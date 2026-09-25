@@ -1,9 +1,9 @@
-//! Proveedor de embeddings DETERMINISTA para tests (feature `testutil`).
+//! DETERMINISTIC embeddings provider for tests (feature `testutil`).
 //!
-//! El vector deriva de un hash del texto: mismo texto ⇒ mismo vector, textos
-//! distintos ⇒ vectores no correlacionados. Registra cada batch recibido
-//! (`calls`) para que los tests afirmen QUÉ salió hacia el proveedor (p. ej.
-//! que un path bajo `denied_prefixes` jamás aparece).
+//! The vector derives from a hash of the text: same text ⇒ same vector,
+//! different texts ⇒ uncorrelated vectors. Records every batch received
+//! (`calls`) so tests can assert WHAT went out to the provider (e.g. that a
+//! path under `denied_prefixes` never appears).
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -13,25 +13,25 @@ use async_trait::async_trait;
 
 use crate::{AiCaps, AiError, AiProvider, ChatRequest, ChatStream, ModelInfo};
 
-/// Proveedor fake: `embed` determinista, `chat` no soportado.
+/// Fake provider: deterministic `embed`, `chat` unsupported.
 pub struct FakeEmbed {
     dim: usize,
-    /// Lo que reporta `is_local()` (default `true`).
+    /// What `is_local()` reports (default `true`).
     pub local: bool,
-    /// Batches recibidos, en orden. Se registra ANTES de aplicar fallos
-    /// inyectados: una llamada rate-limited también cuenta como intento.
+    /// Batches received, in order. Recorded BEFORE applying injected
+    /// failures: a rate-limited call also counts as an attempt.
     pub calls: Mutex<Vec<Vec<String>>>,
-    /// Latencia artificial por llamada (ventana para tests de cancelación).
+    /// Artificial latency per call (window for cancellation tests).
     pub delay: Option<Duration>,
-    /// `retry_after` que reportan los [`AiError::RateLimited`] inyectados.
-    /// Default `Some(0)`: reintento inmediato (tests rápidos); un valor alto
-    /// abre ventana para tests de cancelación durante la espera de reintento.
+    /// `retry_after` reported by the injected [`AiError::RateLimited`]s.
+    /// Default `Some(0)`: immediate retry (fast tests); a high value opens a
+    /// window for cancellation tests during the retry wait.
     pub retry_after: Option<u64>,
     rate_limited_budget: AtomicU32,
 }
 
 impl FakeEmbed {
-    /// Fake de dimensión `dim`, local, sin fallos.
+    /// A fake of dimension `dim`, local, with no failures.
     #[must_use]
     pub fn new(dim: usize) -> Self {
         Self {
@@ -44,14 +44,14 @@ impl FakeEmbed {
         }
     }
 
-    /// Las próximas `n` llamadas a `embed` devuelven [`AiError::RateLimited`].
+    /// The next `n` calls to `embed` return [`AiError::RateLimited`].
     #[must_use]
     pub fn with_rate_limited(self, n: u32) -> Self {
         self.rate_limited_budget.store(n, Ordering::SeqCst);
         self
     }
 
-    /// Latencia artificial antes de responder.
+    /// Artificial latency before responding.
     #[must_use]
     pub fn with_delay(mut self, d: Duration) -> Self {
         self.delay = Some(d);
@@ -59,9 +59,9 @@ impl FakeEmbed {
     }
 
     fn vec_for(&self, text: &str) -> Vec<f32> {
-        // Semilla FNV-1a + xorshift64: determinista y sin dependencias. Cada
-        // componente sale de 16 bits del estado vía conversiones SIN pérdida
-        // (u16→f32 es `From`), evitando casts que disparen pedantic.
+        // FNV-1a seed + xorshift64: deterministic and dependency-free. Each
+        // component comes from 16 bits of the state via LOSSLESS conversions
+        // (u16→f32 is `From`), avoiding casts that would trigger pedantic.
         let mut h: u64 = 0xcbf2_9ce4_8422_2325;
         for b in text.as_bytes() {
             h ^= u64::from(*b);
@@ -108,11 +108,12 @@ impl AiProvider for FakeEmbed {
     }
 
     async fn embed(&self, inputs: &[String]) -> Result<Vec<Vec<f32>>, AiError> {
-        // Se registra ANTES de la latencia: "qué salió hacia el proveedor" se
-        // decide al llamar, y un future cancelado en mitad del delay también
-        // debe constar como intento.
-        // Invariante: el lock solo se envenena si un test hizo panic con él
-        // tomado; propagar ese panic es lo correcto en un fake de test.
+        // Recorded BEFORE the latency: "what went out to the provider" is
+        // decided at call time, and a future cancelled mid-delay must also
+        // register as an attempt.
+        // Invariant: the lock only gets poisoned if a test panicked while
+        // holding it; propagating that panic is the right thing in a test
+        // fake.
         self.calls.lock().expect("test lock").push(inputs.to_vec());
         if let Some(d) = self.delay {
             tokio::time::sleep(d).await;
@@ -142,14 +143,14 @@ mod tests {
     #[tokio::test]
     async fn deterministic_and_records_inputs() {
         let f = FakeEmbed::new(8);
-        let a = f.embed(&["hola".into(), "mundo".into()]).await.unwrap();
-        let b = f.embed(&["hola".into()]).await.unwrap();
-        assert_eq!(a[0], b[0]); // mismo texto ⇒ mismo vector
-        assert_ne!(a[0], a[1]); // texto distinto ⇒ vector distinto
+        let a = f.embed(&["hello".into(), "world".into()]).await.unwrap();
+        let b = f.embed(&["hello".into()]).await.unwrap();
+        assert_eq!(a[0], b[0]); // same text ⇒ same vector
+        assert_ne!(a[0], a[1]); // different text ⇒ different vector
         assert_eq!(a[0].len(), 8);
         let calls = f.calls.lock().unwrap();
         assert_eq!(calls.len(), 2);
-        assert_eq!(calls[0], vec!["hola".to_string(), "mundo".to_string()]);
+        assert_eq!(calls[0], vec!["hello".to_string(), "world".to_string()]);
     }
 
     #[tokio::test]

@@ -1,5 +1,5 @@
-//! Indexado de tar plano (ustar/GNU/pax vía crate `tar`). SYNC: corre en
-//! `spawn_blocking` sobre un [`ProviderReader`](crate::blocking::ProviderReader).
+//! Indexing of plain tar (ustar/GNU/pax via the `tar` crate). SYNC: runs in
+//! `spawn_blocking` over a [`ProviderReader`](crate::blocking::ProviderReader).
 
 use std::io::{Read, Seek};
 use std::sync::Arc;
@@ -9,40 +9,40 @@ use norte_proto::{EntryKind, Error};
 
 use crate::index::{ArchiveIndex, Limits, Locator, Node};
 
-/// Milisegundos desde epoch a partir de los segundos (saturando: los mtime
-/// basura de tars hostiles no panican). Deuda: los overrides pax de mtime
-/// no se aplican (el crate `tar` solo sobreescribe size/uid/gid) — el mtime
-/// mostrado es el del header ustar.
+/// Milliseconds since epoch from the seconds (saturating: garbage mtimes
+/// from hostile tars don't panic). Debt: pax mtime overrides aren't
+/// applied (the `tar` crate only overwrites size/uid/gid) — the mtime
+/// shown is the ustar header's.
 fn secs_to_ms(secs: u64) -> Option<i64> {
     i64::try_from(secs).ok()?.checked_mul(1000)
 }
 
-/// Forma de una entrada de tar clasificada por sus HEADERS (sin tocar los
-/// datos): compartida por el índice plano (`entries_with_seek`, este módulo)
-/// y el de tar.gz (`entries()`, [`targz_format`](crate::targz_format) — ADR
-/// 0028, #55). Cada builder decide el `Locator` de un `File` — contiguo
-/// (plano) u offset DESCOMPRIMIDO (gz) — y valida su propio presupuesto; el
-/// resto (dir/symlink/other, nombre, mtime, filtro de `pax_global_header`)
-/// es IDÉNTICO entre ambos formatos.
+/// Shape of a tar entry classified by its HEADERS (without touching the
+/// data): shared by the plain index (`entries_with_seek`, this module) and
+/// tar.gz's (`entries()`, [`targz_format`](crate::targz_format) — ADR
+/// 0028, #55). Each builder decides a `File`'s `Locator` — contiguous
+/// (plain) or DECOMPRESSED offset (gz) — and validates its own budget; the
+/// rest (dir/symlink/other, name, mtime, `pax_global_header` filter) is
+/// IDENTICAL between both formats.
 pub(crate) enum EntryShape {
-    /// Directorio.
+    /// Directory.
     Dir,
-    /// Symlink; target crudo (`None` si el header no lo trae).
+    /// Symlink; raw target (`None` if the header doesn't carry one).
     Symlink(Option<Vec<u8>>),
-    /// Archivo regular. `offset` es del stream que el `Archive` está
-    /// recorriendo (bytes del contenedor en tar plano; bytes DESCOMPRIMIDOS
-    /// en tar.gz — la interpretación es responsabilidad del caller).
+    /// Regular file. `offset` is within the stream the `Archive` is
+    /// walking (container bytes on plain tar; DECOMPRESSED bytes on
+    /// tar.gz — interpreting it is the caller's job).
     File { offset: u64, size: u64 },
-    /// Hardlinks, devices, fifos, GNU sparse…: sin locator (read →
+    /// Hardlinks, devices, fifos, GNU sparse…: no locator (read →
     /// `Unsupported`).
     Other,
 }
 
-/// Clasifica una entrada de tar por sus headers. `None` = meta ya
-/// consumida por el iterador que debe saltarse del índice (`g` =
-/// `pax_global_header`: el iterador del crate `tar` consume L/K/x
-/// automáticamente pero NO `g` — sin este filtro, todo tar de `git archive`
-/// listaría un `pax_global_header` fantasma, auditoría 8e H5).
+/// Classifies a tar entry by its headers. `None` = meta already consumed
+/// by the iterator that must be skipped from the index (`g` =
+/// `pax_global_header`: the `tar` crate's iterator consumes L/K/x
+/// automatically but NOT `g` — without this filter, every `git archive`
+/// tar would list a phantom `pax_global_header`, audit 8e H5).
 pub(crate) fn classify_entry<R: Read>(
     entry: &tar::Entry<'_, R>,
 ) -> Option<(Vec<u8>, Option<i64>, EntryShape)> {
@@ -65,14 +65,14 @@ pub(crate) fn classify_entry<R: Read>(
     Some((raw_name, mtime_ms, shape))
 }
 
-/// Construye el índice recorriendo los HEADERS del tar (`entries_with_seek`:
-/// los datos se saltan con `Seek`, no se descargan — sobre un provider
-/// remoto el coste es O(headers), no O(tamaño)).
+/// Builds the index by walking the tar's HEADERS (`entries_with_seek`: the
+/// data is skipped with `Seek`, not downloaded — over a remote provider
+/// the cost is O(headers), not O(size)).
 ///
-/// `cancel` se chequea en el inner loop (regla 3): el lado async lo arma al
-/// dropear el future y el hilo blocking termina en la siguiente entrada.
-/// `container_len` valida cada locator contra el tamaño real: un tar
-/// truncado no puede prometer datos más allá del contenedor.
+/// `cancel` is checked in the inner loop (rule 3): the async side arms it
+/// by dropping the future and the blocking thread ends at the next entry.
+/// `container_len` validates every locator against the real size: a
+/// truncated tar can't promise data beyond the container.
 pub(crate) fn build_index<R: Read + Seek>(
     reader: R,
     container_len: u64,
@@ -85,12 +85,12 @@ pub(crate) fn build_index<R: Read + Seek>(
     let entries = archive.entries_with_seek().map_err(|e| corrupt(&e))?;
     for entry in entries {
         if cancel.load(Ordering::Relaxed) {
-            tracing::debug!("indexado tar cancelado");
+            tracing::debug!("tar indexing cancelled");
             return Err(Error::Cancelled);
         }
         let entry = entry.map_err(|e| corrupt(&e))?;
         let Some((raw_name, mtime_ms, shape)) = classify_entry(&entry) else {
-            continue; // meta ya consumida por el iterador (pax_global_header)
+            continue; // meta already consumed by the iterator (pax_global_header)
         };
         let node = match shape {
             EntryShape::Dir => Node::dir(mtime_ms),
@@ -107,9 +107,10 @@ pub(crate) fn build_index<R: Read + Seek>(
                     .checked_add(size)
                     .is_none_or(|end| end > container_len)
                 {
-                    // Con seek los datos no se leen: un tar truncado se
-                    // detecta validando el locator, no tropezando con EOF.
-                    tracing::warn!("tar truncado: entrada promete datos más allá del contenedor");
+                    // With seek the data isn't read: a truncated tar is
+                    // detected by validating the locator, not by
+                    // stumbling into EOF.
+                    tracing::warn!("truncated tar: entry promises data beyond the container");
                     return Err(Error::Corrupt);
                 }
                 Node {
@@ -131,12 +132,12 @@ pub(crate) fn build_index<R: Read + Seek>(
             },
         };
         index.insert_entry(&raw_name, node, limits)?;
-        // Las omitidas también consumen presupuesto: un tar de millones de
-        // nombres hostiles no itera gratis (hallazgo M2 de fase 8d).
+        // Omitted entries also spend budget: a tar with millions of
+        // hostile names doesn't iterate for free (phase 8d finding M2).
         if index.skipped > limits.max_entries as u64 {
             tracing::warn!(
                 max = limits.max_entries,
-                "tar supera el presupuesto de omitidas"
+                "tar exceeds the omitted-entries budget"
             );
             return Err(Error::LimitExceeded {
                 limit: Error::LIMIT_ENTRIES.into(),
@@ -146,19 +147,19 @@ pub(crate) fn build_index<R: Read + Seek>(
     if index.skipped > 0 {
         tracing::warn!(
             skipped = index.skipped,
-            "entradas omitidas del índice (nombres hostiles/límites); detalle en debug"
+            "entries omitted from the index (hostile names/limits); detail in debug"
         );
     }
     Ok(index)
 }
 
 fn corrupt(e: &std::io::Error) -> Error {
-    // IO genuino del provider interior (corte de red a mitad de parseo):
-    // se propaga VERBATIM, jamás se disfraza de Corrupt (#58).
+    // Genuine IO from the inner provider (a network drop mid-parse): it's
+    // propagated VERBATIM, never disguised as Corrupt (#58).
     if let Some(inner) = crate::blocking::inner_proto_error(e) {
         return inner;
     }
-    tracing::warn!(error = %e, "tar corrupto o ilegible");
+    tracing::warn!(error = %e, "corrupt or unreadable tar");
     Error::Corrupt
 }
 
@@ -171,16 +172,16 @@ mod tests {
         Limits::default()
     }
 
-    /// La cancelación corta el loop en la siguiente entrada (regla 3).
+    /// Cancellation cuts the loop at the next entry (rule 3).
     #[test]
-    fn cancelacion_corta_el_indexado() {
+    fn cancellation_cuts_indexing_short() {
         let mut smith = norte_testkit::TarSmith::new();
         for i in 0..50u32 {
             smith = smith.file(format!("f{i}").as_bytes(), b"x");
         }
         let bytes = smith.build();
         let len = bytes.len() as u64;
-        let cancel = Arc::new(AtomicBool::new(true)); // armado ANTES
+        let cancel = Arc::new(AtomicBool::new(true)); // armed BEFORE
         let got = build_index(
             Cursor::new(bytes),
             len,
@@ -191,15 +192,15 @@ mod tests {
         assert_eq!(got.map(|_| ()).unwrap_err(), Error::Cancelled);
     }
 
-    /// Un locator que promete datos fuera del contenedor = truncado.
+    /// A locator promising data outside the container = truncated.
     #[test]
-    fn locator_fuera_del_contenedor_es_corrupt() {
+    fn a_locator_outside_the_container_is_corrupt() {
         let bytes = norte_testkit::TarSmith::new()
-            .file(b"grande.bin", &[7u8; 2000])
+            .file(b"big.bin", &[7u8; 2000])
             .build();
         let len = bytes.len() as u64;
         let cancel = Arc::new(AtomicBool::new(false));
-        // Mentimos: el contenedor "mide" menos de lo que el header promete.
+        // We lie: the container "measures" less than what the header promises.
         let got = build_index(
             Cursor::new(bytes),
             700,

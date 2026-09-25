@@ -1,5 +1,5 @@
-//! Los cuatro selectores modales —tema, columnas, conexiones y reparto— y la
-//! vista previa del reparto.
+//! The four modal pickers — theme, columns, connections and layout — and
+//! the layout preview.
 
 use norte_theme::Role;
 use ratatui::Frame;
@@ -11,8 +11,8 @@ use super::{centered, clear_themed};
 use crate::theme::TuiTheme;
 use norte_i18n::{t, ta};
 
-/// El selector de tema: la lista de temas disponibles sobre un modal
-/// centrado, con el vigente resaltado.
+/// The theme picker: the list of available themes over a centered modal,
+/// with the current one highlighted.
 pub fn draw_theme_picker(
     frame: &mut Frame<'_>,
     picker: &crate::app::ThemePicker,
@@ -46,13 +46,13 @@ pub fn draw_theme_picker(
     frame.render_stateful_widget(list, area, &mut state);
 }
 
-/// Overlay del picker de columnas (#108 7a): lista con cursor — checkbox,
-/// etiqueta (Fluent para builtins; `label` del modelo para attr/plugin,
-/// #117; el id CRUDO enmascarado para los que no parsean — texto de config
-/// del usuario, #73: se pinta con `mask_terminal_hazards`) y la flecha del
-/// sort en la fila de su columna. Mismo esqueleto que [`draw_theme_picker`] (Clear + centrado,
-/// `List` + `ListState` con highlight `Role::Selection`, hint generado en
-/// `title_bottom`, ancho por contenido en CELDAS con suelo del footer).
+/// The columns picker overlay (#108 7a): a cursor list — checkbox, label
+/// (Fluent for builtins; the model's `label` for attr/plugin, #117; the RAW
+/// id masked for the ones that do not parse — user config text, #73: it is
+/// painted with `mask_terminal_hazards`) and the sort arrow on its column's
+/// row. Same skeleton as [`draw_theme_picker`] (Clear + centered, `List` +
+/// `ListState` with `Role::Selection` highlight, generated hint in
+/// `title_bottom`, content width in CELLS with the footer as floor).
 pub(crate) fn draw_columns_picker(
     frame: &mut Frame<'_>,
     p: &norte_frontend::columns_picker::ColumnsPicker,
@@ -65,8 +65,8 @@ pub(crate) fn draw_columns_picker(
     } else {
         t("columns-picker-target-default")
     };
-    let titulo = ta("columns-picker-title", &[("target", &target)]);
-    let filas: Vec<String> = p
+    let title = ta("columns-picker-title", &[("target", &target)]);
+    let rows_text: Vec<String> = p
         .rows()
         .iter()
         .map(|r| {
@@ -76,11 +76,11 @@ pub(crate) fn draw_columns_picker(
                 Some(Builtin::Size) => t("col-header-size"),
                 Some(Builtin::Mtime) => t("col-header-mtime"),
                 Some(Builtin::Kind) => t("col-header-kind"),
-                // #117: attr/plugin traen `label` (header_label, YA
-                // enmascarada al abrir); los que no parsean caen al id. El
-                // re-enmascarado es cinturón, no el choke point; el cap
-                // (encoding-audit L1, paridad GUI) evita que un id
-                // kilométrico de config ensanche el overlay entero.
+                // #117: attr/plugin bring `label` (header_label, ALREADY
+                // masked on open); the ones that do not parse fall back to
+                // the id. The re-masking is a belt, not the choke point;
+                // the cap (encoding-audit L1, GUI parity) keeps a
+                // mile-long config id from widening the whole overlay.
                 None => norte_encoding::mask_terminal_hazards(r.label.as_deref().unwrap_or(&r.id))
                     .chars()
                     .take(norte_frontend::columns::HEADER_MAX_CHARS)
@@ -96,18 +96,18 @@ pub(crate) fn draw_columns_picker(
                 }
                 _ => "",
             };
-            // #108 7b: el formato vigente de la fila (vocabulario ASCII
-            // cerrado — sin enmascarar), ciclable con `f`.
-            let formato = r
+            // #108 7b: the row's current format (closed ASCII vocabulary —
+            // not masked), cyclable with `f`.
+            let format = r
                 .format
                 .as_deref()
                 .map(|f| format!(" · {f}"))
                 .unwrap_or_default();
-            format!(" {mark} {label}{arrow}{formato}")
+            format!(" {mark} {label}{arrow}{format}")
         })
         .collect();
     let footer_w = Line::raw(format!(" {hint} ")).width();
-    let content_w = filas
+    let content_w = rows_text
         .iter()
         .map(|f| Line::raw(f.as_str()).width())
         .max()
@@ -116,17 +116,18 @@ pub(crate) fn draw_columns_picker(
         .unwrap_or(u16::MAX)
         .max(34)
         .min(frame.area().width);
-    // M2 revisión 7a: saturante — una config hostil de 65k ids desbordaría
-    // el `+ 2` en debug; el `.min(alto del frame)` de abajo sigue clampando.
+    // M2 review 7a: saturating — a hostile config with 65k ids would
+    // overflow the `+ 2` in debug; the `.min(frame height)` below still
+    // clamps it.
     let rows = u16::try_from(p.rows().len())
         .unwrap_or(u16::MAX)
         .saturating_add(2);
     let area = centered(frame.area(), width, rows.min(frame.area().height.max(3)));
     clear_themed(frame, area, theme);
-    let items: Vec<ListItem<'_>> = filas.into_iter().map(ListItem::new).collect();
+    let items: Vec<ListItem<'_>> = rows_text.into_iter().map(ListItem::new).collect();
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(format!(" {titulo} "))
+        .title(format!(" {title} "))
         .title_style(theme.role(Role::Title))
         .title_bottom(Line::raw(format!(" {hint} ")))
         .border_style(theme.role(Role::ModalBorder));
@@ -138,35 +139,34 @@ pub(crate) fn draw_columns_picker(
     frame.render_stateful_widget(list, area, &mut state);
 }
 
-/// Ancho, en celdas, de la vista previa del selector de disposiciones.
+/// Width, in cells, of the layout picker's preview.
 ///
-/// Fijo, y no proporcional al frame: la vista previa es un DIBUJO a escala de
-/// la pantalla, y su parecido con lo que saldrá no mejora por ser más grande.
+/// Fixed, not proportional to the frame: the preview is a scale DRAWING of
+/// the screen, and its resemblance to what will come out does not improve by
+/// being bigger.
 pub(crate) const LAYOUT_PREVIEW_W: u16 = 30;
 
-/// Alto de esa misma vista previa. La proporción importa más que el tamaño —
-/// una vista previa cuadrada haría pasar por alto un `simple` por un
-/// `orthodox`.
+/// Height of that same preview. Proportion matters more than size — a
+/// square preview would make a `simple` pass for an `orthodox`.
 pub(crate) const LAYOUT_PREVIEW_H: u16 = 10;
 
-/// Fase A: el selector de disposiciones. Las filas a la izquierda y, a la
-/// derecha, la pantalla que daría la que está bajo el cursor.
+/// Phase A: the layout picker. Rows on the left and, on the right, the
+/// screen the one under the cursor would produce.
 ///
-/// **La vista previa sale del REPARTO del árbol**, no de un dibujo guardado al
-/// lado del fichero: un dibujo guardado empieza a mentir en cuanto alguien
-/// toca un tamaño, y el lector no tiene forma de saber cuál de los dos es la
-/// pantalla de verdad.
+/// **The preview comes from the tree's LAYOUT**, not a drawing saved next to
+/// the file: a saved drawing starts lying as soon as anyone touches a size,
+/// and the reader has no way to know which of the two is the real screen.
 ///
-/// Solo se dibuja la de un preset DE FÁBRICA, cuyo TOML va embebido. Una
-/// disposición del usuario vive en disco, y leer un fichero en el camino de
-/// pintado —una vez por frame— es la clase de coste que no se ve hasta que la
-/// config está en un directorio de red.
-/// El selector de conexiones (#140).
+/// Only a FACTORY preset's is drawn, whose TOML is embedded. A user layout
+/// lives on disk, and reading a file in the paint path — once per frame — is
+/// the kind of cost that does not show up until the config is on a network
+/// directory.
+/// The connections picker (#140).
 ///
-/// Nombre y dirección, que es lo que hay en `connections.toml`: jamás un
-/// secreto — las credenciales se referencian (ADR 0015) y aquí no llegan. Las
-/// dos cosas se enmascaran igual: son texto de un fichero que el usuario
-/// escribió, y un nombre con bidi no reordena este cuadro.
+/// Name and address, which is what is in `connections.toml`: never a
+/// secret — credentials are referenced (ADR 0015) and never arrive here.
+/// Both are masked the same way: they are text from a file the user wrote,
+/// and a bidi name does not reorder this box.
 pub(crate) fn draw_connections_picker(
     frame: &mut Frame<'_>,
     p: &norte_frontend::connections_picker::ConnectionsPicker,
@@ -184,8 +184,8 @@ pub(crate) fn draw_connections_picker(
             )
         })
         .collect();
-    // Sin conexiones se enseña POR QUÉ está vacío y dónde se ponen: una caja
-    // vacía deja al lector pensando que la tecla se rompió.
+    // With no connections, WHY it is empty and where to add them is shown:
+    // an empty box leaves the reader thinking the key broke.
     let body: Vec<String> = if rows.is_empty() {
         vec![format!(" {}", t("connections-picker-empty"))]
     } else {
@@ -227,17 +227,17 @@ pub(crate) fn draw_connections_picker(
     frame.render_widget(Paragraph::new(lines), inside);
 }
 
-/// El selector de PERFILES (ADR 0079).
+/// The PROFILE picker (ADR 0079).
 ///
-/// Sin vista previa, a diferencia del de disposiciones: la pantalla de un
-/// perfil depende de lo que el lector dejó guardado, no solo de un fichero, así
-/// que una miniatura dibujada de su `[ui] layout` mentiría justo en el caso
-/// normal — el de un perfil que ya tiene estado.
+/// No preview, unlike the layout one: a profile's screen depends on what
+/// the reader left saved, not just a file, so a thumbnail drawn from its
+/// `[ui] layout` would lie exactly in the normal case — that of a profile
+/// that already has state.
 ///
-/// Lo que sí lleva cada fila son los avisos que la spec pide por su nombre: cuál
-/// es el activo, cuál no puede guardar estado (D4) y cuál comparte nombre con
-/// otra cosa. La nota de debajo habla de la fila BAJO EL CURSOR, que es lo que
-/// el lector está a punto de elegir.
+/// What every row does carry are the warnings the spec asks for by name:
+/// which one is active, which one cannot save state (D4), and which one
+/// shares a name with something else. The note below talks about the row
+/// UNDER THE CURSOR, which is what the reader is about to choose.
 pub(crate) fn draw_profile_picker(
     frame: &mut Frame<'_>,
     p: &norte_frontend::profile_picker::ProfilePicker,
@@ -250,34 +250,34 @@ pub(crate) fn draw_profile_picker(
         .rows()
         .iter()
         .map(|r| {
-            // El nombre es un DIRECTORIO y puede no ser texto: lossy MARCADO
-            // con su badge y hazards enmascarados, como cualquier otro nombre
-            // de la pantalla (#246 m2/m3).
+            // The name is a DIRECTORY and may not be text: lossy MARKED
+            // with its badge and hazards masked, like any other name on
+            // screen (#246 m2/m3).
             let (name, hostile) = norte_frontend::display_os_name(&r.name);
             let name = norte_encoding::mask_terminal_hazards(&name);
             let badge = if hostile { " ⚠" } else { "" };
-            let marca = if r.active { "▸" } else { " " };
-            // El título acompaña al nombre, JAMÁS lo sustituye: la identidad
-            // del perfil es su directorio, y dos perfiles pueden compartir
-            // título y seguir siendo dos (D3).
-            let titulo = r
+            let mark = if r.active { "▸" } else { " " };
+            // The title accompanies the name, it NEVER replaces it: a
+            // profile's identity is its directory, and two profiles can
+            // share a title and still be two (D3).
+            let title = r
                 .title
                 .as_deref()
                 .map(|t| format!(" · {}", norte_encoding::mask_terminal_hazards(t)))
                 .unwrap_or_default();
-            let roto = if r.problem.is_some() {
+            let broken = if r.problem.is_some() {
                 format!(" · {}", t("profile-picker-broken"))
             } else {
                 String::new()
             };
-            format!(" {marca} {name}{badge}{titulo}{roto}")
+            format!(" {mark} {name}{badge}{title}{broken}")
         })
         .collect();
 
-    // La nota: primero por qué esta fila no se puede usar, después por qué no
-    // guarda estado, y por último la coincidencia de nombre. En ese orden
-    // porque es el de lo que más le importa a quien está a punto de elegirla.
-    let nota = p.current().and_then(|r| {
+    // The note: first why this row cannot be used, then why it does not
+    // save state, and last the name clash. In that order because that is
+    // what matters most to whoever is about to choose it.
+    let note = p.current().and_then(|r| {
         r.problem
             .as_ref()
             .map(|e| format!(" {}", norte_encoding::mask_terminal_hazards(e)))
@@ -291,20 +291,20 @@ pub(crate) fn draw_profile_picker(
     });
     let footer = format!(" {hint} ");
 
-    // El alto y el ancho de la caja se reservan SIEMPRE que alguna fila pueda
-    // pedir la nota, no solo cuando la pide la de ahora: si no, la caja se
-    // encoge y se ensancha mientras el cursor recorre las filas. Misma regla
-    // que el selector de disposiciones, y por el mismo motivo.
-    // DOS líneas, y envuelve: el motivo de una fila rota lo escribe el parser
-    // de TOML y puede ser tan largo como quiera («unknown field `x`, expected
-    // one of …»). Reservar su ancho ensancharía la caja hasta lo absurdo, y
-    // dejarlo en una línea lo corta a media palabra — que es lo que el
-    // selector de disposiciones ya argumentó que es peor que no darlo.
-    let alguna_nota = p
+    // The box's height and width are reserved WHENEVER some row could ask
+    // for the note, not only when the current one does: otherwise the box
+    // shrinks and grows as the cursor moves across rows. Same rule as the
+    // layout picker, and for the same reason.
+    // TWO lines, and it wraps: a broken row's reason is written by the TOML
+    // parser and can be as long as it likes ("unknown field `x`, expected
+    // one of …"). Reserving its width would widen the box absurdly, and
+    // keeping it to one line cuts it mid-word — which the layout picker
+    // already argued is worse than not showing it.
+    let any_note = p
         .rows()
         .iter()
         .any(|r| r.problem.is_some() || !r.carries_state || r.clash != NameClash::None);
-    let note_height = if alguna_nota { 2 } else { 0 };
+    let note_height = if any_note { 2 } else { 0 };
 
     let list_w = rows
         .iter()
@@ -339,19 +339,19 @@ pub(crate) fn draw_profile_picker(
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(0), Constraint::Length(note_height)])
         .split(inside_area);
-    if let Some(nota) = &nota
+    if let Some(note) = &note
         && bands[1].height > 0
     {
         frame.render_widget(
-            Paragraph::new(Line::raw(nota.as_str()))
+            Paragraph::new(Line::raw(note.as_str()))
                 .wrap(ratatui::widgets::Wrap { trim: true })
                 .style(theme.role(Role::Info)),
             bands[1],
         );
     }
 
-    // Una lista VACÍA no es un error: es que todavía no has creado ninguno, y
-    // se dice en vez de dejar una caja en blanco.
+    // An EMPTY list is not an error: it means you have not created one yet,
+    // and it says so instead of leaving a blank box.
     if rows.is_empty() {
         frame.render_widget(
             Paragraph::new(Line::raw(format!(" {}", t("profile-picker-empty"))))
@@ -372,7 +372,7 @@ pub(crate) fn draw_layout_picker(
     p: &norte_frontend::layout_picker::LayoutPicker,
     theme: &TuiTheme,
     hint: &str,
-    // El registro vivo, para la miniatura de la derecha: ver
+    // The live registry, for the thumbnail on the right: see
     // [`draw_layout_preview`].
     kinds: &norte_frontend::layout::KindRegistry,
 ) {
@@ -385,20 +385,21 @@ pub(crate) fn draw_layout_picker(
             } else {
                 t("layout-picker-mine")
             };
-            // El nombre es un STEM de fichero y puede no ser texto: lossy
-            // MARCADO con su badge y hazards enmascarados, como cualquier
-            // otro nombre de la pantalla (#246 m2/m3).
+            // The name is a file STEM and may not be text: lossy MARKED
+            // with its badge and hazards masked, like any other name on
+            // screen (#246 m2/m3).
             let (name, hostile) = norte_frontend::display_os_name(&r.name);
             let name = norte_encoding::mask_terminal_hazards(&name);
             let badge = if hostile { " ⚠" } else { "" };
             format!(" {name}{badge} · {origin}")
         })
         .collect();
-    // La nota del keymap habla de la fila BAJO EL CURSOR, no de la lista: es
-    // un aviso sobre lo que el lector está a punto de elegir.
-    // La nota va DENTRO de la caja, en su propia línea, y no en el pie: un
-    // aviso que se corta a media frase por no caber en el borde es peor que
-    // no darlo, y a 80 columnas el pie no da para las dos cosas.
+    // The keymap note talks about the row UNDER THE CURSOR, not the list:
+    // it is a warning about what the reader is about to choose.
+    // The note goes INSIDE the box, on its own line, and not in the footer:
+    // a warning cut mid-sentence for not fitting on the border is worse
+    // than not giving it, and at 80 columns the footer has no room for
+    // both.
     let note_text = format!(" {}", t("layout-picker-keymap-note"));
     let has_note = p
         .rows()
@@ -413,13 +414,13 @@ pub(crate) fn draw_layout_picker(
         .unwrap_or(0);
     let list_w = u16::try_from(list_w).unwrap_or(u16::MAX).max(18);
     let inside = list_w.saturating_add(LAYOUT_PREVIEW_W).saturating_add(1);
-    // `+ 2` por los bordes, y el pie se mide DENTRO de ellos: sin sumarlos
-    // aquí la nota del keymap se corta a media palabra, que es peor que no
-    // darla.
-    // El ancho se reserva para la nota SIEMPRE que alguna fila pueda pedirla,
-    // no solo cuando la pide la de ahora: si no, la caja se encoge y se
-    // ensancha mientras el cursor recorre las filas, y lo que se compara es
-    // justamente el dibujo de dentro.
+    // `+ 2` for the borders, and the footer is measured INSIDE them: without
+    // adding them here the keymap note cuts mid-word, which is worse than
+    // not giving it.
+    // The width is reserved for the note WHENEVER some row could ask for
+    // it, not only when the current one does: otherwise the box shrinks
+    // and grows as the cursor moves across rows, and what is being
+    // compared is exactly the drawing inside.
     let note_w = if p.rows().iter().any(|r| r.shares_keymap_name) {
         u16::try_from(Line::raw(note_text.as_str()).width()).unwrap_or(u16::MAX)
     } else {
@@ -431,8 +432,9 @@ pub(crate) fn draw_layout_picker(
         .saturating_add(2)
         .min(frame.area().width);
     let rows_height = u16::try_from(rows.len()).unwrap_or(u16::MAX);
-    // La línea de la nota se reserva SIEMPRE que la lista pueda pedirla, por
-    // lo mismo que el ancho: la caja no debe cambiar de alto al moverse.
+    // The note's line is reserved WHENEVER the list could ask for it, for
+    // the same reason as the width: the box must not change height while
+    // moving.
     let note_height = u16::from(note_w > 0);
     let height = rows_height
         .max(LAYOUT_PREVIEW_H)
@@ -476,28 +478,28 @@ pub(crate) fn draw_layout_picker(
     frame.render_stateful_widget(list, halves[0], &mut state);
 
     if halves[1].width == 0 || halves[1].height == 0 {
-        return; // un frame estrecho se queda con la lista, que es lo que se elige
+        return; // a narrow frame keeps the list, which is what gets chosen
     }
     if let Some(row) = p.current() {
         draw_layout_preview(frame, halves[1], row, theme, kinds);
     }
 }
 
-/// La mitad derecha del selector: la pantalla de la fila bajo el cursor.
+/// The picker's right half: the screen of the row under the cursor.
 ///
-/// Sale de la fila, sea de fábrica o del usuario. Filtrar por `factory`
-/// dejaba la mitad derecha en blanco para los ficheros propios —y para uno de
-/// fábrica TAPADO por un fichero— mientras la ayuda prometía que cada fila
-/// dibuja su pantalla (#244 M3).
+/// It comes from the row, whether factory or the user's. Filtering by
+/// `factory` left the right half blank for the user's own files — and for a
+/// factory one COVERED by a file — while help promised that every row draws
+/// its screen (#244 M3).
 pub(crate) fn draw_layout_preview(
     frame: &mut Frame<'_>,
     area: Rect,
     row: &norte_frontend::layout_picker::Row,
     theme: &TuiTheme,
-    // El registro VIVO, no uno de serie recién hecho: desde la fase 3 lleva
-    // dentro los paneles que aportan los plugins, y sin él una disposición
-    // guardada que incluya uno se dibujaba aquí con el hueco en blanco — la
-    // miniatura decía una cosa y la pantalla de verdad otra.
+    // The LIVE registry, not a freshly made stock one: since phase 3 it
+    // carries the panels plugins contribute, and without it a saved layout
+    // that includes one was drawn here with a blank slot — the thumbnail
+    // said one thing and the real screen another.
     kinds: &norte_frontend::layout::KindRegistry,
 ) {
     use norte_frontend::layout_picker::preview;
@@ -506,11 +508,11 @@ pub(crate) fn draw_layout_preview(
         let lines = preview(tree, area.width, area.height, kinds);
         let text: Vec<Line<'_>> = lines.into_iter().map(Line::raw).collect();
         frame.render_widget(Paragraph::new(text), area);
-    } else if let Some(problema) = row.problem.as_deref() {
-        // Un fichero que no parsea DICE por qué, en el sitio donde iría su
-        // pantalla: un hueco en blanco no se distingue de una disposición
-        // vacía. El diagnóstico viene de un fichero, así que se enmascara.
-        let text = norte_encoding::mask_terminal_hazards(problema);
+    } else if let Some(problem) = row.problem.as_deref() {
+        // A file that does not parse SAYS why, in the spot where its screen
+        // would go: a blank slot cannot be told apart from an empty layout.
+        // The diagnosis comes from a file, so it is masked.
+        let text = norte_encoding::mask_terminal_hazards(problem);
         frame.render_widget(
             Paragraph::new(text)
                 .style(theme.role(Role::Warning))

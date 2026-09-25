@@ -1,10 +1,10 @@
-//! Guest WASM (#30 stage 2b-write, ADR 0032): un provider ESCRIBIBLE sobre un
-//! FS plano en memoria (thread-local, mutable) — dogfood del camino de
-//! escritura de la interfaz WIT `provider`.
+//! WASM guest (#30 stage 2b-write, ADR 0032): a WRITABLE provider over a
+//! flat in-memory FS (thread-local, mutable) — dogfooding the WIT
+//! `provider` interface's write path.
 //!
-//! El `writer` es transaccional: los bytes se acumulan en un staging propio del
-//! recurso y el path final NO existe hasta `commit`. `abort`/soltar sin commit
-//! no publican nada. Nombres en bytes crudos (regla 1).
+//! The `writer` is transactional: bytes accumulate in the resource's own
+//! staging and the final path does NOT exist until `commit`. `abort`/dropping
+//! without a commit publishes nothing. Names in raw bytes (rule 1).
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -12,9 +12,9 @@ use std::collections::HashMap;
 wit_bindgen::generate!({
     world: "norte:provider/norte-provider",
     path: "wit",
-    // `host-log`/`host-config` viven en OTRO paquete desde la partición
-    // (ADR 0041 decisión 4); wit-bindgen exige decidir explícitamente qué
-    // hacer con los imports de fuera del paquete del world.
+    // `host-log`/`host-config` live in ANOTHER package since the split
+    // (ADR 0041 decision 4); wit-bindgen requires explicitly deciding what
+    // to do with imports from outside the world's package.
     generate_all,
 });
 
@@ -22,10 +22,10 @@ use exports::norte::provider::provider::{
     Caps, Entry, EntryKind, Guest, GuestWriter, Page, ProviderConfig, VfsError, Writer,
 };
 
-/// Path = sus segmentos (bytes crudos). La raíz es la lista vacía.
+/// Path = its segments (raw bytes). The root is the empty list.
 type PathSegs = Vec<Vec<u8>>;
 
-/// Un nodo del FS plano.
+/// A node of the flat FS.
 #[derive(Clone)]
 enum Node {
     File(Vec<u8>),
@@ -33,12 +33,13 @@ enum Node {
 }
 
 thread_local! {
-    /// El FS: mapa PLANO de path (segmentos) → nodo. La raíz (`[]`) es un dir
-    /// implícito, no una clave.
+    /// The FS: a FLAT map of path (segments) → node. The root (`[]`) is an
+    /// implicit dir, not a key.
     static FS: RefCell<HashMap<PathSegs, Node>> = RefCell::new(seed());
 }
 
-/// Árbol canónico inicial (mismo que provider-mem, sin los nombres no-VPath).
+/// Initial canonical tree (same as provider-mem, without the non-VPath
+/// names).
 fn seed() -> HashMap<PathSegs, Node> {
     let mut fs = HashMap::new();
     let d = |s: &[&[u8]]| s.iter().map(|x| x.to_vec()).collect::<Vec<_>>();
@@ -56,12 +57,13 @@ fn seed() -> HashMap<PathSegs, Node> {
     fs
 }
 
-/// `true` si `child` es hijo DIRECTO de `parent` (un segmento más, mismo prefijo).
+/// `true` if `child` is a DIRECT child of `parent` (one more segment, same
+/// prefix).
 fn is_direct_child(parent: &[Vec<u8>], child: &[Vec<u8>]) -> bool {
     child.len() == parent.len() + 1 && child.starts_with(parent)
 }
 
-/// `true` si `p` es un directorio existente (o la raíz).
+/// `true` if `p` is an existing directory (or the root).
 fn is_dir(fs: &HashMap<PathSegs, Node>, p: &[Vec<u8>]) -> bool {
     p.is_empty() || matches!(fs.get(p), Some(Node::Dir))
 }
@@ -70,7 +72,7 @@ struct Mem;
 
 impl Guest for Mem {
     fn configure(_cfg: ProviderConfig) -> Result<(), VfsError> {
-        // El provider en memoria no establece conexión: no-op.
+        // The in-memory provider establishes no connection: no-op.
         Ok(())
     }
 
@@ -112,12 +114,12 @@ impl Guest for Mem {
         FS.with_borrow(|fs| {
             if !is_dir(fs, &p) {
                 return if fs.contains_key(&p) {
-                    Err(VfsError::Unsupported) // listar un fichero
+                    Err(VfsError::Unsupported) // listing a file
                 } else {
                     Err(VfsError::NotFound)
                 };
             }
-            // Una sola página (el árbol de test es pequeño).
+            // A single page (the test tree is small).
             let entries = fs
                 .iter()
                 .filter(|(k, _)| is_direct_child(&p, k))
@@ -155,12 +157,13 @@ impl Guest for Mem {
         })
     }
 
-    // ---- escritura ----
+    // ---- write ----
 
     type Writer = MemWriter;
 
     fn open_writer(p: PathSegs) -> Result<Writer, VfsError> {
-        // El padre debe existir y ser un dir; el path final no puede ser un dir.
+        // The parent must exist and be a dir; the final path cannot be a
+        // dir.
         FS.with_borrow(|fs| {
             if matches!(fs.get(&p), Some(Node::Dir)) {
                 return Err(VfsError::Conflict);
@@ -196,7 +199,7 @@ impl Guest for Mem {
             if !fs.contains_key(&p) {
                 return Err(VfsError::NotFound);
             }
-            // Borra la entrada y (si es dir) todo su subárbol.
+            // Deletes the entry and (if it is a dir) its whole subtree.
             fs.retain(|k, _| k != &p && !k.starts_with(&p));
             Ok(())
         })
@@ -211,7 +214,7 @@ impl Guest for Mem {
             if !is_dir(fs, dst_parent) {
                 return Err(VfsError::NotFound);
             }
-            // Mueve `src` y su subárbol reescribiendo el prefijo.
+            // Moves `src` and its subtree by rewriting the prefix.
             let moved: Vec<(PathSegs, Node)> = fs
                 .iter()
                 .filter(|(k, _)| *k == &src || k.starts_with(&src))
@@ -230,8 +233,9 @@ impl Guest for Mem {
     }
 }
 
-/// El writer transaccional: acumula en `buf`; `commit` publica en el FS, `abort`
-/// descarta. El path final no existe hasta `commit`.
+/// The transactional writer: accumulates in `buf`; `commit` publishes to
+/// the FS, `abort` discards. The final path does not exist until
+/// `commit`.
 struct MemWriter {
     target: PathSegs,
     buf: RefCell<Vec<u8>>,

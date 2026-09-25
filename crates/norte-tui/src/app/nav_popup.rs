@@ -1,143 +1,146 @@
-//! El popup de navegación: sus items, cómo se muestran y de dónde salen los
-//! volúmenes.
+//! The navigation popup: its items, how they're shown and where the volumes
+//! come from.
 
 use super::display_name;
 use norte_i18n::t;
 use norte_proto::VPath;
 
-/// Qué popup de navegación está abierto (spec 2026-07-18).
+/// Which navigation popup is open (spec 2026-07-18).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NavPopupKind {
-    /// Historial de directorios de un pane (el del foco, o un LADO).
+    /// A pane's directory history (the focused one, or one SIDE).
     History,
-    /// Los directorios populares de la sesión (spec 2026-09-15 D6).
+    /// The session's popular directories (spec 2026-09-15 D6).
     Popular,
-    /// Favoritos persistidos en el `norte.toml` del USUARIO.
+    /// Favorites persisted in the USER's `norte.toml`.
     Hotlist,
-    /// Volúmenes del host (`pane.select-drive`/`-left`/`-right`, design
-    /// 2026-08-10-volumes-design.md §D): snapshot congelada al abrir vía
-    /// `Backend::volumes` — `main.rs` hace el fetch async (app.rs no conoce
-    /// `Backend`) y entrega los items ya construidos a
+    /// Host volumes (`pane.select-drive`/`-left`/`-right`, design
+    /// 2026-08-10-volumes-design.md §D): a snapshot frozen on open via
+    /// `Backend::volumes` — `main.rs` does the async fetch (app.rs doesn't
+    /// know about `Backend`) and hands over the already-built items to
     /// [`crate::app::App::open_volumes_popup`].
     Volumes,
 }
 
-/// Un item del popup de navegación, CONGELADO al construirse en
-/// [`crate::app::App::open_nav_popup`]: display ya saneado, destino ya parseado y (en
-/// hotlist) la clave cruda del favorito. El popup es una snapshot a
-/// propósito — todo lo que una tecla necesita viaja dentro del item, nada
-/// se re-resuelve contra un estado que pudo cambiar debajo.
+/// A navigation popup item, FROZEN when built in
+/// [`crate::app::App::open_nav_popup`]: display already sanitized,
+/// destination already parsed and (for hotlist) the favorite's raw key. The
+/// popup is a snapshot on purpose — everything a key needs travels inside
+/// the item, nothing gets re-resolved against a state that may have changed
+/// underneath.
 #[derive(Debug, Clone)]
 pub struct NavItem {
-    /// Display YA saneado, listo para pintar.
+    /// Display ALREADY sanitized, ready to paint.
     pub display: String,
-    /// Destino parseado; `None` = entrada de hotlist inválida (se muestra
-    /// con su aviso, no navega).
+    /// Parsed destination; `None` = invalid hotlist entry (shown with its
+    /// warning, doesn't navigate).
     pub target: Option<VPath>,
-    /// `name` CRUDO del favorito — la clave del borrado con `d`
-    /// ([`crate::app::App::nav_popup_selected_hotlist_name`]), congelada al abrir: un
-    /// hot-reload puede mutar `App::hotlist` bajo el popup y el borrado
-    /// debe caer sobre lo MOSTRADO, jamás sobre lo que ahora ocupe ese
-    /// índice en la lista nueva (review MAJOR T5). `None` en historial.
+    /// The favorite's RAW `name` — the key `d` deletes by
+    /// ([`crate::app::App::nav_popup_selected_hotlist_name`]), frozen on
+    /// open: a hot-reload can mutate `App::hotlist` under the popup and the
+    /// delete has to land on what was SHOWN, never on whatever now occupies
+    /// that index in the new list (review MAJOR T5). `None` in history.
     pub hotlist_name: Option<String>,
-    /// La marca de una fila de historia (`aquí`, `adelante`), ya traducida.
+    /// A history row's mark (`here`, `forward`), already translated.
     ///
-    /// APARTE del display y pintada con otro estilo: pegada al texto de la
-    /// ruta, un directorio que se llamara `x · aquí` era indistinguible de `x`
-    /// marcado como actual (encoding-auditor, fase 1). `None` en todo lo demás.
+    /// SEPARATE from the display and painted in a different style: glued to
+    /// the path text, a directory literally named `x · here` was
+    /// indistinguishable from `x` marked as the current one
+    /// (encoding-auditor, phase 1). `None` everywhere else.
     pub mark: Option<String>,
 }
 
-/// Popup de navegación (`Alt+↓` historial / `Ctrl+D` hotlist). Los `items`
-/// se construyen YA saneados en [`crate::app::App::open_nav_popup`] (ver [`NavItem`]):
-/// el render no re-decide nada y Enter no re-parsea nada.
+/// Navigation popup (`Alt+↓` history / `Ctrl+D` hotlist). The `items` are
+/// built ALREADY sanitized in [`crate::app::App::open_nav_popup`] (see
+/// [`NavItem`]): rendering doesn't re-decide anything and Enter doesn't
+/// re-parse anything.
 #[derive(Debug, Clone)]
 pub struct NavPopup {
-    /// Historial, hotlist o volúmenes (decide título, footer y qué teclas
-    /// extra acepta).
+    /// History, hotlist or volumes (decides the title, footer and which
+    /// extra keys it accepts).
     pub kind: NavPopupKind,
-    /// Items congelados al abrir.
+    /// Items frozen on open.
     pub(crate) items: Vec<NavItem>,
-    /// Índice resaltado.
+    /// Highlighted index.
     pub(crate) cursor: usize,
-    /// Input de nombre abierto (`a` en hotlist): captura imprimibles antes
-    /// que nada (main.rs); `None` = navegación normal del popup.
+    /// Open name input (`a` in hotlist): captures printables before anything
+    /// else (main.rs); `None` = normal popup navigation.
     pub name_input: Option<String>,
-    /// El pane que `Confirm` navega. El foco para historial, hotlist y
-    /// `pane.select-drive`; un LADO fijo para `-left`/`-right`
-    /// independientemente de dónde esté el foco (design §D — así se
-    /// comportan `Alt+F1`/`Alt+F2` de Total Commander). Congelado al abrir,
-    /// misma razón que el resto del item: nada aquí se re-resuelve contra un
-    /// foco que pudo moverse debajo del popup.
+    /// The pane `Confirm` navigates. The focused one for history, hotlist
+    /// and `pane.select-drive`; a fixed SIDE for `-left`/`-right` regardless
+    /// of where focus is (design §D — that's how Total Commander's
+    /// `Alt+F1`/`Alt+F2` behave). Frozen on open, same reason as the rest of
+    /// the item: nothing here gets re-resolved against a focus that may have
+    /// moved under the popup.
     pub(crate) target_pane: usize,
-    /// Solo volúmenes: si la lista ACTUAL incluye pseudo-filesystems (el
-    /// toggle "mostrar todo" del design §E). Sin sentido en historial/
-    /// hotlist, donde queda `false`.
+    /// Volumes only: whether the CURRENT list includes pseudo-filesystems
+    /// (design §E's "show all" toggle). Meaningless in history/hotlist,
+    /// where it stays `false`.
     pub(crate) include_pseudo: bool,
-    /// Solo una historia abierta por LADO (`pane.history-left/-right`): qué
-    /// lado, para que el título lo diga. `None` en todo lo demás.
+    /// Only a history opened by SIDE (`pane.history-left/-right`): which
+    /// side, so the title can say so. `None` everywhere else.
     pub(crate) side: Option<usize>,
-    /// El filtro de una lista de historia o de populares (`dialog.filter`,
-    /// spec 2026-09-15 D2): `Some` mientras se teclea, y entonces las teclas de
-    /// texto son suyas. `None` sin filtrar y en las demás listas.
+    /// A history or popular list's filter (`dialog.filter`, spec
+    /// 2026-09-15 D2): `Some` while typing, and then text keys belong to it.
+    /// `None` unfiltered and in the other lists.
     pub filter: Option<String>,
 }
 
 impl NavPopup {
-    /// Sube el cursor (tope arriba).
+    /// Moves the cursor up (clamped at the top).
     pub fn up(&mut self) {
         self.cursor = self.cursor.saturating_sub(1);
     }
 
-    /// Baja el cursor (tope en el último item).
+    /// Moves the cursor down (clamped at the last item).
     pub fn down(&mut self) {
         if self.cursor + 1 < self.items.len() {
             self.cursor += 1;
         }
     }
 
-    /// Items congelados para el render.
+    /// Items frozen for rendering.
     #[must_use]
     pub fn items(&self) -> &[NavItem] {
         &self.items
     }
 
-    /// Índice resaltado.
+    /// Highlighted index.
     #[must_use]
     pub fn cursor(&self) -> usize {
         self.cursor
     }
 
-    /// El item resaltado, si lo hay.
+    /// The highlighted item, if any.
     #[must_use]
     pub fn selected(&self) -> Option<&NavItem> {
         self.items.get(self.cursor)
     }
 
-    /// El pane que `Confirm` debe navegar — ver el campo.
+    /// The pane `Confirm` must navigate — see the field.
     #[must_use]
     pub fn target_pane(&self) -> usize {
         self.target_pane
     }
 
-    /// Si la lista de volúmenes actual incluye pseudo-filesystems — ver el
-    /// campo. Sin significado fuera de `NavPopupKind::Volumes`.
+    /// Whether the current volumes list includes pseudo-filesystems — see
+    /// the field. Meaningless outside `NavPopupKind::Volumes`.
     #[must_use]
     pub fn include_pseudo(&self) -> bool {
         self.include_pseudo
     }
 }
 
-/// Display de un item del popup de navegación: `[name — ]path` con el badge
-/// hostil como PREFIJO si cualquier parte saldría alterada (mismo criterio
-/// que los panes: lossy y MARCADO, spec §6).
+/// Display for a navigation popup item: `[name — ]path` with the hostile
+/// badge as a PREFIX if any part would show up altered (same criterion as
+/// the panes: lossy and MARKED, spec §6).
 pub(crate) fn nav_item_display(
     name: Option<&str>,
     path: &VPath,
     enc: Option<norte_encoding::NameEncoding>,
 ) -> String {
-    // #98/F4: los popups son superficie de DECISIÓN (elegir destino de
-    // salto) — siguen la reinterpretación del pane con foco, como la barra.
+    // #98/F4: popups are a DECISION surface (choosing a jump destination) —
+    // they follow the focused pane's reinterpretation, like the status bar.
     let (text, path_hostile) = norte_frontend::path_display_with(path, enc);
     let (prefix, name_hostile) = match name {
         Some(n) => {
@@ -153,10 +156,10 @@ pub(crate) fn nav_item_display(
     }
 }
 
-/// Items de una lista de historia o de populares, desde las filas
-/// COMPARTIDAS ([`norte_frontend::history::history_rows`]): la ruta saneada
-/// como cualquier otra, y la marca de la fila (`aquí`, `adelante`) en su
-/// propio campo, que el pintor pone detrás y con otro estilo.
+/// Items for a history or popular list, from the SHARED rows
+/// ([`norte_frontend::history::history_rows`]): the path sanitized like any
+/// other, and the row's mark (`here`, `forward`) in its own field, which the
+/// painter puts after it and in a different style.
 pub(crate) fn history_items(
     rows: Vec<norte_frontend::history::HistoryRow>,
     enc: Option<norte_encoding::NameEncoding>,

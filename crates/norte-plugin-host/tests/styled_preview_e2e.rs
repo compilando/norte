@@ -1,97 +1,98 @@
-//! E2E de `previewer::render-styled` (ADR 0037 decisión 2, WIT 0.6.0):
-//! compila el guest REAL `examples-wasm/previewer-demo` a `wasm32-wasip2` y
-//! ejecuta [`PluginRuntime::instantiate`] + `PluginInstance::render_styled_preview`,
-//! verificando:
+//! E2E of `previewer::render-styled` (ADR 0037 decision 2, WIT 0.6.0):
+//! compiles the REAL guest `examples-wasm/previewer-demo` to
+//! `wasm32-wasip2` and runs [`PluginRuntime::instantiate`] +
+//! `PluginInstance::render_styled_preview`, verifying:
 //!
-//! - Round-trip de roles+fg REALES desde un guest que clasifica tokens
-//!   (dígitos → `role: "number"`; palabra clave fija → `role: "keyword"` +
-//!   `fg`), no un mock.
-//! - Los CUATRO topes anti-DoS de la tabla ADR 0037 decisión 1 se aplican
-//!   POST-retorno del guest y rechazan ENTERO (fail-closed, no truncan): un
-//!   guest real que devuelve una línea con más de 256 spans dispara
-//!   [`RuntimeError::StyledPreviewTooLarge`] — el caller (`norte-core`, fuera
-//!   de alcance de este crate) es quien decide caer a la previsualización
-//!   plana; aquí se fija el contrato del runtime.
+//! - Round-trip of REAL roles+fg from a guest that classifies tokens
+//!   (digits → `role: "number"`; a fixed keyword → `role: "keyword"` +
+//!   `fg`), not a mock.
+//! - The FOUR anti-DoS caps of the ADR 0037 decision table 1 are applied
+//!   POST-return from the guest and reject the WHOLE thing (fail-closed,
+//!   they do not truncate): a real guest returning a line with more than
+//!   256 spans triggers [`RuntimeError::StyledPreviewTooLarge`] — the
+//!   caller (`norte-core`, out of this crate's scope) is the one who
+//!   decides to fall back to the plain preview; here the runtime's
+//!   contract is fixed.
 //!
-//! SKIP si el target `wasm32-wasip2` no está instalado (ver `support`).
+//! SKIP if the `wasm32-wasip2` target is not installed (see `support`).
 
 use norte_plugin_host::{Capabilities, PluginRuntime, RuntimeError};
 
 mod support;
 
 #[test]
-fn styled_preview_roundtrip_roles_y_fg_wasm_real() {
+fn styled_preview_roundtrip_roles_and_fg_wasm_real() {
     let Some(wasm) = support::build_guest("previewer-demo") else {
         return;
     };
     let rt = PluginRuntime::new().expect("engine");
     let mut inst = rt
         .instantiate(&wasm, Capabilities::default())
-        .expect("instancia");
+        .expect("instance");
 
-    let content = b"hola 42 TODO mundo";
+    let content = b"hello 42 TODO world";
     let lines = inst
         .render_styled_preview("text/plain", content, None)
         .expect("render-styled");
 
-    // Línea 0 = cabecera plana (sin rol/fg), un único span.
-    assert_eq!(lines[0].len(), 1, "cabecera = un span");
+    // Line 0 = plain header (no role/fg), a single span.
+    assert_eq!(lines[0].len(), 1, "header = one span");
     assert!(lines[0][0].role.is_none() && lines[0][0].fg.is_none());
     assert!(lines[0][0].text.contains("text/plain"));
 
-    // Línea 1 = el contenido tokenizado: "hola" plano, "42" → number,
-    // "TODO" → keyword con fg fijo, "mundo" plano.
+    // Line 1 = the tokenized content: "hello" plain, "42" → number,
+    // "TODO" → keyword with fixed fg, "world" plain.
     let spans = &lines[1];
     let numbers: Vec<_> = spans
         .iter()
         .filter(|s| s.role.as_deref() == Some("number"))
         .collect();
-    assert_eq!(numbers.len(), 1, "un span número: {spans:?}");
+    assert_eq!(numbers.len(), 1, "one number span: {spans:?}");
     assert_eq!(numbers[0].text, "42");
-    assert!(numbers[0].fg.is_none(), "number no lleva fg fijo");
+    assert!(numbers[0].fg.is_none(), "number carries no fixed fg");
 
     let keywords: Vec<_> = spans
         .iter()
         .filter(|s| s.role.as_deref() == Some("keyword"))
         .collect();
-    assert_eq!(keywords.len(), 1, "un span keyword: {spans:?}");
+    assert_eq!(keywords.len(), 1, "one keyword span: {spans:?}");
     assert_eq!(keywords[0].text, "TODO");
     assert_eq!(
         keywords[0].fg,
         Some((255, 200, 0)),
-        "keyword lleva fg fijo ADEMÁS del rol (el host decide cuál pinta)"
+        "keyword carries a fixed fg IN ADDITION to the role (the host decides which paints)"
     );
 
     let plain: Vec<_> = spans.iter().filter(|s| s.role.is_none()).collect();
     assert!(
-        plain.iter().any(|s| s.text == "hola") && plain.iter().any(|s| s.text == "mundo"),
-        "los tokens no clasificados quedan planos: {spans:?}"
+        plain.iter().any(|s| s.text == "hello") && plain.iter().any(|s| s.text == "world"),
+        "unclassified tokens stay plain: {spans:?}"
     );
 }
 
 #[test]
-fn styled_preview_supera_tope_de_spans_por_linea_se_rechaza_entero() {
+fn styled_preview_exceeding_the_spans_per_line_cap_is_rejected_whole() {
     let Some(wasm) = support::build_guest("previewer-demo") else {
         return;
     };
     let rt = PluginRuntime::new().expect("engine");
     let mut inst = rt
         .instantiate(&wasm, Capabilities::default())
-        .expect("instancia");
+        .expect("instance");
 
-    // El guest tokeniza por espacios y separa cada token con un span
-    // adicional de un solo carácter: 130 palabras en una línea → 259 spans
-    // (130 tokens + 129 separadores), por encima del tope de 256/línea (ADR
-    // 0037 tabla de decisión 1, enmienda D4).
+    // The guest tokenizes on spaces and separates each token with an
+    // extra single-character span: 130 words in one line → 259 spans
+    // (130 tokens + 129 separators), above the 256/line cap (ADR
+    // 0037 decision table 1, D4 amendment).
     let words: Vec<String> = (0..130).map(|i| format!("w{i}")).collect();
     let line = words.join(" ");
     let content = line.as_bytes();
 
     let err = inst
         .render_styled_preview("text/plain", content, None)
-        .expect_err("una línea de 259 spans supera el tope de 256");
+        .expect_err("a 259-span line exceeds the 256 cap");
     assert!(
         matches!(err, RuntimeError::StyledPreviewTooLarge(ref m) if m.contains("spans")),
-        "fue {err:?}"
+        "was {err:?}"
     );
 }

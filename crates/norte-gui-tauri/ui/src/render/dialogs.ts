@@ -1,28 +1,28 @@
-// Pintores de `Screen` para dialogs (ola W10): funciones con `this: Screen`,
-// enganchadas como propiedades en `render.ts`. El estado sigue en la clase.
+// `Screen` painters for dialogs (wave W10): functions with `this: Screen`,
+// hooked in as properties in `render.ts`. State stays in the class.
 
 import type { Screen } from "../render";
 import type { DialogLine, DialogView } from "../types";
 import { badge } from "./dom";
 
-/** Un campo etiquetado de un diálogo: la etiqueta fuera de banda y el valor
- *  con su marca si lo pintado difiere de lo que hay. */
-export function campoDeDialogo(
+/** A dialog's labeled field: the label out of band and the value with its
+ *  mark if what is painted differs from what is there. */
+export function dialogField(
   this: Screen,
-  etiquetaTexto: string,
-  linea: DialogLine,
+  labelText: string,
+  line: DialogLine,
 ): HTMLElement {
   const p = document.createElement("p");
   p.className = "dialog-field";
-  const etiqueta = document.createElement("span");
-  etiqueta.className = "dialog-field-label";
-  etiqueta.textContent = etiquetaTexto;
-  const valor = document.createElement("span");
-  valor.textContent = linea.text;
-  valor.dataset["hostile"] = String(linea.hostile);
-  p.append(etiqueta, valor);
-  if (linea.hostile) {
-    valor.classList.add("hostile");
+  const label = document.createElement("span");
+  label.className = "dialog-field-label";
+  label.textContent = labelText;
+  const value = document.createElement("span");
+  value.textContent = line.text;
+  value.dataset["hostile"] = String(line.hostile);
+  p.append(label, value);
+  if (line.hostile) {
+    value.classList.add("hostile");
     p.append(badge(this.t("hostile-name")));
   }
   return p;
@@ -31,26 +31,27 @@ export function campoDeDialogo(
 export function paintDialogs(this: Screen, dialogs: DialogView[]): void {
   if (dialogs.length === 0) {
     this.dialogsRoot.replaceChildren();
-    this.dialogoPintado = null;
-    this.dialogoInput = null;
-    this.dialogoCampos.clear();
+    this.dialogPainted = null;
+    this.dialogInput = null;
+    this.dialogFields.clear();
     return;
   }
   const top = dialogs[dialogs.length - 1];
   if (top === undefined) {
     return;
   }
-  // El campo al que devolver el foco cuando la caja nueva esté montada.
-  let refocar: HTMLInputElement | null = null;
-  // Y, en un FORMULARIO, cuál de sus campos lo tenía y por dónde iba el caret
-  // (puente 91): la caja se rehace entera en cada parche —y cada tecla
-  // produce uno—, así que sin esto se escribe una letra y el foco se cae.
-  const activo = document.activeElement;
-  let campoFoco: string | null = null;
+  // The field to return focus to once the new box is mounted.
+  let refocus: HTMLInputElement | null = null;
+  // And, in a FORM, which of its fields had it and where the caret was
+  // (bridge 91): the box is rebuilt whole on every patch — and every
+  // keystroke produces one — so without this, typing a letter drops the
+  // focus.
+  const active = document.activeElement;
+  let focusedField: string | null = null;
   let caret = 0;
-  if (activo instanceof HTMLInputElement && activo.dataset["campo"] !== undefined) {
-    campoFoco = activo.dataset["campo"];
-    caret = activo.selectionStart ?? activo.value.length;
+  if (active instanceof HTMLInputElement && active.dataset["campo"] !== undefined) {
+    focusedField = active.dataset["campo"];
+    caret = active.selectionStart ?? active.value.length;
   }
   const box = document.createElement("div");
   box.className = "dialog";
@@ -62,197 +63,202 @@ export function paintDialogs(this: Screen, dialogs: DialogView[]): void {
   box.setAttribute("aria-labelledby", h.id);
   box.append(h);
   if (top.destination !== null) {
-    // El destino, en su propio elemento y con su etiqueta traducida. NO
-    // como una línea del cuerpo con una flecha delante: un directorio puede
-    // llamarse `docs → /casa/BORRAR`, esa flecha es legítima y no se
-    // enmascara, así que la línea se leería como dos rutas y quien confirma
-    // creería estar mandando sus ficheros a la segunda.
+    // The destination, in its own element and with its translated label. NOT
+    // as a body line with an arrow in front: a directory can be named
+    // `docs → /home/DELETE`, that arrow is legitimate and is not masked, so
+    // the line would read as two paths and whoever confirms would believe
+    // they were sending their files to the second one.
     const dest = document.createElement("p");
     dest.className = "dialog-destination";
-    const etiqueta = document.createElement("span");
-    etiqueta.className = "dialog-destination-label";
-    etiqueta.textContent = this.t("dialog-destination");
-    const valor = document.createElement("span");
-    valor.textContent = top.destination.text;
-    valor.dataset["hostile"] = String(top.destination.hostile);
-    dest.append(etiqueta, valor);
+    const label = document.createElement("span");
+    label.className = "dialog-destination-label";
+    label.textContent = this.t("dialog-destination");
+    const value = document.createElement("span");
+    value.textContent = top.destination.text;
+    value.dataset["hostile"] = String(top.destination.hostile);
+    dest.append(label, value);
     if (top.destination.hostile) {
-      valor.classList.add("hostile");
+      value.classList.add("hostile");
       dest.append(badge(this.t("hostile-name")));
     }
     box.append(dest);
   }
-  // Qué se pide y quién lo pide, cada uno etiquetado y FUERA de la lista de
-  // rutas: entre líneas de rutas, un nombre de fichero que dijera lo mismo
-  // sería indistinguible.
+  // What is asked for and who is asking, each labeled and OUTSIDE the path
+  // list: among path lines, a file name saying the same thing would be
+  // indistinguishable.
   if (top.subject !== null) {
-    box.append(this.campoDeDialogo(this.t("dialog-subject"), top.subject));
+    box.append(this.dialogField(this.t("dialog-subject"), top.subject));
   }
   if (top.asker !== null) {
-    box.append(this.campoDeDialogo(this.t("dialog-asker"), top.asker));
+    box.append(this.dialogField(this.t("dialog-asker"), top.asker));
   }
   if (top.body.length > 0) {
-    // Numeradas por POSICIÓN, con una lista ordenada: la etiqueta es
-    // estructural y ningún nombre de fichero puede escribirla.
-    const lista = document.createElement("ol");
-    lista.className = "dialog-body";
+    // Numbered by POSITION, with an ordered list: the label is structural
+    // and no file name can write it.
+    const list = document.createElement("ol");
+    list.className = "dialog-body";
     for (const line of top.body) {
       const li = document.createElement("li");
       li.textContent = line.text;
       li.dataset["hostile"] = String(line.hostile);
       if (line.hostile) {
-        // Esta es la pantalla donde se aprueba borrar, copiar o mover un
-        // nombre. Un nombre que se pinta distinto de lo que es y no lo dice
-        // se lee como fiel, y la aprobación es de otra cosa.
+        // This is the screen where deleting, copying or moving a name gets
+        // approved. A name that paints different from what it is and does
+        // not say so reads as trustworthy, and the approval is for something
+        // else.
         li.classList.add("hostile");
         li.append(badge(this.t("hostile-name")));
       }
-      lista.append(li);
+      list.append(li);
     }
-    box.append(lista);
+    box.append(list);
   }
   if (top.deadline !== null) {
-    // El plazo, en su propio elemento: con `ttl_ms == 0` no hay línea de
-    // plazo que pintar, y entonces un fichero llamado «caduca en 3600 s»
-    // sería la única que lo pareciera.
-    const plazo = document.createElement("p");
-    plazo.className = "dialog-deadline";
-    plazo.setAttribute("role", "status");
-    plazo.textContent = top.deadline;
-    // Y si el host dijo CUÁNDO vence, se cuenta de verdad (#279). La frase
-    // del host se calcula al abrir y se congelaba: un modal que llevaba
-    // cuatro minutos delante seguía diciendo «caduca en 300 s».
+    // The deadline, in its own element: with `ttl_ms == 0` there is no
+    // deadline line to paint, and then a file named "expires in 3600 s"
+    // would be the only thing that looked like one.
+    const deadline = document.createElement("p");
+    deadline.className = "dialog-deadline";
+    deadline.setAttribute("role", "status");
+    deadline.textContent = top.deadline;
+    // And if the host said WHEN it expires, it is counted for real (#279).
+    // The host's sentence used to be computed on open and then frozen: a
+    // modal that had been up for four minutes still said "expires in 300 s".
     //
-    // El texto lo sigue componiendo el host —aquí solo se sustituye el
-    // número dentro de él— porque la frase es suya y está traducida: el
-    // renderer no sabe decir «caduca en» en el idioma de esta ventana.
-    const vence = top.deadline_at_ms;
-    if (vence !== undefined && vence !== null) {
-      const plantilla = top.deadline;
-      const pintar = (): boolean => {
-        const quedan = Math.max(0, Math.ceil((vence - Date.now()) / 1000));
-        plazo.textContent = plantilla.replace(/\d+/, String(quedan));
-        return quedan > 0;
+    // The host keeps composing the text — only the number inside it gets
+    // substituted here — because the sentence is its own and is translated:
+    // the renderer does not know how to say "expires in" in this window's
+    // language.
+    const dueAt = top.deadline_at_ms;
+    if (dueAt !== undefined && dueAt !== null) {
+      const template = top.deadline;
+      const paint = (): boolean => {
+        const remaining = Math.max(0, Math.ceil((dueAt - Date.now()) / 1000));
+        deadline.textContent = template.replace(/\d+/, String(remaining));
+        return remaining > 0;
       };
-      pintar();
+      paint();
       const tick = window.setInterval(() => {
-        // Cuando llega a cero se para solo: el diálogo lo cierra el host al
-        // vencer, y seguir contando en negativo sobre algo que ya no está
-        // es ruido.
-        if (!pintar() || !plazo.isConnected) {
+        // It stops on its own when it reaches zero: the host closes the
+        // dialog when it expires, and counting into the negative on
+        // something that is no longer there is noise.
+        if (!paint() || !deadline.isConnected) {
           window.clearInterval(tick);
         }
       }, 1000);
     }
-    box.append(plazo);
+    box.append(deadline);
   }
   if (top.overflow_note !== "") {
-    // La lista está recortada, y decirlo es lo único que impide confirmar
-    // una operación sobre doscientos ficheros creyendo que son dieciséis.
-    const nota = document.createElement("p");
-    nota.className = "dialog-overflow";
-    nota.setAttribute("role", "alert");
-    nota.textContent = top.overflow_note;
-    // Y si algo de lo que NO se enseña se pintaría alterado. El badge no
-    // puede hablar de una ruta concreta —esa no está delante— pero sí decir
-    // que ahí fuera hay algo así, que es lo que decide si merece la pena
-    // ampliar antes de aprobar. El terminal lo decía y esta ventana no.
+    // The list is truncated, and saying so is the only thing that keeps
+    // someone from confirming an operation on two hundred files thinking
+    // there are sixteen.
+    const note = document.createElement("p");
+    note.className = "dialog-overflow";
+    note.setAttribute("role", "alert");
+    note.textContent = top.overflow_note;
+    // And whether something NOT shown would paint altered. The badge cannot
+    // talk about a specific path — it is not in front of us — but it can say
+    // there is something like that out there, which is what decides whether
+    // expanding before approving is worth it. The terminal said so and this
+    // window did not.
     if (top.overflow_hostile === true) {
-      nota.append(" ", badge(this.t("hostile-name")));
+      note.append(" ", badge(this.t("hostile-name")));
     }
-    box.append(nota);
+    box.append(note);
   }
-  const chequeo = top.dest_check ?? { state: "not_asked" };
-  if (chequeo.state === "checking") {
-    // Se DICE que se está preguntando, y el sitio queda reservado: un aviso
-    // que aterriza de golpe encima de los botones los mueve bajo el
-    // puntero de quien ya iba a pulsar. Y sobre todo, mientras esto se lea
-    // «comprobando», la ausencia de la línea de #164 no se puede leer como
-    // «este destino confina».
-    const espera = document.createElement("p");
-    espera.className = "dialog-checking";
-    espera.textContent = this.t("dialog-checking-destination");
-    box.append(espera);
+  const check = top.dest_check ?? { state: "not_asked" };
+  if (check.state === "checking") {
+    // It is SAID that a question is in flight, and the spot stays reserved:
+    // a notice that lands abruptly on top of the buttons moves them under
+    // the pointer of someone who was already about to click. And above all,
+    // while this reads "checking", the absence of line #164 cannot be read
+    // as "this destination confines".
+    const waiting = document.createElement("p");
+    waiting.className = "dialog-checking";
+    waiting.textContent = this.t("dialog-checking-destination");
+    box.append(waiting);
   }
-  if (chequeo.state === "done") {
-    for (const aviso of chequeo.warnings) {
-      // Del DESTINO: que no cabe, que no sabe confinar. Ya traducidos y sin
-      // una sola cadena que controle un tercero, así que van en su propio
-      // bloque y no entre las líneas del cuerpo — donde un nombre de
-      // fichero los podría suplantar.
-      const linea = document.createElement("p");
-      linea.className = "dialog-warning";
-      linea.setAttribute("role", "alert");
-      linea.textContent = aviso;
-      box.append(linea);
+  if (check.state === "done") {
+    for (const warning of check.warnings) {
+      // About the DESTINATION: that it does not fit, that it cannot confine.
+      // Already translated and with not a single string controlled by a
+      // third party, so they go in their own block and not among the body's
+      // lines — where a file name could impersonate them.
+      const line = document.createElement("p");
+      line.className = "dialog-warning";
+      line.setAttribute("role", "alert");
+      line.textContent = warning;
+      box.append(line);
     }
   }
   if (top.input_hostile) {
-    // Es la ÚNICA superficie donde se aprueba un nombre: si lo que se pinta
-    // difiere de lo que se creará, se dice aquí.
-    const aviso = document.createElement("p");
-    aviso.className = "hostile";
-    aviso.setAttribute("role", "alert");
-    aviso.textContent = this.t("hostile-name");
-    box.append(aviso);
+    // It is the ONLY surface where a name gets approved: if what is painted
+    // differs from what will be created, it is said here.
+    const notice = document.createElement("p");
+    notice.className = "hostile";
+    notice.setAttribute("role", "alert");
+    notice.textContent = this.t("hostile-name");
+    box.append(notice);
   }
   if (top.input === null) {
-    this.dialogoInput = null;
+    this.dialogInput = null;
   } else {
-    // El campo se REUSA mientras sea el mismo diálogo. Antes se creaba uno
-    // nuevo en cada repintado y se le dejaba el valor sin poner —para no
-    // devolverle la proyección del host, enmascarada y acotada, que el
-    // siguiente evento habría mandado de vuelta como si fuera lo tecleado—,
-    // así que el campo salía VACÍO. Y como cada tecla provoca un parche,
-    // cada tecla lo vaciaba: lo que llegaba a `fs.mkdir` era el último
-    // carácter. Reusar el nodo conserva de paso el cursor y la selección.
-    const previo = this.dialogoPintado === top.id ? this.dialogoInput : null;
-    // Reusar el nodo no basta: la caja del diálogo se rehace en cada
-    // repintado y el campo se MUEVE a la nueva, y mover un nodo lo saca del
-    // documento un instante, que es lo que le quita el foco. Cada tecla
-    // provoca un parche, así que cada tecla dejaba el campo sin foco y la
-    // siguiente se iba al host como un acorde. Se apunta si lo tenía y se
-    // le devuelve al final, con la caja ya montada.
-    const teniaFoco = previo !== null && document.activeElement === previo;
-    if (teniaFoco) {
-      refocar = previo;
+    // The field is REUSED as long as it is the same dialog. It used to be
+    // created anew on every repaint and left with no value set — so as not
+    // to give back the host's projection, masked and bounded, which the next
+    // event would have sent back as if it were what was typed — so the field
+    // came out EMPTY. And since every keystroke triggers a patch, every
+    // keystroke emptied it: what reached `fs.mkdir` was the last character.
+    // Reusing the node also keeps the cursor and the selection.
+    const previous = this.dialogPainted === top.id ? this.dialogInput : null;
+    // Reusing the node is not enough: the dialog box is rebuilt on every
+    // repaint and the field gets MOVED to the new one, and moving a node
+    // takes it out of the document for an instant, which is what strips its
+    // focus. Every keystroke triggers a patch, so every keystroke left the
+    // field unfocused and the next one went to the host as a chord. Whether
+    // it had focus is recorded and given back at the end, once the box is
+    // mounted.
+    const hadFocus = previous !== null && document.activeElement === previous;
+    if (hadFocus) {
+      refocus = previous;
     }
-    let input = previo;
+    let input = previous;
     if (input === null) {
       input = document.createElement("input");
-      // #327: una contraseña se pinta como contraseña. Lo que llega en
-      // `top.input` son PUNTOS —el host no manda nunca el texto—, así que
-      // sembrar el campo con eso escribiría puntos literales dentro: se
-      // siembra vacío, que es lo que el diálogo acaba de abrir.
+      // #327: a password paints as a password. What arrives in `top.input`
+      // is DOTS — the host never sends the text — so seeding the field with
+      // that would write literal dots inside it: it is seeded empty, which
+      // is what the dialog just opened with.
       input.type = top.input_secret ? "password" : "text";
       input.value = top.input_secret ? "" : top.input;
       if (top.input_secret) {
-        // `new-password` y no `off`: Chromium y WebView2 IGNORAN `off` en un
-        // campo de contraseña a propósito, y este es el valor que sí
-        // respetan. Esto no se guarda en ninguna parte, que es justo lo que
-        // el cuerpo del diálogo promete.
+        // `new-password` and not `off`: Chromium and WebView2 deliberately
+        // IGNORE `off` on a password field, and this is the value they do
+        // respect. This is not saved anywhere, which is exactly what the
+        // dialog's body promises.
         input.autocomplete = "new-password";
         input.setAttribute("autocorrect", "off");
         input.spellcheck = false;
       }
-      const vivo = input;
-      vivo.addEventListener("input", () => {
-        // Una CONTRASEÑA no se manda al teclear (#327): el host no guarda lo
-        // que se escribe, el campo lo enmascara el propio navegador, y por
-        // aquí cruzarían `h`, `hu`, `hun`… — un prefijo por pulsación, cada
-        // uno en un trozo de heap que nadie pisa. Cruza una vez, al
-        // confirmar.
+      const live = input;
+      live.addEventListener("input", () => {
+        // A PASSWORD is not sent while typing (#327): the host does not keep
+        // what gets typed, the field is masked by the browser itself, and
+        // over this path `h`, `hu`, `hun`… would cross — one prefix per
+        // keystroke, each in a piece of heap nobody wipes. It crosses once,
+        // on confirming.
         if (top.input_secret) {
           return;
         }
-        this.send({ action: "dialog_input", id: top.id, text: vivo.value });
+        this.send({ action: "dialog_input", id: top.id, text: live.value });
       });
       if (top.input_secret) {
-        // Enter DENTRO del campo confirma, y lleva el valor. Sin esto, la
-        // tecla sale al host como un acorde `dialog.confirm` — que sobre un
-        // diálogo de contraseña no lleva nada y por tanto es inerte—, así
-        // que la forma más natural de contestar no habría hecho nada.
-        vivo.addEventListener("keydown", (e) => {
+        // Enter INSIDE the field confirms, and carries the value. Without
+        // this, the key goes out to the host as a `dialog.confirm` chord —
+        // which over a password dialog carries nothing and is therefore
+        // inert — so the most natural way to answer would have done nothing.
+        live.addEventListener("keydown", (e) => {
           if (e.key !== "Enter") {
             return;
           }
@@ -262,84 +268,85 @@ export function paintDialogs(this: Screen, dialogs: DialogView[]): void {
             action: "dialog",
             id: top.id,
             choice: "confirm",
-            secret: vivo.value,
+            secret: live.value,
           });
         });
       }
       queueMicrotask(() => {
-        vivo.focus();
+        live.focus();
       });
     }
     input.setAttribute("aria-labelledby", h.id);
-    this.dialogoInput = input;
+    this.dialogInput = input;
     box.append(input);
   }
-  // Los CAMPOS de un formulario (puente 91), en el orden en que llegan: el
-  // host los ordena, y reordenarlos aquí sería contar otra historia.
-  const campos = top.fields ?? [];
-  if (campos.length > 0) {
-    // Un diálogo distinto empieza de cero; el MISMO reutiliza sus nodos.
-    if (this.dialogoPintado !== top.id) {
-      this.dialogoCampos.clear();
+  // A form's FIELDS (bridge 91), in the order they arrive: the host orders
+  // them, and reordering them here would tell a different story.
+  const fields = top.fields ?? [];
+  if (fields.length > 0) {
+    // A different dialog starts from scratch; the SAME one reuses its nodes.
+    if (this.dialogPainted !== top.id) {
+      this.dialogFields.clear();
     }
-    const nacieron = this.dialogoCampos.size === 0;
-    const caja = document.createElement("div");
-    caja.className = "dialog-fields";
-    let primero: HTMLInputElement | null = null;
-    for (const f of campos) {
-      const fila = document.createElement("p");
-      fila.className = "dialog-field";
-      const etiqueta = document.createElement("label");
-      etiqueta.className = "dialog-field-label";
-      etiqueta.textContent = this.t(f.label_key);
-      etiqueta.htmlFor = `dialog-field-${f.id}`;
-      fila.append(etiqueta);
-      const previo = this.dialogoCampos.get(f.id) ?? null;
+    const justBorn = this.dialogFields.size === 0;
+    const box2 = document.createElement("div");
+    box2.className = "dialog-fields";
+    let first: HTMLInputElement | null = null;
+    for (const f of fields) {
+      const row = document.createElement("p");
+      row.className = "dialog-field";
+      const label = document.createElement("label");
+      label.className = "dialog-field-label";
+      label.textContent = this.t(f.label_key);
+      label.htmlFor = `dialog-field-${f.id}`;
+      row.append(label);
+      const previous = this.dialogFields.get(f.id) ?? null;
       if (f.kind.kind === "text") {
-        // **El nodo se REUTILIZA y su valor NO se vuelve a sembrar.** Lo que
-        // manda el host es su PROYECCIÓN —enmascarada y acotada—, así que
-        // re-sembrarla haría que la siguiente tecla la devolviera como si
-        // fuera lo tecleado: un `U+FFFD` de pantalla acabaría siendo el
-        // patrón que se busca. Es la misma disciplina que el campo único de
-        // arriba, y el host le pone el otro cinturón rechazando `U+FFFD`.
-        let texto = previo instanceof HTMLInputElement ? previo : null;
-        if (texto === null) {
-          texto = document.createElement("input");
-          texto.type = "text";
-          texto.id = `dialog-field-${f.id}`;
-          texto.value = f.value;
-          texto.dataset["campo"] = f.id;
-          const vivo = texto;
-          vivo.addEventListener("input", () => {
+        // **The node is REUSED and its value is NEVER re-seeded.** What the
+        // host sends is its PROJECTION — masked and bounded — so re-seeding
+        // it would make the next keystroke send it back as if it were what
+        // was typed: an on-screen `U+FFFD` would end up being the pattern
+        // being searched for. Same discipline as the single field above,
+        // and the host adds the other belt by rejecting `U+FFFD`.
+        let text = previous instanceof HTMLInputElement ? previous : null;
+        if (text === null) {
+          text = document.createElement("input");
+          text.type = "text";
+          text.id = `dialog-field-${f.id}`;
+          text.value = f.value;
+          text.dataset["campo"] = f.id;
+          const live = text;
+          live.addEventListener("input", () => {
             this.send({
               action: "dialog_field",
               id: top.id,
               field: f.id,
-              value: { set: "text", text: vivo.value },
+              value: { set: "text", text: live.value },
             });
           });
-          this.dialogoCampos.set(f.id, vivo);
+          this.dialogFields.set(f.id, live);
         }
-        texto.dataset["hostile"] = String(f.hostile);
-        texto.classList.toggle("hostile", f.hostile);
-        primero ??= texto;
-        fila.append(texto);
+        text.dataset["hostile"] = String(f.hostile);
+        text.classList.toggle("hostile", f.hostile);
+        first ??= text;
+        row.append(text);
         if (f.hostile) {
-          fila.append(badge(this.t("hostile-name")));
+          row.append(badge(this.t("hostile-name")));
         }
       } else if (f.kind.kind === "toggle") {
-        // Un interruptor sí se re-siembra: su estado es del HOST y no hay
-        // nada tecleado que pisar.
-        let casilla = previo instanceof HTMLInputElement ? previo : null;
-        if (casilla === null) {
-          casilla = document.createElement("input");
-          casilla.type = "checkbox";
-          casilla.id = `dialog-field-${f.id}`;
-          casilla.dataset["campo"] = f.id;
-          casilla.addEventListener("change", () => {
-            // Sin valor: se dice que se TOCÓ, y a qué estado va lo decide el
-            // host. Mandar el destino dejaría que dos pulsaciones rápidas se
-            // pisaran, la segunda nacida de una foto anterior.
+        // A toggle IS re-seeded: its state belongs to the HOST and there is
+        // nothing typed to overwrite.
+        let checkbox = previous instanceof HTMLInputElement ? previous : null;
+        if (checkbox === null) {
+          checkbox = document.createElement("input");
+          checkbox.type = "checkbox";
+          checkbox.id = `dialog-field-${f.id}`;
+          checkbox.dataset["campo"] = f.id;
+          checkbox.addEventListener("change", () => {
+            // No value: it says it was TOUCHED, and which state it goes to
+            // is decided by the host. Sending the destination would let two
+            // quick clicks step on each other, the second one born from a
+            // stale frame.
             this.send({
               action: "dialog_field",
               id: top.id,
@@ -347,18 +354,18 @@ export function paintDialogs(this: Screen, dialogs: DialogView[]): void {
               value: { set: "toggled" },
             });
           });
-          this.dialogoCampos.set(f.id, casilla);
+          this.dialogFields.set(f.id, checkbox);
         }
-        casilla.checked = f.kind.on;
-        fila.append(casilla);
+        checkbox.checked = f.kind.on;
+        row.append(checkbox);
       } else {
-        let boton = previo instanceof HTMLButtonElement ? previo : null;
-        if (boton === null) {
-          boton = document.createElement("button");
-          boton.type = "button";
-          boton.id = `dialog-field-${f.id}`;
-          boton.dataset["campo"] = f.id;
-          boton.addEventListener("click", () => {
+        let button = previous instanceof HTMLButtonElement ? previous : null;
+        if (button === null) {
+          button = document.createElement("button");
+          button.type = "button";
+          button.id = `dialog-field-${f.id}`;
+          button.dataset["campo"] = f.id;
+          button.addEventListener("click", () => {
             this.send({
               action: "dialog_field",
               id: top.id,
@@ -366,21 +373,21 @@ export function paintDialogs(this: Screen, dialogs: DialogView[]): void {
               value: { set: "cycled" },
             });
           });
-          this.dialogoCampos.set(f.id, boton);
+          this.dialogFields.set(f.id, button);
         }
-        boton.textContent = this.t(f.kind.value_key);
-        fila.append(boton);
+        button.textContent = this.t(f.kind.value_key);
+        row.append(button);
       }
-      caja.append(fila);
+      box2.append(row);
     }
-    box.append(caja);
-    // Un formulario recién abierto se lleva el foco a su primer campo, como
-    // el diálogo de un solo campo: sin esto se abre y teclear no hace nada
-    // hasta que alguien pulsa dentro.
-    if (nacieron && campoFoco === null && primero !== null) {
-      const destino = primero;
+    box.append(box2);
+    // A freshly opened form takes focus to its first field, like the
+    // single-field dialog: without this it opens and typing does nothing
+    // until someone clicks inside.
+    if (justBorn && focusedField === null && first !== null) {
+      const target = first;
       queueMicrotask(() => {
-        destino.focus();
+        target.focus();
       });
     }
   }
@@ -392,16 +399,16 @@ export function paintDialogs(this: Screen, dialogs: DialogView[]): void {
     b.textContent = this.t(c.label_key);
     b.dataset["destructive"] = String(c.destructive);
     b.addEventListener("click", () => {
-      // La contraseña viaja CON la respuesta afirmativa, y solo con ella
-      // (#327): cancelar no entrega nada. Se lee del campo vivo en este
-      // instante, que es lo que el lector está viendo — el host no guarda
-      // ninguna copia con la que pudiera discrepar.
+      // The password travels WITH the affirmative answer, and only with it
+      // (#327): canceling delivers nothing. It is read from the live field
+      // at this instant, which is what the reader is looking at — the host
+      // keeps no copy it could disagree with.
       if (top.input_secret && c.id === "confirm") {
         this.send({
           action: "dialog",
           id: top.id,
           choice: c.id,
-          secret: this.dialogoInput?.value ?? "",
+          secret: this.dialogInput?.value ?? "",
         });
         return;
       }
@@ -411,23 +418,23 @@ export function paintDialogs(this: Screen, dialogs: DialogView[]): void {
   }
   box.append(choices);
   this.dialogsRoot.replaceChildren(box);
-  this.dialogoPintado = top.id;
-  if (refocar !== null) {
-    refocar.focus();
+  this.dialogPainted = top.id;
+  if (refocus !== null) {
+    refocus.focus();
   }
-  // Y el campo del formulario que lo tenía, con su caret donde estaba. Se
-  // busca por `data-campo` y no con un selector compuesto: el id lo pone el
-  // host, pero componer un selector con texto ajeno es una costumbre que se
-  // acaba usando con texto que no lo es.
-  if (campoFoco !== null) {
-    const destino = Array.from(box.querySelectorAll("input, button")).find(
-      (n) => n instanceof HTMLElement && n.dataset["campo"] === campoFoco,
+  // And the form field that had it, with its caret where it was. Looked up
+  // by `data-campo` and not with a composite selector: the host sets the id,
+  // but composing a selector with someone else's text is a habit that
+  // eventually gets used with text that is not.
+  if (focusedField !== null) {
+    const target = Array.from(box.querySelectorAll("input, button")).find(
+      (n) => n instanceof HTMLElement && n.dataset["campo"] === focusedField,
     );
-    if (destino instanceof HTMLElement) {
-      destino.focus();
-      if (destino instanceof HTMLInputElement && destino.type === "text") {
-        const donde = Math.min(caret, destino.value.length);
-        destino.setSelectionRange(donde, donde);
+    if (target instanceof HTMLElement) {
+      target.focus();
+      if (target instanceof HTMLInputElement && target.type === "text") {
+        const where = Math.min(caret, target.value.length);
+        target.setSelectionRange(where, where);
       }
     }
   }

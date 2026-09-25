@@ -1,14 +1,15 @@
-//! El rastro de navegación: adónde vuelve `nav.back`, y qué se rebobina cuando
-//! un `cd` no llega a ninguna parte.
+//! The navigation trail: where `nav.back` returns to, and what gets rewound
+//! when a `cd` does not land anywhere.
 //!
-//! Un paso solo cuenta si el lector lo dio: un `cd` que falla, que se cancela o
-//! que aterriza en el MISMO directorio no deja rastro, porque si lo dejara el
-//! `nav.back` siguiente no haría nada visible. Eso es lo que decide [`Rewind`],
-//! y por eso [`rewind_for`] necesita el [`crate::navigate::Cd`] entero y no un
-//! booleano.
+//! A step only counts if the reader took it: a `cd` that fails, that is
+//! cancelled, or that lands in the SAME directory leaves no trail, because if
+//! it did, the next `nav.back` would do nothing visible. That is what
+//! [`Rewind`] decides, and why [`rewind_for`] needs the whole
+//! [`crate::navigate::Cd`] rather than a boolean.
 //!
-//! Vivía en el root del binario `ntc`, un crate DISTINTO de esta lib, partido en
-//! dos por una función de propiedad del teclado que no tiene nada que ver.
+//! Used to live in the `ntc` binary's root, a crate DIFFERENT from this lib,
+//! split in two by a keyboard-ownership function that has nothing to do with
+//! it.
 
 use norte_core::backend::Backend;
 use norte_i18n::t;
@@ -114,12 +115,12 @@ pub fn rewind_for(outcome: &Cd) -> Rewind {
         Cd::Suspended | Cd::Filling { .. } | Cd::Replaced(_) | Cd::Refreshed(..) | Cd::Swapped => {
             Rewind::No
         }
-        // Manda el desenlace del LECTOR. El del espejo no puede decidir nada
-        // aquí: viajó con `Trail::Seed`, así que no dejó paso en ningún rastro
-        // —ni en el suyo— y no hay nada suyo que rebobinar. Quien recorre el
-        // rastro es el panel que el lector movió, y es su fallo el que tiene
-        // que devolverle el paso.
-        Cd::Espejado { lector, .. } => rewind_for(lector),
+        // The READER's outcome rules. The mirror's cannot decide anything
+        // here: it travelled with `Trail::Seed`, so it left no step on any
+        // trail — not even its own — and there is nothing of its own to
+        // rewind. The one who walks the trail is the pane the reader moved,
+        // and it is that pane's failure that has to give the step back.
+        Cd::Mirrored { reader, .. } => rewind_for(reader),
     }
 }
 
@@ -135,8 +136,9 @@ pub fn rewind_trail(app: &mut App, pane: usize, step: TrailStep, dir: &VPath, re
         Rewind::StepAndRetire => {
             untake_step(app, pane, step, dir.clone());
             app.history[pane].remove(dir);
-            // «Este directorio ya no está» es un hecho, no dos: tampoco sigue
-            // en los populares (la ventana hace lo mismo al fallar el listado).
+            // "This directory is gone" is one fact, not two: it does not stay
+            // in the popular list either (the window does the same when the
+            // listing fails).
             app.popular.remove(dir);
         }
     }
@@ -186,23 +188,23 @@ pub async fn walk_trail(
         app.message = Some(t(step.empty_message()));
         return Cd::Cancelled;
     };
-    // `Trail::Replay`: el rastro se está recorriendo a sí mismo. Si esto
-    // registrara, volver de B a A grabaría «estuve en B» y el siguiente atrás
-    // devolvería a B — la misma oscilación que el rastro existe para evitar,
-    // un nivel más arriba. LLEVA el paso: si la navegación se SUSPENDE (TOFU),
-    // quien responda al modal es quien tendrá que rebobinarlo, y para eso
-    // necesita saber en qué sentido iba.
+    // `Trail::Replay`: the trail is walking itself. If this recorded a step,
+    // going from B back to A would record "I was in B" and the next back
+    // would return to B — the very oscillation the trail exists to prevent,
+    // one level up. It CARRIES the step: if the navigation is SUSPENDED
+    // (TOFU), whoever answers the modal is the one who will have to rewind
+    // it, and for that it needs to know which direction it was going.
     let outcome = cd_in(app, backend, events, pane, dir.clone(), Trail::Replay(step)).await;
     rewind_trail(app, pane, step, &dir, rewind_for(&outcome));
     outcome
 }
 
 /// Whether `nav.enter` on the cursor's current entry navigates anywhere, and
-/// to what. También symlinks: si apunta a un dir, el provider listará; si
-/// no, el cd falla y se absorbe — qué es "entrable" lo decide el core, no el
-/// TUI (regla 7). Un File .zip/.tar entra como directorio virtual (ADR
-/// 0018): el TUI solo COMPONE el path (azúcar de navegación); listar/validar
-/// sigue siendo del core.
+/// to what. Also symlinks: if it points to a dir, the provider will list it;
+/// if not, the cd fails and is absorbed — what counts as "enterable" is the
+/// core's call, not the TUI's (rule 7). A .zip/.tar File enters as a virtual
+/// directory (ADR 0018): the TUI only COMPOSES the path (navigation sugar);
+/// listing/validating still belongs to the core.
 ///
 /// Factored out of `Command::NavEnter` (S2, `--pick`) because the picker's
 /// Enter override needs the exact same answer to a different question: "is
@@ -212,14 +214,14 @@ pub async fn walk_trail(
 /// means.
 #[must_use]
 pub fn nav_enter_target(app: &App) -> Option<VPath> {
-    // La fila `..` no es un operando —`selected()` contesta `None` sobre
-    // ella, que es lo que la hace inofensiva— así que subir se pregunta
-    // aparte. Es lo único que esa fila sabe hacer.
+    // The `..` row is not an operand — `selected()` answers `None` over it,
+    // which is what makes it harmless — so going up is asked about
+    // separately. It is the only thing that row knows how to do.
     let pane = app.focused();
     if pane.cursor_is_parent_row() {
         return pane.parent_target().cloned();
     }
-    // Qué se puede navegar lo dice el crate COMPARTIDO: la ventana contestaba
-    // esta misma pregunta por su cuenta y con otra respuesta (ADR 0077).
+    // What can be navigated is the SHARED crate's call: the window used to
+    // answer this same question on its own, and differently (ADR 0077).
     pane.selected().and_then(norte_frontend::nav::enter_target)
 }

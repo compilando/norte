@@ -1,87 +1,86 @@
-//! Parser ANSI-SGR MÍNIMO y SANEADOR de escapes (#29): convierte la salida de
-//! un previewer de plugin (p. ej. syntect via `as_24_bit_terminal_escaped`) en
-//! líneas con color, interpretando SOLO secuencias SGR (`ESC[…m`) de color de
-//! primer plano. Cualquier OTRA secuencia de ESCAPE — movimientos de cursor,
-//! borrado de pantalla, OSC (título de ventana), escapes desconocidos — se
-//! DESCARTA sin reenviarla jamás a la terminal.
+//! MINIMAL ANSI-SGR parser and escape SANITIZER (#29): turns a plugin
+//! previewer's output (e.g. syntect via `as_24_bit_terminal_escaped`) into
+//! colored lines, interpreting ONLY foreground-color SGR sequences
+//! (`ESC[…m`). Any OTHER escape sequence — cursor movement, screen clearing,
+//! OSC (window title), unknown escapes — is DISCARDED, never forwarded to the
+//! terminal.
 //!
-//! Es la frontera de confianza del preview de plugin (regla 9 / superficie
-//! hostil): un plugin no puede inyectar secuencias de escape peligrosas en la
-//! terminal a través de su `output`; a lo sumo pinta texto coloreado. Los
-//! bytes de control SUELTOS (BEL, retroceso…) se conservan en el texto y los
-//! enmascara a `�` la capa de display del frontend ([`crate::display_name`],
-//! que además trata bidi/invisibles) — el parser solo se ocupa de las
-//! secuencias multi-carácter que `display_name` no sabría reconocer. El frontend
-//! traduce [`Rgb`] a su propio tipo de color (ratatui/GPUI).
+//! It is the plugin preview's trust boundary (rule 9 / hostile surface): a
+//! plugin cannot inject dangerous escape sequences into the terminal through
+//! its `output`; at most it paints colored text. LOOSE control bytes (BEL,
+//! backspace…) are kept in the text and the frontend's display layer masks
+//! them to `�` ([`crate::display_name`], which also handles bidi/invisibles)
+//! — the parser only deals with the multi-character sequences that
+//! `display_name` would not know how to recognize. The frontend translates
+//! [`Rgb`] to its own color type (ratatui/GPUI).
 //!
-//! [`StyledSpan::role`] (G3a, ADR 0037) es el ÚNICO campo que este parser
-//! NUNCA rellena — `parse_sgr` solo entiende SGR de color (`fg`), un
-//! previewer con salida ANSI-SGR no tiene concepto de rol semántico. Lo
-//! rellena la conversión hermana de un preview YA ESTRUCTURADO
-//! (`SpanWire` → `StyledSpan`, `crate::viewer::Viewer::
-//! with_plugin_preview_styled`), que comparte este mismo tipo para que
-//! `draw_viewer`/`render_viewer` pinten AMBAS rutas (ANSI-derivada y
-//! WIT-estructurada) con el mismo código.
+//! [`StyledSpan::role`] (G3a, ADR 0037) is the ONE field this parser NEVER
+//! fills in — `parse_sgr` only understands color SGR (`fg`); a previewer with
+//! ANSI-SGR output has no concept of a semantic role. It is filled by the
+//! sibling conversion for an ALREADY-STRUCTURED preview (`SpanWire` →
+//! `StyledSpan`, `crate::viewer::Viewer::with_plugin_preview_styled`), which
+//! shares this same type so that `draw_viewer`/`render_viewer` paint BOTH
+//! paths (ANSI-derived and WIT-structured) with the same code.
 
-/// Color RGB de 24 bits (primer plano).
+/// 24-bit RGB color (foreground).
 pub type Rgb = (u8, u8, u8);
 
-/// Un tramo de texto con estilo opcional: `role` (G3a, ADR 0037: un nombre
-/// semántico YA VALIDADO contra `norte_theme::Role` — ver el rustdoc del
-/// módulo) o `fg` (color de primer plano crudo). Cuando AMBOS están
-/// presentes, `role` GANA al pintar (el tema del usuario tiene precedencia
-/// sobre un color fijo de plugin, ADR 0037 decisión 3) — el frontend que
-/// consume este tipo (`ui.rs::draw_viewer`/`main.rs::render_viewer`)
-/// implementa esa precedencia; este tipo solo la TRANSPORTA.
+/// A text span with optional style: `role` (G3a, ADR 0037: a semantic name
+/// ALREADY VALIDATED against `norte_theme::Role` — see the module's
+/// rustdoc) or `fg` (raw foreground color). When BOTH are present, `role`
+/// WINS when painting (the user's theme takes precedence over a plugin's
+/// fixed color, ADR 0037 decision 3) — the frontend that consumes this type
+/// (`ui.rs::draw_viewer`/`main.rs::render_viewer`) implements that
+/// precedence; this type only CARRIES it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StyledSpan {
-    /// El texto visible del tramo (ya sin secuencias de escape).
+    /// The span's visible text (escape sequences already stripped).
     pub text: String,
-    /// Rol semántico YA VALIDADO (G3a): `None` si el tramo no trae rol, o si
-    /// traía uno que no está en el conjunto cerrado de `norte_theme::Role`
-    /// (degradación silenciosa, ADR 0037 — nunca un panic ni una cadena
-    /// libre). SIEMPRE `None` en el camino ANSI-SGR (`parse_sgr`, ver el
-    /// rustdoc del módulo).
+    /// Semantic role ALREADY VALIDATED (G3a): `None` if the span carries no
+    /// role, or if it carried one that is not in the closed set of
+    /// `norte_theme::Role` (silent degradation, ADR 0037 — never a panic nor
+    /// a free-form string). ALWAYS `None` on the ANSI-SGR path (`parse_sgr`,
+    /// see the module's rustdoc).
     pub role: Option<norte_theme::Role>,
-    /// Color de primer plano crudo (fallback cuando `role` es `None`, o
-    /// cuando el propio plugin no declaró rol), o `None` para el del tema.
+    /// Raw foreground color (fallback when `role` is `None`, or when the
+    /// plugin itself did not declare a role), or `None` for the theme's.
     pub fg: Option<Rgb>,
-    /// Color de FONDO crudo (proto 0.66.0, D4): un previewer de imagen pinta
-    /// medios bloques con el píxel de arriba en `fg` y el de abajo aquí.
-    /// `None` = el fondo del visor. SIEMPRE `None` en el camino ANSI-SGR.
+    /// Raw BACKGROUND color (proto 0.66.0, D4): an image previewer paints
+    /// half-blocks with the top pixel in `fg` and the bottom one here.
+    /// `None` = the viewer's background. ALWAYS `None` on the ANSI-SGR path.
     pub bg: Option<Rgb>,
 }
 
-/// Una línea = secuencia de tramos con estilo.
+/// A line = a sequence of styled spans.
 pub type StyledLine = Vec<StyledSpan>;
 
-/// Un tramo del WIRE, saneado y validado.
+/// A WIRE span, sanitized and validated.
 ///
-/// Las dos puertas que cruza un tramo que viene de un plugin, en un solo
-/// sitio: el `text` es texto de un TERCERO y se enmascara igual que el de la
-/// ruta ANSI (`crate::display_name`), y el `role` se valida contra lo que un
-/// plugin PUEDE pedir ([`norte_theme::Role::from_kebab_requestable`]), que
-/// deja fuera los roles del cromo y del estado de la ventana (spec
-/// 2026-09-11, F2). Un nombre desconocido degrada a `None`, nunca a un error:
-/// un guest de un norte más nuevo no rompe el pintado de uno más viejo.
+/// The two gates a span coming from a plugin crosses, in one place: `text`
+/// is THIRD-PARTY text and gets masked the same way as the ANSI path's
+/// (`crate::display_name`), and `role` is validated against what a plugin
+/// CAN request ([`norte_theme::Role::from_kebab_requestable`]), which leaves
+/// out the chrome and window-state roles (spec 2026-09-11, F2). An unknown
+/// name degrades to `None`, never to an error: a guest from a newer norte
+/// does not break the painting of an older one.
 ///
-/// Compartida porque los consumidores son tres —el visor con preview
-/// estilada, las decoraciones y, desde la fase 3, el marco de un panel— y la
-/// tercera copia se escribió copiando los campos a mano, sin enmascarar el
-/// texto: un panel podía colar escapes de terminal por el único camino que no
-/// pasaba por aquí.
+/// Shared because there are three consumers — the viewer with a styled
+/// preview, the decorations and, since phase 3, a panel's frame — and the
+/// third copy was written by copying the fields by hand, without masking the
+/// text: a panel could smuggle terminal escapes through the one path meant
+/// to prevent that.
 ///
 /// ```
 /// use norte_proto::methods::SpanWire;
 ///
 /// let s = norte_frontend::ansi::span_de_wire(&SpanWire {
-///     text: "rama".to_owned(),
+///     text: "branch".to_owned(),
 ///     role: Some("scrollbar-slider".to_owned()),
 ///     fg: None,
 ///     bg: None,
 /// });
-/// assert_eq!(s.text, "rama");
-/// assert!(s.role.is_none(), "un rol del cromo no lo puede pedir un plugin");
+/// assert_eq!(s.text, "branch");
+/// assert!(s.role.is_none(), "a plugin cannot request a chrome role");
 /// ```
 #[must_use]
 pub fn span_de_wire(span: &norte_proto::methods::SpanWire) -> StyledSpan {
@@ -96,15 +95,15 @@ pub fn span_de_wire(span: &norte_proto::methods::SpanWire) -> StyledSpan {
     }
 }
 
-/// Parsea `input` (salida de un previewer) a líneas con estilo, interpretando
-/// SOLO SGR de color de primer plano y DESCARTANDO cualquier otra secuencia de
-/// escape (saneado — ver el módulo). Las líneas se separan por `\n`; un `\r`
-/// final de línea se ignora (CRLF). Siempre devuelve al menos una línea.
+/// Parses `input` (a previewer's output) into styled lines, interpreting
+/// ONLY foreground-color SGR and DISCARDING any other escape sequence
+/// (sanitized — see the module). Lines are split on `\n`; a trailing `\r`
+/// at the end of a line is ignored (CRLF). Always returns at least one line.
 ///
 /// ```
 /// use norte_frontend::ansi::{parse_sgr, StyledSpan};
-/// // Un tramo rojo de 24 bits + un OSC hostil (fija el título): el color se
-/// // conserva, el OSC se descarta entero.
+/// // A 24-bit red span + a hostile OSC (sets the title): the color is
+/// // kept, the OSC is discarded whole.
 /// let out = parse_sgr("\x1b[38;2;255;0;0mhi\x1b]0;PWNED\x07\x1b[0m fin");
 /// assert_eq!(out.len(), 1);
 /// assert_eq!(
@@ -124,7 +123,7 @@ pub fn parse_sgr(input: &str) -> Vec<StyledLine> {
     let mut fg: Option<Rgb> = None;
     let mut chars = input.chars().peekable();
 
-    // Cierra el tramo actual (si tiene texto) con el color vigente.
+    // Closes the current span (if it has text) with the color in effect.
     let flush = |cur: &mut String, fg: Option<Rgb>, line: &mut StyledLine| {
         if !cur.is_empty() {
             line.push(StyledSpan {
@@ -139,14 +138,14 @@ pub fn parse_sgr(input: &str) -> Vec<StyledLine> {
     while let Some(c) = chars.next() {
         match c {
             '\x1b' => {
-                // Secuencia de escape: SOLO CSI-SGR (`ESC[…m`) se interpreta;
-                // el resto se consume y descarta.
+                // Escape sequence: ONLY CSI-SGR (`ESC[…m`) is interpreted;
+                // the rest is consumed and discarded.
                 if chars.peek() == Some(&'[') {
                     chars.next(); // '['
                     let mut params = String::new();
                     let mut final_byte = None;
                     for pc in chars.by_ref() {
-                        // Byte final de un CSI: 0x40..=0x7E.
+                        // A CSI's final byte: 0x40..=0x7E.
                         if ('\u{40}'..='\u{7E}').contains(&pc) {
                             final_byte = Some(pc);
                             break;
@@ -154,14 +153,14 @@ pub fn parse_sgr(input: &str) -> Vec<StyledLine> {
                         params.push(pc);
                     }
                     if final_byte == Some('m') {
-                        // SGR: aplica al color vigente tras cerrar el tramo.
+                        // SGR: apply to the color in effect after closing the span.
                         flush(&mut cur, fg, &mut line);
                         apply_sgr(&params, &mut fg);
                     }
-                    // Cualquier otro CSI (cursor, borrado…) se descarta.
+                    // Any other CSI (cursor, clearing…) is discarded.
                 } else if chars.peek() == Some(&']') {
-                    // OSC (`ESC]…`): título de ventana, hyperlinks… hasta BEL
-                    // o ST (`ESC\`). Se consume entero y se descarta.
+                    // OSC (`ESC]…`): window title, hyperlinks… up to BEL
+                    // or ST (`ESC\`). Consumed whole and discarded.
                     chars.next(); // ']'
                     while let Some(pc) = chars.next() {
                         if pc == '\x07' {
@@ -173,8 +172,8 @@ pub fn parse_sgr(input: &str) -> Vec<StyledLine> {
                         }
                     }
                 } else {
-                    // Escape desconocido: descarta el siguiente carácter (si lo
-                    // hay) — jamás se reenvía a la terminal.
+                    // Unknown escape: discards the next character (if there
+                    // is one) — it is never forwarded to the terminal.
                     chars.next();
                 }
             }
@@ -182,12 +181,13 @@ pub fn parse_sgr(input: &str) -> Vec<StyledLine> {
                 flush(&mut cur, fg, &mut line);
                 lines.push(std::mem::take(&mut line));
             }
-            '\r' => { /* CR: normalización CRLF — jamás mueve el cursor */ }
-            // Otros controles (BEL, retroceso, tab…) se CONSERVAN en el texto:
-            // el enmascarado a `�` lo hace la capa de display del frontend
-            // ([`crate::display_name`]), que ya trata bidi/invisibles. Aquí solo
-            // se sanean las SECUENCIAS DE ESCAPE (arriba), que abarcan varios
-            // chars y display_name no sabría reconocer.
+            '\r' => { /* CR: CRLF normalization — never moves the cursor */ }
+            // Other control bytes (BEL, backspace, tab…) are KEPT in the
+            // text: masking to `�` is done by the frontend's display layer
+            // ([`crate::display_name`]), which already handles
+            // bidi/invisibles. Here only ESCAPE SEQUENCES are sanitized
+            // (above), which span several chars and display_name would not
+            // know how to recognize.
             c => cur.push(c),
         }
     }
@@ -196,12 +196,12 @@ pub fn parse_sgr(input: &str) -> Vec<StyledLine> {
     lines
 }
 
-/// Aplica una lista de parámetros SGR (`;`-separados) al color de primer plano
-/// vigente. Interpreta: `0` (reset), `39` (fg por defecto), `38;2;r;g;b`
-/// (24 bits), `38;5;n` (256 → RGB). Consume correctamente `48;…` (fondo) y los
-/// ignora; cualquier otro parámetro (negrita, subrayado…) también se ignora.
+/// Applies a list of `;`-separated SGR parameters to the foreground color in
+/// effect. Interprets: `0` (reset), `39` (default fg), `38;2;r;g;b`
+/// (24-bit), `38;5;n` (256 → RGB). Correctly consumes `48;…` (background)
+/// and ignores it; any other parameter (bold, underline…) is also ignored.
 fn apply_sgr(params: &str, fg: &mut Option<Rgb>) {
-    // Un SGR vacío (`ESC[m`) equivale a reset.
+    // An empty SGR (`ESC[m`) is equivalent to reset.
     if params.is_empty() {
         *fg = None;
         return;
@@ -212,19 +212,20 @@ fn apply_sgr(params: &str, fg: &mut Option<Rgb>) {
             0 | 39 => *fg = None,
             38 => *fg = take_extended_color(&mut it).or(*fg),
             48 => {
-                // Fondo: consume sus sub-parámetros (para no malinterpretarlos)
-                // pero NO lo aplicamos (sin pintar fondo desde un plugin).
+                // Background: consume its sub-parameters (so as not to
+                // misinterpret them) but do NOT apply it (no painting a
+                // background from a plugin).
                 let _ = take_extended_color(&mut it);
             }
             30..=37 => *fg = Some(ansi16_to_rgb(code - 30, false)),
             90..=97 => *fg = Some(ansi16_to_rgb(code - 90, true)),
-            _ => {} // negrita/itálica/etc.: ignorado
+            _ => {} // bold/italic/etc.: ignored
         }
     }
 }
 
-/// Consume un color extendido tras `38`/`48`: `2;r;g;b` (24 bits) o `5;n`
-/// (256). `None` si la forma no encaja (sub-parámetros ya consumidos).
+/// Consumes an extended color after `38`/`48`: `2;r;g;b` (24-bit) or `5;n`
+/// (256). `None` if the shape does not fit (sub-parameters already consumed).
 fn take_extended_color(it: &mut impl Iterator<Item = u16>) -> Option<Rgb> {
     match it.next()? {
         2 => {
@@ -242,7 +243,7 @@ fn clamp8(v: u16) -> u8 {
     u8::try_from(v).unwrap_or(255)
 }
 
-/// Los 16 colores ANSI base → RGB (paleta estándar de xterm).
+/// The 16 base ANSI colors → RGB (xterm's standard palette).
 fn ansi16_to_rgb(idx: u16, bright: bool) -> Rgb {
     const NORMAL: [Rgb; 8] = [
         (0, 0, 0),
@@ -268,7 +269,7 @@ fn ansi16_to_rgb(idx: u16, bright: bool) -> Rgb {
     if bright { BRIGHT[i] } else { NORMAL[i] }
 }
 
-/// Índice xterm-256 → RGB: 0..15 base, 16..231 cubo 6×6×6, 232..255 grises.
+/// xterm-256 index → RGB: 0..15 base, 16..231 6×6×6 cube, 232..255 grays.
 fn xterm256_to_rgb(n: u8) -> Rgb {
     match n {
         0..=7 => ansi16_to_rgb(u16::from(n), false),
@@ -290,7 +291,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn texto_plano_una_linea_sin_color() {
+    fn plain_text_one_line_no_color() {
         let out = parse_sgr("hola mundo");
         assert_eq!(out.len(), 1);
         assert_eq!(
@@ -305,8 +306,8 @@ mod tests {
     }
 
     #[test]
-    fn sgr_24_bits_colorea_el_tramo() {
-        // ESC[38;2;255;0;0m rojo ESC[0m
+    fn sgr_24_bit_colors_the_span() {
+        // ESC[38;2;255;0;0m red ESC[0m
         let out = parse_sgr("\x1b[38;2;255;0;0mrojo\x1b[0m fin");
         assert_eq!(out.len(), 1);
         assert_eq!(
@@ -329,7 +330,7 @@ mod tests {
     }
 
     #[test]
-    fn colores_16_y_256() {
+    fn colors_16_and_256() {
         let out = parse_sgr("\x1b[31mA\x1b[38;5;46mB");
         assert_eq!(
             out[0][0],
@@ -340,24 +341,24 @@ mod tests {
                 bg: None,
             }
         );
-        // 46 = cubo: n=30 → (0,255,0)
+        // 46 = cube: n=30 → (0,255,0)
         assert_eq!(out[0][1].text, "B");
         assert_eq!(out[0][1].fg, Some((0, 255, 0)));
     }
 
     #[test]
-    fn saltos_de_linea_y_crlf() {
+    fn line_breaks_and_crlf() {
         let out = parse_sgr("a\r\nb\nc");
         assert_eq!(out.len(), 3);
-        assert_eq!(out[0][0].text, "a"); // el \r no aparece
+        assert_eq!(out[0][0].text, "a"); // the \r does not show up
         assert_eq!(out[1][0].text, "b");
         assert_eq!(out[2][0].text, "c");
     }
 
-    /// SANEADO: un OSC hostil (fija el título de la ventana) se descarta
-    /// entero — jamás llega a la terminal.
+    /// SANITIZED: a hostile OSC (sets the window title) is discarded
+    /// whole — it never reaches the terminal.
     #[test]
-    fn osc_hostil_se_descarta() {
+    fn a_hostile_osc_is_discarded() {
         let out = parse_sgr("antes\x1b]0;PWNED\x07despues");
         assert_eq!(out.len(), 1);
         assert_eq!(
@@ -371,9 +372,9 @@ mod tests {
         );
     }
 
-    /// SANEADO: CSI que NO es SGR (borrar pantalla, mover cursor) se descarta.
+    /// SANITIZED: a CSI that is NOT SGR (clear screen, move cursor) is discarded.
     #[test]
-    fn csi_no_sgr_se_descarta() {
+    fn a_non_sgr_csi_is_discarded() {
         let out = parse_sgr("x\x1b[2J\x1b[10;5Hy");
         assert_eq!(out.len(), 1);
         assert_eq!(
@@ -387,18 +388,18 @@ mod tests {
         );
     }
 
-    /// SANEADO: un escape desnudo (`ESC Z`) se descarta (consume la `Z`); los
-    /// bytes de control SUELTOS (BEL, backspace) se CONSERVAN en el texto para
-    /// que `display_name` los enmascare a `�` después.
+    /// SANITIZED: a bare escape (`ESC Z`) is discarded (consumes the `Z`);
+    /// LOOSE control bytes (BEL, backspace) are KEPT in the text so that
+    /// `display_name` masks them to `�` afterwards.
     #[test]
-    fn escape_desnudo_se_descarta_controles_sueltos_se_conservan() {
+    fn bare_escape_is_discarded_loose_controls_are_kept() {
         let out = parse_sgr("a\x07b\x08\x1bZc\td");
         assert_eq!(out.len(), 1);
         assert_eq!(out[0][0].text, "a\x07b\x08c\td");
     }
 
     #[test]
-    fn sgr_vacio_es_reset() {
+    fn an_empty_sgr_is_a_reset() {
         let out = parse_sgr("\x1b[31mA\x1b[mB");
         assert_eq!(out[0][0].fg, Some((205, 0, 0)));
         assert_eq!(

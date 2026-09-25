@@ -1,12 +1,13 @@
-//! Lo que el bucle de eventos tiene EN VUELO: los trabajos de fondo, las
-//! sondas y los rellenos paginados que sus brazos del `select!` cosechan.
+//! What the event loop has IN FLIGHT: the background jobs, the probes and
+//! the paginated fills that the `select!` arms harvest.
 //!
-//! Eran diecisiete variables locales de `run`, y por eso toda función que
-//! quisiera salir de ese bucle nacía con quince parámetros. Juntas tienen un
-//! nombre: son el trabajo que ESTE proceso dejó pedido y aún no ha llegado.
-//! De cada clase hay a lo sumo UNO —el panel que lo enseña es uno— salvo los
-//! que van por hueco ([`norte_frontend::layout::BySlot`]), donde el pane que
-//! pagina no puede estrangular al otro.
+//! These used to be seventeen local variables of `run`, and that's why every
+//! function that wanted to leave that loop was born with fifteen parameters.
+//! Together they have a name: they are the work THIS process left requested
+//! and hasn't arrived yet. Of each kind there is at most ONE — the panel that
+//! shows it is one — except the ones that go per slot
+//! ([`norte_frontend::layout::BySlot`]), where the pane that is paginating
+//! must not be able to starve the other.
 
 use std::collections::VecDeque;
 
@@ -22,271 +23,283 @@ use crate::probes::{
 };
 use norte_proto::{Error, VPath};
 
-/// Petición `ai.rename_plan` EN VUELO (M4-IA). Abortar el `JoinHandle`
-/// cancela (regla 3): el abort dropea el future del backend en el runtime →
-/// `CancelOnAbandon` envía `rpc.cancel` (remoto) / el timeout+drop aborta el
-/// stream (embebido). OJO: DROPEAR el handle solo DESVINCULA la task de
-/// tokio — cancelar exige `abort()` explícito.
+/// `ai.rename_plan` request IN FLIGHT (M4-IA). Aborting the `JoinHandle`
+/// cancels (rule 3): the abort drops the backend's future in the runtime →
+/// `CancelOnAbandon` sends `rpc.cancel` (remote) / the timeout+drop aborts
+/// the stream (embedded). NOTE: DROPPING the handle only DETACHES the task
+/// from tokio — cancelling requires an explicit `abort()`.
 pub struct AiRenameRun {
-    /// La llamada al modelo, spawneada (es la única llamada larga del loop).
+    /// The call to the model, spawned (it's the only long call of the loop).
     pub handle: tokio::task::JoinHandle<Result<norte_proto::methods::AiRenamePlanResult, Error>>,
-    /// Dir del pane al LANZAR; el plan se aplica AQUÍ aunque el usuario
-    /// navegue mientras el modelo piensa.
+    /// The pane's dir at LAUNCH time; the plan is applied HERE even if the
+    /// user navigates while the model is thinking.
     pub dir: VPath,
-    /// Los nombres que había en ese dir al lanzar.
+    /// The names that were in that dir at launch time.
     ///
-    /// El cinturón exige que cada `from` del plan EXISTA donde se va a
-    /// aplicar (#275), y para cuando el modelo conteste el lector puede estar
-    /// en otro sitio: preguntarle al pane entonces validaría el plan contra
-    /// un directorio que no es el suyo.
+    /// The belt requires every `from` in the plan to EXIST where it's going
+    /// to be applied (#275), and by the time the model answers the reader
+    /// may be somewhere else: asking the pane then would validate the plan
+    /// against a directory that isn't its own.
     pub names: Vec<Vec<u8>>,
 }
 
-/// Petición de plan de ORGANIZAR en vuelo (fase 8), venga del modelo
-/// (`ai.organize_plan`) o de un plugin `organizer` (`plugin.organize_plan`).
+/// ORGANIZE plan request in flight (phase 8), whether it comes from the
+/// model (`ai.organize_plan`) or from an `organizer` plugin
+/// (`plugin.organize_plan`).
 ///
-/// Uno solo, y a propósito: las dos peticiones producen el MISMO plan y el
-/// mismo modal, así que quien las distinguiera aquí tendría que volver a
-/// juntarlas al cosechar. Misma disciplina de cancelación que
+/// Only one, and on purpose: the two requests produce the SAME plan and the
+/// same modal, so whoever distinguished them here would have to merge them
+/// back together at harvest time. Same cancellation discipline as
 /// [`AiRenameRun`].
 pub struct OrganizeRun {
-    /// La petición, spawneada.
+    /// The request, spawned.
     pub handle: tokio::task::JoinHandle<Result<norte_proto::methods::AiOrganizePlanResult, Error>>,
-    /// Dir del pane al LANZAR: el plan se aplica AHÍ aunque el lector navegue
-    /// mientras el productor piensa.
+    /// The pane's dir at LAUNCH time: the plan is applied THERE even if the
+    /// reader navigates while the producer is thinking.
     pub dir: VPath,
-    /// Los nombres que había en ese dir al lanzar, para saber qué carpeta del
-    /// árbol ya existía. Preguntárselo al pane al cosechar pintaría el árbol
-    /// contra un directorio que no es el suyo.
+    /// The names that were in that dir at launch time, to know which folder
+    /// of the tree already existed. Asking the pane at harvest time would
+    /// paint the tree against a directory that isn't its own.
     pub existentes: Vec<String>,
 }
 
-/// Un plan IA YA cosechado que espera a que se cierre el modal de turno
-/// (M4-IA). Lleva el estado del plan del LOTE (§17), que se pide en cuanto
-/// llega el plan IA: sin él, el modal abriría sin hash aprobado y confirmar
-/// quedaría mudo hasta un segundo viaje que nadie dispara.
+/// An AI plan ALREADY harvested that is waiting for whichever modal is up to
+/// close (M4-IA). It carries the BATCH's plan state (§17), which is
+/// requested as soon as the AI plan arrives: without it, the modal would
+/// open without an approved hash and confirming would stay mute until a
+/// second round trip that nobody triggers.
 pub struct PendingAiPlan {
-    /// Dir del pane al LANZAR (donde aterriza el lote).
+    /// The pane's dir at LAUNCH time (where the batch lands).
     pub dir: VPath,
-    /// Los nombres de ese dir al lanzar, por el mismo motivo que en
+    /// That dir's names at launch time, for the same reason as
     /// [`AiRenameRun::names`].
     pub names: Vec<Vec<u8>>,
-    /// Parejas from→to del modelo.
+    /// from→to pairs from the model.
     pub entries: Vec<norte_proto::methods::AiRenameEntry>,
-    /// Veredicto del lote: en vuelo, resuelto, o fallido.
+    /// The batch's verdict: in flight, resolved, or failed.
     pub plan: norte_frontend::BatchPlan,
 }
 
-/// Petición `fs.rename_batch_plan` EN VUELO (§17). Spawneada por el mismo
-/// motivo que [`AiRenameRun`]: es un `fs.list` del dir entero contra el
-/// provider que toque, y esperarla dentro del `select!` dejaría el loop sin
-/// dibujar, sin leer teclas y sin poder cancelar. A lo sumo una — el prompt
-/// del rename IA no abre sobre otro modal, así que no hay dos planes IA
-/// vivos a la vez que pudieran pisarse.
+/// `fs.rename_batch_plan` request IN FLIGHT (§17). Spawned for the same
+/// reason as [`AiRenameRun`]: it's an `fs.list` of the whole dir against
+/// whichever provider applies, and waiting for it inside the `select!` would
+/// leave the loop without drawing, without reading keys and without being
+/// able to cancel. At most one — the AI rename prompt doesn't open over
+/// another modal, so there are never two AI plans alive at once that could
+/// step on each other.
 pub struct RenameBatchRun {
-    /// La llamada al core, spawneada.
+    /// The call to the core, spawned.
     pub handle:
         tokio::task::JoinHandle<Result<norte_proto::methods::FsRenameBatchPlanResult, Error>>,
 }
 
-/// Petición `index.search_semantic` EN VUELO (M4-IA-2). Mismo contrato de
-/// cancelación que [`AiRenameRun`] (regla 3): `abort()` dropea el future del
-/// backend → `rpc.cancel` (remoto) / drop (embebido); DROPEAR el handle solo
-/// desvincula. Sin dir capturado: la consulta va contra TODOS los roots del
-/// índice (`root = None`), navegar mientras piensa no la invalida.
+/// `index.search_semantic` request IN FLIGHT (M4-IA-2). Same cancellation
+/// contract as [`AiRenameRun`] (rule 3): `abort()` drops the backend's
+/// future → `rpc.cancel` (remote) / drop (embedded); DROPPING the handle
+/// only detaches. No dir captured: the query runs against ALL of the
+/// index's roots (`root = None`), navigating while it thinks doesn't
+/// invalidate it.
 pub struct SemanticRun {
-    /// La llamada al índice+modelo, spawneada.
+    /// The call to the index+model, spawned.
     pub handle: tokio::task::JoinHandle<Result<Vec<norte_proto::methods::SemanticHit>, Error>>,
 }
 
-/// La misma pregunta al índice, pero para la SECCIÓN del «ir a» (fase 6), no
-/// para el modal de [`SemanticRun`].
+/// The same question to the index, but for the "go to" SECTION (phase 6),
+/// not for [`SemanticRun`]'s modal.
 ///
-/// Dos runs y no uno porque lo que se hace con la respuesta es distinto —una
-/// abre un modal, la otra rellena una sección de una pantalla abierta— y
-/// porque pueden solaparse: nada impide tener el «ir a» abierto justo
-/// después de lanzar una búsqueda semántica, y meterlas en la misma casilla
-/// haría que una abortase a la otra sin que nadie lo hubiera pedido.
+/// Two runs and not one because what's done with the answer is different —
+/// one opens a modal, the other fills a section of an open screen — and
+/// because they can overlap: nothing stops "go to" being open right after
+/// launching a semantic search, and putting them in the same slot would make
+/// one abort the other without anyone having asked for that.
 pub struct GotoIndexRun {
-    /// La llamada al índice+modelo, spawneada.
+    /// The call to the index+model, spawned.
     pub handle: tokio::task::JoinHandle<Result<Vec<norte_proto::methods::SemanticHit>, Error>>,
-    /// Lo que estaba escrito cuando se lanzó. La respuesta sólo se usa si
-    /// sigue siendo lo que está escrito: si no, es la respuesta a otra
-    /// pregunta.
+    /// What was typed when it was launched. The answer is only used if it's
+    /// still what's typed: otherwise, it's the answer to another question.
     pub query: String,
 }
 
-/// La medida de un mapa de disco EN VUELO (fase 4).
+/// A disk map measurement IN FLIGHT (phase 4).
 ///
-/// Mismo molde que [`ChecksumRun`] —la espera del informe va spawneada y el
-/// ESTADO viaja con él, porque un informe de una Task cancelada está a medias—
-/// con dos datos que las sumas no necesitan.
+/// Same mold as [`ChecksumRun`] — waiting for the report is spawned and the
+/// STATE travels with it, because a report from a cancelled Task is partial
+/// — with two extra fields the checksums don't need.
 pub struct DiskMapRun {
-    /// La espera del informe, spawneada.
+    /// Waiting for the report, spawned.
     pub handle: tokio::task::JoinHandle<(
         norte_proto::TaskState,
         Result<norte_proto::methods::FsDirUsageReportResult, Error>,
     )>,
-    /// La Task, para CANCELARLA si otra medida la releva. Abortar solo la
-    /// espera dejaría al core recorriendo un `$HOME` entero sin nadie que lo
-    /// recoja — y medir es justo lo que más tarda de todo esto.
+    /// The Task, to CANCEL it if another measurement takes over. Aborting
+    /// only the wait would leave the core walking a whole `$HOME` with
+    /// nobody to collect it — and measuring is exactly the slowest part of
+    /// all this.
     pub task: norte_core::backend::TaskObserver,
-    /// El hueco cuyo mapa se está midiendo.
+    /// The slot whose map is being measured.
     pub slot: norte_frontend::layout::SlotId,
-    /// El directorio que se mandó medir.
+    /// The directory that was sent off to be measured.
     ///
-    /// Viaja con la medida para poder DESCARTAR lo que llegue tarde: medir un
-    /// árbol grande tarda, y en ese rato el panel puede estar apuntando ya a
-    /// otro sitio. Un informe aterrizado sin comprobar esto pintaría los
-    /// tamaños de un directorio bajo el título de otro, que es la clase de
-    /// mentira que este panel existe para no contar.
+    /// It travels with the measurement so late arrivals can be DISCARDED:
+    /// measuring a large tree takes time, and in that time the panel may
+    /// already be pointing elsewhere. A report landed without checking this
+    /// would paint the sizes of one directory under another's title, which
+    /// is the kind of lie this panel exists to not tell.
     pub dir: norte_proto::VPath,
 }
 
-/// Un lote de sumas EN VUELO (#311).
+/// A checksum batch IN FLIGHT (#311).
 ///
-/// La Task ya está lanzada y en el tablero; lo que se espera aquí es el
-/// INFORME, que solo tiene sentido pedir cuando la Task termina — los digests
-/// no caben en el progreso. `publicado` distingue las dos caras del mismo
-/// lote: `None` es «calcula y enséñame», `Some` es «compara contra esto».
+/// The Task is already launched and on the board; what's waited for here is
+/// the REPORT, which only makes sense to ask for once the Task finishes —
+/// digests don't fit in the progress. `published` distinguishes the batch's
+/// two faces: `None` is "compute and show me", `Some` is "compare against
+/// this".
 pub struct ChecksumRun {
-    /// La espera del informe, spawneada. Devuelve el ESTADO final de la Task
-    /// junto al informe: un informe de una Task cancelada está a medias, y
-    /// pintarlo como definitivo acusaría a ficheros que nadie llegó a leer.
+    /// Waiting for the report, spawned. Returns the Task's final STATE
+    /// alongside the report: a report from a cancelled Task is partial, and
+    /// painting it as definitive would accuse files nobody got to read.
     pub handle: tokio::task::JoinHandle<(
         norte_proto::TaskState,
         Result<norte_proto::methods::FsChecksumReportResult, Error>,
     )>,
-    /// La Task, para poder CANCELARLA si otro lote la releva. Abortar solo la
-    /// espera dejaría al core hasheando gigabytes sin nadie que los recoja.
+    /// The Task, so it can be CANCELLED if another batch takes over.
+    /// Aborting only the wait would leave the core hashing gigabytes with
+    /// nobody to collect them.
     pub task: norte_core::backend::TaskObserver,
-    /// Lo que el fichero de sumas publicaba, si esto es una verificación.
-    pub publicado: Option<Publicado>,
+    /// What the checksum file published, if this is a verification.
+    pub published: Option<Published>,
 }
 
-/// El fichero de sumas leído, tal como hace falta para juzgarlo (#311).
-pub struct Publicado {
-    /// Las líneas entendidas, en el orden del fichero.
+/// The checksum file, read as needed to judge it (#311).
+pub struct Published {
+    /// The understood lines, in the file's order.
     pub lines: Vec<norte_frontend::checksums::SumLine>,
-    /// Para cada línea, en qué posición de la PETICIÓN quedó su ruta, o `None`
-    /// si su nombre no se puede escribir en este sistema —y eso no es que
-    /// falte: es que aquí no se puede nombrar, y se arregla de otra forma—.
+    /// For each line, which position of the REQUEST its path ended up at, or
+    /// `None` if its name can't be written on this system — and that isn't
+    /// "missing": it's "can't be named here", and it's fixed another way.
     ///
-    /// Por índice y no por nombre: el informe conserva el orden pedido, y
-    /// emparejar por nombre base daba «falta» sobre un `sub/dentro.txt` que
-    /// estaba ahí.
+    /// By index and not by name: the report keeps the requested order, and
+    /// matching by base name gave "missing" for a `sub/inside.txt` that was
+    /// right there.
     pub asked: Vec<Option<usize>>,
-    /// Cuántas líneas parecían sumas y no se entendieron. Con esto mayor que
-    /// cero, «todos correctos» no se puede decir.
+    /// How many lines looked like checksums and weren't understood. With
+    /// this greater than zero, "all correct" cannot be said.
     pub refused: usize,
 }
 
-/// Todo lo que el bucle pidió y aún no ha cosechado.
+/// Everything the loop requested and hasn't harvested yet.
 #[derive(Default)]
 pub struct InFlight {
-    /// Listados paginados rellenándose en background (ADR 0017): un hueco POR
-    /// PANE — los dos panes pueden estar paginando a la vez, y con un hueco
-    /// global el cd de uno mataba el drenador del otro.
+    /// Paginated listings filling in the background (ADR 0017): one slot PER
+    /// PANE — both panes can be paginating at once, and with a global slot
+    /// one's `cd` killed the other's drainer.
     pub fill: BySlot<Fill>,
-    /// Por dónde sigue el barrido de [`Self::fill`] (ver el brazo del
-    /// `select!`).
+    /// Where [`Self::fill`]'s sweep is up to (see the `select!` arm).
     pub fill_cursor: usize,
-    /// Búsqueda viva en curso (liveSearch T6): a lo sumo una, el pane virtual
-    /// es uno. Se drena en el select y se suelta al salir.
+    /// Live search in progress (liveSearch T6): at most one, the virtual
+    /// pane is one. Drained in the select and dropped on exit.
     pub search: Option<SearchRun>,
-    /// Comparación de directorios en curso (`Shift+F2`): a lo sumo una, el
-    /// panel de diferencias es uno.
+    /// Directory comparison in progress (`Shift+F2`): at most one, the diff
+    /// panel is one.
     pub compare: Option<CompareRun>,
-    /// Sincronización en curso (`Ctrl+Y`): a lo sumo una — aprobar un plan
-    /// mientras otro se aplica sería aprobar a ciegas.
+    /// Sync in progress (`Ctrl+Y`): at most one — approving a plan while
+    /// another applies would be approving blind.
     pub sync: Option<SyncRun>,
-    /// Petición `ai.rename_plan` en vuelo (M4-IA): a lo sumo una — relanzar
-    /// aborta la anterior; Esc (BROWSE) la cancela.
+    /// `ai.rename_plan` request in flight (M4-IA): at most one — relaunching
+    /// aborts the previous one; Esc (BROWSE) cancels it.
     pub ai_rename: Option<AiRenameRun>,
-    /// Petición de plan de ORGANIZAR en vuelo (fase 8): a lo sumo una, por lo
-    /// mismo que [`Self::ai_rename`] — el modal de revisión es uno, y aprobar
-    /// un árbol mientras otro se propone sería aprobar a ciegas.
+    /// ORGANIZE plan request in flight (phase 8): at most one, for the same
+    /// reason as [`Self::ai_rename`] — the review modal is one, and
+    /// approving one tree while another is being proposed would be
+    /// approving blind.
     pub organize: Option<OrganizeRun>,
-    /// Plan IA listo llegado con OTRO modal abierto: se RETIENE aquí (la cola
-    /// de `App` es específica de aprobaciones) y se abre en cuanto no haya
-    /// modal — jamás pisar (disciplina `open_next_pending`).
+    /// AI plan ready that arrived with ANOTHER modal open: it's HELD here
+    /// (`App`'s queue is specific to approvals) and opened as soon as there
+    /// is no modal — never overwrite it (the `open_next_pending`
+    /// discipline).
     pub pending_ai_plan: Option<PendingAiPlan>,
-    /// Petición `fs.rename_batch_plan` en vuelo (§17): a lo sumo una,
-    /// cosechada en el select como [`Self::ai_rename`].
+    /// `fs.rename_batch_plan` request in flight (§17): at most one,
+    /// harvested in the select like [`Self::ai_rename`].
     pub rename_batch: Option<RenameBatchRun>,
-    /// Búsqueda semántica en vuelo (M4-IA-2): mismo molde que
+    /// Semantic search in flight (M4-IA-2): same mold as
     /// [`Self::ai_rename`].
     pub semantic: Option<SemanticRun>,
-    /// La pregunta al índice de la pantalla «ir a» (fase 6): a lo sumo una,
-    /// y escribir otra letra ABORTA la anterior.
+    /// The query to the index from the "go to" screen (phase 6): at most
+    /// one, and typing another letter ABORTS the previous one.
     pub goto_index: Option<GotoIndexRun>,
-    /// Lote de sumas en vuelo (#311): a lo sumo uno — el modal de resultados
-    /// es uno, y lanzar otro CANCELA la Task del anterior además de abortar
-    /// su espera.
+    /// Checksum batch in flight (#311): at most one — the results modal is
+    /// one, and launching another CANCELS the previous one's Task on top of
+    /// aborting its wait.
     pub checksum: Option<ChecksumRun>,
-    /// Medida de un mapa de disco en vuelo (fase 4): a lo sumo una — el panel
-    /// es uno, y lanzar otra CANCELA la Task de la anterior. Sin eso, navegar
-    /// deprisa por un árbol grande dejaba al core midiendo tres directorios
-    /// que ya nadie iba a mirar.
+    /// Disk map measurement in flight (phase 4): at most one — the panel is
+    /// one, and launching another CANCELS the previous one's Task. Without
+    /// that, navigating fast through a large tree left the core measuring
+    /// three directories nobody was going to look at anymore.
     pub disk_map: Option<DiskMapRun>,
-    /// Sumas listas llegadas con OTRO modal abierto: se RETIENEN aquí y se
-    /// abren en cuanto no haya modal (disciplina [`Self::pending_ai_plan`]).
-    /// Antes se tiraban, y la barra prometía «cierra el diálogo para verlas»
-    /// sobre unas filas que ya no existían.
+    /// Checksums ready that arrived with ANOTHER modal open: they're HELD
+    /// here and opened as soon as there is no modal ([`Self::pending_ai_plan`]
+    /// discipline). They used to be dropped, and the status bar promised
+    /// "close the dialog to see them" over rows that no longer existed.
     pub pending_checksums: Option<(&'static str, Vec<crate::app::ChecksumRow>)>,
-    /// Hits listos llegados con OTRO modal abierto: se RETIENEN aquí y se
-    /// abren en cuanto no haya modal (disciplina [`Self::pending_ai_plan`]).
+    /// Hits ready that arrived with ANOTHER modal open: they're HELD here
+    /// and opened as soon as there is no modal ([`Self::pending_ai_plan`]
+    /// discipline).
     pub pending_semantic: Option<Vec<norte_proto::methods::SemanticHit>>,
-    /// Comando Lua en vuelo (M4, ADR 0026): a lo sumo UNO —el estado Lua es
-    /// uno— y se pollea inline en el select, porque `CommandRun` es !Send y
-    /// su future corre en `block_on`, jamás en un spawn.
+    /// Lua command in flight (M4, ADR 0026): at most ONE — the Lua state is
+    /// one — and it's polled inline in the select, because `CommandRun` is
+    /// !Send and its future runs in `block_on`, never in a spawn.
     pub lua: Option<(CommandRun, CancellationToken)>,
-    /// Comandos Lua encolados mientras otro corría.
+    /// Lua commands queued while another was running.
     pub lua_queue: VecDeque<String>,
-    /// Sonda de stat on-focus (#52, listado lazy): a lo sumo una en vuelo.
+    /// stat-on-focus probe (#52, lazy listing): at most one in flight.
     pub stat: Option<StatProbe>,
-    /// Dedup de la sonda de arriba, por (pane, path): dos panes sobre el
-    /// MISMO dir hidratan cada uno la suya, y un stat fallido no se reintenta
-    /// hasta cambiar de selección.
+    /// Dedup of the probe above, by (pane, path): two panes on the SAME dir
+    /// each hydrate their own, and a failed stat isn't retried until the
+    /// selection changes.
     pub probed: Probed,
-    /// Sonda de stat de la fila SELECCIONADA del panel de diferencias (#157).
-    /// Su dedup vive en `App::compare_size_probed` y no aquí, porque
-    /// `App::compare_size_probe_targets` ya lo consulta para decidir qué
-    /// falta por pedir.
+    /// stat probe of the diff panel's SELECTED row (#157). Its dedup lives
+    /// in `App::compare_size_probed` and not here, because
+    /// `App::compare_size_probe_targets` already consults it to decide
+    /// what's missing to request.
     pub compare_stat: Option<CompareStatProbe>,
-    /// Fetch de decoraciones de plugin en vuelo (G3b, ADR 0037), por hueco.
+    /// Plugin decoration fetch in flight (G3b, ADR 0037), per slot.
     pub decorate: BySlot<DecorateFetch>,
-    /// L3: una lectura de preview en vuelo por hueco, superseded al moverse.
+    /// L3: one preview read in flight per slot, superseded on move.
     pub preview: BySlot<PreviewFetch>,
-    /// Una vuelta de `log.tail` en vuelo (#328): a lo sumo una — el panel de
-    /// registro es uno, y con dos un daemon lento acumularía una petición por
-    /// vuelta del bucle para siempre.
+    /// One round of `log.tail` in flight (#328): at most one — the log
+    /// panel is one, and with two a slow daemon would pile up a request per
+    /// loop turn forever.
     pub log_tail: Option<LogTailProbe>,
-    /// El catálogo de plugins en vuelo, para declarar los paneles que aportan
-    /// (fase 3): a lo sumo uno, y se pide UNA vez por sesión — lo que trae es
-    /// qué huecos existen, no el contenido de ninguno.
+    /// The plugin catalogue in flight, to declare the panels they
+    /// contribute (phase 3): at most one, and it's requested ONCE per
+    /// session — what it brings is which slots exist, not any one's
+    /// content.
     pub panels: Option<PanelsProbe>,
-    /// El repintado de un panel de plugin en vuelo (fase 3): a lo sumo uno —el
-    /// `multi: false` de su kind garantiza que hay como mucho un panel de
-    /// plugin visible—, y pedir otro SUSTITUYE al anterior, soltando su
-    /// receptor.
+    /// The repaint of a plugin panel in flight (phase 3): at most one — its
+    /// kind's `multi: false` guarantees there is at most one visible plugin
+    /// panel — and requesting another REPLACES the previous one, dropping
+    /// its receiver.
     pub panel_render: Option<PanelRenderProbe>,
-    /// Cuándo toca la siguiente (ver [`crate::probes::LOG_TAIL_PERIODO`]).
-    /// `None` = ya, que es lo que hace que abrir el panel pregunte en el acto.
+    /// When the next one is due (see [`crate::probes::LOG_TAIL_PERIODO`]).
+    /// `None` = now, which is what makes opening the panel ask right away.
     pub log_next_at: Option<tokio::time::Instant>,
-    /// Una petición `log.level` al daemon en vuelo (#328): a lo sumo una, y la
-    /// última pulsación releva a la anterior — pedirle dos niveles seguidos a
-    /// un anillo que solo sube es pedirle el mayor.
+    /// A `log.level` request to the daemon in flight (#328): at most one,
+    /// and the latest keystroke supersedes the previous one — asking a ring
+    /// that only goes up for two levels in a row is asking for the higher
+    /// one.
     pub log_level: Option<LogLevelProbe>,
-    /// El subshell persistente (#142): UNO por sesión, arrancado perezosamente
-    /// la primera vez que se pide `app.toggle-panels` y vivo hasta salir.
+    /// The persistent subshell (#142): ONE per session, started lazily the
+    /// first time `app.toggle-panels` is requested and alive until exit.
     ///
-    /// Vive aquí y no en `App` por lo mismo que el resto de esta estructura:
-    /// es un recurso del run loop —un proceso, un pty y un hilo lector—, y el
-    /// despacho de teclas no debe poder tocarlo. Que sea perezoso importa:
-    /// quien nunca pulsa la tecla no paga un `fork` ni un pty.
+    /// It lives here and not in `App` for the same reason as the rest of
+    /// this struct: it's a run-loop resource — a process, a pty and a
+    /// reader thread — and key dispatch must not be able to touch it. Being
+    /// lazy matters: whoever never presses the key doesn't pay for a `fork`
+    /// or a pty.
     ///
-    /// POSIX: en Windows no hay subshell y `app.toggle-panels` declina.
+    /// POSIX: on Windows there is no subshell and `app.toggle-panels`
+    /// declines.
     #[cfg(unix)]
     pub subshell: Option<crate::subshell::Subshell>,
 }

@@ -1,14 +1,14 @@
-//! Keymap de la TUI: re-exporta el motor compartido de
-//! [`norte_frontend::keymap`] y aporta el adaptador de crossterm, la lista
-//! de comandos de la TUI y sus presets de fábrica. El motor en sí (tipos
-//! neutros, parseo, fusión de capas, resolución) vive en `norte-frontend`
-//! (GUI-c T1/T2) — este módulo es una capa fina TUI-específica.
-/// `ModKey`/`set_mod_key` están DELIBERADAMENTE ausentes de esta lista (ADR
-/// 0043 decisión 9): la TUI no puede observar ⌘ —crossterm no entrega super
-/// sin `PushKeyboardEnhancementFlags`, que norte no activa— así que no puede
-/// honrar ninguna política que no sea Ctrl, y por tanto no debe poder
-/// nombrarla. Una API que acepta un ajuste que va a ignorar es peor que una
-/// que no lo ofrece.
+//! The TUI's keymap: re-exports the shared engine from
+//! [`norte_frontend::keymap`] and contributes the crossterm adapter, the
+//! TUI's command list, and its factory presets. The engine itself (neutral
+//! types, parsing, layer merging, resolution) lives in `norte-frontend`
+//! (GUI-c T1/T2) — this module is a thin TUI-specific layer.
+/// `ModKey`/`set_mod_key` are DELIBERATELY absent from this list (ADR 0043
+/// decision 9): the TUI cannot observe ⌘ — crossterm does not deliver super
+/// without `PushKeyboardEnhancementFlags`, which norte does not enable — so it
+/// cannot honor any policy other than Ctrl, and therefore must not be able to
+/// name it. An API that accepts a setting it is going to ignore is worse than
+/// one that does not offer it.
 pub use norte_frontend::keymap::{
     Availability, Chord, Count, Effective, KeyCode, KeymapError, KeymapFile, Mods, Rebind,
     RebindError, RebindSources, RebindWrite, Resolution, Resolver, Screen, UnbindOutcome,
@@ -18,20 +18,20 @@ pub use norte_frontend::keymap::{
 
 use crossterm::event::{KeyCode as CtCode, KeyModifiers as CtMods};
 
-/// Adaptador: evento de crossterm → [`Chord`] neutro. En `Char` el carácter
-/// ya codifica shift (lo descarta `Chord::new`); el resto conserva mods.
-/// Devuelve `None` para teclas que el keymap no modela (p. ej. `Media`,
-/// `BackTab`, `CapsLock`): el caller debe tratarlo como si la tecla no
-/// ligara nada (equivalente a [`Resolution::Reset`] — nunca pánico, nunca
-/// una tecla "perdida" en silencio distinto de antes).
+/// Adapter: a crossterm event → a neutral [`Chord`]. On `Char` the character
+/// already encodes shift (`Chord::new` discards it); everything else keeps
+/// its mods. Returns `None` for keys the keymap does not model (e.g. `Media`,
+/// `BackTab`, `CapsLock`): the caller must treat it as if the key bound
+/// nothing (equivalent to [`Resolution::Reset`] — never a panic, never a key
+/// "lost" silently, differently from before).
 #[must_use]
 pub fn chord_from_crossterm(mods: CtMods, code: CtCode) -> Option<Chord> {
     let neutral = match code {
         CtCode::Char(c) => KeyCode::Char(c),
-        // Clamp a f1..=f12, como el adaptador de la GUI (#109): xterm
-        // clásico reporta Shift+F1 como F13, y un F(n>12) no casa ningún
-        // binding (`parse_chord` lo rechaza) ni re-parsea su `Display`
-        // ("f13") — mejor tecla-no-modelada que un chord irrepresentable.
+        // Clamp to f1..=f12, like the GUI's adapter (#109): classic xterm
+        // reports Shift+F1 as F13, and an F(n>12) matches no binding
+        // (`parse_chord` rejects it) nor does its `Display` ("f13") re-parse
+        // — better an unmodeled key than an unrepresentable chord.
         CtCode::F(n @ 1..=12) => KeyCode::F(n),
         CtCode::Enter => KeyCode::Enter,
         CtCode::Tab => KeyCode::Tab,
@@ -47,31 +47,31 @@ pub fn chord_from_crossterm(mods: CtMods, code: CtCode) -> Option<Chord> {
         CtCode::PageDown => KeyCode::PageDown,
         CtCode::Insert => KeyCode::Insert,
         CtCode::Delete => KeyCode::Delete,
-        _ => return None, // teclas que el keymap no modela
+        _ => return None, // keys the keymap does not model
     };
-    // Solo ctrl/alt/shift: crossterm no reporta super/meta sin
-    // PushKeyboardEnhancementFlags (no activado).
+    // Only ctrl/alt/shift: crossterm does not report super/meta without
+    // PushKeyboardEnhancementFlags (not enabled).
     let m = Mods {
         ctrl: mods.contains(CtMods::CONTROL),
         alt: mods.contains(CtMods::ALT),
         shift: mods.contains(CtMods::SHIFT),
-        // JAMÁS puede ser otra cosa en la TUI. `CtMods::SUPER` existe en el
-        // tipo, pero el terminal solo lo entrega bajo
-        // `PushKeyboardEnhancementFlags` (protocolo de teclado de Kitty), que
-        // norte no activa: leerlo aquí devolvería `false` siempre y fingiría
-        // una capacidad que no hay. Por eso `mod+` es Ctrl en la TUI en TODAS
-        // las plataformas, macOS incluido, y lo decimos en vez de prometer
-        // una tecla que el terminal nunca va a entregar.
+        // Can NEVER be anything else in the TUI. `CtMods::SUPER` exists in the
+        // type, but the terminal only delivers it under
+        // `PushKeyboardEnhancementFlags` (Kitty's keyboard protocol), which
+        // norte does not enable: reading it here would always return `false`
+        // and fake a capability that is not there. That is why `mod+` is
+        // Ctrl in the TUI on ALL platforms, macOS included, and we say so
+        // instead of promising a key the terminal is never going to deliver.
         cmd: false,
     };
     Some(Chord::new(m, neutral))
 }
 
-/// La inversa de [`chord_from_crossterm`]: un [`Chord`] neutro → el evento
-/// de crossterm que lo produciría. Para SINTETIZAR una tecla desde un
-/// botón (spec 2026-09-10): un clic en `[Enter] Confirm` es pulsar Enter,
-/// y va por `on_key` como si el terminal lo hubiera entregado. `None` para
-/// lo que la TUI no puede entregar (`cmd`, que aquí nunca llega).
+/// The inverse of [`chord_from_crossterm`]: a neutral [`Chord`] → the
+/// crossterm event that would produce it. For SYNTHESIZING a key from a
+/// button (spec 2026-09-10): a click on `[Enter] Confirm` is pressing Enter,
+/// and it goes through `on_key` as if the terminal had delivered it. `None`
+/// for what the TUI cannot deliver (`cmd`, which never arrives here).
 #[must_use]
 pub fn crossterm_from_chord(chord: Chord) -> Option<(CtMods, CtCode)> {
     let (m, code) = chord.parts();
@@ -103,26 +103,26 @@ pub fn crossterm_from_chord(chord: Chord) -> Option<(CtMods, CtCode)> {
     Some((mods, ct))
 }
 
-/// Los comandos que el TUI sabe ejecutar — la fuente ÚNICA contra la que
-/// se valida todo keymap (los mismos nombres que verán la palette y el
-/// wire, ADR 0006).
-/// Una sola fuente para el vocabulario de comandos (#112): el macro emite
-/// `COMMANDS` (la lista de validación de siempre, misma superficie pública)
-/// Y el enum [`Command`] con una variante por nombre. `dispatch` (main.rs)
-/// matchea el enum SIN comodín: un comando nuevo sin brazo, o un brazo sin
-/// variante, es un ERROR DE COMPILACIÓN — la clase de bug que motivó esto
-/// (`mark.pattern-*` en COMMANDS sin brazo: pánico en debug, no-op mudo en
-/// release) deja de existir en runtime.
+/// The commands the TUI knows how to run — the ONE source every keymap is
+/// validated against (the same names the palette and the wire will see, ADR
+/// 0006).
+/// A single source for the command vocabulary (#112): the macro emits
+/// `COMMANDS` (the usual validation list, the same public surface) AND the
+/// [`Command`] enum with one variant per name. `dispatch` (main.rs) matches
+/// the enum with NO wildcard: a new command with no arm, or an arm with no
+/// variant, is a COMPILE ERROR — the class of bug that motivated this
+/// (`mark.pattern-*` in COMMANDS with no arm: a panic in debug, a silent
+/// no-op in release) no longer exists at runtime.
 macro_rules! commands {
     ($($name:literal => $variant:ident,)+) => {
-        /// Los comandos que el TUI sabe ejecutar — la fuente ÚNICA contra la
-        /// que se valida todo keymap (los mismos nombres que verán la palette
-        /// y el wire, ADR 0006).
+        /// The commands the TUI knows how to run — the ONE source every
+        /// keymap is validated against (the same names the palette and the
+        /// wire will see, ADR 0006).
         pub const COMMANDS: &[&str] = &[$($name),+];
 
-        /// El vocabulario de `dispatch`, tipado (#112). Se parsea UNA vez en
-        /// la frontera (resolver/palette -> [`Command::parse`]); a partir de
-        /// ahí el compilador exige un brazo por variante.
+        /// `dispatch`'s vocabulary, typed (#112). Parsed ONCE at the
+        /// boundary (resolver/palette -> [`Command::parse`]); from there on
+        /// the compiler requires one arm per variant.
         #[derive(Debug, Clone, Copy, PartialEq, Eq)]
         pub enum Command {
             $(
@@ -132,8 +132,9 @@ macro_rules! commands {
         }
 
         impl Command {
-            /// Nombre -> variante. `None` = fuera del vocabulario (el keymap
-            /// lo valida al cargar; `lua:`/`plugin:` se enrutan ANTES).
+            /// Name -> variant. `None` = outside the vocabulary (the keymap
+            /// validates it on load; `lua:`/`plugin:` are routed BEFORE
+            /// this).
             #[must_use]
             pub fn parse(s: &str) -> Option<Self> {
                 match s {
@@ -306,14 +307,14 @@ commands! {
     "mark.to-bottom" => MarkToBottom,
 }
 
-/// Los comandos del contexto `dialog` (H1, issue #24) — la lista CERRADA
-/// que el TUI pasa a [`Effective::build_for`] para `Screen::Dialog`. Cada
-/// overlay (modal, theme picker, extensions, nav popup) declara en código
-/// su propio ALLOWLIST de cuáles soporta (`app::dialog_action` y las
-/// resoluciones ad hoc en `main.rs`); la semántica de seguridad vive ahí,
-/// jamás aquí. Coincide 1:1 con las secciones `[dialog]` de los tres
-/// presets compartidos (`orthodox`/`vim`/`cua`) — un comando nuevo en el
-/// preset sin su entrada aquí falla a construir con `UnknownCommand`.
+/// The `dialog` context's commands (H1, issue #24) — the CLOSED list the
+/// TUI passes to [`Effective::build_for`] for `Screen::Dialog`. Each overlay
+/// (modal, theme picker, extensions, nav popup) declares in code its own
+/// ALLOWLIST of which ones it supports (`app::dialog_action` and the ad hoc
+/// resolutions in `main.rs`); the security semantics live there, never here.
+/// Matches 1:1 the `[dialog]` sections of the three shared presets
+/// (`orthodox`/`vim`/`cua`) — a new command in the preset with no entry here
+/// fails to build with `UnknownCommand`.
 pub const DIALOG_COMMANDS: &[&str] = &[
     "dialog.confirm",
     "dialog.cancel",
@@ -346,37 +347,38 @@ pub const DIALOG_COMMANDS: &[&str] = &[
     "dialog.pane",
     "dialog.back",
     "dialog.filter",
-    // Las listas de historia (spec 2026-09-15 D2).
+    // The history lists (spec 2026-09-15 D2).
     "dialog.confirm-other",
     "dialog.clear",
 ];
 
-/// Id de Fluent con la descripción de un comando (`app.quit` →
-/// `help-cmd-app-quit`). La suite OBLIGA a que exista en ambos locales
-/// para TODO comando de [`COMMANDS`]: un comando nuevo sin descripción
-/// rompe tests — la ayuda no puede quedarse atrás.
+/// Fluent id with a command's description (`app.quit` → `help-cmd-app-quit`).
+/// The suite REQUIRES it to exist in both locales for EVERY command in
+/// [`COMMANDS`]: a new command with no description breaks tests — help must
+/// not fall behind.
 #[must_use]
 pub fn help_id(command: &str) -> String {
     format!("help-cmd-{}", command.replace('.', "-"))
 }
 
-/// Id de Fluent con la etiqueta CORTA de un comando `dialog.*` (`dialog.
-/// page-up` → `dialog-cmd-page-up`), usada por los hints generados de pie
-/// de página (H1 T3, #24). Mismo mangling que [`help_id`] (puntos→guiones)
-/// aplicado al SUFIJO tras `dialog.` — el prefijo no se repite en el id
-/// (evita `dialog-cmd-dialog-page-up`). La suite OBLIGA a que exista en
-/// ambos locales para TODO comando de [`DIALOG_COMMANDS`].
+/// Fluent id with a `dialog.*` command's SHORT label (`dialog.page-up` →
+/// `dialog-cmd-page-up`), used by the generated footer hints (H1 T3, #24).
+/// Same mangling as [`help_id`] (dots→dashes) applied to the SUFFIX after
+/// `dialog.` — the prefix is not repeated in the id (avoids
+/// `dialog-cmd-dialog-page-up`). The suite REQUIRES it to exist in both
+/// locales for EVERY command in [`DIALOG_COMMANDS`].
 #[must_use]
 pub fn dialog_hint_id(command: &str) -> String {
     let suffix = command.strip_prefix("dialog.").unwrap_or(command);
     format!("dialog-cmd-{}", suffix.replace('.', "-"))
 }
 
-/// Los presets de fábrica, parseados (se validan en tests y al construir
-/// el efectivo). Default del producto: `orthodox` (decisión 2026-07-10).
+/// The factory presets, parsed (validated by the tests and when building the
+/// effective keymap). The product's default: `orthodox` (decision
+/// 2026-07-10).
 ///
 /// # Panics
-/// Nunca con los TOML embebidos (los valida la suite).
+/// Never, with the embedded TOMLs (the suite validates them).
 #[must_use]
 pub fn presets() -> Vec<(&'static str, KeymapFile)> {
     use norte_frontend::keymap::presets as shared;
@@ -384,32 +386,31 @@ pub fn presets() -> Vec<(&'static str, KeymapFile)> {
     shared::NAMES
         .iter()
         .map(|&name| {
-            let src = shared::source(name).expect("NAMES resuelve en source()");
+            let src = shared::source(name).expect("NAMES resolves in source()");
             (
                 name,
-                parse_keymap(src)
-                    .unwrap_or_else(|e| panic!("preset {name} embebido inválido: {e}")),
+                parse_keymap(src).unwrap_or_else(|e| panic!("invalid embedded preset {name}: {e}")),
             )
         })
         .collect()
 }
 
-/// El segmento «pendiente» de la barra de estado (`[… ]` en `draw_status`):
-/// el contador tecleado hasta ahora (K2a) seguido de los chords ya pulsados.
-/// Los dos van JUNTOS porque en `12gg` conviven — el `12` sigue vivo mientras
-/// la secuencia `g g` se teclea, y pintar solo uno de los dos miente sobre lo
-/// que va a pasar al soltar la próxima tecla. Un contador que no se ve es un
-/// contador que no se puede cancelar.
+/// The status bar's "pending" segment (`[… ]` in `draw_status`): the count
+/// typed so far (K2a) followed by the chords already pressed. The two travel
+/// TOGETHER because they coexist in `12gg` — the `12` stays alive while the
+/// `g g` sequence is typed, and painting only one of the two lies about what
+/// is going to happen when the next key is released. A count that is not
+/// shown is a count that cannot be cancelled.
 ///
-/// Vacío cuando no hay ni contador ni secuencia: la barra calla.
+/// Empty when there is neither a count nor a sequence: the bar stays silent.
 ///
-/// K3a: la composición vive en `norte_frontend::whichkey::pending_title`, que
-/// es también el TÍTULO del panel which-key. Las dos superficies pintan el
-/// MISMO estado a una línea de distancia, así que dos strings distintos serían
-/// dos ortografías de una sola cosa (`f5 g` abajo, `F5 g` arriba) — y solo una
-/// de ellas iba por `paint_chord`, que es quien ENMASCARA: un `keymap.toml` de
-/// proyecto no lleva confianza y puede ligar un RLO o un BEL, y este string se
-/// pinta en un terminal.
+/// K3a: the composition lives in `norte_frontend::whichkey::pending_title`,
+/// which is also the which-key panel's TITLE. The two surfaces paint the SAME
+/// state one line apart, so two different strings would be two spellings of
+/// one thing (`f5 g` below, `F5 g` above) — and only one of them went through
+/// `paint_chord`, which is what MASKS: a project `keymap.toml` carries no
+/// trust and can bind an RLO or a BEL, and this string gets painted on a
+/// terminal.
 #[must_use]
 pub fn pending_display(resolver: &Resolver) -> String {
     norte_frontend::whichkey::pending_title(resolver.pending(), resolver.count())
@@ -419,11 +420,11 @@ pub fn pending_display(resolver: &Resolver) -> String {
 mod tests {
     use super::*;
 
-    /// K2a: la barra pinta el contador MIENTRAS se teclea, y lo sigue
-    /// pintando con una secuencia a medias encima (`12` + `g`). Sin contador
-    /// vivo el segmento es el de siempre; sin nada, calla.
+    /// K2a: the bar paints the count WHILE it is typed, and keeps painting it
+    /// with a half-done sequence on top (`12` + `g`). With no live count the
+    /// segment is the usual one; with nothing, it stays silent.
     #[test]
-    fn el_segmento_pendiente_pinta_contador_y_secuencia() {
+    fn the_pending_segment_paints_count_and_sequence() {
         let preset = parse_keymap(
             r"
 counts = true
@@ -432,11 +433,11 @@ counts = true
 keymap = [ { on = ['g', 'g'], run = 'cursor.top' } ]
 ",
         )
-        .expect("preset de test");
+        .expect("test preset");
         let eff = Effective::build_for(&preset, &[], &["cursor.top"], Screen::Browse)
-            .expect("efectivo de test");
+            .expect("test effective");
         let mut r = Resolver::new(eff);
-        assert_eq!(pending_display(&r), "", "sin nada, calla");
+        assert_eq!(pending_display(&r), "", "with nothing, it stays silent");
         assert!(matches!(
             r.push(parse_chord("1").expect("chord")),
             Resolution::Counting(1)
@@ -445,7 +446,11 @@ keymap = [ { on = ['g', 'g'], run = 'cursor.top' } ]
             r.push(parse_chord("2").expect("chord")),
             Resolution::Counting(12)
         ));
-        assert_eq!(pending_display(&r), "12", "el contador se ve al teclearlo");
+        assert_eq!(
+            pending_display(&r),
+            "12",
+            "the count is visible as it is typed"
+        );
         assert!(matches!(
             r.push(parse_chord("g").expect("chord")),
             Resolution::Pending(1)
@@ -453,23 +458,23 @@ keymap = [ { on = ['g', 'g'], run = 'cursor.top' } ]
         assert_eq!(
             pending_display(&r),
             "12 g",
-            "el contador SOBREVIVE a la secuencia a medias"
+            "the count SURVIVES the half-done sequence"
         );
     }
 
-    /// Sin contadores en el preset el segmento es exactamente el de antes de
-    /// K2a: los chords unidos por espacio, sin prefijo numérico inventado.
+    /// With no counts in the preset the segment is exactly what it was before
+    /// K2a: the chords joined by a space, with no invented numeric prefix.
     #[test]
-    fn sin_contadores_el_segmento_es_solo_la_secuencia() {
+    fn with_no_counts_the_segment_is_just_the_sequence() {
         let preset = parse_keymap(
             r"
 [pane]
 keymap = [ { on = ['g', 'g'], run = 'cursor.top' } ]
 ",
         )
-        .expect("preset de test");
+        .expect("test preset");
         let eff = Effective::build_for(&preset, &[], &["cursor.top"], Screen::Browse)
-            .expect("efectivo de test");
+            .expect("test effective");
         let mut r = Resolver::new(eff);
         assert!(matches!(
             r.push(parse_chord("g").expect("chord")),
@@ -478,68 +483,68 @@ keymap = [ { on = ['g', 'g'], run = 'cursor.top' } ]
         assert_eq!(pending_display(&r), "g");
     }
 
-    /// #112: `COMMANDS` y `Command` nacen del MISMO macro — cada nombre
-    /// parsea a su variante. Trivial por construcción; pinea contra un
-    /// futuro edit a mano de la lista fuera del macro.
+    /// #112: `COMMANDS` and `Command` are born from the SAME macro — every
+    /// name parses to its variant. Trivial by construction; pins against a
+    /// future hand-edit of the list outside the macro.
     #[test]
-    fn cada_nombre_de_commands_parsea_a_una_variante() {
+    fn every_commands_name_parses_to_a_variant() {
         for name in COMMANDS {
             assert!(Command::parse(name).is_some(), "{name}");
         }
-        assert!(Command::parse("no.existe").is_none());
-        assert!(Command::parse("plugin:x:y").is_none(), "plugin: va aparte");
+        assert!(Command::parse("does.not.exist").is_none());
+        assert!(
+            Command::parse("plugin:x:y").is_none(),
+            "plugin: is routed separately"
+        );
     }
 
     /// The TUI's `COMMANDS`/`DIALOG_COMMANDS` are now a SUBSET declaration, not a
     /// vocabulary. A name the shared catalogue has never heard of means the two
     /// have drifted — which is the whole class of bug this catalogue removes.
     #[test]
-    fn todo_comando_del_tui_esta_en_el_catalogo_compartido() {
+    fn every_tui_command_is_in_the_shared_catalogue() {
         use norte_frontend::keymap::catalogue::{Status, lookup};
         for name in COMMANDS.iter().chain(DIALOG_COMMANDS.iter()) {
             let def = lookup(name)
-                .unwrap_or_else(|| panic!("{name} lo implementa el TUI y no está en CATALOGUE"));
+                .unwrap_or_else(|| panic!("{name} is implemented by the TUI and not in CATALOGUE"));
             assert_eq!(
                 def.status,
                 Status::Live,
-                "{name} lo implementa el TUI pero el catálogo lo declara Planned"
+                "{name} is implemented by the TUI but the catalogue declares it Planned"
             );
         }
     }
 
-    /// El arnés de tmux no vio NADA al pulsar `Shift+F2` sobre el preset por
-    /// defecto (ni al pulsar `Shift+F6`, que lleva ligado a `pane.rename`
-    /// desde hace mucho), mientras el MISMO comando en un `f2` pelado
-    /// respondía al instante. Esto pinea las dos mitades que sí están de este
-    /// lado, para que la próxima vez que alguien lo mire no tenga que
-    /// descartarlas otra vez:
+    /// The tmux harness saw NOTHING on pressing `Shift+F2` over the default
+    /// preset (nor on pressing `Shift+F6`, which has been bound to
+    /// `pane.rename` for a long time), while the SAME command on a bare `f2`
+    /// responded instantly. This pins the two halves that ARE on this side,
+    /// so the next time someone looks at it they do not have to rule them out
+    /// again:
     ///
-    /// 1. el adaptador CONSERVA el shift en una tecla de función (solo lo
-    ///    descarta en `Char`, donde el carácter ya lo codifica), y
-    /// 2. el chord que produce es byte a byte el que parsea `"shift+f2"`, que
-    ///    es lo que el preset liga.
+    /// 1. the adapter KEEPS shift on a function key (it only discards it on
+    ///    `Char`, where the character already encodes it), and
+    /// 2. the chord it produces is byte for byte what `"shift+f2"` parses to,
+    ///    which is what the preset binds.
     ///
-    /// Lo que queda fuera —si el terminal manda la secuencia y si crossterm
-    /// la decodifica a `SHIFT + F(2))`— no se puede afirmar sin un terminal, y
-    /// es donde apunta la evidencia.
+    /// What is left out — whether the terminal sends the sequence and whether
+    /// crossterm decodes it as `SHIFT + F(2)` — cannot be asserted without a
+    /// terminal, and that is where the evidence points.
     #[test]
-    fn una_tecla_de_funcion_con_shift_conserva_su_shift() {
-        let del_terminal = chord_from_crossterm(CtMods::SHIFT, CtCode::F(2));
+    fn a_shifted_function_key_keeps_its_shift() {
+        let from_terminal = chord_from_crossterm(CtMods::SHIFT, CtCode::F(2));
         assert_eq!(
-            del_terminal,
+            from_terminal,
             parse_chord("shift+f2").ok(),
-            "el adaptador y el parser del preset tienen que coincidir"
+            "the adapter and the preset's parser must agree"
         );
-        let (mods, code) = del_terminal.expect("chord").parts();
-        assert!(
-            mods.shift,
-            "el shift no puede perderse en una tecla de función"
-        );
+        let (mods, code) = from_terminal.expect("chord").parts();
+        assert!(mods.shift, "shift must not be lost on a function key");
         assert_eq!(code, KeyCode::F(2));
     }
 
     #[test]
-    fn chord_from_crossterm_traduce_teclas_conocidas() {
+    fn chord_from_crossterm_translates_known_keys() {
         assert_eq!(
             chord_from_crossterm(CtMods::CONTROL, CtCode::Char('k')),
             Some(Chord::new(
@@ -557,18 +562,18 @@ keymap = [ { on = ['g', 'g'], run = 'cursor.top' } ]
     }
 
     #[test]
-    fn chord_from_crossterm_devuelve_none_para_teclas_no_modeladas() {
+    fn chord_from_crossterm_returns_none_for_unmodeled_keys() {
         assert_eq!(chord_from_crossterm(CtMods::NONE, CtCode::BackTab), None);
         assert_eq!(chord_from_crossterm(CtMods::NONE, CtCode::CapsLock), None);
     }
 
-    /// #109: xterm clásico reporta Shift+F1 como `F13`, así que un `F(13)`
-    /// es construible EN RUNTIME desde este adaptador — pero `parse_chord`
-    /// solo acepta `f1..=f12`, con lo que el chord no puede casar ningún
-    /// binding y su `Display` (`"f13"`) no re-parsea. Mismo clamp que el
-    /// adaptador de la GUI: fuera de rango = tecla no modelada, `None`.
+    /// #109: classic xterm reports Shift+F1 as `F13`, so an `F(13)` is
+    /// constructible AT RUNTIME from this adapter — but `parse_chord` only
+    /// accepts `f1..=f12`, so the chord cannot match any binding and its
+    /// `Display` (`"f13"`) does not re-parse. Same clamp as the GUI's
+    /// adapter: out of range = unmodeled key, `None`.
     #[test]
-    fn chord_from_crossterm_clampa_f13_y_superiores_como_no_modeladas() {
+    fn chord_from_crossterm_clamps_f13_and_above_as_unmodeled() {
         assert_eq!(chord_from_crossterm(CtMods::NONE, CtCode::F(13)), None);
         assert_eq!(chord_from_crossterm(CtMods::NONE, CtCode::F(0)), None);
         assert_eq!(chord_from_crossterm(CtMods::NONE, CtCode::F(255)), None);
@@ -579,9 +584,9 @@ keymap = [ { on = ['g', 'g'], run = 'cursor.top' } ]
     }
 
     #[test]
-    fn los_tres_presets_de_fabrica_parsean() {
-        for (nombre, _preset) in presets() {
-            assert!(!nombre.is_empty());
+    fn the_three_factory_presets_parse() {
+        for (name, _preset) in presets() {
+            assert!(!name.is_empty());
         }
     }
 
@@ -602,13 +607,13 @@ keymap = [ { on = ['g', 'g'], run = 'cursor.top' } ]
     /// same test against ITS command list, and until it exists no preset is
     /// checked against a graphical surface at all.
     #[test]
-    fn todos_los_presets_construyen_las_tres_pantallas_del_tui() {
+    fn every_preset_builds_the_tuis_three_screens() {
         let dialog_known: Vec<&str> = COMMANDS
             .iter()
             .copied()
             .chain(DIALOG_COMMANDS.iter().copied())
             .collect();
-        for (nombre, preset) in presets() {
+        for (name, preset) in presets() {
             for screen in [Screen::Browse, Screen::Viewer, Screen::Dialog] {
                 let known: &[&str] = if screen == Screen::Dialog {
                     &dialog_known
@@ -616,24 +621,25 @@ keymap = [ { on = ['g', 'g'], run = 'cursor.top' } ]
                     COMMANDS
                 };
                 Effective::build_for(&preset, &[], known, screen)
-                    .unwrap_or_else(|e| panic!("preset {nombre} en {screen:?}: {e}"));
+                    .unwrap_or_else(|e| panic!("preset {name} on {screen:?}: {e}"));
             }
         }
     }
 
-    /// Decisión #23 pineada: en el preset `cua`, Ctrl+C SALE (emergencia
-    /// universal) — jamás copy. `pane.copy` se queda en F5. Ligar Ctrl+C a
-    /// copy divergiría del Ctrl-C hardcodeado que aborta el cd/refresh (loops
-    /// transitorios que no consultan el keymap). Este test fija la decisión:
-    /// quien intente rebindear Ctrl+C a copy rompe aquí y ve el porqué.
+    /// Decision #23 pinned: in the `cua` preset, Ctrl+C QUITS (universal
+    /// emergency) — never copy. `pane.copy` stays on F5. Binding Ctrl+C to
+    /// copy would diverge from the hardcoded Ctrl-C that aborts cd/refresh
+    /// (transient loops that do not consult the keymap). This test fixes the
+    /// decision: whoever tries to rebind Ctrl+C to copy breaks here and sees
+    /// why.
     #[test]
-    fn cua_ctrl_c_es_salir_no_copy() {
+    fn cua_ctrl_c_quits_not_copies() {
         let cua = presets()
             .into_iter()
             .find(|(n, _)| *n == "cua")
-            .expect("preset cua")
+            .expect("cua preset")
             .1;
-        let eff = Effective::build_for(&cua, &[], COMMANDS, Screen::Browse).expect("cua efectivo");
+        let eff = Effective::build_for(&cua, &[], COMMANDS, Screen::Browse).expect("cua effective");
         let mut r = Resolver::new(eff);
         let ctrl_c = Chord::new(
             Mods {
@@ -649,7 +655,7 @@ keymap = [ { on = ['g', 'g'], run = 'cursor.top' } ]
                 count: Count::None
             }
         );
-        // Copy vive en F5, no en un chord de Ctrl.
+        // Copy lives on F5, not on a Ctrl chord.
         assert_eq!(
             r.push(Chord::new(Mods::default(), KeyCode::F(5))),
             Resolution::Run {
@@ -659,21 +665,21 @@ keymap = [ { on = ['g', 'g'], run = 'cursor.top' } ]
         );
     }
 
-    /// H1 T2: los tres presets construyen `Screen::Dialog` con el
-    /// `known_commands` UNIÓN (`COMMANDS` ∪ `DIALOG_COMMANDS` —
-    /// `build_for_impl` valida TODO el efectivo fusionado, incluido
-    /// `[global]`, contra la lista que le pasa el caller; T1 lo confirmó).
-    /// `y` resuelve `dialog.approve` en los tres (preset idéntico).
+    /// H1 T2: the three presets build `Screen::Dialog` with the UNION
+    /// `known_commands` (`COMMANDS` ∪ `DIALOG_COMMANDS` — `build_for_impl`
+    /// validates the WHOLE merged effective, including `[global]`, against
+    /// the list the caller passes it; T1 confirmed it). `y` resolves
+    /// `dialog.approve` in all three (identical preset).
     #[test]
-    fn dialog_commands_se_resuelven_en_los_tres_presets() {
+    fn dialog_commands_resolve_in_the_three_presets() {
         let known: Vec<&str> = COMMANDS
             .iter()
             .copied()
             .chain(DIALOG_COMMANDS.iter().copied())
             .collect();
-        for (nombre, preset) in presets() {
+        for (name, preset) in presets() {
             let eff = Effective::build_for(&preset, &[], &known, Screen::Dialog)
-                .unwrap_or_else(|e| panic!("preset {nombre}: {e}"));
+                .unwrap_or_else(|e| panic!("preset {name}: {e}"));
             let mut r = Resolver::new(eff);
             assert_eq!(
                 r.push(Chord::new(Mods::default(), KeyCode::Char('y'))),
@@ -681,13 +687,13 @@ keymap = [ { on = ['g', 'g'], run = 'cursor.top' } ]
                     command: "dialog.approve".to_owned(),
                     count: Count::None
                 },
-                "preset {nombre}"
+                "preset {name}"
             );
         }
     }
 
     #[test]
-    fn help_id_reemplaza_puntos_por_guiones() {
+    fn help_id_replaces_dots_with_dashes() {
         assert_eq!(help_id("app.quit"), "help-cmd-app-quit");
         assert_eq!(
             help_id("pane.delete-permanent"),
@@ -696,7 +702,7 @@ keymap = [ { on = ['g', 'g'], run = 'cursor.top' } ]
     }
 
     #[test]
-    fn dialog_hint_id_pela_el_prefijo_dialog_punto() {
+    fn dialog_hint_id_strips_the_dialog_dot_prefix() {
         assert_eq!(dialog_hint_id("dialog.confirm"), "dialog-cmd-confirm");
         assert_eq!(dialog_hint_id("dialog.page-up"), "dialog-cmd-page-up");
         assert_eq!(
@@ -705,26 +711,26 @@ keymap = [ { on = ['g', 'g'], run = 'cursor.top' } ]
         );
     }
 
-    /// #108 7a: las teclas del picker de columnas resuelven en los TRES
-    /// presets A TRAVÉS del adaptador de crossterm real — pinea las
-    /// decisiones de chord verificadas en el plan:
-    /// - `shift+up`/`shift+down` → move-up/move-down: `parse_chord`
-    ///   CONSERVA shift en teclas no-Char y `chord_from_crossterm` también,
-    ///   así que el chord del preset casa el evento SHIFT+flecha.
-    /// - `K`/`J` → move-up/move-down: crossterm entrega `Char('J')`+SHIFT y
-    ///   `Chord::new` DESCARTA shift en Char — casa el binding `"J"`.
-    ///   (`shift+j` como texto NO parsea: `ShiftWithChar`.)
-    /// - `ctrl+s` → dialog.sort: `s` a secas ya es `dialog.skip` (colisión
-    ///   del modal de colisiones) — el fallback del plan.
+    /// #108 7a: the columns picker's keys resolve in the THREE presets
+    /// THROUGH the real crossterm adapter — pins the chord decisions verified
+    /// in the plan:
+    /// - `shift+up`/`shift+down` → move-up/move-down: `parse_chord` KEEPS
+    ///   shift on non-Char keys and `chord_from_crossterm` does too, so the
+    ///   preset's chord matches the SHIFT+arrow event.
+    /// - `K`/`J` → move-up/move-down: crossterm delivers `Char('J')`+SHIFT
+    ///   and `Chord::new` DISCARDS shift on Char — matches the `"J"` binding.
+    ///   (`shift+j` as text does NOT parse: `ShiftWithChar`.)
+    /// - `ctrl+s` → dialog.sort: a bare `s` is already `dialog.skip`
+    ///   (collision modal clash) — the plan's fallback.
     #[test]
-    fn columns_picker_chords_resuelven_via_adaptador_crossterm() {
+    fn columns_picker_chords_resolve_via_the_crossterm_adapter() {
         let expected = [
             ((CtMods::SHIFT, CtCode::Up), "dialog.move-up"),
             ((CtMods::SHIFT, CtCode::Down), "dialog.move-down"),
             ((CtMods::SHIFT, CtCode::Char('K')), "dialog.move-up"),
             ((CtMods::SHIFT, CtCode::Char('J')), "dialog.move-down"),
             ((CtMods::CONTROL, CtCode::Char('s')), "dialog.sort"),
-            // #108 7b: `f` cicla el formato (libre en los tres [dialog]).
+            // #108 7b: `f` cycles the format (free in all three [dialog]s).
             ((CtMods::NONE, CtCode::Char('f')), "dialog.cycle-format"),
         ];
         let known: Vec<&str> = COMMANDS
@@ -732,32 +738,32 @@ keymap = [ { on = ['g', 'g'], run = 'cursor.top' } ]
             .copied()
             .chain(DIALOG_COMMANDS.iter().copied())
             .collect();
-        // K2b: `presets()` ahora también trae `total-commander`/`krusader`,
-        // que NO comparten `alt+c` → `pane.columns` (no está en sus fuentes,
-        // y rule 1 prohíbe inventarlo) — este test pinea la convención
-        // PROPIA de norte, así que se queda en los tres presets nativos.
-        for (nombre, preset) in presets()
+        // K2b: `presets()` now also brings `total-commander`/`krusader`,
+        // which do NOT share `alt+c` → `pane.columns` (it is not in their
+        // sources, and rule 1 forbids inventing it) — this test pins norte's
+        // OWN convention, so it stays scoped to the three native presets.
+        for (name, preset) in presets()
             .into_iter()
             .filter(|(n, _)| matches!(*n, "orthodox" | "vim" | "cua"))
         {
             let eff = Effective::build_for(&preset, &[], &known, Screen::Dialog)
-                .unwrap_or_else(|e| panic!("preset {nombre}: {e}"));
+                .unwrap_or_else(|e| panic!("preset {name}: {e}"));
             for ((mods, code), command) in &expected {
                 let mut r = Resolver::new(eff.clone());
                 let chord = chord_from_crossterm(*mods, *code)
-                    .unwrap_or_else(|| panic!("preset {nombre}: chord no modelado {code:?}"));
+                    .unwrap_or_else(|| panic!("preset {name}: unmodeled chord {code:?}"));
                 assert_eq!(
                     r.push(chord),
                     Resolution::Run {
                         command: (*command).to_owned(),
                         count: Count::None
                     },
-                    "preset {nombre}: {command}"
+                    "preset {name}: {command}"
                 );
             }
-            // Y `alt+c` abre el picker desde el pane.
+            // And `alt+c` opens the picker from the pane.
             let browse = Effective::build_for(&preset, &[], COMMANDS, Screen::Browse)
-                .unwrap_or_else(|e| panic!("preset {nombre}: {e}"));
+                .unwrap_or_else(|e| panic!("preset {name}: {e}"));
             let mut r = Resolver::new(browse);
             let alt_c = chord_from_crossterm(CtMods::ALT, CtCode::Char('c')).expect("alt+c");
             assert_eq!(
@@ -766,7 +772,7 @@ keymap = [ { on = ['g', 'g'], run = 'cursor.top' } ]
                     command: "pane.columns".to_owned(),
                     count: Count::None
                 },
-                "preset {nombre}: pane.columns"
+                "preset {name}: pane.columns"
             );
         }
     }
@@ -810,7 +816,7 @@ keymap = [ { on = ['g', 'g'], run = 'cursor.top' } ]
             for ((mods, code), command) in common.iter().chain(&[(swap, "pane.swap")]) {
                 let mut r = Resolver::new(eff.clone());
                 let chord = chord_from_crossterm(*mods, *code)
-                    .unwrap_or_else(|| panic!("preset {name}: chord no modelado {code:?}"));
+                    .unwrap_or_else(|| panic!("preset {name}: unmodeled chord {code:?}"));
                 assert_eq!(
                     r.push(chord),
                     Resolution::Run {
@@ -823,17 +829,17 @@ keymap = [ { on = ['g', 'g'], run = 'cursor.top' } ]
         }
     }
 
-    /// En `vim`, `ctrl+u` SIGUE siendo `cursor.page-up`: el chord de
-    /// `pane.swap` de los otros dos presets no lo pisó. (Mutación de control:
-    /// ligar ahí `pane.swap` rompe este test.)
+    /// In `vim`, `ctrl+u` is STILL `cursor.page-up`: the `pane.swap` chord
+    /// from the other two presets did not override it. (Mutation control:
+    /// binding `pane.swap` there breaks this test.)
     #[test]
-    fn vim_ctrl_u_sigue_siendo_page_up() {
+    fn vim_ctrl_u_is_still_page_up() {
         let vim = presets()
             .into_iter()
             .find(|(n, _)| *n == "vim")
-            .expect("preset vim")
+            .expect("vim preset")
             .1;
-        let eff = Effective::build_for(&vim, &[], COMMANDS, Screen::Browse).expect("vim efectivo");
+        let eff = Effective::build_for(&vim, &[], COMMANDS, Screen::Browse).expect("vim effective");
         let mut r = Resolver::new(eff);
         let ctrl_u = chord_from_crossterm(CtMods::CONTROL, CtCode::Char('u')).expect("ctrl+u");
         assert_eq!(
@@ -873,12 +879,12 @@ keymap = [ { on = ['g', 'g'], run = 'cursor.top' } ]
                 "mark.invert",
             ),
             (
-                // `alt+a`, no `ctrl+A`. Este par —`ctrl+a` para marcar todo y
-                // su mayúscula para desmarcar— se leía bien y no funcionaba:
-                // el terminal manda el MISMO byte para Ctrl+A y Ctrl+Shift+A,
-                // así que `mark.clear` estaba anunciado y muerto en los tres
-                // presets nativos. Lo caza
-                // `ningun_preset_ata_un_acorde_que_el_terminal_no_entrega`.
+                // `alt+a`, not `ctrl+A`. This pair — `ctrl+a` to mark
+                // everything and its uppercase to unmark — read well and did
+                // not work: the terminal sends the SAME byte for Ctrl+A and
+                // Ctrl+Shift+A, so `mark.clear` was advertised and dead in
+                // all three native presets. Caught by
+                // `no_preset_binds_a_chord_the_terminal_cannot_deliver`.
                 Chord::new(
                     Mods {
                         alt: true,
@@ -918,14 +924,13 @@ keymap = [ { on = ['g', 'g'], run = 'cursor.top' } ]
     }
 }
 
-/// Parsea una `key` de fila de plugin de la palette de vuelta a
-/// `(plugin_id, command_id)`.
+/// Parses a palette plugin row's `key` back into `(plugin_id, command_id)`.
 ///
-/// Vive en `norte-frontend`, JUNTO a `palette::plugin_rows`, que es quien
-/// COMPONE esa clave: el que la escribe y el que la lee no pueden estar en
-/// dos crates con dos respuestas sobre dónde empieza el `command_id` —que es
-/// justo la mitad sin charset validado—. Se re-exporta con su nombre de
-/// siempre para que ningún call site de este crate se mueva.
+/// Lives in `norte-frontend`, ALONGSIDE `palette::plugin_rows`, which is what
+/// COMPOSES that key: whoever writes it and whoever reads it cannot be in two
+/// crates with two different answers about where `command_id` starts — which
+/// is exactly the half with no validated charset. Re-exported under its usual
+/// name so no call site in this crate has to move.
 pub use norte_frontend::palette::parse_plugin_key;
 
 #[cfg(test)]
@@ -933,18 +938,18 @@ mod parse_plugin_key_tests {
     use super::parse_plugin_key;
 
     #[test]
-    fn separa_plugin_id_y_command_id() {
+    fn splits_plugin_id_and_command_id() {
         assert_eq!(
             parse_plugin_key("plugin:org.norte.demo:greet"),
             Some(("org.norte.demo", "greet"))
         );
     }
 
-    /// El `command_id` NO tiene charset validado (a diferencia del
-    /// `plugin_id`): puede llevar `:` o saltos de línea, y el split se
-    /// queda con TODO lo que sigue al primero, sin volver a partir.
+    /// `command_id` has NO validated charset (unlike `plugin_id`): it can
+    /// carry `:` or newlines, and the split keeps EVERYTHING that follows the
+    /// first one, without splitting again.
     #[test]
-    fn command_id_hostil_se_toma_entero_sin_repartir() {
+    fn a_hostile_command_id_is_taken_whole_without_splitting() {
         assert_eq!(
             parse_plugin_key("plugin:org.norte.demo:a:b\nc"),
             Some(("org.norte.demo", "a:b\nc"))
@@ -952,25 +957,25 @@ mod parse_plugin_key_tests {
     }
 
     #[test]
-    fn sin_prefijo_plugin_es_none() {
+    fn with_no_plugin_prefix_it_is_none() {
         assert_eq!(parse_plugin_key("app.quit"), None);
         assert_eq!(parse_plugin_key(""), None);
     }
 
-    /// Sin el segundo `:` (formato mínimo `plugin:x` sin `command_id`): `None`
-    /// — un despacho parcial jamás corre `plugin_run_command` con un id
-    /// vacío o adivinado.
+    /// With no second `:` (minimal format `plugin:x` with no `command_id`):
+    /// `None` — a partial dispatch must never run `plugin_run_command` with an
+    /// empty or guessed id.
     #[test]
-    fn sin_segundo_separador_es_none() {
+    fn with_no_second_separator_it_is_none() {
         assert_eq!(parse_plugin_key("plugin:org.norte.demo"), None);
     }
 
-    /// `plugin_id` vacío (`"plugin::greet"`) es `None` — nunca alcanzable
-    /// desde una fila real (`PluginInfo.id` siempre no-vacío, validado por
-    /// el core), pero el parser no debe entregar un id vacío a
-    /// `plugin_run_command` si alguna vez lo fuera.
+    /// An empty `plugin_id` (`"plugin::greet"`) is `None` — never reachable
+    /// from a real row (`PluginInfo.id` is always non-empty, validated by the
+    /// core), but the parser must not hand an empty id to
+    /// `plugin_run_command` if it ever were one.
     #[test]
-    fn plugin_id_vacio_es_none() {
+    fn an_empty_plugin_id_is_none() {
         assert_eq!(parse_plugin_key("plugin::greet"), None);
     }
 }

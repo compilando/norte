@@ -1,6 +1,6 @@
 [package]
 name = "norte-i18n"
-description = "Strings de UI por Fluent (es/en) para los frontends de norte"
+description = "UI strings via Fluent (es/en) for norte's frontends"
 license = "MIT OR Apache-2.0"
 version.workspace = true
 edition.workspace = true

@@ -1,17 +1,17 @@
-//! Operation hooks (H1, ADR 0100): un plugin `hook` OBSERVA las entradas
-//! que el journal ya registró, y lo único que puede devolver es una frase
-//! para el humano.
+//! Operation hooks (H1, ADR 0100): a `hook` plugin OBSERVES the entries the
+//! journal already recorded, and the only thing it can return is a sentence
+//! for the human.
 //!
-//! La fuente es el journal y no los handlers: [`crate::journal::Journal::
-//! record_entry`] le ofrece cada fila comprometida a un [`HookSender`], así
-//! que toda mutación —de cualquier frontend, de la CLI, de un agente, de un
-//! lote, de un undo— llega por el mismo sitio (ADR 0077). El despachador
-//! ([`spawn_dispatcher`]) vive FUERA del camino crítico: una cola acotada,
-//! un drenado por tanda, un descubrimiento del registro por tanda (así una
-//! aprobación recién dada vale en la siguiente) y una instancia por plugin
-//! que se REUTILIZA entre tandas mientras su `.wasm` no cambie. Tres fallos
-//! seguidos apagan los hooks de ese plugin hasta que se desactive y se
-//! reactive, y se dice por el mismo canal que las frases.
+//! The source is the journal and not the handlers: [`crate::journal::Journal::
+//! record_entry`] offers each committed row to a [`HookSender`], so every
+//! mutation — from any frontend, from the CLI, from an agent, from a batch,
+//! from an undo — arrives through the same place (ADR 0077). The dispatcher
+//! ([`spawn_dispatcher`]) lives OUTSIDE the critical path: a bounded queue, a
+//! per-batch drain, a per-batch rediscovery of the registry (so a
+//! just-granted approval counts on the next one), and one instance per
+//! plugin that is REUSED across batches while its `.wasm` does not change.
+//! Three failures in a row turn off that plugin's hooks until it is disabled
+//! and re-enabled, and it is said over the same channel as the sentences.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
@@ -27,80 +27,83 @@ use tokio_util::sync::CancellationToken;
 use crate::plugins::{LocationMint, LocationSession, PluginRegistry, guest_reason};
 use crate::policy::{OpSet, Scope, ScopeRegistry};
 
-/// Cuántos eventos caben en la cola entre el journal y el despachador. Por
-/// encima, [`HookSender::offer`] descarta el MÁS NUEVO y lo cuenta: la
-/// mutación ya ocurrió y no se va a frenar por un observador lento. Lo
-/// descartado se le DICE al guest en la siguiente llamada (`dropped`).
+/// How many events fit in the queue between the journal and the dispatcher.
+/// Above that, [`HookSender::offer`] drops the NEWEST one and counts it: the
+/// mutation already happened and will not be held back by a slow observer.
+/// What was dropped is TOLD to the guest on the next call (`dropped`).
 pub const HOOK_QUEUE: usize = 1024;
 
-/// Cuántos eventos se le entregan a un guest en una llamada como mucho. Es
-/// también lo que acota el coste de un drenado: un lote de diez mil
-/// renombrados llega en cuarenta llamadas, no en una ni en diez mil.
+/// How many events are handed to a guest in one call at most. It is also
+/// what caps the cost of a drain: a batch of ten thousand renames arrives in
+/// forty calls, not in one or in ten thousand.
 pub const HOOK_DRAIN_MAX: usize = 256;
 
-/// Fallos SEGUIDOS —no instanció, atrapó, se pasó de presupuesto, rehusó—
-/// tras los cuales los hooks de un plugin se apagan. Un éxito entre medias
-/// pone el contador a cero; desactivar el plugin en el gestor lo rearma.
+/// Failures IN A ROW — did not instantiate, panicked, went over budget,
+/// refused — after which a plugin's hooks turn off. A success in between
+/// resets the counter to zero; disabling the plugin in the manager rearms
+/// it.
 pub const HOOK_FUSE_FAILURES: u32 = 3;
 
-/// Cuántos avisos puede soltar un plugin de golpe, y a qué ritmo se
-/// repone el cupo: uno por segundo. Un hook es una frase por cosa que pasó,
-/// no un canal; y sin tope una frase por tanda pisaría el único hueco de
-/// mensaje transitorio de la barra — incluido el aviso de que sus propios
-/// hooks se apagaron.
+/// How many notices a plugin can drop at once, and at what rate the quota
+/// refills: one per second. A hook is one sentence per thing that happened,
+/// not a channel; and without a cap, one sentence per batch would step on
+/// the status bar's single transient-message slot — including the notice
+/// that its own hooks turned off.
 pub const HOOK_NOTICE_BURST: u32 = 4;
 
-/// Una entrada del journal tal y como sale de `record_entry`: bytes de
-/// cable, sin interpretar. Lo que el guest recibe se construye en el
-/// despachador (`to_wire_events`).
+/// A journal entry exactly as it comes out of `record_entry`: wire bytes,
+/// uninterpreted. What the guest receives is built in the dispatcher
+/// (`to_wire_events`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HookEvent {
-    /// El `seq` asignado.
+    /// The assigned `seq`.
     pub seq: i64,
-    /// Milisegundos UTC del registro.
+    /// UTC milliseconds of the record.
     pub ts_ms: i64,
     /// `"created" | "removed" | "trashed" | "renamed" | "mode_changed"`.
     pub op: String,
-    /// `"user" | "agent" | "plugin"`. El id del actor NO viaja (ADR 0100).
+    /// `"user" | "agent" | "plugin"`. The actor's id does NOT travel (ADR
+    /// 0100).
     pub actor_kind: String,
-    /// Path afectado (bytes `to_wire`).
+    /// Affected path (`to_wire` bytes).
     pub path: Vec<u8>,
-    /// El nombre que HABÍA en un `renamed` (el journal guarda el nuevo en
-    /// `path`) / el modo nuevo de un `mode_changed`.
+    /// The name that WAS there in a `renamed` (the journal keeps the new one
+    /// in `path`) / the new mode of a `mode_changed`.
     pub path_to: Option<Vec<u8>>,
-    /// Lote, si formó parte de uno.
+    /// Batch, if it was part of one.
     pub batch_id: Option<i64>,
 }
 
-/// El extremo del journal: ofrece eventos sin esperar nunca.
+/// The journal's end: offers events without ever waiting.
 #[derive(Debug, Clone)]
 pub struct HookSender {
     tx: mpsc::Sender<HookEvent>,
-    /// Descartados desde el arranque (para mirar) y desde la última tanda
-    /// (para decírselo al guest); el despachador vacía el segundo.
+    /// Dropped since startup (to look at) and since the last batch (to tell
+    /// the guest); the dispatcher empties the second.
     dropped: Arc<AtomicU64>,
     dropped_since: Arc<AtomicU64>,
 }
 
 impl HookSender {
-    /// Encola `ev` si cabe. Nunca bloquea ni falla: con la cola llena el
-    /// evento se descarta y se cuenta ([`Self::dropped`]); con el despachador
-    /// muerto, se descarta en silencio — no queda nadie a quien avisar.
+    /// Queues `ev` if it fits. Never blocks nor fails: with the queue full
+    /// the event is dropped and counted ([`Self::dropped`]); with the
+    /// dispatcher dead, it is dropped silently — there is nobody left to
+    /// tell.
     pub fn offer(&self, ev: HookEvent) {
         if let Err(mpsc::error::TrySendError::Full(_)) = self.tx.try_send(ev) {
             self.dropped_since.fetch_add(1, Ordering::Relaxed);
             let n = self.dropped.fetch_add(1, Ordering::Relaxed) + 1;
-            // Una traza por potencia de dos: la primera dice que pasa, las
-            // siguientes cuánto, y ninguna convierte una cola llena en un
-            // registro lleno.
+            // One trace per power of two: the first says it is happening,
+            // the following ones say how much, and none of them turns a
+            // full queue into a full log.
             if n.is_power_of_two() {
-                tracing::warn!(dropped = n, "hooks: cola llena, eventos descartados");
+                tracing::warn!(dropped = n, "hooks: queue full, events dropped");
             }
         }
     }
 
-    /// Un par (extremo, receptor) sin despachador, para mirar lo que el
-    /// journal ofrece.
+    /// A (sender, receiver) pair with no dispatcher, to look at what the
+    /// journal offers.
     #[cfg(test)]
     pub(crate) fn for_test(capacity: usize) -> (Self, mpsc::Receiver<HookEvent>) {
         let (tx, rx) = mpsc::channel(capacity);
@@ -114,55 +117,57 @@ impl HookSender {
         )
     }
 
-    /// Cuántos eventos se descartaron por cola llena desde el arranque.
+    /// How many events were dropped for a full queue since startup.
     #[must_use]
     pub fn dropped(&self) -> u64 {
         self.dropped.load(Ordering::Relaxed)
     }
 }
 
-/// A dónde van los avisos: el daemon los difunde a humanos por
-/// `plugin.notice`; un frontend embebido los empuja a su canal.
+/// Where notices go: the daemon broadcasts them to humans via
+/// `plugin.notice`; an embedded frontend pushes them to its channel.
 pub trait HookNoticeSink: Send + Sync {
-    /// Un aviso, ya enmascarado y acotado.
+    /// A notice, already masked and capped.
     fn notice(&self, n: PluginNotice);
 
-    /// `true` cuando ya no hay nadie al otro lado: el despachador termina en
-    /// la siguiente tanda. Es lo que ata la vida del despachador embebido a la
-    /// del frontend que se llevó el canal.
+    /// `true` when there is nobody left on the other side: the dispatcher
+    /// ends on the next batch. This is what ties the embedded dispatcher's
+    /// life to that of the frontend that took the channel.
     fn is_closed(&self) -> bool {
         false
     }
 }
 
-/// Por dónde escribe un sidecar (ADR 0101): el engine, como actor `plugin`,
-/// y el registro de scopes al que se le concede el directorio del evento
-/// durante la escritura. `Weak` porque el engine sostiene el journal, que
-/// sostiene el extremo del despachador: un `Arc` aquí sería un ciclo. Sin
-/// registro (modo embebido, sin policy) el gate es `AllowAll` y lo que acota
-/// es lo que el despachador ya comprobó: nombre del manifiesto, padre del
-/// evento, ni protegido ni techo.
+/// Where a sidecar writes (ADR 0101): the engine, as the `plugin` actor, and
+/// the scope registry that grants the event's directory for the duration of
+/// the write. `Weak` because the engine holds the journal, which holds the
+/// dispatcher's end: an `Arc` here would be a cycle. Without a registry
+/// (embedded mode, no policy) the gate is `AllowAll` and what caps it is
+/// what the dispatcher already checked: the manifest name, the event's
+/// parent, neither protected nor a ceiling.
 #[derive(Clone)]
 pub struct SidecarWriter {
-    /// El engine que escribe.
+    /// The engine that writes.
     pub engine: std::sync::Weak<crate::Engine>,
-    /// El registro de scopes del daemon, si lo hay.
+    /// The daemon's scope registry, if there is one.
     pub scopes: Option<ScopeRegistry>,
-    /// Las reglas de `policy.toml` cuando el engine NO lleva gate (modo
-    /// embebido): se evalúan aquí para el actor `plugin`, para que la regla
-    /// `actor = "plugin", action = "deny"` valga en el TUI igual que en el
-    /// daemon. `None` = sin fichero, y sin fichero un plugin aprobado escribe
-    /// (su regla es el manifiesto, ADR 0101).
+    /// The `policy.toml` rules when the engine carries NO gate (embedded
+    /// mode): evaluated here for the `plugin` actor, so that the rule
+    /// `actor = "plugin", action = "deny"` holds in the TUI the same as in
+    /// the daemon. `None` = no file, and with no file an approved plugin
+    /// writes (its rule is the manifest, ADR 0101).
     pub policy: Option<Arc<crate::PolicyConfig>>,
 }
 
-/// Cuánto vive el scope transitorio que se le concede a un plugin para UNA
-/// escritura si algo impidiera revocarlo: el gate se evalúa al encolar, así
-/// que la puerta se cierra con `revoke_all` nada más volver, y esto es la red.
+/// How long the transient scope granted to a plugin for ONE write lives if
+/// something prevented revoking it: the gate is evaluated when queuing, so
+/// the door closes with `revoke_all` as soon as it returns, and this is the
+/// safety net.
 const SIDECAR_SCOPE_TTL: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// Un sidecar ya validado por el despachador, pendiente de que el engine lo
-/// escriba: el guest pidió `name` junto al evento `seq`; esto es a dónde va.
+/// A sidecar already validated by the dispatcher, pending the engine writing
+/// it: the guest asked for `name` alongside the `seq` event; this is where
+/// it goes.
 #[derive(Debug)]
 struct PendingWrite {
     plugin_id: String,
@@ -172,8 +177,8 @@ struct PendingWrite {
     on_exists: crate::ops::OnExists,
 }
 
-/// El fusible por plugin: cuenta fallos SEGUIDOS y apaga al llegar a
-/// [`HOOK_FUSE_FAILURES`]. Puro, sin reloj, para poder probarlo.
+/// The per-plugin fuse: counts failures IN A ROW and turns off on reaching
+/// [`HOOK_FUSE_FAILURES`]. Pure, clockless, so it can be tested.
 #[derive(Debug, Default)]
 pub(crate) struct Fuse {
     failures: HashMap<String, u32>,
@@ -181,18 +186,19 @@ pub(crate) struct Fuse {
 }
 
 impl Fuse {
-    /// ¿Están apagados los hooks de `id`?
+    /// Are `id`'s hooks turned off?
     pub(crate) fn is_disabled(&self, id: &str) -> bool {
         self.disabled.contains(id)
     }
 
-    /// Una llamada que fue bien: el contador vuelve a cero.
+    /// A call that went well: the counter goes back to zero.
     pub(crate) fn record_ok(&mut self, id: &str) {
         self.failures.remove(id);
     }
 
-    /// Una llamada que falló. Devuelve `true` la vez que APAGA los hooks del
-    /// plugin (y solo esa vez), para avisar una vez y no en cada tanda.
+    /// A call that failed. Returns `true` the time it TURNS OFF the
+    /// plugin's hooks (and only that time), to warn once and not on every
+    /// batch.
     pub(crate) fn record_failure(&mut self, id: &str) -> bool {
         if self.disabled.contains(id) {
             return false;
@@ -207,18 +213,18 @@ impl Fuse {
         false
     }
 
-    /// Rearma los plugins que YA NO están consentidos: desactivar uno en el
-    /// gestor (o retirarle la aprobación) es lo que el aviso de apagado le
-    /// pide al lector, y tiene que ser verdad. El que vuelva a activarse
-    /// empieza con el contador a cero.
+    /// Rearms the plugins that are NO LONGER consented: disabling one in the
+    /// manager (or withdrawing its approval) is what the shutdown notice
+    /// asks of the reader, and it has to be true. The one that gets
+    /// re-enabled starts with the counter at zero.
     pub(crate) fn rearm_missing(&mut self, present: &HashSet<&str>) {
         self.disabled.retain(|id| present.contains(id.as_str()));
         self.failures.retain(|id, _| present.contains(id.as_str()));
     }
 }
 
-/// Un cupo de avisos por plugin: [`HOOK_NOTICE_BURST`] de golpe y uno por
-/// segundo después. Puro sobre un instante que le pasan, para poder probarlo.
+/// A per-plugin notice quota: [`HOOK_NOTICE_BURST`] at once and one per
+/// second after that. Pure over an instant it is given, so it can be tested.
 #[derive(Debug)]
 pub(crate) struct Bucket {
     tokens: f64,
@@ -233,7 +239,7 @@ impl Bucket {
         }
     }
 
-    /// ¿Hay cupo para un aviso ahora? Consume uno si lo hay.
+    /// Is there quota for a notice now? Consumes one if there is.
     pub(crate) fn take(&mut self, now: Instant) -> bool {
         let elapsed = now.saturating_duration_since(self.last).as_secs_f64();
         self.tokens = (self.tokens + elapsed).min(f64::from(HOOK_NOTICE_BURST));
@@ -247,29 +253,30 @@ impl Bucket {
     }
 }
 
-/// Una instancia viva entre tandas, con lo que hace falta para saber si
-/// sigue sirviendo: el `.wasm` que se instanció y su huella en disco.
+/// An instance alive across batches, with what is needed to know whether it
+/// still serves: the `.wasm` that was instantiated and its footprint on
+/// disk.
 struct Live {
     inst: HookInstance,
     wasm: norte_plugin_host::WasmArtifact,
     stamp: Option<(std::time::SystemTime, u64)>,
 }
 
-/// Lo que el despachador conserva entre tandas. Bajo UN lock, y compartido
-/// con la task bloqueante por `Arc`: si una tanda muere con un panic, lo que
-/// había —los apagados, sobre todo— sigue ahí; un fallo del host no vuelve
-/// a encender un plugin que se apagó por fallar.
+/// What the dispatcher keeps across batches. Under ONE lock, and shared with
+/// the blocking task via `Arc`: if a batch dies with a panic, what was there
+/// — the disabled ones, above all — is still there; a host failure does not
+/// re-enable a plugin that turned off from failing.
 #[derive(Default)]
 struct State {
     fuse: Fuse,
     live: HashMap<String, Live>,
-    /// Cuándo se vio por primera vez consentido cada plugin (ms UTC): un
-    /// evento anterior a eso se registró antes de que el humano aprobara, y
-    /// no se le entrega.
+    /// When each plugin was first seen consented (ms UTC): an event before
+    /// that was recorded before the human approved it, and is not delivered
+    /// to it.
     first_seen: HashMap<String, i64>,
     buckets: HashMap<String, Bucket>,
-    /// A quién se le dijo ya que la policy le denegó un efecto: una vez por
-    /// plugin y proceso; después, al registro.
+    /// Who has already been told the policy denied them an effect: once per
+    /// plugin and process; after that, to the log.
     denied_told: HashSet<String>,
 }
 
@@ -282,16 +289,16 @@ fn now_ms() -> i64 {
     .unwrap_or(i64::MAX)
 }
 
-/// Arranca el despachador y devuelve el extremo que se le instala al journal
-/// ([`crate::Engine::enable_hooks`]) y la task, para quien quiera esperarla.
-/// `config_dir` es donde viven `plugins/` y `plugins-state.toml`; el registro
-/// se redescubre en cada tanda para que una aprobación recién dada cuente
-/// sin reiniciar nada.
+/// Starts the dispatcher and returns the end that gets installed on the
+/// journal ([`crate::Engine::enable_hooks`]) and the task, for whoever wants
+/// to wait on it. `config_dir` is where `plugins/` and `plugins-state.toml`
+/// live; the registry is rediscovered on every batch so that a just-granted
+/// approval counts without restarting anything.
 ///
-/// Termina con `cancel` (el apagado del daemon), cuando el `sink` dice que
-/// ya no hay nadie al otro lado, o cuando muere el último [`HookSender`]. Una
-/// llamada al guest en curso no se interrumpe —está acotada por el
-/// presupuesto de época— pero no se espera: cancelar devuelve enseguida.
+/// Ends with `cancel` (the daemon shutting down), when `sink` says there is
+/// nobody left on the other side, or when the last [`HookSender`] dies. A
+/// guest call in progress is not interrupted — it is bounded by the epoch
+/// budget — but is not waited on: cancelling returns right away.
 #[must_use]
 pub fn spawn_dispatcher(
     config_dir: PathBuf,
@@ -309,11 +316,11 @@ pub fn spawn_dispatcher(
     let dropped_since = Arc::clone(&sender.dropped_since);
     let task = crate::blocking::spawn(async move {
         let state = Arc::new(Mutex::new(State::default()));
-        // Los plugins YA consentidos al arrancar reciben todo lo que llegue:
-        // su aprobación es anterior a este proceso. Los que se aprueben
-        // después empiezan en la tanda que primero los vea, y lo registrado
-        // antes de esa tanda no se les entrega (podría ser anterior a la
-        // aprobación, y no hay forma de saberlo).
+        // Plugins ALREADY consented at startup receive everything that
+        // arrives: their approval predates this process. Ones approved
+        // afterward start at the batch that first sees them, and what was
+        // recorded before that batch is not delivered to them (it could
+        // predate the approval, and there is no way to know).
         {
             let dir = config_dir.clone();
             let st = Arc::clone(&state);
@@ -326,7 +333,7 @@ pub fn spawn_dispatcher(
             })
             .await;
             if let Err(e) = seeded {
-                tracing::warn!(error = %e, "hooks: no se pudo leer el registro al arrancar");
+                tracing::warn!(error = %e, "hooks: could not read the registry at startup");
             }
         }
         loop {
@@ -347,16 +354,16 @@ pub fn spawn_dispatcher(
                     Err(_) => break,
                 }
             }
-            // Dos `record_entry` concurrentes pueden ofrecer fuera de orden:
-            // el `seq` se asigna bajo el lock de la cadena y la oferta va
-            // después de soltarlo. El WIT promete orden de `seq`, y se cumple
-            // aquí.
+            // Two concurrent `record_entry` calls can offer out of order:
+            // the `seq` is assigned under the chain's lock and the offer
+            // happens after releasing it. The WIT promises `seq` order, and
+            // it is honored here.
             batch.sort_unstable_by_key(|e| e.seq);
             let dropped = dropped_since.swap(0, Ordering::Relaxed);
-            // Todo lo que sigue es I/O y CPU síncronos —descubrir el
-            // registro, abrir directorios, correr wasm— así que va en
-            // `spawn_blocking` (regla 2). El estado viaja por `Arc`: un panic
-            // de la tanda no lo pierde.
+            // Everything that follows is synchronous I/O and CPU —
+            // discovering the registry, opening directories, running wasm —
+            // so it goes in `spawn_blocking` (rule 2). The state travels via
+            // `Arc`: a panic in the batch does not lose it.
             let dir = config_dir.clone();
             let rt = Arc::clone(&runtime);
             let st = Arc::clone(&state);
@@ -373,11 +380,11 @@ pub fn spawn_dispatcher(
                     for n in notices {
                         sink.notice(n);
                     }
-                    // Las escrituras van DESPUÉS de las frases y en el lado
-                    // async: cada una es una Task del engine que pasa por el
-                    // gate y por el journal como actor `plugin`.
-                    // Secuenciales a propósito: el e2e cuenta con que la tanda
-                    // N+1 no se drena hasta que las escrituras de N acabaron.
+                    // The writes go AFTER the sentences and on the async
+                    // side: each one is an engine Task that goes through the
+                    // gate and the journal as the `plugin` actor.
+                    // Sequential on purpose: the e2e counts on batch N+1 not
+                    // draining until N's writes finished.
                     for w in pending {
                         let denied = tokio::select! {
                             () = cancel.cancelled() => return,
@@ -400,7 +407,7 @@ pub fn spawn_dispatcher(
                     }
                 }
                 Err(e) => {
-                    tracing::error!(error = %e, "hooks: el despachador de una tanda murió");
+                    tracing::error!(error = %e, "hooks: a batch's dispatcher died");
                 }
             }
         }
@@ -408,21 +415,22 @@ pub fn spawn_dispatcher(
     (sender, task)
 }
 
-/// Escribe UN sidecar por el engine. Devuelve `Some(plugin_id)` si la policy
-/// del humano lo denegó — el único desenlace que se le cuenta al humano; el
-/// resto va al registro. Un `Conflict` con `refuse` es lo que el guest pidió.
+/// Writes ONE sidecar via the engine. Returns `Some(plugin_id)` if the
+/// human's policy denied it — the only outcome that is told to the human;
+/// the rest goes to the log. A `Conflict` with `refuse` is what the guest
+/// asked for.
 async fn apply_write(writer: Option<&SidecarWriter>, w: PendingWrite) -> Option<String> {
     let Some(writer) = writer else {
-        tracing::debug!(plugin = %w.plugin_id, "sidecar: sin escritor, se descarta");
+        tracing::debug!(plugin = %w.plugin_id, "sidecar: no writer, discarded");
         return None;
     };
     let engine = writer.engine.upgrade()?;
     let actor = crate::journal::Actor::Plugin {
         id: w.plugin_id.clone(),
     };
-    // Sin gate en el engine (embebido), las reglas del humano se miran aquí:
-    // un `deny` o un `ask` sobre el actor `plugin` es no; sin regla, el
-    // manifiesto aprobado es la regla.
+    // With no gate on the engine (embedded), the human's rules are checked
+    // here: a `deny` or an `ask` on the `plugin` actor is a no; with no
+    // rule, the approved manifest is the rule.
     if writer.scopes.is_none()
         && let Some(policy) = &writer.policy
     {
@@ -441,20 +449,20 @@ async fn apply_write(writer: Option<&SidecarWriter>, w: PendingWrite) -> Option<
             match policy.decide(&actor, *op, &[&w.path]) {
                 Decision::Allow | Decision::Deny(DenyReason::NoRule) => {}
                 Decision::Deny(reason) => {
-                    tracing::info!(plugin = %w.plugin_id, ?reason, "sidecar: denegado por policy (embebido)");
+                    tracing::info!(plugin = %w.plugin_id, ?reason, "sidecar: denied by policy (embedded)");
                     return Some(w.plugin_id);
                 }
                 Decision::Ask => {
-                    tracing::info!(plugin = %w.plugin_id, "sidecar: la policy pide confirmación a un plugin: denegado");
+                    tracing::info!(plugin = %w.plugin_id, "sidecar: the policy asks a plugin for confirmation: denied");
                     return Some(w.plugin_id);
                 }
             }
         }
     }
-    // El scope transitorio: el directorio del evento, crear y enterrar, bajo
-    // la clave del plugin (`plugin:<id>`, nunca la de un agente). Se revoca
-    // nada más volver; el TTL es la red. Sin él, el gate del daemon deniega
-    // `OutOfScope` — un plugin no tiene sesión que pida scopes.
+    // The transient scope: the event's directory, create and delete, under
+    // the plugin's key (`plugin:<id>`, never an agent's). Revoked as soon as
+    // it returns; the TTL is the safety net. Without it, the daemon's gate
+    // denies `OutOfScope` — a plugin has no session to request scopes with.
     let key = crate::policy::scope_key(&actor).map(std::borrow::Cow::into_owned);
     if let (Some(scopes), Some(key)) = (&writer.scopes, &key) {
         scopes.grant(
@@ -479,27 +487,27 @@ async fn apply_write(writer: Option<&SidecarWriter>, w: PendingWrite) -> Option<
                 norte_proto::TaskState::Failed {
                     error: norte_proto::Error::Conflict { .. },
                 } => {
-                    tracing::debug!(plugin = %w.plugin_id, "sidecar: ya existe y el guest pidió no tocarlo");
+                    tracing::debug!(plugin = %w.plugin_id, "sidecar: already exists and the guest asked not to touch it");
                 }
                 other => {
-                    tracing::warn!(plugin = %w.plugin_id, ?other, "sidecar: la escritura no terminó bien");
+                    tracing::warn!(plugin = %w.plugin_id, ?other, "sidecar: the write did not finish cleanly");
                 }
             }
             None
         }
         Err(norte_proto::Error::PolicyDenied { rule }) => {
-            tracing::info!(plugin = %w.plugin_id, %rule, "sidecar: denegado por policy");
+            tracing::info!(plugin = %w.plugin_id, %rule, "sidecar: denied by policy");
             Some(w.plugin_id)
         }
         Err(e) => {
-            tracing::warn!(plugin = %w.plugin_id, error = %e, "sidecar: el engine no lo aceptó");
+            tracing::warn!(plugin = %w.plugin_id, error = %e, "sidecar: the engine did not accept it");
             None
         }
     }
 }
 
-/// El nombre del evento del manifiesto para una op del journal, o `None`
-/// para una op que este binario no sabe nombrar (un journal más nuevo).
+/// The manifest's event name for a journal op, or `None` for an op this
+/// binary does not know how to name (a newer journal).
 pub(crate) fn event_name_for(op: &str) -> Option<&'static str> {
     let wanted = format!("after-{}", op.replace('_', "-"));
     HOOK_EVENTS.iter().copied().find(|e| *e == wanted)
@@ -525,9 +533,10 @@ fn wire_actor(kind: &str) -> Option<hook_iface::ActorKind> {
     })
 }
 
-/// La forma de cable SIN userinfo: `sftp://ana@host/x` → `sftp://host/x`. Un
-/// hook sin capacidad de red no tiene por qué aprender con qué usuario entra
-/// el humano en cada máquina; el host y la ruta ya dicen qué cambió.
+/// The wire form WITHOUT userinfo: `sftp://ana@host/x` → `sftp://host/x`. A
+/// hook with no network capability has no reason to learn which user the
+/// human logs into each machine with; the host and the path already say
+/// what changed.
 fn without_userinfo(wire: &str) -> String {
     let Some((scheme, rest)) = wire.split_once("://") else {
         return wire.to_owned();
@@ -541,12 +550,12 @@ fn without_userinfo(wire: &str) -> String {
     }
 }
 
-/// Los eventos de una tanda que `ons` pide, en la forma del guest, sin los
-/// que caen bajo una raíz protegida y sin los anteriores a `since_ms`. Con
-/// `mint`, una sesión de ubicación por directorio PADRE distinto, que vive lo
-/// que dure la llamada (se devuelven para que el llamante las sostenga); un
-/// padre que es `$HOME` o la raíz del sistema no se abre — un hook mira el
-/// resultado de una mutación, no el disco entero.
+/// A batch's events that `ons` asks for, in the guest's shape, minus the
+/// ones that fall under a protected root and minus the ones before
+/// `since_ms`. With `mint`, one location session per distinct PARENT
+/// directory, that lives as long as the call does (returned so the caller
+/// holds them); a parent that is `$HOME` or the system root is not opened —
+/// a hook looks at the result of a mutation, not the whole disk.
 fn to_wire_events(
     batch: &[HookEvent],
     ons: &[String],
@@ -555,17 +564,17 @@ fn to_wire_events(
     mint: Option<&Arc<LocationMint>>,
 ) -> (Vec<hook_iface::Event>, Vec<LocationSession>) {
     let mut sessions: Vec<LocationSession> = Vec::new();
-    // `None` cacheado también: un padre que no se abre no se reintenta por
-    // cada uno de sus doscientos hijos.
+    // `None` cached too: a parent that does not open is not retried for
+    // each of its two hundred children.
     let mut by_parent: BTreeMap<String, Option<usize>> = BTreeMap::new();
     let mut out = Vec::new();
     for ev in batch {
         if ev.ts_ms < since_ms {
             continue;
         }
-        // Lo que escribe un plugin —un sidecar— no vuelve como evento a
-        // ningún hook: un hook que escuchara `after-created` y escribiera
-        // un sidecar se llamaría a sí mismo para siempre (ADR 0101).
+        // What a plugin writes — a sidecar — does not come back as an event
+        // to any hook: a hook that listened on `after-created` and wrote a
+        // sidecar would call itself forever (ADR 0101).
         if ev.actor_kind == "plugin" {
             continue;
         }
@@ -578,11 +587,11 @@ fn to_wire_events(
         let (Some(op), Some(actor)) = (wire_op(&ev.op), wire_actor(&ev.actor_kind)) else {
             continue;
         };
-        // El path del journal es `VPath::to_wire`, o sea texto por
-        // construcción; si no lo fuera, es una fila que este binario no
-        // escribió y no se le pasa a nadie — y se dice.
+        // The journal's path is `VPath::to_wire`, i.e. text by
+        // construction; if it were not, it is a row this binary did not
+        // write and it is not passed to anyone — and it is said.
         let Ok(path) = String::from_utf8(ev.path.clone()) else {
-            tracing::warn!(seq = ev.seq, "hooks: fila con path no-UTF-8, saltada");
+            tracing::warn!(seq = ev.seq, "hooks: row with non-UTF-8 path, skipped");
             continue;
         };
         let vpath = norte_proto::VPath::parse(&path).ok();
@@ -591,8 +600,8 @@ fn to_wire_events(
                 .iter()
                 .any(|root| crate::policy::is_under(root, v))
         {
-            // Bajo el estado del daemon no hay nada que un plugin deba ver,
-            // ni siquiera el nombre.
+            // Under the daemon's state there is nothing a plugin should
+            // see, not even the name.
             continue;
         }
         let path_to = ev
@@ -613,8 +622,8 @@ fn to_wire_events(
             let idx = if let Some(i) = by_parent.get(&key) {
                 (*i)?
             } else {
-                // Sin marcador y sin subir: el que corre es un plugin, y lo
-                // que ve es el directorio de la mutación y nada más.
+                // No marker and no going up: whoever runs is a plugin, and
+                // what it sees is the mutation's directory and nothing else.
                 let minted = m.mint_for(&parent, None, false).map(|s| {
                     sessions.push(s);
                     sessions.len() - 1
@@ -643,7 +652,7 @@ fn to_wire_events(
     (out, sessions)
 }
 
-/// Los ids de los hooks consentidos ahora mismo. BLOQUEANTE.
+/// The ids of the hooks currently consented. BLOCKING.
 fn consented_hook_ids(config_dir: &std::path::Path) -> Vec<String> {
     PluginRegistry::discover(config_dir)
         .map(|reg| reg.resolve_hooks().into_iter().map(|(r, _)| r.0).collect())
@@ -655,7 +664,7 @@ fn stamp_of(wasm: &std::path::Path) -> Option<(std::time::SystemTime, u64)> {
     Some((m.modified().ok()?, m.len()))
 }
 
-/// Una tanda contra todos los hooks consentidos. BLOQUEANTE.
+/// One batch against every consented hook. BLOCKING.
 #[tracing::instrument(skip_all, fields(batch_len = batch.len(), dropped))]
 fn dispatch_batch(
     config_dir: &std::path::Path,
@@ -669,7 +678,7 @@ fn dispatch_batch(
     let reg = match PluginRegistry::discover(config_dir) {
         Ok(r) => r,
         Err(e) => {
-            tracing::warn!(error = %e, "hooks: no se pudo leer el registro de plugins");
+            tracing::warn!(error = %e, "hooks: could not read the plugin registry");
             return (notices, writes);
         }
     };
@@ -683,8 +692,8 @@ fn dispatch_batch(
     let protected = crate::policy::protected_roots();
     let now = Instant::now();
     let now_ms = now_ms();
-    // Un acuñador por tanda: acuña tokens para los hooks con `location` y
-    // conoce el techo (`$HOME`, `/`) que ni se lee ni se escribe.
+    // One minter per batch: mints tokens for hooks with `location` and knows
+    // the ceiling (`$HOME`, `/`) that is neither read nor written.
     let mint = LocationMint::new(norte_vfs_local::Bounds::default());
     for (resolved, ons) in hooks {
         let (id, _name, wasm, caps, settings) = resolved;
@@ -704,8 +713,8 @@ fn dispatch_batch(
             live.inst.set_location(host);
             live.inst.set_settings(settings);
             let out = live.inst.on_events(&events, dropped);
-            // El token muere con `_sessions` al salir de la iteración; la
-            // instancia se queda sin resolutor hasta la próxima tanda.
+            // The token dies with `_sessions` at the end of the iteration;
+            // the instance is left without a resolver until the next batch.
             live.inst.set_location(None);
             out.map_err(|e| e.to_string())
         });
@@ -723,11 +732,11 @@ fn dispatch_batch(
                 );
                 notices.extend(spoken.notices);
                 writes.extend(spoken.writes);
-                // Un efecto malformado —un nombre fuera del manifiesto, un
-                // `seq` que no está en la llamada— es fallo del guest, aunque
-                // el resto de la llamada valiera.
+                // A malformed effect — a name outside the manifest, a `seq`
+                // that is not in the call — is the guest's fault, even if
+                // the rest of the call was valid.
                 if spoken.malformed {
-                    tracing::warn!(plugin = %id, "hook: efecto malformado");
+                    tracing::warn!(plugin = %id, "hook: malformed effect");
                     if state.fuse.record_failure(&id) {
                         notices.push(disabled_notice(&id));
                     }
@@ -735,15 +744,15 @@ fn dispatch_batch(
                     state.fuse.record_ok(&id);
                 }
             }
-            Ok(Err(frase)) => {
-                tracing::warn!(plugin = %id, reason = %guest_reason(&frase), "hook: el guest rehusó");
+            Ok(Err(sentence)) => {
+                tracing::warn!(plugin = %id, reason = %guest_reason(&sentence), "hook: the guest refused");
                 state.live.remove(&id);
                 if state.fuse.record_failure(&id) {
                     notices.push(disabled_notice(&id));
                 }
             }
             Err(e) => {
-                tracing::warn!(plugin = %id, error = %e, "hook: fallo al ejecutar");
+                tracing::warn!(plugin = %id, error = %e, "hook: failed to run");
                 state.live.remove(&id);
                 if state.fuse.record_failure(&id) {
                     notices.push(disabled_notice(&id));
@@ -754,10 +763,10 @@ fn dispatch_batch(
     (notices, writes)
 }
 
-/// La instancia viva de `id`, reutilizada mientras el `.wasm` sea el mismo
-/// fichero sin cambiar: compilar un componente por tanda es lo que
-/// convertiría «fuera del camino crítico» en «un hilo del pool ocupado todo
-/// el lote». Instancia si hace falta; `Err` si no pudo.
+/// The live instance for `id`, reused while the `.wasm` is the same
+/// unchanged file: compiling one component per batch is what would turn
+/// "outside the critical path" into "a pool thread busy for the whole
+/// batch". Instantiates if needed; `Err` if it could not.
 fn ensure_live<'s>(
     state: &'s mut State,
     runtime: &PluginRuntime,
@@ -766,8 +775,8 @@ fn ensure_live<'s>(
     caps: norte_plugin_host::Capabilities,
 ) -> Result<&'s mut Live, String> {
     let stamp = stamp_of(wasm.path());
-    // El artefacto ENTERO, huella incluida (ADR 0142): una instancia viva
-    // no sirve a un binario que se aprobó de nuevo con otros bytes.
+    // The WHOLE artifact, footprint included (ADR 0142): a live instance
+    // does not serve a binary that was re-approved with different bytes.
     let reuse = state
         .live
         .get(id)
@@ -789,25 +798,25 @@ fn ensure_live<'s>(
     state
         .live
         .get_mut(id)
-        .ok_or_else(|| "instancia perdida".to_owned())
+        .ok_or_else(|| "instance lost".to_owned())
 }
 
-/// Lo que sale de los efectos de una llamada.
+/// What comes out of a call's effects.
 #[derive(Default)]
 struct Spoken {
     notices: Vec<PluginNotice>,
     writes: Vec<PendingWrite>,
-    /// Algún efecto no valía: cuenta contra el fusible.
+    /// Some effect was invalid: counts against the fuse.
     malformed: bool,
 }
 
-/// Los efectos de una llamada convertidos en avisos y escrituras: UNA frase
-/// por plugin y tanda, dentro del cupo del plugin (el resto se cuenta, no se
-/// pinta); y un sidecar por cada `write-sidecar` cuyo nombre esté en el
-/// manifiesto y cuyo `seq` sea un evento de ESTA llamada con padre abrible.
+/// A call's effects turned into notices and writes: ONE sentence per plugin
+/// and batch, within the plugin's quota (the rest is counted, not shown);
+/// and one sidecar for each `write-sidecar` whose name is in the manifest
+/// and whose `seq` is an event of THIS call with an openable parent.
 #[expect(
     clippy::too_many_arguments,
-    reason = "los contextos de una llamada al guest; una struct los escondería"
+    reason = "the contexts of a guest call; a struct would hide them"
 )]
 fn speak(
     state: &mut State,
@@ -850,35 +859,35 @@ fn speak(
                             hook_iface::OnExists::Replace => crate::ops::OnExists::Replace,
                         },
                     }),
-                    // Culpa del guest: cuenta. Del entorno: se descarta y se
-                    // dice en el registro.
+                    // Guest's fault: it counts. Environment's: it is
+                    // dropped and said in the log.
                     Err(SidecarFault::Guest) => out.malformed = true,
                     Err(SidecarFault::Environment) => {
-                        tracing::debug!(plugin = %id, "sidecar: sin sitio donde escribirlo");
+                        tracing::debug!(plugin = %id, "sidecar: nowhere to write it");
                     }
                 }
             }
         }
     }
     if dropped_effects > 0 {
-        tracing::debug!(plugin = %id, dropped_effects, "hook: avisos fuera de cupo");
+        tracing::debug!(plugin = %id, dropped_effects, "hook: notices out of quota");
     }
     out
 }
 
-/// Por qué un sidecar no tiene sitio: culpa del guest —cuenta contra el
-/// fusible— o del entorno —no cuenta—.
+/// Why a sidecar has nowhere to go: the guest's fault — counts against the
+/// fuse — or the environment's — does not count.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SidecarFault {
-    /// Nombre fuera del manifiesto, o `seq` que no es de esta llamada.
+    /// Name outside the manifest, or `seq` that is not from this call.
     Guest,
-    /// Un evento sin padre escribible: remoto, protegido, la casa, la raíz.
+    /// An event with no writable parent: remote, protected, home, the root.
     Environment,
 }
 
-/// A dónde va un sidecar: `(padre, padre/nombre)`. El nombre se vuelve a
-/// validar aquí aunque el manifiesto ya lo hizo: es el único sitio entre el
-/// guest y el disco.
+/// Where a sidecar goes: `(parent, parent/name)`. The name is validated
+/// again here even though the manifest already did: it is the only place
+/// between the guest and the disk.
 fn sidecar_target(
     sc: &hook_iface::Sidecar,
     events: &[hook_iface::Event],
@@ -915,8 +924,8 @@ fn sidecar_target(
     Ok((parent, path))
 }
 
-/// Las dos clases de aviso, las MISMAS cadenas que el proto declara en
-/// `PLUGIN_NOTICE_KINDS`; un test lo ata.
+/// The two notice classes, the SAME strings the proto declares in
+/// `PLUGIN_NOTICE_KINDS`; a test pins it.
 const KIND_NOTIFY: &str = "notify";
 const KIND_HOOKS_DISABLED: &str = "hooks-disabled";
 const KIND_EFFECT_DENIED: &str = "effect-denied";
@@ -925,7 +934,7 @@ fn disabled_notice(id: &str) -> PluginNotice {
     tracing::warn!(
         plugin = %id,
         failures = HOOK_FUSE_FAILURES,
-        "hooks apagados: desactivar y reactivar el plugin los rearma"
+        "hooks turned off: disabling and re-enabling the plugin rearms them"
     );
     PluginNotice {
         plugin_id: id.to_owned(),
@@ -951,7 +960,7 @@ mod tests {
     }
 
     #[test]
-    fn las_clases_que_se_emiten_son_las_que_el_proto_declara() {
+    fn the_classes_emitted_are_the_ones_the_proto_declares() {
         use norte_proto::methods::PLUGIN_NOTICE_KINDS;
         assert!(PLUGIN_NOTICE_KINDS.contains(&KIND_NOTIFY));
         assert!(PLUGIN_NOTICE_KINDS.contains(&KIND_HOOKS_DISABLED));
@@ -959,56 +968,56 @@ mod tests {
         assert_eq!(
             PLUGIN_NOTICE_KINDS.len(),
             3,
-            "una clase nueva llega con su emisor"
+            "a new class arrives with its emitter"
         );
     }
 
     #[test]
-    fn el_fusible_apaga_al_tercer_fallo_seguido_y_avisa_una_vez() {
+    fn the_fuse_turns_off_at_the_third_failure_in_a_row_and_warns_once() {
         let mut f = Fuse::default();
         assert!(!f.record_failure("a"));
         assert!(!f.record_failure("a"));
         f.record_ok("a");
-        assert!(!f.record_failure("a"), "el éxito puso el contador a cero");
+        assert!(!f.record_failure("a"), "success reset the counter to zero");
         assert!(!f.record_failure("a"));
-        assert!(f.record_failure("a"), "el tercero seguido apaga");
+        assert!(f.record_failure("a"), "the third in a row turns off");
         assert!(f.is_disabled("a"));
-        assert!(!f.record_failure("a"), "apagado no vuelve a avisar");
-        assert!(!f.is_disabled("b"), "cada plugin lleva su fusible");
-        // Desactivar el plugin (deja de estar presente) rearma; al volver,
-        // empieza de cero.
+        assert!(!f.record_failure("a"), "disabled does not warn again");
+        assert!(!f.is_disabled("b"), "each plugin carries its own fuse");
+        // Disabling the plugin (it stops being present) rearms it; on
+        // returning, it starts at zero.
         f.rearm_missing(&HashSet::from(["b"]));
         assert!(!f.is_disabled("a"));
-        assert!(!f.record_failure("a"), "contador a cero tras rearmar");
+        assert!(!f.record_failure("a"), "counter at zero after rearming");
     }
 
     #[test]
-    fn el_cupo_de_avisos_es_una_rafaga_y_uno_por_segundo() {
+    fn the_notice_quota_is_a_burst_and_one_per_second() {
         let t0 = Instant::now();
         let mut b = Bucket::new(t0);
         for _ in 0..HOOK_NOTICE_BURST {
             assert!(b.take(t0));
         }
-        assert!(!b.take(t0), "la ráfaga se agotó");
+        assert!(!b.take(t0), "the burst ran out");
         assert!(
             b.take(t0 + std::time::Duration::from_secs(1)),
-            "un segundo, uno más"
+            "one second, one more"
         );
         assert!(!b.take(t0 + std::time::Duration::from_millis(1100)));
     }
 
     #[test]
-    fn el_nombre_del_evento_sale_de_la_op_del_journal() {
+    fn the_event_name_comes_from_the_journal_op() {
         assert_eq!(event_name_for("created"), Some("after-created"));
         assert_eq!(event_name_for("mode_changed"), Some("after-mode-changed"));
         assert_eq!(event_name_for("teleported"), None);
         for e in HOOK_EVENTS {
-            assert!(e.starts_with("after-"), "{e}: solo hay after-*");
+            assert!(e.starts_with("after-"), "{e}: only after-* exist");
         }
     }
 
     #[test]
-    fn el_userinfo_no_viaja_al_guest() {
+    fn the_userinfo_does_not_travel_to_the_guest() {
         assert_eq!(without_userinfo("sftp://ana@host/a/b"), "sftp://host/a/b");
         assert_eq!(without_userinfo("sftp://ana@host"), "sftp://host");
         assert_eq!(without_userinfo("file:///a/b"), "file:///a/b");
@@ -1016,14 +1025,14 @@ mod tests {
     }
 
     #[test]
-    fn los_eventos_se_filtran_por_lo_que_el_manifiesto_pide() {
+    fn events_are_filtered_by_what_the_manifest_asks_for() {
         let batch = vec![
             ev(1, "created", "file:///a/b.txt"),
             ev(2, "renamed", "file:///a/c.txt"),
             ev(3, "vanished", "file:///a/d.txt"),
         ];
         let (out, sessions) = to_wire_events(&batch, &["after-renamed".to_owned()], 0, &[], None);
-        assert!(sessions.is_empty(), "sin location no se acuña nada");
+        assert!(sessions.is_empty(), "with no location nothing is minted");
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].seq, 2);
         assert_eq!(out[0].path, "file:///a/c.txt");
@@ -1034,20 +1043,20 @@ mod tests {
     }
 
     #[test]
-    fn lo_anterior_a_la_aprobacion_y_lo_protegido_no_se_entrega() {
-        let mut viejo = ev(1, "created", "file:///a/old.txt");
-        viejo.ts_ms = 1;
+    fn what_predates_approval_and_what_is_protected_is_not_delivered() {
+        let mut old = ev(1, "created", "file:///a/old.txt");
+        old.ts_ms = 1;
         let batch = vec![
-            viejo,
+            old,
             ev(2, "created", "file:///cfg/norte/journal.db"),
             ev(3, "created", "file:///a/new.txt"),
         ];
-        let protegida = norte_proto::VPath::parse("file:///cfg/norte").expect("vpath");
+        let protected_path = norte_proto::VPath::parse("file:///cfg/norte").expect("vpath");
         let (out, _) = to_wire_events(
             &batch,
             &["after-created".to_owned()],
             1_000,
-            std::slice::from_ref(&protegida),
+            std::slice::from_ref(&protected_path),
             None,
         );
         assert_eq!(out.len(), 1);
@@ -1055,7 +1064,7 @@ mod tests {
     }
 
     #[test]
-    fn una_sesion_de_ubicacion_por_directorio_padre_y_ninguna_en_el_techo() {
+    fn one_location_session_per_parent_directory_and_none_at_the_ceiling() {
         let dir = tempfile::tempdir().expect("tempdir");
         let sub = dir.path().join("sub");
         std::fs::create_dir(&sub).expect("sub");
@@ -1063,15 +1072,15 @@ mod tests {
         let a = format!("{}/a.txt", root.to_wire());
         let b = format!("{}/b.txt", root.to_wire());
         let c = format!("{}/sub/c.txt", root.to_wire());
-        let en_home = format!("{}/x.txt", root.to_wire());
+        let at_home = format!("{}/x.txt", root.to_wire());
         let batch = vec![
             ev(1, "created", &a),
             ev(2, "created", &b),
             ev(3, "created", &c),
             ev(4, "created", "file:///top.txt"),
         ];
-        // Con la casa en `sub`: el padre de a/b se abre; el de c es la casa y
-        // el de top.txt la raíz del sistema — techos los dos.
+        // With home at `sub`: a/b's parent opens; c's is home and top.txt's
+        // is the system root — both ceilings.
         let mint = LocationMint::with_protected_and_home(
             vec![],
             norte_vfs_local::Bounds::default(),
@@ -1079,21 +1088,21 @@ mod tests {
         );
         let (out, sessions) =
             to_wire_events(&batch, &["after-created".to_owned()], 0, &[], Some(&mint));
-        assert_eq!(out.len(), 4, "el evento viaja aunque no haya token");
-        assert_eq!(sessions.len(), 1, "un solo padre abierto");
+        assert_eq!(out.len(), 4, "the event travels even with no token");
+        assert_eq!(sessions.len(), 1, "a single open parent");
         let t = |i: usize| out[i].location.as_ref().map(|l| l.token.clone());
-        assert_eq!(t(0), t(1), "el mismo padre comparte token");
+        assert_eq!(t(0), t(1), "the same parent shares a token");
         assert!(t(0).is_some());
-        assert!(t(2).is_none(), "la casa no se abre");
-        assert!(t(3).is_none(), "la raíz del sistema tampoco");
-        // Y con la casa en el directorio del test, a.txt tampoco.
+        assert!(t(2).is_none(), "home does not open");
+        assert!(t(3).is_none(), "neither does the system root");
+        // And with home at the test's directory, a.txt does not either.
         let mint = LocationMint::with_protected_and_home(
             vec![],
             norte_vfs_local::Bounds::default(),
             Some(dir.path().to_path_buf()),
         );
         let (out, sessions) = to_wire_events(
-            &[ev(1, "created", &en_home)],
+            &[ev(1, "created", &at_home)],
             &["after-created".to_owned()],
             0,
             &[],
@@ -1104,10 +1113,10 @@ mod tests {
     }
 
     #[test]
-    fn un_sidecar_va_junto_a_su_evento_y_solo_con_nombre_del_manifiesto() {
+    fn a_sidecar_goes_next_to_its_event_and_only_with_a_manifest_name() {
         let dir = tempfile::tempdir().expect("tempdir");
         let root = norte_vfs_local::vpath_from_native(dir.path()).expect("vpath");
-        let en = |name: &str| format!("{}/{name}", root.to_wire());
+        let at = |name: &str| format!("{}/{name}", root.to_wire());
         let ev = |seq: u64, path: String| hook_iface::Event {
             seq,
             ts_ms: 0,
@@ -1119,7 +1128,7 @@ mod tests {
             batch: None,
             location: None,
         };
-        let events = vec![ev(9, en("x.txt")), ev(10, "file:///top.txt".to_owned())];
+        let events = vec![ev(9, at("x.txt")), ev(10, "file:///top.txt".to_owned())];
         let names = vec![".norte-renames.log".to_owned()];
         let sc = |seq: u64, name: &str| hook_iface::Sidecar {
             seq,
@@ -1133,20 +1142,20 @@ mod tests {
             Some(dir.path().join("elsewhere")),
         );
         let ok = sidecar_target(&sc(9, ".norte-renames.log"), &events, &names, &[], &mint)
-            .expect("válido");
+            .expect("valid");
         assert_eq!(ok.0.to_wire(), root.to_wire());
-        assert_eq!(ok.1.to_wire(), en(".norte-renames.log"));
-        // Culpa del guest: nombre fuera del manifiesto, `seq` ajeno.
+        assert_eq!(ok.1.to_wire(), at(".norte-renames.log"));
+        // Guest's fault: name outside the manifest, foreign `seq`.
         assert_eq!(
-            sidecar_target(&sc(9, "otro.log"), &events, &names, &[], &mint),
+            sidecar_target(&sc(9, "other.log"), &events, &names, &[], &mint),
             Err(SidecarFault::Guest)
         );
         assert_eq!(
             sidecar_target(&sc(8, ".norte-renames.log"), &events, &names, &[], &mint),
             Err(SidecarFault::Guest)
         );
-        // Del entorno: la raíz del sistema es techo; una raíz protegida no se
-        // escribe; y la casa tampoco.
+        // Environment's: the system root is a ceiling; a protected root is
+        // not written to; neither is home.
         assert_eq!(
             sidecar_target(&sc(10, ".norte-renames.log"), &events, &names, &[], &mint),
             Err(SidecarFault::Environment)
@@ -1172,33 +1181,34 @@ mod tests {
         );
     }
 
-    /// Lo que escribe un plugin no vuelve a ningún hook: sin esto, un hook
-    /// en `after-created` que escribiera un sidecar se llamaría a sí mismo.
+    /// What a plugin writes does not come back as any hook's event: without
+    /// this, a hook on `after-created` that wrote a sidecar would call
+    /// itself.
     #[test]
-    fn las_filas_de_un_plugin_no_son_eventos() {
-        let mut propia = ev(1, "created", "file:///a/.norte-renames.log");
-        propia.actor_kind = "plugin".to_owned();
-        let batch = vec![propia, ev(2, "created", "file:///a/b.txt")];
+    fn a_plugins_rows_are_not_events() {
+        let mut own = ev(1, "created", "file:///a/.norte-renames.log");
+        own.actor_kind = "plugin".to_owned();
+        let batch = vec![own, ev(2, "created", "file:///a/b.txt")];
         let (out, _) = to_wire_events(&batch, &["after-created".to_owned()], 0, &[], None);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].seq, 2);
     }
 
-    struct Nadie;
-    impl HookNoticeSink for Nadie {
+    struct Nobody;
+    impl HookNoticeSink for Nobody {
         fn notice(&self, _n: PluginNotice) {}
     }
 
-    /// Regla dura 3: el despachador es una task larga, y cancelar la termina
-    /// aunque nunca llegue un evento.
+    /// Hard rule 3: the dispatcher is a long task, and cancelling ends it
+    /// even if an event never arrives.
     #[tokio::test]
-    async fn cancelar_termina_el_despachador() {
+    async fn cancel_ends_the_dispatcher() {
         let cfg = tempfile::tempdir().expect("tempdir");
         let cancel = CancellationToken::new();
         let (tx, task) = spawn_dispatcher(
             cfg.path().to_path_buf(),
             Arc::new(PluginRuntime::new().expect("runtime")),
-            Arc::new(Nadie),
+            Arc::new(Nobody),
             cancel.clone(),
             None,
         );
@@ -1206,18 +1216,19 @@ mod tests {
         cancel.cancel();
         tokio::time::timeout(std::time::Duration::from_secs(5), task)
             .await
-            .expect("termina al cancelar")
-            .expect("sin panic");
-        // El extremo sigue siendo inofensivo con el despachador muerto.
+            .expect("ends on cancel")
+            .expect("no panic");
+        // The end is still harmless with the dispatcher dead.
         tx.offer(ev(2, "created", "file:///b"));
     }
 
-    /// Y un sink que ya no tiene a nadie detrás termina el despachador en la
-    /// siguiente tanda: es la vida del embebido, atada a su frontend.
+    /// And a sink that no longer has anyone behind it ends the dispatcher
+    /// on the next batch: it is the embedded one's lifetime, tied to its
+    /// frontend.
     #[tokio::test]
-    async fn un_sink_cerrado_termina_el_despachador() {
-        struct Cerrado;
-        impl HookNoticeSink for Cerrado {
+    async fn a_closed_sink_ends_the_dispatcher() {
+        struct Closed;
+        impl HookNoticeSink for Closed {
             fn notice(&self, _n: PluginNotice) {}
             fn is_closed(&self) -> bool {
                 true
@@ -1227,14 +1238,14 @@ mod tests {
         let (tx, task) = spawn_dispatcher(
             cfg.path().to_path_buf(),
             Arc::new(PluginRuntime::new().expect("runtime")),
-            Arc::new(Cerrado),
+            Arc::new(Closed),
             CancellationToken::new(),
             None,
         );
         tx.offer(ev(1, "created", "file:///a"));
         tokio::time::timeout(std::time::Duration::from_secs(5), task)
             .await
-            .expect("termina al ver el sink cerrado")
-            .expect("sin panic");
+            .expect("ends on seeing the sink closed")
+            .expect("no panic");
     }
 }

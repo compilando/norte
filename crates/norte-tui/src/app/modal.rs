@@ -1,33 +1,33 @@
-//! Los modales, sus límites de longitud y la decisión de si salir pide
-//! confirmación.
+//! The modals, their length limits and the decision on whether quitting
+//! asks for confirmation.
 
 use super::trail::Trail;
 use norte_i18n::ta;
 use norte_proto::VPath;
 
-/// Lo tecleado en [`Modal::AskSecret`]: una contraseña a medio escribir.
+/// What's typed in [`Modal::AskSecret`]: a half-typed password.
 ///
-/// Reexportado del crate COMPARTIDO desde #327, cuando la ventana necesitó el
-/// mismo campo. Es un tipo de SEGURIDAD —`Debug` que redacta, buffer pisado al
-/// soltarlo, capacidad reservada de antemano— y dos implementaciones son dos
-/// sitios donde alguna de las tres garantías se olvida. Se queda el nombre
-/// aquí para no tocar los treinta call sites de este frontend.
+/// Re-exported from the SHARED crate since #327, when the window needed the
+/// same field. It's a SECURITY type — `Debug` that redacts, buffer wiped on
+/// drop, capacity reserved upfront — and two implementations are two spots
+/// where one of the three guarantees gets forgotten. The name stays here so
+/// this frontend's thirty call sites don't need to change.
 pub use norte_frontend::secret::TypedSecret;
 
-/// De qué informa un [`Modal::Report`]. De aquí salen su título y su página
-/// de ayuda, por `match` exhaustivo: un tercer informe es un error de
-/// compilación en cada sitio que tiene que decidir algo, no una cadena que cae
-/// en la página equivocada.
+/// What a [`Modal::Report`] reports on. Its title and help page come from
+/// here, via an exhaustive `match`: a third report is a compile error at
+/// every spot that has to decide something, not a string falling through to
+/// the wrong page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReportKind {
-    /// Un lote de renombrado que dejó algo a medias.
+    /// A rename batch that left something half done.
     Batch,
-    /// Un undo que no lo devolvió todo.
+    /// An undo that didn't return everything.
     Undo,
 }
 
 impl ReportKind {
-    /// La clave Fluent del título.
+    /// The title's Fluent key.
     #[must_use]
     pub fn title_key(self) -> &'static str {
         match self {
@@ -37,671 +37,688 @@ impl ReportKind {
     }
 }
 
-/// Tipo de transferencia pendiente de confirmación/colisión.
+/// Kind of transfer pending confirmation/collision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransferKind {
-    /// Copia (F5).
+    /// Copy (F5).
     Copy,
-    /// Movimiento (F6).
+    /// Move (F6).
     Move,
 }
 
-/// Qué lote de sumas pidió el despacho (#311).
+/// Which checksum batch dispatch requested (#311).
 ///
-/// Dos formas y no un `bool`: calcular parte de una SELECCIÓN y comprobar parte
-/// de UN fichero — y ese hay que leerlo antes de poder pedir nada.
+/// Two shapes and not a `bool`: computing operates on a SELECTION and
+/// verifying operates on ONE file — and that one has to be read before
+/// anything can even be requested.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChecksumRequest {
-    /// Calcular el digest de estas rutas y enseñarlo.
+    /// Compute the digest of these paths and show it.
     Compute {
-        /// Lo marcado, o el cursor: el operando de siempre.
+        /// What's marked, or the cursor: the usual operand.
         paths: Vec<VPath>,
     },
-    /// Leer este fichero de sumas y comprobar lo que lista.
+    /// Read this checksum file and verify what it lists.
     Verify {
-        /// El fichero de sumas. Los nombres se resuelven contra SU directorio.
+        /// The checksum file. Names are resolved against ITS directory.
         sums: VPath,
     },
 }
 
-/// Una fila del modal de sumas (#311).
+/// A row of the checksums modal (#311).
 ///
-/// El nombre va en BYTES: un fichero de sumas nombra ficheros, y un nombre no
-/// tiene por qué ser texto (regla 1). Lo pinta el saneado de siempre.
+/// The name goes in BYTES: a checksum file names files, and a name doesn't
+/// have to be text (rule 1). It's painted with the usual sanitizing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChecksumRow {
-    /// El nombre, tal como está en el disco.
+    /// The name, as it is on disk.
     pub name: Vec<u8>,
-    /// Su digest, o `None` si no se pudo calcular.
+    /// Its digest, or `None` if it couldn't be computed.
     pub digest: Option<String>,
-    /// El veredicto contra lo publicado. `None` cuando solo se calculó.
+    /// The verdict against what was published. `None` when only computed.
     pub verdict: Option<norte_frontend::checksums::Verdict>,
 }
 
-/// Diálogo modal activo. Sus teclas resuelven contra el contexto `dialog`
-/// del keymap (H1, issue #24 — CERRADO): el run loop pasa la tecla por el
-/// [`Resolver`](crate::keymap::Resolver) del efectivo `dialog` y el comando
-/// resultante se filtra por el ALLOWLIST del modal concreto
-/// ([`crate::app::dialog_action`]) — la semántica de SEGURIDAD (qué confirma, qué
-/// deniega, qué es inerte) vive en código, jamás en el keymap; solo la
-/// ASIGNACIÓN de tecla→comando es rebindeable. Única excepción:
-/// `Modal::TrustLuaInit`, que el run loop intercepta ANTES (necesita el
-/// `LuaHost`) y resuelve con [`crate::app::trust_lua_key`] — decisión 8 del plan H1, no
-/// migrado.
+/// Active modal dialog. Its keys resolve against the keymap's `dialog`
+/// context (H1, issue #24 — CLOSED): the run loop passes the key through
+/// the effective `dialog`'s [`Resolver`](crate::keymap::Resolver) and the
+/// resulting command is filtered by the concrete modal's ALLOWLIST
+/// ([`crate::app::dialog_action`]) — the SECURITY semantics (what confirms,
+/// what denies, what's inert) live in code, never in the keymap; only the
+/// key→command ASSIGNMENT is rebindable. Sole exception:
+/// `Modal::TrustLuaInit`, which the run loop intercepts BEFORE (it needs
+/// the `LuaHost`) and resolves with [`crate::app::trust_lua_key`] — decision
+/// 8 of plan H1, not migrated.
 ///
-/// Sin `Eq` (M4-IA-2): [`Modal::SemanticHits`] arrastra el `score: f64` de
-/// [`norte_proto::methods::SemanticHit`], que es solo `PartialEq` — como su
-/// tipo de proto.
+/// No `Eq` (M4-IA-2): [`Modal::SemanticHits`] carries
+/// [`norte_proto::methods::SemanticHit`]'s `score: f64`, which is only
+/// `PartialEq` — like its proto type.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Modal {
-    /// Las propiedades de la entrada bajo el cursor (#139).
+    /// The properties of the entry under the cursor (#139).
     ///
-    /// Lo que enseña sale del LISTADO, que ya lo tiene: nombre, clase, tamaño,
-    /// fecha y los atributos que el provider haya reportado. Abrirlo no pide
-    /// nada — salvo una cosa, y es justo la que un listado no puede saber: lo
-    /// que ocupa una carpeta. Eso se cuenta, y mientras se cuenta el diálogo lo
-    /// dice.
+    /// What it shows comes from the LISTING, which already has it: name,
+    /// kind, size, date and whatever attributes the provider reported.
+    /// Opening it requests nothing — except one thing, and it's exactly
+    /// what a listing can't know: what a folder takes up. That gets
+    /// counted, and while it's counting the dialog says so.
     Properties {
-        /// La entrada, tal como está en el listado.
+        /// The entry, as it is in the listing.
         entry: Box<norte_proto::Entry>,
-        /// El recuento en marcha, si se lanzó uno (solo para directorios).
+        /// The count in progress, if one was launched (folders only).
         size_task: Option<norte_proto::TaskId>,
-        /// `(bytes, entradas)` cuando el recuento terminó.
+        /// `(bytes, entries)` once the count finished.
         size: Option<(u64, u64)>,
     },
-    /// El informe de algo que NO volvió entero: un lote de renombrado a
-    /// medias o un undo que dejó entradas sin deshacer (o cuyo desenlace no
-    /// se pudo comprobar).
+    /// The report of something that did NOT come back whole: a rename batch
+    /// half done or an undo that left entries un-undone (or whose outcome
+    /// couldn't be verified).
     ///
-    /// Se lee y se cierra, como las propiedades. Las líneas las decide
-    /// `norte_frontend` (`batch_report_lines`, `undo_report_lines`), las
-    /// mismas que el diálogo de la ventana: un directorio medio renombrado o
-    /// medio deshecho no puede pasar inadvertido en ninguno de los dos.
+    /// Read and closed, like properties. The lines are decided by
+    /// `norte_frontend` (`batch_report_lines`, `undo_report_lines`), the
+    /// same ones the window's dialog uses: a half-renamed or half-undone
+    /// directory can't go unnoticed in either one.
     Report {
-        /// De qué informa: da el título y la página de ayuda.
+        /// What it reports on: gives the title and the help page.
         kind: ReportKind,
-        /// Frases y rutas, cada ruta en su propia línea.
+        /// Phrases and paths, each path on its own line.
         lines: Vec<norte_frontend::ReportLine>,
     },
-    /// Conceder capabilities a una extensión (#280).
+    /// Granting capabilities to an extension (#280).
     ///
-    /// Es LA decisión de seguridad del sistema de extensiones: lo que se
-    /// concede es leer ficheros, correr programas o salir a la red en nombre
-    /// del usuario. Aquí se aprobaba con una tecla y sin enumerar nada,
-    /// mientras la ventana gráfica ya preguntaba. REVOCAR no pasa por aquí:
-    /// va en la dirección segura.
+    /// It's THE extension system's security decision: what's being granted
+    /// is reading files, running programs or reaching the network on the
+    /// user's behalf. Here it used to be approved with one key and without
+    /// listing anything, while the graphical window already asked.
+    /// REVOKING doesn't go through here: it goes in the safe direction.
     ConfirmPluginApproval {
-        /// El id de la extensión, tal como el core la nombra.
+        /// The extension's id, as the core names it.
         id: String,
-        /// Su nombre, ya saneado para pintar.
+        /// Its name, already sanitized to paint.
         name: String,
-        /// El nombre difiere del real y hay que marcarlo.
+        /// The name differs from the real one and has to be marked.
         name_hostile: bool,
-        /// Las capabilities que se conceden, cada una enmascarada por su
-        /// cuenta y con su bandera: pegarlas en una frase dejaría que una
-        /// finja ser otra.
+        /// The capabilities being granted, each one masked on its own and
+        /// with its own flag: gluing them into one sentence would let one
+        /// pretend to be another.
         caps: Vec<(String, bool)>,
-        /// El ancla del manifiesto que se ESTÁ ENSEÑANDO (#282), si el core la
-        /// manda. Viaja con el sí, y el core rehúsa si el `plugin.toml` cambió
-        /// entre la pregunta y la respuesta.
+        /// The anchor of the manifest CURRENTLY BEING SHOWN (#282), if the
+        /// core sends it. Travels with the yes, and the core refuses if
+        /// `plugin.toml` changed between the question and the answer.
         digest: Option<String>,
     },
-    /// Confirmación de DESINSTALAR una extensión (ADR 0104): borra sus
-    /// ficheros y retira su consentimiento, y no tiene vuelta —no hay
-    /// `plugin.install` por el wire—. Pregunta por eso, y el cuerpo dice las
-    /// dos cosas que se pierden: «¿desinstalar?» a secas se lee como
-    /// «¿apagar del todo?».
+    /// Confirmation to UNINSTALL an extension (ADR 0104): deletes its files
+    /// and withdraws its consent, and there's no going back — there's no
+    /// `plugin.install` over the wire. It asks because of that, and the body
+    /// says both things that get lost: a bare "uninstall?" reads as "just
+    /// turn it off?".
     ConfirmPluginUninstall {
-        /// El id de la extensión, tal como el core la nombra.
+        /// The extension's id, as the core names it.
         id: String,
-        /// Su nombre, ya saneado para pintar.
+        /// Its name, already sanitized to paint.
         name: String,
-        /// El nombre difiere del real y hay que marcarlo.
+        /// The name differs from the real one and has to be marked.
         name_hostile: bool,
     },
-    /// Revisión de un plan de ORGANIZAR (fase 8, `ai.organize_plan` /
+    /// Review of an ORGANIZE plan (phase 8, `ai.organize_plan` /
     /// `plugin.organize_plan`).
     ///
-    /// Se revisa como un ÁRBOL y no como una lista de parejas, que es la
-    /// diferencia con [`Self::AiRenamePlan`]: lo que cambia es la forma del
-    /// directorio, y cuarenta filas `a.pdf → facturas/2026/a.pdf` no dejan
-    /// ver ni cuántas carpetas aparecen ni qué acaba en cada una.
+    /// Reviewed as a TREE and not as a list of pairs, which is the
+    /// difference with [`Self::AiRenamePlan`]: what changes is the
+    /// directory's shape, and forty rows of `a.pdf → invoices/2026/a.pdf`
+    /// don't let you see how many folders show up nor what ends up in each
+    /// one.
     ///
-    /// Lleva la MISMA disciplina de aprobación que el plan de renombrar:
-    /// hasta que el lector no ha llegado al final, confirmar está mudo. Un
-    /// plan de doscientos movimientos aprobado habiendo visto diez no es un
-    /// plan revisado.
+    /// Carries the SAME approval discipline as the rename plan: until the
+    /// reader has reached the end, confirming stays mute. A two-hundred-move
+    /// plan approved after seeing ten isn't a reviewed plan.
     OrganizePlan {
-        /// Directorio sobre el que se aplica.
+        /// Directory it applies to.
         dir: VPath,
-        /// Los movimientos, tal cual los propuso el productor.
+        /// The moves, exactly as the producer proposed them.
         moves: Vec<norte_proto::methods::OrganizeMove>,
-        /// El árbol ya calculado, que es lo que se pinta.
+        /// The already-computed tree, which is what gets painted.
         lines: Vec<norte_frontend::organize::TreeLine>,
-        /// El token del plan que se revisó: lo único que `fs.organize`
-        /// acepta.
+        /// The token of the reviewed plan: the only thing `fs.organize`
+        /// accepts.
         plan_hash: norte_proto::methods::PlanHash,
-        /// Primera línea visible de la ventana.
+        /// First visible line of the window.
         offset: usize,
-        /// Hasta dónde ha llegado el lector alguna vez. Marca de agua ALTA y
-        /// no la posición actual: volver arriba no deshace haber leído.
+        /// How far the reader has ever gotten. A HIGH watermark, not the
+        /// current position: scrolling back up doesn't undo having read.
         seen: usize,
     },
-    /// Confirmación de DESHACER hasta un punto de la línea de tiempo (fase
-    /// 7, `journal.undo_after`).
+    /// Confirmation to UNDO up to a point in the timeline (phase 7,
+    /// `journal.undo_after`).
     ///
-    /// Pregunta porque revierte trabajo, y el cuerpo lleva el RECUENTO: lo
-    /// que se va a deshacer, lo que se va a saltar y lo que no es del lector
-    /// — tres números que no se suman, porque prometer uno solo sería
-    /// prometer algo que no va a pasar. La regla de esta pantalla es que una
-    /// confirmación que no dice cuánto no es una confirmación.
+    /// It asks because it reverts work, and the body carries the COUNT:
+    /// what's going to be undone, what's going to be skipped and what
+    /// doesn't belong to the reader — three numbers that don't add up,
+    /// because promising just one would be promising something that isn't
+    /// going to happen. This screen's rule is that a confirmation that
+    /// doesn't say how much isn't a confirmation.
     ConfirmUndoAfter {
-        /// El corte: se deshace lo del humano POSTERIOR a este `seq`, y la
-        /// entrada que lo nombra se queda.
+        /// The cut: undoes the human's entries AFTER this `seq`, and the
+        /// entry naming it stays.
         seq: i64,
-        /// Cuántas entradas se van a intentar deshacer.
-        a_deshacer: usize,
-        /// Cuántas se van a saltar (sin vuelta, ya deshechas, o
-        /// compensaciones).
-        irreversibles: usize,
-        /// Cuántas hay por encima del corte que NO son del lector, y que por
-        /// tanto este undo no toca.
-        ajenas: usize,
-        /// El techo (`upto_seq`, 0.80.0): lo más nuevo que este recuento
-        /// contó. El undo no pasa de ahí, así que lo hecho después de pintar
-        /// la lista no entra sin haberse contado.
+        /// How many entries are going to be attempted to undo.
+        to_undo: usize,
+        /// How many are going to be skipped (no way back, already undone,
+        /// or compensations).
+        irreversible: usize,
+        /// How many above the cut are NOT the reader's, and that this undo
+        /// therefore doesn't touch.
+        foreign: usize,
+        /// The ceiling (`upto_seq`, 0.80.0): the newest thing this count
+        /// counted. The undo doesn't go past it, so anything done after the
+        /// list got painted doesn't get in without being counted.
         techo: Option<i64>,
     },
-    /// Confirmación de borrado (F8) sobre las MARCAS. `permanent = false` →
-    /// papelera.
+    /// Delete confirmation (F8) over the MARKS. `permanent = false` → trash.
     ConfirmDelete {
-        /// Los ítems a borrar, en orden de listado.
+        /// The items to delete, in listing order.
         items: Vec<VPath>,
-        /// Permanente (shift+F8, o sin papelera en el provider): el diálogo
-        /// AVISA (ADR 0009).
+        /// Permanent (shift+F8, or no trash in the provider): the dialog
+        /// WARNS (ADR 0009).
         permanent: bool,
     },
-    /// Confirmación de copia/movimiento sobre las MARCAS (#103). `to` es el
-    /// DIRECTORIO destino (el del otro pane): con varios ítems no hay un
-    /// nombre único que editar. El destino editable de un solo ítem, y el
-    /// rename que trae, viven en #105.
+    /// Copy/move confirmation over the MARKS (#103). `to` is the destination
+    /// DIRECTORY (the other pane's): with several items there's no single
+    /// name to edit. A single item's editable destination, and the rename
+    /// it carries, live in #105.
     ConfirmTransfer {
-        /// Copy o Move.
+        /// Copy or Move.
         kind: TransferKind,
-        /// Los orígenes, en orden de listado.
+        /// The sources, in listing order.
         items: Vec<VPath>,
-        /// Directorio destino.
+        /// Destination directory.
         to: VPath,
-        /// El aviso de espacio, cuando lo hay (#149): lo escribe el run loop
-        /// —preguntar por los volúmenes es I/O— y lo pinta este modal.
+        /// The space warning, when there is one (#149): written by the run
+        /// loop — asking about volumes is I/O — and painted by this modal.
         ///
-        /// `None` es el caso NORMAL, y significa las tres cosas honestas a la
-        /// vez: cabe, o el destino no sabe decir cuánto le queda, o no se sabe
-        /// cuánto se va a mover. Ninguna de las tres se anuncia.
+        /// `None` is the NORMAL case, and honestly means all three at once:
+        /// it fits, or the destination can't say how much room is left, or
+        /// it isn't known how much is going to move. None of the three gets
+        /// announced.
         space: Option<String>,
-        /// El aviso de confinamiento, cuando lo hay (#164): igual que
-        /// [`Modal::ConfirmTransfer::space`], lo escribe el run loop y lo pinta
-        /// este modal.
+        /// The confinement warning, when there is one (#164): like
+        /// [`Modal::ConfirmTransfer::space`], written by the run loop and
+        /// painted by this modal.
         ///
-        /// `None` = este destino sabe sujetar sus escrituras, que es el caso
-        /// normal en Linux y macOS y no se anuncia.
+        /// `None` = this destination knows how to confine its writes, which
+        /// is the normal case on Linux and macOS and doesn't get announced.
         confine: Option<String>,
     },
-    /// Colisión: elegir política y REENVIAR la operación entera (ADR 0005:
-    /// el engine trata Ask como Fail; el TUI pregunta a nivel de task).
-    /// Porta el `RetrySpec` COMPLETO: el reintento conserva las opciones
-    /// originales, solo cambia la política de colisión.
+    /// Collision: choosing a policy and RESUBMITTING the whole operation
+    /// (ADR 0005: the engine treats Ask as Fail; the TUI asks at the task
+    /// level). Carries the WHOLE `RetrySpec`: the retry keeps the original
+    /// options, only the collision policy changes.
     Collision {
-        /// La transferencia que colisionó, lista para reenviar.
+        /// The transfer that collided, ready to resubmit.
         retry: crate::tasks::RetrySpec,
     },
-    /// Aprobación de una op de AGENTE bajo regla `ask` (M3-3b T5): el daemon
-    /// difundió `policy.approval_required` y espera `policy.decide`. Las
-    /// rutas son SOLO display (redactadas server-side): jamás se reparsean.
-    /// `y` aprueba, `n`/Esc deniegan; Enter NO aprueba (aprobar una mutación
-    /// de agente no es una respuesta inocua que merezca dispararse sola —
-    /// mismo principio que la colisión).
+    /// Approving an AGENT op under the `ask` rule (M3-3b T5): the daemon
+    /// broadcast `policy.approval_required` and waits for `policy.decide`.
+    /// Paths are DISPLAY ONLY (redacted server-side): never reparsed. `y`
+    /// approves, `n`/Esc deny; Enter does NOT approve (approving an agent
+    /// mutation isn't an innocuous answer that deserves firing on its own —
+    /// same principle as the collision).
     ApproveAgentOp {
-        /// La aprobación pendiente tal como llegó del daemon.
+        /// The pending approval exactly as it arrived from the daemon.
         req: norte_proto::methods::PolicyApprovalRequired,
     },
-    /// Primer contacto TOFU con un host SSH desconocido (#45, ADR 0015 D):
-    /// un `Error::HostKeyUnknown` al navegar a `dir`. Muestra host/algo/
-    /// fingerprint para que el usuario los COMPARE fuera de banda; `y`
-    /// confía (`connection.trust_host_key`) y reintenta la navegación,
-    /// `n`/Esc cancelan. Enter NO confía (decisión de seguridad, mismo
-    /// principio que la aprobación de agente). host/algo/fingerprint vienen
-    /// del servidor remoto (no confiable): se enmascaran al pintar.
+    /// First TOFU contact with an unknown SSH host (#45, ADR 0015 D): an
+    /// `Error::HostKeyUnknown` while navigating to `dir`. Shows
+    /// host/algo/fingerprint so the user can COMPARE them out of band; `y`
+    /// trusts (`connection.trust_host_key`) and retries the navigation,
+    /// `n`/Esc cancel. Enter does NOT trust (a security decision, same
+    /// principle as approving an agent op). host/algo/fingerprint come from
+    /// the remote server (untrusted): masked when painted.
     TrustHostKey {
-        /// Host desnudo al que se conecta (el del `HostKeyUnknown`).
+        /// Bare host being connected to (the `HostKeyUnknown`'s).
         host: String,
-        /// Puerto (ausente = default del scheme).
+        /// Port (absent = the scheme's default).
         port: Option<u16>,
-        /// Algoritmo de la clave (p. ej. `ssh-ed25519`).
+        /// Key algorithm (e.g. `ssh-ed25519`).
         algo: String,
-        /// Fingerprint OpenSSH `SHA256:<base64>` — la MISMA cadena que va a
-        /// `connection.trust_host_key`.
+        /// OpenSSH `SHA256:<base64>` fingerprint — the SAME string that goes
+        /// to `connection.trust_host_key`.
         fingerprint: String,
-        /// La ruta remota a la que reintentar navegar tras confiar.
+        /// The remote path to retry navigating to after trusting.
         dir: VPath,
-        /// El pane que estaba navegando cuando saltó el TOFU. El modal lo
-        /// CARGA porque la navegación interrumpida no es necesariamente la
-        /// del pane con el foco (`pane.mirror` manda el OTRO pane a un sitio
-        /// mientras el foco se queda quieto): reintentar contra el foco
-        /// reanudaría en el pane EQUIVOCADO.
+        /// The pane that was navigating when the TOFU triggered. The modal
+        /// CARRIES it because the interrupted navigation isn't necessarily
+        /// the focused pane's (`pane.mirror` sends the OTHER pane somewhere
+        /// while focus stays put): retrying against the focus would resume
+        /// on the WRONG pane.
         pane: usize,
-        /// Si la navegación interrumpida se REGISTRA en el rastro o es el
-        /// rastro reproduciéndose — y, en ese caso, QUÉ paso estaba dando
-        /// ([`Trail::step`]). Se transporta por el mismo motivo que `pane`:
-        /// el reintento debe ser la MISMA navegación que el TOFU interrumpió,
-        /// no una nueva.
+        /// Whether the interrupted navigation is RECORDED into the trail or
+        /// is the trail replaying itself — and, in that case, WHICH step it
+        /// was on ([`Trail::step`]). Carried for the same reason as `pane`:
+        /// the retry must be the SAME navigation the TOFU interrupted, not a
+        /// new one.
         ///
-        /// El paso viaja porque este modal es el ÚNICO sitio donde una
-        /// navegación sobrevive a quien la empezó: `walk_trail` ya devolvió
-        /// `Suspended` y no rebobinó nada (el reintento iba a terminar el
-        /// paso), así que si la respuesta al modal acaba abandonando la
-        /// navegación —denegar, o un reintento que falla— el rastro se queda
-        /// creyendo que el lector se fue de donde sigue estando. Quien
-        /// responde al modal rebobina, y para eso necesita el sentido.
+        /// The step travels because this modal is the ONE place where a
+        /// navigation outlives whoever started it: `walk_trail` already
+        /// returned `Suspended` and rewound nothing (the retry was going to
+        /// finish the step), so if the modal's answer ends up abandoning the
+        /// navigation — denying, or a retry that fails — the trail is left
+        /// believing the reader left a place they're still at. Whoever
+        /// answers the modal rewinds, and for that it needs the direction.
         trail: Trail,
     },
-    /// La conexión `conn` declara `secret = "prompt"` y ninguna de las tres
-    /// fuentes de siempre lo tiene (#325): un `Error::SecretNeeded` al navegar
-    /// a `dir`. Se teclea la contraseña, Enter la entrega
-    /// (`connection.provide_secret`) y REINTENTA la navegación; Esc cancela.
+    /// Connection `conn` declares `secret = "prompt"` and none of the usual
+    /// three sources has it (#325): an `Error::SecretNeeded` while
+    /// navigating to `dir`. The password gets typed, Enter delivers it
+    /// (`connection.provide_secret`) and RETRIES the navigation; Esc
+    /// cancels.
     ///
-    /// El molde es [`Modal::TrustHostKey`] —transporta `dir`/`pane`/`trail`
-    /// por las mismas razones, y quien responde rebobina el rastro— con dos
-    /// diferencias que vienen de que aquí se ESCRIBE un secreto:
+    /// The mold is [`Modal::TrustHostKey`] — it carries `dir`/`pane`/`trail`
+    /// for the same reasons, and whoever answers rewinds the trail — with
+    /// two differences that come from a secret being WRITTEN here:
     ///
-    /// * Enter SÍ confirma. En el TOFU no, porque confirmar es una decisión
-    ///   de seguridad que no debe dispararse sola; aquí Enter sobre un campo
-    ///   vacío no entrega nada (no hay decisión que disparar), y sobre un
-    ///   campo escrito es lo que el dedo del usuario ya iba a hacer.
-    /// * Lo tecleado NO se pinta: el diálogo dibuja un punto por carácter.
+    /// * Enter DOES confirm. Not in the TOFU one, because confirming there
+    ///   is a security decision that must not fire on its own; here Enter
+    ///   over an empty field delivers nothing (there's no decision to fire),
+    ///   and over a typed field it's what the user's finger was already
+    ///   going to do.
+    /// * What's typed does NOT get painted: the dialog draws a dot per
+    ///   character.
     AskSecret {
-        /// Nombre de la entrada de `connections.toml` que pide el secreto —
-        /// la MISMA cadena que va en `connection.provide_secret`. Sale del
-        /// error del core, no del servidor remoto.
+        /// Name of the `connections.toml` entry asking for the secret — the
+        /// SAME string that goes into `connection.provide_secret`. Comes
+        /// from the core's error, not from the remote server.
         conn: String,
-        /// A dónde se conecta, `scheme://host[:puerto]` y ya redactado por el
-        /// core (sin userinfo). Solo para MOSTRAR, jamás se reparsea — pero
-        /// obligatorio: sin él la pregunta no es contestable, porque el
-        /// nombre de arriba lo eligió un fichero que puede haberse editado.
+        /// Where it's connecting to, `scheme://host[:port]` and already
+        /// redacted by the core (no userinfo). For DISPLAY only, never
+        /// reparsed — but mandatory: without it the question isn't
+        /// answerable, because a file that may have been edited chose the
+        /// name above.
         endpoint: String,
-        /// Lo tecleado hasta ahora. [`TypedSecret`] y no `String`: ni se
-        /// imprime en un `Debug` ni se queda en el heap tras el drop.
+        /// What's been typed so far. [`TypedSecret`] and not `String`: it's
+        /// neither printed in a `Debug` nor left on the heap after the drop.
         input: TypedSecret,
-        /// La ruta remota a la que reintentar navegar tras entregarlo.
+        /// The remote path to retry navigating to after delivering it.
         dir: VPath,
-        /// El pane que estaba navegando (ver [`Modal::TrustHostKey::pane`]).
+        /// The pane that was navigating (see [`Modal::TrustHostKey::pane`]).
         pane: usize,
-        /// El sentido del rastro de esa navegación (ver
+        /// That navigation's trail direction (see
         /// [`Modal::TrustHostKey::trail`]).
         trail: Trail,
     },
-    /// TOFU del `./.norte/init.lua` de PROYECTO (M4 Lua, ADR 0026): un repo
-    /// AJENO trae un script que correría con los permisos del usuario —
-    /// primer contacto pregunta. `y` confía y evalúa, `n`/Esc deniegan
-    /// (persistido por (path, hash) hasta que el fichero cambie); Enter NO
-    /// aprueba (decisión de seguridad, mismo principio que
-    /// [`Modal::ApproveAgentOp`]). Los BYTES aprobados viven en
-    /// [`crate::app::App::lua_pending_trust`] (anti-TOCTOU: lo aprobado = lo evaluado).
+    /// TOFU for a PROJECT's `./.norte/init.lua` (M4 Lua, ADR 0026): a
+    /// FOREIGN repo brings a script that would run with the user's
+    /// permissions — first contact asks. `y` trusts and evaluates, `n`/Esc
+    /// deny (persisted by (path, hash) until the file changes); Enter does
+    /// NOT approve (a security decision, same principle as
+    /// [`Modal::ApproveAgentOp`]). The approved BYTES live in
+    /// [`crate::app::App::lua_pending_trust`] (anti-TOCTOU: what's approved
+    /// = what's evaluated).
     TrustLuaInit {
-        /// Path del script YA SANEADO por quien construye el modal
-        /// (`detail_for_bar`): solo display, jamás se reparsea.
+        /// Script path ALREADY SANITIZED by whoever builds the modal
+        /// (`detail_for_bar`): display only, never reparsed.
         path: String,
-        /// sha256 abreviado (32 hex = 128 bits — forjar una colisión corta
-        /// cuesta minutos; el humano compara lo que ve) del contenido, para
-        /// correlar con el `lua-trust.toml` a ojo.
+        /// Abbreviated sha256 (32 hex = 128 bits — forging a short collision
+        /// costs minutes; the human compares what they see) of the content,
+        /// to correlate against `lua-trust.toml` by eye.
         hash_abbrev: String,
     },
-    /// Confirmar `app.quit` (S2, `[ui] confirm_quit`): abierto por el brazo
-    /// de despacho de `app.quit` en `main.rs` cuando [`quit_needs_confirm`]
-    /// lo pide — SIN datos propios (a diferencia del equivalente de la GUI,
-    /// que cuenta tasks/marcas para el título): sin riesgo de seguridad que
-    /// enmascarar, así que reutiliza el ALLOWLIST/hint de
-    /// [`crate::app::ALLOW_CONFIRM`]/`DialogHints::confirm` sin necesitar los suyos
-    /// propios. Los Ctrl+C hardcodeados del resto de `main.rs` NO pasan por
-    /// aquí a propósito (ver el comentario junto al brazo de despacho): ese
-    /// atajo de salida de emergencia se mantiene inmediato en todos los
-    /// overlays, igual que antes de S2.
+    /// Confirming `app.quit` (S2, `[ui] confirm_quit`): opened by
+    /// `app.quit`'s dispatch arm in `main.rs` when [`quit_needs_confirm`]
+    /// asks for it — with NO data of its own (unlike the GUI's equivalent,
+    /// which counts tasks/marks for the title): no security risk to mask,
+    /// so it reuses [`crate::app::ALLOW_CONFIRM`]/`DialogHints::confirm`'s
+    /// ALLOWLIST/hint without needing its own. The rest of `main.rs`'s
+    /// hardcoded Ctrl+Cs do NOT go through here on purpose (see the comment
+    /// next to the dispatch arm): that emergency exit stays immediate in
+    /// every overlay, same as before S2.
     ConfirmQuit,
-    /// Marcar (`mark = true`) o desmarcar por patrón (`+`/`-`, #103). El
-    /// texto es la query CRUDA del usuario; se enmascara al pintarla, igual
-    /// que el quick search (un patrón puede llegar por PASTE con bidi o
-    /// invisibles).
+    /// Marking (`mark = true`) or unmarking by pattern (`+`/`-`, #103). The
+    /// text is the user's RAW query; it gets masked when painted, same as
+    /// quick search (a pattern can arrive via PASTE with bidi or invisibles
+    /// just as easily).
     MarkPattern {
-        /// Marcar, o desmarcar.
+        /// Mark, or unmark.
         mark: bool,
-        /// Lo tecleado hasta ahora.
+        /// What's been typed so far.
         pattern: String,
-        /// Diagnóstico del último intento fallido, para pintarlo bajo el
-        /// campo. `None` = aún no se ha confirmado nada.
+        /// The last failed attempt's diagnostic, to paint under the field.
+        /// `None` = nothing confirmed yet.
         error: Option<String>,
     },
-    /// Nombre de destino editable (#105): F5/F6 de UN solo ítem, y el
-    /// rename in situ (shift+F6 — `to_dir` es el MISMO dir). Multi-ítem
-    /// sigue en [`Modal::ConfirmTransfer`]: no hay un nombre único que
-    /// editar. Texto libre como [`Modal::Mkdir`].
+    /// Editable destination name (#105): F5/F6 for a SINGLE item, and the
+    /// in-place rename (shift+F6 — `to_dir` is the SAME dir). Multi-item
+    /// stays in [`Modal::ConfirmTransfer`]: there's no single name to edit.
+    /// Free text like [`Modal::Mkdir`].
     TransferName {
-        /// Copy o Move (rename = Move con `to_dir` == dir de `from`).
+        /// Copy or Move (rename = Move with `to_dir` == `from`'s dir).
         kind: TransferKind,
-        /// Origen, bytes exactos.
+        /// Source, exact bytes.
         from: VPath,
-        /// Directorio destino (el del otro pane; el propio en rename).
+        /// Destination directory (the other pane's; the same one in
+        /// rename).
         to_dir: VPath,
-        /// El nombre como TEXTO editable (lo que se pinta, enmascarado).
-        /// Solo manda si `touched`; sin tocar, el confirm usa `original`.
+        /// The name as EDITABLE text (what gets painted, masked). Only
+        /// wins if `touched`; untouched, confirm uses `original`.
         name: String,
-        /// Bytes ORIGINALES del nombre de `from` (regla 1): un F5 sin
-        /// editar copia estos bytes, jamás la forma lossy del prefill.
+        /// `from`'s name's ORIGINAL bytes (rule 1): an unedited F5 copies
+        /// these bytes, never the prefill's lossy form.
         original: Vec<u8>,
-        /// ¿Se editó alguna vez? El primer push/pop lo fija: desde ahí el
-        /// nombre es el texto (doctrina #103: editas lo que VES).
+        /// Was it ever edited? The first push/pop sets it: from then on the
+        /// name is the text (#103 doctrine: you edit what you SEE).
         touched: bool,
-        /// El origen era la MARCA (no el cursor): el submit que encola la
-        /// CONSUME (#105 review MAJOR-1 — mc/TC: la selección se consume al
-        /// enviar, también con un solo ítem). Un rename (cursor) jamás.
+        /// The source was the MARK (not the cursor): the submit that queues
+        /// it CONSUMES it (#105 review MAJOR-1 — mc/TC: the selection gets
+        /// consumed on submit, even with a single item). A rename (cursor)
+        /// never does.
         from_marks: bool,
-        /// Reinterpretación de nombres del pane al ABRIR (#98/M1 y #105
-        /// review MAJOR-2): el prefill de un nombre no-UTF8 es el TEXTO que
-        /// el pane pinta bajo ella (decode #57), no el lossy — sin esto un
-        /// fichero cp437 era irrenombrable (todo edit tropezaba con el
-        /// guard de U+FFFD). El render del dir destino usa la misma.
+        /// The pane's name reinterpretation on OPENING (#98/M1 and #105
+        /// review MAJOR-2): a non-UTF8 name's prefill is the TEXT the pane
+        /// paints under it (decode #57), not the lossy one — without this a
+        /// cp437 file was unrenameable (every edit tripped the U+FFFD
+        /// guard). The destination dir's render uses the same one.
         enc: Option<norte_encoding::NameEncoding>,
-        /// Diagnóstico del último intento inválido.
+        /// The last invalid attempt's diagnostic.
         error: Option<String>,
-        /// «No cabe» (#149), o `None` si cabe o no se sabe cuánto ocupa.
+        /// "Doesn't fit" (#149), or `None` if it fits or it isn't known how
+        /// much room it takes.
         ///
-        /// Las MISMAS dos líneas que [`Self::ConfirmTransfer`], y por eso
-        /// están aquí: este diálogo es el que sale al copiar UN fichero, y
-        /// repartir los avisos por número de ítems hacía que copiar uno suelto
-        /// no dijera nada (#343). El silencio del espacio significa «cabe o no
-        /// lo sé»; el del confinamiento significa «este destino SUJETA sus
-        /// escrituras», que es una afirmación, no una ausencia.
+        /// The SAME two lines as [`Self::ConfirmTransfer`], and that's why
+        /// they're here: this dialog is the one that shows up copying ONE
+        /// file, and spreading the warnings by item count made copying a
+        /// single one say nothing (#343). Space's silence means "fits, or I
+        /// don't know"; confinement's silence means "this destination DOES
+        /// confine its writes", which is an assertion, not an absence.
         space: Option<String>,
-        /// «Este destino no puede confinar las escrituras» (#164, #219).
+        /// "This destination can't confine writes" (#164, #219).
         confine: Option<String>,
     },
-    /// Destino TECLEADO de una transferencia: F5/F6 cuando no hay «el otro
-    /// panel» al que copiar.
+    /// TYPED destination of a transfer: F5/F6 when there's no "other panel"
+    /// to copy to.
     ///
-    /// Con un solo listado —el preset `simple`— el rol `target` no tiene
-    /// candidato, y la regla de L1 para eso es que la operación PREGUNTA en
-    /// vez de fallar. Se teclea la dirección en su forma wire (la misma que
-    /// escribes en `[[hotlist]]`), prellenada con la del propio panel: lo
-    /// normal es editarle la cola, no escribirla entera.
+    /// With a single listing — the `simple` preset — the `target` role has
+    /// no candidate, and L1's rule for that is that the operation ASKS
+    /// instead of failing. The address gets typed in its wire form (the
+    /// same one you write in `[[hotlist]]`), pre-filled with the panel's
+    /// own: the normal thing is editing its tail, not writing the whole
+    /// thing.
     ///
-    /// Texto libre como [`Modal::Mkdir`], y por el mismo motivo: lo tecleado
-    /// se enmascara al pintarlo. Confirmar NO transfiere — abre el modal que
-    /// habría abierto un F5 con dos paneles, que es donde vive la
-    /// confirmación.
+    /// Free text like [`Modal::Mkdir`], and for the same reason: what's
+    /// typed gets masked when painted. Confirming does NOT transfer — it
+    /// opens the modal an F5 with two panels would have opened, which is
+    /// where the confirmation lives.
     TransferDest {
-        /// Copy o Move.
+        /// Copy or Move.
         kind: TransferKind,
-        /// Lo tecleado hasta ahora, en forma wire.
+        /// What's been typed so far, in wire form.
         input: String,
-        /// Diagnóstico del último intento inválido, bajo el campo.
+        /// The last invalid attempt's diagnostic, under the field.
         error: Option<String>,
     },
-    /// Empaquetar (#132). Texto libre: el NOMBRE del archivo que se va a
-    /// crear, prellenado con el del directorio o la entrada de partida más la
-    /// extensión de zip.
+    /// Packing (#132). Free text: the NAME of the archive about to be
+    /// created, pre-filled with the starting directory or entry's plus the
+    /// zip extension.
     ///
-    /// El formato sale del nombre y se enseña en el propio diálogo: lo que
-    /// viaja por el wire es la decisión ya tomada, no un nombre para que el
-    /// servidor adivine (ver `ARCHIVE_PACK`).
+    /// The format comes from the name and is shown in the dialog itself:
+    /// what travels over the wire is the decision already made, not a name
+    /// for the server to guess from (see `ARCHIVE_PACK`).
     Pack {
-        /// Lo tecleado hasta ahora.
+        /// What's been typed so far.
         name: String,
-        /// Diagnóstico del último intento inválido.
+        /// The last invalid attempt's diagnostic.
         error: Option<String>,
     },
-    /// Cambiar los PERMISOS POSIX (#314). Texto libre: el modo en octal,
-    /// prellenado con el que tiene lo que hay bajo el cursor.
+    /// Changing POSIX PERMISSIONS (#314). Free text: the mode in octal,
+    /// pre-filled with what's under the cursor.
     ///
-    /// En octal y no con casillas `rwx` porque es lo que teclea quien sabe lo
-    /// que quiere —`755`, `600`— y porque es la forma que el propio listado
-    /// enseña. Un editor de casillas es otra superficie, y esta no la impide.
+    /// In octal and not with `rwx` checkboxes because that's what someone
+    /// who knows what they want types — `755`, `600` — and because it's the
+    /// form the listing itself shows. A checkbox editor is a different
+    /// surface, and this one doesn't block it.
     Chmod {
-        /// Lo tecleado hasta ahora.
+        /// What's been typed so far.
         mode: String,
-        /// Sobre qué se va a aplicar, resuelto al ABRIR: lo marcado, o lo que
-        /// hay bajo el cursor. Se congela aquí porque entre abrir el diálogo y
-        /// confirmarlo el listado puede refrescarse, y entonces «lo marcado»
-        /// sería otra cosa.
+        /// What it's going to apply to, resolved on OPENING: what's marked,
+        /// or what's under the cursor. Frozen here because between opening
+        /// the dialog and confirming it the listing can refresh, and then
+        /// "what's marked" would be something else.
         targets: Vec<VPath>,
-        /// Diagnóstico del último intento inválido, bajo el campo.
+        /// The last invalid attempt's diagnostic, under the field.
         error: Option<String>,
     },
-    /// Partir un fichero (#132). Texto libre: el tamaño de cada trozo, con
-    /// sufijo (`10M`, `700M`, `4096`).
+    /// Splitting a file (#132). Free text: each chunk's size, with a suffix
+    /// (`10M`, `700M`, `4096`).
     Split {
-        /// Lo tecleado hasta ahora.
+        /// What's been typed so far.
         size: String,
-        /// Diagnóstico del último intento inválido.
+        /// The last invalid attempt's diagnostic.
         error: Option<String>,
     },
-    /// Crear directorio (F7, #104). Texto libre como [`Modal::MarkPattern`]:
-    /// el nombre CRUDO del usuario, enmascarado al pintarlo (un nombre
-    /// llega por paste con bidi/invisibles tan fácil como un patrón).
+    /// Create a directory (F7, #104). Free text like [`Modal::MarkPattern`]:
+    /// the user's RAW name, masked when painted (a name arrives via paste
+    /// with bidi/invisibles just as easily as a pattern).
     Mkdir {
-        /// Lo tecleado hasta ahora.
+        /// What's been typed so far.
         name: String,
-        /// Diagnóstico del último intento inválido (`VPath` o del engine),
-        /// pintado bajo el campo.
+        /// The last invalid attempt's diagnostic (`VPath`'s or the
+        /// engine's), painted under the field.
         error: Option<String>,
     },
-    /// Guardar lo que hay en pantalla como un PERFIL nuevo (#306, ADR 0079).
+    /// Saving what's on screen as a new PROFILE (#306, ADR 0079).
     ///
-    /// Mismo molde que [`Modal::Mkdir`]: un campo y un diagnóstico. Lo que se
-    /// teclea es el nombre del perfil, que acaba siendo un DIRECTORIO
-    /// (`profiles/<nombre>/`), así que pasa por `valid_profile_name` antes de
-    /// tocar disco y el error se pinta bajo el campo en vez de rechazarse en
-    /// silencio.
+    /// Same mold as [`Modal::Mkdir`]: a field and a diagnostic. What gets
+    /// typed is the profile's name, which ends up being a DIRECTORY
+    /// (`profiles/<name>/`), so it goes through `valid_profile_name` before
+    /// touching disk and the error is painted under the field instead of
+    /// being refused silently.
     ProfileSaveAs {
-        /// Lo tecleado hasta ahora.
+        /// What's been typed so far.
         name: String,
-        /// Diagnóstico del último intento inválido.
+        /// The last invalid attempt's diagnostic.
         error: Option<String>,
     },
-    /// Crear un fichero VACÍO (Shift+F4, #290). Mismo molde que
-    /// [`Modal::Mkdir`] con la otra clase de nodo, y por el mismo motivo: el
-    /// fichero lo crea el DAEMON (`fs.create`) y no el editor, así que hace
-    /// falta un nombre antes de lanzar nada.
+    /// Creating an EMPTY file (Shift+F4, #290). Same mold as
+    /// [`Modal::Mkdir`] with the other kind of node, and for the same
+    /// reason: the DAEMON creates the file (`fs.create`), not the editor, so
+    /// a name is needed before launching anything.
     ///
-    /// El editor se abre DESPUÉS, sobre el fichero que ya existe. Dejárselo
-    /// crear a él —lo que hacía esta tecla— saltaba el journal y la política:
-    /// un `pane.edit-new` sobre un directorio donde la política prohíbe
-    /// escribir creaba el fichero igualmente.
+    /// The editor opens AFTERWARD, over the file that already exists.
+    /// Letting it create the file — what this key used to do — skipped the
+    /// journal and the policy: a `pane.edit-new` over a directory where
+    /// policy forbids writing created the file anyway.
     EditNew {
-        /// El directorio donde se crea, ATADO al abrir el modal.
+        /// The directory it's created in, BOUND on opening the modal.
         ///
-        /// No se vuelve a preguntar al pane al confirmar, y es la misma
-        /// decisión que toma la ventana (`Pendiente::CrearFichero { dir }`):
-        /// entre abrir el diálogo y confirmarlo, el sitio bajo el pane puede
-        /// haber cambiado, y crear en «donde esté el foco ahora» crea en un
-        /// directorio que el lector no estaba mirando cuando tecleó el nombre.
+        /// The pane isn't asked again on confirming, and it's the same
+        /// decision the window makes (`Pending::CreateFile { dir }`):
+        /// between opening the dialog and confirming it, the place under the
+        /// pane can have changed, and creating in "wherever focus is now"
+        /// creates in a directory the reader wasn't looking at when they
+        /// typed the name.
         dir: VPath,
-        /// Lo tecleado hasta ahora.
+        /// What's been typed so far.
         name: String,
-        /// Diagnóstico del último intento inválido.
+        /// The last invalid attempt's diagnostic.
         error: Option<String>,
     },
-    /// `pane.command-line` (#135). Texto libre, molde [`Modal::Mkdir`]: la
-    /// línea CRUDA del usuario, enmascarada al pintarla.
+    /// `pane.command-line` (#135). Free text, [`Modal::Mkdir`]'s mold: the
+    /// user's RAW line, masked when painted.
     ///
-    /// Lo que Enter hace con ella NO pasa por el core: se la lleva el shell
-    /// con la TUI suspendida, que es el usuario actuando con sus propios
-    /// permisos y no una mutación de norte (design §D — el journal no ve nada
-    /// de esto, y decirlo así es más honesto que meter entradas
-    /// irreversibles en la cadena).
+    /// What Enter does with it does NOT go through the core: the shell takes
+    /// it with the TUI suspended, which is the user acting with their own
+    /// permissions and not a norte mutation (design §D — the journal sees
+    /// none of this, and saying so is more honest than putting irreversible
+    /// entries in the chain).
     ///
-    /// # Es el único sitio de norte donde lo pintado es código a aprobar
+    /// # It's the one place in norte where what's painted is code to approve
     ///
-    /// Dos consecuencias que la review de S4 dejó decididas, no heredadas:
+    /// Two consequences the S4 review left decided, not inherited:
     ///
-    /// - **El pegado multilínea confirma en el primer salto** (encoding H2).
-    ///   La TUI no tiene bracketed paste —un pegado llega como pulsaciones
-    ///   sueltas y crossterm mapea `\n` a `Enter`—, así que la primera línea
-    ///   se envía sola. El RESTO no se ejecuta: [`crate::app::PendingShell`]
-    ///   se drena con el type-ahead ya descartado, así que no llega ni al
-    ///   hijo ni al despacho de la TUI como comandos. Está dicho en los
-    ///   límites honestos del tema `shell`. El arreglo completo (activar
-    ///   bracketed paste y enrutar `Event::Paste` en las SEIS superficies de
-    ///   texto libre que hay) es trabajo de la TUI entera, no de este item, y
-    ///   hacerlo a medias rompería el pegado en las otras cinco.
-    /// - **ZWJ y NBSP pasan sin marcar.** `must_mask` los permite a sabiendas
-    ///   (fidelidad de emoji), lo cual es correcto para un NOMBRE de fichero.
-    ///   Aquí `git\u{200D}status` se lee igual que `git status` y el shell lo
-    ///   parte distinto. Se acepta el mismo trato que el resto de campos —una
-    ///   excepción por superficie sería peor de razonar— y se hace constar:
-    ///   lo peligroso de verdad (RLO y compañía) SÍ se enmascara.
+    /// - **Multi-line paste confirms on the first newline** (encoding H2).
+    ///   The TUI has no bracketed paste — a paste arrives as loose
+    ///   keystrokes and crossterm maps `\n` to `Enter` — so the first line
+    ///   gets sent alone. The REST doesn't execute: [`crate::app::PendingShell`]
+    ///   gets drained with the type-ahead already discarded, so it doesn't
+    ///   reach the child nor the TUI's dispatch as commands. It's stated in
+    ///   the `shell` topic's honest limits. The full fix (turning on
+    ///   bracketed paste and routing `Event::Paste` in the SIX free-text
+    ///   surfaces there are) is work for the whole TUI, not this item, and
+    ///   doing it halfway would break paste in the other five.
+    /// - **ZWJ and NBSP pass unmarked.** `must_mask` allows them knowingly
+    ///   (emoji fidelity), which is correct for a file NAME. Here
+    ///   `git\u{200D}status` reads the same as `git status` and the shell
+    ///   splits it differently. It gets the same treatment as the rest of
+    ///   the fields — an exception per surface would be worse to reason
+    ///   about — and it's stated: what's truly dangerous (RLO and friends)
+    ///   DOES get masked.
     CommandLine {
-        /// Lo tecleado hasta ahora.
+        /// What's been typed so far.
         command: String,
-        /// Diagnóstico del último intento inválido, bajo el campo.
+        /// The last invalid attempt's diagnostic, under the field.
         error: Option<String>,
     },
-    /// Las sumas de un lote, ya calculadas (#311): superficie de LECTURA.
+    /// A batch's checksums, already computed (#311): a READ surface.
     ///
-    /// Dos caras del mismo modal, y por eso no son dos: calcular enseña la
-    /// suma de cada fichero, y comprobar enseña además el veredicto contra lo
-    /// que el fichero de sumas publicaba. La lista es la misma cosa.
+    /// Two faces of the same modal, and that's why they aren't two:
+    /// computing shows each file's checksum, and verifying additionally
+    /// shows the verdict against what the checksum file published. The list
+    /// is the same thing.
     ///
-    /// Confirmar COPIA las líneas al portapapeles en el formato que
-    /// `sha256sum -c` lee; cancelar cierra. No hay nada que aplicar: aquí no
-    /// se muta nada.
+    /// Confirming COPIES the lines to the clipboard in the format
+    /// `sha256sum -c` reads; cancelling closes. There's nothing to apply:
+    /// nothing gets mutated here.
     Checksums {
-        /// Qué se hizo: calcular o comprobar (clave Fluent del título).
+        /// What was done: compute or verify (the title's Fluent key).
         title_key: &'static str,
-        /// Una fila por ruta, en el orden en que se pidieron.
+        /// One row per path, in the order they were requested.
         rows: Vec<ChecksumRow>,
-        /// Primera fila visible: la lista se recorre entera, y sin esto la
-        /// cola de un lote grande no se podría ver.
+        /// First visible row: the whole list is scrollable, and without
+        /// this the tail of a large batch couldn't be seen.
         offset: usize,
     },
-    /// Prompt de la PLANTILLA del renombrado en lote (#310). Texto libre,
-    /// molde [`Modal::AiRenameInstruction`] — y hermano suyo por diseño: los
-    /// dos producen el MISMO plan revisable, y lo único que cambia es quién
-    /// propone los nombres, un modelo o una plantilla que escribe el humano.
+    /// Prompt for the batch rename TEMPLATE (#310). Free text,
+    /// [`Modal::AiRenameInstruction`]'s mold — and its sibling by design:
+    /// both produce the SAME reviewable plan, and the only thing that
+    /// changes is who proposes the names, a model or a template the human
+    /// writes.
     RenameBatchPattern {
-        /// La plantilla tecleada hasta ahora (`[N]`, `[E]`, `[C]`).
+        /// The template typed so far (`[N]`, `[E]`, `[C]`).
         pattern: String,
-        /// Diagnóstico del último intento inválido, bajo el campo.
+        /// The last invalid attempt's diagnostic, under the field.
         error: Option<String>,
     },
-    /// Prompt de instrucción del rename IA (M4-IA). Texto libre, molde
-    /// [`Modal::Mkdir`]: la instrucción CRUDA del usuario, enmascarada al
-    /// pintarla (una instrucción llega por paste con bidi/invisibles tan
-    /// fácil como un nombre).
+    /// AI rename instruction prompt (M4-IA). Free text, [`Modal::Mkdir`]'s
+    /// mold: the user's RAW instruction, masked when painted (an
+    /// instruction arrives via paste with bidi/invisibles just as easily as
+    /// a name).
     AiRenameInstruction {
-        /// Lo tecleado hasta ahora.
+        /// What's been typed so far.
         instruction: String,
-        /// Diagnóstico del último intento fallido, bajo el campo.
+        /// The last failed attempt's diagnostic, under the field.
         error: Option<String>,
     },
-    /// Plan de rename revisable: superficie de DECISIÓN. Confirmar aplica
-    /// (contenido revisado por el humano); Esc/cancel descarta.
+    /// Reviewable rename plan: a DECISION surface. Confirming applies
+    /// (content reviewed by the human); Esc/cancel discards.
     ///
-    /// El nombre dice `Ai` por su origen (M4-IA) y ya no es solo suyo: desde
-    /// #310 lo comparte el lote por PLANTILLA, que produce el mismo plan por
-    /// el mismo camino. Lo que hace segura la operación no es de dónde
-    /// salieron los nombres, así que la revisión es una y no dos.
+    /// The name says `Ai` from its origin (M4-IA) and it's no longer only
+    /// its own: since #310 the TEMPLATE batch shares it, which produces the
+    /// same plan through the same path. What makes the operation safe isn't
+    /// where the names came from, so the review is one, not two.
     AiRenamePlan {
-        /// Dir sobre el que se aplican los renames.
+        /// Dir the renames apply to.
         dir: VPath,
-        /// Parejas from→to del modelo (proto, UTF-8 garantizado).
+        /// from→to pairs from the model (proto, UTF-8 guaranteed).
         entries: Vec<norte_proto::methods::AiRenameEntry>,
-        /// Primera pareja visible de la ventana (audit MAJOR-3): el plan
-        /// ENTERO es revisable por scroll ([`crate::app::App::ai_plan_scroll`]) — sin
-        /// esto, la cola de un plan > [`crate::app::AI_RENAME_PAIR_LIMIT`] se aplicaba
-        /// sin poder verse.
+        /// First visible pair of the window (audit MAJOR-3): the WHOLE plan
+        /// is reviewable by scroll ([`crate::app::App::ai_plan_scroll`]) —
+        /// without this, the tail of a plan bigger than
+        /// [`crate::app::AI_RENAME_PAIR_LIMIT`] got applied without being
+        /// seen.
         offset: usize,
-        /// Hasta dónde ha llegado el lector alguna vez.
+        /// How far the reader has ever gotten.
         ///
-        /// Marca de agua ALTA y no la posición actual: volver arriba no
-        /// des-lee lo que ya se leyó. Sin esto se podía aprobar un plan de
-        /// doscientos renombrados habiendo visto los diez primeros, y los que
-        /// importan pueden estar en la fila ciento ochenta. La ventana lo
-        /// exigía y el terminal no: la misma pregunta con dos respuestas, en
-        /// la superficie donde más caro sale (ADR 0077).
+        /// A HIGH watermark and not the current position: scrolling back up
+        /// doesn't un-read what was already read. Without this, a
+        /// two-hundred-rename plan could be approved having seen the first
+        /// ten, and the ones that matter could be at row one hundred eighty.
+        /// The window demanded it and the terminal didn't: the same
+        /// question with two answers, on the surface where it costs the
+        /// most (ADR 0077).
         seen: usize,
-        /// El plan del LOTE que contestó `fs.rename_batch_plan` (spec §17,
-        /// ADR 0042): veredictos, si es aplicable y el `plan_hash` que hay
-        /// que devolver para ejecutar EXACTAMENTE lo que se enseñó.
+        /// The BATCH plan that `fs.rename_batch_plan` answered (§17,
+        /// ADR 0042): verdicts, whether it's applicable and the `plan_hash`
+        /// that has to be returned to run EXACTLY what was shown.
         ///
-        /// Nace [`norte_frontend::BatchPlan::Pending`] —el modal abre y se
-        /// rellena cuando el core contesta— y sin un plan APLICABLE
-        /// confirmar está DESHABILITADO ([`crate::app::dialog_action`]): no hay hash
-        /// aprobado que mandar.
+        /// Born [`norte_frontend::BatchPlan::Pending`] — the modal opens and
+        /// fills in once the core answers — and with no APPLICABLE plan,
+        /// confirming is DISABLED ([`crate::app::dialog_action`]): there's
+        /// no approved hash to send.
         plan: norte_frontend::BatchPlan,
     },
-    /// Prompt de consulta de la búsqueda semántica (M4-IA-2). Texto libre,
-    /// molde [`Modal::AiRenameInstruction`]: la consulta CRUDA del usuario,
-    /// enmascarada al pintarla (una consulta llega por paste con
-    /// bidi/invisibles tan fácil como una instrucción).
+    /// Semantic search query prompt (M4-IA-2). Free text,
+    /// [`Modal::AiRenameInstruction`]'s mold: the user's RAW query, masked
+    /// when painted (a query arrives via paste with bidi/invisibles just as
+    /// easily as an instruction).
     SemanticQuery {
-        /// Lo tecleado hasta ahora.
+        /// What's been typed so far.
         query: String,
-        /// Diagnóstico del último intento fallido, bajo el campo.
+        /// The last failed attempt's diagnostic, under the field.
         error: Option<String>,
     },
-    /// Hits de la búsqueda semántica (M4-IA-2): superficie de DECISIÓN con
-    /// cursor. Confirmar NAVEGA al hit bajo el cursor (cd al padre +
-    /// re-anclado, molde `on_search_enter`); Esc/cancel cierra.
+    /// Semantic search hits (M4-IA-2): a DECISION surface with a cursor.
+    /// Confirming NAVIGATES to the hit under the cursor (cd to the parent +
+    /// re-anchor, `on_search_enter`'s mold); Esc/cancel closes.
     SemanticHits {
-        /// Hits del índice, mejor primero (proto, score siempre finito).
+        /// Index hits, best first (proto, score always finite).
         hits: Vec<norte_proto::methods::SemanticHit>,
-        /// Primer hit visible de la ventana (sigue al cursor).
+        /// First visible hit of the window (follows the cursor).
         offset: usize,
-        /// Hit resaltado — el que Enter abre.
+        /// Highlighted hit — the one Enter opens.
         cursor: usize,
     },
 }
 
-/// Tope de caracteres de un campo de TEXTO de esta pantalla: el patrón de
-/// [`Modal::MarkPattern`], un nombre, una instrucción, una plantilla.
+/// This screen's character cap for a TEXT field:
+/// [`Modal::MarkPattern`]'s pattern, a name, an instruction, a template.
 ///
-/// En `chars()`, no bytes — igual criterio que
-/// [`crate::app::DETAIL_MAX_CHARS`], un carácter multibyte cuenta una vez.
+/// In `chars()`, not bytes — same criterion as
+/// [`crate::app::DETAIL_MAX_CHARS`], a multibyte character counts once.
 ///
-/// Se llamaba `TEXT_FIELD_MAX_CHARS` porque nació con el patrón de marcado
-/// (#103), y para cuando lo compartían nueve modales el nombre decía de dónde
-/// venía en vez de qué mide (#121).
+/// Used to be called `TEXT_FIELD_MAX_CHARS` because it was born with the
+/// mark pattern (#103), and by the time nine modals shared it the name said
+/// where it came from instead of what it measures (#121).
 pub const TEXT_FIELD_MAX_CHARS: usize = 256;
 
-/// El tope de una contraseña es el mismo, y ahora se COMPRUEBA (#327).
+/// A password's cap is the same one, and now it's CHECKED (#327).
 ///
-/// Desde que `TypedSecret` vive en el crate compartido son dos constantes en
-/// dos crates, y su rustdoc afirma que valen lo mismo. Una afirmación así, sin
-/// nada que la ate, dura hasta que alguien mueve una: entonces el campo de
-/// contraseña de la TUI frena a una longitud y el de la ventana a otra, y
-/// ninguna prueba lo dice.
+/// Since `TypedSecret` lives in the shared crate these are two constants in
+/// two crates, and their rustdoc claims they're equal. A claim like that,
+/// with nothing tying it down, lasts until someone moves one: then the
+/// TUI's password field stops at one length and the window's at another,
+/// and no test says so.
 const _: () = assert!(
     TEXT_FIELD_MAX_CHARS == norte_frontend::secret::SECRET_MAX_CHARS,
-    "el tope de un campo de texto y el de una contraseña se separaron"
+    "a text field's cap and a password's drifted apart"
 );
 
-/// Borra el último CARÁCTER de un texto en forma WIRE.
+/// Erases the last CHARACTER of a WIRE-form text.
 ///
-/// Un carácter puede ser hasta cuatro bytes y cada byte no ASCII viaja como
-/// `%XX`, así que «borrar un carácter» son entre uno y doce caracteres del
-/// texto. Se quitan los escapes de continuación (`%80`–`%BF`) y luego el de
-/// cabeza; lo que no es un escape se borra como siempre.
+/// A character can be up to four bytes and each non-ASCII byte travels as
+/// `%XX`, so "erase one character" is between one and twelve text
+/// characters. Continuation escapes (`%80`–`%BF`) get removed first and
+/// then the leading one; whatever isn't an escape gets erased as usual.
 pub(crate) fn pop_wire_char(s: &mut String) {
-    /// El byte de un `%XX` al final, si lo hay.
+    /// The byte of a trailing `%XX`, if there is one.
     fn escape_final(s: &str) -> Option<u8> {
         let tail = s.get(s.len().checked_sub(3)?..)?;
         let rest = tail.strip_prefix('%')?;
         u8::from_str_radix(rest, 16).ok().filter(|_| {
-            // `from_str_radix` acepta `+7f` y espacios; aquí solo hex.
+            // `from_str_radix` accepts `+7f` and spaces; only hex here.
             rest.len() == 2 && rest.bytes().all(|b| b.is_ascii_hexdigit())
         })
     }
 
-    // Un carácter UTF-8 son como mucho cuatro bytes: tres continuaciones.
+    // A UTF-8 character is at most four bytes: three continuations.
     for _ in 0..3 {
         match escape_final(s) {
             Some(b) if (0x80..=0xBF).contains(&b) => {
@@ -717,56 +734,56 @@ pub(crate) fn pop_wire_char(s: &mut String) {
             }
         }
     }
-    // Solo continuaciones: la de cabeza, si está, se va con ellas.
+    // Only continuations: the leading one, if present, goes with them.
     if escape_final(s).is_some() {
         s.truncate(s.len() - 3);
     }
 }
 
-/// Tope de caracteres del destino de [`Modal::TransferDest`].
+/// Character cap for [`Modal::TransferDest`]'s destination.
 ///
-/// APARTE de [`TEXT_FIELD_MAX_CHARS`] y mucho mayor, porque lo que se mide
-/// aquí NO es un patrón sino una dirección en forma WIRE, que va
-/// porcentualmente codificada: un byte inválido cuesta tres caracteres, así
-/// que la fixture `name_max_255_invalid_tail` ocupa 765 en UN solo segmento y
-/// un directorio hondo pasa de 256 él solo. Con el tope de los patrones, el
-/// prompt podía ABRIR ya por encima del límite y entonces cada tecla era un
-/// no-op mudo (#246 M3).
+/// SEPARATE from [`TEXT_FIELD_MAX_CHARS`] and much larger, because what's
+/// measured here is NOT a pattern but an address in WIRE form, which is
+/// percent-encoded: an invalid byte costs three characters, so the
+/// `name_max_255_invalid_tail` fixture takes up 765 in a SINGLE segment and
+/// a deep directory alone goes past 256. With the patterns' cap, the prompt
+/// could OPEN already over the limit and then every key was a silent no-op
+/// (#246 M3).
 pub const TRANSFER_DEST_MAX_CHARS: usize = 8192;
 
-/// S2 (`[ui] confirm_quit`): si el brazo de despacho de `app.quit` debe abrir
-/// [`Modal::ConfirmQuit`] en vez de cerrar de inmediato. Pura — el run loop
-/// aporta `board_has_active` ([`crate::tasks::TaskBoard::has_active`]), así
-/// que es testeable sin ratatui/tokio. `Auto` (por defecto) es el
-/// comportamiento pre-S2: confirma solo si el panel de tasks tiene trabajo en
-/// vuelo; `Always`/`Never` son incondicionales. Envoltorio fino (revisión S,
-/// M6): la decisión de tres vías era byte-idéntica a la de la GUI
-/// (`confirm_quit_should_open`) — hoisteada a
+/// S2 (`[ui] confirm_quit`): whether `app.quit`'s dispatch arm must open
+/// [`Modal::ConfirmQuit`] instead of closing right away. Pure — the run loop
+/// supplies `board_has_active`
+/// ([`crate::tasks::TaskBoard::has_active`]), so it's testable without
+/// ratatui/tokio. `Auto` (default) is pre-S2 behavior: it confirms only if
+/// the task panel has work in flight; `Always`/`Never` are unconditional.
+/// Thin wrapper (S review, M6): the three-way decision was byte-identical
+/// to the GUI's (`confirm_quit_should_open`) — hoisted to
 /// [`norte_frontend::settings::quit_needs_confirm`].
 #[must_use]
 pub fn quit_needs_confirm(mode: crate::config::ConfirmQuit, board_has_active: bool) -> bool {
     norte_frontend::settings::quit_needs_confirm(mode, board_has_active)
 }
 
-/// Resultado de una tecla sobre un modal.
+/// Result of a key over a modal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DialogOutcome {
-    /// Tecla irrelevante: el diálogo sigue abierto.
+    /// Irrelevant key: the dialog stays open.
     Open,
-    /// Cerrado sin hacer nada.
+    /// Closed without doing anything.
     Cancelled,
-    /// Confirmado (Enter/y).
+    /// Confirmed (Enter/y).
     Confirmed,
-    /// Reintentar la transferencia con esta política.
+    /// Retry the transfer with this policy.
     Retry(norte_proto::CollisionPolicy),
 }
 
-/// Cuál de los diez prompts de texto libre está abierto.
+/// Which of the ten free-text prompts is open.
 ///
-/// Los métodos con nombre propio (`mkdir_push`, `pack_set_error`…) siguen
-/// existiendo porque son lo que nombran las tablas de despacho; lo que
-/// comparten es UNA implementación, y esta es la etiqueta con la que cada
-/// uno dice de qué prompt habla.
+/// The methods with their own names (`mkdir_push`, `pack_set_error`…) keep
+/// existing because they're what the dispatch tables name; what they share
+/// is ONE implementation, and this is the label each one uses to say which
+/// prompt it's about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PromptKind {
     /// [`Modal::MarkPattern`].
@@ -797,31 +814,31 @@ pub enum PromptKind {
     Semantic,
 }
 
-/// Qué hace un prompt cuando lo tecleado llega al tope.
+/// What a prompt does when what's typed hits the cap.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OverLimit {
-    /// Frena y calla: el campo se ve lleno y el usuario lo ve.
+    /// Stops and stays quiet: the field looks full and the user sees it.
     Silent,
-    /// Lo DICE (`modal-command-line-too-long`): en un prompt que puede ABRIR
-    /// ya largo —una dirección wire, una línea de comandos— frenar en mudo
-    /// convierte cada tecla en un no-op sin explicación (#246 M3).
+    /// SAYS SO (`modal-command-line-too-long`): in a prompt that can OPEN
+    /// already long — a wire address, a command line — stopping silently
+    /// turns every key into an unexplained no-op (#246 M3).
     Say,
 }
 
-/// Qué borra el retroceso.
+/// What backspace erases.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PopMode {
-    /// Un carácter del texto.
+    /// One character of the text.
     Char,
-    /// Un carácter del NOMBRE, escape porcentual entero incluido
+    /// One character of the NAME, whole percent escape included
     /// ([`pop_wire_char`]).
     WireChar,
 }
 
-/// El campo de texto de un prompt abierto, con la política que lo gobierna.
+/// An open prompt's text field, with the policy governing it.
 ///
-/// Se pide a [`Modal::text_prompt`] y se consume en una operación: es un
-/// préstamo mutable del modal, no un estado que se guarde.
+/// Requested from [`Modal::text_prompt`] and consumed in one operation: it's
+/// a mutable borrow of the modal, not state that gets saved.
 pub struct TextPrompt<'a> {
     text: &'a mut String,
     error: &'a mut Option<String>,
@@ -832,19 +849,20 @@ pub struct TextPrompt<'a> {
 }
 
 impl TextPrompt<'_> {
-    /// Lo tecleado hasta ahora.
+    /// What's been typed so far.
     #[must_use]
     pub fn text(&self) -> &str {
         self.text
     }
 
-    /// El diagnóstico que se pinta bajo el campo, si lo hay.
+    /// The diagnostic painted under the field, if there is one.
     #[must_use]
     pub fn error(&self) -> Option<&str> {
         self.error.as_deref()
     }
 
-    /// Añade un carácter. En el tope, frena — y lo dice o no según el prompt.
+    /// Adds a character. At the cap, it stops — and says so or not depending
+    /// on the prompt.
     pub fn push(self, c: char) {
         if self.text.chars().count() >= self.limit {
             if self.over_limit == OverLimit::Say {
@@ -862,40 +880,42 @@ impl TextPrompt<'_> {
         *self.error = None;
     }
 
-    /// Borra hacia atrás.
+    /// Erases backward.
     ///
-    /// El diagnóstico se va aunque no haya nada que borrar: quien pulsa
-    /// retroceso está corrigiendo, y el aviso del intento anterior ya no
-    /// describe lo que hay. El `touched` del nombre editable NO: ese solo se
-    /// fija si de verdad borró algo (#105 review MINOR-5, un pop vacío no
-    /// debe estrechar la vía de los bytes originales).
+    /// The diagnostic goes away even if there's nothing to erase: whoever
+    /// presses backspace is correcting, and the previous attempt's warning
+    /// no longer describes what's there. The editable name's `touched`
+    /// does NOT: that only gets set if it actually erased something (#105
+    /// review MINOR-5, an empty pop must not narrow the original bytes'
+    /// path).
     pub fn pop(self) {
-        let borro = match self.pop {
+        let erased = match self.pop {
             PopMode::Char => self.text.pop().is_some(),
             PopMode::WireChar => {
-                let antes = self.text.len();
+                let before_len = self.text.len();
                 pop_wire_char(self.text);
-                self.text.len() != antes
+                self.text.len() != before_len
             }
         };
-        if borro && let Some(touched) = self.touched {
+        if erased && let Some(touched) = self.touched {
             *touched = true;
         }
         *self.error = None;
     }
 
-    /// Deja el diagnóstico y CONSERVA lo tecleado: un submit que falla se
-    /// corrige y se reintenta, no se vuelve a escribir.
+    /// Leaves the diagnostic and KEEPS what's typed: a submit that fails
+    /// gets corrected and retried, not rewritten from scratch.
     pub fn set_error(self, msg: String) {
         *self.error = Some(msg);
     }
 }
 
 impl Modal {
-    /// Qué prompt de texto libre es este modal, o `None` si es de DECISIÓN.
+    /// Which free-text prompt this modal is, or `None` if it's a DECISION
+    /// one.
     ///
-    /// La frontera importa: un modal de decisión jamás se cierra por la vía
-    /// de los prompts (`cancel_*`), tiene que denegar por `on_dialog_key`.
+    /// The boundary matters: a decision modal never closes through the
+    /// prompts' path (`cancel_*`), it has to be denied by `on_dialog_key`.
     #[must_use]
     pub const fn prompt_kind(&self) -> Option<PromptKind> {
         Some(match self {
@@ -916,16 +936,16 @@ impl Modal {
         })
     }
 
-    /// El campo de texto de este modal y su política, o `None` si no es un
+    /// This modal's text field and its policy, or `None` if it isn't a
     /// prompt.
     ///
-    /// Aquí está, en un solo sitio, TODO lo que distingue a los diez: cómo
-    /// se llama el campo, cuánto admite, si el tope se dice, qué borra el
-    /// retroceso y si hay un `touched` que fijar.
+    /// Here, in one place, is EVERYTHING that tells the ten apart: what the
+    /// field is called, how much it accepts, whether the cap gets stated,
+    /// what backspace erases and whether there's a `touched` to set.
     pub fn text_prompt(&mut self) -> Option<TextPrompt<'_>> {
         let (text, error, touched, limit, over_limit, pop) = match self {
-            // La plantilla del lote comparte molde con el patrón de marcado:
-            // texto libre, mismo tope y mismo borrado.
+            // The batch template shares its mold with the mark pattern:
+            // free text, same cap and same erasing.
             Self::MarkPattern { pattern, error, .. }
             | Self::RenameBatchPattern { pattern, error } => (
                 pattern,
@@ -975,8 +995,9 @@ impl Modal {
                 OverLimit::Silent,
                 PopMode::Char,
             ),
-            // #314: cuatro dígitos octales y ni uno más. El tope frena y
-            // calla, que es lo que un campo lleno ya dice por sí solo.
+            // #314: four octal digits and not one more. The cap stops and
+            // stays quiet, which is what a full field already says on its
+            // own.
             Self::Chmod { mode, error, .. } => (
                 mode,
                 error,
@@ -1022,12 +1043,12 @@ impl Modal {
     }
 }
 
-/// Tope de caracteres del tamaño de trozo de [`Modal::Split`]: corto a
-/// propósito, porque lo que cabe ahí es `700M`, no una frase.
+/// Character cap for [`Modal::Split`]'s chunk size: short on purpose,
+/// because what fits there is `700M`, not a sentence.
 pub const SPLIT_SIZE_MAX_CHARS: usize = 32;
 
-/// Tope del campo de [`Modal::Chmod`] (#314): cuatro dígitos octales — los
-/// tres de siempre más el de setuid/setgid/sticky.
+/// Cap for [`Modal::Chmod`]'s field (#314): four octal digits — the usual
+/// three plus setuid/setgid/sticky's.
 pub const CHMOD_MAX_CHARS: usize = 4;
 
 #[cfg(test)]
@@ -1058,7 +1079,7 @@ mod tests {
         }
     }
 
-    fn los_diez() -> Vec<(PromptKind, Modal)> {
+    fn all_ten() -> Vec<(PromptKind, Modal)> {
         vec![
             (PromptKind::MarkPattern, mark_pattern()),
             (PromptKind::TransferName, transfer_name()),
@@ -1102,7 +1123,7 @@ mod tests {
             (
                 PromptKind::EditNew,
                 Modal::EditNew {
-                    dir: VPath::parse("mem:///").unwrap_or_else(|_| unreachable!("wire de test")),
+                    dir: VPath::parse("mem:///").unwrap_or_else(|_| unreachable!("test wire")),
                     name: String::new(),
                     error: None,
                 },
@@ -1131,97 +1152,101 @@ mod tests {
         ]
     }
 
-    /// Los diez prompts de texto se dicen prompts, y teclear llega al campo
-    /// que cada uno llama de otra manera.
+    /// All ten text prompts say they're prompts, and typing reaches the
+    /// field each one calls something different.
     #[test]
-    fn los_diez_prompts_exponen_su_campo() {
-        for (kind, mut m) in los_diez() {
-            assert_eq!(m.prompt_kind(), Some(kind), "{kind:?} no se dice prompt");
-            m.text_prompt().expect("campo de texto").push('x');
-            let tp = m.text_prompt().expect("campo de texto");
-            assert!(tp.text().ends_with('x'), "{kind:?} no recibió la tecla");
+    fn the_ten_prompts_expose_their_field() {
+        for (kind, mut m) in all_ten() {
+            assert_eq!(
+                m.prompt_kind(),
+                Some(kind),
+                "{kind:?} doesn't say it's a prompt"
+            );
+            m.text_prompt().expect("text field").push('x');
+            let tp = m.text_prompt().expect("text field");
+            assert!(tp.text().ends_with('x'), "{kind:?} didn't receive the key");
         }
     }
 
-    /// Un modal de DECISIÓN no tiene campo que teclear.
+    /// A DECISION modal has no field to type into.
     #[test]
-    fn un_modal_de_decision_no_es_prompt() {
+    fn a_decision_modal_is_not_a_prompt() {
         let mut m = Modal::ConfirmQuit;
         assert_eq!(m.prompt_kind(), None);
         assert!(m.text_prompt().is_none());
     }
 
-    /// El tope es por prompt, y el de partir es el corto.
+    /// The cap is per prompt, and the split one's is the short one.
     #[test]
-    fn el_tope_de_partir_para_en_silencio() {
+    fn splits_cap_stops_silently() {
         let mut m = Modal::Split {
             size: "9".repeat(32),
             error: None,
         };
-        m.text_prompt().expect("campo").push('9');
-        let tp = m.text_prompt().expect("campo");
-        assert_eq!(tp.text().chars().count(), 32, "el tope no frenó");
-        assert!(tp.error().is_none(), "el tope de partir es mudo");
+        m.text_prompt().expect("field").push('9');
+        let tp = m.text_prompt().expect("field");
+        assert_eq!(tp.text().chars().count(), 32, "the cap didn't stop it");
+        assert!(tp.error().is_none(), "the split cap is silent");
     }
 
-    /// El de la línea de comandos SÍ lo dice (#246 M3).
+    /// The command line's DOES say so (#246 M3).
     #[test]
-    fn el_tope_de_la_linea_de_comandos_se_dice() {
+    fn the_command_lines_cap_gets_stated() {
         let mut m = Modal::CommandLine {
             command: "x".repeat(TEXT_FIELD_MAX_CHARS),
             error: None,
         };
-        m.text_prompt().expect("campo").push('y');
-        let tp = m.text_prompt().expect("campo");
+        m.text_prompt().expect("field").push('y');
+        let tp = m.text_prompt().expect("field");
         assert_eq!(tp.text().chars().count(), TEXT_FIELD_MAX_CHARS);
-        assert!(tp.error().is_some(), "el tope de la línea se dice");
+        assert!(tp.error().is_some(), "the line's cap gets stated");
     }
 
-    /// El retroceso del destino borra el ESCAPE entero, no un carácter del
-    /// texto wire (#246 M3).
+    /// The destination's backspace erases the WHOLE escape, not one
+    /// character of the wire text (#246 M3).
     #[test]
-    fn el_retroceso_del_destino_borra_un_escape_entero() {
+    fn the_destinations_backspace_erases_a_whole_escape() {
         let mut m = Modal::TransferDest {
             kind: TransferKind::Copy,
             input: String::from("mem:///caf%C3%A9"),
             error: None,
         };
-        m.text_prompt().expect("campo").pop();
-        let tp = m.text_prompt().expect("campo");
+        m.text_prompt().expect("field").pop();
+        let tp = m.text_prompt().expect("field");
         assert_eq!(tp.text(), "mem:///caf");
     }
 
-    /// El nombre editable marca `touched` solo si el retroceso borró algo
+    /// The editable name marks `touched` only if backspace erased something
     /// (#105 review MINOR-5).
     #[test]
-    fn el_nombre_editable_marca_touched_solo_si_borro() {
+    fn the_editable_name_marks_touched_only_if_it_erased() {
         let mut m = transfer_name();
-        m.text_prompt().expect("campo").pop();
+        m.text_prompt().expect("field").pop();
         assert!(
             matches!(m, Modal::TransferName { touched: true, .. }),
-            "un pop que borra fija touched"
+            "a pop that erases sets touched"
         );
 
-        let mut vacio = transfer_name();
-        if let Modal::TransferName { name, touched, .. } = &mut vacio {
+        let mut empty = transfer_name();
+        if let Modal::TransferName { name, touched, .. } = &mut empty {
             name.clear();
             *touched = false;
         }
-        vacio.text_prompt().expect("campo").pop();
+        empty.text_prompt().expect("field").pop();
         assert!(
-            matches!(vacio, Modal::TransferName { touched: false, .. }),
-            "un pop vacío no estrecha la vía de bytes originales"
+            matches!(empty, Modal::TransferName { touched: false, .. }),
+            "an empty pop doesn't narrow the original bytes' path"
         );
     }
 
-    /// El retroceso limpia el diagnóstico aunque no borre nada.
+    /// Backspace clears the diagnostic even if it erases nothing.
     #[test]
-    fn el_retroceso_en_vacio_limpia_el_diagnostico() {
+    fn backspace_on_empty_clears_the_diagnostic() {
         let mut m = Modal::Mkdir {
             name: String::new(),
-            error: Some(String::from("ya existe")),
+            error: Some(String::from("already exists")),
         };
-        m.text_prompt().expect("campo").pop();
-        assert!(m.text_prompt().expect("campo").error().is_none());
+        m.text_prompt().expect("field").pop();
+        assert!(m.text_prompt().expect("field").error().is_none());
     }
 }

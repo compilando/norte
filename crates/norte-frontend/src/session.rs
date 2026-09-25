@@ -1,14 +1,14 @@
-//! El CUERPO de la sesión de UI (L2): lo que el core guarda y no lee.
+//! The BODY of the UI session (L2): what the core stores and does not read.
 //!
-//! El core almacena un documento opaco —`version`, `revision`, `body`— porque
-//! [`Node`], [`SortSpec`] y [`ColumnId`] viven AQUÍ, y este crate depende de
-//! `norte-proto` y no al revés (ADR 0058). Este módulo es la otra mitad: el
-//! esquema de ese cuerpo, su versión, y los topes que impiden que una pantalla
-//! guardada crezca sin fin.
+//! The core stores an opaque document — `version`, `revision`, `body` —
+//! because [`Node`], [`SortSpec`] and [`ColumnId`] live HERE, and this crate
+//! depends on `norte-proto` and not the other way around (ADR 0058). This
+//! module is the other half: that body's schema, its version, and the caps
+//! that keep a saved screen from growing without end.
 //!
-//! **Los topes son del cliente**, y están en el tipo y no en el llamante: un
-//! tope que se descubre después es una migración, y uno que cada llamante
-//! recorta a su manera es tres topes distintos.
+//! **The caps are the client's**, and they live in the type, not in the
+//! caller: a cap discovered later is a migration, and one that each caller
+//! trims its own way is three different caps.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -19,245 +19,249 @@ use crate::columns::ColumnId;
 use crate::layout::{Node, SlotId};
 use crate::sort::SortSpec;
 
-/// Esquema del cuerpo. Lo posee este crate, no el wire: añadir un campo a
-/// [`SlotState`] es subir ESTE número, no la versión del protocolo.
+/// The body's schema. Owned by this crate, not by the wire: adding a field to
+/// [`SlotState`] bumps THIS number, not the protocol's version.
 pub const SCHEMA_VERSION: u32 = 2;
 
-/// Entradas de historial por hueco y por sentido.
+/// History entries per slot and per direction.
 pub const HISTORY_CAP: usize = 64;
 
-/// Huecos huérfanos —los que ningún layout menciona— que se guardan.
+/// Orphan slots — the ones no layout mentions — that get saved.
 pub const ORPHAN_CAP: usize = 128;
 
-/// Entradas de historial que conserva un hueco HUÉRFANO, por sentido.
+/// History entries an ORPHAN slot keeps, per direction.
 ///
-/// Un hueco que ninguna disposición menciona no está en pantalla: nadie puede
-/// pulsar «atrás» dentro de él sin volver a abrirlo antes, y volver a abrirlo
-/// es empezar a andar de nuevo. Los 64 pasos de [`HISTORY_CAP`] son para el
-/// hueco que se ve.
+/// A slot no layout mentions is not on screen: nobody can press "back"
+/// inside it without reopening it first, and reopening it is starting to
+/// walk again. [`HISTORY_CAP`]'s 64 steps are for the slot that is visible.
 ///
-/// El número sale de una ARITMÉTICA, no del gusto (#304): [`ORPHAN_CAP`] es
-/// 128 y un hueco con el historial lleno mide ~9 240 bytes con rutas de este
-/// repositorio, así que 128 huérfanos por sí solos daban ~1 182 000 contra los
-/// 1 048 576 de [`norte_proto::methods::SESSION_BODY_MAX`] — un cuerpo que el
-/// core REHÚSA, dejando la sesión como estaba. `prune` recorta contra cuentas
-/// y el tope real es de bytes; bajar el historial del que nadie mira es lo que
-/// devuelve el sentido al tope por cuenta.
-/// `el_tope_de_huerfanos_lleno_tambien_cabe_en_el_sobre` mide las dos cotas a
-/// la vez; si se pone rojo, la cura es BAJAR este número.
+/// The number comes from ARITHMETIC, not taste (#304): [`ORPHAN_CAP`] is 128
+/// and a slot with a full history measures ~9,240 bytes with this
+/// repository's paths, so 128 orphans on their own gave ~1,182,000 against
+/// [`norte_proto::methods::SESSION_BODY_MAX`]'s 1,048,576 — a body the core
+/// REFUSES, leaving the session as it was. `prune` trims against counts and
+/// the real cap is in bytes; lowering the history nobody is looking at is
+/// what gives the count cap back its meaning.
+/// `the_orphan_cap_full_also_fits_in_the_envelope` measures both bounds at
+/// once; if it goes red, the fix is LOWERING this number.
 pub const ORPHAN_HISTORY_CAP: usize = 8;
 
-/// Cuántos PERFILES conservan estado a la vez (spec 2026-08-26, D6).
+/// How many PROFILES keep state at once (spec 2026-08-26, D6).
 ///
-/// El número sale de una MEDIDA, no del gusto:
-/// `un_cuerpo_realista_con_el_tope_lleno_cabe_en_el_sobre` serializa cuatro
-/// perfiles de ocho huecos con el historial lleno en los dos sentidos y rutas
-/// de este repositorio, y da **295 567 bytes** contra los 1 048 576 de
-/// [`norte_proto::methods::SESSION_BODY_MAX`] — 28 % del sobre, con sitio para
-/// que las rutas de otro sean bastante más largas que las de aquí. Si ese test
-/// se pone rojo, la cura es BAJAR este número: el core rehúsa un `put` que se
-/// pase y deja la sesión como estaba, así que pasarse es perder lo que estabas
-/// haciendo.
+/// The number comes from a MEASUREMENT, not taste:
+/// `a_realistic_body_with_the_cap_full_fits_in_the_envelope` serializes four
+/// profiles of eight slots with the history full in both directions and this
+/// repository's paths, and gives **295,567 bytes** against
+/// [`norte_proto::methods::SESSION_BODY_MAX`]'s 1,048,576 — 28% of the
+/// envelope, with room for someone else's paths to be quite a bit longer
+/// than these. If that test goes red, the fix is LOWERING this number: the
+/// core refuses a `put` that goes over and leaves the session as it was, so
+/// going over means losing what you were doing.
 ///
-/// Pasado el tope se va el estado del perfil que hace más que nadie activa,
-/// ENTERO. Su directorio de configuración no se toca: el perfil sigue
-/// existiendo y su próximo arranque sale de `[profile.start]`.
+/// Past the cap, the state of the profile that has been activated least
+/// recently goes, WHOLE. Its config directory is not touched: the profile
+/// keeps existing and its next start comes from `[profile.start]`.
 pub const PROFILE_STATE_CAP: usize = 4;
 
-/// Sufijo de la clave de `layouts` bajo la que la VENTANA guarda su
-/// disposición (ADR 0139): `default@window`, `<perfil>@window`.
+/// Suffix of the `layouts` key under which the WINDOW saves its layout (ADR
+/// 0139): `default@window`, `<profile>@window`.
 ///
-/// La terminal y la ventana recuerdan cada una la suya —tamaños y
-/// posiciones de los paneles—, porque compartirla hacía que la última en
-/// escribir pisara lo que la otra había ajustado. La clave de la terminal
-/// sigue siendo el nombre del perfil a secas.
+/// The terminal and the window each remember their own — pane sizes and
+/// positions — because sharing it meant the last one to write stomped on
+/// what the other had adjusted. The terminal's key stays just the profile's
+/// name.
 pub const WINDOW_LAYOUT_SUFFIX: &str = "@window";
 
-/// La clave de la ventana para el perfil de clave `perfil`.
+/// The window's key for the profile keyed `profile`.
 #[must_use]
-pub fn window_layout_key(perfil: &str) -> String {
-    format!("{perfil}{WINDOW_LAYOUT_SUFFIX}")
+pub fn window_layout_key(profile: &str) -> String {
+    format!("{profile}{WINDOW_LAYOUT_SUFFIX}")
 }
 
-/// El perfil al que pertenece una clave de `layouts`: la de la ventana
-/// cuenta como la de su perfil para podar, y se poda con él.
-fn perfil_de(clave: &str) -> &str {
-    clave.strip_suffix(WINDOW_LAYOUT_SUFFIX).unwrap_or(clave)
+/// The profile a `layouts` key belongs to: the window's counts as its
+/// profile's for pruning, and is pruned with it.
+fn profile_of(key: &str) -> &str {
+    key.strip_suffix(WINDOW_LAYOUT_SUFFIX).unwrap_or(key)
 }
 
-/// Edad a la que un huérfano se barre: treinta días en milisegundos.
+/// Age at which an orphan gets swept: thirty days in milliseconds.
 pub const MAX_AGE_MS: u64 = 30 * 24 * 60 * 60 * 1000;
 
-/// Por qué un cuerpo no se pudo leer.
+/// Why a body could not be read.
 #[derive(Debug, thiserror::Error)]
 pub enum SessionError {
-    /// El cuerpo lo escribió un binario más nuevo. Se rehúsa entero: mejor
-    /// arrancar de la configuración que interpretar campos que no son tuyos.
-    #[error("la sesión es de la versión {version} y esta sabe {SCHEMA_VERSION}")]
+    /// The body was written by a newer binary. Refused whole: better to
+    /// start from the configuration than to interpret fields that are not
+    /// yours.
+    #[error("the session is version {version} and this one knows {SCHEMA_VERSION}")]
     FromTheFuture {
-        /// La versión que traía.
+        /// The version it carried.
         version: u32,
     },
-    /// No encaja con el esquema. El mensaje NO cita el contenido: un cuerpo de
-    /// sesión lleva rutas, y una ruta no va a un log por un error de parseo.
-    #[error("la sesión no encaja con el esquema ({reason})")]
+    /// Does not fit the schema. The message does NOT quote the content: a
+    /// session body carries paths, and a path does not go to a log over a
+    /// parse error.
+    #[error("the session does not fit the schema ({reason})")]
     Malformed {
-        /// Categoría y posición, nunca el valor que no encajó.
+        /// Category and position, never the value that did not fit.
         reason: String,
     },
-    /// El cuerpo parsea, pero una de sus disposiciones no se puede usar.
+    /// The body parses, but one of its layouts cannot be used.
     ///
-    /// Va aparte de [`Self::Malformed`] porque la causa es otra y la cura
-    /// también: aquí el JSON estaba bien y lo que no vale es el árbol, así
-    /// que quien lo escribió fue una versión de norte, no un editor de texto.
-    #[error("la sesión trae una disposición inválida: {reason}")]
+    /// Kept apart from [`Self::Malformed`] because the cause is different and
+    /// so is the fix: here the JSON was fine and what is invalid is the
+    /// tree, so whoever wrote it was a version of norte, not a text editor.
+    #[error("the session carries an invalid layout: {reason}")]
     BadLayout {
-        /// Qué le pasa al árbol. Nunca el contenido de un hueco.
+        /// What is wrong with the tree. Never a slot's content.
         reason: String,
     },
 }
 
-/// El estado de UN hueco: dónde está, cómo mira y por dónde ha pasado.
+/// The state of ONE slot: where it is, how it looks and where it has been.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SlotState {
-    /// Dónde está el hueco. `VPath` y jamás `String`: es el único campo de
-    /// esta struct que no es un número ni un enum, y tiparlo como texto
-    /// perdería un nombre que no es UTF-8 sin que ningún test lo notara
-    /// (regla 1).
+    /// Where the slot is. `VPath`, never `String`: it is the only field of
+    /// this struct that is neither a number nor an enum, and typing it as
+    /// text would lose a non-UTF-8 name without any test noticing (rule 1).
     pub path: VPath,
-    /// Fila del cursor dentro del listado.
+    /// Cursor row within the listing.
     #[serde(default)]
     pub cursor: u64,
-    /// Historial hacia atrás, del más viejo al más reciente.
+    /// Backward history, oldest to most recent.
     #[serde(default)]
     pub back: Vec<VPath>,
-    /// Historial hacia delante, del más viejo al más reciente.
+    /// Forward history, oldest to most recent.
     #[serde(default)]
     pub forward: Vec<VPath>,
-    /// El punto de salto del hueco (`nav.set-jump-point`, spec 2026-09-15
-    /// D5). Aditivo: un cuerpo viejo lo lee vacío y no sube
+    /// The slot's jump point (`nav.set-jump-point`, spec 2026-09-15 D5).
+    /// Additive: an old body reads it empty and does not bump
     /// [`SCHEMA_VERSION`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub jump: Option<VPath>,
-    /// Orden del listado.
+    /// Listing order.
     #[serde(default, deserialize_with = "orden::deserialize")]
     pub sort: SortSpec,
-    /// Columnas visibles, en su forma string estable (`name`, `attr:…`,
-    /// `plugin:…/…`): la MISMA que la configuración, y no un segundo
-    /// vocabulario que mantener.
+    /// Visible columns, in their stable string form (`name`, `attr:…`,
+    /// `plugin:…/…`): the SAME as the configuration, and not a second
+    /// vocabulary to maintain.
     ///
-    /// **Hoy viaja SIEMPRE vacío desde la TUI (#236)**, donde las columnas
-    /// visibles son configuración por scheme y no estado por hueco. El campo
-    /// existe porque un frontend que sí las tenga por hueco lo necesita, y
-    /// porque quitarlo después costaría subir [`SCHEMA_VERSION`]; quien lo
-    /// llene tiene que llenarlo en la captura, no aquí.
-    #[serde(default, with = "columnas")]
+    /// **Today it ALWAYS travels empty from the TUI (#236)**, where visible
+    /// columns are per-scheme configuration and not per-slot state. The
+    /// field exists because a frontend that does have them per slot needs
+    /// it, and because removing it later would cost bumping
+    /// [`SCHEMA_VERSION`]; whoever fills it has to fill it at capture time,
+    /// not here.
+    #[serde(default, with = "columns")]
     pub columns: Vec<ColumnId>,
-    /// Si se ven los ocultos.
+    /// Whether hidden entries are shown.
     #[serde(default)]
     pub show_hidden: bool,
-    /// Cuándo se tocó por última vez (epoch ms). Lo escribe el cliente, como
-    /// todos los topes: la barrida por edad necesita un reloj por el que
-    /// barrer, y el core no lee este documento.
+    /// Last touched (epoch ms). Written by the client, like every cap: the
+    /// sweep by age needs a clock to sweep against, and the core does not
+    /// read this document.
     #[serde(default)]
     pub touched_ms: u64,
-    /// Lo MARCADO en este hueco, a lo sumo [`MARKS_CAP`] (fase 9).
+    /// What is MARKED in this slot, up to [`MARKS_CAP`] (phase 9).
     ///
-    /// Las marcas son lo único de la pantalla que no sobrevivía a un relevo
-    /// entre frontends, y es justo lo que más caro cuesta rehacer: recuperar
-    /// un directorio y un cursor es un `cd`; recuperar cuarenta ficheros
-    /// señalados a mano es volver a señalarlos.
+    /// Marks are the only thing on screen that did not use to survive a
+    /// handoff between frontends, and it is exactly the most expensive thing
+    /// to redo: recovering a directory and a cursor is one `cd`; recovering
+    /// forty hand-marked files is marking them all over again.
     ///
-    /// **Son `VPath`, o sea la IDENTIDAD de la fila, y jamás su índice.** Una
-    /// lista que se reordena o que pierde una vecina por encima deja un índice
-    /// apuntando a otro fichero, y lo que se restauraría sería una selección
-    /// que nadie hizo — sobre la que después se pulsa borrar. Es la misma
-    /// razón por la que las marcas vivas se guardan por ruta.
+    /// **They are `VPath`, i.e. the row's IDENTITY, never its index.** A
+    /// list that gets reordered or loses a neighbor above leaves an index
+    /// pointing at another file, and what would be restored is a selection
+    /// nobody made — on which delete then gets pressed. It is the same
+    /// reason live marks are saved by path.
     ///
-    /// Aditivo: un cuerpo viejo lo lee vacío y no sube [`SCHEMA_VERSION`],
-    /// igual que `jump` o `palette_recent`. Y se omite si está vacío, que es
-    /// lo normal: un hueco sin marcas produce los MISMOS bytes que antes.
+    /// Additive: an old body reads it empty and does not bump
+    /// [`SCHEMA_VERSION`], same as `jump` or `palette_recent`. And it is
+    /// omitted when empty, which is the normal case: a slot with no marks
+    /// produces the SAME bytes as before.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub marks: Vec<VPath>,
 }
 
-/// La pantalla guardada: las disposiciones por nombre y el estado por hueco.
+/// The saved screen: layouts by name and state by slot.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionBody {
-    /// El perfil activo. Vacío = ninguno.
+    /// The active profile. Empty = none.
     ///
-    /// Es ESTADO, no configuración: lo que estabas haciendo, no lo que
-    /// decidiste. Por eso vive aquí y no en el `norte.toml` del lector, que
-    /// sigue siendo un fichero que escribió él.
+    /// It is STATE, not configuration: what you were doing, not what you
+    /// decided. That is why it lives here and not in the reader's
+    /// `norte.toml`, which stays a file they wrote themselves.
     ///
-    /// Es `String` y no `OsString` porque es la CLAVE de [`Self::layouts`],
-    /// que es un objeto JSON y por tanto UTF-8 por construcción. Un perfil
-    /// cuyo directorio no sea UTF-8 vale para configuración y no puede llevar
-    /// estado, tampoco pegajoso (spec 2026-08-26, D4).
+    /// It is `String` and not `OsString` because it is the KEY of
+    /// [`Self::layouts`], which is a JSON object and therefore UTF-8 by
+    /// construction. A profile whose directory is not UTF-8 is fine for
+    /// configuration and cannot carry state, sticky either (spec 2026-08-26,
+    /// D4).
     #[serde(default)]
     pub active: String,
-    /// Disposiciones por nombre DE PERFIL. Vacío o `default` es la del lector
-    /// sin perfil; con [`Self::active`] puesto, la clave es ese nombre.
+    /// Layouts by PROFILE name. Empty or `default` is the reader's without a
+    /// profile; with [`Self::active`] set, the key is that name.
     #[serde(default)]
     pub layouts: BTreeMap<String, Node>,
-    /// Estado por hueco, indexado por [`SlotId`].
+    /// State by slot, indexed by [`SlotId`].
     #[serde(default)]
     pub slots: BTreeMap<u32, SlotState>,
-    /// Las últimas claves de despacho lanzadas desde la paleta, la más
-    /// reciente primero, a lo sumo [`PALETTE_RECENT_CAP`] (spec 2026-09-10).
-    /// Es ESTADO, como el perfil activo: lo que hiciste, no lo que
-    /// decidiste. Un campo con `default` es aditivo: un cuerpo viejo lo lee
-    /// vacío y uno nuevo lo escribe; no sube [`SCHEMA_VERSION`].
+    /// The last dispatch keys launched from the palette, most recent first,
+    /// up to [`PALETTE_RECENT_CAP`] (spec 2026-09-10). It is STATE, like the
+    /// active profile: what you did, not what you decided. A field with
+    /// `default` is additive: an old body reads it empty and a new one
+    /// writes it; it does not bump [`SCHEMA_VERSION`].
     #[serde(default)]
     pub palette_recent: Vec<String>,
-    /// Los directorios populares de la sesión entera
-    /// ([`crate::history::Popular`], spec 2026-09-15 D6), en el orden en que
-    /// se guardan. Aditivo como [`Self::palette_recent`].
+    /// The whole session's popular directories
+    /// ([`crate::history::Popular`], spec 2026-09-15 D6), in the order they
+    /// are saved. Additive like [`Self::palette_recent`].
     #[serde(
         default,
         skip_serializing_if = "Vec::is_empty",
-        deserialize_with = "populares::deserialize"
+        deserialize_with = "popular::deserialize"
     )]
     pub popular: Vec<crate::history::PopularEntry>,
 }
 
-/// Los populares se leen ENTRADA A ENTRADA.
+/// Populars are read ENTRY BY ENTRY.
 ///
-/// Una ruta que no parsea —un cuerpo editado a mano— se salta en vez de
-/// rehusar el cuerpo entero, que se llevaría por delante disposiciones y huecos
-/// que no tienen nada que ver. Es una lista de atajos que se rehace andando
-/// (spec 2026-09-15 D6); la ruta de un hueco, en cambio, sigue siendo un error,
-/// porque sin ella el hueco no es nada.
-mod populares {
+/// A path that does not parse — a hand-edited body — is skipped instead of
+/// refusing the whole body, which would take down layouts and slots that
+/// have nothing to do with it. It is a list of shortcuts that gets rebuilt
+/// by walking around (spec 2026-09-15 D6); a slot's path, on the other hand,
+/// is still an error, because without it the slot is nothing.
+mod popular {
     use serde::{Deserialize, Deserializer};
 
     pub(super) fn deserialize<'de, D: Deserializer<'de>>(
         d: D,
     ) -> Result<Vec<crate::history::PopularEntry>, D::Error> {
-        let crudas = Vec::<serde_json::Value>::deserialize(d)?;
-        Ok(crudas
+        let raw = Vec::<serde_json::Value>::deserialize(d)?;
+        Ok(raw
             .into_iter()
             .filter_map(|v| serde_json::from_value(v).ok())
             .collect())
     }
 }
 
-/// Cuántos comandos recientes guarda la paleta. Cinco: los que caben en la
-/// vista sin empujar la lista entera bajo el borde.
+/// How many recent commands the palette keeps. Five: the ones that fit in
+/// view without pushing the whole list under the edge.
 pub const PALETTE_RECENT_CAP: usize = 5;
 
-/// Marcas que conserva un hueco (fase 9, spec 2026-09-15).
+/// Marks a slot keeps (phase 9, spec 2026-09-15).
 ///
-/// El tope vive AQUÍ y no en cada llamante, por lo mismo que los demás: un
-/// documento acotado en cinco sitios está acotado en cuatro. Cuatro mil
-/// noventa y seis rutas de este repositorio rondan los 160 KiB —holgado bajo
-/// el [`norte_proto::methods::SESSION_BODY_MAX`] de 1 MiB— y por encima de esa
-/// cifra lo que hay no es una selección que un humano hizo a mano, sino un
-/// «marcar todo» sobre un directorio enorme, que se rehace con una tecla.
+/// The cap lives HERE and not in each caller, for the same reason as the
+/// others: a document bounded in five places is bounded in four. Four
+/// thousand ninety-six paths from this repository run around 160 KiB —
+/// comfortably under [`norte_proto::methods::SESSION_BODY_MAX`]'s 1 MiB —
+/// and past that figure what there is is not a selection a human made by
+/// hand, but a "mark everything" over a huge directory, which gets redone
+/// with one key.
 pub const MARKS_CAP: usize = 4096;
 
-/// Anota `key` como el comando más reciente de la paleta: lo pone primero,
-/// quita su repetición anterior y recorta a [`PALETTE_RECENT_CAP`].
+/// Notes `key` as the palette's most recent command: puts it first, removes
+/// its earlier repeat and trims to [`PALETTE_RECENT_CAP`].
 pub fn note_palette_recent(recent: &mut Vec<String>, key: &str) {
     recent.retain(|k| k != key);
     recent.insert(0, key.to_owned());
@@ -265,125 +269,125 @@ pub fn note_palette_recent(recent: &mut Vec<String>, key: &str) {
 }
 
 impl SessionBody {
-    /// Recorta la sesión a sus topes. Se llama al ESCRIBIR, que es donde
-    /// crece.
+    /// Trims the session to its caps. Called on WRITE, which is where it
+    /// grows.
     ///
-    /// En este orden: el tope de PERFILES con estado ([`PROFILE_STATE_CAP`],
-    /// spec 2026-08-26, D6) primero, para que todo lo demás vea ya el mapa más
-    /// pequeño; los huecos que alguna disposición menciona quedan marcados
-    /// intocables; el historial de cada hueco se recorta por el extremo VIEJO
-    /// —lo que se tira es lo más lejano, no lo que acabas de andar—, a
-    /// [`HISTORY_CAP`] si el hueco es visible y a [`ORPHAN_HISTORY_CAP`] si no;
-    /// y de los huérfanos se van primero los de más de [`MAX_AGE_MS`] y luego,
-    /// si aún sobran, los que hace más que no se tocan hasta caber en
-    /// [`ORPHAN_CAP`].
+    /// In this order: the cap on PROFILES with state ([`PROFILE_STATE_CAP`],
+    /// spec 2026-08-26, D6) first, so everything else already sees the
+    /// smaller map; the slots some layout mentions are marked untouchable;
+    /// each slot's history is trimmed from the OLD end — what gets dropped
+    /// is the farthest away, not what was just walked — to [`HISTORY_CAP`]
+    /// if the slot is visible and to [`ORPHAN_HISTORY_CAP`] if not; and of
+    /// the orphans, the ones older than [`MAX_AGE_MS`] go first and then, if
+    /// there are still too many, the ones touched least recently until they
+    /// fit [`ORPHAN_CAP`].
     ///
-    /// Un hueco VISIBLE no lo barre ni la edad ni el tope, ni pierde un paso de
-    /// historial: lo que se ve en pantalla no se recicla.
+    /// A VISIBLE slot is swept by neither age nor cap, and loses not a single
+    /// history step: what is on screen is not recycled.
     ///
-    /// El perfil [`Self::active`] no lo barre nada, en ningún paso.
+    /// The [`Self::active`] profile is swept by nothing, at any step.
     ///
-    /// Y al final, el tope que de verdad manda: se mide el cuerpo SERIALIZADO
-    /// y se sigue recortando hasta que quepa en
-    /// [`norte_proto::methods::SESSION_BODY_MAX`]. Todos los de arriba son de
-    /// CUENTAS y el del core es de BYTES, así que ninguna cuenta puede
-    /// prometer que el cuerpo entre; el orden en que se degrada está declarado
-    /// en `fit_to_envelope`, y lo que jamás se toca es el perfil activo, su
-    /// disposición, y la ruta y el cursor de cada hueco visible.
+    /// And at the end, the cap that really rules: the SERIALIZED body is
+    /// measured and trimmed further until it fits
+    /// [`norte_proto::methods::SESSION_BODY_MAX`]. All the ones above are by
+    /// COUNT and the core's is by BYTES, so no count can promise the body
+    /// fits; the order it degrades in is declared in `fit_to_envelope`, and
+    /// what is never touched is the active profile, its layout, and each
+    /// visible slot's path and cursor.
     pub fn prune(&mut self, now_ms: u64) {
         self.prune_profiles();
         if self.popular.len() > crate::history::POPULAR_CAP {
-            // La MISMA regla de expulsión que al visitar, y no un `truncate`:
-            // el orden guardado no es el de importancia.
+            // The SAME eviction rule as on a visit, not a `truncate`: the
+            // saved order is not the order of importance.
             self.popular = crate::history::Popular::from_entries(std::mem::take(&mut self.popular))
                 .entries()
                 .to_vec();
         }
-        let visibles: BTreeSet<u32> = self
+        let visible: BTreeSet<u32> = self
             .layouts
             .values()
             .flat_map(Node::slot_ids)
             .map(|SlotId(id)| id)
             .collect();
         for (id, slot) in &mut self.slots {
-            let cap = if visibles.contains(id) {
+            let cap = if visible.contains(id) {
                 HISTORY_CAP
             } else {
                 ORPHAN_HISTORY_CAP
             };
-            recorta_historial(&mut slot.back, cap);
-            recorta_historial(&mut slot.forward, cap);
+            trim_history(&mut slot.back, cap);
+            trim_history(&mut slot.forward, cap);
         }
         self.slots.retain(|id, s| {
-            visibles.contains(id) || now_ms.saturating_sub(s.touched_ms) <= MAX_AGE_MS
+            visible.contains(id) || now_ms.saturating_sub(s.touched_ms) <= MAX_AGE_MS
         });
-        let mut huerfanos: Vec<(u64, u32)> = self
+        let mut orphans: Vec<(u64, u32)> = self
             .slots
             .iter()
-            .filter(|(id, _)| !visibles.contains(*id))
+            .filter(|(id, _)| !visible.contains(*id))
             .map(|(id, s)| (s.touched_ms, *id))
             .collect();
-        if huerfanos.len() > ORPHAN_CAP {
-            // Por antigüedad de contacto: se van los de arriba, que son los
-            // que hace más que nadie mira.
-            huerfanos.sort_unstable();
-            let sobran = huerfanos.len() - ORPHAN_CAP;
-            for (_, id) in huerfanos.into_iter().take(sobran) {
+        if orphans.len() > ORPHAN_CAP {
+            // By age of contact: the ones at the top go, which are the ones
+            // nobody has looked at in the longest.
+            orphans.sort_unstable();
+            let overflow = orphans.len() - ORPHAN_CAP;
+            for (_, id) in orphans.into_iter().take(overflow) {
                 self.slots.remove(&id);
             }
         }
-        self.fit_to_envelope(&visibles);
+        self.fit_to_envelope(&visible);
     }
 
-    /// Recorta hasta que el cuerpo QUEPA de verdad, midiendo bytes.
+    /// Trims until the body REALLY fits, measuring bytes.
     ///
-    /// Todos los topes de [`Self::prune`] son de cuentas y el del core es de
-    /// bytes ([`norte_proto::methods::SESSION_BODY_MAX`]), así que ninguna
-    /// cuenta puede prometer que el cuerpo entre: las rutas las elige el
-    /// lector. Un nombre no-UTF-8 viaja percent-encoded y mide el triple; un
-    /// árbol profundo multiplica cada entrada del historial; y el número de
-    /// huecos VISIBLES no tiene tope ninguno — nada impide veinte pestañas por
-    /// perfil. Cuando el cuerpo se pasa, el core rehúsa el `put` ENTERO y la
-    /// sesión almacenada se queda como estaba.
+    /// All of [`Self::prune`]'s caps are by count and the core's is by bytes
+    /// ([`norte_proto::methods::SESSION_BODY_MAX`]), so no count can promise
+    /// the body fits: the reader chooses the paths. A non-UTF-8 name travels
+    /// percent-encoded and measures triple; a deep tree multiplies every
+    /// history entry; and the number of VISIBLE slots has no cap at all —
+    /// nothing stops twenty tabs per profile. When the body goes over, the
+    /// core refuses the WHOLE `put` and the stored session stays as it was.
     ///
-    /// El orden en que se degrada es el orden en que duele menos, y se declara
-    /// aquí porque un recorte que el lector no puede predecir es peor que uno
-    /// que sí:
+    /// The order it degrades in is the order that hurts least, and it is
+    /// declared here because a trim the reader cannot predict is worse than
+    /// one they can:
     ///
-    /// 1. los huérfanos, ENTEROS y del que hace más que no se toca hacia
-    ///    delante — nadie los está mirando;
-    /// 2. los populares, enteros — son atajos que se rehacen andando;
-    /// 3. el historial de los visibles, a la mitad cada vuelta hasta cero — se
-    ///    pierden pasos hacia atrás, no dónde estás;
-    /// 4. las disposiciones de los perfiles que no son el activo, con sus
-    ///    huecos, de la que hace más que nadie activa hacia delante.
+    /// 1. the orphans, WHOLE, and the one touched least recently going
+    ///    forward first — nobody is looking at them;
+    /// 2. the populars, whole — they are shortcuts that get rebuilt by
+    ///    walking around;
+    /// 3. the visible ones' history, halved each round down to zero — steps
+    ///    backward are lost, not where you are;
+    /// 4. the layouts of profiles that are not the active one, with their
+    ///    slots, from the one activated least recently going forward.
     ///
-    /// Lo que jamás se toca: el perfil [`Self::active`], su disposición, y la
-    /// RUTA y el cursor de cada hueco visible. Si ni así cabe —un cuerpo con
-    /// una sola disposición de rutas monstruosas— se manda lo que haya: el
-    /// rechazo del core es honesto y el frontend lo dice, mientras que
-    /// inventarse un recorte del árbol activo sería devolverle al lector una
-    /// pantalla que él no dejó.
-    fn fit_to_envelope(&mut self, visibles: &BTreeSet<u32>) {
-        if self.cabe() {
+    /// What is never touched: the [`Self::active`] profile, its layout, and
+    /// the PATH and cursor of every visible slot. If it still does not fit
+    /// even so — a body with a single layout of monstrous paths — whatever
+    /// there is gets sent: the core's rejection is honest and the frontend
+    /// says so, while making up a trim of the active tree would hand the
+    /// reader back a screen they did not leave.
+    fn fit_to_envelope(&mut self, visible: &BTreeSet<u32>) {
+        if self.fits() {
             return;
         }
-        let mut huerfanos: Vec<(u64, u32)> = self
+        let mut orphans: Vec<(u64, u32)> = self
             .slots
             .iter()
-            .filter(|(id, _)| !visibles.contains(*id))
+            .filter(|(id, _)| !visible.contains(*id))
             .map(|(id, s)| (s.touched_ms, *id))
             .collect();
-        huerfanos.sort_unstable();
-        for (_, id) in huerfanos {
+        orphans.sort_unstable();
+        for (_, id) in orphans {
             self.slots.remove(&id);
-            if self.cabe() {
+            if self.fits() {
                 return;
             }
         }
         if !self.popular.is_empty() {
             self.popular.clear();
-            if self.cabe() {
+            if self.fits() {
                 return;
             }
         }
@@ -391,327 +395,329 @@ impl SessionBody {
         while cap > 0 {
             cap /= 2;
             for slot in self.slots.values_mut() {
-                recorta_historial(&mut slot.back, cap);
-                recorta_historial(&mut slot.forward, cap);
+                trim_history(&mut slot.back, cap);
+                trim_history(&mut slot.forward, cap);
             }
-            if self.cabe() {
+            if self.fits() {
                 return;
             }
         }
-        // Del que hace más que nadie activa hacia delante, y el ACTIVO no está
-        // en esta lista: es el único que no se puede tirar.
-        for nombre in self.profiles_by_last_touch() {
-            let arboles = self.quitar_perfil(&nombre);
-            if arboles.is_empty() {
+        // From the one activated least recently going forward, and the
+        // ACTIVE one is not on this list: it is the only one that cannot be
+        // dropped.
+        for name in self.profiles_by_last_touch() {
+            let trees = self.remove_profile(&name);
+            if trees.is_empty() {
                 continue;
             }
-            let vivos: BTreeSet<u32> = self
+            let alive: BTreeSet<u32> = self
                 .layouts
                 .values()
                 .flat_map(Node::slot_ids)
                 .map(|SlotId(id)| id)
                 .collect();
-            for SlotId(id) in arboles.iter().flat_map(Node::slot_ids) {
-                if !vivos.contains(&id) {
+            for SlotId(id) in trees.iter().flat_map(Node::slot_ids) {
+                if !alive.contains(&id) {
                     self.slots.remove(&id);
                 }
             }
-            if self.cabe() {
+            if self.fits() {
                 return;
             }
         }
     }
 
-    /// Degrada el cuerpo para REINTENTAR un `put` que el core rehusó por
-    /// tamaño, y dice si quedaba algo que tirar (#316).
+    /// Degrades the body to RETRY a `put` the core refused for size, and
+    /// says whether there was anything left to drop (#316).
     ///
-    /// Tira los dos rastros de cada hueco, que es lo que más ocupa de una
-    /// sesión y lo que menos duele perder: se pierden pasos hacia atrás, no
-    /// dónde estás. Lo que jamás toca son las rutas, el cursor ni las
-    /// disposiciones — un `put` rehusado deja la sesión ALMACENADA como estaba,
-    /// así que el lector pierde su pantalla entera, y volver con el historial
-    /// vacío es infinitamente mejor que volver a donde estaba hace una semana.
+    /// Drops both of each slot's trails, which is the biggest chunk of a
+    /// session and the one that hurts least to lose: steps backward are
+    /// lost, not where you are. What is never touched are the paths, the
+    /// cursor or the layouts — a refused `put` leaves the STORED session as
+    /// it was, so the reader loses their whole screen, and coming back with
+    /// an empty history is infinitely better than coming back to where they
+    /// were a week ago.
     ///
-    /// `false` = ya no queda historial. Entonces reintentar es pedir el mismo
-    /// error otra vez, y lo honesto es decir que no se guardó.
+    /// `false` = there is no history left. Retrying then just asks for the
+    /// same error again, and the honest thing is to say it did not save.
     ///
-    /// Vive aquí y no en cada frontend porque es una DECISIÓN y no fontanería:
-    /// la TUI la tomaba en su escritor y la ventana no la tomaba en absoluto
-    /// —cualquier error de `session_put` era «no llegó», sin degradar y sin
-    /// avisar—, que es exactamente la divergencia silenciosa del ADR 0077.
-    /// La poda por bytes de [`Self::prune`] hace que esto casi nunca haga
-    /// falta; casi.
+    /// Lives here and not in each frontend because it is a DECISION and not
+    /// plumbing: the TUI made it in its writer and the window did not make
+    /// it at all — any `session_put` error was "did not arrive", with no
+    /// degrading and no warning — which is exactly ADR 0077's silent
+    /// divergence. [`Self::prune`]'s trim by bytes makes this almost never
+    /// necessary; almost.
     pub fn degrade_for_size(&mut self) -> bool {
-        let mut habia = false;
+        let mut had = false;
         for slot in self.slots.values_mut() {
-            habia |= !slot.back.is_empty() || !slot.forward.is_empty();
+            had |= !slot.back.is_empty() || !slot.forward.is_empty();
             slot.back.clear();
             slot.forward.clear();
         }
-        habia
+        had
     }
 
-    /// ¿Cabe este cuerpo en el sobre que el core acepta?
+    /// Does this body fit in the envelope the core accepts?
     ///
-    /// Se mide serializando, que es lo único que contesta la pregunta de
-    /// verdad — el core mide los bytes del `body`, no los elementos. Un fallo
-    /// al serializar cuenta como que SÍ cabe: no serializar es un problema
-    /// distinto, lo verá el `put`, y ponerse a recortar por ello tiraría estado
-    /// bueno por una razón que no es esa.
-    fn cabe(&self) -> bool {
+    /// Measured by serializing, which is the only thing that answers the
+    /// real question — the core measures the `body`'s bytes, not its
+    /// elements. A failure to serialize counts as fitting: failing to
+    /// serialize is a different problem, `put` will see it, and trimming
+    /// over it would throw away good state for a reason that is not this
+    /// one.
+    fn fits(&self) -> bool {
         serde_json::to_vec(&self.to_value())
             .map_or(true, |b| b.len() <= norte_proto::methods::SESSION_BODY_MAX)
     }
 
-    /// Los perfiles con estado que NO son el activo, del que hace más que nadie
-    /// activa al más reciente.
+    /// The profiles with state that are NOT the active one, from the one
+    /// activated least recently to the most recent.
     ///
-    /// «Hace más que nadie lo activa» se DERIVA y no se guarda: es el perfil
-    /// cuyo hueco tocado más recientemente lo fue antes que el de los demás.
-    /// Sin campo nuevo y sin reloj — la misma disciplina que el orden de
-    /// huérfanos de `SlotStore`, donde un reloj haría los tests dependientes
-    /// del tiempo. A igualdad de toque, por nombre: la poda tiene que ser
-    /// determinista y no depender del orden del mapa.
+    /// "Activated least recently" is DERIVED and not stored: it is the
+    /// profile whose most recently touched slot was touched before everyone
+    /// else's. No new field and no clock — the same discipline as
+    /// `SlotStore`'s orphan order, where a clock would make the tests
+    /// time-dependent. On a tie of touch, by name: pruning has to be
+    /// deterministic and not depend on the map's order.
     fn profiles_by_last_touch(&self) -> Vec<String> {
-        let ultimo_toque = |arbol: &Node| -> u64 {
-            arbol
-                .slot_ids()
+        let last_touch = |tree: &Node| -> u64 {
+            tree.slot_ids()
                 .into_iter()
                 .filter_map(|SlotId(id)| self.slots.get(&id))
                 .map(|s| s.touched_ms)
                 .max()
                 .unwrap_or(0)
         };
-        // Por PERFIL, no por clave: la disposición de la ventana
-        // (`<perfil>@window`) es del mismo perfil que la de la terminal, y
-        // su toque cuenta para los dos.
-        let mut toques: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
-        for (clave, arbol) in &self.layouts {
-            let perfil = perfil_de(clave);
-            if perfil == self.active {
+        // By PROFILE, not by key: the window's layout (`<profile>@window`)
+        // belongs to the same profile as the terminal's, and its touch
+        // counts for both.
+        let mut touches: std::collections::BTreeMap<String, u64> =
+            std::collections::BTreeMap::new();
+        for (key, tree) in &self.layouts {
+            let profile = profile_of(key);
+            if profile == self.active {
                 continue;
             }
-            let t = toques.entry(perfil.to_owned()).or_insert(0);
-            *t = (*t).max(ultimo_toque(arbol));
+            let t = touches.entry(profile.to_owned()).or_insert(0);
+            *t = (*t).max(last_touch(tree));
         }
-        let mut orden: Vec<(u64, String)> = toques.into_iter().map(|(p, t)| (t, p)).collect();
-        orden.sort_unstable();
-        orden.into_iter().map(|(_, nombre)| nombre).collect()
+        let mut order: Vec<(u64, String)> = touches.into_iter().map(|(p, t)| (t, p)).collect();
+        order.sort_unstable();
+        order.into_iter().map(|(_, name)| name).collect()
     }
 
-    /// Quita las disposiciones del perfil `perfil` —la de la terminal y la
-    /// de la ventana— y las devuelve.
-    fn quitar_perfil(&mut self, perfil: &str) -> Vec<Node> {
-        let claves: Vec<String> = self
+    /// Removes the layouts of profile `profile` — the terminal's and the
+    /// window's — and returns them.
+    fn remove_profile(&mut self, profile: &str) -> Vec<Node> {
+        let keys: Vec<String> = self
             .layouts
             .keys()
-            .filter(|c| perfil_de(c) == perfil)
+            .filter(|c| profile_of(c) == profile)
             .cloned()
             .collect();
-        claves
-            .iter()
-            .filter_map(|c| self.layouts.remove(c))
-            .collect()
+        keys.iter().filter_map(|c| self.layouts.remove(c)).collect()
     }
 
-    /// Cuántos PERFILES tienen estado (la ventana no cuenta aparte).
-    fn perfiles_con_estado(&self) -> usize {
+    /// How many PROFILES have state (the window does not count separately).
+    fn profiles_with_state(&self) -> usize {
         self.layouts
             .keys()
-            .map(|c| perfil_de(c))
+            .map(|c| profile_of(c))
             .collect::<BTreeSet<_>>()
             .len()
     }
 
-    /// Deja como mucho [`PROFILE_STATE_CAP`] perfiles con estado, tirando
-    /// enteros los que hace más que nadie activa.
+    /// Leaves at most [`PROFILE_STATE_CAP`] profiles with state, dropping
+    /// whole the ones activated least recently.
     ///
-    /// «Hace más que nadie lo activa» se DERIVA y no se guarda: es el perfil
-    /// cuyo hueco tocado más recientemente lo fue antes que el de los demás.
-    /// Sin campo nuevo y sin reloj — la misma disciplina que el orden de
-    /// huérfanos de `SlotStore`, donde un reloj haría los tests dependientes
-    /// del tiempo.
+    /// "Activated least recently" is DERIVED and not stored: it is the
+    /// profile whose most recently touched slot was touched before everyone
+    /// else's. No new field and no clock — the same discipline as
+    /// `SlotStore`'s orphan order, where a clock would make the tests
+    /// time-dependent.
     fn prune_profiles(&mut self) {
-        let perfiles = self.perfiles_con_estado();
-        if perfiles <= PROFILE_STATE_CAP {
+        let profiles = self.profiles_with_state();
+        if profiles <= PROFILE_STATE_CAP {
             return;
         }
-        let orden = self.profiles_by_last_touch();
-        let sobran = perfiles - PROFILE_STATE_CAP;
-        let mut candidatos: BTreeSet<u32> = BTreeSet::new();
-        for nombre in orden.into_iter().take(sobran) {
-            for arbol in self.quitar_perfil(&nombre) {
-                candidatos.extend(arbol.slot_ids().into_iter().map(|SlotId(id)| id));
+        let order = self.profiles_by_last_touch();
+        let overflow = profiles - PROFILE_STATE_CAP;
+        let mut candidates: BTreeSet<u32> = BTreeSet::new();
+        for name in order.into_iter().take(overflow) {
+            for tree in self.remove_profile(&name) {
+                candidates.extend(tree.slot_ids().into_iter().map(|SlotId(id)| id));
             }
         }
-        // Los huecos del perfil que se va se borran contra LO QUE QUEDA, no a
-        // ciegas por su árbol.
+        // The departing profile's slots are erased against WHAT IS LEFT, not
+        // blindly by its tree.
         //
-        // Que dos perfiles no compartan hueco es un invariante del REPARTO
-        // (`next_slot_base` + `rebase_slot_ids`), y nada lo impone sobre un
-        // cuerpo que llega de disco: `from_value` valida cada árbol por
-        // separado —duplicados DENTRO de uno— y no dice nada de un id
-        // compartido entre DOS, y el cuerpo es opaco para el core, así que
-        // cualquier cliente puede escribir uno así. Borrando a ciegas, un
-        // cuerpo de ésos se llevaba por delante los huecos del perfil ACTIVO:
-        // el lector perdía el directorio, el cursor y los dos rastros de los
-        // paneles que estaba mirando, que es justo lo que el rustdoc de
-        // `prune` promete que no pasa.
+        // That two profiles do not share a slot is an invariant of the
+        // ALLOCATION (`next_slot_base` + `rebase_slot_ids`), and nothing
+        // enforces it on a body that arrives from disk: `from_value`
+        // validates each tree separately — duplicates WITHIN one — and says
+        // nothing about an id shared between TWO, and the body is opaque to
+        // the core, so any client can write one like that. Erasing blindly,
+        // a body like that would take down the ACTIVE profile's slots along
+        // with it: the reader would lose the directory, the cursor and both
+        // trails of the panes they were looking at, which is exactly what
+        // `prune`'s rustdoc promises does not happen.
         //
-        // Y solo se miran los ids del perfil saliente: los huérfanos de otros
-        // NO se tocan aquí, que para eso está el barrido por edad de abajo.
-        let vivos: BTreeSet<u32> = self
+        // And only the outgoing profile's ids are looked at: other
+        // profiles' orphans are NOT touched here, that is what the sweep by
+        // age below is for.
+        let alive: BTreeSet<u32> = self
             .layouts
             .values()
             .flat_map(Node::slot_ids)
             .map(|SlotId(id)| id)
             .collect();
-        for id in candidatos {
-            if !vivos.contains(&id) {
+        for id in candidates {
+            if !alive.contains(&id) {
                 self.slots.remove(&id);
             }
         }
     }
 
-    /// El primer id de hueco que no usa NADIE: ni una disposición de ningún
-    /// perfil, ni un estado guardado, huérfanos incluidos.
+    /// The first slot id NOBODY uses: not a layout of any profile, not a
+    /// saved state, orphans included.
     ///
-    /// Es la base que [`Node::rebase_slot_ids`] necesita para que dos perfiles
-    /// no compartan hueco (spec 2026-08-26, D5). Mira TODO y no solo el perfil
-    /// activo a propósito: repartir contra lo que se ve en pantalla acabaría
-    /// reasignando encima del estado guardado de otro perfil, que es
-    /// justamente el estado que nadie está mirando cuando pasa.
+    /// It is the base [`Node::rebase_slot_ids`] needs so two profiles do not
+    /// share a slot (spec 2026-08-26, D5). Looks at EVERYTHING and not just
+    /// the active profile on purpose: allocating against what is on screen
+    /// would end up reassigning over another profile's saved state, which is
+    /// exactly the state nobody is looking at when it happens.
     ///
-    /// Una sesión vacía empieza en 1. `None` = no queda espacio: el id más
-    /// alto en uso es `u32::MAX`, y no hay «el siguiente». Devolverlo saturado
-    /// era decir que `u32::MAX` está libre teniéndolo ocupado, con el
-    /// resultado de que [`Node::rebase_slot_ids`] repartía ese mismo número a
-    /// todos los huecos del árbol.
+    /// An empty session starts at 1. `None` = no room left: the highest id
+    /// in use is `u32::MAX`, and there is no "next one". Returning it
+    /// saturated would say `u32::MAX` is free while it is occupied, with the
+    /// result that [`Node::rebase_slot_ids`] would hand out that same number
+    /// to every slot of the tree.
     #[must_use]
     pub fn next_slot_base(&self) -> Option<u32> {
-        let de_arboles = self
+        let from_trees = self
             .layouts
             .values()
             .flat_map(Node::slot_ids)
             .map(|SlotId(id)| id);
-        let de_estados = self.slots.keys().copied();
-        match de_arboles.chain(de_estados).max() {
+        let from_state = self.slots.keys().copied();
+        match from_trees.chain(from_state).max() {
             None => Some(1),
             Some(m) => m.checked_add(1),
         }
     }
 
-    /// El cuerpo como documento JSON.
+    /// The body as a JSON document.
     ///
-    /// **Sin `version` dentro** desde #247: el esquema del cuerpo lo declara
-    /// [`norte_proto::methods::SessionPutParams::version`], que es el campo
-    /// que el protocolo documenta y el único que el core mira. Había DOS, y
-    /// el documentado no lo leía nadie — un cliente ajeno que hiciera lo que
-    /// dice el contrato (poner un cuerpo v2 y `version: 2` en el sobre)
-    /// llegaba a un lector que solo miraba la copia de dentro, la veía
-    /// ausente, la tomaba por 0 y se comía los campos que no entendía.
+    /// **No `version` inside** since #247: the body's schema is declared by
+    /// [`norte_proto::methods::SessionPutParams::version`], which is the
+    /// field the protocol documents and the only one the core looks at.
+    /// There used to be TWO, and nobody read the documented one — an
+    /// unrelated client doing what the contract says (putting a v2 body and
+    /// `version: 2` in the envelope) reached a reader that only looked at
+    /// the copy inside, saw it absent, took it for 0, and ate the fields it
+    /// did not understand.
     ///
-    /// Un cuerpo escrito por una versión anterior SÍ trae la copia, y
-    /// [`Self::from_value`] la sigue leyendo: quitarla de aquí no puede
-    /// invalidar lo que ya está en disco.
+    /// A body written by an earlier version DOES carry the copy, and
+    /// [`Self::from_value`] still reads it: removing it from here cannot
+    /// invalidate what is already on disk.
     ///
     /// # Panics
     ///
-    /// Nunca: la struct es de tipos que serializan siempre, y el único mapa
-    /// con clave no-string la tiene numérica.
+    /// Never: the struct is made of types that always serialize, and the
+    /// only map with a non-string key has a numeric one.
     #[must_use]
     pub fn to_value(&self) -> serde_json::Value {
-        serde_json::to_value(self).expect("SessionBody serializa siempre")
+        serde_json::to_value(self).expect("SessionBody always serializes")
     }
 
-    /// Lee un cuerpo, comprobando la versión ANTES que la forma.
+    /// Reads a body, checking the version BEFORE the shape.
     ///
-    /// `envelope` es la versión que declara el SOBRE
-    /// ([`norte_proto::methods::Session::version`]), que es la que el
-    /// protocolo documenta. Manda la MAYOR de las dos —el sobre y la copia
-    /// que los cuerpos antiguos llevan dentro—, porque las dos son una
-    /// afirmación de quién lo escribió y rehusar es lo seguro: leer un cuerpo
-    /// más nuevo del que se entiende y volver a escribirlo pierde campos en
-    /// silencio, que es lo que ADR 0059 promete que no pasa (#247).
+    /// `envelope` is the version the ENVELOPE declares
+    /// ([`norte_proto::methods::Session::version`]), the one the protocol
+    /// documents. Takes the HIGHER of the two — the envelope and the copy
+    /// old bodies carry inside — because both are a claim about who wrote
+    /// it, and refusing is the safe thing: reading a body newer than what is
+    /// understood and writing it back again silently drops fields, which is
+    /// what ADR 0059 promises does not happen (#247).
     ///
     /// # Errors
     ///
-    /// [`SessionError::FromTheFuture`] si lo escribió un binario más nuevo,
-    /// [`SessionError::Malformed`] si no encaja con el esquema y
-    /// [`SessionError::BadLayout`] si trae una disposición inservible.
+    /// [`SessionError::FromTheFuture`] if a newer binary wrote it,
+    /// [`SessionError::Malformed`] if it does not fit the schema and
+    /// [`SessionError::BadLayout`] if it carries an unusable layout.
     pub fn from_value(envelope: u32, v: &serde_json::Value) -> Result<Self, SessionError> {
-        // Primero la versión: rehusar un cuerpo del futuro no puede depender
-        // de que su forma le encaje a este binario.
-        let dentro = v
+        // The version first: refusing a body from the future cannot depend
+        // on its shape fitting this binary.
+        let inside = v
             .get("version")
             .and_then(serde_json::Value::as_u64)
             .unwrap_or(0);
-        let version = dentro.max(u64::from(envelope));
+        let version = inside.max(u64::from(envelope));
         if version > u64::from(SCHEMA_VERSION) {
             return Err(SessionError::FromTheFuture {
                 version: u32::try_from(version).unwrap_or(u32::MAX),
             });
         }
-        let cuerpo: Self =
+        let body: Self =
             serde_json::from_value(v.clone()).map_err(|e| SessionError::Malformed {
                 reason: diagnose(&e),
             })?;
-        // Una disposición sin listado PARSEA —el esquema no la prohíbe— y
-        // panicaba al aplicarse, en cada arranque mientras el fichero de
-        // sesión siguiera ahí (#242). Se rechaza el cuerpo entero: el usuario
-        // arranca de su configuración, que es reparable, en vez de de una
-        // pantalla que no lo es.
-        for (nombre, arbol) in &cuerpo.layouts {
-            crate::layout::validate(arbol).map_err(|e| SessionError::BadLayout {
-                reason: format!("{nombre}: {e}"),
+        // A layout with no listing PARSES — the schema does not forbid it —
+        // and it panicked on being applied, on every start while the
+        // session file stayed there (#242). The whole body is rejected: the
+        // user starts from their configuration, which is repairable,
+        // instead of from a screen that is not.
+        for (name, tree) in &body.layouts {
+            crate::layout::validate(tree).map_err(|e| SessionError::BadLayout {
+                reason: format!("{name}: {e}"),
             })?;
         }
-        Ok(cuerpo)
+        Ok(body)
     }
 }
 
-/// Qué toca hacer con la sesión en ESTE tick.
+/// What to do with the session on THIS tick.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PushStep {
-    /// Nada: o no ha cambiado nada, o hay algo delante que dice que no es
-    /// momento de guardar dónde estás.
+    /// Nothing: either nothing has changed, or something in front says now
+    /// is not the moment to save where you are.
     Skip,
-    /// Preguntar si esta ventana ya puede escribir. Solo lo pide una ventana
-    /// SUELTA, cada `retry_every` ticks.
+    /// Ask whether this window can write yet. Only a LONE window asks it,
+    /// every `retry_every` ticks.
     Ask,
-    /// Capturar la pantalla y, si [`PushPolicy::prepare`] dice que ha
-    /// cambiado, mandarla.
+    /// Capture the screen and, if [`PushPolicy::prepare`] says it changed,
+    /// send it.
     Capture,
 }
 
-/// La política de escritura de la sesión: cuándo se manda, cuándo no se
-/// repite, cuándo se vuelve a pedir la propiedad y qué se recorta antes de
-/// mandar.
+/// The session's write policy: when it is sent, when it is not repeated,
+/// when ownership is asked for again, and what gets trimmed before sending.
 ///
-/// **Vive aquí y no en el frontend (#236).** El primer cliente de `session.put`
-/// fue la TUI y toda esta política nació dentro de su bucle de eventos, con el
-/// estado de recorte incluido; el segundo frontend la habría reimplementado
-/// entera, bugs de recorte incluidos. Lo que NO está aquí es la fontanería:
-/// los canales, el reloj y el `put` son de quien tenga runtime.
+/// **Lives here and not in the frontend (#236).** The first client of
+/// `session.put` was the TUI, and this whole policy was born inside its
+/// event loop, trimming state included; the second frontend would have
+/// reimplemented it whole, trimming bugs included. What is NOT here is the
+/// plumbing: the channels, the clock and the `put` belong to whoever has a
+/// runtime.
 #[derive(Debug)]
 pub struct PushPolicy {
-    /// Lo último que se MANDÓ a escribir: se compara para no mandar dos veces
-    /// lo mismo. Comparar el documento entero cuesta menos que un flag de
-    /// sucio puesto a mano en los cientos de sitios que mueven un cursor —y no
-    /// se puede olvidar en uno.
+    /// The last thing SENT to write: compared so the same thing is not sent
+    /// twice. Comparing the whole document costs less than a dirty flag set
+    /// by hand in the hundreds of places that move a cursor — and cannot be
+    /// forgotten in one of them.
     last: Option<std::sync::Arc<SessionBody>>,
-    /// Ticks que quedan para volver a preguntar por la propiedad.
+    /// Ticks left before asking about ownership again.
     retry_in: u32,
-    /// Cada cuántos ticks pregunta una ventana suelta.
+    /// Every how many ticks a lone window asks.
     retry_every: u32,
 }
 
 impl PushPolicy {
-    /// Una política que pregunta por la propiedad cada `retry_every` ticks.
+    /// A policy that asks about ownership every `retry_every` ticks.
     ///
-    /// `retry_every` en 0 se trata como 1: preguntar «cada cero ticks» no es
-    /// una cadencia, y la alternativa —no preguntar jamás— es el bug #234 otra
-    /// vez.
+    /// `retry_every` at 0 is treated as 1: asking "every zero ticks" is not
+    /// a cadence, and the alternative — never asking — is bug #234 all over
+    /// again.
     #[must_use]
     pub fn new(retry_every: u32) -> Self {
         let retry_every = retry_every.max(1);
@@ -722,12 +728,13 @@ impl PushPolicy {
         }
     }
 
-    /// Qué toca este tick.
+    /// What is due this tick.
     ///
-    /// `detached`: esta ventana no es la dueña, así que no escribe —pero sí
-    /// vuelve a preguntar, porque la dueña pudo cerrarse hace un rato y de eso
-    /// no avisa nadie (#234)—. `blocked`: hay algo delante (un modal) y la
-    /// sesión trata de dónde estás, no de lo que estás decidiendo.
+    /// `detached`: this window is not the owner, so it does not write — but
+    /// it does ask again, because the owner may have closed a while ago and
+    /// nobody warns about that (#234). `blocked`: something is in front (a
+    /// modal) and the session is about where you are, not what you are
+    /// deciding.
     pub fn tick(&mut self, detached: bool, blocked: bool) -> PushStep {
         if detached {
             self.retry_in = self.retry_in.saturating_sub(1);
@@ -743,16 +750,16 @@ impl PushPolicy {
         PushStep::Capture
     }
 
-    /// Recorta el cuerpo a sus topes y, si ha cambiado desde lo último
-    /// mandado, sella los huecos VIVOS que se movieron.
+    /// Trims the body to its caps and, if it has changed since the last
+    /// thing sent, seals the LIVE slots that moved.
     ///
-    /// `None` es «no ha cambiado»: este tick no manda nada. `Some(sellados)`
-    /// son los huecos que el llamante tiene que sellar TAMBIÉN en su propio
-    /// estado, con este mismo `now_ms` — el sello no puede salir de la captura
-    /// porque hace falta saber contra qué comparar.
+    /// `None` is "nothing changed": this tick sends nothing. `Some(sealed)`
+    /// are the slots the caller also has to seal in its own state, with this
+    /// same `now_ms` — the seal cannot come out of the capture because it
+    /// needs to know what to compare against.
     ///
-    /// Y solo los vivos: sellar también los huérfanos les devolvería la
-    /// juventud en cada arranque y la barrida por edad no barrería nunca.
+    /// And only the live ones: sealing the orphans too would give them back
+    /// their youth on every start and the sweep by age would never sweep.
     pub fn prepare(
         &self,
         body: &mut SessionBody,
@@ -763,100 +770,100 @@ impl PushPolicy {
         if self.last.as_deref() == Some(&*body) {
             return None;
         }
-        let mut sellados = Vec::new();
+        let mut sealed = Vec::new();
         for id in live {
-            let Some(estado) = body.slots.get_mut(&id.0) else {
+            let Some(state) = body.slots.get_mut(&id.0) else {
                 continue;
             };
             if self
                 .last
                 .as_deref()
                 .and_then(|b| b.slots.get(&id.0))
-                .is_some_and(|antes| antes == estado)
+                .is_some_and(|before| before == state)
             {
                 continue;
             }
-            estado.touched_ms = now_ms;
-            sellados.push(*id);
+            state.touched_ms = now_ms;
+            sealed.push(*id);
         }
-        Some(sellados)
+        Some(sealed)
     }
 
-    /// El cuerpo se mandó de verdad. Solo entonces cuenta como escrito: darlo
-    /// por mandado cuando el canal estaba lleno pierde ese cuerpo para
-    /// siempre.
+    /// The body was really sent. Only then does it count as written: taking
+    /// it as sent when the channel was full loses that body for good.
     pub fn sent(&mut self, body: std::sync::Arc<SessionBody>) {
         self.last = Some(body);
     }
 
-    /// Lo mandado NO llegó (otra ventana escribió antes): que la comparación
-    /// no lo dé por escrito.
+    /// What was sent did NOT arrive (another window wrote first): the
+    /// comparison must not take it as written.
     pub fn resend(&mut self) {
         self.last = None;
     }
 
-    /// Preguntar por la propiedad en el tick SIGUIENTE y no dentro de la
-    /// cadencia entera: tras un relevo de daemon la sesión suele estar ya
-    /// libre.
+    /// Ask about ownership on the VERY NEXT tick and not within the whole
+    /// cadence: after a daemon handoff the session is usually already free.
     pub fn ask_soon(&mut self) {
         self.retry_in = 1;
     }
 }
 
-/// El error de serde SIN su mensaje: su `Display` cita el valor que no encajó,
-/// y ese valor sale de un documento que lleva rutas.
+/// serde's error WITHOUT its message: its `Display` quotes the value that
+/// did not fit, and that value comes from a document carrying paths.
 fn diagnose(e: &serde_json::Error) -> String {
-    let que = match e.classify() {
+    let what = match e.classify() {
         serde_json::error::Category::Io => "i/o",
-        serde_json::error::Category::Syntax => "JSON mal formado",
-        serde_json::error::Category::Data => "forma inesperada",
-        serde_json::error::Category::Eof => "se acaba antes de tiempo",
+        serde_json::error::Category::Syntax => "malformed JSON",
+        serde_json::error::Category::Data => "unexpected shape",
+        serde_json::error::Category::Eof => "ends too soon",
     };
-    format!("{que} en línea {} columna {}", e.line(), e.column())
+    format!("{what} at line {} column {}", e.line(), e.column())
 }
 
-/// Deja las `cap` entradas más RECIENTES, que son las del final.
-fn recorta_historial(h: &mut Vec<VPath>, cap: usize) {
+/// Keeps the `cap` most RECENT entries, which are the ones at the end.
+fn trim_history(h: &mut Vec<VPath>, cap: usize) {
     if h.len() > cap {
         h.drain(..h.len() - cap);
     }
 }
 
-/// Las columnas viajan por su forma string estable, la misma que la config:
-/// [`ColumnId`] no tiene serde propio a propósito —su forma canónica es
-/// `Display`/`FromStr`, con round-trip pineado— y darle una segunda aquí sería
-/// un segundo vocabulario que mantener.
-mod columnas {
+/// Columns travel by their stable string form, the same as the config:
+/// [`ColumnId`] deliberately has no serde of its own — its canonical form is
+/// `Display`/`FromStr`, with a pinned round-trip — and giving it a second one
+/// here would be a second vocabulary to maintain.
+mod columns {
     use serde::{Deserialize as _, Deserializer, Serializer};
 
     use crate::columns::ColumnId;
 
-    /// Cada columna como su string canónico.
+    /// Each column as its canonical string.
     pub(super) fn serialize<S: Serializer>(v: &[ColumnId], s: S) -> Result<S::Ok, S::Error> {
         s.collect_seq(v.iter().map(ToString::to_string))
     }
 
-    /// Una columna que este binario no sabe leer se DESCARTA, no rompe el
-    /// cuerpo entero: es una columna de menos en un panel, y el resto de la
-    /// pantalla —rutas, historial, disposición— vale igual.
+    /// A column this binary cannot read is DROPPED, it does not break the
+    /// whole body: it is one fewer column in one pane, and the rest of the
+    /// screen — paths, history, layout — is just as valid.
     pub(super) fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<ColumnId>, D::Error> {
         let raw = Vec::<String>::deserialize(d)?;
         Ok(raw.iter().filter_map(|s| s.parse().ok()).collect())
     }
 }
 
-/// El orden se lee TOLERANTE, por la misma razón que las columnas: una
-/// columna de orden que este binario no conoce —`extension`, cuando la
-/// añadan— es una preferencia de un panel, y hacerla fatal tiraría la pantalla
-/// ENTERA (disposición, rutas e historial de todos los huecos) por ella. Sin
-/// esto, añadir una variante a [`crate::sort::SortColumn`] sería un cambio de
-/// [`SCHEMA_VERSION`], que es justo lo que este esquema dice que no cuesta.
+/// The order is read TOLERANTLY, for the same reason as the columns: a sort
+/// column this binary does not know — `extension`, whenever it gets added —
+/// is one pane's preference, and making it fatal would take down the WHOLE
+/// screen (layout, paths and history of every slot) over it. Without this,
+/// adding a variant to [`crate::sort::SortColumn`] would be a
+/// [`SCHEMA_VERSION`] change, which is exactly what this schema says it does
+/// not cost.
 mod orden {
     use serde::{Deserialize as _, Deserializer};
 
     use crate::sort::SortSpec;
 
-    /// Un orden que no se entiende es el orden por defecto, no un cuerpo roto.
+    /// An order that is not understood is the default order, not a broken
+    /// body.
     pub(super) fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<SortSpec, D::Error> {
         let raw = serde_json::Value::deserialize(d)?;
         Ok(serde_json::from_value(raw).unwrap_or_default())
@@ -889,10 +896,10 @@ mod tests {
         }
     }
 
-    /// Un cuerpo con un perfil por nombre, cada uno con dos huecos propios y
-    /// su `touched_ms`, que es lo que ordena «hace más que nadie lo activa».
-    fn cuerpo_con_perfiles(perfiles: &[(&str, u64)]) -> SessionBody {
-        let fabrica = crate::layout::Node::split(
+    /// A body with a profile per name, each with two of its own slots and
+    /// its `touched_ms`, which is what orders "activated least recently".
+    fn body_with_profiles(profiles: &[(&str, u64)]) -> SessionBody {
+        let factory = crate::layout::Node::split(
             crate::layout::Dir::Horizontal,
             vec![
                 Node::slot(SlotId(1), KindId::browser()),
@@ -900,124 +907,128 @@ mod tests {
             ],
         );
         let mut b = SessionBody::default();
-        for (nombre, tocado) in perfiles {
-            let (arbol, _) = fabrica.rebase_slot_ids(b.next_slot_base().expect("hay sitio"));
-            for SlotId(id) in arbol.slot_ids() {
+        for (name, touched) in profiles {
+            let (tree, _) = factory.rebase_slot_ids(b.next_slot_base().expect("there is room"));
+            for SlotId(id) in tree.slot_ids() {
                 let mut s = slot("file:///casa");
-                s.touched_ms = *tocado;
+                s.touched_ms = *touched;
                 b.slots.insert(id, s);
             }
-            b.layouts.insert((*nombre).to_owned(), arbol);
+            b.layouts.insert((*name).to_owned(), tree);
         }
         b
     }
 
-    /// Las MARCAS (fase 9) son aditivas: un cuerpo sin ellas se lee igual que
-    /// antes, y uno con ellas las devuelve por RUTA.
+    /// MARKS (phase 9) are additive: a body without them reads the same as
+    /// before, and one with them returns them by PATH.
     ///
-    /// Aditivo de verdad quiere decir dos cosas, y las dos se comprueban: un
-    /// documento viejo —que no tiene el campo— sigue leyéndose sin subir
-    /// [`SCHEMA_VERSION`], y un hueco sin marcas produce los MISMOS bytes que
-    /// producía antes de que el campo existiera. Sin lo segundo, cada tic
-    /// escribiría un cuerpo distinto del anterior y el coalescing dejaría de
-    /// coalescer.
+    /// Truly additive means two things, and both are checked: an old
+    /// document — that does not have the field — still reads without
+    /// bumping [`SCHEMA_VERSION`], and a slot with no marks produces the
+    /// SAME bytes it produced before the field existed. Without the second,
+    /// every tick would write a body different from the last one and
+    /// coalescing would stop coalescing.
     #[test]
-    fn las_marcas_son_aditivas_y_viajan_por_ruta() {
+    fn marks_are_additive_and_travel_by_path() {
         let mut s = slot("mem:///casa");
         assert_eq!(
             serde_json::to_value(&s).expect("json").get("marks"),
             None,
-            "un hueco sin marcas no escribe el campo"
+            "a slot with no marks does not write the field"
         );
-        // Y se lee un documento que no lo trae, que es todo lo que había
-        // guardado hasta esta versión.
-        let viejo = serde_json::json!({"path": "mem:///casa"});
-        let leido: SlotState = serde_json::from_value(viejo).expect("un cuerpo viejo se lee");
-        assert!(leido.marks.is_empty());
+        // And a document that does not carry it is read, which is all that
+        // had been saved up to this version.
+        let old = serde_json::json!({"path": "mem:///casa"});
+        let read: SlotState = serde_json::from_value(old).expect("an old body reads");
+        assert!(read.marks.is_empty());
 
         s.marks = vec![vp("mem:///casa/a.txt"), vp("mem:///casa/b.txt")];
-        let ida = serde_json::to_value(&s).expect("json");
-        let vuelta: SlotState = serde_json::from_value(ida).expect("json");
-        assert_eq!(vuelta.marks, s.marks, "vuelven las RUTAS, no unos índices");
+        let out = serde_json::to_value(&s).expect("json");
+        let back: SlotState = serde_json::from_value(out).expect("json");
+        assert_eq!(back.marks, s.marks, "the PATHS come back, not some indices");
     }
 
-    /// Pasado el tope, el estado del perfil que hace más que nadie activa se va
-    /// ENTERO. Su directorio de configuración no se toca: el perfil sigue
-    /// existiendo y arranca de su `[profile.start]`.
+    /// Past the cap, the state of the profile activated least recently goes
+    /// WHOLE. Its config directory is not touched: the profile keeps
+    /// existing and starts from its `[profile.start]`.
     #[test]
-    fn pasado_el_tope_se_va_el_perfil_mas_viejo() {
-        let mut b = cuerpo_con_perfiles(&[("a", 10), ("b", 20), ("c", 30), ("d", 40), ("e", 50)]);
+    fn past_the_cap_the_oldest_profile_goes() {
+        let mut b = body_with_profiles(&[("a", 10), ("b", 20), ("c", 30), ("d", 40), ("e", 50)]);
         b.active = "e".to_owned();
         b.prune(100);
-        assert!(!b.layouts.contains_key("a"), "el más viejo se va");
+        assert!(!b.layouts.contains_key("a"), "the oldest one goes");
         assert_eq!(b.layouts.len(), PROFILE_STATE_CAP);
     }
 
-    /// ADR 0139: la disposición de la ventana (`<perfil>@window`) es del
-    /// mismo perfil que la de la terminal: no cuenta como un perfil más, y
-    /// se va y se queda con él.
+    /// ADR 0139: the window's layout (`<profile>@window`) belongs to the
+    /// same profile as the terminal's: it does not count as one more
+    /// profile, and it goes and stays with it.
     #[test]
-    fn la_disposicion_de_la_ventana_va_con_su_perfil() {
-        let mut b = cuerpo_con_perfiles(&[("a", 10), ("b", 20), ("c", 30), ("d", 40)]);
+    fn the_windows_layout_goes_with_its_profile() {
+        let mut b = body_with_profiles(&[("a", 10), ("b", 20), ("c", 30), ("d", 40)]);
         for p in ["a", "d"] {
-            let arbol = b.layouts[p].clone();
-            b.layouts.insert(window_layout_key(p), arbol);
+            let tree = b.layouts[p].clone();
+            b.layouts.insert(window_layout_key(p), tree);
         }
         b.active = "d".to_owned();
         b.prune(100);
         assert_eq!(
             b.layouts.len(),
             6,
-            "cuatro perfiles, no seis: nada que podar"
+            "four profiles, not six: nothing to prune"
         );
-        let mut b = cuerpo_con_perfiles(&[("a", 10), ("b", 20), ("c", 30), ("d", 40), ("e", 50)]);
+        let mut b = body_with_profiles(&[("a", 10), ("b", 20), ("c", 30), ("d", 40), ("e", 50)]);
         for p in ["a", "e"] {
-            let arbol = b.layouts[p].clone();
-            b.layouts.insert(window_layout_key(p), arbol);
+            let tree = b.layouts[p].clone();
+            b.layouts.insert(window_layout_key(p), tree);
         }
         b.active = "e".to_owned();
         b.prune(100);
         assert!(!b.layouts.contains_key("a"));
-        assert!(!b.layouts.contains_key("a@window"), "se va con su perfil");
-        assert!(b.layouts.contains_key("e@window"), "la del activo se queda");
+        assert!(!b.layouts.contains_key("a@window"), "goes with its profile");
+        assert!(b.layouts.contains_key("e@window"), "the active one's stays");
     }
 
-    /// El ACTIVO no lo barre nada, en ningún paso, ni siendo el más viejo.
+    /// The ACTIVE one is swept by nothing, at any step, not even being the
+    /// oldest.
     #[test]
-    fn el_activo_no_se_barre_aunque_sea_el_mas_viejo() {
-        let mut b = cuerpo_con_perfiles(&[("a", 10), ("b", 20), ("c", 30), ("d", 40), ("e", 50)]);
+    fn the_active_one_is_not_swept_even_if_oldest() {
+        let mut b = body_with_profiles(&[("a", 10), ("b", 20), ("c", 30), ("d", 40), ("e", 50)]);
         b.active = "a".to_owned();
         b.prune(100);
-        assert!(b.layouts.contains_key("a"), "el activo se queda");
+        assert!(b.layouts.contains_key("a"), "the active one stays");
         assert_eq!(b.layouts.len(), PROFILE_STATE_CAP);
     }
 
-    /// Y tirar un perfil se lleva SUS huecos, no los de otro.
+    /// And dropping a profile takes ITS slots, not another one's.
     #[test]
-    fn tirar_un_perfil_se_lleva_solo_sus_huecos() {
-        let mut b = cuerpo_con_perfiles(&[("a", 10), ("b", 20), ("c", 30), ("d", 40), ("e", 50)]);
+    fn dropping_a_profile_only_takes_its_own_slots() {
+        let mut b = body_with_profiles(&[("a", 10), ("b", 20), ("c", 30), ("d", 40), ("e", 50)]);
         b.active = "e".to_owned();
-        let de_a: Vec<u32> = b.layouts["a"].slot_ids().iter().map(|s| s.0).collect();
-        let de_b: Vec<u32> = b.layouts["b"].slot_ids().iter().map(|s| s.0).collect();
+        let of_a: Vec<u32> = b.layouts["a"].slot_ids().iter().map(|s| s.0).collect();
+        let of_b: Vec<u32> = b.layouts["b"].slot_ids().iter().map(|s| s.0).collect();
         b.prune(100);
-        for id in de_a {
+        for id in of_a {
             assert!(
                 !b.slots.contains_key(&id),
-                "el hueco {id} de «a» se fue con él"
+                "slot {id} of \"a\" went with it"
             );
         }
-        for id in de_b {
-            assert!(b.slots.contains_key(&id), "el hueco {id} de «b» sigue ahí");
+        for id in of_b {
+            assert!(
+                b.slots.contains_key(&id),
+                "slot {id} of \"b\" is still there"
+            );
         }
     }
 
-    /// Un cuerpo que llega de DISCO puede compartir ids entre dos perfiles: la
-    /// disjunción es un invariante del reparto, y `from_value` solo valida cada
-    /// árbol por separado. Tirar un perfil no puede llevarse por delante los
-    /// huecos del ACTIVO, que es lo que el rustdoc de `prune` promete.
+    /// A body that arrives from DISK can share ids between two profiles: the
+    /// disjointness is an invariant of the allocation, and `from_value` only
+    /// validates each tree separately. Dropping a profile cannot take down
+    /// the ACTIVE one's slots, which is what `prune`'s rustdoc promises.
     #[test]
-    fn tirar_un_perfil_no_toca_huecos_que_otro_sigue_mencionando() {
-        let compartido = crate::layout::Node::split(
+    fn dropping_a_profile_does_not_touch_slots_another_still_mentions() {
+        let shared = crate::layout::Node::split(
             crate::layout::Dir::Horizontal,
             vec![
                 Node::slot(SlotId(1), KindId::browser()),
@@ -1025,10 +1036,10 @@ mod tests {
             ],
         );
         let mut b = SessionBody::default();
-        // Cinco perfiles con LOS MISMOS ids: nada en el esquema lo prohíbe.
-        for (i, nombre) in ["a", "b", "c", "d", "e"].iter().enumerate() {
-            b.layouts.insert((*nombre).to_owned(), compartido.clone());
-            for SlotId(id) in compartido.slot_ids() {
+        // Five profiles with the SAME ids: nothing in the schema forbids it.
+        for (i, name) in ["a", "b", "c", "d", "e"].iter().enumerate() {
+            b.layouts.insert((*name).to_owned(), shared.clone());
+            for SlotId(id) in shared.slot_ids() {
                 let mut s = slot("file:///casa");
                 s.touched_ms = (i as u64 + 1) * 10;
                 b.slots.insert(id, s);
@@ -1037,124 +1048,126 @@ mod tests {
         b.active = "e".to_owned();
         b.prune(100);
 
-        assert_eq!(b.layouts.len(), PROFILE_STATE_CAP, "sobra uno y se va");
+        assert_eq!(b.layouts.len(), PROFILE_STATE_CAP, "one is over and goes");
         for SlotId(id) in b.layouts[&b.active].slot_ids() {
             assert!(
                 b.slots.contains_key(&id),
-                "el hueco {id} lo sigue enseñando el perfil activo"
+                "slot {id} is still shown by the active profile"
             );
         }
     }
 
-    /// Sin espacio arriba, `next_slot_base` lo DICE en vez de contestar un id
-    /// que está en uso, y `rebase_slot_ids` devuelve el árbol intacto en vez de
-    /// repartir el mismo número a todos sus huecos — lo que fabricaría
-    /// duplicados a partir de un árbol sano y haría que el siguiente
-    /// `from_value` rehusara el cuerpo ENTERO.
+    /// With no room left, `next_slot_base` SAYS so instead of answering an id
+    /// that is in use, and `rebase_slot_ids` returns the tree intact instead
+    /// of handing out the same number to all its slots — which would forge
+    /// duplicates out of a healthy tree and make the next `from_value`
+    /// refuse the WHOLE body.
     #[test]
-    fn sin_espacio_arriba_no_se_reparte_nada() {
+    fn with_no_room_left_nothing_is_allocated() {
         let mut b = SessionBody::default();
         b.slots.insert(u32::MAX, slot("file:///casa"));
-        assert_eq!(b.next_slot_base(), None, "no hay «el siguiente»");
+        assert_eq!(b.next_slot_base(), None, "there is no \"next one\"");
 
-        let arbol = crate::layout::Node::split(
+        let tree = crate::layout::Node::split(
             crate::layout::Dir::Horizontal,
             vec![
                 Node::slot(SlotId(1), KindId::browser()),
                 Node::slot(SlotId(2), KindId::browser()),
             ],
         );
-        let (nuevo, mapa) = arbol.rebase_slot_ids(u32::MAX);
-        assert_eq!(nuevo, arbol, "el árbol vuelve tal cual");
-        assert!(mapa.is_empty());
+        let (new, map) = tree.rebase_slot_ids(u32::MAX);
+        assert_eq!(new, tree, "the tree comes back as-is");
+        assert!(map.is_empty());
         assert!(
-            nuevo.duplicate_slot_ids().is_empty(),
-            "y sobre todo: sin duplicados fabricados"
+            new.duplicate_slot_ids().is_empty(),
+            "and above all: no forged duplicates"
         );
     }
 
-    /// Un cuerpo realista con el tope lleno cabe en `SESSION_BODY_MAX`. Si este
-    /// test se pone rojo, la cura es BAJAR [`PROFILE_STATE_CAP`], no subir el
-    /// tope del protocolo: el core rehúsa un `put` que se pase y deja la sesión
-    /// como estaba, así que pasarse es perder lo que estabas haciendo.
-    /// La raíz de las rutas de los tests del sobre: de este mismo repositorio,
-    /// porque una ruta rellenada a mano mediría el relleno y no el caso.
-    const RAIZ: &str = "file:///home/u/src/norte/crates/norte-frontend/src";
+    /// A realistic body with the cap full fits in `SESSION_BODY_MAX`. If
+    /// this test goes red, the fix is LOWERING [`PROFILE_STATE_CAP`], not
+    /// raising the protocol's cap: the core refuses a `put` that goes over
+    /// and leaves the session as it was, so going over means losing what
+    /// you were doing.
+    /// The root of the envelope tests' paths: from this same repository,
+    /// because a hand-filled path would measure the filler and not the
+    /// case.
+    const ROOT: &str = "file:///home/u/src/norte/crates/norte-frontend/src";
 
-    /// Un hueco con el historial lleno en los dos sentidos.
-    fn slot_con_historial_lleno(id: u32) -> SlotState {
-        let mut s = slot(&format!("{RAIZ}/modulo{id}"));
+    /// A slot with the history full in both directions.
+    fn slot_with_full_history(id: u32) -> SlotState {
+        let mut s = slot(&format!("{ROOT}/modulo{id}"));
         s.back = (0..HISTORY_CAP)
-            .map(|i| vp(&format!("{RAIZ}/modulo{id}/atras{i}")))
+            .map(|i| vp(&format!("{ROOT}/modulo{id}/atras{i}")))
             .collect();
         s.forward = (0..HISTORY_CAP)
-            .map(|i| vp(&format!("{RAIZ}/modulo{id}/alante{i}")))
+            .map(|i| vp(&format!("{ROOT}/modulo{id}/alante{i}")))
             .collect();
         s
     }
 
-    /// [`PROFILE_STATE_CAP`] perfiles de ocho huecos, todos con el historial
-    /// lleno: el cuerpo VISIBLE al tope, sin un solo huérfano.
-    fn cuerpo_visible_al_tope() -> SessionBody {
+    /// [`PROFILE_STATE_CAP`] profiles of eight slots, all with the history
+    /// full: the VISIBLE body at the cap, without a single orphan.
+    fn visible_body_at_cap() -> SessionBody {
         let mut b = SessionBody::default();
         for p in 0..PROFILE_STATE_CAP {
-            let hijos: Vec<Node> = (1..=8u32)
+            let children: Vec<Node> = (1..=8u32)
                 .map(|i| Node::slot(SlotId(i), KindId::browser()))
                 .collect();
-            let arbol = crate::layout::Node::split(crate::layout::Dir::Horizontal, hijos);
-            let (arbol, _) = arbol.rebase_slot_ids(b.next_slot_base().expect("hay sitio"));
-            for SlotId(id) in arbol.slot_ids() {
-                b.slots.insert(id, slot_con_historial_lleno(id));
+            let tree = crate::layout::Node::split(crate::layout::Dir::Horizontal, children);
+            let (tree, _) = tree.rebase_slot_ids(b.next_slot_base().expect("there is room"));
+            for SlotId(id) in tree.slot_ids() {
+                b.slots.insert(id, slot_with_full_history(id));
             }
-            b.layouts.insert(format!("perfil{p}"), arbol);
+            b.layouts.insert(format!("perfil{p}"), tree);
         }
         b.active = "perfil0".to_owned();
         b
     }
 
     #[test]
-    fn un_cuerpo_realista_con_el_tope_lleno_cabe_en_el_sobre() {
-        let mut b = cuerpo_visible_al_tope();
+    fn a_realistic_body_with_the_cap_full_fits_in_the_envelope() {
+        let mut b = visible_body_at_cap();
         b.prune(0);
 
-        let bytes = serde_json::to_vec(&b.to_value()).expect("serializa");
+        let bytes = serde_json::to_vec(&b.to_value()).expect("serializes");
         assert!(
             bytes.len() <= norte_proto::methods::SESSION_BODY_MAX,
-            "{} bytes contra un tope de {}",
+            "{} bytes against a cap of {}",
             bytes.len(),
             norte_proto::methods::SESSION_BODY_MAX
         );
     }
 
-    /// **Y un cuerpo que se pasa CABIENDO en todas las cuentas, también cabe**
-    /// al final: el tope de verdad es de bytes y ninguna cuenta puede
-    /// prometerlo (revisión de #304).
+    /// **And a body that goes over while FITTING every count also fits** in
+    /// the end: the real cap is in bytes and no count can promise it
+    /// (review of #304).
     ///
-    /// Aquí no hay ni un huérfano y los cuatro perfiles son los que la cuenta
-    /// permite; lo que se pasa es el número de huecos VISIBLES, que no tiene
-    /// tope ninguno — nada impide veinte pestañas por perfil. Sin la poda por
-    /// bytes, el core rehusaba el `put` ENTERO.
+    /// Here there is not a single orphan and the four profiles are what the
+    /// count allows; what goes over is the number of VISIBLE slots, which
+    /// has no cap at all — nothing stops twenty tabs per profile. Without
+    /// the trim by bytes, the core refused the WHOLE `put`.
     ///
-    /// Lo que NO se puede perder está comprobado aparte: el perfil activo, su
-    /// disposición y la RUTA de cada hueco suyo. Lo que se paga son pasos de
-    /// historial, que es el orden declarado en `fit_to_envelope`.
+    /// What CANNOT be lost is checked separately: the active profile, its
+    /// layout and the PATH of each of its slots. What is paid for is
+    /// history steps, which is the order declared in `fit_to_envelope`.
     #[test]
-    fn un_cuerpo_que_cabe_en_las_cuentas_y_no_en_los_bytes_se_recorta_igual() {
+    fn a_body_that_fits_the_counts_but_not_the_bytes_is_trimmed_all_the_same() {
         let mut b = SessionBody::default();
         for p in 0..PROFILE_STATE_CAP {
-            let hijos: Vec<Node> = (1..=40u32)
+            let children: Vec<Node> = (1..=40u32)
                 .map(|i| Node::slot(SlotId(i), KindId::browser()))
                 .collect();
-            let arbol = crate::layout::Node::split(crate::layout::Dir::Horizontal, hijos);
-            let (arbol, _) = arbol.rebase_slot_ids(b.next_slot_base().expect("hay sitio"));
-            for SlotId(id) in arbol.slot_ids() {
-                b.slots.insert(id, slot_con_historial_lleno(id));
+            let tree = crate::layout::Node::split(crate::layout::Dir::Horizontal, children);
+            let (tree, _) = tree.rebase_slot_ids(b.next_slot_base().expect("there is room"));
+            for SlotId(id) in tree.slot_ids() {
+                b.slots.insert(id, slot_with_full_history(id));
             }
-            b.layouts.insert(format!("perfil{p}"), arbol);
+            b.layouts.insert(format!("perfil{p}"), tree);
         }
         b.active = "perfil0".to_owned();
-        let activo = b.layouts["perfil0"].clone();
-        let rutas_del_activo: Vec<(u32, VPath)> = activo
+        let active = b.layouts["perfil0"].clone();
+        let active_paths: Vec<(u32, VPath)> = active
             .slot_ids()
             .into_iter()
             .map(|SlotId(id)| (id, b.slots[&id].path.clone()))
@@ -1162,89 +1175,94 @@ mod tests {
 
         b.prune(0);
 
-        let bytes = serde_json::to_vec(&b.to_value()).expect("serializa");
+        let bytes = serde_json::to_vec(&b.to_value()).expect("serializes");
         assert!(
             bytes.len() <= norte_proto::methods::SESSION_BODY_MAX,
-            "{} bytes contra un tope de {}",
+            "{} bytes against a cap of {}",
             bytes.len(),
             norte_proto::methods::SESSION_BODY_MAX
         );
-        assert_eq!(b.layouts.get("perfil0"), Some(&activo), "el activo entero");
-        for (id, path) in rutas_del_activo {
+        assert_eq!(
+            b.layouts.get("perfil0"),
+            Some(&active),
+            "the whole active one"
+        );
+        for (id, path) in active_paths {
             assert_eq!(
                 b.slots.get(&id).map(|s| &s.path),
                 Some(&path),
-                "el hueco {id} del perfil activo conserva DÓNDE está"
+                "slot {id} of the active profile keeps WHERE it is"
             );
         }
     }
 
-    /// Degradar tira el historial y NADA más: las rutas, el cursor y las
-    /// disposiciones se quedan, que es lo que había que salvar (#316).
+    /// Degrading drops the history and NOTHING else: the paths, the cursor
+    /// and the layouts stay, which is what had to be saved (#316).
     ///
-    /// Y dice si quedaba algo que tirar, porque reintentar sin haber degradado
-    /// es pedir el mismo error otra vez.
+    /// And it says whether there was anything to drop, because retrying
+    /// without having degraded just asks for the same error again.
     #[test]
-    fn degradar_tira_el_historial_y_solo_el_historial() {
-        let mut b = cuerpo_visible_al_tope();
-        let antes = b.layouts.clone();
-        let rutas: BTreeMap<u32, VPath> = b
+    fn degrading_drops_the_history_and_only_the_history() {
+        let mut b = visible_body_at_cap();
+        let before = b.layouts.clone();
+        let paths: BTreeMap<u32, VPath> = b
             .slots
             .iter()
             .map(|(id, s)| (*id, s.path.clone()))
             .collect();
 
-        assert!(b.degrade_for_size(), "había historial que tirar");
+        assert!(b.degrade_for_size(), "there was history to drop");
         assert!(
             b.slots
                 .values()
                 .all(|s| s.back.is_empty() && s.forward.is_empty()),
-            "no queda un solo paso"
+            "not a single step is left"
         );
-        assert_eq!(b.layouts, antes, "las disposiciones no se tocan");
-        for (id, path) in rutas {
-            assert_eq!(b.slots[&id].path, path, "el hueco {id} sigue donde estaba");
+        assert_eq!(b.layouts, before, "the layouts are not touched");
+        for (id, path) in paths {
+            assert_eq!(b.slots[&id].path, path, "slot {id} is still where it was");
         }
         assert!(
             !b.degrade_for_size(),
-            "y a la segunda no queda nada: reintentar sería el mismo error"
+            "and the second time nothing is left: retrying would be the same error"
         );
     }
 
-    /// Y el tope de HUÉRFANOS lleno también cabe, que es lo que no pasaba
-    /// (#304): [`ORPHAN_CAP`] huecos que nadie mira, cada uno con el historial
-    /// lleno, sobre el cuerpo visible al tope. Con [`HISTORY_CAP`] para todos
-    /// esto daba ~1 182 000 bytes contra los 1 048 576 del sobre, y el `put`
-    /// se rehusaba ENTERO: el recorte que existía para impedirlo lo causaba.
+    /// And the ORPHAN cap full also fits, which is not what used to happen
+    /// (#304): [`ORPHAN_CAP`] slots nobody looks at, each with the history
+    /// full, on top of the visible body at the cap. With [`HISTORY_CAP`] for
+    /// all of them this gave ~1,182,000 bytes against the envelope's
+    /// 1,048,576, and the `put` was refused WHOLE: the trim that existed to
+    /// prevent it was causing it.
     #[test]
-    fn el_tope_de_huerfanos_lleno_tambien_cabe_en_el_sobre() {
-        let mut b = cuerpo_visible_al_tope();
-        let base = b.next_slot_base().expect("hay sitio");
-        for k in 0..u32::try_from(ORPHAN_CAP).expect("cabe") {
+    fn the_orphan_cap_full_also_fits_in_the_envelope() {
+        let mut b = visible_body_at_cap();
+        let base = b.next_slot_base().expect("there is room");
+        for k in 0..u32::try_from(ORPHAN_CAP).expect("fits") {
             let id = base + k;
-            b.slots.insert(id, slot_con_historial_lleno(id));
+            b.slots.insert(id, slot_with_full_history(id));
         }
         b.prune(0);
 
         assert_eq!(
             b.slots.len(),
             8 * PROFILE_STATE_CAP + ORPHAN_CAP,
-            "ni uno se ha barrido: el tope se llena, no se pasa"
+            "not one has been swept: the cap fills up, it does not go over"
         );
-        let bytes = serde_json::to_vec(&b.to_value()).expect("serializa");
+        let bytes = serde_json::to_vec(&b.to_value()).expect("serializes");
         assert!(
             bytes.len() <= norte_proto::methods::SESSION_BODY_MAX,
-            "{} bytes contra un tope de {}",
+            "{} bytes against a cap of {}",
             bytes.len(),
             norte_proto::methods::SESSION_BODY_MAX
         );
     }
 
-    /// La base sale de TODO lo que hay: las disposiciones de cada perfil y los
-    /// huecos guardados, huérfanos incluidos. Mirar solo el perfil activo
-    /// reasignaría encima del estado de otro.
+    /// The base comes from EVERYTHING there is: each profile's layouts and
+    /// the saved slots, orphans included. Looking only at the active profile
+    /// would reassign over another one's state.
     #[test]
-    fn la_base_deja_atras_todo_lo_que_ya_existe() {
+    fn the_base_leaves_behind_everything_that_already_exists() {
         let mut b = SessionBody::default();
         b.layouts
             .insert("work".into(), Node::slot(SlotId(4), KindId::browser()));
@@ -1253,15 +1271,15 @@ mod tests {
     }
 
     #[test]
-    fn una_sesion_vacia_empieza_en_uno() {
+    fn an_empty_session_starts_at_one() {
         assert_eq!(SessionBody::default().next_slot_base(), Some(1));
     }
 
-    /// Dos perfiles adoptados sobre la MISMA disposición de fábrica acaban con
-    /// conjuntos de huecos disjuntos. Éste es el test que fija el diseño.
+    /// Two profiles adopted over the SAME factory layout end up with
+    /// disjoint slot sets. This is the test that pins the design.
     #[test]
-    fn dos_perfiles_sobre_la_misma_disposicion_no_comparten_hueco() {
-        let fabrica = crate::layout::Node::split(
+    fn two_profiles_over_the_same_layout_do_not_share_a_slot() {
+        let factory = crate::layout::Node::split(
             crate::layout::Dir::Horizontal,
             vec![
                 Node::slot(SlotId(1), KindId::browser()),
@@ -1270,22 +1288,22 @@ mod tests {
         );
         let mut b = SessionBody::default();
 
-        let (t1, _) = fabrica.rebase_slot_ids(b.next_slot_base().expect("hay sitio"));
+        let (t1, _) = factory.rebase_slot_ids(b.next_slot_base().expect("there is room"));
         b.layouts.insert("work".into(), t1);
-        let (t2, _) = fabrica.rebase_slot_ids(b.next_slot_base().expect("hay sitio"));
+        let (t2, _) = factory.rebase_slot_ids(b.next_slot_base().expect("there is room"));
         b.layouts.insert("photos".into(), t2);
 
         let a: BTreeSet<SlotId> = b.layouts["work"].slot_ids().into_iter().collect();
         let c: BTreeSet<SlotId> = b.layouts["photos"].slot_ids().into_iter().collect();
-        assert!(a.is_disjoint(&c), "work {a:?} y photos {c:?} se pisan");
+        assert!(a.is_disjoint(&c), "work {a:?} and photos {c:?} overlap");
     }
 
-    /// Una disposición sin listado PARSEA, y al aplicarse dejaba la TUI sin
-    /// panel al que apuntar: panic en modo raw, en cada arranque, hasta
-    /// borrar el fichero de sesión a mano (#242). Se rechaza al leer.
+    /// A layout with no listing PARSES, and applying it left the TUI with no
+    /// pane to point at: a panic in raw mode, on every start, until the
+    /// session file was deleted by hand (#242). It is rejected on read.
     #[test]
-    fn una_sesion_con_una_disposicion_sin_listado_no_se_lee() {
-        let sin_listado = crate::layout::Node::split(
+    fn a_session_with_a_layout_with_no_listing_does_not_read() {
+        let no_listing = crate::layout::Node::split(
             crate::layout::Dir::Horizontal,
             vec![
                 crate::layout::Node::slot(crate::layout::SlotId(1), KindId::new("places")),
@@ -1294,7 +1312,7 @@ mod tests {
         );
         let body = SessionBody {
             active: String::new(),
-            layouts: std::iter::once(("default".to_owned(), sin_listado)).collect(),
+            layouts: std::iter::once(("default".to_owned(), no_listing)).collect(),
             slots: std::collections::BTreeMap::new(),
             palette_recent: Vec::new(),
             popular: Vec::new(),
@@ -1306,104 +1324,114 @@ mod tests {
         ));
     }
 
-    /// #236: la cadencia de una ventana SUELTA es de la política.
+    /// #236: a LONE window's cadence belongs to the policy.
     ///
-    /// Una suelta no escribe nunca, pero pregunta cada `retry_every` ticks: la
-    /// dueña pudo cerrarse hace un rato y de eso no avisa nadie (#234).
+    /// A lone window never writes, but it asks every `retry_every` ticks:
+    /// the owner may have closed a while ago and nobody warns about that
+    /// (#234).
     #[test]
-    fn una_ventana_suelta_pregunta_con_cadencia_y_no_escribe() {
+    fn a_lone_window_asks_on_a_cadence_and_does_not_write() {
         let mut p = PushPolicy::new(3);
         assert_eq!(p.tick(true, false), PushStep::Skip);
         assert_eq!(p.tick(true, false), PushStep::Skip);
-        assert_eq!(p.tick(true, false), PushStep::Ask, "al tercero pregunta");
-        assert_eq!(p.tick(true, false), PushStep::Skip, "y vuelve a contar");
+        assert_eq!(p.tick(true, false), PushStep::Ask, "asks on the third");
+        assert_eq!(
+            p.tick(true, false),
+            PushStep::Skip,
+            "and starts counting again"
+        );
 
-        // Tras un relevo de daemon la sesión ya suele estar libre: se pregunta
-        // en el tick siguiente, no dentro de la cadencia entera.
+        // After a daemon handoff the session is usually already free: it is
+        // asked about on the very next tick, not within the whole cadence.
         p.ask_soon();
         assert_eq!(p.tick(true, false), PushStep::Ask);
     }
 
-    /// Con un modal delante no se guarda: la sesión trata de dónde estás, no
-    /// de lo que estás decidiendo. Y sin nada delante, toca capturar.
+    /// With a modal in front, nothing is saved: the session is about where
+    /// you are, not what you are deciding. And with nothing in front, it is
+    /// time to capture.
     #[test]
-    fn un_modal_tapa_la_escritura_y_nada_mas_la_deja_pasar() {
+    fn a_modal_blocks_the_write_and_nothing_else_lets_it_through() {
         let mut p = PushPolicy::new(3);
         assert_eq!(p.tick(false, true), PushStep::Skip);
         assert_eq!(p.tick(false, false), PushStep::Capture);
     }
 
-    /// Sellar es de la política, y sella SOLO los huecos vivos que cambiaron:
-    /// sellar un huérfano le devuelve la juventud en cada arranque y la
-    /// barrida por edad no barre nunca.
+    /// Sealing belongs to the policy, and it seals ONLY the live slots that
+    /// changed: sealing an orphan gives it back its youth on every start and
+    /// the sweep by age never sweeps.
     #[test]
-    fn se_sellan_los_vivos_que_cambiaron_y_nadie_mas() {
+    fn only_the_live_ones_that_changed_get_sealed_and_nobody_else() {
         let mut p = PushPolicy::new(3);
         let mut body = SessionBody::default();
         body.slots.insert(1, slot("file:///uno"));
         body.slots.insert(2, slot("file:///dos"));
-        // El 9 es huérfano: ninguna disposición lo menciona y no está en
-        // `vivos`. Nace con un sello viejo para que la barrida no se lo lleve.
-        let mut viejo = slot("file:///nueve");
-        viejo.touched_ms = 1_000;
-        body.slots.insert(9, viejo);
+        // 9 is an orphan: no layout mentions it and it is not in `live`. It
+        // is born with an old seal so the sweep does not take it.
+        let mut old = slot("file:///nueve");
+        old.touched_ms = 1_000;
+        body.slots.insert(9, old);
 
-        let vivos = [SlotId(1), SlotId(2)];
-        let sellados = p.prepare(&mut body, &vivos, 5_000).expect("es la primera");
-        assert_eq!(sellados, vec![SlotId(1), SlotId(2)]);
+        let live = [SlotId(1), SlotId(2)];
+        let sealed = p.prepare(&mut body, &live, 5_000).expect("it is the first");
+        assert_eq!(sealed, vec![SlotId(1), SlotId(2)]);
         assert_eq!(body.slots[&1].touched_ms, 5_000);
         assert_eq!(
             body.slots[&9].touched_ms, 1_000,
-            "el huérfano no rejuvenece"
+            "the orphan does not get younger"
         );
 
-        // Mandado. El mismo cuerpo otra vez no se manda dos veces.
+        // Sent. The same body again is not sent twice.
         p.sent(std::sync::Arc::new(body.clone()));
-        let mut igual = body.clone();
+        let mut same = body.clone();
         assert!(
-            p.prepare(&mut igual, &vivos, 6_000).is_none(),
-            "lo mismo no se repite"
+            p.prepare(&mut same, &live, 6_000).is_none(),
+            "the same thing is not repeated"
         );
-        assert_eq!(igual.slots[&1].touched_ms, 5_000, "ni se resella");
+        assert_eq!(same.slots[&1].touched_ms, 5_000, "not even re-sealed");
 
-        // Mueve UNO: se sella ese y no el otro.
-        let mut movido = body.clone();
-        movido.slots.get_mut(&2).expect("el dos").cursor = 7;
-        let sellados = p.prepare(&mut movido, &vivos, 7_000).expect("ha cambiado");
-        assert_eq!(sellados, vec![SlotId(2)]);
-        assert_eq!(movido.slots[&1].touched_ms, 5_000, "el quieto no se toca");
+        // Move ONE: only that one gets sealed, not the other.
+        let mut moved = body.clone();
+        moved.slots.get_mut(&2).expect("the two").cursor = 7;
+        let sealed = p.prepare(&mut moved, &live, 7_000).expect("it changed");
+        assert_eq!(sealed, vec![SlotId(2)]);
+        assert_eq!(
+            moved.slots[&1].touched_ms, 5_000,
+            "the still one is not touched"
+        );
     }
 
-    /// Lo que no llegó vuelve a mandarse: si `resend` no borrara el último,
-    /// la comparación daría por escrito un cuerpo que otra ventana pisó.
+    /// What did not arrive gets sent again: if `resend` did not clear the
+    /// last one, the comparison would take as written a body another window
+    /// stomped on.
     #[test]
-    fn lo_que_no_llego_se_vuelve_a_mandar() {
+    fn what_did_not_arrive_gets_sent_again() {
         let mut p = PushPolicy::new(3);
         let mut body = SessionBody::default();
         body.slots.insert(1, slot("file:///uno"));
-        p.prepare(&mut body, &[SlotId(1)], 5_000).expect("primera");
+        p.prepare(&mut body, &[SlotId(1)], 5_000).expect("first");
         p.sent(std::sync::Arc::new(body.clone()));
         assert!(p.prepare(&mut body.clone(), &[SlotId(1)], 6_000).is_none());
 
         p.resend();
         assert!(
             p.prepare(&mut body, &[SlotId(1)], 6_000).is_some(),
-            "tras un conflicto se vuelve a mandar"
+            "after a conflict it gets sent again"
         );
     }
 
-    /// Una cadencia de cero no es una cadencia: se trata como 1. Lo otro sería
-    /// no preguntar jamás, que es el #234 otra vez.
+    /// A cadence of zero is not a cadence: it is treated as 1. The other way
+    /// would be never asking, which is #234 all over again.
     #[test]
-    fn una_cadencia_de_cero_pregunta_cada_tick() {
+    fn a_cadence_of_zero_asks_every_tick() {
         let mut p = PushPolicy::new(0);
         assert_eq!(p.tick(true, false), PushStep::Ask);
         assert_eq!(p.tick(true, false), PushStep::Ask);
     }
 
-    /// Round trip por JSON: lo que sale es lo que entró.
+    /// Round trip through JSON: what comes out is what went in.
     #[test]
-    fn round_trip_por_json() {
+    fn round_trip_through_json() {
         let mut b = SessionBody::default();
         let mut s = slot("file:///casa");
         s.columns = vec![
@@ -1413,63 +1441,63 @@ mod tests {
         s.cursor = 12;
         s.show_hidden = true;
         b.slots.insert(1, s);
-        let vuelta = SessionBody::from_value(SCHEMA_VERSION, &b.to_value()).expect("parsea");
-        assert_eq!(vuelta, b);
+        let back = SessionBody::from_value(SCHEMA_VERSION, &b.to_value()).expect("parses");
+        assert_eq!(back, b);
     }
 
-    /// **La prueba que la regla 1 pide**: un nombre que no es UTF-8 sobrevive
-    /// entero. Este es el sitio exacto donde un `String` se lo habría comido.
+    /// **The proof rule 1 asks for**: a name that is not UTF-8 survives
+    /// whole. This is the exact spot where a `String` would have eaten it.
     #[test]
-    fn un_nombre_no_utf8_sobrevive_al_viaje() {
+    fn a_non_utf8_name_survives_the_trip() {
         for name in norte_testkit::corpus::hostile_names() {
-            let seg = Segment::new(name.bytes.clone()).expect("segmento");
-            let ruta = vp("file:///casa").join(seg);
+            let seg = Segment::new(name.bytes.clone()).expect("segment");
+            let path = vp("file:///casa").join(seg);
             let mut b = SessionBody::default();
             b.slots.insert(
                 1,
                 SlotState {
-                    path: ruta.clone(),
+                    path: path.clone(),
                     ..slot("file:///casa")
                 },
             );
-            let vuelta = SessionBody::from_value(SCHEMA_VERSION, &b.to_value()).expect("parsea");
+            let back = SessionBody::from_value(SCHEMA_VERSION, &b.to_value()).expect("parses");
             assert_eq!(
-                vuelta.slots[&1].path.file_name().map(Segment::as_bytes),
-                ruta.file_name().map(Segment::as_bytes),
-                "{} no sobrevivió",
+                back.slots[&1].path.file_name().map(Segment::as_bytes),
+                path.file_name().map(Segment::as_bytes),
+                "{} did not survive",
                 name.id
             );
-            assert_eq!(vuelta.slots[&1].path, ruta, "{}", name.id);
+            assert_eq!(back.slots[&1].path, path, "{}", name.id);
         }
     }
 
-    /// Un cuerpo v1 no trae `active`, y eso significa exactamente «sin
-    /// perfil». Leerlo tiene que seguir funcionando: quitarle la sesión a
-    /// quien actualiza el binario es justo lo que ADR 0059 promete que no
-    /// pasa.
+    /// A v1 body does not carry `active`, and that means exactly "no
+    /// profile". Reading it has to keep working: taking the session away
+    /// from whoever updates the binary is exactly what ADR 0059 promises
+    /// does not happen.
     #[test]
-    fn un_cuerpo_v1_se_lee_como_sin_perfil() {
+    fn a_v1_body_reads_as_no_profile() {
         let v1 = serde_json::json!({ "version": 1, "layouts": {}, "slots": {} });
-        let b = SessionBody::from_value(1, &v1).expect("un v1 se sigue leyendo");
-        assert_eq!(b.active, "", "sin perfil, que es la verdad");
+        let b = SessionBody::from_value(1, &v1).expect("a v1 still reads");
+        assert_eq!(b.active, "", "no profile, which is the truth");
     }
 
     #[test]
-    fn el_perfil_activo_sobrevive_al_viaje() {
+    fn the_active_profile_survives_the_trip() {
         let mut b = SessionBody {
             active: "work".to_owned(),
             ..SessionBody::default()
         };
         b.layouts
             .insert("work".into(), Node::slot(SlotId(1), KindId::browser()));
-        let vuelta = SessionBody::from_value(SCHEMA_VERSION, &b.to_value()).expect("ida y vuelta");
-        assert_eq!(vuelta.active, "work");
+        let back = SessionBody::from_value(SCHEMA_VERSION, &b.to_value()).expect("round trip");
+        assert_eq!(back.active, "work");
     }
 
-    /// Spec 2026-09-15 D5/D6: el punto de salto y los populares hacen el viaje,
-    /// y un cuerpo escrito antes de que existieran se sigue leyendo sin ellos.
+    /// Spec 2026-09-15 D5/D6: the jump point and the populars make the trip,
+    /// and a body written before they existed still reads without them.
     #[test]
-    fn el_punto_de_salto_y_los_populares_hacen_el_viaje() {
+    fn the_jump_point_and_the_populars_make_the_trip() {
         let mut b = SessionBody::default();
         b.slots.insert(
             1,
@@ -1483,28 +1511,28 @@ mod tests {
             visits: 3,
             last: 9,
         });
-        let vuelta = SessionBody::from_value(SCHEMA_VERSION, &b.to_value()).expect("ida y vuelta");
-        assert_eq!(vuelta.slots[&1].jump, Some(vp("file:///marcado")));
-        assert_eq!(vuelta.popular, b.popular);
+        let back = SessionBody::from_value(SCHEMA_VERSION, &b.to_value()).expect("round trip");
+        assert_eq!(back.slots[&1].jump, Some(vp("file:///marcado")));
+        assert_eq!(back.popular, b.popular);
 
-        let viejo = serde_json::json!({
+        let old = serde_json::json!({
             "layouts": {},
             "slots": { "1": { "path": "file:///casa" } },
         });
-        let b = SessionBody::from_value(SCHEMA_VERSION, &viejo).expect("un cuerpo viejo carga");
+        let b = SessionBody::from_value(SCHEMA_VERSION, &old).expect("an old body loads");
         assert_eq!(b.slots[&1].jump, None);
         assert!(b.popular.is_empty());
     }
 
     #[test]
-    fn la_poda_deja_los_populares_en_su_tope_por_importancia() {
+    fn pruning_leaves_the_populars_at_their_cap_by_importance() {
         let mut b = SessionBody {
             popular: (0..crate::history::POPULAR_CAP + 5)
                 .map(|i| crate::history::PopularEntry {
                     path: vp(&format!("file:///d{i}")),
-                    // Los cinco primeros son los MENOS visitados: los que se van.
+                    // The first five are the LEAST visited: the ones that go.
                     visits: if i < 5 { 1 } else { 2 },
-                    last: u64::try_from(i).expect("cabe"),
+                    last: u64::try_from(i).expect("fits"),
                 })
                 .collect(),
             ..SessionBody::default()
@@ -1514,32 +1542,32 @@ mod tests {
         assert!(b.popular.iter().all(|e| e.visits == 2));
     }
 
-    /// Una entrada de populares ilegible se salta: no se lleva la sesión
-    /// entera por delante (encoding-auditor, fase 1).
+    /// An unreadable popular entry is skipped: it does not take down the
+    /// whole session with it (encoding-auditor, phase 1).
     #[test]
-    fn un_popular_ilegible_se_salta_y_el_cuerpo_carga() {
+    fn an_unreadable_popular_is_skipped_and_the_body_loads() {
         let v = serde_json::json!({
             "layouts": {},
             "slots": { "1": { "path": "file:///casa" } },
             "popular": [
-                { "path": "no es una ruta", "visits": 9 },
+                { "path": "not a path", "visits": 9 },
                 { "path": "file:///bien", "visits": 2, "last": 1 },
             ],
         });
-        let b = SessionBody::from_value(SCHEMA_VERSION, &v).expect("el cuerpo carga");
+        let b = SessionBody::from_value(SCHEMA_VERSION, &v).expect("the body loads");
         assert_eq!(
             b.slots[&1].path,
             vp("file:///casa"),
-            "los huecos siguen ahí"
+            "the slots are still there"
         );
         assert_eq!(b.popular.len(), 1);
         assert_eq!(b.popular[0].path, vp("file:///bien"));
     }
 
-    /// Y un cuerpo del FUTURO se sigue rehusando entero: subir a 2 no puede
-    /// abrir la puerta a un 3.
+    /// And a body from the FUTURE is still refused whole: bumping to 2
+    /// cannot open the door to a 3.
     #[test]
-    fn un_cuerpo_v3_se_sigue_rehusando() {
+    fn a_v3_body_is_still_refused() {
         let v3 = serde_json::json!({ "layouts": {}, "slots": {}, "active": "x" });
         assert!(matches!(
             SessionBody::from_value(SCHEMA_VERSION + 1, &v3),
@@ -1547,16 +1575,18 @@ mod tests {
         ));
     }
 
-    /// Un kind que este binario no declara vuelve intacto, `params` incluidos:
-    /// la sesión guarda el árbol, no lo interpreta (ADR 0058).
+    /// A kind this binary does not declare comes back intact, `params`
+    /// included: the session stores the tree, it does not interpret it (ADR
+    /// 0058).
     #[test]
-    fn un_kind_desconocido_vuelve_entero() {
+    fn an_unknown_kind_comes_back_whole() {
         let mut params = crate::layout::Params::new();
         params.set("grados", serde_json::json!(3));
         params.set("lo_que_sea", serde_json::json!({ "x": [1, 2] }));
-        // Con un listado al lado: un árbol que no tiene ninguno no se lee
-        // (#242), y lo que este test fija es que el kind AJENO vuelve intacto.
-        let arbol = Node::split(
+        // With a listing next to it: a tree with none does not read (#242),
+        // and what this test pins is that the FOREIGN kind comes back
+        // intact.
+        let tree = Node::split(
             crate::layout::Dir::Horizontal,
             vec![
                 Node::slot(SlotId(1), KindId::browser()),
@@ -1569,15 +1599,15 @@ mod tests {
             ],
         );
         let mut b = SessionBody::default();
-        b.layouts.insert("default".into(), arbol.clone());
-        let vuelta = SessionBody::from_value(SCHEMA_VERSION, &b.to_value()).expect("parsea");
-        assert_eq!(vuelta.layouts["default"], arbol);
+        b.layouts.insert("default".into(), tree.clone());
+        let back = SessionBody::from_value(SCHEMA_VERSION, &b.to_value()).expect("parses");
+        assert_eq!(back.layouts["default"], tree);
     }
 
-    /// El historial se recorta al ESCRIBIR, y por el extremo viejo: lo que se
-    /// tira es lo más lejano, no lo que acabas de andar.
+    /// History is trimmed on WRITE, and from the old end: what gets dropped
+    /// is the farthest away, not what was just walked.
     #[test]
-    fn el_historial_se_recorta_por_lo_viejo() {
+    fn history_is_trimmed_from_the_old_end() {
         let mut b = SessionBody::default();
         let mut s = slot("file:///casa");
         s.back = (0..HISTORY_CAP + 10)
@@ -1590,16 +1620,16 @@ mod tests {
         let back = &b.slots[&1].back;
         assert_eq!(back.len(), HISTORY_CAP);
         assert_eq!(
-            back.last().expect("último"),
+            back.last().expect("last one"),
             &vp(&format!("file:///d{}", HISTORY_CAP + 9))
         );
     }
 
-    /// Y el de un HUÉRFANO se recorta más (#304): nadie puede pulsar «atrás»
-    /// dentro de un hueco que ninguna disposición menciona sin volver a abrirlo
-    /// antes. Se tira por el mismo extremo, el viejo.
+    /// And an ORPHAN's is trimmed more (#304): nobody can press "back"
+    /// inside a slot no layout mentions without reopening it first. Dropped
+    /// from the same end, the old one.
     #[test]
-    fn el_historial_de_un_huerfano_se_recorta_mas() {
+    fn an_orphans_history_is_trimmed_more() {
         let mut b = SessionBody::default();
         let mut s = slot("file:///casa");
         s.back = (0..HISTORY_CAP)
@@ -1614,49 +1644,52 @@ mod tests {
         assert_eq!(s.back.len(), ORPHAN_HISTORY_CAP);
         assert_eq!(s.forward.len(), ORPHAN_HISTORY_CAP);
         assert_eq!(
-            s.back.last().expect("último"),
+            s.back.last().expect("last one"),
             &vp(&format!("file:///d{}", HISTORY_CAP - 1)),
-            "lo reciente se queda"
+            "the recent one stays"
         );
     }
 
-    /// Un reloj de verdad, y no el cero: con `now_ms == 0` la barrida por edad
-    /// no barre NADA, así que un test que pode en el cero no prueba que el
-    /// huérfano sobreviva — prueba que la resta no llegó a hacerse.
-    const AHORA: u64 = 1_750_000_000_000;
+    /// A real clock, not zero: with `now_ms == 0` the sweep by age sweeps
+    /// NOTHING, so a test that prunes at zero does not prove the orphan
+    /// survives — it proves the subtraction never happened.
+    const NOW: u64 = 1_750_000_000_000;
 
-    /// Un layout que no menciona un hueco NO borra su estado: cambiar de
-    /// disposición no te tira el historial.
+    /// A layout that does not mention a slot does NOT erase its state:
+    /// changing layouts does not drop your history.
     #[test]
-    fn el_estado_huerfano_sobrevive_al_cambio_de_layout() {
+    fn orphan_state_survives_a_layout_change() {
         let mut b = SessionBody::default();
-        let mut huerfano = slot("file:///lejos");
-        huerfano.touched_ms = AHORA;
-        b.slots.insert(7, huerfano);
+        let mut orphan = slot("file:///lejos");
+        orphan.touched_ms = NOW;
+        b.slots.insert(7, orphan);
         b.layouts
             .insert("default".into(), Node::slot(SlotId(1), KindId::browser()));
-        b.prune(AHORA);
-        assert!(b.slots.contains_key(&7), "el huérfano se queda");
+        b.prune(NOW);
+        assert!(b.slots.contains_key(&7), "the orphan stays");
     }
 
-    /// Y el que NADIE ha tocado nunca —`touched_ms` a cero contra un reloj de
-    /// verdad— se va: sin sellar la marca al capturar, esto se lleva por
-    /// delante todos los huérfanos en el primer volcado.
+    /// And the one NOBODY has ever touched — `touched_ms` at zero against a
+    /// real clock — goes: without sealing the mark on capture, this takes
+    /// down every orphan on the first dump.
     #[test]
-    fn un_huerfano_sin_sellar_se_barre_contra_un_reloj_de_verdad() {
+    fn an_unsealed_orphan_is_swept_against_a_real_clock() {
         let mut b = SessionBody::default();
         b.slots.insert(7, slot("file:///lejos"));
         b.layouts
             .insert("default".into(), Node::slot(SlotId(1), KindId::browser()));
-        b.prune(AHORA);
-        assert!(!b.slots.contains_key(&7), "sin sello no hay edad que valga");
+        b.prune(NOW);
+        assert!(
+            !b.slots.contains_key(&7),
+            "with no seal there is no valid age"
+        );
     }
 
-    /// Los huérfanos tienen tope, y cae el que hace más que no se toca.
+    /// Orphans have a cap, and the one touched least recently falls.
     #[test]
-    fn los_huerfanos_tienen_tope_y_cae_el_mas_viejo() {
+    fn orphans_have_a_cap_and_the_oldest_falls() {
         let mut b = SessionBody::default();
-        let cap = u32::try_from(ORPHAN_CAP).expect("cabe");
+        let cap = u32::try_from(ORPHAN_CAP).expect("fits");
         for i in 0..cap + 5 {
             let mut s = slot("file:///casa");
             s.touched_ms = u64::from(i);
@@ -1664,48 +1697,49 @@ mod tests {
         }
         b.prune(1_000);
         assert_eq!(b.slots.len(), ORPHAN_CAP);
-        assert!(!b.slots.contains_key(&0), "el más viejo se fue");
+        assert!(!b.slots.contains_key(&0), "the oldest one left");
         assert!(b.slots.contains_key(&(cap + 4)));
     }
 
-    /// Y una edad: treinta días sin tocarse y el hueco se va, aunque quepa.
+    /// And an age: thirty days untouched and the slot goes, even if it fits.
     #[test]
-    fn un_hueco_de_hace_treinta_dias_se_barre() {
+    fn a_slot_thirty_days_old_is_swept() {
         let mut b = SessionBody::default();
-        let mut viejo = slot("file:///casa");
-        viejo.touched_ms = 0;
-        let mut nuevo = slot("file:///casa");
-        nuevo.touched_ms = MAX_AGE_MS;
-        b.slots.insert(1, viejo);
-        b.slots.insert(2, nuevo);
+        let mut old = slot("file:///casa");
+        old.touched_ms = 0;
+        let mut new = slot("file:///casa");
+        new.touched_ms = MAX_AGE_MS;
+        b.slots.insert(1, old);
+        b.slots.insert(2, new);
         b.prune(MAX_AGE_MS + 1);
         assert!(!b.slots.contains_key(&1));
         assert!(b.slots.contains_key(&2));
     }
 
-    /// Un hueco que el layout VIVO menciona no lo barre ni la edad ni el tope:
-    /// lo que se ve en pantalla no se recicla.
+    /// A slot the LIVE layout mentions is swept by neither age nor cap: what
+    /// is on screen is not recycled.
     #[test]
-    fn un_hueco_visible_no_se_barre_jamas() {
+    fn a_visible_slot_is_never_swept() {
         let mut b = SessionBody::default();
         let mut s = slot("file:///casa");
         s.touched_ms = 0;
         b.slots.insert(1, s);
         b.layouts
             .insert("default".into(), Node::slot(SlotId(1), KindId::browser()));
-        b.prune(AHORA);
+        b.prune(NOW);
         assert!(b.slots.contains_key(&1));
     }
 
-    /// Una columna de ORDEN que este binario no conoce no tira la pantalla
-    /// entera: se cae al orden por defecto y vuelve todo lo demás.
+    /// A sort COLUMN this binary does not know does not take down the whole
+    /// screen: it falls back to the default order and everything else comes
+    /// back.
     ///
-    /// La fixture era `extension` hasta que #138 la construyó, que es
-    /// exactamente el caso que esta tolerancia existe para cubrir: la columna
-    /// hipotética de ayer es la real de hoy, y un binario viejo tiene que
-    /// seguir abriendo la sesión que escribió uno nuevo.
+    /// The fixture used to be `extension` until #138 built it, which is
+    /// exactly the case this tolerance exists to cover: yesterday's
+    /// hypothetical column is today's real one, and an old binary still has
+    /// to open the session a new one wrote.
     #[test]
-    fn una_columna_de_orden_desconocida_no_tira_el_cuerpo() {
+    fn an_unknown_sort_column_does_not_take_down_the_body() {
         let v = serde_json::json!({
             "version": SCHEMA_VERSION,
             "layouts": {},
@@ -1715,20 +1749,20 @@ mod tests {
                 "sort": { "column": "creacion", "dir": "asc", "dirs_first": true },
             }},
         });
-        let b = SessionBody::from_value(SCHEMA_VERSION, &v).expect("parsea");
+        let b = SessionBody::from_value(SCHEMA_VERSION, &v).expect("parses");
         assert_eq!(b.slots[&1].sort, SortSpec::default());
         assert_eq!(b.slots[&1].path, vp("file:///casa"));
         assert_eq!(
             b.slots[&1].back,
             vec![vp("file:///antes")],
-            "y el historial"
+            "and the history"
         );
     }
 
-    /// Un cuerpo de una versión que este binario no conoce se rehúsa: mejor
-    /// arrancar de la config que interpretar campos que no son los tuyos.
+    /// A body of a version this binary does not know is refused: better to
+    /// start from the config than to interpret fields that are not yours.
     #[test]
-    fn un_esquema_del_futuro_se_rehusa() {
+    fn a_schema_from_the_future_is_refused() {
         let v = serde_json::json!({ "version": SCHEMA_VERSION + 1, "layouts": {}, "slots": {} });
         assert!(matches!(
             SessionBody::from_value(SCHEMA_VERSION, &v),
@@ -1736,10 +1770,10 @@ mod tests {
         ));
     }
 
-    /// Una columna que este binario no sabe leer no se lleva por delante la
-    /// pantalla entera: se descarta ella y el resto vuelve.
+    /// A column this binary cannot read does not take down the whole screen
+    /// with it: it is dropped and the rest comes back.
     #[test]
-    fn una_columna_desconocida_se_descarta_sin_tirar_el_cuerpo() {
+    fn an_unknown_column_is_dropped_without_taking_down_the_body() {
         let v = serde_json::json!({
             "version": SCHEMA_VERSION,
             "layouts": {},
@@ -1748,7 +1782,7 @@ mod tests {
                 "columns": ["name", "columna-de-otro-binario"],
             }},
         });
-        let b = SessionBody::from_value(SCHEMA_VERSION, &v).expect("parsea");
+        let b = SessionBody::from_value(SCHEMA_VERSION, &v).expect("parses");
         assert_eq!(b.slots[&1].columns, vec!["name".parse().expect("name")]);
         assert_eq!(b.slots[&1].path, vp("file:///casa"));
     }

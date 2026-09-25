@@ -1,10 +1,10 @@
-//! E2E del criterio de salida M4 Lua descrito en ADR 0026: un
-//! `init.lua` REALISTA registra un comando que copia la selección al otro
-//! pane renombrando (`copia-<basename>`), todo vía `Backend` → engine
-//! (journal + policy + undo); sin terminal (patrón `backend_mem` de
-//! `lua_fs.rs`). Cubre: camino feliz byte-exacto, nombre hostil (bytes
-//! crudos `0xFF`), cancelación limpia por la ruta E2E completa y rastro
-//! deshacible en el journal.
+//! E2E for the M4 Lua acceptance criterion described in ADR 0026: a
+//! REALISTIC `init.lua` registers a command that copies the selection to
+//! the other pane while renaming (`copy-<basename>`), all through
+//! `Backend` → engine (journal + policy + undo); no terminal (`lua_fs.rs`'s
+//! `backend_mem` pattern). Covers: the byte-exact happy path, a hostile
+//! name (raw `0xFF` bytes), clean cancellation through the full E2E route,
+//! and an undoable trail in the journal.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -17,14 +17,14 @@ use norte_testkit::MemProvider;
 use norte_tui::lua::{Layer, LuaHost, PaneCtx, RunOutcome};
 use norte_vfs::Provider;
 
-/// El `init.lua` realista del criterio de salida. `basename` en Lua PURO
-/// sobre byte strings: búsqueda del último `/` byte a byte (`string.byte`),
-/// SIN patrones Lua (`string.match`/`find` con patrón tratarían `%` y bytes
-/// no-UTF8 como sintaxis — aquí solo aritmética de bytes, robusto ante
-/// cualquier nombre). Los paths de `norte.pane.*` llegan en forma wire
-/// (UTF-8; bytes no-UTF8, controles y `%` van percent-escapados), así que
-/// la concatenación absoluta re-parsea como wire — round-trip exacto
-/// también para el nombre hostil `0xFF`.
+/// The acceptance criterion's realistic `init.lua`. `basename` in PURE Lua
+/// over byte strings: searches for the last `/` byte by byte
+/// (`string.byte`), with NO Lua patterns (`string.match`/`find` with a
+/// pattern would treat `%` and non-UTF8 bytes as syntax — here it is only
+/// byte arithmetic, robust against any name). `norte.pane.*`'s paths
+/// arrive in wire form (UTF-8; non-UTF8 bytes, controls and `%` come
+/// percent-escaped), so the absolute concatenation re-parses as wire — an
+/// exact round trip for the hostile `0xFF` name too.
 const INIT_LUA: &[u8] = br"
     local function basename(p)
       local i = #p
@@ -54,10 +54,10 @@ async fn write_file(mem: &MemProvider, wire: &str, content: &[u8]) {
     sink.commit().await.unwrap();
 }
 
-/// Engine embebido + `MemProvider` con el directorio destino `mem:///dst`
-/// ya creado (el `MemProvider` exige que el padre exista — `mkdir` va por
-/// el provider directo porque `Backend` no lo expone, ver la desviación
-/// documentada en `lua/fs.rs`).
+/// Embedded engine + `MemProvider` with the destination directory
+/// `mem:///dst` already created (`MemProvider` requires the parent to
+/// exist — `mkdir` goes through the provider directly because `Backend`
+/// does not expose it, see the deviation documented in `lua/fs.rs`).
 async fn backend_mem() -> (Backend, Arc<MemProvider>) {
     let engine = Engine::new();
     let mem = Arc::new(MemProvider::new());
@@ -66,11 +66,11 @@ async fn backend_mem() -> (Backend, Arc<MemProvider>) {
     (Backend::Embedded(Arc::new(engine)), mem)
 }
 
-/// Host con el `init.lua` realista ya cargado como capa de usuario.
+/// A host with the realistic `init.lua` already loaded as a user layer.
 fn host_con_init() -> LuaHost {
     let h = LuaHost::new().expect("lua");
-    let w = h.eval_layer(INIT_LUA, Layer::User).expect("init.lua carga");
-    assert!(w.is_empty(), "sin warnings de carga: {w:?}");
+    let w = h.eval_layer(INIT_LUA, Layer::User).expect("init.lua loads");
+    assert!(w.is_empty(), "no load warnings: {w:?}");
     h
 }
 
@@ -83,7 +83,7 @@ fn ctx(selection: Vec<VPath>) -> PaneCtx {
     }
 }
 
-async fn invoke_copiar_sel(h: &LuaHost, backend: &Backend, selection: Vec<VPath>) -> RunOutcome {
+async fn invoke_copy_sel(h: &LuaHost, backend: &Backend, selection: Vec<VPath>) -> RunOutcome {
     let run = h
         .invoke(
             "copiar-sel",
@@ -91,72 +91,72 @@ async fn invoke_copiar_sel(h: &LuaHost, backend: &Backend, selection: Vec<VPath>
             ctx(selection),
             tokio_util::sync::CancellationToken::new(),
         )
-        .expect("copiar-sel registrado");
+        .expect("copiar-sel registered");
     run.await
 }
 
-/// Criterio de salida, camino feliz: la selección entera acaba en el otro
-/// pane renombrada y BYTE-EXACTA — todo por el engine.
+/// Acceptance criterion, happy path: the whole selection ends up in the
+/// other pane, renamed and BYTE-EXACT — all through the engine.
 #[tokio::test]
-async fn copia_la_seleccion_al_otro_pane_renombrada() {
+async fn copies_the_selection_to_the_other_pane_renamed() {
     let (backend, mem) = backend_mem().await;
     write_file(&mem, "mem:///a", b"contenido de a").await;
     write_file(&mem, "mem:///b", b"be").await;
     let h = host_con_init();
 
-    let outcome = invoke_copiar_sel(&h, &backend, vec![vp("mem:///a"), vp("mem:///b")]).await;
+    let outcome = invoke_copy_sel(&h, &backend, vec![vp("mem:///a"), vp("mem:///b")]).await;
     match outcome {
         RunOutcome::Ok { messages } => {
             assert_eq!(messages, vec!["copiado".to_string()]);
         }
-        other => panic!("esperaba Ok, fue {other:?}"),
+        other => panic!("expected Ok, got {other:?}"),
     }
 
-    // Asserts vía Backend (la misma superficie que usa el script).
-    for (wire, contenido) in [
+    // Asserts through Backend (the same surface the script uses).
+    for (wire, content) in [
         ("mem:///dst/copia-a", &b"contenido de a"[..]),
         ("mem:///dst/copia-b", &b"be"[..]),
     ] {
-        assert!(backend.stat(&vp(wire)).await.is_ok(), "{wire} existe");
+        assert!(backend.stat(&vp(wire)).await.is_ok(), "{wire} exists");
         let bytes = backend.read(&vp(wire), None).await.expect("read");
-        assert_eq!(bytes, contenido, "{wire} byte-exacto");
+        assert_eq!(bytes, content, "{wire} byte-exact");
     }
 }
 
-/// Nombre hostil: bytes crudos `0xFF` (no-UTF8). `selection()` lo entrega
-/// en forma wire (`mem:///%FF`), el basename Lua opera sobre esos bytes
-/// ASCII y la concatenación re-parsea como wire → el destino es
-/// `copia-<0xFF>` con el byte CRUDO, verificado con el mismo `VPath` que
-/// en `lua_fs.rs` (regla 1: cero suposición UTF-8 en todo el camino).
+/// Hostile name: raw `0xFF` bytes (non-UTF8). `selection()` delivers it in
+/// wire form (`mem:///%FF`), the Lua basename operates over those ASCII
+/// bytes and the concatenation re-parses as wire → the destination is
+/// `copy-<0xFF>` with the RAW byte, checked with the same `VPath` as in
+/// `lua_fs.rs` (rule 1: zero UTF-8 assumption along the whole path).
 #[tokio::test]
-async fn nombre_hostil_bytes_crudos_round_trip() {
+async fn hostile_name_raw_bytes_round_trip() {
     let (backend, mem) = backend_mem().await;
     write_file(&mem, "mem:///%FF", b"hostil").await;
     let h = host_con_init();
 
-    let outcome = invoke_copiar_sel(&h, &backend, vec![vp("mem:///%FF")]).await;
+    let outcome = invoke_copy_sel(&h, &backend, vec![vp("mem:///%FF")]).await;
     assert!(matches!(outcome, RunOutcome::Ok { .. }), "{outcome:?}");
 
     let dst = vp("mem:///dst/copia-%FF");
     assert_eq!(
         dst.file_name().unwrap().as_bytes(),
         b"copia-\xFF",
-        "el segmento destino lleva el byte crudo"
+        "the destination segment carries the raw byte"
     );
-    assert!(backend.stat(&dst).await.is_ok(), "copia-<0xFF> existe");
+    assert!(backend.stat(&dst).await.is_ok(), "copia-<0xFF> exists");
     assert_eq!(backend.read(&dst, None).await.expect("read"), b"hostil");
 }
 
-/// Cancelación limpia por la ruta E2E completa: el MISMO `init.lua`
-/// realista, con latencia por operación para que la Task de copia siga en
-/// vuelo cuando llega el Esc-equivalente (`token.cancel`). El run muere
-/// `Cancelled` y el destino NO aparece (mismo patrón que `lua_driver.rs`,
-/// pero atravesando el comando real del usuario).
-/// `start_paused`: latencia inyectada y cancel usan timers tokio — con el
-/// reloj pausado el runtime avanza el tiempo al quedar ocioso (determinista
-/// e instantáneo, sin carreras de wall-clock).
+/// Clean cancellation through the full E2E route: the SAME realistic
+/// `init.lua`, with per-operation latency so the copy Task stays in flight
+/// when the Esc-equivalent (`token.cancel`) arrives. The run dies
+/// `Cancelled` and the destination does NOT appear (same pattern as
+/// `lua_driver.rs`, but going through the user's real command).
+/// `start_paused`: the injected latency and the cancel use tokio timers —
+/// with the clock paused the runtime advances time when idle (deterministic
+/// and instant, with no wall-clock races).
 #[tokio::test(start_paused = true)]
-async fn esc_cancela_limpio_sin_destino_a_medias() {
+async fn esc_cancels_cleanly_without_a_half_finished_destination() {
     let (backend, mem) = backend_mem().await;
     write_file(&mem, "mem:///a", b"contenido de a").await;
     mem.faults()
@@ -171,7 +171,7 @@ async fn esc_cancela_limpio_sin_destino_a_medias() {
             ctx(vec![vp("mem:///a")]),
             token.clone(),
         )
-        .expect("copiar-sel registrado");
+        .expect("copiar-sel registered");
     let cancel = async {
         tokio::time::sleep(Duration::from_millis(100)).await;
         token.cancel();
@@ -182,18 +182,19 @@ async fn esc_cancela_limpio_sin_destino_a_medias() {
     mem.faults().clear();
     assert!(
         backend.stat(&vp("mem:///dst/copia-a")).await.is_err(),
-        "la Task en vuelo murió cancelada: el destino no aparece"
+        "the in-flight Task died cancelled: the destination does not appear"
     );
 }
 
-/// Undo-ability: el copy del comando deja rastro DESHACIBLE en el journal.
-/// Montarlo aquí es barato (`Journal::open_in_memory` + `with_journal`,
-/// mismo patrón que `norte-core/tests/engine_journal.rs`), así que se
-/// verifica de verdad: entrada registrada Y revertible para el actor User
-/// (la mecánica completa del undo la cubren los tests de engine — todo va
-/// por `Backend`, no hay camino aparte que probar aquí).
+/// Undo-ability: the command's copy leaves an UNDOABLE trail in the
+/// journal. Setting this up here is cheap (`Journal::open_in_memory` +
+/// `with_journal`, the same pattern as
+/// `norte-core/tests/engine_journal.rs`), so it is really checked: an entry
+/// is recorded AND revertible for the User actor (the engine tests cover
+/// undo's full mechanics — everything goes through `Backend`, there is no
+/// separate path to test here).
 #[tokio::test]
-async fn el_copy_del_comando_deja_rastro_deshacible_en_el_journal() {
+async fn the_command_copy_leaves_an_undoable_trail_in_the_journal() {
     let journal = Arc::new(SqliteJournal::new(
         Journal::open_in_memory().await.expect("journal open"),
     ));
@@ -205,25 +206,25 @@ async fn el_copy_del_comando_deja_rastro_deshacible_en_el_journal() {
     write_file(&mem, "mem:///a", b"contenido de a").await;
     let h = host_con_init();
 
-    let outcome = invoke_copiar_sel(&h, &backend, vec![vp("mem:///a")]).await;
+    let outcome = invoke_copy_sel(&h, &backend, vec![vp("mem:///a")]).await;
     assert!(matches!(outcome, RunOutcome::Ok { .. }), "{outcome:?}");
 
     let entries = journal.journal().entries().await.expect("entries");
-    assert!(!entries.is_empty(), "el copy quedó en el journal");
-    let revertibles = journal
+    assert!(!entries.is_empty(), "the copy was left in the journal");
+    let revertible = journal
         .journal()
         .revertible_for(&Actor::User)
         .await
         .expect("revertible_for");
-    // Endurecido (rust review): no basta "no vacío" — ALGUNA entrada
-    // revertible es EXACTAMENTE la de este copy: actor User y el path del
-    // DESTINO creado (`dst/copia-a`, forma wire).
+    // Hardened (rust review): "not empty" is not enough — SOME revertible
+    // entry is EXACTLY this copy's: User actor and the path of the
+    // DESTINATION created (`dst/copy-a`, wire form).
     assert!(
-        revertibles.iter().any(|e| {
+        revertible.iter().any(|e| {
             e.actor_kind == "user"
                 && e.op == "created"
                 && e.path == vp("mem:///dst/copia-a").to_wire().into_bytes()
         }),
-        "la entrada revertible del copy referencia el destino: {revertibles:?}"
+        "the copy's revertible entry references the destination: {revertible:?}"
     );
 }

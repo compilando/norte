@@ -1,18 +1,18 @@
 name = "default"
 
-# Tema neutro (no ligado a ninguna marca): color discreto sobre fondo oscuro.
-# Es el que se aplica cuando `[ui].theme` está ausente.
+# Neutral theme (not tied to any brand): understated color over a dark background.
+# It is the one applied when `[ui].theme` is absent.
 
-# Efectos de la ventana (ADR 0036: bloque libre, el terminal lo ignora).
-# `backdrop = "blur"` desenfoca lo que hay detrás de un diálogo.
+# Window effects (ADR 0036: free-form block, the terminal ignores it).
+# `backdrop = "blur"` blurs what is behind a dialog.
 [effects]
 backdrop = "blur"
 
 [roles]
 background       = { bg = "#1c1c1c" }
 regular          = { fg = "#d0d0d0" }
-# El cursor con foco lleva el color de acento con texto oscuro: gris sobre gris
-# (#3a3a3a sobre #1c1c1c) se perdía. El del panel sin foco conserva ese gris.
+# The focused cursor carries the accent color with dark text: gray on gray
+# (#3a3a3a on #1c1c1c) got lost. The unfocused pane's cursor keeps that gray.
 selection            = { fg = "#1c1c1c", bg = "#5fafd7" }
 selection-unfocused  = { fg = "#ffffff", bg = "#3a3a3a" }
 button               = { fg = "#1c1c1c", bg = "#af87d7" }

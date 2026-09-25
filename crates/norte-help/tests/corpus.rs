@@ -149,18 +149,18 @@ fn a_topic_id_matches_its_filename() {
 #[test]
 fn the_topics_of_a_tag_are_contiguous() {
     for lang in LANGS {
-        let mut vistos: Vec<&str> = Vec::new();
+        let mut seen: Vec<&str> = Vec::new();
         let mut anterior: Option<&str> = None;
         for t in topics(lang) {
             let tag = t.tags.first().map_or("", String::as_str);
             if anterior != Some(tag) {
                 assert!(
-                    !vistos.contains(&tag),
+                    !seen.contains(&tag),
                     "{lang:?}/{}: tag `{tag}` appears again after another tag \
                      — the sidebar would show its group header twice",
                     t.id
                 );
-                vistos.push(tag);
+                seen.push(tag);
                 anterior = Some(tag);
             }
         }
@@ -773,7 +773,7 @@ fn the_shipped_corpus_claims_only_contexts_the_ui_has() {
     // named here rather than filtered away in silence — and H3h emptied it.
     // What the assertion pins now is that it STAYS empty: a context added
     // without its page fails here as well as in the frontend's gate.
-    let sin_pagina: Vec<&str> = issues
+    let no_page: Vec<&str> = issues
         .iter()
         .filter_map(|i| match i {
             Issue::ContextWithoutTopic { context, .. } => Some(context.as_str()),
@@ -781,8 +781,8 @@ fn the_shipped_corpus_claims_only_contexts_the_ui_has() {
         })
         .collect();
     assert!(
-        sin_pagina.is_empty(),
-        "every context the UI can open must have a page: {sin_pagina:?}"
+        no_page.is_empty(),
+        "every context the UI can open must have a page: {no_page:?}"
     );
 }
 

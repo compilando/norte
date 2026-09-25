@@ -1,11 +1,11 @@
-//! Un provider plugin INSTALADO sirve el scheme que declara.
+//! An INSTALLED provider plugin serves the scheme it declares.
 //!
-//! Hasta aquí `[[contributions.provider]]` se declaraba, se aprobaba y se
-//! activaba, y nada lo resolvía: el `ConnectionManager` casaba schemes a mano
-//! contra los providers del core y un guest FTP embebido. Este test recorre
-//! el camino de distribución entero con el guest `provider-mem` compilado de
-//! verdad: instalar → consentir → conectar por scheme → listar. Y el
-//! negativo: sin consentimiento, el scheme no existe.
+//! Until now `[[contributions.provider]]` was declared, approved and enabled,
+//! and nothing resolved it: the `ConnectionManager` matched schemes by hand
+//! against the core's providers and an embedded FTP guest. This test walks
+//! the whole distribution path with the `provider-mem` guest really compiled:
+//! install → consent → connect by scheme → list. And the negative: without
+//! consent, the scheme does not exist.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -27,8 +27,8 @@ category = "provider"
 scheme = "memplug"
 "#;
 
-/// Un origen instalable con el `.wasm` REAL de `provider-mem`.
-fn origen(dir: &Path, wasm: &Path) -> PathBuf {
+/// An installable source with the REAL `.wasm` from `provider-mem`.
+fn source(dir: &Path, wasm: &Path) -> PathBuf {
     let src = dir.join("src-plugin");
     std::fs::create_dir_all(&src).expect("mkdir");
     std::fs::write(src.join("plugin.toml"), MANIFEST).expect("manifest");
@@ -37,67 +37,67 @@ fn origen(dir: &Path, wasm: &Path) -> PathBuf {
 }
 
 #[tokio::test]
-async fn un_provider_instalado_y_consentido_sirve_su_scheme() {
+async fn an_installed_and_consented_provider_serves_its_scheme() {
     let Some(wasm) = build_guest("provider-mem") else {
         return;
     };
     let cfg = tempfile::tempdir().expect("tempdir");
-    let src = origen(cfg.path(), &wasm);
-    install(cfg.path(), &src, false).expect("instala");
+    let src = source(cfg.path(), &wasm);
+    install(cfg.path(), &src, false).expect("installs");
     let manager = ConnectionManager::new(cfg.path());
 
-    // Instalado pero sin consentir: el scheme no existe para el manager.
-    // Fail-closed, y con la misma respuesta que un scheme que nadie sirve.
+    // Installed but not consented: the scheme does not exist for the manager.
+    // Fail-closed, and with the same answer as a scheme nobody serves.
     let err = manager
         .connect("memplug", "host")
         .await
         .err()
-        .expect("sin consentimiento no conecta");
+        .expect("without consent it does not connect");
     assert_eq!(err.error, Error::Unsupported);
 
     {
         let mut reg = PluginRegistry::discover(cfg.path()).expect("discover");
         assert!(
             reg.set_approval("org.norte.memplug", true)
-                .expect("aprueba")
+                .expect("approves")
         );
-        assert!(reg.set_enabled("org.norte.memplug", true).expect("activa"));
+        assert!(reg.set_enabled("org.norte.memplug", true).expect("enables"));
     }
 
     let connected = manager
         .connect("memplug", "host")
         .await
         .map_err(|d| d.error)
-        .expect("consentido: conecta");
+        .expect("consented: it connects");
     assert!(
         connected.warnings.is_empty(),
-        "un provider en memoria no avisa de nada"
+        "an in-memory provider warns about nothing"
     );
 
-    // Y es el guest de verdad quien contesta: `provider-mem` siembra un
-    // árbol conocido en su raíz.
+    // And it is the real guest answering: `provider-mem` seeds a known tree
+    // at its root.
     let root = VPath::root(Scheme::new("memplug").expect("scheme"), None);
     let names: Vec<Vec<u8>> = connected
         .provider
         .list(&root)
         .await
-        .expect("lista la raíz")
+        .expect("lists the root")
         .map(|e| {
-            e.expect("entrada")
+            e.expect("entry")
                 .path
                 .file_name()
-                .expect("con nombre")
+                .expect("has a name")
                 .as_bytes()
                 .to_vec()
         })
         .collect()
         .await;
-    assert!(!names.is_empty(), "el guest siembra su raíz");
+    assert!(!names.is_empty(), "the guest seeds its root");
 }
 
-/// El mismo guest, declarando `net`: la red que recibe es `ip:puerto` del
-/// endpoint de la conexión, resuelto por el host con el filtro anti-SSRF.
-const MANIFEST_CON_RED: &str = r#"
+/// The same guest, declaring `net`: the network it receives is `ip:port` of
+/// the connection's endpoint, resolved by the host with the anti-SSRF filter.
+const MANIFEST_WITH_NET: &str = r#"
 [plugin]
 id = "org.norte.memplug"
 name = "Mem plug"
@@ -112,108 +112,108 @@ scheme = "memplug"
 net = { hosts = [] }
 "#;
 
-fn instalar_consentido(cfg: &Path, wasm: &Path, manifest: &str) {
+fn install_consented(cfg: &Path, wasm: &Path, manifest: &str) {
     let src = cfg.join("src-plugin");
     std::fs::create_dir_all(&src).expect("mkdir");
     std::fs::write(src.join("plugin.toml"), manifest).expect("manifest");
     std::fs::copy(wasm, src.join("plugin.wasm")).expect("wasm");
-    install(cfg, &src, false).expect("instala");
+    install(cfg, &src, false).expect("installs");
     let mut reg = PluginRegistry::discover(cfg).expect("discover");
     assert!(
         reg.set_approval("org.norte.memplug", true)
-            .expect("aprueba")
+            .expect("approves")
     );
-    assert!(reg.set_enabled("org.norte.memplug", true).expect("activa"));
+    assert!(reg.set_enabled("org.norte.memplug", true).expect("enables"));
 }
 
-/// ADR 0093 §3: el host resuelve y filtra. Un endpoint en el rango de
-/// metadata no se concede aunque el plugin tenga `net`; loopback tecleado
-/// literalmente sí; y sin puerto no hay a qué conceder.
+/// ADR 0093 §3: the host resolves and filters. An endpoint in the metadata
+/// range is not granted even if the plugin has `net`; loopback typed
+/// literally IS; and without a port there is nothing to grant.
 #[tokio::test]
-async fn la_red_de_un_provider_plugin_es_el_endpoint_filtrado_y_con_puerto() {
+async fn a_provider_plugins_network_is_the_filtered_endpoint_with_a_port() {
     let Some(wasm) = build_guest("provider-mem") else {
         return;
     };
     let cfg = tempfile::tempdir().expect("tempdir");
-    instalar_consentido(cfg.path(), &wasm, MANIFEST_CON_RED);
+    install_consented(cfg.path(), &wasm, MANIFEST_WITH_NET);
     let manager = ConnectionManager::new(cfg.path());
 
-    // Metadata de nube: rechazado por el filtro, antes de instanciar nada.
+    // Cloud metadata: rejected by the filter, before instantiating anything.
     let err = manager
         .connect("memplug", "169.254.169.254:80")
         .await
         .err()
-        .expect("link-local no se concede");
+        .expect("link-local is not granted");
     assert_eq!(err.error, Error::ProviderUnavailable { retryable: true });
 
-    // Sin puerto ni `default-port`: no se sabe a qué conceder.
+    // Without a port or `default-port`: there is nothing to grant against.
     let err = manager
         .connect("memplug", "127.0.0.1")
         .await
         .err()
-        .expect("sin puerto no hay concesión");
+        .expect("without a port there is no grant");
     assert_eq!(err.error, Error::Unsupported);
 
-    // Loopback literal con puerto: se concede `127.0.0.1:1` y el guest (que
-    // no abre ninguna conexión) queda configurado.
+    // Literal loopback with a port: `127.0.0.1:1` is granted and the guest
+    // (which opens no connection) ends up configured.
     manager
         .connect("memplug", "127.0.0.1:1")
         .await
         .map_err(|d| d.error)
-        .expect("loopback literal con puerto");
+        .expect("literal loopback with a port");
 }
 
-/// Lo que corre es lo que se aprobó: cambiar el `.wasm` en disco después de
-/// aprobar deja de servir el scheme, aunque el manifiesto no haya cambiado.
+/// What runs is what was approved: changing the `.wasm` on disk after
+/// approving stops serving the scheme, even if the manifest has not changed.
 #[tokio::test]
-async fn un_binario_cambiado_tras_aprobar_no_se_instancia() {
+async fn a_binary_changed_after_approving_is_not_instantiated() {
     let Some(wasm) = build_guest("provider-mem") else {
         return;
     };
     let cfg = tempfile::tempdir().expect("tempdir");
-    instalar_consentido(cfg.path(), &wasm, MANIFEST);
+    install_consented(cfg.path(), &wasm, MANIFEST);
     let manager = ConnectionManager::new(cfg.path());
     manager
         .connect("memplug", "host")
         .await
         .map_err(|d| d.error)
-        .expect("intacto: conecta");
+        .expect("intact: it connects");
 
-    let instalado = cfg.path().join("plugins/org.norte.memplug/plugin.wasm");
-    let mut bytes = std::fs::read(&instalado).expect("lee");
+    let installed = cfg.path().join("plugins/org.norte.memplug/plugin.wasm");
+    let mut bytes = std::fs::read(&installed).expect("read");
     bytes.push(0);
-    std::fs::write(&instalado, bytes).expect("reescribe");
-    // El catálogo re-ancla el digest al descubrir, así que la aprobación deja
-    // de estar vigente (#241) y el scheme deja de existir.
+    std::fs::write(&installed, bytes).expect("rewrite");
+    // The catalogue re-anchors the digest on discovery, so approval stops
+    // being valid (#241) and the scheme stops existing.
     let err = manager
         .connect("memplug", "host")
         .await
         .err()
-        .expect("binario distinto: no sirve");
+        .expect("different binary: does not serve");
     assert_eq!(err.error, Error::Unsupported);
 }
 
-/// El scheme del core sigue siendo del core: un plugin no puede reclamarlo, y
-/// aunque alguien plantase el directorio a mano el manager no pregunta al
-/// catálogo por `sftp`. (La puerta de verdad se prueba en el registro:
+/// The core's scheme stays the core's: a plugin cannot claim it, and even if
+/// someone planted the directory by hand the manager does not ask the
+/// catalogue about `sftp`. (The real gate is tested in the registry:
 /// `resolve_provider_nunca_sirve_un_scheme_del_core`.)
 #[tokio::test]
-async fn un_scheme_del_core_no_se_consulta_al_catalogo() {
+async fn a_core_scheme_is_not_looked_up_in_the_catalogue() {
     let cfg = tempfile::tempdir().expect("tempdir");
     let manager = ConnectionManager::new(cfg.path());
-    // Sin connections.toml ni servidor, `sftp://` falla por el transporte, no
-    // por `Unsupported`: es la prueba de que entró por el brazo del core.
+    // Without connections.toml or a server, `sftp://` fails at the transport,
+    // not with `Unsupported`: that is the proof it went through the core's arm.
     let err = manager
         .connect("sftp", "127.0.0.1:1")
         .await
         .err()
-        .expect("no hay servidor");
+        .expect("there is no server");
     assert_ne!(err.error, Error::Unsupported);
 }
 
 fn build_guest(name: &str) -> Option<PathBuf> {
     if !target_installed("wasm32-wasip2") {
-        eprintln!("SKIP: target wasm32-wasip2 no instalado");
+        eprintln!("SKIP: target wasm32-wasip2 not installed");
         return None;
     }
     let guest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -233,13 +233,13 @@ fn build_guest(name: &str) -> Option<PathBuf> {
         ])
         .arg(&target_dir)
         .status()
-        .expect("cargo build del guest");
-    assert!(status.success(), "el guest {name} no compiló");
+        .expect("cargo build of the guest");
+    assert!(status.success(), "the {name} guest did not build");
     let wasm = target_dir
         .join("wasm32-wasip2")
         .join("release")
         .join(format!("{}.wasm", name.replace('-', "_")));
-    assert!(wasm.exists(), "no se encontró {}", wasm.display());
+    assert!(wasm.exists(), "{} not found", wasm.display());
     Some(wasm)
 }
 

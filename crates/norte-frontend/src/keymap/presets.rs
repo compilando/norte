@@ -63,39 +63,40 @@ pub fn source(name: &str) -> Option<&'static str> {
 mod presets_catalog_tests {
     use super::{NAMES, source};
 
-    /// `NAMES` es el catálogo — cada entrada debe resolver una fuente real
-    /// (final review MINOR 4: sin esto, `NAMES` podría desincronizarse de
-    /// `source()` sin que ningún test lo note).
+    /// `NAMES` is the catalogue — every entry must resolve a real source
+    /// (final review MINOR 4: without this, `NAMES` could fall out of sync
+    /// with `source()` with no test noticing).
     #[test]
-    fn cada_nombre_de_names_resuelve_una_fuente() {
+    fn every_name_in_names_resolves_a_source() {
         for name in NAMES {
             assert!(
                 source(name).is_some(),
-                "NAMES declara {name:?} pero source({name:?}) es None"
+                "NAMES declares {name:?} but source({name:?}) is None"
             );
         }
     }
 
-    /// Ancla el tamaño del catálogo: un preset nuevo debe tocar este test a
-    /// propósito (y con él, el resto de frontends que consumen `NAMES`).
-    /// Renombrado en K2b Task 2 (era `names_tiene_los_tres_presets_de_fabrica`):
-    /// ya no son tres, y el nombre viejo mentiría sobre el tamaño real.
+    /// Pins the catalogue's size: a new preset must touch this test on
+    /// purpose (and with it, the rest of the frontends that consume
+    /// `NAMES`). Renamed in K2b Task 2 (was
+    /// `names_tiene_los_tres_presets_de_fabrica`): it is no longer three,
+    /// and the old name would lie about the real size.
     #[test]
-    fn names_tiene_los_presets_de_fabrica() {
+    fn names_has_the_factory_presets() {
         assert_eq!(NAMES.len(), 7);
     }
 
-    /// Un preset embebido que no parsea no es un fallo ruidoso: los
-    /// consumidores lo ignoran en silencio. `preset_commands` hace
-    /// `let Ok(kf) = parse_keymap(src) else { continue }`, así que un typo en
-    /// —por ejemplo— el `dialog_from` de un preset de K2b encogería el
-    /// vocabulario que `norte doctor` y `ntc keys` tratan por conocido, y el
-    /// síntoma serían avisos de «comando desconocido» en otro sitio. Que
-    /// falle aquí, con el nombre del preset y el diagnóstico.
+    /// An embedded preset that does not parse is not a loud failure: its
+    /// consumers silently ignore it. `preset_commands` does
+    /// `let Ok(kf) = parse_keymap(src) else { continue }`, so a typo in —
+    /// say — a K2b preset's `dialog_from` would shrink the vocabulary
+    /// `norte doctor` and `ntc keys` treat as known, and the symptom would
+    /// be "unknown command" warnings somewhere else. Let it fail here,
+    /// with the preset's name and the diagnostic.
     #[test]
-    fn todos_los_presets_de_fabrica_parsean() {
+    fn every_factory_preset_parses() {
         for name in NAMES {
-            let src = source(name).expect("NAMES resuelve");
+            let src = source(name).expect("NAMES resolves");
             crate::keymap::parse_keymap(src).unwrap_or_else(|e| panic!("preset {name}: {e}"));
         }
     }
@@ -115,7 +116,7 @@ mod presets_catalog_tests {
 ///   whatever replaces it.
 /// - **Check 6** ("only `vim` sets `counts`") already has a pinned test that
 ///   iterates `NAMES`/`source` exactly this way:
-///   [`super::tests::solo_vim_trae_los_contadores_encendidos`] in this
+///   [`super::tests::only_vim_ships_with_counters_turned_on`] in this
 ///   module's parent (`keymap/mod.rs`), predating this task. Duplicating it
 ///   here would just be two tests that can drift from each other.
 ///
@@ -146,10 +147,10 @@ mod k2b_gate_tests {
     /// `.unwrap()` on a `for` loop over seven presets would only say
     /// `SacredKey { .. }` and leave the reader grepping seven files.
     fn build(name: &str, screen: Screen, known: &[&str]) -> Effective {
-        let src = source(name).expect("NAMES resuelve");
+        let src = source(name).expect("NAMES resolves");
         let kf = crate::keymap::parse_keymap(src).unwrap_or_else(|e| panic!("preset {name}: {e}"));
         Effective::build_for(&kf, &[], known, screen)
-            .unwrap_or_else(|e| panic!("preset {name} en {screen:?}: {e}"))
+            .unwrap_or_else(|e| panic!("preset {name} in {screen:?}: {e}"))
     }
 
     /// Check 2: `tab` resolves to `pane.switch` in every bundled preset.
@@ -163,45 +164,46 @@ mod k2b_gate_tests {
     /// the right one to exist at all, and four newly-imported foreign layouts
     /// are the first real chance to get that half wrong (plan rule 2).
     #[test]
-    fn tab_resuelve_a_pane_switch_en_todos_los_presets() {
+    fn tab_resolves_to_pane_switch_in_every_preset() {
         let known = live_commands();
-        let tab = parse_chord("tab").expect("tab parsea");
+        let tab = parse_chord("tab").expect("tab parses");
         for name in NAMES {
             let eff = build(name, Screen::Browse, &known);
             assert!(
                 eff.single_chord_runs(tab, "pane.switch"),
-                "preset {name}: tab no resuelve a pane.switch"
+                "preset {name}: tab does not resolve to pane.switch"
             );
         }
     }
 
-    /// Un acorde no puede nombrar DOS comandos en la misma pantalla.
+    /// A chord cannot name TWO commands on the same screen.
     ///
-    /// El fichero lo permite —son dos líneas de una lista— y el efectivo se
-    /// queda con uno: el otro pierde su tecla sin que nada lo diga, y
-    /// reaparece como `—` en la paleta, en el menú y en la hoja de atajos.
-    /// `orthodox` tenía `alt+n` en `[pane]` atado a `pane.disconnect` y a
-    /// `pane.tab-next`, así que «pestaña siguiente» salía sin tecla en el
-    /// menú y la tecla hacía lo otro.
+    /// The file allows it — they are two lines of a list — and the
+    /// effective one keeps one of them: the other loses its key with
+    /// nothing saying so, and reappears as `—` in the palette, in the menu
+    /// and in the shortcut sheet. `orthodox` had `alt+n` in `[pane]` bound
+    /// to both `pane.disconnect` and `pane.tab-next`, so "next tab" came
+    /// out with no key in the menu and the key did the other thing.
     ///
-    /// Se mira contra el EFECTIVO y no contra el fichero porque es lo que
-    /// corre: cubre además lo que `[global]` mezcla en cada pantalla, que es
-    /// donde una colisión es más fácil de escribir sin verla.
+    /// Checked against the EFFECTIVE one and not the file because that is
+    /// what runs: it also covers what `[global]` mixes into each screen,
+    /// which is where a collision is easiest to write without seeing it.
     #[test]
-    fn ningun_preset_ata_un_acorde_a_dos_comandos_en_la_misma_pantalla() {
+    fn no_preset_binds_a_chord_to_two_commands_on_the_same_screen() {
         for name in NAMES {
-            let kf = crate::keymap::parse_keymap(source(name).expect("NAMES resuelve"))
+            let kf = crate::keymap::parse_keymap(source(name).expect("NAMES resolves"))
                 .unwrap_or_else(|e| panic!("preset {name}: {e}"));
-            // Sección a sección, y sobre el FICHERO: al construir el efectivo
-            // el segundo ya ha pisado al primero, así que ahí la colisión es
-            // invisible — que es justo lo que la hace difícil de ver.
-            for (seccion, raw) in [
+            // Section by section, and over the FILE: by the time the
+            // effective one is built the second has already overwritten
+            // the first, so the collision is invisible there — which is
+            // exactly what makes it hard to see.
+            for (section, raw) in [
                 ("global", &kf.global),
                 ("pane", &kf.pane),
                 ("viewer", &kf.viewer),
                 ("dialog", &kf.dialog),
             ] {
-                let mut por_acorde: std::collections::BTreeMap<
+                let mut by_chord: std::collections::BTreeMap<
                     String,
                     std::collections::BTreeSet<&str>,
                 > = std::collections::BTreeMap::new();
@@ -211,16 +213,16 @@ mod k2b_gate_tests {
                     .chain(&raw.prepend_keymap)
                     .chain(&raw.append_keymap)
                 {
-                    por_acorde
+                    by_chord
                         .entry(b.on.join(" "))
                         .or_default()
                         .insert(b.run.as_str());
                 }
-                for (seq, cmds) in por_acorde {
+                for (seq, cmds) in by_chord {
                     assert!(
                         cmds.len() < 2,
-                        "preset {name}, sección [{seccion}]: `{seq}` ata {} comandos ({}), \
-                         así que todos menos uno se quedan sin tecla",
+                        "preset {name}, section [{section}]: `{seq}` binds {} commands ({}), \
+                         so all but one are left with no key",
                         cmds.len(),
                         cmds.into_iter().collect::<Vec<_>>().join(", ")
                     );
@@ -242,50 +244,49 @@ mod k2b_gate_tests {
     ];
 
     #[test]
-    fn viewer_close_y_los_seis_movers_estan_ligados_en_todos_los_presets() {
+    fn viewer_close_and_the_six_movers_are_bound_in_every_preset() {
         let known = live_commands();
         for name in NAMES {
             let eff = build(name, Screen::Viewer, &known);
             let bound: Vec<&str> = eff.bindings().iter().map(|(_, cmd)| *cmd).collect();
             assert!(
                 bound.contains(&"viewer.close"),
-                "preset {name}: sin viewer.close en [viewer]"
+                "preset {name}: no viewer.close in [viewer]"
             );
             for mover in VIEWER_MOVERS {
                 assert!(
                     bound.contains(&mover),
-                    "preset {name}: sin {mover} en [viewer]"
+                    "preset {name}: no {mover} in [viewer]"
                 );
             }
         }
     }
 
-    /// El ZOOM de una imagen está atado en los SIETE presets (spec
-    /// 2026-09-20).
+    /// An image's ZOOM is bound in all SEVEN presets (spec 2026-09-20).
     ///
-    /// Es una superficie propia de norte: ningún gestor de referencia atesta
-    /// un zoom en su visor, así que las tres teclas las elegimos nosotros y
-    /// la única forma de que un lector las tenga es que estén en todos. Si
-    /// no, el catálogo las anuncia, la hoja de referencia las imprime, la
-    /// paleta las ofrece y su teclado no hace nada — que es exactamente la
-    /// avería que CLAUDE.md dice que ya ha aterrizado tres veces.
+    /// It is a surface of norte's own: no reference manager attests a zoom
+    /// in its viewer, so we chose the three keys ourselves, and the only
+    /// way a reader has them is if they are in all of them. Otherwise, the
+    /// catalogue announces them, the reference sheet prints them, the
+    /// palette offers them, and their keyboard does nothing — which is
+    /// exactly the breakage CLAUDE.md says has already landed three times.
     #[test]
-    fn el_zoom_del_visor_esta_atado_en_los_siete_presets() {
+    fn the_viewers_zoom_is_bound_in_all_seven_presets() {
         let known = live_commands();
-        let mut faltan: Vec<String> = Vec::new();
+        let mut missing: Vec<String> = Vec::new();
         for name in NAMES {
             let eff = build(name, Screen::Viewer, &known);
             let bound: Vec<&str> = eff.bindings().iter().map(|(_, cmd)| *cmd).collect();
             for cmd in ["viewer.zoom-in", "viewer.zoom-out", "viewer.zoom-fit"] {
                 if !bound.contains(&cmd) {
-                    faltan.push(format!("{name}: {cmd}"));
+                    missing.push(format!("{name}: {cmd}"));
                 }
             }
         }
         assert!(
-            faltan.is_empty(),
-            "zoom sin tecla en algún preset:\n  {}",
-            faltan.join("\n  ")
+            missing.is_empty(),
+            "zoom with no key in some preset:\n  {}",
+            missing.join("\n  ")
         );
     }
 
@@ -303,14 +304,14 @@ mod k2b_gate_tests {
     /// preset — the only kind of file that ever reaches `dialog_from` — is
     /// refused those two lists by `check_layer_keys`.
     #[test]
-    fn dialog_no_vacio_tras_resolver_dialog_from_en_todos_los_presets() {
+    fn dialog_is_not_empty_after_resolving_dialog_from_in_every_preset() {
         for name in NAMES {
-            let src = source(name).expect("NAMES resuelve");
+            let src = source(name).expect("NAMES resolves");
             let kf =
                 crate::keymap::parse_keymap(src).unwrap_or_else(|e| panic!("preset {name}: {e}"));
             assert!(
                 !kf.dialog.keymap.is_empty(),
-                "preset {name}: [dialog] vacío tras resolver dialog_from"
+                "preset {name}: [dialog] empty after resolving dialog_from"
             );
         }
     }
@@ -329,59 +330,59 @@ mod k2b_gate_tests {
             .collect()
     }
 
-    /// `pane.sync-dirs` está ligado en TODO preset que ligue su gemelo
-    /// `pane.compare-dirs`, y a `ctrl+y` en los cinco que lo ligan — cuatro
-    /// tomándolo del chord de Krusader, que es el único gestor de referencia
-    /// que le da uno.
+    /// `pane.sync-dirs` is bound in EVERY preset that binds its twin
+    /// `pane.compare-dirs`, and to `ctrl+y` in the five that bind it — four
+    /// taking it from Krusader's chord, which is the only reference manager
+    /// that gives it one.
     ///
-    /// La lista de los que NO lo ligan se escribe A MANO, y ésa es la
-    /// decisión: `far` y `norton` dejan los dos sin ligar por la regla de
-    /// fidelidad que sus propios ficheros enuncian —Far tiene el
-    /// sincronizador en un plugin y NC no lo tenía— y un test que exigiera
-    /// «todos los presets» desharía esos dos comentarios sin discutirlos.
-    /// Escrita aquí, quitar una fidelidad cuesta editar este test.
+    /// The list of the ones that do NOT bind it is written BY HAND, and
+    /// that is the decision: `far` and `norton` leave both unbound by the
+    /// fidelity rule their own files state — Far has the syncer in a plugin
+    /// and NC did not have one — and a test that demanded "every preset"
+    /// would undo those two comments without discussing them. Written here,
+    /// dropping a fidelity choice costs editing this test.
     #[test]
-    fn sincronizar_esta_ligado_dondequiera_que_lo_este_comparar() {
-        const SIN_LIGAR: [&str; 2] = ["far", "norton"];
+    fn sync_is_bound_wherever_compare_is() {
+        const UNBOUND: [&str; 2] = ["far", "norton"];
         for name in NAMES {
-            let src = source(name).expect("NAMES resuelve");
+            let src = source(name).expect("NAMES resolves");
             let kf =
                 crate::keymap::parse_keymap(src).unwrap_or_else(|e| panic!("preset {name}: {e}"));
             let runs = preset_runs(&kf);
-            let compara = runs.contains(&"pane.compare-dirs");
-            let sincroniza = runs.contains(&"pane.sync-dirs");
-            if SIN_LIGAR.contains(name) {
+            let compares = runs.contains(&"pane.compare-dirs");
+            let syncs = runs.contains(&"pane.sync-dirs");
+            if UNBOUND.contains(name) {
                 assert!(
-                    !compara && !sincroniza,
-                    "preset {name}: ya no es de los que no ligan la familia — quita el nombre de SIN_LIGAR"
+                    !compares && !syncs,
+                    "preset {name}: is no longer one of the ones that leave the family unbound — remove the name from UNBOUND"
                 );
                 continue;
             }
-            assert!(compara, "preset {name}: sin pane.compare-dirs");
+            assert!(compares, "preset {name}: no pane.compare-dirs");
             assert!(
-                sincroniza,
-                "preset {name}: liga comparar y NO sincronizar — la mitad que escribe se quedó sin tecla"
+                syncs,
+                "preset {name}: binds compare and NOT sync — the writing half was left with no key"
             );
         }
     }
 
-    /// La tecla por defecto de `pane.sync-dirs` no es una de función con
-    /// modificador.
+    /// `pane.sync-dirs`'s default key is not a function key with a
+    /// modifier.
     ///
-    /// #159: bajo tmux NINGUNA llega — ni `Shift+F2` ni `Alt+F7` —, así que
-    /// una tecla así sería un atajo documentado y muerto, y este repo ya envió
-    /// uno. Se afirma sobre el chord CONCRETO en vez de sobre una propiedad
-    /// del `Chord`, porque lo que hay que impedir es que alguien lo mueva a
-    /// una tecla de función «porque queda simétrico con Shift+F2».
+    /// #159: under tmux NONE arrive — not `Shift+F2` nor `Alt+F7` — so a key
+    /// like that would be a documented, dead shortcut, and this repo has
+    /// already shipped one. It asserts on the CONCRETE chord rather than on
+    /// a property of `Chord`, because what has to be prevented is someone
+    /// moving it to a function key "because it is symmetric with Shift+F2".
     #[test]
-    fn la_tecla_de_sincronizar_no_es_de_funcion_con_modificador() {
+    fn syncs_key_is_not_a_function_key_with_a_modifier() {
         let known = live_commands();
-        let ctrl_y = parse_chord("ctrl+y").expect("ctrl+y parsea");
+        let ctrl_y = parse_chord("ctrl+y").expect("ctrl+y parses");
         for name in ["orthodox", "cua", "vim", "total-commander", "krusader"] {
             let eff = build(name, Screen::Browse, &known);
             assert!(
                 eff.single_chord_runs(ctrl_y, "pane.sync-dirs"),
-                "preset {name}: ctrl+y no resuelve a pane.sync-dirs"
+                "preset {name}: ctrl+y does not resolve to pane.sync-dirs"
             );
         }
     }
@@ -394,9 +395,9 @@ mod k2b_gate_tests {
     /// `KeymapError` variants from an unrelated screen/known-list
     /// combination.
     #[test]
-    fn todo_run_de_cada_preset_esta_en_el_catalogo_compartido() {
+    fn every_run_in_every_preset_is_in_the_shared_catalogue() {
         for name in NAMES {
-            let src = source(name).expect("NAMES resuelve");
+            let src = source(name).expect("NAMES resolves");
             let kf =
                 crate::keymap::parse_keymap(src).unwrap_or_else(|e| panic!("preset {name}: {e}"));
             for run in preset_runs(&kf) {
@@ -404,196 +405,200 @@ mod k2b_gate_tests {
                     .strip_prefix("lua:")
                     .is_some_and(crate::keymap::valid_lua_name)
                     || crate::keymap::catalogue::lookup(run).is_some();
-                assert!(known, "preset {name}: comando desconocido {run:?}");
+                assert!(known, "preset {name}: unknown command {run:?}");
             }
         }
     }
 
-    /// Las superficies PROPIAS de norte están atadas en los SIETE presets.
+    /// norte's OWN surfaces are bound in all SEVEN presets.
     ///
-    /// Son las que ningún gestor de referencia tenía, así que no hay nada que
-    /// transcribir y hay que elegirles tecla a mano — y por eso se olvidan.
-    /// `app.theme` se quedó sin atar en los cuatro presets importados: el
-    /// ÚNICO de la familia que se cayó, y en los cuatro a la vez. Al tema solo
-    /// se llegaba por menú o paleta.
+    /// They are the ones no reference manager had, so there is nothing to
+    /// transcribe and a key has to be picked by hand — and that is why they
+    /// get forgotten. `app.theme` was left unbound in the four imported
+    /// presets: the ONLY one of the family that fell through, and in all
+    /// four at once. The theme could only be reached through the menu or
+    /// the palette.
     ///
-    /// Es la forma de #228 —presets que dejan comandos del núcleo sin tecla—
-    /// aplicada a la familia entera en vez de a un comando suelto.
+    /// It is #228's shape — presets that leave core commands with no key —
+    /// applied to the whole family instead of to a single command.
     #[test]
-    fn las_superficies_propias_estan_atadas_en_los_siete_presets() {
-        let propias = [
+    fn nortes_own_surfaces_are_bound_in_all_seven_presets() {
+        let own = [
             "app.theme",
             "app.settings",
             "app.extensions",
             "app.palette",
             "app.menu",
         ];
-        let mut faltan: Vec<String> = Vec::new();
-        for nombre in NAMES {
-            let src = source(nombre).expect("NAMES resuelve");
+        let mut missing: Vec<String> = Vec::new();
+        for name in NAMES {
+            let src = source(name).expect("NAMES resolves");
             let kf =
-                crate::keymap::parse_keymap(src).unwrap_or_else(|e| panic!("preset {nombre}: {e}"));
-            let atados = preset_runs(&kf);
-            for cmd in propias {
-                if !atados.contains(&cmd) {
-                    faltan.push(format!("{nombre}: {cmd}"));
+                crate::keymap::parse_keymap(src).unwrap_or_else(|e| panic!("preset {name}: {e}"));
+            let bound = preset_runs(&kf);
+            for cmd in own {
+                if !bound.contains(&cmd) {
+                    missing.push(format!("{name}: {cmd}"));
                 }
             }
         }
         assert!(
-            faltan.is_empty(),
-            "superficies de norte sin tecla — solo se llega a ellas por menú o \
-             paleta:\n  {}",
-            faltan.join("\n  ")
+            missing.is_empty(),
+            "norte's own surfaces with no key — reachable only through the \
+             menu or the palette:\n  {}",
+            missing.join("\n  ")
         );
     }
 
-    /// Todo panel que pueda quedarse el TECLADO se abre con una tecla, y la
-    /// pantalla se recorre entera con otra.
+    /// Every panel that can keep the KEYBOARD opens with a key, and the
+    /// screen is browsed whole with another.
     ///
-    /// La misma forma que el test de arriba, sobre la otra familia que ningún
-    /// gestor de referencia tenía: los paneles laterales. `layout.processes`
-    /// estaba sin atar en los siete —al único sitio que dice qué está
-    /// copiando norte se llegaba solo por el menú— y `layout.focus-next`
-    /// también, así que con el sidebar y el visor delante había que acordarse
-    /// de la tecla de cada panel para moverse entre ellos: `tab` alterna los
-    /// dos listados y nada más.
+    /// The same shape as the test above, over the other family no
+    /// reference manager had: the side panels. `layout.processes` was
+    /// unbound in all seven — the only place that says what norte is
+    /// copying could only be reached through the menu — and so was
+    /// `layout.focus-next`, so with the sidebar and the viewer in front you
+    /// had to remember each panel's own key to move between them: `tab`
+    /// only toggles the two listings.
     ///
-    /// `layout.focus-prev` NO está en la lista: en krusader su acorde es el
-    /// de «Sync panels» y se queda sin atar a propósito (ver el fichero). El
-    /// anillo da la vuelta, así que hacia delante se llega igual.
+    /// `layout.focus-prev` is NOT in the list: in krusader its chord is
+    /// "Sync panels"'s and it is left unbound on purpose (see the file).
+    /// The ring wraps around, so forward still gets there.
     #[test]
-    fn los_paneles_con_teclado_se_abren_y_se_recorren_en_los_siete_presets() {
-        let paneles = [
+    fn keyboard_panels_open_and_are_browsed_in_all_seven_presets() {
+        let panels = [
             "layout.places",
             "layout.preview",
             "layout.processes",
             "layout.focus-next",
-            // El registro (#323): panel que toma el teclado, así que entra en
-            // esta lista. Lo ata `alt+l` en los siete, y la regla del
-            // repositorio es que un cambio de teclas no está hecho hasta que
-            // están los siete — esto es lo que lo hace cumplir a máquina.
+            // The log (#323): a panel that takes the keyboard, so it enters
+            // this list. `alt+l` binds it in all seven, and the
+            // repository's rule is that a key change is not done until all
+            // seven have it — this is what enforces that by machine.
             "layout.log",
-            // El mapa de disco (fase 4): otro panel que toma el teclado, y por
-            // tanto otro que no se puede dejar sin tecla en ninguno. `alt+z`
-            // en los siete — la única letra que quedaba libre en todos.
+            // The disk map (phase 4): another panel that takes the
+            // keyboard, and therefore another that cannot be left with no
+            // key in any of them. `alt+z` in all seven — the only letter
+            // still free in all of them.
             "layout.disk-map",
-            // El terminal (#362), y es el caso EXTREMO de esta lista: los
-            // demás paneles consumen comandos del catálogo, y éste consume
-            // bytes, o sea que se queda también los acordes que serían de
-            // norte. Sin tecla no se entra y, lo que importa, no se sale.
-            // `ctrl+alt+s` en los siete.
+            // The terminal (#362), and it is the EXTREME case of this
+            // list: the other panels consume catalogue commands, and this
+            // one consumes bytes, i.e. it also takes the chords that would
+            // be norte's. With no key you cannot enter and, what matters,
+            // cannot leave. `ctrl+alt+s` in all seven.
             "layout.terminal",
         ];
-        let mut faltan: Vec<String> = Vec::new();
-        for nombre in NAMES {
-            let src = source(nombre).expect("NAMES resuelve");
+        let mut missing: Vec<String> = Vec::new();
+        for name in NAMES {
+            let src = source(name).expect("NAMES resolves");
             let kf =
-                crate::keymap::parse_keymap(src).unwrap_or_else(|e| panic!("preset {nombre}: {e}"));
-            let atados = preset_runs(&kf);
-            for cmd in paneles {
-                if !atados.contains(&cmd) {
-                    faltan.push(format!("{nombre}: {cmd}"));
+                crate::keymap::parse_keymap(src).unwrap_or_else(|e| panic!("preset {name}: {e}"));
+            let bound = preset_runs(&kf);
+            for cmd in panels {
+                if !bound.contains(&cmd) {
+                    missing.push(format!("{name}: {cmd}"));
                 }
             }
         }
         assert!(
-            faltan.is_empty(),
-            "paneles sin tecla — o no se abren, o no se puede salir de ellos \
-             sin ratón:\n  {}",
-            faltan.join("\n  ")
+            missing.is_empty(),
+            "panels with no key — either they do not open, or there is no \
+             way out of them without a mouse:\n  {}",
+            missing.join("\n  ")
         );
     }
 
-    /// Ningún preset ata un acorde que un terminal NO PUEDE entregar.
+    /// No preset binds a chord a terminal CANNOT deliver.
     ///
-    /// `ctrl+<letra mayúscula>` es esa forma. [`crate::keymap::parse_chord`]
-    /// la guarda como `Char('P')`, y un terminal manda para Ctrl+P y para
-    /// Ctrl+Shift+P el MISMO byte (0x10), que llega como `Char('p')` en
-    /// minúscula. Distinguirlos exige el protocolo de teclado de Kitty, y el
-    /// adaptador de la TUI (`norte_tui::keymap::chord_from_crossterm`)
-    /// documenta que norte NO lo activa —la misma razón por la que `mod+` es
-    /// Ctrl en todas las plataformas—. Así que el binding existe, el catálogo
-    /// lo anuncia, la ayuda lo imprime, y la tecla no hace NADA.
+    /// `ctrl+<uppercase letter>` is that shape. [`crate::keymap::parse_chord`]
+    /// stores it as `Char('P')`, and a terminal sends the SAME byte (0x10)
+    /// for Ctrl+P and for Ctrl+Shift+P, which arrives as lower-case
+    /// `Char('p')`. Telling them apart requires Kitty's keyboard protocol,
+    /// and the TUI's adapter (`norte_tui::keymap::chord_from_crossterm`)
+    /// documents that norte does NOT enable it — the same reason `mod+` is
+    /// Ctrl on every platform. So the binding exists, the catalogue
+    /// announces it, help prints it, and the key does NOTHING.
     ///
-    /// Salió de la paleta de `krusader`: `ctrl+P` para abrirla, con un
-    /// comentario explicando que la mayúscula ES el shift. Lo es en la
-    /// gramática de acordes; no lo es en el cable. Y como `ctrl+p` en
-    /// minúscula sí está atado ahí a `pane.split-file`, quien buscaba la
-    /// paleta se encontraba un diálogo de partir ficheros.
+    /// It came out of `krusader`'s palette: `ctrl+P` to open it, with a
+    /// comment explaining that the uppercase IS the shift. It is, in the
+    /// chord grammar; it is not, on the wire. And since lower-case `ctrl+p`
+    /// IS bound there to `pane.split-file`, whoever looked for the palette
+    /// found a split-file dialog.
     ///
-    /// El test vive AQUÍ y no en la TUI porque los presets son de este crate,
-    /// y la regla es sobre lo que un preset puede prometer.
+    /// The test lives HERE and not in the TUI because the presets belong to
+    /// this crate, and the rule is about what a preset is allowed to
+    /// promise.
     #[test]
-    fn ningun_preset_ata_un_acorde_que_el_terminal_no_entrega() {
-        let mut muertos: Vec<String> = Vec::new();
-        for nombre in NAMES {
-            let src = source(nombre).expect("NAMES resuelve");
+    fn no_preset_binds_a_chord_the_terminal_cannot_deliver() {
+        let mut dead: Vec<String> = Vec::new();
+        for name in NAMES {
+            let src = source(name).expect("NAMES resolves");
             let kf =
-                crate::keymap::parse_keymap(src).unwrap_or_else(|e| panic!("preset {nombre}: {e}"));
+                crate::keymap::parse_keymap(src).unwrap_or_else(|e| panic!("preset {name}: {e}"));
             for b in [&kf.global, &kf.pane, &kf.viewer, &kf.dialog]
                 .into_iter()
                 .flat_map(|s| s.keymap.iter())
             {
                 for txt in &b.on {
                     if crate::keymap::parse_chord(txt).is_err() {
-                        continue; // lo que no parsea ya lo caza otro check
+                        continue; // what does not parse is already caught by another check
                     }
-                    // Sobre el TEXTO del binding y no sobre el `Chord`: es
-                    // donde vive la regla —lo que un preset escribió— y el
-                    // tipo no expone sus campos fuera de su módulo.
-                    let mut partes: Vec<&str> = txt.split('+').collect();
-                    let Some(tecla) = partes.pop() else { continue };
-                    let con_ctrl = partes
+                    // On the binding's TEXT and not on the `Chord`: that is
+                    // where the rule lives — what a preset wrote — and the
+                    // type does not expose its fields outside its module.
+                    let mut parts: Vec<&str> = txt.split('+').collect();
+                    let Some(key) = parts.pop() else { continue };
+                    let with_ctrl = parts
                         .iter()
                         .any(|m| m.eq_ignore_ascii_case("ctrl") || m.eq_ignore_ascii_case("mod"));
-                    let letra_sola = tecla.chars().count() == 1
-                        && tecla.chars().next().is_some_and(|c| c.is_ascii_uppercase());
-                    if con_ctrl && letra_sola {
-                        muertos.push(format!("{nombre}: «{txt}» → {}", b.run));
+                    let bare_letter = key.chars().count() == 1
+                        && key.chars().next().is_some_and(|c| c.is_ascii_uppercase());
+                    if with_ctrl && bare_letter {
+                        dead.push(format!("{name}: \u{ab}{txt}\u{bb} -> {}", b.run));
                     }
                 }
             }
         }
         assert!(
-            muertos.is_empty(),
-            "acordes que ningún terminal entrega sin el protocolo de Kitty, \
-             que norte no activa:\n  {}",
-            muertos.join("\n  ")
+            dead.is_empty(),
+            "chords no terminal delivers without Kitty's protocol, which \
+             norte does not enable:\n  {}",
+            dead.join("\n  ")
         );
     }
 
-    /// Los cuatro comandos de perfil existen en el catálogo compartido y
-    /// NINGÚN preset los ata.
+    /// The four profile commands exist in the shared catalogue and NO
+    /// preset binds them.
     ///
-    /// #228 fue el hueco contrario —presets que dejaban comandos del núcleo
-    /// sin ninguna tecla— y la lección de aquello no es «ata todo»: atar
-    /// cuatro teclas nuevas en siete presets sin que nadie lo haya pedido
-    /// decide por el lector qué tecla es un perfil, encima de teclas que en
-    /// su gestor de toda la vida significan otra cosa. Se llega por la
-    /// paleta y por el menú, y quien quiera un acorde se lo ata él.
+    /// #228 was the opposite gap — presets that left core commands with no
+    /// key at all — and the lesson from that is not "bind everything":
+    /// binding four new keys in seven presets with nobody asking for it
+    /// decides for the reader which key is a profile, on top of keys that
+    /// in their lifelong manager mean something else. They are reached
+    /// through the palette and the menu, and whoever wants a chord binds it
+    /// themselves.
     #[test]
-    fn los_comandos_de_perfil_existen_y_no_los_ata_ningun_preset() {
-        let perfil = [
+    fn profile_commands_exist_and_no_preset_binds_them() {
+        let profile = [
             "profile.pick",
             "profile.next",
             "profile.prev",
             "profile.save-as",
         ];
-        for cmd in perfil {
+        for cmd in profile {
             assert!(
                 crate::keymap::catalogue::lookup(cmd).is_some(),
-                "{cmd} no está en el catálogo compartido"
+                "{cmd} is not in the shared catalogue"
             );
         }
         for name in NAMES {
-            let src = source(name).expect("NAMES resuelve");
+            let src = source(name).expect("NAMES resolves");
             let kf =
                 crate::keymap::parse_keymap(src).unwrap_or_else(|e| panic!("preset {name}: {e}"));
             for run in preset_runs(&kf) {
                 assert!(
-                    !perfil.contains(&run),
-                    "preset {name} ata {run:?}: los perfiles llegan sin acorde"
+                    !profile.contains(&run),
+                    "preset {name} binds {run:?}: profiles are reached with no chord"
                 );
             }
         }
@@ -605,7 +610,7 @@ mod k2b_gate_tests {
     /// is dated rather than unknown" — plan rule 8's mandatory header
     /// block). `orthodox`/`vim`/`cua` predate this convention and are not
     /// transcriptions of one external document with a version to record —
-    /// there is no `<Program> <version>` to name for "mc clásico" or
+    /// there is no `<Program> <version>` to name for "classic mc" or
     /// "vim-like" the way there is for "Total Commander 11.58" — so the same
     /// header shape does not fit them, and asserting it there would either
     /// fail on files this task did not touch or force a fabricated
@@ -633,21 +638,21 @@ mod k2b_gate_tests {
     }
 
     #[test]
-    fn los_presets_importados_fechan_su_transcripcion_en_la_primera_linea() {
+    fn imported_presets_date_their_transcription_on_the_first_line() {
         for name in TRANSCRIBED_IMPORTS {
-            let src = source(name).expect("NAMES resuelve");
+            let src = source(name).expect("NAMES resolves");
             let first = src.lines().next().unwrap_or_default();
             assert!(
                 first.starts_with('#'),
-                "preset {name}: la primera línea no es un comentario: {first:?}"
+                "preset {name}: the first line is not a comment: {first:?}"
             );
             assert!(
                 first.contains("transcribed"),
-                "preset {name}: la primera línea no nombra una transcripción: {first:?}"
+                "preset {name}: the first line does not name a transcription: {first:?}"
             );
             assert!(
                 has_iso_date(first),
-                "preset {name}: la primera línea no trae una fecha ISO: {first:?}"
+                "preset {name}: the first line carries no ISO date: {first:?}"
             );
         }
     }

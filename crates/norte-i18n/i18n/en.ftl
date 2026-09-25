@@ -228,7 +228,7 @@ msg-no-tasks = no running tasks
 msg-task-finished = that task already finished
 msg-error = error: { $error }
 msg-refresh-error = refresh: { $error }
-# Errores por CATEGORÍA (spec §17.7): localizados, jamás el string del OS.
+# Errors by CATEGORY (spec §17.7): localized, never the OS's own string.
 err-not-found = not found
 err-permission-denied = permission denied
 err-conflict-exists = destination already exists
@@ -273,18 +273,19 @@ err-lua-cancelled = Lua command cancelled
 err-lua-timeout = Lua command timed out
 err-lua-statusbar = Lua statusbar disabled: { $detail }
 err-lua-no-state-dir = project init.lua not loaded: no state directory (XDG_STATE_HOME/HOME)
-# Ya en la cima: no hay directorio padre (raíz `/` o raíz de unidad Windows).
+# Already at the top: there is no parent directory (root `/` or a Windows
+# drive root).
 msg-nav-at-top = already at the top
-# El rastro de atrás/adelante se acabó: la tecla lo DICE, porque una tecla
-# que calla es indistinguible de una rota.
+# The back/forward trail ran out: the key SAYS so, because a key that stays
+# silent is indistinguishable from a broken one.
 msg-nav-no-back = no further back
 msg-nav-no-jump-point = this panel has no jump point
 msg-nav-jump-point-set = jump point set here
 msg-history-cleared = history cleared
 msg-popular-cleared = popular directories cleared
 msg-nav-no-forward = nothing to go forward to
-# Un pane virtual de búsqueda no es una ubicación: una lista de hits no se
-# puede mandar al otro pane ni traer de él.
+# A virtual search pane is not a location: a list of hits cannot be sent to
+# the other pane nor brought from it.
 msg-pane-not-a-location = search results are not a location: nothing to send
 # A pasted newline must never submit a field (#143): only the first line is
 # inserted, and this says how many more were dropped.
@@ -342,9 +343,9 @@ viewer-image-too-large = image too large to preview
 viewer-image-unreadable = image header not understood
 viewer-image-loading = loading image…
 viewer-plugin-preview-lossy = [lossy decode]
-# Ronda de arreglo 2 (Task 5, fase 5 WOW): el texto largo original no cabía
-# junto a la posición de scroll (`pos`) en 80 columnas — ni siquiera solo,
-# en ES. Acortado a lo que quepa en los dos idiomas con `pos` al lado.
+# Fix round 2 (Task 5, phase 5 WOW): the original long text did not fit
+# next to the scroll position (`pos`) in 80 columns — not even alone, in
+# ES. Shortened to what fits in both languages with `pos` alongside.
 viewer-image-needs-previewer = no image previewer approved yet — press F12
 # Task 5b (fase 5 WOW, review finding from T6): counterpart of the key above
 # for `Modo::Kitty`, which needs a `thumbnail` plugin approved (not a
@@ -801,7 +802,7 @@ goto-title = Go to
 goto-section-path = Path
 goto-section-history = History
 goto-section-popular = Frequent
-goto-section-favorites = Favourites
+goto-section-favorites = Favorites
 goto-section-connections = Connections
 goto-section-commands = Commands
 goto-section-index = Found by the index
@@ -1022,8 +1023,8 @@ places-section-drives = Drives
 places-section-favorites = Favorites
 places-empty = nothing here yet
 
-# Fase A: el panel de procesos y la hoja de atributos. Dos paneles nuevos que
-# se abren a mano; la franja de tareas de siempre no se toca.
+# Phase A: the processes panel and the attributes sheet. Two new panels
+# opened by hand; the usual task strip is left untouched.
 processes-title = Processes
 log-level = level
 log-level-error = error
@@ -1173,8 +1174,9 @@ panelbar-metadata = Details
 panelbar-log = Log
 panelbar-disk-map = Map
 panelbar-timeline = History
-# «Shell» y no «Terminal»: la letra del botón es la inicial, y `Tree` ya se
-# queda la T. En español no hay choque y sí dice «Terminal».
+# "Shell" and not "Terminal": the button's letter is the initial, and `Tree`
+# already takes the T. In Spanish there is no clash, so it does say
+# "Terminal".
 panelbar-terminal = Shell
 # The terminal panel's footer: the ONLY key the panel does not pass on to the
 # shell, so the only one worth announcing.
@@ -2026,9 +2028,10 @@ gui-task-kind-split = split
 gui-task-kind-combine = combine
 gui-task-kind-sync-plan = plan
 gui-task-kind-sync = sync
-# La lanzó OTRO cliente de la misma sesión. Se pinta igual y se cancela igual
-# —es la misma sesión—, pero el tablero lo dice: una operación que uno no ha
-# pedido y no se distingue de las suyas es una sorpresa.
+# It was launched by ANOTHER client of the same session. It is painted the
+# same and cancelled the same — it is the same session — but the board says
+# so: an operation you did not ask for, and indistinguishable from your own,
+# is a surprise.
 gui-task-foreign = not yours
 gui-task-state-pending = pending
 gui-task-state-running = running
@@ -2373,8 +2376,8 @@ modal-chmod-count = { $n } entries
 modal-new-file-title = New file
 # #309: the window can now ADD a favourite, not just open the list. The name
 # comes suggested, and saving REPLACES the one that already has that name.
-modal-hotlist-name-title = Save as favourite
-hotlist-name-empty = a favourite with no name is not saved
+modal-hotlist-name-title = Save as favorite
+hotlist-name-empty = a favorite with no name is not saved
 modal-rename-title = Rename
 modal-delete-title = Move to trash?
 # The three verdicts of the shared resolver, for a key that IS bound.

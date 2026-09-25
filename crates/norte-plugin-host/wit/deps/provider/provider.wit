@@ -1,41 +1,43 @@
-// La interfaz de provider, en su propio paquete (ADR 0041 decisión 4).
+// The provider interface, in its own package (ADR 0041 decision 4).
 //
-// Vive aparte de `norte:plugin` porque es la que MÁS se va a mover: ADR 0041
-// decisión 3 dice que sus huecos —copia en servidor, papelera, atributos,
-// reanudación, cancelación— se tapan cuando un plugin real los pida, y cada
-// uno es un bump. Mientras compartía paquete con `previewer`, cada uno de esos
-// bumps dejaba de instanciar a todos los previewers ya compilados.
+// It lives apart from `norte:plugin` because it is the one that is going to
+// move THE MOST: ADR 0041 decision 3 says its gaps — server-side copy,
+// trash, attributes, resume, cancellation — get filled in when a real plugin
+// asks for them, and each one is a bump. While it shared a package with
+// `previewer`, each of those bumps stopped every already-compiled previewer
+// from instantiating.
 //
-// Empieza en 0.1.0 y no hereda el 0.6.0 del paquete del que sale: es un
-// paquete nuevo, y su historia previa está en la cabecera de
-// `norte-plugin.wit`.
+// It starts at 0.1.0 and does not inherit the 0.6.0 of the package it came
+// from: it is a new package, and its earlier history is in
+// `norte-plugin.wit`'s header.
 package norte:provider@0.1.0;
 
-/// Interfaz `provider` (#30, ADR 0032): proyección SÍNCRONA del trait
-/// `norte_vfs::Provider`. El streaming async se proyecta a llamadas ACOTADAS
-/// (list paginado, read por rango) que el host reensambla. Paths y nombres
-/// cruzan como BYTES CRUDOS (regla 1) — un path es su lista de segmentos, cada
-/// segmento su lista de bytes; jamás un `string`. STAGE 2 = solo-lectura, sin
-/// red: de-risk de la proyección.
+/// `provider` interface (#30, ADR 0032): SYNCHRONOUS projection of the
+/// `norte_vfs::Provider` trait. Async streaming is projected to BOUNDED
+/// calls (paginated list, ranged read) that the host reassembles. Paths and
+/// names cross as RAW BYTES (rule 1) — a path is its list of segments, each
+/// segment its list of bytes; never a `string`. STAGE 2 = read-only, no
+/// network: de-risking the projection.
 interface provider {
-    /// Tipo de una entrada del árbol.
+    /// Type of a tree entry.
     enum entry-kind { file, dir, symlink, other }
 
-    /// Una entrada listada/consultada. `name` en bytes crudos (regla 1).
+    /// A listed/queried entry. `name` in raw bytes (rule 1).
     record entry {
         name: list<u8>,
         kind: entry-kind,
         size: option<u64>,
     }
 
-    /// Error del provider: proyección de `norte_proto::Error`. Se incluyen las
-    /// variantes relevantes al camino de lectura para que la taxonomía NO se
-    /// pierda (review): `cursor-expired` (la paginación lo necesita),
-    /// `provider-unavailable` (transitorio remoto, stage 3), `loop` (symlinks).
-    /// El flag `retryable` de `io`/`provider-unavailable` se difiere a stage 3
-    /// (exigiría un `variant`, no un `enum`). `other` = variante conocida aún
-    /// no mapeada — un `enum` WIT es CERRADO, no absorbe variantes futuras (a
-    /// diferencia del `Unknown` de proto): añadir una es un cambio de wire.
+    /// Provider error: projection of `norte_proto::Error`. The variants
+    /// relevant to the read path are included so the taxonomy is NOT lost
+    /// (review): `cursor-expired` (pagination needs it),
+    /// `provider-unavailable` (transient remote, stage 3), `loop` (symlinks).
+    /// The `retryable` flag of `io`/`provider-unavailable` is deferred to
+    /// stage 3 (it would require a `variant`, not an `enum`). `other` = a
+    /// known variant not yet mapped — a WIT `enum` is CLOSED, it does not
+    /// absorb future variants (unlike proto's `Unknown`): adding one is a
+    /// wire change.
     enum vfs-error {
         not-found,
         permission-denied,
@@ -51,94 +53,98 @@ interface provider {
         other,
     }
 
-    /// Capabilities proyectadas. Además del flag de solo-lectura, el guest
-    /// declara HONESTAMENTE (fase 10a) la sensibilidad y preservación de caja
-    /// (deciden qué casos de colisión de caja aplican en la suite contractual).
-    /// Un flag que el guest no ponga se traduce a "capability ausente" en el
-    /// adapter host. (Resume/APPEND no viaja: el adapter usa el `open_resumable`
-    /// por defecto del trait, que NO reanuda — declararlo mentiría.)
+    /// Projected capabilities. Besides the read-only flag, the guest
+    /// HONESTLY declares (phase 10a) case sensitivity and preservation
+    /// (they decide which case-collision cases apply in the contract
+    /// suite). A flag the guest does not set translates to "capability
+    /// absent" in the host adapter. (Resume/APPEND does not travel: the
+    /// adapter uses the trait's default `open_resumable`, which does NOT
+    /// resume — declaring it would be a lie.)
     record caps {
-        /// Solo-lectura: el adapter rechaza toda mutación.
+        /// Read-only: the adapter rejects every mutation.
         read-only: bool,
-        /// El backend distingue `Caja` de `caja` (POSIX). Sin él, el adapter
-        /// asume case-insensitive y la suite exige `CaseCollision`.
+        /// The backend distinguishes `Case` from `case` (POSIX). Without it,
+        /// the adapter assumes case-insensitive and the suite requires
+        /// `CaseCollision`.
         case-sensitive: bool,
-        /// El backend preserva la caja de los nombres al crearlos.
+        /// The backend preserves names' case when creating them.
         case-preserving: bool,
     }
 
-    /// Una página de entradas + el cursor OPACO de la siguiente (`none` = fin).
-    /// El cursor es `list<u8>` (bytes opacos, como el token expirable de #27) —
-    /// NO un índice: un provider remoto (continuación S3/FTP) no cabe en un u32.
+    /// A page of entries + the next OPAQUE cursor (`none` = end).
+    /// The cursor is `list<u8>` (opaque bytes, like #27's expirable token) —
+    /// NOT an index: a remote provider (S3/FTP continuation) does not fit in a u32.
     record page {
         entries: list<entry>,
         next-cursor: option<list<u8>>,
     }
 
-    /// Capabilities del provider.
+    /// Provider capabilities.
     capabilities: func() -> caps;
 
-    /// Metadatos de una entrada (equiv. `Provider::stat`).
+    /// Metadata of an entry (equiv. `Provider::stat`).
     stat: func(segments: list<list<u8>>) -> result<entry, vfs-error>;
 
-    /// Lista PAGINADA (equiv. `Provider::list`): una página + el cursor opaco de
-    /// la siguiente. El host reensambla el `EntryStream` llamando en bucle.
-    /// (`list` es palabra reservada del WIT — de ahí `list-dir`.)
+    /// PAGINATED listing (equiv. `Provider::list`): a page + the next opaque
+    /// cursor. The host reassembles the `EntryStream` by calling in a loop.
+    /// (`list` is a WIT reserved word — hence `list-dir`.)
     list-dir: func(segments: list<list<u8>>, cursor: option<list<u8>>) -> result<page, vfs-error>;
 
-    /// Lee un RANGO acotado (equiv. una porción del `ByteStream`): a lo sumo
-    /// `len` bytes desde `offset`. Un chunk más corto que `len` = EOF.
+    /// Reads a bounded RANGE (equiv. a slice of the `ByteStream`): at most
+    /// `len` bytes from `offset`. A chunk shorter than `len` = EOF.
     read: func(segments: list<list<u8>>, offset: u64, len: u64) -> result<list<u8>, vfs-error>;
 
-    /// Configuración de un provider que ESTABLECE SU PROPIA conexión (#30 stage
-    /// 3c, FTP). El HOST resuelve el hostname a IP, concede la capability `net`
-    /// acotada a esa IP y llama a `configure` con el endpoint YA resuelto
-    /// (`ip:puerto`) — el guest jamás resuelve DNS. Las credenciales cruzan a la
-    /// memoria del guest (sandbox aislado): imprescindibles para el `login`;
-    /// sobre FTP en claro (FTPS = deuda, aws-lc-rs no compila a wasm) ya viajan
-    /// sin cifrar por el cable. `base` = raíz remota absoluta bajo la que vive
-    /// todo. Un provider que no necesita conexión (mem) lo implementa como no-op.
+    /// Configuration for a provider that ESTABLISHES ITS OWN connection (#30
+    /// stage 3c, FTP). The HOST resolves the hostname to an IP, grants the
+    /// `net` capability scoped to that IP and calls `configure` with the
+    /// endpoint ALREADY resolved (`ip:port`) — the guest never resolves
+    /// DNS. Credentials cross into the guest's memory (isolated sandbox):
+    /// essential for `login`; over plain FTP (FTPS = debt, aws-lc-rs does
+    /// not compile to wasm) they already travel unencrypted over the wire.
+    /// `base` = absolute remote root everything lives under. A provider
+    /// that needs no connection (mem) implements it as a no-op.
     record provider-config {
-        /// Endpoint YA resuelto por el host: `ip:puerto`.
+        /// Endpoint ALREADY resolved by the host: `ip:port`.
         endpoint: string,
-        /// Usuario de login (`anonymous` por convención guest).
+        /// Login user (`anonymous` by guest convention).
         user: string,
-        /// Password de login (viaja a memoria del guest para autenticar).
+        /// Login password (travels to guest memory to authenticate).
         password: string,
-        /// Raíz remota absoluta (sin `..`, sin barra final significativa).
+        /// Absolute remote root (no `..`, no significant trailing slash).
         base: string,
     }
     configure: func(cfg: provider-config) -> result<_, vfs-error>;
 
-    /// Escritura TRANSACCIONAL (#30 stage 2b-write): proyección de
-    /// `norte_vfs::ByteSink`. `open-writer` devuelve un `writer` (staging propio
-    /// del guest; el path final NO existe hasta `commit`); `write` añade un
-    /// chunk; `commit` publica atómicamente; `abort` descarta el staging. Soltar
-    /// el `writer` sin commit debe limpiar (best-effort). El host reensambla el
-    /// `ByteSink` sobre este recurso.
+    /// TRANSACTIONAL write (#30 stage 2b-write): projection of
+    /// `norte_vfs::ByteSink`. `open-writer` returns a `writer` (the guest's
+    /// own staging; the final path does NOT exist until `commit`); `write`
+    /// appends a chunk; `commit` publishes atomically; `abort` discards the
+    /// staging. Dropping the `writer` without a commit must clean up
+    /// (best-effort). The host reassembles the `ByteSink` over this
+    /// resource.
     resource writer {
         write: func(chunk: list<u8>) -> result<_, vfs-error>;
         commit: func() -> result<_, vfs-error>;
         abort: func() -> result<_, vfs-error>;
     }
 
-    /// Abre un `writer` transaccional sobre el path (equiv. `Provider::write`).
+    /// Opens a transactional `writer` over the path (equiv. `Provider::write`).
     open-writer: func(segments: list<list<u8>>) -> result<writer, vfs-error>;
 
-    /// Crea un directorio (equiv. `Provider::mkdir`).
+    /// Creates a directory (equiv. `Provider::mkdir`).
     make-dir: func(segments: list<list<u8>>) -> result<_, vfs-error>;
 
-    /// Borra una entrada (equiv. `Provider::remove`).
+    /// Deletes an entry (equiv. `Provider::remove`).
     remove: func(segments: list<list<u8>>) -> result<_, vfs-error>;
 
-    /// Renombra/mueve (equiv. `Provider::rename`). (`from`/`to` son palabras
-    /// reservadas del WIT — de ahí `src`/`dst`.)
+    /// Renames/moves (equiv. `Provider::rename`). (`from`/`to` are WIT
+    /// reserved words — hence `src`/`dst`.)
     rename: func(src: list<list<u8>>, dst: list<list<u8>>) -> result<_, vfs-error>;
 }
 
-/// World de un plugin-provider (#30 stage 2): expone `provider` e importa
-/// `host-log`. Separado de `norte-plugin` — un guest de provider no implementa
-/// previewer/command.
+/// World of a plugin-provider (#30 stage 2): exposes `provider` and imports
+/// `host-log`. Separate from `norte-plugin` — a provider guest does not
+/// implement previewer/command.
 world norte-provider {
     import norte:host/host-log@0.1.0;
     import norte:host/host-config@0.1.0;

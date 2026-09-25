@@ -22,37 +22,37 @@
 use crate::config::FrontendConfig;
 use norte_i18n::t;
 
-/// Bajo qué grupo de la pantalla de ajustes se pinta una entrada.
+/// Under which group of the settings screen an entry is painted.
 ///
-/// Nació con dos variantes —`General` y `Plugins`— y una de las dos ni
-/// siquiera aparecía en [`catalog`]: las 33 entradas eran `General`, así que
-/// la pantalla se leía como una lista plana con un rótulo encima. El orden
-/// de [`Self::ORDER`] es el de la pantalla, y es deliberado: lo que se toca
-/// el primer día arriba, lo que es diagnóstico abajo.
+/// It was born with two variants — `General` and `Plugins` — and one of the
+/// two did not even appear in [`catalog`]: all 33 entries were `General`, so
+/// the screen read as a flat list with a label on top. [`Self::ORDER`]'s
+/// order is the screen's, and it is deliberate: what gets touched on day one
+/// goes on top, what is diagnostic goes at the bottom.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Section {
-    /// Tema, fuentes y lo que se ve.
+    /// Theme, fonts and what things look like.
     Appearance,
-    /// Qué enseña un panel y qué cromo lo rodea.
+    /// What a pane shows and what chrome surrounds it.
     Panes,
-    /// Con qué programa se abre un fichero.
+    /// What program a file opens with.
     OpenWith,
-    /// Teclado y ratón.
+    /// Keyboard and mouse.
     Input,
-    /// Lo que norte hace sin que se lo pidan.
+    /// What norte does without being asked.
     Behavior,
     /// Built from an approved plugin's manifest (S3/S4) — no entries of this
     /// kind live in [`catalog`] itself.
     Plugins,
-    /// Las ubicaciones (configuración, estado, logs, socket). Tampoco sale
-    /// del catálogo: la proyecta quien hospeda. Es una sección del MODELO
-    /// para que el índice la liste como una más y para que la terminal la
-    /// gane sin copiar la proyección de la ventana.
+    /// The locations (config, state, logs, socket). Also does not come from
+    /// the catalog: whoever hosts it projects it. It is a MODEL section so
+    /// the index lists it like any other and the terminal gets it without
+    /// copying the window's projection.
     Paths,
 }
 
 impl Section {
-    /// Las secciones en el orden en el que se pintan.
+    /// The sections in the order they are painted.
     pub const ORDER: &'static [Section] = &[
         Section::Appearance,
         Section::Panes,
@@ -63,11 +63,11 @@ impl Section {
         Section::Paths,
     ];
 
-    /// Su nombre ESTABLE, sin traducir.
+    /// Its STABLE name, untranslated.
     ///
-    /// Lo acepta `@section:` en cualquier idioma, y es lo que viaja por el
-    /// puente hacia la ventana: un fichero de traducción a medias no puede
-    /// volver una sección inencontrable ni romper un salto.
+    /// `@section:` accepts it in any language, and it is what travels over
+    /// the bridge to the window: a half-finished translation file cannot
+    /// make a section unfindable nor break a jump.
     ///
     /// ```
     /// use norte_frontend::settings::Section;
@@ -86,8 +86,8 @@ impl Section {
         }
     }
 
-    /// La clave Fluent de su rótulo, derivada de [`Self::stable_key`]: dos
-    /// listas de nombres es una lista que se desincroniza.
+    /// The Fluent key of its label, derived from [`Self::stable_key`]: two
+    /// lists of names is a list that goes out of sync.
     ///
     /// ```
     /// use norte_frontend::settings::Section;
@@ -106,13 +106,13 @@ impl Section {
         }
     }
 
-    /// La sección anterior/siguiente en [`Self::ORDER`], sin dar la vuelta.
+    /// The previous/next section in [`Self::ORDER`], without wrapping.
     #[must_use]
     pub fn step(self, delta: i32) -> Option<Section> {
         let pos = Section::ORDER.iter().position(|s| *s == self)?;
-        let destino = i32::try_from(pos).ok()?.checked_add(delta)?;
-        let destino = usize::try_from(destino).ok()?;
-        Section::ORDER.get(destino).copied()
+        let target = i32::try_from(pos).ok()?.checked_add(delta)?;
+        let target = usize::try_from(target).ok()?;
+        Section::ORDER.get(target).copied()
     }
 }
 
@@ -126,17 +126,17 @@ pub enum SettingKind {
     Enum(&'static [&'static str]),
     /// Free text.
     Text,
-    /// Una LÍNEA DE ÓRDENES: se teclea como texto y se guarda como ARRAY de
-    /// tokens (`zed %f` → `["zed", "%f"]`).
+    /// A COMMAND LINE: typed as text and saved as an ARRAY of tokens
+    /// (`zed %f` → `["zed", "%f"]`).
     ///
-    /// Existe porque `[ui] editor` no es una cadena en el fichero: es un argv,
-    /// y guardarlo como cadena haría que la siguiente carga lo rechazara. El
-    /// troceo es por espacios ASCII, la misma convención con la que `$EDITOR`
-    /// admite `code -w` — el precio es un programa cuyo binario lleve un
-    /// espacio, que hay que escribir en el fichero a mano.
+    /// Exists because `[ui] editor` is not a string in the file: it is an
+    /// argv, and saving it as a string would make the next load reject it.
+    /// Splitting is on ASCII spaces, the same convention `$EDITOR` uses to
+    /// accept `code -w` — the price is a program whose binary has a space in
+    /// it, which has to be written into the file by hand.
     Args,
     /// A NUMBER in `[min, max]` — despite the name, the buffer parses as
-    /// `f64` and accepts a fractional part (revisión S, M4): `ui.font-size`
+    /// `f64` and accepts a fractional part (revision S, M4): `ui.font-size`
     /// is the only entry using this kind, and its underlying config field
     /// (`CommonConfig::ui_font_size`) is `f32`, not an integer — a
     /// hand-edited `font_size = 14.5` was previously un-editable from this
@@ -188,12 +188,12 @@ pub struct SettingDef {
 }
 
 impl SettingDef {
-    /// La sección bajo la que se pinta.
+    /// The section it is painted under.
     ///
-    /// Sale de [`section_of`] y no de un campo por entrada: escrito 33
-    /// veces al lado de cada `id`, el reparto no se puede leer de un
-    /// vistazo ni auditar de una vez — que es exactamente cómo las 33
-    /// entradas acabaron diciendo `General`.
+    /// Comes from [`section_of`] and not from a field per entry: written 33
+    /// times next to each `id`, the assignment cannot be read at a glance
+    /// nor audited all at once — which is exactly how the 33 entries ended
+    /// up saying `General`.
     ///
     /// ```
     /// use norte_frontend::settings::{catalog, Section};
@@ -202,88 +202,89 @@ impl SettingDef {
     /// ```
     #[must_use]
     pub fn section(&self) -> Section {
-        // El invariante lo fija `cada_entrada_del_catalogo_tiene_seccion`:
-        // ningún id del catálogo cae aquí. Un id nuevo sin sección aterriza
-        // en «Comportamiento» —visible, no escondido— y el test lo caza.
+        // The invariant is pinned by `every_catalog_entry_has_a_section`: no
+        // catalog id falls here. A new id with no section lands in
+        // "Behavior" — visible, not hidden — and the test catches it.
         section_of(self.id).unwrap_or(Section::Behavior)
     }
 }
 
-/// El filtro de la pantalla de ajustes, ya interpretado.
+/// The settings screen's filter, already interpreted.
 ///
-/// El texto libre busca donde siempre —id, nombre y descripción, plegados—,
-/// y encima hay dos operadores, copiados de donde el lector ya los conoce:
-/// `@modified` (solo lo que no es de fábrica) y `@section:<x>`.
+/// Free text searches where it always does — id, name and description,
+/// folded — and on top of that there are two operators, copied from where
+/// the reader already knows them: `@modified` (only what is not factory)
+/// and `@section:<x>`.
 ///
-/// `@section:` casa contra la clave ESTABLE de la sección y contra su
-/// rótulo en **los dos** idiomas, no solo en el activo: un fichero de
-/// traducción no puede ser la diferencia entre encontrar algo y no
-/// encontrarlo.
+/// `@section:` matches against the section's STABLE key and against its
+/// label in **both** languages, not just the active one: a translation file
+/// cannot be the difference between finding something and not finding it.
 ///
-/// Una arroba que no abre operador conocido es texto normal. Nadie tiene
-/// que escapar nada para buscar una arroba, y un filtro que se come lo que
-/// no entiende deja al lector mirando una lista vacía sin saber por qué.
+/// An `@` that does not open a known operator is normal text. Nobody has to
+/// escape anything to search for an `@`, and a filter that eats what it
+/// does not understand leaves the reader staring at an empty list with no
+/// idea why.
 #[derive(Debug, Default)]
 struct Query {
-    /// El texto libre, ya plegado. Vacío = no filtra por texto.
+    /// Free text, already folded. Empty = does not filter by text.
     text: String,
-    /// `@modified` estaba en la consulta.
+    /// `@modified` was in the query.
     only_modified: bool,
-    /// Las secciones nombradas con `@section:`. Vacío = todas.
+    /// Sections named with `@section:`. Empty = all.
     sections: Vec<Section>,
-    /// `@section:` nombró algo que no existe. No filtra a «todas»: filtra a
-    /// NADA, que es la respuesta honesta a «enséñame los ajustes de algo que
-    /// no hay». Ignorar el operador enseñaría la lista entera y el lector
-    /// leería eso como «aquí está todo lo que pediste».
-    imposible: bool,
+    /// `@section:` named something that does not exist. It does not filter
+    /// to "all": it filters to NOTHING, which is the honest answer to "show
+    /// me the settings of something that is not there". Ignoring the
+    /// operator would show the whole list and the reader would read that as
+    /// "here is everything you asked for".
+    impossible: bool,
 }
 
 impl Query {
-    /// Interpreta la consulta cruda (bytes, como se teclean).
+    /// Interprets the raw query (bytes, as typed).
     fn parse(raw: &[u8]) -> Self {
         let mut q = Query::default();
-        // El texto libre se conserva TAL CUAL mientras no haya operadores, y
-        // eso no es pereza: `ui.font ` con el espacio final aísla una fila
-        // que `ui.font` no aísla, porque el heno lleva el id seguido del
-        // nombre. Trocear y volver a juntar por un espacio se come esa
-        // precisión, y un filtro que enseña dos filas donde antes enseñaba
-        // una es una regresión silenciosa.
+        // Free text is kept AS-IS while there are no operators, and that is
+        // not laziness: `ui.font ` with the trailing space isolates a row
+        // `ui.font` does not isolate, because the haystack carries the id
+        // followed by the name. Splitting and rejoining with one space eats
+        // that precision, and a filter that shows two rows where it used to
+        // show one is a silent regression.
         if !raw.contains(&b'@') {
             q.text = crate::nav::fold(raw);
             return q;
         }
-        // Con operadores por medio: se sacan sus tokens y el resto se pliega
-        // junto, ya sin la precisión del espacio de los bordes — combinar
-        // `@modified` con un fragmento que dependa de un espacio final no es
-        // una consulta que nadie escriba.
-        let mut resto: Vec<&[u8]> = Vec::new();
-        // Por bytes y separando por espacio ASCII: la consulta es entrada de
-        // usuario cruda (pegado incluido) y no tiene por qué ser UTF-8
-        // válido. `from_utf8_lossy` para mirar un token no lo escribe en
-        // ningún sitio.
+        // With operators in the mix: their tokens are pulled out and the
+        // rest is folded together, already without the edge-space precision
+        // — combining `@modified` with a fragment that depends on a
+        // trailing space is not a query anyone writes.
+        let mut rest: Vec<&[u8]> = Vec::new();
+        // By bytes and splitting on ASCII space: the query is raw user
+        // input (paste included) and has no reason to be valid UTF-8.
+        // `from_utf8_lossy` to look at a token does not write it anywhere.
         for token in raw.split(|b| *b == b' ').filter(|t| !t.is_empty()) {
-            let texto = String::from_utf8_lossy(token);
-            // Plegado, como todo lo demás de esta pantalla: `@Modified` y
-            // `@MODIFIED` son lo mismo, y dos operadores con dos reglas de
-            // comparación es una trampa.
+            let text = String::from_utf8_lossy(token);
+            // Folded, like everything else on this screen: `@Modified` and
+            // `@MODIFIED` are the same thing, and two operators with two
+            // comparison rules is a trap.
             if crate::nav::fold(token) == "@modified" {
                 q.only_modified = true;
-            } else if let Some(nombre) = texto.strip_prefix("@section:") {
-                match section_by_name(nombre) {
+            } else if let Some(name) = text.strip_prefix("@section:") {
+                match section_by_name(name) {
                     Some(s) => q.sections.push(s),
-                    None => q.imposible = true,
+                    None => q.impossible = true,
                 }
             } else {
-                resto.push(token);
+                rest.push(token);
             }
         }
-        q.text = crate::nav::fold(resto.join(&b' ').as_slice());
+        q.text = crate::nav::fold(rest.join(&b' ').as_slice());
         q
     }
 
-    /// ¿Esta fila pasa el filtro? `fold` es su heno ya plegado.
+    /// Does this row pass the filter? `fold` is its already-folded haystack.
     fn matches(&self, row: &Row, fold: &str) -> bool {
-        if self.imposible {
+        if self.impossible {
             return false;
         }
         if self.only_modified && !row.modified {
@@ -296,129 +297,130 @@ impl Query {
     }
 }
 
-/// La sección cuyo nombre estable, o cuyo rótulo en CUALQUIERA de los dos
-/// idiomas, EMPIEZA por `nombre` (plegando acentos y mayúsculas).
+/// The section whose stable name, or whose label in EITHER of the two
+/// languages, STARTS WITH `name` (folding accents and case).
 ///
-/// Por prefijo y no por igualdad, por dos motivos que son el mismo: la
-/// consulta se trocea por espacios, así que `@section:abrir con` solo trae
-/// `abrir` —y cinco de las siete secciones tienen el rótulo de dos palabras,
-/// o sea que con igualdad eran inalcanzables—, y quien teclea espera ver el
-/// efecto según escribe, no al poner la última letra.
+/// By prefix and not by equality, for two reasons that are really one: the
+/// query is split on spaces, so `@section:open with` only brings `open` —
+/// and five of the seven sections have a two-word label, i.e. they would be
+/// unreachable under equality — and whoever is typing expects to see the
+/// effect as they write, not upon typing the last letter.
 ///
-/// Ambigüedad: gana la primera de [`Section::ORDER`], que es el orden de la
-/// pantalla. Ninguna pareja de rótulos comparte prefijo hoy en ninguno de
-/// los dos idiomas.
-fn section_by_name(nombre: &str) -> Option<Section> {
-    let buscado = crate::nav::fold(nombre.as_bytes());
-    if buscado.is_empty() {
+/// Ambiguity: the first one in [`Section::ORDER`] wins, which is the
+/// screen's order. No pair of labels shares a prefix today in either
+/// language.
+fn section_by_name(name: &str) -> Option<Section> {
+    let sought = crate::nav::fold(name.as_bytes());
+    if sought.is_empty() {
         return None;
     }
     Section::ORDER.iter().copied().find(|s| {
-        if crate::nav::fold(s.stable_key().as_bytes()).starts_with(&buscado) {
+        if crate::nav::fold(s.stable_key().as_bytes()).starts_with(&sought) {
             return true;
         }
         [norte_i18n::Lang::Es, norte_i18n::Lang::En]
             .into_iter()
             .any(|l| {
-                crate::nav::fold(norte_i18n::t_in(l, s.label_key()).as_bytes())
-                    .starts_with(&buscado)
+                crate::nav::fold(norte_i18n::t_in(l, s.label_key()).as_bytes()).starts_with(&sought)
             })
     })
 }
 
-/// Qué mitad de la pantalla de ajustes tiene el teclado.
+/// Which half of the settings screen has the keyboard.
 ///
-/// El mismo vocabulario que [`crate::help::Focus`], y por el mismo motivo:
-/// dos listas a la vez piden decir cuál manda, y las dos pantallas que lo
-/// hacen tienen que decirlo igual.
+/// The same vocabulary as [`crate::help::Focus`], and for the same reason:
+/// two lists at once ask which one is in charge, and both screens that do
+/// this have to say it the same way.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Focus {
-    /// La lista de ajustes: arriba/abajo recorren filas, Enter edita.
+    /// The settings list: up/down walk rows, Enter edits.
     #[default]
     List,
-    /// El índice: arriba/abajo cambian de SECCIÓN, y la lista sigue.
+    /// The index: up/down change SECTION, and the list follows.
     Index,
 }
 
-/// Una sección tal y como la pinta el índice: su rótulo ya traducido,
-/// cuántas filas visibles tiene con el filtro puesto, y en cuál empieza.
+/// A section as the index paints it: its already-translated label, how many
+/// visible rows it has with the filter on, and where it starts.
 ///
-/// Se proyecta, no se guarda: el estado es el filtro, y un índice guardado
-/// al lado sería una segunda copia que se queda vieja en cuanto alguien
-/// teclea una letra.
+/// Projected, not stored: the state is the filter, and an index stored
+/// alongside it would be a second copy that goes stale the moment someone
+/// types a letter.
 #[derive(Debug, Clone)]
 pub struct SectionView {
-    /// Qué sección es.
+    /// Which section it is.
     pub section: Section,
-    /// Su rótulo, traducido al idioma activo.
+    /// Its label, translated into the active language.
     pub title: String,
-    /// Cuántas de sus filas se ven con el filtro puesto. Cero con
-    /// [`Self::total`] mayor que cero = apagada en el índice, nunca ausente.
+    /// How many of its rows are visible with the filter on. Zero with
+    /// [`Self::total`] greater than zero = dimmed in the index, never
+    /// absent.
     pub visible: usize,
-    /// Cuántas filas tiene en total, filtre lo que filtre.
+    /// How many rows it has in total, whatever the filter is.
     ///
-    /// Distingue «la tapó el filtro» de «esta superficie no la tiene»: la
-    /// terminal no proyecta ubicaciones, y un índice que anuncia una sección
-    /// que nunca va a tener nada promete algo que no va a cumplir.
+    /// Distinguishes "the filter hid it" from "this surface does not have
+    /// it": the terminal does not project locations, and an index that
+    /// announces a section that will never have anything promises something
+    /// it will not deliver.
     pub total: usize,
-    /// Posición de su primera fila visible dentro de
-    /// [`SettingsState::visible`] — la unidad del cursor. `None` si el
-    /// filtro la dejó vacía.
+    /// Position of its first visible row within [`SettingsState::visible`]
+    /// — the cursor's unit. `None` if the filter left it empty.
     pub first_row: Option<usize>,
 }
 
-/// La configuración DE FÁBRICA: la que sale de cero capas.
+/// The FACTORY configuration: the one that comes out of zero layers.
 ///
-/// Es contra esto contra lo que se decide si una fila está «modificada», y
-/// se calcula con [`current_value`], la misma función que pinta el valor —
-/// una tabla de defectos escrita a mano se desincroniza del esquema en
-/// cuanto alguien cambia uno.
+/// It is against this that whether a row is "modified" is decided, and it
+/// is computed with [`current_value`], the same function that paints the
+/// value — a hand-written table of defaults goes out of sync with the
+/// schema the moment someone changes one.
 ///
-/// Cacheada porque las 33 entradas se comparan contra la misma y
-/// [`crate::config::load`] con cero capas no toca el disco (recorre una
-/// lista vacía). Si alguna vez fallara, `None` degrada a «nada está
-/// modificado»: un punto de menos es un fallo inerte, y uno de más señala
-/// como tocado algo que nadie tocó.
+/// Cached because all 33 entries are compared against the same one and
+/// [`crate::config::load`] with zero layers does not touch disk (it walks
+/// an empty list). If it ever failed, `None` degrades to "nothing is
+/// modified": one dot missing is an inert failure, and one extra dot flags
+/// as touched something nobody touched.
 fn factory_config() -> Option<&'static FrontendConfig> {
-    static FABRICA: std::sync::OnceLock<Option<FrontendConfig>> = std::sync::OnceLock::new();
-    FABRICA
+    static FACTORY: std::sync::OnceLock<Option<FrontendConfig>> = std::sync::OnceLock::new();
+    FACTORY
         .get_or_init(|| crate::config::load(&norte_config::Layers { dirs: vec![] }).ok())
         .as_ref()
 }
 
-/// Qué clase de control pide un ajuste, y con qué valores.
+/// What class of control a setting asks for, and with what values.
 ///
-/// Es lo que un frontend GRÁFICO necesita para pintar un interruptor en vez
-/// de la palabra `true`: el terminal se apaña con el ciclo de
-/// [`SettingsState::activate`], pero una ventana tiene controles de verdad y
-/// no puede adivinar de qué clase es cada fila mirando su texto.
+/// It is what a GRAPHICAL frontend needs to paint a toggle instead of the
+/// word `true`: the terminal gets by with [`SettingsState::activate`]'s
+/// cycle, but a window has real controls and cannot guess what class each
+/// row is by looking at its text.
 ///
-/// Las listas vivas —temas y presets— NO salen de aquí: las resuelve quien
-/// llama, como en [`SettingsState::activate`], porque cambian en caliente.
+/// The live lists — themes and presets — do NOT come from here: the caller
+/// resolves them, as in [`SettingsState::activate`], because they change
+/// live.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Control {
-    /// Un interruptor.
+    /// A toggle.
     Toggle,
-    /// Una lista cerrada, con sus valores.
+    /// A closed list, with its values.
     Choice(&'static [&'static str]),
-    /// Una lista cuyos valores resuelve quien llama: los temas.
+    /// A list whose values the caller resolves: themes.
     ThemeChoice,
-    /// Lo mismo con los presets de teclado.
+    /// The same with keyboard presets.
     PresetChoice,
-    /// Un número entre dos topes, los dos incluidos.
+    /// A number between two bounds, both included.
     Number {
-        /// Tope inferior.
+        /// Lower bound.
         min: i64,
-        /// Tope superior.
+        /// Upper bound.
         max: i64,
     },
-    /// Texto libre.
+    /// Free text.
     Text,
-    /// Una línea de órdenes: se teclea como texto y se guarda troceada.
+    /// A command line: typed as text and saved split into pieces.
     Args,
 }
 
-/// El control que pide el ajuste `id`, o `None` si no es del catálogo.
+/// The control setting `id` asks for, or `None` if it is not in the catalog.
 ///
 /// ```
 /// use norte_frontend::settings::{control_of, Control};
@@ -440,16 +442,16 @@ pub fn control_of(id: &str) -> Option<Control> {
     })
 }
 
-/// El valor DE FÁBRICA de una entrada, como texto de pantalla.
+/// The FACTORY value of an entry, as display text.
 ///
-/// Es [`current_value`] sobre la configuración de cero capas: la misma
-/// función que pinta el valor, no una segunda tabla de defectos que se
-/// desincronice. Vacío si la configuración de fábrica no se pudo cargar,
-/// que es lo mismo que enseña una fila sin valor.
+/// It is [`current_value`] over the zero-layer configuration: the same
+/// function that paints the value, not a second table of defaults that goes
+/// out of sync. Empty if the factory configuration could not be loaded,
+/// which is the same thing an empty-valued row shows.
 ///
-/// Lo pinta la ventana como marcador de un campo vacío: «vacío» no es un
-/// hueco, es este valor, y decir cuál informa — decirlo con una frase ocupa
-/// el sitio del dato sin darlo.
+/// The window paints it as an empty field's placeholder: "empty" is not a
+/// gap, it is this value, and saying which one is informative — saying it
+/// with a sentence takes the data's spot without giving it.
 ///
 /// ```
 /// use norte_frontend::settings::{catalog, default_value};
@@ -463,11 +465,11 @@ pub fn default_value(def: &SettingDef) -> String {
         .unwrap_or_default()
 }
 
-/// El reparto del catálogo en secciones, en UN sitio.
+/// The catalog's assignment into sections, in ONE place.
 ///
-/// `None` para un id que no es del catálogo. Un id del catálogo que
-/// devuelva `None` es un bug que caza el test de cobertura: la alternativa
-/// —un `_ =>` que le dé una sección cualquiera— archiva mal en silencio.
+/// `None` for an id that is not in the catalog. A catalog id that returns
+/// `None` is a bug the coverage test catches: the alternative — a `_ =>`
+/// giving it some section or other — files it wrong, silently.
 #[must_use]
 pub fn section_of(id: &str) -> Option<Section> {
     let s = match id {
@@ -548,74 +550,76 @@ const CATALOG: &[SettingDef] = &[
         applies_live: true,
     },
     SettingDef {
-        // Solo TUI, como `ui.mouse`. En el catálogo porque apagada por
-        // defecto nadie la encontraría, y quien la busca es quien acaba de
-        // pulsar Alt en el terminal y no ha pasado nada.
+        // TUI only, like `ui.mouse`. In the catalog because turned off by
+        // default nobody would find it, and whoever looks for it just
+        // pressed Alt in the terminal and nothing happened.
         id: "ui.alt-menu",
         kind: SettingKind::Bool,
         applies_live: true,
     },
     SettingDef {
-        // La barra de menú fijada. Está en el catálogo por lo mismo que
-        // `ui.mouse`: es la clave que alguien va a buscar en cuanto quiera
-        // recuperar esa fila, y un ajuste del que solo te enteras leyendo un
-        // fichero de config que no sabías que existía no es descubrible.
+        // The pinned menu bar. In the catalog for the same reason as
+        // `ui.mouse`: it is the key someone is going to search for as soon
+        // as they want that row back, and a setting you only learn about by
+        // reading a config file you did not know existed is not
+        // discoverable.
         id: "ui.menu-bar",
         kind: SettingKind::Bool,
         applies_live: true,
     },
     SettingDef {
-        // La barra de paneles (#324), y aquí el argumento es el de la propia
-        // feature: existe porque un panel que no se ve no lo encuentra nadie.
-        // Dejar su interruptor solo en un fichero de config sería cometer el
-        // mismo error una capa más arriba.
+        // The panel bar (#324), and here the argument is the feature's own:
+        // it exists because a panel nobody can see is a panel nobody finds.
+        // Leaving its toggle only in a config file would be making the same
+        // mistake one layer up.
         id: "ui.panel-bar",
         kind: SettingKind::Bool,
         applies_live: true,
     },
     SettingDef {
-        // La fila `..`. Mismo criterio que `ui.mouse` y `ui.menu-bar`: no
-        // tiene comando ni tecla, así que el fichero era el ÚNICO sitio desde
-        // el que se podía apagar o encender.
+        // The `..` row. Same criterion as `ui.mouse` and `ui.menu-bar`: it
+        // has no command and no key, so the file was the ONLY place it
+        // could be turned on or off from.
         id: "ui.parent-entry",
         kind: SettingKind::Bool,
         applies_live: true,
     },
     SettingDef {
-        // El default de arranque de los ocultos. `pane.toggle-hidden` alterna
-        // la SESIÓN y no persiste nada, así que sin esta fila el valor con el
-        // que norte abre solo se podía cambiar escribiendo el fichero.
+        // The startup default for hidden entries. `pane.toggle-hidden`
+        // toggles the SESSION and persists nothing, so without this row the
+        // value norte opens with could only be changed by writing the file.
         id: "ui.show-hidden",
         kind: SettingKind::Bool,
         applies_live: true,
     },
     SettingDef {
-        // El editor de `pane.edit`. Va aquí y no solo en el fichero por lo
-        // mismo que el resto: es lo primero que alguien quiere cambiar, y
-        // hasta ahora se elegía por variable de entorno, que es el sitio donde
-        // menos se busca la configuración de un programa.
+        // `pane.edit`'s editor. Goes here and not only in the file for the
+        // same reason as the rest: it is the first thing anyone wants to
+        // change, and until now it was chosen via an environment variable,
+        // which is the last place anyone looks for a program's
+        // configuration.
         id: "ui.editor",
         kind: SettingKind::Args,
         applies_live: true,
     },
     SettingDef {
-        // Y si ese editor abre ventana propia. Sin esta fila, poner un editor
-        // gráfico deja la terminal en blanco y no hay nada en pantalla que
-        // explique por qué.
+        // And whether that editor opens its own window. Without this row,
+        // setting a graphical editor leaves the terminal blank with nothing
+        // on screen to explain why.
         id: "ui.editor-detached",
         kind: SettingKind::Bool,
         applies_live: true,
     },
     SettingDef {
-        // El comparador de `pane.compare-files` (#312), por lo mismo que el
-        // editor: sin fila, el que compara dos ficheros solo se elige
-        // escribiendo el fichero de configuración.
+        // `pane.compare-files`'s comparer (#312), for the same reason as the
+        // editor: without a row, whatever compares two files can only be
+        // chosen by writing the config file.
         id: "ui.diff",
         kind: SettingKind::Args,
         applies_live: true,
     },
     SettingDef {
-        // Y si ese comparador abre ventana propia (Meld, Kompare).
+        // And whether that comparer opens its own window (Meld, Kompare).
         id: "ui.diff-detached",
         kind: SettingKind::Bool,
         applies_live: true,
@@ -625,9 +629,9 @@ const CATALOG: &[SettingDef] = &[
         kind: SettingKind::Enum(&["auto", "always", "never"]),
         applies_live: true,
     },
-    // ─── El cromo (spec 2026-09-10): cada uno existe porque un lector lo
-    //     echa de menos en la primera hora, y un interruptor que solo vive en
-    //     el fichero es un interruptor que no encuentra nadie.
+    // ─── The chrome (spec 2026-09-10): each one exists because a reader
+    //     misses it in the first hour, and a toggle that only lives in the
+    //     file is a toggle nobody finds.
     SettingDef {
         id: "ui.key-bar",
         kind: SettingKind::Bool,
@@ -639,22 +643,22 @@ const CATALOG: &[SettingDef] = &[
         applies_live: true,
     },
     SettingDef {
-        // Arriba en el terminal y a la izquierda en la ventana (`auto`), o
-        // la misma en los dos (spec 2026-09-21).
+        // Top in the terminal and left in the window (`auto`), or the same
+        // in both (spec 2026-09-21).
         id: "ui.panel-bar-position",
         kind: SettingKind::Enum(&["auto", "top", "left"]),
         applies_live: true,
     },
     SettingDef {
-        // La barra de título de la ventana (ADR 0136). De ARRANQUE: la
-        // decoración se quita al crear la ventana.
+        // The window's title bar (ADR 0136). At STARTUP: the decoration is
+        // removed when the window is created.
         id: "ui.titlebar",
         kind: SettingKind::Enum(&["native", "custom"]),
         applies_live: false,
     },
     SettingDef {
-        // La mitad derecha de la barra de estado (ADR 0132): ids separados
-        // por espacios, en el orden en que se pintan.
+        // The status bar's right half (ADR 0132): ids separated by spaces,
+        // in the order they are painted.
         id: "ui.status-items",
         kind: SettingKind::Args,
         applies_live: true,
@@ -684,8 +688,8 @@ const CATALOG: &[SettingDef] = &[
         kind: SettingKind::Int { min: 5, max: 64 },
         applies_live: true,
     },
-    // Spec 2026-09-15, fase 2: la pantalla de arranque, el panel de procesos
-    // que se abre solo y la `/` de las carpetas.
+    // Spec 2026-09-15, phase 2: the splash screen, the processes panel that
+    // opens on its own, and the `/` on directories.
     SettingDef {
         id: "ui.splash",
         kind: SettingKind::Enum(&["brief", "off", "home"]),
@@ -696,8 +700,9 @@ const CATALOG: &[SettingDef] = &[
         kind: SettingKind::Enum(&["auto", "manual"]),
         applies_live: true,
     },
-    // Fase 5, tarea 2: cómo el visor de la TUI pinta una imagen. Clave de
-    // TERMINAL — la ventana pinta imágenes por su propia webview y no la lee.
+    // Phase 5, task 2: how the TUI's viewer paints an image. A TERMINAL
+    // key — the window paints images through its own webview and does not
+    // read it.
     SettingDef {
         id: "ui.images",
         kind: SettingKind::Enum(&["auto", "kitty", "blocks", "off"]),
@@ -713,9 +718,9 @@ const CATALOG: &[SettingDef] = &[
         kind: SettingKind::Bool,
         applies_live: true,
     },
-    // ─── El tema por esquema del escritorio (spec 2026-09-11, V6): solo la
-    //     ventana lo lee, pero el fichero es uno y la pantalla de ajustes
-    //     es la misma en los dos frontends.
+    // ─── The theme per desktop scheme (spec 2026-09-11, V6): only the
+    //     window reads it, but the file is one and the settings screen is
+    //     the same in both frontends.
     SettingDef {
         id: "ui.theme-light",
         kind: SettingKind::Text,
@@ -774,7 +779,7 @@ pub fn fluent_desc_id(id: &str) -> String {
 pub fn wire_key(id: &str) -> (&str, String) {
     let (section, key) = id
         .split_once('.')
-        .expect("un id de catalog() siempre tiene sección.clave");
+        .expect("a catalog() id always has section.key");
     (section, key.replace('-', "_"))
 }
 
@@ -818,18 +823,18 @@ pub fn current_value(def: &SettingDef, cfg: &FrontendConfig) -> String {
         // actually does, rather than an empty cell for a real behavior.
         "ui.mouse" => cfg.common.ui_mouse.unwrap_or(true).to_string(),
         "ui.alt-menu" => cfg.common.ui_alt_menu.unwrap_or(false).to_string(),
-        // Ausente = FIJADA, igual que `ui.mouse`: la fila enseña lo que el
-        // frontend hace de verdad. Faltaba, y la consecuencia no era cosmética
-        // — con la celda vacía, alternar leía «no es true» y escribía `true`
-        // siempre, así que la barra no se podía apagar desde aquí.
+        // Absent = PINNED, same as `ui.mouse`: the row shows what the
+        // frontend really does. It was missing, and the consequence was not
+        // cosmetic — with the empty cell, toggling read "is not true" and
+        // always wrote `true`, so the bar could not be turned off from here.
         "ui.menu-bar" => cfg.common.ui_menu_bar.unwrap_or(true).to_string(),
         "ui.panel-bar" => cfg.common.ui_panel_bar.unwrap_or(true).to_string(),
         "ui.parent-entry" => cfg.common.ui_parent_entry.unwrap_or(true).to_string(),
         "ui.show-hidden" => cfg.common.ui_show_hidden.unwrap_or(false).to_string(),
         "ui.editor" => cfg.common.ui_editor.clone().unwrap_or_default().join(" "),
         "ui.editor-detached" => cfg.common.ui_editor_detached.unwrap_or(false).to_string(),
-        // Ausente = `diff -u`, y la fila lo enseña: es lo que norte hace de
-        // verdad, no una celda vacía sobre un comportamiento que existe.
+        // Absent = `diff -u`, and the row shows it: it is what norte
+        // really does, not an empty cell over a behavior that exists.
         "ui.diff" => cfg
             .common
             .ui_diff
@@ -838,7 +843,7 @@ pub fn current_value(def: &SettingDef, cfg: &FrontendConfig) -> String {
             .join(" "),
         "ui.diff-detached" => cfg.common.ui_diff_detached.unwrap_or(false).to_string(),
         "ui.confirm-quit" => cfg.common.ui_confirm_quit.as_str().to_owned(),
-        // Ausente = lo que el frontend hace de verdad, como `ui.menu-bar`.
+        // Absent = what the frontend really does, like `ui.menu-bar`.
         "ui.key-bar" => cfg.common.ui_chrome.key_bar().to_string(),
         "ui.panel-bar-style" => cfg.common.ui_chrome.panel_bar_style().as_str().to_owned(),
         "ui.panel-bar-position" => cfg
@@ -859,7 +864,7 @@ pub fn current_value(def: &SettingDef, cfg: &FrontendConfig) -> String {
         "ui.images" => cfg.common.ui_chrome.images().as_str().to_owned(),
         "ui.dir-indicator" => cfg.common.ui_chrome.dir_indicator().as_str().to_owned(),
         "ui.dialog-buttons" => cfg.common.ui_chrome.dialog_buttons().to_string(),
-        // Vacío = sin variante: la ventana pinta `theme` en los dos esquemas.
+        // Empty = no variant: the window paints `theme` in both schemes.
         "ui.theme-light" => cfg.common.ui_theme_light.clone().unwrap_or_default(),
         "ui.theme-dark" => cfg.common.ui_theme_dark.clone().unwrap_or_default(),
         "keymap.preset" => cfg.common.preset.clone(),
@@ -917,22 +922,23 @@ pub struct Row {
     /// Current value as display text; empty for a row with nothing single
     /// to show (the informational fallback).
     pub value: String,
-    /// La sección bajo la que se pinta: la del catálogo para una entrada
-    /// curada, [`Section::Plugins`] para un resumen de plugin.
+    /// The section it is painted under: the catalog's for a curated entry,
+    /// [`Section::Plugins`] for a plugin summary.
     ///
-    /// Va en la fila y no se re-deriva del id en cada frontend: dos cuentas
-    /// de «dónde va esto» son dos pantallas que se desordenan por separado.
+    /// It goes in the row and is not re-derived from the id in each
+    /// frontend: two counts of "where does this go" are two screens that
+    /// go out of order separately.
     pub section: Section,
-    /// El valor efectivo NO es el de fábrica.
+    /// The effective value is NOT the factory one.
     ///
-    /// «No es el de fábrica», y no «lo has tocado tú»: una clave que solo
-    /// fija la capa del sistema enciende el punto sin que el lector haya
-    /// hecho nada, y una que escribió a mano con el valor que ya traía no lo
-    /// enciende. La etiqueta de la pantalla dice lo primero, que es lo que
-    /// esto mide.
+    /// "Is not the factory one", not "you touched it": a key only the
+    /// system layer sets turns the dot on without the reader having done
+    /// anything, and one hand-written with the value it already had does
+    /// not turn it on. The screen's label says the first thing, which is
+    /// what this measures.
     ///
-    /// Falso siempre para una fila que no sale del catálogo: no hay valor
-    /// de fábrica con el que compararla.
+    /// Always false for a row that does not come from the catalog: there is
+    /// no factory value to compare it against.
     pub modified: bool,
 }
 
@@ -1017,18 +1023,18 @@ pub fn build_rows(cfg: &FrontendConfig, plugin_summaries: &[PluginConfigSummary]
     build_rows_in(cfg, plugin_summaries, norte_i18n::active())
 }
 
-/// [`build_rows`] en un idioma DADO.
+/// [`build_rows`] in a GIVEN language.
 ///
-/// La pantalla de ajustes traducía los títulos de sección con el idioma del
-/// HOST y el nombre y la descripción de cada opción con el del PROCESO, así
-/// que salía a medias en dos idiomas.
+/// The settings screen used to translate section titles with the HOST's
+/// language and each option's name and description with the PROCESS's, so
+/// it came out half in one language and half in another.
 #[must_use]
 pub fn build_rows_in(
     cfg: &FrontendConfig,
     plugin_summaries: &[PluginConfigSummary],
     lang: norte_i18n::Lang,
 ) -> Vec<Row> {
-    let fabrica = factory_config();
+    let factory = factory_config();
     let mut rows: Vec<Row> = catalog()
         .iter()
         .enumerate()
@@ -1039,21 +1045,21 @@ pub fn build_rows_in(
                 plugin_id: None,
                 name: norte_i18n::t_in(lang, &fluent_name_id(def.id)),
                 desc: norte_i18n::t_in(lang, &fluent_desc_id(def.id)),
-                modified: fabrica.is_some_and(|f| value != current_value(def, f)),
+                modified: factory.is_some_and(|f| value != current_value(def, f)),
                 value,
                 section: def.section(),
             }
         })
         .collect();
-    // En orden de PANTALLA: por sección primero, y dentro de cada una el
-    // orden del catálogo. El catálogo va agrupado por sección de
-    // `norte.toml` (`[ui]` y luego `[keymap]`), que no es el mismo reparto:
-    // `ui.lang` es Comportamiento y `ui.quick-search` es Teclado, y están a
-    // dos filas la una de la otra. Sin ordenar aquí, una lista con cabeceras
-    // pintaría la misma sección siete veces.
+    // In SCREEN order: by section first, and the catalog's order within
+    // each one. The catalog is grouped by `norte.toml` section (`[ui]` then
+    // `[keymap]`), which is not the same assignment: `ui.lang` is Behavior
+    // and `ui.quick-search` is Input, and they are two rows apart. Without
+    // sorting here, a list with headers would paint the same section seven
+    // times.
     //
-    // `sort_by_key` es ESTABLE, que es lo que conserva el orden del catálogo
-    // dentro de cada sección sin escribir un segundo criterio.
+    // `sort_by_key` is STABLE, which is what keeps the catalog's order
+    // within each section without writing a second criterion.
     rows.sort_by_key(|r| {
         Section::ORDER
             .iter()
@@ -1109,30 +1115,31 @@ impl PendingWrite {
     }
 }
 
-/// Una clave que hay que QUITAR de la capa de escritura, producida por
+/// A key that has to be REMOVED from the write layer, produced by
 /// [`SettingsState::reset`].
 ///
-/// Como [`PendingWrite`], es pura: quien la recibe llama a
-/// `norte_config::persist_unset` fuera del hilo de pintado (regla 2) y
-/// anuncia el resultado. No lleva valor porque no hay ninguno que escribir
-/// — restablecer es dejar de decir nada, no decir el defecto: escribir el
-/// valor de fábrica en el fichero lo congelaría contra un cambio futuro del
-/// defecto, que es justo lo contrario de lo que el lector pidió.
+/// Like [`PendingWrite`], it is pure: whoever receives it calls
+/// `norte_config::persist_unset` off the paint thread (rule 2) and
+/// announces the result. It carries no value because there is none to
+/// write — resetting is ceasing to say anything, not saying the default:
+/// writing the factory value into the file would freeze it against a future
+/// change of the default, which is exactly the opposite of what the reader
+/// asked for.
 #[derive(Debug, Clone)]
 pub struct PendingReset {
-    /// `[section]` de `norte.toml`.
+    /// `[section]` of `norte.toml`.
     pub section: &'static str,
-    /// La clave dentro de esa sección (`snake_case`, ya convertida).
+    /// The key within that section (`snake_case`, already converted).
     pub key: String,
-    /// El id del catálogo (`ui.theme`), para volver a encontrar la fila
-    /// después de releer.
+    /// The catalog id (`ui.theme`), to find the row again after rereading.
     ///
-    /// Viaja porque la vuelta —de `(section, key)` al id— NO es una
-    /// biyección: un id futuro con `_` volvería con `-` y no casaría con
-    /// ninguna fila, y quien busca contestaría «vuelve al valor de fábrica»
-    /// para todo, que es la respuesta equivocada y muda.
+    /// It travels because the trip back — from `(section, key)` to the id —
+    /// is NOT a bijection: a future id with `_` would come back with `-` and
+    /// would not match any row, and whoever looks it up would answer "back
+    /// to the factory value" for everything, which is the wrong, silent
+    /// answer.
     pub id: &'static str,
-    /// El nombre traducido del ajuste, para el aviso.
+    /// The setting's translated name, for the notice.
     pub name: String,
 }
 
@@ -1185,43 +1192,44 @@ pub struct SettingsState {
     /// cursor; `None` = normal browsing/filtering. Raw, like a name-input
     /// popup — sanitizing happens on paint.
     edit: Option<String>,
-    /// La primera LÍNEA visible de una lista que no cabe, en la unidad de
-    /// quien pinta ([`Self::reconcile_viewport`]).
+    /// The first visible LINE of a list that does not fit, in whoever paints
+    /// it's own unit ([`Self::reconcile_viewport`]).
     ///
-    /// No existía porque los ajustes cabían en una pantalla — lo decía el
-    /// editor de atajos de la terminal, y era verdad cuando se escribió. Con
-    /// ~30 ajustes dejó de serlo: bajar con el cursor pasado el borde lo
-    /// dejaba fuera de la caja y la lista no se movía.
+    /// It did not exist because settings fit on one screen — the terminal's
+    /// shortcut editor said so, and it was true when written. With ~30
+    /// settings it stopped being true: going down with the cursor past the
+    /// edge left it outside the box and the list did not move.
     viewport_offset: usize,
-    /// Qué mitad tiene el teclado.
+    /// Which half has the keyboard.
     ///
-    /// No hay un cursor del índice aparte: con el foco en él, moverse CAMBIA
-    /// de sección y la lista sigue, igual que la barra lateral de la ayuda
-    /// abre el tema al recorrerla. Un segundo cursor que hubiera que
-    /// sincronizar con el primero es la clase de estado que se desincroniza.
+    /// There is no separate index cursor: with focus on it, moving CHANGES
+    /// section and the list follows, just like the help sidebar opens the
+    /// topic as you walk through it. A second cursor that had to be
+    /// synchronized with the first is the kind of state that goes out of
+    /// sync.
     focus: Focus,
 }
 
 impl SettingsState {
-    /// Deja la ventana lista para pintar `rows` líneas con el cursor a la
-    /// vista: la arrastra SÓLO si el cursor se salió, por la regla compartida
-    /// de [`crate::viewport::sticky_offset`]. Se llama una vez por frame,
-    /// antes de pintar.
+    /// Leaves the window ready to paint `rows` lines with the cursor in
+    /// view: it drags it ONLY if the cursor went outside, by
+    /// [`crate::viewport::sticky_offset`]'s shared rule. Called once per
+    /// frame, before painting.
     ///
-    /// Recibe la línea del cursor y el total YA en líneas de pantalla, y no
-    /// en filas, porque quien pinta intercala cabeceras de sección entre las
-    /// filas: esa cuenta es suya, y hacerla aquí sería una segunda copia de
-    /// cómo se pinta. La ventana, que es web, ni lo llama — el navegador ya
-    /// desplaza la fila elegida hasta que se ve.
+    /// Receives the cursor's line and the total ALREADY in screen lines, not
+    /// rows, because whoever paints interleaves section headers between the
+    /// rows: that count is theirs, and doing it here would be a second copy
+    /// of how it is painted. The window, being web, does not even call it —
+    /// the browser already scrolls the chosen row into view.
     ///
-    /// `anchor_line` es la primera línea que tiene que verse CON el cursor:
-    /// la cabecera de su sección cuando el cursor está en la primera fila de
-    /// ella, y `cursor_line` en cualquier otro caso. Existe porque anclar
-    /// solo al cursor esconde la cabecera para siempre: la primera fila vive
-    /// en la línea 1 —la 0 es «General»—, así que al subir del todo el
-    /// desplazamiento se quedaba en 1 y la cabecera no volvía nunca. El
-    /// cursor manda en el borde de ABAJO (una cabecera no puede empujarlo
-    /// fuera de la caja) y el ancla solo tira hacia ARRIBA.
+    /// `anchor_line` is the first line that has to be seen WITH the cursor:
+    /// its section's header when the cursor is on the section's first row,
+    /// and `cursor_line` in any other case. It exists because anchoring only
+    /// to the cursor hides the header forever: the first row lives on line
+    /// 1 — 0 is "General" — so scrolling all the way up left the offset at 1
+    /// and the header never came back. The cursor rules the BOTTOM edge (a
+    /// header cannot push it out of the box) and the anchor only pulls
+    /// UPWARD.
     pub fn reconcile_viewport(
         &mut self,
         cursor_line: usize,
@@ -1234,7 +1242,7 @@ impl SettingsState {
         self.viewport_offset = off.min(anchor_line.min(cursor_line));
     }
 
-    /// La primera línea visible — ver [`Self::reconcile_viewport`].
+    /// The first visible line — see [`Self::reconcile_viewport`].
     #[must_use]
     pub fn viewport_offset(&self) -> usize {
         self.viewport_offset
@@ -1288,12 +1296,12 @@ impl SettingsState {
     }
 
     fn recompute(&mut self) {
-        let filtro = Query::parse(&self.query);
+        let filter = Query::parse(&self.query);
         self.visible = self
             .folds
             .iter()
             .enumerate()
-            .filter(|(i, f)| filtro.matches(&self.rows[*i], f))
+            .filter(|(i, f)| filter.matches(&self.rows[*i], f))
             .map(|(i, _)| i)
             .collect();
         self.clamp_cursor();
@@ -1321,15 +1329,17 @@ impl SettingsState {
         self.recompute();
     }
 
-    /// Pone la consulta ENTERA de golpe y recomputa.
+    /// Sets the WHOLE query at once and recomputes.
     ///
-    /// La ventana la necesita: su buscador es un `<input>` del navegador y
-    /// lo que cruza el puente es el texto completo, no la tecla. El terminal
-    /// sigue con [`Self::push_char`] porque su overlay sí recibe teclas.
+    /// The window needs it: its search box is a browser `<input>` and what
+    /// crosses the bridge is the full text, not the keystroke. The terminal
+    /// stays with [`Self::push_char`] because its overlay does receive
+    /// keystrokes.
     ///
-    /// El texto llega como bytes de una caja de texto: no se valida ni se
-    /// recorta aquí — plegar y filtrar es todo lo que se hace con él, y
-    /// pintarlo es de quien pinta ([`Self::query_display`] lo enmascara).
+    /// The text arrives as bytes from a text box: it is neither validated
+    /// nor trimmed here — folding and filtering is all that is done with
+    /// it, and painting it is up to whoever paints ([`Self::query_display`]
+    /// masks it).
     pub fn set_query(&mut self, text: &str) {
         if self.edit.is_some() {
             return;
@@ -1356,9 +1366,9 @@ impl SettingsState {
         if self.edit.is_some() {
             return;
         }
-        // Con el foco en el índice se recorren SECCIONES, no filas, y la
-        // lista sigue: es lo que hace la barra lateral de la ayuda, que abre
-        // el tema al pasar por él.
+        // With focus on the index, SECTIONS are walked, not rows, and the
+        // list follows: it is what the help sidebar does, opening the topic
+        // as it passes over it.
         if self.focus == Focus::Index {
             self.step_section(-1);
             return;
@@ -1417,17 +1427,17 @@ impl SettingsState {
         &self.rows
     }
 
-    /// El índice de secciones que pinta la pantalla: TODAS, en el orden de
-    /// [`Section::ORDER`], con cuántas filas visibles tiene cada una y en
-    /// cuál empieza.
+    /// The section index the screen paints: ALL of them, in
+    /// [`Section::ORDER`]'s order, with how many visible rows each has and
+    /// where it starts.
     ///
-    /// Una sección que el filtro deja a cero **sigue en la lista**, apagada:
-    /// un índice que cambia de largo mientras escribes es un índice que no
-    /// se puede usar como mapa.
+    /// A section the filter leaves at zero **stays in the list**, dimmed: an
+    /// index that changes length while you type is an index that cannot be
+    /// used as a map.
     ///
-    /// `first_row` es una posición dentro de [`Self::visible`] —la misma
-    /// unidad que [`Self::cursor`]— y NO un índice dentro de [`Self::rows`].
-    /// Mezclar las dos unidades es un cursor que apunta a otra fila.
+    /// `first_row` is a position within [`Self::visible`] — the same unit as
+    /// [`Self::cursor`] — and NOT an index within [`Self::rows`]. Mixing the
+    /// two units is a cursor that points at another row.
     #[must_use]
     pub fn sections(&self) -> Vec<SectionView> {
         Section::ORDER
@@ -1454,18 +1464,18 @@ impl SettingsState {
             .collect()
     }
 
-    /// Qué mitad tiene el teclado.
+    /// Which half has the keyboard.
     #[must_use]
     pub fn focus(&self) -> Focus {
         self.focus
     }
 
-    /// Cambia de lado. No-op mientras se edita: una edición abierta congela
-    /// todo lo demás, como el resto de esta máquina.
+    /// Switches sides. No-op while editing: an open edit freezes everything
+    /// else, like the rest of this machine.
     ///
-    /// Del índice no se puede salir a un sitio que no existe, así que pasar
-    /// a él con la lista vacía tampoco tiene sentido: sin filas visibles no
-    /// hay sección a la que ir, y el foco se queda donde está.
+    /// The index cannot lead somewhere that does not exist, so switching to
+    /// it with an empty list makes no sense either: with no visible rows
+    /// there is no section to go to, and focus stays where it is.
     pub fn toggle_focus(&mut self) {
         if self.edit.is_some() {
             return;
@@ -1477,42 +1487,39 @@ impl SettingsState {
         };
     }
 
-    /// Lleva el cursor a la sección anterior (`delta` negativo) o siguiente,
-    /// SALTÁNDOSE las que el filtro dejó vacías. Devuelve a cuál fue, o
-    /// `None` si no había ninguna con filas hacia ese lado.
+    /// Moves the cursor to the previous section (negative `delta`) or the
+    /// next, SKIPPING the ones the filter left empty. Returns which one it
+    /// went to, or `None` if there was none with rows on that side.
     ///
-    /// Vive aquí y no en cada frontend porque las dos pantallas tienen que
-    /// moverse igual: con el recorrido escrito dos veces, la octava sección
-    /// —o un cambio de orden— las separa en silencio y solo una tiene test.
-    /// Saltarse las vacías es lo que hace que la tecla sirva con un filtro
-    /// puesto: parar en una obligaría a pulsar dos veces sin que nada pase.
+    /// Lives here and not in each frontend because both screens have to
+    /// move the same way: with the walk written twice, the eighth section —
+    /// or a reordering — separates them silently and only one has a test.
+    /// Skipping the empty ones is what makes the key work with a filter on:
+    /// stopping on one would force pressing twice with nothing happening.
     pub fn step_section(&mut self, delta: i32) -> Option<Section> {
         let &real = self.visible.get(self.cursor)?;
-        let mut actual = self.rows[real].section;
+        let mut current = self.rows[real].section;
         let index = self.sections();
-        while let Some(siguiente) = actual.step(delta) {
-            if index
-                .iter()
-                .any(|v| v.section == siguiente && v.visible > 0)
-            {
-                self.jump_to(siguiente);
-                return Some(siguiente);
+        while let Some(next) = current.step(delta) {
+            if index.iter().any(|v| v.section == next && v.visible > 0) {
+                self.jump_to(next);
+                return Some(next);
             }
-            actual = siguiente;
+            current = next;
         }
         None
     }
 
-    /// Lleva el cursor a la primera fila visible de `section`.
+    /// Moves the cursor to the first visible row of `section`.
     ///
-    /// Una sección sin filas visibles no mueve nada: un salto que aterriza
-    /// en la fila de otra sección es peor que un salto que no ocurre.
+    /// A section with no visible rows moves nothing: a jump that lands on
+    /// another section's row is worse than a jump that does not happen.
     pub fn jump_to(&mut self, section: Section) {
-        let destino = self
+        let target = self
             .visible
             .iter()
             .position(|&real| self.rows[real].section == section);
-        if let Some(pos) = destino {
+        if let Some(pos) = target {
             self.set_cursor(pos);
         }
     }
@@ -1523,16 +1530,17 @@ impl SettingsState {
         self.cursor
     }
 
-    /// Cuántas filas hay en total, filtre lo que filtre.
+    /// How many rows there are in total, whatever the filter is.
     #[must_use]
     pub fn total(&self) -> usize {
         self.rows.len()
     }
 
-    /// Cuántas se ven con el filtro puesto.
+    /// How many are visible with the filter on.
     ///
-    /// Va con [`Self::total`] a la pantalla («7 de 33») porque sin la
-    /// segunda cifra «no hay nada» y «lo tapé con una letra» se leen igual.
+    /// Goes with [`Self::total`] on screen ("7 of 33") because without the
+    /// second figure "there is nothing" and "I hid it with a letter" read
+    /// the same.
     #[must_use]
     pub fn shown(&self) -> usize {
         self.visible.len()
@@ -1653,31 +1661,32 @@ impl SettingsState {
         }
     }
 
-    /// Pone un valor CONCRETO en la fila `id` — lo que necesita un control
-    /// de ventana (un interruptor, un desplegable, un campo numérico).
+    /// Sets a SPECIFIC value on row `id` — what a window control needs (a
+    /// toggle, a dropdown, a numeric field).
     ///
-    /// Existe porque [`Self::activate`] **cicla**: con un desplegable de
-    /// diez temas, elegir el séptimo serían siete viajes y seis escrituras
-    /// en el `norte.toml`. Aquí el control dice a qué valor va y se escribe
-    /// una vez.
+    /// Exists because [`Self::activate`] **cycles**: with a dropdown of ten
+    /// themes, choosing the seventh would be seven round trips and six
+    /// writes to `norte.toml`. Here the control says which value to go to
+    /// and it is written once.
     ///
-    /// La validación es la MISMA que la del teclado: un entero pasa por el
-    /// rango del catálogo, una línea de órdenes se trocea igual, y un valor
-    /// que no está en la lista de un enum se rechaza. Nada de esto vive en
-    /// el renderer — un frontend que validara por su cuenta sería una
-    /// segunda regla que se separa de la primera.
+    /// The validation is the SAME as the keyboard's: an integer goes through
+    /// the catalog's range, a command line is split the same way, and a
+    /// value not in an enum's list is rejected. None of this lives in the
+    /// renderer — a frontend validating on its own would be a second rule
+    /// splitting off from the first.
     ///
-    /// `theme_names`/`preset_names` llegan VIVAS, como en [`Self::activate`].
+    /// `theme_names`/`preset_names` arrive LIVE, as in [`Self::activate`].
     ///
     /// # Errors
-    /// [`SettingsEditError`] con el mismo criterio que [`Self::edit_commit`];
-    /// una fila que no existe, que no sale del catálogo, o un valor fuera de
-    /// la lista de su enum se rechazan como un entero inválido — el fallo
-    /// inerte que el editor ya usa para «esto no se puede escribir».
+    /// [`SettingsEditError`] under the same criterion as
+    /// [`Self::edit_commit`]; a row that does not exist, that is not from
+    /// the catalog, or a value outside its enum's list are rejected like an
+    /// invalid integer — the inert failure the editor already uses for
+    /// "this cannot be written".
     pub fn set_value(
         &mut self,
         id: &str,
-        valor: &str,
+        value: &str,
         theme_names: &[String],
         preset_names: &[&str],
     ) -> Result<PendingWrite, SettingsEditError> {
@@ -1698,7 +1707,7 @@ impl SettingsState {
         let def = &catalog()[idx];
         match def.kind {
             SettingKind::Bool => {
-                let b = match valor {
+                let b = match value {
                     "true" => true,
                     "false" => false,
                     _ => return Err(SettingsEditError::NotAnInt),
@@ -1706,59 +1715,61 @@ impl SettingsState {
                 Ok(self.commit_row(real, def, b.to_string(), toml_edit::Value::from(b)))
             }
             SettingKind::Enum(values) => {
-                if !values.contains(&valor) {
+                if !values.contains(&value) {
                     return Err(SettingsEditError::NotAnInt);
                 }
-                let v = toml_edit::Value::from(valor);
-                Ok(self.commit_row(real, def, valor.to_owned(), v))
+                let v = toml_edit::Value::from(value);
+                Ok(self.commit_row(real, def, value.to_owned(), v))
             }
             SettingKind::ThemeName => {
-                if !theme_names.iter().any(|t| t == valor) {
+                if !theme_names.iter().any(|t| t == value) {
                     return Err(SettingsEditError::NotAnInt);
                 }
-                let v = toml_edit::Value::from(valor);
-                Ok(self.commit_row(real, def, valor.to_owned(), v))
+                let v = toml_edit::Value::from(value);
+                Ok(self.commit_row(real, def, value.to_owned(), v))
             }
             SettingKind::PresetName => {
-                if !preset_names.contains(&valor) {
+                if !preset_names.contains(&value) {
                     return Err(SettingsEditError::NotAnInt);
                 }
-                let v = toml_edit::Value::from(valor);
-                Ok(self.commit_row(real, def, valor.to_owned(), v))
+                let v = toml_edit::Value::from(value);
+                Ok(self.commit_row(real, def, value.to_owned(), v))
             }
-            // Los que ya sabe validar el editor de línea: se le pasa el
-            // texto entero por su mismo camino, en vez de copiar el troceo
-            // de una línea de órdenes o el rango de un entero.
+            // The ones the line editor already knows how to validate: the
+            // whole text is passed to it through its own path, instead of
+            // copying a command line's splitting or an integer's range.
             SettingKind::Int { .. } | SettingKind::Text | SettingKind::Args => {
-                let antes = self.cursor;
+                let before = self.cursor;
                 self.cursor = pos;
-                self.edit = Some(valor.to_owned());
-                let salida = self.edit_commit();
+                self.edit = Some(value.to_owned());
+                let out = self.edit_commit();
                 self.edit = None;
-                if salida.is_err() {
-                    self.cursor = antes;
+                if out.is_err() {
+                    self.cursor = before;
                 }
-                salida
+                out
             }
         }
     }
 
-    /// Restablecer la fila del cursor: la clave que hay que QUITAR de la
-    /// capa de escritura, o `None` si no hay nada que quitar.
+    /// Resets the cursor's row: the key that has to be REMOVED from the
+    /// write layer, or `None` if there is nothing to remove.
     ///
-    /// `None` cuando la fila ya está en su valor de fábrica (quitar una
-    /// clave que no está es un no-op que no merece un aviso), cuando no sale
-    /// del catálogo (un resumen de plugin no tiene valor de fábrica), o
-    /// mientras se edita — igual que el resto de esta máquina, editar
-    /// congela todo lo demás.
+    /// `None` when the row is already at its factory value (removing a
+    /// key that is not there is a no-op that does not deserve a notice),
+    /// when it is not from the catalog (a plugin summary has no factory
+    /// value), or while editing — same as the rest of this machine, editing
+    /// freezes everything else.
     ///
-    /// **Quitar la clave de TU capa no siempre devuelve el valor de
-    /// fábrica**: si el sistema, el perfil o el proyecto fijan la misma, el
-    /// valor cambia y sigue sin ser el defecto. Esta función no lo sabe;
-    /// quien la llama reconstruye las filas después —ya lo hace tras cada
-    /// escritura— y mira el punto: si la fila sigue `modified`, lo dice con
-    /// `settings-still-set-elsewhere`, y si no, con `settings-reset-done`.
-    /// El punto encendido es verdad sin maquinaria de procedencia.
+    /// **Removing the key from YOUR layer does not always return the
+    /// factory value**: if the system, the profile or the project set the
+    /// same one, the value changes and is still not the default. This
+    /// function does not know that; the caller rebuilds the rows afterward
+    /// — it already does so after every write — and looks at the dot: if
+    /// the row is still `modified`, it says so with
+    /// `settings-still-set-elsewhere`, and if not, with
+    /// `settings-reset-done`. The lit dot is true with no provenance
+    /// machinery.
     pub fn reset(&mut self) -> Option<PendingReset> {
         if self.edit.is_some() {
             return None;
@@ -1779,7 +1790,7 @@ impl SettingsState {
     }
 
     /// Confirms the inline edit buffer: `Int` parses the buffer as `f64`
-    /// (revisión S, M4 — see [`SettingKind::Int`]'s doc for why a "whole
+    /// (revision S, M4 — see [`SettingKind::Int`]'s doc for why a "whole
     /// number" kind accepts a fractional part) and validates `[min, max]`
     /// ([`SettingsEditError`] WITHOUT persisting, buffer intact — the user
     /// corrects and retries); `Text` accepts anything. Only reachable with
@@ -1809,7 +1820,7 @@ impl SettingsState {
             // `min`/`max` are catalog constants, always tiny (today: 8/32) —
             // the precision loss `as f64` could theoretically incur past
             // 2^53 never applies here.
-            #[expect(clippy::cast_precision_loss, reason = "magnitudes lejos de 2^53")]
+            #[expect(clippy::cast_precision_loss, reason = "magnitudes far from 2^53")]
             let (min_f, max_f) = (min as f64, max as f64);
             if n < min_f || n > max_f {
                 return Err(SettingsEditError::OutOfRange { min, max });
@@ -1828,14 +1839,14 @@ impl SettingsState {
             };
             self.commit_row(real, def, n.to_string(), value)
         } else if matches!(def.kind, SettingKind::Args) {
-            // Una línea de órdenes se GUARDA como array: `zed %f` viaja como
-            // `["zed", "%f"]`, que es lo que el fichero declara. Escribirla
-            // como cadena haría que la siguiente carga la rechazara.
+            // A command line is SAVED as an array: `zed %f` travels as
+            // `["zed", "%f"]`, which is what the file declares. Writing it
+            // as a string would make the next load reject it.
             //
-            // Vacío = un array vacío, que la configuración lee como «ninguno»
-            // y devuelve el mando a `$VISUAL`/`$EDITOR`.
-            // Una lista con vocabulario cerrado se valida AQUÍ: escrita mal,
-            // la siguiente carga rechazaría el fichero entero.
+            // Empty = an empty array, which the configuration reads as
+            // "none" and hands control back to `$VISUAL`/`$EDITOR`.
+            // A list with closed vocabulary is validated HERE: written
+            // wrong, the next load would reject the whole file.
             if def.id == "ui.status-items" {
                 let ids: Vec<&str> = buf.split_ascii_whitespace().collect();
                 if norte_config::StatusItems::parse(&ids).is_err() {
@@ -1907,7 +1918,7 @@ pub(crate) fn cycle(current: &str, values: &[&str]) -> String {
 /// `TaskBoard::has_active`; GUI: tasks/marks/inflight, see
 /// `confirm_quit_task_count`) — the caller computes THAT; this is only the
 /// three-way decision from the mode, and it was byte-identical in both
-/// frontends before this hoist (revisión S, M6: TUI's `quit_needs_confirm`
+/// frontends before this hoist (revision S, M6: TUI's `quit_needs_confirm`
 /// and the GUI's `confirm_quit_should_open`).
 #[must_use]
 pub fn quit_needs_confirm(mode: norte_config::ConfirmQuit, pending: bool) -> bool {
@@ -1920,7 +1931,7 @@ pub fn quit_needs_confirm(mode: norte_config::ConfirmQuit, pending: bool) -> boo
 
 /// Status-bar/inline message for a [`SettingsEditError`] — by CATEGORY
 /// (Fluent), never ad hoc text (#73 pattern). Shared by the TUI overlay
-/// (S3) and the GUI view (S4, revisión S M6): both had their own
+/// (S3) and the GUI view (S4, revision S M6): both had their own
 /// byte-identical copy of this match before this hoist.
 #[must_use]
 pub fn edit_error_message(e: &SettingsEditError) -> String {
@@ -1944,7 +1955,7 @@ mod tests {
     /// Every catalog entry's id is unique — a duplicate would silently
     /// shadow one entry's Fluent keys/current value with another's.
     #[test]
-    fn catalog_ids_son_unicos() {
+    fn catalog_ids_are_unique() {
         let ids: Vec<&str> = catalog().iter().map(|d| d.id).collect();
         let mut sorted = ids.clone();
         sorted.sort_unstable();
@@ -1952,14 +1963,14 @@ mod tests {
         assert_eq!(
             sorted.len(),
             ids.len(),
-            "id duplicado en catalog(): {ids:?}"
+            "duplicate id in catalog(): {ids:?}"
         );
     }
 
     /// `fluent_name_id`/`fluent_desc_id` dash the id's dots — pinned with a
     /// concrete example so a refactor can't silently change the derivation.
     #[test]
-    fn fluent_ids_dashean_los_puntos() {
+    fn fluent_ids_dash_the_dots() {
         assert_eq!(
             fluent_name_id("ui.confirm-quit"),
             "setting-ui-confirm-quit-name"
@@ -1979,7 +1990,7 @@ mod tests {
     /// itself) in BOTH locales — a missing translation would otherwise only
     /// surface as a raw id leaking into the settings UI.
     #[test]
-    fn fluent_keys_existen_en_ambos_locales_para_cada_entrada() {
+    fn fluent_keys_exist_in_both_locales_for_every_entry() {
         for def in catalog() {
             for lang in [Lang::Es, Lang::En] {
                 let name_id = fluent_name_id(def.id);
@@ -1987,13 +1998,13 @@ mod tests {
                 assert_ne!(
                     t_in(lang, &name_id),
                     name_id,
-                    "falta la clave Fluent {name_id} en {lang:?} (id={})",
+                    "missing Fluent key {name_id} in {lang:?} (id={})",
                     def.id
                 );
                 assert_ne!(
                     t_in(lang, &desc_id),
                     desc_id,
-                    "falta la clave Fluent {desc_id} en {lang:?} (id={})",
+                    "missing Fluent key {desc_id} in {lang:?} (id={})",
                     def.id
                 );
             }
@@ -2005,47 +2016,48 @@ mod tests {
     /// use) without panicking, and never returns an id-shaped fallback that
     /// would suggest a typo in `current_value`'s match.
     #[test]
-    fn current_value_resuelve_para_cada_entrada_sin_panic() {
-        let cfg = crate::config::load(&Layers { dirs: vec![] }).expect("config vacía carga");
+    fn current_value_resolves_for_every_entry_without_panicking() {
+        let cfg = crate::config::load(&Layers { dirs: vec![] }).expect("empty config loads");
         for def in catalog() {
             let value = current_value(def, &cfg);
             assert_ne!(
                 value, def.id,
-                "current_value no debería devolver el id como fallback: {}",
+                "current_value should not return the id as a fallback: {}",
                 def.id
             );
         }
     }
 
-    /// Una fila de las que se ALTERNAN tiene que enseñar un valor legible, y
-    /// no la cadena vacía.
+    /// A row that TOGGLES has to show a readable value, not the empty
+    /// string.
     ///
-    /// El test de arriba no bastaba —una celda vacía no es el id, así que
-    /// pasaba— y el agujero no era cosmético: `activate` decide el siguiente
-    /// valor leyendo el que se PINTA, así que con la celda vacía un `Bool`
-    /// leía «no es true» y escribía `true` siempre. `ui.menu-bar` estuvo así:
-    /// en el catálogo, sin brazo en `current_value`, y por tanto imposible de
-    /// apagar desde esta pantalla.
+    /// The test above was not enough — an empty cell is not the id, so it
+    /// passed — and the hole was not cosmetic: `activate` decides the next
+    /// value by reading the one PAINTED, so with the empty cell a `Bool`
+    /// read "is not true" and always wrote `true`. `ui.menu-bar` was like
+    /// this: in the catalog, with no arm in `current_value`, and therefore
+    /// impossible to turn off from this screen.
     #[test]
-    fn una_fila_que_se_alterna_nunca_ensena_una_celda_vacia() {
-        let cfg = crate::config::load(&Layers { dirs: vec![] }).expect("config vacía carga");
+    fn a_toggled_row_never_shows_an_empty_cell() {
+        let cfg = crate::config::load(&Layers { dirs: vec![] }).expect("empty config loads");
         for def in catalog() {
             let value = current_value(def, &cfg);
             match def.kind {
                 SettingKind::Bool => assert!(
                     value == "true" || value == "false",
-                    "{} pinta {value:?}, que no es un booleano",
+                    "{} paints {value:?}, which is not a boolean",
                     def.id
                 ),
-                // Los `Enum` quedan FUERA a sabiendas: `ui.lang` sin valor
-                // pinta `auto`, que no es uno de los suyos —es lo que norte
-                // hace, negociar con el entorno— y la primera pulsación cae en
-                // el primero de la lista igualmente. Lo que aquí se protege es
-                // el caso en el que el valor pintado DECIDE el siguiente y una
-                // celda vacía lo decide mal.
+                // `Enum`s are knowingly left OUT: `ui.lang` with no value
+                // paints `auto`, which is not one of its own — it is what
+                // norte does, negotiate with the environment — and the
+                // first press falls on the first of the list all the same.
+                // What is protected here is the case where the painted
+                // value DECIDES the next one and an empty cell decides it
+                // wrong.
                 //
-                // Los de texto libre SÍ pueden estar vacíos: «sin fuente
-                // elegida» y «sin editor elegido» son respuestas válidas.
+                // Free-text ones CAN be empty: "no font chosen" and "no
+                // editor chosen" are valid answers.
                 SettingKind::Enum(_)
                 | SettingKind::Text
                 | SettingKind::Args
@@ -2056,26 +2068,26 @@ mod tests {
         }
     }
 
-    /// Teclear una línea de órdenes guarda un ARRAY, que es lo que el fichero
-    /// declara: una cadena haría que la siguiente carga la rechazara.
+    /// Typing a command line saves an ARRAY, which is what the file
+    /// declares: a string would make the next load reject it.
     #[test]
-    fn una_fila_de_ordenes_se_guarda_como_array() {
-        let cfg = crate::config::load(&Layers { dirs: vec![] }).expect("config vacía carga");
+    fn a_command_line_row_is_saved_as_an_array() {
+        let cfg = crate::config::load(&Layers { dirs: vec![] }).expect("empty config loads");
         let mut st = SettingsState::new(build_rows(&cfg, &[]));
-        let fila = st
+        let row = st
             .rows()
             .iter()
             .position(|r| r.def_index.map(|i| catalog()[i].id) == Some("ui.editor"))
-            .expect("ui.editor está en el catálogo");
-        st.set_cursor(fila);
+            .expect("ui.editor is in the catalog");
+        st.set_cursor(row);
         assert!(
             st.activate(&[], &[]).is_none(),
-            "una línea de órdenes se edita, no se alterna"
+            "a command line is edited, not toggled"
         );
         for c in "zed %f".chars() {
             st.edit_push_char(c);
         }
-        let write = st.edit_commit().expect("texto libre no falla");
+        let write = st.edit_commit().expect("free text does not fail");
         assert_eq!(write.section, "ui");
         assert_eq!(write.key, "editor");
         assert_eq!(write.value.to_string().trim(), r#"["zed", "%f"]"#);
@@ -2086,20 +2098,20 @@ mod tests {
     /// as the same wire string `[ui] confirm_quit` accepts in `norte.toml`
     /// (S2's exemplar setting — this is the one already wired end-to-end).
     #[test]
-    fn current_value_confirm_quit_default_es_auto() {
-        let cfg = crate::config::load(&Layers { dirs: vec![] }).expect("config vacía carga");
+    fn current_value_confirm_quit_default_is_auto() {
+        let cfg = crate::config::load(&Layers { dirs: vec![] }).expect("empty config loads");
         let def = catalog()
             .iter()
             .find(|d| d.id == "ui.confirm-quit")
-            .expect("ui.confirm-quit está en el catálogo");
+            .expect("ui.confirm-quit is in the catalog");
         assert_eq!(current_value(def, &cfg), "auto");
     }
 
     /// `wire_key` splits on the FIRST `.` and dashes-to-underscores the rest
-    /// — pinned with concrete examples (mirrors `fluent_ids_dashean_los_puntos`
+    /// — pinned with concrete examples (mirrors `fluent_ids_dash_the_dots`
     /// above, same derivation family, different target vocabulary).
     #[test]
-    fn wire_key_deriva_seccion_y_clave_snake_case() {
+    fn wire_key_derives_section_and_snake_case_key() {
         assert_eq!(
             wire_key("ui.confirm-quit"),
             ("ui", "confirm_quit".to_owned())
@@ -2112,7 +2124,7 @@ mod tests {
     /// panicking (never true for a real id, but a future entry missing the
     /// `section.key` shape would panic here first, not in the TUI/GUI).
     #[test]
-    fn wire_key_resuelve_para_cada_entrada_del_catalog() {
+    fn wire_key_resolves_for_every_catalog_entry() {
         for def in catalog() {
             let (section, key) = wire_key(def.id);
             assert!(!section.is_empty());
@@ -2123,7 +2135,7 @@ mod tests {
     /// `ui.confirm-quit` reflects a NON-default value loaded from
     /// `norte.toml` — not just the default path above.
     #[test]
-    fn current_value_confirm_quit_refleja_config_cargada() {
+    fn current_value_confirm_quit_reflects_loaded_config() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("norte.toml"),
@@ -2133,11 +2145,11 @@ mod tests {
         let layers = Layers {
             dirs: vec![(dir.path().to_path_buf(), Layer::User)],
         };
-        let cfg = crate::config::load(&layers).expect("carga");
+        let cfg = crate::config::load(&layers).expect("loads");
         let def = catalog()
             .iter()
             .find(|d| d.id == "ui.confirm-quit")
-            .expect("ui.confirm-quit está en el catálogo");
+            .expect("ui.confirm-quit is in the catalog");
         assert_eq!(current_value(def, &cfg), "always");
     }
 
@@ -2146,35 +2158,35 @@ mod tests {
     /// One row per catalog entry, plus EXACTLY one informational row at the
     /// end when NO plugin declares any `[config]` key (G3c fallback shape).
     #[test]
-    fn build_rows_una_fila_por_entrada_mas_la_de_plugins() {
-        let rows = build_rows(&cfg_vacia(), &[]);
+    fn build_rows_one_row_per_entry_plus_the_plugins_one() {
+        let rows = build_rows(&empty_cfg(), &[]);
         assert_eq!(rows.len(), catalog().len() + 1);
         assert!(!rows[0].is_plugins_note());
         assert!(rows.last().unwrap().is_plugins_note());
         assert_eq!(rows.last().unwrap().plugin_id(), None);
     }
 
-    fn cfg_vacia() -> FrontendConfig {
-        crate::config::load(&Layers { dirs: vec![] }).expect("config vacía carga")
+    fn empty_cfg() -> FrontendConfig {
+        crate::config::load(&Layers { dirs: vec![] }).expect("empty config loads")
     }
 
     /// Each General row's value is EXACTLY what `current_value` (S2) would
     /// resolve for the same `def` — never a diverging copy.
     #[test]
-    fn build_rows_valores_coinciden_con_current_value() {
-        let cfg = cfg_vacia();
+    fn build_rows_values_match_current_value() {
+        let cfg = empty_cfg();
         let rows = build_rows(&cfg, &[]);
-        // Por ID, no por posición: las filas salen en orden de PANTALLA
-        // (sección primero) y el catálogo va agrupado por sección de
-        // `norte.toml`, que es otro orden.
+        // By ID, not by position: rows come out in SCREEN order (section
+        // first) and the catalog is grouped by `norte.toml` section, which
+        // is a different order.
         for def in catalog() {
             let row = rows
                 .iter()
                 .find(|r| r.id() == Some(def.id))
-                .unwrap_or_else(|| panic!("«{}» no está en las filas", def.id));
+                .unwrap_or_else(|| panic!("\"{}\" is not in the rows", def.id));
             assert_eq!(row.value, current_value(def, &cfg));
         }
-        // El catálogo entero, más la fila informativa de Plugins.
+        // The whole catalog, plus the Plugins informational row.
         assert_eq!(rows.len(), catalog().len() + 1);
     }
 
@@ -2182,8 +2194,8 @@ mod tests {
     /// its name/description resolve to REAL text (not the raw Fluent id) in
     /// this suite's active language.
     #[test]
-    fn plugins_note_row_sin_valor_y_con_texto_traducido() {
-        let rows = build_rows(&cfg_vacia(), &[]);
+    fn plugins_note_row_has_no_value_and_translated_text() {
+        let rows = build_rows(&empty_cfg(), &[]);
         let note = rows.last().unwrap();
         assert_eq!(note.value, "");
         assert_ne!(note.name, "settings-plugins-name");
@@ -2195,7 +2207,7 @@ mod tests {
     /// a localized `"N settings"` value — the caller's cue to drill in on
     /// Enter, never to call `SettingsState::activate` on it.
     #[test]
-    fn build_rows_con_plugins_una_fila_por_resumen() {
+    fn build_rows_with_plugins_one_row_per_summary() {
         let summaries = vec![
             PluginConfigSummary {
                 plugin_id: "org.a".into(),
@@ -2208,14 +2220,14 @@ mod tests {
                 key_count: 1,
             },
         ];
-        let rows = build_rows(&cfg_vacia(), &summaries);
+        let rows = build_rows(&empty_cfg(), &summaries);
         assert_eq!(rows.len(), catalog().len() + 2);
         let a = &rows[catalog().len()];
         assert_eq!(a.plugin_id(), Some("org.a"));
         assert_eq!(a.name, "Alpha");
         assert!(
             a.is_plugins_note(),
-            "no editable vía SettingsState::activate"
+            "not editable via SettingsState::activate"
         );
         assert!(a.value.contains('3'));
         let b = &rows[catalog().len() + 1];
@@ -2230,21 +2242,21 @@ mod tests {
     /// masks BEFORE building the row) — this pins that `build_rows` does
     /// not double-mask nor accidentally corrupt an already-masked name.
     #[test]
-    fn build_rows_con_plugins_no_altera_un_nombre_ya_enmascarado() {
+    fn build_rows_with_plugins_does_not_alter_an_already_masked_name() {
         let masked = crate::display_name("\u{202E}evil".as_bytes()).0;
         let summaries = vec![PluginConfigSummary {
             plugin_id: "org.evil".into(),
             name: masked.clone(),
             key_count: 1,
         }];
-        let rows = build_rows(&cfg_vacia(), &summaries);
+        let rows = build_rows(&empty_cfg(), &summaries);
         assert_eq!(rows.last().unwrap().name, masked);
     }
 
     // --- `SettingsState`/`PendingWrite`/`SettingsEditError` (S3/S4 hoist) ---
 
     fn rows() -> Vec<Row> {
-        build_rows(&cfg_vacia(), &[])
+        build_rows(&empty_cfg(), &[])
     }
 
     /// Filtering by a DASHED fragment of the id (`confirm-quit`) — unlikely
@@ -2257,13 +2269,13 @@ mod tests {
         assert_eq!(
             s.visible().len(),
             1,
-            "el fragmento {fragment:?} debería aislar una sola fila"
+            "fragment {fragment:?} should isolate a single row"
         );
         s
     }
 
     #[test]
-    fn settings_filtra_por_id_nombre_o_descripcion() {
+    fn settings_filters_by_id_name_or_description() {
         let s = only("confirm-quit");
         assert_eq!(
             s.rows()[s.visible()[0]].name,
@@ -2272,7 +2284,7 @@ mod tests {
     }
 
     #[test]
-    fn settings_query_hostil_se_enmascara() {
+    fn settings_hostile_query_is_masked() {
         let mut s = SettingsState::new(rows());
         for c in "a\u{202E}b".chars() {
             s.push_char(c);
@@ -2283,7 +2295,7 @@ mod tests {
     }
 
     #[test]
-    fn settings_sin_matches_no_panica_y_activate_es_none() {
+    fn settings_with_no_matches_does_not_panic_and_activate_is_none() {
         let mut s = SettingsState::new(rows());
         for c in "zzzznuncacasa".chars() {
             s.push_char(c);
@@ -2298,20 +2310,20 @@ mod tests {
     }
 
     #[test]
-    fn activate_en_bool_toggla_y_devuelve_pendingwrite() {
+    fn activate_on_bool_toggles_and_returns_pendingwrite() {
         let mut s = only("reduce-motion");
         assert_eq!(s.rows()[s.visible()[0]].value, "false", "default");
-        let write = s.activate(&[], &[]).expect("Bool activa de inmediato");
+        let write = s.activate(&[], &[]).expect("Bool activates immediately");
         assert_eq!(write.section, "ui");
         assert_eq!(write.key, "reduce_motion");
         assert_eq!(write.value.as_bool(), Some(true));
         assert_eq!(write.display, "true");
-        assert_eq!(s.rows()[s.visible()[0]].value, "true", "optimista");
+        assert_eq!(s.rows()[s.visible()[0]].value, "true", "optimistic");
         assert!(!s.is_editing());
     }
 
     #[test]
-    fn activate_en_enum_cicla_con_wrap() {
+    fn activate_on_enum_cycles_with_wrap() {
         let mut s = only("confirm-quit");
         assert_eq!(s.rows()[s.visible()[0]].value, "auto", "default S2");
         let w1 = s.activate(&[], &[]).unwrap();
@@ -2319,60 +2331,62 @@ mod tests {
         let w2 = s.activate(&[], &[]).unwrap();
         assert_eq!(w2.display, "never");
         let w3 = s.activate(&[], &[]).unwrap();
-        assert_eq!(w3.display, "auto", "wrap al primero");
+        assert_eq!(w3.display, "auto", "wraps to the first");
         assert_eq!(w3.value.as_str(), Some("auto"));
     }
 
     #[test]
-    fn activate_en_theme_name_cicla_sobre_la_lista_viva() {
-        // "ui.theme" es prefijo de `ui.theme-light` y `ui.theme-dark` (spec
-        // 2026-09-11, V6): el filtro deja TRES filas, y el cursor queda en la
-        // primera, que por orden del catálogo es la del tema a secas.
+    fn activate_on_theme_name_cycles_over_the_live_list() {
+        // "ui.theme" is a prefix of `ui.theme-light` and `ui.theme-dark`
+        // (spec 2026-09-11, V6): the filter leaves THREE rows, and the
+        // cursor lands on the first, which by catalog order is the plain
+        // theme's.
         let mut s = SettingsState::new(rows());
         for c in "ui.theme".chars() {
             s.push_char(c);
         }
-        assert_eq!(s.visible().len(), 3, "theme, theme-light y theme-dark");
+        assert_eq!(s.visible().len(), 3, "theme, theme-light and theme-dark");
         assert_eq!(s.rows()[s.visible()[0]].name, t("setting-ui-theme-name"));
         let names = vec!["default".to_owned(), "nord".to_owned()];
-        // El valor actual (default de S2) es "default": el próximo es "nord".
-        let write = s.activate(&names, &[]).expect("ThemeName activa");
+        // The current value (S2's default) is "default": the next is "nord".
+        let write = s.activate(&names, &[]).expect("ThemeName activates");
         assert_eq!(write.section, "ui");
         assert_eq!(write.key, "theme");
         assert_eq!(write.value.as_str(), Some("nord"));
     }
 
     #[test]
-    fn activate_en_preset_name_cicla_sobre_la_lista_viva() {
+    fn activate_on_preset_name_cycles_over_the_live_list() {
         let mut s = only("keymap.preset");
         let presets = ["orthodox", "vim", "cua"];
-        let write = s.activate(&[], &presets).expect("PresetName activa");
+        let write = s.activate(&[], &presets).expect("PresetName activates");
         assert_eq!(write.section, "keymap");
         assert_eq!(write.key, "preset");
         assert_eq!(write.value.as_str(), Some("vim"), "orthodox → vim (wrap)");
     }
 
     #[test]
-    fn activate_en_text_abre_edicion_sin_persistir() {
-        // Espacio final: `ui.font` es PREFIJO de `ui.font-size` (el fold
-        // pega `"{id} {name} {desc}"`, así que el espacio que sigue al id
-        // ancla el fin de token y descarta ese otro id sin ambigüedad).
+    fn activate_on_text_opens_editing_without_persisting() {
+        // Trailing space: `ui.font` is a PREFIX of `ui.font-size` (the fold
+        // pastes `"{id} {name} {desc}"`, so the space following the id
+        // anchors the end of the token and discards that other id
+        // unambiguously).
         let mut s = only("ui.font ");
         assert!(!s.is_editing());
         let write = s.activate(&[], &[]);
-        assert!(write.is_none(), "Text no persiste al abrir: solo edita");
+        assert!(write.is_none(), "Text does not persist on open: only edits");
         assert!(s.is_editing());
         assert_eq!(s.edit_buffer(), Some(""));
     }
 
     #[test]
-    fn edit_commit_en_text_persiste_lo_tecleado() {
+    fn edit_commit_on_text_persists_what_was_typed() {
         let mut s = only("mono-font");
         s.activate(&[], &[]);
         for c in "JetBrains Mono".chars() {
             s.edit_push_char(c);
         }
-        let write = s.edit_commit().expect("Text siempre válido");
+        let write = s.edit_commit().expect("Text is always valid");
         assert_eq!(write.section, "ui");
         assert_eq!(write.key, "mono_font");
         assert_eq!(write.value.as_str(), Some("JetBrains Mono"));
@@ -2380,36 +2394,36 @@ mod tests {
         assert_eq!(s.rows()[s.visible()[0]].value, "JetBrains Mono");
     }
 
-    /// La ventana no teclea carácter a carácter: su campo es nativo y entrega
-    /// el texto entero al confirmar. `edit_set` es esa entrada, y fuera de
-    /// una edición no hace nada.
+    /// The window does not type character by character: its field is native
+    /// and hands over the whole text on confirm. `edit_set` is that input,
+    /// and outside an edit it does nothing.
     #[test]
-    fn edit_set_reemplaza_el_buffer_entero_y_solo_editando() {
+    fn edit_set_replaces_the_whole_buffer_and_only_while_editing() {
         let mut s = only("mono-font");
-        s.edit_set("nada");
-        assert!(!s.is_editing(), "sin edición abierta no abre una");
+        s.edit_set("nothing");
+        assert!(!s.is_editing(), "with no edit open it does not open one");
         s.activate(&[], &[]);
         s.edit_set("JetBrains Mono");
         assert_eq!(s.edit_buffer(), Some("JetBrains Mono"));
-        let write = s.edit_commit().expect("Text siempre válido");
+        let write = s.edit_commit().expect("Text is always valid");
         assert_eq!(write.value.as_str(), Some("JetBrains Mono"));
     }
 
     #[test]
-    fn edit_commit_en_int_valida_rango_sin_persistir_y_conserva_el_buffer() {
+    fn edit_commit_on_int_validates_range_without_persisting_and_keeps_the_buffer() {
         let mut s = only("font-size");
         s.activate(&[], &[]);
         for c in "999".chars() {
             s.edit_push_char(c);
         }
-        let err = s.edit_commit().expect_err("999 fuera de [8,32]");
+        let err = s.edit_commit().expect_err("999 is out of [8,32]");
         assert_eq!(err, SettingsEditError::OutOfRange { min: 8, max: 32 });
-        assert!(s.is_editing(), "el buffer se conserva tras un rechazo");
+        assert!(s.is_editing(), "the buffer is kept after a rejection");
         assert_eq!(s.edit_buffer(), Some("999"));
     }
 
     #[test]
-    fn edit_commit_en_int_no_numerico_rechaza() {
+    fn edit_commit_on_int_non_numeric_rejects() {
         let mut s = only("font-size");
         s.activate(&[], &[]);
         for c in "abc".chars() {
@@ -2419,59 +2433,60 @@ mod tests {
     }
 
     #[test]
-    fn edit_commit_en_int_valido_persiste() {
+    fn edit_commit_on_int_valid_persists() {
         let mut s = only("font-size");
-        // El buffer arranca con el valor VIGENTE ("" — sin `[ui] font_size`
-        // en la config vacía de este test, `current_value` ya lo documenta).
+        // The buffer starts with the CURRENT value ("" — with no
+        // `[ui] font_size` in this test's empty config, `current_value`
+        // already documents this).
         s.activate(&[], &[]);
         assert_eq!(s.edit_buffer(), Some(""));
         for c in "16".chars() {
             s.edit_push_char(c);
         }
-        let write = s.edit_commit().expect("16 está en [8,32]");
+        let write = s.edit_commit().expect("16 is in [8,32]");
         assert_eq!(write.value.as_integer(), Some(16));
         assert_eq!(write.display, "16");
     }
 
-    /// Revisión S, M4: `ui.font-size` acepta un valor FRACCIONARIO
-    /// (`[ui] font_size` es `f32` en `norte_config`, no un entero — un
-    /// `norte.toml` editado a mano con `font_size = 14.5` era imposible de
-    /// re-editar desde aquí antes de este fix, el `i64::parse` estricto lo
-    /// rechazaba). Round-trip: "14.5" → `Value::Float(14.5)` + `display`
-    /// SIN ceros de más.
+    /// Revision S, M4: `ui.font-size` accepts a FRACTIONAL value (`[ui]
+    /// font_size` is `f32` in `norte_config`, not an integer — a hand-edited
+    /// `norte.toml` with `font_size = 14.5` was impossible to re-edit from
+    /// here before this fix, the strict `i64::parse` rejected it outright).
+    /// Round trip: "14.5" → `Value::Float(14.5)` + `display` with NO extra
+    /// zeros.
     #[test]
-    fn edit_commit_en_font_size_acepta_fraccion_y_round_tripea() {
+    fn edit_commit_on_font_size_accepts_a_fraction_and_round_trips() {
         let mut s = only("font-size");
         s.activate(&[], &[]);
         for c in "14.5".chars() {
             s.edit_push_char(c);
         }
-        let write = s.edit_commit().expect("14.5 está en [8,32]");
+        let write = s.edit_commit().expect("14.5 is in [8,32]");
         assert_eq!(write.value.as_float(), Some(14.5));
         assert_eq!(
             write.value.as_integer(),
             None,
-            "no debe escribirse como entero"
+            "must not be written as an integer"
         );
         assert_eq!(write.display, "14.5");
     }
 
-    /// Un valor fraccionario FUERA de rango (p. ej. `33.5`) sigue
-    /// rechazándose — el parse más permisivo (`f64` en vez de `i64`) no
-    /// debilita la validación de `[min, max]`.
+    /// A fractional value OUT of range (e.g. `33.5`) is still rejected — the
+    /// more permissive parse (`f64` instead of `i64`) does not weaken the
+    /// `[min, max]` validation.
     #[test]
-    fn edit_commit_en_font_size_fraccion_fuera_de_rango_rechaza() {
+    fn edit_commit_on_font_size_fraction_out_of_range_rejects() {
         let mut s = only("font-size");
         s.activate(&[], &[]);
         for c in "33.5".chars() {
             s.edit_push_char(c);
         }
-        let err = s.edit_commit().expect_err("33.5 fuera de [8,32]");
+        let err = s.edit_commit().expect_err("33.5 is out of [8,32]");
         assert_eq!(err, SettingsEditError::OutOfRange { min: 8, max: 32 });
     }
 
     #[test]
-    fn edit_cancel_no_persiste_y_conserva_el_valor_original() {
+    fn edit_cancel_does_not_persist_and_keeps_the_original_value() {
         let mut s = only("mono-font");
         let original = s.rows()[s.visible()[0]].value.clone();
         s.activate(&[], &[]);
@@ -2481,10 +2496,10 @@ mod tests {
         assert_eq!(s.rows()[s.visible()[0]].value, original);
     }
 
-    /// La fila informativa de Plugins (última con query vacía) nunca abre
-    /// edición ni produce un `PendingWrite`.
+    /// The Plugins informational row (last one with an empty query) never
+    /// opens editing nor produces a `PendingWrite`.
     #[test]
-    fn activate_en_fila_informativa_de_plugins_es_no_op() {
+    fn activate_on_the_plugins_informational_row_is_a_no_op() {
         let mut s = SettingsState::new(rows());
         let n = catalog().len();
         for _ in 0..n {
@@ -2498,7 +2513,7 @@ mod tests {
     /// `refresh` (hot-reload) rebuilds the VALUES but keeps the query and
     /// cursor the user typed/moved.
     #[test]
-    fn refresh_conserva_query_y_recalcula_valores() {
+    fn refresh_keeps_the_query_and_recomputes_values() {
         let mut s = only("reduce-motion");
         assert_eq!(s.rows()[s.visible()[0]].value, "false");
         let dir = tempfile::tempdir().unwrap();
@@ -2510,41 +2525,41 @@ mod tests {
         let layers = Layers {
             dirs: vec![(dir.path().to_path_buf(), Layer::User)],
         };
-        let cfg = crate::config::load(&layers).expect("carga");
+        let cfg = crate::config::load(&layers).expect("loads");
         s.refresh(build_rows(&cfg, &[]));
         assert_eq!(
             s.visible().len(),
             1,
-            "la query 'reduce-motion' se conserva tras el refresh"
+            "the 'reduce-motion' query is kept after the refresh"
         );
-        assert_eq!(s.rows()[s.visible()[0]].value, "true", "valor fresco");
+        assert_eq!(s.rows()[s.visible()[0]].value, "true", "fresh value");
     }
 
-    /// El ancla tira hacia ARRIBA y el cursor manda abajo.
+    /// The anchor pulls UPWARD and the cursor rules below.
     ///
-    /// Con la ventana abajo, volver a la primera fila (línea 1, porque la 0
-    /// es la cabecera «General») dejaba el desplazamiento en 1: la cabecera
-    /// no volvía nunca. El ancla es la línea de esa cabecera.
+    /// With the window scrolled down, going back to the first row (line 1,
+    /// because 0 is the "General" header) left the offset at 1: the header
+    /// never came back. The anchor is that header's line.
     #[test]
-    fn la_cabecera_de_la_seccion_entra_con_su_primera_fila() {
+    fn the_sections_header_comes_in_with_its_first_row() {
         let mut s = SettingsState::new(rows());
-        // Diez líneas de caja sobre cuarenta; la ventana ya bajó.
+        // Ten lines of box over forty; the window has already scrolled down.
         s.reconcile_viewport(39, 39, 40, 10);
         assert_eq!(s.viewport_offset(), 30);
-        // Volver a la primera fila: su cabecera es la línea 0.
+        // Going back to the first row: its header is line 0.
         s.reconcile_viewport(1, 0, 40, 10);
-        assert_eq!(s.viewport_offset(), 0, "la cabecera vuelve con su fila");
-        // Una fila que NO abre sección no tira de nada: ancla = cursor.
+        assert_eq!(s.viewport_offset(), 0, "the header comes back with its row");
+        // A row that does NOT open a section pulls nothing: anchor = cursor.
         s.reconcile_viewport(25, 25, 40, 10);
         assert_eq!(s.viewport_offset(), 16);
-        // Y una cabecera no puede empujar el cursor fuera por abajo.
+        // And a header cannot push the cursor out at the bottom.
         s.reconcile_viewport(39, 38, 40, 10);
         assert!(s.viewport_offset() <= 38 && s.viewport_offset() + 10 > 39);
     }
 
     #[test]
-    fn restablecer_una_fila_tocada_pide_quitar_su_clave() {
-        let mut cfg = cfg_vacia();
+    fn resetting_a_touched_row_asks_to_remove_its_key() {
+        let mut cfg = empty_cfg();
         cfg.common.ui_theme = Some("nord".to_owned());
         let mut s = SettingsState::new(build_rows(&cfg, &[]));
         let pos = s
@@ -2553,35 +2568,35 @@ mod tests {
             .position(|&i| s.rows()[i].id() == Some("ui.theme"))
             .expect("ui.theme visible");
         s.set_cursor(pos);
-        let r = s.reset().expect("hay algo que quitar");
+        let r = s.reset().expect("there is something to remove");
         assert_eq!((r.section, r.key.as_str()), ("ui", "theme"));
     }
 
     #[test]
-    fn restablecer_lo_que_ya_es_de_fabrica_no_pide_nada() {
-        let mut s = SettingsState::new(build_rows(&cfg_vacia(), &[]));
+    fn resetting_what_is_already_factory_asks_nothing() {
+        let mut s = SettingsState::new(build_rows(&empty_cfg(), &[]));
         s.set_cursor(0);
         assert!(s.reset().is_none());
     }
 
     #[test]
-    fn una_fila_de_plugins_no_se_restablece() {
-        let resumen = PluginConfigSummary {
+    fn a_plugins_row_does_not_reset() {
+        let summary = PluginConfigSummary {
             plugin_id: "org.a".into(),
             name: "A".into(),
             key_count: 2,
         };
-        let mut s = SettingsState::new(build_rows(&cfg_vacia(), &[resumen]));
-        let ultima = s.visible().len() - 1;
-        s.set_cursor(ultima);
+        let mut s = SettingsState::new(build_rows(&empty_cfg(), &[summary]));
+        let last = s.visible().len() - 1;
+        s.set_cursor(last);
         assert!(s.reset().is_none());
     }
 
-    /// Editando, restablecer no hace nada: igual que el resto de esta
-    /// máquina, una edición abierta congela todo lo demás.
+    /// While editing, resetting does nothing: same as the rest of this
+    /// machine, an open edit freezes everything else.
     #[test]
-    fn editando_no_se_restablece() {
-        let mut cfg = cfg_vacia();
+    fn while_editing_nothing_resets() {
+        let mut cfg = empty_cfg();
         cfg.common.ui_font = Some("Inter".to_owned());
         let mut s = SettingsState::new(build_rows(&cfg, &[]));
         let pos = s
@@ -2596,8 +2611,8 @@ mod tests {
     }
 
     #[test]
-    fn el_operador_modified_deja_solo_lo_tocado() {
-        let mut cfg = cfg_vacia();
+    fn the_modified_operator_leaves_only_whats_touched() {
+        let mut cfg = empty_cfg();
         cfg.common.ui_theme = Some("nord".to_owned());
         let mut s = SettingsState::new(build_rows(&cfg, &[]));
         for c in "@modified".chars() {
@@ -2607,16 +2622,16 @@ mod tests {
         assert_eq!(s.rows()[s.visible()[0]].id(), Some("ui.theme"));
     }
 
-    /// En los DOS idiomas, y por la clave estable: un fichero de traducción
-    /// no puede ser la diferencia entre encontrar algo y no encontrarlo.
+    /// In BOTH languages, and by the stable key: a translation file cannot
+    /// be the difference between finding something and not finding it.
     #[test]
-    fn el_operador_section_acepta_el_nombre_traducido_y_el_estable() {
+    fn the_section_operator_accepts_the_translated_and_the_stable_name() {
         for q in ["@section:appearance", "@section:apariencia"] {
-            let mut s = SettingsState::new(build_rows(&cfg_vacia(), &[]));
+            let mut s = SettingsState::new(build_rows(&empty_cfg(), &[]));
             for c in q.chars() {
                 s.push_char(c);
             }
-            assert!(s.shown() > 0, "«{q}» no encontró nada");
+            assert!(s.shown() > 0, "\"{q}\" found nothing");
             assert!(
                 s.visible()
                     .iter()
@@ -2625,80 +2640,84 @@ mod tests {
         }
     }
 
-    /// CADA sección, en los DOS idiomas, por su rótulo entero y por un
-    /// prefijo. Cinco de las siete tienen el rótulo de dos palabras, y la
-    /// consulta se trocea por espacios: con igualdad exacta eran
-    /// inencontrables, y el test que solo probaba «apariencia» —la única de
-    /// una palabra en ambos idiomas— no lo veía.
+    /// EVERY section, in BOTH languages, by its whole label and by a prefix.
+    /// Five of the seven have a two-word label, and the query is split on
+    /// spaces: under exact equality they were unfindable, and the test that
+    /// only tried "appearance" — the only one-word one in both languages —
+    /// did not see it.
     #[test]
-    fn cada_seccion_se_encuentra_por_su_rotulo_en_los_dos_idiomas() {
+    fn every_section_is_found_by_its_label_in_both_languages() {
         for s in Section::ORDER {
-            let mut consultas = vec![s.stable_key().to_owned()];
+            let mut queries = vec![s.stable_key().to_owned()];
             for lang in [norte_i18n::Lang::Es, norte_i18n::Lang::En] {
-                let rotulo = norte_i18n::t_in(lang, s.label_key());
-                // La primera palabra: es lo que sobrevive al troceo.
-                let primera = rotulo.split(' ').next().unwrap_or(&rotulo).to_owned();
-                consultas.push(primera);
+                let label = norte_i18n::t_in(lang, s.label_key());
+                // The first word: what survives the splitting.
+                let first = label.split(' ').next().unwrap_or(&label).to_owned();
+                queries.push(first);
             }
-            for q in consultas {
+            for q in queries {
                 assert_eq!(
                     section_by_name(&q),
                     Some(*s),
-                    "«{q}» tenía que llevar a {s:?}"
+                    "\"{q}\" had to lead to {s:?}"
                 );
             }
         }
     }
 
-    /// Y el otro operador se compara igual: plegado. Dos operadores con dos
-    /// reglas de mayúsculas es una trampa.
+    /// And the other operator compares the same way: folded. Two operators
+    /// with two case rules is a trap.
     #[test]
-    fn el_operador_modified_no_distingue_mayusculas() {
-        let mut cfg = cfg_vacia();
+    fn the_modified_operator_is_case_insensitive() {
+        let mut cfg = empty_cfg();
         cfg.common.ui_theme = Some("nord".to_owned());
         for q in ["@modified", "@Modified", "@MODIFIED"] {
             let mut s = SettingsState::new(build_rows(&cfg, &[]));
             for c in q.chars() {
                 s.push_char(c);
             }
-            assert_eq!(s.shown(), 1, "«{q}»");
+            assert_eq!(s.shown(), 1, "\"{q}\"");
         }
     }
 
     #[test]
-    fn los_operadores_se_combinan_con_el_texto() {
-        let mut cfg = cfg_vacia();
+    fn the_operators_combine_with_the_text() {
+        let mut cfg = empty_cfg();
         cfg.common.ui_theme = Some("nord".to_owned());
         cfg.common.ui_show_hidden = Some(true);
         let mut s = SettingsState::new(build_rows(&cfg, &[]));
         for c in "@modified".chars() {
             s.push_char(c);
         }
-        assert_eq!(s.shown(), 2, "dos tocadas");
+        assert_eq!(s.shown(), 2, "two touched");
         for c in " theme".chars() {
             s.push_char(c);
         }
-        assert_eq!(s.shown(), 1, "y con el texto, una");
+        assert_eq!(s.shown(), 1, "and with the text, one");
     }
 
-    /// Una arroba que no abre operador conocido es TEXTO. Nadie tiene que
-    /// escapar nada para buscar una arroba.
+    /// An `@` that does not open a known operator is TEXT. Nobody has to
+    /// escape anything to search for an `@`.
     #[test]
-    fn una_arroba_suelta_es_texto_normal() {
-        let mut s = SettingsState::new(build_rows(&cfg_vacia(), &[]));
+    fn a_lone_at_sign_is_normal_text() {
+        let mut s = SettingsState::new(build_rows(&empty_cfg(), &[]));
         for c in "@nada".chars() {
             s.push_char(c);
         }
         assert_eq!(s.shown(), 0);
-        assert_eq!(s.total(), s.rows().len(), "el total no lo toca el filtro");
+        assert_eq!(
+            s.total(),
+            s.rows().len(),
+            "the total is untouched by the filter"
+        );
     }
 
-    /// Una sección que no existe filtra a NADA. Ignorar el operador
-    /// enseñaría la lista entera, y el lector la leería como «esto es todo
-    /// lo que pediste».
+    /// A section that does not exist filters to NOTHING. Ignoring the
+    /// operator would show the whole list, and the reader would read that
+    /// as "this is everything you asked for".
     #[test]
-    fn una_seccion_que_no_existe_no_ensena_la_lista_entera() {
-        let mut s = SettingsState::new(build_rows(&cfg_vacia(), &[]));
+    fn a_nonexistent_section_does_not_show_the_whole_list() {
+        let mut s = SettingsState::new(build_rows(&empty_cfg(), &[]));
         for c in "@section:loquesea".chars() {
             s.push_char(c);
         }
@@ -2706,10 +2725,10 @@ mod tests {
     }
 
     #[test]
-    fn el_indice_lista_todas_las_secciones_aunque_el_filtro_vacie_alguna() {
-        let mut s = SettingsState::new(build_rows(&cfg_vacia(), &[]));
-        // Por el ID, no por el rótulo: estos tests corren en el locale por
-        // defecto, y un filtro escrito en español no casa nada en inglés.
+    fn the_index_lists_every_section_even_if_the_filter_empties_one() {
+        let mut s = SettingsState::new(build_rows(&empty_cfg(), &[]));
+        // By ID, not by label: these tests run in the default locale, and a
+        // filter written in Spanish matches nothing in English.
         for c in "theme".chars() {
             s.push_char(c);
         }
@@ -2717,42 +2736,42 @@ mod tests {
         assert_eq!(
             idx.len(),
             Section::ORDER.len(),
-            "el índice no encoge al filtrar"
+            "the index does not shrink when filtering"
         );
-        let apariencia = idx
+        let appearance = idx
             .iter()
             .find(|v| v.section == Section::Appearance)
-            .expect("apariencia");
-        assert!(apariencia.visible > 0);
-        let abrir = idx
+            .expect("appearance");
+        assert!(appearance.visible > 0);
+        let open_with = idx
             .iter()
             .find(|v| v.section == Section::OpenWith)
-            .expect("abrir con");
-        assert_eq!(abrir.visible, 0);
-        assert_eq!(abrir.first_row, None);
+            .expect("open with");
+        assert_eq!(open_with.visible, 0);
+        assert_eq!(open_with.first_row, None);
     }
 
     #[test]
-    fn saltar_a_una_seccion_pone_el_cursor_en_su_primera_fila_visible() {
-        let mut s = SettingsState::new(build_rows(&cfg_vacia(), &[]));
+    fn jumping_to_a_section_puts_the_cursor_on_its_first_visible_row() {
+        let mut s = SettingsState::new(build_rows(&empty_cfg(), &[]));
         s.jump_to(Section::Input);
-        let fila = &s.rows()[s.visible()[s.cursor()]];
-        assert_eq!(fila.section, Section::Input);
-        // Y es la PRIMERA de la sección, no una cualquiera.
+        let row = &s.rows()[s.visible()[s.cursor()]];
+        assert_eq!(row.section, Section::Input);
+        // And it is the FIRST of the section, not just any one.
         assert!(s.cursor() == 0 || s.rows()[s.visible()[s.cursor() - 1]].section != Section::Input);
     }
 
-    /// Poner un valor concreto valida con las MISMAS reglas que el teclado:
-    /// es lo que hace que un control de ventana no sea una segunda regla.
+    /// Setting a specific value validates with the SAME rules as the
+    /// keyboard: it is what makes a window control not a second rule.
     #[test]
-    fn set_value_valida_como_el_editor() {
-        let temas = vec!["default".to_owned(), "nord".to_owned()];
+    fn set_value_validates_like_the_editor() {
+        let themes = vec!["default".to_owned(), "nord".to_owned()];
         let presets = ["orthodox", "vim"];
-        let mut s = SettingsState::new(build_rows(&cfg_vacia(), &[]));
+        let mut s = SettingsState::new(build_rows(&empty_cfg(), &[]));
 
-        // Un booleano, sin ciclar.
+        // A boolean, no cycling.
         let w = s
-            .set_value("ui.mouse", "false", &temas, &presets)
+            .set_value("ui.mouse", "false", &themes, &presets)
             .expect("bool");
         assert_eq!(
             (w.section, w.key.as_str(), w.display.as_str()),
@@ -2760,38 +2779,40 @@ mod tests {
         );
         assert_eq!(w.value.as_bool(), Some(false));
 
-        // Un tema de la lista VIVA, y uno que no está.
-        assert!(s.set_value("ui.theme", "nord", &temas, &presets).is_ok());
+        // A theme from the LIVE list, and one that is not there.
+        assert!(s.set_value("ui.theme", "nord", &themes, &presets).is_ok());
         assert!(
-            s.set_value("ui.theme", "inventado", &temas, &presets)
+            s.set_value("ui.theme", "inventado", &themes, &presets)
                 .is_err()
         );
 
-        // Un entero fuera de rango se rechaza CON sus topes, como el editor.
+        // An out-of-range integer is rejected WITH its bounds, like the
+        // editor.
         let e = s
-            .set_value("ui.font-size", "999", &temas, &presets)
-            .expect_err("fuera de rango");
+            .set_value("ui.font-size", "999", &themes, &presets)
+            .expect_err("out of range");
         assert!(matches!(e, SettingsEditError::OutOfRange { .. }));
 
-        // Y una línea de órdenes se trocea igual: array, no cadena.
+        // And a command line is split the same way: array, not string.
         let w = s
-            .set_value("ui.editor", "zed %f", &temas, &presets)
+            .set_value("ui.editor", "zed %f", &themes, &presets)
             .expect("args");
-        assert!(w.value.as_array().is_some(), "se guarda troceada");
+        assert!(w.value.as_array().is_some(), "saved split into pieces");
     }
 
-    /// Un valor que no es de una lista cerrada no entra, venga de donde
-    /// venga: el renderer no valida, y un puente puede traer cualquier cosa.
+    /// A value not from a closed list does not get in, wherever it comes
+    /// from: the renderer does not validate, and a bridge can bring
+    /// anything.
     #[test]
-    fn set_value_rechaza_lo_que_no_esta_en_la_lista() {
-        let mut s = SettingsState::new(build_rows(&cfg_vacia(), &[]));
+    fn set_value_rejects_what_is_not_in_the_list() {
+        let mut s = SettingsState::new(build_rows(&empty_cfg(), &[]));
         assert!(s.set_value("ui.confirm-quit", "quizas", &[], &[]).is_err());
         assert!(s.set_value("ui.mouse", "SI", &[], &[]).is_err());
-        // Los elementos de la barra de estado (ADR 0132): un id que no
-        // existe, o uno repetido, rompería la siguiente carga del fichero.
+        // The status bar's items (ADR 0132): an id that does not exist, or a
+        // repeated one, would break the next load of the file.
         assert_eq!(
             s.set_value("ui.status-items", "tasks git", &[], &[])
-                .expect_err("id desconocido"),
+                .expect_err("unknown id"),
             SettingsEditError::Invalid {
                 key: "msg-settings-invalid-status-items"
             }
@@ -2802,13 +2823,13 @@ mod tests {
         );
         let w = s
             .set_value("ui.status-items", "notices  position", &[], &[])
-            .expect("válida");
+            .expect("valid");
         assert_eq!(w.display, "notices position");
         assert!(s.set_value("no.existe", "1", &[], &[]).is_err());
     }
 
     #[test]
-    fn el_control_de_cada_entrada_sale_del_catalogo() {
+    fn every_entrys_control_comes_from_the_catalog() {
         assert_eq!(control_of("ui.mouse"), Some(Control::Toggle));
         assert_eq!(control_of("ui.theme"), Some(Control::ThemeChoice));
         assert_eq!(control_of("keymap.preset"), Some(Control::PresetChoice));
@@ -2817,50 +2838,51 @@ mod tests {
             control_of("ui.confirm-quit"),
             Some(Control::Choice(_))
         ));
-        // Y ninguna entrada del catálogo se queda sin control.
+        // And no catalog entry is left without a control.
         for d in catalog() {
-            assert!(control_of(d.id).is_some(), "«{}» sin control", d.id);
+            assert!(control_of(d.id).is_some(), "\"{}\" has no control", d.id);
         }
     }
 
-    /// Con el foco en el índice, las flechas recorren SECCIONES y la lista
-    /// sigue — como la barra lateral de la ayuda, que abre el tema al pasar
-    /// por él. Sin un segundo cursor que sincronizar.
+    /// With focus on the index, the arrows walk SECTIONS and the list
+    /// follows — like the help sidebar, which opens the topic as it passes
+    /// over it. With no second cursor to synchronize.
     #[test]
-    fn con_el_foco_en_el_indice_las_flechas_cambian_de_seccion() {
-        let mut s = SettingsState::new(build_rows(&cfg_vacia(), &[]));
-        let seccion = |s: &SettingsState| s.rows()[s.visible()[s.cursor()]].section;
+    fn with_focus_on_the_index_the_arrows_change_section() {
+        let mut s = SettingsState::new(build_rows(&empty_cfg(), &[]));
+        let section = |s: &SettingsState| s.rows()[s.visible()[s.cursor()]].section;
         assert_eq!(s.focus(), Focus::List);
         s.down();
         assert_eq!(
-            seccion(&s),
+            section(&s),
             Section::Appearance,
-            "en la lista, baja una fila"
+            "in the list, goes down one row"
         );
 
         s.toggle_focus();
         assert_eq!(s.focus(), Focus::Index);
         s.down();
         assert_eq!(
-            seccion(&s),
+            section(&s),
             Section::Panes,
-            "en el índice, baja una sección"
+            "in the index, goes down one section"
         );
         s.up();
-        assert_eq!(seccion(&s), Section::Appearance);
+        assert_eq!(section(&s), Section::Appearance);
 
-        // Y volver al otro lado devuelve las flechas a las filas.
+        // And going back to the other side returns the arrows to the rows.
         s.toggle_focus();
         assert_eq!(s.focus(), Focus::List);
-        let antes = s.cursor();
+        let before = s.cursor();
         s.down();
-        assert_eq!(s.cursor(), antes + 1);
+        assert_eq!(s.cursor(), before + 1);
     }
 
-    /// Sin filas visibles no hay sección a la que ir: el foco no cruza.
+    /// With no visible rows there is no section to go to: focus does not
+    /// cross.
     #[test]
-    fn con_la_lista_vacia_el_foco_no_pasa_al_indice() {
-        let mut s = SettingsState::new(build_rows(&cfg_vacia(), &[]));
+    fn with_an_empty_list_focus_does_not_move_to_the_index() {
+        let mut s = SettingsState::new(build_rows(&empty_cfg(), &[]));
         for c in "@section:loquesea".chars() {
             s.push_char(c);
         }
@@ -2869,10 +2891,11 @@ mod tests {
         assert_eq!(s.focus(), Focus::List);
     }
 
-    /// Y editando no cruza tampoco: una edición abierta congela lo demás.
+    /// And while editing it does not cross either: an open edit freezes
+    /// everything else.
     #[test]
-    fn editando_el_foco_no_cambia() {
-        let mut cfg = cfg_vacia();
+    fn while_editing_focus_does_not_change() {
+        let mut cfg = empty_cfg();
         cfg.common.ui_font = Some("Inter".to_owned());
         let mut s = SettingsState::new(build_rows(&cfg, &[]));
         let pos = s
@@ -2887,143 +2910,145 @@ mod tests {
         assert_eq!(s.focus(), Focus::List);
     }
 
-    /// El recorrido de secciones, que es el MISMO en las dos pantallas.
+    /// Section stepping, which is the SAME in both screens.
     #[test]
-    fn el_paso_de_seccion_va_y_vuelve() {
-        let mut s = SettingsState::new(build_rows(&cfg_vacia(), &[]));
-        let seccion = |s: &SettingsState| s.rows()[s.visible()[s.cursor()]].section;
-        assert_eq!(seccion(&s), Section::Appearance);
+    fn section_stepping_goes_and_comes_back() {
+        let mut s = SettingsState::new(build_rows(&empty_cfg(), &[]));
+        let section = |s: &SettingsState| s.rows()[s.visible()[s.cursor()]].section;
+        assert_eq!(section(&s), Section::Appearance);
         assert_eq!(s.step_section(1), Some(Section::Panes));
-        assert_eq!(seccion(&s), Section::Panes);
+        assert_eq!(section(&s), Section::Panes);
         assert_eq!(s.step_section(-1), Some(Section::Appearance));
     }
 
-    /// En el extremo no hay a dónde ir y el cursor se queda: fingir que da
-    /// la vuelta es un cursor que se teletransporta.
+    /// At the edge there is nowhere to go and the cursor stays: pretending
+    /// to wrap around is a cursor that teleports.
     #[test]
-    fn el_paso_de_seccion_para_en_el_extremo() {
-        let mut s = SettingsState::new(build_rows(&cfg_vacia(), &[]));
+    fn section_stepping_stops_at_the_edge() {
+        let mut s = SettingsState::new(build_rows(&empty_cfg(), &[]));
         assert_eq!(s.step_section(-1), None);
         assert_eq!(s.cursor(), 0);
     }
 
-    /// Una sección que el filtro vació se ATRAVIESA, y si no queda ninguna
-    /// con filas, no se mueve nada.
+    /// A section the filter emptied is WALKED THROUGH, and if none is left
+    /// with rows, nothing moves.
     #[test]
-    fn el_paso_de_seccion_se_salta_las_vacias() {
-        let mut s = SettingsState::new(build_rows(&cfg_vacia(), &[]));
-        // «theme» solo deja filas en Apariencia — ni la nota de Plugins,
-        // cuyo heno no lleva esa palabra.
+    fn section_stepping_skips_the_empty_ones() {
+        let mut s = SettingsState::new(build_rows(&empty_cfg(), &[]));
+        // "theme" only leaves rows in Appearance — not even the Plugins
+        // note, whose haystack does not carry that word.
         for c in "theme".chars() {
             s.push_char(c);
         }
-        let antes = s.cursor();
+        let before = s.cursor();
         assert_eq!(s.step_section(1), None);
-        assert_eq!(s.cursor(), antes);
+        assert_eq!(s.cursor(), before);
     }
 
     #[test]
-    fn saltar_a_una_seccion_vacia_no_mueve_nada() {
-        let mut s = SettingsState::new(build_rows(&cfg_vacia(), &[]));
+    fn jumping_to_an_empty_section_moves_nothing() {
+        let mut s = SettingsState::new(build_rows(&empty_cfg(), &[]));
         for c in "theme".chars() {
             s.push_char(c);
         }
-        let antes = s.cursor();
+        let before = s.cursor();
         s.jump_to(Section::OpenWith);
         assert_eq!(
             s.cursor(),
-            antes,
-            "una sección sin filas visibles no mueve el cursor"
+            before,
+            "a section with no visible rows does not move the cursor"
         );
     }
 
-    /// El punto de «esto lo has tocado tú» se calcula contra el valor DE
-    /// FÁBRICA, con la misma función que pinta el valor: una tabla de
-    /// defectos escrita a mano se desincroniza del esquema en cuanto alguien
-    /// cambia uno.
+    /// The "you touched this" dot is computed against the FACTORY value,
+    /// with the same function that paints the value: a hand-written table
+    /// of defaults goes out of sync with the schema the moment someone
+    /// changes one.
     #[test]
-    fn sobre_la_config_por_defecto_no_hay_nada_modificado() {
-        for r in build_rows(&cfg_vacia(), &[]) {
-            assert!(!r.modified, "«{}» no debería salir modificada", r.name);
+    fn over_the_default_config_nothing_is_modified() {
+        for r in build_rows(&empty_cfg(), &[]) {
+            assert!(!r.modified, "\"{}\" should not come out modified", r.name);
         }
     }
 
     #[test]
-    fn cambiar_un_campo_enciende_el_punto_de_esa_fila_y_de_ninguna_otra() {
-        let mut cfg = cfg_vacia();
+    fn changing_one_field_lights_up_that_rows_dot_and_no_other() {
+        let mut cfg = empty_cfg();
         cfg.common.ui_theme = Some("nord".to_owned());
-        let filas = build_rows(&cfg, &[]);
-        let tocadas: Vec<_> = filas
+        let rows = build_rows(&cfg, &[]);
+        let touched: Vec<_> = rows
             .iter()
             .filter(|r| r.modified)
             .map(super::Row::id)
             .collect();
-        assert_eq!(tocadas, vec![Some("ui.theme")]);
+        assert_eq!(touched, vec![Some("ui.theme")]);
     }
 
-    /// Una fila que no sale del catálogo nunca está modificada: no hay valor
-    /// de fábrica con el que compararla.
+    /// A row that does not come from the catalog is never modified: there
+    /// is no factory value to compare it against.
     #[test]
-    fn una_fila_de_plugins_no_esta_modificada() {
-        let resumen = PluginConfigSummary {
+    fn a_plugins_row_is_never_modified() {
+        let summary = PluginConfigSummary {
             plugin_id: "org.a".into(),
             name: "A".into(),
             key_count: 2,
         };
-        let filas = build_rows(&cfg_vacia(), &[resumen]);
-        let fila = filas.last().expect("hay fila de plugin");
-        assert_eq!(fila.section, Section::Plugins);
-        assert!(!fila.modified);
+        let rows = build_rows(&empty_cfg(), &[summary]);
+        let row = rows.last().expect("there is a plugin row");
+        assert_eq!(row.section, Section::Plugins);
+        assert!(!row.modified);
     }
 
-    /// Ninguna entrada se queda sin sitio. Un id nuevo sin sección cae en
-    /// «Comportamiento» por el `unwrap_or` de `SettingDef::section`, y este
-    /// test es lo único que separa ese apaño de un archivado en silencio.
+    /// No entry is left without a place. A new id with no section falls
+    /// into "Behavior" via `SettingDef::section`'s `unwrap_or`, and this
+    /// test is the only thing separating that patch from a silent
+    /// misfiling.
     #[test]
-    fn cada_entrada_del_catalogo_tiene_seccion() {
+    fn every_catalog_entry_has_a_section() {
         for d in catalog() {
             assert!(
                 section_of(d.id).is_some(),
-                "«{}» no está repartida en ninguna sección",
+                "\"{}\" is not assigned to any section",
                 d.id
             );
         }
     }
 
-    /// Y ninguna sección del catálogo se queda vacía: una sección que el
-    /// índice lista y nunca tiene nada es una promesa rota.
+    /// And no catalog section is left empty: a section the index lists and
+    /// that never has anything is a broken promise.
     #[test]
-    fn cada_seccion_del_catalogo_tiene_al_menos_una_entrada() {
+    fn every_catalog_section_has_at_least_one_entry() {
         for s in Section::ORDER {
             if matches!(s, Section::Plugins | Section::Paths) {
-                continue; // No salen del catálogo.
+                continue; // Do not come from the catalog.
             }
             assert!(
                 catalog().iter().any(|d| d.section() == *s),
-                "la sección {s:?} no tiene ninguna entrada"
+                "section {s:?} has no entry"
             );
         }
     }
 
-    /// Cada sección se dice en los dos idiomas. Media pantalla traducida es
-    /// peor que ninguna.
+    /// Every section is said in both languages. Half a translated screen is
+    /// worse than none.
     #[test]
-    fn cada_seccion_tiene_su_rotulo_en_ambos_locales() {
+    fn every_section_has_its_label_in_both_locales() {
         for s in Section::ORDER {
             for lang in [norte_i18n::Lang::Es, norte_i18n::Lang::En] {
                 let txt = norte_i18n::t_in(lang, s.label_key());
                 assert!(
                     !txt.is_empty() && !txt.contains(s.label_key()),
-                    "{s:?} sin traducir en {lang:?}: {txt}"
+                    "{s:?} untranslated in {lang:?}: {txt}"
                 );
             }
         }
     }
 
-    /// Avanzar y retroceder por el índice no da la vuelta: en los extremos
-    /// no hay a dónde ir, y fingir que sí es un cursor que se teletransporta.
+    /// Stepping forward and backward through the index does not wrap
+    /// around: at the edges there is nowhere to go, and pretending there is
+    /// is a cursor that teleports.
     #[test]
-    fn el_paso_entre_secciones_para_en_los_extremos() {
+    fn section_stepping_stops_at_the_edges() {
         assert_eq!(Section::Appearance.step(-1), None);
         assert_eq!(Section::Appearance.step(1), Some(Section::Panes));
         assert_eq!(Section::Paths.step(1), None);
@@ -3031,23 +3056,23 @@ mod tests {
     }
 
     #[test]
-    fn set_cursor_clampa_al_ultimo_visible() {
+    fn set_cursor_clamps_to_the_last_visible() {
         let mut s = SettingsState::new(rows());
         let last = s.visible().len() - 1;
         s.set_cursor(last + 50);
-        assert_eq!(s.cursor(), last, "clampa al último visible");
+        assert_eq!(s.cursor(), last, "clamps to the last visible");
         s.set_cursor(0);
         assert_eq!(s.cursor(), 0);
     }
 
     #[test]
-    fn set_cursor_es_no_op_mientras_se_edita() {
+    fn set_cursor_is_a_no_op_while_editing() {
         let mut s = SettingsState::new(rows());
-        // Sin filtrar: TODAS las filas siguen visibles, así que si el guard
-        // de edición fallara habría a dónde moverse de verdad. Se busca
-        // `ui.font` por su ID —una fila `Text`, que al activarse abre
-        // edición—, no por su posición: las filas salen en orden de
-        // pantalla, que no es el del catálogo.
+        // Unfiltered: ALL rows stay visible, so if the editing guard failed
+        // there would be somewhere real to move to. `ui.font` is looked up
+        // by its ID — a `Text` row, which opens editing on activation — not
+        // by its position: rows come out in screen order, which is not the
+        // catalog's.
         let idx = s
             .visible()
             .iter()
@@ -3061,20 +3086,20 @@ mod tests {
         assert_eq!(
             s.cursor(),
             idx,
-            "editando, un click en otra fila no mueve el cursor"
+            "while editing, a click on another row does not move the cursor"
         );
     }
 
     #[test]
-    fn row_id_devuelve_el_id_del_catalogo_o_none_para_la_nota_de_plugins() {
+    fn row_id_returns_the_catalog_id_or_none_for_the_plugins_note() {
         let rows = rows();
-        // Cada id del catálogo sale UNA vez; el orden es el de pantalla
-        // (sección primero), no el del catálogo.
+        // Each catalog id comes out ONCE; the order is the screen's
+        // (section first), not the catalog's.
         for def in catalog() {
             assert_eq!(
                 rows.iter().filter(|r| r.id() == Some(def.id)).count(),
                 1,
-                "«{}» tiene que salir exactamente una vez",
+                "\"{}\" has to come out exactly once",
                 def.id
             );
         }
@@ -3082,40 +3107,40 @@ mod tests {
     }
 
     #[test]
-    fn cycle_envuelve_y_arranca_en_el_primero_si_no_encuentra() {
+    fn cycle_wraps_and_starts_at_the_first_if_not_found() {
         let values = ["a", "b", "c"];
         assert_eq!(cycle("a", &values), "b");
         assert_eq!(cycle("c", &values), "a", "wrap");
+        assert_eq!(cycle("x", &values), "a", "not found: starts at the first");
         assert_eq!(
-            cycle("x", &values),
+            cycle("a", &[]),
             "a",
-            "no encontrado: arranca en el primero"
+            "empty list: does not panic, does not change"
         );
-        assert_eq!(cycle("a", &[]), "a", "lista vacía: no panica, no cambia");
     }
 
-    // --- `quit_needs_confirm`/`edit_error_message` (revisión S, M6 hoist) ---
+    // --- `quit_needs_confirm`/`edit_error_message` (revision S, M6 hoist) ---
 
     #[test]
-    fn quit_needs_confirm_los_tres_modos() {
+    fn quit_needs_confirm_all_three_modes() {
         use norte_config::ConfirmQuit;
         assert!(
             !quit_needs_confirm(ConfirmQuit::Never, true),
-            "Never: jamás"
+            "Never: never"
         );
         assert!(
             quit_needs_confirm(ConfirmQuit::Always, false),
-            "Always: siempre"
+            "Always: always"
         );
         assert!(
             quit_needs_confirm(ConfirmQuit::Auto, true),
-            "Auto: sigue a pending"
+            "Auto: follows pending"
         );
         assert!(!quit_needs_confirm(ConfirmQuit::Auto, false));
     }
 
     #[test]
-    fn edit_error_message_por_categoria_nunca_vacio() {
+    fn edit_error_message_by_category_is_never_empty() {
         assert!(!edit_error_message(&SettingsEditError::NotAnInt).is_empty());
         let msg = edit_error_message(&SettingsEditError::OutOfRange { min: 8, max: 32 });
         assert!(!msg.is_empty());

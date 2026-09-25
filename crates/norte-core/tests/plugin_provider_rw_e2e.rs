@@ -1,9 +1,9 @@
-//! E2E del camino de ESCRITURA de [`PluginProvider`] (#30 stage 2b-write, ADR
-//! 0032): compila el guest ESCRIBIBLE `provider-mem-rw`, lo envuelve en un
-//! `norte_vfs::Provider` y verifica la proyección del `ByteSink` transaccional
+//! E2E of [`PluginProvider`]'s WRITE path (#30 stage 2b-write, ADR 0032):
+//! compiles the WRITABLE `provider-mem-rw` guest, wraps it in a
+//! `norte_vfs::Provider` and verifies the transactional `ByteSink` projection
 //! (writer resource) + mkdir/remove/rename.
 //!
-//! SKIP sin el target `wasm32-wasip2`.
+//! SKIP without the `wasm32-wasip2` target.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -20,7 +20,7 @@ fn root() -> VPath {
 }
 
 fn child(base: &VPath, name: &[u8]) -> VPath {
-    base.join(Segment::new(name.to_vec()).expect("segmento"))
+    base.join(Segment::new(name.to_vec()).expect("segment"))
 }
 
 async fn read_all(p: &PluginProvider, path: &VPath) -> Result<Vec<u8>, Error> {
@@ -33,9 +33,9 @@ async fn read_all(p: &PluginProvider, path: &VPath) -> Result<Vec<u8>, Error> {
 }
 
 #[tokio::test]
-async fn plugin_provider_camino_de_escritura() {
+async fn plugin_provider_write_path() {
     let Some(wasm) = build_guest("provider-mem-rw") else {
-        eprintln!("SKIP: target wasm32-wasip2 no instalado");
+        eprintln!("SKIP: target wasm32-wasip2 not installed");
         return;
     };
     let rt = PluginRuntime::new().expect("runtime");
@@ -43,86 +43,98 @@ async fn plugin_provider_camino_de_escritura() {
     let p = PluginProvider::new(rt, &wasm, HostCaps::default(), "mem").expect("adapter");
     let root = root();
 
-    // El guest es ESCRIBIBLE: sin el flag READ_ONLY.
+    // The guest is WRITABLE: no READ_ONLY flag.
     assert!(!p.capabilities().flags.contains(CapabilityFlags::READ_ONLY));
 
-    // ---- write + commit: crea el fichero con contenido byte-exacto (hostil) ----
-    let nuevo = child(&root, b"nuevo.bin");
-    let contenido: &[u8] = b"linea\x00\xff\xfe fin";
-    // El staging es transaccional: antes del commit el path NO existe.
-    let mut sink = p.write(&nuevo).await.expect("abre writer");
+    // ---- write + commit: creates the file with byte-exact (hostile) content ----
+    let new = child(&root, b"new.bin");
+    let content: &[u8] = b"line\x00\xff\xfe end";
+    // Staging is transactional: before the commit the path does NOT exist.
+    let mut sink = p.write(&new).await.expect("opens writer");
     assert_eq!(
-        p.stat(&nuevo).await.unwrap_err(),
+        p.stat(&new).await.unwrap_err(),
         Error::NotFound,
-        "el path final no existe hasta commit"
+        "the final path does not exist until commit"
     );
-    sink.write(Bytes::from_static(b"linea\x00"))
+    sink.write(Bytes::from_static(b"line\x00"))
         .await
         .expect("chunk 1");
-    sink.write(Bytes::from_static(b"\xff\xfe fin"))
+    sink.write(Bytes::from_static(b"\xff\xfe end"))
         .await
         .expect("chunk 2");
     sink.commit().await.expect("commit");
-    // Ahora existe y su contenido es byte-exacto.
-    let st = p.stat(&nuevo).await.expect("existe tras commit");
+    // Now it exists and its content is byte-exact.
+    let st = p.stat(&new).await.expect("exists after commit");
     assert_eq!(st.kind, EntryKind::File);
-    assert_eq!(st.size, Some(contenido.len() as u64));
-    assert_eq!(read_all(&p, &nuevo).await.unwrap(), contenido);
+    assert_eq!(st.size, Some(content.len() as u64));
+    assert_eq!(read_all(&p, &new).await.unwrap(), content);
 
-    // ---- abort: no publica nada ----
-    let abortado = child(&root, b"abortado.txt");
-    let mut sink = p.write(&abortado).await.expect("abre writer");
-    sink.write(Bytes::from_static(b"basura"))
+    // ---- abort: publishes nothing ----
+    let aborted = child(&root, b"aborted.txt");
+    let mut sink = p.write(&aborted).await.expect("opens writer");
+    sink.write(Bytes::from_static(b"garbage"))
         .await
         .expect("chunk");
     sink.abort().await.expect("abort");
     assert_eq!(
-        p.stat(&abortado).await.unwrap_err(),
+        p.stat(&aborted).await.unwrap_err(),
         Error::NotFound,
-        "abort no publica"
+        "abort publishes nothing"
     );
 
     // ---- mkdir ----
-    let dir = child(&root, b"nuevodir");
+    let dir = child(&root, b"newdir");
     p.mkdir(&dir).await.expect("mkdir");
-    assert_eq!(p.stat(&dir).await.expect("dir existe").kind, EntryKind::Dir);
-    // mkdir sobre algo existente = Conflict.
+    assert_eq!(p.stat(&dir).await.expect("dir exists").kind, EntryKind::Dir);
+    // mkdir over something existing = Conflict.
     assert!(matches!(
         p.mkdir(&dir).await.unwrap_err(),
         Error::Conflict { .. }
     ));
 
     // ---- remove ----
-    let vacio = child(&root, b"vacio.txt");
-    assert!(p.stat(&vacio).await.is_ok());
-    p.remove(&vacio).await.expect("remove");
-    assert_eq!(p.stat(&vacio).await.unwrap_err(), Error::NotFound);
+    // NOTE: `empty.txt` is fixture data baked into the `provider-mem-rw` guest
+    // (crates/norte-plugin-host/examples-wasm/provider-mem-rw/src/lib.rs,
+    // owned by another task) and kept verbatim — see the T05 report's
+    // cross-file literals.
+    let empty = child(&root, b"vacio.txt");
+    assert!(p.stat(&empty).await.is_ok());
+    p.remove(&empty).await.expect("remove");
+    assert_eq!(p.stat(&empty).await.unwrap_err(), Error::NotFound);
 
     // ---- rename ----
+    // NOTE: `docs/hello.txt` and its content "hola norte\n" are the same kind
+    // of guest fixture data; kept verbatim.
     let hello = child(&child(&root, b"docs"), b"hello.txt");
-    let renombrado = child(&child(&root, b"docs"), b"renombrado.txt");
-    p.rename(&hello, &renombrado).await.expect("rename");
+    let renamed = child(&child(&root, b"docs"), b"renamed.txt");
+    p.rename(&hello, &renamed).await.expect("rename");
     assert_eq!(p.stat(&hello).await.unwrap_err(), Error::NotFound);
-    assert_eq!(read_all(&p, &renombrado).await.unwrap(), b"hola norte\n");
+    assert_eq!(read_all(&p, &renamed).await.unwrap(), b"hola norte\n");
 
-    // ---- regla 1: un NOMBRE no-UTF8 (Segment válido) round-trip por write y
-    // rename byte-exacto ----
-    let hostil = child(&root, b"h\xff\xfe.bin");
-    let mut sink = p.write(&hostil).await.expect("abre writer nombre hostil");
+    // ---- rule 1: a non-UTF-8 NAME (valid Segment) round-trips through write
+    // and rename byte-exact ----
+    let hostile = child(&root, b"h\xff\xfe.bin");
+    let mut sink = p
+        .write(&hostile)
+        .await
+        .expect("opens writer for hostile name");
     sink.write(Bytes::from_static(b"x")).await.expect("chunk");
     sink.commit().await.expect("commit");
-    assert!(p.stat(&hostil).await.is_ok(), "el nombre no-UTF8 se crea");
-    let hostil2 = child(&root, b"h\xfe\xff.mov");
-    p.rename(&hostil, &hostil2)
+    assert!(
+        p.stat(&hostile).await.is_ok(),
+        "the non-UTF-8 name is created"
+    );
+    let hostile2 = child(&root, b"h\xfe\xff.mov");
+    p.rename(&hostile, &hostile2)
         .await
-        .expect("rename nombre hostil");
-    assert_eq!(p.stat(&hostil).await.unwrap_err(), Error::NotFound);
-    assert_eq!(read_all(&p, &hostil2).await.unwrap(), b"x");
+        .expect("rename hostile name");
+    assert_eq!(p.stat(&hostile).await.unwrap_err(), Error::NotFound);
+    assert_eq!(read_all(&p, &hostile2).await.unwrap(), b"x");
 }
 
 fn build_guest(name: &str) -> Option<PathBuf> {
     if !target_installed("wasm32-wasip2") {
-        eprintln!("SKIP: target wasm32-wasip2 no instalado");
+        eprintln!("SKIP: target wasm32-wasip2 not installed");
         return None;
     }
     let guest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -142,13 +154,13 @@ fn build_guest(name: &str) -> Option<PathBuf> {
         ])
         .arg(&target_dir)
         .status()
-        .expect("cargo build del guest");
-    assert!(status.success(), "el guest {name} no compiló");
+        .expect("cargo build of the guest");
+    assert!(status.success(), "the {name} guest did not build");
     let wasm = target_dir
         .join("wasm32-wasip2")
         .join("release")
         .join(format!("{}.wasm", name.replace('-', "_")));
-    assert!(wasm.exists(), "no se encontró {}", wasm.display());
+    assert!(wasm.exists(), "{} not found", wasm.display());
     Some(wasm)
 }
 

@@ -1,224 +1,228 @@
-//! La paleta de comandos y las filas que ponen las extensiones.
+//! The command palette and the rows extensions contribute.
 //!
-//! Parte de `controller`: son métodos de `Estado`, movidos aquí sin
-//! tocarlos (ADR 0086). El único escritor sigue siendo el actor.
+//! Part of `controller`: these are methods of `State`, moved here without
+//! touching them (ADR 0086). The only writer is still the actor.
 
-// Estos módulos son el mismo `impl Estado` partido en trozos, así que usan
-// los mismos imports que el padre. Enumerarlos aquí sería una lista de
-// cuarenta líneas por fichero, en 32 ficheros, que se desincroniza en cuanto
-// el padre importa algo — `super::*` la sigue sola.
+// These modules are the same `impl State` split into pieces, so they use
+// the same imports as the parent. Listing them here would be a forty-line
+// list per file, across 32 files, that goes out of sync the moment the
+// parent imports something — `super::*` keeps it in sync on its own.
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
-impl Estado {
-    /// Abre la paleta de comandos.
+impl State {
+    /// Opens the command palette.
     ///
-    /// Las filas se construyen AQUÍ, al abrir, y se congelan: es lo que el
-    /// modelo compartido espera (pliega el haystack de cada fila una vez, no
-    /// por tecla).
-    pub(super) fn abrir_paleta(
+    /// The rows are built HERE, on open, and frozen: that is what the shared
+    /// model expects (it folds each row's haystack once, not per keystroke).
+    pub(super) fn open_palette(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        self.paleta = Some(norte_frontend::palette_state::Palette::with_recent(
-            self.filas_de_paleta(),
-            &self.paleta_recientes,
+        self.palette = Some(norte_frontend::palette_state::Palette::with_recent(
+            self.palette_rows(),
+            &self.palette_recent,
         ));
-        self.pedir_filas_de_plugin(backend, buzon);
-        let cambio = ViewChange::Palette {
-            palette: self.vista_paleta(),
+        self.request_plugin_rows(backend, mailbox);
+        let change = ViewChange::Palette {
+            palette: self.vista_palette(),
         };
-        (self.aplicada(), vec![self.parche(vec![cambio])])
+        (self.applied(), vec![self.parche(vec![change])])
     }
 
-    /// Pide el catálogo para las filas de PLUGIN de la paleta.
+    /// Requests the catalogue for the palette's PLUGIN rows.
     ///
-    /// No se espera: la paleta se pinta ya con los comandos propios y las de
-    /// plugin se unen cuando el daemon conteste. Congelar la ventana hasta
-    /// entonces sería pagar el viaje aunque no haya ninguna extensión.
-    pub(super) fn pedir_filas_de_plugin(
+    /// It is not awaited: the palette is already painted with its own
+    /// commands, and the plugin ones are joined in once the daemon answers.
+    /// Freezing the window until then would pay for the round trip even when
+    /// there is no extension at all.
+    pub(super) fn request_plugin_rows(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) {
-        // En SOLO LECTURA no se piden: lo que hace un comando de plugin lo
-        // decide el plugin, y esta ventana no lo va a lanzar. Es la misma
-        // regla que `filas_de_paleta` ya aplica a los comandos propios —
-        // ofrecer lo que se va a rehusar es prometer algo que no se hará.
-        if self.efectos == crate::commands::Efectos::SoloLectura {
+        // In READ-ONLY they are not requested: what a plugin command does is
+        // the plugin's decision, and this window is not going to launch it.
+        // Same rule `palette_rows` already applies to its own commands —
+        // offering what will be refused is promising something that will not
+        // happen.
+        if self.effects == crate::commands::Effects::SoloRead {
             return;
         }
-        self.gen_paleta += 1;
-        let apertura = self.gen_paleta;
+        self.gen_palette += 1;
+        let generation = self.gen_palette;
         let backend = Arc::clone(backend);
-        let buzon = buzon.clone();
+        let mailbox = mailbox.clone();
         tokio::spawn(async move {
-            let res = match tokio::time::timeout(PLAZO_PLUGINS, backend.plugin_list()).await {
+            let res = match tokio::time::timeout(DEADLINE_PLUGINS, backend.plugin_list()).await {
                 Ok(r) => r,
                 Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
             };
-            let _ = buzon
-                .send(Mensaje::Fondo(Box::new(Fondo::PluginsDePaleta(
-                    apertura, res,
+            let _ = mailbox
+                .send(Message::Background(Box::new(Background::PalettePlugins(
+                    generation, res,
                 ))))
                 .await;
         });
     }
 
-    /// Las filas de plugin llegaron: se UNEN a la paleta abierta.
+    /// The plugin rows arrived: they are JOINED into the open palette.
     ///
-    /// Conservando lo tecleado (`extend_rows`): reconstruirla perdería la
-    /// query, y perder lo que alguien acaba de escribir por unas filas que
-    /// llegan tarde es peor que no tenerlas.
+    /// Preserving what was typed (`extend_rows`): rebuilding it would lose
+    /// the query, and losing what someone just typed for the sake of rows
+    /// that arrive late is worse than not having them.
     ///
-    /// Un fallo NO tumba la paleta ni se anuncia: los comandos propios
-    /// siguen ahí, que es el mismo criterio que el TUI («un daemon caído
-    /// degrada la paleta, no la tumba»).
-    pub(super) fn aplicar_filas_de_plugin(
+    /// A failure does NOT bring the palette down, nor is it announced: the
+    /// window's own commands are still there, which is the same criterion as
+    /// the TUI's ("a dead daemon degrades the palette, it does not bring it
+    /// down").
+    pub(super) fn apply_plugin_rows(
         &mut self,
-        apertura: u64,
+        generation: u64,
         res: Result<norte_proto::methods::PluginListResult, Error>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        if apertura != self.gen_paleta {
+        if generation != self.gen_palette {
             return Vec::new();
         }
-        let Ok(lista) = res else {
+        let Ok(list) = res else {
             return Vec::new();
         };
-        let Some(p) = self.paleta.as_mut() else {
+        let Some(p) = self.palette.as_mut() else {
             return Vec::new();
         };
-        // El mismo filtro y el mismo tope que el GESTOR aplica al catálogo:
-        // un daemon hostil puede anunciar los plugins que quiera, y por aquí
-        // cada uno además aporta una fila por comando. Sin el `is_valid_
-        // plugin_id`, un id con `:` dentro rompe la clave que `plugin_rows`
-        // compone y `parse_plugin_key` deshace, que es justo el contrato que
-        // las dos comparten.
-        let catalogo: Vec<_> = lista
+        // The same filter and the same cap the MANAGER applies to the
+        // catalogue: a hostile daemon can announce whatever plugins it
+        // wants, and here each one also contributes a row per command.
+        // Without `is_valid_plugin_id`, an id with a `:` inside breaks the
+        // key that `plugin_rows` builds and `parse_plugin_key` undoes, which
+        // is exactly the contract the two share.
+        let catalog: Vec<_> = list
             .plugins
             .iter()
             .filter(|p| norte_proto::methods::is_valid_plugin_id(&p.id))
-            .take(crate::extensions::MAX_EXTENSIONES)
+            .take(crate::extensions::MAX_EXTENSIONS)
             .cloned()
             .collect();
-        // El modelo COMPARTIDO decide qué se ofrece: solo aprobadas y
-        // encendidas —la misma puerta que `plugin.run_command` exige por su
-        // cuenta—, en orden de manifiesto, y con el prefijo que impide que
-        // un comando de tercero se disfrace de uno propio.
-        let mut filas = norte_frontend::palette::plugin_rows_in(&catalogo, self.lang);
-        // Y un tope de FILAS: el manifiesto no acota cuántos comandos declara
-        // un plugin, así que uno aprobado con doscientos mil convertía cada
-        // `ctrl+p` en un mensaje de cientos de megas.
-        filas.truncate(crate::bridge::MAX_ROWS_PER_BATCH);
-        if filas.is_empty() {
+        // The SHARED model decides what gets offered: only approved and
+        // enabled ones — the same gate `plugin.run_command` enforces on its
+        // own — in manifest order, and with the prefix that keeps a
+        // third-party command from disguising itself as one of ours.
+        let mut rows = norte_frontend::palette::plugin_rows_in(&catalog, self.lang);
+        // And a cap on ROWS: the manifest does not bound how many commands a
+        // plugin declares, so an approved one with two hundred thousand
+        // turned every `ctrl+p` into a message of hundreds of megabytes.
+        rows.truncate(crate::bridge::MAX_ROWS_PER_BATCH);
+        if rows.is_empty() {
             return Vec::new();
         }
-        p.extend_rows(filas);
-        self.rotulos_plugin = catalogo
+        p.extend_rows(rows);
+        self.labels_plugin = catalog
             .iter()
             .map(|p| {
-                let comandos = p
+                let commands = p
                     .commands
                     .iter()
-                    .map(|c| (c.id.clone(), crate::extensions::texto_de_tercero(&c.title)))
+                    .map(|c| (c.id.clone(), crate::extensions::third_party_text(&c.title)))
                     .collect();
                 (
                     p.id.clone(),
-                    (crate::extensions::texto_de_tercero(&p.name), comandos),
+                    (crate::extensions::third_party_text(&p.name), commands),
                 )
             })
             .collect();
-        let cambio = ViewChange::Palette {
-            palette: self.vista_paleta(),
+        let change = ViewChange::Palette {
+            palette: self.vista_palette(),
         };
-        vec![self.parche(vec![cambio])]
+        vec![self.parche(vec![change])]
     }
 
-    /// Ejecuta un comando de extensión y enseña su salida.
+    /// Runs an extension command and shows its output.
     ///
-    /// La autorización es del SERVIDOR: `plugin.run_command` resuelve el
-    /// comando contra el catálogo y exige aprobada + encendida por su
-    /// cuenta. Lo que la fila comprueba de este lado es coherencia con lo
-    /// que el lector está mirando, jamás el permiso.
-    pub(super) fn ejecutar_de_plugin(
+    /// The authorization is the SERVER's: `plugin.run_command` resolves the
+    /// command against the catalogue and enforces approved + enabled on its
+    /// own. What the row checks on this side is consistency with what the
+    /// reader is currently looking at, never the permission.
+    pub(super) fn run_from_plugin(
         &mut self,
-        clave: &str,
+        key: &str,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some((id, comando)) = norte_frontend::palette::parse_plugin_key(clave) else {
-            return self.no_implementado(clave);
+        let Some((id, command)) = norte_frontend::palette::parse_plugin_key(key) else {
+            return self.no_implemented(key);
         };
-        if self.efectos == crate::commands::Efectos::SoloLectura {
-            // Lo que hace un comando de plugin lo decide el plugin: puede
-            // escribir. Una ventana sin efectos no lo lanza.
-            return Self::no_muta();
+        if self.effects == crate::commands::Effects::SoloRead {
+            // What a plugin command does is the plugin's decision: it can
+            // write. A window without effects does not launch it.
+            return Self::no_mutates();
         }
-        self.gen_salida += 1;
-        let apertura = self.gen_salida;
-        // Los dos rótulos se resuelven AHORA, con el catálogo que la paleta
-        // usó: la respuesta puede tardar, y buscarlos al volver es buscarlos
-        // en un catálogo que ya no es el mismo.
-        let (rotulo, titulo) = self.rotulos_de_comando(id, comando);
+        self.gen_output += 1;
+        let generation = self.gen_output;
+        // Both labels are resolved NOW, with the catalogue the palette used:
+        // the response can take a while, and looking them up again on return
+        // means looking them up in a catalogue that is no longer the same
+        // one.
+        let (label, title) = self.command_labels(id, command);
         let backend2 = Arc::clone(backend);
-        let buzon2 = buzon.clone();
-        let (id2, comando2) = (id.to_owned(), comando.to_owned());
+        let mailbox2 = mailbox.clone();
+        let (id2, command2) = (id.to_owned(), command.to_owned());
         let id3 = id2.clone();
         tokio::spawn(async move {
             let res = match tokio::time::timeout(
-                PLAZO_COMANDO,
-                backend2.plugin_run_command(id2, comando2, String::new()),
+                DEADLINE_COMMAND,
+                backend2.plugin_run_command(id2, command2, String::new()),
             )
             .await
             {
                 Ok(r) => r,
                 Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
             };
-            let _ = buzon2
-                .send(Mensaje::Fondo(Box::new(Fondo::SalidaDeComando(
-                    apertura,
-                    Box::new(SalidaPedida {
+            let _ = mailbox2
+                .send(Message::Background(Box::new(Background::CommandOutput(
+                    generation,
+                    Box::new(OutputRequested {
                         id: id3,
-                        plugin: rotulo,
-                        comando: titulo,
+                        plugin: label,
+                        command: title,
                         res,
                     }),
                 ))))
                 .await;
         });
-        (self.aplicada(), self.decir("host-plugin-running"))
+        (self.applied(), self.say("host-plugin-running"))
     }
 
-    /// Cómo se llaman, para el panel de salida: el nombre de la extensión y
-    /// el título del comando, ya enmascarados. Si el gestor no está abierto
-    /// se cae al id, que es lo único que este proceso asigna.
-    pub(super) fn rotulos_de_comando(
+    /// What to call things, for the output panel: the extension's name and
+    /// the command's title, already masked. If the manager is not open it
+    /// falls back to the id, which is the only thing this process assigns.
+    pub(super) fn command_labels(
         &self,
         id: &str,
-        comando: &str,
-    ) -> (crate::extensions::Texto, crate::extensions::Texto) {
-        let del_catalogo = self.rotulos_plugin.get(id);
-        let nombre = del_catalogo
+        command: &str,
+    ) -> (crate::extensions::Text, crate::extensions::Text) {
+        let from_catalog = self.labels_plugin.get(id);
+        let name = from_catalog
             .map(|(n, _)| n.clone())
-            .or_else(|| Some(self.extensiones.as_ref()?.concesion(id)?.nombre))
-            // Sin rótulo conocido se cae al id —que el core SÍ valida— pero
-            // por la misma puerta que todo lo demás: quien lo manda es el
-            // daemon y no este proceso.
-            .unwrap_or_else(|| crate::extensions::texto_de_tercero(id));
-        let titulo = del_catalogo
-            .and_then(|(_, cs)| cs.get(comando).cloned())
+            .or_else(|| Some(self.extensions.as_ref()?.grant(id)?.name))
+            // Without a known label it falls back to the id — which the core
+            // DOES validate — but through the same gate as everything else:
+            // it is the daemon that sends it, not this process.
+            .unwrap_or_else(|| crate::extensions::third_party_text(id));
+        let title = from_catalog
+            .and_then(|(_, cs)| cs.get(command).cloned())
             .or_else(|| {
-                self.extensiones
+                self.extensions
                     .as_ref()?
-                    .comandos_de_id(id)
+                    .id_commands(id)
                     .iter()
-                    .find(|c| c.id == comando)
+                    .find(|c| c.id == command)
                     .map(|c| (c.title.clone(), c.hostile))
             })
-            // El id de un COMANDO no se pinta: el manifiesto no le valida
-            // charset. Sin título conocido, la línea se queda sin él.
+            // A COMMAND's id is not painted: the manifest does not validate
+            // its charset. Without a known title, the line is left without
+            // one.
             .unwrap_or_default();
-        (nombre, titulo)
+        (name, title)
     }
 }

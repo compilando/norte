@@ -1,220 +1,224 @@
-//! Leer y volcar la sesión.
+//! Reading and flushing the session.
 //!
-//! Parte de `controller`: son métodos de `Estado`, movidos aquí sin
-//! tocarlos (ADR 0086). El único escritor sigue siendo el actor.
+//! Part of `controller`: these are methods of `State`, moved here without
+//! touching them (ADR 0086). The only writer is still the actor.
 
-// Estos módulos son el mismo `impl Estado` partido en trozos, así que usan
-// los mismos imports que el padre. Enumerarlos aquí sería una lista de
-// cuarenta líneas por fichero, en 32 ficheros, que se desincroniza en cuanto
-// el padre importa algo — `super::*` la sigue sola.
+// These modules are the same `impl State` split into pieces, so they use
+// the same imports as the parent. Listing them here would be a forty-line
+// list per file, across 32 files, that goes out of sync the moment the
+// parent imports something — `super::*` keeps it in sync on its own.
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
-impl Estado {
-    /// Lee la sesión y la aplica, si se puede.
+impl State {
+    /// Reads the session and applies it, if it can.
     ///
-    /// Tres cosas se deciden aquí, y las tres son de ADR 0059:
+    /// Three things are decided here, and all three belong to ADR 0059:
     ///
-    /// - **Quién escribe.** Una ventana SUELTA no escribe. La sesión es un
-    ///   documento con un solo escritor, y dos ventanas guardando la suya
-    ///   encima de la otra es exactamente lo que produce una pantalla que
-    ///   nadie pidió.
-    /// - **Qué se aplica.** Solo lo que este host entiende. Un hueco de un
-    ///   kind desconocido NO se toca, ni siquiera para borrarlo.
-    /// - **Qué NO se sobrescribe.** Si lo guardado es de un esquema más
-    ///   nuevo, se arranca de la configuración y se deja quieto: arrancar sin
-    ///   sesión es recuperable; machacar la de una versión futura no.
+    /// - **Who writes.** A LOOSE window does not write. The session is a
+    ///   document with a single writer, and two windows saving theirs on top
+    ///   of each other is exactly what produces a screen nobody asked for.
+    /// - **What gets applied.** Only what this host understands. A slot of an
+    ///   unknown kind is NOT touched, not even to delete it.
+    /// - **What is NOT overwritten.** If what is stored is of a newer schema,
+    ///   it starts from the configuration and leaves it alone: starting with
+    ///   no session is recoverable; clobbering a future version's is not.
     ///
-    /// Y la DISPOSICIÓN guardada bajo la clave de este perfil se pone antes
-    /// que los huecos, por encima de la de `--layout` y la configuración —el
-    /// mismo orden que el terminal: la sesión es más específica que las dos,
-    /// porque es cómo estaba la pantalla al cerrar—. Es la D8 de la ADR 0058:
-    /// cierra un frontend, abre el otro, sigue donde estabas. Hasta aquí la
-    /// ventana no la leía, así que alternar un panel duraba hasta cerrar.
-    pub(super) async fn leer_sesion(&mut self, backend: &dyn HostBackend) {
-        let Ok((sesion, owner)) = backend.session_get().await else {
-            // Sin sesión legible se arranca igual: es memoria de dónde
-            // estabas, no un requisito para existir.
+    /// And the LAYOUT saved under this profile's key is set before the slots,
+    /// ahead of `--layout`'s and the configuration's — the same order as the
+    /// terminal's: the session is more specific than both, because it is how
+    /// the screen was when it closed. This is ADR 0058's D8: close one
+    /// frontend, open the other, pick up where you were. Until now the window
+    /// did not read it, so toggling a panel lasted only until it closed.
+    pub(super) async fn leer_session(&mut self, backend: &dyn HostBackend) {
+        let Ok((session, owner)) = backend.session_get().await else {
+            // With no readable session it still starts: it is memory of
+            // where you were, not a requirement to exist.
             return;
         };
-        self.sesion.revision = sesion.revision;
-        self.sesion.owner = owner;
-        if sesion.version > norte_frontend::session::SCHEMA_VERSION {
-            self.sesion.futuro = true;
+        self.session.revision = session.revision;
+        self.session.owner = owner;
+        if session.version > norte_frontend::session::SCHEMA_VERSION {
+            self.session.future = true;
             return;
         }
-        if sesion.version == 0 {
-            // Nadie la ha escrito todavía.
+        if session.version == 0 {
+            // Nobody has written it yet.
             return;
         }
-        // Por el constructor que VALIDA, como el terminal, y no por serde a
-        // secas: un cuerpo cuya disposición no tenga listado parsea igual, y
-        // ponerla dejaría `huecos` vacío y la siguiente tecla en el `expect`
-        // de `hueco()` (#242). Un cuerpo que no vale se deja quieto y se
-        // arranca de la configuración, como uno del futuro.
+        // Through the VALIDATING constructor, like the terminal, and not
+        // through plain serde: a body whose layout has no listing parses just
+        // the same, and setting it would leave `slots` empty and the next
+        // key on `slot()`'s `expect` (#242). A body that is not valid is
+        // left alone and it starts from the configuration, like a future
+        // one.
         let Ok(body) =
-            norte_frontend::session::SessionBody::from_value(sesion.version, &sesion.body)
+            norte_frontend::session::SessionBody::from_value(session.version, &session.body)
         else {
-            tracing::warn!("la sesión guardada no se entiende: se arranca de la configuración");
+            tracing::warn!("the stored session is not understood: starting from configuration");
             return;
         };
-        // La disposición de ESTA ventana (ADR 0139), y si todavía no tiene
-        // —primera vez tras el cambio, o un perfil que solo usó la
-        // terminal— la compartida, para no arrancar de fábrica.
-        let propia = norte_frontend::session::window_layout_key(&self.clave_de_sesion());
-        if let Some(arbol) = body
+        // THIS window's layout (ADR 0139), and if it does not have one yet —
+        // first time after the change, or a profile that only ever used the
+        // terminal — the shared one, so as not to start from factory
+        // defaults.
+        let own_key = norte_frontend::session::window_layout_key(&self.session_key());
+        if let Some(tree) = body
             .layouts
-            .get(&propia)
-            .or_else(|| body.layouts.get(&self.clave_de_sesion()))
+            .get(&own_key)
+            .or_else(|| body.layouts.get(&self.session_key()))
             .cloned()
         {
-            // Sin despertar nada: los listados se piden después, una vez la
-            // sesión haya dicho dónde estaba cada uno. Despertarlos aquí
-            // pediría el directorio del arranque para tirarlo un instante
-            // después.
-            self.poner_arbol(arbol, None);
+            // Without waking anything: the listings are requested later, once
+            // the session has said where each one was. Waking them here would
+            // request the startup directory just to throw it away an instant
+            // later.
+            self.set_tree(tree, None);
         }
-        self.aplicar_sesion(&body);
-        self.paleta_recientes.clone_from(&body.palette_recent);
+        self.apply_session(&body);
+        self.palette_recent.clone_from(&body.palette_recent);
         self.popular = norte_frontend::history::Popular::from_entries(body.popular.clone());
-        self.sesion.conocidos = body.slots.keys().copied().collect();
-        for (id, estado) in &body.slots {
-            self.sesion.touched.insert(*id, estado.touched_ms);
+        self.session.known = body.slots.keys().copied().collect();
+        for (id, slot_state) in &body.slots {
+            self.session.touched.insert(*id, slot_state.touched_ms);
         }
-        self.sesion.leida = body;
+        self.session.read = body;
     }
 
-    /// Bajo qué clave de `layouts` va la pantalla de esta ventana.
+    /// Under which `layouts` key this window's screen goes.
     ///
-    /// La misma que el terminal (`App::session_key`): el nombre del perfil
-    /// activo, o `default` sin ninguno. Un perfil cuyo directorio no sea UTF-8
-    /// cae a `default`, que es lo que el selector avisa con `carries_state`.
-    pub(super) fn clave_de_sesion(&self) -> String {
-        self.perfil_activo
+    /// The same as the terminal's (`App::session_key`): the active profile's
+    /// name, or `default` with none. A profile whose directory is not UTF-8
+    /// falls back to `default`, which is what the selector warns about with
+    /// `carries_state`.
+    pub(super) fn session_key(&self) -> String {
+        self.profile_active
             .as_ref()
             .and_then(|n| n.to_str())
             .filter(|s| !s.is_empty())
             .map_or_else(|| "default".to_owned(), ToOwned::to_owned)
     }
 
-    /// Un tic de un segundo sobre el aviso de la barra (spec 2026-09-10,
-    /// `[ui] notice_seconds`): pasado el tope, el mensaje sale de la barra,
-    /// va al registro por `tracing` y `notices_unread` cuenta uno más. Con
-    /// `0` no caduca nada. Abrir el panel de registro pone la cuenta a
-    /// cero. Devuelve el parche de estado si algo cambió; los tests lo hacen
-    /// avanzar tic a tic, sin reloj.
+    /// A one-second tick over the status bar's notice (spec 2026-09-10, `[ui]
+    /// notice_seconds`): past the cap, the message leaves the bar, goes to
+    /// the log via `tracing`, and `notices_unread` counts one more. With `0`
+    /// nothing expires. Opening the log panel resets the count to zero.
+    /// Returns the state patch if something changed; tests advance it tick by
+    /// tick, with no clock.
     ///
-    /// La cuenta va por TEXTO: repetir la misma acción dentro del plazo no la
-    /// reinicia (revisión m10). Reiniciarla al asignar pediría un setter en
-    /// los ~40 sitios que escriben `status.message`; se deja dicho.
-    pub(super) fn caducar_aviso(&mut self) -> Option<BridgeEnvelope<UiUpdate>> {
-        let mut cambio = false;
-        let registro_abierto = self
-            .arbol
+    /// The count is by TEXT: repeating the same action within the deadline
+    /// does not reset it (revision m10). Resetting it on assignment would
+    /// require a setter at the ~40 places that write `status.message`; left
+    /// noted here.
+    pub(super) fn expire_notice(&mut self) -> Option<BridgeEnvelope<UiUpdate>> {
+        let mut changed = false;
+        let log_open = self
+            .tree
             .slot_ids()
             .into_iter()
-            .any(|id| self.arbol.kind_of(id).is_some_and(|k| k.as_str() == "log"));
-        if registro_abierto && self.status.notices_unread != 0 {
+            .any(|id| self.tree.kind_of(id).is_some_and(|k| k.as_str() == "log"));
+        if log_open && self.status.notices_unread != 0 {
             self.status.notices_unread = 0;
-            cambio = true;
+            changed = true;
         }
         match self.status.message.as_deref() {
             None => {
-                self.mensaje_ticks = 0;
-                self.mensaje_contado = None;
+                self.message_ticks = 0;
+                self.message_counted = None;
             }
             Some(msg) => {
-                if self.mensaje_contado.as_deref() == Some(msg) {
-                    self.mensaje_ticks = self.mensaje_ticks.saturating_add(1);
+                if self.message_counted.as_deref() == Some(msg) {
+                    self.message_ticks = self.message_ticks.saturating_add(1);
                 } else {
-                    self.mensaje_contado = Some(msg.to_owned());
-                    self.mensaje_ticks = 1;
+                    self.message_counted = Some(msg.to_owned());
+                    self.message_ticks = 1;
                 }
-                let tope = self.config.common.ui_chrome.notice_seconds();
-                if tope > 0 && self.mensaje_ticks >= tope {
+                let cap = self.config.common.ui_chrome.notice_seconds();
+                if cap > 0 && self.message_ticks >= cap {
                     let text = self.status.message.take().unwrap_or_default();
-                    self.mensaje_ticks = 0;
-                    self.mensaje_contado = None;
+                    self.message_ticks = 0;
+                    self.message_counted = None;
                     self.status.notices_unread = self.status.notices_unread.saturating_add(1);
-                    // `info`, no `warn`: «copiado 1 fichero» no es un aviso, y
-                    // el nivel es por lo que se filtra el panel de registro.
+                    // `info`, not `warn`: "copied 1 file" is not a warning,
+                    // and the level is what the log panel filters by.
                     tracing::info!(target: "norte::notice", "{text}");
-                    cambio = true;
+                    changed = true;
                 }
             }
         }
-        cambio.then(|| self.parche(vec![ViewChange::Status(self.status.clone())]))
+        changed.then(|| self.parche(vec![ViewChange::Status(self.status.clone())]))
     }
 
-    /// Mira si la pantalla cambió desde lo último escrito y, si cambió, la
-    /// escribe FUERA del actor. Es el tic de la sesión, y también lo que
-    /// cada cambio del árbol llama sin esperar al tic.
+    /// Checks whether the screen changed since the last write and, if it did,
+    /// writes it OUTSIDE the actor. This is the session's tick, and also what
+    /// every tree change calls without waiting for the tick.
     ///
-    /// Una ventana suelta no escribe; una sesión del futuro no se machaca; y
-    /// con un diálogo delante no se guarda lo que se está decidiendo, como en
-    /// el terminal. Con un `put` en vuelo se espera a que conteste: dos
-    /// escrituras cruzadas con la misma revisión son un conflicto seguro.
-    pub(super) fn empujar_sesion(
+    /// A loose window does not write; a future session is not clobbered; and
+    /// with a dialog in front, what is being decided is not saved, like in
+    /// the terminal. With a `put` in flight, it waits for the answer: two
+    /// crossed writes with the same revision are a sure conflict.
+    pub(super) fn push_session(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) {
-        if !self.sesion.owner
-            || self.sesion.futuro
-            || self.sesion.en_vuelo.is_some()
-            || !self.dialogos.is_empty()
+        if !self.session.owner
+            || self.session.future
+            || self.session.in_flight.is_some()
+            || !self.dialogs.is_empty()
         {
             return;
         }
-        let ahora = u64::try_from(ahora_ms()).unwrap_or(0);
-        let mut body = self.capturar_sesion();
-        if self.sesion.sin_historial {
+        let now = u64::try_from(now_ms()).unwrap_or(0);
+        let mut body = self.capture_session();
+        if self.session.no_history {
             body.degrade_for_size();
         }
-        let vivos: Vec<SlotId> = self.huecos.keys().map(|id| SlotId(*id)).collect();
-        let Some(sellados) = self.sesion.policy.prepare(&mut body, &vivos, ahora) else {
+        let alive: Vec<SlotId> = self.slots.keys().map(|id| SlotId(*id)).collect();
+        let Some(sealed) = self.session.policy.prepare(&mut body, &alive, now) else {
             return;
         };
-        for SlotId(id) in sellados {
-            self.sesion.touched.insert(id, ahora);
+        for SlotId(id) in sealed {
+            self.session.touched.insert(id, now);
         }
         let Ok(json) = serde_json::to_value(&body) else {
             return;
         };
-        let cuerpo = std::sync::Arc::new(body);
-        self.sesion.en_vuelo = Some(std::sync::Arc::clone(&cuerpo));
+        let arc_body = std::sync::Arc::new(body);
+        self.session.in_flight = Some(std::sync::Arc::clone(&arc_body));
         let backend = Arc::clone(backend);
-        let buzon = buzon.clone();
-        let revision = self.sesion.revision;
+        let mailbox = mailbox.clone();
+        let revision = self.session.revision;
         tokio::spawn(async move {
             let res = backend
                 .session_put(norte_frontend::session::SCHEMA_VERSION, revision, json)
                 .await;
-            let _ = buzon
-                .send(Mensaje::SesionPuesta(Box::new((res, cuerpo))))
+            let _ = mailbox
+                .send(Message::SessionPlaced(Box::new((res, arc_body))))
                 .await;
         });
     }
 
-    /// Pide el RELEVO a la terminal (fase 9): vuelca la pantalla CON las
-    /// marcas y suelta la sesión.
+    /// Requests HANDOFF to the terminal (phase 9): flushes the screen WITH
+    /// the marks and releases the session.
     ///
-    /// Las dos cosas van spawneadas y en ese orden: soltar antes de escribir
-    /// dejaría a la terminal leyendo la pantalla de hace un segundo, y
-    /// escribir sin soltar la dejaría sin poder escribir la suya. El
-    /// desenlace vuelve por el buzón ([`Mensaje::Relevado`]), que es donde se
-    /// decide si se lanza la terminal o si esto se queda como estaba.
+    /// Both things are spawned, and in that order: releasing before writing
+    /// would leave the terminal reading the screen from a second ago, and
+    /// writing without releasing would leave it unable to write its own. The
+    /// outcome comes back through the mailbox ([`Message::HandedOff`]), which
+    /// is where it is decided whether the terminal is launched or this stays
+    /// as it was.
     ///
-    /// **Sólo la DUEÑA releva.** Una ventana suelta no tiene la pantalla que
-    /// entregar, y soltar lo ajeno no hace nada: ofrecerlo igualmente sería
-    /// prometer un relevo que se queda a medias, con la terminal abierta
-    /// sobre el listado de otro.
-    pub(super) fn pedir_relevo(
+    /// **Only the OWNER hands off.** A loose window has no screen to hand
+    /// over, and releasing someone else's does nothing: offering it anyway
+    /// would promise a handoff that stays half-done, with the terminal open
+    /// over someone else's listing.
+    pub(super) fn request_handoff(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        if !self.sesion.owner {
+        if !self.session.owner {
             return (
                 ActionAck::Unavailable {
                     reason_key: "host-handoff-not-owner".to_owned(),
@@ -222,7 +226,7 @@ impl Estado {
                 Vec::new(),
             );
         }
-        let body = self.capturar_sesion_para_relevo();
+        let body = self.capture_session_for_handoff();
         let Ok(json) = serde_json::to_value(&body) else {
             return (
                 ActionAck::Unavailable {
@@ -231,357 +235,361 @@ impl Estado {
                 Vec::new(),
             );
         };
-        let revision = self.sesion.revision;
-        let b = Arc::clone(backend);
-        let buz = buzon.clone();
+        let revision = self.session.revision;
+        let backend2 = Arc::clone(backend);
+        let mailbox2 = mailbox.clone();
         tokio::spawn(async move {
-            // Sólo se suelta si la pantalla ENTRÓ: soltarla tras un `put` que
-            // falló dejaría a la terminal reclamando un cuerpo viejo, que es
-            // peor que no relevar.
-            let escrito = b
+            // It is only released if the screen WENT IN: releasing after a
+            // `put` that failed would leave the terminal claiming an old
+            // body, which is worse than not handing off.
+            let written = backend2
                 .session_put(norte_frontend::session::SCHEMA_VERSION, revision, json)
                 .await
                 .is_ok();
-            let soltada = if escrito {
-                b.session_release().await.unwrap_or(false)
+            let released = if written {
+                backend2.session_release().await.unwrap_or(false)
             } else {
                 false
             };
-            let _ = buz.send(Mensaje::Relevado { soltada }).await;
+            let _ = mailbox2.send(Message::HandedOff { released }).await;
         });
-        (self.aplicada(), self.decir("msg-handoff-running"))
+        (self.applied(), self.say("msg-handoff-running"))
     }
 
-    /// El relevo contestó: se entrega la pantalla o no ha pasado nada.
-    pub(super) fn relevo_terminado(&mut self, soltada: bool) -> Vec<BridgeEnvelope<UiUpdate>> {
+    /// The handoff answered: the screen is handed over, or nothing happened.
+    pub(super) fn handoff_finished(&mut self, soltada: bool) -> Vec<BridgeEnvelope<UiUpdate>> {
         if !soltada {
-            return self.decir("msg-handoff-failed");
+            return self.say("msg-handoff-failed");
         }
-        // Ya no somos dueños: dejar de escribir es lo honesto, y el indicador
-        // de la barra lo dice solo.
-        self.sesion.owner = false;
-        // Y queda un relevo EN CURSO hasta que quien hospeda diga si la
-        // terminal se abrió: es lo que autoriza un `HandoffFailed`.
-        self.relevo_en_curso = true;
-        // Lanzar la terminal y cerrarse es de quien hospeda. Si no puede, lo
-        // dice y NO se cierra: la sesión está suelta pero la pantalla sigue
-        // aquí, que es el fallo barato.
-        if !self.nativo(crate::dto::NativeEffect::HandoffToTerminal { daemon: true }) {
-            return self.decir("msg-handoff-no-terminal");
+        // We are no longer the owner: stopping writing is the honest thing,
+        // and the bar's indicator says so on its own.
+        self.session.owner = false;
+        // And a handoff stays IN PROGRESS until whoever hosts it says whether
+        // the terminal opened: that is what authorizes a `HandoffFailed`.
+        self.handoff_in_progress = true;
+        // Launching the terminal and closing is up to the host. If it
+        // cannot, it says so and does NOT close: the session is loose but the
+        // screen is still here, which is the cheap failure.
+        if !self.native(crate::dto::NativeEffect::HandoffToTerminal { daemon: true }) {
+            return self.say("msg-handoff-no-terminal");
         }
-        self.decir("msg-handoff-running")
+        self.say("msg-handoff-running")
     }
 
-    /// La terminal del relevo no se abrió: esta ventana se QUEDA, recupera la
-    /// sesión que había soltado y dice por qué (fase 9).
+    /// The handoff's terminal did not open: this window STAYS, recovers the
+    /// session it had released, and says why (phase 9).
     ///
-    /// Es la decisión 4 de la ADR 0123 del lado de la ventana: cuando algo
-    /// falla, no pasa nada y el proceso sigue donde estaba. La pantalla está
-    /// escrita en el core, así que recuperarla es volver a pedir la propiedad
-    /// — por el camino de siempre, que es la política del escritor: si otro
-    /// frontend la reclamó entretanto, se queda con él y esta ventana sigue
-    /// suelta, que es la verdad.
-    pub(super) fn relevo_fallido(
+    /// This is decision 4 of ADR 0123 on the window's side: when something
+    /// fails, nothing happens and the process stays where it was. The screen
+    /// is written in the core, so recovering it means asking for ownership
+    /// again — through the usual path, which is the writer's policy: if
+    /// another frontend claimed it in the meantime, it keeps it and this
+    /// window stays loose, which is the truth.
+    pub(super) fn handoff_failed(
         &mut self,
         no_terminal: bool,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        // Sólo si HAY un relevo en curso: la acción la puede mandar cualquiera
-        // que hable con el host, y sin esta comprobación bastaría con mandarla
-        // para pintar «la terminal no arrancó» sobre una ventana que no había
-        // pedido nada.
-        if !std::mem::take(&mut self.relevo_en_curso) {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        // Only if there IS a handoff in progress: anyone who talks to the
+        // host can send the action, and without this check it would be
+        // enough to send it to paint "the terminal did not start" over a
+        // window that had asked for nothing.
+        if !std::mem::take(&mut self.handoff_in_progress) {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         }
-        self.sesion.policy.ask_soon();
-        let clave = if no_terminal {
+        self.session.policy.ask_soon();
+        let key = if no_terminal {
             "msg-handoff-no-terminal"
         } else {
             "msg-handoff-terminal-failed"
         };
-        (self.aplicada(), self.decir(clave))
+        (self.applied(), self.say(key))
     }
 
-    /// El `session.put` del tic contestó.
+    /// The tick's `session.put` answered.
     ///
-    /// Cuatro respuestas, y cada una dice algo distinto: entró, y lo mandado
-    /// pasa a ser lo último escrito; otra ventana escribió en medio, y se
-    /// relee para escribir sobre su revisión; el cuerpo no cabe, y desde
-    /// ahora va sin historial; esta ventana ya no es la dueña, y lo dice el
-    /// indicador. Lo demás se apunta y se reintenta en el tic siguiente.
-    pub(super) fn sesion_puesta(
+    /// Four answers, and each says something different: it went in, and what
+    /// was sent becomes the last thing written; another window wrote in
+    /// between, and it rereads to write over its revision; the body does not
+    /// fit, and from now on it goes with no history; this window is no longer
+    /// the owner, and the indicator says so. Everything else is noted and
+    /// retried on the next tick.
+    pub(super) fn session_placed(
         &mut self,
         res: Result<u64, Error>,
-        cuerpo: std::sync::Arc<norte_frontend::session::SessionBody>,
+        arc_body: std::sync::Arc<norte_frontend::session::SessionBody>,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        self.sesion.en_vuelo = None;
+        self.session.in_flight = None;
         match res {
             Ok(rev) => {
-                self.sesion.revision = rev;
-                self.sesion.policy.sent(cuerpo);
+                self.session.revision = rev;
+                self.session.policy.sent(arc_body);
                 Vec::new()
             }
             Err(Error::Conflict { .. }) => {
-                self.sesion.policy.resend();
+                self.session.policy.resend();
                 let backend = Arc::clone(backend);
-                let buzon = buzon.clone();
-                // La relectura vuelve por el buzón como todo lo demás, y
-                // mientras vuela no se escribe: lo que conflictó sigue
-                // pendiente hasta saber sobre qué revisión va.
-                self.sesion.en_vuelo = Some(cuerpo);
+                let mailbox = mailbox.clone();
+                // The reread comes back through the mailbox like everything
+                // else, and while it is in flight nothing is written: what
+                // conflicted stays pending until it is known which revision
+                // it is against.
+                self.session.in_flight = Some(arc_body);
                 tokio::spawn(async move {
                     let res = backend.session_get().await;
-                    let _ = buzon.send(Mensaje::SesionReleida(res)).await;
+                    let _ = mailbox.send(Message::SessionReread(res)).await;
                 });
                 Vec::new()
             }
             Err(Error::LimitExceeded { .. }) => {
-                self.sesion.policy.resend();
-                self.sesion.sin_historial = true;
+                self.session.policy.resend();
+                self.session.no_history = true;
                 Vec::new()
             }
             Err(Error::PermissionDenied) => {
-                self.sesion.policy.resend();
-                self.sesion.owner = false;
-                let cambio = self.cambio_de_banners();
-                vec![self.parche(vec![cambio])]
+                self.session.policy.resend();
+                self.session.owner = false;
+                let change = self.banner_change();
+                vec![self.parche(vec![change])]
             }
             Err(e) => {
-                tracing::warn!(error = %e, "la sesión no se pudo escribir; se reintenta");
-                self.sesion.policy.resend();
+                tracing::warn!(error = %e, "the session could not be written; retrying");
+                self.session.policy.resend();
                 Vec::new()
             }
         }
     }
 
-    /// La sesión releída tras un conflicto: se toma su revisión y se conserva
-    /// lo ajeno, SIN aplicarla a la pantalla —esta ventana es la que acaba de
-    /// moverse, y lo suyo va encima en el siguiente tic.
+    /// The session reread after a conflict: its revision is taken and
+    /// whatever is someone else's is kept, WITHOUT applying it to the screen
+    /// — this window is the one that just moved, and its own goes on top on
+    /// the next tick.
     ///
-    /// La revisión solo avanza si el cuerpo se entiende: avanzar con un
-    /// cuerpo que no se pudo leer escribiría lo LEÍDO ANTES sobre una
-    /// revisión que ya no lo refleja, y eso pisa lo que la otra ventana
-    /// acaba de guardar. Sin cuerpo, el siguiente tic vuelve a conflictar y a
-    /// releer, que es lo honesto. Un cuerpo del FUTURO apaga la escritura del
-    /// todo, como al arrancar.
-    pub(super) fn sesion_releida(
+    /// The revision only advances if the body is understood: advancing with a
+    /// body that could not be read would write what was PREVIOUSLY READ over
+    /// a revision that no longer reflects it, and that clobbers what the
+    /// other window just saved. With no body, the next tick conflicts and
+    /// rereads again, which is the honest thing. A body from the FUTURE
+    /// switches off writing entirely, as on startup.
+    pub(super) fn session_reread(
         &mut self,
         res: Result<(norte_proto::methods::Session, bool), Error>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        self.sesion.en_vuelo = None;
-        let Ok((sesion, owner)) = res else {
+        self.session.in_flight = None;
+        let Ok((session, owner)) = res else {
             return Vec::new();
         };
-        let era_duena = self.sesion.owner;
-        self.sesion.owner = owner;
-        match norte_frontend::session::SessionBody::from_value(sesion.version, &sesion.body) {
+        let was_owner = self.session.owner;
+        self.session.owner = owner;
+        match norte_frontend::session::SessionBody::from_value(session.version, &session.body) {
             Ok(body) => {
-                self.sesion.revision = sesion.revision;
-                self.sesion.leida = body;
+                self.session.revision = session.revision;
+                self.session.read = body;
             }
             Err(norte_frontend::session::SessionError::FromTheFuture { .. }) => {
-                self.sesion.futuro = true;
+                self.session.future = true;
             }
             Err(e) => {
-                tracing::warn!(error = %e, "la sesión releída no se entiende; se reintenta");
+                tracing::warn!(error = %e, "the reread session is not understood; retrying");
             }
         }
-        if era_duena == owner && !self.sesion.futuro {
+        if was_owner == owner && !self.session.future {
             return Vec::new();
         }
-        let cambio = self.cambio_de_banners();
-        vec![self.parche(vec![cambio])]
+        let change = self.banner_change();
+        vec![self.parche(vec![change])]
     }
 
-    /// Los huecos que `[profile.start]` siembra, ya filtrados a los que ESTA
-    /// pantalla tiene.
+    /// The slots `[profile.start]` seeds, already filtered to the ones THIS
+    /// screen has.
     ///
-    /// Quién gana lo decide [`norte_frontend::config::profile_start_seeds`],
-    /// que es de los dos frontends: la sesión manda, y el perfil solo dice
-    /// dónde abre un hueco del que la sesión no sabe nada. Un id que el perfil
-    /// nombre y esta disposición no coloque no tiene dónde abrir, así que se
-    /// cae aquí.
+    /// Who wins is decided by
+    /// [`norte_frontend::config::profile_start_seeds`], which belongs to both
+    /// frontends: the session rules, and the profile only says where to open
+    /// a slot the session knows nothing about. An id the profile names that
+    /// this layout does not place has nowhere to open, so it is dropped here.
     ///
-    /// Apunta lo sembrado. Sin esa cuenta, un lector sin sesión guardada
-    /// —instalación nueva, o un `session_get` que ni se pudo leer— volvía al
-    /// directorio de arranque del perfil cada vez que entraba y salía de él:
-    /// para él la sesión no sabe nunca nada, así que el veto de arriba no veta.
-    pub(super) fn siembra_de_perfil(&mut self) -> Vec<(u32, VPath)> {
-        let siembra: Vec<(u32, VPath)> = norte_frontend::config::profile_start_seeds(
+    /// It notes what was seeded. Without that count, a reader with no saved
+    /// session — a fresh install, or a `session_get` that could not even be
+    /// read — went back to the profile's startup directory every time they
+    /// entered and left it: for them the session never knows anything, so the
+    /// veto above does not veto.
+    pub(super) fn profile_seed(&mut self) -> Vec<(u32, VPath)> {
+        let seeds: Vec<(u32, VPath)> = norte_frontend::config::profile_start_seeds(
             &self.config.common.profile_start,
-            &self.sesion.conocidos,
-            &self.sesion.sembrados,
+            &self.session.known,
+            &self.session.seeded,
         )
         .into_iter()
-        .filter(|(id, _)| self.huecos.contains_key(id))
+        .filter(|(id, _)| self.slots.contains_key(id))
         .collect();
-        for (id, _) in &siembra {
-            self.sesion.sembrados.insert(*id);
+        for (id, _) in &seeds {
+            self.session.seeded.insert(*id);
         }
-        // Un id que el perfil nombra y esta disposición no coloca no tiene
-        // dónde abrir. Se DICE, como en el terminal: callarlo es la misma
-        // clase de silencio que la clave entera tenía antes de la ADR 0098.
-        let colocados: std::collections::BTreeSet<u32> = self.huecos.keys().copied().collect();
-        let huerfanos = norte_frontend::config::profile_start_huerfanos(
+        // An id the profile names and this layout does not place has nowhere
+        // to open. It is SAID, like in the terminal: staying quiet about it
+        // is the same kind of silence the whole key used to have before ADR
+        // 0098.
+        let placed: std::collections::BTreeSet<u32> = self.slots.keys().copied().collect();
+        let orphans = norte_frontend::config::profile_start_orphans(
             &self.config.common.profile_start,
-            &colocados,
+            &placed,
         );
-        if !huerfanos.is_empty() {
-            let ids: Vec<String> = huerfanos.iter().map(u32::to_string).collect();
+        if !orphans.is_empty() {
+            let ids: Vec<String> = orphans.iter().map(u32::to_string).collect();
             self.status.message = Some(clamp_display(norte_i18n::ta_in(
                 self.lang,
                 "msg-profile-start-orphans",
-                &[
-                    ("n", &huerfanos.len().to_string()),
-                    ("ids", &ids.join(", ")),
-                ],
+                &[("n", &orphans.len().to_string()), ("ids", &ids.join(", "))],
             )));
         }
-        siembra
+        seeds
     }
 
-    /// Devuelve el panel ACTIVO al directorio que se escribió al arrancar.
+    /// Returns the ACTIVE panel to the directory written on startup.
     ///
-    /// Va DESPUÉS de aplicar la sesión, y ése es todo el arreglo: la sesión
-    /// escribe el sitio de todos los huecos, así que un argumento de la línea
-    /// de órdenes solo puede ganar volviendo a ponerlo encima. Un directorio
-    /// que alguien acaba de teclear es más específico que dónde cerró ayer —
-    /// la misma regla que hace que `--layout` gane a `[ui] layout`.
+    /// Goes AFTER applying the session, and that is the whole fix: the
+    /// session writes every slot's location, so a command-line argument can
+    /// only win by being set on top again. A directory someone just typed is
+    /// more specific than where it closed yesterday — the same rule that
+    /// makes `--layout` win over `[ui] layout`.
     ///
-    /// Solo el activo: el otro panel se queda donde la sesión lo dejó. Y solo
-    /// el SITIO — el orden y los ocultos son preferencias, y no se tocan.
-    pub(super) fn fijar_dir_pedido(&mut self) {
-        let Some(dir) = self.dir_pedido.take() else {
+    /// Only the active one: the other panel stays wherever the session left
+    /// it. And only the LOCATION — order and hidden state are preferences,
+    /// and are not touched.
+    pub(super) fn pin_dir_requested(&mut self) {
+        let Some(dir) = self.dir_requested.take() else {
             return;
         };
-        let activo = self.activo();
-        if let Some(hueco) = self.huecos.get_mut(&activo) {
-            hueco.pane.begin_loading(dir);
-            // El cursor que guardó la sesión era una fila de OTRO directorio:
-            // aplicarlo sobre el tecleado pondría el cursor en una fila al
-            // azar. La misma regla que `pin_start_dir` en la terminal.
-            hueco.cursor_a_restaurar = None;
+        let active = self.active();
+        if let Some(slot) = self.slots.get_mut(&active) {
+            slot.pane.begin_loading(dir);
+            // The cursor the session saved was a row of ANOTHER directory:
+            // applying it over what was typed would put the cursor on a
+            // random row. The same rule as `pin_start_dir` in the terminal.
+            slot.cursor_to_restore = None;
         }
     }
 
-    /// Coloca cada hueco donde la sesión dice que estaba.
-    pub(super) fn aplicar_sesion(&mut self, body: &norte_frontend::session::SessionBody) {
-        // El tope ANTES de sembrar (rust-reviewer MAJOR, fase 1): un hueco nace
-        // con el de fábrica, y sembrar con él recortaba a 30 una historia de 64
-        // que la sesión guardó entera — y la siguiente escritura lo perpetuaba.
-        let tope = self.config.common.ui_chrome.history_size();
-        for (id, hueco) in &mut self.huecos {
-            hueco.historial.set_capacity(tope);
-            let Some(estado) = body.slots.get(id) else {
+    /// Places each slot where the session says it was.
+    pub(super) fn apply_session(&mut self, body: &norte_frontend::session::SessionBody) {
+        // The cap BEFORE seeding (rust-reviewer MAJOR, phase 1): a slot is
+        // born with the factory one, and seeding with it clamped a history of
+        // 64 the session saved in full down to 30 — and the next write made
+        // it permanent.
+        let cap = self.config.common.ui_chrome.history_size();
+        for (id, slot) in &mut self.slots {
+            slot.history.set_capacity(cap);
+            let Some(slot_state) = body.slots.get(id) else {
                 continue;
             };
-            hueco.pane.begin_loading(estado.path.clone());
-            // El orden y los ocultos se ESCRIBÍAN en la sesión y no los leía
-            // nadie: la ventana se acordaba de dónde estabas y olvidaba cómo
-            // lo estabas mirando, así que ordenar por tamaño o apartar los
-            // dotfiles duraba hasta cerrar.
-            hueco.pane.set_sort(estado.sort.clone());
-            hueco.pane.set_show_hidden(estado.show_hidden);
-            // El CURSOR se guardaba y no lo leía nadie: la ventana volvía al
-            // sitio y a la fila `..`. Lo aplica `aterriza_en` cuando lleguen
-            // las filas, como hace la terminal en `restore_cursor`.
-            hueco.cursor_a_restaurar = usize::try_from(estado.cursor).ok();
-            hueco
-                .historial
-                .seed(estado.back.clone(), estado.forward.clone());
-            hueco.historial.seed_jump(estado.jump.clone());
-            // Las marcas de un RELEVO (fase 9), y sólo con `--attach`. Van a
-            // `marcas_a_restaurar`, el mecanismo con el que un refresco ya
-            // conserva la selección: `aterriza_en` lo consume TRAS
-            // `set_listing` —que limpia lo marcado— y por `restore_marks`, que
-            // pasa por el embudo de la fila `..`.
+            slot.pane.begin_loading(slot_state.path.clone());
+            // Order and hidden state USED TO BE written to the session and
+            // nobody read them: the window remembered where you were and
+            // forgot how you were looking at it, so sorting by size or
+            // hiding dotfiles lasted only until it closed.
+            slot.pane.set_sort(slot_state.sort.clone());
+            slot.pane.set_show_hidden(slot_state.show_hidden);
+            // The CURSOR used to be saved and nobody read it: the window went
+            // back to the place and to the `..` row. `lands_on` applies it
+            // once the rows arrive, like the terminal does in
+            // `restore_cursor`.
+            slot.cursor_to_restore = usize::try_from(slot_state.cursor).ok();
+            slot.history
+                .seed(slot_state.back.clone(), slot_state.forward.clone());
+            slot.history.seed_jump(slot_state.jump.clone());
+            // A HANDOFF's marks (phase 9), and only with `--attach`. They go
+            // to `marks_to_restore`, the same mechanism a refresh already
+            // uses to keep the selection: `lands_on` consumes it AFTER
+            // `set_listing` — which clears what was marked — and through
+            // `restore_marks`, which goes through the `..` row's funnel.
             //
-            // Por ahí y no por un camino propio, y es la lección de este
-            // arreglo: una primera versión las sembraba en
-            // `aterrizar_listado`, y el listado del ARRANQUE no pasa por ahí
-            // —va por `listar_inicial`—, así que nunca llegaban. `aterriza_en`
-            // es por donde pasan todos.
-            if self.attach && !estado.marks.is_empty() {
-                hueco.marcas_a_restaurar.clone_from(&estado.marks);
+            // Through there and not through a path of its own, and that is
+            // this fix's lesson: an earlier version seeded them in
+            // `land_listing`, and the STARTUP listing does not go
+            // through there — it goes through `list_initial` — so they
+            // never arrived. `lands_on` is where they all pass through.
+            if self.attach && !slot_state.marks.is_empty() {
+                slot.marks_to_restore.clone_from(&slot_state.marks);
             }
         }
     }
 
-    /// La pantalla de AHORA como cuerpo de sesión.
+    /// The CURRENT screen as a session body.
     ///
-    /// Las MARCAS no entran: son una selección de trabajo, no un sitio donde
-    /// estabas, y restaurarlas haría que una ventana nueva abriese con media
-    /// docena de ficheros elegidos que nadie eligió.
-    pub(super) fn capturar_sesion(&self) -> norte_frontend::session::SessionBody {
-        self.capturar_sesion_con_marcas(false)
+    /// MARKS do not go in: they are a working selection, not a place you
+    /// were, and restoring them would make a new window open with half a
+    /// dozen files selected that nobody chose.
+    pub(super) fn capture_session(&self) -> norte_frontend::session::SessionBody {
+        self.capture_session_with_marks(false)
     }
 
-    /// La misma pantalla CON lo marcado (fase 9): lo que se vuelca para un
-    /// relevo entre frontends.
+    /// The same screen WITH what is marked (phase 9): what is flushed for a
+    /// handoff between frontends.
     ///
-    /// La diferencia con su hermana es la única que importa: en un relevo
-    /// pasan segundos entre soltar y reclamar, así que devolver lo señalado es
-    /// devolver el trabajo que se estaba haciendo. En un arranque cualquiera
-    /// han pasado horas, y el razonamiento de arriba sigue en pie.
-    pub(super) fn capturar_sesion_para_relevo(&self) -> norte_frontend::session::SessionBody {
-        self.capturar_sesion_con_marcas(true)
+    /// The difference with its sibling is the only one that matters: in a
+    /// handoff, seconds pass between releasing and claiming, so returning
+    /// what is selected is returning the work that was being done. In an
+    /// ordinary startup, hours have passed, and the reasoning above still
+    /// holds.
+    pub(super) fn capture_session_for_handoff(&self) -> norte_frontend::session::SessionBody {
+        self.capture_session_with_marks(true)
     }
 
-    fn capturar_sesion_con_marcas(&self, marcas: bool) -> norte_frontend::session::SessionBody {
-        // Se parte de lo LEÍDO y se pisa solo lo propio: los huecos de otro
-        // frontend y las disposiciones de los OTROS perfiles siguen ahí.
+    fn capture_session_with_marks(&self, marks: bool) -> norte_frontend::session::SessionBody {
+        // It starts from what was READ and only overwrites its own: another
+        // frontend's slots and the OTHER profiles' layouts stay there.
         //
-        // La disposición de esta ventana va bajo la clave de su perfil, como
-        // la del terminal: la D8 de la ADR 0058 —cierra un frontend, abre el
-        // otro, sigue donde estabas— y lo que el lector espera al volver a
-        // abrir: los paneles que dejó abiertos. Se dejó de escribir una vez
-        // por miedo a que curiosear en el selector cambiara el arranque del
-        // terminal, pero eso ES compartir la pantalla, y lo que la D5 protege
-        // es otra cosa: que el TAMAÑO de una ventana no reescriba el árbol.
+        // This window's layout goes under its profile's key, like the
+        // terminal's: ADR 0058's D8 — close one frontend, open the other,
+        // pick up where you were — and what the reader expects on reopening:
+        // the panels they left open. Writing it stopped once, out of fear
+        // that browsing the selector would change the terminal's startup,
+        // but that IS sharing the screen, and what D5 protects is something
+        // else: that a window's SIZE does not rewrite the tree.
         //
-        // Desde el ADR 0139 va bajo la clave PROPIA de la ventana
-        // (`<perfil>@window`): la terminal y la ventana recuerdan cada una
-        // sus tamaños y posiciones, y la última en escribir ya no pisa lo
-        // que la otra ajustó. En un RELEVO se escribe además la compartida:
-        // entregar la pantalla es justo que la terminal abra con esta.
-        let mut body = self.sesion.leida.clone();
+        // Since ADR 0139 it goes under the window's OWN key
+        // (`<profile>@window`): the terminal and the window each remember
+        // their own sizes and positions, and the last one to write no longer
+        // clobbers what the other adjusted. On a HANDOFF the shared one is
+        // also written: handing over the screen is exactly the terminal
+        // opening with this one.
+        let mut body = self.session.read.clone();
         body.layouts.insert(
-            norte_frontend::session::window_layout_key(&self.clave_de_sesion()),
-            self.arbol.clone(),
+            norte_frontend::session::window_layout_key(&self.session_key()),
+            self.tree.clone(),
         );
-        if marcas {
-            body.layouts
-                .insert(self.clave_de_sesion(), self.arbol.clone());
+        if marks {
+            body.layouts.insert(self.session_key(), self.tree.clone());
         }
-        body.palette_recent.clone_from(&self.paleta_recientes);
+        body.palette_recent.clone_from(&self.palette_recent);
         body.popular = self.popular.entries().to_vec();
-        for (id, hueco) in &self.huecos {
+        for (id, slot) in &self.slots {
             body.slots.insert(
                 *id,
                 norte_frontend::session::SlotState {
-                    path: hueco.pane.dir().clone(),
-                    cursor: hueco.pane.cursor() as u64,
-                    back: hueco.historial.trail().to_vec(),
-                    forward: hueco.historial.forward_trail().to_vec(),
-                    jump: hueco.historial.jump().cloned(),
-                    sort: hueco.pane.sort(),
+                    path: slot.pane.dir().clone(),
+                    cursor: slot.pane.cursor() as u64,
+                    back: slot.history.trail().to_vec(),
+                    forward: slot.history.forward_trail().to_vec(),
+                    jump: slot.history.jump().cloned(),
+                    sort: slot.pane.sort(),
                     columns: Vec::new(),
-                    show_hidden: hueco.pane.show_hidden(),
-                    // El sello de edad tal como se ESCRIBIÓ la última vez,
-                    // no «ahora»: sellar cada captura con el reloj hacía que
-                    // ningún cuerpo fuera igual al anterior y el tic escribía
-                    // cada segundo. Quien cambia lo sella la política al
-                    // preparar el cuerpo, y `touched` recuerda el sello. Un
-                    // hueco nunca sellado va a cero y lo sella la primera
-                    // escritura, que es lo que hace el terminal.
-                    touched_ms: self.sesion.touched.get(id).copied().unwrap_or(0),
-                    // Por RUTA, que es la identidad de la fila: un índice
-                    // restaurado sobre un listado que cambió señala otro
-                    // fichero. El tope es del modelo.
-                    marks: if marcas {
-                        hueco
-                            .pane
+                    show_hidden: slot.pane.show_hidden(),
+                    // The age stamp exactly as it was LAST WRITTEN, not
+                    // "now": stamping every capture with the clock meant no
+                    // body was ever equal to the previous one and the tick
+                    // wrote every second. The policy stamps it when it
+                    // prepares the body, and `touched` remembers the stamp. A
+                    // slot never stamped goes to zero and the first write
+                    // stamps it, which is what the terminal does.
+                    touched_ms: self.session.touched.get(id).copied().unwrap_or(0),
+                    // By PATH, which is the row's identity: a restored index
+                    // over a listing that changed points at a different file.
+                    // The cap belongs to the model.
+                    marks: if marks {
+                        slot.pane
                             .marked_entries()
                             .iter()
                             .take(norte_frontend::session::MARKS_CAP)

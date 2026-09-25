@@ -1,11 +1,11 @@
-//! Golden de los JSON Schema publicados (ADR 0007, spec §13): se generan
-//! desde los MISMOS structs serde que parsean — si el código cambia el
-//! formato, este test obliga a republicar el schema.
+//! Golden of the published JSON Schemas (ADR 0007, spec §13): generated
+//! from the SAME serde structs that parse them — if the code changes the
+//! format, this test forces republishing the schema.
 
 use std::path::Path;
 
 #[test]
-fn los_schemas_publicados_no_divergen() {
+fn published_schemas_do_not_diverge() {
     let cases = [
         (
             "norte.schema.json",
@@ -21,19 +21,19 @@ fn los_schemas_publicados_no_divergen() {
         let json = format!("{}\n", serde_json::to_string_pretty(&schema).unwrap());
         let path = base.join(name);
         if std::env::var_os("NORTE_UPDATE_SCHEMA").is_some() {
-            std::fs::write(&path, &json).expect("escribir schema");
+            std::fs::write(&path, &json).expect("write schema");
             continue;
         }
-        let publicado = std::fs::read_to_string(&path)
+        let published = std::fs::read_to_string(&path)
             .unwrap_or_else(|_| {
-                panic!("falta docs/schema/{name}: regenera con NORTE_UPDATE_SCHEMA=1")
+                panic!("missing docs/schema/{name}: regenerate with NORTE_UPDATE_SCHEMA=1")
             })
-            // Cinturón además del .gitattributes: un checkout con CRLF no
-            // debe romper la comparación (cazado en CI de Windows).
+            // Belt in addition to .gitattributes: a checkout with CRLF must
+            // not break the comparison (caught in Windows CI).
             .replace("\r\n", "\n");
         assert_eq!(
-            publicado, json,
-            "docs/schema/{name} divergió del código: regenera con \
+            published, json,
+            "docs/schema/{name} diverged from the code: regenerate with \
              NORTE_UPDATE_SCHEMA=1 cargo nextest run -p norte-tui schemas"
         );
     }

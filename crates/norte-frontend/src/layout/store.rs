@@ -1,37 +1,38 @@
-//! El estado de los paneles, indexado por hueco.
+//! Pane state, indexed by slot.
 
 use std::collections::BTreeMap;
 
 use super::{Node, SlotId};
 
-/// Cuántos estados huérfanos se conservan antes de purgar el más antiguo.
+/// How many orphaned states are kept before purging the oldest.
 ///
-/// Generoso para una sesión de trabajo y acotado para que abrir y cerrar
-/// paneles toda una tarde no crezca sin fin.
+/// Generous for a work session and bounded so that opening and closing
+/// panes all afternoon does not grow without end.
 const ORPHAN_CAP: usize = 32;
 
-/// El estado de los paneles, indexado por hueco.
+/// Pane state, indexed by slot.
 ///
-/// GENÉRICO sobre el estado, y cada frontend pone el suyo: este crate tiene
-/// las mitades puras (`pane`, `viewer`, `compare`, `sync`), pero el TUI las
-/// envuelve en vistas propias y la GUI en otras distintas. Un enum concreto
-/// aquí arrastraría los tipos de vista de un frontend al grafo del otro.
+/// GENERIC over the state, and each frontend puts in its own: this crate
+/// has the pure halves (`pane`, `viewer`, `compare`, `sync`), but the TUI
+/// wraps them in its own views and the GUI in different ones. A concrete
+/// enum here would drag one frontend's view types into the other's graph.
 ///
-/// La elegibilidad para un rol NO necesita un trait sobre `P`: la decide el
-/// `kind` del hueco en el árbol más el registro.
+/// Eligibility for a role does NOT need a trait over `P`: it is decided by
+/// the slot's `kind` in the tree plus the registry.
 ///
-/// # Los huérfanos, y por qué no se borran
+/// # Orphans, and why they are not deleted
 ///
-/// Cerrar un hueco no borra su estado: pasa a huérfano. Reabrir la misma
-/// disposición recupera el historial, las marcas y el cursor en vez de
-/// arrancar en blanco — que es lo que un usuario espera de cerrar una pestaña
-/// por error. El precio es acotado: pasado el tope (32 por defecto) se purga el más
-/// antiguo, y la edad es el orden en que quedaron huérfanos, no el reloj (aquí
-/// no hay reloj, y no se quiere uno: haría los tests dependientes del tiempo).
+/// Closing a slot does not delete its state: it becomes an orphan.
+/// Reopening the same layout recovers the history, the marks and the
+/// cursor instead of starting blank — which is what a user expects from
+/// closing a tab by mistake. The price is bounded: past the ceiling (32 by
+/// default) the oldest is purged, and age is the order they became orphans
+/// in, not the clock (there is no clock here, and none is wanted: it would
+/// make the tests time-dependent).
 #[derive(Debug, Clone)]
 pub struct SlotStore<P> {
     slots: BTreeMap<SlotId, P>,
-    /// Huérfanos del más ANTIGUO al más reciente.
+    /// Orphans from the OLDEST to the most recent.
     orphans: Vec<SlotId>,
     cap: usize,
 }
@@ -43,7 +44,7 @@ impl<P> Default for SlotStore<P> {
 }
 
 impl<P> SlotStore<P> {
-    /// Un store con un tope de huérfanos a medida.
+    /// A store with a custom orphan ceiling.
     #[must_use]
     pub fn with_orphan_cap(cap: usize) -> Self {
         Self {
@@ -53,75 +54,76 @@ impl<P> SlotStore<P> {
         }
     }
 
-    /// Pone el estado de un hueco. Si ese id estaba huérfano, revive.
+    /// Sets a slot's state. If that id was orphaned, it revives.
     pub fn insert(&mut self, id: SlotId, state: P) {
         self.orphans.retain(|o| *o != id);
         self.slots.insert(id, state);
     }
 
-    /// El estado del hueco `id`, vivo o huérfano.
+    /// Slot `id`'s state, alive or orphaned.
     #[must_use]
     pub fn get(&self, id: SlotId) -> Option<&P> {
         self.slots.get(&id)
     }
 
-    /// El estado del hueco `id`, para mutarlo.
+    /// Slot `id`'s state, to mutate it.
     pub fn get_mut(&mut self, id: SlotId) -> Option<&mut P> {
         self.slots.get_mut(&id)
     }
 
-    /// Quita un hueco y su estado del todo. Lo usa quien de verdad quiere
-    /// olvidar, no el cierre de un panel.
+    /// Removes a slot and its state entirely. Used by whoever really wants
+    /// to forget, not by closing a pane.
     pub fn remove(&mut self, id: SlotId) -> Option<P> {
         self.orphans.retain(|o| *o != id);
         self.slots.remove(&id)
     }
 
-    /// Reclasifica contra `tree`: lo que el árbol menciona está VIVO, lo demás
-    /// queda huérfano; pasado el tope, se purga el más antiguo.
+    /// Reclassifies against `tree`: what the tree mentions is ALIVE,
+    /// everything else becomes orphaned; past the ceiling, the oldest is
+    /// purged.
     ///
-    /// Se llama tras cada cambio de layout.
+    /// Called after every layout change.
     pub fn sync_with(&mut self, tree: &Node) {
-        let vivos = tree.slot_ids();
-        // Los que vuelven al árbol dejan de ser huérfanos.
-        self.orphans.retain(|o| !vivos.contains(o));
-        // Los que salieron del árbol y aún no estaban en la lista, entran.
+        let alive = tree.slot_ids();
+        // Those that return to the tree stop being orphans.
+        self.orphans.retain(|o| !alive.contains(o));
+        // Those that left the tree and were not yet in the list, enter it.
         for id in self.slots.keys() {
-            if !vivos.contains(id) && !self.orphans.contains(id) {
+            if !alive.contains(id) && !self.orphans.contains(id) {
                 self.orphans.push(*id);
             }
         }
         while self.orphans.len() > self.cap {
-            let viejo = self.orphans.remove(0);
-            self.slots.remove(&viejo);
+            let oldest = self.orphans.remove(0);
+            self.slots.remove(&oldest);
         }
     }
 
-    /// Los estados, en orden de [`SlotId`].
+    /// The states, in [`SlotId`] order.
     pub fn values(&self) -> impl Iterator<Item = &P> {
         self.slots.values()
     }
 
-    /// Los estados, en orden de [`SlotId`], para mutarlos.
+    /// The states, in [`SlotId`] order, to mutate them.
     pub fn values_mut(&mut self) -> impl Iterator<Item = &mut P> {
         self.slots.values_mut()
     }
 
-    /// Los pares `(id, estado)`, en orden de [`SlotId`].
+    /// The `(id, state)` pairs, in [`SlotId`] order.
     pub fn iter(&self) -> impl Iterator<Item = (SlotId, &P)> {
         self.slots.iter().map(|(id, p)| (*id, p))
     }
 
-    /// Los pares `(id, estado)`, en orden de [`SlotId`], para mutarlos.
+    /// The `(id, state)` pairs, in [`SlotId`] order, to mutate them.
     pub fn iter_mut(&mut self) -> impl Iterator<Item = (SlotId, &mut P)> {
         self.slots.iter_mut().map(|(id, p)| (*id, p))
     }
 
-    /// Intercambia el estado de dos huecos, dejando los ids donde estaban.
+    /// Swaps two slots' state, leaving the ids where they were.
     ///
-    /// Lo pide el gesto de intercambiar paneles: lo que cambia de sitio es el
-    /// CONTENIDO, no la identidad del hueco — si se movieran los ids, todo lo
-    /// que guarda un `SlotId` de antes pasaría a nombrar al otro.
+    /// Requested by the swap-panes gesture: what changes place is the
+    /// CONTENT, not the slot's identity — if the ids moved, anything
+    /// holding an earlier `SlotId` would end up naming the other one.
     pub fn swap(&mut self, a: SlotId, b: SlotId) {
         if a == b {
             return;
@@ -135,19 +137,19 @@ impl<P> SlotStore<P> {
         }
     }
 
-    /// Los ids huérfanos, del más antiguo al más reciente.
+    /// The orphaned ids, from the oldest to the most recent.
     #[must_use]
     pub fn orphans(&self) -> Vec<SlotId> {
         self.orphans.clone()
     }
 
-    /// Cuántos estados hay guardados, vivos y huérfanos.
+    /// How many states are stored, alive and orphaned.
     #[must_use]
     pub fn len(&self) -> usize {
         self.slots.len()
     }
 
-    /// ¿Ninguno?
+    /// None at all?
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.slots.is_empty()
@@ -162,7 +164,7 @@ mod tests {
     fn browser(id: u32) -> Node {
         Node::slot(SlotId(id), KindId::browser())
     }
-    fn dos(a: u32, b: u32) -> Node {
+    fn two(a: u32, b: u32) -> Node {
         Node::Split {
             dir: Dir::Horizontal,
             sizes: vec![Size::Weight(1), Size::Weight(1)],
@@ -170,48 +172,53 @@ mod tests {
         }
     }
 
-    /// Cerrar un hueco NO borra su estado: queda huérfano, para que reabrir la
-    /// misma disposición recupere el historial en vez de arrancar en blanco.
+    /// Closing a slot does NOT delete its state: it becomes an orphan, so
+    /// reopening the same layout recovers the history instead of starting
+    /// blank.
     #[test]
-    fn cerrar_un_hueco_deja_su_estado_huerfano() {
+    fn closing_a_slot_leaves_its_state_orphaned() {
         let mut s: SlotStore<u32> = SlotStore::default();
         s.insert(SlotId(1), 10);
         s.insert(SlotId(2), 20);
         s.sync_with(&browser(1));
-        assert_eq!(s.get(SlotId(2)), Some(&20), "el estado del cerrado sigue");
+        assert_eq!(
+            s.get(SlotId(2)),
+            Some(&20),
+            "the closed one's state remains"
+        );
         assert_eq!(s.orphans(), vec![SlotId(2)]);
     }
 
-    /// Los huérfanos tienen tope: sin él, abrir y cerrar paneles toda una
-    /// sesión crece sin fin. Se purga el MÁS ANTIGUO.
+    /// Orphans have a ceiling: without it, opening and closing panes for a
+    /// whole session grows without end. The OLDEST is purged.
     #[test]
-    fn los_huerfanos_tienen_tope_y_se_purga_el_mas_antiguo() {
+    fn orphans_have_a_cap_and_the_oldest_is_purged() {
         let mut s: SlotStore<u32> = SlotStore::with_orphan_cap(2);
         for i in 1..=4 {
             s.insert(SlotId(i), i);
         }
         s.sync_with(&browser(4));
         assert_eq!(s.orphans().len(), 2);
-        assert!(s.get(SlotId(1)).is_none(), "el más antiguo se fue");
-        assert_eq!(s.get(SlotId(4)), Some(&4), "el vivo no se toca");
+        assert!(s.get(SlotId(1)).is_none(), "the oldest is gone");
+        assert_eq!(s.get(SlotId(4)), Some(&4), "the live one is untouched");
     }
 
-    /// Reabrir un id huérfano lo revive con su estado.
+    /// Reopening an orphaned id revives it with its state.
     #[test]
-    fn reabrir_un_id_huerfano_recupera_su_estado() {
+    fn reopening_an_orphan_id_recovers_its_state() {
         let mut s: SlotStore<u32> = SlotStore::default();
         s.insert(SlotId(1), 10);
         s.insert(SlotId(2), 20);
         s.sync_with(&browser(1));
-        s.sync_with(&dos(1, 2));
+        s.sync_with(&two(1, 2));
         assert_eq!(s.get(SlotId(2)), Some(&20));
         assert!(s.orphans().is_empty());
     }
 
-    /// Intercambiar mueve el CONTENIDO y deja los ids quietos: si se movieran
-    /// los ids, cualquier `SlotId` guardado de antes nombraría al otro hueco.
+    /// Swapping moves the CONTENT and leaves the ids in place: if the ids
+    /// moved, any `SlotId` stored earlier would name the other slot.
     #[test]
-    fn intercambiar_mueve_el_contenido_no_los_ids() {
+    fn swapping_moves_the_content_not_the_ids() {
         let mut s: SlotStore<u32> = SlotStore::default();
         s.insert(SlotId(1), 10);
         s.insert(SlotId(2), 20);
@@ -221,11 +228,11 @@ mod tests {
         assert_eq!(s.values().copied().collect::<Vec<_>>(), vec![20, 10]);
     }
 
-    /// Dos `sync_with` seguidos sin cambios no duplican el huérfano: si lo
-    /// hicieran, el tope se agotaría con un solo hueco cerrado y un frame
-    /// repetido bastaría para tirar estado vivo.
+    /// Two `sync_with` calls in a row with no changes do not duplicate the
+    /// orphan: if they did, the ceiling would run out with a single closed
+    /// slot, and one repeated frame would be enough to drop live state.
     #[test]
-    fn sincronizar_dos_veces_no_duplica_al_huerfano() {
+    fn syncing_twice_does_not_duplicate_the_orphan() {
         let mut s: SlotStore<u32> = SlotStore::default();
         s.insert(SlotId(1), 10);
         s.insert(SlotId(2), 20);

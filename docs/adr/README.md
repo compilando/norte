@@ -151,3 +151,7 @@ edits.
 | [0148](0148-repeating-a-failed-transfer-and-the-thin-line.md) | Repeating a failed transfer, and the thin line | accepted |
 | [0149](0149-a-serial-queue-for-transfers.md) | A serial queue for transfers | accepted |
 | [0150](0150-rsa-client-keys-as-a-per-connection-opt-in.md) | RSA client keys as a per-connection opt-in | accepted |
+| [0151](0151-a-destination-that-goes-away-mid-copy.md) | A destination that goes away mid-copy | accepted |
+| [0152](0152-an-undo-of-a-creation-checks-what-it-is-about-to-delete.md) | An undo of a creation checks what it is about to delete | accepted |
+| [0153](0153-the-subshell-is-moved-through-a-mailbox-not-by-typing.md) | The subshell is moved through a mailbox, not by typing | accepted |
+| [0154](0154-the-source-code-is-written-in-english.md) | The source code is written in English | accepted |

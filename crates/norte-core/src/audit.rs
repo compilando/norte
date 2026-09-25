@@ -1,22 +1,22 @@
-//! Audit del journal (M3-5, ADR 0025): export determinista (JSONL/CSV) y
-//! anclas HMAC del head de la cadena.
+//! Journal audit (M3-5, ADR 0025): deterministic export (JSONL/CSV) and HMAC
+//! anchors for the chain's head.
 //!
-//! **Garantía honesta de las anclas.** El hash-chain keyless del journal no
-//! resiste a un atacante con escritura en la DB (#63): reescritura total,
-//! truncación de cola y rollback pasan `verify_chain`. Un ancla
-//! `HMAC-SHA256(key, "norte-anchor-v1" ‖ seq ‖ head)` con la clave en el
-//! keyring del SO acota esa ventana: REESCRIBIR la historia cubierta por un
-//! ancla exige ADEMÁS la clave. Lo que la clave NO protege: el propio
-//! fichero de anclas vive en el mismo dir — un atacante con escritura de
-//! ficheros puede BORRARLO, recortarle líneas (las anteriores siguen siendo
-//! MACs válidos) o restaurar un snapshot coherente del PAR (DB + anclas),
-//! todo SIN la clave. Por eso `verify` reporta la COBERTURA (hasta qué seq
-//! llegan las anclas) y trata la ausencia de anclas como fallo salvo opt-out
-//! explícito; la copia EXTERNA del fichero de anclas (otro host, log
-//! remoto) es lo que convierte el recorte en detectable. Tampoco cubre:
-//! atacante con acceso al keyring, ni mutaciones posteriores al último
-//! ancla. El core NO conoce el keyring: la clave entra como bytes (la
-//! resuelve el CLI vía `norte-connect`, regla 10).
+//! **Honest guarantee for the anchors.** The journal's keyless hash chain
+//! does not withstand an attacker with write access to the DB (#63): full
+//! rewrite, tail truncation and rollback all pass `verify_chain`. An anchor
+//! `HMAC-SHA256(key, "norte-anchor-v1" ‖ seq ‖ head)` with the key in the
+//! OS keyring bounds that window: REWRITING history covered by an anchor
+//! ALSO requires the key. What the key does NOT protect: the anchors file
+//! itself lives in the same dir — an attacker with file write access can
+//! DELETE it, trim lines off it (the earlier ones are still valid MACs), or
+//! restore a coherent snapshot of the PAIR (DB + anchors), all WITHOUT the
+//! key. That's why `verify` reports the COVERAGE (up to which seq the
+//! anchors reach) and treats absent anchors as a failure unless explicitly
+//! opted out; the EXTERNAL copy of the anchors file (another host, a remote
+//! log) is what makes the trim detectable. Also not covered: an attacker
+//! with keyring access, or mutations after the last anchor. The core does
+//! NOT know the keyring: the key comes in as bytes (resolved by the CLI via
+//! `norte-connect`, rule 10).
 
 use hmac::{Hmac, Mac};
 use serde::Serialize;
@@ -27,46 +27,46 @@ use crate::journal::JournalEntry;
 
 type HmacSha256 = Hmac<Sha256>;
 
-/// Un ancla: el head `(seq, entry_hash)` de la cadena en el momento de
-/// anclar. Se persiste como UNA línea JSON en `journal-anchors.jsonl`
-/// (append-only) junto a su MAC.
+/// An anchor: the chain's `(seq, entry_hash)` head at the moment it was
+/// anchored. Persisted as ONE JSON line in `journal-anchors.jsonl`
+/// (append-only) alongside its MAC.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Anchor {
-    /// `seq` del head anclado.
+    /// `seq` of the anchored head.
     pub seq: i64,
-    /// `entry_hash` del head anclado.
+    /// `entry_hash` of the anchored head.
     pub head: [u8; 32],
 }
 
-/// Veredicto de UNA línea de anclas contra la cadena actual.
+/// Verdict for ONE anchor line against the current chain.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AnchorVerdict {
-    /// MAC válido y el hash de la cadena en ese `seq` coincide.
+    /// Valid MAC and the chain's hash at that `seq` matches.
     Ok(Anchor),
-    /// La línea no parsea (fichero dañado o formato futuro).
+    /// The line doesn't parse (corrupted file or a future format).
     BadLine,
-    /// MAC inválido: el ancla no la produjo esta clave (fabricada o clave
-    /// rotada sin re-anclar).
+    /// Invalid MAC: this key did not produce the anchor (forged, or the key
+    /// rotated without re-anchoring).
     BadMac,
-    /// La cadena YA NO TIENE ese `seq`: truncación/rollback por detrás del
-    /// ancla.
+    /// The chain NO LONGER HAS that `seq`: truncation/rollback behind the
+    /// anchor.
     MissingSeq(Anchor),
-    /// El `seq` existe pero su hash difiere: la historia se reescribió.
+    /// The `seq` exists but its hash differs: history was rewritten.
     HashMismatch(Anchor),
 }
 
-/// Context string del MAC: separación de dominio + versión del formato. Si
-/// la clave se reutilizara para otro MAC, o el formato cambia, no hay
-/// confusión cross-protocol ni migración ambigua.
+/// The MAC's context string: domain separation + format version. If the key
+/// were ever reused for another MAC, or the format changes, there's no
+/// cross-protocol confusion or ambiguous migration.
 const ANCHOR_CONTEXT: &[u8] = b"norte-anchor-v1";
 
-/// `HMAC-SHA256(key, "norte-anchor-v1" ‖ seq_le ‖ head)`. Campos de longitud
-/// FIJA (15+8+32): sin ambigüedad de concatenación. Deuda anotada: sin
-/// identidad del journal en el MAC, un ancla de OTRO perfil (`$NORTE_CONFIG_DIR`)
-/// del mismo usuario es MAC-válida contra este — produce `MissingSeq`/
-/// `HashMismatch` (falsa alarma), no bypass.
+/// `HMAC-SHA256(key, "norte-anchor-v1" ‖ seq_le ‖ head)`. FIXED-length
+/// fields (15+8+32): no concatenation ambiguity. Noted debt: with no
+/// journal identity in the MAC, an anchor from ANOTHER profile
+/// (`$NORTE_CONFIG_DIR`) of the same user is MAC-valid against this one —
+/// it produces `MissingSeq`/`HashMismatch` (a false alarm), not a bypass.
 fn anchor_mac(key: &[u8], seq: i64, head: &[u8; 32]) -> [u8; 32] {
-    let mut mac = HmacSha256::new_from_slice(key).expect("HMAC acepta cualquier longitud de clave");
+    let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts any key length");
     mac.update(ANCHOR_CONTEXT);
     mac.update(&seq.to_le_bytes());
     mac.update(head);
@@ -86,7 +86,7 @@ fn unhex<const N: usize>(s: &str) -> Option<[u8; N]> {
     Some(out)
 }
 
-/// Serializa un ancla como línea JSONL con su MAC (sin `\n` final).
+/// Serializes an anchor as a JSONL line with its MAC (no trailing `\n`).
 #[must_use]
 pub fn anchor_line(key: &[u8], anchor: &Anchor) -> String {
     let mac = anchor_mac(key, anchor.seq, &anchor.head);
@@ -98,15 +98,15 @@ pub fn anchor_line(key: &[u8], anchor: &Anchor) -> String {
     )
 }
 
-/// Verifica UNA línea de anclas: parseo → MAC → contraste con el hash que la
-/// cadena tiene HOY en ese `seq` (`None` = el seq ya no existe).
+/// Verifies ONE anchor line: parse → MAC → compare against the hash the
+/// chain has TODAY at that `seq` (`None` = the seq no longer exists).
 ///
-/// El MAC se comprueba ANTES de mirar la cadena: una línea fabricada sin la
-/// clave jamás llega a acusar a la cadena.
+/// The MAC is checked BEFORE looking at the chain: a line forged without
+/// the key never gets to accuse the chain of anything.
 ///
 /// # Panics
-/// Nunca: HMAC acepta claves de cualquier longitud (el `expect` es la
-/// invariante del constructor de la API de `RustCrypto`).
+/// Never: HMAC accepts keys of any length (the `expect` documents that
+/// invariant of `RustCrypto`'s constructor API).
 #[must_use]
 pub fn verify_anchor_line(key: &[u8], line: &str, hash_at_seq: Option<[u8; 32]>) -> AnchorVerdict {
     #[derive(serde::Deserialize)]
@@ -121,8 +121,8 @@ pub fn verify_anchor_line(key: &[u8], line: &str, hash_at_seq: Option<[u8; 32]>)
     let (Some(head), Some(mac)) = (unhex::<32>(&parsed.head), unhex::<32>(&parsed.mac)) else {
         return AnchorVerdict::BadLine;
     };
-    // Comparación en tiempo constante (hmac::Mac::verify_slice).
-    let mut check = HmacSha256::new_from_slice(key).expect("HMAC acepta cualquier longitud");
+    // Constant-time comparison (hmac::Mac::verify_slice).
+    let mut check = HmacSha256::new_from_slice(key).expect("HMAC accepts any length");
     check.update(ANCHOR_CONTEXT);
     check.update(&parsed.seq.to_le_bytes());
     check.update(&head);
@@ -140,26 +140,26 @@ pub fn verify_anchor_line(key: &[u8], line: &str, hash_at_seq: Option<[u8; 32]>)
     }
 }
 
-/// Resultado de verificar TODO el fichero de anclas contra un snapshot de la
-/// cadena (regla 7: la orquestación vive en el core, el CLI solo traduce).
+/// Result of verifying the WHOLE anchors file against a snapshot of the
+/// chain (rule 7: orchestration lives in the core, the CLI only translates).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct AnchorsReport {
-    /// Anclas revisadas (líneas no vacías).
+    /// Anchors reviewed (non-empty lines).
     pub checked: u64,
-    /// Veredictos NO-Ok, con su número de línea (1-indexado).
+    /// NON-Ok verdicts, with their line number (1-indexed).
     pub bad: Vec<(usize, AnchorVerdict)>,
-    /// `seq` más alto entre las anclas Ok: hasta AHÍ llega la cobertura de
-    /// las anclas. Todo lo posterior en la cadena está SIN anclar — y un
-    /// recorte del fichero de anclas se manifiesta como cobertura que
-    /// retrocede (por eso `verify` la imprime SIEMPRE).
+    /// Highest `seq` among the Ok anchors: the anchors' coverage reaches
+    /// THAT FAR. Everything later in the chain is UNANCHORED — and a trim of
+    /// the anchors file shows up as coverage moving backward (that's why
+    /// `verify` ALWAYS prints it).
     pub max_ok_seq: Option<i64>,
 }
 
-/// Verifica cada línea de `anchors_text` contra un SNAPSHOT de la cadena
-/// (mapa `seq → entry_hash`, tomado de [`crate::Journal::entries`] tras un
-/// [`crate::Journal::verify_chain`] `Intact` — una sola lectura, veredicto
-/// coherente). El MAC decide ANTES de consultar el snapshot: una línea
-/// fabricada sin la clave jamás llega a acusar a la cadena.
+/// Verifies each line of `anchors_text` against a SNAPSHOT of the chain (a
+/// `seq → entry_hash` map, taken from [`crate::Journal::entries`] after a
+/// [`crate::Journal::verify_chain`] `Intact` — one read, one coherent
+/// verdict). The MAC decides BEFORE consulting the snapshot: a line forged
+/// without the key never gets to accuse the chain of anything.
 #[must_use]
 pub fn verify_anchors<S: std::hash::BuildHasher>(
     key: &[u8],
@@ -173,9 +173,10 @@ pub fn verify_anchors<S: std::hash::BuildHasher>(
         .filter(|(_, l)| !l.trim().is_empty())
     {
         report.checked += 1;
-        // El lookup se hace tras validar el MAC dentro de verify_anchor_line
-        // (el closure de abajo solo corre para líneas con seq parseado; el
-        // acceso al mapa es inocuo, el VEREDICTO exige MAC válido primero).
+        // The lookup happens after the MAC is validated inside
+        // verify_anchor_line (the closure below only runs for lines with a
+        // parsed seq; the map access is harmless, the VERDICT requires a
+        // valid MAC first).
         let seq = serde_json::from_str::<serde_json::Value>(line)
             .ok()
             .and_then(|v| v["seq"].as_i64());
@@ -190,10 +191,10 @@ pub fn verify_anchors<S: std::hash::BuildHasher>(
     report
 }
 
-/// Fila del export: los campos del [`JournalEntry`] en forma estable. Los
-/// paths del journal son bytes `to_wire` (regla 1) — normalmente UTF-8 (la
-/// forma wire es percent-encoded); si un blob corrupto no lo es, el campo va
-/// como `<campo>_hex` y el normal queda `null`, jamás lossy silencioso.
+/// An export row: a [`JournalEntry`]'s fields in a stable shape. The
+/// journal's paths are `to_wire` bytes (rule 1) — normally UTF-8 (the wire
+/// form is percent-encoded); if a corrupted blob isn't, the field goes as
+/// `<field>_hex` and the normal one stays `null`, never silently lossy.
 #[derive(Serialize)]
 struct AuditRow<'a> {
     seq: i64,
@@ -214,16 +215,15 @@ struct AuditRow<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     undoes_seq: Option<i64>,
     entry_hash: String,
-    /// Al FINAL, y omitido cuando no hay lote: un export viejo y uno nuevo de
-    /// las mismas entradas sueltas siguen siendo idénticos. Sin él, cuarenta
-    /// renames de UNA acción de un agente se leen como cuarenta acciones
-    /// independientes, que es justo la pregunta que un audit existe para
-    /// responder.
+    /// LAST, and omitted when there's no batch: an old export and a new one
+    /// of the same standalone entries stay identical. Without it, forty
+    /// renames from ONE agent action read as forty independent actions,
+    /// which is exactly the question an audit exists to answer.
     #[serde(skip_serializing_if = "Option::is_none")]
     batch_id: Option<i64>,
 }
 
-/// Campo de bytes-wire: `(utf8, hex_fallback)`.
+/// Wire-bytes field: `(utf8, hex_fallback)`.
 fn wire_field(bytes: &[u8]) -> (Option<&str>, Option<String>) {
     match std::str::from_utf8(bytes) {
         Ok(s) => (Some(s), None),
@@ -254,28 +254,28 @@ fn row(e: &JournalEntry) -> AuditRow<'_> {
     }
 }
 
-/// Export JSONL: una línea JSON por entrada, orden de `seq`, claves en orden
-/// de declaración (estable entre ejecuciones — apto para diff/firma).
+/// JSONL export: one JSON line per entry, in `seq` order, with keys in
+/// declaration order (stable across runs — fit for diff/signing).
 ///
 /// # Panics
-/// Nunca: un struct plano de strings/enteros siempre serializa (el `expect`
-/// documenta esa invariante).
+/// Never: a flat struct of strings/integers always serializes (the `expect`
+/// documents that invariant).
 #[must_use]
 pub fn export_jsonl(entries: &[JournalEntry]) -> String {
     let mut out = String::new();
     for e in entries {
-        out.push_str(&serde_json::to_string(&row(e)).expect("struct plano serializa"));
+        out.push_str(&serde_json::to_string(&row(e)).expect("flat struct serializes"));
         out.push('\n');
     }
     out
 }
 
-/// Escapa un campo CSV (RFC 4180: comillas dobladas; se cita siempre que
-/// haga falta) y NEUTRALIZA fórmulas: el CSV es «para humanos» (ADR 0025) —
-/// se abrirá en Excel/LibreOffice — y los nombres de archivo son hostiles
-/// por diseño (`=HYPERLINK(...)`, `=cmd|...`); un campo que empiece por
-/// `=`/`+`/`-`/`@`/TAB se prefija con `'` (convención estándar anti
-/// formula-injection en material de auditoría).
+/// Escapes a CSV field (RFC 4180: doubled quotes; quoted whenever needed)
+/// and NEUTRALIZES formulas: the CSV is "for humans" (ADR 0025) — it will
+/// be opened in Excel/LibreOffice — and filenames are hostile by design
+/// (`=HYPERLINK(...)`, `=cmd|...`); a field starting with `=`/`+`/`-`/`@`/TAB
+/// is prefixed with `'` (the standard anti formula-injection convention for
+/// audit material).
 fn csv_field(s: &str) -> String {
     let neutralized = if s.starts_with(['=', '+', '-', '@', '\t']) {
         format!("'{s}")
@@ -289,15 +289,15 @@ fn csv_field(s: &str) -> String {
     }
 }
 
-/// Export CSV con cabecera fija. Los paths no-UTF-8 van en hex con prefijo
-/// `hex:` — AMBIGUO a sabiendas: un path UTF-8 que empiece literalmente por
-/// `hex:` es indistinguible (improbable: la forma wire empieza por scheme
-/// whitelisted). Para consumo por máquina usa el JSONL, que separa
-/// `path`/`path_hex` en campos distintos.
+/// CSV export with a fixed header. Non-UTF-8 paths go in hex with a `hex:`
+/// prefix — knowingly AMBIGUOUS: a UTF-8 path that literally starts with
+/// `hex:` is indistinguishable (unlikely: the wire form starts with a
+/// whitelisted scheme). For machine consumption use the JSONL, which keeps
+/// `path`/`path_hex` in separate fields.
 #[must_use]
 pub fn export_csv(entries: &[JournalEntry]) -> String {
-    // `batch_id` se AÑADE al final: las columnas que ya existían no se mueven,
-    // así que un consumidor por posición sigue leyendo lo mismo.
+    // `batch_id` is APPENDED at the end: existing columns don't move, so a
+    // by-position consumer keeps reading the same thing.
     let mut out = String::from(
         "seq,ts_ms,actor_kind,actor_id,op,path,path_to,reversal,undoes_seq,entry_hash,batch_id\n",
     );
@@ -348,7 +348,7 @@ mod tests {
     }
 
     #[test]
-    fn jsonl_es_estable_y_una_linea_por_entrada() {
+    fn jsonl_is_stable_and_one_line_per_entry() {
         let e = [entry(1, b"mem:///a.txt"), entry(2, b"mem:///b.txt")];
         let out = export_jsonl(&e);
         assert_eq!(out.lines().count(), 2);
@@ -356,47 +356,47 @@ mod tests {
         assert_eq!(first["seq"], 1);
         assert_eq!(first["path"], "mem:///a.txt");
         assert_eq!(first["actor_id"], "claude");
-        assert_eq!(out, export_jsonl(&e), "determinista");
+        assert_eq!(out, export_jsonl(&e), "deterministic");
     }
 
     #[test]
-    fn jsonl_bytes_no_utf8_van_en_hex_jamas_lossy() {
+    fn jsonl_non_utf8_bytes_go_in_hex_never_lossy() {
         let e = [entry(1, b"\xff\xfe")];
         let v: serde_json::Value =
             serde_json::from_str(export_jsonl(&e).lines().next().unwrap()).unwrap();
-        assert!(v.get("path").is_none(), "sin path lossy");
+        assert!(v.get("path").is_none(), "no lossy path");
         assert_eq!(v["path_hex"], "fffe");
     }
 
-    /// El lote SALE en los dos exports: sin él, n renames de UNA acción de un
-    /// agente se leen como n acciones sueltas. Ausente ⇒ ausente (JSONL) y
-    /// vacío (CSV), así que un export de entradas sueltas no cambia.
+    /// The batch SHOWS UP in both exports: without it, n renames from ONE
+    /// agent action read as n independent actions. Absent ⇒ absent (JSONL)
+    /// and empty (CSV), so an export of standalone entries doesn't change.
     #[test]
-    fn el_lote_sale_en_ambos_exports_y_ausente_no_cambia_nada() {
-        let suelta = entry(1, b"mem:///a.txt");
-        let mut agrupada = entry(2, b"mem:///b.txt");
-        agrupada.batch_id = Some(7);
-        let e = [suelta, agrupada];
+    fn the_batch_shows_up_in_both_exports_and_absent_changes_nothing() {
+        let standalone = entry(1, b"mem:///a.txt");
+        let mut grouped = entry(2, b"mem:///b.txt");
+        grouped.batch_id = Some(7);
+        let e = [standalone, grouped];
 
         let jsonl = export_jsonl(&e);
         let mut lines = jsonl.lines();
         let v0: serde_json::Value = serde_json::from_str(lines.next().unwrap()).unwrap();
         let v1: serde_json::Value = serde_json::from_str(lines.next().unwrap()).unwrap();
-        assert!(v0.get("batch_id").is_none(), "sin lote, sin clave");
+        assert!(v0.get("batch_id").is_none(), "no batch, no key");
         assert_eq!(v1["batch_id"], 7);
 
         let csv = export_csv(&e);
         let header = csv.lines().next().unwrap();
-        assert!(header.ends_with(",batch_id"), "columna al final: {header}");
+        assert!(header.ends_with(",batch_id"), "column at the end: {header}");
         assert!(
             csv.lines().nth(1).unwrap().ends_with(','),
-            "sin lote, vacío"
+            "no batch, empty"
         );
         assert!(csv.lines().nth(2).unwrap().ends_with(",7"));
     }
 
     #[test]
-    fn csv_escapa_comas_y_comillas() {
+    fn csv_escapes_commas_and_quotes() {
         let e = [entry(1, br#"mem:///a,"b".txt"#)];
         let out = export_csv(&e);
         let data = out.lines().nth(1).unwrap();
@@ -404,7 +404,7 @@ mod tests {
     }
 
     #[test]
-    fn ancla_round_trip_y_mac_fabricado_se_rechaza() {
+    fn anchor_round_trip_and_forged_mac_is_rejected() {
         let key = [7u8; 32];
         let a = Anchor {
             seq: 5,
@@ -415,12 +415,12 @@ mod tests {
             verify_anchor_line(&key, &line, Some(a.head)),
             AnchorVerdict::Ok(a)
         );
-        // Otra clave NO produce la misma línea válida.
+        // Another key does NOT produce the same valid line.
         assert_eq!(
             verify_anchor_line(&[8u8; 32], &line, Some(a.head)),
             AnchorVerdict::BadMac
         );
-        // Línea fabricada sin la clave: MAC inválido antes de mirar nada.
+        // Line forged without the key: invalid MAC before looking at anything.
         let forged = line.replace("\"seq\":5", "\"seq\":6");
         assert_eq!(
             verify_anchor_line(&key, &forged, Some(a.head)),
@@ -429,19 +429,19 @@ mod tests {
     }
 
     #[test]
-    fn ancla_detecta_truncacion_y_reescritura() {
+    fn anchor_detects_truncation_and_rewrite() {
         let key = [7u8; 32];
         let a = Anchor {
             seq: 5,
             head: [9u8; 32],
         };
         let line = anchor_line(&key, &a);
-        // Truncación/rollback: la cadena ya no llega al seq anclado.
+        // Truncation/rollback: the chain no longer reaches the anchored seq.
         assert_eq!(
             verify_anchor_line(&key, &line, None),
             AnchorVerdict::MissingSeq(a)
         );
-        // Reescritura: el seq existe con OTRO hash.
+        // Rewrite: the seq exists with ANOTHER hash.
         assert_eq!(
             verify_anchor_line(&key, &line, Some([1u8; 32])),
             AnchorVerdict::HashMismatch(a)
@@ -449,22 +449,22 @@ mod tests {
     }
 
     #[test]
-    fn linea_ilegible_es_bad_line() {
+    fn unreadable_line_is_bad_line() {
         assert_eq!(
             verify_anchor_line(&[7u8; 32], "no-json", None),
             AnchorVerdict::BadLine
         );
         assert_eq!(
-            verify_anchor_line(&[7u8; 32], r#"{"seq":1,"head":"corto","mac":"00"}"#, None),
+            verify_anchor_line(&[7u8; 32], r#"{"seq":1,"head":"short","mac":"00"}"#, None),
             AnchorVerdict::BadLine
         );
     }
 
-    /// GOLDEN del formato de línea persistido: clave/seq/head fijos → línea
-    /// EXACTA. Si esto cambia, el fichero de anclas existente deja de
-    /// verificar: exige bump del context string ("norte-anchor-v2").
+    /// GOLDEN for the persisted line format: fixed key/seq/head → EXACT
+    /// line. If this changes, the existing anchors file stops verifying:
+    /// requires bumping the context string ("norte-anchor-v2").
     #[test]
-    fn golden_formato_de_linea_de_ancla() {
+    fn golden_anchor_line_format() {
         let line = anchor_line(
             &[7u8; 32],
             &Anchor {
@@ -479,23 +479,23 @@ mod tests {
     }
 
     #[test]
-    fn csv_neutraliza_formulas() {
+    fn csv_neutralizes_formulas() {
         let mut e = entry(1, b"=HYPERLINK(\"http://evil\")");
         e.actor_id = Some("-2-2".into());
         let out = export_csv(&[e]);
         let data = out.lines().nth(1).unwrap();
         assert!(
             data.contains("'=HYPERLINK"),
-            "formula del path neutralizada: {data}"
+            "path formula neutralized: {data}"
         );
         assert!(
             data.contains(",'-2-2,"),
-            "actor_id elegido por el agente tambien: {data}"
+            "actor_id chosen by the agent too: {data}"
         );
     }
 
     #[test]
-    fn verify_anchors_reporta_cobertura_y_malas() {
+    fn verify_anchors_reports_coverage_and_bad_ones() {
         let key = [7u8; 32];
         let a1 = Anchor {
             seq: 1,
@@ -506,7 +506,7 @@ mod tests {
             head: [3u8; 32],
         };
         let text = format!(
-            "{}\n\n{}\nbasura\n",
+            "{}\n\n{}\ngarbage\n",
             anchor_line(&key, &a1),
             anchor_line(&key, &a2)
         );
@@ -514,13 +514,13 @@ mod tests {
         chain.insert(1, [1u8; 32]);
         chain.insert(3, [3u8; 32]);
         let r = verify_anchors(&key, &text, &chain);
-        assert_eq!(r.checked, 3, "las vacias no cuentan");
-        assert_eq!(r.max_ok_seq, Some(3), "cobertura = seq mas alto Ok");
+        assert_eq!(r.checked, 3, "empty ones don't count");
+        assert_eq!(r.max_ok_seq, Some(3), "coverage = highest Ok seq");
         assert_eq!(r.bad, vec![(4, AnchorVerdict::BadLine)]);
-        // Recorte del par: la cadena retrocedio a seq<3 -> MissingSeq.
+        // Trimming the pair: the chain fell back to seq<3 -> MissingSeq.
         chain.remove(&3);
         let r = verify_anchors(&key, &text, &chain);
-        assert_eq!(r.max_ok_seq, Some(1), "la cobertura RETROCEDE — visible");
+        assert_eq!(r.max_ok_seq, Some(1), "coverage MOVES BACKWARD — visible");
         assert!(matches!(
             r.bad.as_slice(),
             [

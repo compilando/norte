@@ -1,11 +1,11 @@
-//! #167/#177: el engine embebido lleva journal, y lo abre en la PRIMERA
-//! mutación — no al arrancar.
+//! #167/#177: the embedded engine carries a journal, and opens it on the
+//! FIRST mutation — not at startup.
 //!
-//! Lo que se pinea aquí es la diferencia entre las dos cosas. Abrirlo al
-//! arrancar toma el lock EXCLUSIVO de `SQLite` sobre `journal.db` para toda la
-//! vida del proceso, así que un `ntc` NAVEGANDO impedía arrancar al daemon (y
-//! con él a `norte mcp serve`) y le negaba la lectura a `norte audit`. Abrirlo
-//! en la primera mutación conserva el registro sin conservar el estorbo.
+//! What is pinned down here is the difference between the two. Opening it at
+//! startup takes `SQLite`'s EXCLUSIVE lock on `journal.db` for the process's
+//! whole life, so an `ntc` just BROWSING kept the daemon from starting (and
+//! with it `norte mcp serve`), and denied `norte audit` its read. Opening it
+//! on the first mutation keeps the record without keeping the obstruction.
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -21,28 +21,28 @@ fn vp(w: &str) -> VPath {
     VPath::parse(w).expect("wire")
 }
 
-/// Sink de avisos que los GUARDA: el test necesita contarlos, no verlos.
+/// A warnings sink that KEEPS them: the test needs to count them, not watch them.
 #[derive(Default)]
-struct Avisos(Mutex<Vec<NoJournal>>);
+struct Warnings(Mutex<Vec<NoJournal>>);
 
-impl JournalWarningSink for Avisos {
+impl JournalWarningSink for Warnings {
     fn on_no_journal(&self, why: &NoJournal) {
-        self.0.lock().expect("lock de avisos").push(why.clone());
+        self.0.lock().expect("warnings lock").push(why.clone());
     }
 
-    /// Este sink solo cuenta pérdidas; las recuperaciones las mira `Estados`.
+    /// This sink only counts losses; `States` watches the recoveries.
     fn on_journal_recovered(&self) {}
 }
 
-impl Avisos {
-    fn vistos(&self) -> Vec<NoJournal> {
-        self.0.lock().expect("lock de avisos").clone()
+impl Warnings {
+    fn seen(&self) -> Vec<NoJournal> {
+        self.0.lock().expect("warnings lock").clone()
     }
 }
 
-/// Un engine embebido sobre `dir` como directorio de estado, con un
-/// `MemProvider` registrado para poder mutar algo.
-fn engine_perezoso(dir: &Path) -> (Engine, Arc<LazyJournal>, Arc<MemProvider>) {
+/// An embedded engine over `dir` as the state directory, with a `MemProvider`
+/// registered so there is something to mutate.
+fn lazy_engine(dir: &Path) -> (Engine, Arc<LazyJournal>, Arc<MemProvider>) {
     let lazy = Arc::new(LazyJournal::in_state_dir(dir));
     let engine = Engine::with_lazy_journal(Arc::clone(&lazy));
     let mem = Arc::new(MemProvider::new());
@@ -50,69 +50,69 @@ fn engine_perezoso(dir: &Path) -> (Engine, Arc<LazyJournal>, Arc<MemProvider>) {
     (engine, lazy, mem)
 }
 
-/// El fichero que se disputa.
+/// The file that gets contested.
 fn journal_path(dir: &Path) -> std::path::PathBuf {
     dir.join("journal.db")
 }
 
-/// **La regresión de #177.** Una sesión que solo NAVEGA no toca el journal, así
-/// que el daemon y el `norte audit` pueden abrirlo mientras ella vive.
+/// **The regression from #177.** A session that only BROWSES does not touch
+/// the journal, so the daemon and `norte audit` can open it while it lives.
 ///
-/// La lista de lecturas no es decorativa: es la superficie por la que un TUI
-/// pasa antes de mutar nada, y cada una de ellas resolviendo el journal
-/// devolvería el bug. La última —`sync_apply` sin spool— es la más frágil de
-/// todas: en `Engine::sync_apply_as` el spool se comprueba ANTES que el
-/// journal, y basta invertir esas dos líneas para que abrir el diálogo de
-/// sincronización le quite el fichero al daemon.
+/// The list of reads is not decorative: it is the surface a TUI crosses
+/// before mutating anything, and any one of them resolving the journal would
+/// bring the bug back. The last one — `sync_apply` without a spool — is the
+/// most fragile of all: in `Engine::sync_apply_as` the spool is checked
+/// BEFORE the journal, and swapping those two lines is enough for opening the
+/// sync dialog to take the file away from the daemon.
 #[tokio::test]
-async fn navegar_no_toma_el_lock() {
+async fn browsing_does_not_take_the_lock() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let (engine, lazy, mem) = engine_perezoso(dir.path());
+    let (engine, lazy, mem) = lazy_engine(dir.path());
     mem.mkdir(&vp("mem:///sub")).await.expect("fixture");
 
     engine.stat(&vp("mem:///")).await.ok();
     engine.list(&vp("mem:///")).await.ok();
     engine.capabilities(&vp("mem:///")).await.ok();
     engine
-        .rename_batch_plan(&vp("mem:///"), &[("sub".into(), "otro".into())])
+        .rename_batch_plan(&vp("mem:///"), &[("sub".into(), "other".into())])
         .await
         .ok();
-    // `sync.apply` sin spool tiene que negarse SIN abrir el journal.
+    // `sync.apply` without a spool has to refuse WITHOUT opening the journal.
     let hash = norte_proto::methods::PlanHash::parse(&"0".repeat(64)).expect("hash");
     assert!(
         matches!(
             engine.sync_apply_as(&hash, 0, Actor::User).await,
             Err(norte_proto::Error::Unsupported)
         ),
-        "sin spool no se aplica"
+        "without a spool nothing applies"
     );
 
-    assert!(!lazy.attempted(), "navegar no abre el journal");
+    assert!(!lazy.attempted(), "browsing does not open the journal");
 
-    // Y esto es lo que antes fallaba: el daemon arrancando sobre el mismo
-    // directorio de estado, o un `norte audit` leyendo.
+    // And this is what used to fail: the daemon starting on the same state
+    // directory, or a `norte audit` reading.
     SqliteJournal::open(&journal_path(dir.path()))
         .await
-        .expect("el journal sigue libre mientras la sesión solo navega");
+        .expect("the journal is still free while the session only browses");
 }
 
-/// La primera mutación SÍ lo abre, y queda registrada (regla dura 4, #167).
+/// The first mutation DOES open it, and it gets recorded (hard rule 4, #167).
 #[tokio::test]
-async fn la_primera_mutacion_abre_el_journal_y_deja_fila() {
+async fn the_first_mutation_opens_the_journal_and_leaves_a_row() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let (engine, lazy, _mem) = engine_perezoso(dir.path());
+    let (engine, lazy, _mem) = lazy_engine(dir.path());
 
-    let h = engine.mkdir(&vp("mem:///nuevo")).await.expect("mkdir");
+    let h = engine.mkdir(&vp("mem:///new")).await.expect("mkdir");
     assert_eq!(h.join().await, TaskState::Completed);
 
-    assert!(lazy.attempted(), "la mutación abre el journal");
-    let journal = lazy.get().await.expect("esta sesión es la dueña");
+    assert!(lazy.attempted(), "the mutation opens the journal");
+    let journal = lazy.get().await.expect("this session owns it");
     let entries = journal.journal().entries().await.expect("entries");
-    assert_eq!(entries.len(), 1, "la mutación dejó su fila: {entries:?}");
+    assert_eq!(entries.len(), 1, "the mutation left its row: {entries:?}");
 
-    // Y ahora sí es suyo: el segundo en llegar se queda fuera. Con plazo CORTO a
-    // propósito: el de por omisión son cinco segundos esperando un lock que este
-    // test sabe que nadie va a soltar.
+    // And now it really is its own: the second one to arrive is shut out.
+    // With a SHORT deadline on purpose: the default is five seconds waiting on
+    // a lock this test knows nobody will release.
     assert!(
         SqliteJournal::open_with_busy_timeout(
             &journal_path(dir.path()),
@@ -120,28 +120,28 @@ async fn la_primera_mutacion_abre_el_journal_y_deja_fila() {
         )
         .await
         .is_err(),
-        "tras mutar, esta sesión es la dueña del fichero"
+        "after mutating, this session owns the file"
     );
 }
 
-/// El aviso sale CUANDO se necesita el journal, no antes, y UNA sola vez por
-/// sesión — y la mutación sigue adelante (hoy, #178).
+/// The warning fires WHEN the journal is needed, not before, and ONLY ONCE per
+/// session — and the mutation still goes ahead (today, #178).
 #[tokio::test]
-async fn el_aviso_sale_en_la_primera_mutacion_y_una_sola_vez() {
+async fn the_warning_fires_on_the_first_mutation_and_only_once() {
     let dir = tempfile::tempdir().expect("tempdir");
-    // Otro proceso (aquí: otro handle) se lleva el lock ANTES.
-    let _dueno = SqliteJournal::open(&journal_path(dir.path()))
+    // Another process (here: another handle) takes the lock FIRST.
+    let _owner = SqliteJournal::open(&journal_path(dir.path()))
         .await
-        .expect("el primero se lo lleva");
+        .expect("the first one takes it");
 
-    let (engine, lazy, _mem) = engine_perezoso(dir.path());
-    let avisos = Arc::new(Avisos::default());
-    lazy.set_warning_sink(Arc::clone(&avisos) as Arc<dyn JournalWarningSink>);
+    let (engine, lazy, _mem) = lazy_engine(dir.path());
+    let warnings = Arc::new(Warnings::default());
+    lazy.set_warning_sink(Arc::clone(&warnings) as Arc<dyn JournalWarningSink>);
 
     engine.stat(&vp("mem:///")).await.ok();
     assert!(
-        avisos.vistos().is_empty(),
-        "navegar no puede avisar de nada: el journal ni se ha pedido"
+        warnings.seen().is_empty(),
+        "browsing cannot warn of anything: the journal was never even asked for"
     );
 
     for n in 0..2 {
@@ -152,412 +152,428 @@ async fn el_aviso_sale_en_la_primera_mutacion_y_una_sola_vez() {
         assert_eq!(
             h.join().await,
             TaskState::Completed,
-            "sin journal se sigue mutando (#178), no se rompe la sesión"
+            "without a journal it still mutates (#178), the session does not break"
         );
     }
 
     assert_eq!(
-        avisos.vistos(),
+        warnings.seen(),
         vec![NoJournal::Busy],
-        "un aviso, en la primera mutación, y no uno por mutación"
+        "one warning, on the first mutation, and not one per mutation"
     );
 }
 
-/// Un sink instalado DESPUÉS de que el intento ya haya fallado recibe el aviso
-/// igual: si no, una sesión sin registro se quedaría muda por una carrera de
-/// arranque, que es justo el fallo que #177 llama «peor que hoy».
+/// A sink installed AFTER the attempt has already failed gets the warning all
+/// the same: otherwise, a session with no record would be left mute by a
+/// startup race, which is exactly the failure #177 calls "worse than today".
 #[tokio::test]
-async fn un_sink_tardio_recibe_el_aviso_pendiente() {
+async fn a_late_sink_gets_the_pending_warning() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let _dueno = SqliteJournal::open(&journal_path(dir.path()))
+    let _owner = SqliteJournal::open(&journal_path(dir.path()))
         .await
-        .expect("el primero se lo lleva");
+        .expect("the first one takes it");
 
-    let (engine, lazy, _mem) = engine_perezoso(dir.path());
+    let (engine, lazy, _mem) = lazy_engine(dir.path());
     let h = engine.mkdir(&vp("mem:///d")).await.expect("mkdir");
     assert_eq!(h.join().await, TaskState::Completed);
 
-    let avisos = Arc::new(Avisos::default());
-    lazy.set_warning_sink(Arc::clone(&avisos) as Arc<dyn JournalWarningSink>);
+    let warnings = Arc::new(Warnings::default());
+    lazy.set_warning_sink(Arc::clone(&warnings) as Arc<dyn JournalWarningSink>);
     assert_eq!(
-        avisos.vistos(),
+        warnings.seen(),
         vec![NoJournal::Busy],
-        "el aviso pendiente se le entrega al primer sink que aparezca"
+        "the pending warning is delivered to the first sink that shows up"
     );
 }
 
-/// **El nudo de #177.** `undo_session` pregunta si este engine tiene journal
-/// ANTES de que haya mutado nada. Con una caché perezosa solo en el observer,
-/// contestaría `Unsupported` sobre un engine que abriría el journal sin
-/// problema; el accessor perezoso lo abre bajo demanda y contesta la verdad.
+/// **The knot in #177.** `undo_session` asks whether this engine has a journal
+/// BEFORE anything has mutated. With a cache lazy only in the observer, it
+/// would answer `Unsupported` about an engine that would open the journal
+/// just fine; the lazy accessor opens it on demand and answers the truth.
 #[tokio::test]
-async fn el_undo_abre_el_journal_bajo_demanda() {
+async fn undo_opens_the_journal_on_demand() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let (engine, lazy, _mem) = engine_perezoso(dir.path());
+    let (engine, lazy, _mem) = lazy_engine(dir.path());
 
     let (h, _report) = engine
         .undo_session(Actor::User)
         .await
-        .expect("un engine perezoso sobre un journal libre SÍ puede deshacer");
+        .expect("a lazy engine over a free journal CAN undo");
     assert_eq!(h.join().await, TaskState::Completed);
-    assert!(lazy.attempted(), "deshacer necesitaba el journal: lo abrió");
+    assert!(lazy.attempted(), "undo needed the journal: it opened it");
 }
 
-/// Y si el journal es de otro, `undo_session` dice que no — lo mismo que decía
-/// antes: sin cadena no hay nada que revertir.
+/// And if the journal belongs to someone else, `undo_session` says no — the
+/// same thing it used to say: without a chain there is nothing to revert.
 #[tokio::test]
-async fn el_undo_sin_journal_sigue_siendo_unsupported() {
+async fn undo_without_a_journal_is_still_unsupported() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let _dueno = SqliteJournal::open(&journal_path(dir.path()))
+    let _owner = SqliteJournal::open(&journal_path(dir.path()))
         .await
-        .expect("el primero se lo lleva");
-    let (engine, _lazy, _mem) = engine_perezoso(dir.path());
+        .expect("the first one takes it");
+    let (engine, _lazy, _mem) = lazy_engine(dir.path());
 
     assert!(
         matches!(
             engine.undo_session(Actor::User).await,
             Err(norte_proto::Error::Unsupported)
         ),
-        "sin cadena no hay undo"
+        "no chain, no undo"
     );
 }
 
-/// El veredicto se RECUERDA entre mutaciones: dentro de la ventana del freno,
-/// una sesión que se encontró el journal ocupado no vuelve a pagar la espera
-/// del lock por cada mutación (#179 pide el reintento, no el reintento en cada
-/// fila). Lo que sí cambia respecto de #177 es que la decisión ya no es para
-/// siempre: ver `un_ocupante_de_paso_no_condena_la_sesion`.
+/// The verdict is REMEMBERED between mutations: within the brake's window, a
+/// session that found the journal busy does not pay the lock's wait again for
+/// every mutation (#179 asks for the retry, not the retry on every row). What
+/// DOES change from #177 is that the decision is no longer forever: see
+/// `a_passing_occupant_does_not_condemn_the_session`.
 #[tokio::test]
-async fn el_veredicto_se_recuerda_dentro_del_freno() {
+async fn the_verdict_is_remembered_within_the_brake() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let dueno = SqliteJournal::open(&journal_path(dir.path()))
+    let owner = SqliteJournal::open(&journal_path(dir.path()))
         .await
-        .expect("el primero se lo lleva");
-    let (engine, lazy, _mem) = engine_perezoso(dir.path());
+        .expect("the first one takes it");
+    let (engine, lazy, _mem) = lazy_engine(dir.path());
 
     let h = engine.mkdir(&vp("mem:///d")).await.expect("mkdir");
     assert_eq!(h.join().await, TaskState::Completed);
-    assert!(lazy.get().await.is_none(), "el lock era de otro");
+    assert!(
+        lazy.get().await.is_none(),
+        "the lock belonged to someone else"
+    );
 
-    drop(dueno);
+    drop(owner);
     let h = engine.mkdir(&vp("mem:///d2")).await.expect("mkdir");
     assert_eq!(h.join().await, TaskState::Completed);
     assert_eq!(
         lazy.attempts(),
         1,
-        "el freno de 30 s no había pasado: ni un intento más"
+        "the 30 s brake had not elapsed: not one more attempt"
     );
 }
 
-/// El motivo que NO es el lock llega como [`NoJournal::Failed`] con su texto —
-/// la rama que acaba en la barra de estado de la TUI, y la única que
-/// stringifica un error del core para enseñárselo a alguien.
+/// A reason that is NOT the lock arrives as [`NoJournal::Failed`] with its
+/// text — the branch that ends up in the TUI's status bar, and the only one
+/// that stringifies a core error to show it to someone.
 ///
-/// Lo que hace la mutación con ese motivo es de #178 y lo pinea
-/// `un_journal_ilegible_rehusa_la_mutacion`; lo que se comprueba aquí es la
-/// CLASIFICACIÓN, que es de lo que cuelga todo lo demás.
+/// What the mutation does with that reason is #178's business and is pinned
+/// by `an_unreadable_journal_refuses_the_mutation`; what is checked here is
+/// the CLASSIFICATION, which is what everything else hangs off.
 #[tokio::test]
-async fn un_journal_que_no_se_puede_abrir_no_es_busy() {
+async fn a_journal_that_cannot_be_opened_is_not_busy() {
     let dir = tempfile::tempdir().expect("tempdir");
-    // Un DIRECTORIO donde va el fichero: `SQLite` no puede abrirlo, y no por
-    // culpa de ningún lock.
-    std::fs::create_dir(journal_path(dir.path())).expect("ocupar el nombre");
+    // A DIRECTORY where the file goes: `SQLite` cannot open it, and not
+    // because of any lock.
+    std::fs::create_dir(journal_path(dir.path())).expect("occupy the name");
 
-    let (_engine, lazy, _mem) = engine_perezoso(dir.path());
-    let avisos = Arc::new(Avisos::default());
-    lazy.set_warning_sink(Arc::clone(&avisos) as Arc<dyn JournalWarningSink>);
+    let (_engine, lazy, _mem) = lazy_engine(dir.path());
+    let warnings = Arc::new(Warnings::default());
+    lazy.set_warning_sink(Arc::clone(&warnings) as Arc<dyn JournalWarningSink>);
 
-    assert!(lazy.get().await.is_none(), "no se pudo abrir");
-    match avisos.vistos().as_slice() {
-        [NoJournal::Failed(motivo)] => assert!(!motivo.is_empty(), "el motivo se cuenta"),
-        otro => panic!("esto no es el lock de nadie: {otro:?}"),
+    assert!(lazy.get().await.is_none(), "it could not be opened");
+    match warnings.seen().as_slice() {
+        [NoJournal::Failed(reason)] => assert!(!reason.is_empty(), "the reason gets recorded"),
+        other => panic!("this is nobody's lock: {other:?}"),
     }
 }
 
-/// Dos mutaciones a la vez comparten UN intento de apertura y UN aviso.
+/// Two mutations at once share ONE opening attempt and ONE warning.
 ///
-/// Es la razón de que la celda sea un `OnceCell` y no un `Option` bajo mutex:
-/// dos intentos concurrentes serían dos handles del mismo fichero, y el segundo
-/// se vería `Busy` contra el lock del PRIMERO — un proceso negándose a
-/// journalizar por culpa de sí mismo.
+/// This is why the cell is a `OnceCell` and not an `Option` behind a mutex:
+/// two concurrent attempts would be two handles on the same file, and the
+/// second would see itself `Busy` against the FIRST one's lock — a process
+/// refusing to journal because of itself.
 #[tokio::test]
-async fn dos_mutaciones_a_la_vez_comparten_el_intento() {
+async fn two_simultaneous_mutations_share_the_attempt() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let _dueno = SqliteJournal::open(&journal_path(dir.path()))
+    let _owner = SqliteJournal::open(&journal_path(dir.path()))
         .await
-        .expect("el primero se lo lleva");
+        .expect("the first one takes it");
 
-    let (engine, lazy, _mem) = engine_perezoso(dir.path());
-    let avisos = Arc::new(Avisos::default());
-    lazy.set_warning_sink(Arc::clone(&avisos) as Arc<dyn JournalWarningSink>);
+    let (engine, lazy, _mem) = lazy_engine(dir.path());
+    let warnings = Arc::new(Warnings::default());
+    lazy.set_warning_sink(Arc::clone(&warnings) as Arc<dyn JournalWarningSink>);
 
     let (pa, pb) = (vp("mem:///a"), vp("mem:///b"));
     let (a, b) = tokio::join!(engine.mkdir(&pa), engine.mkdir(&pb));
     assert_eq!(a.expect("mkdir a").join().await, TaskState::Completed);
     assert_eq!(b.expect("mkdir b").join().await, TaskState::Completed);
     assert_eq!(
-        avisos.vistos(),
+        warnings.seen(),
         vec![NoJournal::Busy],
-        "un intento, un aviso, aunque las mutaciones vengan a la vez"
+        "one attempt, one warning, even with the mutations arriving at once"
     );
 }
 
-/// `ensure_journal` es el contrato del que depende `norte ai rename` para poder
-/// decir «esto no se va a poder deshacer» ANTES de preguntar.
+/// `ensure_journal` is the contract `norte ai rename` depends on to be able to
+/// say "this will not be undoable" BEFORE asking.
 #[tokio::test]
-async fn ensure_journal_lo_abre_y_contesta_la_verdad() {
-    let libre = tempfile::tempdir().expect("tempdir");
-    let (engine, lazy, _mem) = engine_perezoso(libre.path());
-    assert!(engine.ensure_journal().await, "el fichero estaba libre");
-    assert!(lazy.attempted(), "y lo abrió sin que nadie mutara nada");
+async fn ensure_journal_opens_it_and_answers_the_truth() {
+    let free = tempfile::tempdir().expect("tempdir");
+    let (engine, lazy, _mem) = lazy_engine(free.path());
+    assert!(engine.ensure_journal().await, "the file was free");
+    assert!(
+        lazy.attempted(),
+        "and it opened it without anyone mutating anything"
+    );
 
-    let ocupado = tempfile::tempdir().expect("tempdir");
-    let _dueno = SqliteJournal::open(&journal_path(ocupado.path()))
+    let taken = tempfile::tempdir().expect("tempdir");
+    let _owner = SqliteJournal::open(&journal_path(taken.path()))
         .await
-        .expect("el primero se lo lleva");
-    let (engine, _lazy, _mem) = engine_perezoso(ocupado.path());
-    assert!(!engine.ensure_journal().await, "el fichero era de otro");
+        .expect("the first one takes it");
+    let (engine, _lazy, _mem) = lazy_engine(taken.path());
+    assert!(
+        !engine.ensure_journal().await,
+        "the file belonged to someone else"
+    );
 }
 
-/// El cableado que usa la TUI: el aviso sale del core y llega por el canal del
-/// `Backend`, y un engine que NO puede quedarse sin journal no entrega canal
-/// (uno que nunca sonaría le haría creerse cubierto).
+/// The wiring the TUI uses: the warning leaves the core and arrives through
+/// the `Backend`'s channel, and an engine that CANNOT be left without a
+/// journal delivers no channel (one that would never sound would make it
+/// believe itself covered).
 #[tokio::test]
-async fn el_backend_entrega_el_aviso_por_su_canal() {
+async fn the_backend_delivers_the_warning_through_its_channel() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let _dueno = SqliteJournal::open(&journal_path(dir.path()))
+    let _owner = SqliteJournal::open(&journal_path(dir.path()))
         .await
-        .expect("el primero se lo lleva");
+        .expect("the first one takes it");
 
-    let (engine, _lazy, _mem) = engine_perezoso(dir.path());
+    let (engine, _lazy, _mem) = lazy_engine(dir.path());
     let mut backend = norte_core::backend::Backend::Embedded(Arc::new(engine));
     let mut rx = backend
         .take_journal_warnings()
-        .expect("un engine embebido perezoso sí puede quedarse sin journal");
+        .expect("a lazy embedded engine CAN be left without a journal");
 
     let norte_core::backend::Backend::Embedded(engine) = &backend else {
-        unreachable!("es el embebido")
+        unreachable!("it is the embedded one")
     };
     let h = engine.mkdir(&vp("mem:///d")).await.expect("mkdir");
     assert_eq!(h.join().await, TaskState::Completed);
     assert_eq!(
         rx.try_recv(),
         Ok(JournalStatus::Lost(NoJournal::Busy)),
-        "el aviso llegó al canal"
+        "the warning reached the channel"
     );
 
-    let mut sin_journal = norte_core::backend::Backend::Embedded(Arc::new(Engine::new()));
+    let mut without_journal = norte_core::backend::Backend::Embedded(Arc::new(Engine::new()));
     assert!(
-        sin_journal.take_journal_warnings().is_none(),
-        "un engine que no journaliza nada no puede prometer avisar de ello"
+        without_journal.take_journal_warnings().is_none(),
+        "an engine that journals nothing cannot promise to warn about it"
     );
 }
 
 // ---------------------------------------------------------------------------
-// #179: la ventana de propiedad se abre y se cierra más de una vez.
+// #179: the ownership window opens and closes more than once.
 // ---------------------------------------------------------------------------
 
-/// Sink que apunta TODO lo que le llega, pérdidas y recuperaciones.
+/// A sink that records EVERYTHING that reaches it, losses and recoveries.
 #[derive(Default)]
-struct Estados(Mutex<Vec<JournalStatus>>);
+struct States(Mutex<Vec<JournalStatus>>);
 
-impl JournalWarningSink for Estados {
+impl JournalWarningSink for States {
     fn on_no_journal(&self, why: &NoJournal) {
         self.0
             .lock()
-            .expect("lock de estados")
+            .expect("states lock")
             .push(JournalStatus::Lost(why.clone()));
     }
 
     fn on_journal_recovered(&self) {
         self.0
             .lock()
-            .expect("lock de estados")
+            .expect("states lock")
             .push(JournalStatus::Recovered);
     }
 
     fn on_journal_squatted(&self) {
         self.0
             .lock()
-            .expect("lock de estados")
+            .expect("states lock")
             .push(JournalStatus::Squatted);
     }
 }
 
-impl Estados {
-    fn vistos(&self) -> Vec<JournalStatus> {
-        self.0.lock().expect("lock de estados").clone()
+impl States {
+    fn seen(&self) -> Vec<JournalStatus> {
+        self.0.lock().expect("states lock").clone()
     }
 }
 
-/// Como [`engine_perezoso`], con el freno de reintento que el test necesite.
-fn engine_con_freno(
+/// Like [`lazy_engine`], with whatever retry brake the test needs.
+fn engine_with_brake(
     dir: &Path,
-    freno: std::time::Duration,
+    brake: std::time::Duration,
 ) -> (Engine, Arc<LazyJournal>, Arc<MemProvider>) {
-    let lazy = Arc::new(LazyJournal::with_retry_brake(dir, freno));
+    let lazy = Arc::new(LazyJournal::with_retry_brake(dir, brake));
     let engine = Engine::with_lazy_journal(Arc::clone(&lazy));
     let mem = Arc::new(MemProvider::new());
     engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
     (engine, lazy, mem)
 }
 
-/// **#179.1.** El ocupante de la primera mutación era de paso, y la sesión
-/// vuelve a registrar en cuanto suelta: una superposición de un cuarto de
-/// segundo dejaba marcada una sesión de tres horas.
+/// **#179.1.** The first mutation's occupant was just passing through, and the
+/// session starts recording again as soon as it lets go: a quarter-second
+/// overlap used to leave a three-hour session marked.
 #[tokio::test]
-async fn un_ocupante_de_paso_no_condena_la_sesion() {
+async fn a_passing_occupant_does_not_condemn_the_session() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let dueno = SqliteJournal::open(&journal_path(dir.path()))
+    let owner = SqliteJournal::open(&journal_path(dir.path()))
         .await
-        .expect("el primero se lo lleva");
+        .expect("the first one takes it");
 
-    let (engine, lazy, _mem) = engine_con_freno(dir.path(), std::time::Duration::ZERO);
-    let avisos = Arc::new(Estados::default());
-    lazy.set_warning_sink(Arc::clone(&avisos) as Arc<dyn JournalWarningSink>);
+    let (engine, lazy, _mem) = engine_with_brake(dir.path(), std::time::Duration::ZERO);
+    let warnings = Arc::new(States::default());
+    lazy.set_warning_sink(Arc::clone(&warnings) as Arc<dyn JournalWarningSink>);
 
     let h = engine.mkdir(&vp("mem:///d")).await.expect("mkdir");
     assert_eq!(h.join().await, TaskState::Completed);
-    assert!(lazy.get().await.is_none(), "el lock era de otro");
+    assert!(
+        lazy.get().await.is_none(),
+        "the lock belonged to someone else"
+    );
 
-    // El de paso suelta.
-    dueno.close().await;
+    // The passer-by lets go.
+    owner.close().await;
 
     let h = engine.mkdir(&vp("mem:///d2")).await.expect("mkdir");
     assert_eq!(h.join().await, TaskState::Completed);
     let journal = lazy
         .get()
         .await
-        .expect("el fichero quedó libre y se reintentó");
+        .expect("the file was left free and got retried");
     let entries = journal.journal().entries().await.expect("entries");
     assert_eq!(
         entries.len(),
         1,
-        "la mutación de después del reintento SÍ quedó registrada: {entries:?}"
+        "the mutation after the retry DID get recorded: {entries:?}"
     );
     assert_eq!(
-        avisos.vistos(),
+        warnings.seen(),
         vec![
             JournalStatus::Lost(NoJournal::Busy),
             JournalStatus::Recovered
         ],
-        "el indicador permanente del frontend tiene que poder apagarse"
+        "the frontend's permanent indicator has to be able to turn off"
     );
 }
 
-/// Un probe de presencia de daemon que contesta lo que el test le diga (#203).
-struct DaemonDice(bool);
+/// A daemon-presence probe that answers whatever the test tells it to (#203).
+struct DaemonSays(bool);
 
-impl norte_core::embedded::DaemonPresence for DaemonDice {
+impl norte_core::embedded::DaemonPresence for DaemonSays {
     fn any_daemon_listening(&self) -> bool {
         self.0
     }
 }
 
-/// **#203.** Un `Busy` que lleva minutos Y sin daemon escuchando deja de
-/// parecerse al caso benigno.
+/// **#203.** A `Busy` that has lasted minutes AND with no daemon listening
+/// stops looking like the benign case.
 ///
-/// Es la mitad que el aviso genérico no podía dar: `Busy` sale igual cuando hay
-/// un daemon vivo —lo normal— que cuando alguien retiene `journal.db` con un
-/// `begin exclusive`, y un aviso que sale siempre no lo mira nadie.
+/// It is the half the generic warning could not give: `Busy` fires the same
+/// whether there is a live daemon — the normal case — or whether someone is
+/// holding `journal.db` with a `begin exclusive`, and a warning that always
+/// fires is a warning nobody looks at.
 ///
-/// El plazo se inyecta a cero, así que aquí sube en el PRIMER intento; en
-/// producción son cinco minutos y los primeros avisos son los de siempre. Lo
-/// que este test fija es el veredicto, no el reloj — el reloj lo fija su
-/// gemelo de abajo, y ninguno de los dos duerme.
+/// The delay is injected at zero, so here it escalates on the FIRST attempt;
+/// in production it is five minutes and the first warnings are the usual
+/// ones. What this test pins down is the verdict, not the clock — the clock is
+/// pinned by its twin below, and neither of them sleeps.
 #[tokio::test]
-async fn un_busy_persistente_sin_daemon_se_dice_distinto() {
+async fn a_persistent_busy_with_no_daemon_is_said_differently() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let _dueno = SqliteJournal::open(&journal_path(dir.path()))
+    let _owner = SqliteJournal::open(&journal_path(dir.path()))
         .await
-        .expect("el primero se lo lleva");
+        .expect("the first one takes it");
 
-    let estados = Arc::new(Estados::default());
+    let states = Arc::new(States::default());
     let lazy = Arc::new(
         LazyJournal::with_retry_brake(dir.path(), std::time::Duration::ZERO)
-            .with_daemon_presence(Arc::new(DaemonDice(false)))
+            .with_daemon_presence(Arc::new(DaemonSays(false)))
             .with_suspicion_delay(std::time::Duration::ZERO),
     );
-    lazy.set_warning_sink(Arc::clone(&estados) as Arc<dyn JournalWarningSink>);
+    lazy.set_warning_sink(Arc::clone(&states) as Arc<dyn JournalWarningSink>);
 
     assert!(lazy.resolve().await.is_err());
     assert_eq!(
-        estados.vistos(),
+        states.seen(),
         vec![JournalStatus::Squatted],
-        "sin daemon y con el plazo cumplido, la frase es la fuerte"
+        "with no daemon and the delay elapsed, the phrasing is the strong one"
     );
 
-    // Y no se repite: un indicador que parpadea es un indicador que se ignora.
+    // And it does not repeat: an indicator that flickers is an indicator that
+    // gets ignored.
     assert!(lazy.resolve().await.is_err());
     assert!(lazy.resolve().await.is_err());
-    assert_eq!(estados.vistos().len(), 1);
+    assert_eq!(states.seen().len(), 1);
 }
 
-/// Y ANTES del plazo no sube, por muchos intentos que se hagan: el plazo es lo
-/// que separa «un daemon tardando en arrancar» de «alguien retiene tu
-/// journal».
+/// And BEFORE the delay it does not escalate, no matter how many attempts are
+/// made: the delay is what separates "a daemon taking a while to start" from
+/// "someone is holding your journal".
 ///
-/// Medido en veredictos y no en reloj — el plazo se pone a una hora, así que
-/// ningún intento de este test puede cumplirlo por lento que vaya la máquina.
+/// Measured in verdicts and not in the clock — the delay is set to an hour, so
+/// no attempt in this test can meet it no matter how slow the machine.
 #[tokio::test]
-async fn antes_del_plazo_el_aviso_sigue_siendo_el_de_siempre() {
+async fn before_the_delay_the_warning_is_still_the_usual_one() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let _dueno = SqliteJournal::open(&journal_path(dir.path()))
+    let _owner = SqliteJournal::open(&journal_path(dir.path()))
         .await
-        .expect("el primero se lo lleva");
+        .expect("the first one takes it");
 
-    let estados = Arc::new(Estados::default());
+    let states = Arc::new(States::default());
     let lazy = Arc::new(
         LazyJournal::with_retry_brake(dir.path(), std::time::Duration::ZERO)
-            .with_daemon_presence(Arc::new(DaemonDice(false)))
+            .with_daemon_presence(Arc::new(DaemonSays(false)))
             .with_suspicion_delay(std::time::Duration::from_hours(1)),
     );
-    lazy.set_warning_sink(Arc::clone(&estados) as Arc<dyn JournalWarningSink>);
+    lazy.set_warning_sink(Arc::clone(&states) as Arc<dyn JournalWarningSink>);
 
     for _ in 0..3 {
         assert!(lazy.resolve().await.is_err());
     }
-    assert_eq!(estados.vistos(), vec![JournalStatus::Lost(NoJournal::Busy)]);
+    assert_eq!(states.seen(), vec![JournalStatus::Lost(NoJournal::Busy)]);
 }
 
-/// Con un daemon escuchando NO sube, por mucho que dure: ése es el caso
-/// benigno, y confundirlo es exactamente el ruido que #203 viene a quitar.
+/// With a daemon listening it does NOT escalate, no matter how long it lasts:
+/// that is the benign case, and confusing it is exactly the noise #203 comes
+/// to remove.
 #[tokio::test]
-async fn un_busy_con_daemon_vivo_se_queda_en_el_aviso_de_siempre() {
+async fn a_busy_with_a_live_daemon_stays_at_the_usual_warning() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let _dueno = SqliteJournal::open(&journal_path(dir.path()))
+    let _owner = SqliteJournal::open(&journal_path(dir.path()))
         .await
-        .expect("el primero se lo lleva");
+        .expect("the first one takes it");
 
-    let estados = Arc::new(Estados::default());
+    let states = Arc::new(States::default());
     let lazy = Arc::new(
         LazyJournal::with_retry_brake(dir.path(), std::time::Duration::ZERO)
-            .with_daemon_presence(Arc::new(DaemonDice(true)))
+            .with_daemon_presence(Arc::new(DaemonSays(true)))
             .with_suspicion_delay(std::time::Duration::ZERO),
     );
-    lazy.set_warning_sink(Arc::clone(&estados) as Arc<dyn JournalWarningSink>);
+    lazy.set_warning_sink(Arc::clone(&states) as Arc<dyn JournalWarningSink>);
 
     for _ in 0..3 {
         assert!(lazy.resolve().await.is_err());
     }
     assert_eq!(
-        estados.vistos(),
+        states.seen(),
         vec![JournalStatus::Lost(NoJournal::Busy)],
-        "hay un daemon: es el caso corriente y se dice una vez"
+        "there is a daemon: it is the ordinary case and it is said once"
     );
 }
 
-/// **#179, el freno.** Reintentar no puede costar `ESPERA_POR_EL_LOCK` por
-/// mutación. Se mide en INTENTOS, no en reloj: «tardó menos de X» mide la carga
-/// de la máquina tanto como el código.
+/// **#179, the brake.** Retrying cannot cost `WAIT_FOR_THE_LOCK` per mutation.
+/// Measured in ATTEMPTS, not in the clock: "took less than X" measures the
+/// machine's load as much as the code.
 #[tokio::test]
-async fn el_reintento_lleva_freno() {
+async fn the_retry_carries_a_brake() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let _dueno = SqliteJournal::open(&journal_path(dir.path()))
+    let _owner = SqliteJournal::open(&journal_path(dir.path()))
         .await
-        .expect("el primero se lo lleva");
+        .expect("the first one takes it");
 
-    let (engine, lazy, _mem) = engine_con_freno(dir.path(), std::time::Duration::from_hours(1));
+    let (engine, lazy, _mem) = engine_with_brake(dir.path(), std::time::Duration::from_hours(1));
 
     for n in 0..3 {
         let h = engine
@@ -569,304 +585,302 @@ async fn el_reintento_lleva_freno() {
     assert_eq!(
         lazy.attempts(),
         1,
-        "dentro de la ventana del freno no se vuelve a pagar la espera del lock"
+        "inside the brake's window the lock's wait does not get paid again"
     );
 }
 
-/// **La trampa del `ChainState`, y la razón de que esto no sea pequeño.**
+/// **The `ChainState` trap, and the reason this is not small.**
 ///
-/// Reabrir un journal que este proceso YA TUVO obliga a releer `last_seq` y
-/// `last_hash` del fichero. Con el par viejo, el insert choca contra la PK de
-/// `seq` — y como `last_seq` solo avanza al acertar, fallan TODAS las
-/// mutaciones siguientes: efecto aplicado sin fila, en bucle.
+/// Reopening a journal this process ALREADY HAD forces rereading `last_seq`
+/// and `last_hash` from the file. With the old pair, the insert collides
+/// against `seq`'s PK — and since `last_seq` only advances on success, EVERY
+/// following mutation fails: effect applied with no row, in a loop.
 #[tokio::test]
-async fn reabrir_relee_la_cadena_del_fichero() {
+async fn reopening_rereads_the_files_chain() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let (engine, lazy, _mem) = engine_con_freno(dir.path(), std::time::Duration::ZERO);
+    let (engine, lazy, _mem) = engine_with_brake(dir.path(), std::time::Duration::ZERO);
 
-    let h = engine.mkdir(&vp("mem:///uno")).await.expect("mkdir");
+    let h = engine.mkdir(&vp("mem:///one")).await.expect("mkdir");
     assert_eq!(h.join().await, TaskState::Completed);
-    assert!(lazy.release().await, "nadie más tiene el handle");
+    assert!(lazy.release().await, "nobody else holds the handle");
 
-    // OTRO escritor avanza la cadena mientras esta sesión no la tiene.
+    // ANOTHER writer advances the chain while this session does not have it.
     {
-        let otro = SqliteJournal::open(&journal_path(dir.path()))
+        let other = SqliteJournal::open(&journal_path(dir.path()))
             .await
-            .expect("soltado de verdad: el fichero está libre");
-        otro.journal()
+            .expect("really released: the file is free");
+        other
+            .journal()
             .record(
                 "created",
-                b"mem:///de-otro",
+                b"mem:///from-someone-else",
                 None,
                 norte_core::journal::Reversal::Delete,
                 None,
                 &Actor::User,
             )
             .await
-            .expect("la fila del otro");
-        otro.close().await;
+            .expect("the other one's row");
+        other.close().await;
     }
 
-    let h = engine.mkdir(&vp("mem:///dos")).await.expect("mkdir");
+    let h = engine.mkdir(&vp("mem:///two")).await.expect("mkdir");
     assert_eq!(
         h.join().await,
         TaskState::Completed,
-        "la mutación de después de reabrir NO puede chocar con la PK de seq"
+        "the mutation after reopening must NOT collide with seq's PK"
     );
 
-    let journal = lazy.get().await.expect("reabierto");
+    let journal = lazy.get().await.expect("reopened");
     let entries = journal.journal().entries().await.expect("entries");
     let seqs: Vec<i64> = entries.iter().map(|e| e.seq).collect();
     assert_eq!(
         seqs,
         vec![1, 2, 3],
-        "la cadena sigue al OTRO escritor: {entries:?}"
+        "the chain follows the OTHER writer: {entries:?}"
     );
     assert_eq!(
         entries[2].path.as_slice(),
-        b"mem:///dos",
-        "y la última es la nuestra: {entries:?}"
+        b"mem:///two",
+        "and the last one is ours: {entries:?}"
     );
 }
 
-/// Dos mutaciones a la vez sobre un journal LIBRE abren UN handle, no dos: el
-/// segundo se vería `Busy` contra el lock del primero — un proceso negándose a
-/// journalizar por culpa de sí mismo.
+/// Two simultaneous mutations over a FREE journal open ONE handle, not two:
+/// the second would see itself `Busy` against the first one's lock — a
+/// process refusing to journal because of itself.
 #[tokio::test]
-async fn dos_mutaciones_a_la_vez_abren_un_solo_handle() {
+async fn two_simultaneous_mutations_open_a_single_handle() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let (engine, lazy, _mem) = engine_con_freno(dir.path(), std::time::Duration::ZERO);
-    let avisos = Arc::new(Estados::default());
-    lazy.set_warning_sink(Arc::clone(&avisos) as Arc<dyn JournalWarningSink>);
+    let (engine, lazy, _mem) = engine_with_brake(dir.path(), std::time::Duration::ZERO);
+    let warnings = Arc::new(States::default());
+    lazy.set_warning_sink(Arc::clone(&warnings) as Arc<dyn JournalWarningSink>);
 
     let (pa, pb) = (vp("mem:///a"), vp("mem:///b"));
     let (a, b) = tokio::join!(engine.mkdir(&pa), engine.mkdir(&pb));
     assert_eq!(a.expect("mkdir a").join().await, TaskState::Completed);
     assert_eq!(b.expect("mkdir b").join().await, TaskState::Completed);
 
-    assert_eq!(lazy.attempts(), 1, "un intento, no uno por mutación");
+    assert_eq!(lazy.attempts(), 1, "one attempt, not one per mutation");
     assert!(
-        avisos.vistos().is_empty(),
-        "nada que avisar: se abrió a la primera"
+        warnings.seen().is_empty(),
+        "nothing to warn about: it opened on the first try"
     );
-    let journal = lazy.get().await.expect("dueña");
+    let journal = lazy.get().await.expect("owner");
     assert_eq!(
         journal.journal().count().await.expect("count"),
         2,
-        "las dos mutaciones quedaron registradas"
+        "both mutations got recorded"
     );
 }
 
-/// Soltar con alguien más sosteniendo el handle NO suelta: abrir un segundo
-/// handle sobre el mismo fichero sería este proceso quitándose el journal a sí
-/// mismo.
-/// #179, la política: se suelta cuando lleva un rato SIN USARSE, y no antes.
+/// Releasing while someone else is holding the handle does NOT release:
+/// opening a second handle on the same file would be this process taking the
+/// journal away from itself.
+/// #179, the policy: it releases when it has gone a while WITHOUT being used,
+/// and not before.
 ///
-/// El proceso tomaba el journal en la primera mutación y no lo devolvía hasta
-/// salir: una copia a las 09:00 dejaba a `norte daemon run` y a `norte audit`
-/// sin poder abrir el fichero en todo el día.
+/// The process used to take the journal on the first mutation and not give it
+/// back until exiting: a copy at 09:00 left `norte daemon run` and
+/// `norte audit` unable to open the file all day.
 #[tokio::test]
-async fn soltar_por_ocioso_espera_a_que_lo_este() {
+async fn releasing_when_idle_waits_until_it_is() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let (engine, lazy, _mem) = engine_con_freno(dir.path(), std::time::Duration::ZERO);
+    let (engine, lazy, _mem) = engine_with_brake(dir.path(), std::time::Duration::ZERO);
 
-    let h = engine.mkdir(&vp("mem:///uno")).await.expect("mkdir");
+    let h = engine.mkdir(&vp("mem:///one")).await.expect("mkdir");
     assert_eq!(h.join().await, TaskState::Completed);
 
-    // Recién usado: no se suelta, y sigue siendo nuestro.
+    // Just used: it does not release, and it is still ours.
     assert!(
         !lazy
             .release_if_idle(std::time::Duration::from_mins(1))
             .await,
-        "acaba de usarse: soltarlo sería soltar lo que alguien pidió hace un instante"
+        "just used: releasing it would be releasing what someone asked for a moment ago"
     );
     assert!(
         SqliteJournal::open(&journal_path(dir.path()))
             .await
             .is_err(),
-        "y el fichero sigue ocupado por esta sesión"
+        "and the file is still held by this session"
     );
 
-    // Con el umbral a cero, lo está por definición.
+    // With the threshold at zero, it is idle by definition.
     assert!(lazy.release_if_idle(std::time::Duration::ZERO).await);
     {
-        let otro = SqliteJournal::open(&journal_path(dir.path()))
+        let other = SqliteJournal::open(&journal_path(dir.path()))
             .await
-            .expect("soltado de verdad: el fichero está libre");
-        otro.close().await;
+            .expect("really released: the file is free");
+        other.close().await;
     }
 
-    // Y la ventana se REABRE sola en la siguiente mutación, releyendo la
-    // cadena — que es lo que hace que soltar sea seguro.
-    let h = engine.mkdir(&vp("mem:///dos")).await.expect("mkdir");
+    // And the window REOPENS on its own on the next mutation, rereading the
+    // chain — which is what makes releasing safe.
+    let h = engine.mkdir(&vp("mem:///two")).await.expect("mkdir");
     assert_eq!(h.join().await, TaskState::Completed);
     assert!(
         !lazy
             .release_if_idle(std::time::Duration::from_mins(1))
             .await,
-        "vuelve a ser nuestro"
+        "it is ours again"
     );
 }
 
-/// Sin haberlo tenido nunca, «soltar por ocioso» contesta que el fichero está
-/// libre: no hay nada que soltar, y decir `false` haría que el llamante
-/// creyera que lo tiene.
+/// Never having had it, "release if idle" answers that the file is free:
+/// there is nothing to release, and answering `false` would make the caller
+/// believe it holds it.
 #[tokio::test]
-async fn soltar_por_ocioso_sin_haberlo_tomado_es_cierto() {
+async fn releasing_when_idle_without_ever_holding_it_is_true() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let (_engine, lazy, _mem) = engine_con_freno(dir.path(), std::time::Duration::ZERO);
+    let (_engine, lazy, _mem) = engine_with_brake(dir.path(), std::time::Duration::ZERO);
     assert!(lazy.release_if_idle(std::time::Duration::ZERO).await);
 }
 
 #[tokio::test]
-async fn soltar_con_el_handle_prestado_no_suelta() {
+async fn releasing_with_the_handle_borrowed_does_not_release() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let (engine, lazy, _mem) = engine_con_freno(dir.path(), std::time::Duration::ZERO);
+    let (engine, lazy, _mem) = engine_with_brake(dir.path(), std::time::Duration::ZERO);
     let h = engine.mkdir(&vp("mem:///d")).await.expect("mkdir");
     assert_eq!(h.join().await, TaskState::Completed);
 
-    let prestado = lazy.get().await.expect("dueña");
-    assert!(!lazy.release().await, "hay un Arc vivo por ahí");
-    drop(prestado);
-    assert!(lazy.release().await, "ya no");
+    let borrowed = lazy.get().await.expect("owner");
+    assert!(!lazy.release().await, "there is a live Arc out there");
+    drop(borrowed);
+    assert!(lazy.release().await, "not anymore");
 }
 
-/// El motivo de un journal ilegible pasa por un saneador antes de llegar a una
-/// terminal: quien puede escribir el fichero escribe parte de esa frase, y la
-/// prosa de `SQLite` interpola identificadores del propio fichero.
+/// The reason for an unreadable journal goes through a sanitizer before
+/// reaching a terminal: whoever can write the file writes part of that
+/// phrase, and `SQLite`'s prose interpolates identifiers from the file
+/// itself.
 #[tokio::test]
-async fn el_motivo_de_un_journal_roto_no_lleva_controles_a_la_pantalla() {
+async fn the_reason_for_a_broken_journal_carries_no_controls_to_the_screen() {
     let dir = tempfile::tempdir().expect("tempdir");
-    // Un fichero que no es una base de datos, con un identificador hostil
-    // dentro: `SQLite` lo devolverá en su mensaje.
+    // A file that is not a database, with a hostile identifier inside:
+    // `SQLite` will return it in its message.
     std::fs::write(
         journal_path(dir.path()),
-        b"no soy sqlite \x1b[31m\x07 \x1b]0;pwned\x07",
+        b"i am not sqlite \x1b[31m\x07 \x1b]0;pwned\x07",
     )
     .expect("fixture");
 
-    let (_engine, lazy, _mem) = engine_perezoso(dir.path());
-    let avisos = Arc::new(Avisos::default());
-    lazy.set_warning_sink(Arc::clone(&avisos) as Arc<dyn JournalWarningSink>);
-    assert!(lazy.get().await.is_none(), "no es una base de datos");
+    let (_engine, lazy, _mem) = lazy_engine(dir.path());
+    let warnings = Arc::new(Warnings::default());
+    lazy.set_warning_sink(Arc::clone(&warnings) as Arc<dyn JournalWarningSink>);
+    assert!(lazy.get().await.is_none(), "it is not a database");
 
-    match avisos.vistos().as_slice() {
-        [NoJournal::Failed(motivo)] => {
+    match warnings.seen().as_slice() {
+        [NoJournal::Failed(reason)] => {
             assert!(
-                !motivo.chars().any(char::is_control),
-                "ni un byte de control llega a la barra de estado: {motivo:?}"
+                !reason.chars().any(char::is_control),
+                "not one control byte reaches the status bar: {reason:?}"
             );
-            assert!(motivo.chars().count() <= 201, "acotado: {}", motivo.len());
+            assert!(reason.chars().count() <= 201, "bounded: {}", reason.len());
         }
-        otro => panic!("no es el lock de nadie: {otro:?}"),
+        other => panic!("this is nobody's lock: {other:?}"),
     }
 }
 
-/// `ensure_journal` se salta el freno: es lo que `norte ai rename` pregunta
-/// ANTES de pedir confirmación, y contestar desde un veredicto de hace medio
-/// minuto le diría al humano «esto no se registra» sobre un fichero libre.
+/// `ensure_journal` skips the brake: it is what `norte ai rename` asks BEFORE
+/// requesting confirmation, and answering from a half-minute-old verdict
+/// would tell the human "this is not being recorded" about a free file.
 #[tokio::test]
-async fn ensure_journal_no_contesta_desde_el_freno() {
+async fn ensure_journal_does_not_answer_from_the_brake() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let dueno = SqliteJournal::open(&journal_path(dir.path()))
+    let owner = SqliteJournal::open(&journal_path(dir.path()))
         .await
-        .expect("el primero se lo lleva");
-    // Freno LARGO: una mutación normal no reintentaría en toda la sesión.
-    let (engine, lazy, _mem) = engine_con_freno(dir.path(), std::time::Duration::from_hours(1));
+        .expect("the first one takes it");
+    // LONG brake: a normal mutation would not retry for the whole session.
+    let (engine, lazy, _mem) = engine_with_brake(dir.path(), std::time::Duration::from_hours(1));
 
-    assert!(!engine.ensure_journal().await, "el fichero era de otro");
-    dueno.close().await;
+    assert!(
+        !engine.ensure_journal().await,
+        "the file belonged to someone else"
+    );
+    owner.close().await;
     assert!(
         engine.ensure_journal().await,
-        "quedó libre: la pregunta que ve un humano no se contesta desde la caché"
+        "it was left free: the question a human sees is not answered from the cache"
     );
-    assert_eq!(
-        lazy.attempts(),
-        2,
-        "y para eso hubo que intentarlo otra vez"
-    );
+    assert_eq!(lazy.attempts(), 2, "and that took trying again");
 }
 
 // ---------------------------------------------------------------------------
-// #178: un journal ilegible falla en CERRADO; uno ocupado, no.
+// #178: an unreadable journal fails CLOSED; a busy one does not.
 // ---------------------------------------------------------------------------
 
-/// **#178.** Un `journal.db` que no es una base de datos —lo que deja cualquiera
-/// con escritura en el directorio de estado— REHÚSA la mutación, con su
-/// categoría propia y sin tocar nada.
+/// **#178.** A `journal.db` that is not a database — which anyone with write
+/// access to the state directory can leave — REFUSES the mutation, with its
+/// own category and without touching anything.
 ///
-/// Antes seguía adelante detrás de un aviso, o sea que corromper un fichero
-/// desactivaba el registro de TODAS las sesiones embebidas —incluido el de
-/// `norte ai rename --yes`, que es el que más falta hace— en silencio y para
-/// siempre, mientras `norte daemon run` con esa misma entrada se niega a
-/// arrancar. La asimetría era el bug.
+/// It used to go ahead behind a warning, meaning corrupting one file disabled
+/// the recording of ALL embedded sessions — including `norte ai rename
+/// --yes`'s, which needs it the most — silently and forever, while
+/// `norte daemon run` with that same entry refuses to start. The asymmetry
+/// was the bug.
 #[tokio::test]
-async fn un_journal_ilegible_rehusa_la_mutacion() {
+async fn an_unreadable_journal_refuses_the_mutation() {
     let dir = tempfile::tempdir().expect("tempdir");
-    // Un DIRECTORIO donde va el fichero: `SQLite` no puede abrirlo, y no por
-    // culpa de ningún lock.
-    std::fs::create_dir(journal_path(dir.path())).expect("ocupar el nombre");
+    // A DIRECTORY where the file goes: `SQLite` cannot open it, and not
+    // because of any lock.
+    std::fs::create_dir(journal_path(dir.path())).expect("occupy the name");
 
-    let (engine, lazy, mem) = engine_perezoso(dir.path());
-    let avisos = Arc::new(Estados::default());
-    lazy.set_warning_sink(Arc::clone(&avisos) as Arc<dyn JournalWarningSink>);
+    let (engine, lazy, mem) = lazy_engine(dir.path());
+    let warnings = Arc::new(States::default());
+    lazy.set_warning_sink(Arc::clone(&warnings) as Arc<dyn JournalWarningSink>);
 
     assert!(
         matches!(
             engine.mkdir(&vp("mem:///d")).await,
             Err(norte_proto::Error::JournalUnavailable)
         ),
-        "un journal ilegible para la mutación con su categoría"
+        "an unreadable journal for the mutation with its own category"
     );
     assert!(
         mem.stat(&vp("mem:///d")).await.is_err(),
-        "y no se tocó nada: la negativa es PREVIA al efecto"
+        "and nothing got touched: the refusal is PRIOR to the effect"
     );
-    // El motivo, con el fichero nombrado, sigue llegando por el canal de avisos
-    // — que es in-process y sí puede llevar rutas.
-    match avisos.vistos().as_slice() {
-        [JournalStatus::Lost(NoJournal::Failed(motivo))] => {
-            assert!(
-                motivo.contains("journal.db"),
-                "el fichero se nombra: {motivo}"
-            );
+    // The reason, with the file named, still arrives through the warnings
+    // channel — which is in-process and CAN carry paths.
+    match warnings.seen().as_slice() {
+        [JournalStatus::Lost(NoJournal::Failed(reason))] => {
+            assert!(reason.contains("journal.db"), "the file is named: {reason}");
         }
-        otro => panic!("esto no es el lock de nadie: {otro:?}"),
+        other => panic!("this is nobody's lock: {other:?}"),
     }
 }
 
-/// Y su gemela, que es la que impide que el arreglo sea peor que el agujero: un
-/// journal OCUPADO deja seguir.
+/// And its twin, which is what keeps the fix from being worse than the hole:
+/// an OCCUPIED journal lets things proceed.
 ///
-/// El ocupante habitual es benigno —un daemon vivo, otra ventana— y rehusar
-/// convertiría «hay un daemon» en «el gestor de ficheros no funciona». Un
-/// transitorio (otro `norte cp` de un script, un daemon reiniciándose) no puede
-/// tumbar una sesión de tres horas.
+/// The usual occupant is benign — a live daemon, another window — and
+/// refusing would turn "there is a daemon" into "the file manager does not
+/// work". A transient one (another script's `norte cp`, a daemon restarting)
+/// cannot bring down a three-hour session.
 #[tokio::test]
-async fn un_journal_ocupado_deja_seguir() {
+async fn a_busy_journal_lets_things_proceed() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let _dueno = SqliteJournal::open(&journal_path(dir.path()))
+    let _owner = SqliteJournal::open(&journal_path(dir.path()))
         .await
-        .expect("el primero se lo lleva");
+        .expect("the first one takes it");
 
-    let (engine, _lazy, mem) = engine_perezoso(dir.path());
+    let (engine, _lazy, mem) = lazy_engine(dir.path());
     let h = engine
         .mkdir(&vp("mem:///d"))
         .await
-        .expect("ocupado NO rehúsa");
+        .expect("busy does NOT refuse");
     assert_eq!(h.join().await, TaskState::Completed);
     assert!(
         mem.stat(&vp("mem:///d")).await.is_ok(),
-        "la mutación ocurrió"
+        "the mutation happened"
     );
 }
 
-/// El engine SIN journal por construcción (`Engine::new()`, un embebedor de la
-/// biblioteca) no queda atrapado en la negativa de #178: no tiene journal
-/// perezoso, así que no hay fichero que arreglar y nunca hubo registro que
-/// perder.
+/// The engine WITHOUT a journal by construction (`Engine::new()`, a library
+/// embedder) does not get caught in #178's refusal: it has no lazy journal, so
+/// there is no file to fix and there was never a record to lose.
 #[tokio::test]
-async fn un_engine_sin_journal_perezoso_no_lo_echa_de_menos() {
+async fn an_engine_without_a_lazy_journal_does_not_miss_it() {
     let engine = Engine::new();
     let mem = Arc::new(MemProvider::new());
     engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
@@ -874,44 +888,44 @@ async fn un_engine_sin_journal_perezoso_no_lo_echa_de_menos() {
     assert_eq!(h.join().await, TaskState::Completed);
 }
 
-/// **La afirmación entera de #178, y lo único que la sostiene.** TODO punto de
-/// mutación del engine pasa por el gate del journal.
+/// **The whole claim of #178, and the only thing that holds it up.** EVERY
+/// mutation point in the engine passes through the journal's gate.
 ///
-/// Sin esto, la cobertura la daba un solo `mkdir`: un `Engine::hardlink_as`
-/// futuro que se olvidara del gate no rompería ningún test y reabriría el
-/// agujero por la puerta nueva, en silencio. La lista es la de los ocho
-/// llamadores de `gate`, y crece con ellos.
+/// Without this, coverage was given by a single `mkdir`: a future
+/// `Engine::hardlink_as` that forgot the gate would break no test and reopen
+/// the hole through the new door, silently. The list is `gate`'s eight
+/// callers, and it grows with them.
 #[tokio::test]
-async fn toda_mutacion_pasa_por_el_gate_del_journal() {
+async fn every_mutation_passes_through_the_journals_gate() {
     use norte_proto::Error as E;
 
     let dir = tempfile::tempdir().expect("tempdir");
-    std::fs::create_dir(journal_path(dir.path())).expect("ocupar el nombre con un directorio");
-    let (engine, _lazy, mem) = engine_perezoso(dir.path());
-    // Un árbol con algo que copiar, mover, renombrar y borrar.
+    std::fs::create_dir(journal_path(dir.path())).expect("occupy the name with a directory");
+    let (engine, _lazy, mem) = lazy_engine(dir.path());
+    // A tree with something to copy, move, rename and delete.
     mem.mkdir(&vp("mem:///d")).await.expect("fixture");
     {
         let mut sink = mem.write(&vp("mem:///d/a.txt")).await.expect("write");
-        sink.write(bytes::Bytes::from_static(b"vivo"))
+        sink.write(bytes::Bytes::from_static(b"alive"))
             .await
             .expect("chunk");
         sink.commit().await.expect("commit");
     }
 
     let (from, to) = (vp("mem:///d/a.txt"), vp("mem:///d/b.txt"));
-    // El plan de renombrados se pide de verdad: `rename_batch` compara el hash
-    // ANTES del gate, así que uno inventado saldría por `PlanStale` y no
-    // probaría nada del journal. (Que el orden sea ese no es un problema:
-    // comparar no toca el árbol.)
-    let pares: Vec<(Vec<u8>, Vec<u8>)> = vec![(b"a.txt".to_vec(), b"c.txt".to_vec())];
+    // The rename plan is requested for real: `rename_batch` compares the hash
+    // BEFORE the gate, so a made-up one would fail with `PlanStale` and prove
+    // nothing about the journal. (That the order is that way is not a
+    // problem: comparing does not touch the tree.)
+    let pairs: Vec<(Vec<u8>, Vec<u8>)> = vec![(b"a.txt".to_vec(), b"c.txt".to_vec())];
     let plan = engine
-        .rename_batch_plan(&vp("mem:///d"), &pares)
+        .rename_batch_plan(&vp("mem:///d"), &pairs)
         .await
-        .expect("planificar es LEER: no pasa por el gate del journal");
-    let rehusado: Vec<(&str, Result<(), norte_proto::Error>)> = vec![
+        .expect("planning is READING: it does not pass through the journal's gate");
+    let refused: Vec<(&str, Result<(), norte_proto::Error>)> = vec![
         ("copy", engine.copy(&from, &to).await.map(|_| ())),
         ("move", engine.move_(&from, &to).await.map(|_| ())),
-        ("mkdir", engine.mkdir(&vp("mem:///nuevo")).await.map(|_| ())),
+        ("mkdir", engine.mkdir(&vp("mem:///new")).await.map(|_| ())),
         (
             "delete",
             engine.delete(&vp("mem:///d/a.txt")).await.map(|_| ()),
@@ -919,7 +933,7 @@ async fn toda_mutacion_pasa_por_el_gate_del_journal() {
         (
             "rename_batch",
             engine
-                .rename_batch(&vp("mem:///d"), &pares, plan.hash())
+                .rename_batch(&vp("mem:///d"), &pairs, plan.hash())
                 .await
                 .map(|_| ()),
         ),
@@ -927,8 +941,8 @@ async fn toda_mutacion_pasa_por_el_gate_del_journal() {
             "undo_session",
             engine.undo_session(Actor::User).await.map(|_| ()),
         ),
-        // #314: la novena. El pin existe justo para que la que llega no se
-        // olvide, y esta llegó — así que aquí está.
+        // #314: the ninth one. The pin exists exactly so the one that arrives
+        // is not forgotten, and this one arrived — so here it is.
         (
             "set_mode",
             engine
@@ -942,48 +956,52 @@ async fn toda_mutacion_pasa_por_el_gate_del_journal() {
                 .map(|_| ()),
         ),
     ];
-    for (nombre, r) in rehusado {
+    for (name, r) in refused {
         assert!(
             matches!(r, Err(E::JournalUnavailable)),
-            "{nombre} tiene que pasar por el gate del journal: {r:?}"
+            "{name} has to pass through the journal's gate: {r:?}"
         );
     }
 
-    // Y nada de eso tocó el árbol: la negativa es PREVIA al efecto.
+    // And none of that touched the tree: the refusal is PRIOR to the effect.
     assert!(
         mem.stat(&from).await.is_ok(),
-        "el fichero sigue donde estaba"
+        "the file is still where it was"
     );
-    assert!(mem.stat(&to).await.is_err(), "no se creó el destino");
     assert!(
-        mem.stat(&vp("mem:///nuevo")).await.is_err(),
-        "no se creó el directorio"
+        mem.stat(&to).await.is_err(),
+        "the destination was not created"
+    );
+    assert!(
+        mem.stat(&vp("mem:///new")).await.is_err(),
+        "the directory was not created"
     );
 }
 
 // ---------------------------------------------------------------------------
-// #205: una operación queda ENTERA dentro del journal, o entera fuera.
+// #205: an operation stays ENTIRELY inside the journal, or entirely outside.
 // ---------------------------------------------------------------------------
 
-/// Un `MemProvider` que SUELTA el journal en cuanto borra el primer nodo.
+/// A `MemProvider` that RELEASES the journal as soon as it deletes the first
+/// node.
 ///
-/// Es el reintento de #179 disparándose a mitad de una operación larga, sin
-/// carreras: el ocupante deja el fichero justo entre la primera entrada y la
-/// segunda, que es la ventana exacta en la que una Task podía empezar a
-/// registrar por el medio.
-struct SueltaElJournalAlBorrar {
+/// It is #179's retry firing halfway through a long operation, with no races:
+/// the occupant leaves the file exactly between the first entry and the
+/// second, which is the exact window in which a Task could start recording
+/// partway through.
+struct ReleasesJournalOnDelete {
     inner: Arc<MemProvider>,
-    dueno: tokio::sync::Mutex<Option<SqliteJournal>>,
-    /// Borrados vistos. Se suelta en el SEGUNDO, no en el primero, y ahí está
-    /// la gracia: la fila de la primera entrada ya se intentó (y no llegó, el
-    /// fichero era de otro), así que lo que queda es una operación con la
-    /// cabeza sin registrar y la cola registrada — la mitad y mitad exacta que
-    /// #205 describe, no un cambio de veredicto antes de empezar.
-    vistos: std::sync::atomic::AtomicU64,
+    owner: tokio::sync::Mutex<Option<SqliteJournal>>,
+    /// Deletes seen. It releases on the SECOND one, not the first, and
+    /// therein lies the point: the first entry's row was already attempted
+    /// (and did not land, the file belonged to someone else), so what is left
+    /// is an operation with an unrecorded head and a recorded tail — the exact
+    /// half-and-half #205 describes, not a verdict change before starting.
+    seen: std::sync::atomic::AtomicU64,
 }
 
 #[async_trait::async_trait]
-impl Provider for SueltaElJournalAlBorrar {
+impl Provider for ReleasesJournalOnDelete {
     fn scheme(&self) -> &str {
         self.inner.scheme()
     }
@@ -1014,40 +1032,38 @@ impl Provider for SueltaElJournalAlBorrar {
     }
     async fn remove(&self, p: &VPath) -> Result<(), norte_proto::Error> {
         self.inner.remove(p).await?;
-        if self
-            .vistos
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-            == 1
-            && let Some(j) = self.dueno.lock().await.take()
+        if self.seen.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 1
+            && let Some(j) = self.owner.lock().await.take()
         {
-            // De verdad, y esperando: soltar sin cerrar dejaría el lock puesto
-            // un rato indefinido y el test dependería del reloj.
+            // For real, and waiting: releasing without closing would leave the
+            // lock in place for an indefinite while and the test would depend
+            // on the clock.
             j.close().await;
         }
         Ok(())
     }
 }
 
-/// **#205.** Una operación que empieza SIN journal se queda sin journal entera,
-/// aunque el fichero se libere a mitad.
+/// **#205.** An operation that starts WITHOUT a journal stays without a
+/// journal entirely, even if the file gets freed halfway through.
 ///
-/// Sin fijar el veredicto, `ops` lo preguntaba por MUTACIÓN: la primera entrada
-/// no dejaba fila, el ocupante soltaba, y las siguientes sí — media operación
-/// registrada dentro de UNA Task y UN actor. `undo_session` desanda entonces la
-/// cola registrada y deja la cabeza que no lo está, sin poder nombrar lo que se
-/// dejó, porque de eso no hay filas.
+/// Without pinning the verdict, `ops` used to ask PER MUTATION: the first
+/// entry left no row, the occupant let go, and the following ones did — half
+/// an operation recorded inside ONE Task and ONE actor. `undo_session` then
+/// unwinds the recorded tail and leaves the head that is not, unable to name
+/// what was left, because there are no rows for it.
 ///
-/// «No quedó registrado» se arregla a mano; «quedó registrado a medias» es una
-/// trampa, y la abrió el reintento de #179.
+/// "Nothing got recorded" gets fixed by hand; "got half-recorded" is a trap,
+/// and #179's retry is what opened it.
 #[tokio::test]
-async fn una_operacion_no_queda_registrada_a_medias() {
+async fn an_operation_does_not_get_recorded_halfway() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let dueno = SqliteJournal::open(&journal_path(dir.path()))
+    let owner = SqliteJournal::open(&journal_path(dir.path()))
         .await
-        .expect("el primero se lo lleva");
+        .expect("the first one takes it");
 
-    // Freno CERO: sin fijar el veredicto, la segunda entrada reintentaría y
-    // encontraría el fichero libre. Es lo que hace al test discriminante.
+    // ZERO brake: without pinning the verdict, the second entry would retry
+    // and find the file free. That is what makes the test discriminating.
     let lazy = Arc::new(LazyJournal::with_retry_brake(
         dir.path(),
         std::time::Duration::ZERO,
@@ -1065,14 +1081,14 @@ async fn una_operacion_no_queda_registrada_a_medias() {
             .expect("chunk");
         sink.commit().await.expect("commit");
     }
-    let provider = Arc::new(SueltaElJournalAlBorrar {
+    let provider = Arc::new(ReleasesJournalOnDelete {
         inner: Arc::clone(&mem),
-        dueno: tokio::sync::Mutex::new(Some(dueno)),
-        vistos: std::sync::atomic::AtomicU64::new(0),
+        owner: tokio::sync::Mutex::new(Some(owner)),
+        seen: std::sync::atomic::AtomicU64::new(0),
     });
     engine.register_provider(provider as Arc<dyn Provider>);
 
-    // Un borrado permanente del árbol: cuatro entradas, una mutación cada una.
+    // A permanent delete of the tree: four entries, one mutation each.
     let h = engine
         .delete_with(&vp("mem:///d"), norte_proto::DeleteMode::Permanent)
         .await
@@ -1080,30 +1096,31 @@ async fn una_operacion_no_queda_registrada_a_medias() {
     assert_eq!(h.join().await, TaskState::Completed);
     assert!(
         mem.stat(&vp("mem:///d")).await.is_err(),
-        "el árbol se borró entero: el efecto no depende del journal"
+        "the whole tree got deleted: the effect does not depend on the journal"
     );
 
-    // Y el fichero quedó libre a mitad, así que ahora esta sesión sí lo abre.
-    let journal = lazy.get().await.expect("el ocupante lo soltó");
+    // And the file was left free halfway through, so now this session does
+    // open it.
+    let journal = lazy.get().await.expect("the occupant let go of it");
     assert_eq!(
         journal.journal().count().await.expect("count"),
         0,
-        "la operación empezó sin journal: NINGUNA de sus entradas quedó \
-         registrada, ni siquiera las de después de que el fichero se liberara. \
-         Sin fijar el veredicto son 3 de 4 — cabeza sin registrar, cola \
-         registrada — que es la operación que el undo deshace a medias"
+        "the operation started without a journal: NONE of its entries got \
+         recorded, not even the ones after the file was freed. Without pinning \
+         the verdict it is 3 of 4 — unrecorded head, recorded tail — which is \
+         the operation undo would undo halfway"
     );
 }
 
-/// Y la otra mitad de la misma propiedad: una operación que empieza CON journal
-/// registra todas sus entradas.
+/// And the other half of the same property: an operation that starts WITH a
+/// journal records all of its entries.
 ///
-/// Las dos juntas son «entera dentro o entera fuera». Sin esta, fijar el
-/// veredicto en `NoopObserver` para todo pasaría el test de arriba.
+/// Both together are "entirely in or entirely out". Without this one, pinning
+/// the verdict to `NoopObserver` for everything would pass the test above.
 #[tokio::test]
-async fn una_operacion_que_empieza_con_journal_lo_registra_todo() {
+async fn an_operation_that_starts_with_a_journal_records_everything() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let (engine, lazy, mem) = engine_perezoso(dir.path());
+    let (engine, lazy, mem) = lazy_engine(dir.path());
     mem.mkdir(&vp("mem:///d")).await.expect("fixture");
     for n in 0..3 {
         let mut sink = mem
@@ -1122,30 +1139,31 @@ async fn una_operacion_que_empieza_con_journal_lo_registra_todo() {
         .expect("delete");
     assert_eq!(h.join().await, TaskState::Completed);
 
-    let journal = lazy.get().await.expect("dueña");
+    let journal = lazy.get().await.expect("owner");
     assert_eq!(
         journal.journal().count().await.expect("count"),
         4,
-        "tres ficheros y su directorio: la operación entera"
+        "three files and their directory: the whole operation"
     );
 }
 
-/// Un provider que intenta SOLTAR el journal justo cuando la Task está
-/// mutando, y apunta lo que le contestaron.
+/// A provider that tries to RELEASE the journal right when the Task is
+/// mutating, and records what it was told.
 ///
-/// El instante importa y por eso se pregunta desde aquí dentro: entre que el
-/// engine despacha la Task y que su cuerpo fija el veredicto no hay nadie
-/// sosteniendo el handle, y soltar AHÍ es inofensivo (todavía no hay efecto, y
-/// el `pin` lo vuelve a abrir). La ventana que importa es la otra, la que va
-/// del `pin` a la última fila, y solo se alcanza desde dentro del efecto.
-struct SueltaMientrasMuta {
+/// The instant matters, and that is why it is asked from in here: between the
+/// engine dispatching the Task and its body pinning the verdict there is
+/// nobody holding the handle, and releasing THERE is harmless (there is still
+/// no effect, and the `pin` reopens it). The window that matters is the other
+/// one, the one that runs from the `pin` to the last row, and it is only
+/// reachable from inside the effect.
+struct ReleasesWhileMutating {
     inner: Arc<MemProvider>,
     lazy: Arc<LazyJournal>,
-    solto: Mutex<Option<bool>>,
+    released: Mutex<Option<bool>>,
 }
 
 #[async_trait::async_trait]
-impl Provider for SueltaMientrasMuta {
+impl Provider for ReleasesWhileMutating {
     fn scheme(&self) -> &str {
         self.inner.scheme()
     }
@@ -1175,64 +1193,64 @@ impl Provider for SueltaMientrasMuta {
         self.inner.remove(p).await
     }
     async fn mkdir(&self, p: &VPath) -> Result<(), norte_proto::Error> {
-        // El efecto ya está a punto de ocurrir y su fila todavía no existe:
-        // ESTA es la ventana.
+        // The effect is about to happen and its row does not exist yet: THIS
+        // is the window.
         let r = self.lazy.release().await;
-        *self.solto.lock().expect("lock") = Some(r);
+        *self.released.lock().expect("lock") = Some(r);
         self.inner.mkdir(p).await
     }
 }
 
-/// El handle fijado se sostiene TODA la Task, así que `release` no puede cerrar
-/// la ventana entre el gate de una mutación y su fila.
+/// The pinned handle is held for the WHOLE Task, so `release` cannot close the
+/// window between a mutation's gate and its row.
 ///
-/// Es la precondición que le falta al temporizador de ociosidad de #179, y la
-/// mitad de #205 que no es sobre el undo: pinchar el handle al principio la da
-/// gratis, y sin ella `release` desde otro hilo dejaría un efecto sin fila y
-/// sin error.
+/// It is the precondition #179's idleness timer is missing, and the half of
+/// #205 that is not about undo: pinning the handle at the start gives this for
+/// free, and without it `release` from another thread would leave an effect
+/// with no row and no error.
 #[tokio::test]
-async fn mientras_una_task_muta_el_journal_no_se_puede_soltar() {
+async fn while_a_task_mutates_the_journal_cannot_be_released() {
     let dir = tempfile::tempdir().expect("tempdir");
     let lazy = Arc::new(LazyJournal::in_state_dir(dir.path()));
     let engine = Engine::with_lazy_journal(Arc::clone(&lazy));
     let mem = Arc::new(MemProvider::new());
-    let provider = Arc::new(SueltaMientrasMuta {
+    let provider = Arc::new(ReleasesWhileMutating {
         inner: Arc::clone(&mem),
         lazy: Arc::clone(&lazy),
-        solto: Mutex::new(None),
+        released: Mutex::new(None),
     });
     engine.register_provider(Arc::clone(&provider) as Arc<dyn Provider>);
 
-    let h = engine.mkdir(&vp("mem:///nuevo")).await.expect("mkdir");
+    let h = engine.mkdir(&vp("mem:///new")).await.expect("mkdir");
     assert_eq!(h.join().await, TaskState::Completed);
 
     assert_eq!(
-        *provider.solto.lock().expect("lock"),
+        *provider.released.lock().expect("lock"),
         Some(false),
-        "con la Task a medio mutar, soltar el journal tiene que NEGARSE: \
-         cerrarlo ahí dejaría este efecto sin fila y sin error"
+        "with the Task mid-mutation, releasing the journal has to be REFUSED: \
+         closing it there would leave this effect with no row and no error"
     );
-    let journal = lazy.get().await.expect("dueña");
+    let journal = lazy.get().await.expect("owner");
     assert_eq!(
         journal.journal().count().await.expect("count"),
         1,
-        "y la fila llegó"
+        "and the row arrived"
     );
 }
 
-/// Un `MemProvider` que suelta el journal tras el SEGUNDO renombrado.
+/// A `MemProvider` that releases the journal after the SECOND rename.
 ///
-/// El gemelo de [`SueltaElJournalAlBorrar`] para el otro camino que fija su
-/// veredicto fuera de `ops`: el lote de renombrados, que cuando arranca sin
-/// journal se registra por el observer crudo.
-struct SueltaElJournalAlRenombrar {
+/// [`ReleasesJournalOnDelete`]'s twin for the other path that pins its verdict
+/// outside `ops`: the rename batch, which when it starts with no journal
+/// records through the raw observer.
+struct ReleasesJournalOnRename {
     inner: Arc<MemProvider>,
-    dueno: tokio::sync::Mutex<Option<SqliteJournal>>,
-    vistos: std::sync::atomic::AtomicU64,
+    owner: tokio::sync::Mutex<Option<SqliteJournal>>,
+    seen: std::sync::atomic::AtomicU64,
 }
 
 #[async_trait::async_trait]
-impl Provider for SueltaElJournalAlRenombrar {
+impl Provider for ReleasesJournalOnRename {
     fn scheme(&self) -> &str {
         self.inner.scheme()
     }
@@ -1263,11 +1281,8 @@ impl Provider for SueltaElJournalAlRenombrar {
     }
     async fn rename(&self, from: &VPath, to: &VPath) -> Result<(), norte_proto::Error> {
         self.inner.rename(from, to).await?;
-        if self
-            .vistos
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-            == 1
-            && let Some(j) = self.dueno.lock().await.take()
+        if self.seen.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 1
+            && let Some(j) = self.owner.lock().await.take()
         {
             j.close().await;
         }
@@ -1275,19 +1290,20 @@ impl Provider for SueltaElJournalAlRenombrar {
     }
 }
 
-/// **#205 en el lote de renombrados**, que fija su veredicto en `engine` y no
-/// en `ops`, y por tanto tenía la misma grieta por su cuenta.
+/// **#205 in the rename batch**, which pins its verdict in `engine` and not in
+/// `ops`, and therefore had the same crack of its own.
 ///
-/// Cuando `rename_batch_as` no encuentra journal al empezar, registra por el
-/// observer crudo. Sin fijarlo, cada paso volvía a preguntar — y las filas que
-/// llegaran a mitad irían ADEMÁS sin `batch_id`, o sea que el lote que el wire
-/// anuncia como una unidad deshacible quedaría medio registrado y sin agrupar.
+/// When `rename_batch_as` finds no journal on starting, it records through
+/// the raw observer. Without pinning it, every step would ask again — and the
+/// rows arriving partway would ALSO go with no `batch_id`, meaning the batch
+/// the wire announces as one undoable unit would end up half-recorded and
+/// ungrouped.
 #[tokio::test]
-async fn un_lote_de_renombrados_tampoco_queda_registrado_a_medias() {
+async fn a_rename_batch_also_does_not_get_recorded_halfway() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let dueno = SqliteJournal::open(&journal_path(dir.path()))
+    let owner = SqliteJournal::open(&journal_path(dir.path()))
         .await
-        .expect("el primero se lo lleva");
+        .expect("the first one takes it");
 
     let lazy = Arc::new(LazyJournal::with_retry_brake(
         dir.path(),
@@ -1306,14 +1322,14 @@ async fn un_lote_de_renombrados_tampoco_queda_registrado_a_medias() {
             .expect("chunk");
         sink.commit().await.expect("commit");
     }
-    let provider = Arc::new(SueltaElJournalAlRenombrar {
+    let provider = Arc::new(ReleasesJournalOnRename {
         inner: Arc::clone(&mem),
-        dueno: tokio::sync::Mutex::new(Some(dueno)),
-        vistos: std::sync::atomic::AtomicU64::new(0),
+        owner: tokio::sync::Mutex::new(Some(owner)),
+        seen: std::sync::atomic::AtomicU64::new(0),
     });
     engine.register_provider(provider as Arc<dyn Provider>);
 
-    let pares: Vec<(Vec<u8>, Vec<u8>)> = (0..3)
+    let pairs: Vec<(Vec<u8>, Vec<u8>)> = (0..3)
         .map(|n| {
             (
                 format!("a{n}.txt").into_bytes(),
@@ -1322,56 +1338,55 @@ async fn un_lote_de_renombrados_tampoco_queda_registrado_a_medias() {
         })
         .collect();
     let plan = engine
-        .rename_batch_plan(&vp("mem:///d"), &pares)
+        .rename_batch_plan(&vp("mem:///d"), &pairs)
         .await
         .expect("plan");
     let (h, _report) = engine
-        .rename_batch(&vp("mem:///d"), &pares, plan.hash())
+        .rename_batch(&vp("mem:///d"), &pairs, plan.hash())
         .await
         .expect("rename_batch");
     assert_eq!(h.join().await, TaskState::Completed);
     assert!(
         mem.stat(&vp("mem:///d/b0.txt")).await.is_ok(),
-        "los renombrados ocurrieron"
+        "the renames happened"
     );
 
-    let journal = lazy.get().await.expect("el ocupante lo soltó a mitad");
+    let journal = lazy.get().await.expect("the occupant let go of it halfway");
     assert_eq!(
         journal.journal().count().await.expect("count"),
         0,
-        "el lote empezó sin journal: NINGUNO de sus pasos quedó registrado, y \
-         desde luego no unos sí y otros no"
+        "the batch started without a journal: NONE of its steps got recorded, \
+         and certainly not some yes and some no"
     );
 }
 
-/// Arma un engine cuyo journal lo tiene otro, y que lo suelta en cuanto el
-/// provider ve su primera mutación.
-async fn escenario_que_suelta(dir: &Path) -> (Engine, Arc<LazyJournal>, Arc<MemProvider>) {
-    let dueno = SqliteJournal::open(&journal_path(dir))
+/// Builds an engine whose journal belongs to someone else, and who releases it
+/// as soon as the provider sees its first mutation.
+async fn scenario_that_releases(dir: &Path) -> (Engine, Arc<LazyJournal>, Arc<MemProvider>) {
+    let owner = SqliteJournal::open(&journal_path(dir))
         .await
-        .expect("el primero se lo lleva");
+        .expect("the first one takes it");
     let lazy = Arc::new(LazyJournal::with_retry_brake(
         dir,
         std::time::Duration::ZERO,
     ));
     let engine = Engine::with_lazy_journal(Arc::clone(&lazy));
     let mem = Arc::new(MemProvider::new());
-    let provider = Arc::new(SueltaAlMutar {
+    let provider = Arc::new(ReleasesOnMutate {
         inner: Arc::clone(&mem),
-        dueno: tokio::sync::Mutex::new(Some(dueno)),
-        vistos: std::sync::atomic::AtomicU64::new(0),
+        owner: tokio::sync::Mutex::new(Some(owner)),
+        seen: std::sync::atomic::AtomicU64::new(0),
     });
     engine.register_provider(provider as Arc<dyn Provider>);
     (engine, lazy, mem)
 }
 
-/// Un directorio con tres ficheros, para que la operación tenga entradas que
-/// partir.
-async fn arbolito(mem: &Arc<MemProvider>, raiz: &str) {
-    mem.mkdir(&vp(raiz)).await.expect("mkdir");
+/// A directory with three files, so the operation has entries to split.
+async fn little_tree(mem: &Arc<MemProvider>, root: &str) {
+    mem.mkdir(&vp(root)).await.expect("mkdir");
     for n in 0..3 {
         let mut sink = mem
-            .write(&vp(&format!("{raiz}/f{n}.txt")))
+            .write(&vp(&format!("{root}/f{n}.txt")))
             .await
             .expect("write");
         sink.write(bytes::Bytes::from_static(b"x"))
@@ -1381,77 +1396,79 @@ async fn arbolito(mem: &Arc<MemProvider>, raiz: &str) {
     }
 }
 
-/// Cuántas filas tiene el journal de `lazy`, que a estas alturas está libre.
-async fn filas(lazy: &Arc<LazyJournal>) -> i64 {
+/// How many rows `lazy`'s journal has, which by this point is free.
+async fn row_count(lazy: &Arc<LazyJournal>) -> i64 {
     lazy.get()
         .await
-        .expect("el ocupante lo soltó")
+        .expect("the occupant let go of it")
         .journal()
         .count()
         .await
         .expect("count")
 }
 
-/// **La regla entera de #205, y lo único que la sostiene.** TODA Task que muta
-/// fija su veredicto: empieza sin journal → termina sin journal, entera.
+/// **The whole rule of #205, and the only thing that holds it up.** EVERY Task
+/// that mutates pins its verdict: starts without a journal → ends without a
+/// journal, entirely.
 ///
-/// El gemelo de `toda_mutacion_pasa_por_el_gate_del_journal` para #205, y por
-/// el mismo motivo: sin él la regla vive en un comentario, y el día que alguien
-/// añada un `Engine::hardlink_as` que se olvide de fijar, ningún test se entera
-/// — la operación empezará a registrarse por el medio y el undo la deshará a
-/// medias, en silencio.
+/// The twin of `every_mutation_passes_through_the_journals_gate` for #205, and
+/// for the same reason: without it the rule lives in a comment, and the day
+/// someone adds an `Engine::hardlink_as` that forgets to pin, no test notices
+/// — the operation will start getting recorded partway through and undo will
+/// undo it halfway, silently.
 ///
-/// Cada caso corre en su propio directorio de estado: lo que se afirma es que
-/// el journal quedó VACÍO, y compartirlo haría que el de al lado lo llenara.
+/// Each case runs in its own state directory: what is being asserted is that
+/// the journal was left EMPTY, and sharing it would let the one next door
+/// fill it.
 #[tokio::test]
-async fn toda_task_que_muta_fija_su_veredicto() {
+async fn every_task_that_mutates_pins_its_verdict() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let (engine, lazy, mem) = escenario_que_suelta(dir.path()).await;
-    arbolito(&mem, "mem:///src").await;
+    let (engine, lazy, mem) = scenario_that_releases(dir.path()).await;
+    little_tree(&mem, "mem:///src").await;
     let h = engine
         .copy(&vp("mem:///src"), &vp("mem:///dst"))
         .await
         .expect("copy");
     assert_eq!(h.join().await, TaskState::Completed);
-    assert_eq!(filas(&lazy).await, 0, "copy_tree fija su veredicto");
+    assert_eq!(row_count(&lazy).await, 0, "copy_tree pins its verdict");
 
-    // Dentro del MISMO provider un move es UN rename, así que también prueba
-    // el camino de `rename_with_policy`, que es el otro que `move_task`
-    // delega.
+    // Inside the SAME provider a move is ONE rename, so this also exercises
+    // the `rename_with_policy` path, which is the other one `move_task`
+    // delegates to.
     let dir = tempfile::tempdir().expect("tempdir");
-    let (engine, lazy, mem) = escenario_que_suelta(dir.path()).await;
-    arbolito(&mem, "mem:///src").await;
+    let (engine, lazy, mem) = scenario_that_releases(dir.path()).await;
+    little_tree(&mem, "mem:///src").await;
     let h = engine
         .move_(&vp("mem:///src"), &vp("mem:///dst"))
         .await
         .expect("move");
     assert_eq!(h.join().await, TaskState::Completed);
-    assert_eq!(filas(&lazy).await, 0, "move fija su veredicto");
+    assert_eq!(row_count(&lazy).await, 0, "move pins its verdict");
 
     let dir = tempfile::tempdir().expect("tempdir");
-    let (engine, lazy, mem) = escenario_que_suelta(dir.path()).await;
-    arbolito(&mem, "mem:///d").await;
+    let (engine, lazy, mem) = scenario_that_releases(dir.path()).await;
+    little_tree(&mem, "mem:///d").await;
     let h = engine
         .delete_with(&vp("mem:///d"), norte_proto::DeleteMode::Permanent)
         .await
         .expect("delete");
     assert_eq!(h.join().await, TaskState::Completed);
-    assert_eq!(filas(&lazy).await, 0, "delete fija su veredicto");
+    assert_eq!(row_count(&lazy).await, 0, "delete pins its verdict");
 
-    // Una sola mutación, así que no hay mitad que partir — pero el veredicto
-    // tiene que ser el del principio igual.
+    // A single mutation, so there is no half to split — but the verdict still
+    // has to be the one from the start.
     let dir = tempfile::tempdir().expect("tempdir");
-    let (engine, lazy, _mem) = escenario_que_suelta(dir.path()).await;
-    let h = engine.mkdir(&vp("mem:///nuevo")).await.expect("mkdir");
+    let (engine, lazy, _mem) = scenario_that_releases(dir.path()).await;
+    let h = engine.mkdir(&vp("mem:///new")).await.expect("mkdir");
     assert_eq!(h.join().await, TaskState::Completed);
-    assert_eq!(filas(&lazy).await, 0, "mkdir fija su veredicto");
+    assert_eq!(row_count(&lazy).await, 0, "mkdir pins its verdict");
 
-    // #314: un lote de permisos son VARIAS mutaciones seguidas, que es el caso
-    // que este test existe para cubrir — el observador se fija una vez, antes
-    // de la primera, y no se vuelve a preguntar por el camino.
+    // #314: a permissions batch is SEVERAL mutations in a row, which is the
+    // case this test exists to cover — the observer is pinned once, before
+    // the first one, and does not get asked again along the way.
     let dir = tempfile::tempdir().expect("tempdir");
-    let (engine, lazy, mem) = escenario_que_suelta(dir.path()).await;
-    arbolito(&mem, "mem:///d").await;
+    let (engine, lazy, mem) = scenario_that_releases(dir.path()).await;
+    little_tree(&mem, "mem:///d").await;
     let h = engine
         .set_mode(norte_proto::methods::FsSetModeParams {
             paths: vec![vp("mem:///d/f0.txt"), vp("mem:///d/f1.txt")],
@@ -1462,32 +1479,28 @@ async fn toda_task_que_muta_fija_su_veredicto() {
         .await
         .expect("set_mode");
     assert_eq!(h.join().await, TaskState::Completed);
-    assert_eq!(filas(&lazy).await, 0, "set_mode fija su veredicto");
+    assert_eq!(row_count(&lazy).await, 0, "set_mode pins its verdict");
 }
 
-/// El provider de [`toda_task_que_muta_fija_su_veredicto`]: suelta el journal
-/// en cuanto ve su SEGUNDA mutación, sea del tipo que sea.
-struct SueltaAlMutar {
+/// The provider for [`every_task_that_mutates_pins_its_verdict`]: releases the
+/// journal as soon as it sees its SECOND mutation, whatever kind it is.
+struct ReleasesOnMutate {
     inner: Arc<MemProvider>,
-    dueno: tokio::sync::Mutex<Option<SqliteJournal>>,
-    vistos: std::sync::atomic::AtomicU64,
+    owner: tokio::sync::Mutex<Option<SqliteJournal>>,
+    seen: std::sync::atomic::AtomicU64,
 }
 
-impl SueltaAlMutar {
-    /// Suelta en la PRIMERA mutación, no en la segunda.
+impl ReleasesOnMutate {
+    /// Releases on the FIRST mutation, not the second.
     ///
-    /// Aquí lo que se comprueba es que el veredicto de la Task no cambia, no
-    /// dónde cae el corte — de eso se ocupa
-    /// `una_operacion_no_queda_registrada_a_medias`, con su 3-de-4. Y hace
-    /// falta que sea la primera: un `move` dentro del mismo provider es UN
-    /// rename, así que esperando a la segunda no se soltaría nunca y el caso
-    /// pasaría sin probar nada.
-    async fn quizas_soltar(&self) {
-        if self
-            .vistos
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-            == 0
-            && let Some(j) = self.dueno.lock().await.take()
+    /// What is checked here is that the Task's verdict does not change, not
+    /// where the cut falls — `an_operation_does_not_get_recorded_halfway`
+    /// handles that, with its 3-of-4. And it has to be the first: a `move`
+    /// inside the same provider is ONE rename, so waiting for the second would
+    /// never release and the case would pass without proving anything.
+    async fn maybe_release(&self) {
+        if self.seen.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0
+            && let Some(j) = self.owner.lock().await.take()
         {
             j.close().await;
         }
@@ -1495,7 +1508,7 @@ impl SueltaAlMutar {
 }
 
 #[async_trait::async_trait]
-impl Provider for SueltaAlMutar {
+impl Provider for ReleasesOnMutate {
     fn scheme(&self) -> &str {
         self.inner.scheme()
     }
@@ -1517,35 +1530,36 @@ impl Provider for SueltaAlMutar {
     }
     async fn write(&self, p: &VPath) -> Result<Box<dyn norte_vfs::ByteSink>, norte_proto::Error> {
         let sink = self.inner.write(p).await?;
-        self.quizas_soltar().await;
+        self.maybe_release().await;
         Ok(sink)
     }
     async fn mkdir(&self, p: &VPath) -> Result<(), norte_proto::Error> {
         self.inner.mkdir(p).await?;
-        self.quizas_soltar().await;
+        self.maybe_release().await;
         Ok(())
     }
     async fn remove(&self, p: &VPath) -> Result<(), norte_proto::Error> {
         self.inner.remove(p).await?;
-        self.quizas_soltar().await;
+        self.maybe_release().await;
         Ok(())
     }
     async fn rename(&self, from: &VPath, to: &VPath) -> Result<(), norte_proto::Error> {
         self.inner.rename(from, to).await?;
-        self.quizas_soltar().await;
+        self.maybe_release().await;
         Ok(())
     }
-    // #314: cambiar permisos es una mutación más, y sin reenviarla este doble
-    // respondía `Unsupported` por el default del trait — la Task terminaba
-    // «bien» sin haber mutado nada y sin soltar el journal, que es justo lo
-    // contrario de lo que este test comprueba.
+    // #314: changing permissions is one more mutation, and without forwarding
+    // it this double used to answer `Unsupported` from the trait's default —
+    // the Task would finish "fine" having mutated nothing and without
+    // releasing the journal, which is exactly the opposite of what this test
+    // checks.
     async fn set_mode(&self, p: &VPath, mode: u32) -> Result<(), norte_proto::Error> {
         self.inner.set_mode(p, mode).await?;
-        self.quizas_soltar().await;
+        self.maybe_release().await;
         Ok(())
     }
-    // Para que el modo ANTERIOR se pueda leer: el default del trait tira las
-    // opciones y con ellas el `posix.mode` que la reversa necesita.
+    // So the PREVIOUS mode can be read: the trait's default drops the
+    // options, and with them the `posix.mode` the reversal needs.
     async fn stat_with(
         &self,
         p: &VPath,

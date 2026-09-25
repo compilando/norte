@@ -1,9 +1,9 @@
-//! E2E de live search (Alt+F7, M4 T7): criterio de salida contra el
-//! `Backend::Embedded` real (Engine + `MemProvider`), el mismo harness
-//! `backend_mem` que `tests/lua_fs.rs`. Cubre los cuatro ejes de criterio
-//! (`name_glob`/`name_regex`/`content`/`content_regex`), cancelación limpia
-//! con hits parciales conservados, y un nombre hostil (bytes crudos no-UTF8)
-//! intacto de punta a punta.
+//! Live search E2E (Alt+F7, M4 T7): acceptance criteria against the real
+//! `Backend::Embedded` (Engine + `MemProvider`), the same `backend_mem`
+//! harness as `tests/lua_fs.rs`. Covers the four criterion axes
+//! (`name_glob`/`name_regex`/`content`/`content_regex`), clean cancellation
+//! with partial hits kept, and a hostile name (raw non-UTF8 bytes) intact
+//! end to end.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -17,22 +17,22 @@ use norte_testkit::MemProvider;
 use norte_vfs::Provider;
 
 fn vp(wire: &str) -> VPath {
-    VPath::parse(wire).expect("wire válido")
+    VPath::parse(wire).expect("valid wire")
 }
 
 async fn write_file(mem: &MemProvider, wire: &str, content: &[u8]) {
-    let mut sink = mem.write(&vp(wire)).await.expect("write abre");
+    let mut sink = mem.write(&vp(wire)).await.expect("write opens");
     sink.write(Bytes::copy_from_slice(content))
         .await
         .expect("chunk");
     sink.commit().await.expect("commit");
 }
 
-/// Escribe `content` bajo la raíz con un nombre de BYTES crudos (corpus
-/// hostil: nunca se asume UTF-8 en el nombre, regla 1).
+/// Writes `content` under the root with a RAW-BYTES name (hostile corpus:
+/// the name is never assumed to be UTF-8, rule 1).
 async fn write_named(mem: &MemProvider, name: &[u8], content: &[u8]) -> VPath {
-    let p = MemProvider::root().join(Segment::new(name.to_vec()).expect("segmento"));
-    let mut sink = mem.write(&p).await.expect("write abre");
+    let p = MemProvider::root().join(Segment::new(name.to_vec()).expect("segment"));
+    let mut sink = mem.write(&p).await.expect("write opens");
     sink.write(Bytes::copy_from_slice(content))
         .await
         .expect("chunk");
@@ -47,13 +47,13 @@ fn backend_mem() -> (Backend, Arc<MemProvider>) {
     (Backend::Embedded(Arc::new(engine)), mem)
 }
 
-/// Params base: solo raíz, resto vacío/false (mismo molde que
-/// `engine_search.rs`, para que los cuatro ejes se puedan setear con `..`).
+/// Base params: only the root, the rest empty/false (same mold as
+/// `engine_search.rs`, so the four axes can be set with `..`).
 fn params(root: &str) -> FsSearchParams {
     FsSearchParams::new(vp(root))
 }
 
-/// Drena el canal de hits hasta que se cierra; aplana entries+matches.
+/// Drains the hits channel until it closes; flattens entries+matches.
 async fn drain(
     mut rx: tokio::sync::mpsc::Receiver<norte_proto::methods::SearchHits>,
 ) -> Vec<(Entry, Option<MatchInfo>)> {
@@ -68,14 +68,14 @@ async fn drain(
 }
 
 // 1 ───────────────────────────────────────────────────────────────────────
-// Criterio de salida M4 live search: "año" bajo un árbol UTF-8 + Latin-1
-// encuentra ambos (y el UTF-8 anidado), en streaming; F5 desde un hit copia
-// el fichero real y el destino es byte-exacto contra el original.
+// M4 live search acceptance criterion: "año" under a UTF-8 + Latin-1 tree
+// finds both (and the nested UTF-8 one), streaming; F5 from a hit copies
+// the real file and the destination is byte-exact against the original.
 #[tokio::test]
-async fn criterio_de_salida_año() {
+async fn exit_criterion_año() {
     let (backend, mem) = backend_mem();
     write_file(&mem, "mem:///f1", "un año".as_bytes()).await;
-    // Latin-1 crudo: 'a' 0xF1 'o' = "año" con la ñ en un solo byte alto.
+    // Raw Latin-1: 'a' 0xF1 'o' = "año" with the ñ as a single high byte.
     write_file(&mem, "mem:///f2", b"a\xF1o").await;
     write_file(&mem, "mem:///f3.rs", b"").await;
     mem.mkdir(&vp("mem:///sub")).await.expect("mkdir sub");
@@ -102,52 +102,49 @@ async fn criterio_de_salida_año() {
             vp("mem:///f2").display_lossy(),
             vp("mem:///sub/f4").display_lossy(),
         ],
-        "f1 (UTF-8), f2 (Latin-1) y sub/f4 (UTF-8) casan; f3.rs (vacío) no"
+        "f1 (UTF-8), f2 (Latin-1) and sub/f4 (UTF-8) match; f3.rs (empty) does not"
     );
-    // Los tres son hits de CONTENIDO: line/preview poblados.
+    // All three are CONTENT hits: line/preview populated.
     for (e, m) in &hits {
         let m = m
             .as_ref()
-            .unwrap_or_else(|| panic!("match info para {}", e.path.display_lossy()));
+            .unwrap_or_else(|| panic!("match info for {}", e.path.display_lossy()));
         assert_eq!(m.line, Some(1), "{}", e.path.display_lossy());
         assert!(
             m.preview.as_deref().is_some_and(|s| !s.is_empty()),
-            "preview no vacío para {}",
+            "preview not empty for {}",
             e.path.display_lossy()
         );
     }
 
-    // F5-equivalente: copia el PRIMER hit (mem:///f1, UTF-8) a otro dir y
-    // verifica que el destino es byte-exacto contra el original.
+    // F5-equivalent: copies the FIRST hit (mem:///f1, UTF-8) to another dir
+    // and verifies the destination is byte-exact against the original.
     mem.mkdir(&vp("mem:///otro")).await.expect("mkdir otro");
-    let primero = &hits[0].0;
-    assert_eq!(
-        primero.path.display_lossy(),
-        vp("mem:///f1").display_lossy()
-    );
-    let name = primero.path.file_name().expect("nombre").clone();
+    let first = &hits[0].0;
+    assert_eq!(first.path.display_lossy(), vp("mem:///f1").display_lossy());
+    let name = first.path.file_name().expect("name").clone();
     let dest = vp("mem:///otro").join(name);
 
     let copy_task = backend
-        .copy(&primero.path, &dest, TransferOptions::default())
+        .copy(&first.path, &dest, TransferOptions::default())
         .await
         .expect("copy");
     assert_eq!(copy_task.join().await, TaskState::Completed);
 
     let original = backend
-        .read(&primero.path, None)
+        .read(&first.path, None)
         .await
         .expect("read original");
-    let copiado = backend.read(&dest, None).await.expect("read copia");
-    assert_eq!(copiado, original, "F5 desde un hit es byte-exacto");
+    let copied = backend.read(&dest, None).await.expect("read copy");
+    assert_eq!(copied, original, "F5 from a hit is byte-exact");
     assert_eq!(original, "un año".as_bytes());
 }
 
 // 2 ───────────────────────────────────────────────────────────────────────
-// Cancelación limpia (regla 3): tras el primer lote, cancel; los hits ya
-// llegados se conservan en lo drenado, la Task termina Cancelled.
+// Clean cancellation (rule 3): after the first batch, cancel; the hits
+// already received are kept in what was drained, the Task ends Cancelled.
 #[tokio::test]
-async fn cancel_conserva_lo_llegado() {
+async fn cancel_keeps_what_arrived() {
     let (backend, mem) = backend_mem();
     for i in 0..200 {
         write_file(
@@ -157,7 +154,7 @@ async fn cancel_conserva_lo_llegado() {
         )
         .await;
     }
-    // Latencia por op: da tiempo a cancelar a mitad del walk.
+    // Latency per op: gives time to cancel mid-walk.
     mem.faults()
         .set_latency_per_op(Some(Duration::from_millis(3)));
 
@@ -169,24 +166,24 @@ async fn cancel_conserva_lo_llegado() {
         .await
         .expect("search");
 
-    let first = rx.recv().await.expect("primer lote");
-    assert!(!first.entries.is_empty(), "primer lote no vacío");
+    let first = rx.recv().await.expect("first batch");
+    assert!(!first.entries.is_empty(), "first batch not empty");
     task.cancel();
 
     let mut got = first.entries.len();
     while let Some(batch) = rx.recv().await {
         got += batch.entries.len();
     }
-    assert!(got >= 1, "al menos el primer lote se conservó: {got}");
-    assert!(got < 200, "cancelada a mitad: {got} < 200");
+    assert!(got >= 1, "at least the first batch was kept: {got}");
+    assert!(got < 200, "cancelled halfway: {got} < 200");
     assert_eq!(task.join().await, TaskState::Cancelled);
 }
 
 // 3 ───────────────────────────────────────────────────────────────────────
-// Nombre hostil: bytes crudos no-UTF8 (0xFF 0xFE) sobreviven intactos por
-// glob "*" — ni panic ni corrupción del path (regla 1).
+// Hostile name: raw non-UTF8 bytes (0xFF 0xFE) survive intact through a
+// "*" glob — no panic, no path corruption (rule 1).
 #[tokio::test]
-async fn nombre_hostil() {
+async fn hostile_name() {
     let (backend, mem) = backend_mem();
     let hostile = write_named(&mem, &[0xFF, 0xFE], b"x").await;
 
@@ -200,34 +197,31 @@ async fn nombre_hostil() {
 
     let hits = drain(rx).await;
     assert_eq!(task.join().await, TaskState::Completed);
-    assert_eq!(hits.len(), 1, "una entrada");
+    assert_eq!(hits.len(), 1, "one entry");
     let (entry, m) = &hits[0];
-    assert!(
-        m.is_none(),
-        "búsqueda de solo nombre: sin contexto de contenido"
-    );
+    assert!(m.is_none(), "name-only search: no content context");
     assert_eq!(
         entry.path, hostile,
-        "el VPath del hit llega con los bytes crudos intactos"
+        "the hit's VPath arrives with the raw bytes intact"
     );
     assert_eq!(
-        entry.path.file_name().expect("nombre").as_bytes(),
+        entry.path.file_name().expect("name").as_bytes(),
         &[0xFF, 0xFE],
-        "el nombre hostil no se corrompe ni se decodifica"
+        "the hostile name is neither corrupted nor decoded"
     );
 }
 
 // 4 ───────────────────────────────────────────────────────────────────────
-// Los cuatro ejes de criterio (name_glob cubierto en `nombre_hostil`,
-// content en `criterio_de_salida_año`): aquí name_regex y content_regex.
+// The four criterion axes (name_glob covered in `hostile_name`, content
+// in `exit_criterion_año`): here name_regex and content_regex.
 #[tokio::test]
-async fn ejes_name_regex_y_content_regex() {
+async fn axes_name_regex_and_content_regex() {
     let (backend, mem) = backend_mem();
     write_file(&mem, "mem:///main.rs", b"fn main() {}\n").await;
     write_file(&mem, "mem:///notes.txt", b"nothing here\n").await;
     write_file(&mem, "mem:///lib.rs", b"struct Lib;\n").await;
 
-    // Eje name_regex.
+    // name_regex axis.
     let (task, rx) = backend
         .search(FsSearchParams {
             name_regex: Some(r"^(main|lib)\.rs$".to_owned()),
@@ -247,7 +241,7 @@ async fn ejes_name_regex_y_content_regex() {
         ]
     );
 
-    // Eje content_regex.
+    // content_regex axis.
     let (task, rx) = backend
         .search(FsSearchParams {
             content_regex: Some(r"struct\s+Lib".to_owned()),

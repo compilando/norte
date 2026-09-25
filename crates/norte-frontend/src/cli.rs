@@ -1,47 +1,48 @@
-//! Parseo de la línea de comandos COMPARTIDO por los frontends interactivos
-//! (TUI y GUI). Ninguno de los dos usa clap: son binarios cuyo arranque se
-//! nota, y su superficie de argumentos es un puñado de flags. Compartirlo
-//! evita que diverjan en lo que sí es contrato con la persona que teclea:
-//! qué es el posicional, qué flags existen, y qué pasa con uno que no.
+//! Command-line parsing SHARED by the interactive frontends (TUI and GUI).
+//! Neither uses clap: they are binaries whose startup time is noticeable, and
+//! their argument surface is a handful of flags. Sharing it keeps them from
+//! diverging on what actually is a contract with the person typing: what the
+//! positional is, which flags exist, and what happens with one that is not.
 //!
-//! Cada frontend DECLARA su superficie ([`parse`] recibe qué flags acepta),
-//! así que un flag que no soporta sale por [`Cli::unknown`] y el binario
-//! puede rechazarlo con un mensaje — jamás tragárselo en silencio, que es
-//! como `--help` acababa muriendo dentro del inicializador del terminal.
+//! Each frontend DECLARES its surface ([`parse`] receives which flags it
+//! accepts), so a flag it does not support comes out through [`Cli::unknown`]
+//! and the binary can reject it with a message — never swallow it silently,
+//! which is how `--help` used to end up dying inside the terminal's
+//! initializer.
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-/// Lo que la línea de comandos pidió.
+/// What the command line asked for.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Cli {
-    /// Primer argumento posicional: el directorio de arranque. Se conserva
-    /// como ruta cruda (regla 1: un nombre de dir no tiene por qué ser
-    /// UTF-8). Los posicionales siguientes se ignoran.
+    /// First positional argument: the starting directory. Kept as a raw path
+    /// (rule 1: a directory name has no reason to be UTF-8). Further
+    /// positionals are ignored.
     pub dir: Option<PathBuf>,
-    /// Flags booleanos presentes, por nombre EXACTO (`--daemon`).
+    /// Boolean flags present, by EXACT name (`--daemon`).
     pub flags: Vec<String>,
-    /// Flags con valor, por nombre exacto (`--socket` → su valor crudo).
+    /// Flags with a value, by exact name (`--socket` → its raw value).
     pub values: BTreeMap<String, OsString>,
-    /// Se pidió ayuda (`-h`/`--help`).
+    /// Help was requested (`-h`/`--help`).
     pub help: bool,
-    /// Se pidió la versión (`-V`/`--version`).
+    /// The version was requested (`-V`/`--version`).
     pub version: bool,
-    /// PRIMER flag no reconocido, tal cual se tecleó.
+    /// FIRST unrecognized flag, exactly as typed.
     pub unknown: Option<String>,
 }
 
 impl Cli {
-    /// ¿Estaba presente este flag booleano?
+    /// Was this boolean flag present?
     #[must_use]
     pub fn has(&self, flag: &str) -> bool {
         self.flags.iter().any(|f| f == flag)
     }
 
-    /// Valor de un flag con valor, como `String` con conversión LOSSY —
-    /// solo para valores que son texto por contrato (un nombre de preset).
-    /// Para rutas usa [`Cli::path`], que no toca los bytes.
+    /// A value-flag's value, as a `String` with a LOSSY conversion — only for
+    /// values that are text by contract (a preset name). For paths use
+    /// [`Cli::path`], which does not touch the bytes.
     #[must_use]
     pub fn text(&self, flag: &str) -> Option<String> {
         self.values
@@ -49,32 +50,32 @@ impl Cli {
             .map(|v| v.to_string_lossy().into_owned())
     }
 
-    /// Valor de un flag con valor, con los BYTES intactos.
+    /// A value-flag's value, with the BYTES intact.
     ///
-    /// Para lo que no es texto por contrato aunque lo parezca: el nombre de
-    /// una disposición acaba siendo `layouts/<nombre>.toml`, así que pasarlo
-    /// por [`Cli::text`] cambiaba qué fichero se abre —dos bytes inválidos
-    /// distintos aterrizaban en el mismo `\u{FFFD}.toml`— sin decir nada
-    /// (#246).
+    /// For what is not text by contract even though it looks like it: a
+    /// layout's name ends up as `layouts/<name>.toml`, so passing it through
+    /// [`Cli::text`] changed which file gets opened — two different invalid
+    /// byte sequences landed on the same `\u{FFFD}.toml` — without saying
+    /// anything (#246).
     #[must_use]
     pub fn os_text(&self, flag: &str) -> Option<&std::ffi::OsStr> {
         self.values.get(flag).map(OsString::as_os_str)
     }
 
-    /// Valor de un flag con valor, como ruta (bytes intactos).
+    /// A value-flag's value, as a path (bytes intact).
     #[must_use]
     pub fn path(&self, flag: &str) -> Option<PathBuf> {
         self.values.get(flag).map(PathBuf::from)
     }
 }
 
-/// Parsea `argv` SIN `argv[0]` (el caller lo salta).
+/// Parses `argv` WITHOUT `argv[0]` (the caller skips it).
 ///
-/// `bool_flags` y `value_flags` son la superficie que el frontend soporta;
-/// `-h`/`--help` y `-V`/`--version` se reconocen siempre. Un flag fuera de
-/// esas listas va a [`Cli::unknown`] en vez de ignorarse. Un flag con valor
-/// sin valor detrás (`--socket` al final) se queda sin entrada, como si no
-/// se hubiera pasado.
+/// `bool_flags` and `value_flags` are the surface the frontend supports;
+/// `-h`/`--help` and `-V`/`--version` are always recognized. A flag outside
+/// those lists goes to [`Cli::unknown`] instead of being ignored. A
+/// value-flag with no value after it (`--socket` at the end) ends up with no
+/// entry, as if it had not been passed.
 #[must_use]
 pub fn parse<I, S>(argv: I, bool_flags: &[&str], value_flags: &[&str]) -> Cli
 where
@@ -94,7 +95,7 @@ where
                     out.values.insert(s.to_owned(), v);
                 }
             }
-            // `-` a secas es un posicional por convención (stdin), no un flag.
+            // A bare `-` is a positional by convention (stdin), not a flag.
             s if s.starts_with('-') && s != "-" => {
                 if out.unknown.is_none() {
                     out.unknown = Some(s.to_owned());
@@ -114,10 +115,10 @@ mod tests {
     const BOOL: &[&str] = &["--daemon"];
     const VALUE: &[&str] = &["--preset", "--socket"];
 
-    /// El posicional es el DIR; los flags con valor se llevan el siguiente
-    /// argumento; los booleanos se registran por nombre.
+    /// The positional is the DIR; value-flags take the following argument;
+    /// booleans are recorded by name.
     #[test]
-    fn posicional_flags_y_valores() {
+    fn positional_flags_and_values() {
         let c = parse(
             [
                 "/tmp/x", "--preset", "vim", "--daemon", "--socket", "/run/s",
@@ -135,11 +136,11 @@ mod tests {
         assert!(c.unknown.is_none());
     }
 
-    /// `--help`/`--version` se reconocen SIEMPRE, los declare quien los
-    /// declare: antes caían en «flag desconocido, ignora» y el binario
-    /// seguía hasta morir tomando el terminal.
+    /// `--help`/`--version` are ALWAYS recognized, no matter who declares
+    /// them: they used to fall into "unknown flag, ignore" and the binary
+    /// kept going until it died holding the terminal.
     #[test]
-    fn ayuda_y_version_siempre() {
+    fn help_and_version_always() {
         for a in ["-h", "--help"] {
             assert!(parse([a], &[], &[]).help, "{a}");
         }
@@ -148,11 +149,11 @@ mod tests {
         }
     }
 
-    /// Un flag fuera de la superficie DECLARADA se nombra (el frontend lo
-    /// rechaza), aunque otro frontend sí lo soporte — cada uno responde de
-    /// lo suyo.
+    /// A flag outside the DECLARED surface is named (the frontend rejects
+    /// it), even when another frontend does support it — each one answers
+    /// for its own.
     #[test]
-    fn flag_fuera_de_la_superficie_declarada() {
+    fn flag_outside_the_declared_surface() {
         let c = parse(["--daemon", "/tmp"], &[], VALUE);
         assert_eq!(c.unknown.as_deref(), Some("--daemon"));
         assert_eq!(c.dir.as_deref(), Some(std::path::Path::new("/tmp")));
@@ -162,10 +163,10 @@ mod tests {
         );
     }
 
-    /// Un flag con valor SIN valor detrás no inventa nada; sin argumentos,
-    /// no se pide nada.
+    /// A value-flag with NO value after it invents nothing; with no
+    /// arguments, nothing is asked for.
     #[test]
-    fn valor_ausente_y_vacio() {
+    fn missing_and_empty_value() {
         let c = parse(["--socket"], BOOL, VALUE);
         assert!(c.path("--socket").is_none());
         assert_eq!(
@@ -174,14 +175,14 @@ mod tests {
         );
     }
 
-    /// Regla 1: un dir con bytes no-UTF8 llega ENTERO (nada de lossy en el
-    /// camino del dato).
+    /// Rule 1: a dir with non-UTF-8 bytes arrives WHOLE (no lossy anywhere
+    /// on the data's path).
     #[test]
     #[cfg(unix)]
-    fn el_dir_no_utf8_sobrevive() {
+    fn non_utf8_dir_survives() {
         use std::os::unix::ffi::OsStringExt as _;
-        let crudo = std::ffi::OsString::from_vec(b"/tmp/due\xffo".to_vec());
-        let c = parse([crudo.clone()], BOOL, VALUE);
-        assert_eq!(c.dir.as_deref(), Some(std::path::Path::new(&crudo)));
+        let raw = std::ffi::OsString::from_vec(b"/tmp/due\xffo".to_vec());
+        let c = parse([raw.clone()], BOOL, VALUE);
+        assert_eq!(c.dir.as_deref(), Some(std::path::Path::new(&raw)));
     }
 }

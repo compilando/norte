@@ -1,5 +1,5 @@
-//! Modelo del host de plugins (ADR 0022, M4-P1): manifiesto, capabilities,
-//! catálogo. Sin runtime WASM (M4-P2).
+//! Plugin host model (ADR 0022, M4-P1): manifest, capabilities, catalog.
+//! No WASM runtime (M4-P2).
 
 use norte_plugin_host::{
     COMMAND_ID_MAX_CHARS, COMMAND_MAX_COUNT, COMMAND_TITLE_MAX_CHARS, CONFIG_DESCRIPTION_MAX_CHARS,
@@ -25,7 +25,7 @@ fs-read = "scoped"
 "#;
 
 #[test]
-fn manifiesto_completo_parsea() {
+fn a_complete_manifest_parses() {
     let m = Manifest::from_toml(SYNTAX_PREVIEW).unwrap();
     assert_eq!(m.id, "org.norte.syntax-preview");
     assert_eq!(m.category, Category::Previewer);
@@ -40,7 +40,7 @@ fn manifiesto_completo_parsea() {
 }
 
 #[test]
-fn capabilities_ausentes_son_none() {
+fn absent_capabilities_are_none() {
     let m = Manifest::from_toml(
         r#"
         [plugin]
@@ -58,7 +58,7 @@ fn capabilities_ausentes_son_none() {
 }
 
 #[test]
-fn exec_distinto_de_none_se_rechaza() {
+fn exec_other_than_none_is_rejected() {
     let src = r#"
         [plugin]
         id = "org.evil.plugin"
@@ -73,25 +73,28 @@ fn exec_distinto_de_none_se_rechaza() {
         Manifest::from_toml(src),
         Err(ManifestError::ExecForbidden)
     ));
-    // `exec = "none"` explícito SÍ vale.
+    // An explicit `exec = "none"` DOES work.
     let ok = src.replace(r#"exec = "shell""#, r#"exec = "none""#);
     assert!(Manifest::from_toml(&ok).is_ok());
 }
 
-/// Un hook no lo ejecuta nadie: la categoría está en el manifiesto, en el
-/// catálogo y en la UI, pero no hay interfaz WIT, ni world, ni sitio en el
-/// host desde donde llamarla. Aceptar el manifiesto instalaría algo inerte y
-/// el gestor lo pintaría como un plugin más — la peor de las tres opciones,
-/// porque el autor se entera cuando nada pasa.
+/// Nobody runs a hook: the category is in the manifest, in the catalog and
+/// in the UI, but there is no WIT interface, no world, no place on the
+/// host to call it from. Accepting the manifest would install something
+/// inert and the manager would paint it as just another plugin — the
+/// worst of the three options, because the author finds out when nothing
+/// happens.
 ///
-/// Se rechaza al parsear, con el motivo. La categoría NO se borra: spec §7.1
-/// nombra los hooks entre las interfaces que WIT debe cubrir, así que quitarla
-/// alejaría el código de la especificación en vez de acercarlo.
+/// Rejected while parsing, with the reason. The category is NOT removed:
+/// spec §7.1 names hooks among the interfaces WIT must cover, so removing
+/// it would move the code away from the specification instead of closer
+/// to it.
 #[test]
-fn un_hook_escucha_eventos_del_vocabulario_cerrado() {
-    // Un evento fuera del vocabulario se rechaza CON el valor: `before-*` no
-    // existe a propósito (ADR 0100), y el error lo dice.
-    let desconocido = r#"
+fn a_hook_listens_to_events_from_the_closed_vocabulary() {
+    // An event outside the vocabulary is rejected WITH the value:
+    // `before-*` does not exist on purpose (ADR 0100), and the error says
+    // so.
+    let unknown = r#"
         [plugin]
         id = "org.demo.hooker"
         name = "Hooker"
@@ -102,13 +105,13 @@ fn un_hook_escucha_eventos_del_vocabulario_cerrado() {
         on = "before-copy"
     "#;
     assert!(matches!(
-        Manifest::from_toml(desconocido),
+        Manifest::from_toml(unknown),
         Err(ManifestError::HookUnknownEvent(ref e)) if e == "before-copy"
     ));
 
-    // También como contribución de un plugin de otra categoría: es la
-    // declaración la que se valida, no el campo que clasifica.
-    let por_contribucion = r#"
+    // Also as a contribution of a plugin of another category: it is the
+    // declaration that gets validated, not the field that classifies it.
+    let by_contribution = r#"
         [plugin]
         id = "org.demo.sneaky"
         name = "Sneaky"
@@ -119,23 +122,25 @@ fn un_hook_escucha_eventos_del_vocabulario_cerrado() {
         on = "after-copy"
     "#;
     assert!(matches!(
-        Manifest::from_toml(por_contribucion),
+        Manifest::from_toml(by_contribution),
         Err(ManifestError::HookUnknownEvent(_))
     ));
 
-    // Y un evento VÁLIDO en un plugin de otra categoría tampoco entra: solo
-    // los `hook` se despachan, así que sería una promesa inerte.
-    let en_otra = por_contribucion.replace("after-copy", "after-renamed");
+    // And a VALID event on a plugin of another category does not get in
+    // either: only `hook` ones get dispatched, so it would be an inert
+    // promise.
+    let on_other = by_contribution.replace("after-copy", "after-renamed");
     assert!(matches!(
-        Manifest::from_toml(&en_otra),
+        Manifest::from_toml(&on_other),
         Err(ManifestError::HookOnOtherCategory)
     ));
 
-    // Un hook con red se rechaza: recibe la ruta de cada mutación.
-    let con_red = r#"
+    // A hook with network access is rejected: it receives the path of
+    // every mutation.
+    let with_net = r#"
         [plugin]
-        id = "org.demo.fuga"
-        name = "Fuga"
+        id = "org.demo.leak"
+        name = "Leak"
         publisher = "demo"
         version = "0.1.0"
         category = "hook"
@@ -145,14 +150,14 @@ fn un_hook_escucha_eventos_del_vocabulario_cerrado() {
         net = { hosts = ["203.0.113.5"] }
     "#;
     assert!(matches!(
-        Manifest::from_toml(con_red),
+        Manifest::from_toml(with_net),
         Err(ManifestError::HookWithNet)
     ));
 }
 
-/// Un hook con dos sidecars válidos: el punto de partida de los tests de
-/// `fs-write`.
-const HOOK_CON_SIDECAR: &str = r#"
+/// A hook with two valid sidecars: the starting point of the `fs-write`
+/// tests.
+const HOOK_WITH_SIDECAR: &str = r#"
         [plugin]
         id = "org.demo.log"
         name = "Log"
@@ -165,12 +170,12 @@ const HOOK_CON_SIDECAR: &str = r#"
         fs-write = { sidecar = [".norte-renames.log", "renames.json"] }
     "#;
 
-/// `fs-write` (ADR 0101): sidecars, solo para hooks, nombres de verdad; el
-/// `"scoped"` reservado se rechaza diciendo qué poner.
+/// `fs-write` (ADR 0101): sidecars, only for hooks, real names; the
+/// reserved `"scoped"` is rejected saying what to put instead.
 #[test]
-fn fs_write_son_sidecars_y_solo_para_hooks() {
-    let hook_con_sidecar = HOOK_CON_SIDECAR;
-    let m = Manifest::from_toml(hook_con_sidecar).expect("sidecars válidos");
+fn fs_write_is_sidecars_and_only_for_hooks() {
+    let hook_with_sidecar = HOOK_WITH_SIDECAR;
+    let m = Manifest::from_toml(hook_with_sidecar).expect("valid sidecars");
     assert_eq!(
         m.capabilities.fs_write.sidecar_names(),
         &[".norte-renames.log".to_owned(), "renames.json".to_owned()]
@@ -182,109 +187,110 @@ fn fs_write_son_sidecars_y_solo_para_hooks() {
             "fs-write:renames.json".to_owned()
         ]
     );
-    // Un control dentro no llega a ser TOML válido, así que se prueba en la
-    // función: el manifiesto lo rechaza antes por otro camino. Y con él lo
-    // que no es ASCII portable: bidi, reservados de Windows, punto final.
-    for malo in [
+    // A control character inside never becomes valid TOML, so it is
+    // tested in the function: the manifest rejects it earlier by another
+    // path. And with it, whatever is not portable ASCII: bidi, Windows
+    // reserved names, trailing dot.
+    for bad in [
         "x\u{1b}y",
         "log\u{202e}",
         "CON",
         "nul.txt",
         "COM1.log",
-        "fin.",
+        "end.",
         "a:b",
         "ñ",
     ] {
-        assert!(!norte_plugin_host::is_valid_sidecar_name(malo), "{malo:?}");
+        assert!(!norte_plugin_host::is_valid_sidecar_name(bad), "{bad:?}");
     }
     assert!(norte_plugin_host::is_valid_sidecar_name("CONTROL.log"));
-    for malo in ["a/b", "..", ""] {
-        let src = hook_con_sidecar.replace("renames.json", malo);
+    for bad in ["a/b", "..", ""] {
+        let src = hook_with_sidecar.replace("renames.json", bad);
         assert!(
             matches!(
                 Manifest::from_toml(&src),
                 Err(ManifestError::SidecarName(_))
             ),
-            "{malo:?}"
+            "{bad:?}"
         );
     }
-    let repetido = hook_con_sidecar.replace("renames.json", ".norte-renames.log");
+    let repeated = hook_with_sidecar.replace("renames.json", ".norte-renames.log");
     assert!(matches!(
-        Manifest::from_toml(&repetido),
+        Manifest::from_toml(&repeated),
         Err(ManifestError::SidecarName(_))
     ));
 }
 
-/// `fs-write = "none"` sigue valiendo (ADR 0022); `"scoped"`, una lista
-/// vacía y una clave extra dicen por qué no.
+/// `fs-write = "none"` still works (ADR 0022); `"scoped"`, an empty list
+/// and an extra key say why not.
 #[test]
-fn fs_write_none_vale_y_los_errores_dicen_por_que() {
-    let hook_con_sidecar = HOOK_CON_SIDECAR;
-    let reservado = hook_con_sidecar.replace(
+fn fs_write_none_is_valid_and_the_errors_say_why() {
+    let hook_with_sidecar = HOOK_WITH_SIDECAR;
+    let reserved = hook_with_sidecar.replace(
         r#"fs-write = { sidecar = [".norte-renames.log", "renames.json"] }"#,
         r#"fs-write = "scoped""#,
     );
     assert!(matches!(
-        Manifest::from_toml(&reservado),
+        Manifest::from_toml(&reserved),
         Err(ManifestError::FsWriteReserved(ref s)) if s == "scoped"
     ));
-    // `"none"` (ADR 0022) sigue valiendo: es lo mismo que ausente, y digesta
-    // igual, así que una aprobación existente no se mueve.
-    let none = reservado.replace(r#"fs-write = "scoped""#, r#"fs-write = "none""#);
-    let sin = reservado.replace(r#"fs-write = "scoped""#, "");
-    let m_none = Manifest::from_toml(&none).expect("none vale");
+    // `"none"` (ADR 0022) still works: it is the same as absent, and
+    // digests the same, so an existing approval does not move.
+    let none = reserved.replace(r#"fs-write = "scoped""#, r#"fs-write = "none""#);
+    let without = reserved.replace(r#"fs-write = "scoped""#, "");
+    let m_none = Manifest::from_toml(&none).expect("none is valid");
     assert_eq!(
         m_none.capabilities.fs_write,
         norte_plugin_host::FsWriteCap::None
     );
     assert_eq!(
         m_none.approval_digest(),
-        Manifest::from_toml(&sin)
-            .expect("ausente vale")
+        Manifest::from_toml(&without)
+            .expect("absent is valid")
             .approval_digest()
     );
-    // Una lista vacía o desbordada dice cuántos traía, no un nombre.
-    let vacia = hook_con_sidecar.replace(r#"[".norte-renames.log", "renames.json"]"#, "[]");
+    // An empty or oversized list says how many it carried, not a name.
+    let empty = hook_with_sidecar.replace(r#"[".norte-renames.log", "renames.json"]"#, "[]");
     assert!(matches!(
-        Manifest::from_toml(&vacia),
+        Manifest::from_toml(&empty),
         Err(ManifestError::SidecarListSize { got: 0 })
     ));
-    // Y una clave que no sea `sidecar` en la tabla es un manifiesto inválido.
-    let extra = hook_con_sidecar.replace(
+    // And a key other than `sidecar` in the table is an invalid manifest.
+    let extra = hook_with_sidecar.replace(
         r#"fs-write = { sidecar = [".norte-renames.log", "renames.json"] }"#,
         r#"fs-write = { sidecar = ["a.log"], grant = "all" }"#,
     );
     assert!(Manifest::from_toml(&extra).is_err());
-    let en_previewer = hook_con_sidecar
+    let on_previewer = hook_with_sidecar
         .replace(r#"category = "hook""#, r#"category = "previewer""#)
         .replace("[[contributions.hook]]\n        on = \"after-renamed\"", "");
     assert!(matches!(
-        Manifest::from_toml(&en_previewer),
+        Manifest::from_toml(&on_previewer),
         Err(ManifestError::SidecarNotForCategory)
     ));
 
-    // Un hook que no escucha nada es inerte, y se dice.
-    let sin_eventos = r#"
+    // A hook that listens to nothing is inert, and it says so.
+    let no_events = r#"
         [plugin]
-        id = "org.demo.mudo"
-        name = "Mudo"
+        id = "org.demo.mute"
+        name = "Mute"
         publisher = "demo"
         version = "0.1.0"
         category = "hook"
     "#;
     assert!(matches!(
-        Manifest::from_toml(sin_eventos),
+        Manifest::from_toml(no_events),
         Err(ManifestError::HookWithoutEvents)
     ));
 
-    // Y con los cinco eventos que existen, entra; el vocabulario del código
-    // es el que la constante publica.
+    // And with the five events that exist, it goes through; the code's
+    // vocabulary is what the constant publishes.
     for on in norte_plugin_host::HOOK_EVENTS {
-        let bueno = format!(
+        let good = format!(
             r#"
             [plugin]
-            id = "org.demo.oyente"
-            name = "Oyente"
+            id = "org.demo.listener"
+            name = "Listener"
             publisher = "demo"
             version = "0.1.0"
             category = "hook"
@@ -292,16 +298,16 @@ fn fs_write_none_vale_y_los_errores_dicen_por_que() {
             on = "{on}"
         "#
         );
-        let m = Manifest::from_toml(&bueno).unwrap_or_else(|e| panic!("{on}: {e}"));
+        let m = Manifest::from_toml(&good).unwrap_or_else(|e| panic!("{on}: {e}"));
         assert_eq!(m.contributions.hook[0].on, *on);
     }
 }
 
 #[test]
-fn id_no_reverse_dns_se_rechaza() {
+fn a_non_reverse_dns_id_is_rejected() {
     let src = r#"
         [plugin]
-        id = "sinpunto"
+        id = "nodot"
         name = "N"
         publisher = "p"
         version = "0.1.0"
@@ -311,9 +317,10 @@ fn id_no_reverse_dns_se_rechaza() {
 }
 
 #[test]
-fn id_charset_reverse_dns_estricto() {
-    // `id_literal` = el texto EXACTO del valor TOML (ya escapado). Permite meter
-    // `\n` (escape TOML → salto de línea real en el valor) o `\"` (comilla).
+fn strict_reverse_dns_id_charset() {
+    // `id_literal` = the EXACT text of the TOML value (already escaped).
+    // Allows sneaking in `\n` (TOML escape → real newline in the value) or
+    // `\"` (a quote).
     let with_id = |id_literal: &str| {
         format!(
             r#"
@@ -327,15 +334,16 @@ fn id_charset_reverse_dns_estricto() {
         )
     };
 
-    // Ids válidos: segmentos alfanuméricos con guiones, con al menos un punto.
+    // Valid ids: alphanumeric segments with hyphens, with at least one dot.
     assert!(Manifest::from_toml(&with_id(r#""org.norte.demo""#)).is_ok());
     assert!(Manifest::from_toml(&with_id(r#""org.foo-bar.baz""#)).is_ok());
 
-    // Ids hostiles que SÍ parsean como TOML pero fallan el charset ⇒
-    // `ManifestError::Id` (no llegan al log ni al modal de aprobación T5):
-    //  - `\n` (escape TOML) = salto de línea real en el valor → inyección de log.
-    //  - `\"` (escape TOML) = comilla en el valor → spoofing del diálogo.
-    //  - espacios, guion-bajo, no-ASCII, punto inicial/final, segmento vacío.
+    // Hostile ids that DO parse as TOML but fail the charset ⇒
+    // `ManifestError::Id` (they never reach the log nor the T5 approval
+    // modal):
+    //  - `\n` (TOML escape) = a real newline in the value → log injection.
+    //  - `\"` (TOML escape) = a quote in the value → dialog spoofing.
+    //  - spaces, underscore, non-ASCII, leading/trailing dot, empty segment.
     for bad_literal in [
         r#""org.norte.de\nmo""#,
         r#""org.\"norte\".demo""#,
@@ -352,11 +360,11 @@ fn id_charset_reverse_dns_estricto() {
                 Manifest::from_toml(&with_id(bad_literal)),
                 Err(ManifestError::Id)
             ),
-            "id hostil debe rechazarse como Id: {bad_literal}"
+            "hostile id must be rejected as Id: {bad_literal}"
         );
     }
 
-    // Longitud total > 128 se rechaza.
+    // Total length > 128 is rejected.
     let long = format!(r#""org.norte.{}""#, "a".repeat(120));
     assert!(matches!(
         Manifest::from_toml(&with_id(&long)),
@@ -365,13 +373,13 @@ fn id_charset_reverse_dns_estricto() {
 }
 
 #[test]
-fn description_ausente_es_none() {
+fn absent_description_is_none() {
     let m = Manifest::from_toml(SYNTAX_PREVIEW).unwrap();
     assert_eq!(m.description, None);
 }
 
 #[test]
-fn description_presente_se_parsea() {
+fn present_description_is_parsed() {
     let src = r#"
         [plugin]
         id = "org.norte.x"
@@ -379,17 +387,17 @@ fn description_presente_se_parsea() {
         publisher = "norte"
         version = "0.1.0"
         category = "command"
-        description = "Genera previews de Markdown en línea."
+        description = "Generates inline Markdown previews."
     "#;
     let m = Manifest::from_toml(src).unwrap();
     assert_eq!(
         m.description.as_deref(),
-        Some("Genera previews de Markdown en línea.")
+        Some("Generates inline Markdown previews.")
     );
 }
 
 #[test]
-fn description_280_chars_es_el_tope_exacto() {
+fn a_280_char_description_is_the_exact_cap() {
     let d = "a".repeat(280);
     let src = format!(
         r#"
@@ -407,7 +415,7 @@ fn description_280_chars_es_el_tope_exacto() {
 }
 
 #[test]
-fn description_281_chars_se_rechaza() {
+fn a_281_char_description_is_rejected() {
     let d = "a".repeat(281);
     let src = format!(
         r#"
@@ -427,10 +435,10 @@ fn description_281_chars_se_rechaza() {
 }
 
 #[test]
-fn description_cuenta_caracteres_no_bytes() {
-    // 280 caracteres NO-ASCII (multi-byte en UTF-8): el tope es de CHARS, no de
-    // bytes, o un manifiesto legítimo en un idioma no-ASCII se rechazaría antes
-    // de tiempo.
+fn description_counts_characters_not_bytes() {
+    // 280 NON-ASCII characters (multi-byte in UTF-8): the cap is in CHARS,
+    // not bytes, or a legitimate manifest in a non-ASCII language would be
+    // rejected ahead of time.
     let d = "á".repeat(280);
     let src = format!(
         r#"
@@ -447,10 +455,10 @@ fn description_cuenta_caracteres_no_bytes() {
 }
 
 #[test]
-fn description_editada_no_mueve_el_approval_digest() {
-    // Precedente de manifest.rs:296-307 (name/publisher/version cosméticos):
-    // description es TAMBIÉN cosmética — editarla NO debe reinvalidar
-    // capabilities ya aprobadas por el humano.
+fn an_edited_description_does_not_move_the_approval_digest() {
+    // Precedent from manifest.rs:296-307 (cosmetic name/publisher/version):
+    // description is ALSO cosmetic — editing it must NOT reinvalidate
+    // capabilities the human already approved.
     let base = |desc: Option<&str>| {
         let d = desc.map_or_else(String::new, |d| format!(r#"description = "{d}""#));
         Manifest::from_toml(&format!(
@@ -468,25 +476,25 @@ fn description_editada_no_mueve_el_approval_digest() {
         ))
         .unwrap()
     };
-    let sin_desc = base(None);
-    let con_desc = base(Some("Una descripción cualquiera."));
-    let con_otra_desc = base(Some("Una descripción TOTALMENTE distinta."));
+    let without_desc = base(None);
+    let with_desc = base(Some("Some description."));
+    let with_another_desc = base(Some("A TOTALLY different description."));
     assert_eq!(
-        sin_desc.approval_digest(),
-        con_desc.approval_digest(),
-        "añadir description no debe mover el digest"
+        without_desc.approval_digest(),
+        with_desc.approval_digest(),
+        "adding a description must not move the digest"
     );
     assert_eq!(
-        con_desc.approval_digest(),
-        con_otra_desc.approval_digest(),
-        "editar description no debe mover el digest"
+        with_desc.approval_digest(),
+        with_another_desc.approval_digest(),
+        "editing the description must not move the digest"
     );
 }
 
-/// P1 encoding audit M2: manifiesto con UN `contributions.command`, `id`/
-/// `title` parametrizados — para probar los topes 120/64 (chars) sin
-/// repetir el boilerplate del `[plugin]`.
-fn manifest_con_comando(id: &str, title: &str) -> Result<Manifest, ManifestError> {
+/// P1 encoding audit M2: a manifest with ONE `contributions.command`,
+/// parameterized `id`/`title` — to test the 120/64 (chars) caps without
+/// repeating the `[plugin]` boilerplate.
+fn manifest_with_command(id: &str, title: &str) -> Result<Manifest, ManifestError> {
     Manifest::from_toml(&format!(
         r#"
         [plugin]
@@ -502,29 +510,29 @@ fn manifest_con_comando(id: &str, title: &str) -> Result<Manifest, ManifestError
 }
 
 #[test]
-fn command_title_120_chars_es_el_tope_exacto() {
+fn a_120_char_command_title_is_the_exact_cap() {
     let title = "a".repeat(COMMAND_TITLE_MAX_CHARS);
-    let m = manifest_con_comando("cmd", &title).unwrap();
+    let m = manifest_with_command("cmd", &title).unwrap();
     assert_eq!(m.contributions.command[0].title, title);
 }
 
 #[test]
-fn command_title_121_chars_se_rechaza() {
+fn a_121_char_command_title_is_rejected() {
     let title = "a".repeat(COMMAND_TITLE_MAX_CHARS + 1);
     assert!(matches!(
-        manifest_con_comando("cmd", &title),
+        manifest_with_command("cmd", &title),
         Err(ManifestError::CommandTitleTooLong)
     ));
 }
 
 #[test]
-fn command_id_64_chars_es_el_tope_exacto() {
+fn a_64_char_command_id_is_the_exact_cap() {
     let id = "a".repeat(COMMAND_ID_MAX_CHARS);
-    let m = manifest_con_comando(&id, "Title").unwrap();
+    let m = manifest_with_command(&id, "Title").unwrap();
     assert_eq!(m.contributions.command[0].id, id);
 }
 
-fn manifest_con_n_comandos(n: usize) -> Result<Manifest, ManifestError> {
+fn manifest_with_n_commands(n: usize) -> Result<Manifest, ManifestError> {
     let cmds: Vec<String> = (0..n)
         .map(|i| format!(r#"{{ id = "c{i}", title = "C{i}" }}"#))
         .collect();
@@ -543,52 +551,53 @@ fn manifest_con_n_comandos(n: usize) -> Result<Manifest, ManifestError> {
     ))
 }
 
-/// El tope se corta en el MANIFIESTO, no en cada paleta que lo pinta (#281).
-/// La ventana ya se defiende por su lado (512 extensiones, 2048 filas), pero
-/// eso es el cliente protegiéndose del servidor.
+/// The cap is cut at the MANIFEST, not at each palette that paints it
+/// (#281). The window already defends itself on its side (512 extensions,
+/// 2048 rows), but that is the client protecting itself from the server.
 #[test]
-fn command_33_comandos_se_rechaza() {
+fn command_33_is_rejected() {
     assert!(matches!(
-        manifest_con_n_comandos(COMMAND_MAX_COUNT + 1),
+        manifest_with_n_commands(COMMAND_MAX_COUNT + 1),
         Err(ManifestError::TooManyCommands)
     ));
 }
 
 #[test]
-fn command_32_comandos_es_el_tope_exacto() {
-    let m = manifest_con_n_comandos(COMMAND_MAX_COUNT).unwrap();
+fn command_32_is_the_exact_cap() {
+    let m = manifest_with_n_commands(COMMAND_MAX_COUNT).unwrap();
     assert_eq!(m.contributions.command.len(), COMMAND_MAX_COUNT);
 }
 
 #[test]
-fn command_id_65_chars_se_rechaza() {
+fn a_65_char_command_id_is_rejected() {
     let id = "a".repeat(COMMAND_ID_MAX_CHARS + 1);
     assert!(matches!(
-        manifest_con_comando(&id, "Title"),
+        manifest_with_command(&id, "Title"),
         Err(ManifestError::CommandIdTooLong)
     ));
 }
 
-/// El tope es de PARSEO, no de digest: `title` SÍ entra en `approval_digest`
-/// (decide cuándo/cómo se dispara el comando), pero eso ya estaba probado
-/// por `approval_digest_incluye_category_y_contributions_no_solo_capabilities`
-/// — el tope NUEVO solo rechaza manifiestos NUEVOS que lo excedan, jamás
-/// reinterpreta un digest ya calculado para uno viejo dentro del tope (el
-/// digest hashea el VALOR de `title`, no el tope contra el que se validó al
-/// parsear).
+/// The cap is a PARSING one, not a digest one: `title` DOES go into
+/// `approval_digest` (it decides when/how the command fires), but that was
+/// already tested by
+/// `approval_digest_includes_category_and_contributions_not_just_capabilities`
+/// — the NEW cap only rejects NEW manifests that exceed it, it never
+/// reinterprets a digest already computed for an old one within the cap
+/// (the digest hashes `title`'s VALUE, not the cap it was validated
+/// against while parsing).
 #[test]
-fn command_dentro_del_tope_no_cambia_el_criterio_del_digest() {
-    let a = manifest_con_comando("cmd", "Title A").unwrap();
-    let b = manifest_con_comando("cmd", "Title B").unwrap();
+fn a_command_within_the_cap_does_not_change_the_digests_criterion() {
+    let a = manifest_with_command("cmd", "Title A").unwrap();
+    let b = manifest_with_command("cmd", "Title B").unwrap();
     assert_ne!(
         a.approval_digest(),
         b.approval_digest(),
-        "title distinto SÍ debe mover el digest (no es cosmético como description)"
+        "a different title DOES move the digest (it is not cosmetic like description)"
     );
 }
 
 #[test]
-fn net_capability_lista_hosts() {
+fn net_capability_lists_hosts() {
     let m = Manifest::from_toml(
         r#"
         [plugin]
@@ -616,17 +625,17 @@ fn write_plugin(root: &std::path::Path, id: &str, toml: &str) {
     let dir = root.join(id);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("plugin.toml"), toml).unwrap();
-    // el .wasm real llega en M4-P2; el catálogo solo exige el manifiesto.
+    // the real .wasm arrives in M4-P2; the catalog only requires the manifest.
 }
 
-/// Añade `config_dir/plugins/<id>/config.toml` a un plugin YA escrito con
-/// [`write_plugin`] (P2 Task 2).
+/// Adds `config_dir/plugins/<id>/config.toml` to a plugin ALREADY written
+/// with [`write_plugin`] (P2 Task 2).
 fn write_config_values(root: &std::path::Path, id: &str, toml: &str) {
     std::fs::write(root.join(id).join("config.toml"), toml).unwrap();
 }
 
 #[test]
-fn catalogo_descubre_ordena_y_agrupa() {
+fn the_catalog_discovers_orders_and_groups() {
     let root = tempfile::tempdir().unwrap();
     write_plugin(root.path(), "org.norte.syntax-preview", SYNTAX_PREVIEW);
     write_plugin(
@@ -643,7 +652,7 @@ fn catalogo_descubre_ordena_y_agrupa() {
         fs-read = "scoped"
     "#,
     );
-    // Uno inválido: no debe desaparecer en silencio, va a `errors`.
+    // An invalid one: it must not disappear silently, it goes to `errors`.
     write_plugin(
         root.path(),
         "org.bad.exec",
@@ -660,15 +669,15 @@ fn catalogo_descubre_ordena_y_agrupa() {
     );
 
     let cat = Catalog::load_dir(root.path());
-    assert_eq!(cat.plugins.len(), 2, "dos válidos");
+    assert_eq!(cat.plugins.len(), 2, "two valid ones");
     assert_eq!(
         cat.errors.len(),
         1,
-        "el exec-shell va a errors, no se oculta"
+        "the exec-shell one goes to errors, it is not hidden"
     );
 
-    // Agrupado por categoría, en orden (command antes que previewer no —
-    // previewer va primero en el ORDER).
+    // Grouped by category, in order (command before previewer would be
+    // wrong — previewer comes first in the ORDER).
     let groups = cat.by_category();
     let cats: Vec<Category> = groups.iter().map(|(c, _)| *c).collect();
     assert_eq!(cats, vec![Category::Previewer, Category::Command]);
@@ -676,17 +685,18 @@ fn catalogo_descubre_ordena_y_agrupa() {
 }
 
 #[test]
-fn catalogo_dir_inexistente_es_vacio() {
-    let cat = Catalog::load_dir(std::path::Path::new("/no/existe/seguro/norte"));
+fn a_nonexistent_dir_is_an_empty_catalog() {
+    let cat = Catalog::load_dir(std::path::Path::new("/does/not/exist/norte/for/sure"));
     assert!(cat.plugins.is_empty() && cat.errors.is_empty());
 }
 
 #[test]
-fn approval_digest_incluye_category_y_contributions_no_solo_capabilities() {
-    // Issue #69 (MINOR 1): el digest de aprobación cubre category + contributions
-    // (cuándo/cómo se dispara), no solo [capabilities]. Un manifiesto reeditado
-    // que cambie esos campos MANTENIENDO las capabilities debe mover el digest
-    // (→ re-consentimiento fail-closed), o pasaría a auto-dispararse sin aprobar.
+fn approval_digest_includes_category_and_contributions_not_just_capabilities() {
+    // Issue #69 (MINOR 1): the approval digest covers category +
+    // contributions (when/how it fires), not just [capabilities]. A
+    // re-edited manifest that changes those fields WHILE KEEPING the
+    // capabilities must move the digest (→ fail-closed re-consent), or it
+    // would start auto-firing without approval.
     let command = Manifest::from_toml(
         r#"
         [plugin]
@@ -701,7 +711,7 @@ fn approval_digest_incluye_category_y_contributions_no_solo_capabilities() {
     )
     .unwrap();
 
-    // MISMAS capabilities, pero category previewer (con un entry de mimetypes).
+    // SAME capabilities, but category previewer (with a mimetypes entry).
     let previewer = Manifest::from_toml(
         r#"
         [plugin]
@@ -718,7 +728,7 @@ fn approval_digest_incluye_category_y_contributions_no_solo_capabilities() {
     )
     .unwrap();
 
-    // MISMA category previewer + mismas capabilities, pero mimetypes AMPLIADOS.
+    // SAME category previewer + same capabilities, but WIDENED mimetypes.
     let previewer_wide = Manifest::from_toml(
         r#"
         [plugin]
@@ -738,27 +748,28 @@ fn approval_digest_incluye_category_y_contributions_no_solo_capabilities() {
     assert_eq!(
         command.capabilities.digest(),
         previewer.capabilities.digest(),
-        "las capabilities son idénticas (control del test)"
+        "the capabilities are identical (test control)"
     );
     assert_ne!(
         command.approval_digest(),
         previewer.approval_digest(),
-        "cambiar la category mueve el digest de aprobación"
+        "changing the category moves the approval digest"
     );
     assert_ne!(
         previewer.approval_digest(),
         previewer_wide.approval_digest(),
-        "ampliar los mimetypes del entry mueve el digest de aprobación"
+        "widening the entry's mimetypes moves the approval digest"
     );
-    // Determinista y estable para un manifiesto dado.
+    // Deterministic and stable for a given manifest.
     assert_eq!(command.approval_digest(), command.approval_digest());
 }
 
 #[test]
-fn catalogo_rechaza_ids_duplicados_en_dos_directorios() {
-    // Issue #69: dos directorios distintos declaran el MISMO `plugin.id`. Un
-    // segundo dir no puede reclamar la aprobación del primero para colar su
-    // `plugin.wasm`. Se rechazan AMBOS (fail-closed), no se elige "el primero".
+fn the_catalog_rejects_duplicate_ids_in_two_directories() {
+    // Issue #69: two different directories declare the SAME `plugin.id`. A
+    // second dir cannot claim the first one's approval to sneak in its
+    // `plugin.wasm`. BOTH are rejected (fail-closed), "the first one" is
+    // not chosen.
     let root = tempfile::tempdir().unwrap();
     let dupe = r#"
         [plugin]
@@ -768,10 +779,11 @@ fn catalogo_rechaza_ids_duplicados_en_dos_directorios() {
         version = "0.1.0"
         category = "command"
     "#;
-    // Dos subdirectorios con nombres distintos pero el mismo id declarado.
+    // Two subdirectories with different names but the same declared id.
     write_plugin(root.path(), "dir-a", dupe);
     write_plugin(root.path(), "dir-b", dupe);
-    // Y uno legítimo con id único: no debe verse afectado por la colisión ajena.
+    // And a legitimate one with a unique id: it must not be affected by
+    // the unrelated collision.
     write_plugin(
         root.path(),
         "solo",
@@ -789,92 +801,93 @@ fn catalogo_rechaza_ids_duplicados_en_dos_directorios() {
     assert_eq!(
         cat.plugins.len(),
         1,
-        "solo el id único carga; los colisionantes se rechazan"
+        "only the unique id loads; the colliding ones are rejected"
     );
     assert_eq!(cat.plugins[0].manifest.id, "org.norte.solo");
-    assert_eq!(cat.errors.len(), 2, "ambos directorios del id duplicado");
+    assert_eq!(cat.errors.len(), 2, "both directories of the duplicate id");
     assert!(
         cat.errors
             .iter()
             .all(|e| matches!(&e.error, ManifestError::DuplicateId(id) if id == "org.norte.clash")),
-        "los dos errores son DuplicateId del id colisionante"
+        "both errors are DuplicateId of the colliding id"
     );
 }
 
-/// P2: pin de no-regresión. El digest de `SYNTAX_PREVIEW` (sin `[config]`)
-/// capturado ANTES de introducir el esquema `[config]` en la forma canónica
-/// del digest (commit previo a este). Si este test se rompe, la extensión de
-/// P2 movió el digest de un manifiesto SIN `[config]` — eso resetearía TODAS
-/// las aprobaciones humanas existentes de plugins que no usan `[config]`,
-/// que es exactamente lo que la decisión 2 del plan P2 prohíbe.
+/// P2: non-regression pin. `SYNTAX_PREVIEW`'s digest (without `[config]`)
+/// captured BEFORE introducing the `[config]` schema into the digest's
+/// canonical form (a commit before this one). If this test breaks, P2's
+/// extension moved the digest of a manifest WITHOUT `[config]` — that
+/// would reset ALL existing human approvals of plugins that do not use
+/// `[config]`, which is exactly what P2's plan decision 2 forbids.
 #[test]
-fn manifest_sin_config_digesta_identico_a_pre_p2() {
+fn manifest_without_config_digests_identical_to_pre_p2() {
     const DIGEST_PRE_P2: &str = "9ba598fcee4cb10e91a2de3683287a11af83c9bdd7bc18ecb2df79570f9c0d5f";
     let m = Manifest::from_toml(SYNTAX_PREVIEW).unwrap();
     assert_eq!(
         m.approval_digest(),
         DIGEST_PRE_P2,
-        "un manifiesto sin [config] debe digestar IGUAL que antes de P2 \
-         (o resetea aprobaciones existentes)"
+        "a manifest without [config] must digest THE SAME as before P2 \
+         (or it resets existing approvals)"
     );
 }
 
-/// ADR 0057: pedir `location` CAMBIA el digest —o sea, exige aprobar otra vez—
-/// y no pedirla lo deja intacto. Las dos mitades son la misma decisión: una
-/// capacidad nueva no se cuela sin consentimiento, y añadirla al esquema no
-/// puede invalidar el consentimiento que ya existe.
+/// ADR 0057: requesting `location` CHANGES the digest — i.e. requires
+/// approving again — and not requesting it leaves it intact. Both halves
+/// are the same decision: a new capability does not sneak in without
+/// consent, and adding it to the schema cannot invalidate consent that
+/// already exists.
 #[test]
-fn location_declarada_entra_en_el_digest_de_aprobacion() {
-    let sin = Manifest::from_toml(COLUMNS_PLUGIN).unwrap();
-    let con = Manifest::from_toml(
+fn declared_location_goes_into_the_approval_digest() {
+    let without = Manifest::from_toml(COLUMNS_PLUGIN).unwrap();
+    let with = Manifest::from_toml(
         &COLUMNS_PLUGIN.replace("[capabilities]", "[capabilities]\nlocation = \"read\""),
     )
     .unwrap();
     assert_ne!(
-        sin.approval_digest(),
-        con.approval_digest(),
-        "pedir una capacidad nueva EXIGE aprobarla de nuevo"
+        without.approval_digest(),
+        with.approval_digest(),
+        "requesting a new capability REQUIRES approving it again"
     );
-    assert!(con.capabilities.location.granted());
+    assert!(with.capabilities.location.granted());
     assert!(
-        con.capabilities
+        with.capabilities
             .badges()
             .iter()
             .any(|b| b.starts_with("location")),
-        "el badge nombra la capacidad de ubicación"
+        "the badge names the location capability"
     );
 
-    // Y con MARCADOR, el badge lo DICE (#241): «location» a secas se lee como
-    // «puede leer donde estoy mirando», y lo que se concede es el ancestro más
-    // cercano que contenga el marcador — el proyecto entero, no la carpeta.
-    let con_marcador = Manifest::from_toml(&COLUMNS_PLUGIN.replace(
+    // And WITH a MARKER, the badge SAYS SO (#241): plain "location" reads
+    // as "can read where I'm looking", and what is granted is the nearest
+    // ancestor containing the marker — the whole project, not the folder.
+    let with_marker = Manifest::from_toml(&COLUMNS_PLUGIN.replace(
         "[capabilities]",
         "[capabilities]\nlocation = \"read\"\nlocation-root-marker = \".git\"",
     ))
     .unwrap();
     assert!(
-        con_marcador
+        with_marker
             .capabilities
             .badges()
             .contains(&"location-root:.git".to_owned()),
-        "el badge dice qué marcador abre el ancestro: {:?}",
-        con_marcador.capabilities.badges()
+        "the badge says which marker opens the ancestor: {:?}",
+        with_marker.capabilities.badges()
     );
 }
 
-/// Vocabulario CERRADO, como `exec`: un valor inventado es un manifiesto
-/// inválido, jamás una capacidad que se ignora en silencio.
+/// CLOSED vocabulary, like `exec`: a made-up value is an invalid
+/// manifest, never a capability silently ignored.
 #[test]
-fn un_valor_desconocido_de_location_es_error_de_manifiesto() {
+fn an_unknown_location_value_is_a_manifest_error() {
     let m = COLUMNS_PLUGIN.replace("[capabilities]", "[capabilities]\nlocation = \"write\"");
     assert!(Manifest::from_toml(&m).is_err());
 }
 
-/// Un manifiesto de columnas CON `[capabilities]` pero sin `location`.
+/// A columns manifest WITH `[capabilities]` but without `location`.
 const COLUMNS_PLUGIN: &str = r#"
 [plugin]
-id = "org.norte.columnas"
-name = "Columnas"
+id = "org.norte.columns"
+name = "Columns"
 publisher = "norte"
 version = "0.1.0"
 category = "columns"
@@ -884,10 +897,10 @@ fs-read = "none"
 
 [[contributions.columns]]
 id = "name-len"
-header = "Largo"
+header = "Length"
 "#;
 
-// --- P2: esquema `[config]` del manifiesto (dentro del approval digest) ---
+// --- P2: the manifest's `[config]` schema (inside the approval digest) ---
 
 const WITH_CONFIG: &str = r#"
 [plugin]
@@ -900,7 +913,7 @@ category = "command"
 [config.greeting]
 type = "string"
 default = "hola"
-description = "Saludo mostrado al arrancar."
+description = "Greeting shown on startup."
 
 [config.enabled]
 type = "bool"
@@ -918,9 +931,9 @@ default = "fast"
 values = ["fast", "slow"]
 "#;
 
-/// Boilerplate mínimo de `[plugin]` + las entradas `[config.*]` que se le
-/// inyecten, para probar los topes de P2 sin repetir el resto del manifiesto.
-fn manifest_con_config(entries: &str) -> Result<Manifest, ManifestError> {
+/// Minimal `[plugin]` boilerplate + the `[config.*]` entries injected into
+/// it, to test P2's caps without repeating the rest of the manifest.
+fn manifest_with_config(entries: &str) -> Result<Manifest, ManifestError> {
     Manifest::from_toml(&format!(
         r#"
         [plugin]
@@ -935,14 +948,14 @@ fn manifest_con_config(entries: &str) -> Result<Manifest, ManifestError> {
 }
 
 #[test]
-fn config_los_4_tipos_parsean() {
+fn config_the_4_types_parse() {
     let m = Manifest::from_toml(WITH_CONFIG).unwrap();
     assert_eq!(m.config.len(), 4);
     assert_eq!(
         m.config.get("greeting"),
         Some(&ConfigKeySpec::String {
             default: "hola".into(),
-            description: Some("Saludo mostrado al arrancar.".into()),
+            description: Some("Greeting shown on startup.".into()),
         })
     );
     assert_eq!(
@@ -972,13 +985,13 @@ fn config_los_4_tipos_parsean() {
 }
 
 #[test]
-fn config_ausente_es_mapa_vacio() {
+fn absent_config_is_an_empty_map() {
     let m = Manifest::from_toml(SYNTAX_PREVIEW).unwrap();
     assert!(m.config.is_empty());
 }
 
 #[test]
-fn config_33_claves_se_rechaza() {
+fn config_33_keys_is_rejected() {
     use std::fmt::Write as _;
     let mut entries = String::new();
     for i in 0..=CONFIG_MAX_KEYS {
@@ -988,13 +1001,13 @@ fn config_33_claves_se_rechaza() {
         );
     }
     assert!(matches!(
-        manifest_con_config(&entries),
+        manifest_with_config(&entries),
         Err(ManifestError::ConfigTooManyKeys)
     ));
 }
 
 #[test]
-fn config_32_claves_es_el_tope_exacto() {
+fn config_32_keys_is_the_exact_cap() {
     use std::fmt::Write as _;
     let mut entries = String::new();
     for i in 0..CONFIG_MAX_KEYS {
@@ -1003,65 +1016,65 @@ fn config_32_claves_es_el_tope_exacto() {
             "\n[config.k{i}]\ntype = \"bool\"\ndefault = true\n"
         );
     }
-    let m = manifest_con_config(&entries).unwrap();
+    let m = manifest_with_config(&entries).unwrap();
     assert_eq!(m.config.len(), CONFIG_MAX_KEYS);
 }
 
 #[test]
-fn config_clave_con_mayuscula_se_rechaza() {
+fn config_key_with_uppercase_is_rejected() {
     let entries = "\n[config.Bad]\ntype = \"bool\"\ndefault = true\n";
     assert!(matches!(
-        manifest_con_config(entries),
+        manifest_with_config(entries),
         Err(ManifestError::ConfigKeyCharset)
     ));
 }
 
 #[test]
-fn config_clave_con_guion_bajo_se_rechaza() {
+fn config_key_with_underscore_is_rejected() {
     let entries = "\n[config.has_underscore]\ntype = \"bool\"\ndefault = true\n";
     assert!(matches!(
-        manifest_con_config(entries),
+        manifest_with_config(entries),
         Err(ManifestError::ConfigKeyCharset)
     ));
 }
 
 #[test]
-fn config_clave_33_chars_se_rechaza() {
+fn a_33_char_config_key_is_rejected() {
     let key = "a".repeat(33);
     let entries = format!("\n[config.{key}]\ntype = \"bool\"\ndefault = true\n");
     assert!(matches!(
-        manifest_con_config(&entries),
+        manifest_with_config(&entries),
         Err(ManifestError::ConfigKeyCharset)
     ));
 }
 
 #[test]
-fn config_clave_32_chars_es_el_tope_exacto() {
+fn a_32_char_config_key_is_the_exact_cap() {
     let key = "a".repeat(32);
     let entries = format!("\n[config.{key}]\ntype = \"bool\"\ndefault = true\n");
-    let m = manifest_con_config(&entries).unwrap();
+    let m = manifest_with_config(&entries).unwrap();
     assert!(m.config.contains_key(&key));
 }
 
 #[test]
-fn config_description_281_chars_se_rechaza() {
+fn a_281_char_config_description_is_rejected() {
     let d = "a".repeat(CONFIG_DESCRIPTION_MAX_CHARS + 1);
     let entries = format!(
         "\n[config.greeting]\ntype = \"string\"\ndefault = \"hi\"\ndescription = \"{d}\"\n"
     );
     assert!(matches!(
-        manifest_con_config(&entries),
+        manifest_with_config(&entries),
         Err(ManifestError::ConfigDescriptionTooLong)
     ));
 }
 
 #[test]
-fn config_description_280_chars_es_el_tope_exacto() {
+fn a_280_char_config_description_is_the_exact_cap() {
     let d = "a".repeat(CONFIG_DESCRIPTION_MAX_CHARS);
     let entries = format!(
         "\n[config.greeting]\ntype = \"string\"\ndefault = \"hi\"\ndescription = \"{d}\"\n"
     );
-    let m = manifest_con_config(&entries).unwrap();
+    let m = manifest_with_config(&entries).unwrap();
     assert_eq!(
         m.config.get("greeting"),
         Some(&ConfigKeySpec::String {
@@ -1072,37 +1085,37 @@ fn config_description_280_chars_es_el_tope_exacto() {
 }
 
 #[test]
-fn config_string_default_281_chars_se_rechaza() {
+fn a_281_char_string_default_is_rejected() {
     let d = "a".repeat(CONFIG_STRING_MAX_CHARS + 1);
     let entries = format!("\n[config.greeting]\ntype = \"string\"\ndefault = \"{d}\"\n");
     assert!(matches!(
-        manifest_con_config(&entries),
+        manifest_with_config(&entries),
         Err(ManifestError::ConfigDefaultTooLong)
     ));
 }
 
 #[test]
-fn config_int_default_por_encima_del_maximo_se_rechaza() {
+fn config_int_default_above_the_maximum_is_rejected() {
     let entries = "\n[config.retries]\ntype = \"int\"\ndefault = 20\nmin = 0\nmax = 10\n";
     assert!(matches!(
-        manifest_con_config(entries),
+        manifest_with_config(entries),
         Err(ManifestError::ConfigIntDefaultOutOfRange)
     ));
 }
 
 #[test]
-fn config_int_default_bajo_el_minimo_se_rechaza() {
+fn config_int_default_below_the_minimum_is_rejected() {
     let entries = "\n[config.retries]\ntype = \"int\"\ndefault = -1\nmin = 0\nmax = 10\n";
     assert!(matches!(
-        manifest_con_config(entries),
+        manifest_with_config(entries),
         Err(ManifestError::ConfigIntDefaultOutOfRange)
     ));
 }
 
 #[test]
-fn config_int_default_en_el_borde_es_valido() {
+fn config_int_default_at_the_edge_is_valid() {
     let entries = "\n[config.retries]\ntype = \"int\"\ndefault = 10\nmin = 0\nmax = 10\n";
-    let m = manifest_con_config(entries).unwrap();
+    let m = manifest_with_config(entries).unwrap();
     assert_eq!(
         m.config.get("retries"),
         Some(&ConfigKeySpec::Int {
@@ -1115,17 +1128,17 @@ fn config_int_default_en_el_borde_es_valido() {
 }
 
 #[test]
-fn config_enum_default_ausente_de_values_se_rechaza() {
+fn config_enum_default_absent_from_values_is_rejected() {
     let entries =
         "\n[config.mode]\ntype = \"enum\"\ndefault = \"turbo\"\nvalues = [\"fast\", \"slow\"]\n";
     assert!(matches!(
-        manifest_con_config(entries),
+        manifest_with_config(entries),
         Err(ManifestError::ConfigEnumDefaultNotInValues)
     ));
 }
 
 #[test]
-fn config_enum_17_values_se_rechaza() {
+fn config_enum_17_values_is_rejected() {
     let values: Vec<String> = (0..=CONFIG_ENUM_MAX_VALUES)
         .map(|i| format!("\"v{i}\""))
         .collect();
@@ -1134,13 +1147,13 @@ fn config_enum_17_values_se_rechaza() {
         values.join(", ")
     );
     assert!(matches!(
-        manifest_con_config(&entries),
+        manifest_with_config(&entries),
         Err(ManifestError::ConfigEnumTooManyValues)
     ));
 }
 
 #[test]
-fn config_enum_16_values_es_el_tope_exacto() {
+fn config_enum_16_values_is_the_exact_cap() {
     let values: Vec<String> = (0..CONFIG_ENUM_MAX_VALUES)
         .map(|i| format!("\"v{i}\""))
         .collect();
@@ -1148,114 +1161,122 @@ fn config_enum_16_values_es_el_tope_exacto() {
         "\n[config.mode]\ntype = \"enum\"\ndefault = \"v0\"\nvalues = [{}]\n",
         values.join(", ")
     );
-    let m = manifest_con_config(&entries).unwrap();
+    let m = manifest_with_config(&entries).unwrap();
     match m.config.get("mode").unwrap() {
         ConfigKeySpec::Enum { values, .. } => assert_eq!(values.len(), CONFIG_ENUM_MAX_VALUES),
-        other => panic!("se esperaba Enum, se obtuvo {other:?}"),
+        other => panic!("expected Enum, got {other:?}"),
     }
 }
 
 #[test]
-fn config_enum_value_281_chars_se_rechaza() {
+fn a_281_char_config_enum_value_is_rejected() {
     let long_value = "a".repeat(CONFIG_STRING_MAX_CHARS + 1);
     let entries = format!(
         "\n[config.mode]\ntype = \"enum\"\ndefault = \"{long_value}\"\nvalues = [\"{long_value}\"]\n"
     );
     assert!(matches!(
-        manifest_con_config(&entries),
+        manifest_with_config(&entries),
         Err(ManifestError::ConfigEnumValueTooLong)
     ));
 }
 
 #[test]
-fn config_presente_mueve_el_approval_digest() {
-    let sin_config = manifest_con_config("").unwrap();
-    let con_config =
-        manifest_con_config("\n[config.greeting]\ntype = \"string\"\ndefault = \"hola\"\n")
+fn present_config_moves_the_approval_digest() {
+    let without_config = manifest_with_config("").unwrap();
+    let with_config =
+        manifest_with_config("\n[config.greeting]\ntype = \"string\"\ndefault = \"hola\"\n")
             .unwrap();
     assert_ne!(
-        sin_config.approval_digest(),
-        con_config.approval_digest(),
-        "declarar [config] debe mover el digest de aprobación (decisión 2)"
+        without_config.approval_digest(),
+        with_config.approval_digest(),
+        "declaring [config] must move the approval digest (decision 2)"
     );
 }
 
 #[test]
-fn config_default_distinto_mueve_el_approval_digest() {
-    let a = manifest_con_config("\n[config.greeting]\ntype = \"string\"\ndefault = \"hola\"\n")
+fn a_different_config_default_moves_the_approval_digest() {
+    let a = manifest_with_config("\n[config.greeting]\ntype = \"string\"\ndefault = \"hola\"\n")
         .unwrap();
-    let b = manifest_con_config("\n[config.greeting]\ntype = \"string\"\ndefault = \"adios\"\n")
+    let b = manifest_with_config("\n[config.greeting]\ntype = \"string\"\ndefault = \"adios\"\n")
         .unwrap();
     assert_ne!(
         a.approval_digest(),
         b.approval_digest(),
-        "un default distinto es comportamiento distinto: debe mover el digest"
+        "a different default is different behavior: it must move the digest"
     );
 }
 
 #[test]
-fn config_description_editada_no_mueve_el_approval_digest() {
-    // Mismo criterio que `plugin.description` (cosmética): editarla no
-    // reinvalida capabilities ya aprobadas.
-    let a = manifest_con_config(
-        "\n[config.greeting]\ntype = \"string\"\ndefault = \"hola\"\ndescription = \"uno\"\n",
+fn an_edited_config_description_does_not_move_the_approval_digest() {
+    // Same criterion as `plugin.description` (cosmetic): editing it does
+    // not reinvalidate already-approved capabilities.
+    let a = manifest_with_config(
+        "\n[config.greeting]\ntype = \"string\"\ndefault = \"hola\"\ndescription = \"one\"\n",
     )
     .unwrap();
-    let b = manifest_con_config(
-        "\n[config.greeting]\ntype = \"string\"\ndefault = \"hola\"\ndescription = \"dos, muy distinta\"\n",
+    let b = manifest_with_config(
+        "\n[config.greeting]\ntype = \"string\"\ndefault = \"hola\"\ndescription = \"two, very different\"\n",
     )
     .unwrap();
     assert_eq!(
         a.approval_digest(),
         b.approval_digest(),
-        "editar la description de una clave de config no debe mover el digest"
+        "editing a config key's description must not move the digest"
     );
 }
 
 #[test]
-fn config_tabla_vacia_digesta_igual_que_ausente() {
-    // decisión 2: la sección `config:` solo se añade al digest si el mapa NO
-    // está vacío — una tabla `[config]` presente pero sin claves debe digestar
-    // igual que su ausencia total.
-    let sin_tabla = manifest_con_config("").unwrap();
-    let tabla_vacia = manifest_con_config("\n[config]\n").unwrap();
-    assert_eq!(sin_tabla.approval_digest(), tabla_vacia.approval_digest());
+fn an_empty_config_table_digests_the_same_as_absent() {
+    // decision 2: the `config:` section is only added to the digest if
+    // the map is NOT empty — a `[config]` table present but with no keys
+    // must digest the same as it being totally absent.
+    let without_table = manifest_with_config("").unwrap();
+    let empty_table = manifest_with_config("\n[config]\n").unwrap();
+    assert_eq!(
+        without_table.approval_digest(),
+        empty_table.approval_digest()
+    );
 }
 
-// --- P2 Task 2: wiring de `resolve_settings` en `Catalog::load_dir` -------
+// --- P2 Task 2: `resolve_settings` wiring in `Catalog::load_dir` -------
 
 #[test]
-fn catalogo_config_toml_invalido_excluye_el_plugin_via_error() {
-    // Un `config.toml` que NO valida contra el esquema `[config]` del
-    // manifiesto (P2 decisión 3) excluye el plugin ENTERO del catálogo
-    // (fail-closed, mismo trato que un `plugin.toml` roto o un id
-    // duplicado): va a `errors`, nunca a `plugins` con valores a medias.
+fn the_catalog_excludes_the_plugin_via_error_on_invalid_config_toml() {
+    // A `config.toml` that does NOT validate against the manifest's
+    // `[config]` schema (P2 decision 3) excludes the WHOLE plugin from
+    // the catalog (fail-closed, same treatment as a broken `plugin.toml`
+    // or a duplicate id): it goes to `errors`, never to `plugins` with
+    // half-way values.
     let root = tempfile::tempdir().unwrap();
     write_plugin(root.path(), "org.norte.demo-config", WITH_CONFIG);
     write_config_values(root.path(), "org.norte.demo-config", "mode = \"turbo\"\n");
-    // Un plugin sano de control, sin `[config]`.
+    // A healthy control plugin, without `[config]`.
     write_plugin(root.path(), "org.norte.syntax-preview", SYNTAX_PREVIEW);
 
     let cat = Catalog::load_dir(root.path());
     assert_eq!(
         cat.plugins.len(),
         1,
-        "el plugin con config.toml inválido NO carga"
+        "the plugin with an invalid config.toml does NOT load"
     );
     assert_eq!(cat.plugins[0].manifest.id, "org.norte.syntax-preview");
-    assert_eq!(cat.errors.len(), 1, "el config.toml inválido va a errors");
+    assert_eq!(
+        cat.errors.len(),
+        1,
+        "the invalid config.toml goes to errors"
+    );
     assert!(
         matches!(
             &cat.errors[0].error,
             ManifestError::ConfigValues(inner) if inner.to_string().contains("mode")
         ),
-        "el error nombra la CLAVE (mode), no el valor: {:?}",
+        "the error names the KEY (mode), not the value: {:?}",
         cat.errors[0].error
     );
 }
 
 #[test]
-fn catalogo_config_toml_valido_resuelve_settings_en_la_entrada() {
+fn the_catalog_resolves_settings_in_the_entry_from_a_valid_config_toml() {
     let root = tempfile::tempdir().unwrap();
     write_plugin(root.path(), "org.norte.demo-config", WITH_CONFIG);
     write_config_values(root.path(), "org.norte.demo-config", "retries = 7\n");
@@ -1265,15 +1286,15 @@ fn catalogo_config_toml_valido_resuelve_settings_en_la_entrada() {
     assert_eq!(cat.plugins.len(), 1);
     let settings = &cat.plugins[0].settings;
     assert_eq!(settings.get("retries").map(String::as_str), Some("7"));
-    // El resto sigue en su default.
+    // The rest stays at its default.
     assert_eq!(settings.get("greeting").map(String::as_str), Some("hola"));
 }
 
 #[test]
-fn catalogo_sin_config_toml_resuelve_defaults_en_la_entrada() {
+fn the_catalog_resolves_defaults_in_the_entry_without_config_toml() {
     let root = tempfile::tempdir().unwrap();
     write_plugin(root.path(), "org.norte.demo-config", WITH_CONFIG);
-    // Sin escribir config.toml.
+    // Without writing config.toml.
 
     let cat = Catalog::load_dir(root.path());
     assert_eq!(cat.errors.len(), 0, "{:?}", cat.errors);
@@ -1283,7 +1304,7 @@ fn catalogo_sin_config_toml_resuelve_defaults_en_la_entrada() {
 }
 
 #[test]
-fn catalogo_plugin_sin_config_tiene_settings_vacio() {
+fn a_catalog_plugin_without_config_has_empty_settings() {
     let root = tempfile::tempdir().unwrap();
     write_plugin(root.path(), "org.norte.syntax-preview", SYNTAX_PREVIEW);
 
@@ -1291,15 +1312,15 @@ fn catalogo_plugin_sin_config_tiene_settings_vacio() {
     assert!(cat.plugins[0].settings.is_empty());
 }
 
-// --- H3e: el catálogo anuncia si el plugin trae `help.md` ----------------
+// --- H3e: the catalog announces whether the plugin carries `help.md` ----
 
 #[test]
-fn descubrir_marca_el_plugin_que_trae_help_md() {
+fn discovery_flags_the_plugin_that_carries_help_md() {
     let root = tempfile::tempdir().unwrap();
     write_plugin(root.path(), "org.norte.syntax-preview", SYNTAX_PREVIEW);
     std::fs::write(
         root.path().join("org.norte.syntax-preview").join("help.md"),
-        "+++\nid = \"org.norte.syntax-preview\"\ntitle = \"Preview\"\n+++\ncuerpo",
+        "+++\nid = \"org.norte.syntax-preview\"\ntitle = \"Preview\"\n+++\nbody",
     )
     .unwrap();
 
@@ -1307,12 +1328,12 @@ fn descubrir_marca_el_plugin_que_trae_help_md() {
     assert_eq!(
         cat.plugins[0].help,
         HelpPresence::Servable,
-        "el help.md descubierto se anuncia, y pasa la guarda"
+        "the discovered help.md is announced, and passes the guard"
     );
 }
 
 #[test]
-fn sin_help_md_no_se_anuncia_ayuda() {
+fn without_help_md_no_help_is_announced() {
     let root = tempfile::tempdir().unwrap();
     write_plugin(root.path(), "org.norte.syntax-preview", SYNTAX_PREVIEW);
 
@@ -1321,10 +1342,10 @@ fn sin_help_md_no_se_anuncia_ayuda() {
 }
 
 #[test]
-fn un_help_md_que_es_un_directorio_no_anuncia_ayuda() {
-    // `is_file`, no `exists`: un `help.md` que es un directorio no es una
-    // página, y anunciarla haría que la barra lateral pintase un nodo que
-    // luego se abre vacío.
+fn a_help_md_that_is_a_directory_announces_no_help() {
+    // `is_file`, not `exists`: a `help.md` that is a directory is not a
+    // page, and announcing it would make the sidebar paint a node that
+    // then opens empty.
     let root = tempfile::tempdir().unwrap();
     write_plugin(root.path(), "org.norte.syntax-preview", SYNTAX_PREVIEW);
     std::fs::create_dir_all(root.path().join("org.norte.syntax-preview").join("help.md")).unwrap();
@@ -1333,41 +1354,42 @@ fn un_help_md_que_es_un_directorio_no_anuncia_ayuda() {
     assert_eq!(
         cat.plugins[0].help,
         HelpPresence::Absent,
-        "ni presente ni servible: un directorio no es una pagina"
+        "neither present nor servable: a directory is not a page"
     );
 }
 
-/// El tercer estado, el que existe precisamente para no colapsarse con los
-/// otros dos (H3e): hay `help.md` y el host NO lo servirá. `Absent` diría que
-/// el autor no se documentó y `Servable` prometería una página; solo este
-/// estado deja a `norte doctor` reportar "lo pusiste y apunta fuera".
+/// The third state, the one that exists precisely so as not to collapse
+/// with the other two (H3e): there is a `help.md` and the host will NOT
+/// serve it. `Absent` would say the author never documented anything and
+/// `Servable` would promise a page; only this state lets `norte doctor`
+/// report "you put one there and it points outside".
 #[cfg(unix)]
 #[test]
-fn un_help_md_que_escapa_del_directorio_esta_presente_pero_no_es_servible() {
+fn a_help_md_that_escapes_the_directory_is_present_but_not_servable() {
     let root = tempfile::tempdir().unwrap();
     write_plugin(root.path(), "org.norte.syntax-preview", SYNTAX_PREVIEW);
-    let fuera = root.path().join("ajeno.md");
-    std::fs::write(&fuera, "secreto").unwrap();
+    let outside = root.path().join("outside.md");
+    std::fs::write(&outside, "secret").unwrap();
     std::os::unix::fs::symlink(
-        &fuera,
+        &outside,
         root.path().join("org.norte.syntax-preview").join("help.md"),
     )
     .unwrap();
 
     let cat = Catalog::load_dir(root.path());
     assert_eq!(cat.plugins[0].help, HelpPresence::Unservable);
-    assert!(cat.plugins[0].help.is_present(), "el fichero está ahí");
+    assert!(cat.plugins[0].help.is_present(), "the file is there");
     assert!(
         !cat.plugins[0].help.is_servable(),
-        "y el wire no lo anuncia: anunciar y servir vacío es el oráculo"
+        "and the wire does not announce it: announcing and serving empty is the oracle"
     );
 }
 
 // ---------------------------------------------------------------------
 // ADR 0037 (G3b): `Category::Decorator` + `Contributions.decorator`.
 
-/// Un manifiesto `decorator` mínimo: categoría nueva, un único contrib
-/// marcador vacío.
+/// A minimal `decorator` manifest: a new category, a single empty-marker
+/// contribution.
 const DECORATOR_MANIFEST: &str = r#"
 [plugin]
 id = "org.norte.decor"
@@ -1380,29 +1402,29 @@ category = "decorator"
 "#;
 
 #[test]
-fn manifiesto_decorator_parsea() {
+fn a_decorator_manifest_parses() {
     let m = Manifest::from_toml(DECORATOR_MANIFEST).unwrap();
     assert_eq!(m.category, Category::Decorator);
     assert_eq!(m.contributions.decorator.len(), 1);
 }
 
 #[test]
-fn category_decorator_as_str_es_kebab() {
+fn category_decorator_as_str_is_kebab() {
     assert_eq!(Category::Decorator.as_str(), "decorator");
 }
 
-/// ADR 0037: `contributions.decorator` sigue el patrón OPCIONAL de
-/// `[config]` (`update_decorator_digest`) — un manifiesto SIN
-/// `[[contributions.decorator]]` debe digestar EXACTAMENTE igual que un
-/// manifiesto de antes de esta categoría (ninguna aprobación humana
-/// existente se resetea por la sola introducción del campo).
+/// ADR 0037: `contributions.decorator` follows `[config]`'s OPTIONAL
+/// pattern (`update_decorator_digest`) — a manifest WITHOUT
+/// `[[contributions.decorator]]` must digest EXACTLY the same as a
+/// manifest from before this category (no existing human approval is
+/// reset just because the field exists).
 #[test]
-fn manifiesto_sin_decorator_digesta_igual_que_antes_del_campo() {
-    // `command` es la MISMA forma que `TOCTOU_BEFORE`/`CMD_MANIFEST` usados
-    // en otras suites: sin `[[contributions.decorator]]`, el `Vec` está
-    // vacío por el `#[serde(default)]` — el caso general de CUALQUIER
-    // manifiesto pre-existente.
-    let sin_decorator = Manifest::from_toml(
+fn a_manifest_without_decorator_digests_the_same_as_before_the_field() {
+    // `command` is the SAME shape as `TOCTOU_BEFORE`/`CMD_MANIFEST` used
+    // in other suites: without `[[contributions.decorator]]`, the `Vec`
+    // is empty because of `#[serde(default)]` — the general case for ANY
+    // pre-existing manifest.
+    let without_decorator = Manifest::from_toml(
         r#"
         [plugin]
         id = "org.norte.x"
@@ -1415,26 +1437,28 @@ fn manifiesto_sin_decorator_digesta_igual_que_antes_del_campo() {
     "#,
     )
     .unwrap();
-    assert!(sin_decorator.contributions.decorator.is_empty());
-    // El digest no depende de si el tipo EXISTE, solo de si la sección se
-    // popula: repetir el cómputo (determinismo) confirma que no hay un byte
-    // fantasma colándose por la sola presencia del campo en el struct.
+    assert!(without_decorator.contributions.decorator.is_empty());
+    // The digest does not depend on whether the type EXISTS, only on
+    // whether the section gets populated: repeating the computation
+    // (determinism) confirms there is no phantom byte sneaking in just
+    // because the field is present in the struct.
     assert_eq!(
-        sin_decorator.approval_digest(),
-        sin_decorator.approval_digest()
+        without_decorator.approval_digest(),
+        without_decorator.approval_digest()
     );
 }
 
-/// Fase 3 del programa 2026-09-15: `contributions.panel` sigue el mismo
-/// patrón OPCIONAL que `decorator` y `[config]`.
+/// Phase 3 of the 2026-09-15 program: `contributions.panel` follows the
+/// same OPTIONAL pattern as `decorator` and `[config]`.
 ///
-/// Un manifiesto SIN `[[contributions.panel]]` tiene que digestar exactamente
-/// lo que digestaba antes de que la categoría existiera. Si no, la sola
-/// aparición del campo resetearía las aprobaciones que el lector ya dio, y el
-/// gestor le pediría consentir de nuevo ocho plugins que no han cambiado.
+/// A manifest WITHOUT `[[contributions.panel]]` has to digest exactly
+/// what it digested before the category existed. Otherwise, the field's
+/// mere appearance would reset the approvals the reader already gave,
+/// and the manager would ask them to consent again to eight plugins that
+/// have not changed.
 #[test]
-fn manifiesto_sin_panel_digesta_igual_que_antes_del_campo() {
-    let sin_panel = Manifest::from_toml(
+fn a_manifest_without_panel_digests_the_same_as_before_the_field() {
+    let without_panel = Manifest::from_toml(
         r#"
         [plugin]
         id = "org.norte.x"
@@ -1447,14 +1471,18 @@ fn manifiesto_sin_panel_digesta_igual_que_antes_del_campo() {
     "#,
     )
     .unwrap();
-    assert!(sin_panel.contributions.panel.is_empty());
-    assert_eq!(sin_panel.approval_digest(), sin_panel.approval_digest());
+    assert!(without_panel.contributions.panel.is_empty());
+    assert_eq!(
+        without_panel.approval_digest(),
+        without_panel.approval_digest()
+    );
 }
 
-/// Y declarar un panel SÍ lo mueve: qué hueco ocupa un plugin, cómo se llama
-/// en la barra y cuánta pantalla pide son parte de lo que se aprueba.
+/// And declaring a panel DOES move it: which slot a plugin occupies, what
+/// it is called in the bar and how much screen it asks for are part of
+/// what gets approved.
 #[test]
-fn panel_presente_mueve_el_approval_digest() {
+fn a_present_panel_moves_the_approval_digest() {
     let base = r#"
         [plugin]
         id = "org.norte.x"
@@ -1463,25 +1491,25 @@ fn panel_presente_mueve_el_approval_digest() {
         version = "0.1.0"
         category = "panel"
     "#;
-    let sin = Manifest::from_toml(base).unwrap();
-    let con = Manifest::from_toml(&format!(
+    let without = Manifest::from_toml(base).unwrap();
+    let with = Manifest::from_toml(&format!(
         "{base}\n[[contributions.panel]]\nkind = \"git\"\ntitle = \"Git\"\nmin-cols = 24\nmin-rows = 6\n"
     ))
     .unwrap();
-    assert_ne!(sin.approval_digest(), con.approval_digest());
+    assert_ne!(without.approval_digest(), with.approval_digest());
 
-    // Y el TAMAÑO también: un panel que tras la aprobación pide media
-    // pantalla no es el panel que se aprobó.
-    let mas_grande = Manifest::from_toml(&format!(
+    // And the SIZE too: a panel that after approval asks for half the
+    // screen is not the panel that was approved.
+    let bigger = Manifest::from_toml(&format!(
         "{base}\n[[contributions.panel]]\nkind = \"git\"\ntitle = \"Git\"\nmin-cols = 60\nmin-rows = 6\n"
     ))
     .unwrap();
-    assert_ne!(con.approval_digest(), mas_grande.approval_digest());
+    assert_ne!(with.approval_digest(), bigger.approval_digest());
 }
 
 #[test]
-fn decorator_presente_mueve_el_approval_digest() {
-    let sin = Manifest::from_toml(
+fn a_present_decorator_moves_the_approval_digest() {
+    let without = Manifest::from_toml(
         r#"
         [plugin]
         id = "org.norte.x"
@@ -1492,27 +1520,28 @@ fn decorator_presente_mueve_el_approval_digest() {
     "#,
     )
     .unwrap();
-    let con = Manifest::from_toml(
+    let with = Manifest::from_toml(
         DECORATOR_MANIFEST
             .replace("org.norte.decor", "org.norte.x")
             .as_str(),
     )
     .unwrap();
     assert_ne!(
-        sin.approval_digest(),
-        con.approval_digest(),
-        "declarar [[contributions.decorator]] debe mover el digest (nuevo trigger, nueva superficie)"
+        without.approval_digest(),
+        with.approval_digest(),
+        "declaring [[contributions.decorator]] must move the digest (new trigger, new surface)"
     );
 }
 
-/// ADR 0105: `slot = "badge"` escrito digesta IGUAL que sin `slot` (ningún
-/// decorador anterior cambia de ancla); `slot = "icon"` mueve el digest,
-/// porque cambia dónde se pinta el plugin; y el hueco va CON su posición,
-/// porque el core lee el de la primera contribución y reordenar dos bloques
-/// no puede mover un plugin aprobado de un hueco al otro en silencio.
+/// ADR 0105: a written `slot = "badge"` digests THE SAME as without
+/// `slot` (no earlier decorator changes its anchor); `slot = "icon"`
+/// moves the digest, because it changes where the plugin paints; and the
+/// slot goes WITH its position, because the core reads the first
+/// contribution's and reordering two blocks cannot silently move an
+/// approved plugin from one slot to the other.
 #[test]
-fn el_hueco_de_un_decorador_digesta_solo_cuando_es_icono_y_con_su_posicion() {
-    let con = |contribs: &str| {
+fn a_decorators_slot_digests_only_when_it_is_icon_and_with_its_position() {
+    let with = |contribs: &str| {
         Manifest::from_toml(&format!(
             r#"
             [plugin]
@@ -1527,24 +1556,27 @@ fn el_hueco_de_un_decorador_digesta_solo_cuando_es_icono_y_con_su_posicion() {
         .unwrap()
         .approval_digest()
     };
-    let sin_slot = con("[[contributions.decorator]]");
-    let badge = con("[[contributions.decorator]]\nslot = \"badge\"");
-    let icon = con("[[contributions.decorator]]\nslot = \"icon\"");
-    assert_eq!(sin_slot, badge, "el hueco de siempre no mueve el ancla");
-    assert_ne!(sin_slot, icon, "pasar a la columna de iconos sí");
-    let icono_primero = con(
+    let without_slot = with("[[contributions.decorator]]");
+    let badge = with("[[contributions.decorator]]\nslot = \"badge\"");
+    let icon = with("[[contributions.decorator]]\nslot = \"icon\"");
+    assert_eq!(
+        without_slot, badge,
+        "the usual slot does not move the anchor"
+    );
+    assert_ne!(without_slot, icon, "moving to the icon column does");
+    let icon_first = with(
         "[[contributions.decorator]]\nslot = \"icon\"\n[[contributions.decorator]]\nslot = \"badge\"",
     );
-    let icono_segundo = con(
+    let icon_second = with(
         "[[contributions.decorator]]\nslot = \"badge\"\n[[contributions.decorator]]\nslot = \"icon\"",
     );
     assert_ne!(
-        icono_primero, icono_segundo,
-        "reordenar los bloques cambia qué hueco lee el core, y el digest lo nota"
+        icon_first, icon_second,
+        "reordering the blocks changes which slot the core reads, and the digest notices"
     );
-    // Y un hueco que este build no conoce RECHAZA el manifiesto: en el
-    // manifiesto se es estricto con lo que escribió un humano; en el wire,
-    // tolerante con lo que manda un peer (ahí cae a `badge`).
+    // And a slot this build does not know REJECTS the manifest: in the
+    // manifest, we are strict about what a human wrote; on the wire,
+    // tolerant of what a peer sends (there it falls back to `badge`).
     assert!(
         Manifest::from_toml(
             r#"
@@ -1555,7 +1587,7 @@ fn el_hueco_de_un_decorador_digesta_solo_cuando_es_icono_y_con_su_posicion() {
             version = "0.1.0"
             category = "decorator"
             [[contributions.decorator]]
-            slot = "esquina"
+            slot = "corner"
         "#
         )
         .is_err()
@@ -1563,10 +1595,11 @@ fn el_hueco_de_un_decorador_digesta_solo_cuando_es_icono_y_con_su_posicion() {
 }
 
 #[test]
-fn category_decorator_mueve_el_approval_digest_frente_a_otra_categoria() {
-    // Mismo criterio que `approval_digest_incluye_category_y_contributions_
-    // no_solo_capabilities`: cambiar SOLO la categoría (sin tocar
-    // capabilities) debe mover el digest.
+fn category_decorator_moves_the_approval_digest_versus_another_category() {
+    // Same criterion as
+    // `approval_digest_includes_category_and_contributions_not_just_capabilities`:
+    // changing ONLY the category (without touching capabilities) must
+    // move the digest.
     let command = Manifest::from_toml(
         r#"
         [plugin]
@@ -1596,13 +1629,13 @@ fn category_decorator_mueve_el_approval_digest_frente_a_otra_categoria() {
     assert_eq!(
         command.capabilities.digest(),
         decorator.capabilities.digest(),
-        "las capabilities son idénticas (control del test)"
+        "the capabilities are identical (test control)"
     );
     assert_ne!(command.approval_digest(), decorator.approval_digest());
 }
 
 #[test]
-fn catalogo_by_category_incluye_decorator() {
+fn catalog_by_category_includes_decorator() {
     let root = tempfile::tempdir().unwrap();
     write_plugin(root.path(), "org.norte.decor", DECORATOR_MANIFEST);
     write_plugin(root.path(), "org.norte.syntax-preview", SYNTAX_PREVIEW);
@@ -1614,13 +1647,14 @@ fn catalogo_by_category_incluye_decorator() {
     assert_eq!(cats, vec![Category::Previewer, Category::Decorator]);
 }
 
-/// La capability `ai` se parseaba, entraba en el digest y pintaba insignia,
-/// y ningún host la leía: no hay interfaz WIT de IA ni sitio que la linke.
-/// Un humano aprobaba «acceso a IA» y concedía nada — la mentira de ADR 0088
-/// con la firma de los hooks. Mismo remedio: se rechaza al parsear, con el
-/// motivo, y el campo se queda porque spec §7.1 lo nombra.
+/// The `ai` capability used to parse, go into the digest and paint a
+/// badge, and no host read it: there is no AI WIT interface nor a place
+/// that links it. A human would approve "AI access" and grant nothing —
+/// ADR 0088's lie, with the hooks' signature. Same remedy: rejected while
+/// parsing, with the reason, and the field stays because spec §7.1 names
+/// it.
 #[test]
-fn la_capability_ai_se_rechaza_porque_nadie_la_honra() {
+fn the_ai_capability_is_rejected_because_nobody_honors_it() {
     let src = r#"
         [plugin]
         id = "org.demo.oracle"
@@ -1635,19 +1669,19 @@ fn la_capability_ai_se_rechaza_porque_nadie_la_honra() {
         Manifest::from_toml(src),
         Err(ManifestError::AiNotImplemented)
     ));
-    // Sin la promesa, el mismo plugin entra.
-    let sin_ai = src.replace(r#"ai = "chat""#, "");
-    assert!(Manifest::from_toml(&sin_ai).is_ok());
+    // Without the promise, the same plugin goes through.
+    let without_ai = src.replace(r#"ai = "chat""#, "");
+    assert!(Manifest::from_toml(&without_ai).is_ok());
 }
 
-/// Un provider plugin sirve el scheme que declara — y eso hace del scheme un
-/// nombre que puede SUPLANTAR: `file`, `sftp` y `s3` los sirve el core y un
-/// plugin que los reclame estaría poniéndose delante de un provider con
-/// papelera, reanudación y TLS. Los schemes con `+` son la composición de
-/// archivos (ADR 0018) y tampoco se ceden.
+/// A provider plugin serves the scheme it declares — and that makes the
+/// scheme a name that can SPOOF: `file`, `sftp` and `s3` are served by
+/// the core and a plugin claiming them would be putting itself in front
+/// of a provider with trash, resume and TLS. Schemes with `+` are archive
+/// composition (ADR 0018) and are not given up either.
 #[test]
-fn un_provider_no_puede_reclamar_un_scheme_del_core() {
-    for reservado in [
+fn a_provider_cannot_claim_a_core_scheme() {
+    for reserved in [
         "file",
         "sftp",
         "ftp",
@@ -1666,7 +1700,7 @@ fn un_provider_no_puede_reclamar_un_scheme_del_core() {
             version = "0.1.0"
             category = "provider"
             [[contributions.provider]]
-            scheme = "{reservado}"
+            scheme = "{reserved}"
         "#
         );
         assert!(
@@ -1674,13 +1708,13 @@ fn un_provider_no_puede_reclamar_un_scheme_del_core() {
                 Manifest::from_toml(&src),
                 Err(ManifestError::ReservedScheme)
             ),
-            "{reservado} debería estar reservado"
+            "{reserved} should be reserved"
         );
     }
-    // Y un scheme que no es ni siquiera un nombre de scheme (mayúsculas,
-    // barras, vacío) se rechaza por la misma puerta: lo que llega al
-    // connector tiene que ser lo que un VPath puede llevar.
-    for malo in ["", "Web-DAV", "a/b", "x y"] {
+    // And a scheme that is not even a scheme name (uppercase, slashes,
+    // empty) is rejected through the same gate: what reaches the
+    // connector has to be what a VPath can carry.
+    for bad in ["", "Web-DAV", "a/b", "x y"] {
         let src = format!(
             r#"
             [plugin]
@@ -1690,7 +1724,7 @@ fn un_provider_no_puede_reclamar_un_scheme_del_core() {
             version = "0.1.0"
             category = "provider"
             [[contributions.provider]]
-            scheme = "{malo}"
+            scheme = "{bad}"
         "#
         );
         assert!(
@@ -1698,18 +1732,19 @@ fn un_provider_no_puede_reclamar_un_scheme_del_core() {
                 Manifest::from_toml(&src),
                 Err(ManifestError::ReservedScheme)
             ),
-            "{malo:?} no es un scheme"
+            "{bad:?} is not a scheme"
         );
     }
 }
 
-/// Un guest compilado contra otra versión del WIT no se carga: se lista en
-/// `errors` con las DOS versiones (ADR 0094). Con el binario intacto entra
-/// en `plugins`. Se fabrica el viejo reescribiendo `@0.10.0` por `@0.70.0`
-/// en los bytes del guest real (una versión que el host no sirve para ningún
-/// paquete; misma longitud, así que las secciones siguen siendo válidas).
+/// A guest compiled against another WIT version does not load: it is
+/// listed in `errors` with BOTH versions (ADR 0094). With the binary
+/// intact it goes into `plugins`. The old one is built by rewriting
+/// `@0.10.0` to `@0.70.0` in the real guest's bytes (a version the host
+/// does not serve for any package; same length, so the sections stay
+/// valid).
 #[test]
-fn un_guest_compilado_contra_otro_wit_se_lista_roto() {
+fn a_guest_built_against_another_wit_is_listed_as_broken() {
     let Some(wasm) = support::build_guest("previewer-demo") else {
         return;
     };
@@ -1721,12 +1756,12 @@ fn un_guest_compilado_contra_otro_wit_se_lista_roto() {
     std::fs::write(&wasm_path, &bytes).unwrap();
     let cat = Catalog::load_dir(root.path());
     assert!(cat.errors.is_empty(), "{:?}", cat.errors);
-    assert_eq!(cat.plugins.len(), 1, "el guest actual carga");
+    assert_eq!(cat.plugins.len(), 1, "the current guest loads");
 
-    let viejo = support::rewrite_bytes(&bytes, b"@0.10.0", b"@0.70.0");
-    std::fs::write(&wasm_path, viejo).unwrap();
+    let old = support::rewrite_bytes(&bytes, b"@0.10.0", b"@0.70.0");
+    std::fs::write(&wasm_path, old).unwrap();
     let cat = Catalog::load_dir(root.path());
-    assert!(cat.plugins.is_empty(), "no se carga");
+    assert!(cat.plugins.is_empty(), "it does not load");
     assert_eq!(cat.errors.len(), 1);
     match &cat.errors[0].error {
         ManifestError::WitMismatch {
@@ -1738,21 +1773,21 @@ fn un_guest_compilado_contra_otro_wit_se_lista_roto() {
             assert_eq!(built_against, "0.70.0");
             assert_eq!(served, "0.10.0");
         }
-        otro => panic!("se esperaba WitMismatch, salió {otro:?}"),
+        other => panic!("expected WitMismatch, got {other:?}"),
     }
 }
 
-/// Un `plugin.wasm` por encima del tope de artefacto no se LEE: se lista
-/// como roto con su tamaño, sin materializarlo. Un fichero disperso de
-/// varios GiB se instala gratis, y leerlo entero en cada descubrimiento
-/// tumbaría el catálogo, no un plugin.
+/// A `plugin.wasm` above the artifact cap is NOT read: it is listed as
+/// broken with its size, without materializing it. A sparse file of
+/// several GiB installs for free, and reading it whole on every
+/// discovery would bring down the catalog, not a plugin.
 #[test]
-fn un_binario_por_encima_del_tope_se_lista_roto_sin_leerlo() {
+fn a_binary_above_the_cap_is_listed_as_broken_without_reading_it() {
     let root = tempfile::tempdir().unwrap();
     write_plugin(root.path(), "org.norte.syntax-preview", SYNTAX_PREVIEW);
     let wasm = root.path().join("org.norte.syntax-preview/plugin.wasm");
     let f = std::fs::File::create(&wasm).unwrap();
-    // Disperso: ocupa nada, mide de más.
+    // Sparse: takes up nothing, measures more.
     f.set_len(norte_plugin_host::MAX_ARTIFACT_BYTES + 1)
         .unwrap();
     drop(f);
@@ -1765,16 +1800,17 @@ fn un_binario_por_encima_del_tope_se_lista_roto_sin_leerlo() {
             assert_eq!(*len, norte_plugin_host::MAX_ARTIFACT_BYTES + 1);
             assert_eq!(*cap, norte_plugin_host::MAX_ARTIFACT_BYTES);
         }
-        otro => panic!("se esperaba ArtifactTooLarge, salió {otro:?}"),
+        other => panic!("expected ArtifactTooLarge, got {other:?}"),
     }
 }
 
-/// Un provider plugin recibe red a `ip:puerto`, nunca a la IP entera, y el
-/// host no sabe el puerto por defecto de un scheme ajeno: lo declara la
-/// contribución. Entra en el digest — cambiarlo cambia a qué se concede red.
+/// A provider plugin receives network access to `ip:port`, never the
+/// whole IP, and the host does not know a foreign scheme's default port:
+/// the contribution declares it. It goes into the digest — changing it
+/// changes what network access is granted.
 #[test]
-fn el_puerto_por_defecto_de_un_provider_se_declara_y_entra_en_el_digest() {
-    let con = r#"
+fn a_providers_default_port_is_declared_and_goes_into_the_digest() {
+    let with = r#"
         [plugin]
         id = "org.demo.dav"
         name = "DAV"
@@ -1785,10 +1821,10 @@ fn el_puerto_por_defecto_de_un_provider_se_declara_y_entra_en_el_digest() {
         scheme = "webdav"
         default-port = 8443
     "#;
-    let m = Manifest::from_toml(con).unwrap();
+    let m = Manifest::from_toml(with).unwrap();
     assert_eq!(m.contributions.provider[0].default_port, Some(8443));
-    let sin = con.replace("default-port = 8443", "");
-    let m2 = Manifest::from_toml(&sin).unwrap();
+    let without = with.replace("default-port = 8443", "");
+    let m2 = Manifest::from_toml(&without).unwrap();
     assert_eq!(m2.contributions.provider[0].default_port, None);
     assert_ne!(m.approval_digest(), m2.approval_digest());
 }

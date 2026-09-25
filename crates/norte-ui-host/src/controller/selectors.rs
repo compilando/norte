@@ -1,52 +1,52 @@
-//! Los selectores emergentes: tema, volúmenes, conexiones y favoritos.
+//! The popup selectors: theme, volumes, connections and favorites.
 //!
-//! Parte de `controller`: son métodos de `Estado`, movidos aquí sin
-//! tocarlos (ADR 0086). El único escritor sigue siendo el actor.
+//! Part of `controller`: these are `State` methods, moved here without
+//! touching them (ADR 0086). The only writer is still the actor.
 
-// Estos módulos son el mismo `impl Estado` partido en trozos, así que usan
-// los mismos imports que el padre. Enumerarlos aquí sería una lista de
-// cuarenta líneas por fichero, en 32 ficheros, que se desincroniza en cuanto
-// el padre importa algo — `super::*` la sigue sola.
+// These modules are the same `impl State` split into pieces, so they use
+// the same imports as the parent. Enumerating them here would be a
+// forty-line list per file, in 32 files, that goes stale the moment the
+// parent imports something — `super::*` tracks it on its own.
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
-impl Estado {
-    /// La proyección del tema.
-    pub(super) fn vista_tema(&self) -> Option<crate::dto::ThemeView> {
-        let sel = self.tema_elegido.as_ref()?;
-        let mut vista = self.tema.vista();
-        vista.choices.clone_from(&sel.nombres);
+impl State {
+    /// The theme's projection.
+    pub(super) fn vista_theme(&self) -> Option<crate::dto::ThemeView> {
+        let sel = self.theme_chosen.as_ref()?;
+        let mut vista = self.theme.vista();
+        vista.choices.clone_from(&sel.names);
         vista.cursor = sel.cursor as u64;
         Some(vista)
     }
 
-    /// Abre el selector de volúmenes y PIDE la tabla de montaje.
+    /// Opens the volumes selector and REQUESTS the mount table.
     ///
-    /// Igual que el catálogo de extensiones: se abre diciendo que está
-    /// preguntando, no esperando.
-    pub(super) fn abrir_volumenes(
+    /// Same as the extensions catalog: it opens saying it is asking, not
+    /// waiting.
+    pub(super) fn open_volumes(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        self.abrir_volumenes_en(self.activo(), backend, buzon)
+        self.open_volumes_in(self.active(), backend, mailbox)
     }
 
-    /// Los volúmenes para el hueco de un LADO de la pantalla.
+    /// The volumes for the slot on a SIDE of the screen.
     ///
-    /// `pane.select-drive-left`/`-right` nombran un lado y no el foco —es lo
-    /// que hacen `Alt+F1`/`Alt+F2`—, y en un árbol de huecos el único
-    /// significado honesto de «izquierda» es la GEOMETRÍA del reparto: el
-    /// listado que se ve más a la izquierda. Sin ninguno de ese lado se dice,
-    /// en vez de caer al del foco: montar un volumen en el panel equivocado
-    /// es exactamente lo que este comando existe para evitar.
-    pub(super) fn abrir_volumenes_de_lado(
+    /// `pane.select-drive-left`/`-right` name a side and not the focus — that
+    /// is what `Alt+F1`/`Alt+F2` do — and in a tree of slots the only honest
+    /// meaning of "left" is the layout's GEOMETRY: the leftmost visible
+    /// listing. With none on that side it is reported, instead of falling
+    /// back to the focused one: mounting a volume in the wrong pane is
+    /// exactly what this command exists to prevent.
+    pub(super) fn open_side_volumes(
         &mut self,
-        derecha: bool,
+        right: bool,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(slot) = self.listado_del_lado(derecha) else {
+        let Some(slot) = self.side_listing(right) else {
             return (
                 ActionAck::Unavailable {
                     reason_key: "host-no-other-slot".to_owned(),
@@ -54,264 +54,273 @@ impl Estado {
                 Vec::new(),
             );
         };
-        self.abrir_volumenes_con(
-            crate::pickers::Selector::volumenes_de_lado(slot, derecha),
+        self.open_volumes_with(
+            crate::pickers::Selector::side_volumes(slot, right),
             backend,
-            buzon,
+            mailbox,
         )
     }
 
-    /// El listado que se ve más a la izquierda —o más a la derecha— del
-    /// reparto de ESTE tamaño.
+    /// The leftmost — or rightmost — visible listing in THIS layout's size.
     ///
-    /// Solo entre los que se ven: una pestaña de atrás no está en ningún
-    /// lado de la pantalla. Empata por `y` y luego por id, para que dos
-    /// listados en la misma columna den siempre la misma respuesta.
-    pub(super) fn listado_del_lado(&self, derecha: bool) -> Option<u32> {
-        let mut candidatos: Vec<(u16, u16, u32)> = self
-            .reparto
+    /// Only among the visible ones: a background tab is on no side of the
+    /// screen. Ties break by `y` and then by id, so two listings in the
+    /// same column always give the same answer.
+    pub(super) fn side_listing(&self, right: bool) -> Option<u32> {
+        let mut candidates: Vec<(u16, u16, u32)> = self
+            .split
             .placements
             .iter()
-            .filter(|(s, _)| self.huecos.contains_key(&s.0))
+            .filter(|(s, _)| self.slots.contains_key(&s.0))
             .map(|(s, r)| (r.x, r.y, s.0))
             .collect();
-        candidatos.sort_unstable();
-        if derecha {
-            candidatos.last().map(|(_, _, id)| *id)
+        candidates.sort_unstable();
+        if right {
+            candidates.last().map(|(_, _, id)| *id)
         } else {
-            candidatos.first().map(|(_, _, id)| *id)
+            candidates.first().map(|(_, _, id)| *id)
         }
     }
 
-    /// Abre el selector de volúmenes para un hueco concreto y PIDE la tabla.
-    pub(super) fn abrir_volumenes_en(
+    /// Opens the volumes selector for a specific slot and REQUESTS the
+    /// table.
+    pub(super) fn open_volumes_in(
         &mut self,
         slot: u32,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        self.abrir_volumenes_con(crate::pickers::Selector::volumenes(slot), backend, buzon)
+        self.open_volumes_with(crate::pickers::Selector::volumes(slot), backend, mailbox)
     }
 
-    /// El cuerpo compartido: abre ESTE selector y pide la tabla de montaje.
-    pub(super) fn abrir_volumenes_con(
+    /// The shared body: opens THIS selector and requests the mount table.
+    pub(super) fn open_volumes_with(
         &mut self,
         selector: crate::pickers::Selector,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         self.selector = Some(selector);
         self.gen_selector += 1;
-        let apertura = self.gen_selector;
+        let opening = self.gen_selector;
         let backend = Arc::clone(backend);
-        let buzon = buzon.clone();
+        let mailbox = mailbox.clone();
         tokio::spawn(async move {
-            let res = match tokio::time::timeout(PLAZO_PLUGINS, backend.volumes()).await {
+            let res = match tokio::time::timeout(DEADLINE_PLUGINS, backend.volumes()).await {
                 Ok(r) => r,
                 Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
             };
-            let _ = buzon
-                .send(Mensaje::Fondo(Box::new(Fondo::Volumenes(apertura, res))))
+            let _ = mailbox
+                .send(Message::Background(Box::new(Background::Volumes(
+                    opening, res,
+                ))))
                 .await;
         });
-        let cambio = ViewChange::Picker {
+        let change = ViewChange::Picker {
             picker: self.vista_selector(),
         };
-        (self.aplicada(), vec![self.parche(vec![cambio])])
+        (self.applied(), vec![self.parche(vec![change])])
     }
 
-    /// La tabla de montaje llegó.
+    /// The mount table arrived.
     ///
-    /// Un fallo se aplica igual: deja de estar preguntando con la lista
-    /// vacía, que ya sabe decirse. Y si el selector se cerró mientras volaba,
-    /// no hay nada que hacer.
-    pub(super) fn aplicar_volumenes(
+    /// A failure applies the same way: it stops asking with an empty list,
+    /// which already knows how to say itself. And if the selector closed
+    /// while it was in flight, there is nothing to do.
+    pub(super) fn apply_volumes(
         &mut self,
-        apertura: u64,
+        opening: u64,
         res: Result<Vec<norte_proto::methods::Volume>, Error>,
     ) -> Option<BridgeEnvelope<UiUpdate>> {
-        // De ESTA apertura: la generación sube al abrir, así que una
-        // respuesta de la anterior no casa.
-        if apertura != self.gen_selector {
+        // From THIS opening: the generation goes up on open, so an answer
+        // from the previous one does not match.
+        if opening != self.gen_selector {
             return None;
         }
         let lang = self.lang;
         let s = self.selector.as_mut()?;
-        s.set_volumenes(&res.unwrap_or_default(), lang);
+        s.set_volumes(&res.unwrap_or_default(), lang);
         self.gen_selector += 1;
-        let cambio = ViewChange::Picker {
+        let change = ViewChange::Picker {
             picker: self.vista_selector(),
         };
-        Some(self.parche(vec![cambio]))
+        Some(self.parche(vec![change]))
     }
 
-    /// `pane.connect` (#264): el selector de conexiones configuradas.
+    /// `pane.connect` (#264): the configured connections selector.
     ///
-    /// La lista la da el DAEMON, no este proceso: leer `connections.toml`
-    /// aquí metería russh, opendal, age y el keyring en un binario que solo
-    /// quiere pintar nombres. Elegir una NAVEGA a su URL, y eso establece la
-    /// sesión por el camino de siempre — con su TOFU y su política.
-    pub(super) fn abrir_conexiones(
+    /// The list is given by the DAEMON, not this process: reading
+    /// `connections.toml` here would pull russh, opendal, age and the
+    /// keyring into a binary that only wants to paint names. Choosing one
+    /// NAVIGATES to its URL, and that establishes the session through the
+    /// usual path — with its TOFU and its policy.
+    pub(super) fn open_connections(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        self.selector = Some(crate::pickers::Selector::conexiones(self.activo()));
+        self.selector = Some(crate::pickers::Selector::connections(self.active()));
         self.gen_selector += 1;
-        let apertura = self.gen_selector;
+        let opening = self.gen_selector;
         let backend = Arc::clone(backend);
-        let buzon = buzon.clone();
+        let mailbox = mailbox.clone();
         tokio::spawn(async move {
-            let res = match tokio::time::timeout(PLAZO_PLUGINS, backend.connections()).await {
+            let res = match tokio::time::timeout(DEADLINE_PLUGINS, backend.connections()).await {
                 Ok(r) => r,
                 Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
             };
-            let _ = buzon
-                .send(Mensaje::Fondo(Box::new(Fondo::Conexiones(apertura, res))))
+            let _ = mailbox
+                .send(Message::Background(Box::new(Background::Connections(
+                    opening, res,
+                ))))
                 .await;
         });
-        let cambio = ViewChange::Picker {
+        let change = ViewChange::Picker {
             picker: self.vista_selector(),
         };
-        (self.aplicada(), vec![self.parche(vec![cambio])])
+        (self.applied(), vec![self.parche(vec![change])])
     }
 
-    /// Cierra la sesión del panel activo y lo saca de ahí (#140).
+    /// Closes the active pane's session and moves it out of there (#140).
     ///
-    /// En un panel LOCAL no hay nada que cerrar y se DICE: una tecla que
-    /// contesta «hecho» sobre algo que no ha hecho nada enseña a no fiarse del
-    /// mensaje.
+    /// On a LOCAL pane there is nothing to close and it IS SAID: a key that
+    /// answers "done" about something that did nothing teaches you not to
+    /// trust the message.
     ///
-    /// El destino se decide AQUÍ, antes de soltar la sesión, porque después la
-    /// ruta del panel ya no sirve de clave.
-    pub(super) fn desconectar(
+    /// The destination is decided HERE, before releasing the session,
+    /// because afterward the pane's path no longer works as a key.
+    pub(super) fn disconnect(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let slot = self.activo();
-        let dir = self.hueco().pane.dir().clone();
+        let slot = self.active();
+        let dir = self.slot().pane.dir().clone();
         if dir.scheme() == "file" {
-            let fuera = self.decir("msg-disconnect-local");
+            let outside = self.say("msg-disconnect-local");
             return (
                 ActionAck::Unavailable {
                     reason_key: "msg-disconnect-local".to_owned(),
                 },
-                fuera,
+                outside,
             );
         }
-        let destino = self.donde_volver_tras_desconectar(&dir);
+        let dest = self.where_to_return_after_disconnecting(&dir);
         let backend_c = Arc::clone(backend);
-        let buzon_c = buzon.clone();
-        let clave = dir.clone();
+        let mailbox_c = mailbox.clone();
+        let key = dir.clone();
         tokio::spawn(async move {
-            let res = backend_c.close_connection(clave).await;
-            let _ = buzon_c
-                .send(Mensaje::Fondo(Box::new(Fondo::Desconectada(
-                    slot, res, destino,
+            let res = backend_c.close_connection(key).await;
+            let _ = mailbox_c
+                .send(Message::Background(Box::new(Background::Disconnected(
+                    slot, res, dest,
                 ))))
                 .await;
         });
-        (self.aplicada(), Vec::new())
+        (self.applied(), Vec::new())
     }
 
-    /// A dónde va un panel cuya sesión se acaba de cerrar.
+    /// Where a pane whose session has just closed goes.
     ///
-    /// La decisión —el rastro hacia atrás saltándose la máquina que se cierra,
-    /// y casa cuando no queda nada— vive en `norte-frontend` y la comparten los
-    /// dos frontends: cuando estaba aquí, la TUI se iba a casa siempre y esta
-    /// ventana volvía sobre su rastro, con la misma tecla y el mismo nombre.
-    pub(super) fn donde_volver_tras_desconectar(&self, cerrada: &VPath) -> VPath {
-        norte_frontend::nav::regreso_tras_desconectar(cerrada, self.hueco().historial.trail())
+    /// The decision — the trail going backward, skipping the machine that is
+    /// closing, and home when nothing is left — lives in `norte-frontend` and
+    /// is shared by both frontends: when it lived here, the TUI always went
+    /// home and this window retraced its trail, under the same key and the
+    /// same name.
+    pub(super) fn where_to_return_after_disconnecting(&self, closed: &VPath) -> VPath {
+        norte_frontend::nav::return_after_disconnect(closed, self.slot().history.trail())
             .unwrap_or_else(norte_frontend::shell::home_vpath)
     }
 
-    /// La sesión se cerró (o no había ninguna): se dice y el panel se va.
-    pub(super) fn aplicar_desconexion(
+    /// The session closed (or there was none): it is reported and the pane
+    /// leaves.
+    pub(super) fn apply_disconnection(
         &mut self,
         slot: u32,
         res: Result<bool, Error>,
-        destino: &VPath,
+        dest: &VPath,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        let clave = match res {
+        let key = match res {
             Ok(true) => "msg-disconnect-done",
-            // `false` no es un fallo: no había sesión abierta. Y aun así el
-            // panel se va, porque seguir ahí exigiría reabrirla.
+            // `false` is not a failure: there was no open session. And the
+            // pane leaves anyway, because staying there would require
+            // reopening it.
             Ok(false) => "msg-disconnect-none",
             Err(e) => {
-                // Un cierre que falla NO navega: el panel sigue donde estaba y
-                // la sesión sigue viva, que es lo que el error dice.
-                return self.decir(norte_frontend::error::error_key(&e));
+                // A close that fails does NOT navigate: the pane stays where
+                // it was and the session is still alive, which is what the
+                // error says.
+                return self.say(norte_frontend::error::error_key(&e));
             }
         };
-        self.status.message = Some(clamp_display(norte_i18n::t_in(self.lang, clave)));
-        self.navegar_hueco(slot, destino, Trail::Record, backend, buzon)
+        self.status.message = Some(clamp_display(norte_i18n::t_in(self.lang, key)));
+        self.navigate_slot(slot, dest, Trail::Record, backend, mailbox)
     }
 
-    /// Llegaron las conexiones (#264). Misma guarda de apertura que los
-    /// volúmenes: una respuesta de la lista anterior no la rellena.
-    pub(super) fn aplicar_conexiones(
+    /// The connections arrived (#264). Same opening guard as the volumes: an
+    /// answer from the previous list does not fill it in.
+    pub(super) fn apply_connections(
         &mut self,
-        apertura: u64,
+        opening: u64,
         res: Result<norte_proto::methods::ConnectionListResult, Error>,
     ) -> Option<BridgeEnvelope<UiUpdate>> {
-        if apertura != self.gen_selector {
+        if opening != self.gen_selector {
             return None;
         }
         let s = self.selector.as_mut()?;
-        // Un fallo se pinta como lista VACÍA con su frase, no como una lista
-        // sin explicación: «no tienes ninguna» y «no se pudo preguntar» no son
-        // lo mismo, y sin la frase las dos se leen igual.
-        let (buenas, inservibles) = res.map(|r| (r.connections, r.unusable)).unwrap_or_default();
-        s.con_conexiones(buenas, inservibles);
+        // A failure is painted as an EMPTY list with its own phrase, not as
+        // an unexplained list: "you have none" and "could not be asked" are
+        // not the same thing, and without the phrase both read alike.
+        let (good, unusable) = res.map(|r| (r.connections, r.unusable)).unwrap_or_default();
+        s.with_connections(good, unusable);
         self.gen_selector += 1;
-        let cambio = ViewChange::Picker {
+        let change = ViewChange::Picker {
             picker: self.vista_selector(),
         };
-        Some(self.parche(vec![cambio]))
+        Some(self.parche(vec![change]))
     }
 
-    /// La proyección del selector.
+    /// The selector's projection.
     pub(super) fn vista_selector(&self) -> Option<crate::dto::PickerView> {
         let mut v = self.selector.as_ref()?.vista(self.lang);
         v.generation = self.gen_selector;
         Some(v)
     }
 
-    /// Las teclas mientras se mira el tema. Solo se cierra.
-    /// Teclas del selector de perfiles.
+    /// The keys while the theme is being looked at. It only closes.
+    /// Profile selector keys.
     ///
-    /// Fijas, como las de los demás selectores de esta ventana: flechas para
-    /// recorrer, `Enter` para elegir y `Escape` para cerrar sin cambiar nada.
-    pub(super) fn tecla_en_perfiles(
+    /// Fixed, like the rest of this window's selectors: arrows to scroll,
+    /// `Enter` to choose and `Escape` to close without changing anything.
+    pub(super) fn key_in_profiles(
         &mut self,
         k: &crate::keys::KeyInput,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(p) = self.selector_perfil.as_mut() else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        let Some(p) = self.selector_profile.as_mut() else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
         match k.key.as_str() {
             "Escape" | "esc" => {
-                self.selector_perfil = None;
-                let cambio = ViewChange::Profiles { profiles: None };
-                return (self.aplicada(), vec![self.parche(vec![cambio])]);
+                self.selector_profile = None;
+                let change = ViewChange::Profiles { profiles: None };
+                return (self.applied(), vec![self.parche(vec![change])]);
             }
             "ArrowUp" | "up" => p.up(),
             "ArrowDown" | "down" => p.down(),
             "Enter" | "enter" => {
-                let elegido = p.chosen().map(std::ffi::OsStr::to_os_string);
-                return match elegido {
-                    Some(nombre) => {
-                        let envios = self.elegir_perfil(&nombre, backend, buzon);
-                        (self.aplicada(), envios)
+                let chosen = p.chosen().map(std::ffi::OsStr::to_os_string);
+                return match chosen {
+                    Some(name) => {
+                        let sends = self.choose_profile(&name, backend, mailbox);
+                        (self.applied(), sends)
                     }
-                    // Una fila que no se puede cargar no cambia nada, y el
-                    // selector se queda abierto: cerrarlo sería contestar que
-                    // sí a algo que no pasó.
+                    // A row that cannot be loaded changes nothing, and the
+                    // selector stays open: closing it would be answering yes
+                    // to something that did not happen.
                     None => (
                         ActionAck::Unavailable {
                             reason_key: "host-profile-broken".to_owned(),
@@ -320,270 +329,279 @@ impl Estado {
                     ),
                 };
             }
-            _ => return (self.aplicada(), Vec::new()),
+            _ => return (self.applied(), Vec::new()),
         }
-        let cambio = ViewChange::Profiles {
-            profiles: self.vista_perfiles(),
+        let change = ViewChange::Profiles {
+            profiles: self.vista_profiles(),
         };
-        (self.aplicada(), vec![self.parche(vec![cambio])])
+        (self.applied(), vec![self.parche(vec![change])])
     }
 
-    /// Elige un perfil de la lista: si ya es el activo no pasa nada, y si no,
-    /// empieza el cambio.
-    pub(super) fn elegir_perfil(
+    /// Chooses a profile from the list: if it is already the active one,
+    /// nothing happens, and if not, the switch begins.
+    pub(super) fn choose_profile(
         &mut self,
-        nombre: &std::ffi::OsStr,
+        name: &std::ffi::OsStr,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         let _ = backend;
-        if self.perfil_activo.as_deref() == Some(nombre) {
-            // Ya estabas en él: se cierra y se calla. Tirar y recargar la
-            // pantalla para dejarla igual sería trabajo para nada.
-            self.selector_perfil = None;
+        if self.profile_active.as_deref() == Some(name) {
+            // Already on it: it closes and stays quiet. Dropping and
+            // reloading the screen only to leave it the same would be work
+            // for nothing.
+            self.selector_profile = None;
             return vec![self.parche(vec![ViewChange::Profiles { profiles: None }])];
         }
-        self.cambiar_de_perfil(nombre, buzon)
+        self.switch_profile(name, mailbox)
     }
 
-    pub(super) fn tecla_en_tema(
+    pub(super) fn key_in_theme(
         &mut self,
         k: &crate::keys::KeyInput,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(sel) = self.tema_elegido.as_mut() else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        let Some(sel) = self.theme_chosen.as_mut() else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
         match k.key.as_str() {
-            // `Escape` VUELVE al que había. Un selector con preview en vivo
-            // que se cierra dejando puesto lo último que rozó el cursor no
-            // es un selector: es una forma de cambiar de tema sin querer.
+            // `Escape` GOES BACK to whatever there was. A selector with a
+            // live preview that closes leaving whatever the cursor last
+            // brushed against set is not a selector: it is a way to change
+            // theme by accident.
             "Escape" | "esc" => {
                 let previo = *sel.previo.clone();
-                self.tema_elegido = None;
-                // Se restaura el tema ENTERO, no se vuelve a resolver su
-                // nombre: el que había puede no ser un preset. El aviso sale
-                // igual, para que quien hospeda deshaga lo suyo.
-                let nombre = previo.name.clone();
-                self.tema = previo;
-                self.nativo(crate::dto::NativeEffect::ThemeChanged { name: nombre });
-                let cambio = ViewChange::Theme { theme: None };
-                // Y las filas: el preview en vivo dejó los nombres con los
-                // colores del tema que el cursor rozó, y volver atrás tiene
-                // que devolverlos también (puente 66).
-                let mut fuera = vec![self.parche(vec![cambio])];
-                fuera.extend(self.parches_de_filas_de_todos());
-                return (self.aplicada(), fuera);
+                self.theme_chosen = None;
+                // The WHOLE theme is restored, its name is not resolved
+                // again: the one there was may not be a preset. The
+                // notification goes out the same way, so whoever is hosting
+                // undoes their side too.
+                let name = previo.name.clone();
+                self.theme = previo;
+                self.native(crate::dto::NativeEffect::ThemeChanged { name });
+                let change = ViewChange::Theme { theme: None };
+                // And the rows: the live preview left the names with the
+                // colors of whichever theme the cursor brushed, and going
+                // back has to bring those back too (bridge 66).
+                let mut outside = vec![self.parche(vec![change])];
+                outside.extend(self.patches_of_rows_from_all());
+                return (self.applied(), outside);
             }
             "ArrowUp" | "up" => sel.cursor = sel.cursor.saturating_sub(1),
             "ArrowDown" | "down" => {
-                sel.cursor = (sel.cursor + 1).min(sel.nombres.len().saturating_sub(1));
+                sel.cursor = (sel.cursor + 1).min(sel.names.len().saturating_sub(1));
             }
             "Enter" | "enter" => {
-                let Some(elegido) = sel.nombres.get(sel.cursor).cloned() else {
-                    return (self.aplicada(), Vec::new());
+                let Some(chosen) = sel.names.get(sel.cursor).cloned() else {
+                    return (self.applied(), Vec::new());
                 };
-                self.tema_elegido = None;
-                self.aplicar_tema(&elegido, buzon);
-                // Y se GUARDA, que es lo que separa elegir un tema de mirarlo.
-                // Al perfil activo si lo hay: escribirlo en la capa del
-                // usuario mientras un perfil fija el suyo lo deja tapado
-                // (ADR 0079 D1).
-                self.persistir_tema(&elegido, buzon);
-                let cambio = ViewChange::Theme { theme: None };
-                let mut fuera = vec![self.parche(vec![cambio])];
-                fuera.extend(self.parches_de_filas_de_todos());
-                return (self.aplicada(), fuera);
+                self.theme_chosen = None;
+                self.apply_theme(&chosen, mailbox);
+                // And it IS SAVED, which is what separates choosing a theme
+                // from just looking at it. To the active profile if there is
+                // one: writing it to the user layer while a profile pins its
+                // own leaves it shadowed (ADR 0079 D1).
+                self.persistir_theme(&chosen, mailbox);
+                let change = ViewChange::Theme { theme: None };
+                let mut outside = vec![self.parche(vec![change])];
+                outside.extend(self.patches_of_rows_from_all());
+                return (self.applied(), outside);
             }
-            _ => return (self.aplicada(), Vec::new()),
+            _ => return (self.applied(), Vec::new()),
         }
-        // Preview EN VIVO: moverse por la lista enseña el tema, no su nombre.
-        let bajo_el_cursor = sel.nombres.get(sel.cursor).cloned();
-        if let Some(nombre) = bajo_el_cursor {
-            self.aplicar_tema(&nombre, buzon);
+        // LIVE preview: moving through the list shows the theme, not its
+        // name.
+        let under_the_cursor = sel.names.get(sel.cursor).cloned();
+        if let Some(name) = under_the_cursor {
+            self.apply_theme(&name, mailbox);
         }
-        let cambio = ViewChange::Theme {
-            theme: self.vista_tema(),
+        let change = ViewChange::Theme {
+            theme: self.vista_theme(),
         };
-        // El preview mueve los colores de las ENTRADAS igual que los del
-        // cromo (puente 66): sin esto, recorrer la lista cambiaba el fondo y
-        // los bordes bajo el cursor pero dejaba los nombres del tema
-        // anterior, que es la mitad de la comparación que el selector existe
-        // para ofrecer.
-        let mut fuera = vec![self.parche(vec![cambio])];
-        fuera.extend(self.parches_de_filas_de_todos());
-        (self.aplicada(), fuera)
+        // The preview moves ENTRIES' colors the same as chrome's (bridge 66):
+        // without this, scrolling the list changed the background and
+        // borders under the cursor but left the names in the previous
+        // theme's colors, which is half of the comparison the selector
+        // exists to offer.
+        let mut outside = vec![self.parche(vec![change])];
+        outside.extend(self.patches_of_rows_from_all());
+        (self.applied(), outside)
     }
 
-    /// Pone un tema por su nombre: el del host, y el de quien lo hospeda.
+    /// Sets a theme by its name: the host's, and the one hosting it.
     ///
-    /// Los dos, y por eso está aquí en vez de en dos sitios: el host guarda
-    /// los colores para su propia pantalla de tema, y quien hospeda tiene que
-    /// volver a resolver lo suyo —las variables CSS de la webview— porque las
-    /// resolvió una vez al arrancar. Un nombre que no existe deja el tema como
-    /// estaba en vez de dejar la pantalla sin colores.
+    /// Both, and that is why this is in one place instead of two: the host
+    /// keeps the colors for its own theme screen, and whoever hosts it has
+    /// to resolve its own again — the webview's CSS variables — because it
+    /// resolved them once at startup. A name that does not exist leaves the
+    /// theme as it was instead of leaving the screen without colors.
     ///
-    /// Un PRESET se aplica aquí mismo; una RUTA se va a leer fuera.
+    /// A PRESET is applied right here; a PATH goes off to be read.
     ///
-    /// El corte lo decide `norte_frontend::theme::is_preset`, que es de los
-    /// dos frontends: resolver un preset es aritmética sobre colores y
-    /// mandarlo a otro hilo añadiría un frame de retraso a algo que el lector
-    /// ve cambiar bajo el cursor, mientras que leer un fichero dentro del
-    /// actor es la regla 2 rota — y con un tema en un montaje caído congela la
-    /// ventana entera.
+    /// The split is decided by `norte_frontend::theme::is_preset`, shared by
+    /// both frontends: resolving a preset is arithmetic over colors and
+    /// sending it to another thread would add a frame of lag to something
+    /// the reader sees changing under the cursor, while reading a file
+    /// inside the actor is rule 2 broken — and with a theme on a dropped
+    /// mount it freezes the whole window.
     ///
-    /// Antes solo se aplicaban presets. El selector ofrece presets, así que
-    /// por esa puerta daba igual; por la del CAMBIO DE PERFIL no, porque un
-    /// perfil puede traer `theme = "…/mio.toml"` (ADR 0020) y eso se quedaba
-    /// sin aplicar en silencio, con el terminal aplicándolo.
-    pub(super) fn aplicar_tema(&mut self, nombre: &str, buzon: &mpsc::Sender<Mensaje>) {
-        if let Ok(Some(tema)) = norte_theme::Theme::preset(nombre) {
-            self.tema_puesto(nombre, &tema);
+    /// It used to be that only presets were applied. The selector offers
+    /// presets, so through that door it made no difference; through the
+    /// PROFILE SWITCH door it did, because a profile can carry `theme =
+    /// "…/mine.toml"` (ADR 0020) and that used to go silently unapplied,
+    /// with the terminal applying it.
+    pub(super) fn apply_theme(&mut self, name: &str, mailbox: &mpsc::Sender<Message>) {
+        if let Ok(Some(theme)) = norte_theme::Theme::preset(name) {
+            self.theme_placed(name, &theme);
             return;
         }
-        let spec = nombre.to_owned();
-        let buzon = buzon.clone();
+        let spec = name.to_owned();
+        let mailbox = mailbox.clone();
         tokio::task::spawn_blocking(move || {
-            let resuelto = norte_frontend::theme::resolve_theme(Some(&spec));
-            // El error NO viaja: lleva el spec dentro, que es una ruta, y lo
-            // que la barra dice sale del catálogo (#73). La clave dice si el
-            // fichero no se pudo leer o si no valida, que es lo accionable.
-            let salida = resuelto.map_err(|e| match e {
+            let resolved = norte_frontend::theme::resolve_theme(Some(&spec));
+            // The error does NOT travel: it carries the spec inside, which
+            // is a path, and what the status bar says comes from the
+            // catalog (#73). The key says whether the file could not be
+            // read or does not validate, which is the actionable part.
+            let output = resolved.map_err(|e| match e {
                 norte_frontend::theme::ResolveError::Io { .. } => "host-theme-unreadable",
                 norte_frontend::theme::ResolveError::Parse { .. } => "host-theme-invalid",
             });
-            let _ = buzon.blocking_send(Mensaje::TemaResuelto(Box::new((spec, salida))));
+            let _ = mailbox.blocking_send(Message::ThemeResolved(Box::new((spec, output))));
         });
     }
 
-    /// El tema ya resuelto pasa a ser el vigente, y se le dice a quien hospeda.
-    pub(super) fn tema_puesto(&mut self, nombre: &str, tema: &norte_theme::Theme) {
-        self.tema = crate::pickers::HostTheme::de(nombre, tema);
-        self.nativo(crate::dto::NativeEffect::ThemeChanged {
-            name: nombre.to_owned(),
+    /// The already-resolved theme becomes the active one, and whoever hosts
+    /// it is told.
+    pub(super) fn theme_placed(&mut self, name: &str, theme: &norte_theme::Theme) {
+        self.theme = crate::pickers::HostTheme::de(name, theme);
+        self.native(crate::dto::NativeEffect::ThemeChanged {
+            name: name.to_owned(),
         });
     }
 
-    /// Los parches de FILAS de todos los huecos, para después de un cambio de
-    /// tema.
+    /// The ROW patches for every slot, for after a theme change.
     ///
-    /// Desde el puente 66 el color de una entrada va COCIDO en su fila
-    /// (`RowView::name_color`), así que cambiar de tema y no repintar las
-    /// filas deja los nombres con los colores del tema anterior hasta que el
-    /// lector se mueva, marque algo o cambie de directorio. El resto de la
-    /// pantalla —fondo, bordes, paleta, barra de estado— sí cambia, que es lo
-    /// que hace el fallo tan raro de leer: media ventana obedece y la otra
-    /// media no.
+    /// Since bridge 66 an entry's color is BAKED into its row
+    /// (`RowView::name_color`), so changing theme and not repainting the
+    /// rows leaves the names in the previous theme's colors until the
+    /// reader moves, marks something or changes directory. The rest of the
+    /// screen — background, borders, palette, status bar — does change,
+    /// which is what makes the bug so odd to read: half the window obeys
+    /// and the other half does not.
     ///
-    /// De TODOS los huecos y no solo del activo: `filas_visibles` mira
-    /// `self.hueco()`, y el panel de al lado también tiene nombres.
+    /// For ALL slots and not just the active one: `rows_visible` looks at
+    /// `self.slot()`, and the pane next door also has names.
     ///
-    /// Vive aquí, junto a `tema_puesto`, porque los dos caminos que ponen un
-    /// tema pasan por él: el de preset, que resuelve en el sitio, y el de
-    /// fichero, que llega por `Mensaje::TemaResuelto`. Es el mismo error que
-    /// `readornar_todo` arregló para los iconos.
-    pub(super) fn parches_de_filas_de_todos(&mut self) -> Vec<BridgeEnvelope<UiUpdate>> {
-        let slots: Vec<u32> = self.huecos.keys().copied().collect();
+    /// Lives here, next to `theme_placed`, because the two paths that set a
+    /// theme both go through it: the preset one, which resolves on the spot,
+    /// and the file one, which arrives through `Message::ThemeResolved`. It
+    /// is the same bug `redecorate_all` fixed for the icons.
+    pub(super) fn patches_of_rows_from_all(&mut self) -> Vec<BridgeEnvelope<UiUpdate>> {
+        let slots: Vec<u32> = self.slots.keys().copied().collect();
         slots
             .into_iter()
-            .map(|slot| self.parche_filas_de(slot))
+            .map(|slot| self.patch_rows_of(slot))
             .collect()
     }
 
-    /// Guarda el tema elegido en la capa que toca, FUERA del actor.
+    /// Saves the chosen theme to the right layer, OUTSIDE the actor.
     ///
-    /// El actor es el único escritor del estado y esto es I/O con un lock
-    /// entre procesos detrás (`persist_ui_theme_to` bloquea mientras otro
-    /// norte escribe): hacerlo aquí congelaría la ventana entera. Vuelve por
-    /// el buzón como todo lo demás.
-    pub(super) fn persistir_tema(&mut self, nombre: &str, buzon: &mpsc::Sender<Mensaje>) {
-        let Some(dir) = self.dir_de_escritura() else {
+    /// The actor is the only writer of the state and this is I/O with an
+    /// inter-process lock behind it (`persist_ui_theme_to` blocks while
+    /// another norte is writing): doing it here would freeze the whole
+    /// window. It comes back through the mailbox like everything else.
+    pub(super) fn persistir_theme(&mut self, name: &str, mailbox: &mpsc::Sender<Message>) {
+        let Some(dir) = self.write_dir() else {
             self.status.message = Some(clamp_display(norte_i18n::t_in(
                 self.lang,
                 "host-no-config-dir",
             )));
             return;
         };
-        let nombre = nombre.to_owned();
-        let buzon = buzon.clone();
+        let name = name.to_owned();
+        let mailbox = mailbox.clone();
         tokio::task::spawn_blocking(move || {
-            let clave = match norte_config::persist_ui_theme_to(&dir, &nombre) {
+            let key = match norte_config::persist_ui_theme_to(&dir, &name) {
                 Ok(_) => None,
-                // El error NO viaja: puede llevar la ruta del fichero, y lo
-                // que la barra dice sale del catálogo (#73). La categoría
-                // basta para saber qué pasó.
-                Err(e) => Some(clave_de_io(&e)),
+                // The error does NOT travel: it can carry the file's path,
+                // and what the status bar says comes from the catalog (#73).
+                // The category is enough to know what happened.
+                Err(e) => Some(io_key(&e)),
             };
-            let _ = buzon.blocking_send(Mensaje::TemaPersistido(clave));
+            let _ = mailbox.blocking_send(Message::ThemePersisted(key));
         });
     }
 
-    /// Dónde escribe esta ventana su configuración.
+    /// Where this window writes its configuration.
     ///
-    /// La capa MÁS ALTA de las que se pueden editar: el perfil activo si lo
-    /// hay, y la del usuario si no. Nunca la del sistema (no es de quien está
-    /// delante) ni la del proyecto (es del directorio, no de la persona).
+    /// The HIGHEST of the layers that can be edited: the active profile if
+    /// there is one, and the user's if not. Never the system's (it is not
+    /// the one in front of it) nor the project's (it belongs to the
+    /// directory, not to the person).
     ///
-    /// Sale de las capas que quien arrancó el host resolvió, no de volver a
-    /// mirar el entorno: la ventana escribe donde de verdad leyó (ADR 0066
-    /// D14). Y el perfil es el que está PUESTO, no el del arranque: las capas
-    /// del arranque solo llevan uno si se arrancó con `--profile`, y un
-    /// perfil elegido en caliente no las toca. Sin esto, con un perfil puesto
-    /// desde el selector, el ajuste se escribía en la capa del usuario y el
-    /// perfil lo tapaba en la relectura: «guardado» y sin efecto, en silencio.
-    pub(super) fn dir_de_escritura(&self) -> Option<std::path::PathBuf> {
+    /// Comes from the layers whoever started the host resolved, not from
+    /// looking at the environment again: the window writes where it really
+    /// read from (ADR 0066 D14). And the profile is the one currently SET,
+    /// not the one at startup: startup's layers only carry one if it started
+    /// with `--profile`, and a profile chosen live does not touch them.
+    /// Without this, with a profile set from the selector, the setting was
+    /// written to the user layer and the profile shadowed it on re-read:
+    /// "saved" and with no effect, silently.
+    pub(super) fn write_dir(&self) -> Option<std::path::PathBuf> {
         use crate::settings::ConfigLayer;
-        let usuario = self
+        let user = self
             .paths
             .config_layers
             .iter()
-            .find(|(capa, _)| matches!(capa, ConfigLayer::User))
+            .find(|(layer, _)| matches!(layer, ConfigLayer::User))
             .map(|(_, p)| p.path.clone());
-        match (&self.perfil_activo, usuario) {
-            (Some(perfil), Some(usuario)) => Some(usuario.join("profiles").join(perfil)),
-            (None, usuario) => usuario,
-            // Perfil puesto y sin capa de usuario de la que colgarlo: solo
-            // puede venir del arranque, y entonces está en las capas.
+        match (&self.profile_active, user) {
+            (Some(profile), Some(user)) => Some(user.join("profiles").join(profile)),
+            (None, user) => user,
+            // Profile set with no user layer to hang it off: it can only
+            // have come from startup, and then it is in the layers.
             (Some(_), None) => self
                 .paths
                 .config_layers
                 .iter()
-                .rfind(|(capa, _)| matches!(capa, ConfigLayer::Profile))
+                .rfind(|(layer, _)| matches!(layer, ConfigLayer::Profile))
                 .map(|(_, p)| p.path.clone()),
         }
     }
 
-    /// Pide el NOMBRE de un favorito nuevo que apunta al directorio del panel
-    /// (#309), con el campo ya prellenado.
+    /// Asks for a new favorite's NAME pointing to the pane's directory
+    /// (#309), with the field already prefilled.
     ///
-    /// La sugerencia sale del modelo COMPARTIDO
-    /// (`norte_frontend::places::suggested_hotlist_name`), que es el que usa el
-    /// terminal: esquiva los nombres ocupados porque guardar REEMPLAZA el
-    /// favorito que ya se llame así, y con el campo prellenado el reflejo de
-    /// aceptar sin leer pisaría uno que apuntaba a otro sitio. Un nombre
-    /// TECLEADO que colisione sigue reemplazando — eso es lo que se pidió.
-    pub(super) fn pedir_favorito(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let destino = self.hueco().pane.dir().clone();
-        self.pedir_favorito_de(destino)
+    /// The suggestion comes from the SHARED model
+    /// (`norte_frontend::places::suggested_hotlist_name`), the one the
+    /// terminal uses: it dodges taken names because saving REPLACES the
+    /// favorite already named that, and with the field prefilled the reflex
+    /// of accepting without reading would overwrite one pointing somewhere
+    /// else. A TYPED name that collides still replaces — that is what was
+    /// asked for.
+    pub(super) fn request_favorite(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let dest = self.slot().pane.dir().clone();
+        self.request_favorite_of(dest)
     }
 
-    /// Lo mismo, para un directorio que no tiene por qué ser el del panel: la
-    /// fila del cursor de una lista de historia (spec 2026-09-15 D2).
-    pub(super) fn pedir_favorito_de(
+    /// The same, for a directory that need not be the pane's: a history
+    /// list's cursor row (spec 2026-09-15 D2).
+    pub(super) fn request_favorite_of(
         &mut self,
-        destino: VPath,
+        dest: VPath,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let ocupados: Vec<&str> = self
+        let busy: Vec<&str> = self
             .config
             .common
             .hotlist
             .iter()
             .map(|h| h.name.as_str())
             .collect();
-        let sugerido = norte_frontend::places::suggested_hotlist_name(&destino, &ocupados);
-        let donde = Self::linea_de_ruta(&destino);
-        let id = ModalId(self.siguiente_modal);
-        self.siguiente_modal += 1;
+        let suggested = norte_frontend::places::suggested_hotlist_name(&dest, &busy);
+        let location_line = Self::path_line(&dest);
+        let id = ModalId(self.next_modal);
+        self.next_modal += 1;
         let vista = DialogView {
             id,
             title_key: "modal-hotlist-name-title".to_owned(),
@@ -592,7 +610,7 @@ impl Estado {
             asker: None,
             deadline: None,
             deadline_at_ms: None,
-            body: vec![donde],
+            body: vec![location_line],
             overflow_note: String::new(),
             overflow_hostile: false,
             choices: vec![
@@ -607,87 +625,89 @@ impl Estado {
                     destructive: false,
                 },
             ],
-            input: Some(clamp_display(sugerido.clone())),
+            input: Some(clamp_display(suggested.clone())),
             input_hostile: false,
             input_secret: false,
             fields: Vec::new(),
             dest_check: crate::dto::DestCheckView::NotAsked,
         };
-        self.dialogos.push(Dialogo {
+        self.dialogs.push(Dialog {
             id,
             vista,
-            tecleado: Tecleado::Texto(sugerido),
-            reconocido: true,
-            al_confirmar: Some(Pendiente::GuardarFavorito { destino }),
+            typed: Typed::Text(suggested),
+            recognized: true,
+            on_confirm: Some(Pending::SaveFavorite { dest }),
         });
-        // El selector se cierra: la pregunta la contesta el diálogo, y dejar
-        // la lista debajo daría dos cursores vivos a la vez.
+        // The selector closes: the dialog answers the question, and leaving
+        // the list underneath would give two live cursors at once.
         self.selector = None;
-        let cambios = vec![
+        let changes = vec![
             ViewChange::Picker { picker: None },
             ViewChange::Dialogs {
-                dialogs: self.vistas_de_dialogos(),
+                dialogs: self.dialog_views(),
             },
         ];
-        (self.aplicada(), vec![self.parche(cambios)])
+        (self.applied(), vec![self.parche(changes)])
     }
 
-    /// Guarda el favorito `nombre` = `destino` en la capa de configuración que
-    /// esta ventana escribe (#309).
+    /// Saves the favorite `name` = `dest` in the config layer this
+    /// window writes (#309).
     ///
-    /// Por `spawn_blocking` (regla 2): `persist_hotlist_add` escribe un fichero
-    /// con lock y tmp+rename. La copia en memoria solo se toca si el disco fue
-    /// bien — que es lo que hace el terminal, y por lo mismo: una lista que
-    /// dice tener un favorito que no está en el fichero miente hasta el
-    /// siguiente arranque.
-    pub(super) fn guardar_favorito(
+    /// Through `spawn_blocking` (rule 2): `persist_hotlist_add` writes a file
+    /// with a lock and tmp+rename. The in-memory copy is only touched if the
+    /// disk went well — which is what the terminal does, and for the same
+    /// reason: a list claiming to have a favorite that is not in the file
+    /// lies until the next startup.
+    pub(super) fn save_favorite(
         &mut self,
-        destino: &VPath,
-        nombre: &str,
-        buzon: &mpsc::Sender<Mensaje>,
+        dest: &VPath,
+        name: &str,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (Option<&'static str>, Vec<BridgeEnvelope<UiUpdate>>) {
-        let nombre = nombre.trim().to_owned();
-        if nombre.is_empty() {
-            // Sin nombre no hay favorito: es lo que hace el terminal con el
-            // campo vacío, y es más honesto que guardar uno sin nombre.
-            return (Some("hotlist-name-empty"), self.decir("hotlist-name-empty"));
+        let name = name.trim().to_owned();
+        if name.is_empty() {
+            // No name, no favorite: it is what the terminal does with an
+            // empty field, and it is more honest than saving one with no
+            // name.
+            return (Some("hotlist-name-empty"), self.say("hotlist-name-empty"));
         }
-        let Some(dir) = self.dir_de_escritura() else {
-            return (Some("host-no-config-dir"), self.decir("host-no-config-dir"));
+        let Some(dir) = self.write_dir() else {
+            return (Some("host-no-config-dir"), self.say("host-no-config-dir"));
         };
-        let wire = destino.to_wire();
-        let a_donde = destino.clone();
-        let buzon = buzon.clone();
-        let n = nombre.clone();
+        let wire = dest.to_wire();
+        let where_to = dest.clone();
+        let mailbox = mailbox.clone();
+        let n = name.clone();
         tokio::task::spawn_blocking(move || {
-            let clave = match norte_config::persist_hotlist_add(&dir, &n, &wire) {
+            let key = match norte_config::persist_hotlist_add(&dir, &n, &wire) {
                 Ok(_) => None,
-                Err(e) => Some(clave_de_io(&e)),
+                Err(e) => Some(io_key(&e)),
             };
-            let _ = buzon.blocking_send(Mensaje::FavoritoPersistido(Box::new((n, a_donde, clave))));
+            let _ = mailbox.blocking_send(Message::FavoritePersisted(Box::new((n, where_to, key))));
         });
         (None, Vec::new())
     }
 
-    /// Pide el NOMBRE con el que guardar el espacio de trabajo (#318).
+    /// Asks for the NAME to save the workspace under (#318).
     ///
-    /// Prellenado con el perfil ACTIVO, que es lo que un «guardar como» hace
-    /// en todas partes: lo normal es partir del que tienes y darle otro
-    /// nombre. Sin perfil activo el campo nace vacío — inventar uno sería
-    /// proponer un directorio que el lector no ha pedido.
-    pub(super) fn pedir_guardar_perfil(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let sugerido = self
-            .perfil_activo
+    /// Prefilled with the ACTIVE profile, which is what a "save as" does
+    /// everywhere: the normal thing is to start from what you have and give
+    /// it another name. With no active profile the field is born empty —
+    /// inventing one would be proposing a directory the reader never asked
+    /// for.
+    pub(super) fn request_save_profile(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let suggested = self
+            .profile_active
             .as_ref()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let id = ModalId(self.siguiente_modal);
-        self.siguiente_modal += 1;
+        let id = ModalId(self.next_modal);
+        self.next_modal += 1;
         let vista = DialogView {
             id,
-            // Las claves del TERMINAL, no unas nuevas: es el mismo diálogo, y
-            // Fluent se queda con la PRIMERA definición — una clave duplicada
-            // con otro texto deja muerta a la vieja sin decirlo.
+            // The TERMINAL's keys, not new ones: it is the same dialog, and
+            // Fluent keeps the FIRST definition — a duplicate key with
+            // different text leaves the old one dead without saying so.
             title_key: "modal-profile-save-as".to_owned(),
             destination: None,
             subject: None,
@@ -712,93 +732,95 @@ impl Estado {
                     destructive: false,
                 },
             ],
-            input: Some(clamp_display(sugerido.clone())),
+            input: Some(clamp_display(suggested.clone())),
             input_hostile: false,
             input_secret: false,
             fields: Vec::new(),
             dest_check: crate::dto::DestCheckView::NotAsked,
         };
-        self.dialogos.push(Dialogo {
+        self.dialogs.push(Dialog {
             id,
             vista,
-            tecleado: Tecleado::Texto(sugerido),
-            reconocido: true,
-            al_confirmar: Some(Pendiente::GuardarPerfil),
+            typed: Typed::Text(suggested),
+            recognized: true,
+            on_confirm: Some(Pending::SaveProfile),
         });
-        let cambio = ViewChange::Dialogs {
-            dialogs: self.vistas_de_dialogos(),
+        let change = ViewChange::Dialogs {
+            dialogs: self.dialog_views(),
         };
-        (self.aplicada(), vec![self.parche(vec![cambio])])
+        (self.applied(), vec![self.parche(vec![change])])
     }
 
-    /// Escribe `profiles/<nombre>/` con lo que hay en pantalla (#318).
+    /// Writes `profiles/<name>/` with what is on screen (#318).
     ///
-    /// El CONTENIDO no se decide aquí: lo monta [`Self::instantanea_de_perfil`]
-    /// y lo escribe `norte_config::save_profile`, que es el mismo escritor que
-    /// usa el terminal. Es la exigencia de la ADR 0077 —una decisión duplicada
-    /// entre frontends diverge en silencio—, y aquí sería el peor sitio para
-    /// que divergiera: dos «guardar como» que producen perfiles distintos
-    /// convierten el perfil en algo que depende de por dónde lo guardaste.
+    /// The CONTENT is not decided here: it is assembled by
+    /// [`Self::profile_snapshot`] and written by
+    /// `norte_config::save_profile`, the same writer the terminal uses. It
+    /// is ADR 0077's requirement — a decision duplicated between frontends
+    /// silently drifts apart — and this would be the worst place for it to
+    /// drift: two "save as" that produce different profiles turn the
+    /// profile into something that depends on where you saved it from.
     ///
-    /// El nombre se valida ANTES de tocar disco, y el disco va fuera del actor.
-    pub(super) fn guardar_perfil(
+    /// The name is validated BEFORE touching disk, and the disk part
+    /// happens outside the actor.
+    pub(super) fn save_profile(
         &mut self,
-        nombre: &str,
-        buzon: &mpsc::Sender<Mensaje>,
+        name: &str,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (Option<&'static str>, Vec<BridgeEnvelope<UiUpdate>>) {
-        let nombre = std::ffi::OsString::from(nombre.trim());
-        if !norte_config::valid_profile_name(&nombre) {
+        let name = std::ffi::OsString::from(name.trim());
+        if !norte_config::valid_profile_name(&name) {
             return (
                 Some("msg-profile-name-invalid"),
-                self.decir("msg-profile-name-invalid"),
+                self.say("msg-profile-name-invalid"),
             );
         }
-        let Some(dir) = self.dir_de_perfiles() else {
-            return (Some("host-no-config-dir"), self.decir("host-no-config-dir"));
+        let Some(dir) = self.profiles_dir() else {
+            return (Some("host-no-config-dir"), self.say("host-no-config-dir"));
         };
-        let snap = self.instantanea_de_perfil();
-        let buzon = buzon.clone();
-        let visible = nombre.to_string_lossy().into_owned();
+        let snap = self.profile_snapshot();
+        let mailbox = mailbox.clone();
+        let visible = name.to_string_lossy().into_owned();
         tokio::task::spawn_blocking(move || {
-            let clave = match norte_config::save_profile(&dir, &nombre, &snap) {
+            let key = match norte_config::save_profile(&dir, &name, &snap) {
                 Ok(_) => None,
-                Err(e) => Some(clave_de_io(&e)),
+                Err(e) => Some(io_key(&e)),
             };
-            let _ = buzon.blocking_send(Mensaje::PerfilGuardado(Box::new((visible, clave))));
+            let _ = mailbox.blocking_send(Message::ProfileSaved(Box::new((visible, key))));
         });
         (None, Vec::new())
     }
 
-    /// Lo que hay en pantalla, en la forma que `norte-config` escribe (#318).
+    /// What is on screen, in the shape `norte-config` writes (#318).
     ///
-    /// El CONTENIDO lo decide `norte_frontend::config::profile_snapshot`, que
-    /// es la misma que llama el terminal: aquí solo se contesta dónde está
-    /// cada listado. Ver su rustdoc para por qué no hay dos copias de esto.
-    pub(super) fn instantanea_de_perfil(&self) -> norte_config::ProfileSnapshot {
+    /// The CONTENT is decided by `norte_frontend::config::profile_snapshot`,
+    /// the same one the terminal calls: here it only answers where each
+    /// listing is. See its rustdoc for why there are not two copies of this.
+    pub(super) fn profile_snapshot(&self) -> norte_config::ProfileSnapshot {
         norte_frontend::config::profile_snapshot(
-            &self.arbol,
-            // Solo los huecos que SON un listado tienen directorio, y son los
-            // que `huecos` guarda: el visor, los procesos y los sitios no
-            // tienen nada que poner en `[profile.start]`.
-            &|SlotId(n)| self.huecos.get(&n).map(|h| h.pane.dir().clone()),
-            self.dir_de_escritura()
+            &self.tree,
+            // Only the slots that ARE a listing have a directory, and those
+            // are the ones `slots` stores: the viewer, processes and
+            // places have nothing to put in `[profile.start]`.
+            &|SlotId(n)| self.slots.get(&n).map(|h| h.pane.dir().clone()),
+            self.write_dir()
                 .and_then(|d| std::fs::read(d.join("keymap.toml")).ok()),
         )
     }
 
-    /// Quita el favorito que el cursor señala (#309).
+    /// Removes the favorite the cursor points at (#309).
     ///
-    /// Sin confirmación, como en el terminal: un favorito es un atajo, no un
-    /// fichero, y volver a crearlo cuesta una tecla. El nombre sale CRUDO de
-    /// la fila y no de su etiqueta, que va saneada.
-    pub(super) fn quitar_favorito(
+    /// No confirmation, like in the terminal: a favorite is a shortcut, not
+    /// a file, and creating it again costs one key. The name comes RAW from
+    /// the row and not from its label, which is sanitized.
+    pub(super) fn remove_favorite(
         &mut self,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(nombre) = self
+        let Some(name) = self
             .selector
             .as_ref()
-            .and_then(|s| s.nombre_crudo())
+            .and_then(|s| s.name_raw())
             .map(str::to_owned)
         else {
             return (
@@ -808,86 +830,87 @@ impl Estado {
                 Vec::new(),
             );
         };
-        let Some(dir) = self.dir_de_escritura() else {
-            let fuera = self.decir("host-no-config-dir");
+        let Some(dir) = self.write_dir() else {
+            let outside = self.say("host-no-config-dir");
             return (
                 ActionAck::Unavailable {
                     reason_key: "host-no-config-dir".to_owned(),
                 },
-                fuera,
+                outside,
             );
         };
-        let buzon = buzon.clone();
-        let n = nombre;
+        let mailbox = mailbox.clone();
+        let n = name;
         tokio::task::spawn_blocking(move || {
-            let clave = match norte_config::persist_hotlist_remove(&dir, &n) {
+            let key = match norte_config::persist_hotlist_remove(&dir, &n) {
                 Ok(_) => None,
-                Err(e) => Some(clave_de_io(&e)),
+                Err(e) => Some(io_key(&e)),
             };
-            let _ = buzon.blocking_send(Mensaje::FavoritoQuitado(Box::new((n, clave))));
+            let _ = mailbox.blocking_send(Message::FavoriteRemoved(Box::new((n, key))));
         });
-        (self.aplicada(), Vec::new())
+        (self.applied(), Vec::new())
     }
 
-    /// El disco contestó a un favorito guardado (#309): se refleja o se dice.
-    /// El perfil quedó escrito, o no (#318).
+    /// The disk answered a saved favorite (#309): it is reflected or
+    /// reported. The profile got written, or not (#318).
     ///
-    /// No se activa solo: guardar es guardar, y cambiar de perfil es otra
-    /// cosa con su propia tecla. El terminal hace lo mismo, y el test de
-    /// paridad lo pide.
-    pub(super) fn perfil_guardado(
+    /// It does not activate on its own: saving is saving, and switching
+    /// profile is something else with its own key. The terminal does the
+    /// same, and the parity test requires it.
+    pub(super) fn profile_saved(
         &mut self,
-        nombre: &str,
-        fallo: Option<&'static str>,
+        name: &str,
+        failure: Option<&'static str>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        if let Some(clave) = fallo {
-            return self.decir(clave);
+        if let Some(key) = failure {
+            return self.say(key);
         }
         self.status.message = Some(clamp_display(norte_i18n::ta_in(
             self.lang,
             "msg-profile-saved",
-            &[("name", &clamp_display(nombre.to_owned()))],
+            &[("name", &clamp_display(name.to_owned()))],
         )));
-        let cambio = ViewChange::Status(self.status.clone());
-        vec![self.parche(vec![cambio])]
+        let change = ViewChange::Status(self.status.clone());
+        vec![self.parche(vec![change])]
     }
 
-    pub(super) fn favorito_persistido(
+    pub(super) fn favorite_persisted(
         &mut self,
-        nombre: &str,
-        destino: Option<VPath>,
-        fallo: Option<&'static str>,
+        name: &str,
+        dest: Option<VPath>,
+        failure: Option<&'static str>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        if let Some(clave) = fallo {
-            return self.decir(clave);
+        if let Some(key) = failure {
+            return self.say(key);
         }
-        match destino {
-            Some(destino) => {
-                // REEMPLAZA el que se llame igual, que es lo que hace el
-                // fichero: si la copia en memoria añadiera uno más, la lista
-                // enseñaría dos donde el disco tiene uno.
-                self.config.common.hotlist.retain(|h| h.name != nombre);
+        match dest {
+            Some(dest) => {
+                // REPLACES the one with the same name, which is what the
+                // file does: if the in-memory copy added one more, the list
+                // would show two where the disk has one.
+                self.config.common.hotlist.retain(|h| h.name != name);
                 self.config.common.hotlist.push(norte_config::HotlistItem {
-                    name: nombre.to_owned(),
-                    target: Ok(destino),
+                    name: name.to_owned(),
+                    target: Ok(dest),
                 });
             }
-            None => self.config.common.hotlist.retain(|h| h.name != nombre),
+            None => self.config.common.hotlist.retain(|h| h.name != name),
         }
-        // La barra lateral pinta los favoritos: se resiembra desde la copia
-        // que acaba de cambiar, y eso sube su generación. Sin ello la lista de
-        // sitios seguiría enseñando la de antes.
-        self.sembrar_sitios();
-        // Y el selector, si sigue abierto, se rehace con la lista nueva: es la
-        // superficie desde la que se acaba de editar, y dejarla igual sería
-        // contestar «hecho» sobre una lista que no lo enseña.
+        // The side panel paints the favorites: it is re-seeded from the copy
+        // that just changed, and that bumps its generation. Without this the
+        // places list would keep showing the old one.
+        self.seed_places();
+        // And the selector, if it is still open, is rebuilt with the new
+        // list: it is the very surface being edited from, and leaving it
+        // unchanged would be answering "done" over a list that does not
+        // show it.
         if self
             .selector
             .as_ref()
             .is_some_and(crate::pickers::Selector::es_hotlist)
         {
-            let slot = self.activo();
-            let favoritos: Vec<(String, Result<VPath, String>)> = self
+            let slot = self.active();
+            let favorites: Vec<(String, Result<VPath, String>)> = self
                 .config
                 .common
                 .hotlist
@@ -895,120 +918,121 @@ impl Estado {
                 .map(|h| (h.name.clone(), h.target.clone()))
                 .collect();
             self.selector = Some(crate::pickers::Selector::hotlist(
-                slot, &favoritos, self.lang,
+                slot, &favorites, self.lang,
             ));
             self.gen_selector += 1;
         }
-        // Una FOTO entera, como cuando llegan los volúmenes y por lo mismo:
-        // esto cambia dos superficies a la vez —la barra y el selector— y las
-        // filas se numeran de nuevo, así que un parche por índice nombraría
-        // filas que ya no son las que eran.
+        // A whole SNAPSHOT, same as when the volumes arrive and for the same
+        // reason: this changes two surfaces at once — the side panel and the
+        // selector — and the rows get renumbered, so an index-based patch
+        // would name rows that are no longer what they were.
         let snap = self.snapshot();
-        vec![self.sobre(UiUpdate::Snapshot(Box::new(snap)))]
+        vec![self.over(UiUpdate::Snapshot(Box::new(snap)))]
     }
 
-    /// Las teclas mientras un selector está abierto.
-    pub(super) fn tecla_en_selector(
+    /// The keys while a selector is open.
+    pub(super) fn key_in_selector(
         &mut self,
         k: &crate::keys::KeyInput,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        /// Cuántas filas mueve una página.
-        const PAGINA: i64 = 10;
+        /// How many rows a page moves.
+        const PAGE: i64 = 10;
         if self.selector.is_none() {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+            return (Self::stale(StaleAction::Modal), Vec::new());
         }
-        // Filtrando una historia, las teclas de texto son del filtro.
-        if let Some(salida) = self.tecla_de_filtro(k) {
-            return salida;
+        // While filtering a history, text keys belong to the filter.
+        if let Some(output) = self.filter_key(k) {
+            return output;
         }
-        // `Home`/`End` siguen siendo teclas fijas: el catálogo compartido no
-        // tiene verbo para «al principio» dentro de un diálogo, y esperar a
-        // que lo tenga habría dejado la lista sin extremos.
-        let extremo = match k.key.as_str() {
+        // `Home`/`End` stay fixed keys: the shared catalog has no verb for
+        // "to the start" inside a dialog, and waiting for it to have one
+        // would have left the list with no extremes.
+        let end = match k.key.as_str() {
             "Home" | "home" => Some(i64::MIN / 2),
             "End" | "end" => Some(i64::MAX / 2),
             _ => None,
         };
-        let verbo = if extremo.is_some() {
+        let verb = if end.is_some() {
             None
         } else {
-            self.verbo_de_dialogo(k)
+            self.dialog_verb(k)
         };
         let Some(s) = self.selector.as_mut() else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
-        if let Some(salto) = extremo {
-            s.mover(salto);
+        if let Some(jump) = end {
+            s.mover(jump);
         } else {
-            match verbo.as_deref() {
+            match verb.as_deref() {
                 Some("dialog.cancel") => self.selector = None,
                 Some("dialog.down") => s.mover(1),
                 Some("dialog.up") => s.mover(-1),
-                Some("dialog.page-down") => s.mover(PAGINA),
-                Some("dialog.page-up") => s.mover(-PAGINA),
-                Some("dialog.confirm") => return self.elegir_del_selector(backend, buzon),
-                // Los favoritos son la única lista de esta ventana que se
-                // EDITA (#309), y son los dos verbos que el catálogo ya tenía
-                // para eso: en el terminal son la `a` y la `d` del mismo
-                // popup. Sobre cualquier otro selector no significan nada y se
-                // ignoran, como cualquier tecla que ese selector no ata.
-                Some("dialog.add") if s.es_hotlist() => return self.pedir_favorito(),
-                Some("dialog.remove") if s.es_hotlist() => return self.quitar_favorito(buzon),
-                // La historia y los populares también se editan (spec
-                // 2026-09-15 D2), y abrir en el otro hueco vale para toda
-                // lista que navega.
-                Some("dialog.remove") if s.es_historia() => return self.quitar_de_historia(),
-                Some("dialog.clear") if s.es_historia() => return self.vaciar_historia(),
-                Some("dialog.filter") if s.es_historia() => {
-                    return self.filtrar_historia(Some(String::new()));
+                Some("dialog.page-down") => s.mover(PAGE),
+                Some("dialog.page-up") => s.mover(-PAGE),
+                Some("dialog.confirm") => return self.choose_from_selector(backend, mailbox),
+                // Favorites are the only list in this window that gets
+                // EDITED (#309), and they are the two verbs the catalog
+                // already had for that: in the terminal they are `a` and `d`
+                // on the same popup. On any other selector they mean nothing
+                // and are ignored, like any key that selector does not bind.
+                Some("dialog.add") if s.es_hotlist() => return self.request_favorite(),
+                Some("dialog.remove") if s.es_hotlist() => return self.remove_favorite(mailbox),
+                // History and frequent are also edited (spec 2026-09-15 D2),
+                // and opening in the other slot works for any navigating
+                // list.
+                Some("dialog.remove") if s.es_history() => return self.remove_from_history(),
+                Some("dialog.clear") if s.es_history() => return self.clear_history(),
+                Some("dialog.filter") if s.es_history() => {
+                    return self.filter_history(Some(String::new()));
                 }
-                // `a` sobre una fila de historia la guarda como favorito.
-                Some("dialog.add") if s.es_historia() => {
-                    return match s.elegir() {
-                        Some(destino) => self.pedir_favorito_de(destino),
-                        None => (self.aplicada(), Vec::new()),
+                // `a` over a history row saves it as a favorite.
+                Some("dialog.add") if s.es_history() => {
+                    return match s.choose() {
+                        Some(dest) => self.request_favorite_of(dest),
+                        None => (self.applied(), Vec::new()),
                     };
                 }
                 Some("dialog.confirm-other") => {
-                    return self.elegir_del_selector_en_otro(backend, buzon);
+                    return self.choose_from_selector_into_another(backend, mailbox);
                 }
-                _ => return (self.aplicada(), Vec::new()),
+                _ => return (self.applied(), Vec::new()),
             }
         }
-        let cambio = ViewChange::Picker {
+        let change = ViewChange::Picker {
             picker: self.vista_selector(),
         };
-        (self.aplicada(), vec![self.parche(vec![cambio])])
+        (self.applied(), vec![self.parche(vec![change])])
     }
 
-    /// Elegir del selector: navegar al volumen.
+    /// Choosing from the selector: navigate to the volume.
     ///
-    /// Navegar es LECTURA, así que el volumen sí se abre — al contrario que
-    /// una conexión, que esta ventana ni enumera todavía.
+    /// Navigating is READING, so the volume DOES open — unlike a connection,
+    /// which this window does not even enumerate yet.
     ///
-    /// El cierre viaja en su PROPIO parche y antes de la navegación, como el
-    /// de la paleta y por lo mismo: un renderer que aplica parches se
-    /// quedaría el selector pintado encima del listado nuevo.
-    pub(super) fn elegir_del_selector(
+    /// The close travels in its OWN patch and before the navigation, like
+    /// the palette's and for the same reason: a renderer applying patches
+    /// would end up with the selector painted over the new listing.
+    pub(super) fn choose_from_selector(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let Some(s) = self.selector.as_ref() else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
-        // El hueco lo dijo el selector al ABRIRSE: `pane.select-drive-left`
-        // nombra un lado, y leer el foco aquí haría que moverlo con la lista
-        // puesta montara el volumen en otro panel.
+        // The slot was said by the selector when it OPENED:
+        // `pane.select-drive-left` names a side, and reading focus here
+        // would let moving it with the list up mount the volume in another
+        // pane.
         let slot = s.slot();
-        if !self.huecos.contains_key(&slot) || self.oculto(slot) {
-            // El reparto cambió con la lista puesta: el hueco que el selector
-            // capturó al abrirse ya no está, o dejó de verse. Navegar ahí
-            // traería un listado que nadie va a mirar —contra «lo que no se
-            // ve no se trae»— o no haría nada y cerraría el selector en
-            // silencio.
+        if !self.slots.contains_key(&slot) || self.hidden(slot) {
+            // The layout changed with the list up: the slot the selector
+            // captured on opening is no longer there, or stopped being
+            // visible. Navigating there would bring a listing nobody is
+            // going to look at — against "what is not seen is not fetched"
+            // — or would do nothing and silently close the selector.
             self.selector = None;
             return (
                 ActionAck::Unavailable {
@@ -1017,10 +1041,11 @@ impl Estado {
                 vec![self.parche(vec![ViewChange::Picker { picker: None }])],
             );
         }
-        let Some(destino) = s.elegir() else {
-            if s.hay_fila() {
-                // Hay fila y no lleva a ninguna parte: un favorito cuya ruta
-                // no parsea. Se DICE, que es lo que la fila ya avisaba.
+        let Some(dest) = s.choose() else {
+            if s.hay_row() {
+                // There is a row and it goes nowhere: a favorite whose path
+                // does not parse. It IS REPORTED, which is what the row was
+                // already warning about.
                 return (
                     ActionAck::Unavailable {
                         reason_key: "hotlist-invalid".to_owned(),
@@ -1028,187 +1053,197 @@ impl Estado {
                     Vec::new(),
                 );
             }
-            // Sin filas todavía (o la tabla llegó vacía): no hay a dónde ir.
-            return (self.aplicada(), Vec::new());
+            // No rows yet (or the table came back empty): nowhere to go.
+            return (self.applied(), Vec::new());
         };
         self.selector = None;
-        let cierre = self.parche(vec![ViewChange::Picker { picker: None }]);
-        let mut envios = vec![cierre];
-        envios.extend(self.navegar_hueco(slot, &destino, Trail::Record, backend, buzon));
-        (self.aplicada(), envios)
+        let close = self.parche(vec![ViewChange::Picker { picker: None }]);
+        let mut sends = vec![close];
+        sends.extend(self.navigate_slot(slot, &dest, Trail::Record, backend, mailbox));
+        (self.applied(), sends)
     }
 
-    /// Un click en una fila del selector: la elige.
-    pub(super) fn elegir_fila_del_selector(
+    /// A click on a selector row: chooses it.
+    pub(super) fn choose_row_from_selector(
         &mut self,
         row: u32,
         generation: u64,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         if generation != self.gen_selector {
-            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+            return (Self::stale(StaleAction::Generation), Vec::new());
         }
         let Some(s) = self.selector.as_mut() else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
-        s.senalar(row as usize);
-        let cambio = ViewChange::Picker {
+        s.point_at(row as usize);
+        let change = ViewChange::Picker {
             picker: self.vista_selector(),
         };
-        (self.aplicada(), vec![self.parche(vec![cambio])])
+        (self.applied(), vec![self.parche(vec![change])])
     }
 
-    /// La conexión con el daemon cambió de estado: se PINTA y se DICE.
+    /// The connection to the daemon changed state: it is PAINTED and
+    /// REPORTED.
     ///
-    /// Las dos cosas, y por la misma cola: perder el daemon a mitad de una
-    /// operación no puede notarse solo en un icono.
-    pub(super) fn cambio_de_conexion(
+    /// Both things, through the same queue: losing the daemon halfway
+    /// through an operation cannot be noticed only in an icon.
+    pub(super) fn connection_change(
         &mut self,
         ev: norte_client::ConnEvent,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        let (vista, clave) = match ev {
+        let (vista, key) = match ev {
             norte_client::ConnEvent::Restored => (ConnectionView::Connected, "msg-daemon-restored"),
-            // El daemon avisa ANTES de cerrar, y esto es lo único que
-            // distingue un relevo de una parada: en cuanto la conexión caiga,
-            // las dos se ven igual. Se queda como aviso PERSISTENTE porque
-            // sigue siendo verdad mientras dure, y la vista de conexión no se
-            // toca todavía — la conexión, ahora mismo, sigue en pie.
+            // The daemon warns BEFORE closing, and this is the only thing
+            // that tells a handoff apart from a stop: as soon as the
+            // connection drops, the two look the same. It stays as a
+            // PERSISTENT notice because it stays true for as long as it
+            // lasts, and the connection view is not touched yet — the
+            // connection, right now, is still up.
             norte_client::ConnEvent::GoingAway { reconnect } => {
-                self.aviso_de_daemon = Some(if reconnect {
+                self.daemon_notice = Some(if reconnect {
                     "msg-daemon-handover"
                 } else {
                     "msg-daemon-stopping"
                 });
-                let clave = self.aviso_de_daemon.unwrap_or("msg-daemon-stopping");
-                let banners = self.cambio_de_banners();
+                let key = self.daemon_notice.unwrap_or("msg-daemon-stopping");
+                let banners = self.banner_change();
                 let parche = self.parche(vec![banners]);
-                let aviso = self.sobre(UiUpdate::Notice(UiNotice::Message {
-                    key: clave.to_owned(),
+                let notice = self.over(UiUpdate::Notice(UiNotice::Message {
+                    key: key.to_owned(),
                     detail: None,
                 }));
-                return vec![parche, aviso];
+                return vec![parche, notice];
             }
-            // `Lost` y el comodín juntos: `ConnEvent` es NO EXHAUSTIVO, y un
-            // evento de un SDK más nuevo se lee como una pérdida, que es lo
-            // conservador — se pinta reconectando en vez de fingir que todo
-            // sigue igual.
+            // `Lost` and the wildcard together: `ConnEvent` is NOT
+            // exhaustive, and an event from a newer SDK reads as a loss,
+            // which is the conservative choice — it is painted as
+            // reconnecting instead of pretending everything is still the
+            // same.
             norte_client::ConnEvent::Lost | _ => (ConnectionView::Reconnecting, "msg-daemon-lost"),
         };
-        // Volver APAGA el aviso: uno que no sabe volverse «ya está» miente en
-        // cuanto el daemon reaparece, y el relevo termina volviendo.
-        // Y estrena ÉPOCA: al otro lado puede haber un daemon NUEVO, con su
-        // contador de ids desde 1. Lo que quede en el tablero con esos
-        // números es de antes, y a partir de aquí no se hereda nada suyo.
+        // Coming back TURNS OFF the notice: one that does not know how to
+        // become "all clear" lies the moment the daemon reappears, and the
+        // handoff ends up coming back.
+        // And it starts a new EPOCH: on the other side there can be a NEW
+        // daemon, with its id counter starting from 1. Whatever is left on
+        // the board with those numbers belongs to before, and from here on
+        // nothing of its is inherited.
         if matches!(ev, norte_client::ConnEvent::Restored) {
-            self.aviso_de_daemon = None;
-            self.epoca_conexion = self.epoca_conexion.saturating_add(1);
-            // La barra ligera deja de contar el trabajo del daemon anterior
-            // (ADR 0146): sin esto su ráfaga no se cerraría nunca.
-            self.anotar_tira(buzon);
-            // «Ir a» (#357): lo que conteste el daemon ANTERIOR —sus conexiones,
-            // su índice— ya no es de este. Una apertura nueva lo invalida.
+            self.daemon_notice = None;
+            self.epoch_connection = self.epoch_connection.saturating_add(1);
+            // The light bar stops counting the previous daemon's work
+            // (ADR 0146): without this its burst would never close.
+            self.annotate_strip(mailbox);
+            // "Go to" (#357): whatever the PREVIOUS daemon answers with —
+            // its connections, its index — no longer belongs to this one. A
+            // new opening invalidates it.
             self.gen_ir_a = self.gen_ir_a.saturating_add(1);
-            // Un plan pedido al daemon ANTERIOR no lo va a contestar el
-            // nuevo: su id empieza otra vez en 1, y dejar la petición colgada
-            // haría que el panel se abriera con la Task de otro.
-            if let Some(pedida) = self.sync_pedida.take() {
-                pedida
-                    .abandonada
+            // A plan requested from the PREVIOUS daemon is not going to be
+            // answered by the new one: its id starts over at 1, and leaving
+            // the request hanging would make the panel open with someone
+            // else's Task.
+            if let Some(requested) = self.sync_requested.take() {
+                requested
+                    .abandoned
                     .store(true, std::sync::atomic::Ordering::SeqCst);
             }
         }
-        self.conexion = vista.clone();
-        // Y el panel que se abrió solo por ese trabajo se cierra.
-        let mut envios = self.procesos_automaticos(backend, buzon);
-        let banners = self.cambio_de_banners();
+        self.connection = vista.clone();
+        // And the pane that opened only for that work closes.
+        let mut sends = self.processes_automaticos(backend, mailbox);
+        let banners = self.banner_change();
         let parche = self.parche(vec![ViewChange::Connection(vista), banners]);
-        let aviso = self.sobre(UiUpdate::Notice(UiNotice::Message {
-            key: clave.to_owned(),
+        let notice = self.over(UiUpdate::Notice(UiNotice::Message {
+            key: key.to_owned(),
             detail: None,
         }));
-        envios.extend([parche, aviso]);
-        envios
+        sends.extend([parche, notice]);
+        sends
     }
 
-    /// Una sesión de provider viaja sin cifrar (#44): se apunta y se dice.
+    /// A provider session travels unencrypted (#44): it is noted and
+    /// reported.
     ///
-    /// Persistente y no efímero: un mensaje que borra la siguiente tecla no
-    /// puede describir cómo viaja lo que se está mirando. La frase y el techo
-    /// los pone `norte_frontend::banners`, que es el MISMO código que compone
-    /// el aviso del TUI.
-    pub(super) fn sesion_degradada(
+    /// Persistent and not ephemeral: a message the next key erases cannot
+    /// describe how what is being looked at is traveling. The phrase and the
+    /// cap are set by `norte_frontend::banners`, the SAME code that composes
+    /// the TUI's notice.
+    pub(super) fn session_degraded(
         &mut self,
         d: norte_proto::methods::ConnectionDegraded,
     ) -> BridgeEnvelope<UiUpdate> {
-        self.degradadas.note(d);
-        let cambio = self.cambio_de_banners();
-        self.parche(vec![cambio])
+        self.degraded.note(d);
+        let change = self.banner_change();
+        self.parche(vec![change])
     }
 
-    /// La conexión pide su contraseña (#325/#327): se abre el diálogo.
+    /// The connection asks for its password (#325/#327): the dialog opens.
     ///
-    /// La pregunta nombra la conexión **y a dónde se conecta**, y esa segunda
-    /// línea es el punto: el nombre lo eligió un fichero de configuración, y un
-    /// fichero puede llegar de los dotfiles de otro o de una línea editada, así
-    /// que «trabajo» no dice nada sobre si esa entrada sigue apuntando donde
-    /// apuntaba ayer. Es la misma razón por la que el diálogo de host key
-    /// enseña una huella. Cada parte en su CAMPO, jamás interpolada en la
-    /// frase.
+    /// The question names the connection **and where it connects to**, and
+    /// that second line is the point: the name was chosen by a config file,
+    /// and a file can arrive from someone else's dotfiles or from an edited
+    /// line, so "work" says nothing about whether that entry still points
+    /// where it pointed yesterday. It is the same reason the host key
+    /// dialog shows a fingerprint. Each part in its OWN FIELD, never
+    /// interpolated into the sentence.
     ///
-    /// El campo nace vacío y confirmar sobre él es INERTE (ver
-    /// `ejecutar_pendiente`): entregar la cadena vacía reproduce #320, donde un
-    /// secreto vacío hacía que la conexión autenticara con la cadena ambiente
-    /// —una identidad que nadie pidió—.
-    pub(super) fn pedir_secreto(
+    /// The field is born empty and confirming over it is INERT (see
+    /// `run_pending`): delivering the empty string reproduces #320,
+    /// where an empty secret made the connection authenticate with the
+    /// ambient string — an identity nobody asked for.
+    pub(super) fn request_secret(
         &mut self,
         conn: String,
         endpoint: &str,
         slot: u32,
         dir: VPath,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        // UNA pregunta por conexión. Dos paneles sobre la misma entrada
-        // `prompt` —o un refresco mientras el diálogo está delante— apilaban
-        // otra pregunta idéntica, con su propio campo vacío; y bajo suficientes
-        // de esas, el desalojo por tope de `apilar_dialogo` se lleva por
-        // delante las APROBACIONES de agente sin reconocer, que es lo primero
-        // que sacrifica.
-        if self.dialogos.iter().any(|d| {
-            matches!(&d.al_confirmar, Some(Pendiente::EntregarSecreto { conn: c, .. }) if *c == conn)
-        }) {
+        // ONE question per connection. Two panes over the same `prompt`
+        // entry — or a refresh while the dialog is up front — used to stack
+        // another identical question, with its own empty field; and under
+        // enough of those, `stack_dialog`'s cap-based eviction sweeps away
+        // unacknowledged agent APPROVALS, which are the first thing it
+        // sacrifices.
+        if self.dialogs.iter().any(
+            |d| matches!(&d.on_confirm, Some(Pending::DeliverSecret { conn: c, .. }) if *c == conn),
+        ) {
             return Vec::new();
         }
-        let id = ModalId(self.siguiente_modal);
-        self.siguiente_modal += 1;
-        // Los dos vienen del CORE, no del servidor remoto, pero se enmascaran
-        // igual: el nombre sale de un fichero y el endpoint de una URL, y
-        // ninguno de los dos orígenes es de fiar para lo que se pinta.
-        let linea = |s: &str| {
-            let (pintable, hostil) = norte_frontend::display_name(s.as_bytes());
+        let id = ModalId(self.next_modal);
+        self.next_modal += 1;
+        // Both come from the CORE, not from the remote server, but they are
+        // masked the same way: the name comes from a file and the endpoint
+        // from a URL, and neither origin is trustworthy for what is
+        // painted.
+        let line = |s: &str| {
+            let (paintable, hostile) = norte_frontend::display_name(s.as_bytes());
             crate::dto::DialogLine {
-                text: clamp_display(pintable),
-                hostile: hostil,
+                text: clamp_display(paintable),
+                hostile,
             }
         };
         let vista = DialogView {
             id,
             title_key: "modal-ask-secret-title".to_owned(),
-            // A DÓNDE va la contraseña. En `destination` y no en el cuerpo por
-            // lo que dice el rustdoc de ese campo: un separador dentro del
-            // texto lo puede escribir el propio dato.
-            destination: Some(linea(endpoint)),
-            // QUÉ entrada la pide.
-            subject: Some(linea(&conn)),
+            // WHERE the password is going. In `destination` and not in the
+            // body, per what that field's rustdoc says: a separator inside
+            // the text could be written by the data itself.
+            destination: Some(line(endpoint)),
+            // WHICH entry is asking for it.
+            subject: Some(line(&conn)),
             asker: None,
             deadline: None,
             deadline_at_ms: None,
-            // Dónde acaba lo que se teclea, y es la misma frase que dice la
-            // TUI: el secreto vive en la memoria del daemon hasta que pare, y
-            // no se escribe en ningún fichero. Quien va a teclear una
-            // contraseña tiene derecho a saberlo ANTES.
+            // Where what is typed ends up, and it is the same phrase the TUI
+            // says: the secret lives in the daemon's memory until it stops,
+            // and it is never written to any file. Whoever is about to type
+            // a password has the right to know that BEFORE.
             //
-            // `hostile: false` porque es una frase del catálogo, no un dato:
-            // no ha pasado por `display_name` porque no viene de fuera.
+            // `hostile: false` because it is a catalog phrase, not data: it
+            // has not gone through `display_name` because it does not come
+            // from outside.
             body: vec![crate::dto::DialogLine {
                 text: clamp_display(norte_i18n::t_in(self.lang, "modal-ask-secret-note")),
                 hostile: false,
@@ -1219,9 +1254,9 @@ impl Estado {
                 crate::dto::DialogChoice {
                     id: "confirm".to_owned(),
                     label_key: "dialog-confirm".to_owned(),
-                    // No es destructivo: no borra nada. Lo que lo hace
-                    // delicado —que sale un secreto— no es lo que esa marca
-                    // significa, y usarla aquí devaluaría la de un borrado.
+                    // Not destructive: it deletes nothing. What makes it
+                    // sensitive — a secret goes out — is not what that flag
+                    // means, and using it here would devalue a delete's.
                     destructive: false,
                 },
                 crate::dto::DialogChoice {
@@ -1230,170 +1265,180 @@ impl Estado {
                     destructive: false,
                 },
             ],
-            // Vacío, y con `Some`: es lo que le dice al renderer que aquí SE
-            // ESCRIBE. Lo que viaje por aquí serán siempre puntos.
+            // Empty, and with `Some`: that is what tells the renderer typing
+            // HAPPENS here. Whatever travels through here will always be
+            // dots.
             input: Some(String::new()),
             input_hostile: false,
             input_secret: true,
             fields: Vec::new(),
             dest_check: crate::dto::DestCheckView::NotAsked,
         };
-        let mut fuera = self.apilar_dialogo(Dialogo {
+        let mut outside = self.stack_dialog(Dialog {
             id,
             vista,
-            tecleado: Tecleado::Secreto,
-            // `true`: esto lo abrió un GESTO del lector —la navegación que
-            // acaba de hacer—, así que la siguiente respuesta ya ES una
-            // respuesta. La regla del «ya lo veo» es para lo que aparece sin
-            // que nadie lo pida (una aprobación de agente, el informe de un
-            // lote), y aquí la pregunta la hizo quien está delante. Es lo
-            // mismo que hace la TUI, donde Enter contesta directo.
+            typed: Typed::Secret,
+            // `true`: this was opened by a GESTURE of the reader's — the
+            // navigation they just made — so the next answer already IS an
+            // answer. The "I already see it" rule is for what appears
+            // without anyone asking for it (an agent approval, a batch's
+            // report), and here the question was asked by whoever is in
+            // front. It is the same thing the TUI does, where Enter answers
+            // directly.
             //
-            // Y no abre ningún hueco: confirmar sin teclear nada es inerte,
-            // así que el peor caso de un dedo adelantado es no hacer nada.
-            reconocido: true,
-            al_confirmar: Some(Pendiente::EntregarSecreto { conn, slot, dir }),
+            // And it opens no gap: confirming without typing anything is
+            // inert, so the worst case of a finger getting ahead of itself
+            // is doing nothing.
+            recognized: true,
+            on_confirm: Some(Pending::DeliverSecret { conn, slot, dir }),
         });
-        // `apilar_dialogo` solo apila —y devuelve lo que se cayó por el tope—:
-        // el parche que lo PINTA lo manda quien abre, como el resto.
-        let cambio = ViewChange::Dialogs {
-            dialogs: self.vistas_de_dialogos(),
+        // `stack_dialog` only stacks — and returns what fell off the cap —
+        // the patch that PAINTS it is sent by whoever opens it, like
+        // everything else.
+        let change = ViewChange::Dialogs {
+            dialogs: self.dialog_views(),
         };
-        fuera.push(self.parche(vec![cambio]));
-        fuera
+        outside.push(self.parche(vec![change]));
+        outside
     }
 
-    /// El secreto se entregó (o no): se reintenta la navegación, o se dice.
+    /// The secret was delivered (or not): the navigation is retried, or it
+    /// is reported.
     ///
-    /// El reintento es de ESA navegación —su hueco y su destino—, que es lo
-    /// que la pendiente transporta. Si entregarlo falló, no hay reintento: el
-    /// hueco se queda como el error lo dejó y la barra lo cuenta.
-    pub(super) fn secreto_entregado(
+    /// The retry is of THAT navigation — its slot and its destination —
+    /// which is what the pending action carries. If delivering it failed,
+    /// there is no retry: the slot stays as the error left it and the status
+    /// bar counts it.
+    pub(super) fn secret_delivered(
         &mut self,
         slot: u32,
         dir: &VPath,
         res: Result<(), Error>,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         match res {
-            // `Record` y no `Replay`, aunque esto sea un reintento: un
-            // `Replay` necesita un SENTIDO del rastro, y aquí no lo hay —esta
-            // navegación pudo nacer de una tecla, de un favorito o de un
-            // `back`, y el error no lo transportó—. Inventarse uno sería peor
-            // que no tenerlo.
+            // `Record` and not `Replay`, even though this is a retry: a
+            // `Replay` needs a DIRECTION for the trail, and there is none
+            // here — this navigation could have been born from a key, a
+            // favorite or a `back`, and the error did not carry it.
+            // Inventing one would be worse than not having it.
             //
-            // Y no duplica: el listado fallido dejó el hueco ENSEÑANDO el
-            // directorio al que no se pudo entrar, así que en el reintento
-            // `anterior == destino` y `navegar_hueco` no registra nada.
-            Ok(()) => self.navegar_hueco(slot, dir, Trail::Record, backend, buzon),
-            Err(e) => self.decir(norte_frontend::error::error_key(&e)),
+            // And it does not duplicate: the failed listing left the slot
+            // SHOWING the directory it could not enter, so on retry
+            // `anterior == dest` and `navigate_slot` records nothing.
+            Ok(()) => self.navigate_slot(slot, dir, Trail::Record, backend, mailbox),
+            Err(e) => self.say(norte_frontend::error::error_key(&e)),
         }
     }
 
-    /// Una conexión NO se pudo abrir, y por qué (#322).
+    /// A connection could NOT be opened, and why (#322).
     ///
-    /// Un `Notice` y no un banner persistente, al revés que la degradación: la
-    /// degradación describe una sesión que existe y sigue existiendo mientras
-    /// se mira; esto describe un intento que ya terminó, y un indicador
-    /// permanente sobre algo que no está abierto no se apagaría nunca.
+    /// A `Notice` and not a persistent banner, unlike degradation:
+    /// degradation describes a session that exists and keeps existing while
+    /// it is being looked at; this describes an attempt that has already
+    /// ended, and a permanent indicator over something that is not open
+    /// would never turn off.
     ///
-    /// La línea la compone `norte_frontend::banners::failure_line`, que es el
-    /// MISMO código que usa la TUI: dos frases sobre por qué no se pudo entrar
-    /// en una máquina divergen en silencio, que es justo lo que ADR 0077
-    /// existe para evitar.
+    /// The line is composed by `norte_frontend::banners::failure_line`, the
+    /// SAME code the TUI uses: two phrases about why a machine could not be
+    /// entered silently drift apart, which is exactly what ADR 0077 exists
+    /// to prevent.
     ///
-    /// **El orden con el error del listado NO está garantizado aquí.** En la
-    /// TUI sí lo está (el manejador retiene el `select!` mientras espera, así
-    /// que la categoría llega primero y esta frase la pisa); en la ventana son
-    /// dos productores independientes contra el mismo buzón, y la categoría
-    /// genérica puede procesarse DESPUÉS. Se acepta: los dos textos describen
-    /// el mismo fallo y ninguno es incorrecto. Si algún día importa, hay que
-    /// hacerlo explícito y no confiar en el planificador.
-    /// Devuelve DOS cosas, y el parche es la que se ve: el renderer solo
-    /// atiende los `Notice` de clase `fatal`, y su texto de estado sale de
-    /// `status.message`, que solo se mueve con un parche. Mandar el aviso solo
-    /// dejaba a la ventana sin pintar nada — con el test verde, porque
-    /// afirmaba sobre el sobre del puente y no sobre el estado. Es el mismo
-    /// patrón que `cambio_de_conexion`, que ya devuelve `vec![parche, aviso]`.
-    pub(super) fn conexion_fallida(
+    /// **The order with the listing's error is NOT guaranteed here.** In the
+    /// TUI it is (the handler holds the `select!` while waiting, so the
+    /// category arrives first and this phrase overwrites it); in the window
+    /// they are two independent producers against the same mailbox, and the
+    /// generic category can be processed AFTER. It is accepted: both texts
+    /// describe the same failure and neither is wrong. If it ever matters,
+    /// it has to be made explicit instead of trusting the scheduler.
+    /// Returns TWO things, and the patch is the one that is seen: the
+    /// renderer only listens to `fatal`-class `Notice`s, and its status text
+    /// comes from `status.message`, which only moves with a patch. Sending
+    /// only the notice left the window painting nothing — with the test
+    /// green, because it asserted on the bridge's envelope and not on the
+    /// state. It is the same pattern as `connection_change`, which already
+    /// returns `vec![parche, notice]`.
+    pub(super) fn connection_failed(
         &mut self,
         f: &norte_proto::methods::ConnectionFailed,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        let linea = norte_frontend::banners::failure_line(self.lang, f);
-        self.status.message = Some(clamp_display(linea.clone()));
+        let line = norte_frontend::banners::failure_line(self.lang, f);
+        self.status.message = Some(clamp_display(line.clone()));
         let parche = self.parche(vec![ViewChange::Status(self.status.clone())]);
-        let aviso = self.sobre(UiUpdate::Notice(UiNotice::Message {
+        let notice = self.over(UiUpdate::Notice(UiNotice::Message {
             key: "status-connection-failed".to_owned(),
-            detail: Some(linea),
+            detail: Some(line),
         }));
-        vec![parche, aviso]
+        vec![parche, notice]
     }
 
-    /// Un `plugin.notice` (0.69.0, ADR 0100): la frase de un hook, atribuida
-    /// al plugin, como mensaje de estado — el mismo par parche + aviso que
-    /// [`Self::conexion_fallida`], y por lo mismo. Una clase desconocida sin
-    /// texto no pinta nada.
-    pub(super) fn aviso_de_plugin(
+    /// A `plugin.notice` (0.69.0, ADR 0100): a hook's phrase, attributed to
+    /// the plugin, as a status message — the same patch + notice pair as
+    /// [`Self::connection_failed`], and for the same reason. An unknown
+    /// class with no text paints nothing.
+    pub(super) fn plugin_notice(
         &mut self,
         n: &norte_proto::methods::PluginNotice,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        let Some(linea) = norte_frontend::banners::plugin_notice_line(self.lang, n) else {
+        let Some(line) = norte_frontend::banners::plugin_notice_line(self.lang, n) else {
             return Vec::new();
         };
-        self.status.message = Some(clamp_display(linea.clone()));
+        self.status.message = Some(clamp_display(line.clone()));
         let parche = self.parche(vec![ViewChange::Status(self.status.clone())]);
-        // La clave sigue a `kind`: un renderer que atienda los `Notice` por
-        // clave distingue la frase de un hook del aviso de que se apagó.
+        // The key follows `kind`: a renderer listening to `Notice`s by key
+        // tells a hook's phrase apart from the notice that it turned off.
         let key = match n.kind.as_str() {
             "hooks-disabled" => "msg-plugin-hooks-disabled",
             "effect-denied" => "msg-plugin-effect-denied",
             _ => "msg-plugin-notice",
         };
-        let aviso = self.sobre(UiUpdate::Notice(UiNotice::Message {
+        let notice = self.over(UiUpdate::Notice(UiNotice::Message {
             key: key.to_owned(),
-            detail: Some(linea),
+            detail: Some(line),
         }));
-        vec![parche, aviso]
+        vec![parche, notice]
     }
 
-    /// Recompone los avisos persistentes de la barra y devuelve su cambio.
+    /// Rebuilds the status bar's persistent notices and returns its change.
     ///
-    /// UN sitio para los tres, y en este orden: el journal habla de TODA la
-    /// sesión y de si algo se puede deshacer, el daemon de si esta ventana
-    /// va a seguir sirviendo, y la degradación de cómo viaja una conexión.
-    /// Elegir uno solo escondería los otros para siempre, que es justo lo
-    /// que el TUI ya decidió no hacer.
-    pub(super) fn cambio_de_banners(&mut self) -> ViewChange {
-        let frase = |clave: &str| crate::dto::BannerView {
-            text: clamp_display(norte_i18n::t_in(self.lang, clave)),
+    /// ONE spot for all three, in this order: the journal talks about the
+    /// WHOLE session and about whether anything can be undone, the daemon
+    /// about whether this window is going to keep being served, and
+    /// degradation about how a connection travels. Picking only one would
+    /// hide the others forever, which is exactly what the TUI already
+    /// decided not to do.
+    pub(super) fn banner_change(&mut self) -> ViewChange {
+        let phrase = |key: &str| crate::dto::BannerView {
+            text: clamp_display(norte_i18n::t_in(self.lang, key)),
             subject: None,
         };
         let mut banners = Vec::new();
-        if self.journal_rehusado {
-            banners.push(frase("status-journal-refused"));
+        if self.journal_refused {
+            banners.push(phrase("status-journal-refused"));
         }
-        if let Some(clave) = self.aviso_de_daemon {
-            banners.push(frase(clave));
+        if let Some(key) = self.daemon_notice {
+            banners.push(phrase(key));
         }
-        // Una ventana SUELTA —otra tiene la sesión, o la guardada es de un
-        // binario más nuevo— no escribe la pantalla, y hasta aquí no lo decía
-        // nadie: cerraba y perdía dónde estaba cada panel en silencio. El
-        // mismo indicador que el terminal, y en el mismo sitio (ADR 0077).
-        if !self.sesion.owner || self.sesion.futuro {
-            banners.push(frase("status-session-detached"));
+        // A LOOSE window — another one holds the session, or the saved one
+        // belongs to a newer binary — does not write the screen, and until
+        // now nobody said so: it closed and silently lost where each pane
+        // was. The same indicator as the terminal, and in the same place
+        // (ADR 0077).
+        if !self.session.owner || self.session.future {
+            banners.push(phrase("status-session-detached"));
         }
-        if let Some(aviso) = self.degradadas.banner(self.lang) {
-            // La conexión va en su propio campo, jamás dentro de la frase:
-            // ver el rustdoc de `connection_banner`.
+        if let Some(notice) = self.degraded.banner(self.lang) {
+            // The connection goes in its own field, never inside the
+            // sentence: see `connection_banner`'s rustdoc.
             banners.push(crate::dto::BannerView {
-                text: clamp_display(aviso.text),
+                text: clamp_display(notice.text),
                 subject: Some(crate::dto::BannerSubjectView {
-                    scheme: clamp_display(aviso.scheme),
-                    host: clamp_display(aviso.host),
-                    reason: clamp_display(aviso.reason),
-                    detail: aviso.detail.map(clamp_display),
-                    hostile: aviso.hostile,
+                    scheme: clamp_display(notice.scheme),
+                    host: clamp_display(notice.host),
+                    reason: clamp_display(notice.reason),
+                    detail: notice.detail.map(clamp_display),
+                    hostile: notice.hostile,
                 }),
             });
         }

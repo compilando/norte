@@ -1,13 +1,13 @@
-//! Host de plugins WASM de norte (ADR 0022): descubre plugins locales, valida
-//! sus manifiestos y modela sus capabilities y su catálogo ordenado.
+//! norte's WASM plugin host (ADR 0022): discovers local plugins, validates
+//! their manifests and models their capabilities and their ordered catalog.
 //!
-//! Esta fase (M4-P1) trae el MODELO — manifiesto, capabilities, catálogo — sin
-//! el runtime: `wasmtime` + Component Model + las interfaces WIT llegan en
-//! M4-P2. El modelo es lo que consumen tanto el runtime como el gestor de
-//! extensiones (la vista tipo `VSCode`, M4-P3).
+//! This phase (M4-P1) brings the MODEL — manifest, capabilities, catalog —
+//! without the runtime: `wasmtime` + Component Model + the WIT interfaces
+//! arrive in M4-P2. The model is what both the runtime and the extensions
+//! manager (the `VSCode`-like view, M4-P3) consume.
 //!
-//! Invariante dura (spec §7.1): un plugin JAMÁS tiene `exec` — el manifiesto lo
-//! rechaza al parsear.
+//! Hard invariant (spec §7.1): a plugin NEVER has `exec` — the manifest
+//! rejects it while parsing.
 //!
 //! ```
 //! use norte_plugin_host::{Manifest, Category};
@@ -60,8 +60,8 @@ pub use runtime::{
     WasmArtifact, columns_iface, decorator_iface, hook_iface, location_iface, organizer_iface,
     panel_iface, previewer_iface, provider_iface, renamer_iface, thumbnail_iface,
 };
-/// Handle opaco de un `writer` resource del guest (#30 stage 2b-write): el
-/// adapter host lo lleva en su `ByteSink` y lo pasa a los métodos
-/// `writer_*`/`writer_drop` de [`ProviderInstance`].
+/// Opaque handle to a guest `writer` resource (#30 stage 2b-write): the host
+/// adapter carries it in its `ByteSink` and passes it to the
+/// `writer_*`/`writer_drop` methods of [`ProviderInstance`].
 pub use wasmtime::component::ResourceAny as WriterHandle;
 pub use wit_imports::{SERVED_WIT, WitMismatch, wit_mismatch, wit_packages};

@@ -1,8 +1,9 @@
-//! Guest WASM (#30 stage 3a): sonda de RED. `command::run(_, arg)` conecta por
-//! TCP a `arg` (`ip:puerto`), envía `ping` y devuelve lo que recibe. Prueba el
-//! gating de la capability `net`: con red concedida (allow-list) la conexión va;
-//! sin `net`, el `socket_addr_check` por defecto del host la RECHAZA y `connect`
-//! falla. `previewer::render` responde no-soportado (guest solo de comando).
+//! WASM guest (#30 stage 3a): NETWORK probe. `command::run(_, arg)` connects
+//! over TCP to `arg` (`ip:port`), sends `ping` and returns what it
+//! receives. Tests the `net` capability's gating: with network granted
+//! (allow-list) the connection goes through; without `net`, the host's
+//! default `socket_addr_check` REJECTS it and `connect` fails.
+//! `previewer::render` responds not-supported (command-only guest).
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -10,9 +11,9 @@ use std::net::TcpStream;
 wit_bindgen::generate!({
     world: "norte-plugin",
     path: "wit",
-    // `host-log`/`host-config` viven en OTRO paquete desde la partición
-    // (ADR 0041 decisión 4); wit-bindgen exige decidir explícitamente qué
-    // hacer con los imports de fuera del paquete del world.
+    // `host-log`/`host-config` live in ANOTHER package since the split
+    // (ADR 0041 decision 4); wit-bindgen requires explicitly deciding what
+    // to do with imports from outside the world's package.
     generate_all,
 });
 
@@ -37,12 +38,12 @@ impl CommandGuest for Probe {
 
 impl PreviewerGuest for Probe {
     fn render(_input: PreviewInput) -> Result<String, String> {
-        Err("net-probe no aporta preview".to_string())
+        Err("net-probe does not provide a preview".to_string())
     }
 
-    // ADR 0037 (WIT 0.6.0): export REQUERIDO de `previewer`, guest solo-command.
+    // ADR 0037 (WIT 0.6.0): REQUIRED export of `previewer`, command-only guest.
     fn render_styled(_input: PreviewInput) -> Result<Vec<Vec<Span>>, String> {
-        Err("net-probe no aporta preview".to_string())
+        Err("net-probe does not provide a preview".to_string())
     }
 }
 

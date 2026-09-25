@@ -1,7 +1,7 @@
-//! El trait [`AiProvider`] y sus tipos (ADR 0031, spec §9): la abstracción
-//! sobre proveedores de modelos. Chat en STREAMING (deltas de texto),
-//! embeddings opcionales y capabilities declaradas. Los proveedores reciben
-//! CONTENIDO, jamás paths del filesystem; las credenciales se INYECTAN.
+//! The [`AiProvider`] trait and its types (ADR 0031, spec §9): the
+//! abstraction over model providers. Chat in STREAMING (text deltas),
+//! optional embeddings and declared capabilities. Providers receive
+//! CONTENT, never filesystem paths; credentials are INJECTED.
 
 use std::sync::Arc;
 
@@ -9,45 +9,46 @@ use async_trait::async_trait;
 use futures::stream::BoxStream;
 
 bitflags::bitflags! {
-    /// Capacidades declaradas por un proveedor: el core elige estrategia sin
-    /// tantear la red. Serializan como lista de nombres (jamás el bitfield
-    /// crudo — misma disciplina que `norte_proto::CapabilityFlags`).
+    /// Capabilities a provider declares: the core picks a strategy without
+    /// probing the network. Serialize as a list of names (never the raw
+    /// bitfield — same discipline as `norte_proto::CapabilityFlags`).
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct AiCaps: u32 {
-        /// `chat` entrega la respuesta en deltas incrementales.
+        /// `chat` delivers the response in incremental deltas.
         const STREAMING = 1 << 0;
-        /// `embed` está soportado (si no, devuelve [`AiError::Unsupported`]).
+        /// `embed` is supported (if not, returns [`AiError::Unsupported`]).
         const EMBEDDINGS = 1 << 1;
-        /// El modelo admite salida estructurada (JSON estricto) — el rename
-        /// IA (M4) lo aprovecha cuando está, con validación local siempre.
+        /// The model supports structured output (strict JSON) — the AI
+        /// rename (M4) takes advantage of it when present, always with
+        /// local validation.
         const JSON_OUTPUT = 1 << 2;
     }
 }
 
-/// Rol de un mensaje de chat.
+/// Role of a chat message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChatRole {
-    /// Instrucción de sistema (persona, formato, reglas).
+    /// System instruction (persona, format, rules).
     System,
-    /// Turno del usuario.
+    /// The user's turn.
     User,
-    /// Turno previo del asistente (contexto multi-turno).
+    /// A previous turn by the assistant (multi-turn context).
     Assistant,
 }
 
-/// Un mensaje de la conversación. `content` es texto plano (los proveedores
-/// v1 no reciben imágenes ni archivos — spec §9: solo contenido de texto que
-/// el core ya filtró contra los denied paths).
+/// A message in the conversation. `content` is plain text (v1 providers do
+/// not receive images or files — spec §9: only text content the core has
+/// already filtered against the denied paths).
 #[derive(Debug, Clone)]
 pub struct ChatMessage {
-    /// Rol del emisor.
+    /// Role of the sender.
     pub role: ChatRole,
-    /// Texto del mensaje.
+    /// The message's text.
     pub content: String,
 }
 
 impl ChatMessage {
-    /// Atajo para un mensaje de sistema.
+    /// Shortcut for a system message.
     #[must_use]
     pub fn system(content: impl Into<String>) -> Self {
         Self {
@@ -56,7 +57,7 @@ impl ChatMessage {
         }
     }
 
-    /// Atajo para un turno de usuario.
+    /// Shortcut for a user turn.
     #[must_use]
     pub fn user(content: impl Into<String>) -> Self {
         Self {
@@ -65,7 +66,7 @@ impl ChatMessage {
         }
     }
 
-    /// Atajo para un turno del asistente.
+    /// Shortcut for an assistant turn.
     #[must_use]
     pub fn assistant(content: impl Into<String>) -> Self {
         Self {
@@ -75,35 +76,35 @@ impl ChatMessage {
     }
 }
 
-/// Petición de chat. El `system` va aparte del resto de turnos (algunos
-/// proveedores lo tratan como parámetro dedicado, p. ej. Anthropic).
+/// A chat request. `system` is separate from the rest of the turns (some
+/// providers treat it as a dedicated parameter, e.g. Anthropic).
 #[derive(Debug, Clone)]
 pub struct ChatRequest {
-    /// Instrucción de sistema (opcional).
+    /// System instruction (optional).
     pub system: Option<String>,
-    /// Turnos de la conversación (user/assistant alternados; el primero debe
-    /// ser `user` — el proveedor valida y devuelve `Protocol` si no).
+    /// Turns of the conversation (alternating user/assistant; the first must
+    /// be `user` — the provider validates and returns `Protocol` if not).
     pub messages: Vec<ChatMessage>,
-    /// Tope de tokens de salida. `None` = el default del proveedor.
+    /// Output token cap. `None` = the provider's default.
     pub max_tokens: Option<u32>,
-    /// Pide salida JSON estricta contra este contrato.
+    /// Asks for strict JSON output against this contract.
     ///
-    /// Lo ATIENDE el proveedor que declara [`AiCaps::JSON_OUTPUT`]; el que no,
-    /// lo ignora y contesta lo que el prompt le pida. En los dos casos el
-    /// caller valida: un contrato en el cuerpo reduce los errores de formato,
-    /// no sustituye a la validación local.
+    /// HONORED by a provider that declares [`AiCaps::JSON_OUTPUT`]; one that
+    /// does not ignores it and answers whatever the prompt asks for. In both
+    /// cases the caller validates: a contract in the body reduces format
+    /// errors, it does not replace local validation.
     pub json_schema: Option<JsonContract>,
 }
 
-/// Un contrato de salida tipada: cómo se llama y qué forma tiene.
+/// A typed-output contract: what it is called and what shape it has.
 ///
-/// El nombre no es decorativo — el mecanismo nativo de los proveedores
-/// compatibles con `OpenAI` lo exige (`response_format.json_schema.name`), y sin
-/// él cada llamante tendría que inventarse uno. Anthropic no lo usa, así que
-/// viaja igual y se ignora allí.
+/// The name is not decorative — the native mechanism of `OpenAI`-compatible
+/// providers requires it (`response_format.json_schema.name`), and without
+/// it every caller would have to invent one. Anthropic does not use it, so
+/// it still travels along and gets ignored there.
 ///
-/// Existe para que la segunda respuesta tipada del proyecto no vuelva a
-/// empezar por decidir dónde va el schema.
+/// It exists so that the project's second typed response does not have to
+/// start over deciding where the schema goes.
 ///
 /// ```
 /// use norte_ai::JsonContract;
@@ -116,16 +117,17 @@ pub struct ChatRequest {
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JsonContract {
-    /// Nombre del schema, tal como lo pide el proveedor que lo necesita.
+    /// Schema name, exactly as the provider that needs it asks for it.
     pub name: String,
-    /// El JSON Schema. Objetos con `additionalProperties: false` y `required`
-    /// completo: es lo que los mecanismos nativos aceptan, y lo que hace que
-    /// «faltó un campo» sea un error del proveedor y no una sorpresa nuestra.
+    /// The JSON Schema. Objects with `additionalProperties: false` and a
+    /// complete `required`: it is what the native mechanisms accept, and
+    /// what makes "a field was missing" the provider's error rather than a
+    /// surprise of ours.
     pub schema: serde_json::Value,
 }
 
 impl JsonContract {
-    /// Un contrato con su nombre y su schema.
+    /// A contract with its name and its schema.
     #[must_use]
     pub fn new(name: impl Into<String>, schema: serde_json::Value) -> Self {
         Self {
@@ -136,7 +138,7 @@ impl JsonContract {
 }
 
 impl ChatRequest {
-    /// Petición mínima: solo turnos, sin system ni tope.
+    /// Minimal request: just turns, no system and no cap.
     #[must_use]
     pub fn new(messages: Vec<ChatMessage>) -> Self {
         Self {
@@ -148,101 +150,102 @@ impl ChatRequest {
     }
 }
 
-/// Metadatos de un modelo del proveedor.
+/// Metadata of one of the provider's models.
 #[derive(Debug, Clone)]
 pub struct ModelInfo {
-    /// Id del modelo tal cual lo espera el proveedor (`claude-opus-4-8`…).
+    /// Model id exactly as the provider expects it (`claude-opus-4-8`…).
     pub id: String,
-    /// Ventana de contexto en tokens, si el proveedor la expone.
+    /// Context window in tokens, if the provider exposes it.
     pub context_window: Option<u64>,
 }
 
-/// Error de un proveedor de IA. Vocabulario CERRADO (`non_exhaustive` para
-/// no romper a los consumidores al crecer): el frontend renderiza por
-/// categoría, jamás parsea el `Display`.
+/// Error from an AI provider. CLOSED vocabulary (`non_exhaustive` so it
+/// does not break consumers when it grows): the frontend renders by
+/// category, never parses the `Display`.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum AiError {
-    /// Credenciales ausentes, inválidas o sin permiso (HTTP 401/403).
+    /// Missing, invalid or unauthorized credentials (HTTP 401/403).
     #[error("authentication failed")]
     Auth,
-    /// Rate limit (HTTP 429); `retry_after` en segundos si el server lo dio.
+    /// Rate limit (HTTP 429); `retry_after` in seconds if the server gave one.
     #[error("rate limited")]
     RateLimited {
-        /// Segundos a esperar antes de reintentar, si el server lo indicó.
+        /// Seconds to wait before retrying, if the server indicated one.
         retry_after: Option<u64>,
     },
-    /// Error HTTP no cubierto por las categorías anteriores (con el código).
+    /// HTTP error not covered by the previous categories (with the code).
     #[error("http error: {status}")]
     Http {
-        /// Código de estado HTTP.
+        /// HTTP status code.
         status: u16,
     },
-    /// Respuesta malformada o inesperada (JSON roto, SSE inválido, campo
-    /// ausente): el proveedor habló pero no en el formato esperado.
+    /// Malformed or unexpected response (broken JSON, invalid SSE, missing
+    /// field): the provider spoke but not in the expected format.
     #[error("protocol error: {0}")]
     Protocol(String),
-    /// La operación no la soporta este proveedor (p. ej. embeddings en un
-    /// proveedor solo-chat).
+    /// This provider does not support the operation (e.g. embeddings on a
+    /// chat-only provider).
     #[error("unsupported operation")]
     Unsupported,
-    /// La operación se canceló (el future del stream se dropeó, o el core
-    /// canceló la Task — regla 3).
+    /// The operation was cancelled (the stream's future was dropped, or the
+    /// core cancelled the Task — rule 3).
     #[error("cancelled")]
     Cancelled,
-    /// Fallo de transporte (red caída, DNS, TLS): reintentable.
+    /// Transport failure (network down, DNS, TLS): retryable.
     #[error("transport error: {0}")]
     Transport(String),
 }
 
-/// Stream de deltas de texto de una respuesta de chat: la concatenación de
-/// todos los `Ok(String)` es el texto completo. Un `Err` termina el stream
-/// (parcial descartado, como el resto de streams del proyecto).
+/// Stream of text deltas from a chat response: concatenating every
+/// `Ok(String)` is the full text. An `Err` ends the stream (the partial is
+/// discarded, like the rest of the project's streams).
 pub type ChatStream = BoxStream<'static, Result<String, AiError>>;
 
-/// Un proveedor de modelos de IA (spec §9, ADR 0031). Object-safe: el core
-/// lo maneja tras `Arc<dyn AiProvider>`. Las credenciales se INYECTAN en el
-/// constructor de cada impl (jamás las lee el trait); los proveedores
-/// reciben CONTENIDO, nunca paths del filesystem.
+/// An AI model provider (spec §9, ADR 0031). Object-safe: the core handles
+/// it behind `Arc<dyn AiProvider>`. Credentials are INJECTED in each impl's
+/// constructor (the trait never reads them); providers receive CONTENT,
+/// never filesystem paths.
 #[async_trait]
 pub trait AiProvider: Send + Sync {
-    /// Id estable del proveedor (`anthropic`, `ollama`, `openai-compat`).
+    /// Stable provider id (`anthropic`, `ollama`, `openai-compat`).
     fn id(&self) -> &str;
 
-    /// Capacidades declaradas — el core consulta esto, no tantea la red.
+    /// Declared capabilities — the core consults this, it does not probe the
+    /// network.
     fn capabilities(&self) -> AiCaps;
 
-    /// `true` si el proveedor corre LOCALMENTE (Ollama en loopback): el modo
-    /// `local_only` del core (spec §9) solo deja pasar los que lo son. Los
-    /// remotos devuelven `false`; el gate del core es la barrera dura.
+    /// `true` if the provider runs LOCALLY (Ollama on loopback): the core's
+    /// `local_only` mode (spec §9) only lets through the ones that are.
+    /// Remote ones return `false`; the core's gate is the hard barrier.
     fn is_local(&self) -> bool;
 
-    /// Chat en streaming: devuelve el stream de deltas de texto. Dropear el
-    /// stream cancela la petición HTTP (regla 3, drop-based).
+    /// Streaming chat: returns the stream of text deltas. Dropping the
+    /// stream cancels the HTTP request (rule 3, drop-based).
     ///
     /// # Errors
-    /// Los fallos de ESTABLECIMIENTO (auth, red, request inválida) salen en
-    /// el `Result`; los de mitad de stream, como items `Err` del stream.
+    /// SET-UP failures (auth, network, invalid request) come out in the
+    /// `Result`; mid-stream ones, as `Err` items of the stream.
     async fn chat(&self, req: ChatRequest) -> Result<ChatStream, AiError>;
 
-    /// Embeddings de cada texto de entrada (mismo orden). Default
-    /// [`AiError::Unsupported`]: solo los proveedores con
-    /// [`AiCaps::EMBEDDINGS`] lo implementan.
+    /// Embeddings for each input text (same order). Default
+    /// [`AiError::Unsupported`]: only providers with [`AiCaps::EMBEDDINGS`]
+    /// implement it.
     ///
     /// # Errors
-    /// [`AiError::Unsupported`] (default) o los del proveedor.
+    /// [`AiError::Unsupported`] (default) or the provider's own.
     async fn embed(&self, inputs: &[String]) -> Result<Vec<Vec<f32>>, AiError> {
         let _ = inputs;
         Err(AiError::Unsupported)
     }
 
-    /// Modelos disponibles del proveedor. Default: el modelo configurado como
-    /// único elemento (los proveedores que exponen un catálogo lo overridean).
+    /// The provider's available models. Default: the configured model as
+    /// the sole element (providers that expose a catalogue override this).
     ///
     /// # Errors
-    /// Los del proveedor al consultar su catálogo.
+    /// The provider's own, when querying its catalogue.
     async fn list_models(&self) -> Result<Vec<ModelInfo>, AiError>;
 }
 
-/// Un proveedor tras `Arc` (clave de registro/uso en el core).
+/// A provider behind `Arc` (registry/usage key in the core).
 pub type SharedAiProvider = Arc<dyn AiProvider>;

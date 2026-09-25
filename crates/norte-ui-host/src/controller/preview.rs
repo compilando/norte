@@ -1,217 +1,219 @@
-//! El visor ACOPLADO (#291): qué debería estar enseñando cada hueco de
-//! preview, y qué enseña.
+//! The DOCKED viewer (#291): what each preview slot should be showing, and
+//! what it shows.
 //!
-//! La misma decisión que `norte-tui/src/preview.rs`, con el mismo reparto de
-//! responsabilidades (ADR 0077): un hueco de preview que el reparto no
-//! colocó —cerrado, detrás de una pestaña, colapsado por falta de sitio— no
-//! produce objetivo, así que no hay lectura que suspender; un directorio bajo
-//! el cursor no se lee; y la respuesta viaja con su HUECO y su testigo, nunca
-//! con una posición, para que una que llega tarde no aterrice en quien ocupe
-//! ese sitio al llegar.
+//! The same decision as `norte-tui/src/preview.rs`, with the same split of
+//! responsibilities (ADR 0077): a preview slot the layout did not place —
+//! closed, behind a tab, collapsed for lack of room — produces no target, so
+//! there is no read to suspend; a directory under the cursor is not read; and
+//! the response travels with its SLOT and its token, never with a position,
+//! so a late one does not land on whoever occupies that spot when it arrives.
 //!
-//! Lo que cambia respecto a la TUI es el «cuándo»: allí se pregunta en cada
-//! frame; aquí, después de cada mensaje del actor (`sondear_previews`), que
-//! es lo más parecido a un frame que tiene un host que solo habla cuando
-//! algo cambia.
+//! What changes compared to the TUI is the "when": there it is asked every
+//! frame; here, after every actor message (`probe_previews`), which is the
+//! closest thing to a frame a host that only speaks when something changes
+//! has.
 
-// El mismo `impl Estado` partido en trozos, con los imports del padre: ver
+// The same `impl State` split into pieces, with the parent's imports: see
 // `viewer.rs`.
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
-/// El kind que ocupa un hueco de visor. El mismo que el visor a pantalla
-/// completa: lo que cambia es el vínculo, no lo que hay dentro.
+/// The kind that occupies a viewer slot. The same as the full-screen viewer:
+/// what changes is the link, not what is inside.
 pub(super) const KIND: &str = "viewer";
 
-/// Tope de filas que cruzan para un hueco de preview. Lo normal es que
-/// viaje la VENTANA que cabe en el hueco (`alto_de_preview`); esto acota
-/// un hueco sin colocación conocida.
+/// Cap on rows that cross for a preview slot. Normally what travels is the
+/// WINDOW that fits the slot (`alto_de_preview`); this bounds a slot with no
+/// known placement.
 const PREVIEW_MAX_ROWS: usize = crate::bridge::MAX_ROWS_PER_BATCH;
 
-/// Lo que un hueco de preview tiene AHORA, y lo que está pidiendo.
+/// What a preview slot has NOW, and what it is requesting.
 #[derive(Default)]
-pub(super) struct EstadoPreview {
-    /// Qué ruta enseña (o intentó enseñar), si alguna.
+pub(super) struct StatePreview {
+    /// Which path it shows (or tried to show), if any.
     shown: Option<VPath>,
-    /// El visor con lo leído.
+    /// The viewer with what was read.
     viewer: Option<norte_frontend::viewer::Viewer>,
-    /// La clave Fluent que sustituye al fichero: un directorio, nada bajo
-    /// el cursor, un error de lectura.
+    /// The Fluent key that replaces the file: a directory, nothing under the
+    /// cursor, a read error.
     note: Option<&'static str>,
-    /// La lectura en vuelo, con su testigo: una respuesta con otro testigo
-    /// es de un cursor que ya se movió.
-    en_vuelo: Option<(RequestToken, VPath)>,
+    /// The read in flight, with its token: a response with a different token
+    /// is from a cursor that already moved.
+    in_flight: Option<(RequestToken, VPath)>,
 }
 
-/// Qué debería estar enseñando un hueco de preview.
-enum Quiere {
-    /// Este fichero, que hay que leer.
-    Fichero(VPath),
-    /// Nada que leer, y esta clave dice por qué.
-    Nota(&'static str),
+/// What a preview slot should be showing.
+enum Wants {
+    /// This file, which needs reading.
+    File(VPath),
+    /// Nothing to read, and this key says why.
+    Note(&'static str),
 }
 
-impl Estado {
-    /// Los huecos de preview COLOCADOS, con su ancho en celdas.
+impl State {
+    /// The PLACED preview slots, with their width in cells.
     ///
-    /// Del reparto y no del árbol: un hueco detrás de una pestaña existe,
-    /// pero no se está viendo, y lo que no se ve no lee.
-    fn huecos_de_preview(&self) -> Vec<(u32, u16)> {
-        self.reparto
+    /// From the layout, not the tree: a slot behind a tab exists, but is not
+    /// being seen, and what is not seen does not read.
+    fn preview_slots(&self) -> Vec<(u32, u16)> {
+        self.split
             .placements
             .iter()
-            .filter(|(slot, _)| kind_de(&self.arbol, *slot).is_some_and(|k| k.as_str() == KIND))
+            .filter(|(slot, _)| kind_de(&self.tree, *slot).is_some_and(|k| k.as_str() == KIND))
             .map(|(SlotId(id), r)| (*id, r.width))
             .collect()
     }
 
-    /// Qué debería estar enseñando el hueco `slot`.
+    /// What slot `slot` should be showing.
     ///
-    /// El vínculo se resuelve con el motor compartido, como la hoja de
-    /// atributos: un hueco seguido que muere degrada al rol `active`.
-    fn quiere_preview(&self, slot: SlotId) -> Quiere {
+    /// The link is resolved with the shared engine, like the attribute sheet:
+    /// a followed slot that dies degrades to the `active` role.
+    fn wants_preview(&self, slot: SlotId) -> Wants {
         let mut diags = Vec::new();
-        let seguido =
-            norte_frontend::layout::resolve_follow(&self.arbol, slot, &self.roles, &mut diags)
+        let followed =
+            norte_frontend::layout::resolve_follow(&self.tree, slot, &self.roles, &mut diags)
                 .or_else(|| self.roles.get(norte_frontend::layout::RoleId::Active));
-        // Con el FOCO en el propio hueco de preview el rol activo es él, y
-        // seguirse a sí mismo es seguir a nadie: entonces manda el listado
-        // activo, que siempre existe. En la TUI el teclado y el rol son dos
-        // cosas distintas y esto no pasa; aquí el foco ES el rol.
-        // `cursor_entry` y no `selected`, por lo mismo que la hoja de
-        // atributos: el visor DESCRIBE lo que hay bajo el cursor. Sobre la
-        // fila `..` decía «nada seleccionado» —que es falso: hay una fila, y
-        // lleva a una carpeta— en cada arranque.
-        let entrada = seguido
-            .and_then(|SlotId(s)| self.huecos.get(&s))
-            .or_else(|| self.huecos.get(&self.activo()))
+        // With FOCUS on the preview slot itself, the active role is it, and
+        // following yourself is following nobody: so the active listing takes
+        // over, which always exists. In the TUI, the keyboard and the role
+        // are two different things and this does not happen; here the focus
+        // IS the role.
+        // `cursor_entry` and not `selected`, for the same reason as the
+        // attribute sheet: the viewer DESCRIBES what is under the cursor. On
+        // the `..` row it used to say "nothing selected" — which is false:
+        // there is a row, and it leads to a folder — on every startup.
+        let entry = followed
+            .and_then(|SlotId(s)| self.slots.get(&s))
+            .or_else(|| self.slots.get(&self.active()))
             .and_then(|h| h.pane.cursor_entry());
-        let Some(e) = entrada else {
-            return Quiere::Nota("preview-empty");
+        let Some(e) = entry else {
+            return Wants::Note("preview-empty");
         };
         match e.kind {
-            EntryKind::File => Quiere::Fichero(e.path.clone()),
-            EntryKind::Dir => Quiere::Nota("preview-directory"),
-            // Un enlace o algo que el provider no clasifica: no se lee a
-            // ciegas, porque leer «lo que sea» es justo como un preview
-            // automático se convierte en abrir un dispositivo de bloque.
-            _ => Quiere::Nota("preview-not-a-file"),
+            EntryKind::File => Wants::File(e.path.clone()),
+            EntryKind::Dir => Wants::Note("preview-directory"),
+            // A link or something the provider does not classify: it is not
+            // read blindly, because reading "whatever it is" is exactly how
+            // an automatic preview turns into opening a block device.
+            _ => Wants::Note("preview-not-a-file"),
         }
     }
 
-    /// Pone cada hueco de preview colocado a enseñar lo que le toca: una
-    /// nota, ya; un fichero, pidiéndolo si no es el que ya enseña ni el que
-    /// ya está en vuelo. Devuelve una foto si alguna nota cambió.
-    pub(super) fn sondear_previews(
+    /// Sets every placed preview slot to show whatever it should: a note,
+    /// right away; a file, requesting it if it is not the one already shown
+    /// nor the one already in flight. Returns a snapshot if any note changed.
+    pub(super) fn probe_previews(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        // Un hueco que ya no existe no guarda nada: ni un visor de un fichero
-        // que nadie ve, ni una respuesta en vuelo que aterrizaría en él.
-        let vivos: Vec<u32> = self
-            .arbol
+        // A slot that no longer exists keeps nothing: neither a viewer for a
+        // file nobody sees, nor a response in flight that would land on it.
+        let alive: Vec<u32> = self
+            .tree
             .slot_ids()
             .into_iter()
             .map(|SlotId(id)| id)
             .collect();
-        self.previews.retain(|id, _| vivos.contains(id));
+        self.previews.retain(|id, _| alive.contains(id));
 
-        let mut cambio = false;
-        for (id, ancho) in self.huecos_de_preview() {
-            match self.quiere_preview(SlotId(id)) {
-                Quiere::Nota(clave) => {
-                    let est = self.previews.entry(id).or_default();
-                    if est.note != Some(clave) || est.viewer.is_some() {
-                        *est = EstadoPreview {
-                            note: Some(clave),
-                            ..EstadoPreview::default()
+        let mut changed = false;
+        for (id, width) in self.preview_slots() {
+            match self.wants_preview(SlotId(id)) {
+                Wants::Note(key) => {
+                    let state = self.previews.entry(id).or_default();
+                    if state.note != Some(key) || state.viewer.is_some() {
+                        *state = StatePreview {
+                            note: Some(key),
+                            ..StatePreview::default()
                         };
-                        cambio = true;
+                        changed = true;
                     }
                 }
-                Quiere::Fichero(path) => {
-                    let ya = self.previews.get(&id).is_some_and(|est| {
-                        est.shown.as_ref() == Some(&path)
-                            || est.en_vuelo.as_ref().is_some_and(|(_, p)| *p == path)
+                Wants::File(path) => {
+                    let already = self.previews.get(&id).is_some_and(|state| {
+                        state.shown.as_ref() == Some(&path)
+                            || state.in_flight.as_ref().is_some_and(|(_, p)| *p == path)
                     });
-                    if ya {
+                    if already {
                         continue;
                     }
                     self.token += 1;
                     let token = RequestToken(self.token);
-                    self.previews.entry(id).or_default().en_vuelo = Some((token, path.clone()));
-                    // El ancho del HUECO menos su marco, para el previewer
-                    // (proto 0.66.0): una imagen encoge a lo que le digan.
-                    let columnas = Some(u32::from(ancho.saturating_sub(2).max(1)));
+                    self.previews.entry(id).or_default().in_flight = Some((token, path.clone()));
+                    // The SLOT's width minus its frame, for the previewer
+                    // (proto 0.66.0): an image shrinks to whatever it is
+                    // told.
+                    let columns = Some(u32::from(width.saturating_sub(2).max(1)));
                     let backend = Arc::clone(backend);
-                    let buzon = buzon.clone();
+                    let mailbox = mailbox.clone();
                     tokio::spawn(async move {
-                        let lectura = backend.read(
+                        let reading = backend.read(
                             path.clone(),
                             Some(norte_proto::ByteRange {
                                 offset: 0,
                                 len: Some(VISOR_CAP + 1),
                             }),
                         );
-                        let leido = match tokio::time::timeout(PLAZO_VISOR, lectura).await {
+                        let read_bytes = match tokio::time::timeout(DEADLINE_VISOR, reading).await {
                             Ok(r) => r,
                             Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
                         };
-                        // Un previewer que falla, que tarda o que no aplica
-                        // NO es un error: se cae a la vista cruda.
+                        // A previewer that fails, that takes too long, or
+                        // that does not apply is NOT an error: it falls back
+                        // to the raw view.
                         let preview = match tokio::time::timeout(
-                            PLAZO_PLUGINS,
-                            backend.plugin_preview_styled(path.clone(), columnas),
+                            DEADLINE_PLUGINS,
+                            backend.plugin_preview_styled(path.clone(), columns),
                         )
                         .await
                         {
                             Ok(Ok(p)) => p,
                             _ => None,
                         };
-                        let _ = buzon
-                            .send(Mensaje::PreviewContenido(Box::new((
+                        let _ = mailbox
+                            .send(Message::PreviewContent(Box::new((
                                 id,
-                                (token, path, leido, preview),
+                                (token, path, read_bytes, preview),
                             ))))
                             .await;
                     });
                 }
             }
         }
-        if cambio {
+        if changed {
             let snap = self.snapshot();
-            vec![self.sobre(UiUpdate::Snapshot(Box::new(snap)))]
+            vec![self.over(UiUpdate::Snapshot(Box::new(snap)))]
         } else {
             Vec::new()
         }
     }
 
-    /// Lo leído para un hueco de preview aterriza: se enseña si el testigo
-    /// es el de la última petición de ESE hueco, y se tira si no.
-    pub(super) fn aterrizar_preview(
+    /// What was read for a preview slot lands: it is shown if the token is
+    /// that of THAT slot's last request, and discarded otherwise.
+    pub(super) fn land_preview(
         &mut self,
         slot: u32,
         token: RequestToken,
         path: VPath,
-        leido: Result<Vec<u8>, Error>,
+        read_bytes: Result<Vec<u8>, Error>,
         preview: Option<norte_proto::methods::PluginPreviewStyled>,
     ) -> Option<BridgeEnvelope<UiUpdate>> {
-        let est = self.previews.get_mut(&slot)?;
-        if est.en_vuelo.as_ref().map(|(t, _)| *t) != Some(token) {
+        let state = self.previews.get_mut(&slot)?;
+        if state.in_flight.as_ref().map(|(t, _)| *t) != Some(token) {
             return None;
         }
-        est.en_vuelo = None;
-        if let Ok(mut bytes) = leido {
+        state.in_flight = None;
+        if let Ok(mut bytes) = read_bytes {
             let cap = usize::try_from(VISOR_CAP).unwrap_or(usize::MAX);
-            let truncado = bytes.len() > cap;
-            if truncado {
+            let truncated = bytes.len() > cap;
+            if truncated {
                 bytes.truncate(cap);
             }
-            // Por BYTES, y antes de que un previewer pueda esconder el
-            // formato: de esto depende la clase del carrete (`viewer.next`),
-            // y lo que el fichero ES no cambia porque un plugin haya ganado.
-            let por_bytes = norte_frontend::viewer::image_format(&bytes).is_some();
+            // By BYTES, and before a previewer can hide the format: the
+            // reel's class depends on this (`viewer.next`), and what the file
+            // IS does not change because a plugin claimed it.
+            let by_bytes = norte_frontend::viewer::image_format(&bytes).is_some();
             let mut v = match preview {
                 Some(p) => norte_frontend::viewer::Viewer::with_plugin_preview_styled(
                     path.clone(),
@@ -219,27 +221,27 @@ impl Estado {
                     &p.lines,
                     p.lossy,
                 ),
-                None => norte_frontend::viewer::Viewer::new(path.clone(), bytes, truncado),
+                None => norte_frontend::viewer::Viewer::new(path.clone(), bytes, truncated),
             };
-            v.set_image_by_bytes(por_bytes);
-            est.viewer = Some(v);
-            est.note = None;
+            v.set_image_by_bytes(by_bytes);
+            state.viewer = Some(v);
+            state.note = None;
         } else {
-            // No se pudo leer: se DICE, en el hueco, en vez de dejar el
-            // fichero anterior puesto como si fuera este.
-            est.viewer = None;
-            est.note = Some("preview-unreadable");
+            // It could not be read: it is SAID, in the slot, instead of
+            // leaving the previous file in place as if it were this one.
+            state.viewer = None;
+            state.note = Some("preview-unreadable");
         }
-        est.shown = Some(path);
+        state.shown = Some(path);
         let snap = self.snapshot();
-        Some(self.sobre(UiUpdate::Snapshot(Box::new(snap))))
+        Some(self.over(UiUpdate::Snapshot(Box::new(snap))))
     }
 
-    /// Cuántas filas caben en el hueco `slot`: su alto menos el cromo
-    /// (título y borde). Es la ventana que viaja y la página que las teclas
-    /// saltan. Un hueco que no está colocado no tiene alto: cae al tope.
+    /// How many rows fit in slot `slot`: its height minus the chrome (title
+    /// and border). It is the window that travels and the page keys jump. A
+    /// slot that is not placed has no height: it falls back to the cap.
     fn alto_de_preview(&self, slot: u32) -> usize {
-        self.reparto
+        self.split
             .placements
             .iter()
             .find(|(s, _)| *s == SlotId(slot))
@@ -248,204 +250,206 @@ impl Estado {
             })
     }
 
-    /// El hueco de preview con el FOCO, si el foco está en uno y tiene
-    /// visor. Sin visor —una nota— no hay nada que mover, y las teclas
-    /// siguen su camino.
-    fn preview_enfocado(&self) -> Option<u32> {
+    /// The preview slot with FOCUS, if the focus is on one and it has a
+    /// viewer. Without a viewer — a note — there is nothing to move, and the
+    /// keys go their own way.
+    fn preview_focused(&self) -> Option<u32> {
         let SlotId(id) = self.roles.get(norte_frontend::layout::RoleId::Active)?;
-        let es_visor = kind_de(&self.arbol, SlotId(id)).is_some_and(|k| k.as_str() == KIND);
-        (es_visor && self.previews.get(&id).is_some_and(|e| e.viewer.is_some())).then_some(id)
+        let is_viewer = kind_de(&self.tree, SlotId(id)).is_some_and(|k| k.as_str() == KIND);
+        (is_viewer && self.previews.get(&id).is_some_and(|e| e.viewer.is_some())).then_some(id)
     }
 
-    /// Las teclas del visor sobre el hueco acoplado con el foco (#291).
+    /// The viewer keys over the docked slot with focus (#291).
     ///
-    /// Se resuelven con el keymap del VISOR, como en el grande: `viewer.*`
-    /// mueve este visor. `viewer.close` no cierra el hueco — devuelve el
-    /// foco al listado, como la TUI: cerrar un panel que el lector solo
-    /// quería dejar de manejar es la respuesta equivocada; cerrarlo es
-    /// `layout.preview`. `None` = el foco no está en un visor acoplado, o la
-    /// tecla no es suya: que siga por el camino normal.
-    pub(super) fn tecla_en_preview(
+    /// They are resolved with the VIEWER's keymap, like the full one:
+    /// `viewer.*` moves this viewer. `viewer.close` does not close the slot —
+    /// it returns focus to the listing, like the TUI: closing a panel the
+    /// reader only wanted to stop looking at is the wrong answer; closing it
+    /// is `layout.preview`. `None` = focus is not on a docked viewer, or the
+    /// key is not one of its own: let it go through the normal path.
+    pub(super) fn key_in_preview(
         &mut self,
         k: &crate::keys::KeyInput,
     ) -> Option<(ActionAck, Vec<BridgeEnvelope<UiUpdate>>)> {
-        let slot = self.preview_enfocado()?;
+        let slot = self.preview_focused()?;
         let chord = k.to_chord().ok()?;
         let (command, count) = match self.resolver_visor.push(chord) {
             Resolution::Run { command, count } => (command, count),
-            // Un prefijo a medias es suyo; lo que no está atado, no.
+            // A half-finished prefix is its own; whatever is not bound, is
+            // not.
             Resolution::Pending(_) | Resolution::Counting(_) => {
-                return Some((self.aplicada(), Vec::new()));
+                return Some((self.applied(), Vec::new()));
             }
             Resolution::Unavailable { .. } | Resolution::Reset => return None,
         };
-        let efecto = crate::commands::efecto_visor_de(&command, count.times())?;
-        let alto = self.alto_de_preview(slot);
-        if matches!(efecto, crate::commands::EfectoVisor::Cerrar) {
-            let listado = SlotId(self.activo());
+        let effect = crate::commands::viewer_effect_of(&command, count.times())?;
+        let height = self.alto_de_preview(slot);
+        if matches!(effect, crate::commands::EffectVisor::Close) {
+            let listing = SlotId(self.active());
             self.roles
-                .set(norte_frontend::layout::RoleId::Active, listado);
-            self.reconcilia_roles();
-            let cambio = ViewChange::Layout(self.disposicion());
-            return Some((self.aplicada(), vec![self.parche(vec![cambio])]));
+                .set(norte_frontend::layout::RoleId::Active, listing);
+            self.reconciles_roles();
+            let change = ViewChange::Layout(self.layout());
+            return Some((self.applied(), vec![self.parche(vec![change])]));
         }
-        if let crate::commands::EfectoVisor::Hermana { adelante } = efecto {
-            return Some(self.hermana_del_preview(slot, adelante));
+        if let crate::commands::EffectVisor::Sibling { forward } = effect {
+            return Some(self.preview_sibling(slot, forward));
         }
         let v = self.previews.get_mut(&slot)?.viewer.as_mut()?;
-        Self::mover_visor(v, efecto, alto);
+        Self::mover_visor(v, effect, height);
         let snap = self.snapshot();
         Some((
-            self.aplicada(),
-            vec![self.sobre(UiUpdate::Snapshot(Box::new(snap)))],
+            self.applied(),
+            vec![self.over(UiUpdate::Snapshot(Box::new(snap)))],
         ))
     }
 
-    /// La hermana siguiente (o anterior) en el visor ACOPLADO.
+    /// The next (or previous) sibling in the DOCKED viewer.
     ///
-    /// Aquí no se abre nada, y esa es toda la diferencia con el visor grande:
-    /// el acoplado sigue al CURSOR del listado activo
-    /// ([`Self::quiere_preview`]), así que mover el cursor ES pedir el
-    /// fichero siguiente, y la lectura la hace el sondeo de la vuelta
-    /// siguiente, como con cualquier otro movimiento.
-    fn hermana_del_preview(
+    /// Nothing is opened here, and that is the whole difference from the full
+    /// viewer: the docked one follows the active listing's CURSOR
+    /// ([`Self::wants_preview`]), so moving the cursor IS requesting the
+    /// next file, and the read is done by the next round's polling, like with
+    /// any other movement.
+    fn preview_sibling(
         &mut self,
         slot: u32,
-        adelante: bool,
+        forward: bool,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let est = self.previews.get(&slot);
-        let es_imagen = est
+        let state = self.previews.get(&slot);
+        let is_image = state
             .and_then(|e| e.viewer.as_ref())
             .is_some_and(norte_frontend::viewer::Viewer::is_image_by_bytes);
-        let Some(abierta) = est.and_then(|e| e.shown.clone()) else {
-            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        let Some(open_path) = state.and_then(|e| e.shown.clone()) else {
+            return (Self::stale(StaleAction::Generation), Vec::new());
         };
-        let quiero = if es_imagen {
-            norte_frontend::viewer::Clase::Imagen
+        let wanted = if is_image {
+            norte_frontend::viewer::Class::Imagen
         } else {
-            norte_frontend::viewer::Clase::Otro
+            norte_frontend::viewer::Class::Other
         };
-        // El listado del que sale la escalera es el que ESTE preview sigue
-        // ([`Self::quiere_preview`]), que con un hueco atado a un slot no es
-        // el listado activo: leer el activo movería el cursor de otro panel y
-        // dejaría este preview igual que estaba.
+        // The listing the ladder comes from is the one THIS preview follows
+        // ([`Self::wants_preview`]), which with a slot tied to a role is not
+        // the active listing: reading the active one would move another
+        // panel's cursor and leave this preview exactly as it was.
         let mut diags = Vec::new();
-        let seguido = norte_frontend::layout::resolve_follow(
-            &self.arbol,
+        let followed = norte_frontend::layout::resolve_follow(
+            &self.tree,
             SlotId(slot),
             &self.roles,
             &mut diags,
         )
         .or_else(|| self.roles.get(norte_frontend::layout::RoleId::Active))
-        .map_or_else(|| self.activo(), |SlotId(s)| s);
-        let Some(pane) = self.huecos.get(&seguido).map(|h| &h.pane) else {
-            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        .map_or_else(|| self.active(), |SlotId(s)| s);
+        let Some(pane) = self.slots.get(&followed).map(|h| &h.pane) else {
+            return (Self::stale(StaleAction::Generation), Vec::new());
         };
         let entries = pane.entries();
-        // Solo por lo que el lector VE, como en el visor grande.
-        let visibles = pane.quick_visible();
-        let destino = entries
+        // Only by what the reader SEES, like the full viewer.
+        let visible = pane.quick_visible();
+        let target = entries
             .iter()
-            .position(|e| e.path == abierta)
-            .and_then(|desde| {
-                norte_frontend::viewer::hermana(entries, visibles, desde, adelante, quiero)
+            .position(|e| e.path == open_path)
+            .and_then(|from| {
+                norte_frontend::viewer::sibling(entries, visible, from, forward, wanted)
             });
-        let Some(fila) = destino else {
+        let Some(row) = target else {
             self.status.message = Some(clamp_display(norte_i18n::t_in(
                 self.lang,
                 "host-no-sibling",
             )));
-            let cambio = ViewChange::Status(self.status.clone());
+            let change = ViewChange::Status(self.status.clone());
             return (
                 ActionAck::Unavailable {
                     reason_key: "host-no-sibling".to_owned(),
                 },
-                vec![self.parche(vec![cambio])],
+                vec![self.parche(vec![change])],
             );
         };
-        // Un «no hay más» de antes no puede sobrevivir a un salto que SÍ pasó.
+        // An earlier "no more" cannot survive a jump that DID happen.
         self.status.message = None;
-        // `senalar` y no `set_cursor`: con un filtro vivo lo que el preview
-        // sigue es la selección del quick, y mover el cursor real no la mueve
-        // —el panel se quedaría igual mientras la tecla dice que funcionó.
-        if let Some(h) = self.huecos.get_mut(&seguido) {
-            h.pane.senalar(fila);
+        // `point_at` and not `set_cursor`: with a live filter, what the
+        // preview follows is the quick-search selection, and moving the real
+        // cursor does not move it — the panel would stay the same while the
+        // key claims it worked.
+        if let Some(h) = self.slots.get_mut(&followed) {
+            h.pane.point_at(row);
         }
         let snap = self.snapshot();
         (
-            self.aplicada(),
-            vec![self.sobre(UiUpdate::Snapshot(Box::new(snap)))],
+            self.applied(),
+            vec![self.over(UiUpdate::Snapshot(Box::new(snap)))],
         )
     }
 
-    /// Aplica un efecto de visor que NO es cerrar.
+    /// Applies a viewer effect that is NOT closing.
     fn mover_visor(
         v: &mut norte_frontend::viewer::Viewer,
-        efecto: crate::commands::EfectoVisor,
-        alto: usize,
+        effect: crate::commands::EffectVisor,
+        height: usize,
     ) {
-        use crate::commands::EfectoVisor;
-        // `unsigned_abs`, no `abs`: el delta de `PreviewScroll` llega CRUDO del
-        // renderer, y `i64::MIN.abs()` desborda.
-        let pasos = |n: i64| usize::try_from(n.unsigned_abs()).unwrap_or(usize::MAX);
-        match efecto {
-            // Las dos las atiende quien llama, y antes de llegar aquí: cerrar
-            // devuelve el foco al listado, y las hermanas mueven su CURSOR —el
-            // acoplado lo sigue, así que moverlo ES pedir el fichero
-            // siguiente—. En ninguno de los dos casos hay nada que mover en
-            // ESTE visor.
-            EfectoVisor::Cerrar | EfectoVisor::Hermana { .. } => {}
-            EfectoVisor::Linea(n) if n < 0 => v.scroll_up(pasos(n)),
-            EfectoVisor::Linea(n) => v.scroll_down(pasos(n)),
-            EfectoVisor::Pagina(n) if n < 0 => v.scroll_up(pasos(n).saturating_mul(alto)),
-            EfectoVisor::Pagina(n) => v.scroll_down(pasos(n).saturating_mul(alto)),
-            EfectoVisor::Columna(n) if n < 0 => v.scroll_left(pasos(n)),
-            EfectoVisor::Columna(n) => v.scroll_right(pasos(n)),
-            EfectoVisor::Extremo { al_final: false } => v.scroll_top(),
-            EfectoVisor::Extremo { al_final: true } => v.scroll_bottom(),
-            EfectoVisor::Hex => v.toggle_hex(),
-            EfectoVisor::Encoding => v.cycle_encoding(),
-            EfectoVisor::EncodingAuto => v.reset_encoding(),
-            EfectoVisor::Zoom { acercar: true } => v.zoom_in(),
-            EfectoVisor::Zoom { acercar: false } => v.zoom_out(),
-            EfectoVisor::ZoomAjustar => v.zoom_fit(),
+        use crate::commands::EffectVisor;
+        // `unsigned_abs`, not `abs`: `PreviewScroll`'s delta arrives RAW from
+        // the renderer, and `i64::MIN.abs()` overflows.
+        let steps = |n: i64| usize::try_from(n.unsigned_abs()).unwrap_or(usize::MAX);
+        match effect {
+            // Both are handled by the caller, and before getting here:
+            // closing returns focus to the listing, and the siblings move
+            // their CURSOR — the docked one follows it, so moving it IS
+            // requesting the next file. In neither case is there anything to
+            // move in THIS viewer.
+            EffectVisor::Close | EffectVisor::Sibling { .. } => {}
+            EffectVisor::Line(n) if n < 0 => v.scroll_up(steps(n)),
+            EffectVisor::Line(n) => v.scroll_down(steps(n)),
+            EffectVisor::Page(n) if n < 0 => v.scroll_up(steps(n).saturating_mul(height)),
+            EffectVisor::Page(n) => v.scroll_down(steps(n).saturating_mul(height)),
+            EffectVisor::Column(n) if n < 0 => v.scroll_left(steps(n)),
+            EffectVisor::Column(n) => v.scroll_right(steps(n)),
+            EffectVisor::End { al_final: false } => v.scroll_top(),
+            EffectVisor::End { al_final: true } => v.scroll_bottom(),
+            EffectVisor::Hex => v.toggle_hex(),
+            EffectVisor::Encoding => v.cycle_encoding(),
+            EffectVisor::EncodingAuto => v.reset_encoding(),
+            EffectVisor::Zoom { zoom_in: true } => v.zoom_in(),
+            EffectVisor::Zoom { zoom_in: false } => v.zoom_out(),
+            EffectVisor::ZoomFit => v.zoom_fit(),
         }
     }
 
-    /// La rueda sobre un hueco de preview: `delta` líneas por el HOST, que
-    /// es quien decide la ventana visible (como el registro).
-    pub(super) fn desplazar_preview(
+    /// The wheel over a preview slot: `delta` lines through the HOST, which
+    /// is the one who decides the visible window (like the log panel).
+    pub(super) fn scroll_preview(
         &mut self,
         slot: u32,
         delta: i64,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        if self.oculto(slot) {
-            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        if self.hidden(slot) {
+            return (Self::stale(StaleAction::Generation), Vec::new());
         }
         let Some(v) = self.previews.get_mut(&slot).and_then(|e| e.viewer.as_mut()) else {
-            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+            return (Self::stale(StaleAction::Generation), Vec::new());
         };
-        Self::mover_visor(v, crate::commands::EfectoVisor::Linea(delta), 1);
+        Self::mover_visor(v, crate::commands::EffectVisor::Line(delta), 1);
         let snap = self.snapshot();
         (
-            self.aplicada(),
-            vec![self.sobre(UiUpdate::Snapshot(Box::new(snap)))],
+            self.applied(),
+            vec![self.over(UiUpdate::Snapshot(Box::new(snap)))],
         )
     }
 
-    /// La proyección de un hueco de preview: la VENTANA de filas que cabe
-    /// en el hueco, desde donde el visor está desplazado.
+    /// A preview slot's projection: the WINDOW of rows that fits the slot,
+    /// from wherever the viewer is scrolled to.
     pub(super) fn vista_de_preview(&self, slot: u32) -> crate::dto::PreviewSlotView {
-        let est = self.previews.get(&slot);
-        let alto = self.alto_de_preview(slot);
-        let viewer = est
+        let state = self.previews.get(&slot);
+        let height = self.alto_de_preview(slot);
+        let viewer = state
             .and_then(|e| e.viewer.as_ref())
-            .map(|v| self.vista_de_visor(v, alto, false));
+            .map(|v| self.vista_de_visor(v, height, false));
         let note = if viewer.is_some() {
             String::new()
         } else {
-            let clave = est.and_then(|e| e.note).unwrap_or("preview-empty");
-            clamp_display(norte_i18n::t_in(self.lang, clave))
+            let key = state.and_then(|e| e.note).unwrap_or("preview-empty");
+            clamp_display(norte_i18n::t_in(self.lang, key))
         };
         crate::dto::PreviewSlotView {
             slot_id: slot,

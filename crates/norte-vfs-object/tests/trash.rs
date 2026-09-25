@@ -1,5 +1,5 @@
-//! Papelera lógica `.norte-trash/` de object/S3 (fase 9c, ADR 0019) contra
-//! el harness `services-fs` de opendal.
+//! Object/S3's logical `.norte-trash/` trash (phase 9c, ADR 0019) against
+//! opendal's `services-fs` harness.
 mod common;
 
 use futures::TryStreamExt;
@@ -8,8 +8,8 @@ use norte_vfs::Provider;
 use norte_vfs::trash;
 use norte_vfs_object::ObjectProvider;
 
-/// Provider fresco sobre un tempdir vía `services-fs`, con la papelera
-/// lógica en el estado pedido.
+/// A fresh provider over a tempdir via `services-fs`, with the logical
+/// trash in the requested state.
 fn fresh(logical_trash: bool) -> ObjectProvider {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path().join("root");
@@ -21,12 +21,12 @@ fn fresh(logical_trash: bool) -> ObjectProvider {
     ObjectProvider::new(op, "s3").with_logical_trash(logical_trash)
 }
 
-/// La raíz del provider (`s3://norte-test/`).
+/// The provider's root (`s3://norte-test/`).
 fn root() -> VPath {
     ObjectProvider::root("s3", Authority::new("norte-test").expect("authority"))
 }
 
-/// Lista los nombres (bytes) de los hijos de un dir (drena el `EntryStream`).
+/// Lists a dir's children's names (bytes) (drains the `EntryStream`).
 async fn child_names(p: &ObjectProvider, dir: &VPath) -> Vec<Vec<u8>> {
     let mut stream = p.list(dir).await.expect("list");
     let mut names = Vec::new();
@@ -35,7 +35,7 @@ async fn child_names(p: &ObjectProvider, dir: &VPath) -> Vec<Vec<u8>> {
             entry
                 .path
                 .file_name()
-                .expect("hijo con nombre")
+                .expect("named child")
                 .as_bytes()
                 .to_vec(),
         );
@@ -43,11 +43,11 @@ async fn child_names(p: &ObjectProvider, dir: &VPath) -> Vec<Vec<u8>> {
     names
 }
 
-/// El único `<id>` bajo `.norte-trash/`.
+/// The one `<id>` under `.norte-trash/`.
 async fn sole_entry(p: &ObjectProvider) -> VPath {
     let trash_dir = root().join(Segment::new(trash::TRASH_DIR.to_vec()).unwrap());
     let ids = child_names(p, &trash_dir).await;
-    assert_eq!(ids.len(), 1, "una entrada de papelera");
+    assert_eq!(ids.len(), 1, "one trash entry");
     trash_dir.join(Segment::new(ids[0].clone()).unwrap())
 }
 
@@ -74,33 +74,34 @@ async fn trash_moves_file_and_writes_info() {
         .await
         .expect("trash");
 
-    // Origen desaparece.
+    // The source disappears.
     assert!(matches!(
         p.stat(&victim).await,
         Err(norte_proto::Error::NotFound)
     ));
 
     let entry = sole_entry(&p).await;
-    // La entrada contiene EXACTAMENTE {payload, .norte-info}, sin markers extra.
+    // The entry contains EXACTLY {payload, .norte-info}, no extra markers.
     let mut names = child_names(&p, &entry).await;
     names.sort();
     let mut expected = vec![b".norte-info".to_vec(), b"victim.txt".to_vec()];
     expected.sort();
     assert_eq!(names, expected);
-    // Payload preserva el contenido.
+    // The payload preserves the content.
     let payload = entry.join(Segment::new(b"victim.txt".to_vec()).unwrap());
     assert_eq!(
         common::read_all(&p, &payload).await.expect("read payload"),
         b"contenido"
     );
-    // La papelera LÓGICA devuelve el destino recuperable → reversal_ref del
-    // journal (M3-1b): es EXACTAMENTE el payload dentro de `.norte-trash/<id>`.
+    // The LOGICAL trash returns the recoverable destination → the
+    // journal's reversal_ref (M3-1b): it is EXACTLY the payload inside
+    // `.norte-trash/<id>`.
     assert_eq!(
-        dest.expect("papelera lógica devuelve destino recuperable"),
+        dest.expect("logical trash returns a recoverable destination"),
         payload,
-        "el dest devuelto es la ruta del payload"
+        "the returned dest is the payload's path"
     );
-    // `.norte-info` decodifica a la ruta original, anclado a la conexión.
+    // `.norte-info` decodes to the original path, anchored to the connection.
     let info_path = entry.join(Segment::new(trash::INFO_NAME.to_vec()).unwrap());
     let info_bytes = common::read_all(&p, &info_path).await.expect("read info");
     let info = trash::info_decode(&info_bytes, &root()).expect("decode");
@@ -109,7 +110,7 @@ async fn trash_moves_file_and_writes_info() {
 
 #[tokio::test]
 async fn trash_moves_directory_tree() {
-    // El rename copy-all→delete-all se lleva el ÁRBOL entero.
+    // The copy-all→delete-all rename takes the WHOLE tree.
     let p = fresh(true);
     let dir = root().join(Segment::new(b"proj".to_vec()).unwrap());
     p.mkdir(&dir).await.expect("mkdir proj");
@@ -180,7 +181,7 @@ async fn trash_refuses_to_trash_itself() {
 
 #[tokio::test]
 async fn trash_preserves_hostile_basename() {
-    // S3 keys son UTF-8-only (como sftp): el nombre hostil es UTF-8 retorcido.
+    // S3 keys are UTF-8-only (like sftp): the hostile name is twisted UTF-8.
     let p = fresh(true);
     let hostile = "año 名前 😀.txt".as_bytes().to_vec();
     let victim = root().join(Segment::new(hostile.clone()).unwrap());
@@ -200,6 +201,6 @@ async fn trash_preserves_hostile_basename() {
     let names = child_names(&p, &entry).await;
     assert!(
         names.iter().any(|n| n == &hostile),
-        "basename hostil preservado"
+        "hostile basename preserved"
     );
 }

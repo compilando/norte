@@ -17,7 +17,7 @@ fn plugin_dir() -> PathBuf {
 
 fn build_plugin() -> Option<PathBuf> {
     if !target_installed("wasm32-wasip2") {
-        eprintln!("SKIP: target wasm32-wasip2 no instalado");
+        eprintln!("SKIP: target wasm32-wasip2 not installed");
         return None;
     }
     let target_dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("wasm-guests");
@@ -76,7 +76,7 @@ fn install_and_consent(cfg: &Path, wasm: &Path) -> PluginRegistry {
 #[expect(
     clippy::cast_possible_truncation,
     clippy::trivially_copy_pass_by_ref,
-    reason = "un codificador PNG de juguete: tamaños de test, todos cortos"
+    reason = "a toy PNG encoder: test sizes, all short"
 )]
 fn png(w: u32, h: u32) -> Vec<u8> {
     fn crc32(bytes: &[u8]) -> u32 {

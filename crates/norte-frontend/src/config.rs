@@ -39,28 +39,27 @@ pub struct FrontendConfig {
     /// [`RebindSources::split_at`](crate::keymap::RebindSources::split_at),
     /// which is the only supported way to make that cut.
     pub keymap_layer_kinds: Vec<Layer>,
-    /// El DIRECTORIO del que salió cada entrada de [`Self::keymap_layers`] —
-    /// misma longitud, mismo orden, índice a índice que
-    /// [`Self::keymap_layer_kinds`].
+    /// The DIRECTORY each entry of [`Self::keymap_layers`] came from — same
+    /// length, same order, index by index as [`Self::keymap_layer_kinds`].
     ///
-    /// Los tres vectores son UNA tabla. Este existe porque el destino de una
-    /// escritura de atajo y el directorio donde cae tienen que salir del mismo
-    /// sitio: `split_at` dice a qué capa apunta y esto dice dónde vive, así que
-    /// el escritor ya no resuelve un directorio por su cuenta. Con un perfil
-    /// activo eso mandaba la escritura al fichero del usuario, donde el perfil
-    /// la tapaba (#305).
+    /// The three vectors are ONE table. This one exists because a shortcut
+    /// write's destination and the directory it lands in have to come from
+    /// the same place: `split_at` says which layer it targets and this says
+    /// where it lives, so the writer no longer resolves a directory on its
+    /// own. With an active profile that used to send the write to the
+    /// user's file, where the profile shadowed it (#305).
     pub keymap_layer_dirs: Vec<std::path::PathBuf>,
     /// Quick-search mode mapped onto the navigation enum.
     pub quick_search_mode: nav::Mode,
     /// Merged declarative openers (#28): System/User only, fail-closed.
     pub openers: OpenersConfig,
-    /// Los temas del USUARIO, `<config>/themes/*.toml`, ya parseados
+    /// The USER's themes, `<config>/themes/*.toml`, already parsed
     /// ([`crate::theme::load_user_themes`]).
     ///
-    /// Solo de la capa de usuario. Un tema no lanza nada, pero la lista es lo
-    /// que ofrecen los selectores, y un `./.norte` ajeno no tiene por qué
-    /// poner nombres en ella. Viajan con la config para que un selector los
-    /// liste y los previsualice sin leer disco en una tecla.
+    /// From the user layer only. A theme launches nothing, but the list is
+    /// what the selectors offer, and a foreign `./.norte` has no business
+    /// putting names in it. They travel with the config so a selector can
+    /// list and preview them without reading disk inside a keystroke.
     pub user_themes: Vec<crate::theme::UserTheme>,
 }
 
@@ -102,7 +101,7 @@ pub fn load_keymap_layer(
         return Err(ConfigError::Toml {
             path: keymap,
             message:
-                "una capa de config no admite `keymap`: usa prepend_keymap/append_keymap (ADR 0006)"
+                "a config layer does not accept `keymap`: use prepend_keymap/append_keymap (ADR 0006)"
                     .to_owned(),
         });
     }
@@ -155,8 +154,8 @@ pub fn load(layers: &Layers) -> Result<FrontendConfig, ConfigError> {
             // In lockstep with the push above and never apart from it: the
             // two vectors are one table, and a layer whose kind was dropped
             // cannot be recovered by position (a dir with no `keymap.toml`
-            // leaves no gap here). Tres desde #305: el directorio también, por
-            // lo mismo.
+            // leaves no gap here). Three since #305: the directory too, for
+            // the same reason.
             keymap_layer_kinds.push(*kind);
             keymap_layer_dirs.push(dir.clone());
         }
@@ -185,24 +184,24 @@ pub fn load(layers: &Layers) -> Result<FrontendConfig, ConfigError> {
     })
 }
 
-/// [`load`] con un perfil de por medio, con la regla de tres respuestas de D7
-/// aplicada a la CAPA ENTERA y no solo a su `norte.toml`.
+/// [`load`] with a profile in the mix, with D7's rule-of-three-answers
+/// applied to the WHOLE LAYER and not just its `norte.toml`.
 ///
-/// **Ésta es la que llama un frontend**, y la de `norte-config` la que llama
-/// el core. La diferencia no es de comodidad: aquella decide sobre
-/// `norte.toml`, y un perfil trae además `keymap.toml` y `openers.toml`, que
-/// son fatales para cualquier capa que no sea de proyecto. Pasando por la de
-/// abajo, un perfil con una errata en un atajo se declaraba sano y reventaba
-/// después — con `ProfileSource::Sticky` eso es exactamente el desenlace que
-/// D7 existe para impedir, porque el lector se queda fuera del programa y sin
-/// manera de elegir otro perfil (#305).
+/// **This is the one a frontend calls**, and `norte-config`'s is the one the
+/// core calls. The difference is not one of convenience: that one decides
+/// about `norte.toml`, and a profile also brings `keymap.toml` and
+/// `openers.toml`, which are fatal for any layer that is not project. Going
+/// through the one below, a profile with a typo in a shortcut declared
+/// itself healthy and blew up later — with `ProfileSource::Sticky` that is
+/// exactly the outcome D7 exists to prevent, because the reader is left
+/// outside the program with no way to choose another profile (#305).
 ///
-/// La regla no se duplica: [`norte_config::load_with`] la tiene, y esto le
-/// pasa el cargador de este crate.
+/// The rule is not duplicated: [`norte_config::load_with`] has it, and this
+/// passes it this crate's loader.
 ///
 /// # Errors
 ///
-/// [`norte_config::ProfileError`] según la procedencia del nombre, igual que
+/// [`norte_config::ProfileError`] depending on the name's provenance, same as
 /// [`norte_config::load_with_profile`].
 pub fn load_with_profile(
     layers_for: &impl Fn(Option<&std::ffi::OsStr>) -> Layers,
@@ -212,80 +211,82 @@ pub fn load_with_profile(
     norte_config::load_with(layers_for, name, source, &load)
 }
 
-/// Lo que «guardar como perfil» guarda, montado a partir de lo que se VE
-/// (#306 en el terminal, #318 en la ventana).
+/// What "save as profile" saves, assembled from what is SEEN (#306 in the
+/// terminal, #318 in the window).
 ///
-/// Vive aquí, y no una copia en cada frontend, por la lección de la ADR 0077:
-/// **una decisión duplicada entre frontends diverge en silencio**. Y este es
-/// el peor sitio donde podría divergir — dos «guardar como» que producen
-/// perfiles distintos convierten el perfil en algo que depende de por dónde lo
-/// guardaste. Con una sola función, la paridad no es un test que haya que
-/// acordarse de escribir: es que no hay dos cosas que comparar.
+/// Lives here, and not a copy in each frontend, for ADR 0077's lesson: **a
+/// decision duplicated between frontends silently drifts**. And this is the
+/// worst place it could drift — two "save as" that produce different
+/// profiles turn a profile into something that depends on where you saved
+/// it from. With a single function, parity is not a test someone has to
+/// remember to write: there is no second thing to compare it against.
 ///
-/// `dir_de_hueco` contesta dónde está cada listado; un hueco que no lo sea
-/// (visor, procesos, sitios) contesta `None` y no entra en `[profile.start]`,
-/// que es lo correcto: no tiene directorio que recordar.
+/// `slot_dir` answers where each listing is; a slot that is not one (viewer,
+/// processes, sites) answers `None` and does not enter `[profile.start]`,
+/// which is correct: it has no directory to remember.
 ///
-/// Lo que NO se guarda, y por qué:
+/// What is NOT saved, and why:
 ///
-/// - los escalares de `[ui]`: lo que el lector cambia en marcha —tema,
-///   preset— ya se persiste por su propio camino, y copiarlo aquí escribiría
-///   dos veces lo mismo con dos verdades posibles;
-/// - los favoritos, las conexiones y el resto de secciones. Un perfil es un
-///   espacio de TRABAJO, no una copia de la configuración entera: duplicar la
-///   hotlist en cada perfil la congelaría, y la del usuario sigue viéndose por
-///   debajo.
+/// - `[ui]`'s scalars: what the reader changes on the fly — theme, preset —
+///   is already persisted through its own path, and copying it here would
+///   write the same thing twice with two possible truths;
+/// - the favorites, the connections and the rest of the sections. A profile
+///   is a WORKSPACE, not a copy of the entire configuration: duplicating
+///   the hotlist into every profile would freeze it, and the user's keeps
+///   showing through underneath.
 ///
-/// El `keymap.toml` sí se copia, BYTE a BYTE y sin reescribirlo: es un fichero
-/// del lector, con sus comentarios, y «guardar como» tiene que producir un
-/// perfil que se comporte igual que el que tenías.
+/// `keymap.toml` IS copied, BYTE for BYTE and without rewriting it: it is
+/// the reader's file, with their comments, and "save as" has to produce a
+/// profile that behaves the same as the one you had.
 #[must_use]
 pub fn profile_snapshot(
-    arbol: &crate::layout::Node,
-    dir_de_hueco: &dyn Fn(crate::layout::SlotId) -> Option<norte_proto::VPath>,
+    tree: &crate::layout::Node,
+    slot_dir: &dyn Fn(crate::layout::SlotId) -> Option<norte_proto::VPath>,
     keymap: Option<Vec<u8>>,
 ) -> norte_config::ProfileSnapshot {
-    let start = arbol
+    let start = tree
         .slot_ids()
         .into_iter()
         .filter_map(|id| {
             let crate::layout::SlotId(n) = id;
-            Some((n.to_string(), dir_de_hueco(id)?.to_wire()))
+            Some((n.to_string(), slot_dir(id)?.to_wire()))
         })
         .collect();
     norte_config::ProfileSnapshot {
         title: None,
-        layout_toml: crate::layout::config::to_toml(arbol).ok(),
+        layout_toml: crate::layout::config::to_toml(tree).ok(),
         ui: Vec::new(),
         start,
         keymap,
     }
 }
 
-/// Qué huecos siembra `[profile.start]` al entrar en un perfil.
+/// Which slots `[profile.start]` seeds when entering a profile.
 ///
-/// **La SESIÓN gana.** `[profile.start]` dice dónde abre un hueco «la primera
-/// vez»: en cuanto ese hueco tiene estado guardado, lo que manda es dónde lo
-/// dejaste, porque un perfil es un espacio de trabajo y no un marcador que te
-/// devuelve al principio cada vez que entras.
+/// **The SESSION wins.** `[profile.start]` says where a slot opens "the
+/// first time": as soon as that slot has saved state, what rules is where
+/// you left it, because a profile is a workspace and not a bookmark that
+/// sends you back to the start every time you enter it.
 ///
-/// Dos vetos, y hacen falta los dos:
+/// Two vetoes, and both are needed:
 ///
-/// - `conocidos` son los huecos de los que la sesión GUARDADA sabe algo. Tiene
-///   que ser lo leído del disco, no la pantalla de ahora: ésta nombra todos los
-///   huecos vivos, así que preguntándole el perfil no sembraría nunca.
-/// - `sembrados` son los que este proceso ya sembró. Sin ellos, un lector sin
-///   sesión guardada —una instalación nueva— volvería al directorio de arranque
-///   del perfil cada vez que entra y sale de él, porque para él la sesión no
-///   sabe nunca nada de nada.
+/// - `known` are the slots the SAVED session knows something about. It has
+///   to be what was read from disk, not the current screen: the latter
+///   names every live slot, so asking the profile about it would never seed
+///   anything.
+/// - `seeded` are the ones this process already seeded. Without them, a
+///   reader with no saved session — a fresh install — would go back to the
+///   profile's startup directory every time they enter and leave it,
+///   because as far as it is concerned the session never knows anything at
+///   all.
 ///
-/// Se devuelven en el orden del mapa —por id de hueco— para que sembrar sea
-/// determinista: dos huecos que se siembran en distinto orden acaban con el
-/// mismo contenido pero con el foco en sitios distintos.
+/// Returned in the map's order — by slot id — so that seeding is
+/// deterministic: two slots seeded in a different order end up with the
+/// same content but with focus in different places.
 ///
-/// Vive en este crate porque los dos frontends contestan la misma pregunta, y
-/// esa es exactamente la clase de decisión que escrita dos veces diverge
-/// (ADR 0077). No hace I/O: decide, y quien llame lista.
+/// Lives in this crate because both frontends answer the same question, and
+/// that is exactly the kind of decision that drifts when written twice (ADR
+/// 0077). Does no I/O: it decides, and the caller lists.
 ///
 /// ```
 /// use std::collections::{BTreeMap, BTreeSet};
@@ -295,104 +296,103 @@ pub fn profile_snapshot(
 /// let mut start = BTreeMap::new();
 /// start.insert(1, VPath::parse("file:///src").unwrap());
 /// start.insert(2, VPath::parse("file:///tmp").unwrap());
-/// let nada = BTreeSet::new();
+/// let none = BTreeSet::new();
 ///
-/// // Sin sesión y sin haber sembrado, van los dos.
-/// assert_eq!(profile_start_seeds(&start, &nada, &nada).len(), 2);
+/// // With no session and nothing seeded yet, both go.
+/// assert_eq!(profile_start_seeds(&start, &none, &none).len(), 2);
 ///
-/// // El hueco 1 lo conoce la sesión: ese lo manda ella.
-/// let conocidos = BTreeSet::from([1]);
-/// let siembra = profile_start_seeds(&start, &conocidos, &nada);
-/// assert_eq!(siembra.len(), 1);
-/// assert_eq!(siembra[0].0, 2);
+/// // Slot 1 is known to the session: that one is theirs to rule.
+/// let known = BTreeSet::from([1]);
+/// let seeds = profile_start_seeds(&start, &known, &none);
+/// assert_eq!(seeds.len(), 1);
+/// assert_eq!(seeds[0].0, 2);
 ///
-/// // Y lo ya sembrado no se vuelve a sembrar: entrar y salir del perfil no
-/// // te saca de donde estabas.
-/// let sembrados = BTreeSet::from([2]);
-/// assert!(profile_start_seeds(&start, &conocidos, &sembrados).is_empty());
+/// // And what is already seeded is not seeded again: entering and leaving
+/// // the profile does not pull you away from where you were.
+/// let seeded = BTreeSet::from([2]);
+/// assert!(profile_start_seeds(&start, &known, &seeded).is_empty());
 /// ```
 #[must_use]
 pub fn profile_start_seeds(
     start: &std::collections::BTreeMap<u32, norte_proto::VPath>,
-    conocidos: &std::collections::BTreeSet<u32>,
-    sembrados: &std::collections::BTreeSet<u32>,
+    known: &std::collections::BTreeSet<u32>,
+    seeded: &std::collections::BTreeSet<u32>,
 ) -> Vec<(u32, norte_proto::VPath)> {
     start
         .iter()
-        .filter(|(id, _)| !conocidos.contains(id) && !sembrados.contains(id))
+        .filter(|(id, _)| !known.contains(id) && !seeded.contains(id))
         .map(|(id, v)| (*id, v.clone()))
         .collect()
 }
 
-/// Los huecos que `[profile.start]` nombra y esta DISPOSICIÓN no coloca.
+/// The slots `[profile.start]` names that this LAYOUT does not place.
 ///
-/// No tienen dónde abrir, así que se caen — y eso hay que decirlo. Es la misma
-/// clase de silencio que la clave entera tenía antes de ADR 0098: se escribe
-/// algo en el fichero del perfil y no pasa nada, sin que nada explique por
-/// qué. Ocurre editando a mano o cambiando la disposición del perfil sin
-/// reguardarlo; `save_profile` siempre escribe ids que su propia disposición
-/// coloca.
+/// They have nowhere to open, so they are dropped — and that has to be
+/// said. It is the same kind of silence the whole key used to have before
+/// ADR 0098: something is written in the profile's file and nothing
+/// happens, with nothing explaining why. It happens by hand-editing or by
+/// changing the profile's layout without re-saving it; `save_profile`
+/// always writes ids its own layout places.
 ///
-/// Devuelve los ids EN ORDEN, para que el mensaje sea el mismo en las dos
-/// superficies.
+/// Returns the ids IN ORDER, so the message is the same on both surfaces.
 ///
 /// ```
 /// use std::collections::{BTreeMap, BTreeSet};
 /// use norte_proto::VPath;
-/// use norte_frontend::config::profile_start_huerfanos;
+/// use norte_frontend::config::profile_start_orphans;
 ///
 /// let mut start = BTreeMap::new();
 /// start.insert(1, VPath::parse("file:///src").unwrap());
 /// start.insert(9, VPath::parse("file:///tmp").unwrap());
-/// let colocados = BTreeSet::from([1, 2]);
-/// assert_eq!(profile_start_huerfanos(&start, &colocados), vec![9]);
+/// let placed = BTreeSet::from([1, 2]);
+/// assert_eq!(profile_start_orphans(&start, &placed), vec![9]);
 /// ```
 #[must_use]
-pub fn profile_start_huerfanos(
+pub fn profile_start_orphans(
     start: &std::collections::BTreeMap<u32, norte_proto::VPath>,
-    colocados: &std::collections::BTreeSet<u32>,
+    placed: &std::collections::BTreeSet<u32>,
 ) -> Vec<u32> {
     start
         .keys()
-        .filter(|id| !colocados.contains(id))
+        .filter(|id| !placed.contains(id))
         .copied()
         .collect()
 }
 
-/// Lee todos los perfiles de `<dir>/profiles/`, con su título y su motivo si
-/// no cargan.
+/// Reads every profile from `<dir>/profiles/`, with its title and its reason
+/// if it does not load.
 ///
-/// **Bloquea**: lista un directorio y abre un fichero por perfil. Quien la
-/// llame desde un bucle de eventos pasa por `spawn_blocking` (regla 2), y
-/// #244 es por qué.
+/// **Blocks**: lists a directory and opens one file per profile. Whoever
+/// calls it from an event loop goes through `spawn_blocking` (rule 2), and
+/// #244 is why.
 ///
-/// Un perfil que no parsea NO desaparece: vuelve con su `problem` puesto, para
-/// que el selector lo enseñe roto en vez de esconder un directorio que el
-/// lector creó.
+/// A profile that does not parse does NOT disappear: it comes back with its
+/// `problem` set, so the selector shows it broken instead of hiding a
+/// directory the reader created.
 ///
-/// Vive en este módulo y no en [`crate::profile_picker`] porque abre
-/// ficheros, y aquel es puro por contrato. Y vive en este CRATE y no en un
-/// frontend porque los dos lo necesitan igual: la ventana y el terminal
-/// enseñan la misma lista, y dos lectores del mismo directorio acaban
-/// discrepando en qué es un perfil roto.
+/// Lives in this module and not in [`crate::profile_picker`] because it
+/// opens files, and that one is pure by contract. And it lives in this
+/// CRATE and not in a frontend because both need it equally: the window and
+/// the terminal show the same list, and two readers of the same directory
+/// end up disagreeing on what counts as a broken profile.
 #[must_use]
 pub fn read_profiles(dir: &Path) -> Vec<crate::profile_picker::UserProfile> {
-    let raiz = dir.join("profiles");
-    norte_config::list_profiles(&raiz)
+    let root = dir.join("profiles");
+    norte_config::list_profiles(&root)
         .unwrap_or_default()
         .into_iter()
         .map(|name| {
-            let toml = raiz.join(&name).join("norte.toml");
+            let toml = root.join(&name).join("norte.toml");
             let (title, problem) = match std::fs::read_to_string(&toml) {
-                // Un perfil sin `norte.toml` es legítimo: puede traer solo su
-                // `layouts/` o su `keymap.toml`.
+                // A profile with no `norte.toml` is legitimate: it can bring
+                // only its `layouts/` or its `keymap.toml`.
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => (None, None),
                 Err(e) => (None, Some(e.kind().to_string())),
                 Ok(raw) => match toml::from_str::<norte_config::NorteToml>(&raw) {
                     Ok(p) => (p.profile.title, None),
-                    // El diagnóstico NO cita el contenido del fichero: la
-                    // barra de mensajes tiene un tope y una config puede
-                    // llevar rutas (#73).
+                    // The diagnostic does NOT quote the file's content: the
+                    // message bar has a cap and a config can carry paths
+                    // (#73).
                     Err(e) => (None, Some(e.message().to_owned())),
                 },
             };
@@ -411,85 +411,85 @@ mod tests {
 
     use super::*;
 
-    /// **Solo entra en `[profile.start]` lo que ES un listado.**
+    /// **Only what IS a listing enters `[profile.start]`.**
     ///
-    /// Un hueco de visor, de procesos o de sitios no tiene directorio que
-    /// recordar, y meterlo con el del panel de al lado escribiría un perfil
-    /// que al abrirse manda un visor a un directorio.
+    /// A viewer, processes, or sites slot has no directory to remember, and
+    /// lumping it in with the panel next to it would write a profile that,
+    /// on opening, sends a viewer to a directory.
     #[test]
-    fn el_start_solo_lleva_los_huecos_que_son_listado() {
+    fn start_only_carries_the_slots_that_are_a_listing() {
         use crate::layout::SlotId;
         use crate::layout::{Dir, KindId, Node};
-        let arbol = Node::split(
+        let tree = Node::split(
             Dir::Horizontal,
             vec![
                 Node::slot(SlotId(1), KindId::browser()),
                 Node::slot(SlotId(2), KindId::browser()),
             ],
         );
-        // El hueco 2 no contesta: no es un listado.
+        // Slot 2 does not answer: it is not a listing.
         let snap = profile_snapshot(
-            &arbol,
+            &tree,
             &|SlotId(n)| (n == 1).then(|| norte_proto::VPath::parse("mem:///uno").unwrap()),
             None,
         );
         assert_eq!(snap.start, [("1".to_owned(), "mem:///uno".to_owned())]);
-        assert!(snap.layout_toml.is_some(), "la disposición sí va entera");
-        assert!(snap.ui.is_empty(), "los escalares de [ui] no se copian");
+        assert!(snap.layout_toml.is_some(), "the layout does go whole");
+        assert!(snap.ui.is_empty(), "[ui]'s scalars are not copied");
         assert!(snap.keymap.is_none());
     }
 
-    /// El `keymap.toml` viaja BYTE a BYTE: es un fichero del lector, con sus
-    /// comentarios, y reescribirlo le cambiaría el suyo.
+    /// `keymap.toml` travels BYTE for BYTE: it is the reader's file, with
+    /// their comments, and rewriting it would change theirs.
     #[test]
-    fn el_keymap_se_copia_tal_cual() {
+    fn the_keymap_is_copied_as_is() {
         use crate::layout::SlotId;
         use crate::layout::{KindId, Node};
-        let arbol = Node::slot(SlotId(1), KindId::browser());
-        let crudo = b"# mio\n[pane]\nkeymap = []\n\xff".to_vec();
-        let snap = profile_snapshot(&arbol, &|SlotId(_)| None, Some(crudo.clone()));
-        assert_eq!(snap.keymap.as_deref(), Some(crudo.as_slice()));
+        let tree = Node::slot(SlotId(1), KindId::browser());
+        let raw = b"# mio\n[pane]\nkeymap = []\n\xff".to_vec();
+        let snap = profile_snapshot(&tree, &|SlotId(_)| None, Some(raw.clone()));
+        assert_eq!(snap.keymap.as_deref(), Some(raw.as_slice()));
     }
 
-    /// Un árbol con capa de usuario y un perfil `work` cuyo contenido se da.
-    fn arbol_con_perfil(
-        ficheros: &[(&str, &str)],
+    /// A tree with a user layer and a `work` profile whose content is given.
+    fn tree_with_profile(
+        files: &[(&str, &str)],
     ) -> (
         impl Fn(Option<&std::ffi::OsStr>) -> Layers + use<>,
         tempfile::TempDir,
     ) {
-        let usuario = tempfile::tempdir().expect("tempdir");
-        let dir = usuario.path().join("profiles").join("work");
+        let user = tempfile::tempdir().expect("tempdir");
+        let dir = user.path().join("profiles").join("work");
         std::fs::create_dir_all(&dir).expect("mkdir");
-        for (nombre, contenido) in ficheros {
-            std::fs::write(dir.join(nombre), contenido).expect("write");
+        for (name, content) in files {
+            std::fs::write(dir.join(name), content).expect("write");
         }
-        let raiz = usuario.path().to_path_buf();
+        let root = user.path().to_path_buf();
         let f = move |n: Option<&std::ffi::OsStr>| Layers {
             dirs: match n {
-                None => vec![(raiz.clone(), Layer::User)],
+                None => vec![(root.clone(), Layer::User)],
                 Some(n) => vec![
-                    (raiz.clone(), Layer::User),
-                    (raiz.join("profiles").join(n), Layer::Profile),
+                    (root.clone(), Layer::User),
+                    (root.join("profiles").join(n), Layer::Profile),
                 ],
             },
         };
-        (f, usuario)
+        (f, user)
     }
 
-    /// D7 es una regla sobre la CAPA, no sobre `norte.toml`.
+    /// D7 is a rule about the LAYER, not about `norte.toml`.
     ///
-    /// Un `keymap.toml` roto en el perfil PEGAJOSO tiene que degradar igual:
-    /// `load_keymap_layer` es fatal para toda capa que no sea de proyecto, así
-    /// que pasando solo por el cargador de `norte.toml` un perfil con una
-    /// errata en un atajo se declaraba sano y reventaba después — dejando al
-    /// lector fuera del programa y sin manera de elegir otro, que es justo lo
-    /// que D7 existe para impedir (#305).
+    /// A broken `keymap.toml` in the STICKY profile has to degrade the same
+    /// way: `load_keymap_layer` is fatal for any layer that is not project,
+    /// so going only through `norte.toml`'s loader a profile with a typo in
+    /// a shortcut declared itself healthy and blew up later — leaving the
+    /// reader outside the program with no way to choose another, which is
+    /// exactly what D7 exists to prevent (#305).
     #[test]
-    fn un_keymap_roto_en_el_perfil_pegajoso_degrada() {
-        // `keymap` (la lista ENTERA) es clave solo de preset: en una capa es
-        // un error que nombra el fichero culpable.
-        let (layers_for, _g) = arbol_con_perfil(&[
+    fn a_broken_keymap_in_the_sticky_profile_degrades() {
+        // `keymap` (the WHOLE list) is a preset-only key: in a layer it is
+        // an error naming the culprit file.
+        let (layers_for, _g) = tree_with_profile(&[
             ("norte.toml", "[ui]\ntheme = \"nord\"\n"),
             (
                 "keymap.toml",
@@ -499,9 +499,9 @@ mod tests {
         let work = std::ffi::OsStr::new("work");
 
         let r = load_with_profile(&layers_for, Some(work), norte_config::ProfileSource::Sticky)
-            .expect("arranca igual");
-        assert_eq!(r.active, None, "sin capa de perfil");
-        assert!(r.degraded.is_some(), "y no en silencio");
+            .expect("starts the same");
+        assert_eq!(r.active, None, "no profile layer");
+        assert!(r.degraded.is_some(), "and not silently");
 
         assert!(
             load_with_profile(
@@ -510,30 +510,30 @@ mod tests {
                 norte_config::ProfileSource::Explicit
             )
             .is_err(),
-            "con --profile es fatal: el lector nombró ese perfil"
+            "with --profile it is fatal: the reader named that profile"
         );
     }
 
-    /// Lo mismo con `openers.toml`, que es la otra mitad de la capa y también
-    /// es fatal fuera de proyecto.
+    /// The same with `openers.toml`, which is the other half of the layer and
+    /// is also fatal outside of project.
     #[test]
-    fn un_openers_roto_en_el_perfil_pegajoso_degrada() {
-        let (layers_for, _g) = arbol_con_perfil(&[("openers.toml", "[[opener]]\nmime = 3\n")]);
+    fn a_broken_openers_in_the_sticky_profile_degrades() {
+        let (layers_for, _g) = tree_with_profile(&[("openers.toml", "[[opener]]\nmime = 3\n")]);
         let r = load_with_profile(
             &layers_for,
             Some(std::ffi::OsStr::new("work")),
             norte_config::ProfileSource::Sticky,
         )
-        .expect("arranca igual");
+        .expect("starts the same");
         assert_eq!(r.active, None);
         assert!(r.degraded.is_some());
     }
 
-    /// El camino feliz trae el keymap DEL PERFIL, y su kind viaja para que
-    /// `split_at` pueda cortar por él (D10).
+    /// The happy path brings the PROFILE's keymap, and its kind travels so
+    /// `split_at` can cut by it (D10).
     #[test]
-    fn un_perfil_sano_aporta_su_capa_de_keymap() {
-        let (layers_for, _g) = arbol_con_perfil(&[(
+    fn a_healthy_profile_contributes_its_keymap_layer() {
+        let (layers_for, _g) = tree_with_profile(&[(
             "keymap.toml",
             "[pane]\nprepend_keymap = [{ on = [\"f5\"], run = \"pane.move\" }]\n",
         )]);
@@ -542,43 +542,43 @@ mod tests {
             Some(std::ffi::OsStr::new("work")),
             norte_config::ProfileSource::Explicit,
         )
-        .expect("carga");
+        .expect("loads");
         assert_eq!(r.active.as_deref(), Some(std::ffi::OsStr::new("work")));
         assert_eq!(r.config.keymap_layer_kinds, vec![Layer::Profile]);
     }
 
-    /// #28 seguridad: un `openers.toml` en la capa de PROYECTO (`./.norte`) se
-    /// IGNORA fail-closed — un repo hostil no puede inyectar un binario que se
-    /// ejecute al pulsar F4. La capa de USUARIO sí se honra.
+    /// #28 security: an `openers.toml` in the PROJECT layer (`./.norte`) is
+    /// IGNORED fail-closed — a hostile repo cannot inject a binary that runs
+    /// when F4 is pressed. The USER layer IS honored.
     #[test]
-    fn openers_de_proyecto_se_ignoran_usuario_se_honra() {
-        let usuario = tempfile::tempdir().unwrap();
+    fn project_openers_are_ignored_user_ones_are_honored() {
+        let user = tempfile::tempdir().unwrap();
         std::fs::write(
-            usuario.path().join("openers.toml"),
+            user.path().join("openers.toml"),
             "[[opener]]\nmime = \"text/*\"\ncommand = [\"bat\", \"%f\"]\n",
         )
         .unwrap();
-        let proyecto = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
         std::fs::write(
-            proyecto.path().join("openers.toml"),
+            project.path().join("openers.toml"),
             "[[opener]]\nmime = \"text/*\"\ncommand = [\"curl-malicioso\", \"%f\"]\n",
         )
         .unwrap();
         let layers = Layers {
             dirs: vec![
-                (usuario.path().to_path_buf(), Layer::User),
-                (proyecto.path().to_path_buf(), Layer::Project),
+                (user.path().to_path_buf(), Layer::User),
+                (project.path().to_path_buf(), Layer::Project),
             ],
         };
-        let cfg = load(&layers).expect("carga");
-        // Resuelve al opener del USUARIO, jamás al del proyecto.
+        let cfg = load(&layers).expect("loads");
+        // Resolves to the USER's opener, never the project's.
         assert_eq!(
             cfg.openers
                 .resolve_for("text/plain", "linux")
                 .unwrap()
                 .program(),
             "bat",
-            "el opener de proyecto se ignora fail-closed"
+            "the project opener is ignored fail-closed"
         );
     }
 
@@ -590,7 +590,7 @@ mod tests {
     /// key that drifted there would only show up as a user's entire keymap
     /// silently reverting on the next reload.
     #[test]
-    fn un_binding_persistido_carga_y_resuelve() {
+    fn a_persisted_binding_loads_and_resolves() {
         use crate::keymap::{Effective, Screen, parse_chord, parse_keymap};
 
         let dir = tempfile::tempdir().unwrap();
@@ -607,46 +607,47 @@ mod tests {
         let layers = Layers {
             dirs: vec![(dir.path().to_path_buf(), Layer::User)],
         };
-        let cfg = load(&layers).expect("lo escrito por el persistidor CARGA");
+        let cfg = load(&layers).expect("what the persister wrote LOADS");
         assert_eq!(cfg.keymap_layers.len(), 1);
-        // Un preset mínimo: el pin es sobre la CAPA, no sobre un preset
-        // concreto, y así `ctrl+g` no puede chocar con lo que el preset del
-        // día bindee.
+        // A minimal preset: the pin is about the LAYER, not about a specific
+        // preset, so `ctrl+g` cannot collide with whatever the preset of the
+        // day binds.
         let preset =
             parse_keymap("[pane]\nkeymap = [{ on = [\"j\"], run = \"cursor.down\" }]\n").unwrap();
-        // `build_for` es quien corre `check_layer_keys`: si el escritor
-        // hubiese producido `keymap` (o `counts`, o `dialog_from`) esto sería
-        // `Err` y la config del usuario se habría revertido entera.
+        // `build_for` is the one that runs `check_layer_keys`: had the
+        // writer produced `keymap` (or `counts`, or `dialog_from`) this
+        // would be `Err` and the user's config would have reverted whole.
         let eff = Effective::build_for(
             &preset,
             &cfg.keymap_layers,
-            // El set del frontend: sin él un comando del catálogo resuelve
-            // `NotHere` (no lo sirve ESTA pantalla) y `single_chord_runs`
-            // diría `false` por una razón que no es la que se prueba.
+            // The frontend's set: without it a catalogue command resolves
+            // `NotHere` (this screen does not serve it) and
+            // `single_chord_runs` would say `false` for a reason that is not
+            // the one being tested.
             &["cursor.top", "cursor.down"],
             Screen::Browse,
         )
-        .expect("la capa escrita es una capa legal");
+        .expect("the written layer is a legal layer");
         assert!(
             eff.single_chord_runs(parse_chord("ctrl+g").unwrap(), "cursor.top"),
-            "el binding persistido resuelve"
+            "the persisted binding resolves"
         );
     }
 
-    /// K3c c1, la razón de que `persist_keymap_bind` lleve `KeymapList`: sobre
-    /// una tecla que el PRESET ya bindea EN EL MISMO contexto, solo un
-    /// `prepend_keymap` gana. Un `append_keymap` parsea, carga, valida — y no
-    /// dispara nunca, porque el orden de fusión es prepends → preset →
-    /// appends y gana el PRIMERO. Escrito como test y no como comentario
-    /// porque es exactamente el fallo que un editor de atajos comete callando:
-    /// "guardado", y la tecla sigue haciendo lo de antes.
+    /// K3c c1, the reason `persist_keymap_bind` carries a `KeymapList`: on a
+    /// key the PRESET already binds in the SAME context, only a
+    /// `prepend_keymap` wins. An `append_keymap` parses, loads, validates —
+    /// and never fires, because the merge order is prepends → preset →
+    /// appends and the FIRST one wins. Written as a test and not as a
+    /// comment because it is exactly the mistake a shortcut editor makes
+    /// silently: "saved", and the key keeps doing what it did before.
     #[test]
-    fn solo_un_prepend_pisa_al_preset_en_su_propio_contexto() {
+    fn only_a_prepend_overrides_the_preset_in_its_own_context() {
         use crate::keymap::{Effective, Screen, parse_chord, parse_keymap};
 
         let preset =
             parse_keymap("[pane]\nkeymap = [{ on = [\"f5\"], run = \"pane.copy\" }]\n").unwrap();
-        let efectivo = |list| {
+        let effective = |list| {
             let dir = tempfile::tempdir().unwrap();
             norte_config::persist_keymap_bind(
                 dir.path(),
@@ -659,49 +660,50 @@ mod tests {
             let layers = Layers {
                 dirs: vec![(dir.path().to_path_buf(), Layer::User)],
             };
-            let cfg = load(&layers).expect("carga");
+            let cfg = load(&layers).expect("loads");
             Effective::build_for(
                 &preset,
                 &cfg.keymap_layers,
                 &["pane.copy", "pane.move"],
                 Screen::Browse,
             )
-            .expect("capa legal")
+            .expect("legal layer")
         };
         let f5 = parse_chord("f5").unwrap();
         assert!(
-            efectivo(norte_config::KeymapList::Prepend).single_chord_runs(f5, "pane.move"),
-            "un prepend pisa al preset: es lo que un rebind necesita"
+            effective(norte_config::KeymapList::Prepend).single_chord_runs(f5, "pane.move"),
+            "a prepend overrides the preset: it is what a rebind needs"
         );
         assert!(
-            efectivo(norte_config::KeymapList::Append).single_chord_runs(f5, "pane.copy"),
-            "un append NO pisa al preset — el binding se escribe y no hace nada"
+            effective(norte_config::KeymapList::Append).single_chord_runs(f5, "pane.copy"),
+            "an append does NOT override the preset — the binding is written and does nothing"
         );
     }
 
-    /// `dialog_from` es clave de PRESET (ADR 0045). Una capa que la use tiene
-    /// que enterarse por su nombre: si la capa se parsease con `parse_keymap`,
-    /// la herencia se resolvería ANTES del chequeo de `has_full_keymap`, que
-    /// mira `dialog.keymap` — y el usuario recibiría un error sobre `keymap`,
-    /// una clave que no escribió. Este test es la única red que hay a la
-    /// altura del cargador; `check_layer_keys` se prueba aparte y no ve esto.
+    /// `dialog_from` is a PRESET key (ADR 0045). A layer that uses it has to
+    /// find out by its own name: if the layer were parsed with
+    /// `parse_keymap`, inheritance would resolve BEFORE the
+    /// `has_full_keymap` check, which looks at `dialog.keymap` — and the
+    /// user would get an error about `keymap`, a key they did not write.
+    /// This test is the only safety net at the loader's level;
+    /// `check_layer_keys` is tested separately and does not see this.
     #[test]
-    fn una_capa_con_dialog_from_falla_nombrando_dialog_from() {
-        let usuario = tempfile::tempdir().unwrap();
+    fn a_layer_with_dialog_from_fails_naming_dialog_from() {
+        let user = tempfile::tempdir().unwrap();
         std::fs::write(
-            usuario.path().join("keymap.toml"),
+            user.path().join("keymap.toml"),
             "dialog_from = \"orthodox\"\n",
         )
         .unwrap();
         let layers = Layers {
-            dirs: vec![(usuario.path().to_path_buf(), Layer::User)],
+            dirs: vec![(user.path().to_path_buf(), Layer::User)],
         };
-        let e = load(&layers).expect_err("una capa no puede heredar [dialog]");
+        let e = load(&layers).expect_err("a layer cannot inherit [dialog]");
         let msg = e.to_string();
         assert!(msg.contains("dialog_from"), "{msg}");
         assert!(
             !msg.contains("prepend_keymap"),
-            "el diagnóstico habla de la clave equivocada: {msg}"
+            "the diagnostic names the wrong key: {msg}"
         );
     }
 
@@ -713,98 +715,97 @@ mod tests {
     /// index; without it a shortcut editor cutting this list would model its
     /// write into the system layer (see `RebindSources::split_at`).
     #[test]
-    fn keymap_layer_kinds_va_en_paralelo_a_las_capas_presentes() {
-        let sistema = tempfile::tempdir().unwrap();
+    fn keymap_layer_kinds_runs_parallel_to_the_layers_present() {
+        let system = tempfile::tempdir().unwrap();
         std::fs::write(
-            sistema.path().join("keymap.toml"),
+            system.path().join("keymap.toml"),
             "[pane]\nprepend_keymap = [{ on = [\"j\"], run = \"cursor.down\" }]\n",
         )
         .unwrap();
-        // El usuario todavía no tiene fichero: el primer rebind de una
-        // instalación nueva.
-        let usuario = tempfile::tempdir().unwrap();
-        let proyecto = tempfile::tempdir().unwrap();
+        // The user has no file yet: a fresh install's first rebind.
+        let user = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
         std::fs::write(
-            proyecto.path().join("keymap.toml"),
+            project.path().join("keymap.toml"),
             "[pane]\nprepend_keymap = [{ on = [\"k\"], run = \"cursor.up\" }]\n",
         )
         .unwrap();
         let layers = Layers {
             dirs: vec![
-                (sistema.path().to_path_buf(), Layer::System),
-                (usuario.path().to_path_buf(), Layer::User),
-                (proyecto.path().to_path_buf(), Layer::Project),
+                (system.path().to_path_buf(), Layer::System),
+                (user.path().to_path_buf(), Layer::User),
+                (project.path().to_path_buf(), Layer::Project),
             ],
         };
-        let cfg = load(&layers).expect("carga");
-        assert_eq!(cfg.keymap_layers.len(), 2, "el usuario no aporta fichero");
+        let cfg = load(&layers).expect("loads");
+        assert_eq!(cfg.keymap_layers.len(), 2, "the user contributes no file");
         assert_eq!(
             cfg.keymap_layer_kinds,
             vec![Layer::System, Layer::Project],
-            "el kind viaja con la capa, no con el índice"
+            "the kind travels with the layer, not with the index"
         );
         assert!(
             cfg.keymap_layers[1].is_project(),
-            "y la de proyecto sigue marcada"
+            "and the project one is still marked"
         );
     }
 
-    /// #28: entre capas, la superior (usuario) gana el empate de mimetype.
+    /// #28: between layers, the higher one (user) wins the mimetype tie.
     #[test]
-    fn openers_usuario_gana_sobre_sistema() {
-        let sistema = tempfile::tempdir().unwrap();
+    fn user_openers_win_over_system() {
+        let system = tempfile::tempdir().unwrap();
         std::fs::write(
-            sistema.path().join("openers.toml"),
+            system.path().join("openers.toml"),
             "[[opener]]\nmime = \"text/*\"\ncommand = [\"less\", \"%f\"]\n",
         )
         .unwrap();
-        let usuario = tempfile::tempdir().unwrap();
+        let user = tempfile::tempdir().unwrap();
         std::fs::write(
-            usuario.path().join("openers.toml"),
+            user.path().join("openers.toml"),
             "[[opener]]\nmime = \"text/*\"\ncommand = [\"bat\", \"%f\"]\n",
         )
         .unwrap();
         let layers = Layers {
             dirs: vec![
-                (sistema.path().to_path_buf(), Layer::System),
-                (usuario.path().to_path_buf(), Layer::User),
+                (system.path().to_path_buf(), Layer::System),
+                (user.path().to_path_buf(), Layer::User),
             ],
         };
-        let cfg = load(&layers).expect("carga");
+        let cfg = load(&layers).expect("loads");
         assert_eq!(
             cfg.openers
                 .resolve_for("text/plain", "linux")
                 .unwrap()
                 .program(),
             "bat",
-            "la capa de usuario (superior) gana"
+            "the user layer (higher) wins"
         );
     }
 
     /// The combined loader wires all three passes: scalars, keymap layers,
     /// openers — and maps `quick_search` onto `nav::Mode`.
     #[test]
-    fn load_combina_escalares_keymap_y_openers() {
-        let usuario = tempfile::tempdir().unwrap();
+    fn load_combines_scalars_keymap_and_openers() {
+        let user = tempfile::tempdir().unwrap();
         std::fs::write(
-            usuario.path().join("norte.toml"),
+            user.path().join("norte.toml"),
             "[ui]\nquick_search = \"jump\"\n[keymap]\npreset = \"vim\"\n",
         )
         .unwrap();
         std::fs::write(
-            usuario.path().join("keymap.toml"),
+            user.path().join("keymap.toml"),
             "[pane]\nprepend_keymap = [{ on = [\"j\"], run = \"cursor.down\" }]\n",
         )
         .unwrap();
         std::fs::write(
-            usuario.path().join("openers.toml"),
+            user.path().join("openers.toml"),
             "[[opener]]\nmime = \"text/*\"\ncommand = [\"bat\", \"%f\"]\n",
         )
         .unwrap();
         let layers = Layers {
-            dirs: vec![(usuario.path().to_path_buf(), Layer::User)],
+            dirs: vec![(user.path().to_path_buf(), Layer::User)],
         };
-        let cfg = load(&layers).expect("carga");
+        let cfg = load(&layers).expect("loads");
         assert_eq!(cfg.common.preset, "vim");
         assert_eq!(cfg.quick_search_mode, nav::Mode::Jump);
         assert_eq!(cfg.keymap_layers.len(), 1);

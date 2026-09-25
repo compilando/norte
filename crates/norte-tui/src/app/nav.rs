@@ -1,5 +1,5 @@
-//! El popup de navegación visto desde `App`: historial, hotlist y volúmenes,
-//! su entrada de teclado y el guardado y borrado de una entrada de hotlist.
+//! The navigation popup as seen from `App`: history, hotlist and volumes,
+//! its key input, and saving and deleting a hotlist entry.
 
 use super::nav_popup::{NavItem, NavPopup, NavPopupKind, nav_item_display};
 use super::{App, PickerAction, display_name};
@@ -7,30 +7,30 @@ use norte_i18n::t;
 use norte_proto::VPath;
 
 impl App {
-    /// Abre el popup de navegación (spec 2026-07-18): historial del pane
-    /// con foco (más reciente primero) o la copia de hotlist. Los items se
-    /// construyen YA saneados aquí (`nav_item_display`); una entrada de
-    /// hotlist inválida se muestra con su aviso y destino `None`.
+    /// Opens the navigation popup (spec 2026-07-18): the focused pane's
+    /// history (most recent first) or the hotlist copy. Items are built
+    /// ALREADY sanitized here (`nav_item_display`); an invalid hotlist entry
+    /// shows with its warning and a `None` destination.
     ///
     /// # Panics
-    /// Con `NavPopupKind::Volumes`: esos items necesitan un fetch ASYNC
-    /// contra `Backend::volumes` que este método (síncrono, sin `Backend`)
-    /// no puede hacer — `main.rs` abre ese kind vía
-    /// [`Self::open_volumes_popup`], nunca aquí.
+    /// With `NavPopupKind::Volumes`: those items need an ASYNC fetch against
+    /// `Backend::volumes` that this method (synchronous, no `Backend`)
+    /// can't do — `main.rs` opens that kind via
+    /// [`Self::open_volumes_popup`], never here.
     pub fn open_nav_popup(&mut self, kind: NavPopupKind) {
         let pane = self.focus;
         self.open_nav_popup_for(kind, pane, None, None);
     }
 
-    /// La historia de un LADO de la pantalla (`pane.history-left/-right`,
-    /// spec 2026-09-15 D7): lo elegido navega ESE panel aunque el foco esté en
-    /// el otro, y el lado se congela al abrir, como en los volúmenes.
+    /// A SIDE of the screen's history (`pane.history-left/-right`, spec
+    /// 2026-09-15 D7): what's chosen navigates THAT panel even if focus is
+    /// on the other one, and the side is frozen on open, like volumes.
     pub fn open_side_history(&mut self, side: usize) {
         self.open_nav_popup_for(NavPopupKind::History, side, Some(side), None);
     }
 
-    /// Abre el popup de `kind` sobre el pane `pane`. `side` solo lo lleva una
-    /// historia abierta por lado, para el título.
+    /// Opens the `kind` popup over pane `pane`. `side` is only carried by a
+    /// history opened per side, for the title.
     fn open_nav_popup_for(
         &mut self,
         kind: NavPopupKind,
@@ -42,28 +42,29 @@ impl App {
         let mut cursor = 0;
         let items: Vec<NavItem> = match kind {
             NavPopupKind::Volumes => unreachable!(
-                "Volumes se abre vía `open_volumes_popup` (design §D), nunca `open_nav_popup`"
+                "Volumes opens via `open_volumes_popup` (design §D), never `open_nav_popup`"
             ),
             NavPopupKind::History | NavPopupKind::Popular => {
-                // Las filas son las COMPARTIDAS: qué sale, en qué orden y con
-                // qué marca lo decide `norte_frontend::history`, igual que en
-                // la ventana (ADR 0077).
+                // The rows are the SHARED ones: what comes out, in what
+                // order and with what mark is decided by
+                // `norte_frontend::history`, same as in the window
+                // (ADR 0077).
                 let current = self.panes[pane].dir().clone();
-                let filtro = filter.as_deref().unwrap_or("");
+                let filter_str = filter.as_deref().unwrap_or("");
                 let rows = if kind == NavPopupKind::History {
                     norte_frontend::history::history_rows(
                         &self.history[pane],
                         &current,
-                        filtro,
+                        filter_str,
                         enc,
                     )
                 } else {
-                    norte_frontend::history::popular_rows(&self.popular, &current, filtro)
+                    norte_frontend::history::popular_rows(&self.popular, &current, filter_str)
                 };
                 cursor = norte_frontend::history::start_cursor(&rows);
-                // Los populares son de toda la sesión: la reinterpretación de UN
-                // panel aplicada a rutas de otro inventaría mojibake
-                // (encoding-auditor, fase 1).
+                // Popular entries span the whole session: ONE panel's
+                // reinterpretation applied to another's paths would invent
+                // mojibake (encoding-auditor, phase 1).
                 let enc = if kind == NavPopupKind::History {
                     enc
                 } else {
@@ -78,9 +79,10 @@ impl App {
                     let (display, target) = if let Ok(p) = &h.target {
                         (nav_item_display(Some(&h.name), p, enc), Some(p.clone()))
                     } else {
-                        // review MINOR T5: el flag hostil del name NO se
-                        // descarta — una inválida con name bidi también
-                        // lleva el badge (mismo criterio que el resto).
+                        // review MINOR T5: the name's hostile flag is NOT
+                        // discarded — an invalid one with a bidi name also
+                        // carries the badge (same criterion as everything
+                        // else).
                         let (name, hostile) = display_name(h.name.as_bytes());
                         let notice = t("hotlist-invalid");
                         let display = if hostile {
@@ -111,9 +113,10 @@ impl App {
         });
     }
 
-    /// El OTRO panel respecto al que navega el popup abierto: el destino del
-    /// foco si el popup es del foco, y el foco si el popup es de un lado que
-    /// no lo tiene (`dialog.confirm-other`, spec 2026-09-15 D2).
+    /// The OTHER panel relative to the one the open popup navigates: the
+    /// focus's destination if the popup is the focus's, and the focus if
+    /// the popup is a side's that doesn't have it (`dialog.confirm-other`,
+    /// spec 2026-09-15 D2).
     #[must_use]
     pub fn nav_popup_other_pane(&self) -> Option<usize> {
         let pane = self.nav_popup.as_ref()?.target_pane;
@@ -124,8 +127,8 @@ impl App {
         }
     }
 
-    /// Quita la fila del cursor de la historia o de los populares
-    /// (`dialog.remove`) y rehace la lista conservando el cursor.
+    /// Removes the cursor's row from history or from popular entries
+    /// (`dialog.remove`) and rebuilds the list keeping the cursor.
     pub fn nav_popup_remove_selected(&mut self) {
         let Some(p) = &self.nav_popup else {
             return;
@@ -135,9 +138,10 @@ impl App {
             return;
         };
         match kind {
-            // La fila «aquí» no se quita: la lista la pone siempre, y
-            // `History::remove` podaría del rastro el directorio actual y su
-            // punto de salto sin que se viera (rust-reviewer, fase 1).
+            // The "here" row doesn't get removed: the list always puts it
+            // there, and `History::remove` would prune the current
+            // directory and its jump point from the trail without it
+            // showing (rust-reviewer, phase 1).
             NavPopupKind::History if path == *self.panes[pane].dir() => return,
             NavPopupKind::History => self.history[pane].remove(&path),
             NavPopupKind::Popular => self.popular.remove(&path),
@@ -146,8 +150,9 @@ impl App {
         self.reopen_history_popup();
     }
 
-    /// Vacía la historia del panel o los populares (`dialog.clear`). Sin
-    /// confirmación: es memoria de navegación, no ficheros, y el aviso lo dice.
+    /// Clears the panel's history or the popular entries (`dialog.clear`).
+    /// No confirmation: it's navigation memory, not files, and the notice
+    /// says so.
     pub fn nav_popup_clear(&mut self) {
         let Some(p) = &self.nav_popup else {
             return;
@@ -168,8 +173,8 @@ impl App {
         self.reopen_history_popup();
     }
 
-    /// Rehace una lista de historia o de populares tras cambiarla, con el
-    /// cursor donde estaba (acotado).
+    /// Rebuilds a history or popular list after changing it, with the
+    /// cursor where it was (clamped).
     fn reopen_history_popup(&mut self) {
         let Some(p) = &self.nav_popup else {
             return;
@@ -182,18 +187,18 @@ impl App {
         }
     }
 
-    /// Abre el popup de volúmenes (`pane.select-drive`/`-left`/`-right`,
-    /// design §D) con `items` YA construidos por [`super::nav_popup::volume_items`] — `main.rs`
-    /// hace el fetch async contra `Backend::volumes` y llama aquí, mismo
-    /// reparto que el resto de este popup: main.rs es I/O, app.rs es estado y
-    /// presentación.
+    /// Opens the volumes popup (`pane.select-drive`/`-left`/`-right`, design
+    /// §D) with `items` ALREADY built by
+    /// [`super::nav_popup::volume_items`] — `main.rs` does the async fetch
+    /// against `Backend::volumes` and calls here, the same split as the
+    /// rest of this popup: main.rs is I/O, app.rs is state and
+    /// presentation.
     ///
-    /// `pane` es el LADO que `Confirm` va a navegar: el foco para
-    /// `pane.select-drive`, un lado fijo para `-left`/`-right`
-    /// independientemente del foco actual. `include_pseudo` es el modo con el
-    /// que se pidió ESTA lista — el toggle de dentro del popup vuelve a
-    /// llamar aquí con el valor invertido, así que esto es literalmente una
-    /// re-apertura, no un caso especial.
+    /// `pane` is the SIDE `Confirm` is going to navigate: the focus for
+    /// `pane.select-drive`, a fixed side for `-left`/`-right` regardless of
+    /// current focus. `include_pseudo` is the mode THIS list was requested
+    /// with — the toggle inside the popup calls back here with the value
+    /// flipped, so this is literally a re-open, not a special case.
     pub fn open_volumes_popup(&mut self, pane: usize, include_pseudo: bool, items: Vec<NavItem>) {
         self.nav_popup = Some(NavPopup {
             kind: NavPopupKind::Volumes,
@@ -207,12 +212,13 @@ impl App {
         });
     }
 
-    /// Procesa una acción sobre el popup de navegación. `Confirm` con un
-    /// item VÁLIDO cierra el popup y devuelve su destino (el caller navega
-    /// por el flujo de cd normal); sobre un item inválido (o sin items) es
-    /// no-op — el popup sigue abierto. `Cancel` cierra el `name_input` si
-    /// está activo, y si no, el popup. El caller no debe llamar a `Confirm`
-    /// con `name_input` activo (Enter ahí confirma el ADD, main.rs).
+    /// Processes an action on the navigation popup. `Confirm` with a VALID
+    /// item closes the popup and returns its destination (the caller
+    /// navigates through the normal cd flow); over an invalid item (or no
+    /// items) it's a no-op — the popup stays open. `Cancel` closes the
+    /// `name_input` if active, and if not, the popup. The caller must not
+    /// call `Confirm` with `name_input` active (Enter there confirms the
+    /// ADD, main.rs).
     pub fn nav_popup_input(&mut self, action: PickerAction) -> Option<VPath> {
         match action {
             PickerAction::Up => {
@@ -251,31 +257,31 @@ impl App {
         }
     }
 
-    /// Abre el input de nombre del popup de hotlist (`a`), prellenado con lo
-    /// que [`norte_frontend::places::suggested_hotlist_name`] propone para el
-    /// dir del pane con foco —el mismo que se va a guardar— ya libre de los
-    /// nombres que la hotlist tiene puestos. En el popup de historial es no-op
-    /// (no hay nada que nombrar).
+    /// Opens the hotlist popup's name input (`a`), pre-filled with what
+    /// [`norte_frontend::places::suggested_hotlist_name`] proposes for the
+    /// focused pane's dir — the same one that's about to be saved — already
+    /// clear of the names the hotlist already has taken. In the history
+    /// popup it's a no-op (nothing to name).
     ///
-    /// Prellenado y EDITABLE, el mismo molde que el nombre del destino de una
-    /// copia: el campo en blanco pedía teclear a mano lo que el path ya
-    /// intuía. Vacío sigue queriendo decir cancelar (`main.rs`), así que
-    /// borrarlo entero sigue siendo la salida.
+    /// Pre-filled and EDITABLE, the same mold as a copy's destination name:
+    /// a blank field asked for typing by hand what the path already
+    /// implied. Empty still means cancel (`main.rs`), so deleting it whole
+    /// is still the way out.
     pub fn nav_popup_open_name_input(&mut self) {
         let Some(target) = self.nav_popup_add_target() else {
             return;
         };
-        let ocupados: Vec<&str> = self.hotlist.iter().map(|h| h.name.as_str()).collect();
-        let sugerido = norte_frontend::places::suggested_hotlist_name(&target, &ocupados);
+        let taken: Vec<&str> = self.hotlist.iter().map(|h| h.name.as_str()).collect();
+        let suggested = norte_frontend::places::suggested_hotlist_name(&target, &taken);
         if let Some(p) = &mut self.nav_popup {
-            p.name_input = Some(sugerido);
+            p.name_input = Some(suggested);
         }
     }
 
-    /// A dónde apunta el favorito que `dialog.add` crea desde el popup: el
-    /// directorio del pane con foco en la lista de favoritos, y la FILA del
-    /// cursor en una lista de historia o de populares (spec 2026-09-15 D2).
-    /// `None` en volúmenes o sin fila.
+    /// What the favorite `dialog.add` creates from the popup points at: the
+    /// focused pane's directory in the favorites list, and the cursor's ROW
+    /// in a history or popular list (spec 2026-09-15 D2). `None` in volumes
+    /// or with no row.
     #[must_use]
     pub fn nav_popup_add_target(&self) -> Option<VPath> {
         let p = self.nav_popup.as_ref()?;
@@ -286,9 +292,9 @@ impl App {
         }
     }
 
-    /// Cambia el filtro de una lista de historia o de populares y la rehace
-    /// (spec 2026-09-15 D2). El cursor vuelve al principio: la lista es otra.
-    /// `None` quita el filtro.
+    /// Changes a history or popular list's filter and rebuilds it (spec
+    /// 2026-09-15 D2). The cursor goes back to the start: it's a different
+    /// list. `None` removes the filter.
     pub fn nav_popup_set_filter(&mut self, filter: Option<String>) {
         let Some(p) = &self.nav_popup else {
             return;
@@ -300,38 +306,38 @@ impl App {
         self.open_nav_popup_for(kind, pane, side, filter);
     }
 
-    /// El `name` CRUDO del favorito seleccionado (la clave que necesita
-    /// `persist_hotlist_remove` — el display del item va saneado y NO sirve
-    /// como clave). Sale de la clave CONGELADA en el propio item
-    /// ([`NavItem::hotlist_name`]): jamás se indexa `App::hotlist`, que un
-    /// hot-reload pudo mutar bajo el popup (review MAJOR T5 — borraría
-    /// otro favorito). `None` en historial o sin items.
+    /// The selected favorite's RAW `name` (the key `persist_hotlist_remove`
+    /// needs — the item's display is sanitized and does NOT serve as a
+    /// key). Comes from the key FROZEN in the item itself
+    /// ([`NavItem::hotlist_name`]): `App::hotlist` is never indexed, which a
+    /// hot-reload could have mutated under the popup (review MAJOR T5 — it
+    /// would delete another favorite). `None` in history or with no items.
     #[must_use]
     pub fn nav_popup_selected_hotlist_name(&self) -> Option<String> {
         self.nav_popup.as_ref()?.selected()?.hotlist_name.clone()
     }
 
-    /// Reemplaza la lista de favoritos vigente y la lleva a las dos
-    /// superficies que la enseñan.
+    /// Replaces the current favorites list and carries it to the two
+    /// surfaces that show it.
     ///
-    /// La usan el arranque, el hot-reload del `norte.toml` y el cambio de
-    /// perfil. Antes cada uno escribía `App::hotlist` a pelo, y el sidebar se
-    /// quedaba con la lista de antes sin que nada volviera a tocarlo.
+    /// Used by startup, `norte.toml`'s hot-reload and switching profiles.
+    /// Before, each one wrote `App::hotlist` bare, and the sidebar was left
+    /// with the old list with nothing ever touching it again.
     ///
-    /// Un popup ABIERTO no se reconstruye, y eso es lo contrario de lo que
-    /// hacen el alta y la baja: sus items son una foto congelada al abrirlo
-    /// (ver [`NavPopup`]) porque `dialog.remove` borra por el nombre de la
-    /// fila, y una lista que se mueve bajo el cursor por un fichero editado
-    /// fuera borraría otra cosa.
+    /// An OPEN popup does NOT get rebuilt, and that's the opposite of what
+    /// adding and removing do: its items are a snapshot frozen on opening
+    /// (see [`NavPopup`]) because `dialog.remove` deletes by the row's name,
+    /// and a list moving under the cursor because of a file edited
+    /// elsewhere would delete something else.
     pub fn set_hotlist(&mut self, items: Vec<crate::config::HotlistItem>) {
         self.hotlist = items;
         self.sync_places_favorites();
     }
 
-    /// Refleja en la copia local un favorito YA persistido con éxito
-    /// (reemplaza por `name` conservando posición, o añade al final — la
-    /// MISMA semántica que `config::persist_hotlist_add`/`load`) y refresca
-    /// las dos superficies que la enseñan: el popup abierto y el sidebar.
+    /// Reflects in the local copy a favorite ALREADY persisted successfully
+    /// (replaces by `name` keeping position, or appends at the end — the
+    /// SAME semantics as `config::persist_hotlist_add`/`load`) and refreshes
+    /// the two surfaces that show it: the open popup and the sidebar.
     pub fn hotlist_apply_saved(&mut self, name: &str, target: VPath) {
         if let Some(item) = self.hotlist.iter_mut().find(|h| h.name == name) {
             item.target = Ok(target);
@@ -345,17 +351,17 @@ impl App {
         self.rebuild_hotlist_popup();
     }
 
-    /// Refleja en la copia local un favorito YA borrado del disco y
-    /// refresca las dos superficies que lo enseñaban.
+    /// Reflects in the local copy a favorite ALREADY deleted from disk and
+    /// refreshes the two surfaces that showed it.
     pub fn hotlist_apply_removed(&mut self, name: &str) {
         self.hotlist.retain(|h| h.name != name);
         self.sync_places_favorites();
         self.rebuild_hotlist_popup();
     }
 
-    /// Reconstruye los items del popup de hotlist tras un add/remove,
-    /// conservando el cursor (con clamp): la lista pintada nunca queda
-    /// desincronizada de la copia en `App` (el invariante 1:1 de índices).
+    /// Rebuilds the hotlist popup's items after an add/remove, keeping the
+    /// cursor (clamped): the painted list never drifts out of sync with the
+    /// copy in `App` (the 1:1 index invariant).
     fn rebuild_hotlist_popup(&mut self) {
         if let Some(p) = &self.nav_popup
             && p.kind == NavPopupKind::Hotlist
@@ -375,73 +381,74 @@ mod tests {
     use crate::app::nav_popup::volume_items;
     use crate::app::testutil::*;
 
-    /// Popup de historial (spec 2026-07-18): navegación con `PickerAction`,
-    /// Confirm devuelve el destino y cierra, Cancel cierra.
+    /// History popup (spec 2026-07-18): navigation with `PickerAction`,
+    /// Confirm returns the destination and closes, Cancel closes.
     #[test]
-    fn nav_popup_historial_navega_confirma_y_cancela() {
-        let mut app = app_dos_panes();
-        app.history[0].push(vp("mem:///uno"));
-        app.history[0].push(vp("mem:///dos"));
+    fn nav_popup_history_navigates_confirms_and_cancels() {
+        let mut app = app_two_panes();
+        app.history[0].push(vp("mem:///one"));
+        app.history[0].push(vp("mem:///two"));
         app.open_nav_popup(NavPopupKind::History);
         assert_eq!(
             app.nav_popup.as_ref().unwrap().items().len(),
             3,
-            "el directorio actual va primero (spec 2026-09-15 D3)"
+            "the current directory goes first (spec 2026-09-15 D3)"
         );
         assert_eq!(
             app.nav_popup.as_ref().unwrap().selected().unwrap().target,
-            Some(vp("mem:///dos")),
-            "más reciente primero"
+            Some(vp("mem:///two")),
+            "most recent first"
         );
         assert_eq!(app.nav_popup_input(PickerAction::Down), None);
         assert_eq!(
             app.nav_popup_input(PickerAction::Confirm),
-            Some(vp("mem:///uno")),
-            "Confirm devuelve el destino del item resaltado"
+            Some(vp("mem:///one")),
+            "Confirm returns the highlighted item's destination"
         );
-        assert!(app.nav_popup.is_none(), "Confirm cierra el popup");
+        assert!(app.nav_popup.is_none(), "Confirm closes the popup");
 
         app.open_nav_popup(NavPopupKind::History);
         assert_eq!(app.nav_popup_input(PickerAction::Cancel), None);
-        assert!(app.nav_popup.is_none(), "Cancel cierra el popup");
+        assert!(app.nav_popup.is_none(), "Cancel closes the popup");
     }
 
-    /// Un favorito INVÁLIDO (path que no parsea) se muestra con su aviso y
-    /// destino `None`: Confirm sobre él es no-op (el popup sigue abierto).
+    /// An INVALID favorite (a path that doesn't parse) shows with its
+    /// warning and a `None` destination: Confirm over it is a no-op (the
+    /// popup stays open).
     #[test]
-    fn nav_popup_hotlist_item_invalido_no_confirma() {
+    fn nav_popup_hotlist_invalid_item_does_not_confirm() {
         let _ = norte_i18n::force(norte_i18n::Lang::Es);
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.hotlist = vec![crate::config::HotlistItem {
-            name: "rota".into(),
+            name: "broken".into(),
             target: Err("err-invalid-path".into()),
         }];
         app.open_nav_popup(NavPopupKind::Hotlist);
         let item = app.nav_popup.as_ref().unwrap().selected().unwrap().clone();
-        assert!(item.target.is_none(), "inválida no navega");
+        assert!(item.target.is_none(), "invalid doesn't navigate");
         assert!(
             item.display.contains(&norte_i18n::t("hotlist-invalid")),
-            "el aviso de inválida se pinta: {}",
+            "the invalid warning gets painted: {}",
             item.display
         );
         assert_eq!(app.nav_popup_input(PickerAction::Confirm), None);
-        assert!(app.nav_popup.is_some(), "el popup NO se cierra");
+        assert!(app.nav_popup.is_some(), "the popup does NOT close");
     }
 
-    /// `a` abre el input de nombre SOLO en hotlist; Cancel con input activo
-    /// cierra el input (no el popup). `d`: el name CRUDO seleccionado sirve
-    /// de clave y el borrado local refresca los items.
+    /// `a` opens the name input ONLY in hotlist; Cancel with the input
+    /// active closes the input (not the popup). `d`: the selected RAW name
+    /// serves as key and the local delete refreshes the items.
     #[test]
-    fn nav_popup_hotlist_input_y_borrado() {
-        let mut app = app_dos_panes();
+    fn nav_popup_hotlist_input_and_deletion() {
+        let mut app = app_two_panes();
         app.hotlist = vec![
             crate::config::HotlistItem {
-                name: "uno".into(),
-                target: Ok(vp("mem:///uno")),
+                name: "one".into(),
+                target: Ok(vp("mem:///one")),
             },
             crate::config::HotlistItem {
-                name: "dos".into(),
-                target: Ok(vp("mem:///dos")),
+                name: "two".into(),
+                target: Ok(vp("mem:///two")),
             },
         ];
         app.open_nav_popup(NavPopupKind::Hotlist);
@@ -449,61 +456,63 @@ mod tests {
         assert_eq!(
             app.nav_popup.as_ref().unwrap().name_input.as_deref(),
             Some("/"),
-            "`a` abre el input prellenado con el nombre sugerido"
+            "`a` opens the input pre-filled with the suggested name"
         );
         app.nav_popup_input(PickerAction::Cancel);
         let p = app.nav_popup.as_ref().unwrap();
-        assert!(p.name_input.is_none(), "Cancel cierra el input");
-        assert!(app.nav_popup.is_some(), "…no el popup");
+        assert!(p.name_input.is_none(), "Cancel closes the input");
+        assert!(app.nav_popup.is_some(), "...not the popup");
 
         assert_eq!(
             app.nav_popup_selected_hotlist_name().as_deref(),
-            Some("uno"),
-            "el name CRUDO del seleccionado (clave del persist)"
+            Some("one"),
+            "the selected one's RAW name (the persist's key)"
         );
-        app.hotlist_apply_removed("uno");
+        app.hotlist_apply_removed("one");
         assert_eq!(app.hotlist.len(), 1);
         let p = app.nav_popup.as_ref().unwrap();
-        assert_eq!(p.items().len(), 1, "el popup se refresca tras borrar");
-        assert_eq!(p.selected().unwrap().target, Some(vp("mem:///dos")));
+        assert_eq!(p.items().len(), 1, "the popup refreshes after deleting");
+        assert_eq!(p.selected().unwrap().target, Some(vp("mem:///two")));
     }
 
-    /// review MAJOR T5: un hot-reload con el popup abierto muta
-    /// `App.hotlist` mientras el usuario ve la snapshot VIEJA (items
-    /// congelados a propósito) — `d` debe borrar lo MOSTRADO (clave
-    /// congelada en el item), jamás lo que ahora ocupa ese índice en la
-    /// lista nueva (borraría OTRO favorito: pérdida de config).
+    /// review MAJOR T5: a hot-reload with the popup open mutates
+    /// `App.hotlist` while the user sees the OLD snapshot (items frozen on
+    /// purpose) — `d` must delete what's SHOWN (the key frozen in the
+    /// item), never whatever now occupies that index in the new list (it
+    /// would delete ANOTHER favorite: config loss).
     #[test]
-    fn d_con_popup_desincronizado_borra_el_mostrado() {
-        let mut app = app_dos_panes();
+    fn d_with_desynced_popup_clears_the_shown_one() {
+        let mut app = app_two_panes();
         app.hotlist = vec![
             crate::config::HotlistItem {
-                name: "uno".into(),
-                target: Ok(vp("mem:///uno")),
+                name: "one".into(),
+                target: Ok(vp("mem:///one")),
             },
             crate::config::HotlistItem {
-                name: "dos".into(),
-                target: Ok(vp("mem:///dos")),
+                name: "two".into(),
+                target: Ok(vp("mem:///two")),
             },
         ];
         app.open_nav_popup(NavPopupKind::Hotlist);
-        // Cursor en 0: el usuario VE "uno". Simula el hot-reload que quitó
-        // "uno" de la config (la copia en App cambia, el popup no).
+        // Cursor on 0: the user SEES "one". Simulates the hot-reload that
+        // removed "one" from the config (the copy in App changes, the
+        // popup doesn't).
         app.hotlist.remove(0);
         assert_eq!(
             app.nav_popup_selected_hotlist_name().as_deref(),
-            Some("uno"),
-            "la clave es la CONGELADA del popup, no App.hotlist[cursor]"
+            Some("one"),
+            "the key is the popup's FROZEN one, not App.hotlist[cursor]"
         );
     }
 
-    /// `a` no abre un campo en blanco: el path ya lo intuye del panel, así que
-    /// el nombre también. Y la sugerencia esquiva los nombres que la hotlist ya
-    /// tiene puestos —`persist_hotlist_add` REEMPLAZA por nombre, y aceptar sin
-    /// leer pisaría un favorito que apuntaba a otro sitio.
+    /// `a` doesn't open a blank field: the path already implies it from the
+    /// panel, so does the name. And the suggestion dodges the names the
+    /// hotlist already has taken — `persist_hotlist_add` REPLACES by name,
+    /// and accepting without checking would overwrite a favorite pointing
+    /// somewhere else.
     #[test]
-    fn el_input_de_nombre_se_prellena_con_el_dir_del_panel() {
-        let mut app = crate::app::testutil::app_en("mem:///home/o/norte/src", "mem:///otro");
+    fn the_name_input_prefills_with_the_panels_dir() {
+        let mut app = crate::app::testutil::app_en("mem:///home/o/norte/src", "mem:///other");
         app.open_nav_popup(NavPopupKind::Hotlist);
         app.nav_popup_open_name_input();
         assert_eq!(
@@ -514,59 +523,61 @@ mod tests {
         app.nav_popup_input(PickerAction::Cancel);
         app.hotlist = vec![crate::config::HotlistItem {
             name: "src".into(),
-            target: Ok(vp("mem:///otro/src")),
+            target: Ok(vp("mem:///other/src")),
         }];
         app.nav_popup_open_name_input();
         assert_eq!(
             app.nav_popup.as_ref().unwrap().name_input.as_deref(),
             Some("norte/src"),
-            "ocupado: se cualifica con el padre en vez de pisar"
+            "taken: it qualifies with the parent instead of overwriting"
         );
     }
 
-    /// Spec 2026-09-15 D3: la primera fila es donde está el panel, marcada, y
-    /// el cursor empieza en la siguiente; quitar y vaciar rehacen la lista.
+    /// Spec 2026-09-15 D3: the first row is where the panel is, marked, and
+    /// the cursor starts on the next one; removing and clearing rebuild the
+    /// list.
     #[test]
-    fn la_historia_marca_el_actual_y_quitar_o_vaciar_la_rehacen() {
+    fn history_marks_the_current_one_and_remove_or_clear_redo_it() {
         let _ = norte_i18n::force(norte_i18n::Lang::Es);
-        let mut app = app_dos_panes();
-        let aqui = app.panes[0].dir().clone();
-        app.history[0].push(vp("mem:///uno"));
-        app.history[0].push(vp("mem:///dos"));
+        let mut app = app_two_panes();
+        let here = app.panes[0].dir().clone();
+        app.history[0].push(vp("mem:///one"));
+        app.history[0].push(vp("mem:///two"));
         app.open_nav_popup(NavPopupKind::History);
         let p = app.nav_popup.as_ref().unwrap();
-        assert_eq!(p.items()[0].target, Some(aqui));
+        assert_eq!(p.items()[0].target, Some(here));
         assert_eq!(
             p.items()[0].mark.as_deref(),
             Some(norte_i18n::t("history-mark-current").as_str()),
-            "la marca va APARTE de la ruta: pegada al texto la imitaba un \
-             directorio llamado `x · aquí`"
+            "the mark goes APART from the path: glued to the text it \
+             mimicked a directory named `x · here`"
         );
         assert!(
             !p.items()[0]
                 .display
                 .contains(&norte_i18n::t("history-mark-current"))
         );
-        // Quitar la fila «aquí» no hace nada: ni la lista ni el rastro cambian.
+        // Removing the "here" row does nothing: neither the list nor the
+        // trail change.
         app.nav_popup.as_mut().unwrap().cursor = 0;
         app.nav_popup_remove_selected();
         assert_eq!(app.nav_popup.as_ref().unwrap().items().len(), 3);
         app.nav_popup.as_mut().unwrap().cursor = 1;
         let p = app.nav_popup.as_ref().unwrap();
-        assert_eq!(p.selected().unwrap().target, Some(vp("mem:///dos")));
+        assert_eq!(p.selected().unwrap().target, Some(vp("mem:///two")));
 
         app.nav_popup_remove_selected();
-        assert!(!app.history[0].entries().contains(&vp("mem:///dos")));
+        assert!(!app.history[0].entries().contains(&vp("mem:///two")));
         let p = app.nav_popup.as_ref().unwrap();
         assert_eq!(p.items().len(), 2);
-        assert_eq!(p.selected().unwrap().target, Some(vp("mem:///uno")));
+        assert_eq!(p.selected().unwrap().target, Some(vp("mem:///one")));
 
         app.nav_popup_clear();
         assert!(app.history[0].entries().is_empty());
         assert_eq!(
             app.nav_popup.as_ref().unwrap().items().len(),
             1,
-            "solo el actual"
+            "only the current one"
         );
         assert_eq!(
             app.message.as_deref(),
@@ -574,95 +585,95 @@ mod tests {
         );
     }
 
-    /// D7: la historia de un LADO navega ese lado aunque el foco esté en el
-    /// otro, y abrir en el otro panel apunta al foco.
+    /// D7: a SIDE's history navigates that side even if focus is on the
+    /// other one, and opening on the other panel points at the focus.
     #[test]
-    fn la_historia_de_un_lado_congela_el_lado() {
-        let mut app = app_dos_panes();
-        app.history[1].push(vp("mem:///derecha"));
+    fn one_sides_history_freezes_the_side() {
+        let mut app = app_two_panes();
+        app.history[1].push(vp("mem:///right"));
         app.open_side_history(1);
         let p = app.nav_popup.as_ref().unwrap();
         assert_eq!((p.target_pane(), p.side), (1, Some(1)));
-        assert_eq!(p.selected().unwrap().target, Some(vp("mem:///derecha")));
+        assert_eq!(p.selected().unwrap().target, Some(vp("mem:///right")));
         assert_eq!(app.nav_popup_other_pane(), Some(app.focus()));
     }
 
-    /// D6: los populares se listan por visitas.
+    /// D6: popular entries are listed by visits.
     #[test]
-    fn los_populares_van_por_visitas() {
-        let mut app = app_dos_panes();
-        app.popular.visit(&vp("mem:///poco"));
-        app.popular.visit(&vp("mem:///mucho"));
-        app.popular.visit(&vp("mem:///mucho"));
+    fn popular_ones_are_ranked_by_visits() {
+        let mut app = app_two_panes();
+        app.popular.visit(&vp("mem:///little"));
+        app.popular.visit(&vp("mem:///lots"));
+        app.popular.visit(&vp("mem:///lots"));
         app.open_nav_popup(NavPopupKind::Popular);
         let p = app.nav_popup.as_ref().unwrap();
-        assert_eq!(p.items()[0].target, Some(vp("mem:///mucho")));
-        assert_eq!(p.items()[1].target, Some(vp("mem:///poco")));
+        assert_eq!(p.items()[0].target, Some(vp("mem:///lots")));
+        assert_eq!(p.items()[1].target, Some(vp("mem:///little")));
     }
 
-    /// En el popup de HISTORIAL, `a` abre el nombre del favorito para la FILA
-    /// del cursor (spec 2026-09-15 D2) —antes no hacía nada—, y no hay name de
-    /// hotlist que borrar.
+    /// In the HISTORY popup, `a` opens the favorite name for the cursor's
+    /// ROW (spec 2026-09-15 D2) — it used to do nothing — and there's no
+    /// hotlist name to delete.
     #[test]
-    fn nav_popup_historial_anade_la_fila_como_favorito() {
-        let mut app = app_dos_panes();
-        app.history[0].push(vp("mem:///uno"));
+    fn nav_popup_history_adds_the_row_as_a_favorite() {
+        let mut app = app_two_panes();
+        app.history[0].push(vp("mem:///one"));
         app.open_nav_popup(NavPopupKind::History);
-        assert_eq!(app.nav_popup_add_target(), Some(vp("mem:///uno")));
+        assert_eq!(app.nav_popup_add_target(), Some(vp("mem:///one")));
         app.nav_popup_open_name_input();
         assert_eq!(
             app.nav_popup.as_ref().unwrap().name_input.as_deref(),
-            Some("uno")
+            Some("one")
         );
         assert_eq!(app.nav_popup_selected_hotlist_name(), None);
     }
 
-    /// D2: el filtro rehace la lista, el cursor vuelve al principio y quitarlo
-    /// la devuelve entera.
+    /// D2: the filter rebuilds the list, the cursor goes back to the start
+    /// and removing it returns it whole.
     #[test]
-    fn el_filtro_de_la_historia_rehace_la_lista() {
-        let mut app = app_dos_panes();
-        app.history[0].push(vp("mem:///fotos/2024"));
-        app.history[0].push(vp("mem:///facturas"));
-        app.history[0].push(vp("mem:///musica"));
+    fn the_history_filter_rebuilds_the_list() {
+        let mut app = app_two_panes();
+        app.history[0].push(vp("mem:///photos/2024"));
+        app.history[0].push(vp("mem:///invoices"));
+        app.history[0].push(vp("mem:///music"));
         app.open_nav_popup(NavPopupKind::History);
-        let entera = app.nav_popup.as_ref().unwrap().items().len();
-        app.nav_popup_set_filter(Some("fac".to_owned()));
+        let whole = app.nav_popup.as_ref().unwrap().items().len();
+        app.nav_popup_set_filter(Some("inv".to_owned()));
         let p = app.nav_popup.as_ref().unwrap();
-        assert_eq!(p.filter.as_deref(), Some("fac"));
+        assert_eq!(p.filter.as_deref(), Some("inv"));
         assert_eq!(p.items().len(), 1);
-        assert_eq!(p.selected().unwrap().target, Some(vp("mem:///facturas")));
+        assert_eq!(p.selected().unwrap().target, Some(vp("mem:///invoices")));
         app.nav_popup_set_filter(None);
-        assert_eq!(app.nav_popup.as_ref().unwrap().items().len(), entera);
+        assert_eq!(app.nav_popup.as_ref().unwrap().items().len(), whole);
     }
 
-    /// `hotlist_apply_saved` reemplaza por name conservando posición o
-    /// añade al final (misma semántica que persist/load) y refresca popup.
+    /// `hotlist_apply_saved` replaces by name keeping position or appends at
+    /// the end (same semantics as persist/load) and refreshes the popup.
     #[test]
-    fn hotlist_apply_saved_reemplaza_o_anade() {
-        let mut app = app_dos_panes();
+    fn hotlist_apply_saved_replaces_or_adds() {
+        let mut app = app_two_panes();
         app.hotlist = vec![crate::config::HotlistItem {
-            name: "uno".into(),
-            target: Ok(vp("mem:///viejo")),
+            name: "one".into(),
+            target: Ok(vp("mem:///old")),
         }];
         app.open_nav_popup(NavPopupKind::Hotlist);
-        app.hotlist_apply_saved("uno", vp("mem:///nuevo"));
-        assert_eq!(app.hotlist.len(), 1, "reemplaza, no duplica");
-        assert_eq!(app.hotlist[0].target.as_ref().unwrap(), &vp("mem:///nuevo"));
-        app.hotlist_apply_saved("dos", vp("mem:///dos"));
-        assert_eq!(app.hotlist.len(), 2, "name nuevo se añade al final");
+        app.hotlist_apply_saved("one", vp("mem:///new"));
+        assert_eq!(app.hotlist.len(), 1, "replaces, doesn't duplicate");
+        assert_eq!(app.hotlist[0].target.as_ref().unwrap(), &vp("mem:///new"));
+        app.hotlist_apply_saved("two", vp("mem:///two"));
+        assert_eq!(app.hotlist.len(), 2, "a new name gets appended at the end");
         assert_eq!(
             app.nav_popup.as_ref().unwrap().items().len(),
             2,
-            "el popup abierto refleja el alta"
+            "the open popup reflects the add"
         );
     }
 
-    /// Un path HOSTIL en el historial sale enmascarado y con el badge como
-    /// prefijo — jamás bidi/controles crudos en el popup (spec §6).
+    /// A HOSTILE path in the history comes out masked and with the badge as
+    /// a prefix — never raw bidi/controls in the popup (spec §6).
     #[test]
-    fn nav_popup_sanea_paths_hostiles() {
-        let mut app = app_dos_panes();
+    fn nav_popup_sanitizes_hostile_paths() {
+        let mut app = app_two_panes();
         app.history[0].push(vp("mem:///evil%E2%80%AEdir"));
         app.open_nav_popup(NavPopupKind::History);
         let display = app
@@ -673,8 +684,8 @@ mod tests {
             .unwrap()
             .display
             .clone();
-        assert!(!display.contains('\u{202E}'), "sin bidi crudo: {display:?}");
-        assert!(display.starts_with('!'), "badge prefijo: {display}");
+        assert!(!display.contains('\u{202E}'), "no raw bidi: {display:?}");
+        assert!(display.starts_with('!'), "badge prefix: {display}");
     }
 
     /// encoding-auditor MAJOR: `fs_type` looked like a closed, ASCII-only
@@ -684,7 +695,7 @@ mod tests {
     /// `volume_item_display` spliced it in with `{}` and skipped
     /// `display_name` entirely, so a hostile `fs_type` reached the row raw.
     #[test]
-    fn volume_row_sanea_fs_type_hostil() {
+    fn volume_row_sanitizes_hostile_fs_type() {
         let vol = norte_proto::methods::Volume {
             mount: vp("mem:///media/usb"),
             label: None,
@@ -696,8 +707,8 @@ mod tests {
         };
         let items = volume_items(std::slice::from_ref(&vol), None);
         let display = items[0].display.clone();
-        assert!(!display.contains('\u{202E}'), "sin bidi crudo: {display:?}");
-        assert!(display.starts_with('!'), "badge prefijo: {display}");
+        assert!(!display.contains('\u{202E}'), "no raw bidi: {display:?}");
+        assert!(display.starts_with('!'), "badge prefix: {display}");
     }
 
     /// V3.5 (encoding-auditor MAJOR deferred from V3): `label` is
@@ -707,7 +718,7 @@ mod tests {
     /// gets above. Bytes `\xFF\xFE` are not valid UTF-8 in any position, so
     /// `display_name` must fall back to lossy rendering AND mark it hostile.
     #[test]
-    fn volume_row_sanea_label_no_utf8() {
+    fn volume_row_sanitizes_non_utf8_label() {
         let vol = norte_proto::methods::Volume {
             mount: vp("mem:///media/usb"),
             label: Some(vec![0xFF, 0xFE, b'X']),
@@ -719,15 +730,15 @@ mod tests {
         };
         let items = volume_items(std::slice::from_ref(&vol), None);
         let display = items[0].display.clone();
-        assert!(display.starts_with('!'), "badge prefijo: {display}");
+        assert!(display.starts_with('!'), "badge prefix: {display}");
         assert!(
             display.contains('\u{FFFD}'),
-            "el label no-UTF8 se pinta lossy: {display}"
+            "the non-UTF8 label paints lossy: {display}"
         );
         assert_eq!(
             items[0].target,
             Some(vp("mem:///media/usb")),
-            "el target sigue siendo el mount real, ajeno al label"
+            "the target is still the real mount, unrelated to the label"
         );
     }
 
@@ -759,10 +770,10 @@ mod tests {
         let (path_text, path_hostile) = norte_frontend::path_display_with(&mount, None);
         assert!(
             !path_hostile,
-            "control: el mount fijo del test no es hostil"
+            "control: the test's fixed mount isn't hostile"
         );
         let (fs_text, fs_hostile) = display_name(b"vfat");
-        assert!(!fs_hostile, "control: \"vfat\" no es hostil");
+        assert!(!fs_hostile, "control: \"vfat\" isn't hostile");
         let sizes = format!("{u} / {u}", u = t("volumes-size-unknown"));
         for fixture in norte_testkit::corpus::hostile_names() {
             let vol = norte_proto::methods::Volume {
@@ -785,13 +796,13 @@ mod tests {
             };
             assert_eq!(
                 display, &expected,
-                "{}: badge debe coincidir con display_name({:?})",
+                "{}: badge must match display_name({:?})",
                 fixture.id, fixture.bytes
             );
             assert_eq!(
                 items[0].target,
                 Some(mount.clone()),
-                "{}: el target sigue siendo el mount, ajeno al label",
+                "{}: the target is still the mount, unrelated to the label",
                 fixture.id
             );
         }
@@ -802,7 +813,7 @@ mod tests {
     /// NO badge and say `volumes-size-unknown` rather than a bare zero — a
     /// zero here would read as "full", the opposite of "unknown".
     #[test]
-    fn volume_row_talla_ausente_no_es_cero() {
+    fn volume_row_missing_size_is_not_zero() {
         let vol = norte_proto::methods::Volume {
             mount: vp("mem:///media/usb"),
             label: Some(b"USB".to_vec()),
@@ -814,16 +825,16 @@ mod tests {
         };
         let items = volume_items(std::slice::from_ref(&vol), None);
         let display = items[0].display.clone();
-        assert!(!display.starts_with('!'), "nada hostil aquí: {display}");
-        assert!(!display.contains('0'), "ausente no es cero: {display}");
+        assert!(!display.starts_with('!'), "nothing hostile here: {display}");
+        assert!(!display.contains('0'), "absent isn't zero: {display}");
         assert_eq!(items[0].target, Some(vp("mem:///media/usb")));
     }
 
-    /// review MINOR T5: una entrada INVÁLIDA con name hostil también lleva
-    /// el badge (antes el flag de `display_name` se descartaba en ese brazo).
+    /// review MINOR T5: an INVALID entry with a hostile name also carries
+    /// the badge (before, `display_name`'s flag was discarded in that arm).
     #[test]
-    fn hotlist_invalida_con_name_hostil_lleva_badge() {
-        let mut app = app_dos_panes();
+    fn invalid_hotlist_with_hostile_name_carries_a_badge() {
+        let mut app = app_two_panes();
         app.hotlist = vec![crate::config::HotlistItem {
             name: "evil\u{202E}name".into(),
             target: Err("err-invalid-path".into()),
@@ -837,7 +848,7 @@ mod tests {
             .unwrap()
             .display
             .clone();
-        assert!(!display.contains('\u{202E}'), "sin bidi crudo: {display:?}");
-        assert!(display.starts_with('!'), "badge prefijo: {display}");
+        assert!(!display.contains('\u{202E}'), "no raw bidi: {display:?}");
+        assert!(display.starts_with('!'), "badge prefix: {display}");
     }
 }

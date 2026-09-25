@@ -1,6 +1,6 @@
-//! Manifiesto `plugin.toml` (ADR 0022 D3): identidad + contribuciones por
-//! interfaz (estilo `contributes` de `VSCode`) + capabilities + `[config]`
-//! (P2: settings tipadas declaradas por el plugin).
+//! `plugin.toml` manifest (ADR 0022 D3): identity + per-interface
+//! contributions (`VSCode`-style `contributes`) + capabilities + `[config]`
+//! (P2: typed settings declared by the plugin).
 
 use std::collections::BTreeMap;
 
@@ -8,59 +8,61 @@ use serde::Deserialize;
 
 use crate::capability::Capabilities;
 
-/// Categoría PRIMARIA del plugin = la interfaz WIT por la que se ordena en el
-/// gestor (spec §7.1). Un plugin puede contribuir a varias, pero declara una
-/// principal.
+/// The plugin's PRIMARY category = the WIT interface it is ordered by in
+/// the manager (spec §7.1). A plugin can contribute to several, but
+/// declares one main one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Category {
-    /// Genera previews para mimetypes.
+    /// Generates previews for mimetypes.
     Previewer,
-    /// Provider VFS de terceros.
+    /// Third-party VFS provider.
     Provider,
-    /// Comando invocable desde palette/keybinding.
+    /// Command invokable from the palette/keybinding.
     Command,
-    /// Columnas custom en el listado.
+    /// Custom columns in the listing.
     Columns,
-    /// Observa las mutaciones que el journal ya registró (H1, ADR 0100,
-    /// interfaz WIT `hook` del paquete `norte:hook`, world `norte-hook`).
-    /// Solo `after-*`: un hook no veta ni muta, y su único efecto es una
-    /// frase para el humano. Los eventos que escucha van en
-    /// `[[contributions.hook]]`, del vocabulario [`HOOK_EVENTS`].
+    /// Observes mutations the journal already recorded (H1, ADR 0100, WIT
+    /// interface `hook` of package `norte:hook`, world `norte-hook`). Only
+    /// `after-*`: a hook neither vetoes nor mutates, and its only effect is
+    /// a sentence for the human. The events it listens to go in
+    /// `[[contributions.hook]]`, from the [`HOOK_EVENTS`] vocabulary.
     Hook,
-    /// Decora entradas visibles con un badge/rol tipo "git status" (ADR
-    /// 0037 decisión 2, interfaz WIT `decorator`, world `norte-decorator`).
+    /// Decorates visible entries with a "git status"-like badge/role (ADR
+    /// 0037 decision 2, WIT interface `decorator`, world
+    /// `norte-decorator`).
     Decorator,
-    /// Propone pares de renombrado para un lote (C3, ADR 0095, interfaz WIT
-    /// `renamer` del paquete `norte:renamer`, world `norte-renamer`). El
-    /// core los ejecuta por el mismo camino que el plan de la IA.
+    /// Proposes rename pairs for a batch (C3, ADR 0095, WIT interface
+    /// `renamer` of package `norte:renamer`, world `norte-renamer`). The
+    /// core runs them through the same path as the AI's plan.
     Renamer,
-    /// Fabrica una MINIATURA de un fichero para el visor de la ventana (ADR
-    /// 0107, paquete `norte:thumbnail`, world `norte-thumbnail`). Los
-    /// mimetypes que atiende van en `[[contributions.thumbnail]]`, como los
-    /// de un previewer; recibe bytes acotados y devuelve un raster que el
-    /// host verifica antes de pintarlo.
+    /// Builds a THUMBNAIL of a file for the window's viewer (ADR 0107,
+    /// package `norte:thumbnail`, world `norte-thumbnail`). The mimetypes
+    /// it handles go in `[[contributions.thumbnail]]`, like a previewer's;
+    /// it receives capped bytes and returns a raster the host verifies
+    /// before painting it.
     Thumbnail,
-    /// Pinta un PANEL entero del reparto (fase 3 del programa 2026-09-15,
-    /// paquete `norte:panel`, world `norte-panel`). Los paneles que aporta
-    /// van en `[[contributions.panel]]`, cada uno con su `kind` y su tamaño
-    /// mínimo; el hueco se llama `plugin:<id>:<kind>` y no puede chocar con
-    /// uno de casa. El guest describe líneas con estilo y zonas pulsables que
-    /// nombran COMANDOS del catálogo: un clic suyo no puede hacer nada que el
-    /// lector no pudiera hacer con una tecla.
+    /// Paints an entire PANEL of the layout (phase 3 of the 2026-09-15
+    /// program, package `norte:panel`, world `norte-panel`). The panels it
+    /// supplies go in `[[contributions.panel]]`, each with its `kind` and
+    /// its minimum size; the slot is named `plugin:<id>:<kind>` and cannot
+    /// collide with a built-in one. The guest describes styled lines and
+    /// clickable zones that name catalog COMMANDS: a click on one cannot
+    /// do anything the reader could not do with a key.
     Panel,
-    /// Propone a dónde MOVER cada fichero, con subdirectorios (fase 8,
-    /// paquete `norte:organizer`, world `norte-organizer`). Generaliza
-    /// [`Category::Renamer`]: allí el destino es un nombre y aquí una ruta
-    /// relativa, así que el plan además crea carpetas. Los organizers que
-    /// aporta van en `[[contributions.organizer]]`, y el core los ejecuta por
-    /// el mismo camino que el plan de la IA — con la misma validación del
-    /// destino, que es lo que impide escribir fuera del directorio.
+    /// Proposes WHERE to MOVE each file, with subdirectories (phase 8,
+    /// package `norte:organizer`, world `norte-organizer`). Generalizes
+    /// [`Category::Renamer`]: there the destination is a name, here a
+    /// relative path, so the plan also creates folders. The organizers it
+    /// supplies go in `[[contributions.organizer]]`, and the core runs
+    /// them through the same path as the AI's plan — with the same
+    /// destination validation, which is what prevents writing outside the
+    /// directory.
     Organizer,
 }
 
 impl Category {
-    /// Nombre estable (para agrupar en la UI y trazas).
+    /// Stable name (for grouping in the UI and traces).
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
@@ -77,11 +79,11 @@ impl Category {
         }
     }
 
-    /// Byte canónico y estable para el digest de aprobación (issue #69). NO se
-    /// usa el discriminante del enum (podría reordenarse) sino un valor fijo.
-    /// `Decorator` = 5 (ADR 0037): un valor NUEVO al final, nunca reutiliza ni
-    /// reordena los existentes — los digests de manifiestos previos a esta
-    /// categoría no se ven afectados por su sola existencia.
+    /// Canonical, stable byte for the approval digest (issue #69). Does
+    /// NOT use the enum's discriminant (it could be reordered) but a fixed
+    /// value. `Decorator` = 5 (ADR 0037): a NEW value at the end, it never
+    /// reuses nor reorders the existing ones — digests of manifests that
+    /// predate this category are not affected by its mere existence.
     fn digest_tag(self) -> u8 {
         match self {
             Category::Previewer => 0,
@@ -90,149 +92,150 @@ impl Category {
             Category::Columns => 3,
             Category::Hook => 4,
             Category::Decorator => 5,
-            // Nuevo al final (ADR 0095), como `Decorator` en su día.
+            // New at the end (ADR 0095), like `Decorator` in its day.
             Category::Renamer => 6,
-            // Y el siguiente detrás (ADR 0107): un tag es para siempre.
+            // And the next one after it (ADR 0107): a tag is forever.
             Category::Thumbnail => 7,
-            // Y el siguiente detrás, por lo mismo: los manifiestos que ya
-            // están aprobados no pueden moverse porque exista una categoría
-            // más.
+            // And the next one after it, for the same reason: manifests
+            // already approved cannot move just because one more category
+            // exists.
             Category::Panel => 8,
-            // Y el siguiente detrás (fase 8). Un tag es PARA SIEMPRE: los
-            // manifiestos ya aprobados no pueden cambiar de digest porque
-            // exista una categoría más.
+            // And the next one after it (phase 8). A tag is FOREVER:
+            // already-approved manifests cannot change digest just
+            // because one more category exists.
             Category::Organizer => 9,
         }
     }
 }
 
-/// Un previewer declarado: los mimetypes que sabe pintar.
+/// A declared previewer: the mimetypes it can paint.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PreviewerContrib {
-    /// Patrones de mimetype (`text/*`, `application/json`).
+    /// Mimetype patterns (`text/*`, `application/json`).
     pub mimetypes: Vec<String>,
 }
 
-/// Un comando declarado.
+/// A declared command.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CommandContrib {
-    /// Id estable (namespaced por el plugin al registrarlo).
+    /// Stable id (namespaced by the plugin when registering it).
     pub id: String,
-    /// Título para la palette.
+    /// Title for the palette.
     pub title: String,
 }
 
-/// Una columna declarada.
+/// A declared column.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ColumnContrib {
-    /// Id estable.
+    /// Stable id.
     pub id: String,
-    /// Cabecera visible.
+    /// Visible header.
     pub header: String,
 }
 
-/// Un PANEL declarado (fase 3 del programa 2026-09-15): un hueco del reparto
-/// cuyo contenido pinta el guest.
+/// A declared PANEL (phase 3 of the 2026-09-15 program): a layout slot
+/// whose content the guest paints.
 ///
-/// El `kind` es estable dentro del plugin y el hueco acaba llamándose
-/// `plugin:<id>:<kind>`, que es lo que impide que choque con uno de casa. El
-/// tamaño mínimo lo declara el plugin porque lo sabe él —un panel de dos
-/// columnas no dice nada—, y el reparto colapsa el `Split` que lo contiene
-/// cuando no cabe, igual que con cualquier kind.
+/// The `kind` is stable within the plugin and the slot ends up named
+/// `plugin:<id>:<kind>`, which is what prevents it colliding with a
+/// built-in one. The minimum size is declared by the plugin because it is
+/// the one that knows it — a two-column panel says nothing — and the
+/// layout collapses the `Split` that contains it when it does not fit,
+/// same as with any kind.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PanelContrib {
-    /// Id estable dentro del plugin.
+    /// Stable id within the plugin.
     pub kind: String,
-    /// Título legible. Texto del plugin — NO confiable.
+    /// Readable title. Plugin text — NOT trusted.
     pub title: String,
-    /// Ancho mínimo en celdas, si el panel pide uno.
+    /// Minimum width in cells, if the panel asks for one.
     #[serde(default, rename = "min-cols")]
     pub min_cols: Option<u16>,
-    /// Alto mínimo en celdas, si el panel pide uno.
+    /// Minimum height in cells, if the panel asks for one.
     #[serde(default, rename = "min-rows")]
     pub min_rows: Option<u16>,
 }
 
-/// Un provider declarado: el scheme que sirve (`webdav`, …).
+/// A declared provider: the scheme it serves (`webdav`, …).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderContrib {
-    /// Scheme del VFS (sin `://`).
+    /// VFS scheme (without `://`).
     pub scheme: String,
-    /// Puerto al que conecta el guest cuando la URL no lo dice (`default-port
-    /// = 8443`). Un provider plugin recibe red a `ip:puerto`, nunca a la IP
-    /// entera, y el host no conoce el puerto por defecto de un scheme ajeno:
-    /// sin este campo y sin puerto en la URL, la conexión se rehúsa. Entra en
-    /// el digest de aprobación como el scheme.
+    /// Port the guest connects to when the URL does not say (`default-port
+    /// = 8443`). A provider plugin receives network access to `ip:port`,
+    /// never to the whole IP, and the host does not know a foreign
+    /// scheme's default port: without this field and without a port in
+    /// the URL, the connection is refused. Goes into the approval digest
+    /// like the scheme.
     #[serde(default, rename = "default-port")]
     pub default_port: Option<u16>,
 }
 
-/// Un fabricante de miniaturas declarado (ADR 0107): los mimetypes que
-/// sabe convertir en un raster, con las mismas reglas de casado que los de
-/// un previewer (exacto antes que comodín).
+/// A declared thumbnail maker (ADR 0107): the mimetypes it can convert
+/// into a raster, with the same matching rules as a previewer's (exact
+/// before wildcard).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ThumbnailContrib {
-    /// Mimetypes que atiende (`image/png`, `image/*`).
+    /// Mimetypes it handles (`image/png`, `image/*`).
     pub mimetypes: Vec<String>,
 }
 
-/// Un renamer declarado (C3, ADR 0095): un proponente de nombres con su id
-/// y su título. Un plugin puede aportar varios («por fecha EXIF», «por
-/// título ID3»); el id es lo que viaja a `renamer.plan` y el título lo que
-/// la paleta enseña.
+/// A declared renamer (C3, ADR 0095): a name proposer with its id and its
+/// title. A plugin can supply several ("by EXIF date", "by ID3 title");
+/// the id is what travels to `renamer.plan` and the title is what the
+/// palette shows.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RenamerContrib {
-    /// Id estable dentro del plugin.
+    /// Stable id within the plugin.
     pub id: String,
-    /// Título legible. Texto del plugin — NO confiable.
+    /// Readable title. Plugin text — NOT trusted.
     pub title: String,
 }
 
-/// Un organizer declarado (fase 8): un proponente de REORGANIZACIÓN con su
-/// id y su título. Misma forma que [`RenamerContrib`] porque cumple el mismo
-/// papel; lo que cambia es lo que propone —una ruta relativa en vez de un
-/// nombre— y eso vive en el WIT, no aquí.
+/// A declared organizer (phase 8): a REORGANIZATION proposer with its id
+/// and its title. Same shape as [`RenamerContrib`] because it plays the
+/// same role; what changes is what it proposes — a relative path instead
+/// of a name — and that lives in the WIT, not here.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OrganizerContrib {
-    /// Id estable dentro del plugin.
+    /// Stable id within the plugin.
     pub id: String,
-    /// Título legible. Texto del plugin — NO confiable.
+    /// Readable title. Plugin text — NOT trusted.
     pub title: String,
 }
 
-/// Un hook declarado: el evento al que engancha.
+/// A declared hook: the event it hooks into.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HookContrib {
-    /// Evento, uno de [`HOOK_EVENTS`] (`after-renamed`, …). Cerrado y
-    /// validado al parsear: un valor que no esté es
-    /// [`ManifestError::HookUnknownEvent`], como una capability desconocida.
+    /// Event, one of [`HOOK_EVENTS`] (`after-renamed`, …). Closed and
+    /// validated while parsing: a value not in it is
+    /// [`ManifestError::HookUnknownEvent`], like an unknown capability.
     pub on: String,
 }
 
-/// Cuántos sidecars puede declarar un hook. Dieciséis es «varios ficheros
-/// de trabajo»; por encima es un plugin que quiere un directorio, y eso es
-/// otra capacidad.
+/// How many sidecars a hook can declare. Sixteen is "several work files";
+/// above that it is a plugin that wants a directory, and that is a
+/// different capability.
 pub const SIDECAR_MAX_NAMES: usize = 16;
 
-/// Tope de bytes del nombre de un sidecar: `NAME_MAX` en los sistemas de
-/// ficheros corrientes.
+/// Byte cap for a sidecar's name: `NAME_MAX` on common filesystems.
 const SIDECAR_NAME_MAX_BYTES: usize = 255;
 
-/// `true` si `name` es UN nombre de fichero PORTABLE que el host aceptará
-/// escribir junto a un evento: ASCII imprimible sin `/ \ : * ? " < > |`, no
-/// vacío, cabe en `NAME_MAX`, ni `.` ni `..`, sin punto final y sin nombre
-/// reservado de Windows (`CON`, `NUL`, `COM1`…). ASCII porque el nombre es
-/// texto de un tercero que se pinta en la aprobación y se escribe en disco:
-/// sin bidi, sin invisibles, sin homógrafos.
+/// `true` if `name` is A PORTABLE file name the host will agree to write
+/// next to an event: printable ASCII without `/ \ : * ? " < > |`, not
+/// empty, fits in `NAME_MAX`, not `.` nor `..`, no trailing dot and not a
+/// reserved Windows name (`CON`, `NUL`, `COM1`…). ASCII because the name is
+/// third-party text that gets painted in the approval and written to disk:
+/// no bidi, no invisibles, no homoglyphs.
 ///
 /// ```
 /// use norte_plugin_host::is_valid_sidecar_name;
@@ -265,13 +268,15 @@ pub fn is_valid_sidecar_name(name: &str) -> bool {
     !RESERVED.contains(&stem.as_str())
 }
 
-/// El vocabulario CERRADO de `[[contributions.hook]].on` (ADR 0100): las
-/// operaciones del journal, en pasado, porque un hook solo ve lo que ya
-/// quedó registrado. No hay `before-*` — eso sería policy, no un plugin.
+/// The CLOSED vocabulary of `[[contributions.hook]].on` (ADR 0100): journal
+/// operations, in the past tense, because a hook only sees what has
+/// already been recorded. There is no `before-*` — that would be policy,
+/// not a plugin.
 ///
-/// Está aquí y no en el core porque las tres piezas que tienen que estar de
-/// acuerdo —quien lo valida (este crate), quien lo dispara (`norte-core`) y
-/// la guía— parten de una lista; sin ella cada una guarda su copia.
+/// Lives here and not in the core because the three pieces that must
+/// agree — whoever validates it (this crate), whoever fires it
+/// (`norte-core`) and the guide — all start from a list; without it, each
+/// one keeps its own copy.
 pub const HOOK_EVENTS: &[&str] = &[
     "after-created",
     "after-removed",
@@ -280,52 +285,51 @@ pub const HOOK_EVENTS: &[&str] = &[
     "after-mode-changed",
 ];
 
-/// Un decorator declarado (ADR 0037 decisión 2): marcador VACÍO — a
-/// diferencia de [`PreviewerContrib`]/[`ColumnContrib`], un decorator no
-/// declara mimetypes ni ids: la interfaz WIT `decorator::decorate` se llama
-/// para TODA entrada visible de la página (batched, sin filtro previo por
-/// tipo). La entrada existe (en vez de que `category = "decorator"` baste
-/// por sí sola) para dejar sitio simétrico a futuros campos (p. ej. un glob
-/// de exclusión) sin otro cambio de forma del manifiesto; hoy es
-/// deliberadamente `{}` — `deny_unknown_fields` para que un campo hostil
-/// desconocido rechace el manifiesto en vez de ignorarse en silencio.
+/// A declared decorator (ADR 0037 decision 2): an EMPTY marker — unlike
+/// [`PreviewerContrib`]/[`ColumnContrib`], a decorator declares no
+/// mimetypes or ids: the WIT interface `decorator::decorate` is called for
+/// EVERY visible entry on the page (batched, with no prior type filter).
+/// The entry exists (rather than letting `category = "decorator"` be
+/// enough on its own) to leave symmetrical room for future fields (e.g. an
+/// exclusion glob) without another shape change to the manifest; today it
+/// is deliberately `{}` — `deny_unknown_fields` so an unknown hostile
+/// field rejects the manifest instead of being ignored silently.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DecoratorContrib {
-    /// En qué HUECO de la fila se pinta lo que este decorador devuelve
-    /// (ADR 0105): `badge` (por defecto) a la derecha del nombre, como un
-    /// estado de git; `icon` a la izquierda, en una columna de ancho fijo.
-    /// Los dos huecos coexisten: un icono y una insignia en la misma fila
-    /// vienen de dos plugins distintos. Entra en el digest solo cuando no es
-    /// el valor por defecto, para que ningún manifiesto anterior cambie de
-    /// ancla.
+    /// Which SLOT of the row this decorator's return value is painted in
+    /// (ADR 0105): `badge` (default) to the right of the name, like a git
+    /// status; `icon` to the left, in a fixed-width column. The two slots
+    /// coexist: an icon and a badge on the same row come from two
+    /// different plugins. Goes into the digest only when it is not the
+    /// default value, so that no earlier manifest changes anchor.
     #[serde(default)]
     pub slot: DecoratorSlot,
 }
 
-/// El hueco de la fila que llena un decorador (ADR 0105).
+/// The row slot a decorator fills (ADR 0105).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DecoratorSlot {
-    /// A la derecha del nombre, texto corto: `M`, `++`.
+    /// To the right of the name, short text: `M`, `++`.
     #[default]
     Badge,
-    /// A la izquierda del nombre, un glifo por fila.
+    /// To the left of the name, one glyph per row.
     Icon,
 }
 
-/// Lo que el plugin APORTA, por interfaz. Todo opcional: un plugin de una sola
-/// interfaz solo rellena la suya.
+/// What the plugin CONTRIBUTES, per interface. All optional: a
+/// single-interface plugin fills in only its own.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Contributions {
     /// Previewers.
     #[serde(default)]
     pub previewer: Vec<PreviewerContrib>,
-    /// Comandos.
+    /// Commands.
     #[serde(default)]
     pub command: Vec<CommandContrib>,
-    /// Columnas.
+    /// Columns.
     #[serde(default)]
     pub columns: Vec<ColumnContrib>,
     /// Providers.
@@ -334,44 +338,46 @@ pub struct Contributions {
     /// Hooks.
     #[serde(default)]
     pub hook: Vec<HookContrib>,
-    /// Decorators (ADR 0037 decisión 2). A diferencia de las demás
-    /// secciones, esta NO entra en `Contributions::update_digest`
-    /// (unconditional): sigue el patrón OPCIONAL de `[config]` — ver
-    /// `update_decorator_digest` — para que un manifiesto sin
-    /// `[[contributions.decorator]]` digeste EXACTAMENTE igual que antes de
-    /// esta categoría (las aprobaciones humanas ya existentes no se
-    /// resetean por la sola introducción del campo).
+    /// Decorators (ADR 0037 decision 2). Unlike the other sections, this
+    /// one does NOT go into `Contributions::update_digest`
+    /// (unconditionally): it follows `[config]`'s OPTIONAL pattern — see
+    /// `update_decorator_digest` — so that a manifest without
+    /// `[[contributions.decorator]]` digests EXACTLY like it did before
+    /// this category (existing human approvals are not reset just because
+    /// this field exists).
     #[serde(default)]
     pub decorator: Vec<DecoratorContrib>,
-    /// Renamers (C3, ADR 0095). Aditivo y con default, como los demás: los
-    /// manifiestos anteriores no lo traen y su digest no se mueve.
+    /// Renamers (C3, ADR 0095). Additive with a default, like the others:
+    /// earlier manifests don't carry it and its digest does not move.
     #[serde(default)]
     pub renamer: Vec<RenamerContrib>,
-    /// Organizers (fase 8). Aditivo y con default, como los demás.
+    /// Organizers (phase 8). Additive with a default, like the others.
     #[serde(default)]
     pub organizer: Vec<OrganizerContrib>,
-    /// Paneles que el plugin pinta (fase 3 del programa 2026-09-15). Sigue el
-    /// patrón OPCIONAL del digest, como `decorator` y `[config]`: un
-    /// manifiesto sin `[[contributions.panel]]` digesta byte a byte igual que
-    /// antes de que esta categoría existiera, así que las aprobaciones que el
-    /// lector ya dio no se resetean por la sola aparición del campo.
+    /// Panels the plugin paints (phase 3 of the 2026-09-15 program).
+    /// Follows the digest's OPTIONAL pattern, like `decorator` and
+    /// `[config]`: a manifest without `[[contributions.panel]]` digests
+    /// byte for byte the same as before this category existed, so
+    /// approvals the reader already gave are not reset just because the
+    /// field appears.
     #[serde(default)]
     pub panel: Vec<PanelContrib>,
-    /// Fabricantes de miniaturas (ADR 0107).
+    /// Thumbnail makers (ADR 0107).
     #[serde(default)]
     pub thumbnail: Vec<ThumbnailContrib>,
 }
 
 impl Contributions {
-    /// Alimenta un hasher con la forma CANÓNICA de las contribuciones, SIN
-    /// finalizar (issue #69). Son los campos que deciden CUÁNDO/CÓMO se dispara
-    /// el plugin (mimetypes del previewer, ids de comando, schemes de provider,
-    /// eventos de hook): cambiarlos manteniendo las mismas capabilities NO debe
-    /// conservar la aprobación (si no, un `command` reeditado a `previewer`
-    /// pasaría a auto-ejecutarse en el viewer sobre ficheros que casen). El orden
-    /// se preserva (no se ordena): un reorden dispara re-consentimiento —
-    /// conservador y fail-closed. Cada sección va con su nº de entradas y cada
-    /// cadena longitud-prefijada (sin ambigüedad entre secciones).
+    /// Feeds a hasher with the CANONICAL form of the contributions,
+    /// WITHOUT finalizing (issue #69). These are the fields that decide
+    /// WHEN/HOW the plugin fires (a previewer's mimetypes, command ids, a
+    /// provider's schemes, hook events): changing them while keeping the
+    /// same capabilities must NOT preserve the approval (otherwise a
+    /// `command` re-edited to `previewer` would start auto-running in the
+    /// viewer over matching files). Order is preserved (not sorted): a
+    /// reorder triggers re-consent — conservative and fail-closed. Each
+    /// section goes with its entry count and each string is
+    /// length-prefixed (no ambiguity between sections).
     fn update_digest(&self, h: &mut sha2::Sha256) {
         use crate::capability::update_str;
         use sha2::Digest;
@@ -396,9 +402,9 @@ impl Contributions {
         h.update((self.provider.len() as u64).to_le_bytes());
         for c in &self.provider {
             update_str(h, &c.scheme);
-            // Presencia + valor, como cualquier opcional del digest: el
-            // puerto decide a qué se concede red, así que cambiarlo tras
-            // aprobar es cambiar lo aprobado.
+            // Presence + value, like any optional field in the digest: the
+            // port decides what network access is granted, so changing it
+            // after approval is changing what was approved.
             h.update([u8::from(c.default_port.is_some())]);
             h.update(c.default_port.unwrap_or_default().to_le_bytes());
         }
@@ -406,11 +412,12 @@ impl Contributions {
         for c in &self.hook {
             update_str(h, &c.on);
         }
-        // Los renamers, DETRÁS y solo si hay: un manifiesto sin ninguno
-        // digesta exactamente lo que digestaba antes de que existieran, y
-        // ninguna aprobación se resetea por su sola introducción. Con alguno,
-        // el separador fijo y cada par id/título, como los comandos: cambiar
-        // qué propone un plugin es cambiar lo aprobado.
+        // Renamers, AFTER everything and only if there are any: a
+        // manifest with none digests exactly what it digested before they
+        // existed, and no approval is reset by their mere introduction.
+        // With some, a fixed separator and each id/title pair, like
+        // commands: changing what a plugin proposes is changing what was
+        // approved.
         if !self.renamer.is_empty() {
             h.update(b"renamer:\n");
             h.update((self.renamer.len() as u64).to_le_bytes());
@@ -419,8 +426,9 @@ impl Contributions {
                 update_str(h, &c.title);
             }
         }
-        // Las miniaturas, con el mismo trato (ADR 0107): detrás y solo si
-        // hay, para que ningún manifiesto existente cambie de digest.
+        // Thumbnails, with the same treatment (ADR 0107): after
+        // everything and only if there are any, so no existing manifest
+        // changes digest.
         if !self.thumbnail.is_empty() {
             h.update(b"thumbnail:\n");
             h.update((self.thumbnail.len() as u64).to_le_bytes());
@@ -431,30 +439,31 @@ impl Contributions {
                 }
             }
         }
-        // Y los paneles, con el mismo trato: detrás y solo si hay, para que
-        // ningún manifiesto existente cambie de digest por la sola aparición
-        // de la categoría. Entra el `kind` (es el hueco que el plugin ocupa),
-        // el título (lo que el lector lee en la barra) y los mínimos: un
-        // panel que tras la aprobación pide media pantalla ya no es el panel
-        // que se aprobó.
+        // And panels, with the same treatment: after everything and only
+        // if there are any, so no existing manifest changes digest just
+        // because the category appears. In goes the `kind` (it is the
+        // slot the plugin occupies), the title (what the reader reads in
+        // the bar) and the minimums: a panel that after approval asks for
+        // half the screen is no longer the panel that was approved.
         if !self.panel.is_empty() {
             h.update(b"panel:\n");
             h.update((self.panel.len() as u64).to_le_bytes());
             for c in &self.panel {
                 update_str(h, &c.kind);
                 update_str(h, &c.title);
-                // Presencia + valor, como el puerto de un provider: «sin
-                // mínimo» y «mínimo cero» no son lo mismo.
+                // Presence + value, like a provider's port: "no minimum"
+                // and "minimum zero" are not the same.
                 h.update([u8::from(c.min_cols.is_some())]);
                 h.update(c.min_cols.unwrap_or_default().to_le_bytes());
                 h.update([u8::from(c.min_rows.is_some())]);
                 h.update(c.min_rows.unwrap_or_default().to_le_bytes());
             }
         }
-        // Y los organizers, detrás de todo y solo si hay (fase 8), por lo
-        // mismo que sus cinco predecesores: un manifiesto sin ninguno digesta
-        // byte a byte lo que digestaba antes, así que ninguna aprobación
-        // humana se resetea porque esta categoría exista.
+        // And organizers, after everything and only if there are any
+        // (phase 8), for the same reason as their five predecessors: a
+        // manifest with none digests byte for byte what it digested
+        // before, so no human approval is reset just because this
+        // category exists.
         if !self.organizer.is_empty() {
             h.update(b"organizer:\n");
             h.update((self.organizer.len() as u64).to_le_bytes());
@@ -466,59 +475,61 @@ impl Contributions {
     }
 }
 
-/// Una clave `[config.<key>]` del manifiesto (P2), ya validada: el `type`
-/// TOML fija la forma exacta (mirror del estilo de [`Capabilities`] — un
-/// permiso ausente/campo no aplicable simplemente no existe en la variante).
-/// `description` es cosmética para la UI del gestor y está deliberadamente
-/// FUERA de [`Manifest::approval_digest`] (mismo criterio que
-/// [`Manifest::description`]): editarla no reinvalida capabilities ya
-/// aprobadas, porque no cambia qué valores puede tomar la clave.
+/// A `[config.<key>]` key of the manifest (P2), already validated: the
+/// TOML `type` fixes the exact shape (mirroring [`Capabilities`]'s
+/// style — an absent permission/non-applicable field simply does not
+/// exist in the variant). `description` is cosmetic for the manager's UI
+/// and is deliberately OUTSIDE [`Manifest::approval_digest`] (same
+/// treatment as [`Manifest::description`]): editing it does not
+/// reinvalidate already-approved capabilities, because it does not change
+/// what values the key can take.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ConfigKeySpec {
     /// `type = "string"`.
     String {
-        /// Valor por defecto (tope [`CONFIG_STRING_MAX_CHARS`] caracteres).
+        /// Default value (cap [`CONFIG_STRING_MAX_CHARS`] characters).
         default: String,
-        /// Texto cosmético para la UI (tope [`CONFIG_DESCRIPTION_MAX_CHARS`]
-        /// caracteres). NO entra en el digest de aprobación.
+        /// Cosmetic text for the UI (cap
+        /// [`CONFIG_DESCRIPTION_MAX_CHARS`] characters). Does NOT go into
+        /// the approval digest.
         description: Option<String>,
     },
     /// `type = "bool"`.
     Bool {
-        /// Valor por defecto.
+        /// Default value.
         default: bool,
-        /// Ver [`ConfigKeySpec::String::description`].
+        /// See [`ConfigKeySpec::String::description`].
         description: Option<String>,
     },
     /// `type = "int"`.
     Int {
-        /// Valor por defecto; DEBE caer dentro de `[min, max]` cuando se
-        /// declaran (validado al parsear, fail-loud).
+        /// Default value; MUST fall within `[min, max]` when declared
+        /// (validated while parsing, fail-loud).
         default: i64,
-        /// Cota inferior inclusive (opcional).
+        /// Inclusive lower bound (optional).
         min: Option<i64>,
-        /// Cota superior inclusive (opcional).
+        /// Inclusive upper bound (optional).
         max: Option<i64>,
-        /// Ver [`ConfigKeySpec::String::description`].
+        /// See [`ConfigKeySpec::String::description`].
         description: Option<String>,
     },
     /// `type = "enum"`.
     Enum {
-        /// Valor por defecto; DEBE estar en `values` (validado al parsear,
+        /// Default value; MUST be in `values` (validated while parsing,
         /// fail-loud).
         default: String,
-        /// Valores permitidos (tope [`CONFIG_ENUM_MAX_VALUES`] entradas, cada
-        /// una hasta [`CONFIG_STRING_MAX_CHARS`] caracteres).
+        /// Allowed values (cap [`CONFIG_ENUM_MAX_VALUES`] entries, each up
+        /// to [`CONFIG_STRING_MAX_CHARS`] characters).
         values: Vec<String>,
-        /// Ver [`ConfigKeySpec::String::description`].
+        /// See [`ConfigKeySpec::String::description`].
         description: Option<String>,
     },
 }
 
 impl ConfigKeySpec {
-    /// Byte canónico y estable para el digest de aprobación (mismo criterio
-    /// que [`Category::digest_tag`]/`Scope::digest_tag`): NO se usa el
-    /// discriminante del enum (podría reordenarse) sino un valor fijo.
+    /// Canonical, stable byte for the approval digest (same criterion as
+    /// [`Category::digest_tag`]/`Scope::digest_tag`): does NOT use the
+    /// enum's discriminant (it could be reordered) but a fixed value.
     fn digest_tag(&self) -> u8 {
         match self {
             ConfigKeySpec::String { .. } => 0,
@@ -528,10 +539,11 @@ impl ConfigKeySpec {
         }
     }
 
-    /// Alimenta un hasher con la forma CANÓNICA de esta clave, SIN finalizar
-    /// (compone [`Manifest::approval_digest`]): tag de tipo + los campos que
-    /// afectan comportamiento (`default`, `min`, `max`, `values`).
-    /// `description` se EXCLUYE a propósito (cosmética, ver el doc del tipo).
+    /// Feeds a hasher with this key's CANONICAL form, WITHOUT finalizing
+    /// (composes [`Manifest::approval_digest`]): type tag + the fields
+    /// that affect behavior (`default`, `min`, `max`, `values`).
+    /// `description` is EXCLUDED on purpose (cosmetic, see the type's
+    /// doc).
     fn update_digest(&self, h: &mut sha2::Sha256) {
         use crate::capability::{update_opt_i64, update_str};
         use sha2::Digest;
@@ -550,10 +562,11 @@ impl ConfigKeySpec {
                 default, values, ..
             } => {
                 update_str(h, default);
-                // `values` es una LISTA ordenada (no un conjunto): el orden en
-                // que el usuario las declara es el orden en que se muestran en
-                // la UI (ADR-style: mismo criterio que `Contributions`, que
-                // tampoco ordena). Cambiar el orden SÍ mueve el digest.
+                // `values` is an ORDERED LIST (not a set): the order the
+                // user declares them in is the order shown in the UI
+                // (ADR-style: same criterion as `Contributions`, which
+                // also does not sort). Changing the order DOES move the
+                // digest.
                 h.update((values.len() as u64).to_le_bytes());
                 for v in values {
                     update_str(h, v);
@@ -563,9 +576,9 @@ impl ConfigKeySpec {
     }
 }
 
-/// Forma cruda de una entrada `[config.<key>]` (antes de validar). El campo
-/// `type` (`serde(tag = "type")`) selecciona la variante; TOML es
-/// autodescriptivo así que el tag interno funciona sin ambigüedad.
+/// Raw form of a `[config.<key>]` entry (before validation). The `type`
+/// field (`serde(tag = "type")`) selects the variant; TOML is
+/// self-describing so the internal tag works unambiguously.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
 enum ConfigKeyRaw {
@@ -600,29 +613,30 @@ enum ConfigKeyRaw {
     },
 }
 
-/// Tope de claves en `[config]` (P2 decisión 1).
+/// Cap on the number of `[config]` keys (P2 decision 1).
 pub const CONFIG_MAX_KEYS: usize = 32;
-/// Tope de longitud de una clave `[config.<key>]`; el charset permitido es
-/// `[a-z0-9-]{1,32}` (P2 decisión 1) — ni mayúsculas ni `_` ni no-ASCII, para
-/// que la clave sea segura de interpolar en TOML de valores
-/// (`config_dir/plugins/<id>/config.toml`), logs y la UI del gestor sin
-/// escapado.
+/// Length cap for a `[config.<key>]` key; the allowed charset is
+/// `[a-z0-9-]{1,32}` (P2 decision 1) — no uppercase, no `_`, no non-ASCII,
+/// so the key is safe to interpolate into values TOML
+/// (`config_dir/plugins/<id>/config.toml`), logs and the manager's UI
+/// without escaping.
 pub const CONFIG_KEY_MAX_CHARS: usize = 32;
-/// Tope de `[config.<key>].description` (P2 decisión 1), mismo criterio que
-/// [`Manifest::description`] (280 CARACTERES, no bytes).
+/// Cap on `[config.<key>].description` (P2 decision 1), same criterion as
+/// [`Manifest::description`] (280 CHARACTERS, not bytes).
 pub const CONFIG_DESCRIPTION_MAX_CHARS: usize = 280;
-/// Tope de un `default` de tipo `string`, o de cada entrada de `values`
-/// (enum) (P2 decisión 1), en CARACTERES.
+/// Cap on a `string`-typed `default`, or each `values` entry (enum) (P2
+/// decision 1), in CHARACTERS.
 pub const CONFIG_STRING_MAX_CHARS: usize = 280;
-/// Tope de entradas en `[config.<key>].values` (enum) (P2 decisión 1).
+/// Cap on entries in `[config.<key>].values` (enum) (P2 decision 1).
 pub const CONFIG_ENUM_MAX_VALUES: usize = 16;
 
-/// `true` si `key` respeta el charset `[a-z0-9-]{1,32}` (P2 decisión 1): solo
-/// minúsculas ASCII, dígitos y guion, longitud `1..=32`. `pub(crate)`: la
-/// reutiliza `config_values.rs` (security review P2 Task 4a) para decidir si
-/// una clave DESCONOCIDA de `config.toml` es segura de interpolar en un
-/// mensaje de error — el mismo charset acotado (ASCII, sin control/bidi, tope
-/// de longitud) que ya garantiza toda clave DECLARADA en el esquema.
+/// `true` if `key` respects the `[a-z0-9-]{1,32}` charset (P2 decision 1):
+/// only lowercase ASCII, digits and hyphen, length `1..=32`.
+/// `pub(crate)`: reused by `config_values.rs` (security review P2 Task 4a)
+/// to decide whether an UNKNOWN key from `config.toml` is safe to
+/// interpolate into an error message — the same bounded charset (ASCII, no
+/// control/bidi, length cap) that already guarantees every key DECLARED in
+/// the schema.
 pub(crate) fn is_valid_config_key(key: &str) -> bool {
     !key.is_empty()
         && key.len() <= CONFIG_KEY_MAX_CHARS
@@ -631,11 +645,11 @@ pub(crate) fn is_valid_config_key(key: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
-/// Valida una entrada cruda `[config.<key>]` contra sus propios topes de tipo
-/// y devuelve la forma ya validada. `key` NO se usa en los mensajes de error
-/// (mismo criterio que `Id`/`DuplicateId`... salvo que aquí ni siquiera el id
-/// de plugin, ya validado, se arriesga: la clave de config puede venir de
-/// CUALQUIER TOML hostil antes de pasar el charset).
+/// Validates a raw `[config.<key>]` entry against its own type caps and
+/// returns the already-validated form. `key` is NOT used in error
+/// messages (same criterion as `Id`/`DuplicateId`... except that here not
+/// even the plugin id, already validated, is risked: a config key can
+/// come from ANY hostile TOML before it passes the charset).
 fn validate_config_entry(raw: ConfigKeyRaw) -> Result<ConfigKeySpec, ManifestError> {
     fn check_description(description: Option<&String>) -> Result<(), ManifestError> {
         if description.is_some_and(|d| d.chars().count() > CONFIG_DESCRIPTION_MAX_CHARS) {
@@ -712,21 +726,21 @@ fn validate_config_entry(raw: ConfigKeyRaw) -> Result<ConfigKeySpec, ManifestErr
     }
 }
 
-/// Alimenta un hasher con la forma CANÓNICA de `[config]` completo, SIN
-/// finalizar (P2 decisión 2): la sección `config:` SOLO se añade si `config`
-/// NO está vacío — un manifiesto sin `[config]` (o con una tabla presente
-/// pero sin claves) digesta IGUAL que antes de P2, así que las aprobaciones
-/// humanas ya existentes de plugins que no usan `[config]` NUNCA se
-/// resetean. El `BTreeMap` ya itera en orden de clave (determinista, no
-/// depende del orden en el fichero).
+/// Feeds a hasher with the CANONICAL form of the whole `[config]`, WITHOUT
+/// finalizing (P2 decision 2): the `config:` section is ONLY added if
+/// `config` is NOT empty — a manifest without `[config]` (or with a table
+/// present but no keys) digests THE SAME as before P2, so existing human
+/// approvals of plugins that do not use `[config]` are NEVER reset. The
+/// `BTreeMap` already iterates in key order (deterministic, independent of
+/// the order in the file).
 fn update_config_digest(config: &BTreeMap<String, ConfigKeySpec>, h: &mut sha2::Sha256) {
     use crate::capability::update_str;
     use sha2::Digest;
     if config.is_empty() {
         return;
     }
-    // Domain separator FIJO (no interpolado, no ambiguo con contenido de
-    // usuario): marca dónde empieza la sección opcional.
+    // FIXED domain separator (not interpolated, not ambiguous with user
+    // content): marks where the optional section begins.
     h.update(b"config:\n");
     h.update((config.len() as u64).to_le_bytes());
     for (key, spec) in config {
@@ -735,31 +749,31 @@ fn update_config_digest(config: &BTreeMap<String, ConfigKeySpec>, h: &mut sha2::
     }
 }
 
-/// Alimenta un hasher con la forma CANÓNICA de `contributions.decorator`, SIN
-/// finalizar (ADR 0037 decisión 2): mismo patrón OPCIONAL que
-/// [`update_config_digest`] — la sección `decorator:` SOLO se añade si el
-/// `Vec` NO está vacío, así que un manifiesto sin
-/// `[[contributions.decorator]]` (la inmensa mayoría, incluidos TODOS los
-/// manifiestos que existían antes de esta categoría) digesta EXACTAMENTE
-/// igual que antes de este cambio — ninguna aprobación humana existente se
-/// resetea por la sola introducción del campo. Un manifiesto que SÍ declara
-/// al menos un decorator mueve el digest (fuerza consentimiento) porque
-/// pasar a `category = "decorator"` cambia radicalmente cuándo/cómo se
-/// dispara el plugin.
+/// Feeds a hasher with the CANONICAL form of `contributions.decorator`,
+/// WITHOUT finalizing (ADR 0037 decision 2): the same OPTIONAL pattern as
+/// [`update_config_digest`] — the `decorator:` section is ONLY added if
+/// the `Vec` is NOT empty, so a manifest without
+/// `[[contributions.decorator]]` (the vast majority, including EVERY
+/// manifest that existed before this category) digests EXACTLY the same
+/// as before this change — no existing human approval is reset just
+/// because the field exists. A manifest that DOES declare at least one
+/// decorator moves the digest (forces consent) because moving to
+/// `category = "decorator"` radically changes when/how the plugin fires.
 fn update_decorator_digest(decorator: &[DecoratorContrib], h: &mut sha2::Sha256) {
     use sha2::Digest;
     if decorator.is_empty() {
         return;
     }
-    // Domain separator FIJO, igual criterio que `update_config_digest`.
+    // FIXED domain separator, same criterion as `update_config_digest`.
     h.update(b"decorator:\n");
     h.update((decorator.len() as u64).to_le_bytes());
-    // El hueco (ADR 0105) SOLO cuando no es el de siempre: un manifiesto
-    // anterior a la columna de iconos digesta byte a byte igual que antes, y
-    // pasar a `icon` mueve el ancla porque cambia dónde se pinta el plugin.
-    // CON su posición: el core lee el hueco de la PRIMERA contribución, y
-    // sin el índice reordenar dos bloques movería un plugin aprobado de la
-    // insignia a la columna de iconos sin que el digest se enterase.
+    // The slot (ADR 0105) ONLY when it is not the usual one: a manifest
+    // predating the icon column digests byte for byte the same as before,
+    // and moving to `icon` moves the anchor because it changes where the
+    // plugin paints. WITH its position: the core reads the FIRST
+    // contribution's slot, and without the index, reordering two blocks
+    // would move an approved plugin from the badge to the icon column
+    // without the digest noticing.
     for (i, d) in decorator.iter().enumerate() {
         if d.slot == DecoratorSlot::Icon {
             h.update(b"slot:icon@");
@@ -768,7 +782,7 @@ fn update_decorator_digest(decorator: &[DecoratorContrib], h: &mut sha2::Sha256)
     }
 }
 
-/// Bloque `[plugin]` del manifiesto.
+/// Manifest's `[plugin]` block.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PluginSection {
@@ -777,13 +791,13 @@ struct PluginSection {
     publisher: String,
     version: String,
     category: Category,
-    /// Descripción cosmética (P1); ausente = `None`. Cap 280 chars en
-    /// [`Manifest::from_toml`] — ver [`Manifest::description`].
+    /// Cosmetic description (P1); absent = `None`. 280-char cap in
+    /// [`Manifest::from_toml`] — see [`Manifest::description`].
     #[serde(default)]
     description: Option<String>,
 }
 
-/// Forma cruda del TOML (antes de validar).
+/// Raw form of the TOML (before validation).
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ManifestRaw {
@@ -792,311 +806,320 @@ struct ManifestRaw {
     contributions: Contributions,
     #[serde(default)]
     capabilities: Capabilities,
-    /// `[config.<key>]` (P2); ausente = mapa vacío. `BTreeMap` para que el
-    /// orden de iteración sea determinista independientemente del orden en
-    /// el fichero (relevante para [`Manifest::approval_digest`]).
+    /// `[config.<key>]` (P2); absent = empty map. `BTreeMap` so the
+    /// iteration order is deterministic regardless of the order in the
+    /// file (relevant to [`Manifest::approval_digest`]).
     #[serde(default)]
     config: BTreeMap<String, ConfigKeyRaw>,
 }
 
-/// El manifiesto ya validado de un plugin.
+/// A plugin's already-validated manifest.
 #[derive(Debug, Clone)]
 pub struct Manifest {
-    /// Id reverse-DNS único (`org.norte.syntax-preview`).
+    /// Unique reverse-DNS id (`org.norte.syntax-preview`).
     pub id: String,
-    /// Nombre legible.
+    /// Readable name.
     pub name: String,
-    /// Publicador.
+    /// Publisher.
     pub publisher: String,
-    /// Versión (`SemVer`, sin validar aquí).
+    /// Version (`SemVer`, not validated here).
     pub version: String,
-    /// Categoría primaria (ordena el gestor).
+    /// Primary category (orders the manager).
     pub category: Category,
-    /// Descripción cosmética (P1), tope 280 caracteres (fail-loud al parsear,
-    /// como `id`). `None` si el manifiesto no la declara. Texto suministrado
-    /// por el plugin — NO confiable, un frontend debe enmascararla antes de
-    /// renderizarla. Deliberadamente FUERA de [`Manifest::approval_digest`]
-    /// (mismo trato que `name`/`publisher`/`version`): editarla no reinvalida
-    /// capabilities ya aprobadas por el humano, porque no cambia qué hace el
-    /// plugin ni cuándo se dispara.
+    /// Cosmetic description (P1), 280-character cap (fail-loud while
+    /// parsing, like `id`). `None` if the manifest does not declare it.
+    /// Text supplied by the plugin — NOT trusted, a frontend must mask it
+    /// before rendering. Deliberately OUTSIDE
+    /// [`Manifest::approval_digest`] (same treatment as
+    /// `name`/`publisher`/`version`): editing it does not reinvalidate
+    /// capabilities the human already approved, because it does not
+    /// change what the plugin does nor when it fires.
     pub description: Option<String>,
-    /// Contribuciones por interfaz.
+    /// Per-interface contributions.
     pub contributions: Contributions,
-    /// Capabilities declaradas.
+    /// Declared capabilities.
     pub capabilities: Capabilities,
-    /// Settings tipadas declaradas por el plugin (P2), ya validadas.
-    /// `BTreeMap` para orden determinista por clave. Ausente `[config]` en el
-    /// TOML ⇒ mapa vacío. SÍ entra en [`Manifest::approval_digest`] (afecta
-    /// comportamiento: define qué valores puede tomar cada setting), salvo la
-    /// `description` de cada clave (cosmética, igual que
+    /// Typed settings the plugin declares (P2), already validated.
+    /// `BTreeMap` for deterministic order by key. Absent `[config]` in the
+    /// TOML ⇒ empty map. DOES go into [`Manifest::approval_digest`]
+    /// (affects behavior: defines what values each setting can take),
+    /// except each key's `description` (cosmetic, same as
     /// [`Manifest::description`]).
     pub config: BTreeMap<String, ConfigKeySpec>,
 }
 
-/// Error al cargar un manifiesto — o, más ampliamente, la razón por la que un
-/// candidato a plugin queda excluido del catálogo (mismo tipo que
-/// [`crate::LoadError::error`]): además del parseo/validación de
-/// `plugin.toml` en sí, cubre condiciones de nivel catálogo como
-/// `DuplicateId` y, desde P2, `ConfigValues` (un `config.toml` de VALORES
-/// que no valida contra el esquema `[config]` — el plugin entero se excluye,
-/// no solo la clave ofensora).
+/// Error loading a manifest — or, more broadly, the reason a plugin
+/// candidate is excluded from the catalog (same type as
+/// [`crate::LoadError::error`]): besides parsing/validating `plugin.toml`
+/// itself, it covers catalog-level conditions such as `DuplicateId` and,
+/// since P2, `ConfigValues` (a VALUES `config.toml` that fails to validate
+/// against the `[config]` schema — the whole plugin is excluded, not just
+/// the offending key).
 #[derive(Debug, thiserror::Error)]
 pub enum ManifestError {
-    /// El TOML no parsea o tiene claves desconocidas.
-    #[error("plugin.toml inválido: {0}")]
+    /// The TOML does not parse or has unknown keys.
+    #[error("invalid plugin.toml: {0}")]
     Toml(#[from] toml::de::Error),
-    /// `plugin.id` vacío o no reverse-DNS (sin `.`).
-    #[error("plugin.id inválido: se espera reverse-DNS (p. ej. `org.foo.bar`)")]
+    /// `plugin.id` empty or not reverse-DNS (no `.`).
+    #[error("invalid plugin.id: reverse-DNS expected (e.g. `org.foo.bar`)")]
     Id,
-    /// `exec` distinto de `none`: PROHIBIDO (spec §7.1, invariante dura).
-    #[error("capability `exec` prohibida: debe ser `none` (o ausente)")]
+    /// `exec` other than `none`: FORBIDDEN (spec §7.1, hard invariant).
+    #[error("capability `exec` forbidden: must be `none` (or absent)")]
     ExecForbidden,
-    /// `location-root-marker` que no es UN nombre: vacío, con separador, con
-    /// NUL, `.`/`..`, o absurdamente largo. Un marcador con una barra dentro
-    /// haría que el host buscase por una RUTA subiendo, que es otra capacidad.
-    #[error("`location-root-marker` debe ser un nombre simple (sin `/`, sin NUL, no `.`/`..`)")]
+    /// `location-root-marker` that is not A name: empty, with a separator,
+    /// with NUL, `.`/`..`, or absurdly long. A marker with a slash inside
+    /// would make the host search by a PATH going up, which is a
+    /// different capability.
+    #[error("`location-root-marker` must be a simple name (no `/`, no NUL, not `.`/`..`)")]
     LocationMarker,
-    /// `location-root-marker` declarado SIN `location = "read"`: pediría abrir
-    /// un ancestro sin pedir la capacidad que lo lee. Se rechaza en vez de
-    /// ignorarse, para que el autor se entere.
+    /// `location-root-marker` declared WITHOUT `location = "read"`: it
+    /// would ask to open an ancestor without requesting the capability
+    /// that reads it. Rejected instead of ignored, so the author finds
+    /// out.
     #[error(
-        "`location-root-marker` sin `location = \"read\"`: declara la capacidad o quita el marcador"
+        "`location-root-marker` without `location = \"read\"`: declare the capability or remove the marker"
     )]
     LocationMarkerWithoutCap,
-    /// `[[contributions.hook]].on` con un valor fuera de [`HOOK_EVENTS`]. El
-    /// vocabulario es cerrado a propósito: un `before-copy` que se aceptara
-    /// instalaría un hook que nunca dispara, y su autor se enteraría porque
-    /// nunca pasa nada. Lleva el valor para que el error sea accionable.
+    /// `[[contributions.hook]].on` with a value outside [`HOOK_EVENTS`].
+    /// The vocabulary is closed on purpose: a `before-copy` that got
+    /// accepted would install a hook that never fires, and its author
+    /// would find out because nothing ever happens. Carries the value so
+    /// the error is actionable.
     #[error(
-        "evento de hook desconocido `{0}`: los que existen son after-created, after-removed, after-trashed, after-renamed y after-mode-changed"
+        "unknown hook event `{0}`: the ones that exist are after-created, after-removed, after-trashed, after-renamed and after-mode-changed"
     )]
     HookUnknownEvent(String),
-    /// `category = "hook"` sin ningún `[[contributions.hook]]`: un plugin que
-    /// dice observar y no escucha nada es inerte, y el gestor lo pintaría
-    /// como uno normal.
+    /// `category = "hook"` with no `[[contributions.hook]]` at all: a
+    /// plugin that claims to observe and listens to nothing is inert, and
+    /// the manager would paint it as a normal one.
     #[error(
-        "`category = \"hook\"` sin ningún `[[contributions.hook]]`: declara qué eventos escucha"
+        "`category = \"hook\"` with no `[[contributions.hook]]`: declare which events it listens to"
     )]
     HookWithoutEvents,
-    /// `[[contributions.hook]]` en un plugin de otra categoría: solo los de
-    /// `category = "hook"` se despachan, así que esos eventos no sonarían
-    /// nunca — el plugin inerte que el gestor pintaría como uno normal.
+    /// `[[contributions.hook]]` on a plugin of another category: only
+    /// `category = "hook"` ones get dispatched, so those events would
+    /// never sound — the inert plugin the manager would paint as a normal
+    /// one.
     #[error(
-        "`[[contributions.hook]]` requiere `category = \"hook\"`: un plugin de otra categoría no recibe eventos"
+        "`[[contributions.hook]]` requires `category = \"hook\"`: a plugin of another category receives no events"
     )]
     HookOnOtherCategory,
-    /// `category = "hook"` con `net`: un hook recibe la ruta de cada mutación
-    /// de la máquina, y con red sería un canal para sacarlas fuera. Hasta que
-    /// un ADR diga qué badge lo dice, se rechaza (ADR 0100).
+    /// `category = "hook"` with `net`: a hook receives the path of every
+    /// mutation on the machine, and with network access that would be a
+    /// channel to exfiltrate them. Until an ADR says which badge states
+    /// it, it is rejected (ADR 0100).
     #[error(
-        "un `hook` no puede declarar `net`: recibe la ruta de cada mutación, y con red eso es un canal de salida (ADR 0100)"
+        "a `hook` cannot declare `net`: it receives the path of every mutation, and with network access that is an exfiltration channel (ADR 0100)"
     )]
     HookWithNet,
-    /// `fs-write = "scoped"` (o cualquier cadena): un valor RESERVADO que
-    /// ninguna puerta del host honraba y que desde ADR 0088 se rechaza en vez
-    /// de aprobarse en vano. Lo que existe es `fs-write = { sidecar = [...] }`
-    /// (ADR 0101).
+    /// `fs-write = "scoped"` (or any string): a RESERVED value no host
+    /// gate ever honored and that, since ADR 0088, is rejected instead of
+    /// being approved in vain. What exists is
+    /// `fs-write = { sidecar = [...] }` (ADR 0101).
     #[error(
-        "`fs-write = \"{0}\"` no existe: la escritura de un plugin es `fs-write = {{ sidecar = [\"nombre\"] }}`, y solo para un `hook` (ADR 0101)"
+        "`fs-write = \"{0}\"` does not exist: a plugin's write is `fs-write = {{ sidecar = [\"name\"] }}`, and only for a `hook` (ADR 0101)"
     )]
     FsWriteReserved(String),
-    /// `fs-write = { sidecar = [...] }` en un plugin que no es `hook`: solo un
-    /// hook tiene un evento junto al que escribir, así que en otra categoría
-    /// sería una capacidad aprobada que nadie usa (ADR 0088).
-    #[error("`fs-write` con sidecars solo lo puede declarar un `hook` (ADR 0101)")]
+    /// `fs-write = { sidecar = [...] }` on a plugin that is not a `hook`:
+    /// only a hook has an event to write alongside, so in another category
+    /// it would be an approved capability nobody uses (ADR 0088).
+    #[error("`fs-write` with sidecars can only be declared by a `hook` (ADR 0101)")]
     SidecarNotForCategory,
-    /// Un nombre de sidecar que no es UN nombre de fichero portable: ASCII
-    /// imprimible sin `/ \ : * ? " < > |`, ni `.`/`..`, ni nombre reservado de
-    /// Windows, ni punto final; o repetido. ASCII a propósito: el nombre es
-    /// lo que el humano lee en el badge de aprobación y lo que acaba en
-    /// disco, y un carácter bidi o invisible ahí es una suplantación. Lleva
-    /// el valor para que sea accionable.
+    /// A sidecar name that is not A portable file name: printable ASCII
+    /// without `/ \ : * ? " < > |`, not `.`/`..`, not a reserved Windows
+    /// name, no trailing dot; or repeated. ASCII on purpose: the name is
+    /// what the human reads in the approval badge and what ends up on
+    /// disk, and a bidi or invisible character there is a spoof. Carries
+    /// the value so it is actionable.
     #[error(
-        "nombre de sidecar inválido `{0}`: ASCII imprimible, sin `/ \\ : * ? \" < > |`, ni `.`/`..`, ni nombre reservado, ni repetido"
+        "invalid sidecar name `{0}`: printable ASCII, no `/ \\ : * ? \" < > |`, not `.`/`..`, not a reserved name, not repeated"
     )]
     SidecarName(String),
-    /// `fs-write = {{ sidecar = [...] }}` vacío o con más de
-    /// [`SIDECAR_MAX_NAMES`] nombres.
-    #[error("`fs-write.sidecar` lleva {got} nombres: entre 1 y {SIDECAR_MAX_NAMES}")]
+    /// `fs-write = {{ sidecar = [...] }}` empty or with more than
+    /// [`SIDECAR_MAX_NAMES`] names.
+    #[error("`fs-write.sidecar` carries {got} names: between 1 and {SIDECAR_MAX_NAMES}")]
     SidecarListSize {
-        /// Cuántos traía.
+        /// How many it carried.
         got: usize,
     },
-    /// `capabilities.ai` declarada cuando NADA la honra: no hay interfaz WIT
-    /// de IA ni sitio en el host que la linke. Se parseaba, entraba en el
-    /// digest y pintaba insignia, así que un humano aprobaba «acceso a IA» y
-    /// concedía nada — la capability declarada que nadie honra (ADR 0088).
-    /// Se rechaza al parsear y el campo se queda porque spec §7.1 lo nombra;
-    /// los hooks tuvieron el mismo rechazo hasta ADR 0100.
+    /// `capabilities.ai` declared when NOTHING honors it: there is no AI
+    /// WIT interface nor a place in the host that links it. It used to
+    /// parse, go into the digest and paint a badge, so a human would
+    /// approve "AI access" and grant nothing — the declared capability
+    /// nobody honors (ADR 0088). Rejected while parsing and the field
+    /// stays because spec §7.1 names it; hooks had the same rejection
+    /// until ADR 0100.
     #[error(
-        "la capability `ai` aún no está implementada: no hay interfaz WIT que la sirva, \
-         así que declararla aprobaría un permiso que no concede nada"
+        "the `ai` capability is not implemented yet: there is no WIT interface to serve it, \
+         so declaring it would approve a permission that grants nothing"
     )]
     AiNotImplemented,
-    /// Un `[[contributions.provider]]` reclama un scheme que no puede servir:
-    /// uno del core ([`CORE_SCHEMES`]), un formato de archivo o un scheme con
-    /// `+` (composición, ADR 0018), o algo que no es un scheme (charset de
-    /// [`norte_proto::Scheme`]). Un plugin que sirviera `sftp://` se pondría
-    /// delante de un provider con papelera, reanudación y TLS, y uno que
-    /// sirviera `ftp://` recibiría las contraseñas FTP guardadas; el humano
-    /// que aprueba no vería la diferencia.
+    /// A `[[contributions.provider]]` claims a scheme it cannot serve: one
+    /// from the core ([`CORE_SCHEMES`]), an archive format, or a scheme
+    /// with `+` (composition, ADR 0018), or something that is not a
+    /// scheme (charset of [`norte_proto::Scheme`]). A plugin serving
+    /// `sftp://` would put itself in front of a provider with trash,
+    /// resume and TLS, and one serving `ftp://` would receive the saved
+    /// FTP passwords; the human approving would see no difference.
     #[error(
-        "contributions.provider[].scheme reservado o inválido: `file`, `sftp`, `ftp`, `s3` y \
-         los formatos de archivo los sirve el core, y el scheme debe ser `[a-z][a-z0-9.-]*`"
+        "contributions.provider[].scheme reserved or invalid: `file`, `sftp`, `ftp`, `s3` and \
+         archive formats are served by the core, and the scheme must be `[a-z][a-z0-9.-]*`"
     )]
     ReservedScheme,
-    /// El `plugin.wasm` se compiló contra una versión de un paquete WIT que
-    /// este host sirve a OTRA (ADR 0094). No es un error del manifiesto,
-    /// pero es la causa por la que el catálogo no carga el plugin, y
-    /// [`crate::LoadError`] lleva una de estas: se lista como roto con las
-    /// dos versiones a la vista en vez de morir en wasmtime nombrando una
-    /// interfaz. El estado (aprobación) no se toca; un binario recompilado
-    /// es otro binario y se vuelve a aprobar (#241).
+    /// `plugin.wasm` was compiled against a version of a WIT package that
+    /// this host serves as ANOTHER (ADR 0094). Not a manifest error, but
+    /// the reason the catalog does not load the plugin, and
+    /// [`crate::LoadError`] carries one of these: it is listed as broken
+    /// with both versions visible instead of dying inside wasmtime naming
+    /// an interface. State (approval) is not touched; a recompiled binary
+    /// is another binary and gets approved again (#241).
     #[error(
-        "compilado contra `{package}@{built_against}`, este norte sirve `@{served}`: \
-         recompila el plugin contra el WIT actual"
+        "compiled against `{package}@{built_against}`, this norte serves `@{served}`: \
+         recompile the plugin against the current WIT"
     )]
     WitMismatch {
-        /// El paquete (`norte:plugin`).
+        /// The package (`norte:plugin`).
         package: String,
-        /// La versión que el binario referencia.
+        /// The version the binary references.
         built_against: String,
-        /// La que este host sirve.
+        /// The one this host serves.
         served: String,
     },
-    /// El `plugin.wasm` supera el tope de artefacto
-    /// ([`crate::MAX_ARTIFACT_BYTES`]) y el catálogo NO lo lee: leerlo para
-    /// hashearlo y leer sus imports materializaría en memoria lo que un
-    /// tercero decidió, en cada descubrimiento, y un fallo ahí tumba el
-    /// catálogo entero y no un plugin. El runtime aplica el mismo tope al
-    /// instanciar; este es el mismo tope, una puerta antes.
-    #[error("plugin.wasm mide {len} bytes y el tope es {cap}: no se lee")]
+    /// `plugin.wasm` exceeds the artifact cap
+    /// ([`crate::MAX_ARTIFACT_BYTES`]) and the catalog does NOT read it:
+    /// reading it to hash it and read its imports would materialize in
+    /// memory what a third party decided, on every discovery, and a
+    /// failure there brings down the whole catalog and not one plugin.
+    /// The runtime applies the same cap when instantiating; this is the
+    /// same cap, one gate earlier.
+    #[error("plugin.wasm is {len} bytes and the cap is {cap}: not read")]
     ArtifactTooLarge {
-        /// Bytes del fichero.
+        /// File size in bytes.
         len: u64,
-        /// El tope.
+        /// The cap.
         cap: u64,
     },
-    /// Dos o más directorios declaran el MISMO `plugin.id` (issue #69): se
-    /// rechazan TODOS (fail-closed). Un segundo directorio no puede reclamar el
-    /// id de un plugin aprobado para colar su propio `plugin.wasm`.
+    /// Two or more directories declare the SAME `plugin.id` (issue #69):
+    /// ALL are rejected (fail-closed). A second directory cannot claim an
+    /// approved plugin's id to sneak in its own `plugin.wasm`.
     #[error(
-        "id duplicado: `{0}` aparece en más de un directorio de plugins (rechazado por seguridad)"
+        "duplicate id: `{0}` appears in more than one plugin directory (rejected for security)"
     )]
     DuplicateId(String),
-    /// `plugin.description` supera el tope de 280 caracteres (P1). Cosmética
-    /// pero fail-loud, como `id`: evita manifiestos que abulten logs/UI o que
-    /// intenten esconder texto fuera de la vista truncada del frontend.
-    #[error("plugin.description excede el tope de 280 caracteres")]
+    /// `plugin.description` exceeds the 280-character cap (P1). Cosmetic
+    /// but fail-loud, like `id`: prevents manifests from bloating logs/UI
+    /// or trying to hide text outside the frontend's truncated view.
+    #[error("plugin.description exceeds the 280-character cap")]
     DescriptionTooLong,
-    /// `contributions.command[].title` supera el tope de 120 caracteres (P1
-    /// encoding audit M2). A diferencia de `description`, `title` SÍ entra en
-    /// `approval_digest` (decide cuándo/cómo se dispara el comando en la
-    /// palette) — el tope es solo de PARSEO: un manifiesto ya aprobado con un
-    /// título corto no se ve afectado si el tope cambia en una versión
-    /// futura del host, porque eso solo rechaza manifiestos NUEVOS, nunca
-    /// reinterpreta uno viejo.
-    #[error("contributions.command[].title excede el tope de 120 caracteres")]
+    /// `contributions.command[].title` exceeds the 120-character cap (P1
+    /// encoding audit M2). Unlike `description`, `title` DOES go into
+    /// `approval_digest` (it decides when/how the command fires in the
+    /// palette) — the cap is only a PARSING one: an already-approved
+    /// manifest with a short title is unaffected if the cap changes in a
+    /// future host version, because that only rejects NEW manifests, it
+    /// never reinterprets an old one.
+    #[error("contributions.command[].title exceeds the 120-character cap")]
     CommandTitleTooLong,
-    /// `contributions.command[].id` supera el tope de 64 caracteres (P1
-    /// encoding audit M2). Mismo criterio que `CommandTitleTooLong`: cap de
-    /// PARSEO, no reinterpreta aprobaciones existentes.
-    #[error("contributions.command[].id excede el tope de 64 caracteres")]
+    /// `contributions.command[].id` exceeds the 64-character cap (P1
+    /// encoding audit M2). Same criterion as `CommandTitleTooLong`:
+    /// parsing cap, does not reinterpret existing approvals.
+    #[error("contributions.command[].id exceeds the 64-character cap")]
     CommandIdTooLong,
-    /// `[contributions]` declara más de [`COMMAND_MAX_COUNT`] comandos (#281).
-    #[error("contributions declara más comandos de los permitidos (tope: {COMMAND_MAX_COUNT})")]
+    /// `[contributions]` declares more than [`COMMAND_MAX_COUNT`]
+    /// commands (#281).
+    #[error("contributions declares more commands than allowed (cap: {COMMAND_MAX_COUNT})")]
     TooManyCommands,
-    /// `[config]` declara más de [`CONFIG_MAX_KEYS`] claves (P2 decisión 1).
-    #[error("[config] declara más claves de las permitidas (tope: {CONFIG_MAX_KEYS})")]
+    /// `[config]` declares more than [`CONFIG_MAX_KEYS`] keys (P2
+    /// decision 1).
+    #[error("[config] declares more keys than allowed (cap: {CONFIG_MAX_KEYS})")]
     ConfigTooManyKeys,
-    /// Una clave `[config.<key>]` no respeta el charset `[a-z0-9-]{1,32}` (P2
-    /// decisión 1). La clave literal NO se interpola en el mensaje (mismo
-    /// criterio que `Id`): una clave hostil no debe llegar a logs/UI vía el
-    /// texto del error.
-    #[error("clave de [config] inválida: se espera el charset `[a-z0-9-]{{1,32}}`")]
+    /// A `[config.<key>]` key does not respect the `[a-z0-9-]{1,32}`
+    /// charset (P2 decision 1). The literal key is NOT interpolated into
+    /// the message (same criterion as `Id`): a hostile key must not reach
+    /// logs/UI via the error text.
+    #[error("invalid [config] key: the `[a-z0-9-]{{1,32}}` charset is expected")]
     ConfigKeyCharset,
-    /// `[config.<key>].description` supera el tope de
-    /// [`CONFIG_DESCRIPTION_MAX_CHARS`] caracteres (mismo criterio que
+    /// `[config.<key>].description` exceeds the
+    /// [`CONFIG_DESCRIPTION_MAX_CHARS`] cap (same criterion as
     /// `plugin.description`).
-    #[error(
-        "[config.<key>].description excede el tope de {CONFIG_DESCRIPTION_MAX_CHARS} caracteres"
-    )]
+    #[error("[config.<key>].description exceeds the {CONFIG_DESCRIPTION_MAX_CHARS}-character cap")]
     ConfigDescriptionTooLong,
-    /// `[config.<key>].default` de tipo `string` supera el tope de
-    /// [`CONFIG_STRING_MAX_CHARS`] caracteres (P2 decisión 1).
-    #[error(
-        "[config.<key>].default (string) excede el tope de {CONFIG_STRING_MAX_CHARS} caracteres"
-    )]
+    /// A `string`-typed `[config.<key>].default` exceeds the
+    /// [`CONFIG_STRING_MAX_CHARS`] cap (P2 decision 1).
+    #[error("[config.<key>].default (string) exceeds the {CONFIG_STRING_MAX_CHARS}-character cap")]
     ConfigDefaultTooLong,
-    /// `[config.<key>].default` de tipo `int` cae fuera de `[min, max]`
-    /// declarados (P2 decisión 1: los defaults DEBEN validar contra su propio
-    /// tipo/rango al parsear).
-    #[error("[config.<key>].default (int) cae fuera del rango [min, max] declarado")]
+    /// An `int`-typed `[config.<key>].default` falls outside the declared
+    /// `[min, max]` (P2 decision 1: defaults MUST validate against their
+    /// own type/range while parsing).
+    #[error("[config.<key>].default (int) falls outside the declared [min, max] range")]
     ConfigIntDefaultOutOfRange,
-    /// `[config.<key>].values` (enum) supera [`CONFIG_ENUM_MAX_VALUES`]
-    /// entradas (P2 decisión 1).
-    #[error("[config.<key>].values (enum) excede el tope de {CONFIG_ENUM_MAX_VALUES} entradas")]
+    /// `[config.<key>].values` (enum) exceeds [`CONFIG_ENUM_MAX_VALUES`]
+    /// entries (P2 decision 1).
+    #[error("[config.<key>].values (enum) exceeds the {CONFIG_ENUM_MAX_VALUES}-entry cap")]
     ConfigEnumTooManyValues,
-    /// Una entrada de `[config.<key>].values` (enum) supera el tope de
-    /// [`CONFIG_STRING_MAX_CHARS`] caracteres (P2 decisión 1).
+    /// A `[config.<key>].values` (enum) entry exceeds the
+    /// [`CONFIG_STRING_MAX_CHARS`] cap (P2 decision 1).
     #[error(
-        "[config.<key>].values (enum) contiene una entrada que excede el tope de {CONFIG_STRING_MAX_CHARS} caracteres"
+        "[config.<key>].values (enum) contains an entry that exceeds the {CONFIG_STRING_MAX_CHARS}-character cap"
     )]
     ConfigEnumValueTooLong,
-    /// `[config.<key>].default` de tipo `enum` no está entre `values` (P2
-    /// decisión 1: los defaults DEBEN validar contra su propio tipo/rango al
-    /// parsear).
-    #[error("[config.<key>].default (enum) no está entre los `values` declarados")]
+    /// An `enum`-typed `[config.<key>].default` is not among `values` (P2
+    /// decision 1: defaults MUST validate against their own type/range
+    /// while parsing).
+    #[error("[config.<key>].default (enum) is not among the declared `values`")]
     ConfigEnumDefaultNotInValues,
-    /// El `config.toml` de VALORES (P2 decisión 3, distinto del manifiesto)
-    /// no valida contra el esquema `[config]` — fail-closed a nivel de
-    /// catálogo: el plugin ENTERO se excluye (mismo criterio que
-    /// `DuplicateId`), nunca carga con valores a medias.
-    #[error("config.toml inválido: {0}")]
+    /// The VALUES `config.toml` (P2 decision 3, distinct from the
+    /// manifest) fails to validate against the `[config]` schema —
+    /// fail-closed at the catalog level: the WHOLE plugin is excluded
+    /// (same criterion as `DuplicateId`), it never loads with half-way
+    /// values.
+    #[error("invalid config.toml: {0}")]
     ConfigValues(#[from] crate::config_values::ConfigValueError),
 }
 
-/// Tope de `contributions.command[].title` (P1 encoding audit M2): mismo
-/// espíritu que el tope de `description` — un plugin hostil no debe poder
-/// abultar la palette con un título kilométrico. `title` SÍ entra en
-/// `approval_digest` (ver doc de [`ManifestError::CommandTitleTooLong`]).
+/// Cap on `contributions.command[].title` (P1 encoding audit M2): same
+/// spirit as `description`'s cap — a hostile plugin must not be able to
+/// bloat the palette with an absurdly long title. `title` DOES go into
+/// `approval_digest` (see [`ManifestError::CommandTitleTooLong`]'s doc).
 pub const COMMAND_TITLE_MAX_CHARS: usize = 120;
 
-/// Tope de `contributions.command[].id` (P1 encoding audit M2).
+/// Cap on `contributions.command[].id` (P1 encoding audit M2).
 pub const COMMAND_ID_MAX_CHARS: usize = 64;
 
-/// Tope de CUÁNTOS comandos declara un manifiesto (#281), del mismo tamaño y
-/// por el mismo motivo que [`CONFIG_MAX_KEYS`]: cada comando aprobado se
-/// convierte en una fila de paleta en cada cliente
-/// (`norte_frontend::palette::plugin_rows`), y el sitio donde eso se corta de
-/// raíz es la validación del manifiesto, no cada paleta.
+/// Cap on HOW MANY commands a manifest declares (#281), the same size and
+/// for the same reason as [`CONFIG_MAX_KEYS`]: every approved command
+/// becomes a palette row on every client
+/// (`norte_frontend::palette::plugin_rows`), and the place that cuts that
+/// off at the root is manifest validation, not each palette.
 ///
-/// Como los otros topes de `[[command]]`, es un cap de PARSEO: rechaza
-/// manifiestos NUEVOS, nunca reinterpreta una aprobación ya concedida.
+/// Like the other `[[command]]` caps, it is a PARSING cap: it rejects NEW
+/// manifests, it never reinterprets an already-granted approval.
 pub const COMMAND_MAX_COUNT: usize = 32;
 
-/// El alfabeto de un id de plugin, definido junto al tipo del wire que lo
-/// transporta ([`norte_proto::methods::is_valid_plugin_id`]).
+/// The alphabet of a plugin id, defined alongside the wire type that
+/// carries it ([`norte_proto::methods::is_valid_plugin_id`]).
 ///
-/// Se re-exporta con el nombre de siempre porque la pregunta es UNA y tiene
-/// dos entradas: este crate la hace al parsear un `plugin.toml`, y todo el que
-/// recibe un `PluginInfo` por el wire la hace otra vez. Dos implementaciones
-/// del mismo alfabeto acabarían con una más laxa que la otra. `norte-core` lo
-/// re-exporta a su vez para los frontends que no dependen de este crate.
+/// Re-exported under its usual name because it is ONE question with two
+/// entry points: this crate asks it while parsing a `plugin.toml`, and
+/// everyone who receives a `PluginInfo` over the wire asks it again. Two
+/// implementations of the same alphabet would end up with one looser than
+/// the other. `norte-core` re-exports it in turn for frontends that do not
+/// depend on this crate.
 pub use norte_proto::methods::is_valid_plugin_id;
 
-/// Schemes que sirve el core y que un provider plugin NO puede reclamar.
+/// Schemes the core serves and that a provider plugin CANNOT claim.
 ///
-/// `ftp` está, aunque su guest sea WASM: un plugin que lo reclamase recibiría
-/// por `configure` la contraseña de cada conexión `ftp://` guardada, y la
-/// pantalla de aprobación no enseñaba el scheme. El día que el guest embebido
-/// se distribuya como plugin, `ftp` sale de aquí en ese mismo commit.
+/// `ftp` is here, even though its guest is WASM: a plugin claiming it
+/// would receive, via `configure`, the saved password of every `ftp://`
+/// connection, and the approval screen did not show the scheme. The day
+/// the embedded guest ships as a plugin, `ftp` leaves this list in that
+/// same commit.
 pub const CORE_SCHEMES: &[&str] = &["file", "sftp", "ftp", "s3"];
 
-/// `true` si un `[[contributions.provider]]` puede declarar `scheme`: es un
-/// scheme válido para un [`norte_proto::VPath`], no es de
-/// [`CORE_SCHEMES`], no es un formato de archivo y no lleva `+`, el operador
-/// de composición de ADR 0018 (`zip+sftp`).
+/// `true` if a `[[contributions.provider]]` can declare `scheme`: it is a
+/// valid scheme for a [`norte_proto::VPath`], it is not one of
+/// [`CORE_SCHEMES`], it is not an archive format and it carries no `+`,
+/// ADR 0018's composition operator (`zip+sftp`).
 ///
 /// ```
 /// use norte_plugin_host::scheme_claimable;
@@ -1114,14 +1137,14 @@ pub fn scheme_claimable(scheme: &str) -> bool {
         && !norte_proto::ARCHIVE_FORMATS.contains(&scheme)
 }
 
-/// Lo que un manifiesto declara sobre hooks y sidecars (ADR 0100, ADR 0101),
-/// validado aparte de [`Manifest::from_toml`] para que la lista de
-/// comprobaciones del manifiesto no desborde el límite de líneas.
+/// What a manifest declares about hooks and sidecars (ADR 0100, ADR 0101),
+/// validated apart from [`Manifest::from_toml`] so the manifest's checklist
+/// does not overflow the line limit.
 fn validate_hooks_and_sidecars(raw: &ManifestRaw) -> Result<(), ManifestError> {
-    // Hooks (ADR 0100): cada evento del vocabulario cerrado, y un plugin
-    // que se declara hook escucha al menos uno. DESPUÉS del id a
-    // propósito: un manifiesto cuyo id no es de fiar se rechaza por el
-    // id, que es lo accionable.
+    // Hooks (ADR 0100): every event from the closed vocabulary, and a
+    // plugin that declares itself a hook listens to at least one. AFTER
+    // the id on purpose: a manifest whose id cannot be trusted is
+    // rejected for the id, which is the actionable one.
     if let Some(h) = raw
         .contributions
         .hook
@@ -1139,8 +1162,8 @@ fn validate_hooks_and_sidecars(raw: &ManifestRaw) -> Result<(), ManifestError> {
     if raw.plugin.category == Category::Hook && raw.capabilities.net.is_some() {
         return Err(ManifestError::HookWithNet);
     }
-    // `fs-write` (ADR 0101): solo sidecars, solo en hooks, nombres de
-    // verdad. Un `"scoped"` heredado se rechaza con lo que hay que poner.
+    // `fs-write` (ADR 0101): only sidecars, only on hooks, real names. An
+    // inherited `"scoped"` is rejected along with what to put instead.
     match &raw.capabilities.fs_write {
         crate::capability::FsWriteCap::None => {}
         crate::capability::FsWriteCap::Reserved(s) => {
@@ -1165,22 +1188,23 @@ fn validate_hooks_and_sidecars(raw: &ManifestRaw) -> Result<(), ManifestError> {
 }
 
 impl Manifest {
-    /// Parsea y VALIDA un `plugin.toml`.
+    /// Parses and VALIDATES a `plugin.toml`.
     ///
     /// # Errors
-    /// [`ManifestError`] si el TOML no parsea, el `id` no es reverse-DNS, o se
-    /// declara `exec` distinto de `none` (prohibido sin excepción).
+    /// [`ManifestError`] if the TOML does not parse, the `id` is not
+    /// reverse-DNS, or an `exec` other than `none` is declared (forbidden
+    /// with no exception).
     pub fn from_toml(src: &str) -> Result<Self, ManifestError> {
         let mut raw: ManifestRaw = toml::from_str(src)?;
-        // `fs-write = "none"` es la forma explícita de «sin escritura» que
-        // ADR 0022 documenta: vale lo mismo que ausente, y digesta igual
-        // (byte 0), así que ninguna aprobación se mueve. Cualquier OTRA cadena
-        // se rechaza en la validación de abajo.
+        // `fs-write = "none"` is the explicit form of "no write" that ADR
+        // 0022 documents: it is worth the same as absent, and digests the
+        // same (byte 0), so no approval moves. Any OTHER string is
+        // rejected in the validation below.
         if matches!(&raw.capabilities.fs_write, crate::capability::FsWriteCap::Reserved(s) if s == "none")
         {
             raw.capabilities.fs_write = crate::capability::FsWriteCap::None;
         }
-        // Invariante dura: exec SIEMPRE none.
+        // Hard invariant: exec is ALWAYS none.
         if raw
             .capabilities
             .exec
@@ -1189,43 +1213,45 @@ impl Manifest {
         {
             return Err(ManifestError::ExecForbidden);
         }
-        // El marcador de raíz es UN nombre, jamás una ruta: con una barra
-        // dentro el host estaría subiendo por un camino elegido por el plugin,
-        // que es una capacidad distinta de la que se aprueba.
+        // The root marker is A name, never a path: with a slash inside,
+        // the host would be going up a route chosen by the plugin, which
+        // is a different capability from the one being approved.
         if let Some(marker) = raw.capabilities.location_root_marker.as_deref() {
             if !raw.capabilities.location.granted() {
                 return Err(ManifestError::LocationMarkerWithoutCap);
             }
-            let malo = marker.is_empty()
+            let bad = marker.is_empty()
                 || marker.len() > 64
                 || marker.contains('/')
                 || marker.contains('\\')
                 || marker.contains('\0')
                 || marker == "."
                 || marker == "..";
-            if malo {
+            if bad {
                 return Err(ManifestError::LocationMarker);
             }
         }
-        // id reverse-DNS REAL: uno o más segmentos `[A-Za-z0-9-]+` separados por
-        // puntos, con al menos un punto, sin segmento vacío (ni punto inicial/
-        // final), longitud total 1..=128. Endurecido más allá de "contiene un
-        // punto" porque el id crudo del manifiesto termina en logs y en el modal
-        // de aprobación (T5): un id con saltos de línea, comillas o espacios
-        // permitiría inyección en el log o spoofing del diálogo de consentimiento.
+        // REAL reverse-DNS id: one or more `[A-Za-z0-9-]+` segments
+        // separated by dots, with at least one dot, no empty segment (nor
+        // leading/trailing dot), total length 1..=128. Hardened beyond
+        // "contains a dot" because the manifest's raw id ends up in logs
+        // and in the approval modal (T5): an id with newlines, quotes or
+        // spaces would allow log injection or spoofing the consent
+        // dialog.
         if !is_valid_plugin_id(&raw.plugin.id) {
             return Err(ManifestError::Id);
         }
         validate_hooks_and_sidecars(&raw)?;
-        // `ai`: una promesa que nadie cumple.
-        // Se mira la PRESENCIA, no el valor: cualquier modo sería igual de
-        // inerte.
+        // `ai`: a promise nobody keeps.
+        // Presence is checked, not value: any mode would be equally
+        // inert.
         if raw.capabilities.ai.is_some() {
             return Err(ManifestError::AiNotImplemented);
         }
-        // Un provider sirve el scheme que declara, así que el scheme es un
-        // nombre que se puede suplantar: los del core y los de archivo no se
-        // ceden, y lo que no es un scheme no llega al connector.
+        // A provider serves the scheme it declares, so the scheme is a
+        // name that can be spoofed: the core's and the archive ones are
+        // not given up, and anything that is not a scheme never reaches
+        // the connector.
         if raw
             .contributions
             .provider
@@ -1234,8 +1260,8 @@ impl Manifest {
         {
             return Err(ManifestError::ReservedScheme);
         }
-        // Tope de 280 CARACTERES (no bytes: un idioma no-ASCII no debe pagar
-        // el tope antes de tiempo). Cosmética pero fail-loud, como `id`.
+        // 280-CHARACTER cap (not bytes: a non-ASCII language must not pay
+        // the cap ahead of time). Cosmetic but fail-loud, like `id`.
         if raw
             .plugin
             .description
@@ -1244,12 +1270,13 @@ impl Manifest {
         {
             return Err(ManifestError::DescriptionTooLong);
         }
-        // Topes de cada comando declarado (P1 encoding audit M2), simétricos
-        // con el de `description` — CHARS, no bytes. `id` primero: es el que
-        // viaja al wire para despachar (`plugin.run_command`), acotarlo
-        // primero da el error más específico si AMBOS desbordan a la vez.
-        // Cuántos, antes de cuánto mide cada uno: con mil comandos el error
-        // útil es «son demasiados», no el `id` largo del número 400.
+        // Caps for each declared command (P1 encoding audit M2),
+        // symmetric with `description`'s — CHARS, not bytes. `id` first:
+        // it is the one that travels over the wire to dispatch
+        // (`plugin.run_command`), capping it first gives the more
+        // specific error if BOTH overflow at once. How many, before how
+        // long each one is: with a thousand commands the useful error is
+        // "there are too many", not the long `id` of number 400.
         if raw.contributions.command.len() > COMMAND_MAX_COUNT {
             return Err(ManifestError::TooManyCommands);
         }
@@ -1261,9 +1288,9 @@ impl Manifest {
                 return Err(ManifestError::CommandTitleTooLong);
             }
         }
-        // `[config]` (P2 decisión 1): tope de claves primero (fail-fast antes
-        // de validar cada entrada), luego charset + topes de tipo por clave,
-        // en orden de `BTreeMap` (determinista).
+        // `[config]` (P2 decision 1): key count cap first (fail-fast
+        // before validating each entry), then charset + per-type caps per
+        // key, in `BTreeMap` order (deterministic).
         if raw.config.len() > CONFIG_MAX_KEYS {
             return Err(ManifestError::ConfigTooManyKeys);
         }
@@ -1287,39 +1314,42 @@ impl Manifest {
         })
     }
 
-    /// Digest hex (sha256) de la forma CANÓNICA del manifiesto para ANCLAR la
-    /// aprobación del humano (issue #69, defensa confused-deputy TOCTOU). Cubre
-    /// no solo las `[capabilities]` (lo que el host hace cumplir) sino también la
-    /// `category` y las `contributions` — los campos que deciden CUÁNDO y CÓMO se
-    /// dispara el plugin (mimetypes, ids de comando, schemes…). Así, un
-    /// `plugin.toml` reeditado que cambie de `command` a `previewer`, o que
-    /// amplíe los mimetypes, MANTENIENDO las mismas capabilities, deja de casar el
-    /// digest y fuerza re-consentimiento (si no, pasaría a auto-ejecutarse en el
-    /// viewer sin que el humano lo aprobara para eso).
+    /// Hex (sha256) digest of the manifest's CANONICAL form, to ANCHOR the
+    /// human's approval (issue #69, confused-deputy TOCTOU defense).
+    /// Covers not just the `[capabilities]` (what the host enforces) but
+    /// also `category` and `contributions` — the fields that decide WHEN
+    /// and HOW the plugin fires (mimetypes, command ids, schemes…). So a
+    /// re-edited `plugin.toml` that changes from `command` to
+    /// `previewer`, or that widens the mimetypes, WHILE KEEPING the same
+    /// capabilities, stops matching the digest and forces re-consent
+    /// (otherwise it would start auto-running in the viewer without the
+    /// human approving it for that).
     ///
-    /// La forma es determinista y no ambigua (tags de enum estables, cadenas
-    /// longitud-prefijadas, hosts de red como conjunto ordenado y deduplicado).
-    /// El id y el nombre/publisher/versión NO entran: la aprobación se indexa por
-    /// id (cambiarlo es otro plugin) y el resto es cosmético — lo que importa para
-    /// la seguridad es qué hace y cuándo se dispara.
+    /// The form is deterministic and unambiguous (stable enum tags,
+    /// length-prefixed strings, network hosts as an ordered, deduplicated
+    /// set). The id and name/publisher/version do NOT go in: the approval
+    /// is indexed by id (changing it is another plugin) and the rest is
+    /// cosmetic — what matters for security is what it does and when it
+    /// fires.
     ///
-    /// P2 extiende la forma canónica con una sección `config:` — pero SOLO
-    /// cuando `[config]` declara alguna clave: `update_config_digest` no
-    /// añade ni un byte si `self.config` está vacío, así que un manifiesto sin
-    /// `[config]` digesta EXACTAMENTE igual que antes de P2 (las aprobaciones
-    /// humanas existentes de plugins que no usan `[config]` no se resetean).
+    /// P2 extends the canonical form with a `config:` section — but ONLY
+    /// when `[config]` declares some key: `update_config_digest` does not
+    /// add a single byte if `self.config` is empty, so a manifest without
+    /// `[config]` digests EXACTLY the same as before P2 (existing human
+    /// approvals of plugins that do not use `[config]` are not reset).
     #[must_use]
     pub fn approval_digest(&self) -> String {
         use sha2::{Digest, Sha256};
         let mut h = Sha256::new();
-        // Prefijo de dominio + versión del esquema: si cambia la forma canónica,
-        // los digests viejos no colisionan con los nuevos.
+        // Domain prefix + schema version: if the canonical form ever
+        // changes, old digests won't collide with new ones.
         h.update(b"norte-plugin-manifest:v1\n");
         h.update([self.category.digest_tag()]);
         self.contributions.update_digest(&mut h);
         self.capabilities.update_digest(&mut h);
         update_config_digest(&self.config, &mut h);
-        // ADR 0037: sección OPCIONAL igual que `config:` — ver su rustdoc.
+        // ADR 0037: OPTIONAL section just like `config:` — see its
+        // rustdoc.
         update_decorator_digest(&self.contributions.decorator, &mut h);
         crate::capability::hex_lower(&h.finalize())
     }

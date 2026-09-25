@@ -1,9 +1,9 @@
-//! El selector de disposición: qué se carga, quién gana y qué se dice.
+//! The layout picker: what loads, who wins and what gets said.
 //!
-//! La regla que estos tests fijan es una sola y es la que sorprende: un
-//! fichero tuyo en `layouts/<nombre>.toml` GANA al preset de fábrica con ese
-//! nombre. Es lo que hacen las demás capas de configuración, y el preset se
-//! recupera borrando el fichero.
+//! The rule these tests pin is a single one and it is the surprising one:
+//! a file of yours at `layouts/<name>.toml` WINS over the factory preset of
+//! that name. It is what every other config layer does, and the preset
+//! comes back by deleting the file.
 
 use std::ffi::{OsStr, OsString};
 
@@ -14,19 +14,19 @@ use norte_tui::app::{App, Pane};
 
 fn vp(wire: &str) -> VPath {
     let _ = norte_i18n::force(norte_i18n::Lang::Es);
-    VPath::parse(wire).expect("wire válido")
+    VPath::parse(wire).expect("valid wire")
 }
 
-fn app_de_prueba() -> App {
+fn test_app() -> App {
     App::new(
         Pane::new(vp("file:///izq"), Vec::new()),
         Pane::new(vp("file:///der"), Vec::new()),
     )
 }
 
-/// Un layout de usuario: dos listados y nada más, para distinguirlo de
-/// cualquier preset por el número de huecos.
-fn arbol_mio() -> Node {
+/// A user layout: two listings and nothing else, to tell it apart from any
+/// preset by its number of slots.
+fn tree_mio() -> Node {
     Node::split(
         Dir::Vertical,
         vec![
@@ -36,16 +36,16 @@ fn arbol_mio() -> Node {
     )
 }
 
-/// Cargar y aplicar, que es lo que hace el binario en dos pasos: el fichero
-/// se lee FUERA del bucle de eventos (regla 2, #244 M2) y el `App` solo
-/// decide qué hacer con lo leído.
-fn aplicar(app: &mut App, nombre: &str, dir: &std::path::Path) -> bool {
-    let n = OsStr::new(nombre);
+/// Load and apply, which is what the binary does in two steps: the file is
+/// read OUTSIDE the event loop (rule 2, #244 M2) and `App` only decides
+/// what to do with what was read.
+fn apply(app: &mut App, name: &str, dir: &std::path::Path) -> bool {
+    let n = OsStr::new(name);
     app.apply_loaded_layout(n, norte_frontend::layout::config::load(dir, n))
 }
 
-/// Lo que el binario le pasa al selector: cada fichero del directorio, ya
-/// leído.
+/// What the binary hands the picker: every file in the directory, already
+/// read.
 fn user(dir: &std::path::Path) -> Vec<UserLayout> {
     norte_frontend::layout::config::list(dir)
         .into_iter()
@@ -56,115 +56,119 @@ fn user(dir: &std::path::Path) -> Vec<UserLayout> {
         .collect()
 }
 
-fn escribir(dir: &std::path::Path, nombre: &str, tree: &Node) {
+fn write(dir: &std::path::Path, name: &str, tree: &Node) {
     let layouts = dir.join("layouts");
     std::fs::create_dir_all(&layouts).expect("mkdir");
     std::fs::write(
-        layouts.join(format!("{nombre}.toml")),
+        layouts.join(format!("{name}.toml")),
         to_toml(tree).expect("toml"),
     )
     .expect("write");
 }
 
 #[test]
-fn un_preset_de_fabrica_se_aplica_sin_fichero_ninguno() {
+fn a_factory_preset_applies_with_no_file_at_all() {
     let dir = tempfile::tempdir().expect("tmp");
-    let mut app = app_de_prueba();
-    assert!(aplicar(&mut app, "simple", dir.path()));
+    let mut app = test_app();
+    assert!(apply(&mut app, "simple", dir.path()));
     assert_eq!(
         app.layout,
-        norte_frontend::layout::presets::tree("simple").expect("de fábrica")
+        norte_frontend::layout::presets::tree("simple").expect("factory")
     );
-    assert!(app.message.is_none(), "sin fichero no hay nada que avisar");
+    assert!(
+        app.message.is_none(),
+        "with no file there is nothing to warn about"
+    );
 }
 
-/// Un preset con sidebar, visor, procesos y atributos deja TODOS esos huecos
-/// con su estado puesto. Sin esto el panel se pinta vacío para siempre: el
-/// toggle que lo habría creado no se va a pulsar, porque ya está ahí.
+/// A preset with a sidebar, viewer, processes and attributes leaves ALL
+/// those slots with their state set. Without this the panel paints empty
+/// forever: the toggle that would have created it is not going to be
+/// pressed, because it is already there.
 #[test]
-fn un_preset_completo_siembra_el_estado_de_cada_hueco() {
+fn a_complete_preset_seeds_every_slots_state() {
     let dir = tempfile::tempdir().expect("tmp");
-    let mut app = app_de_prueba();
-    assert!(aplicar(&mut app, "full", dir.path()));
+    let mut app = test_app();
+    assert!(apply(&mut app, "full", dir.path()));
     for id in app.layout.slot_ids() {
         let kind = app
             .layout
             .kind_of(id)
             .map(|k| k.as_str().to_owned())
             .expect("kind");
-        let sembrado = match kind.as_str() {
+        let seeded = match kind.as_str() {
             "browser" => app.panes.browser(id).is_some(),
             "places" => app.panes.places(id).is_some(),
             "viewer" => app.panes.preview(id).is_some(),
             "processes" => app.panes.processes(id).is_some(),
             "metadata" => app.panes.metadata(id).is_some(),
-            // `tasks` y `status` no tienen estado propio.
+            // `tasks` and `status` have no state of their own.
             _ => true,
         };
-        assert!(sembrado, "el hueco {id:?} de kind {kind} se quedó vacío");
+        assert!(seeded, "slot {id:?} of kind {kind} was left empty");
     }
 }
 
-/// Gana el fichero del usuario, y con el mismo nombre que uno de fábrica.
+/// The user's file wins, even under the same name as a factory one.
 #[test]
-fn un_fichero_del_usuario_gana_al_preset_del_mismo_nombre() {
+fn a_user_file_wins_over_the_preset_of_the_same_name() {
     let dir = tempfile::tempdir().expect("tmp");
-    escribir(dir.path(), "simple", &arbol_mio());
-    let mut app = app_de_prueba();
-    assert!(aplicar(&mut app, "simple", dir.path()));
-    assert_eq!(app.layout, arbol_mio(), "se cargó el del usuario");
+    write(dir.path(), "simple", &tree_mio());
+    let mut app = test_app();
+    assert!(apply(&mut app, "simple", dir.path()));
+    assert_eq!(app.layout, tree_mio(), "the user's was loaded");
     assert!(app.message.is_none());
 }
 
-/// Un fichero roto AVISA y cae al preset: un layout que no parsea no puede
-/// dejar a norte sin pantalla.
+/// A broken file WARNS and falls back to the preset: a layout that does not
+/// parse cannot leave norte with no screen.
 #[test]
-fn un_fichero_roto_avisa_y_cae_al_preset() {
+fn a_broken_file_warns_and_falls_back_to_the_preset() {
     let dir = tempfile::tempdir().expect("tmp");
     let layouts = dir.path().join("layouts");
     std::fs::create_dir_all(&layouts).expect("mkdir");
     std::fs::write(layouts.join("simple.toml"), "esto no es un layout").expect("write");
 
-    let mut app = app_de_prueba();
-    assert!(aplicar(&mut app, "simple", dir.path()));
+    let mut app = test_app();
+    assert!(apply(&mut app, "simple", dir.path()));
     assert_eq!(
         app.layout,
-        norte_frontend::layout::presets::tree("simple").expect("de fábrica"),
-        "cayó al preset"
+        norte_frontend::layout::presets::tree("simple").expect("factory"),
+        "it fell back to the preset"
     );
-    let notice = app.message.as_deref().expect("avisa");
-    assert!(notice.contains("simple"), "nombra el layout: {notice}");
+    let notice = app.message.as_deref().expect("it warns");
+    assert!(notice.contains("simple"), "it names the layout: {notice}");
 }
 
-/// Un nombre que no es de nadie no deja la pantalla a medias: se dice y el
-/// árbol de antes sigue en pie.
+/// A name that belongs to nobody does not leave the screen half-done: it is
+/// said and the earlier tree stays standing.
 #[test]
-fn un_nombre_desconocido_no_cambia_el_arbol() {
+fn an_unknown_name_does_not_change_the_tree() {
     let dir = tempfile::tempdir().expect("tmp");
-    let mut app = app_de_prueba();
+    let mut app = test_app();
     let before = app.layout.clone();
-    assert!(!aplicar(&mut app, "no-existe", dir.path()));
+    assert!(!apply(&mut app, "no-existe", dir.path()));
     assert_eq!(app.layout, before);
-    assert!(app.message.is_some(), "lo dice");
+    assert!(app.message.is_some(), "it says so");
 }
 
-/// Cambiar de disposición no borra la navegación: el listado que ya estaba
-/// en un hueco sigue donde estaba.
+/// Switching layouts does not erase navigation: the listing that was
+/// already in a slot stays where it was.
 #[test]
-fn cambiar_de_layout_conserva_los_listados_que_ya_habia() {
+fn changing_layout_keeps_the_listings_that_were_already_there() {
     let dir = tempfile::tempdir().expect("tmp");
-    let mut app = app_de_prueba();
+    let mut app = test_app();
     let left = app.panes[0].dir().clone();
-    assert!(aplicar(&mut app, "full", dir.path()));
-    assert_eq!(app.panes[0].dir(), &left, "el listado no se reinició");
+    assert!(apply(&mut app, "full", dir.path()));
+    assert_eq!(app.panes[0].dir(), &left, "the listing was not reset");
 }
 
-/// El selector: cinco de fábrica más lo del directorio, y el aviso de que el
-/// nombre coincide con un preset de teclas.
+/// The picker: five factory ones plus the directory's, and the warning that
+/// the name matches a keymap preset.
 #[test]
-fn el_selector_lista_las_de_fabrica_y_las_del_usuario() {
+fn the_selector_lists_the_factory_ones_and_the_users() {
     let dir = tempfile::tempdir().expect("tmp");
-    escribir(dir.path(), "mio", &arbol_mio());
+    write(dir.path(), "mio", &tree_mio());
     let mine = user(dir.path());
     assert_eq!(
         mine.iter().map(|u| u.name.clone()).collect::<Vec<_>>(),
@@ -185,42 +189,42 @@ fn el_selector_lista_las_de_fabrica_y_las_del_usuario() {
             .find(|r| r.name == OsStr::new("krusader"))
             .expect("krusader")
             .shares_keymap_name,
-        "el diálogo avisa de que el nombre es también de keymap"
+        "the dialog warns that the name is also a keymap's"
     );
     assert!(
-        p.rows().last().expect("mio").tree.as_ref() == Some(&arbol_mio()),
-        "la fila del usuario trae SU árbol para la vista previa (#244 M3)"
+        p.rows().last().expect("mio").tree.as_ref() == Some(&tree_mio()),
+        "the user's row carries ITS OWN tree for the preview (#244 M3)"
     );
     assert!(
         !p.rows().last().expect("mio").factory,
-        "el del usuario no es de fábrica"
+        "the user's is not a factory one"
     );
 }
 
-/// Elegir en el selector aplica lo elegido, y cancelar no toca nada.
+/// Choosing from the picker applies the choice, and cancelling touches nothing.
 #[test]
-fn confirmar_aplica_y_cancelar_no_toca_nada() {
+fn confirm_applies_and_cancel_touches_nothing() {
     use norte_tui::app::PickerAction;
     let dir = tempfile::tempdir().expect("tmp");
-    let mut app = app_de_prueba();
+    let mut app = test_app();
     let before = app.layout.clone();
 
     app.open_layout_picker(user(dir.path()));
     app.layout_picker_input(PickerAction::Cancel);
-    assert!(app.layout_picker.is_none(), "cerrado");
-    assert_eq!(app.layout, before, "cancelar no aplica");
+    assert!(app.layout_picker.is_none(), "closed");
+    assert_eq!(app.layout, before, "cancelling applies nothing");
 
     app.open_layout_picker(user(dir.path()));
     app.layout_picker_input(PickerAction::Down); // simple
     app.layout_picker_input(PickerAction::Confirm);
-    assert!(app.layout_picker.is_none(), "confirmar cierra");
+    assert!(app.layout_picker.is_none(), "confirming closes it");
     assert_eq!(
         app.layout,
-        norte_frontend::layout::presets::tree("simple").expect("de fábrica")
+        norte_frontend::layout::presets::tree("simple").expect("factory")
     );
     assert!(
         app.message.as_deref().is_some_and(|m| m.contains("simple")),
-        "dice cuál aplicó: {:?}",
+        "it says which one it applied: {:?}",
         app.message
     );
 }

@@ -1,22 +1,24 @@
-//! Guest WASM (#30 stage 3c): el provider FTP COMPLETO. Proyección SÍNCRONA del
-//! trait `norte_vfs::Provider` sobre `suppaftp::FtpStream` (sync) por
-//! `wasi:sockets`. Port de `norte-vfs-ftp` con las MISMAS defensas
-//! anti-inyección CR/LF y el mismo tratamiento MLSD/LIST. Sin TLS (FTPS=deuda:
-//! aws-lc-rs no compila a wasm32-wasip2).
+//! WASM guest (#30 stage 3c): the COMPLETE FTP provider. SYNCHRONOUS
+//! projection of the `norte_vfs::Provider` trait over `suppaftp::FtpStream`
+//! (sync) via `wasi:sockets`. A port of `norte-vfs-ftp` with the SAME
+//! CR/LF anti-injection defenses and the same MLSD/LIST handling. No TLS
+//! (FTPS=debt: aws-lc-rs does not compile to wasm32-wasip2).
 //!
-//! Single-threaded wasm: la conexión de control vive en un `thread_local`
-//! `RefCell<Option<Session>>`, no en `Arc<Mutex>`. Nombres crudos en bytes
-//! (regla 1); FTP exige UTF-8 → un nombre no representable es `invalid-path`.
+//! Single-threaded wasm: the control connection lives in a `thread_local`
+//! `RefCell<Option<Session>>`, not an `Arc<Mutex>`. Raw names in bytes
+//! (rule 1); FTP requires UTF-8 → a non-representable name is
+//! `invalid-path`.
 //!
-//! LECTURA (#30 M1): la interfaz WIT `read(segs, offset, len)` es acotada, pero el
-//! guest CACHEA el `DataStream` del RETR en la sesión y lo reutiliza mientras las
-//! lecturas sean secuenciales (offset = fin del chunk anterior) → un solo RETR por
-//! fichero, O(n). Cualquier otra op (o un offset no secuencial) drena y finaliza la
-//! caché ANTES de emitir su comando de control (`flush_cached_read`), así el `226`
-//! pendiente jamás se intercala. DEUDA (timeout/cancelación, ADR 0033): una lectura
-//! bloqueada en el socket no la corta el epoch deadline (solo traba código guest),
-//! y el hilo `spawn_blocking` del host queda retenido — mitigación futura:
-//! `tokio::time::timeout` en el adapter.
+//! READ (#30 M1): the WIT `read(segs, offset, len)` interface is bounded,
+//! but the guest CACHES the RETR's `DataStream` in the session and reuses
+//! it while reads stay sequential (offset = end of the previous chunk) →
+//! a single RETR per file, O(n). Any other op (or a non-sequential offset)
+//! drains and finalizes the cache BEFORE issuing its control command
+//! (`flush_cached_read`), so the pending `226` never interleaves. DEBT
+//! (timeout/cancellation, ADR 0033): a read blocked on the socket is not
+//! cut off by the epoch deadline (it only cuts off guest code), and the
+//! host's `spawn_blocking` thread stays held — future mitigation:
+//! `tokio::time::timeout` in the adapter.
 
 use std::cell::RefCell;
 use std::io::Write;
@@ -28,9 +30,9 @@ use suppaftp::{FtpError, FtpStream, Status};
 wit_bindgen::generate!({
     world: "norte:provider/norte-provider",
     path: "wit",
-    // `host-log`/`host-config` viven en OTRO paquete desde la partición
-    // (ADR 0041 decisión 4); wit-bindgen exige decidir explícitamente qué
-    // hacer con los imports de fuera del paquete del world.
+    // `host-log`/`host-config` live in ANOTHER package since the split
+    // (ADR 0041 decision 4); wit-bindgen requires explicitly deciding what
+    // to do with imports from outside the world's package.
     generate_all,
 });
 
@@ -38,41 +40,43 @@ use exports::norte::provider::provider::{
     Caps, Entry, EntryKind, Guest, GuestWriter, Page, ProviderConfig, VfsError, Writer,
 };
 
-/// Cota defensiva de entradas materializadas por listado (issue #40). El bound
-/// real contra OOM es upstream (suppaftp bufferiza las líneas).
+/// Defensive cap on entries materialized per listing (issue #40). The real
+/// OOM bound is upstream (suppaftp buffers the lines).
 const MAX_LIST_ENTRIES: usize = 1 << 20;
-/// Prefijo del staging de escritura (ADR 0012, mismo convenio que local/sftp).
+/// Write staging prefix (ADR 0012, same convention as local/sftp).
 const PARTIAL_PREFIX: &str = ".norte-partial.";
 
-/// Sesión FTP establecida: conexión de control + estado de la raíz remota.
+/// An established FTP session: control connection + remote root state.
 struct Session {
     ftp: FtpStream,
-    /// Raíz remota absoluta bajo la que vive todo. Sin `..`, sin barra final.
+    /// Absolute remote root everything lives under. No `..`, no trailing
+    /// slash.
     base: String,
-    /// El servidor soporta MLSD/MLST (machine-readable). Si no, se degrada a
-    /// `LIST` (`ls -l`), universal pero frágil con nombres hostiles (ADR 0014 C).
+    /// The server supports MLSD/MLST (machine-readable). If not, it
+    /// degrades to `LIST` (`ls -l`), universal but fragile with hostile
+    /// names (ADR 0014 C).
     has_mlsd: bool,
-    /// Contador de staging (nombre efímero único para `open_writer`).
+    /// Staging counter (unique ephemeral name for `open_writer`).
     seq: u64,
-    /// RETR en curso reutilizable entre lecturas secuenciales (#30 M1): evita el
-    /// re-RETR por chunk (O(n²)→O(n)). `None` = sin lectura en vuelo.
+    /// An in-flight RETR reusable across sequential reads (#30 M1): avoids
+    /// re-RETR per chunk (O(n²)→O(n)). `None` = no read in flight.
     cached_read: Option<CachedRead>,
 }
 
-/// Un RETR vivo cacheado: la conexión de DATOS + el path y el siguiente offset
-/// que entregará. El `reader` es independiente del control; se drena y finaliza
-/// vía [`flush_cached_read`] ANTES de cualquier comando de control, para que el
-/// `226` pendiente jamás se intercale.
+/// A live cached RETR: the DATA connection + the path and the next offset
+/// it will deliver. The `reader` is independent of the control one; it is
+/// drained and finalized via [`flush_cached_read`] BEFORE any control
+/// command, so the pending `226` never interleaves.
 struct CachedRead {
     remote: String,
     next_offset: u64,
     reader: Box<dyn std::io::Read>,
 }
 
-/// Metadatos mínimos de una entrada, agnósticos del backend de parse (MLSD
-/// self-parse o `ls -l` de suppaftp). Reemplaza el `File` de suppaftp en la
-/// superficie de [`stat_remote`] para que el size sea u64 (no el `usize` de
-/// suppaftp, techo 4 GiB en wasm32, #30 H2).
+/// Minimal entry metadata, agnostic of the parsing backend (MLSD
+/// self-parse or suppaftp's `ls -l`). Replaces suppaftp's `File` on
+/// [`stat_remote`]'s surface so the size is u64 (not suppaftp's `usize`,
+/// a 4 GiB ceiling on wasm32, #30 H2).
 struct StatEntry {
     kind: EntryKind,
     size: Option<u64>,
@@ -82,9 +86,9 @@ thread_local! {
     static SESSION: RefCell<Option<Session>> = const { RefCell::new(None) };
 }
 
-/// Ejecuta `f` con la sesión establecida, o `provider-unavailable` si
-/// `configure` no se llamó (o falló). El wasm es single-threaded: el
-/// `borrow_mut` jamás se solapa.
+/// Runs `f` with the established session, or `provider-unavailable` if
+/// `configure` was never called (or failed). The wasm is single-threaded:
+/// `borrow_mut` never overlaps.
 fn with_session<T>(f: impl FnOnce(&mut Session) -> Result<T, VfsError>) -> Result<T, VfsError> {
     SESSION.with_borrow_mut(|s| match s.as_mut() {
         Some(sess) => f(sess),
@@ -92,24 +96,27 @@ fn with_session<T>(f: impl FnOnce(&mut Session) -> Result<T, VfsError>) -> Resul
     })
 }
 
-/// Drena y finaliza el RETR cacheado (si hay), dejando el control LIMPIO para el
-/// siguiente comando. Best-effort e idempotente (`None` = no-op). Todo op que
-/// emita un comando de control lo llama ANTES (invariante #30 M1: jamás un
-/// comando con un `226` pendiente en el control).
+/// Drains and finalizes the cached RETR (if any), leaving control CLEAN
+/// for the next command. Best-effort and idempotent (`None` = no-op).
+/// Every op that issues a control command calls it BEFORE (#30 M1's
+/// invariant: never a command with a pending `226` on the control
+/// connection).
 ///
-/// COSTE (deuda, ADR 0033): el drenado va hasta EOF de la conexión de datos, así
-/// que abandonar una lectura de un fichero grande hace que la SIGUIENTE op pague
-/// transferir la cola no leída; y un servidor hostil que streamee sin fin cuelga
-/// el hilo `spawn_blocking` del host (el epoch deadline no traba I/O de socket).
-/// Igual que la deuda de timeout/cancelación; el fix limpio sería `ABOR` o
-/// reconectar el control. El `8192`-scratch acota la MEMORIA, no el total.
+/// COST (debt, ADR 0033): the drain goes all the way to the data
+/// connection's EOF, so abandoning a large file's read makes the NEXT op
+/// pay for transferring the unread tail; and a hostile server that
+/// streams forever hangs the host's `spawn_blocking` thread (the epoch
+/// deadline does not cut off socket I/O). Same debt as
+/// timeout/cancellation; the clean fix would be `ABOR` or reconnecting
+/// control. The `8192`-byte scratch bounds MEMORY, not the total.
 fn flush_cached_read(s: &mut Session) {
     let Some(mut cr) = s.cached_read.take() else {
         return;
     };
     use std::io::Read;
-    // Drena el resto de la conexión de datos (RETR va offset→EOF; parar sin
-    // drenar desincronizaría el control), luego lee la respuesta de transferencia.
+    // Drains the rest of the data connection (RETR goes offset→EOF;
+    // stopping without draining would desync control), then reads the
+    // transfer's response.
     let mut scratch = [0u8; 8192];
     loop {
         match cr.reader.read(&mut scratch) {
@@ -124,9 +131,10 @@ struct FtpProvider;
 
 impl Guest for FtpProvider {
     fn configure(cfg: ProviderConfig) -> Result<(), VfsError> {
-        // `base` es config de confianza (el host la fija), pero se valida como
-        // defensa en profundidad: absoluta y sin CR/LF/NUL (que inyectarían un
-        // comando FTP en cada op, saltándose el filtro por-segmento).
+        // `base` is trusted config (the host sets it), but it is validated
+        // as defense in depth: absolute and without CR/LF/NUL (which
+        // would inject an FTP command into every op, bypassing the
+        // per-segment filter).
         let mut base = cfg.base;
         while base.len() > 1 && base.ends_with('/') {
             base.pop();
@@ -134,8 +142,8 @@ impl Guest for FtpProvider {
         if !base.starts_with('/') || base.contains(['\r', '\n', '\0']) {
             return Err(VfsError::InvalidPath);
         }
-        // El endpoint YA es `ip:puerto` numérico (el host resolvió DNS): connect
-        // no resuelve hostnames (el guest no tiene DNS).
+        // The endpoint is ALREADY a numeric `ip:port` (the host resolved
+        // DNS): connect resolves no hostnames (the guest has no DNS).
         let mut ftp =
             FtpStream::connect(cfg.endpoint.as_str()).map_err(|_| VfsError::ProviderUnavailable)?;
         ftp.login(cfg.user.as_str(), cfg.password.as_str())
@@ -152,10 +160,11 @@ impl Guest for FtpProvider {
     }
 
     fn capabilities() -> Caps {
-        // Honestas (ADR 0014): remoto POSIX case-sensitive y case-preserving.
-        // NO declara symlinks/trash/server-copy (el adapter los mapea a ausente
-        // → Unsupported), ni resume (el adapter usa el open_resumable por
-        // defecto, que no reanuda). Sin READ_ONLY (escribible).
+        // Honest (ADR 0014): remote POSIX case-sensitive and
+        // case-preserving. It does NOT declare symlinks/trash/server-copy
+        // (the adapter maps them to absent → Unsupported), nor resume
+        // (the adapter uses the default open_resumable, which does not
+        // resume). No READ_ONLY (writable).
         Caps {
             read_only: false,
             case_sensitive: true,
@@ -166,7 +175,8 @@ impl Guest for FtpProvider {
     fn stat(segments: Vec<Vec<u8>>) -> Result<Entry, VfsError> {
         with_session(|s| {
             flush_cached_read(s);
-            // La raíz del provider es el directorio base (no tiene padre a listar).
+            // The provider's root is the base directory (it has no parent
+            // to list).
             if segments.is_empty() {
                 return Ok(Entry {
                     name: Vec::new(),
@@ -197,22 +207,25 @@ impl Guest for FtpProvider {
             }
             .map_err(|e| map_err(&e))?;
             let mut entries = Vec::new();
-            // suppaftp decodifica los nombres con `from_utf8_lossy`: un byte no-UTF8
-            // llega ya sustituido por U+FFFD e irrecuperable → rechazo LIMPIO (regla
-            // 1, ADR 0014 D2). Un `/` o NUL inyectados por un servidor hostil buscan
-            // escapar/truncar la ruta: se falla la página LOUD (encoding M2).
+            // suppaftp decodes names with `from_utf8_lossy`: a non-UTF-8
+            // byte arrives already substituted by U+FFFD and unrecoverable
+            // → CLEAN rejection (rule 1, ADR 0014 D2). A `/` or NUL
+            // injected by a hostile server tries to escape/truncate the
+            // path: the page fails LOUD (encoding M2).
             let reject = |name: &str| name.contains('\u{FFFD}') || name.contains(['/', '\0']);
             for line in lines {
-                // Cota defensiva de nuestra materialización (issue #40).
+                // Defensive cap on our own materialization (issue #40).
                 if entries.len() >= MAX_LIST_ENTRIES {
                     return Err(VfsError::Io);
                 }
-                // Ramas separadas para que cada `name` sea dueño de su lifetime
-                // (el `f.name()` de LIST toma prestado de `f`, que muere al salir).
+                // Separate branches so each `name` owns its lifetime
+                // (LIST's `f.name()` borrows from `f`, which dies on
+                // exit).
                 if s.has_mlsd {
-                    // MLSD self-parse (#30 H2): (kind, size u64, nombre crudo).
+                    // MLSD self-parse (#30 H2): (kind, size u64, raw name).
                     let Some((kind, size, name)) = parse_mlsd_facts(&line) else {
-                        // MLSD machine-readable: una línea ilegible es anómala.
+                        // Machine-readable MLSD: an unreadable line is
+                        // anomalous.
                         return Err(VfsError::Io);
                     };
                     if name == "." || name == ".." {
@@ -227,7 +240,8 @@ impl Guest for FtpProvider {
                         size,
                     });
                 } else {
-                    // `ls -l`: líneas no parseables (cabecera `total N`) se descartan.
+                    // `ls -l`: unparseable lines (a `total N` header) are
+                    // dropped.
                     let Some(f) = parse_list_line(&line) else {
                         continue;
                     };
@@ -257,21 +271,23 @@ impl Guest for FtpProvider {
         use std::io::Read;
         with_session(|s| {
             let remote = remote(&s.base, &segments)?;
-            // Reusa el RETR cacheado si casa el path Y el offset secuencial (#30
-            // M1). Si no casa (o no hay), finaliza el anterior y abre uno nuevo.
+            // Reuses the cached RETR if the path AND sequential offset
+            // match (#30 M1). If not (or none), finalizes the previous one
+            // and opens a new one.
             let hit = s
                 .cached_read
                 .as_ref()
                 .is_some_and(|cr| cr.remote == remote && cr.next_offset == offset);
             if !hit {
                 flush_cached_read(s);
-                // Rechaza dir (leerlo es error) y ausente (NotFound).
+                // Rejects a dir (reading it is an error) and an absent one
+                // (NotFound).
                 match stat_remote(&mut s.ftp, &remote, s.has_mlsd, &s.base)? {
                     None => return Err(VfsError::NotFound),
                     Some(st) if st.kind == EntryKind::Dir => return Err(VfsError::Conflict),
                     Some(_) => {}
                 }
-                // REST offset (resume/rango): posiciona el inicio del RETR.
+                // REST offset (resume/range): positions the RETR's start.
                 if offset > 0 {
                     let off = usize::try_from(offset).map_err(|_| VfsError::Io)?;
                     s.ftp.resume_transfer(off).map_err(|e| map_err(&e))?;
@@ -286,16 +302,20 @@ impl Guest for FtpProvider {
                     reader: Box::new(reader),
                 });
             }
-            // Lee hasta `want` bytes del reader cacheado. Se lee DIRECTO sobre un
-            // buffer del tamaño pedido (no un buf fijo + truncado): así jamás se
-            // saca del socket más de lo pedido, que corromperia la siguiente
-            // lectura secuencial (perdería esos bytes de su ventana).
+            // Reads up to `want` bytes from the cached reader. It reads
+            // DIRECTLY into a buffer of the requested size (not a fixed
+            // buf + truncation): this way it never pulls more than
+            // requested off the socket, which would corrupt the next
+            // sequential read (it would lose those bytes from its
+            // window).
             let want = usize::try_from(len).unwrap_or(usize::MAX);
-            // Techo por si `want == u64::MAX` (el adapter pide 64 KiB; jamás pica).
+            // Ceiling in case `want == u64::MAX` (the adapter asks for
+            // 64 KiB; it never bites).
             let cap = want.min(1 << 20);
-            // El hit reusa la caché; el miss la instaló justo arriba — en ambos
-            // casos `cached_read` es Some. El else es inalcanzable; se trata como
-            // Io en vez de panicar (regla 6, sin `expect`).
+            // A hit reuses the cache; a miss just installed it above — in
+            // both cases `cached_read` is Some. The else is unreachable;
+            // it is treated as Io instead of panicking (hard rule 6, no
+            // `expect`).
             let Some(cr) = s.cached_read.as_mut() else {
                 return Err(VfsError::Io);
             };
@@ -304,8 +324,9 @@ impl Guest for FtpProvider {
             let mut eof = false;
             let mut read_err = false;
             while filled < cap {
-                // Un error NO puede hacer `?` (saltaría el flush → 226 pendiente,
-                // rust review B1). Se marca y se finaliza fuera del bucle.
+                // An error CANNOT use `?` (it would skip the flush →
+                // pending 226, rust review B1). It is flagged and
+                // finalized outside the loop.
                 match cr.reader.read(&mut out[filled..]) {
                     Ok(0) => {
                         eof = true;
@@ -320,7 +341,8 @@ impl Guest for FtpProvider {
             }
             out.truncate(filled);
             cr.next_offset += filled as u64;
-            // EOF o error: finaliza la caché (limpio, o best-effort en error).
+            // EOF or error: finalizes the cache (clean, or best-effort on
+            // error).
             if eof || read_err {
                 flush_cached_read(s);
             }
@@ -331,7 +353,7 @@ impl Guest for FtpProvider {
         })
     }
 
-    // ---- escritura ----
+    // ---- write ----
 
     type Writer = FtpWriter;
 
@@ -341,16 +363,17 @@ impl Guest for FtpProvider {
             let final_remote = remote(&s.base, &segments)?;
             let parent_len = segments.len().saturating_sub(1);
             let parent = remote(&s.base, &segments[..parent_len])?;
-            // El destino final no debe existir (create-new; la política de
-            // sobrescritura es del core). Ventana TOCTOU documentada.
+            // The final destination must not exist (create-new; the
+            // overwrite policy belongs to the core). A documented TOCTOU
+            // window.
             if exists(&mut s.ftp, &final_remote, s.has_mlsd, &s.base)? {
                 return Err(VfsError::Conflict);
             }
             let seq = s.seq;
             s.seq += 1;
             let staging = format!("{parent}/{PARTIAL_PREFIX}eph.{seq}");
-            // Crea el staging VACÍO (STOR sin datos): un write de 0 bytes tiene
-            // qué renombrar y los write() posteriores solo APPE-an.
+            // Creates the staging EMPTY (STOR with no data): a base for a
+            // 0-byte write to rename, and later write() calls just APPE.
             create_empty(&mut s.ftp, &staging)?;
             Ok(Writer::new(FtpWriter {
                 staging: RefCell::new(Some(staging)),
@@ -374,7 +397,7 @@ impl Guest for FtpProvider {
         with_session(|s| {
             flush_cached_read(s);
             let remote = remote(&s.base, &segments)?;
-            // Saber si es dir para elegir RMD vs DELE.
+            // Need to know if it is a dir to choose RMD vs DELE.
             let st =
                 stat_remote(&mut s.ftp, &remote, s.has_mlsd, &s.base)?.ok_or(VfsError::NotFound)?;
             if st.kind == EntryKind::Dir {
@@ -390,8 +413,8 @@ impl Guest for FtpProvider {
             flush_cached_read(s);
             let from_r = remote(&s.base, &src)?;
             let to_r = remote(&s.base, &dst)?;
-            // RNFR/RNTO no garantiza no-replace: se comprueba antes (TOCTOU
-            // documentada) para dar Conflict, no pisar.
+            // RNFR/RNTO does not guarantee no-replace: checked beforehand
+            // (documented TOCTOU) to give Conflict, not overwrite.
             if exists(&mut s.ftp, &to_r, s.has_mlsd, &s.base)? {
                 return Err(VfsError::Conflict);
             }
@@ -400,12 +423,13 @@ impl Guest for FtpProvider {
     }
 }
 
-/// Writer transaccional sobre ftp (ADR 0014): cada `write` hace un `APPE` de su
-/// chunk al staging; `commit` renombra staging→final; `abort` borra el staging.
-/// El estado (path de staging) vive tras `RefCell` porque los métodos WIT del
-/// recurso toman `&self`. La conexión se alcanza vía el `thread_local`.
+/// Transactional writer over FTP (ADR 0014): each `write` does an `APPE`
+/// of its chunk to the staging; `commit` renames staging→final; `abort`
+/// deletes the staging. State (the staging path) lives behind `RefCell`
+/// because the resource's WIT methods take `&self`. The connection is
+/// reached via the `thread_local`.
 struct FtpWriter {
-    /// `Some` mientras no se haya publicado/descartado.
+    /// `Some` while it has not been published/discarded.
     staging: RefCell<Option<String>>,
     final_remote: String,
 }
@@ -423,8 +447,8 @@ impl GuestWriter for FtpWriter {
                 .append_with_stream(&staging)
                 .map_err(|e| map_err(&e))?;
             let res = data.write_all(&chunk);
-            // Cierra la conexión de datos y lee la respuesta SIEMPRE (aunque el
-            // write fallara), o el control queda desincronizado.
+            // Closes the data connection and reads the response ALWAYS
+            // (even if the write failed), or control ends up desynced.
             let fin = s.ftp.finalize_put_stream(data);
             res.map_err(|_| VfsError::Io)?;
             fin.map_err(|e| map_err(&e))
@@ -435,8 +459,9 @@ impl GuestWriter for FtpWriter {
         let staging = self.staging.borrow_mut().take().ok_or(VfsError::Io)?;
         with_session(|s| {
             flush_cached_read(s);
-            // El destino final no debe existir (create-new): comprobado al abrir;
-            // la ventana hasta aquí es TOCTOU (FTP sin rename atómico).
+            // The final destination must not exist (create-new): checked
+            // when opening; the window up to here is TOCTOU (FTP has no
+            // atomic rename).
             if exists(&mut s.ftp, &self.final_remote, s.has_mlsd, &s.base)? {
                 return Err(VfsError::Conflict);
             }
@@ -447,7 +472,7 @@ impl GuestWriter for FtpWriter {
     }
 
     fn abort(&self) -> Result<(), VfsError> {
-        // Borra el staging (cada write lo dejó durable en el servidor).
+        // Deletes the staging (each write left it durable on the server).
         if let Some(staging) = self.staging.borrow_mut().take() {
             let _ = with_session(|s| {
                 flush_cached_read(s);
@@ -459,31 +484,35 @@ impl GuestWriter for FtpWriter {
     }
 }
 
-/// Path remoto absoluto bajo `base` desde segmentos crudos. MISMAS defensas que
-/// el provider nativo: UTF-8 exigido, sin `/`/`.`/`..`, sin CR/LF, ≤255 bytes.
+/// Absolute remote path under `base` from raw segments. SAME defenses as
+/// the native provider: UTF-8 required, no `/`/`.`/`..`, no CR/LF, ≤255
+/// bytes.
 ///
-/// FTP es un protocolo de LÍNEAS (comando terminado en CRLF): un nombre con
-/// CR/LF inyectaría un comando FTP arbitrario (`STOR path\r\nDELE víctima`) — se
-/// rechaza. Contención ESPECÍFICA de FTP.
+/// FTP is a LINE-based protocol (a command ends in CRLF): a name with
+/// CR/LF would inject an arbitrary FTP command
+/// (`STOR path\r\nDELE victim`) — rejected. FTP-SPECIFIC containment.
 fn remote(base: &str, segments: &[Vec<u8>]) -> Result<String, VfsError> {
     let mut out = String::from(base);
     for seg in segments {
         let name = std::str::from_utf8(seg).map_err(|_| VfsError::InvalidPath)?;
-        // Un segmento vacío haría un path con `//` que aliasa al padre (encoding
-        // M1); `/`/`.`/`..` escaparían la base. El `Segment` del host ya los
-        // rechaza, pero el guest revalida (bytes crudos en el WIT).
+        // An empty segment would make a path with `//` that aliases the
+        // parent (encoding M1); `/`/`.`/`..` would escape the base. The
+        // host's `Segment` already rejects them, but the guest revalidates
+        // (raw bytes in the WIT).
         if name.is_empty() || name.contains('/') || name == "." || name == ".." {
             return Err(VfsError::InvalidPath);
         }
-        // CR/LF inyectarían un comando FTP; NUL trunca paths en servidores en C.
-        // El `Segment` del host ya rechaza NUL, pero el guest revalida (la
-        // interfaz WIT cruza bytes crudos): defensa en profundidad, misma que
-        // `configure` aplica a `base` (rust review m2 / security LOW).
+        // CR/LF would inject an FTP command; NUL truncates paths on
+        // C-based servers. The host's `Segment` already rejects NUL, but
+        // the guest revalidates (the WIT interface carries raw bytes):
+        // defense in depth, same as `configure` applies to `base` (rust
+        // review m2 / security LOW).
         if name.contains(['\r', '\n', '\0']) {
             return Err(VfsError::InvalidPath);
         }
-        // NAME_MAX: la mayoría de FS rechazan >255 bytes con ENAMETOOLONG; el
-        // servidor fallaría a media op con un 550 ambiguo. Se rechaza LIMPIO.
+        // NAME_MAX: most FS's reject >255 bytes with ENAMETOOLONG; the
+        // server would fail mid-op with an ambiguous 550. Rejected
+        // CLEANLY.
         if seg.len() > 255 {
             return Err(VfsError::InvalidPath);
         }
@@ -495,14 +524,15 @@ fn remote(base: &str, segments: &[Vec<u8>]) -> Result<String, VfsError> {
     Ok(out)
 }
 
-/// El último segmento (nombre) de un path, o vacío para la raíz.
+/// The last segment (name) of a path, or empty for the root.
 fn last_name(segments: &[Vec<u8>]) -> Vec<u8> {
     segments.last().cloned().unwrap_or_default()
 }
 
-/// Prepara una conexión recién logueada: BINARIO (ASCII corrompe binarios),
-/// detección de MLSD/MLST y `OPTS UTF8 ON` si el servidor lo anuncia (RFC 2640,
-/// ADR 0014 D2; best-effort). Devuelve si hay MLSD.
+/// Prepares a freshly logged-in connection: BINARY (ASCII corrupts
+/// binaries), MLSD/MLST detection and `OPTS UTF8 ON` if the server
+/// announces it (RFC 2640, ADR 0014 D2; best-effort). Returns whether
+/// MLSD is available.
 fn setup_conn(ftp: &mut FtpStream) -> Result<bool, FtpError> {
     ftp.transfer_type(FileType::Binary)?;
     let feats = ftp.feat().ok();
@@ -519,48 +549,51 @@ fn setup_conn(ftp: &mut FtpStream) -> Result<bool, FtpError> {
     Ok(has_mlsd)
 }
 
-/// Mapea el error de suppaftp a la taxonomía WIT `vfs-error` (spec §17.7).
+/// Maps a suppaftp error to the WIT `vfs-error` taxonomy (spec §17.7).
 fn map_err(e: &FtpError) -> VfsError {
     match e {
         FtpError::UnexpectedResponse(r) => match r.status {
-            // 550 es ambiguo en FTP (no existe / sin permiso): NotFound es el
-            // caso común y el que el contrato espera para paths ausentes.
+            // 550 is ambiguous in FTP (does not exist / no permission):
+            // NotFound is the common case and the one the contract expects
+            // for absent paths.
             Status::FileUnavailable => VfsError::NotFound,
             Status::NotLoggedIn => VfsError::PermissionDenied,
             Status::BadFilename => VfsError::InvalidPath,
-            // El flag `retryable` de la taxonomía proto no cruza la interfaz WIT
-            // (enum cerrado): 450 y el resto caen a `io`.
+            // The proto taxonomy's `retryable` flag does not cross the WIT
+            // interface (closed enum): 450 and the rest fall to `io`.
             _ => VfsError::Io,
         },
-        // `SecureError` está gateado por la feature TLS (deshabilitada: FTPS es
-        // deuda) — no existe en esta compilación.
+        // `SecureError` is gated by the TLS feature (disabled: FTPS is
+        // debt) — it does not exist in this build.
         FtpError::ConnectionError(_) => VfsError::ProviderUnavailable,
         FtpError::InvalidAddress(_) => VfsError::InvalidPath,
         FtpError::BadResponse | FtpError::DataConnectionAlreadyOpen => VfsError::Io,
     }
 }
 
-/// Parsea una línea de `LIST` (`ls -l` POSIX, con respaldo DOS). `None` para
-/// líneas no parseables (cabeceras `total N`): se descartan.
+/// Parses a `LIST` line (POSIX `ls -l`, with a DOS fallback). `None` for
+/// unparseable lines (`total N` headers): they are dropped.
 fn parse_list_line(line: &str) -> Option<File> {
     ListParser::parse_posix(line)
         .ok()
         .or_else(|| ListParser::parse_dos(line).ok())
 }
 
-/// Parsea una línea MLSD/MLST (RFC 3659: `[facts] SP pathname`). Devuelve
-/// `(kind, size, raw_name)`: `kind` del fact `type`, `size` como u64 (`None` si
-/// el fact `size` falta o no es numérico — un dir lo omite), `raw_name` tras el
-/// PRIMER espacio (crudo; el caller aplica el rechazo U+FFFD/`/`/NUL). Reemplaza
-/// a `ListParser::parse_mlsd`/`parse_mlst` de suppaftp, que parsea el size a
-/// `usize` (techo 4 GiB en wasm32) y truncaba el nombre en `;` (#30 H2). `None`
-/// si la línea no tiene la forma `facts SP name` (sin espacio, o nombre vacío).
+/// Parses an MLSD/MLST line (RFC 3659: `[facts] SP pathname`). Returns
+/// `(kind, size, raw_name)`: `kind` from the `type` fact, `size` as u64
+/// (`None` if the `size` fact is missing or not numeric — a dir omits
+/// it), `raw_name` after the FIRST space (raw; the caller applies the
+/// U+FFFD/`/`/NUL rejection). Replaces suppaftp's
+/// `ListParser::parse_mlsd`/`parse_mlst`, which parses the size as
+/// `usize` (a 4 GiB ceiling on wasm32) and truncated the name at `;`
+/// (#30 H2). `None` if the line does not have the `facts SP name` shape
+/// (no space, or empty name).
 fn parse_mlsd_facts(line: &str) -> Option<(EntryKind, Option<u64>, &str)> {
     let (facts, name) = line.split_once(' ')?;
     if name.is_empty() {
         return None;
     }
-    let mut kind = EntryKind::File; // default si falta `type`
+    let mut kind = EntryKind::File; // default if `type` is missing
     let mut size = None;
     for fact in facts.split(';') {
         let Some((key, value)) = fact.split_once('=') else {
@@ -580,17 +613,19 @@ fn parse_mlsd_facts(line: &str) -> Option<(EntryKind, Option<u64>, &str)> {
     Some((kind, size, name))
 }
 
-/// Nombre de una línea `ls -l` de forma TOLERANTE, SÓLO para la salvaguarda
-/// anti-overwrite (nunca como nombre real): `perms links owner group size mon day
-/// time name` → el nombre es todo tras el 8º campo separado por whitespace.
-/// `None` si la línea tiene <9 campos (p. ej. una cabecera `total N`). Los
-/// nombres con espacio inicial se pierden (límite conocido de `ls -l`): eso deja
-/// UN hueco en la salvaguarda anti-overwrite — un fichero ≥4 GiB con nombre de
-/// espacio inicial en un servidor SIN MLSD no casaría `child` y podría
-/// sobrescribirse. Intersección de 3 precondiciones raras + inherente a `ls -l`
-/// (suppaftp lo pierde igual); el fix real es MLSD (que sí preserva el espacio).
+/// TOLERANT extraction of an `ls -l` line's name, ONLY for the
+/// anti-overwrite safeguard (never as a real name): `perms links owner
+/// group size mon day time name` → the name is everything after the 8th
+/// whitespace-separated field. `None` if the line has <9 fields (e.g. a
+/// `total N` header). Names with a leading space are lost (a known
+/// `ls -l` limitation): that leaves ONE gap in the anti-overwrite
+/// safeguard — a file ≥4 GiB with a leading-space name on a server
+/// WITHOUT MLSD would not reliably match `child` and could be
+/// overwritten. An intersection of 3 rare preconditions + inherent to
+/// `ls -l` (suppaftp loses it the same way); the real fix is MLSD (which
+/// does preserve the space).
 fn ls_l_name(line: &str) -> Option<&str> {
-    // Salta 8 campos (cada uno = token + su whitespace siguiente).
+    // Skips 8 fields (each = a token + its following whitespace).
     let mut rest = line;
     for _ in 0..8 {
         let trimmed = rest.trim_start();
@@ -601,8 +636,9 @@ fn ls_l_name(line: &str) -> Option<&str> {
     if name.is_empty() { None } else { Some(name) }
 }
 
-/// `StatEntry` desde un `File` de suppaftp (rama LIST; el size sale del `usize`
-/// de suppaftp — límite 4 GiB aceptado para servidores SIN MLSD).
+/// `StatEntry` from a suppaftp `File` (the LIST branch; the size comes
+/// from suppaftp's `usize` — a 4 GiB limit accepted for servers WITHOUT
+/// MLSD).
 fn stat_entry_from_file(f: &File) -> StatEntry {
     let kind = if f.is_symlink() {
         EntryKind::Symlink
@@ -617,9 +653,9 @@ fn stat_entry_from_file(f: &File) -> StatEntry {
     StatEntry { kind, size }
 }
 
-/// `stat` de `remote`: con MLSD `MLST` directo (self-parse, size u64); sin MLSD,
-/// `LIST` del DIRECTORIO padre + búsqueda por nombre (universal — pure-ftpd; ADR
-/// 0014 C). `None` = no existe.
+/// `stat` of `remote`: with MLSD, a direct `MLST` (self-parse, u64 size);
+/// without MLSD, `LIST` of the PARENT directory + search by name
+/// (universal — pure-ftpd; ADR 0014 C). `None` = does not exist.
 fn stat_remote(
     ftp: &mut FtpStream,
     remote: &str,
@@ -630,7 +666,7 @@ fn stat_remote(
         return match ftp.mlst(Some(remote)) {
             Ok(line) => match parse_mlsd_facts(&line) {
                 Some((kind, size, _name)) => Ok(Some(StatEntry { kind, size })),
-                None => Err(VfsError::Io), // MLST ilegible = anómalo
+                None => Err(VfsError::Io), // an unreadable MLST is anomalous
             },
             Err(e) => match map_err(&e) {
                 VfsError::NotFound => Ok(None),
@@ -638,9 +674,10 @@ fn stat_remote(
             },
         };
     }
-    // Contención (security): la rama LIST lista el DIRECTORIO PADRE. Para la RAÍZ
-    // del provider (`remote == base`) el padre estaría FUERA de la base — jamás
-    // se lista por encima. La raíz es un dir degenerado: None (fail-safe).
+    // Containment (security): the LIST branch lists the PARENT directory.
+    // For the provider's ROOT (`remote == base`) the parent would be
+    // OUTSIDE the base — it is never listed above it. The root is a
+    // degenerate dir: None (fail-safe).
     if remote == base {
         return Ok(None);
     }
@@ -664,8 +701,9 @@ fn stat_remote(
     for line in lines {
         match parse_list_line(&line) {
             Some(f) => {
-                // El nombre del servidor viene lossy: un no-UTF8 (U+FFFD) jamás
-                // casa un `child` UTF-8 de forma fiable → se salta, no se compara.
+                // The server's name arrives lossy: a non-UTF-8 (U+FFFD)
+                // never reliably matches a UTF-8 `child` → skipped, not
+                // compared.
                 let n = f.name();
                 if n.contains('\u{FFFD}') {
                     continue;
@@ -674,12 +712,13 @@ fn stat_remote(
                     return Ok(Some(stat_entry_from_file(&f)));
                 }
             }
-            // Salvaguarda anti-overwrite (#30 H2): una línea `ls -l` que NO parsea
-            // (p. ej. size ≥ 4 GiB rompe el parse `usize` de suppaftp) pero cuyo
-            // nombre casa `child` NO se descarta en silencio — se falla LOUD, así
-            // `exists()` no dice "no existe" y write/rename/mkdir no sobrescriben
-            // un fichero invisible. Cabeceras `total N` (ls_l_name=None) siguen
-            // descartándose.
+            // Anti-overwrite safeguard (#30 H2): an `ls -l` line that does
+            // NOT parse (e.g. size ≥ 4 GiB breaks suppaftp's `usize`
+            // parse) but whose name matches `child` is NOT silently
+            // dropped — it fails LOUD, so `exists()` does not say "does
+            // not exist" and write/rename/mkdir do not overwrite an
+            // invisible file. `total N` headers (ls_l_name=None) keep
+            // getting dropped.
             None => {
                 if let Some(n) = ls_l_name(&line) {
                     if !n.contains('\u{FFFD}') && n == child {
@@ -692,12 +731,13 @@ fn stat_remote(
     Ok(None)
 }
 
-/// ¿Existe `remote`? (vía `stat_remote`.)
+/// Does `remote` exist? (via `stat_remote`.)
 fn exists(ftp: &mut FtpStream, remote: &str, has_mlsd: bool, base: &str) -> Result<bool, VfsError> {
     Ok(stat_remote(ftp, remote, has_mlsd, base)?.is_some())
 }
 
-/// Crea `remote` como fichero VACÍO (STOR sin datos): base para APPE-ar.
+/// Creates `remote` as an EMPTY file (STOR with no data): a base to APPE
+/// onto.
 fn create_empty(ftp: &mut FtpStream, remote: &str) -> Result<(), VfsError> {
     let data = ftp.put_with_stream(remote).map_err(|e| map_err(&e))?;
     ftp.finalize_put_stream(data).map_err(|e| map_err(&e))
@@ -711,9 +751,10 @@ mod parse_tests {
 
     #[test]
     fn mlsd_facts_size_u64_beyond_4gib() {
-        // 5 GiB = 5368709120 > u32::MAX: suppaftp lo rompía; aquí es u64 exacto.
+        // 5 GiB = 5368709120 > u32::MAX: suppaftp used to break on it; here
+        // it is exact u64.
         let line = "type=file;size=5368709120;modify=20200101000000; big.bin";
-        let (kind, size, name) = parse_mlsd_facts(line).expect("parsea");
+        let (kind, size, name) = parse_mlsd_facts(line).expect("parses");
         assert_eq!(kind, EntryKind::File);
         assert_eq!(size, Some(5_368_709_120));
         assert_eq!(name, "big.bin");
@@ -730,8 +771,9 @@ mod parse_tests {
 
     #[test]
     fn mlsd_facts_name_with_semicolon_survives() {
-        // El nombre va tras el PRIMER espacio: un `;` en el nombre NO lo trunca.
-        let (_, _, name) = parse_mlsd_facts("type=file;size=1; a;b.txt").expect("parsea");
+        // The name goes after the FIRST space: a `;` in the name does NOT
+        // truncate it.
+        let (_, _, name) = parse_mlsd_facts("type=file;size=1; a;b.txt").expect("parses");
         assert_eq!(name, "a;b.txt");
     }
 
@@ -748,15 +790,15 @@ mod parse_tests {
     #[test]
     fn mlsd_facts_rejects_malformed() {
         assert!(parse_mlsd_facts("no-space-no-name").is_none());
-        assert!(parse_mlsd_facts("type=file;size=1; ").is_none()); // nombre vacío
+        assert!(parse_mlsd_facts("type=file;size=1; ").is_none()); // empty name
     }
 
     #[test]
     fn ls_l_name_extracts_after_eight_fields() {
         let n = ls_l_name("-rw-r--r-- 1 owner group 5368709120 Jan 12 10:00 big.bin");
         assert_eq!(n, Some("big.bin"));
-        let n2 = ls_l_name("-rw-r--r-- 1 o g 5 Jan 12 10:00 con espacios.txt");
-        assert_eq!(n2, Some("con espacios.txt"));
+        let n2 = ls_l_name("-rw-r--r-- 1 o g 5 Jan 12 10:00 with spaces.txt");
+        assert_eq!(n2, Some("with spaces.txt"));
     }
 
     #[test]

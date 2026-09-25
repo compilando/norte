@@ -1,11 +1,12 @@
-//! Contención de un servidor SFTP HOSTIL (ADR 0013, threat model §14): un
-//! servidor que inyecta nombres trampa (`../../`) y symlinks fuera de la
-//! base no puede hacer que el provider escape la raíz ni corrompa.
+//! Containment of a HOSTILE SFTP server (ADR 0013, threat model §14): a
+//! server that injects trap names (`../../`) and symlinks outside the base
+//! must not be able to make the provider escape the root or corrupt.
 //!
-//! Solo-Linux (igual que `contract.rs`): el servidor in-process se respalda en
-//! el FS del HOST y solo es fiel en POSIX (case-sensitive, byte-preserving);
-//! un fixture no-UTF8 crudo (`caf\xE9`) ni siquiera se puede plantar en APFS
-//! (EILSEQ). El provider es OS-agnóstico; el nightly openssh cubre POSIX real.
+//! Linux-only (same as `contract.rs`): the in-process server is backed by
+//! the HOST's FS and is only faithful on POSIX (case-sensitive,
+//! byte-preserving); a raw non-UTF8 fixture (`caf\xE9`) cannot even be
+//! planted on APFS (EILSEQ). The provider is OS-agnostic; the nightly
+//! openssh covers real POSIX.
 #![cfg(target_os = "linux")]
 
 mod common;
@@ -17,7 +18,7 @@ use norte_vfs::{FollowLinks, Provider};
 use norte_vfs_sftp::SftpProvider;
 
 fn vp(p: &str) -> VPath {
-    VPath::parse(&format!("sftp://test:22{p}")).expect("wire válido")
+    VPath::parse(&format!("sftp://test:22{p}")).expect("valid wire")
 }
 
 async fn provider(base: &std::path::Path, mode: common::Mode) -> SftpProvider {
@@ -25,262 +26,272 @@ async fn provider(base: &std::path::Path, mode: common::Mode) -> SftpProvider {
     SftpProvider::new(session, "/")
 }
 
-/// Un servidor que inyecta `../../escape` en cada `readdir`: el provider
-/// RECHAZA la entrada con `/` (jamás la reconstruye como hijo) y corta el
-/// listado — el resto de entradas legítimas no se sirven a ciegas.
+/// A server that injects `../../escape` into every `readdir`: the provider
+/// REJECTS the entry with `/` (never reconstructs it as a child) and cuts
+/// the listing short — the rest of the legitimate entries are not served
+/// blindly.
 #[tokio::test]
-async fn readdir_con_nombre_trampa_se_rechaza() {
+async fn readdir_with_trap_name_is_rejected() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("legit.txt"), b"ok").unwrap();
     let p = provider(dir.path(), common::Mode::Hostile).await;
 
-    let mut stream = p.list(&vp("/")).await.expect("list abre");
-    let mut vio_error = false;
+    let mut stream = p.list(&vp("/")).await.expect("list opens");
+    let mut saw_error = false;
     while let Some(item) = stream.next().await {
         match item {
             Ok(entry) => {
-                // Ninguna entrada servida contiene `/` ni `..` en su nombre.
-                let name = entry.path.file_name().expect("con nombre");
+                // No served entry contains `/` or `..` in its name.
+                let name = entry.path.file_name().expect("has a name");
                 assert!(
                     !name.as_bytes().contains(&b'/'),
-                    "una entrada con `/` escaparía la base"
+                    "an entry with `/` would escape the base"
                 );
                 assert_ne!(name.as_bytes(), b"..");
             }
             Err(Error::InvalidPath) => {
-                // El nombre trampa `../../escape` se rechaza: contención OK.
-                vio_error = true;
+                // The trap name `../../escape` is rejected: containment OK.
+                saw_error = true;
             }
-            Err(other) => panic!("error inesperado: {other:?}"),
+            Err(other) => panic!("unexpected error: {other:?}"),
         }
     }
     assert!(
-        vio_error,
-        "el servidor hostil inyectó `../../escape` y debió rechazarse"
+        saw_error,
+        "the hostile server injected `../../escape` and it should have been rejected"
     );
 }
 
-/// El provider construye los paths SIEMPRE desde segmentos validados: aunque
-/// el servidor mienta en un listado, un `stat` posterior usa el path que
-/// arma el cliente, jamás uno ecoado — no hay escape.
+/// The provider ALWAYS builds paths from validated segments: even if the
+/// server lies in a listing, a later `stat` uses the path the client built,
+/// never an echoed one — there is no escape.
 #[tokio::test]
-async fn stat_usa_path_propio_no_el_ecoado() {
+async fn stat_uses_its_own_path_not_the_echoed_one() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("f.txt"), b"data").unwrap();
     let p = provider(dir.path(), common::Mode::Hostile).await;
 
-    // Stat de un hijo legítimo funciona (el path lo arma el cliente).
-    let e = p.stat(&vp("/f.txt")).await.expect("stat del hijo legítimo");
+    // Stat of a legitimate child works (the client builds the path).
+    let e = p
+        .stat(&vp("/f.txt"))
+        .await
+        .expect("stat of the legit child");
     assert_eq!(e.kind, EntryKind::File);
-    // Un VPath jamás admite `..` como segmento, así que el cliente no puede
-    // pedir `sftp://test:22/../etc` — no hay forma de construirlo.
+    // A VPath never admits `..` as a segment, so the client cannot request
+    // `sftp://test:22/../etc` — there is no way to build it.
     assert!(VPath::parse("sftp://test:22/../etc").is_err());
 }
 
-/// Un symlink trampa que apunta FUERA de la base (`/etc/passwd`) se ve como
-/// symlink (lstat, jamás seguido); `read_link` da los bytes crudos del
-/// target sin resolverlo, y como `node_id` es `None`, el `Follow` del engine
-/// no puede recorrerlo.
+/// A trap symlink pointing OUTSIDE the base (`/etc/passwd`) is seen as a
+/// symlink (lstat, never followed); `read_link` gives the raw target bytes
+/// without resolving it, and since `node_id` is `None`, the engine's
+/// `Follow` cannot walk it.
 #[tokio::test]
-async fn symlink_trampa_no_se_sigue() {
+async fn trap_symlink_is_not_followed() {
     let dir = tempfile::tempdir().expect("tempdir");
-    std::os::unix::fs::symlink("/etc/passwd", dir.path().join("trampa")).unwrap();
+    std::os::unix::fs::symlink("/etc/passwd", dir.path().join("trap")).unwrap();
     let p = provider(dir.path(), common::Mode::Honest).await;
 
-    let e = p.stat(&vp("/trampa")).await.expect("stat del symlink");
-    assert_eq!(e.kind, EntryKind::Symlink, "se ve como LINK, no se sigue");
-    // read_link da el target CRUDO, sin resolver.
-    let target = p.read_link(&vp("/trampa")).await.expect("read_link");
+    let e = p.stat(&vp("/trap")).await.expect("stat of the symlink");
+    assert_eq!(e.kind, EntryKind::Symlink, "seen as a LINK, not followed");
+    // read_link gives the RAW target, unresolved.
+    let target = p.read_link(&vp("/trap")).await.expect("read_link");
     assert_eq!(target, b"/etc/passwd");
-    // node_id es None → el engine no puede seguir dir-symlinks (contención).
+    // node_id is None → the engine cannot follow dir-symlinks (containment).
     assert_eq!(
-        p.node_id(&vp("/trampa"), FollowLinks::No).await.unwrap(),
+        p.node_id(&vp("/trap"), FollowLinks::No).await.unwrap(),
         None
     );
-    // Y JAMÁS se leyó el contenido de /etc/passwd por el provider.
+    // And the provider NEVER read /etc/passwd's contents.
 }
 
-/// El provider nunca sale de su base: los paths se componen bajo ella y el
-/// servidor de test rebasa todo dentro del tempdir. Escribir crea el archivo
-/// DENTRO, no en el FS del test runner.
+/// The provider never leaves its base: paths are composed under it and the
+/// test server rebases everything inside the tempdir. Writing creates the
+/// file INSIDE it, not on the test runner's FS.
 #[tokio::test]
-async fn escritura_queda_dentro_de_la_base() {
+async fn write_stays_inside_the_base() {
     let dir = tempfile::tempdir().expect("tempdir");
     let p = provider(dir.path(), common::Mode::Honest).await;
 
-    let mut sink = p.write(&vp("/nuevo.bin")).await.expect("write abre");
-    sink.write(Bytes::from_static(b"contenido")).await.unwrap();
+    let mut sink = p.write(&vp("/new.bin")).await.expect("write opens");
+    sink.write(Bytes::from_static(b"content")).await.unwrap();
     sink.commit().await.expect("commit");
-    // El archivo aparece DENTRO del tempdir, en ningún otro sitio.
+    // The file appears INSIDE the tempdir, nowhere else.
     assert_eq!(
-        std::fs::read(dir.path().join("nuevo.bin")).unwrap(),
-        b"contenido"
+        std::fs::read(dir.path().join("new.bin")).unwrap(),
+        b"content"
     );
 }
 
-/// Un nombre no-UTF8 se rechaza LIMPIO con `InvalidPath` (limitación de
-/// russh-sftp = String; ADR 0013 D2), jamás lossy.
+/// A non-UTF8 name is CLEANLY rejected with `InvalidPath` (russh-sftp's
+/// limitation = String; ADR 0013 D2), never lossy.
 #[tokio::test]
-async fn nombre_no_utf8_se_rechaza_limpio() {
+async fn non_utf8_name_is_cleanly_rejected() {
     let dir = tempfile::tempdir().expect("tempdir");
     let p = provider(dir.path(), common::Mode::Honest).await;
     let seg = norte_proto::Segment::new(vec![0xFF, 0xFE]).unwrap();
-    let hostil = SftpProvider::root(Authority::new("test:22").unwrap()).join(seg);
-    // Cualquier operación con un nombre no-UTF8 rechaza limpio.
-    assert_eq!(p.stat(&hostil).await.unwrap_err(), Error::InvalidPath);
-    assert!(p.write(&hostil).await.is_err());
+    let hostile = SftpProvider::root(Authority::new("test:22").unwrap()).join(seg);
+    // Any operation with a non-UTF8 name rejects cleanly.
+    assert_eq!(p.stat(&hostile).await.unwrap_err(), Error::InvalidPath);
+    assert!(p.write(&hostile).await.is_err());
 }
-/// Resume sobre sftp (ADR 0012): `keep` conserva el `.norte-partial`, una
-/// segunda apertura reanuda desde el offset y el commit concatena. (La
-/// cancelación limpia del sink la cubre `contract_abort_leaves_no_trace` de
-/// la macro de contrato, que corre contra este mismo provider.)
+/// Resume over sftp (ADR 0012): `keep` preserves the `.norte-partial`, a
+/// second open resumes from the offset and commit concatenates. (The sink's
+/// clean cancellation is covered by the contract macro's
+/// `contract_abort_leaves_no_trace`, which runs against this same
+/// provider.)
 #[tokio::test]
-async fn resume_sobre_sftp_reanuda() {
+async fn resume_over_sftp_resumes() {
     let dir = tempfile::tempdir().expect("tempdir");
     let p = provider(dir.path(), common::Mode::Honest).await;
 
-    // Primer tramo: open_resumable, escribe "hola", keep (conserva).
+    // First leg: open_resumable, write "hello", keep (preserve).
     let (mut sink, already) = p.open_resumable(&vp("/big.bin")).await.expect("open 1");
     assert_eq!(already, 0);
-    sink.write(Bytes::from_static(b"hola")).await.unwrap();
+    sink.write(Bytes::from_static(b"hello")).await.unwrap();
     sink.keep().await.expect("keep");
-    // El destino final no existe todavía.
+    // The final destination does not exist yet.
     assert_eq!(p.stat(&vp("/big.bin")).await.unwrap_err(), Error::NotFound);
 
-    // Segundo tramo: reanuda desde 4 bytes.
+    // Second leg: resumes from 5 bytes.
     let (mut sink, already) = p.open_resumable(&vp("/big.bin")).await.expect("open 2");
-    assert_eq!(already, 4, "reanuda tras lo conservado");
-    sink.write(Bytes::from_static(b"mundo")).await.unwrap();
+    assert_eq!(already, 5, "resumes after what was preserved");
+    sink.write(Bytes::from_static(b"world")).await.unwrap();
     sink.commit().await.expect("commit");
-    // El contenido es la concatenación.
+    // The content is the concatenation.
     let mut stream = p.read(&vp("/big.bin"), None).await.expect("read");
     let mut out = Vec::new();
     while let Some(c) = stream.next().await {
         out.extend_from_slice(&c.unwrap());
     }
-    assert_eq!(out, b"holamundo");
+    assert_eq!(out, b"helloworld");
 }
 
-/// H1 (write): el staging efímero tiene nombre PREDECIBLE
-/// (`.norte-partial.eph.0`). Un servidor/co-tenant hostil lo pre-planta como
-/// symlink a un fichero FUERA de la base; `write()` abre con `EXCLUDE`
-/// (create-new atómico) → FALLA sin seguir el symlink. El víctima queda intacto
-/// (contención de escritura — ADR 0013, threat model §14).
+/// H1 (write): the ephemeral staging has a PREDICTABLE name
+/// (`.norte-partial.eph.0`). A hostile server/co-tenant pre-plants it as a
+/// symlink to a file OUTSIDE the base; `write()` opens with `EXCLUDE`
+/// (atomic create-new) → FAILS without following the symlink. The victim
+/// stays intact (write containment — ADR 0013, threat model §14).
 #[tokio::test]
-async fn staging_symlink_pre_plantado_no_se_sigue_en_write() {
+async fn pre_planted_staging_symlink_is_not_followed_on_write() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let outside = tempfile::tempdir().expect("tempdir víctima");
-    let victim = outside.path().join("victima");
-    std::fs::write(&victim, b"intacto").unwrap();
-    // El hostil pre-planta el staging predecible como symlink al víctima.
+    let outside = tempfile::tempdir().expect("victim tempdir");
+    let victim = outside.path().join("victim");
+    std::fs::write(&victim, b"intact").unwrap();
+    // The hostile party pre-plants the predictable staging as a symlink to
+    // the victim.
     std::os::unix::fs::symlink(&victim, dir.path().join(".norte-partial.eph.0")).unwrap();
 
     let p = provider(dir.path(), common::Mode::Honest).await;
-    // El open con EXCLUDE falla ante el path existente → write() da error.
+    // The open with EXCLUDE fails against the existing path → write() gives
+    // an error.
     assert!(
         p.write(&vp("/dest")).await.is_err(),
-        "abrir un staging pre-plantado (symlink) debe fallar, no seguirlo"
+        "opening a pre-planted staging (symlink) must fail, not follow it"
     );
     assert_eq!(
         std::fs::read(&victim).unwrap(),
-        b"intacto",
-        "jamás se escribió a través del symlink fuera de la base"
+        b"intact",
+        "never wrote through the symlink outside the base"
     );
 }
 
-/// H1 (resume): `open_resumable` no puede usar `EXCLUDE` (reabre un parcial
-/// legítimo), así que hace `lstat` y RECHAZA si el staging existente es un
-/// symlink. Si no, reanudar en APPEND escribiría en el target fuera de base.
+/// H1 (resume): `open_resumable` cannot use `EXCLUDE` (it legitimately
+/// reopens a partial), so it does `lstat` and REJECTS if the existing
+/// staging is a symlink. Otherwise, resuming in APPEND would write into the
+/// target outside the base.
 #[tokio::test]
-async fn staging_symlink_pre_plantado_no_se_reanuda() {
+async fn pre_planted_staging_symlink_is_not_resumed() {
     use std::os::unix::ffi::OsStrExt;
     let dir = tempfile::tempdir().expect("tempdir");
     let p = provider(dir.path(), common::Mode::Honest).await;
 
-    // Primera apertura: crea el staging (fichero regular), escribe, keep.
+    // First open: creates the staging (regular file), writes, keep.
     let (mut sink, _) = p.open_resumable(&vp("/big.bin")).await.expect("open 1");
-    sink.write(Bytes::from_static(b"hola")).await.unwrap();
+    sink.write(Bytes::from_static(b"hello")).await.unwrap();
     sink.keep().await.expect("keep");
 
-    // Descubre el staging A TRAVÉS del provider: `list` es un round-trip
-    // in-order que garantiza que las escrituras de sink1 ya se procesaron
-    // server-side antes de tocar el tempdir por fuera (si no, un WRITE tardío
-    // de sink1 seguiría el symlink que plantamos — artefacto del test, no del
-    // provider). El nombre del staging es determinista pero interno; lo tomamos
-    // del listado en vez de hardcodearlo.
+    // Discovers the staging THROUGH the provider: `list` is an in-order
+    // round-trip that guarantees sink1's writes were already processed
+    // server-side before touching the tempdir from outside (otherwise, a
+    // late WRITE from sink1 would follow the symlink we planted — an
+    // artifact of the test, not the provider). The staging's name is
+    // deterministic but internal; we take it from the listing instead of
+    // hardcoding it.
     let mut stream = p.list(&vp("/")).await.expect("list");
     let mut staging_name = None;
     while let Some(item) = stream.next().await {
-        let entry = item.expect("entrada válida");
+        let entry = item.expect("valid entry");
         let name = entry
             .path
             .file_name()
-            .expect("con nombre")
+            .expect("has a name")
             .as_bytes()
             .to_vec();
         if name.starts_with(b".norte-partial.") {
             staging_name = Some(name);
         }
     }
-    let staging_name = staging_name.expect("el staging conservado se lista");
+    let staging_name = staging_name.expect("the preserved staging is listed");
     let staging = dir.path().join(std::ffi::OsStr::from_bytes(&staging_name));
 
-    // El hostil sustituye el staging por un symlink fuera de base.
-    let outside = tempfile::tempdir().expect("tempdir víctima");
-    let victim = outside.path().join("victima");
-    std::fs::write(&victim, b"intacto").unwrap();
+    // The hostile party replaces the staging with a symlink outside the base.
+    let outside = tempfile::tempdir().expect("victim tempdir");
+    let victim = outside.path().join("victim");
+    std::fs::write(&victim, b"intact").unwrap();
     std::fs::remove_file(&staging).unwrap();
     std::os::unix::fs::symlink(&victim, &staging).unwrap();
 
-    // Segunda apertura: el staging es ahora un symlink → se rechaza.
-    let rechazo = p.open_resumable(&vp("/big.bin")).await;
+    // Second open: the staging is now a symlink → rejected.
+    let rejection = p.open_resumable(&vp("/big.bin")).await;
     assert!(
         matches!(
-            rechazo,
+            rejection,
             Err(Error::Conflict {
                 conflict: ConflictKind::TypeMismatch
             })
         ),
-        "reanudar sobre un staging que es symlink debe rechazarse"
+        "resuming over a staging that is a symlink must be rejected"
     );
     assert_eq!(
         std::fs::read(&victim).unwrap(),
-        b"intacto",
-        "jamás se añadió a través del symlink fuera de la base"
+        b"intact",
+        "never appended through the symlink outside the base"
     );
 }
 
-/// Hallazgo A (encoding): russh-sftp decodifica los nombres del servidor con
-/// `from_utf8_lossy`, así que un nombre no-UTF8 llega sustituido por U+FFFD y
-/// los bytes originales se pierden BAJO la frontera. El provider lo RECHAZA
-/// limpio (`InvalidPath`) en vez de emitir un `Entry` con bytes corruptos que
-/// colisionaría o apuntaría a un fichero inexistente (regla 1 / ADR 0013 D2).
+/// Finding A (encoding): russh-sftp decodes the server's names with
+/// `from_utf8_lossy`, so a non-UTF8 name arrives substituted by U+FFFD and
+/// the original bytes are lost BELOW the boundary. The provider CLEANLY
+/// REJECTS it (`InvalidPath`) instead of emitting an `Entry` with corrupt
+/// bytes that would collide or point at a nonexistent file (rule 1 / ADR
+/// 0013 D2).
 #[tokio::test]
-async fn readdir_nombre_no_utf8_no_se_corrompe() {
+async fn readdir_non_utf8_name_is_not_corrupted() {
     use std::os::unix::ffi::OsStrExt;
     let dir = tempfile::tempdir().expect("tempdir");
-    // `café` en Latin-1: byte 0xE9 crudo — imposible de crear vía el provider.
+    // `café` in Latin-1: raw byte 0xE9 — impossible to create via the provider.
     let raw = std::ffi::OsStr::from_bytes(b"caf\xE9.txt");
     std::fs::write(dir.path().join(raw), b"x").unwrap();
     let p = provider(dir.path(), common::Mode::Honest).await;
 
-    let mut stream = p.list(&vp("/")).await.expect("list abre");
-    let mut rechazado = false;
+    let mut stream = p.list(&vp("/")).await.expect("list opens");
+    let mut rejected = false;
     while let Some(item) = stream.next().await {
         match item {
             Ok(entry) => {
-                let name = entry.path.file_name().expect("con nombre");
+                let name = entry.path.file_name().expect("has a name");
                 assert!(
                     !name.as_bytes().windows(3).any(|w| w == [0xEF, 0xBF, 0xBD]),
-                    "un nombre no-UTF8 se emitió corrupto (U+FFFD) en silencio"
+                    "a non-UTF8 name was silently emitted corrupt (U+FFFD)"
                 );
             }
-            Err(Error::InvalidPath) => rechazado = true,
-            Err(other) => panic!("error inesperado: {other:?}"),
+            Err(Error::InvalidPath) => rejected = true,
+            Err(other) => panic!("unexpected error: {other:?}"),
         }
     }
     assert!(
-        rechazado,
-        "el nombre no-UTF8 debió rechazarse limpio (InvalidPath), jamás corromperse"
+        rejected,
+        "the non-UTF8 name should have been cleanly rejected (InvalidPath), never corrupted"
     );
 }

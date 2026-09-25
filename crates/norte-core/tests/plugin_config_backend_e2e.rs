@@ -1,12 +1,12 @@
-//! E2E de `Backend::Remote::plugin_get_config`/`plugin_set_config` (G3c)
-//! contra un daemon UDS real — cierra la brecha de cobertura que
-//! `plugins_decorate_columns_e2e.rs` dejó para `plugin.decorate`/
-//! `plugin.column_values`: las envolturas `RemoteBackend` de get/set
-//! config no tenían NINGÚN test que las ejercitara directamente (solo
-//! `daemon.rs`, que llama al `Client` JSON-RPC crudo, sin pasar por
-//! `Backend`). Sin WASM: `plugin.get_config`/`plugin.set_config` son
-//! operaciones de REGISTRO puras (nunca instancian el runtime), así que
-//! este test no necesita compilar ningún guest ni un `SKIP` condicional.
+//! E2E of `Backend::Remote::plugin_get_config`/`plugin_set_config` (G3c)
+//! against a real UDS daemon — closes the coverage gap
+//! `plugins_decorate_columns_e2e.rs` left for `plugin.decorate`/
+//! `plugin.column_values`: the `RemoteBackend` get/set config wrappers had
+//! NO test exercising them directly (only `daemon.rs`, which calls the raw
+//! JSON-RPC `Client`, without going through `Backend`). Without WASM:
+//! `plugin.get_config`/`plugin.set_config` are pure REGISTRY operations
+//! (they never instantiate the runtime), so this test needs to compile no
+//! guest nor any conditional `SKIP`.
 #![cfg(unix)]
 
 use std::sync::Arc;
@@ -28,11 +28,11 @@ category = "command"
 
 [config.greeting]
 type = "string"
-default = "hola"
+default = "hello"
 "#;
 
 #[tokio::test]
-async fn plugin_get_set_config_e2e_a_traves_del_backend_remote() {
+async fn plugin_get_set_config_e2e_through_the_remote_backend() {
     let cfg = tempfile::tempdir().expect("tempdir cfg");
     let plugin_dir = cfg.path().join("plugins").join("org.norte.cfg");
     std::fs::create_dir_all(&plugin_dir).expect("mkdir plugin dir");
@@ -69,38 +69,38 @@ async fn plugin_get_set_config_e2e_a_traves_del_backend_remote() {
     .expect("connect");
     let backend = Backend::Remote(remote);
 
-    // ABIERTO: leer no consiente nada, ni siquiera aprobado/activado.
+    // OPEN: reading consents to nothing, not even approved/enabled.
     let res = backend
         .plugin_get_config("org.norte.cfg")
         .await
         .expect("plugin_get_config");
     assert_eq!(res.keys.len(), 1);
     assert_eq!(res.keys[0].key, "greeting");
-    assert_eq!(res.keys[0].value, "hola");
+    assert_eq!(res.keys[0].value, "hello");
 
-    // Id desconocido: `keys: []`, no un error.
+    // Unknown id: `keys: []`, not an error.
     let empty = backend
-        .plugin_get_config("org.norte.fantasma")
+        .plugin_get_config("org.norte.ghost")
         .await
-        .expect("plugin_get_config con id desconocido no es error");
+        .expect("plugin_get_config with an unknown id is not an error");
     assert!(empty.keys.is_empty());
 
     backend
-        .plugin_set_config("org.norte.cfg", "greeting", "hola G3c")
+        .plugin_set_config("org.norte.cfg", "greeting", "hello G3c")
         .await
-        .expect("plugin_set_config con un valor válido");
+        .expect("plugin_set_config with a valid value");
 
     let after = backend
         .plugin_get_config("org.norte.cfg")
         .await
-        .expect("plugin_get_config tras set_config");
-    assert_eq!(after.keys[0].value, "hola G3c");
+        .expect("plugin_get_config after set_config");
+    assert_eq!(after.keys[0].value, "hello G3c");
 
-    // Clave desconocida: error, taxonomía honesta (no exhaustiva aquí —
-    // `daemon.rs` ya pinea el código JSON-RPC exacto).
+    // Unknown key: error, honest taxonomy (not exhaustive here —
+    // `daemon.rs` already pins the exact JSON-RPC code).
     let err = backend
         .plugin_set_config("org.norte.cfg", "no-such-key", "x")
         .await
-        .expect_err("clave desconocida debe rechazarse");
+        .expect_err("an unknown key must be rejected");
     assert!(!matches!(err, norte_proto::Error::Unknown));
 }

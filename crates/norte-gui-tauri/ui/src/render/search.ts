@@ -1,9 +1,9 @@
-// Pintores de `Screen` para search (ola W10): funciones con `this: Screen`,
-// enganchadas como propiedades en `render.ts`. El estado sigue en la clase.
+// `Screen` painters for search (wave W10): functions with `this: Screen`,
+// hooked in as properties in `render.ts`. State stays in the class.
 
 import type { Screen } from "../render";
 import type { SearchView } from "../types";
-import { revelar, badge } from "./dom";
+import { revealInView, badge } from "./dom";
 
 export function paintSearch(this: Screen, search: SearchView | null): void {
   if (search === null) {
@@ -12,89 +12,90 @@ export function paintSearch(this: Screen, search: SearchView | null): void {
     return;
   }
   this.searchRoot.dataset["open"] = "true";
-  const caja = document.createElement("section");
-  caja.className = "search";
-  caja.setAttribute("role", "dialog");
-  caja.setAttribute("aria-modal", "true");
-  // Una búsqueda por significado no recorre un subárbol: su alcance es el
-  // índice entero, y titularla como la otra prometería lo que no hay.
-  const rotulo = search.semantic
+  const box = document.createElement("section");
+  box.className = "search";
+  box.setAttribute("role", "dialog");
+  box.setAttribute("aria-modal", "true");
+  // A search by meaning does not walk a subtree: its scope is the whole
+  // index, and titling it like the other one would promise what is not
+  // there.
+  const label = search.semantic
     ? this.t("search-title-semantic")
     : this.t("search-title");
-  caja.setAttribute("aria-label", rotulo);
+  box.setAttribute("aria-label", label);
 
-  const titulo = document.createElement("h1");
-  titulo.textContent = `${rotulo} · ${search.query}`;
-  caja.append(titulo);
+  const title = document.createElement("h1");
+  title.textContent = `${label} · ${search.query}`;
+  box.append(title);
 
   if (search.semantic) {
-    const alcance = document.createElement("p");
-    alcance.className = "search-root";
-    alcance.textContent = this.t("modal-semantic-scope");
-    caja.append(alcance);
+    const scope = document.createElement("p");
+    scope.className = "search-root";
+    scope.textContent = this.t("modal-semantic-scope");
+    box.append(scope);
   } else {
-    const donde = document.createElement("p");
-    donde.className = "search-root";
-    donde.dataset["hostile"] = String(search.root_hostile);
-    donde.textContent = search.root;
+    const where = document.createElement("p");
+    where.className = "search-root";
+    where.dataset["hostile"] = String(search.root_hostile);
+    where.textContent = search.root;
     if (search.root_hostile) {
-      donde.append(badge(this.t("hostile-name")));
+      where.append(badge(this.t("hostile-name")));
     }
-    caja.append(donde);
+    box.append(where);
   }
 
-  const estado = document.createElement("p");
-  estado.className = "search-status";
-  estado.dataset["running"] = String(search.running);
-  // `status` mientras corre: un lector de pantalla anuncia el avance sin
-  // robarle el foco a lo que el usuario esté haciendo.
-  estado.setAttribute("role", "status");
-  estado.setAttribute("aria-live", "polite");
-  estado.textContent = search.status;
-  caja.append(estado);
+  const status = document.createElement("p");
+  status.className = "search-status";
+  status.dataset["running"] = String(search.running);
+  // `status` while it runs: a screen reader announces progress without
+  // stealing focus from whatever the user is doing.
+  status.setAttribute("role", "status");
+  status.setAttribute("aria-live", "polite");
+  status.textContent = search.status;
+  box.append(status);
 
-  const lista = document.createElement("ul");
-  lista.className = "search-rows";
-  lista.setAttribute("role", "listbox");
+  const list = document.createElement("ul");
+  list.className = "search-rows";
+  list.setAttribute("role", "listbox");
   for (const [i, r] of search.rows.entries()) {
-    const fila = document.createElement("li");
-    fila.className = "search-row";
-    fila.id = `search-row-${String(i)}`;
-    fila.setAttribute("role", "option");
-    fila.setAttribute("aria-selected", String(search.cursor === i));
-    fila.dataset["dir"] = String(r.is_dir);
-    fila.addEventListener("click", () => {
+    const row = document.createElement("li");
+    row.className = "search-row";
+    row.id = `search-row-${String(i)}`;
+    row.setAttribute("role", "option");
+    row.setAttribute("aria-selected", String(search.cursor === i));
+    row.dataset["dir"] = String(r.is_dir);
+    row.addEventListener("click", () => {
       this.send({ action: "search_activate_row", row: i });
     });
-    const nombre = document.createElement("span");
-    nombre.className = "search-name";
-    nombre.dataset["hostile"] = String(r.hostile);
-    nombre.textContent = r.name;
+    const name = document.createElement("span");
+    name.className = "search-name";
+    name.dataset["hostile"] = String(r.hostile);
+    name.textContent = r.name;
     if (r.hostile) {
-      nombre.append(badge(this.t("hostile-name")));
+      name.append(badge(this.t("hostile-name")));
     }
-    const padre = document.createElement("span");
-    padre.className = "search-parent";
-    padre.dataset["hostile"] = String(r.parent_hostile);
-    padre.textContent = r.parent;
-    fila.append(nombre, padre);
+    const parent = document.createElement("span");
+    parent.className = "search-parent";
+    parent.dataset["hostile"] = String(r.parent_hostile);
+    parent.textContent = r.parent;
+    row.append(name, parent);
     if (r.score !== null) {
-      // El parecido, en su propia celda: sin él, un 0,91 y un 0,42 se leen
-      // igual de buenos y el orden parece arbitrario. Dos decimales, que es
-      // lo que distingue sin fingir precisión.
-      const parecido = document.createElement("span");
-      parecido.className = "search-score";
-      parecido.textContent = r.score.toFixed(2);
-      fila.append(parecido);
+      // The similarity, in its own cell: without it, a 0.91 and a 0.42 read
+      // as equally good and the order looks arbitrary. Two decimals, which
+      // is enough to tell them apart without faking precision.
+      const score = document.createElement("span");
+      score.className = "search-score";
+      score.textContent = r.score.toFixed(2);
+      row.append(score);
     }
-    lista.append(fila);
+    list.append(row);
   }
   if (search.cursor !== null) {
-    lista.setAttribute("aria-activedescendant", `search-row-${String(search.cursor)}`);
+    list.setAttribute("aria-activedescendant", `search-row-${String(search.cursor)}`);
   }
-  caja.append(lista);
-  this.searchRoot.replaceChildren(caja);
+  box.append(list);
+  this.searchRoot.replaceChildren(box);
   if (search.cursor !== null) {
-    revelar(lista.querySelector(`#search-row-${String(search.cursor)}`) ?? undefined);
+    revealInView(list.querySelector(`#search-row-${String(search.cursor)}`) ?? undefined);
   }
 }

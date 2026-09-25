@@ -415,8 +415,8 @@ mod tests {
     /// diff and not a new branch somewhere.
     #[test]
     fn the_filter_hides_pseudo_filesystems_and_keeps_real_ones() {
-        // Los dos FUSE que monta el ESCRITORIO en `/run/user/<uid>` (captura
-        // del 2026-09-21): salían como «0B libres» en la barra de sitios.
+        // The two FUSE mounts the DESKTOP mounts in `/run/user/<uid>` (caught
+        // on 2026-09-21): they used to show up as "0B free" in the places bar.
         for t in [
             "proc",
             "sysfs",
@@ -429,7 +429,7 @@ mod tests {
         ] {
             assert!(is_pseudo(t), "{t} should be hidden");
         }
-        // Un FUSE que monta una PERSONA —sshfs, rclone— sigue siendo real.
+        // A FUSE a PERSON mounts —sshfs, rclone— is still real.
         for t in [
             "ext4",
             "btrfs",

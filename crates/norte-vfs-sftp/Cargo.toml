@@ -1,6 +1,6 @@
 [package]
 name = "norte-vfs-sftp"
-description = "Provider VFS sobre SFTP/SSH (russh)"
+description = "VFS provider over SFTP/SSH (russh)"
 license = "MIT OR Apache-2.0"
 version.workspace = true
 edition.workspace = true
@@ -14,12 +14,13 @@ bytes.workspace = true
 futures.workspace = true
 norte-proto.workspace = true
 norte-vfs.workspace = true
-# SHA-256 del staging para VerifyPolicy::Hash (#35).
+# SHA-256 of the staging for VerifyPolicy::Hash (#35).
 sha2.workspace = true
-# La lib solo habla sftp sobre un stream ya establecido; russh-sftp es agnóstico
-# del transporte y NO arrastra russh/rsa. El transporte SSH (`russh`) lo usa solo
-# el test nightly `openssh` → es dev-dependency hasta que fase 6 cablee connect()
-# de verdad; así rsa/aws-lc-rs (RUSTSEC-2023-0071) NO entra al build del gate.
+# The lib only speaks sftp over an already-established stream; russh-sftp is
+# agnostic of the transport and does NOT pull in russh/rsa. The SSH transport
+# (`russh`) is used only by the nightly test `openssh` → it stays a
+# dev-dependency until phase 6 wires up connect() for real; this way
+# rsa/aws-lc-rs (RUSTSEC-2023-0071) does NOT enter the gate's build.
 russh-sftp.workspace = true
 tokio = { workspace = true, features = ["io-util"] }
 
@@ -30,17 +31,17 @@ tempfile.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "sync", "time"] }
 
 [features]
-# Test de integración NIGHTLY contra un servidor OpenSSH real (atmoz/sftp) por
-# testcontainers (ADR 0013 C2). Fuera del gate de PR: exige Docker y es lento;
-# lo corre el workflow nightly, no `just ci`. `testcontainers` es dep opcional
-# para no compilar su árbol (bollard, …) en el build normal.
+# NIGHTLY integration test against a real OpenSSH server (atmoz/sftp) via
+# testcontainers (ADR 0013 C2). Outside the PR gate: it requires Docker and is
+# slow; the nightly workflow runs it, not `just ci`. `testcontainers` is an
+# optional dep so its tree (bollard, …) does not compile in the normal build.
 it-openssh = ["dep:testcontainers"]
 
 [dependencies.testcontainers]
 version = "0.27"
 optional = true
 
-# El test `openssh` solo se compila con la feature `it-openssh` (nightly).
+# The `openssh` test only compiles with the `it-openssh` feature (nightly).
 [[test]]
 name = "openssh"
 required-features = ["it-openssh"]

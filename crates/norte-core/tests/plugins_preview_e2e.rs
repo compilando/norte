@@ -1,16 +1,17 @@
-//! E2E del previewer de plugins (M4-P5, cierre): la cadena completa
-//! descubrir → (denegar sin aprobar) → aprobar → activar → resolver → ejecutar,
-//! contra un componente WASM **real** compilado desde
-//! `norte-plugin-host/examples-wasm/previewer-demo` (M4-P2) y ejecutado
-//! sandboxeado por el runtime.
+//! E2E of the plugin previewer (M4-P5, closing): the whole chain
+//! discover → (deny without approving) → approve → enable → resolve → run,
+//! against a **real** WASM component compiled from
+//! `norte-plugin-host/examples-wasm/previewer-demo` (M4-P2) and run sandboxed
+//! by the runtime.
 //!
-//! Es el cierre de M4-P5: `PluginRegistry::resolve_previewer` elige, fail-closed,
-//! el previewer consentido para un mimetype, y el runtime lo EJECUTA de verdad
-//! devolviendo el render (cabecera + primeras 3 líneas del contenido).
+//! This is M4-P5's closing: `PluginRegistry::resolve_previewer` chooses,
+//! fail-closed, the consented previewer for a mimetype, and the runtime
+//! really RUNS it, returning the render (header + first 3 lines of content).
 //!
-//! Si el target `wasm32-wasip2` no está instalado el test hace SKIP (no hay
-//! artefacto que ejecutar): pasa en toolchains sin ese target y el resto de la
-//! suite queda verde. Con el target presente ejecuta el `.wasm` de verdad.
+//! If the `wasm32-wasip2` target is not installed the test SKIPs (there is no
+//! artifact to run): it passes on toolchains without that target and the rest
+//! of the suite stays green. With the target present it runs the real
+//! `.wasm`.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -18,10 +19,10 @@ use std::process::Command;
 use norte_core::PluginRegistry;
 use norte_plugin_host::PluginRuntime;
 
-/// Manifiesto `previewer` del plugin sembrado: declara `text/*` como su glob de
-/// mimetypes y `fs-read=scoped` (el render no toca el FS, pero fija que las
-/// capabilities del manifiesto viajan al runtime). El id lleva puntos
-/// (reverse-DNS).
+/// The seeded plugin's `previewer` manifest: declares `text/*` as its
+/// mimetype glob and `fs-read=scoped` (the render does not touch the FS, but
+/// this pins that the manifest's capabilities travel to the runtime). The id
+/// carries dots (reverse-DNS).
 const PREV_MANIFEST: &str = r#"
 [plugin]
 id = "org.norte.prev"
@@ -37,13 +38,13 @@ previewer = [{ mimetypes = ["text/*"] }]
 fs-read = "scoped"
 "#;
 
-/// Contenido de prueba: cuatro líneas — el previewer-demo solo toma las 3
-/// primeras, así que "linea cuatro" NO debe aparecer en el render.
-const SAMPLE: &[u8] = b"linea uno\nlinea dos\nlinea tres\nlinea cuatro";
+/// Test content: four lines — previewer-demo only takes the first 3, so
+/// "line four" must NOT appear in the render.
+const SAMPLE: &[u8] = b"line one\nline two\nline three\nline four";
 
-/// Igual que [`PREV_MANIFEST`] pero con `[config.banner]` (P2 Task 4a): para
-/// probar que `resolve_previewer` + `set_settings` entregan `[config]` al
-/// previewer, no solo al `command` (Task 3).
+/// Same as [`PREV_MANIFEST`] but with `[config.banner]` (P2 Task 4a): to test
+/// that `resolve_previewer` + `set_settings` deliver `[config]` to the
+/// previewer, not just to `command` (Task 3).
 const PREV_MANIFEST_WITH_CONFIG: &str = r#"
 [plugin]
 id = "org.norte.prev-cfg"
@@ -63,11 +64,11 @@ type = "string"
 default = "Default Banner"
 "#;
 
-/// La cadena de cierre M4-P5 con un componente WASM REAL.
+/// The M4-P5 closing chain with a REAL WASM component.
 #[test]
-fn plugin_preview_e2e_wasm_real() {
+fn plugin_preview_e2e_real_wasm() {
     let Some(wasm) = build_guest("previewer-demo") else {
-        eprintln!("SKIP: target wasm32-wasip2 no instalado; no hay .wasm que ejecutar");
+        eprintln!("SKIP: target wasm32-wasip2 not installed; no .wasm to run");
         return;
     };
 
@@ -81,92 +82,93 @@ fn plugin_preview_e2e_wasm_real() {
     let rt = PluginRuntime::new().expect("PluginRuntime::new");
     let mut reg = PluginRegistry::discover(cfg.path()).expect("discover");
 
-    // 1) SIN aprobar: fail-closed. El .wasm ESTÁ presente y el mimetype casa,
-    //    pero el consentimiento manda: no se elige previewer alguno.
+    // 1) UNAPPROVED: fail-closed. The .wasm IS present and the mimetype
+    //    matches, but consent rules: no previewer at all is chosen.
     assert!(
         reg.resolve_previewer("text/plain").is_none(),
-        "un previewer no consentido jamás se elige, ni con .wasm presente"
+        "an unconsented previewer is never chosen, even with .wasm present"
     );
 
-    // 2) Aprobar + activar (in-memory: uso embebido en el test).
+    // 2) Approve + enable (in-memory: embedded usage in the test).
     assert!(
         reg.set_approval_in_memory("org.norte.prev", true),
-        "el plugin existe: la aprobación se aplica"
+        "the plugin exists: the approval applies"
     );
     assert!(
         reg.set_enabled_in_memory("org.norte.prev", true),
-        "el plugin existe: la activación se aplica"
+        "the plugin exists: the enable applies"
     );
 
-    // 3) Ahora sí resuelve para el mimetype que casa el glob `text/*`.
+    // 3) Now it does resolve for the mimetype matching the `text/*` glob.
     let (id, name, resolved_wasm, caps, _settings) = reg
         .resolve_previewer("text/plain")
-        .expect("text/plain casa text/* con el previewer consentido");
-    assert_eq!(id, "org.norte.prev", "id del previewer resuelto");
-    assert_eq!(name, "Preview Demo", "name del previewer resuelto");
+        .expect("text/plain matches text/* with the consented previewer");
+    assert_eq!(id, "org.norte.prev", "resolved previewer's id");
+    assert_eq!(name, "Preview Demo", "resolved previewer's name");
     assert!(
         resolved_wasm.path().ends_with("plugin.wasm"),
-        "el binario resuelto es <dir>/plugin.wasm"
+        "the resolved binary is <dir>/plugin.wasm"
     );
 
-    // 4) Un mimetype que el previewer NO declara → None (solo declara text/*).
+    // 4) A mimetype the previewer does NOT declare → None (it only declares text/*).
     assert!(
         reg.resolve_previewer("application/json").is_none(),
-        "application/json no casa text/*: no hay previewer para él"
+        "application/json does not match text/*: no previewer for it"
     );
 
-    // 5) EJECUTA el componente WASM real: el core leería los bytes acotados y los
-    //    pasa al guest (regla 9: el plugin no toca el FS a pelo).
+    // 5) RUNS the real WASM component: the core would read the bounded bytes
+    //    and pass them to the guest (rule 9: the plugin does not touch the FS
+    //    directly).
     let render = rt
         .instantiate(&resolved_wasm, caps)
-        .expect("instanciar el previewer")
+        .expect("instantiate the previewer")
         .render_preview("text/plain", SAMPLE)
-        .expect("el previewer-demo debe renderizar el contenido");
+        .expect("previewer-demo must render the content");
 
     assert!(
         render.contains("[text/plain]"),
-        "el render lleva la cabecera con el mimetype: {render:?}"
+        "the render carries the header with the mimetype: {render:?}"
     );
     assert!(
-        render.contains("linea uno"),
-        "el render incluye la 1.ª línea: {render:?}"
+        render.contains("line one"),
+        "the render includes the 1st line: {render:?}"
     );
     assert!(
-        render.contains("linea tres"),
-        "el render incluye la 3.ª línea: {render:?}"
+        render.contains("line three"),
+        "the render includes the 3rd line: {render:?}"
     );
     assert!(
-        !render.contains("linea cuatro"),
-        "el previewer-demo solo toma 3 líneas: la 4.ª no aparece: {render:?}"
+        !render.contains("line four"),
+        "previewer-demo only takes 3 lines: the 4th does not appear: {render:?}"
     );
 
-    // 6) ADR 0142: el `plugin.wasm` reescrito DESPUÉS de aprobarse no se
-    //    ejecuta con esa aprobación, aunque el registro ya lo resolviera y
-    //    la versión aprobada esté compilada en la caché del runtime.
-    let mut bytes = std::fs::read(&resolved_wasm).expect("lee el binario");
-    // Una sección personalizada al final: sigue siendo un componente válido,
-    // así que lo único que lo delata es la huella.
+    // 6) ADR 0142: a `plugin.wasm` rewritten AFTER being approved does not run
+    //    with that approval, even if the registry already resolved it and the
+    //    approved version is compiled in the runtime's cache.
+    let mut bytes = std::fs::read(&resolved_wasm).expect("read the binary");
+    // A custom section at the end: still a valid component, so the only thing
+    // that gives it away is the fingerprint.
     bytes.extend_from_slice(&[0, 2, 1, b'z']);
-    std::fs::write(&resolved_wasm, &bytes).expect("reescribe el binario");
+    std::fs::write(&resolved_wasm, &bytes).expect("rewrite the binary");
     let Err(err) = rt.instantiate(&resolved_wasm, norte_plugin_host::Capabilities::default())
     else {
-        panic!("un binario cambiado tras aprobarse no se instancia")
+        panic!("a binary changed after being approved must not be instantiated")
     };
     assert!(
         matches!(err, norte_plugin_host::RuntimeError::DigestMismatch),
-        "fue {err:?}"
+        "was {err:?}"
     );
 }
 
-/// P2 Task 4a: el previewer recibe `[config]` YA resuelto vía `host-config`,
-/// igual que `command` (Task 3) — este test es el análogo de
-/// `plugins_config_e2e.rs` pero para la ruta `resolve_previewer` +
-/// `set_settings` + `render_preview`. Sin `config.toml`, el guest ve el
-/// DEFAULT del esquema.
+/// P2 Task 4a: the previewer receives `[config]` ALREADY resolved via
+/// `host-config`, just like `command` (Task 3) — this test is the analogue of
+/// `plugins_config_e2e.rs` but for the `resolve_previewer` + `set_settings` +
+/// `render_preview` path. Without `config.toml`, the guest sees the schema's
+/// DEFAULT.
 #[test]
-fn plugin_preview_e2e_wasm_real_config_banner_default() {
+fn plugin_preview_e2e_real_wasm_config_banner_default() {
     let Some(wasm) = build_guest("previewer-demo") else {
-        eprintln!("SKIP: target wasm32-wasip2 no instalado; no hay .wasm que ejecutar");
+        eprintln!("SKIP: target wasm32-wasip2 not installed; no .wasm to run");
         return;
     };
 
@@ -176,7 +178,7 @@ fn plugin_preview_e2e_wasm_real_config_banner_default() {
     std::fs::write(plugin_dir.join("plugin.toml"), PREV_MANIFEST_WITH_CONFIG)
         .expect("write manifest");
     std::fs::copy(&wasm, plugin_dir.join("plugin.wasm")).expect("copy .wasm");
-    // Deliberadamente SIN config.toml.
+    // Deliberately WITHOUT config.toml.
 
     let rt = PluginRuntime::new().expect("PluginRuntime::new");
     let mut reg = PluginRegistry::discover(cfg.path()).expect("discover");
@@ -185,24 +187,24 @@ fn plugin_preview_e2e_wasm_real_config_banner_default() {
 
     let (_id, _name, resolved_wasm, caps, settings) = reg
         .resolve_previewer("text/plain")
-        .expect("text/plain casa text/*");
-    let mut inst = rt.instantiate(&resolved_wasm, caps).expect("instanciar");
+        .expect("text/plain matches text/*");
+    let mut inst = rt.instantiate(&resolved_wasm, caps).expect("instantiate");
     inst.set_settings(settings);
     let render = inst
         .render_preview("text/plain", SAMPLE)
-        .expect("render con settings");
+        .expect("render with settings");
     assert!(
         render.starts_with("Default Banner\n"),
-        "sin config.toml, el guest ve el default del esquema: {render:?}"
+        "without config.toml, the guest sees the schema's default: {render:?}"
     );
 }
 
-/// Como el anterior, pero CON `config.toml` — el guest debe ver el OVERRIDE
-/// validado, no el default.
+/// Like the previous one, but WITH `config.toml` — the guest must see the
+/// validated OVERRIDE, not the default.
 #[test]
-fn plugin_preview_e2e_wasm_real_config_banner_override() {
+fn plugin_preview_e2e_real_wasm_config_banner_override() {
     let Some(wasm) = build_guest("previewer-demo") else {
-        eprintln!("SKIP: target wasm32-wasip2 no instalado; no hay .wasm que ejecutar");
+        eprintln!("SKIP: target wasm32-wasip2 not installed; no .wasm to run");
         return;
     };
 
@@ -214,7 +216,7 @@ fn plugin_preview_e2e_wasm_real_config_banner_override() {
     std::fs::copy(&wasm, plugin_dir.join("plugin.wasm")).expect("copy .wasm");
     std::fs::write(
         plugin_dir.join("config.toml"),
-        "banner = \"Hola desde config\"\n",
+        "banner = \"Hello from config\"\n",
     )
     .expect("write config.toml");
 
@@ -225,33 +227,33 @@ fn plugin_preview_e2e_wasm_real_config_banner_override() {
 
     let (_id, _name, resolved_wasm, caps, settings) = reg
         .resolve_previewer("text/plain")
-        .expect("text/plain casa text/*");
-    let mut inst = rt.instantiate(&resolved_wasm, caps).expect("instanciar");
+        .expect("text/plain matches text/*");
+    let mut inst = rt.instantiate(&resolved_wasm, caps).expect("instantiate");
     inst.set_settings(settings);
     let render = inst
         .render_preview("text/plain", SAMPLE)
-        .expect("render con settings");
+        .expect("render with settings");
     assert!(
-        render.starts_with("Hola desde config\n"),
-        "con config.toml, el guest ve el override validado: {render:?}"
+        render.starts_with("Hello from config\n"),
+        "with config.toml, the guest sees the validated override: {render:?}"
     );
 }
 
-/// Compila el guest `examples-wasm/<name>/` de `norte-plugin-host` a
-/// `wasm32-wasip2` (release) y devuelve la ruta del `.wasm`.
+/// Compiles `norte-plugin-host`'s `examples-wasm/<name>/` guest to
+/// `wasm32-wasip2` (release) and returns the `.wasm`'s path.
 ///
-/// Réplica del helper de `plugins_run_e2e.rs` / `norte-plugin-host/tests/support`
-/// (no accesible entre árboles de tests). Devuelve `None` (SKIP) si el target
-/// `wasm32-wasip2` no está instalado; si el target está pero el guest no compila,
-/// es un fallo real y aborta.
+/// A replica of the helper in `plugins_run_e2e.rs` / `norte-plugin-host/tests/support`
+/// (not reachable across test trees). Returns `None` (SKIP) if the
+/// `wasm32-wasip2` target is not installed; if the target is present but the
+/// guest does not build, it is a real failure and aborts.
 fn build_guest(name: &str) -> Option<PathBuf> {
     if !target_installed("wasm32-wasip2") {
-        eprintln!("SKIP: target wasm32-wasip2 no instalado");
+        eprintln!("SKIP: target wasm32-wasip2 not installed");
         return None;
     }
 
-    // `CARGO_MANIFEST_DIR` = .../crates/norte-core; el guest vive en el crate
-    // hermano norte-plugin-host.
+    // `CARGO_MANIFEST_DIR` = .../crates/norte-core; the guest lives in the
+    // sibling crate norte-plugin-host.
     let guest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("norte-plugin-host")
@@ -270,25 +272,21 @@ fn build_guest(name: &str) -> Option<PathBuf> {
         ])
         .arg(&target_dir)
         .status()
-        .expect("no se pudo lanzar cargo para compilar el guest");
+        .expect("could not launch cargo to compile the guest");
     assert!(
         status.success(),
-        "el guest {name} no compiló (target wasm32-wasip2 presente)"
+        "the {name} guest did not build (wasm32-wasip2 target present)"
     );
 
     let wasm = target_dir
         .join("wasm32-wasip2")
         .join("release")
         .join(format!("{}.wasm", name.replace('-', "_")));
-    assert!(
-        wasm.exists(),
-        "no se encontró el artefacto {}",
-        wasm.display()
-    );
+    assert!(wasm.exists(), "artifact {} not found", wasm.display());
     Some(wasm)
 }
 
-/// `true` si `rustup` reporta `target` entre los instalados.
+/// `true` if `rustup` reports `target` among the installed ones.
 fn target_installed(target: &str) -> bool {
     Command::new("rustup")
         .args(["target", "list", "--installed"])
@@ -303,22 +301,23 @@ fn target_installed(target: &str) -> bool {
 }
 
 // ---------------------------------------------------------------------
-// G3a (ADR 0037): `plugin.preview_styled` de punta a punta CON WASM real,
-// a través de `Backend` (no del `PluginRuntime` a pelo como arriba). Solo
-// unix: el daemon UDS es `#[cfg(unix)]` (ADR 0011), igual que
-// `tests/backend_remote.rs`, del que esta sección toma el arnés
+// G3a (ADR 0037): `plugin.preview_styled` end to end WITH real WASM,
+// through `Backend` (not the bare `PluginRuntime` as above). Unix only:
+// the UDS daemon is `#[cfg(unix)]` (ADR 0011), same as
+// `tests/backend_remote.rs`, from which this section takes the harness
 // (`RemoteBackend::connect` + `DaemonConfig::plugins_dir`).
 //
-// NO se ejercita `Backend::Embedded` aquí a propósito: su brazo de plugins
-// resuelve el directorio SIEMPRE vía `norte_core::connect::config_dir()`
-// (global del proceso, sin parámetro de override) — cambiarlo desde un test
-// exigiría `std::env::set_var` (`unsafe` en edition 2024, regla 5 del
-// proyecto: PROHIBIDO fuera de `norte-vfs-local`). `Backend::Remote` ejerce
-// la MISMA superficie pública (`Backend::plugin_preview_styled`) contra el
-// handler REAL del daemon (`daemon::server::handle_plugin_preview_styled`,
-// cableado en esta misma task) sin ese problema — el `plugins_dir` del
-// daemon SÍ es parametrizable por test (`DaemonConfig`), como ya prueba
-// `spawn_daemon_plugins_ok_y_roto` en `tests/daemon.rs`.
+// `Backend::Embedded` is NOT exercised here on purpose: its plugins arm
+// ALWAYS resolves the directory via `norte_core::connect::config_dir()`
+// (a process global, with no override parameter) — changing it from a
+// test would require `std::env::set_var` (`unsafe` in edition 2024,
+// project rule 5: FORBIDDEN outside `norte-vfs-local`). `Backend::Remote`
+// exercises the SAME public surface (`Backend::plugin_preview_styled`)
+// against the daemon's REAL handler
+// (`daemon::server::handle_plugin_preview_styled`, wired in this same
+// task) without that problem — the daemon's `plugins_dir` CAN be
+// parameterized by a test (`DaemonConfig`), as
+// `spawn_daemon_plugins_ok_and_broken` in `tests/daemon.rs` already proves.
 #[cfg(unix)]
 mod styled {
     use std::sync::Arc;
@@ -336,33 +335,33 @@ mod styled {
     use super::{PREV_MANIFEST, SAMPLE, build_guest};
 
     fn vp(wire: &str) -> VPath {
-        VPath::parse(wire).expect("wire válido de test")
+        VPath::parse(wire).expect("valid test wire")
     }
 
     async fn write_file(mem: &MemProvider, wire: &str, content: &[u8]) {
-        let mut sink = mem.write(&vp(wire)).await.expect("write abre");
+        let mut sink = mem.write(&vp(wire)).await.expect("write opens");
         sink.write(Bytes::copy_from_slice(content))
             .await
-            .expect("chunk entra");
-        sink.commit().await.expect("commit publica");
+            .expect("chunk goes in");
+        sink.commit().await.expect("commit publishes");
     }
 
-    /// La cadena de cierre G3a con un componente WASM REAL, de punta a
-    /// punta A TRAVÉS DE `Backend::Remote` (daemon UDS real): descubrir →
-    /// aprobar → activar (por el WIRE, `plugin.set_approval`/
-    /// `plugin.set_enabled` — no `_in_memory`, a diferencia del test
-    /// síncrono de arriba) → `Backend::plugin_preview_styled` → roles/fg
-    /// REALES del mini-highlighter de `previewer-demo` (ver su rustdoc:
-    /// dígitos → `role: "number"`, `TODO`/`FIXME`/`norte` → `role:
-    /// "keyword"` + `fg` fijo).
+    /// The G3a closing chain with a REAL WASM component, end to end THROUGH
+    /// `Backend::Remote` (a real UDS daemon): discover → approve → enable
+    /// (over the WIRE, `plugin.set_approval`/`plugin.set_enabled` — not
+    /// `_in_memory`, unlike the synchronous test above) →
+    /// `Backend::plugin_preview_styled` → REAL roles/fg from
+    /// `previewer-demo`'s mini-highlighter (see its rustdoc: digits →
+    /// `role: "number"`, `TODO`/`FIXME`/`norte` → `role: "keyword"` + a fixed
+    /// `fg`).
     #[tokio::test]
     #[expect(
         clippy::too_many_lines,
-        reason = "e2e de punta a punta: setup+wire+assert, sin trocear"
+        reason = "end-to-end e2e: setup+wire+assert, not split up"
     )]
-    async fn plugin_preview_styled_e2e_wasm_real_a_traves_del_backend() {
+    async fn plugin_preview_styled_e2e_real_wasm_through_the_backend() {
         let Some(wasm) = build_guest("previewer-demo") else {
-            eprintln!("SKIP: target wasm32-wasip2 no instalado; no hay .wasm que ejecutar");
+            eprintln!("SKIP: target wasm32-wasip2 not installed; no .wasm to run");
             return;
         };
 
@@ -405,121 +404,121 @@ mod styled {
         .expect("connect");
         let backend = Backend::Remote(remote.clone());
 
-        // SIN aprobar todavía: el consentimiento manda, `plugin.preview`
-        // clásico ya lo prueba (arriba, in-memory); aquí basta confirmar que
-        // el WIRE respeta el mismo fail-closed antes de aprobar.
+        // NOT approved yet: consent rules, the classic `plugin.preview`
+        // already proves it (above, in-memory); here it is enough to confirm
+        // the WIRE respects the same fail-closed before approving.
         let none_yet = backend
             .plugin_preview_styled(&vp("mem:///doc.txt"), None)
             .await
-            .expect("plugin.preview_styled no es error sin aprobar");
+            .expect("plugin.preview_styled is not an error without approval");
         assert!(
             none_yet.is_none(),
-            "sin aprobar, ningún previewer consentido casa: None"
+            "unapproved, no consented previewer matches: None"
         );
 
         backend
             .plugins_set_approval("org.norte.prev", true, None)
             .await
-            .expect("aprobar por el wire");
+            .expect("approve over the wire");
         backend
             .plugins_set_enabled("org.norte.prev", true)
             .await
-            .expect("activar por el wire");
+            .expect("enable over the wire");
 
         let preview = backend
             .plugin_preview_styled(&vp("mem:///doc.txt"), None)
             .await
-            .expect("plugin.preview_styled no es error")
-            .expect("aprobado+activado: el previewer aplica");
+            .expect("plugin.preview_styled is not an error")
+            .expect("approved+enabled: the previewer applies");
         assert_eq!(preview.plugin_id, "org.norte.prev");
         assert_eq!(preview.plugin_name, "Preview Demo");
 
-        // SAMPLE = "linea uno\nlinea dos\nlinea tres\nlinea cuatro": la
-        // cabecera (1 línea plana) + 3 líneas de contenido resaltado.
+        // SAMPLE = "line one\nline two\nline three\nline four": the header
+        // (1 plain line) + 3 lines of highlighted content.
         assert_eq!(
             preview.lines.len(),
             4,
-            "cabecera + 3 líneas: {:?}",
+            "header + 3 lines: {:?}",
             preview.lines
         );
         let header_text: String = preview.lines[0].iter().map(|s| s.text.as_str()).collect();
         assert!(
             header_text.contains("[text/plain]"),
-            "cabecera con el mimetype: {header_text:?}"
+            "header with the mimetype: {header_text:?}"
         );
         assert!(
             preview.lines[0]
                 .iter()
                 .all(|s| s.role.is_none() && s.fg.is_none()),
-            "la cabecera es un único span plano: {:?}",
+            "the header is a single plain span: {:?}",
             preview.lines[0]
         );
 
-        // "linea uno" no tiene dígitos ni keywords: todo plano.
+        // "line one" has no digits nor keywords: all plain.
         assert!(
             preview.lines[1].iter().all(|s| s.role.is_none()),
-            "línea sin dígitos ni keywords: sin roles: {:?}",
+            "a line without digits or keywords: no roles: {:?}",
             preview.lines[1]
         );
 
-        // El contenido de SAMPLE no lleva dígitos/keywords reales en las 3
-        // primeras líneas ("linea uno/dos/tres"); se prueba la conversión
-        // exacta (role sin validar en el wire) con un archivo dedicado.
+        // SAMPLE's content carries no real digits/keywords in its first 3
+        // lines ("line one/two/three"); the exact conversion (role
+        // unvalidated on the wire) is tested with a dedicated file.
         let mem2 = &mem;
-        write_file(mem2, "mem:///code.txt", b"TODO 42 norte plano\nsegunda").await;
+        write_file(mem2, "mem:///code.txt", b"TODO 42 norte plain\nsecond").await;
         let preview2 = backend
             .plugin_preview_styled(&vp("mem:///code.txt"), None)
             .await
             .expect("preview_styled ok")
-            .expect("previewer sigue aprobado+activado");
-        // lines[1] = primera línea de contenido: "TODO 42 norte plano".
+            .expect("previewer still approved+enabled");
+        // lines[1] = first content line: "TODO 42 norte plain".
         let spans = &preview2.lines[1];
         let by_text = |t: &str| spans.iter().find(|s| s.text == t);
         assert_eq!(
             by_text("TODO").and_then(|s| s.role.as_deref()),
             Some("keyword"),
-            "TODO es keyword del guest (SIN validar contra norte_theme::Role en el wire): {spans:?}"
+            "TODO is the guest's keyword (UNVALIDATED against norte_theme::Role on the wire): {spans:?}"
         );
         assert_eq!(
             by_text("TODO").and_then(|s| s.fg),
             Some([255, 200, 0]),
-            "keyword además lleva fg fijo: {spans:?}"
+            "a keyword also carries a fixed fg: {spans:?}"
         );
         assert_eq!(
             by_text("42").and_then(|s| s.role.as_deref()),
             Some("number"),
-            "42 es number: {spans:?}"
+            "42 is a number: {spans:?}"
         );
         assert_eq!(
             by_text("norte").and_then(|s| s.role.as_deref()),
             Some("keyword"),
-            "norte es keyword: {spans:?}"
+            "norte is a keyword: {spans:?}"
         );
         assert_eq!(
-            by_text("plano").and_then(|s| s.role.as_deref()),
+            by_text("plain").and_then(|s| s.role.as_deref()),
             None,
-            "plano no casa ninguna regla del highlighter: {spans:?}"
+            "plain matches no highlighter rule: {spans:?}"
         );
 
-        // #101 (paridad daemon↔embebido): la decodificación host-side ocurre
-        // en el HANDLER DEL DAEMON y su señal `lossy` viaja por el WIRE. Un
-        // archivo válido no es lossy...
-        assert!(!preview.lossy, "SAMPLE UTF-8 válido: no lossy");
-        assert!(!preview2.lossy, "código ASCII: no lossy");
-        // ...y uno detectado como texto (BOM UTF-8) con un byte inválido SÍ:
-        // prueba que el daemon DECODIFICA (no pasa bytes crudos al guest) y
-        // marca la pérdida.
+        // #101 (daemon↔embedded parity): the host-side decoding happens in
+        // the DAEMON'S HANDLER and its `lossy` signal travels over the WIRE.
+        // A valid file is not lossy...
+        assert!(!preview.lossy, "SAMPLE valid UTF-8: not lossy");
+        assert!(!preview2.lossy, "ASCII code: not lossy");
+        // ...and one detected as text (UTF-8 BOM) with an invalid byte IS:
+        // proof that the daemon DECODES (it does not pass raw bytes to the
+        // guest) and flags the loss.
         let mut bad = vec![0xEF, 0xBB, 0xBF];
-        bad.extend_from_slice(b"linea\xFFmala\n");
+        bad.extend_from_slice(b"line\xFFbad\n");
         write_file(&mem, "mem:///bad.txt", &bad).await;
         let preview_lossy = backend
             .plugin_preview_styled(&vp("mem:///bad.txt"), None)
             .await
             .expect("preview_styled ok")
-            .expect("previewer sigue aprobado+activado");
+            .expect("previewer still approved+enabled");
         assert!(
             preview_lossy.lossy,
-            "el daemon decodificó texto y marcó la pérdida por el wire: {preview_lossy:?}"
+            "the daemon decoded text and flagged the loss over the wire: {preview_lossy:?}"
         );
     }
 }

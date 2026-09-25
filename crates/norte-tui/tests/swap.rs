@@ -1,6 +1,6 @@
-//! El intercambio de panes cruza TODO lo que está en vuelo apuntando a un
-//! hueco: los `Fill`, las decoraciones, la búsqueda viva y los watch
-//! targets. Lo que no hace es cosechar nada por el camino.
+//! Swapping panes crosses EVERYTHING in flight that points at a slot: the
+//! `Fill`s, the decorations, the live search and the watch targets. What it
+//! does not do is harvest anything along the way.
 
 use norte_core::backend::TaskRef;
 use norte_proto::VPath;
@@ -14,16 +14,16 @@ use norte_tui::probes::{DecorateFetch, Probed};
 use norte_tui::refresh::reap_search_run;
 
 fn vp(wire: &str) -> VPath {
-    VPath::parse(wire).expect("wire de test")
+    VPath::parse(wire).expect("test wire")
 }
 
-/// Una búsqueda viva CORRIENDO sobre `pane`. La Task es sintética (el
-/// `TaskRef` de test del core): aquí no se ejerce el walker, sino el
-/// índice de pane que el run loop guarda a su lado.
+/// A live search RUNNING over `pane`. The Task is synthetic (the core's
+/// test `TaskRef`): what is exercised here is not the walker, but the pane
+/// index the run loop keeps beside it.
 fn search_run(pane: usize) -> SearchRun {
     let (_tx, rx) = tokio::sync::mpsc::channel::<SearchHits>(1);
     let id = norte_proto::TaskId::new(1);
-    let (_progreso, prx) = tokio::sync::watch::channel(norte_proto::TaskProgress {
+    let (_progress, prx) = tokio::sync::watch::channel(norte_proto::TaskProgress {
         task_id: id,
         kind: norte_proto::TaskKind::Search,
         state: norte_proto::TaskState::Running,
@@ -54,15 +54,16 @@ fn decorate(slot: norte_frontend::layout::SlotId) -> DecorateFetch {
     }
 }
 
-/// El relleno EN VUELO está archivado POR PANE: si el intercambio no cruza
-/// los huecos, los lotes del listado siguen llegando al pane de al lado y
-/// el lector ve crecer la lista equivocada. Es el bug que una suite verde
-/// no ve, porque el listado sigue llegando: solo llega al sitio que no es.
+/// A fill IN FLIGHT is filed PER PANE: if the swap does not cross the
+/// slots, the listing's batches keep arriving at the neighboring pane and
+/// the reader sees the wrong list grow. It is the bug a green suite does
+/// not see, because the listing keeps arriving: it just arrives at the
+/// wrong place.
 ///
-/// Comprueba que se movió ESE drenador y no un hueco cualquiera: el lote
-/// enviado por el `tx` del pane 0 se recoge del hueco del pane 1.
+/// Checks that THAT drain moved and not just any slot: the batch sent by
+/// pane 0's `tx` is picked up from pane 1's slot.
 #[test]
-fn el_intercambio_cruza_los_huecos_del_relleno_en_vuelo() {
+fn the_swap_crosses_the_in_flight_filler_slots() {
     let (tx, rx) = tokio::sync::mpsc::channel::<FillMsg>(1);
     let mut f: norte_frontend::layout::BySlot<Fill> = norte_frontend::layout::BySlot::new();
     f.insert(norte_tui::panel::SLOT_LEFT, Fill { rx });
@@ -86,30 +87,30 @@ fn el_intercambio_cruza_los_huecos_del_relleno_en_vuelo() {
 
     assert!(
         f.get(norte_tui::panel::SLOT_LEFT).is_none(),
-        "el hueco del pane 0 queda libre"
+        "pane 0's slot is left free"
     );
     tx.try_send(FillMsg::Failed)
-        .expect("el drenador sigue vivo");
+        .expect("the drain is still alive");
     assert!(
         f.get_mut(norte_tui::panel::SLOT_RIGHT)
-            .expect("cruzado al hueco del pane 1")
+            .expect("crossed to pane 1's slot")
             .rx
             .try_recv()
             .is_ok(),
-        "y es EL MISMO drenador el que ahora alimenta al pane 1"
+        "and it is the SAME drain now feeding pane 1"
     );
     assert!(
         df.get(norte_tui::panel::SLOT_RIGHT).is_some()
             && df.get(norte_tui::panel::SLOT_LEFT).is_none(),
-        "cruzados"
+        "crossed"
     );
-    assert!(lp.is_empty(), "la caché de stat se tira, no se traduce");
+    assert!(lp.is_empty(), "the stat cache is dropped, not translated");
 }
 
-/// Sin nada en vuelo el reconciliado es inofensivo: un intercambio no
-/// puede inventar un relleno ni un fetch donde no los había.
+/// With nothing in flight the reconciliation is harmless: a swap cannot
+/// invent a fill or a fetch where there were none.
 #[test]
-fn el_intercambio_sin_nada_en_vuelo_no_inventa_nada() {
+fn the_swap_with_nothing_in_flight_invents_nothing() {
     let mut f: norte_frontend::layout::BySlot<Fill> = norte_frontend::layout::BySlot::new();
     let mut df: norte_frontend::layout::BySlot<DecorateFetch> =
         norte_frontend::layout::BySlot::new();
@@ -133,12 +134,12 @@ fn el_intercambio_sin_nada_en_vuelo_no_inventa_nada() {
     );
 }
 
-/// El desenlace `Cd::Swapped` tiene que LLEGAR al reconciliado: la mitad
-/// del intercambio que `dispatch` no puede hacer viaja por `apply_cd`, y
-/// un brazo que se olvidara de llamarlo dejaría el fill apuntando al pane
-/// que no es sin que ningún test de `App` se enterase.
+/// The `Cd::Swapped` outcome has to REACH the reconciliation: the half of
+/// the swap `dispatch` cannot do travels through `apply_cd`, and an arm
+/// that forgot to call it would leave the fill pointing at the wrong pane
+/// with no `App` test noticing.
 #[test]
-fn apply_cd_swapped_reconcilia_el_estado_del_run_loop() {
+fn apply_cd_swapped_reconciles_run_loop_state() {
     let (_tx, rx) = tokio::sync::mpsc::channel::<FillMsg>(1);
     let mut f: norte_frontend::layout::BySlot<Fill> = norte_frontend::layout::BySlot::new();
     f.insert(norte_tui::panel::SLOT_RIGHT, Fill { rx });
@@ -166,12 +167,11 @@ fn apply_cd_swapped_reconcilia_el_estado_del_run_loop() {
     assert!(lp.is_empty());
 }
 
-/// La búsqueda VIVA también está indexada por pane: `SearchRun` guarda el
-/// pane virtual que muestra los hits, exactamente como el relleno guarda
-/// el suyo. Si el intercambio no lo voltea, los hits siguen entrando en el
-/// pane de al lado.
+/// A LIVE search is also indexed per pane: `SearchRun` keeps the virtual
+/// pane that shows the hits, exactly as a fill keeps its own. If the swap
+/// does not flip it, the hits keep arriving at the neighboring pane.
 #[test]
-fn el_intercambio_voltea_el_pane_de_la_busqueda_viva() {
+fn the_swap_flips_the_pane_with_the_live_search() {
     let mut f: norte_frontend::layout::BySlot<Fill> = norte_frontend::layout::BySlot::new();
     let mut df: norte_frontend::layout::BySlot<DecorateFetch> =
         norte_frontend::layout::BySlot::new();
@@ -188,32 +188,33 @@ fn el_intercambio_voltea_el_pane_de_la_busqueda_viva() {
     );
 
     assert_eq!(
-        sr.as_ref().expect("el run sigue vivo").pane,
+        sr.as_ref().expect("the run is still alive").pane,
         1,
-        "el pane virtual de la búsqueda cambió de lado con su pane"
+        "the search's virtual pane switched sides with its pane"
     );
 }
 
-/// Y el intercambio no puede COSECHAR la búsqueda por el camino.
+/// And the swap cannot HARVEST the search along the way.
 ///
-/// El `Esc`/`Enter` del pane virtual son las ÚNICAS teclas que ese modo
-/// intercepta, así que un `Ctrl+U` cae al resolutor y cruza los panes con
-/// una búsqueda corriendo. Justo después, el mismo call site pasa por
-/// [`reap_search_run`], que suelta el run cuando su pane ya no es virtual:
-/// con el `pane` sin voltear mira el pane 0 —que ahora tiene el listado
-/// ordinario que vino del otro lado— y CANCELA la Task en silencio,
-/// dejando el pane 1 con hits a medias en `Running` para siempre y sin su
-/// manejador de `Esc` (que exige un run vivo PARA ESE pane).
+/// The virtual pane's `Esc`/`Enter` are the ONLY keys that mode
+/// intercepts, so a `Ctrl+U` falls through to the resolver and swaps the
+/// panes with a search running. Right after, the same call site goes
+/// through [`reap_search_run`], which drops the run when its pane is no
+/// longer virtual: with `pane` unflipped it looks at pane 0 — which now has
+/// the ordinary listing that came from the other side — and CANCELS the
+/// Task silently, leaving pane 1 with half-finished hits stuck at
+/// `Running` forever and with no `Esc` handler (which requires a live run
+/// FOR THAT pane).
 ///
-/// Por eso el volteo tiene que ocurrir DENTRO de `reconcile_swap`: pasada
-/// la cosecha ya no hay nada que salvar.
+/// That is why the flip has to happen INSIDE `reconcile_swap`: once the
+/// harvest has passed there is nothing left to save.
 #[test]
-fn un_intercambio_no_cosecha_la_busqueda_viva() {
+fn a_swap_does_not_harvest_the_live_search() {
     let mut app = App::new(
         Pane::new(vp("file:///izq"), Vec::new()),
         Pane::new(vp("file:///der"), Vec::new()),
     );
-    // Búsqueda viva en el pane 0 (el `Alt+F7` lo dejó virtual).
+    // Live search on pane 0 (`Alt+F7` left it virtual).
     app.panes[0].begin_search(vp("file:///izq"));
     let mut sr = Some(search_run(0));
     let mut f: norte_frontend::layout::BySlot<Fill> = norte_frontend::layout::BySlot::new();
@@ -221,32 +222,34 @@ fn un_intercambio_no_cosecha_la_busqueda_viva() {
         norte_frontend::layout::BySlot::new();
     let mut lp = Probed::new();
 
-    // `Ctrl+U`: `dispatch` cruza los panes y el run loop reconcilia…
+    // `Ctrl+U`: `dispatch` swaps the panes and the run loop reconciles…
     app.swap_panes();
     let panes = norte_tui::panel::PaneSlots::new(
         Pane::new(vp("mem:///d"), Vec::new()),
         Pane::new(vp("mem:///d"), Vec::new()),
     );
     apply_cd(&panes, &mut f, &mut df, &mut lp, &mut sr, Cd::Swapped);
-    // …y el MISMO call site cosecha a continuación.
+    // …and the SAME call site harvests right after.
     reap_search_run(&app, &mut sr);
 
-    let s = sr.as_ref().expect("la búsqueda en curso NO se cancela");
-    assert_eq!(s.pane, 1, "sigue los hits a su nuevo lado");
+    let s = sr
+        .as_ref()
+        .expect("the search in progress is NOT cancelled");
+    assert_eq!(s.pane, 1, "the hits follow to their new side");
     assert!(
         app.panes[s.pane].virtual_search,
-        "y ese lado es el que está en modo búsqueda"
+        "and that side is the one in search mode"
     );
 }
 
-/// El watcher NO necesita reconciliado propio, y esto es lo que hace
-/// cierta esa afirmación: el conjunto vigilado se deriva de `app.panes`
-/// en cada vuelta del run loop (`rewatch(&watch_targets(app))` es la
-/// primera sentencia del bucle), así que basta con que `watch_targets`
-/// no cachee nada. Si alguien introdujera una copia por lado, el
-/// intercambio dejaría cada pane vigilando el dir del otro.
+/// The watcher does NOT need its own reconciliation, and this is what makes
+/// that claim true: the watched set is derived from `app.panes` on every
+/// run loop turn (`rewatch(&watch_targets(app))` is the loop's first
+/// statement), so it is enough that `watch_targets` caches nothing. If
+/// someone introduced a per-side copy, the swap would leave each pane
+/// watching the other's dir.
 #[test]
-fn watch_targets_sigue_a_los_panes_tras_el_intercambio() {
+fn watch_targets_follows_the_panes_after_the_swap() {
     let mut app = App::new(
         Pane::new(vp("file:///izq"), Vec::new()),
         Pane::new(vp("file:///der"), Vec::new()),
@@ -256,11 +259,11 @@ fn watch_targets_sigue_a_los_panes_tras_el_intercambio() {
     let after = watch_targets(&app);
     assert_eq!(
         before[0], after[1],
-        "el dir izquierdo pasa a vigilarse a la derecha"
+        "the left dir becomes watched on the right"
     );
     assert_eq!(before[1], after[0]);
     assert_ne!(
         before[0], before[1],
-        "los dos dirs eran distintos de partida"
+        "the two dirs were different to begin with"
     );
 }

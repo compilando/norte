@@ -1,32 +1,32 @@
-//! Un tema de Visual Studio Code, leído y proyectado sobre un [`Theme`]
+//! A Visual Studio Code theme, read and projected onto a [`Theme`]
 //! (spec 2026-09-11, F5).
 //!
-//! Dos hechos dan forma a este módulo:
+//! Two facts shape this module:
 //!
-//! 1. **Un tema de VS Code NO es una paleta completa.** `dark_modern.json`
-//!    incluye `dark_plus.json`, que incluye `dark_vs.json`, y ninguno de los
-//!    tres define `list.*` ni `scrollbarSlider.*`: esos viven en el registro
-//!    de colores del editor. Por eso [`to_theme`] pinta SOBRE una base
-//!    (`vscode-dark` o `vscode-light`) y lo que el tema calla lo pone ella, en
-//!    vez de caer al monocromo.
-//! 2. **Este módulo no toca el disco.** `include` se devuelve crudo y quien
-//!    tiene el fichero —el binario— recorre la cadena y llama a
-//!    [`VsCodeTheme::merge_under`]. `norte-theme` es un modelo puro.
+//! 1. **A VS Code theme is NOT a complete palette.** `dark_modern.json`
+//!    includes `dark_plus.json`, which includes `dark_vs.json`, and none of the
+//!    three defines `list.*` or `scrollbarSlider.*`: those live in the editor's
+//!    color registry. That is why [`to_theme`] paints ON TOP of a base
+//!    (`vscode-dark` or `vscode-light`) and whatever the theme leaves unsaid the base supplies,
+//!    instead of falling back to monochrome.
+//! 2. **This module does not touch the disk.** `include` is returned raw and whoever
+//!    has the file —the binary— walks the chain and calls
+//!    [`VsCodeTheme::merge_under`]. `norte-theme` is a pure model.
 //!
-//! `tokenColors` y `semanticTokenColors` se IGNORAN: norte no colorea
-//! sintaxis. Solo cuenta el bloque `colors`.
+//! `tokenColors` and `semanticTokenColors` are IGNORED: norte does not color
+//! syntax. Only the `colors` block counts.
 //!
 //! ```
 //! use norte_theme::{Role, Theme, vscode};
 //!
 //! let src = r##"{
-//!     // Un tema del marketplace trae comentarios y comas colgantes.
+//!     // A marketplace theme carries comments and trailing commas.
 //!     "type": "dark",
 //!     "colors": { "editor.background": "#101010", },
 //! }"##;
-//! let tema = vscode::parse(src).unwrap();
-//! let base = Theme::preset(tema.base_or_default().preset()).unwrap().unwrap();
-//! let t = vscode::to_theme(&tema.colors, &base);
+//! let theme = vscode::parse(src).unwrap();
+//! let base = Theme::preset(theme.base_or_default().preset()).unwrap().unwrap();
+//! let t = vscode::to_theme(&theme.colors, &base);
 //! assert_eq!(t.style(Role::Background).bg.unwrap().to_hex(), "#101010");
 //! ```
 
@@ -39,7 +39,7 @@ use crate::role::Role;
 use crate::style::Style;
 use crate::theme::Theme;
 
-/// Si el tema es claro u oscuro: decide sobre qué preset se pinta.
+/// Whether the theme is light or dark: decides which preset it is painted over.
 ///
 /// ```
 /// use norte_theme::vscode::VsBase;
@@ -54,7 +54,7 @@ pub enum VsBase {
 }
 
 impl VsBase {
-    /// El preset embebido que hace de base para este tipo.
+    /// The embedded preset that serves as the base for this type.
     ///
     /// ```
     /// use norte_theme::{Theme, vscode::VsBase};
@@ -68,8 +68,8 @@ impl VsBase {
         }
     }
 
-    /// Lee el campo `"type"`. Un valor que no se reconoce es `None`, igual
-    /// que su ausencia: ninguno de los dos dice nada.
+    /// Reads the `"type"` field. An unrecognized value is `None`, just like
+    /// its absence: neither says anything.
     fn from_type(s: &str) -> Option<Self> {
         match s.to_ascii_lowercase().as_str() {
             "dark" | "vs-dark" | "hc" | "hc-black" | "hcdark" | "hc-dark" => Some(Self::Dark),
@@ -79,95 +79,95 @@ impl VsBase {
     }
 }
 
-/// Un color de VS Code: RGB más un canal alfa que norte no tiene.
+/// A VS Code color: RGB plus an alpha channel norte does not have.
 ///
-/// VS Code acepta `#rgb`, `#rgba`, `#rrggbb` y `#rrggbbaa`. El modelo de tema
-/// de norte es RGB de 24 bits (ADR 0020), así que el alfa se guarda aquí y
-/// [`to_theme`] lo COMPONE sobre el fondo del tema — lo mismo que se hizo a
-/// mano con `scrollbar-slider` en los dos presets. Descartarlo sin más
-/// convertiría un deslizador al 40 % en uno opaco y chillón.
+/// VS Code accepts `#rgb`, `#rgba`, `#rrggbb` and `#rrggbbaa`. norte's theme
+/// model is 24-bit RGB (ADR 0020), so the alpha is kept here and
+/// [`to_theme`] COMPOSITES it over the theme's background — the same thing that was done by
+/// hand with `scrollbar-slider` in the two presets. Simply dropping it
+/// would turn a 40 % slider into an opaque, garish one.
 ///
 /// ```
 /// use norte_theme::vscode::VsColor;
 /// let c = VsColor::parse("#ffffff80").unwrap();
 /// assert_eq!(c.alpha, 0x80);
 /// assert_eq!(VsColor::parse("#abc").unwrap().rgb.to_hex(), "#aabbcc");
-/// assert!(VsColor::parse("rojo").is_none());
+/// assert!(VsColor::parse("red").is_none());
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VsColor {
-    /// Los tres canales de color.
+    /// The three color channels.
     pub rgb: Color,
-    /// Opacidad, 255 = opaco.
+    /// Opacity, 255 = opaque.
     pub alpha: u8,
 }
 
 impl VsColor {
-    /// Parsea las cuatro formas que admite VS Code. `None` si no es ninguna.
+    /// Parses the four forms VS Code accepts. `None` if it is none of them.
     #[must_use]
     pub fn parse(s: &str) -> Option<Self> {
         let hex = s.strip_prefix('#')?;
         if !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
             return None;
         }
-        // Las formas cortas duplican cada dígito: `#abc8` = `#aabbcc88`.
-        let largo: String = match hex.len() {
+        // The short forms double each digit: `#abc8` = `#aabbcc88`.
+        let long: String = match hex.len() {
             3 | 4 => hex.chars().flat_map(|c| [c, c]).collect(),
             6 | 8 => hex.to_owned(),
             _ => return None,
         };
-        let rgb = Color::parse(&format!("#{}", &largo[..6])).ok()?;
-        let alpha = match largo.get(6..8) {
+        let rgb = Color::parse(&format!("#{}", &long[..6])).ok()?;
+        let alpha = match long.get(6..8) {
             Some(a) => u8::from_str_radix(a, 16).ok()?,
             None => 255,
         };
         Some(Self { rgb, alpha })
     }
 
-    /// El color resultante de pintar este sobre `fondo` opaco.
+    /// The color resulting from painting this one over an opaque `background`.
     ///
     /// ```
     /// use norte_theme::{Color, vscode::VsColor};
-    /// // #797979 al 40 % sobre #1f1f1f: el `scrollbar-slider` de vscode-dark.
+    /// // #797979 at 40 % over #1f1f1f: vscode-dark's `scrollbar-slider`.
     /// let c = VsColor { rgb: Color::rgb(0x79, 0x79, 0x79), alpha: 102 };
     /// assert_eq!(c.over(Color::rgb(0x1f, 0x1f, 0x1f)).to_hex(), "#434343");
     /// ```
     #[must_use]
-    pub fn over(self, fondo: Color) -> Color {
+    pub fn over(self, background: Color) -> Color {
         let a = u16::from(self.alpha);
-        let mezcla = |c: u8, f: u8| -> u8 {
+        let blend = |c: u8, f: u8| -> u8 {
             let v = (u16::from(c) * a + u16::from(f) * (255 - a) + 127) / 255;
-            // c,f ≤ 255 y a ≤ 255 ⇒ v ≤ 255: el try_from nunca falla.
+            // c,f ≤ 255 and a ≤ 255 ⇒ v ≤ 255: the try_from never fails.
             u8::try_from(v).unwrap_or(u8::MAX)
         };
         Color::rgb(
-            mezcla(self.rgb.r, fondo.r),
-            mezcla(self.rgb.g, fondo.g),
-            mezcla(self.rgb.b, fondo.b),
+            blend(self.rgb.r, background.r),
+            blend(self.rgb.g, background.g),
+            blend(self.rgb.b, background.b),
         )
     }
 }
 
-/// Un tema de VS Code ya leído, con `include` todavía sin resolver.
+/// A VS Code theme already read, with `include` still unresolved.
 #[derive(Debug, Clone, Default)]
 pub struct VsCodeTheme {
-    /// El `"name"` del JSON, si lo trae.
+    /// The JSON's `"name"`, if it has one.
     pub name: Option<String>,
-    /// El `"type"`. `None` si falta o no se reconoce; ver
+    /// The `"type"`. `None` if missing or unrecognized; see
     /// [`Self::base_or_default`].
     pub base: Option<VsBase>,
-    /// El `"include"` tal cual, relativo al fichero que lo nombra.
+    /// The `"include"` as is, relative to the file that names it.
     pub include: Option<String>,
-    /// Los colores que parsean, por id de VS Code.
+    /// The colors that parse, by VS Code id.
     pub colors: HashMap<String, VsColor>,
-    /// Los ids cuyo valor no es un color, ordenados. VS Code los ignora y aquí
-    /// también, pero se dicen: un tema que pierde colores en silencio se
-    /// parece demasiado a un importador roto.
+    /// The ids whose value is not a color, sorted. VS Code ignores them and so
+    /// does this, but they are reported: a theme that silently loses colors
+    /// looks too much like a broken importer.
     pub ignored: Vec<String>,
 }
 
 impl VsCodeTheme {
-    /// El tipo efectivo: el declarado, u oscuro, que es lo que asume VS Code.
+    /// The effective type: the declared one, or dark, which is what VS Code assumes.
     ///
     /// ```
     /// use norte_theme::vscode::{VsBase, VsCodeTheme};
@@ -178,29 +178,29 @@ impl VsCodeTheme {
         self.base.unwrap_or(VsBase::Dark)
     }
 
-    /// Mete `padre` DEBAJO de este tema: el hijo gana cada color que ya
-    /// tiene, el padre rellena el resto, y el `include` pasa a ser el del
-    /// padre para seguir la cadena. El nombre es siempre el del hijo.
+    /// Puts `parent` UNDER this theme: the child wins every color it already
+    /// has, the parent fills the rest, and the `include` becomes the
+    /// parent's to follow the chain. The name is always the child's.
     ///
     /// ```
     /// use norte_theme::vscode::parse;
-    /// let mut hijo = parse(r##"{"include":"p.json","colors":{"foreground":"#111111"}}"##).unwrap();
-    /// let padre = parse(r##"{"type":"light","colors":{"foreground":"#999999","focusBorder":"#0000ff"}}"##).unwrap();
-    /// hijo.merge_under(padre);
-    /// assert_eq!(hijo.colors["foreground"].rgb.to_hex(), "#111111");
-    /// assert!(hijo.colors.contains_key("focusBorder"));
-    /// assert!(hijo.include.is_none());
+    /// let mut child = parse(r##"{"include":"p.json","colors":{"foreground":"#111111"}}"##).unwrap();
+    /// let parent = parse(r##"{"type":"light","colors":{"foreground":"#999999","focusBorder":"#0000ff"}}"##).unwrap();
+    /// child.merge_under(parent);
+    /// assert_eq!(child.colors["foreground"].rgb.to_hex(), "#111111");
+    /// assert!(child.colors.contains_key("focusBorder"));
+    /// assert!(child.include.is_none());
     /// ```
-    pub fn merge_under(&mut self, padre: VsCodeTheme) {
-        for (id, color) in padre.colors {
+    pub fn merge_under(&mut self, parent: VsCodeTheme) {
+        for (id, color) in parent.colors {
             self.colors.entry(id).or_insert(color);
         }
-        self.base = self.base.or(padre.base);
-        self.include = padre.include;
-        // Un inválido del padre que el hijo sí define no se ha perdido.
+        self.base = self.base.or(parent.base);
+        self.include = parent.include;
+        // An invalid one in the parent that the child does define has not been lost.
         let colors = &self.colors;
         self.ignored.extend(
-            padre
+            parent
                 .ignored
                 .into_iter()
                 .filter(|id| !colors.contains_key(id)),
@@ -210,53 +210,53 @@ impl VsCodeTheme {
     }
 }
 
-/// Error al leer un tema de VS Code.
+/// Error reading a VS Code theme.
 #[derive(Debug, thiserror::Error)]
 pub enum VsCodeError {
-    /// No es JSON (ni JSONC) válido, o su forma no es la de un tema.
-    #[error("tema de VSCode inválido: {0}")]
+    /// It is not valid JSON (nor JSONC), or its shape is not that of a theme.
+    #[error("invalid VSCode theme: {0}")]
     Json(#[from] serde_json::Error),
 }
 
-/// La forma del JSON, tolerante: un color que no es cadena no tumba el tema.
+/// The JSON's shape, lenient: a color that is not a string does not bring down the theme.
 #[derive(Deserialize)]
-struct Crudo {
+struct Raw {
     #[serde(default)]
     name: Option<serde_json::Value>,
     #[serde(default, rename = "type")]
-    tipo: Option<serde_json::Value>,
+    kind: Option<serde_json::Value>,
     #[serde(default)]
     include: Option<serde_json::Value>,
     #[serde(default)]
     colors: Option<HashMap<String, serde_json::Value>>,
 }
 
-/// Una cadena del JSON, o nada: un `"name": 3` se trata como ausente.
-fn cadena(v: Option<serde_json::Value>) -> Option<String> {
+/// A JSON string, or nothing: a `"name": 3` is treated as absent.
+fn string_of(v: Option<serde_json::Value>) -> Option<String> {
     match v {
         Some(serde_json::Value::String(s)) => Some(s),
         _ => None,
     }
 }
 
-/// Parsea un tema de VS Code (JSON con comentarios y comas colgantes).
+/// Parses a VS Code theme (JSON with comments and trailing commas).
 ///
-/// Un `null` en `colors` cuenta como ausente; cualquier otro valor que no sea
-/// un color va a [`VsCodeTheme::ignored`].
+/// A `null` in `colors` counts as absent; any other value that is not
+/// a color goes to [`VsCodeTheme::ignored`].
 ///
 /// # Errors
-/// [`VsCodeError::Json`] si el texto no es JSONC o no tiene forma de tema.
+/// [`VsCodeError::Json`] if the text is not JSONC or does not have the shape of a theme.
 ///
 /// ```
 /// let t = norte_theme::vscode::parse(r##"{"name":"X","colors":{"foreground":7}}"##).unwrap();
 /// assert_eq!(t.ignored, ["foreground"]);
 /// ```
 pub fn parse(src: &str) -> Result<VsCodeTheme, VsCodeError> {
-    let crudo: Crudo = serde_json::from_str(&strip_jsonc(src))?;
+    let raw: Raw = serde_json::from_str(&strip_jsonc(src))?;
     let mut colors = HashMap::new();
     let mut ignored = Vec::new();
-    for (id, valor) in crudo.colors.unwrap_or_default() {
-        match &valor {
+    for (id, value) in raw.colors.unwrap_or_default() {
+        match &value {
             serde_json::Value::Null => {}
             serde_json::Value::String(s) => match VsColor::parse(s) {
                 Some(c) => {
@@ -269,43 +269,43 @@ pub fn parse(src: &str) -> Result<VsCodeTheme, VsCodeError> {
     }
     ignored.sort();
     Ok(VsCodeTheme {
-        name: cadena(crudo.name),
-        base: cadena(crudo.tipo).as_deref().and_then(VsBase::from_type),
-        include: cadena(crudo.include),
+        name: string_of(raw.name),
+        base: string_of(raw.kind).as_deref().and_then(VsBase::from_type),
+        include: string_of(raw.include),
         colors,
         ignored,
     })
 }
 
-/// JSONC → JSON: quita `//` y `/* */` y las comas colgantes.
+/// JSONC → JSON: strips `//` and `/* */` and trailing commas.
 ///
-/// A mano y no con una dependencia: son treinta líneas (regla 8). Un `//`
-/// DENTRO de una cadena no es un comentario —`"https://…"` aparece en temas
-/// reales—, así que la máquina sigue si está dentro de una. Los comentarios
-/// se cambian por espacios y se conservan los saltos de línea, para que un
-/// error de `serde_json` siga apuntando a la línea correcta.
+/// By hand and not with a dependency: it is thirty lines (rule 8). A `//`
+/// INSIDE a string is not a comment —`"https://…"` appears in real
+/// themes—, so the machine tracks whether it is inside one. Comments
+/// are replaced with spaces and line breaks are kept, so that a
+/// `serde_json` error still points at the right line.
 fn strip_jsonc(src: &str) -> String {
     let src = src.strip_prefix('\u{feff}').unwrap_or(src);
     let mut out = String::with_capacity(src.len());
     let mut chars = src.chars().peekable();
-    let mut en_cadena = false;
+    let mut in_string = false;
     while let Some(c) = chars.next() {
-        if en_cadena {
+        if in_string {
             out.push(c);
             match c {
                 '\\' => {
-                    if let Some(escapado) = chars.next() {
-                        out.push(escapado);
+                    if let Some(escaped) = chars.next() {
+                        out.push(escaped);
                     }
                 }
-                '"' => en_cadena = false,
+                '"' => in_string = false,
                 _ => {}
             }
             continue;
         }
         match (c, chars.peek()) {
             ('"', _) => {
-                en_cadena = true;
+                in_string = true;
                 out.push(c);
             }
             ('/', Some('/')) => {
@@ -318,23 +318,23 @@ fn strip_jsonc(src: &str) -> String {
             }
             ('/', Some('*')) => {
                 chars.next();
-                let mut previo = '\0';
+                let mut prev = '\0';
                 for c in chars.by_ref() {
                     if c == '\n' {
                         out.push('\n');
                     }
-                    if previo == '*' && c == '/' {
+                    if prev == '*' && c == '/' {
                         break;
                     }
-                    previo = c;
+                    prev = c;
                 }
                 out.push(' ');
             }
             ('}' | ']', _) => {
-                // Coma colgante: la última cosa no blanca antes del cierre.
-                let fin = out.trim_end().len();
-                if out[..fin].ends_with(',') {
-                    out.remove(fin - 1);
+                // Trailing comma: the last non-blank thing before the closer.
+                let end = out.trim_end().len();
+                if out[..end].ends_with(',') {
+                    out.remove(end - 1);
                 }
                 out.push(c);
             }
@@ -344,18 +344,18 @@ fn strip_jsonc(src: &str) -> String {
     out
 }
 
-/// Id de VS Code → rol de norte. El `bool` es `true` si el id llena el `bg`
-/// del rol y `false` si llena el `fg`.
+/// VS Code id → norte role. The `bool` is `true` if the id fills the role's `bg`
+/// and `false` if it fills the `fg`.
 ///
-/// **El orden importa: si dos ids alimentan el mismo lado de un rol, gana el
-/// que va DESPUÉS.** Así se escribe un respaldo: `editor.foreground` antes que
-/// `foreground`, porque One Dark Pro —uno de los temas más instalados— no
-/// define `foreground` y sin el respaldo su texto saldría del gris de la base.
+/// **Order matters: if two ids feed the same side of a role, the
+/// one that comes LATER wins.** That is how a fallback is written: `editor.foreground` before
+/// `foreground`, because One Dark Pro —one of the most installed themes— does not
+/// define `foreground` and without the fallback its text would come out in the base's gray.
 ///
-/// Es la misma tabla por la que se transcribieron `vscode-dark` y
-/// `vscode-light` (cada cabecera la repite), menos `widget.shadow`: una
-/// sombra es alfa, y sin alfa la hoja de estilos de la ventana hace mejor
-/// trabajo con su respaldo translúcido.
+/// It is the same table `vscode-dark` and `vscode-light` were transcribed
+/// through (each header repeats it), minus `widget.shadow`: a
+/// shadow is alpha, and without alpha the window's stylesheet does a better
+/// job with its translucent fallback.
 ///
 /// ```
 /// use norte_theme::{Role, vscode::MAPPING};
@@ -405,19 +405,19 @@ pub const MAPPING: &[(&str, Role, bool)] = &[
     ("scrollbarSlider.background", Role::ScrollbarSlider, true),
 ];
 
-/// Pinta `colors` sobre `base` y devuelve un tema COMPLETO.
+/// Paints `colors` over `base` and returns a COMPLETE theme.
 ///
-/// Parte de un clon de `base`; por cada fila de [`MAPPING`] cuyo id está en
-/// `colors`, sustituye ESE lado del rol y deja el otro y los atributos como
-/// los tenía la base. Lo que el tema no dice —los roles sin id, `[files]`,
-/// `hostile-badge`, `mark`— sigue siendo de la base. El `name` queda vacío:
-/// el de la base mentiría, y lo pone quien importa.
+/// It starts from a clone of `base`; for each [`MAPPING`] row whose id is in
+/// `colors`, it replaces THAT side of the role and leaves the other side and the attributes as
+/// the base had them. What the theme does not say —roles with no id, `[files]`,
+/// `hostile-badge`, `mark`— still comes from the base. The `name` is left empty:
+/// the base's would lie, and whoever imports sets it.
 ///
-/// Un color con alfa se compone sobre el fondo: el `editor.background` del
-/// tema (compuesto a su vez sobre el de la base), o el de la base si el tema
-/// no lo trae. Es una aproximación —un color de la barra lateral se ve
-/// realmente sobre la barra lateral— y es la misma que se usó al transcribir
-/// los presets.
+/// A color with alpha is composited over the background: the theme's
+/// `editor.background` (itself composited over the base's), or the base's if the theme
+/// does not have one. It is an approximation —a side bar color is really seen
+/// over the side bar— and it is the same one used when transcribing
+/// the presets.
 ///
 /// ```
 /// use std::collections::HashMap;
@@ -435,38 +435,38 @@ pub fn to_theme<S: std::hash::BuildHasher>(
     colors: &HashMap<String, VsColor, S>,
     base: &Theme,
 ) -> Theme {
-    let fondo_base = base
+    let base_background = base
         .style(Role::Background)
         .bg
         .unwrap_or(Color::rgb(0, 0, 0));
-    let fondo = colors
+    let background = colors
         .get("editor.background")
-        .map_or(fondo_base, |c| c.over(fondo_base));
+        .map_or(base_background, |c| c.over(base_background));
 
-    let mut tema = base.clone();
-    tema.name = None;
-    for &(id, role, es_fondo) in MAPPING {
+    let mut theme = base.clone();
+    theme.name = None;
+    for &(id, role, is_background) in MAPPING {
         let Some(color) = colors.get(id) else {
             continue;
         };
-        // `roles.get`, no `style()`: el fallback monocromo de un rol que la
-        // base no define (un `reverse`) no debe colarse bajo un color nuevo.
-        let previo = tema.roles.get(&role).copied().unwrap_or_default();
-        let lado = if id == "editor.background" {
-            // Ya compuesto arriba: componerlo otra vez sobre sí mismo lo
-            // aclararía una segunda vez.
-            Style::new().bg(fondo)
-        } else if es_fondo {
-            Style::new().bg(color.over(fondo))
+        // `roles.get`, not `style()`: the monochrome fallback of a role the
+        // base does not define (a `reverse`) must not sneak in under a new color.
+        let prev = theme.roles.get(&role).copied().unwrap_or_default();
+        let side = if id == "editor.background" {
+            // Already composited above: compositing it again over itself would
+            // lighten it a second time.
+            Style::new().bg(background)
+        } else if is_background {
+            Style::new().bg(color.over(background))
         } else {
-            // Un primer plano translúcido se ve sobre el fondo de SU rol
-            // (`statusBar.foreground` sobre `statusBar.background`), y la
-            // tabla pone siempre el fondo de un rol antes que su frente.
-            Style::new().fg(color.over(previo.bg.unwrap_or(fondo)))
+            // A translucent foreground is seen over ITS role's background
+            // (`statusBar.foreground` over `statusBar.background`), and the
+            // table always puts a role's background before its foreground.
+            Style::new().fg(color.over(prev.bg.unwrap_or(background)))
         };
-        tema.roles.insert(role, previo.overlay(lado));
+        theme.roles.insert(role, prev.overlay(side));
     }
-    tema
+    theme
 }
 
 #[cfg(test)]
@@ -475,102 +475,102 @@ mod tests {
 
     fn dark() -> Theme {
         Theme::preset("vscode-dark")
-            .expect("parsea")
+            .expect("parses")
             .expect("preset")
     }
 
-    /// JSONC: un tema del marketplace trae comentarios y comas colgantes.
-    /// `serde_json` no los acepta, así que hay que limpiarlos antes.
+    /// JSONC: a marketplace theme carries comments and trailing commas.
+    /// `serde_json` does not accept them, so they have to be cleaned first.
     #[test]
-    fn parsea_jsonc_con_comentarios_y_coma_colgante() {
+    fn parses_jsonc_with_comments_and_trailing_comma() {
         let src = r##"{
-            // el nombre
+            // the name
             "name": "Mío",
             "type": "dark",
             "colors": {
-                "editor.background": "#1F1F1F", /* bloque */
+                "editor.background": "#1F1F1F", /* block */
                 "foreground": "#CCCCCC",
             },
         }"##;
-        let t = parse(src).expect("parsea");
+        let t = parse(src).expect("parses");
         assert_eq!(t.name.as_deref(), Some("Mío"));
         assert_eq!(t.base, Some(VsBase::Dark));
         assert_eq!(t.colors.len(), 2);
     }
 
-    /// Un `//` dentro de una cadena NO es un comentario: las URL aparecen en
-    /// temas reales, y comérselas dejaría la cadena sin cerrar.
+    /// A `//` inside a string is NOT a comment: URLs appear in
+    /// real themes, and eating them would leave the string unterminated.
     #[test]
-    fn una_barra_doble_dentro_de_una_cadena_no_es_comentario() {
+    fn a_double_slash_inside_a_string_is_not_a_comment() {
         let src = r##"{"name": "https://x.y/*z*/", "colors": {"a": "#fff"}}"##;
-        let t = parse(src).expect("parsea");
+        let t = parse(src).expect("parses");
         assert_eq!(t.name.as_deref(), Some("https://x.y/*z*/"));
         assert_eq!(t.colors.len(), 1);
     }
 
-    /// Una comilla escapada no cierra la cadena, y un comentario en un array
-    /// —como los de `dark_plus.json`— tampoco rompe la coma colgante.
+    /// An escaped quote does not close the string, and a comment in an array
+    /// —like those in `dark_plus.json`— does not break the trailing comma either.
     #[test]
-    fn escapes_y_comentarios_en_arrays() {
+    fn escapes_and_comments_in_arrays() {
         let src = "{\"name\": \"a\\\"//b\", \"x\": [1, // c\n 2, ],\n}";
-        let t = parse(src).expect("parsea");
+        let t = parse(src).expect("parses");
         assert_eq!(t.name.as_deref(), Some("a\"//b"));
-        // Un comentario ENTRE la coma colgante y el cierre.
+        // A comment BETWEEN the trailing comma and the closer.
         assert!(parse("{\"x\": [1, /* c */ ], \"k\": \",\" }").is_ok());
     }
 
-    /// Un campo que no es cadena, o `colors: null`, no tumba el tema.
+    /// A field that is not a string, or `colors: null`, does not bring down the theme.
     #[test]
-    fn campos_con_forma_rara_se_toleran() {
+    fn oddly_shaped_fields_are_tolerated() {
         let t = parse(r#"{"name": 3, "type": ["dark"], "include": {}, "colors": null}"#)
-            .expect("parsea");
+            .expect("parses");
         assert!(t.name.is_none() && t.base.is_none() && t.include.is_none());
         assert!(t.colors.is_empty());
     }
 
-    /// Un `editor.background` translúcido se compone UNA vez sobre la base.
+    /// A translucent `editor.background` is composited ONCE over the base.
     #[test]
-    fn un_fondo_translucido_se_compone_una_sola_vez() {
+    fn a_translucent_background_is_composited_only_once() {
         let base = dark();
         let src = r##"{"colors":{"editor.background":"#ffffff80"}}"##;
         let t = to_theme(&parse(src).unwrap().colors, &base);
-        let esperado = VsColor::parse("#ffffff80")
+        let expected = VsColor::parse("#ffffff80")
             .unwrap()
             .over(base.style(Role::Background).bg.unwrap());
-        assert_eq!(t.style(Role::Background).bg, Some(esperado));
-        assert_eq!(t.style(Role::PaneFocusBackground).bg, Some(esperado));
+        assert_eq!(t.style(Role::Background).bg, Some(expected));
+        assert_eq!(t.style(Role::PaneFocusBackground).bg, Some(expected));
     }
 
-    /// Un frente translúcido se compone sobre el fondo de su propio rol.
+    /// A translucent foreground is composited over its own role's background.
     #[test]
-    fn un_frente_translucido_se_compone_sobre_el_fondo_de_su_rol() {
+    fn a_translucent_foreground_is_composited_over_its_role_background() {
         let src = r##"{"colors":{
             "editor.background":"#000000",
             "statusBar.background":"#ffffff",
             "statusBar.foreground":"#00000080"
         }}"##;
         let t = to_theme(&parse(src).unwrap().colors, &dark());
-        let esperado = VsColor::parse("#00000080")
+        let expected = VsColor::parse("#00000080")
             .unwrap()
             .over(Color::rgb(255, 255, 255));
-        assert_eq!(t.style(Role::StatusBar).fg, Some(esperado));
+        assert_eq!(t.style(Role::StatusBar).fg, Some(expected));
     }
 
-    /// Un `#RRGGBBAA` de ocho dígitos es legal en VS Code, y `#rgba` también.
+    /// An eight-digit `#RRGGBBAA` is legal in VS Code, and so is `#rgba`.
     #[test]
-    fn las_cuatro_formas_de_color_parsean() {
+    fn the_four_color_forms_parse() {
         let src = r##"{"colors":{"a":"#000000","b":"#00000066","c":"#abc","d":"#abc8"}}"##;
-        let t = parse(src).expect("parsea");
+        let t = parse(src).expect("parses");
         assert_eq!(t.colors["b"].alpha, 0x66);
         assert_eq!(t.colors["d"].rgb.to_hex(), "#aabbcc");
         assert_eq!(t.colors["d"].alpha, 0x88);
         assert!(t.ignored.is_empty());
     }
 
-    /// El alfa se COMPONE sobre el fondo del propio tema: el `#4e566660` del
-    /// deslizador de One Dark Pro sobre su `#282c34`, no un `#4e5666` opaco.
+    /// Alpha is COMPOSITED over the theme's own background: One Dark Pro's
+    /// slider `#4e566660` over its `#282c34`, not an opaque `#4e5666`.
     #[test]
-    fn un_color_con_alfa_se_compone_sobre_el_fondo_del_tema() {
+    fn a_color_with_alpha_is_composited_over_the_theme_background() {
         let src = r##"{"colors":{
             "editor.background":"#282c34",
             "scrollbarSlider.background":"#4e566660"
@@ -583,21 +583,25 @@ mod tests {
                 .unwrap()
                 .over(Color::rgb(0x28, 0x2c, 0x34))
         );
-        assert_ne!(slider.to_hex(), "#4e5666", "no se descarta el alfa sin más");
+        assert_ne!(
+            slider.to_hex(),
+            "#4e5666",
+            "the alpha is not simply dropped"
+        );
     }
 
-    /// Un valor que no es color no tumba el tema: se ignora y se dice.
+    /// A value that is not a color does not bring down the theme: it is ignored and reported.
     #[test]
-    fn un_color_invalido_se_ignora_y_se_lista() {
+    fn an_invalid_color_is_ignored_and_listed() {
         let src = r##"{"colors":{"a":"transparent","b":"#12","c":null,"d":"#123456"}}"##;
-        let t = parse(src).expect("parsea");
-        assert_eq!(t.ignored, ["a", "b"], "null es ausente, no inválido");
+        let t = parse(src).expect("parses");
+        assert_eq!(t.ignored, ["a", "b"], "null is absent, not invalid");
         assert_eq!(t.colors.len(), 1);
     }
 
-    /// `include` se DEVUELVE sin resolver: este módulo no toca el disco.
+    /// `include` is RETURNED unresolved: this module does not touch the disk.
     #[test]
-    fn el_include_se_devuelve_crudo() {
+    fn include_is_returned_raw() {
         let src = r#"{"include":"./dark_plus.json","type":"dark","colors":{}}"#;
         assert_eq!(
             parse(src).unwrap().include.as_deref(),
@@ -605,41 +609,41 @@ mod tests {
         );
     }
 
-    /// El tipo de alto contraste y el claro se reconocen; uno desconocido es
-    /// silencio, y el silencio es oscuro, como en VS Code.
+    /// The high-contrast and light types are recognized; an unknown one is
+    /// silence, and silence is dark, as in VS Code.
     #[test]
-    fn los_tipos_de_vscode() {
-        let tipo = |s: &str| parse(&format!(r#"{{"type":"{s}"}}"#)).unwrap().base;
-        assert_eq!(tipo("hc-black"), Some(VsBase::Dark));
-        assert_eq!(tipo("hc-light"), Some(VsBase::Light));
-        assert_eq!(tipo("vs"), Some(VsBase::Light));
-        assert_eq!(tipo("sepia"), None);
+    fn vscode_types() {
+        let kind = |s: &str| parse(&format!(r#"{{"type":"{s}"}}"#)).unwrap().base;
+        assert_eq!(kind("hc-black"), Some(VsBase::Dark));
+        assert_eq!(kind("hc-light"), Some(VsBase::Light));
+        assert_eq!(kind("vs"), Some(VsBase::Light));
+        assert_eq!(kind("sepia"), None);
         assert_eq!(parse("{}").unwrap().base_or_default(), VsBase::Dark);
     }
 
-    /// El padre va DEBAJO: el hijo gana, el tipo se hereda si el hijo calla,
-    /// y el include avanza al del padre.
+    /// The parent goes UNDER: the child wins, the type is inherited if the child is silent,
+    /// and the include advances to the parent's.
     #[test]
-    fn merge_under_el_hijo_gana_y_la_cadena_avanza() {
-        let mut hijo = parse(r##"{"name":"h","include":"p","colors":{"a":"#111111"}}"##).unwrap();
-        let padre = parse(
-            r##"{"name":"p","type":"light","include":"abuelo","colors":{"a":"#999999","b":"#222222"}}"##,
+    fn merge_under_child_wins_and_the_chain_advances() {
+        let mut child = parse(r##"{"name":"h","include":"p","colors":{"a":"#111111"}}"##).unwrap();
+        let parent = parse(
+            r##"{"name":"p","type":"light","include":"grandparent","colors":{"a":"#999999","b":"#222222"}}"##,
         )
         .unwrap();
-        hijo.merge_under(padre);
-        assert_eq!(hijo.name.as_deref(), Some("h"));
-        assert_eq!(hijo.base, Some(VsBase::Light));
-        assert_eq!(hijo.include.as_deref(), Some("abuelo"));
-        assert_eq!(hijo.colors["a"].rgb.to_hex(), "#111111");
-        assert_eq!(hijo.colors["b"].rgb.to_hex(), "#222222");
+        child.merge_under(parent);
+        assert_eq!(child.name.as_deref(), Some("h"));
+        assert_eq!(child.base, Some(VsBase::Light));
+        assert_eq!(child.include.as_deref(), Some("grandparent"));
+        assert_eq!(child.colors["a"].rgb.to_hex(), "#111111");
+        assert_eq!(child.colors["b"].rgb.to_hex(), "#222222");
     }
 
-    /// Un tema que fija VEINTE claves produce un tema COMPLETO: lo que no
-    /// dice lo pone la base (spec 2026-09-11, F5). Sin esto, importar del
-    /// marketplace daría veinte colores y el resto en monocromo, que se lee
-    /// como un importador roto.
+    /// A theme that sets TWENTY keys produces a COMPLETE theme: what it does not
+    /// say the base supplies (spec 2026-09-11, F5). Without this, importing from the
+    /// marketplace would give twenty colors and the rest in monochrome, which reads
+    /// as a broken importer.
     #[test]
-    fn lo_que_el_tema_no_dice_lo_pone_la_base() {
+    fn what_the_theme_does_not_say_the_base_supplies() {
         let base = dark();
         let mut colors = HashMap::new();
         colors.insert(
@@ -651,20 +655,20 @@ mod tests {
         assert_eq!(
             t.style(Role::Hover).bg,
             base.style(Role::Hover).bg,
-            "un rol que el tema calla lo hereda de la base"
+            "a role the theme is silent about is inherited from the base"
         );
         assert!(t.style(Role::Regular).fg.is_some());
-        assert!(t.name.is_none(), "el nombre de la base mentiría");
+        assert!(t.name.is_none(), "the base's name would lie");
         for &role in Role::CORE {
             let s = t.style(role);
-            assert!(s.fg.is_some() || s.bg.is_some(), "{role:?} sin color");
+            assert!(s.fg.is_some() || s.bg.is_some(), "{role:?} without color");
         }
     }
 
-    /// Un id que llena un lado no borra el otro ni los atributos de la base:
-    /// `title` es negrita en `vscode-dark` y lo sigue siendo.
+    /// An id that fills one side does not erase the other nor the base's attributes:
+    /// `title` is bold in `vscode-dark` and stays so.
     #[test]
-    fn un_lado_no_borra_el_otro() {
+    fn one_side_does_not_erase_the_other() {
         let base = dark();
         let mut colors = HashMap::new();
         colors.insert(
@@ -680,39 +684,39 @@ mod tests {
         assert!(t.style(Role::Title).bold);
     }
 
-    /// El orden de [`MAPPING`] es el respaldo: `foreground` gana a
-    /// `editor.foreground` si están los dos, y este suple si falta aquel.
+    /// The order of [`MAPPING`] is the fallback: `foreground` beats
+    /// `editor.foreground` if both are present, and the latter stands in if the former is missing.
     #[test]
-    fn el_ultimo_id_de_la_tabla_gana() {
-        let solo_editor = parse(r##"{"colors":{"editor.foreground":"#abb2bf"}}"##).unwrap();
-        let t = to_theme(&solo_editor.colors, &dark());
+    fn the_last_id_in_the_table_wins() {
+        let editor_only = parse(r##"{"colors":{"editor.foreground":"#abb2bf"}}"##).unwrap();
+        let t = to_theme(&editor_only.colors, &dark());
         assert_eq!(t.style(Role::Regular).fg.unwrap().to_hex(), "#abb2bf");
 
-        let ambos = parse(r##"{"colors":{"editor.foreground":"#abb2bf","foreground":"#cccccc"}}"##)
+        let both = parse(r##"{"colors":{"editor.foreground":"#abb2bf","foreground":"#cccccc"}}"##)
             .unwrap();
-        let t = to_theme(&ambos.colors, &dark());
+        let t = to_theme(&both.colors, &dark());
         assert_eq!(t.style(Role::Regular).fg.unwrap().to_hex(), "#cccccc");
     }
 
-    /// `widget.shadow` no entra, a propósito: ver el rustdoc de [`MAPPING`].
+    /// `widget.shadow` is left out on purpose: see [`MAPPING`]'s rustdoc.
     #[test]
-    fn la_sombra_no_se_importa() {
+    fn the_shadow_is_not_imported() {
         assert!(!MAPPING.iter().any(|(id, ..)| *id == "widget.shadow"));
     }
 
-    /// `tokenColors` se IGNORA: norte no colorea sintaxis. Un importador que
-    /// se tragase la mitad de su entrada en silencio sería un test verde que
-    /// no prueba nada — por eso el rustdoc del módulo lo dice.
+    /// `tokenColors` is IGNORED: norte does not color syntax. An importer that
+    /// silently swallowed half its input would be a green test that
+    /// proves nothing — that is why the module's rustdoc says so.
     #[test]
-    fn token_colors_se_ignora() {
+    fn token_colors_is_ignored() {
         let src = r#"{"type":"dark","colors":{},"tokenColors":[{"scope":"comment"}]}"#;
         assert!(parse(src).is_ok());
     }
 
-    /// Lo que no es JSONC es un error, no un tema vacío.
+    /// What is not JSONC is an error, not an empty theme.
     #[test]
-    fn basura_es_error() {
-        assert!(parse("esto no es json").is_err());
+    fn garbage_is_an_error() {
+        assert!(parse("this is not json").is_err());
         assert!(parse(r##"{"colors": ["#fff"]}"##).is_err());
     }
 }

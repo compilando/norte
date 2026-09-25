@@ -1,7 +1,7 @@
-//! Envelope JSON-RPC 2.0 (ADR 0011): request/response/notification y el
-//! objeto de error. La taxonomía de [`Error`](crate::Error) viaja ÍNTEGRA en
-//! `error.data` — `code`/`message` son protocolo y presentación, jamás el
-//! contrato (los frontends hacen match por `data.kind`).
+//! JSON-RPC 2.0 envelope (ADR 0011): request/response/notification and the
+//! error object. [`Error`](crate::Error)'s taxonomy travels WHOLE in
+//! `error.data` — `code`/`message` are protocol and presentation, never the
+//! contract (frontends match by `data.kind`).
 
 use std::fmt;
 
@@ -9,9 +9,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::Error;
 
-/// La constante `jsonrpc` del envelope. Serializa a `"2.0"` y RECHAZA
-/// cualquier otro valor al deserializar (un peer que no habla 2.0 es un
-/// error de protocolo, no algo que tolerar).
+/// The envelope's `jsonrpc` constant. Serializes to `"2.0"` and REJECTS any
+/// other value on deserialization (a peer that does not speak 2.0 is a
+/// protocol error, not something to tolerate).
 ///
 /// ```
 /// use norte_proto::wire::JsonRpcVersion;
@@ -34,14 +34,14 @@ impl<'de> Deserialize<'de> for JsonRpcVersion {
             Ok(Self)
         } else {
             Err(serde::de::Error::custom(format!(
-                "jsonrpc debe ser \"2.0\", llegó {v:?}"
+                "jsonrpc must be \"2.0\", got {v:?}"
             )))
         }
     }
 }
 
-/// Id de una request. El emisor canónico escribe números (contador u64);
-/// se aceptan strings por tolerancia (JSON-RPC 2.0 los permite).
+/// Id of a request. The canonical emitter writes numbers (a `u64` counter);
+/// strings are accepted for tolerance (JSON-RPC 2.0 allows them).
 ///
 /// ```
 /// use norte_proto::wire::RequestId;
@@ -54,9 +54,9 @@ impl<'de> Deserialize<'de> for JsonRpcVersion {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(untagged)]
 pub enum RequestId {
-    /// Contador del emisor canónico.
+    /// The canonical emitter's counter.
     Num(u64),
-    /// Aceptado por tolerancia con otros clientes JSON-RPC.
+    /// Accepted for tolerance with other JSON-RPC clients.
     Str(String),
 }
 
@@ -69,7 +69,7 @@ impl fmt::Display for RequestId {
     }
 }
 
-/// Request JSON-RPC 2.0 (espera respuesta con el mismo `id`).
+/// JSON-RPC 2.0 request (expects a response with the same `id`).
 ///
 /// ```
 /// use norte_proto::wire::{JsonRpcVersion, Request, RequestId};
@@ -80,23 +80,24 @@ impl fmt::Display for RequestId {
 ///     params: None,
 /// };
 /// let wire = serde_json::to_string(&r).unwrap();
-/// assert!(wire.contains(r#""params":null"#)); // null explícito (ADR 0004)
+/// assert!(wire.contains(r#""params":null"#)); // explicit null (ADR 0004)
 /// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Request {
-    /// Siempre `"2.0"`.
+    /// Always `"2.0"`.
     pub jsonrpc: JsonRpcVersion,
-    /// Correlaciona la respuesta.
+    /// Correlates the response.
     pub id: RequestId,
-    /// Método (`initialize`, `fs.list`, `task.cancel`…).
+    /// Method (`initialize`, `fs.list`, `task.cancel`…).
     pub method: String,
-    /// Params del método (el tipo concreto vive en [`crate::methods`]).
-    /// El emisor canónico escribe `null` explícito si no hay params.
+    /// The method's params (the concrete type lives in [`crate::methods`]).
+    /// The canonical emitter writes an explicit `null` when there are no
+    /// params.
     #[serde(default)]
     pub params: Option<serde_json::Value>,
 }
 
-/// Notificación JSON-RPC 2.0 (sin `id`: nadie responde).
+/// JSON-RPC 2.0 notification (no `id`: nobody answers).
 ///
 /// ```
 /// use norte_proto::wire::{JsonRpcVersion, Notification};
@@ -109,34 +110,34 @@ pub struct Request {
 /// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Notification {
-    /// Siempre `"2.0"`.
+    /// Always `"2.0"`.
     pub jsonrpc: JsonRpcVersion,
-    /// Método de la notificación (`task.progress`…).
+    /// The notification's method (`task.progress`…).
     pub method: String,
-    /// Payload (tipo concreto en [`crate::methods`]).
+    /// Payload (concrete type in [`crate::methods`]).
     #[serde(default)]
     pub params: Option<serde_json::Value>,
 }
 
-/// Response JSON-RPC 2.0: `result` XOR `error` (validado por
-/// [`Response::outcome`], no por el tipo — tolerancia de deserialización).
+/// JSON-RPC 2.0 response: `result` XOR `error` (validated by
+/// [`Response::outcome`], not by the type — deserialization tolerance).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Response {
-    /// Siempre `"2.0"`.
+    /// Always `"2.0"`.
     pub jsonrpc: JsonRpcVersion,
-    /// El id de la request respondida; `None` (= `null` en el wire) cuando
-    /// no pudo conocerse (error de parse, spec JSON-RPC).
+    /// The id of the request being answered; `None` (= `null` on the wire)
+    /// when it could not be known (a parse error, JSON-RPC spec).
     pub id: Option<RequestId>,
-    /// Resultado, si la request tuvo éxito.
+    /// Result, if the request succeeded.
     #[serde(default)]
     pub result: Option<serde_json::Value>,
-    /// Error, si falló.
+    /// Error, if it failed.
     #[serde(default)]
     pub error: Option<RpcError>,
 }
 
 impl Response {
-    /// Respuesta de éxito.
+    /// Success response.
     ///
     /// ```
     /// use norte_proto::wire::{RequestId, Response};
@@ -153,7 +154,7 @@ impl Response {
         }
     }
 
-    /// Respuesta de error.
+    /// Error response.
     ///
     /// ```
     /// use norte_proto::wire::{Response, RpcError, codes};
@@ -170,42 +171,42 @@ impl Response {
         }
     }
 
-    /// `result` XOR `error`, validado: ambos presentes o ninguno es una
-    /// violación de JSON-RPC y se trata como error de protocolo.
+    /// `result` XOR `error`, validated: both present or neither is a
+    /// violation of JSON-RPC and is treated as a protocol error.
     ///
     /// # Errors
-    /// [`RpcError`] con [`codes::INVALID_REQUEST`] si la respuesta está
-    /// malformada; el error del peer tal cual si lo hay.
+    /// [`RpcError`] with [`codes::INVALID_REQUEST`] if the response is
+    /// malformed; the peer's own error as is if there is one.
     pub fn outcome(&self) -> Result<&serde_json::Value, RpcError> {
         match (&self.result, &self.error) {
             (Some(r), None) => Ok(r),
             (None, Some(e)) => Err(e.clone()),
             _ => Err(RpcError::protocol(
                 codes::INVALID_REQUEST,
-                "response necesita exactamente uno de result/error",
+                "response needs exactly one of result/error",
             )),
         }
     }
 }
 
-/// Objeto de error JSON-RPC. La taxonomía completa viaja en `data`
-/// (ADR 0011): `code` distingue protocolo de aplicación, `message` es
-/// `Display` del error (inglés estable) — JAMÁS se parsea.
+/// JSON-RPC error object. The full taxonomy travels in `data` (ADR 0011):
+/// `code` distinguishes protocol from application, `message` is the error's
+/// `Display` (stable English) — NEVER parsed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
 #[error("rpc error {code}: {message}")]
 pub struct RpcError {
-    /// Código JSON-RPC (ver [`codes`]).
+    /// JSON-RPC code (see [`codes`]).
     pub code: i64,
-    /// Detalle humano; presentación, nunca contrato.
+    /// Human detail; presentation, never contract.
     pub message: String,
-    /// La taxonomía de la spec §17.7 — el contrato real para frontends.
-    /// `None` en errores DE PROTOCOLO (parse, método desconocido…).
+    /// The taxonomy from spec §17.7 — the real contract for frontends.
+    /// `None` on PROTOCOL errors (parse, unknown method…).
     #[serde(default)]
     pub data: Option<Error>,
 }
 
 impl RpcError {
-    /// Error de protocolo (sin taxonomía: no hay operación de FS detrás).
+    /// Protocol error (no taxonomy: there is no FS operation behind it).
     ///
     /// ```
     /// use norte_proto::wire::{RpcError, codes};
@@ -223,8 +224,8 @@ impl RpcError {
 }
 
 impl From<Error> for RpcError {
-    /// Error de APLICACIÓN: código único [`codes::APP_ERROR`] y la
-    /// taxonomía íntegra en `data`.
+    /// APPLICATION error: a single [`codes::APP_ERROR`] code and the whole
+    /// taxonomy in `data`.
     fn from(e: Error) -> Self {
         Self {
             code: codes::APP_ERROR,
@@ -234,59 +235,60 @@ impl From<Error> for RpcError {
     }
 }
 
-/// Códigos JSON-RPC (ADR 0011): estándar para protocolo, `-32000` único
-/// para aplicación (la categoría viaja en `data`, no en el código).
+/// JSON-RPC codes (ADR 0011): standard for protocol, a single `-32000` for
+/// application (the category travels in `data`, not in the code).
 pub mod codes {
-    /// JSON inválido en el frame.
+    /// Invalid JSON in the frame.
     pub const PARSE_ERROR: i64 = -32700;
-    /// Envelope malformado (no es request/notification válida).
+    /// Malformed envelope (not a valid request/notification).
     pub const INVALID_REQUEST: i64 = -32600;
-    /// Método desconocido.
+    /// Unknown method.
     pub const METHOD_NOT_FOUND: i64 = -32601;
-    /// Params que no deserializan al tipo del método.
+    /// Params that do not deserialize into the method's type.
     pub const INVALID_PARAMS: i64 = -32602;
-    /// Error interno del servidor RPC (no confundir con
-    /// [`Error::Internal`](crate::Error::Internal), que viaja como app).
+    /// Internal error of the RPC server (not to be confused with
+    /// [`Error::Internal`](crate::Error::Internal), which travels as an app
+    /// error).
     pub const INTERNAL_ERROR: i64 = -32603;
-    /// Error de APLICACIÓN: la taxonomía completa está en `data`.
+    /// APPLICATION error: the full taxonomy is in `data`.
     pub const APP_ERROR: i64 = -32000;
-    /// `initialize` rechazado por versión de protocolo incompatible — LA
-    /// señal que un cliente debe distinguir programáticamente (upgrade
-    /// dance, ADR 0011). Jamás se detecta parseando `message`.
+    /// `initialize` rejected for an incompatible protocol version — THE
+    /// signal a client must distinguish programmatically (the upgrade dance,
+    /// ADR 0011). Never detected by parsing `message`.
     pub const VERSION_MISMATCH: i64 = -32001;
-    /// Se llamó a un método antes de `initialize` (ADR 0011).
+    /// A method was called before `initialize` (ADR 0011).
     pub const NOT_INITIALIZED: i64 = -32002;
-    /// El server rechaza trabajo nuevo por límite de recursos (tasks o
-    /// conexiones): reintentable más tarde.
+    /// The server rejects new work due to a resource limit (tasks or
+    /// connections): retryable later.
     pub const OVERLOADED: i64 = -32003;
 }
 
-/// Clase estructural de un mensaje entrante, decidida por PRESENCIA de
-/// claves sobre el `Value` ya parseado — para servidores: permite
-/// distinguir "JSON roto" (-32700) de "envelope inválido" (-32600) y
-/// evita que una request con `id` de tipo ilegal se pierda en silencio
-/// como notification (JSON-RPC exige responder).
+/// Structural class of an incoming message, decided by key PRESENCE on the
+/// already-parsed `Value` — for servers: it lets "broken JSON" (-32700) be
+/// told apart from "invalid envelope" (-32600) and keeps a request with an
+/// illegal-typed `id` from silently being lost as a notification (JSON-RPC
+/// requires answering).
 ///
 /// ```
 /// use norte_proto::wire::{classify, MessageKind};
 /// let v: serde_json::Value = serde_json::json!({"jsonrpc":"2.0","id":-1,"method":"m"});
-/// assert_eq!(classify(&v), MessageKind::Request); // id ilegal ≠ notification
+/// assert_eq!(classify(&v), MessageKind::Request); // an illegal id ≠ notification
 /// assert_eq!(classify(&serde_json::json!({"foo":1})), MessageKind::Invalid);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MessageKind {
-    /// Tiene `method` e `id`: espera respuesta (aunque el `id` luego no
-    /// parsee — eso es `INVALID_REQUEST`, no silencio).
+    /// Has `method` and `id`: expects a response (even if the `id` later
+    /// fails to parse — that is `INVALID_REQUEST`, not silence).
     Request,
-    /// Tiene `method` sin `id`.
+    /// Has `method` without `id`.
     Notification,
-    /// Sin `method` pero con `id`/`result`/`error`.
+    /// No `method` but has `id`/`result`/`error`.
     Response,
-    /// Nada de lo anterior: envelope inválido.
+    /// None of the above: invalid envelope.
     Invalid,
 }
 
-/// Ver [`MessageKind`].
+/// See [`MessageKind`].
 #[must_use]
 pub fn classify(v: &serde_json::Value) -> MessageKind {
     let Some(obj) = v.as_object() else {
@@ -306,10 +308,10 @@ pub fn classify(v: &serde_json::Value) -> MessageKind {
     }
 }
 
-/// Un mensaje entrante, clasificado estructuralmente: `method`+`id` =
-/// request; `method` sin `id` = notification; sin `method` = response.
-/// El ORDEN de las variantes es el orden de prueba de `untagged` y es
-/// significativo (una request también encajaría como notification).
+/// An incoming message, classified structurally: `method`+`id` = request;
+/// `method` without `id` = notification; no `method` = response. The ORDER of
+/// the variants is `untagged`'s trial order and is significant (a request
+/// would also fit as a notification).
 ///
 /// ```
 /// use norte_proto::wire::Message;
@@ -329,10 +331,10 @@ pub fn classify(v: &serde_json::Value) -> MessageKind {
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(untagged)]
 pub enum Message {
-    /// Espera respuesta.
+    /// Expects a response.
     Request(Request),
-    /// No espera respuesta.
+    /// Does not expect a response.
     Notification(Notification),
-    /// Respuesta a una request nuestra.
+    /// Response to one of our requests.
     Response(Response),
 }

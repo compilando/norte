@@ -1,156 +1,157 @@
-//! El selector de PERFILES: qué filas hay y qué se dice de cada una.
+//! The PROFILES picker: which rows there are and what is said about each.
 //!
-//! Hermano de [`crate::layout_picker`] a propósito, y con su misma disciplina:
-//! vive aquí y no en un frontend por la regla 7, las filas llegan YA LEÍDAS
-//! porque leer al pasar el cursor sería I/O en el bucle de eventos (#244), y
-//! una fila que no se puede usar se ENSEÑA con su motivo en vez de
-//! desaparecer — esconder un directorio que el lector creó es peor que
-//! enseñarlo roto.
+//! Sibling of [`crate::layout_picker`] on purpose, and with its same
+//! discipline: it lives here and not in a frontend because of rule 7, the
+//! rows arrive ALREADY READ because reading as the cursor passes over would
+//! be I/O in the event loop (#244), and a row that cannot be used is SHOWN
+//! with its reason instead of disappearing — hiding a directory the reader
+//! created is worse than showing it broken.
 //!
-//! Lo que este selector añade sobre aquél son dos avisos que la spec pide por
-//! su nombre (`docs/superpowers/specs/2026-08-26-config-profiles-design.md`):
-//! un perfil cuyo nombre no es UTF-8 no puede llevar estado (D4), y un nombre
-//! que coincide con el de una disposición o un preset de teclado es una
-//! trampa si no se dice.
+//! What this picker adds over that one are two warnings the spec asks for by
+//! name (`docs/superpowers/specs/2026-08-26-config-profiles-design.md`): a
+//! profile whose name is not UTF-8 cannot carry state (D4), and a name that
+//! matches a layout's or a keyboard preset's is a trap if it goes unsaid.
 
 use std::ffi::{OsStr, OsString};
 
-/// Un perfil del disco, ya leído.
+/// A profile from disk, already read.
 ///
-/// El `title` y el `problem` los resuelve quien tiene el disco delante: este
-/// crate no abre directorios.
+/// `title` and `problem` are resolved by whoever has the disk in front of
+/// them: this crate does not open directories.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UserProfile {
-    /// El nombre del directorio, con sus bytes (rule 1, D4).
+    /// The directory's name, with its raw bytes (rule 1, D4).
     pub name: OsString,
-    /// Su `[profile] title`, si lo declara.
+    /// Its `[profile] title`, if it declares one.
     pub title: Option<String>,
-    /// Por qué no se pudo leer su `norte.toml`, cuando no se pudo.
+    /// Why its `norte.toml` could not be read, when it could not.
     pub problem: Option<String>,
 }
 
-/// Qué otra cosa de norte se llama igual que un perfil.
+/// What else in norte is named the same as a profile.
 ///
-/// Se AVISA por lo mismo que lo avisa el selector de disposiciones: son
-/// ajustes distintos que comparten nombre, y sin la línea la coincidencia es
-/// una trampa en vez de una comodidad. Elegir el perfil `far` no ata ni una
-/// tecla del preset `far`.
+/// It is WARNED about for the same reason the layout picker warns about it:
+/// they are different settings that share a name, and without the line the
+/// coincidence is a trap instead of a convenience. Choosing the `far` profile
+/// does not bind a single key of the `far` preset.
 ///
-/// Un enum y no dos `bool` porque es UNA pregunta —«¿este nombre significa
-/// otra cosa en algún sitio?»— y quien pinta tiene que decir cuál, no dos.
+/// An enum and not two `bool`s because it is ONE question —"does this name
+/// mean something else somewhere?"— and whoever paints it has to say which,
+/// not two.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum NameClash {
-    /// Solo es un perfil.
+    /// It is only a profile.
     #[default]
     None,
-    /// También hay una disposición de fábrica así.
+    /// There is also a built-in layout by that name.
     Layout,
-    /// También hay un preset de teclado así.
+    /// There is also a keyboard preset by that name.
     Keymap,
-    /// Las dos cosas.
+    /// Both things.
     Both,
 }
 
-/// Una fila del selector.
+/// One row of the picker.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Row {
-    /// El nombre con el que se activa. La IDENTIDAD del perfil.
+    /// The name it activates under. The profile's IDENTITY.
     ///
-    /// [`OsString`] y no `String`: es un nombre de DIRECTORIO y acaba en
-    /// `profiles/<nombre>/`, así que pasarlo por texto cambia cuál se abre
-    /// (#245, #246).
+    /// [`OsString`] and not `String`: it is a DIRECTORY name and ends up as
+    /// `profiles/<name>/`, so passing it through text changes which one gets
+    /// opened (#245, #246).
     pub name: OsString,
-    /// Su `[profile] title`, para enseñar al lado del nombre. Nunca EN VEZ
-    /// del nombre: dos perfiles pueden compartir título y seguir siendo dos.
+    /// Its `[profile] title`, to show next to the name. Never INSTEAD OF the
+    /// name: two profiles can share a title and still be two.
     pub title: Option<String>,
-    /// Si es el perfil activo ahora mismo.
+    /// Whether it is the currently active profile.
     ///
-    /// Sin esto el selector es una lista de nombres en la que no se sabe
-    /// dónde estás.
+    /// Without this the picker is a list of names where you cannot tell
+    /// where you are.
     pub active: bool,
-    /// Qué OTRA cosa se llama igual que este perfil.
+    /// What OTHER thing is named the same as this profile.
     pub clash: NameClash,
-    /// Si este perfil puede guardar dónde dejaste cada panel.
+    /// Whether this profile can save where you left each panel.
     ///
-    /// `false` cuando su nombre no es UTF-8: la clave de las disposiciones
-    /// guardadas es un objeto JSON, así que un nombre así vale para
-    /// configuración y no puede llevar estado ni ser pegajoso (D4). Se dice
-    /// ANTES de elegirlo, no después de perderlo.
+    /// `false` when its name is not UTF-8: the key for saved layouts is a
+    /// JSON object, so a name like that is good for configuration and cannot
+    /// carry state or be sticky (D4). It is said BEFORE choosing it, not
+    /// after losing it.
     pub carries_state: bool,
-    /// Por qué esta fila no se puede cargar, cuando no se puede.
+    /// Why this row cannot be loaded, when it cannot.
     pub problem: Option<String>,
 }
 
-/// El selector de perfiles.
+/// The profiles picker.
 #[derive(Debug)]
 pub struct ProfilePicker {
     rows: Vec<Row>,
     cursor: usize,
 }
 
-/// El perfil que sigue (o precede) al activo, girando por el final.
+/// The profile that follows (or precedes) the active one, wrapping at the
+/// end.
 ///
-/// `None` cuando no hay a dónde ir: ni perfiles, o solo el que ya está activo
-/// — girar sobre uno solo es un cambio que no cambia nada, y hacerlo pasar por
-/// la secuencia entera tiraría y recargaría la pantalla para dejarla igual.
+/// `None` when there is nowhere to go: no profiles, or only the one that is
+/// already active — cycling over a single one is a change that changes
+/// nothing, and running it through the whole sequence would tear down and
+/// reload the screen to leave it the same.
 ///
-/// Sin perfil activo, `next` es el primero y `prev` el último: entrar por
-/// cualquiera de los dos extremos es lo que espera quien todavía no ha elegido
-/// ninguno.
+/// With no active profile, `next` is the first one and `prev` the last:
+/// entering from either end is what whoever has not chosen one yet expects.
 ///
-/// Compartido a propósito: `profile.next` tiene que significar lo mismo en la
-/// ventana y en el terminal, y dos copias de un giro con módulo son dos
-/// órdenes distintas esperando a divergir (ADR 0077).
+/// Shared on purpose: `profile.next` has to mean the same thing in the
+/// window and in the terminal, and two copies of a modulo cycle are two
+/// different orders waiting to diverge (ADR 0077).
 #[must_use]
 pub fn next_profile(
-    perfiles: &[UserProfile],
-    activo: Option<&OsStr>,
-    hacia_delante: bool,
+    profiles: &[UserProfile],
+    active: Option<&OsStr>,
+    forward: bool,
 ) -> Option<OsString> {
-    if perfiles.is_empty() {
+    if profiles.is_empty() {
         return None;
     }
-    let Some(activo) = activo else {
-        let i = if hacia_delante { 0 } else { perfiles.len() - 1 };
-        return Some(perfiles[i].name.clone());
+    let Some(active) = active else {
+        let i = if forward { 0 } else { profiles.len() - 1 };
+        return Some(profiles[i].name.clone());
     };
-    let actual = perfiles.iter().position(|p| p.name == activo)?;
-    if perfiles.len() == 1 {
+    let current = profiles.iter().position(|p| p.name == active)?;
+    if profiles.len() == 1 {
         return None;
     }
-    let n = perfiles.len();
-    let i = if hacia_delante {
-        (actual + 1) % n
+    let n = profiles.len();
+    let i = if forward {
+        (current + 1) % n
     } else {
-        (actual + n - 1) % n
+        (current + n - 1) % n
     };
-    Some(perfiles[i].name.clone())
+    Some(profiles[i].name.clone())
 }
 
 impl ProfilePicker {
-    /// Abre el selector con los perfiles que se le pasen, ya leídos, y el
-    /// nombre del que está activo.
+    /// Opens the picker with the profiles it is given, already read, and the
+    /// name of the one that is active.
     ///
-    /// No hay perfiles «de fábrica»: a diferencia de las disposiciones, un
-    /// perfil es siempre un directorio que el lector creó. Una lista vacía es
-    /// una lista vacía, y quien pinta lo dice.
+    /// There are no "built-in" profiles: unlike layouts, a profile is always
+    /// a directory the reader created. An empty list is an empty list, and
+    /// whoever paints it says so.
     #[must_use]
     pub fn open(profiles: Vec<UserProfile>, active: Option<&OsStr>) -> Self {
         let rows = profiles
             .into_iter()
             .map(|p| {
-                let texto = p.name.to_str();
-                let como_layout = texto.is_some_and(|n| crate::layout::presets::NAMES.contains(&n));
-                let como_keymap = texto.is_some_and(|n| crate::keymap::presets::NAMES.contains(&n));
+                let text = p.name.to_str();
+                let as_layout = text.is_some_and(|n| crate::layout::presets::NAMES.contains(&n));
+                let as_keymap = text.is_some_and(|n| crate::keymap::presets::NAMES.contains(&n));
                 Row {
                     active: active == Some(p.name.as_os_str()),
-                    clash: match (como_layout, como_keymap) {
+                    clash: match (as_layout, as_keymap) {
                         (true, true) => NameClash::Both,
                         (true, false) => NameClash::Layout,
                         (false, true) => NameClash::Keymap,
                         (false, false) => NameClash::None,
                     },
-                    carries_state: texto.is_some(),
+                    carries_state: text.is_some(),
                     name: p.name,
                     title: p.title,
                     problem: p.problem,
@@ -160,35 +161,35 @@ impl ProfilePicker {
         Self { rows, cursor: 0 }
     }
 
-    /// Las filas, en orden.
+    /// The rows, in order.
     #[must_use]
     pub fn rows(&self) -> &[Row] {
         &self.rows
     }
 
-    /// Dónde está el cursor, acotado a las filas que hay.
+    /// Where the cursor is, clamped to the rows there are.
     #[must_use]
     pub fn cursor(&self) -> usize {
         self.cursor.min(self.rows.len().saturating_sub(1))
     }
 
-    /// Sube.
+    /// Moves up.
     pub const fn up(&mut self) {
         self.cursor = self.cursor.saturating_sub(1);
     }
 
-    /// Baja.
+    /// Moves down.
     pub fn down(&mut self) {
         self.cursor = (self.cursor + 1).min(self.rows.len().saturating_sub(1));
     }
 
-    /// El nombre de la fila resaltada.
+    /// The name of the highlighted row.
     #[must_use]
     pub fn chosen(&self) -> Option<&OsStr> {
         self.rows.get(self.cursor()).map(|r| r.name.as_os_str())
     }
 
-    /// La fila resaltada entera.
+    /// The whole highlighted row.
     #[must_use]
     pub fn current(&self) -> Option<&Row> {
         self.rows.get(self.cursor())
@@ -199,7 +200,7 @@ impl ProfilePicker {
 mod tests {
     use super::*;
 
-    fn perfil(name: &str) -> UserProfile {
+    fn profile(name: &str) -> UserProfile {
         UserProfile {
             name: OsString::from(name),
             title: None,
@@ -207,38 +208,40 @@ mod tests {
         }
     }
 
-    fn perfiles(nombres: &[&str]) -> Vec<UserProfile> {
-        nombres.iter().map(|n| perfil(n)).collect()
+    fn profiles(names: &[&str]) -> Vec<UserProfile> {
+        names.iter().map(|n| profile(n)).collect()
     }
 
     #[test]
-    fn gira_por_el_final_en_los_dos_sentidos() {
-        let p = perfiles(&["a", "b", "c"]);
+    fn it_wraps_at_the_end_in_both_directions() {
+        let p = profiles(&["a", "b", "c"]);
         assert_eq!(
             next_profile(&p, Some(OsStr::new("c")), true).as_deref(),
             Some(OsStr::new("a")),
-            "del último al primero"
+            "from the last one to the first"
         );
         assert_eq!(
             next_profile(&p, Some(OsStr::new("a")), false).as_deref(),
             Some(OsStr::new("c")),
-            "y del primero al último"
+            "and from the first one to the last"
         );
     }
 
-    /// Girar sobre UN solo perfil no es un cambio: hacerlo pasar por la
-    /// secuencia entera tiraría y recargaría la pantalla para dejarla igual.
+    /// Cycling over a SINGLE profile is not a change: running it through the
+    /// whole sequence would tear down and reload the screen to leave it the
+    /// same.
     #[test]
-    fn con_un_solo_perfil_activo_no_hay_a_donde_ir() {
-        let p = perfiles(&["a"]);
+    fn with_a_single_active_profile_there_is_nowhere_to_go() {
+        let p = profiles(&["a"]);
         assert_eq!(next_profile(&p, Some(OsStr::new("a")), true), None);
         assert_eq!(next_profile(&p, Some(OsStr::new("a")), false), None);
     }
 
-    /// Sin perfil activo se entra por el extremo que corresponda al sentido.
+    /// With no active profile, entry is from whichever end matches the
+    /// direction.
     #[test]
-    fn sin_activo_se_entra_por_un_extremo() {
-        let p = perfiles(&["a", "b", "c"]);
+    fn with_none_active_it_enters_from_one_end() {
+        let p = profiles(&["a", "b", "c"]);
         assert_eq!(
             next_profile(&p, None, true).as_deref(),
             Some(OsStr::new("a"))
@@ -249,115 +252,119 @@ mod tests {
         );
     }
 
-    /// Un activo que ya no está en la lista —lo borraron con el programa
-    /// abierto— no elige ninguno a ciegas: girar desde un sitio que no existe
-    /// no tiene respuesta buena, y saltar al primero movería al lector a un
-    /// perfil que no pidió.
+    /// An active one that is no longer in the list —deleted while the
+    /// program was open— does not choose blindly: cycling from a place that
+    /// does not exist has no good answer, and jumping to the first one would
+    /// move the reader to a profile they did not ask for.
     #[test]
-    fn un_activo_que_ya_no_existe_no_elige_a_ciegas() {
-        let p = perfiles(&["a", "b"]);
-        assert_eq!(next_profile(&p, Some(OsStr::new("fantasma")), true), None);
+    fn an_active_one_that_no_longer_exists_does_not_choose_blindly() {
+        let p = profiles(&["a", "b"]);
+        assert_eq!(next_profile(&p, Some(OsStr::new("ghost")), true), None);
     }
 
     #[test]
-    fn sin_perfiles_no_hay_nada() {
+    fn with_no_profiles_there_is_nothing() {
         assert_eq!(next_profile(&[], None, true), None);
     }
 
-    /// La fila del perfil ACTIVO se marca. Sin eso, el selector es una lista
-    /// de nombres en la que no se sabe dónde estás.
+    /// The ACTIVE profile's row is marked. Without that, the picker is a
+    /// list of names where you cannot tell where you are.
     #[test]
-    fn el_activo_se_marca() {
+    fn the_active_one_is_marked() {
         let p = ProfilePicker::open(
-            vec![perfil("work"), perfil("photos")],
+            vec![profile("work"), profile("photos")],
             Some(OsStr::new("photos")),
         );
         assert!(!p.rows()[0].active);
-        assert!(p.rows()[1].active, "photos es el activo");
+        assert!(p.rows()[1].active, "photos is the active one");
     }
 
-    /// Sin perfil activo no se marca ninguna: «ninguno» es un estado legítimo
-    /// y no se disfraza de la primera fila.
+    /// With no active profile none is marked: "none" is a legitimate state
+    /// and does not disguise itself as the first row.
     #[test]
-    fn sin_activo_no_se_marca_ninguna() {
-        let p = ProfilePicker::open(vec![perfil("work")], None);
+    fn with_none_active_none_is_marked() {
+        let p = ProfilePicker::open(vec![profile("work")], None);
         assert!(p.rows().iter().all(|r| !r.active));
     }
 
-    /// D4: un nombre que no es UTF-8 vale para configuración y NO puede llevar
-    /// estado, ni siquiera pegajoso. La fila lo dice ANTES de elegirlo, no
-    /// después de perderlo. Y los bytes viajan intactos.
+    /// D4: a name that is not UTF-8 is good for configuration and CANNOT
+    /// carry state, not even sticky state. The row says so BEFORE it is
+    /// chosen, not after it is lost. And the bytes travel intact.
     #[test]
     #[cfg(unix)]
-    fn un_nombre_no_utf8_se_lista_y_avisa_de_que_no_guarda_estado() {
+    fn a_non_utf8_name_is_listed_and_warns_it_carries_no_state() {
         use std::os::unix::ffi::OsStringExt;
 
-        let hostil = OsString::from_vec(vec![b'w', 0xFF, b'k']);
+        let hostile = OsString::from_vec(vec![b'w', 0xFF, b'k']);
         let p = ProfilePicker::open(
             vec![UserProfile {
-                name: hostil.clone(),
+                name: hostile.clone(),
                 title: None,
                 problem: None,
             }],
             None,
         );
-        let fila = &p.rows()[0];
-        assert_eq!(fila.name, hostil, "los bytes intactos");
-        assert!(!fila.carries_state);
-        assert_eq!(p.chosen(), Some(hostil.as_os_str()));
+        let row = &p.rows()[0];
+        assert_eq!(row.name, hostile, "the bytes stay intact");
+        assert!(!row.carries_state);
+        assert_eq!(p.chosen(), Some(hostile.as_os_str()));
     }
 
-    /// Un perfil que no parsea SE LISTA, con su motivo: esconder un directorio
-    /// que el lector creó es peor que enseñarlo roto, y es lo que hace el
-    /// selector de disposiciones con un layout ilegible.
+    /// A profile that does not parse IS LISTED, with its reason: hiding a
+    /// directory the reader created is worse than showing it broken, and
+    /// that is what the layout picker does with an unreadable layout.
     #[test]
-    fn un_perfil_roto_se_lista_con_su_motivo() {
+    fn a_broken_profile_is_listed_with_its_reason() {
         let p = ProfilePicker::open(
             vec![UserProfile {
                 name: OsString::from("work"),
                 title: None,
-                problem: Some("línea 3: unknown field `them`".to_owned()),
+                problem: Some("line 3: unknown field `them`".to_owned()),
             }],
             None,
         );
-        assert_eq!(p.rows().len(), 1, "la fila no desaparece");
+        assert_eq!(p.rows().len(), 1, "the row does not disappear");
         assert!(p.rows()[0].problem.is_some());
     }
 
-    /// Compartir nombre con una disposición o con un preset de teclado se
-    /// AVISA: son tres ajustes distintos, y la coincidencia es una trampa si
-    /// no se dice.
+    /// Sharing a name with a layout or a keyboard preset is WARNED about:
+    /// they are three different settings, and the coincidence is a trap if
+    /// it goes unsaid.
     #[test]
-    fn una_coincidencia_de_nombre_se_avisa() {
-        let p = ProfilePicker::open(vec![perfil("orthodox"), perfil("far"), perfil("mío")], None);
+    fn a_name_clash_is_warned_about() {
+        let p = ProfilePicker::open(
+            vec![profile("orthodox"), profile("far"), profile("mine")],
+            None,
+        );
         assert_eq!(
             p.rows()[0].clash,
             NameClash::Both,
-            "orthodox es las dos cosas"
+            "orthodox is both things"
         );
         assert_eq!(
             p.rows()[1].clash,
             NameClash::Keymap,
-            "far es un preset de teclado y no una disposición"
+            "far is a keyboard preset and not a layout"
         );
         assert_eq!(p.rows()[2].clash, NameClash::None);
     }
 
-    /// El cursor se acota a las filas que hay, y una lista vacía no panica.
+    /// The cursor is clamped to the rows there are, and an empty list does
+    /// not panic.
     #[test]
-    fn el_cursor_se_acota() {
-        let mut p = ProfilePicker::open(vec![perfil("a"), perfil("b")], None);
+    fn the_cursor_is_clamped() {
+        let mut p = ProfilePicker::open(vec![profile("a"), profile("b")], None);
         p.down();
         p.down();
         p.down();
-        assert_eq!(p.cursor(), 1, "no se sale por abajo");
+        assert_eq!(p.cursor(), 1, "it does not run off the bottom");
         p.up();
         p.up();
-        assert_eq!(p.cursor(), 0, "ni por arriba");
+        assert_eq!(p.cursor(), 0, "nor the top");
 
-        let vacio = ProfilePicker::open(Vec::new(), None);
-        assert_eq!(vacio.cursor(), 0);
-        assert_eq!(vacio.chosen(), None);
-        assert!(vacio.current().is_none());
+        let empty = ProfilePicker::open(Vec::new(), None);
+        assert_eq!(empty.cursor(), 0);
+        assert_eq!(empty.chosen(), None);
+        assert!(empty.current().is_none());
     }
 }

@@ -1,5 +1,5 @@
-// Los ayudantes de DOM del renderer, compartidos por `render.ts` y por los
-// pintores de `render/*` (ola W10: el fichero único de 4.400 líneas).
+// The renderer's DOM helpers, shared by `render.ts` and by the `render/*`
+// painters (wave W10: the single 4,400-line file).
 
 import type {
   CompareRowView,
@@ -13,44 +13,45 @@ import type {
 } from "../types";
 
 /**
- * Desplaza lo justo para que `el` se vea, si el entorno sabe hacerlo.
+ * Scrolls just enough for `el` to be visible, if the environment knows how.
  *
- * `scrollIntoView` no existe en jsdom, donde corren los tests del renderer:
- * sin la guarda, comprobar el pintado de una lista tumbaba el test en una
- * llamada que no es del pintado.
+ * `scrollIntoView` does not exist in jsdom, where the renderer's tests run:
+ * without the guard, checking a list's paint brought down a test over a call
+ * that has nothing to do with painting.
  */
-export function revelar(el: Element | undefined): void {
+export function revealInView(el: Element | undefined): void {
   if (el instanceof HTMLElement && typeof el.scrollIntoView === "function") {
     el.scrollIntoView({ block: "nearest" });
   }
 }
 
-/** Un párrafo con una frase que el host ya escribió. */
-export function nota(texto: string): HTMLElement {
+/** A paragraph with a sentence the host already wrote. */
+export function note(text: string): HTMLElement {
   const p = document.createElement("p");
   p.className = "slot-note";
-  p.textContent = texto;
+  p.textContent = text;
   return p;
 }
 
 /**
- * Una barra de scroll del visor, o `null` si cabe todo.
+ * A viewer scrollbar, or `null` if everything fits.
  *
- * PROPIA y no la del navegador: el host manda solo la ventana visible, así que
- * el `pre` mide exactamente lo que se ve y `overflow` no tiene nada que
- * desplazar. Sin barra, el visor decía «hay más» solo en la cuenta de la
- * cabecera, y a lo ancho no lo decía nada — y el visor no envuelve, así que un
- * fichero cortado por la derecha se lee como un fichero corto.
+ * OUR OWN and not the browser's: the host only sends the visible window, so
+ * the `pre` measures exactly what is shown and `overflow` has nothing to
+ * scroll. Without a bar, the viewer only said "there's more" in the header's
+ * count, and sideways it said nothing at all — and the viewer does not wrap,
+ * so a file cut off on the right reads as a short file.
  *
- * No se arrastra: es un INDICADOR. Arrastrarla pediría traducir píxeles a
- * líneas del lado del renderer, que es justo lo que el host hace ya para la
- * rueda. Por eso va `aria-hidden` y NO `role="scrollbar"`: ese rol promete un
- * control que no existe y exige un `aria-controls` que no hay. Quien no la ve
- * lee la posición en las marcas de la cabecera, que la dicen con palabras.
+ * It does not drag: it is an INDICATOR. Dragging it would require
+ * translating pixels to lines on the renderer's side, which is exactly what
+ * the host already does for the wheel. That is why it is `aria-hidden` and
+ * NOT `role="scrollbar"`: that role promises a control that does not exist
+ * and requires an `aria-controls` that is not there. Whoever cannot see it
+ * reads the position in the header's marks, which say it in words.
  *
- * `visible === 0` es la medida de ANTES de pintar —el cuerpo aún no tiene
- * altura— y entonces no se dibuja nada: con `Math.max(1, 0)` salía un pulgar
- * de un píxel durante un frame.
+ * `visible === 0` is the measurement from BEFORE painting — the body does
+ * not have a height yet — and then nothing is drawn: with `Math.max(1, 0)` a
+ * one-pixel thumb used to show up for one frame.
  */
 export function viewerBar(
   vertical: boolean,
@@ -66,30 +67,30 @@ export function viewerBar(
   bar.setAttribute("aria-hidden", "true");
   const thumb = document.createElement("div");
   thumb.className = "viewer-thumb";
-  const largo = visible / total;
-  const donde = Math.min(1, Math.max(0, first / (total - visible)));
+  const length = visible / total;
+  const where = Math.min(1, Math.max(0, first / (total - visible)));
   const pct = (x: number): string => `${(x * 100).toFixed(2)}%`;
   if (vertical) {
-    thumb.style.height = pct(largo);
-    thumb.style.top = pct((1 - largo) * donde);
+    thumb.style.height = pct(length);
+    thumb.style.top = pct((1 - length) * where);
   } else {
-    thumb.style.width = pct(largo);
-    thumb.style.left = pct((1 - largo) * donde);
+    thumb.style.width = pct(length);
+    thumb.style.left = pct((1 - length) * where);
   }
   bar.append(thumb);
   return bar;
 }
 
 /**
- * El cuerpo de un visor: las líneas, o los fragmentos con estilo si un
- * plugin los puso. Lo comparten el visor a pantalla completa y el acoplado
- * (#291): es el mismo visor en otro sitio, y dos cuerpos divergen.
+ * A viewer's body: the lines, or the styled fragments if a plugin put them
+ * there. Shared by the full-screen viewer and the docked one (#291): it is
+ * the same viewer elsewhere, and two bodies drift apart.
  *
- * Siempre `textContent`: el texto lo escribió un plugin. El rol va en
- * `data-role`, que la hoja de estilos mapea a las variables del tema, y el
- * color propio solo cuando no hay rol — el tema del lector manda sobre la
- * paleta fija del plugin. El fondo no tiene rol que lo mande: un medio
- * bloque sin fondo es media imagen (puente 50).
+ * Always `textContent`: the text was written by a plugin. The role goes in
+ * `data-role`, which the stylesheet maps to the theme's variables, and its
+ * own color only when there is no role — the reader's theme rules over the
+ * plugin's fixed palette. The background has no role to set it: half a block
+ * with no background is half an image (bridge 50).
  */
 export function viewerBody(viewer: ViewerView): HTMLElement {
   const body = document.createElement("pre");
@@ -98,10 +99,10 @@ export function viewerBody(viewer: ViewerView): HTMLElement {
     body.textContent = viewer.lines.join("\n");
     return body;
   }
-  for (const linea of viewer.styled) {
-    const fila = document.createElement("div");
-    fila.className = "viewer-line";
-    for (const s of linea) {
+  for (const line of viewer.styled) {
+    const row = document.createElement("div");
+    row.className = "viewer-line";
+    for (const s of line) {
       const el = document.createElement("span");
       el.className = "viewer-span";
       el.textContent = s.text;
@@ -113,50 +114,49 @@ export function viewerBody(viewer: ViewerView): HTMLElement {
       if (s.bg !== null) {
         el.style.backgroundColor = s.bg;
       }
-      fila.append(el);
+      row.append(el);
     }
-    body.append(fila);
+    body.append(row);
   }
   return body;
 }
 
 /**
- * Filas de más que se piden por arriba y por abajo del hueco visible.
+ * Extra rows requested above and below the visible slot.
  *
- * El scroll lo mueve el motor en el acto y las filas nuevas llegan del host
- * un viaje después: lo que quede fuera de este margen asoma EN BLANCO durante
- * ese viaje, y con la rueda o el panel táctil eso es un parpadeo en el borde.
- * Ocho filas se agotaban con dos muescas de rueda; veinticuatro cubren un
- * gesto normal por unos pocos KB más por respuesta.
+ * The engine moves the scroll on the spot and the new rows arrive from the
+ * host a round trip later: whatever falls outside this margin shows up BLANK
+ * during that trip, and with the wheel or the trackpad that is a flicker at
+ * the edge. Eight rows used to run out in two wheel notches; twenty-four
+ * cover a normal gesture for a few more KB per response.
  */
 export const OVERSCAN = 24;
 
-/** La última firma con la que se pintó cada nodo. */
-const firmas = new WeakMap<object, string>();
+/** The last signature each node was painted with. */
+const signatures = new WeakMap<object, string>();
 
 /**
- * ¿Se pintó ya `nodo` con exactamente estos datos? Si no, apunta la firma
- * nueva y contesta `false`, y quien pregunta repinta.
+ * Has `node` already been painted with exactly this data? If not, records
+ * the new signature and answers `false`, and the caller repaints.
  *
- * Existe porque el host manda la vista ENTERA en cada actualización y
- * `paint()` la vuelca entera: cada respuesta a un scroll rehacía la barra de
- * menús, la de paneles, la de teclas, las pestañas, el título, la cabecera y
- * todas las filas visibles, aunque solo hubieran cambiado las filas del
- * borde. Rehacer un nodo idéntico no es gratis ni invisible: se recalcula la
- * maqueta, el `:hover` se pierde y vuelve, y en WebKitGTK se ve como un
- * parpadeo sutil mientras se desplaza.
+ * Exists because the host sends the WHOLE view on every update and `paint()`
+ * dumps it whole: every response to a scroll used to redo the menu bar, the
+ * panel bar, the key bar, the tabs, the title, the header and every visible
+ * row, even if only the edge rows had changed. Redoing an identical node is
+ * not free nor invisible: the layout gets recomputed, `:hover` is lost and
+ * comes back, and on WebKitGTK it shows as a subtle flicker while scrolling.
  */
-/** Con qué fila (el objeto) y dónde se pintó cada nodo, para `updateRow`. */
-const filasPintadas = new WeakMap<
+/** Which row (the object) and where each node was painted, for `updateRow`. */
+const paintedRows = new WeakMap<
   HTMLElement,
   { row: RowView; selected: boolean; index: number; rowH: number; iconColumn: boolean }
 >();
 
-export function sinCambios(nodo: object, firma: string): boolean {
-  if (firmas.get(nodo) === firma) {
+export function unchanged(node: object, signature: string): boolean {
+  if (signatures.get(node) === signature) {
     return true;
   }
-  firmas.set(nodo, firma);
+  signatures.set(node, signature);
   return false;
 }
 
@@ -164,73 +164,74 @@ export type Send = (action: UiAction) => void;
 
 export interface SlotDom {
   root: HTMLElement;
-  /** La barra de pestañas, vacía cuando el hueco no está en un grupo. */
+  /** The tab bar, empty when the slot is not in a group. */
   tabs: HTMLElement;
   title: HTMLElement;
   header: HTMLElement;
   scroller: HTMLElement;
   canvas: HTMLElement;
-  /** El pie del listado (cuentas, marcado, espacio libre). Vacío = oculto. */
+  /** The listing's footer (counts, marked, free space). Empty = hidden. */
   footer: HTMLElement;
   rows: Map<number, HTMLElement>;
   /**
-   * El aviso de «esperando», ESTABLE. No se crea en cada pintada porque su
-   * umbral es un `animation-delay`, y una animación que empieza de cero cada
-   * vez que su nodo nace nunca llega a los 250 ms: `paint()` repinta todos
-   * los huecos en cada actualización, así que el aviso no habría aparecido
-   * jamás en los casos lentos, que son para los que existe.
+   * The "waiting" notice, STABLE. Not created on every paint because its
+   * threshold is an `animation-delay`, and an animation that starts from
+   * zero every time its node is born never reaches 250 ms: `paint()`
+   * repaints every slot on every update, so the notice would never have
+   * shown up in the slow cases, which are what it exists for.
    */
   busy: HTMLElement;
   lastRange: { first: number; count: number } | null;
   /**
-   * La generación que se PINTÓ. Toda acción de fila la lleva: sin ella la
-   * clave es un índice, y un índice de la pantalla anterior nombra otro
-   * fichero. El host la compara y responde `stale` si no coincide.
+   * The generation that was PAINTED. Every row action carries it: without
+   * it the key is an index, and an index from the previous screen names a
+   * different file. The host compares it and answers `stale` if it does not
+   * match.
    */
   generation: number;
 }
 
 /**
- * El color de la regla de marcas: el de la marca, aclarado hacia el texto
- * para que una banda de tres píxeles se lea. De dos roles del tema, sin
- * variable propia que el tema no alimentaría.
+ * The mark ruler's color: the mark's, lightened toward the text so a
+ * three-pixel band can be read. From two theme roles, with no variable of
+ * its own the theme would not feed.
  */
 export const MARK_RULER_COLOR = "color-mix(in srgb, var(--mark-bg) 55%, var(--fg))";
 
 /**
- * La regla de marcas como imagen de fondo (ADR 0135): una banda por cada
- * racha de tramos seguidos con marca, en porcentaje del alto. Cadena vacía
- * = sin regla.
+ * The mark ruler as a background image (ADR 0135): one band per run of
+ * consecutive marked spans, as a percentage of the height. Empty string =
+ * no ruler.
  *
- * Un FONDO del desplazable y no un nodo: el fondo de un elemento con scroll
- * se queda quieto mientras su contenido se mueve, que es justo lo que una
- * regla del listado entero tiene que hacer, y así no hay que medir nada al
- * pintar.
+ * A BACKGROUND of the scrollable and not a node: the background of an
+ * element with scroll stays still while its content moves, which is exactly
+ * what a ruler for the whole listing has to do, and this way nothing needs
+ * measuring when painting.
  */
-export function markRulerImage(tramos: readonly number[], spans: number): string {
-  if (tramos.length === 0 || spans <= 0) {
+export function markRulerImage(runs: readonly number[], spans: number): string {
+  if (runs.length === 0 || spans <= 0) {
     return "";
   }
-  // Cuatro decimales: sobran para cualquier alto de pantalla, y sin ellos
-  // `11/20` sale `55.00000000000001%`.
+  // Four decimals: more than enough for any screen height, and without them
+  // `11/20` comes out `55.00000000000001%`.
   const pct = (t: number): string =>
     `${String(Number(((Math.min(t, spans) / spans) * 100).toFixed(4)))}%`;
   const c = MARK_RULER_COLOR;
   const stops: string[] = ["transparent 0%"];
   let i = 0;
-  while (i < tramos.length) {
-    const desde = tramos[i] ?? 0;
-    let hasta = desde;
-    // Rachas: tramos seguidos son UNA banda, no doscientas paradas.
-    while (i + 1 < tramos.length && tramos[i + 1] === hasta + 1) {
-      hasta += 1;
+  while (i < runs.length) {
+    const from = runs[i] ?? 0;
+    let to = from;
+    // Runs: consecutive spans are ONE band, not two hundred stops.
+    while (i + 1 < runs.length && runs[i + 1] === to + 1) {
+      to += 1;
       i += 1;
     }
     stops.push(
-      `transparent ${pct(desde)}`,
-      `${c} ${pct(desde)}`,
-      `${c} ${pct(hasta + 1)}`,
-      `transparent ${pct(hasta + 1)}`,
+      `transparent ${pct(from)}`,
+      `${c} ${pct(from)}`,
+      `${c} ${pct(to + 1)}`,
+      `transparent ${pct(to + 1)}`,
     );
     i += 1;
   }
@@ -251,8 +252,9 @@ export function place(
 export function newRow(dom: SlotDom, slotId: number, key: number): HTMLElement {
   const el = document.createElement("div");
   el.className = "row";
-  // Id ESTABLE: `aria-activedescendant` apunta a él, y un id que cambia al
-  // repintar deja al lector de pantalla señalando a un nodo que ya no está.
+  // STABLE id: `aria-activedescendant` points to it, and an id that changes
+  // on repaint leaves the screen reader pointing at a node that is no longer
+  // there.
   el.id = `row-${String(slotId)}-${String(key)}`;
   el.setAttribute("role", "row");
   el.dataset["key"] = String(key);
@@ -266,69 +268,69 @@ export function updateRow(
   row: RowView,
   index: number,
   rowH: number,
-  // La columna de iconos está abierta en este hueco (puente 62): ALGUNA
-  // fila tiene icono, así que todas llevan la celda, vacía o no, para que
-  // los nombres sigan alineados. Lo decide quien pinta el hueco, no la fila.
+  // The icon column is open in this slot (bridge 62): SOME row has an icon,
+  // so all of them carry the cell, empty or not, so names stay aligned.
+  // Decided by whoever paints the slot, not by the row.
   iconColumn = false,
 ): void {
-  // Todo lo que esta función lee está en la firma: la fila entera, su
-  // posición, el alto y la columna de iconos. Si nada cambió, el nodo ya
-  // dice lo que tiene que decir.
+  // Everything this function reads is in the signature: the whole row, its
+  // position, the height and the icon column. If nothing changed, the node
+  // already says what it has to say.
   //
-  // Primero por IDENTIDAD, que no cuesta nada: la sesión sustituye las filas
-  // cuando llega un lote y solo muta en su sitio `selected` (el parche del
-  // cursor), así que el mismo objeto con el mismo `selected` es la misma
-  // fila. Serializar cada fila visible en cada repintado —y cada parche
-  // repinta— era trabajo tirado en el caso más común.
-  const previa = filasPintadas.get(el);
+  // First by IDENTITY, which costs nothing: the session replaces the rows
+  // when a batch arrives and only mutates `selected` in place (the cursor's
+  // patch), so the same object with the same `selected` is the same row.
+  // Serializing every visible row on every repaint — and every patch
+  // repaints — was wasted work in the most common case.
+  const previous = paintedRows.get(el);
   if (
-    previa !== undefined &&
-    previa.row === row &&
-    previa.selected === row.selected &&
-    previa.index === index &&
-    previa.rowH === rowH &&
-    previa.iconColumn === iconColumn
+    previous !== undefined &&
+    previous.row === row &&
+    previous.selected === row.selected &&
+    previous.index === index &&
+    previous.rowH === rowH &&
+    previous.iconColumn === iconColumn
   ) {
     return;
   }
-  filasPintadas.set(el, { row, selected: row.selected, index, rowH, iconColumn });
-  if (sinCambios(el, JSON.stringify([row, index, rowH, iconColumn]))) {
+  paintedRows.set(el, { row, selected: row.selected, index, rowH, iconColumn });
+  if (unchanged(el, JSON.stringify([row, index, rowH, iconColumn]))) {
     return;
   }
   el.style.setProperty("top", `${index * rowH}px`);
   el.setAttribute("aria-rowindex", String(index + 1));
   el.setAttribute("aria-selected", String(row.selected));
   el.dataset["marked"] = String(row.marked);
-  // La paridad de la fila PINTADA, para el pijama (spec 2026-09-20). Va
-  // siempre, encendido el ajuste o no: quien decide si se ve es el
-  // contenedor (`data-stripes`), y así una fila reciclada por el scroll no
-  // arrastra la banda de la posición que ocupaba antes.
+  // The PAINTED row's parity, for the row stripes (spec 2026-09-20). Always
+  // set, whether the setting is on or not: whoever decides if it shows is
+  // the container (`data-stripes`), so a row recycled by scroll does not
+  // drag along the band of the position it used to occupy.
   el.dataset["odd"] = String(index % 2 === 1);
   el.className = `row kind-${row.kind}`;
   const name = document.createElement("span");
   name.className = row.hostile ? "cell-name hostile" : "cell-name";
   name.setAttribute("role", "gridcell");
   name.textContent = row.display_name;
-  // El color que el TEMA da a esta entrada (puente 66). Se aplica en línea
-  // porque el valor viene resuelto del host: `[files.ext]` es un conjunto
-  // abierto y no hay clase CSS que pudiera representarlo.
+  // The color the THEME gives this entry (bridge 66). Applied inline
+  // because the value comes resolved from the host: `[files.ext]` is an
+  // open set and there is no CSS class that could represent it.
   //
-  // Bajo el CURSOR no se pinta, y eso replica al terminal: allí el estilo de
-  // la fila seleccionada se aplica con `highlight_style`, que PISA el del
-  // item cuando el tema le da primer plano a `selection` — y los diez presets
-  // se lo dan. Sin esta salvedad, un directorio azul oscuro sobre el
-  // #04395e de vscode-dark se quedaría ilegible justo en la fila que el
-  // lector está mirando.
+  // Not painted under the CURSOR, and that mirrors the terminal: there the
+  // selected row's style is applied with `highlight_style`, which OVERRIDES
+  // the item's when the theme gives `selection` a foreground — and all ten
+  // presets do. Without this exception, a dark blue directory over
+  // vscode-dark's #04395e would end up unreadable in exactly the row the
+  // reader is looking at.
   if (row.name_color !== "" && !row.selected) {
     name.style.color = row.name_color;
   }
   if (row.name_bold) {
     name.style.fontWeight = "bold";
   }
-  // `dim` es el atributo de terminal, no una opacidad del tema: 0.6 es lo que
-  // ratatui pinta para `Modifier::DIM` en la práctica. Los presets retro
-  // atenúan así `zip`/`tar`/`gz`, y sin esto salían apagados en `ntc` y a
-  // plena luz aquí.
+  // `dim` is the terminal attribute, not a theme opacity: 0.6 is what
+  // ratatui paints for `Modifier::DIM` in practice. The retro presets dim
+  // `zip`/`tar`/`gz` this way, and without this they came out dim in `ntc`
+  // and at full brightness here.
   if (row.name_dim) {
     name.style.opacity = "0.6";
   }
@@ -338,121 +340,122 @@ export function updateRow(
   if (row.name_underline) {
     name.style.textDecoration = "underline";
   }
-  // El nombre y lo que lo decora, juntos y a la IZQUIERDA; las celdas de las
-  // columnas siguen a la derecha. El bloque es quien crece, así que el nombre
-  // se puede recortar con elipsis SIN llevarse por delante la insignia: el
-  // TUI, que no puede hacer eso, tiene que tirar la decoración entera cuando
-  // el nombre no cabe.
-  const bloque = document.createElement("span");
-  bloque.className = "name-block";
+  // The name and what decorates it, together and on the LEFT; the column
+  // cells follow on the right. The block is what grows, so the name can be
+  // ellipsis-truncated WITHOUT taking the badge down with it: the TUI, which
+  // cannot do that, has to drop the whole decoration when the name does not
+  // fit.
+  const block = document.createElement("span");
+  block.className = "name-block";
   if (iconColumn) {
-    // El icono, ANTES del nombre y en su propio nodo de ancho fijo: es
-    // texto de un plugin, y la celda existe aunque esta fila no tenga
-    // icono, que es lo que mantiene la columna.
-    const icono = document.createElement("span");
-    icono.className = "cell-icon";
-    // Con el color de LA ENTRADA, que es la decisión de ADR 0105: un icono
-    // dice qué ES la fila, no en qué estado está, así que sigue al mismo
-    // color que su nombre. El terminal lo hace desde entonces
-    // (`norte-tui/src/ui/pane.rs`); aquí no había color de entrada que
-    // seguir hasta el puente 66, y dejarlo suelto ahora habría separado las
-    // dos superficies justo al darles color.
+    // The icon, BEFORE the name and in its own fixed-width node: it is a
+    // plugin's text, and the cell exists even when this row has no icon,
+    // which is what keeps the column in place.
+    const icon = document.createElement("span");
+    icon.className = "cell-icon";
+    // With the ENTRY's color, which is ADR 0105's decision: an icon says
+    // what the row IS, not what state it is in, so it follows the same
+    // color as its name. The terminal has done this ever since
+    // (`norte-tui/src/ui/pane.rs`); here there was no entry color to follow
+    // until bridge 66, and leaving it loose now would have split the two
+    // surfaces right when giving them color.
     if (row.name_color !== "" && !row.selected) {
-      icono.style.color = row.name_color;
+      icon.style.color = row.name_color;
     }
-    icono.dataset["hostile"] = String(row.icon_hostile);
-    icono.textContent = row.icon;
+    icon.dataset["hostile"] = String(row.icon_hostile);
+    icon.textContent = row.icon;
     if (row.icon_hostile) {
-      icono.append(badge("△"));
+      icon.append(badge("△"));
     }
-    bloque.append(icono);
+    block.append(icon);
   }
-  bloque.append(name);
-  const nodes: Node[] = [bloque];
+  block.append(name);
+  const nodes: Node[] = [block];
   if (row.hostile) {
-    // Un nombre que se pinta distinto del real se DICE. Nunca se esconde.
+    // A name that paints different from the real one is SAID. Never hidden.
     name.append(badge("△"));
   }
   if (row.badge !== "") {
-    // Lo que un PLUGIN dice de esta fila, DENTRO del bloque del nombre y
-    // justo detrás, como en el TUI. Suelta entre el nombre y la primera
-    // celda flotaba a la derecha —`.cell-name` es `flex: 1`— y se leía como
-    // parte de la columna de tamaño: la misma insignia decía dos cosas
-    // distintas según quién pintara.
+    // What a PLUGIN says about this row, INSIDE the name's block and right
+    // behind it, as in the TUI. Loose between the name and the first cell it
+    // floated to the right — `.cell-name` is `flex: 1` — and read as part of
+    // the size column: the same badge said two different things depending
+    // on who painted it.
     //
-    // En su propio NODO, no en el mismo texto: son dos datos de dos orígenes
-    // y `unicode-bidi: isolate` no separa dos cosas concatenadas.
+    // In its own NODE, not in the same text: they are two data points from
+    // two origins, and `unicode-bidi: isolate` does not separate two things
+    // that are concatenated.
     //
-    // El color sale del ROL, vocabulario cerrado del tema: un plugin no
-    // elige el suyo.
-    const marca = document.createElement("span");
-    marca.className = "cell-badge";
-    marca.dataset["role"] = row.badge_role;
-    marca.dataset["hostile"] = String(row.badge_hostile);
-    marca.textContent = row.badge;
+    // The color comes from the ROLE, the theme's closed vocabulary: a plugin
+    // does not choose its own.
+    const mark = document.createElement("span");
+    mark.className = "cell-badge";
+    mark.dataset["role"] = row.badge_role;
+    mark.dataset["hostile"] = String(row.badge_hostile);
+    mark.textContent = row.badge;
     if (row.badge_hostile) {
-      marca.append(badge("△"));
+      mark.append(badge("△"));
     }
-    bloque.append(marca);
+    block.append(mark);
   }
   for (const c of row.cells) {
     const cell = document.createElement("span");
     cell.className = "cell";
     cell.setAttribute("role", "gridcell");
     cell.textContent = c.text ?? "";
-    // El ancho y la alineación los DECLARA la cabecera del hueco como
-    // variables en su raíz (puente 64); una celda solo las lee. Sin
-    // variable, `auto` y `left`: lo de siempre.
+    // Width and alignment are DECLARED by the slot's header as variables on
+    // its root (bridge 64); a cell only reads them. With no variable, `auto`
+    // and `left`: the usual.
     const v = colVar(c.column);
     cell.style.width = `var(${v}, auto)`;
     cell.style.textAlign = `var(${v}-align, left)`;
-    // Una columna que la cabecera DESCARTÓ por no caber (`${v}-show: none`)
-    // se va de todas las filas a la vez, sin repintarlas.
+    // A column the header DROPPED for not fitting (`${v}-show: none`) leaves
+    // every row at once, without repainting them.
     cell.style.display = `var(${v}-show, block)`;
     nodes.push(cell);
   }
-  // La casilla de marca va la PRIMERA: un hueco reservado que se pinta al
-  // pasar el ratón o cuando la fila está marcada (ver `.row-check`).
+  // The mark checkbox goes FIRST: a reserved gap that paints on mouseover or
+  // when the row is marked (see `.row-check`).
   const check = document.createElement("span");
   check.className = "row-check";
   check.setAttribute("aria-hidden", "true");
   check.textContent = row.marked ? "☑" : "☐";
-  // La barra de la task que lleva ESTE fichero entre manos (puente 69, ADR
-  // 0115). Detrás del texto y no entre las celdas: la fila ya dice lo que es,
-  // y el avance es un estado suyo, no una columna más. `aria-hidden` porque
-  // el tablero de procesos es quien lo anuncia; repetirlo por fila
-  // convertiría una copia larga en una cantinela para un lector de pantalla.
-  const fondo: Node[] = [];
+  // The bar for the task that has THIS file in hand (bridge 69, ADR 0115).
+  // Behind the text and not between the cells: the row already says what it
+  // is, and progress is a state of its own, not one more column.
+  // `aria-hidden` because the process dashboard is the one that announces
+  // it; repeating it per row would turn a long copy into a chant for a
+  // screen reader.
+  const background: Node[] = [];
   if (row.progress !== null && row.progress !== undefined) {
-    const barra = document.createElement("span");
-    barra.className = "row-progress";
-    barra.setAttribute("aria-hidden", "true");
-    barra.style.setProperty(
+    const bar = document.createElement("span");
+    bar.className = "row-progress";
+    bar.setAttribute("aria-hidden", "true");
+    bar.style.setProperty(
       "--pct",
       `${String(Math.max(0, Math.min(100, row.progress)))}%`,
     );
-    // EL PRIMERO de los hermanos, que es lo que lo deja debajo: en esta hoja
-    // no hay `z-index` en ninguna parte, así que el apilado es el orden del
-    // documento, y una lámina pintada al final teñiría el nombre que la fila
-    // está diciendo.
-    fondo.push(barra);
+    // FIRST among its siblings, which is what leaves it underneath: this
+    // sheet has no `z-index` anywhere, so stacking is document order, and a
+    // sheet painted last would tint the name the row is stating.
+    background.push(bar);
   }
-  el.replaceChildren(...fondo, check, ...nodes);
+  el.replaceChildren(...background, check, ...nodes);
 }
 
 /**
- * El nombre de la variable CSS que lleva el ancho de una columna en la raíz
- * de su hueco (`--colw-<id>`), y con el sufijo `-align`, su alineación. El
- * id de una columna es un conjunto abierto (`attr:posix.mode`,
- * `plugin:git-status`) y un nombre de variable no admite `:` ni `.`: se
- * sustituyen. Dos ids que colisionen tras eso comparten ancho, y es un caso
- * que la configuración no produce.
+ * The CSS variable name carrying a column's width on its slot's root
+ * (`--colw-<id>`), and with the `-align` suffix, its alignment. A column's
+ * id is an open set (`attr:posix.mode`, `plugin:git-status`) and a variable
+ * name allows neither `:` nor `.`: they are substituted. Two ids that
+ * collide after that share a width, and that is a case the configuration
+ * does not produce.
  */
 export function colVar(id: string): string {
   return `--colw-${id.replace(/[^A-Za-z0-9_-]/g, "_")}`;
 }
 
-/** Una etiqueta pequena de cabecera (nivel, filtro, origen del registro). */
+/** A small header label (level, filter, log source). */
 export function chip(text: string): HTMLElement {
   const c = document.createElement("span");
   c.className = "chip";
@@ -482,9 +485,9 @@ export function errorNode(text: string, detail: string | null): HTMLElement {
   return d;
 }
 
-/** Los dos glifos del medio de una fila comparada, ya traducidos por el
- *  host: el veredicto y cuánto vale. */
-export function veredicto(r: CompareRowView, tr: (k: string) => string): HTMLElement {
+/** The two glyphs in the middle of a compared row, already translated by
+ *  the host: the verdict and how confident it is. */
+export function verdict(r: CompareRowView, tr: (k: string) => string): HTMLElement {
   const el = document.createElement("span");
   el.className = "compare-verdict";
   el.textContent = r.verdict;
@@ -493,10 +496,10 @@ export function veredicto(r: CompareRowView, tr: (k: string) => string): HTMLEle
   conf.textContent = r.confidence;
   el.append(conf);
   if (r.reason !== null) {
-    const por = document.createElement("span");
-    por.className = "compare-reason";
-    por.textContent = r.reason;
-    el.append(por);
+    const reason = document.createElement("span");
+    reason.className = "compare-reason";
+    reason.textContent = r.reason;
+    el.append(reason);
   }
   el.title = tr("compare-title");
   return el;
@@ -506,16 +509,17 @@ export function statusNodes(
   status: StatusView,
   connection: string,
   tr: (k: string) => string,
-  rechazo: string | null = null,
+  rejection: string | null = null,
   items: StatusItemView[] = [],
   onItem: ((id: string) => void) | null = null,
 ): Node[] {
   const nodes: Node[] = [];
-  if (rechazo !== null) {
-    // Delante de todo: es lo único de esta barra que el host no sabe.
+  if (rejection !== null) {
+    // In front of everything: it is the only thing on this bar the host
+    // does not know.
     const el = document.createElement("span");
     el.className = "banner rejected";
-    el.textContent = rechazo;
+    el.textContent = rejection;
     nodes.push(el);
   }
   for (const b of status.banners) {
@@ -523,41 +527,43 @@ export function statusNodes(
     el.className = "banner";
     el.textContent = b.text;
     if (b.subject !== null) {
-      // La conexión, en su propio elemento y etiquetada. NUNCA como
-      // `scheme://host` dentro de la frase: un host puede llamarse
-      // `banco.example@malo.example` sin llevar ni un carácter que se
-      // enmascare, y ahí se leería como userinfo de un host legítimo.
-      const sujeto = document.createElement("span");
-      sujeto.className = "banner-subject";
-      sujeto.dataset["hostile"] = String(b.subject.hostile);
-      const esquema = document.createElement("span");
-      esquema.className = "banner-scheme";
-      esquema.textContent = b.subject.scheme;
+      // The connection, in its own element and labeled. NEVER as
+      // `scheme://host` inside the sentence: a host can be named
+      // `bank.example@evil.example` without carrying a single character
+      // that gets masked, and it would read there as a legitimate host's
+      // userinfo.
+      const subject = document.createElement("span");
+      subject.className = "banner-subject";
+      subject.dataset["hostile"] = String(b.subject.hostile);
+      const scheme = document.createElement("span");
+      scheme.className = "banner-scheme";
+      scheme.textContent = b.subject.scheme;
       const host = document.createElement("span");
       host.className = "banner-host";
       host.textContent = b.subject.host;
-      sujeto.append(esquema, host);
-      // El MOTIVO, en su propio elemento y por lo mismo que la conexión: es
-      // texto ya traducido por el host, y no se interpola en la frase. Sin
-      // él, un motivo que el host no conoce se leía igual que «FTP en
-      // claro» — un aviso de seguridad afirmando una causa que nadie dijo.
-      const motivo = document.createElement("span");
-      motivo.className = "banner-reason";
-      motivo.textContent = b.subject.reason;
-      sujeto.append(motivo);
-      // El detalle solo viene con un motivo desconocido, y ya llega
-      // enmascarado y acotado: es texto del otro extremo.
+      subject.append(scheme, host);
+      // The REASON, in its own element and for the same cause as the
+      // connection: it is text already translated by the host, and it is
+      // not interpolated into the sentence. Without it, a reason the host
+      // does not know used to read the same as "plaintext FTP" — a security
+      // warning stating a cause nobody gave.
+      const reason = document.createElement("span");
+      reason.className = "banner-reason";
+      reason.textContent = b.subject.reason;
+      subject.append(reason);
+      // The detail only comes with an unknown reason, and it already
+      // arrives masked and bounded: it is text from the other end.
       if (b.subject.detail !== undefined && b.subject.detail !== "") {
-        const detalle = document.createElement("span");
-        detalle.className = "banner-detail";
-        detalle.textContent = b.subject.detail;
-        sujeto.append(detalle);
+        const detail = document.createElement("span");
+        detail.className = "banner-detail";
+        detail.textContent = b.subject.detail;
+        subject.append(detail);
       }
       if (b.subject.hostile) {
-        sujeto.classList.add("hostile");
-        sujeto.append(badge(tr("hostile-name")));
+        subject.classList.add("hostile");
+        subject.append(badge(tr("hostile-name")));
       }
-      el.append(sujeto);
+      el.append(subject);
     }
     nodes.push(el);
   }
@@ -567,11 +573,11 @@ export function statusNodes(
     el.textContent = connection;
     nodes.push(el);
   }
-  // El mensaje efímero es un TOAST (spec 2026-09-11, V5): con clase
-  // propia, la hoja de estilos lo saca de la barra a la esquina inferior
-  // derecha mientras dure; el host lo caduca (`[ui] notice_seconds`) y
-  // entonces el nodo queda vacío y no se pinta. Sigue dentro de la región
-  // viva de la barra, así que un lector de pantalla lo anuncia igual.
+  // The ephemeral message is a TOAST (spec 2026-09-11, V5): with its own
+  // class, the stylesheet pulls it out of the bar to the bottom-right corner
+  // while it lasts; the host expires it (`[ui] notice_seconds`) and then the
+  // node is left empty and unpainted. It stays inside the bar's live region,
+  // so a screen reader announces it all the same.
   const msg = document.createElement("span");
   msg.className = "status-message";
   msg.textContent = status.message ?? "";
@@ -586,12 +592,12 @@ export function statusNodes(
         : `${String(count)} ${status.pending.chords}`;
     nodes.push(p);
   }
-  // La mitad DERECHA (ADR 0132, puente 85): los elementos que el host ya
-  // eligió, redactó y recortó, en su orden. Los avisos sin leer son uno de
-  // ellos (`notices`). Un clic devuelve el ID; el host corre el comando.
+  // The RIGHT half (ADR 0132, bridge 85): the elements the host already
+  // chose, worded and trimmed, in its order. Unread notices are one of them
+  // (`notices`). A click returns the ID; the host runs the command.
   if (items.length > 0) {
-    const derecha = document.createElement("span");
-    derecha.className = "status-items";
+    const right = document.createElement("span");
+    right.className = "status-items";
     for (const it of items) {
       const el = document.createElement(it.clickable ? "button" : "span");
       el.className = "status-item";
@@ -599,24 +605,24 @@ export function statusNodes(
       el.textContent = it.text;
       el.title = it.tooltip;
       if (it.progress !== undefined) {
-        // La barra ligera (ADR 0146): detrás del texto, fina. Sin porcentaje
-        // se anima en vez de pintarse vacía: «no se sabe» no es 0 %.
-        const barra = document.createElement("span");
-        barra.className = "status-bar";
-        barra.dataset["phase"] = it.progress.phase;
-        barra.setAttribute("role", "progressbar");
-        barra.setAttribute("aria-valuemin", "0");
-        barra.setAttribute("aria-valuemax", "100");
-        const relleno = document.createElement("span");
-        relleno.className = "status-bar-fill";
+        // The thin bar (ADR 0146): behind the text, slim. With no percentage
+        // it animates instead of painting empty: "unknown" is not 0%.
+        const bar = document.createElement("span");
+        bar.className = "status-bar";
+        bar.dataset["phase"] = it.progress.phase;
+        bar.setAttribute("role", "progressbar");
+        bar.setAttribute("aria-valuemin", "0");
+        bar.setAttribute("aria-valuemax", "100");
+        const fill = document.createElement("span");
+        fill.className = "status-bar-fill";
         if (it.progress.percent === null) {
-          barra.dataset["indeterminate"] = "true";
+          bar.dataset["indeterminate"] = "true";
         } else {
-          barra.setAttribute("aria-valuenow", String(it.progress.percent));
-          relleno.style.width = `${String(it.progress.percent)}%`;
+          bar.setAttribute("aria-valuenow", String(it.progress.percent));
+          fill.style.width = `${String(it.progress.percent)}%`;
         }
-        barra.append(relleno);
-        el.append(barra);
+        bar.append(fill);
+        el.append(bar);
       }
       if (el instanceof HTMLButtonElement) {
         el.type = "button";
@@ -626,9 +632,9 @@ export function statusNodes(
           });
         }
       }
-      derecha.append(el);
+      right.append(el);
     }
-    nodes.push(derecha);
+    nodes.push(right);
   }
   return nodes;
 }
@@ -638,8 +644,9 @@ export function taskNode(t: TaskView, tr: (k: string) => string): HTMLElement {
   el.className = "task";
   el.setAttribute("role", "listitem");
   const kind = document.createElement("span");
-  // Con su prefijo `gui-`, que es como se llaman en el catálogo: sin él
-  // TODAS caían al `?? key` y cada task del tablero se leía `task-kind-copy`.
+  // With its `gui-` prefix, which is how they are named in the catalogue:
+  // without it ALL of them fell to `?? key` and every task on the dashboard
+  // read `task-kind-copy`.
   kind.textContent = tr(`gui-task-kind-${t.kind}`);
   const state = document.createElement("span");
   state.setAttribute("role", "progressbar");
@@ -654,9 +661,9 @@ export function taskNode(t: TaskView, tr: (k: string) => string): HTMLElement {
   detail.dataset["hostile"] = String(t.detail_hostile);
   el.append(kind, state, detail);
   if (t.detail_hostile) {
-    // El fichero en curso se pinta distinto de lo que es: se dice, igual que
-    // en una fila del listado. Sin insignia, un nombre enmascarado se lee
-    // como el nombre de verdad.
+    // The file in progress paints different from what it is: it is said,
+    // same as in a listing row. Without a badge, a masked name reads as the
+    // real one.
     detail.classList.add("hostile");
     el.append(badge(tr("hostile-name")));
   }

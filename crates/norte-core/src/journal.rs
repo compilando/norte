@@ -1,22 +1,22 @@
-//! Journal transaccional (M3-1, ADR 0023): toda mutación → una entrada con
-//! actor, referencia de reversa y hash-chain sobre `SQLite` (WAL).
+//! Transactional journal (M3-1, ADR 0023): every mutation → one entry with an
+//! actor, a reversal reference, and a hash chain over `SQLite` (WAL).
 //!
-//! **Alcance de la integridad (importante).** El hash-chain (SHA-256 SIN clave,
-//! genesis fijo) detecta corrupción y ediciones INGENUAS —las que no recomputan
-//! la cadena—. NO es tamper-evidence frente a un atacante con acceso de
-//! escritura a la DB: reescritura total, truncación de COLA y rollback pasan
-//! [`Journal::verify_chain`]. Las **anclas HMAC** (M3-5, ADR 0025, módulo
-//! [`crate::audit`]) acotan esa ventana: fabricar historia exige ADEMÁS la
-//! clave del keyring y re-anclar. Sigue SIN cubrir: atacante con acceso al
-//! keyring, mutaciones entre el último ancla y el ataque, destrucción del
-//! fichero de anclas (copia externa recomendada).
+//! **Scope of the integrity guarantee (important).** The hash chain (keyless
+//! SHA-256, fixed genesis) detects corruption and NAIVE edits — ones that do
+//! not recompute the chain. It is NOT tamper-evidence against an attacker with
+//! write access to the DB: a full rewrite, a TAIL truncation and a rollback
+//! all pass [`Journal::verify_chain`]. The **HMAC anchors** (M3-5, ADR 0025,
+//! module [`crate::audit`]) bound that window: fabricating history ALSO
+//! requires the keyring key and re-anchoring. Still not covered: an attacker
+//! with keyring access, mutations between the last anchor and the attack,
+//! destruction of the anchor file (an external copy is recommended).
 //!
-//! **Formato (ADR 0046).** Un journal creado desde esta versión declara su
-//! formato en una entrada DENTRO de la cadena, en el `seq` 0 reservado: así un
-//! binario más viejo puede decir «no sé leer esto» en vez de acusar de
-//! manipulación a un fichero que nadie tocó (#127). El `seq` 0 es metadato, no
-//! historia: [`Journal::entries`], [`Journal::revertible_for`],
-//! [`Journal::count`] y [`Journal::head`] solo ven mutaciones (`seq >= 1`).
+//! **Format (ADR 0046).** A journal created from this version onward declares
+//! its format in an entry INSIDE the chain, at the reserved `seq` 0: that way
+//! an older binary can say "I don't know how to read this" instead of
+//! accusing of tampering a file nobody touched (#127). `seq` 0 is metadata,
+//! not history: [`Journal::entries`], [`Journal::revertible_for`],
+//! [`Journal::count`] and [`Journal::head`] only see mutations (`seq >= 1`).
 
 use std::str::FromStr;
 
@@ -44,33 +44,32 @@ CREATE TABLE IF NOT EXISTS journal (
     entry_hash   BLOB    NOT NULL
 );";
 
-/// Migración de la columna de lote (batch rename, §17). Va fuera de `SCHEMA` a
-/// propósito: `CREATE TABLE IF NOT EXISTS` NO altera una tabla que ya existe,
-/// así que una DB escrita antes de esta versión se quedaría sin columna. La
-/// idempotencia la da preguntar al catálogo ANTES ([`has_batch_id_column`]), no
-/// tragarse el error del `ALTER`: el mensaje de «duplicate column name» no es
-/// contrato de nadie, y comerse un error por su texto es comerse también el que
-/// no toca.
+/// Migration for the batch column (batch rename, §17). Deliberately kept
+/// outside `SCHEMA`: `CREATE TABLE IF NOT EXISTS` does NOT alter a table that
+/// already exists, so a DB written before this version would end up without
+/// the column. Idempotency comes from asking the catalog FIRST
+/// ([`has_batch_id_column`]), not from swallowing the `ALTER`'s error: the
+/// "duplicate column name" message is nobody's contract, and swallowing an
+/// error by its text also swallows the one that shouldn't be swallowed.
 const MIGRATE_BATCH_ID: &str = "ALTER TABLE journal ADD COLUMN batch_id INTEGER";
 
-/// Migración de la columna que apunta a la entrada que un undo COMPENSA
-/// (M3-2). Esta columna se añadió al `SCHEMA` SIN su migración: un journal de
-/// antes se abría bien y reventaba en CADA escritura con «table journal has no
-/// column named `undoes_seq`». Se vio en vivo al journalizar el motor embebido
-/// (#167), donde ese fallo dejaba un `norte cp` en «internal error» sin copiar
-/// nada.
+/// Migration for the column that points at the entry an undo COMPENSATES
+/// (M3-2). This column was added to `SCHEMA` WITHOUT its migration: an older
+/// journal opened fine and then blew up on EVERY write with "table journal has
+/// no column named `undoes_seq`". Seen live when journaling the embedded
+/// engine (#167), where that failure left a `norte cp` in "internal error"
+/// without copying anything.
 ///
-/// A diferencia de [`MIGRATE_BATCH_ID`], esto SOLO se aplica a una tabla VACÍA:
-/// la columna llegó junto con su byte de presencia en el preimagen del hash, así
-/// que las filas de antes no verifican bajo el `chain_hash` de hoy. Ver el sitio
-/// donde se ejecuta.
+/// Unlike [`MIGRATE_BATCH_ID`], this ONLY applies to an EMPTY table: the
+/// column arrived together with its presence byte in the hash's preimage, so
+/// older rows do not verify under today's `chain_hash`. See the call site.
 const MIGRATE_UNDOES_SEQ: &str = "ALTER TABLE journal ADD COLUMN undoes_seq INTEGER";
 
-/// Lo que `SQLite` espera a un lock ajeno antes de rendirse, salvo que quien
-/// abre diga otra cosa ([`Journal::open_with_busy_timeout`]).
+/// How long `SQLite` waits on someone else's lock before giving up, unless
+/// whoever opens it says otherwise ([`Journal::open_with_busy_timeout`]).
 ///
-/// Es el de `sqlx` por omisión, escrito aquí para que sea un hecho con nombre y
-/// no una propiedad implícita de una dependencia.
+/// It is `sqlx`'s own default, written here so it is a named fact and not an
+/// implicit property of a dependency.
 pub const DEFAULT_BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// The one INSERT of this module, shared by [`Journal::record_entry`] and by
@@ -105,10 +104,10 @@ const FORMAT_OP: &str = "journal_format";
 /// `revertible_for` cannot return it even if the `seq` filter were dropped.
 const FORMAT_ACTOR_KIND: &str = "system";
 
-/// Columnas de lectura, en dos variantes fijas. SIN `format!`: en el fichero
-/// que sostiene la evidencia de manipulación, «aquí no se construye SQL con
-/// strings» tiene que poder comprobarse de un vistazo. La variante `NULL` es
-/// para una DB pre-migración abierta en SOLO-LECTURA, que no se puede alterar.
+/// Read columns, in two fixed variants. WITHOUT `format!`: in the file that
+/// holds the evidence of tampering, "SQL is not built from strings here" has
+/// to be checkable at a glance. The `NULL` variant is for a pre-migration DB
+/// opened READ-ONLY, which cannot be altered.
 const SELECT_VERIFY: &str = "SELECT seq, ts_ms, actor_kind, actor_id, op, path, path_to, reversal, reversal_ref, undoes_seq, prev_hash, entry_hash, batch_id FROM journal ORDER BY seq ASC";
 const SELECT_VERIFY_NO_BATCH: &str = "SELECT seq, ts_ms, actor_kind, actor_id, op, path, path_to, reversal, reversal_ref, undoes_seq, prev_hash, entry_hash, NULL FROM journal ORDER BY seq ASC";
 /// `seq >= 1` on every MUTATION reader: row 0 is the format marker
@@ -117,22 +116,22 @@ const SELECT_VERIFY_NO_BATCH: &str = "SELECT seq, ts_ms, actor_kind, actor_id, o
 /// the undo's LIFO stack and in `count()`.
 const SELECT_ENTRIES: &str = "SELECT seq, ts_ms, entry_hash, actor_kind, actor_id, op, path, path_to, reversal, reversal_ref, undoes_seq, batch_id FROM journal WHERE seq >= 1 ORDER BY seq ASC";
 const SELECT_ENTRIES_NO_BATCH: &str = "SELECT seq, ts_ms, entry_hash, actor_kind, actor_id, op, path, path_to, reversal, reversal_ref, undoes_seq, NULL FROM journal WHERE seq >= 1 ORDER BY seq ASC";
-/// Una entrada está DESHECHA si tiene una compensación VIVA: una entrada con
-/// su `seq` en `undoes_seq` que a su vez nadie haya compensado.
+/// An entry is UNDONE if it has a LIVE compensation: an entry with its `seq`
+/// in `undoes_seq` that nobody has, in turn, compensated.
 ///
-/// La condición ingenua —«existe alguna compensación»— era correcta mientras
-/// una compensación jamás se desandaba. El undo de un LOTE (§17) rompió eso:
-/// se ejecuta por el mismo ejecutor que la ida, así que si un paso del undo
-/// falla, el ejecutor DESANDA los pasos de undo que ya había aplicado y
-/// journaliza esa vuelta como compensación de la compensación. El árbol queda
-/// como estaba —el lote sigue aplicado—, pero con la condición ingenua sus
-/// entradas quedaban tapadas por unas compensaciones que ya no valen, y el
-/// lote se volvía INDESHACIBLE para siempre, en silencio.
+/// The naive condition — "some compensation exists" — was correct as long as
+/// a compensation was never itself undone. The undo of a BATCH (§17) broke
+/// that: it runs through the same executor as the forward action, so if a
+/// step of the undo fails, the executor UNDOES the undo steps it had already
+/// applied and journals that reversal as a compensation of the compensation.
+/// The tree ends up as it was — the batch is still applied — but under the
+/// naive condition its entries stayed covered by compensations that no longer
+/// count, and the batch became UNUNDOABLE forever, silently.
 ///
-/// La cadena que este código puede producir es `O ← C ← D` y nada más hondo:
-/// una compensación nace con `undoes_seq` no nulo, así que jamás es revertible
-/// por sí misma y nadie la vuelve a compensar salvo el desandado de su propio
-/// lote de undo. Un nivel de anidamiento cubre exactamente eso.
+/// The chain this code can produce is `O ← C ← D` and nothing deeper: a
+/// compensation is born with a non-null `undoes_seq`, so it is never
+/// revertible by itself and nobody compensates it again except by undoing its
+/// own undo batch. One level of nesting covers exactly that.
 const SELECT_REVERTIBLE: &str = "SELECT seq, ts_ms, entry_hash, actor_kind, actor_id, op, path, path_to, reversal, reversal_ref, undoes_seq, batch_id \
      FROM journal \
      WHERE seq >= 1 AND undoes_seq IS NULL AND actor_kind = ? AND actor_id IS ? \
@@ -152,37 +151,36 @@ const SELECT_REVERTIBLE_NO_BATCH: &str = "SELECT seq, ts_ms, entry_hash, actor_k
        ) \
      ORDER BY seq DESC";
 
-/// Una PÁGINA hacia atrás para la línea de tiempo (fase 7).
+/// A backward PAGE for the timeline (phase 7).
 ///
-/// `?1` es la cota superior EXCLUSIVA (`NULL` = desde la más nueva) y `?2`
-/// la clase de actor (`NULL` = todas). El `IS NULL OR` de cada una es lo que
-/// permite una sola sentencia para las cuatro combinaciones, en vez de
-/// construir SQL por concatenación — que es como se acaba metiendo en una
-/// consulta algo que vino de fuera.
+/// `?1` is the EXCLUSIVE upper bound (`NULL` = from the newest) and `?2` the
+/// actor class (`NULL` = all). The `IS NULL OR` on each one is what lets a
+/// single statement cover all four combinations, instead of building SQL by
+/// concatenation — which is how something from outside ends up inside a
+/// query.
 ///
-/// Las compensaciones (`undoes_seq IS NOT NULL`) SÍ salen: son mutaciones
-/// que ocurrieron, y una línea de tiempo que las escondiera enseñaría un
-/// pasado que no pasó — «deshice esto» es un suceso tan real como lo que
-/// deshizo.
-/// La columna 12 de las dos que siguen: si la entrada YA está deshecha, o
-/// sea si tiene una compensación VIVA.
+/// Compensations (`undoes_seq IS NOT NULL`) DO come out: they are mutations
+/// that happened, and a timeline that hid them would show a past that did not
+/// happen — "I undid this" is an event just as real as the one it undid.
+/// Column 12 of the two that follow: whether the entry is ALREADY undone,
+/// i.e. whether it has a LIVE compensation.
 ///
-/// Es la MISMA condición que usa [`SELECT_REVERTIBLE`] para descartarla, y
-/// por eso se escribe una vez y se pega en las dos: si divergieran, la línea
-/// de tiempo prometería deshacer entradas que el undo se va a saltar — que
-/// es exactamente el número que una confirmación no puede tener mal.
+/// It is the SAME condition [`SELECT_REVERTIBLE`] uses to discard it, and
+/// that is why it is written once and pasted into both: if they diverged, the
+/// timeline would promise to undo entries the undo is going to skip — which
+/// is exactly the number a confirmation cannot get wrong.
 ///
-/// El cliente NO puede calcularlo: la compensación puede estar fuera de la
-/// página que tiene delante.
+/// The client CANNOT compute it: the compensation may be outside the page it
+/// has in front of it.
 const COL_UNDONE: &str = "(seq IN ( \
        SELECT c.undoes_seq FROM journal c \
        WHERE c.undoes_seq IS NOT NULL \
          AND c.seq NOT IN (SELECT d.undoes_seq FROM journal d WHERE d.undoes_seq IS NOT NULL) \
      ))";
 
-/// La página, con [`COL_UNDONE`] pegado detrás de las doce de siempre.
-fn select_page(con_batch: bool) -> String {
-    let batch = if con_batch { "batch_id" } else { "NULL" };
+/// The page, with [`COL_UNDONE`] pasted behind the usual twelve.
+fn select_page(with_batch: bool) -> String {
+    let batch = if with_batch { "batch_id" } else { "NULL" };
     format!(
         "SELECT seq, ts_ms, entry_hash, actor_kind, actor_id, op, path, path_to, reversal, reversal_ref, undoes_seq, {batch}, {COL_UNDONE} \
          FROM journal \
@@ -191,29 +189,29 @@ fn select_page(con_batch: bool) -> String {
     )
 }
 
-/// [`SELECT_REVERTIBLE`] acotado a lo POSTERIOR a un `seq` (fase 7).
+/// [`SELECT_REVERTIBLE`] bounded to what comes AFTER a `seq` (phase 7).
 ///
-/// Mismo cuerpo, dos condiciones más. Se duplica en vez de componerse porque
-/// la condición de «compensada viva» es la parte delicada de esta consulta
-/// —su porqué está sobre [`SELECT_REVERTIBLE`]— y un constructor de SQL que
-/// la pegue por trozos es la forma de que un día deje de estar.
+/// Same body, two more conditions. Duplicated instead of composed because the
+/// "live compensation" condition is the delicate part of this query — its
+/// rationale is on [`SELECT_REVERTIBLE`] — and an SQL builder that pastes it
+/// together in pieces is how it one day stops being there.
 ///
-/// **Un LOTE entra entero o no entra** (`batch_id NOT IN (…seq <= corte)`),
-/// y ésta es la condición que de verdad importa aquí. `revertible_for` no la
-/// necesitaba: traía TODAS las entradas del actor, así que un `batch_id`
-/// siempre llegaba completo a `undo_units`. Al cortar por `seq` deja de ser
-/// cierto, y `revert_batch` —que revierte «entero o nada»— recibiría media
-/// unidad creyéndola entera: su propio `debug_assert` sólo comprueba que el
-/// trozo sea internamente coherente, y un trozo lo es. El resultado sería un
-/// `fs.rename_batch` con la mitad de los nombres devueltos y la otra mitad
-/// no, con compensaciones escritas para la mitad que se movió.
+/// **A BATCH goes in whole or not at all** (`batch_id NOT IN (…seq <= cutoff)`),
+/// and this is the condition that actually matters here. `revertible_for`
+/// did not need it: it brought back ALL of the actor's entries, so a
+/// `batch_id` always arrived complete at `undo_units`. Cutting by `seq` stops
+/// that being true, and `revert_batch` — which reverts "all or nothing" —
+/// would receive half a unit believing it whole: its own `debug_assert` only
+/// checks that the piece is internally coherent, and a piece is. The result
+/// would be an `fs.rename_batch` with half the names returned and the other
+/// half not, with compensations written for the half that moved.
 ///
-/// Y NO se resuelve metiendo el lote entero: eso desharía entradas anteriores
-/// al corte, o sea la fila que el humano señaló para conservar. Se excluye,
-/// que es la dirección segura — deshacer de menos se vuelve a pedir; deshacer
-/// de más, no. Los seqs de un lote pueden además no ser contiguos (dos tareas
-/// concurrentes se intercalan, como dice `alloc_batch`), así que esto no se
-/// puede dejar en manos de que el corte «caiga entre lotes».
+/// And it is NOT solved by including the whole batch: that would undo entries
+/// before the cutoff, i.e. the row the human pointed at to KEEP. It is
+/// excluded, which is the safe direction — undoing too little gets asked for
+/// again; undoing too much does not. A batch's seqs may also not be
+/// contiguous (two concurrent tasks interleave, as `alloc_batch` says), so
+/// this cannot be left to the cutoff "happening to fall between batches".
 const SELECT_REVERTIBLE_AFTER: &str = "SELECT seq, ts_ms, entry_hash, actor_kind, actor_id, op, path, path_to, reversal, reversal_ref, undoes_seq, batch_id \
      FROM journal \
      WHERE seq >= 1 AND seq > ?3 AND undoes_seq IS NULL AND actor_kind = ?1 AND actor_id IS ?2 \
@@ -230,11 +228,11 @@ const SELECT_REVERTIBLE_AFTER: &str = "SELECT seq, ts_ms, entry_hash, actor_kind
          SELECT b.batch_id FROM journal b WHERE b.batch_id IS NOT NULL AND b.seq > ?4 \
        )) \
      ORDER BY seq DESC";
-// El TECHO (`?4`, 0.80.0) es el espejo exacto del corte: nada por encima, y
-// ningún lote con una entrada por encima — mirado contra el journal ENTERO,
-// igual que el corte, y no contra lo ya seleccionado. Revertir la mitad
-// contada de un lote que seguía creciendo es revertir media unidad
-// creyéndola entera. `NULL` = sin techo, que es lo de 0.79.
+// The CEILING (`?4`, 0.80.0) is the exact mirror of the cutoff: nothing
+// above it, and no batch with an entry above it — checked against the WHOLE
+// journal, same as the cutoff, and not against what is already selected.
+// Reverting the counted half of a batch that kept growing is reverting half
+// a unit believing it whole. `NULL` = no ceiling, which is 0.79's behavior.
 const SELECT_REVERTIBLE_AFTER_NO_BATCH: &str = "SELECT seq, ts_ms, entry_hash, actor_kind, actor_id, op, path, path_to, reversal, reversal_ref, undoes_seq, NULL \
      FROM journal \
      WHERE seq >= 1 AND seq > ?3 AND undoes_seq IS NULL AND actor_kind = ?1 AND actor_id IS ?2 \
@@ -246,49 +244,50 @@ const SELECT_REVERTIBLE_AFTER_NO_BATCH: &str = "SELECT seq, ts_ms, entry_hash, a
        AND (?4 IS NULL OR seq <= ?4) \
      ORDER BY seq DESC";
 
-/// Errores del journal.
+/// Journal errors.
 #[derive(Debug, thiserror::Error)]
 pub enum JournalError {
-    /// Error de la capa sqlx (abrir/consultar/insertar).
+    /// Error from the sqlx layer (open/query/insert).
     #[error("sqlite: {0}")]
     Sqlx(#[from] sqlx::Error),
-    /// El journal en disco está corrupto (p. ej. un `entry_hash` que no mide 32
-    /// bytes): NO se panica, se falla en seguro.
-    #[error("journal corrupto: {0}")]
+    /// The journal on disk is corrupt (e.g. an `entry_hash` that is not 32
+    /// bytes long): it does NOT panic, it fails safe.
+    #[error("corrupt journal: {0}")]
     Corrupt(&'static str),
-    /// Error de I/O al preparar la ubicación del journal (p. ej. crear el dir
-    /// de config).
+    /// I/O error while preparing the journal's location (e.g. creating the
+    /// config dir).
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
 }
 
 impl From<JournalError> for ProtoError {
     fn from(_: JournalError) -> Self {
-        // El detalle va por `tracing`; al wire/task se expone como interno.
+        // The detail goes through `tracing`; it is exposed as internal to the
+        // wire/task.
         ProtoError::Internal { panic: false }
     }
 }
 
-/// Quién originó la mutación (spec §10). Hoy siempre `User`; los agentes lo
-/// fijan vía scopes/MCP (M3-4).
+/// Who originated the mutation (spec §10). Today always `User`; agents set it
+/// via scopes/MCP (M3-4).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Actor {
-    /// Un frontend humano local.
+    /// A local human frontend.
     User,
-    /// Un agente por MCP, con su id de sesión.
+    /// An agent over MCP, with its session id.
     Agent {
-        /// Id de la sesión del agente.
+        /// The agent's session id.
         session: String,
     },
-    /// Un plugin, con su id declarado.
+    /// A plugin, with its declared id.
     Plugin {
-        /// Id del plugin.
+        /// The plugin's id.
         id: String,
     },
 }
 
 impl Actor {
-    /// `(kind, id)` para persistir: `("user", None)`, `("agent", Some(sess))`…
+    /// `(kind, id)` for persisting: `("user", None)`, `("agent", Some(sess))`…
     #[must_use]
     pub fn parts(&self) -> (&'static str, Option<&str>) {
         match self {
@@ -299,28 +298,28 @@ impl Actor {
     }
 }
 
-/// Cómo revertir la entrada (lo EJECUTA M3-2).
+/// How to revert the entry (M3-2 is what EXECUTES it).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Reversal {
-    /// Borrar el nodo creado.
+    /// Delete the created node.
     Delete,
-    /// Renombrar de vuelta (destino → origen).
+    /// Rename back (destination → source).
     RenameBack,
-    /// Restaurar desde la papelera.
+    /// Restore from the trash.
     RestoreTrash,
-    /// No hay vuelta atrás (borrado permanente).
+    /// No way back (permanent delete).
     Irreversible,
-    /// Devolver los permisos POSIX que tenía (#314).
+    /// Give back the POSIX permissions it had (#314).
     ///
-    /// El modo ANTERIOR viaja en `reversal_ref`, que para esta op no es una
-    /// ruta sino el número en ASCII decimal. Es la única columna que existe
-    /// para «lo que la reversa necesita», y añadir otra al esquema por doce
-    /// bits sería peor que decir aquí lo que hay dentro.
+    /// The PREVIOUS mode travels in `reversal_ref`, which for this op is not a
+    /// path but the number in ASCII decimal. It is the only column that
+    /// exists for "what the reversal needs", and adding another one to the
+    /// schema for twelve bits would be worse than saying here what is inside.
     SetModeBack,
 }
 
 impl Reversal {
-    /// Etiqueta persistida.
+    /// Persisted label.
     #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -332,14 +331,14 @@ impl Reversal {
         }
     }
 
-    /// La reversa que nombra esa etiqueta, o `None` si este binario no la
-    /// conoce.
+    /// The reversal that label names, or `None` if this binary does not know
+    /// it.
     ///
-    /// `None` NO es «irreversible»: es «no sé qué es esto», y quien pregunte
-    /// tiene que decidir qué hacer con esa diferencia. La línea de tiempo la
-    /// cuenta como SIN vuelta, porque en un journal manipulado —o escrito
-    /// por una versión que no es ésta— afirmar que algo se puede deshacer es
-    /// la mentira que cuesta cara.
+    /// `None` is NOT "irreversible": it is "I don't know what this is", and
+    /// whoever asks has to decide what to do with that difference. The
+    /// timeline counts it as having NO way back, because in a tampered
+    /// journal — or one written by a version that is not this one —
+    /// asserting that something can be undone is the lie that costs dearly.
     #[must_use]
     pub fn from_str_opt(s: &str) -> Option<Self> {
         match s {
@@ -353,88 +352,89 @@ impl Reversal {
     }
 }
 
-/// Una entrada del journal materializada para LECTURA (undo M3-2, audit M3-5,
-/// tests de integración). Los `path`/`path_to`/`reversal_ref` son BYTES crudos
-/// de [`norte_proto::VPath::to_wire`] (regla 1): reconstruye con
-/// `VPath::from_wire` al consumir, jamás asumas UTF-8.
+/// A journal entry materialized for READING (undo M3-2, audit M3-5,
+/// integration tests). `path`/`path_to`/`reversal_ref` are the raw BYTES from
+/// [`norte_proto::VPath::to_wire`] (rule 1): reconstruct with
+/// `VPath::from_wire` on consumption, never assume UTF-8.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JournalEntry {
-    /// Secuencia monótona asignada al registrar.
+    /// Monotonic sequence assigned when recorded.
     pub seq: i64,
-    /// Milisegundos UTC del registro (reloj del daemon al journalizar).
+    /// UTC milliseconds of the recording (the daemon's clock at journaling
+    /// time).
     pub ts_ms: i64,
-    /// Hash de la entrada en la cadena (32 bytes) — el audit lo cruza con
-    /// las anclas (ADR 0025).
+    /// The entry's hash in the chain (32 bytes) — the audit cross-checks it
+    /// against the anchors (ADR 0025).
     pub entry_hash: Vec<u8>,
-    /// Origen: `"user" | "agent" | "plugin"`.
+    /// Origin: `"user" | "agent" | "plugin"`.
     pub actor_kind: String,
-    /// Id de sesión del agente / id del plugin, si aplica.
+    /// Agent's session id / plugin's id, if applicable.
     pub actor_id: Option<String>,
-    /// Operación: `"created" | "removed" | "trashed" | "renamed"`.
+    /// Operation: `"created" | "removed" | "trashed" | "renamed"`.
     pub op: String,
-    /// Path afectado (bytes `to_wire`).
+    /// Affected path (`to_wire` bytes).
     pub path: Vec<u8>,
-    /// Destino de un `renamed` (bytes `to_wire`).
+    /// Destination of a `renamed` (`to_wire` bytes).
     pub path_to: Option<Vec<u8>>,
-    /// Etiqueta de reversa persistida ([`Reversal::as_str`]).
+    /// Persisted reversal label ([`Reversal::as_str`]).
     pub reversal: String,
-    /// Referencia para revertir (p. ej. ruta de papelera de un `trashed`),
-    /// bytes `to_wire`.
+    /// Reference needed to revert (e.g. the trash path of a `trashed`),
+    /// `to_wire` bytes.
     pub reversal_ref: Option<Vec<u8>>,
-    /// Si esta entrada COMPENSA un undo, el `seq` original que deshace; `None`
-    /// si es una mutación normal.
+    /// If this entry COMPENSATES an undo, the original `seq` it undoes;
+    /// `None` for a normal mutation.
     pub undoes_seq: Option<i64>,
-    /// Lote al que pertenece la entrada (`fs.rename_batch`). Es la ETIQUETA que
-    /// permitirá deshacer n entradas como una sola unidad; el consumidor (el
-    /// ejecutor de lotes y el undo por grupo) llega después. `None` para una
-    /// mutación suelta — y para toda entrada escrita antes de que existieran
-    /// los lotes.
+    /// The batch the entry belongs to (`fs.rename_batch`). It is the LABEL
+    /// that will allow undoing n entries as a single unit; the consumer (the
+    /// batch executor and the group undo) comes later. `None` for a standalone
+    /// mutation — and for every entry written before batches existed.
     pub batch_id: Option<i64>,
 }
 
-/// Una entrada tal y como la sirve [`Journal::page`]: la entrada, más si YA
-/// está deshecha.
+/// An entry as [`Journal::page`] serves it: the entry, plus whether it is
+/// ALREADY undone.
 ///
-/// «Deshecha» no es un campo de la tabla: es que exista una compensación
-/// suya VIVA, y eso se calcula con una subconsulta (`COL_UNDONE`). Viaja
-/// pegada a la entrada porque el cliente no puede deducirlo — la
-/// compensación puede estar fuera de su página — y sin ello una línea de
-/// tiempo cuenta como deshacible lo que el undo se va a saltar.
+/// "Undone" is not a column in the table: it is that a LIVE compensation of
+/// it exists, and that is computed with a subquery (`COL_UNDONE`). It travels
+/// attached to the entry because the client cannot deduce it — the
+/// compensation may be outside its page — and without it a timeline counts as
+/// undoable what the undo is going to skip.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PageEntry {
-    /// La entrada.
+    /// The entry.
     pub entry: JournalEntry,
-    /// Si tiene una compensación viva.
+    /// Whether it has a live compensation.
     pub undone: bool,
 }
 
 impl PageEntry {
-    /// Esta entrada en su forma de WIRE, para la línea de tiempo
-    /// ([`norte_proto::methods::JOURNAL_LIST`], fase 7).
+    /// This entry in its WIRE form, for the timeline
+    /// ([`norte_proto::methods::JOURNAL_LIST`], phase 7).
     ///
-    /// Vive aquí y no en el daemon porque los dos backends la necesitan: el
-    /// embebido contesta la misma lista sin socket de por medio, y dos
-    /// conversiones para la misma pregunta divergen en el primer campo que
-    /// alguien añada.
+    /// Lives here and not in the daemon because both backends need it: the
+    /// embedded one answers the same list with no socket in between, and two
+    /// conversions for the same question diverge at the first field someone
+    /// adds.
     ///
-    /// Las rutas salen SANEADAS (`mask_terminal_hazards`) y con
-    /// [`norte_proto::methods::JournalRow::hostile`] puesta si el texto dejó
-    /// de decir lo que decían los bytes. El nombre de un fichero lo elige
-    /// quien lo crea —incluido un agente dentro de su recinto—, y ésta es la
-    /// pantalla donde un humano decide qué revertir: un override bidi o una
-    /// secuencia de escape aquí repintan esa decisión. Es el mismo trato que
-    /// `fs.search` le da a la línea que devuelve, y por el mismo motivo.
+    /// Paths come out SANITIZED (`mask_terminal_hazards`) and with
+    /// [`norte_proto::methods::JournalRow::hostile`] set if the text stopped
+    /// saying what the bytes said. A file's name is chosen by whoever creates
+    /// it — including an agent inside its confinement — and this is the
+    /// screen where a human decides what to revert: a bidi override or an
+    /// escape sequence here would repaint that decision. It is the same
+    /// treatment `fs.search` gives the line it returns, and for the same
+    /// reason.
     ///
-    /// Que los bytes no sean texto no tira la fila: se enseña con
-    /// reemplazos. Una mutación que no se ve es indistinguible de una que no
-    /// ocurrió.
+    /// Bytes not being text does not drop the row: it is shown with
+    /// replacements. A mutation that cannot be seen is indistinguishable from
+    /// one that did not happen.
     #[must_use]
     pub fn to_wire_row(&self) -> norte_proto::methods::JournalRow {
         let e = &self.entry;
-        let (path, path_hostil) = texto_de_ruta(&e.path);
-        let (path_to, to_hostil) = match &e.path_to {
+        let (path, path_hostile) = path_text(&e.path);
+        let (path_to, to_hostile) = match &e.path_to {
             Some(b) => {
-                let (t, h) = texto_de_ruta(b);
+                let (t, h) = path_text(b);
                 (Some(t), h)
             }
             None => (None, false),
@@ -447,10 +447,10 @@ impl PageEntry {
             op: e.op.clone(),
             path,
             path_to,
-            hostile: path_hostil || to_hostil,
-            // Un token de `reversal` que este daemon no conoce cuenta como
-            // SIN vuelta: en un journal manipulado, afirmar que algo se
-            // puede deshacer es la mentira cara.
+            hostile: path_hostile || to_hostile,
+            // A `reversal` token this daemon does not know counts as having
+            // NO way back: in a tampered journal, asserting that something
+            // can be undone is the costly lie.
             reversible: Reversal::from_str_opt(&e.reversal)
                 .is_some_and(|r| r != Reversal::Irreversible),
             undoes_seq: e.undoes_seq,
@@ -460,49 +460,51 @@ impl PageEntry {
     }
 }
 
-/// Una página en su forma de wire, con el CURSOR ya calculado.
+/// A page in its wire form, with the CURSOR already computed.
 ///
-/// Vive aquí, junto a [`PageEntry::to_wire_row`], y por la misma razón: los
-/// dos bordes que sirven `journal.list` —el daemon y el backend embebido—
-/// tenían esta misma expresión de seis fichas copiada, y ninguna de las dos
-/// copias podía ponerse roja sola.
+/// Lives here, next to [`PageEntry::to_wire_row`], and for the same reason:
+/// the two edges that serve `journal.list` — the daemon and the embedded
+/// backend — had this same six-field expression copied, and neither copy
+/// could turn red on its own.
 ///
-/// **El cursor sólo se ofrece si la página vino LLENA.** Con una a medias ya
-/// no queda nada más viejo, y ofrecerlo haría que el cliente pidiera otra
-/// vuelta para recibir cero filas, indefinidamente. Y es el `seq` de la
-/// última servida, nunca `seq - 1`: los `seq` no son densos, y esa resta es
-/// justo la aritmética que se rompe el día que dejen de serlo.
+/// **The cursor is only offered if the page came back FULL.** With a partial
+/// one there is nothing older left, and offering it would make the client
+/// ask for another round to receive zero rows, forever. And it is the `seq`
+/// of the last one served, never `seq - 1`: `seq`s are not dense, and that
+/// subtraction is exactly the arithmetic that breaks the day they stop being
+/// so.
 #[must_use]
 pub fn page_to_wire(entries: &[PageEntry], limit: u32) -> norte_proto::methods::JournalListResult {
-    let lleno = entries.len() == limit as usize;
+    let full = entries.len() == limit as usize;
     norte_proto::methods::JournalListResult {
         rows: entries.iter().map(PageEntry::to_wire_row).collect(),
-        // El `flatten` no es adorno: con `limit` cero —que ningún borde deja
-        // pasar, pero que nadie de aquí abajo puede garantizar— una página
-        // vacía contaría como «llena», y esto la salva de anunciar un cursor
-        // que no existe.
-        next_before_seq: lleno.then(|| entries.last().map(|e| e.entry.seq)).flatten(),
+        // The `flatten` is not decoration: with a `limit` of zero — which no
+        // edge lets through, but which nothing down here can guarantee — an
+        // empty page would count as "full", and this saves it from
+        // announcing a cursor that does not exist.
+        next_before_seq: full.then(|| entries.last().map(|e| e.entry.seq)).flatten(),
     }
 }
 
-/// El texto pintable de unos bytes de ruta, y si dejó de decir lo que ellos
-/// decían (por no ser texto, o por llevar algo que un terminal ejecutaría).
-fn texto_de_ruta(bytes: &[u8]) -> (String, bool) {
-    let crudo = String::from_utf8_lossy(bytes);
-    let saneado = norte_encoding::mask_terminal_hazards(&crudo);
-    let hostil = matches!(crudo, std::borrow::Cow::Owned(_)) || saneado != crudo;
-    (saneado, hostil)
+/// The paintable text of some path bytes, and whether it stopped saying what
+/// they said (for not being text, or for carrying something a terminal would
+/// execute).
+fn path_text(bytes: &[u8]) -> (String, bool) {
+    let raw = String::from_utf8_lossy(bytes);
+    let sanitized = norte_encoding::mask_terminal_hazards(&raw);
+    let hostile = matches!(raw, std::borrow::Cow::Owned(_)) || sanitized != raw;
+    (sanitized, hostile)
 }
 
-/// Materializa un `JournalEntry` desde una fila con el orden de columnas
-/// `seq, ts_ms, entry_hash, actor_kind, actor_id, op, path, path_to,
-/// reversal, reversal_ref, undoes_seq, batch_id` (compartido por `entries` y
+/// Materializes a `JournalEntry` from a row with the column order `seq,
+/// ts_ms, entry_hash, actor_kind, actor_id, op, path, path_to, reversal,
+/// reversal_ref, undoes_seq, batch_id` (shared by `entries` and
 /// `revertible_for`).
 ///
-/// `try_get` en todas: el tipado de `SQLite` es DINÁMICO, así que un blob
-/// no-UTF-8 metido en una columna TEXT hace panicar a `get` — y un panic aquí
-/// es un `norte audit export` que no exporta nada en vez de un error que se
-/// pueda leer y contar.
+/// `try_get` on every one: `SQLite`'s typing is DYNAMIC, so a non-UTF-8 blob
+/// put in a TEXT column makes `get` PANIC — and a panic here is a `norte
+/// audit export` that exports nothing instead of an error that can be
+/// read and counted.
 fn row_to_entry(row: &sqlx::sqlite::SqliteRow) -> Result<JournalEntry, JournalError> {
     Ok(JournalEntry {
         seq: row.try_get(0)?,
@@ -520,33 +522,35 @@ fn row_to_entry(row: &sqlx::sqlite::SqliteRow) -> Result<JournalEntry, JournalEr
     })
 }
 
-/// ¿Existe ya la columna `batch_id`? Se pregunta al catálogo en vez de asumir:
-/// el handle de SOLO-LECTURA (audit) no puede migrar una DB antigua y aun así
-/// tiene que leerla. Una tabla ausente responde CERO filas → `false`, y la
-/// primera query real fallará con su error propio, sin enmascarar nada.
+/// Does the `batch_id` column already exist? Asked of the catalog instead of
+/// assumed: the READ-ONLY handle (audit) cannot migrate an old DB and still
+/// has to read it. A missing table answers ZERO rows → `false`, and the first
+/// real query will fail with its own error, without masking anything.
 async fn has_batch_id_column(pool: &SqlitePool) -> Result<bool, JournalError> {
     has_column(pool, "batch_id").await
 }
 
-/// Si la tabla `journal` tiene la columna `nombre`, preguntándoselo al catálogo.
+/// Whether the `journal` table has the column `name`, by asking the catalog.
 ///
-/// Ver [`has_batch_id_column`] para por qué se pregunta en vez de tragarse el
-/// error del `ALTER`.
-async fn has_column(pool: &SqlitePool, nombre: &str) -> Result<bool, JournalError> {
-    Ok(columnas(pool).await?.iter().any(|c| c == nombre))
+/// See [`has_batch_id_column`] for why it is asked instead of swallowing the
+/// `ALTER`'s error.
+async fn has_column(pool: &SqlitePool, name: &str) -> Result<bool, JournalError> {
+    Ok(columns(pool).await?.iter().any(|c| c == name))
 }
 
-/// Las columnas de la tabla `journal`, según el catálogo. VACÍO si la tabla no
-/// existe —lo que aquí no es un error: el audit abre el fichero que le señalen y
-/// la primera query real fallará con su error propio, sin enmascarar nada.
-async fn columnas(pool: &SqlitePool) -> Result<Vec<String>, JournalError> {
+/// The columns of the `journal` table, according to the catalog. EMPTY if the
+/// table does not exist — which is not an error here: the audit opens
+/// whatever file it is pointed at and the first real query will fail with its
+/// own error, without masking anything.
+async fn columns(pool: &SqlitePool) -> Result<Vec<String>, JournalError> {
     let rows = sqlx::query("PRAGMA table_info(journal)")
         .fetch_all(pool)
         .await?;
     let mut out = Vec::with_capacity(rows.len());
     for r in &rows {
-        // `try_get`: la fila la produce un fichero que el operador señala (el
-        // audit abre lo que le den), así que su forma no se da por hecha.
+        // `try_get`: the row is produced by a file the operator points us at
+        // (the audit opens whatever it is given), so its shape is not
+        // assumed.
         out.push(r.try_get::<String, _>(1)?);
     }
     Ok(out)
@@ -591,8 +595,8 @@ impl JournalFormat {
     }
 }
 
-/// Veredicto de [`Journal::verify_chain`] (B2 de #63): si la cadena se
-/// rompió, DÓNDE — el audit lo cita en vez de un booleano mudo.
+/// Verdict of [`Journal::verify_chain`] (B2 of #63): if the chain broke,
+/// WHERE — the audit cites it instead of a mute boolean.
 ///
 /// `#[non_exhaustive]`: a verdict enum grows (this variant is the proof), and
 /// a caller that stops compiling is cheaper than one that silently treats a
@@ -601,14 +605,14 @@ impl JournalFormat {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ChainStatus {
-    /// Cadena íntegra.
+    /// Chain intact.
     Intact {
-        /// Entradas verificadas.
+        /// Entries verified.
         entries: u64,
     },
-    /// Primera entrada cuyo encadenado o hash no casa.
+    /// First entry whose chaining or hash does not match.
     Broken {
-        /// `seq` de la primera rotura.
+        /// `seq` of the first break.
         first_bad_seq: i64,
     },
     /// The journal declares a format this binary does not know (ADR 0046), so
@@ -641,14 +645,14 @@ pub enum ChainStatus {
 }
 
 impl ChainStatus {
-    /// `true` si la cadena está íntegra.
+    /// `true` if the chain is intact.
     #[must_use]
     pub fn is_intact(&self) -> bool {
         matches!(self, ChainStatus::Intact { .. })
     }
 }
 
-/// Los campos de una entrada, en el orden canónico del hash.
+/// An entry's fields, in the hash's canonical order.
 pub(crate) struct Record<'a> {
     pub seq: i64,
     pub ts_ms: i64,
@@ -663,7 +667,7 @@ pub(crate) struct Record<'a> {
     pub batch_id: Option<i64>,
 }
 
-/// `entry_hash = sha256(prev_hash ‖ campos con longitud prefijada y presencia)`.
+/// `entry_hash = sha256(prev_hash ‖ length- and presence-prefixed fields)`.
 pub(crate) fn chain_hash(prev: &[u8; 32], r: &Record<'_>) -> [u8; 32] {
     let mut h = Sha256::new();
     h.update(prev);
@@ -683,23 +687,23 @@ pub(crate) fn chain_hash(prev: &[u8; 32], r: &Record<'_>) -> [u8; 32] {
             feed(&mut h, &s.to_le_bytes());
         }
     }
-    // AL FINAL y SOLO si hay lote. `None` no alimenta NADA —ni siquiera el byte
-    // de presencia que usan los demás `Option`— porque una entrada escrita antes
-    // de que existiera `batch_id` tiene que hashear EXACTAMENTE igual que
-    // entonces: si no, `verify_chain` gritaría «manipulado» sobre una DB que
-    // solo se migró. `Some` sí alimenta presencia + id con longitud prefijada,
-    // así que ni quitar un lote ni inventarlo sobrevive a la verificación.
+    // AT THE END and ONLY if there is a batch. `None` feeds NOTHING — not even
+    // the presence byte the other `Option`s use — because an entry written
+    // before `batch_id` existed has to hash EXACTLY as it did back then:
+    // otherwise `verify_chain` would scream "tampered" over a DB that was only
+    // migrated. `Some` does feed presence + a length-prefixed id, so neither
+    // stripping a batch nor inventing one survives verification.
     //
-    // ESTO NO ES UN PATRÓN REUTILIZABLE. Funciona porque `batch_id` es el
-    // ÚLTIMO campo: el mensaje de una entrada sin lote es un prefijo estricto
-    // del de una con lote, así que no hay ambigüedad. Un SEGUNDO campo opcional
-    // añadido con el mismo truco la crearía al instante — `(batch=Some(x),
-    // otro=None)` y `(batch=None, otro=Some(x))` producirían la MISMA cola
-    // `01 ‖ len ‖ x` y por tanto el mismo `entry_hash`, que es un agujero en la
-    // cadena, no una optimización. Campo nuevo ⇒ `feed_opt` (presencia
-    // siempre), y si por compatibilidad hiciera falta repetir el truco, versiona
-    // antes el formato de la cadena — con un marcador DENTRO de lo que la cadena
-    // y las anclas autentican, nunca en la cabecera del fichero.
+    // THIS IS NOT A REUSABLE PATTERN. It works because `batch_id` is the LAST
+    // field: the message of an entry with no batch is a strict prefix of one
+    // with a batch, so there is no ambiguity. A SECOND optional field added
+    // with the same trick would create one instantly — `(batch=Some(x),
+    // other=None)` and `(batch=None, other=Some(x))` would produce the SAME
+    // tail `01 ‖ len ‖ x` and therefore the same `entry_hash`, which is a hole
+    // in the chain, not an optimization. New field ⇒ `feed_opt` (always
+    // presence), and if compatibility ever required repeating the trick,
+    // version the chain's format first — with a marker INSIDE what the chain
+    // and the anchors authenticate, never in the file's header.
     if let Some(b) = r.batch_id {
         h.update([1u8]);
         feed(&mut h, &b.to_le_bytes());
@@ -841,112 +845,117 @@ fn now_ms() -> i64 {
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
 }
 
-/// Estado de la cadena. `seq` y `last_hash` se avanzan JUNTOS bajo el `Mutex`
-/// de `record`, así que el orden de `seq` == orden de encadenado por
-/// construcción (evita el falso «manipulado» bajo concurrencia — security M1).
+/// Chain state. `seq` and `last_hash` advance TOGETHER under `record`'s
+/// `Mutex`, so `seq` order == chaining order by construction (avoids the
+/// false "tampered" verdict under concurrency — security M1).
 struct ChainState {
     last_seq: i64,
     last_hash: [u8; 32],
-    /// Último id de lote entregado. Vive AQUÍ, bajo el mismo lock que `seq`,
-    /// para que dos tareas de batch concurrentes no puedan compartir id.
+    /// Last batch id handed out. Lives HERE, under the same lock as `seq`, so
+    /// two concurrent batch tasks cannot share an id.
     batch_counter: i64,
 }
 
-/// El journal transaccional sobre `SQLite` (WAL).
+/// The transactional journal over `SQLite` (WAL).
 pub struct Journal {
-    /// **No se CLONA fuera de este tipo**, y de eso depende
-    /// [`crate::embedded::LazyJournal::release`]: un `SqlitePool` clonado
-    /// sobrevive al `Arc::try_unwrap` que decide que nadie sostiene el journal,
-    /// y mantiene el fichero abierto después de que este proceso se haya
-    /// declarado no-dueño. `pub(crate)` no lo impide; esta línea sí lo dice.
-    /// Todos los usos del árbol son préstamos (`&self.pool`).
+    /// **Never CLONED outside this type**, and
+    /// [`crate::embedded::LazyJournal::release`] depends on that: a cloned
+    /// `SqlitePool` survives the `Arc::try_unwrap` that decides nobody holds
+    /// the journal, and keeps the file open after this process has declared
+    /// itself not the owner. `pub(crate)` does not prevent it; this line says
+    /// so. Every use across the tree is a borrow (`&self.pool`).
     pub(crate) pool: SqlitePool,
     chain: Mutex<ChainState>,
-    /// ¿Tiene la tabla la columna `batch_id`? Siempre `true` tras un [`Journal::open`]
-    /// (migra), puede ser `false` en [`Journal::open_read_only`] sobre una DB
-    /// pre-migración, que no se puede alterar y aun así hay que poder auditar.
+    /// Does the table have the `batch_id` column? Always `true` after a
+    /// [`Journal::open`] (it migrates), can be `false` in
+    /// [`Journal::open_read_only`] over a pre-migration DB, which cannot be
+    /// altered and still has to be auditable.
     has_batch_id: bool,
-    /// A quién se le ofrece cada fila comprometida (ADR 0100): los hooks. Un
-    /// `RwLock` std porque se lee en cada `record_entry` y se escribe una vez
-    /// al arrancar; `None` hasta que [`Journal::set_hook_sender`] lo ponga.
+    /// Who each committed row is offered to (ADR 0100): the hooks. A std
+    /// `RwLock` because it is read on every `record_entry` and written once
+    /// at startup; `None` until [`Journal::set_hook_sender`] sets it.
     hooks: std::sync::RwLock<Option<crate::hooks::HookSender>>,
 }
 
-/// Todo lo que necesita UNA entrada del journal. Una struct en vez de ocho
-/// argumentos posicionales: la llamada se lee, y añadir un campo más adelante no
-/// vuelve a barajarlos. Los `path*` son BYTES de [`norte_proto::VPath::to_wire`]
-/// (regla 1).
+/// Everything ONE journal entry needs. A struct instead of eight positional
+/// arguments: the call reads clearly, and adding a field later never reshuffles
+/// them. The `path*` fields are BYTES from [`norte_proto::VPath::to_wire`]
+/// (rule 1).
 #[derive(Debug, Clone, Copy)]
 pub struct NewEntry<'a> {
-    /// Operación: `"created" | "removed" | "trashed" | "renamed"`.
+    /// Operation: `"created" | "removed" | "trashed" | "renamed"`.
     pub op: &'a str,
-    /// Path afectado (bytes `to_wire`).
+    /// Affected path (`to_wire` bytes).
     pub path: &'a [u8],
-    /// Destino de un `renamed` (bytes `to_wire`).
+    /// Destination of a `renamed` (`to_wire` bytes).
     pub path_to: Option<&'a [u8]>,
-    /// Cómo revertir.
+    /// How to revert.
     pub reversal: Reversal,
-    /// Referencia necesaria para revertir (p. ej. el destino en la papelera
-    /// lógica), bytes `to_wire`.
+    /// Reference needed to revert (e.g. the destination in the logical
+    /// trash), `to_wire` bytes.
     pub reversal_ref: Option<&'a [u8]>,
-    /// Quién la causó.
+    /// Who caused it.
     pub actor: &'a Actor,
-    /// El `seq` que esta entrada COMPENSA, si es un undo.
+    /// The `seq` this entry COMPENSATES, if it is an undo.
     pub undoes_seq: Option<i64>,
-    /// El lote al que pertenece, si formó parte de uno ([`Journal::alloc_batch`]):
-    /// la etiqueta que agrupa n entradas para deshacerlas juntas. Las
-    /// compensaciones de un undo de grupo se registran con el MISMO lote, para
-    /// que el grupo siga siendo legible después.
+    /// The batch it belongs to, if it was part of one
+    /// ([`Journal::alloc_batch`]): the label that groups n entries to undo
+    /// them together. A group undo's compensations are recorded with the SAME
+    /// batch, so the group stays readable as a group afterward.
     pub batch_id: Option<i64>,
 }
 
 impl Journal {
-    /// Abre (o crea) el journal en `path` con WAL + `synchronous=NORMAL` y
-    /// **lock exclusivo del fichero** (`locking_mode=EXCLUSIVE`): el
-    /// single-writer del hash-chain (spec §4) es un MECANISMO, no una
-    /// convención — un segundo proceso sobre el mismo fichero (p. ej. dos
-    /// daemons con sockets distintos y el mismo dir de config) falla al abrir
-    /// en vez de forkear la cadena y colisionar `seq` (MAJOR-1 del
-    /// security-reviewer M3-4). El fichero se crea `0600` ANTES de conectar
-    /// (sin ventana con el umask) y su dir padre `0700`.
+    /// Opens (or creates) the journal at `path` with WAL + `synchronous=NORMAL`
+    /// and an **exclusive file lock** (`locking_mode=EXCLUSIVE`): the hash
+    /// chain's single-writer requirement (spec §4) is a MECHANISM, not a
+    /// convention — a second process on the same file (e.g. two daemons with
+    /// different sockets and the same config dir) fails to open instead of
+    /// forking the chain and colliding on `seq` (MAJOR-1 from the
+    /// security-reviewer, M3-4). The file is created `0600` BEFORE connecting
+    /// (no window with the umask) and its parent dir `0700`.
     ///
     /// # Errors
-    /// [`JournalError::Sqlx`] al abrir/crear — incluida `database is locked`
-    /// si OTRO proceso ya lo tiene abierto; [`JournalError::Corrupt`] si el
-    /// último `entry_hash` no mide 32 bytes; I/O al pre-crear fichero/dir.
+    /// [`JournalError::Sqlx`] on open/create — including `database is locked`
+    /// if ANOTHER process already has it open; [`JournalError::Corrupt`] if
+    /// the last `entry_hash` is not 32 bytes long; I/O while pre-creating the
+    /// file/dir.
     pub async fn open(path: &std::path::Path) -> Result<Self, JournalError> {
         Self::open_with_busy_timeout(path, DEFAULT_BUSY_TIMEOUT).await
     }
 
-    /// Como [`Journal::open`], pero con un plazo propio para el caso «el lock lo
-    /// tiene otro».
+    /// Like [`Journal::open`], but with its own deadline for the case "someone
+    /// else has the lock".
     ///
-    /// `busy_timeout` es lo que `SQLite` espera antes de rendirse con `database
-    /// is locked`. El de [`DEFAULT_BUSY_TIMEOUT`] es el que quiere el daemon:
-    /// arranca una vez y prefiere aguantar un checkpoint ajeno a morir.
+    /// `busy_timeout` is how long `SQLite` waits before giving up with
+    /// `database is locked`. [`DEFAULT_BUSY_TIMEOUT`]'s value is what the
+    /// daemon wants: it starts once and would rather wait out someone else's
+    /// checkpoint than die.
     ///
-    /// Un proceso EMBEBIDO quiere lo contrario y por eso existe esta puerta
-    /// (#167): quien tiene el lock lo tiene para toda su vida —otro TUI, o el
-    /// daemon—, así que esperar cinco segundos no lo consigue, solo convierte
-    /// cada `norte cp` en cinco segundos de nada antes de seguir sin registro.
+    /// An EMBEDDED process wants the opposite, and that is why this door
+    /// exists (#167): whoever has the lock has it for its whole lifetime —
+    /// another TUI, or the daemon — so waiting five seconds does not get it,
+    /// it only turns every `norte cp` into five seconds of nothing before
+    /// carrying on without logging.
     ///
-    /// OJO: el plazo es de la CONEXIÓN, no del `open`. Rige también cada
-    /// sentencia posterior sobre ese handle — hoy da igual (una sola conexión,
-    /// dueña exclusiva, sin nadie con quien competir), y dejaría de darlo si
-    /// alguna vez se permitiera reconectar bajo un lock ajeno.
+    /// NOTE: the deadline belongs to the CONNECTION, not to `open`. It also
+    /// governs every later statement on that handle — today it makes no
+    /// difference (a single connection, the exclusive owner, nobody to
+    /// compete with), and would stop making none if reconnecting under
+    /// someone else's lock were ever allowed.
     ///
     /// # Errors
-    /// Las mismas que [`Journal::open`] — y con un plazo corto, `database is
-    /// locked` deja de ser el caso raro: es LA respuesta esperada cuando el
-    /// journal ya tiene dueño.
+    /// The same as [`Journal::open`] — and with a short deadline, `database is
+    /// locked` stops being the rare case: it is THE expected answer when the
+    /// journal already has an owner.
     pub async fn open_with_busy_timeout(
         path: &std::path::Path,
         busy_timeout: std::time::Duration,
     ) -> Result<Self, JournalError> {
-        // Pre-creación con permisos correctos DESDE el primer byte (MINOR-1):
-        // SQLite crearía el fichero con el umask (típicamente 0644) y el
-        // chmod posterior dejaba una ventana legible. Con el fichero ya
-        // presente, `create_if_missing` es un no-op.
+        // Pre-creation with the correct permissions FROM the first byte
+        // (MINOR-1): SQLite would create the file with the umask (typically
+        // 0644) and the later chmod left a readable window. With the file
+        // already present, `create_if_missing` is a no-op.
         #[cfg(unix)]
         {
             if let Some(parent) = path.parent() {
@@ -967,40 +976,41 @@ impl Journal {
             .create_if_missing(true)
             .journal_mode(SqliteJournalMode::Wal)
             .synchronous(SqliteSynchronous::Normal)
-            // WAL + EXCLUSIVE es válido (single-process WAL): el lock del
-            // fichero se toma con el primer write — el CREATE TABLE del
-            // schema en `from_options` lo fuerza YA en el open.
+            // WAL + EXCLUSIVE is valid (single-process WAL): the file's lock
+            // is taken on the first write — the schema's CREATE TABLE in
+            // `from_options` forces it ALREADY during open.
             .locking_mode(sqlx::sqlite::SqliteLockingMode::Exclusive);
         let opts = opts.busy_timeout(busy_timeout);
         let this = Self::from_options(opts).await?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            // Cinturón por si el fichero preexistía con otros permisos. Los
-            // sidecars -wal/-shm heredan del principal. Por `tokio::fs` (regla
-            // 2): es un `chmod` corto, pero un `std::fs` en un contexto async
-            // no deja de serlo por ser barato.
+            // Belt-and-suspenders in case the file preexisted with other
+            // permissions. The -wal/-shm sidecars inherit from the main file.
+            // Through `tokio::fs` (rule 2): it is a short `chmod`, but a
+            // `std::fs` call in an async context does not stop being one for
+            // being cheap.
             let _ = tokio::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).await;
         }
         Ok(this)
     }
 
-    /// Cierra el journal y ESPERA a que el fichero quede libre.
+    /// Closes the journal and WAITS for the file to become free.
     ///
-    /// Soltar el valor no basta y por eso esto existe: `sqlx` cierra la
-    /// conexión de `SQLite` en su hilo trabajador, así que un `drop` devuelve
-    /// antes de que el lock exclusivo del fichero se haya soltado y el
-    /// siguiente en abrir se lleva un `database is locked` que nadie sostiene.
-    /// Lo nota [`crate::embedded::LazyJournal::release`], que suelta para que
-    /// OTRO proceso pueda abrir acto seguido.
+    /// Dropping the value is not enough, and that is why this exists: `sqlx`
+    /// closes `SQLite`'s connection on its worker thread, so a `drop` returns
+    /// before the file's exclusive lock has actually been released, and the
+    /// next one to open gets a `database is locked` that nobody is holding.
+    /// [`crate::embedded::LazyJournal::release`] notices this, and it
+    /// releases so that ANOTHER process can open right after.
     ///
-    /// Consume el journal: reabrir es [`Self::open`], y tiene que serlo — es
-    /// ahí donde `last_seq`/`last_hash` se releen del fichero.
+    /// Consumes the journal: reopening is [`Self::open`], and it has to be —
+    /// that is where `last_seq`/`last_hash` are re-read from the file.
     pub async fn close(self) {
         self.pool.close().await;
     }
 
-    /// Journal efímero en memoria (tests).
+    /// Ephemeral in-memory journal (tests).
     ///
     /// # Errors
     /// [`JournalError::Sqlx`] / [`JournalError::Corrupt`].
@@ -1008,16 +1018,16 @@ impl Journal {
         Self::from_options(SqliteConnectOptions::from_str("sqlite::memory:")?).await
     }
 
-    /// Abre el journal en SOLO-LECTURA para el audit (M3-5): sin crear, sin
-    /// schema, sin `locking_mode=EXCLUSIVE`. OJO: el daemon abre la DB con
-    /// lock EXCLUSIVO de `SQLite` — con el daemon corriendo, este open (o la
-    /// primera query) falla con `database is locked`; el audit se corre con
-    /// el daemon parado. `record` sobre este handle falla (readonly), por
-    /// diseño.
+    /// Opens the journal READ-ONLY for the audit (M3-5): no create, no
+    /// schema, no `locking_mode=EXCLUSIVE`. NOTE: the daemon opens the DB
+    /// with `SQLite`'s EXCLUSIVE lock — with the daemon running, this open
+    /// (or the first query) fails with `database is locked`; the audit is run
+    /// with the daemon stopped. `record` on this handle fails (readonly), by
+    /// design.
     ///
     /// # Errors
-    /// [`JournalError::Sqlx`] al abrir/consultar (incluida `database is
-    /// locked` con el daemon vivo, y fichero inexistente).
+    /// [`JournalError::Sqlx`] on open/query (including `database is locked`
+    /// with the daemon alive, and a missing file).
     pub async fn open_read_only(path: &std::path::Path) -> Result<Self, JournalError> {
         let opts = SqliteConnectOptions::new()
             .filename(path)
@@ -1028,27 +1038,28 @@ impl Journal {
             .max_connections(1)
             .connect_with(opts)
             .await?;
-        // Sin CREATE TABLE (readonly): si el fichero no es un journal, la
-        // primera query fallará con su error real — no se enmascara.
+        // No CREATE TABLE (readonly): if the file is not a journal, the first
+        // query will fail with its real error — it is not masked.
         //
-        // Lo que sí se ataja es el journal anterior a `undoes_seq`: TODAS las
-        // consultas de aquí nombran esa columna y este handle no puede `ALTER`
-        // (es solo-lectura por diseño), así que saldría un «no such column»
-        // crudo envuelto en `cli-audit-open-failed`. La tabla AUSENTE no entra
-        // por aquí —eso es «no es un journal», y lo cuenta la query real—.
-        let cols = columnas(&pool).await?;
+        // What IS caught here is a journal older than `undoes_seq`: ALL the
+        // queries here name that column and this handle cannot `ALTER` (it is
+        // read-only by design), so a raw "no such column" would come out
+        // wrapped in `cli-audit-open-failed`. A MISSING table does not go
+        // through here — that is "not a journal", and the real query reports
+        // it.
+        let cols = columns(&pool).await?;
         if !cols.is_empty() && !cols.iter().any(|c| c == "undoes_seq") {
             return Err(JournalError::Corrupt(
-                "journal anterior a undoes_seq: este binario no sabe leerlo (sus filas \
-                 se hashearon sobre un preimagen sin esa columna). Léelo con un \
-                 binario de su época",
+                "journal older than undoes_seq: this binary does not know how to read it \
+                 (its rows were hashed over a preimage without that column). Read it with \
+                 a binary of its own era",
             ));
         }
         let has_batch_id = has_batch_id_column(&pool).await?;
-        // El contador arranca del máximo escrito igual que en escritura: este
-        // handle no puede insertar nada (SQLite lo rechaza), pero un
-        // `alloc_batch` que devolviera ids ya usados sería una respuesta
-        // MENTIROSA, y aquí no se miente por no poder equivocarse.
+        // The counter starts from the highest written, same as on write: this
+        // handle cannot insert anything (SQLite rejects it), but an
+        // `alloc_batch` that returned already-used ids would be a LYING
+        // answer, and here nothing is lied about since nothing can go wrong.
         let batch_counter: i64 = if has_batch_id {
             sqlx::query("SELECT COALESCE(MAX(batch_id), 0) FROM journal")
                 .fetch_one(&pool)
@@ -1069,28 +1080,30 @@ impl Journal {
         })
     }
 
-    /// Elige entre la consulta CON columna de lote y la que la sustituye por
-    /// `NULL` (DB pre-migración abierta en solo-lectura, que no se puede
-    /// alterar). Dos constantes, ninguna construida.
+    /// Picks between the query WITH the batch column and the one that
+    /// replaces it with `NULL` (a pre-migration DB opened read-only, which
+    /// cannot be altered). Two constants, neither built.
     fn pick(&self, with: &'static str, without: &'static str) -> &'static str {
         if self.has_batch_id { with } else { without }
     }
 
     async fn from_options(opts: SqliteConnectOptions) -> Result<Self, JournalError> {
-        // Pool de 1 conexión: un solo escritor (in-memory exige max=1 para no
-        // perder la DB entre conexiones).
+        // A pool of 1 connection: a single writer (in-memory requires max=1
+        // so as not to lose the DB between connections).
         //
-        // Y esa conexión NO se recicla, que es lo que sostiene todo lo demás.
-        // El lock exclusivo del fichero es una propiedad de LA CONEXIÓN VIVA, no
-        // del proceso: los defaults de `sqlx` (`min_connections=0`,
-        // `idle_timeout=10min`, `max_lifetime=30min`) levantan un barrendero que
-        // la cierra estando ociosa, y cerrarla SUELTA el lock. Con eso, un
-        // proceso que se cree dueño (un TUI que lleva once minutos navegando)
-        // deja entrar a otro, y su `ChainState` en memoria —`last_seq`,
-        // `last_hash`— se queda viejo: la siguiente mutación choca contra la PK
-        // de `seq` y falla, y como `last_seq` solo avanza al acertar, falla
-        // TODAS las siguientes. Un efecto ya aplicado sin su fila, en bucle.
-        // (Y en `sqlite::memory:`, cerrar la única conexión BORRA la DB.)
+        // And that connection is NOT recycled, which is what holds up
+        // everything else. The file's exclusive lock is a property of THE
+        // LIVE CONNECTION, not of the process: `sqlx`'s defaults
+        // (`min_connections=0`, `idle_timeout=10min`, `max_lifetime=30min`)
+        // raise a reaper that closes it while idle, and closing it RELEASES
+        // the lock. With that, a process that believes itself the owner (a
+        // TUI that has been browsing for eleven minutes) lets another one in,
+        // and its in-memory `ChainState` — `last_seq`, `last_hash` — goes
+        // stale: the next mutation collides with the `seq` PK and fails, and
+        // since `last_seq` only advances on success, it fails EVERY
+        // subsequent one. An effect already applied without its row, in a
+        // loop. (And on `sqlite::memory:`, closing the only connection ERASES
+        // the DB.)
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
             .min_connections(1)
@@ -1099,92 +1112,96 @@ impl Journal {
             .connect_with(opts)
             .await?;
         sqlx::query(SCHEMA).execute(&pool).await?;
-        // Migración: se pregunta al catálogo y solo entonces se altera. Todo
-        // error se PROPAGA (falla en seguro: sin la columna no se puede
-        // journalizar un lote, y escribir sin ella perdería el agrupamiento en
-        // silencio, que es justo lo que la cadena tiene que impedir). La
-        // idempotencia sale del catálogo, NO de mirarle el texto al error:
-        // «duplicate column name» no es contrato de nadie, y comerse un error
-        // por su mensaje es comerse también el que no toca.
+        // Migration: the catalog is asked and only then is it altered. Every
+        // error is PROPAGATED (fail safe: without the column a batch cannot
+        // be journaled, and writing without it would silently lose the
+        // grouping, which is exactly what the chain has to prevent).
+        // Idempotency comes from the catalog, NOT from looking at the
+        // error's text: "duplicate column name" is nobody's contract, and
+        // swallowing an error by its message also swallows the one that
+        // shouldn't be swallowed.
         //
-        // El marcador de formato (#127, ADR 0046) es lo que le queda a un
-        // binario FUTURO para no confundir «no sé leer esto» con «te lo han
-        // manipulado». Se escribe abajo, sobre un journal sin filas.
+        // The format marker (#127, ADR 0046) is what is left for a FUTURE
+        // binary so it does not confuse "I don't know how to read this" with
+        // "this has been tampered with". It is written below, over a journal
+        // with no rows.
         if !has_batch_id_column(&pool).await? {
             sqlx::query(MIGRATE_BATCH_ID).execute(&pool).await?;
             if !has_batch_id_column(&pool).await? {
                 return Err(JournalError::Corrupt(
-                    "la columna batch_id sigue ausente tras migrar",
+                    "the batch_id column is still missing after migrating",
                 ));
             }
         }
-        // Y la de `undoes_seq`, que es MÁS vieja. Va antes del marcador de
-        // formato de abajo porque ese marcador es una fila, o sea un INSERT que
-        // nombra la columna.
+        // And `undoes_seq`'s, which is OLDER. It goes before the format
+        // marker below because that marker is a row, i.e. an INSERT that
+        // names the column.
         //
-        // Pero SOLO si la tabla está vacía, y esta es la diferencia con
-        // `batch_id`: aquella columna se añadió sin tocar el preimagen del hash
-        // (`None` no alimenta nada, ver `chain_hash`), y esta llegó JUNTO con su
-        // byte de presencia. Una fila escrita antes se hasheó sobre un preimagen
-        // que terminaba en `reversal_ref`; recalcularla hoy da otro digest. Es
-        // decir: migrar una DB CON historia la deja escribible y `verify_chain`
-        // la declara rota en su primera fila —una acusación FALSA de
-        // manipulación sobre un fichero que nadie tocó, que es exactamente lo
-        // que el marcador de formato (ADR 0046) existe para no producir— y sin
-        // arreglo posible, porque esas filas ya no se pueden rehashear.
+        // But ONLY if the table is empty, and this is the difference with
+        // `batch_id`: that column was added without touching the hash's
+        // preimage (`None` feeds nothing, see `chain_hash`), and this one
+        // arrived TOGETHER with its presence byte. A row written before was
+        // hashed over a preimage that ended at `reversal_ref`; recomputing it
+        // today gives a different digest. In other words: migrating a DB
+        // WITH history leaves it writable and `verify_chain` declares it
+        // broken at its first row — a FALSE accusation of tampering on a file
+        // nobody touched, which is exactly what the format marker (ADR 0046)
+        // exists to avoid producing — and with no possible fix, because those
+        // rows can no longer be rehashed.
         //
-        // Así que se rehúsa, y se dice qué hacer. El embebido lo verá como
-        // `NoJournal::Failed` y seguirá sin registro (#167); el daemon no
-        // arrancará, que para un journal ilegible es lo correcto.
+        // So it is refused, and it says what to do. The embedded backend will
+        // see it as `NoJournal::Failed` and keep going without logging
+        // (#167); the daemon will not start, which for an unreadable journal
+        // is the correct behavior.
         if !has_column(&pool, "undoes_seq").await? {
-            let filas: i64 = sqlx::query("SELECT COUNT(*) FROM journal")
+            let rows: i64 = sqlx::query("SELECT COUNT(*) FROM journal")
                 .fetch_one(&pool)
                 .await?
                 .try_get(0)?;
-            if filas != 0 {
+            if rows != 0 {
                 return Err(JournalError::Corrupt(
-                    "journal anterior a undoes_seq y CON historia: migrarlo haría que \
-                     verify_chain lo declarase roto en su primera fila (esas filas se \
-                     hashearon sobre un preimagen sin esa columna). Expórtalo con un \
-                     binario de su época, archívalo y deja que se cree uno nuevo",
+                    "journal older than undoes_seq and WITH history: migrating it would make \
+                     verify_chain declare it broken at its first row (those rows were \
+                     hashed over a preimage without that column). Export it with a binary \
+                     of its own era, archive it, and let a new one be created",
                 ));
             }
             sqlx::query(MIGRATE_UNDOES_SEQ).execute(&pool).await?;
             if !has_column(&pool, "undoes_seq").await? {
                 return Err(JournalError::Corrupt(
-                    "la columna undoes_seq sigue ausente tras migrar",
+                    "the undoes_seq column is still missing after migrating",
                 ));
             }
         }
         Self::stamp_format_if_new(&pool).await?;
         Self::warn_if_format_unknown(&pool).await?;
-        // SIN filtro de `seq` A PROPÓSITO (y no es un descuido que «unificar»
-        // con las lecturas de mutaciones): la primera mutación de un journal
-        // recién creado tiene que encadenar con el MARCADOR del `seq` 0. Si
-        // esta consulta lo saltara, nacería encadenada al hash cero y la cadena
-        // estaría rota desde la entrada 1.
+        // WITHOUT a `seq` filter ON PURPOSE (and it is not an oversight that
+        // "unifying" with the mutation reads would fix): the first mutation
+        // of a freshly created journal has to chain onto the MARKER at `seq`
+        // 0. If this query skipped it, it would be born chained to the zero
+        // hash and the chain would be broken starting from entry 1.
         let (last_seq, last_hash) =
             sqlx::query("SELECT seq, entry_hash FROM journal ORDER BY seq DESC LIMIT 1")
                 .fetch_optional(&pool)
                 .await?
                 .map_or(Ok((0i64, [0u8; 32])), |row| {
-                    // `try_get`: un blob hostil aquí haría panicar el ARRANQUE
-                    // del dueño del journal. Falla con error tipado, que es lo
-                    // que la regla 6 pide y lo que ADR 0046 §5 supone al
-                    // razonar sobre disponibilidad.
+                    // `try_get`: a hostile blob here would panic the STARTUP
+                    // of the journal's owner. It fails with a typed error,
+                    // which is what rule 6 asks for and what ADR 0046 §5
+                    // assumes when reasoning about availability.
                     let seq: i64 = row.try_get(0)?;
                     let v: Vec<u8> = row.try_get(1)?;
                     if v.len() != 32 {
-                        return Err(JournalError::Corrupt("entry_hash no mide 32 bytes"));
+                        return Err(JournalError::Corrupt("entry_hash is not 32 bytes long"));
                     }
                     let mut h = [0u8; 32];
                     h.copy_from_slice(&v);
                     Ok((seq, h))
                 })?;
-        // El contador de lotes arranca del MÁXIMO ya escrito: reabrir jamás
-        // reutiliza un id que alguna entrada lleva puesto.
-        // `try_get`: un blob hostil en la columna haría panicar a `get`, y en
-        // este fichero un panic es un veredicto que nunca se emite.
+        // The batch counter starts from the HIGHEST already written: reopening
+        // never reuses an id some entry already carries.
+        // `try_get`: a hostile blob in the column would make `get` panic, and
+        // in this file a panic is a verdict that is never issued.
         let batch_counter: i64 = sqlx::query("SELECT COALESCE(MAX(batch_id), 0) FROM journal")
             .fetch_one(&pool)
             .await?
@@ -1273,9 +1290,9 @@ impl Journal {
             tracing::warn!(
                 ?declared,
                 known = JOURNAL_FORMAT,
-                "el journal declara un formato que este binario no conoce: sus entradas \
-                 nuevas se escriben con las reglas de este formato y una versión más \
-                 nueva las verá como rotas (ADR 0046)"
+                "the journal declares a format this binary does not know: its new entries \
+                 are written with this format's rules and a newer version will see them \
+                 as broken (ADR 0046)"
             );
         }
         Ok(())
@@ -1303,13 +1320,13 @@ impl Journal {
         Ok(parse_format(&op, &path))
     }
 
-    /// Registra una mutación NORMAL (no compensa ningún undo). El `seq` se
-    /// asigna monótono DENTRO del lock de la cadena (junto al encadenado) →
-    /// orden de `seq` == orden de hash. Devuelve el `seq` asignado. Si el insert
-    /// falla, ni `seq` ni `last_hash` avanzan (sin huecos ni cadena rota).
+    /// Records a NORMAL mutation (compensates no undo). `seq` is assigned
+    /// monotonically INSIDE the chain's lock (together with chaining) → `seq`
+    /// order == hash order. Returns the assigned `seq`. If the insert fails,
+    /// neither `seq` nor `last_hash` advance (no gaps, no broken chain).
     ///
     /// # Errors
-    /// [`JournalError::Sqlx`] al insertar.
+    /// [`JournalError::Sqlx`] on insert.
     pub async fn record(
         &self,
         op: &str,
@@ -1323,15 +1340,15 @@ impl Journal {
             .await
     }
 
-    /// Como [`Self::record`] pero fija `undoes_seq` = el `seq` que esta entrada
-    /// COMPENSA (undo M3-2). `None` para mutaciones normales. El `undoes_seq`
-    /// entra en el hash-chain (sigue tamper-evident).
+    /// Like [`Self::record`] but sets `undoes_seq` = the `seq` this entry
+    /// COMPENSATES (undo M3-2). `None` for normal mutations. `undoes_seq` goes
+    /// into the hash chain (it stays tamper-evident).
     ///
     /// # Errors
-    /// [`JournalError::Sqlx`] al insertar.
+    /// [`JournalError::Sqlx`] on insert.
     #[expect(
         clippy::too_many_arguments,
-        reason = "todos los campos de una entrada del journal, en el orden de la tabla"
+        reason = "every field of a journal entry, in the table's order"
     )]
     pub async fn record_undoing(
         &self,
@@ -1356,33 +1373,31 @@ impl Journal {
         .await
     }
 
-    /// Entrega un id de lote fresco. Monótono y libre de carreras: el contador
-    /// vive en el estado de la cadena, BAJO EL MISMO LOCK que asigna `seq`, así
-    /// que dos tareas de batch concurrentes del mismo daemon no pueden
-    /// compartirlo (un `SELECT MAX(batch_id) + 1` sí las dejaría). Al reabrir,
-    /// el contador arranca del máximo escrito, así que tampoco se reutiliza
-    /// entre arranques.
+    /// Hands out a fresh batch id. Monotonic and race-free: the counter lives
+    /// in the chain state, UNDER THE SAME LOCK that assigns `seq`, so two
+    /// concurrent batch tasks in the same daemon cannot share it (a `SELECT
+    /// MAX(batch_id) + 1` could let them). On reopening, the counter starts
+    /// from the highest written, so it is not reused across startups either.
     ///
-    /// Un id entregado y nunca usado (la tarea murió antes del primer paso) se
-    /// pierde sin más: los ids son etiquetas de agrupación, no un contador
-    /// auditable.
+    /// An id handed out and never used (the task died before the first step)
+    /// is simply lost: ids are grouping labels, not an auditable counter.
     ///
     /// # Errors
-    /// Hoy no falla nunca; el `Result` se mantiene para que persistir el
-    /// contador más adelante no cambie la firma.
+    /// Never fails today; the `Result` is kept so that persisting the counter
+    /// later does not change the signature.
     pub async fn alloc_batch(&self) -> Result<i64, JournalError> {
         let mut chain = self.chain.lock().await;
         chain.batch_counter += 1;
         Ok(chain.batch_counter)
     }
 
-    /// Registra UNA entrada. Es el cuerpo real: [`Self::record`] y
-    /// [`Self::record_undoing`] son envoltorios sobre esta. El `seq` se asigna
-    /// DENTRO del lock de la cadena (junto al encadenado) → orden de `seq` ==
-    /// orden de hash. Si el insert falla, ni `seq` ni `last_hash` avanzan.
+    /// Records ONE entry. This is the real body: [`Self::record`] and
+    /// [`Self::record_undoing`] are wrappers over it. `seq` is assigned INSIDE
+    /// the chain's lock (together with chaining) → `seq` order == hash order.
+    /// If the insert fails, neither `seq` nor `last_hash` advance.
     ///
     /// # Errors
-    /// [`JournalError::Sqlx`] al insertar.
+    /// [`JournalError::Sqlx`] on insert.
     pub async fn record_entry(&self, e: &NewEntry<'_>) -> Result<i64, JournalError> {
         let NewEntry {
             op,
@@ -1432,12 +1447,12 @@ impl Journal {
             .execute(&self.pool)
             .await?;
 
-        // Solo tras el insert OK: sin huecos de seq ni cadena rota si falla.
+        // Only after a successful insert: no seq gaps or broken chain on failure.
         chain.last_seq = seq;
         chain.last_hash = entry_hash;
         drop(chain);
-        // Y DESPUÉS de durable, a los hooks (ADR 0100): lo que un hook ve es
-        // exactamente lo que el journal registró. `offer` no espera nunca.
+        // And AFTER it is durable, to the hooks (ADR 0100): what a hook sees
+        // is exactly what the journal recorded. `offer` never waits.
         let sender = self
             .hooks
             .read()
@@ -1457,9 +1472,9 @@ impl Journal {
         Ok(seq)
     }
 
-    /// Instala el extremo al que se le ofrece cada fila comprometida (ADR
-    /// 0100). El segundo en instalarse pisa al primero: hay un despachador
-    /// por proceso, y es del arranque.
+    /// Installs the endpoint every committed row is offered to (ADR 0100).
+    /// The second one to install overwrites the first: there is one dispatcher
+    /// per process, set at startup.
     pub fn set_hook_sender(&self, tx: crate::hooks::HookSender) {
         *self
             .hooks
@@ -1467,7 +1482,7 @@ impl Journal {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(tx);
     }
 
-    /// Número de MUTACIONES (el marcador de formato del `seq 0` no lo es).
+    /// Number of MUTATIONS (the format marker at `seq 0` is not one).
     ///
     /// # Errors
     /// [`JournalError::Sqlx`].
@@ -1627,33 +1642,33 @@ impl Journal {
         })
     }
 
-    /// Head de la cadena: `(seq, entry_hash)` de la última MUTACIÓN (`None`
-    /// sin ninguna). Es lo que un ancla HMAC firma (ADR 0025).
+    /// Chain head: `(seq, entry_hash)` of the last MUTATION (`None` if there
+    /// is none). It is what an HMAC anchor signs (ADR 0025).
     ///
-    /// **Este `head` NO devuelve el marcador de formato (`seq 0`, ADR 0046), y
-    /// sigue sin devolverlo a propósito**: el `seq` 0 tampoco sale por
-    /// [`Journal::entries`], así que un ancla del HEAD que apuntara ahí la
-    /// leería el audit como «el seq anclado ya no existe» — una acusación falsa
-    /// de truncación.
+    /// **This `head` does NOT return the format marker (`seq 0`, ADR 0046),
+    /// and deliberately still does not**: `seq` 0 also does not come out
+    /// through [`Journal::entries`], so a HEAD anchor pointing there would be
+    /// read by the audit as "the anchored seq no longer exists" — a false
+    /// accusation of truncation.
     ///
-    /// La cobertura que un ancla del head da al marcador es TRANSITIVA y con
-    /// una salvedad: cada mutación encadena con el hash del marcador, así que
-    /// re-declarar el formato y RECOMPUTAR la cola cambia todos los hashes
-    /// almacenados y ningún ancla previa casa. Pero eso vale para quien pueda
-    /// recomputar la cadena, y un verificador que ya ha dicho
-    /// [`ChainStatus::UnknownFormat`] es justo el que no puede: para él el
-    /// ancla del head no cubre el marcador. Una re-declaración que NO recomputa
-    /// la cola (tres escrituras) no mueve ningún hash almacenado y las anclas
-    /// del head siguen casando — ver [`Journal::verify_chain`].
+    /// The coverage a head anchor gives the marker is TRANSITIVE, with one
+    /// caveat: every mutation chains onto the marker's hash, so re-declaring
+    /// the format and RECOMPUTING the tail changes every stored hash and no
+    /// prior anchor matches. But that holds for whoever can recompute the
+    /// chain, and a verifier that has already said
+    /// [`ChainStatus::UnknownFormat`] is exactly the one that cannot: for it,
+    /// the head anchor does not cover the marker. A re-declaration that does
+    /// NOT recompute the tail (three writes) moves no stored hash and the
+    /// head anchors still match — see [`Journal::verify_chain`].
     ///
-    /// **Lo que sí lo cubre es un ancla PROPIA del marcador** (#146), con su
-    /// digest tomado de [`Journal::marker_hash`] y en su propio fichero. Esa es
-    /// la razón de que este método no haya tenido que cambiar: el ancla del
-    /// marcador no pasa por aquí.
+    /// **What DOES cover it is an anchor of the marker'S OWN** (#146), with
+    /// its digest taken from [`Journal::marker_hash`] and in its own file.
+    /// That is why this method has not had to change: the marker's anchor
+    /// does not go through here.
     ///
     /// # Errors
-    /// [`JournalError::Sqlx`]; [`JournalError::Corrupt`] si el hash
-    /// almacenado no mide 32 bytes.
+    /// [`JournalError::Sqlx`]; [`JournalError::Corrupt`] if the stored hash is
+    /// not 32 bytes long.
     pub async fn head(&self) -> Result<Option<(i64, [u8; 32])>, JournalError> {
         let row = sqlx::query(
             "SELECT seq, entry_hash FROM journal WHERE seq >= 1 ORDER BY seq DESC LIMIT 1",
@@ -1665,28 +1680,29 @@ impl Journal {
         let blob: Vec<u8> = row.try_get(1)?;
         let hash: [u8; 32] = blob
             .try_into()
-            .map_err(|_| JournalError::Corrupt("entry_hash del head no mide 32 bytes"))?;
+            .map_err(|_| JournalError::Corrupt("head's entry_hash is not 32 bytes long"))?;
         Ok(Some((seq, hash)))
     }
 
-    /// Hash de la MUTACIÓN `seq` (`None` si no existe). El audit lo contrasta
-    /// con cada ancla DESPUÉS de un [`Journal::verify_chain`] `Intact` (ADR
-    /// 0025): con la cadena verificada, el hash almacenado ES el recomputado.
+    /// Hash of MUTATION `seq` (`None` if it does not exist). The audit
+    /// cross-checks it against each anchor AFTER an `Intact`
+    /// [`Journal::verify_chain`] (ADR 0025): with the chain verified, the
+    /// stored hash IS the recomputed one.
     ///
-    /// El marcador de formato (`seq` 0) queda fuera, como en
-    /// [`Journal::head`] y [`Journal::entries`], y una respuesta aquí para un
-    /// `seq` que el resto del audit dice que no existe sería una incoherencia
-    /// esperando a que alguien la use.
+    /// The format marker (`seq` 0) is left out, as in [`Journal::head`] and
+    /// [`Journal::entries`], and an answer here for a `seq` that the rest of
+    /// the audit says does not exist would be an inconsistency waiting for
+    /// someone to use it.
     ///
-    /// **Su digest se pide por [`Journal::marker_hash`]**, que es la puerta
-    /// estrecha que #146 abrió para anclarlo — no relajando esta. Las dos
-    /// coexisten porque sirven a mecanismos distintos: las anclas del HEAD
-    /// contrastan contra este filtro, y las del MARCADOR contra aquella, en su
-    /// propio fichero.
+    /// **Its digest is requested through [`Journal::marker_hash`]**, which is
+    /// the narrow gate #146 opened to anchor it — not by relaxing this one.
+    /// The two coexist because they serve different mechanisms: HEAD anchors
+    /// are checked against this filter, and the MARKER's against that one, in
+    /// its own file.
     ///
     /// # Errors
-    /// [`JournalError::Sqlx`]; [`JournalError::Corrupt`] si el blob no mide
-    /// 32 bytes.
+    /// [`JournalError::Sqlx`]; [`JournalError::Corrupt`] if the blob is not 32
+    /// bytes long.
     pub async fn entry_hash_at(&self, seq: i64) -> Result<Option<[u8; 32]>, JournalError> {
         let row = sqlx::query("SELECT entry_hash FROM journal WHERE seq = ? AND seq >= 1")
             .bind(seq)
@@ -1696,46 +1712,45 @@ impl Journal {
         let blob: Vec<u8> = row.try_get(0)?;
         let hash: [u8; 32] = blob
             .try_into()
-            .map_err(|_| JournalError::Corrupt("entry_hash no mide 32 bytes"))?;
+            .map_err(|_| JournalError::Corrupt("entry_hash is not 32 bytes long"))?;
         Ok(Some(hash))
     }
 
-    /// Digest del MARCADOR DE FORMATO (`seq 0`, ADR 0046), o `None` si este
-    /// journal no lo lleva (se creó antes de que el marcador existiera).
+    /// Digest of the FORMAT MARKER (`seq 0`, ADR 0046), or `None` if this
+    /// journal does not carry one (it was created before the marker existed).
     ///
-    /// Accesor propio, y no una relajación del filtro de
-    /// [`Journal::entry_hash_at`]: ese filtro está puesto a mano porque una
-    /// respuesta ahí contradiría a [`Journal::head`] y a [`Journal::entries`],
-    /// que no devuelven el `seq` 0 — y un ancla no puede apuntar a un `seq` que
-    /// el resto del audit dice que no existe. Lo que hace falta es lo
-    /// contrario: UNA puerta, estrecha y con nombre, para lo único que sí
-    /// quiere el marcador.
+    /// Its own accessor, and not a relaxation of [`Journal::entry_hash_at`]'s
+    /// filter: that filter is set on purpose because an answer there would
+    /// contradict [`Journal::head`] and [`Journal::entries`], which do not
+    /// return `seq` 0 — and an anchor cannot point at a `seq` that the rest of
+    /// the audit says does not exist. What is needed is the opposite: ONE
+    /// gate, narrow and named, for the one thing the marker actually wants.
     ///
-    /// # Por qué existe (#146)
-    /// ADR 0046 concedía un agujero: re-declarar el formato cuesta TRES
-    /// escrituras de columna y ninguna clave —poner la versión, refrescar el
-    /// digest del marcador (que es keyless y públicamente computable), reencadenar
-    /// el `seq 1`— y convierte un veredicto `Broken { first_bad_seq: k }` en
-    /// `UnknownFormat`, con una versión de `u32::MAX` para que ningún binario
-    /// futuro diga otra cosa. La alarma sobrevive; la CULPA no. Y las anclas de
-    /// ADR 0025 no lo cierran, al contrario de lo que parece: la edición no
-    /// mueve ningún `entry_hash` de `seq >= 1`, así que todas siguen casando.
+    /// # Why it exists (#146)
+    /// ADR 0046 granted a hole: re-declaring the format costs THREE column
+    /// writes and no key — set the version, refresh the marker's digest
+    /// (which is keyless and publicly computable), rechain `seq 1` — and it
+    /// turns a `Broken { first_bad_seq: k }` verdict into `UnknownFormat`,
+    /// with a version of `u32::MAX` so that no future binary says otherwise.
+    /// The alarm survives; the BLAME does not. And ADR 0025's anchors do not
+    /// close it, contrary to how it looks: the edit moves no `entry_hash` at
+    /// `seq >= 1`, so all of them still match.
     ///
-    /// Con esto, `norte audit anchor` firma también el marcador y una
-    /// re-declaración incoherente sale como
+    /// With this, `norte audit anchor` also signs the marker, and an
+    /// inconsistent re-declaration comes out as
     /// [`AnchorVerdict::HashMismatch`](crate::audit::AnchorVerdict::HashMismatch)
-    /// **en el `seq` 0** — localizada, y con una clave detrás.
+    /// **at `seq` 0** — located, and with a key behind it.
     ///
-    /// # Es el digest ALMACENADO, no uno recomputado
-    /// Como [`Journal::entry_hash_at`], y con la misma condición para que
-    /// signifique algo: contrástalo DESPUÉS de un [`Journal::verify_chain`] que
-    /// haya validado el marcador — `Intact` o `UnknownFormat`, los dos brazos
-    /// que solo se alcanzan si la fila del `seq` 0 es canónica y su hash
-    /// recomputa. Bajo `Broken` este valor es lo que ponga el fichero.
+    /// # It is the STORED digest, not a recomputed one
+    /// Like [`Journal::entry_hash_at`], and under the same condition for it to
+    /// mean anything: check it AFTER a [`Journal::verify_chain`] that has
+    /// validated the marker — `Intact` or `UnknownFormat`, the two arms that
+    /// are only reached if the `seq` 0 row is canonical and its hash
+    /// recomputes. Under `Broken` this value is whatever the file says.
     ///
     /// # Errors
-    /// [`JournalError::Sqlx`]; [`JournalError::Corrupt`] si el blob no mide
-    /// 32 bytes.
+    /// [`JournalError::Sqlx`]; [`JournalError::Corrupt`] if the blob is not 32
+    /// bytes long.
     pub async fn marker_hash(&self) -> Result<Option<[u8; 32]>, JournalError> {
         let row = sqlx::query("SELECT entry_hash FROM journal WHERE seq = ?")
             .bind(FORMAT_SEQ)
@@ -1745,14 +1760,14 @@ impl Journal {
         let blob: Vec<u8> = row.try_get(0)?;
         let hash: [u8; 32] = blob
             .try_into()
-            .map_err(|_| JournalError::Corrupt("el entry_hash del marcador no mide 32 bytes"))?;
+            .map_err(|_| JournalError::Corrupt("the marker's entry_hash is not 32 bytes long"))?;
         Ok(Some(hash))
     }
 
-    /// Vuelca todas las entradas en orden de `seq`. Materializa en memoria:
-    /// pensado para journals de tamaño de sesión (la paginación es deuda si
-    /// crece — mismo criterio que el listado, #27). Base de lectura para el
-    /// undo (M3-2) y el audit export (M3-5).
+    /// Dumps every entry in `seq` order. Materializes in memory: meant for
+    /// session-sized journals (pagination is debt if it grows — same
+    /// criterion as the listing, #27). Read base for undo (M3-2) and the
+    /// audit export (M3-5).
     ///
     /// # Errors
     /// [`JournalError::Sqlx`].
@@ -1763,14 +1778,13 @@ impl Journal {
         rows.iter().map(row_to_entry).collect()
     }
 
-    /// Una PÁGINA de entradas hacia atrás, de la más nueva a la más vieja
-    /// (fase 7): las anteriores a `before_seq` —`None` = desde la última—,
-    /// como mucho `limit`, y sólo las de `actor_kind` si se da uno.
+    /// A backward PAGE of entries, from newest to oldest (phase 7): those
+    /// before `before_seq` — `None` = from the last one — at most `limit`,
+    /// and only the ones from `actor_kind` if one is given.
     ///
-    /// A diferencia de [`Self::entries`], que trae el journal ENTERO y es
-    /// para auditar, esto es lo que lee una pantalla: acotado por
-    /// construcción, porque un journal de meses no cabe en la memoria de
-    /// nadie.
+    /// Unlike [`Self::entries`], which brings back the WHOLE journal and is
+    /// for auditing, this is what a screen reads: bounded by construction,
+    /// because a journal of months does not fit in anyone's memory.
     ///
     /// # Errors
     /// [`JournalError::Sqlx`].
@@ -1797,12 +1811,12 @@ impl Journal {
             .collect()
     }
 
-    /// Como [`Self::revertible_for`], pero sólo lo POSTERIOR a `after_seq`
-    /// (fase 7, base de [`crate::Engine::undo_after`]).
+    /// Like [`Self::revertible_for`], but only what comes AFTER `after_seq`
+    /// (phase 7, base of [`crate::Engine::undo_after`]).
     ///
-    /// La entrada `after_seq` NO entra: es el punto al que se quiere volver,
-    /// no la primera víctima. `upto_seq` es el techo (0.80.0): nada por
-    /// encima, ni ningún lote con una entrada por encima. `None` = sin techo.
+    /// The `after_seq` entry does NOT go in: it is the point to return to,
+    /// not the first victim. `upto_seq` is the ceiling (0.80.0): nothing
+    /// above it, nor any batch with an entry above it. `None` = no ceiling.
     ///
     /// # Errors
     /// [`JournalError::Sqlx`].
@@ -1824,15 +1838,15 @@ impl Journal {
         rows.iter().map(row_to_entry).collect()
     }
 
-    /// Las entradas REVERTIBLES de la sesión `actor`, en orden LIFO (`seq`
-    /// DESC): mutaciones normales (`undoes_seq IS NULL`) de ese actor cuya
-    /// compensación no exista o haya sido a su vez desandada. Base de
+    /// The REVERTIBLE entries of session `actor`, in LIFO order (`seq` DESC):
+    /// normal mutations (`undoes_seq IS NULL`) from that actor whose
+    /// compensation either does not exist or has itself been undone. Base of
     /// [`crate::Engine::undo_session`] (M3-2).
     ///
-    /// «Compensada» significa compensada VIVA, no «compensada alguna vez»: un
-    /// undo de lote que falla a mitad desanda sus propias compensaciones, y el
-    /// lote tiene que volver a ser deshacible. El porqué, con la forma exacta
-    /// de la cadena, está sobre la constante `SELECT_REVERTIBLE`.
+    /// "Compensated" means LIVE-compensated, not "compensated at some point":
+    /// a batch undo that fails halfway undoes its own compensations, and the
+    /// batch has to become undoable again. The why, with the chain's exact
+    /// shape, is on the `SELECT_REVERTIBLE` constant.
     ///
     /// # Errors
     /// [`JournalError::Sqlx`].
@@ -1846,36 +1860,36 @@ impl Journal {
         rows.iter().map(row_to_entry).collect()
     }
 
-    /// Cuáles de `seqs` están deshechas AHORA: tienen una compensación viva,
-    /// con la misma condición (`COL_UNDONE`) que usa la selección de lo
-    /// revertible.
+    /// Which of `seqs` are undone RIGHT NOW: they have a live compensation,
+    /// under the same condition (`COL_UNDONE`) the revertible selection uses.
     ///
-    /// Es la re-comprobación de un undo JUSTO ANTES de ejecutar una unidad
-    /// (#358): lo que se eligió al pedir el undo pudo deshacerlo, entretanto,
-    /// otro undo — un doble clic, dos frontends, un reintento tras timeout.
+    /// This is the re-check of an undo JUST BEFORE executing a unit (#358):
+    /// what was chosen when the undo was requested may have been undone,
+    /// meanwhile, by another undo — a double click, two frontends, a retry
+    /// after a timeout.
     ///
-    /// Pregunta por trozos: una unidad de sincronización puede tener medio
-    /// millón de entradas, y `SQLite` pone techo a los parámetros de una
-    /// consulta.
+    /// Asks in chunks: a sync unit can have half a million entries, and
+    /// `SQLite` caps a query's parameters.
     ///
     /// # Errors
     /// [`JournalError::Sqlx`].
     pub async fn undone_among(&self, seqs: &[i64]) -> Result<Vec<i64>, JournalError> {
-        const TROZO: usize = 500;
-        let mut deshechas = Vec::new();
-        for trozo in seqs.chunks(TROZO) {
-            let huecos = vec!["?"; trozo.len()].join(",");
-            let sql = format!("SELECT seq FROM journal WHERE seq IN ({huecos}) AND {COL_UNDONE}");
+        const CHUNK: usize = 500;
+        let mut undone = Vec::new();
+        for chunk in seqs.chunks(CHUNK) {
+            let placeholders = vec!["?"; chunk.len()].join(",");
+            let sql =
+                format!("SELECT seq FROM journal WHERE seq IN ({placeholders}) AND {COL_UNDONE}");
             let mut q = sqlx::query_scalar::<_, i64>(&sql);
-            for s in trozo {
+            for s in chunk {
                 q = q.bind(s);
             }
-            deshechas.extend(q.fetch_all(&self.pool).await?);
+            undone.extend(q.fetch_all(&self.pool).await?);
         }
-        Ok(deshechas)
+        Ok(undone)
     }
 
-    /// SOLO TESTS: corrompe el `path` de una entrada sin recomputar su hash.
+    /// TESTS ONLY: corrupts an entry's `path` without recomputing its hash.
     #[cfg(test)]
     async fn corrupt_path_for_test(&self, seq: i64, path: &[u8]) -> Result<(), JournalError> {
         sqlx::query("UPDATE journal SET path = ? WHERE seq = ?")
@@ -1886,9 +1900,9 @@ impl Journal {
         Ok(())
     }
 
-    /// SOLO TESTS: cambia el `batch_id` de una entrada sin recomputar su hash
-    /// (simula a un atacante DESAGRUPANDO un lote, o inventándole uno a una
-    /// mutación suelta).
+    /// TESTS ONLY: changes an entry's `batch_id` without recomputing its hash
+    /// (simulates an attacker UNGROUPING a batch, or inventing one for a
+    /// standalone mutation).
     #[cfg(test)]
     async fn set_batch_for_test(&self, seq: i64, batch: Option<i64>) -> Result<(), JournalError> {
         sqlx::query("UPDATE journal SET batch_id = ? WHERE seq = ?")
@@ -1965,12 +1979,12 @@ impl Journal {
         Ok(())
     }
 
-    /// SOLO TESTS: pone un `entry_hash` de longitud inválida (simula corrupción
-    /// en disco) para probar el guard de arranque.
+    /// TESTS ONLY: sets an `entry_hash` of invalid length (simulates on-disk
+    /// corruption) to test the startup guard.
     #[cfg(test)]
     async fn set_short_hash_for_test(&self, seq: i64) -> Result<(), JournalError> {
         sqlx::query("UPDATE journal SET entry_hash = ? WHERE seq = ?")
-            .bind(&b"corto"[..])
+            .bind(&b"short"[..])
             .bind(seq)
             .execute(&self.pool)
             .await?;
@@ -1978,73 +1992,74 @@ impl Journal {
     }
 }
 
-/// El [`Journal`] como [`crate::observer::MutationObserver`]: mapea cada
-/// `Mutation` a una entrada. El `seq` lo asigna el propio [`Journal`] bajo su
-/// lock. Una papelerización lógica arrastra su destino recuperable a la
+/// [`Journal`] as a [`crate::observer::MutationObserver`]: maps every
+/// `Mutation` to an entry. `seq` is assigned by [`Journal`] itself under its
+/// own lock. A logical trashing carries its recoverable destination over to
 /// `reversal_ref` (M3-1b).
 pub struct SqliteJournal {
     journal: Journal,
 }
 
 impl SqliteJournal {
-    /// Envuelve un journal ya abierto.
+    /// Wraps an already-open journal.
     #[must_use]
     pub fn new(journal: Journal) -> Self {
         Self { journal }
     }
 
-    /// El [`Journal`] subyacente (lectura para audit/undo/tests).
+    /// The underlying [`Journal`] (read access for audit/undo/tests).
     #[must_use]
     pub fn journal(&self) -> &Journal {
         &self.journal
     }
 
-    /// Ver [`Journal::set_hook_sender`].
+    /// See [`Journal::set_hook_sender`].
     pub fn set_hook_sender(&self, tx: crate::hooks::HookSender) {
         self.journal.set_hook_sender(tx);
     }
 
-    /// Cierra el journal subyacente y espera a que el fichero quede libre
-    /// (ver [`Journal::close`]).
+    /// Closes the underlying journal and waits for the file to become free
+    /// (see [`Journal::close`]).
     pub async fn close(self) {
         self.journal.close().await;
     }
 
-    /// Abre (o crea) el journal en `path` y lo envuelve como observer, listo
-    /// para [`crate::Engine::with_observer`]. Crea el directorio contenedor si
-    /// falta.
+    /// Opens (or creates) the journal at `path` and wraps it as an observer,
+    /// ready for [`crate::Engine::with_observer`]. Creates the containing
+    /// directory if it is missing.
     ///
-    /// UN SOLO ESCRITOR (spec §4): el hash-chain asume un único proceso dueño.
-    /// Varios procesos escribiendo el MISMO fichero forkearían la cadena y
-    /// colisionarían en `seq`, y por eso no es una convención: [`Journal::open`]
-    /// toma el lock EXCLUSIVO de `SQLite`, así que el segundo en llegar falla al
-    /// abrir en vez de compartir.
+    /// A SINGLE WRITER (spec §4): the hash chain assumes one owning process.
+    /// Several processes writing the SAME file would fork the chain and
+    /// collide on `seq`, and that is why it is not a convention:
+    /// [`Journal::open`] takes `SQLite`'s EXCLUSIVE lock, so the second one to
+    /// arrive fails to open instead of sharing.
     ///
-    /// Quién es ese dueño ya no es siempre el daemon: desde #167 un proceso
-    /// embebido (TUI, o un `norte cp` sin daemon) abre este mismo fichero — ver
-    /// [`crate::embedded::LazyJournal`], que es quien decide qué hacer cuando
-    /// el lock ya lo tiene otro, que desde #177 no lo abre hasta la primera
-    /// mutación (así, una sesión que solo navega no se lo quita a nadie) y que
-    /// desde #179 lo reintenta y sabe soltarlo.
+    /// Who that owner is is no longer always the daemon: since #167 an
+    /// embedded process (a TUI, or a `norte cp` with no daemon) opens this
+    /// same file — see [`crate::embedded::LazyJournal`], which decides what
+    /// to do when someone else already holds the lock, which since #177 it
+    /// does not open until the first mutation (so a session that only
+    /// browses does not take it from anyone) and which since #179 retries it
+    /// and knows how to release it.
     ///
     /// # Errors
-    /// [`JournalError::Io`] si no puede crear el directorio contenedor;
-    /// [`JournalError`] al abrir/crear la DB (ver [`Journal::open`]).
+    /// [`JournalError::Io`] if it cannot create the containing directory;
+    /// [`JournalError`] on opening/creating the DB (see [`Journal::open`]).
     pub async fn open(path: &std::path::Path) -> Result<Self, JournalError> {
         Self::open_with_busy_timeout(path, DEFAULT_BUSY_TIMEOUT).await
     }
 
-    /// Como [`SqliteJournal::open`], con el plazo de espera del lock de
+    /// Like [`SqliteJournal::open`], with the lock's wait deadline from
     /// [`Journal::open_with_busy_timeout`].
     ///
     /// # Errors
-    /// Las mismas que [`SqliteJournal::open`].
+    /// The same as [`SqliteJournal::open`].
     pub async fn open_with_busy_timeout(
         path: &std::path::Path,
         busy_timeout: std::time::Duration,
     ) -> Result<Self, JournalError> {
-        // El dir de config puede no existir en el primer arranque; SQLite crea
-        // el FICHERO (create_if_missing) pero no su directorio padre.
+        // The config dir may not exist on first startup; SQLite creates the
+        // FILE (create_if_missing) but not its parent directory.
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
@@ -2054,33 +2069,34 @@ impl SqliteJournal {
     }
 }
 
-/// Cómo se escribe la identidad de un nodo en `reversal_ref` (ADR 0152).
+/// How a node's identity is written into `reversal_ref` (ADR 0152).
 ///
-/// Texto y no bytes crudos porque el volcado de una fila con `sqlite3` durante
-/// una investigación enseña `12:34567` y no cuatro bytes opacos. No sale por
-/// el wire ni por la exportación de auditoría, así que nadie más lo lee.
+/// Text and not raw bytes because dumping a row with `sqlite3` during an
+/// investigation shows `12:34567` and not four opaque bytes. It does not go
+/// out over the wire nor through the audit export, so nobody else reads it.
 ///
-/// Vive aquí, en pareja con [`huella_a_nodo`], para que quien escribe y quien
-/// compara no puedan divergir: el día que esto cambie de forma, cambia en un
-/// sitio y el parser de al lado lo acompaña.
-pub(crate) fn huella_de_nodo(n: &norte_vfs::NodeId) -> String {
+/// Lives here, paired with [`footprint_to_node`], so that whoever writes it and
+/// whoever compares it cannot diverge: the day this changes shape, it changes
+/// in one place and the parser right next to it comes along.
+pub(crate) fn node_footprint(n: &norte_vfs::NodeId) -> String {
     format!("{}:{}", n.volume, n.index)
 }
 
-/// La inversa de [`huella_de_nodo`]. `None` = esos bytes no son una huella.
+/// The inverse of [`node_footprint`]. `None` = those bytes are not a
+/// fingerprint.
 ///
-/// La comparación del deshacer va por [`norte_vfs::NodeId`] y no por bytes
-/// justamente por este `None`. Hoy nada puede dejar otra cosa en el
-/// `reversal_ref` de un `delete` —los otros escritores ponen `None`, y el
-/// `restore_trash`, que sí guarda una ruta ahí, se atiende en otro brazo—,
-/// pero comparar cadenas hace que el día que algo la deje, esa entrada no
-/// coincida NUNCA y se bloquee para siempre. Parseando, un valor que no es
-/// una huella cae en «no hay nada que comparar» y el deshacer se comporta
-/// como antes de ADR 0152, que es la dirección en la que esto tiene que
-/// fallar.
-pub(crate) fn huella_a_nodo(bytes: &[u8]) -> Option<norte_vfs::NodeId> {
-    let texto = std::str::from_utf8(bytes).ok()?;
-    let (vol, idx) = texto.split_once(':')?;
+/// Undo's comparison goes through [`norte_vfs::NodeId`] and not through bytes
+/// precisely because of this `None`. Today nothing can leave anything else in
+/// a `delete`'s `reversal_ref` — the other writers put `None`, and
+/// `restore_trash`, which does store a path there, is handled in another
+/// branch — but comparing strings would mean that the day something does
+/// leave one, that entry would NEVER match and would be stuck forever. By
+/// parsing, a value that is not a fingerprint falls into "nothing to
+/// compare" and the undo behaves as it did before ADR 0152, which is the
+/// direction this has to fail in.
+pub(crate) fn footprint_to_node(bytes: &[u8]) -> Option<norte_vfs::NodeId> {
+    let text = std::str::from_utf8(bytes).ok()?;
+    let (vol, idx) = text.split_once(':')?;
     Some(norte_vfs::NodeId {
         volume: vol.parse().ok()?,
         index: idx.parse().ok()?,
@@ -2103,16 +2119,17 @@ impl crate::observer::MutationObserver for SqliteJournal {
             Option<Vec<u8>>,
             Option<i64>,
         ) = match mutation {
-            // `reversal_ref` lleva aquí la IDENTIDAD de lo creado, no una ruta
-            // (#369, ADR 0152). La columna es libre y cada reversa le da su
-            // sentido: `restore_trash` guarda el destino recuperable, y
-            // `delete` guarda qué nodo era el suyo para no borrar otro.
+            // `reversal_ref` carries the IDENTITY of what was created here,
+            // not a path (#369, ADR 0152). The column is free-form and each
+            // reversal gives it its own meaning: `restore_trash` stores the
+            // recoverable destination, and `delete` stores which node was its
+            // own so as not to delete another one.
             Mutation::Created { path, node } => (
                 "created",
                 path.to_wire().into_bytes(),
                 None,
                 Reversal::Delete,
-                node.map(|n| huella_de_nodo(&n).into_bytes()),
+                node.map(|n| node_footprint(&n).into_bytes()),
                 None,
             ),
             Mutation::Removed(p) => (
@@ -2123,8 +2140,8 @@ impl crate::observer::MutationObserver for SqliteJournal {
                 None,
                 None,
             ),
-            // Papelera lógica → `dest` es la ruta recuperable (reversal_ref).
-            // Papelera nativa/"vanish" → `dest` None (handle en el undo M3-2).
+            // Logical trash → `dest` is the recoverable path (reversal_ref).
+            // Native trash/"vanish" → `dest` None (handled in the undo, M3-2).
             Mutation::Trashed { path, dest } => (
                 "trashed",
                 path.to_wire().into_bytes(),
@@ -2141,12 +2158,12 @@ impl crate::observer::MutationObserver for SqliteJournal {
                 None,
                 *batch,
             ),
-            // #314: la reversa ES el modo anterior, y va en `reversal_ref` en
-            // ASCII decimal. Sin él no hay vuelta atrás que prometer, y la
-            // entrada lo dice —`Irreversible` con su motivo— en vez de ofrecer
-            // un undo que pondría un modo que nadie tuvo. El modo NUEVO va en
-            // `path_to` para que el diario se pueda leer sin adivinar qué se
-            // puso.
+            // #314: the reversal IS the previous mode, and it travels in
+            // `reversal_ref` in ASCII decimal. Without it there is no way back
+            // to promise, and the entry says so — `Irreversible` with its
+            // reason — instead of offering an undo that would set a mode
+            // nobody ever had. The NEW mode goes in `path_to` so the journal
+            // can be read without guessing what was set.
             Mutation::ModeChanged {
                 path,
                 from,
@@ -2162,13 +2179,14 @@ impl crate::observer::MutationObserver for SqliteJournal {
                     Reversal::Irreversible
                 },
                 from.map(|m| m.to_string().into_bytes()),
-                // El lote de un recursivo (#315): n entradas que fueron UNA
-                // acción del humano.
+                // The batch of a recursive op (#315): n entries that were ONE
+                // human action.
                 *batch,
             ),
         };
-        // El error se PROPAGA (regla 4): la op no se considera completa si su
-        // entrada de journal no quedó durable. El detalle va por tracing.
+        // The error is PROPAGATED (rule 4): the op is not considered complete
+        // if its journal entry did not become durable. The detail goes
+        // through tracing.
         self.journal
             .record_entry(&NewEntry {
                 op,
@@ -2182,7 +2200,7 @@ impl crate::observer::MutationObserver for SqliteJournal {
             })
             .await
             .map_err(|e| {
-                tracing::error!(error = %e, "fallo al escribir el journal");
+                tracing::error!(error = %e, "failed to write the journal");
                 ProtoError::from(e)
             })?;
         Ok(())
@@ -2193,10 +2211,10 @@ impl crate::observer::MutationObserver for SqliteJournal {
 mod tests {
     use super::*;
 
-    /// ADR 0100: cada fila comprometida se le ofrece al extremo de los hooks,
-    /// con lo que la fila dice — y solo tras el insert, con su `seq`.
+    /// ADR 0100: every committed row is offered to the hooks endpoint, with
+    /// what the row says — and only after the insert, with its `seq`.
     #[tokio::test]
-    async fn cada_fila_comprometida_se_ofrece_a_los_hooks() {
+    async fn every_committed_row_is_offered_to_the_hooks() {
         let j = Journal::open_in_memory().await.expect("open");
         let (tx, mut rx) = crate::hooks::HookSender::for_test(2);
         j.set_hook_sender(tx.clone());
@@ -2216,16 +2234,19 @@ mod tests {
             })
             .await
             .expect("record");
-        let ev = rx.try_recv().expect("un evento por fila");
+        let ev = rx.try_recv().expect("one event per row");
         assert_eq!(ev.seq, seq);
         assert_eq!(ev.op, "renamed");
-        assert_eq!(ev.actor_kind, "agent", "la clase sí; la sesión no viaja");
+        assert_eq!(
+            ev.actor_kind, "agent",
+            "the class does; the session does not travel"
+        );
         assert_eq!(ev.path, b"file:///a/nuevo".to_vec());
         assert_eq!(ev.path_to, Some(b"file:///a/viejo".to_vec()));
         assert_eq!(ev.batch_id, Some(3));
 
-        // Cola llena: la fila se escribe igual y el evento se cuenta como
-        // descartado. Un observador lento jamás frena una mutación.
+        // Full queue: the row is written all the same and the event counts as
+        // dropped. A slow observer never holds up a mutation.
         for _ in 0..3 {
             j.record(
                 "created",
@@ -2239,7 +2260,7 @@ mod tests {
             .expect("record");
         }
         assert_eq!(j.count().await.expect("count"), 4);
-        assert_eq!(tx.dropped(), 1, "dos cupieron, el tercero se descartó");
+        assert_eq!(tx.dropped(), 1, "two fit, the third was dropped");
     }
 
     fn rec(seq: i64) -> Record<'static> {
@@ -2262,24 +2283,24 @@ mod tests {
     fn chain_hash_is_deterministic_and_prev_sensitive() {
         let zero = [0u8; 32];
         let h1 = chain_hash(&zero, &rec(1));
-        assert_eq!(h1, chain_hash(&zero, &rec(1)), "determinista");
+        assert_eq!(h1, chain_hash(&zero, &rec(1)), "deterministic");
         assert_ne!(h1, chain_hash(&h1, &rec(1)));
         assert_ne!(h1, chain_hash(&zero, &rec(2)));
     }
 
-    /// VECTOR CONGELADO de la cadena, con TODOS los campos poblados: los dos
-    /// `Option` presentes (uno de ellos vacío, para fijar el byte de
-    /// presencia), `undoes_seq` presente, y rutas que NO son UTF-8.
+    /// FROZEN VECTOR of the chain, with EVERY field populated: both `Option`s
+    /// present (one of them empty, to pin the presence byte), `undoes_seq`
+    /// present, and paths that are NOT UTF-8.
     ///
-    /// Los demás tests de `chain_hash` son relativos (`assert_ne!` entre dos
-    /// digests) y seguirían verdes si el prefijo de longitud pasara de `u64` a
-    /// `u32`, de little-endian a big-endian, o si el orden de los campos
-    /// cambiara — y cualquiera de esas cosas invalida `verify_chain` en TODOS
-    /// los journals que ya están en disco. Este es el único guardarraíl
-    /// mecánico que tiene esa promesa.
+    /// The other `chain_hash` tests are relative (`assert_ne!` between two
+    /// digests) and would stay green if the length prefix went from `u64` to
+    /// `u32`, from little-endian to big-endian, or if the field order
+    /// changed — and any of those things invalidates `verify_chain` on EVERY
+    /// journal already on disk. This is the only mechanical guardrail that
+    /// holds that promise.
     ///
-    /// Si se pone rojo: NO actualices la constante. Revierte el cambio de
-    /// framing, o versiona el formato de la cadena y migra los journals.
+    /// If this goes red: do NOT update the constant. Revert the framing
+    /// change, or version the chain's format and migrate the journals.
     #[test]
     fn the_chain_hash_is_frozen() {
         let r = Record {
@@ -2293,9 +2314,9 @@ mod tests {
             reversal: "rename",
             reversal_ref: Some(&[]),
             undoes_seq: Some(3),
-            // SIN lote, como toda entrada anterior al batch rename: la
-            // constante de abajo NO cambia por añadir el campo, y eso es
-            // exactamente la promesa de compatibilidad.
+            // WITHOUT a batch, like every entry before the batch rename: the
+            // constant below does NOT change from adding the field, and that
+            // is exactly the compatibility promise.
             batch_id: None,
         };
         let got = chain_hash(&[0u8; 32], &r);
@@ -2319,7 +2340,7 @@ mod tests {
 
     #[test]
     fn none_and_empty_some_do_not_collide() {
-        // security B1: `None` vs `Some(&[])` deben dar hashes distintos.
+        // security B1: `None` vs `Some(&[])` must give different hashes.
         let zero = [0u8; 32];
         let mut none = rec(1);
         none.reversal_ref = None;
@@ -2362,7 +2383,7 @@ mod tests {
         assert_eq!(j.count().await.expect("count"), 2);
         assert!(
             j.verify_chain().await.expect("verify").is_intact(),
-            "cadena íntegra"
+            "intact chain"
         );
     }
 
@@ -2385,7 +2406,7 @@ mod tests {
         assert_eq!(
             j.verify_chain().await.expect("verify"),
             ChainStatus::Broken { first_bad_seq: 1 },
-            "se detecta Y se cita dónde (B2)"
+            "it is detected AND it cites where (B2)"
         );
     }
 
@@ -2407,29 +2428,29 @@ mod tests {
             .expect("insert");
             j.set_short_hash_for_test(1).await.expect("corrupt");
         }
-        // Reabrir lee el último entry_hash → corto → Corrupt, no panic.
+        // Reopening reads the last entry_hash → short → Corrupt, not a panic.
         assert!(matches!(
             Journal::open(&path).await,
             Err(JournalError::Corrupt(_))
         ));
     }
 
-    /// El single-writer del hash-chain es un MECANISMO (MAJOR-1 security
-    /// M3-4): mientras un proceso tenga el journal abierto, un segundo `open`
-    /// del MISMO fichero falla — jamás dos escritores forkeando la cadena
-    /// (p. ej. dos daemons con sockets distintos y el mismo config dir).
+    /// The hash chain's single-writer requirement is a MECHANISM (MAJOR-1
+    /// security M3-4): while a process has the journal open, a second `open`
+    /// of the SAME file fails — never two writers forking the chain (e.g. two
+    /// daemons with different sockets and the same config dir).
     #[tokio::test]
     async fn second_open_of_live_journal_fails() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("j.db");
-        let vivo = Journal::open(&path).await.expect("primer open");
+        let live = Journal::open(&path).await.expect("first open");
         assert!(
             matches!(Journal::open(&path).await, Err(JournalError::Sqlx(_))),
-            "el lock exclusivo rechaza al segundo escritor"
+            "the exclusive lock rejects the second writer"
         );
-        // Soltar el primero libera el lock: reabrir vuelve a funcionar.
-        drop(vivo);
-        let _ = Journal::open(&path).await.expect("reopen tras drop");
+        // Releasing the first one frees the lock: reopening works again.
+        drop(live);
+        let _ = Journal::open(&path).await.expect("reopen after drop");
     }
 
     #[tokio::test]
@@ -2463,7 +2484,7 @@ mod tests {
             )
             .await
             .expect("insert");
-        assert_eq!(seq, 3, "el seq continúa tras reabrir");
+        assert_eq!(seq, 3, "the seq continues after reopening");
         assert_eq!(j.count().await.expect("count"), 3);
         assert!(j.verify_chain().await.expect("verify").is_intact());
     }
@@ -2483,13 +2504,13 @@ mod tests {
             let obs = Arc::clone(&obs);
             let p = p.clone();
             handles.push(tokio::spawn(async move {
-                obs.on_mutation(&Mutation::creado(&p), &Actor::User).await
+                obs.on_mutation(&Mutation::created(&p), &Actor::User).await
             }));
         }
         for h in handles {
             h.await.expect("join").expect("on_mutation ok");
         }
-        // seq asignado bajo el lock → cadena consistente pese a 32 concurrentes.
+        // seq assigned under the lock → chain consistent despite 32 concurrent.
         assert_eq!(obs.journal.count().await.expect("count"), 32);
         assert!(
             obs.journal
@@ -2497,7 +2518,7 @@ mod tests {
                 .await
                 .expect("verify")
                 .is_intact(),
-            "sin falso-manipulado bajo concurrencia (security M1)"
+            "no false-tampered under concurrency (security M1)"
         );
     }
 
@@ -2507,13 +2528,13 @@ mod tests {
         use norte_proto::VPath;
 
         let dir = tempfile::tempdir().expect("tempdir");
-        // El dir contenedor NO existe todavía (primer arranque del dueño).
+        // The containing dir does NOT exist yet (owner's first startup).
         let path = dir.path().join("state/journal.db");
         let j = SqliteJournal::open(&path)
             .await
-            .expect("open crea el padre");
+            .expect("open creates the parent");
         let victim = VPath::parse("file:///a").expect("vpath");
-        j.on_mutation(&Mutation::creado(&victim), &Actor::User)
+        j.on_mutation(&Mutation::created(&victim), &Actor::User)
             .await
             .expect("on_mutation");
         assert_eq!(j.journal().count().await.expect("count"), 1);
@@ -2527,8 +2548,8 @@ mod tests {
         let obs = SqliteJournal::new(Journal::open_in_memory().await.expect("open"));
         let seg = |b: &[u8]| Segment::new(b.to_vec()).expect("segment");
         let root = VPath::root(Scheme::new("file").expect("scheme"), None);
-        // Basename NO-UTF8 (0xFF 0xFE): ejercita la rama percent-encoding del
-        // wire, justo donde un bug lossy (regla 1) se escondería.
+        // Non-UTF-8 basename (0xFF 0xFE): exercises the wire's percent-encoding
+        // branch, exactly where a lossy bug (rule 1) would hide.
         let victim = root.join(seg(&[0xFF, 0xFE]));
         let dest = root
             .join(seg(b".norte-trash"))
@@ -2545,22 +2566,22 @@ mod tests {
         .await
         .expect("on_mutation");
 
-        let es = obs.journal.entries().await.expect("entries");
-        assert_eq!(es.len(), 1);
-        assert_eq!(es[0].op, "trashed");
-        assert_eq!(es[0].reversal, "restore_trash");
-        let stored = es[0]
+        let entries = obs.journal.entries().await.expect("entries");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].op, "trashed");
+        assert_eq!(entries[0].reversal, "restore_trash");
+        let stored = entries[0]
             .reversal_ref
             .as_deref()
-            .expect("papelera lógica: hay reversal_ref");
-        // Round-trip REAL (no tautológico): `VPath::parse` es la inversa de
-        // `to_wire`; si el wire perdiera los bytes hostiles, reconstruiría un
-        // VPath distinto y este assert fallaría.
+            .expect("logical trash: there is a reversal_ref");
+        // REAL round-trip (not tautological): `VPath::parse` is the inverse of
+        // `to_wire`; if the wire lost the hostile bytes, it would reconstruct a
+        // different VPath and this assert would fail.
         let roundtrip =
-            VPath::parse(std::str::from_utf8(stored).expect("wire es ASCII")).expect("parse");
+            VPath::parse(std::str::from_utf8(stored).expect("wire is ASCII")).expect("parse");
         assert_eq!(
             roundtrip, dest,
-            "reversal_ref round-trip byte-exacto (regla 1)"
+            "reversal_ref round-trips byte-exact (rule 1)"
         );
     }
 
@@ -2580,11 +2601,11 @@ mod tests {
         )
         .await
         .expect("on_mutation");
-        let es = obs.journal.entries().await.expect("entries");
-        assert_eq!(es[0].reversal, "restore_trash");
+        let entries = obs.journal.entries().await.expect("entries");
+        assert_eq!(entries[0].reversal, "restore_trash");
         assert_eq!(
-            es[0].reversal_ref, None,
-            "papelera nativa: sin ruta estable"
+            entries[0].reversal_ref, None,
+            "native trash: no stable path"
         );
     }
 
@@ -2612,16 +2633,16 @@ mod tests {
         .await
         .expect("r2");
 
-        let es = j.entries().await.expect("entries");
-        assert_eq!(es.len(), 2);
-        assert_eq!(es[0].seq, 1);
-        assert_eq!(es[0].op, "created");
-        assert_eq!(es[0].path, b"file:///a");
-        assert_eq!(es[0].reversal, "delete");
-        assert_eq!(es[1].op, "renamed");
-        assert_eq!(es[1].path, b"file:///b");
-        assert_eq!(es[1].path_to.as_deref(), Some(&b"file:///a"[..]));
-        assert_eq!(es[1].reversal, "rename_back");
+        let entries = j.entries().await.expect("entries");
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].seq, 1);
+        assert_eq!(entries[0].op, "created");
+        assert_eq!(entries[0].path, b"file:///a");
+        assert_eq!(entries[0].reversal, "delete");
+        assert_eq!(entries[1].op, "renamed");
+        assert_eq!(entries[1].path, b"file:///b");
+        assert_eq!(entries[1].path_to.as_deref(), Some(&b"file:///a"[..]));
+        assert_eq!(entries[1].reversal, "rename_back");
     }
 
     #[tokio::test]
@@ -2630,7 +2651,7 @@ mod tests {
         let agent = Actor::Agent {
             session: "s1".into(),
         };
-        // seq 1: agente crea A. seq 2: usuario crea B (otro actor).
+        // seq 1: the agent creates A. seq 2: the user creates B (another actor).
         j.record(
             "created",
             b"file:///a",
@@ -2651,7 +2672,7 @@ mod tests {
         )
         .await
         .expect("2");
-        // seq 3: compensación de la 1 (undoes_seq=1) → la 1 deja de ser revertible.
+        // seq 3: compensation of 1 (undoes_seq=1) → 1 stops being revertible.
         j.record_undoing(
             "removed",
             b"file:///a",
@@ -2667,7 +2688,7 @@ mod tests {
         let rev = j.revertible_for(&agent).await.expect("revertible");
         assert!(
             rev.is_empty(),
-            "la 1 ya está compensada; la 2 es de otro actor"
+            "1 is already compensated; 2 belongs to another actor"
         );
 
         let rev_user = j
@@ -2679,18 +2700,18 @@ mod tests {
         assert_eq!(rev_user[0].undoes_seq, None);
     }
 
-    /// Una compensación DESANDADA no tapa a su original: la mutación vuelve a
-    /// ser revertible.
+    /// A compensation that was itself UNDONE does not cover its original: the
+    /// mutation becomes revertible again.
     ///
-    /// Es la forma que produce el undo de un lote cuando falla a mitad: el
-    /// ejecutor desanda los pasos de undo que ya había aplicado y journaliza
-    /// esa vuelta como compensación de la compensación (`O ← C ← D`). El árbol
-    /// queda con el lote aplicado, así que decir «ya está deshecho» lo dejaría
-    /// indeshacible para siempre y en silencio.
+    /// This is the shape produced by a batch undo that fails halfway: the
+    /// executor undoes the undo steps it had already applied and journals
+    /// that reversal as a compensation of the compensation (`O ← C ← D`). The
+    /// tree ends up with the batch applied, so saying "already undone" would
+    /// leave it undoable-never-again, silently.
     #[tokio::test]
     async fn a_compensation_that_was_itself_undone_reopens_its_entry() {
         let j = Journal::open_in_memory().await.expect("open");
-        // seq 1: la mutación original.
+        // seq 1: the original mutation.
         j.record(
             "renamed",
             b"file:///x",
@@ -2701,7 +2722,7 @@ mod tests {
         )
         .await
         .expect("1");
-        // seq 2: su compensación → la 1 deja de ser revertible.
+        // seq 2: its compensation → 1 stops being revertible.
         let comp = j
             .record_undoing(
                 "renamed",
@@ -2720,8 +2741,8 @@ mod tests {
                 .expect("revertible")
                 .is_empty(),
         );
-        // seq 3: la compensación se DESANDA (el undo del lote se cayó y el
-        // ejecutor la devolvió) → la 1 vuelve a estar pendiente.
+        // seq 3: the compensation gets UNDONE (the batch undo fell over and
+        // the executor reverted it) → 1 is pending again.
         j.record_undoing(
             "renamed",
             b"file:///x",
@@ -2737,22 +2758,22 @@ mod tests {
         assert_eq!(
             rev.iter().map(|e| e.seq).collect::<Vec<_>>(),
             vec![1],
-            "la compensación ya no vale, así que la 1 sigue por deshacer",
+            "the compensation no longer counts, so 1 is still to be undone",
         );
-        // Y la re-comprobación del undo (#358) lee la MISMA condición: la 1 no
-        // está deshecha. Si divergieran, un undo en marcha se saltaría lo que
-        // la selección acaba de ofrecer, o al revés.
+        // And the undo's re-check (#358) reads the SAME condition: 1 is not
+        // undone. If they diverged, an undo in progress would skip what the
+        // selection just offered, or the other way around.
         assert!(
             j.undone_among(&[1]).await.expect("undone").is_empty(),
-            "desandada la compensación, la 1 no cuenta como deshecha"
+            "with the compensation undone, 1 does not count as undone"
         );
     }
 
-    /// `undone_among` dice cuáles de las pedidas tienen una compensación VIVA,
-    /// y pregunta por trozos: con más seqs que el trozo, sigue contestando
-    /// entero.
+    /// `undone_among` says which of the requested ones have a LIVE
+    /// compensation, and asks in chunks: with more seqs than the chunk size,
+    /// it still answers in full.
     #[tokio::test]
-    async fn undone_among_devuelve_las_compensadas_vivas_y_cruza_los_trozos() {
+    async fn undone_among_returns_the_live_compensations_and_crosses_chunks() {
         let j = Journal::open_in_memory().await.expect("open");
         for i in 0..3 {
             j.record(
@@ -2764,9 +2785,9 @@ mod tests {
                 &Actor::User,
             )
             .await
-            .expect("mutación");
+            .expect("mutation");
         }
-        // seq 4 compensa la 2.
+        // seq 4 compensates 2.
         j.record_undoing(
             "removed",
             b"file:///f1",
@@ -2777,13 +2798,13 @@ mod tests {
             Some(2),
         )
         .await
-        .expect("compensación");
+        .expect("compensation");
         assert_eq!(j.undone_among(&[1, 2, 3]).await.expect("undone"), vec![2]);
-        // Más de un trozo (500), con la compensada al final: la que importa
-        // no se pierde en la costura.
-        let mut muchas: Vec<i64> = (10_000..10_600).collect();
-        muchas.push(2);
-        assert_eq!(j.undone_among(&muchas).await.expect("undone"), vec![2]);
+        // More than one chunk (500), with the compensated one at the end: the
+        // one that matters is not lost at the seam.
+        let mut many: Vec<i64> = (10_000..10_600).collect();
+        many.push(2);
+        assert_eq!(j.undone_among(&many).await.expect("undone"), vec![2]);
     }
 
     #[tokio::test]
@@ -2798,44 +2819,44 @@ mod tests {
         assert_eq!(
             rev.iter().map(|e| e.seq).collect::<Vec<_>>(),
             vec![3, 2, 1],
-            "orden LIFO (DESC)"
+            "LIFO order (DESC)"
         );
         assert!(
             j.verify_chain().await.expect("verify").is_intact(),
-            "chain íntegra con undoes_seq"
+            "chain intact with undoes_seq"
         );
     }
 
-    /// M3-5 (ADR 0025): la truncación de COLA pasa `verify_chain` (debilidad
-    /// keyless PINNEADA aquí a propósito) — y el ancla HMAC la detecta.
+    /// M3-5 (ADR 0025): TAIL truncation passes `verify_chain` (a keyless
+    /// weakness PINNED here on purpose) — and the HMAC anchor detects it.
     #[tokio::test]
-    async fn ancla_detecta_truncacion_de_cola_que_la_cadena_no_ve() {
+    async fn anchor_detects_tail_truncation_the_chain_does_not_see() {
         let j = Journal::open_in_memory().await.expect("open");
         for w in [&b"file:///a"[..], b"file:///b", b"file:///c"] {
             j.record("created", w, None, Reversal::Delete, None, &Actor::User)
                 .await
                 .expect("rec");
         }
-        let (seq, head) = j.head().await.expect("head").expect("no vacio");
+        let (seq, head) = j.head().await.expect("head").expect("not empty");
         assert_eq!(seq, 3);
         assert_eq!(
             j.entry_hash_at(seq).await.expect("hash_at"),
             Some(head),
-            "head() y entry_hash_at coinciden"
+            "head() and entry_hash_at agree"
         );
         let key = [7u8; 32];
         let line = crate::audit::anchor_line(&key, &crate::audit::Anchor { seq, head });
 
-        // ATAQUE: el atacante borra la ultima entrada (rollback de cola).
+        // ATTACK: the attacker deletes the last entry (tail rollback).
         sqlx::query("DELETE FROM journal WHERE seq = 3")
             .execute(&j.pool)
             .await
             .expect("delete");
         assert!(
             j.verify_chain().await.expect("verify").is_intact(),
-            "keyless NO ve la truncacion de cola (por eso existen las anclas)"
+            "keyless does NOT see the tail truncation (that is why anchors exist)"
         );
-        // El ancla si: el seq anclado ya no existe.
+        // The anchor does: the anchored seq no longer exists.
         let at = j.entry_hash_at(seq).await.expect("hash_at");
         assert_eq!(
             crate::audit::verify_anchor_line(&key, &line, at),
@@ -2843,10 +2864,10 @@ mod tests {
         );
     }
 
-    /// El schema del journal ANTES de que existiera `batch_id`, copiado tal
-    /// cual se envió. Los tests de compatibilidad crean la DB con ESTE texto:
-    /// si el `SCHEMA` de arriba cambia, ellos siguen describiendo el disco que
-    /// ya existe, que es de lo que va la migración.
+    /// The journal's schema BEFORE `batch_id` existed, copied exactly as it
+    /// shipped. The compatibility tests create the DB with THIS text: if the
+    /// `SCHEMA` above changes, they keep describing the disk that already
+    /// exists, which is what the migration is about.
     const SCHEMA_BEFORE_BATCH_ID: &str = "\
 CREATE TABLE IF NOT EXISTS journal (
     seq          INTEGER PRIMARY KEY,
@@ -2865,16 +2886,16 @@ CREATE TABLE IF NOT EXISTS journal (
 
     fn unhex(s: &str) -> Vec<u8> {
         let b = s.as_bytes();
-        assert!(b.len().is_multiple_of(2), "hex de longitud par");
+        assert!(b.len().is_multiple_of(2), "even-length hex");
         b.chunks(2)
             .map(|p| u8::from_str_radix(std::str::from_utf8(p).expect("ascii"), 16).expect("hex"))
             .collect()
     }
 
-    /// Escribe en `path` una DB con el schema PRE-migración y UNA fila cuyo
-    /// `entry_hash` es la constante congelada de `the_chain_hash_is_frozen` —
-    /// es decir, un hash calculado por el código ANTERIOR a esta tarea, que
-    /// nada de este test recomputa.
+    /// Writes into `path` a DB with the PRE-migration schema and ONE row whose
+    /// `entry_hash` is the frozen constant from `the_chain_hash_is_frozen` —
+    /// i.e. a hash computed by the code BEFORE this task, which nothing in
+    /// this test recomputes.
     async fn write_pre_migration_journal(path: &std::path::Path) {
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
@@ -2882,17 +2903,17 @@ CREATE TABLE IF NOT EXISTS journal (
                 SqliteConnectOptions::new()
                     .filename(path)
                     .create_if_missing(true)
-                    // WAL como lo dejaba `Journal::open` de entonces: un
-                    // journal pre-migración REAL está en WAL, y el handle de
-                    // solo-lectura no podría cambiar el modo (eso es escribir).
+                    // WAL as `Journal::open` left it back then: a REAL
+                    // pre-migration journal is in WAL, and the read-only
+                    // handle could not change the mode (that is writing).
                     .journal_mode(SqliteJournalMode::Wal),
             )
             .await
-            .expect("pool viejo");
+            .expect("old pool");
         sqlx::query(SCHEMA_BEFORE_BATCH_ID)
             .execute(&pool)
             .await
-            .expect("schema viejo");
+            .expect("old schema");
         sqlx::query(
             "INSERT INTO journal (seq, ts_ms, actor_kind, actor_id, op, path, path_to, reversal, reversal_ref, undoes_seq, prev_hash, entry_hash) \
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -2908,39 +2929,37 @@ CREATE TABLE IF NOT EXISTS journal (
         .bind(Some(&[][..]))
         .bind(Some(3i64))
         .bind(&[0u8; 32][..])
-        // El MISMO hex que pinea `the_chain_hash_is_frozen`, duplicado a
-        // propósito: este test no debe poder «arreglarse» tocando aquella
-        // constante.
+        // The SAME hex `the_chain_hash_is_frozen` pins, duplicated on purpose:
+        // this test must not be "fixable" by touching that constant.
         .bind(unhex("b00a2da6db1199742aa42f4811370bf02fcc21a294d77741ae7a26ad2b794ecc"))
         .execute(&pool)
         .await
-        .expect("insert de la era pre-batch");
+        .expect("insert from the pre-batch era");
         pool.close().await;
     }
 
-    /// EL test de la regla del hash: un journal escrito ANTES de que existiera
-    /// `batch_id` sigue verificando después de migrarlo. Su fila lleva un
-    /// `entry_hash` de la era anterior; si `None` alimentara algo (aunque fuera
-    /// un byte de presencia), `verify_chain` gritaría «manipulado» sobre una
-    /// base de datos que nadie tocó.
+    /// THE test for the hash rule: a journal written BEFORE `batch_id` existed
+    /// still verifies after migrating it. Its row carries an `entry_hash` from
+    /// the earlier era; if `None` fed anything (even a mere presence byte),
+    /// `verify_chain` would scream "tampered" over a database nobody touched.
     #[tokio::test]
     async fn a_pre_migration_journal_still_verifies_and_keeps_chaining() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("viejo.db");
         write_pre_migration_journal(&path).await;
 
-        let j = Journal::open(&path).await.expect("open migra la DB");
+        let j = Journal::open(&path).await.expect("open migrates the DB");
         assert_eq!(
             j.verify_chain().await.expect("verify"),
             ChainStatus::Intact { entries: 1 },
-            "la migración no puede romper una cadena ya escrita"
+            "migration cannot break a chain already written"
         );
-        let es = j.entries().await.expect("entries");
-        assert_eq!(es.len(), 1);
-        assert_eq!(es[0].batch_id, None, "la fila migrada no tiene lote");
+        let entries = j.entries().await.expect("entries");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].batch_id, None, "the migrated row has no batch");
 
-        // Y la cadena SIGUE desde ahí: la entrada nueva encadena con el head
-        // heredado y la cadena entera vuelve a verificar.
+        // And the chain KEEPS GOING from there: the new entry chains onto the
+        // inherited head and the whole chain verifies again.
         let seq = j
             .record(
                 "created",
@@ -2951,19 +2970,19 @@ CREATE TABLE IF NOT EXISTS journal (
                 &Actor::User,
             )
             .await
-            .expect("record tras migrar");
-        assert_eq!(seq, 8, "el seq continúa desde la fila heredada");
+            .expect("record after migrating");
+        assert_eq!(seq, 8, "the seq continues from the inherited row");
         assert!(j.verify_chain().await.expect("verify").is_intact());
         assert_eq!(
             j.alloc_batch().await.expect("alloc"),
             1,
-            "sin lotes previos, el contador arranca en 1"
+            "with no prior batches, the counter starts at 1"
         );
     }
 
-    /// El schema de ANTES de que existiera `undoes_seq` (la columna que apunta a
-    /// la entrada que un undo compensa, M3-2). Es más viejo que
-    /// [`SCHEMA_BEFORE_BATCH_ID`], y hay ficheros así en disco.
+    /// The schema from BEFORE `undoes_seq` existed (the column pointing at the
+    /// entry an undo compensates, M3-2). It is older than
+    /// [`SCHEMA_BEFORE_BATCH_ID`], and files like this exist on disk.
     const SCHEMA_BEFORE_UNDOES_SEQ: &str = "\
 CREATE TABLE IF NOT EXISTS journal (
     seq          INTEGER PRIMARY KEY,
@@ -2979,17 +2998,17 @@ CREATE TABLE IF NOT EXISTS journal (
     entry_hash   BLOB    NOT NULL
 );";
 
-    /// Un journal anterior a `undoes_seq` se MIGRA al abrir, como el de
-    /// `batch_id`.
+    /// A journal older than `undoes_seq` is MIGRATED on open, like the
+    /// `batch_id` one.
     ///
-    /// Sin esto, `open` tiene éxito —`CREATE TABLE IF NOT EXISTS` no altera una
-    /// tabla que ya existe— y es cada ESCRITURA la que revienta con «table
-    /// journal has no column named `undoes_seq`». Encontrado en vivo (#167): un
-    /// `norte cp` embebido contra un journal de esa era abortaba con «internal
-    /// error» y no copiaba nada. `batch_id` ya tenía su migración; esta columna
-    /// se añadió sin la suya.
+    /// Without this, `open` succeeds — `CREATE TABLE IF NOT EXISTS` does not
+    /// alter a table that already exists — and it is every WRITE that blows up
+    /// with "table journal has no column named `undoes_seq`". Found live
+    /// (#167): an embedded `norte cp` against a journal from that era aborted
+    /// with "internal error" and copied nothing. `batch_id` already had its
+    /// migration; this column was added without its own.
     #[tokio::test]
-    async fn un_journal_anterior_a_undoes_seq_se_migra_y_acepta_escrituras() {
+    async fn a_journal_older_than_undoes_seq_is_migrated_and_accepts_writes() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("prehistorico.db");
         {
@@ -3002,15 +3021,15 @@ CREATE TABLE IF NOT EXISTS journal (
                         .journal_mode(SqliteJournalMode::Wal),
                 )
                 .await
-                .expect("pool viejo");
+                .expect("old pool");
             sqlx::query(SCHEMA_BEFORE_UNDOES_SEQ)
                 .execute(&pool)
                 .await
-                .expect("schema prehistórico");
+                .expect("prehistoric schema");
             pool.close().await;
         }
 
-        let j = Journal::open(&path).await.expect("open migra la DB");
+        let j = Journal::open(&path).await.expect("open migrates the DB");
         j.record(
             "created",
             b"file:///nuevo",
@@ -3020,49 +3039,52 @@ CREATE TABLE IF NOT EXISTS journal (
             &Actor::User,
         )
         .await
-        .expect("escribir en una DB migrada");
+        .expect("writing to a migrated DB");
         assert!(
             j.verify_chain().await.expect("verify").is_intact(),
-            "migrar no rompe la cadena"
+            "migrating does not break the chain"
         );
     }
 
-    /// El lock exclusivo es de LA CONEXIÓN, así que el pool no puede reciclarla.
+    /// The exclusive lock belongs to THE CONNECTION, so the pool must not
+    /// recycle it.
     ///
-    /// Los defaults de `sqlx` —`min_connections=0`, `idle_timeout=10min`,
-    /// `max_lifetime=30min`— levantan un barrendero que cierra la conexión
-    /// ociosa, y con ella se va el lock: el proceso se sigue creyendo dueño, otro
-    /// entra, y el `ChainState` en memoria de éste choca contra la PK de `seq`
-    /// en su siguiente mutación… y en todas las demás. Se pinea por las opciones
-    /// y no por el reloj: esperar diez minutos en la suite no es un test.
+    /// `sqlx`'s defaults — `min_connections=0`, `idle_timeout=10min`,
+    /// `max_lifetime=30min` — raise a reaper that closes the idle connection,
+    /// and the lock goes with it: the process keeps believing it is the
+    /// owner, another one comes in, and this one's in-memory `ChainState`
+    /// collides with the `seq` PK on its next mutation… and on every one
+    /// after. Pinned via the options and not via the clock: waiting ten
+    /// minutes in the suite is not a test.
     #[tokio::test]
-    async fn el_pool_no_recicla_la_conexion_que_sostiene_el_lock() {
+    async fn the_pool_does_not_recycle_the_connection_holding_the_lock() {
         let dir = tempfile::tempdir().expect("tempdir");
         let j = Journal::open(&dir.path().join("j.db")).await.expect("open");
         let opts = j.pool.options();
-        assert_eq!(opts.get_max_connections(), 1, "un solo escritor");
+        assert_eq!(opts.get_max_connections(), 1, "a single writer");
         assert_eq!(
             opts.get_min_connections(),
             1,
-            "a cero, el barrendero puede dejar el pool vacío y soltar el lock"
+            "at zero, the reaper could leave the pool empty and release the lock"
         );
-        assert_eq!(opts.get_idle_timeout(), None, "ocioso sigue siendo dueño");
+        assert_eq!(opts.get_idle_timeout(), None, "idle is still the owner");
         assert_eq!(
             opts.get_max_lifetime(),
             None,
-            "reciclar la conexión es reciclar el lock"
+            "recycling the connection is recycling the lock"
         );
     }
 
-    /// Un journal anterior a `undoes_seq` CON historia NO se migra: se rehúsa.
+    /// A journal older than `undoes_seq` WITH history is NOT migrated: it is
+    /// refused.
     ///
-    /// Migrarlo lo dejaría escribible y `verify_chain` lo declararía roto en su
-    /// primera fila, porque esas filas se hashearon sobre un preimagen que no
-    /// llevaba la columna (`01e3cf8` añadió las dos cosas a la vez). Una
-    /// acusación FALSA de manipulación sobre un fichero que nadie tocó, y sin
-    /// arreglo: esas filas ya no se pueden rehashear.
+    /// Migrating it would leave it writable and `verify_chain` would declare
+    /// it broken at its first row, because those rows were hashed over a
+    /// preimage that did not carry the column (`01e3cf8` added both things at
+    /// once). A FALSE accusation of tampering on a file nobody touched, and
+    /// with no fix: those rows can no longer be rehashed.
     #[tokio::test]
-    async fn un_journal_anterior_a_undoes_seq_con_filas_se_rehusa() {
+    async fn a_journal_older_than_undoes_seq_with_rows_is_refused() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("con-historia.db");
         {
@@ -3075,11 +3097,11 @@ CREATE TABLE IF NOT EXISTS journal (
                         .journal_mode(SqliteJournalMode::Wal),
                 )
                 .await
-                .expect("pool viejo");
+                .expect("old pool");
             sqlx::query(SCHEMA_BEFORE_UNDOES_SEQ)
                 .execute(&pool)
                 .await
-                .expect("schema prehistórico");
+                .expect("prehistoric schema");
             sqlx::query(
                 "INSERT INTO journal (seq, ts_ms, actor_kind, actor_id, op, path, path_to, \
                  reversal, reversal_ref, prev_hash, entry_hash) \
@@ -3098,22 +3120,22 @@ CREATE TABLE IF NOT EXISTS journal (
             .bind(&[7u8; 32][..])
             .execute(&pool)
             .await
-            .expect("fila de la era pre-undoes_seq");
+            .expect("row from the pre-undoes_seq era");
             pool.close().await;
         }
 
         let Err(err) = Journal::open(&path).await else {
-            panic!("una DB pre-undoes_seq CON filas no se puede migrar")
+            panic!("a pre-undoes_seq DB WITH rows must not be migratable")
         };
         assert!(
             matches!(err, JournalError::Corrupt(m) if m.contains("undoes_seq")),
-            "y se dice por qué: {err}"
+            "and it says why: {err}"
         );
 
-        // Y el audit tampoco lo lee a ciegas: dice qué es, en vez de soltar un
-        // «no such column» crudo.
+        // And the audit does not read it blindly either: it says what it is,
+        // instead of dropping a raw "no such column".
         let Err(ro) = Journal::open_read_only(&path).await else {
-            panic!("el audit tampoco puede leerla")
+            panic!("the audit cannot read it either")
         };
         assert!(
             matches!(ro, JournalError::Corrupt(m) if m.contains("undoes_seq")),
@@ -3121,9 +3143,9 @@ CREATE TABLE IF NOT EXISTS journal (
         );
     }
 
-    /// `open` es la vía de migración; `open_read_only` (audit, M3-5) NO puede
-    /// hacer `ALTER TABLE`, así que tiene que LEER una DB pre-migración sin
-    /// reventar con «no such column».
+    /// `open` is the migration path; `open_read_only` (audit, M3-5) CANNOT do
+    /// `ALTER TABLE`, so it has to READ a pre-migration DB without blowing up
+    /// with "no such column".
     #[tokio::test]
     async fn a_pre_migration_journal_is_readable_read_only() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -3131,12 +3153,12 @@ CREATE TABLE IF NOT EXISTS journal (
         write_pre_migration_journal(&path).await;
 
         let ro = Journal::open_read_only(&path).await.expect("open ro");
-        let es = ro.entries().await.expect("entries");
-        assert_eq!(es.len(), 1);
-        assert_eq!(es[0].batch_id, None);
+        let entries = ro.entries().await.expect("entries");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].batch_id, None);
         assert!(
             ro.verify_chain().await.expect("verify").is_intact(),
-            "la cadena vieja verifica igual en solo-lectura"
+            "the old chain verifies the same way read-only"
         );
         assert_eq!(
             ro.revertible_for(&Actor::User)
@@ -3144,15 +3166,15 @@ CREATE TABLE IF NOT EXISTS journal (
                 .expect("revertible")
                 .len(),
             0,
-            "la fila es de un agente, no del usuario"
+            "the row belongs to an agent, not the user"
         );
     }
 
-    /// VECTOR CONGELADO del campo NUEVO: el mismo registro que
-    /// `the_chain_hash_is_frozen` pero CON lote. Pinea la otra mitad de la
-    /// regla (byte de presencia + id con longitud prefijada, al final del
-    /// todo). Si se pone rojo, has cambiado el framing del `batch_id` y has
-    /// invalidado la cadena de los journals que ya lo usan.
+    /// FROZEN VECTOR for the NEW field: the same record as
+    /// `the_chain_hash_is_frozen` but WITH a batch. Pins the other half of the
+    /// rule (presence byte + length-prefixed id, right at the end). If this
+    /// goes red, you have changed `batch_id`'s framing and invalidated the
+    /// chain of journals that already use it.
     #[test]
     fn the_batch_id_framing_is_frozen() {
         let r = Record {
@@ -3174,18 +3196,19 @@ CREATE TABLE IF NOT EXISTS journal (
         );
     }
 
-    /// Un id de lote es monótono y no se reutiliza, ni entre dos asignaciones
-    /// sin insert de por medio ni al reabrir el journal.
+    /// A batch id is monotonic and not reused, neither between two
+    /// allocations with no insert in between nor across reopening the
+    /// journal.
     #[tokio::test]
     async fn batch_ids_are_monotonic_across_allocs_and_reopens() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("j.db");
-        let usados;
+        let used;
         {
             let j = Journal::open(&path).await.expect("open");
             let a = j.alloc_batch().await.expect("alloc");
             let b = j.alloc_batch().await.expect("alloc");
-            assert_eq!(b, a + 1, "monótono sin insert de por medio");
+            assert_eq!(b, a + 1, "monotonic with no insert in between");
             j.record_entry(&NewEntry {
                 op: "renamed",
                 path: b"file:///b",
@@ -3198,17 +3221,17 @@ CREATE TABLE IF NOT EXISTS journal (
             })
             .await
             .expect("record");
-            usados = b;
+            used = b;
         }
         let j = Journal::open(&path).await.expect("reopen");
         assert!(
-            j.alloc_batch().await.expect("alloc") > usados,
-            "tras reabrir, jamás se repite un lote ya escrito"
+            j.alloc_batch().await.expect("alloc") > used,
+            "after reopening, an already-written batch is never repeated"
         );
     }
 
-    /// Dos tareas concurrentes en el mismo daemon JAMÁS comparten lote (un
-    /// `MAX(batch_id) + 1` sí podría).
+    /// Two concurrent tasks in the same daemon NEVER share a batch (a
+    /// `MAX(batch_id) + 1` could).
     #[tokio::test]
     async fn concurrent_alloc_batch_never_repeats_an_id() {
         use std::collections::HashSet;
@@ -3220,16 +3243,16 @@ CREATE TABLE IF NOT EXISTS journal (
             let j = Arc::clone(&j);
             handles.push(tokio::spawn(async move { j.alloc_batch().await }));
         }
-        let mut vistos = HashSet::new();
+        let mut seen = HashSet::new();
         for h in handles {
             let id = h.await.expect("join").expect("alloc");
-            assert!(vistos.insert(id), "id de lote repetido: {id}");
+            assert!(seen.insert(id), "repeated batch id: {id}");
         }
-        assert_eq!(vistos.len(), 32);
+        assert_eq!(seen.len(), 32);
     }
 
-    /// El lote es parte de la cadena: quitárselo a una fila rompe
-    /// `verify_chain` justo ahí (un atacante no puede DESAGRUPAR un batch).
+    /// The batch is part of the chain: stripping it from a row breaks
+    /// `verify_chain` right there (an attacker cannot UNGROUP a batch).
     #[tokio::test]
     async fn stripping_a_batch_id_breaks_the_chain() {
         let j = Journal::open_in_memory().await.expect("open");
@@ -3255,8 +3278,8 @@ CREATE TABLE IF NOT EXISTS journal (
         );
     }
 
-    /// Y en la otra dirección: INVENTARLE un lote a una entrada suelta también
-    /// rompe la cadena. La compatibilidad con lo viejo no es un agujero.
+    /// And in the other direction: INVENTING a batch for a standalone entry
+    /// also breaks the chain. Compatibility with the old is not a loophole.
     #[tokio::test]
     async fn inventing_a_batch_id_breaks_the_chain() {
         let j = Journal::open_in_memory().await.expect("open");
@@ -3279,8 +3302,9 @@ CREATE TABLE IF NOT EXISTS journal (
         );
     }
 
-    /// El handle de solo-lectura (audit) lee un lote REAL de la DB y no
-    /// entrega ids ya usados: su contador arranca del máximo escrito.
+    /// The read-only handle (audit) reads a REAL batch from the DB and does
+    /// not hand out already-used ids: its counter starts from the highest
+    /// written.
     #[tokio::test]
     async fn read_only_reads_a_real_batch_and_does_not_reuse_ids() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -3309,16 +3333,16 @@ CREATE TABLE IF NOT EXISTS journal (
         );
         assert!(
             ro.verify_chain().await.expect("verify").is_intact(),
-            "la cadena con lote verifica igual en solo-lectura"
+            "the chain with a batch verifies the same way read-only"
         );
         assert!(
             ro.alloc_batch().await.expect("alloc") > batch,
-            "jamás un id que ya está en disco"
+            "never an id already on disk"
         );
     }
 
-    /// El lector expone el lote, que es lo que permite al undo consumir el
-    /// grupo entero como UNA unidad.
+    /// The reader exposes the batch, which is what lets undo consume the
+    /// whole group as ONE unit.
     #[tokio::test]
     async fn entries_and_revertible_report_their_batch() {
         let j = Journal::open_in_memory().await.expect("open");
@@ -3335,25 +3359,25 @@ CREATE TABLE IF NOT EXISTS journal (
         })
         .await
         .expect("record");
-        let es = j.entries().await.expect("entries");
-        assert_eq!(es[0].batch_id, Some(batch));
+        let entries = j.entries().await.expect("entries");
+        assert_eq!(entries[0].batch_id, Some(batch));
         let rev = j.revertible_for(&Actor::User).await.expect("revertible");
         assert_eq!(rev[0].batch_id, Some(batch));
-        // Un lote NO cruza la frontera de actor: quien deshaga por grupo tiene
-        // que seguir filtrando por actor, jamás solo por `batch_id`.
+        // A batch does NOT cross the actor boundary: whoever undoes by group
+        // still has to filter by actor, never by `batch_id` alone.
         assert!(
             j.revertible_for(&Actor::Agent {
                 session: "s1".into()
             })
             .await
-            .expect("revertible agente")
+            .expect("revertible agent")
             .is_empty(),
-            "el lote es del usuario, no del agente"
+            "the batch belongs to the user, not the agent"
         );
     }
 
-    /// Un rename suelto (el camino de `fs.move`) sigue sin lote; uno de un
-    /// batch lo arrastra hasta la fila.
+    /// A standalone rename (the `fs.move` path) still has no batch; one from a
+    /// batch carries it through to the row.
     #[tokio::test]
     async fn on_mutation_threads_the_batch_of_a_rename() {
         use crate::observer::{Mutation, MutationObserver};
@@ -3371,7 +3395,7 @@ CREATE TABLE IF NOT EXISTS journal (
             &Actor::User,
         )
         .await
-        .expect("suelto");
+        .expect("standalone");
         let batch = obs.journal().alloc_batch().await.expect("alloc");
         obs.on_mutation(
             &Mutation::Renamed {
@@ -3382,10 +3406,13 @@ CREATE TABLE IF NOT EXISTS journal (
             &Actor::User,
         )
         .await
-        .expect("en lote");
-        let es = obs.journal().entries().await.expect("entries");
-        assert_eq!(es[0].batch_id, None, "un rename suelto no inventa lote");
-        assert_eq!(es[1].batch_id, Some(batch));
+        .expect("in a batch");
+        let entries = obs.journal().entries().await.expect("entries");
+        assert_eq!(
+            entries[0].batch_id, None,
+            "a standalone rename does not invent a batch"
+        );
+        assert_eq!(entries[1].batch_id, Some(batch));
         assert!(
             obs.journal()
                 .verify_chain()
@@ -3618,23 +3645,22 @@ CREATE TABLE IF NOT EXISTS journal (
         assert_eq!(j.entries().await.expect("entries").len(), 1);
     }
 
-    /// **#146: anclar el marcador cierra el agujero que ADR 0046 concedía.**
+    /// **#146: anchoring the marker closes the hole ADR 0046 granted.**
     ///
-    /// El ataque son tres escrituras de columna y ninguna clave: poner la
-    /// versión, refrescar el digest del marcador (keyless y públicamente
-    /// computable) y reencadenar el `seq 1`. Convierte un
-    /// `Broken { first_bad_seq: k }` en `UnknownFormat`, y con `u32::MAX` de
-    /// versión ningún binario futuro dirá otra cosa: la alarma sobrevive, la
-    /// CULPA no.
+    /// The attack is three column writes and no key: set the version, refresh
+    /// the marker's digest (keyless and publicly computable), and rechain
+    /// `seq 1`. It turns a `Broken { first_bad_seq: k }` into `UnknownFormat`,
+    /// and with a version of `u32::MAX` no future binary will say otherwise:
+    /// the alarm survives, the BLAME does not.
     ///
-    /// Las anclas del HEAD no lo cazan, y esta es la mitad del test que importa
-    /// — se comprueba explícitamente abajo: la edición no mueve ningún
-    /// `entry_hash` de `seq >= 1`, así que el ancla del head SIGUE casando. Es
-    /// el hueco entre los dos mecanismos: `verify_chain` caza ediciones
-    /// incoherentes, las anclas cazan las coherentes, y esta era una
-    /// incoherente a la que le habían desviado el veredicto.
+    /// HEAD anchors do not catch it, and this is the half of the test that
+    /// matters — checked explicitly below: the edit moves no `entry_hash` at
+    /// `seq >= 1`, so the head anchor STILL matches. It is the gap between the
+    /// two mechanisms: `verify_chain` catches inconsistent edits, anchors
+    /// catch consistent ones, and this was an inconsistent one whose verdict
+    /// had been diverted.
     #[tokio::test]
-    async fn una_redeclaracion_del_formato_rompe_el_ancla_del_marcador() {
+    async fn a_format_redeclaration_breaks_the_markers_anchor() {
         use crate::audit::{Anchor, AnchorVerdict, anchor_line, verify_anchor_line};
 
         let j = Journal::open_in_memory().await.expect("open");
@@ -3649,120 +3675,123 @@ CREATE TABLE IF NOT EXISTS journal (
         .await
         .expect("record");
 
-        // `norte audit anchor`: el marcador Y el head.
-        let key = b"clave de anclado del test";
-        let marcador = j
+        // `norte audit anchor`: the marker AND the head.
+        let key = b"test anchor key";
+        let marker = j
             .marker_hash()
             .await
             .expect("marker_hash")
-            .expect("un journal nuevo lleva marcador");
-        let ancla_marcador = anchor_line(
+            .expect("a new journal carries a marker");
+        let marker_anchor = anchor_line(
             key,
             &Anchor {
                 seq: 0,
-                head: marcador,
+                head: marker,
             },
         );
-        let (seq, head) = j.head().await.expect("head").expect("hay una mutación");
-        let ancla_head = anchor_line(key, &Anchor { seq, head });
+        let (seq, head) = j.head().await.expect("head").expect("there is a mutation");
+        let head_anchor = anchor_line(key, &Anchor { seq, head });
 
-        // ANTES del ataque: el ancla del marcador CASA. Es la mitad que un
-        // regresor silencioso rompería —basta con dejar de sembrar el `seq` 0
-        // en el snapshot del audit— y a partir de ahí TODO journal anclado
-        // empezaría a decir «truncación» sobre un fichero intacto.
+        // BEFORE the attack: the marker's anchor MATCHES. This is the half a
+        // silent regression would break — it takes only ceasing to seed
+        // `seq` 0 into the audit's snapshot — and from then on EVERY anchored
+        // journal would start saying "truncation" about an intact file.
         assert!(
             matches!(
-                verify_anchor_line(key, &ancla_marcador, j.marker_hash().await.expect("marker")),
+                verify_anchor_line(key, &marker_anchor, j.marker_hash().await.expect("marker")),
                 AnchorVerdict::Ok(_)
             ),
-            "un journal sin tocar no se acusa a sí mismo",
+            "an untouched journal does not accuse itself",
         );
 
-        // El ataque, entero.
+        // The attack, in full.
         j.redeclare_format_for_test(&u32::MAX.to_string().into_bytes(), true)
             .await
-            .expect("re-declarar");
+            .expect("re-declare");
         j.relink_first_entry_for_test().await.expect("relink");
 
-        // El veredicto de la cadena, desviado: ya no acusa a nadie.
+        // The chain's verdict, diverted: it no longer accuses anyone.
         assert!(
             matches!(
                 j.verify_chain().await.expect("verify"),
                 ChainStatus::UnknownFormat { .. }
             ),
-            "el desvío del veredicto es la premisa del ataque",
+            "diverting the verdict is the attack's premise",
         );
 
-        // Y el ancla del HEAD sigue casando, que es justo lo que hacía que
-        // «las anclas ya lo cubren» sonara verdad y no lo fuera.
+        // And the HEAD anchor still matches, which is exactly what made "the
+        // anchors already cover it" sound true when it was not.
         assert!(
             matches!(
                 verify_anchor_line(
                     key,
-                    &ancla_head,
-                    j.entry_hash_at(seq).await.expect("hash del head"),
+                    &head_anchor,
+                    j.entry_hash_at(seq).await.expect("head's hash"),
                 ),
                 AnchorVerdict::Ok(_)
             ),
-            "la edición no mueve ningún entry_hash de seq >= 1",
+            "the edit moves no entry_hash at seq >= 1",
         );
 
-        // La del marcador, no. Localizada en el `seq` 0 y con una clave detrás.
-        let ahora = j.marker_hash().await.expect("marker_hash");
+        // The marker's does not. Located at `seq` 0 and with a key behind it.
+        let now = j.marker_hash().await.expect("marker_hash");
         assert_eq!(
-            verify_anchor_line(key, &ancla_marcador, ahora),
+            verify_anchor_line(key, &marker_anchor, now),
             AnchorVerdict::HashMismatch(Anchor {
                 seq: 0,
-                head: marcador,
+                head: marker,
             }),
-            "una re-declaración incoherente es HashMismatch en el seq 0",
+            "an inconsistent re-declaration is a HashMismatch at seq 0",
         );
     }
 
-    /// **El agujero que ESTO no cierra, escrito en código y no solo en prosa.**
+    /// **The hole THIS does not close, written in code and not only in prose.**
     ///
-    /// Un journal ANTERIOR a ADR 0046 no tiene marcador —y por diseño no lo
-    /// gana nunca (§6)—, así que cuando se ancló no había nada del `seq` 0 que
-    /// firmar. El ataque ahí no es re-declarar sino INYECTAR: meter la fila del
-    /// `seq` 0 y reencadenar el `seq` 1. El veredicto se desvía igual, y no hay
-    /// ancla previa que lo contradiga.
+    /// A journal from BEFORE ADR 0046 has no marker — and by design never
+    /// gains one (§6) — so when it was anchored there was nothing at `seq` 0
+    /// to sign. The attack there is not re-declaring but INJECTING: putting in
+    /// the `seq` 0 row and rechaining `seq` 1. The verdict is diverted just the
+    /// same, and there is no prior anchor to contradict it.
     ///
-    /// Lo que sí queda es una señal, y el audit la dice: hay marcador y nadie
-    /// lo ancla.
+    /// What does remain is a signal, and the audit states it: there is a
+    /// marker and nobody anchors it.
     #[tokio::test]
-    async fn un_journal_sin_marcador_no_tiene_ancla_que_lo_defienda() {
+    async fn a_journal_without_a_marker_has_no_anchor_to_defend_it() {
         let j = Journal::open_in_memory().await.expect("open");
-        // Se le quita el marcador, que es como nacieron los journals de antes
-        // de ADR 0046.
+        // The marker is removed, which is how journals from before ADR 0046
+        // were born.
         sqlx::query("DELETE FROM journal WHERE seq = 0")
             .execute(&j.pool)
             .await
-            .expect("borrar el marcador");
+            .expect("delete the marker");
         assert_eq!(
             j.marker_hash().await.expect("marker_hash"),
             None,
-            "sin marcador no hay digest que anclar, y el audit no escribe línea"
+            "with no marker there is no digest to anchor, and the audit writes no line"
         );
     }
 
-    /// Y el marcador anclado NO se cuela en la historia: `entry_hash_at` sigue
-    /// filtrando `seq >= 1`, porque una respuesta ahí contradiría a `head` y a
-    /// `entries`, y un ancla no puede apuntar a un `seq` que el resto del audit
-    /// dice que no existe.
+    /// And the anchored marker does NOT sneak into history: `entry_hash_at`
+    /// still filters `seq >= 1`, because an answer there would contradict
+    /// `head` and `entries`, and an anchor cannot point at a `seq` that the
+    /// rest of the audit says does not exist.
     #[tokio::test]
-    async fn el_marcador_tiene_puerta_propia_y_no_relaja_la_de_las_mutaciones() {
+    async fn the_marker_has_its_own_gate_and_does_not_relax_the_mutations_gate() {
         let j = Journal::open_in_memory().await.expect("open");
         assert!(
             j.marker_hash().await.expect("marker_hash").is_some(),
-            "su puerta contesta"
+            "its gate answers"
         );
         assert_eq!(
             j.entry_hash_at(0).await.expect("entry_hash_at"),
             None,
-            "y la de las mutaciones sigue sin contestar por el seq 0"
+            "and the mutations' gate still does not answer for seq 0"
         );
-        assert_eq!(j.head().await.expect("head"), None, "ni head");
-        assert!(j.entries().await.expect("entries").is_empty(), "ni entries");
+        assert_eq!(j.head().await.expect("head"), None, "nor head");
+        assert!(
+            j.entries().await.expect("entries").is_empty(),
+            "nor entries"
+        );
     }
 
     /// Same refusal when the marker is present but its version is not a number
@@ -4049,11 +4078,11 @@ CREATE TABLE IF NOT EXISTS journal (
         assert_eq!(markers, 0, "history that exists is never re-stamped");
     }
 
-    /// `open_read_only` (M3-5): lee lo mismo que el handle de escritura y
-    /// RECHAZA `record` (readonly por diseño). File-backed: cubre el camino
-    /// WAL real del audit.
+    /// `open_read_only` (M3-5): reads the same as the write handle and
+    /// REJECTS `record` (read-only by design). File-backed: covers the
+    /// audit's real WAL path.
     #[tokio::test]
-    async fn open_read_only_lee_y_rechaza_escrituras() {
+    async fn open_read_only_reads_and_rejects_writes() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("j.db");
         let j = Journal::open(&path).await.expect("open rw");
@@ -4067,7 +4096,7 @@ CREATE TABLE IF NOT EXISTS journal (
         )
         .await
         .expect("rec");
-        let head_rw = j.head().await.expect("head").expect("no vacio");
+        let head_rw = j.head().await.expect("head").expect("not empty");
         drop(j);
 
         let ro = Journal::open_read_only(&path).await.expect("open ro");
@@ -4075,7 +4104,7 @@ CREATE TABLE IF NOT EXISTS journal (
         assert_eq!(ro.head().await.expect("head"), Some(head_rw));
         assert!(
             ro.verify_chain().await.expect("verify").is_intact(),
-            "la cadena verifica igual en solo-lectura"
+            "the chain verifies the same way read-only"
         );
         assert!(
             ro.record(
@@ -4088,12 +4117,12 @@ CREATE TABLE IF NOT EXISTS journal (
             )
             .await
             .is_err(),
-            "record sobre readonly DEBE fallar"
+            "record on a readonly handle MUST fail"
         );
     }
 
-    /// Escribe `n` mutaciones del humano y devuelve sus `seq`.
-    async fn del_humano(j: &Journal, n: usize) -> Vec<i64> {
+    /// Writes `n` mutations from the human and returns their `seq`.
+    async fn human_mutations(j: &Journal, n: usize) -> Vec<i64> {
         let mut seqs = Vec::new();
         for i in 0..n {
             let seq = j
@@ -4112,86 +4141,89 @@ CREATE TABLE IF NOT EXISTS journal (
         seqs
     }
 
-    /// La página va de la más NUEVA hacia atrás, respeta el tope, y el
-    /// `before_seq` es ESTRICTO: la entrada señalada no vuelve a salir, que
-    /// es lo que hace que paginar termine en vez de repetir una fila para
-    /// siempre.
+    /// The page goes from the NEWEST backward, respects the cap, and
+    /// `before_seq` is STRICT: the marked entry does not come out again,
+    /// which is what makes paging terminate instead of repeating a row
+    /// forever.
     #[tokio::test]
-    async fn la_pagina_va_hacia_atras_y_before_seq_es_estricto() {
+    async fn the_page_goes_backward_and_before_seq_is_strict() {
         let j = Journal::open_in_memory().await.expect("open");
-        let seqs = del_humano(&j, 5).await;
+        let seqs = human_mutations(&j, 5).await;
 
-        let primera = j.page(None, 2, None).await.expect("page");
+        let first = j.page(None, 2, None).await.expect("page");
         assert_eq!(
-            primera.iter().map(|e| e.entry.seq).collect::<Vec<_>>(),
+            first.iter().map(|e| e.entry.seq).collect::<Vec<_>>(),
             vec![seqs[4], seqs[3]],
-            "las dos más nuevas, en ese orden"
+            "the two newest, in that order"
         );
 
-        let segunda = j.page(Some(seqs[3]), 2, None).await.expect("page");
+        let second = j.page(Some(seqs[3]), 2, None).await.expect("page");
         assert_eq!(
-            segunda.iter().map(|e| e.entry.seq).collect::<Vec<_>>(),
+            second.iter().map(|e| e.entry.seq).collect::<Vec<_>>(),
             vec![seqs[2], seqs[1]],
-            "sigue por debajo de la última servida, sin repetirla"
+            "continues below the last one served, without repeating it"
         );
     }
 
-    /// **Paginar hasta el final devuelve cada entrada UNA vez y termina**
-    /// (hallazgo de la revisión de protocolo: la regla del cursor estaba
-    /// escrita dos veces y probada cero).
+    /// **Paging to the end returns every entry ONCE and terminates** (found
+    /// by the protocol review: the cursor rule was written twice and tested
+    /// zero times).
     ///
-    /// Es el contrato entero en un test: sin repetir, sin saltarse ninguna,
-    /// en orden descendente, y con `next_before_seq` a `None` exactamente
-    /// cuando ya no queda nada más viejo.
+    /// It is the whole contract in a test: no repeats, none skipped, in
+    /// descending order, and `next_before_seq` at `None` exactly when nothing
+    /// older is left.
     #[tokio::test]
-    async fn paginar_hasta_el_final_no_repite_ni_se_salta_nada() {
+    async fn paging_to_the_end_does_not_repeat_or_skip_anything() {
         let j = Journal::open_in_memory().await.expect("open");
-        let seqs = del_humano(&j, 5).await;
+        let seqs = human_mutations(&j, 5).await;
 
-        let mut vistas = Vec::new();
+        let mut seen = Vec::new();
         let mut cursor = None;
-        let mut vueltas = 0;
+        let mut rounds = 0;
         loop {
-            vueltas += 1;
-            assert!(vueltas < 10, "el bucle de paginación no termina");
-            let pagina = j.page(cursor, 2, None).await.expect("page");
-            let wire = page_to_wire(&pagina, 2);
-            vistas.extend(wire.rows.iter().map(|r| r.seq));
+            rounds += 1;
+            assert!(rounds < 10, "the paging loop does not terminate");
+            let page = j.page(cursor, 2, None).await.expect("page");
+            let wire = page_to_wire(&page, 2);
+            seen.extend(wire.rows.iter().map(|r| r.seq));
             match wire.next_before_seq {
                 Some(c) => cursor = Some(c),
                 None => break,
             }
         }
 
-        let mut esperadas = seqs.clone();
-        esperadas.reverse();
-        assert_eq!(vistas, esperadas, "todas, una vez, de la nueva a la vieja");
-        assert_eq!(vueltas, 3, "2 + 2 + 1, y la de 1 ya no ofrece cursor");
+        let mut expected = seqs.clone();
+        expected.reverse();
+        assert_eq!(seen, expected, "all of them, once, from newest to oldest");
+        assert_eq!(
+            rounds, 3,
+            "2 + 2 + 1, and the one of 1 no longer offers a cursor"
+        );
     }
 
-    /// Una página que viene LLENA justo al agotar el journal ofrece cursor, y
-    /// la vuelta siguiente contesta vacío y sin cursor. Es el único caso en
-    /// que el cliente da una vuelta de más, y es correcto: el servidor no
-    /// puede saber que no queda nada sin mirar.
+    /// A page that comes back FULL right as it exhausts the journal offers a
+    /// cursor, and the next round answers empty with no cursor. It is the
+    /// only case where the client makes one extra round, and it is correct:
+    /// the server cannot know nothing is left without looking.
     #[tokio::test]
-    async fn una_pagina_justa_ofrece_cursor_y_la_siguiente_cierra() {
+    async fn an_exact_page_offers_a_cursor_and_the_next_one_closes() {
         let j = Journal::open_in_memory().await.expect("open");
-        del_humano(&j, 2).await;
+        human_mutations(&j, 2).await;
 
-        let primera = page_to_wire(&j.page(None, 2, None).await.expect("page"), 2);
-        let cursor = primera.next_before_seq.expect("la página vino llena");
+        let first = page_to_wire(&j.page(None, 2, None).await.expect("page"), 2);
+        let cursor = first.next_before_seq.expect("the page came back full");
 
-        let segunda = page_to_wire(&j.page(Some(cursor), 2, None).await.expect("page"), 2);
-        assert!(segunda.rows.is_empty());
-        assert_eq!(segunda.next_before_seq, None, "y ahí se cierra");
+        let second = page_to_wire(&j.page(Some(cursor), 2, None).await.expect("page"), 2);
+        assert!(second.rows.is_empty());
+        assert_eq!(second.next_before_seq, None, "and it closes there");
     }
 
-    /// Filtrar por clase de actor deja fuera a las demás — y no filtrar las
-    /// trae todas.
+    /// Filtering by actor class leaves the others out — and not filtering
+    /// brings all of them.
     #[tokio::test]
-    async fn la_pagina_filtra_por_clase_de_actor() {
+    async fn the_page_filters_by_actor_kind() {
         let j = Journal::open_in_memory().await.expect("open");
-        del_humano(&j, 2).await;
+        human_mutations(&j, 2).await;
         j.record(
             "created",
             b"file:///a/agente",
@@ -4205,55 +4237,55 @@ CREATE TABLE IF NOT EXISTS journal (
         .await
         .expect("record");
 
-        let todas = j.page(None, 50, None).await.expect("page");
-        assert_eq!(todas.len(), 3);
+        let all = j.page(None, 50, None).await.expect("page");
+        assert_eq!(all.len(), 3);
 
-        let solo_humano = j.page(None, 50, Some("user")).await.expect("page");
-        assert_eq!(solo_humano.len(), 2);
-        assert!(solo_humano.iter().all(|e| e.entry.actor_kind == "user"));
+        let human_only = j.page(None, 50, Some("user")).await.expect("page");
+        assert_eq!(human_only.len(), 2);
+        assert!(human_only.iter().all(|e| e.entry.actor_kind == "user"));
 
-        let solo_agente = j.page(None, 50, Some("agent")).await.expect("page");
-        assert_eq!(solo_agente.len(), 1);
+        let agent_only = j.page(None, 50, Some("agent")).await.expect("page");
+        assert_eq!(agent_only.len(), 1);
     }
 
-    /// `revertible_for_after` deja FUERA la entrada señalada y todo lo
-    /// anterior. Señalar una fila es decir «vuelve a este estado», así que
-    /// esa fila es lo que se conserva, no la primera víctima — y equivocarse
-    /// aquí deshace una mutación que el humano quería mantener.
+    /// `revertible_for_after` leaves OUT the marked entry and everything
+    /// before it. Marking a row is saying "go back to this state", so that
+    /// row is what is kept, not the first victim — and getting this wrong
+    /// undoes a mutation the human wanted to keep.
     #[tokio::test]
-    async fn revertible_after_no_toca_la_entrada_senalada() {
+    async fn revertible_after_does_not_touch_the_marked_entry() {
         let j = Journal::open_in_memory().await.expect("open");
-        let seqs = del_humano(&j, 4).await;
+        let seqs = human_mutations(&j, 4).await;
 
-        let desde_la_segunda = j
+        let from_the_second = j
             .revertible_for_after(&Actor::User, seqs[1], None)
             .await
             .expect("revertible");
 
         assert_eq!(
-            desde_la_segunda.iter().map(|e| e.seq).collect::<Vec<_>>(),
+            from_the_second.iter().map(|e| e.seq).collect::<Vec<_>>(),
             vec![seqs[3], seqs[2]],
-            "LIFO, y sin la señalada ni lo de antes"
+            "LIFO, and without the marked one or anything before it"
         );
     }
 
-    /// **Un LOTE partido por el corte se queda FUERA entero** (BLOCKER de la
-    /// revisión de seguridad).
+    /// **A BATCH split by the cutoff stays OUT entirely** (BLOCKER from the
+    /// security review).
     ///
-    /// `revertible_for` traía todas las entradas del actor, así que un
-    /// `batch_id` llegaba siempre completo a `undo_units`. Cortar por `seq`
-    /// rompe eso: `revert_batch` —que revierte «entero o nada»— recibiría
-    /// media unidad creyéndola entera, porque su `debug_assert` sólo
-    /// comprueba que el trozo sea internamente coherente, y un trozo lo es.
-    /// El resultado sería un `fs.rename_batch` con la mitad de los nombres
-    /// devueltos y la otra mitad no.
+    /// `revertible_for` used to bring back all of the actor's entries, so a
+    /// `batch_id` always arrived complete at `undo_units`. Cutting by `seq`
+    /// breaks that: `revert_batch` — which reverts "all or nothing" — would
+    /// receive half a unit believing it whole, because its `debug_assert`
+    /// only checks that the piece is internally coherent, and a piece is. The
+    /// result would be an `fs.rename_batch` with half the names returned and
+    /// the other half not.
     ///
-    /// Se excluye entero, y no se incluye entero, porque incluirlo desharía
-    /// la entrada que el humano señaló para CONSERVAR.
+    /// It is excluded whole, and not included whole, because including it
+    /// would undo the entry the human marked to KEEP.
     #[tokio::test]
-    async fn un_lote_partido_por_el_corte_se_queda_fuera_entero() {
+    async fn a_batch_split_by_the_cutoff_stays_out_entirely() {
         let j = Journal::open_in_memory().await.expect("open");
-        let lote = j.alloc_batch().await.expect("batch");
+        let batch = j.alloc_batch().await.expect("batch");
         let mut seqs = Vec::new();
         for i in 0..3 {
             let seq = j
@@ -4265,13 +4297,13 @@ CREATE TABLE IF NOT EXISTS journal (
                     reversal_ref: None,
                     actor: &Actor::User,
                     undoes_seq: None,
-                    batch_id: Some(lote),
+                    batch_id: Some(batch),
                 })
                 .await
                 .expect("record");
             seqs.push(seq);
         }
-        let suelta = j
+        let standalone = j
             .record(
                 "created",
                 b"file:///a/suelta",
@@ -4283,24 +4315,24 @@ CREATE TABLE IF NOT EXISTS journal (
             .await
             .expect("record");
 
-        // Corte EN MEDIO del lote: la de en medio.
-        let elegidas = j
+        // Cutoff IN THE MIDDLE of the batch: the middle one.
+        let chosen = j
             .revertible_for_after(&Actor::User, seqs[1], None)
             .await
             .expect("revertible");
 
         assert_eq!(
-            elegidas.iter().map(|e| e.seq).collect::<Vec<_>>(),
-            vec![suelta],
-            "sólo lo de fuera del lote: el lote no se parte"
+            chosen.iter().map(|e| e.seq).collect::<Vec<_>>(),
+            vec![standalone],
+            "only what is outside the batch: the batch is not split"
         );
     }
 
-    /// Y un lote ENTERAMENTE posterior al corte sí entra entero.
+    /// And a batch ENTIRELY after the cutoff does go in whole.
     #[tokio::test]
-    async fn un_lote_entero_posterior_al_corte_entra() {
+    async fn a_whole_batch_after_the_cutoff_is_included() {
         let j = Journal::open_in_memory().await.expect("open");
-        let corte = j
+        let cutoff = j
             .record(
                 "created",
                 b"file:///a/base",
@@ -4311,7 +4343,7 @@ CREATE TABLE IF NOT EXISTS journal (
             )
             .await
             .expect("record");
-        let lote = j.alloc_batch().await.expect("batch");
+        let batch = j.alloc_batch().await.expect("batch");
         for i in 0..2 {
             j.record_entry(&NewEntry {
                 op: "renamed",
@@ -4321,34 +4353,34 @@ CREATE TABLE IF NOT EXISTS journal (
                 reversal_ref: None,
                 actor: &Actor::User,
                 undoes_seq: None,
-                batch_id: Some(lote),
+                batch_id: Some(batch),
             })
             .await
             .expect("record");
         }
 
-        let elegidas = j
-            .revertible_for_after(&Actor::User, corte, None)
+        let chosen = j
+            .revertible_for_after(&Actor::User, cutoff, None)
             .await
             .expect("revertible");
 
-        assert_eq!(elegidas.len(), 2, "el lote entero: {elegidas:?}");
-        assert!(elegidas.iter().all(|e| e.batch_id == Some(lote)));
+        assert_eq!(chosen.len(), 2, "the whole batch: {chosen:?}");
+        assert!(chosen.iter().all(|e| e.batch_id == Some(batch)));
     }
 
-    /// El TECHO (0.80.0) es el espejo del corte: lo más nuevo se queda, y un
-    /// LOTE con una entrada por encima se queda ENTERO — aunque la de arriba
-    /// no sea revertible, porque la regla mira el journal entero y no la
-    /// selección. Un techo por debajo del corte no selecciona nada.
+    /// The CEILING (0.80.0) is the cutoff's mirror: what is newest stays out,
+    /// and a BATCH with an entry above it stays out WHOLE — even if the one
+    /// above is not revertible, because the rule looks at the whole journal
+    /// and not the selection. A ceiling below the cutoff selects nothing.
     #[tokio::test]
-    async fn el_techo_deja_fuera_lo_nuevo_y_el_lote_que_parte() {
+    async fn the_ceiling_excludes_whats_newer_and_the_batch_it_splits() {
         let j = Journal::open_in_memory().await.expect("open");
-        let seqs = del_humano(&j, 1).await;
-        let corte = seqs[0];
-        let lote = j.alloc_batch().await.expect("batch");
-        let mut del_lote = Vec::new();
+        let seqs = human_mutations(&j, 1).await;
+        let cutoff = seqs[0];
+        let batch = j.alloc_batch().await.expect("batch");
+        let mut from_batch = Vec::new();
         for i in 0..2 {
-            del_lote.push(
+            from_batch.push(
                 j.record_entry(&NewEntry {
                     op: "renamed",
                     path: format!("file:///a/{i}").as_bytes(),
@@ -4357,13 +4389,13 @@ CREATE TABLE IF NOT EXISTS journal (
                     reversal_ref: None,
                     actor: &Actor::User,
                     undoes_seq: None,
-                    batch_id: Some(lote),
+                    batch_id: Some(batch),
                 })
                 .await
                 .expect("record"),
             );
         }
-        let suelta = j
+        let standalone = j
             .record(
                 "created",
                 b"file:///a/suelta",
@@ -4375,38 +4407,43 @@ CREATE TABLE IF NOT EXISTS journal (
             .await
             .expect("record");
 
-        let seqs_de = |v: Vec<JournalEntry>| v.into_iter().map(|e| e.seq).collect::<Vec<_>>();
-        // Techo justo en la primera del lote: lo parte, así que fuera entero.
-        let partido = j
-            .revertible_for_after(&Actor::User, corte, Some(del_lote[0]))
+        let seqs_of = |v: Vec<JournalEntry>| v.into_iter().map(|e| e.seq).collect::<Vec<_>>();
+        // Ceiling right at the batch's first entry: it splits it, so it is
+        // excluded whole.
+        let split = j
+            .revertible_for_after(&Actor::User, cutoff, Some(from_batch[0]))
             .await
             .expect("revertible");
-        assert!(partido.is_empty(), "el lote partido no entra: {partido:?}");
-        // Techo en la última del lote: entra entero, y la suelta de después no.
-        let entero = j
-            .revertible_for_after(&Actor::User, corte, Some(del_lote[1]))
+        assert!(
+            split.is_empty(),
+            "the split batch does not go in: {split:?}"
+        );
+        // Ceiling at the batch's last entry: it goes in whole, and the
+        // standalone one after it does not.
+        let whole = j
+            .revertible_for_after(&Actor::User, cutoff, Some(from_batch[1]))
             .await
             .expect("revertible");
-        assert_eq!(seqs_de(entero), vec![del_lote[1], del_lote[0]]);
-        // Sin techo, todo; con un techo por debajo del corte, nada.
-        let todo = j
-            .revertible_for_after(&Actor::User, corte, None)
+        assert_eq!(seqs_of(whole), vec![from_batch[1], from_batch[0]]);
+        // With no ceiling, everything; with a ceiling below the cutoff, nothing.
+        let all = j
+            .revertible_for_after(&Actor::User, cutoff, None)
             .await
             .expect("revertible");
-        assert_eq!(seqs_de(todo), vec![suelta, del_lote[1], del_lote[0]]);
-        let nada = j
-            .revertible_for_after(&Actor::User, corte, Some(corte - 1))
+        assert_eq!(seqs_of(all), vec![standalone, from_batch[1], from_batch[0]]);
+        let none = j
+            .revertible_for_after(&Actor::User, cutoff, Some(cutoff - 1))
             .await
             .expect("revertible");
-        assert!(nada.is_empty());
+        assert!(none.is_empty());
     }
 
-    /// Y sólo mira al actor que se le pide: lo que hizo un agente no entra en
-    /// el «deshaz lo mío» de un humano, aunque sea posterior.
+    /// And it only looks at the actor it is asked about: what an agent did
+    /// does not enter a human's "undo mine", even if it comes later.
     #[tokio::test]
-    async fn revertible_after_no_se_lleva_lo_de_otro_actor() {
+    async fn revertible_after_does_not_take_another_actors_entries() {
         let j = Journal::open_in_memory().await.expect("open");
-        let seqs = del_humano(&j, 1).await;
+        let seqs = human_mutations(&j, 1).await;
         j.record(
             "created",
             b"file:///a/agente",
@@ -4420,22 +4457,23 @@ CREATE TABLE IF NOT EXISTS journal (
         .await
         .expect("record");
 
-        let del_humano = j
+        let human_side = j
             .revertible_for_after(&Actor::User, seqs[0], None)
             .await
             .expect("revertible");
 
         assert!(
-            del_humano.is_empty(),
-            "lo del agente es suyo: {del_humano:?}"
+            human_side.is_empty(),
+            "the agent's is its own: {human_side:?}"
         );
     }
 
-    /// La fila de wire dice `reversible` por lo que la entrada DECLARÓ, y
-    /// una ruta ilegible se enseña con reemplazos en vez de perderse: una
-    /// mutación que no se ve es indistinguible de una que no ocurrió.
+    /// The wire row states `reversible` based on what the entry DECLARED, and
+    /// an unreadable path is shown with replacements instead of being lost: a
+    /// mutation that cannot be seen is indistinguishable from one that did not
+    /// happen.
     #[tokio::test]
-    async fn la_fila_de_wire_no_pierde_una_entrada_ilegible() {
+    async fn the_wire_row_does_not_lose_an_unreadable_entry() {
         let j = Journal::open_in_memory().await.expect("open");
         j.record(
             "deleted",
@@ -4448,7 +4486,7 @@ CREATE TABLE IF NOT EXISTS journal (
         .await
         .expect("record");
 
-        let filas: Vec<_> = j
+        let rows: Vec<_> = j
             .page(None, 10, None)
             .await
             .expect("page")
@@ -4457,25 +4495,28 @@ CREATE TABLE IF NOT EXISTS journal (
             .collect();
 
         assert_eq!(
-            filas.len(),
+            rows.len(),
             1,
-            "la entrada sale aunque su ruta no sea texto"
+            "the entry comes out even though its path is not text"
         );
-        assert!(!filas[0].reversible, "un Irreversible lo dice");
-        assert!(filas[0].path.contains('\u{FFFD}'));
-        assert!(filas[0].hostile, "y la fila lo DICE, no lo deja adivinar");
+        assert!(!rows[0].reversible, "an Irreversible says so");
+        assert!(rows[0].path.contains('\u{FFFD}'));
+        assert!(
+            rows[0].hostile,
+            "and the row SAYS so, it does not leave it to guessing"
+        );
     }
 
-    /// **Una ruta con algo que un terminal ejecutaría sale SANEADA, y la fila
-    /// lo dice** (hallazgo de la revisión de seguridad).
+    /// **A path with something a terminal would execute comes out SANITIZED,
+    /// and the row says so** (found by the security review).
     ///
-    /// El nombre de un fichero lo elige quien lo crea —incluido un agente
-    /// dentro de su recinto— y ésta es la pantalla donde un humano decide
-    /// qué revertir: un override bidi o una secuencia de escape aquí
-    /// repintan esa decisión. Mismo trato que le da `fs.search` a la línea
-    /// que devuelve.
+    /// A file's name is chosen by whoever creates it — including an agent
+    /// inside its confinement — and this is the screen where a human decides
+    /// what to revert: a bidi override or an escape sequence here would
+    /// repaint that decision. Same treatment `fs.search` gives the line it
+    /// returns.
     #[tokio::test]
-    async fn una_ruta_con_trampa_de_terminal_sale_saneada() {
+    async fn a_path_with_a_terminal_trap_comes_out_sanitized() {
         let j = Journal::open_in_memory().await.expect("open");
         j.record(
             "renamed",
@@ -4488,7 +4529,7 @@ CREATE TABLE IF NOT EXISTS journal (
         .await
         .expect("record");
 
-        let filas: Vec<_> = j
+        let rows: Vec<_> = j
             .page(None, 10, None)
             .await
             .expect("page")
@@ -4497,23 +4538,23 @@ CREATE TABLE IF NOT EXISTS journal (
             .collect();
 
         assert!(
-            !filas[0].path.contains('\u{202E}'),
-            "el override RTL no sale crudo: {}",
-            filas[0].path
+            !rows[0].path.contains('\u{202E}'),
+            "the RTL override does not come out raw: {}",
+            rows[0].path
         );
-        let destino = filas[0].path_to.as_deref().expect("hay destino");
+        let destination = rows[0].path_to.as_deref().expect("there is a destination");
         assert!(
-            !destino.contains('\u{1b}'),
-            "ni un ESC en el destino: {destino}"
+            !destination.contains('\u{1b}'),
+            "not even an ESC in the destination: {destination}"
         );
-        assert!(filas[0].hostile, "y se marca como pintado distinto");
+        assert!(rows[0].hostile, "and it is marked as painted differently");
     }
 
-    /// Un `reversal` que este binario no conoce cuenta como SIN vuelta: en
-    /// un journal manipulado, afirmar que algo se puede deshacer es la
-    /// mentira que cuesta cara.
+    /// A `reversal` this binary does not know counts as having NO way back: in
+    /// a tampered journal, asserting that something can be undone is the lie
+    /// that costs dearly.
     #[tokio::test]
-    async fn un_reversal_desconocido_no_promete_vuelta() {
+    async fn an_unknown_reversal_does_not_promise_a_way_back() {
         let j = Journal::open_in_memory().await.expect("open");
         j.record(
             "created",
@@ -4528,9 +4569,9 @@ CREATE TABLE IF NOT EXISTS journal (
         sqlx::query("UPDATE journal SET reversal = 'lo_que_sea' WHERE seq = 1")
             .execute(&j.pool)
             .await
-            .expect("tocar la fila");
+            .expect("touch the row");
 
-        let filas: Vec<_> = j
+        let rows: Vec<_> = j
             .page(None, 10, None)
             .await
             .expect("page")
@@ -4538,14 +4579,14 @@ CREATE TABLE IF NOT EXISTS journal (
             .map(PageEntry::to_wire_row)
             .collect();
 
-        assert!(!filas[0].reversible);
+        assert!(!rows[0].reversible);
     }
 
-    /// Una entrada YA deshecha lo dice, y su compensación también: son las
-    /// dos cosas que el undo no va a volver a tocar, y sin ellas una línea
-    /// de tiempo promete el doble de lo que va a pasar.
+    /// An entry that is ALREADY undone says so, and so does its compensation:
+    /// they are the two things undo will never touch again, and without them
+    /// a timeline promises twice what is going to happen.
     #[tokio::test]
-    async fn la_pagina_dice_lo_que_ya_esta_deshecho() {
+    async fn the_page_says_what_is_already_undone() {
         let j = Journal::open_in_memory().await.expect("open");
         let seq = j
             .record(
@@ -4568,9 +4609,9 @@ CREATE TABLE IF NOT EXISTS journal (
             Some(seq),
         )
         .await
-        .expect("compensación");
+        .expect("compensation");
 
-        let filas: Vec<_> = j
+        let rows: Vec<_> = j
             .page(None, 10, None)
             .await
             .expect("page")
@@ -4578,9 +4619,9 @@ CREATE TABLE IF NOT EXISTS journal (
             .map(PageEntry::to_wire_row)
             .collect();
 
-        let compensacion = &filas[0];
-        let original = &filas[1];
-        assert_eq!(compensacion.undoes_seq, Some(seq), "es la compensación");
-        assert!(original.undone, "y la de abajo ya está deshecha");
+        let compensation = &rows[0];
+        let original = &rows[1];
+        assert_eq!(compensation.undoes_seq, Some(seq), "it is the compensation");
+        assert!(original.undone, "and the one below is already undone");
     }
 }

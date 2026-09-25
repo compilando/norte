@@ -994,7 +994,7 @@ fn blocks_of(body: &str, limits: Limits, mode: Mode<'_>) -> (Vec<Block>, bool) {
     let mut out = Vec::new();
     let mut truncated = false;
     let mut lines = body.lines().peekable();
-    let mut para: Vec<String> = Vec::new();
+    let mut for_: Vec<String> = Vec::new();
     let mut cells_left = limits.max_cells;
 
     while let Some(raw) = lines.next() {
@@ -1010,9 +1010,9 @@ fn blocks_of(body: &str, limits: Limits, mode: Mode<'_>) -> (Vec<Block>, bool) {
         truncated |= cut;
 
         if line.trim().is_empty() {
-            flush(&mut para, &mut out, mode);
+            flush(&mut for_, &mut out, mode);
         } else if let Some(rest) = line.strip_prefix("```") {
-            flush(&mut para, &mut out, mode);
+            flush(&mut for_, &mut out, mode);
             let lang =
                 (!rest.trim().is_empty()).then(|| mask_if(rest.trim().to_owned(), mode.masks()));
             let mut text = String::new();
@@ -1036,7 +1036,7 @@ fn blocks_of(body: &str, limits: Limits, mode: Mode<'_>) -> (Vec<Block>, bool) {
             }
             out.push(Block::Code { lang, text });
         } else if let Some(rest) = line.strip_prefix('#') {
-            flush(&mut para, &mut out, mode);
+            flush(&mut for_, &mut out, mode);
             // One `#` is already stripped, so the hashes left here are the
             // ones ABOVE level 1. Clamped to 3 — the model documents 1..=3 —
             // by counting, never by arithmetic that could overflow `u8`:
@@ -1052,14 +1052,14 @@ fn blocks_of(body: &str, limits: Limits, mode: Mode<'_>) -> (Vec<Block>, bool) {
                 text: mask_if(text.to_owned(), mode.masks()),
             });
         } else if let Some(rest) = line.strip_prefix("> ") {
-            flush(&mut para, &mut out, mode);
+            flush(&mut for_, &mut out, mode);
             let (kind, body) = callout_kind(rest);
             out.push(Block::Callout {
                 kind,
                 spans: spans_masked(body, mode),
             });
         } else if let Some(rest) = line.strip_prefix("- ") {
-            flush(&mut para, &mut out, mode);
+            flush(&mut for_, &mut out, mode);
             let mut items = vec![spans_masked(rest, mode)];
             // `to_owned` on purpose: `peek` borrows `lines` for the WHOLE body
             // of the `while let`, so the inner `next()` would not compile with
@@ -1078,7 +1078,7 @@ fn blocks_of(body: &str, limits: Limits, mode: Mode<'_>) -> (Vec<Block>, bool) {
             }
             out.push(Block::Bullets(items));
         } else if line.starts_with('|') {
-            flush(&mut para, &mut out, mode);
+            flush(&mut for_, &mut out, mode);
             let mut header = cells(line, mode);
             // Every cell of this body, header cells included, comes out of one
             // budget. Rows are padded to the header width, so it is the
@@ -1119,10 +1119,10 @@ fn blocks_of(body: &str, limits: Limits, mode: Mode<'_>) -> (Vec<Block>, bool) {
             }
             out.push(Block::Table { header, rows });
         } else {
-            para.push(line.to_owned());
+            for_.push(line.to_owned());
         }
     }
-    flush(&mut para, &mut out, mode);
+    flush(&mut for_, &mut out, mode);
     // One iteration can push the pending paragraph AND its own block, so the
     // cap may be overshot by one. Clamping here makes `blocks.len() <=
     // max_blocks` hold unconditionally. It bounds the block COUNT only —
@@ -1137,12 +1137,12 @@ fn blocks_of(body: &str, limits: Limits, mode: Mode<'_>) -> (Vec<Block>, bool) {
 /// Emits the paragraph built up so far, if there is one, and empties the
 /// buffer. Lines are joined with a single space: a hard-wrapped corpus must
 /// reflow to the reader's width, not show ours.
-fn flush(para: &mut Vec<String>, out: &mut Vec<Block>, mode: Mode<'_>) {
-    if para.is_empty() {
+fn flush(for_: &mut Vec<String>, out: &mut Vec<Block>, mode: Mode<'_>) {
+    if for_.is_empty() {
         return;
     }
     let mut spans = Vec::new();
-    for (i, line) in para.iter().enumerate() {
+    for (i, line) in for_.iter().enumerate() {
         if i > 0 {
             // The joiner is OUR structure, not the author's bytes, so it is
             // written after the line was parsed on its own. That ordering is
@@ -1152,7 +1152,7 @@ fn flush(para: &mut Vec<String>, out: &mut Vec<Block>, mode: Mode<'_>) {
         spans.extend(spans_masked(line, mode));
     }
     out.push(Block::Paragraph(merge_text(spans)));
-    para.clear();
+    for_.clear();
 }
 
 /// Cuts a line to `max_line_bytes`, always on a `char` boundary. Returns the
@@ -2292,148 +2292,150 @@ p\u{202E}ara\n\n\
     }
 
     #[test]
-    fn sanitizar_recorta_en_el_mismo_tope_que_el_parser() {
-        let gordo = vec![b'a'; Limits::untrusted().max_bytes + 100];
-        let s = cut_and_decode_untrusted(&gordo);
-        assert!(s.truncated, "pasarse del tope se declara");
-        assert!(!s.lossy, "ascii no es lossy");
+    fn sanitizing_truncates_at_the_same_cap_as_the_parser() {
+        let fat = vec![b'a'; Limits::untrusted().max_bytes + 100];
+        let s = cut_and_decode_untrusted(&fat);
+        assert!(s.truncated, "going over the cap is declared");
+        assert!(!s.lossy, "ascii is not lossy");
         assert!(
             s.markdown.len() <= Limits::untrusted().max_bytes,
-            "el texto sale acotado: {}",
+            "the text comes out bounded: {}",
             s.markdown.len()
         );
     }
 
     #[test]
-    fn el_tope_vale_para_el_texto_decodificado_no_solo_para_los_bytes() {
-        // El tope es de bytes FUENTE y la decodificación va después: 64 KiB de
-        // windows-1252 `0x80` son ~192 KiB de UTF-8 `U+20AC`. Sin el segundo
-        // corte cruzaban el wire con `truncated` en falso — un receptor que
-        // dimensiona por el tope documentado se equivoca 3×, y el
-        // `parse_untrusted` del otro lado RE-corta a 64 KiB, así que `norte
-        // doctor` y el frontend verían páginas distintas del MISMO fichero.
+    fn the_cap_applies_to_the_decoded_text_not_just_the_bytes() {
+        // The cap is on SOURCE bytes and decoding happens after: 64 KiB of
+        // windows-1252 `0x80` is ~192 KiB of UTF-8 `U+20AC`. Without the
+        // second cut they crossed the wire with `truncated` false — a
+        // receiver sizing by the documented cap is wrong 3× over, and the
+        // other side's `parse_untrusted` RE-cuts to 64 KiB, so `norte
+        // doctor` and the frontend would see different pages of the SAME
+        // file.
         let max = Limits::untrusted().max_bytes;
         let s = cut_and_decode_untrusted(&vec![0x80_u8; max]);
         assert!(
             s.markdown.chars().count() < s.markdown.len(),
-            "el fixture solo dice algo si de verdad decodificó a multi-byte: \
-             {} chars en {} bytes",
+            "the fixture only says something if it truly decoded to multi-byte: \
+             {} chars in {} bytes",
             s.markdown.chars().count(),
             s.markdown.len()
         );
         assert!(
             s.markdown.len() <= max,
-            "el TEXTO sale acotado, no solo la fuente: {}",
+            "the TEXT comes out bounded, not just the source: {}",
             s.markdown.len()
         );
         assert!(
             s.truncated,
-            "y el segundo corte se declara: la fuente cabía justa, el texto no"
+            "and the second cut is declared: the source just fit, the text did not"
         );
     }
 
     #[test]
-    fn sanitizar_devuelve_utf8_valido_de_bytes_rotos() {
-        // Lo que el wire promete: `String`, siempre. Un byte irrecuperable
-        // sale `U+FFFD` y la bandera lo dice.
+    fn sanitizing_returns_valid_utf8_from_broken_bytes() {
+        // What the wire promises: `String`, always. An unrecoverable byte
+        // comes out as `U+FFFD` and the flag says so.
         //
-        // El BOM del principio es parte del caso, no decoración: sin él,
-        // `decode_source` deja que la detección lea `\xFF\xFE` como
-        // windows-1252 y salen dos caracteres perfectamente válidos, con
-        // `lossy` honestamente en falso (lo dice el rustdoc de
-        // [`Parsed::lossy`]). El BOM es certeza de UTF-8, y bajo UTF-8 esos
-        // bytes no se recuperan de ninguna manera. Es el mismo fixture que ya
-        // fija el doctest de [`parse_untrusted`].
-        let s = cut_and_decode_untrusted(b"\xef\xbb\xbfhola \xFF\xFE mundo");
-        assert!(s.lossy, "un byte irrecuperable se declara");
+        // The leading BOM is part of the case, not decoration: without it,
+        // `decode_source` lets the detection read `\xFF\xFE` as
+        // windows-1252 and out come two perfectly valid characters, with
+        // `lossy` honestly false (as [`Parsed::lossy`]'s rustdoc says). The
+        // BOM is UTF-8 certainty, and under UTF-8 those bytes are not
+        // recoverable in any way. It is the same fixture that already pins
+        // [`parse_untrusted`]'s doctest.
+        let s = cut_and_decode_untrusted(b"\xef\xbb\xbfhello \xFF\xFE world");
+        assert!(s.lossy, "an unrecoverable byte is declared");
         assert!(s.markdown.contains('\u{FFFD}'));
     }
 
     #[test]
-    fn sanitizar_y_reparsear_da_el_mismo_cuerpo_que_parsear_directo() {
-        // El salto de wire de H3e: host sanitiza, frontend parsea. El modelo
-        // resultante tiene que ser el mismo que el del parseo directo, salvo
-        // las banderas, que el emisor vuelve a poner con `fold_flags`.
-        // Con `id`, que es obligatorio: sin él el encabezado no deserializa,
-        // degrada a "no hay encabezado" y el `title` de los dos lados sería
-        // el id de respaldo por la misma vía trivial. La comparación solo
-        // dice algo si el encabezado se parsea de verdad.
+    fn sanitizing_and_reparsing_gives_the_same_body_as_parsing_directly() {
+        // H3e's wire seam: the host sanitizes, the frontend parses. The
+        // resulting model has to be the same as direct parsing, except for
+        // the flags, which the sender sets again with `fold_flags`. With
+        // `id`, which is mandatory: without it the header does not
+        // deserialize, it degrades to "no header" and both sides' `title`
+        // would be the fallback id via the same trivial path. The
+        // comparison only says something if the header truly parses.
         let src = b"+++\nid = \"acme.ftp\"\ntitle = \"FTP\"\n\
-                    +++\nCuerpo con {{cmd:plugin:acme.ftp:sync}}.";
-        let directo = parse_untrusted(src, "acme.ftp", None);
+                    +++\nBody with {{cmd:plugin:acme.ftp:sync}}.";
+        let direct = parse_untrusted(src, "acme.ftp", None);
         let s = cut_and_decode_untrusted(src);
-        let por_el_wire = parse_untrusted(s.markdown.as_bytes(), "acme.ftp", None)
+        let via_the_wire = parse_untrusted(s.markdown.as_bytes(), "acme.ftp", None)
             .fold_flags(s.truncated, s.lossy);
-        assert_eq!(directo.topic.title, "FTP", "el encabezado se parsea");
+        assert_eq!(direct.topic.title, "FTP", "the header is parsed");
         assert!(
-            directo
+            direct
                 .topic
                 .blocks
                 .iter()
                 .any(|b| matches!(b, Block::Paragraph(s)
                     if s.contains(&Span::CommandRef("plugin:acme.ftp:sync".to_owned())))),
-            "y la marca propia sigue viva: {:?}",
-            directo.topic.blocks
+            "and its own mark is still alive: {:?}",
+            direct.topic.blocks
         );
-        assert_eq!(directo.topic.blocks, por_el_wire.topic.blocks);
-        assert_eq!(directo.topic.title, por_el_wire.topic.title);
+        assert_eq!(direct.topic.blocks, via_the_wire.topic.blocks);
+        assert_eq!(direct.topic.title, via_the_wire.topic.title);
     }
 
     #[test]
-    fn comandos_ajenos_del_encabezado_se_reportan() {
-        // `id` y `title` no son adorno: son obligatorios en `FrontMatter`, y
-        // sin ellos el TOML no deserializa, el `split` falla y esta función
-        // no vería lista alguna que revisar.
+    fn foreign_commands_in_the_header_are_reported() {
+        // `id` and `title` are not decoration: they are mandatory in
+        // `FrontMatter`, and without them the TOML does not deserialize,
+        // `split` fails and this function would not see any list to check.
         let src = "+++\nid = \"acme.ftp\"\ntitle = \"FTP\"\n\
                    commands = [\"plugin:acme.ftp:sync\", \"fs.copy\", \
-                   \"plugin:otro:borrar\"]\n+++\ncuerpo";
-        let ajenos = foreign_commands(src, "acme.ftp");
+                   \"plugin:other:delete\"]\n+++\nbody";
+        let foreign = foreign_commands(src, "acme.ftp");
         assert_eq!(
-            ajenos,
-            vec!["fs.copy".to_owned(), "plugin:otro:borrar".to_owned()]
+            foreign,
+            vec!["fs.copy".to_owned(), "plugin:other:delete".to_owned()]
         );
     }
 
     #[test]
-    fn sin_encabezado_no_hay_comandos_ajenos() {
-        assert!(foreign_commands("solo cuerpo", "acme.ftp").is_empty());
+    fn without_a_header_there_are_no_foreign_commands() {
+        assert!(foreign_commands("just body", "acme.ftp").is_empty());
     }
 
-    /// La valla que se abre y no se cierra: el caso fácil de fallar, porque
-    /// `split` lo distingue de «no hay valla» y esta función DEBE reportarlo.
-    /// Es además el que produce el `help.md` más engañoso — el autor ve su
-    /// encabezado escrito y el lector lo ve como prosa, valla incluida.
+    /// The fence that opens and never closes: the easy case to get wrong,
+    /// because `split` distinguishes it from "no fence" and this function
+    /// MUST report it. It is also the one that produces the most
+    /// misleading `help.md` — the author sees their header written and the
+    /// reader sees it as prose, fence included.
     #[test]
-    fn una_valla_que_nunca_cierra_es_un_encabezado_roto() {
+    fn a_fence_that_never_closes_is_a_broken_header() {
         assert!(has_broken_front_matter(
-            "+++\nid = \"acme.ftp\"\ntitle = \"FTP\"\ncuerpo sin cerrar\n"
+            "+++\nid = \"acme.ftp\"\ntitle = \"FTP\"\nunclosed body\n"
         ));
     }
 
-    /// Un encabezado válido no es un defecto, y tampoco lo son las dos formas
-    /// de no tener valla: ninguna prosa y un `+++` que ni siquiera abre línea
-    /// (`split` lee ambos como «no hay encabezado», y esta función copia esa
-    /// lectura en vez de rederivar la gramática).
+    /// A valid header is not a defect, and neither are the two ways of
+    /// having no fence: no prose at all, and a `+++` that does not even
+    /// open a line (`split` reads both as "no header", and this function
+    /// copies that reading instead of re-deriving the grammar).
     #[test]
-    fn un_encabezado_valido_o_ausente_no_es_un_defecto() {
+    fn a_valid_or_absent_header_is_not_a_defect() {
         assert!(!has_broken_front_matter(
-            "+++\nid = \"acme.ftp\"\ntitle = \"FTP\"\n+++\ncuerpo\n"
+            "+++\nid = \"acme.ftp\"\ntitle = \"FTP\"\n+++\nbody\n"
         ));
-        assert!(!has_broken_front_matter("solo cuerpo"));
+        assert!(!has_broken_front_matter("just body"));
         assert!(!has_broken_front_matter("+++"));
     }
 
-    /// La asimetría que justifica el hallazgo: con el encabezado roto,
-    /// `foreign_commands` calla (no hay lista que leer) y solo esta función
-    /// tiene algo que decir.
+    /// The asymmetry that justifies the finding: with a broken header,
+    /// `foreign_commands` stays quiet (there is no list to read) and only
+    /// this function has something to say.
     #[test]
-    fn el_encabezado_roto_lo_reporta_esta_funcion_y_no_foreign_commands() {
-        // `title` y `commands`, sin el `id` obligatorio.
-        let src = "+++\ntitle = \"FTP\"\ncommands = [\"fs.copy\"]\n+++\ncuerpo\n";
+    fn the_broken_header_is_reported_by_this_function_and_not_foreign_commands() {
+        // `title` and `commands`, without the mandatory `id`.
+        let src = "+++\ntitle = \"FTP\"\ncommands = [\"fs.copy\"]\n+++\nbody\n";
         assert!(has_broken_front_matter(src));
         assert!(
             foreign_commands(src, "acme.ftp").is_empty(),
-            "sin encabezado deserializado no hay comandos que revisar"
+            "without a deserialized header there are no commands to check"
         );
     }
 }

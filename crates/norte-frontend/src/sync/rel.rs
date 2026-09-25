@@ -1,9 +1,9 @@
-//! Dónde ANCLA cada paso: si su ruta relativa habla del origen, del destino o
-//! de los dos.
+//! Where each step ANCHORS: whether its relative path speaks about the
+//! source, the destination, or both.
 //!
-//! No es un detalle de pintado. Un paso que borra en el destino y otro que
-//! copia desde el origen enseñan rutas que se PARECEN, y confundirlas es
-//! confundir qué árbol se toca.
+//! This is not a painting detail. A step that deletes at the destination and
+//! another that copies from the source show paths that LOOK ALIKE, and
+//! confusing them is confusing which tree gets touched.
 
 use norte_i18n::{Lang, t_in};
 use norte_proto::methods::{
@@ -222,10 +222,10 @@ pub fn rel_display(rel: &RelPath, reinterpret: Option<norte_encoding::NameEncodi
 /// use norte_proto::methods::RelPath;
 /// let whole = rel_display_or_root(&RelPath::parse_wire("").expect("rel"), None, Lang::En);
 /// assert!(!whole.text.is_empty());
-/// assert!(whole.raw.is_empty(), "no hay bytes que decir");
-/// assert!(!whole.hostile, "la raíz no es un nombre hostil");
+/// assert!(whole.raw.is_empty(), "there are no bytes to say");
+/// assert!(!whole.hostile, "the root is not a hostile name");
 ///
-/// // Cualquier otra ruta se comporta exactamente como `rel_display`.
+/// // Any other path behaves exactly like `rel_display`.
 /// let named = rel_display_or_root(&RelPath::parse_wire("a.txt").expect("rel"), None, Lang::En);
 /// assert_eq!(named.text, "a.txt");
 /// ```

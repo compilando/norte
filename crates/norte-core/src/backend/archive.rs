@@ -1,18 +1,18 @@
-//! El área de archivos empaquetados de [`Backend`](super::Backend) (#132):
-//! `archive.pack`/`archive.test` con sus informes, y `file.split`/`file.combine`.
+//! [`Backend`](super::Backend)'s packed-archive area (#132):
+//! `archive.pack`/`archive.test` with their reports, and `file.split`/`file.combine`.
 
 use norte_proto::Error;
 
 use super::{Backend, TaskRef};
 
 impl Backend {
-    /// Fabrica un archivo (`archive.pack`, 0.50.0, #132).
+    /// Builds an archive (`archive.pack`, 0.50.0, #132).
     ///
     /// # Errors
     ///
-    /// [`Error::InvalidPath`] sin fuentes, y lo que devuelva el core. Un
-    /// daemon N-1 sin el método contesta `METHOD_NOT_FOUND` →
-    /// [`Error::Unsupported`].
+    /// [`Error::InvalidPath`] with no sources, and whatever the core
+    /// returns. An N-1 daemon with no such method answers `METHOD_NOT_FOUND`
+    /// → [`Error::Unsupported`].
     pub async fn pack(
         &self,
         params: norte_proto::methods::ArchivePackParams,
@@ -22,8 +22,8 @@ impl Backend {
         }
         match self {
             Self::Embedded(engine) => {
-                // El informe (#250) se recoge por `archive_pack_report`: aquí
-                // solo viaja el handle.
+                // The report (#250) is collected via `archive_pack_report`:
+                // only the handle travels here.
                 let handle = engine.pack_as(params, crate::journal::Actor::User).await?;
                 Ok(TaskRef::from_handle(&handle))
             }
@@ -32,12 +32,12 @@ impl Backend {
         }
     }
 
-    /// Comprueba un archivo (`archive.test`, 0.50.0, #132).
+    /// Tests an archive (`archive.test`, 0.50.0, #132).
     ///
     /// # Errors
     ///
-    /// [`Error::Unsupported`] si el nombre no es de un formato conocido, y lo
-    /// que devuelva el core.
+    /// [`Error::Unsupported`] if the name isn't a known format, and whatever
+    /// the core returns.
     pub async fn test_archive(
         &self,
         params: norte_proto::methods::ArchiveTestParams,
@@ -54,13 +54,13 @@ impl Backend {
         }
     }
 
-    /// El informe de un `archive.test` ya lanzado (0.50.0, #132).
+    /// The report for an `archive.test` already launched (0.50.0, #132).
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`] si ese id no fue un test de esta instancia, si el
-    /// anillo ya lo desalojó o si es de otro actor — las tres con la misma
-    /// respuesta, que es lo que hace el daemon.
+    /// [`Error::NotFound`] if that id was never a test of this instance, if
+    /// the ring already evicted it, or if it belongs to another actor —
+    /// all three get the same answer, which is what the daemon does.
     pub async fn archive_test_report(
         &self,
         task_id: norte_proto::TaskId,
@@ -75,12 +75,12 @@ impl Backend {
         }
     }
 
-    /// El informe de un `archive.pack` (0.58.0, #250): qué guardó ese
-    /// empaquetado que no sobrevive a salir de aquí.
+    /// The report for an `archive.pack` (0.58.0, #250): what that packing
+    /// job stored that doesn't survive leaving here.
     ///
     /// # Errors
-    /// [`Error::NotFound`] si ese id nunca fue un empaquetado o si el anillo ya
-    /// lo desalojó; contra un daemon N-1, lo que responda él.
+    /// [`Error::NotFound`] if that id was never a packing job or if the ring
+    /// already evicted it; against an N-1 daemon, whatever it answers.
     pub async fn archive_pack_report(
         &self,
         task_id: norte_proto::TaskId,
@@ -95,12 +95,12 @@ impl Backend {
         }
     }
 
-    /// Parte un fichero en trozos (`file.split`, 0.50.0, #132).
+    /// Splits a file into pieces (`file.split`, 0.50.0, #132).
     ///
     /// # Errors
     ///
-    /// Lo que devuelva el core: trozo demasiado pequeño, demasiados trozos, o
-    /// un fallo de I/O.
+    /// Whatever the core returns: a piece too small, too many pieces, or an
+    /// I/O failure.
     pub async fn split_file(
         &self,
         params: norte_proto::methods::FileSplitParams,
@@ -115,12 +115,12 @@ impl Backend {
         }
     }
 
-    /// Junta los trozos de un split (`file.combine`, 0.50.0, #132).
+    /// Joins the pieces of a split (`file.combine`, 0.50.0, #132).
     ///
     /// # Errors
     ///
-    /// Lo que devuelva el core: un hueco en la numeración, un trozo intermedio
-    /// corto, o un fallo de I/O.
+    /// Whatever the core returns: a gap in the numbering, a short
+    /// intermediate piece, or an I/O failure.
     pub async fn combine_files(
         &self,
         params: norte_proto::methods::FileCombineParams,

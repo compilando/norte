@@ -1,54 +1,56 @@
-//! En qué acabó una búsqueda, y qué frase le corresponde.
+//! How a search ended, and which sentence matches it.
 //!
-//! Los desenlaces se dicen distinto porque significan cosas distintas **sobre
-//! el disco**, no sobre la interfaz: «no hay más» es una respuesta, «la paré»
-//! es media respuesta y «se rompió» no es ninguna. Colapsarlos deja a la
-//! pantalla afirmando que un directorio no contiene lo que se buscaba cuando
-//! lo que pasó es que nadie llegó a mirar.
+//! The outcomes are said differently because they mean different things
+//! **about the disk**, not about the interface: "no more" is an answer,
+//! "I stopped it" is half an answer and "it broke" is not an answer at all.
+//! Collapsing them leaves the screen asserting a directory does not contain
+//! what was searched for when what actually happened is that nobody got
+//! around to looking.
 //!
-//! Vive aquí porque los dos frontends lo decidían por su cuenta y **con
-//! precedencias distintas** (ADR 0077): una búsqueda que el lector paraba
-//! justo en el tope decía «cancelada» en el terminal y «hay más» en la
-//! ventana. Ahora la precedencia es una, y cambiarla es cambiar los dos.
+//! It lives here because both frontends used to decide it on their own and
+//! **with different precedence** (ADR 0077): a search the reader stopped
+//! right at the cap said "cancelled" in the terminal and "there is more" in
+//! the window. Now there is one precedence, and changing it changes both.
 
 use norte_proto::TaskState;
 
-/// En qué acabó, o que sigue.
+/// How it ended, or that it is still going.
 ///
-/// No es `TaskState`: eso es del wire y tiene estados que a una búsqueda no
-/// le dicen nada (`Pending`, `Paused`, `Unknown`). Esto es lo que hay que
-/// contarle al lector.
+/// It is not `TaskState`: that is wire-level and has states that say nothing
+/// to a search (`Pending`, `Paused`, `Unknown`). This is what has to be told
+/// to the reader.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
-    /// Sigue corriendo, o todavía no ha empezado. Las dos cosas son «espera».
+    /// Still running, or has not started yet. Both count as "waiting".
     Running,
-    /// Terminó de recorrer lo que había.
+    /// Finished going through everything there was.
     Done,
-    /// La paró el lector. Lo encontrado vale; lo que falta no se llegó a
-    /// mirar.
+    /// The reader stopped it. What was found stands; what is left was never
+    /// looked at.
     Cancelled,
-    /// Se rompió, y con qué CATEGORÍA de error (ya traducida).
+    /// It broke, and with which error CATEGORY (already translated).
     ///
-    /// Persistente: un fallo jamás degrada a «hecha» en la siguiente tecla.
-    /// Eso costó una revisión en el terminal y aquí se hereda escrito.
+    /// Persistent: a failure never degrades to "done" on the next keystroke.
+    /// That cost a review round in the terminal and is inherited here
+    /// already fixed.
     ///
-    /// Guarda el texto y no el `Error` porque `ui.lang` NO cambia en caliente
-    /// (`norte_i18n::force` corre una vez por proceso; la lista de claves
-    /// fuera de alcance en caliente del host lo dice por su nombre). El día
-    /// que el idioma se pueda cambiar sin reiniciar, esto tiene que pasar a
-    /// guardar el error y traducir al pintar.
+    /// Stores the text, not the `Error`, because `ui.lang` does NOT change on
+    /// the fly (`norte_i18n::force` runs once per process; the list of keys
+    /// out of the host's hot-reload reach says so by name). The day the
+    /// language can be changed without restarting, this has to switch to
+    /// storing the error and translating at paint time.
     Failed(String),
 }
 
-/// Qué le pasó a una task de búsqueda, si es que le pasó algo.
+/// What happened to a search task, if anything did.
 ///
-/// `None` = no es un desenlace: `Running` y `Pending` son «espera», y
-/// `Unknown` —un estado de un protocolo más nuevo— también, porque
-/// [`TaskState::is_terminal`] lo cuenta como no-terminal a propósito: ante
-/// algo que no entiende, el cliente sigue escuchando.
+/// `None` = not an outcome: `Running` and `Pending` are "waiting", and
+/// `Unknown` — a state from a newer protocol — is too, because
+/// [`TaskState::is_terminal`] deliberately counts it as non-terminal: facing
+/// something it does not understand, the client keeps listening.
 ///
-/// Un `_ => Done` en vez de esto es lo que hacía que una búsqueda encolada o
-/// pausada se anunciara como terminada sin hallazgos.
+/// A `_ => Done` instead of this is what made a queued or paused search
+/// announce itself as finished with no results.
 ///
 /// ```
 /// use norte_frontend::search_status::{Outcome, outcome_of};
@@ -56,7 +58,7 @@ pub enum Outcome {
 ///
 /// assert_eq!(outcome_of(&TaskState::Completed, |_| unreachable!()), Some(Outcome::Done));
 /// assert_eq!(outcome_of(&TaskState::Cancelled, |_| unreachable!()), Some(Outcome::Cancelled));
-/// // Ni encolada ni pausada son un desenlace.
+/// // Neither queued nor paused is an outcome.
 /// assert_eq!(outcome_of(&TaskState::Pending, |_| unreachable!()), None);
 /// assert_eq!(outcome_of(&TaskState::Paused, |_| unreachable!()), None);
 /// assert_eq!(outcome_of(&TaskState::Running, |_| unreachable!()), None);
@@ -64,34 +66,34 @@ pub enum Outcome {
 #[must_use]
 pub fn outcome_of(
     state: &TaskState,
-    categoria: impl FnOnce(&norte_proto::Error) -> String,
+    category: impl FnOnce(&norte_proto::Error) -> String,
 ) -> Option<Outcome> {
     match state {
         TaskState::Completed => Some(Outcome::Done),
         TaskState::Cancelled => Some(Outcome::Cancelled),
-        TaskState::Failed { error } => Some(Outcome::Failed(categoria(error))),
-        // `Pending`, `Paused`, `Running` y `Unknown`: nada que anunciar. Y
-        // `Unknown` es el que importa — un estado de un protocolo más nuevo
-        // NO es terminal (`TaskState::is_terminal` lo excluye a propósito:
-        // ante algo que no entiende, el cliente sigue escuchando), así que
-        // caer aquí es lo correcto y no un descuido. El wildcard hace falta
-        // porque `TaskState` es `#[non_exhaustive]`.
+        TaskState::Failed { error } => Some(Outcome::Failed(category(error))),
+        // `Pending`, `Paused`, `Running` and `Unknown`: nothing to announce.
+        // And `Unknown` is the one that matters — a state from a newer
+        // protocol is NOT terminal (`TaskState::is_terminal` excludes it on
+        // purpose: facing something it does not understand, the client keeps
+        // listening), so falling here is correct and not an oversight. The
+        // wildcard is needed because `TaskState` is `#[non_exhaustive]`.
         _ => None,
     }
 }
 
-/// La clave Fluent de la frase de estado.
+/// The Fluent key for the status sentence.
 ///
-/// **La precedencia es la decisión**, y es la del terminal
-/// (`norte_tui::jobs::search::finalize_search_state`): cancelada gana a
-/// truncada. Las dos dicen «esto no es todo», pero solo una dice POR QUÉ, y
-/// «hay más» sobre una búsqueda que el lector paró afirma además que el
-/// recorrido llegó a llenar el tope — que después de una cancelación es
-/// justo lo que no se sabe.
+/// **The precedence is the decision**, and it is the terminal's
+/// (`norte_tui::jobs::search::finalize_search_state`): cancelled beats
+/// truncated. Both say "this is not all", but only one says WHY, and "there
+/// is more" about a search the reader stopped also asserts that the crawl
+/// reached the cap — which, after a cancellation, is exactly what is not
+/// known.
 ///
-/// `at_cap` solo cuenta sobre una que TERMINÓ: mientras corre, el tope
-/// alcanzado no es un desenlace, y anunciarlo como tal ponía una frase
-/// terminal al lado de un spinner.
+/// `at_cap` only counts on one that FINISHED: while it runs, reaching the cap
+/// is not an outcome, and announcing it as one put a terminal sentence next
+/// to a spinner.
 ///
 /// ```
 /// use norte_frontend::search_status::{Outcome, status_key};
@@ -100,10 +102,10 @@ pub fn outcome_of(
 /// assert_eq!(status_key(&Outcome::Running, true), "search-status-running");
 /// assert_eq!(status_key(&Outcome::Done, true), "search-status-truncated");
 /// assert_eq!(status_key(&Outcome::Done, false), "search-status-done");
-/// // Cancelada gana al tope: solo ella dice por qué falta lo que falta.
+/// // Cancelled beats the cap: only it says why what is missing is missing.
 /// assert_eq!(status_key(&Outcome::Cancelled, true), "search-status-cancelled");
 /// assert_eq!(
-///     status_key(&Outcome::Failed("permiso".to_owned()), true),
+///     status_key(&Outcome::Failed("permission".to_owned()), true),
 ///     "search-status-failed",
 /// );
 /// ```
@@ -122,38 +124,40 @@ pub fn status_key(outcome: &Outcome, at_cap: bool) -> &'static str {
 mod tests {
     use super::*;
 
-    /// El par que discrepaba entre frontends: parar la búsqueda justo en el
-    /// tope. El terminal decía «cancelada» y la ventana «hay más».
+    /// The pair that disagreed between frontends: stopping the search right
+    /// at the cap. The terminal said "cancelled" and the window "there is
+    /// more".
     #[test]
-    fn cancelada_en_el_tope_dice_cancelada() {
+    fn cancelled_at_the_cap_says_cancelled() {
         assert_eq!(
             status_key(&Outcome::Cancelled, true),
             "search-status-cancelled"
         );
     }
 
-    /// Y una VIVA que llega al tope sigue diciendo que corre: una frase
-    /// terminal al lado de un spinner se lee como que ya terminó.
+    /// And a LIVE one that reaches the cap keeps saying it is running: a
+    /// terminal sentence next to a spinner reads as already finished.
     #[test]
-    fn viva_en_el_tope_sigue_diciendo_que_corre() {
+    fn live_at_the_cap_keeps_saying_it_is_running() {
         assert_eq!(status_key(&Outcome::Running, true), "search-status-running");
     }
 
-    /// Un estado que este cliente no entiende NO es un desenlace: el wire lo
-    /// dice (`is_terminal` excluye `Unknown`) y esto tiene que decir lo mismo,
-    /// o un daemon más nuevo hace que la ventana anuncie búsquedas terminadas
-    /// que siguen corriendo.
+    /// A state this client does not understand is NOT an outcome: the wire
+    /// says so (`is_terminal` excludes `Unknown`) and this has to say the
+    /// same, or a newer daemon makes the window announce finished searches
+    /// that are still running.
     #[test]
-    fn un_estado_desconocido_no_termina_nada() {
+    fn an_unknown_state_ends_nothing() {
         assert_eq!(outcome_of(&TaskState::Unknown, |_| String::new()), None);
         for s in [TaskState::Pending, TaskState::Paused, TaskState::Running] {
             assert_eq!(outcome_of(&s, |_| String::new()), None, "{s:?}");
         }
     }
 
-    /// Y los tres que sí lo son se distinguen, con la causa dentro del fallo.
+    /// And the three that are outcomes are told apart, with the cause inside
+    /// the failure.
     #[test]
-    fn los_tres_desenlaces_se_distinguen() {
+    fn the_three_outcomes_are_told_apart() {
         assert_eq!(
             outcome_of(&TaskState::Completed, |_| String::new()),
             Some(Outcome::Done)
@@ -167,9 +171,9 @@ mod tests {
                 &TaskState::Failed {
                     error: norte_proto::Error::PermissionDenied
                 },
-                |_| "sin permiso".to_owned()
+                |_| "no permission".to_owned()
             ),
-            Some(Outcome::Failed("sin permiso".to_owned()))
+            Some(Outcome::Failed("no permission".to_owned()))
         );
     }
 }

@@ -1,10 +1,9 @@
-//! Hints de pie de página de los overlays de diálogo (H1 T3, issue #24 —
-//! CIERRA): mismo patrón que la ayuda F1 (`help.rs`), pero por comando del
-//! contexto `dialog`. Un hint es el JOIN de los comandos SOPORTADOS por un
-//! overlay concreto × el keymap `dialog` EFECTIVO × las etiquetas Fluent
-//! `dialog-cmd-*` — jamás una cadena estática mantenida a mano: un rebind
-//! ya no puede desincronizar el pie de página de lo que la tecla hace de
-//! verdad.
+//! Dialog overlays' footer hints (H1 T3, issue #24 — CLOSES): same pattern as
+//! F1 help (`help.rs`), but per command of the `dialog` context. A hint is the
+//! JOIN of the commands SUPPORTED by a given overlay × the EFFECTIVE `dialog`
+//! keymap × the `dialog-cmd-*` Fluent labels — never a hand-kept static
+//! string: a rebind can no longer desync the footer from what the key really
+//! does.
 
 use std::collections::HashSet;
 
@@ -74,16 +73,16 @@ pub(crate) fn without_navigation<'a>(supported: &'a [&'a str]) -> Vec<&'a str> {
 /// included. `ALLOW_HELP` and the dispatch in `app.rs` are untouched either
 /// way — this is the printed hint only.
 ///
-/// **La paginación SÍ está**, al contrario que en los demás overlays. En una
-/// lista de opciones las flechas se dan por sabidas y el pie es estrecho; aquí
-/// el cuerpo es PROSA de doscientas líneas en una ventana de veinte, y no
-/// había nada en pantalla que dijera cómo bajar por ella. `dialog.up`/`down`
-/// siguen fuera: en esta pantalla mueven el cursor entre filas ejecutables, y
-/// eso se descubre solo — bajar por el texto no.
+/// **Paging IS included**, unlike in the other overlays. In an options list
+/// the arrows are taken for granted and the footer is narrow; here the body
+/// is two hundred lines of PROSE in a twenty-line window, and there was
+/// nothing on screen saying how to scroll down through it. `dialog.up`/`down`
+/// stay out: on this screen they move the cursor between runnable rows, and
+/// that is discoverable on its own — scrolling through text is not.
 ///
-/// `help_priority_covers_every_printable_verb` fija que esta lista siga siendo
-/// una proyección completa de `ALLOW_HELP`: un verbo añadido allí hay que
-/// rankearlo aquí, no dejarlo mudo para siempre.
+/// `help_priority_covers_every_printable_verb` pins that this list stays a
+/// complete projection of `ALLOW_HELP`: a verb added there has to be ranked
+/// here, not left mute forever.
 const HELP_HINT_PRIORITY: &[&str] = &[
     "dialog.pane",
     "dialog.page-down",
@@ -94,20 +93,20 @@ const HELP_HINT_PRIORITY: &[&str] = &[
     "dialog.cancel",
 ];
 
-/// La etiqueta de un verbo EN LA AYUDA, que no siempre es la del mismo verbo
-/// en un diálogo.
+/// A verb's label IN HELP, which is not always the same verb's label in a
+/// dialog.
 ///
-/// `dialog.pane` es el caso que lo motiva: en un modal significa «el otro
-/// panel», y aquí significa «índice ↔ contenido» — pintar «otro panel» sobre
-/// un overlay que no tiene panes le dice al lector algo que no puede hacer, y
-/// le esconde lo único que necesita para llegar al texto. La paginación
-/// también se dice distinta: aquí no pagina una lista, desplaza la página.
+/// `dialog.pane` is the motivating case: in a modal it means "the other
+/// pane", and here it means "index ↔ content" — painting "other pane" over an
+/// overlay that has no panes tells the reader something they cannot do, and
+/// hides the one thing they need to reach the text. Paging is also worded
+/// differently: here it does not page a list, it scrolls the page.
 fn help_hint_id(cmd: &str) -> String {
     match cmd {
         "dialog.pane" => "help-cmd-pane".to_owned(),
         "dialog.page-up" => "help-cmd-page-up".to_owned(),
         "dialog.page-down" => "help-cmd-page-down".to_owned(),
-        otro => dialog_hint_id(otro),
+        other => dialog_hint_id(other),
     }
 }
 
@@ -115,28 +114,28 @@ fn help_hint_id(cmd: &str) -> String {
 /// the effective dialog keymap × Fluent labels — same invariant as F1 help
 /// (#24: a rebind can never desync the hint again).
 ///
-/// El ORDEN sale del keymap EFECTIVO (`eff.bindings()`, en precedencia
-/// real), no del array `supported`: un comando SIN binding en el efectivo
-/// (rebindeado a nada, o simplemente jamás ligado en una capa exótica)
-/// queda fuera — honesto, sin tecla fantasma. La PRIMERA chord de cada
-/// comando en ese orden es la que se muestra (p. ej. en `vim`, `up`/`down`
-/// ganan a los `k`/`j` añadidos después en el preset).
+/// The ORDER comes from the EFFECTIVE keymap (`eff.bindings()`, in real
+/// precedence), not from the `supported` array: a command with NO binding in
+/// the effective (rebound to nothing, or simply never bound in an exotic
+/// layer) is left out — honest, no phantom key. The FIRST chord of each
+/// command in that order is the one shown (e.g. in `vim`, `up`/`down` beat
+/// the `k`/`j` added later in the preset).
 #[must_use]
 pub fn dialog_hints(supported: &[&str], eff: &Effective) -> String {
     let mut seen: HashSet<&str> = HashSet::new();
     let mut out = Vec::new();
     for (chord, cmd) in eff.bindings() {
         if supported.contains(&cmd) && seen.insert(cmd) {
-            // RENDER-side duty (encoding audit H1): `chord` viene de un
-            // keymap potencialmente hostil (`./.norte/keymap.toml`, capa de
-            // PROYECTO sin trust — `parse_chord` acepta CUALQUIER
-            // codepoint suelto como `KeyCode::Char`). `Chord`'s `Display`
-            // lo escribe crudo y en minúscula A PROPÓSITO (logs/debug
-            // quieren el chord real); este hint SÍ se pinta en el pie de
-            // modales de seguridad, así que `paint_chord` — el ÚNICO hogar
-            // de presentación de un chord, compartido con la palette y la
-            // ayuda F1 — enmascara PRIMERO y solo después escribe la tecla
-            // como la escribe la documentación (`F5`, no `f5`).
+            // RENDER-side duty (encoding audit H1): `chord` comes from a
+            // potentially hostile keymap (`./.norte/keymap.toml`, a PROJECT
+            // layer with no trust — `parse_chord` accepts ANY lone codepoint
+            // as a `KeyCode::Char`). `Chord`'s `Display` writes it raw and
+            // lowercase ON PURPOSE (logs/debug want the real chord); this
+            // hint DOES get painted on security modals' footers, so
+            // `paint_chord` — the ONLY presentation home for a chord, shared
+            // with the palette and F1 help — masks FIRST and only then
+            // writes the key the way the documentation spells it (`F5`, not
+            // `f5`).
             let chord = crate::keymap::paint_chord(&chord);
             out.push(format!("[{chord}] {}", t(&dialog_hint_id(cmd))));
         }
@@ -163,7 +162,7 @@ pub fn dialog_hints_in_order(order: &[&str], eff: &Effective) -> String {
     hints_in_order_with(order, eff, dialog_hint_id)
 }
 
-/// Como [`dialog_hints_in_order`], con la etiqueta que decida `label`.
+/// Like [`dialog_hints_in_order`], with whichever label `label` decides.
 fn hints_in_order_with(order: &[&str], eff: &Effective, label: impl Fn(&str) -> String) -> String {
     order
         .iter()
@@ -178,16 +177,15 @@ fn hints_in_order_with(order: &[&str], eff: &Effective, label: impl Fn(&str) -> 
         .join(" ")
 }
 
-/// Hints precomputados de TODOS los overlays de diálogo, uno por campo.
-/// Se reconstruyen en el arranque y en cada hot-reload OK (`main.rs`),
-/// igual que `help_lines` (`help::build`), a partir del MISMO efectivo
-/// `dialog` que consume el `Resolver` compartido — ANTES de que ese
-/// efectivo se mueva al `Resolver` (`Effective` es `Clone`, pero
-/// `DialogHints::build` solo toma prestado: no hace falta clonar).
-/// `ui::draw_*` los lee en vez de una clave Fluent estática. El único punto
-/// de acoplamiento con la semántica de SEGURIDAD (qué comandos acepta cada
-/// overlay) son los ALLOWLIST de `app.rs` — la MISMA lista que filtra el
-/// despacho, jamás una copia.
+/// Precomputed hints for EVERY dialog overlay, one per field. Rebuilt at
+/// startup and on every successful hot-reload (`main.rs`), same as
+/// `help_lines` (`help::build`), from the SAME `dialog` effective the shared
+/// `Resolver` consumes — BEFORE that effective moves into the `Resolver`
+/// (`Effective` is `Clone`, but `DialogHints::build` only borrows: no clone
+/// needed). `ui::draw_*` reads them instead of a static Fluent key. The only
+/// coupling point with SECURITY semantics (which commands each overlay
+/// accepts) is `app.rs`'s ALLOWLISTs — the SAME list that filters dispatch,
+/// never a copy.
 #[derive(Debug, Clone, Default)]
 pub struct DialogHints {
     /// `Modal::ConfirmDelete`/`Modal::ConfirmTransfer`/`Modal::ConfirmQuit`
@@ -197,31 +195,31 @@ pub struct DialogHints {
     pub collision: String,
     /// `Modal::ApproveAgentOp`.
     pub approval: String,
-    /// `Modal::ConfirmPluginUninstall` (ADR 0104): confirmar sin `approve`.
+    /// `Modal::ConfirmPluginUninstall` (ADR 0104): confirm with no `approve`.
     pub uninstall: String,
     /// `Modal::TrustHostKey`.
     pub trust_host: String,
     /// `Modal::AskSecret` (#325).
     pub ask_secret: String,
-    /// Selector de tema (`App::theme_picker`).
+    /// Theme selector (`App::theme_picker`).
     pub picker: String,
-    /// Picker de columnas (`App::columns_picker`, #108 7a).
+    /// Columns picker (`App::columns_picker`, #108 7a).
     pub columns: String,
-    /// Gestor de extensiones (`App::extensions`).
+    /// Extension manager (`App::extensions`).
     pub extensions: String,
-    /// Panel de `[config]` de un plugin dentro del gestor de extensiones
+    /// A plugin's `[config]` panel inside the extension manager
     /// (`App::extensions`'s `config`, G3c).
     pub plugin_config: String,
-    /// Popup de navegación en modo hotlist (`App::nav_popup`,
-    /// `NavPopupKind::Hotlist`) — el historial no pinta footer, igual que
-    /// antes de H1.
+    /// Navigation popup in hotlist mode (`App::nav_popup`,
+    /// `NavPopupKind::Hotlist`) — history paints no footer, same as before
+    /// H1.
     pub nav_list: String,
-    /// Popup de navegación en modo volúmenes (`App::nav_popup`,
-    /// `NavPopupKind::Volumes`, design §D) — su propio hint porque
-    /// `add`/`remove` de `nav_list` no significan nada aquí y el toggle
-    /// "mostrar todo" sí.
+    /// Navigation popup in volumes mode (`App::nav_popup`,
+    /// `NavPopupKind::Volumes`, design §D) — its own hint because
+    /// `nav_list`'s `add`/`remove` mean nothing here and the "show all"
+    /// toggle does.
     pub nav_volumes: String,
-    /// Popup de navegación en modo historia o populares (spec 2026-09-15 D2).
+    /// Navigation popup in history or popular mode (spec 2026-09-15 D2).
     pub nav_history: String,
     /// Help overlay (`App::help`, H3b).
     pub help: String,
@@ -242,30 +240,30 @@ pub struct DialogHints {
     /// footer, which the function above replaces. A new prose-hinted modal needs
     /// an arm here too.
     pub modals_inert: bool,
-    /// `[ui] dialog_buttons` (spec 2026-09-10): la línea de teclas de un
-    /// modal se pinta como BOTONES pulsables en vez de como texto. Lo pone
-    /// quien construye los hints desde la config; `build` lo deja apagado
-    /// porque un `Effective` no sabe de ajustes.
+    /// `[ui] dialog_buttons` (spec 2026-09-10): a modal's key line is painted
+    /// as clickable BUTTONS instead of as text. Set by whoever builds the
+    /// hints from the config; `build` leaves it off because an `Effective`
+    /// knows nothing about settings.
     pub buttons: bool,
 }
 
-/// Un botón de la línea de teclas de un modal: el chord pintado y su verbo.
+/// A button on a modal's key line: the painted chord and its verb.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HintButton {
-    /// El chord tal y como lo escribe `paint_chord` (`Enter`, `Esc`, `F5`).
+    /// The chord exactly as `paint_chord` writes it (`Enter`, `Esc`, `F5`).
     pub chord: String,
-    /// El verbo, en el idioma del lector.
+    /// The verb, in the reader's language.
     pub label: String,
 }
 
-/// Los botones de una línea de teclas —la generada por [`dialog_hints`]
-/// (`[Enter] confirm [Esc] cancel`) o una escrita en Fluent (`[enter]
-/// confirm · [esc] cancel`)—, o `None` si la línea no tiene esa forma.
+/// The buttons of a key line — the one [`dialog_hints`] generates (`[Enter]
+/// confirm [Esc] cancel`) or one written in Fluent (`[enter] confirm · [esc]
+/// cancel`) — or `None` if the line does not have that shape.
 ///
-/// Cada grupo empieza por `[`, el chord acaba en `] ` y el verbo llega hasta
-/// el siguiente ` [` o ` · [`. Un verbo puede llevar espacios; un chord no
-/// lleva `]` ni espacios, y se pinta como lo escribe la documentación
-/// (`Enter`, no `enter`), que es también lo que el ratón sintetiza.
+/// Each group starts with `[`, the chord ends at `] `, and the verb runs to
+/// the next ` [` or ` · [`. A verb may carry spaces; a chord carries neither
+/// `]` nor spaces, and is painted the way the documentation spells it
+/// (`Enter`, not `enter`), which is also what the mouse synthesizes.
 #[must_use]
 pub fn hint_buttons(line: &str) -> Option<Vec<HintButton>> {
     if !line.starts_with('[') {
@@ -288,7 +286,7 @@ pub fn hint_buttons(line: &str) -> Option<Vec<HintButton>> {
 }
 
 impl DialogHints {
-    /// Reconstruye todos los hints del efectivo `dialog` vigente.
+    /// Rebuilds every hint from the current `dialog` effective.
     #[must_use]
     pub fn build(eff: &Effective) -> Self {
         use crate::app::{
@@ -307,12 +305,12 @@ impl DialogHints {
             // are dropped from the PRINTED hint (never from dispatch — see
             // `without_navigation`).
             picker: dialog_hints(&without_navigation(ALLOW_PICKER), eff),
-            // #108 7a: además de la navegación, el pie del picker de
-            // columnas omite los verbos de REORDENACIÓN — shift+↑/↓ son las
-            // flechas con shift, autoevidentes junto a up/down, y con ellos
-            // el hint (101 celdas en es) no cabe en un frame de 80 (mismo
-            // MAJOR-1 que motivó `without_navigation`). Solo el hint
-            // IMPRESO: `ALLOW_COLUMNS` y el dispatch no cambian.
+            // #108 7a: besides navigation, the columns picker's footer omits
+            // the REORDERING verbs — shift+↑/↓ are the shifted arrows,
+            // self-evident next to up/down, and with them the hint (101
+            // cells in es) does not fit an 80-column frame (the same
+            // MAJOR-1 that motivated `without_navigation`). Only the PRINTED
+            // hint: `ALLOW_COLUMNS` and the dispatch do not change.
             columns: dialog_hints(
                 &without_navigation(ALLOW_COLUMNS)
                     .into_iter()
@@ -320,19 +318,19 @@ impl DialogHints {
                     .collect::<Vec<_>>(),
                 eff,
             ),
-            // El gestor ata `dialog.pane` —`tab` mueve el foco entre la
-            // lista y los botones de la ficha— pero NO lo imprime, y es el
-            // único de estos pies con una exclusión propia. Su footer ya
-            // iba lleno a 80 columnas: con los cinco verbos de siempre
-            // quedaban tres celdas libres, y el sexto no crecía la caja
-            // sino que partía el quinto por la mitad (`[Tab] otr┘`) —
-            // exactamente el MAJOR-1 que hizo nacer `without_navigation`,
-            // cuyo criterio se aplica igual aquí: la tecla sigue haciendo
-            // lo suyo, solo que no se deletrea. `dialog.pane` no entra en
-            // la lista COMPARTIDA porque otras seis allowlists lo atan con
-            // el sentido de «el otro panel», y ahí sí cabe y sí hace falta.
-            // Quien lo cuenta en su lugar: el tema de ayuda del gestor, y
-            // el propio botón, que se enciende al recibir el foco.
+            // The manager binds `dialog.pane` — `tab` moves focus between the
+            // list and the sheet's buttons — but does NOT print it, and it is
+            // the only one of these footers with an exclusion of its own. Its
+            // footer already ran full at 80 columns: with the usual five
+            // verbs three cells were left free, and the sixth did not grow
+            // the box but split the fifth in half (`[Tab] othe┘`) — exactly
+            // the MAJOR-1 that gave birth to `without_navigation`, whose
+            // criterion applies the same here: the key still does its job, it
+            // is just not spelled out. `dialog.pane` does not join the SHARED
+            // list because six other allowlists bind it with the meaning "the
+            // other pane", and there it does fit and is needed. What
+            // accounts for it instead: the manager's own help topic, and the
+            // button itself, which lights up on receiving focus.
             extensions: dialog_hints(
                 &without_navigation(ALLOW_EXTENSIONS)
                     .into_iter()
@@ -340,8 +338,8 @@ impl DialogHints {
                     .collect::<Vec<_>>(),
                 eff,
             ),
-            // `dialog.pane` fuera del pie por la misma razón que arriba: sale
-            // como `Esc`, que ya se deletrea.
+            // `dialog.pane` out of the footer for the same reason as above:
+            // it exits as `Esc`, which is already spelled out.
             plugin_config: dialog_hints(
                 &without_navigation(ALLOW_PLUGIN_CONFIG)
                     .into_iter()
@@ -351,16 +349,16 @@ impl DialogHints {
             ),
             nav_list: dialog_hints(&without_navigation(ALLOW_NAV_HOTLIST), eff),
             nav_volumes: dialog_hints(&without_navigation(ALLOW_NAV_VOLUMES), eff),
-            // Solo los verbos PROPIOS de la lista: con confirmar y cancelar
-            // delante, el pie en castellano pasaba de 80 celdas y el frame
-            // cortaba el último grupo a medias (`[Alt+Enter]┘` sin etiqueta),
-            // el mismo MAJOR-1 que motivó `without_navigation`. Enter y Esc son
-            // las teclas que cualquier lista ya enseña; el despacho no cambia.
+            // Only the list's OWN verbs: with confirm and cancel in front,
+            // the Spanish footer went past 80 cells and the frame cut the
+            // last group in half (`[Alt+Enter]┘` with no label), the same
+            // MAJOR-1 that motivated `without_navigation`. Enter and Esc are
+            // keys any list already teaches; the dispatch does not change.
             nav_history: dialog_hints(
                 &without_navigation(ALLOW_NAV_HISTORY)
                     .into_iter()
-                    // `add` tampoco: con él no cabe en 80 celdas, y la ayuda
-                    // de la historia lo dice.
+                    // `add` too: with it, it does not fit 80 cells, and
+                    // history's help topic already says so.
                     .filter(|c| !matches!(*c, "dialog.confirm" | "dialog.cancel" | "dialog.add"))
                     .collect::<Vec<_>>(),
                 eff,
@@ -369,9 +367,9 @@ impl DialogHints {
             // much of it is printed (`ui::fit_hint_groups`), not a fixed
             // exclusion. See [`HELP_HINT_PRIORITY`].
             help: hints_in_order_with(HELP_HINT_PRIORITY, eff, help_hint_id),
-            // Los hints RECIÉN construidos describen teclas que sí responden;
-            // solo `with_modals_inert` levanta el flag, y solo mientras una
-            // ayuda tape el modal.
+            // Hints JUST built describe keys that DO respond; only
+            // `with_modals_inert` raises the flag, and only while a help page
+            // covers the modal.
             modals_inert: false,
             buttons: false,
         }
@@ -416,10 +414,10 @@ mod tests {
     use super::*;
     use crate::keymap::{Screen, parse_keymap};
 
-    /// El efectivo `dialog` del preset de fábrica, que es el que pintan los
-    /// pies reales. Vocabulario = `COMMANDS` ∪ `DIALOG_COMMANDS`: el efectivo
-    /// `dialog` fusiona TAMBIÉN la sección `[global]` del preset, así que
-    /// `DIALOG_COMMANDS` a secas no basta (`build_for` fallaría con
+    /// The factory preset's `dialog` effective, the one real footers paint.
+    /// Vocabulary = `COMMANDS` ∪ `DIALOG_COMMANDS`: the `dialog` effective
+    /// ALSO merges the preset's `[global]` section, so `DIALOG_COMMANDS`
+    /// alone is not enough (`build_for` would fail with
     /// `UnknownCommand { run: "app.quit" }`).
     fn orthodox_dialog() -> Effective {
         let (_, preset) = crate::keymap::presets()
@@ -431,18 +429,18 @@ mod tests {
             .copied()
             .chain(crate::keymap::DIALOG_COMMANDS.iter().copied())
             .collect();
-        Effective::build_for(&preset, &[], &known, Screen::Dialog).expect("efectivo dialog")
+        Effective::build_for(&preset, &[], &known, Screen::Dialog).expect("dialog effective")
     }
 
-    /// Encoding audit H1: un `./.norte/keymap.toml` de PROYECTO (sin trust)
-    /// puede ligar un chord hostil (RLO/ZWSP/LRM/BEL, corpus
-    /// `norte_testkit::corpus::hostile_chords`) a un comando `dialog.*`
-    /// soportado vía `prepend_keymap` — capa de usuario, gana al preset. El
-    /// hint generado (`dialog_hints`) es lo que se pinta en el pie de
-    /// modales de SEGURIDAD (`ApproveAgentOp`/`TrustHostKey`/
-    /// `ConfirmDelete`-permanente): ningún hazard puede sobrevivir crudo.
+    /// Encoding audit H1: a PROJECT `./.norte/keymap.toml` (no trust) can
+    /// bind a hostile chord (RLO/ZWSP/LRM/BEL, corpus
+    /// `norte_testkit::corpus::hostile_chords`) to a `dialog.*` command
+    /// supported via `prepend_keymap` — a user layer, which beats the preset.
+    /// The generated hint (`dialog_hints`) is what gets painted on SECURITY
+    /// modals' footers (`ApproveAgentOp`/`TrustHostKey`/permanent
+    /// `ConfirmDelete`): no hazard can survive raw.
     #[test]
-    fn dialog_hints_enmascara_chords_hostiles_de_una_capa() {
+    fn dialog_hints_masks_hostile_chords_from_a_layer() {
         let preset = parse_keymap(
             r#"
             [dialog]
@@ -452,9 +450,9 @@ mod tests {
         .unwrap();
         let known = ["dialog.approve", "dialog.deny"];
         for hazard in norte_testkit::corpus::hostile_chords() {
-            // Escape `\uXXXX` de TOML (spec v1.0.0): un control C0 crudo
-            // como BEL (U+0007) es sintaxis inválida dentro de una basic
-            // string TOML, así que el token va SIEMPRE escapado, no crudo.
+            // TOML `\uXXXX` escape (spec v1.0.0): a raw C0 control such as
+            // BEL (U+0007) is invalid syntax inside a basic TOML string, so
+            // the token is ALWAYS escaped, never raw.
             let token_esc = format!("\\u{:04X}", hazard.token as u32);
             let layer_src = format!(
                 r#"
@@ -464,27 +462,27 @@ mod tests {
             );
             let layer = parse_keymap(&layer_src).unwrap();
             let eff = Effective::build_for(&preset, &[layer], &known, Screen::Dialog)
-                .unwrap_or_else(|e| panic!("[{}] keymap efectivo: {e}", hazard.id));
+                .unwrap_or_else(|e| panic!("[{}] effective keymap: {e}", hazard.id));
             let hint = dialog_hints(&["dialog.approve", "dialog.deny"], &eff);
             assert!(
                 !hint.chars().any(norte_encoding::is_terminal_hazard),
-                "[{}] hazard crudo en el hint: {hint:?}",
+                "[{}] raw hazard in the hint: {hint:?}",
                 hazard.id
             );
             assert!(
                 hint.contains('\u{FFFD}'),
-                "[{}] el hazard debe enmascararse a U+FFFD: {hint:?}",
+                "[{}] the hazard must be masked to U+FFFD: {hint:?}",
                 hazard.id
             );
         }
     }
 
     #[test]
-    fn dialog_hints_omite_comandos_sin_binding() {
-        // Este test afirma los strings del corpus INGLÉS. Sin fijar el idioma
-        // resolvía por entorno (`LANG`), así que era verde en CI y rojo en
-        // cualquier máquina con `LANG=es_*` — la misma línea que el resto de
-        // los tests de render de este crate ya llevaba.
+    fn dialog_hints_skips_commands_with_no_binding() {
+        // This test asserts the ENGLISH corpus strings. Without pinning the
+        // language it resolved by environment (`LANG`), so it was green in CI
+        // and red on any machine with `LANG=es_*` — the same line the rest of
+        // this crate's render tests already carried.
         let _ = norte_i18n::force(norte_i18n::Lang::En);
         let preset = parse_keymap(
             r#"
@@ -500,11 +498,11 @@ mod tests {
     }
 
     #[test]
-    fn dialog_hints_respeta_el_orden_del_efectivo_no_del_allowlist() {
-        // Este test afirma los strings del corpus INGLÉS. Sin fijar el idioma
-        // resolvía por entorno (`LANG`), así que era verde en CI y rojo en
-        // cualquier máquina con `LANG=es_*` — la misma línea que el resto de
-        // los tests de render de este crate ya llevaba.
+    fn dialog_hints_follows_the_effectives_order_not_the_allowlists() {
+        // This test asserts the ENGLISH corpus strings. Without pinning the
+        // language it resolved by environment (`LANG`), so it was green in CI
+        // and red on any machine with `LANG=es_*` — the same line the rest of
+        // this crate's render tests already carried.
         let _ = norte_i18n::force(norte_i18n::Lang::En);
         let preset = parse_keymap(
             r#"
@@ -518,20 +516,20 @@ mod tests {
         .unwrap();
         let known = ["dialog.confirm", "dialog.cancel"];
         let eff = Effective::build_for(&preset, &[], &known, Screen::Dialog).unwrap();
-        // El allowlist pide confirm-antes-que-cancel; el efectivo declara
-        // cancel primero — el hint sigue al efectivo.
-        // Chords PINTADOS (`paint_chord`): `Esc`/`Enter`, no `esc`/`enter` —
-        // `Chord`'s `Display` es crudo y en minúscula solo para logs.
+        // The allowlist asks for confirm-before-cancel; the effective
+        // declares cancel first — the hint follows the effective.
+        // PAINTED chords (`paint_chord`): `Esc`/`Enter`, not `esc`/`enter` —
+        // `Chord`'s `Display` is raw and lowercase only for logs.
         let hint = dialog_hints(&["dialog.confirm", "dialog.cancel"], &eff);
         assert_eq!(hint, "[Esc] cancel [Enter] confirm");
     }
 
     #[test]
-    fn dialog_hints_usa_la_primera_chord_ante_un_duplicado() {
-        // Este test afirma los strings del corpus INGLÉS. Sin fijar el idioma
-        // resolvía por entorno (`LANG`), así que era verde en CI y rojo en
-        // cualquier máquina con `LANG=es_*` — la misma línea que el resto de
-        // los tests de render de este crate ya llevaba.
+    fn dialog_hints_uses_the_first_chord_on_a_duplicate() {
+        // This test asserts the ENGLISH corpus strings. Without pinning the
+        // language it resolved by environment (`LANG`), so it was green in CI
+        // and red on any machine with `LANG=es_*` — the same line the rest of
+        // this crate's render tests already carried.
         let _ = norte_i18n::force(norte_i18n::Lang::En);
         let preset = parse_keymap(
             r#"
@@ -550,7 +548,7 @@ mod tests {
     }
 
     #[test]
-    fn dialog_hints_string_vacia_sin_soportados_ligados() {
+    fn dialog_hints_is_an_empty_string_with_no_supported_bound() {
         let preset = parse_keymap(
             r#"
             [dialog]
@@ -564,14 +562,14 @@ mod tests {
         assert_eq!(hint, "");
     }
 
-    /// MAJOR-1 (H1 close): las teclas de navegación NO salen en los tres
-    /// hints de overlay NO-modal (picker/extensions/hotlist) — se pintarían
-    /// self-evidentes y truncaban el pie a 80 col
-    /// (`snapshots_ui__snapshot_popup_hotlist.snap` antes de este fix). Los
-    /// modales sí llevan sus comandos completos (ninguno soporta
-    /// navegación) — nada que filtrar, así que su comportamiento no cambia.
+    /// MAJOR-1 (H1 close): navigation keys do NOT appear in the three
+    /// NON-modal overlay hints (picker/extensions/hotlist) — they would paint
+    /// as self-evident and truncate the footer at 80 columns
+    /// (`snapshots_ui__snapshot_popup_hotlist.snap` before this fix). Modals
+    /// DO carry their commands whole (none of them support navigation) —
+    /// nothing to filter, so their behavior does not change.
     #[test]
-    fn overlays_no_modales_omiten_navegacion_del_hint() {
+    fn non_modal_overlays_omit_navigation_from_the_hint() {
         let hints = DialogHints::build(&orthodox_dialog());
         for hint in [
             &hints.picker,
@@ -581,10 +579,10 @@ mod tests {
         ] {
             assert!(
                 !hint.contains("[Up]") && !hint.contains("[Down]"),
-                "las flechas no deberían salir en un hint no-modal: {hint:?}"
+                "arrows should not appear in a non-modal hint: {hint:?}"
             );
         }
-        // El picker SÍ conserva confirm/cancel (no son navegación).
+        // The picker DOES keep confirm/cancel (they are not navigation).
         assert!(hints.picker.contains("[Enter]"));
         assert!(hints.picker.contains("[Esc]"));
     }
@@ -592,22 +590,22 @@ mod tests {
     /// H3b: the help overlay's footer is GENERATED like every other
     /// overlay's — the three verbs it adds must reach it with their chords.
     ///
-    /// Con la etiqueta de la AYUDA, que no es la del mismo verbo en un modal:
-    /// `dialog.pane` aquí es «índice ↔ texto» y no «otro panel», que sobre un
-    /// overlay sin panes nombra algo que el lector no puede hacer.
+    /// With HELP's own label, which is not the same verb's label in a modal:
+    /// `dialog.pane` here is "index ↔ text" and not "other pane", which over
+    /// an overlay with no panes names something the reader cannot do.
     #[test]
-    fn el_hint_de_la_ayuda_lista_sus_verbos_propios() {
+    fn helps_hint_lists_its_own_verbs() {
         let hints = DialogHints::build(&orthodox_dialog());
         for cmd in ["dialog.filter", "dialog.back", "dialog.pane"] {
             assert!(
                 hints.help.contains(&t(&help_hint_id(cmd))),
-                "{cmd} debe aparecer en el pie de la ayuda: {}",
+                "{cmd} must appear in help's footer: {}",
                 hints.help
             );
         }
         assert!(
             !hints.help.contains(&t("dialog-cmd-pane")),
-            "y jamás con la etiqueta del modal: {}",
+            "and never with the modal's label: {}",
             hints.help
         );
     }
@@ -618,54 +616,56 @@ mod tests {
     /// more: a 113-column terminal has room for the lot and used to paint half
     /// an empty footer while hiding them.
     #[test]
-    fn el_pie_de_la_ayuda_ofrece_todos_sus_verbos_en_orden_de_prioridad() {
+    fn helps_footer_offers_all_its_verbs_in_priority_order() {
         let hints = DialogHints::build(&orthodox_dialog());
         let position = |cmd: &str| {
             hints
                 .help
                 .find(&t(&help_hint_id(cmd)))
-                .unwrap_or_else(|| panic!("{cmd} debe estar en el pie de la ayuda: {}", hints.help))
+                .unwrap_or_else(|| panic!("{cmd} must be in help's footer: {}", hints.help))
         };
         let order: Vec<usize> = HELP_HINT_PRIORITY.iter().map(|c| position(c)).collect();
         assert!(
             order.windows(2).all(|w| w[0] < w[1]),
-            "los verbos salen en el orden de prioridad, que es el que decide \
-             qué sobrevive a un frame estrecho: {}",
+            "verbs come out in priority order, which is what decides \
+             what survives a narrow frame: {}",
             hints.help
         );
-        // Las FLECHAS siguen fuera —mover el cursor entre filas ejecutables se
-        // descubre solo— pero la paginación SÍ está: el cuerpo es prosa larga
-        // en una ventana corta, y nada más en pantalla dice cómo bajar por
-        // ella. Es la diferencia entre esta pantalla y una lista de opciones.
+        // ARROWS stay out — moving the cursor between runnable rows is
+        // discoverable on its own — but paging IS included: the body is long
+        // prose in a short window, and nothing else on screen says how to
+        // scroll down through it. That is the difference between this screen
+        // and an options list.
         for cmd in ["dialog.up", "dialog.down"] {
             assert!(
                 !hints
                     .help
                     .contains(&format!("] {}", t(&dialog_hint_id(cmd)))),
-                "{cmd} es autoevidente y no gasta ancho: {}",
+                "{cmd} is self-evident and does not spend width: {}",
                 hints.help
             );
         }
         for cmd in ["dialog.page-up", "dialog.page-down"] {
             assert!(
                 hints.help.contains(&t(&help_hint_id(cmd))),
-                "{cmd} es lo que nadie adivina en una página de prosa: {}",
+                "{cmd} is what nobody guesses on a page of prose: {}",
                 hints.help
             );
         }
     }
 
-    /// [`HELP_HINT_PRIORITY`] es una proyección COMPLETA de `ALLOW_HELP`: un
-    /// verbo nuevo en el allowlist tiene que rankearse aquí, no quedarse
-    /// invisible en el pie para siempre (que es lo que hacía la exclusión
-    /// fija). Y al revés: nada se anuncia que el despacho no acepte.
+    /// [`HELP_HINT_PRIORITY`] is a COMPLETE projection of `ALLOW_HELP`: a
+    /// verb new to the allowlist has to be ranked here, not left invisible in
+    /// the footer forever (which is what the fixed exclusion used to do).
+    /// And the other way around: nothing is advertised that the dispatch does
+    /// not accept.
     #[test]
     fn help_priority_covers_every_printable_verb() {
         use crate::app::{ALLOW_HELP, help_action};
-        // La paginación SÍ se imprime en esta pantalla (ver
-        // `HELP_HINT_PRIORITY`): lo único que no gasta ancho aquí son las
-        // flechas y los extremos (Inicio, Fin), que se descubren solos — y
-        // con ellos el pie no cabía entero ni a 124 columnas.
+        // Paging IS printed on this screen (see `HELP_HINT_PRIORITY`): the
+        // only things that do not spend width here are the arrows and the
+        // extremes (Home, End), which are discoverable on their own — and
+        // with them the footer did not fit whole even at 124 columns.
         let printable: Vec<&str> = ALLOW_HELP
             .iter()
             .copied()
@@ -684,30 +684,31 @@ mod tests {
         for cmd in &printable {
             assert!(
                 HELP_HINT_PRIORITY.contains(cmd),
-                "{cmd} es imprimible pero no está rankeado en HELP_HINT_PRIORITY"
+                "{cmd} is printable but is not ranked in HELP_HINT_PRIORITY"
             );
         }
         for cmd in HELP_HINT_PRIORITY {
             assert!(
                 printable.contains(cmd),
-                "{cmd} se anunciaría sin que el despacho lo acepte"
+                "{cmd} would be advertised without the dispatch accepting it"
             );
             assert!(
                 help_action(cmd).is_some(),
-                "…y la tecla tiene que estar viva: {cmd}"
+                "…and the key has to be alive: {cmd}"
             );
         }
         assert_eq!(HELP_HINT_PRIORITY.len(), printable.len());
     }
 
-    /// `dialog_hints_in_order` sigue el ORDEN del caller (al revés que
-    /// [`dialog_hints`], que sigue el efectivo) y omite lo no ligado.
+    /// `dialog_hints_in_order` follows the caller's ORDER (unlike
+    /// [`dialog_hints`], which follows the effective) and skips what is not
+    /// bound.
     #[test]
-    fn dialog_hints_in_order_sigue_al_caller_no_al_efectivo() {
-        // Este test afirma los strings del corpus INGLÉS. Sin fijar el idioma
-        // resolvía por entorno (`LANG`), así que era verde en CI y rojo en
-        // cualquier máquina con `LANG=es_*` — la misma línea que el resto de
-        // los tests de render de este crate ya llevaba.
+    fn dialog_hints_in_order_follows_the_caller_not_the_effective() {
+        // This test asserts the ENGLISH corpus strings. Without pinning the
+        // language it resolved by environment (`LANG`), so it was green in CI
+        // and red on any machine with `LANG=es_*` — the same line the rest of
+        // this crate's render tests already carried.
         let _ = norte_i18n::force(norte_i18n::Lang::En);
         let preset = parse_keymap(
             r#"
@@ -724,59 +725,59 @@ mod tests {
         assert_eq!(
             dialog_hints_in_order(&["dialog.confirm", "dialog.pane", "dialog.cancel"], &eff),
             "[Enter] confirm [Esc] cancel",
-            "el orden es el pedido, y `dialog.pane` (sin binding) no inventa tecla"
+            "the order is the one requested, and `dialog.pane` (no binding) invents no key"
         );
     }
 
-    /// H3c: con una página de ayuda ENCIMA, los CUATRO pies de modal dicen que
-    /// hay que cerrarla y no ofrecen ni un verbo — ni `confirmar`/`cancelar`,
-    /// que es lo que el test de render no puede aislar (el pie de la propia
-    /// ayuda los lista, y ahí sí responden).
+    /// H3c: with a help page ON TOP, the FOUR modal footers say it must be
+    /// closed and offer no verb at all — not even `confirm`/`cancel`, which
+    /// the render test cannot isolate on its own (help's own footer lists
+    /// them, and there they DO respond).
     ///
-    /// Los pies que NO son de modal se quedan intactos: un modal en pantalla ya
-    /// les había quitado la tecla mucho antes (`modal_wins`, H1), y eso es una
-    /// decisión de entonces, no lo que esta función arregla.
+    /// Footers that are NOT a modal's stay untouched: a modal on screen had
+    /// already taken their key away long before (`modal_wins`, H1), and that
+    /// is a decision from back then, not what this function fixes.
     #[test]
-    fn los_pies_de_modal_dejan_de_ofrecer_verbos_bajo_la_ayuda() {
+    fn modal_footers_stop_offering_verbs_under_help() {
         let alive = DialogHints::build(&orthodox_dialog());
         let inert = alive.with_modals_inert();
         let notice = t("modal-hint-help-open");
-        for pie in [
+        for footer in [
             &inert.confirm,
             &inert.collision,
             &inert.approval,
             &inert.trust_host,
         ] {
-            assert_eq!(pie, &notice);
+            assert_eq!(footer, &notice);
         }
-        // Ningún verbo del vocabulario `dialog.*` sobrevive en ellos.
+        // No verb of the `dialog.*` vocabulary survives in them.
         for cmd in crate::keymap::DIALOG_COMMANDS {
             let label = t(&dialog_hint_id(cmd));
-            for pie in [
+            for footer in [
                 &inert.confirm,
                 &inert.collision,
                 &inert.approval,
                 &inert.trust_host,
             ] {
                 assert!(
-                    !pie.contains(&label),
-                    "{cmd} sigue anunciado en un pie inerte: {pie:?}"
+                    !footer.contains(&label),
+                    "{cmd} is still advertised in an inert footer: {footer:?}"
                 );
             }
         }
-        // Y lo que no es un modal no se toca.
+        // And whatever is not a modal is not touched.
         assert_eq!(inert.picker, alive.picker);
         assert_eq!(inert.columns, alive.columns);
         assert_eq!(inert.extensions, alive.extensions);
         assert_eq!(inert.plugin_config, alive.plugin_config);
         assert_eq!(inert.nav_list, alive.nav_list);
-        assert_eq!(inert.help, alive.help, "la ayuda SÍ tiene las teclas");
+        assert_eq!(inert.help, alive.help, "help DOES have its keys");
     }
 
-    /// [`without_navigation`] filtra SOLO las cuatro entradas de navegación,
-    /// preservando el resto intacto y su orden relativo.
+    /// [`without_navigation`] filters ONLY the four navigation entries,
+    /// preserving the rest intact along with their relative order.
     #[test]
-    fn without_navigation_filtra_solo_navegacion() {
+    fn without_navigation_filters_only_navigation() {
         let supported = [
             "dialog.up",
             "dialog.approve",

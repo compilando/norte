@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Renderiza los mockups de docs/mockups a PNG con Chrome headless.
+# Renders the mockups in docs/mockups to PNG with headless Chrome.
 #
-#   scripts/mockups.sh              # todos
-#   scripts/mockups.sh 01-browse    # sólo los que empiecen por ese prefijo
+#   scripts/mockups.sh              # all of them
+#   scripts/mockups.sh 01-browse    # only the ones starting with that prefix
 #
-# El lienzo es 1440×900 y se fuerza escala 2 -> PNG de 2880×1800, que es lo que
-# hace falta para que el texto mono aguante un zoom en la web.
+# The canvas is 1440×900 and scale 2 is forced -> 2880×1800 PNG, which is
+# what it takes for the mono text to hold up to a zoom on the web.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -17,7 +17,7 @@ chrome=""
 for c in google-chrome-stable google-chrome chromium chromium-browser; do
   if command -v "$c" >/dev/null 2>&1; then chrome="$c"; break; fi
 done
-[ -n "$chrome" ] || { echo "ERROR: no encuentro Chrome/Chromium para renderizar."; exit 1; }
+[ -n "$chrome" ] || { echo "ERROR: cannot find Chrome/Chromium to render with."; exit 1; }
 
 mkdir -p "$out"
 profile="$(mktemp -d)"
@@ -40,4 +40,4 @@ for f in "$src/${prefix}"*.html; do
   count=$((count + 1))
 done
 
-echo "$count capturas en docs/mockups/png"
+echo "$count captures in docs/mockups/png"

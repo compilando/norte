@@ -1,25 +1,26 @@
-//! El mapa de disco, repartido en rectángulos (fase 4, T3).
+//! The disk map, laid out into rectangles (phase 4, T3).
 //!
-//! Entra una lista de hijos ya medidos (`fs.dir_usage`) y sale un
-//! [`StyledFrame`]: líneas con estilo y zonas pulsables, que es lo que los dos
-//! frontends ya saben pintar desde la fase 3. El reparto vive aquí y no en cada
-//! uno porque un treemap calculado dos veces son dos treemaps distintos en
-//! cuanto alguien toque un redondeo — la lección de ADR 0077.
+//! A list of already-measured children (`fs.dir_usage`) goes in and a
+//! [`StyledFrame`] comes out: styled lines and clickable zones, which is what
+//! both frontends already know how to paint since phase 3. The layout lives
+//! here and not in each one because a treemap computed twice is two
+//! different treemaps the moment someone touches a rounding — the lesson of
+//! ADR 0077.
 //!
-//! # El marco es NUESTRO
-//! En un panel de plugin la etiqueta Y el comando los elige un tercero, y por
-//! eso existe `zona_puede` (ADR 0116). Aquí los elige esta función: cada
-//! rectángulo nombra `nav.enter` sobre un hijo del directorio que se está
-//! enseñando, así que sus zonas no pasan por ese filtro y un plugin no puede
-//! fabricar un marco de `disk-map`.
+//! # The frame is OURS
+//! In a plugin panel, the label AND the command are chosen by a third party,
+//! and that is why `zone_allowed` exists (ADR 0116). Here, this function
+//! chooses them: every rectangle names `nav.enter` over a child of the
+//! directory being shown, so its zones do not go through that filter and a
+//! plugin cannot fabricate a `disk-map` frame.
 //!
-//! # El `arg` es el nombre en forma WIRE, nunca lo que se pinta
-//! Lo pintado pasa por [`crate::display_name`], que enmascara: un nombre con
-//! bytes de control se ve como `�` y ESA forma no identifica ningún fichero. El
-//! `arg` lleva [`Segment::to_wire`](norte_proto::Segment::to_wire), que es
-//! reversible, y quien lo recibe
-//! resuelve `padre.join(Segment::parse_wire(arg))`. Un nombre no-UTF8, uno en
-//! NFD o uno llamado `!` llegan enteros o no llegan.
+//! # The `arg` is the name in WIRE form, never what gets painted
+//! What is painted goes through [`crate::display_name`], which masks: a name
+//! with control bytes shows up as `�` and THAT form identifies no file. The
+//! `arg` carries [`Segment::to_wire`](norte_proto::Segment::to_wire), which
+//! is reversible, and whoever receives it resolves
+//! `parent.join(Segment::parse_wire(arg))`. A non-UTF8 name, an NFD one, or
+//! one called `!` arrive whole or not at all.
 
 use norte_proto::EntryKind;
 use norte_proto::methods::DirUsageChild;
@@ -28,132 +29,138 @@ use norte_theme::Role;
 use crate::ansi::StyledSpan;
 use crate::frame::{Hit, MAX_HITS, StyledFrame};
 
-/// El comando que corre un rectángulo: entrar en ese hijo.
-const COMANDO: &str = "nav.enter";
+/// The command a rectangle runs: enter that child.
+const COMMAND: &str = "nav.enter";
 
-/// Marca de un hijo cuyo tamaño es una COTA INFERIOR (`partial`).
+/// Mark for a child whose size is a LOWER BOUND (`partial`).
 ///
-/// Va en la etiqueta y no en el color: el color dice de qué CLASE es el fichero,
-/// y un rectángulo incompleto puede ser de cualquier clase. Quien pinta no tiene
-/// que elegir entre las dos cosas.
-const CASI: char = '≈';
+/// It goes in the label and not in the color: the color says what CLASS the
+/// file is, and an incomplete rectangle can be of any class. The painter
+/// does not have to choose between the two things.
+const PARTIAL_MARK: char = '≈';
 
-/// De qué clase es un hijo, para que el mapa lo pinte como lo que es.
+/// What class a child is, so the map paints it as what it is.
 ///
-/// No existía ninguna taxonomía que reutilizar: el decorador de un plugin
-/// recibe un ROL del tema, no una clase (ADR 0105), así que esta es la primera
-/// y vive aquí, donde la usan los dos frontends.
+/// There was no taxonomy to reuse: a plugin's decorator receives a theme
+/// ROLE, not a class (ADR 0105), so this is the first one and it lives here,
+/// where both frontends use it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Clase {
-    /// Un directorio.
-    Directorio,
-    /// Fuente, cabeceras, guiones.
-    Codigo,
-    /// Un contenedor comprimido.
-    Comprimido,
-    /// Imagen fija.
-    Imagen,
-    /// Audio o vídeo — lo que suele ocupar el rectángulo grande.
-    Medios,
-    /// Texto legible: documentos, notas, datos.
-    Documento,
-    /// Todo lo demás, incluido lo que no sabemos leer.
-    Otro,
+pub enum ChildClass {
+    /// A directory.
+    Directory,
+    /// Source, headers, scripts.
+    Code,
+    /// A compressed container.
+    Archive,
+    /// A still image.
+    Image,
+    /// Audio or video — what usually takes up the big rectangle.
+    Media,
+    /// Readable text: documents, notes, data.
+    Document,
+    /// Everything else, including what we do not know how to read.
+    Other,
 }
 
-impl Clase {
-    /// El papel del tema con el que se pinta.
+impl ChildClass {
+    /// The theme role it is painted with.
     ///
-    /// Roles y no colores crudos (ADR 0037): el tema manda, y un mapa cosido a
-    /// `#ff8800` se ve igual de mal en los dos temas que el lector eligió.
-    /// Ninguno de estos roles significa «fichero de tal clase» —no existe esa
-    /// familia— así que se toman prestados por CONTRASTE, que es lo que un
-    /// treemap necesita: rectángulos vecinos que se distinguen.
+    /// Roles and not raw colors (ADR 0037): the theme rules, and a map
+    /// hard-coded to `#ff8800` looks equally bad in both themes the reader
+    /// chose. None of these roles means "file of this class" —that family
+    /// does not exist— so they are borrowed for CONTRAST, which is what a
+    /// treemap needs: neighbouring rectangles that stand apart.
     #[must_use]
     pub fn role(self) -> Role {
         match self {
-            Self::Directorio => Role::Info,
-            Self::Codigo => Role::Match,
-            Self::Comprimido => Role::Warning,
-            Self::Imagen => Role::Badge,
-            Self::Medios => Role::Selection,
-            Self::Documento => Role::Regular,
-            Self::Otro => Role::Muted,
+            Self::Directory => Role::Info,
+            Self::Code => Role::Match,
+            Self::Archive => Role::Warning,
+            Self::Image => Role::Badge,
+            Self::Media => Role::Selection,
+            Self::Document => Role::Regular,
+            Self::Other => Role::Muted,
         }
     }
 }
 
-/// La clase de un hijo, por su tipo y por su extensión.
+/// A child's class, by its type and its extension.
 ///
-/// La extensión se lee de los BYTES del nombre y se compara en ASCII
-/// minúscula: no se decodifica el nombre para clasificarlo, porque un nombre
-/// que no es UTF-8 tiene extensión igual (regla 1).
+/// The extension is read from the name's BYTES and compared in lowercase
+/// ASCII: the name is not decoded to classify it, because a name that is not
+/// UTF-8 has an extension all the same (rule 1).
 #[must_use]
-pub fn clase_de(child: &DirUsageChild) -> Clase {
+pub fn class_of(child: &DirUsageChild) -> ChildClass {
     if child.kind == EntryKind::Dir {
-        return Clase::Directorio;
+        return ChildClass::Directory;
     }
     let bytes = child.name.as_bytes();
-    let Some(punto) = bytes.iter().rposition(|b| *b == b'.') else {
-        return Clase::Otro;
+    let Some(dot) = bytes.iter().rposition(|b| *b == b'.') else {
+        return ChildClass::Other;
     };
-    let ext: Vec<u8> = bytes[punto + 1..].to_ascii_lowercase();
+    let ext: Vec<u8> = bytes[dot + 1..].to_ascii_lowercase();
     match ext.as_slice() {
         b"rs" | b"c" | b"h" | b"cpp" | b"hpp" | b"py" | b"js" | b"ts" | b"go" | b"java" | b"rb"
-        | b"sh" | b"toml" | b"json" | b"yaml" | b"yml" => Clase::Codigo,
-        b"zip" | b"gz" | b"bz2" | b"xz" | b"zst" | b"tar" | b"rar" | b"7z" => Clase::Comprimido,
-        b"png" | b"jpg" | b"jpeg" | b"gif" | b"webp" | b"bmp" | b"svg" | b"ico" => Clase::Imagen,
-        b"mp3" | b"flac" | b"ogg" | b"wav" | b"mp4" | b"mkv" | b"avi" | b"mov" | b"webm" => {
-            Clase::Medios
+        | b"sh" | b"toml" | b"json" | b"yaml" | b"yml" => ChildClass::Code,
+        b"zip" | b"gz" | b"bz2" | b"xz" | b"zst" | b"tar" | b"rar" | b"7z" => ChildClass::Archive,
+        b"png" | b"jpg" | b"jpeg" | b"gif" | b"webp" | b"bmp" | b"svg" | b"ico" => {
+            ChildClass::Image
         }
-        b"txt" | b"md" | b"pdf" | b"doc" | b"docx" | b"odt" | b"csv" | b"html" => Clase::Documento,
-        _ => Clase::Otro,
+        b"mp3" | b"flac" | b"ogg" | b"wav" | b"mp4" | b"mkv" | b"avi" | b"mov" | b"webm" => {
+            ChildClass::Media
+        }
+        b"txt" | b"md" | b"pdf" | b"doc" | b"docx" | b"odt" | b"csv" | b"html" => {
+            ChildClass::Document
+        }
+        _ => ChildClass::Other,
     }
 }
 
-/// Un rectángulo del reparto, en CELDAS del marco.
+/// One rectangle of the layout, in frame CELLS.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rect {
-    /// Columna de la esquina superior izquierda.
+    /// Column of the top-left corner.
     pub x: u16,
-    /// Fila de la esquina superior izquierda.
+    /// Row of the top-left corner.
     pub y: u16,
-    /// Anchura en celdas. Cero = no se pinta.
+    /// Width in cells. Zero = not painted.
     pub w: u16,
-    /// Altura en celdas. Cero = no se pinta.
+    /// Height in cells. Zero = not painted.
     pub h: u16,
 }
 
 impl Rect {
-    /// Cuántas celdas ocupa.
+    /// How many cells it occupies.
     #[must_use]
-    pub fn celdas(self) -> u32 {
+    pub fn cells(self) -> u32 {
         u32::from(self.w) * u32::from(self.h)
     }
 }
 
-/// El reparto: un rectángulo por hijo, en el mismo orden que `pesos`.
+/// The layout: one rectangle per child, in the same order as `weights`.
 ///
-/// Un hijo al que no le llega para una celda sale con `w` o `h` en cero — **no
-/// se pinta, pero no desaparece**: su tamaño ya está contado en el total que
-/// alguien enseñe al lado, y borrarlo de la lista haría que los rectángulos
-/// mintieran sobre de qué se compone el directorio.
+/// A child that does not reach a whole cell comes out with `w` or `h` at
+/// zero — **it is not painted, but it does not disappear**: its size is
+/// already counted in whatever total is shown next to it, and dropping it
+/// from the list would make the rectangles lie about what the directory is
+/// made of.
 ///
-/// # Reparto EXACTO, por construcción
-/// Las anchuras se reparten con un acumulador de resto en vez de redondeando
-/// cada una por su cuenta: la última de cada tira toma lo que queda. Así los
-/// rectángulos no se solapan ni dejan huecos, y no hay que comprobarlo después
-/// — lo que se comprueba en los tests es que esta propiedad se cumple.
+/// # EXACT layout, by construction
+/// Widths are distributed with a remainder accumulator instead of rounding
+/// each one on its own: the last one of each strip takes whatever is left.
+/// That way the rectangles neither overlap nor leave gaps, and it does not
+/// need to be checked afterwards — what the tests check is that this
+/// property holds.
 ///
 /// ```
-/// use norte_frontend::treemap::{Rect, repartir};
-/// let r = repartir(&[3, 1], Rect { x: 0, y: 0, w: 4, h: 1 });
+/// use norte_frontend::treemap::{Rect, distribute};
+/// let r = distribute(&[3, 1], Rect { x: 0, y: 0, w: 4, h: 1 });
 /// assert_eq!(r.len(), 2);
-/// // Cubren la franja entera, sin solaparse.
+/// // They cover the whole strip, without overlapping.
 /// assert_eq!(r[0].w + r[1].w, 4);
 /// ```
 #[must_use]
-pub fn repartir(pesos: &[u64], area: Rect) -> Vec<Rect> {
+pub fn distribute(weights: &[u64], area: Rect) -> Vec<Rect> {
     let mut out = vec![
         Rect {
             x: 0,
@@ -161,174 +168,185 @@ pub fn repartir(pesos: &[u64], area: Rect) -> Vec<Rect> {
             w: 0,
             h: 0
         };
-        pesos.len()
+        weights.len()
     ];
-    if pesos.is_empty() || area.w == 0 || area.h == 0 {
+    if weights.is_empty() || area.w == 0 || area.h == 0 {
         return out;
     }
-    // Orden por tamaño descendente: es lo que hace que un treemap salga
-    // legible, y el desempate por POSICIÓN mantiene el resultado estable entre
-    // dos vistas de lo mismo.
-    let mut orden: Vec<usize> = (0..pesos.len()).collect();
-    orden.sort_by(|a, b| pesos[*b].cmp(&pesos[*a]).then(a.cmp(b)));
+    // Descending size order: that is what makes a treemap come out legible,
+    // and the tie-break by POSITION keeps the result stable between two
+    // views of the same thing.
+    let mut order: Vec<usize> = (0..weights.len()).collect();
+    order.sort_by(|a, b| weights[*b].cmp(&weights[*a]).then(a.cmp(b)));
 
-    let mut restante: u64 = pesos.iter().copied().fold(0, u64::saturating_add);
-    let mut libre = area;
+    let mut remaining: u64 = weights.iter().copied().fold(0, u64::saturating_add);
+    let mut free = area;
     let mut i = 0;
-    while i < orden.len() && libre.w > 0 && libre.h > 0 && restante > 0 {
-        // La tira se apoya en el lado CORTO, que es lo que mantiene los
-        // rectángulos cuadrados en vez de convertirlos en tiras finas.
-        let horizontal = libre.w <= libre.h;
-        let largo = if horizontal { libre.w } else { libre.h };
-        let grueso_total = if horizontal { libre.h } else { libre.w };
+    while i < order.len() && free.w > 0 && free.h > 0 && remaining > 0 {
+        // The strip is laid along the SHORT side, which is what keeps the
+        // rectangles square instead of turning them into thin strips.
+        let horizontal = free.w <= free.h;
+        let length = if horizontal { free.w } else { free.h };
+        let total_thickness = if horizontal { free.h } else { free.w };
 
-        // Cuántos hijos entran en esta tira: se crece mientras el peor aspecto
-        // mejore (algoritmo squarified clásico).
-        let mut fin = i;
-        let mut suma: u64 = 0;
-        let mut mejor = f64::INFINITY;
-        while fin < orden.len() {
-            let nueva = suma.saturating_add(pesos[orden[fin]]);
-            if nueva == 0 {
-                fin += 1;
+        // How many children fit in this strip: it grows while the worst
+        // aspect ratio improves (the classic squarified algorithm).
+        let mut end = i;
+        let mut sum: u64 = 0;
+        let mut best = f64::INFINITY;
+        while end < order.len() {
+            let new_sum = sum.saturating_add(weights[order[end]]);
+            if new_sum == 0 {
+                end += 1;
                 continue;
             }
-            let peor = peor_aspecto(&orden[i..=fin], pesos, nueva, restante, largo, grueso_total);
-            if peor > mejor {
+            let worst = worst_aspect(
+                &order[i..=end],
+                weights,
+                new_sum,
+                remaining,
+                length,
+                total_thickness,
+            );
+            if worst > best {
                 break;
             }
-            mejor = peor;
-            suma = nueva;
-            fin += 1;
+            best = worst;
+            sum = new_sum;
+            end += 1;
         }
-        if fin == i {
-            // Nada mensurable queda: el resto son ceros y se van sin pintar.
+        if end == i {
+            // Nothing measurable is left: the rest are zeros and go
+            // unpainted.
             break;
         }
 
-        // El grosor de la tira, al menos una celda si lleva algo.
-        let grueso = celdas_de(proporcion(suma, restante), grueso_total).clamp(1, grueso_total);
+        // The strip's thickness, at least one cell if it carries anything.
+        let thickness =
+            cells_of(fraction(sum, remaining), total_thickness).clamp(1, total_thickness);
 
-        // Y dentro, el largo se reparte con acumulador de resto.
-        let mut usado: u16 = 0;
-        for (n, idx) in orden[i..fin].iter().enumerate() {
-            let ultimo = n == fin - i - 1;
-            let trozo = if ultimo {
-                largo - usado
+        // And inside it, the length is distributed with a remainder
+        // accumulator.
+        let mut used: u16 = 0;
+        for (n, idx) in order[i..end].iter().enumerate() {
+            let last = n == end - i - 1;
+            let chunk = if last {
+                length - used
             } else {
-                celdas_de(proporcion(pesos[*idx], suma), largo).min(largo - usado)
+                cells_of(fraction(weights[*idx], sum), length).min(length - used)
             };
             out[*idx] = if horizontal {
                 Rect {
-                    x: libre.x + usado,
-                    y: libre.y,
-                    w: trozo,
-                    h: grueso,
+                    x: free.x + used,
+                    y: free.y,
+                    w: chunk,
+                    h: thickness,
                 }
             } else {
                 Rect {
-                    x: libre.x,
-                    y: libre.y + usado,
-                    w: grueso,
-                    h: trozo,
+                    x: free.x,
+                    y: free.y + used,
+                    w: thickness,
+                    h: chunk,
                 }
             };
-            usado += trozo;
+            used += chunk;
         }
 
-        // Lo que queda libre, para la siguiente tira.
+        // What is left free, for the next strip.
         if horizontal {
-            libre.y += grueso;
-            libre.h -= grueso;
+            free.y += thickness;
+            free.h -= thickness;
         } else {
-            libre.x += grueso;
-            libre.w -= grueso;
+            free.x += thickness;
+            free.w -= thickness;
         }
-        restante = restante.saturating_sub(suma);
-        i = fin;
+        remaining = remaining.saturating_sub(sum);
+        i = end;
     }
     out
 }
 
-/// Qué fracción del total es `parte`, para repartir área.
+/// What fraction of the total `part` is, to distribute area.
 ///
-/// Un treemap reparte PROPORCIONES, y eso pide coma flotante. La pérdida de
-/// precisión de `u64` a `f64` empieza por encima de 2^53 bytes: un directorio
-/// de nueve petabytes perdería un byte de precisión al calcular cuántas celdas
-/// le tocan. Es un DIBUJO — los tamaños que se enseñan salen del informe, que
-/// sigue siendo entero.
+/// A treemap distributes PROPORTIONS, and that calls for floating point.
+/// `u64` to `f64`'s precision loss starts above 2^53 bytes: a nine-petabyte
+/// directory would lose one byte of precision computing how many cells it
+/// gets. It is a DRAWING — the sizes that are shown come from the report,
+/// which stays an integer.
 #[expect(
     clippy::cast_precision_loss,
-    reason = "reparto de área: el error empieza en 2^53 bytes y solo afecta a cuántas celdas se pintan, no al tamaño que se dice"
+    reason = "area distribution: the error starts at 2^53 bytes and only affects how many cells get painted, not the size that is stated"
 )]
-fn proporcion(parte: u64, total: u64) -> f64 {
+fn fraction(part: u64, total: u64) -> f64 {
     if total == 0 {
         return 0.0;
     }
-    parte as f64 / total as f64
+    part as f64 / total as f64
 }
 
-/// Cuántas celdas de `total` le tocan a una proporción.
+/// How many cells of `total` a proportion gets.
 ///
-/// El resultado está acotado por construcción: `prop` sale de [`proporcion`] y
-/// vive en `[0, 1]`, así que el producto cae en `[0, total]` y el `clamp` lo
-/// deja ahí aunque un redondeo se pase por uno. Ni trunca lo que importa ni
-/// puede salir negativo.
+/// The result is bounded by construction: `prop` comes from [`fraction`] and
+/// lives in `[0, 1]`, so the product falls in `[0, total]` and the `clamp`
+/// keeps it there even if a rounding overshoots by one. It neither truncates
+/// what matters nor can come out negative.
 #[expect(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
-    reason = "producto de una proporción en [0,1] por un número de celdas, y además acotado: el resultado cabe en u16 y no es negativo"
+    reason = "product of a proportion in [0,1] by a number of cells, and bounded besides: the result fits in u16 and is not negative"
 )]
-fn celdas_de(prop: f64, total: u16) -> u16 {
+fn cells_of(prop: f64, total: u16) -> u16 {
     let n = (prop * f64::from(total)).round();
     n.clamp(0.0, f64::from(total)) as u16
 }
 
-/// El peor aspecto (lado largo / lado corto) de una tira candidata.
-fn peor_aspecto(
-    tira: &[usize],
-    pesos: &[u64],
-    suma: u64,
-    restante: u64,
-    largo: u16,
-    grueso_total: u16,
+/// The worst aspect ratio (long side / short side) of a candidate strip.
+fn worst_aspect(
+    strip: &[usize],
+    weights: &[u64],
+    sum: u64,
+    remaining: u64,
+    length: u16,
+    total_thickness: u16,
 ) -> f64 {
-    let grueso = (proporcion(suma, restante) * f64::from(grueso_total)).max(1.0);
-    let mut peor: f64 = 1.0;
-    for idx in tira {
-        let p = pesos[*idx];
+    let thickness = (fraction(sum, remaining) * f64::from(total_thickness)).max(1.0);
+    let mut worst: f64 = 1.0;
+    for idx in strip {
+        let p = weights[*idx];
         if p == 0 {
             continue;
         }
-        let trozo = proporcion(p, suma) * f64::from(largo);
-        if trozo <= 0.0 {
+        let chunk = fraction(p, sum) * f64::from(length);
+        if chunk <= 0.0 {
             continue;
         }
-        let a = (grueso / trozo).max(trozo / grueso);
-        peor = peor.max(a);
+        let a = (thickness / chunk).max(chunk / thickness);
+        worst = worst.max(a);
     }
-    peor
+    worst
 }
 
-/// El mapa entero: rectángulos pintados y pulsables.
+/// The whole map: painted, clickable rectangles.
 ///
-/// `cols`/`rows` son las celdas del hueco. Un hueco de cero no pinta nada, que
-/// es distinto de pintar un marco vacío.
+/// `cols`/`rows` are the slot's cells. A zero-sized slot paints nothing,
+/// which is different from painting an empty frame.
 ///
-/// # Las zonas se PRESUPUESTAN
-/// Un rectángulo de varias filas se describe con un [`Hit`] por fila (es el
-/// contrato del marco), así que un mapa alto se come el tope de zonas enseguida
-/// — y [`StyledFrame::clamped`] las tira EN SILENCIO. Se reparten de mayor a
-/// menor: si no caben todas, las que se quedan sin zona son las de los
-/// rectángulos pequeños, no las del grande que alguien está intentando pulsar.
+/// # Zones are BUDGETED
+/// A multi-row rectangle is described with one [`Hit`] per row (the frame's
+/// contract), so a tall map eats through the zone cap fast — and
+/// [`StyledFrame::clamped`] drops the excess SILENTLY. They are handed out
+/// from largest to smallest: if not all of them fit, the ones left without a
+/// zone are the small rectangles', never the big one somebody is trying to
+/// click.
 #[must_use]
 pub fn squarify(children: &[DirUsageChild], cols: u16, rows: u16) -> StyledFrame {
     if cols == 0 || rows == 0 || children.is_empty() {
         return StyledFrame::default();
     }
-    let pesos: Vec<u64> = children.iter().map(|c| c.bytes).collect();
-    let rects = repartir(
-        &pesos,
+    let weights: Vec<u64> = children.iter().map(|c| c.bytes).collect();
+    let rects = distribute(
+        &weights,
         Rect {
             x: 0,
             y: 0,
@@ -337,91 +355,92 @@ pub fn squarify(children: &[DirUsageChild], cols: u16, rows: u16) -> StyledFrame
         },
     );
 
-    // Rejilla de dueños: quién ocupa cada celda. Es lo que convierte
-    // rectángulos en líneas sin que dos se pisen.
-    let ancho = usize::from(cols);
-    let alto = usize::from(rows);
-    let mut duenyo: Vec<Option<usize>> = vec![None; ancho * alto];
+    // Owner grid: who occupies each cell. This is what turns rectangles into
+    // lines without two of them stepping on each other.
+    let width = usize::from(cols);
+    let height = usize::from(rows);
+    let mut owner: Vec<Option<usize>> = vec![None; width * height];
     for (i, r) in rects.iter().enumerate() {
         for y in r.y..r.y.saturating_add(r.h) {
             for x in r.x..r.x.saturating_add(r.w) {
                 let (xi, yi) = (usize::from(x), usize::from(y));
-                if xi < ancho && yi < alto {
-                    duenyo[yi * ancho + xi] = Some(i);
+                if xi < width && yi < height {
+                    owner[yi * width + xi] = Some(i);
                 }
             }
         }
     }
 
-    let etiquetas: Vec<String> = children.iter().map(etiqueta_de).collect();
-    let lines = pintar(&duenyo, children, &etiquetas, &rects, ancho, alto);
-    let hits = zonas(children, &rects);
+    let labels: Vec<String> = children.iter().map(label_of).collect();
+    let lines = paint(&owner, children, &labels, &rects, width, height);
+    let hits = hit_zones(children, &rects);
     StyledFrame::clamped(lines, hits)
 }
 
-/// La etiqueta de un hijo: su nombre enmascarado y lo que ocupa.
-fn etiqueta_de(child: &DirUsageChild) -> String {
-    let (nombre, _masked) = crate::display_name(child.name.as_bytes());
-    let tam = crate::human_bytes_short(child.bytes);
+/// A child's label: its masked name and what it takes up.
+fn label_of(child: &DirUsageChild) -> String {
+    let (name, _masked) = crate::display_name(child.name.as_bytes());
+    let size = crate::human_bytes_short(child.bytes);
     if child.partial {
-        format!("{nombre} {CASI}{tam}")
+        format!("{name} {PARTIAL_MARK}{size}")
     } else {
-        format!("{nombre} {tam}")
+        format!("{name} {size}")
     }
 }
 
-/// Las líneas del marco, una por fila de celdas.
-fn pintar(
-    duenyo: &[Option<usize>],
+/// The frame's lines, one per row of cells.
+fn paint(
+    owner: &[Option<usize>],
     children: &[DirUsageChild],
-    etiquetas: &[String],
+    labels: &[String],
     rects: &[Rect],
-    ancho: usize,
-    alto: usize,
+    width: usize,
+    height: usize,
 ) -> Vec<Vec<StyledSpan>> {
-    let mut lines = Vec::with_capacity(alto);
-    for y in 0..alto {
-        let mut fila: Vec<StyledSpan> = Vec::new();
+    let mut lines = Vec::with_capacity(height);
+    for y in 0..height {
+        let mut row: Vec<StyledSpan> = Vec::new();
         let mut x = 0;
-        while x < ancho {
-            let actual = duenyo[y * ancho + x];
-            let mut fin = x;
-            while fin < ancho && duenyo[y * ancho + fin] == actual {
-                fin += 1;
+        while x < width {
+            let current = owner[y * width + x];
+            let mut end = x;
+            while end < width && owner[y * width + end] == current {
+                end += 1;
             }
-            let celdas = fin - x;
-            let texto = match actual {
-                // La etiqueta se pinta en la PRIMERA fila del rectángulo y solo
-                // si cabe entera: media etiqueta nombra un fichero que no es.
+            let cell_count = end - x;
+            let text = match current {
+                // The label is painted on the rectangle's FIRST row and only
+                // if it fits whole: half a label names a file that is not
+                // there.
                 Some(i)
-                    if usize::from(rects[i].y) == y && etiquetas[i].chars().count() <= celdas =>
+                    if usize::from(rects[i].y) == y && labels[i].chars().count() <= cell_count =>
                 {
-                    let mut t = etiquetas[i].clone();
-                    t.push_str(&" ".repeat(celdas - etiquetas[i].chars().count()));
+                    let mut t = labels[i].clone();
+                    t.push_str(&" ".repeat(cell_count - labels[i].chars().count()));
                     t
                 }
-                // Sin etiqueta que quepa, o sin dueño: celdas en blanco. Es el
-                // MISMO resultado a propósito — el color ya dice de quién es el
-                // rectángulo, y una relleno distinto sería ruido.
-                _ => " ".repeat(celdas),
+                // No label fits, or no owner: blank cells. It is the SAME
+                // result on purpose — the color already says whose rectangle
+                // it is, and a different fill would be noise.
+                _ => " ".repeat(cell_count),
             };
-            fila.push(StyledSpan {
-                text: texto,
-                role: actual.map(|i| clase_de(&children[i]).role()),
+            row.push(StyledSpan {
+                text,
+                role: current.map(|i| class_of(&children[i]).role()),
                 fg: None,
                 bg: None,
             });
-            x = fin;
+            x = end;
         }
-        lines.push(fila);
+        lines.push(row);
     }
     lines
 }
 
-/// Las zonas pulsables, de mayor a menor y hasta el tope.
-fn zonas(children: &[DirUsageChild], rects: &[Rect]) -> Vec<Hit> {
-    let mut orden: Vec<usize> = (0..children.len()).collect();
-    orden.sort_by(|a, b| {
+/// The clickable zones, from largest to smallest and up to the cap.
+fn hit_zones(children: &[DirUsageChild], rects: &[Rect]) -> Vec<Hit> {
+    let mut order: Vec<usize> = (0..children.len()).collect();
+    order.sort_by(|a, b| {
         children[*b].bytes.cmp(&children[*a].bytes).then_with(|| {
             children[*a]
                 .name
@@ -430,7 +449,7 @@ fn zonas(children: &[DirUsageChild], rects: &[Rect]) -> Vec<Hit> {
         })
     });
     let mut hits = Vec::new();
-    for i in orden {
+    for i in order {
         let r = rects[i];
         if r.w == 0 || r.h == 0 {
             continue;
@@ -443,9 +462,9 @@ fn zonas(children: &[DirUsageChild], rects: &[Rect]) -> Vec<Hit> {
                 row: y,
                 col: r.x,
                 width: r.w,
-                command: COMANDO.to_owned(),
-                // Forma WIRE: es la que se puede volver a convertir en el
-                // nombre exacto. Lo que se PINTA está enmascarado y no sirve.
+                command: COMMAND.to_owned(),
+                // WIRE form: it is the one that can be turned back into the
+                // exact name. What is PAINTED is masked and is no use here.
                 arg: Some(children[i].name.to_wire()),
             });
         }
@@ -453,101 +472,102 @@ fn zonas(children: &[DirUsageChild], rects: &[Rect]) -> Vec<Hit> {
     hits
 }
 
-/// Cuántos mapas se recuerdan a la vez.
+/// How many maps are remembered at once.
 ///
-/// Cada uno llega hasta [`DIR_USAGE_MAX_CHILDREN`] hijos, así que esto no es
-/// una cuenta de conveniencia: sin tope, pasear por un árbol grande se va
-/// guardando cada directorio visitado durante toda la sesión.
+/// Each one reaches up to [`DIR_USAGE_MAX_CHILDREN`] children, so this is not
+/// a convenience count: with no cap, walking a large tree keeps saving every
+/// directory visited for the whole session.
 ///
 /// [`DIR_USAGE_MAX_CHILDREN`]: norte_proto::methods::DIR_USAGE_MAX_CHILDREN
 pub const CACHE_MAX: usize = 8;
 
-/// Lo que ya se midió, para que volver a un directorio pinte en el acto.
+/// What has already been measured, so returning to a directory paints
+/// instantly.
 ///
-/// Medir un árbol cuesta segundos o minutos; volver al padre y bajar otra vez
-/// es lo más normal del mundo. Esto guarda el ÚLTIMO informe de cada
-/// directorio, acotado a [`CACHE_MAX`].
+/// Measuring a tree costs seconds or minutes; going back to the parent and
+/// down again is the most ordinary thing in the world. This keeps the LAST
+/// report of each directory, bounded by [`CACHE_MAX`].
 ///
-/// # El ping no dice QUÉ cambió, así que se olvida todo
-/// La vigilancia de directorios entrega un `()` por ráfaga —«algo cambió en
-/// algún directorio vigilado»— y nada más. Con eso NO se puede invalidar una
-/// entrada concreta: elegir una sería inventarse cuál, y dejar las demás sería
-/// pintar tamaños viejos como si fueran de ahora. Por eso [`Self::invalidar`]
-/// lo tira todo, y [`Self::olvidar`] existe aparte para quien SÍ sabe qué
-/// directorio tocó.
+/// # The ping does not say WHAT changed, so everything is forgotten
+/// Directory watching delivers a `()` per burst —"something changed in some
+/// watched directory"— and nothing more. With that, ONE specific entry
+/// cannot be invalidated: picking one would be making up which, and leaving
+/// the rest would paint old sizes as if they were current. That is why
+/// [`Self::invalidate`] drops everything, and [`Self::forget`] exists
+/// separately for whoever DOES know which directory was touched.
 ///
-/// # Vive en el consumidor, no en un singleton
-/// Igual que `Tree`: el hueco que enseña el mapa tiene el suyo. Un mapa es de
-/// quien lo mira, y dos huecos enseñando directorios distintos no comparten
-/// nada. La REGLA —cuándo se olvida— es lo que los dos frontends comparten;
-/// el cableado lo pone cada uno desde su propio camino de refresco, porque hoy
-/// solo el terminal tiene vigilancia nativa.
+/// # Lives in the consumer, not in a singleton
+/// Same as `Tree`: the slot that shows the map has its own. A map belongs to
+/// whoever is looking at it, and two slots showing different directories
+/// share nothing. The RULE —when it is forgotten— is what both frontends
+/// share; the wiring is set up by each one from its own refresh path,
+/// because today only the terminal has native watching.
 #[derive(Debug, Default)]
 pub struct Cache {
-    /// Del más reciente al más viejo. `Vec` y no un mapa: son ocho.
-    entradas: Vec<(
+    /// From most recent to oldest. A `Vec` and not a map: there are eight.
+    entries: Vec<(
         norte_proto::VPath,
         norte_proto::methods::FsDirUsageReportResult,
     )>,
 }
 
 impl Cache {
-    /// Una caché vacía.
+    /// An empty cache.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// El último mapa medido de `dir`, si se recuerda.
+    /// The last map measured for `dir`, if it is remembered.
     #[must_use]
     pub fn get(
         &self,
         dir: &norte_proto::VPath,
     ) -> Option<&norte_proto::methods::FsDirUsageReportResult> {
-        self.entradas.iter().find(|(p, _)| p == dir).map(|(_, r)| r)
+        self.entries.iter().find(|(p, _)| p == dir).map(|(_, r)| r)
     }
 
-    /// Guarda —o reemplaza— el mapa de `dir`, y desaloja el más viejo si hace
-    /// falta.
+    /// Saves —or replaces— `dir`'s map, evicting the oldest one if needed.
     ///
-    /// **Un informe incompleto no se guarda.** Un mapa cancelado a media
-    /// medición es un fragmento correcto para enseñar AHORA, con su aviso
-    /// delante; guardarlo lo convertiría en la respuesta que se pinta mañana
-    /// sin aviso ninguno.
+    /// **An incomplete report is not saved.** A map cancelled mid-measurement
+    /// is a correct fragment to show NOW, with its warning in front; saving
+    /// it would turn it into the answer painted tomorrow with no warning at
+    /// all.
     pub fn put(
         &mut self,
         dir: norte_proto::VPath,
-        informe: norte_proto::methods::FsDirUsageReportResult,
+        report: norte_proto::methods::FsDirUsageReportResult,
     ) {
-        if !informe.listed {
+        if !report.listed {
             return;
         }
-        self.entradas.retain(|(p, _)| *p != dir);
-        self.entradas.insert(0, (dir, informe));
-        self.entradas.truncate(CACHE_MAX);
+        self.entries.retain(|(p, _)| *p != dir);
+        self.entries.insert(0, (dir, report));
+        self.entries.truncate(CACHE_MAX);
     }
 
-    /// Olvida TODO: es la respuesta a un aviso que no dice qué cambió.
-    pub fn invalidar(&mut self) {
-        self.entradas.clear();
+    /// Forgets EVERYTHING: this is the answer to a warning that does not say
+    /// what changed.
+    pub fn invalidate(&mut self) {
+        self.entries.clear();
     }
 
-    /// Olvida un directorio concreto, para quien sí sabe cuál tocó (una copia,
-    /// un borrado, un renombrado hecho desde aquí).
-    pub fn olvidar(&mut self, dir: &norte_proto::VPath) {
-        self.entradas.retain(|(p, _)| p != dir);
+    /// Forgets one specific directory, for whoever DOES know which one was
+    /// touched (a copy, a delete, a rename done from here).
+    pub fn forget(&mut self, dir: &norte_proto::VPath) {
+        self.entries.retain(|(p, _)| p != dir);
     }
 
-    /// Cuántos mapas se recuerdan.
+    /// How many maps are remembered.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.entradas.len()
+        self.entries.len()
     }
 
-    /// ¿No se recuerda ninguno?
+    /// Is none remembered?
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.entradas.is_empty()
+        self.entries.is_empty()
     }
 }
 
@@ -559,11 +579,11 @@ mod tests {
     use norte_proto::methods::FsDirUsageReportResult;
 
     fn vp(wire: &str) -> VPath {
-        VPath::parse(wire).expect("wire válido")
+        VPath::parse(wire).expect("valid wire")
     }
 
-    /// Un informe TERMINADO de `bytes` bytes.
-    fn informe(bytes: u64) -> FsDirUsageReportResult {
+    /// A FINISHED report of `bytes` bytes.
+    fn report(bytes: u64) -> FsDirUsageReportResult {
         FsDirUsageReportResult {
             total_bytes: bytes,
             listed: true,
@@ -571,97 +591,95 @@ mod tests {
         }
     }
 
-    /// Lo medido se recuerda: volver a un directorio pinta en el acto en vez de
-    /// volver a recorrer un árbol que tardó minutos.
+    /// What was measured is remembered: returning to a directory paints
+    /// instantly instead of walking a tree that took minutes all over again.
     #[test]
-    fn lo_medido_se_recuerda_por_directorio() {
+    fn what_was_measured_is_remembered_per_directory() {
         let mut cache = Cache::new();
-        cache.put(vp("mem:///a"), informe(10));
-        cache.put(vp("mem:///b"), informe(20));
+        cache.put(vp("mem:///a"), report(10));
+        cache.put(vp("mem:///b"), report(20));
         assert_eq!(cache.get(&vp("mem:///a")).map(|r| r.total_bytes), Some(10));
         assert_eq!(cache.get(&vp("mem:///b")).map(|r| r.total_bytes), Some(20));
         assert!(cache.get(&vp("mem:///c")).is_none());
     }
 
-    /// Un mapa que no llegó a listarse NO se guarda.
+    /// A map that never got listed is NOT saved.
     ///
-    /// Como fragmento que se enseña ahora, con su aviso delante, es correcto.
-    /// Guardado, se convierte en la respuesta que se pinta mañana sin aviso
-    /// ninguno: un directorio que parece tener un hijo porque la medición se
-    /// cortó en el primero.
+    /// As a fragment shown now, with its warning in front, it is correct.
+    /// Saved, it turns into the answer painted tomorrow with no warning at
+    /// all: a directory that looks like it has one child because the
+    /// measurement was cut off at the first one.
     #[test]
-    fn un_mapa_a_medias_no_se_guarda() {
+    fn a_half_done_map_is_not_saved() {
         let mut cache = Cache::new();
-        let fragmento = FsDirUsageReportResult {
+        let fragment = FsDirUsageReportResult {
             total_bytes: 5,
             listed: false,
             ..FsDirUsageReportResult::default()
         };
-        cache.put(vp("mem:///a"), fragmento);
-        assert!(
-            cache.is_empty(),
-            "un fragmento no es una respuesta guardable"
-        );
+        cache.put(vp("mem:///a"), fragment);
+        assert!(cache.is_empty(), "a fragment is not a savable answer");
     }
 
-    /// El aviso de la vigilancia no dice QUÉ cambió, así que se olvida todo.
+    /// The watch's warning does not say WHAT changed, so everything is
+    /// forgotten.
     ///
-    /// Invalidar solo una entrada sería inventarse cuál; dejar las demás sería
-    /// pintar tamaños viejos como si fueran de ahora.
+    /// Invalidating only one entry would be making up which; leaving the
+    /// rest would paint old sizes as if they were current.
     #[test]
-    fn un_aviso_sin_nombre_lo_olvida_todo() {
+    fn an_unnamed_warning_forgets_everything() {
         let mut cache = Cache::new();
-        cache.put(vp("mem:///a"), informe(10));
-        cache.put(vp("mem:///b"), informe(20));
-        cache.invalidar();
+        cache.put(vp("mem:///a"), report(10));
+        cache.put(vp("mem:///b"), report(20));
+        cache.invalidate();
         assert!(cache.is_empty());
     }
 
-    /// Quien SÍ sabe qué directorio tocó olvida solo ese.
+    /// Whoever DOES know what changed forgets only that.
     #[test]
-    fn quien_sabe_que_cambio_olvida_solo_eso() {
+    fn whoever_knows_what_changed_forgets_only_that() {
         let mut cache = Cache::new();
-        cache.put(vp("mem:///a"), informe(10));
-        cache.put(vp("mem:///b"), informe(20));
-        cache.olvidar(&vp("mem:///a"));
+        cache.put(vp("mem:///a"), report(10));
+        cache.put(vp("mem:///b"), report(20));
+        cache.forget(&vp("mem:///a"));
         assert!(cache.get(&vp("mem:///a")).is_none());
         assert_eq!(cache.get(&vp("mem:///b")).map(|r| r.total_bytes), Some(20));
     }
 
-    /// El tope desaloja al más viejo: pasear por un árbol grande no puede ir
-    /// guardando cada directorio de la sesión, con hasta 4096 hijos cada uno.
+    /// The cap evicts the oldest: walking a large tree cannot keep saving
+    /// every directory of the session, with up to 4096 children each.
     #[test]
-    fn el_tope_desaloja_al_mas_viejo() {
+    fn the_cap_evicts_the_oldest() {
         let mut cache = Cache::new();
         for i in 0..CACHE_MAX + 3 {
-            cache.put(vp(&format!("mem:///d{i}")), informe(i as u64));
+            cache.put(vp(&format!("mem:///d{i}")), report(i as u64));
         }
         assert_eq!(cache.len(), CACHE_MAX);
         assert!(
             cache.get(&vp("mem:///d0")).is_none(),
-            "el primero que entró ya no está"
+            "the first one in is no longer there"
         );
         assert!(
             cache
                 .get(&vp(&format!("mem:///d{}", CACHE_MAX + 2)))
                 .is_some(),
-            "el último sí"
+            "the last one is"
         );
     }
 
-    /// Volver a medir el mismo directorio REEMPLAZA, no duplica.
+    /// Measuring the same directory again REPLACES, it does not duplicate.
     #[test]
-    fn volver_a_medir_reemplaza() {
+    fn measuring_again_replaces() {
         let mut cache = Cache::new();
-        cache.put(vp("mem:///a"), informe(10));
-        cache.put(vp("mem:///a"), informe(99));
+        cache.put(vp("mem:///a"), report(10));
+        cache.put(vp("mem:///a"), report(99));
         assert_eq!(cache.len(), 1);
         assert_eq!(cache.get(&vp("mem:///a")).map(|r| r.total_bytes), Some(99));
     }
 
-    fn hijo(name: &str, bytes: u64, kind: EntryKind) -> DirUsageChild {
+    fn child(name: &str, bytes: u64, kind: EntryKind) -> DirUsageChild {
         DirUsageChild {
-            name: Segment::new(name.as_bytes().to_vec()).expect("segmento"),
+            name: Segment::new(name.as_bytes().to_vec()).expect("segment"),
             kind,
             bytes,
             entries: 1,
@@ -669,41 +687,42 @@ mod tests {
         }
     }
 
-    /// El reparto CUBRE el área y no se solapa: cada celda tiene un dueño y
-    /// solo uno. Es la propiedad de la que cuelga todo lo demás — un mapa con
-    /// huecos miente sobre el espacio libre, y uno con solapes hace que un clic
-    /// abra el fichero de al lado.
+    /// The layout COVERS the area and does not overlap: every cell has an
+    /// owner and only one. This is the property everything else hangs from
+    /// — a map with gaps lies about the free space, and one with overlaps
+    /// makes a click open the wrong file.
     #[test]
-    fn los_rectangulos_cubren_el_area_y_no_se_solapan() {
-        let pesos = [40_u64, 30, 20, 10];
+    fn the_rectangles_cover_the_area_and_do_not_overlap() {
+        let weights = [40_u64, 30, 20, 10];
         let area = Rect {
             x: 0,
             y: 0,
             w: 20,
             h: 10,
         };
-        let rects = repartir(&pesos, area);
-        let mut celdas = [0_u8; 20 * 10];
+        let rects = distribute(&weights, area);
+        let mut cells = [0_u8; 20 * 10];
         for r in &rects {
             for y in r.y..r.y + r.h {
                 for x in r.x..r.x + r.w {
-                    celdas[usize::from(y) * 20 + usize::from(x)] += 1;
+                    cells[usize::from(y) * 20 + usize::from(x)] += 1;
                 }
             }
         }
         assert!(
-            celdas.iter().all(|c| *c == 1),
-            "cada celda, exactamente un dueño"
+            cells.iter().all(|c| *c == 1),
+            "each cell, exactly one owner"
         );
     }
 
-    /// Un hijo que no llega a una celda NO se pinta, y tampoco desaparece de la
-    /// lista: sigue teniendo su sitio en el reparto, con área cero.
+    /// A tiny child that does not reach a whole cell is NOT painted, and it
+    /// does not disappear from the list either: it still has its place in
+    /// the layout, with zero area.
     #[test]
-    fn un_hijo_diminuto_no_se_pinta_pero_sigue_contando() {
-        let pesos = [1_000_000_u64, 1];
-        let rects = repartir(
-            &pesos,
+    fn a_tiny_child_is_not_painted_but_still_counts() {
+        let weights = [1_000_000_u64, 1];
+        let rects = distribute(
+            &weights,
             Rect {
                 x: 0,
                 y: 0,
@@ -711,17 +730,18 @@ mod tests {
                 h: 2,
             },
         );
-        assert_eq!(rects.len(), 2, "el reparto no pierde hijos");
-        assert!(rects[0].celdas() > 0, "el grande se pinta");
+        assert_eq!(rects.len(), 2, "the layout loses no children");
+        assert!(rects[0].cells() > 0, "the big one is painted");
     }
 
-    /// El `arg` de una zona es la forma WIRE del nombre, no lo que se pinta.
+    /// A zone's `arg` is the name's WIRE form, not what is painted.
     ///
-    /// Lo pintado pasa por el enmascarado y un nombre con bytes de control se
-    /// ve como `�`: navegar con eso abriría otro fichero, o ninguno.
+    /// What is painted goes through the masking and a name with control
+    /// bytes shows up as `�`: navigating with that would open another file,
+    /// or none.
     #[test]
-    fn la_zona_lleva_el_nombre_en_forma_wire() {
-        let name = Segment::new(vec![0xFF, b'.', b'r', b's']).expect("segmento");
+    fn the_zone_carries_the_name_in_wire_form() {
+        let name = Segment::new(vec![0xFF, b'.', b'r', b's']).expect("segment");
         let child = DirUsageChild {
             name: name.clone(),
             kind: EntryKind::File,
@@ -730,93 +750,99 @@ mod tests {
             partial: false,
         };
         let frame = squarify(&[child], 20, 3);
-        let hit = frame.hits.first().expect("una zona");
+        let hit = frame.hits.first().expect("a zone");
         assert_eq!(hit.command, "nav.enter");
         assert_eq!(hit.arg.as_deref(), Some(name.to_wire().as_str()));
         assert_eq!(
             Segment::parse_wire(hit.arg.as_deref().expect("arg")).expect("round trip"),
             name,
-            "el arg vuelve a ser los bytes exactos"
+            "the arg comes back as the exact bytes"
         );
     }
 
-    /// Lo pintado va ENMASCARADO, aunque el `arg` conserve los bytes.
+    /// What is painted is MASKED, even though the `arg` keeps the bytes.
     #[test]
-    fn lo_pintado_esta_enmascarado() {
+    fn what_is_painted_is_masked() {
         let child = DirUsageChild {
-            name: Segment::new(vec![0xFF, b'.', b'r', b's']).expect("segmento"),
+            name: Segment::new(vec![0xFF, b'.', b'r', b's']).expect("segment"),
             kind: EntryKind::File,
             bytes: 100,
             entries: 1,
             partial: false,
         };
         let frame = squarify(&[child], 20, 3);
-        let pintado: String = frame
+        let painted: String = frame
             .lines
             .iter()
             .flat_map(|l| l.iter().map(|s| s.text.clone()))
             .collect();
-        assert!(pintado.contains('\u{FFFD}'), "el byte crudo no se pinta");
-        assert!(!pintado.as_bytes().contains(&0xFF));
+        assert!(painted.contains('\u{FFFD}'), "the raw byte is not painted");
+        assert!(!painted.as_bytes().contains(&0xFF));
     }
 
-    /// Un rectángulo incompleto se marca, y la marca va en la ETIQUETA: el
-    /// color dice de qué clase es el fichero, y las dos cosas tienen que caber.
+    /// An incomplete rectangle is marked, and the mark goes in the LABEL:
+    /// the color says what class the file is, and both things have to fit.
     #[test]
-    fn un_hijo_parcial_se_marca_sin_perder_su_clase() {
-        let mut child = hijo("fotos", 1000, EntryKind::Dir);
+    fn a_partial_child_is_marked_without_losing_its_class() {
+        let mut child = child("photos", 1000, EntryKind::Dir);
         child.partial = true;
         let frame = squarify(&[child], 30, 3);
-        let pintado: String = frame
+        let painted: String = frame
             .lines
             .iter()
             .flat_map(|l| l.iter().map(|s| s.text.clone()))
             .collect();
-        assert!(pintado.contains(CASI), "dice que es una cota inferior");
+        assert!(
+            painted.contains(PARTIAL_MARK),
+            "it says it is a lower bound"
+        );
         assert_eq!(
             frame.lines[0][0].role,
             Some(Role::Info),
-            "y sigue pintándose como el directorio que es"
+            "and it still paints as the directory it is"
         );
     }
 
-    /// Las zonas no pasan del tope, y las que sobreviven son las de los
-    /// rectángulos GRANDES: `clamped` tira el exceso en silencio, así que
-    /// quedarse sin zona tiene que tocarle al que nadie va a pulsar.
+    /// Zones do not exceed the cap, and the ones that survive are the BIG
+    /// rectangles': `clamped` drops the excess silently, so losing a zone
+    /// has to fall on the one nobody is going to click.
     #[test]
-    fn las_zonas_se_presupuestan_de_mayor_a_menor() {
-        let hijos: Vec<DirUsageChild> = (0..60_u64)
-            .map(|i| hijo(&format!("f{i}"), (60 - i) * 1000, EntryKind::File))
+    fn zones_are_budgeted_from_largest_to_smallest() {
+        let children: Vec<DirUsageChild> = (0..60_u64)
+            .map(|i| child(&format!("f{i}"), (60 - i) * 1000, EntryKind::File))
             .collect();
-        let frame = squarify(&hijos, 40, 30);
-        assert!(frame.hits.len() <= MAX_HITS, "no se pasa del tope");
-        let mayor = frame.hits.iter().any(|h| h.arg.as_deref() == Some("f0"));
-        assert!(mayor, "el mayor conserva su zona");
+        let frame = squarify(&children, 40, 30);
+        assert!(frame.hits.len() <= MAX_HITS, "it does not exceed the cap");
+        let biggest = frame.hits.iter().any(|h| h.arg.as_deref() == Some("f0"));
+        assert!(biggest, "the biggest one keeps its zone");
     }
 
-    /// La clase sale del tipo y de la extensión, leída en BYTES.
+    /// The class comes from the type and the extension, read in BYTES.
     #[test]
-    fn la_clase_se_lee_de_los_bytes_del_nombre() {
-        assert_eq!(clase_de(&hijo("x", 1, EntryKind::Dir)), Clase::Directorio);
+    fn the_class_is_read_from_the_names_bytes() {
         assert_eq!(
-            clase_de(&hijo("main.RS", 1, EntryKind::File)),
-            Clase::Codigo
+            class_of(&child("x", 1, EntryKind::Dir)),
+            ChildClass::Directory
         );
         assert_eq!(
-            clase_de(&hijo("a.tar", 1, EntryKind::File)),
-            Clase::Comprimido
+            class_of(&child("main.RS", 1, EntryKind::File)),
+            ChildClass::Code
         );
         assert_eq!(
-            clase_de(&hijo("sin_extension", 1, EntryKind::File)),
-            Clase::Otro
+            class_of(&child("a.tar", 1, EntryKind::File)),
+            ChildClass::Archive
+        );
+        assert_eq!(
+            class_of(&child("no_extension", 1, EntryKind::File)),
+            ChildClass::Other
         );
     }
 
-    /// Un hueco de cero no pinta nada — que no es lo mismo que pintar un marco
-    /// vacío.
+    /// A zero-sized slot paints nothing — which is not the same as painting
+    /// an empty frame.
     #[test]
-    fn un_hueco_de_cero_no_pinta_nada() {
-        let frame = squarify(&[hijo("a", 10, EntryKind::File)], 0, 5);
+    fn a_zero_sized_slot_paints_nothing() {
+        let frame = squarify(&[child("a", 10, EntryKind::File)], 0, 5);
         assert!(frame.lines.is_empty());
         assert!(frame.hits.is_empty());
     }

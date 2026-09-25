@@ -2,16 +2,16 @@ use super::*;
 
 // ---------- fs.rename_batch{,_plan,_report} (0.36.0, ADR 0042) ----------
 
-/// Un nombre base desde sus BYTES: lo que un `String` no habría podido llevar.
+/// A basename from its BYTES: what a `String` could not have carried.
 pub(super) fn sg(bytes: &[u8]) -> norte_proto::Segment {
-    norte_proto::Segment::new(bytes.to_vec()).expect("segment de test")
+    norte_proto::Segment::new(bytes.to_vec()).expect("test segment")
 }
 
-/// Contenido completo de un fichero del `MemProvider` (para comprobar QUÉ
-/// fichero acabó bajo cada nombre tras una permutación).
+/// A `MemProvider` file's full content (to check WHICH file ended up under
+/// each name after a permutation).
 pub(super) async fn read_all(mem: &MemProvider, wire: &str) -> Vec<u8> {
     use futures::StreamExt;
-    let mut stream = mem.read(&vp(wire), None).await.expect("read abre");
+    let mut stream = mem.read(&vp(wire), None).await.expect("read opens");
     let mut out = Vec::new();
     while let Some(chunk) = stream.next().await {
         out.extend_from_slice(&chunk.expect("chunk"));
@@ -26,13 +26,14 @@ pub(super) fn pair(from: &[u8], to: &[u8]) -> methods::RenamePair {
     }
 }
 
-/// El plan cruza el socket con un nombre NO-UTF8 intacto, y NO muta nada.
+/// The plan crosses the socket with a NON-UTF8 name intact, and mutates
+/// nothing.
 ///
-/// El nombre viaja percent-encoded (`caf%FF.txt`) y vuelve como los mismos
-/// bytes: es el caso que motiva que `RenamePair` lleve `Segment` y no `String`
-/// (regla dura 1).
+/// The name travels percent-encoded (`caf%FF.txt`) and comes back as the
+/// same bytes: it is the case that motivates `RenamePair` carrying a
+/// `Segment` and not a `String` (hard rule 1).
 #[tokio::test]
-async fn rename_batch_plan_responde_por_el_socket() {
+async fn rename_batch_plan_answers_over_the_socket() {
     let d = spawn_daemon(None).await;
     let hostile = b"caf\xff.txt";
     write_file(&d.mem, "mem:///caf%FF.txt", b"x").await;
@@ -55,11 +56,11 @@ async fn rename_batch_plan_responde_por_el_socket() {
     assert_eq!(
         plan.steps[0].from.as_bytes(),
         hostile,
-        "los bytes hostiles sobreviven al viaje de ida y vuelta",
+        "the hostile bytes survive the round trip",
     );
     assert_eq!(plan.steps[0].to.as_bytes(), b"cafe.txt");
     assert_eq!(plan.plan_hash.to_string().len(), 64);
-    // Planificar NO muta: el fichero sigue con su nombre.
+    // Planning does NOT mutate: the file keeps its name.
     assert!(d.mem.stat(&vp("mem:///caf%FF.txt")).await.is_ok());
     assert!(matches!(
         d.mem.stat(&vp("mem:///cafe.txt")).await,
@@ -67,10 +68,10 @@ async fn rename_batch_plan_responde_por_el_socket() {
     ));
 }
 
-/// La DERIVA se rehúsa con la categoría accionable (`plan_stale`), no con un
-/// error interno genérico: el humano sabe que tiene que volver a planificar.
+/// DRIFT is refused with the actionable category (`plan_stale`), not a
+/// generic internal error: the human knows it has to plan again.
 #[tokio::test]
-async fn rename_batch_con_hash_rancio_es_plan_stale() {
+async fn rename_batch_with_a_stale_hash_is_plan_stale() {
     let d = spawn_daemon(None).await;
     write_file(&d.mem, "mem:///a", b"1").await;
     let c = connected_client(&d).await;
@@ -87,8 +88,8 @@ async fn rename_batch_con_hash_rancio_es_plan_stale() {
         .expect("plan");
     assert!(plan.executable);
 
-    // El destino aparece A ESPALDAS del daemon: el re-plan lo ve ocupado y
-    // concluye otra cosa.
+    // The destination appears BEHIND the daemon's back: the re-plan sees it
+    // occupied and concludes something else.
     write_file(&d.mem, "mem:///z", b"intruso").await;
 
     let err = c
@@ -101,24 +102,25 @@ async fn rename_batch_con_hash_rancio_es_plan_stale() {
             },
         )
         .await
-        .expect_err("el plan aprobado ya no vale");
+        .expect_err("the approved plan is no longer valid");
     match err {
         ClientError::Rpc(rpc) => assert!(
             matches!(rpc.data, Some(Error::PlanStale)),
-            "PlanStale, fue {:?}",
+            "PlanStale, was {:?}",
             rpc.data
         ),
-        other => panic!("esperaba Rpc, fue {other:?}"),
+        other => panic!("expected Rpc, got {other:?}"),
     }
-    // Y no tocó nada.
+    // And it touched nothing.
     assert!(d.mem.stat(&vp("mem:///a")).await.is_ok());
     assert_eq!(read_all(&d.mem, "mem:///z").await, b"intruso");
 }
 
-/// El tope de parejas se impone EN LA FRONTERA y RECHAZA (no recorta): un lote
-/// recortado ejecutaría un plan distinto del pedido. Los DOS métodos.
+/// The pair cap is enforced AT THE BOUNDARY and REJECTS (does not trim): a
+/// trimmed batch would run a plan different from the one requested. BOTH
+/// methods.
 #[tokio::test]
-async fn rename_batch_por_encima_del_tope_de_parejas_es_invalid_params() {
+async fn rename_batch_above_the_pair_cap_is_invalid_params() {
     let d = spawn_daemon(None).await;
     let c = connected_client(&d).await;
     let too_many: Vec<methods::RenamePair> = (0..=methods::FS_RENAME_BATCH_MAX_PAIRS)
@@ -135,14 +137,14 @@ async fn rename_batch_por_encima_del_tope_de_parejas_es_invalid_params() {
             },
         )
         .await
-        .expect_err("por encima del tope");
+        .expect_err("above the cap");
     match err {
         ClientError::Rpc(rpc) => assert!(
             matches!(rpc.data, Some(Error::InvalidPath)),
-            "InvalidPath, fue {:?}",
+            "InvalidPath, was {:?}",
             rpc.data
         ),
-        other => panic!("esperaba Rpc, fue {other:?}"),
+        other => panic!("expected Rpc, got {other:?}"),
     }
 
     let err = c
@@ -155,18 +157,18 @@ async fn rename_batch_por_encima_del_tope_de_parejas_es_invalid_params() {
             },
         )
         .await
-        .expect_err("por encima del tope");
+        .expect_err("above the cap");
     match err {
         ClientError::Rpc(rpc) => assert!(
             matches!(rpc.data, Some(Error::InvalidPath)),
-            "InvalidPath, fue {:?}",
+            "InvalidPath, was {:?}",
             rpc.data
         ),
-        other => panic!("esperaba Rpc, fue {other:?}"),
+        other => panic!("expected Rpc, got {other:?}"),
     }
 
-    // Justo en el tope NO es error de params (muere por otra cosa o pasa): el
-    // rechazo es del EXCESO, no del tamaño legal.
+    // Right at the cap it is NOT a params error (it dies for another reason,
+    // or passes): the rejection is about the EXCESS, not the legal size.
     let at_cap: Vec<methods::RenamePair> = (0..methods::FS_RENAME_BATCH_MAX_PAIRS)
         .map(|i| pair(format!("f{i}").as_bytes(), format!("g{i}").as_bytes()))
         .collect();
@@ -179,6 +181,6 @@ async fn rename_batch_por_encima_del_tope_de_parejas_es_invalid_params() {
             },
         )
         .await
-        .expect("el tope exacto se planifica");
-    assert!(!plan.executable, "ninguno de esos ficheros existe");
+        .expect("the exact cap gets planned");
+    assert!(!plan.executable, "none of those files exist");
 }

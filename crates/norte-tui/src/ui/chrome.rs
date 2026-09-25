@@ -1,11 +1,11 @@
-//! El cromo de la ventana: la barra de menú con sus zonas de clic, y la tira de
-//! pestañas de cada lado.
+//! The window's chrome: the menu bar with its click zones, and each side's
+//! tab strip.
 //!
-//! Las dos siguen la misma forma: una función MIDE las zonas (`menu_zones`,
-//! `tab_zones`) y otra PINTA, porque quien enruta un clic necesita la geometría
-//! sin haber pintado nada.
+//! Both follow the same shape: one function MEASURES the zones (`menu_zones`,
+//! `tab_zones`) and another PAINTS, because whoever routes a click needs the
+//! geometry without having painted anything.
 
-use norte_frontend::panelbar::cifra;
+use norte_frontend::panelbar::figure;
 use norte_theme::Role;
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -17,57 +17,57 @@ use super::geometry::{pane_rects, tab_strip_for};
 use crate::app::App;
 use crate::theme::TuiTheme;
 
-/// Las pestañas de un pane: el título de cada una y cuál está activa.
+/// A pane's tabs: each one's title and which is active.
 ///
-/// Los títulos vienen ya SANEADOS (`display_name`): el nombre de un directorio
-/// hostil dentro de una pestaña es tan hostil como dentro de un listado.
+/// Titles arrive already SANITIZED (`display_name`): a hostile directory
+/// name inside a tab is as hostile as inside a listing.
 pub struct TabStrip {
-    /// Título de cada pestaña, en orden.
+    /// Each tab's title, in order.
     pub titles: Vec<String>,
-    /// Cuál está activa.
+    /// Which one is active.
     pub active: usize,
 }
 
-/// Lo que se puede pulsar en la barra de menús.
+/// What can be clicked in the menu bar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MenuHit {
-    /// Un título: lo abre.
+    /// A title: opens it.
     Title(usize),
-    /// Un elemento del menú abierto: lo ejecuta.
+    /// An item of the open menu: runs it.
     Item(usize),
 }
 
-/// Una zona pulsable de la barra de menús.
+/// A clickable zone of the menu bar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MenuZone {
-    /// Fila.
+    /// Row.
     pub row: u16,
-    /// Primera columna, inclusive.
+    /// First column, inclusive.
     pub x0: u16,
-    /// Última columna, inclusive.
+    /// Last column, inclusive.
     pub x1: u16,
-    /// Qué hace pulsarla.
+    /// What clicking it does.
     pub hit: MenuHit,
 }
 
-/// La geometría del menú: títulos con su rango y el desplegable con el suyo.
+/// The menu's geometry: titles with their range and the dropdown with its
+/// own.
 ///
-/// UNA fuente para lo que se pinta y lo que se pulsa, por lo mismo que la
-/// barra de pestañas: medirlo dos veces es cómo un click abre el menú de al
-/// lado.
+/// ONE source for what is painted and what is clicked, for the same reason
+/// as the tab bar: measuring it twice is how a click opens the menu next
+/// door.
 pub(crate) struct MenuGeom {
-    /// La caja del desplegable.
+    /// The dropdown's box.
     drop: Rect,
-    /// Las líneas del desplegable, de arriba abajo: órdenes y separaciones.
+    /// The dropdown's lines, top to bottom: commands and separators.
     lines: Vec<MenuLine>,
 }
 
-/// Una línea del desplegable.
+/// A line of the dropdown.
 pub(crate) enum MenuLine {
-    /// El principio de una sección: una raya, con su rótulo si lo tiene.
+    /// The start of a section: a rule, with its label if it has one.
     Section(Option<String>),
-    /// Una orden: su índice en la lista plana del menú, etiqueta, tecla y
-    /// papel.
+    /// A command: its index in the menu's flat list, label, chord and role.
     Item {
         index: usize,
         label: String,
@@ -76,46 +76,46 @@ pub(crate) enum MenuLine {
     },
 }
 
-/// La marca de una orden que hace un modelo de IA.
+/// The mark for a command an AI model performs.
 pub(crate) const AI_MARK: &str = " ✦";
 
-/// Tope de ancho del desplegable: un menú es una lista de etiquetas cortas,
-/// así que uno ancho es siempre un síntoma. El tope evita que una traducción
-/// larga vuelva a tapar la pantalla, que es lo que pasaba cuando las etiquetas
-/// eran las frases de `help-cmd-*`.
+/// Width cap of the dropdown: a menu is a list of short labels, so a wide
+/// one is always a symptom. The cap keeps a long translation from covering
+/// the screen again, which is what happened when the labels were
+/// `help-cmd-*`'s sentences.
 pub(crate) const DROP_MAX: u16 = 44;
 
-/// Calcula la geometría del menú abierto, o `None` si no hay ninguno.
-/// Los títulos de la barra y dónde cae cada uno, ABIERTO O NO.
+/// Computes the open menu's geometry, or `None` if there is none.
+/// The bar's titles and where each lands, OPEN OR NOT.
 ///
-/// Separado de [`menu_geom`] porque aquello sale por `?` en cuanto el menú
-/// está cerrado —tiene que hacerlo: sin menú abierto no hay desplegable que
-/// medir— y con la barra fijada eso dejaba la fila en blanco. Los títulos no
-/// dependen de que haya nada abierto; el desplegable sí.
+/// Separated from [`menu_geom`] because that one returns via `?` as soon as
+/// the menu is closed — it has to: with no menu open there is no dropdown to
+/// measure — and with the bar pinned that left the row blank. Titles do not
+/// depend on anything being open; the dropdown does.
 pub(crate) fn menu_titles(area: Rect) -> Vec<(String, u16, u16)> {
-    let nombres: Vec<String> = norte_frontend::menu::MENUS
+    let names: Vec<String> = norte_frontend::menu::MENUS
         .iter()
         .map(|m| norte_i18n::t(m.title))
         .collect();
-    // Dos espacios entre títulos cuando caben, uno cuando no. Con diez menús
-    // la barra en castellano mide 82 columnas a doble espacio, y en un
-    // terminal de 80 el último —«Ayuda», justo el que un lector nuevo busca—
-    // desaparecía. Apretar la barra antes que amputarla: lo que tiene que
-    // decir es qué menús HAY.
-    let ancho = |sep: usize| -> usize {
-        nombres
+    // Two spaces between titles when they fit, one when they do not. With
+    // ten menus the bar in Spanish measures 82 columns at double spacing,
+    // and on an 80-wide terminal the last one — "Help", exactly the one a
+    // new reader looks for — vanished. Tightening the bar beats amputating
+    // it: what it has to say is which menus THERE ARE.
+    let width = |sep: usize| -> usize {
+        names
             .iter()
             .map(|n| UnicodeWidthStr::width(n.as_str()) + sep)
             .sum()
     };
-    let holgado = ancho(2) <= usize::from(area.width);
+    let roomy = width(2) <= usize::from(area.width);
     let mut titles = Vec::new();
     let mut x = area.x;
-    for nombre in nombres {
-        let label = if holgado {
-            format!(" {nombre} ")
+    for name in names {
+        let label = if roomy {
+            format!(" {name} ")
         } else {
-            format!(" {nombre}")
+            format!(" {name}")
         };
         let w = u16::try_from(UnicodeWidthStr::width(label.as_str())).unwrap_or(0);
         let x1 = x.saturating_add(w).saturating_sub(1);
@@ -131,16 +131,16 @@ pub(crate) fn menu_geom(app: &App, area: Rect) -> Option<MenuGeom> {
     let m = norte_frontend::menu::MENUS.get(st.menu())?;
     let mut lines: Vec<MenuLine> = Vec::new();
     for (index, id) in m.items().enumerate() {
-        if let Some(titulo) = m.section_at(index) {
-            lines.push(MenuLine::Section(titulo.map(norte_i18n::t)));
+        if let Some(title) = m.section_at(index) {
+            lines.push(MenuLine::Section(title.map(norte_i18n::t)));
         }
-        // La etiqueta es CORTA y propia (`menu-item-*`), no la frase de
-        // `help-cmd-*`: esa es una descripción, y usarla hacía el
-        // desplegable de setenta columnas y tapaba los dos paneles. Lo
-        // destapó pilotar la TUI en tmux, no la suite.
+        // The label is SHORT and its own (`menu-item-*`), not the
+        // `help-cmd-*` sentence: that is a description, and using it made
+        // the dropdown seventy columns wide and covered both panes. Piloting
+        // the TUI in tmux uncovered it, not the suite.
         let label = norte_i18n::t(&format!("menu-item-{}", id.replace('.', "-")));
-        // Sin tecla, nada: una raya en cada orden sin atajo era ruido que
-        // se leía como «deshabilitada».
+        // With no key, nothing: a dash on every command with no shortcut
+        // was noise that read as "disabled."
         let chord = app
             .palette_rows
             .iter()
@@ -153,31 +153,31 @@ pub(crate) fn menu_geom(app: &App, area: Rect) -> Option<MenuGeom> {
             role: norte_frontend::menu::role(id),
         });
     }
-    // Un menú que no cabe en alto pierde antes las rayas que las órdenes:
-    // primero las separaciones sin nombre, luego los rótulos. Las órdenes se
-    // quedan todas, que es para lo que está el menú.
-    let alto_max = usize::from(area.height.saturating_sub(3));
-    if lines.len() > alto_max {
+    // A menu that does not fit in height drops the rules before the
+    // commands: first the unnamed separators, then the labels. The commands
+    // all stay, which is what the menu is for.
+    let max_height = usize::from(area.height.saturating_sub(3));
+    if lines.len() > max_height {
         lines.retain(|l| !matches!(l, MenuLine::Section(None)));
     }
-    if lines.len() > alto_max {
+    if lines.len() > max_height {
         lines.retain(|l| matches!(l, MenuLine::Item { .. }));
     }
-    // Ancho: la etiqueta más larga, su tecla, dos bordes y el hueco entre
-    // ambas columnas; y el rótulo de sección más largo con sus rayas.
+    // Width: the longest label, its key, two borders and the gap between
+    // both columns; and the longest section label with its rules.
     let text_width = lines
         .iter()
         .map(|l| match l {
             MenuLine::Item {
                 label, chord, role, ..
             } => {
-                let marca = if *role == norte_frontend::menu::ItemRole::Ai {
+                let mark = if *role == norte_frontend::menu::ItemRole::Ai {
                     UnicodeWidthStr::width(AI_MARK)
                 } else {
                     0
                 };
                 UnicodeWidthStr::width(label.as_str())
-                    + marca
+                    + mark
                     + UnicodeWidthStr::width(chord.as_str())
                     + 3
             }
@@ -208,15 +208,15 @@ pub(crate) fn menu_geom(app: &App, area: Rect) -> Option<MenuGeom> {
     })
 }
 
-/// Las zonas pulsables de la barra de menús.
+/// The menu bar's clickable zones.
 #[must_use]
 pub fn menu_zones(app: &App, area: Rect) -> Vec<MenuZone> {
-    // Los TÍTULOS son pulsables siempre que la barra esté en pantalla, esté
-    // el menú abierto o no. Salían de `menu_geom`, que devuelve `None` con el
-    // menú cerrado —tiene que hacerlo, sin nada abierto no hay desplegable que
-    // medir— así que con la barra fijada se veía y no se podía pulsar: una
-    // barra que existe para que encuentres el menú y en la que el clic no
-    // hace nada.
+    // TITLES are clickable whenever the bar is on screen, whether the menu
+    // is open or not. They used to come from `menu_geom`, which returns
+    // `None` with the menu closed — it has to, with nothing open there is
+    // no dropdown to measure — so with the bar pinned it was visible and
+    // could not be clicked: a bar that exists so you can find the menu, on
+    // which the click does nothing.
     let mut out: Vec<MenuZone> = if app.menu_bar || app.menu.is_some() {
         menu_titles(area)
             .iter()
@@ -234,18 +234,18 @@ pub fn menu_zones(app: &App, area: Rect) -> Vec<MenuZone> {
     let Some(g) = menu_geom(app, area) else {
         return out;
     };
-    // Por LÍNEA pintada, no por orden: con secciones, la orden `i` ya no
-    // cae en la fila `i`, y una raya no es pulsable.
-    for (fila, linea) in g.lines.iter().enumerate() {
+    // By PAINTED LINE, not by command: with sections, command `i` no longer
+    // lands on row `i`, and a rule is not clickable.
+    for (row, line) in g.lines.iter().enumerate() {
         let row = g
             .drop
             .y
             .saturating_add(1)
-            .saturating_add(u16::try_from(fila).unwrap_or(0));
+            .saturating_add(u16::try_from(row).unwrap_or(0));
         if row >= g.drop.y.saturating_add(g.drop.height).saturating_sub(1) {
             break;
         }
-        let MenuLine::Item { index, .. } = linea else {
+        let MenuLine::Item { index, .. } = line else {
             continue;
         };
         out.push(MenuZone {
@@ -258,50 +258,50 @@ pub fn menu_zones(app: &App, area: Rect) -> Vec<MenuZone> {
     out
 }
 
-/// Dónde caen los botones de disposición (ADR 0133): en el borde DERECHO de
-/// la barra de menús, si caben enteros sin pisar un título. UNA medida para
-/// el pintado y para el ratón.
+/// Where the layout buttons land (ADR 0133): on the RIGHT edge of the menu
+/// bar, if they fit whole without stepping on a title. ONE measurement for
+/// painting and for the mouse.
 pub(crate) fn layout_button_cells(
     app: &App,
     area: Rect,
 ) -> Vec<(u16, &'static norte_frontend::layoutbar::LayoutButton)> {
-    // Con un overlay delante o el menú desplegado, ni se pintan ni se
-    // pulsan: los overlays no tapan la fila 0, así que pintados quedarían a
-    // la vista y muertos (revisión de ADR 0133; la barra de paneles tuvo el
-    // mismo BLOCKER). La comprobación vive AQUÍ para que pintado y ratón no
-    // puedan separarse.
+    // With an overlay in front or the menu dropped, they are neither
+    // painted nor clickable: overlays do not cover row 0, so painted they
+    // would be visible and dead (ADR 0133 review; the panel bar had the
+    // same BLOCKER). The check lives HERE so painting and the mouse cannot
+    // drift apart.
     if !app.menu_bar || app.menu.is_some() || crate::mouse::overlay_open(app) {
         return Vec::new();
     }
-    let usado: usize = menu_titles(area)
+    let used: usize = menu_titles(area)
         .iter()
         .filter(|(_, _, x1)| *x1 < area.x.saturating_add(area.width))
         .map(|(l, _, _)| UnicodeWidthStr::width(l.as_str()))
         .sum();
-    // Un título vale más que un botón: lo que queda, menos un espacio de
-    // separación, decide cuáles caben enteros — y el primero en ceder es
-    // girar (ADR 0138), la regla compartida.
-    let botones =
-        norte_frontend::layoutbar::fitting(usize::from(area.width).saturating_sub(usado + 1));
-    let total = norte_frontend::layoutbar::width_of(&botones);
+    // A title is worth more than a button: what is left, minus a
+    // separating space, decides which fit whole — and the first to yield is
+    // rotate (ADR 0138), the shared rule.
+    let buttons =
+        norte_frontend::layoutbar::fitting(usize::from(area.width).saturating_sub(used + 1));
+    let total = norte_frontend::layoutbar::width_of(&buttons);
     let mut x = area
         .x
         .saturating_add(area.width)
         .saturating_sub(u16::try_from(total).unwrap_or(u16::MAX));
     let mut out = Vec::new();
-    for b in botones {
+    for b in buttons {
         out.push((x, b));
         x = x.saturating_add(u16::try_from(b.glyph.len() + 1).unwrap_or(u16::MAX));
     }
     out
 }
 
-/// Pinta los botones de disposición (ADR 0133) en el borde derecho de `bar`
-/// y devuelve cuántas celdas reservan, separación incluida — lo que la
-/// pista del atajo del menú tiene que dejarles.
+/// Paints the layout buttons (ADR 0133) on `bar`'s right edge and returns
+/// how many cells they reserve, separator included — what the menu
+/// shortcut's hint has to leave them.
 fn draw_layout_buttons(frame: &mut Frame<'_>, app: &App, area: Rect, bar: Rect) -> u16 {
-    let botones = layout_button_cells(app, area);
-    for (x, b) in &botones {
+    let buttons = layout_button_cells(app, area);
+    for (x, b) in &buttons {
         let w = u16::try_from(b.glyph.len()).unwrap_or(0);
         frame.render_widget(
             Paragraph::new(ratatui::text::Line::styled(
@@ -315,18 +315,18 @@ fn draw_layout_buttons(frame: &mut Frame<'_>, app: &App, area: Rect, bar: Rect) 
             },
         );
     }
-    let pintados: Vec<&norte_frontend::layoutbar::LayoutButton> =
-        botones.iter().map(|(_, b)| *b).collect();
-    if pintados.is_empty() {
+    let painted: Vec<&norte_frontend::layoutbar::LayoutButton> =
+        buttons.iter().map(|(_, b)| *b).collect();
+    if painted.is_empty() {
         0
     } else {
-        u16::try_from(norte_frontend::layoutbar::width_of(&pintados) + 1).unwrap_or(u16::MAX)
+        u16::try_from(norte_frontend::layoutbar::width_of(&painted) + 1).unwrap_or(u16::MAX)
     }
 }
 
-/// Las zonas de los botones de disposición: las MISMAS celdas que se
-/// pintan (`layout_button_cells`), que ya callan con un overlay delante o
-/// el menú abierto.
+/// The layout buttons' zones: the SAME cells that get painted
+/// (`layout_button_cells`), which already stays quiet with an overlay in
+/// front or the menu open.
 #[must_use]
 pub fn layout_zones(app: &App, area: Rect) -> Vec<PanelZone> {
     layout_button_cells(app, area)
@@ -340,36 +340,36 @@ pub fn layout_zones(app: &App, area: Rect) -> Vec<PanelZone> {
         .collect()
 }
 
-/// Una casilla pulsable de la barra de paneles (#324).
+/// A clickable box in the panel bar (#324).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PanelZone {
-    /// Fila.
+    /// Row.
     pub row: u16,
-    /// Primera columna, inclusive.
+    /// First column, inclusive.
     pub x0: u16,
-    /// Última columna, inclusive.
+    /// Last column, inclusive.
     pub x1: u16,
-    /// El comando que dispara pulsarla.
+    /// The command clicking it triggers.
     pub command: String,
 }
 
-/// Una celda pulsable de la barra de teclas (spec 2026-09-10).
+/// A clickable cell of the key bar (spec 2026-09-10).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyZone {
-    /// Fila.
+    /// Row.
     pub row: u16,
-    /// Primera columna, inclusive.
+    /// First column, inclusive.
     pub x0: u16,
-    /// Última columna, inclusive.
+    /// Last column, inclusive.
     pub x1: u16,
-    /// La tecla de función, `1`..=`10`.
+    /// The function key, `1`..=`10`.
     pub key: u8,
 }
 
-/// Las celdas pulsables de la barra de teclas: el MISMO reparto que el
-/// pintado (`keybar::layout`), así que miden lo mismo. Una celda vacía —una
-/// tecla que no ata nada en esta pantalla— no es una zona: pulsarla no
-/// haría nada, y una zona que no hace nada confunde.
+/// The key bar's clickable cells: the SAME layout as the painting
+/// (`keybar::layout`), so they measure the same thing. An empty cell — a key
+/// bound to nothing on this screen — is not a zone: clicking it would do
+/// nothing, and a zone that does nothing is confusing.
 #[must_use]
 pub fn key_zones(app: &App, area: Rect) -> Vec<KeyZone> {
     let Some(bar) = crate::ui::geometry::key_bar_area(app, area) else {
@@ -392,22 +392,22 @@ pub fn key_zones(app: &App, area: Rect) -> Vec<KeyZone> {
         .collect()
 }
 
-/// Pinta la barra de teclas: diez celdas con el número y lo que hace cada
-/// tecla en la pantalla que tiene el teclado. El número lleva el estilo de
-/// la barra de estado y la etiqueta el de selección invertido, como en mc:
-/// dos tonos para que se lean como diez botones y no como una frase.
+/// Paints the key bar: ten cells with the number and what each key does on
+/// the screen that has the keyboard. The number carries the status bar's
+/// style and the label the inverted selection one, as in mc: two tones so
+/// they read as ten buttons and not as a sentence.
 pub(crate) fn draw_key_bar(frame: &mut Frame<'_>, app: &App) {
     let Some(bar) = crate::ui::geometry::key_bar_area(app, frame.area()) else {
         return;
     };
     clear_themed(frame, bar, &app.theme);
     let cells = app.key_bar_cells();
-    let numero = app.theme.role(Role::Regular);
-    // `Button` y no `StatusBar` (2026-09-11): en el tema de serie la barra de
-    // estado y el cursor llevan el mismo par de colores, y la fila de teclas
-    // encima de la de estado se leía como una sola franja. Una celda de esta
-    // barra es un botón, y ese rol ya existe para los de los modales.
-    let etiqueta = app.theme.role(Role::Button);
+    let number_style = app.theme.role(Role::Regular);
+    // `Button` and not `StatusBar` (2026-09-11): in the stock theme the
+    // status bar and the cursor carry the same color pair, and the key row
+    // above the status one read as a single stripe. A cell of this bar is a
+    // button, and that role already exists for the ones in modals.
+    let label_style = app.theme.role(Role::Button);
     let mut spans: Vec<ratatui::text::Span<'static>> = Vec::new();
     for ((_, w), c) in norte_frontend::keybar::layout(usize::from(bar.width))
         .into_iter()
@@ -416,36 +416,36 @@ pub(crate) fn draw_key_bar(frame: &mut Frame<'_>, app: &App) {
         let text = norte_frontend::keybar::cell_text(c, w);
         let n = c.key.to_string().len();
         let (num, label) = text.split_at(n);
-        spans.push(ratatui::text::Span::styled(num.to_owned(), numero));
-        // Una celda vacía se queda con el fondo base: una tecla que no hace
-        // nada no se pinta como un botón.
-        let estilo = if c.command.is_some() {
-            etiqueta
+        spans.push(ratatui::text::Span::styled(num.to_owned(), number_style));
+        // An empty cell keeps the base background: a key that does nothing
+        // is not painted as a button.
+        let style = if c.command.is_some() {
+            label_style
         } else {
-            numero
+            number_style
         };
-        spans.push(ratatui::text::Span::styled(label.to_owned(), estilo));
+        spans.push(ratatui::text::Span::styled(label.to_owned(), style));
     }
     frame.render_widget(Paragraph::new(ratatui::text::Line::from(spans)), bar);
 }
 
-/// ¿Se pintan los NOMBRES de los paneles? `[ui] panel_bar_style = "names"`
-/// y que quepan todos en la fila; si no, letras (spec 2026-09-10). Una sola
-/// respuesta para el pintado y para las zonas del ratón, que así miden lo
-/// mismo.
-fn con_nombres(app: &App, buttons: &[norte_frontend::panelbar::PanelButton], bar: Rect) -> bool {
+/// Are panel NAMES painted? `[ui] panel_bar_style = "names"` and all of them
+/// have to fit the row; otherwise, letters (spec 2026-09-10). One single
+/// answer for painting and for the mouse zones, so they measure the same
+/// thing.
+fn shows_names(app: &App, buttons: &[norte_frontend::panelbar::PanelButton], bar: Rect) -> bool {
     app.chrome.panel_bar_style().shows_names()
         && norte_frontend::panelbar::names_fit(buttons, usize::from(bar.width))
 }
 
-/// El kind del panel que tiene el teclado, si lo tiene un panel.
+/// The kind of the panel that has the keyboard, if a panel has it.
 ///
-/// Traduce `KeyOwner` a kind: la barra razona en kinds porque es lo que el
-/// registro le da, y `KeyOwner` es cosa de la TUI.
-/// El préstamo es de `app` y no `'static` desde la fase 3: el kind de un panel
-/// de plugin es `plugin:<id>:<kind>`, una cadena que vive en el árbol y no se
-/// conoce al compilar.
-fn kind_con_teclado(app: &App) -> Option<&str> {
+/// Translates `KeyOwner` to a kind: the bar reasons in kinds because that
+/// is what the registry gives it, and `KeyOwner` is the TUI's own business.
+/// The borrow is from `app` and not `'static` since phase 3: a plugin
+/// panel's kind is `plugin:<id>:<kind>`, a string that lives in the tree and
+/// is not known at compile time.
+fn kind_with_keyboard(app: &App) -> Option<&str> {
     match app.key_owner() {
         crate::app::KeyOwner::Panes => None,
         crate::app::KeyOwner::Places => Some("places"),
@@ -456,35 +456,39 @@ fn kind_con_teclado(app: &App) -> Option<&str> {
         crate::app::KeyOwner::DiskMap => Some(crate::diskmap::KIND),
         crate::app::KeyOwner::Timeline => Some(crate::timeline::KIND),
         crate::app::KeyOwner::Terminal => Some(crate::termpanel::KIND),
-        // Cuál es lo dice el reparto, no el enum: hay como mucho uno visible.
+        // Which one it is is said by the layout, not the enum: there is at
+        // most one visible.
         crate::app::KeyOwner::Panel => app.panel_kind(),
     }
 }
 
-/// Los botones de la barra de paneles, con lo que sabe la `App`.
+/// The panel bar's buttons, with what the `App` knows.
 ///
-/// Vive aquí y no en `norte-frontend` la parte de RECOGER el estado; el QUÉ y
-/// el ORDEN los decide `panelbar::buttons`, compartido con la ventana.
+/// The COLLECTING-the-state part lives here and not in `norte-frontend`;
+/// WHAT they are and their ORDER are decided by `panelbar::buttons`, shared
+/// with the window.
 #[must_use]
 pub fn panel_buttons(app: &App, area: Rect) -> Vec<norte_frontend::panelbar::PanelButton> {
-    // Del REPARTO y no del árbol (#331). Fue en dos pasos, y los dos hacían
-    // falta: #329 cambió `slot_ids` por `visible_slot_ids` porque un hueco
-    // detrás de una pestaña inactiva existe y no se ve; pero `visible_slot_ids`
-    // contesta qué pestaña está activa, no qué CABE. Un panel cuya pestaña sí
-    // está activa y que el reparto descarta por falta de sitio se seguía
-    // pintando abierto. Las colocaciones son literalmente lo que se pinta, así
-    // que cubren las dos preguntas de una vez.
+    // From the LAYOUT and not the tree (#331). It took two steps, and both
+    // were needed: #329 swapped `slot_ids` for `visible_slot_ids` because a
+    // slot behind an inactive tab exists and is not seen; but
+    // `visible_slot_ids` answers which tab is active, not what FITS. A
+    // panel whose tab IS active and that the layout drops for lack of room
+    // was still painted as open. Placements are literally what gets
+    // painted, so they cover both questions at once.
     //
-    // Cuesta un reparto más por frame, como `tab_zones` y sus vecinas: es el
-    // precio de que el cromo diga la verdad sobre un cuerpo que ya se repartió.
+    // Costs one more layout per frame, like `tab_zones` and its neighbors:
+    // it is the price of chrome telling the truth about a body that already
+    // got laid out.
     let res = crate::ui::geometry::resolved_frame(app, area);
-    // En ORDEN DE PANTALLA, que es el de los botones: de arriba abajo y, a
-    // igual altura, de izquierda a derecha. El reparto los da en el orden en
-    // que recorre el árbol, que casi siempre coincide y no lo garantiza; y
-    // «casi siempre» en una fila que se aprende con el dedo no vale.
-    let mut colocados: Vec<_> = res.placements.iter().collect();
-    colocados.sort_by_key(|(_, r)| (r.y, r.x));
-    let abiertos: Vec<&str> = colocados
+    // In SCREEN ORDER, which is the buttons' order: top to bottom and, at
+    // the same height, left to right. The layout gives them in the order it
+    // walks the tree, which almost always matches and does not guarantee
+    // it; and "almost always" in a row learned by finger is not good
+    // enough.
+    let mut placed: Vec<_> = res.placements.iter().collect();
+    placed.sort_by_key(|(_, r)| (r.y, r.x));
+    let open: Vec<&str> = placed
         .iter()
         .map(|(id, _)| *id)
         .filter_map(|id| {
@@ -493,69 +497,71 @@ pub fn panel_buttons(app: &App, area: Rect) -> Vec<norte_frontend::panelbar::Pan
                 .map(norte_frontend::layout::KindId::as_str)
         })
         .collect();
-    let foco = kind_con_teclado(app);
-    // Novedad: el registro con errores sin ver, y procesos con tareas vivas.
-    // Es lo que hace mirar la barra en vez de recordarla.
-    let mut novedad: Vec<(&str, u32)> = Vec::new();
-    // Con el panel A LA VISTA ya las estás viendo: la marca sobra, y además le
-    // robaba el estilo al estado mientras durase la tarea. Mismo criterio que
-    // el registro, aquí abajo.
+    let focus = kind_with_keyboard(app);
+    // News: the log with unseen errors, and processes with live tasks. It
+    // is what makes someone look at the bar instead of just remembering it.
+    let mut attention: Vec<(&str, u32)> = Vec::new();
+    // With the panel IN VIEW you are already seeing it: the mark is
+    // redundant, and on top of that it stole the style from the status bar
+    // for as long as the task lasted. Same criterion as the log, right
+    // below.
     //
-    // «A la vista» y no «existente» desde #329: escondido en una pestaña no lo
-    // estás viendo, y callar la marca ahí apagaba el aviso justo en el caso en
-    // que sirve para algo. Se pregunta a `abiertos`, que ya ES el conjunto de
-    // kinds visibles: recorrer el árbol otra vez costaría dos pasadas más por
-    // frame y dejaría la misma pregunta contestada en dos sitios, libres de
-    // separarse.
-    if !abiertos.contains(&crate::processes::KIND) {
-        novedad.push((crate::processes::KIND, cifra(app.board.rows().len())));
+    // "In view" and not "existing" since #329: hidden in a tab you are not
+    // seeing it, and silencing the mark there muted the warning right in
+    // the case where it is useful. It asks `open`, which already IS the set
+    // of visible kinds: walking the tree again would cost two more passes
+    // per frame and would leave the same question answered in two places,
+    // free to drift apart.
+    if !open.contains(&crate::processes::KIND) {
+        attention.push((crate::processes::KIND, figure(app.board.rows().len())));
     }
-    // Errores o avisos en el registro que el lector no ha tenido delante: si
-    // el panel está abierto ya los está viendo, así que la marca sobra.
+    // Errors or warnings in the log the reader has not had in front of
+    // them: if the panel is open they are already seeing them, so the mark
+    // is redundant.
     //
-    // `count_at_or_above` y no `snapshot`: esto corre en cada frame, y clonar
-    // el anillo entero para contar avisos eran dos mil líneas con sus dos
-    // `String` cada una, diez veces por segundo.
-    if !abiertos.contains(&crate::logview::KIND)
+    // `count_at_or_above` and not `snapshot`: this runs every frame, and
+    // cloning the whole ring to count warnings was two thousand lines with
+    // their two `String`s each, ten times a second.
+    if !open.contains(&crate::logview::KIND)
         && let Some(r) = app.log_ring.as_ref()
     {
-        novedad.push((
+        attention.push((
             crate::logview::KIND,
-            cifra(r.count_at_or_above(norte_config::logline::LogLevel::Warn)),
+            figure(r.count_at_or_above(norte_config::logline::LogLevel::Warn)),
         ));
     }
     norte_frontend::panelbar::buttons(
         &app.kinds,
         norte_frontend::panelbar::PanelBarInput {
-            open: &abiertos,
-            focused: foco,
-            attention: &novedad,
+            open: &open,
+            focused: focus,
+            attention: &attention,
         },
     )
 }
 
-/// Las casillas pulsables de la barra de paneles.
+/// The panel bar's clickable boxes.
 ///
-/// Y las de los botones de disposición de la barra de menús (ADR 0133): son
-/// la misma cosa —una casilla del cromo que corre una orden por el despacho
-/// de su atajo— y así el ratón las resuelve por el mismo camino.
+/// And the menu bar's layout buttons' (ADR 0133): they are the same thing —
+/// a chrome box that runs a command through its shortcut's dispatch — so
+/// the mouse resolves them through the same path.
 #[must_use]
 pub fn panel_zones(app: &App, area: Rect) -> Vec<PanelZone> {
     let mut out = panel_bar_zones(app, area);
     out.extend(layout_zones(app, area));
-    out.extend(zonas_de_tiras(app, area));
+    out.extend(hidden_tab_zones(app, area));
     out
 }
 
-/// Pinta las tiras de pestañas de los grupos de paneles (ADR 0134): la de
-/// delante con el estilo de título y subrayada, las otras atenuadas.
-pub(crate) fn draw_tiras_de_paneles(frame: &mut Frame<'_>, app: &App) {
-    for (fila, pestanas) in crate::ui::geometry::tiras_de_paneles(app, frame.area()) {
-        clear_themed(frame, fila, &app.theme);
-        let spans: Vec<ratatui::text::Span<'static>> = pestanas
+/// Paints the panel groups' tab strips (ADR 0134): the one in front with
+/// the title style and underlined, the others dimmed.
+pub(crate) fn draw_pane_strips(frame: &mut Frame<'_>, app: &App) {
+    for (row, tabs) in crate::ui::geometry::panel_tab_strips(app, frame.area()) {
+        clear_themed(frame, row, &app.theme);
+        let spans: Vec<ratatui::text::Span<'static>> = tabs
             .into_iter()
             .map(|p| {
-                let estilo = if p.activa {
+                let style = if p.active {
                     app.theme
                         .role(Role::Title)
                         .add_modifier(ratatui::style::Modifier::UNDERLINED)
@@ -564,31 +570,32 @@ pub(crate) fn draw_tiras_de_paneles(frame: &mut Frame<'_>, app: &App) {
                         .role(Role::Regular)
                         .add_modifier(ratatui::style::Modifier::DIM)
                 };
-                ratatui::text::Span::styled(p.texto, estilo)
+                ratatui::text::Span::styled(p.text, style)
             })
             .collect();
-        frame.render_widget(Paragraph::new(ratatui::text::Line::from(spans)), fila);
+        frame.render_widget(Paragraph::new(ratatui::text::Line::from(spans)), row);
     }
 }
 
-/// Las pestañas ESCONDIDAS de los grupos de paneles como zonas pulsables:
-/// pulsar una corre la orden de su panel, que con el panel escondido lo
-/// ENSEÑA (#329). La de delante no es zona — pulsarla lo cerraría.
-fn zonas_de_tiras(app: &App, area: Rect) -> Vec<PanelZone> {
+/// The HIDDEN tabs of the panel groups as clickable zones: clicking one runs
+/// its panel's command, which with the panel hidden SHOWS it (#329). The
+/// one in front is not a zone — clicking it would close it.
+fn hidden_tab_zones(app: &App, area: Rect) -> Vec<PanelZone> {
     if crate::mouse::overlay_open(app) || app.menu.is_some() {
         return Vec::new();
     }
-    let botones = panel_buttons(app, area);
+    let buttons = panel_buttons(app, area);
     let mut out = Vec::new();
-    for (fila, pestanas) in crate::ui::geometry::tiras_de_paneles(app, area) {
-        for p in pestanas.into_iter().filter(|p| !p.activa) {
+    for (row, tabs) in crate::ui::geometry::panel_tab_strips(app, area) {
+        for p in tabs.into_iter().filter(|p| !p.active) {
             let Some(kind) = app.layout.kind_of(p.slot) else {
                 continue;
             };
-            // Sin botón no hay comando que la traiga delante: `layout.<kind>`
-            // no existe para el panel de un plugin, y una zona que despacha
-            // un comando desconocido es un clic muerto con aviso.
-            let Some(command) = botones
+            // With no button there is no command to bring it forward:
+            // `layout.<kind>` does not exist for a plugin's panel, and a
+            // zone that dispatches an unknown command is a dead click with
+            // a warning.
+            let Some(command) = buttons
                 .iter()
                 .find(|b| b.kind == kind.as_str())
                 .map(|b| b.command.clone())
@@ -596,7 +603,7 @@ fn zonas_de_tiras(app: &App, area: Rect) -> Vec<PanelZone> {
                 continue;
             };
             out.push(PanelZone {
-                row: fila.y,
+                row: row.y,
                 x0: p.x0,
                 x1: p.x1,
                 command,
@@ -606,38 +613,38 @@ fn zonas_de_tiras(app: &App, area: Rect) -> Vec<PanelZone> {
     out
 }
 
-/// Las filas de la COLUMNA de paneles (ADR 0140): una por botón, y con aire
-/// —una fila en blanco entre dos, y otra arriba— si caben todos así, como
-/// la barra de actividad de VS Code; apretados si no. Una cuenta para el
-/// pintado y para el ratón.
-fn filas_del_rail(n: usize, bar: Rect) -> Vec<u16> {
-    let alto = usize::from(bar.height);
-    let (desde, paso) = if n > 0 && 2 * n <= alto {
+/// The rows of the panel COLUMN (ADR 0140): one per button, and with air —
+/// a blank row between two, and another on top — if they all fit that way,
+/// like VS Code's activity bar; tight otherwise. One count for painting and
+/// for the mouse.
+fn rail_rows(n: usize, bar: Rect) -> Vec<u16> {
+    let height = usize::from(bar.height);
+    let (from, step) = if n > 0 && 2 * n <= height {
         (1, 2)
-    } else if n > 0 && 2 * n - 1 <= alto {
+    } else if n > 0 && 2 * n - 1 <= height {
         (0, 2)
     } else {
         (0, 1)
     };
     (0..n)
-        .map(|i| desde + i * paso)
-        .take_while(|f| *f < alto)
+        .map(|i| from + i * step)
+        .take_while(|f| *f < height)
         .map(|f| bar.y.saturating_add(u16::try_from(f).unwrap_or(u16::MAX)))
         .collect()
 }
 
-/// Las casillas de la barra de paneles, sola.
+/// The panel bar's boxes, alone.
 fn panel_bar_zones(app: &App, area: Rect) -> Vec<PanelZone> {
     let Some(bar) = crate::ui::geometry::panel_bar_visible(app, area) else {
         return Vec::new();
     };
     let mut x = bar.x;
     let mut out = Vec::new();
-    let botones = panel_buttons(app, area);
-    // En columna, un botón por fila y el raíl entero de ancho: las mismas
-    // filas que pinta `draw_panel_bar`.
-    if crate::ui::geometry::barra_en_columna(app) {
-        for (y, b) in filas_del_rail(botones.len(), bar).into_iter().zip(botones) {
+    let buttons = panel_buttons(app, area);
+    // In a column, one button per row and the whole rail's width: the same
+    // rows `draw_panel_bar` paints.
+    if crate::ui::geometry::bar_in_column(app) {
+        for (y, b) in rail_rows(buttons.len(), bar).into_iter().zip(buttons) {
             out.push(PanelZone {
                 row: y,
                 x0: bar.x,
@@ -647,167 +654,166 @@ fn panel_bar_zones(app: &App, area: Rect) -> Vec<PanelZone> {
         }
         return out;
     }
-    let nombres = con_nombres(app, &botones, bar);
-    for b in botones {
-        let ancho = u16::try_from(norte_frontend::panelbar::button_cell(&b, nombres).width)
+    let names = shows_names(app, &buttons, bar);
+    for b in buttons {
+        let width = u16::try_from(norte_frontend::panelbar::button_cell(&b, names).width)
             .unwrap_or(u16::MAX);
-        let fin = x.saturating_add(ancho);
-        // Un botón que no cabe ENTERO no se pinta ni se puede pulsar: media
-        // letra no es un botón. Mismo criterio que los títulos del menú.
-        if fin > bar.x.saturating_add(bar.width) {
+        let end = x.saturating_add(width);
+        // A button that does not fit WHOLE is neither painted nor
+        // clickable: half a letter is not a button. Same criterion as the
+        // menu titles.
+        if end > bar.x.saturating_add(bar.width) {
             break;
         }
         out.push(PanelZone {
             row: bar.y,
             x0: x,
-            x1: fin.saturating_sub(1),
+            x1: end.saturating_sub(1),
             command: b.command,
         });
-        x = fin;
+        x = end;
     }
     out
 }
 
-/// Pinta la barra de paneles: qué paneles hay, cómo están y con qué tecla.
+/// Paints the panel bar: which panels there are, how they are, and with
+/// which key.
 pub(crate) fn draw_panel_bar(frame: &mut Frame<'_>, app: &App) {
     use norte_frontend::panelbar::PanelState;
     let Some(bar) = crate::ui::geometry::panel_bar_visible(app, frame.area()) else {
         return;
     };
     clear_themed(frame, bar, &app.theme);
-    if crate::ui::geometry::barra_en_columna(app) {
+    if crate::ui::geometry::bar_in_column(app) {
         draw_rail(frame, app, bar);
         return;
     }
     let mut spans: Vec<ratatui::text::Span<'static>> = Vec::new();
-    let mut ancho = 0_u16;
-    let botones = panel_buttons(app, frame.area());
-    let nombres = con_nombres(app, &botones, bar);
-    // En COLUMNA (spec 2026-09-21) cada botón es una línea con su celda de
-    // letras —` S·`, tres de ancho— y los nombres no caben.
-    let columna = crate::ui::geometry::barra_en_columna(app);
-    let nombres = nombres && !columna;
-    let mut lineas: Vec<ratatui::text::Line<'static>> = Vec::new();
-    for (i, b) in botones.into_iter().enumerate() {
-        let celda = norte_frontend::panelbar::button_cell(&b, nombres);
-        let ancho_boton = u16::try_from(celda.width).unwrap_or(u16::MAX);
-        if columna {
+    let mut width = 0_u16;
+    let buttons = panel_buttons(app, frame.area());
+    let names = shows_names(app, &buttons, bar);
+    // In a COLUMN (spec 2026-09-21) each button is a line with its letter
+    // cell — `" S·"`, three wide — and names do not fit.
+    let column = crate::ui::geometry::bar_in_column(app);
+    let names = names && !column;
+    let mut lines: Vec<ratatui::text::Line<'static>> = Vec::new();
+    for (i, b) in buttons.into_iter().enumerate() {
+        let cell = norte_frontend::panelbar::button_cell(&b, names);
+        let button_w = u16::try_from(cell.width).unwrap_or(u16::MAX);
+        if column {
             if u16::try_from(i).unwrap_or(u16::MAX) >= bar.height {
                 break;
             }
-        } else if ancho.saturating_add(ancho_boton) > bar.width {
+        } else if width.saturating_add(button_w) > bar.width {
             break;
         }
-        let desde = spans.len();
-        // Tres estilos para tres estados. Que un panel tenga el TECLADO no es
-        // lo mismo que esté abierto, y es la mitad de lo que se pregunta al
-        // mirar la barra: dónde van a ir mis teclas.
-        let estilo = match b.state {
+        let from = spans.len();
+        // Three styles for three states. A panel having the KEYBOARD is not
+        // the same as it being open, and it is half of what is being asked
+        // when looking at the bar: where are my keys going to go.
+        let style = match b.state {
             PanelState::Focused => app.theme.role(Role::Selection),
             PanelState::Open => app.theme.role(Role::Title),
-            // APAGADO, no otro color: el texto base de la barra atenuado.
+            // OFF, not another color: the bar's base text, dimmed.
             //
-            // Era `Role::StatusBar`, que es el estilo de la BARRA DE ESTADO —
-            // en la mitad de los temas, fondo vivo y texto oscuro. Esta barra
-            // se limpia con el fondo base, así que los botones CERRADOS
-            // salían como bloques encendidos sobre ella y los ABIERTOS como
-            // texto normal: el peso visual, exactamente al revés. Mirarla
-            // contestaba lo contrario de lo que preguntas, que es lo que hace
-            // que parezca que el estado va por libre.
+            // It used to be `Role::StatusBar`, which is the STATUS BAR's
+            // style — in half the themes, a bright background and dark
+            // text. This bar clears with the base background, so CLOSED
+            // buttons came out as lit blocks on it and OPEN ones as normal
+            // text: the visual weight, exactly backwards. Looking at it
+            // answered the opposite of what you asked, which is what makes
+            // it seem like state is acting on its own.
             //
-            // El menú de al lado nunca cayó en esto: usa `Title` para lo que
-            // no está abierto y `Selection` para lo que sí, y jamás el rol de
-            // otra superficie.
+            // The menu next to it never fell into this: it uses `Title` for
+            // what is not open and `Selection` for what is, and never
+            // another surface's role.
             PanelState::Closed => app
                 .theme
                 .role(Role::Regular)
                 .add_modifier(ratatui::style::Modifier::DIM),
         };
-        // La letra conserva SIEMPRE el estilo de su estado, y la marca de
-        // novedad es un span aparte. Pintar el botón entero de aviso —como
-        // hacía la primera versión— le quitaba al lector la respuesta a «¿a
-        // dónde van a ir mis teclas?» justo mientras algo estaba pasando, que
-        // es cuando más se pregunta.
+        // The letter ALWAYS keeps its state's style, and the attention mark
+        // is a separate span. Painting the whole button as a warning — as
+        // the first version did — took away the reader's answer to "where
+        // are my keys going to go?" right while something was happening,
+        // which is when it is asked the most.
         //
-        // La marca va DENTRO del ancho del botón (ocupa el espacio de la
-        // derecha) para que la fila no cambie de tamaño según lo que pase: una
-        // barra que baila se lee peor que una fija.
+        // The mark goes INSIDE the button's width (it takes the space on
+        // the right) so the row does not change size depending on what
+        // happens: a bar that dances reads worse than a fixed one.
         //
-        // Con nombres, la letra de acceso va SUBRAYADA dentro del nombre
-        // (spec 2026-09-10): tres spans —antes, la letra, después— y el
-        // mismo estilo de estado en los tres.
-        let subrayado = estilo.add_modifier(ratatui::style::Modifier::UNDERLINED);
-        let antes: String = celda.text.chars().take(celda.letter_at).collect();
-        let letra: String = celda.text.chars().skip(celda.letter_at).take(1).collect();
-        let despues: String = celda.text.chars().skip(celda.letter_at + 1).collect();
-        spans.push(ratatui::text::Span::styled(format!(" {antes}"), estilo));
-        spans.push(ratatui::text::Span::styled(letra, subrayado));
-        spans.push(ratatui::text::Span::styled(despues, estilo));
+        // With names, the access letter is UNDERLINED inside the name
+        // (spec 2026-09-10): three spans — before, the letter, after — and
+        // the same state style on all three.
+        let underlined = style.add_modifier(ratatui::style::Modifier::UNDERLINED);
+        let before: String = cell.text.chars().take(cell.letter_at).collect();
+        let letter: String = cell.text.chars().skip(cell.letter_at).take(1).collect();
+        let after: String = cell.text.chars().skip(cell.letter_at + 1).collect();
+        spans.push(ratatui::text::Span::styled(format!(" {before}"), style));
+        spans.push(ratatui::text::Span::styled(letter, underlined));
+        spans.push(ratatui::text::Span::styled(after, style));
         spans.push(if b.attention > 0 {
             ratatui::text::Span::styled("·", app.theme.role(Role::Warning))
         } else {
-            ratatui::text::Span::styled(" ", estilo)
+            ratatui::text::Span::styled(" ", style)
         });
-        if columna {
-            lineas.push(ratatui::text::Line::from(spans.split_off(desde)));
+        if column {
+            lines.push(ratatui::text::Line::from(spans.split_off(from)));
         }
-        ancho = ancho.saturating_add(ancho_boton);
+        width = width.saturating_add(button_w);
     }
-    if !columna {
-        lineas.push(ratatui::text::Line::from(spans));
+    if !column {
+        lines.push(ratatui::text::Line::from(spans));
     }
-    frame.render_widget(Paragraph::new(lineas), bar);
+    frame.render_widget(Paragraph::new(lines), bar);
 }
 
-/// La COLUMNA de paneles (ADR 0140), a la manera de la barra de actividad
-/// de VS Code: tres celdas por fila —la raya del foco, el icono y la
-/// insignia— y aire entre iconos si cabe ([`filas_del_rail`]).
+/// The panel COLUMN (ADR 0140), the way VS Code's activity bar does it:
+/// three cells per row — the focus rule, the icon and the badge — and air
+/// between icons if it fits ([`rail_rows`]).
 ///
-/// - El panel con el TECLADO lleva la raya `▎` en el color del foco y el
-///   icono encendido; uno abierto, el icono encendido sin raya; uno
-///   cerrado, el icono apagado. La misma escala que la ventana.
-/// - La insignia es la CIFRA (tareas, avisos) en el color de aviso, y `+`
-///   pasadas las nueve: una celda no da para más.
-/// - El icono sale de `[ui] panel_bar_style`: Unicode con `names` o
-///   `icons`, Nerd Fonts con `nerd`, la letra con `letters`. Un panel sin
-///   icono —el de un plugin— pinta su letra.
+/// - The panel with the KEYBOARD carries the `▎` rule in the focus color
+///   and a lit icon; an open one, the lit icon with no rule; a closed one,
+///   a dimmed icon. The same scale as the window.
+/// - The badge is the COUNT (tasks, warnings) in the warning color, and `+`
+///   past nine: one cell does not allow for more.
+/// - The icon comes from `[ui] panel_bar_style`: Unicode with `names` or
+///   `icons`, Nerd Fonts with `nerd`, the letter with `letters`. A panel
+///   with no icon — a plugin's — paints its letter.
 fn draw_rail(frame: &mut Frame<'_>, app: &App, bar: Rect) {
     use norte_frontend::panelbar::{IconSet, PanelState};
     use ratatui::style::Modifier;
     use ratatui::text::{Line, Span};
-    let botones = panel_buttons(app, frame.area());
-    let juego = match app.chrome.panel_bar_style() {
+    let buttons = panel_buttons(app, frame.area());
+    let set = match app.chrome.panel_bar_style() {
         norte_config::PanelBarStyle::Letters => None,
         norte_config::PanelBarStyle::Nerd => Some(IconSet::Nerd),
         norte_config::PanelBarStyle::Names | norte_config::PanelBarStyle::Icons => {
             Some(IconSet::Unicode)
         }
     };
-    let filas = filas_del_rail(botones.len(), bar);
-    for (y, b) in filas.into_iter().zip(botones) {
-        let apagado = app.theme.role(Role::Regular).add_modifier(Modifier::DIM);
-        let encendido = app.theme.role(Role::Title).add_modifier(Modifier::BOLD);
-        let (raya, icono_estilo) = match b.state {
-            PanelState::Focused => (
-                Span::styled("▎", app.theme.role(Role::BorderFocus)),
-                encendido,
-            ),
-            PanelState::Open => (Span::raw(" "), encendido),
-            PanelState::Closed => (Span::raw(" "), apagado),
+    let rows = rail_rows(buttons.len(), bar);
+    for (y, b) in rows.into_iter().zip(buttons) {
+        let off = app.theme.role(Role::Regular).add_modifier(Modifier::DIM);
+        let on = app.theme.role(Role::Title).add_modifier(Modifier::BOLD);
+        let (rule, icon_style) = match b.state {
+            PanelState::Focused => (Span::styled("▎", app.theme.role(Role::BorderFocus)), on),
+            PanelState::Open => (Span::raw(" "), on),
+            PanelState::Closed => (Span::raw(" "), off),
         };
-        let glifo = juego
+        let glyph = set
             .and_then(|j| norte_frontend::panelbar::icon(&b.kind, j))
             .map_or_else(|| b.letter.to_string(), str::to_owned);
-        let insignia = match b.attention {
+        let badge = match b.attention {
             0 => Span::raw(" "),
             n @ 1..=9 => Span::styled(n.to_string(), app.theme.role(Role::Warning)),
             _ => Span::styled("+", app.theme.role(Role::Warning)),
         };
         frame.render_widget(
             Paragraph::new(Line::from(vec![
-                raya,
-                Span::styled(glifo, icono_estilo),
-                insignia,
+                rule,
+                Span::styled(glyph, icon_style),
+                badge,
             ])),
             Rect {
                 y,
@@ -818,26 +824,28 @@ fn draw_rail(frame: &mut Frame<'_>, app: &App, bar: Rect) {
     }
 }
 
-/// Pinta la barra de menús y su desplegable.
+/// Paints the menu bar and its dropdown.
 pub(crate) fn draw_menu(frame: &mut Frame<'_>, app: &App) {
     let area = frame.area();
-    // La BARRA se pinta con el menú abierto o cerrado: fijada, su trabajo es
-    // decir que el menú existe. El desplegable, obviamente, solo abierto — y
-    // por eso los títulos se miden aparte, sin pasar por `menu_geom`.
-    let abierto = app.menu.as_ref();
+    // The BAR is painted with the menu open or closed: pinned, its job is
+    // to say the menu exists. The dropdown, obviously, only when open — and
+    // that is why titles are measured separately, without going through
+    // `menu_geom`.
+    let open = app.menu.as_ref();
     let titles = menu_titles(area);
     let bar = Rect { height: 1, ..area };
     clear_themed(frame, bar, &app.theme);
-    // Un título que no cabe ENTERO no se pinta a medias: en cuarenta columnas
-    // la barra acababa en «Bus», que no es un menú, es un ruido. Se cae el
-    // último que sobra y ya está — lo que la barra tiene que decir es que HAY
-    // menú, y para eso los primeros bastan.
+    // A title that does not fit WHOLE is not painted halfway: at forty
+    // columns the bar used to end in "Bus," which is not a menu, it is
+    // noise. The last one that does not fit is dropped and that is it —
+    // what the bar has to say is that a menu EXISTS, and the first ones are
+    // enough for that.
     let spans: Vec<ratatui::text::Span<'static>> = titles
         .iter()
         .filter(|(_, _, x1)| *x1 < area.x.saturating_add(area.width))
         .enumerate()
         .map(|(i, (label, _, _))| {
-            let style = if abierto.is_some_and(|st| i == st.menu()) {
+            let style = if open.is_some_and(|st| i == st.menu()) {
                 app.theme.role(Role::Selection)
             } else {
                 app.theme.role(Role::Title)
@@ -847,47 +855,49 @@ pub(crate) fn draw_menu(frame: &mut Frame<'_>, app: &App) {
         .collect();
     frame.render_widget(Paragraph::new(ratatui::text::Line::from(spans)), bar);
 
-    let reserva = draw_layout_buttons(frame, app, area, bar);
+    let reserve = draw_layout_buttons(frame, app, area, bar);
 
-    // Y la tecla que lo abre, a la derecha, SACADA DEL KEYMAP VIVO.
+    // And the key that opens it, on the right, PULLED FROM THE LIVE KEYMAP.
     //
-    // Una barra que enseña siete títulos y no dice cómo se entra en ellos deja
-    // al lector con el ratón como única puerta. La tecla no se escribe a mano
-    // —es `alt+m` en unos presets y otra cosa en los que alguien reate— así
-    // que sale de donde salen las de los items del desplegable.
+    // A bar that shows seven titles and does not say how to enter them
+    // leaves the reader with the mouse as the only door. The key is not
+    // written by hand — it is `alt+m` in some presets and something else in
+    // whichever ones someone rebound — so it comes from wherever the
+    // dropdown items' come from.
     //
-    // Solo con el menú CERRADO: abierto, la tecla ya no hace falta y ese hueco
-    // lo quiere el título más a la derecha.
-    if abierto.is_none()
+    // Only with the menu CLOSED: open, the key is no longer needed and that
+    // slot is wanted by the title further to the right.
+    if open.is_none()
         && let Some(chord) = app
             .palette_rows
             .iter()
             .find(|r| r.key == "app.menu")
             .map(|r| r.chord.clone())
     {
-        let texto = format!("{chord} ");
-        let w = u16::try_from(UnicodeWidthStr::width(texto.as_str())).unwrap_or(0);
-        let usado = titles
+        let text = format!("{chord} ");
+        let w = u16::try_from(UnicodeWidthStr::width(text.as_str())).unwrap_or(0);
+        let used = titles
             .iter()
             .filter(|(_, _, x1)| *x1 < area.x.saturating_add(area.width))
             .map(|(l, _, _)| u16::try_from(UnicodeWidthStr::width(l.as_str())).unwrap_or(0))
             .sum::<u16>();
-        // Solo si cabe SIN pisar los títulos: el nombre de un menú vale más
-        // que su atajo, y medio atajo no vale nada.
-        // A la izquierda de los botones, si los hay.
-        if bar.width > usado.saturating_add(w).saturating_add(reserva) {
+        // Only if it fits WITHOUT stepping on the titles: a menu's name is
+        // worth more than its shortcut, and half a shortcut is worth
+        // nothing.
+        // To the left of the buttons, if there are any.
+        if bar.width > used.saturating_add(w).saturating_add(reserve) {
             let hint = Rect {
                 x: bar
                     .x
                     .saturating_add(bar.width)
                     .saturating_sub(w)
-                    .saturating_sub(reserva),
+                    .saturating_sub(reserve),
                 width: w,
                 ..bar
             };
             frame.render_widget(
                 Paragraph::new(ratatui::text::Line::styled(
-                    texto,
+                    text,
                     app.theme.role(Role::Info),
                 )),
                 hint,
@@ -895,7 +905,7 @@ pub(crate) fn draw_menu(frame: &mut Frame<'_>, app: &App) {
         }
     }
 
-    let (Some(st), Some(g)) = (abierto, menu_geom(app, area)) else {
+    let (Some(st), Some(g)) = (open, menu_geom(app, area)) else {
         return;
     };
     clear_themed(frame, g.drop, &app.theme);
@@ -910,48 +920,48 @@ pub(crate) fn draw_menu(frame: &mut Frame<'_>, app: &App) {
     let lines: Vec<ratatui::text::Line<'static>> = g
         .lines
         .iter()
-        .map(|linea| menu_line(app, linea, width, st.item()))
+        .map(|line| menu_line(app, line, width, st.item()))
         .collect();
     frame.render_widget(Paragraph::new(lines), inner);
-    // La raya de una sección se une al borde (`├───┤`), como en mc: flotando
-    // entre dos `│` se lee como un subrayado, no como una división.
-    let derecha = g.drop.x.saturating_add(g.drop.width).saturating_sub(1);
-    for (i, linea) in g.lines.iter().enumerate() {
-        let fila = inner.y.saturating_add(u16::try_from(i).unwrap_or(u16::MAX));
-        if !matches!(linea, MenuLine::Section(_)) || fila >= inner.y.saturating_add(inner.height) {
+    // A section's rule joins the border (`├───┤`), as in mc: floating
+    // between two `│` it reads as an underline, not as a division.
+    let right = g.drop.x.saturating_add(g.drop.width).saturating_sub(1);
+    for (i, line) in g.lines.iter().enumerate() {
+        let row = inner.y.saturating_add(u16::try_from(i).unwrap_or(u16::MAX));
+        if !matches!(line, MenuLine::Section(_)) || row >= inner.y.saturating_add(inner.height) {
             continue;
         }
         let buf = frame.buffer_mut();
-        for (x, s) in [(g.drop.x, "├"), (derecha, "┤")] {
-            if let Some(c) = buf.cell_mut((x, fila)) {
+        for (x, s) in [(g.drop.x, "├"), (right, "┤")] {
+            if let Some(c) = buf.cell_mut((x, row)) {
                 c.set_symbol(s);
             }
         }
     }
 }
 
-/// Una línea del desplegable, pintada a `width` celdas; `cursor` es la
-/// orden resaltada.
+/// A line of the dropdown, painted at `width` cells; `cursor` is the
+/// highlighted command.
 fn menu_line(
     app: &App,
-    linea: &MenuLine,
+    line: &MenuLine,
     width: usize,
     cursor: usize,
 ) -> ratatui::text::Line<'static> {
-    match linea {
+    match line {
         MenuLine::Section(None) => {
             ratatui::text::Line::styled("─".repeat(width), app.theme.role(Role::Separator))
         }
-        // El rótulo en el estilo apagado, entre rayas: se lee como cabecera
-        // de grupo, no como una orden más que no hace nada.
+        // The label in the dimmed style, between rules: it reads as a group
+        // header, not as one more command that does nothing.
         MenuLine::Section(Some(t)) => {
             let t = super::text::take_width(t, width.saturating_sub(4));
-            let resto = width.saturating_sub(UnicodeWidthStr::width(t.as_str()) + 3);
+            let rest = width.saturating_sub(UnicodeWidthStr::width(t.as_str()) + 3);
             ratatui::text::Line::from(vec![
                 ratatui::text::Span::styled("─ ", app.theme.role(Role::Separator)),
                 ratatui::text::Span::styled(t, app.theme.role(Role::Muted)),
                 ratatui::text::Span::styled(
-                    format!(" {}", "─".repeat(resto)),
+                    format!(" {}", "─".repeat(rest)),
                     app.theme.role(Role::Separator),
                 ),
             ])
@@ -963,14 +973,15 @@ fn menu_line(
             role,
         } => {
             use norte_frontend::menu::ItemRole;
-            let marca = if *role == ItemRole::Ai { AI_MARK } else { "" };
+            let mark = if *role == ItemRole::Ai { AI_MARK } else { "" };
             let slot = width
                 .saturating_sub(UnicodeWidthStr::width(label.as_str()))
-                .saturating_sub(UnicodeWidthStr::width(marca))
+                .saturating_sub(UnicodeWidthStr::width(mark))
                 .saturating_sub(UnicodeWidthStr::width(chord.as_str()));
-            let text = format!("{label}{marca}{}{chord}", " ".repeat(slot));
-            // El color de peligro en lo que borra, salvo bajo el cursor: ahí
-            // manda la selección, que es lo que dice DÓNDE estás.
+            let text = format!("{label}{mark}{}{chord}", " ".repeat(slot));
+            // The danger color on what deletes, except under the cursor:
+            // there the selection wins, since that is what says WHERE you
+            // are.
             let style = if *index == cursor {
                 app.theme.role(Role::Selection)
             } else if *role == ItemRole::Destructive {
@@ -983,60 +994,61 @@ fn menu_line(
     }
 }
 
-/// Lo que se puede pulsar en una barra de pestañas.
+/// What can be clicked in a tab bar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TabAction {
-    /// Ir a la pestaña `n` (base 0).
+    /// Go to tab `n` (0-based).
     Goto(usize),
-    /// Abrir una pestaña.
+    /// Open a tab.
     New,
-    /// Cerrar la activa.
+    /// Close the active one.
     Close,
 }
 
-/// Una zona pulsable de la barra de pestañas de un panel.
+/// A clickable zone of a panel's tab bar.
 ///
-/// Se calcula del MISMO sitio que pinta la barra, por lo mismo que la
-/// geometría del listado: un rango deducido a ojo resuelve el click a la
-/// pestaña de al lado, y eso no se ve como un bug de ratón.
+/// Computed from the SAME spot that paints the bar, for the same reason as
+/// the listing's geometry: a range guessed by eye resolves the click to the
+/// tab next door, and that does not look like a mouse bug.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TabZone {
-    /// Posición visible del panel.
+    /// The panel's visible position.
     pub pane: usize,
-    /// Fila donde está la barra.
+    /// Row where the bar is.
     pub row: u16,
-    /// Primera columna, inclusive.
+    /// First column, inclusive.
     pub x0: u16,
-    /// Última columna, inclusive.
+    /// Last column, inclusive.
     pub x1: u16,
-    /// Qué hace pulsarla.
+    /// What clicking it does.
     pub action: TabAction,
 }
 
-/// El botón de abrir pestaña. ASCII: un `+` en una caja no puede medir dos
-/// celdas en un terminal cualquiera, y un `⊕` sí.
+/// The open-tab button. ASCII: a `+` in a box cannot measure two cells on
+/// any given terminal, and a `⊕` can.
 pub(crate) const TAB_NEW: &str = "[+]";
 
-/// El botón de cerrar la activa.
+/// The button to close the active one.
 pub(crate) const TAB_CLOSE: &str = "[x]";
 
-/// Los trozos de la barra, cada uno con su ancho y qué hace pulsarlo.
+/// The bar's pieces, each with its width and what clicking it does.
 pub(crate) fn tab_pieces(t: &TabStrip) -> Vec<(String, TabAction)> {
     let mut v: Vec<(String, TabAction)> = t
         .titles
         .iter()
         .enumerate()
-        .map(|(i, titulo)| (format!(" {titulo} "), TabAction::Goto(i)))
+        .map(|(i, title)| (format!(" {title} "), TabAction::Goto(i)))
         .collect();
     v.push((TAB_NEW.to_owned(), TabAction::New));
     v.push((TAB_CLOSE.to_owned(), TabAction::Close));
     v
 }
 
-/// Las zonas pulsables de los paneles con pestañas, en el frame de `area`.
+/// The clickable zones of panels with tabs, in `area`'s frame.
 ///
-/// Vive junto al pintado —y no en el ratón— por lo mismo que
-/// [`super::geometry::pane_geometry`]: quien sabe dónde cayó cada cosa es el `draw`.
+/// Lives next to the painting — and not in the mouse module — for the same
+/// reason as [`super::geometry::pane_geometry`]: whoever knows where
+/// everything landed is the `draw`.
 #[must_use]
 pub fn tab_zones(app: &App, area: Rect) -> Vec<TabZone> {
     let cols = pane_rects(app, area);
@@ -1045,16 +1057,16 @@ pub fn tab_zones(app: &App, area: Rect) -> Vec<TabZone> {
         let Some(t) = tab_strip_for(app, pane) else {
             continue;
         };
-        // La barra es la PRIMERA fila del interior del bloque.
+        // The bar is the block interior's FIRST row.
         let row = rect.y.saturating_add(1);
         let mut x = rect.x.saturating_add(1);
-        let tope = rect.x.saturating_add(rect.width).saturating_sub(1);
+        let ceiling = rect.x.saturating_add(rect.width).saturating_sub(1);
         for (text, action) in tab_pieces(&t) {
             let w = u16::try_from(UnicodeWidthStr::width(text.as_str())).unwrap_or(0);
-            if w == 0 || x >= tope {
+            if w == 0 || x >= ceiling {
                 break;
             }
-            let x1 = x.saturating_add(w).saturating_sub(1).min(tope - 1);
+            let x1 = x.saturating_add(w).saturating_sub(1).min(ceiling - 1);
             out.push(TabZone {
                 pane,
                 row,
@@ -1068,17 +1080,17 @@ pub fn tab_zones(app: &App, area: Rect) -> Vec<TabZone> {
     out
 }
 
-/// Marca del panel DESTINO en su título. ASCII a propósito, como el badge
-/// hostil: una flecha unicode es ambiguous-width y ocuparía dos celdas en
-/// muchos terminales.
+/// Mark for the TARGET panel in its title. ASCII on purpose, like the
+/// hostile badge: a unicode arrow is ambiguous-width and would take two
+/// cells on many terminals.
 pub(crate) const TARGET_BADGE: &str = "->";
 
-/// Pinta la barra de pestañas si la hay, y devuelve dónde caen la cabecera de
-/// columnas y el listado.
+/// Paints the tab bar if there is one, and returns where the column header
+/// and the listing land.
 ///
-/// Con pestañas, la PRIMERA fila del interior es la barra y todo lo demás baja
-/// una: por eso `pane_chrome_rows` cuenta lo mismo, y el test de ancla lo
-/// contrasta contra el buffer.
+/// With tabs, the interior's FIRST row is the bar and everything else moves
+/// down one: that is why `pane_chrome_rows` counts the same thing, and the
+/// anchor test contrasts it against the buffer.
 pub(crate) fn draw_tab_strip(
     frame: &mut Frame<'_>,
     inner: Rect,
@@ -1093,28 +1105,28 @@ pub(crate) fn draw_tab_strip(
         bar_area.height = 1;
         frame.render_widget(Paragraph::new(tab_strip_line(t, theme)), bar_area);
     }
-    let mut cab = inner;
-    cab.y = inner.y.saturating_add(bar);
-    cab.height = 1;
-    let mut lst = inner;
-    lst.y = inner.y.saturating_add(bar).saturating_add(1);
-    lst.height = inner.height.saturating_sub(bar).saturating_sub(1);
-    (cab, lst)
+    let mut header = inner;
+    header.y = inner.y.saturating_add(bar);
+    header.height = 1;
+    let mut list = inner;
+    list.y = inner.y.saturating_add(bar).saturating_add(1);
+    list.height = inner.height.saturating_sub(bar).saturating_sub(1);
+    (header, list)
 }
 
-/// La línea de la barra de pestañas.
+/// The tab bar's line.
 pub(crate) fn tab_strip_line<'a>(t: &TabStrip, theme: &TuiTheme) -> ratatui::text::Line<'a> {
-    // Los MISMOS trozos que mide `tab_zones`: si los dos los calcularan por
-    // su cuenta, un click resolvería a la pestaña de al lado.
+    // The SAME pieces `tab_zones` measures: if both computed them on their
+    // own, a click would resolve to the tab next door.
     let spans = tab_pieces(t)
         .into_iter()
         .map(|(text, action)| {
-            let estilo = if action == TabAction::Goto(t.active) {
+            let style = if action == TabAction::Goto(t.active) {
                 theme.role(Role::Selection)
             } else {
                 ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::DIM)
             };
-            ratatui::text::Span::styled(text, estilo)
+            ratatui::text::Span::styled(text, style)
         })
         .collect::<Vec<_>>();
     ratatui::text::Line::from(spans)

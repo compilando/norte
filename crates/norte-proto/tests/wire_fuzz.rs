@@ -1,7 +1,7 @@
-//! Fuzz corto (proptest) del framing + envelope JSON-RPC (spec §12, ADR 0011).
-//! Sin sockets: el `FrameDecoder` y el parse de envelope son I/O-free, así que
-//! se fuzzean con bytes puros. Corre en el gate de PR (como `config_fuzz` de la
-//! TUI); el nightly amplía casos.
+//! Short fuzz (proptest) of the framing + JSON-RPC envelope (spec §12, ADR
+//! 0011). No sockets: `FrameDecoder` and the envelope parse are I/O-free, so
+//! they are fuzzed with plain bytes. Runs on the PR gate (like the TUI's
+//! `config_fuzz`); nightly widens the cases.
 
 use norte_proto::wire::{
     FrameDecoder, JsonRpcVersion, Message, MessageKind, Notification, Request, RequestId, classify,
@@ -9,7 +9,7 @@ use norte_proto::wire::{
 };
 use proptest::prelude::*;
 
-/// Drena todos los frames que el decoder tenga listos.
+/// Drains every frame the decoder has ready.
 fn drain(dec: &mut FrameDecoder) -> Vec<Vec<u8>> {
     let mut out = Vec::new();
     while let Some(f) = dec.next_frame() {
@@ -19,35 +19,34 @@ fn drain(dec: &mut FrameDecoder) -> Vec<Vec<u8>> {
 }
 
 proptest! {
-    /// Ningún byte arbitrario hace `panic` al decoder, y todo frame emitido
-    /// está LIMPIO: sin `\n` interior y sin `\r` final (el contrato de NDJSON).
+    /// No arbitrary byte makes the decoder `panic`, and every emitted frame
+    /// is CLEAN: no interior `\n` and no trailing `\r` (NDJSON's contract).
     #[test]
     fn framing_never_panics_frames_are_clean(data in proptest::collection::vec(any::<u8>(), 0..4096)) {
         let mut dec = FrameDecoder::new();
-        // Inputs pequeños: jamás rozan MAX_FRAME_BYTES, el push no puede fallar.
+        // Small inputs: they never come close to MAX_FRAME_BYTES, push cannot fail.
         prop_assert!(dec.push(&data).is_ok());
         for frame in drain(&mut dec) {
-            prop_assert!(!frame.contains(&b'\n'), "frame con \\n interior");
-            prop_assert_ne!(frame.last(), Some(&b'\r'), "frame con \\r final sin recortar");
-            prop_assert!(!frame.is_empty(), "línea vacía debió descartarse");
+            prop_assert!(!frame.contains(&b'\n'), "frame with an interior \\n");
+            prop_assert_ne!(frame.last(), Some(&b'\r'), "frame with an untrimmed trailing \\r");
+            prop_assert!(!frame.is_empty(), "an empty line should have been dropped");
         }
     }
 
-    /// Invariante de frontera de chunk: alimentar los MISMOS bytes troceados de
-    /// cualquier forma entrega EXACTAMENTE los mismos frames que en un push
-    /// único. Es la propiedad que la optimización `scanned`/`pending_newlines`
-    /// podría romper.
+    /// Chunk boundary invariant: feeding the SAME bytes chopped up any way
+    /// delivers EXACTLY the same frames as a single push. This is the
+    /// property the `scanned`/`pending_newlines` optimization could break.
     #[test]
     fn framing_chunk_boundary_invariance(
         data in proptest::collection::vec(any::<u8>(), 0..2048),
         cuts in proptest::collection::vec(any::<prop::sample::Index>(), 0..16),
     ) {
-        // Referencia: un solo push.
+        // Reference: a single push.
         let mut whole = FrameDecoder::new();
         prop_assert!(whole.push(&data).is_ok());
         let expected = drain(&mut whole);
 
-        // Trocea `data` en puntos arbitrarios ordenados.
+        // Chop `data` at arbitrary sorted points.
         let mut points: Vec<usize> = cuts.iter().map(|c| c.index(data.len() + 1)).collect();
         points.sort_unstable();
         let mut chunked = FrameDecoder::new();
@@ -62,21 +61,22 @@ proptest! {
         prop_assert_eq!(expected, got);
     }
 
-    /// `classify` y el parse de `Message` nunca hacen `panic` con basura: el
-    /// server debe poder distinguir "JSON roto" de "envelope inválido" sin
-    /// caerse (spec §12).
+    /// `classify` and `Message`'s parse never `panic` on garbage: the server
+    /// must be able to tell "broken JSON" apart from "invalid envelope"
+    /// without falling over (spec §12).
     #[test]
     fn envelope_parse_never_panics(data in proptest::collection::vec(any::<u8>(), 0..4096)) {
         if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&data) {
             let _ = classify(&v); // no panic
         }
-        // Parse tipado directo: Ok o Err, jamás panic.
+        // Direct typed parse: Ok or Err, never panic.
         let _ = serde_json::from_slice::<Message>(&data);
     }
 
-    /// Roundtrip: una request/notification válida sobrevive encode_frame →
-    /// FrameDecoder → parse, con method/id intactos. `method` arbitrario
-    /// (incluye Unicode y control salvo `\0`, que serde_json escapa).
+    /// Roundtrip: a valid request/notification survives encode_frame →
+    /// FrameDecoder → parse, with method/id intact. `method` is arbitrary
+    /// (includes Unicode and control characters except `\0`, which
+    /// serde_json escapes).
     #[test]
     fn envelope_request_roundtrips(
         method in "\\PC{0,64}",
@@ -97,12 +97,12 @@ proptest! {
                 params: None,
             })
         }
-        .expect("un tipo del protocolo siempre serializa");
+        .expect("a protocol type always serializes");
 
         let mut dec = FrameDecoder::new();
         prop_assert!(dec.push(&frame).is_ok());
-        let bytes = dec.next_frame().expect("el frame cerró con \\n");
-        let msg: Message = serde_json::from_slice(&bytes).expect("reparsea");
+        let bytes = dec.next_frame().expect("the frame closed with \\n");
+        let msg: Message = serde_json::from_slice(&bytes).expect("re-parses");
 
         match (is_request, &msg) {
             (true, Message::Request(r)) => {
@@ -110,9 +110,9 @@ proptest! {
                 prop_assert_eq!(&r.id, &RequestId::Num(id));
             }
             (false, Message::Notification(n)) => prop_assert_eq!(&n.method, &method),
-            other => prop_assert!(false, "clasificación inesperada: {:?}", other),
+            other => prop_assert!(false, "unexpected classification: {:?}", other),
         }
-        // Coherencia con classify sobre el Value.
+        // Consistency with classify over the Value.
         let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         let want = if is_request { MessageKind::Request } else { MessageKind::Notification };
         prop_assert_eq!(classify(&v), want);

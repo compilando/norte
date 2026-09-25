@@ -1,31 +1,31 @@
-//! Las tres tareas largas que un panel enseña mientras corren: buscar,
-//! comparar y sincronizar.
+//! The three long-running tasks a pane shows while they run: search, compare
+//! and sync.
 //!
-//! Las tres tienen la misma forma —se lanzan, van llegando por un canal que se
-//! drena, y mientras viven su panel se come el teclado con una tabla de teclas
-//! propia— y las tres vivían en el root del binario `ntc`, un crate DISTINTO de
-//! esta lib.
+//! All three have the same shape — they get launched, results arrive over a
+//! channel that gets drained, and while they are alive their pane eats the
+//! keyboard with a key table of its own — and all three used to live in the
+//! `ntc` binary's root, a crate DIFFERENT from this lib.
 //!
-//! Hay un ciclo entre este módulo y [`crate::navigate`] —el `cd` tiene que
-//! soltar una búsqueda viva al salir del pane virtual, y lanzar una búsqueda
-//! necesita el `cd`—. Un ciclo entre módulos del MISMO crate es legal en Rust,
-//! así que el orden de salida no importa; lo que no se podía es dejar una mitad
-//! en el binario, que sí es otro crate.
+//! There is a cycle between this module and [`crate::navigate`] — `cd` has to
+//! drop a live search when leaving the virtual pane, and launching a search
+//! needs the `cd`. A cycle between modules of the SAME crate is legal in
+//! Rust, so the exit order doesn't matter; what could not be done was leaving
+//! half of it in the binary, which IS another crate.
 //!
-//! Los tres `*Run` son el asa: la Task cancelable (regla 3), el canal, y la
-//! generación con la que un lote que llega tarde se descarta en vez de mezclarse
-//! con el plan siguiente.
+//! The three `*Run` types are the handle: the cancelable Task (rule 3), the
+//! channel, and the generation that lets a batch arriving late be discarded
+//! instead of getting mixed with the next plan.
 //!
-//! Un fichero por dominio y `mod.rs` de pura fachada, que es el patrón que
-//! `norte-frontend/src/layout/` ya demuestra en este repo: ningún fichero de
-//! producción por encima de las mil líneas.
+//! One file per domain and a pure-facade `mod.rs`, which is the pattern
+//! `norte-frontend/src/layout/` already demonstrates in this repo: no
+//! production file over a thousand lines.
 
 mod ai;
 mod compare;
 mod diskmap;
-// Público, al contrario que los demás: sus dos verbos —pedir y olvidar— los
-// llama el manejador de teclas en cada letra, y leerlos como
-// `jobs::goto::pedir_al_indice` dice de qué pantalla son.
+// Public, unlike the others: its two verbs — request and forget — are called
+// by the key handler on every keystroke, and reading them as
+// `jobs::goto::ask_the_index` says which screen they are for.
 pub mod goto;
 mod inflight;
 mod search;
@@ -39,11 +39,11 @@ pub use compare::{
     COMPARE_PAGE_STEP, CompareKey, CompareRun, compare_key, drain_compare, launch_compare,
     on_compare_enter, on_compare_key,
 };
-pub use diskmap::{harvest as harvest_disk_map, lanzar as lanzar_disk_map};
+pub use diskmap::{harvest as harvest_disk_map, launch as launch_disk_map};
 pub use goto::harvest_goto_index;
 pub use inflight::{
     AiRenameRun, ChecksumRun, DiskMapRun, GotoIndexRun, InFlight, OrganizeRun, PendingAiPlan,
-    Publicado, RenameBatchRun, SemanticRun,
+    Published, RenameBatchRun, SemanticRun,
 };
 pub use search::{
     SEARCH_MAX_HITS, SearchRun, drain_search, finalize_search_state, launch_search,

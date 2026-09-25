@@ -1,7 +1,7 @@
-//! Integración del [`ConnectionManager`] REAL contra servidores in-process
-//! (fase 6e): sftp (russh server) y ftp (libunftp), con `connections.toml` y
-//! secretos del `secrets.age` en un tempdir — el camino completo
-//! resolución → secreto → transporte → provider, sin Docker.
+//! Integration of the REAL [`ConnectionManager`] against in-process servers
+//! (phase 6e): sftp (russh server) and ftp (libunftp), with `connections.toml`
+//! and secrets from `secrets.age` in a tempdir — the full path
+//! resolution → secret → transport → provider, with no Docker.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -16,7 +16,7 @@ use russh::{Channel, ChannelId};
 const USER: &str = "norte";
 const PASS: &str = "s3cr3t";
 
-// ---------- servidor SSH in-process (password + sftp trivial) ----------
+// ---------- in-process SSH server (password + trivial sftp) ----------
 
 struct ServerHandler {
     channels: Arc<Mutex<HashMap<ChannelId, Channel<Msg>>>>,
@@ -41,7 +41,7 @@ impl russh::server::Handler for ServerHandler {
     ) -> Result<(), Self::Error> {
         self.channels
             .lock()
-            .expect("lock de test")
+            .expect("test lock")
             .insert(channel.id(), channel);
         reply.accept().await;
         Ok(())
@@ -57,9 +57,9 @@ impl russh::server::Handler for ServerHandler {
             let channel = self
                 .channels
                 .lock()
-                .expect("lock de test")
+                .expect("test lock")
                 .remove(&channel_id)
-                .expect("canal abierto");
+                .expect("open channel");
             session.channel_success(channel_id)?;
             tokio::spawn(russh_sftp::server::run(channel.into_stream(), TrivialSftp));
         } else {
@@ -79,11 +79,11 @@ impl russh_sftp::server::Handler for TrivialSftp {
     }
 }
 
-/// Arranca el servidor SSH y devuelve (puerto, fingerprint de su host key).
+/// Starts the SSH server and returns (port, its host key's fingerprint).
 async fn spawn_ssh() -> (u16, String) {
     let host_key =
         russh::keys::PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519)
-            .expect("host key de test");
+            .expect("test host key");
     let fingerprint = host_key
         .public_key()
         .fingerprint(russh::keys::HashAlg::Sha256)
@@ -117,18 +117,19 @@ async fn spawn_ssh() -> (u16, String) {
     (port, fingerprint)
 }
 
-// ---------- config de test (connections.toml + secrets.age) ----------
+// ---------- test config (connections.toml + secrets.age) ----------
 
-/// Puebla el dir de config: la conexión nombrada `name` y su secreto en el
-/// `secrets.age` (así se ejercita el resolver real, sin tocar env global).
-async fn config_con(dir: &Path, name: &str, url: &str, auth: &str) {
+/// Populates the config dir: the connection named `name` and its secret in
+/// `secrets.age` (this exercises the real resolver, without touching global
+/// env).
+async fn config_with(dir: &Path, name: &str, url: &str, auth: &str) {
     std::fs::write(
         dir.join("connections.toml"),
         format!("[connections.{name}]\nurl = \"{url}\"\nauth = \"{auth}\"\n"),
     )
     .unwrap();
     let key_path = dir.join("secrets.key");
-    std::fs::write(&key_path, "passphrase-de-test").unwrap();
+    std::fs::write(&key_path, "test-passphrase").unwrap();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -137,30 +138,30 @@ async fn config_con(dir: &Path, name: &str, url: &str, auth: &str) {
     SecretResolver::new(dir)
         .store_in_age(name, &Secret::new(PASS.into()))
         .await
-        .expect("guardar secreto de test");
+        .expect("store the test secret");
 }
 
 // ---------- tests ----------
 
-/// Camino completo sftp: primer contacto → `HostKeyUnknown` (fingerprint de la
-/// clave REAL), trust vía el manager (re-verifica), connect → provider vivo
-/// cacheable. La resolución matchea la entrada nombrada y saca el secreto
-/// del `secrets.age`.
+/// Full sftp path: first contact → `HostKeyUnknown` (the REAL key's
+/// fingerprint), trust via the manager (re-verifies), connect → cacheable live
+/// provider. Resolution matches the named entry and pulls the secret from
+/// `secrets.age`.
 #[tokio::test]
-async fn sftp_tofu_trust_y_provider() {
+async fn sftp_tofu_trust_and_provider() {
     let (port, fp_real) = spawn_ssh().await;
     let dir = tempfile::tempdir().unwrap();
     let url = format!("sftp://{USER}@127.0.0.1:{port}");
-    config_con(dir.path(), "trabajo", &url, "password").await;
+    config_with(dir.path(), "work", &url, "password").await;
     let mgr = ConnectionManager::new(dir.path());
 
-    // Primer contacto.
+    // First contact.
     let err = mgr
         .connect("sftp", &format!("{USER}@127.0.0.1:{port}"))
         .await
         .err()
         .map(|d| d.error)
-        .expect("primer contacto debe fallar");
+        .expect("first contact must fail");
     let Error::HostKeyUnknown {
         host,
         port: p,
@@ -168,40 +169,40 @@ async fn sftp_tofu_trust_y_provider() {
         ..
     } = &err
     else {
-        panic!("esperaba HostKeyUnknown, fue {err:?}");
+        panic!("expected HostKeyUnknown, was {err:?}");
     };
     assert_eq!(host, "127.0.0.1");
     assert_eq!(*p, Some(port));
     assert_eq!(fingerprint, &fp_real);
 
-    // Confianza explícita (anti-TOCTOU: re-disca y compara) y reintento.
+    // Explicit trust (anti-TOCTOU: it redials and compares) and a retry.
     mgr.trust_host_key(host, *p, fingerprint)
         .await
         .expect("trust");
     let connected = mgr
         .connect("sftp", &format!("{USER}@127.0.0.1:{port}"))
         .await
-        .expect("connect tras trust");
+        .expect("connect after trust");
     assert_eq!(connected.provider.scheme(), "sftp");
-    assert!(connected.warnings.is_empty(), "sftp no degrada TLS");
+    assert!(connected.warnings.is_empty(), "sftp does not degrade TLS");
 
-    // connect_named usa la misma entrada (y la clave ya es de confianza).
-    let (scheme, authority, _prov) = mgr.connect_named("trabajo").await.expect("connect_named");
+    // connect_named uses the same entry (and the key is already trusted).
+    let (scheme, authority, _prov) = mgr.connect_named("work").await.expect("connect_named");
     assert_eq!(scheme, "sftp");
     assert_eq!(authority, format!("{USER}@127.0.0.1:{port}"));
 
-    // named_url resuelve la URL de la entrada; un nombre inexistente es
+    // named_url resolves the entry's URL; a name that does not exist is
     // NotFound.
-    assert_eq!(named_url(dir.path(), "trabajo").await.unwrap(), url);
+    assert_eq!(named_url(dir.path(), "work").await.unwrap(), url);
     assert!(matches!(
-        named_url(dir.path(), "no-existe").await,
+        named_url(dir.path(), "does-not-exist").await,
         Err(Error::NotFound)
     ));
 }
 
-/// Un fingerprint que NO coincide con la clave real no registra nada.
+/// A fingerprint that does NOT match the real key registers nothing.
 #[tokio::test]
-async fn trust_con_huella_falsa_es_mismatch() {
+async fn trust_with_a_fake_fingerprint_is_a_mismatch() {
     let (port, _fp) = spawn_ssh().await;
     let dir = tempfile::tempdir().unwrap();
     let mgr = ConnectionManager::new(dir.path());
@@ -213,21 +214,22 @@ async fn trust_con_huella_falsa_es_mismatch() {
         )
         .await
         .unwrap_err();
-    assert!(matches!(err, Error::HostKeyMismatch { .. }), "fue {err:?}");
+    assert!(matches!(err, Error::HostKeyMismatch { .. }), "was {err:?}");
 }
 
-/// Camino ftp (#30 stage 3c, ADR 0033): `ftp://` va por el provider-plugin
-/// WASM. El manager resuelve la IP, instancia el guest embebido y lo configura
-/// contra el servidor; el provider resultante sirve el scheme `ftp` y SIEMPRE
-/// avisa `FtpPlaintext` (FTPS = deuda, la sesión es en claro).
+/// ftp path (#30 stage 3c, ADR 0033): `ftp://` goes through the WASM
+/// provider-plugin. The manager resolves the IP, instantiates the embedded
+/// guest and configures it against the server; the resulting provider serves
+/// the `ftp` scheme and ALWAYS warns `FtpPlaintext` (FTPS = debt, the session
+/// is plaintext).
 #[tokio::test]
-async fn ftp_establece_provider_por_plugin() {
+async fn ftp_establishes_a_provider_via_plugin() {
     use libunftp::ServerBuilder;
     use unftp_sbe_fs::Filesystem;
 
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().to_path_buf();
-    let probe = std::net::TcpListener::bind("127.0.0.1:0").expect("bind efímero");
+    let probe = std::net::TcpListener::bind("127.0.0.1:0").expect("ephemeral bind");
     let port = probe.local_addr().expect("addr").port();
     drop(probe);
     let server = ServerBuilder::new(Box::new(move || {
@@ -263,25 +265,25 @@ async fn ftp_establece_provider_por_plugin() {
         .await
         .expect("connect ftp");
     assert_eq!(norte_vfs::Provider::scheme(&*connected.provider), "ftp");
-    // FTP-por-plugin es SIEMPRE en claro (FTPS = deuda): un aviso FtpPlaintext.
+    // FTP-via-plugin is ALWAYS plaintext (FTPS = debt): an FtpPlaintext warning.
     assert!(
         connected
             .warnings
             .iter()
             .any(|w| w.reason == ConnectionWarningReason::FtpPlaintext),
-        "el ftp-por-plugin avisa FtpPlaintext, fue {:?}",
+        "ftp-via-plugin warns FtpPlaintext, was {:?}",
         connected.warnings
     );
-    // Y el provider LISTA de verdad la raíz (el guest configuró y conecta).
+    // And the provider really LISTS the root (the guest configured and connects).
     let root = norte_proto::VPath::root(norte_proto::Scheme::new("ftp").unwrap(), None);
     let _stream = norte_vfs::Provider::list(&*connected.provider, &root)
         .await
-        .expect("lista la raíz remota");
+        .expect("lists the remote root");
 }
 
-/// Un scheme que el manager no sabe conectar es Unsupported.
+/// A scheme the manager does not know how to connect is Unsupported.
 #[tokio::test]
-async fn scheme_desconocido_es_unsupported() {
+async fn unknown_scheme_is_unsupported() {
     let dir = tempfile::tempdir().unwrap();
     let mgr = ConnectionManager::new(dir.path());
     let err = mgr
@@ -289,10 +291,10 @@ async fn scheme_desconocido_es_unsupported() {
         .await
         .err()
         .map(|d| d.error)
-        .expect("gopher no conecta");
-    // La URL gopher://h ni siquiera parsea como conexión remota conocida.
+        .expect("gopher does not connect");
+    // The URL gopher://h does not even parse as a known remote connection.
     assert!(
         matches!(err, Error::Unsupported | Error::InvalidPath),
-        "fue {err:?}"
+        "was {err:?}"
     );
 }

@@ -1,39 +1,35 @@
-//! La ayuda: temas, contexto y páginas de extensión.
+//! Help: topics, context and extension pages.
 //!
-//! Parte de `controller`: son métodos de `Estado`, movidos aquí sin
-//! tocarlos (ADR 0086). El único escritor sigue siendo el actor.
+//! Part of `controller`: these are `State` methods, moved here without
+//! touching them (ADR 0086). The only writer is still the actor.
 
-// Estos módulos son el mismo `impl Estado` partido en trozos, así que usan
-// los mismos imports que el padre. Enumerarlos aquí sería una lista de
-// cuarenta líneas por fichero, en 32 ficheros, que se desincroniza en cuanto
-// el padre importa algo — `super::*` la sigue sola.
+// These modules are the same `impl State` split into pieces, so they use
+// the same imports as the parent. Enumerating them here would be a
+// forty-line list per file, in 32 files, that goes stale the moment the
+// parent imports something — `super::*` tracks it on its own.
 #[allow(clippy::wildcard_imports)]
 use super::*;
 use crate::dto::HelpScrollTo;
 
-impl Estado {
-    /// Abre la ayuda sobre la página del CONTEXTO donde está el lector.
+impl State {
+    /// Opens help on the page for the CONTEXT the reader is in.
     ///
-    /// Quien pulsa `F1` mirando una pregunta quiere la respuesta a ESA
-    /// pregunta, no el índice. El contexto es una palabra cerrada
-    /// (`dialog.confirm`, `viewer`, `browse`) y quién la reclama lo dice el
-    /// propio corpus en su portada, así que añadir una página para un
-    /// diálogo nuevo no toca este código.
-    pub(super) fn abrir_ayuda(
+    /// Whoever presses `F1` while looking at a question wants the answer to
+    /// THAT question, not the index. The context is a closed word
+    /// (`dialog.confirm`, `viewer`, `browse`) and who claims it is said by
+    /// the corpus itself on its front page, so adding a page for a new
+    /// dialog does not touch this code.
+    pub(super) fn open_help(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        // Sobre un diálogo que se está TECLEANDO, no. La ayuda se queda el
-        // teclado mientras está abierta, así que abrirla encima de un campo
-        // de texto convierte el `⌫` que corrige una errata en un paso atrás
-        // de la ayuda y el `enter` que confirma en otra cosa. El TUI lo
-        // prohíbe por su nombre desde H3c y con el mismo razonamiento.
-        if self
-            .dialogos
-            .last()
-            .is_some_and(|d| d.vista.input.is_some())
-        {
+        // Not over a dialog that is being TYPED into. Help keeps the
+        // keyboard while it is open, so opening it over a text field turns
+        // the `⌫` that fixes a typo into a step back in help, and the
+        // `enter` that confirms into something else. The TUI forbids it by
+        // name since H3c and for the same reasoning.
+        if self.dialogs.last().is_some_and(|d| d.vista.input.is_some()) {
             return (
                 ActionAck::Unavailable {
                     reason_key: "host-help-over-input".to_owned(),
@@ -41,224 +37,226 @@ impl Estado {
                 Vec::new(),
             );
         }
-        let contexto = self.contexto_de_ayuda();
-        self.ayuda = Some(crate::help::Ayuda::abrir(
+        let context = self.help_context();
+        self.help = Some(crate::help::Help::open(
             self.lang,
-            contexto,
-            &self.efectivo,
-            &self.efectivo_visor,
-            self.hechos(),
+            context,
+            &self.effective,
+            &self.effective_visor,
+            self.facts(),
         ));
-        // El catálogo de extensiones se pide y NO se espera: la ayuda se
-        // pinta ya. La documentación es cosmética, y una ventana en blanco
-        // hasta que el daemon conteste es peor que una lateral que gana
-        // filas medio segundo más tarde. Un fallo no se dice: se pinta la
-        // ayuda sin páginas de extensión.
+        // The extension catalog is requested and NOT awaited: help is
+        // painted right away. The documentation is cosmetic, and a blank
+        // window until the daemon answers is worse than a side panel that
+        // gains rows half a second later. A failure is not reported: help is
+        // painted without extension pages.
         let backend = Arc::clone(backend);
-        let buzon = buzon.clone();
+        let mailbox = mailbox.clone();
         tokio::spawn(async move {
-            let res = match tokio::time::timeout(PLAZO_PLUGINS, backend.plugin_list()).await {
+            let res = match tokio::time::timeout(DEADLINE_PLUGINS, backend.plugin_list()).await {
                 Ok(r) => r,
                 Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
             };
-            let _ = buzon
-                .send(Mensaje::Fondo(Box::new(Fondo::PluginsDeAyuda(res))))
+            let _ = mailbox
+                .send(Message::Background(Box::new(Background::HelpPlugins(res))))
                 .await;
         });
-        let cambio = ViewChange::Help {
-            help: self.vista_ayuda(),
+        let change = ViewChange::Help {
+            help: self.vista_help(),
         };
-        (self.aplicada(), vec![self.parche(vec![cambio])])
+        (self.applied(), vec![self.parche(vec![change])])
     }
 
-    /// El parche de la ayuda, y de paso la página que haya que pedir.
+    /// Help's patch, and along the way the page that needs to be requested.
     ///
-    /// UN sitio para las dos cosas a propósito: cualquier gesto que cambie de
-    /// página —una flecha, un click, un enlace— puede aterrizar en la de una
-    /// extensión, y esa página no está en el corpus, hay que pedirla. Un
-    /// segundo camino que solo pintara sería una página de extensión que se
-    /// queda en blanco según cómo se llegue a ella.
-    pub(super) fn parche_de_ayuda(
+    /// ONE spot for both things on purpose: any gesture that changes page —
+    /// an arrow, a click, a link — can land on an extension's, and that page
+    /// is not in the corpus, it has to be requested. A second path that only
+    /// painted would be an extension page that stays blank depending on how
+    /// it is reached.
+    pub(super) fn help_patch(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        self.pedir_pagina_de_plugin(backend, buzon);
-        let cambio = ViewChange::Help {
-            help: self.vista_ayuda(),
+        self.request_plugin_page(backend, mailbox);
+        let change = ViewChange::Help {
+            help: self.vista_help(),
         };
-        vec![self.parche(vec![cambio])]
+        vec![self.parche(vec![change])]
     }
 
-    /// El catálogo llegó: entra al modelo y, si el lector ya está sobre una
-    /// página de extensión, se pide esa página.
+    /// The catalog arrived: it enters the model and, if the reader is
+    /// already on an extension page, that page is requested.
     ///
-    /// Si la ayuda se cerró mientras volaba, no hay nada que hacer: la foto
-    /// era de una apertura que ya no existe, y guardarla para la siguiente
-    /// sería enseñar un catálogo viejo.
-    pub(super) fn aplicar_catalogo_de_plugins(
+    /// If help closed while this was in flight, there is nothing to do: the
+    /// snapshot was of an opening that no longer exists, and keeping it for
+    /// the next one would show a stale catalog.
+    pub(super) fn apply_plugins_catalog(
         &mut self,
         res: Result<norte_proto::methods::PluginListResult, Error>,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        let Ok(lista) = res else {
+        let Ok(list) = res else {
             return Vec::new();
         };
-        let Some(a) = self.ayuda.as_mut() else {
+        let Some(a) = self.help.as_mut() else {
             return Vec::new();
         };
-        let antes = a.estado.rows().to_vec();
-        a.set_plugins(&lista.plugins);
-        if a.estado.rows() == antes {
-            // Un catálogo que no añade ninguna fila —ninguna extensión, o
-            // ninguna con página y con id válido— no cambia la pantalla, y
-            // un parche que no cambia nada obliga a un renderer a repintar
-            // la ayuda entera para nada.
+        let before = a.state.rows().to_vec();
+        a.set_plugins(&list.plugins);
+        if a.state.rows() == before {
+            // A catalog that adds no row — no extension, or none with a page
+            // and a valid id — does not change the screen, and a patch that
+            // changes nothing forces a renderer to repaint the whole help
+            // for nothing.
             return Vec::new();
         }
-        self.parche_de_ayuda(backend, buzon)
+        self.help_patch(backend, mailbox)
     }
 
-    /// Pide la página de la extensión abierta, si hay una y no se ha pedido
-    /// ya en esta apertura de la ayuda.
-    pub(super) fn pedir_pagina_de_plugin(
+    /// Requests the open extension's page, if there is one and it has not
+    /// already been requested in this opening of help.
+    pub(super) fn request_plugin_page(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) {
-        let Some(id) = self
-            .ayuda
-            .as_mut()
-            .and_then(crate::help::Ayuda::reclamar_pagina)
-        else {
+        let Some(id) = self.help.as_mut().and_then(crate::help::Help::claim_page) else {
             return;
         };
         let backend = Arc::clone(backend);
-        let buzon = buzon.clone();
+        let mailbox = mailbox.clone();
         tokio::spawn(async move {
-            let res =
-                match tokio::time::timeout(PLAZO_PLUGINS, backend.plugin_help(id.clone())).await {
-                    Ok(r) => r,
-                    Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
-                };
-            let _ = buzon
-                .send(Mensaje::Fondo(Box::new(Fondo::PaginaDePlugin(id, res))))
+            let res = match tokio::time::timeout(DEADLINE_PLUGINS, backend.plugin_help(id.clone()))
+                .await
+            {
+                Ok(r) => r,
+                Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
+            };
+            let _ = mailbox
+                .send(Message::Background(Box::new(Background::PluginPage(
+                    id, res,
+                ))))
                 .await;
         });
     }
 
-    /// La página de una extensión llegó. Un fallo deja la página VACÍA con su
-    /// nombre, que es mejor respuesta que un error encima de la ayuda — y es
-    /// también lo que ve un daemon N-1 sin el método. Se pide una vez por
-    /// apertura: cerrar y volver a abrir la ayuda es el reintento.
-    pub(super) fn aplicar_pagina_de_plugin(
+    /// An extension's page arrived. A failure leaves the page EMPTY with its
+    /// name, which is a better answer than an error over help — and it is
+    /// also what an N-1 daemon without the method sees. It is requested once
+    /// per opening: closing and reopening help is the retry.
+    pub(super) fn apply_plugin_page(
         &mut self,
         id: &str,
         res: Option<&norte_proto::methods::PluginHelpResult>,
     ) -> Option<BridgeEnvelope<UiUpdate>> {
-        let a = self.ayuda.as_mut()?;
-        a.instalar_pagina(id, res?);
-        let cambio = ViewChange::Help {
-            help: self.vista_ayuda(),
+        let a = self.help.as_mut()?;
+        a.install_page(id, res?);
+        let change = ViewChange::Help {
+            help: self.vista_help(),
         };
-        Some(self.parche(vec![cambio]))
+        Some(self.parche(vec![change]))
     }
 
-    /// Dónde está el lector, en el vocabulario del corpus.
+    /// Where the reader is, in the corpus's vocabulary.
     ///
-    /// El diálogo de más arriba gana: es lo que tapa la pantalla y lo que el
-    /// lector está mirando. Un diálogo que solo informa no tiene página
-    /// propia y cae al listado, que es de lo que estaba hablando.
-    pub(super) fn contexto_de_ayuda(&self) -> &'static str {
+    /// The topmost dialog wins: it is what covers the screen and what the
+    /// reader is looking at. A dialog that only informs has no page of its
+    /// own and falls back to the listing, which is what it was talking
+    /// about.
+    pub(super) fn help_context(&self) -> &'static str {
         debug_assert!(
-            CONTEXTOS.contains(&self.contexto_calculado()),
-            "un contexto fuera del vocabulario declarado"
+            CONTEXTOS.contains(&self.context_computed()),
+            "a context outside the declared vocabulary"
         );
-        self.contexto_calculado()
+        self.context_computed()
     }
 
-    /// El cálculo, sin el ancla.
-    pub(super) fn contexto_calculado(&self) -> &'static str {
-        if let Some(d) = self.dialogos.last() {
-            return match d.al_confirmar {
-                // Una transferencia comparte página con el borrado: las dos
-                // son «la pregunta que hay que responder antes de que algo
-                // cambie», y el corpus tiene UNA que habla de eso.
-                // La colisión tiene su PROPIA página en el corpus: sus teclas
-                // son otras (`dialog.overwrite`, `dialog.skip`…), y mandar al
-                // lector a la de confirmar le enseñaría las que no valen.
-                Some(Pendiente::Reintentar { .. }) => "dialog.collision",
-                // Cerrar cae aquí por lo mismo: es «responde antes de que
-                // algo se pierda», y lo que se pierde es una copia a medias.
+    /// The computation, without the anchor.
+    pub(super) fn context_computed(&self) -> &'static str {
+        if let Some(d) = self.dialogs.last() {
+            return match d.on_confirm {
+                // A transfer shares a page with deletion: both are "the
+                // question that must be answered before something changes",
+                // and the corpus has ONE page about that.
+                // The collision has its OWN page in the corpus: its keys are
+                // different (`dialog.overwrite`, `dialog.skip`…), and sending
+                // the reader to the confirm page would show them ones that do
+                // not apply.
+                Some(Pending::Retry { .. }) => "dialog.collision",
+                // Closing falls here for the same reason: it is "answer
+                // before something is lost", and what is lost is a copy left
+                // halfway.
                 Some(
-                    Pendiente::Borrar { .. }
-                    | Pendiente::Transferir { .. }
-                    | Pendiente::Soltar { .. }
-                    // Desinstalar es un borrado que pregunta: misma página
-                    // que el borrado.
-                    | Pendiente::DesinstalarExtension { .. }
-                    // Deshacer hasta un punto es una consecuencia que se
-                    // acepta: la misma página que en la TUI.
-                    | Pendiente::DeshacerHasta { .. }
-                    | Pendiente::Salir,
+                    Pending::Delete { .. }
+                    | Pending::Transferir { .. }
+                    | Pending::Release { .. }
+                    // Uninstalling is a delete that asks: same page as
+                    // deletion.
+                    | Pending::UninstallExtension { .. }
+                    // Undoing up to a point is an accepted consequence: the
+                    // same page as in the TUI.
+                    | Pending::UndoUntil { .. }
+                    | Pending::Exit,
                 ) => "dialog.confirm",
                 Some(
-                    Pendiente::Decidir { .. }
-                    | Pendiente::AprobarExtension { .. }
-                    | Pendiente::DeshacerSesion { .. },
+                    Pending::Decide { .. }
+                    | Pending::ApproveExtension { .. }
+                    | Pending::UndoSession { .. },
                 ) => "dialog.approval",
-                // Buscar comparte página con crear: los dos son el diálogo
-                // que pide que teclees un nombre, y el corpus tiene UNA que
-                // habla de eso.
-                // Renombrar comparte página con crear y con buscar: los tres
-                // son el diálogo que pide que teclees algo, y el corpus tiene
-                // UNA que habla de eso.
-                Some(Pendiente::InstruccionIa { .. }) => "dialog.ai-rename",
-                // La plantilla del lote (#310): la misma página que la TUI le
-                // da a su prompt, la del renombrado.
-                Some(Pendiente::PlantillaLote { .. }) => "dialog.rename",
-                // #327: el de la contraseña tiene su PROPIA página, la misma
-                // que usa la TUI (`remote.md`, junto al TOFU). Mandarlo a la
-                // de «teclea un nombre» sería la divergencia entre frontends
-                // que ADR 0077 existe para evitar, cometida en el mismo cambio
-                // que añade su test de paridad.
-                Some(Pendiente::EntregarSecreto { .. }) => "dialog.ask-secret",
-                // #311: el diálogo de sumas es un cuadro de LECTURA sobre lo
-                // que hay bajo el cursor, como las propiedades.
-                Some(Pendiente::CopiarSumas { .. }) => "dialog.properties",
+                // Search shares a page with create: both are the dialog that
+                // asks you to type a name, and the corpus has ONE page about
+                // that.
+                // Rename shares a page with create and with search: all
+                // three are the dialog that asks you to type something, and
+                // the corpus has ONE page about that.
+                Some(Pending::InstructionIa { .. }) => "dialog.ai-rename",
+                // The batch template (#310): the same page the TUI gives its
+                // prompt, the rename one.
+                Some(Pending::TemplateBatch { .. }) => "dialog.rename",
+                // #327: the password one has its OWN page, the same one the
+                // TUI uses (`remote.md`, next to TOFU). Sending it to "type a
+                // name" would be the divergence between frontends ADR 0077
+                // exists to prevent, committed in the very change that adds
+                // its parity test.
+                Some(Pending::DeliverSecret { .. }) => "dialog.ask-secret",
+                // #311: the checksums dialog is a READ-ONLY box over what is
+                // under the cursor, like properties.
+                Some(Pending::CopyChecksums { .. }) => "dialog.properties",
                 Some(
-                    Pendiente::CrearDirectorio { .. }
-                    | Pendiente::CrearFichero { .. }
-                    | Pendiente::Buscar { .. }
-                    | Pendiente::Renombrar { .. }
-                    // La consulta semántica es otro diálogo que pide que
-                    // teclees algo, y el corpus tiene UNA página que habla
-                    // de eso.
-                    | Pendiente::ConsultaSemantica
-                    // Marcar por patrón, igual: un diálogo que pide que
-                    // teclees algo.
-                    | Pendiente::Patron { .. }
-                    // Y empaquetar: lo que se teclea es el nombre del
-                    // contenedor, de donde sale el formato.
-                    | Pendiente::Empaquetar { .. }
-                    // Partir pide un TAMAÑO, pero es el mismo diálogo de un
-                    // campo de texto y una confirmación.
-                    | Pendiente::Partir { .. }
-                    // Y guardar el perfil pide un NOMBRE, que acaba siendo un
-                    // directorio: mismo diálogo de un campo (#318).
-                    | Pendiente::GuardarPerfil
-                    // Y el valor de un ajuste de texto: un campo prellenado
-                    // y dos botones.
-                    | Pendiente::EditarAjuste { .. }
-                    // Y los permisos piden un MODO, con la misma forma (#314).
-                    // El corpus los documenta en la página de las propiedades,
-                    // pero el CONTEXTO de teclas es este: un campo y dos
-                    // botones.
-                    | Pendiente::Permisos { .. }
-                    // Y el nombre de un favorito (#309): un campo prellenado
-                    // y dos botones, la misma forma que todos los de arriba.
-                    | Pendiente::GuardarFavorito { .. },
+                    Pending::CreateDirectory { .. }
+                    | Pending::CreateFile { .. }
+                    | Pending::Search { .. }
+                    | Pending::Rename { .. }
+                    // The semantic query is another dialog that asks you to
+                    // type something, and the corpus has ONE page about
+                    // that.
+                    | Pending::QuerySemantic
+                    // Marking by pattern, same thing: a dialog that asks you
+                    // to type something.
+                    | Pending::Patron { .. }
+                    // And packing: what is typed is the container's name,
+                    // which is where the format comes from.
+                    | Pending::Pack { .. }
+                    // Splitting asks for a SIZE, but it is the same dialog of
+                    // a text field and a confirmation.
+                    | Pending::Split { .. }
+                    // And saving the profile asks for a NAME, which ends up
+                    // being a directory: same single-field dialog (#318).
+                    | Pending::SaveProfile
+                    // And a text setting's value: a prefilled field and two
+                    // buttons.
+                    | Pending::EditSetting { .. }
+                    // And permissions ask for a MODE, with the same shape
+                    // (#314). The corpus documents them on the properties
+                    // page, but the key CONTEXT is this one: a field and two
+                    // buttons.
+                    | Pending::Permissions { .. }
+                    // And a favorite's name (#309): a prefilled field and two
+                    // buttons, the same shape as all the ones above.
+                    | Pending::SaveFavorite { .. },
                 ) => "dialog.mkdir",
                 None => "browse",
             };
@@ -269,121 +267,116 @@ impl Estado {
         "browse"
     }
 
-    /// Los hechos con los que la ayuda atenúa una fila, congelados al abrir.
+    /// The facts help uses to dim a row, frozen on open.
     ///
-    /// Los dos de solo lectura salen de las capacidades del hueco, que se
-    /// piden al aterrizar cada listado. Estuvieron cableados a `false` con un
-    /// comentario que decía que el host no llevaba esa cuenta: la llevaba
-    /// —desde #268— y tiraba todo menos el modo de plegado, así que dentro de
-    /// un contenedor el terminal atenuaba F5/F8 y esta ventana los ofrecía
-    /// encendidos. El ORIGEN es el hueco activo y el DESTINO es el que tiene
-    /// el rol, que son exactamente los dos huecos por los que pregunta la
-    /// tabla compartida.
+    /// The two read-only ones come from the slot's capabilities, requested
+    /// when each listing lands. They used to be wired to `false` with a
+    /// comment saying the host did not track that — it did, since #268, and
+    /// dropped everything but the fold mode, so inside a container the
+    /// terminal dimmed F5/F8 and this window offered them lit. The SOURCE is
+    /// the active slot and the DESTINATION is the one holding the role,
+    /// which are exactly the two slots the shared table asks about.
     ///
-    /// Sin destino designado —tres o más huecos sin rol, o ninguno más— la
-    /// respuesta es `false`, y la divergencia con `App::help_facts` del
-    /// terminal es DELIBERADA: allí se contesta con el hueco propio, que
-    /// atenúa F5 diciendo «solo lectura» cuando el impedimento real es que no
-    /// hay a dónde copiar. Una causa falsa enseña al lector algo que no es;
-    /// aquí la tecla se ofrece y el rechazo llega con su nombre
-    /// (`host-no-target-designated`, `host-no-other-slot`), que es
-    /// información. Si alguien iguala los dos frontends, que sea moviendo el
-    /// terminal hacia aquí.
-    pub(super) fn hechos(&self) -> norte_frontend::availability::Facts {
-        let hueco = self.hueco();
-        // `cursor_entry`, que es la puerta de DESCRIBIR: con un quick filter
-        // puesto el cursor crudo no se mueve y la fila señalada es otra, así
-        // que indexar `entries()` por él describía una entrada que no es la
-        // que el lector tiene delante.
-        let entrada = hueco.pane.cursor_entry();
+    /// With no destination designated — three or more roleless slots, or no
+    /// more than one — the answer is `false`, and the divergence from the
+    /// terminal's `App::help_facts` is DELIBERATE: there, the answer comes
+    /// from its own slot, which dims F5 saying "read only" when the real
+    /// obstacle is that there is nowhere to copy to. A false cause shows the
+    /// reader something that is not so; here the key is offered and the
+    /// rejection arrives with its name (`host-no-target-designated`,
+    /// `host-no-other-slot`), which is information. If anyone makes the two
+    /// frontends match, let it be by moving the terminal here.
+    pub(super) fn facts(&self) -> norte_frontend::availability::Facts {
+        let slot = self.slot();
+        // `cursor_entry`, the door for DESCRIBING: with a quick filter set
+        // the raw cursor does not move and the pointed-to row is a different
+        // one, so indexing `entries()` by it described an entry that is not
+        // the one the reader has in front of them.
+        let entry = slot.pane.cursor_entry();
         norte_frontend::availability::Facts {
-            // Lo mismo que navega `Activate`, y por el sitio compartido: un
-            // contenedor y un enlace se entran igual que un directorio (ADR
-            // 0077). Preguntarlo aquí por `kind == Dir` era atenuar `enter`
-            // sobre un `.zip` que la tecla abre sin problema.
-            enterable: entrada.is_some_and(|e| norte_frontend::nav::enter_target(e).is_some()),
-            // Lo MISMO que rehúsa `pedir_visor`, que solo rehúsa un
-            // directorio: un symlink se abre en el visor sin problema, y
-            // atenuar F3 sobre uno decía «esto no aplica» de una tecla que
-            // funciona. Los dos sitios se mueven juntos.
-            viewable: entrada.is_some_and(|e| e.kind != EntryKind::Dir),
-            rename_single: hueco.pane.marks_len() <= 1,
-            source_read_only: self.solo_lectura(self.activo()),
-            dest_read_only: self
-                .hueco_destino()
-                .is_ok_and(|destino| self.solo_lectura(destino)),
-            // `degraded` en la tabla significa que la sesión va SIN CIFRAR,
-            // que no es ninguno de los tres estados que este host proyecta
-            // (conectado, reintentando, perdido). Mientras el wire de la
-            // conexión no llegue hasta aquí, la respuesta honesta es que no
-            // consta.
+            // The same as what `Activate` navigates, and through the shared
+            // spot: a container and a symlink are entered the same as a
+            // directory (ADR 0077). Asking here by `kind == Dir` used to dim
+            // `enter` over a `.zip` that the key opens without a problem.
+            enterable: entry.is_some_and(|e| norte_frontend::nav::enter_target(e).is_some()),
+            // The SAME thing `request_visor` refuses, which only refuses a
+            // directory: a symlink opens in the viewer without a problem,
+            // and dimming F3 over one said "this does not apply" about a key
+            // that works. The two spots move together.
+            viewable: entry.is_some_and(|e| e.kind != EntryKind::Dir),
+            rename_single: slot.pane.marks_len() <= 1,
+            source_read_only: self.solo_read(self.active()),
+            dest_read_only: self.slot_dest().is_ok_and(|dest| self.solo_read(dest)),
+            // `degraded` in the table means the session runs UNENCRYPTED,
+            // which is none of the three states this host projects
+            // (connected, retrying, lost). While the connection's wire does
+            // not reach this far, the honest answer is that it is unknown.
             degraded: false,
-            // El host habla por el SDK contra el daemon, que es quien lleva
-            // el journal (ADR 0066): lo que muta por aquí se registra y se
-            // puede deshacer.
+            // The host speaks through the SDK against the daemon, which is
+            // the one carrying the journal (ADR 0066): what mutates here is
+            // recorded and can be undone.
             journalled: true,
-            // Y por lo mismo hay daemon con quien compartir la sesión: esta
-            // ventana no tiene otro brazo (fase 9).
+            // And for the same reason there is a daemon to share the session
+            // with: this window has no other arm (phase 9).
             daemon: true,
-            // Una ventana se está pintando, así que hay escritorio donde
-            // abrir la otra mitad del relevo. Preguntárselo al entorno aquí
-            // sería preguntar si existe lo que se está usando.
+            // A window is being painted, so there is a desktop where the
+            // other half of the handoff can open. Asking the environment
+            // here would be asking whether the thing being used exists.
             windowed: true,
         }
     }
 
-    /// Re-congela los hechos de la ayuda si está abierta, y devuelve su
-    /// parche (#262).
+    /// Re-freezes help's facts if it is open, and returns its patch (#262).
     ///
-    /// El congelado de `abrir_ayuda` es contra que se mueva el LECTOR, no
-    /// contra que se mueva el mundo. Dos de los hechos —`enterable` y
-    /// `viewable`— describen la entrada bajo el cursor, y una copia o un
-    /// borrado que terminan con la ayuda delante re-listan el panel por
-    /// debajo: la frase de motivo se quedaba explicando por qué no aplica a
-    /// una selección que ya no existe. No había despacho incorrecto
-    /// —`activar_en_ayuda` vuelve a preguntar antes de correr—, pero una
-    /// pantalla que explica algo falso es una pantalla que miente.
-    pub(super) fn recongelar_ayuda(&mut self) -> Option<BridgeEnvelope<UiUpdate>> {
-        if !self.recongelar_hechos_de_ayuda() {
+    /// The freezing in `open_help` guards against the READER moving, not
+    /// against the world moving. Two of the facts — `enterable` and
+    /// `viewable` — describe the entry under the cursor, and a copy or a
+    /// delete that finish with help in front re-list the pane underneath:
+    /// the reason phrase kept explaining why something did not apply to a
+    /// selection that no longer exists. There was no wrong dispatch —
+    /// `activate_in_help` asks again before running — but a screen that
+    /// explains something false is a screen that lies.
+    pub(super) fn refreeze_help(&mut self) -> Option<BridgeEnvelope<UiUpdate>> {
+        if !self.refreeze_help_facts() {
             return None;
         }
-        let cambio = ViewChange::Help {
-            help: self.vista_ayuda(),
+        let change = ViewChange::Help {
+            help: self.vista_help(),
         };
-        Some(self.parche(vec![cambio]))
+        Some(self.parche(vec![change]))
     }
 
-    /// Re-congela y NO fabrica parche. Para los caminos que ya mandan una
-    /// foto: `parche` gasta un número de secuencia, y tirar el sobre después
-    /// de gastarlo deja un HUECO en la secuencia — que es exactamente la
-    /// condición que obliga al renderer a pedir una foto entera.
+    /// Re-freezes and does NOT build a patch. For paths that already send a
+    /// snapshot: `parche` spends a sequence number, and dropping the
+    /// envelope after spending it leaves a GAP in the sequence — exactly the
+    /// condition that forces the renderer to request a full snapshot.
     ///
-    /// Devuelve si la ayuda estaba abierta Y sus hechos han CAMBIADO.
-    pub(super) fn recongelar_hechos_de_ayuda(&mut self) -> bool {
-        if self.ayuda.is_none() {
+    /// Returns whether help was open AND its facts have CHANGED.
+    pub(super) fn refreeze_help_facts(&mut self) -> bool {
+        if self.help.is_none() {
             return false;
         }
-        let hechos = self.hechos();
-        self.ayuda.as_mut().is_some_and(|a| a.recongelar(hechos))
+        let facts = self.facts();
+        self.help.as_mut().is_some_and(|a| a.refreeze(facts))
     }
 
-    /// Una parte del detalle de un veredicto, en LÍNEAS separadas (#273).
+    /// One part of a verdict's detail, in separate LINES (#273).
     ///
-    /// La causa y el nombre van en líneas distintas, que es la forma que
-    /// tiene esta superficie de separarlos FUERA de banda: componerlos en
-    /// una sola dejaba que un fichero llamado `✗ 4. ya existe: otro.txt`
-    /// fabricara una entrada de la lista que no existe. El nombre viaja solo
-    /// y con su marca, que es lo único que un tercero controla.
-    pub(super) fn lineas_de_detalle(
+    /// The cause and the name go on different lines, which is how this
+    /// surface separates them OUT of band: composing them into one let a
+    /// file named `✗ 4. ya exists: other.txt` fabricate a list entry that
+    /// does not exist. The name travels alone and with its mark, the only
+    /// thing a third party controls.
+    pub(super) fn detail_lines(
         &self,
-        parte: &norte_frontend::DetailPart,
+        part: &norte_frontend::DetailPart,
     ) -> Vec<crate::dto::DialogLine> {
         use norte_frontend::DetailPart;
-        let plana = |texto: String| crate::dto::DialogLine {
-            text: clamp_display(texto),
+        let plana = |text: String| crate::dto::DialogLine {
+            text: clamp_display(text),
             hostile: false,
         };
-        match parte {
+        match part {
             DetailPart::Temp { count } => vec![plana(norte_i18n::ta_in(
                 self.lang,
                 "modal-rename-batch-temp",
@@ -396,7 +389,7 @@ impl Estado {
                 hostile,
             } => {
                 let kind = norte_i18n::t_in(self.lang, kind_key);
-                let causa = match index {
+                let cause = match index {
                     Some(n) => norte_i18n::ta_in(
                         self.lang,
                         "modal-rename-batch-collision-prefix",
@@ -409,7 +402,7 @@ impl Estado {
                     ),
                 };
                 vec![
-                    plana(causa),
+                    plana(cause),
                     crate::dto::DialogLine {
                         text: clamp_display(name.clone()),
                         hostile: *hostile,
@@ -426,115 +419,113 @@ impl Estado {
                     "modal-rename-batch-collision-more",
                     &[("shown", &shown.to_string()), ("total", &total.to_string())],
                 )),
-                // El resumen no lleva nombre, pero SÍ la marca de que alguna
-                // de las ocultas lo tiene hostil: lo escondido no se cuela
-                // limpio.
+                // The summary carries no name, but it DOES carry the mark
+                // that one of the hidden ones has a hostile one: what is
+                // hidden does not sneak through clean.
                 hostile: *hostile,
             }],
         }
     }
 
-    /// La proyección de la ayuda.
-    pub(super) fn vista_ayuda(&self) -> Option<crate::dto::HelpView> {
-        let a = self.ayuda.as_ref()?;
-        Some(a.vista(self.lang, self.efectos, self.visor.is_some()))
+    /// Help's projection.
+    pub(super) fn vista_help(&self) -> Option<crate::dto::HelpView> {
+        let a = self.help.as_ref()?;
+        Some(a.vista(self.lang, self.effects, self.visor.is_some()))
     }
 
-    /// Las teclas mientras la ayuda está abierta.
+    /// The keys while help is open.
     ///
-    /// FIJAS a propósito, como las de la paleta y por el mismo motivo: el
-    /// catálogo no tiene comandos para «filtrar esta lista», «cambiar de
-    /// mitad» o «seguir este enlace». Son las que la propia ayuda anuncia en
-    /// su pie (`help-hint-gui`), y esa cadena y este `match` cambian juntos.
-    pub(super) fn tecla_en_ayuda(
+    /// FIXED on purpose, like the palette's and for the same reason: the
+    /// catalog has no commands for "filter this list", "switch halves" or
+    /// "follow this link". They are the ones help itself announces in its
+    /// footer (`help-hint-gui`), and that string and this `match` change
+    /// together.
+    pub(super) fn key_in_help(
         &mut self,
         k: &crate::keys::KeyInput,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        // `Ctrl+P` sale de la ayuda a la paleta, que es lo que su pie
-        // promete. Los DOS cambios viajan en el mismo parche: un renderer que
-        // solo recibiera el de la paleta seguiría pintando la ayuda debajo.
+        // `Ctrl+P` leaves help for the palette, which is what its footer
+        // promises. BOTH changes travel in the same patch: a renderer that
+        // only received the palette one would keep painting help
+        // underneath.
         if k.ctrl && !k.alt && !k.meta && k.key.eq_ignore_ascii_case("p") {
-            self.ayuda = None;
-            self.paleta = Some(norte_frontend::palette_state::Palette::with_recent(
-                self.filas_de_paleta(),
-                &self.paleta_recientes,
+            self.help = None;
+            self.palette = Some(norte_frontend::palette_state::Palette::with_recent(
+                self.palette_rows(),
+                &self.palette_recent,
             ));
-            self.pedir_filas_de_plugin(backend, buzon);
-            let cambios = vec![
+            self.request_plugin_rows(backend, mailbox);
+            let changes = vec![
                 ViewChange::Help { help: None },
                 ViewChange::Palette {
-                    palette: self.vista_paleta(),
+                    palette: self.vista_palette(),
                 },
             ];
-            return (self.aplicada(), vec![self.parche(cambios)]);
+            return (self.applied(), vec![self.parche(changes)]);
         }
-        // FILTRANDO, las teclas son LETRAS: resolverlas por el keymap
-        // convertiría escribir «documento» en abrir, cerrar y filtrar. Solo
-        // `Escape`, `Backspace` y `Enter` siguen significando algo, y esos
-        // tres van por su nombre porque el filtro es un campo de texto.
-        let filtrando = self.ayuda.as_ref().is_some_and(|a| a.estado.filtering());
-        let verbo = if filtrando {
-            None
-        } else {
-            self.verbo_de_dialogo(k)
+        // WHILE FILTERING, keys are LETTERS: resolving them through the
+        // keymap would turn typing "document" into open, close and filter.
+        // Only `Escape`, `Backspace` and `Enter` still mean something, and
+        // those three go by name because the filter is a text field.
+        let filtering = self.help.as_ref().is_some_and(|a| a.state.filtering());
+        let verb = if filtering { None } else { self.dialog_verb(k) };
+        let Some(a) = self.help.as_mut() else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
-        let Some(a) = self.ayuda.as_mut() else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
-        };
-        match (verbo.as_deref(), k.key.as_str()) {
+        match (verb.as_deref(), k.key.as_str()) {
             (Some("dialog.cancel"), _) | (None, "Escape" | "esc") => {
-                // Filtrando, `esc` deja de filtrar y no cierra: cerrar la
-                // ayuda entera por abandonar una búsqueda es perder la
-                // página que se estaba leyendo.
-                if a.estado.filtering() {
-                    a.estado.end_filter();
+                // While filtering, `esc` stops filtering and does not close:
+                // closing all of help for abandoning a search would lose the
+                // page that was being read.
+                if a.state.filtering() {
+                    a.state.end_filter();
                 } else {
-                    self.ayuda = None;
+                    self.help = None;
                 }
             }
-            (Some("dialog.pane"), _) => a.estado.toggle_focus(),
-            // Las teclas que DESPLAZAN, resueltas por el keymap del lector —
-            // antes el renderer atendía `AvPág`, `Inicio`, `[`… como teclas
-            // fijas, y reatarlas cambiaba el terminal y no esta ventana—.
+            (Some("dialog.pane"), _) => a.state.toggle_focus(),
+            // The keys that SCROLL, resolved by the reader's keymap — before,
+            // the renderer handled `PageDown`, `Home`, `[`… as fixed keys,
+            // and rebinding them changed the terminal and not this window.
             //
-            // En la LATERAL las aplica el modelo: la página camina por los
-            // temas y enseña uno. En el CUERPO, no: el cuerpo cruza el puente
-            // entero y quien lo desplaza es el DOM, que es el que sabe lo que
-            // mide; moverlo aquí crearía una SEGUNDA verdad sobre por dónde va
-            // la ayuda (#267). Así que el host solo PIDE —«una página abajo»—
-            // y el renderer mide y desplaza (`HelpView::scroll`, puente 76).
-            // Las flechas desplazan el cuerpo solo si no hay nada ejecutable:
-            // con acciones, eligen una, como en el terminal.
-            (Some(verbo @ ("dialog.down" | "dialog.up")), _)
-                if a.estado.focus() == norte_frontend::help::Focus::Body
-                    && a.estado.actions().is_empty() =>
+            // On the SIDE the model applies them: the page walks through the
+            // topics and shows one. In the BODY, no: the body crosses the
+            // whole bridge and the one that scrolls it is the DOM, which is
+            // the one that knows what it measures; moving it here would
+            // create a SECOND truth about where help is scrolled to (#267).
+            // So the host only ASKS — "one page down" — and the renderer
+            // measures and scrolls (`HelpView::scroll`, bridge 76). The
+            // arrows scroll the body only if there is nothing executable:
+            // with actions, they pick one, same as in the terminal.
+            (Some(verb @ ("dialog.down" | "dialog.up")), _)
+                if a.state.focus() == norte_frontend::help::Focus::Body
+                    && a.state.actions().is_empty() =>
             {
-                a.desplazar(if verbo == "dialog.down" {
+                a.scroll(if verb == "dialog.down" {
                     HelpScrollTo::LineDown
                 } else {
                     HelpScrollTo::LineUp
                 });
             }
-            (Some("dialog.down"), _) => a.estado.down(),
-            (Some("dialog.up"), _) => a.estado.up(),
+            (Some("dialog.down"), _) => a.state.down(),
+            (Some("dialog.up"), _) => a.state.up(),
             (
                 Some(
-                    verbo
-                    @ ("dialog.page-down" | "dialog.page-up" | "dialog.top" | "dialog.bottom"),
+                    verb @ ("dialog.page-down" | "dialog.page-up" | "dialog.top" | "dialog.bottom"),
                 ),
                 _,
             ) => {
-                if a.estado.focus() == norte_frontend::help::Focus::Topics {
-                    match verbo {
-                        "dialog.page-down" => a.estado.page_down(PAGINA_DE_AYUDA),
-                        "dialog.page-up" => a.estado.page_up(PAGINA_DE_AYUDA),
-                        "dialog.top" => a.estado.top(),
-                        _ => a.estado.bottom(),
+                if a.state.focus() == norte_frontend::help::Focus::Topics {
+                    match verb {
+                        "dialog.page-down" => a.state.page_down(HELP_PAGE),
+                        "dialog.page-up" => a.state.page_up(HELP_PAGE),
+                        "dialog.top" => a.state.top(),
+                        _ => a.state.bottom(),
                     }
                 } else {
-                    a.desplazar(match verbo {
+                    a.scroll(match verb {
                         "dialog.page-down" => HelpScrollTo::PageDown,
                         "dialog.page-up" => HelpScrollTo::PageUp,
                         "dialog.top" => HelpScrollTo::Top,
@@ -542,154 +533,154 @@ impl Estado {
                     });
                 }
             }
-            // Las secciones son del CUERPO tenga quien tenga el foco.
-            (Some("dialog.section-prev"), _) => a.desplazar(HelpScrollTo::SectionPrev),
-            (Some("dialog.section-next"), _) => a.desplazar(HelpScrollTo::SectionNext),
+            // Sections belong to the BODY no matter who has focus.
+            (Some("dialog.section-prev"), _) => a.scroll(HelpScrollTo::SectionPrev),
+            (Some("dialog.section-next"), _) => a.scroll(HelpScrollTo::SectionNext),
             (Some("dialog.back"), _) | (None, "Backspace" | "backspace") => {
-                if a.estado.filtering() {
-                    a.estado.backspace();
-                } else if !a.estado.back() {
-                    // En la raíz, «atrás» es cerrar: el lector no tiene a
-                    // dónde volver y una tecla que no hace nada se lee como
-                    // una ventana colgada.
-                    self.ayuda = None;
+                if a.state.filtering() {
+                    a.state.backspace();
+                } else if !a.state.back() {
+                    // At the root, "back" is close: the reader has nowhere
+                    // to go back to, and a key that does nothing reads as a
+                    // frozen window.
+                    self.help = None;
                 }
             }
             (Some("dialog.confirm"), _) | (None, "Enter" | "enter") => {
-                return self.enter_en_ayuda(backend, buzon);
+                return self.enter_in_help(backend, mailbox);
             }
-            (Some("dialog.filter"), _) if !a.estado.filtering() => a.estado.start_filter(),
-            (_, otra) => {
-                // Una tecla de TEXTO es un punto de código, no un nombre de
-                // tecla (`ArrowLeft` no se teclea), y solo cuenta con el
-                // filtro abierto: teclear «d» leyendo una página no puede
-                // ponerse a filtrar sola.
-                let mut chars = otra.chars();
+            (Some("dialog.filter"), _) if !a.state.filtering() => a.state.start_filter(),
+            (_, other) => {
+                // A TEXT key is a code point, not a key name (`ArrowLeft` is
+                // not typed), and it only counts with the filter open:
+                // typing "d" while reading a page cannot start filtering on
+                // its own.
+                let mut chars = other.chars();
                 match (chars.next(), chars.next()) {
-                    (Some(c), None) if a.estado.filtering() && !k.ctrl && !k.alt && !k.meta => {
-                        a.estado.push_char(c);
+                    (Some(c), None) if a.state.filtering() && !k.ctrl && !k.alt && !k.meta => {
+                        a.state.push_char(c);
                     }
-                    _ => return (self.aplicada(), Vec::new()),
+                    _ => return (self.applied(), Vec::new()),
                 }
             }
         }
-        (self.aplicada(), self.parche_de_ayuda(backend, buzon))
+        (self.applied(), self.help_patch(backend, mailbox))
     }
 
-    /// `enter` sobre la ayuda: abrir la página elegida, seguir un enlace o
-    /// correr un comando.
-    pub(super) fn enter_en_ayuda(
+    /// `enter` over help: open the chosen page, follow a link, or run a
+    /// command.
+    pub(super) fn enter_in_help(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(a) = self.ayuda.as_mut() else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        let Some(a) = self.help.as_mut() else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
-        if a.estado.focus() == norte_frontend::help::Focus::Topics {
-            a.estado.open_selected();
-            return (self.aplicada(), self.parche_de_ayuda(backend, buzon));
+        if a.state.focus() == norte_frontend::help::Focus::Topics {
+            a.state.open_selected();
+            return (self.applied(), self.help_patch(backend, mailbox));
         }
-        let i = a.estado.action_cursor();
-        self.activar_en_ayuda(u32::try_from(i).unwrap_or(u32::MAX), backend, buzon)
+        let i = a.state.action_cursor();
+        self.activate_in_help(u32::try_from(i).unwrap_or(u32::MAX), backend, mailbox)
     }
 
-    /// Actúa sobre la fila `i` del cuerpo, venga de `enter` o de un click.
+    /// Acts on body row `i`, whether from `enter` or from a click.
     ///
-    /// La comprobación de si se PUEDE vive aquí, en el host, y no en quien
-    /// pinta: el renderer no le pone escuchador a una fila apagada, pero el
-    /// teclado no pasa por ahí, así que delegarla dejaba que `enter` corriera
-    /// una fila atenuada.
-    pub(super) fn activar_en_ayuda(
+    /// The check for whether it CAN lives here, in the host, and not in
+    /// whoever paints: the renderer does not attach a listener to a dimmed
+    /// row, but the keyboard does not go through there, so delegating it let
+    /// `enter` run a dimmed row.
+    pub(super) fn activate_in_help(
         &mut self,
         i: u32,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let (lang, efectos, hay_visor) = (self.lang, self.efectos, self.visor.is_some());
-        let Some(a) = self.ayuda.as_mut() else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        let (lang, effects, hay_visor) = (self.lang, self.effects, self.visor.is_some());
+        let Some(a) = self.help.as_mut() else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
         let i = i as usize;
-        let veredicto = a.accion_ejecutable(i, lang, efectos, hay_visor);
-        // Señalar la fila es la mitad del click que NO ejecuta, y se hace
-        // igual: tras seguir un enlace, la siguiente flecha se mueve por
-        // donde el lector señaló.
-        a.senalar(i);
-        match veredicto {
-            Ok(accion) => self.actuar_en_ayuda(Some(accion), backend, buzon),
-            Err(clave) if clave.is_empty() => {
-                // Una fila que ya no existe: el renderer iba un frame por
-                // detrás, y eso no es un error.
-                (Self::obsoleta(StaleAction::Modal), Vec::new())
+        let verdict = a.action_executable(i, lang, effects, hay_visor);
+        // Pointing at the row is the half of the click that does NOT
+        // execute, and it is done the same way: after following a link, the
+        // next arrow moves from where the reader pointed.
+        a.point_at(i);
+        match verdict {
+            Ok(action) => self.act_in_help(Some(action), backend, mailbox),
+            Err(key) if key.is_empty() => {
+                // A row that no longer exists: the renderer was one frame
+                // behind, and that is not an error.
+                (Self::stale(StaleAction::Modal), Vec::new())
             }
-            Err(clave) => {
-                // Atenuada: se dice por qué y la página SIGUE abierta. Cerrar
-                // la ayuda para negarse sería quitarle al lector la página
-                // donde está la explicación.
-                self.status.message = Some(clamp_display(norte_i18n::t_in(self.lang, &clave)));
-                let cambios = vec![
+            Err(key) => {
+                // Dimmed: the reason is stated and the page STAYS open.
+                // Closing help to refuse would take away the page with the
+                // explanation from the reader.
+                self.status.message = Some(clamp_display(norte_i18n::t_in(self.lang, &key)));
+                let changes = vec![
                     ViewChange::Status(self.status.clone()),
                     ViewChange::Help {
-                        help: self.vista_ayuda(),
+                        help: self.vista_help(),
                     },
                 ];
                 (
-                    ActionAck::Unavailable { reason_key: clave },
-                    vec![self.parche(cambios)],
+                    ActionAck::Unavailable { reason_key: key },
+                    vec![self.parche(changes)],
                 )
             }
         }
     }
 
-    /// Lo que hace una acción del cuerpo, venga de `enter` o de un click.
-    pub(super) fn actuar_en_ayuda(
+    /// What a body action does, whether from `enter` or from a click.
+    pub(super) fn act_in_help(
         &mut self,
-        accion: Option<norte_frontend::help::Action>,
+        action: Option<norte_frontend::help::Action>,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        match accion {
+        match action {
             Some(norte_frontend::help::Action::Open(id)) => {
-                if let Some(a) = self.ayuda.as_mut() {
-                    a.estado.open(&id);
+                if let Some(a) = self.help.as_mut() {
+                    a.state.open(&id);
                 }
-                (self.aplicada(), self.parche_de_ayuda(backend, buzon))
+                (self.applied(), self.help_patch(backend, mailbox))
             }
             Some(norte_frontend::help::Action::Run(cmd)) => {
-                // Correr cierra la ayuda: el comando actúa sobre el listado
-                // que la ayuda estaba tapando. El cierre viaja PRIMERO y en
-                // su propio parche, de modo que el acuse que devuelve el
-                // efecto sigue apuntando a la actualización que lo refleja.
-                self.ayuda = None;
-                let cierre = self.parche(vec![ViewChange::Help { help: None }]);
-                let Some(efecto) = efecto_de(&cmd, 1) else {
-                    let (ack, mut resto) = self.no_implementado(&cmd);
-                    let mut envios = vec![cierre];
-                    envios.append(&mut resto);
-                    return (ack, envios);
+                // Running closes help: the command acts on the listing help
+                // was covering. The close travels FIRST and in its own
+                // patch, so the ack the effect returns still points at the
+                // update that reflects it.
+                self.help = None;
+                let close = self.parche(vec![ViewChange::Help { help: None }]);
+                let Some(effect) = effect_of(&cmd, 1) else {
+                    let (ack, mut rest) = self.no_implemented(&cmd);
+                    let mut sends = vec![close];
+                    sends.append(&mut rest);
+                    return (ack, sends);
                 };
-                let (ack, mut resto) = self.aplicar_efecto(efecto, backend, buzon);
-                let mut envios = vec![cierre];
-                envios.append(&mut resto);
-                (ack, envios)
+                let (ack, mut rest) = self.apply_effect(effect, backend, mailbox);
+                let mut sends = vec![close];
+                sends.append(&mut rest);
+                (ack, sends)
             }
-            None => (self.aplicada(), Vec::new()),
+            None => (self.applied(), Vec::new()),
         }
     }
 
-    /// Un click en una fila de la lateral de la ayuda: ENSEÑA lo que haya,
-    /// que es lo mismo que hace la flecha.
-    pub(super) fn elegir_pagina(
+    /// A click on a row in help's side panel: SHOWS whatever there is, the
+    /// same thing the arrow does.
+    pub(super) fn choose_page(
         &mut self,
         row: u32,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(a) = self.ayuda.as_mut() else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        let Some(a) = self.help.as_mut() else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
-        a.estado.click_row(row as usize);
-        (self.aplicada(), self.parche_de_ayuda(backend, buzon))
+        a.state.click_row(row as usize);
+        (self.applied(), self.help_patch(backend, mailbox))
     }
 }

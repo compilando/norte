@@ -1,109 +1,106 @@
-//! #125: `is_terminal_hazard` enumeraba codepoints en vez de decidir por
-//! propiedad, y su rustdoc afirmaba cubrir «los INVISIBLES Cf/Zl/Zp». Los que
-//! se le escapaban no son exóticos: son justo los que se usan para fabricar
-//! dos nombres visualmente idénticos que difieren en bytes, que es la premisa
-//! que `must_mask` existe para proteger («aprueba el que ya viste»).
+//! #125: `is_terminal_hazard` used to enumerate codepoints instead of
+//! deciding by property, and its rustdoc claimed to cover "the Cf/Zl/Zp
+//! INVISIBLES". The ones that slipped past it are not exotic: they are
+//! exactly the ones used to forge two visually identical names that differ
+//! in bytes, which is the premise `must_mask` exists to protect ("approve
+//! the one you already saw").
 
 use norte_encoding::{is_terminal_hazard, mask_terminal_hazards};
 
-/// Los invisibles que la enumeración NO cogía, uno a uno y con su nombre.
+/// The invisibles the enumeration did NOT catch, one by one and named.
 ///
-/// Se listan explícitos y no por rango porque cada uno documenta una vía
-/// distinta: unos son Cf que la lista simplemente olvidó, `U+3164` y `U+115F`
-/// son **Lo** —ninguna enumeración de Cf/Zl/Zp los cogerá jamás, y son los
-/// clásicos del contrabando invisible—, `U+FFF9` es Cf pero está EXCLUIDO de
-/// `Default_Ignorable_Code_Point`, y `U+2800` es **So**: se pinta en blanco
-/// sin ser ignorable para nadie.
+/// Listed explicitly and not by range because each one documents a
+/// different route: some are Cf the list simply forgot, `U+3164` and
+/// `U+115F` are **Lo** —no Cf/Zl/Zp enumeration will ever catch them, and
+/// they are the classic invisible-smuggling pair—, `U+FFF9` is Cf but is
+/// EXCLUDED from `Default_Ignorable_Code_Point`, and `U+2800` is **So**: it
+/// paints blank without being ignorable to anyone.
 #[test]
-fn los_invisibles_no_enumerados_son_peligro() {
-    const FUGAS: &[(char, &str)] = &[
+fn the_unenumerated_invisible_are_a_hazard() {
+    const LEAKS: &[(char, &str)] = &[
         ('\u{2061}', "FUNCTION APPLICATION (Cf)"),
         ('\u{2064}', "INVISIBLE PLUS (Cf)"),
         ('\u{206E}', "NATIONAL DIGIT SHAPES (Cf)"),
-        (
-            '\u{FFF9}',
-            "INTERLINEAR ANNOTATION ANCHOR (Cf, fuera de DI)",
-        ),
+        ('\u{FFF9}', "INTERLINEAR ANNOTATION ANCHOR (Cf, outside DI)"),
         ('\u{3164}', "HANGUL FILLER (Lo)"),
         ('\u{115F}', "HANGUL CHOSEONG FILLER (Lo)"),
         ('\u{180E}', "MONGOLIAN VOWEL SEPARATOR"),
         ('\u{2800}', "BRAILLE PATTERN BLANK (So)"),
     ];
-    for (c, nombre) in FUGAS {
+    for (c, name) in LEAKS {
         assert!(
             is_terminal_hazard(*c),
-            "U+{:04X} {nombre} se pinta en blanco y pasaba sin enmascarar",
+            "U+{:04X} {name} paints blank and used to pass unmasked",
             *c as u32
         );
     }
 }
 
-/// Dos nombres que un humano no puede distinguir tienen que ENMASCARARSE
-/// distinto. Es el contrato entero: si `mask_terminal_hazards` deja los dos
-/// iguales, aprobar el que viste aprueba también el que no.
+/// Two names a human cannot tell apart have to be MASKED differently. That
+/// is the whole contract: if `mask_terminal_hazards` leaves the two the
+/// same, approving the one you saw also approves the one you did not.
 #[test]
-fn el_gemelo_invisible_no_sobrevive_al_enmascarado() {
-    for intruso in ['\u{2064}', '\u{3164}', '\u{115F}', '\u{2800}', '\u{180E}'] {
-        let gemelo: String = format!("a{intruso}b");
+fn the_invisible_twin_does_not_survive_masking() {
+    for intruder in ['\u{2064}', '\u{3164}', '\u{115F}', '\u{2800}', '\u{180E}'] {
+        let twin: String = format!("a{intruder}b");
         assert_ne!(
-            mask_terminal_hazards(&gemelo),
+            mask_terminal_hazards(&twin),
             "ab",
-            "U+{:04X} desaparecía sin dejar marca: `a{{X}}b` se leía como `ab`",
-            intruso as u32
+            "U+{:04X} disappeared leaving no trace: `a{{X}}b` read as `ab`",
+            intruder as u32
         );
         assert_eq!(
-            mask_terminal_hazards(&gemelo),
+            mask_terminal_hazards(&twin),
             "a\u{FFFD}b",
-            "U+{:04X} debe dejar la marca de saneado",
-            intruso as u32
+            "U+{:04X} must leave the sanitizing mark",
+            intruder as u32
         );
     }
 }
 
-/// Lo que sigue PERMITIDO, y por qué. Ampliar el set por propiedad tiene un
-/// riesgo obvio: `Default_Ignorable_Code_Point` incluye ZWJ y los selectores
-/// de variación, que son exactamente lo que compone un emoji. Enmascararlos
-/// rompería nombres legítimos a cambio del residual de un gemelo que solo se
-/// diferencia en eso.
+/// What stays ALLOWED, and why. Extending the set by property has an
+/// obvious risk: `Default_Ignorable_Code_Point` includes ZWJ and the
+/// variation selectors, which are exactly what composes an emoji. Masking
+/// them would break legitimate names in exchange for the residual of a
+/// twin that only differs in that.
 #[test]
-fn zwj_y_selectores_de_variacion_siguen_permitidos() {
-    assert!(!is_terminal_hazard('\u{200D}'), "ZWJ (emoji compuesto)");
-    assert!(!is_terminal_hazard('\u{FE0F}'), "VS16 (presentación emoji)");
+fn zwj_and_variation_selectors_stay_allowed() {
+    assert!(!is_terminal_hazard('\u{200D}'), "ZWJ (compound emoji)");
+    assert!(!is_terminal_hazard('\u{FE0F}'), "VS16 (emoji presentation)");
     assert!(!is_terminal_hazard('\u{FE00}'), "VS1");
-    // El caso real: familia = persona ZWJ persona ZWJ criatura.
-    let familia = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F466}";
-    assert_eq!(mask_terminal_hazards(familia), familia);
+    // The real case: family = person ZWJ person ZWJ child.
+    let family = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F466}";
+    assert_eq!(mask_terminal_hazards(family), family);
 }
 
-/// Ni una letra, ni un dígito, ni un signo de puntuación, ni un espacio
-/// ordinario puede caer en el set. Un `is_terminal_hazard` que se pase de
-/// ancho destroza nombres legítimos en silencio, que es peor que el problema
-/// que arregla.
+/// Not a letter, not a digit, not a punctuation mark, not an ordinary space
+/// can fall into the set. An `is_terminal_hazard` that overreaches destroys
+/// legitimate names silently, which is worse than the problem it fixes.
 #[test]
-fn lo_legible_jamas_es_peligro() {
+fn readable_text_is_never_a_hazard() {
     for c in " !\"#$%&'()*+,-./0123456789:;<=>?@ABCXYZ[\\]^_`abcxyz{|}~".chars() {
-        assert!(!is_terminal_hazard(c), "ASCII imprimible {c:?}");
+        assert!(!is_terminal_hazard(c), "printable ASCII {c:?}");
     }
     for c in "áéíóúñÑçüßαβγ日本語漢字한글кириллица".chars() {
-        assert!(!is_terminal_hazard(c), "letra no-ASCII {c:?}");
+        assert!(!is_terminal_hazard(c), "non-ASCII letter {c:?}");
     }
-    // Espacios que SÍ ocupan sitio: se ven, luego no engañan.
+    // Spaces that DO take up room: they are visible, so they do not deceive.
     for c in ['\u{00A0}', '\u{2003}', '\u{3000}'] {
         assert!(
             !is_terminal_hazard(c),
-            "U+{:04X} es un espacio visible, no un invisible",
+            "U+{:04X} is a visible space, not an invisible one",
             c as u32
         );
     }
 }
 
-/// Lo que ya cogía sigue cogido: la ampliación no puede perder terreno.
+/// What was already caught stays caught: the extension cannot lose ground.
 #[test]
-fn el_set_previo_no_encoge() {
+fn the_previous_set_does_not_shrink() {
     for c in [
         '\u{001B}',
         '\u{0000}',
-        '\u{000A}', // controles
+        '\u{000A}', // controls
         '\u{202A}',
         '\u{202E}',
         '\u{2066}',
@@ -123,42 +120,41 @@ fn el_set_previo_no_encoge() {
     ] {
         assert!(
             is_terminal_hazard(c),
-            "U+{:04X} dejó de ser peligro",
+            "U+{:04X} stopped being a hazard",
             c as u32
         );
     }
 }
 
-/// Las tablas se recorren con búsqueda binaria: si alguna deja de estar
-/// ordenada, `is_terminal_hazard` empieza a decir que no a codepoints que sí
-/// están en ella — en silencio, y solo para algunos. Se comprueba desde fuera
-/// del crate por el único camino público que hay: recorrer el espacio de
-/// codepoints y exigir que el resultado coincida con una búsqueda lineal
-/// sobre el mismo criterio observable.
+/// The tables are walked with binary search: if any of them stops being
+/// sorted, `is_terminal_hazard` starts saying no to codepoints that ARE in
+/// it — silently, and only for some. Checked from outside the crate through
+/// the only public path there is: walking the codepoint space and requiring
+/// the result to match a linear search over the same observable criterion.
 #[test]
-fn el_set_es_consistente_en_todo_el_espacio_de_codepoints() {
-    // Un rango ordenado implica que el resultado nunca "reaparece" de forma
-    // incoherente: se comprueba que cada char marcado como peligro lo sigue
-    // siendo al consultarlo aislado y a través del enmascarado, que es el
-    // único uso real.
-    let mut peligrosos = 0usize;
+fn the_set_is_consistent_across_the_whole_codepoint_space() {
+    // A sorted range implies the result never "reappears" incoherently: it
+    // is checked that every char marked as a hazard stays one when queried
+    // in isolation and through masking, which is the only real use.
+    let mut hazardous = 0usize;
     for cp in 0u32..=0x10_FFFF {
         let Some(c) = char::from_u32(cp) else {
             continue;
         };
         if is_terminal_hazard(c) {
-            peligrosos += 1;
+            hazardous += 1;
             assert_eq!(
                 mask_terminal_hazards(&c.to_string()),
                 "\u{FFFD}",
-                "U+{cp:04X} es peligro pero el enmascarado no lo sustituyó"
+                "U+{cp:04X} is a hazard but masking did not replace it"
             );
         }
     }
-    // Cota de cordura: el set son controles + ignorables + un puñado. Si esto
-    // se dispara a decenas de miles, la tabla cogió un rango que no le tocaba.
+    // Sanity bound: the set is controls + ignorables + a handful. If this
+    // jumps to tens of thousands, the table caught a range it should not
+    // have.
     assert!(
-        (1_000..20_000).contains(&peligrosos),
-        "{peligrosos} codepoints marcados: el set creció fuera de lo razonable"
+        (1_000..20_000).contains(&hazardous),
+        "{hazardous} codepoints marked: the set grew beyond reason"
     );
 }

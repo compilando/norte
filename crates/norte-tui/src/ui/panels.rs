@@ -1,8 +1,8 @@
-//! Los paneles laterales: árbol, procesos, metadatos y tareas, más el visor, la
-//! previsualización y la lista de sitios.
+//! The side panels: tree, processes, metadata and tasks, plus the viewer,
+//! the preview and the places list.
 //!
-//! Cada uno ocupa un hueco del reparto y pinta lo que hay en su modelo; ninguno
-//! decide dónde va.
+//! Each one occupies a slot of the layout and paints what is in its model;
+//! none decides where it goes.
 
 use norte_theme::Role;
 use ratatui::Frame;
@@ -17,35 +17,35 @@ use crate::app::{App, display_name};
 use crate::theme::TuiTheme;
 use norte_i18n::{t, ta};
 
-/// Las dos barras de scroll de un visor enmarcado, sobre sus bordes.
+/// The two scrollbars of a framed viewer, over its borders.
 ///
-/// El visor decía «1/4813» en la barra de estado y nada más, así que el hecho
-/// de que hubiera más ARRIBA o a la DERECHA solo se sabía contando. La
-/// horizontal importa el doble: el visor no envuelve, y un fichero recortado
-/// por la derecha se lee como un fichero corto.
+/// The viewer used to say "1/4813" in the status bar and nothing else, so
+/// whether there was more ABOVE or to the RIGHT could only be known by
+/// counting. The horizontal one matters twice as much: the viewer does not
+/// wrap, and a file clipped on the right reads as a short file.
 ///
-/// `area` es el marco COMPLETO; las barras se pintan encima de sus bordes y
-/// abarcan solo el interior, para que la posición del pulgar coincida con la
-/// primera y la última fila de texto. Ninguna se pinta cuando cabe todo
+/// `area` is the WHOLE frame; the bars are painted over its borders and
+/// span only the interior, so the thumb's position matches the first and
+/// last row of text. Neither is painted when everything fits
 /// ([`super::help::render_scrollbar`]).
 ///
-/// `con_horizontal` es `false` en el visor ACOPLADO: su borde de abajo lleva la
-/// línea de estado —encoding, EOL, pérdidas, truncado—, que es el único sitio
-/// donde ese hueco dice QUÉ se está viendo. Taparla con una barra cambiaría un
-/// dato por una insinuación.
-fn barras_del_visor(
+/// `with_horizontal` is `false` in the DOCKED viewer: its bottom border
+/// carries the status line — encoding, EOL, losses, truncation — which is
+/// the only place that slot says WHAT is being viewed. Covering it with a
+/// bar would trade a fact for a hint.
+fn viewer_scrollbars(
     frame: &mut Frame<'_>,
     area: Rect,
     viewer: &crate::viewer::Viewer,
     theme: &TuiTheme,
-    con_horizontal: bool,
+    with_horizontal: bool,
 ) {
-    // Sin sitio para el marco no hay interior sobre el que informar.
+    // With no room for the frame there is no interior to report on.
     if area.width < 3 || area.height < 3 {
         return;
     }
-    let alto = usize::from(area.height - 2);
-    let ancho = usize::from(area.width - 2);
+    let height = usize::from(area.height - 2);
+    let width = usize::from(area.width - 2);
     super::help::render_scrollbar(
         frame,
         Rect {
@@ -57,9 +57,9 @@ fn barras_del_visor(
         theme,
         viewer.total_rows(),
         viewer.scroll,
-        alto,
+        height,
     );
-    if con_horizontal {
+    if with_horizontal {
         super::help::render_hscrollbar(
             frame,
             Rect {
@@ -71,22 +71,21 @@ fn barras_del_visor(
             theme,
             viewer.max_cols(),
             viewer.hscroll(),
-            ancho,
+            width,
         );
     }
 }
 
-/// Viewer a pantalla completa: contenido + status propia (encoding, EOL,
-/// pérdidas, truncado — el usuario SIEMPRE sabe qué mira, spec §6).
+/// Full-screen viewer: content + its own status (encoding, EOL, losses,
+/// truncation — the user ALWAYS knows what they are looking at, spec §6).
 pub(crate) fn draw_viewer(frame: &mut Frame<'_>, viewer: &crate::viewer::Viewer, app: &App) {
-    // Sobre el área del CUERPO, no la del frame: el visor se pinta a pantalla
-    // completa y no pasa por el reparto de huecos, así que con la barra de
-    // menú fijada se metía debajo de ella y la barra le tapaba la primera
-    // fila. La misma resta que hace el reparto, en el único otro sitio que
-    // pinta a pantalla completa. `visor_split` — no una copia del
-    // `Layout::split` — es la MISMA cuenta que usa el run loop (T4) para
-    // saber dónde van los píxeles: dos cuentas del mismo hueco divergen en
-    // silencio.
+    // Over the BODY's area, not the frame's: the viewer paints full-screen
+    // and does not go through the slot layout, so with the menu bar pinned
+    // it used to land underneath it and the bar covered its first row. The
+    // same subtraction the layout does, in the one other place that paints
+    // full-screen. `visor_split` — not a copy of `Layout::split` — is the
+    // SAME calculation the run loop (T4) uses to know where the pixels go:
+    // two calculations of the same slot diverge silently.
     let (content_area, status_area) = visor_split(app, frame.area());
     let (title, hostile) =
         norte_frontend::path_display_with(&viewer.path, app.focused().name_encoding());
@@ -95,18 +94,18 @@ pub(crate) fn draw_viewer(frame: &mut Frame<'_>, viewer: &crate::viewer::Viewer,
     } else {
         title
     };
-    // M4-P5: indicador «via <plugin>» cuando la vista viene de un preview de
-    // plugin (el plugin_name ya viene enmascarado desde el viewer).
+    // M4-P5: "via <plugin>" indicator when the view comes from a plugin
+    // preview (plugin_name already arrives masked from the viewer).
     let mut block = Block::default()
         .borders(Borders::ALL)
         .title(title)
         .title_style(app.theme.role(Role::Title))
         .border_style(app.theme.role(Role::BorderFocus));
     if let Some(plugin) = viewer.preview_plugin() {
-        // #101: cuando la decodificación host-side fue LOSSY, un aviso (rol
-        // Warning) SIGUE al «via …» — misma honestidad que el status de
-        // encoding del viewer crudo, y mismo orden que la GUI
-        // (`viewer_header`). ASCII (`⚠` es ambiguous-width).
+        // #101: when the host-side decoding was LOSSY, a warning (role
+        // Warning) FOLLOWS the "via …" — same honesty as the raw viewer's
+        // encoding status, and same order as the GUI (`viewer_header`).
+        // ASCII (`⚠` is ambiguous-width).
         let mut spans = vec![Span::styled(
             ta("viewer-plugin-preview", &[("plugin", plugin)]),
             app.theme.role(Role::Info),
@@ -119,99 +118,98 @@ pub(crate) fn draw_viewer(frame: &mut Frame<'_>, viewer: &crate::viewer::Viewer,
         }
         block = block.title(Line::from(spans).right_aligned());
     }
-    // T5 (fase 5 WOW): sin preview de plugin, un PNG en `Modo::Bloques` cae a
-    // hexview igual que un fichero que nadie sabe interpretar — nada en
-    // pantalla distinguía los dos casos hasta que el piloto lo encontró.
+    // T5 (phase 5 WOW): with no plugin preview, a PNG in `Modo::Blocks`
+    // falls back to hexview just like a file nobody knows how to interpret
+    // — nothing on screen told the two cases apart until the pilot found
+    // it.
     //
-    // Revisión de rama, hallazgo 3: `modo` NO se recalcula aquí — se lee de
-    // `App::viewer_modo`, el mismo valor que `viewer_open::open_viewer`
-    // resolvió al ABRIR el visor. Recalcularlo en cada frame contra
-    // `app.chrome.images()` (lo que hacía la primera versión) es lo que
-    // producía el bug: `[ui] images` se recarga EN CALIENTE
-    // (`config_reload::reload_config` reasigna `app.chrome` entero,
-    // `applies_live` en `norte-frontend::settings`), así que un cambio de
-    // `blocks` a `kitty` con el visor ya abierto hacía que este `match`
-    // pasara a `Modo::Kitty` para un fichero al que JAMÁS se le pidió una
-    // miniatura — el aviso «falta aprobar la extensión de miniaturas» sobre
-    // un fichero que nunca la pidió, mintiendo sobre lo que hace falta
-    // (reabrir, no aprobar nada). `App::viewer_modo` sólo cambia cuando el
-    // visor se abre de nuevo, o cuando `reload_config` suelta una miniatura
-    // `Kitty` que dejó de serlo (ver ahí el porqué de esa dirección única).
+    // Branch review, finding 3: `modo` is NOT recomputed here — it is read
+    // from `App::viewer_modo`, the same value `viewer_open::open_viewer`
+    // resolved when the viewer OPENED. Recomputing it every frame against
+    // `app.chrome.images()` (what the first version did) is what produced
+    // the bug: `[ui] images` reloads LIVE
+    // (`config_reload::reload_config` reassigns `app.chrome` whole,
+    // `applies_live` in `norte-frontend::settings`), so a change from
+    // `blocks` to `kitty` with the viewer already open made this `match`
+    // switch to `Modo::Kitty` for a file that NEVER asked for a thumbnail —
+    // the "the thumbnail extension needs approving" warning on a file that
+    // never asked for one, lying about what is actually needed (reopening,
+    // not approving anything). `App::viewer_modo` only changes when the
+    // viewer opens again, or when `reload_config` drops a `Kitty` thumbnail
+    // that stopped being one (see there for why it is one-directional).
     //
-    // El bucle de colocación (T4, `event_loop.rs`) no necesita mirar `modo`
-    // por su cuenta: `ui::imagen_a_colocar` sólo ve algo que colocar
-    // mientras `App::viewer_imagen` siga vivo, y `reload_config` ya lo
-    // suelta en el momento en que el modo deja de ser `Kitty` — un solo
-    // punto de corte en vez de una comprobación repetida en cada frame.
+    // The placement loop (T4, `event_loop.rs`) does not need to look at
+    // `modo` on its own: `ui::image_to_place` only sees something to
+    // place while `App::viewer_imagen` stays alive, and `reload_config`
+    // already drops it the moment the mode stops being `Kitty` — a single
+    // cut point instead of a check repeated every frame.
     //
-    // NO va en el título de la cabecera pese a que el «via …» de arriba
-    // vive ahí: el título derecho se right-aligna SIN recortar cuando no
-    // cabe, así que el texto largo del aviso (con el hint de F12) se comía
-    // el título izquierdo entero — regresión real, cazada por
-    // `snapshot_viewer_texto_y_hex`. La barra de estado de abajo es de
-    // ancho completo y ya cede el sitio entero a `app.message` cuando hay
-    // uno; este aviso sigue el mismo patrón.
+    // It does NOT go in the header title even though the "via …" above
+    // lives there: the right title right-aligns WITHOUT clipping when it
+    // does not fit, so the warning's long text (with the F12 hint) used to
+    // eat the whole left title — a real regression, caught by
+    // `snapshot_viewer_text_and_hex`. The bottom status bar is full width and
+    // already yields the whole spot to `app.message` when there is one;
+    // this warning follows the same pattern.
     //
-    // Task 5b (hallazgo de revisión de T6): el mismo agujero existía en
-    // `Modo::Kitty` — sin plugin `thumbnail` aprobado, `viewer_for_width`
-    // nunca coloca `App::viewer_imagen` y el visor cae a hexview tan
-    // silenciosamente como en `Modo::Bloques` sin previewer. Qué condición
-    // hace innecesario el aviso depende del modo — el `previewer` de
-    // `Modo::Bloques` y el `thumbnail` de `Modo::Kitty` son dos plugins
-    // distintos, con documentación separada en
-    // `viewer_open::no_hace_falta_avisar_de_imagen` /
-    // `no_hace_falta_avisar_de_miniatura` (con la trampa de "simplificarlo"
-    // a `preview_plugin().is_some()` escrita en la primera); ese `match`
-    // decide cuál aplica.
+    // Task 5b (T6 review finding): the same hole existed in `Modo::Kitty` —
+    // with no `thumbnail` plugin approved, `viewer_for_width` never places
+    // `App::viewer_imagen` and the viewer falls back to hexview as silently
+    // as `Modo::Blocks` with no previewer. Which condition makes the
+    // warning unnecessary depends on the mode — `Modo::Blocks`'s
+    // `previewer` and `Modo::Kitty`'s `thumbnail` are two different
+    // plugins, with separate documentation in
+    // `viewer_open::no_need_to_warn_about_image` /
+    // `no_need_to_warn_about_thumbnail` (with the "simplify it to"
+    // `preview_plugin().is_some()` trap written on the first one); that
+    // `match` decides which applies.
     let modo = app.viewer_modo;
-    let no_hace_falta_avisar = match modo {
-        crate::viewer_open::Modo::Kitty => crate::viewer_open::no_hace_falta_avisar_de_miniatura(
-            viewer,
-            app.viewer_imagen.as_ref(),
-        ),
-        crate::viewer_open::Modo::Bloques | crate::viewer_open::Modo::Nada => {
-            crate::viewer_open::no_hace_falta_avisar_de_imagen(viewer)
+    let no_warning_needed = match modo {
+        crate::viewer_open::Modo::Kitty => {
+            crate::viewer_open::no_need_to_warn_about_thumbnail(viewer, app.viewer_imagen.as_ref())
+        }
+        crate::viewer_open::Modo::Blocks | crate::viewer_open::Modo::Nothing => {
+            crate::viewer_open::no_need_to_warn_about_image(viewer)
         }
     };
-    // Contra el path del visor: una miniatura rechazada del fichero de
-    // ANTES no dice nada de éste (misma trampa que documenta
-    // `no_hace_falta_avisar_de_miniatura` para la imagen ya colocada).
-    let formato_ajeno = app
-        .viewer_miniatura_ajena
+    // Against the viewer's path: a thumbnail rejected for the PREVIOUS file
+    // says nothing about this one (the same trap
+    // `no_need_to_warn_about_thumbnail` documents for the already-placed
+    // image).
+    let foreign_format = app
+        .viewer_thumbnail_foreign
         .as_ref()
         .is_some_and(|p| *p == viewer.path);
-    let aviso_imagen =
-        crate::viewer_open::aviso_de_imagen(modo, no_hace_falta_avisar, formato_ajeno);
-    // `rect_del_visor` — la MISMA función que usa el run loop para el APC,
-    // no una resta a mano — es lo que garantiza que el hueco que se deja en
-    // blanco abajo y el hueco donde caen los píxeles sean estructuralmente
-    // el mismo (revisión, CRÍTICO 2).
+    let image_warning = crate::viewer_open::image_notice(modo, no_warning_needed, foreign_format);
+    // `rect_del_visor` — the SAME function the run loop uses for the APC,
+    // not a hand-written subtraction — is what guarantees that the slot
+    // left blank below and the slot where the pixels land are structurally
+    // the same one (review, CRITICAL 2).
     let inner_h = rect_del_visor(app, frame.area()).height as usize;
-    // T4 (fase 5 WOW): con la imagen COLOCADA (el run loop pinta sus
-    // píxeles tras este frame, por fuera de ratatui), las líneas van
-    // VACÍAS. El terminal va a pintar ENCIMA de este hueco, y un texto ahí
-    // se vería DEBAJO de los píxeles o parpadearía al alternar con ellos en
-    // cada frame. El marco, el título y las barras de scroll de abajo
-    // siguen pintándose igual — nada de esto cambia por tener una imagen
-    // puesta.
-    // Revisión de rama, hallazgo 2: `imagen_a_colocar` (no una comprobación
-    // aparte del `path`) es la MISMA función que usa el run loop para
-    // decidir si coloca píxeles — antes esta línea sólo miraba el `path`, y
-    // el run loop añadía además `!algo_encima_del_visor` y que el rect no
-    // estuviera vacío; con un overlay que no tapa la pantalla entera (el
-    // menú, which-key…) este pintor blanqueaba el hueco igual que siempre
-    // mientras el run loop se negaba a colocar píxeles encima: ni imagen ni
-    // hexview.
-    let hay_imagen = super::imagen_a_colocar(app, frame.area()).is_some();
+    // T4 (phase 5 WOW): with the image PLACED (the run loop paints its
+    // pixels after this frame, outside ratatui), the lines go EMPTY. The
+    // terminal is going to paint OVER this slot, and text there would show
+    // UNDER the pixels or flicker as it alternates with them every frame.
+    // The frame, the title and the scrollbars below keep painting the same
+    // — none of this changes because an image is placed.
+    // Branch review, finding 2: `image_to_place` (not a check separate
+    // from the `path`) is the SAME function the run loop uses to decide
+    // whether to place pixels — this line used to only look at `path`, and
+    // the run loop additionally added `!something_above_the_viewer` and that the
+    // rect not be empty; with an overlay that does not cover the whole
+    // screen (the menu, which-key…) this painter used to blank the slot as
+    // always while the run loop refused to place pixels over it: neither
+    // image nor hexview.
+    let has_image = super::image_to_place(app, frame.area()).is_some();
 
-    // #29/G3a (ADR 0037): un preview de plugin trae color, por ANSI-SGR
-    // saneado (`fg` únicamente) o por WIT estructurado (`role` VALIDADO +
-    // `fg` de respaldo). `role` GANA sobre `fg` cuando ambos están
-    // presentes (el tema del usuario tiene precedencia sobre el color fijo
-    // de un plugin, ADR 0037 decisión 3) — se resuelve por el tema
-    // (`app.theme.role`), no como RGB crudo. Sin ninguno de los dos, el
-    // color por defecto del tema (sin `.style()`).
-    let lines: Vec<Line<'_>> = if hay_imagen {
+    // #29/G3a (ADR 0037): a plugin preview carries color, either through
+    // sanitized ANSI-SGR (`fg` only) or through structured WIT (`role`
+    // VALIDATED + fallback `fg`). `role` WINS over `fg` when both are
+    // present (the user's theme takes precedence over a plugin's fixed
+    // color, ADR 0037 decision 3) — it is resolved through the theme
+    // (`app.theme.role`), not as raw RGB. With neither, the theme's default
+    // color (no `.style()`).
+    let lines: Vec<Line<'_>> = if has_image {
         Vec::new()
     } else {
         match viewer.plugin_styled_rows(inner_h) {
@@ -221,7 +219,7 @@ pub(crate) fn draw_viewer(frame: &mut Frame<'_>, viewer: &crate::viewer::Viewer,
                     Line::from(
                         line.iter()
                             .map(|span| {
-                                Span::raw(span.text.clone()).style(estilo_de_span(span, &app.theme))
+                                Span::raw(span.text.clone()).style(span_style(span, &app.theme))
                             })
                             .collect::<Vec<_>>(),
                     )
@@ -231,7 +229,7 @@ pub(crate) fn draw_viewer(frame: &mut Frame<'_>, viewer: &crate::viewer::Viewer,
         }
     };
     frame.render_widget(Paragraph::new(lines).block(block), content_area);
-    barras_del_visor(frame, content_area, viewer, &app.theme, true);
+    viewer_scrollbars(frame, content_area, viewer, &app.theme, true);
     let pos = format!(
         "{}/{}",
         (viewer.scroll + 1).min(viewer.total_rows().max(1)),
@@ -239,13 +237,13 @@ pub(crate) fn draw_viewer(frame: &mut Frame<'_>, viewer: &crate::viewer::Viewer,
     );
     let text: Line<'_> = match &app.message {
         Some(msg) => Line::styled(format!(" {msg}"), app.theme.role(Role::StatusBar)),
-        None => match aviso_imagen {
-            // Ronda de arreglo 1, IMPORTANTE 2: sin previewer aprobado es el
-            // estado por DEFECTO de cualquier instalación, así que esta
-            // rama es el caso común, no el raro — perder `pos` aquí es
-            // perderlo justo donde más se nota (un PNG grande en hexview,
-            // haciendo scroll sin más guía que el pulgar de la barra).
-            Some(aviso) => Line::styled(format!(" {aviso}  {pos}"), app.theme.role(Role::Info)),
+        None => match image_warning {
+            // Fix round 1, IMPORTANT 2: with no previewer approved is the
+            // DEFAULT state of any install, so this branch is the common
+            // case, not the rare one — losing `pos` here loses it exactly
+            // where it is noticed most (a big PNG in hexview, scrolling
+            // with no guide but the bar's thumb).
+            Some(notice) => Line::styled(format!(" {notice}  {pos}"), app.theme.role(Role::Info)),
             None => Line::styled(
                 format!(" {}  {pos}", crate::viewer::status(viewer)),
                 app.theme.role(Role::StatusBar),
@@ -255,26 +253,26 @@ pub(crate) fn draw_viewer(frame: &mut Frame<'_>, viewer: &crate::viewer::Viewer,
     frame.render_widget(Paragraph::new(text), status_area);
 }
 
-/// El visor ACOPLADO (L3): el fichero bajo el cursor, en su hueco.
+/// The DOCKED viewer (L3): the file under the cursor, in its slot.
 ///
-/// El mismo renderer que [`draw_viewer`] —mismas filas, mismo preview de
-/// plugin— dentro de un bloque del tamaño del hueco en vez de la pantalla
-/// entera. La línea de estado del visor (encoding, EOL, pérdidas, truncado) va
-/// en el borde de abajo: es el único sitio que dice QUÉ se está viendo, y un
-/// visor que no lo dice miente por omisión.
+/// The same renderer as [`draw_viewer`] — same rows, same plugin preview —
+/// inside a block the size of the slot instead of the whole screen. The
+/// viewer's status line (encoding, EOL, losses, truncation) goes on the
+/// bottom border: it is the only place that says WHAT is being viewed, and
+/// a viewer that does not say so lies by omission.
 ///
-/// Sin fichero, el hueco lleva un texto: un directorio, un listado vacío, o el
-/// motivo por el que la lectura no pudo hacerse. Una denegación se PINTA aquí
-/// y no abre nada — el preview sigue al cursor, así que un diálogo por
-/// pulsación convertiría bajar por un directorio en una ráfaga de modales.
+/// With no file, the slot carries text: a directory, an empty listing, or
+/// the reason the read could not be done. A denial is PAINTED here and
+/// opens nothing — the preview follows the cursor, so a dialog per
+/// keystroke would turn going down a directory into a burst of modals.
 pub(crate) fn draw_preview(
     frame: &mut Frame<'_>,
     area: Rect,
     preview: &crate::preview::Preview,
-    con_teclado: bool,
+    with_keyboard: bool,
     app: &App,
 ) {
-    let border = if con_teclado {
+    let border = if with_keyboard {
         Role::BorderFocus
     } else {
         Role::BorderUnfocused
@@ -302,8 +300,8 @@ pub(crate) fn draw_preview(
     let width = usize::from(area.width.saturating_sub(2));
     let mut block = Block::default()
         .borders(Borders::ALL)
-        // La ruta se recorta por el MEDIO: en un hueco estrecho lo que
-        // identifica un fichero es su nombre, o sea la cola.
+        // The path is clipped in the MIDDLE: in a narrow slot what
+        // identifies a file is its name, i.e. the tail.
         .title(norte_frontend::middle_ellipsis(&title, width))
         .title_style(app.theme.role(Role::Title))
         .border_style(app.theme.role(border))
@@ -328,7 +326,7 @@ pub(crate) fn draw_preview(
                 Line::from(
                     line.iter()
                         .map(|span| {
-                            Span::raw(span.text.clone()).style(estilo_de_span(span, &app.theme))
+                            Span::raw(span.text.clone()).style(span_style(span, &app.theme))
                         })
                         .collect::<Vec<_>>(),
                 )
@@ -337,22 +335,22 @@ pub(crate) fn draw_preview(
         None => viewer.rows(inner_h).into_iter().map(Line::raw).collect(),
     };
     frame.render_widget(Paragraph::new(lines).block(block), area);
-    // Solo la vertical: el borde de abajo es de la línea de estado.
-    barras_del_visor(frame, area, viewer, &app.theme, false);
+    // Vertical only: the bottom border belongs to the status line.
+    viewer_scrollbars(frame, area, viewer, &app.theme, false);
 }
 
-/// El estilo de un tramo con estilo, sea de un preview, de un visor o de un
-/// panel de plugin.
+/// The style of a styled span, whether from a preview, a viewer or a
+/// plugin panel.
 ///
-/// El ROL gana al color (ADR 0037, decisión 3): el tema del lector tiene
-/// precedencia sobre el color fijo que pida un tercero. El fondo no lo manda
-/// ningún rol (proto 0.66.0, D4), porque un medio bloque sin fondo es media
-/// imagen.
+/// The ROLE beats the color (ADR 0037, decision 3): the reader's theme
+/// takes precedence over a fixed color a third party asks for. No role
+/// commands the background (proto 0.66.0, D4), because a half block with no
+/// background is half an image.
 ///
-/// Una sola copia: esto estaba escrito palabra por palabra en el visor y en el
-/// preview, y el panel de plugin habría sido la tercera — tres sitios donde
-/// cambiar la precedencia de un rol.
-fn estilo_de_span(span: &norte_frontend::ansi::StyledSpan, theme: &TuiTheme) -> Style {
+/// A single copy: this was written word for word in the viewer and in the
+/// preview, and the plugin panel would have been the third — three places
+/// to change a role's precedence.
+fn span_style(span: &norte_frontend::ansi::StyledSpan, theme: &TuiTheme) -> Style {
     let mut style = if let Some(role) = span.role {
         theme.role(role)
     } else if let Some((r, g, b)) = span.fg {
@@ -366,144 +364,147 @@ fn estilo_de_span(span: &norte_frontend::ansi::StyledSpan, theme: &TuiTheme) -> 
     style
 }
 
-/// El panel que pinta un PLUGIN (fase 3): su marco, dentro de un borde de casa.
+/// The panel that paints a PLUGIN (phase 3): its frame, inside a house
+/// border.
 ///
-/// El borde, el título y el foco los pone norte; lo de dentro lo describe el
-/// guest. Esa frontera es la que hace que un plugin no pueda fingir ser otro
-/// panel: no puede pintar su propio marco ni escribir en el título.
+/// The border, the title and the focus are set by norte; what is inside is
+/// described by the guest. That boundary is what keeps a plugin from
+/// pretending to be another panel: it cannot paint its own border nor write
+/// in the title.
 ///
-/// Sin marco todavía —la primera petición sigue en vuelo, o el plugin falló—
-/// el hueco se pinta VACÍO con su borde: se sabe que está y de quién es. Lo
-/// que nunca hace es parpadear, porque un marco que llegó se conserva mientras
-/// se pide el siguiente.
+/// With no frame yet — the first request is still in flight, or the plugin
+/// failed — the slot is painted EMPTY with its border: it is known to be
+/// there and whose it is. What it never does is flicker, because a frame
+/// that arrived is kept while the next one is requested.
 pub(crate) fn draw_plugin_panel(
     frame: &mut Frame<'_>,
     area: Rect,
     app: &App,
     id: norte_frontend::layout::SlotId,
-    con_teclado: bool,
+    with_keyboard: bool,
 ) {
-    let border = if con_teclado {
+    let border = if with_keyboard {
         Role::BorderFocus
     } else {
         Role::BorderUnfocused
     };
-    // El kind sale del ÁRBOL —un fichero de disposición, `--layout` o la
-    // sesión—, y ahí no le ha exigido un alfabeto nadie: `validate` mira la
-    // forma y conserva los kinds que este binario no conoce (ADR 0059). El
-    // alfabeto se exige al DECLARARLO, que es otro camino. Así que se
-    // enmascara como cualquier nombre que venga de un fichero.
-    let titulo = app
+    // The kind comes from the TREE — a layout file, `--layout` or the
+    // session — and nobody has demanded an alphabet from it there:
+    // `validate` looks at the shape and keeps the kinds this binary does
+    // not know (ADR 0059). The alphabet is demanded when it is DECLARED,
+    // which is a different path. So it is masked like any name coming from
+    // a file.
+    let title = app
         .layout
         .kind_of(id)
-        .and_then(|k| crate::panelplugin::partes(k.as_str()).map(|(_, kind)| kind.to_owned()))
+        .and_then(|k| crate::panelplugin::parts(k.as_str()).map(|(_, kind)| kind.to_owned()))
         .map(|k| norte_frontend::display_name(k.as_bytes()).0)
         .unwrap_or_default();
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(format!(" {titulo} "))
+        .title(format!(" {title} "))
         .title_style(app.theme.role(Role::Title))
         .border_style(app.theme.role(border));
     let lines: Vec<Line<'_>> = app
-        .paneles
+        .panels
         .get(id)
         .and_then(|p| p.frame.as_ref())
-        .map(|f| lineas_de_marco(f, &app.theme))
+        .map(|f| frame_lines(f, &app.theme))
         .unwrap_or_default();
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 
-/// Un [`StyledFrame`](norte_frontend::frame::StyledFrame) convertido en líneas
-/// de `ratatui`.
+/// A [`StyledFrame`](norte_frontend::frame::StyledFrame) converted into
+/// `ratatui` lines.
 ///
-/// UNA conversión y dos llamantes —el panel de un plugin y el mapa de disco—,
-/// porque una segunda escrita a mano es exactamente cómo se coló un camino que
-/// se saltaba el enmascarado (ver `crate::ansi::span_de_wire`). Lo que entra ya
-/// viene saneado; lo que esto hace es solo estilo.
-fn lineas_de_marco<'a>(
-    marco: &norte_frontend::frame::StyledFrame,
-    theme: &TuiTheme,
-) -> Vec<Line<'a>> {
+/// ONE conversion and two callers — a plugin's panel and the disk map —
+/// because a second hand-written one is exactly how a path that skipped the
+/// masking slipped through (see `crate::ansi::span_de_wire`). What comes in
+/// already arrives sanitized; all this does is style.
+fn frame_lines<'a>(marco: &norte_frontend::frame::StyledFrame, theme: &TuiTheme) -> Vec<Line<'a>> {
     marco
         .lines
         .iter()
-        .map(|linea| {
+        .map(|line| {
             Line::from(
-                linea
-                    .iter()
-                    .map(|span| Span::raw(span.text.clone()).style(estilo_de_span(span, theme)))
+                line.iter()
+                    .map(|span| Span::raw(span.text.clone()).style(span_style(span, theme)))
                     .collect::<Vec<_>>(),
             )
         })
         .collect()
 }
 
-/// El mapa de disco (fase 4): de qué está hecho el directorio, en rectángulos.
+/// The disk map (phase 4): what the directory is made of, in rectangles.
 ///
-/// El marco lo reparte [`norte_frontend::treemap::squarify`] con el ancho y el
-/// alto de DENTRO del borde: el reparto no sabe dónde cayó el hueco, igual que
-/// no lo sabe el guest de un plugin, y la cuenta la hace quien pinta.
+/// The frame is laid out by [`norte_frontend::treemap::squarify`] with the
+/// width and height INSIDE the border: the layout does not know where the
+/// slot landed, just like a plugin's guest does not, and whoever paints
+/// does the arithmetic.
 ///
-/// Mientras se mide se pinta lo que haya llegado —un mapa se va formando— y el
-/// título lo dice. Un mapa a medias sin decirlo se lee como un directorio
-/// pequeño, que es la respuesta equivocada.
+/// While it is measuring, whatever has arrived is painted — a map builds up
+/// gradually — and the title says so. A half-finished map that does not say
+/// so reads as a small directory, which is the wrong answer.
 pub(crate) fn draw_disk_map(
     frame: &mut Frame<'_>,
     area: Rect,
-    mapa: &norte_frontend::diskmap::DiskMap,
+    map: &norte_frontend::diskmap::DiskMap,
     app: &App,
-    con_teclado: bool,
+    with_keyboard: bool,
 ) {
-    use norte_frontend::diskmap::Estado;
+    use norte_frontend::diskmap::State;
 
-    let border = if con_teclado {
+    let border = if with_keyboard {
         Role::BorderFocus
     } else {
         Role::BorderUnfocused
     };
-    // El título lleva el ESTADO, que es la mitad de la información: «midiendo»
-    // sobre un mapa a medias es lo que impide leerlo como un total.
-    let estado = match mapa.estado() {
-        // Quieto y Hecho no añaden nada, y es el MISMO resultado a propósito:
-        // uno es «nadie ha pedido nada» y el otro «ya está», y en los dos el
-        // título se basta solo. Lo que tiene que verse es cuando NO está
-        // terminado, porque un mapa a medias sin decirlo se lee como un total.
-        Estado::Quieto | Estado::Hecho => String::new(),
-        Estado::Midiendo(_) => format!(" — {}", t("disk-map-measuring")),
-        Estado::Fallo(motivo) => format!(" — {motivo}"),
+    // The title carries the STATUS, which is half the information:
+    // "measuring" over a half-finished map is what keeps it from being read
+    // as a total.
+    let the_state = match map.state() {
+        // Idle and Done add nothing, and it is the SAME result on purpose:
+        // one is "nobody has asked for anything" and the other "it is
+        // already done", and in both the title is enough on its own. What
+        // needs to show is when it is NOT finished, because a half-finished
+        // map that does not say so reads as a total.
+        State::Idle | State::Done => String::new(),
+        State::Measuring(_) => format!(" — {}", t("disk-map-measuring")),
+        State::Failure(motivo) => format!(" — {motivo}"),
     };
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(format!(" {}{estado} ", t("disk-map-title")))
+        .title(format!(" {}{the_state} ", t("disk-map-title")))
         .title_style(app.theme.role(Role::Title))
         .border_style(app.theme.role(border));
-    let dentro = block.inner(area);
+    let inside = block.inner(area);
     let marco =
-        norte_frontend::treemap::squarify(&mapa.informe().children, dentro.width, dentro.height);
-    let lines = lineas_de_marco(&marco, &app.theme);
+        norte_frontend::treemap::squarify(&map.report().children, inside.width, inside.height);
+    let lines = frame_lines(&marco, &app.theme);
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 
-/// El sidebar de sitios (L3): discos y favoritos en un panel que se queda.
+/// The places sidebar (L3): drives and favorites in a panel that stays put.
 ///
-/// Todo lo que la plataforma nos da —la etiqueta de un volumen, su punto de
-/// montaje, el nombre que el usuario le puso a un favorito— pasa por el mismo
-/// enmascarado que el popup de unidades (`display_name`/`path_display`): un
-/// `fuse.<subtype>` lo elige un usuario sin privilegios, y una etiqueta de
-/// FAT es tan hostil como un nombre de fichero.
+/// Everything the platform gives us — a volume's label, its mount point,
+/// the name the user gave a favorite — goes through the same masking as the
+/// drives popup (`display_name`/`path_display`): a `fuse.<subtype>` is
+/// chosen by an unprivileged user, and a FAT label is as hostile as a file
+/// name.
 ///
-/// Un favorito roto se pinta ATENUADO y con su motivo traducido, nunca se
-/// esconde: un favorito que desaparece solo es un fallo de config invisible.
+/// A broken favorite is painted DIMMED and with its translated reason,
+/// never hidden: a favorite that disappears is only an invisible config
+/// failure.
 pub(crate) fn draw_places(
     frame: &mut Frame<'_>,
     area: Rect,
     state: &norte_frontend::places::PlacesState,
-    con_teclado: bool,
+    with_keyboard: bool,
     theme: &TuiTheme,
 ) {
     use norte_frontend::places::PlaceRow;
 
-    let border = if con_teclado {
+    let border = if with_keyboard {
         Role::BorderFocus
     } else {
         Role::BorderUnfocused
@@ -533,23 +534,24 @@ pub(crate) fn draw_places(
             PlaceRow::Drive {
                 label, mount, free, ..
             } => {
-                // El nombre CORTO, el mismo que la ventana (captura del
-                // 2026-09-21): el montaje entero recortado eran cinco filas
-                // «/home/oscar/…» que no se distinguían.
-                let (nombre, hostile) = norte_frontend::places::drive_name(label, mount);
-                // Corto y sin decimales: catorce celdas tienen que llevar el
-                // nombre del montaje Y su espacio. Un `?` cuando el
-                // filesystem no contestó — jamás un cero, que se leería como
-                // «lleno» (la palabra entera la sigue diciendo el popup, que
-                // sí tiene sitio).
-                let libre = free.map_or_else(|| "?".to_owned(), norte_frontend::human_bytes_short);
-                // El nombre de un montaje se recorta por el MEDIO: lo que
-                // identifica `/home/oscar/.cache` es la cola, y con seis
-                // montajes bajo `/home` una lista recortada por delante son
-                // seis filas que ponen lo mismo.
+                // The SHORT name, same as the window's (2026-09-21
+                // screenshot): the whole clipped mount used to be five
+                // "/home/oscar/…" rows that could not be told apart.
+                let (entry_name, hostile) = norte_frontend::places::drive_name(label, mount);
+                // Short and with no decimals: fourteen cells have to carry
+                // the mount's name AND its space. A `?` when the filesystem
+                // did not answer — never a zero, which would read as
+                // "full" (the whole word is still said by the popup, which
+                // does have room).
+                let is_free =
+                    free.map_or_else(|| "?".to_owned(), norte_frontend::human_bytes_short);
+                // A mount's name is clipped in the MIDDLE: what identifies
+                // `/home/oscar/.cache` is the tail, and with six mounts
+                // under `/home` a list clipped from the front is six rows
+                // saying the same thing.
                 ListItem::new(Line::raw(two_fields(
-                    &with_badge(&nombre, hostile),
-                    &libre,
+                    &with_badge(&entry_name, hostile),
+                    &is_free,
                     width,
                     middle,
                 )))
@@ -559,13 +561,13 @@ pub(crate) fn draw_places(
                 let left = with_badge(&text, hostile);
                 match target {
                     Ok(_) => ListItem::new(Line::raw(head(&format!(" {left}"), width))),
-                    // Roto: marca `!` y fila ATENUADA. El motivo entero no
-                    // cabe en catorce celdas —«ruta inválida» son trece— y
-                    // recortarlo dejaría media palabra diciendo nada, así que
-                    // la fila dice QUE está roto y la barra de estado dice por
-                    // qué cuando el cursor cae encima. Lo que no se hace es
-                    // esconderla: un favorito que desaparece solo es un fallo
-                    // de config invisible.
+                    // Broken: a `!` mark and a DIMMED row. The whole reason
+                    // does not fit in fourteen cells — "invalid path" is
+                    // thirteen — and clipping it would leave half a word
+                    // saying nothing, so the row says THAT it is broken and
+                    // the status bar says why when the cursor lands on it.
+                    // What is not done is hiding it: a favorite that
+                    // disappears is only an invisible config failure.
                     Err(_) => ListItem::new(Line::styled(
                         two_fields(&left, "!", width, head),
                         theme.role(Role::Info),
@@ -575,48 +577,49 @@ pub(crate) fn draw_places(
         })
         .collect();
     let list = List::new(items).highlight_style(theme.role(Role::Selection));
-    // El desplazamiento se calcula AQUÍ y no lo decide el widget, para que
-    // `places_zones` pueda decir con qué fila del modelo se corresponde cada
-    // fila de la pantalla (#226). Es el mismo número que ratatui elegía por su
-    // cuenta —desplazamiento mínimo para que el cursor se vea, partiendo de
-    // cero en cada frame—, así que la pantalla no cambia; lo que cambia es que
-    // ahora hay UNA fuente y el ratón la puede leer.
-    let mut estado = ListState::default().with_offset(if con_teclado {
+    // The scroll is computed HERE and not decided by the widget, so that
+    // `places_zones` can say which model row each screen row corresponds
+    // to (#226). It is the same number ratatui chose on its own — minimum
+    // scroll so the cursor is visible, starting from zero every frame — so
+    // the screen does not change; what changes is that there is now ONE
+    // source and the mouse can read it.
+    let mut the_state = ListState::default().with_offset(if with_keyboard {
         places_offset(state.cursor(), inner.height as usize)
     } else {
         0
     });
-    estado.select(con_teclado.then(|| state.cursor()));
-    frame.render_stateful_widget(list, inner, &mut estado);
+    the_state.select(with_keyboard.then(|| state.cursor()));
+    frame.render_stateful_widget(list, inner, &mut the_state);
 }
 
-/// Primera fila del modelo que se ve, para un cursor y un alto.
+/// First model row that is visible, for a cursor and a height.
 ///
-/// Desplazamiento MÍNIMO para que el cursor entre, empezando de cero: es lo
-/// que hacía el widget con un `ListState` nuevo en cada frame, escrito para
-/// que el hit test del ratón no tenga que adivinarlo.
+/// MINIMUM scroll so the cursor is in view, starting from zero: it is what
+/// the widget did with a fresh `ListState` every frame, written down so the
+/// mouse's hit test does not have to guess it.
 pub(crate) const fn places_offset(cursor: usize, height: usize) -> usize {
     cursor.saturating_sub(height.saturating_sub(1))
 }
 
-/// Una fila pulsable del sidebar de sitios, en el frame de `area`.
+/// A clickable row of the places sidebar, in `area`'s frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PlaceZone {
-    /// Fila de la pantalla.
+    /// Screen row.
     pub row: u16,
-    /// Primera columna, inclusive.
+    /// First column, inclusive.
     pub x0: u16,
-    /// Última columna, inclusive.
+    /// Last column, inclusive.
     pub x1: u16,
-    /// Índice dentro de [`norte_frontend::places::PlacesState::rows`].
+    /// Index within [`norte_frontend::places::PlacesState::rows`].
     pub index: usize,
 }
 
-/// Las filas pulsables del sidebar, en el frame de `area`.
+/// The sidebar's clickable rows, in `area`'s frame.
 ///
-/// Vive junto al pintado y comparte con él el reparto y el desplazamiento
-/// —igual que [`super::tab_zones`] y por lo mismo—: medir por un lado y pintar por
-/// otro es cómo un click acaba activando la fila de al lado.
+/// Lives next to the painting and shares its layout and scroll with it —
+/// same as [`super::tab_zones`] and for the same reason: measuring on one
+/// side and painting on the other is how a click ends up activating the row
+/// next door.
 #[must_use]
 pub fn places_zones(app: &App, area: Rect) -> Vec<PlaceZone> {
     let res = resolved_for(app, area);
@@ -626,7 +629,7 @@ pub fn places_zones(app: &App, area: Rect) -> Vec<PlaceZone> {
     let Some(state) = app.panes.places(id) else {
         return Vec::new();
     };
-    // El interior del bloque: el marco no es pulsable.
+    // The block's interior: the frame is not clickable.
     let inner = Block::default().borders(Borders::ALL).inner(rect);
     if inner.width == 0 || inner.height == 0 {
         return Vec::new();
@@ -654,27 +657,28 @@ pub fn places_zones(app: &App, area: Rect) -> Vec<PlaceZone> {
         .collect()
 }
 
-/// Una fila pulsable del árbol, en el frame de `area` (#136).
+/// A clickable row of the tree, in `area`'s frame (#136).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TreeZone {
-    /// Fila de la pantalla.
+    /// Screen row.
     pub row: u16,
-    /// Primera columna, inclusive.
+    /// First column, inclusive.
     pub x0: u16,
-    /// Última columna, inclusive.
+    /// Last column, inclusive.
     pub x1: u16,
-    /// La columna de la MARCA (`▾`/`▸`/`·`) de esta fila, que pliega y
-    /// despliega. Sangrada por profundidad, igual que la pinta `draw_tree`.
+    /// This row's MARK column (`▾`/`▸`/`·`), which folds and unfolds it.
+    /// Indented by depth, same as `draw_tree` paints it.
     pub mark_x: u16,
-    /// Índice dentro de [`norte_frontend::tree::Tree::rows`].
+    /// Index within [`norte_frontend::tree::Tree::rows`].
     pub index: usize,
 }
 
-/// Las filas pulsables del árbol, en el frame de `area`.
+/// The tree's clickable rows, in `area`'s frame.
 ///
-/// Vive junto al pintado y comparte con él el reparto y el desplazamiento, lo
-/// mismo que [`places_zones`] y por lo mismo: medir por un lado y pintar por
-/// otro es cómo un click acaba abriendo la rama de al lado.
+/// Lives next to the painting and shares its layout and scroll with it,
+/// same as [`places_zones`] and for the same reason: measuring on one side
+/// and painting on the other is how a click ends up opening the branch next
+/// door.
 #[must_use]
 pub fn tree_zones(app: &App, area: Rect) -> Vec<TreeZone> {
     let res = resolved_for(app, area);
@@ -689,130 +693,135 @@ pub fn tree_zones(app: &App, area: Rect) -> Vec<TreeZone> {
         return Vec::new();
     }
     let rows = tree.rows();
-    // El árbol pinta SIEMPRE su cursor, tenga el teclado o no (a diferencia
-    // del sidebar), así que su desplazamiento no depende de quién teclea.
+    // The tree ALWAYS paints its cursor, whether it has the keyboard or not
+    // (unlike the sidebar), so its scroll does not depend on who is typing.
     let offset = places_offset(tree.cursor(), inner.height as usize);
     (0..inner.height as usize)
         .filter_map(|row| {
             let index = offset.checked_add(row)?;
-            let fila = rows.get(index)?;
-            // `  ` por nivel, y luego la marca: el mismo molde que `draw_tree`.
-            let sangria = u16::try_from(fila.depth.saturating_mul(2)).unwrap_or(u16::MAX);
+            let the_row = rows.get(index)?;
+            // `  ` per level, then the mark: the same mold as `draw_tree`.
+            let indent = u16::try_from(the_row.depth.saturating_mul(2)).unwrap_or(u16::MAX);
             Some(TreeZone {
                 row: inner
                     .y
                     .saturating_add(u16::try_from(row).unwrap_or(u16::MAX)),
                 x0: inner.x,
                 x1: inner.x.saturating_add(inner.width).saturating_sub(1),
-                mark_x: inner.x.saturating_add(sangria),
+                mark_x: inner.x.saturating_add(indent),
                 index,
             })
         })
         .collect()
 }
 
-/// El porcentaje de una tarea, o `0` si todavía no se sabe.
+/// A task's percentage, or `0` if it is not known yet.
 ///
-/// La ARITMÉTICA vive en `norte_frontend::tasks`: la ventana gráfica pinta el
-/// mismo tablero, y dos copias del mismo cálculo divergieron una vez ya —la
-/// otra no caía a las entradas, así que un borrado se quedaba en cero—.
+/// The ARITHMETIC lives in `norte_frontend::tasks`: the graphical window
+/// paints the same board, and two copies of the same calculation already
+/// diverged once — the other one did not fall back to entries, so a delete
+/// stayed at zero.
 ///
-/// Aquí «no se sabe» se pinta como cero porque la barra tiene que medir algo;
-/// el estado de al lado es el que dice si la tarea está viva.
+/// Here "not known" is painted as zero because the bar has to measure
+/// something; the status next to it is what says whether the task is
+/// alive.
 pub(crate) fn progress_pct(p: &norte_proto::TaskProgress) -> u64 {
     norte_frontend::tasks::progress_pct(p).map_or(0, u64::from)
 }
 
-/// La etiqueta de una clase de task, por CATEGORÍA (nunca el `Debug`).
+/// A task class's label, by CATEGORY (never the `Debug` one).
 ///
-/// Una sola copia porque son dos las superficies que la pintan —la franja de
-/// abajo y el panel de procesos— y una etiqueta que sale distinta en cada una
-/// para la misma task es un bug que nadie reporta: se lee como si fueran dos
-/// cosas diferentes.
+/// A single copy because there are two surfaces that paint it — the bottom
+/// strip and the processes panel — and a label that comes out different on
+/// each for the same task is a bug nobody reports: it reads as if they were
+/// two different things.
 pub(crate) fn kind_label(kind: norte_proto::TaskKind) -> &'static str {
     match kind {
         norte_proto::TaskKind::Copy => "copy",
         norte_proto::TaskKind::Move => "move",
         norte_proto::TaskKind::Delete => "delete",
         norte_proto::TaskKind::Undo => "undo",
-        // Etiqueta mínima; el diálogo/pane virtual de Alt+F7 llega en
-        // T6 de liveSearch — aquí solo evita el `match` no exhaustivo.
+        // Minimal label; the Alt+F7 dialog/virtual pane arrives in T6 of
+        // liveSearch — here it only avoids the non-exhaustive `match`.
         norte_proto::TaskKind::Search => "search",
         norte_proto::TaskKind::Index => "index",
         norte_proto::TaskKind::Mkdir => "mkdir",
         norte_proto::TaskKind::Create => "create",
         norte_proto::TaskKind::Embed => "embed",
         norte_proto::TaskKind::RenameBatch => "rename",
-        // Contar no muta nada, pero SALE en la franja como todo lo demás, y
-        // caía al brazo genérico: «task 82 %» no dice que se está midiendo un
-        // directorio.
+        // Counting mutates nothing, but it DOES show in the strip like
+        // everything else, and it used to fall to the generic arm: "task
+        // 82%" does not say a directory is being measured.
         norte_proto::TaskKind::DirSize => "dir-size",
-        // Etiqueta mínima, como la de `Search` en su día: el pane de
-        // comparación llega en C7 de este mismo plan; esto solo evita
-        // que una Task de `fs.compare` se pinte como genérica.
+        // Minimal label, like `Search`'s in its day: the compare pane
+        // arrives in C7 of this same plan; this only keeps a `fs.compare`
+        // Task from being painted as generic.
         norte_proto::TaskKind::Compare => "compare",
-        // #311: mismo caso que `DirSize`. «task 40 %» no dice que lo que está
-        // corriendo es el sha256 de lo que marcaste.
+        // #311: same case as `DirSize`. "task 40%" does not say what is
+        // running is the sha256 of what you marked.
         norte_proto::TaskKind::Checksum => "checksum",
-        // #314: y esta MUTA, así que menos todavía puede salir sin nombre.
+        // #314: and this one MUTATES, so it can even less afford to come
+        // out with no name.
         norte_proto::TaskKind::SetMode => "set-mode",
-        // `Unknown` es la clase de un daemon N+1 que este proto YA
-        // conocía como desconocida (vía `serde(other)`); el `_` es
-        // `#[non_exhaustive]` (#126) — una variante de un norte-proto
-        // más nuevo que este BINARIO no reconoce en absoluto. Mismo
-        // caso de cara al usuario, misma etiqueta genérica.
+        // `Unknown` is the class of an N+1 daemon that this proto ALREADY
+        // knew as unknown (via `serde(other)`); the `_` is
+        // `#[non_exhaustive]` (#126) — a variant of a newer norte-proto that
+        // this BINARY does not recognize at all. Same case from the user's
+        // point of view, same generic label.
         norte_proto::TaskKind::Unknown | _ => "task",
     }
 }
 
-/// Sobre QUÉ actúa una fila del tablero, recortada a `max` celdas.
+/// What a board row acts ON, clipped to `max` cells.
 ///
-/// La ruta se recorta por el MEDIO porque lo que identifica un fichero es su
-/// nombre, o sea la cola — el mismo criterio que el título del visor acoplado.
-/// Vacío cuando la task no publicó ninguna entrada (una búsqueda que todavía
-/// no ha tocado nada), y entonces la fila se queda con su clase y su estado,
-/// que es lo que se sabe.
+/// The path is clipped in the MIDDLE because what identifies a file is its
+/// name, i.e. the tail — the same criterion as the docked viewer's title.
+/// Empty when the task published no entry (a search that has not touched
+/// anything yet), and then the row is left with its class and its status,
+/// which is what is known.
 ///
-/// La reinterpretación de nombres es la del pane con el FOCO. No es exacta —el
-/// operando puede venir del otro pane— pero un nombre hostil pintado como
-/// bytes crudos no se lee, y el badge de al lado dice que hubo reinterpretación.
+/// The name reinterpretation is the FOCUSED pane's. It is not exact — the
+/// operand can come from the other pane — but a hostile name painted as raw
+/// bytes cannot be read, and the badge next to it says there was a
+/// reinterpretation.
 fn operand_text(row: &crate::tasks::TaskRow, app: &App, max: usize) -> String {
     let Some(p) = row.operand.as_ref() else {
         return String::new();
     };
-    let (texto, hostil) = norte_frontend::path_display_with(p, app.focused().name_encoding());
-    let texto = if hostil {
-        format!("{HOSTILE_BADGE} {texto}")
+    let (text, hostile) = norte_frontend::path_display_with(p, app.focused().name_encoding());
+    let text = if hostile {
+        format!("{HOSTILE_BADGE} {text}")
     } else {
-        texto
+        text
     };
-    norte_frontend::middle_ellipsis(&texto, max)
+    norte_frontend::middle_ellipsis(&text, max)
 }
 
-/// El panel de procesos (fase A): una fila por tarea, con barra y estado.
+/// The processes panel (phase A): one row per task, with a bar and status.
 ///
-/// Las filas salen del `TaskBoard` que ya pinta la franja — este panel no
-/// guarda una segunda lista — y el cursor se acota AQUÍ contra las filas de
-/// este frame: una tarea puede terminar y desaparecer entre dos pinturas.
-/// El árbol de directorios (#136).
+/// The rows come from the `TaskBoard` that already paints the strip — this
+/// panel does not keep a second list — and the cursor is bounded HERE
+/// against this frame's rows: a task can finish and disappear between two
+/// paints.
+/// The directory tree (#136).
 ///
-/// Un nombre por fila, sangrado por profundidad, con un indicador de tres
-/// estados: desplegada, plegada-con-hijos, y sin leer. El tercero importa —
-/// pintar «hoja» a algo que todavía no se ha listado sería inventarse la
-/// respuesta— y es el mismo criterio que el resto de la pantalla: lo que no se
-/// sabe se dice, no se rellena.
+/// One name per row, indented by depth, with a three-state indicator:
+/// expanded, folded-with-children, and unread. The third one matters —
+/// painting "leaf" on something that has not been listed yet would be
+/// inventing the answer — and it is the same criterion as the rest of the
+/// screen: what is not known is said, not filled in.
 ///
-/// Los nombres van por `display_name`, como el listado: un directorio con bidi
-/// o invisibles no reordena esta columna.
+/// Names go through `display_name`, like the listing: a directory with bidi
+/// or invisibles does not reorder this column.
 pub(crate) fn draw_tree(
     frame: &mut Frame<'_>,
     area: Rect,
     tree: &crate::tree::Tree,
     app: &App,
-    con_teclado: bool,
+    with_keyboard: bool,
 ) {
     let theme = &app.theme;
-    let border = if con_teclado {
+    let border = if with_keyboard {
         Role::BorderFocus
     } else {
         Role::BorderUnfocused
@@ -842,9 +851,9 @@ pub(crate) fn draw_tree(
             let mark = match (r.expanded, r.children) {
                 (true, _) => "▾",
                 (false, Some(true)) => "▸",
-                // Leída y sin hijos: una hoja de verdad.
+                // Read and with no children: a real leaf.
                 (false, Some(false)) => " ",
-                // Sin leer: ni hoja ni rama, todavía.
+                // Unread: neither leaf nor branch, yet.
                 (false, None) => "·",
             };
             let (name, hostile) = display_name(
@@ -861,13 +870,12 @@ pub(crate) fn draw_tree(
             ListItem::new(Line::raw(text))
         })
         .collect();
-    // El desplazamiento se calcula AQUÍ y no lo decide el widget, para que
-    // `tree_zones` pueda decir con qué fila del modelo se corresponde cada fila
-    // de la pantalla. Es el mismo número que ratatui elegía por su cuenta
-    // —desplazamiento mínimo para que el cursor se vea, partiendo de cero en
-    // cada frame—, así que la pantalla no cambia; lo que cambia es que ahora
-    // hay UNA fuente y el ratón la puede leer (mismo arreglo que #226 en el
-    // sidebar).
+    // The scroll is computed HERE and not decided by the widget, so that
+    // `tree_zones` can say which model row each screen row corresponds to.
+    // It is the same number ratatui chose on its own — minimum scroll so
+    // the cursor is visible, starting from zero every frame — so the screen
+    // does not change; what changes is that there is now ONE source and the
+    // mouse can read it (same fix as #226 in the sidebar).
     let mut list_state =
         ListState::default().with_offset(places_offset(cursor, inner.height as usize));
     list_state.select(Some(cursor));
@@ -878,14 +886,14 @@ pub(crate) fn draw_tree(
 pub(crate) fn draw_processes(
     frame: &mut Frame<'_>,
     area: Rect,
-    // Por VALOR: desde que el tipo vive en `norte-frontend` es un `usize` con
-    // nombre, y ocho bytes se copian más barato que se referencian.
+    // By VALUE: since the type lives in `norte-frontend` it is a named
+    // `usize`, and eight bytes are cheaper to copy than to reference.
     processes: crate::processes::Processes,
     app: &App,
-    con_teclado: bool,
+    with_keyboard: bool,
 ) {
     let theme = &app.theme;
-    let border = if con_teclado {
+    let border = if with_keyboard {
         Role::BorderFocus
     } else {
         Role::BorderUnfocused
@@ -895,15 +903,15 @@ pub(crate) fn draw_processes(
         .title(format!(" {} ", t("processes-title")))
         .title_style(theme.role(Role::Title))
         .border_style(theme.role(border));
-    // Que este panel tenga el TECLADO se decía solo con el color del borde, y
-    // un lector que no distinga ese par de colores —o que no sepa que ese par
-    // significa eso— ve un gestor de ficheros en el que las flechas han dejado
-    // de funcionar y no tiene por dónde empezar. Es la misma lección de #111:
-    // una señal solo-color no es una señal.
+    // That this panel has the KEYBOARD used to be said only by the border's
+    // color, and a reader who cannot tell that pair of colors apart — or
+    // who does not know that pair means that — sees a file manager where
+    // the arrows have stopped working and has nowhere to start. It is the
+    // same lesson as #111: a color-only signal is not a signal.
     //
-    // El pie dice la salida, no el estado: «tiene el foco» no ayuda a nadie,
-    // «Esc devuelve el teclado» sí.
-    if con_teclado {
+    // The footer says the way OUT, not the status: "has focus" helps
+    // nobody, "Esc gives the keyboard back" does.
+    if with_keyboard {
         block = block.title_bottom(Line::styled(
             format!(" {} ", t("processes-has-keyboard")),
             theme.role(Role::Info),
@@ -922,64 +930,66 @@ pub(crate) fn draw_processes(
         );
         return;
     }
-    let cursor = processes.fila_o_cero(&app.board.task_ids());
+    let cursor = processes.row_or_zero(&app.board.task_ids());
     let items: Vec<ListItem<'_>> = rows
         .iter()
         .enumerate()
         .map(|(i, row)| {
             let p = &row.last;
             let pct = progress_pct(p);
-            // Diez celdas de barra: cabe en un panel estrecho y sigue
-            // diciendo de un vistazo por dónde va.
+            // Ten cells of bar: it fits in a narrow panel and still says at
+            // a glance how far along it is.
             let full = usize::try_from(pct / 10).unwrap_or(0).min(10);
             let bar: String = "█".repeat(full) + &"░".repeat(10 - full);
             let (state_txt, role) = match &p.state {
                 norte_proto::TaskState::Completed => ("✓".to_owned(), Some(Role::Info)),
                 norte_proto::TaskState::Cancelled => (t("task-cancelled"), Some(Role::Warning)),
-                // Pausada (ADR 0147): el porcentaje donde se quedó, y que está
-                // parada — un número quieto sin más se lee como atascado.
+                // Paused (ADR 0147): the percentage it stopped at, and that
+                // it is stopped — a plain still number reads as stuck.
                 norte_proto::TaskState::Paused => (format!("⏸ {pct}%"), Some(Role::Warning)),
                 norte_proto::TaskState::Failed { .. } => (t("task-failed"), Some(Role::Error)),
                 _ => (format!("{pct}%"), None),
             };
-            // El número de task NO se pinta: dieciocho dígitos no le dicen
-            // nada a nadie y se comen el ancho que necesita el nombre. Lo que
-            // faltaba era el par «qué clase de trabajo» + «sobre qué», que ya
-            // viaja entero en el progreso.
+            // The task number is NOT painted: eighteen digits tell nobody
+            // anything and eat the width the name needs. What was missing
+            // was the pair "what kind of work" + "on what", which already
+            // travels whole in the progress line.
             let kind = kind_label(p.kind);
-            // Ritmo y tiempo que queda (spec 2026-09-15, fase 2): ninguno viene
-            // del wire —los estima el tablero de sus propios snapshots— y los
-            // dos se callan cuando no se saben. Una barra sin velocidad dice
-            // que algo pasa; con ella, dice si merece la pena esperar.
-            let ritmo = norte_frontend::tasks::human_rate(row.rate.bps());
-            let queda = norte_frontend::tasks::human_eta(row.rate.eta_secs(p));
-            let medida = match (ritmo.is_empty(), queda.is_empty()) {
+            // Rate and time remaining (spec 2026-09-15, phase 2): neither
+            // comes from the wire — the board estimates them from its own
+            // snapshots — and both stay silent when unknown. A bar with no
+            // speed says something is happening; with it, it says whether
+            // waiting is worth it.
+            let pace = norte_frontend::tasks::human_rate(row.rate.bps());
+            let remains = norte_frontend::tasks::human_eta(row.rate.eta_secs(p));
+            let measured = match (pace.is_empty(), remains.is_empty()) {
                 (true, true) => String::new(),
-                (false, true) => format!("{ritmo} "),
-                (true, false) => format!("{queda} "),
-                (false, false) => format!("{ritmo} · {queda} "),
+                (false, true) => format!("{pace} "),
+                (true, false) => format!("{remains} "),
+                (false, false) => format!("{pace} · {remains} "),
             };
-            // Ancho fijo de la fila: la marca, la clase, la barra, el estado y
-            // los CUATRO espacios que los separan. Lo que sobra es del
-            // operando, y si no sobra nada se queda vacío en vez de empujar
-            // nada fuera.
+            // The row's fixed width: the mark, the class, the bar, the
+            // status and the FOUR spaces that separate them. What is left
+            // over belongs to the operand, and if nothing is left over it
+            // stays empty instead of pushing anything out.
             //
-            // El `ratatui` recorta la línea al ancho sin decir nada, así que
-            // pasarse de uno no rompe el pinta: se come el `✓` del final, que
-            // es justo el dato que la fila existe para dar.
-            let fijo = 1
+            // `ratatui` clips the line to the width without saying
+            // anything, so going one over does not break the paint: it eats
+            // the trailing `✓`, which is exactly the fact the row exists to
+            // give.
+            let fixed = 1
                 + 4
                 + kind.chars().count()
                 + 10
                 + state_txt.chars().count()
-                + medida.chars().count();
-            let hueco = usize::from(inner.width).saturating_sub(fijo);
-            let operando = operand_text(row, app, hueco);
-            let marca = if i == cursor { '▶' } else { ' ' };
-            let header = if operando.is_empty() {
-                format!("{marca} {kind} {bar} {medida}")
+                + measured.chars().count();
+            let slot = usize::from(inner.width).saturating_sub(fixed);
+            let operating = operand_text(row, app, slot);
+            let mark = if i == cursor { '▶' } else { ' ' };
+            let header = if operating.is_empty() {
+                format!("{mark} {kind} {bar} {measured}")
             } else {
-                format!("{marca} {kind} {operando} {bar} {medida}")
+                format!("{mark} {kind} {operating} {bar} {measured}")
             };
             let tail = match role {
                 Some(r) => Span::styled(state_txt, theme.role(r)),
@@ -991,39 +1001,42 @@ pub(crate) fn draw_processes(
     frame.render_widget(List::new(items), inner);
 }
 
-/// La hoja de atributos (fase A): lo que se sabe de la entrada bajo el cursor.
+/// The attribute sheet (phase A): what is known about the entry under the
+/// cursor.
 ///
-/// Todo sale de la `Entry` que el listado ya tenía, así que esta función no
-/// puede pedir nada aunque quisiera. QUÉ filas van dentro lo decide
-/// [`norte_frontend::metadata::sheet`], que es la misma que usa la ventana:
-/// esto solo las pinta. Cuando cada frontend tenía su copia de la lista ya
-/// habían divergido —el arreglo que marca un valor de atributo hostil se
-/// aplicó en una sola— y ese es exactamente el fallo que una copia produce.
+/// Everything comes from the `Entry` the listing already had, so this
+/// function cannot ask for anything even if it wanted to. WHICH rows go in
+/// is decided by [`norte_frontend::metadata::sheet`], the same one the
+/// window uses: this only paints them. When each frontend had its own copy
+/// of the list they had already diverged — the fix that flags a hostile
+/// attribute value was applied to only one — and that is exactly the
+/// failure a copy produces.
 pub(crate) fn draw_metadata(
     frame: &mut Frame<'_>,
     area: Rect,
     entry: Option<&(norte_proto::Entry, bool)>,
-    sigue: Option<&(String, bool)>,
+    follows: Option<&(String, bool)>,
     app: &App,
-    con_teclado: bool,
+    with_keyboard: bool,
 ) {
     let theme = &app.theme;
-    let border = if con_teclado {
+    let border = if with_keyboard {
         Role::BorderFocus
     } else {
         Role::BorderUnfocused
     };
-    // El título dice a QUÉ LISTADO sigue, no solo que es la hoja: con dos
-    // listados abiertos, «Detalles» a secas no dice de qué son los detalles,
-    // y la única forma de averiguarlo era mover el cursor y mirar si la hoja
-    // se movía. La ruta se recorta por el medio y con marca, como cualquier
-    // otra ruta de este fichero: el borde del bloque no avisa de un corte.
-    let titulo = match sigue {
-        Some((ruta, hostil)) => format!(
+    // The title says WHICH LISTING it follows, not just that it is the
+    // sheet: with two listings open, a bare "Details" does not say whose
+    // details they are, and the only way to find out was to move the
+    // cursor and watch whether the sheet moved. The path is clipped in the
+    // middle and with a mark, like any other path in this file: the
+    // block's border does not warn of a clip.
+    let title = match follows {
+        Some((path, hostile)) => format!(
             " {} · {} ",
             t("metadata-title"),
             norte_frontend::middle_ellipsis(
-                &with_badge(ruta, *hostil),
+                &with_badge(path, *hostile),
                 (area.width as usize).saturating_sub(t("metadata-title").chars().count() + 6),
             )
         ),
@@ -1031,7 +1044,7 @@ pub(crate) fn draw_metadata(
     };
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(titulo)
+        .title(title)
         .title_style(theme.role(Role::Title))
         .border_style(theme.role(border));
     let inner = block.inner(area);
@@ -1039,7 +1052,7 @@ pub(crate) fn draw_metadata(
     if inner.width == 0 || inner.height == 0 {
         return;
     }
-    let Some((e, fila_de_subir)) = entry else {
+    let Some((e, is_parent_row)) = entry else {
         frame.render_widget(
             Paragraph::new(Line::styled(t("metadata-empty"), theme.role(Role::Title))),
             inner,
@@ -1048,24 +1061,25 @@ pub(crate) fn draw_metadata(
     };
 
     let catalog = app.attr_catalog(e.path.scheme());
-    let ancho = inner.width as usize;
+    let width = inner.width as usize;
     let lines: Vec<Line<'_>> =
-        norte_frontend::metadata::sheet(e, *fila_de_subir, catalog, norte_i18n::active())
+        norte_frontend::metadata::sheet(e, *is_parent_row, catalog, norte_i18n::active())
             .into_iter()
             .map(|f| {
-                // El valor se recorta por el MEDIO y con marca. Un
-                // `Paragraph` sin wrap corta por la derecha y sin decirlo, y
-                // el campo `Destino` es una ruta entera: en un panel estrecho
-                // `⟨file⟩/home/oscar/proyectos/norte-secreto` quedaba como
-                // `⟨file⟩/home/oscar/proyectos`, que es otro directorio que
-                // además existe. Es la misma regla que el resto de las rutas
-                // de este fichero.
-                let etiqueta = format!("{} ", f.label);
-                let sitio = ancho.saturating_sub(crate::ui::text::cells(&etiqueta));
+                // The value is clipped in the MIDDLE and with a mark. A
+                // `Paragraph` with no wrap clips on the right without
+                // saying so, and the `Destination` field is a whole path:
+                // in a narrow panel
+                // `⟨file⟩/home/oscar/projects/norte-secret` used to be left
+                // as `⟨file⟩/home/oscar/projects`, which is another
+                // directory that also exists. It is the same rule as the
+                // rest of this file's paths.
+                let label = format!("{} ", f.label);
+                let place = width.saturating_sub(crate::ui::text::cells(&label));
                 let valor =
-                    norte_frontend::middle_ellipsis(&with_badge(&f.value, f.hostile), sitio);
+                    norte_frontend::middle_ellipsis(&with_badge(&f.value, f.hostile), place);
                 Line::from(vec![
-                    Span::styled(etiqueta, theme.role(Role::Title)),
+                    Span::styled(label, theme.role(Role::Title)),
                     Span::raw(valor),
                 ])
             })
@@ -1086,13 +1100,13 @@ pub(crate) fn draw_tasks(frame: &mut Frame<'_>, area: Rect, app: &App) {
         .map(|row| {
             let p = &row.last;
             let pct = progress_pct(p);
-            // Por CATEGORÍA (Display estable), jamás Debug de cara al usuario.
-            // El estado se colorea por rol (error rojo, hecho info).
+            // By CATEGORY (stable Display), never Debug facing the user.
+            // The status is colored by role (error red, done info).
             let (state, role) = match &p.state {
                 norte_proto::TaskState::Completed => ("✓".to_owned(), Some(Role::Info)),
                 norte_proto::TaskState::Cancelled => (t("task-cancelled"), Some(Role::Warning)),
-                // Pausada (ADR 0147): el porcentaje donde se quedó, y que está
-                // parada — un número quieto sin más se lee como atascado.
+                // Paused (ADR 0147): the percentage it stopped at, and that
+                // it is stopped — a plain still number reads as stuck.
                 norte_proto::TaskState::Paused => (format!("⏸ {pct}%"), Some(Role::Warning)),
                 norte_proto::TaskState::Failed { error } => {
                     (format!("✗ {error}"), Some(Role::Error))
@@ -1100,16 +1114,16 @@ pub(crate) fn draw_tasks(frame: &mut Frame<'_>, area: Rect, app: &App) {
                 _ => (format!("{pct}%"), None),
             };
             let kind = kind_label(p.kind);
-            // Igual que el panel: la clase y el operando, no el id. La franja
-            // decía « copy #7318349021 45 % », que es la misma línea para
-            // cualquier copia de cualquier cosa.
-            let fijo = 1 + kind.chars().count() + 2 + state.chars().count();
-            let hueco = usize::from(area.width).saturating_sub(fijo);
-            let operando = operand_text(row, app, hueco);
-            let head = if operando.is_empty() {
+            // Same as the panel: the class and the operand, not the id. The
+            // strip used to say " copy #7318349021 45% ", which is the same
+            // line for any copy of anything.
+            let fixed = 1 + kind.chars().count() + 2 + state.chars().count();
+            let slot = usize::from(area.width).saturating_sub(fixed);
+            let operating = operand_text(row, app, slot);
+            let head = if operating.is_empty() {
                 Span::raw(format!(" {kind} "))
             } else {
-                Span::raw(format!(" {kind} {operando} "))
+                Span::raw(format!(" {kind} {operating} "))
             };
             let tail = match role {
                 Some(r) => Span::styled(state, app.theme.role(r)),
@@ -1121,26 +1135,27 @@ pub(crate) fn draw_tasks(frame: &mut Frame<'_>, area: Rect, app: &App) {
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-/// La hora de una línea de registro, del módulo COMPARTIDO.
+/// A log line's time, from the SHARED module.
 ///
-/// Estaba aquí hasta que la ventana necesitó la misma (#326): dos ideas de qué
-/// hora es en el panel de registro de cada frontend es la clase de diferencia
-/// que nadie mira hasta que compara dos capturas de pantalla.
-use norte_frontend::format::hora_utc;
+/// It used to live here until the window needed the same one (#326): two
+/// ideas of what time it is in each frontend's log panel is the kind of
+/// difference nobody notices until they compare two screenshots.
+use norte_frontend::format::time_utc;
 
-/// El panel de registro (#323): lo que está pasando, sin salir de la TUI.
-/// El panel de terminal (#362): la rejilla del shell dentro de su marco.
+/// The log panel (#323): what is happening, without leaving the TUI.
+/// The terminal panel (#362): the shell's grid inside its frame.
 ///
-/// El contenido es AJENO —lo pinta otro programa— y por eso no lleva nada del
-/// tema encima: los colores son los que el shell pidió, y un índice lo resuelve
-/// la paleta del emulador del lector, como si el programa corriera fuera de
-/// norte. Lo único nuestro es el marco.
+/// The content is FOREIGN — another program paints it — and that is why it
+/// carries nothing of the theme on top: the colors are the ones the shell
+/// asked for, and an index resolves it against the reader's emulator
+/// palette, as if the program ran outside norte. The only thing that is
+/// ours is the frame.
 ///
-/// Que no haya que enmascarar nada aquí no es un descuido: lo garantiza la
-/// rejilla, donde un byte de control no puede llegar a una celda.
-pub(crate) fn draw_terminal(frame: &mut Frame<'_>, area: Rect, app: &App, con_teclado: bool) {
+/// That nothing needs masking here is not an oversight: the grid guarantees
+/// it, where a control byte cannot reach a cell.
+pub(crate) fn draw_terminal(frame: &mut Frame<'_>, area: Rect, app: &App, with_keyboard: bool) {
     let theme = &app.theme;
-    let border = if con_teclado {
+    let border = if with_keyboard {
         Role::BorderFocus
     } else {
         Role::BorderUnfocused
@@ -1150,111 +1165,117 @@ pub(crate) fn draw_terminal(frame: &mut Frame<'_>, area: Rect, app: &App, con_te
         .title(format!(" {} ", t("panelbar-terminal")))
         .title_style(theme.role(Role::Title))
         .border_style(theme.role(border));
-    // El pie dice cómo se SALE, y sólo cuando el teclado está dentro: es la
-    // única tecla que el panel no le pasa al shell, así que es la única que
-    // hay que anunciar — y sin anunciarla, un lector que entra con todas las
-    // teclas tomadas no tiene de dónde deducirla.
-    if con_teclado && let Some(c) = app.terminal_chord {
+    // The footer says how to GET OUT, and only when the keyboard is inside:
+    // it is the only key the panel does not pass to the shell, so it is the
+    // only one that has to be announced — and without announcing it, a
+    // reader who comes in with every key taken has no way to deduce it.
+    if with_keyboard && let Some(c) = app.terminal_chord {
         block = block.title_bottom(Line::styled(
             format!(" {c} · {} ", t("terminal-leave")),
             theme.role(Role::Muted),
         ));
     }
-    let dentro = block.inner(area);
+    let inside = block.inner(area);
     frame.render_widget(block, area);
     let Some(term) = app.terminal.as_ref() else {
-        // Sin shell el hueco sigue siendo útil: dice que no lo hay. Un panel
-        // vacío sin explicación es lo que hace desconfiar de un panel.
+        // With no shell the slot is still useful: it says there is none. An
+        // empty panel with no explanation is what makes a panel distrusted.
         frame.render_widget(
             Paragraph::new(Line::styled(t("terminal-none"), theme.role(Role::Muted))),
-            dentro,
+            inside,
         );
         return;
     };
-    let p = term.pantalla();
-    frame.render_widget(Paragraph::new(crate::termpanel::filas(p)), dentro);
-    if let Some((x, y)) = crate::termpanel::cursor_en(p, dentro, con_teclado) {
+    let p = term.screen();
+    frame.render_widget(Paragraph::new(crate::termpanel::rows(p)), inside);
+    if let Some((x, y)) = crate::termpanel::cursor_en(p, inside, with_keyboard) {
         frame.set_cursor_position((x, y));
     }
 }
 
-pub(crate) fn draw_log(frame: &mut Frame<'_>, area: Rect, app: &App, con_teclado: bool) {
+pub(crate) fn draw_log(frame: &mut Frame<'_>, area: Rect, app: &App, with_keyboard: bool) {
     use std::fmt::Write as _;
     let theme = &app.theme;
-    let border = if con_teclado {
+    let border = if with_keyboard {
         Role::BorderFocus
     } else {
         Role::BorderUnfocused
     };
     let panel = &app.log_panel;
-    let fuente = crate::logview::fuente_efectiva(app);
-    // El título dice el nivel, la FUENTE y el filtro: sin eso, un panel que se
-    // ve vacío no distingue «no ha pasado nada» de «lo estás filtrando fuera»
-    // ni de «estás mirando el registro del otro proceso», que es la confusión
-    // que hace desconfiar de un visor de logs.
+    let source = crate::logview::source_effective(app);
+    // The title says the level, the SOURCE and the filter: without that, a
+    // panel that looks empty cannot tell "nothing has happened" apart from
+    // "you are filtering it out" or from "you are looking at the other
+    // process's log", which is the confusion that makes a log viewer
+    // distrusted.
     //
-    // El nivel es SIEMPRE el que se ENSEÑA, en todas las fuentes: es el que la
-    // tecla controla y el que filtra la lista. Marcar aquí el que el daemon
-    // contestó tener puesto sería el peor error posible del panel — con el
-    // daemon en `trace` y el panel en `info`, la cabecera diría `trace`
-    // mientras cada línea `debug` que cruza el socket se tira en silencio.
-    let mut titulo = format!(" {} · {} ", t("log-title"), panel.level().label().trim());
-    // La fuente solo cuando hay dos sitios de los que pueda venir una línea.
-    // Sin daemon no hay segmento y no falta nada: un `ntc` corriente tiene un
-    // proceso y un anillo, y una frase sobre el origen contestaría una pregunta
-    // que nadie se ha hecho — exactamente el panel que dejó #326.
-    if let Some(fuente_txt) = crate::logview::etiqueta_de_fuente(app, fuente) {
-        let _ = write!(titulo, "· {fuente_txt} ");
+    // The level is ALWAYS the one being SHOWN, across every source: it is
+    // the one the key controls and the one that filters the list. Marking
+    // here the one the daemon answered having set would be the worst
+    // possible mistake for the panel — with the daemon on `trace` and the
+    // panel on `info`, the header would say `trace` while every `debug`
+    // line crossing the socket is silently dropped.
+    let mut title = format!(" {} · {} ", t("log-title"), panel.level().label().trim());
+    // The source only when there are two places a line could come from.
+    // With no daemon there is no segment and nothing is missing: a plain
+    // `ntc` has one process and one ring, and a sentence about the origin
+    // would answer a question nobody asked — exactly the panel #326 left
+    // behind.
+    if let Some(source_txt) = crate::logview::source_label(app, source) {
+        let _ = write!(title, "· {source_txt} ");
     }
-    // Si algún anillo está capturando MÁS de lo que se enseña, se dice, y con
-    // los dos a la vista cada parte dice de quién habla. Pedir TRACE y volver a
-    // INFO deja el proceso capturando TRACE el resto de la sesión —a propósito,
-    // para que ir y volver no borre lo de en medio— y sin esta línea eso no se
-    // ve por ninguna parte.
-    let captura = crate::logview::nota_de_captura(app, fuente);
-    if !captura.is_empty() {
-        let _ = write!(titulo, "· {captura} ");
+    // If some ring is capturing MORE than what is shown, it is said, and
+    // with both in view each part says whom it is talking about. Asking for
+    // TRACE and going back to INFO leaves the process capturing TRACE for
+    // the rest of the session — on purpose, so that going and coming back
+    // does not erase what happened in between — and without this line that
+    // shows up nowhere.
+    let capture = crate::logview::capture_note(app, source);
+    if !capture.is_empty() {
+        let _ = write!(title, "· {capture} ");
     }
     if !panel.filter().is_empty() {
         let _ = write!(
-            titulo,
+            title,
             "· /{} ",
             norte_encoding::mask_terminal_hazards(panel.filter())
         );
     }
-    // Lo descartado se DICE, y por anillo: el local cuenta lo evacuado desde
-    // que arrancó el proceso, el del daemon lo que ESTA apertura se perdió. Son
-    // números distintos y no se suman. Un anillo que tira lo viejo en silencio
-    // hace que el lector busque una línea que estuvo y ya no está, y concluya
-    // que el registro miente.
-    let descartes = crate::logview::nota_de_descartes(app, fuente);
+    // What was discarded is SAID, per ring: the local one counts what has
+    // been evacuated since the process started, the daemon's what THIS
+    // opening lost. They are different numbers and do not add up. A ring
+    // that silently drops the old stuff makes the reader look for a line
+    // that was there and no longer is, and conclude the log is lying.
+    let descartes = crate::logview::discard_note(app, source);
     if !descartes.is_empty() {
-        let _ = write!(titulo, "· {descartes} ");
+        let _ = write!(title, "· {descartes} ");
     }
     let mut block = Block::default()
         .borders(Borders::ALL)
-        .title(titulo)
+        .title(title)
         .title_style(theme.role(Role::Title))
         .border_style(theme.role(border));
-    // El pie: o el filtro que se está tecleando, o las teclas. El campo GANA
-    // porque mientras se escribe es lo único que importa, y porque un cursor
-    // que no se ve es un campo que no parece un campo.
+    // The footer: either the filter being typed, or the keys. The field WINS
+    // because while it is being typed it is the only thing that matters,
+    // and because a cursor that cannot be seen is a field that does not
+    // look like a field.
     if let Some(input) = &app.log_filter_input {
         block = block.title_bottom(Line::styled(
             format!(" /{}▏", norte_encoding::mask_terminal_hazards(input)),
             theme.role(Role::Match),
         ));
-    } else if con_teclado {
-        // La tecla de la fuente solo se ofrece cuando HAY una segunda: anunciar
-        // un mando que recorrería tres vistas del mismo anillo es prometer algo
-        // que no existe. Es la misma regla que en la ventana, donde el selector
-        // simplemente no se pinta.
-        let teclas = if app.log_remote.servicio == crate::logview::Servicio::Sirve {
+    } else if with_keyboard {
+        // The source key is only offered when there IS a second one:
+        // announcing a control that would cycle through three views of the
+        // same ring is promising something that does not exist. It is the
+        // same rule as in the window, where the selector simply is not
+        // painted.
+        let keys = if app.log_remote.service == crate::logview::Service::Serves {
             format!("{} · {}", t("log-keys"), t("log-keys-source"))
         } else {
             t("log-keys")
         };
-        block = block.title_bottom(Line::styled(format!(" {teclas} "), theme.role(Role::Info)));
+        block = block.title_bottom(Line::styled(format!(" {keys} "), theme.role(Role::Info)));
     }
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -1262,53 +1283,56 @@ pub(crate) fn draw_log(frame: &mut Frame<'_>, area: Rect, app: &App, con_teclado
         return;
     }
 
-    if app.log_ring.is_none() && fuente == norte_frontend::logpanel::LogSource::Window {
-        // Sin anillo instalado (tests, o un embebedor que no montó el
-        // subscriber) y sin daemon que sirva el suyo se dice, en vez de pintar
-        // un panel vacío que parece que no pasa nada. No es «no se registra
-        // nada»: el proceso sigue escribiendo a su fichero; lo que falta es el
-        // anillo en memoria, que es lo que este panel lee.
+    if app.log_ring.is_none() && source == norte_frontend::logpanel::LogSource::Window {
+        // With no ring installed (tests, or an embedder that did not mount
+        // the subscriber) and no daemon serving its own, it is said,
+        // instead of painting an empty panel that looks like nothing is
+        // happening. It is not "nothing is being logged": the process keeps
+        // writing to its file; what is missing is the in-memory ring, which
+        // is what this panel reads.
         frame.render_widget(
             Paragraph::new(Line::styled(t("log-no-ring"), theme.role(Role::Warning))),
             inner,
         );
         return;
     }
-    // Las dos fuentes, mezcladas por marca de tiempo y ya filtradas (#328).
-    // Prestadas, no clonadas: el anillo ya clonó una vez en su `snapshot` y
-    // aquí se pinta como mucho una pantalla.
-    let lineas = crate::logview::instantanea(app);
-    let visibles = crate::logview::visibles(app, &lineas);
+    // Both sources, mixed by timestamp and already filtered (#328).
+    // Borrowed, not cloned: the ring already cloned once in its `snapshot`
+    // and here at most one screen is painted.
+    let lines = crate::logview::snapshot(app);
+    let visible = crate::logview::visible(app, &lines);
     let alto = usize::from(inner.height);
-    let desde = panel.window_start(visibles.len(), alto);
-    if visibles.is_empty() {
+    let from = panel.window_start(visible.len(), alto);
+    if visible.is_empty() {
         frame.render_widget(
             Paragraph::new(Line::styled(t("log-empty"), theme.role(Role::Title))),
             inner,
         );
         return;
     }
-    let pintadas: Vec<Line<'_>> = visibles
+    let painted: Vec<Line<'_>> = visible
         .iter()
-        .skip(desde)
+        .skip(from)
         .take(alto)
-        .map(|(l, origen)| {
+        .map(|(l, origin)| {
             let rol = match l.level {
                 norte_config::logline::LogLevel::Error => Role::Error,
                 norte_config::logline::LogLevel::Warn => Role::Warning,
                 _ => Role::Info,
             };
-            // El módulo y el mensaje llevan rutas y nombres de host que eligió
-            // alguien que no es el lector: pasan por el mismo enmascarado que
-            // cualquier otro texto ajeno antes de tocar la terminal.
-            let cuerpo =
+            // The module and the message carry paths and host names chosen
+            // by someone who is not the reader: they go through the same
+            // masking as any other foreign text before touching the
+            // terminal.
+            let body =
                 norte_encoding::mask_terminal_hazards(&format!("{}: {}", l.target, l.message));
-            // Una línea del DAEMON se marca al margen, y solo con las dos
-            // fuentes en pantalla: con una sola no hay nada que distinguir, y
-            // el filete gastaría dos columnas por línea para no decir nada. Un
-            // filete y no un color, igual que en la ventana: el color ya lo
-            // tiene tomado el nivel, que es lo que se busca de un vistazo.
-            let margen = match (fuente, origen) {
+            // A DAEMON line is flagged in the margin, and only with both
+            // sources on screen: with just one there is nothing to tell
+            // apart, and the rule would spend two columns per line to say
+            // nothing. A rule and not a color, same as in the window: the
+            // color is already taken by the level, which is what is
+            // searched for at a glance.
+            let margin = match (source, origin) {
                 (
                     norte_frontend::logpanel::LogSource::Both,
                     norte_frontend::logpanel::LogSource::Daemon,
@@ -1317,80 +1341,82 @@ pub(crate) fn draw_log(frame: &mut Frame<'_>, area: Rect, app: &App, con_teclado
                 _ => "",
             };
             Line::from(vec![
-                Span::styled(margen, theme.role(Role::BorderUnfocused)),
-                Span::raw(format!("{} ", hora_utc(l.epoch_ms))),
+                Span::styled(margin, theme.role(Role::BorderUnfocused)),
+                Span::raw(format!("{} ", time_utc(l.epoch_ms))),
                 Span::styled(format!("{} ", l.level.label()), theme.role(rol)),
-                Span::raw(cuerpo),
+                Span::raw(body),
             ])
         })
         .collect();
-    frame.render_widget(Paragraph::new(pintadas), inner);
+    frame.render_widget(Paragraph::new(painted), inner);
 }
 
-/// El color de una fila de la línea de tiempo según QUIÉN la hizo (fase 7).
+/// The color of a timeline row according to WHO did it (phase 7).
 ///
-/// Lo que separa es «yo» de «algo en mi nombre», que es la distinción que un
-/// humano necesita para leer su propio historial: lo suyo lo puede deshacer
-/// desde aquí; lo de un agente o un plugin, no — eso va por
-/// `policy.undo_session`, que es otra pantalla y otra pregunta.
+/// What it splits is "me" from "something in my name", which is the
+/// distinction a human needs to read their own history: theirs can be
+/// undone from here; an agent's or a plugin's cannot — that goes through
+/// `policy.undo_session`, which is a different screen and a different
+/// question.
 #[must_use]
 pub(crate) fn rol_de_actor(actor_kind: &str) -> Role {
     match actor_kind {
-        norte_frontend::timeline::ACTOR_HUMANO => Role::Regular,
+        norte_frontend::timeline::ACTOR_HUMAN => Role::Regular,
         "agent" => Role::Warning,
         _ => Role::Info,
     }
 }
 
-/// Una fila de la línea de tiempo, ya pintable.
+/// A timeline row, already paintable.
 ///
-/// `hora · punto · verbo · nombre`, y detrás lo que la distingue: cuántas
-/// entradas trae si es un lote, y si no tiene vuelta. El punto es lo que
-/// lleva el color del actor — el texto se queda legible y la clase se lee de
-/// un vistazo por la columna, que es para lo que sirve una línea de tiempo.
-fn linea_de_timeline<'a>(
-    fila: &norte_frontend::timeline::TimelineRow,
+/// `time · dot · verb · name`, and behind that what sets it apart: how many
+/// entries it carries if it is a batch, and whether it cannot be undone. The
+/// dot is what carries the actor's color — the text stays legible and the
+/// class reads at a glance through the column, which is what a timeline is
+/// for.
+fn timeline_line<'a>(
+    the_row: &norte_frontend::timeline::TimelineRow,
     theme: &TuiTheme,
-    ancho: usize,
+    width: usize,
 ) -> Line<'a> {
     use std::fmt::Write as _;
 
     let mut spans = vec![
         Span::styled(
-            format!("{} ", norte_frontend::format::hora_utc(fila.ts_ms)),
+            format!("{} ", norte_frontend::format::time_utc(the_row.ts_ms)),
             theme.role(Role::BorderUnfocused),
         ),
-        Span::styled("● ", theme.role(rol_de_actor(&fila.actor_kind))),
+        Span::styled("● ", theme.role(rol_de_actor(&the_row.actor_kind))),
     ];
-    // La insignia, DELANTE y en su propio span, como en toda superficie donde
-    // se decide algo: el servidor ya enmascaró el texto, y esto es lo que
-    // impide leerlo como fiel.
-    if fila.hostile {
+    // The badge, UP FRONT and in its own span, as on every surface where
+    // something is decided: the server has already masked the text, and
+    // this is what keeps it from being read as faithful.
+    if the_row.hostile {
         spans.push(Span::styled(
             format!("{HOSTILE_BADGE} "),
             theme.role(Role::HostileBadge),
         ));
     }
     let mut cola = String::new();
-    if fila.members > 1 {
+    if the_row.members > 1 {
         let _ = write!(
             cola,
             " · {}",
-            ta("timeline-batch", &[("n", &fila.members.to_string())])
+            ta("timeline-batch", &[("n", &the_row.members.to_string())])
         );
     }
-    if !fila.reversible {
+    if !the_row.reversible {
         let _ = write!(cola, " · {}", t("timeline-irreversible"));
     }
-    let usado = spans.iter().map(Span::width).sum::<usize>() + super::text::cells(&cola);
-    let verbo = format!("{} ", fila.op);
-    let sitio = ancho
-        .saturating_sub(usado + super::text::cells(&verbo))
+    let used = spans.iter().map(Span::width).sum::<usize>() + super::text::cells(&cola);
+    let verb = format!("{} ", the_row.op);
+    let place = width
+        .saturating_sub(used + super::text::cells(&verb))
         .max(1);
-    spans.push(Span::raw(verbo));
+    spans.push(Span::raw(verb));
     spans.push(Span::raw(norte_frontend::display::middle_ellipsis(
-        &norte_frontend::timeline::path_label(&fila.path),
-        sitio,
+        &norte_frontend::timeline::path_label(&the_row.path),
+        place,
     )));
     if !cola.is_empty() {
         spans.push(Span::styled(cola, theme.role(Role::BorderUnfocused)));
@@ -1398,18 +1424,18 @@ fn linea_de_timeline<'a>(
     Line::from(spans)
 }
 
-/// La línea de tiempo del journal (fase 7): una fila por mutación —o por
-/// lote—, de la más nueva a la más vieja, con el cursor sobre la que sería
-/// el punto de vuelta.
+/// The journal's timeline (phase 7): one row per mutation — or per batch —
+/// from the newest to the oldest, with the cursor over the one that would
+/// be the point to go back to.
 pub(crate) fn draw_timeline(
     frame: &mut Frame<'_>,
     area: Rect,
     timeline: &norte_frontend::timeline::Timeline,
     app: &App,
-    con_teclado: bool,
+    with_keyboard: bool,
 ) {
     let theme = &app.theme;
-    let border = if con_teclado {
+    let border = if with_keyboard {
         Role::BorderFocus
     } else {
         Role::BorderUnfocused
@@ -1419,17 +1445,18 @@ pub(crate) fn draw_timeline(
         .title(format!(" {} ", t("timeline-title")))
         .title_style(theme.role(Role::Title))
         .border_style(theme.role(border));
-    // El pie dice lo que se va a llevar un Intro AQUÍ, no en general: es el
-    // único número que importa antes de pulsar, y tenerlo delante mientras se
-    // mueve el cursor es lo que convierte la lista en una decisión.
-    if con_teclado && !timeline.is_empty() {
-        let c = timeline.resumen();
-        let texto = if c.no_hace_nada() {
+    // The footer says what an Enter is going to take HERE, not in general:
+    // it is the only number that matters before pressing it, and having it
+    // in front while the cursor moves is what turns the list into a
+    // decision.
+    if with_keyboard && !timeline.is_empty() {
+        let c = timeline.summary();
+        let text = if c.no_does_nothing() {
             t("timeline-undo-nothing")
         } else {
-            ta("timeline-undo-count", &[("n", &c.a_deshacer.to_string())])
+            ta("timeline-undo-count", &[("n", &c.to_undo.to_string())])
         };
-        block = block.title_bottom(Line::styled(format!(" {texto} "), theme.role(Role::Info)));
+        block = block.title_bottom(Line::styled(format!(" {text} "), theme.role(Role::Info)));
     }
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -1437,44 +1464,45 @@ pub(crate) fn draw_timeline(
         return;
     }
     if timeline.is_empty() {
-        // «Todavía no se ha hecho nada» sólo se dice cuando SE HA MIRADO. Un
-        // panel heredado de una disposición guardada aún no ha preguntado, y
-        // afirmar ahí que el journal está vacío es la peor equivocación
-        // posible en una pantalla de historial.
-        let texto = if timeline.cargada() {
+        // "Nothing has been done yet" is only said once it HAS BEEN
+        // CHECKED. A panel inherited from a saved layout has not asked yet,
+        // and stating there that the journal is empty is the worst possible
+        // mistake on a history screen.
+        let text = if timeline.loaded() {
             t("timeline-empty")
         } else {
             t("timeline-loading")
         };
         frame.render_widget(
-            Paragraph::new(Line::styled(texto, theme.role(Role::Title))),
+            Paragraph::new(Line::styled(text, theme.role(Role::Title))),
             inner,
         );
         return;
     }
     let alto = usize::from(inner.height);
-    // La misma ventana que cualquier lista larga de este binario: se pinta lo
-    // que cabe y no el historial entero (`draw_pane`, y el porqué medido).
-    let ventana = super::pane::filas_pintadas(
+    // The same window as any long list in this binary: what fits is
+    // painted, not the whole history (`draw_pane`, and the reason measured
+    // there).
+    let window = super::pane::painted_rows(
         timeline.cursor().saturating_sub(alto.saturating_sub(1) / 2),
         timeline.len(),
         alto,
     );
-    let ancho = usize::from(inner.width);
+    let width = usize::from(inner.width);
     let items: Vec<ListItem<'_>> = timeline
         .rows()
         .iter()
-        .skip(ventana.start)
-        .take(ventana.len())
-        .map(|f| ListItem::new(linea_de_timeline(f, theme, ancho)))
+        .skip(window.start)
+        .take(window.len())
+        .map(|f| ListItem::new(timeline_line(f, theme, width)))
         .collect();
-    let list = List::new(items).highlight_style(theme.role(if con_teclado {
+    let list = List::new(items).highlight_style(theme.role(if with_keyboard {
         Role::Selection
     } else {
         Role::SelectionUnfocused
     }));
     let mut state = ListState::default();
-    state.select(timeline.cursor().checked_sub(ventana.start));
+    state.select(timeline.cursor().checked_sub(window.start));
     *state.offset_mut() = 0;
     frame.render_stateful_widget(list, inner, &mut state);
 }
@@ -1485,54 +1513,55 @@ mod draw_log_tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
-    /// Pinta el panel de registro y devuelve lo que quedó en el buffer.
-    fn pintado(app: &App, ancho: u16, alto: u16) -> String {
-        let mut terminal = Terminal::new(TestBackend::new(ancho, alto)).expect("terminal de test");
+    /// Paints the log panel and returns what was left in the buffer.
+    fn painted(app: &App, width: u16, alto: u16) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(width, alto)).expect("test terminal");
         terminal
             .draw(|f| draw_log(f, f.area(), app, true))
             .expect("draw");
         terminal.backend().to_string()
     }
 
-    /// Las dos columnas de margen de una fila pintada.
+    /// A painted row's two margin columns.
     ///
-    /// Hay que pelar dos cosas antes: la comilla que pone el `Display` de
-    /// `TestBackend` y el BORDE izquierdo del bloque, que es otro `│` y que la
-    /// primera versión de este test confundió con el filete del daemon —
-    /// declarando marcada como remota una línea de esta terminal.
-    fn margen(fila: &str) -> String {
-        fila.chars()
+    /// Two things have to be peeled off first: the quote `TestBackend`'s
+    /// `Display` adds, and the block's LEFT border, which is another `│`
+    /// and which this test's first version confused with the daemon's
+    /// rule — declaring a line from this terminal flagged as remote.
+    fn margin(the_row: &str) -> String {
+        the_row
+            .chars()
             .skip_while(|c| *c == '"')
             .skip(1)
             .take(2)
             .collect()
     }
 
-    /// Con un daemon aparte, las DOS fuentes llegan a las filas pintadas, y la
-    /// del daemon se distingue por el filete del margen (#328).
+    /// With a separate daemon, BOTH sources reach the painted rows, and the
+    /// daemon's is told apart by the margin rule (#328).
     ///
-    /// Es el agujero que `ntc --socket` tenía: los providers, el journal, la
-    /// política y el motivo por el que una conexión falló están en el otro
-    /// proceso, y este panel solo enseñaba lo de la terminal. La ventana ya lo
-    /// resolvió, y arreglarlo en un solo frontend es lo que los hace divergir
-    /// en silencio (ADR 0077).
+    /// It is the hole `ntc --socket` had: the providers, the journal, the
+    /// policy and the reason a connection failed live in the other
+    /// process, and this panel only showed the terminal's. The window
+    /// already solved it, and fixing it in a single frontend is what makes
+    /// them silently diverge (ADR 0077).
     #[test]
-    fn el_panel_pinta_la_terminal_y_el_daemon_y_los_distingue() {
-        let mut app = crate::app::testutil::app_dos_panes();
-        let anillo = norte_config::logring::LogRing::new(10);
+    fn the_panel_paints_the_terminal_and_the_daemon_and_tells_them_apart() {
+        let mut app = crate::app::testutil::app_two_panes();
+        let ring = norte_config::logring::LogRing::new(10);
         {
             use tracing_subscriber::layer::SubscriberExt as _;
-            let s = tracing_subscriber::registry().with(norte_config::logring::ring_layer(&anillo));
+            let s = tracing_subscriber::registry().with(norte_config::logring::ring_layer(&ring));
             tracing::subscriber::with_default(s, || tracing::info!("linea-de-la-terminal"));
         }
-        let local_ms = anillo.snapshot()[0].epoch_ms;
-        app.log_ring = Some(anillo);
+        let local_ms = ring.snapshot()[0].epoch_ms;
+        app.log_ring = Some(ring);
         app.log_remote.hay_daemon = true;
         app.toggle_log();
-        let epoca = app.log_remote.epoca;
-        crate::logview::aterrizar_tail(
+        let epoch = app.log_remote.epoch;
+        crate::logview::land_tail(
             &mut app,
-            epoca,
+            epoch,
             Ok(norte_proto::methods::LogTailResult {
                 lines: vec![norte_proto::methods::LogLine {
                     epoch_ms: local_ms + 1,
@@ -1542,107 +1571,108 @@ mod draw_log_tests {
                 }],
                 next: 7,
                 lost: 0,
-                // El nivel del daemon, MÁS alto que el que el panel enseña:
-                // es lo que hace visible la regla de los dos niveles.
+                // The daemon's level, HIGHER than the one the panel shows:
+                // it is what makes the two-level rule visible.
                 level: "trace".to_owned(),
                 capacity: 2000,
             }),
         );
 
-        let texto = pintado(&app, 120, 8);
-        let fila_local = texto
+        let text = painted(&app, 120, 8);
+        let row_local = text
             .lines()
             .find(|l| l.contains("linea-de-la-terminal"))
-            .expect("la línea de esta terminal no se pintó");
-        let fila_daemon = texto
+            .expect("this terminal's line was not painted");
+        let row_daemon = text
             .lines()
             .find(|l| l.contains("linea-del-daemon"))
-            .expect("la línea del daemon no se pintó");
-        // El filete del margen es lo que separa «el provider falló» de «la
-        // terminal no pudo pintarlo», que se leen igual y son dos averías
-        // distintas.
+            .expect("the daemon's line was not painted");
+        // The margin rule is what separates "the provider failed" from "the
+        // terminal could not paint it", which read the same and are two
+        // different failures.
         assert_eq!(
-            margen(fila_daemon),
+            margin(row_daemon),
             "│ ",
-            "la línea del daemon no se marcó al margen: {fila_daemon:?}"
+            "the daemon's line was not flagged in the margin: {row_daemon:?}"
         );
         assert_eq!(
-            margen(fila_local),
+            margin(row_local),
             "  ",
-            "la línea de esta terminal se marcó como del daemon: {fila_local:?}"
+            "this terminal's line was flagged as the daemon's: {row_local:?}"
         );
 
-        // El nivel que se MARCA es el que se ENSEÑA, en todas las fuentes: el
-        // del daemon se dice en la nota de captura y no en la cabecera. Con la
-        // cabecera diciendo `traza` mientras el filtro sigue en `info`, cada
-        // línea DEBUG del daemon cruzaría el socket y se tiraría en silencio.
-        let cabecera = texto.lines().next().unwrap_or_default();
+        // The level that gets FLAGGED is the one being SHOWN, across every
+        // source: the daemon's is said in the capture note, not in the
+        // header. With the header saying `trace` while the filter stays on
+        // `info`, every DEBUG line from the daemon would cross the socket
+        // and be silently dropped.
+        let header = text.lines().next().unwrap_or_default();
         assert!(
-            cabecera.contains(norte_config::logline::LogLevel::Info.label().trim()),
-            "la cabecera no marca el nivel que se enseña: {cabecera:?}"
+            header.contains(norte_config::logline::LogLevel::Info.label().trim()),
+            "the header does not flag the level being shown: {header:?}"
         );
         assert!(
-            texto.contains(&norte_i18n::ta(
+            text.contains(&norte_i18n::ta(
                 "log-capturing-daemon",
                 &[(
                     "level",
                     norte_config::logline::LogLevel::Trace.label().trim()
                 )]
             )),
-            "no se dice que el daemon captura más de lo que se ve: {texto}"
+            "it does not say the daemon is capturing more than what is shown: {text}"
         );
     }
 
-    /// Sin daemon que sirva su registro no se ofrece la tecla de la fuente:
-    /// recorrer tres vistas del MISMO anillo es un mando que promete algo que
-    /// no existe.
+    /// With no daemon serving its log the source key is not offered:
+    /// cycling through three views of the SAME ring is a control that
+    /// promises something that does not exist.
     #[test]
-    fn la_tecla_de_la_fuente_solo_se_ofrece_cuando_hay_dos() {
-        let mut app = crate::app::testutil::app_dos_panes();
+    fn the_source_key_is_only_offered_when_there_are_two() {
+        let mut app = crate::app::testutil::app_two_panes();
         app.log_ring = Some(norte_config::logring::LogRing::new(10));
         app.toggle_log();
-        let sin = pintado(&app, 120, 8);
+        let sin = painted(&app, 120, 8);
         assert!(
             !sin.contains(&norte_i18n::t("log-keys-source")),
-            "se ofreció la fuente sin una segunda que ofrecer: {sin}"
+            "the source was offered with no second one to offer: {sin}"
         );
 
         app.log_remote.hay_daemon = true;
-        app.log_remote.servicio = crate::logview::Servicio::Sirve;
-        let con = pintado(&app, 120, 8);
+        app.log_remote.service = crate::logview::Service::Serves;
+        let con = painted(&app, 120, 8);
         assert!(
             con.contains(&norte_i18n::t("log-keys-source")),
-            "con daemon, la tecla de la fuente no se anuncia: {con}"
+            "with a daemon, the source key is not announced: {con}"
         );
     }
 
-    /// Un `ntc` corriente —sin daemon, que es el arranque por defecto— pinta el
-    /// panel EXACTAMENTE como lo dejó #326: un proceso, un anillo, y ni una
-    /// palabra sobre un origen ni sobre un daemon.
+    /// A plain `ntc` — with no daemon, which is the default startup —
+    /// paints the panel EXACTLY as #326 left it: one process, one ring, and
+    /// not a word about a source or a daemon.
     ///
-    /// La ausencia del segmento es la respuesta. Cualquier frase ahí contesta
-    /// una pregunta que nadie se ha hecho, y las que había —«el daemon registra
-    /// aparte», «este daemon no sirve su registro»— hablaban de alguien que no
-    /// existe.
+    /// The segment's absence is the answer. Any phrase there would answer a
+    /// question nobody asked, and the ones that existed — "the daemon logs
+    /// separately", "this daemon does not serve its log" — talked about
+    /// someone who does not exist.
     #[test]
-    fn sin_daemon_el_panel_es_el_de_326() {
-        let mut app = crate::app::testutil::app_dos_panes();
-        let anillo = norte_config::logring::LogRing::new(10);
+    fn with_no_daemon_the_panel_is_326s() {
+        let mut app = crate::app::testutil::app_two_panes();
+        let ring = norte_config::logring::LogRing::new(10);
         {
             use tracing_subscriber::layer::SubscriberExt as _;
-            let s = tracing_subscriber::registry().with(norte_config::logring::ring_layer(&anillo));
+            let s = tracing_subscriber::registry().with(norte_config::logring::ring_layer(&ring));
             tracing::subscriber::with_default(s, || tracing::info!("una linea cualquiera"));
         }
-        app.log_ring = Some(anillo);
+        app.log_ring = Some(ring);
         app.toggle_log();
 
-        let texto = pintado(&app, 120, 8);
-        let cabecera = texto.lines().next().unwrap_or_default();
+        let text = painted(&app, 120, 8);
+        let header = text.lines().next().unwrap_or_default();
         assert!(
-            texto.contains("una linea cualquiera"),
-            "el panel de siempre dejó de pintar: {texto}"
+            text.contains("una linea cualquiera"),
+            "the usual panel stopped painting: {text}"
         );
-        for clave in [
+        for key in [
             "log-source-window",
             "log-source-both",
             "log-source-daemon",
@@ -1651,15 +1681,15 @@ mod draw_log_tests {
             "log-keys-source",
         ] {
             assert!(
-                !texto.contains(&norte_i18n::t(clave)),
-                "se habló de un daemon que no existe ({clave}): {texto}"
+                !text.contains(&norte_i18n::t(key)),
+                "it talked about a daemon that does not exist ({key}): {text}"
             );
         }
-        // Y lo que sí tiene que seguir estando: el título y el nivel.
+        // And what does have to still be there: the title and the level.
         assert!(
-            cabecera.contains(&norte_i18n::t("log-title"))
-                && cabecera.contains(norte_config::logline::LogLevel::Info.label().trim()),
-            "el título perdió lo suyo: {cabecera:?}"
+            header.contains(&norte_i18n::t("log-title"))
+                && header.contains(norte_config::logline::LogLevel::Info.label().trim()),
+            "the title lost what was its own: {header:?}"
         );
     }
 }

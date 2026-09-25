@@ -1,90 +1,93 @@
-// Pintor de `Screen` para la línea de tiempo del journal (puente 78, #359):
-// función con `this: Screen`, enganchada como propiedad en `render.ts`.
+// `Screen` painter for the journal's timeline (bridge 78, #359): a function
+// with `this: Screen`, hooked in as a property in `render.ts`.
 //
-// Las filas vienen YA pintables: el host agrupó los lotes, formateó la hora y
-// tradujo la cola. Lo único que se decide aquí es cómo se ve un punto, que es
-// lo único que de verdad cambia entre un terminal y una ventana.
+// Rows arrive ALREADY paintable: the host grouped the batches, formatted the
+// time and translated the tail. The only thing decided here is how a point
+// looks, which is the only thing that really changes between a terminal and
+// a window.
 
 import type { Screen } from "../render";
 import type { TimelineSlotView } from "../types";
 import type { SlotDom } from "./dom";
-import { badge, revelar } from "./dom";
+import { badge, revealInView } from "./dom";
 
 /**
- * Pinta la línea de tiempo de un hueco: una fila por mutación —o por lote—,
- * de la más nueva a la más vieja, con el cursor sobre el punto al que se
- * volvería, y al pie lo que se llevaría un `Enter` ahí.
+ * Paints a slot's timeline: one row per mutation — or per batch — from
+ * newest to oldest, with the cursor over the point it would revert to, and
+ * at the bottom what an `Enter` there would do.
  */
 export function paintTimeline(this: Screen, dom: SlotDom, slot: TimelineSlotView): void {
   dom.root.setAttribute("aria-label", slot.title);
   dom.scroller.className = "timeline";
-  // El nodo se REUSA mientras la geometría no cambie: un hueco que era otra
-  // cosa llega con el manejador de rueda del anterior puesto.
+  // The node is REUSED as long as the geometry does not change: a slot that
+  // used to be something else arrives with the previous one's wheel handler
+  // still set.
   dom.scroller.onwheel = null;
   dom.title.replaceChildren(document.createTextNode(slot.title));
 
   if (slot.rows.length === 0) {
-    const vacio = document.createElement("div");
-    vacio.className = "empty";
-    vacio.textContent = slot.empty;
-    dom.scroller.replaceChildren(vacio);
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = slot.empty;
+    dom.scroller.replaceChildren(empty);
     return;
   }
 
-  const lista = document.createElement("ul");
-  lista.className = "timeline-rows";
-  lista.setAttribute("role", "listbox");
+  const list = document.createElement("ul");
+  list.className = "timeline-rows";
+  list.setAttribute("role", "listbox");
   for (const [i, r] of slot.rows.entries()) {
-    const fila = document.createElement("li");
-    fila.className = "timeline-row";
-    fila.id = `timeline-${String(slot.slot_id)}-${String(i)}`;
-    fila.setAttribute("role", "option");
-    fila.setAttribute("aria-selected", String(slot.cursor === i));
-    const hora = document.createElement("span");
-    hora.className = "timeline-time";
-    hora.textContent = r.time;
-    // El punto lleva el COLOR del actor: «yo» contra «algo en mi nombre». Lo
-    // tuyo se deshace desde aquí; lo de un agente, por otra puerta.
-    const punto = document.createElement("span");
-    punto.className = "timeline-dot";
-    punto.dataset["actor"] =
-      r.actor === "user" || r.actor === "agent" ? r.actor : "other";
-    punto.setAttribute("aria-hidden", "true");
-    punto.textContent = "●";
-    fila.append(hora, punto);
+    const row = document.createElement("li");
+    row.className = "timeline-row";
+    row.id = `timeline-${String(slot.slot_id)}-${String(i)}`;
+    row.setAttribute("role", "option");
+    row.setAttribute("aria-selected", String(slot.cursor === i));
+    const time = document.createElement("span");
+    time.className = "timeline-time";
+    time.textContent = r.time;
+    // The dot carries the actor's COLOR: "me" versus "something in my name".
+    // Yours gets undone from here; an agent's, through another door.
+    const dot = document.createElement("span");
+    dot.className = "timeline-dot";
+    dot.dataset["actor"] = r.actor === "user" || r.actor === "agent" ? r.actor : "other";
+    dot.setAttribute("aria-hidden", "true");
+    dot.textContent = "●";
+    row.append(time, dot);
     if (r.hostile) {
-      // DELANTE, como en toda superficie donde se decide algo: el servidor ya
-      // enmascaró el nombre, y esto es lo que impide leerlo como fiel.
-      fila.append(badge(this.t("hostile-name")));
+      // IN FRONT, as on every surface where something gets decided: the
+      // server already masked the name, and this is what keeps it from being
+      // read as trustworthy.
+      row.append(badge(this.t("hostile-name")));
     }
-    const verbo = document.createElement("span");
-    verbo.className = "timeline-op";
-    verbo.textContent = r.op;
-    const ruta = document.createElement("span");
-    ruta.className = "timeline-path";
-    ruta.textContent = r.path;
-    // La columna recorta por el final: la ruta entera, al pasar.
-    fila.title = `${r.op} ${r.path}`;
-    fila.append(verbo, ruta);
+    const verb = document.createElement("span");
+    verb.className = "timeline-op";
+    verb.textContent = r.op;
+    const path = document.createElement("span");
+    path.className = "timeline-path";
+    path.textContent = r.path;
+    // The column truncates from the end: the whole path, on hover.
+    row.title = `${r.op} ${r.path}`;
+    row.append(verb, path);
     if (r.tail !== "") {
-      const cola = document.createElement("span");
-      cola.className = "timeline-tail";
-      cola.textContent = r.tail;
-      fila.append(cola);
+      const tail = document.createElement("span");
+      tail.className = "timeline-tail";
+      tail.textContent = r.tail;
+      row.append(tail);
     }
-    lista.append(fila);
+    list.append(row);
   }
   if (slot.cursor !== null) {
-    lista.setAttribute(
+    list.setAttribute(
       "aria-activedescendant",
       `timeline-${String(slot.slot_id)}-${String(slot.cursor)}`,
     );
   }
-  const pie = document.createElement("div");
-  pie.className = "timeline-footer";
-  pie.textContent = slot.footer;
-  dom.scroller.replaceChildren(lista, pie);
-  // La fila del cursor, a la vista: la siguiente página se pide al llegar a
-  // la última cargada, y un cursor que baja sin verse no sabe dónde está.
-  revelar(lista.querySelector('[aria-selected="true"]') ?? undefined);
+  const footer = document.createElement("div");
+  footer.className = "timeline-footer";
+  footer.textContent = slot.footer;
+  dom.scroller.replaceChildren(list, footer);
+  // The cursor's row, in view: the next page is requested on reaching the
+  // last one loaded, and a cursor that moves down unseen does not know where
+  // it is.
+  revealInView(list.querySelector('[aria-selected="true"]') ?? undefined);
 }

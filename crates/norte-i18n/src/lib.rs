@@ -1,6 +1,6 @@
-//! Strings de UI por Fluent (convención de CLAUDE.md, issue #1): catálogos
-//! es/en EMBEBIDOS con paridad total verificada por test. Un id ausente
-//! cae al propio id (visible y greppeable), jamás panica.
+//! UI strings via Fluent (CLAUDE.md convention, issue #1): EMBEDDED es/en
+//! catalogues with full parity verified by test. A missing id falls back to
+//! the id itself (visible and greppable), never panics.
 #![forbid(unsafe_code)]
 
 use std::sync::OnceLock;
@@ -8,18 +8,18 @@ use std::sync::OnceLock;
 use fluent::{FluentArgs, FluentResource, concurrent::FluentBundle};
 use unic_langid::LanguageIdentifier;
 
-/// Idiomas soportados.
+/// Supported languages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Lang {
-    /// Español.
+    /// Spanish.
     Es,
-    /// Inglés (fallback).
+    /// English (fallback).
     En,
 }
 
 impl Lang {
-    /// Negocia desde un valor tipo `LANG`/`LC_MESSAGES` (`es_ES.UTF-8`).
-    /// Desconocido o ausente → inglés.
+    /// Negotiates from a `LANG`/`LC_MESSAGES`-style value (`es_ES.UTF-8`).
+    /// Unknown or absent → English.
     #[must_use]
     pub fn negotiate(env: Option<&str>) -> Self {
         match env {
@@ -28,7 +28,7 @@ impl Lang {
         }
     }
 
-    /// Negocia desde el entorno del proceso: `NORTE_LANG` >
+    /// Negotiates from the process environment: `NORTE_LANG` >
     /// `LC_ALL` > `LC_MESSAGES` > `LANG`.
     #[must_use]
     pub fn from_env() -> Self {
@@ -51,8 +51,8 @@ impl Lang {
 
     fn langid(self) -> LanguageIdentifier {
         match self {
-            Self::Es => "es".parse().expect("langid constante"),
-            Self::En => "en".parse().expect("langid constante"),
+            Self::Es => "es".parse().expect("constant langid"),
+            Self::En => "en".parse().expect("constant langid"),
         }
     }
 }
@@ -65,22 +65,22 @@ fn bundle(lang: Lang) -> &'static FluentBundle<FluentResource> {
         Lang::En => &EN,
     };
     cell.get_or_init(|| {
-        // Los .ftl embebidos los valida la suite: un error aquí es build
-        // roto, no runtime del usuario.
+        // The embedded .ftl files are validated by the suite: an error here
+        // is a broken build, not the user's runtime.
         let res = FluentResource::try_new(lang.ftl().to_owned()).unwrap_or_else(|(res, _)| res);
         let mut b = FluentBundle::new_concurrent(vec![lang.langid()]);
         let _ = b.add_resource(res);
-        // Sin marcas bidi de aislamiento: la UI es un terminal.
+        // No bidi isolation marks: the UI is a terminal.
         b.set_use_isolating(false);
         b
     })
 }
 
-/// Idioma global del proceso (lo fija el frontend al arrancar).
+/// The process's global language (set by the frontend at startup).
 static GLOBAL: OnceLock<Lang> = OnceLock::new();
 
-/// Fija el idioma global. Solo la PRIMERA llamada gana; `false` si ya
-/// estaba fijado (o usado) con otro valor.
+/// Sets the global language. Only the FIRST call wins; `false` if it was
+/// already set (or used) with a different value.
 pub fn force(lang: Lang) -> bool {
     GLOBAL.set(lang).is_ok() || GLOBAL.get() == Some(&lang)
 }
@@ -89,18 +89,18 @@ fn global() -> Lang {
     *GLOBAL.get_or_init(Lang::from_env)
 }
 
-/// El idioma global vigente: el que [`force`] fijó, o el del entorno si nadie
-/// lo fijó.
+/// The current global language: the one [`force`] set, or the
+/// environment's if nobody set it.
 ///
-/// Existe para los callers que necesitan traducir con [`t_in`] en el idioma
-/// que [`t`] usaría — un resolver que guarda el idioma en un campo, por
-/// ejemplo. Sin esto tenían que re-derivar la negociación por su cuenta, y dos
-/// derivaciones del mismo hecho acaban discrepando: la UI en un idioma y una
-/// tabla dentro de ella en otro.
+/// Exists for callers who need to translate with [`t_in`] in the language
+/// [`t`] would use — a resolver that stores the language in a field, for
+/// example. Without this they had to re-derive the negotiation on their
+/// own, and two derivations of the same fact end up disagreeing: the UI in
+/// one language and a table inside it in another.
 ///
-/// OJO: leerlo FIJA el idioma si nadie lo había fijado (`get_or_init`), igual
-/// que traducir. Llamarlo antes de [`force`] hace que ese `force` posterior
-/// devuelva `false` salvo que coincida.
+/// NOTE: reading it SETS the language if nobody had set it (`get_or_init`),
+/// same as translating. Calling it before [`force`] makes that later
+/// `force` return `false` unless it matches.
 ///
 /// ```
 /// let lang = norte_i18n::active();
@@ -111,25 +111,25 @@ pub fn active() -> Lang {
     global()
 }
 
-/// Traduce `id` en el idioma global.
+/// Translates `id` in the global language.
 #[must_use]
 pub fn t(id: &str) -> String {
     t_in(global(), id)
 }
 
-/// Traduce `id` con args en el idioma global.
+/// Translates `id` with args in the global language.
 #[must_use]
 pub fn ta(id: &str, args: &[(&str, &str)]) -> String {
     ta_in(global(), id, args)
 }
 
-/// Traduce `id` en un idioma concreto (tests y previews).
+/// Translates `id` in a specific language (tests and previews).
 #[must_use]
 pub fn t_in(lang: Lang, id: &str) -> String {
     ta_in(lang, id, &[])
 }
 
-/// Traduce con args en un idioma concreto. Id ausente → el propio id.
+/// Translates with args in a specific language. Missing id → the id itself.
 #[must_use]
 pub fn ta_in(lang: Lang, id: &str, args: &[(&str, &str)]) -> String {
     let b = bundle(lang);
@@ -148,7 +148,7 @@ pub fn ta_in(lang: Lang, id: &str, args: &[(&str, &str)]) -> String {
         .into_owned()
 }
 
-/// Todos los ids de mensaje de un locale (para el test de paridad).
+/// All of a locale's message ids (for the parity test).
 #[must_use]
 pub fn message_ids(lang: Lang) -> Vec<String> {
     use fluent_syntax::ast::Entry;
@@ -162,41 +162,41 @@ pub fn message_ids(lang: Lang) -> Vec<String> {
 }
 
 #[cfg(test)]
-mod sin_duplicados {
+mod no_duplicates {
     use std::collections::BTreeSet;
 
-    /// Ninguna clave se define dos veces.
+    /// No key is defined twice.
     ///
-    /// Fluent se queda con la PRIMERA definición y tira la segunda EN
-    /// SILENCIO, así que un duplicado es una traducción que alguien escribió,
-    /// que el fichero enseña, y que nadie va a leer nunca. Había uno
-    /// (`layout-picker-factory`, con dos textos distintos en inglés) y lo
-    /// encontró una auditoría, no el catálogo.
+    /// Fluent keeps the FIRST definition and SILENTLY drops the second, so
+    /// a duplicate is a translation someone wrote, that the file shows, and
+    /// that nobody will ever read. There was one
+    /// (`layout-picker-factory`, with two different English texts) and an
+    /// audit found it, not the catalogue.
     #[test]
-    fn ninguna_clave_se_define_dos_veces() {
-        for (lang, fuente) in [
+    fn no_key_is_defined_twice() {
+        for (lang, source) in [
             ("en", include_str!("../i18n/en.ftl")),
             ("es", include_str!("../i18n/es.ftl")),
         ] {
-            let mut vistas: BTreeSet<&str> = BTreeSet::new();
-            let mut repetidas: Vec<&str> = Vec::new();
-            for linea in fuente.lines() {
-                // Una definición empieza en la columna cero; una
-                // continuación va indentada y un comentario lleva `#`.
-                let Some((id, _)) = linea.split_once(" = ") else {
+            let mut seen: BTreeSet<&str> = BTreeSet::new();
+            let mut repeated: Vec<&str> = Vec::new();
+            for line in source.lines() {
+                // A definition starts at column zero; a continuation is
+                // indented and a comment carries `#`.
+                let Some((id, _)) = line.split_once(" = ") else {
                     continue;
                 };
                 if id.starts_with([' ', '#', '.', '*', '[']) || id.is_empty() {
                     continue;
                 }
-                if !vistas.insert(id) {
-                    repetidas.push(id);
+                if !seen.insert(id) {
+                    repeated.push(id);
                 }
             }
             assert!(
-                repetidas.is_empty(),
-                "{lang}.ftl define dos veces: {repetidas:?} — Fluent se queda \
-                 con la primera y tira la otra sin decir nada"
+                repeated.is_empty(),
+                "{lang}.ftl defines twice: {repeated:?} — Fluent keeps \
+                 the first and silently drops the other"
             );
         }
     }

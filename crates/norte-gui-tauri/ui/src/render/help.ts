@@ -1,284 +1,285 @@
-// Pintores de `Screen` para help (ola W10): funciones con `this: Screen`,
-// enganchadas como propiedades en `render.ts`. El estado sigue en la clase.
+// `Screen` painters for help (wave W10): functions with `this: Screen`,
+// hooked in as properties in `render.ts`. State stays in the class.
 
 import type { Screen } from "../render";
 import type { HelpBlockView, HelpScrollTo, HelpSpanView, HelpView } from "../types";
-import { revelar } from "./dom";
+import { revealInView } from "./dom";
 
 /**
- * La ayuda (F1).
+ * Help (F1).
  *
- * Todo lo que se pinta aquí llega ya resuelto: los bloques son un
- * vocabulario CERRADO, las marcas del corpus vienen convertidas en la
- * tecla de ESTE lector y los motivos de una fila apagada vienen
- * traducidos. Por eso cada bloque se construye con `createElement` y
- * `textContent` y nunca con `innerHTML`: un `help.md` de un plugin es
- * texto de tercero, y la única razón por la que se puede pintar es que
- * jamás se interpreta como marcado.
+ * Everything painted here arrives already resolved: the blocks are a CLOSED
+ * vocabulary, the corpus's marks come converted to THIS reader's key, and a
+ * disabled row's reasons come translated. That is why every block is built
+ * with `createElement` and `textContent` and never with `innerHTML`: a
+ * plugin's `help.md` is a third party's text, and the only reason it can be
+ * painted at all is that it is never interpreted as markup.
  */
 export function paintHelp(this: Screen, help: HelpView | null): void {
   if (help === null) {
     this.helpRoot.replaceChildren();
     this.helpRoot.dataset["open"] = "false";
     this.helpBodyFocused = false;
-    this.helpPintada = null;
-    // Cada apertura numera sus peticiones desde 1 (el host crea una ayuda
-    // nueva): sin esto, la primera de la siguiente se tomaría por vieja.
+    this.helpPainted = null;
+    // Every opening numbers its requests from 1 (the host creates a fresh
+    // help): without this, the next opening's first one would be mistaken
+    // for stale.
     this.helpScrollSeq = 0;
     return;
   }
-  // Dónde iba leyendo, para devolvérselo. El cuerpo se reconstruye entero
-  // en CADA parche —y mover el cursor de la lateral es un parche—, así que
-  // sin esto leer media página y pulsar `↓` devolvía el scroll a cero.
-  // Solo dentro de la MISMA página: cambiar de página empieza arriba, que
-  // es lo que hace cualquier lector.
+  // Where it was reading, to give it back. The body is rebuilt whole on
+  // EVERY patch — and moving the sidebar's cursor is a patch — so without
+  // this, reading half a page and pressing `↓` reset the scroll to zero.
+  // Only within the SAME page: changing pages starts at the top, which is
+  // what any reader does.
   const scroll =
-    this.helpPintada === help.topic_id
+    this.helpPainted === help.topic_id
       ? (this.helpRoot.querySelector(".help-body")?.scrollTop ?? 0)
       : 0;
-  this.helpPintada = help.topic_id;
+  this.helpPainted = help.topic_id;
   this.helpRoot.dataset["open"] = "true";
   this.helpBodyFocused = help.focus === "body";
-  const caja = document.createElement("section");
-  caja.className = "help";
-  // Modal: mientras está abierta, las teclas son suyas — y el host lo
-  // sabe, así que el lector de pantalla debe saberlo también.
-  caja.setAttribute("role", "dialog");
-  caja.setAttribute("aria-modal", "true");
-  caja.setAttribute("aria-label", this.t("help-title"));
+  const box = document.createElement("section");
+  box.className = "help";
+  // Modal: while it is open, the keys are its own — and the host knows it,
+  // so the screen reader has to know it too.
+  box.setAttribute("role", "dialog");
+  box.setAttribute("aria-modal", "true");
+  box.setAttribute("aria-label", this.t("help-title"));
 
-  caja.append(this.helpSidebar(help), this.helpBody(help));
+  box.append(this.helpSidebar(help), this.helpBody(help));
 
-  const pie = document.createElement("footer");
-  pie.className = "help-hint";
-  pie.textContent = this.t("help-hint-gui");
-  caja.append(pie);
-  this.helpRoot.replaceChildren(caja);
+  const footer = document.createElement("footer");
+  footer.className = "help-hint";
+  footer.textContent = this.t("help-hint-gui");
+  box.append(footer);
+  this.helpRoot.replaceChildren(box);
   if (scroll > 0) {
-    const cuerpo = this.helpRoot.querySelector(".help-body");
-    if (cuerpo instanceof HTMLElement) {
-      cuerpo.scrollTop = scroll;
+    const body = this.helpRoot.querySelector(".help-body");
+    if (body instanceof HTMLElement) {
+      body.scrollTop = scroll;
     }
   }
-  // La petición de desplazar, UNA vez: un parche que repinta la ayuda por
-  // otro motivo trae la misma petición, con el mismo número.
+  // The scroll request, ONCE: a patch that repaints help for another reason
+  // carries the same request, with the same number.
   if (help.scroll !== null && help.scroll.seq > this.helpScrollSeq) {
     this.helpScrollSeq = help.scroll.seq;
-    this.desplazarAyuda(help.scroll.to);
+    this.scrollHelp(help.scroll.to);
   }
 }
 
 /**
- * Desplaza el cuerpo de la ayuda hacia `to` (puente 76).
+ * Scrolls help's body toward `to` (bridge 76).
  *
- * QUÉ tecla significa qué lo decide el HOST, con el keymap del lector: le
- * llega la tecla como a cualquier otra pantalla y contesta con una petición
- * en `HelpView.scroll`. Antes el renderer atendía `AvPág`, `Inicio`, `[`…
- * como teclas fijas, y un reatado cambiaba el terminal y no esta ventana.
+ * WHICH key means what is decided by the HOST, with the reader's keymap: the
+ * key reaches it like any other screen and it answers with a request in
+ * `HelpView.scroll`. The renderer used to handle `PageDown`, `Home`, `[`… as
+ * fixed keys, and a rebind changed the terminal and not this window.
  *
- * CUÁNTO es una línea, una página o dónde empieza una sección lo mide esta
- * caja, que es la única que lo sabe (#267). Y lo aplica el renderer y no el
- * scroll nativo: ese necesita el foco del documento, y el cuerpo se
- * reconstruye en cada parche sin que nadie se lo devuelva.
+ * HOW MUCH is a line, a page or where a section starts is measured by this
+ * box, which is the only one that knows it (#267). And the renderer applies
+ * it, not native scroll: that needs the document's focus, and the body is
+ * rebuilt on every patch with nobody giving it back.
  */
-export function desplazarAyuda(this: Screen, to: HelpScrollTo): void {
-  const cuerpo = this.helpRoot.querySelector(".help-body");
-  if (!(cuerpo instanceof HTMLElement)) {
+export function scrollHelp(this: Screen, to: HelpScrollTo): void {
+  const body = this.helpRoot.querySelector(".help-body");
+  if (!(body instanceof HTMLElement)) {
     return;
   }
-  // Una línea de prosa, y una página con dos líneas de solape para no
-  // perder el sitio en el salto.
-  const linea = parseFloat(getComputedStyle(cuerpo).lineHeight) || 16;
-  const pagina = Math.max(linea, cuerpo.clientHeight - 2 * linea);
+  // One line of prose, and a page with two lines of overlap so as not to
+  // lose your place on the jump.
+  const line = parseFloat(getComputedStyle(body).lineHeight) || 16;
+  const page = Math.max(line, body.clientHeight - 2 * line);
   switch (to) {
     case "line_down":
-      cuerpo.scrollTop += linea;
+      body.scrollTop += line;
       return;
     case "line_up":
-      cuerpo.scrollTop -= linea;
+      body.scrollTop -= line;
       return;
     case "page_down":
-      cuerpo.scrollTop += pagina;
+      body.scrollTop += page;
       return;
     case "page_up":
-      cuerpo.scrollTop -= pagina;
+      body.scrollTop -= page;
       return;
     case "top":
-      cuerpo.scrollTop = 0;
+      body.scrollTop = 0;
       return;
     case "bottom":
-      cuerpo.scrollTop = cuerpo.scrollHeight;
+      body.scrollTop = body.scrollHeight;
       return;
     case "section_next":
     case "section_prev": {
-      const adelante = to === "section_next";
-      const tope = cuerpo.scrollTop;
-      // Los TRES niveles del corpus (`helpBlock` los pinta como h2..h4): el
-      // terminal para en todos, y la ventana tiene que parar en los mismos.
-      const secciones = [...cuerpo.querySelectorAll("h2, h3, h4")].filter(
+      const forward = to === "section_next";
+      const from = body.scrollTop;
+      // The corpus's THREE levels (`helpBlock` paints them as h2..h4): the
+      // terminal stops on all of them, and the window has to stop on the
+      // same ones.
+      const sections = [...body.querySelectorAll("h2, h3, h4")].filter(
         (h): h is HTMLElement => h instanceof HTMLElement,
       );
-      const destino = adelante
-        ? secciones.find((h) => h.offsetTop > tope + 1)
-        : secciones.reverse().find((h) => h.offsetTop < tope - 1);
-      cuerpo.scrollTop = destino?.offsetTop ?? (adelante ? cuerpo.scrollHeight : 0);
+      const target = forward
+        ? sections.find((h) => h.offsetTop > from + 1)
+        : sections.reverse().find((h) => h.offsetTop < from - 1);
+      body.scrollTop = target?.offsetTop ?? (forward ? body.scrollHeight : 0);
       return;
     }
   }
 }
 
-/** La lateral: cabeceras de grupo y páginas. */
+/** The sidebar: group headers and pages. */
 export function helpSidebar(this: Screen, help: HelpView): HTMLElement {
   const nav = document.createElement("nav");
   nav.className = "help-topics";
   nav.dataset["focused"] = String(help.focus === "topics");
   if (help.filtering) {
-    const filtro = document.createElement("div");
-    filtro.className = "help-filter";
-    filtro.textContent = `/${help.filter}`;
-    nav.append(filtro);
+    const filter = document.createElement("div");
+    filter.className = "help-filter";
+    filter.textContent = `/${help.filter}`;
+    nav.append(filter);
   }
-  const lista = document.createElement("ul");
-  lista.setAttribute("role", "listbox");
-  lista.className = "help-topic-rows";
+  const list = document.createElement("ul");
+  list.setAttribute("role", "listbox");
+  list.className = "help-topic-rows";
   for (const [i, r] of help.sidebar.entries()) {
-    const fila = document.createElement("li");
-    fila.id = `help-topic-${String(i)}`;
+    const row = document.createElement("li");
+    row.id = `help-topic-${String(i)}`;
     if (r.row === "group") {
-      // Una cabecera NO es elegible: `presentation` la saca del recuento
-      // de opciones que un lector de pantalla anuncia.
-      fila.className = "help-group";
-      fila.setAttribute("role", "presentation");
-      fila.textContent = r.label;
+      // A header is NOT selectable: `presentation` takes it out of the
+      // option count a screen reader announces.
+      row.className = "help-group";
+      row.setAttribute("role", "presentation");
+      row.textContent = r.label;
     } else {
-      fila.className = "help-topic";
-      fila.setAttribute("role", "option");
-      fila.setAttribute("aria-selected", String(help.cursor === i));
-      fila.dataset["current"] = String(r.current);
-      fila.textContent = r.title;
-      // La lateral corta con elipsis los títulos largos; el completo, al
-      // pasar por encima. `title` es texto: no se interpreta como marcado.
-      fila.title = r.title;
-      fila.addEventListener("click", () => {
+      row.className = "help-topic";
+      row.setAttribute("role", "option");
+      row.setAttribute("aria-selected", String(help.cursor === i));
+      row.dataset["current"] = String(r.current);
+      row.textContent = r.title;
+      // The sidebar ellipsis-truncates long titles; the full one, on hover.
+      // `title` is text: it is never interpreted as markup.
+      row.title = r.title;
+      row.addEventListener("click", () => {
         this.send({ action: "help_select_topic", row: i });
       });
     }
-    lista.append(fila);
+    list.append(row);
   }
-  lista.setAttribute("aria-activedescendant", `help-topic-${String(help.cursor)}`);
-  nav.append(lista);
-  // La lateral es más larga que su caja: sin esto, pasar del pliegue mueve
-  // un cursor que no se ve.
-  revelar(lista.children[help.cursor]);
+  list.setAttribute("aria-activedescendant", `help-topic-${String(help.cursor)}`);
+  nav.append(list);
+  // The sidebar is longer than its box: without this, scrolling past the
+  // fold moves a cursor that is not visible.
+  revealInView(list.children[help.cursor]);
   return nav;
 }
 
-/** El cuerpo: la prosa de la página y lo que se puede ejecutar en ella. */
+/** The body: the page's prose and what can be run from it. */
 export function helpBody(this: Screen, help: HelpView): HTMLElement {
-  const cuerpo = document.createElement("article");
-  cuerpo.className = "help-body";
-  cuerpo.dataset["focused"] = String(help.focus === "body");
-  // Enfocable: es lo que hace que las teclas de página desplacen ESTA caja
-  // y no la ventana. `-1` porque al orden de tabulación se entra con la
-  // tecla que la propia ayuda usa para cambiar de mitad.
-  cuerpo.setAttribute("tabindex", "-1");
+  const body = document.createElement("article");
+  body.className = "help-body";
+  body.dataset["focused"] = String(help.focus === "body");
+  // Focusable: this is what makes the page keys scroll THIS box and not the
+  // window. `-1` because tab order is entered with the key help itself uses
+  // to switch halves.
+  body.setAttribute("tabindex", "-1");
 
-  const titulo = document.createElement("h1");
-  titulo.textContent = help.title;
-  cuerpo.append(titulo);
+  const title = document.createElement("h1");
+  title.textContent = help.title;
+  body.append(title);
   if (help.badge !== null) {
-    // La procedencia de una página de tercero. Siempre visible en una
-    // página de plugin: una línea que aparece a veces enseña lo contrario
-    // de la verdad cuando falta.
+    // A third party page's provenance. Always visible on a plugin page: a
+    // line that only sometimes shows up teaches the opposite of the truth
+    // when it is missing.
     const badge = document.createElement("p");
     badge.className = "help-badge";
     badge.textContent = help.badge;
-    cuerpo.append(badge);
+    body.append(badge);
   }
-  const bloques = help.blocks.map((b) => this.helpBlock(b));
-  // El índice de la PÁGINA, arriba: sus secciones, cada una un botón que la
-  // trae a la vista. Solo con tres o más — con una o dos, el índice ocupa más
-  // de lo que ahorra.
-  const secciones = bloques.filter((el) => el.tagName === "H2");
-  if (secciones.length >= 3) {
-    const indice = document.createElement("nav");
-    indice.className = "help-toc";
-    indice.setAttribute("aria-label", this.t("help-toc"));
-    for (const h of secciones) {
-      const ir = document.createElement("button");
-      ir.type = "button";
-      ir.className = "help-toc-item";
-      ir.textContent = h.textContent;
-      ir.addEventListener("click", () => {
-        cuerpo.scrollTop = h.offsetTop;
+  const blocks = help.blocks.map((b) => this.helpBlock(b));
+  // The PAGE's table of contents, at the top: its sections, each one a
+  // button that brings it into view. Only with three or more — with one or
+  // two, the index takes up more than it saves.
+  const sections = blocks.filter((el) => el.tagName === "H2");
+  if (sections.length >= 3) {
+    const toc = document.createElement("nav");
+    toc.className = "help-toc";
+    toc.setAttribute("aria-label", this.t("help-toc"));
+    for (const h of sections) {
+      const go = document.createElement("button");
+      go.type = "button";
+      go.className = "help-toc-item";
+      go.textContent = h.textContent;
+      go.addEventListener("click", () => {
+        body.scrollTop = h.offsetTop;
       });
-      indice.append(ir);
+      toc.append(go);
     }
-    cuerpo.append(indice);
+    body.append(toc);
   }
-  cuerpo.append(...bloques);
+  body.append(...blocks);
   if (help.actions.length > 0) {
-    const lista = document.createElement("ul");
-    lista.className = "help-actions";
-    lista.setAttribute("role", "listbox");
+    const list = document.createElement("ul");
+    list.className = "help-actions";
+    list.setAttribute("role", "listbox");
     for (const [i, a] of help.actions.entries()) {
-      const fila = document.createElement("li");
-      fila.className = "help-action";
-      fila.id = `help-action-${String(i)}`;
-      fila.setAttribute("role", "option");
-      fila.setAttribute("aria-selected", String(help.action_cursor === i));
-      fila.dataset["enabled"] = String(a.enabled);
+      const row = document.createElement("li");
+      row.className = "help-action";
+      row.id = `help-action-${String(i)}`;
+      row.setAttribute("role", "option");
+      row.setAttribute("aria-selected", String(help.action_cursor === i));
+      row.dataset["enabled"] = String(a.enabled);
       const chord = document.createElement("span");
       chord.className = "help-action-chord";
       chord.textContent = a.chord;
       const label = document.createElement("span");
       label.className = "help-action-label";
       label.textContent = a.label;
-      fila.append(chord, label);
+      row.append(chord, label);
       if (a.opens_topic) {
-        // La flecha es lo ÚNICO que distingue «abre una página» de «corre
-        // un comando», así que va en su propio nodo —pegada al texto queda
-        // en la misma corrida bidi que la etiqueta y puede acabar delante—
-        // pero DENTRO de la etiqueta: como hermana suya, el reparto flex la
-        // mandaba al otro extremo de la fila, lejos de lo que califica.
-        const abre = document.createElement("span");
-        abre.className = "help-action-opens";
-        abre.textContent = "→";
-        label.append(abre);
+        // The arrow is the ONLY thing that tells apart "opens a page" from
+        // "runs a command", so it goes in its own node — glued to the text
+        // it ends up in the same bidi run as the label and can end up in
+        // front — but INSIDE the label: as its sibling, the flex layout sent
+        // it to the other end of the row, far from what it qualifies.
+        const arrow = document.createElement("span");
+        arrow.className = "help-action-opens";
+        arrow.textContent = "→";
+        label.append(arrow);
       }
       if (!a.enabled && a.reason !== "") {
-        const motivo = document.createElement("span");
-        motivo.className = "help-action-reason";
-        motivo.textContent = a.reason;
-        fila.append(motivo);
+        const reason = document.createElement("span");
+        reason.className = "help-action-reason";
+        reason.textContent = a.reason;
+        row.append(reason);
       }
       if (a.enabled) {
-        fila.addEventListener("click", () => {
+        row.addEventListener("click", () => {
           this.send({ action: "help_activate", index: i });
         });
       }
-      lista.append(fila);
+      list.append(row);
     }
     if (help.action_cursor !== null) {
-      lista.setAttribute(
+      list.setAttribute(
         "aria-activedescendant",
         `help-action-${String(help.action_cursor)}`,
       );
-      revelar(lista.children[help.action_cursor]);
+      revealInView(list.children[help.action_cursor]);
     }
-    cuerpo.append(lista);
+    body.append(list);
   }
-  return cuerpo;
+  return body;
 }
 
-/** Un bloque del corpus, en su elemento semántico. */
+/** A corpus block, in its semantic element. */
 export function helpBlock(this: Screen, b: HelpBlockView): HTMLElement {
   switch (b.block) {
     case "heading": {
-      // El nivel viene acotado a 1..=3 por el host, y el título de la
-      // página ya ocupa el `h1`: un encabezado del cuerpo empieza en `h2`.
-      const nivel = Math.min(3, Math.max(1, b.level)) + 1;
-      const h = document.createElement(`h${String(nivel)}`);
+      // The level arrives bounded to 1..=3 by the host, and the page's title
+      // already occupies `h1`: a body heading starts at `h2`.
+      const level = Math.min(3, Math.max(1, b.level)) + 1;
+      const h = document.createElement(`h${String(level)}`);
       h.textContent = b.text;
       return h;
     }
@@ -309,17 +310,17 @@ export function helpBlock(this: Screen, b: HelpBlockView): HTMLElement {
       return pre;
     }
     case "table": {
-      const tabla = document.createElement("table");
-      tabla.className = "help-table";
+      const table = document.createElement("table");
+      table.className = "help-table";
       const thead = document.createElement("thead");
-      const cabecera = document.createElement("tr");
+      const headRow = document.createElement("tr");
       for (const c of b.header) {
         const th = document.createElement("th");
         th.setAttribute("scope", "col");
         th.textContent = c;
-        cabecera.append(th);
+        headRow.append(th);
       }
-      thead.append(cabecera);
+      thead.append(headRow);
       const tbody = document.createElement("tbody");
       for (const r of b.rows) {
         const tr = document.createElement("tr");
@@ -330,23 +331,23 @@ export function helpBlock(this: Screen, b: HelpBlockView): HTMLElement {
         }
         tbody.append(tr);
       }
-      tabla.append(thead, tbody);
-      return tabla;
+      table.append(thead, tbody);
+      return table;
     }
     case "callout": {
       const aside = document.createElement("aside");
       aside.className = "help-callout";
       aside.dataset["kind"] = b.kind;
-      const etiqueta = document.createElement("span");
-      etiqueta.className = "help-callout-kind";
-      etiqueta.textContent = this.t(`help-callout-${b.kind}`);
-      aside.append(etiqueta);
+      const label = document.createElement("span");
+      label.className = "help-callout-kind";
+      label.textContent = this.t(`help-callout-${b.kind}`);
+      aside.append(label);
       aside.append(...b.spans.map((s) => this.helpSpan(s)));
       return aside;
     }
     case "keys": {
-      const tabla = document.createElement("table");
-      tabla.className = "help-keys";
+      const table = document.createElement("table");
+      table.className = "help-keys";
       const tbody = document.createElement("tbody");
       for (const r of b.rows) {
         const tr = document.createElement("tr");
@@ -359,26 +360,26 @@ export function helpBlock(this: Screen, b: HelpBlockView): HTMLElement {
         label.className = "help-key-label";
         label.textContent = r.label;
         tr.append(chord, label);
-        // Atenuar sin decir por qué deja al lector adivinando si la
-        // ventana está rota. El motivo va en su PROPIA celda y no pegado
-        // al texto: compuestos en banda, el guion y el motivo quedan en la
-        // misma corrida bidi que la etiqueta, y una etiqueta que acabe en
-        // RTL fuerte se los lleva al lado que no es.
+        // Dimming without saying why leaves the reader guessing whether the
+        // window is broken. The reason goes in its OWN cell and not glued to
+        // the text: run together, the dash and the reason end up in the same
+        // bidi run as the label, and a label ending in strong RTL carries
+        // them to the wrong side.
         if (!r.enabled && r.reason !== "") {
-          const motivo = document.createElement("td");
-          motivo.className = "help-key-reason";
-          motivo.textContent = r.reason;
-          tr.append(motivo);
+          const reason = document.createElement("td");
+          reason.className = "help-key-reason";
+          reason.textContent = r.reason;
+          tr.append(reason);
         }
         tbody.append(tr);
       }
-      tabla.append(tbody);
-      return tabla;
+      table.append(tbody);
+      return table;
     }
   }
 }
 
-/** Un fragmento en línea. */
+/** An inline fragment. */
 export function helpSpan(this: Screen, s: HelpSpanView): HTMLElement {
   switch (s.span) {
     case "text": {
@@ -402,29 +403,29 @@ export function helpSpan(this: Screen, s: HelpSpanView): HTMLElement {
       return el;
     }
     case "command": {
-      // `kbd` solo cuando es una TECLA de verdad: cuando el comando no
-      // tiene atajo, lo que viaja es su nombre, y pintarlo como una tecla
-      // sería enseñar una que no existe.
+      // `kbd` only when it is a REAL key: when the command has no shortcut,
+      // what travels is its name, and painting it as a key would show one
+      // that does not exist.
       const el = document.createElement(s.is_chord ? "kbd" : "span");
       el.className = s.is_chord ? "help-chord" : "help-cmd";
       el.textContent = s.text;
       return el;
     }
     case "link": {
-      // Desde el puente 75 un `[[enlace]]` de la prosa ES una fila de las
-      // acciones de la página, y pulsarlo es activar esa fila: lo mismo que
-      // Intro sobre ella, con el mismo camino por el host. Viaja el ÍNDICE,
-      // no la clave del destino. Sin fila (`null`) sigue siendo texto: un
-      // control que no hace nada es peor que un texto que se lee como enlace.
+      // Since bridge 75 a `[[link]]` in the prose IS one of the page's action
+      // rows, and clicking it activates that row: the same as Enter on it,
+      // through the same host path. What travels is the INDEX, not the
+      // target's key. With no row (`null`) it stays text: a control that
+      // does nothing is worse than text that reads as a link.
       const el = document.createElement("span");
       el.className = "help-link";
       el.textContent = s.text;
-      const fila = s.action;
-      if (fila !== null) {
+      const row = s.action;
+      if (row !== null) {
         el.setAttribute("role", "link");
         el.dataset["live"] = "true";
         el.addEventListener("click", () => {
-          this.send({ action: "help_activate", index: fila });
+          this.send({ action: "help_activate", index: row });
         });
       }
       return el;

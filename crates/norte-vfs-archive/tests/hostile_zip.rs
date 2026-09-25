@@ -1,5 +1,5 @@
-//! Casos hostiles del provider zip: encoding de nombres (bit 11, cp437),
-//! zip-slip, EOCD mentiroso, cifrado/métodos raros, deflate real y rangos.
+//! Hostile cases for the zip provider: name encoding (bit 11, cp437),
+//! zip-slip, a lying EOCD, encryption/odd methods, real deflate and ranges.
 
 mod common;
 
@@ -21,10 +21,10 @@ async fn list_names(p: &ArchiveProvider, dir: &VPath) -> Vec<Vec<u8>> {
         .await
         .expect("list")
         .map(|e| {
-            e.expect("entrada ok")
+            e.expect("entry ok")
                 .path
                 .file_name()
-                .expect("con nombre")
+                .expect("has a name")
                 .as_bytes()
                 .to_vec()
         })
@@ -43,8 +43,8 @@ async fn read_all(p: &ArchiveProvider, f: &VPath, range: Option<ByteRange>) -> V
     out
 }
 
-/// Un zip deflate REAL: los bytes comprimidos los produce flate2 y la
-/// estructura la forja `ZipSmith` (#59: sin el crate `zip` ni en tests).
+/// A REAL deflate zip: flate2 produces the compressed bytes and `ZipSmith`
+/// forges the structure (#59: without the `zip` crate, not even in tests).
 fn deflate_zip(name: &[u8], data: &[u8]) -> Vec<u8> {
     let mut enc = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
     enc.write_all(data).expect("deflate");
@@ -53,8 +53,8 @@ fn deflate_zip(name: &[u8], data: &[u8]) -> Vec<u8> {
 }
 
 #[tokio::test]
-async fn cp437_crudo_bit11_off_se_lista_byte_exacto() {
-    // CAFÉ.TXT en cp437 (É = 0x90): bytes crudos, jamás decodificados.
+async fn raw_cp437_with_bit11_off_lists_byte_exact() {
+    // CAFÉ.TXT in cp437 (É = 0x90): raw bytes, never decoded.
     let zip = ZipSmith::new().file(b"CAF\x90.TXT", b"1980s").build();
     let (p, root) = common::zip_provider(&zip).await;
     assert_eq!(list_names(&p, &root).await, vec![b"CAF\x90.TXT".to_vec()]);
@@ -65,9 +65,9 @@ async fn cp437_crudo_bit11_off_se_lista_byte_exacto() {
 }
 
 #[tokio::test]
-async fn bit11_mentiroso_no_decodifica_ni_panica() {
-    // Bit 11 dice "UTF-8" pero los bytes NO lo son: el flag es un anuncio,
-    // los bytes mandan (regla 1).
+async fn a_lying_bit11_neither_decodes_nor_panics() {
+    // Bit 11 says "UTF-8" but the bytes are NOT: the flag is an
+    // announcement, the bytes rule (rule 1).
     let zip = ZipSmith::new()
         .file_utf8(b"lie-\xff\xfe.txt", b"liar")
         .build();
@@ -83,99 +83,100 @@ async fn bit11_mentiroso_no_decodifica_ni_panica() {
 }
 
 #[tokio::test]
-async fn zip_slip_y_marcador_se_omiten() {
+async fn zip_slip_and_the_marker_are_omitted() {
     let zip = ZipSmith::new()
         .file(b"../evil", b"slip")
         .file(b"/etc/passwd", b"abs")
         .file(b"a/../b", b"dotdot")
         .file(b"!", b"marker")
-        .file(b"a/!/b", b"marker-dentro")
-        .file(b"ok.txt", b"bien")
+        .file(b"a/!/b", b"marker-inside")
+        .file(b"ok.txt", b"fine")
         .build();
     let (p, root) = common::zip_provider(&zip).await;
-    // Solo sobreviven `ok.txt` y el dir implícito `a` (de `a/../b` nada:
-    // la entrada entera se omite; `a` existe por `a/!/b`… tampoco: también
-    // se omite entera. Verifica exactamente qué queda.)
+    // Only `ok.txt` and the implicit `a` dir survive (from `a/../b`
+    // nothing: the whole entry is omitted; `a` exists because of `a/!/b`…
+    // that one too gets omitted whole. Checks exactly what's left.)
     assert_eq!(list_names(&p, &root).await, vec![b"ok.txt".to_vec()]);
 }
 
 #[tokio::test]
-async fn duplicado_y_file_vs_dir() {
+async fn duplicate_and_file_vs_dir() {
     let zip = ZipSmith::new()
-        .file(b"x", b"uno")
-        .file(b"x", b"dos!!")
-        .file(b"d", b"soy-file")
+        .file(b"x", b"one")
+        .file(b"x", b"two!!")
+        .file(b"d", b"i-am-a-file")
         .dir(b"d")
-        .file(b"d/hijo", b"vivo")
+        .file(b"d/child", b"alive")
         .build();
     let (p, root) = common::zip_provider(&zip).await;
-    assert_eq!(read_all(&p, &root.join(seg(b"x")), None).await, b"dos!!");
+    assert_eq!(read_all(&p, &root.join(seg(b"x")), None).await, b"two!!");
     assert_eq!(
-        read_all(&p, &root.join(seg(b"d")).join(seg(b"hijo")), None).await,
-        b"vivo",
-        "el dir gana al file homónimo y el subárbol sobrevive"
+        read_all(&p, &root.join(seg(b"d")).join(seg(b"child")), None).await,
+        b"alive",
+        "the dir wins over the same-named file and the subtree survives"
     );
 }
 
 #[tokio::test]
-async fn eocd_mentiroso_corta_sin_pagar_el_indice() {
+async fn a_lying_eocd_cuts_without_paying_for_the_index() {
     let zip = ZipSmith::new().file(b"x", b"1").build_lying_eocd(60_000);
     let limits = Limits {
         max_entries: 100,
         ..Limits::default()
     };
     let (p, root) = common::zip_provider_with_limits(&zip, limits).await;
-    // #95.3: el corte por anuncio del EOCD es LimitExceeded, no Corrupt — en
-    // este punto no se sabe si el EOCD miente o el zip es legítimo y enorme
-    // (y precisamente se rehúsa a pagar el índice para averiguarlo).
+    // #95.3: the cut from the EOCD's announcement is LimitExceeded, not
+    // Corrupt — at this point it's unknown whether the EOCD is lying or
+    // the zip is legitimate and huge (and it precisely refuses to pay for
+    // the index to find out).
     match p.list(&root).await.map(|_| ()) {
         Err(Error::LimitExceeded { limit }) if limit == "entries" => {}
         other => {
-            panic!("esperaba LimitExceeded(entries) por EOCD anunciando de más, fue {other:?}")
+            panic!("expected LimitExceeded(entries) from an over-announcing EOCD, got {other:?}")
         }
     }
 }
 
 #[tokio::test]
-async fn zip_vacio_y_basura() {
-    // Un zip sin entradas es VÁLIDO: raíz vacía.
+async fn an_empty_zip_and_garbage() {
+    // A zip with no entries is VALID: an empty root.
     let (p, root) = common::zip_provider(&ZipSmith::new().build()).await;
     assert!(list_names(&p, &root).await.is_empty());
-    // Basura sin EOCD: Io.
-    let (p, root) = common::zip_provider(b"no soy un zip").await;
+    // Garbage with no EOCD: Corrupt.
+    let (p, root) = common::zip_provider(b"i am not a zip").await;
     match p.list(&root).await.map(|_| ()) {
         Err(Error::Corrupt) => {}
-        other => panic!("esperaba Corrupt, fue {other:?}"),
+        other => panic!("expected Corrupt, got {other:?}"),
     }
-    // Contenedor de 0 bytes: Io.
+    // A 0-byte container: Corrupt.
     let (p, root) = common::zip_provider(b"").await;
     match p.list(&root).await.map(|_| ()) {
         Err(Error::Corrupt) => {}
-        other => panic!("esperaba Corrupt con 0 bytes, fue {other:?}"),
+        other => panic!("expected Corrupt with 0 bytes, got {other:?}"),
     }
 }
 
 #[tokio::test]
-async fn cifrado_y_metodo_raro_se_listan_pero_no_se_leen() {
+async fn encrypted_and_odd_method_list_but_do_not_read() {
     let zip = ZipSmith::new()
-        .file_raw(b"secreto.bin", b"garbage", 0, 1) // bit 0: cifrado
-        .file_raw(b"exotico.bin", b"garbage", 12, 0) // método 12 (bzip2, sin feature)
+        .file_raw(b"secret.bin", b"garbage", 0, 1) // bit 0: encrypted
+        .file_raw(b"exotic.bin", b"garbage", 12, 0) // method 12 (bzip2, no feature)
         .file(b"normal.txt", b"ok")
         .build();
     let (p, root) = common::zip_provider(&zip).await;
     assert_eq!(
         list_names(&p, &root).await,
         vec![
-            b"exotico.bin".to_vec(),
+            b"exotic.bin".to_vec(),
             b"normal.txt".to_vec(),
-            b"secreto.bin".to_vec()
+            b"secret.bin".to_vec()
         ],
-        "cifradas/exóticas SE LISTAN (metadatos)"
+        "encrypted/exotic ones ARE LISTED (metadata)"
     );
-    for name in [b"secreto.bin".as_slice(), b"exotico.bin"] {
+    for name in [b"secret.bin".as_slice(), b"exotic.bin"] {
         match p.read(&root.join(seg(name)), None).await.map(|_| ()) {
             Err(Error::Unsupported) => {}
-            other => panic!("esperaba Unsupported en {name:?}, fue {other:?}"),
+            other => panic!("expected Unsupported on {name:?}, got {other:?}"),
         }
     }
     assert_eq!(
@@ -185,18 +186,18 @@ async fn cifrado_y_metodo_raro_se_listan_pero_no_se_leen() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn deflate_real_roundtrip_y_rangos() {
-    // Datos compresibles y grandes (varios chunks de 64 KiB del lector).
+async fn real_deflate_roundtrip_and_ranges() {
+    // Compressible, big data (several 64 KiB reader chunks).
     let data: Vec<u8> = (0..500_000u32).map(|i| (i % 7) as u8).collect();
-    let zip = deflate_zip(b"grande.bin", &data);
+    let zip = deflate_zip(b"big.bin", &data);
     let (p, root) = common::zip_provider(&zip).await;
-    let f = root.join(seg(b"grande.bin"));
+    let f = root.join(seg(b"big.bin"));
     assert_eq!(
         p.stat(&f).await.expect("stat").size,
         Some(data.len() as u64)
     );
     assert_eq!(read_all(&p, &f, None).await, data);
-    // Range sobre bytes DESCOMPRIMIDOS.
+    // Range over DECOMPRESSED bytes.
     assert_eq!(
         read_all(
             &p,
@@ -232,29 +233,29 @@ async fn deflate_real_roundtrip_y_rangos() {
         )
         .await,
         b"",
-        "past-EOF descomprimido: stream vacío"
+        "decompressed past-EOF: empty stream"
     );
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn drop_del_stream_cancela_la_descompresion() {
+async fn dropping_the_stream_cancels_the_decompression() {
     let data: Vec<u8> = (0..4_000_000u32).map(|i| (i % 13) as u8).collect();
-    let zip = deflate_zip(b"enorme.bin", &data);
+    let zip = deflate_zip(b"huge.bin", &data);
     let (p, root) = common::zip_provider(&zip).await;
-    let f = root.join(seg(b"enorme.bin"));
+    let f = root.join(seg(b"huge.bin"));
     let mut stream = p.read(&f, None).await.expect("read");
-    let first = stream.next().await.expect("hay chunk").expect("ok");
+    let first = stream.next().await.expect("there's a chunk").expect("ok");
     assert!(!first.is_empty());
-    drop(stream); // el hilo blocking muere al siguiente send (canal cerrado)
-    // Regla 3: nada cuelga — el test termina; el hilo huérfano está acotado
-    // a 4 chunks en vuelo. Releer entera verifica que nada quedó roto.
+    drop(stream); // the blocking thread dies on the next send (closed channel)
+    // Rule 3: nothing hangs — the test ends; the orphaned thread is bounded
+    // to 4 in-flight chunks. Re-reading it whole verifies nothing broke.
     assert_eq!(read_all(&p, &f, None).await, data);
 }
 
 #[tokio::test]
-async fn backslash_final_es_file_legible() {
-    // H2 (auditoría 8e): `\` final NO es separador ni marca de dir — el
-    // crate zip lo decodifica como dir; norte decide por BYTES.
+async fn a_trailing_backslash_is_a_readable_file() {
+    // H2 (8e audit): a trailing `\` is NEITHER a separator NOR a dir
+    // marker — the zip crate decodes it as a dir; norte decides by BYTES.
     let zip = ZipSmith::new().file(b"trailing\\", b"data").build();
     let (p, root) = common::zip_provider(&zip).await;
     let f = root.join(seg(b"trailing\\"));
@@ -264,12 +265,13 @@ async fn backslash_final_es_file_legible() {
 }
 
 #[tokio::test]
-async fn file_primero_hijo_despues_asciende_a_dir() {
-    // H4 (auditoría 8e): `file a` + `a/hijo` — el file asciende a dir y el
-    // subárbol queda visible (antes: TypeMismatch y subárbol huérfano).
+async fn a_file_then_a_child_ascends_it_to_a_dir() {
+    // H4 (8e audit): `file a` + `a/child` — the file ascends to a dir and
+    // the subtree stays visible (before: TypeMismatch and an orphaned
+    // subtree).
     let zip = ZipSmith::new()
-        .file(b"a", b"soy-file")
-        .file(b"a/hijo", b"vivo")
+        .file(b"a", b"i-am-a-file")
+        .file(b"a/child", b"alive")
         .build();
     let (p, root) = common::zip_provider(&zip).await;
     let a = root.join(seg(b"a"));
@@ -277,28 +279,28 @@ async fn file_primero_hijo_despues_asciende_a_dir() {
         p.stat(&a).await.expect("stat").kind,
         norte_proto::EntryKind::Dir
     );
-    assert_eq!(list_names(&p, &a).await, vec![b"hijo".to_vec()]);
-    assert_eq!(read_all(&p, &a.join(seg(b"hijo")), None).await, b"vivo");
+    assert_eq!(list_names(&p, &a).await, vec![b"child".to_vec()]);
+    assert_eq!(read_all(&p, &a.join(seg(b"child")), None).await, b"alive");
 }
 
 #[tokio::test]
-async fn nombre_con_nul_se_omite() {
-    // H7: el único NUL posible en zip viene forjado — se omite limpio.
+async fn a_name_with_nul_is_omitted() {
+    // H7: the only possible NUL in a zip comes forged — it's cleanly omitted.
     let zip = ZipSmith::new()
         .file(b"nul\x00byte.txt", b"x")
-        .file(b"ok.txt", b"bien")
+        .file(b"ok.txt", b"fine")
         .build();
     let (p, root) = common::zip_provider(&zip).await;
     assert_eq!(list_names(&p, &root).await, vec![b"ok.txt".to_vec()]);
 }
 
 #[tokio::test]
-async fn firma_eocd_falsa_en_el_comentario_no_rompe() {
-    // H9: un comentario que CONTIENE una firma EOCD (con contador enorme)
-    // no debe hacer que el preflight rechace un zip válido.
+async fn a_fake_eocd_signature_in_the_comment_does_not_break() {
+    // H9: a comment that CONTAINS an EOCD signature (with a huge counter)
+    // must not make the preflight reject a valid zip.
     let mut fake = b"PK\x05\x06".to_vec();
     fake.extend_from_slice(&[0u8; 6]);
-    fake.extend_from_slice(&60_000u16.to_le_bytes()); // count_total falso
+    fake.extend_from_slice(&60_000u16.to_le_bytes()); // fake count_total
     fake.extend_from_slice(&60_000u16.to_le_bytes());
     fake.extend_from_slice(&[0u8; 6]);
     let zip = ZipSmith::new()
@@ -314,48 +316,48 @@ async fn firma_eocd_falsa_en_el_comentario_no_rompe() {
 }
 
 #[tokio::test]
-async fn h1_nombres_que_colapsan_en_lossy_ya_no_colapsan() {
-    // H1 (#59): el crate `zip` indexaba el CD por el nombre DECODIFICADO —
-    // dos nombres crudos distintos que decodifican al mismo U+FFFD
-    // colapsaban en UNA entrada (última gana) antes de que norte los viera.
-    // Con el parser propio del CD ambos nombres viven byte-exactos.
+async fn h1_names_that_collapsed_in_lossy_no_longer_collapse() {
+    // H1 (#59): the `zip` crate indexed the CD by the DECODED name — two
+    // different raw names that decode to the same U+FFFD used to collapse
+    // into ONE entry (last one wins) before norte ever saw them. With the
+    // CD's own parser, both names live byte-exact.
     let zip = ZipSmith::new()
-        .file_utf8(b"lossy-\xff.txt", b"PRIMERO")
-        .file_utf8(b"lossy-\xfe.txt", b"SEGUNDO")
+        .file_utf8(b"lossy-\xff.txt", b"FIRST")
+        .file_utf8(b"lossy-\xfe.txt", b"SECOND")
         .build();
     let (p, root) = common::zip_provider(&zip).await;
     assert_eq!(
         list_names(&p, &root).await,
         vec![b"lossy-\xfe.txt".to_vec(), b"lossy-\xff.txt".to_vec()],
-        "las dos entradas listan byte-exactas, sin colapso lossy"
+        "both entries list byte-exact, no lossy collapse"
     );
     assert_eq!(
         p.list_skipped(&root).await.expect("skipped"),
         Some(0),
-        "nada se omitió ni se perdió"
+        "nothing was omitted or lost"
     );
     assert_eq!(
         read_all(&p, &root.join(seg(b"lossy-\xff.txt")), None).await,
-        b"PRIMERO"
+        b"FIRST"
     );
     assert_eq!(
         read_all(&p, &root.join(seg(b"lossy-\xfe.txt")), None).await,
-        b"SEGUNDO"
+        b"SECOND"
     );
 }
 
-/// Extra field 0x7075 (Info-ZIP unicode path) VÁLIDO: versión 1 + crc32 del
-/// nombre del header + nombre unicode alternativo.
+/// A VALID 0x7075 extra field (Info-ZIP unicode path): version 1 + the
+/// header name's crc32 + an alternate unicode name.
 fn extra_7075(unicode: &[u8], header_name: &[u8]) -> Vec<u8> {
     let mut crc = flate2::Crc::new();
     crc.update(header_name);
-    let mut body = vec![1u8]; // versión
+    let mut body = vec![1u8]; // version
     body.extend_from_slice(&crc.sum().to_le_bytes());
     body.extend_from_slice(unicode);
     let mut out = 0x7075u16.to_le_bytes().to_vec();
     out.extend_from_slice(
         &u16::try_from(body.len())
-            .expect("extra corto")
+            .expect("extra too short")
             .to_le_bytes(),
     );
     out.extend_from_slice(&body);
@@ -363,65 +365,66 @@ fn extra_7075(unicode: &[u8], header_name: &[u8]) -> Vec<u8> {
 }
 
 #[tokio::test]
-async fn extra_7075_valido_jamas_sustituye_el_nombre() {
-    // H3 (#59): el crate `zip` SUSTITUÍA el nombre del CD por el del extra
-    // 0x7075 cuando su crc validaba. El parser propio lo ignora por diseño:
-    // los bytes del CD mandan (regla 1).
-    let extra = extra_7075(b"impostor.txt", b"nombre-cd.txt");
+async fn a_valid_extra_7075_never_replaces_the_name() {
+    // H3 (#59): the `zip` crate USED TO REPLACE the CD's name with the
+    // 0x7075 extra's one when its crc validated. The own parser ignores it
+    // by design: the CD's bytes rule (rule 1).
+    let extra = extra_7075(b"impostor.txt", b"cd-name.txt");
     let zip = ZipSmith::new()
-        .file_with_extra(b"nombre-cd.txt", b"contenido", &extra)
+        .file_with_extra(b"cd-name.txt", b"content", &extra)
         .build();
     let (p, root) = common::zip_provider(&zip).await;
     assert_eq!(
         list_names(&p, &root).await,
-        vec![b"nombre-cd.txt".to_vec()],
-        "el nombre CRUDO del CD manda; el 0x7075 se ignora"
+        vec![b"cd-name.txt".to_vec()],
+        "the CD's RAW name rules; the 0x7075 is ignored"
     );
     assert_eq!(
-        read_all(&p, &root.join(seg(b"nombre-cd.txt")), None).await,
-        b"contenido"
+        read_all(&p, &root.join(seg(b"cd-name.txt")), None).await,
+        b"content"
     );
 }
 
 #[tokio::test]
-async fn extra_7075_invalido_no_mata_el_archivo() {
-    // H3 (#59): un 0x7075 malformado (size que desborda el blob) abortaba
-    // el archive ENTERO en el crate `zip`. Ahora: record truncado = se deja
-    // de caminar el blob y la entrada sobrevive con su nombre del CD.
+async fn an_invalid_extra_7075_does_not_kill_the_archive() {
+    // H3 (#59): a malformed 0x7075 (a size that overflows the blob) used
+    // to abort the WHOLE archive in the `zip` crate. Now: a truncated
+    // record just stops walking the blob and the entry survives with its
+    // CD name.
     let mut extra = 0x7075u16.to_le_bytes().to_vec();
-    extra.extend_from_slice(&200u16.to_le_bytes()); // promete 200, hay 3
+    extra.extend_from_slice(&200u16.to_le_bytes()); // promises 200, there are 3
     extra.extend_from_slice(&[1, 2, 3]);
     let zip = ZipSmith::new()
-        .file_with_extra(b"superviviente.txt", b"vivo", &extra)
-        .file(b"vecina.txt", b"tambien")
+        .file_with_extra(b"survivor.txt", b"alive", &extra)
+        .file(b"neighbor.txt", b"too")
         .build();
     let (p, root) = common::zip_provider(&zip).await;
     assert_eq!(
         list_names(&p, &root).await,
-        vec![b"superviviente.txt".to_vec(), b"vecina.txt".to_vec()]
+        vec![b"neighbor.txt".to_vec(), b"survivor.txt".to_vec()]
     );
     assert_eq!(
-        read_all(&p, &root.join(seg(b"superviviente.txt")), None).await,
-        b"vivo"
+        read_all(&p, &root.join(seg(b"survivor.txt")), None).await,
+        b"alive"
     );
 }
 
 #[tokio::test]
-async fn zip64_eocd_cuenta_y_lee() {
-    // zip64 (#59): EOCD con marcadores → locator → EOCD64. La entrada lista
-    // y lee byte-exacta.
+async fn zip64_eocd_counts_and_reads() {
+    // zip64 (#59): an EOCD with markers -> locator -> EOCD64. The entry
+    // lists and reads byte-exact.
     let zip = ZipSmith::new()
-        .file(b"z64.txt", b"contenido-64")
+        .file(b"z64.txt", b"content-64")
         .build_zip64();
     let (p, root) = common::zip_provider(&zip).await;
     assert_eq!(list_names(&p, &root).await, vec![b"z64.txt".to_vec()]);
     assert_eq!(
         read_all(&p, &root.join(seg(b"z64.txt")), None).await,
-        b"contenido-64"
+        b"content-64"
     );
 
-    // Y una cuenta zip64 mentirosa por encima de max_entries corta ANTES de
-    // pagar el CD (el hueco del preflight u16 queda cerrado, #59).
+    // And a lying zip64 count above max_entries cuts BEFORE paying for
+    // the CD (the preflight's u16 gap stays closed, #59).
     let liar = ZipSmith::new()
         .file(b"z64.txt", b"x")
         .build_zip64_lying_count(1_000_000);
@@ -432,30 +435,31 @@ async fn zip64_eocd_cuenta_y_lee() {
     let (p, root) = common::zip_provider_with_limits(&liar, limits).await;
     match p.list(&root).await.map(|_| ()) {
         Err(Error::LimitExceeded { limit }) if limit == "entries" => {}
-        other => panic!("esperaba LimitExceeded(entries) por EOCD64 mentiroso, fue {other:?}"),
+        other => panic!("expected LimitExceeded(entries) from a lying EOCD64, got {other:?}"),
     }
 }
 
 #[tokio::test]
-async fn crc_mentiroso_en_lectura_completa_es_corrupt() {
-    // #59: la lectura COMPLETA (el camino de copia) verifica el CRC del CD
-    // sobre los bytes servidos — un CD que miente termina en Err(Corrupt)
-    // como ÚLTIMO item del stream, jamás datos corruptos en silencio.
-    let mut bytes = ZipSmith::new().file(b"mentira.bin", b"contenido").build();
+async fn a_lying_crc_in_a_full_read_is_corrupt() {
+    // #59: the FULL read (the copy path) verifies the CD's CRC over the
+    // served bytes — a lying CD ends in Err(Corrupt) as the LAST item of
+    // the stream, never silently corrupt data.
+    let mut bytes = ZipSmith::new().file(b"lie.bin", b"content").build();
     let cd = bytes
         .windows(4)
         .position(|w| w == [0x50, 0x4b, 0x01, 0x02])
-        .expect("firma del CD");
-    bytes[cd + 16..cd + 20].copy_from_slice(&0xDEAD_BEEFu32.to_le_bytes()); // crc falso
+        .expect("CD signature");
+    bytes[cd + 16..cd + 20].copy_from_slice(&0xDEAD_BEEFu32.to_le_bytes()); // fake crc
     let (p, root) = common::zip_provider(&bytes).await;
-    let f = root.join(seg(b"mentira.bin"));
-    let (vistos, fallo) = read_hasta_fallo(&p, &f).await;
-    match fallo {
+    let f = root.join(seg(b"lie.bin"));
+    let (seen, failure) = read_until_failure(&p, &f).await;
+    match failure {
         Some(Error::Corrupt) => {}
-        other => panic!("esperaba Corrupt por CRC mentiroso (vistos {vistos}), fue {other:?}"),
+        other => panic!("expected Corrupt from a lying CRC (seen {seen}), got {other:?}"),
     }
-    // Un range PARCIAL de la misma entrada no puede verificarse sin
-    // descomprimir la entrada entera: sirve los bytes sin CRC (documentado).
+    // A PARTIAL range of the same entry can't be verified without
+    // decompressing the whole entry: it serves the bytes with no CRC
+    // (documented).
     assert_eq!(
         read_all(
             &p,
@@ -470,95 +474,95 @@ async fn crc_mentiroso_en_lectura_completa_es_corrupt() {
     );
 }
 
-/// Drena un read esperando que el stream FALLE; devuelve (`bytes_ok`, error).
-async fn read_hasta_fallo(p: &ArchiveProvider, f: &VPath) -> (usize, Option<Error>) {
-    let mut stream = p.read(f, None).await.expect("read abre");
-    let mut vistos = 0usize;
+/// Drains a read expecting the stream to FAIL; returns (`bytes_ok`, error).
+async fn read_until_failure(p: &ArchiveProvider, f: &VPath) -> (usize, Option<Error>) {
+    let mut stream = p.read(f, None).await.expect("read opens");
+    let mut seen = 0usize;
     while let Some(item) = stream.next().await {
         match item {
-            Ok(chunk) => vistos += chunk.len(),
-            Err(e) => return (vistos, Some(e)),
+            Ok(chunk) => seen += chunk.len(),
+            Err(e) => return (seen, Some(e)),
         }
     }
-    (vistos, None)
+    (seen, None)
 }
 
-/// Robustez: una entrada cuyo CD promete más bytes de los que el CONTENEDOR
-/// tiene falla `Corrupt` (aquí ya lo cazaba el CRC del crate `zip` al agotar
-/// el reader — el pin del camino silencioso es el test de abajo).
+/// Robustness: an entry whose CD promises more bytes than the CONTAINER
+/// has fails `Corrupt` (here the `zip` crate's own CRC already caught it
+/// when the reader ran out — the silent path's pin is the test below).
 #[tokio::test]
-async fn zip_entrada_que_promete_mas_bytes_que_el_contenedor_es_corrupt() {
-    let mut bytes = ZipSmith::new().file(b"corta.bin", &[9u8; 100]).build();
-    // Cirugía sobre el CD (única entrada): comp/uncomp pasan a 1 MiB — muy
-    // por encima del final del contenedor. El local header queda como está
-    // (el crate `zip` lee con los tamaños del CD).
+async fn a_zip_entry_promising_more_bytes_than_the_container_is_corrupt() {
+    let mut bytes = ZipSmith::new().file(b"short.bin", &[9u8; 100]).build();
+    // Surgery on the CD (the only entry): comp/uncomp become 1 MiB — way
+    // past the container's end. The local header stays as-is (the `zip`
+    // crate reads with the CD's sizes).
     let cd = bytes
         .windows(4)
         .position(|w| w == [0x50, 0x4b, 0x01, 0x02])
-        .expect("firma del CD");
+        .expect("CD signature");
     let lie = (1u32 << 20).to_le_bytes();
     bytes[cd + 20..cd + 24].copy_from_slice(&lie); // compressed size
     bytes[cd + 24..cd + 28].copy_from_slice(&lie); // uncompressed size
     let (p, root) = common::zip_provider(&bytes).await;
-    let (vistos, fallo) = read_hasta_fallo(&p, &root.join(seg(b"corta.bin"))).await;
-    match fallo {
+    let (seen, failure) = read_until_failure(&p, &root.join(seg(b"short.bin"))).await;
+    match failure {
         Some(Error::Corrupt) => {}
-        other => panic!("esperaba Corrupt (vistos {vistos} bytes), fue {other:?}"),
+        other => panic!("expected Corrupt (saw {seen} bytes), got {other:?}"),
     }
 }
 
-/// #95.4 — EL camino silencioso (paridad con el FIX-1 de targz): deflate que
-/// termina LIMPIO (bloque final válido) antes del `uncompressed_size` que el
-/// CD promete, con CRC consistente con los datos CORTOS. El crate `zip` no
-/// tiene nada que objetar (deflate válido, CRC ok) → el take-loop ve `Ok(0)`
-/// con `remaining > 0`. Antes del fix devolvía un fichero parcial SIN RUIDO;
-/// ahora es `Corrupt`.
+/// #95.4 — THE silent path (parity with targz's FIX-1): a deflate stream
+/// that ends CLEANLY (a valid final block) before the `uncompressed_size`
+/// the CD promises, with a CRC consistent with the SHORT data. The `zip`
+/// crate has nothing to object to (valid deflate, CRC ok) -> the take-loop
+/// sees `Ok(0)` with `remaining > 0`. Before the fix it returned a partial
+/// file with NO WARNING; now it's `Corrupt`.
 #[tokio::test]
-async fn zip_deflate_corto_con_crc_consistente_es_corrupt_no_datos_cortos() {
-    // Deflate raw VÁLIDO de solo 2 bytes.
-    let cortos = b"AB";
+async fn short_zip_deflate_with_consistent_crc_is_corrupt_not_short_data() {
+    // A VALID raw deflate of just 2 bytes.
+    let short = b"AB";
     let mut enc = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
-    enc.write_all(cortos).expect("deflate");
+    enc.write_all(short).expect("deflate");
     let deflated = enc.finish().expect("finish");
-    // ZipSmith escribe comp=uncomp=len(deflated) y crc de los bytes crudos:
-    // cirugía en LOCAL y CD — uncomp miente 100, crc = crc32(descomprimido).
+    // ZipSmith writes comp=uncomp=len(deflated) and the crc of the raw
+    // bytes: surgery on LOCAL and CD — uncomp lies 100, crc = crc32(decompressed).
     let mut crc = flate2::Crc::new();
-    crc.update(cortos);
+    crc.update(short);
     let crc_ok = crc.sum().to_le_bytes();
     let mut bytes = ZipSmith::new()
-        .file_raw(b"corta.bin", &deflated, 8, 0)
+        .file_raw(b"short.bin", &deflated, 8, 0)
         .build();
     let lie = 100u32.to_le_bytes();
     let local = bytes
         .windows(4)
         .position(|w| w == [0x50, 0x4b, 0x03, 0x04])
-        .expect("firma local");
+        .expect("local signature");
     bytes[local + 14..local + 18].copy_from_slice(&crc_ok);
     bytes[local + 22..local + 26].copy_from_slice(&lie); // uncomp (local)
     let cd = bytes
         .windows(4)
         .position(|w| w == [0x50, 0x4b, 0x01, 0x02])
-        .expect("firma del CD");
+        .expect("CD signature");
     bytes[cd + 16..cd + 20].copy_from_slice(&crc_ok);
     bytes[cd + 24..cd + 28].copy_from_slice(&lie); // uncomp (CD)
     let (p, root) = common::zip_provider(&bytes).await;
-    let (vistos, fallo) = read_hasta_fallo(&p, &root.join(seg(b"corta.bin"))).await;
-    match fallo {
+    let (seen, failure) = read_until_failure(&p, &root.join(seg(b"short.bin"))).await;
+    match failure {
         Some(Error::Corrupt) => {}
         other => {
-            panic!("esperaba Corrupt, fue {other:?} con {vistos} bytes — datos cortos en silencio")
+            panic!("expected Corrupt, got {other:?} with {seen} bytes — silently short data")
         }
     }
 }
 
-/// #95.3 (MAJOR-1 del review): el presupuesto de omitidas del zip es un
-/// límite LOCAL — muchas entradas hostiles con `max_entries` apretado deben
-/// fallar `LimitExceeded("entries")`, no `Corrupt` (paridad con tar/targz).
+/// #95.3 (review MAJOR-1): the zip's skipped-entries budget is a LOCAL
+/// limit — many hostile entries with a tight `max_entries` must fail
+/// `LimitExceeded("entries")`, not `Corrupt` (parity with tar/targz).
 #[tokio::test]
-async fn zip_presupuesto_de_omitidas_es_limit_exceeded() {
+async fn zips_skipped_budget_is_limit_exceeded() {
     let mut smith = ZipSmith::new();
     for i in 0..5u32 {
-        // Traversal: cada una se OMITE (cuenta en skipped, no en el índice).
+        // Traversal: each one gets OMITTED (counted in skipped, not in the index).
         smith = smith.file(format!("../evil{i}").as_bytes(), b"x");
     }
     let limits = Limits {
@@ -568,35 +572,36 @@ async fn zip_presupuesto_de_omitidas_es_limit_exceeded() {
     let (p, root) = common::zip_provider_with_limits(&smith.build(), limits).await;
     match p.list(&root).await.map(|_| ()) {
         Err(Error::LimitExceeded { limit }) if limit == "entries" => {}
-        other => panic!("esperaba LimitExceeded(entries) por omitidas, fue {other:?}"),
+        other => panic!("expected LimitExceeded(entries) from omitted ones, got {other:?}"),
     }
 }
 
-/// enc MAJOR-1 (review #59, bug CONFIRMADO pre-fix): una entrada STORED cuyo
-/// CD miente `uncomp > comp` habría servido bytes VECINOS del contenedor en
-/// un ranged read (el local header de al lado salía como contenido, en
-/// silencio). APPNOTE exige comp == uncomp para stored: fail-loud `Corrupt`
-/// en CUALQUIER lectura, jamás datos ajenos atribuidos a la entrada.
+/// enc MAJOR-1 (review #59, bug CONFIRMED pre-fix): a STORED entry whose
+/// CD lies `uncomp > comp` used to serve NEIGHBORING bytes from the
+/// container on a ranged read (the local header next door came out as
+/// content, silently). APPNOTE demands comp == uncomp for stored: fail
+/// loud `Corrupt` on ANY read, never foreign data attributed to the entry.
 #[tokio::test]
-async fn stored_con_uncomp_mentiroso_es_corrupt_jamas_bytes_vecinos() {
-    let mut zip = ZipSmith::new().file(b"peq.txt", b"hola").build();
-    // Cirugía: infla el uncomp_size del CD (offset +24 del record 0x02014b50)
-    // de 4 a 40. El comp_size (+20) queda en 4: la mentira exacta del bug.
+async fn stored_with_a_lying_uncomp_is_corrupt_never_neighboring_bytes() {
+    let mut zip = ZipSmith::new().file(b"small.txt", b"hi").build();
+    // Surgery: inflates the CD's uncomp_size (offset +24 of the
+    // 0x02014b50 record) from 2 to 40. The comp_size (+20) stays at 2:
+    // the bug's exact lie.
     let cd = zip
         .windows(4)
         .position(|w| w == [0x50, 0x4b, 0x01, 0x02])
         .expect("CD record");
     assert_eq!(
         u32::from_le_bytes(zip[cd + 24..cd + 28].try_into().expect("u32")),
-        4,
-        "uncomp original"
+        2,
+        "original uncomp"
     );
     zip[cd + 24..cd + 28].copy_from_slice(&40u32.to_le_bytes());
 
     let (provider, root) = common::zip_provider(&zip).await;
-    let path = root.join(Segment::new(b"peq.txt".to_vec()).expect("seg"));
-    // Ranged read MÁS ALLÁ de los datos reales: antes devolvía bytes del
-    // local header vecino con err=None; ahora Corrupt.
+    let path = root.join(Segment::new(b"small.txt".to_vec()).expect("seg"));
+    // A ranged read BEYOND the real data: it used to return bytes from the
+    // neighboring local header with err=None; now Corrupt.
     let mut stream = provider
         .read(
             &path,
@@ -606,7 +611,7 @@ async fn stored_con_uncomp_mentiroso_es_corrupt_jamas_bytes_vecinos() {
             }),
         )
         .await
-        .expect("read abre (el plan se valida en el hilo)");
+        .expect("read opens (the plan is validated in the thread)");
     let mut err = None;
     let mut got = Vec::new();
     while let Some(item) = stream.next().await {
@@ -618,19 +623,22 @@ async fn stored_con_uncomp_mentiroso_es_corrupt_jamas_bytes_vecinos() {
             }
         }
     }
-    assert!(matches!(err, Some(Error::Corrupt)), "fue {err:?}");
-    assert!(got.is_empty(), "ni un byte vecino en silencio: {got:x?}");
+    assert!(matches!(err, Some(Error::Corrupt)), "got {err:?}");
+    assert!(
+        got.is_empty(),
+        "not one neighboring byte in silence: {got:x?}"
+    );
 }
 
-/// rust MAJOR-1 (review #59, regla 3): dropear el stream durante la fase de
-/// DESCARTE de un deflate ranged (que no envía nada al canal) corta el hilo
-/// blocking — sin el chequeo de canal cerrado, seguiría descomprimiendo el
-/// skip entero para nadie.
+/// rust MAJOR-1 (review #59, rule 3): dropping the stream during the
+/// DISCARD phase of a ranged deflate (which sends nothing to the channel)
+/// cuts the blocking thread — without the closed-channel check, it would
+/// keep decompressing the whole skip for nobody.
 #[tokio::test]
-async fn drop_del_stream_durante_el_descarte_corta_el_hilo() {
-    // 4 MiB INCOMPRESIBLES (xorshift determinista): comp ≈ uncomp, así el
-    // descarte de ~4 MiB descomprimidos exige leer ~16 bloques de 256 KiB
-    // del contenedor — señal medible en Faults::read_calls.
+async fn dropping_the_stream_during_the_discard_cuts_the_thread() {
+    // 4 MiB INCOMPRESSIBLE (deterministic xorshift): comp ≈ uncomp, so
+    // discarding ~4 MiB decompressed demands reading ~16 256 KiB blocks
+    // of the container — a signal measurable via Faults::read_calls.
     let mut data = vec![0u8; 4 * 1024 * 1024];
     let mut x = 0x2545_F491_4F6C_DD1Du64;
     for b in &mut data {
@@ -639,7 +647,7 @@ async fn drop_del_stream_durante_el_descarte_corta_el_hilo() {
         x ^= x << 17;
         #[expect(
             clippy::cast_possible_truncation,
-            reason = "xorshift: se quiere el byte bajo"
+            reason = "xorshift: the low byte is what's wanted"
         )]
         {
             *b = x as u8;
@@ -661,11 +669,11 @@ async fn drop_del_stream_durante_el_descarte_corta_el_hilo() {
         Limits::default(),
     );
     let entry = root.join(Segment::new(b"big.bin".to_vec()).expect("seg"));
-    // Warm-up del índice (sus lecturas no cuentan para la aserción).
+    // Warms up the index (its reads don't count toward the assertion).
     let _ = provider.stat(&entry).await.expect("stat");
     let base = mem.faults().read_calls();
 
-    // Ranged read con skip PROFUNDO… y drop inmediato del stream.
+    // A ranged read with a DEEP skip… and an immediate drop of the stream.
     let stream = provider
         .read(
             &entry,
@@ -675,10 +683,10 @@ async fn drop_del_stream_durante_el_descarte_corta_el_hilo() {
             }),
         )
         .await
-        .expect("read abre");
+        .expect("read opens");
     drop(stream);
 
-    // Espera a que el contador se ESTABILICE (el hilo blocking muere solo).
+    // Waits for the counter to SETTLE (the blocking thread dies on its own).
     let mut last = mem.faults().read_calls();
     for _ in 0..200 {
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
@@ -689,30 +697,30 @@ async fn drop_del_stream_durante_el_descarte_corta_el_hilo() {
         last = now;
     }
     let spent = last.saturating_sub(base);
-    // Con el fix: data_offset (1 bloque) + a lo sumo un par de iteraciones
-    // del descarte antes de ver el canal cerrado. Sin el fix: ~16 bloques
-    // del contenedor (el descarte entero).
+    // With the fix: data_offset (1 block) + at most a couple of discard
+    // iterations before seeing the closed channel. Without the fix: ~16
+    // blocks of the container (the whole discard).
     assert!(
         spent <= 6,
-        "el descarte siguió tras el drop: {spent} lecturas"
+        "the discard kept going after the drop: {spent} reads"
     );
 }
 
-/// Pin de la decisión #59 (rust MAJOR-3 / enc MINOR-4): un zip con datos
-/// PREPENDADOS (self-extractor) se rechaza `Corrupt` — la aceptación exige
-/// la auto-consistencia exacta del EOCD (`cd_off + cd_size == pos`), que es
-/// precisamente lo que hace sólido el rechazo de firmas falsas en el
-/// comentario (H9). Decisión consciente, no accidente: el "offset fudge" de
-/// Info-ZIP queda como feature futura si aparece demanda real.
+/// Pins #59's decision (rust MAJOR-3 / enc MINOR-4): a zip with PREPENDED
+/// data (a self-extractor) gets rejected as `Corrupt` — acceptance
+/// demands the EOCD's exact self-consistency (`cd_off + cd_size == pos`),
+/// which is precisely what makes rejecting fake signatures in the comment
+/// (H9) solid. A conscious decision, not an accident: Info-ZIP's "offset
+/// fudge" stays a future feature if real demand shows up.
 #[tokio::test]
-async fn zip_con_datos_prependados_se_rechaza_documentado() {
+async fn a_zip_with_prepended_data_is_rejected_documented() {
     let zip = ZipSmith::new().file(b"a.txt", b"x").build();
     let mut sfx = b"#!/bin/sh\necho stub\n".to_vec();
     sfx.extend_from_slice(&zip);
     let (provider, root) = common::zip_provider(&sfx).await;
-    // El fallo puede salir del list directo o del stream: acepta ambos.
+    // The failure can come out of the direct list or of the stream: both are accepted.
     if let Err(e) = provider.list(&root).await {
-        assert!(matches!(e, Error::Corrupt), "fue {e:?}");
+        assert!(matches!(e, Error::Corrupt), "got {e:?}");
         return;
     }
     let mut stream = provider.list(&root).await.expect("list");
@@ -723,20 +731,20 @@ async fn zip_con_datos_prependados_se_rechaza_documentado() {
             break;
         }
     }
-    assert!(matches!(got_err, Some(Error::Corrupt)), "fue {got_err:?}");
+    assert!(matches!(got_err, Some(Error::Corrupt)), "got {got_err:?}");
 }
 
-// ---------- attrs zip (#108 bloque 2) ----------
+// ---------- zip attrs (#108 block 2) ----------
 
 #[tokio::test]
 async fn attrs_zip_method_packed_crc() {
     use norte_proto::AttrValue;
     use norte_vfs::{AttrRequest, ListOptions};
 
-    // Una entrada normal (store) y una CIFRADA (bit 0: sin locator).
+    // A normal entry (store) and an ENCRYPTED one (bit 0: no locator).
     let zip = ZipSmith::new()
-        .file(b"normal.txt", b"contenido")
-        .file_raw(b"cifrada.txt", b"xxxx", 8, 1)
+        .file(b"normal.txt", b"content")
+        .file_raw(b"encrypted.txt", b"xxxx", 8, 1)
         .build();
     let (p, root) = common::zip_provider(&zip).await;
     let opt = ListOptions {
@@ -754,28 +762,28 @@ async fn attrs_zip_method_packed_crc() {
     );
     assert_eq!(
         e.attrs.get("archive.packed_size"),
-        Some(&AttrValue::Uint(b"contenido".len() as u64))
+        Some(&AttrValue::Uint(b"content".len() as u64))
     );
     assert!(matches!(
         e.attrs.get("archive.crc32"),
         Some(AttrValue::Uint(_))
     ));
 
-    // La CIFRADA (no legible, locator None) SÍ conserva sus attrs: method
-    // es precisamente más interesante ahí.
+    // The ENCRYPTED one (unreadable, locator None) DOES keep its attrs:
+    // method is precisely more interesting there.
     let enc = p
-        .stat_with(&root.join(seg(b"cifrada.txt")), &opt)
+        .stat_with(&root.join(seg(b"encrypted.txt")), &opt)
         .await
-        .expect("stat_with de cifrada");
+        .expect("stat_with of the encrypted one");
     assert_eq!(
         enc.attrs.get("archive.method"),
         Some(&AttrValue::Text("deflate".to_owned()))
     );
 
-    // list_with lleva lo mismo por entrada; sin pedir → nada.
+    // list_with carries the same per entry; when not requested -> nothing.
     let mut s = p.list_with(&root, &opt).await.expect("list_with");
     while let Some(e) = s.next().await {
-        assert!(e.expect("entrada").attrs.contains_key("archive.method"));
+        assert!(e.expect("entry").attrs.contains_key("archive.method"));
     }
     assert!(
         p.stat(&root.join(seg(b"normal.txt")))

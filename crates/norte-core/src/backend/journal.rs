@@ -1,16 +1,16 @@
-//! El área de journal de [`Backend`](super::Backend): decidir aprobaciones,
-//! deshacer (sesión de agente o por `seq`), y la línea de tiempo `journal.list`.
+//! [`Backend`](super::Backend)'s journal area: deciding approvals, undoing
+//! (an agent session or by `seq`), and the `journal.list` timeline.
 
 use norte_proto::{Error, TaskId};
 
 use super::{Backend, TaskRef};
 
 impl Backend {
-    /// Resuelve una aprobación pendiente (`policy.decide`, M3-3b T5).
+    /// Resolves a pending approval (`policy.decide`, M3-3b T5).
     ///
     /// # Errors
-    /// Taxonomía del protocolo; `Unsupported` en embebido (las aprobaciones
-    /// solo llegan por el canal del daemon, así que aquí no hay qué decidir).
+    /// Protocol taxonomy; `Unsupported` when embedded (approvals only ever
+    /// arrive over the daemon's channel, so there's nothing to decide here).
     pub async fn policy_decide(&self, approval_id: u64, approve: bool) -> Result<(), Error> {
         match self {
             Self::Embedded(_) => Err(Error::Unsupported),
@@ -19,14 +19,14 @@ impl Backend {
         }
     }
 
-    /// Deshace la sesión completa de un agente como Task (`policy.undo_session`,
-    /// M3-4). Solo tiene sentido contra el daemon (dueño del journal).
+    /// Undoes an agent's whole session as a Task (`policy.undo_session`,
+    /// M3-4). Only makes sense against the daemon (the journal's owner).
     ///
     /// # Errors
-    /// Taxonomía del protocolo; `Unsupported` en embebido. Desde #167 el
-    /// embebido sí puede tener journal, pero deshacer LA SESIÓN DE UN AGENTE es
-    /// del daemon: los agentes se gobiernan ahí y es ahí donde existen sus
-    /// sesiones.
+    /// Protocol taxonomy; `Unsupported` when embedded. Since #167 embedded
+    /// CAN have a journal, but undoing AN AGENT'S SESSION belongs to the
+    /// daemon: agents are governed there and that's where their sessions
+    /// exist.
     pub async fn undo_session(&self, session: &str) -> Result<TaskRef, Error> {
         match self {
             Self::Embedded(_) => Err(Error::Unsupported),
@@ -35,16 +35,17 @@ impl Backend {
         }
     }
 
-    /// Una página de la línea de tiempo del journal (`journal.list`, 0.76.0,
-    /// fase 7): de la más nueva hacia atrás, `before_seq` exclusivo.
+    /// A page of the journal's timeline (`journal.list`, 0.76.0, phase 7):
+    /// newest to oldest, `before_seq` exclusive.
     ///
-    /// Funciona EMBEBIDO, al contrario que [`Backend::undo_session`]: lo que
-    /// aquél no puede contestar sin daemon son las sesiones de agente, y esto
-    /// es el journal de esta máquina, que el engine embebido tiene delante.
+    /// Works EMBEDDED, unlike [`Backend::undo_session`]: what that one
+    /// cannot answer without a daemon is agent sessions, and this is the
+    /// journal of this machine, which the embedded engine has right in
+    /// front of it.
     ///
     /// # Errors
-    /// Taxonomía del protocolo. `Unsupported` sin journal; contra un daemon,
-    /// `PolicyDenied` si la conexión no es humana.
+    /// Protocol taxonomy. `Unsupported` with no journal; against a daemon,
+    /// `PolicyDenied` if the connection isn't human.
     pub async fn journal_list(
         &self,
         before_seq: Option<i64>,
@@ -55,10 +56,10 @@ impl Backend {
             Self::Embedded(engine) => {
                 let limit = limit.clamp(1, norte_proto::methods::JOURNAL_LIST_MAX_PAGE);
                 let entries = engine.journal_page(before_seq, limit, actor_kind).await?;
-                // El MISMO cálculo de cursor que el daemon, porque es la
-                // misma función: dos copias de esta expresión es lo que la
-                // revisión de protocolo señaló, y ninguna podía ponerse roja
-                // por su cuenta.
+                // The SAME cursor computation as the daemon, because it's
+                // the same function: two copies of this expression is what
+                // the protocol review flagged, and neither could turn red
+                // on its own.
                 Ok(crate::journal::page_to_wire(&entries, limit))
             }
             #[cfg(unix)]
@@ -66,18 +67,18 @@ impl Backend {
         }
     }
 
-    /// Deshace lo que el humano hizo DESPUÉS de `seq` (`journal.undo_after`,
-    /// 0.76.0, fase 7). La entrada señalada se queda.
+    /// Undoes what the human did AFTER `seq` (`journal.undo_after`, 0.76.0,
+    /// phase 7). The pointed-at entry stays.
     ///
-    /// También embebido, por lo mismo que [`Backend::journal_list`]: deshacer
-    /// lo propio no necesita daemon. El informe se lee como el de cualquier
-    /// undo.
+    /// Also embedded, for the same reason as [`Backend::journal_list`]:
+    /// undoing one's own work needs no daemon. The report reads like any
+    /// other undo's.
     ///
-    /// `upto_seq` es el techo (0.80.0): lo más nuevo que el humano vio
-    /// contado. Nada por encima se deshace. `None` = sin techo.
+    /// `upto_seq` is the ceiling (0.80.0): the newest thing the human saw
+    /// counted. Nothing above it gets undone. `None` = no ceiling.
     ///
     /// # Errors
-    /// Taxonomía del protocolo; `Unsupported` sin journal.
+    /// Protocol taxonomy; `Unsupported` with no journal.
     pub async fn undo_after(&self, seq: i64, upto_seq: Option<i64>) -> Result<TaskRef, Error> {
         match self {
             Self::Embedded(engine) => {
@@ -89,21 +90,21 @@ impl Backend {
         }
     }
 
-    /// Informe de una Task de undo (`policy.undo_report`, #71): qué se
-    /// deshizo, qué se saltó y por qué, dónde se bloqueó el LIFO. Snapshot;
-    /// definitivo cuando la Task es terminal.
+    /// Report for an undo Task (`policy.undo_report`, #71): what was
+    /// undone, what was skipped and why, where the LIFO got blocked.
+    /// A snapshot; final once the Task is terminal.
     ///
     /// # Errors
-    /// Taxonomía del protocolo; [`Error::NotFound`], por los dos brazos (el
-    /// daemon desde 0.79.0), si ese id no fue un undo o el anillo ya lo
-    /// desalojó.
+    /// Protocol taxonomy; [`Error::NotFound`], on both arms (the daemon
+    /// since 0.79.0), if that id was never an undo or the ring already
+    /// evicted it.
     pub async fn undo_report(
         &self,
         task_id: TaskId,
     ) -> Result<norte_proto::methods::PolicyUndoReportResult, Error> {
         match self {
-            // Embebido no hay actor que comprobar: este `Backend` ES el humano
-            // en proceso (mismo criterio que `rename_batch_report`).
+            // Embedded has no actor to check: this `Backend` IS the human
+            // in-process (same criterion as `rename_batch_report`).
             Self::Embedded(engine) => engine
                 .undo_report(task_id)
                 .map(|(_owner, r)| crate::undo::report_to_proto(r))

@@ -1,14 +1,14 @@
-//! Test de integración NIGHTLY contra un servidor **OpenSSH real** (imagen
-//! `atmoz/sftp`, sftp subsystem chrooteado) vía testcontainers (ADR 0013 C2).
+//! NIGHTLY integration test against a **real OpenSSH server** (`atmoz/sftp`
+//! image, chrooted sftp subsystem) via testcontainers (ADR 0013 C2).
 //!
-//! Fuera del gate de PR: exige Docker y es lento. Lo corre el workflow nightly
-//! (`--features it-openssh`), nunca `just ci`. La suite in-process de
-//! `contract.rs`/`hostile.rs` ya cubre la lógica en CI normal; esto valida que
-//! el provider habla con un servidor de PRODUCCIÓN, no solo con el server de
-//! test de russh-sftp (que controlamos nosotros).
+//! Outside the PR gate: it requires Docker and is slow. The nightly workflow
+//! runs it (`--features it-openssh`), never `just ci`. The in-process suite
+//! of `contract.rs`/`hostile.rs` already covers the logic in normal CI; this
+//! validates that the provider talks to a PRODUCTION server, not only to
+//! russh-sftp's test server (which we control).
 //!
-//! La conexión SSH aquí es un helper de test MÍNIMO (password auth, host key
-//! aceptada): la gestión real de conexión/secretos/host-key es fase 6.
+//! The SSH connection here is a MINIMAL test helper (password auth, host key
+//! accepted): real connection/secrets/host-key management is phase 6.
 #![cfg(feature = "it-openssh")]
 
 use std::sync::Arc;
@@ -26,11 +26,11 @@ use testcontainers::{GenericImage, ImageExt};
 
 const USER: &str = "norte";
 const PASS: &str = "s3cr3t";
-/// atmoz/sftp: `user:pass:::dir` crea `/dir` ESCRIBIBLE dentro del chroot.
+/// atmoz/sftp: `user:pass:::dir` creates `/dir` WRITABLE inside the chroot.
 const BASE: &str = "/upload";
 
-/// Handler de cliente russh de test: acepta la host key del contenedor
-/// (efímero, de test) y no hace nada más. La verificación real es fase 6.
+/// Test russh client handler: accepts the container's host key (ephemeral,
+/// test-only) and does nothing else. Real verification is phase 6.
 struct TestClient;
 
 impl client::Handler for TestClient {
@@ -40,41 +40,43 @@ impl client::Handler for TestClient {
         &mut self,
         _key: &russh::keys::ssh_key::PublicKey,
     ) -> Result<bool, Self::Error> {
-        // Contenedor efímero de test: la host key cambia en cada arranque y no
-        // hay TOFU aquí. Fase 6 traerá verificación real (known_hosts/keyring).
+        // Ephemeral test container: the host key changes on every start and
+        // there is no TOFU here. Phase 6 will bring real verification
+        // (known_hosts/keyring).
         Ok(true)
     }
 }
 
-/// Establece SSH + abre el subsistema sftp y envuelve la sesión en un
-/// `SftpProvider` enraizado en `BASE`.
+/// Establishes SSH + opens the sftp subsystem and wraps the session in an
+/// `SftpProvider` rooted at `BASE`.
 async fn connect_provider(port: u16) -> SftpProvider {
     let config = Arc::new(client::Config::default());
     let mut handle = client::connect(config, ("127.0.0.1", port), TestClient)
         .await
-        .expect("conexión SSH al contenedor");
+        .expect("SSH connection to the container");
     let authed = handle
         .authenticate_password(USER, PASS)
         .await
-        .expect("auth password");
-    assert!(authed.success(), "el servidor rechazó la password de test");
+        .expect("password auth");
+    assert!(authed.success(), "the server rejected the test password");
 
     let channel = handle
         .channel_open_session()
         .await
-        .expect("abrir canal de sesión");
+        .expect("open session channel");
     channel
         .request_subsystem(true, "sftp")
         .await
-        .expect("solicitar subsistema sftp");
+        .expect("request sftp subsystem");
     let session = SftpSession::new(channel.into_stream())
         .await
-        .expect("handshake sftp");
+        .expect("sftp handshake");
     SftpProvider::new(session, BASE)
 }
 
-/// Arranca un contenedor `atmoz/sftp` con un usuario de test y devuelve
-/// (contenedor, provider). El contenedor vive mientras el guard no se dropee.
+/// Starts an `atmoz/sftp` container with a test user and returns
+/// (container, provider). The container lives as long as the guard is not
+/// dropped.
 async fn setup() -> (testcontainers::ContainerAsync<GenericImage>, SftpProvider) {
     let container = GenericImage::new("atmoz/sftp", "alpine")
         .with_exposed_port(22.tcp())
@@ -82,66 +84,66 @@ async fn setup() -> (testcontainers::ContainerAsync<GenericImage>, SftpProvider)
         .with_cmd([format!("{USER}:{PASS}:::{}", BASE.trim_start_matches('/'))])
         .start()
         .await
-        .expect("arrancar contenedor atmoz/sftp");
+        .expect("start atmoz/sftp container");
     let port = container
         .get_host_port_ipv4(22.tcp())
         .await
-        .expect("puerto mapeado");
+        .expect("mapped port");
     let provider = connect_provider(port).await;
     (container, provider)
 }
 
 fn vp(p: &str) -> VPath {
-    VPath::parse(&format!("sftp://127.0.0.1:22{p}")).expect("wire válido")
+    VPath::parse(&format!("sftp://127.0.0.1:22{p}")).expect("valid wire")
 }
 
-/// Roundtrip básico contra OpenSSH real: escribir, stat, listar, leer.
+/// Basic roundtrip against real OpenSSH: write, stat, list, read.
 #[tokio::test]
 async fn openssh_write_stat_list_read() {
     let (_c, p) = setup().await;
 
-    let mut sink = p.write(&vp("/hola.txt")).await.expect("write abre");
-    sink.write(Bytes::from_static(b"contenido real"))
+    let mut sink = p.write(&vp("/hello.txt")).await.expect("write opens");
+    sink.write(Bytes::from_static(b"real content"))
         .await
         .unwrap();
     sink.commit().await.expect("commit");
 
-    let e = p.stat(&vp("/hola.txt")).await.expect("stat");
+    let e = p.stat(&vp("/hello.txt")).await.expect("stat");
     assert_eq!(e.kind, EntryKind::File);
-    assert_eq!(e.size, Some(14));
+    assert_eq!(e.size, Some(12));
 
-    let mut stream = p.list(&vp("/")).await.expect("list abre");
-    let mut visto = false;
+    let mut stream = p.list(&vp("/")).await.expect("list opens");
+    let mut seen = false;
     while let Some(item) = stream.next().await {
-        let entry = item.expect("entrada válida");
-        if entry.path.file_name().map(|n| n.as_bytes()) == Some(b"hola.txt".as_slice()) {
-            visto = true;
+        let entry = item.expect("valid entry");
+        if entry.path.file_name().map(|n| n.as_bytes()) == Some(b"hello.txt".as_slice()) {
+            seen = true;
         }
     }
-    assert!(visto, "el archivo escrito aparece en el listado");
+    assert!(seen, "the written file appears in the listing");
 
-    let mut rd = p.read(&vp("/hola.txt"), None).await.expect("read");
+    let mut rd = p.read(&vp("/hello.txt"), None).await.expect("read");
     let mut out = Vec::new();
     while let Some(c) = rd.next().await {
         out.extend_from_slice(&c.unwrap());
     }
-    assert_eq!(out, b"contenido real");
+    assert_eq!(out, b"real content");
 }
 
-/// Resume por append (ADR 0012) contra OpenSSH real: keep conserva el parcial,
-/// una segunda apertura reanuda desde el offset, el commit concatena.
+/// Resume by append (ADR 0012) against real OpenSSH: keep preserves the
+/// partial, a second open resumes from the offset, commit concatenates.
 #[tokio::test]
-async fn openssh_resume_por_append() {
+async fn openssh_resume_by_append() {
     let (_c, p) = setup().await;
 
     let (mut sink, already) = p.open_resumable(&vp("/big.bin")).await.expect("open 1");
     assert_eq!(already, 0);
-    sink.write(Bytes::from_static(b"hola")).await.unwrap();
-    sink.keep().await.expect("keep conserva el parcial");
+    sink.write(Bytes::from_static(b"hello")).await.unwrap();
+    sink.keep().await.expect("keep preserves the partial");
 
     let (mut sink, already) = p.open_resumable(&vp("/big.bin")).await.expect("open 2");
-    assert_eq!(already, 4, "reanuda desde lo conservado");
-    sink.write(Bytes::from_static(b"mundo")).await.unwrap();
+    assert_eq!(already, 5, "resumes from what was preserved");
+    sink.write(Bytes::from_static(b"world")).await.unwrap();
     sink.commit().await.expect("commit");
 
     let mut rd = p.read(&vp("/big.bin"), None).await.expect("read");
@@ -149,5 +151,5 @@ async fn openssh_resume_por_append() {
     while let Some(c) = rd.next().await {
         out.extend_from_slice(&c.unwrap());
     }
-    assert_eq!(out, b"holamundo");
+    assert_eq!(out, b"helloworld");
 }

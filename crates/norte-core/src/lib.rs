@@ -1,5 +1,6 @@
-//! Núcleo de norte: scheduler de tasks con cancelación y progreso, copy engine,
-//! y (en M0) modo embebido como biblioteca — el daemon llega en hitos posteriores.
+//! norte's core: a task scheduler with cancellation and progress, a copy
+//! engine, and (in M0) an embedded mode as a library — the daemon arrives in
+//! later milestones.
 #![forbid(unsafe_code)]
 
 pub mod ai;
@@ -8,25 +9,26 @@ pub mod approval;
 pub mod archive_config;
 pub mod audit;
 pub mod backend;
-/// `spawn_blocking` que conserva el span (ADR 0127).
+/// `spawn_blocking` that preserves the span (ADR 0127).
 mod blocking;
-/// La Task de `fs.compare`: lotes coalescidos sobre el motor `norte-compare`.
+/// The `fs.compare` Task: batches coalesced over the `norte-compare` engine.
 mod compare;
 pub mod connect;
 #[cfg(unix)]
 pub mod daemon;
 pub mod embedded;
 mod engine;
-pub mod equipo;
 pub mod ftp_plugin;
 mod hashing;
 pub mod hooks;
 mod index_build;
 mod index_embed;
 pub mod journal;
-/// El montaje de `tracing` vive en `norte-config` desde #255: la ventana
-/// gráfica lo necesita igual y no puede depender del motor (ADR 0066). Se
-/// re-exporta aquí porque éste era su sitio y la CLI lo llama así.
+pub mod team;
+/// The `tracing` setup has lived in `norte-config` since #255: the graphical
+/// window needs it just the same and cannot depend on the engine (ADR 0066).
+/// It's re-exported here because this used to be its home and the CLI calls
+/// it this way.
 pub use norte_config::logging;
 mod observer;
 mod ops;
@@ -54,14 +56,14 @@ pub use journal::{
     SqliteJournal,
 };
 pub use norte_index::Index;
-/// ¿Es esto un id de plugin válido? Re-export de `norte-plugin-host` para que
-/// un frontend pueda DESCARTAR en su punto de entrada un id que llegó por el
-/// wire, sin depender del runtime de plugins (regla 7: los frontends hablan con
-/// el core, y este crate ya les da [`PluginRegistry`] por el mismo camino).
+/// Is this a valid plugin id? Re-exported from `norte-plugin-host` so a
+/// frontend can REJECT at its entry point an id that arrived over the wire,
+/// without depending on the plugin runtime (rule 7: frontends talk to the
+/// core, and this crate already gives them [`PluginRegistry`] the same way).
 pub use norte_plugin_host::is_valid_plugin_id;
-/// Límites anti-bomba de los providers archive (#95.2): re-export para que
-/// los frontends configuren [`Engine::set_archive_limits`] sin depender de
-/// `norte-vfs-archive` (regla 7: hablan con el core).
+/// Anti-bomb limits for archive providers (#95.2): re-exported so frontends
+/// can configure [`Engine::set_archive_limits`] without depending on
+/// `norte-vfs-archive` (rule 7: they talk to the core).
 pub use norte_vfs_archive::Limits as ArchiveLimits;
 pub use observer::{Mutation, MutationObserver};
 pub use ops::OnExists;

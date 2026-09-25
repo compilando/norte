@@ -1,12 +1,12 @@
-//! Integración `Engine::dir_usage_as` (fase 4): de qué está HECHO un
-//! directorio, como Task cancelable, con los hijos en un INFORME — porque una
-//! lista no cabe en el desenlace de una Task ni en su progreso.
+//! `Engine::dir_usage_as` integration (phase 4): what a directory is MADE OF,
+//! as a cancelable Task, with the children in a REPORT — because a list does
+//! not fit in a Task's outcome nor in its progress.
 //!
-//! Es el hermano de `engine_dir_size`, con la pregunta al revés: aquello
-//! contesta «¿cuánto ocupa esto?» en un número, y por eso le bastaba el
-//! progreso. Un mapa necesita la lista, y de ahí el informe.
+//! It is `engine_dir_size`'s sibling, with the question reversed: that one
+//! answers "how much does this occupy?" with a number, and that is why the
+//! progress was enough. A map needs the list, hence the report.
 //!
-//! `MemProvider` in-memory → determinista, sin tocar disco.
+//! In-memory `MemProvider` → deterministic, without touching disk.
 
 use std::sync::Arc;
 
@@ -18,11 +18,11 @@ use norte_testkit::MemProvider;
 use norte_vfs::Provider;
 
 fn vp(wire: &str) -> VPath {
-    VPath::parse(wire).expect("wire válido")
+    VPath::parse(wire).expect("valid wire")
 }
 
 async fn write_file(mem: &MemProvider, wire: &str, bytes: usize) {
-    let mut sink = mem.write(&vp(wire)).await.expect("write abre");
+    let mut sink = mem.write(&vp(wire)).await.expect("write opens");
     sink.write(Bytes::from(vec![b'x'; bytes]))
         .await
         .expect("chunk");
@@ -47,377 +47,380 @@ fn params(wire: &str) -> FsDirUsageParams {
     }
 }
 
-/// Busca un hijo por su nombre en bytes, que es como se nombran (regla 1).
-fn hijo<'a>(
-    informe: &'a norte_proto::methods::FsDirUsageReportResult,
+/// Finds a child by its name in bytes, which is how they are named (rule 1).
+fn child<'a>(
+    report: &'a norte_proto::methods::FsDirUsageReportResult,
     name: &[u8],
 ) -> &'a norte_proto::methods::DirUsageChild {
-    informe
+    report
         .children
         .iter()
         .find(|c| c.name.as_bytes() == name)
-        .unwrap_or_else(|| panic!("no está el hijo {}", String::from_utf8_lossy(name)))
+        .unwrap_or_else(|| panic!("child {} is not there", String::from_utf8_lossy(name)))
 }
 
-/// Lo que la feature promete: cada hijo con lo que ocupa ENTERO, subárbol
-/// incluido. Es la diferencia con un listado —que da el tamaño del nodo— y lo
-/// único con lo que se puede pintar un mapa.
+/// What the feature promises: each child with what it occupies IN FULL,
+/// subtree included. This is the difference from a listing — which gives the
+/// node's own size — and the only thing a map can be painted from.
 #[tokio::test]
-async fn el_mapa_dice_de_que_esta_hecho_el_directorio() {
+async fn the_map_says_what_the_directory_is_made_of() {
     let (engine, mem) = setup();
-    mkdir(&mem, "mem:///raiz").await;
-    mkdir(&mem, "mem:///raiz/sub").await;
-    write_file(&mem, "mem:///raiz/suelto", 10).await;
-    write_file(&mem, "mem:///raiz/sub/b", 32).await;
-    write_file(&mem, "mem:///raiz/sub/c", 8).await;
+    mkdir(&mem, "mem:///root").await;
+    mkdir(&mem, "mem:///root/sub").await;
+    write_file(&mem, "mem:///root/lone", 10).await;
+    write_file(&mem, "mem:///root/sub/b", 32).await;
+    write_file(&mem, "mem:///root/sub/c", 8).await;
 
     let handle = engine
-        .dir_usage_as(params("mem:///raiz"), Actor::User)
+        .dir_usage_as(params("mem:///root"), Actor::User)
         .await
-        .expect("lanza");
+        .expect("launches");
     let id = handle.id();
     assert_eq!(handle.join().await, TaskState::Completed);
 
-    let (_actor, informe) = engine.dir_usage_report(id).expect("hay mapa");
-    assert!(informe.listed, "el listado de la raíz terminó");
-    assert_eq!(informe.pending, 0, "terminada: no queda hijo por medir");
-    assert_eq!(informe.omitted, 0);
-    assert_eq!(informe.children.len(), 2, "un suelto y un subdirectorio");
+    let (_actor, report) = engine.dir_usage_report(id).expect("there is a map");
+    assert!(report.listed, "the root's listing finished");
+    assert_eq!(report.pending, 0, "finished: no child left to measure");
+    assert_eq!(report.omitted, 0);
+    assert_eq!(
+        report.children.len(),
+        2,
+        "one lone file and one subdirectory"
+    );
 
-    let suelto = hijo(&informe, b"suelto");
-    assert_eq!(suelto.kind, EntryKind::File);
-    assert_eq!(suelto.bytes, 10);
-    assert_eq!(suelto.entries, 1);
-    assert!(!suelto.partial);
+    let lone = child(&report, b"lone");
+    assert_eq!(lone.kind, EntryKind::File);
+    assert_eq!(lone.bytes, 10);
+    assert_eq!(lone.entries, 1);
+    assert!(!lone.partial);
 
-    // Lo que hace que esto sea un MAPA: el directorio pesa lo que pesa su
-    // contenido, no cero.
-    let sub = hijo(&informe, b"sub");
+    // What makes this a MAP: the directory weighs what its content weighs,
+    // not zero.
+    let sub = child(&report, b"sub");
     assert_eq!(sub.kind, EntryKind::Dir);
-    assert_eq!(sub.bytes, 40, "32 + 8, el subárbol entero");
-    assert_eq!(sub.entries, 3, "él y sus dos ficheros");
+    assert_eq!(sub.bytes, 40, "32 + 8, the whole subtree");
+    assert_eq!(sub.entries, 3, "itself and its two files");
     assert!(!sub.partial);
 
-    assert_eq!(informe.total_bytes, 50);
-    assert_eq!(informe.total_entries, 4);
+    assert_eq!(report.total_bytes, 50);
+    assert_eq!(report.total_entries, 4);
 }
 
-/// El nombre de un hijo son sus BYTES (regla 1), no un `String` lossy: un
-/// nombre que no es UTF-8 existe en el disco y el mapa tiene que poder
-/// nombrarlo.
+/// A child's name is its BYTES (rule 1), not a lossy `String`: a name that is
+/// not UTF-8 exists on disk and the map has to be able to name it.
 #[tokio::test]
-async fn el_nombre_de_un_hijo_son_los_bytes_que_habia_en_el_disco() {
+async fn a_childs_name_is_the_bytes_that_were_on_disk() {
     let (engine, mem) = setup();
-    mkdir(&mem, "mem:///raiz").await;
-    write_file(&mem, "mem:///raiz/caf%FF.txt", 3).await;
+    mkdir(&mem, "mem:///root").await;
+    write_file(&mem, "mem:///root/caf%FF.txt", 3).await;
 
     let handle = engine
-        .dir_usage_as(params("mem:///raiz"), Actor::User)
+        .dir_usage_as(params("mem:///root"), Actor::User)
         .await
-        .expect("lanza");
+        .expect("launches");
     let id = handle.id();
     assert_eq!(handle.join().await, TaskState::Completed);
 
-    let (_actor, informe) = engine.dir_usage_report(id).expect("mapa");
-    assert_eq!(informe.children.len(), 1);
+    let (_actor, report) = engine.dir_usage_report(id).expect("map");
+    assert_eq!(report.children.len(), 1);
     assert_eq!(
-        informe.children[0].name.as_bytes(),
+        report.children[0].name.as_bytes(),
         b"caf\xFF.txt",
-        "los bytes vuelven tal cual, sin pasar por un lossy"
+        "the bytes come back as is, without going through a lossy conversion"
     );
 }
 
-/// Un hijo que no se deja medir del todo sale MARCADO, y los demás se miden.
+/// A child that cannot be fully measured comes out MARKED, and the others get
+/// measured.
 ///
-/// `partial` va por hijo y no por informe, que es la diferencia entre poder
-/// pintar el mapa y no: se marca el rectángulo incompleto y el resto sigue
-/// siendo verdad. Una bandera global solo puede apagar el mapa entero.
+/// `partial` is per child, not per report, which is the difference between
+/// being able to paint the map or not: the incomplete rectangle is marked and
+/// the rest stays true. A global flag can only turn off the whole map.
 #[tokio::test]
-async fn un_hijo_ilegible_sale_marcado_y_no_tumba_el_mapa() {
+async fn an_unreadable_child_comes_out_marked_and_does_not_bring_down_the_map() {
     let (engine, mem) = setup();
-    mkdir(&mem, "mem:///raiz").await;
-    mkdir(&mem, "mem:///raiz/prohibido").await;
-    mkdir(&mem, "mem:///raiz/abierto").await;
-    write_file(&mem, "mem:///raiz/prohibido/secreto", 1000).await;
-    write_file(&mem, "mem:///raiz/abierto/x", 7).await;
-    mem.faults().fail_list_at(&vp("mem:///raiz/prohibido"));
+    mkdir(&mem, "mem:///root").await;
+    mkdir(&mem, "mem:///root/forbidden").await;
+    mkdir(&mem, "mem:///root/open").await;
+    write_file(&mem, "mem:///root/forbidden/secret", 1000).await;
+    write_file(&mem, "mem:///root/open/x", 7).await;
+    mem.faults().fail_list_at(&vp("mem:///root/forbidden"));
 
     let handle = engine
-        .dir_usage_as(params("mem:///raiz"), Actor::User)
+        .dir_usage_as(params("mem:///root"), Actor::User)
         .await
-        .expect("lanza");
+        .expect("launches");
     let id = handle.id();
     assert_eq!(
         handle.join().await,
         TaskState::Completed,
-        "un hijo ilegible NO hace fallar la Task"
+        "an unreadable child does NOT fail the Task"
     );
 
-    let (_actor, informe) = engine.dir_usage_report(id).expect("mapa");
-    let prohibido = hijo(&informe, b"prohibido");
+    let (_actor, report) = engine.dir_usage_report(id).expect("map");
+    let forbidden = child(&report, b"forbidden");
     assert!(
-        prohibido.partial,
-        "lo suyo es una cota inferior, y se DECLARA"
+        forbidden.partial,
+        "its number is a lower bound, and it is DECLARED"
     );
-    assert_eq!(prohibido.bytes, 0, "los 1000 no se pudieron leer");
+    assert_eq!(forbidden.bytes, 0, "the 1000 could not be read");
 
-    let abierto = hijo(&informe, b"abierto");
-    assert!(!abierto.partial, "el hermano sano no se contagia");
-    assert_eq!(abierto.bytes, 7);
+    let open = child(&report, b"open");
+    assert!(!open.partial, "the healthy sibling does not catch it");
+    assert_eq!(open.bytes, 7);
 }
 
-/// De qué está hecho un FICHERO no es una pregunta: está hecho de sí mismo.
+/// What a FILE is made of is not a question: it is made of itself.
 ///
-/// Se rechaza en vez de contestar con un mapa de un solo rectángulo, que es la
-/// respuesta que parece útil y no lo es.
+/// It is rejected instead of answering with a one-rectangle map, which is the
+/// answer that looks useful and is not.
 #[tokio::test]
-async fn describir_un_fichero_no_es_una_pregunta() {
+async fn describing_a_file_is_not_a_question() {
     let (engine, mem) = setup();
-    write_file(&mem, "mem:///solo", 7).await;
+    write_file(&mem, "mem:///alone", 7).await;
 
     let handle = engine
-        .dir_usage_as(params("mem:///solo"), Actor::User)
+        .dir_usage_as(params("mem:///alone"), Actor::User)
         .await
-        .expect("lanza");
-    // Y falla POR LO QUE ES. Un `Failed` a secas también lo daría un panic
-    // capturado (`Error::Internal` con `panic: true`), así que sin mirar la
-    // causa este test pasaría el día que medir un fichero reventase.
+        .expect("launches");
+    // And it fails FOR WHAT IT IS. A bare `Failed` would also come from a
+    // caught panic (`Error::Internal` with `panic: true`), so without looking
+    // at the cause this test would pass the day measuring a file blew up.
     let TaskState::Failed { error } = handle.join().await else {
-        panic!("de qué está hecho un fichero no es una pregunta");
+        panic!("what a file is made of is not a question");
     };
     assert!(matches!(error, ProtoError::InvalidPath), "{error:?}");
 }
 
-/// La profundidad se comprueba ANTES de crear Task alguna, y las de más se
-/// RECHAZAN en vez de recortarse.
+/// Depth is checked BEFORE creating any Task, and anything over the cap is
+/// REJECTED instead of trimmed.
 ///
-/// Recortar en silencio deja al cliente creyendo que tiene los dos niveles que
-/// pidió: pintaría un mapa de un nivel diciendo que es de dos. Por eso `2` es
-/// `Unsupported` —«el método existe, esa profundidad no se sirve»— y no un
-/// `1` disfrazado.
+/// Trimming silently leaves the client believing it has the two levels it
+/// asked for: it would paint a one-level map claiming it is two. That is why
+/// `2` is `Unsupported` — "the method exists, that depth is not served" — and
+/// not a `1` in disguise.
 #[tokio::test]
-async fn una_profundidad_que_no_se_sirve_se_rechaza_y_no_se_recorta() {
+async fn a_depth_that_is_not_served_is_rejected_and_not_trimmed() {
     let (engine, mem) = setup();
-    mkdir(&mem, "mem:///raiz").await;
+    mkdir(&mem, "mem:///root").await;
 
-    let cero = FsDirUsageParams {
-        path: vp("mem:///raiz"),
+    let zero = FsDirUsageParams {
+        path: vp("mem:///root"),
         depth: 0,
     };
-    let Err(err) = engine.dir_usage_as(cero, Actor::User).await else {
-        panic!("describir cero niveles no es una petición");
+    let Err(err) = engine.dir_usage_as(zero, Actor::User).await else {
+        panic!("describing zero levels is not a request");
     };
     assert!(matches!(err, ProtoError::InvalidPath), "{err:?}");
 
-    let pasada = FsDirUsageParams {
-        path: vp("mem:///raiz"),
+    let over = FsDirUsageParams {
+        path: vp("mem:///root"),
         depth: norte_proto::methods::DIR_USAGE_MAX_DEPTH + 1,
     };
-    let Err(err) = engine.dir_usage_as(pasada, Actor::User).await else {
-        panic!("por encima del tope tiene que rechazarse");
+    let Err(err) = engine.dir_usage_as(over, Actor::User).await else {
+        panic!("above the cap has to be rejected");
     };
     assert!(matches!(err, ProtoError::InvalidPath), "{err:?}");
 
-    let dos = FsDirUsageParams {
-        path: vp("mem:///raiz"),
+    let two = FsDirUsageParams {
+        path: vp("mem:///root"),
         depth: 2,
     };
-    let Err(err) = engine.dir_usage_as(dos, Actor::User).await else {
-        panic!("hoy solo se sirve un nivel, y se dice");
+    let Err(err) = engine.dir_usage_as(two, Actor::User).await else {
+        panic!("today only one level is served, and it says so");
     };
     assert!(
         matches!(err, ProtoError::Unsupported),
-        "«no se sirve», que no es «no vale»: {err:?}"
+        "\"not served\", which is not \"invalid\": {err:?}"
     );
 }
 
-/// Regla 3: el mapa se cancela limpiamente ESTANDO DENTRO, y el informe se
-/// queda a medias diciéndolo.
+/// Rule 3: the map cancels cleanly WHILE IN PROGRESS, and the report is left
+/// half done saying so.
 ///
-/// La primera versión de este test cancelaba justo después de lanzar, y no
-/// probaba nada: el cuerpo corre en otro spawn, así que la cancelación llegaba
-/// antes de la primera entrada, el informe se quedaba en `default()` y los dos
-/// asserts se cumplían solos. Habría pasado igual con TODAS las comprobaciones
-/// de cancelación borradas — que es la definición de un test verde que no
-/// demuestra nada.
+/// The first version of this test cancelled right after launching, and proved
+/// nothing: the body runs in another spawn, so the cancellation arrived before
+/// the first entry, the report stayed at `default()`, and both asserts passed
+/// on their own. It would have passed the same way with ALL the cancellation
+/// checks removed — which is the definition of a green test that proves
+/// nothing.
 ///
-/// Así que la cancelación se arma DONDE pasa el tiempo: al tercer `list`, o
-/// sea con la raíz ya listada y un hijo ya medido, mientras se mide el
-/// siguiente. Determinista y sin reloj — un `sleep` acertaría por casualidad.
+/// So the cancellation is armed WHERE time passes: at the third `list`, i.e.
+/// with the root already listed and one child already measured, while the
+/// next one is being measured. Deterministic and clockless — a `sleep` would
+/// get it right by chance.
 ///
-/// El estado que se fija solo lo puede producir un corte a media medición: hay
-/// un hijo medido Y el listado no llegó a terminar. Eso es lo que `listed`
-/// existe para decir: sin él, un mapa con un hijo se lee igual que un
-/// directorio que solo tiene uno.
+/// The state pinned here can only be produced by a cut halfway through
+/// measuring: there is one measured child AND the listing did not finish.
+/// That is what `listed` exists to say: without it, a map with one child reads
+/// the same as a directory that only has one.
 #[tokio::test]
-async fn cancelar_a_media_medicion_deja_el_mapa_marcado_como_incompleto() {
+async fn cancelling_mid_measurement_leaves_the_map_marked_incomplete() {
     let (engine, mem) = setup();
-    mkdir(&mem, "mem:///grande").await;
-    mkdir(&mem, "mem:///grande/a").await;
-    mkdir(&mem, "mem:///grande/b").await;
-    write_file(&mem, "mem:///grande/a/x", 10).await;
-    write_file(&mem, "mem:///grande/b/y", 20).await;
+    mkdir(&mem, "mem:///big").await;
+    mkdir(&mem, "mem:///big/a").await;
+    mkdir(&mem, "mem:///big/b").await;
+    write_file(&mem, "mem:///big/a/x", 10).await;
+    write_file(&mem, "mem:///big/b/y", 20).await;
 
     let handle = engine
-        .dir_usage_as(params("mem:///grande"), Actor::User)
+        .dir_usage_as(params("mem:///big"), Actor::User)
         .await
-        .expect("lanza");
-    // 1 = la raíz, 2 = el subárbol de `a`, 3 = el de `b`: corta en el tercero.
+        .expect("launches");
+    // 1 = the root, 2 = `a`'s subtree, 3 = `b`'s: cut at the third one.
     mem.faults().cancel_after_lists(3, handle.cancel_token());
     let id = handle.id();
     assert_eq!(handle.join().await, TaskState::Cancelled);
 
-    let (_actor, informe) = engine.dir_usage_report(id).expect("hay mapa");
+    let (_actor, report) = engine.dir_usage_report(id).expect("there is a map");
     assert!(
-        !informe.listed,
-        "el listado NO terminó, y el informe no puede insinuar que sí"
+        !report.listed,
+        "the listing did NOT finish, and the report cannot imply it did"
     );
     assert_eq!(
-        informe.children.len(),
+        report.children.len(),
         1,
-        "se midió `a` y se cortó en `b`: si fueran 0 la cancelación llegó \
-         antes de empezar y este test no prueba que el bucle interior pare"
+        "`a` was measured and it cut at `b`: if it were 0 the cancellation \
+         arrived before starting and this test does not prove the inner loop stops"
     );
 }
 
-/// Por encima del tope sobreviven los MÁS GRANDES, y lo omitido se cuenta en
-/// los totales aunque pierda su nombre.
+/// Above the cap the BIGGEST ones survive, and what is omitted is still
+/// counted in the totals even though it loses its name.
 ///
-/// El hijo enorme se crea el ÚLTIMO a propósito. Con hijos todos del mismo
-/// tamaño este test pasaba con cualquier política —los primeros N y los mayores
-/// N son el mismo conjunto—, que es justo cómo se me coló quedarme con los
-/// primeros: el protocolo promete los mayores, y un mapa que manda el hijo de
-/// 400 GB a `omitted` para pintar 4096 minucias es la función no existiendo.
+/// The huge child is created LAST on purpose. With children all the same
+/// size, this test used to pass under any policy — the first N and the
+/// biggest N are the same set — which is exactly how keeping the first ones
+/// slipped in: the protocol promises the biggest ones, and a map that sends
+/// the 400 GB child to `omitted` to paint 4096 trifles is the function not
+/// existing.
 ///
-/// Lo que el tope se lleva es el NOMBRE, no el tamaño: por eso los totales
-/// siguen cuadrando y un mapa puede pintar el resto como un rectángulo más.
+/// What the cap takes is the NAME, not the size: that is why the totals still
+/// add up and a map can paint the rest as one more rectangle.
 #[tokio::test]
-async fn por_encima_del_tope_sobreviven_los_mas_grandes() {
+async fn above_the_cap_the_biggest_ones_survive() {
     let (engine, mem) = setup();
-    let tope = norte_proto::methods::DIR_USAGE_MAX_CHILDREN;
-    mkdir(&mem, "mem:///muchos").await;
-    for i in 0..tope {
-        write_file(&mem, &format!("mem:///muchos/f{i}"), 2).await;
+    let cap = norte_proto::methods::DIR_USAGE_MAX_CHILDREN;
+    mkdir(&mem, "mem:///many").await;
+    for i in 0..cap {
+        write_file(&mem, &format!("mem:///many/f{i}"), 2).await;
     }
-    // El último en llegar y el mayor de todos.
-    write_file(&mem, "mem:///muchos/enorme", 100_000).await;
+    // The last one to arrive and the biggest of all.
+    write_file(&mem, "mem:///many/huge", 100_000).await;
 
     let handle = engine
-        .dir_usage_as(params("mem:///muchos"), Actor::User)
+        .dir_usage_as(params("mem:///many"), Actor::User)
         .await
-        .expect("lanza");
+        .expect("launches");
     let id = handle.id();
     assert_eq!(handle.join().await, TaskState::Completed);
 
-    let (_actor, informe) = engine.dir_usage_report(id).expect("mapa");
-    assert_eq!(informe.children.len(), tope, "la lista se para en el tope");
-    assert_eq!(informe.omitted, 1, "y dice cuántos se quedaron fuera");
+    let (_actor, report) = engine.dir_usage_report(id).expect("map");
+    assert_eq!(report.children.len(), cap, "the list stops at the cap");
+    assert_eq!(report.omitted, 1, "and says how many were left out");
     assert!(
-        informe
-            .children
-            .iter()
-            .any(|c| c.name.as_bytes() == b"enorme"),
-        "el mayor viaja aunque llegue el último: es lo que un mapa pinta"
+        report.children.iter().any(|c| c.name.as_bytes() == b"huge"),
+        "the biggest travels even arriving last: that is what a map paints"
     );
     assert_eq!(
-        informe.total_bytes,
-        (tope as u64) * 2 + 100_000,
-        "los totales los cuentan TODOS, también al que no se nombra"
+        report.total_bytes,
+        (cap as u64) * 2 + 100_000,
+        "the totals count EVERYONE, including the one not named"
     );
-    assert_eq!(informe.total_entries, tope as u64 + 1);
+    assert_eq!(report.total_entries, cap as u64 + 1);
 }
 
-/// Un provider que ADMITE haber dejado entradas fuera no produce un mapa que
-/// diga «esto es todo».
+/// A provider that ADMITS it left entries out does not produce a map that
+/// claims "this is everything".
 ///
-/// El índice de un archivo deja fuera lo que no puede representar y lo cuenta
-/// en `list_skipped` (#93). Sin mirarlo, el informe salía `listed: true`,
-/// `omitted: 0` y todos los hijos `partial: false` — las tres señales de
-/// completitud a la vez, sobre un listado que el propio provider dijo que
-/// estaba incompleto.
+/// An archive's index leaves out what it cannot represent and counts it in
+/// `list_skipped` (#93). Without looking at it, the report came out
+/// `listed: true`, `omitted: 0` and every child `partial: false` — the three
+/// signals of completeness at once, over a listing the provider itself said
+/// was incomplete.
 ///
-/// Va a `unvisited` y no a `omitted` porque `omitted` promete que los bytes de
-/// lo omitido SÍ están en los totales, y los de una entrada que nadie listó no
-/// lo están.
+/// It goes to `unvisited` and not to `omitted` because `omitted` promises the
+/// bytes of what was omitted ARE in the totals, and those of an entry nobody
+/// listed are not.
 #[tokio::test]
-async fn un_listado_que_el_provider_recorto_no_se_anuncia_como_completo() {
+async fn a_listing_the_provider_trimmed_is_not_announced_as_complete() {
     let engine = Engine::new();
     let mem = Arc::new(MemProvider::new().with_list_skipped(3));
     engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
-    mkdir(&mem, "mem:///archivo").await;
-    write_file(&mem, "mem:///archivo/visible", 5).await;
+    mkdir(&mem, "mem:///archive").await;
+    write_file(&mem, "mem:///archive/visible", 5).await;
 
     let handle = engine
-        .dir_usage_as(params("mem:///archivo"), Actor::User)
+        .dir_usage_as(params("mem:///archive"), Actor::User)
         .await
-        .expect("lanza");
+        .expect("launches");
     let prog = handle.progress();
     assert_eq!(handle.join().await, TaskState::Completed);
     assert_eq!(
         prog.borrow().unvisited,
         Some(3),
-        "el árbol es más grande que lo que se recorrió, y se dice"
+        "the tree is bigger than what was walked, and it says so"
     );
 }
 
-/// Dos hijos con bytes DISTINTOS que colapsan al mismo nombre lossy siguen
-/// siendo dos hijos, con sus bytes intactos.
+/// Two children with DIFFERENT bytes that collapse to the same lossy name are
+/// still two children, with their bytes intact.
 ///
-/// `\xFF.rs` y `\xFE.rs` se convierten los dos en `�.rs` en cuanto alguien hace
-/// una conversión lossy. Con un solo nombre hostil el test no distingue «pasa
-/// los bytes» de «los pliega»: hacen falta los DOS, que es justo por qué el
-/// corpus los trae emparejados. Si alguien mete un `to_string_lossy` en este
-/// camino, el mapa pinta un rectángulo donde había dos y `nav.enter` abre el
-/// que no es.
+/// `\xFF.rs` and `\xFE.rs` both turn into `�.rs` as soon as someone does a
+/// lossy conversion. With a single hostile name the test cannot tell "passes
+/// the bytes through" from "folds them": it needs BOTH, which is exactly why
+/// the corpus carries them paired. If someone slips a `to_string_lossy` into
+/// this path, the map paints one rectangle where there were two and
+/// `nav.enter` opens the wrong one.
 #[tokio::test]
-async fn dos_hijos_que_colapsan_al_mismo_lossy_siguen_siendo_dos() {
+async fn two_children_that_collapse_to_the_same_lossy_name_stay_two() {
     let (engine, mem) = setup();
-    let raiz = vp("mem:///hostil");
-    mem.mkdir(&raiz).await.expect("mkdir");
+    let root = vp("mem:///hostile");
+    mem.mkdir(&root).await.expect("mkdir");
 
     let fixture = |id: &str| {
         norte_testkit::corpus::hostile_names()
             .into_iter()
             .find(|n| n.id == id)
-            .unwrap_or_else(|| panic!("fixture {id} en el corpus"))
+            .unwrap_or_else(|| panic!("fixture {id} in the corpus"))
             .bytes
     };
     let ff = fixture("lossy_collapse_ff");
     let fe = fixture("lossy_collapse_fe");
     for bytes in [ff.clone(), fe.clone()] {
-        let seg = norte_proto::Segment::new(bytes).expect("segmento válido");
-        let mut sink = mem.write(&raiz.join(seg)).await.expect("write abre");
+        let seg = norte_proto::Segment::new(bytes).expect("valid segment");
+        let mut sink = mem.write(&root.join(seg)).await.expect("write opens");
         sink.write(Bytes::from_static(b"xy")).await.expect("chunk");
         sink.commit().await.expect("commit");
     }
 
     let handle = engine
-        .dir_usage_as(params("mem:///hostil"), Actor::User)
+        .dir_usage_as(params("mem:///hostile"), Actor::User)
         .await
-        .expect("lanza");
+        .expect("launches");
     let id = handle.id();
     assert_eq!(handle.join().await, TaskState::Completed);
 
-    let (_actor, informe) = engine.dir_usage_report(id).expect("mapa");
+    let (_actor, report) = engine.dir_usage_report(id).expect("map");
     assert_eq!(
-        informe.children.len(),
+        report.children.len(),
         2,
-        "dos nombres distintos, dos hijos: un pliegue lossy los haría uno"
+        "two different names, two children: a lossy fold would make them one"
     );
     assert!(
-        informe.children.iter().any(|c| c.name.as_bytes() == ff),
-        "los bytes de 0xFF vuelven tal cual"
+        report.children.iter().any(|c| c.name.as_bytes() == ff),
+        "the 0xFF bytes come back as is"
     );
     assert!(
-        informe.children.iter().any(|c| c.name.as_bytes() == fe),
-        "y los de 0xFE también, distintos de los otros"
+        report.children.iter().any(|c| c.name.as_bytes() == fe),
+        "and so do the 0xFE ones, distinct from the others"
     );
 }
 
-/// Un id que nunca fue un mapa no tiene informe — y eso es lo que el daemon
-/// convierte en `NotFound` para quien pregunta por el de otro.
+/// An id that was never a map has no report — and that is what the daemon
+/// turns into `NotFound` for whoever asks about someone else's.
 #[tokio::test]
-async fn un_id_ajeno_no_tiene_mapa() {
+async fn a_foreign_id_has_no_map() {
     let (engine, _mem) = setup();
     assert!(
         engine

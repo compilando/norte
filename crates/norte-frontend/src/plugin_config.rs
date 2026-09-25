@@ -134,14 +134,14 @@ pub struct ConfigKeyDisplay {
 pub fn sanitize_config_keys(keys: &[PluginConfigKeyWire]) -> Vec<ConfigKeyRow> {
     keys.iter()
         .map(|k| {
-            let (value, v_hostil) = crate::display_name(k.value.as_bytes());
-            let (default, d_hostil) = crate::display_name(k.default.as_bytes());
-            let dominio: Vec<(String, bool)> = k
+            let (value, v_hostile) = crate::display_name(k.value.as_bytes());
+            let (default, d_hostile) = crate::display_name(k.default.as_bytes());
+            let domain: Vec<(String, bool)> = k
                 .values
                 .iter()
                 .map(|v| crate::display_name(v.as_bytes()))
                 .collect();
-            let hostile = v_hostil || d_hostil || dominio.iter().any(|(_, h)| *h);
+            let hostile = v_hostile || d_hostile || domain.iter().any(|(_, h)| *h);
             ConfigKeyRow {
                 key: k.key.clone(),
                 kind: k.kind.clone(),
@@ -158,7 +158,7 @@ pub fn sanitize_config_keys(keys: &[PluginConfigKeyWire]) -> Vec<ConfigKeyRow> {
                 display: ConfigKeyDisplay {
                     value,
                     default,
-                    values: dominio.into_iter().map(|(v, _)| v).collect(),
+                    values: domain.into_iter().map(|(v, _)| v).collect(),
                     hostile,
                 },
             }
@@ -359,15 +359,15 @@ impl PluginConfigState {
         // Enter wrote `true` again — the daemon flip-flopped and the screen
         // never moved. The new value can be plugin text (an `enum` value) or
         // human-typed, so it goes through the same mask as the rest.
-        let (pintable, hostile) = crate::display_name(value.as_bytes());
-        row.display.value.clone_from(&pintable);
+        let (paintable, hostile) = crate::display_name(value.as_bytes());
+        row.display.value.clone_from(&paintable);
         // The row's flag is about ALL THREE free-text fields, so it can only
         // grow here: a clean new value does not clear a hostile `default` or
         // a hostile domain.
         row.display.hostile |= hostile;
         PendingConfigWrite {
             key: row.key.clone(),
-            display: pintable,
+            display: paintable,
             value,
         }
     }
@@ -377,13 +377,13 @@ impl PluginConfigState {
 mod tests {
     use super::*;
 
-    /// Ciclar un `bool` mueve las DOS mitades de la fila.
+    /// Cycling a `bool` moves BOTH halves of the row.
     ///
-    /// Solo el operando se actualizaba, así que la celda seguía enseñando el
-    /// valor viejo: el segundo Enter lo devolvía a donde estaba, el daemon
-    /// oscilaba y la pantalla no se movía nunca.
+    /// Only the operand used to update, so the cell kept showing the old
+    /// value: the second Enter sent it back to where it was, the daemon
+    /// oscillated, and the screen never moved.
     #[test]
-    fn ciclar_mueve_tambien_lo_que_se_pinta() {
+    fn cycling_also_moves_what_is_painted() {
         let rows = sanitize_config_keys(&[PluginConfigKeyWire {
             key: "verbose".to_owned(),
             kind: "bool".to_owned(),
@@ -395,9 +395,9 @@ mod tests {
             value: "false".to_owned(),
         }]);
         let mut state = PluginConfigState::new(rows);
-        state.activate().expect("un bool cicla");
-        assert_eq!(state.rows()[0].value, "true", "el operando");
-        assert_eq!(state.rows()[0].display.value, "true", "y lo que se pinta");
+        state.activate().expect("a bool cycles");
+        assert_eq!(state.rows()[0].value, "true", "the operand");
+        assert_eq!(state.rows()[0].display.value, "true", "and what is painted");
     }
 
     /// `EDITABLE_KINDS` and `activate` are the same set, and this is what
@@ -405,7 +405,7 @@ mod tests {
     /// calls editable that `activate` refuses (or the other way round) is a
     /// screen that lies about what it can do.
     #[test]
-    fn el_conjunto_editable_es_el_que_activate_despacha() {
+    fn the_editable_set_is_the_one_activate_dispatches() {
         for kind in ["bool", "enum", "string", "int", "duration", ""] {
             let wire = PluginConfigKeyWire {
                 key: "k".to_owned(),
@@ -420,10 +420,10 @@ mod tests {
             let rows = sanitize_config_keys(std::slice::from_ref(&wire));
             let editable = rows[0].is_editable();
             let mut state = PluginConfigState::new(rows);
-            // `activate` hace ALGO —escribe, o abre el buffer— exactamente
-            // para los `kind` que el flag llama editables.
-            let hizo_algo = state.activate().is_some() || state.is_editing();
-            assert_eq!(editable, hizo_algo, "kind `{kind}`");
+            // `activate` does SOMETHING — writes, or opens the buffer —
+            // exactly for the `kind`s the flag calls editable.
+            let did_something = state.activate().is_some() || state.is_editing();
+            assert_eq!(editable, did_something, "kind `{kind}`");
         }
     }
 
@@ -441,12 +441,12 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_config_keys_enmascara_solo_description() {
-        let hostil = norte_testkit::corpus::hostile_names()
+    fn sanitize_config_keys_masks_only_description() {
+        let hostile = norte_testkit::corpus::hostile_names()
             .into_iter()
             .find(|n| n.id == "rtl_override")
-            .expect("fixture del corpus");
-        let desc = String::from_utf8_lossy(&hostil.bytes).into_owned();
+            .expect("corpus fixture");
+        let desc = String::from_utf8_lossy(&hostile.bytes).into_owned();
         let mut k = wire("greeting", "string", "hola", "hola");
         k.description = Some(desc);
         let rows = sanitize_config_keys(&[k]);
@@ -456,25 +456,25 @@ mod tests {
                 .description
                 .chars()
                 .any(norte_encoding::is_terminal_hazard),
-            "description hostil sin enmascarar: {:?}",
+            "hostile description left unmasked: {:?}",
             rows[0].description
         );
     }
 
     #[test]
-    fn activate_en_bool_cicla_de_inmediato() {
+    fn activate_on_bool_cycles_immediately() {
         let mut s = PluginConfigState::new(sanitize_config_keys(&[wire(
             "verbose", "bool", "false", "false",
         )]));
-        let w = s.activate().expect("bool activa de inmediato");
+        let w = s.activate().expect("bool activates immediately");
         assert_eq!(w.key, "verbose");
         assert_eq!(w.value, "true");
-        assert_eq!(s.rows()[0].value, "true", "optimista");
+        assert_eq!(s.rows()[0].value, "true", "optimistic");
         assert!(!s.is_editing());
     }
 
     #[test]
-    fn activate_en_enum_cicla_con_wrap() {
+    fn activate_on_enum_cycles_with_wrap() {
         let mut k = wire("mode", "enum", "fast", "fast");
         k.values = vec!["fast".into(), "thorough".into()];
         let mut s = PluginConfigState::new(sanitize_config_keys(&[k]));
@@ -485,18 +485,21 @@ mod tests {
     }
 
     #[test]
-    fn activate_en_string_abre_edicion_sin_persistir() {
+    fn activate_on_string_opens_editing_without_persisting() {
         let mut s = PluginConfigState::new(sanitize_config_keys(&[wire(
             "greeting", "string", "hola", "hola",
         )]));
         let w = s.activate();
-        assert!(w.is_none(), "string no persiste al abrir: solo edita");
+        assert!(
+            w.is_none(),
+            "string does not persist on opening: it only edits"
+        );
         assert!(s.is_editing());
         assert_eq!(s.edit_buffer(), Some("hola"));
     }
 
     #[test]
-    fn edit_commit_en_string_persiste_lo_tecleado() {
+    fn edit_commit_on_string_persists_what_was_typed() {
         let mut s = PluginConfigState::new(sanitize_config_keys(&[wire(
             "greeting", "string", "hola", "hola",
         )]));
@@ -508,7 +511,7 @@ mod tests {
         for c in "hey".chars() {
             s.edit_push_char(c);
         }
-        let w = s.edit_commit().expect("string siempre válido");
+        let w = s.edit_commit().expect("string is always valid");
         assert_eq!(w.key, "greeting");
         assert_eq!(w.value, "hey");
         assert!(!s.is_editing());
@@ -516,7 +519,7 @@ mod tests {
     }
 
     #[test]
-    fn edit_commit_en_int_valida_rango_sin_persistir_y_conserva_el_buffer() {
+    fn edit_commit_on_int_validates_range_without_persisting_and_keeps_the_buffer() {
         let mut k = wire("retries", "int", "3", "3");
         k.min = Some(0);
         k.max = Some(10);
@@ -526,14 +529,14 @@ mod tests {
         for c in "99".chars() {
             s.edit_push_char(c);
         }
-        let err = s.edit_commit().expect_err("99 fuera de [0,10]");
+        let err = s.edit_commit().expect_err("99 is out of [0,10]");
         assert_eq!(err, SettingsEditError::OutOfRange { min: 0, max: 10 });
-        assert!(s.is_editing(), "el buffer se conserva tras un rechazo");
+        assert!(s.is_editing(), "the buffer is kept after a rejection");
         assert_eq!(s.edit_buffer(), Some("99"));
     }
 
     #[test]
-    fn edit_commit_en_int_no_numerico_rechaza() {
+    fn edit_commit_on_int_rejects_a_non_numeric_value() {
         let mut k = wire("retries", "int", "3", "3");
         k.min = Some(0);
         k.max = Some(10);
@@ -546,19 +549,19 @@ mod tests {
     }
 
     #[test]
-    fn edit_commit_en_int_sin_cotas_acepta_cualquier_entero() {
+    fn edit_commit_on_int_with_no_bounds_accepts_any_integer() {
         let mut s = PluginConfigState::new(sanitize_config_keys(&[wire("count", "int", "0", "0")]));
         s.activate();
         s.edit_backspace();
         for c in "-1000000".chars() {
             s.edit_push_char(c);
         }
-        let w = s.edit_commit().expect("sin min/max, cualquier i64 vale");
+        let w = s.edit_commit().expect("with no min/max, any i64 is valid");
         assert_eq!(w.value, "-1000000");
     }
 
     #[test]
-    fn edit_cancel_no_persiste_y_conserva_el_valor_original() {
+    fn edit_cancel_does_not_persist_and_keeps_the_original_value() {
         let mut s = PluginConfigState::new(sanitize_config_keys(&[wire(
             "greeting", "string", "hola", "hola",
         )]));
@@ -570,7 +573,7 @@ mod tests {
     }
 
     #[test]
-    fn activate_en_kind_desconocido_es_no_op_forward_compat() {
+    fn activate_on_an_unknown_kind_is_a_no_op_for_forward_compat() {
         let mut s = PluginConfigState::new(sanitize_config_keys(&[wire(
             "future", "duration", "1s", "1s",
         )]));
@@ -579,7 +582,7 @@ mod tests {
     }
 
     #[test]
-    fn up_down_clampan_y_son_no_op_vacio() {
+    fn up_down_clamp_and_are_a_no_op_when_empty() {
         let mut s = PluginConfigState::new(Vec::new());
         s.up();
         s.down();

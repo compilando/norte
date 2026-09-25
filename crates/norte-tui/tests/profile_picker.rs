@@ -1,5 +1,5 @@
-//! El selector de perfiles visto desde el `App`: qué pide al confirmar y qué
-//! no, y que su caja se pinta sin desbordar.
+//! The profile picker seen from `App`: what it asks for on confirm and
+//! what it does not, and that its box paints without overflowing.
 
 use std::ffi::OsString;
 
@@ -9,17 +9,17 @@ use norte_tui::app::{App, Pane, PickerAction};
 
 fn vp(wire: &str) -> VPath {
     let _ = norte_i18n::force(norte_i18n::Lang::Es);
-    VPath::parse(wire).expect("wire válido")
+    VPath::parse(wire).expect("valid wire")
 }
 
-fn app_de_prueba() -> App {
+fn test_app() -> App {
     App::new(
-        Pane::new(vp("file:///izq"), Vec::new()),
-        Pane::new(vp("file:///der"), Vec::new()),
+        Pane::new(vp("file:///left"), Vec::new()),
+        Pane::new(vp("file:///right"), Vec::new()),
     )
 }
 
-fn perfil(name: &str) -> UserProfile {
+fn profile(name: &str) -> UserProfile {
     UserProfile {
         name: OsString::from(name),
         title: None,
@@ -27,119 +27,120 @@ fn perfil(name: &str) -> UserProfile {
     }
 }
 
-/// **Guardar como perfil se abre PRELLENADO con el perfil activo** (#306).
+/// **Save as profile opens PRE-FILLED with the active profile** (#306).
 ///
-/// Lo normal es partir del que tienes puesto, así que «guardar como» sobre el
-/// mismo nombre es guardar encima — que es lo que hace cualquier programa. Sin
-/// perfil el campo nace vacío: no hay un nombre por defecto que no sea una
-/// invención.
+/// The normal thing is to start from the one you have set, so "save as"
+/// over the same name is saving over it — which is what any program does.
+/// With no profile the field is born empty: there is no default name that
+/// is not a fabrication.
 #[test]
-fn guardar_como_perfil_parte_del_activo() {
-    let mut app = app_de_prueba();
+fn save_as_profile_starts_from_the_active_one() {
+    let mut app = test_app();
     app.open_profile_save_as();
     assert!(
         matches!(&app.modal, Some(norte_tui::app::Modal::ProfileSaveAs { name, .. }) if name.is_empty()),
-        "sin perfil, vacío: {:?}",
+        "no profile, empty: {:?}",
         app.modal
     );
 
     app.modal = None;
-    app.active_profile = Some(OsString::from("fotos"));
+    app.active_profile = Some(OsString::from("photos"));
     app.open_profile_save_as();
     assert!(
-        matches!(&app.modal, Some(norte_tui::app::Modal::ProfileSaveAs { name, .. }) if name == "fotos"),
-        "con perfil, el suyo: {:?}",
+        matches!(&app.modal, Some(norte_tui::app::Modal::ProfileSaveAs { name, .. }) if name == "photos"),
+        "with a profile, its own: {:?}",
         app.modal
     );
 }
 
-/// Y un nombre que no puede ser un directorio deja el modal abierto con su
-/// diagnóstico: lo tecleado sobrevive para corregirlo, que es la disciplina de
-/// los prompts de esta pantalla.
+/// And a name that cannot be a directory leaves the modal open with its
+/// diagnostic: what was typed survives so it can be fixed, which is the
+/// discipline of this screen's prompts.
 #[tokio::test]
-async fn un_nombre_de_perfil_invalido_no_cierra_el_modal() {
-    let mut app = app_de_prueba();
+async fn an_invalid_profile_name_does_not_close_the_modal() {
+    let mut app = test_app();
     app.open_profile_save_as();
     let Some(norte_tui::app::Modal::ProfileSaveAs { name, .. }) = &mut app.modal else {
-        panic!("el modal está abierto");
+        panic!("the modal is open");
     };
-    name.push_str("../otro");
+    name.push_str("../other");
 
     norte_tui::screens::profile_save_as(&mut app).await;
 
     assert!(
         matches!(
             &app.modal,
-            Some(norte_tui::app::Modal::ProfileSaveAs { name, error: Some(_) }) if name == "../otro"
+            Some(norte_tui::app::Modal::ProfileSaveAs { name, error: Some(_) }) if name == "../other"
         ),
-        "sigue abierto, con el nombre y el motivo: {:?}",
+        "still open, with the name and the reason: {:?}",
         app.modal
     );
 }
 
-/// Confirmar deja el cambio PEDIDO y cierra el selector. No lo hace aquí: el
-/// cambio recarga configuración, y hacerlo desde el manejador de una tecla es
-/// la regla 2 otra vez.
+/// Confirming leaves the REQUESTED change and closes the picker. It does
+/// not do it here: the change reloads config, and doing that from a key
+/// handler is rule 2 again.
 #[test]
-fn confirmar_pide_el_cambio_y_cierra() {
-    let mut app = app_de_prueba();
-    app.open_profile_picker(vec![perfil("work"), perfil("photos")]);
+fn confirming_requests_the_change_and_closes() {
+    let mut app = test_app();
+    app.open_profile_picker(vec![profile("work"), profile("photos")]);
     app.profile_picker_input(PickerAction::Down);
     app.profile_picker_input(PickerAction::Confirm);
 
-    assert!(app.profile_picker.is_none(), "el selector se cierra");
+    assert!(app.profile_picker.is_none(), "the picker closes");
     assert_eq!(
         app.pending_profile.as_deref(),
         Some(std::ffi::OsStr::new("photos"))
     );
 }
 
-/// Elegir el perfil que YA está activo no pide nada: un cambio que no cambia
-/// nada tiraría y recargaría la pantalla para dejarla igual.
+/// Choosing the profile that is ALREADY active requests nothing: a change
+/// that changes nothing would tear down and reload the screen just to
+/// leave it the same.
 #[test]
-fn confirmar_el_activo_no_pide_nada() {
-    let mut app = app_de_prueba();
+fn confirming_the_active_one_requests_nothing() {
+    let mut app = test_app();
     app.active_profile = Some(OsString::from("work"));
-    app.open_profile_picker(vec![perfil("work")]);
+    app.open_profile_picker(vec![profile("work")]);
     app.profile_picker_input(PickerAction::Confirm);
 
     assert!(app.profile_picker.is_none());
     assert_eq!(app.pending_profile, None);
 }
 
-/// Cancelar cierra y no pide nada.
+/// Cancelling closes and requests nothing.
 #[test]
-fn cancelar_no_pide_nada() {
-    let mut app = app_de_prueba();
-    app.open_profile_picker(vec![perfil("work")]);
+fn cancelling_requests_nothing() {
+    let mut app = test_app();
+    app.open_profile_picker(vec![profile("work")]);
     app.profile_picker_input(PickerAction::Cancel);
     assert!(app.profile_picker.is_none());
     assert_eq!(app.pending_profile, None);
 }
 
-/// La caja se pinta sin desbordar en un terminal pequeño, con la lista vacía
-/// y con filas que piden nota. Una lista vacía no es un error: es que todavía
-/// no has creado ninguno.
+/// The box paints without overflowing in a small terminal, with an empty
+/// list and with rows that need a note. An empty list is not an error: it
+/// just means you have not created one yet.
 #[test]
-fn se_pinta_sin_desbordar() {
-    for perfiles in [
+fn it_paints_without_overflowing() {
+    for profiles in [
         Vec::new(),
-        vec![perfil("work")],
+        vec![profile("work")],
         vec![
-            perfil("orthodox"),
+            profile("orthodox"),
             UserProfile {
-                name: OsString::from("roto"),
-                title: Some("Un título largo de verdad".to_owned()),
-                problem: Some("línea 3: unknown field `them`".to_owned()),
+                name: OsString::from("broken"),
+                title: Some("A genuinely long title".to_owned()),
+                problem: Some("line 3: unknown field `them`".to_owned()),
             },
         ],
     ] {
         for (w, h) in [(24_u16, 6_u16), (80, 24), (200, 60)] {
-            let mut app = app_de_prueba();
-            app.open_profile_picker(perfiles.clone());
+            let mut app = test_app();
+            app.open_profile_picker(profiles.clone());
             let backend = ratatui::backend::TestBackend::new(w, h);
             let mut term = ratatui::Terminal::new(backend).expect("terminal");
-            term.draw(|f| norte_tui::ui::draw(f, &app)).expect("pinta");
+            term.draw(|f| norte_tui::ui::draw(f, &app)).expect("paint");
         }
     }
 }

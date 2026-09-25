@@ -29,7 +29,7 @@ pub fn human_bytes(n: u64) -> String {
     // below only ever needs ~3 significant digits of `value` to pick a unit
     // and round to one decimal — the precision loss is invisible at that
     // scale (same idiom as `settings.rs`'s `min as f64`/`max as f64`).
-    #[expect(clippy::cast_precision_loss, reason = "magnitudes lejos de 2^53")]
+    #[expect(clippy::cast_precision_loss, reason = "magnitudes far from 2^53")]
     let mut value = n as f64 / 1024.0;
     let mut unit = 0usize;
     // Promote on the ROUNDED value, not the raw one (review MAJOR M2): the
@@ -46,18 +46,18 @@ pub fn human_bytes(n: u64) -> String {
     format!("{value:.1} {}", UNITS[unit])
 }
 
-/// El mismo tamaño en CUATRO o cinco celdas: sin decimales y con la inicial de
-/// la unidad. `38G`, `402M`, `900B`.
+/// The same size in FOUR or five cells: no decimals, and the unit's initial.
+/// `38G`, `402M`, `900B`.
 ///
-/// Existe por el sidebar de sitios (L3), que tiene catorce celdas para el
-/// nombre del montaje Y su espacio libre: con `38.2 GiB` no cabe ninguno de
-/// los dos, y recortar un tamaño no da una etiqueta rota sino un NÚMERO FALSO
-/// (`38.2 GiB` recortado por la cabeza pinta `8.2 GiB`).
+/// Exists for the places sidebar (L3), which has fourteen cells for the
+/// mount's name AND its free space: neither fits with `38.2 GiB`, and
+/// truncating a size does not give a broken label but a FALSE NUMBER
+/// (`38.2 GiB` truncated from the head paints `8.2 GiB`).
 ///
-/// Redondea hacia ABAJO a propósito: el espacio libre que se anuncia nunca
-/// debe ser más del que hay.
+/// Rounds DOWN on purpose: the free space announced must never be more than
+/// there actually is.
 ///
-/// La unidad no se localiza, por el mismo motivo que en [`human_bytes`].
+/// The unit is not localised, for the same reason as in [`human_bytes`].
 ///
 /// ```
 /// use norte_frontend::human_bytes_short;
@@ -80,25 +80,26 @@ pub fn human_bytes_short(n: u64) -> String {
     format!("{value}{}", UNITS[unit])
 }
 
-/// La hora `HH:MM:SS` de una marca en milisegundos, en UTC.
+/// The `HH:MM:SS` time of a millisecond timestamp, in UTC.
 ///
-/// UTC y no local, igual que la columna de fecha en formato ISO: este árbol no
-/// lleva base de datos de husos, y una hora local inventada a partir de un
-/// desplazamiento fijo sería mentira dos veces al año. Lo que se compara aquí
-/// son líneas entre sí, y para eso el huso da igual mientras sea el mismo.
+/// UTC and not local, same as the date column in ISO format: this tree
+/// carries no timezone database, and a local time invented from a fixed
+/// offset would lie twice a year. What gets compared here is lines against
+/// each other, and for that the timezone does not matter as long as it is the
+/// same one.
 ///
-/// Vive aquí desde #326, cuando la ventana necesitó la misma: dos ideas de qué
-/// hora es en el panel de registro de cada frontend es la clase de diferencia
-/// que nadie mira hasta que compara dos capturas de pantalla.
+/// Lives here since #326, when the window needed the same thing: two ideas of
+/// what time it is in each frontend's log panel is the kind of difference
+/// nobody notices until they compare two screenshots.
 ///
 /// ```
-/// use norte_frontend::format::hora_utc;
-/// assert_eq!(hora_utc(0), "00:00:00");
-/// // Y una marca ANTERIOR a la época no da una hora negativa.
-/// assert_eq!(hora_utc(-1), "23:59:59");
+/// use norte_frontend::format::time_utc;
+/// assert_eq!(time_utc(0), "00:00:00");
+/// // And a timestamp BEFORE the epoch does not give a negative time.
+/// assert_eq!(time_utc(-1), "23:59:59");
 /// ```
 #[must_use]
-pub fn hora_utc(epoch_ms: i64) -> String {
+pub fn time_utc(epoch_ms: i64) -> String {
     let sod = epoch_ms.div_euclid(1000).rem_euclid(86_400);
     format!("{:02}:{:02}:{:02}", sod / 3600, (sod % 3600) / 60, sod % 60)
 }
@@ -107,18 +108,18 @@ pub fn hora_utc(epoch_ms: i64) -> String {
 mod tests {
     use super::*;
 
-    /// El corto redondea hacia ABAJO: anunciar más espacio libre del que hay
-    /// es la mentira que importa aquí.
+    /// The short form rounds DOWN: announcing more free space than there is
+    /// is the lie that matters here.
     #[test]
-    fn el_corto_no_redondea_hacia_arriba() {
+    fn the_short_form_does_not_round_up() {
         assert_eq!(human_bytes_short(1023), "1023B");
         assert_eq!(human_bytes_short(2047), "1K");
         assert_eq!(human_bytes_short(1024 * 1024 - 1), "1023K");
     }
 
-    /// Y jamás pasa de cinco celdas, que es lo que el sidebar puede pagar.
+    /// And it never exceeds five cells, which is what the sidebar can afford.
     #[test]
-    fn el_corto_cabe_en_cinco_celdas() {
+    fn the_short_form_fits_in_five_cells() {
         for n in [0, 1, 1023, 1024, u64::MAX / 2, u64::MAX] {
             assert!(human_bytes_short(n).chars().count() <= 5, "{n}");
         }

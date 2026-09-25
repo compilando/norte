@@ -1,39 +1,40 @@
-//! El mapa de disco en la TUI: el kind y sus teclas.
+//! The disk map in the TUI: the kind and its keys.
 //!
-//! El estado vive en [`norte_frontend::diskmap`], no aquí, por lo mismo que el
-//! panel de procesos: «cuál es el hijo elegido» es una pregunta que contestan
-//! las dos superficies, y una decisión escrita dos veces diverge en silencio
-//! (ADR 0077). Lo que queda en este crate es el `KIND` —que es lo que escribe
-//! la disposición— y qué tecla hace qué mientras el panel tiene el teclado.
+//! The state lives in [`norte_frontend::diskmap`], not here, for the same
+//! reason as the processes pane: "which child is chosen" is a question both
+//! surfaces answer, and the same decision written twice drifts apart in
+//! silence (ADR 0077). What stays in this crate is the `KIND` — what the
+//! layout writes — and which key does what while the pane holds the keyboard.
 
-pub use norte_frontend::diskmap::{DiskMap, Estado};
+pub use norte_frontend::diskmap::{DiskMap, State};
 
-/// El kind que ocupa un hueco de mapa de disco.
+/// The kind that occupies a disk-map slot.
 pub const KIND: &str = "disk-map";
 
-/// Lo que una tecla le pide al mapa.
+/// What a key asks the map to do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MapAction {
-    /// Mover la elección `n` rectángulos.
+    /// Move the selection `n` rectangles.
     Mover(isize),
-    /// Entrar en el hijo elegido.
-    Entrar,
-    /// Volver a medir este directorio.
-    Remedir,
-    /// Devolver el teclado sin cerrar el panel.
+    /// Enter the chosen child.
+    Enter,
+    /// Re-measure this directory.
+    Remeasure,
+    /// Return the keyboard without closing the pane.
     Leave,
 }
 
-/// Traduce una tecla del mapa de disco.
+/// Translates a disk-map key.
 ///
-/// Un `match` explícito y NO el keymap, con el mismo criterio que el panel de
-/// registro: estas teclas solo existen mientras el mapa tiene el teclado, y
-/// meterlas en el keymap obligaría a los siete presets a declarar atajos que
-/// fuera de aquí no significan nada.
+/// An explicit `match` and NOT the keymap, on the same grounds as the log
+/// pane: these keys only exist while the map holds the keyboard, and putting
+/// them in the keymap would force all seven presets to declare shortcuts that
+/// mean nothing outside here.
 ///
-/// `r` de «remedir» es la única letra suelta, y se gana su sitio: un mapa es
-/// una foto de hace un rato, y volver a medir sin salir del panel es lo que
-/// uno quiere justo después de borrar algo grande.
+/// `r` for "remedir" (re-measure) is the only loose letter, and it earns its
+/// place: a map is a snapshot from a while ago, and re-measuring without
+/// leaving the pane is exactly what one wants right after deleting something
+/// big.
 #[must_use]
 pub fn key(
     code: crossterm::event::KeyCode,
@@ -46,51 +47,52 @@ pub fn key(
     Some(match code {
         KeyCode::Down | KeyCode::Right => MapAction::Mover(1),
         KeyCode::Up | KeyCode::Left => MapAction::Mover(-1),
-        // Las páginas se mueven por bloques, como en cualquier lista: un mapa
-        // de 4096 rectángulos no se recorre de uno en uno.
-        KeyCode::PageDown => MapAction::Mover(PAGINA),
-        KeyCode::PageUp => MapAction::Mover(-PAGINA),
+        // Pages move in blocks, like in any list: a map of 4096 rectangles is
+        // not walked one at a time.
+        KeyCode::PageDown => MapAction::Mover(PAGE),
+        KeyCode::PageUp => MapAction::Mover(-PAGE),
         KeyCode::Home => MapAction::Mover(isize::MIN),
         KeyCode::End => MapAction::Mover(isize::MAX),
-        KeyCode::Enter => MapAction::Entrar,
-        KeyCode::Char('r') => MapAction::Remedir,
+        KeyCode::Enter => MapAction::Enter,
+        KeyCode::Char('r') => MapAction::Remeasure,
         KeyCode::Esc => MapAction::Leave,
         _ => return None,
     })
 }
 
-/// Cuántos rectángulos salta una página.
-const PAGINA: isize = 10;
+/// How many rectangles a page skips.
+const PAGE: isize = 10;
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crossterm::event::{KeyCode, KeyModifiers};
 
-    /// Las cuatro flechas mueven: en un mapa no hay «arriba» y «al lado», hay
-    /// una lista de rectángulos que se recorre.
+    /// The four arrows move: in a map there is no "up" and "sideways", there
+    /// is a list of rectangles being walked.
     #[test]
-    fn las_cuatro_flechas_mueven() {
-        for (code, esperado) in [
+    fn the_four_arrows_move() {
+        for (code, expected) in [
             (KeyCode::Down, MapAction::Mover(1)),
             (KeyCode::Right, MapAction::Mover(1)),
             (KeyCode::Up, MapAction::Mover(-1)),
             (KeyCode::Left, MapAction::Mover(-1)),
         ] {
-            assert_eq!(key(code, KeyModifiers::NONE), Some(esperado));
+            assert_eq!(key(code, KeyModifiers::NONE), Some(expected));
         }
     }
 
-    /// Enter entra, `r` vuelve a medir, `Esc` suelta el teclado SIN cerrar.
+    /// Enter enters, `r` re-measures, `Esc` releases the keyboard WITHOUT
+    /// closing.
     #[test]
-    fn las_teclas_propias_del_mapa() {
+    fn the_maps_own_keys() {
         assert_eq!(
             key(KeyCode::Enter, KeyModifiers::NONE),
-            Some(MapAction::Entrar)
+            Some(MapAction::Enter)
         );
         assert_eq!(
             key(KeyCode::Char('r'), KeyModifiers::NONE),
-            Some(MapAction::Remedir)
+            Some(MapAction::Remeasure)
         );
         assert_eq!(
             key(KeyCode::Esc, KeyModifiers::NONE),
@@ -98,17 +100,17 @@ mod tests {
         );
     }
 
-    /// Con Ctrl o Alt no es del mapa: esas van al keymap, que es donde vive
-    /// `alt+z` para cerrarlo y `alt+l` para abrir el de al lado.
+    /// With Ctrl or Alt it is not the map's: those go to the keymap, which is
+    /// where `alt+z` lives to close it and `alt+l` to open the one beside it.
     #[test]
-    fn con_ctrl_o_alt_la_tecla_no_es_del_mapa() {
+    fn with_ctrl_or_alt_the_key_is_not_the_maps() {
         assert!(key(KeyCode::Char('r'), KeyModifiers::CONTROL).is_none());
         assert!(key(KeyCode::Down, KeyModifiers::ALT).is_none());
     }
 
-    /// Una letra cualquiera no hace nada: el mapa no se come el alfabeto.
+    /// Any other letter does nothing: the map does not swallow the alphabet.
     #[test]
-    fn una_letra_ajena_no_es_del_mapa() {
+    fn an_unrelated_letter_is_not_the_maps() {
         assert!(key(KeyCode::Char('q'), KeyModifiers::NONE).is_none());
     }
 }

@@ -1,11 +1,10 @@
-//! Tests del estado modal (fase 5) + H1 T2 (issue #24): las teclas de
-//! diálogo ahora se RESUELVEN contra el contexto `dialog` del keymap y el
-//! comando resultante se filtra por el ALLOWLIST del modal concreto
-//! (`app::dialog_action`) — la semántica de SEGURIDAD (qué confirma, qué
-//! deniega, qué es inerte) vive en código; solo la asignación tecla→comando
-//! es rebindeable. `Modal::TrustLuaInit` es la única excepción (decisión 8
-//! del plan H1): sigue resuelta con `app::trust_lua_key` sobre el
-//! `crossterm::event::KeyCode` crudo.
+//! Modal state tests (phase 5) + H1 T2 (issue #24): dialog keys are now
+//! RESOLVED against the keymap's `dialog` context and the resulting command
+//! is filtered by the specific modal's ALLOWLIST (`app::dialog_action`) —
+//! SECURITY semantics (what confirms, what denies, what is inert) live in
+//! code; only the key→command assignment is rebindable. `Modal::TrustLuaInit`
+//! is the only exception (decision 8 of the H1 plan): it is still resolved
+//! with `app::trust_lua_key` over the raw `crossterm::event::KeyCode`.
 
 use norte_core::TransferOptions;
 use norte_proto::{CollisionPolicy, VPath};
@@ -17,7 +16,7 @@ use norte_tui::keymap::{
 use norte_tui::tasks::RetrySpec;
 
 fn vp(wire: &str) -> VPath {
-    VPath::parse(wire).expect("wire válido")
+    VPath::parse(wire).expect("valid wire")
 }
 
 fn confirm() -> Modal {
@@ -70,9 +69,9 @@ fn trust_host() -> Modal {
     }
 }
 
-fn ask_secret_con(texto: &str) -> Modal {
+fn ask_secret_con(text: &str) -> Modal {
     let mut input = norte_tui::app::TypedSecret::default();
-    for c in texto.chars() {
+    for c in text.chars() {
         input.push(c);
     }
     Modal::AskSecret {
@@ -89,27 +88,28 @@ fn ask_secret() -> Modal {
     ask_secret_con("hunter2")
 }
 
-/// Safety pin H1 T2: Enter (`dialog.confirm`) es INERTE sobre una
-/// aprobación de agente — aprobar una mutación de agente no es una
-
+/// Safety pin H1 T2: Enter (`dialog.confirm`) is INERT on an agent
+/// approval — approving an agent mutation is not a
+// TODO(translation): review — source comment was cut off mid-sentence before translation; restore the missing rationale from history if available.
 #[test]
-fn aprobacion_ignora_confirm() {
+fn approval_ignores_confirm() {
     assert_eq!(dialog_action(&approval(), "dialog.confirm"), None);
 }
 
-/// Safety pin H1 T2: mismo principio para el TOFU de host key SSH (#45) —
-/// Enter jamás confía en una clave sin verificar.
+/// Safety pin H1 T2: same principle for the SSH host key TOFU (#45) — Enter
+/// never trusts an unverified key.
 #[test]
-fn trust_host_ignora_confirm() {
+fn trust_host_ignores_confirm() {
     assert_eq!(dialog_action(&trust_host(), "dialog.confirm"), None);
 }
 
-/// #325 y el contraste con el de arriba: el diálogo de contraseña SÍ acepta
-/// Enter —el dato lo acaba de teclear quien responde—, y NO acepta
-/// `dialog.approve`: entregar una contraseña no es aprobar nada, y ofrecer la
-/// tecla de aprobar aquí enseñaría que sirve para eso.
+/// #325 and the contrast with the one above: the password dialog DOES
+/// accept Enter — whoever answers just typed the data — and does NOT
+/// accept `dialog.approve`: handing over a password is not approving
+/// anything, and offering the approve key here would suggest it is good
+/// for that.
 #[test]
-fn ask_secret_acepta_confirm_y_no_approve() {
+fn ask_secret_accepts_confirm_and_not_approve() {
     assert_eq!(
         dialog_action(&ask_secret(), "dialog.confirm"),
         Some(DialogOutcome::Confirmed)
@@ -122,17 +122,17 @@ fn ask_secret_acepta_confirm_y_no_approve() {
     );
 }
 
-/// #325: con el campo VACÍO, confirmar es INERTE — el diálogo se queda. Las
-/// dos mitades importan: entregar la cadena vacía reproduciría lo que #320
-/// cerró (un secreto vacío deja al provider tomando credenciales del
-/// ambiente), y cerrar obligaría a rehacer la navegación entera por un Enter
-/// de más, que en un campo donde no se ve lo tecleado es el error fácil de
-/// cometer. Cancelar sigue vivo: irse SÍ es una respuesta.
+/// #325: with an EMPTY field, confirming is INERT — the dialog stays. Both
+/// halves matter: submitting the empty string would reproduce what #320
+/// closed (an empty secret leaves the provider picking up credentials from
+/// the environment), and closing would force redoing the whole navigation
+/// over one extra Enter, which in a field where what is typed is not shown
+/// is the easy mistake to make. Cancel is still live: leaving IS an answer.
 ///
-/// (Mutación de control: quitar el guard de `is_empty` hace que la primera
-/// aserción devuelva `Confirmed`.)
+/// (Control mutation: removing the `is_empty` guard makes the first
+/// assertion return `Confirmed`.)
 #[test]
-fn ask_secret_vacio_no_confirma_pero_si_cancela() {
+fn ask_secret_empty_does_not_confirm_but_does_cancel() {
     assert_eq!(dialog_action(&ask_secret_con(""), "dialog.confirm"), None);
     assert_eq!(
         dialog_action(&ask_secret_con(""), "dialog.cancel"),
@@ -140,19 +140,19 @@ fn ask_secret_vacio_no_confirma_pero_si_cancela() {
     );
 }
 
-/// #325: PEGAR en el campo de contraseña funciona.
+/// #325: PASTING into the password field works.
 ///
-/// Es el caso donde más importa y el que se había quedado fuera: pegar desde
-/// un gestor de contraseñas es como la mayoría de la gente contesta este
-/// diálogo, y sin el brazo en `route_paste` no pasaba nada y nada lo decía —
-/// ni un carácter, ni un mensaje. El contrato de `route_paste` dice
-/// literalmente que un overlay que se queda una tecla tiene que quedarse
-/// también el pegado, «o las dos superficies divergen».
+/// It is the case that matters most and the one that had been left out:
+/// pasting from a password manager is how most people answer this dialog,
+/// and without the arm in `route_paste` nothing happened and nothing said
+/// so — not a character, not a message. `route_paste`'s contract literally
+/// says an overlay that keeps a key also has to keep the paste, "or the two
+/// surfaces diverge."
 ///
-/// (Mutación de control: quitar el brazo de `AskSecret` de `route_paste` deja
-/// el campo vacío y la segunda aserción se pone roja.)
+/// (Control mutation: removing `AskSecret`'s arm from `route_paste` leaves
+/// the field empty and the second assertion turns red.)
 #[test]
-fn pegar_llena_el_campo_de_contrasena() {
+fn pasting_fills_the_password_field() {
     let dir = vp("file:///x");
     let mut app = norte_tui::app::App::new(
         norte_tui::app::Pane::new(dir.clone(), Vec::new()),
@@ -162,22 +162,22 @@ fn pegar_llena_el_campo_de_contrasena() {
     norte_tui::paste::route_paste(&mut app, "de-un-gestor");
 
     let Some(Modal::AskSecret { input, .. }) = &app.modal else {
-        panic!("el modal sigue abierto: {:?}", app.modal);
+        panic!("the modal is still open: {:?}", app.modal);
     };
     assert_eq!(
         input.chars(),
         "de-un-gestor".chars().count(),
-        "lo pegado entra entero"
+        "the paste enters whole"
     );
-    // Y pegar NO confirma: sigue haciendo falta un Enter.
+    // And pasting does NOT confirm: an Enter is still needed.
     assert!(matches!(app.modal, Some(Modal::AskSecret { .. })));
 }
 
-/// #325: el `Debug` del modal NO lleva la contraseña. Es el sitio por donde
-/// se escaparía sin ruido — `tracing`, el mensaje de un panic, el diff de un
-/// `assert_eq!` — y el envoltorio existe justo para eso (regla 10).
+/// #325: the modal's `Debug` does NOT carry the password. It is where it
+/// would leak silently — `tracing`, a panic message, an `assert_eq!`'s diff
+/// — and the wrapper exists exactly for that (rule 10).
 #[test]
-fn el_debug_del_modal_no_lleva_el_secreto() {
+fn the_modal_debug_does_not_carry_the_secret() {
     let mut input = norte_tui::app::TypedSecret::default();
     for c in "hunter2".chars() {
         input.push(c);
@@ -190,29 +190,29 @@ fn el_debug_del_modal_no_lleva_el_secreto() {
         pane: 0,
         trail: Trail::Record,
     };
-    let pintado = format!("{modal:?}");
+    let painted = format!("{modal:?}");
     assert!(
-        !pintado.contains("hunter2"),
-        "el Debug del modal filtró la contraseña: {pintado}"
+        !painted.contains("hunter2"),
+        "the modal's Debug leaked the password: {painted}"
     );
-    // Y el nombre de la conexión SÍ, que es lo que hace útil el Debug.
-    assert!(pintado.contains("rosetta"), "{pintado}");
+    // And the connection's name DOES show, which is what makes Debug useful.
+    assert!(painted.contains("rosetta"), "{painted}");
 }
 
-/// Safety pin H1 T2: la colisión no tiene default peligroso — ni
-/// `dialog.confirm` (Enter) ni `dialog.deny` (`n`, que en la colisión no es
-/// una política válida) hacen nada; solo overwrite/skip/rename/newer/cancel.
+/// Safety pin H1 T2: a collision has no dangerous default — neither
+/// `dialog.confirm` (Enter) nor `dialog.deny` (`n`, which on a collision is
+/// not a valid policy) do anything; only overwrite/skip/rename/newer/cancel.
 #[test]
-fn colision_ignora_confirm_y_deny() {
+fn collision_ignores_confirm_and_deny() {
     assert_eq!(dialog_action(&collision(), "dialog.confirm"), None);
     assert_eq!(dialog_action(&collision(), "dialog.deny"), None);
 }
 
-/// Safety pin H1 T2: en las confirmaciones (borrado/transferencia), tanto
-/// `dialog.confirm` (Enter) como `dialog.approve` (`y`) aceptan — mismo
-/// comportamiento que antes de H1.
+/// Safety pin H1 T2: in confirmations (delete/transfer), both
+/// `dialog.confirm` (Enter) and `dialog.approve` (`y`) accept — same
+/// behavior as before H1.
 #[test]
-fn confirm_acepta_confirm_y_approve() {
+fn confirm_accepts_confirm_and_approve() {
     assert_eq!(
         dialog_action(&confirm(), "dialog.confirm"),
         Some(DialogOutcome::Confirmed)
@@ -224,7 +224,7 @@ fn confirm_acepta_confirm_y_approve() {
 }
 
 #[test]
-fn confirmacion_acepta_y_cancela() {
+fn confirmation_accepts_and_cancels() {
     for cmd in ["dialog.confirm", "dialog.approve"] {
         assert_eq!(
             dialog_action(&confirm(), cmd),
@@ -237,38 +237,38 @@ fn confirmacion_acepta_y_cancela() {
             Some(DialogOutcome::Cancelled)
         );
     }
-    // Comando fuera del allowlist: inerte (el diálogo sigue abierto).
+    // Command outside the allowlist: inert (the dialog stays open).
     assert_eq!(dialog_action(&confirm(), "dialog.overwrite"), None);
-    let borrar = Modal::ConfirmDelete {
+    let delete = Modal::ConfirmDelete {
         items: vec![vp("file:///x")],
         permanent: false,
     };
     assert_eq!(
-        dialog_action(&borrar, "dialog.confirm"),
+        dialog_action(&delete, "dialog.confirm"),
         Some(DialogOutcome::Confirmed)
     );
     assert_eq!(
-        dialog_action(&borrar, "dialog.cancel"),
+        dialog_action(&delete, "dialog.cancel"),
         Some(DialogOutcome::Cancelled)
     );
 }
 
 #[test]
-fn colision_elige_politica_o_cancela() {
+fn collision_chooses_policy_or_cancels() {
     let cases = [
         ("dialog.overwrite", CollisionPolicy::Overwrite),
         ("dialog.skip", CollisionPolicy::Skip),
         ("dialog.rename", CollisionPolicy::RenameAuto),
-        // La colisión cambió `n`→`w` (dialog.newer, decisión 5 del plan
-        // H1): `n` ahora es `dialog.deny`, inerte en este modal (pin
-        // arriba, `colision_ignora_confirm_y_deny`).
+        // The collision switched `n`→`w` (dialog.newer, H1 plan decision
+        // 5): `n` is now `dialog.deny`, inert on this modal (pin above,
+        // `collision_ignores_confirm_and_deny`).
         ("dialog.newer", CollisionPolicy::Newer),
     ];
     for (cmd, policy) in cases {
         assert_eq!(
             dialog_action(&collision(), cmd),
             Some(DialogOutcome::Retry(policy)),
-            "comando {cmd}"
+            "command {cmd}"
         );
     }
     assert_eq!(
@@ -277,11 +277,11 @@ fn colision_elige_politica_o_cancela() {
     );
 }
 
-/// Aprobación de agente (M3-3b T5): `dialog.approve` aprueba, `dialog.deny`
-/// y `dialog.cancel` DENIEGAN (cerrar es denegar, fail-safe);
-/// `dialog.confirm` es inerte (pin `aprobacion_ignora_confirm`).
+/// Agent approval (M3-3b T5): `dialog.approve` approves, `dialog.deny` and
+/// `dialog.cancel` DENY (closing is denying, fail-safe); `dialog.confirm`
+/// is inert (pin `approval_ignores_confirm`).
 #[test]
-fn aprobacion_aprueba_con_approve_y_deniega_con_deny_cancel() {
+fn approval_approves_with_approve_and_denies_with_deny_cancel() {
     assert_eq!(
         dialog_action(&approval(), "dialog.approve"),
         Some(DialogOutcome::Confirmed)
@@ -292,32 +292,32 @@ fn aprobacion_aprueba_con_approve_y_deniega_con_deny_cancel() {
             Some(DialogOutcome::Cancelled)
         );
     }
-    // Comando fuera del allowlist de este modal.
+    // Command outside this modal's allowlist.
     assert_eq!(dialog_action(&approval(), "dialog.overwrite"), None);
 }
 
-/// Integración H1 T2 (issue #24, el "payoff" de datificar el keymap): un
-/// keymap TOML real —preset `orthodox` + capa de usuario— rebindea `y` de
-/// `dialog.approve` a `dialog.deny`, se RESUELVE con el motor de
-/// `norte-frontend` (el mismo camino que el run loop) y `dialog_action`
-/// obedece el comando resuelto, no la tecla física: la aprobación de agente
-/// ahora la DENIEGA.
+/// H1 T2 integration (issue #24, the "payoff" of turning the keymap into
+/// data): a real TOML keymap — `orthodox` preset + a user layer — rebinds
+/// `dialog.approve`'s `y` to `dialog.deny`, is RESOLVED with
+/// `norte-frontend`'s engine (the same path as the run loop), and
+/// `dialog_action` obeys the resolved command, not the physical key: agent
+/// approval is now DENIED.
 #[test]
-fn una_capa_de_usuario_rebindea_dialog_y_dialog_action_lo_obedece() {
+fn a_user_layer_rebinds_dialog_and_dialog_action_obeys_it() {
     let preset = presets_orthodox();
     let layer =
         parse_keymap("[dialog]\nprepend_keymap = [{ on = [\"y\"], run = \"dialog.deny\" }]\n")
-            .expect("capa válida");
-    // El TUI pasa la UNIÓN de COMMANDS ∪ DIALOG_COMMANDS a Screen::Dialog
-    // (T1 confirmó: build_for_impl valida TODO el efectivo fusionado,
-    // incluido [global], no solo la sección específica).
+            .expect("valid layer");
+    // The TUI passes the UNION of COMMANDS ∪ DIALOG_COMMANDS to
+    // Screen::Dialog (T1 confirmed: build_for_impl validates the WHOLE
+    // merged effective, including [global], not just the specific section).
     let known: Vec<&str> = COMMANDS
         .iter()
         .copied()
         .chain(DIALOG_COMMANDS.iter().copied())
         .collect();
     let eff = Effective::build_for(&preset, &[layer], &known, Screen::Dialog)
-        .expect("el efectivo construye con la capa rebindeada");
+        .expect("the effective builds with the rebound layer");
     let mut resolver = Resolver::new(eff);
     let res = resolver.push(Chord::new(Mods::default(), KeyCode::Char('y')));
     assert_eq!(
@@ -330,37 +330,37 @@ fn una_capa_de_usuario_rebindea_dialog_y_dialog_action_lo_obedece() {
     let Resolution::Run { command: cmd, .. } = res else {
         unreachable!()
     };
-    // El comando RESUELTO (no la tecla) decide el desenlace: `y` ahora
-    // deniega la aprobación de agente, dato puro, sin tocar código.
+    // The RESOLVED command (not the key) decides the outcome: `y` now
+    // denies the agent approval, pure data, with no code touched.
     assert_eq!(
         dialog_action(&approval(), &cmd),
         Some(DialogOutcome::Cancelled)
     );
 }
 
-/// review MINOR-3 (H1 close): `ALLOW_APPROVAL` excluye `dialog.confirm` A
-/// PROPÓSITO — de fábrica, Enter NUNCA aprueba una mutación de agente
-/// (decisión 2 del plan H1). Pero si un usuario rebindea EXPLÍCITAMENTE
-/// `enter` a `dialog.approve` en su PROPIA capa de keymap, Enter SÍ aprueba
-/// — este test documenta ese agujero como ACEPTADO, no como bug: la
-/// semántica de seguridad sigue viviendo en `dialog_action` (el comando
-/// RESUELTO decide, nunca la tecla física), y llegar aquí exige una capa de
-/// usuario escrita a mano — ningún preset de fábrica la trae — así que es
-/// consentimiento informado, no una tecla que se dispara sola.
+/// review MINOR-3 (H1 close): `ALLOW_APPROVAL` excludes `dialog.confirm` ON
+/// PURPOSE — out of the box, Enter NEVER approves an agent mutation (H1
+/// plan decision 2). But if a user EXPLICITLY rebinds `enter` to
+/// `dialog.approve` in their OWN keymap layer, Enter DOES approve — this
+/// test documents that hole as ACCEPTED, not as a bug: security semantics
+/// still live in `dialog_action` (the RESOLVED command decides, never the
+/// physical key), and reaching this requires a hand-written user layer — no
+/// factory preset brings it — so it is informed consent, not a key firing
+/// on its own.
 #[test]
-fn rebind_explicito_de_enter_a_approve_es_consentimiento_informado() {
+fn explicit_rebind_of_enter_to_approve_is_informed_consent() {
     let preset = presets_orthodox();
     let layer = parse_keymap(
         "[dialog]\nprepend_keymap = [{ on = [\"enter\"], run = \"dialog.approve\" }]\n",
     )
-    .expect("capa válida");
+    .expect("valid layer");
     let known: Vec<&str> = COMMANDS
         .iter()
         .copied()
         .chain(DIALOG_COMMANDS.iter().copied())
         .collect();
     let eff = Effective::build_for(&preset, &[layer], &known, Screen::Dialog)
-        .expect("el efectivo construye con la capa rebindeada");
+        .expect("the effective builds with the rebound layer");
     let mut resolver = Resolver::new(eff);
     let res = resolver.push(Chord::new(Mods::default(), KeyCode::Enter));
     assert_eq!(
@@ -376,22 +376,22 @@ fn rebind_explicito_de_enter_a_approve_es_consentimiento_informado() {
     assert_eq!(
         dialog_action(&approval(), &cmd),
         Some(DialogOutcome::Confirmed),
-        "un rebind EXPLÍCITO de enter a dialog.approve sí aprueba: consentimiento informado"
+        "an EXPLICIT rebind of enter to dialog.approve does approve: informed consent"
     );
 }
 
-/// El preset `orthodox` embebido, ya parseado (helper del test de
-/// integración anterior).
+/// The embedded `orthodox` preset, already parsed (helper for the previous
+/// integration test).
 fn presets_orthodox() -> norte_tui::keymap::KeymapFile {
     norte_tui::keymap::presets()
         .into_iter()
         .find(|(n, _)| *n == "orthodox")
-        .expect("preset orthodox")
+        .expect("orthodox preset")
         .1
 }
 
-/// App de dos panes sobre el mismo dir, sin entradas (fixture de los tests
-/// de estado M4-IA).
+/// A two-pane App over the same dir, with no entries (fixture for the
+/// M4-IA state tests).
 fn app() -> norte_tui::app::App {
     use norte_tui::app::{App, Pane};
     let dir = vp("file:///x");
@@ -401,14 +401,14 @@ fn app() -> norte_tui::app::App {
     )
 }
 
-/// Plan de rename IA con una pareja y un plan de LOTE aplicable (fixture
-/// del test de allowlist: el caso en que confirmar SÍ tiene qué mandar).
+/// An AI rename plan with one pair and an applicable BATCH plan (allowlist
+/// test fixture: the case where confirming DOES have something to submit).
 fn ai_plan() -> Modal {
     ai_plan_con(batch_plan(true))
 }
 
-/// El mismo fixture con el plan de lote que se le pase: `None` = todavía en
-/// vuelo, `Some(no ejecutable)` = el core lo paró con veredictos.
+/// The same fixture with whatever batch plan is passed in: `None` = still
+/// in flight, `Some(not executable)` = the core stopped it with verdicts.
 fn ai_plan_con(plan: norte_frontend::BatchPlan) -> Modal {
     Modal::AiRenamePlan {
         dir: vp("file:///x"),
@@ -417,14 +417,14 @@ fn ai_plan_con(plan: norte_frontend::BatchPlan) -> Modal {
             to: "b".into(),
         }],
         offset: 0,
-        // Una sola pareja: se ve entera en cuanto el modal abre.
+        // A single pair: it is seen whole as soon as the modal opens.
         seen: norte_frontend::AI_RENAME_PAIR_LIMIT,
         plan,
     }
 }
 
-/// Plan de lote de `fs.rename_batch_plan` con el veredicto que se pida, ya
-/// en el estado «el core contestó».
+/// A `fs.rename_batch_plan` batch plan with whatever verdict is asked for,
+/// already in the "the core answered" state.
 fn batch_plan(executable: bool) -> norte_frontend::BatchPlan {
     norte_frontend::BatchPlan::Ready(Box::new(norte_proto::methods::FsRenameBatchPlanResult {
         steps: Vec::new(),
@@ -434,13 +434,13 @@ fn batch_plan(executable: bool) -> norte_frontend::BatchPlan {
     }))
 }
 
-/// M4-IA: el prompt de instrucción sigue la disciplina de `Mkdir` (#104
-/// review MINOR-1) — confirmar NO cierra; `ai_rename_set_error` deja un
-/// diagnóstico SÍNCRONO conservando lo tecleado (audit INFO-7: en el flujo
-/// real los fallos del modelo llegan async con el prompt ya cerrado y van
-/// a la barra); solo `ai_rename_submitted` cierra.
+/// M4-IA: the instruction prompt follows `Mkdir`'s discipline (#104 review
+/// MINOR-1) — confirming does NOT close; `ai_rename_set_error` leaves a
+/// SYNCHRONOUS diagnostic while keeping what was typed (audit INFO-7: in
+/// the real flow model failures arrive async with the prompt already closed
+/// and go to the bar); only `ai_rename_submitted` closes it.
 #[test]
-fn ai_rename_instruccion_conserva_texto_tras_fallo() {
+fn ai_rename_instruction_keeps_text_after_failure() {
     let mut app = app();
     app.open_ai_rename();
     for c in "kebab".chars() {
@@ -453,16 +453,16 @@ fn ai_rename_instruccion_conserva_texto_tras_fallo() {
             assert_eq!(instruction, "kebab");
             assert_eq!(error.as_deref(), Some("boom"));
         }
-        other => panic!("modal inesperado: {other:?}"),
+        other => panic!("unexpected modal: {other:?}"),
     }
     app.ai_rename_submitted();
     assert!(app.modal.is_none());
 }
 
-/// M4-IA: confirmar con la instrucción vacía no devuelve nada y deja el
-/// diagnóstico bajo el campo (el modal sigue abierto).
+/// M4-IA: confirming with an empty instruction returns nothing and leaves
+/// the diagnostic under the field (the modal stays open).
 #[test]
-fn ai_rename_confirm_vacio_no_devuelve_y_deja_diagnostico() {
+fn ai_rename_confirm_empty_does_not_return_and_leaves_a_diagnostic() {
     let mut app = app();
     app.open_ai_rename();
     assert!(app.ai_rename_confirm().is_none());
@@ -472,46 +472,45 @@ fn ai_rename_confirm_vacio_no_devuelve_y_deja_diagnostico() {
     ));
 }
 
-/// M4-IA: `AiRenamePlan` es una superficie de decisión sobre contenido
-/// iniciado y REVISADO por el humano — usa `ALLOW_CONFIRM` (Enter confirma,
-/// como un delete), NO el allowlist de aprobación de agentes: que
-/// `dialog.confirm` confirme aquí es exactamente lo que `ALLOW_APPROVAL`
-/// prohíbe (pin `aprobacion_ignora_confirm`), y los comandos de colisión
-/// son inertes. El prompt de instrucción es texto libre: jamás pasa por
-/// `dialog_action`.
+/// M4-IA: `AiRenamePlan` is a decision surface over content the human
+/// initiated and REVIEWED — it uses `ALLOW_CONFIRM` (Enter confirms, like a
+/// delete), NOT the agent-approval allowlist: `dialog.confirm` confirming
+/// here is exactly what `ALLOW_APPROVAL` forbids (pin
+/// `approval_ignores_confirm`), and collision commands are inert. The
+/// instruction prompt is free text: it never goes through `dialog_action`.
 #[test]
-fn plan_ia_confirma_como_confirmacion_no_como_aprobacion_de_agente() {
+fn ai_plan_confirms_as_a_confirmation_not_as_an_agent_approval() {
     for cmd in ["dialog.confirm", "dialog.approve"] {
         assert_eq!(
             dialog_action(&ai_plan(), cmd),
             Some(DialogOutcome::Confirmed),
-            "comando {cmd}"
+            "command {cmd}"
         );
     }
     for cmd in ["dialog.cancel", "dialog.deny"] {
         assert_eq!(
             dialog_action(&ai_plan(), cmd),
             Some(DialogOutcome::Cancelled),
-            "comando {cmd}"
+            "command {cmd}"
         );
     }
-    // Fuera del allowlist de ESTE modal: inerte. up/down INCLUIDOS (audit
-    // MAJOR-3): el scroll de la ventana lo enruta el run loop, jamás es un
-    // desenlace — scrollear no confirma ni cancela.
+    // Outside THIS modal's allowlist: inert. up/down INCLUDED (audit
+    // MAJOR-3): the window's scroll is routed by the run loop, it is never
+    // an outcome — scrolling neither confirms nor cancels.
     assert_eq!(dialog_action(&ai_plan(), "dialog.overwrite"), None);
     assert_eq!(dialog_action(&ai_plan(), "dialog.up"), None);
     assert_eq!(dialog_action(&ai_plan(), "dialog.down"), None);
 }
 
-/// §17: confirmar está DESHABILITADO sin un plan de lote APLICABLE — sin
-/// plan no hay `plan_hash` aprobado que mandar, y con veredictos el core no
-/// ejecutaría nada. Cancelar sigue vivo en los dos casos: un modal del que
-/// no se pudiera salir sería peor que uno que no aplica.
+/// §17: confirming is DISABLED with no APPLICABLE batch plan — with no
+/// plan there is no approved `plan_hash` to submit, and with verdicts the
+/// core would execute nothing. Cancel is still live in both cases: a modal
+/// you could not leave would be worse than one that does not apply.
 ///
-/// (Mutación de control: quitar el gate de `dialog_action` pone
-/// `Some(Confirmed)` en las dos primeras vueltas y rompe este test.)
+/// (Control mutation: removing `dialog_action`'s gate puts `Some(Confirmed)`
+/// on the first two rounds and breaks this test.)
 #[test]
-fn plan_ia_no_confirma_sin_un_lote_aplicable() {
+fn ai_plan_does_not_confirm_without_an_applicable_batch() {
     for plan in [
         norte_frontend::BatchPlan::Pending,
         norte_frontend::BatchPlan::Failed,
@@ -522,18 +521,18 @@ fn plan_ia_no_confirma_sin_un_lote_aplicable() {
             assert_eq!(
                 dialog_action(&modal, cmd),
                 None,
-                "{cmd} no puede confirmar un lote que no se puede ejecutar: {modal:?}"
+                "{cmd} cannot confirm a batch that cannot be executed: {modal:?}"
             );
         }
         for cmd in ["dialog.cancel", "dialog.deny"] {
             assert_eq!(
                 dialog_action(&modal, cmd),
                 Some(DialogOutcome::Cancelled),
-                "cancelar SIEMPRE vale: {modal:?}"
+                "cancel ALWAYS works: {modal:?}"
             );
         }
     }
-    // Texto libre (como Mkdir/MarkPattern): el run loop lo intercepta ANTES.
+    // Free text (like Mkdir/MarkPattern): the run loop intercepts it BEFORE.
     let prompt = Modal::AiRenameInstruction {
         instruction: String::new(),
         error: None,
@@ -542,51 +541,51 @@ fn plan_ia_no_confirma_sin_un_lote_aplicable() {
     assert_eq!(dialog_action(&prompt, "dialog.approve"), None);
 }
 
-/// §17: la respuesta de `fs.rename_batch_plan` llega ASÍNCRONA (el modal
-/// abre en `Pending` y se rellena), así que tiene que aterrizar en el modal
-/// abierto — y solo si ese modal sigue esperando. Una respuesta jamás pisa un
-/// plan ya resuelto, y sin modal no aterriza en ninguna parte.
+/// §17: `fs.rename_batch_plan`'s answer arrives ASYNCHRONOUSLY (the modal
+/// opens `Pending` and gets filled in), so it has to land on the open modal
+/// — and only if that modal is still waiting. An answer never overwrites an
+/// already-resolved plan, and with no modal it lands nowhere.
 ///
-/// (Mutación de control: quitar el guard de `Pending` hace que la segunda
-/// vuelta sobrescriba y rompe este test.)
+/// (Control mutation: removing the `Pending` guard makes the second round
+/// overwrite and breaks this test.)
 #[test]
-fn el_plan_del_lote_solo_rellena_al_modal_que_lo_esperaba() {
+fn the_batch_plan_only_fills_the_modal_that_was_waiting_for_it() {
     let mut app = app();
-    // Sin modal: la respuesta se tira, y lo DICE.
+    // No modal: the answer is dropped, and it SAYS SO.
     assert!(!app.settle_ai_batch_plan(&batch_plan(true)));
 
     app.modal = Some(ai_plan_con(norte_frontend::BatchPlan::Pending));
     assert!(app.settle_ai_batch_plan(&batch_plan(true)));
     let Some(Modal::AiRenamePlan { plan, .. }) = &app.modal else {
-        panic!("modal inesperado: {:?}", app.modal);
+        panic!("unexpected modal: {:?}", app.modal);
     };
-    assert!(plan.confirmable(), "el plan aterrizó: {plan:?}");
+    assert!(plan.confirmable(), "the plan landed: {plan:?}");
 
-    // Ya resuelto: una segunda respuesta NO lo pisa.
+    // Already resolved: a second answer does NOT overwrite it.
     assert!(!app.settle_ai_batch_plan(&norte_frontend::BatchPlan::Failed));
     let Some(Modal::AiRenamePlan { plan, .. }) = &app.modal else {
-        panic!("modal inesperado: {:?}", app.modal);
+        panic!("unexpected modal: {:?}", app.modal);
     };
     assert!(
         plan.confirmable(),
-        "una respuesta tardía no degrada: {plan:?}"
+        "a late answer does not degrade it: {plan:?}"
     );
 
-    // Otro modal encima: tampoco (el run loop lo busca en su stash).
+    // Another modal on top: also not (the run loop looks for it in its stash).
     app.modal = Some(confirm());
     assert!(!app.settle_ai_batch_plan(&batch_plan(true)));
 }
 
-/// Un plan que no se ha LEÍDO no se puede aprobar.
+/// A plan that has not been READ cannot be approved.
 ///
-/// El terminal solo exigía que el core lo aceptara, así que se podía firmar
-/// un plan de doscientos renombrados habiendo visto los diez primeros — y los
-/// que importan pueden estar en la fila ciento ochenta. La ventana ya lo
-/// exigía: la misma pregunta con dos respuestas, en la superficie donde más
-/// caro sale.
+/// The terminal only required the core to accept it, so a plan with two
+/// hundred renames could be signed off after seeing the first ten — and the
+/// ones that matter could be on row one hundred eighty. The window already
+/// required it: the same question with two answers, on the surface where
+/// it costs the most.
 #[test]
-fn un_plan_sin_leer_no_se_aprueba() {
-    let largo: Vec<norte_proto::methods::AiRenameEntry> = (1..=40)
+fn an_unread_plan_is_not_approved() {
+    let long: Vec<norte_proto::methods::AiRenameEntry> = (1..=40)
         .map(|i| norte_proto::methods::AiRenameEntry {
             from: format!("f{i}"),
             to: format!("t{i}"),
@@ -595,40 +594,46 @@ fn un_plan_sin_leer_no_se_aprueba() {
     let mut app = app();
     app.modal = Some(Modal::AiRenamePlan {
         dir: vp("file:///x"),
-        entries: largo.clone(),
+        entries: long.clone(),
         offset: 0,
         seen: norte_frontend::AI_RENAME_PAIR_LIMIT,
         plan: batch_plan(true),
     });
     assert_eq!(
-        dialog_action(app.modal.as_ref().expect("hay modal"), "dialog.confirm"),
+        dialog_action(
+            app.modal.as_ref().expect("there is a modal"),
+            "dialog.confirm"
+        ),
         None,
-        "el core lo acepta, pero el lector se ha quedado en la primera ventana"
+        "the core accepts it, but the reader stayed on the first window"
     );
 
-    // Bajar hasta el final: la marca de agua sube, y volver arriba NO
-    // des-lee lo ya leído.
-    for _ in 0..largo.len() {
+    // Scroll all the way down: the watermark rises, and going back up does
+    // NOT un-read what was already read.
+    for _ in 0..long.len() {
         app.ai_plan_scroll(true);
     }
-    for _ in 0..largo.len() {
+    for _ in 0..long.len() {
         app.ai_plan_scroll(false);
     }
     assert_eq!(
-        dialog_action(app.modal.as_ref().expect("hay modal"), "dialog.confirm"),
+        dialog_action(
+            app.modal.as_ref().expect("there is a modal"),
+            "dialog.confirm"
+        ),
         Some(DialogOutcome::Confirmed),
-        "visto entero, y volver arriba no lo des-lee"
+        "seen in full, and going back up does not un-read it"
     );
 }
 
-/// Audit MAJOR-3: el scroll del plan clampa la ventana a `[0, len - 5]`
-/// (jamás pasa de largo ni se hace negativo) y avanza/retrocede de una en
-/// una con numeración estable.
+/// Audit MAJOR-3: the plan's scroll clamps the window to `[0, len - 5]`
+/// (never overshoots or goes negative) and advances/retreats one at a time
+/// with stable numbering.
 #[test]
-fn scroll_del_plan_clampa_en_ambos_extremos() {
+fn the_plans_scroll_clamps_at_both_ends() {
     let offset_de = |app: &norte_tui::app::App| match &app.modal {
         Some(Modal::AiRenamePlan { offset, .. }) => *offset,
-        other => panic!("modal inesperado: {other:?}"),
+        other => panic!("unexpected modal: {other:?}"),
     };
     let mut app = app();
     app.modal = Some(Modal::AiRenamePlan {
@@ -644,20 +649,20 @@ fn scroll_del_plan_clampa_en_ambos_extremos() {
         plan: batch_plan(true),
     });
     app.ai_plan_scroll(false);
-    assert_eq!(offset_de(&app), 0, "no retrocede bajo cero");
+    assert_eq!(offset_de(&app), 0, "it does not go below zero");
     for _ in 0..10 {
         app.ai_plan_scroll(true);
     }
-    assert_eq!(offset_de(&app), 2, "clampa en len - ventana (7 - 5)");
+    assert_eq!(offset_de(&app), 2, "clamps at len - window (7 - 5)");
     app.ai_plan_scroll(false);
     assert_eq!(offset_de(&app), 1);
 }
 
-/// Las aprobaciones hacen cola como las colisiones (jamás pisan un modal
-/// abierto) y tienen PRIORIDAD sobre ellas: una aprobación vence por TTL en
-/// el daemon; una colisión espera lo que haga falta.
+/// Approvals queue like collisions (they never overwrite an open modal) and
+/// have PRIORITY over them: an approval expires by TTL on the daemon; a
+/// collision waits as long as it takes.
 #[test]
-fn las_aprobaciones_hacen_cola_con_prioridad_sobre_colisiones() {
+fn approvals_queue_with_priority_over_collisions() {
     use norte_tui::app::{App, Pane};
     let dir = vp("file:///x");
     let mut app = App::new(
@@ -671,11 +676,15 @@ fn las_aprobaciones_hacen_cola_con_prioridad_sobre_colisiones() {
     app.pending_collisions.push_back(retry());
     app.pending_approvals.push_back(req);
 
-    // Con un modal abierto, nada cambia.
+    // With a modal open, nothing changes.
     app.open_next_pending();
-    assert_eq!(app.modal, Some(confirm()), "el modal abierto no se pisa");
+    assert_eq!(
+        app.modal,
+        Some(confirm()),
+        "the open modal is not overwritten"
+    );
 
-    // Al cerrarse, la APROBACIÓN sale antes que la colisión encolada primero.
+    // Once closed, the APPROVAL comes out before the collision queued first.
     app.modal = None;
     app.open_next_pending();
     assert!(matches!(app.modal, Some(Modal::ApproveAgentOp { .. })));
@@ -684,11 +693,11 @@ fn las_aprobaciones_hacen_cola_con_prioridad_sobre_colisiones() {
     assert!(matches!(app.modal, Some(Modal::Collision { .. })));
     app.modal = None;
     app.open_next_pending();
-    assert_eq!(app.modal, None, "colas vacías");
+    assert_eq!(app.modal, None, "empty queues");
 }
 
 #[test]
-fn las_colisiones_hacen_cola_y_jamas_pisan_un_modal() {
+fn collisions_queue_and_never_step_on_a_modal() {
     use norte_tui::app::{App, Pane};
     let dir = vp("file:///x");
     let mut app = App::new(
@@ -699,11 +708,15 @@ fn las_colisiones_hacen_cola_y_jamas_pisan_un_modal() {
     app.pending_collisions.push_back(retry());
     app.pending_collisions.push_back(retry());
 
-    // Con un modal abierto, nada cambia.
+    // With a modal open, nothing changes.
     app.open_next_collision();
-    assert_eq!(app.modal, Some(confirm()), "el modal abierto no se pisa");
+    assert_eq!(
+        app.modal,
+        Some(confirm()),
+        "the open modal is not overwritten"
+    );
 
-    // Al cerrarse, las colisiones salen en orden.
+    // Once closed, the collisions come out in order.
     app.modal = None;
     app.open_next_collision();
     assert!(matches!(app.modal, Some(Modal::Collision { .. })));
@@ -712,11 +725,10 @@ fn las_colisiones_hacen_cola_y_jamas_pisan_un_modal() {
     assert!(matches!(app.modal, Some(Modal::Collision { .. })));
     app.modal = None;
     app.open_next_collision();
-    assert_eq!(app.modal, None, "cola vacía");
+    assert_eq!(app.modal, None, "empty queue");
 }
 
-/// Hits semánticos de fixture (M4-IA-2): `n` paths distintos, score
-/// descendente.
+/// Semantic hits fixture (M4-IA-2): `n` distinct paths, descending score.
 fn semantic_hits(n: u16) -> Modal {
     Modal::SemanticHits {
         hits: (1..=n)
@@ -730,11 +742,11 @@ fn semantic_hits(n: u16) -> Modal {
     }
 }
 
-/// M4-IA-2: el prompt de consulta sigue la disciplina del de instrucción IA
-/// — confirmar NO cierra (devuelve la consulta trimmed); solo
-/// `semantic_submitted` cierra tras spawnear.
+/// M4-IA-2: the query prompt follows the AI instruction one's discipline —
+/// confirming does NOT close (returns the trimmed query); only
+/// `semantic_submitted` closes it after spawning.
 #[test]
-fn semantic_query_modal_edita_y_confirma() {
+fn semantic_query_modal_edits_and_confirms() {
     let mut app = app();
     app.open_semantic_search();
     for c in "facturas 2024".chars() {
@@ -743,17 +755,17 @@ fn semantic_query_modal_edita_y_confirma() {
     assert_eq!(app.semantic_confirm().as_deref(), Some("facturas 2024"));
     assert!(
         matches!(app.modal, Some(Modal::SemanticQuery { .. })),
-        "confirmar no cierra: cierra el submit"
+        "confirming does not close it: the submit does"
     );
     app.semantic_submitted();
     assert!(app.modal.is_none());
 }
 
-/// M4-IA-2: confirmar con la consulta vacía no devuelve nada y deja el
-/// diagnóstico bajo el campo (el modal sigue abierto); `semantic_set_error`
-/// conserva lo tecleado.
+/// M4-IA-2: confirming with an empty query returns nothing and leaves the
+/// diagnostic under the field (the modal stays open); `semantic_set_error`
+/// keeps what was typed.
 #[test]
-fn semantic_query_vacia_no_confirma() {
+fn an_empty_semantic_query_does_not_confirm() {
     let mut app = app();
     app.open_semantic_search();
     assert!(app.semantic_confirm().is_none());
@@ -768,54 +780,54 @@ fn semantic_query_vacia_no_confirma() {
             assert_eq!(query, "q");
             assert_eq!(error.as_deref(), Some("boom"));
         }
-        other => panic!("modal inesperado: {other:?}"),
+        other => panic!("unexpected modal: {other:?}"),
     }
 }
 
-/// M4-IA-2: el cursor de hits clampa en ambos extremos y la VENTANA le
-/// sigue (baja al pasar del borde inferior, sube al pasar del superior).
+/// M4-IA-2: the hits cursor clamps at both ends and the WINDOW follows it
+/// (scrolls down past the bottom edge, up past the top one).
 #[test]
 fn semantic_hits_cursor_scroll_clampa() {
     let state = |app: &norte_tui::app::App| match &app.modal {
         Some(Modal::SemanticHits { offset, cursor, .. }) => (*offset, *cursor),
-        other => panic!("modal inesperado: {other:?}"),
+        other => panic!("unexpected modal: {other:?}"),
     };
     let mut app = app();
     app.modal = Some(semantic_hits(12));
     app.semantic_cursor(false);
-    assert_eq!(state(&app), (0, 0), "no retrocede bajo cero");
+    assert_eq!(state(&app), (0, 0), "it does not go below zero");
     for _ in 0..99 {
         app.semantic_cursor(true);
     }
     assert_eq!(
         state(&app),
         (2, 11),
-        "cursor clampa en len-1 y la ventana lo sigue (12 - 10)"
+        "the cursor clamps at len-1 and the window follows it (12 - 10)"
     );
     for _ in 0..99 {
         app.semantic_cursor(false);
     }
-    assert_eq!(state(&app), (0, 0), "la ventana vuelve a subir con él");
+    assert_eq!(state(&app), (0, 0), "the window scrolls back up with it");
 }
 
-/// M4-IA-2: `SemanticHits` confirma como decisión (`ALLOW_CONFIRM`, Enter
-/// navega) y up/down son INERTES para `dialog_action` (el run loop enruta el
-/// cursor, jamás es un desenlace); el prompt de consulta es texto libre y
-/// nunca pasa por aquí.
+/// M4-IA-2: `SemanticHits` confirms as a decision (`ALLOW_CONFIRM`, Enter
+/// navigates) and up/down are INERT for `dialog_action` (the run loop
+/// routes the cursor, it is never an outcome); the query prompt is free
+/// text and never goes through here.
 #[test]
-fn semantic_hits_confirma_como_decision_y_cursor_es_inerte() {
+fn semantic_hits_confirms_as_a_decision_and_the_cursor_is_inert() {
     for cmd in ["dialog.confirm", "dialog.approve"] {
         assert_eq!(
             dialog_action(&semantic_hits(1), cmd),
             Some(DialogOutcome::Confirmed),
-            "comando {cmd}"
+            "command {cmd}"
         );
     }
     for cmd in ["dialog.cancel", "dialog.deny"] {
         assert_eq!(
             dialog_action(&semantic_hits(1), cmd),
             Some(DialogOutcome::Cancelled),
-            "comando {cmd}"
+            "command {cmd}"
         );
     }
     assert_eq!(dialog_action(&semantic_hits(1), "dialog.up"), None);

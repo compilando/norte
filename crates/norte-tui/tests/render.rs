@@ -1,5 +1,5 @@
-//! Smoke test del render: el frame pinta ambos panes, resalta el foco y
-//! marca los nombres no-UTF8. Snapshot tests de verdad (insta) = fase 10.
+//! Render smoke test: the frame paints both panes, highlights focus and
+//! marks non-UTF8 names. Real snapshot tests (insta) = phase 10.
 
 use norte_proto::{Entry, EntryKind, Segment, VPath};
 use norte_tui::app::{App, Pane, sort_entries};
@@ -8,30 +8,30 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 
 fn vp(wire: &str) -> VPath {
-    VPath::parse(wire).expect("wire válido")
+    VPath::parse(wire).expect("valid wire")
 }
 
-/// H1 T3 (#24): los hints de los overlays se precomputan del efectivo
-/// `dialog` vigente (`main.rs`, `DialogHints::build`). Este test construye
-/// `App` directamente (sin pasar por `main`), así que replica el MISMO
-/// cómputo con el preset `orthodox` real.
+/// H1 T3 (#24): overlay hints are precomputed from the effective `dialog`
+/// in force (`main.rs`, `DialogHints::build`). This test builds `App`
+/// directly (without going through `main`), so it replicates the SAME
+/// computation with the real `orthodox` preset.
 fn default_dialog_hints() -> norte_tui::hints::DialogHints {
     use norte_tui::keymap::{COMMANDS, DIALOG_COMMANDS, Effective, Screen, presets};
     let (_, preset) = presets()
         .into_iter()
         .find(|(n, _)| *n == "orthodox")
-        .expect("preset orthodox");
+        .expect("orthodox preset");
     let known: Vec<&str> = COMMANDS
         .iter()
         .copied()
         .chain(DIALOG_COMMANDS.iter().copied())
         .collect();
-    let eff = Effective::build_for(&preset, &[], &known, Screen::Dialog).expect("dialog efectivo");
+    let eff = Effective::build_for(&preset, &[], &known, Screen::Dialog).expect("effective dialog");
     norte_tui::hints::DialogHints::build(&eff)
 }
 
 #[test]
-fn frame_pinta_panes_y_badge_no_utf8() {
+fn frame_paints_panes_and_non_utf8_badge() {
     let dir = vp("file:///casa");
     let mut entries = vec![
         Entry {
@@ -43,7 +43,7 @@ fn frame_pinta_panes_y_badge_no_utf8() {
         },
         Entry {
             attrs: std::collections::BTreeMap::new(),
-            // é en latin-1: no-UTF8 → lossy + badge.
+            // é in latin-1: non-UTF8 → lossy + badge.
             path: dir.join(Segment::new(vec![0xE9]).unwrap()),
             kind: EntryKind::File,
             size: Some(1),
@@ -53,27 +53,27 @@ fn frame_pinta_panes_y_badge_no_utf8() {
     sort_entries(&mut entries);
     let app = App::new(Pane::new(dir.clone(), entries), Pane::new(dir, Vec::new()));
 
-    let mut terminal = Terminal::new(TestBackend::new(60, 10)).expect("terminal de test");
+    let mut terminal = Terminal::new(TestBackend::new(60, 10)).expect("test terminal");
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
 
     let content = terminal.backend().to_string();
-    assert!(content.contains("/docs"), "dir con marcador: {content}");
+    assert!(content.contains("/docs"), "dir with marker: {content}");
     assert!(
         content.contains('\u{FFFD}') && content.contains("! "),
-        "no-UTF8 lossy Y con badge en prefijo: {content}"
+        "non-UTF8 lossy AND with a prefix badge: {content}"
     );
     assert!(
         content.contains("1/2"),
-        "posición del cursor en status: {content}"
+        "cursor position in status: {content}"
     );
 }
 
-/// #117-follow-up: una columna `plugin:` configurada en `[ui.columns]`
-/// pinta cabecera (etiqueta `plugin/columna` saneada) y celda (valor del
-/// side-map del pane, llegado por el fetch asíncrono); una entrada sin
-/// valor queda en blanco — jamás fabricado.
+/// #117-follow-up: a `plugin:` column configured in `[ui.columns]` paints a
+/// header (sanitized `plugin/column` label) and a cell (value from the
+/// pane's side-map, arrived through the async fetch); an entry with no
+/// value stays blank — never fabricated.
 #[test]
-fn columna_plugin_configurada_pinta_cabecera_y_celda() {
+fn configured_plugin_column_paints_header_and_cell() {
     let dir = vp("file:///x");
     let mut entries = vec![
         Entry {
@@ -105,10 +105,11 @@ fn columna_plugin_configurada_pinta_cabecera_y_celda() {
         dir.join(Segment::new(b"a.txt".to_vec()).unwrap()),
         "main".to_owned(),
     );
-    // Audit F3: un valor con RLO CRUDO metido directamente en el side-map
-    // (simulando un ingest que dejó de sanear) — el re-mask defensivo de
-    // `plugin_cell` es la última línea y debe verse en el FRAME (en
-    // ratatui un bidi crudo desaparece en silencio, no "se ve raro").
+    // Audit F3: a value with a RAW RLO stuck directly into the side-map
+    // (simulating an ingest that stopped sanitizing) — `plugin_cell`'s
+    // defensive re-mask is the last line and must show in the FRAME (in
+    // ratatui a raw bidi character disappears silently, it does not "look
+    // weird").
     per_path.insert(
         dir.join(Segment::new(b"b.txt".to_vec()).unwrap()),
         "x\u{202E}y".to_owned(),
@@ -122,21 +123,21 @@ fn columna_plugin_configurada_pinta_cabecera_y_celda() {
     let content = terminal.backend().to_string();
     assert!(
         content.contains("git/branch"),
-        "cabecera de la columna plugin visible: {content}"
+        "the plugin column's header is visible: {content}"
     );
     assert!(
         content.contains("main"),
-        "celda del side-map visible: {content}"
+        "the side-map's cell is visible: {content}"
     );
     assert!(
         !content.contains('\u{202E}') && content.contains('\u{FFFD}'),
-        "el RLO del valor hostil llega ENMASCARADO al frame: {content}"
+        "the hostile value's RLO reaches the frame MASKED: {content}"
     );
 }
 
-/// ADR 0006: la secuencia pendiente se pinta en la status bar.
+/// ADR 0006: the pending sequence paints in the status bar.
 #[test]
-fn la_secuencia_pendiente_se_ve_en_la_status_bar() {
+fn the_pending_sequence_shows_in_the_status_bar() {
     let dir = vp("file:///x");
     let mut app = App::new(
         Pane::new(dir.clone(), Vec::new()),
@@ -147,15 +148,15 @@ fn la_secuencia_pendiente_se_ve_en_la_status_bar() {
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
     assert!(
         terminal.backend().to_string().contains("[g …]"),
-        "el prefijo pendiente da feedback visual"
+        "the pending prefix gives visual feedback"
     );
 }
 
-/// #93: un contenedor con entradas omitidas de su índice lo señaliza en la
-/// status bar («N entradas omitidas») — un listado incompleto jamás es
-/// silencioso. `Some(0)`/`None` no pintan nada.
+/// #93: a container with entries omitted from its index flags it in the
+/// status bar ("N entries omitted") — an incomplete listing is never
+/// silent. `Some(0)`/`None` paint nothing.
 #[test]
-fn omitidas_del_contenedor_se_ven_en_la_status_bar() {
+fn container_omissions_show_in_the_status_bar() {
     let dir = vp("file:///x");
     let mut app = App::new(
         Pane::new(dir.clone(), Vec::new()),
@@ -167,26 +168,26 @@ fn omitidas_del_contenedor_se_ven_en_la_status_bar() {
     let with_badge = terminal.backend().to_string();
     assert!(
         with_badge.contains('3') && with_badge.contains("omit"),
-        "badge de omitidas visible: {with_badge}"
+        "the omitted badge is visible: {with_badge}"
     );
 
-    // Some(0) = contenedor indexado SIN omisiones: nada que señalizar.
+    // Some(0) = indexed container with NO omissions: nothing to flag.
     app.panes[0].begin_listing(dir, Vec::new(), false, Some(0));
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
     assert!(
         !terminal.backend().to_string().contains("omit"),
-        "sin omitidas no hay badge"
+        "with nothing omitted there is no badge"
     );
 }
 
-/// F3.1 de la auditoría: el badge va en PREFIJO porque al final moriría en
-/// el truncado por ancho — un nombre hostil LARGO en un pane estrecho debe
-/// seguir marcado.
+/// Audit F3.1: the badge goes as a PREFIX because at the end it would die
+/// in the width truncation — a LONG hostile name in a narrow pane must
+/// stay marked.
 #[test]
-fn badge_sobrevive_al_truncado_en_pane_estrecho() {
+fn badge_survives_truncation_in_a_narrow_pane() {
     let dir = vp("file:///x");
     let mut name = vec![b'x'; 200];
-    name.push(0xE9); // los bytes malos, al FINAL: fuera del ancho visible
+    name.push(0xE9); // the bad bytes, at the END: outside the visible width
     let entries = vec![Entry {
         attrs: std::collections::BTreeMap::new(),
         path: dir.join(Segment::new(name).unwrap()),
@@ -201,13 +202,13 @@ fn badge_sobrevive_al_truncado_en_pane_estrecho() {
     let content = terminal.backend().to_string();
     assert!(
         content.contains("!xxx") || content.contains("! xxx"),
-        "la marca es visible aunque el � truncado no lo sea: {content}"
+        "the mark is visible even though the truncated � is not: {content}"
     );
 }
 
-/// Fase 5: el panel de tasks pinta progreso vivo y el modal se superpone.
+/// Phase 5: the tasks panel paints live progress and the modal overlaps it.
 #[test]
-fn panel_de_tasks_y_modal_se_pintan() {
+fn tasks_panel_and_modal_are_painted() {
     use norte_tui::app::{Modal, TransferKind};
     let dir = vp("file:///x");
     let mut app = App::new(
@@ -231,18 +232,18 @@ fn panel_de_tasks_y_modal_se_pintan() {
     let content = terminal.backend().to_string();
     assert!(
         content.contains("destination exists"),
-        "mensaje por categoría visible: {content}"
+        "the message is visible by category: {content}"
     );
     assert!(
         content.contains("[o]") && content.contains("[r]"),
-        "el diálogo de colisión lista sus opciones: {content}"
+        "the collision dialog lists its options: {content}"
     );
 }
 
-/// M4-P5: F3 con preview de plugin pinta el indicador «via <plugin>» y las
-/// líneas de la salida del plugin (ya enmascaradas).
+/// M4-P5: F3 with a plugin preview paints the "via <plugin>" indicator and
+/// the plugin's output lines (already masked).
 #[test]
-fn viewer_pinta_indicador_via_plugin_y_sus_lineas() {
+fn viewer_paints_indicator_via_plugin_and_its_lines() {
     let _ = norte_i18n::force(norte_i18n::Lang::En);
     let dir = vp("file:///x");
     let mut app = App::new(
@@ -260,23 +261,23 @@ fn viewer_pinta_indicador_via_plugin_y_sus_lineas() {
     let content = terminal.backend().to_string();
     assert!(
         content.contains("via Markdown"),
-        "indicador del previewer visible: {content}"
+        "the previewer's indicator is visible: {content}"
     );
     assert!(
         content.contains("titulo") && content.contains("cuerpo"),
-        "las líneas del preview se pintan: {content}"
+        "the preview's lines paint: {content}"
     );
 }
 
-/// #101: un preview cuya decodificación host-side fue LOSSY pinta el aviso
-/// `[lossy decode]` junto al indicador «via …» (honestidad igual que el
-/// status de encoding del viewer crudo).
+/// #101: a preview whose host-side decoding was LOSSY paints the
+/// `[lossy decode]` notice next to the "via …" indicator (same honesty as
+/// the raw viewer's encoding status).
 #[test]
-fn viewer_preview_lossy_pinta_el_aviso() {
-    // Este test afirma los strings del corpus INGLÉS. Sin fijar el idioma
-    // resolvía por entorno (`LANG`), así que era verde en CI y rojo en
-    // cualquier máquina con `LANG=es_*` — la misma línea que el resto de
-    // los tests de render de este crate ya llevaba.
+fn viewer_preview_lossy_paints_the_warning() {
+    // This test asserts the ENGLISH corpus's strings. Without fixing the
+    // language it resolved from the environment (`LANG`), so it was green
+    // in CI and red on any machine with `LANG=es_*` — the same line the
+    // rest of this crate's render tests already carried.
     let _ = norte_i18n::force(norte_i18n::Lang::En);
     let dir = vp("file:///x");
     let mut app = App::new(
@@ -294,19 +295,19 @@ fn viewer_preview_lossy_pinta_el_aviso() {
     let content = terminal.backend().to_string();
     assert!(
         content.contains("via Markdown") && content.contains("lossy"),
-        "el aviso lossy acompaña al «via …»: {content}"
+        "the lossy notice accompanies the \"via …\": {content}"
     );
 }
 
-/// G3a (ADR 0037): un preview de plugin CON ESTILO (`SpanWire`, no ANSI-SGR)
-/// pinta con el COLOR DEL TEMA cuando el span trae `role`, y con el `fg`
-/// crudo cuando no — `role` GANA sobre `fg` si un span trae ambos (decisión
-/// 3 del ADR: el tema del usuario tiene precedencia sobre el color fijo de
-/// un plugin). Inspecciona el BUFFER de ratatui (como `theme_render.rs`),
-/// no solo el texto: la snapshot de texto no distingue "pintado con role"
-/// de "pintado con fg crudo".
+/// G3a (ADR 0037): a STYLED plugin preview (`SpanWire`, not ANSI-SGR) paints
+/// with the THEME'S COLOR when the span carries a `role`, and with the raw
+/// `fg` when it does not — `role` WINS over `fg` if a span carries both
+/// (ADR decision 3: the user's theme takes precedence over a plugin's fixed
+/// color). Inspects ratatui's BUFFER (like `theme_render.rs`), not just the
+/// text: the text snapshot cannot tell "painted with role" apart from
+/// "painted with raw fg".
 #[test]
-fn viewer_preview_styled_role_gana_a_fg_y_pinta_del_tema() {
+fn viewer_preview_styled_role_wins_over_fg_and_paints_from_the_theme() {
     use norte_proto::methods::SpanWire;
     use norte_theme::{ColorDepth, Theme};
     use norte_tui::theme::TuiTheme;
@@ -317,23 +318,24 @@ fn viewer_preview_styled_role_gana_a_fg_y_pinta_del_tema() {
         Pane::new(dir.clone(), Vec::new()),
         Pane::new(dir, Vec::new()),
     );
-    // Truecolor EXPLÍCITO (no `detect_depth()`, que depende del entorno del
-    // proceso de test — mismo criterio que `theme_render.rs`). El preset
-    // `default` fija `title = #5fafd7` (RGB 95,175,215): fuente única del
-    // color esperado, sin repetirlo a mano en dos sitios.
+    // EXPLICIT truecolor (not `detect_depth()`, which depends on the test
+    // process's environment — same criterion as `theme_render.rs`). The
+    // `default` preset sets `title = #5fafd7` (RGB 95,175,215): single
+    // source for the expected color, without repeating it by hand in two
+    // places.
     app.theme = TuiTheme::new(Theme::preset_default(), ColorDepth::Truecolor);
 
     let lines = vec![vec![
-        // Rol Y fg a la vez: el rol (Title, #5fafd7) debe ganar — el fg
-        // crudo (255,0,0) NUNCA debe llegar a pintarse.
+        // Role AND fg at once: the role (Title, #5fafd7) must win — the
+        // raw fg (255,0,0) must NEVER get painted.
         SpanWire {
             text: "AAA".to_owned(),
             role: Some("title".to_owned()),
             fg: Some([255, 0, 0]),
             bg: None,
         },
-        // Solo fg (y un fondo, 0.66.0): pinta el crudo tal cual, sin tema
-        // de por medio.
+        // Only fg (and a background, 0.66.0): paints the raw value as is,
+        // with no theme involved.
         SpanWire {
             text: "BBB".to_owned(),
             role: None,
@@ -354,45 +356,45 @@ fn viewer_preview_styled_role_gana_a_fg_y_pinta_del_tema() {
 
     assert!(
         cells.iter().any(|c| c.fg == Color::Rgb(0x5f, 0xaf, 0xd7)),
-        "el span con role=title pinta el AZUL del tema (title.fg)"
+        "the span with role=title paints the theme's BLUE (title.fg)"
     );
     assert!(
         !cells.iter().any(|c| c.fg == Color::Rgb(255, 0, 0)),
-        "el fg crudo (255,0,0) del span con role NUNCA se pinta: role gana"
+        "the raw fg (255,0,0) of the span with role NEVER paints: role wins"
     );
     assert!(
         cells.iter().any(|c| c.fg == Color::Rgb(0, 255, 0)),
-        "el span SIN role pinta su fg crudo tal cual"
+        "the span WITHOUT role paints its raw fg as is"
     );
     assert!(
         cells
             .iter()
             .any(|c| c.fg == Color::Rgb(0, 255, 0) && c.bg == Color::Rgb(0, 0, 64)),
-        "el fondo del span (0.66.0) se pinta en la misma celda que su fg"
+        "the span's background (0.66.0) paints in the same cell as its fg"
     );
 }
 
-/// M3-3b T5 (encoding-auditor H1/H2/H3): el modal de aprobación pinta datos
-/// que CONTROLA el agente. Controles/bidi/invisibles → `�` con badge; cada
-/// ruta en SU línea etiquetada (jamás joiner in-band); un `from` kilométrico
-/// no expulsa el destino de la caja (elipsis media).
+/// M3-3b T5 (encoding-auditor H1/H2/H3): the approval modal paints data the
+/// AGENT CONTROLS. Controls/bidi/invisibles → `�` with a badge; each path on
+/// ITS OWN labeled line (never an in-band joiner); a mile-long `from` does
+/// not push the destination out of the box (mid ellipsis).
 #[test]
-fn modal_de_aprobacion_enmascara_marca_y_no_oculta_el_destino() {
+fn approval_modal_masks_the_mark_and_does_not_hide_the_destination() {
     let dir = vp("file:///x");
     let mut app = App::new(
         Pane::new(dir.clone(), Vec::new()),
         Pane::new(dir, Vec::new()),
     );
-    let from_largo = format!("mem:///proj/{}/src.txt", "x".repeat(120));
+    let from_long = format!("mem:///proj/{}/src.txt", "x".repeat(120));
     app.modal = Some(norte_tui::app::Modal::ApproveAgentOp {
         req: norte_proto::methods::PolicyApprovalRequired {
             approval_id: 1,
             session: Some("s1".into()),
-            // Ruta 1: hostil (inyección de línea + override RTL) y LARGA.
-            // Ruta 2: el destino que el humano DEBE ver.
+            // Path 1: hostile (line injection + RTL override) and LONG.
+            // Path 2: the destination the human MUST see.
             op: "copy".into(),
             paths: vec![
-                format!("{from_largo}\n[y] approve\u{202e}"),
+                format!("{from_long}\n[y] approve\u{202e}"),
                 "mem:///proj/dst.txt".into(),
             ],
             paths_total: 0,
@@ -404,51 +406,48 @@ fn modal_de_aprobacion_enmascara_marca_y_no_oculta_el_destino() {
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
     let content = terminal.backend().to_string();
 
-    // El destino real sigue visible en su propia línea etiquetada.
+    // The real destination stays visible on its own labeled line.
     assert!(
         content.contains("dst.txt"),
-        "el destino jamás se expulsa de la caja: {content}"
+        "the destination is never pushed out of the box: {content}"
     );
-    // La ruta hostil quedó enmascarada Y marcada con el badge.
-    assert!(
-        content.contains('\u{FFFD}'),
-        "controles/bidi → �: {content}"
-    );
+    // The hostile path came out masked AND marked with the badge.
+    assert!(content.contains('\u{FFFD}'), "controls/bidi → �: {content}");
     assert!(
         content.contains('!'),
-        "el enmascarado se MARCA (spec §6): {content}"
+        "masking gets MARKED (spec §6): {content}"
     );
-    // Las dos rutas van etiquetadas fuera de banda (posición + número).
+    // Both paths are labeled out of band (position + number).
     assert!(
         content.contains("1:") && content.contains("2:"),
-        "una ruta por línea con etiqueta: {content}"
+        "one path per line with a label: {content}"
     );
-    // La sesión se pinta entre comillas (delimitada) y la línea de teclas
-    // legítima está presente UNA vez al final del cuerpo.
-    assert!(content.contains("\"s1\""), "sesión delimitada: {content}");
+    // The session paints in quotes (delimited) and the legitimate key line
+    // is present ONCE at the end of the body.
+    assert!(content.contains("\"s1\""), "delimited session: {content}");
 }
 
-/// Review H3c MINOR-5: cuántas rutas trae la petición lo elige el AGENTE, y el
-/// pie del modal tiene que PINTARSE de todas formas.
+/// Review H3c MINOR-5: how many paths the request carries is chosen by the
+/// AGENT, and the modal's footer has to PAINT regardless.
 ///
-/// El alto crecía con `paths.len()` sin tope y `centered` recorta contra el
-/// frame, así que las líneas de sobra no llegaban al buffer — incluida la
-/// ÚLTIMA, que bajo H3c es la única explicación de por qué las teclas del modal
-/// no responden. Se comprueba sobre el FRAME pintado (no sobre el texto): el
-/// defecto era del recorte, no del cuerpo.
+/// The height grew with `paths.len()` with no cap and `centered` clips
+/// against the frame, so the extra lines never reached the buffer —
+/// including the LAST one, which under H3c is the only explanation of why
+/// the modal's keys do not respond. Checked against the PAINTED FRAME (not
+/// the text): the defect was in the clipping, not the body.
 #[test]
-fn el_pie_del_modal_de_aprobacion_se_pinta_con_un_lote_gigante() {
+fn the_approval_modal_footer_is_painted_with_a_giant_batch() {
     let dir = vp("file:///x");
     let mut app = App::new(
         Pane::new(dir.clone(), Vec::new()),
         Pane::new(dir, Vec::new()),
     );
-    // Con una ayuda TAPÁNDOLO: el pie inerte es el aviso que no puede perderse.
+    // With help COVERING it: the inert footer is the notice that cannot be lost.
     app.help = Some(norte_tui::app::HelpView::new(
         norte_i18n::Lang::En,
         Vec::new(),
     ));
-    app.help.as_mut().expect("abierta").over_modal = true;
+    app.help.as_mut().expect("open").over_modal = true;
     app.dialog_hints = app.dialog_hints.with_modals_inert();
     app.modal = Some(norte_tui::app::Modal::ApproveAgentOp {
         req: norte_proto::methods::PolicyApprovalRequired {
@@ -468,36 +467,39 @@ fn el_pie_del_modal_de_aprobacion_se_pinta_con_un_lote_gigante() {
 
     assert!(
         content.contains(&norte_i18n::t("modal-hint-help-open")),
-        "el aviso de teclas inertes se pinta con 400 rutas: {content}"
+        "the inert-keys notice paints with 400 paths: {content}"
     );
     assert!(
         content.contains(&norte_i18n::t("modal-approval-title")),
-        "y la pregunta sigue a la vista: {content}"
+        "and the question stays visible: {content}"
     );
-    // La lista está ACOTADA y resumida: la cola no se pinta ni empuja nada.
-    assert!(!content.contains("f400"), "la cola no se pinta: {content}");
+    // The list is BOUNDED and summarized: the tail neither paints nor pushes anything.
+    assert!(
+        !content.contains("f400"),
+        "the tail does not paint: {content}"
+    );
     assert!(
         content.contains("390"),
-        "el resumen dice cuántas quedan fuera: {content}"
+        "the summary says how many are left out: {content}"
     );
 }
 
-/// M4-IA (doctrina encoding-auditor): el plan de rename IA pinta contenido
-/// del MODELO — controles/bidi → `�` con badge; un `from` kilométrico no
-/// expulsa el `to` de la caja (elipsis media); `→` fuera de banda al inicio
-/// de la línea del destino (jamás joiner in-band).
+/// M4-IA (encoding-auditor doctrine): the AI rename plan paints MODEL
+/// content — controls/bidi → `�` with a badge; a mile-long `from` does not
+/// push the `to` out of the box (mid ellipsis); an out-of-band `→` at the
+/// start of the destination's line (never an in-band joiner).
 #[test]
-fn modal_de_plan_ai_enmascara_y_no_oculta_el_destino() {
+fn ai_plan_modal_masks_and_does_not_hide_the_destination() {
     let dir = vp("file:///x");
     let mut app = App::new(
         Pane::new(dir.clone(), Vec::new()),
         Pane::new(dir.clone(), Vec::new()),
     );
-    let from_largo = format!("{}\u{202e}oculto.txt", "x".repeat(120));
+    let from_long = format!("{}\u{202e}oculto.txt", "x".repeat(120));
     app.modal = Some(norte_tui::app::Modal::AiRenamePlan {
         dir,
         entries: vec![norte_proto::methods::AiRenameEntry {
-            from: from_largo,
+            from: from_long,
             to: "destino-final.txt".into(),
         }],
         offset: 0,
@@ -517,27 +519,27 @@ fn modal_de_plan_ai_enmascara_y_no_oculta_el_destino() {
 
     assert!(
         content.contains("destino-final"),
-        "el destino jamás se expulsa de la caja: {content}"
+        "the destination is never pushed out of the box: {content}"
     );
     assert!(content.contains('\u{FFFD}'), "bidi → �: {content}");
     assert!(
         content.contains('!'),
-        "el enmascarado se MARCA (spec §6): {content}"
+        "masking gets MARKED (spec §6): {content}"
     );
     assert!(
         content.contains('→'),
-        "flecha fuera de banda en la línea del destino: {content}"
+        "out-of-band arrow on the destination's line: {content}"
     );
 }
 
-/// #325: el diálogo de contraseña pinta PUNTOS, no lo tecleado. Es el test
-/// que sostiene la promesa de la caja: quien mire la pantalla por encima del
-/// hombro no lee la credencial.
+/// #325: the password dialog paints DOTS, not what was typed. It is the
+/// test that upholds the box's promise: someone looking over your shoulder
+/// does not read the credential.
 ///
-/// (Mutación de control: pintar `input.expose()` en vez de los puntos hace
-/// que este test se ponga rojo por la primera aserción.)
+/// (Control mutation: painting `input.expose()` instead of the dots turns
+/// this test red on the first assertion.)
 #[test]
-fn el_dialogo_de_contrasena_pinta_puntos_y_no_el_texto() {
+fn the_password_dialog_paints_dots_and_not_the_text() {
     let _ = norte_i18n::force(norte_i18n::Lang::En);
     let dir = vp("file:///x");
     let mut app = App::new(
@@ -562,32 +564,36 @@ fn el_dialogo_de_contrasena_pinta_puntos_y_no_el_texto() {
 
     assert!(
         !content.contains("hunter2"),
-        "la contraseña jamás se pinta: {content}"
+        "the password is never painted: {content}"
     );
     assert!(
         content.contains(&"•".repeat(7)),
-        "un punto por carácter tecleado: {content}"
+        "one dot per typed character: {content}"
     );
-    assert!(content.contains("rosetta"), "y la conexión SÍ: {content}");
-    // Y sobre todo el DESTINO: un diálogo que solo dice «conexión: rosetta»
-    // no se puede contestar con criterio, porque ese nombre lo eligió un
-    // fichero que puede haberse editado (#325, hallazgo del revisor de
-    // seguridad).
+    assert!(
+        content.contains("rosetta"),
+        "and the connection IS: {content}"
+    );
+    // And above all the DESTINATION: a dialog that only says "connection:
+    // rosetta" cannot be answered with judgment, because that name was
+    // chosen by a file that may have been edited (#325, a security
+    // reviewer's finding).
     assert!(
         content.contains("s3.eu-west-1.amazonaws.com"),
-        "el destino se pinta: {content}"
+        "the destination paints: {content}"
     );
 }
 
-/// §17: un plan grande con veredictos hace el modal MÁS ALTO que el
-/// terminal, y `centered` lo recorta por ABAJO. La línea que dice que el
-/// lote NO se puede aplicar va arriba, pegada al dir, precisamente por eso:
-/// un recorte puede comerse la cola de las colisiones, jamás el veredicto.
+/// §17: a large plan with verdicts makes the modal TALLER than the
+/// terminal, and `centered` clips it from the BOTTOM. The line saying the
+/// batch CANNOT be applied goes at the top, right against the dir,
+/// precisely for that reason: a clip can eat the collisions' tail, never
+/// the verdict.
 ///
-/// (Mutación de control: mover el estado del lote al final del cuerpo — que
-/// es donde estaba— hace que este test no lo encuentre.)
+/// (Control mutation: moving the batch's status to the end of the body —
+/// which is where it used to be — makes this test not find it.)
 #[test]
-fn el_veredicto_del_lote_sobrevive_a_un_terminal_corto() {
+fn the_batch_verdict_survives_a_short_terminal() {
     let _ = norte_i18n::force(norte_i18n::Lang::En);
     let dir = vp("file:///x");
     let mut app = App::new(
@@ -604,7 +610,7 @@ fn el_veredicto_del_lote_sobrevive_a_un_terminal_corto() {
         .map(|i| norte_proto::methods::RenameCollision {
             pair_index: i,
             name: norte_proto::Segment::new(format!("t{}.txt", i + 1).into_bytes())
-                .expect("segmento"),
+                .expect("segment"),
             kind: norte_proto::methods::RenameCollisionKind::External,
         })
         .collect();
@@ -622,32 +628,31 @@ fn el_veredicto_del_lote_sobrevive_a_un_terminal_corto() {
             },
         )),
     });
-    // 14 filas: el modal pide 21 y no cabe.
+    // 14 rows: the modal asks for 21 and does not fit.
     let mut terminal = Terminal::new(TestBackend::new(80, 14)).expect("terminal");
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
     let content = terminal.backend().to_string();
 
     assert!(
         content.contains(&norte_i18n::t("modal-rename-batch-not-applicable")),
-        "el veredicto sobrevive al recorte: {content}"
+        "the verdict survives the clip: {content}"
     );
     assert!(
         !content.contains(&norte_i18n::t("modal-ai-rename-plan-hint")),
-        "y el pie jamás ofrece una tecla muda: {content}"
+        "and the footer never offers a dead key: {content}"
     );
 }
 
-/// Encoding audit H1: un chord hostil (`norte_testkit::corpus::
-/// hostile_chords`) ligado a `dialog.approve` desde una capa (el modelo
-/// de `./.norte/keymap.toml`, capa de PROYECTO sin trust) no debe
-/// sobrevivir crudo al pie del modal `ApproveAgentOp` — uno de los tres
-/// modales de SEGURIDAD (junto a `TrustHostKey`/`ConfirmDelete`-permanente)
-/// cuyo footer un RLO podría reordenar visualmente (cancel/confirm
-/// intercambiados aparentes). `DialogHints::build` se construye del
-/// efectivo hostil, exactamente como `main.rs` lo hace en el arranque/
-/// hot-reload real.
+/// Encoding audit H1: a hostile chord (`norte_testkit::corpus::
+/// hostile_chords`) bound to `dialog.approve` from a layer (the model for
+/// `./.norte/keymap.toml`, an untrusted PROJECT layer) must not survive raw
+/// in the `ApproveAgentOp` modal's footer — one of the three SECURITY
+/// modals (along with `TrustHostKey`/permanent `ConfirmDelete`) whose
+/// footer an RLO could visually reorder (apparent cancel/confirm swap).
+/// `DialogHints::build` is built from the hostile effective, exactly as
+/// `main.rs` does at real startup/hot-reload.
 #[test]
-fn footer_de_aprobacion_enmascara_chord_hostil_de_una_capa() {
+fn approval_footer_masks_a_layers_hostile_chord() {
     use norte_tui::keymap::{COMMANDS, DIALOG_COMMANDS, Effective, Screen, parse_keymap, presets};
 
     let dir = vp("file:///x");
@@ -659,7 +664,7 @@ fn footer_de_aprobacion_enmascara_chord_hostil_de_una_capa() {
     let (_, preset) = presets()
         .into_iter()
         .find(|(n, _)| *n == "orthodox")
-        .expect("preset orthodox");
+        .expect("orthodox preset");
     let known: Vec<&str> = COMMANDS
         .iter()
         .copied()
@@ -676,12 +681,12 @@ fn footer_de_aprobacion_enmascara_chord_hostil_de_una_capa() {
         );
         let layer = parse_keymap(&layer_src).unwrap();
         let eff = Effective::build_for(&preset, &[layer], &known, Screen::Dialog)
-            .unwrap_or_else(|e| panic!("[{}] efectivo dialog: {e}", hazard.id));
+            .unwrap_or_else(|e| panic!("[{}] effective dialog: {e}", hazard.id));
         app.dialog_hints = norte_tui::hints::DialogHints::build(&eff);
         assert!(
             app.dialog_hints.approval.contains('\u{FFFD}'),
-            "[{}] precondición: el hint hostil debe enmascararse ANTES de \
-             pintar (helper de norte_encoding, no un accidente del render)",
+            "[{}] precondition: the hostile hint must be masked BEFORE \
+             painting (norte_encoding helper, not a render accident)",
             hazard.id
         );
 
@@ -703,30 +708,30 @@ fn footer_de_aprobacion_enmascara_chord_hostil_de_una_capa() {
 
         assert!(
             content.contains('\u{FFFD}'),
-            "[{}] el pie del modal de aprobación debe llevar U+FFFD: {content}",
+            "[{}] the approval modal's footer must carry U+FFFD: {content}",
             hazard.id
         );
-        // El check es del TOKEN concreto, no un blanket `is_terminal_hazard`
-        // sobre `content`: la stringificación de `TestBackend` UNE filas
-        // con `\n` (un hazard legítimo del formato de grilla, no del dato
-        // pintado) — comparar contra el hazard exacto evita ese falso
-        // positivo.
+        // The check is on the SPECIFIC token, not a blanket
+        // `is_terminal_hazard` over `content`: `TestBackend`'s
+        // stringification JOINS rows with `\n` (a legitimate hazard of the
+        // grid format, not of the painted data) — comparing against the
+        // exact hazard avoids that false positive.
         assert!(
             !content.contains(hazard.token),
-            "[{}] el chord crudo no debe sobrevivir en el frame pintado: {content}",
+            "[{}] the raw chord must not survive in the painted frame: {content}",
             hazard.id
         );
     }
 }
 
-/// #57: con `pane.names-encoding` activo, un nombre cirílico en cp866 se
-/// PINTA legible (Папка), conserva su badge hostil (el texto difiere de los
-/// bytes) y la barra indica el modo de forma persistente. El ciclo:
-/// None → sugerido (IBM866 con estas muestras) → … → None.
+/// #57: with `pane.names-encoding` active, a Cyrillic name in cp866 PAINTS
+/// legibly (Папка), keeps its hostile badge (the text differs from the
+/// bytes) and the bar shows the mode persistently. The cycle:
+/// None → suggested (IBM866 with these samples) → … → None.
 #[test]
-fn reinterpretar_nombres_pinta_legible_con_badge_e_indicador() {
+fn reinterpreting_names_paints_it_readable_with_a_badge_and_indicator() {
     let dir = vp("file:///x");
-    // "Папка" en cp866: no-UTF8 → lossy sin reinterpretar.
+    // "Папка" in cp866: non-UTF8 → lossy without reinterpreting.
     let entries = vec![Entry {
         attrs: std::collections::BTreeMap::new(),
         path: dir.join(Segment::new(b"\x8f\xa0\xaf\xaa\xa0".to_vec()).unwrap()),
@@ -736,57 +741,54 @@ fn reinterpretar_nombres_pinta_legible_con_badge_e_indicador() {
     }];
     let mut app = App::new(Pane::new(dir.clone(), entries), Pane::new(dir, Vec::new()));
 
-    // Primer ciclo: la sugerencia de chardetng sobre el listado (IBM866).
+    // First cycle: chardetng's suggestion over the listing (IBM866).
     let label = app.panes[0].cycle_name_encoding();
-    assert_eq!(label, Some("IBM866"), "sugerido por las muestras cp866");
+    assert_eq!(label, Some("IBM866"), "suggested from the cp866 samples");
 
     let mut terminal = Terminal::new(TestBackend::new(80, 8)).expect("terminal");
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
     let content = terminal.backend().to_string();
     assert!(
         content.contains("Папка"),
-        "nombre reinterpretado legible: {content}"
+        "reinterpreted, legible name: {content}"
     );
     assert!(
         content.contains("! "),
-        "badge hostil conservado (el texto no son los bytes): {content}"
+        "hostile badge kept (the text is not the bytes): {content}"
     );
     assert!(
         content.contains("IBM866"),
-        "indicador persistente en la barra: {content}"
+        "persistent indicator in the bar: {content}"
     );
 
-    // M1 del review: el ciclo da la VUELTA COMPLETA — desde la sugerencia
-    // (IBM866) se visitan TODOS los demás encodings, cp437 incluido, y se
-    // apaga exactamente al regresar al punto de entrada.
-    let mut visitados = vec!["IBM866"];
+    // Review M1: the cycle goes all the way AROUND — from the suggestion
+    // (IBM866) EVERY other encoding is visited, cp437 included, and it
+    // turns off exactly on returning to the entry point.
+    let mut visited = vec!["IBM866"];
     while let Some(label) = app.panes[0].cycle_name_encoding() {
-        visitados.push(label);
-        assert!(visitados.len() <= 5, "el ciclo debe cerrarse en None");
+        visited.push(label);
+        assert!(visited.len() <= 5, "the cycle must close at None");
     }
     assert_eq!(
-        visitados,
+        visited,
         ["IBM866", "Shift_JIS", "GBK", "windows-1252", "cp437"],
-        "vuelta completa con wrap: cp437 alcanzable desde cualquier entrada"
+        "full round trip with wrap: cp437 reachable from any entry point"
     );
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
     let off = terminal.backend().to_string();
-    assert!(
-        off.contains('\u{FFFD}'),
-        "apagado = lossy de siempre: {off}"
-    );
+    assert!(off.contains('\u{FFFD}'), "off = the usual lossy: {off}");
 }
 
-/// #98/F2: las superficies de DECISIÓN siguen la reinterpretación del pane —
-/// el modal de confirmar borrado sobre la entrada cp866 pinta «Папка» (lo
-/// mismo por lo que el usuario navegó), no «�����», con el badge conservado.
+/// #98/F2: DECISION surfaces follow the pane's reinterpretation — the
+/// delete-confirmation modal over the cp866 entry paints "Папка" (the same
+/// thing the user navigated by), not "�����", with the badge kept.
 #[test]
-fn modal_de_confirmacion_sigue_la_reinterpretacion() {
+fn confirmation_modal_follows_the_reinterpretation() {
     let dir = vp("file:///x");
     let papka = norte_testkit::corpus::hostile_names()
         .into_iter()
         .find(|n| n.id == "cp866_papka")
-        .expect("fixture del corpus")
+        .expect("corpus fixture")
         .bytes;
     let target = dir.join(Segment::new(papka).unwrap());
     let entries = vec![Entry {
@@ -807,17 +809,17 @@ fn modal_de_confirmacion_sigue_la_reinterpretacion() {
     let content = terminal.backend().to_string();
     assert!(
         content.contains("Папка"),
-        "el modal pinta el texto por el que se navegó: {content}"
+        "the modal paints the text that was navigated by: {content}"
     );
-    assert!(!content.contains("�����"), "no el lossy crudo: {content}");
+    assert!(!content.contains("�����"), "not the raw lossy: {content}");
 }
 
-/// #103 T10: el modal de un LOTE pinta una ruta POR LÍNEA (jamás dos
-/// pegadas por un joiner in-band que un nombre pudiera imitar), se corta en
-/// `MODAL_ITEM_LIMIT` y RESUME cuántas quedan fuera — un lote de 14 no puede
-/// parecer uno de 10. La flecha del destino va en SU propia línea.
+/// #103 T10: a BATCH's modal paints one path PER LINE (never two joined by
+/// an in-band joiner a name could imitate), cuts at `MODAL_ITEM_LIMIT` and
+/// SUMMARIZES how many are left out — a batch of 14 cannot look like one of
+/// 10. The destination's arrow goes on ITS OWN line.
 #[test]
-fn el_modal_de_un_lote_pinta_una_ruta_por_linea_y_resume_el_resto() {
+fn the_batch_modal_paints_one_path_per_line_and_summarizes_the_rest() {
     let dir = vp("file:///casa");
     let items: Vec<VPath> = (0..14)
         .map(|i| dir.join(Segment::new(format!("f{i:02}").into_bytes()).unwrap()))
@@ -836,53 +838,56 @@ fn el_modal_de_un_lote_pinta_una_ruta_por_linea_y_resume_el_resto() {
     let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
     let painted = terminal.backend().to_string();
-    // Los 10 primeros, cada uno en su línea; el 11.º YA no se lista.
+    // The first 10, each on its own line; the 11th is no longer listed.
     let names: Vec<String> = (0..norte_frontend::MODAL_ITEM_LIMIT)
         .map(|i| format!("f{i:02}"))
         .collect();
-    for nombre in &names {
-        let lines = painted.lines().filter(|l| l.contains(nombre)).count();
-        assert_eq!(lines, 1, "{nombre} va en UNA línea, no {lines}: {painted}");
+    for name in &names {
+        let lines = painted.lines().filter(|l| l.contains(name)).count();
+        assert_eq!(lines, 1, "{name} goes on ONE line, not {lines}: {painted}");
     }
-    for linea in painted.lines() {
-        let cuantos = names.iter().filter(|n| linea.contains(*n)).count();
-        assert!(cuantos <= 1, "dos ítems en la misma línea: {linea:?}");
+    for line in painted.lines() {
+        let how_many = names.iter().filter(|n| line.contains(*n)).count();
+        assert!(how_many <= 1, "two items on the same line: {line:?}");
     }
-    assert!(!painted.contains("f10"), "el 11.º no se lista: {painted}");
-    // …y el resumen dice cuántos quedan fuera (14 - 10 = 4).
+    assert!(
+        !painted.contains("f10"),
+        "the 11th is not listed: {painted}"
+    );
+    // …and the summary says how many are left out (14 - 10 = 4).
     assert!(
         painted.lines().any(|l| l.contains('…') && l.contains('4')),
-        "falta el resumen de los que no caben: {painted}"
+        "the summary of the ones that do not fit is missing: {painted}"
     );
-    // El destino, en su propia línea y con la ETIQUETA fuera de banda. La
-    // flecha se retiró: `→` es legítimo en un nombre y no se enmascara, y con
-    // los homóglifos de barra (U+2215 y compañía, también legales) un fichero
-    // llamado `→ ∕srv∕publico` fabricaba esta línea entera encima de la lista
-    // de nombres. Lo que la distingue ahora es su PAPEL —se pinta con el rol
-    // del destino, no con el del cuerpo— y eso un nombre no lo escribe.
+    // The destination, on its own line and with the label out of band. The
+    // arrow was retired: `→` is legal in a name and does not get masked,
+    // and with slash homoglyphs (U+2215 and friends, also legal) a file
+    // called `→ ∕srv∕publico` fabricated this whole line above the name
+    // list. What tells it apart now is its ROLE — it paints with the
+    // destination's role, not the body's — and a name cannot write that.
     assert!(
         painted
             .lines()
             .any(|l| l.contains(&norte_i18n::t("modal-transfer-to")) && l.contains("/otro")),
-        "el destino va en su línea: {painted}"
+        "the destination is on its own line: {painted}"
     );
     assert!(
         !painted.contains('→'),
-        "y ya no lleva una flecha que un nombre pueda imitar: {painted}"
+        "and it no longer carries an arrow a name could imitate: {painted}"
     );
 }
 
-/// #103 T9 (extra work item 2): el patrón de `Modal::MarkPattern` es texto
-/// NO confiable — llega por paste tan fácil como tecleado — así que debe
-/// enmascararse con el MISMO `display_name` que usa el input del quick
-/// search antes de llegar al buffer, y lo mismo su diagnóstico: el mensaje
-/// de `PatternError::Glob` EMBEBE el patrón verbatim (rustdoc de
-/// `PatternError`). Camino REAL de punta a punta (no un modal a mano):
-/// teclea el override RTL del corpus canónico carácter a carácter y cierra
-/// con un `[` sin parear para forzar un glob inválido — el error que vuelve
-/// de `mark_glob` contiene el RTL crudo, y el render no debe dejarlo pasar.
+/// #103 T9 (extra work item 2): `Modal::MarkPattern`'s pattern is UNTRUSTED
+/// text — it arrives by paste as easily as typed — so it must be masked
+/// with the SAME `display_name` the quick search input uses before it
+/// reaches the buffer, and so must its diagnostic: `PatternError::Glob`'s
+/// message EMBEDS the pattern verbatim (`PatternError`'s rustdoc). A REAL
+/// end-to-end path (not a hand-built modal): types the canonical corpus's
+/// RTL override character by character and closes with an unpaired `[` to
+/// force an invalid glob — the error that comes back from `mark_glob`
+/// contains the raw RTL, and the render must not let it through.
 #[test]
-fn mark_pattern_modal_enmascara_el_patron_hostil_y_su_error() {
+fn mark_pattern_modal_masks_the_hostile_pattern_and_its_error() {
     let dir = vp("file:///x");
     let mut app = App::new(
         Pane::new(dir.clone(), Vec::new()),
@@ -891,49 +896,48 @@ fn mark_pattern_modal_enmascara_el_patron_hostil_y_su_error() {
     let rtl = norte_testkit::corpus::hostile_names()
         .into_iter()
         .find(|n| n.id == "rtl_override")
-        .expect("fixture del corpus")
+        .expect("corpus fixture")
         .bytes;
-    let pattern = String::from_utf8(rtl).expect("fixture rtl_override es UTF-8 válida");
+    let pattern = String::from_utf8(rtl).expect("rtl_override fixture is valid UTF-8");
 
     app.open_mark_pattern(true);
     for c in pattern.chars() {
         app.mark_pattern_push(c);
     }
-    app.mark_pattern_push('['); // glob mal formado: fuerza PatternError
+    app.mark_pattern_push('['); // malformed glob: forces a PatternError
     assert!(
         app.mark_pattern_confirm().is_err(),
-        "el corchete sin parear no debe compilar como glob"
+        "the unpaired bracket must not compile as a glob"
     );
-    assert!(app.modal.is_some(), "el modal queda abierto con el error");
+    assert!(app.modal.is_some(), "the modal stays open with the error");
 
     let mut terminal = Terminal::new(TestBackend::new(80, 12)).expect("terminal");
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
     let content = terminal.backend().to_string();
-    // Review MAJOR M4: `!contains('\u{202E}')` por sí sola NUNCA puede
-    // fallar aquí — U+202E es de ancho cero y el renderer de párrafo de
-    // ratatui se COME los grafemas de ancho cero, enmascarados o no. Se
-    // conserva como comprobación barata (documenta la intención), pero la
-    // aserción que de verdad pinea el enmascarado es el CONTEO de U+FFFD:
-    // uno por línea enmascarada. `contains('\u{FFFD}')` a secas lo
-    // satisfacía con SOLO el patrón enmascarado — borrar el `display_name`
-    // de la línea de error dejaba el test en verde. El unit test puro de
-    // `mark_pattern_modal_text` (ui.rs) cubre el enmascarado en sí; este
-    // E2E cubre que la ruta completa (push → confirm → draw) lo conserva.
+    // Review MAJOR M4: `!contains('\u{202E}')` alone can NEVER fail here —
+    // U+202E is zero-width and ratatui's paragraph renderer EATS zero-width
+    // graphemes, masked or not. It stays as a cheap check (documents the
+    // intent), but the assertion that really pins the masking is the U+FFFD
+    // COUNT: one per masked line. `contains('\u{FFFD}')` alone was
+    // satisfied with ONLY the masked pattern — deleting the error line's
+    // `display_name` left the test green. `mark_pattern_modal_text`'s pure
+    // unit test (ui.rs) covers the masking itself; this E2E covers that the
+    // full path (push → confirm → draw) keeps it.
     assert!(
         !content.contains('\u{202E}'),
-        "el override RTL crudo no debe llegar al buffer (patrón NI error): {content}"
+        "the raw RTL override must not reach the buffer (neither pattern nor error): {content}"
     );
     assert!(
         content.matches('\u{FFFD}').count() >= 2,
-        "patrón Y error deben enmascararse — no solo uno: {content}"
+        "pattern AND error must both be masked — not just one: {content}"
     );
 }
 
-/// #81: el contexto del match de contenido (línea + preview) del hit BAJO EL
-/// CURSOR se pinta en la barra del pane virtual — saneado (un preview hostil
-/// jamás pinta controles crudos).
+/// #81: the content match's context (line + preview) for the hit UNDER THE
+/// CURSOR paints in the virtual pane's bar — sanitized (a hostile preview
+/// never paints raw controls).
 #[test]
-fn preview_del_match_bajo_el_cursor_en_la_barra() {
+fn preview_of_the_match_under_the_cursor_in_the_bar() {
     let dir = vp("file:///casa");
     let mut app = App::new(
         Pane::new(dir.clone(), Vec::new()),
@@ -961,33 +965,32 @@ fn preview_del_match_bajo_el_cursor_en_la_barra() {
     let content = terminal.backend().to_string();
     assert!(
         content.contains(":42") && content.contains("hola"),
-        "línea y preview del hit en la barra: {content}"
+        "the hit's line and preview in the bar: {content}"
     );
-    // El cinturón (detail_for_bar) enmascara: ESC/bidi jamás crudos aunque
-    // un core buggy los colara en el preview.
+    // The belt (detail_for_bar) masks: ESC/bidi are never raw even if a
+    // buggy core let them slip into the preview.
     assert!(
         !content.contains('\u{1b}') && !content.contains('\u{202e}'),
-        "controles/bidi enmascarados en la barra: {content:?}"
+        "controls/bidi masked in the bar: {content:?}"
     );
 }
 
-/// M4-IA-2 (doctrina encoding-auditor): el modal de hits semánticos pinta
-/// paths del ÍNDICE — controles/bidi → `�` con badge; un path kilométrico no
-/// expulsa el score de la caja (elipsis media); el marcador `>` del cursor va
-/// fuera de banda al inicio de su línea.
+/// M4-IA-2 (encoding-auditor doctrine): the semantic hits modal paints
+/// paths from the INDEX — controls/bidi → `�` with a badge; a mile-long
+/// path does not push the score out of the box (mid ellipsis); the cursor's
+/// `>` marker goes out of band at the start of its line.
 #[test]
-fn modal_semantic_enmascara_hits_hostiles() {
+fn semantic_modal_masks_hostile_hits() {
     let dir = vp("file:///x");
     let mut app = App::new(
         Pane::new(dir.clone(), Vec::new()),
         Pane::new(dir.clone(), Vec::new()),
     );
-    let hostil_largo = format!("{}\u{202e}oculto.txt", "x".repeat(120));
+    let hostile_long = format!("{}\u{202e}oculto.txt", "x".repeat(120));
     app.modal = Some(norte_tui::app::Modal::SemanticHits {
         hits: vec![
             norte_proto::methods::SemanticHit {
-                path: dir
-                    .join(Segment::new(hostil_largo.into_bytes()).expect("segmento del fixture")),
+                path: dir.join(Segment::new(hostile_long.into_bytes()).expect("fixture segment")),
                 score: 0.91,
             },
             norte_proto::methods::SemanticHit {
@@ -1004,32 +1007,31 @@ fn modal_semantic_enmascara_hits_hostiles() {
 
     assert!(
         content.contains("0.91"),
-        "el score jamás se expulsa de la caja: {content}"
+        "the score is never pushed out of the box: {content}"
     );
     assert!(content.contains('\u{FFFD}'), "bidi → �: {content}");
     assert!(
         content.contains('!'),
-        "el enmascarado se MARCA (spec §6): {content}"
+        "masking gets MARKED (spec §6): {content}"
     );
     assert!(
         content.contains('>'),
-        "marcador de cursor fuera de banda: {content}"
+        "out-of-band cursor marker: {content}"
     );
     assert!(
         content.contains("limpio.txt"),
-        "el hit limpio se pinta entero: {content}"
+        "the clean hit paints whole: {content}"
     );
 }
 
-/// La ayuda (F1) se PINTA sobre el viewer. `f1 → app.help` vive en
-/// `[global]` del preset, así que sigue vigente en `Screen::Viewer`: el
-/// run loop enruta la tecla, `app.help` pasa a `Some`… y el draw hacía
-/// `return` justo después del viewer, dejando el overlay INVISIBLE. Como
-/// el brazo de `app.help` del run loop va ANTES del viewer, ese overlay
-/// fantasma se comía TODAS las teclas siguientes: F1 "dejaba de
-/// funcionar" y el viewer parecía muerto.
+/// Help (F1) PAINTS over the viewer. `f1 → app.help` lives in the preset's
+/// `[global]`, so it is still in force under `Screen::Viewer`: the run loop
+/// routes the key, `app.help` becomes `Some`… and draw did `return` right
+/// after the viewer, leaving the overlay INVISIBLE. Since the run loop's
+/// `app.help` arm goes BEFORE the viewer, that ghost overlay ate EVERY
+/// following key: F1 "stopped working" and the viewer looked dead.
 #[test]
-fn la_ayuda_se_pinta_sobre_el_viewer() {
+fn the_help_is_painted_over_the_viewer() {
     let _ = norte_i18n::force(norte_i18n::Lang::En);
     let dir = vp("file:///x");
     let mut app = App::new(
@@ -1041,10 +1043,10 @@ fn la_ayuda_se_pinta_sobre_el_viewer() {
         b"cuerpo del fichero\n".to_vec(),
         false,
     ));
-    // H3b: la página de teclado sintética — el `keys_lines` de siempre, ahora
-    // como cuerpo de una entrada más de la lateral. Se abre navegando a ella
-    // (el overlay arranca en el índice) y se MAQUETA antes de pintar, como
-    // hace el run loop.
+    // H3b: the synthetic keyboard page — the usual `keys_lines`, now as the
+    // body of one more sidebar entry. It is opened by navigating to it (the
+    // overlay starts at the index) and is LAID OUT before painting, as the
+    // run loop does.
     let mut help = norte_tui::app::HelpView::new(
         norte_i18n::Lang::En,
         vec![ratatui::text::Line::raw("  f1             this help")],
@@ -1058,16 +1060,16 @@ fn la_ayuda_se_pinta_sobre_el_viewer() {
     let content = terminal.backend().to_string();
     assert!(
         content.contains("this help"),
-        "la ayuda es visible sobre el viewer: {content}"
+        "help is visible over the viewer: {content}"
     );
 }
 
-/// Mismo fallo, consecuencia de SEGURIDAD: un modal asíncrono (aprobación
-/// de policy, colisión, confirmación) llegado con el viewer abierto se
-/// enruta ANTES que el viewer (`app.modal` gana la tecla) pero quedaba sin
-/// pintar — el usuario respondía a ciegas a un diálogo que no veía.
+/// Same bug, a SECURITY consequence: an async modal (policy approval,
+/// collision, confirmation) arriving with the viewer open is routed BEFORE
+/// the viewer (`app.modal` wins the key) but stayed unpainted — the user
+/// answered blindly to a dialog they could not see.
 #[test]
-fn un_modal_se_pinta_sobre_el_viewer() {
+fn a_modal_paints_over_the_viewer() {
     let _ = norte_i18n::force(norte_i18n::Lang::En);
     let dir = vp("file:///x");
     let mut app = App::new(
@@ -1089,18 +1091,17 @@ fn un_modal_se_pinta_sobre_el_viewer() {
     let content = terminal.backend().to_string();
     assert!(
         content.contains("borrame.txt"),
-        "el modal es visible sobre el viewer: {content}"
+        "the modal is visible over the viewer: {content}"
     );
 }
 
-/// El modal de nombre en destino (#105) elide las rutas por el MEDIO, como
-/// el de aprobación y el de colisión: una ruta kilométrica se recortaba a
-/// pelo contra el borde de la caja (`modal_width` topa contra el frame y el
-/// `Paragraph` no envuelve), así que la COLA del destino —el dir al que se
-/// copia de verdad— quedaba expulsada sin ni siquiera un `…` que lo
-/// delatara.
+/// The name-at-destination modal (#105) elides paths in the MIDDLE, like
+/// the approval and collision ones: a mile-long path used to get clipped
+/// raw against the box's edge (`modal_width` bumps against the frame and
+/// `Paragraph` does not wrap), so the destination's TAIL — the dir it is
+/// really copying to — got pushed out with not even a `…` to give it away.
 #[test]
-fn el_modal_de_nombre_en_destino_elide_las_rutas() {
+fn the_name_in_destination_modal_elides_the_paths() {
     let _ = norte_i18n::force(norte_i18n::Lang::En);
     let hondo = "/tmp/claude-1000/-home-oscar-work-wot-projects-high-norte/fd0480d7-a010-40be";
     let dir = vp(&format!("file://{hondo}/origen"));
@@ -1127,29 +1128,28 @@ fn el_modal_de_nombre_en_destino_elide_las_rutas() {
     let content = terminal.backend().to_string();
     assert!(
         content.contains('…'),
-        "la ruta larga se elide, no se corta a pelo: {content}"
+        "the long path is elided, not clipped raw: {content}"
     );
     assert!(
         content.contains("destino"),
-        "la COLA del destino sobrevive al recorte: {content}"
+        "the destination's TAIL survives the clip: {content}"
     );
     assert!(
         content.contains("grande.log"),
-        "el nombre editable sigue visible: {content}"
+        "the editable name is still visible: {content}"
     );
 }
 
-/// #124: `ui::pane_list_rows` cuenta EXACTAMENTE las filas de listado que el
-/// frame pinta — es el número que el run loop devuelve al modelo para que la
-/// paginación y la sonda de stat dejen de adivinar el viewport. Si el layout
-/// del pane cambia (un borde, una línea de cabecera, el panel de tasks),
-/// este test cae y obliga a corregir la aritmética en vez de dejarla
-/// mintiendo.
+/// #124: `ui::pane_list_rows` counts EXACTLY the listing rows the frame
+/// paints — it is the number the run loop returns to the model so pagination
+/// and the stat probe stop guessing the viewport. If a pane's layout changes
+/// (a border, a header line, the tasks panel), this test fails and forces
+/// the arithmetic to be fixed instead of leaving it lying.
 #[test]
-fn pane_list_rows_cuenta_las_filas_que_de_verdad_se_pintan() {
+fn pane_list_rows_counts_the_rows_actually_painted() {
     let _ = norte_i18n::force(norte_i18n::Lang::En);
     let dir = vp("file:///x");
-    // Muchas más entradas que filas: el pane se llena entero.
+    // Many more entries than rows: the pane fills up entirely.
     let entries: Vec<Entry> = (0..60)
         .map(|i| Entry {
             attrs: std::collections::BTreeMap::new(),
@@ -1174,10 +1174,10 @@ fn pane_list_rows_cuenta_las_filas_que_de_verdad_se_pintan() {
                 ratatui::layout::Rect::new(0, 0, 60, alto)
             )),
             rows,
-            "alto {alto}: la cuenta debe ser la del buffer real:\n{painted}"
+            "height {alto}: the count must match the real buffer:\n{painted}"
         );
     }
-    // Con el visor abierto no se pinta ningún pane: cero filas visibles.
+    // With the viewer open no pane paints: zero visible rows.
     app.viewer = Some(norte_tui::viewer::Viewer::new(
         vp("file:///x/f000.txt"),
         b"x".to_vec(),
@@ -1189,11 +1189,11 @@ fn pane_list_rows_cuenta_las_filas_que_de_verdad_se_pintan() {
     );
 }
 
-/// #311: la lista se recorre ENTERA. Cuarenta ficheros con el que no cuadra en
-/// la fila doce enseñaban cinco «correcto» y «… y 35 más», sin tecla que
-/// llegara al malo: el `offset` estaba en el modal y no lo movía nadie.
+/// #311: the list is walked WHOLE. Forty files with the mismatched one on
+/// row twelve used to show five "match" and "… and 35 more", with no key
+/// reaching the bad one: `offset` lived in the modal and nobody moved it.
 #[test]
-fn la_ventana_del_modal_de_sumas_se_desplaza() {
+fn the_checksums_modal_window_scrolls() {
     let dir = vp("file:///casa");
     let mut app = App::new(
         Pane::new(dir.clone(), Vec::new()),
@@ -1211,50 +1211,55 @@ fn la_ventana_del_modal_de_sumas_se_desplaza() {
         rows,
         offset: 0,
     });
-    let pinta = |app: &App| {
+    let paints = |app: &App| {
         let mut t = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
         t.draw(|f| ui::draw(f, app)).expect("draw");
         t.backend().to_string()
     };
-    let antes = pinta(&app);
-    assert!(antes.contains("f00.bin"), "arriba del todo:\n{antes}");
+    let before = paints(&app);
+    assert!(before.contains("f00.bin"), "at the very top:\n{before}");
 
     for _ in 0..12 {
         app.checksums_scroll(true);
     }
-    let despues = pinta(&app);
+    let after = paints(&app);
     assert!(
-        despues.contains("f12.bin") && !despues.contains("f00.bin"),
-        "bajando doce se llega a la fila doce:\n{despues}"
+        after.contains("f12.bin") && !after.contains("f00.bin"),
+        "scrolling down twelve reaches row twelve:\n{after}"
     );
 
-    // Y el clamp: bajar mil veces no pasa del final ni deja la caja vacía.
+    // And the clamp: scrolling down a thousand times does not go past the
+    // end nor leave the box empty.
     for _ in 0..1000 {
         app.checksums_scroll(true);
     }
-    let fondo = pinta(&app);
-    assert!(fondo.contains("f39.bin"), "el final se alcanza:\n{fondo}");
+    let background = paints(&app);
+    assert!(
+        background.contains("f39.bin"),
+        "the end is reached:\n{background}"
+    );
 }
 
-/// #311: el modal de sumas nombra ficheros que vienen de un fichero de FUERA.
-/// Ni un hazard llega crudo al buffer, el nombre hostil va con su badge, y un
-/// nombre demasiado largo se corta MARCADO — dos nombres largos con el mismo
-/// principio pintados idénticos son la fila que no dice cuál es cuál.
+/// #311: the checksums modal names files that come from an OUTSIDE file.
+/// Not one hazard reaches the buffer raw, the hostile name carries its
+/// badge, and a name that is too long is clipped MARKED — two long names
+/// with the same start painted identically are the row that does not say
+/// which is which.
 #[test]
-fn el_modal_de_sumas_enmascara_y_marca_el_corte() {
-    let hostiles = norte_testkit::corpus::hostile_names();
-    let toma = |id: &str| -> Vec<u8> {
-        hostiles
+fn the_checksums_modal_masks_and_marks_the_cut() {
+    let hostile = norte_testkit::corpus::hostile_names();
+    let takes = |id: &str| -> Vec<u8> {
+        hostile
             .iter()
             .find(|n| n.id == id)
-            .unwrap_or_else(|| panic!("fixture {id} del corpus"))
+            .unwrap_or_else(|| panic!("corpus fixture {id}"))
             .bytes
             .clone()
     };
     let rows: Vec<norte_tui::app::ChecksumRow> = ["rtl_override", "control_escape", "zwsp_twin"]
         .into_iter()
         .map(|id| norte_tui::app::ChecksumRow {
-            name: toma(id),
+            name: takes(id),
             digest: Some("aa".repeat(32)),
             verdict: None,
         })
@@ -1281,25 +1286,25 @@ fn el_modal_de_sumas_enmascara_y_marca_el_corte() {
 
     assert!(
         !painted.contains('\u{202E}') && !painted.contains('\u{1B}'),
-        "ningún hazard crudo en el buffer:\n{painted}"
+        "no raw hazard in the buffer:\n{painted}"
     );
     assert!(
         painted.contains('\u{FFFD}'),
-        "un nombre hostil se pinta enmascarado:\n{painted}"
+        "a hostile name paints masked:\n{painted}"
     );
     assert!(
         painted.contains('…'),
-        "el nombre de 200 bytes se corta y el corte va MARCADO:\n{painted}"
+        "the 200-byte name gets clipped and the clip is MARKED:\n{painted}"
     );
 }
 
-/// #311: el pie del modal de sumas ofrece COPIAR solo cuando hay algo que
-/// copiar. Una comprobación trae veredictos y ningún digest, así que
-/// prometerle «Enter: copiar la lista» acababa en «nada que copiar»: el
-/// diálogo ofrecía una tecla que no hacía nada.
+/// #311: the checksums modal's footer offers COPY only when there is
+/// something to copy. A check yields verdicts and no digest at all, so
+/// promising "Enter: copy the list" ended in "nothing to copy": the dialog
+/// offered a key that did nothing.
 #[test]
-fn el_pie_de_las_sumas_solo_ofrece_copiar_cuando_hay_digests() {
-    fn pinta(rows: Vec<norte_tui::app::ChecksumRow>) -> String {
+fn the_checksums_footer_only_offers_copy_when_there_are_digests() {
+    fn paints(rows: Vec<norte_tui::app::ChecksumRow>) -> String {
         let dir = vp("file:///casa");
         let mut app = App::new(
             Pane::new(dir.clone(), Vec::new()),
@@ -1315,42 +1320,42 @@ fn el_pie_de_las_sumas_solo_ofrece_copiar_cuando_hay_digests() {
         terminal.backend().to_string()
     }
 
-    let copiar = norte_i18n::t("modal-checksums-hint");
-    let solo_cerrar = norte_i18n::t("modal-checksums-hint-verify");
-    // Las dos primeras palabras bastan: el pie va recortado al ancho del
-    // modal, así que comparar la frase entera pinearía el ancho, no el texto.
-    let trozo = |s: &str| s.chars().take(12).collect::<String>();
+    let copy = norte_i18n::t("modal-checksums-hint");
+    let solo_close = norte_i18n::t("modal-checksums-hint-verify");
+    // The first two words are enough: the footer clips to the modal's
+    // width, so comparing the whole phrase would pin the width, not the text.
+    let chunk = |s: &str| s.chars().take(12).collect::<String>();
 
-    let calculado = pinta(vec![norte_tui::app::ChecksumRow {
+    let computed = paints(vec![norte_tui::app::ChecksumRow {
         name: b"a.txt".to_vec(),
         digest: Some("aa".repeat(32)),
         verdict: None,
     }]);
     assert!(
-        calculado.contains(&trozo(&copiar)),
-        "con digests, copiar se ofrece:\n{calculado}"
+        computed.contains(&chunk(&copy)),
+        "with digests, copy is offered:\n{computed}"
     );
 
-    let comprobado = pinta(vec![norte_tui::app::ChecksumRow {
+    let checked = paints(vec![norte_tui::app::ChecksumRow {
         name: b"a.txt".to_vec(),
         digest: None,
         verdict: Some(norte_frontend::checksums::Verdict::Mismatch),
     }]);
     assert!(
-        comprobado.contains(&trozo(&solo_cerrar)),
-        "sin digests, el pie solo cierra:\n{comprobado}"
+        checked.contains(&chunk(&solo_close)),
+        "with no digests, the footer only closes:\n{checked}"
     );
     assert!(
-        !comprobado.contains(&trozo(&copiar)),
-        "sin digests no puede prometer una copia:\n{comprobado}"
+        !checked.contains(&chunk(&copy)),
+        "with no digests it cannot promise a copy:\n{checked}"
     );
 }
 
-/// #314: la pregunta de una op de agente dice QUÉ modo, cuando la op es
-/// cambiar permisos. Con la op y las rutas a secas, `0600` y `4777` son la
-/// misma pregunta y decisiones opuestas.
+/// #314: an agent op's question states WHICH mode, when the op is changing
+/// permissions. With just the op and the paths, `0600` and `4777` are the
+/// same question and opposite decisions.
 #[test]
-fn la_aprobacion_de_un_chmod_pinta_el_modo() {
+fn the_approval_of_a_chmod_paints_the_mode() {
     let dir = vp("file:///casa");
     let mut app = App::new(
         Pane::new(dir.clone(), Vec::new()),
@@ -1373,9 +1378,9 @@ fn la_aprobacion_de_un_chmod_pinta_el_modo() {
     });
     let mut terminal = Terminal::new(TestBackend::new(80, 16)).expect("terminal");
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
-    let pintado = terminal.backend().to_string();
+    let painted = terminal.backend().to_string();
     assert!(
-        pintado.contains("4755"),
-        "el modo va en la pregunta, no solo la op:\n{pintado}"
+        painted.contains("4755"),
+        "the mode is in the question, not just the op:\n{painted}"
     );
 }

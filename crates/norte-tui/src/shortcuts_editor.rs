@@ -1,15 +1,16 @@
-//! El editor de atajos: qué se puede ligar, a qué, y qué se escribe al disco.
+//! The shortcuts editor: what can be bound, to what, and what gets written
+//! to disk.
 //!
-//! Vivía en el root del binario `ntc` —un crate DISTINTO de esta lib—, con sus
-//! 419 líneas de test dentro de `main.rs`. Y no podía salir antes que
-//! [`crate::paste::route_paste`]: esos tests comprueban que un pegado sobre el
-//! campo que está capturando un chord no entra como texto, así que el editor y
-//! el enrutador de pegado salen en ese orden y no en otro.
+//! It used to live in the `ntc` binary's root — a crate DISTINCT from this
+//! lib — with its 419 lines of test inside `main.rs`. And it could not leave
+//! before [`crate::paste::route_paste`]: those tests check that a paste over
+//! the field capturing a chord does not go in as text, so the editor and the
+//! paste router leave in that order and no other.
 //!
-//! [`Maps`] es el trío de mapas VIVOS. El editor lee sus filas y cada veredicto
-//! de ahí y nunca de una copia tomada al abrir: un hot-reload reemplaza los
-//! tres, y un veredicto leído de un mapa viejo es un veredicto sobre el teclado
-//! de otra persona.
+//! [`Maps`] is the trio of LIVE maps. The editor reads its rows and every
+//! verdict off them, never off a copy taken when it opened: a hot reload
+//! replaces all three, and a verdict read from a stale map is a verdict
+//! about somebody else's keyboard.
 
 use crossterm::event::{KeyCode, KeyModifiers};
 use norte_i18n::{t, ta};
@@ -28,11 +29,11 @@ use crate::keymap::{
 /// and a verdict read from a stale map is a verdict about somebody else's
 /// keyboard.
 pub struct Maps<'a> {
-    /// El efectivo de la pantalla de navegación.
+    /// The browse screen's effective map.
     pub browse: &'a Effective,
-    /// El del visor.
+    /// The viewer's.
     pub viewer: &'a Effective,
-    /// El de los diálogos.
+    /// The dialogs'.
     pub dialog: &'a Effective,
 }
 
@@ -121,27 +122,28 @@ pub fn shortcut_rows(maps: &Maps<'_>) -> Vec<norte_frontend::shortcuts::Shortcut
     norte_frontend::shortcuts::build_rows(&screens, lang)
 }
 
-/// La puerta, tal y como la llama ESTE frontend: el nombre del preset activo,
-/// las capas cargadas y el set con el que se valida esa pantalla.
+/// The gate, as called by THIS frontend: the active preset's name, the
+/// loaded layers and the set that screen is validated against.
 ///
-/// La puerta en sí vive en `norte_frontend::shortcuts::plan_rebind` — el corte
-/// de las capas (`RebindSources::split_at`) no es del frontend, y una GUI que
-/// lo rehiciera a mano es justo el lector que su documentación avisa que se va
-/// a equivocar en silencio. Aquí solo queda lo que sí es de la TUI: de dónde
-/// sale el nombre del preset y qué comandos valida cada pantalla.
-/// Dónde cae la escritura de un atajo.
+/// The gate itself lives in `norte_frontend::shortcuts::plan_rebind` — the
+/// layer cut (`RebindSources::split_at`) is not the frontend's, and a GUI
+/// that redid it by hand is exactly the reader its documentation warns will
+/// get it silently wrong. What is left here is only what belongs to the
+/// TUI: where the preset name comes from and which commands each screen
+/// validates.
+/// Where a shortcut's write lands.
 ///
-/// Del MISMO corte que decide el destino, y no de `user_config_dir()` por
-/// separado: D10 movió el destino al `keymap.toml` del perfil activo y este
-/// escritor seguía resolviendo el directorio del usuario por su cuenta, así
-/// que la puerta planificaba sobre un fichero y la escritura caía en otro,
-/// donde el perfil la tapaba — «visiblemente guardado, y sin hacer nada»
-/// (#305).
+/// From the SAME cut that decides the destination, not from
+/// `user_config_dir()` separately: D10 moved the destination to the active
+/// profile's `keymap.toml` and this writer kept resolving the user's
+/// directory on its own, so the gate planned against one file and the write
+/// landed in another, where the profile shadowed it — "visibly saved, and
+/// doing nothing" (#305).
 ///
-/// Cuando el corte no apunta a ninguna capa la escritura CREA un fichero, y
-/// entonces se crea en el del perfil activo si lo hay: rebindear una tecla
-/// dentro de un espacio de trabajo significa esa tecla en ese espacio, la
-/// traiga ya el perfil o no.
+/// When the cut points at no layer the write CREATES a file, and it is then
+/// created in the active profile's, if there is one: rebinding a key inside
+/// a workspace means that key in that workspace, whether the profile
+/// already carries it or not.
 fn rebind_dir(
     app: &App,
     cfg: &config::LoadedConfig,
@@ -209,17 +211,17 @@ fn plan_unbind(
     )
 }
 
-/// Teclas del editor de atajos (K3c, `app.shortcuts`): mismo criterio que el
-/// overlay de ajustes de arriba — teclas fijas, hardcodeadas aquí.
+/// Shortcuts editor keys (K3c, `app.shortcuts`): same approach as the
+/// settings overlay above — fixed keys, hardcoded here.
 ///
-/// El modo CAPTURA es lo que no cabía como un brazo más de `on_settings_key`:
-/// mientras está activo TODA tecla es el chord que se está capturando, no un
-/// atajo de la pantalla. Solo `Esc` se queda fuera, porque es lo que cancela —
-/// y por eso es el único chord que este editor no puede capturar, cosa que la
-/// pantalla DICE en vez de dejar al lector pulsándolo.
+/// CAPTURE mode is what did not fit as one more arm of `on_settings_key`:
+/// while it is active EVERY key is the chord being captured, not a screen
+/// shortcut. Only `Esc` stays out, because it is what cancels — and that is
+/// why it is the one chord this editor cannot capture, something the screen
+/// SAYS instead of leaving the reader to press it.
 ///
-/// `Enter` sí se puede capturar: en la fase de espera es una tecla como
-/// cualquier otra, y solo confirma DESPUÉS, con un veredicto ya en pantalla.
+/// `Enter` CAN be captured: in the waiting phase it is a key like any other,
+/// and only confirms AFTERWARD, with a verdict already on screen.
 pub async fn on_shortcuts_key(
     app: &mut App,
     cfg: &config::LoadedConfig,
@@ -228,11 +230,11 @@ pub async fn on_shortcuts_key(
     mods: KeyModifiers,
     code: KeyCode,
 ) {
-    // La salida de emergencia global, SALVO capturando: `ctrl+c` es un chord
-    // que un converso de CUA quiere ligar (es su «copiar»), y en modo captura
-    // el lector está pulsando teclas a ciegas por diseño — cerrar norte ahí
-    // sería la peor lectura posible de una tecla que el editor pidió. Con la
-    // captura abierta la salida es `esc`, que es lo que la pantalla dice.
+    // The global emergency exit, EXCEPT while capturing: `ctrl+c` is a chord
+    // a CUA convert wants to bind (it is their "copy"), and in capture mode
+    // the reader is pressing keys blind by design — quitting norte there
+    // would be the worst possible reading of a key the editor asked for.
+    // With capture open the exit is `esc`, which is what the screen says.
     let capturing = app.shortcuts.as_ref().is_some_and(Shortcuts::is_capturing);
     if !capturing && mods.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('c') {
         app.quit = true;
@@ -251,28 +253,29 @@ pub async fn on_shortcuts_key(
     }
 }
 
-/// Qué pidió una tecla del editor de atajos — el cómputo PURO, dentro del
-/// borrow de `app.shortcuts`, separado del I/O async igual que
-/// [`SettingsKeyOutcome`] lo separa en el overlay de ajustes.
+/// What a shortcuts editor key requested — the PURE computation, inside the
+/// `app.shortcuts` borrow, separated from the async I/O the same way
+/// [`SettingsKeyOutcome`] separates it in the settings overlay.
 enum ShortcutsKeyOutcome {
-    /// Consumida sin nada pendiente (navegación, filtro, captura).
+    /// Consumed with nothing pending (navigation, filter, capture).
     None,
-    /// `Esc` fuera de captura: cierra la pantalla.
+    /// `Esc` outside capture: closes the screen.
     Close,
-    /// Escribir la captura, si la puerta la deja pasar.
+    /// Write the capture, if the gate lets it through.
     Confirm,
-    /// Quitar el binding de la fila bajo el cursor.
+    /// Remove the binding on the row under the cursor.
     Unbind,
-    /// La tecla capturada no la modela el keymap (Media, `CapsLock`…): no hay
-    /// chord que capturar, y fingir uno sería ligar otra cosa.
+    /// The captured key is not modeled by the keymap (Media, `CapsLock`…):
+    /// there is no chord to capture, and faking one would bind something
+    /// else.
     NotBindable,
-    /// La fila bajo el cursor es de `[global]` (#141): ni rebind ni unbind
-    /// pueden escribir ahí desde una fila que nombra una sola pantalla.
+    /// The row under the cursor is `[global]`'s (#141): neither rebind nor
+    /// unbind can write there from a row that names a single screen.
     RowIsGlobal,
 }
 
-/// El estado del editor tras una tecla. Puro y sincrónico: es donde vive la
-/// regla de la captura, y es lo que los tests pueden conducir sin runtime.
+/// The editor's state after a key. Pure and synchronous: this is where the
+/// capture rule lives, and it is what tests can drive with no runtime.
 fn shortcuts_key(
     sc: &mut Shortcuts,
     maps: &Maps<'_>,
@@ -284,39 +287,39 @@ fn shortcuts_key(
         let waiting = capture.is_waiting();
         let screen = capture.screen();
         match code {
-            // Cancela SIEMPRE, en las dos fases, y por eso `esc` es el único
-            // chord que no se puede capturar. `esc` PELADO: el contrato de la
-            // pantalla es «esc cancela», no «cualquier cosa que acabe en esc»,
-            // así que `shift+esc` y `alt+esc` siguen siendo chords ligables.
+            // ALWAYS cancels, in both phases, which is why `esc` is the one
+            // chord that cannot be captured. BARE `esc`: the screen's
+            // contract is "esc cancels", not "anything ending in esc", so
+            // `shift+esc` and `alt+esc` are still bindable chords.
             KeyCode::Esc if plain => sc.cancel_capture(),
             KeyCode::Enter if !waiting => return ShortcutsKeyOutcome::Confirm,
             KeyCode::Backspace if !waiting => sc.recapture(),
-            // Un codepoint peligroso no viene de una tecla: viene de un
-            // PEGADO. Desde #143 la defensa PRIMARIA es `route_paste`, que
-            // intercepta el `Event::Paste` entero ANTES de que llegue aquí
-            // (mientras `waiting`, lo rechaza entero — un capture responde a
-            // UNA tecla física, nunca a un pegado). Este brazo sigue vivo
-            // como RESPALDO: un terminal o multiplexor que no honre
-            // `\e[?2004h` sigue entregando el pegado como `Char`s sueltos,
-            // uno por uno, y sin este guard `parse_chord` lo aceptaría y el
-            // escritor lo dejaría crudo en el `keymap.toml` del usuario — un
-            // fichero que ninguna pantalla de norte pinta crudo, pero que su
-            // editor de texto sí. `un_codepoint_peligroso_pegado_no_se_captura`
-            // prueba ESTA rama directamente (vía `Event::Key`), independiente
-            // de `route_paste`, para que una regresión en la defensa primaria
-            // no deje también sin cobertura la de respaldo.
+            // A dangerous codepoint does not come from a key: it comes from
+            // a PASTE. Since #143 the PRIMARY defense is `route_paste`,
+            // which intercepts the whole `Event::Paste` BEFORE it reaches
+            // here (while `waiting`, it rejects it whole — a capture answers
+            // to ONE physical key, never a paste). This arm stays alive as a
+            // BACKUP: a terminal or multiplexer that does not honor
+            // `\e[?2004h` still delivers the paste as loose `Char`s, one by
+            // one, and without this guard `parse_chord` would accept it and
+            // the writer would leave it raw in the user's `keymap.toml` — a
+            // file no norte screen paints raw, but their text editor does.
+            // `a_pasted_dangerous_codepoint_is_not_captured` tests THIS
+            // branch directly (via `Event::Key`), independent of
+            // `route_paste`, so a regression in the primary defense does not
+            // also leave the backup uncovered.
             _ if waiting && hostile_key(code) => return ShortcutsKeyOutcome::NotBindable,
             _ if waiting => match chord_from_crossterm(mods, code) {
-                // El mapa es el de LA FILA (`maps.of`), no el de la pantalla
-                // que el lector estaba mirando: `Tab` está libre en el viewer
-                // y reservado en el browser, y el veredicto tiene que hablar
-                // del teclado que se va a editar.
+                // The map is THE ROW's (`maps.of`), not the screen the
+                // reader was looking at: `Tab` is free in the viewer and
+                // reserved in the browser, and the verdict has to talk about
+                // the keyboard that is about to be edited.
                 Some(chord) => sc.capture_chord(chord, maps.of(screen)),
                 None => return ShortcutsKeyOutcome::NotBindable,
             },
-            // Con un veredicto en pantalla, el resto de teclas no hacen nada:
-            // confirmar, recapturar o cancelar son las tres salidas, y el pie
-            // las nombra.
+            // With a verdict on screen, the rest of the keys do nothing:
+            // confirm, recapture or cancel are the three exits, and the
+            // footer names them.
             _ => {}
         }
         return ShortcutsKeyOutcome::None;
@@ -344,35 +347,35 @@ fn shortcuts_key(
     ShortcutsKeyOutcome::None
 }
 
-/// ¿Es esta tecla un codepoint que no debe acabar crudo en un fichero de
-/// configuración? Solo alcanzable por pegado — ninguna tecla física entrega un
-/// RLO —, y por eso se RECHAZA en vez de enmascararse: enmascarar ligaría un
-/// chord distinto del que el fichero diría.
+/// Is this key a codepoint that must not end up raw in a configuration
+/// file? Only reachable by paste — no physical key delivers an RLO — and
+/// that is why it is REJECTED instead of masked: masking would bind a
+/// different chord from the one the file would say.
 fn hostile_key(code: KeyCode) -> bool {
     matches!(code, KeyCode::Char(c) if norte_encoding::is_terminal_hazard(c))
 }
 
-/// Confirma la captura: la puerta ([`plan_rebind`]) y, solo si pasa, el
-/// escritor — en `spawn_blocking` (regla 2: `persist_keymap_bind` toma un lock
-/// de fichero y hace I/O síncrona, y esto corre en el hilo de la UI).
+/// Confirms the capture: the gate ([`plan_rebind`]) and, only if it passes,
+/// the writer — in `spawn_blocking` (rule 2: `persist_keymap_bind` takes a
+/// file lock and does synchronous I/O, and this runs on the UI thread).
 ///
-/// Lo que llega al escritor es lo que devolvió la puerta, TAL CUAL: la sección,
-/// la lista (`prepend_keymap` — un `append` no pisa al preset y no dispararía
-/// nunca) y la ortografía de los chords. Re-renderizar aquí la secuencia
-/// capturada reabriría justo el hueco que la puerta cierra.
+/// What reaches the writer is what the gate returned, AS IS: the section,
+/// the list (`prepend_keymap` — an `append` does not shadow the preset and
+/// would never fire), and the chords' spelling. Re-rendering the captured
+/// sequence here would reopen exactly the hole the gate closes.
 ///
-/// El fichero escrito lo ve el watcher de `keymap.toml`, que dispara
-/// `reload_config`: de ahí sale el efecto EN VIVO, y de ahí sale también el
-/// refresco de esta pantalla.
+/// The written file is seen by `keymap.toml`'s watcher, which fires
+/// `reload_config`: that is where the LIVE effect comes from, and that is
+/// also where this screen's refresh comes from.
 async fn confirm_shortcut(app: &mut App, cfg: &config::LoadedConfig, cli_preset: Option<&str>) {
     let captured = app.shortcuts.as_ref().and_then(|sc| {
         sc.confirmable()
             .map(|(screen, command, seq)| (screen, command.to_owned(), seq.to_vec()))
     });
-    // `None` = veredicto de rechazo (o nada capturado): no se escribe nada y la
-    // captura sigue viva para que el lector pruebe otra tecla — pero el Enter
-    // que acaba de pulsar no puede quedarse mudo: se repite el veredicto en la
-    // barra, que es la razón por la que no se guardó.
+    // `None` = a rejection verdict (or nothing captured): nothing is
+    // written and the capture stays alive so the reader can try another
+    // key — but the Enter they just pressed cannot stay mute: the verdict is
+    // repeated in the bar, which is the reason it was not saved.
     let Some((screen, command, seq)) = captured else {
         if let Some(v) = app
             .shortcuts
@@ -425,10 +428,10 @@ async fn confirm_shortcut(app: &mut App, cfg: &config::LoadedConfig, cli_preset:
             "msg-settings-save-failed",
             &[("error", &io_error_category(&e))],
         ),
-        // Un panic en el write es un bug nuestro: que no tumbe la TUI (misma
-        // disciplina que `persist_setting`).
+        // A panic in the write is our bug: it must not take down the TUI
+        // (same discipline as `persist_setting`).
         Err(e) => {
-            tracing::error!(error = %e, "tarea de fondo de persist_keymap_bind no terminó");
+            tracing::error!(error = %e, "persist_keymap_bind's background task did not finish");
             t("msg-settings-save-crashed")
         }
     });
@@ -437,19 +440,18 @@ async fn confirm_shortcut(app: &mut App, cfg: &config::LoadedConfig, cli_preset:
     }
 }
 
-/// Quita el binding de la fila bajo el cursor — la razón de que c1 escribiera
-/// `persist_keymap_unbind`: un editor que solo añade es un editor que no
-/// arregla un error.
+/// Removes the binding on the row under the cursor — the reason c1 wrote
+/// `persist_keymap_unbind`: an editor that only adds is an editor that fixes
+/// no mistake.
 ///
-/// Ahora pasa por la misma puerta que el bind ([`plan_unbind`] /
-/// `unbind_dry_run`, #141): casa por secuencia PARSEADA, no por bytes, así
-/// que un gemelo escrito a mano (`mod+p` por `ctrl+p`) se encuentra y se
-/// escribe con SU propia ortografía; y el mensaje sale del mapa
-/// RECONSTRUIDO — qué ejecuta la tecla AHORA — en vez de "quitado de tu
-/// keymap.toml", que era cierto e inútil en cuanto otra capa seguía
-/// ligándola. Una fila `[global]` ni siquiera llega a la puerta: se refleja
-/// en la fila misma (`ShortcutRow::is_editable`) y se rechaza antes, con su
-/// propio mensaje.
+/// Now goes through the same gate as the bind ([`plan_unbind`] /
+/// `unbind_dry_run`, #141): it matches by PARSED sequence, not by bytes, so
+/// a hand-written twin (`mod+p` for `ctrl+p`) is found and written with ITS
+/// OWN spelling; and the message comes from the RECONSTRUCTED map — what the
+/// key runs NOW — instead of "removed from your keymap.toml", which was
+/// true and useless the moment another layer kept binding it. A `[global]`
+/// row does not even reach the gate: it is reflected in the row itself
+/// (`ShortcutRow::is_editable`) and rejected earlier, with its own message.
 async fn unbind_shortcut(app: &mut App, cfg: &config::LoadedConfig, cli_preset: Option<&str>) {
     let Some(row) = app
         .shortcuts
@@ -480,8 +482,8 @@ async fn unbind_shortcut(app: &mut App, cfg: &config::LoadedConfig, cli_preset: 
         }
     };
     if matches!(write.outcome, crate::keymap::UnbindOutcome::NotBound) {
-        // Nada que escribir: el propio door ya vio que esta capa no tenía la
-        // secuencia (una fila de otra capa, o una lectura obsoleta).
+        // Nothing to write: the door itself already saw this layer did not
+        // have the sequence (a row from another layer, or a stale read).
         app.message = Some(t("msg-shortcut-nothing-to-unbind"));
         return;
     }
@@ -497,14 +499,15 @@ async fn unbind_shortcut(app: &mut App, cfg: &config::LoadedConfig, cli_preset: 
     })
     .await;
     app.message = Some(match res {
-        // `w.changed` es la verdad del ESCRITOR (releída bajo su lock) sobre
-        // si algo se quitó; `write.outcome` es la del DOOR, leída de la
-        // config en memoria antes del `spawn_blocking`. Si el fichero cambió
-        // justo en ese hueco (otro proceso, una edición a mano) `w.changed`
-        // sigue siendo cierto — no se inventa un cambio que no ocurrió — pero
-        // el TEXTO de `outcome` puede describir un mapa que ya no es el de
-        // disco: la misma ventana que `rebind_dry_run` ya documenta para el
-        // bind (el escritor toma el lock del fichero, esto no).
+        // `w.changed` is the WRITER's truth (re-read under its lock) about
+        // whether something was removed; `write.outcome` is the DOOR's,
+        // read from the in-memory config before the `spawn_blocking`. If
+        // the file changed in exactly that gap (another process, a manual
+        // edit) `w.changed` is still true — no change that did not happen
+        // is invented — but `outcome`'s TEXT can describe a map that is no
+        // longer the one on disk: the same window `rebind_dry_run` already
+        // documents for the bind (the writer takes the file's lock, this
+        // does not).
         Ok(Ok(w)) if w.changed => norte_frontend::shortcuts::unbind_outcome_message(
             &write.outcome,
             &painted,
@@ -516,22 +519,23 @@ async fn unbind_shortcut(app: &mut App, cfg: &config::LoadedConfig, cli_preset: 
             &[("error", &io_error_category(&e))],
         ),
         Err(e) => {
-            tracing::error!(error = %e, "tarea de fondo de persist_keymap_unbind no terminó");
+            tracing::error!(error = %e, "persist_keymap_unbind's background task did not finish");
             t("msg-settings-save-crashed")
         }
     });
 }
-/// Resuelve el preset (flag > config > default) y pliega las capas de
-/// keymap (ADR 0007) para las TRES pantallas (browse, viewer, dialog — H1
-/// T2). El error tipado ([`KeymapsError`], #73) vive en `crate::app`
-/// junto a su categoría Fluent.
+/// Resolves the preset (flag > config > default) and folds the keymap
+/// layers (ADR 0007) for the THREE screens (browse, viewer, dialog — H1
+/// T2). The typed error ([`KeymapsError`], #73) lives in `crate::app`
+/// next to its Fluent category.
 ///
 /// # Errors
 ///
-/// [`KeymapsError`] si el preset pedido no existe o si una capa no se puede
-/// plegar. Tipado y no `anyhow` a propósito: su categoría Fluent vive junto al
-/// error, y el editor de atajos hace un ensayo con esta misma función para
-/// decidir si una tecla se puede ligar — necesita el motivo, no un texto.
+/// [`KeymapsError`] if the requested preset does not exist or a layer
+/// cannot be folded. Typed and not `anyhow` on purpose: its Fluent category
+/// lives next to the error, and the shortcuts editor runs a dry run with
+/// this same function to decide whether a key can be bound — it needs the
+/// reason, not a text.
 pub fn build_keymaps(
     cfg: &config::LoadedConfig,
     cli_preset: Option<&str>,
@@ -558,32 +562,32 @@ pub fn build_keymaps(
     let viewer_known = known_commands(Screen::Viewer);
     let viewer = Effective::build_for(preset, &cfg.keymap_layers, &viewer_known, Screen::Viewer)
         .map_err(invalid)?;
-    // Screen::Dialog fusiona `[dialog] ∪ [global]` (ADR 0006/H1 T1):
-    // `build_for_impl` valida TODO el efectivo fusionado contra
-    // `known_commands`, así que un binding GLOBAL (p. ej. `ctrl+c →
-    // app.quit`) se validaría como `UnknownCommand` si solo pasáramos
-    // `DIALOG_COMMANDS`. La UNIÓN con `COMMANDS` es la opción simple (T1 lo
-    // deja elegido): inofensiva porque cada overlay ALLOWLISTEA solo sus
-    // `dialog.*` soportados (`app::dialog_action` y las resoluciones ad hoc
-    // de este módulo) y descarta cualquier otro comando resuelto.
+    // Screen::Dialog merges `[dialog] ∪ [global]` (ADR 0006/H1 T1):
+    // `build_for_impl` validates the WHOLE merged effective map against
+    // `known_commands`, so a GLOBAL binding (e.g. `ctrl+c →
+    // app.quit`) would validate as `UnknownCommand` if we only passed
+    // `DIALOG_COMMANDS`. The UNION with `COMMANDS` is the simple option (T1
+    // settled on it): harmless because each overlay ALLOWLISTS only its own
+    // supported `dialog.*` (`app::dialog_action` and this module's ad hoc
+    // resolutions) and drops any other resolved command.
     //
-    // K3c: esa unión vive ahora en `known_commands`, porque la puerta del
-    // editor de atajos tiene que pasarle al cargador EXACTAMENTE el mismo set
-    // que se lo pasó aquí — con uno más estrecho, el ensayo del rebind
-    // rechazaría un binding global que carga perfectamente.
+    // K3c: that union now lives in `known_commands`, because the shortcuts
+    // editor's gate has to hand the loader EXACTLY the same set that was
+    // handed to it here — with a narrower one, the rebind's dry run would
+    // reject a global binding that loads perfectly fine.
     let dialog_known = known_commands(Screen::Dialog);
     let dialog = Effective::build_for(preset, &cfg.keymap_layers, &dialog_known, Screen::Dialog)
         .map_err(invalid)?;
     Ok((browse, viewer, dialog))
 }
 
-/// K3c: el editor de atajos, conducido por el mismo camino que las teclas —
-/// [`shortcuts_key`] — y llevado hasta el disco y de vuelta.
+/// K3c: the shortcuts editor, driven through the same path as the keys —
+/// [`shortcuts_key`] — and carried all the way to disk and back.
 ///
-/// El test que importa es el de ida y vuelta completa: `reload_config` aplica
-/// TODO o NADA, así que una escritura que produjese una capa inválida dejaría
-/// el mapa viejo en su sitio, el editor diría «guardado» y la tecla nueva no
-/// haría nada. Eso no se ve en ningún test que se quede en la puerta.
+/// The test that matters is the full round trip: `reload_config` applies
+/// ALL or NOTHING, so a write that produced an invalid layer would leave
+/// the old map in place, the editor would say "saved" and the new key would
+/// do nothing. That does not show up in any test that stops at the gate.
 #[cfg(test)]
 mod shortcuts_editor_tests {
     use super::{Maps, ShortcutsKeyOutcome, build_keymaps, plan_rebind, shortcut_rows};
@@ -597,73 +601,72 @@ mod shortcuts_editor_tests {
     use crossterm::event::{KeyCode, KeyModifiers};
     use norte_frontend::shortcuts::PlanError;
 
-    /// Un directorio de configuración vacío como capa de USUARIO: el primer
-    /// rebind de una instalación nueva, que es el caso que `split_at` puede
-    /// modelar mal en silencio.
-    fn cfg_en(dir: &std::path::Path) -> (Layers, config::LoadedConfig) {
+    /// An empty config directory as the USER layer: a fresh install's first
+    /// rebind, which is the case `split_at` can silently model wrong.
+    fn config_in(dir: &std::path::Path) -> (Layers, config::LoadedConfig) {
         let layers = Layers {
             dirs: vec![(dir.to_path_buf(), Layer::User)],
         };
-        let cfg = config::load(&layers).expect("una capa vacía carga");
+        let cfg = config::load(&layers).expect("an empty layer loads");
         (layers, cfg)
     }
 
     fn maps(cfg: &config::LoadedConfig) -> (Effective, Effective, Effective) {
-        build_keymaps(cfg, None).expect("los tres mapas del preset activo")
+        build_keymaps(cfg, None).expect("the active preset's three maps")
     }
 
-    /// Con un perfil activo que trae `keymap.toml`, el atajo se escribe en el
-    /// fichero DEL PERFIL.
+    /// With an active profile carrying a `keymap.toml`, the shortcut is
+    /// written to the PROFILE's file.
     ///
-    /// D10 movió el destino ahí y este escritor seguía resolviendo el
-    /// directorio del usuario por su cuenta: la puerta planificaba sobre el
-    /// fichero del perfil y la escritura caía en el del usuario, donde el
-    /// perfil la tapa — «visiblemente guardado, y sin hacer nada» (#305).
+    /// D10 moved the destination there and this writer kept resolving the
+    /// user's directory on its own: the gate planned against the profile's
+    /// file and the write landed in the user's, where the profile shadows
+    /// it — "visibly saved, and doing nothing" (#305).
     #[test]
-    fn con_perfil_activo_el_atajo_se_escribe_en_el_fichero_del_perfil() {
-        let usuario = tempfile::tempdir().expect("tempdir");
-        let perfil = tempfile::tempdir().expect("tempdir");
+    fn with_an_active_profile_the_shortcut_is_written_to_the_profiles_file() {
+        let user = tempfile::tempdir().expect("tempdir");
+        let profile = tempfile::tempdir().expect("tempdir");
         std::fs::write(
-            perfil.path().join("keymap.toml"),
+            profile.path().join("keymap.toml"),
             "[pane]\nprepend_keymap = [{ on = [\"ctrl+j\"], run = \"cursor.top\" }]\n",
         )
         .expect("write");
         let layers = Layers {
             dirs: vec![
-                (usuario.path().to_path_buf(), Layer::User),
-                (perfil.path().to_path_buf(), Layer::Profile),
+                (user.path().to_path_buf(), Layer::User),
+                (profile.path().to_path_buf(), Layer::Profile),
             ],
         };
-        let cfg = config::load(&layers).expect("carga");
-        let mut app = app_vacia();
+        let cfg = config::load(&layers).expect("load");
+        let mut app = app_empty();
         app.active_profile = Some(std::ffi::OsString::from("work"));
 
         assert_eq!(
             super::rebind_dir(&app, &cfg, None, Screen::Browse).as_deref(),
-            Some(perfil.path()),
-            "el destino sale del CORTE, no de user_config_dir()"
+            Some(profile.path()),
+            "the destination comes from the CUT, not from user_config_dir()"
         );
     }
 
-    /// Sin perfil, sigue yendo al del usuario: esto no puede cambiar lo que ya
-    /// funcionaba.
+    /// With no profile, it still goes to the user's: this must not change
+    /// what already worked.
     #[test]
-    fn sin_perfil_el_atajo_sigue_yendo_al_del_usuario() {
-        let usuario = tempfile::tempdir().expect("tempdir");
+    fn with_no_profile_the_shortcut_still_goes_to_the_users() {
+        let user = tempfile::tempdir().expect("tempdir");
         std::fs::write(
-            usuario.path().join("keymap.toml"),
+            user.path().join("keymap.toml"),
             "[pane]\nprepend_keymap = [{ on = [\"ctrl+j\"], run = \"cursor.top\" }]\n",
         )
         .expect("write");
         let layers = Layers {
-            dirs: vec![(usuario.path().to_path_buf(), Layer::User)],
+            dirs: vec![(user.path().to_path_buf(), Layer::User)],
         };
-        let cfg = config::load(&layers).expect("carga");
-        let app = app_vacia();
+        let cfg = config::load(&layers).expect("load");
+        let app = app_empty();
 
         assert_eq!(
             super::rebind_dir(&app, &cfg, None, Screen::Browse).as_deref(),
-            Some(usuario.path())
+            Some(user.path())
         );
     }
 
@@ -671,14 +674,14 @@ mod shortcuts_editor_tests {
         parse_chord(s).expect("chord")
     }
 
-    fn app_vacia() -> super::App {
-        let d = norte_proto::VPath::parse("file:///x").expect("wire de test");
+    fn app_empty() -> super::App {
+        let d = norte_proto::VPath::parse("file:///x").expect("test wire");
         super::App::new(Pane::new(d.clone(), Vec::new()), Pane::new(d, Vec::new()))
     }
 
-    /// Sitúa el cursor en la fila de `command` en `screen` y devuelve el
-    /// editor listo para capturar.
-    fn editor_en(
+    /// Places the cursor on `command`'s row in `screen` and returns the
+    /// editor ready to capture.
+    fn editor_at(
         browse: &Effective,
         viewer: &Effective,
         dialog: &Effective,
@@ -693,7 +696,7 @@ mod shortcuts_editor_tests {
         let idx = rows
             .iter()
             .position(|r| r.screen == screen && r.command == command)
-            .expect("la fila del comando existe");
+            .expect("the command's row exists");
         let mut sc = Shortcuts::new(rows);
         for _ in 0..idx {
             sc.down();
@@ -701,22 +704,22 @@ mod shortcuts_editor_tests {
         assert_eq!(
             sc.selected().map(|r| r.command.as_str()),
             Some(command),
-            "el cursor está donde el test cree"
+            "the cursor is where the test thinks it is"
         );
         sc
     }
 
-    /// EL camino entero: capturar, pasar la puerta, escribir, RECARGAR como lo
-    /// hace el watcher, y comprobar que la tecla hace otra cosa.
+    /// THE whole path: capture, pass the gate, write, RELOAD the way the
+    /// watcher does, and check that the key does something else.
     ///
-    /// Sobre una tecla que el PRESET ya bindea, que es donde `append_keymap`
-    /// habría cargado, validado y no disparado nunca: si la puerta devolviese
-    /// la lista equivocada, este test seguiría escribiendo un fichero legal y
-    /// la última línea fallaría.
+    /// Over a key the PRESET already binds, which is where `append_keymap`
+    /// would have loaded, validated and never fired: if the gate returned
+    /// the wrong list, this test would still write a legal file and the
+    /// last line would fail.
     #[test]
-    fn una_captura_confirmada_se_escribe_carga_y_la_tecla_cambia() {
+    fn a_confirmed_capture_is_written_loads_and_the_key_changes() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let (layers, cfg) = cfg_en(dir.path());
+        let (layers, cfg) = config_in(dir.path());
         let (browse, viewer, dialog) = maps(&cfg);
         let f5 = chord("f5");
         let before = browse
@@ -724,10 +727,10 @@ mod shortcuts_editor_tests {
             .into_iter()
             .find(|(seq, _, _)| *seq == [f5])
             .map(|(_, run, _)| run.to_owned())
-            .expect("el preset activo bindea F5");
-        assert_ne!(before, "pane.mkdir", "si no, el test no prueba nada");
+            .expect("the active preset binds F5");
+        assert_ne!(before, "pane.mkdir", "otherwise the test proves nothing");
 
-        let mut sc = editor_en(&browse, &viewer, &dialog, Screen::Browse, "pane.mkdir");
+        let mut sc = editor_at(&browse, &viewer, &dialog, Screen::Browse, "pane.mkdir");
         let m = Maps {
             browse: &browse,
             viewer: &viewer,
@@ -736,42 +739,43 @@ mod shortcuts_editor_tests {
         super::shortcuts_key(&mut sc, &m, KeyModifiers::NONE, KeyCode::Enter);
         assert!(sc.is_capturing());
         super::shortcuts_key(&mut sc, &m, KeyModifiers::NONE, KeyCode::F(5));
-        let (screen, command, seq) = sc.confirmable().expect("F5 se puede reasignar");
+        let (screen, command, seq) = sc.confirmable().expect("F5 can be reassigned");
         let command = command.to_owned();
         let seq = seq.to_vec();
 
-        let w = plan_rebind(&cfg, None, screen, &seq, &command).expect("la puerta deja pasar");
+        let w = plan_rebind(&cfg, None, screen, &seq, &command).expect("the gate lets it through");
         assert_eq!(
             w.list,
             config::KeymapList::Prepend,
-            "un append no pisaría al preset"
+            "an append would not shadow the preset"
         );
         config::persist_keymap_bind(dir.path(), w.section, w.list, &w.chords, &w.command)
-            .expect("el escritor escribe");
+            .expect("the writer writes");
 
-        // Lo que hace el watcher: recargar la config y reconstruir los mapas.
-        // `reload_config` es todo-o-nada, así que un fichero que no cargase se
-        // vería aquí como un `Err` — y en la TUI, como un mapa viejo intacto.
-        let (_, cfg2) = cfg_en(dir.path());
+        // What the watcher does: reload the config and rebuild the maps.
+        // `reload_config` is all-or-nothing, so a file that failed to load
+        // would show up here as an `Err` — and in the TUI, as an intact old
+        // map.
+        let (_, cfg2) = config_in(dir.path());
         drop(layers);
         let (browse2, _, _) = maps(&cfg2);
         assert!(
             browse2.single_chord_runs(f5, "pane.mkdir"),
-            "la tecla nueva hace lo que el editor dijo"
+            "the new key does what the editor said"
         );
 
-        // Y el desligado la devuelve al preset — el motivo de que c1 escribiera
-        // `persist_keymap_unbind`: un editor que solo añade no arregla nada.
-        // Los mismos argumentos que arma `unbind_shortcut` a partir de la fila.
+        // And unbinding returns it to the preset — the reason c1 wrote
+        // `persist_keymap_unbind`: an editor that only adds fixes nothing.
+        // The same arguments `unbind_shortcut` builds from the row.
         let row_seq: Vec<String> = seq.iter().map(ToString::to_string).collect();
         let removed = config::persist_keymap_unbind(dir.path(), w.section, &row_seq, &command)
-            .expect("quita");
-        assert!(removed.changed, "había algo que quitar");
-        let (_, cfg3) = cfg_en(dir.path());
+            .expect("removes");
+        assert!(removed.changed, "there was something to remove");
+        let (_, cfg3) = config_in(dir.path());
         let (browse3, _, _) = maps(&cfg3);
         assert!(
             browse3.single_chord_runs(f5, &before),
-            "sin la capa del usuario vuelve a mandar el preset"
+            "without the user layer the preset rules again"
         );
     }
 
@@ -784,10 +788,10 @@ mod shortcuts_editor_tests {
     #[test]
     fn a_paste_while_capturing_a_chord_is_rejected_not_bound() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let (_layers, cfg) = cfg_en(dir.path());
+        let (_layers, cfg) = config_in(dir.path());
         let (browse, viewer, dialog) = maps(&cfg);
-        let sc = editor_en(&browse, &viewer, &dialog, Screen::Browse, "pane.mkdir");
-        let mut app = app_vacia();
+        let sc = editor_at(&browse, &viewer, &dialog, Screen::Browse, "pane.mkdir");
+        let mut app = app_empty();
         app.shortcuts = Some(sc);
         let m = Maps {
             browse: &browse,
@@ -815,15 +819,16 @@ mod shortcuts_editor_tests {
         );
     }
 
-    /// Una tecla sagrada (§12) capturada NO es confirmable — y la puerta, si
-    /// alguien la saltase, tampoco la deja pasar. Las dos mitades, porque el
-    /// veredicto de la captura es una comodidad y la puerta es la garantía.
+    /// A sacred key (§12) that gets captured is NOT confirmable — and the
+    /// gate, if someone skipped it, would not let it through either. Both
+    /// halves, because the capture's verdict is a convenience and the gate
+    /// is the guarantee.
     #[test]
-    fn una_tecla_sagrada_no_es_confirmable_ni_pasa_la_puerta() {
+    fn a_sacred_key_is_not_confirmable_nor_does_it_pass_the_gate() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let (_layers, cfg) = cfg_en(dir.path());
+        let (_layers, cfg) = config_in(dir.path());
         let (browse, viewer, dialog) = maps(&cfg);
-        let mut sc = editor_en(&browse, &viewer, &dialog, Screen::Browse, "pane.mkdir");
+        let mut sc = editor_at(&browse, &viewer, &dialog, Screen::Browse, "pane.mkdir");
         let m = Maps {
             browse: &browse,
             viewer: &viewer,
@@ -833,43 +838,43 @@ mod shortcuts_editor_tests {
         super::shortcuts_key(&mut sc, &m, KeyModifiers::NONE, KeyCode::Tab);
         assert!(
             sc.capture().and_then(|c| c.verdict()).is_some(),
-            "el veredicto se ve ANTES de confirmar"
+            "the verdict is seen BEFORE confirming"
         );
-        assert!(sc.confirmable().is_none(), "Tab no se vende");
+        assert!(sc.confirmable().is_none(), "Tab does not sell out");
         assert!(matches!(
             plan_rebind(&cfg, None, Screen::Browse, &[chord("tab")], "pane.mkdir"),
             Err(PlanError::Door(_))
         ));
-        // Y con un veredicto de rechazo en pantalla, Enter no pide escribir.
+        // And with a rejection verdict on screen, Enter does not ask to write.
         assert!(matches!(
             super::shortcuts_key(&mut sc, &m, KeyModifiers::NONE, KeyCode::Enter),
             ShortcutsKeyOutcome::Confirm
         ));
         assert!(
             sc.confirmable().is_none(),
-            "y `confirm_shortcut` no tiene nada que escribir"
+            "and `confirm_shortcut` has nothing to write"
         );
     }
 
-    /// `Esc` cancela la captura en las dos fases — por eso es el único chord
-    /// que este editor no puede capturar, y por eso la pantalla lo dice.
-    /// `Enter`, en cambio, SÍ se captura: en la fase de espera es una tecla
-    /// como otra cualquiera y solo confirma después.
+    /// `Esc` cancels the capture in both phases — which is why it is the one
+    /// chord this editor cannot capture, and why the screen says so.
+    /// `Enter`, on the other hand, CAN be captured: in the waiting phase it
+    /// is a key like any other and only confirms afterward.
     #[test]
-    fn esc_cancela_y_enter_si_se_puede_capturar() {
+    fn esc_cancels_and_enter_can_be_captured() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let (_layers, cfg) = cfg_en(dir.path());
+        let (_layers, cfg) = config_in(dir.path());
         let (browse, viewer, dialog) = maps(&cfg);
         let m = Maps {
             browse: &browse,
             viewer: &viewer,
             dialog: &dialog,
         };
-        let mut sc = editor_en(&browse, &viewer, &dialog, Screen::Browse, "pane.mkdir");
+        let mut sc = editor_at(&browse, &viewer, &dialog, Screen::Browse, "pane.mkdir");
         super::shortcuts_key(&mut sc, &m, KeyModifiers::NONE, KeyCode::Enter);
         super::shortcuts_key(&mut sc, &m, KeyModifiers::NONE, KeyCode::Esc);
-        assert!(!sc.is_capturing(), "esc cancela la espera");
-        // Y con la captura cerrada, `Esc` cierra la pantalla.
+        assert!(!sc.is_capturing(), "esc cancels the wait");
+        // And with the capture closed, `Esc` closes the screen.
         assert!(matches!(
             super::shortcuts_key(&mut sc, &m, KeyModifiers::NONE, KeyCode::Esc),
             ShortcutsKeyOutcome::Close
@@ -880,28 +885,28 @@ mod shortcuts_editor_tests {
         assert_eq!(
             sc.capture().map(|c| c.seq().to_vec()),
             Some(vec![chord("enter")]),
-            "el primer Enter abre la captura y el segundo ES la tecla"
+            "the first Enter opens the capture and the second IS the key"
         );
         super::shortcuts_key(&mut sc, &m, KeyModifiers::NONE, KeyCode::Esc);
-        assert!(!sc.is_capturing(), "esc cancela también con veredicto");
+        assert!(!sc.is_capturing(), "esc cancels with a verdict too");
     }
 
-    /// `Ctrl+C` NO cierra norte mientras se captura: es un chord que un
-    /// converso de CUA quiere ligar, y en modo captura el lector pulsa a
-    /// ciegas porque el editor se lo ha pedido. Fuera de la captura sigue
-    /// siendo la salida de emergencia de siempre.
+    /// `Ctrl+C` does NOT quit norte while capturing: it is a chord a CUA
+    /// convert wants to bind, and in capture mode the reader is pressing
+    /// blind because the editor asked for it. Outside the capture it stays
+    /// the usual emergency exit.
     #[tokio::test]
-    async fn ctrl_c_capturando_es_un_chord_y_no_una_salida() {
+    async fn ctrl_c_while_capturing_is_a_chord_not_an_exit() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let (_layers, cfg) = cfg_en(dir.path());
+        let (_layers, cfg) = config_in(dir.path());
         let (browse, viewer, dialog) = maps(&cfg);
         let m = Maps {
             browse: &browse,
             viewer: &viewer,
             dialog: &dialog,
         };
-        let mut app = app_vacia();
-        app.shortcuts = Some(editor_en(
+        let mut app = app_empty();
+        app.shortcuts = Some(editor_at(
             &browse,
             &viewer,
             &dialog,
@@ -918,7 +923,10 @@ mod shortcuts_editor_tests {
             KeyCode::Char('c'),
         )
         .await;
-        assert!(!app.quit, "capturando, ctrl+c es la tecla que se captura");
+        assert!(
+            !app.quit,
+            "while capturing, ctrl+c is the key being captured"
+        );
         assert_eq!(
             app.shortcuts
                 .as_ref()
@@ -926,7 +934,7 @@ mod shortcuts_editor_tests {
                 .map(|c| c.seq().to_vec()),
             Some(vec![chord("ctrl+c")])
         );
-        // Cancelada la captura, vuelve a ser la salida global.
+        // With the capture cancelled, it goes back to being the global exit.
         super::on_shortcuts_key(&mut app, &cfg, None, &m, KeyModifiers::NONE, KeyCode::Esc).await;
         super::on_shortcuts_key(
             &mut app,
@@ -940,20 +948,20 @@ mod shortcuts_editor_tests {
         assert!(app.quit);
     }
 
-    /// Un codepoint peligroso solo puede llegar PEGADO (norte no activa
-    /// bracketed paste), y no se captura: `parse_chord` lo aceptaría y el
-    /// escritor lo dejaría crudo en el `keymap.toml` del usuario.
+    /// A dangerous codepoint can only arrive PASTED (norte does not enable
+    /// bracketed paste), and it is not captured: `parse_chord` would accept
+    /// it and the writer would leave it raw in the user's `keymap.toml`.
     #[test]
-    fn un_codepoint_peligroso_pegado_no_se_captura() {
+    fn a_pasted_dangerous_codepoint_is_not_captured() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let (_layers, cfg) = cfg_en(dir.path());
+        let (_layers, cfg) = config_in(dir.path());
         let (browse, viewer, dialog) = maps(&cfg);
         let m = Maps {
             browse: &browse,
             viewer: &viewer,
             dialog: &dialog,
         };
-        let mut sc = editor_en(&browse, &viewer, &dialog, Screen::Browse, "pane.mkdir");
+        let mut sc = editor_at(&browse, &viewer, &dialog, Screen::Browse, "pane.mkdir");
         super::shortcuts_key(&mut sc, &m, KeyModifiers::NONE, KeyCode::Enter);
         assert!(matches!(
             super::shortcuts_key(
@@ -966,21 +974,21 @@ mod shortcuts_editor_tests {
             ShortcutsKeyOutcome::NotBindable
         ));
         assert!(
-            sc.capture().expect("sigue capturando").is_waiting(),
-            "no se capturó nada"
+            sc.capture().expect("still capturing").is_waiting(),
+            "nothing was captured"
         );
     }
 
-    /// Un modal que llega SOLO (una aprobación de policy, una colisión) se
-    /// queda el teclado: el editor deja de pedir una tecla a ciegas, y el
-    /// brazo del modal lo retira entero.
+    /// A modal that arrives ALONE (a policy approval, a collision) claims
+    /// the keyboard: the editor stops asking for a key blind, and the
+    /// modal's arm retires it entirely.
     #[test]
-    fn un_modal_que_llega_solo_abandona_la_captura() {
+    fn a_modal_arriving_alone_abandons_the_capture() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let (_layers, cfg) = cfg_en(dir.path());
+        let (_layers, cfg) = config_in(dir.path());
         let (browse, viewer, dialog) = maps(&cfg);
-        let mut app = app_vacia();
-        let mut sc = editor_en(&browse, &viewer, &dialog, Screen::Browse, "pane.mkdir");
+        let mut app = app_empty();
+        let mut sc = editor_at(&browse, &viewer, &dialog, Screen::Browse, "pane.mkdir");
         assert!(sc.begin_capture());
         app.shortcuts = Some(sc);
         app.pending_approvals
@@ -997,18 +1005,18 @@ mod shortcuts_editor_tests {
         assert!(app.modal.is_some());
         assert!(
             !app.shortcuts.as_ref().is_some_and(Shortcuts::is_capturing),
-            "ya no se pide una tecla a ciegas"
+            "a key is no longer requested blind"
         );
         close_stale_overlays(&mut app);
-        assert!(app.shortcuts.is_none(), "y el brazo del modal lo retira");
+        assert!(app.shortcuts.is_none(), "and the modal's arm retires it");
     }
 
-    /// El editor lista lo que la hoja de referencia no puede: un comando que
-    /// ninguna tecla pulsa. Sin esa fila, «cómo pulso X» no tiene respuesta.
+    /// The editor lists what the reference sheet cannot: a command that no
+    /// key presses. Without that row, "how do I press X" has no answer.
     #[test]
-    fn un_comando_sin_tecla_tiene_fila() {
+    fn a_command_with_no_key_has_a_row() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let (_layers, cfg) = cfg_en(dir.path());
+        let (_layers, cfg) = config_in(dir.path());
         let (browse, viewer, dialog) = maps(&cfg);
         let rows = shortcut_rows(&Maps {
             browse: &browse,
@@ -1017,28 +1025,29 @@ mod shortcuts_editor_tests {
         });
         assert!(
             rows.iter().any(|r| !r.is_bound()),
-            "el preset activo no bindea TODO lo que la TUI despacha"
+            "the active preset does not bind EVERYTHING the TUI dispatches"
         );
         for screen in [Screen::Browse, Screen::Viewer, Screen::Dialog] {
             assert!(
                 rows.iter().any(|r| r.screen == screen),
-                "{screen:?} tiene filas"
+                "{screen:?} has rows"
             );
         }
-        // Y las filas del viewer no ofrecen comandos de pane: ligar `pane.copy`
-        // ahí escribiría una tecla que no hace nada en el viewer.
+        // And the viewer's rows do not offer pane commands: binding
+        // `pane.copy` there would write a key that does nothing in the
+        // viewer.
         assert!(
             !rows
                 .iter()
                 .any(|r| r.screen == Screen::Viewer && !r.is_bound() && r.command == "pane.copy"),
-            "el viewer no despacha comandos de pane"
+            "the viewer does not dispatch pane commands"
         );
     }
 
-    /// Cada mensaje de esta pantalla existe en los DOS locales: lo que se ve
-    /// en la barra si falta una clave es el id crudo.
+    /// Every message on this screen exists in BOTH locales: what shows in
+    /// the bar if a key is missing is the raw id.
     #[test]
-    fn las_claves_de_la_pantalla_existen_en_ambos_locales() {
+    fn the_screens_keys_exist_in_both_locales() {
         for lang in [norte_i18n::Lang::Es, norte_i18n::Lang::En] {
             for id in [
                 "shortcuts-title",
@@ -1055,7 +1064,7 @@ mod shortcuts_editor_tests {
                 "msg-shortcut-not-bindable",
                 "shortcuts-row-global",
             ] {
-                assert_ne!(norte_i18n::t_in(lang, id), id, "falta {id} en {lang:?}");
+                assert_ne!(norte_i18n::t_in(lang, id), id, "{id} missing in {lang:?}");
             }
         }
     }

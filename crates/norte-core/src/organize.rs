@@ -1,22 +1,22 @@
-//! Organizar un directorio (fase 8 del programa WOW): un plan que MUEVE a
-//! subdirectorios, y que por tanto además los crea.
+//! Organizing a directory (WOW program phase 8): a plan that MOVES into
+//! subdirectories, and therefore also creates them.
 //!
-//! Es el hermano del renombrado por lotes, y la diferencia cabe en una
-//! frase: allí el destino es un nombre, aquí es una ruta relativa. Eso
-//! arrastra tres cosas que no se pueden tomar prestadas de aquél:
+//! It's the sibling of batch rename, and the difference fits in one
+//! sentence: there the destination is a name, here it's a relative path.
+//! That drags along three things that cannot be borrowed from the other:
 //!
-//! - **Hay que validar la ruta.** `proposed_rel` lo escribe un tercero —un
-//!   modelo o un plugin— y un `..` ahí es una escritura fuera del directorio
-//!   que el humano estaba mirando. Lo comprueba
-//!   [`norte_proto::methods::validar_proposed_rel`], que vive en el
-//!   protocolo para que el core y los frontends apliquen la MISMA regla.
-//! - **Hay que crear carpetas**, y tienen que ir en el mismo lote que los
-//!   movimientos: si no, deshacer devuelve los ficheros y se olvida los
-//!   directorios.
-//! - **No hay directorio común.** Por eso el journal marca los movimientos
-//!   con [`crate::OP_ORGANIZED`] y no con `renamed`: sin esa marca, el
-//!   undo los tomaría por un lote de renombrados de un solo directorio y los
-//!   desharía contra el equivocado.
+//! - **The path has to be validated.** `proposed_rel` is written by a third
+//!   party —a model or a plugin— and a `..` in there is a write outside the
+//!   directory the human was looking at. Checked by
+//!   [`norte_proto::methods::validar_proposed_rel`], which lives in the
+//!   protocol so the core and the frontends apply the SAME rule.
+//! - **Folders have to be created**, and they have to go in the same batch
+//!   as the moves: otherwise undo returns the files and forgets the
+//!   directories.
+//! - **There is no common directory.** That's why the journal marks the
+//!   moves with [`crate::OP_ORGANIZED`] and not with `renamed`: without
+//!   that mark, undo would mistake them for a single-directory batch rename
+//!   and undo them against the wrong one.
 
 use std::collections::BTreeSet;
 
@@ -25,33 +25,34 @@ use norte_proto::{Error, Segment, VPath};
 
 use crate::hashing::hex_lower;
 
-/// Un plan de organizar ya validado y atado a su directorio.
+/// An organize plan already validated and bound to its directory.
 ///
-/// Que exista este tipo es lo que impide aplicar un plan que nadie revisó:
-/// [`Engine::organize`](crate::Engine::organize) sólo acepta el `plan_hash`
-/// que sale de aquí.
+/// This type existing is what prevents applying a plan nobody reviewed:
+/// [`Engine::organize`](crate::Engine::organize) only accepts the
+/// `plan_hash` that comes out of here.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OrganizePlan {
-    /// Los movimientos, con su destino ya partido en segmentos.
-    pasos: Vec<OrganizeStep>,
-    /// El token que hay que devolver para aplicarlo.
+    /// The moves, with their destination already split into segments.
+    steps: Vec<OrganizeStep>,
+    /// The token that has to be returned to apply it.
     hash: PlanHash,
 }
 
-/// Un movimiento validado: de dónde sale y a dónde va, ya en segmentos.
+/// A validated move: where it comes from and where it goes, already in
+/// segments.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OrganizeStep {
-    /// El nombre que hay ahora, dentro del directorio del plan.
+    /// The name it currently has, inside the plan's directory.
     pub current: Segment,
-    /// El destino, relativo al mismo directorio. Al menos un segmento; los
-    /// de en medio son carpetas que puede haber que crear.
+    /// The destination, relative to the same directory. At least one
+    /// segment; the middle ones are folders that may need creating.
     pub rel: Vec<Segment>,
 }
 
 impl OrganizeStep {
-    /// La ruta absoluta de destino, colgando de `dir`.
+    /// The absolute destination path, hanging off `dir`.
     #[must_use]
-    pub fn destino(&self, dir: &VPath) -> VPath {
+    pub fn dest(&self, dir: &VPath) -> VPath {
         let mut p = dir.clone();
         for s in &self.rel {
             p = p.join(s.clone());
@@ -59,10 +60,10 @@ impl OrganizeStep {
         p
     }
 
-    /// Las carpetas que este paso necesita bajo `dir`, de la más alta a la
-    /// más honda. El ÚLTIMO segmento es el fichero y no entra.
+    /// The folders this step needs under `dir`, from shallowest to deepest.
+    /// The LAST segment is the file and is not included.
     #[must_use]
-    pub fn carpetas(&self, dir: &VPath) -> Vec<VPath> {
+    pub fn folders(&self, dir: &VPath) -> Vec<VPath> {
         let mut out = Vec::new();
         let mut p = dir.clone();
         for s in self.rel.iter().take(self.rel.len().saturating_sub(1)) {
@@ -74,125 +75,126 @@ impl OrganizeStep {
 }
 
 impl OrganizePlan {
-    /// Valida `moves` contra `dir` y ata el plan a ese directorio.
+    /// Validates `moves` against `dir` and binds the plan to that directory.
     ///
-    /// Un solo destino inválido tumba el plan ENTERO, y es deliberado: un
-    /// plan es una intención que un humano aprueba de una vez, y aplicar «lo
-    /// que se pudo» de una propuesta que traía un `..` sería quedarse con la
-    /// mitad de algo que nadie revisó. Fail-loud, como el plan de
-    /// renombrado hace con los nombres hostiles.
+    /// A single invalid destination brings down the WHOLE plan, and that's
+    /// deliberate: a plan is an intention a human approves all at once, and
+    /// applying "what could be done" from a proposal that carried a `..`
+    /// would mean keeping half of something nobody reviewed. Fail-loud, the
+    /// same way the rename plan does with hostile names.
     ///
     /// # Errors
-    /// [`Error::InvalidPath`] si algún `current` no es un nombre válido o
-    /// algún `proposed_rel` no pasa
-    /// [`norte_proto::methods::validar_proposed_rel`]; también si dos
-    /// movimientos se pisan —el mismo origen dos veces, o dos destinos
-    /// iguales—, que es un plan que no se puede cumplir entero.
+    /// [`Error::InvalidPath`] if some `current` is not a valid name or some
+    /// `proposed_rel` does not pass
+    /// [`norte_proto::methods::validar_proposed_rel`]; also if two moves
+    /// collide —the same origin twice, or two equal destinations—, which is
+    /// a plan that cannot be fulfilled in full.
     pub fn bind(dir: &VPath, moves: &[OrganizeMove]) -> Result<Self, Error> {
-        let mut pasos = Vec::with_capacity(moves.len());
-        let mut origenes: BTreeSet<Vec<u8>> = BTreeSet::new();
-        let mut destinos: BTreeSet<Vec<Vec<u8>>> = BTreeSet::new();
+        let mut steps = Vec::with_capacity(moves.len());
+        let mut origins: BTreeSet<Vec<u8>> = BTreeSet::new();
+        let mut destinations: BTreeSet<Vec<Vec<u8>>> = BTreeSet::new();
         for m in moves {
             let current = Segment::new(m.current.as_bytes()).map_err(|_| Error::InvalidPath)?;
             let rel = norte_proto::methods::validar_proposed_rel(&m.proposed_rel)
                 .map_err(|_| Error::InvalidPath)?;
-            // Un origen repetido es un plan que se contradice; dos destinos
-            // iguales, uno que pierde un fichero. Las dos cosas se rechazan
-            // ANTES de tocar nada: a mitad de camino ya no hay plan que
-            // revisar.
-            if !origenes.insert(current.as_bytes().to_vec()) {
+            // A repeated origin is a self-contradicting plan; two equal
+            // destinations, one that loses a file. Both are rejected
+            // BEFORE touching anything: halfway through there's no longer
+            // a plan to review.
+            if !origins.insert(current.as_bytes().to_vec()) {
                 return Err(Error::InvalidPath);
             }
-            let clave: Vec<Vec<u8>> = rel.iter().map(|s| s.as_bytes().to_vec()).collect();
-            if !destinos.insert(clave) {
+            let key: Vec<Vec<u8>> = rel.iter().map(|s| s.as_bytes().to_vec()).collect();
+            if !destinations.insert(key) {
                 return Err(Error::InvalidPath);
             }
-            pasos.push(OrganizeStep { current, rel });
+            steps.push(OrganizeStep { current, rel });
         }
-        let hash = hash_de(dir, &pasos);
-        Ok(Self { pasos, hash })
+        let hash = hash_of(dir, &steps);
+        Ok(Self { steps, hash })
     }
 
-    /// Los pasos validados.
+    /// The validated steps.
     #[must_use]
-    pub fn pasos(&self) -> &[OrganizeStep] {
-        &self.pasos
+    pub fn steps(&self) -> &[OrganizeStep] {
+        &self.steps
     }
 
-    /// El token que hay que devolver para aplicarlo.
+    /// The token that has to be returned to apply it.
     #[must_use]
     pub fn hash(&self) -> &PlanHash {
         &self.hash
     }
 
-    /// Todas las carpetas que el plan necesita bajo `dir`, sin repetir y de
-    /// la más alta a la más honda.
+    /// Every folder the plan needs under `dir`, without repeats and from
+    /// shallowest to deepest.
     ///
-    /// El orden importa: crear `a/b` antes que `a` falla en cualquier
-    /// provider que no cree padres por su cuenta, y no se le puede pedir a
-    /// un provider que lo haga —la regla es que el core sepa qué creó, para
-    /// poder deshacerlo—.
+    /// Order matters: creating `a/b` before `a` fails on any provider that
+    /// does not create parents on its own, and a provider cannot be asked
+    /// to do that —the rule is that the core knows what it created, so it
+    /// can undo it—.
     #[must_use]
-    pub fn carpetas(&self, dir: &VPath) -> Vec<VPath> {
-        let mut vistas: BTreeSet<String> = BTreeSet::new();
+    pub fn folders(&self, dir: &VPath) -> Vec<VPath> {
+        let mut seen: BTreeSet<String> = BTreeSet::new();
         let mut out: Vec<VPath> = Vec::new();
-        for paso in &self.pasos {
-            for c in paso.carpetas(dir) {
-                if vistas.insert(c.to_wire()) {
+        for step in &self.steps {
+            for c in step.folders(dir) {
+                if seen.insert(c.to_wire()) {
                     out.push(c);
                 }
             }
         }
-        // Por profundidad: el padre antes que el hijo. `segments().count()`
-        // es el número de tramos, o sea exactamente la profundidad.
+        // By depth: the parent before the child. `segments().count()` is
+        // the number of segments, i.e. exactly the depth.
         out.sort_by_key(|p| p.segments().count());
         out
     }
 }
 
-/// El token de un plan recién propuesto, listo para viajar CON él.
+/// The token for a freshly proposed plan, ready to travel WITH it.
 ///
-/// Existe porque quien propone y quien aplica están separados por el wire: un
-/// plan sin token no se puede aprobar, y calcularlo en el cliente pondría el
-/// algoritmo del digest en dos sitios —que es exactamente la forma de que un
-/// día dejen de coincidir y `fs.organize` conteste `PlanStale` a un plan que
-/// nadie tocó—.
+/// It exists because whoever proposes and whoever applies are separated by
+/// the wire: a plan with no token cannot be approved, and computing it on
+/// the client would put the digest algorithm in two places —which is
+/// exactly how they'd stop matching one day and `fs.organize` would answer
+/// `PlanStale` for a plan nobody touched—.
 ///
 /// # Errors
-/// Lo que rechace [`OrganizePlan::bind`]: un plan con un destino inválido o
-/// que se contradice no tiene token, porque no se va a poder aplicar.
+/// Whatever [`OrganizePlan::bind`] rejects: a plan with an invalid or
+/// self-contradicting destination has no token, because it will not be
+/// possible to apply it.
 pub fn plan_hash(dir: &VPath, moves: &[OrganizeMove]) -> Result<PlanHash, Error> {
     OrganizePlan::bind(dir, moves).map(|p| p.hash)
 }
 
-/// El hash de un plan, atado a su directorio.
+/// A plan's hash, bound to its directory.
 ///
-/// Mismo criterio que `DirPlan::bind` del renombrado —un dominio propio para
-/// que este digest no pueda colisionar con otro del core sobre los mismos
-/// bytes— y con los pasos dentro, para que cambiar un destino invalide el
-/// token que el humano aprobó.
-fn hash_de(dir: &VPath, pasos: &[OrganizeStep]) -> PlanHash {
+/// Same criterion as rename's `DirPlan::bind` —its own domain so this digest
+/// cannot collide with another one in the core over the same bytes— and
+/// with the steps inside, so changing a destination invalidates the token
+/// the human approved.
+fn hash_of(dir: &VPath, steps: &[OrganizeStep]) -> PlanHash {
     use sha2::{Digest, Sha256};
     let mut h = Sha256::new();
     h.update(b"norte-organize-plan-dir-v1");
-    alimenta(&mut h, dir.to_wire().as_bytes());
-    for paso in pasos {
-        alimenta(&mut h, paso.current.as_bytes());
-        // Cuántos segmentos, y luego cada uno: sin la cuenta, `a/b` y `ab`
-        // podrían alimentar los mismos bytes.
-        alimenta(&mut h, &(paso.rel.len() as u64).to_le_bytes());
-        for s in &paso.rel {
-            alimenta(&mut h, s.as_bytes());
+    feed(&mut h, dir.to_wire().as_bytes());
+    for step in steps {
+        feed(&mut h, step.current.as_bytes());
+        // How many segments, and then each one: without the count, `a/b`
+        // and `ab` could feed the same bytes.
+        feed(&mut h, &(step.rel.len() as u64).to_le_bytes());
+        for s in &step.rel {
+            feed(&mut h, s.as_bytes());
         }
     }
-    // INVARIANTE: el hex en minúsculas de un sha256 son 64 dígitos, que es
-    // todo el contrato de `PlanHash`.
-    PlanHash::parse(&hex_lower(&h.finalize())).expect("un sha256 en hex es un PlanHash")
+    // INVARIANT: the lowercase hex of a sha256 is 64 digits, which is the
+    // entire contract of `PlanHash`.
+    PlanHash::parse(&hex_lower(&h.finalize())).expect("a sha256 in hex is a PlanHash")
 }
 
-/// Alimenta un trozo con su longitud delante, para que dos trozos distintos
-/// no puedan producir la misma cadena de bytes.
-fn alimenta(h: &mut impl sha2::Digest, bytes: &[u8]) {
+/// Feeds a chunk with its length in front, so two different chunks cannot
+/// produce the same byte string.
+fn feed(h: &mut impl sha2::Digest, bytes: &[u8]) {
     h.update((bytes.len() as u64).to_le_bytes());
     h.update(bytes);
 }
@@ -203,7 +205,7 @@ mod tests {
     use norte_proto::VPath;
 
     fn dir() -> VPath {
-        VPath::parse("mem:///descargas").expect("wire")
+        VPath::parse("mem:///downloads").expect("wire")
     }
 
     fn mov(current: &str, rel: &str) -> OrganizeMove {
@@ -213,108 +215,117 @@ mod tests {
         }
     }
 
-    /// **Un destino que se sale del directorio tumba el plan ENTERO.**
+    /// **A destination that escapes the directory brings down the WHOLE plan.**
     ///
-    /// Es la propiedad de seguridad de toda la fase: `proposed_rel` lo
-    /// escribe un modelo o un plugin, y un `..` ahí es una escritura fuera
-    /// de lo que el humano estaba mirando. Y tumba el plan entero, no sólo
-    /// ese paso: aplicar «lo que se pudo» de una propuesta que traía eso
-    /// sería quedarse con la mitad de algo que nadie revisó.
+    /// This is the whole phase's security property: `proposed_rel` is
+    /// written by a model or a plugin, and a `..` in there is a write
+    /// outside what the human was looking at. And it brings down the whole
+    /// plan, not just that step: applying "what could be done" from a
+    /// proposal carrying that would mean keeping half of something nobody
+    /// reviewed.
     #[test]
-    fn un_destino_que_se_sale_tumba_el_plan_entero() {
-        for malo in [
-            "../fuera.txt",
-            "a/../../fuera.txt",
+    fn a_destination_that_escapes_brings_down_the_whole_plan() {
+        for bad in [
+            "../outside.txt",
+            "a/../../outside.txt",
             "/etc/passwd",
             "",
             "a//b",
             "a/",
             "./x",
         ] {
-            let r = OrganizePlan::bind(&dir(), &[mov("bueno.txt", "ok/bueno.txt"), mov("x", malo)]);
-            assert!(r.is_err(), "«{malo}» tendría que rechazarse");
+            let r = OrganizePlan::bind(&dir(), &[mov("good.txt", "ok/good.txt"), mov("x", bad)]);
+            assert!(r.is_err(), "«{bad}» should be rejected");
         }
     }
 
-    /// Dos movimientos que se pisan —mismo origen, o mismo destino— son un
-    /// plan que no se puede cumplir entero, y se rechaza antes de tocar nada.
+    /// Two moves that collide —same origin, or same destination— are a plan
+    /// that cannot be fulfilled in full, and it's rejected before touching
+    /// anything.
     #[test]
-    fn un_plan_que_se_contradice_se_rechaza() {
-        let mismo_origen = OrganizePlan::bind(&dir(), &[mov("a.txt", "x/a"), mov("a.txt", "y/a")]);
-        assert!(mismo_origen.is_err());
-        let mismo_destino = OrganizePlan::bind(&dir(), &[mov("a.txt", "x/a"), mov("b.txt", "x/a")]);
-        assert!(mismo_destino.is_err());
+    fn a_self_contradicting_plan_is_rejected() {
+        let same_origin = OrganizePlan::bind(&dir(), &[mov("a.txt", "x/a"), mov("a.txt", "y/a")]);
+        assert!(same_origin.is_err());
+        let same_destination =
+            OrganizePlan::bind(&dir(), &[mov("a.txt", "x/a"), mov("b.txt", "x/a")]);
+        assert!(same_destination.is_err());
     }
 
-    /// Las carpetas salen sin repetir y con el PADRE ANTES QUE EL HIJO:
-    /// crear `a/b` antes que `a` falla en cualquier provider que no invente
-    /// los padres.
+    /// The folders come out without repeats and with the PARENT BEFORE THE
+    /// CHILD: creating `a/b` before `a` fails on any provider that doesn't
+    /// invent parents.
     #[test]
-    fn las_carpetas_van_de_la_mas_alta_a_la_mas_honda() {
+    fn folders_go_from_shallowest_to_deepest() {
         let plan = OrganizePlan::bind(
             &dir(),
             &[
-                mov("uno.pdf", "facturas/2026/marzo/uno.pdf"),
-                mov("dos.pdf", "facturas/2026/abril/dos.pdf"),
-                mov("tres.txt", "notas/tres.txt"),
+                mov("one.pdf", "invoices/2026/march/one.pdf"),
+                mov("two.pdf", "invoices/2026/april/two.pdf"),
+                mov("three.txt", "notes/three.txt"),
             ],
         )
-        .expect("plan válido");
-        let carpetas: Vec<String> = plan
-            .carpetas(&dir())
+        .expect("valid plan");
+        let folders: Vec<String> = plan
+            .folders(&dir())
             .iter()
-            .map(|p| p.to_wire().replace("mem:///descargas/", ""))
+            .map(|p| p.to_wire().replace("mem:///downloads/", ""))
             .collect();
         assert_eq!(
-            carpetas,
+            folders,
             vec![
-                "facturas",
-                "notas",
-                "facturas/2026",
-                "facturas/2026/marzo",
-                "facturas/2026/abril"
+                "invoices",
+                "notes",
+                "invoices/2026",
+                "invoices/2026/march",
+                "invoices/2026/april"
             ],
-            "sin repetir `facturas`, y cada padre antes que su hijo"
+            "no `invoices` repeated, and each parent before its child"
         );
     }
 
-    /// Un destino SIN subdirectorio es un renombrado corriente, y vale: la
-    /// misma pantalla sirve para ordenar y para renombrar de paso.
+    /// A destination with NO subdirectory is a plain rename, and that's
+    /// fine: the same screen serves both organizing and renaming along the
+    /// way.
     #[test]
-    fn un_destino_sin_carpeta_es_un_renombrado() {
-        let plan = OrganizePlan::bind(&dir(), &[mov("a.txt", "b.txt")]).expect("plan válido");
-        assert!(plan.carpetas(&dir()).is_empty());
+    fn a_destination_with_no_folder_is_a_rename() {
+        let plan = OrganizePlan::bind(&dir(), &[mov("a.txt", "b.txt")]).expect("valid plan");
+        assert!(plan.folders(&dir()).is_empty());
         assert_eq!(
-            plan.pasos()[0].destino(&dir()).to_wire(),
-            "mem:///descargas/b.txt"
+            plan.steps()[0].dest(&dir()).to_wire(),
+            "mem:///downloads/b.txt"
         );
     }
 
-    /// El hash ATA el plan a su directorio y a sus pasos: cambiar cualquiera
-    /// de las dos cosas invalida el token que el humano aprobó.
+    /// The hash BINDS the plan to its directory and to its steps: changing
+    /// either one invalidates the token the human approved.
     #[test]
-    fn el_hash_ata_el_plan_al_directorio_y_a_los_pasos() {
+    fn the_hash_binds_the_plan_to_the_directory_and_the_steps() {
         let a = OrganizePlan::bind(&dir(), &[mov("a.txt", "x/a.txt")]).expect("plan");
-        let mismo = OrganizePlan::bind(&dir(), &[mov("a.txt", "x/a.txt")]).expect("plan");
-        assert_eq!(a.hash(), mismo.hash(), "el mismo plan, el mismo token");
+        let same = OrganizePlan::bind(&dir(), &[mov("a.txt", "x/a.txt")]).expect("plan");
+        assert_eq!(a.hash(), same.hash(), "the same plan, the same token");
 
-        let otro_dir = OrganizePlan::bind(
-            &VPath::parse("mem:///otro").expect("wire"),
+        let other_dir = OrganizePlan::bind(
+            &VPath::parse("mem:///other").expect("wire"),
             &[mov("a.txt", "x/a.txt")],
         )
         .expect("plan");
-        assert_ne!(a.hash(), otro_dir.hash(), "otro directorio, otro token");
+        assert_ne!(
+            a.hash(),
+            other_dir.hash(),
+            "another directory, another token"
+        );
 
-        let otro_destino = OrganizePlan::bind(&dir(), &[mov("a.txt", "y/a.txt")]).expect("plan");
-        assert_ne!(a.hash(), otro_destino.hash());
+        let other_destination =
+            OrganizePlan::bind(&dir(), &[mov("a.txt", "y/a.txt")]).expect("plan");
+        assert_ne!(a.hash(), other_destination.hash());
     }
 
-    /// Y los segmentos van con su longitud delante, así que `a/b` y `ab` no
-    /// pueden alimentar los mismos bytes.
+    /// And the segments go with their length in front, so `a/b` and `ab`
+    /// cannot feed the same bytes.
     #[test]
-    fn dos_planes_distintos_no_comparten_hash_por_concatenacion() {
-        let partido = OrganizePlan::bind(&dir(), &[mov("f", "a/b")]).expect("plan");
-        let junto = OrganizePlan::bind(&dir(), &[mov("f", "ab")]).expect("plan");
-        assert_ne!(partido.hash(), junto.hash());
+    fn two_different_plans_do_not_share_a_hash_by_concatenation() {
+        let split = OrganizePlan::bind(&dir(), &[mov("f", "a/b")]).expect("plan");
+        let joined = OrganizePlan::bind(&dir(), &[mov("f", "ab")]).expect("plan");
+        assert_ne!(split.hash(), joined.hash());
     }
 }

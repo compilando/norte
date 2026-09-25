@@ -1,13 +1,14 @@
-//! Contestar un modal, y mandar la mutación que la respuesta autoriza.
+//! Answering a modal, and sending the mutation the answer authorizes.
 //!
-//! Todo lo que ESCRIBE en el disco de alguien pasa por aquí, y por eso es el
-//! módulo con la regla más estricta: una respuesta se traduce a una Task y nada
-//! más. La decisión —qué se pregunta, con qué aviso, y cuántas veces— es del
-//! modelo (`crate::app`) y de su allowlist; esto solo la ejecuta.
+//! Everything that WRITES to somebody's disk goes through here, which is why
+//! this is the module with the strictest rule: an answer translates into a
+//! Task and nothing more. The decision — what is asked, with what notice,
+//! and how many times — belongs to the model (`crate::app`) and its
+//! allowlist; this only executes it.
 //!
-//! Vivía en el root del binario `ntc`, un crate DISTINTO de esta lib, así que
-//! el único test que podía escribirse era el de la función pura que reparte
-//! destinos ([`transfer_dests`]).
+//! It used to live in the `ntc` binary's root, a crate DISTINCT from this
+//! lib, so the only test that could be written was the one for the pure
+//! function that distributes destinations ([`transfer_dests`]).
 
 use crossterm::event::{KeyCode, KeyModifiers};
 use norte_core::TransferOptions;
@@ -27,15 +28,14 @@ use crate::navigate::{
 use crate::overlays::{modal_help_toggle, modal_scroll};
 use crate::tasks::RetrySpec;
 
-/// Teclas de un modal abierto, resueltas contra el contexto `dialog` del
-/// keymap (H1 T2, issue #24 CERRADO — rebindeable) y filtradas por el
-/// ALLOWLIST del modal concreto ([`crate::app::dialog_action`]): la semántica de
-/// seguridad vive en código, solo la ASIGNACIÓN tecla→comando es keymap.
-/// `Modal::TrustLuaInit` nunca llega aquí (interceptado antes en el run
-/// loop, decisión 8). `events` es para el reintento de navegación del modal
-/// TOFU (#45): confiar en la host key relanza el `cd`, que tiene su propio
-/// loop de eventos.
-#[expect(clippy::too_many_arguments, reason = "wiring del run loop, no API")]
+/// An open modal's keys, resolved against the keymap's `dialog` context (H1
+/// T2, issue #24 CLOSED — rebindable) and filtered by the specific modal's
+/// ALLOWLIST ([`crate::app::dialog_action`]): security semantics live in
+/// code, only the key→command ASSIGNMENT is keymap. `Modal::TrustLuaInit`
+/// never reaches here (intercepted earlier in the run loop, decision 8).
+/// `events` is for the TOFU modal's navigation retry (#45): trusting the
+/// host key relaunches the `cd`, which has its own event loop.
+#[expect(clippy::too_many_arguments, reason = "run loop wiring, not API")]
 pub async fn on_dialog_key(
     app: &mut App,
     backend: &Backend,
@@ -50,22 +50,22 @@ pub async fn on_dialog_key(
         return Cd::Cancelled;
     };
     let Some(chord) = chord_from_crossterm(mods, code) else {
-        return Cd::Cancelled; // tecla no modelada por el keymap: ignorar
+        return Cd::Cancelled; // key not modeled by the keymap: ignore
     };
     let cmd = match resolver.push(chord) {
         Resolution::Run { command: cmd, .. } => cmd,
-        // Sin semántica de secuencia definida para overlays (T2), y lo mismo
-        // para una tecla ligada a algo que esta build no corre (K1 T4):
-        // ignorar y reiniciar el estado de resolución.
+        // No defined sequence semantics for overlays (T2), and the same for
+        // a key bound to something this build does not run (K1 T4): ignore
+        // and reset the resolution state.
         Resolution::Pending(_) | Resolution::Counting(_) | Resolution::Unavailable { .. } => {
             resolver.reset();
             return Cd::Cancelled;
         }
         Resolution::Reset => return Cd::Cancelled,
     };
-    // H3c: ANTES del allowlist, que dejaría caer `app.help` — no es un verbo
-    // `dialog.*`. La ayuda se abre sobre el modal y se queda las teclas
-    // (`help_owns_keys`); el modal sigue intacto detrás.
+    // H3c: BEFORE the allowlist, which would drop `app.help` — it is not a
+    // `dialog.*` verb. The help opens over the modal and claims the keys
+    // (`help_owns_keys`); the modal stays intact behind it.
     if modal_help_toggle(app, cmd.as_str(), lang, help_lines) {
         return Cd::Cancelled;
     }
@@ -73,31 +73,32 @@ pub async fn on_dialog_key(
         return Cd::Cancelled;
     }
     let Some(outcome) = dialog_action(&modal, &cmd) else {
-        return Cd::Cancelled; // comando fuera del allowlist de ESTE modal
+        return Cd::Cancelled; // command outside THIS modal's allowlist
     };
     match outcome {
-        DialogOutcome::Open => {} // dialog_action nunca lo devuelve: defensivo
+        DialogOutcome::Open => {} // dialog_action never returns it: defensive
         DialogOutcome::Cancelled => {
             app.modal = None;
             app.open_next_pending();
             match modal {
-                // Cerrar el diálogo de aprobación ES denegar (fail-safe): el
-                // agente recibe `not-approved`, jamás una espera colgada.
+                // Closing the approval dialog IS denying (fail-safe): the
+                // agent receives `not-approved`, never a hung wait.
                 Modal::ApproveAgentOp { req } => {
                     decide_approval(app, backend, req.approval_id, false).await;
                 }
-                // DENEGAR la host key abandona la navegación que el TOFU
-                // suspendió: no hay reintento que la termine, así que el paso
-                // del rastro que `walk_trail` dejó dado vuelve aquí. Es el
-                // camino MÁS probable de los tres (decir que no a un host
-                // desconocido es lo normal), y el único que no pasa por
-                // `trust_host_retry`.
+                // DENYING the host key abandons the navigation TOFU
+                // suspended: there is no retry to finish it, so the trail
+                // step `walk_trail` had taken comes back here. This is the
+                // MOST likely of the three paths (saying no to an unknown
+                // host is the normal case), and the only one that does not
+                // go through `trust_host_retry`.
                 Modal::TrustHostKey {
                     dir, pane, trail, ..
                 }
-                // #325: y lo mismo al no dar el secreto. Cerrarlo abandona la
-                // navegación, y el secreto a medio teclear muere con el modal
-                // (`TypedSecret` se pisa con ceros al soltarlo).
+                // #325: and the same for not giving the secret. Closing it
+                // abandons the navigation, and the half-typed secret dies
+                // with the modal (`TypedSecret` is overwritten with zeros
+                // when dropped).
                 | Modal::AskSecret {
                     dir, pane, trail, ..
                 } => settle_suspended_trail(app, pane, &dir, trail, &Cd::Cancelled),
@@ -112,7 +113,7 @@ pub async fn on_dialog_key(
         DialogOutcome::Retry(policy) => {
             app.modal = None;
             if let Modal::Collision { retry } = modal {
-                // Conserva las opciones ORIGINALES; solo cambia la política.
+                // Keeps the ORIGINAL options; only the policy changes.
                 let opts = TransferOptions {
                     on_collision: policy,
                     ..retry.opts
@@ -122,23 +123,25 @@ pub async fn on_dialog_key(
             app.open_next_pending();
         }
     }
-    // Salvo el retry TOFU (que hace `return cd(...)`), un modal no navega.
+    // Except for the TOFU retry (which does `return cd(...)`), a modal does
+    // not navigate.
     Cd::Cancelled
 }
 
-/// Lo que hace CONFIRMAR cada modal.
+/// What CONFIRMING each modal does.
 ///
-/// Extraída del `match` de `on_dialog_key` cuando éste pasó de cien líneas
-/// (#132 le añadió dos brazos). El `Some(cd)` es el único camino que NAVEGA —
-/// el retry TOFU y el salto a un hit semántico—, y por eso vuelve al llamante
-/// en vez de resolverse aquí: es él quien decide qué hacer con un `Cd`.
+/// Pulled out of `on_dialog_key`'s `match` once it passed a hundred lines
+/// (#132 added it two more arms). `Some(cd)` is the only path that
+/// NAVIGATES — the TOFU retry and jumping to a semantic hit — and that is
+/// why it goes back to the caller instead of being resolved here: it is the
+/// caller who decides what to do with a `Cd`.
 ///
-/// El `match` sigue siendo EXHAUSTIVO a propósito: nombrar los modales que no
-/// confirman nada es lo que hace que añadir uno nuevo sea un error de
-/// compilación en vez de un Enter que hace algo a escondidas.
+/// The `match` is kept EXHAUSTIVE on purpose: naming the modals that confirm
+/// nothing is what makes adding a new one a compile error instead of an
+/// Enter that does something behind everyone's back.
 #[expect(
     clippy::too_many_lines,
-    reason = "un brazo por modal que confirma: la lista es literal a propósito"
+    reason = "one arm per confirming modal: the list is literal on purpose"
 )]
 pub async fn confirm_modal(
     app: &mut App,
@@ -147,34 +150,35 @@ pub async fn confirm_modal(
     modal: Modal,
 ) -> Option<Cd> {
     app.modal = None;
-    // OJO (MAJOR del rust-reviewer): NO abrir la siguiente pendiente
-    // ANTES del match — el retry TOFU (`return cd`) puede reabrir un
-    // TrustHostKey y PISAR una aprobación de agente ya sacada de la
-    // cola (quedaría huérfana hasta su TTL). Se difiere al final.
+    // WATCH OUT (a MAJOR from rust-reviewer): do NOT open the next pending
+    // one BEFORE the match — the TOFU retry (`return cd`) can reopen a
+    // TrustHostKey and STOMP an agent approval already pulled off the queue
+    // (it would be orphaned until its TTL). It is deferred to the end.
     match modal {
         Modal::ConfirmDelete { items, permanent } => {
             submit_deletes(app, backend, &items, permanent).await;
         }
-        // Ya lo confirmó un humano que leyó las capabilities enumeradas
-        // (#280). Lo que sigue lo dice el CORE: se concede y se relista, en
-        // vez de creerse un `bool` local que el daemon no confirmó.
+        // A human already confirmed it after reading the enumerated
+        // capabilities (#280). What follows is said by the CORE: it grants
+        // and relists, instead of trusting a local `bool` the daemon never
+        // confirmed.
         Modal::ConfirmPluginApproval { id, digest, .. } => {
-            crate::screens::extensions::conceder_aprobacion(app, backend, &id, digest.as_deref())
+            crate::screens::extensions::grant_approval(app, backend, &id, digest.as_deref())
                 .await;
         }
         Modal::ConfirmPluginUninstall { id, .. } => {
-            crate::screens::extensions::desinstalar_confirmada(app, backend, &id).await;
+            crate::screens::extensions::uninstall_confirmed(app, backend, &id).await;
         }
-        // El humano leyó el recuento y dijo que sí (fase 7). Corre como Task
-        // de undo, con el progreso y la cancelación de siempre: lo que aquí
-        // se dice es que ARRANCÓ, y lo que pasó lo cuenta su informe.
+        // A human read the count and said yes (phase 7). Runs as an undo
+        // Task, with the usual progress and cancellation: what is said here
+        // is that it STARTED, and what happened is told by its report.
         Modal::ConfirmUndoAfter { seq, techo, .. } => match backend.undo_after(seq, techo).await {
             Ok(_task) => app.message = Some(t("msg-timeline-undo-running")),
             Err(e) => app.message = Some(error_message(&e)),
         },
-        // El humano leyó el árbol ENTERO y dijo que sí (fase 8). Se aplica
-        // con el token del plan que leyó: si el directorio derivó, el core
-        // contesta `PlanStale` y no se toca nada.
+        // A human read the WHOLE tree and said yes (phase 8). It is applied
+        // with the token from the plan they read: if the directory drifted,
+        // the core answers `PlanStale` and nothing is touched.
         Modal::OrganizePlan {
             dir,
             moves,
@@ -190,20 +194,20 @@ pub async fn confirm_modal(
             let o = TransferOptions::default();
             submit_transfers(app, backend, kind, &items, &to, o).await;
         }
-        // TrustLuaInit se intercepta ANTES en el run loop (necesita
-        // el LuaHost); MarkPattern (#103 T9) también, como texto
-        // libre (mismo motivo que la búsqueda) — `dialog_action`
-        // devuelve `None` para ambos, así que `on_dialog_key` ya
-        // habría retornado antes de llegar a este match: inalcanzable
-        // aquí, no-op defensivo.
-        // Y las propiedades (#139) tampoco: `dialog_action` solo les
-        // entiende cancelar, así que un «confirmar» no llega aquí —
-        // nombrarlas es lo que hace que añadir uno sea un error de
-        // compilación y no un Enter que hace algo a escondidas.
-        // #311: confirmar COPIA las sumas al portapapeles, que es lo único
-        // que se puede hacer con ellas — no hay fichero que escribir mientras
-        // el protocolo no sepa escribir contenido (#132). Lo que se copia es
-        // el formato que `sha256sum -c` lee.
+        // TrustLuaInit is intercepted EARLIER in the run loop (it needs
+        // the LuaHost); MarkPattern (#103 T9) too, as free text
+        // (same reason as search) — `dialog_action` returns `None`
+        // for both, so `on_dialog_key` would already have returned
+        // before reaching this match: unreachable here, defensive
+        // no-op.
+        // And properties (#139) too: `dialog_action` only understands
+        // cancel for them, so a "confirm" does not reach here —
+        // naming them is what makes adding one a compile error
+        // instead of an Enter that does something behind everyone's back.
+        // #311: confirming COPIES the checksums to the clipboard, which is
+        // the only thing that can be done with them — there is no file to
+        // write while the protocol cannot write content (#132). What gets
+        // copied is the format `sha256sum -c` reads.
         Modal::Checksums {
             title_key,
             rows,
@@ -213,15 +217,15 @@ pub async fn confirm_modal(
                 .iter()
                 .map(|r| (r.name.clone(), r.digest.clone()))
                 .collect();
-            // En BYTES: un nombre no tiene por qué ser texto, y una lista con
-            // `U+FFFD` dentro no comprueba el fichero que nombra (regla 1).
+            // In BYTES: a name need not be text, and a list with a `U+FFFD`
+            // inside does not check the file it names (rule 1).
             let bytes = norte_frontend::checksums::to_sums_bytes(&entries);
             if bytes.is_empty() {
                 app.message = Some(t("msg-checksum-nothing-to-copy"));
             } else {
-                // El helper escribe por un pipe y el payload puede ser de
-                // cientos de kilobytes: en el hilo del bucle eso es la TUI
-                // parada a mitad de una escritura.
+                // The helper writes through a pipe and the payload can be
+                // hundreds of kilobytes: on the loop's thread that is the TUI
+                // stalled mid-write.
                 let outcome = tokio::task::spawn_blocking({
                     let bytes = bytes.clone();
                     move || norte_frontend::shell::copy_to_clipboard(&bytes)
@@ -230,16 +234,17 @@ pub async fn confirm_modal(
                 .unwrap_or(norte_frontend::shell::ClipboardOutcome::Failed);
                 app.message = Some(match outcome {
                     norte_frontend::shell::ClipboardOutcome::Done(_) => t("msg-checksum-copied"),
-                    // Se distingue del anterior porque la secuencia de escape
-                    // no contesta: si el terminal no la honra, no hay nada que
-                    // avise, y quien lo lea tiene que saber por qué camino fue.
+                    // Told apart from the previous one because the escape
+                    // sequence does not answer: if the terminal does not
+                    // honor it, nothing warns of it, and whoever reads it has
+                    // to know which path it took.
                     norte_frontend::shell::ClipboardOutcome::NoHelper => {
                         app.pending_osc52 = Some(norte_frontend::shell::osc52(&bytes));
                         t("msg-checksum-copied-osc52")
                     }
-                    // La copia falló: el modal VUELVE. Cerrarlo se llevaría por
-                    // delante la única copia de unos digests que pueden haber
-                    // costado horas de lectura.
+                    // The copy failed: the modal COMES BACK. Closing it would
+                    // take with it the only copy of digests that may have
+                    // cost hours to read.
                     norte_frontend::shell::ClipboardOutcome::Failed => {
                         app.modal = Some(Modal::Checksums {
                             title_key,
@@ -266,27 +271,26 @@ pub async fn confirm_modal(
         | Modal::TransferDest { .. }
         | Modal::Pack { .. }
         | Modal::Split { .. }
-        // #314: texto libre igual que los de arriba — el Enter lo atiende el
-        // run loop por `PromptKind::Chmod`, no este embudo.
+        // #314: free text just like the ones above — the Enter is handled by
+        // the run loop via `PromptKind::Chmod`, not this funnel.
         | Modal::Chmod { .. }
         | Modal::TransferName { .. } => {}
-        // `AiRenamePlan` (M4-IA) SÍ es una superficie de decisión:
-        // confirmar aplica el plan REVISADO por el ejecutor
-        // transaccional de lotes (§17) — UNA task gobernada (journal
-        // + policy) para el lote entero, en el orden que decidió el
-        // core. Se aplican TODAS las parejas, no solo la ventana
-        // visible: el scroll (audit MAJOR-3) hace revisable el plan
-        // entero.
+        // `AiRenamePlan` (M4-IA) IS a decision surface: confirming
+        // applies the plan REVIEWED by the transactional batch
+        // executor (§17) — ONE governed task (journal + policy) for
+        // the whole batch, in the order the core decided. ALL pairs
+        // are applied, not just the visible window: scroll (audit
+        // MAJOR-3) makes the whole plan reviewable.
         Modal::AiRenamePlan {
             dir, entries, plan, ..
         } => {
             apply_ai_rename(app, backend, &dir, &entries, &plan).await;
         }
-        // M4-IA-2: confirmar NAVEGA al hit bajo el cursor
-        // (`semantic_hit_cd`). El `Cd` vuelve al caller (apply_cd +
-        // decorate), como el retry TOFU; si el cd abrió un modal
-        // (otro HostKeyUnknown), la siguiente pendiente espera —
-        // jamás pisar.
+        // M4-IA-2: confirming NAVIGATES to the hit under the cursor
+        // (`semantic_hit_cd`). The `Cd` goes back to the caller (apply_cd +
+        // decorate), like the TOFU retry; if the cd opened a modal
+        // (another HostKeyUnknown), the next pending one waits —
+        // never step on it.
         Modal::SemanticHits { hits, cursor, .. } => {
             let outcome = semantic_hit_cd(app, backend, events, &hits, cursor).await;
             if app.modal.is_none() {
@@ -294,52 +298,53 @@ pub async fn confirm_modal(
             }
             return Some(outcome);
         }
-        // S2 (`[ui] confirm_quit`): confirmar cierra — el run loop
-        // lo detecta en su chequeo de `app.quit` de cada vuelta
-        // (main.rs, tope del `loop`).
+        // S2 (`[ui] confirm_quit`): confirming closes — the run loop
+        // detects it in its `app.quit` check on every turn
+        // (main.rs, top of the `loop`).
         Modal::ConfirmQuit => app.quit = true,
         Modal::ApproveAgentOp { req } => {
             decide_approval(app, backend, req.approval_id, true).await;
         }
 
-        // TOFU (#45): confía en la host key y REINTENTA la navegación.
+        // TOFU (#45): trusts the host key and RETRIES the navigation.
         m @ Modal::TrustHostKey { .. } => {
             if let Some(outcome) = trust_host_retry(app, backend, events, m).await {
                 return Some(outcome);
             }
         }
 
-        // #325: entrega el secreto tecleado y REINTENTA la navegación. Aquí
-        // ya hay algo tecleado: con el campo vacío, `dialog_action` deja el
-        // confirmar inerte y esto no se alcanza.
+        // #325: hands over the typed secret and RETRIES the navigation.
+        // Here there is already something typed: with the field empty,
+        // `dialog_action` leaves confirming inert and this is not reached.
         m @ Modal::AskSecret { .. } => {
             if let Some(outcome) = provide_secret_retry(app, backend, events, m).await {
                 return Some(outcome);
             }
         }
     }
-    // Todas las ramas salvo los dos retries (que ya volvieron) abren aquí
-    // la siguiente pendiente, con el modal ya cerrado.
+    // Every arm except the two retries (which already returned) opens the
+    // next pending one here, with the modal already closed.
     app.open_next_pending();
     None
 }
 
-/// Resuelve una aprobación de policy (`policy.decide`, M3-3b T5). Un error
-/// (id ya vencido/decidido por otro frontend, daemon caído) sale por la
-/// barra: la pendiente, si sigue viva, vencerá por TTL — jamás se cuelga.
+/// Resolves a policy approval (`policy.decide`, M3-3b T5). An error (id
+/// already expired/decided by another frontend, daemon down) goes out
+/// through the bar: the pending one, if still alive, will expire by TTL —
+/// never hangs.
 pub async fn decide_approval(app: &mut App, backend: &Backend, approval_id: u64, approve: bool) {
     if let Err(e) = backend.policy_decide(approval_id, approve).await {
         app.message = Some(error_message(&e));
     }
 }
 
-/// Los pares `(origen, destino)` de un lote: cada ítem aterriza en el
-/// DIRECTORIO `to` con SU MISMO nombre — el nombre son BYTES (`Segment`,
-/// regla 1), jamás texto, así que un `Папка` o un `\xff` viaja intacto. Un
-/// ítem sin nombre (la raíz de un scheme) no es transferible y se descarta:
-/// no hay nada que colgar del destino.
+/// A batch's `(source, destination)` pairs: each item lands in the `to`
+/// DIRECTORY with ITS SAME name — the name is BYTES (`Segment`, rule 1),
+/// never text, so a `Папка` or a `\xff` travels intact. An item with no name
+/// (a scheme's root) is not transferable and is dropped: there is nothing to
+/// hang off the destination.
 ///
-/// PURA a propósito: el lote entero se ve sin levantar backend.
+/// PURE on purpose: the whole batch can be seen with no backend raised.
 #[must_use]
 pub fn transfer_dests(items: &[VPath], to: &VPath) -> Vec<(VPath, VPath)> {
     items
@@ -351,18 +356,19 @@ pub fn transfer_dests(items: &[VPath], to: &VPath) -> Vec<(VPath, VPath)> {
         .collect()
 }
 
-/// Envía el lote de copia/movimiento: UNA task POR ÍTEM (#103 T10), cada una
-/// con su progreso, su cancelación y sus entradas de journal propias —
-/// cancelar una no toca a las demás.
+/// Sends the copy/move batch: ONE task PER ITEM (#103 T10), each with its
+/// own progress, cancellation and journal entries — cancelling one does not
+/// touch the others.
 ///
-/// Un fallo NO aborta el lote: los ítems restantes se envían igual y el
-/// último error queda en la barra. Abandonar 4..n porque el 3 falló dejaría
-/// media selección hecha sin decirlo; el panel de tasks muestra el resultado
-/// de cada una por separado. Las colisiones no viajan por aquí: llegan
-/// ASÍNCRONAS al terminar la task y `on_tick` las ENCOLA
-/// (`pending_collisions`) para no pisar jamás un modal abierto.
+/// A failure does NOT abort the batch: the remaining items are still sent
+/// and the last error stays in the bar. Abandoning 4..n because item 3
+/// failed would leave half the selection done without saying so; the tasks
+/// panel shows each one's result separately. Collisions do not travel
+/// through here: they arrive ASYNCHRONOUSLY when the task finishes and
+/// `on_tick` QUEUES them (`pending_collisions`) so an open modal is never
+/// stepped on.
 ///
-/// Las marcas se consumen al ENVIAR el lote, no al completarse.
+/// Marks are consumed when the batch is SENT, not when it completes.
 pub async fn submit_transfers(
     app: &mut App,
     backend: &Backend,
@@ -377,10 +383,10 @@ pub async fn submit_transfers(
     app.consume_marks();
 }
 
-/// Envía el lote de borrado: UNA task POR ÍTEM, mismo criterio que
-/// [`submit_transfers`] (un fallo no abandona el resto). El objetivo de
-/// papelera viaja con cada task para que un `Unsupported` reofrezca el
-/// PERMANENTE de ESE ítem (ADR 0009), no del lote entero.
+/// Sends the delete batch: ONE task PER ITEM, same criterion as
+/// [`submit_transfers`] (a failure does not abandon the rest). The trash
+/// target travels with each task so an `Unsupported` re-offers PERMANENT for
+/// THAT item (ADR 0009), not the whole batch.
 pub async fn submit_deletes(app: &mut App, backend: &Backend, items: &[VPath], permanent: bool) {
     let del_mode = if permanent {
         DeleteMode::Permanent
@@ -399,18 +405,19 @@ pub async fn submit_deletes(app: &mut App, backend: &Backend, items: &[VPath], p
     app.consume_marks();
 }
 
-/// Lanza un recuento de tamaño y lo registra en el panel de tasks (#139).
+/// Launches a size count and registers it in the tasks panel (#139).
 ///
-/// `para_el_dialogo` ata la Task al modal de propiedades abierto, para que su
-/// resultado llegue AHÍ y no solo a la barra de estado.
+/// `for_dialog` ties the Task to the open properties modal, so its result
+/// lands THERE and not just in the status bar.
 ///
-/// El total no vuelve por aquí: llega en el progreso terminal de la Task, que
-/// es lo que `on_tick` ya está mirando para todas las demás.
+/// The total does not come back through here: it arrives in the Task's
+/// terminal progress, which is what `on_tick` is already watching for all
+/// the others.
 pub async fn launch_size_count(
     app: &mut App,
     backend: &Backend,
     paths: Vec<VPath>,
-    para_el_dialogo: bool,
+    for_dialog: bool,
 ) {
     if paths.is_empty() {
         return;
@@ -420,7 +427,7 @@ pub async fn launch_size_count(
         .await
     {
         Ok(task) => {
-            if para_el_dialogo {
+            if for_dialog {
                 app.properties_counting(task.id());
             } else {
                 app.message = Some(t("msg-dir-size-counting"));
@@ -431,36 +438,37 @@ pub async fn launch_size_count(
     }
 }
 
-/// `pane.unpack` (#132): copia el INTERIOR del contenedor bajo el cursor al
-/// otro panel.
+/// `pane.unpack` (#132): copies the container under the cursor's INTERIOR to
+/// the other panel.
 ///
-/// No lleva método propio y no le hace falta: el motor de copia ya acepta el
-/// interior de un archivo como origen, así que desempaquetar es la copia que
-/// el usuario podría haber hecho a mano, con el journal, el undo, la política
-/// de colisiones y la cancelación que la copia ya tiene.
+/// It carries no method of its own and does not need one: the copy engine
+/// already accepts an archive's interior as a source, so unpacking is the
+/// copy the user could have done by hand, with the journal, the undo, the
+/// collision policy and the cancellation the copy already has.
 pub async fn unpack(app: &mut App, backend: &Backend) {
     let Some(entry) = app.focused().selected().cloned() else {
         return;
     };
-    let Some(raiz) = crate::nav::archive_root_for(&entry) else {
+    let Some(root) = crate::nav::archive_root_for(&entry) else {
         app.message = Some(t("msg-unpack-not-archive"));
         return;
     };
-    // El destino es el OTRO panel, que es donde un gestor ortodoxo
-    // desempaqueta. Con uno solo, el mismo — que es lo que hace F5 cuando no
-    // hay otro sitio al que apuntar.
-    // La misma noción de «el otro» que usa partir: por POSICIÓN visible, y con
-    // un solo panel el mismo. `focus() ^ 1` daba un índice fuera de rango con
-    // tres o cuatro paneles, y ahí `pane_read_only` contesta `false` sin mirar
-    // nada — el gate quedaba inerte justo donde hay más sitios a los que
-    // apuntar por error.
+    // The destination is the OTHER panel, which is where an orthodox
+    // manager unpacks. With only one, the same one — which is what F5 does
+    // when there is no other place to point at.
+    // The same notion of "the other" that splitting uses: by visible
+    // POSITION, and with only one panel the same one. `focus() ^ 1` gave an
+    // out-of-range index with three or four panels, and there
+    // `pane_read_only` answers `false` without looking at anything — the
+    // gate was left inert exactly where there are more spots to point at by
+    // mistake.
     let other = app.split_dest_pane();
     if app.pane_read_only(other) {
         app.message = Some(t("msg-pack-read-only"));
         return;
     }
     let dest = app.panes[other].dir().clone();
-    match backend.copy(&raiz, &dest, TransferOptions::default()).await {
+    match backend.copy(&root, &dest, TransferOptions::default()).await {
         Ok(task) => {
             app.message = Some(t("msg-unpack-started"));
             app.board.push(&task, None);
@@ -469,7 +477,7 @@ pub async fn unpack(app: &mut App, backend: &Backend) {
     }
 }
 
-/// `pane.test-archive` (#132): comprueba el contenedor bajo el cursor.
+/// `pane.test-archive` (#132): checks the container under the cursor.
 pub async fn test_archive(app: &mut App, backend: &Backend) {
     let Some(entry) = app.focused().selected().cloned() else {
         return;
@@ -492,19 +500,19 @@ pub async fn test_archive(app: &mut App, backend: &Backend) {
     }
 }
 
-/// Tope de bytes que se leen de un fichero de SUMAS (#311).
+/// Cap on the bytes read from a SUMS file (#311).
 ///
-/// Un `SHA256SUMS` de un proyecto grande son unos cientos de kilobytes; un
-/// megabyte deja margen de sobra y evita que apuntar esta tecla a un ISO
-/// intente meterlo entero en memoria para no encontrar ni una línea válida.
+/// A large project's `SHA256SUMS` is a few hundred kilobytes; a megabyte
+/// leaves plenty of margin and stops pointing this key at an ISO from
+/// trying to fit it whole into memory just to find not one valid line.
 const SUMS_MAX_BYTES: u64 = 1024 * 1024;
 
-/// `pane.checksum` (#311): calcula el sha256 de lo marcado —o de lo que hay
-/// bajo el cursor— y enseña la lista.
+/// `pane.checksum` (#311): computes the sha256 of what is marked — or what
+/// is under the cursor — and shows the list.
 ///
-/// El operando es el de siempre (`marked_paths`), así que no hay una regla
-/// nueva que aprender. La Task va al tablero como cualquier otra: lo que este
-/// gesto añade es esperar su INFORME, que es donde viajan los digests.
+/// The operand is the usual one (`marked_paths`), so there is no new rule to
+/// learn. The Task goes to the board like any other: what this gesture adds
+/// is waiting for its REPORT, which is where the digests travel.
 pub async fn checksum_start(
     app: &mut App,
     backend: &Backend,
@@ -513,7 +521,7 @@ pub async fn checksum_start(
 ) {
     match req {
         crate::app::ChecksumRequest::Compute { paths } => {
-            lanzar_sumas(app, backend, work, paths, None).await;
+            launch_checksums(app, backend, work, paths, None).await;
         }
         crate::app::ChecksumRequest::Verify { sums } => {
             checksum_verify(app, backend, work, &sums).await;
@@ -521,24 +529,25 @@ pub async fn checksum_start(
     }
 }
 
-/// `pane.checksum-verify` (#311): comprueba los ficheros que lista el fichero
-/// de sumas bajo el cursor.
+/// `pane.checksum-verify` (#311): checks the files listed by the sums file
+/// under the cursor.
 ///
-/// Los nombres del fichero se resuelven contra SU directorio —no contra el del
-/// pane—: un `SHA256SUMS` habla de lo que tiene al lado, y resolverlo contra
-/// otro sitio comprobaría ficheros distintos con los mismos nombres.
+/// The file's names are resolved against ITS OWN directory — not the
+/// pane's: a `SHA256SUMS` talks about what it has next to it, and resolving
+/// it against another spot would check different files with the same
+/// names.
 async fn checksum_verify(
     app: &mut App,
     backend: &Backend,
     work: &mut crate::jobs::InFlight,
     sums: &norte_proto::VPath,
 ) {
-    // Se pide UN BYTE MÁS que el tope para poder distinguir «cabe» de «no
-    // cabe». Un fichero de sumas recortado en silencio comprueba media lista y
-    // el resumen se lee como «todo correcto» — y el corte cae en un byte
-    // cualquiera, así que la última línea puede quedar con medio nombre y
-    // acusar de «falta» a un fichero que está. Es el mismo criterio que el tope
-    // del otro extremo: RECHAZAR, no recortar.
+    // ONE BYTE MORE than the cap is requested so "fits" can be told apart
+    // from "does not fit". A sums file truncated in silence checks half the
+    // list and the summary reads as "all correct" — and the cut lands on
+    // some arbitrary byte, so the last line can end up with half a name and
+    // accuse a file that IS there of being "missing". Same criterion as the
+    // cap at the other end: REJECT, do not truncate.
     let bytes = match backend
         .read(
             sums,
@@ -559,12 +568,11 @@ async fn checksum_verify(
         app.message = Some(t("msg-checksum-sums-too-big"));
         return;
     }
-    let publicado = norte_frontend::checksums::parse_sums(&bytes);
-    if publicado.lines.is_empty() {
-        // Decir POR QUÉ cuando se sabe: un `SHA256SUMS` de PowerShell es un
-        // fichero de sumas perfectamente válido en otra codificación, y
-        // mandar a quien lo lee a dudar del fichero es mandarlo al sitio
-        // equivocado.
+    let published = norte_frontend::checksums::parse_sums(&bytes);
+    if published.lines.is_empty() {
+        // Say WHY when it is known: a PowerShell `SHA256SUMS` is a perfectly
+        // valid sums file in a different encoding, and sending whoever reads
+        // it to doubt the file is sending them to the wrong place.
         app.message = Some(t(if norte_frontend::checksums::looks_utf16(&bytes) {
             "msg-checksum-sums-utf16"
         } else {
@@ -572,38 +580,39 @@ async fn checksum_verify(
         }));
         return;
     }
-    // El directorio del FICHERO DE SUMAS, y no el del pane.
+    // The SUMS FILE's directory, not the pane's.
     let Some(base) = sums.parent() else {
         app.message = Some(t("msg-checksum-not-a-sums-file"));
         return;
     };
-    // La resolución vive en el crate COMPARTIDO: la ventana comprueba los
-    // mismos ficheros de sumas, y dos lecturas de `sub/dentro.txt` en dos
-    // frontends serían dos comprobaciones distintas (ADR 0077).
-    let (paths, asked) = norte_frontend::checksums::resolve_targets(&base, &publicado.lines);
+    // The resolution lives in the SHARED crate: the window checks the same
+    // sums files, and two reads of `sub/inside.txt` in two frontends would
+    // be two different checks (ADR 0077).
+    let (paths, asked) = norte_frontend::checksums::resolve_targets(&base, &published.lines);
     if paths.is_empty() {
         app.message = Some(t("msg-checksum-not-a-sums-file"));
         return;
     }
-    let publicado = crate::jobs::Publicado {
-        lines: publicado.lines,
+    let published = crate::jobs::Published {
+        lines: published.lines,
         asked,
-        refused: publicado.refused,
+        refused: published.refused,
     };
-    lanzar_sumas(app, backend, work, paths, Some(publicado)).await;
+    launch_checksums(app, backend, work, paths, Some(published)).await;
 }
 
-/// Lanza la Task de sumas y deja esperando su informe.
+/// Launches the checksums Task and leaves it waiting for its report.
 ///
-/// La espera va SPAWNEADA y se cosecha en el bucle (regla 3): un lote de cien
-/// ficheros grandes tarda, y esperarlo aquí dejaría la TUI sin dibujar, sin
-/// teclas y sin poder cancelar — que es justo cuando alguien cancela.
-async fn lanzar_sumas(
+/// The wait is SPAWNED and harvested in the loop (rule 3): a batch of a
+/// hundred large files takes a while, and awaiting it here would leave the
+/// TUI not drawing, not taking keys and unable to cancel — which is exactly
+/// when someone cancels.
+async fn launch_checksums(
     app: &mut App,
     backend: &Backend,
     work: &mut crate::jobs::InFlight,
     paths: Vec<norte_proto::VPath>,
-    publicado: Option<crate::jobs::Publicado>,
+    published: Option<crate::jobs::Published>,
 ) {
     let params = norte_proto::methods::FsChecksumParams {
         paths,
@@ -614,39 +623,40 @@ async fn lanzar_sumas(
             app.message = Some(t("msg-checksum-started"));
             app.board.push(&task, None);
             let id = task.id();
-            let observador = task.observer();
+            let observer = task.observer();
             let mut prog = task.progress();
             let b = backend.clone();
             let handle = tokio::spawn(async move {
-                // El informe solo es DEFINITIVO cuando la Task es terminal;
-                // pedirlo antes daría media lista sin decir que lo es.
+                // The report is only DEFINITIVE once the Task is terminal;
+                // requesting it earlier would give half the list without
+                // saying it is.
                 while !prog.borrow().state.is_terminal() {
                     if prog.changed().await.is_err() {
                         break;
                     }
                 }
-                // El estado viaja CON el informe: `Cancelled` o `Failed`
-                // significan que lo que hay está a medias, y un `changed()`
-                // que muere sin llegar a terminal —el daemon se cayó— no es
-                // ninguna de las dos. Mismo criterio que `TaskRef::join`.
-                let estado = prog.borrow().state.clone();
-                if !estado.is_terminal() {
+                // The state travels WITH the report: `Cancelled` or `Failed`
+                // mean what is there is half-done, and a `changed()` that
+                // dies without reaching terminal — the daemon went down — is
+                // neither of the two. Same criterion as `TaskRef::join`.
+                let state = prog.borrow().state.clone();
+                if !state.is_terminal() {
                     return (
-                        estado,
+                        state,
                         Err(norte_proto::Error::ProviderUnavailable { retryable: true }),
                     );
                 }
-                (estado, b.checksum_report(id).await)
+                (state, b.checksum_report(id).await)
             });
             if let Some(old) = work.checksum.replace(crate::jobs::ChecksumRun {
                 handle,
-                task: observador,
-                publicado,
+                task: observer,
+                published,
             }) {
-                // Cancelar la TASK, no solo la espera: abortar el `JoinHandle`
-                // dejaba al core hasheando un ISO entero sin nadie que lo
-                // recogiera y —desde que las sumas no dicen «done»— sin decir
-                // siquiera que terminó.
+                // Cancel the TASK, not just the wait: aborting the
+                // `JoinHandle` left the core hashing a whole ISO with
+                // nobody to collect it and — since checksums do not say
+                // "done" — without even saying that it finished.
                 old.task.cancel();
                 old.handle.abort();
             }
@@ -655,8 +665,8 @@ async fn lanzar_sumas(
     }
 }
 
-/// `pane.combine-files` (#132): junta los trozos a partir del `.001` bajo el
-/// cursor.
+/// `pane.combine-files` (#132): joins the pieces starting from the `.001`
+/// under the cursor.
 pub async fn combine_pieces(app: &mut App, backend: &Backend) {
     let Some(entry) = app.focused().selected().cloned() else {
         return;
@@ -666,18 +676,18 @@ pub async fn combine_pieces(app: &mut App, backend: &Backend) {
         .file_name()
         .map(|s| s.as_bytes().to_vec())
         .unwrap_or_default();
-    // Solo desde el PRIMER trozo: empezar por el `.007` uniría media cosa, y
-    // el core ya solo sabe buscar hacia delante. La regla vive en el crate
-    // compartido — la ventana pide lo mismo (D14).
-    let Some(seg) = norte_frontend::nav::base_de_trozos(&name) else {
+    // Only from the FIRST piece: starting from `.007` would join half a
+    // thing, and the core only knows how to search forward anyway. The rule
+    // lives in the shared crate — the window asks the same (D14).
+    let Some(seg) = norte_frontend::nav::chunk_base(&name) else {
         app.message = Some(t("msg-combine-needs-first"));
         return;
     };
-    let destino = app.focused().dir().join(seg);
+    let dest = app.focused().dir().join(seg);
     match backend
         .combine_files(norte_proto::methods::FileCombineParams {
             first: entry.path,
-            dest: destino,
+            dest,
         })
         .await
     {
@@ -689,10 +699,10 @@ pub async fn combine_pieces(app: &mut App, backend: &Backend) {
     }
 }
 
-/// Encola una transferencia y la registra en el panel con su contexto de
-/// reintento (para el diálogo de colisión).
-/// Devuelve `true` si la task ENCOLÓ (#105: el modal de nombre editable
-/// solo se cierra entonces); un fallo deja el error en la barra.
+/// Queues a transfer and registers it in the panel with its retry context
+/// (for the collision dialog).
+/// Returns `true` if the task QUEUED (#105: the editable-name modal only
+/// closes then); a failure leaves the error in the bar.
 pub async fn submit_transfer(
     app: &mut App,
     backend: &Backend,
@@ -701,11 +711,11 @@ pub async fn submit_transfer(
     to: VPath,
     opts: TransferOptions,
 ) -> bool {
-    // El interruptor de la sesión decide por dónde entra (ADR 0149); el
-    // reintento de una colisión hereda lo que se pidió la primera vez, así
-    // que se respeta lo que ya trajeran las opciones.
+    // The session's switch decides which door it goes through (ADR 0149);
+    // a collision's retry inherits what was requested the first time, so
+    // whatever the options already carried is respected.
     let opts = TransferOptions {
-        queued: opts.queued || app.encolar,
+        queued: opts.queued || app.enqueue,
         ..opts
     };
     let res = match kind {
@@ -714,8 +724,8 @@ pub async fn submit_transfer(
     };
     match res {
         Ok(task) => {
-            // #98/M1: el enc del pane origen viaja con el retry — la
-            // colisión llega async y el foco puede haber cambiado.
+            // #98/M1: the source pane's encoding travels with the retry —
+            // the collision arrives async and focus may have changed.
             let name_encoding = app.focused().name_encoding();
             app.board.push(
                 &task,
@@ -736,27 +746,28 @@ pub async fn submit_transfer(
     }
 }
 
-/// Aplica un plan de rename IA CONFIRMADO (M4-IA) por el ejecutor
-/// TRANSACCIONAL de lotes (spec §17, ADR 0042): UNA task, UNA unidad
-/// deshacible del journal, rollback si un paso falla.
+/// Applies an AI rename plan CONFIRMED (M4-IA) through the TRANSACTIONAL
+/// batch executor (spec §17, ADR 0042): ONE task, ONE undoable journal unit,
+/// rollback if a step fails.
 ///
-/// Sustituye al bucle de un `fs.move` por pareja, que no era una
-/// transacción (el quinto fallo dejaba cuatro aplicados), no comprobaba el
-/// plan contra sí mismo, y no podía hacer una permutación — el caso NORMAL
-/// del rename IA («numera bien estos episodios»), donde `a→b, b→c` chocaba
-/// en el primer move.
+/// Replaces the loop of one `fs.move` per pair, which was not a transaction
+/// (the fifth failure left four applied), did not check the plan against
+/// itself, and could not do a permutation — the NORMAL AI rename case
+/// ("number these episodes correctly"), where `a→b, b→c` collided on the
+/// first move.
 ///
-/// Tres negativas, en orden, y ninguna encola nada:
+/// Three refusals, in order, and none of them queues anything:
 ///
-/// - una pareja que no es un [`norte_proto::Segment`] = plan adulterado
-///   (cinturón [`norte_frontend::rename_pairs`], COMPARTIDO con la GUI —
-///   quality review 78eb243 MAJOR-1, audit MAJOR-2);
-/// - sin plan de lote no hay `plan_hash` aprobado que mandar;
-/// - con veredictos el core no ejecutaría nada, así que ni se pide.
+/// - a pair that is not a [`norte_proto::Segment`] = a tampered plan (belt
+///   [`norte_frontend::rename_pairs`], SHARED with the GUI — quality review
+///   78eb243 MAJOR-1, audit MAJOR-2);
+/// - with no batch plan there is no approved `plan_hash` to send;
+/// - with verdicts pending the core would not execute anything, so it is not
+///   even requested.
 ///
-/// Las tres son cinturón: la tecla de confirmar ya está muda sin un plan
-/// aplicable (`dialog_action`). Lo que llega aquí es un solo submit, y su
-/// fallo va entero a la barra.
+/// All three are a belt: the confirm key is already mute with no applicable
+/// plan (`dialog_action`). What reaches here is a single submit, and its
+/// failure goes whole to the bar.
 pub async fn apply_ai_rename(
     app: &mut App,
     backend: &Backend,
@@ -764,28 +775,28 @@ pub async fn apply_ai_rename(
     entries: &[norte_proto::methods::AiRenameEntry],
     plan: &norte_frontend::BatchPlan,
 ) {
-    // Solo la FORMA. La comprobación de que cada `from` existe ya corrió al
-    // aterrizar el plan, contra el directorio que se PLANEÓ (#275); repetirla
-    // aquí contra el pane enfocado la haría contra otro directorio, porque el
-    // lector puede haberse movido mientras leía la revisión. Y el core la
-    // hace por su cuenta antes de tocar nada.
+    // Only the SHAPE. The check that each `from` exists already ran when the
+    // plan landed, against the directory that was PLANNED (#275); repeating
+    // it here against the focused pane would run it against a different
+    // directory, because the reader may have moved while reading the
+    // review. And the core does it on its own before touching anything.
     let Some(pairs) = norte_frontend::rename_pairs(entries) else {
         app.message = Some(t("msg-ai-rename-invalid-plan"));
         return;
     };
-    let Some(resuelto) = plan.ready() else {
+    let Some(resolved) = plan.ready() else {
         app.message = Some(t("msg-rename-batch-no-plan"));
         return;
     };
-    if !resuelto.executable {
+    if !resolved.executable {
         app.message = Some(t("msg-rename-batch-collisions"));
         return;
     }
-    // Lo que se anuncia son los renames que el core se comprometió a hacer,
-    // no las parejas PEDIDAS: el planificador tira las nulas (`from == to`),
-    // y prometer más de lo que va a pasar es mentir en la barra.
+    // What is announced is the renames the core committed to doing, not the
+    // pairs REQUESTED: the planner drops the null ones (`from == to`), and
+    // promising more than what will happen is lying in the bar.
     let n = plan.real_steps();
-    match backend.rename_batch(dir, &pairs, &resuelto.plan_hash).await {
+    match backend.rename_batch(dir, &pairs, &resolved.plan_hash).await {
         Ok(task) => {
             app.board.push(&task, None);
             app.message = Some(ta("msg-rename-batch-applied", &[("n", &n.to_string())]));
@@ -805,42 +816,43 @@ mod bulk_tests {
     use norte_proto::VPath;
 
     fn vp(wire: &str) -> VPath {
-        VPath::parse(wire).expect("wire válido")
+        VPath::parse(wire).expect("valid wire")
     }
 
-    /// #103 T10: el lote se envía ENTERO — un par por ítem, cada uno con SU
-    /// nombre colgado del directorio destino. (Mutación de control: hacer
-    /// que el envío use solo el primer ítem rompe este test.)
+    /// #103 T10: the whole batch is sent — one pair per item, each with ITS
+    /// OWN name hung off the destination directory. (Control mutation:
+    /// making the submit use only the first item breaks this test.)
     #[test]
     fn a_bulk_transfer_submits_every_item_not_just_the_first() {
         let items = vec![vp("mem:///src/a"), vp("mem:///src/b"), vp("mem:///src/c")];
         let pairs = transfer_dests(&items, &vp("mem:///dst"));
-        assert_eq!(pairs.len(), 3, "una task POR ítem");
+        assert_eq!(pairs.len(), 3, "one task PER item");
         assert_eq!(
             pairs.iter().map(|(_, d)| d.clone()).collect::<Vec<_>>(),
             vec![vp("mem:///dst/a"), vp("mem:///dst/b"), vp("mem:///dst/c")],
         );
     }
 
-    /// Regla 1: el nombre son BYTES. Un nombre no-UTF8 llega al destino
-    /// byte a byte — el destino jamás se construye desde el texto pintado.
+    /// Rule 1: the name is BYTES. A non-UTF8 name arrives at the destination
+    /// byte for byte — the destination is never built from the painted text.
     #[test]
     fn a_bulk_transfer_keeps_non_utf8_names_byte_exact() {
         let raw = b"caf\xff\xfe.txt".to_vec();
-        let seg = norte_proto::Segment::new(raw.clone()).expect("segmento");
+        let seg = norte_proto::Segment::new(raw.clone()).expect("segment");
         let from = vp("mem:///src").join(seg);
         let pairs = transfer_dests(std::slice::from_ref(&from), &vp("mem:///dst"));
         assert_eq!(pairs.len(), 1);
         assert_eq!(
             pairs[0].1.file_name().map(|s| s.as_bytes().to_vec()),
             Some(raw),
-            "los bytes del nombre viajan intactos al destino",
+            "the name's bytes travel intact to the destination",
         );
     }
 
-    /// El destino IGUAL que el origen (mismo dir en ambos panes) rinde un
-    /// par `from == to`: la decisión de qué hacer con eso es del engine
-    /// (colisión), no del frontend — que no debe inventarse un descarte.
+    /// A destination SAME as the source (same dir in both panes) yields a
+    /// `from == to` pair: the decision of what to do with that belongs to
+    /// the engine (collision), not the frontend — which must not invent a
+    /// discard.
     #[test]
     fn a_same_directory_transfer_maps_each_item_onto_itself() {
         let items = vec![vp("mem:///src/a")];
@@ -848,8 +860,8 @@ mod bulk_tests {
         assert_eq!(pairs[0].0, pairs[0].1);
     }
 
-    /// Una raíz de scheme no tiene nombre que colgar del destino: se
-    /// descarta en vez de fabricar una ruta.
+    /// A scheme root has no name to hang off the destination: it is dropped
+    /// instead of fabricating a path.
     #[test]
     fn a_rootless_item_is_dropped_from_the_batch() {
         let root = VPath::root(norte_proto::Scheme::new("mem").unwrap(), None);

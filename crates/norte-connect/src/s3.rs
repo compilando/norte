@@ -1,8 +1,9 @@
-//! Construcción del `Operator` de object storage (ADR 0016 B, fase 7d): la
-//! región/endpoint/credenciales viven AQUÍ; `ObjectProvider::new` recibe el
-//! `Operator` ya configurado y jamás ve el secret-access-key (regla 10).
+//! Building the object storage `Operator` (ADR 0016 B, phase 7d): the
+//! region/endpoint/credentials live HERE; `ObjectProvider::new` receives the
+//! already-configured `Operator` and never sees the secret-access-key
+//! (rule 10).
 //!
-//! Sin TOFU: S3 va por TLS/WebPKI, nunca emite un `HostKeyUnknown`.
+//! No TOFU: S3 goes over TLS/WebPKI, it never emits a `HostKeyUnknown`.
 
 use opendal::Operator;
 
@@ -10,32 +11,33 @@ use crate::error::ConnectError;
 use crate::secret::Secret;
 use crate::spec::{AddressingStyle, AuthMethod, ConnectionSpec};
 
-/// Conector S3/object storage. Sin estado propio (a diferencia de SSH, que
-/// retiene `known_hosts`): cada `connect` construye un `Operator` nuevo.
+/// S3/object storage connector. No state of its own (unlike SSH, which
+/// retains `known_hosts`): every `connect` builds a new `Operator`.
 #[derive(Debug, Clone, Default)]
 pub struct S3Connector {}
 
 impl S3Connector {
-    /// Conector S3.
+    /// S3 connector.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Construye y SONDEA un `Operator` para `spec`. El sondeo (un `list`
-    /// limit-1) da el fail-fast que el timeout de connect del engine espera:
-    /// credenciales/bucket/red malos fallan aquí, no en la primera operación.
+    /// Builds and PROBES an `Operator` for `spec`. The probe (a limit-1
+    /// `list`) gives the fail-fast the engine's connect timeout expects: bad
+    /// credentials/bucket/network fail here, not on the first operation.
     ///
-    /// `secret` = el secret-access-key (solo con `auth = "access-key"`); con
-    /// `auth = "agent"` se usa la cadena ambiente de opendal (`AWS_*`/perfil/
-    /// IMDS). `auth = "key"`/`"password"` no aplican a s3.
+    /// `secret` = the secret-access-key (only with `auth = "access-key"`);
+    /// with `auth = "agent"` opendal's ambient chain is used
+    /// (`AWS_*`/profile/IMDS). `auth = "key"`/`"password"` do not apply to
+    /// s3.
     ///
     /// # Errors
-    /// - [`ConnectError::Config`]: auth/region incoherentes con s3.
-    /// - [`ConnectError::Secret`]: `access-key` sin el secret-access-key.
-    /// - proyecta el error del sondeo (403 → permiso, bucket ausente →
-    ///   `NotFound`, red → transporte).
-    // Sin campos crudos de la URL/credenciales en el span (regla 10).
+    /// - [`ConnectError::Config`]: auth/region incoherent with s3.
+    /// - [`ConnectError::Secret`]: `access-key` without the secret-access-key.
+    /// - projects the probe's error (403 → permission, missing bucket →
+    ///   `NotFound`, network → transport).
+    // No raw URL/credential fields in the span (rule 10).
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn connect(
         &self,
@@ -45,62 +47,66 @@ impl S3Connector {
         let ep = spec.endpoint()?;
         if ep.scheme != "s3" {
             return Err(ConnectError::InvalidUrl(format!(
-                "scheme {}:// (el conector S3 solo acepta s3://)",
+                "scheme {}:// (the S3 connector only accepts s3://)",
                 ep.scheme
             )));
         }
-        let bucket = &ep.host; // la authority de s3://bucket ES el bucket
-        // opendal con default-features=false NO auto-registra el transporte
-        // HTTP ni el servicio; idempotente.
+        let bucket = &ep.host; // s3://bucket's authority IS the bucket
+        // opendal with default-features=false does NOT auto-register the
+        // HTTP transport or the service; idempotent.
         opendal::install_default();
 
         let mut builder = opendal::services::S3::default().bucket(bucket);
 
-        // Un campo VACÍO no es un campo puesto (#320, revisión seguridad
-        // MINOR-3). Todos los setters de opendal descartan la cadena vacía en
-        // silencio (`if !v.is_empty()`), y el resultado no es un fallo sino un
-        // destino DISTINTO del que el usuario escribió: con `endpoint = ""`
-        // nuestro código toma la rama «endpoint propio» —path-style, sin el
-        // aviso de `http://`— y opendal se va luego al endpoint de AWS, con lo
-        // que el bucket, el access-key-id y la firma acaban en Amazon mientras
-        // el usuario cree estar hablando con su MinIO. Con `region = ""` la
-        // región de firma sale de `AWS_REGION` del entorno, y ESE fallback no
-        // lo gatea `disable_config_load`. Se rechazan antes de tocar nada.
-        for (campo, valor) in [("region", &spec.region), ("endpoint", &spec.endpoint)] {
-            if valor.as_deref().is_some_and(str::is_empty) {
+        // An EMPTY field is not a field that was set (#320, security review
+        // MINOR-3). Every opendal setter silently discards the empty string
+        // (`if !v.is_empty()`), and the result is not a failure but a
+        // DIFFERENT destination from the one the user wrote: with
+        // `endpoint = ""` our code takes the "own endpoint" branch —
+        // path-style, without the `http://` warning— and opendal then falls
+        // through to the AWS endpoint, so the bucket, the access-key-id and
+        // the signature end up at Amazon while the user believes they are
+        // talking to their MinIO. With `region = ""` the signing region comes
+        // from the environment's `AWS_REGION`, and THAT fallback is not
+        // gated by `disable_config_load`. They are rejected before touching
+        // anything.
+        for (field, value) in [("region", &spec.region), ("endpoint", &spec.endpoint)] {
+            if value.as_deref().is_some_and(str::is_empty) {
                 return Err(ConnectError::Config(format!(
-                    "`{campo}` está presente y VACÍO en la conexión s3: dale un valor o quita la clave"
+                    "`{field}` is present and EMPTY in the s3 connection: give it a value or remove the key"
                 )));
             }
         }
 
-        // Región: obligatoria contra AWS; con endpoint custom (MinIO) se asume
-        // us-east-1 si falta (convención; el servidor la ignora).
+        // Region: mandatory against AWS; with a custom endpoint (MinIO)
+        // us-east-1 is assumed if missing (convention; the server ignores
+        // it).
         match (&spec.region, &spec.endpoint) {
             (Some(r), _) => builder = builder.region(r),
             (None, Some(_)) => builder = builder.region("us-east-1"),
             (None, None) => {
                 return Err(ConnectError::Config(
-                    "la conexión s3 sin `endpoint` (AWS) exige `region`".to_string(),
+                    "an s3 connection without `endpoint` (AWS) requires `region`".to_string(),
                 ));
             }
         }
         if let Some(endpoint) = &spec.endpoint {
-            // El ADR 0015/0016 promete que http (sin TLS) es opt-in VISIBLE:
-            // se avisa (el endpoint no es secreto — es logueable). En claro
-            // viajan los datos, el access_key_id y, con `agent`+IMDS, el
-            // X-Amz-Security-Token (bearer replayable) — MITM-able.
+            // ADR 0015/0016 promises that http (no TLS) is a VISIBLE opt-in:
+            // it is warned about (the endpoint is not secret — it is
+            // loggable). In the clear travel the data, the access_key_id and,
+            // with `agent`+IMDS, the X-Amz-Security-Token (a replayable
+            // bearer) — MITM-able.
             if endpoint.starts_with("http://") {
                 tracing::warn!(
                     endpoint = %endpoint,
-                    "conexión s3 por HTTP sin cifrar (inseguro): datos y credenciales en claro"
+                    "s3 connection over unencrypted HTTP (insecure): data and credentials in the clear"
                 );
             }
             builder = builder.endpoint(endpoint);
         }
 
-        // Direccionamiento: virtual-host por defecto sin endpoint (AWS),
-        // path-style con endpoint custom (MinIO); overridable.
+        // Addressing: virtual-host by default without an endpoint (AWS),
+        // path-style with a custom endpoint (MinIO); overridable.
         let virtual_host = match spec.addressing {
             Some(AddressingStyle::VirtualHost) => true,
             Some(AddressingStyle::Path) => false,
@@ -110,24 +116,25 @@ impl S3Connector {
             builder = builder.enable_virtual_host_style();
         }
 
-        // Credenciales.
+        // Credentials.
         match spec.auth {
             AuthMethod::AccessKey => {
-                // Vacío es tan inválido como ausente, y en las DOS mitades: el
-                // proveedor estático se gatea con `(access_key_id,
-                // secret_access_key)` y opendal descarta la cadena vacía en
-                // cada setter, así que un `access_key_id = ""` reproduce #320
-                // entero aunque el secreto esté bien. Se comprueba AQUÍ, en la
-                // capa que tiene el peligro, y no solo en el resolver: este
-                // conector es API pública y el resolver no es su único llamante
-                // posible. Ver ADR 0015 (enmienda 2026-08-31) y #321.
+                // Empty is as invalid as absent, and in BOTH halves: the
+                // static provider is gated on `(access_key_id,
+                // secret_access_key)` and opendal discards the empty string
+                // in every setter, so an `access_key_id = ""` reproduces all
+                // of #320 even if the secret is fine. Checked HERE, in the
+                // layer that holds the danger, and not only in the resolver:
+                // this connector is public API and the resolver is not its
+                // only possible caller. See ADR 0015 (2026-08-31 amendment)
+                // and #321.
                 let key_id = spec
                     .access_key_id
                     .as_deref()
                     .filter(|k| !k.is_empty())
                     .ok_or_else(|| {
                         ConnectError::Config(
-                            "auth = \"access-key\" exige un `access_key_id` NO VACÍO en \
+                            "auth = \"access-key\" requires a NON-EMPTY `access_key_id` in \
                              connections.toml"
                                 .to_string(),
                         )
@@ -140,22 +147,23 @@ impl S3Connector {
                 builder = builder
                     .access_key_id(key_id)
                     .secret_access_key(sk.expose())
-                    // Determinismo, y NO por estos dos flags: en opendal 0.58
-                    // solo apagan env, perfil e IMDS — SSO, web-identity,
-                    // process y ECS siguen en la cadena (#321). Lo que lo
-                    // sostiene es que el proveedor estático entra por delante
-                    // y gana; a la cadena solo se llega si no hay credenciales
-                    // explícitas, que es justo lo que las guardas de arriba
-                    // impiden.
+                    // Determinism, and NOT via these two flags: in opendal
+                    // 0.58 they only turn off env, profile and IMDS — SSO,
+                    // web-identity, process and ECS remain in the chain
+                    // (#321). What actually guarantees it is that the static
+                    // provider comes in first and wins; the chain is only
+                    // reached if there are no explicit credentials, which is
+                    // exactly what the guards above prevent.
                     .disable_config_load()
                     .disable_ec2_metadata();
             }
-            // `agent` en s3 = cadena ambiente de opendal (AWS_*/perfil/IMDS):
-            // el caso CI/instancia con rol. No se toca el builder de creds.
+            // `agent` on s3 = opendal's ambient chain (AWS_*/profile/IMDS):
+            // the CI/instance-with-role case. The credentials builder is not
+            // touched.
             AuthMethod::Agent => {}
             AuthMethod::Key | AuthMethod::Password => {
                 return Err(ConnectError::Config(
-                    "s3 usa auth = \"access-key\" (o \"agent\" para la cadena ambiente), no \
+                    "s3 uses auth = \"access-key\" (or \"agent\" for the ambient chain), not \
                      \"key\"/\"password\""
                         .to_string(),
                 ));
@@ -163,9 +171,10 @@ impl S3Connector {
         }
 
         let op = Operator::new(builder).map_err(|e| map_opendal(&e))?;
-        // Sondeo fail-fast: `list` (NO `lister`, que es perezoso y no tocaría
-        // la red) de 1 entrada hace un ListObjectsV2 real — valida
-        // credenciales + bucket + conectividad sin depender de una key concreta.
+        // Fail-fast probe: `list` (NOT `lister`, which is lazy and would not
+        // touch the network) of 1 entry does a real ListObjectsV2 — it
+        // validates credentials + bucket + connectivity without depending on
+        // a specific key.
         op.list_with("")
             .limit(1)
             .await
@@ -174,9 +183,10 @@ impl S3Connector {
     }
 }
 
-/// Proyecta un error de opendal (construcción o sondeo) a `ConnectError`. Se
-/// degrada a CATEGORÍA (`ErrorKind`), sin re-emitir el mensaje de opendal (que
-/// podría llevar el endpoint) ni jamás el secreto (queda en el builder).
+/// Projects an opendal error (construction or probing) onto `ConnectError`.
+/// Degrades to a CATEGORY (`ErrorKind`), without re-emitting opendal's
+/// message (which could carry the endpoint) or ever the secret (it stays in
+/// the builder).
 fn map_opendal(e: &opendal::Error) -> ConnectError {
     use opendal::ErrorKind;
     match e.kind() {
@@ -185,14 +195,13 @@ fn map_opendal(e: &opendal::Error) -> ConnectError {
             host: "(s3)".to_string(),
         },
         ErrorKind::ConfigInvalid => {
-            ConnectError::Config("configuración s3 inválida (endpoint/region/bucket)".to_string())
+            ConnectError::Config("invalid s3 configuration (endpoint/region/bucket)".to_string())
         }
-        // Bucket inexistente/inaccesible: reintentar NO lo arregla — se
-        // proyecta como config inválida (no-retryable), no como transporte.
-        ErrorKind::NotFound => {
-            ConnectError::Config("bucket s3 no encontrado o sin acceso".to_string())
-        }
-        // Red, servicio, rate-limit: el provider "no responde" (retryable).
+        // Missing/inaccessible bucket: retrying does NOT fix it — projected
+        // as invalid config (non-retryable), not as transport.
+        ErrorKind::NotFound => ConnectError::Config("s3 bucket not found or no access".to_string()),
+        // Network, service, rate-limit: the provider "is not responding"
+        // (retryable).
         other => ConnectError::S3(format!("{other}")),
     }
 }

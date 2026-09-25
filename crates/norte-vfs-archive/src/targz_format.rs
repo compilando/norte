@@ -1,15 +1,14 @@
-//! Indexado y lectura de tar.gz/tgz (ADR 0028, #55): `tar+gz` compuesto —
-//! la capa gz es OPACA sobre tar, forward-only (no seekable). El índice
-//! recorre `tar::Archive::entries()` (solo `Read`, sin `entries_with_seek`)
-//! sobre un `flate2::read::MultiGzDecoder` (miembros gzip concatenados: los
-//! tgz reales los tienen); los offsets de `Locator::Gz` son del stream
-//! DESCOMPRIMIDO. SYNC: corre en `spawn_blocking` sobre un
-//! [`ProviderReader`](crate::blocking::ProviderReader), igual que
+//! Indexing and reading of tar.gz/tgz (ADR 0028, #55): composite `tar+gz`
+//! — the gz layer is OPAQUE over tar, forward-only (not seekable). The
+//! index walks `tar::Archive::entries()` (`Read` only, no
+//! `entries_with_seek`) over a `flate2::read::MultiGzDecoder` (concatenated
+//! gzip members: real tgz files have them); `Locator::Gz`'s offsets are of
+//! the DECOMPRESSED stream. SYNC: runs in `spawn_blocking` over a
+//! [`ProviderReader`](crate::blocking::ProviderReader), same as
 //! [`tar_format`](crate::tar_format)/[`zip_format`](crate::zip_format) —
-//! de hecho reutiliza la clasificación de entradas de `tar_format`
-//! (`classify_entry`/`EntryShape`): nombre/kind/symlink/mtime son
-//! IDÉNTICOS al tar plano, solo cambia cómo se resuelve el `Locator` de un
-//! archivo regular.
+//! in fact it reuses `tar_format`'s entry classification
+//! (`classify_entry`/`EntryShape`): name/kind/symlink/mtime are IDENTICAL
+//! to plain tar, only how a regular file's `Locator` is resolved changes.
 
 use std::io::Read;
 use std::sync::Arc;
@@ -21,18 +20,17 @@ use norte_proto::{EntryKind, Error};
 use crate::index::{ArchiveIndex, Limits, Locator, Node};
 use crate::tar_format::{EntryShape, classify_entry};
 
-/// Envuelve el DECODER gzip (no el `Read` crudo del contenedor) para contar
-/// bytes DESCOMPRIMIDOS leídos: una gzip bomb es CPU infinita aunque la
-/// memoria del pipeline sea streaming (el decoder nunca materializa el
-/// contenido completo) — `max` corta el PASE DE ÍNDICE entero (ADR 0028
-/// D4), no por entrada.
+/// Wraps the gzip DECODER (not the container's raw `Read`) to count
+/// DECOMPRESSED bytes read: a gzip bomb is infinite CPU even if the
+/// pipeline's memory is streaming (the decoder never materializes the
+/// full content) — `max` cuts the WHOLE INDEX PASS short (ADR 0028 D4),
+/// not per entry.
 ///
-/// También arma la cancelación (regla 3) POR CHUNK, no solo por entrada: el
-/// `tar::Entries` interno puede consumir el cuerpo completo de una entrada
-/// (o el descarte de sus bytes sobrantes al saltar a la siguiente) SIN
-/// devolver el control al loop externo de `build_index_gz` — chequear
-/// `cancel` solo entre entradas no bastaría para cortar rápido una entrada
-/// gigante.
+/// Also arms cancellation (rule 3) PER CHUNK, not just per entry: the
+/// internal `tar::Entries` can consume an entry's whole body (or discard
+/// its leftover bytes when skipping to the next one) WITHOUT returning
+/// control to `build_index_gz`'s outer loop — checking `cancel` only
+/// between entries wouldn't be enough to quickly cut short a giant entry.
 struct CountingReader<R> {
     inner: R,
     read_total: u64,
@@ -50,10 +48,10 @@ impl<R: Read> Read for CountingReader<R> {
         if self.read_total > self.max {
             tracing::warn!(
                 max = self.max,
-                "tar.gz supera el presupuesto de descompresión del índice (bomba)"
+                "tar.gz exceeds the index's decompression budget (bomb)"
             );
-            // #95.3: bomba O backup legítimo enorme — límite local honesto.
-            // `inner_proto_error` lo desenvuelve de la cadena io::Error.
+            // #95.3: bomb OR a legitimately huge backup — an honest local limit.
+            // `inner_proto_error` unwraps it from the io::Error chain.
             return Err(std::io::Error::other(Error::LimitExceeded {
                 limit: Error::LIMIT_DECOMPRESSED_BYTES.into(),
             }));
@@ -62,19 +60,20 @@ impl<R: Read> Read for CountingReader<R> {
     }
 }
 
-/// Construye el índice de un tar.gz recorriendo `entries()` (forward-only,
-/// sin `Seek`) sobre el `MultiGzDecoder`. Reutiliza `classify_entry` de
-/// [`tar_format`](crate::tar_format) para nombre/kind/symlink/mtime; solo
-/// difiere en el `Locator` del archivo regular: offset DESCOMPRIMIDO, SIN
-/// validar contra ningún `container_len` (ADR 0028 — ese tamaño sería el
-/// COMPRIMIDO y no acota nada del stream descomprimido). El truncamiento se
-/// detecta fail-loud en el propio `entries()` cuando el decoder corta a
-/// mitad de una entrada (vía `corrupt`, mismo criterio #58 que tar/zip:
-/// el IO genuino del provider interior se propaga verbatim).
+/// Builds a tar.gz's index by walking `entries()` (forward-only, no
+/// `Seek`) over the `MultiGzDecoder`. Reuses
+/// [`tar_format`](crate::tar_format)'s `classify_entry` for
+/// name/kind/symlink/mtime; only differs in a regular file's `Locator`:
+/// DECOMPRESSED offset, WITHOUT validating against any `container_len`
+/// (ADR 0028 — that size would be the COMPRESSED one and bounds nothing
+/// about the decompressed stream). Truncation is detected fail-loud in
+/// `entries()` itself when the decoder cuts off mid-entry (via `corrupt`,
+/// same #58 criterion as tar/zip: genuine IO from the inner provider
+/// propagates verbatim).
 ///
-/// `cancel` se chequea por entrada (paridad con el tar plano) Y por chunk
-/// dentro de `CountingReader` (más fino: una sola entrada gigante no debe
-/// bloquear la cancelación).
+/// `cancel` is checked per entry (parity with plain tar) AND per chunk
+/// inside `CountingReader` (finer-grained: a single giant entry shouldn't
+/// block cancellation).
 pub(crate) fn build_index_gz<R: Read>(
     reader: R,
     generation: (Option<i64>, Option<u64>),
@@ -92,12 +91,12 @@ pub(crate) fn build_index_gz<R: Read>(
     let entries = archive.entries().map_err(|e| corrupt(&e))?;
     for entry in entries {
         if cancel.load(Ordering::Relaxed) {
-            tracing::debug!("indexado tar.gz cancelado");
+            tracing::debug!("tar.gz indexing cancelled");
             return Err(Error::Cancelled);
         }
         let entry = entry.map_err(|e| corrupt(&e))?;
         let Some((raw_name, mtime_ms, shape)) = classify_entry(&entry) else {
-            continue; // meta ya consumida por el iterador (pax_global_header)
+            continue; // meta already consumed by the iterator (pax_global_header)
         };
         let node = match shape {
             EntryShape::Dir => Node::dir(mtime_ms),
@@ -127,12 +126,12 @@ pub(crate) fn build_index_gz<R: Read>(
             },
         };
         index.insert_entry(&raw_name, node, limits)?;
-        // Las omitidas también consumen presupuesto: un tar.gz de millones
-        // de nombres hostiles no itera gratis (mismo criterio que tar/zip).
+        // Omitted entries also spend budget: a tar.gz with millions of
+        // hostile names doesn't iterate for free (same criterion as tar/zip).
         if index.skipped > limits.max_entries as u64 {
             tracing::warn!(
                 max = limits.max_entries,
-                "tar.gz supera el presupuesto de omitidas"
+                "tar.gz exceeds the omitted-entries budget"
             );
             return Err(Error::LimitExceeded {
                 limit: Error::LIMIT_ENTRIES.into(),
@@ -142,29 +141,28 @@ pub(crate) fn build_index_gz<R: Read>(
     if index.skipped > 0 {
         tracing::warn!(
             skipped = index.skipped,
-            "entradas omitidas del índice (nombres hostiles/límites); detalle en debug"
+            "entries omitted from the index (hostile names/limits); detail in debug"
         );
     }
     Ok(index)
 }
 
-/// Lee `take` bytes descomprimidos desde `skip` de un tar.gz. Decoder
-/// FRESCO por lectura (gz no es seekable, ADR 0028 D3): descarta `skip`
-/// bytes en chunks — CHEQUEANDO `tx.is_closed()` en cada chunk, porque un
-/// descarte largo (offset grande dentro de una entrada) también debe ser
-/// cancelable (regla 3; a diferencia del descarte de zip, que es corto por
-/// la ventana de deflate) — y luego sirve `take` en chunks de 64 KiB por el
-/// canal acotado.
+/// Reads `take` decompressed bytes starting at `skip` of a tar.gz. A FRESH
+/// decoder per read (gz isn't seekable, ADR 0028 D3): discards `skip`
+/// bytes in chunks — CHECKING `tx.is_closed()` on every chunk, because a
+/// long discard (a large offset inside an entry) must also be cancellable
+/// (rule 3; unlike zip's discard, which is short due to deflate's window)
+/// — and then serves `take` in 64 KiB chunks over the bounded channel.
 ///
-/// EOF prematuro es FAIL-LOUD en AMBAS fases, `skip` Y `take` (fix de
-/// review #55: la fase de descarte devolvía silenciosamente un stream vacío
-/// — INCORRECTO). El caller (`ArchiveProvider::read`) ya recortó `req_off`
-/// contra `entry_size` ANTES de lanzar este hilo (semántica pread): un EOF
-/// aquí NUNCA es "offset legítimamente fuera de la entrada" (eso ya lo
-/// filtró el caller) — solo puede significar contenedor truncado o mutado
-/// bajo nuestros pies (el mismo evento que documenta
-/// [`ProviderReader::read`](crate::blocking::ProviderReader)), jamás datos
-/// cortos en silencio.
+/// A premature EOF is FAIL-LOUD in BOTH phases, `skip` AND `take` (fix
+/// from review #55: the discard phase used to silently return an empty
+/// stream — INCORRECT). The caller (`ArchiveProvider::read`) already
+/// trimmed `req_off` against `entry_size` BEFORE launching this thread
+/// (pread semantics): an EOF here is NEVER "an offset legitimately
+/// outside the entry" (the caller already filtered that) — it can only
+/// mean a truncated container or one mutated under our feet (the same
+/// event [`ProviderReader::read`](crate::blocking::ProviderReader)
+/// documents), never silently short data.
 pub(crate) fn read_entry_gz<R: Read>(
     reader: R,
     skip: u64,
@@ -172,7 +170,7 @@ pub(crate) fn read_entry_gz<R: Read>(
     tx: &tokio::sync::mpsc::Sender<Result<bytes::Bytes, Error>>,
 ) {
     let send_err = |tx: &tokio::sync::mpsc::Sender<Result<bytes::Bytes, Error>>, e: Error| {
-        // Mejor esfuerzo: si el receptor murió, no hay a quién contárselo.
+        // Best effort: if the receiver died, there's nobody to tell.
         let _ = tx.blocking_send(Err(e));
     };
     let mut decoder = MultiGzDecoder::new(reader);
@@ -180,17 +178,17 @@ pub(crate) fn read_entry_gz<R: Read>(
     let mut to_skip = skip;
     while to_skip > 0 {
         if tx.is_closed() {
-            tracing::debug!("descarte de tar.gz cancelado (receptor muerto)");
+            tracing::debug!("tar.gz discard cancelled (receiver dead)");
             return;
         }
         let want = buf.len().min(usize::try_from(to_skip).unwrap_or(buf.len()));
         match decoder.read(&mut buf[..want]) {
             Ok(0) => {
-                // FIX-1 (rust+security MAJOR, #55 review): el caller YA
-                // recortó `req_off` contra `entry_size` — un EOF aquí solo
-                // puede ser contenedor truncado/mutado bajo nuestros pies,
-                // jamás un offset legítimamente vacío. Fail-loud, igual que
-                // el EOF prematuro de la fase `take`.
+                // FIX-1 (rust+security MAJOR, #55 review): the caller
+                // ALREADY trimmed `req_off` against `entry_size` — an EOF
+                // here can only be a truncated/mutated container under
+                // our feet, never a legitimately empty offset. Fail-loud,
+                // same as the `take` phase's premature EOF.
                 return send_err(tx, Error::Corrupt);
             }
             Ok(n) => to_skip -= n as u64,
@@ -204,9 +202,9 @@ pub(crate) fn read_entry_gz<R: Read>(
             .min(usize::try_from(remaining).unwrap_or(buf.len()));
         match decoder.read(&mut buf[..want]) {
             Ok(0) => {
-                // Premature EOF a mitad de la entrada: el índice prometió
-                // `size` bytes y el decoder no los tiene — contenedor
-                // truncado bajo la entrada (jamás datos cortos en silencio).
+                // Premature EOF mid-entry: the index promised `size`
+                // bytes and the decoder doesn't have them — a container
+                // truncated under the entry (never silently short data).
                 return send_err(tx, Error::Corrupt);
             }
             Ok(n) => {
@@ -215,7 +213,7 @@ pub(crate) fn read_entry_gz<R: Read>(
                     .blocking_send(Ok(bytes::Bytes::copy_from_slice(&buf[..n])))
                     .is_err()
                 {
-                    tracing::debug!("lectura tar.gz cancelada (receptor muerto)");
+                    tracing::debug!("tar.gz read cancelled (receiver dead)");
                     return;
                 }
             }
@@ -224,32 +222,33 @@ pub(crate) fn read_entry_gz<R: Read>(
     }
 }
 
-/// Por qué abortó [`spool_gz`] sin producir un spool completo.
+/// Why [`spool_gz`] aborted without producing a complete spool.
 #[derive(Debug)]
 pub(crate) enum SpoolAbort {
-    /// `tx_probe` devolvió `true` (receptor muerto): nadie espera el
-    /// resultado — descartar el parcial sin ruido (regla 3).
+    /// `tx_probe` returned `true` (receiver dead): nobody's waiting for
+    /// the result — discard the partial without noise (rule 3).
     Cancelled,
-    /// El descomprimido superó el presupuesto (`Limits::spool_max_bytes`):
-    /// el contenedor es no-spooleable — el caller lo recuerda y las
-    /// lecturas siguen por forward-decode.
+    /// The decompressed size exceeded the budget
+    /// (`Limits::spool_max_bytes`): the container is non-spoolable — the
+    /// caller remembers this and reads continue via forward-decode.
     OverBudget,
-    /// Error genuino: decoder (gz roto/IO del provider interior, ya
-    /// desenvuelto verbatim vía [`corrupt`]) o escritura al fichero de
-    /// spool (disco lleno). El caller decide si propaga o degrada a
-    /// forward-decode.
+    /// A genuine error: the decoder (broken gz/IO from the inner
+    /// provider, already unwrapped verbatim via [`corrupt`]) or writing
+    /// to the spool file (full disk). The caller decides whether to
+    /// propagate it or degrade to forward-decode.
     Io(Error),
 }
 
-/// Descomprime el stream gz COMPLETO de un contenedor (desde el offset 0,
-/// mismo `MultiGzDecoder` que [`read_entry_gz`]) al fichero `out`: el spool
-/// de #95.1. Devuelve el total de bytes descomprimidos escritos.
+/// Decompresses a container's WHOLE gz stream (from offset 0, the same
+/// `MultiGzDecoder` as [`read_entry_gz`]) into the `out` file: #95.1's
+/// spool. Returns the total decompressed bytes written.
 ///
-/// `tx_probe` se consulta ANTES de cada chunk (`true` = abortar): el caller
-/// le pasa el `tx.is_closed()` de su canal de entrega — un receptor muerto
-/// corta la construcción igual que corta el forward-decode (regla 3).
-/// Superar `budget` aborta con [`SpoolAbort::OverBudget`] sin seguir
-/// pagando descompresión (mismo criterio anti-bomba que el pase de índice).
+/// `tx_probe` is consulted BEFORE every chunk (`true` = abort): the
+/// caller passes it its delivery channel's `tx.is_closed()` — a dead
+/// receiver cuts the build short just like it cuts forward-decode short
+/// (rule 3). Exceeding `budget` aborts with [`SpoolAbort::OverBudget`]
+/// without paying for more decompression (same anti-bomb criterion as the
+/// index pass).
 pub(crate) fn spool_gz<R: Read>(
     src: R,
     budget: u64,
@@ -272,9 +271,9 @@ pub(crate) fn spool_gz<R: Read>(
                     return Err(SpoolAbort::OverBudget);
                 }
                 if let Err(e) = out.write_all(&buf[..n]) {
-                    // Escritura local del spool (disco lleno…): no pasa por
-                    // `corrupt` — no es el contenedor, es nuestro tempfile.
-                    tracing::warn!(error = %e, "fallo escribiendo el spool tar.gz");
+                    // Local spool write (full disk…): doesn't go through
+                    // `corrupt` — it isn't the container, it's our tempfile.
+                    tracing::warn!(error = %e, "failed writing the tar.gz spool");
                     return Err(SpoolAbort::Io(Error::Io { retryable: true }));
                 }
             }
@@ -284,14 +283,14 @@ pub(crate) fn spool_gz<R: Read>(
 }
 
 fn corrupt(e: &std::io::Error) -> Error {
-    // IO genuino del provider interior (corte de red a mitad de parseo) O
-    // señal envuelta por `CountingReader` (`Cancelled`/`Corrupt` de bomba):
-    // ambos van por el mismo `io::Error::other`, se desenvuelven verbatim
-    // (#58) — jamás se disfrazan de "tar.gz corrupto".
+    // Genuine IO from the inner provider (a network drop mid-parse) OR a
+    // signal wrapped by `CountingReader` (bomb's `Cancelled`/`Corrupt`):
+    // both go through the same `io::Error::other`, unwrapped verbatim
+    // (#58) — never disguised as "corrupt tar.gz".
     if let Some(inner) = crate::blocking::inner_proto_error(e) {
         return inner;
     }
-    tracing::warn!(error = %e, "tar.gz corrupto o ilegible");
+    tracing::warn!(error = %e, "corrupt or unreadable tar.gz");
     Error::Corrupt
 }
 
@@ -304,28 +303,27 @@ mod tests {
         Limits::default()
     }
 
-    /// Gzipea bytes ya armados (p. ej. un tar de `TarSmith`) en un único
-    /// miembro gzip.
+    /// Gzips already-built bytes (e.g. a `TarSmith` tar) into a single gzip member.
     fn gzip(bytes: &[u8]) -> Vec<u8> {
         let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
         enc.write_all(bytes).expect("write gz");
         enc.finish().expect("finish gz")
     }
 
-    /// Verificación exigida por el plan (#55 T3): `entry.raw_file_position()`
-    /// SIRVE como offset DESCOMPRIMIDO con `entries()` (sin `Seek`) — el
-    /// crate `tar` lo calcula contando bytes consumidos del `Read`, no vía
-    /// `Seek::stream_position`. Dos archivos con contenido conocido: el
-    /// segundo NO puede estar en offset 0, y el offset debe coincidir con
-    /// el que produce `entries_with_seek` sobre el MISMO tar plano.
+    /// Verification the plan requires (#55 T3): `entry.raw_file_position()`
+    /// WORKS as the DECOMPRESSED offset with `entries()` (no `Seek`) — the
+    /// `tar` crate computes it by counting bytes consumed from the `Read`,
+    /// not via `Seek::stream_position`. Two files with known content: the
+    /// second CAN'T be at offset 0, and the offset must match what
+    /// `entries_with_seek` produces over the SAME plain tar.
     #[test]
-    fn raw_file_position_es_correcto_sin_seek() {
+    fn raw_file_position_is_correct_without_seek() {
         let tar = norte_testkit::TarSmith::new()
-            .file(b"primero.bin", &[0xAAu8; 600])
-            .file(b"segundo.bin", b"0123456789")
+            .file(b"first.bin", &[0xAAu8; 600])
+            .file(b"second.bin", b"0123456789")
             .build();
 
-        // Offsets de referencia: con Seek sobre el tar PLANO (sin gz).
+        // Reference offsets: with Seek over the PLAIN tar (no gz).
         let mut archive_seek = tar::Archive::new(Cursor::new(tar.clone()));
         let seek_offsets: Vec<(Vec<u8>, u64, u64)> = archive_seek
             .entries_with_seek()
@@ -335,18 +333,14 @@ mod tests {
                 (e.path_bytes().to_vec(), e.raw_file_position(), e.size())
             })
             .collect();
-        assert_eq!(
-            seek_offsets.len(),
-            2,
-            "dos archivos en el tar de referencia"
-        );
+        assert_eq!(seek_offsets.len(), 2, "two files in the reference tar");
         assert!(
             seek_offsets[1].1 > 0,
-            "el segundo archivo no puede empezar en offset 0"
+            "the second file can't start at offset 0"
         );
 
-        // Mismos offsets, ahora vía `entries()` (sin Seek) sobre el tar PLANO
-        // directo (sin gz de por medio: aísla la propiedad de raw_file_position).
+        // Same offsets, now via `entries()` (no Seek) over the PLAIN tar
+        // directly (no gz in between: isolates raw_file_position's property).
         let mut archive_plain = tar::Archive::new(Cursor::new(tar.clone()));
         let plain_offsets: Vec<(Vec<u8>, u64, u64)> = archive_plain
             .entries()
@@ -358,10 +352,10 @@ mod tests {
             .collect();
         assert_eq!(
             plain_offsets, seek_offsets,
-            "raw_file_position() coincide entre entries() y entries_with_seek()"
+            "raw_file_position() matches between entries() and entries_with_seek()"
         );
 
-        // Y ahora vía el pipeline real: gz + MultiGzDecoder + entries().
+        // And now via the real pipeline: gz + MultiGzDecoder + entries().
         let gz = gzip(&tar);
         let mut archive_gz = tar::Archive::new(MultiGzDecoder::new(Cursor::new(gz)));
         let gz_offsets: Vec<(Vec<u8>, u64, u64)> = archive_gz
@@ -374,30 +368,31 @@ mod tests {
             .collect();
         assert_eq!(
             gz_offsets, seek_offsets,
-            "raw_file_position() sobre MultiGzDecoder da el offset DESCOMPRIMIDO correcto"
+            "raw_file_position() over MultiGzDecoder gives the correct DECOMPRESSED offset"
         );
     }
 
-    /// La cancelación corta el loop en la siguiente entrada (regla 3),
-    /// mismo patrón que el tar plano.
+    /// Cancellation cuts the loop short at the next entry (rule 3), same
+    /// pattern as plain tar.
     #[test]
-    fn cancelacion_corta_el_indexado() {
+    fn cancellation_cuts_indexing_short() {
         let mut smith = norte_testkit::TarSmith::new();
         for i in 0..50u32 {
             smith = smith.file(format!("f{i}").as_bytes(), b"x");
         }
         let gz = gzip(&smith.build());
-        let cancel = Arc::new(AtomicBool::new(true)); // armado ANTES
+        let cancel = Arc::new(AtomicBool::new(true)); // armed BEFORE
         let got = build_index_gz(Cursor::new(gz), (Some(0), Some(1)), &limits(), &cancel);
         assert_eq!(got.map(|_| ()).unwrap_err(), Error::Cancelled);
     }
 
-    /// `max_decompressed_bytes` corta el pase de índice sin colgarse: fixture
-    /// de "bomba" clásica (un archivo grande de ceros comprime a casi nada).
+    /// `max_decompressed_bytes` cuts the index pass short without
+    /// hanging: a classic "bomb" fixture (a large file of zeros compresses
+    /// to almost nothing).
     #[test]
-    fn max_decompressed_bytes_corta_la_bomba() {
+    fn max_decompressed_bytes_cuts_the_bomb_short() {
         let tar = norte_testkit::TarSmith::new()
-            .file(b"bomba.bin", &vec![0u8; 2_000_000])
+            .file(b"bomb.bin", &vec![0u8; 2_000_000])
             .build();
         let gz = gzip(&tar);
         let cancel = Arc::new(AtomicBool::new(false));
@@ -414,20 +409,20 @@ mod tests {
         );
     }
 
-    /// FIX-1 (rust+security MAJOR, #55 review): EOF durante el DESCARTE
-    /// (`skip`) debe ser fail-loud, no un stream vacío silencioso. `skip`
-    /// aquí supera lo que el gz truncado puede entregar — antes del fix esto
-    /// devolvía Ok(()) sin ningún mensaje por el canal (indistinguible de
-    /// "no hay más datos porque el receptor cerró"); ahora debe llegar
-    /// exactamente UN mensaje `Err(Corrupt)`.
+    /// FIX-1 (rust+security MAJOR, #55 review): EOF during DISCARD
+    /// (`skip`) must be fail-loud, not a silent empty stream. `skip` here
+    /// exceeds what the truncated gz can deliver — before the fix this
+    /// returned Ok(()) with no message over the channel at all
+    /// (indistinguishable from "no more data because the receiver
+    /// closed"); now exactly ONE `Err(Corrupt)` message must arrive.
     #[test]
-    fn eof_durante_el_descarte_es_corrupt_no_vacio() {
+    fn eof_during_discard_is_corrupt_not_empty() {
         let tar = norte_testkit::TarSmith::new()
-            .file(b"grande.bin", &[7u8; 4000])
+            .file(b"big.bin", &[7u8; 4000])
             .build();
         let gz = gzip(&tar);
-        // Corta el gz a la mitad: el decoder no puede entregar los 4000
-        // bytes descomprimidos que `skip` pide.
+        // Cuts the gz in half: the decoder can't deliver the 4000
+        // decompressed bytes `skip` asks for.
         let truncated = gz[..gz.len() / 2].to_vec();
 
         let (tx, mut rx) = tokio::sync::mpsc::channel(4);
@@ -436,23 +431,23 @@ mod tests {
 
         match rx.blocking_recv() {
             Some(Err(Error::Corrupt)) => {}
-            other => panic!(
-                "esperaba EXACTAMENTE un Err(Corrupt) por EOF durante el descarte, fue {other:?}"
-            ),
+            other => {
+                panic!("expected EXACTLY one Err(Corrupt) for EOF during discard, was {other:?}")
+            }
         }
         assert!(
             rx.blocking_recv().is_none(),
-            "ni un byte de datos tras el EOF prematuro: jamás cortos en silencio"
+            "not a single byte of data after the premature EOF: never silently short"
         );
     }
 
-    /// Reader que arma `cancel` (el MISMO que recibe `build_index_gz`) tras
-    /// servir sus primeros `arm_after` bytes CRUDOS (comprimidos): simula
-    /// una cancelación real EN MEDIO del pipeline de descompresión —
-    /// distinto del test `cancelacion_corta_el_indexado` de arriba, que
-    /// arma el flag ANTES de arrancar (corta en la PRIMERISIMA lectura, sin
-    /// que el build haya progresado nada todavía). FIX-4 (rust MINOR-3a,
-    /// #55 review).
+    /// A reader that arms `cancel` (the SAME one `build_index_gz` gets)
+    /// after serving its first `arm_after` RAW (compressed) bytes:
+    /// simulates a real cancellation IN THE MIDDLE of the decompression
+    /// pipeline — unlike the `cancellation_cuts_indexing_short` test
+    /// above, which arms the flag BEFORE starting (cuts short on the
+    /// VERY FIRST read, before the build has made any progress at all).
+    /// FIX-4 (rust MINOR-3a, #55 review).
     struct ArmCancelAfter<R> {
         inner: R,
         served: u64,
@@ -471,22 +466,21 @@ mod tests {
         }
     }
 
-    /// FIX-4 (rust MINOR-3a, #55 review): cancelación DESPUÉS de que el
-    /// pipeline ya sirvió bytes reales (no antes de que arranque el build) —
-    /// el resultado sigue siendo `Cancelled`, NUNCA `Corrupt`. También
-    /// valida la cadena `source()` de FIX-3: la señal atraviesa flate2 +
-    /// tar-rs sin perder su identidad, aunque quede reenvuelta por el
-    /// camino.
+    /// FIX-4 (rust MINOR-3a, #55 review): cancellation AFTER the pipeline
+    /// has already served real bytes (not before the build starts) — the
+    /// result is still `Cancelled`, NEVER `Corrupt`. Also validates
+    /// FIX-3's `source()` chain: the signal crosses flate2 + tar-rs
+    /// without losing its identity, even if it gets re-wrapped along the way.
     #[test]
-    fn cancelacion_a_mitad_del_pipeline_es_cancelled_no_corrupt() {
-        // Contenido de ALTA entropía (xorshift32, no un patrón periódico):
-        // deflate no puede comprimir ruido genuino, así que el gz resultante
-        // es ~proporcional al tamaño descomprimido — evita que TODO el gz
-        // quepa en un solo buffer interno de flate2 (lo que dejaría
-        // `served` saltar de 0 al total en una sola lectura y perdería el
-        // matiz "a mitad").
+    fn cancellation_mid_pipeline_is_cancelled_not_corrupt() {
+        // HIGH-entropy content (xorshift32, not a periodic pattern):
+        // deflate can't compress genuine noise, so the resulting gz is
+        // ~proportional to the decompressed size — this keeps the WHOLE
+        // gz from fitting in a single internal flate2 buffer (which would
+        // let `served` jump from 0 to the total in a single read and lose
+        // the "mid-way" nuance).
         let mut state: u32 = 0x2545_F491;
-        let contenido: Vec<u8> = (0..2_000_000u32)
+        let content: Vec<u8> = (0..2_000_000u32)
             .map(|_| {
                 state ^= state << 13;
                 state ^= state >> 17;
@@ -495,28 +489,28 @@ mod tests {
             })
             .collect();
         let tar = norte_testkit::TarSmith::new()
-            .file(b"grande.bin", &contenido)
-            .file(b"segunda.bin", b"x")
+            .file(b"big.bin", &content)
+            .file(b"second.bin", b"x")
             .build();
         let gz = gzip(&tar);
         let gz_len = gz.len() as u64;
         assert!(
             gz_len > 100_000,
-            "contenido poco compresible: el gz debe seguir siendo grande"
+            "poorly compressible content: the gz must still be large"
         );
 
         let cancel = Arc::new(AtomicBool::new(false));
         let reader = ArmCancelAfter {
             inner: Cursor::new(gz),
             served: 0,
-            arm_after: gz_len / 2, // a mitad del stream comprimido
+            arm_after: gz_len / 2, // mid-way through the compressed stream
             cancel: Arc::clone(&cancel),
         };
         let got = build_index_gz(reader, (Some(0), Some(1)), &limits(), &cancel);
         assert_eq!(
             got.map(|_| ()).unwrap_err(),
             Error::Cancelled,
-            "cancelación a mitad del pipeline: Cancelled, NO Corrupt"
+            "cancellation mid-pipeline: Cancelled, NOT Corrupt"
         );
     }
 }

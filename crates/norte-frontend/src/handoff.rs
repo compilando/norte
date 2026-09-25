@@ -1,39 +1,40 @@
-//! Los argumentos del RELEVO entre frontends (fase 9, ADR 0123), en UN sitio.
+//! The HANDOFF arguments between frontends (phase 9, ADR 0123), in ONE place.
 //!
-//! Existe por un bug que sólo se vio con un humano delante: la terminal
-//! lanzaba la ventana como `ntc-gui --attach --daemon`, y la ventana no conocía
-//! ninguno de los dos flags. Su parser rechaza lo desconocido —bien: un flag
-//! mal escrito que se ignora es una opción que el usuario cree haber puesto—,
-//! salía con código 2, y como el relevo le cierra `stderr` para no ensuciar el
-//! prompt, moría sin decir nada. La terminal ya se había ido.
+//! It exists because of a bug that only showed up with a human watching: the
+//! terminal launched the window as `ntc-gui --attach --daemon`, and the window
+//! knew neither flag. Its parser rejects the unknown — good: a misspelled flag
+//! that gets ignored is an option the user believes they set — exited with
+//! code 2, and since the handoff closes its `stderr` so as not to dirty the
+//! prompt, it died without saying anything. The terminal was already gone.
 //!
-//! El `argv` se construía en un binario y se parseaba en OTRO, sin nada que los
-//! atara. Ahora los dos lados lo sacan de aquí, y cada binario tiene un test
-//! que parsea lo que construye el otro con SU parser de verdad: es lo único que
-//! habría visto el fallo sin abrir una ventana.
+//! The `argv` was built in one binary and parsed in ANOTHER, with nothing
+//! tying them together. Now both sides pull it from here, and each binary has
+//! a test that parses what the other builds with ITS real parser: it is the
+//! only thing that would have caught the failure without opening a window.
 
-/// El flag que distingue un relevo de un arranque cualquiera.
+/// The flag that tells a handoff apart from an ordinary launch.
 ///
-/// Con él, el frontend que llega reclama además lo MARCADO que el otro dejó en
-/// la sesión. Sin él, un arranque es un arranque, y unas marcas de un relevo a
-/// medias no resucitan al día siguiente.
+/// With it, the incoming frontend also claims the MARKED state the other left
+/// in the session. Without it, a launch is a launch, and marks from a
+/// half-finished handoff do not come back to life the next day.
 pub const ATTACH: &str = "--attach";
 
-/// Los argumentos con los que la terminal lanza la VENTANA.
+/// The arguments the terminal launches the WINDOW with.
 ///
-/// Sólo [`ATTACH`], y la ausencia es la mitad del arreglo: la ventana va
-/// SIEMPRE con daemon —arranca el suyo si no hay—, así que no tiene `--daemon`,
-/// y pasárselo era un flag desconocido que la mataba.
+/// Only [`ATTACH`], and the absence is half the fix: the window ALWAYS goes
+/// with a daemon — it starts its own if there is none — so it has no
+/// `--daemon`, and passing it was an unknown flag that killed it.
 #[must_use]
 pub fn window_args() -> Vec<String> {
     vec![ATTACH.to_owned()]
 }
 
-/// Los argumentos con los que la ventana lanza la TERMINAL (`ntc`).
+/// The arguments the window launches the TERMINAL (`ntc`) with.
 ///
-/// [`ATTACH`] y `--daemon` si quien releva lo lleva: la sesión que se acaba de
-/// soltar es la del daemon, y un `ntc` contra su core embebido no encontraría
-/// nada. La ventana pasa `true` siempre, porque es su único modo.
+/// [`ATTACH`] and `--daemon` if whoever hands off carries one: the session
+/// that just let go is the daemon's, and an `ntc` against its embedded core
+/// would find nothing. The window always passes `true`, because that is its
+/// only mode.
 #[must_use]
 pub fn terminal_args(daemon: bool) -> Vec<String> {
     let mut args = vec![ATTACH.to_owned()];
@@ -47,17 +48,19 @@ pub fn terminal_args(daemon: bool) -> Vec<String> {
 mod tests {
     use super::*;
 
-    /// La ventana NO recibe `--daemon`: no lo tiene, y un flag desconocido la
-    /// mataba sin decir nada. El test de que lo acepta vive en su crate, con su
-    /// parser de verdad; éste fija que no se le vuelva a colar.
+    /// The window does NOT receive `--daemon`: it does not have one, and an
+    /// unknown flag killed it without a word. The test that it accepts the
+    /// flag lives in its own crate, with its real parser; this one fixes that
+    /// it never sneaks back in.
     #[test]
-    fn a_la_ventana_solo_se_le_pide_attach() {
+    fn window_is_only_asked_for_attach() {
         assert_eq!(window_args(), vec!["--attach".to_owned()]);
     }
 
-    /// A la terminal sí: sin `--daemon` iría contra su core embebido.
+    /// The terminal does: without `--daemon` it would run against its
+    /// embedded core.
     #[test]
-    fn a_la_terminal_se_le_pasa_el_daemon() {
+    fn terminal_is_passed_the_daemon() {
         assert_eq!(
             terminal_args(true),
             vec!["--attach".to_owned(), "--daemon".to_owned()]

@@ -1,16 +1,16 @@
-//! Guest WASM de ejemplo (ADR 0037, G3 plan Task 4/G3b): un columns mínimo.
+//! Example WASM guest (ADR 0037, G3 plan Task 4/G3b): a minimal columns.
 //!
-//! Exporta la interfaz `columns` del world `norte-columns`: `column-values`
-//! recibe el LOTE de nombres/paths crudos de la página visible (regla 1:
-//! bytes, jamás asumidos UTF-8 — el largo se mide en BYTES, no en chars, así
-//! que este guest no necesita decodificar nada) y devuelve, POR CADA
-//! entrada en el MISMO orden (contrato posicional 1:1, ADR 0037 tabla de
-//! decisión 1), el largo del nombre como texto decimal para la columna
-//! `"name-len"`; cualquier otro `id` de columna (que este guest no declara
-//! en su manifiesto) responde `none` para toda la página — determinista y
-//! defensivo, sin adivinar qué querría decir un id que no le pertenece. El
-//! e2e del host verifica el round-trip posicional exacto sin depender de
-//! ningún estado externo.
+//! Exports the `columns` interface of the `norte-columns` world:
+//! `column-values` receives the BATCH of raw names/paths from the visible
+//! page (rule 1: bytes, never assumed UTF-8 — the length is measured in
+//! BYTES, not chars, so this guest needs no decoding) and returns, FOR
+//! EACH entry in the SAME order (positional 1:1 contract, ADR 0037
+//! decision table 1), the name's length as decimal text for the
+//! `"name-len"` column; any other column `id` (that this guest does not
+//! declare in its manifest) answers `none` for the whole page —
+//! deterministic and defensive, without guessing what an id that does not
+//! belong to it would mean. The host's e2e verifies the exact positional
+//! round trip with no dependency on any external state.
 #![no_std]
 
 extern crate alloc;
@@ -22,9 +22,9 @@ use alloc::vec::Vec;
 wit_bindgen::generate!({
     world: "norte-columns",
     path: "wit",
-    // `host-log`/`host-config` viven en OTRO paquete desde la partición
-    // (ADR 0041 decisión 4); wit-bindgen exige decidir explícitamente qué
-    // hacer con los imports de fuera del paquete del world.
+    // `host-log`/`host-config` live in ANOTHER package since the split
+    // (ADR 0041 decision 4); wit-bindgen requires explicitly deciding what
+    // to do with imports from outside the world's package.
     generate_all,
 });
 
@@ -34,14 +34,14 @@ use norte::location::location;
 
 struct ColumnsDemo;
 
-/// Único id de columna que este guest declara y sabe valorar (mismo id que
-/// su manifiesto de prueba en `plugins_column_values_e2e.rs`).
+/// The only column id this guest declares and knows how to value (the
+/// same id as its test manifest in `plugins_column_values_e2e.rs`).
 const NAME_LEN_COLUMN: &str = "name-len";
 
-/// Columna de prueba de la capacidad `location` (ADR 0057): por cada entrada
-/// devuelve el tamaño que `stat` reporta bajo el token, o `none` si el host no
-/// da ubicación (sin capacidad aprobada, o sin token). Un guest sin ubicación
-/// tiene que seguir contestando, no fallar.
+/// Test column for the `location` capability (ADR 0057): for each entry
+/// returns the size `stat` reports under the token, or `none` if the host
+/// gives no location (no approved capability, or no token). A guest with
+/// no location still has to keep answering, not fail.
 const STAT_SIZE_COLUMN: &str = "stat-size";
 
 impl ColumnsGuest for ColumnsDemo {
@@ -51,13 +51,13 @@ impl ColumnsGuest for ColumnsDemo {
         entries: Vec<Vec<u8>>,
     ) -> Vec<Option<String>> {
         host_log::log(&format!(
-            "columns-demo: id={id} {} entradas, ubicacion={}",
+            "columns-demo: id={id} {} entries, location={}",
             entries.len(),
-            if location.is_some() { "si" } else { "no" }
+            if location.is_some() { "yes" } else { "no" }
         ));
         if id != NAME_LEN_COLUMN && id != STAT_SIZE_COLUMN {
-            // Un id que este guest no aporta: `none` para TODA la página,
-            // nunca se adivina ni se omite del vector posicional.
+            // An id this guest does not supply: `none` for the WHOLE page,
+            // never guessed nor omitted from the positional vector.
             return entries.iter().map(|_| None).collect();
         }
         if id == STAT_SIZE_COLUMN {
@@ -67,8 +67,8 @@ impl ColumnsGuest for ColumnsDemo {
             return entries
                 .iter()
                 .map(|raw| {
-                    // La entrada visible cuelga del PREFIJO, no de la raíz: la
-                    // raíz puede ser un ancestro (marcador de proyecto).
+                    // The visible entry hangs off the PREFIX, not the root:
+                    // the root can be an ancestor (project marker).
                     let mut rel = loc.prefix.clone();
                     if !rel.is_empty() {
                         rel.push(b'/');
@@ -78,10 +78,10 @@ impl ColumnsGuest for ColumnsDemo {
                 })
                 .map(|rel| match location::stat(&loc.token, &rel) {
                     Ok(meta) => Some(meta.size.to_string()),
-                    // El host dice que no (sin capacidad, token desconocido):
-                    // celda vacía, jamás una traba.
+                    // The host says no (no capability, unknown token): an
+                    // empty cell, never a jam.
                     Err(why) => {
-                        host_log::log(&format!("columns-demo: stat denegado: {why}"));
+                        host_log::log(&format!("columns-demo: stat denied: {why}"));
                         None
                     }
                 })

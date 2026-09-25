@@ -43,9 +43,9 @@ pub const CONTEXTS: &[&str] = &[
     "dialog.command-line",
     "dialog.ai-rename",
     "dialog.semantic-search",
-    // #139: las propiedades de una entrada son «qué me dice el listado de
-    // esto», que es de lo que va la página de columnas — no un diálogo de
-    // decisión, así que no comparte id con ninguno de los que preguntan.
+    // #139: an entry's properties are "what does the listing tell me about
+    // this", which is what the columns page is about — not a decision
+    // dialog, so it shares no id with any of the ones that ask something.
     "dialog.properties",
 ];
 
@@ -67,10 +67,10 @@ pub const CONTEXTS: &[&str] = &[
 /// prose about another.
 fn modal_context(modal: &Modal) -> &'static str {
     match modal {
-        // Desinstalar una extensión es un borrado que pregunta: misma
-        // página que el borrado.
-        // Deshacer hasta un punto también es una consecuencia que se acepta,
-        // así que comparte la página de confirmar.
+        // Uninstalling an extension is a delete that asks: same page as the
+        // delete.
+        // Undoing up to a point is also a consequence being accepted, so it
+        // shares the confirm page.
         Modal::ConfirmDelete { .. }
         | Modal::ConfirmPluginUninstall { .. }
         | Modal::ConfirmUndoAfter { .. }
@@ -78,58 +78,59 @@ fn modal_context(modal: &Modal) -> &'static str {
         Modal::ConfirmQuit => "dialog.quit",
         Modal::Collision { .. } => "dialog.collision",
         Modal::ApproveAgentOp { .. } => "dialog.approval",
-        // Conceder capabilities NO comparte página con aprobar la operación
-        // de un agente: son dos cosas distintas de las que tener cuidado, y
-        // quien pulsa F1 encima de una no puede recibir prosa de la otra.
+        // Granting capabilities does NOT share a page with approving an
+        // agent's operation: they are two different things to be careful
+        // about, and whoever presses F1 over one must not get prose about the
+        // other.
         Modal::ConfirmPluginApproval { .. } => "dialog.plugin-approval",
         Modal::TrustHostKey { .. } => "dialog.trust-host",
-        // #325: id PROPIO y no el del TOFU, aunque hoy los dos los explique
-        // la misma página (`remote`, que es donde viven las conexiones y sus
-        // secretos): son dos preguntas distintas —una clave de host que
-        // comparar, una contraseña que teclear— y compartir id ataría la
-        // segunda a la página de la primera para siempre. `F1` encima no
-        // abre nada (`help_over_modal_allowed`), así que este id se llega
-        // hoy por el índice de la ayuda, no por la tecla.
+        // #325: its OWN id and not the TOFU's, even though today the same
+        // page (`remote`, where connections and their secrets live) explains
+        // both: they are two different questions — a host key to compare, a
+        // password to type — and sharing an id would tie the second to the
+        // first's page forever. `F1` over it opens nothing
+        // (`help_over_modal_allowed`), so this id is reached today through
+        // help's index, not through the key.
         Modal::AskSecret { .. } => "dialog.ask-secret",
         Modal::TrustLuaInit { .. } => "dialog.trust-lua",
         Modal::MarkPattern { .. } => "dialog.mark-pattern",
         Modal::TransferName { .. } => "dialog.transfer-name",
-        // Crear fichero comparte página con crear directorio, igual que en la
-        // ventana: los dos son el diálogo que pide que teclees un nombre, y el
-        // corpus tiene UNA que habla de eso.
-        // Guardar como perfil comparte página con crear: los dos son el
-        // diálogo que pide que teclees un nombre.
+        // Creating a file shares a page with creating a directory, same as in
+        // the window: both are the dialog that asks you to type a name, and
+        // the corpus has ONE page that talks about that.
+        // Saving as a profile shares a page with creating: both are the
+        // dialog that asks you to type a name.
         Modal::Mkdir { .. } | Modal::EditNew { .. } | Modal::ProfileSaveAs { .. } => "dialog.mkdir",
         Modal::TransferDest { .. } => "dialog.transfer-dest",
         Modal::CommandLine { .. } => "dialog.command-line",
-        // Organizar comparte página con el plan de renombrar por IA: es el
-        // mismo trato —un plan que se revisa entero antes de aplicarse— con
-        // una libertad más, y separar la prosa obligaría a repetirla.
+        // Organize shares a page with the AI-rename plan: it is the same
+        // deal — a plan reviewed whole before it applies — with one more
+        // freedom, and splitting the prose would force repeating it.
         Modal::AiRenameInstruction { .. }
         | Modal::AiRenamePlan { .. }
         | Modal::OrganizePlan { .. } => "dialog.ai-rename",
-        // La plantilla del lote comparte página con renombrar, que es donde
-        // se cuenta qué es un plan revisable y qué se puede deshacer.
+        // The batch template shares a page with rename, which is where it is
+        // explained what a reviewable plan is and what can be undone.
         Modal::RenameBatchPattern { .. } => "dialog.rename",
-        // Un informe va a la página de lo que lo produjo: el de un undo, a la
-        // de confirmar un undo (la de `ConfirmUndoAfter`); el de un lote, a la
-        // de renombrar, que cuenta qué se puede deshacer.
+        // A report goes to the page of whatever produced it: an undo's, to
+        // the confirm-undo page (`ConfirmUndoAfter`'s); a batch's, to the
+        // rename page, which explains what can be undone.
         Modal::Report { kind, .. } => match kind {
             ReportKind::Undo => "dialog.confirm",
             ReportKind::Batch => "dialog.rename",
         },
         Modal::SemanticQuery { .. } | Modal::SemanticHits { .. } => "dialog.semantic-search",
-        // Las sumas comparten página con las propiedades: las dos son cuadros
-        // de LECTURA sobre lo que hay bajo el cursor.
-        // Y el de permisos (#314): es el diálogo que CAMBIA lo que ese cuadro
-        // enseña, y lo que hay que contar —qué es un modo en octal, sobre qué
-        // se aplica— se cuenta junto a ello.
+        // Checksums share a page with properties: both are READ-ONLY panels
+        // about what is under the cursor.
+        // And chmod (#314): it is the dialog that CHANGES what that panel
+        // shows, and what needs explaining — what an octal mode is, what it
+        // applies to — is explained alongside it.
         Modal::Properties { .. } | Modal::Checksums { .. } | Modal::Chmod { .. } => {
             "dialog.properties"
         }
-        // #132: los dos diálogos de escribir archivos comparten página — se
-        // teclea una cosa y se confirma, y lo que hay que contar (qué formato
-        // sale del nombre, qué sufijos entiende el tamaño) es lo mismo.
+        // #132: the two file-writing dialogs share a page — something is
+        // typed and confirmed, and what needs explaining (what format comes
+        // from the name, what suffixes the size understands) is the same.
         Modal::Pack { .. } | Modal::Split { .. } => "dialog.archive",
     }
 }
@@ -157,11 +158,11 @@ fn modal_context(modal: &Modal) -> &'static str {
 ///
 /// ```
 /// use norte_tui::help_context::help_over_modal_allowed;
-/// let escribiendo = norte_tui::app::Modal::Mkdir {
-///     name: "nuevo".into(),
+/// let typing = norte_tui::app::Modal::Mkdir {
+///     name: "new".into(),
 ///     error: None,
 /// };
-/// assert!(!help_over_modal_allowed(&escribiendo));
+/// assert!(!help_over_modal_allowed(&typing));
 /// assert!(help_over_modal_allowed(&norte_tui::app::Modal::ConfirmQuit));
 /// ```
 #[must_use]
@@ -178,18 +179,18 @@ pub fn help_over_modal_allowed(modal: &Modal) -> bool {
         | Modal::RenameBatchPattern { .. }
         | Modal::SemanticQuery { .. }
         | Modal::TransferName { .. }
-        // #132: los dos de escribir archivos son editores de texto libre, y el
-        // run loop los intercepta antes del keymap `dialog` igual que a los
-        // demás. `F1` encima tecleraría una efe en el nombre.
+        // #132: the two file-writing ones are free-text editors, and the run
+        // loop intercepts them before the `dialog` keymap same as the others.
+        // `F1` over them would type an f into the name.
         | Modal::Pack { .. }
         | Modal::Split { .. }
-        // #314: el de permisos, por lo mismo — `F1` encima teclearía una efe
-        // que ni siquiera es un dígito octal.
+        // #314: chmod, for the same reason — `F1` over it would type an f
+        // that is not even an octal digit.
         | Modal::Chmod { .. }
-        // #325: se teclea una CONTRASEÑA. `F1` encima escribiría una efe
-        // dentro de ella, y —peor que en los de arriba— el campo no la
-        // enseña, así que el usuario no vería el carácter de más que acaba de
-        // meter en su credencial.
+        // #325: a PASSWORD is being typed. `F1` over it would write an f
+        // inside it, and — worse than the ones above — the field does not
+        // show it, so the user would not see the extra character they just
+        // put in their credential.
         | Modal::AskSecret { .. } => false,
         Modal::ConfirmDelete { .. }
         | Modal::ConfirmPluginUninstall { .. }
@@ -202,7 +203,8 @@ pub fn help_over_modal_allowed(modal: &Modal) -> bool {
         | Modal::ConfirmPluginApproval { .. }
         | Modal::TrustHostKey { .. }
         | Modal::AiRenamePlan { .. }
-        // #139: se lee, no se escribe — F1 encima no le roba una tecla a nadie.
+        // #139: it is read, not written — F1 over it steals no key from
+        // anyone.
         | Modal::Properties { .. }
         | Modal::Report { .. }
         | Modal::Checksums { .. }
@@ -238,10 +240,10 @@ mod tests {
     use norte_proto::VPath;
 
     fn vp(wire: &str) -> VPath {
-        VPath::parse(wire).expect("wire de test")
+        VPath::parse(wire).expect("test wire")
     }
 
-    fn app_en_pane() -> App {
+    fn app_in_a_pane() -> App {
         let d = vp("file:///x");
         App::new(
             crate::app::Pane::new(d.clone(), Vec::new()),
@@ -249,7 +251,7 @@ mod tests {
         )
     }
 
-    fn collision_modal_de_test() -> Modal {
+    fn test_collision_modal() -> Modal {
         Modal::Collision {
             retry: crate::tasks::RetrySpec {
                 kind: TransferKind::Move,
@@ -261,7 +263,7 @@ mod tests {
         }
     }
 
-    fn approval_modal_de_test() -> Modal {
+    fn test_approval_modal() -> Modal {
         Modal::ApproveAgentOp {
             req: norte_proto::methods::PolicyApprovalRequired {
                 approval_id: 7,
@@ -275,21 +277,21 @@ mod tests {
         }
     }
 
-    fn visor_de_test() -> crate::viewer::Viewer {
-        crate::viewer::Viewer::new(vp("file:///x/a.txt"), b"hola\n".to_vec(), false)
+    fn test_viewer() -> crate::viewer::Viewer {
+        crate::viewer::Viewer::new(vp("file:///x/a.txt"), b"hello\n".to_vec(), false)
     }
 
-    /// Uno de CADA variante de [`Modal`], para cruzar el mapa con
-    /// [`CONTEXTS`]. No es exhaustiva por compilador (eso lo hace el `match`
-    /// de `modal_context`): su trabajo es que ningún id del vocabulario se
-    /// quede sin modal que lo produzca, ni al revés.
-    // Una lista LITERAL de variantes: crece con el enum, y es lo que hace
-    // que un modal nuevo sin contexto de ayuda sea un fallo de compilación.
+    /// One of EACH [`Modal`] variant, to cross-check the map against
+    /// [`CONTEXTS`]. It is not exhaustive by compiler (that is
+    /// `modal_context`'s `match`): its job is that no id in the vocabulary is
+    /// left without a modal that produces it, nor the other way around.
+    // A LITERAL list of variants: it grows with the enum, and that is what
+    // makes a new modal with no help context a compile failure.
     #[expect(
         clippy::too_many_lines,
-        reason = "lista literal de variantes: un modal nuevo sin ayuda es error de compilación"
+        reason = "literal list of variants: a new modal with no help is a compile error"
     )]
-    fn un_modal_de_cada_variante() -> Vec<Modal> {
+    fn one_modal_of_each_variant() -> Vec<Modal> {
         vec![
             Modal::ConfirmDelete {
                 items: vec![vp("file:///x/a")],
@@ -299,7 +301,7 @@ mod tests {
                 id: "org.acme.demo".to_owned(),
                 name: "Demo".to_owned(),
                 name_hostile: false,
-                caps: vec![("leer ficheros".to_owned(), false)],
+                caps: vec![("read files".to_owned(), false)],
                 digest: None,
             },
             Modal::ConfirmPluginUninstall {
@@ -314,8 +316,8 @@ mod tests {
                 space: None,
                 confine: None,
             },
-            collision_modal_de_test(),
-            approval_modal_de_test(),
+            test_collision_modal(),
+            test_approval_modal(),
             Modal::TrustHostKey {
                 host: "h".into(),
                 port: Some(22),
@@ -373,7 +375,7 @@ mod tests {
                 confine: None,
             },
             Modal::Mkdir {
-                name: "nuevo".into(),
+                name: "new".into(),
                 error: None,
             },
             Modal::CommandLine {
@@ -381,7 +383,7 @@ mod tests {
                 error: None,
             },
             Modal::AiRenameInstruction {
-                instruction: "en snake_case".into(),
+                instruction: "in snake_case".into(),
                 error: None,
             },
             Modal::AiRenamePlan {
@@ -395,7 +397,7 @@ mod tests {
                 plan: norte_frontend::BatchPlan::Pending,
             },
             Modal::SemanticQuery {
-                query: "facturas".into(),
+                query: "invoices".into(),
                 error: None,
             },
             Modal::SemanticHits {
@@ -410,58 +412,58 @@ mod tests {
     }
 
     #[test]
-    fn el_pane_es_el_contexto_por_defecto() {
-        assert_eq!(help_context(&app_en_pane()), "browse");
+    fn the_pane_is_the_default_context() {
+        assert_eq!(help_context(&app_in_a_pane()), "browse");
     }
 
     #[test]
-    fn un_modal_gana_al_pane_y_cada_uno_tiene_el_suyo() {
-        let mut app = app_en_pane();
-        app.modal = Some(collision_modal_de_test());
+    fn a_modal_beats_the_pane_and_each_has_its_own() {
+        let mut app = app_in_a_pane();
+        app.modal = Some(test_collision_modal());
         assert_eq!(help_context(&app), "dialog.collision");
-        app.modal = Some(approval_modal_de_test());
+        app.modal = Some(test_approval_modal());
         assert_eq!(
             help_context(&app),
             "dialog.approval",
-            "la aprobación de un agente no se explica con la página de copiar"
+            "an agent's approval is not explained by the copy page"
         );
     }
 
     #[test]
-    fn el_visor_gana_al_pane_y_pierde_contra_un_modal() {
-        // El orden importa: lo que está ENCIMA es lo que el lector está
-        // mirando, y es de eso de lo que necesita que le hablen.
-        let mut app = app_en_pane();
-        app.viewer = Some(visor_de_test());
+    fn the_viewer_beats_the_pane_and_loses_to_a_modal() {
+        // Order matters: what is ON TOP is what the reader is looking at, and
+        // that is what they need explained.
+        let mut app = app_in_a_pane();
+        app.viewer = Some(test_viewer());
         assert_eq!(help_context(&app), "viewer");
-        app.modal = Some(collision_modal_de_test());
+        app.modal = Some(test_collision_modal());
         assert_eq!(help_context(&app), "dialog.collision");
     }
 
     #[test]
-    fn el_vocabulario_no_tiene_duplicados_ni_huecos() {
-        // Un id repetido haría que dos modales compartieran página sin que
-        // nadie lo hubiera decidido; uno vacío abriría la nada.
+    fn the_vocabulary_has_no_duplicates_or_gaps() {
+        // A repeated id would make two modals share a page without anyone
+        // having decided so; an empty one would open nothing.
         let mut seen = std::collections::BTreeSet::new();
         for id in CONTEXTS {
-            assert!(!id.is_empty(), "id vacío en el vocabulario");
-            assert!(seen.insert(*id), "id duplicado: {id}");
+            assert!(!id.is_empty(), "empty id in the vocabulary");
+            assert!(seen.insert(*id), "duplicate id: {id}");
         }
     }
 
-    /// El mapa y el vocabulario se pinan MUTUAMENTE: un `match` que devuelva
-    /// un id que no está en [`CONTEXTS`] deja a la puerta de documentación
-    /// sin nada que comprobar (F1 abriría el índice y nadie se quejaría), y
-    /// un id en `CONTEXTS` que ningún modal produce hace que la puerta pida
-    /// una página para una pantalla que no existe.
+    /// The map and the vocabulary pin each OTHER: a `match` that returns an
+    /// id not in [`CONTEXTS`] leaves the documentation gate with nothing to
+    /// check (F1 would open the index and nobody would complain), and an id
+    /// in `CONTEXTS` that no modal produces makes the gate ask for a page for
+    /// a screen that does not exist.
     #[test]
-    fn cada_id_de_dialogo_lo_produce_un_modal_y_esta_en_el_vocabulario() {
+    fn every_dialog_id_is_produced_by_a_modal_and_is_in_the_vocabulary() {
         let mut produced = std::collections::BTreeSet::new();
-        for modal in un_modal_de_cada_variante() {
+        for modal in one_modal_of_each_variant() {
             let id = modal_context(&modal);
             assert!(
                 CONTEXTS.contains(&id),
-                "{id} sale del mapa pero no está en CONTEXTS"
+                "{id} comes out of the map but is not in CONTEXTS"
             );
             produced.insert(id);
         }
@@ -472,7 +474,7 @@ mod tests {
             .collect();
         assert_eq!(
             produced, declared,
-            "todo id `dialog.*` del vocabulario lo produce algún modal, y al revés"
+            "every `dialog.*` id in the vocabulary is produced by some modal, and vice versa"
         );
     }
 }

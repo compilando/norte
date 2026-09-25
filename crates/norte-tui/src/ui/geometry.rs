@@ -1,8 +1,9 @@
-//! Dónde va cada cosa: resolver el reparto para un frame y traducirlo a `Rect`.
+//! Where everything goes: resolving the layout for a frame and translating
+//! it into `Rect`s.
 //!
-//! Nada de aquí pinta. Es lo que `draw` consulta antes de repartir el frame, y
-//! también lo que consulta el enrutado de ratón para saber qué hay bajo el
-//! cursor sin haber pintado.
+//! Nothing here paints. This is what `draw` consults before laying out the
+//! frame, and also what mouse routing consults to know what is under the
+//! cursor without having painted.
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::widgets::{Block, Borders};
@@ -12,110 +13,112 @@ use super::compare::compare_layout;
 use super::sync::sync_layout;
 use crate::app::App;
 
-/// Filas del panel de tasks en un frame (tope 6): parte del layout de
-/// [`draw`], extraída para que [`pane_list_rows`] cuente lo MISMO que se
-/// pinta.
+/// Rows of the tasks panel in a frame (cap 6): part of [`draw`]'s layout,
+/// pulled out so [`pane_list_rows`] counts the SAME thing that is painted.
 pub(crate) fn tasks_rows(app: &App) -> u16 {
     u16::try_from(app.board.rows().len().min(6)).unwrap_or(6)
 }
 
-/// Filas de LISTADO que cada pane pinta en un frame de alto `frame_height`
-/// (#124): el alto del frame menos el panel de tasks y la barra de estado
-/// (layout de [`super::draw`]), menos los dos bordes del bloque del pane y su línea
-/// de cabecera de columnas (`draw_pane`, privado). El run loop la devuelve al
-/// modelo (`PaneState::set_viewport_rows`) para que la paginación y la sonda
-/// de stat dejen de adivinar el viewport. Un test de render la ancla contra
-/// las filas que aparecen de verdad en el buffer — si el layout cambia, ese
-/// test cae aquí.
+/// LISTING rows each pane paints in a frame of height `frame_height` (#124):
+/// the frame's height minus the tasks panel and the status bar ([`super::draw`]'s
+/// layout), minus the pane block's two borders and its column-header line
+/// (`draw_pane`, private). The run loop feeds it back to the model
+/// (`PaneState::set_viewport_rows`) so paging and the stat probe stop
+/// guessing the viewport. A render test anchors it against the rows that
+/// really appear in the buffer — if the layout changes, that test fails
+/// here.
 #[must_use]
 pub fn pane_list_rows(app: &App, area: Rect) -> u16 {
-    // Con el visor abierto no se pinta ningún pane: 0 filas visibles.
+    // With the viewer open no pane is painted: 0 visible rows.
     if app.viewer.is_some() {
         return 0;
     }
-    // El alto sale del REPARTO, no de restar a mano la franja de tareas y la
-    // barra: esas dos son ya huecos del árbol. Lo que queda aquí es el cromo
-    // del propio pane, que el árbol no conoce.
-    // Bordes del bloque (2) + cabecera de columnas (1). Un pane que este
-    // frame no pinta (el `Split` colapsó) no tiene filas de listado.
+    // The height comes from the LAYOUT, not from manually subtracting the
+    // tasks strip and the bar: those two are already gaps in the tree.
+    // What is left here is the pane's own chrome, which the tree does not
+    // know about.
+    // Block borders (2) + column header (1). A pane this frame does not
+    // paint (the `Split` collapsed) has no listing rows.
     pane_rects(app, area)
         .first()
         .map_or(0, |r| r.height)
         .saturating_sub(pane_chrome_rows(app, 0))
 }
 
-/// Lo que hay que hacer al MODELO justo antes de pintar un frame de `height`
-/// filas: dejar la ventana de cada pane lista.
+/// What has to be done to the MODEL right before painting a frame of
+/// `height` rows: getting each pane's window ready.
 ///
-/// Va aquí y no suelto en el run loop porque los tests pintan por su cuenta y
-/// tienen que pasar por lo mismo — si esto vive solo en el bucle, un test
-/// pinta con una ventana que nadie reconcilió y comprueba una pantalla que
-/// ningún usuario ve.
+/// Lives here and not loose in the run loop because tests paint on their
+/// own and have to go through the same thing — if this only lived in the
+/// loop, a test would paint with a window nobody reconciled and check a
+/// screen no user ever sees.
 ///
-/// ANTES del draw y no después: el cursor ya está donde lo dejó la tecla, así
-/// que esto decide qué filas se ven y el draw las pinta. Al revés costaba un
-/// frame de retraso, y el frame retrasado es justo el que el usuario mira
-/// cuando el cursor toca el borde.
+/// BEFORE the draw and not after: the cursor is already where the key left
+/// it, so this decides which rows are visible and the draw paints them. The
+/// other way around cost a frame of lag, and the delayed frame is exactly
+/// the one the user is looking at when the cursor touches the edge.
 pub fn before_frame(app: &mut App, area: Rect) {
-    app.ultimo_frame = Some(area);
+    app.last_frame = Some(area);
     let res = resolved_frame(app, area);
-    // Quién se ve dónde: con pestañas, el hueco de cada lado cambia.
+    // Who is seen where: with tabs, each side's slot changes.
     let vis = visible_browsers(&res, &app.layout);
     let order: Vec<_> = vis.iter().map(|(id, _)| *id).collect();
-    // Las dos juntas, siempre: dos listas de orden que se puedan desincronizar
-    // son un fallo que solo se ve al cambiar de pestaña.
+    // Both together, always: two order lists that can go out of sync are a
+    // bug that only shows up when switching tabs.
     app.panes.set_visible(&order);
     app.history.set_order(&order);
     let cols = pane_cols(&res, &app.layout);
-    // El panel de terminal (#362): se le dice al pty el tamaño que de verdad
-    // le tocó, y se vuelca lo que el shell haya escrito.
+    // The terminal panel (#362): the pty is told the size it really got,
+    // and whatever the shell wrote is flushed.
     //
-    // Va AQUÍ por la misma razón que todo lo demás de esta función: es antes
-    // del draw y con `&mut`, así que el frame que se pinta ya lleva lo último
-    // que llegó. Hacerlo después costaría un frame de retraso en cada tecla,
-    // que en un shell se nota como un eco lento.
+    // It goes HERE for the same reason as everything else in this function:
+    // it is before the draw and with `&mut`, so the frame that gets painted
+    // already carries the latest that arrived. Doing it after would cost a
+    // frame of lag on every keystroke, which in a shell shows up as a slow
+    // echo.
     //
-    // El pty se entera del tamaño o un programa de pantalla completa sigue
-    // pintando para el de antes, y lo que se ve es basura. `redimensionar` no
-    // hace nada si no cambió.
+    // The pty learns the size or a full-screen program keeps painting for
+    // the previous one, and what shows is garbage. `resize` does
+    // nothing if it did not change.
     if let Some((_, rect)) = placed_of_kind(&res, &app.layout, crate::termpanel::KIND)
         && let Some(t) = app.terminal.as_mut()
     {
-        // El marco se descuenta: el shell pinta DENTRO.
-        t.redimensionar((rect.width.saturating_sub(2), rect.height.saturating_sub(2)));
-        t.bombear();
+        // The frame is subtracted: the shell paints INSIDE.
+        t.resize((rect.width.saturating_sub(2), rect.height.saturating_sub(2)));
+        t.pump();
     }
-    // Y si el shell se fue, el panel deja de tener shell: se suelta para que
-    // el hueco lo diga en vez de enseñar la última pantalla de un proceso que
-    // ya no existe. El hueco se queda — cerrarlo por su cuenta movería la
-    // disposición del lector sin que él lo pidiera.
+    // And if the shell left, the panel stops having a shell: it is released
+    // so the slot says so instead of showing the last screen of a process
+    // that no longer exists. The slot stays — closing it on its own would
+    // move the reader's layout without them asking for it.
     if app
         .terminal
         .as_mut()
-        .is_some_and(crate::termpanel::TermPanel::muerto)
+        .is_some_and(crate::termpanel::TermPanel::dead)
     {
         app.terminal = None;
         if app.key_owner() == crate::app::KeyOwner::Terminal {
-            app.soltar_teclado();
+            app.release_keyboard();
         }
     }
-    // El foco no puede quedarse en un pane que este frame no pinta: sería un
-    // teclado que mueve un cursor que nadie ve. Con dos lados esto es
-    // `position`; cuando haya N huecos lo hará `layout::focus_next`.
-    // El foco no puede señalar una posición que este frame no pinta.
+    // Focus cannot stay on a pane this frame does not paint: that would be
+    // a keyboard moving a cursor nobody sees. With two sides this is
+    // `position`; once there are N slots `layout::focus_next` will do it.
+    // Focus cannot point at a position this frame does not paint.
     if app.focus() >= cols.len() && !cols.is_empty() {
         app.set_focus(0);
     }
-    // Y los roles se ponen al día con lo que hay en pantalla: `active` es el
-    // foco, `target` es el otro si sigue visible.
+    // And the roles are brought up to date with what is on screen: `active`
+    // is the focus, `target` is the other one if it is still visible.
     let focus = app.panes.slot_of(app.focus());
     let (tree, kinds) = (app.layout.clone(), app.kinds.clone());
     app.roles.reconcile(&tree, &res, &kinds, focus);
-    // Una ventana POR PANE: el que no se pinta no tiene filas, y reconciliar
-    // el suyo contra el alto del otro le dejaría una ventana que nadie vio.
-    let visor = app.viewer.is_some();
+    // One window PER PANE: the one that is not painted has no rows, and
+    // reconciling its own against the other one's height would leave it a
+    // window nobody saw.
+    let viewer_open = app.viewer.is_some();
     for i in 0..app.panes.len() {
-        let rows = if visor {
+        let rows = if viewer_open {
             0
         } else {
             usize::from(
@@ -126,10 +129,10 @@ pub fn before_frame(app: &mut App, area: Rect) {
         };
         app.panes[i].reconcile_viewport(rows);
     }
-    // Las OTRAS dos listas largas (#210). El alto sale de replicar aquí el
-    // mismo recorte que hace su `draw`, por lo mismo que `pane_geometry`
-    // replica el suyo: si el layout cambia, lo que rompe es el test de al
-    // lado y no el scroll en silencio.
+    // The OTHER two long lists (#210). The height comes from replicating
+    // here the same truncation its `draw` does, for the same reason
+    // `pane_geometry` replicates its own: if the layout changes, what
+    // breaks is the test right next to it and not a silent scroll bug.
     let body = overlay_body(app, area);
     if let Some(view) = &mut app.sync {
         let (_, list, _) = sync_layout_rows(body, view);
@@ -140,30 +143,31 @@ pub fn before_frame(app: &mut App, area: Rect) {
         let (_, list, _, _) = compare_layout(block_inner(body));
         view.pane.reconcile_viewport(usize::from(list.height));
     }
-    // El registro (#323), por el mismo motivo y con el mismo remedio. Nació
-    // con un alto ADIVINADO —diez, el que trae el hueco al abrirse— mientras
-    // su `draw` usaba el interior real, que son ocho: cada página se saltaba
-    // dos líneas y la primera, cuatro. Adivinar el viewport rompe el scroll en
-    // silencio, que es justo lo que esta función existe para no dejar hacer.
+    // The log (#323), for the same reason and with the same fix. It was
+    // born with a GUESSED height — ten, whatever the slot brings on open —
+    // while its `draw` used the real interior, which is eight: every page
+    // skipped two lines, and the first one, four. Guessing the viewport
+    // breaks scroll silently, which is exactly what this function exists to
+    // not let happen.
     if let Some((_, rect)) = placed_of_kind(&res, &app.layout, crate::logview::KIND) {
         let inner = block_inner(rect);
         app.log_panel.set_viewport_rows(usize::from(inner.height));
     }
-    // Los AJUSTES, con el mismo remedio. Se pintaban siempre desde arriba
-    // porque cabían en una pantalla; con ~30 dejaron de caber, y bajar con el
-    // cursor pasado el borde lo sacaba de la caja. Se concilia en LÍNEAS —las
-    // cabeceras de sección caen entre las filas— con el mismo plan y el mismo
-    // alto que usa el dibujo, para que no puedan contar distinto.
+    // SETTINGS, with the same fix. It always painted from the top because
+    // it fit on one screen; with ~30 it stopped fitting, and moving the
+    // cursor down past the edge pushed it out of the box. It is reconciled
+    // in LINES — section headers fall between rows — with the same plan and
+    // the same height the drawing uses, so they cannot count differently.
     if let Some(settings) = &mut app.settings {
         let plan = super::overlays::settings_line_plan(settings);
         let cursor_line = plan
             .iter()
             .position(|l| *l == super::overlays::SettingsLine::Row(settings.cursor()))
             .unwrap_or(0);
-        // La cabecera que abre la sección del cursor, si es que la abre él:
-        // entra en la ventana CON su fila. Sin esto, la primera fila (línea
-        // 1, porque la 0 es «General») dejaba el desplazamiento clavado en 1
-        // y la cabecera no volvía al subir.
+        // The header that opens the cursor's section, if it does open one:
+        // it enters the window WITH its row. Without this, the first row
+        // (line 1, since 0 is "General") kept the scroll pinned at 1 and
+        // the header never came back on scrolling up.
         let anchor = match cursor_line.checked_sub(1).and_then(|p| plan.get(p)) {
             Some(super::overlays::SettingsLine::Header(_)) => cursor_line - 1,
             _ => cursor_line,
@@ -173,44 +177,44 @@ pub fn before_frame(app: &mut App, area: Rect) {
     }
 }
 
-/// El reparto de ESTE frame, con los `Auto` ya sustituidos.
+/// This frame's layout, with the `Auto`s already substituted.
 ///
-/// El árbol guardado (`app.layout`) conserva sus `Auto`; el del frame no.
-/// Sustituir aquí y no dentro de `resolve` es lo que mantiene al motor puro y
-/// sin closures en su firma.
-/// Los BORDES que se pueden arrastrar en el frame de `area`.
+/// The saved tree (`app.layout`) keeps its `Auto`s; the frame's does not.
+/// Substituting here and not inside `resolve` is what keeps the engine pure
+/// and free of closures in its signature.
+/// The BORDERS that can be dragged in `area`'s frame.
 ///
-/// Un borde es el hueco entre dos huecos ADYACENTES del reparto: el de la
-/// izquierda (o el de arriba) es quien lo lleva, porque es el que
-/// `Node::drag_border` sabe nombrar. Lo que se guarda es dónde empieza la
-/// pareja y cuánto ocupa junta, que es lo que convierte una columna del
-/// puntero en una fracción.
+/// A border is the gap between two ADJACENT slots of the layout: the left
+/// one (or the top one) is the one that carries it, because it is the one
+/// `Node::drag_border` knows how to name. What is stored is where the pair
+/// begins and how much room it takes together, which is what turns a
+/// pointer column into a fraction.
 ///
-/// Sale del MISMO reparto que pinta, no de una segunda cuenta: dos cálculos
-/// de dónde está un borde son un borde que se agarra en un sitio y se mueve
-/// desde otro.
+/// It comes from the SAME layout that paints, not a second count: two
+/// calculations of where a border is are a border grabbed in one spot and
+/// moved from another.
 #[must_use]
 pub fn resize_borders(app: &App, area: Rect) -> Vec<crate::mouse::ResizeBorder> {
     use norte_frontend::layout::Dir;
     let res = resolved_frame(app, area);
-    // Solo entre PANELES. La barra de estado y la franja de tareas también
-    // son huecos del reparto y también tienen bordes, pero miden una fila fija
-    // y arrastrarlas no significa nada — y ofrecerlas se comía la última fila
-    // del panel de encima, que sí es suya. «Panel» es lo que el registro
-    // compartido llama enfocable.
+    // Only between PANELS. The status bar and the tasks strip are also
+    // layout slots and also have borders, but they measure a fixed row and
+    // dragging them means nothing — and offering them ate the last row of
+    // the panel above, which IS theirs. "Panel" is what the shared registry
+    // calls focusable.
     let panel = |id| {
         app.layout
             .kind_of(id)
             .and_then(|k| app.kinds.get(k))
             .is_some_and(|d| d.focusable)
     };
-    // La pareja se mide ENTERA, en el reparto donde los dos son vecinos:
-    // entre el segundo listado y los detalles, el borde separa el cuerpo
-    // de los detalles, y medir solo el listado daba la fracción de otra
-    // pareja.
-    let pareja = |a, b, dir| {
-        let (izq, der) = app.layout.border_pair(a, b)?;
-        norte_frontend::layout::border_span(&res, &izq, &der, dir)
+    // The pair is measured WHOLE, in the layout where the two are
+    // neighbors: between the second listing and the details, the border
+    // separates the body from the details, and measuring only the listing
+    // gave the fraction of a different pair.
+    let pair = |a, b, dir| {
+        let (left, right) = app.layout.border_pair(a, b)?;
+        norte_frontend::layout::border_span(&res, &left, &right, dir)
     };
     let mut out = Vec::new();
     for (a, ra) in &res.placements {
@@ -221,37 +225,37 @@ pub fn resize_borders(app: &App, area: Rect) -> Vec<crate::mouse::ResizeBorder> 
             if !panel(*b) {
                 continue;
             }
-            // Vertical: `b` empieza justo donde acaba `a`, y se solapan en
-            // filas. El `+ 1` es la columna del borde, que en el TUI es el
-            // marco que los dos pintan.
+            // Vertical: `b` starts exactly where `a` ends, and they overlap
+            // in rows. The `+ 1` is the border column, which in the TUI is
+            // the frame both paint.
             if rb.x == ra.x + ra.width
-                && solapan(ra.y, ra.height, rb.y, rb.height)
-                && let Some((inicio, largo)) = pareja(*a, *b, Dir::Horizontal)
+                && overlaps(ra.y, ra.height, rb.y, rb.height)
+                && let Some((start, len)) = pair(*a, *b, Dir::Horizontal)
             {
                 out.push(crate::mouse::ResizeBorder {
                     slot: *a,
-                    vecino: *b,
+                    neighbor: *b,
                     dir: Dir::Horizontal,
-                    linea: ra.x + ra.width,
-                    desde: ra.y.max(rb.y),
-                    hasta: (ra.y + ra.height).min(rb.y + rb.height),
-                    inicio,
-                    largo,
+                    line: ra.x + ra.width,
+                    from: ra.y.max(rb.y),
+                    until: (ra.y + ra.height).min(rb.y + rb.height),
+                    start,
+                    long: len,
                 });
             }
             if rb.y == ra.y + ra.height
-                && solapan(ra.x, ra.width, rb.x, rb.width)
-                && let Some((inicio, largo)) = pareja(*a, *b, Dir::Vertical)
+                && overlaps(ra.x, ra.width, rb.x, rb.width)
+                && let Some((start, len)) = pair(*a, *b, Dir::Vertical)
             {
                 out.push(crate::mouse::ResizeBorder {
                     slot: *a,
-                    vecino: *b,
+                    neighbor: *b,
                     dir: Dir::Vertical,
-                    linea: ra.y + ra.height,
-                    desde: ra.x.max(rb.x),
-                    hasta: (ra.x + ra.width).min(rb.x + rb.width),
-                    inicio,
-                    largo,
+                    line: ra.y + ra.height,
+                    from: ra.x.max(rb.x),
+                    until: (ra.x + ra.width).min(rb.x + rb.width),
+                    start,
+                    long: len,
                 });
             }
         }
@@ -259,23 +263,24 @@ pub fn resize_borders(app: &App, area: Rect) -> Vec<crate::mouse::ResizeBorder> 
     out
 }
 
-/// Los HUECOS que se colocaron en el frame de `area`, con su rectángulo.
+/// The SLOTS placed in `area`'s frame, with their rectangle.
 ///
-/// Es lo que convierte un click en «qué panel señaló el puntero». Sale del
-/// MISMO reparto que pinta, por lo mismo que los bordes: una segunda cuenta de
-/// dónde está cada panel es un click que enfoca el de al lado.
+/// This is what turns a click into "which panel the pointer pointed at."
+/// It comes from the SAME layout that paints, for the same reason as the
+/// borders: a second count of where each panel is is a click that focuses
+/// the one next door.
 ///
-/// Van TODOS los huecos colocados, incluidos los que no toman teclas: quién
-/// escucha lo decide `App::focus_slot` con el registro compartido, y no una
-/// segunda tabla escrita aquí.
+/// EVERY placed slot goes in, including the ones that do not take keys: who
+/// listens is decided by `App::focus_slot` with the shared registry, not a
+/// second table written here.
 #[must_use]
 pub fn panel_slots(app: &App, area: Rect) -> Vec<crate::mouse::PanelSlot> {
     resolved_frame(app, area)
         .placements
         .into_iter()
         .map(|(slot, r)| {
-            // Sin la tira de un grupo de paneles: esa fila es de sus zonas.
-            let r = contenido_de_hueco(&app.layout, slot, crate::panel::to_ratatui(r));
+            // Without a panel group's strip: that row belongs to its zones.
+            let r = slot_content(&app.layout, slot, crate::panel::to_ratatui(r));
             crate::mouse::PanelSlot {
                 slot,
                 x: r.x,
@@ -287,8 +292,8 @@ pub fn panel_slots(app: &App, area: Rect) -> Vec<crate::mouse::PanelSlot> {
         .collect()
 }
 
-/// ¿Se solapan dos tramos `[a, a+la)` y `[b, b+lb)`?
-const fn solapan(a: u16, la: u16, b: u16, lb: u16) -> bool {
+/// Do two spans `[a, a+la)` and `[b, b+lb)` overlap?
+const fn overlaps(a: u16, la: u16, b: u16, lb: u16) -> bool {
     a < b + lb && b < a + la
 }
 
@@ -301,75 +306,78 @@ pub(crate) fn resolved_frame(app: &App, area: Rect) -> norte_frontend::layout::R
     )
 }
 
-/// El área que le queda al CUERPO: la del frame menos la barra de menú, si
-/// está fijada.
+/// The area left for the BODY: the frame's minus the menu bar, if it is set.
 ///
-/// La resta se hace AQUÍ y en ningún otro sitio. Este es el único punto por el
-/// que pasan el pintado, el mapeo de clics del ratón y las decisiones de «qué
-/// hueco se colocó» del bucle de eventos, así que restando una vez las tres
-/// cuadran solas — y restando en el pintor, el ratón habría seguido creyendo
-/// que la fila 0 es del panel de arriba y cada clic habría caído una fila más
-/// abajo de donde el lector lo dio.
+/// The subtraction happens HERE and nowhere else. This is the only point
+/// painting, mouse click mapping and the event loop's "which slot got
+/// placed" decisions all go through, so subtracting once makes the three
+/// line up on their own — and subtracting in the painter, the mouse would
+/// have kept believing row 0 belongs to the panel above and every click
+/// would have landed one row below where the reader gave it.
 ///
-/// Un terminal de una sola fila se queda sin cuerpo antes que sin barra, y por
-/// eso la resta es saturante: es preferible una pantalla degradada a un
-/// reparto sobre un rectángulo de altura negativa.
+/// A one-row terminal runs out of body before it runs out of bar, and that
+/// is why the subtraction saturates: a degraded screen is preferable to a
+/// layout over a rectangle of negative height.
 #[must_use]
 pub(crate) fn body_area(app: &App, area: Rect) -> Rect {
-    // Dos filas de cromo posibles arriba, cada una opcional por su cuenta: la
-    // de menús y la de paneles (#324). Se restan las que estén, y saturando —
-    // es preferible una pantalla degradada a un reparto sobre altura negativa.
-    let filas = u16::from(app.menu_bar) + fila_de_paneles(app);
-    // Y la de teclas ABAJO (spec 2026-09-10): se resta del alto, no del
-    // origen. Mismo criterio que las dos de arriba: una sola resta, aquí.
-    let abajo = u16::from(key_bar_area(app, area).is_some());
-    // Y la barra de paneles en COLUMNA (spec 2026-09-21) se resta del ancho,
-    // desde el origen. La pregunta es a `panel_bar_area`, que ya sabe si cabe:
-    // un raíl que no se pinta no puede comerse tres columnas.
-    let izquierda = if barra_en_columna(app) {
+    // Two possible chrome rows on top, each optional on its own: the menu's
+    // and the panel bar's (#324). Whichever are present are subtracted, and
+    // saturating — a degraded screen is preferable to a layout over
+    // negative height.
+    let rows = u16::from(app.menu_bar) + panel_bar_row(app);
+    // And the key bar row BELOW (spec 2026-09-10): subtracted from the
+    // height, not the origin. Same criterion as the two above: one
+    // subtraction, here.
+    let bottom = u16::from(key_bar_area(app, area).is_some());
+    // And the panel bar in a COLUMN (spec 2026-09-21) is subtracted from
+    // the width, from the origin. The question goes to `panel_bar_area`,
+    // which already knows whether it fits: a rail that is not painted
+    // cannot eat three columns.
+    let left = if bar_in_column(app) {
         panel_bar_area(app, area).map_or(0, |r| r.width)
     } else {
         0
     };
-    if filas + abajo + izquierda == 0 || area.height == 0 {
+    if rows + bottom + left == 0 || area.height == 0 {
         return area;
     }
     Rect {
-        x: area.x.saturating_add(izquierda),
-        y: area.y.saturating_add(filas),
-        width: area.width.saturating_sub(izquierda),
-        height: area.height.saturating_sub(filas).saturating_sub(abajo),
+        x: area.x.saturating_add(left),
+        y: area.y.saturating_add(rows),
+        width: area.width.saturating_sub(left),
+        height: area.height.saturating_sub(rows).saturating_sub(bottom),
     }
 }
 
-/// Ancho de la barra de paneles en columna: `" S·"`, la celda de un botón
-/// en letras (`panelbar::button_cell`), que es la misma en fila y en columna.
+/// Width of the panel bar in a column: `" S·"`, a button's cell in letters
+/// (`panelbar::button_cell`), the same in a row or a column.
 pub(crate) const RAIL_W: u16 = 3;
 
-/// ¿La barra de paneles va en COLUMNA? `[ui] panel_bar_position`, con la
-/// respuesta del terminal para `auto`: arriba, porque aquí falta ancho.
+/// Does the panel bar go in a COLUMN? `[ui] panel_bar_position`, with the
+/// terminal's answer for `auto`: on top, because width is short here.
 #[must_use]
-pub(crate) fn barra_en_columna(app: &App) -> bool {
+pub(crate) fn bar_in_column(app: &App) -> bool {
     app.panel_bar && app.chrome.panel_bar_position().vertical(false)
 }
 
-/// Cuántas filas de arriba se come la barra de paneles: una en fila, ninguna
-/// en columna.
-fn fila_de_paneles(app: &App) -> u16 {
-    u16::from(app.panel_bar && !barra_en_columna(app))
+/// How many top rows the panel bar eats: one in a row, none in a column.
+fn panel_bar_row(app: &App) -> u16 {
+    u16::from(app.panel_bar && !bar_in_column(app))
 }
 
-/// La fila donde va la barra de teclas (spec 2026-09-10), si está: la ÚLTIMA
-/// del frame, como en mc, far y norton, y la de estado queda encima. La fila
-/// se RESERVA aunque haya un overlay delante —abrir un modal no recoloca la
-/// pantalla de detrás, como con la barra de paneles—; lo que se pinta en
-/// ella lo decide `App::key_bar_cells`, y con un modal es nada.
+/// The row where the key bar goes (spec 2026-09-10), if there is one: the
+/// LAST one of the frame, as in mc, far and norton, with the status one
+/// staying above it. The row is RESERVED even with an overlay in front —
+/// opening a modal does not relayout the screen behind it, same as with the
+/// panel bar —; what gets painted on it is decided by
+/// `App::key_bar_cells`, and with a modal that is nothing.
 #[must_use]
 pub(crate) fn key_bar_area(app: &App, area: Rect) -> Option<Rect> {
-    // Con las tres barras en un terminal de tres filas no queda cuerpo; la
-    // de teclas es la que cede: `<=` para que no caiga fuera del búfer.
-    let arriba = u16::from(app.menu_bar) + fila_de_paneles(app);
-    if !app.chrome.key_bar() || area.height <= arriba.saturating_add(1) {
+    // With all three bars on a three-row terminal there is no body left;
+    // the key one is the one that yields: `<=` so it does not fall outside
+    // the buffer.
+    let top = u16::from(app.menu_bar) + panel_bar_row(app);
+    if !app.chrome.key_bar() || area.height <= top.saturating_add(1) {
         return None;
     }
     Some(Rect {
@@ -379,38 +387,37 @@ pub(crate) fn key_bar_area(app: &App, area: Rect) -> Option<Rect> {
     })
 }
 
-/// Donde va la barra de paneles, si está: una fila, o una columna.
+/// Where the panel bar goes, if there is one: a row, or a column.
 ///
-/// Debajo de la de menús cuando las dos están: el menú nombra lo que se puede
-/// hacer y la barra enseña dónde está, así que el orden de arriba abajo es de
-/// lo general a lo concreto. En columna (`[ui] panel_bar_position = "left"`)
-/// va en el borde izquierdo, desde debajo del menú hasta encima de la barra
-/// de teclas.
+/// Below the menu one when both are on: the menu names what can be done and
+/// the bar shows where it is, so top-to-bottom order goes from the general
+/// to the specific. In a column (`[ui] panel_bar_position = "left"`) it goes
+/// on the left edge, from below the menu to above the key bar.
 #[must_use]
 pub(crate) fn panel_bar_area(app: &App, area: Rect) -> Option<Rect> {
-    // `<=` y no `== 0`: con las dos barras encendidas en un terminal de una
-    // fila, la de paneles caería FUERA del búfer. Ratatui recorta y no
-    // revienta, pero las zonas pulsables se publicarían sobre una fila que no
-    // existe.
+    // `<=` and not `== 0`: with both bars on in a one-row terminal, the
+    // panel one would fall OUTSIDE the buffer. Ratatui truncates and does
+    // not crash, but the clickable zones would be published over a row
+    // that does not exist.
     if !app.panel_bar || area.height <= u16::from(app.menu_bar) {
         return None;
     }
-    if barra_en_columna(app) {
-        // Un terminal que no deja cuerpo al lado del raíl se queda sin raíl:
-        // mejor un listado sin botones que botones sin listado.
-        let abajo = u16::from(key_bar_area(app, area).is_some());
-        let alto = area
+    if bar_in_column(app) {
+        // A terminal that leaves no body next to the rail loses the rail:
+        // better a listing with no buttons than buttons with no listing.
+        let bottom = u16::from(key_bar_area(app, area).is_some());
+        let height = area
             .height
             .saturating_sub(u16::from(app.menu_bar))
-            .saturating_sub(abajo);
-        if area.width <= RAIL_W || alto == 0 {
+            .saturating_sub(bottom);
+        if area.width <= RAIL_W || height == 0 {
             return None;
         }
         return Some(Rect {
             x: area.x,
             y: area.y.saturating_add(u16::from(app.menu_bar)),
             width: RAIL_W,
-            height: alto,
+            height,
         });
     }
     Some(Rect {
@@ -420,18 +427,18 @@ pub(crate) fn panel_bar_area(app: &App, area: Rect) -> Option<Rect> {
     })
 }
 
-/// ¿Se ve la barra de paneles AHORA?
+/// Is the panel bar visible RIGHT NOW?
 ///
-/// Distinto de [`panel_bar_area`], que es geometría: el hueco de la fila se
-/// resta del cuerpo esté quien esté encima —si no, abrir un modal recolocaría
-/// toda la pantalla detrás—, pero con un overlay delante la barra ni se pinta
-/// ni se puede pulsar.
+/// Different from [`panel_bar_area`], which is geometry: the row's gap is
+/// subtracted from the body no matter what is in front — otherwise opening
+/// a modal would relayout the whole screen behind it — but with an overlay
+/// in front the bar is neither painted nor clickable.
 ///
-/// Existe porque no tenerlo fue un BLOCKER: la barra se pintaba antes que los
-/// overlays y sus zonas seguían activas debajo, así que con la ayuda abierta un
-/// clic en la barra de título de la ayuda —fila 1— caía en un botón y abría o
-/// cerraba un panel invisible. Pintada y pulsable tienen que ser lo mismo, y la
-/// forma de garantizarlo es que las dos pregunten aquí.
+/// Exists because not having it was a BLOCKER: the bar was painted before
+/// the overlays and its zones stayed active underneath, so with help open a
+/// click on help's title bar — row 1 — landed on a button and opened or
+/// closed an invisible panel. Painted and clickable have to be the same
+/// thing, and the way to guarantee it is for both to ask here.
 #[must_use]
 pub(crate) fn panel_bar_visible(app: &App, area: Rect) -> Option<Rect> {
     if crate::mouse::overlay_open(app) || app.menu.is_some() {
@@ -440,20 +447,20 @@ pub(crate) fn panel_bar_visible(app: &App, area: Rect) -> Option<Rect> {
     panel_bar_area(app, area)
 }
 
-/// El reparto de este frame, para quien no pinta.
+/// This frame's layout, for whoever does not paint.
 ///
-/// `pub` porque el run loop necesita saber qué huecos se COLOCARON para
-/// decidir qué pedir: un preview que no se colocó no lee (regla 2 del spec), y
-/// eso solo lo sabe el reparto.
+/// `pub` because the run loop needs to know which slots got PLACED to
+/// decide what to request: a preview that was not placed does not read
+/// (spec rule 2), and only the layout knows that.
 #[must_use]
 pub fn resolved_for(app: &App, area: Rect) -> norte_frontend::layout::Resolved {
     resolved_frame(app, area)
 }
 
-/// El tamaño que pide un hueco por su CONTENIDO.
+/// The size a slot asks for by its CONTENT.
 ///
-/// Solo la franja de tareas tiene uno: `min(tareas, 6)` filas, y cero en
-/// reposo. Es lo único de la pantalla que el árbol no puede saber solo.
+/// Only the tasks strip has one: `min(tasks, 6)` rows, and zero at rest. It
+/// is the only thing on screen the tree cannot know on its own.
 pub(crate) fn natural(app: &App, id: norte_frontend::layout::SlotId) -> (u16, u16) {
     if id == crate::panel::SLOT_TASKS {
         (0, tasks_rows(app))
@@ -462,7 +469,7 @@ pub(crate) fn natural(app: &App, id: norte_frontend::layout::SlotId) -> (u16, u1
     }
 }
 
-/// Dónde cayó un hueco en este reparto.
+/// Where a slot landed in this layout.
 pub(crate) fn slot_rect(
     res: &norte_frontend::layout::Resolved,
     id: norte_frontend::layout::SlotId,
@@ -473,12 +480,12 @@ pub(crate) fn slot_rect(
         .map(|(_, r)| crate::panel::to_ratatui(*r))
 }
 
-/// El primer hueco COLOCADO con ese kind, y dónde cayó.
+/// The first PLACED slot with that kind, and where it landed.
 ///
-/// Del REPARTO y no del árbol: quien pinta solo puede pintar lo que se colocó,
-/// y un hueco detrás de una pestaña o dentro de un `Split` colapsado no se
-/// colocó. Ahí es donde la suspensión de un hueco oculto deja de ser una regla
-/// escrita y pasa a ser lo único que el código puede hacer.
+/// From the LAYOUT and not the tree: whoever paints can only paint what got
+/// placed, and a slot behind a tab or inside a collapsed `Split` did not get
+/// placed. That is where a hidden slot's suspension stops being a written
+/// rule and becomes the only thing the code can do.
 pub(crate) fn placed_of_kind(
     res: &norte_frontend::layout::Resolved,
     tree: &norte_frontend::layout::Node,
@@ -487,125 +494,121 @@ pub(crate) fn placed_of_kind(
     res.placements
         .iter()
         .find(|(id, _)| tree.kind_of(*id).is_some_and(|k| k.as_str() == kind))
-        .map(|(id, r)| {
-            (
-                *id,
-                contenido_de_hueco(tree, *id, crate::panel::to_ratatui(*r)),
-            )
-        })
+        .map(|(id, r)| (*id, slot_content(tree, *id, crate::panel::to_ratatui(*r))))
 }
 
-/// Dónde cae el CONTENIDO de un hueco colocado en `rect`.
+/// Where the CONTENT of a slot placed in `rect` lands.
 ///
-/// En un grupo de paneles (ADR 0134) la primera fila es la TIRA de
-/// pestañas, y el contenido empieza una más abajo. UNA cuenta para quien
-/// pinta y para el ratón: con dos, un clic en el mapa de disco elegía el
-/// hijo de al lado.
-pub(crate) fn contenido_de_hueco(
+/// In a panel group (ADR 0134) the first row is the tab STRIP, and the
+/// content starts one row below. ONE count for the painter and for the
+/// mouse: with two, a click on the disk map picked the child next door.
+pub(crate) fn slot_content(
     tree: &norte_frontend::layout::Node,
     id: norte_frontend::layout::SlotId,
     mut rect: Rect,
 ) -> Rect {
-    if grupo_de_paneles(tree, id).is_some() && rect.height > 1 {
+    if panel_group(tree, id).is_some() && rect.height > 1 {
         rect.y = rect.y.saturating_add(1);
         rect.height -= 1;
     }
     rect
 }
 
-/// El grupo de PANELES de `id` (ADR 0134): sus huecos y cuál está delante,
-/// si `id` vive en una pestaña junto a otro panel. Un grupo con un listado
-/// dentro es el de las pestañas de un listado, y ese tiene su propia tira.
+/// `id`'s PANEL group (ADR 0134): its slots and which one is in front, if
+/// `id` lives in a tab alongside another panel. A group with a listing
+/// inside is a listing's own tab strip, and that one has its own strip.
 #[must_use]
-pub(crate) fn grupo_de_paneles(
+pub(crate) fn panel_group(
     tree: &norte_frontend::layout::Node,
     id: norte_frontend::layout::SlotId,
 ) -> Option<(Vec<norte_frontend::layout::SlotId>, usize)> {
-    let (huecos, activo) = tree.tabs_of(id)?;
-    (huecos.len() >= 2
-        && huecos
+    let (slots, active) = tree.tabs_of(id)?;
+    (slots.len() >= 2
+        && slots
             .iter()
             .all(|s| tree.kind_of(*s).is_some_and(|k| k.as_str() != "browser")))
-    .then_some((huecos, activo))
+    .then_some((slots, active))
 }
 
-/// Una pestaña de la tira de un grupo de paneles: dónde cae, qué hueco
-/// lleva y si es la de delante.
-pub(crate) struct PestanaDePanel {
-    /// El rótulo, con un espacio a cada lado.
-    pub texto: String,
-    /// Primera columna.
+/// A tab in a panel group's strip: where it lands, which slot it carries
+/// and whether it is the one in front.
+pub(crate) struct PanelTab {
+    /// The label, with a space on each side.
+    pub text: String,
+    /// First column.
     pub x0: u16,
-    /// Última columna, inclusive.
+    /// Last column, inclusive.
     pub x1: u16,
-    /// El hueco de dentro.
+    /// The slot inside.
     pub slot: norte_frontend::layout::SlotId,
-    /// Es la que se ve.
-    pub activa: bool,
+    /// Is the one shown.
+    pub active: bool,
 }
 
-/// Las tiras de pestañas de los grupos de paneles del frame (ADR 0134): la
-/// fila y sus pestañas. UNA medida para el pintado y para el ratón.
+/// The frame's panel groups' tab strips (ADR 0134): the row and its tabs.
+/// ONE measurement for painting and for the mouse.
 #[must_use]
-pub(crate) fn tiras_de_paneles(app: &App, area: Rect) -> Vec<(Rect, Vec<PestanaDePanel>)> {
+pub(crate) fn panel_tab_strips(app: &App, area: Rect) -> Vec<(Rect, Vec<PanelTab>)> {
     let res = resolved_frame(app, area);
     let lang = norte_i18n::active();
     let mut out = Vec::new();
     for (id, r) in &res.placements {
-        let Some((huecos, activo)) = grupo_de_paneles(&app.layout, *id) else {
+        let Some((slots, active)) = panel_group(&app.layout, *id) else {
             continue;
         };
         let rect = crate::panel::to_ratatui(*r);
-        // Un hueco sin altura no tiene fila propia: pintarla sería pisar la
-        // del vecino.
+        // A slot with no height has no row of its own: painting it would
+        // step on the neighbor's.
         if rect.height == 0 {
             continue;
         }
-        let fila = Rect { height: 1, ..rect };
-        let tope = rect.x.saturating_add(rect.width);
-        let rotulos: Vec<(String, u16)> = huecos
+        let row = Rect { height: 1, ..rect };
+        let ceiling = rect.x.saturating_add(rect.width);
+        let labels: Vec<(String, u16)> = slots
             .iter()
             .map(|s| {
                 let kind = app
                     .layout
                     .kind_of(*s)
                     .map_or("", norte_frontend::layout::KindId::as_str);
-                let nombre =
+                let name =
                     norte_frontend::panelbar::label_in(lang, kind, &format!("layout.{kind}"));
-                let texto = format!(" {} ", norte_frontend::display_name(nombre.as_bytes()).0);
-                let w = u16::try_from(super::text::cells(&texto)).unwrap_or(u16::MAX);
-                (texto, w)
+                let text = format!(" {} ", norte_frontend::display_name(name.as_bytes()).0);
+                let w = u16::try_from(super::text::cells(&text)).unwrap_or(u16::MAX);
+                (text, w)
             })
             .collect();
-        // La de delante se reserva antes que nada: una tira estrecha que se
-        // come justo esa no dice qué panel se está viendo.
-        let w_activa = rotulos.get(activo).map_or(0, |(_, w)| *w);
+        // The one in front is reserved before anything else: a narrow strip
+        // that eats exactly that one does not say which panel is being
+        // shown.
+        let active_w = labels.get(active).map_or(0, |(_, w)| *w);
         let mut x = rect.x;
-        let mut pestanas = Vec::new();
-        for (i, ((texto, w), s)) in rotulos.into_iter().zip(&huecos).enumerate() {
-            let reserva = if i < activo { w_activa } else { 0 };
-            // Una pestaña que no cabe entera no se pinta ni se pulsa.
-            if x.saturating_add(w).saturating_add(reserva) > tope {
+        let mut tabs = Vec::new();
+        for (i, ((text, w), s)) in labels.into_iter().zip(&slots).enumerate() {
+            let reserve = if i < active { active_w } else { 0 };
+            // A tab that does not fit whole is neither painted nor
+            // clickable.
+            if x.saturating_add(w).saturating_add(reserve) > ceiling {
                 continue;
             }
-            pestanas.push(PestanaDePanel {
-                texto,
+            tabs.push(PanelTab {
+                text,
                 x0: x,
                 x1: x.saturating_add(w).saturating_sub(1),
                 slot: *s,
-                activa: i == activo,
+                active: i == active,
             });
             x = x.saturating_add(w);
         }
-        out.push((fila, pestanas));
+        out.push((row, tabs));
     }
     out
 }
 
-/// El CUERPO: la caja envolvente de los `browser` colocados.
+/// The BODY: the bounding box of the placed `browser`s.
 ///
-/// Con uno solo colocado —el `Split` colapsó— la caja es ese mismo, que es
-/// exactamente el sitio que un visor o un panel de diferencias debe ocupar.
+/// With only one placed — the `Split` collapsed — the box is that same one,
+/// which is exactly the spot a viewer or a differences panel must occupy.
 pub(crate) fn body_rect(
     res: &norte_frontend::layout::Resolved,
     tree: &norte_frontend::layout::Node,
@@ -629,38 +632,35 @@ pub(crate) fn body_rect(
     bbox
 }
 
-/// El cuerpo calculado a mano, para cuando el reparto no coloca ningún pane.
+/// The body computed by hand, for when the layout places no pane at all.
 ///
-/// No pasa con el preset `orthodox`; existe porque un layout sin `browser` no
-/// puede dejar sin sitio a un visor abierto.
+/// Does not happen with the `orthodox` preset; it exists because a layout
+/// with no `browser` cannot leave an open viewer with nowhere to go.
 ///
-/// Parte de [`body_area`] y no del frame: sin eso el cuerpo de reserva
-/// empezaba debajo del raíl de paneles (y de las filas de cromo) en vez de a
-/// su lado.
+/// It builds on [`body_area`] and not the frame: without that, the fallback
+/// body started below the panel rail (and the chrome rows) instead of
+/// beside it.
 pub(crate) fn chrome_body(app: &App, area: Rect) -> Rect {
     let area = body_area(app, area);
-    let alto = area
+    let height = area
         .height
         .saturating_sub(tasks_rows(app))
         .saturating_sub(1);
-    Rect {
-        height: alto,
-        ..area
-    }
+    Rect { height, ..area }
 }
 
-/// El área que ocupan los panes —o el panel que los sustituye— en `area`.
+/// The area the panes — or whatever panel replaces them — occupy in `area`.
 pub(crate) fn overlay_body(app: &App, area: Rect) -> Rect {
     let res = resolved_frame(app, area);
     body_rect(&res, &app.layout).unwrap_or_else(|| chrome_body(app, area))
 }
 
-/// Los `browser` que este reparto SÍ pinta, de izquierda a derecha.
+/// The `browser`s this layout DOES paint, left to right.
 ///
-/// Con pestañas hay más de dos listados vivos y solo dos visibles, así que
-/// «el pane izquierdo» deja de ser un id fijo y pasa a ser una POSICIÓN: el
-/// browser colocado más a la izquierda. Ordenar por `(x, y)` es exactamente lo
-/// que el usuario ve, y es lo que mantiene el significado de `app.panes[0]`.
+/// With tabs there are more than two live listings and only two visible, so
+/// "the left pane" stops being a fixed id and becomes a POSITION: the
+/// leftmost placed browser. Sorting by `(x, y)` is exactly what the user
+/// sees, and it is what keeps `app.panes[0]`'s meaning intact.
 pub(crate) fn visible_browsers(
     res: &norte_frontend::layout::Resolved,
     tree: &norte_frontend::layout::Node,
@@ -678,11 +678,12 @@ pub(crate) fn visible_browsers(
     v
 }
 
-/// Dónde cae cada pane, o `None` si este frame no lo pinta.
+/// Where each pane lands, or `None` if this frame does not paint it.
 ///
-/// Un `None` no es un error: el `Split` colapsó porque el cuerpo no da para
-/// dos veces el mínimo del `browser`, y el otro se pinta a ancho completo.
-/// Quien tuviera el foco ahí lo pierde en [`before_frame`].
+/// A `None` is not an error: the `Split` collapsed because the body does
+/// not give room for twice the `browser`'s minimum, and the other one
+/// paints at full width. Whoever had focus there loses it in
+/// [`before_frame`].
 pub(crate) fn pane_cols(
     res: &norte_frontend::layout::Resolved,
     tree: &norte_frontend::layout::Node,
@@ -693,23 +694,23 @@ pub(crate) fn pane_cols(
         .collect()
 }
 
-/// Como [`pane_cols`], resolviendo el frame por su cuenta.
+/// Like [`pane_cols`], resolving the frame on its own.
 pub(crate) fn pane_rects(app: &App, area: Rect) -> Vec<Rect> {
     pane_cols(&resolved_frame(app, area), &app.layout)
 }
 
-/// Las pestañas del pane del lado `side`, si está en un grupo.
+/// The tabs of the pane on side `side`, if it is in a group.
 ///
-/// `pub` porque el ratón necesita los mismos títulos para medir las zonas.
+/// `pub` because the mouse needs the same titles to measure the zones.
 ///
-/// El título de cada una es el nombre del directorio de su hueco, saneado por
-/// `display_name`: un directorio con nombre hostil dentro de una pestaña es
-/// tan hostil como dentro de un listado (regla 1).
+/// Each one's title is its slot's directory name, sanitized by
+/// `display_name`: a directory with a hostile name inside a tab is as
+/// hostile as inside a listing (rule 1).
 #[must_use]
 pub fn tab_strip_for(app: &App, side: usize) -> Option<TabStrip> {
     let slot = app.panes.slot_of(side);
-    let (huecos, active) = app.layout.tabs_of(slot)?;
-    let titles = huecos
+    let (slots, active) = app.layout.tabs_of(slot)?;
+    let titles = slots
         .iter()
         .map(|id| {
             app.panes
@@ -731,25 +732,25 @@ pub fn tab_strip_for(app: &App, side: usize) -> Option<TabStrip> {
     Some(TabStrip { titles, active })
 }
 
-/// Cuántas filas del pane son CROMO: los dos bordes, la cabecera de columnas
-/// y, si está en un grupo, la barra de pestañas.
+/// How many of a pane's rows are CHROME: the two borders, the column header
+/// and, if it is in a group, the tab bar.
 pub(crate) fn pane_chrome_rows(app: &App, side: usize) -> u16 {
     3 + u16::from(tab_strip_for(app, side).is_some())
 }
 
-/// El interior de un bloque con borde por los cuatro lados./// El interior de un bloque con borde por los cuatro lados./// El interior de un bloque con borde por los cuatro lados.
+/// The interior of a block bordered on all four sides.
 pub(crate) fn block_inner(area: Rect) -> Rect {
     Block::default().borders(Borders::ALL).inner(area)
 }
 
-/// El reparto del visor a pantalla completa en sus DOS filas: el marco de
-/// contenido (con sus bordes — lo que recibe el `Block` de `draw_viewer`) y
-/// la barra de estado de una fila debajo.
+/// The full-screen viewer's layout in its TWO rows: the content frame (with
+/// its borders — what `draw_viewer`'s `Block` receives) and the one-row
+/// status bar below it.
 ///
-/// Única función que hace esta cuenta: [`rect_del_visor`] es su primera
-/// mitad, y `draw_viewer` toma las dos de aquí en vez de repetir el
-/// `Layout::split` a mano — dos cuentas del mismo hueco divergen en
-/// silencio (memoria `funcion-compartida-no-basta`).
+/// The only function that does this count: [`rect_del_visor`] is its first
+/// half, and `draw_viewer` takes both from here instead of repeating the
+/// `Layout::split` by hand — two counts of the same slot drift apart
+/// silently (memory `funcion-compartida-no-basta`).
 pub(crate) fn visor_split(app: &App, area: Rect) -> (Rect, Rect) {
     let rows = Layout::default()
         .direction(Direction::Vertical)
@@ -758,26 +759,26 @@ pub(crate) fn visor_split(app: &App, area: Rect) -> (Rect, Rect) {
     (rows[0], rows[1])
 }
 
-/// El hueco donde el visor a pantalla completa pinta su CONTENIDO de verdad:
-/// el INTERIOR del marco, SIN bordes — donde `draw_viewer` deja las líneas
-/// en blanco cuando hay una imagen colocada.
+/// The slot where the full-screen viewer really paints its CONTENT: the
+/// frame's INTERIOR, with NO borders — where `draw_viewer` leaves the lines
+/// blank when an image is placed.
 ///
-/// `pub` porque el run loop (T4, fase 5 WOW) la necesita tras
-/// `terminal.draw` para saber dónde colocar los píxeles. Revisión, CRÍTICO
-/// 2: la primera versión devolvía el marco CON bordes (`visor_split(...).0`
-/// a secas) — dos celdas de más por eje, justo encima del borde y de las
-/// barras de scroll que `barras_del_visor` pinta ahí — así que ahora aplica
-/// `block_inner` (privado, sin enlazar) ella misma: la coincidencia con el
-/// hueco que `draw_viewer` deja vacío es ESTRUCTURAL, no algo que recordar
-/// en cada llamante. Sale de `visor_split` (privado también), la MISMA
-/// cuenta que pinta el marco — no una copia.
+/// `pub` because the run loop (T4, phase 5 WOW) needs it after
+/// `terminal.draw` to know where to place the pixels. Review, CRITICAL 2:
+/// the first version returned the frame WITH borders (`visor_split(...).0`
+/// alone) — two cells too many per axis, right over the border and the
+/// scrollbars `viewer_scrollbars` paints there — so now it applies
+/// `block_inner` (private, not exported) itself: matching the slot
+/// `draw_viewer` leaves empty is STRUCTURAL, not something to remember at
+/// every call site. It comes from `visor_split` (also private), the SAME
+/// count that paints the frame — not a copy.
 #[must_use]
 pub fn rect_del_visor(app: &App, area: Rect) -> Rect {
     block_inner(visor_split(app, area).0)
 }
 
-/// Como [`sync_layout`], desde el área EXTERNA del panel (la que recibe
-/// `draw_sync`): descuenta el borde antes de repartir.
+/// Like [`sync_layout`], from the panel's EXTERNAL area (the one
+/// `draw_sync` receives): subtracts the border before laying out.
 pub(crate) fn sync_layout_rows(
     area: Rect,
     view: &crate::app::SyncView,
@@ -785,50 +786,51 @@ pub(crate) fn sync_layout_rows(
     sync_layout(block_inner(area), view)
 }
 
-/// La geometría PINTADA de los dos panes en un frame de `area`, o `None`
-/// cuando este frame no pinta panes (visor abierto).
+/// The PAINTED geometry of the two panes in an `area` frame, or `None` when
+/// this frame paints no panes (viewer open).
 ///
-/// El reparto YA NO se calcula aquí: sale de `pane_rects`, la misma llamada
-/// que usa `draw`. Lo que sigue viviendo aquí es el CROMO — los bordes del
-/// bloque y la cabecera de columnas—, que es lo que convierte un rectángulo de
-/// pane en filas de listado.
+/// The layout is NO LONGER computed here: it comes from `pane_rects`, the
+/// same call `draw` uses. What still lives here is the CHROME — the block's
+/// borders and the column header — which is what turns a pane rectangle
+/// into listing rows.
 ///
-/// Mismo trato que [`pane_list_rows`] (#124): el draw es quien sabe dónde
-/// cayó cada cosa, así que el run loop devuelve esto al modelo
-/// ([`crate::mouse::after_frame`]) tras cada frame y el ratón resuelve sus
-/// clicks contra la ÚLTIMA pantalla que el usuario vio, no contra una
-/// recalculada a ojo. Se computa aquí, junto al layout que replica, para
-/// que cambiarlo rompa el test de geometría de al lado y no el ratón en
-/// silencio.
+/// Same treatment as [`pane_list_rows`] (#124): the draw is the one that
+/// knows where everything landed, so the run loop feeds this back to the
+/// model ([`crate::mouse::after_frame`]) after every frame and the mouse
+/// resolves its clicks against the LAST screen the user saw, not one
+/// recalculated by eye. It is computed here, next to the layout it
+/// replicates, so that changing it breaks the geometry test right next to
+/// it and not the mouse silently.
 ///
-/// Las filas de un pane, de arriba abajo: borde superior (1), cabecera de
-/// columnas (1), el listado, borde inferior (1). Las columnas: borde
-/// izquierdo (1), contenido, borde derecho (1). Todo lo que no sea listado
-/// es CROMO, y un click ahí resuelve a «este pane, ninguna fila».
+/// A pane's rows, top to bottom: top border (1), column header (1), the
+/// listing, bottom border (1). Columns: left border (1), content, right
+/// border (1). Everything that is not listing is CHROME, and a click there
+/// resolves to "this pane, no row."
 #[must_use]
 pub fn pane_geometry(app: &App, area: Rect) -> Option<Vec<crate::mouse::PaneGeometry>> {
-    // Ni con el visor ni con el panel de diferencias: los dos sustituyen a
-    // los panes, y una geometría de algo que no está pintado es un click
-    // resuelto contra una fila que el lector no puede ver.
+    // Not with the viewer nor the differences panel: both replace the
+    // panes, and a geometry for something not painted is a click resolved
+    // against a row the reader cannot see.
     if app.viewer.is_some() || app.compare.is_some() {
         return None;
     }
     let cols = pane_rects(app, area);
-    // Un `PaneGeometry` por panel PINTADO. La longitud varía con el layout,
-    // y el hit test resuelve contra la del último frame — que es lo que el
-    // lector tenía delante.
+    // One `PaneGeometry` per PAINTED panel. Its length varies with the
+    // layout, and the hit test resolves against the last frame's — which is
+    // what the reader had in front of them.
     let mut out = vec![crate::mouse::PaneGeometry::default(); cols.len()];
     for (i, pane) in app.panes.iter().enumerate() {
         let Some(block) = cols.get(i).copied() else {
             continue;
         };
-        // Interior del bloque con `Borders::ALL`, sin construir el bloque:
-        // un margen de 1 por lado. `title_bottom` (el input del quick
-        // search) NO consume filas — se pinta sobre el borde inferior.
+        // Interior of the block with `Borders::ALL`, without building the
+        // block: a margin of 1 per side. `title_bottom` (the quick search
+        // input) does NOT consume rows — it is painted over the bottom
+        // border.
         let inner_w = block.width.saturating_sub(2);
         let inner_h = block.height.saturating_sub(2);
-        // La cabecera de columnas se come la primera fila del interior, y la
-        // barra de pestañas —si el pane está en un grupo— otra por encima.
+        // The column header eats the interior's first row, and the tab
+        // bar — if the pane is in a group — another one above it.
         let chrome = pane_chrome_rows(app, i).saturating_sub(2);
         let list_rows = inner_h.saturating_sub(chrome);
         out[i] = crate::mouse::PaneGeometry {
@@ -842,9 +844,10 @@ pub fn pane_geometry(app: &App, area: Rect) -> Option<Vec<crate::mouse::PaneGeom
             } else {
                 list_rows
             },
-            // La ventana la decide el MODELO (pegajosa), y el hit test lee
-            // exactamente la misma que se pintó: deducirla aquí otra vez es
-            // como se resuelve un click contra la fila de al lado.
+            // The window is decided by the MODEL (sticky), and the hit test
+            // reads exactly the one that was painted: deriving it again
+            // here is how a click ends up resolved against the row next
+            // door.
             offset: pane.viewport_offset(),
         };
     }

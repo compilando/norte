@@ -1,16 +1,16 @@
 name = "retro-crt-amber"
 
-# Fósforo ámbar (P3): terminal CRT clásica. [effects] es interpretado por la
-# GUI (scanlines/vignette/glow/bezel, ADR 0036); la TUI lo ignora y solo pinta
-# los [roles]/[files].
+# Amber phosphor (P3): classic CRT terminal. [effects] is interpreted by the
+# GUI (scanlines/vignette/glow/bezel, ADR 0036); the TUI ignores it and only paints
+# the [roles]/[files].
 
 [roles]
 background       = { bg = "#100c04" }
 regular          = { fg = "#ffb000" }
 selection           = { fg = "#100c04", bg = "#ffb000" }
 selection-unfocused = { fg = "#ffe0a0", bg = "#4f3a13" }
-# Un ámbar más oscuro que la barra de estado: la fila de teclas va justo
-# encima de ella, y con el mismo par se leían como una sola franja.
+# An amber darker than the status bar: the key row sits right
+# above it, and with the same pair they read as a single band.
 button              = { fg = "#100c04", bg = "#c47d00" }
 border-focus     = { fg = "#ffb000", bold = true }
 border-unfocused = { fg = "#8f6a1a", dim = true }

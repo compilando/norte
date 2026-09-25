@@ -1,32 +1,33 @@
-//! Store TOFU (trust-on-first-use) del `./.norte/init.lua` de PROYECTO
-//! (ADR 0026, M4 Lua): a diferencia del `init.lua` de usuario (config propia,
-//! se ejecuta sin preguntar), este fichero viene con un repo AJENO —
-//! ejecutarlo a ciegas es RCE. Patrón calcado de
-//! `norte-connect::known_hosts` (TOFU de host keys) y `norte-connect::secret`
-//! (escritura atómica 0600): primer contacto → [`TrustDecision::Unknown`], el
-//! frontend pregunta, la respuesta se persiste por (path, hash).
+//! TOFU (trust-on-first-use) store for the PROJECT `./.norte/init.lua`
+//! (ADR 0026, M4 Lua): unlike the user's `init.lua` (their own config,
+//! executed without asking), this file comes with SOMEONE ELSE'S repo —
+//! running it blindly is RCE. A pattern copied from
+//! `norte-connect::known_hosts` (host key TOFU) and `norte-connect::secret`
+//! (atomic 0600 write): first contact → [`TrustDecision::Unknown`], the
+//! frontend asks, the answer is persisted by (path, hash).
 //!
-//! Clave de identidad: (bytes EXACTOS del path, sha256 de los bytes del
-//! contenido). Un fichero que CAMBIA de contenido en el mismo path no hereda
-//! la confianza de la versión vieja — se re-pregunta, igual que un host que
-//! cambia de clave.
+//! Identity key: (EXACT bytes of the path, sha256 of the content bytes). A
+//! file that CHANGES content at the same path does not inherit the old
+//! version's trust — it is asked again, just like a host that changes its
+//! key.
 //!
-//! Regla 1 (nombres de archivo = bytes): el path se compara por
-//! `OsStr::as_encoded_bytes()`, JAMÁS por su forma `String` — dos paths que
-//! solo difieren en bytes no-UTF8 nunca colisionan, y viceversa: el campo
-//! `path` que viaja en el TOML es SOLO para inspección humana del fichero,
-//! el match de identidad usa `path_hex`.
+//! Rule 1 (file names = bytes): the path is compared via
+//! `OsStr::as_encoded_bytes()`, NEVER by its `String` form — two paths that
+//! only differ in non-UTF8 bytes never collide, and vice versa: the `path`
+//! field carried in the TOML is ONLY for human inspection of the file, the
+//! identity match uses `path_hex`.
 //!
-//! Limitación conocida (trampas recurrentes de CLAUDE.md): este store NO
-//! normaliza NFC/NFD — compara bytes tal cual llegan. En macOS, si el
-//! CALLER obtiene el path por dos rutas distintas (una NFC, otra NFD tras
-//! pasar por HFS+/APFS), `check`/`record` los verían como paths DISTINTOS.
-//! El caller (T8) debe usar SIEMPRE la misma forma (la que devuelve
-//! `std::fs::canonicalize`) para check y record del mismo script.
+//! Known limitation (CLAUDE.md's recurring traps): this store does NOT
+//! normalize NFC/NFD — it compares bytes as they arrive. On macOS, if the
+//! CALLER obtains the path through two different routes (one NFC, another
+//! NFD after going through HFS+/APFS), `check`/`record` would see them as
+//! DIFFERENT paths. The caller (T8) must ALWAYS use the same form (the one
+//! `std::fs::canonicalize` returns) for check and record of the same
+//! script.
 //!
-//! I/O SÍNCRONO (fichero pequeño, TOML plano): el caller (task 7 de este
-//! plan) lo envuelve en `spawn_blocking` al usarlo desde contexto async
-//! (regla 2 — esta regla se cumple en el CALLER, no aquí dentro).
+//! SYNCHRONOUS I/O (small file, plain TOML): the caller (task 7 of this
+//! plan) wraps it in `spawn_blocking` when using it from an async context
+//! (rule 2 — this rule is met by the CALLER, not in here).
 
 use std::fmt::Write as _;
 use std::io::Write as _;
@@ -35,60 +36,58 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-/// Resultado de contrastar un script con el store.
+/// Result of checking a script against the store.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrustDecision {
-    /// (path, hash) coincide con una entrada aprobada: cargar sin preguntar.
+    /// (path, hash) matches an approved entry: load without asking.
     Trusted,
-    /// (path, hash) coincide EXACTAMENTE con una entrada denegada: NO
-    /// cargar, NO preguntar de nuevo (evita machacar al usuario con el
-    /// mismo script).
+    /// (path, hash) matches EXACTLY a denied entry: do NOT load, do NOT
+    /// ask again (avoids hammering the user with the same script).
     Denied,
-    /// El path tiene una entrada denegada, pero con OTRO hash: el contenido
-    /// cambió desde el rechazo. El caller (T8) trata esto como deny
-    /// SILENCIOSO (aviso en la barra de estado), JAMÁS modal automático —
-    /// si reabriéramos el modal en cada edición de un script ya rechazado,
-    /// el usuario acabaría aprobando por fatiga. Para volver a preguntar
-    /// hace falta una acción explícita (p. ej. borrar la entrada, fuera del
-    /// alcance de T6).
+    /// The path has a denied entry, but with a DIFFERENT hash: the content
+    /// changed since the rejection. The caller (T8) treats this as a
+    /// SILENT deny (a notice on the status bar), NEVER an automatic modal
+    /// — if we reopened the modal on every edit of an already-rejected
+    /// script, the user would end up approving out of fatigue. Asking
+    /// again requires an explicit action (e.g. deleting the entry, out of
+    /// T6's scope).
     DeniedPathChanged,
-    /// Sin entrada para este path, o el path estaba APROBADO pero con OTRO
-    /// hash (ahí sí se re-pregunta: aprobar un script no es un cheque en
-    /// blanco para cualquier futura versión).
+    /// No entry for this path, or the path was APPROVED but with a
+    /// DIFFERENT hash (in that case it IS asked again: approving a script
+    /// is not a blank check for any future version).
     Unknown,
 }
 
-/// Entrada persistida: una decisión por path (la más reciente sustituye a
-/// cualquier anterior del mismo path — `record` es upsert-by-path).
+/// Persisted entry: one decision per path (the most recent replaces any
+/// previous one for the same path — `record` is upsert-by-path).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Entry {
-    /// Path en forma "lossy" — SOLO para que un humano pueda inspeccionar
-    /// el TOML a ojo. NUNCA se usa para el match de identidad (regla 1):
-    /// eso es `path_hex`.
+    /// Path in "lossy" form — ONLY so a human can eyeball the TOML. NEVER
+    /// used for the identity match (rule 1): that is `path_hex`.
     path: String,
-    /// Bytes EXACTOS del path (`OsStr::as_encoded_bytes()`) en hex — la
-    /// clave real de identidad, sin pérdida ni asunción de UTF-8.
+    /// EXACT bytes of the path (`OsStr::as_encoded_bytes()`) in hex — the
+    /// real identity key, with no loss and no UTF-8 assumption.
     path_hex: String,
-    /// sha256 en hex de los bytes de contenido evaluados.
+    /// hex sha256 of the evaluated content bytes.
     hash: String,
-    /// `true` = aprobado, `false` = denegado.
+    /// `true` = approved, `false` = denied.
     allow: bool,
-    /// Marca temporal informativa (epoch seconds; sin dep nueva de tiempo).
+    /// Informational timestamp (epoch seconds; no new time dependency).
     date_epoch: u64,
 }
 
-/// Fichero TOML plano: lista de entradas bajo la clave `entry`.
+/// Plain TOML file: a list of entries under the `entry` key.
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct FileFormat {
     #[serde(default, rename = "entry")]
     entries: Vec<Entry>,
 }
 
-/// Store TOFU del `init.lua` de proyecto.
+/// TOFU store for the project's `init.lua`.
 ///
-/// Todas las operaciones son I/O SÍNCRONO (fichero pequeño, se toca en
-/// arranque/reload): el caller async debe envolverlas en `spawn_blocking`
-/// (regla 2 — la responsabilidad es del caller, no de este tipo).
+/// All operations are SYNCHRONOUS I/O (small file, touched at
+/// startup/reload): the async caller must wrap them in `spawn_blocking`
+/// (rule 2 — the responsibility is the caller's, not this type's).
 #[derive(Debug)]
 pub struct TrustStore {
     path: PathBuf,
@@ -96,25 +95,26 @@ pub struct TrustStore {
 }
 
 impl TrustStore {
-    /// Abre el store en `path`. Fichero AUSENTE = store vacío (primer uso del
-    /// binario en esta máquina); cualquier otro error de lectura o de
-    /// parseo se propaga (fail-closed: un fichero corrupto no debe degradar
-    /// en silencio a "todo desconocido" si en realidad es una manipulación —
-    /// mismo criterio que `KnownHostsStore`, ver
+    /// Opens the store at `path`. An ABSENT file = empty store (first use
+    /// of the binary on this machine); any other read or parse error is
+    /// propagated (fail-closed: a corrupt file must not silently degrade
+    /// to "everything unknown" if it is actually tampering — same
+    /// criterion as `KnownHostsStore`, see
     /// `crates/norte-connect/src/known_hosts.rs`).
     ///
     /// # Errors
     ///
-    /// Si `path` existe pero no se puede leer, o su contenido no es un
-    /// `lua-trust.toml` válido (incluye bytes no-UTF8: `read_to_string`
-    /// los rechaza y el error se propaga, no se trata como "no existe").
+    /// If `path` exists but cannot be read, or its content is not a valid
+    /// `lua-trust.toml` (this includes non-UTF8 bytes: `read_to_string`
+    /// rejects them and the error is propagated, not treated as
+    /// "does not exist").
     pub fn open(path: PathBuf) -> std::io::Result<Self> {
         let entries = match std::fs::read_to_string(&path) {
             Ok(raw) => {
                 let parsed: FileFormat = toml::from_str(&raw).map_err(|e| {
                     std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
-                        format!("lua-trust.toml corrupto: {e}"),
+                        format!("corrupt lua-trust.toml: {e}"),
                     )
                 })?;
                 parsed.entries
@@ -125,22 +125,23 @@ impl TrustStore {
         Ok(Self { path, entries })
     }
 
-    /// Contrasta `script_path` (YA CANÓNICO — lo resuelve el caller con
-    /// `std::fs::canonicalize`; este store no canonicaliza) y el hash de
-    /// `content` contra el store.
+    /// Checks `script_path` (ALREADY CANONICAL — resolved by the caller
+    /// with `std::fs::canonicalize`; this store does not canonicalize) and
+    /// the hash of `content` against the store.
     ///
-    /// Anti-TOCTOU: el hash se calcula SOBRE LOS BYTES PASADOS, no releyendo
-    /// el fichero. El caller debe leer el script UNA SOLA VEZ, llamar
-    /// `check(bytes)` y, si el resultado autoriza la carga, evaluar ESOS
-    /// MISMOS bytes — jamás volver a tocar disco entre el check y el eval.
+    /// Anti-TOCTOU: the hash is computed OVER THE PASSED-IN BYTES, without
+    /// re-reading the file. The caller must read the script EXACTLY ONCE,
+    /// call `check(bytes)` and, if the result authorizes the load,
+    /// evaluate THOSE SAME bytes — never touch disk again between the
+    /// check and the eval.
     ///
-    /// Requisito del CALLER (no lo puede imponer este tipo, que solo ve
-    /// bytes de path+contenido): antes de invocar `check` hay que verificar
-    /// que `.norte` es un directorio REAL y que `init.lua` es un fichero
-    /// REGULAR (`symlink_metadata`, o abrir con `O_NOFOLLOW`) — sin esa
-    /// comprobación, un symlink que apunte a un proyecto ya confiado
-    /// ejecutaría, en un contexto distinto (potencialmente hostil), el
-    /// contenido que el usuario aprobó para OTRO sitio. Se implementa en T8.
+    /// CALLER requirement (this type cannot enforce it, since it only sees
+    /// path+content bytes): before invoking `check` one must verify that
+    /// `.norte` is a REAL directory and that `init.lua` is a REGULAR file
+    /// (`symlink_metadata`, or opening with `O_NOFOLLOW`) — without that
+    /// check, a symlink pointing at an already-trusted project would
+    /// execute, in a different (potentially hostile) context, the content
+    /// the user approved for ANOTHER location. Implemented in T8.
     #[must_use]
     pub fn check(&self, script_path: &Path, content: &[u8]) -> TrustDecision {
         let path_hex = path_hex(script_path);
@@ -153,25 +154,25 @@ impl TrustStore {
         }
     }
 
-    /// Registra la decisión del usuario para `(script_path, content)`.
-    /// Sustituye cualquier entrada previa del MISMO `script_path` (una viva
-    /// por path — la entrada vieja, si tenía otro hash, deja de aplicar).
+    /// Records the user's decision for `(script_path, content)`. Replaces
+    /// any previous entry for the SAME `script_path` (one live entry per
+    /// path — the old entry, if it had a different hash, stops applying).
     ///
-    /// Escritura ATÓMICA (fichero temporal en el MISMO directorio + rename)
-    /// con permisos 0600 en Unix AL CREAR (calcado de `write_secret_file` en
-    /// `crates/norte-connect/src/secret.rs`). Crea el directorio padre con
-    /// 0700 si falta (calcado de `Journal::open`,
+    /// ATOMIC write (temp file in the SAME directory + rename) with 0600
+    /// permissions on Unix WHEN CREATED (copied from `write_secret_file` in
+    /// `crates/norte-connect/src/secret.rs`). Creates the parent directory
+    /// with 0700 if missing (copied from `Journal::open`,
     /// `crates/norte-core/src/journal.rs:283-286`).
     ///
-    /// Si la persistencia falla, la mutación en memoria se REVIERTE — el
-    /// estado en RAM nunca diverge del disco (si no, un `check` posterior
-    /// mentiría que algo quedó registrado cuando en realidad no sobrevive a
-    /// un reinicio).
+    /// If persistence fails, the in-memory mutation is REVERTED — the
+    /// state in RAM never diverges from disk (otherwise a later `check`
+    /// would lie that something got recorded when it actually does not
+    /// survive a restart).
     ///
     /// # Errors
     ///
-    /// Si falla la creación del directorio padre, la escritura del fichero
-    /// temporal o el rename atómico final.
+    /// If creating the parent directory, writing the temp file, or the
+    /// final atomic rename fails.
     pub fn record(
         &mut self,
         script_path: &Path,
@@ -200,32 +201,32 @@ impl TrustStore {
         Ok(())
     }
 
-    /// Vuelca `self.entries` a disco de forma atómica. Separado de
-    /// `record` para que el rollback en caso de error sea un simple
-    /// `self.entries = previous` en el caller (arriba).
+    /// Dumps `self.entries` to disk atomically. Separated from `record` so
+    /// that the rollback on error is a simple `self.entries = previous` in
+    /// the caller (above).
     fn persist(&self) -> std::io::Result<()> {
         ensure_parent_dir_0700(&self.path)?;
         let serialized = toml::to_string(&FileFormat {
             entries: self.entries.clone(),
         })
-        .map_err(|e| std::io::Error::other(format!("serializar lua-trust.toml: {e}")))?;
+        .map_err(|e| std::io::Error::other(format!("serializing lua-trust.toml: {e}")))?;
         write_atomic_0600(&self.path, serialized.as_bytes())
     }
 }
 
-/// Bytes exactos de `path` (sin asumir UTF-8 — regla 1) en hex.
+/// Exact bytes of `path` (without assuming UTF-8 — rule 1) in hex.
 fn path_hex(path: &Path) -> String {
     bytes_to_hex(path.as_os_str().as_encoded_bytes())
 }
 
-/// sha256 en hex minúscula de `content`.
+/// Lowercase hex sha256 of `content`.
 fn hash_hex(content: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(content);
     bytes_to_hex(hasher.finalize().as_slice())
 }
 
-/// hex minúscula de una tira de bytes cualquiera.
+/// Lowercase hex of any byte string.
 fn bytes_to_hex(bytes: &[u8]) -> String {
     bytes
         .iter()
@@ -235,9 +236,9 @@ fn bytes_to_hex(bytes: &[u8]) -> String {
         })
 }
 
-/// Crea el directorio padre de `path` con 0700 en Unix si falta (calcado de
-/// `Journal::open`, `crates/norte-core/src/journal.rs:283-286`). No-op si
-/// `path` no tiene padre o el padre ya existe.
+/// Creates `path`'s parent directory with 0700 on Unix if missing (copied
+/// from `Journal::open`, `crates/norte-core/src/journal.rs:283-286`).
+/// No-op if `path` has no parent or the parent already exists.
 fn ensure_parent_dir_0700(path: &Path) -> std::io::Result<()> {
     let Some(parent) = path.parent() else {
         return Ok(());
@@ -255,15 +256,15 @@ fn ensure_parent_dir_0700(path: &Path) -> std::io::Result<()> {
     builder.create(parent)
 }
 
-/// Escribe `data` en `path` de forma atómica (tmp en el MISMO dir + rename)
-/// con permisos 0600 en Unix al crear. Calcado de `write_secret_file` en
-/// `crates/norte-connect/src/secret.rs`.
+/// Writes `data` to `path` atomically (tmp in the SAME dir + rename) with
+/// 0600 permissions on Unix when created. Copied from `write_secret_file`
+/// in `crates/norte-connect/src/secret.rs`.
 fn write_atomic_0600(path: &Path, data: &[u8]) -> std::io::Result<()> {
-    // El nombre del tmp lleva el PID: dos procesos escribiendo el MISMO
-    // store a la vez (dos frontends embebidos apuntando al mismo store, o
-    // tests en paralelo) no deben pisarse el fichero temporal el uno al
-    // otro antes del rename — un nombre fijo compartido corrompería el
-    // contenido de quien pierda la carrera de `truncate`.
+    // The tmp name carries the PID: two processes writing to the SAME
+    // store at once (two embedded frontends pointing at the same store, or
+    // parallel tests) must not clobber each other's temp file before the
+    // rename — a fixed, shared name would corrupt the content of whoever
+    // loses the `truncate` race.
     let tmp = path.with_extension(format!("toml.tmp.{}", std::process::id()));
     let mut opts = std::fs::OpenOptions::new();
     opts.write(true).create(true).truncate(true);
@@ -285,7 +286,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn desconocido_pregunta_aprobado_carga_denegado_persiste() {
+    fn unknown_asks_approved_loads_denied_persists() {
         let dir = tempfile::tempdir().unwrap();
         let mut store = TrustStore::open(dir.path().join("lua-trust.toml")).unwrap();
         let p = Path::new("/repo/.norte/init.lua");
@@ -293,15 +294,15 @@ mod tests {
         assert_eq!(store.check(p, content), TrustDecision::Unknown);
         store.record(p, content, true).unwrap();
         assert_eq!(store.check(p, content), TrustDecision::Trusted);
-        // Contenido distinto = hash distinto = re-preguntar.
+        // Different content = different hash = ask again.
         assert_eq!(store.check(p, b"otro"), TrustDecision::Unknown);
-        // Denegado persiste (no re-preguntar hasta cambiar).
+        // Denied persists (do not ask again until it changes).
         store.record(p, b"otro", false).unwrap();
         assert_eq!(store.check(p, b"otro"), TrustDecision::Denied);
     }
 
     #[test]
-    fn el_store_reabre_lo_persistido() {
+    fn the_store_reopens_what_was_persisted() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("lua-trust.toml");
         let script = Path::new("/x/.norte/init.lua");
@@ -315,7 +316,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn el_fichero_nace_0600() {
+    fn the_file_is_born_0600() {
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("lua-trust.toml");
@@ -327,32 +328,33 @@ mod tests {
         assert_eq!(mode, 0o600);
     }
 
-    /// MEDIA-2 (review de seguridad): dos paths no-UTF8 DISTINTOS no deben
-    /// colisionar en el match de identidad — si `check`/`record` degradaran
-    /// a comparar por `String` (lossy), bytes inválidos se reemplazarían
-    /// por `U+FFFD` y paths distintos podrían volverse indistinguibles.
+    /// MEDIUM-2 (security review): two DIFFERENT non-UTF8 paths must not
+    /// collide in the identity match — if `check`/`record` degraded to
+    /// comparing by `String` (lossy), invalid bytes would be replaced by
+    /// `U+FFFD` and different paths could become indistinguishable.
     #[cfg(unix)]
     #[test]
-    fn paths_no_utf8_distintos_no_colisionan() {
+    fn distinct_non_utf8_paths_do_not_collide() {
         use std::ffi::OsStr;
         use std::os::unix::ffi::OsStrExt;
         let dir = tempfile::tempdir().unwrap();
         let mut store = TrustStore::open(dir.path().join("lua-trust.toml")).unwrap();
         let a = Path::new(OsStr::from_bytes(b"/repo/\xFF\xFEa/.norte/init.lua"));
         let b = Path::new(OsStr::from_bytes(b"/repo/\xFF\xFEb/.norte/init.lua"));
-        let content = b"mismo contenido";
+        let content = b"same content";
         store.record(a, content, true).unwrap();
         assert_eq!(store.check(a, content), TrustDecision::Trusted);
-        // `b` nunca se registró: sigue Unknown pese a compartir contenido y
-        // casi todos los bytes de path con `a`.
+        // `b` was never recorded: still Unknown despite sharing content and
+        // almost all path bytes with `a`.
         assert_eq!(store.check(b, content), TrustDecision::Unknown);
     }
 
-    /// MEDIA-2: un path no-UTF8 sobrevive round-trip por disco (el TOML
-    /// guarda `path_hex`, no depende de que `path` sea representable).
+    /// MEDIUM-2: a non-UTF8 path survives a disk round-trip (the TOML
+    /// stores `path_hex`, it does not depend on `path` being
+    /// representable).
     #[cfg(unix)]
     #[test]
-    fn path_no_utf8_sobrevive_round_trip_por_disco() {
+    fn non_utf8_path_survives_a_disk_round_trip() {
         use std::ffi::OsStr;
         use std::os::unix::ffi::OsStrExt;
         let dir = tempfile::tempdir().unwrap();
@@ -367,68 +369,65 @@ mod tests {
         assert_eq!(store.check(script, content), TrustDecision::Trusted);
     }
 
-    /// MEDIA-3: un script YA denegado que cambia de contenido es deny
-    /// SILENCIOSO (`DeniedPathChanged`), NUNCA vuelve a `Unknown` — si no,
-    /// cada edición de un script rechazado reabriría el modal hasta que el
-    /// usuario apruebe por fatiga.
+    /// MEDIUM-3: an ALREADY-denied script that changes content is a SILENT
+    /// deny (`DeniedPathChanged`), NEVER back to `Unknown` — otherwise
+    /// every edit of a rejected script would reopen the modal until the
+    /// user approves out of fatigue.
     #[test]
-    fn denegado_que_cambia_de_contenido_es_deniedpathchanged_no_unknown() {
+    fn denied_that_changes_content_is_deniedpathchanged_not_unknown() {
         let dir = tempfile::tempdir().unwrap();
         let mut store = TrustStore::open(dir.path().join("lua-trust.toml")).unwrap();
         let p = Path::new("/repo/.norte/init.lua");
-        store.record(p, b"malo", false).unwrap();
-        assert_eq!(store.check(p, b"malo"), TrustDecision::Denied);
-        assert_eq!(
-            store.check(p, b"cambiado"),
-            TrustDecision::DeniedPathChanged
-        );
+        store.record(p, b"bad", false).unwrap();
+        assert_eq!(store.check(p, b"bad"), TrustDecision::Denied);
+        assert_eq!(store.check(p, b"changed"), TrustDecision::DeniedPathChanged);
     }
 
-    /// Un aprobado que cambia de contenido sigue siendo `Unknown` (no
-    /// cambia con esta review: aprobar un script no es un cheque en blanco
-    /// para cualquier versión futura).
+    /// An approved script that changes content stays `Unknown` (unchanged
+    /// by this review: approving a script is not a blank check for any
+    /// future version).
     #[test]
-    fn aprobado_que_cambia_de_contenido_sigue_siendo_unknown() {
+    fn approved_that_changes_content_stays_unknown() {
         let dir = tempfile::tempdir().unwrap();
         let mut store = TrustStore::open(dir.path().join("lua-trust.toml")).unwrap();
         let p = Path::new("/repo/.norte/init.lua");
-        store.record(p, b"bueno", true).unwrap();
-        assert_eq!(store.check(p, b"otra-version"), TrustDecision::Unknown);
+        store.record(p, b"good", true).unwrap();
+        assert_eq!(store.check(p, b"other-version"), TrustDecision::Unknown);
     }
 
-    /// BAJA-5: fichero ausente = store vacío, todo es `Unknown`.
+    /// LOW-5: an absent file = empty store, everything is `Unknown`.
     #[test]
-    fn ausente_es_store_vacio() {
+    fn absent_is_an_empty_store() {
         let dir = tempfile::tempdir().unwrap();
-        let p = dir.path().join("no-existe.toml");
+        let p = dir.path().join("does-not-exist.toml");
         let store = TrustStore::open(p).unwrap();
         assert_eq!(
-            store.check(Path::new("/no/importa"), b"x"),
+            store.check(Path::new("/no/matter"), b"x"),
             TrustDecision::Unknown
         );
     }
 
-    /// BAJA-5: un fichero corrupto (TOML roto y, además, bytes no-UTF8) es
-    /// ERROR, no se degrada en silencio a store vacío (fail-closed: podría
-    /// ser el rastro de una manipulación, no una ausencia benigna).
+    /// LOW-5: a corrupt file (broken TOML, and also non-UTF8 bytes) is an
+    /// ERROR, it does not silently degrade to an empty store (fail-closed:
+    /// it could be the trace of tampering, not a benign absence).
     #[test]
-    fn fichero_corrupto_es_err_no_store_vacio() {
+    fn corrupt_file_is_err_not_an_empty_store() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("lua-trust.toml");
-        std::fs::write(&p, b"no es toml valido \xFF\xFE [[[").unwrap();
+        std::fs::write(&p, b"not valid toml \xFF\xFE [[[").unwrap();
         assert!(TrustStore::open(p).is_err());
     }
 
-    /// BAJA-5 (pin anti-inyección): un `script_path` con sintaxis TOML
-    /// embebida (comillas, saltos de línea, una tabla `[[entry]]` de
-    /// mentira) no debe corromper el fichero ni crear una segunda entrada
-    /// fantasma — como el campo se serializa vía `serde`/`toml` (no por
-    /// interpolación manual de strings), el escapado es automático.
+    /// LOW-5 (anti-injection pin): a `script_path` with embedded TOML
+    /// syntax (quotes, newlines, a fake `[[entry]]` table) must not
+    /// corrupt the file nor create a second phantom entry — since the
+    /// field is serialized via `serde`/`toml` (not by manual string
+    /// interpolation), escaping is automatic.
     #[test]
-    fn path_hostil_con_sintaxis_toml_embebida_sobrevive_round_trip() {
+    fn hostile_path_with_embedded_toml_syntax_survives_round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("lua-trust.toml");
-        let hostile = Path::new("/tmp/\"comillas\"\n[[entry]]\npath = \"inyectado\"\n/init.lua");
+        let hostile = Path::new("/tmp/\"quotes\"\n[[entry]]\npath = \"injected\"\n/init.lua");
         let content = b"c";
         let mut store = TrustStore::open(p.clone()).unwrap();
         store.record(hostile, content, true).unwrap();
@@ -437,20 +436,21 @@ mod tests {
         assert_eq!(reopened.entries.len(), 1);
     }
 
-    /// Si la persistencia falla, la entrada NO debe quedar "trusted" en
-    /// memoria sin respaldo en disco (si no, un reinicio del proceso vería
-    /// `Unknown` para algo que un `check` anterior, en el mismo proceso,
-    /// había reportado como `Trusted` — una mentira transitoria).
+    /// If persistence fails, the entry must NOT remain "trusted" in memory
+    /// without backing on disk (otherwise a process restart would see
+    /// `Unknown` for something an earlier `check`, in the same process,
+    /// had reported as `Trusted` — a transient lie).
     #[test]
-    fn write_fallido_no_deja_divergir_memoria_de_disco() {
+    fn failed_write_does_not_let_memory_diverge_from_disk() {
         let dir = tempfile::tempdir().unwrap();
-        // Abrimos con una ruta válida (open() no debe ver el problema)...
+        // Open with a valid path (open() must not see the problem)...
         let mut store = TrustStore::open(dir.path().join("lua-trust.toml")).unwrap();
-        // ...y DESPUÉS rompemos el "directorio padre" convirtiéndolo en un
-        // fichero: crear el dir falla, y con él debe fallar `record` entero
-        // (acceso al campo privado `path`, legal desde el submódulo test).
-        let blocker = dir.path().join("no-es-un-dir");
-        std::fs::write(&blocker, b"soy un fichero, no un directorio").unwrap();
+        // ...and THEN break the "parent directory" by turning it into a
+        // file: creating the dir fails, and with it `record` as a whole
+        // must fail (access to the private `path` field, legal from the
+        // test submodule).
+        let blocker = dir.path().join("not-a-dir");
+        std::fs::write(&blocker, b"I am a file, not a directory").unwrap();
         store.path = blocker.join("subdir").join("lua-trust.toml");
         let p = Path::new("/x/init.lua");
         assert!(store.record(p, b"c", true).is_err());

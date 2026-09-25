@@ -1,7 +1,7 @@
-//! Los constructores que comparten los tests de `app`: paths, entradas,
-//! panes y `App` ya montadas. Vive fuera de cualquier `mod tests` porque lo
-//! usan los de siete módulos hermanos, y duplicarlo en cada uno era la
-//! alternativa.
+//! The constructors `app`'s tests share: paths, entries, panes and
+//! already-assembled `App`s. Lives outside any `mod tests` because seven
+//! sibling modules use it, and duplicating it in each one was the
+//! alternative.
 
 use super::pane::Pane;
 use super::*;
@@ -29,32 +29,32 @@ pub fn names(p: &Pane) -> Vec<String> {
 }
 
 pub fn vp(wire: &str) -> VPath {
-    VPath::parse(wire).expect("wire de test")
+    VPath::parse(wire).expect("test wire")
 }
 
-/// Pane sobre `mem://` con archivos nombrados como se pida: #54, `Pane`
-/// (vía `PaneState::new`) normaliza el orden internamente (dirs primero,
-/// NFC, empate por bytes) — los tests del quick search razonan sobre el
-/// índice real YA ORDENADO, no sobre el orden de llegada de `names`.
+/// Pane over `mem://` with files named as requested: #54, `Pane` (via
+/// `PaneState::new`) normalizes the order internally (dirs first, NFC, ties
+/// by bytes) — the quick search tests reason over the real, ALREADY SORTED
+/// index, not over `names`'s arrival order.
 pub fn pane_con(names: &[&str]) -> Pane {
     Pane::new(root(), names.iter().map(|n| file(n)).collect())
 }
 
-pub fn app_dos_panes() -> App {
+pub fn app_two_panes() -> App {
     App::new(pane_con(&["a"]), pane_con(&["b"]))
 }
 
-/// Unas caps cualesquiera: lo que se prueba es el CACHÉ por scheme, no
-/// qué flags trae el provider.
-pub fn caps_de_test() -> norte_proto::Capabilities {
+/// Some caps or other: what's tested is the per-scheme CACHE, not which
+/// flags the provider carries.
+pub fn test_caps() -> norte_proto::Capabilities {
     norte_proto::Capabilities {
         flags: norte_proto::CapabilityFlags::RENAME_ATOMIC,
         max_path: None,
     }
 }
 
-/// `App` con cada pane sobre SU dir (el `app_dos_panes` de arriba pone
-/// los dos sobre `root()`, que no distingue lados).
+/// `App` with each pane on ITS OWN dir (the `app_two_panes` above puts both
+/// on `root()`, which doesn't distinguish sides).
 pub fn app_en(left: &str, right: &str) -> App {
     App::new(
         Pane::new(vp(left), Vec::new()),
@@ -72,19 +72,19 @@ pub fn e(wire: &str, k: EntryKind) -> Entry {
     }
 }
 
-/// App de un solo listado de nombres, sobre `mem://` (task 9, #103):
-/// vía `pane_con` — mismo orden real que pinta la UI — con foco en el
-/// pane lleno; el otro vacío. Nombre distinto de `app_with_sized_entries`
-/// (`tests/status_marks.rs`): esa lleva tamaño explícito, esta solo
-/// nombres.
+/// App with a single listing of names, over `mem://` (task 9, #103): via
+/// `pane_con` — the same real order the UI paints — with focus on the full
+/// pane; the other one empty. Different name from `app_with_sized_entries`
+/// (`tests/status_marks.rs`): that one carries an explicit size, this one
+/// only names.
 pub fn app_with_entries(names: &[&str]) -> App {
     App::new(pane_con(names), Pane::new(root(), Vec::new()))
 }
 
-/// Como [`app_with_entries`], con el pane INACTIVO plantado en `dst`
-/// (vacío): el destino ortodoxo de F5/F6 es el DIRECTORIO del otro pane
-/// (#103 T10), así que los tests del lote necesitan un destino distinto
-/// de la raíz de origen.
+/// Like [`app_with_entries`], with the INACTIVE pane planted on `dst`
+/// (empty): the orthodox destination for F5/F6 is the OTHER pane's
+/// DIRECTORY (#103 T10), so the batch tests need a destination different
+/// from the source root.
 pub fn app_with_two_panes(names: &[&str], dst: &str) -> App {
     App::new(
         pane_con(names),
@@ -92,8 +92,8 @@ pub fn app_with_two_panes(names: &[&str], dst: &str) -> App {
     )
 }
 
-/// Una notif `connection.degraded` como la del wire (#44).
-pub fn degradacion_de_test(scheme: &str, host: &str) -> norte_proto::methods::ConnectionDegraded {
+/// A `connection.degraded` notice like the wire's (#44).
+pub fn test_degraded(scheme: &str, host: &str) -> norte_proto::methods::ConnectionDegraded {
     norte_proto::methods::ConnectionDegraded {
         scheme: scheme.to_owned(),
         host: host.to_owned(),
@@ -102,13 +102,9 @@ pub fn degradacion_de_test(scheme: &str, host: &str) -> norte_proto::methods::Co
     }
 }
 
-/// Fila de comparación de un lado (huérfano) con la clase y el tamaño
-/// pedidos, para las pruebas de `compare_size_probe_targets` (#157).
-pub fn fila_huerfana(
-    id: u64,
-    kind: EntryKind,
-    size: Option<u64>,
-) -> norte_proto::methods::CompareRow {
+/// A one-sided (orphan) comparison row with the requested kind and size, for
+/// the `compare_size_probe_targets` tests (#157).
+pub fn orphan_row(id: u64, kind: EntryKind, size: Option<u64>) -> norte_proto::methods::CompareRow {
     use norte_proto::methods::{CompareConfidence, CompareCriterion, CompareVerdict};
     norte_proto::methods::CompareRow {
         id,

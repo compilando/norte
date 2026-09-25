@@ -1,890 +1,910 @@
-//! Lo que el renderer PIDE.
+//! What the renderer ASKS FOR.
 //!
-//! Son acciones SEMÁNTICAS, no métodos del backend: «mueve el cursor», no
-//! «llama a `fs.list` con este cursor». La diferencia importa porque lo que
-//! se expone es lo que un renderer puede hacer, y un renderer no debe poder
-//! pedir un `rpc(method, params)` arbitrario (ADR 0066, decisión D11).
+//! These are SEMANTIC actions, not backend methods: "move the cursor", not
+//! "call `fs.list` with this cursor". The difference matters because what
+//! is exposed is what a renderer can do, and a renderer must not be able to
+//! request an arbitrary `rpc(method, params)` (ADR 0066, decision D11).
 //!
-//! Ninguna acción nombra un path. Se actúa sobre filas por su [`RowKey`], y
-//! toda acción que nombre una fila lleva TAMBIÉN la generación en la que el
-//! renderer la vio. Sin ese par la clave no dice nada: es un índice, y un
-//! índice de una pantalla anterior nombra otro fichero. El host compara la
-//! generación con la época del listado y responde
-//! [`crate::ActionAck::Stale`] cuando no coinciden — que es lo que impide que
-//! un click tardío actúe sobre lo que ocupó esa fila DESPUÉS.
+//! No action names a path. Rows are acted on by their [`RowKey`], and every
+//! action that names a row ALSO carries the generation in which the
+//! renderer saw it. Without that pair the key says nothing: it is an index,
+//! and an index from an earlier screen names a different file. The host
+//! compares the generation with the listing's epoch and answers
+//! [`crate::ActionAck::Stale`] when they do not match — which is what stops
+//! a late click from acting on what occupied that row AFTERWARD.
 //!
-//! Y ninguna acción acepta una cadena de ruta, ni la aceptará: lo que el
-//! renderer puede nombrar es lo que el host le dio.
+//! And no action accepts a path string, nor ever will: what the renderer can
+//! name is what the host gave it.
 
 use serde::{Deserialize, Serialize};
 
 use crate::bridge::{ModalId, RowKey};
 use crate::keys::KeyInput;
 
-/// Qué hace un botón de la barra de pestañas (ADR 0133).
+/// What a tab-bar button does (ADR 0133).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TabVerb {
-    /// Abrir una pestaña en el grupo (`pane.tab-new`).
+    /// Open a tab in the group (`pane.tab-new`).
     New,
-    /// Cerrar la pestaña (`pane.tab-close`).
+    /// Close the tab (`pane.tab-close`).
     Close,
 }
 
-/// Una petición del renderer.
+/// A request from the renderer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "action")]
 pub enum UiAction {
-    /// Mueve el cursor del hueco. `delta` en filas; negativo hacia arriba.
+    /// Moves the slot's cursor. `delta` in rows; negative is upward.
     ///
-    /// Es la acción que más se repite (una tecla mantenida) y el host NO la
-    /// fusiona: aplica una por una y emite un parche de cursor por cada una.
-    /// Con el renderer de referencia no hay nada que fusionar —serializa sus
-    /// llamadas, así que como mucho hay una en el buzón—, y fusionar sin
-    /// necesidad complica el punto donde se contestan los acuses. Un renderer
-    /// que mande en lotes hará que valga la pena; hasta entonces, esto
-    /// describe lo que pasa y no lo que estaría bien.
+    /// It is the most-repeated action (a held key) and the host does NOT
+    /// coalesce it: it applies them one by one and emits one cursor patch
+    /// per each. With the reference renderer there is nothing to coalesce —
+    /// it serializes its calls, so there is at most one in the mailbox — and
+    /// coalescing without need complicates the point where acks are
+    /// answered. A renderer that sends in batches will make it worth it;
+    /// until then, this describes what happens, not what would be nice.
     MoveCursor {
-        /// Hueco.
+        /// Slot.
         slot_id: u32,
-        /// Filas a mover.
+        /// Rows to move.
         delta: i64,
     },
-    /// Pone el cursor en una fila concreta (un click).
+    /// Puts the cursor on a specific row (a click).
     SelectRow {
-        /// Hueco.
+        /// Slot.
         slot_id: u32,
-        /// Fila.
+        /// Row.
         key: RowKey,
-        /// La generación en la que el renderer vio esa fila.
+        /// The generation in which the renderer saw that row.
         generation: u64,
     },
-    /// Marca o desmarca una fila.
+    /// Marks or unmarks a row.
     ToggleMark {
-        /// Hueco.
+        /// Slot.
         slot_id: u32,
-        /// Fila.
+        /// Row.
         key: RowKey,
-        /// La generación en la que el renderer vio esa fila.
+        /// The generation in which the renderer saw that row.
         generation: u64,
     },
-    /// Marca TODO el rango entre dos filas, extremos incluidos.
+    /// Marks the WHOLE range between two rows, ends included.
     ///
-    /// Un barrido con el ratón (shift+click, arrastre) es UNA acción y no una
-    /// ristra de `ToggleMark`: qué entra en un rango —y qué no, como `..`—
-    /// es una regla de selección, y esas viven en `norte-frontend`, no en el
-    /// renderer (ADR 0066, decisión D14). El orden de los extremos da igual.
+    /// A mouse sweep (shift+click, drag) is ONE action, not a string of
+    /// `ToggleMark`s: what belongs in a range — and what does not, like
+    /// `..` — is a selection rule, and those live in `norte-frontend`, not
+    /// in the renderer (ADR 0066, decision D14). The order of the ends does
+    /// not matter.
     MarkRange {
-        /// Hueco.
+        /// Slot.
         slot_id: u32,
-        /// Un extremo.
+        /// One end.
         from: RowKey,
-        /// El otro.
+        /// The other.
         to: RowKey,
-        /// La generación en la que el renderer vio esas filas.
+        /// The generation in which the renderer saw those rows.
         generation: u64,
     },
-    /// Abre lo que haya bajo esa fila: entra en el directorio, o abre el
-    /// fichero por el camino de siempre.
+    /// Opens whatever is under that row: enters the directory, or opens the
+    /// file the usual way.
     Activate {
-        /// Hueco.
+        /// Slot.
         slot_id: u32,
-        /// Fila.
+        /// Row.
         key: RowKey,
-        /// La generación en la que el renderer vio esa fila.
+        /// The generation in which the renderer saw that row.
         generation: u64,
     },
-    /// Sube al directorio padre.
+    /// Goes up to the parent directory.
     Parent {
-        /// Hueco.
+        /// Slot.
         slot_id: u32,
     },
-    /// Pulsa una miga de la ruta (puente 65): navega al directorio con los
-    /// primeros `depth` tramos de la ruta actual. `0` es la raíz.
+    /// Clicks a breadcrumb (bridge 65): navigates to the directory with the
+    /// current path's first `depth` segments. `0` is the root.
     ///
-    /// Por PROFUNDIDAD y no por nombre: los tramos ya viajaron enmascarados,
-    /// y un nombre enmascarado no vuelve a ser un nombre.
+    /// By DEPTH and not by name: the segments already traveled masked, and
+    /// a masked name is not a name again.
     BreadcrumbActivate {
-        /// Hueco.
+        /// Slot.
         slot_id: u32,
-        /// Cuántos tramos conservar.
+        /// How many segments to keep.
         depth: u32,
-        /// La generación del listado que pintó esas migas. Si el hueco ya
-        /// navegó a otro sitio, la profundidad se refiere a una ruta que
-        /// ya no está: la miga es rancia y no se reinterpreta sobre la nueva.
+        /// The generation of the listing that painted those breadcrumbs. If
+        /// the slot already navigated elsewhere, the depth refers to a path
+        /// that is no longer there: the breadcrumb is stale and is not
+        /// reinterpreted over the new one.
         generation: u64,
     },
-    /// Atrás y adelante en el rastro de navegación.
+    /// Back and forward in the navigation trail.
     History {
-        /// Hueco.
+        /// Slot.
         slot_id: u32,
-        /// `true` = atrás.
+        /// `true` = back.
         back: bool,
     },
-    /// La ventana visible cambió (scroll o resize).
+    /// The visible window changed (scroll or resize).
     ///
-    /// Llega DEBOUNCED desde el renderer: el pintado del scroll es suyo, y lo
-    /// único que cruza es qué filas hacen falta.
+    /// Arrives DEBOUNCED from the renderer: painting the scroll is its own,
+    /// and the only thing that crosses is which rows are needed.
     SetVisibleRange {
-        /// Hueco.
+        /// Slot.
         slot_id: u32,
-        /// Primera fila visible.
+        /// First visible row.
         first: u64,
-        /// Cuántas caben.
+        /// How many fit.
         count: u32,
     },
-    /// Ordena el listado por una columna (un click en su cabecera).
+    /// Sorts the listing by a column (a click on its header).
     ///
-    /// La columna va por su ID, no por su posición ni por su etiqueta: qué
-    /// significa ordenar por ella —y si se invierte o empieza de nuevo— lo
-    /// decide la regla compartida (`SortSpec::after_click`), no el renderer.
+    /// The column travels by its ID, not its position or its label: what
+    /// sorting by it means — and whether it reverses or starts over — is
+    /// decided by the shared rule (`SortSpec::after_click`), not the
+    /// renderer.
     SortBy {
-        /// Hueco.
+        /// Slot.
         slot_id: u32,
-        /// Id de la columna, tal como viajó en su cabecera.
+        /// The column's id, as it traveled in its header.
         column: String,
     },
-    /// Fija el ancho de una columna (arrastrar el borde de su cabecera,
-    /// puente 64).
+    /// Sets a column's width (dragging its header's edge, bridge 64).
     ///
-    /// El ancho es de la COLUMNA, no del hueco: `[ui.columns] spec.width`
-    /// es global, así que todos los huecos que la pintan cambian a la vez,
-    /// y el terminal la lee igual en su siguiente carga. `cells` llega en
-    /// celdas de la rejilla; el host lo acota a lo que la configuración
-    /// acepta.
+    /// The width belongs to the COLUMN, not the slot: `[ui.columns]
+    /// spec.width` is global, so every slot that paints it changes at once,
+    /// and the terminal reads the same value on its next load. `cells`
+    /// arrives in grid cells; the host clamps it to what the configuration
+    /// accepts.
     ResizeColumn {
-        /// Hueco donde se arrastró.
+        /// The slot where it was dragged.
         slot_id: u32,
-        /// Id de la columna, tal como viajó en su cabecera.
+        /// The column's id, as it traveled in its header.
         column: String,
-        /// Ancho pedido, en celdas.
+        /// Requested width, in cells.
         cells: u16,
     },
-    /// Cambia el foco de teclado de hueco.
+    /// Changes which slot has keyboard focus.
     FocusSlot {
-        /// Hueco.
+        /// Slot.
         slot_id: u32,
     },
-    /// Responde a un diálogo.
+    /// Answers a dialog.
     ///
-    /// El `choice` es uno de los ids que el propio diálogo publicó. Un id que
-    /// no esté en la lista no se interpreta: no hay respuestas implícitas.
+    /// The `choice` is one of the ids the dialog itself published. An id
+    /// not in the list is not interpreted: there are no implicit answers.
     Dialog {
-        /// Diálogo.
+        /// Dialog.
         id: ModalId,
-        /// Respuesta elegida.
+        /// Chosen answer.
         choice: String,
-        /// La contraseña, y SOLO para un diálogo que la pide (#327).
+        /// The password, and ONLY for a dialog that asks for one (#327).
         ///
-        /// Viaja aquí y no por [`Self::DialogInput`] a propósito. Ese manda el
-        /// campo ENTERO en cada pulsación, que para un nombre de fichero está
-        /// bien y para una contraseña significa que `h`, `hu`, `hun`… cruzan el
-        /// IPC y se quedan, cada uno en su trozo de heap que nadie pisa: una
-        /// contraseña de veinte caracteres deja veinte prefijos suyos por el
-        /// camino. Con esto cruza UNA vez, en el instante en que el lector
-        /// decide entregarla.
+        /// It travels here and deliberately not through
+        /// [`Self::DialogInput`]. That one sends the WHOLE field on every
+        /// keystroke, which is fine for a file name and for a password means
+        /// `h`, `hu`, `hun`… cross the IPC and stay, each in its own bit of
+        /// heap that nobody overwrites: a twenty-character password leaves
+        /// twenty of its own prefixes along the way. With this it crosses
+        /// ONCE, at the moment the reader decides to hand it over.
         ///
-        /// El corolario es que **el host no sabe lo que se está tecleando**
-        /// hasta ese momento, y no le hace falta: el campo lo enmascara el
-        /// propio `input type=password` del renderer, así que no hay puntos
-        /// que contar. Lo que el host no tiene no se le puede escapar.
+        /// The corollary is that **the host does not know what is being
+        /// typed** until that moment, and does not need to: the field is
+        /// masked by the renderer's own `input type=password`, so there are
+        /// no keystrokes to count. What the host does not have cannot leak
+        /// from it.
         ///
-        /// `None` en todos los demás diálogos, y en uno de secreto significa
-        /// campo vacío: confirmar así es INERTE (ver `responder_dialogo`).
+        /// `None` in every other dialog, and in a secret one means an empty
+        /// field: confirming like that is INERT (see `responder_dialog`).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         secret: Option<String>,
     },
-    /// Vuelve a listar UN hueco: el reintento de uno que quedó en error.
+    /// Re-lists ONE slot: the retry of one left in error.
     ///
-    /// Por hueco y no `pane.refresh`, que relista todos los visibles y actúa
-    /// sobre el foco: esto lo dispara un clic SOBRE el error de un hueco
-    /// concreto, y refrescar los otros de paso sería hacer más de lo que se
-    /// pidió.
+    /// Per slot and not `pane.refresh`, which re-lists every visible one
+    /// and acts on the focus: this is triggered by a click ON a specific
+    /// slot's error, and refreshing the others along the way would be doing
+    /// more than was asked.
     ///
-    /// Es el gesto que convierte un panel parado en la pregunta que
-    /// corresponda —la contraseña de una conexión, típicamente—: el host no
-    /// pregunta solo al arrancar, porque restaurar una sesión no es pedir
-    /// conectarse.
+    /// It is the gesture that turns a stalled pane into the matching
+    /// question — a connection's password, typically: the host does not ask
+    /// only at startup, because restoring a session is not requesting to
+    /// connect.
     RefreshSlot {
-        /// El hueco que se reintenta.
+        /// The slot being retried.
         slot_id: u32,
     },
-    /// Enseñar el registro hasta este nivel (#326).
+    /// Show the log up to this level (#326).
     ///
-    /// Sube el del ANILLO si hace falta y nunca lo baja: filtrar en la
-    /// pantalla lo que nunca se registró es imposible, y dejar de capturar al
-    /// bajar dejaría un agujero del tamaño del rato que se estuvo abajo.
+    /// Raises the RING's level if needed and never lowers it: filtering on
+    /// screen what was never logged is impossible, and stopping capture
+    /// when lowering it would leave a hole the size of however long it was
+    /// down.
     LogSetLevel {
-        /// Vocabulario CERRADO: `error`, `warn`, `info`, `debug`, `trace`.
-        /// Uno que no se conoce se DICE, no cae en `info`.
+        /// CLOSED vocabulary: `error`, `warn`, `info`, `debug`, `trace`. An
+        /// unknown one is STATED, it does not fall back to `info`.
         level: String,
     },
-    /// El filtro de texto del registro, sobre módulo y mensaje.
+    /// The log's text filter, over module and message.
     LogSetFilter {
-        /// Lo tecleado. Vacío = todo.
+        /// What was typed. Empty = everything.
         filter: String,
     },
-    /// Sube (`delta` negativo) o baja por el registro, despegándose del final.
+    /// Scrolls up (`delta` negative) or down through the log, detaching
+    /// from the end.
     LogScroll {
-        /// Líneas. El renderer manda las que su rueda o su tecla signifiquen.
+        /// Lines. The renderer sends whatever its wheel or key means.
         delta: i64,
     },
-    /// Se pulsó una CELDA de un panel de plugin (fase 3).
+    /// A CELL of a plugin panel was clicked (phase 3).
     ///
-    /// Viaja la celda, no un comando: el host tiene el marco y resuelve qué
-    /// zona era y qué comando le toca, con el mismo filtro que aplica el
-    /// terminal (`norte_frontend::frame::zona_puede`). El renderer cuenta lo
-    /// que pasó; qué significa lo decide quien tiene el estado.
+    /// The cell travels, not a command: the host has the frame and resolves
+    /// what zone it was and what command applies to it, with the same
+    /// filter the terminal applies (`norte_frontend::frame::zone_can`).
+    /// The renderer reports what happened; what it means is decided by
+    /// whoever holds the state.
     PanelClick {
-        /// Qué hueco.
+        /// Which slot.
         slot_id: u32,
-        /// Fila dentro del marco, sin el borde.
+        /// Row inside the frame, without the border.
         row: u16,
-        /// Columna dentro del marco, sin el borde.
+        /// Column inside the frame, without the border.
         col: u16,
     },
-    /// Desplaza el visor ACOPLADO de un hueco (#291): la rueda sobre él. Las
-    /// teclas no pasan por aquí — van por el keymap del visor cuando el hueco
-    /// tiene el foco, como en la TUI.
+    /// Scrolls a slot's DOCKED viewer (#291): the wheel over it. Keys do
+    /// not go through here — they go through the viewer's keymap when the
+    /// slot has focus, like in the TUI.
     PreviewScroll {
-        /// Qué hueco.
+        /// Which slot.
         slot_id: u32,
-        /// Líneas, negativo hacia arriba.
+        /// Lines, negative is upward.
         delta: i64,
     },
-    /// Desplaza el visor a pantalla completa: la RUEDA sobre él (puente 59).
+    /// Scrolls the full-screen viewer: the WHEEL over it (bridge 59).
     ///
-    /// Las teclas no pasan por aquí —van por el keymap del visor—, igual que
-    /// en [`UiAction::PreviewScroll`]. Existe porque una rueda no es una
-    /// tecla: el renderer sabe cuántas líneas significa un giro en su
-    /// plataforma, y fabricar pulsaciones de flecha para expresarlo dejaría el
-    /// gesto atado a que alguien no reatara esa flecha.
+    /// Keys do not go through here — they go through the viewer's keymap —
+    /// same as in [`UiAction::PreviewScroll`]. It exists because a wheel is
+    /// not a key: the renderer knows how many lines a turn means on its
+    /// platform, and manufacturing arrow keystrokes to express it would tie
+    /// the gesture to nobody rebinding that arrow.
     ///
-    /// Los dos ejes en UNA acción: la rueda con `shift` desplaza a lo ancho, y
-    /// separarlos serían dos acciones que siempre se mandan por el mismo
-    /// gesto.
+    /// Both axes in ONE action: the wheel with `shift` scrolls sideways, and
+    /// splitting them would be two actions that are always sent by the same
+    /// gesture.
     ViewerScroll {
-        /// Líneas, negativo hacia arriba.
+        /// Lines, negative is upward.
         lines: i64,
-        /// Columnas, negativo hacia la izquierda.
+        /// Columns, negative is toward the left.
         cols: i64,
     },
-    /// Vuelve a pegar el registro al final y sigue lo que llega.
+    /// Sticks the log back to the end and follows what arrives.
     LogFollow,
-    /// Recorre la FUENTE del registro: los dos → esta ventana → el daemon
-    /// (#328).
+    /// Cycles the log's SOURCE: both → this window → the daemon (#328).
     ///
-    /// UN mando y no tres, y sin parámetro: son tres estados de una misma
-    /// pregunta —«¿de quién quiero leer?»— y un `set` con vocabulario abierto
-    /// obligaría a validar en el host una cadena que el renderer no tiene
-    /// motivo para componer.
+    /// ONE command and not three, and with no parameter: they are three
+    /// states of the same question — "whose do I want to read?" — and a
+    /// `set` with open vocabulary would force the host to validate a string
+    /// the renderer has no reason to compose.
     ///
-    /// No hace nada visible cuando no hay una segunda fuente: entonces el
-    /// renderer ni siquiera pinta el selector (`sources_available`).
+    /// Does nothing visible when there is no second source: then the
+    /// renderer does not even paint the selector (`sources_available`).
     LogCycleSource,
-    /// Cuántas filas de registro cabían en el último frame.
+    /// How many log rows fit in the last frame.
     ///
-    /// La pone el renderer, como la ventana del listado: adivinarla en el host
-    /// es lo que en la TUI hizo que cada página se saltara dos líneas y la
-    /// primera cuatro, y lo que ninguna de las dos ventanas enseñaba no se
-    /// podía leer de ninguna manera.
+    /// Set by the renderer, like the listing's window: guessing it on the
+    /// host is what made the TUI skip two lines on each page and four on the
+    /// first, and what neither window showed could not be read at all.
     LogSetVisibleRange {
-        /// Filas visibles. Cero se trata como una.
+        /// Visible rows. Zero is treated as one.
         rows: u32,
     },
-    /// La ventana ganó o perdió el foco del escritorio (#285).
+    /// The window gained or lost desktop focus (#285).
     ///
-    /// El host lo necesita para no avisar por fuera de lo que ya se está
-    /// viendo: con la ventana delante, la barra y el tablero cuentan lo mismo
-    /// que contaría una notificación, y duplicarlo es ruido.
+    /// The host needs this to avoid notifying about what is already being
+    /// looked at from the outside: with the window in front, the bar and
+    /// the board already report what a notification would report, and
+    /// duplicating it is noise.
     ///
-    /// Se asume ENFOCADA mientras nadie diga lo contrario: un renderer que no
-    /// mande esto se comporta como antes de #285 —avisa siempre— en vez de
-    /// callarse, que sería perder avisos sin que nadie lo note.
+    /// Assumed FOCUSED until told otherwise: a renderer that does not send
+    /// this behaves as before #285 — always notifies — instead of going
+    /// silent, which would be losing notifications with nobody noticing.
     WindowFocus {
-        /// `true` si la ventana está delante.
+        /// `true` if the window is in front.
         focused: bool,
     },
-    /// El lector eligió un directorio en el selector del ESCRITORIO, o lo
-    /// cerró sin elegir (#284).
+    /// The reader picked a directory in the DESKTOP picker, or closed it
+    /// without picking one (#284).
     ///
-    /// La ruta viene del renderer, así que se trata como todo lo que viene de
-    /// ahí: se valida, y sobre todo se ENSEÑA en la confirmación antes de
-    /// tocar nada. Lo que NO viene en este mensaje es qué se copia — eso sigue
-    /// siendo del estado del host, que es la regla de ADR 0069.
+    /// The path comes from the renderer, so it is treated like everything
+    /// from there: it is validated, and above all it is SHOWN in the
+    /// confirmation before touching anything. What does NOT come in this
+    /// message is what gets copied — that stays the host's state, per ADR
+    /// 0069's rule.
     DirectoryPicked {
-        /// La ruta NATIVA elegida, o `None` si se cerró el selector. Es texto
-        /// del sistema de ficheros, no un `VPath`: convertirla es del host.
+        /// The chosen NATIVE path, or `None` if the picker was closed. It is
+        /// filesystem text, not a `VPath`: converting it is the host's job.
         path: Option<String>,
     },
-    /// Un programa que se corrió esperándolo (`NativeEffect::RunProgram`)
-    /// terminó (#312): lo que imprimió, en bruto. El host lo enmascara,
-    /// lo parte en líneas y lo acota antes de enseñarlo — es texto de otro
-    /// programa sobre ficheros que nombró cualquiera.
+    /// A program run and waited on (`NativeEffect::RunProgram`) finished
+    /// (#312): what it printed, raw. The host masks it, splits it into
+    /// lines and clamps it before showing it — it is another program's text
+    /// about files anyone could have named.
     ProgramFinished {
-        /// La clave del título que viajó en el efecto.
+        /// The title key that traveled in the effect.
         title_key: String,
-        /// El argv que corrió, ya en texto para decirlo (lossy: es para
-        /// enseñarlo, no para volver a correrlo).
+        /// The argv that ran, already as text to display (lossy: it is for
+        /// showing, not for running again).
         command: String,
-        /// stdout y stderr, en ese orden, hasta el tope del que hospeda.
+        /// stdout and stderr, in that order, up to the host's cap.
         output: Vec<u8>,
-        /// Quien hospeda cortó la salida.
+        /// The host truncated the output.
         truncated: bool,
-        /// No arrancó, o se pasó del plazo.
+        /// It did not start, or it ran past the deadline.
         failed: bool,
     },
-    /// El lector SOLTÓ ficheros del escritorio sobre la ventana (#283).
+    /// The reader DROPPED files from the desktop onto the window (#283).
     ///
-    /// Solo entra: arrastrar hacia FUERA no se ofrece, porque eso es publicar
-    /// las rutas de lo marcado a cualquier aplicación que acepte el drop, y
-    /// ese es otro diseño (ADR 0074).
+    /// Inbound only: dragging OUT is not offered, because that is
+    /// publishing the marked items' paths to any application that accepts
+    /// the drop, and that is a different design (ADR 0074).
     ///
-    /// Las rutas vienen de OTRO proceso —el emisor compone la lista a mano si
-    /// quiere—, así que no se copia nada por recibirlas: abren la misma
-    /// confirmación que copiar, con los nombres enmascarados. Un drop es un
-    /// gesto sin confirmación por naturaleza y esta ventana pregunta antes de
-    /// escribir; la pregunta es justamente lo que acota que la lista sea
-    /// ajena.
+    /// The paths come from ANOTHER process — the sender composes the list
+    /// by hand if it wants to — so nothing is copied just by receiving them:
+    /// they open the same confirmation as copying, with masked names. A
+    /// drop is a gesture with no confirmation by nature, and this window
+    /// asks before writing; the question is exactly what bounds the list
+    /// being foreign.
     FilesDropped {
-        /// Rutas NATIVAS de esta máquina, tal cual las manda el escritorio.
-        /// Texto del sistema de ficheros, no `VPath`: convertirlas es del
-        /// host, y la que no convierta se descarta diciéndolo.
+        /// NATIVE paths of this machine, exactly as the desktop sends them.
+        /// Filesystem text, not `VPath`: converting them is the host's job,
+        /// and one that fails to convert is dropped, saying so.
         paths: Vec<String>,
     },
-    /// Teclea en el campo de texto del diálogo abierto.
+    /// Types into the open dialog's text field.
     DialogInput {
-        /// Diálogo.
+        /// Dialog.
         id: ModalId,
-        /// Texto completo tras la edición (no un delta: el renderer es dueño
-        /// del caret, y mandar el texto entero evita reconstruirlo en Rust).
+        /// Full text after the edit (not a delta: the renderer owns the
+        /// caret, and sending the whole text avoids rebuilding it in Rust).
         text: String,
     },
-    /// Toca un campo de un diálogo-FORMULARIO (puente 91).
+    /// Touches a field of a FORM dialog (bridge 91).
     ///
-    /// Aparte de [`Self::DialogInput`] y no una extensión suya, por dos
-    /// motivos: aquel nombra «el» campo —no hay más— y es el camino por el
-    /// que NO viaja una contraseña (#327), y un formulario tiene que decir
-    /// CUÁL de sus campos se tocó. Mezclarlos obligaría a que el diálogo de
-    /// la contraseña llevara un id de campo que no significa nada.
+    /// Separate from [`Self::DialogInput`] and not an extension of it, for
+    /// two reasons: that one names "the" field — there is no other — and it
+    /// is the path a password does NOT travel by (#327), and a form has to
+    /// say WHICH of its fields was touched. Mixing them would force the
+    /// password dialog to carry a field id that means nothing.
     DialogField {
-        /// Diálogo.
+        /// Dialog.
         id: ModalId,
-        /// Id estable del campo, de los que mandó `DialogFieldView::id`. Uno
-        /// que el diálogo no tenga se descarta: los campos los decide el
-        /// host.
+        /// The field's stable id, from the ones `DialogFieldView::id` sent.
+        /// One the dialog does not have is dropped: the host decides the
+        /// fields.
         field: String,
-        /// Qué se le hizo.
+        /// What was done to it.
         value: DialogFieldValue,
     },
-    /// Elige una fila del panel de diferencias, POR SU ID.
+    /// Chooses a row of the differences pane, BY ITS ID.
     ///
-    /// Por id y no por índice: un filtro esconde filas y las renumeraría, y
-    /// la selección tiene que seguir nombrando la misma.
+    /// By id and not by index: a filter hides rows and would renumber them,
+    /// and the selection has to keep naming the same one.
     CompareSelectRow {
-        /// El id que la fila trajo.
+        /// The id the row carried.
         id: u64,
     },
-    /// Abre la fila elegida: navega al directorio del lado ACTIVO.
+    /// Opens the chosen row: navigates to the ACTIVE side's directory.
     CompareActivateRow {
-        /// El id de la fila.
+        /// The row's id.
         id: u64,
     },
-    /// Enseña o esconde una categoría entera del panel de diferencias.
+    /// Shows or hides a whole category of the differences pane.
     CompareToggleFilter {
-        /// Id estable de la categoría (`same`, `different`…).
+        /// The category's stable id (`same`, `different`…).
         category: String,
     },
-    /// Dice qué ventana de filas está pintando el renderer.
+    /// States which window of rows the renderer is painting.
     ///
-    /// La comparación no tiene tope —un tope convertiría «¿son iguales?» en
-    /// media respuesta— así que lo que cruza el puente es una ventana, y esto
-    /// es lo que la mueve.
+    /// The comparison has no cap — a cap would turn "are they equal?" into
+    /// a half-answer — so what crosses the bridge is a window, and this is
+    /// what moves it.
     CompareSetVisibleRange {
-        /// Índice, entre las VISIBLES, de la primera fila pintada.
+        /// Index, among the VISIBLE ones, of the first painted row.
         first: u64,
-        /// Cuántas caben.
+        /// How many fit.
         count: u32,
     },
-    /// Pide cancelar una task.
+    /// Asks to cancel a task.
     CancelTask {
-        /// Id de la task.
+        /// The task's id.
         task_id: u64,
     },
-    /// El tamaño de la ventana cambió.
+    /// The window's size changed.
     ///
-    /// En CELDAS de layout, no en píxeles: los mínimos de cada panel están
-    /// declarados así y se comparten con el TUI, de modo que «esto no cabe»
-    /// significa lo mismo en las dos superficies. Redimensionar reparte otra
-    /// vez; jamás reescribe la disposición guardada, que es la intención del
-    /// usuario y no una función del tamaño de su ventana.
+    /// In layout CELLS, not pixels: each pane's minimums are declared that
+    /// way and shared with the TUI, so "this does not fit" means the same
+    /// thing on both surfaces. Resizing redistributes again; it never
+    /// rewrites the saved layout, which is the user's intent and not a
+    /// function of their window's size.
     SetViewport {
-        /// Ancho en celdas.
+        /// Width in cells.
         width: u16,
-        /// Alto en celdas.
+        /// Height in cells.
         height: u16,
     },
-    /// El escritorio pide esquema claro u oscuro (`prefers-color-scheme`).
+    /// The desktop asks for a light or dark scheme (`prefers-color-scheme`).
     ///
-    /// Lo manda el renderer al arrancar y cada vez que cambia. El host la
-    /// necesita —y no le basta con que el renderer enchufe las variables CSS
-    /// de la variante— porque desde el puente 66 el color de una entrada va
-    /// COCIDO en su fila: con `theme_dark = "vscode-dark"` y `theme_light =
-    /// "vscode-light"`, pasar el escritorio a claro repintaba toda la
-    /// pantalla con la paleta clara y dejaba los NOMBRES con los colores del
-    /// tema oscuro — azul #4daafc sobre blanco, 2,6:1, por debajo del suelo
-    /// que los propios presets prometen en su cabecera.
+    /// Sent by the renderer at startup and every time it changes. The host
+    /// needs it — and it is not enough for the renderer to just plug in the
+    /// variant's CSS variables — because since bridge 66 an entry's color
+    /// travels BAKED into its row: with `theme_dark = "vscode-dark"` and
+    /// `theme_light = "vscode-light"`, switching the desktop to light
+    /// repainted the whole screen with the light palette and left the NAMES
+    /// with the dark theme's colors — blue #4daafc on white, 2.6:1, below
+    /// the floor the presets themselves promise in their own header.
     SetColorScheme {
-        /// `true` = el escritorio pide oscuro.
+        /// `true` = the desktop asks for dark.
         dark: bool,
     },
-    /// Una tecla.
+    /// A key.
     ///
-    /// El renderer manda la tecla NORMALIZADA y nada más: quién resuelve un
-    /// contador, un prefijo a medias o qué comando lleva ligado es Rust, con
-    /// el mismo resolver y los mismos presets que el TUI. Dos keymaps serían
-    /// dos sitios donde divergir sin que nadie lo note.
+    /// The renderer sends the NORMALIZED key and nothing else: resolving a
+    /// count, a half-typed prefix, or which command is bound is Rust's job,
+    /// with the same resolver and the same presets as the TUI. Two keymaps
+    /// would be two places to diverge without anyone noticing.
     Key(KeyInput),
-    /// Cuántas líneas caben en el visor.
+    /// How many lines fit in the viewer.
     ///
-    /// El host no puede saberlo: su rejilla son celdas de disposición y el
-    /// cromo del visor lo pinta el renderer. Adivinarlo hacía dos cosas mal a
-    /// la vez —mandar más líneas de las que caben, que se recortan sin
-    /// decirlo, y avanzar una página por un número distinto del que se ve—,
-    /// así que cada página saltaba en silencio lo recortado.
+    /// The host cannot know this: its grid is layout cells and the viewer's
+    /// chrome is painted by the renderer. Guessing it did two things wrong
+    /// at once — sending more lines than fit, which get clipped without
+    /// saying so, and advancing a page by a number different from what is
+    /// shown — so every page silently skipped whatever got clipped.
     SetViewerRows {
-        /// Líneas visibles.
+        /// Visible lines.
         rows: u32,
     },
-    /// Cuántas CELDAS de ancho tiene el cuerpo del visor, medidas por quien
-    /// pinta. Es lo que se le dice al previewer (proto 0.66.0) la próxima
-    /// vez que se abra: el viewport entero contaba el cromo, y una imagen
-    /// encogida a él se salía por la derecha.
+    /// How many CELLS wide the viewer's body is, measured by whoever
+    /// paints. It is what gets told to the previewer (proto 0.66.0) the
+    /// next time it opens: the whole viewport counted the chrome, and an
+    /// image shrunk to it spilled out on the right.
     SetViewerCols {
-        /// Celdas de ancho del cuerpo.
+        /// Body width in cells.
         cols: u32,
     },
-    /// Pone el cursor de la lateral de la ayuda en esa fila y ENSEÑA lo que
-    /// haya (un click).
+    /// Puts the help sidebar's cursor on that row and SHOWS whatever is
+    /// there (a click).
     ///
-    /// Enseñar y no navegar, que es lo que hace la misma tecla de flecha:
-    /// recorrer el índice no debe dejarle al lector un paso de vuelta que
-    /// tenga que deshacer con `⌫` antes de poder cerrar. Una cabecera de
-    /// grupo y una fila fuera de rango no hacen nada.
+    /// Shows, does not navigate, which is what the same arrow key does:
+    /// walking the index must not leave the reader a step back that has to
+    /// be undone with `⌫` before being able to close it. A group header and
+    /// an out-of-range row do nothing.
     HelpSelectTopic {
-        /// Fila de la lateral, tal como viajó en el orden de `sidebar`.
+        /// Sidebar row, as it traveled in `sidebar`'s order.
         row: u32,
     },
-    /// Actúa sobre una fila ejecutable del cuerpo de la ayuda (un click):
-    /// corre el comando, o abre la página enlazada.
+    /// Acts on an executable row of the help body (a click): runs the
+    /// command, or opens the linked page.
     ///
-    /// Va por el MISMO camino que `enter`, y ese por el mismo que una tecla:
-    /// la ayuda es otra puerta al catálogo, no un segundo despachador.
+    /// Goes through the SAME path as `enter`, and that through the same one
+    /// as a key: help is another door into the catalogue, not a second
+    /// dispatcher.
     HelpActivate {
-        /// Índice dentro de `actions`.
+        /// Index within `actions`.
         index: u32,
     },
-    /// Pone el cursor de los ajustes en esa fila (un click).
+    /// Puts the settings cursor on that row (a click).
     ///
-    /// Solo mueve. Activarla es [`Self::SettingsActivate`].
+    /// Only moves. Activating it is [`Self::SettingsActivate`].
     SettingsSelectRow {
-        /// Fila, contando TODAS las de todas las secciones en orden.
+        /// Row, counting ALL of them across all sections in order.
         row: u32,
     },
-    /// Activa esa fila de los ajustes (un doble click): lo que gira, gira;
-    /// lo que se teclea, se pide en un diálogo. El mismo camino que `enter`
-    /// (puente 60).
+    /// Activates that settings row (a double click): whatever cycles,
+    /// cycles; whatever is typed is asked for in a dialog. The same path as
+    /// `enter` (bridge 60).
     SettingsActivate {
-        /// Fila, contando TODAS las de todas las secciones en orden.
+        /// Row, counting ALL of them across all sections in order.
         row: u32,
     },
-    /// Lo que hay escrito en el buscador de los ajustes.
+    /// What is typed in the settings search box.
     ///
-    /// Viaja el TEXTO entero y no la tecla: el buscador de esta ventana es
-    /// un `<input>` del navegador, y las teclas imprimibles no llegan al
-    /// host — que es por lo que esta pantalla no tuvo filtro hasta ahora.
+    /// The whole TEXT travels, not the key: this window's search box is a
+    /// browser `<input>`, and printable keys do not reach the host — which
+    /// is why this screen had no filter until now.
     SettingsQuery {
-        /// El texto tal y como está en la caja.
+        /// The text exactly as it is in the box.
         text: String,
     },
-    /// Lleva el cursor a una sección, por su clave ESTABLE (`appearance`,
+    /// Takes the cursor to a section, by its STABLE key (`appearance`,
     /// `open-with`…).
     ///
-    /// Por la clave y no por el rótulo traducido: el índice manda de vuelta
-    /// lo que el host le dio, y un rótulo viajando de ida y vuelta ataría el
-    /// salto al idioma.
+    /// By the key and not the translated label: the index sends back what
+    /// the host gave it, and a label traveling round-trip would tie the
+    /// jump to the language.
     SettingsJumpSection {
-        /// La clave estable de la sección, de `index` de la vista.
+        /// The section's stable key, from the view's `index`.
         section: String,
     },
-    /// Restablece esa fila: quita su clave de la capa de escritura.
+    /// Resets that row: removes its key from the write layer.
     SettingsReset {
-        /// Fila, contando TODAS las de todas las secciones en orden.
+        /// Row, counting ALL of them across all sections in order.
         row: u32,
     },
-    /// Pone un valor CONCRETO en un ajuste: lo que manda un interruptor, un
-    /// desplegable o un campo numérico de la ventana.
+    /// Sets a SPECIFIC value on a setting: what a toggle, a dropdown or a
+    /// numeric field of the window sends.
     ///
-    /// Por el ID del catálogo y no por la fila: un control tarda lo que
-    /// tarda el lector en soltarlo, y el filtro de detrás puede haber
-    /// cambiado qué filas hay. Una posición no nombra una fila en una lista
-    /// que se mueve.
+    /// By the catalogue's ID, not by row: a control takes as long as the
+    /// reader takes to release it, and the filter behind it may have
+    /// changed which rows there are. A position does not name a row in a
+    /// list that moves.
     ///
-    /// Y es PONER, no activar: `settings_activate` cicla, así que elegir el
-    /// séptimo tema de un desplegable serían siete viajes y seis escrituras
-    /// en el `norte.toml`. El valor lo valida el editor compartido, nunca el
-    /// renderer.
+    /// And it is SETTING, not activating: `settings_activate` cycles, so
+    /// choosing a dropdown's seventh theme would be seven trips and six
+    /// writes to `norte.toml`. The value is validated by the shared editor,
+    /// never by the renderer.
     SettingsSet {
-        /// El id del catálogo (`ui.theme`).
+        /// The catalogue's id (`ui.theme`).
         id: String,
-        /// El valor, como texto. Un booleano viaja como `true`/`false`.
+        /// The value, as text. A boolean travels as `true`/`false`.
         value: String,
     },
-    /// Pone delante la pestaña de este hueco (un click).
+    /// Brings this slot's tab to the front (a click).
     SelectTab {
-        /// El hueco que hay dentro de la pestaña elegida.
+        /// The slot inside the chosen tab.
         slot_id: u32,
     },
 
-    /// Elige una sesión de agente por posición (un click).
+    /// Chooses an agent session by position (a click).
     AgentSelectRow {
-        /// Fila dentro de la lista pintada.
+        /// Row within the painted list.
         row: u32,
-        /// La generación de la lista que el renderer estaba pintando.
+        /// The generation of the list the renderer was painting.
         ///
-        /// La lista cambia SIN gesto —una petición de permiso la reordena—,
-        /// así que un clic contra la de antes elige otra fila. Fuera de
-        /// generación se rehúsa: aquí «esta fila» es de quién se deshace el
-        /// trabajo.
+        /// The list changes WITHOUT a gesture — a permission request
+        /// reorders it — so a click against the previous one chooses a
+        /// different row. Out of generation is refused: here "this row" is
+        /// whose work gets undone.
         generation: u64,
     },
 
-    /// Elige una extensión del gestor (un click) y pide su ficha.
+    /// Chooses an extension in the manager (a click) and requests its
+    /// detail card.
     ExtensionSelectRow {
-        /// Fila, en el orden en que viajaron.
+        /// Row, in the order they traveled.
         row: u32,
     },
-    /// Gobierna la extensión de esa fila desde un BOTÓN (puente 61): la
-    /// señala y hace exactamente lo que el verbo del teclado haría sobre ella
-    /// —`dialog.add`, `dialog.toggle-enabled`, `dialog.remove`—, con las
-    /// mismas preguntas. Un botón no es un atajo para saltarse el diálogo de
-    /// consentimiento o el de borrado: es otra forma de llegar a él.
+    /// Governs that row's extension from a BUTTON (bridge 61): selects it
+    /// and does exactly what the keyboard verb would do to it —
+    /// `dialog.add`, `dialog.toggle-enabled`, `dialog.remove` — with the
+    /// same questions. A button is not a shortcut to skip the consent
+    /// dialog or the removal one: it is another way to reach it.
     ///
-    /// Lleva la fila Y su id: el catálogo se repide tras cada gobierno y
-    /// aterriza de fondo, así que una fila borrada por ENCIMA de la pulsada
-    /// corre todas las de debajo, y un índice solo nombraría a la vecina.
-    /// Si el id de esa fila ya no es este, se rehúsa como obsoleta.
+    /// Carries the row AND its id: the catalogue is re-requested after
+    /// every governing action and lands in the background, so a row deleted
+    /// ABOVE the one pressed shifts every one below it, and an index alone
+    /// would only name its neighbor. If that row's id is no longer this
+    /// one, it is refused as stale.
     ExtensionGovern {
-        /// Fila, en el orden en que viajaron.
+        /// Row, in the order they traveled.
         row: u32,
-        /// El id que el renderer vio en esa fila.
+        /// The id the renderer saw in that row.
         id: String,
-        /// Qué se cambia.
+        /// What is changed.
         change: ExtensionChange,
     },
-    /// Abre la ayuda en la página de la extensión de esa fila (puente 61), lo
-    /// que `app.help` hace sobre la fila elegida en el terminal. Cierra el
-    /// gestor, como allí: la ayuda lo sustituye. Misma pareja fila+id que
-    /// [`Self::ExtensionGovern`], por la misma razón.
+    /// Opens help on that row's extension page (bridge 61), what `app.help`
+    /// does on the selected row in the terminal. Closes the manager, as it
+    /// does there: help replaces it. Same row+id pair as
+    /// [`Self::ExtensionGovern`], for the same reason.
     ExtensionHelp {
-        /// Fila, en el orden en que viajaron.
+        /// Row, in the order they traveled.
         row: u32,
-        /// El id que el renderer vio en esa fila.
+        /// The id the renderer saw in that row.
         id: String,
     },
-    /// Pone el cursor de un selector en esa fila (un click).
+    /// Puts a picker's cursor on that row (a click).
     PickerSelectRow {
-        /// Fila, en el orden en que viajaron.
+        /// Row, in the order they traveled.
         row: u32,
-        /// La generación con la que se pintó esa fila. El selector de
-        /// volúmenes se abre vacío y se llena después: misma carrera.
+        /// The generation with which that row was painted. The volume
+        /// picker opens empty and fills afterward: same race.
         generation: u64,
     },
-    /// Elige una fila de la barra lateral de sitios (un click) y la ACTIVA:
-    /// navega a ella, o pliega su sección si es una cabecera.
+    /// Chooses a row of the places sidebar (a click) and ACTIVATES it:
+    /// navigates to it, or folds its section if it is a header.
     ///
-    /// Selecciona y activa a la vez, al contrario que las otras listas: una
-    /// barra lateral existe para ir a sitios, y un click que solo mueve un
-    /// cursor obliga a rematar con el teclado.
+    /// Selects and activates at once, unlike the other lists: a sidebar
+    /// exists to go places, and a click that only moves a cursor forces a
+    /// follow-up with the keyboard.
     PlaceActivateRow {
-        /// Fila, en el orden en que viajaron.
+        /// Row, in the order they traveled.
         row: u32,
-        /// La generación con la que se pintó esa fila.
+        /// The generation with which that row was painted.
         ///
-        /// Obligatoria porque esta lista CAMBIA sola: los volúmenes llegan de
-        /// una tarea de fondo y se insertan antes que los favoritos, así que
-        /// un índice sin generación puede nombrar una fila que ya no es la
-        /// que se pulsó. Una que no case se rechaza.
+        /// Mandatory because this list CHANGES on its own: volumes arrive
+        /// from a background task and get inserted before the favorites, so
+        /// an index with no generation could name a row that is no longer
+        /// the one clicked. One that does not match is rejected.
         generation: u64,
     },
-    /// Elige una rama del árbol (un click) y NAVEGA a ella: el listado
-    /// enfocado va a ese directorio, y la rama queda desplegada.
+    /// Chooses a tree branch (a click) and NAVIGATES to it: the focused
+    /// listing goes to that directory, and the branch stays expanded.
     ///
-    /// Desplegar *y* navegar, las dos: quien pulsa sobre una rama quiere ver
-    /// qué hay dentro, y verlo en el listado es la respuesta completa. El
-    /// árbol se queda donde está, que es lo que hace útil tenerlo abierto.
+    /// Expand *and* navigate, both: whoever clicks a branch wants to see
+    /// what is inside, and seeing it in the listing is the complete answer.
+    /// The tree stays where it is, which is what makes keeping it open
+    /// useful.
     TreeActivateRow {
-        /// Fila, en el orden en que viajaron.
+        /// Row, in the order they traveled.
         row: u32,
-        /// La generación con la que se pintó. Obligatoria por lo mismo que en
-        /// la barra de sitios: desplegar pide un listado, y ese listado inserta
-        /// filas EN MEDIO cuando llega.
+        /// The generation with which it was painted. Mandatory for the same
+        /// reason as the places bar: expanding requests a listing, and that
+        /// listing inserts rows IN THE MIDDLE when it arrives.
         generation: u64,
     },
-    /// Pliega o despliega la rama, sin navegar a ninguna parte.
+    /// Folds or expands the branch, without navigating anywhere.
     TreeToggleRow {
-        /// Fila, en el orden en que viajaron.
+        /// Row, in the order they traveled.
         row: u32,
-        /// La generación con la que se pintó.
+        /// The generation with which it was painted.
         generation: u64,
     },
-    /// Elige una disposición del selector (un click) y la APLICA.
+    /// Chooses a layout from the picker (a click) and APPLIES it.
     LayoutActivateRow {
-        /// Fila, en el orden en que viajaron.
+        /// Row, in the order they traveled.
         row: u32,
     },
-    /// Elige un resultado de la búsqueda (un click) y VA a él: el panel
-    /// navega a su directorio y el cursor queda encima.
+    /// Chooses a search result (a click) and GOES to it: the pane navigates
+    /// to its directory and the cursor lands on it.
     ///
-    /// El renderer manda un ÍNDICE, nunca una ruta: la ruta exacta la tiene
-    /// el host desde que el daemon la mandó, y reconstruirla desde un texto
-    /// pintado es como se acaba abriendo otro fichero.
+    /// The renderer sends an INDEX, never a path: the host has had the
+    /// exact path since the daemon sent it, and reconstructing it from
+    /// painted text is how you end up opening a different file.
     SearchActivateRow {
-        /// Fila, en el orden en que viajaron.
+        /// Row, in the order they traveled.
         row: u32,
     },
-    /// Contesta a la revisión de un plan de renombrado: aplicarlo o
-    /// descartarlo.
+    /// Answers the review of a rename plan: apply it or discard it.
     ///
-    /// Existe además de las teclas porque la revisión se abre SOLA y se queda
-    /// el teclado: sin ella, la única forma de contestar era una tecla, y un
-    /// lector con el ratón no podía ni quitársela de encima. Y a diferencia de
-    /// una tecla, un clic en un botón es un gesto DIRIGIDO a esta pantalla —
-    /// no puede ser una tecla que iba a otro sitio.
+    /// Exists alongside the keys because the review opens ON ITS OWN and
+    /// keeps the keyboard: without it, the only way to answer was a key, and
+    /// a reader using the mouse could not even get it out of the way. And
+    /// unlike a key, a click on a button is a gesture AIMED at this screen —
+    /// it cannot be a key meant for somewhere else.
     AiRenameDecide {
-        /// `true` = aplicar. `false` = descartar.
+        /// `true` = apply. `false` = discard.
         approve: bool,
     },
-    /// Contesta a la revisión de un plan de ORGANIZAR (fase 8), por lo mismo
-    /// y con el mismo contrato que su gemelo de arriba.
+    /// Answers the review of an ORGANIZE plan (phase 8), for the same
+    /// reason and with the same contract as its twin above.
     OrganizeDecide {
-        /// `true` = aplicar. `false` = descartar.
+        /// `true` = apply. `false` = discard.
         approve: bool,
     },
-    /// El relevo a la terminal NO llegó a abrirla (fase 9): quien hospeda no
-    /// encontró emulador, o el que encontró no arrancó.
+    /// The handoff to the terminal did NOT manage to open it (phase 9):
+    /// the host process found no emulator, or the one it found did not
+    /// start.
     ///
-    /// Lo manda el hilo de los efectos nativos, como [`Self::DirectoryPicked`]:
-    /// es quien sabe si la terminal se abrió. Sin esto la ventana se quedaba
-    /// diciendo «entregando la pantalla…» con la sesión ya soltada, y el lector
-    /// no sabía que tenía que seguir aquí.
+    /// Sent by the native-effects thread, like [`Self::DirectoryPicked`]: it
+    /// is the one that knows whether the terminal opened. Without this the
+    /// window kept saying "handing off the screen…" with the session
+    /// already released, and the reader did not know they had to keep going
+    /// here.
     ///
-    /// Sin texto libre a propósito: cualquiera que hable con el host puede
-    /// mandar una acción, y un motivo escrito por el que la manda sería un
-    /// mensaje que el host pintaría sin haberlo escrito. Lo que cabe decir son
-    /// dos cosas, y un bool las distingue.
+    /// Deliberately no free text: anyone talking to the host can send an
+    /// action, and a reason written by the sender would be a message the
+    /// host would paint without having written it. What can be said is two
+    /// things, and a bool tells them apart.
     HandoffFailed {
-        /// `true` = no hay ningún emulador de terminal en el PATH; `false` =
-        /// había uno y no arrancó.
+        /// `true` = there is no terminal emulator at all on PATH; `false` =
+        /// there was one and it did not start.
         no_terminal: bool,
     },
-    /// Recorre el árbol de organizar sin decidir nada (fase 8): es una
-    /// pantalla con scroll, y aprobar exige haber llegado al final — sin un
-    /// gesto para recorrerla, un lector con el ratón no podía aprobar nunca.
+    /// Walks the organize tree without deciding anything (phase 8): it is a
+    /// scrolling screen, and approving requires having reached the end —
+    /// without a gesture to walk it, a reader using the mouse could never
+    /// approve.
     OrganizeScroll {
-        /// `true` = hacia abajo.
+        /// `true` = downward.
         down: bool,
     },
-    /// Despliega un menú de la barra por su índice, o cierra el que hubiera
-    /// si ya era ese (un click en el título abierto lo pliega).
+    /// Opens a menu-bar entry by its index, or closes the open one if it
+    /// was already that one (a click on the open title folds it).
     MenuOpen {
-        /// Qué menú, en el orden en que viajaron sus títulos.
+        /// Which menu, in the order its titles traveled.
         menu: u32,
     },
-    /// Mueve el cursor dentro del menú desplegado (el ratón por encima).
+    /// Moves the cursor within the open menu (the mouse hovering over it).
     MenuPointRow {
-        /// Qué entrada, en el orden en que viajaron.
+        /// Which entry, in the order they traveled.
         row: u32,
     },
-    /// Ejecuta una entrada del menú desplegado (un click).
+    /// Runs an entry of the open menu (a click).
     ///
-    /// Lleva la fila y no el comando: lo que el renderer sabe es dónde pulsó
-    /// el lector, y el comando lo resuelve el host contra el menú que él
-    /// mismo tiene abierto. Un id de comando que viniera del renderer sería
-    /// un despachador paralelo al keymap (ADR 0069).
+    /// Carries the row and not the command: what the renderer knows is
+    /// where the reader clicked, and the host resolves the command against
+    /// the menu it itself has open. A command id coming from the renderer
+    /// would be a dispatcher running parallel to the keymap (ADR 0069).
     MenuActivateRow {
-        /// Qué entrada, en el orden en que viajaron.
+        /// Which entry, in the order they traveled.
         row: u32,
     },
-    /// Cierra el menú desplegado sin ejecutar nada (un click fuera).
+    /// Closes the open menu without running anything (a click outside).
     MenuClose,
-    /// Alt pulsado y soltado SOLO, sin otra tecla por medio (puente 68).
+    /// Alt pressed and released ALONE, with no other key in between
+    /// (bridge 68).
     ///
-    /// Es el gesto de escritorio para ir a la barra de menús: pliega el menú
-    /// si está abierto y, si no, lo abre como `app.menu`. No es una tecla
-    /// porque un modificador solo no es un chord que el keymap pueda
-    /// nombrar, y no lleva comando porque un id que viniera del renderer
-    /// sería un despachador paralelo al keymap (ADR 0069). Con una pantalla
-    /// que se queda las teclas delante —un diálogo, la ayuda— no hace nada,
-    /// igual que F9 allí.
+    /// It is the desktop gesture for going to the menu bar: it folds the
+    /// menu if it is open and, if not, opens it like `app.menu`. It is not
+    /// a key because a lone modifier is not a chord the keymap can name,
+    /// and it carries no command because an id coming from the renderer
+    /// would be a dispatcher running parallel to the keymap (ADR 0069). With
+    /// a screen holding the keys in front — a dialog, help — it does
+    /// nothing, same as F9 there.
     MenuToggle,
-    /// Abre el asistente de primer arranque (spec 2026-09-10, puente 63).
-    /// Lo manda el renderer al arrancar cuando el catálogo dice
-    /// `first_run`: no hay `norte.toml` de usuario todavía.
+    /// Opens the first-run wizard (spec 2026-09-10, bridge 63). Sent by the
+    /// renderer at startup when the catalogue says `first_run`: there is no
+    /// user `norte.toml` yet.
     WizardOpen,
-    /// Pone la pantalla de arranque, si la configuración la quiere.
+    /// Shows the splash screen, if the configuration wants it.
     ///
-    /// La manda el renderer al arrancar, como `wizard_open`: el host es quien
-    /// sabe si `[ui] splash` dice `brief`, `home` u `off`, y quien cede ante
-    /// el asistente de primer arranque. El renderer no decide, solo avisa de
-    /// que este es el arranque.
+    /// Sent by the renderer at startup, like `wizard_open`: the host is the
+    /// one that knows whether `[ui] splash` says `brief`, `home` or `off`,
+    /// and which yields to the first-run wizard. The renderer does not
+    /// decide, it only reports that this is startup.
     SplashOpen,
-    /// Quita la pantalla de arranque (puente 69, ADR 0115).
+    /// Dismisses the splash screen (bridge 69, ADR 0115).
     ///
-    /// La manda el renderer ante cualquier tecla, cualquier clic, o cuando
-    /// vence el plazo que la propia pantalla trajo (`close_after_ms`). No es
-    /// un comando del keymap a propósito: no se ata una tecla para quitarla,
-    /// se quita con la que sea, que es lo que una persona intenta.
+    /// Sent by the renderer on any key, any click, or when the deadline
+    /// the screen itself brought expires (`close_after_ms`). Deliberately
+    /// not a keymap command: no key is bound to dismiss it, it is dismissed
+    /// with whichever one, which is what a person tries.
     SplashClose,
-    /// Abre lo que dice una fila NUMERADA de la pantalla de arranque.
+    /// Opens whatever a NUMBERED row of the splash screen says.
     ///
-    /// El número es el que la fila enseña (1..=9), no su índice: es lo que el
-    /// lector teclea, y contarlo aquí desde cero sería pedirle que reste.
+    /// The number is the one the row shows (1..=9), not its index: it is
+    /// what the reader types, and counting it here from zero would be
+    /// asking them to subtract.
     SplashActivateRow {
-        /// El número pintado en la fila.
+        /// The number painted on the row.
         number: u8,
     },
-    /// Elige una fila del asistente Y la confirma: lo que hace un click.
+    /// Chooses a row of the wizard AND confirms it: what a click does.
     WizardActivateRow {
-        /// Qué fila, en el orden en que viajaron.
+        /// Which row, in the order they traveled.
         row: u32,
     },
-    /// Pulsa un botón de la barra de paneles (#324, puente 51): abre el
-    /// panel si está cerrado y lo cierra si está abierto.
+    /// Presses a panel-bar button (#324, bridge 51): opens the panel if
+    /// closed and closes it if open.
     ///
-    /// Lleva el índice y no el comando, por lo mismo que el menú: el host
-    /// resuelve el botón contra la barra que él mismo mandó, y el panel se
-    /// abre por el MISMO despacho que su atajo (ADR 0069, ADR 0077).
+    /// Carries the index and not the command, for the same reason as the
+    /// menu: the host resolves the button against the bar it itself sent,
+    /// and the panel opens through the SAME dispatch as its shortcut (ADR
+    /// 0069, ADR 0077).
     PanelBarActivate {
-        /// Qué botón, en el orden en que viajaron.
+        /// Which button, in the order they traveled.
         button: u32,
     },
-    /// Pulsa un elemento de la barra de estado (ADR 0132, puente 85).
+    /// Presses a status-bar item (ADR 0132, bridge 85).
     ///
-    /// Por ID y no por posición, como `settings_set`: la lista cambia con el
-    /// cursor y el ancho, y entre el pintado y el clic puede haberse movido.
-    /// El host resuelve el comando con el mismo código que la TUI y lo corre
-    /// por el mismo despacho que su atajo.
+    /// By ID and not by position, like `settings_set`: the list changes
+    /// with the cursor and the width, and it may have moved between the
+    /// paint and the click. The host resolves the command with the same
+    /// code as the TUI and runs it through the same dispatch as its
+    /// shortcut.
     StatusItemActivate {
-        /// El id del elemento (`sort`, `tasks`…).
+        /// The item's id (`sort`, `tasks`…).
         id: String,
     },
-    /// Pulsa un botón de disposición de la barra de menús (ADR 0133,
-    /// puente 86), por ID.
+    /// Presses a layout button on the menu bar (ADR 0133, bridge 86), by
+    /// ID.
     LayoutButtonActivate {
-        /// El id del botón (`split-h`, `pick`…).
+        /// The button's id (`split-h`, `pick`…).
         id: String,
     },
-    /// Un botón de la barra de pestañas de un grupo (ADR 0133, puente 86):
-    /// abrir una pestaña en ese grupo, o cerrar la de `slot_id`.
+    /// A button on a group's tab bar (ADR 0133, bridge 86): open a tab in
+    /// that group, or close the one at `slot_id`.
     ///
-    /// Primero se ELIGE la pestaña de `slot_id` —el grupo pulsado pasa a
-    /// tener el foco, como en la TUI— y después corre la orden por el
-    /// despacho de su atajo. Pulsar el `+` de un grupo y que la pestaña
-    /// naciera en el otro sería lo contrario de lo que el dedo dijo.
+    /// The tab at `slot_id` is CHOSEN first — the pressed group gets focus,
+    /// like in the TUI — and only then does the command run through its
+    /// shortcut's dispatch. Pressing a group's `+` and having the tab born
+    /// in the other one would be the opposite of what the finger said.
     TabAction {
-        /// La pestaña sobre la que se actúa.
+        /// The tab being acted on.
         slot_id: u32,
-        /// Qué hacer. `verb` y no `action`: `action` es la etiqueta del
-        /// enum en el JSON.
+        /// What to do. `verb` and not `action`: `action` is the enum's tag
+        /// in the JSON.
         verb: TabVerb,
     },
-    /// Arrastra el borde que hay entre `slot_id` y el hueco de al lado.
+    /// Drags the border between `slot_id` and the slot next to it.
     ///
-    /// `cells` es DÓNDE está el puntero en el eje del reparto, en celdas de
-    /// layout — no un tamaño ni un delta. El renderer sabe convertir píxeles a
-    /// celdas porque ya lo hace para declarar su viewport; lo que significa
-    /// esa posición —qué pareja se reparte, cuánto le toca a cada uno, qué
-    /// mínimos hay— lo decide el host con el reparto que él mismo calculó
-    /// (ADR 0069).
+    /// `cells` is WHERE the pointer is on the split's axis, in layout
+    /// cells — not a size or a delta. The renderer knows how to convert
+    /// pixels to cells because it already does so to declare its viewport;
+    /// what that position means — which pair splits, how much each gets,
+    /// what minimums apply — is decided by the host with the split it
+    /// itself computed (ADR 0069).
     ResizeSlot {
-        /// El hueco de la IZQUIERDA del borde (o el de ARRIBA).
+        /// The slot to the LEFT of the border (or the one ABOVE).
         slot_id: u32,
-        /// La posición del puntero en el eje del reparto, en celdas.
+        /// The pointer's position on the split's axis, in cells.
         cells: u16,
     },
-    /// Suelta el hueco `slot_id`, arrastrado por su título, sobre `target`
-    /// (puente 90, ADR 0138): a uno de sus lados, o en el centro para unirse
-    /// a él como pestaña. Qué pasa con el árbol lo decide el host
-    /// (`Node::move_slot`); un id que ya no está no cambia nada.
+    /// Drops slot `slot_id`, dragged by its title, onto `target` (bridge 90,
+    /// ADR 0138): onto one of its sides, or in the center to join it as a
+    /// tab. What happens to the tree is decided by the host
+    /// (`Node::move_slot`); an id that is no longer there changes nothing.
     MoveSlot {
-        /// El hueco que se arrastra.
+        /// The slot being dragged.
         slot_id: u32,
-        /// El hueco sobre el que se suelta.
+        /// The slot it is dropped onto.
         target: u32,
-        /// Dónde, dentro de `target`.
+        /// Where, within `target`.
         zone: norte_frontend::layout::DropZone,
     },
-    /// Elige una fila del selector de PERFILES y la activa (un click).
+    /// Chooses a row of the PROFILE picker and activates it (a click).
     ///
-    /// Selecciona y activa a la vez, como la barra lateral: un selector de
-    /// perfiles existe para cambiar de perfil, y un click que solo mueve un
-    /// cursor obliga a rematar con el teclado.
+    /// Selects and activates at once, like the sidebar: a profile picker
+    /// exists to switch profiles, and a click that only moves a cursor
+    /// forces a follow-up with the keyboard.
     ProfileActivateRow {
-        /// Fila, en el orden en que viajaron.
+        /// Row, in the order they traveled.
         row: u32,
-        /// La generación con la que se pintó. La lista se llena desde una
-        /// tarea de fondo: sin esto, un índice nombra otro perfil.
+        /// The generation with which it was painted. The list fills in from
+        /// a background task: without this, an index names a different
+        /// profile.
         generation: u64,
     },
-    /// Pide un snapshot completo: el renderer perdió el hilo de la secuencia.
+    /// Asks for a full snapshot: the renderer lost track of the sequence.
     Resync,
-    /// El lector quiere CERRAR la ventana.
+    /// The reader wants to CLOSE the window.
     ///
-    /// No la cierra: pregunta si hay que preguntar. Con `[ui] confirm_quit`
-    /// pidiéndolo —siempre, o solo si queda trabajo— abre el diálogo y espera;
-    /// si no, contesta con [`crate::dto::NativeEffect::CloseWindow`]. Quien
-    /// hospeda no decide esto: es configuración.
+    /// Does not close it: asks whether it should ask. With `[ui]
+    /// confirm_quit` requesting it — always, or only if work remains — it
+    /// opens the dialog and waits; if not, it answers with
+    /// [`crate::dto::NativeEffect::CloseWindow`]. The host process does not
+    /// decide this: it is configuration.
     RequestQuit,
 }
 
-/// Qué cambia [`UiAction::ExtensionGovern`] de una extensión (puente 61).
+/// What [`UiAction::ExtensionGovern`] changes about an extension (bridge
+/// 61).
 ///
-/// Los tres verbos del gestor, con nombre propio y no con el del teclado:
-/// un renderer pinta botones, y «añadir» sobre una extensión ya aprobada
-/// significa revocar — lo resuelve el host mirando cómo está, igual que con
-/// la tecla.
+/// The manager's three verbs, with their own name and not the keyboard's:
+/// a renderer paints buttons, and "add" on an already-approved extension
+/// means revoke — the host resolves it by looking at its state, same as
+/// with the key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExtensionChange {
-    /// Conceder sus capabilities si no las tiene; retirárselas si las tiene.
-    /// Conceder PREGUNTA, enumerándolas.
+    /// Grant its capabilities if it does not have them; withdraw them if it
+    /// does. Granting ASKS, enumerating them.
     Approval,
-    /// Encenderla si está apagada; apagarla si está encendida. Encender una
-    /// sin aprobar se rehúsa y se dice.
+    /// Turn it on if it is off; turn it off if it is on. Turning on an
+    /// unapproved one is refused, and said.
     Enabled,
-    /// Desinstalarla: borrar sus ficheros y retirar su consentimiento.
-    /// PREGUNTA, porque es irreversible.
+    /// Uninstall it: delete its files and withdraw its consent. ASKS,
+    /// because it is irreversible.
     Uninstall,
 }
 
-/// Qué se le hizo a un campo de un diálogo-formulario (puente 91).
+/// What was done to a FORM dialog's field (bridge 91).
 ///
-/// Un interruptor y un ciclo no llevan valor: lo que el renderer dice es que
-/// se TOCARON, y a qué estado van lo decide Rust. Mandar el estado destino
-/// dejaría que dos pulsaciones rápidas se pisaran —la segunda nacida de una
-/// foto anterior—, y el renderer no es dueño de ese estado.
+/// A toggle and a cycle carry no value: what the renderer says is that they
+/// were TOUCHED, and which state they go to is decided by Rust. Sending the
+/// target state would let two quick presses step on each other — the second
+/// born from an earlier snapshot — and the renderer does not own that
+/// state.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "set")]
 pub enum DialogFieldValue {
-    /// Texto completo tras la edición, por lo mismo que
-    /// [`UiAction::DialogInput`]: el caret es del renderer.
+    /// Full text after the edit, for the same reason as
+    /// [`UiAction::DialogInput`]: the caret belongs to the renderer.
     Text {
-        /// Lo que hay escrito en el campo.
+        /// What is typed in the field.
         text: String,
     },
-    /// Se pulsó el interruptor.
+    /// The toggle was pressed.
     Toggled,
-    /// Se pasó al siguiente valor del ciclo.
+    /// It moved to the cycle's next value.
     Cycled,
 }

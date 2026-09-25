@@ -1,10 +1,10 @@
-//! #164 de punta a punta y contra el sistema de ficheros REAL: un componente
-//! intermedio del destino que se vuelve un symlink hacia fuera ENTRE aprobar y
-//! aplicar no redirige la escritura.
+//! #164 end to end and against the REAL filesystem: an intermediate
+//! destination component that becomes an outward symlink BETWEEN approving
+//! and applying does not redirect the write.
 //!
-//! Va con `file://` a propósito. `MemProvider` no tiene symlinks intermedios que
-//! seguir ni `openat` con el que negarse, así que el agujero solo existe —y solo
-//! se puede demostrar cerrado— contra un filesystem de verdad.
+//! This goes with `file://` on purpose. `MemProvider` has no intermediate
+//! symlinks to follow nor an `openat` to refuse with, so the hole only
+//! exists — and can only be shown closed — against a real filesystem.
 
 #![cfg(unix)]
 
@@ -21,7 +21,7 @@ use norte_proto::{TaskState, VPath};
 use norte_vfs::Provider;
 
 fn vp(wire: &str) -> VPath {
-    VPath::parse(wire).expect("wire válido")
+    VPath::parse(wire).expect("valid wire")
 }
 
 struct Harness {
@@ -30,16 +30,17 @@ struct Harness {
     _spool: tempfile::TempDir,
 }
 
-/// Origen, destino y un directorio FUERA del destino al que apuntar, los tres
-/// bajo la raíz del provider — que es lo que hace de esto una fuga del
-/// DESTINO y no un fallo de la raíz del provider, que ya se comprueba aparte.
+/// Source, destination and a directory OUTSIDE the destination to point at,
+/// all three under the provider's root — which is what makes this a
+/// DESTINATION leak and not a failure of the provider's root, which is
+/// already checked separately.
 async fn harness() -> Harness {
-    let tree = tempfile::tempdir().expect("árbol");
+    let tree = tempfile::tempdir().expect("tree");
     let spool = tempfile::tempdir().expect("spool");
-    std::fs::create_dir_all(tree.path().join("s/sub")).expect("origen");
-    std::fs::write(tree.path().join("s/sub/secreto.txt"), b"secreto").expect("fichero");
-    std::fs::create_dir(tree.path().join("d")).expect("destino");
-    std::fs::create_dir(tree.path().join("fuera")).expect("fuera");
+    std::fs::create_dir_all(tree.path().join("s/sub")).expect("source");
+    std::fs::write(tree.path().join("s/sub/secret.txt"), b"secret").expect("file");
+    std::fs::create_dir(tree.path().join("d")).expect("destination");
+    std::fs::create_dir(tree.path().join("outside")).expect("outside");
 
     let journal = Arc::new(SqliteJournal::new(
         Journal::open_in_memory().await.expect("journal"),
@@ -69,7 +70,7 @@ async fn plan(h: &Harness) -> SyncPlanDone {
         .engine
         .sync_plan_as(params, 1, Actor::User)
         .await
-        .expect("sync.plan aceptado");
+        .expect("sync.plan accepted");
     let mut done = None;
     while let Some(event) = rx.recv().await {
         if let SyncPlanEvent::Done(d) = event {
@@ -77,7 +78,7 @@ async fn plan(h: &Harness) -> SyncPlanDone {
         }
     }
     assert_eq!(handle.join().await, TaskState::Completed);
-    done.expect("el plan cerró con sync.plan_done")
+    done.expect("the plan closed with sync.plan_done")
 }
 
 async fn apply(h: &Harness, hash: &PlanHash) -> (TaskState, SyncReportResult) {
@@ -85,44 +86,49 @@ async fn apply(h: &Harness, hash: &PlanHash) -> (TaskState, SyncReportResult) {
         .engine
         .sync_apply_as(hash, 1, Actor::User)
         .await
-        .expect("sync.apply aceptado");
+        .expect("sync.apply accepted");
     let state = handle.join().await;
     let report = report.lock().expect("report lock").clone();
     (state, report)
 }
 
-/// El caso de #164: el plan se aprueba contra un destino limpio y, antes de
-/// aplicarlo, alguien sustituye el directorio intermedio por un symlink hacia
-/// fuera. La copia NO puede aterrizar ahí.
+/// The case from #164: the plan is approved against a clean destination and,
+/// before applying it, someone swaps the intermediate directory for an
+/// outward symlink. The copy CANNOT land there.
 #[tokio::test]
-async fn una_sincronizacion_no_sigue_un_symlink_intermedio_fuera_de_su_destino() {
+async fn a_sync_does_not_follow_an_intermediate_symlink_out_of_its_destination() {
     let h = harness().await;
     let done = plan(&h).await;
     assert!(
         done.executable,
-        "el plan se aprueba contra un destino limpio"
+        "the plan is approved against a clean destination"
     );
 
-    // La ventana del TTL: entre aprobar y aplicar, `d/sub` deja de ser el
-    // directorio que el plan creará y pasa a ser un puente a `fuera`.
-    std::os::unix::fs::symlink(h.tree.path().join("fuera"), h.tree.path().join("d/sub"))
-        .expect("symlink hostil");
+    // The TTL window: between approving and applying, `d/sub` stops being the
+    // directory the plan will create and becomes a bridge to `outside`.
+    std::os::unix::fs::symlink(h.tree.path().join("outside"), h.tree.path().join("d/sub"))
+        .expect("hostile symlink");
 
     let (state, report) = apply(&h, &done.plan_hash).await;
 
-    assert_eq!(state, TaskState::Completed, "la Task termina, no revienta");
-    assert!(
-        !h.tree.path().join("fuera/secreto.txt").exists(),
-        "no escribió fuera del destino"
+    assert_eq!(
+        state,
+        TaskState::Completed,
+        "the Task ends, it does not blow up"
     );
-    // Y se contó como conflicto: la fila del informe dice que ese paso no
-    // ocurrió, en vez de callarse una escritura que aterrizó en otro sitio.
+    assert!(
+        !h.tree.path().join("outside/secret.txt").exists(),
+        "it did not write outside the destination"
+    );
+    // And it was counted as a conflict: the report's row says that step did
+    // not happen, instead of staying quiet about a write that landed
+    // somewhere else.
     assert!(
         report
             .failures
             .iter()
             .any(|f| { f.kind == SyncStepKind::Copy && f.cause == SyncFailureCause::Conflict }),
-        "la copia sale como conflicto: {:?}",
+        "the copy comes out as a conflict: {:?}",
         report.failures
     );
 }

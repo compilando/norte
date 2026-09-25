@@ -1,50 +1,50 @@
 name = "vscode-light"
 
-# Light Modern, el tema claro por defecto de Visual Studio Code desde la 1.75.
+# Light Modern, Visual Studio Code's default light theme since 1.75.
 #
-# TRANSCRIPCIÓN, con las mismas fuentes y el mismo orden que `vscode-dark`:
+# TRANSCRIPTION, with the same sources and the same order as `vscode-dark`:
 #
 #   1. extensions/theme-defaults/themes/light_modern.json
-#   2. su `include`: light_plus.json, y el de este: light_vs.json
-#   3. lo que ninguno define: el REGISTRO de colores del editor
+#   2. its `include`: light_plus.json, and that one's: light_vs.json
+#   3. what none of them defines: the editor's color REGISTRY
 #      (src/vs/platform/theme/common/colors/)
 #
-# Light Modern sí declara `list.activeSelection*` y `list.hoverBackground` por
-# su cuenta; el que sale del registro es `list.inactiveSelectionBackground`.
+# Light Modern does declare `list.activeSelection*` and `list.hoverBackground` on
+# its own; the one that comes from the registry is `list.inactiveSelectionBackground`.
 #
-# --- Divergencias, y aquí son TRES, no una ---------------------------------
+# --- Divergences, and here there are THREE, not one ------------------------
 #
-# Las tres son el mismo problema: sobre fondo blanco, los colores de señal de
-# VSCode no llegan al 4,5:1 que la suite de norte exige a `error`, `warning` y
-# `hostile-badge` (`las_senales_semanticas_llegan_a_wcag_aa_en_todo_preset`).
-# Son justo los colores que hay que poder leer cuando algo ha ido mal, así que
-# se oscurecen y se anota. Medido contra `background` = #ffffff:
+# All three are the same problem: over a white background, VSCode's signal
+# colors do not reach the 4.5:1 that norte's suite requires of `error`, `warning` and
+# `hostile-badge` (`semantic_signals_reach_wcag_aa_in_every_preset`).
+# They are exactly the colors that must be readable when something has gone wrong, so
+# they are darkened and it is noted. Measured against `background` = #ffffff:
 #
-#   error    #f85149 (errorForeground de light_modern)  daba 3,35:1  → #e51400
-#            #e51400 es editorError.foreground del registro para claro: 4,75:1,
-#            o sea que no es una invención, es el otro valor que VSCode ya
-#            tiene para lo mismo.
-#   warning  #bf8803 (editorWarning.foreground claro)   daba 3,12:1  → #9a6d00
-#            Este sí es un oscurecimiento propio del mismo tono: 4,60:1.
-#   hostile  sin id que transcribir                     → #a83a00 (6,4:1)
+#   error    #f85149 (light_modern's errorForeground)   gave 3.35:1  → #e51400
+#            #e51400 is the registry's light editorError.foreground: 4.75:1,
+#            so it is not an invention, it is the other value VSCode already
+#            has for the same thing.
+#   warning  #bf8803 (light editorWarning.foreground)   gave 3.12:1  → #9a6d00
+#            This one is our own darkening of the same hue: 4.60:1.
+#   hostile  no id to transcribe                        → #a83a00 (6.4:1)
 #
-# `muted` es la cuarta anotación, y no es de contraste. Light Modern fija
-# `descriptionForeground` a #3b3b3b, que es EXACTAMENTE su `foreground`: un
-# texto «atenuado» idéntico al normal no atenúa nada. Se usa #616161, que el
-# propio light_modern atesta para los primeros planos inactivos
+# `muted` is the fourth annotation, and it is not about contrast. Light Modern sets
+# `descriptionForeground` to #3b3b3b, which is EXACTLY its `foreground`: a
+# "dimmed" text identical to the normal one dims nothing. #616161 is used, which
+# light_modern itself attests for inactive foregrounds
 # (`activityBar.inactiveForeground`, `tab.inactiveForeground`).
 #
-# `scrollbar-slider` aplanado: el registro da #646464 al 40 %, que compuesto
-# sobre el blanco del fondo es #c1c1c1. El modelo no tiene alfa (ADR 0020).
+# `scrollbar-slider` flattened: the registry gives #646464 at 40 %, which composited
+# over the white background is #c1c1c1. The model has no alpha (ADR 0020).
 #
-# `widget-shadow` no se define, por la misma razón que en `vscode-dark`: una
-# sombra es alfa, y sin alfa la hoja de estilos hace mejor trabajo con su
-# propio respaldo.
+# `widget-shadow` is not defined, for the same reason as in `vscode-dark`: a
+# shadow is alpha, and without alpha the stylesheet does a better job with its
+# own fallback.
 #
-# `hostile-badge`, `mark`, `[files.kind]` y `[files.ext]`: DERIVADOS. VSCode no
-# colorea una lista de ficheros por tipo de nodo.
+# `hostile-badge`, `mark`, `[files.kind]` and `[files.ext]`: DERIVED. VSCode does not
+# color a file list by node type.
 #
-# --- Tipografía -------------------------------------------------------------
+# --- Typography -------------------------------------------------------------
 #
 #   [ui]
 #   font_size = 13
@@ -63,17 +63,17 @@ status-bar            = { fg = "#3b3b3b", bg = "#f8f8f8" }
 title                 = { fg = "#3b3b3b", bold = true }
 button                = { fg = "#ffffff", bg = "#005fb8" }
 match                 = { fg = "#000000", bg = "#a8ac94" }
-# Oscurecidos respecto al original: ver el bloque de divergencias.
+# Darkened relative to the original: see the divergences block.
 error                 = { fg = "#e51400" }
 warning               = { fg = "#9a6d00" }
 hostile-badge         = { fg = "#a83a00", bold = true }
 info                  = { fg = "#0063d3" }
 mark                  = { bg = "#fff4ce" }
-# Un punto por debajo de `pane-background` y distinto de `hover` (#f2f2f2):
-# iguales, la banda se comía el aviso de «el ratón está aquí».
+# A notch below `pane-background` and distinct from `hover` (#f2f2f2):
+# if equal, the stripe swallowed the "the mouse is here" cue.
 stripe                = { bg = "#ececec" }
 
-# Cromo de la ventana (spec 2026-09-11, F2).
+# Window chrome (spec 2026-09-11, F2).
 hover                 = { bg = "#f2f2f2" }
 input-background      = { bg = "#ffffff" }
 input-border          = { fg = "#cecece" }
@@ -84,7 +84,7 @@ separator             = { fg = "#e5e5e5" }
 focus-border          = { fg = "#005fb8" }
 muted                 = { fg = "#616161" }
 
-# Derivados, todos.
+# Derived, all of them.
 [files.kind]
 dir          = { fg = "#005fb8", bold = true }  # textLink.foreground
 symlink      = { fg = "#0598bc" }

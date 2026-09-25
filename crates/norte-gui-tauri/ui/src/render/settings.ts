@@ -1,5 +1,5 @@
-// Pintores de `Screen` para settings (ola W10): funciones con `this: Screen`,
-// enganchadas como propiedades en `render.ts`. El estado sigue en la clase.
+// `Screen` painters for settings (wave W10): functions with `this: Screen`,
+// hooked in as properties in `render.ts`. State stays in the class.
 
 import type { Screen } from "../render";
 import type {
@@ -11,16 +11,17 @@ import type {
   SettingsView,
   ThemeView,
 } from "../types";
-import { revelar, badge } from "./dom";
+import { revealInView, badge } from "./dom";
 
 /**
- * Los ajustes (F11).
+ * Settings (F11).
  *
- * Dos clases de sección y ninguna decisión aquí: el host manda el registro
- * con su valor ya resuelto y las ubicaciones ya saneadas. Lo único que este
- * método sabe es que una fila de ruta que falta se dice, que la lista es
- * un `listbox` con un cursor que el host lleva, y que un doble clic sobre
- * una fila la activa — girarla o pedir su valor lo decide el host.
+ * Two kinds of section and no decision here: the host sends the registry
+ * with its value already resolved and the locations already sanitized. The
+ * only things this method knows are that a missing path row is stated, that
+ * the list is a `listbox` with a cursor the host keeps, and that a double
+ * click on a row activates it — whether to cycle it or ask for its value is
+ * decided by the host.
  */
 export function paintSettings(this: Screen, settings: SettingsView | null): void {
   if (settings === null) {
@@ -28,229 +29,230 @@ export function paintSettings(this: Screen, settings: SettingsView | null): void
     this.settingsRoot.dataset["open"] = "false";
     return;
   }
-  // El sitio del scroll ANTES de rehacer la lista: el `<ul>` se reemplaza
-  // entero en cada pintada, y sin esto la rueda vuelve a cero cada vez que
-  // el host manda un parche.
-  const previo = this.settingsRoot.querySelector(".settings-rows");
-  const scroll = previo instanceof HTMLElement ? previo.scrollTop : 0;
-  // El foco, ANTES de tocar nada. Mover la barra a la caja nueva ya saca el
-  // campo del DOM un instante, y eso lo desenfoca: mirarlo después sería
-  // mirar siempre «no lo tenía».
-  const campo = this.settingsBarra?.querySelector(".settings-search");
-  const enfocado = campo instanceof HTMLInputElement && document.activeElement === campo;
+  // The scroll position BEFORE rebuilding the list: the `<ul>` gets replaced
+  // whole on every paint, and without this the wheel resets to zero every
+  // time the host sends a patch.
+  const previous = this.settingsRoot.querySelector(".settings-rows");
+  const scroll = previous instanceof HTMLElement ? previous.scrollTop : 0;
+  // The focus, BEFORE touching anything. Moving the bar to the new box
+  // already takes the field out of the DOM for an instant, and that unfocuses
+  // it: checking afterward would always see "it did not have it".
+  const field = this.settingsBar?.querySelector(".settings-search");
+  const focused = field instanceof HTMLInputElement && document.activeElement === field;
   const caret: [number | null, number | null] =
-    campo instanceof HTMLInputElement
-      ? [campo.selectionStart, campo.selectionEnd]
+    field instanceof HTMLInputElement
+      ? [field.selectionStart, field.selectionEnd]
       : [null, null];
   this.settingsRoot.dataset["open"] = "true";
-  const caja = document.createElement("section");
-  caja.className = "settings";
-  caja.setAttribute("role", "dialog");
-  caja.setAttribute("aria-modal", "true");
-  caja.setAttribute("aria-label", this.t("settings-title"));
+  const box = document.createElement("section");
+  box.className = "settings";
+  box.setAttribute("role", "dialog");
+  box.setAttribute("aria-modal", "true");
+  box.setAttribute("aria-label", this.t("settings-title"));
 
-  const titulo = document.createElement("h1");
-  titulo.textContent = this.t("settings-title");
-  caja.append(titulo);
+  const title = document.createElement("h1");
+  title.textContent = this.t("settings-title");
+  box.append(title);
 
-  // El buscador. Un `<input>` de verdad y no una tecla que viaje: las
-  // imprimibles no llegan al host, que es por lo que esta pantalla no tuvo
-  // filtro hasta ahora.
+  // The search box. A real `<input>` and not a key that travels: printable
+  // characters do not reach the host, which is why this screen had no filter
+  // until now.
   //
-  // Se REUSA entre pintadas. Cada tecla provoca un parche del host, o sea un
-  // repintado: un campo que se recreara se destruiría con el primer carácter
-  // y se llevaría el foco y el caret. Mismo fallo y misma cura que el filtro
-  // del registro y el campo de un diálogo.
-  let barra = this.settingsBarra;
-  if (barra === null) {
-    barra = document.createElement("div");
-    barra.className = "settings-search-bar";
-    const nuevo = document.createElement("input");
-    nuevo.className = "settings-search";
-    nuevo.type = "search";
-    nuevo.setAttribute("aria-label", this.t("settings-title"));
-    nuevo.addEventListener("input", () => {
-      this.send({ action: "settings_query", text: nuevo.value });
+  // REUSED between paints. Every keystroke triggers a host patch, i.e. a
+  // repaint: a field that got recreated would be destroyed on the first
+  // character and take the focus and the caret with it. Same bug and same
+  // cure as the log's filter and a dialog's field.
+  let bar = this.settingsBar;
+  if (bar === null) {
+    bar = document.createElement("div");
+    bar.className = "settings-search-bar";
+    const input = document.createElement("input");
+    input.className = "settings-search";
+    input.type = "search";
+    input.setAttribute("aria-label", this.t("settings-title"));
+    input.addEventListener("input", () => {
+      this.send({ action: "settings_query", text: input.value });
     });
-    const cuantas = document.createElement("span");
-    cuantas.className = "settings-count";
-    barra.append(nuevo, cuantas);
-    this.settingsBarra = barra;
+    const count = document.createElement("span");
+    count.className = "settings-count";
+    bar.append(input, count);
+    this.settingsBar = bar;
   }
-  const buscar = barra.querySelector(".settings-search");
-  // Resembrarlo mientras se escribe en él devolvería la proyección del host
-  // encima de lo que el lector está tecleando.
-  if (buscar instanceof HTMLInputElement && !enfocado) {
-    buscar.value = settings.query;
+  const search = bar.querySelector(".settings-search");
+  // Re-seeding it while it is being typed into would put the host's
+  // projection back over what the reader is typing.
+  if (search instanceof HTMLInputElement && !focused) {
+    search.value = settings.query;
   }
-  const cuenta = barra.querySelector(".settings-count");
-  if (cuenta instanceof HTMLElement) {
-    cuenta.textContent = `${String(settings.shown)} / ${String(settings.total)}`;
+  const count = bar.querySelector(".settings-count");
+  if (count instanceof HTMLElement) {
+    count.textContent = `${String(settings.shown)} / ${String(settings.total)}`;
   }
-  caja.append(barra);
+  box.append(bar);
 
-  const cuerpo = document.createElement("div");
-  cuerpo.className = "settings-body";
-  cuerpo.append(indiceDeSecciones.call(this, settings));
+  const body = document.createElement("div");
+  body.className = "settings-body";
+  body.append(sectionIndex.call(this, settings));
 
-  const lista = document.createElement("ul");
-  lista.className = "settings-rows";
-  lista.setAttribute("role", "listbox");
-  // El cursor cuenta filas ELEGIBLES: las cabeceras no entran, así que el
-  // índice se lleva aparte del recorrido de las secciones.
+  const list = document.createElement("ul");
+  list.className = "settings-rows";
+  list.setAttribute("role", "listbox");
+  // The cursor counts SELECTABLE rows: headers do not count, so the index is
+  // tracked apart from the sections' walk.
   let i = 0;
   for (const sec of settings.sections) {
-    const cabecera = document.createElement("li");
-    cabecera.className = "settings-group";
-    cabecera.setAttribute("role", "presentation");
-    cabecera.textContent = sec.title;
-    // Si TODAS las filas de la sección piden reiniciar, se dice UNA vez en
-    // su cabecera. Cinco insignias idénticas no informan de nada: hacen
-    // ruido justo encima de lo que sí varía, que es el valor.
-    const todas =
+    const header = document.createElement("li");
+    header.className = "settings-group";
+    header.setAttribute("role", "presentation");
+    header.textContent = sec.title;
+    // If ALL of a section's rows ask for a restart, it is said ONCE in its
+    // header. Five identical badges inform of nothing: they make noise right
+    // over what does vary, which is the value.
+    const all =
       sec.section === "settings" &&
       sec.rows.length > 0 &&
       sec.rows.every((r) => r.restart_required);
-    if (todas) {
-      const marca = document.createElement("span");
-      marca.className = "settings-badge";
-      marca.textContent = this.t("settings-restart-badge");
-      cabecera.append(" ", marca);
+    if (all) {
+      const mark = document.createElement("span");
+      mark.className = "settings-badge";
+      mark.textContent = this.t("settings-restart-badge");
+      header.append(" ", mark);
     }
-    lista.append(cabecera);
-    // El `switch` va FUERA del bucle de filas: dentro, TypeScript no
-    // puede estrechar el tipo de la fila a partir de la sección, y una
-    // fila de ruta y una de ajuste no comparten ni un campo.
+    list.append(header);
+    // The `switch` goes OUTSIDE the row loop: inside it, TypeScript cannot
+    // narrow the row's type from the section, and a path row and a setting
+    // row do not share a single field.
     if (sec.section === "settings") {
       for (const r of sec.rows) {
-        const fila = this.settingsRow(i, settings.cursor);
-        // CUATRO celdas fijas y en este orden, siempre: punto, nombre,
-        // valor, acciones. La rejilla tiene cuatro columnas, así que colgar
-        // un hijo de más manda lo que sobra a una fila nueva — así salía
-        // «Restablecer» como una caja de ancho completo y el punto suelto
-        // contra el borde derecho.
-        const punto = document.createElement("span");
-        punto.className = "settings-dot";
-        punto.dataset["on"] = String(r.modified);
+        const row = this.settingsRow(i, settings.cursor);
+        // FOUR fixed cells and in this order, always: dot, name, value,
+        // actions. The grid has four columns, so hanging one extra child
+        // sends the overflow to a new row — that is how "Reset" used to
+        // come out as a full-width box with the dot loose against the
+        // right edge.
+        const dot = document.createElement("span");
+        dot.className = "settings-dot";
+        dot.dataset["on"] = String(r.modified);
         if (r.modified) {
-          // Un punto CON etiqueta, no color a secas: el color no es
-          // información para quien no lo distingue.
-          punto.setAttribute("aria-label", this.t("settings-modified"));
-          punto.textContent = "●";
+          // A dot WITH a label, not just color: color is not information
+          // for whoever cannot tell it apart.
+          dot.setAttribute("aria-label", this.t("settings-modified"));
+          dot.textContent = "●";
         }
-        const nombre = document.createElement("span");
-        nombre.className = "settings-name";
-        nombre.textContent = r.name;
-        const valor = controlDeAjuste.call(this, r);
-        // Las acciones van JUNTAS en una celda: hoy, si está tocado, el
-        // botón que lo deshace. La insignia de reinicio NO está aquí: es
-        // información que solo importa al cambiar esa fila, y repetida en
-        // seis líneas a la vez deja de leerse (ver `settings-desc`).
-        const acciones = document.createElement("span");
-        acciones.className = "settings-actions";
+        const name = document.createElement("span");
+        name.className = "settings-name";
+        name.textContent = r.name;
+        const value = settingControl.call(this, r);
+        // The actions go TOGETHER in one cell: today, if it is touched, the
+        // button that undoes it. The restart badge is NOT here: it is
+        // information that only matters when changing that row, and
+        // repeated across six lines at once it stops being readable (see
+        // `settings-desc`).
+        const actions = document.createElement("span");
+        actions.className = "settings-actions";
         if (r.modified) {
-          const volver = document.createElement("button");
-          volver.className = "settings-reset";
-          volver.type = "button";
-          // Un ICONO con su etiqueta y su título: el texto se comía treinta
-          // celdas de cada fila para decir lo mismo que una flecha de
-          // deshacer, y estaba en todas las filas tocadas a la vez.
-          volver.textContent = "↺";
-          volver.setAttribute("aria-label", this.t("settings-reset"));
-          volver.title = this.t("settings-reset");
-          // El índice de ESTA fila, copiado: `i` es UNA variable del bucle,
-          // y una clausura que la leyera al pulsar vería la última.
-          const cual = i;
-          volver.addEventListener("click", (e) => {
-            // Sin burbujear: el `<li>` lleva un click que SEÑALA y un doble
-            // click que activa, y restablecer no es ninguna de las dos.
+          const revert = document.createElement("button");
+          revert.className = "settings-reset";
+          revert.type = "button";
+          // An ICON with its label and its title: the text used to eat
+          // thirty cells of every row to say the same thing as an undo
+          // arrow, and it was on every touched row at once.
+          revert.textContent = "↺";
+          revert.setAttribute("aria-label", this.t("settings-reset"));
+          revert.title = this.t("settings-reset");
+          // THIS row's index, copied: `i` is ONE loop variable, and a
+          // closure reading it on click would see the last one.
+          const which = i;
+          revert.addEventListener("click", (e) => {
+            // No bubbling: the `<li>` carries a click that SELECTS and a
+            // double click that activates, and resetting is neither.
             e.stopPropagation();
-            this.send({ action: "settings_reset", row: cual });
+            this.send({ action: "settings_reset", row: which });
           });
-          acciones.append(volver);
+          actions.append(revert);
         }
-        // La descripción va SIEMPRE, atenuada y bajo el nombre, no solo en
-        // la fila elegida: es lo que dice qué hace un ajuste, y esconderla
-        // obliga a recorrer la lista para leerla. Con ella, y al final, lo
-        // que hoy era una pastilla repetida en cada fila.
+        // The description ALWAYS shows, dimmed and under the name, not only
+        // on the chosen row: it is what says what a setting does, and
+        // hiding it forces scanning the whole list to read it. With it, and
+        // at the end, what used to be a pill repeated on every row.
         const desc = document.createElement("span");
         desc.className = "settings-desc";
         desc.textContent = r.desc;
-        if (r.restart_required && !todas) {
-          const cuando = document.createElement("span");
-          cuando.className = "settings-when";
-          cuando.textContent = this.t("settings-restart-badge");
-          desc.append(" ", cuando);
+        if (r.restart_required && !all) {
+          const when = document.createElement("span");
+          when.className = "settings-when";
+          when.textContent = this.t("settings-restart-badge");
+          desc.append(" ", when);
         }
-        fila.append(punto, nombre, valor, acciones, desc);
-        lista.append(fila);
+        row.append(dot, name, value, actions, desc);
+        list.append(row);
         i += 1;
       }
     } else {
       for (const r of sec.rows) {
-        const fila = this.settingsRow(i, settings.cursor);
-        // Las MISMAS cuatro celdas que una fila de ajuste, para que las dos
-        // clases de fila formen columna: una ubicación no tiene punto, así
-        // que el suyo va vacío en vez de faltar.
-        const punto = document.createElement("span");
-        punto.className = "settings-dot";
-        punto.dataset["on"] = "false";
-        const nombre = document.createElement("span");
-        nombre.className = "settings-name";
-        nombre.textContent = r.label;
-        const valor = document.createElement("span");
-        valor.className = "settings-value";
-        valor.dataset["hostile"] = String(r.hostile);
-        valor.textContent = r.display;
+        const row = this.settingsRow(i, settings.cursor);
+        // The SAME four cells as a settings row, so both row kinds form a
+        // column: a location has no dot, so its own goes empty instead of
+        // missing.
+        const dot = document.createElement("span");
+        dot.className = "settings-dot";
+        dot.dataset["on"] = "false";
+        const name = document.createElement("span");
+        name.className = "settings-name";
+        name.textContent = r.label;
+        const value = document.createElement("span");
+        value.className = "settings-value";
+        value.dataset["hostile"] = String(r.hostile);
+        value.textContent = r.display;
         if (r.hostile) {
-          valor.append(badge(this.t("hostile-name")));
+          value.append(badge(this.t("hostile-name")));
         }
-        const acciones = document.createElement("span");
-        acciones.className = "settings-actions";
+        const actions = document.createElement("span");
+        actions.className = "settings-actions";
         if (r.missing) {
-          // Que un sitio no exista es un HECHO del diagnóstico y no un
-          // error: una capa que nadie ha creado es lo normal.
-          const falta = document.createElement("span");
-          falta.className = "settings-missing";
-          falta.textContent = this.t("settings-path-missing");
-          acciones.append(falta);
+          // A location not existing is a diagnostic FACT and not an error: a
+          // layer nobody has created is normal.
+          const missing = document.createElement("span");
+          missing.className = "settings-missing";
+          missing.textContent = this.t("settings-path-missing");
+          actions.append(missing);
         }
-        fila.append(punto, nombre, valor, acciones);
-        lista.append(fila);
+        row.append(dot, name, value, actions);
+        list.append(row);
         i += 1;
       }
     }
   }
-  lista.setAttribute("aria-activedescendant", `settings-row-${String(settings.cursor)}`);
-  // Qué mitad tiene el teclado. Los DOS cursores se pintan siempre y el que
-  // no lo tiene va apagado (ADR 0128): uno solo vivo, o ninguno, es lo que
-  // hace que no se sepa dónde está el foco.
-  lista.dataset["focused"] = String(settings.focus === "list");
-  cuerpo.append(lista);
-  caja.append(cuerpo);
-  // Conservar el nodo NO basta: moverlo a la caja nueva lo saca del DOM un
-  // instante, y eso ya lo desenfoca. Se le devuelve el foco —y el caret—
-  // que tenía al empezar. Es la misma cura que el campo de un diálogo
-  // necesitó por lo mismo.
-  this.settingsRoot.replaceChildren(caja);
-  if (enfocado && buscar instanceof HTMLInputElement) {
-    buscar.focus();
+  list.setAttribute("aria-activedescendant", `settings-row-${String(settings.cursor)}`);
+  // Which half has the keyboard. BOTH cursors are always painted and the one
+  // that does not have it is dimmed (ADR 0128): only one alive, or none, is
+  // what makes it impossible to know where the focus is.
+  list.dataset["focused"] = String(settings.focus === "list");
+  body.append(list);
+  box.append(body);
+  // Keeping the node is NOT enough: moving it to the new box takes it out of
+  // the DOM for an instant, and that already unfocuses it. It is given back
+  // the focus — and the caret — it had at the start. Same cure a dialog's
+  // field needed for the same reason.
+  this.settingsRoot.replaceChildren(box);
+  if (focused && search instanceof HTMLInputElement) {
+    search.focus();
     if (caret[0] !== null && caret[1] !== null) {
-      buscar.setSelectionRange(caret[0], caret[1]);
+      search.setSelectionRange(caret[0], caret[1]);
     }
   }
-  lista.scrollTop = scroll;
-  revelar(objetivoRevelado(lista, settings.cursor));
+  list.scrollTop = scroll;
+  revealInView(revealTarget(list, settings.cursor));
 }
 
 /**
- * Un icono por sección, por su clave ESTABLE.
+ * One icon per section, by its STABLE key.
  *
- * Unicode a secas, no Nerd Font: el índice tiene que leerse en una máquina
- * sin fuentes de iconos instaladas, y una sección cuya clave no esté aquí
- * simplemente no lleva icono — el rótulo, que es lo que se lee, sigue ahí.
+ * Plain Unicode, not Nerd Font: the index has to read on a machine with no
+ * icon fonts installed, and a section whose key is not here simply carries
+ * no icon — the label, which is what gets read, is still there.
  */
-const ICONO_DE_SECCION: Record<string, string> = {
+const SECTION_ICON: Record<string, string> = {
   appearance: "◐",
   panes: "▤",
   "open-with": "↗",
@@ -261,24 +263,24 @@ const ICONO_DE_SECCION: Record<string, string> = {
 };
 
 /**
- * El CONTROL de una fila: interruptor, desplegable, número o campo de texto,
- * según lo que el host diga que es.
+ * A row's CONTROL: switch, dropdown, number or text field, according to
+ * what the host says it is.
  *
- * La clase la manda el host (`control`) y los valores admitidos también
- * (`choices`, ya resueltos): aquí no se decide qué admite un ajuste ni se
- * valida nada. Lo que se teclea o se elige se manda con `settings_set` y lo
- * acepta o lo rechaza el editor compartido, que es el mismo que usa el
- * teclado del terminal.
+ * The class is sent by the host (`control`) and so are the accepted values
+ * (`choices`, already resolved): nothing about what a setting accepts is
+ * decided here, and nothing is validated. What gets typed or chosen is sent
+ * with `settings_set` and accepted or rejected by the shared editor, the
+ * same one the terminal's keyboard uses.
  *
- * Ninguno de estos controles burbujea su interacción: el `<li>` lleva un
- * click que SEÑALA y un doble click que ACTIVA, y mover un interruptor no es
- * ninguna de las dos.
+ * None of these controls lets its interaction bubble: the `<li>` carries a
+ * click that SELECTS and a double click that ACTIVATES, and flipping a
+ * switch is neither.
  */
-function controlDeAjuste(this: Screen, r: SettingRowView): HTMLElement {
-  const caja = document.createElement("span");
-  caja.className = "settings-value";
-  caja.dataset["control"] = r.control;
-  const poner = (value: string): void => {
+function settingControl(this: Screen, r: SettingRowView): HTMLElement {
+  const box = document.createElement("span");
+  box.className = "settings-value";
+  box.dataset["control"] = r.control;
+  const set = (value: string): void => {
     this.send({ action: "settings_set", id: r.id, value });
   };
 
@@ -290,17 +292,17 @@ function controlDeAjuste(this: Screen, r: SettingRowView): HTMLElement {
     const on = r.value === "true";
     sw.setAttribute("aria-checked", String(on));
     sw.dataset["on"] = String(on);
-    // El estado se dice con TEXTO además de con la posición: un interruptor
-    // que solo se distingue por dónde está el pomo no se lee sin verlo.
-    const bolita = document.createElement("span");
-    bolita.className = "settings-switch-knob";
-    sw.append(bolita);
+    // The state is said with TEXT in addition to position: a switch that is
+    // only told apart by where the knob is does not read without seeing it.
+    const knob = document.createElement("span");
+    knob.className = "settings-switch-knob";
+    sw.append(knob);
     sw.addEventListener("click", (e) => {
       e.stopPropagation();
-      poner(on ? "false" : "true");
+      set(on ? "false" : "true");
     });
-    caja.append(sw);
-    return caja;
+    box.append(sw);
+    return box;
   }
 
   if (r.control === "choice" && r.choices.length > 0) {
@@ -313,25 +315,25 @@ function controlDeAjuste(this: Screen, r: SettingRowView): HTMLElement {
       op.selected = c === r.value;
       sel.append(op);
     }
-    // Un valor que el fichero trae y la lista ya no reconoce —un tema
-    // borrado, un preset renombrado— se AÑADE al final en vez de
-    // desaparecer: un desplegable que enseña otra cosa de la que hay puesta
-    // miente sobre la configuración.
+    // A value the file carries that the list no longer recognizes — a
+    // deleted theme, a renamed preset — is ADDED at the end instead of
+    // disappearing: a dropdown that shows something other than what is set
+    // lies about the configuration.
     if (!r.choices.includes(r.value) && r.value !== "") {
-      const huerfano = document.createElement("option");
-      huerfano.value = r.value;
-      huerfano.textContent = r.value;
-      huerfano.selected = true;
-      sel.append(huerfano);
+      const orphan = document.createElement("option");
+      orphan.value = r.value;
+      orphan.textContent = r.value;
+      orphan.selected = true;
+      sel.append(orphan);
     }
     sel.addEventListener("click", (e) => {
       e.stopPropagation();
     });
     sel.addEventListener("change", () => {
-      poner(sel.value);
+      set(sel.value);
     });
-    caja.append(sel);
-    return caja;
+    box.append(sel);
+    return box;
   }
 
   if (r.control === "number") {
@@ -346,93 +348,94 @@ function controlDeAjuste(this: Screen, r: SettingRowView): HTMLElement {
     if (r.max !== null) {
       num.max = String(r.max);
     }
-    campoQueGuarda.call(this, num, r, poner);
-    caja.append(num);
-    return caja;
+    savingField.call(this, num, r, set);
+    box.append(num);
+    return box;
   }
 
   if (r.control === "text" || r.control === "args") {
-    const campo = document.createElement("input");
-    campo.className = "settings-text";
-    campo.type = "text";
-    // Vacío NO es un hueco: es el valor de fábrica, y se dice CUÁL. Una
-    // frase («lo que norte trae») ocupa el sitio del dato sin darlo.
-    campo.placeholder = r.default;
-    // El valor que se EDITA es el real, no el enmascarado: lo que se pinta
-    // en una lista pasa por la máscara, pero un campo que devolviera el
-    // texto saneado guardaría el reemplazo en el fichero.
-    campo.value = r.value;
-    campoQueGuarda.call(this, campo, r, poner);
-    caja.append(campo);
-    return caja;
+    const field = document.createElement("input");
+    field.className = "settings-text";
+    field.type = "text";
+    // Empty is NOT a gap: it is the factory value, and WHICH one is stated.
+    // A sentence ("what norte ships with") takes the data's spot without
+    // giving it.
+    field.placeholder = r.default;
+    // The value being EDITED is the real one, not the masked one: what is
+    // painted in a list goes through the mask, but a field that returned the
+    // sanitized text would save the replacement into the file.
+    field.value = r.value;
+    savingField.call(this, field, r, set);
+    box.append(field);
+    return box;
   }
 
-  // Lo que no se edita desde aquí —el resumen de un plugin— se queda como
-  // texto, con su marca si el valor vino hostil.
-  caja.dataset["hostile"] = String(r.hostile);
-  caja.textContent = r.value;
+  // What is not edited from here — a plugin's summary — stays as text, with
+  // its mark if the value came hostile.
+  box.dataset["hostile"] = String(r.hostile);
+  box.textContent = r.value;
   if (r.hostile) {
-    caja.append(badge(this.t("hostile-name")));
+    box.append(badge(this.t("hostile-name")));
   }
-  return caja;
+  return box;
 }
 
 /**
- * Un campo que guarda al salir de él o con Intro, y se rinde con Escape.
+ * A field that saves on blur or with Enter, and gives up with Escape.
  *
- * No con cada tecla: cada pulsación sería una escritura en el `norte.toml`
- * y una recarga de la configuración entera. Y no burbujea: el `<li>` de
- * debajo mueve el cursor con el click.
+ * Not on every keystroke: every keypress would be a write to `norte.toml`
+ * and a reload of the whole configuration. And it does not bubble: the
+ * `<li>` underneath moves the cursor with the click.
  */
-function campoQueGuarda(
+function savingField(
   this: Screen,
-  campo: HTMLInputElement,
+  field: HTMLInputElement,
   r: SettingRowView,
-  poner: (v: string) => void,
+  set: (v: string) => void,
 ): void {
-  campo.addEventListener("click", (e) => {
+  field.addEventListener("click", (e) => {
     e.stopPropagation();
   });
-  campo.addEventListener("blur", () => {
-    if (campo.value !== r.value) {
-      poner(campo.value);
+  field.addEventListener("blur", () => {
+    if (field.value !== r.value) {
+      set(field.value);
     }
   });
-  campo.addEventListener("keydown", (e) => {
-    // Las teclas de un campo son SUYAS: sin esto, las flechas mueven el
-    // cursor de la lista de detrás mientras se escribe, y `esc` cierra los
-    // ajustes enteros en vez de rendir el campo.
+  field.addEventListener("keydown", (e) => {
+    // A field's keys are ITS OWN: without this, the arrows move the list's
+    // cursor behind it while typing, and `esc` closes all of settings
+    // instead of giving up on the field.
     e.stopPropagation();
     if (e.key === "Enter") {
-      campo.blur();
+      field.blur();
     } else if (e.key === "Escape") {
-      campo.value = r.value;
-      campo.blur();
+      field.value = r.value;
+      field.blur();
     }
   });
 }
 
 /**
- * El índice de la izquierda: todas las secciones que esta superficie tiene,
- * con cuántas de sus filas se ven.
+ * The index on the left: every section this surface has, with how many of
+ * its rows are visible.
  *
- * Una que el filtro vació sigue aquí, apagada: un índice que cambia de largo
- * mientras escribes no se puede usar como mapa. Lo que viaja de vuelta al
- * pinchar es su clave ESTABLE, así que el salto no depende del idioma.
+ * One the filter emptied stays here, dimmed: an index that changes length
+ * while you type cannot be used as a map. What travels back on a click is
+ * its STABLE key, so the jump does not depend on the language.
  */
-function indiceDeSecciones(this: Screen, settings: SettingsView): HTMLElement {
-  // En qué sección cae el cursor. Se cuenta sobre las mismas secciones que
-  // se pintan, y se empareja por CLAVE: casar por el rótulo traducido se
-  // rompería el día que dos se llamen parecido o alguien retoque una cadena.
-  let vistas = 0;
-  let actual: string | null = null;
+function sectionIndex(this: Screen, settings: SettingsView): HTMLElement {
+  // Which section the cursor falls in. Counted over the same sections that
+  // are painted, and matched by KEY: matching by the translated label would
+  // break the day two are named similarly or someone tweaks a string.
+  let seen = 0;
+  let current: string | null = null;
   for (const sec of settings.sections) {
     const n = sec.rows.length;
-    if (settings.cursor < vistas + n) {
-      actual = sec.section === "settings" ? sec.key : "paths";
+    if (settings.cursor < seen + n) {
+      current = sec.section === "settings" ? sec.key : "paths";
       break;
     }
-    vistas += n;
+    seen += n;
   }
   const nav = document.createElement("nav");
   nav.className = "settings-index";
@@ -445,26 +448,27 @@ function indiceDeSecciones(this: Screen, settings: SettingsView): HTMLElement {
     item.dataset["key"] = s.key;
     item.dataset["empty"] = String(s.visible === 0);
     item.disabled = s.visible === 0;
-    if (s.key === actual) {
-      // El cursor de ESTE lado. Se pinta siempre; el CSS lo apaga cuando el
-      // teclado está en la lista.
+    if (s.key === current) {
+      // THIS side's cursor. Always painted; the CSS dims it when the
+      // keyboard is in the list.
       item.setAttribute("aria-current", "true");
     }
-    // El icono es DECORACIÓN: el rótulo va al lado y es lo que se lee. Por
-    // eso `aria-hidden` — un lector de pantalla que dijera «paleta,
-    // Apariencia» estaría leyendo dos veces lo mismo, la segunda mal.
-    const icono = document.createElement("span");
-    icono.className = "settings-index-icon";
-    icono.setAttribute("aria-hidden", "true");
-    icono.textContent = ICONO_DE_SECCION[s.key] ?? "";
-    const titulo = document.createElement("span");
-    titulo.className = "settings-index-title";
-    titulo.textContent = s.title;
-    item.append(icono);
-    const cuantas = document.createElement("span");
-    cuantas.className = "settings-index-count";
-    cuantas.textContent = String(s.visible);
-    item.append(titulo, cuantas);
+    // The icon is DECORATION: the label sits next to it and is what gets
+    // read. That is why `aria-hidden` — a screen reader saying "palette,
+    // Appearance" would be reading the same thing twice, the second time
+    // wrong.
+    const icon = document.createElement("span");
+    icon.className = "settings-index-icon";
+    icon.setAttribute("aria-hidden", "true");
+    icon.textContent = SECTION_ICON[s.key] ?? "";
+    const title = document.createElement("span");
+    title.className = "settings-index-title";
+    title.textContent = s.title;
+    item.append(icon);
+    const count = document.createElement("span");
+    count.className = "settings-index-count";
+    count.textContent = String(s.visible);
+    item.append(title, count);
     item.addEventListener("click", () => {
       this.send({ action: "settings_jump_section", section: s.key });
     });
@@ -474,38 +478,36 @@ function indiceDeSecciones(this: Screen, settings: SettingsView): HTMLElement {
 }
 
 /**
- * QUÉ hay que dejar a la vista para el cursor: su fila, o la CABECERA de su
- * sección cuando la fila es la primera de ella.
+ * WHAT has to be kept in view for the cursor: its row, or its section's
+ * HEADER when the row is the first one in it.
  *
- * Revelar solo la fila deja la cabecera justo por encima del borde, y el
- * lector pierde el único rótulo que dice dónde está: bajar del todo y volver
- * arriba dejaba «General» fuera para siempre. La terminal tiene la misma
- * regla en su conciliación de ventana (`SettingsState::reconcile_viewport`),
- * escrita ahí porque allí el scroll es nuestro y aquí es del navegador.
+ * Revealing only the row leaves the header right above the edge, and the
+ * reader loses the only label that says where they are: scrolling all the
+ * way down and back up left "General" out forever. The terminal has the
+ * same rule in its window reconciliation
+ * (`SettingsState::reconcile_viewport`), written there because there the
+ * scroll is ours and here it is the browser's.
  *
- * Aparte y exportada porque `scrollIntoView` no existe en jsdom: lo que los
- * tests pueden comprobar es la ELECCIÓN, no el desplazamiento.
+ * Kept separate and exported because `scrollIntoView` does not exist in
+ * jsdom: what the tests can check is the CHOICE, not the scrolling.
  */
-export function objetivoRevelado(
-  lista: Element,
-  cursor: number,
-): HTMLElement | undefined {
-  const fila = lista.querySelector(`#settings-row-${String(cursor)}`);
-  if (!(fila instanceof HTMLElement)) {
+export function revealTarget(list: Element, cursor: number): HTMLElement | undefined {
+  const row = list.querySelector(`#settings-row-${String(cursor)}`);
+  if (!(row instanceof HTMLElement)) {
     return undefined;
   }
-  const previo = fila.previousElementSibling;
-  if (previo instanceof HTMLElement && previo.classList.contains("settings-group")) {
-    return previo;
+  const previous = row.previousElementSibling;
+  if (previous instanceof HTMLElement && previous.classList.contains("settings-group")) {
+    return previous;
   }
-  return fila;
+  return row;
 }
 
 /**
- * El tema por dentro (F9).
+ * The theme from the inside (F9).
  *
- * Cada rol con su color como MUESTRA, no como texto: un `#2d4f8a` no le
- * dice nada a nadie hasta que se ve al lado del cuadrado que pinta.
+ * Each role with its color as a SWATCH, not as text: a `#2d4f8a` tells
+ * nobody anything until it is seen next to the square it paints.
  */
 export function paintTheme(this: Screen, theme: ThemeView | null): void {
   if (theme === null) {
@@ -514,95 +516,95 @@ export function paintTheme(this: Screen, theme: ThemeView | null): void {
     return;
   }
   this.themeRoot.dataset["open"] = "true";
-  const caja = document.createElement("section");
-  caja.className = "theme";
-  caja.setAttribute("role", "dialog");
-  caja.setAttribute("aria-modal", "true");
-  caja.setAttribute("aria-label", this.t("theme-title"));
+  const box = document.createElement("section");
+  box.className = "theme";
+  box.setAttribute("role", "dialog");
+  box.setAttribute("aria-modal", "true");
+  box.setAttribute("aria-label", this.t("theme-title"));
 
-  const titulo = document.createElement("h1");
-  titulo.textContent = `${this.t("theme-title")} · ${theme.name}`;
-  caja.append(titulo);
+  const title = document.createElement("h1");
+  title.textContent = `${this.t("theme-title")} · ${theme.name}`;
+  box.append(title);
 
-  // La lista de temas, con el cursor. Moverse por ella previsualiza EN
-  // VIVO: los colores de la ventana entera ya han cambiado cuando esto se
-  // pinta, así que lo que hay debajo es el tema señalado.
+  // The theme list, with the cursor. Moving through it previews LIVE: the
+  // whole window's colors have already changed by the time this paints, so
+  // what is underneath is the pointed-to theme.
   if (theme.choices.length > 0) {
-    const elegir = document.createElement("ul");
-    elegir.className = "theme-choices";
-    elegir.setAttribute("role", "listbox");
-    for (const [i, nombre] of theme.choices.entries()) {
-      const fila = document.createElement("li");
-      fila.className = "theme-choice";
-      fila.id = `theme-choice-${String(i)}`;
-      fila.setAttribute("role", "option");
-      fila.setAttribute("aria-selected", String(theme.cursor === i));
-      fila.textContent = nombre;
-      elegir.append(fila);
+    const choose = document.createElement("ul");
+    choose.className = "theme-choices";
+    choose.setAttribute("role", "listbox");
+    for (const [i, name] of theme.choices.entries()) {
+      const row = document.createElement("li");
+      row.className = "theme-choice";
+      row.id = `theme-choice-${String(i)}`;
+      row.setAttribute("role", "option");
+      row.setAttribute("aria-selected", String(theme.cursor === i));
+      row.textContent = name;
+      choose.append(row);
     }
-    elegir.setAttribute("aria-activedescendant", `theme-choice-${String(theme.cursor)}`);
-    caja.append(elegir);
+    choose.setAttribute("aria-activedescendant", `theme-choice-${String(theme.cursor)}`);
+    box.append(choose);
   }
 
   if (theme.unsupported_effects.length > 0) {
-    // Se NOMBRAN. Un tema retro que se ve idéntico a los demás se lee como
-    // roto, y el usuario va a buscar el bug donde no está.
-    const aviso = document.createElement("p");
-    aviso.className = "theme-effects";
-    aviso.setAttribute("role", "note");
-    const hostil = theme.unsupported_effects.some((e) => e.hostile);
-    aviso.textContent = `${this.t("theme-effects-unsupported")} ${theme.unsupported_effects
+    // They are NAMED. A retro theme that looks identical to the rest reads
+    // as broken, and the user goes looking for the bug where it is not.
+    const notice = document.createElement("p");
+    notice.className = "theme-effects";
+    notice.setAttribute("role", "note");
+    const hostile = theme.unsupported_effects.some((e) => e.hostile);
+    notice.textContent = `${this.t("theme-effects-unsupported")} ${theme.unsupported_effects
       .map((e) => e.key)
       .join(" · ")}`;
-    aviso.dataset["hostile"] = String(hostil);
-    if (hostil) {
-      // Las claves salen del fichero de tema: si se enmascararon, se dice.
-      aviso.classList.add("hostile");
-      aviso.append(badge(this.t("hostile-name")));
+    notice.dataset["hostile"] = String(hostile);
+    if (hostile) {
+      // The keys come from the theme file: if they were masked, it is said.
+      notice.classList.add("hostile");
+      notice.append(badge(this.t("hostile-name")));
     }
-    caja.append(aviso);
+    box.append(notice);
   }
 
   const sub = document.createElement("h2");
   sub.textContent = this.t("theme-roles");
-  caja.append(sub);
+  box.append(sub);
 
-  const lista = document.createElement("ul");
-  lista.className = "theme-roles";
+  const list = document.createElement("ul");
+  list.className = "theme-roles";
   for (const r of theme.roles) {
-    const fila = document.createElement("li");
-    fila.className = "theme-role";
-    const muestra = document.createElement("span");
-    muestra.className = "theme-swatch";
-    // Por CSSOM y no por atributo `style`: la CSP lo bloquea.
-    muestra.style.setProperty("background-color", r.color);
-    const nombre = document.createElement("span");
-    nombre.className = "theme-role-name";
-    nombre.textContent = r.role;
+    const row = document.createElement("li");
+    row.className = "theme-role";
+    const swatch = document.createElement("span");
+    swatch.className = "theme-swatch";
+    // Through CSSOM and not the `style` attribute: the CSP blocks it.
+    swatch.style.setProperty("background-color", r.color);
+    const name = document.createElement("span");
+    name.className = "theme-role-name";
+    name.textContent = r.role;
     const hex = document.createElement("span");
     hex.className = "theme-role-hex";
     hex.textContent = r.color;
-    fila.append(muestra, nombre, hex);
-    lista.append(fila);
+    row.append(swatch, name, hex);
+    list.append(row);
   }
-  caja.append(lista);
-  this.themeRoot.replaceChildren(caja);
+  box.append(list);
+  this.themeRoot.replaceChildren(box);
 }
 
 /**
- * El selector de disposiciones, con la FORMA de la elegida al lado.
+ * The layout picker, with the SHAPE of the chosen one alongside.
  *
- * La miniatura llega como líneas de texto pintadas por el mismo motor que
- * reparte la pantalla de verdad, así que no puede mentir sobre lo que va a
- * salir. Aquí solo se pone en un `<pre>`.
+ * The thumbnail arrives as text lines painted by the same engine that lays
+ * out the real screen, so it cannot lie about what will come out. Here it is
+ * only put into a `<pre>`.
  */
 /**
- * El selector de COLUMNAS: qué se pinta, en qué orden y con qué formato.
+ * The COLUMNS picker: what gets painted, in what order and with what format.
  *
- * Dice en su título el ALCANCE —un esquema o todos— y en su pie que lo
- * elegido vale para ESTA ventana y no se guarda: esta fase no escribe
- * configuración, y callarlo dejaría al usuario creyendo que acaba de
- * configurar norte.
+ * States its SCOPE in the title — one scheme or all — and in its footer that
+ * the choice applies to THIS window and is not saved: this phase does not
+ * write configuration, and staying quiet about it would leave the user
+ * believing they just configured norte.
  */
 export function paintColumns(this: Screen, columns: ColumnsPickerView | null): void {
   if (columns === null) {
@@ -611,83 +613,82 @@ export function paintColumns(this: Screen, columns: ColumnsPickerView | null): v
     return;
   }
   this.columnsRoot.dataset["open"] = "true";
-  const caja = document.createElement("section");
-  caja.className = "columns-picker";
-  caja.setAttribute("role", "dialog");
-  caja.setAttribute("aria-modal", "true");
-  caja.setAttribute("aria-label", columns.title);
+  const box = document.createElement("section");
+  box.className = "columns-picker";
+  box.setAttribute("role", "dialog");
+  box.setAttribute("aria-modal", "true");
+  box.setAttribute("aria-label", columns.title);
 
-  const titulo = document.createElement("h1");
-  titulo.textContent = columns.title;
-  caja.append(titulo);
+  const title = document.createElement("h1");
+  title.textContent = columns.title;
+  box.append(title);
 
-  const lista = document.createElement("ul");
-  lista.className = "columns-rows";
-  lista.setAttribute("role", "listbox");
+  const list = document.createElement("ul");
+  list.className = "columns-rows";
+  list.setAttribute("role", "listbox");
   for (const [i, r] of columns.rows.entries()) {
-    const fila = document.createElement("li");
-    fila.className = "columns-row";
-    fila.id = `columns-row-${String(i)}`;
-    fila.setAttribute("role", "option");
-    fila.setAttribute("aria-selected", String(columns.cursor === i));
-    // Encendida o no, y si se puede tocar: las dos cosas al lector de
-    // pantalla, no solo al que mira.
-    fila.setAttribute("aria-checked", String(r.enabled));
-    fila.dataset["enabled"] = String(r.enabled);
-    fila.dataset["fixed"] = String(r.fixed);
+    const row = document.createElement("li");
+    row.className = "columns-row";
+    row.id = `columns-row-${String(i)}`;
+    row.setAttribute("role", "option");
+    row.setAttribute("aria-selected", String(columns.cursor === i));
+    // On or not, and whether it can be touched: both to the screen reader,
+    // not only to whoever is looking.
+    row.setAttribute("aria-checked", String(r.enabled));
+    row.dataset["enabled"] = String(r.enabled);
+    row.dataset["fixed"] = String(r.fixed);
 
-    const marca = document.createElement("span");
-    marca.className = "columns-check";
-    marca.textContent = r.enabled ? "☑" : "☐";
-    const nombre = document.createElement("span");
-    nombre.className = "columns-label";
-    nombre.dataset["hostile"] = String(r.hostile);
-    nombre.textContent = r.label;
+    const mark = document.createElement("span");
+    mark.className = "columns-check";
+    mark.textContent = r.enabled ? "☑" : "☐";
+    const name = document.createElement("span");
+    name.className = "columns-label";
+    name.dataset["hostile"] = String(r.hostile);
+    name.textContent = r.label;
     if (r.hostile) {
-      nombre.append(badge(this.t("hostile-name")));
+      name.append(badge(this.t("hostile-name")));
     }
-    fila.append(marca, nombre);
+    row.append(mark, name);
     if (r.format !== "") {
-      // El formato vigente. Bloqueado = lo fija un ajuste del esquema y
-      // aquí no se cicla; se pinta apagado en vez de desaparecer, porque
-      // una tecla que no hace nada y no dice por qué es peor.
+      // The current format. Locked = a scheme setting fixes it and it is not
+      // cycled here; painted dimmed instead of disappearing, because a key
+      // that does nothing and does not say why is worse.
       const fmt = document.createElement("span");
       fmt.className = "columns-format";
       fmt.dataset["locked"] = String(r.format_locked);
       fmt.textContent = r.format;
-      fila.append(fmt);
+      row.append(fmt);
     }
-    lista.append(fila);
+    list.append(row);
   }
   if (columns.cursor < columns.rows.length) {
-    lista.setAttribute("aria-activedescendant", `columns-row-${String(columns.cursor)}`);
+    list.setAttribute("aria-activedescendant", `columns-row-${String(columns.cursor)}`);
   }
-  caja.append(lista);
+  box.append(list);
 
-  const nota = document.createElement("p");
-  nota.className = "columns-note";
-  nota.setAttribute("role", "note");
-  nota.textContent = columns.note;
-  caja.append(nota);
+  const note = document.createElement("p");
+  note.className = "columns-note";
+  note.setAttribute("role", "note");
+  note.textContent = columns.note;
+  box.append(note);
 
-  const pie = document.createElement("footer");
-  pie.className = "columns-hint";
-  // Del HOST (#287): los verbos `dialog.*` se pueden reatar, y una cadena
-  // de aquí que nombre teclas concretas deja de ser cierta en cuanto
-  // alguien lo hace.
-  pie.textContent = columns.hint;
-  caja.append(pie);
-  this.columnsRoot.replaceChildren(caja);
+  const footer = document.createElement("footer");
+  footer.className = "columns-hint";
+  // From the HOST (#287): `dialog.*` verbs can be rebound, and a string here
+  // naming specific keys stops being true the moment someone does.
+  footer.textContent = columns.hint;
+  box.append(footer);
+  this.columnsRoot.replaceChildren(box);
 }
 
 /**
- * El selector de PERFILES (ADR 0079).
+ * The PROFILE picker (ADR 0079).
  *
- * Una fila que no se puede cargar se ENSEÑA con su motivo en vez de
- * desaparecer: esconder un directorio que el lector creó es peor que
- * enseñarlo roto. Y los dos avisos que la spec pide por su nombre —qué
- * otra cosa se llama igual, y qué perfil no puede guardar estado— van en
- * la fila, no en una nota al pie que nadie asocia.
+ * A row that cannot load is SHOWN with its reason instead of disappearing:
+ * hiding a directory the reader created is worse than showing it broken.
+ * And the two warnings the spec asks for by name — what else is named the
+ * same, and which profile cannot save state — go on the row, not in a
+ * footnote nobody connects to it.
  */
 export function paintProfiles(this: Screen, profiles: ProfilePickerView | null): void {
   if (profiles === null) {
@@ -696,74 +697,74 @@ export function paintProfiles(this: Screen, profiles: ProfilePickerView | null):
     return;
   }
   this.profilesRoot.dataset["open"] = "true";
-  const caja = document.createElement("section");
-  caja.className = "profiles";
-  caja.setAttribute("role", "dialog");
-  caja.setAttribute("aria-modal", "true");
-  caja.setAttribute("aria-label", this.t("profile-picker-title"));
+  const box = document.createElement("section");
+  box.className = "profiles";
+  box.setAttribute("role", "dialog");
+  box.setAttribute("aria-modal", "true");
+  box.setAttribute("aria-label", this.t("profile-picker-title"));
 
-  const titulo = document.createElement("h1");
-  titulo.textContent = this.t("profile-picker-title");
-  caja.append(titulo);
+  const title = document.createElement("h1");
+  title.textContent = this.t("profile-picker-title");
+  box.append(title);
 
-  const lista = document.createElement("ul");
-  lista.className = "profiles-rows";
-  lista.setAttribute("role", "listbox");
+  const list = document.createElement("ul");
+  list.className = "profiles-rows";
+  list.setAttribute("role", "listbox");
   for (const [i, r] of profiles.rows.entries()) {
-    const fila = document.createElement("li");
-    fila.className = "profiles-row";
-    fila.id = `profile-row-${String(i)}`;
-    fila.setAttribute("role", "option");
-    fila.setAttribute("aria-selected", String(profiles.cursor === i));
-    fila.dataset["active"] = String(r.active);
-    fila.dataset["broken"] = String(r.problem !== "");
-    fila.addEventListener("click", () => {
+    const row = document.createElement("li");
+    row.className = "profiles-row";
+    row.id = `profile-row-${String(i)}`;
+    row.setAttribute("role", "option");
+    row.setAttribute("aria-selected", String(profiles.cursor === i));
+    row.dataset["active"] = String(r.active);
+    row.dataset["broken"] = String(r.problem !== "");
+    row.addEventListener("click", () => {
       this.send({
         action: "profile_activate_row",
         row: i,
         generation: profiles.generation,
       });
     });
-    const nombre = document.createElement("span");
-    nombre.className = "profiles-name";
-    nombre.textContent = r.name;
+    const name = document.createElement("span");
+    name.className = "profiles-name";
+    name.textContent = r.name;
     if (r.name_hostile) {
-      // El nombre son bytes de un directorio: si se enmascaró, se dice.
-      nombre.append(badge(this.t("hostile-name")));
+      // The name is a directory's bytes: if it was masked, it is said.
+      name.append(badge(this.t("hostile-name")));
     }
-    fila.append(nombre);
+    row.append(name);
     if (r.title !== null) {
       const t = document.createElement("span");
       t.className = "profiles-title";
       t.textContent = r.title;
-      fila.append(t);
+      row.append(t);
     }
-    // El orden de las notas es el del terminal: primero por qué NO carga,
-    // luego lo que no podrá guardar, y al final el choque de nombre. De
-    // más grave a menos.
-    const nota =
+    // The notes' order is the terminal's: first why it does NOT load, then
+    // what it will not be able to save, and last the name clash. From most
+    // to least serious.
+    const note =
       r.problem !== ""
         ? r.problem
         : r.no_state
           ? this.t("profile-picker-no-state")
           : r.clash;
-    if (nota !== "") {
+    if (note !== "") {
       const n = document.createElement("span");
       n.className = "profiles-note";
-      n.textContent = nota;
-      fila.append(n);
+      n.textContent = note;
+      row.append(n);
     }
-    lista.append(fila);
+    list.append(row);
   }
-  lista.setAttribute("aria-activedescendant", `profile-row-${String(profiles.cursor)}`);
+  list.setAttribute("aria-activedescendant", `profile-row-${String(profiles.cursor)}`);
   if (profiles.rows.length === 0) {
-    const vacio = document.createElement("li");
-    vacio.className = "empty";
-    vacio.textContent = this.t("profile-picker-empty");
-    lista.append(vacio);
+    const empty = document.createElement("li");
+    empty.className = "empty";
+    empty.textContent = this.t("profile-picker-empty");
+    list.append(empty);
   }
-  caja.append(lista);
-  this.profilesRoot.replaceChildren(caja);
+  box.append(list);
+  this.profilesRoot.replaceChildren(box);
 }
 
 export function paintLayouts(this: Screen, layouts: LayoutPickerView | null): void {
@@ -773,81 +774,81 @@ export function paintLayouts(this: Screen, layouts: LayoutPickerView | null): vo
     return;
   }
   this.layoutsRoot.dataset["open"] = "true";
-  const caja = document.createElement("section");
-  caja.className = "layouts";
-  caja.setAttribute("role", "dialog");
-  caja.setAttribute("aria-modal", "true");
-  caja.setAttribute("aria-label", layouts.title);
+  const box = document.createElement("section");
+  box.className = "layouts";
+  box.setAttribute("role", "dialog");
+  box.setAttribute("aria-modal", "true");
+  box.setAttribute("aria-label", layouts.title);
 
-  const titulo = document.createElement("h1");
-  titulo.textContent = layouts.title;
-  caja.append(titulo);
+  const title = document.createElement("h1");
+  title.textContent = layouts.title;
+  box.append(title);
 
-  const cuerpo = document.createElement("div");
-  cuerpo.className = "layouts-body";
-  const lista = document.createElement("ul");
-  lista.className = "layouts-rows";
-  lista.setAttribute("role", "listbox");
+  const body = document.createElement("div");
+  body.className = "layouts-body";
+  const list = document.createElement("ul");
+  list.className = "layouts-rows";
+  list.setAttribute("role", "listbox");
   for (const [i, r] of layouts.rows.entries()) {
-    const fila = document.createElement("li");
-    fila.className = "layouts-row";
-    fila.id = `layout-row-${String(i)}`;
-    fila.setAttribute("role", "option");
-    fila.setAttribute("aria-selected", String(layouts.cursor === i));
-    fila.dataset["broken"] = String(r.broken);
-    fila.addEventListener("click", () => {
+    const row = document.createElement("li");
+    row.className = "layouts-row";
+    row.id = `layout-row-${String(i)}`;
+    row.setAttribute("role", "option");
+    row.setAttribute("aria-selected", String(layouts.cursor === i));
+    row.dataset["broken"] = String(r.broken);
+    row.addEventListener("click", () => {
       this.send({ action: "layout_activate_row", row: i });
     });
-    const nombre = document.createElement("span");
-    nombre.className = "layouts-name";
-    nombre.dataset["hostile"] = String(r.hostile);
-    nombre.textContent = r.name;
+    const name = document.createElement("span");
+    name.className = "layouts-name";
+    name.dataset["hostile"] = String(r.hostile);
+    name.textContent = r.name;
     if (r.hostile) {
-      nombre.append(badge(this.t("hostile-name")));
+      name.append(badge(this.t("hostile-name")));
     }
-    fila.append(nombre);
+    row.append(name);
     if (r.factory) {
-      const marca = document.createElement("span");
-      marca.className = "layouts-tag";
-      marca.textContent = this.t("layout-picker-factory");
-      fila.append(marca);
+      const mark = document.createElement("span");
+      mark.className = "layouts-tag";
+      mark.textContent = this.t("layout-picker-factory");
+      row.append(mark);
     }
     if (r.shares_keymap_name) {
-      // Se AVISA: elegir esta disposición no cambia ni una tecla, y sin la
-      // línea la coincidencia de nombre es una trampa.
-      const aviso = document.createElement("span");
-      aviso.className = "layouts-warn";
-      aviso.textContent = this.t("layout-picker-shares-keymap");
-      fila.append(aviso);
+      // It is WARNED: choosing this layout does not change a single key, and
+      // without the line the name match is a trap.
+      const notice = document.createElement("span");
+      notice.className = "layouts-warn";
+      notice.textContent = this.t("layout-picker-shares-keymap");
+      row.append(notice);
     }
-    lista.append(fila);
+    list.append(row);
   }
-  lista.setAttribute("aria-activedescendant", `layout-row-${String(layouts.cursor)}`);
-  cuerpo.append(lista);
+  list.setAttribute("aria-activedescendant", `layout-row-${String(layouts.cursor)}`);
+  body.append(list);
 
   if (layouts.problem === "") {
-    const vista = document.createElement("pre");
-    vista.className = "layouts-preview";
-    vista.setAttribute("aria-hidden", "true");
-    vista.textContent = layouts.preview.join("\n");
-    cuerpo.append(vista);
+    const preview = document.createElement("pre");
+    preview.className = "layouts-preview";
+    preview.setAttribute("aria-hidden", "true");
+    preview.textContent = layouts.preview.join("\n");
+    body.append(preview);
   } else {
-    const roto = document.createElement("p");
-    roto.className = "layouts-problem";
-    roto.textContent = layouts.problem;
-    roto.dataset["hostile"] = String(layouts.problem_hostile);
+    const broken = document.createElement("p");
+    broken.className = "layouts-problem";
+    broken.textContent = layouts.problem;
+    broken.dataset["hostile"] = String(layouts.problem_hostile);
     if (layouts.problem_hostile) {
-      roto.classList.add("hostile");
-      roto.append(badge(this.t("hostile-name")));
+      broken.classList.add("hostile");
+      broken.append(badge(this.t("hostile-name")));
     }
-    cuerpo.append(roto);
+    body.append(broken);
   }
-  caja.append(cuerpo);
-  this.layoutsRoot.replaceChildren(caja);
-  revelar(lista.querySelector(`#layout-row-${String(layouts.cursor)}`) ?? undefined);
+  box.append(body);
+  this.layoutsRoot.replaceChildren(box);
+  revealInView(list.querySelector(`#layout-row-${String(layouts.cursor)}`) ?? undefined);
 }
 
-/** El selector de volúmenes. */
+/** The volume picker. */
 export function paintPicker(this: Screen, picker: PickerView | null): void {
   if (picker === null) {
     this.pickerRoot.replaceChildren();
@@ -855,38 +856,38 @@ export function paintPicker(this: Screen, picker: PickerView | null): void {
     return;
   }
   this.pickerRoot.dataset["open"] = "true";
-  const caja = document.createElement("section");
-  caja.className = "picker";
-  caja.setAttribute("role", "dialog");
-  caja.setAttribute("aria-modal", "true");
-  caja.setAttribute("aria-label", picker.title);
+  const box = document.createElement("section");
+  box.className = "picker";
+  box.setAttribute("role", "dialog");
+  box.setAttribute("aria-modal", "true");
+  box.setAttribute("aria-label", picker.title);
 
-  const titulo = document.createElement("h1");
-  titulo.textContent = picker.title;
-  caja.append(titulo);
+  const title = document.createElement("h1");
+  title.textContent = picker.title;
+  box.append(title);
 
   if (picker.empty !== "") {
-    // La frase la escribe el host: distingue «todavía preguntando» de «no
-    // hay ninguno», que es la distinción que una lista vacía se come.
-    const vacio = document.createElement("p");
-    vacio.className = "picker-empty";
-    vacio.setAttribute("role", "status");
-    vacio.textContent = picker.empty;
-    caja.append(vacio);
+    // The sentence is written by the host: it tells apart "still asking"
+    // from "there are none", the distinction an empty list swallows.
+    const empty = document.createElement("p");
+    empty.className = "picker-empty";
+    empty.setAttribute("role", "status");
+    empty.textContent = picker.empty;
+    box.append(empty);
   }
 
-  const lista = document.createElement("ul");
-  lista.className = "picker-rows";
-  lista.setAttribute("role", "listbox");
+  const list = document.createElement("ul");
+  list.className = "picker-rows";
+  list.setAttribute("role", "listbox");
   for (const [i, r] of picker.rows.entries()) {
-    const fila = document.createElement("li");
-    fila.className = "picker-row";
-    fila.id = `picker-row-${String(i)}`;
-    fila.setAttribute("role", "option");
-    fila.setAttribute("aria-selected", String(picker.cursor === i));
-    fila.addEventListener("click", () => {
-      // La generación de ESTA pintada: si la lista cambió entre el
-      // pintado y el click, el host lo rechaza en vez de elegir otra fila.
+    const row = document.createElement("li");
+    row.className = "picker-row";
+    row.id = `picker-row-${String(i)}`;
+    row.setAttribute("role", "option");
+    row.setAttribute("aria-selected", String(picker.cursor === i));
+    row.addEventListener("click", () => {
+      // THIS paint's generation: if the list changed between the paint and
+      // the click, the host rejects it instead of choosing a different row.
       this.send({
         action: "picker_select_row",
         row: i,
@@ -900,38 +901,38 @@ export function paintPicker(this: Screen, picker: PickerView | null): void {
     if (r.hostile) {
       label.append(badge(this.t("hostile-name")));
     }
-    const detalle = document.createElement("span");
-    detalle.className = "picker-detail";
-    detalle.textContent = r.detail;
-    fila.append(label, detalle);
-    lista.append(fila);
+    const detail = document.createElement("span");
+    detail.className = "picker-detail";
+    detail.textContent = r.detail;
+    row.append(label, detail);
+    list.append(row);
   }
   if (picker.cursor !== null) {
-    lista.setAttribute("aria-activedescendant", `picker-row-${String(picker.cursor)}`);
-    revelar(lista.querySelector(`#picker-row-${String(picker.cursor)}`) ?? undefined);
+    list.setAttribute("aria-activedescendant", `picker-row-${String(picker.cursor)}`);
+    revealInView(list.querySelector(`#picker-row-${String(picker.cursor)}`) ?? undefined);
   }
-  caja.append(lista);
-  this.pickerRoot.replaceChildren(caja);
+  box.append(list);
+  this.pickerRoot.replaceChildren(box);
 }
 
 /**
- * El `<li>` de una fila de ajustes, con su cursor, su click y su doble click.
+ * A settings row's `<li>`, with its cursor, its click and its double click.
  *
- * El click SEÑALA y el doble click ACTIVA, como en un listado: el primero
- * mueve el cursor y el segundo hace lo que `enter`. Los dos viajan —un
- * doble click es también un click— y el host los ordena.
+ * The click SELECTS and the double click ACTIVATES, as in a listing: the
+ * first moves the cursor and the second does what `enter` does. Both
+ * travel — a double click is also a click — and the host orders them.
  */
 export function settingsRow(this: Screen, i: number, cursor: number): HTMLElement {
-  const fila = document.createElement("li");
-  fila.className = "settings-row";
-  fila.id = `settings-row-${String(i)}`;
-  fila.setAttribute("role", "option");
-  fila.setAttribute("aria-selected", String(cursor === i));
-  fila.addEventListener("click", () => {
+  const row = document.createElement("li");
+  row.className = "settings-row";
+  row.id = `settings-row-${String(i)}`;
+  row.setAttribute("role", "option");
+  row.setAttribute("aria-selected", String(cursor === i));
+  row.addEventListener("click", () => {
     this.send({ action: "settings_select_row", row: i });
   });
-  fila.addEventListener("dblclick", () => {
+  row.addEventListener("dblclick", () => {
     this.send({ action: "settings_activate", row: i });
   });
-  return fila;
+  return row;
 }

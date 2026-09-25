@@ -1,18 +1,18 @@
-//! Tests del estado puro del TUI (fase 3 M1): navegación, cd, sort y
-//! display de nombres hostiles. Cero terminal: el estado es una máquina
-//! pura sobre `Entry`s.
+//! Tests for the TUI's pure state (phase 3 M1): navigation, cd, sort and
+//! display of hostile names. Zero terminal: the state is a pure machine
+//! over `Entry`s.
 
 use norte_proto::{Entry, EntryKind, Segment, VPath};
 use norte_tui::app::{Pane, display_name, sort_entries};
 
 fn vp(wire: &str) -> VPath {
-    VPath::parse(wire).expect("wire válido de test")
+    VPath::parse(wire).expect("valid test wire")
 }
 
 fn entry(dir: &VPath, name: &[u8], kind: EntryKind) -> Entry {
     Entry {
         attrs: std::collections::BTreeMap::new(),
-        path: dir.join(Segment::new(name.to_vec()).expect("segmento válido")),
+        path: dir.join(Segment::new(name.to_vec()).expect("valid segment")),
         kind,
         size: (kind == EntryKind::File).then_some(42),
         mtime_ms: None,
@@ -27,7 +27,7 @@ fn pane_with(names: &[(&[u8], EntryKind)]) -> Pane {
 }
 
 #[test]
-fn sort_pone_dirs_primero_y_por_bytes() {
+fn sort_puts_dirs_first_and_by_bytes() {
     let dir = vp("file:///base");
     let mut entries = vec![
         entry(&dir, b"zeta.txt", EntryKind::File),
@@ -41,7 +41,7 @@ fn sort_pone_dirs_primero_y_por_bytes() {
         .iter()
         .map(|e| e.path.file_name().unwrap().as_bytes())
         .collect();
-    // Dirs primero (orden de bytes: mayúsculas antes), luego el resto.
+    // Dirs first (byte order: uppercase before), then the rest.
     assert_eq!(
         names,
         vec![
@@ -55,7 +55,7 @@ fn sort_pone_dirs_primero_y_por_bytes() {
 }
 
 #[test]
-fn cursor_navega_con_topes() {
+fn cursor_navigates_with_caps() {
     let mut p = pane_with(&[
         (b"a", EntryKind::File),
         (b"b", EntryKind::File),
@@ -63,11 +63,11 @@ fn cursor_navega_con_topes() {
     ]);
     assert_eq!(p.cursor(), 0);
     p.move_up(1);
-    assert_eq!(p.cursor(), 0, "tope superior");
+    assert_eq!(p.cursor(), 0, "top cap");
     p.move_down(1);
     assert_eq!(p.cursor(), 1);
     p.move_down(100);
-    assert_eq!(p.cursor(), 2, "tope inferior");
+    assert_eq!(p.cursor(), 2, "bottom cap");
     p.move_to_end();
     assert_eq!(p.cursor(), 2);
     p.move_to_start();
@@ -75,7 +75,7 @@ fn cursor_navega_con_topes() {
 }
 
 #[test]
-fn cursor_en_pane_vacio_no_revienta() {
+fn cursor_in_empty_pane_does_not_crash() {
     let mut p = pane_with(&[]);
     p.move_down(1);
     p.move_up(1);
@@ -85,9 +85,9 @@ fn cursor_en_pane_vacio_no_revienta() {
 }
 
 #[test]
-fn selected_devuelve_la_entrada_bajo_el_cursor() {
+fn selected_returns_the_entry_under_the_cursor() {
     let mut p = pane_with(&[(b"a", EntryKind::File), (b"dir", EntryKind::Dir)]);
-    // Tras el sort: [dir, a].
+    // After sort: [dir, a].
     assert_eq!(
         p.selected().unwrap().path.file_name().unwrap().as_bytes(),
         b"dir"
@@ -100,52 +100,52 @@ fn selected_devuelve_la_entrada_bajo_el_cursor() {
 }
 
 #[test]
-fn display_marca_toda_perdida_y_neutraliza_controles() {
-    // Nombre UTF-8 limpio: idéntico y sin badge.
+fn display_marks_everything_lost_and_neutralizes_controls() {
+    // Clean UTF-8 name: identical and with no badge.
     let (text, hostile) = display_name(b"normal.txt");
     assert_eq!(text, "normal.txt");
     assert!(!hostile);
 
-    // Propiedad de la spec §6: badge EXACTAMENTE cuando el texto pintado
-    // difiere del nombre real (lossy, controles enmascarados o bidi).
+    // Spec §6 property: badge EXACTLY when the painted text differs from
+    // the real name (lossy, masked controls or bidi).
     for n in norte_testkit::corpus::hostile_names() {
         let (text, hostile) = display_name(&n.bytes);
-        assert!(!text.is_empty(), "{}: display jamás vacío", n.id);
-        let identico = text.as_bytes() == n.bytes.as_slice();
+        assert!(!text.is_empty(), "{}: display never empty", n.id);
+        let identical = text.as_bytes() == n.bytes.as_slice();
         assert_eq!(
-            hostile, !identico,
-            "{}: badge exactamente cuando el display difiere del real",
+            hostile, !identical,
+            "{}: badge exactly when the display differs from the real name",
             n.id
         );
-        // Jamás controles crudos ni bidi override hacia el terminal:
-        // ratatui los BORRARÍA en silencio (nombre visible ≠ real) y un
-        // frontend directo ejecutaría ANSI / reordenaría RTL.
+        // Never raw controls or a bidi override toward the terminal:
+        // ratatui would silently DROP them (visible name ≠ real one) and a
+        // direct frontend would run ANSI / reorder RTL.
         assert!(
             !text.chars().any(|c| c.is_control()
                 || matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')),
-            "{}: sin Cc ni Cf-bidi en el display",
+            "{}: no Cc or Cf-bidi in the display",
             n.id
         );
-        if !identico {
+        if !identical {
             assert!(
                 text.contains('\u{FFFD}'),
-                "{}: la pérdida se ve (spec §6: lossy marcado)",
+                "{}: the loss is visible (spec §6: lossy marked)",
                 n.id
             );
         }
     }
 
-    // Un archivo REALMENTE llamado � (UTF-8 válido) no lleva badge: la
-    // distinción con un lossy depende del badge, no del glifo.
+    // A file REALLY named � (valid UTF-8) carries no badge: telling it
+    // apart from a lossy one depends on the badge, not the glyph.
     let (text, hostile) = display_name("\u{FFFD}".as_bytes());
     assert_eq!(text, "\u{FFFD}");
     assert!(!hostile);
 }
 
 #[test]
-fn sort_junta_las_variantes_de_normalizacion() {
-    // spec §6.1: unicode_compare = nfc por defecto PARA ORDENAR (los bytes
-    // jamás se mutan). NFC y NFD del mismo nombre quedan adyacentes.
+fn sort_groups_normalization_variants_together() {
+    // spec §6.1: unicode_compare = nfc by default FOR SORTING (the bytes
+    // are never mutated). NFC and NFD of the same name end up adjacent.
     let dir = vp("file:///base");
     let mut entries = vec![
         entry(&dir, &[0xC3, 0xA9], EntryKind::File), // é NFC
@@ -158,9 +158,9 @@ fn sort_junta_las_variantes_de_normalizacion() {
         .iter()
         .map(|e| e.path.file_name().unwrap().as_bytes())
         .collect();
-    // é (U+00E9) ordena tras 'z' por su clave NFC; lo que importa: las DOS
-    // variantes quedan ADYACENTES (misma clave, desempate por bytes crudos:
-    // NFD 0x65… < NFC 0xC3…). Sin clave NFC, "zzz" partiría el par.
+    // é (U+00E9) sorts after 'z' by its NFC key; what matters: BOTH variants
+    // end up ADJACENT (same key, tie broken by raw bytes: NFD 0x65… <
+    // NFC 0xC3…). With no NFC key, "zzz" would split the pair.
     assert_eq!(names[0], b"aaa");
     assert_eq!(names[1], b"zzz");
     assert_eq!(names[2], &[0x65, 0xCC, 0x81][..]);
@@ -168,7 +168,7 @@ fn sort_junta_las_variantes_de_normalizacion() {
 }
 
 #[test]
-fn path_display_marca_paths_con_segmentos_hostiles() {
+fn path_display_flags_paths_with_hostile_segments() {
     use norte_tui::app::path_display;
     let clean = vp("file:///casa/docs");
     let (text, hostile) = path_display(&clean);
@@ -177,11 +177,11 @@ fn path_display_marca_paths_con_segmentos_hostiles() {
 
     let feo = clean.join(Segment::new(vec![0xE9]).unwrap());
     let (_, hostile) = path_display(&feo);
-    assert!(hostile, "un segmento no-UTF8 marca el path entero");
+    assert!(hostile, "a non-UTF8 segment marks the whole path");
 }
 
 #[test]
-fn tab_alterna_el_foco_entre_los_dos_panes() {
+fn tab_toggles_focus_between_the_two_panes() {
     use norte_tui::app::App;
     let mut app = App::new(pane_with(&[]), pane_with(&[]));
     assert_eq!(app.focus(), 0);
@@ -193,11 +193,11 @@ fn tab_alterna_el_foco_entre_los_dos_panes() {
     assert!(!app.quit);
 }
 
-/// #81 (MAJOR-4 del review): re-lanzar la búsqueda SIN cd de por medio no
-/// arrastra previews de la anterior — un hit de la query B solo-nombre
-/// pintaría el :línea de la query A.
+/// #81 (review MAJOR-4): re-launching the search with NO cd in between does
+/// not drag previews from the earlier one — a name-only hit from query B
+/// would paint query A's :line.
 #[test]
-fn begin_search_limpia_los_previews_anteriores() {
+fn begin_search_clears_previous_previews() {
     let mut p = pane_with(&[(b"a.rs", EntryKind::File)]);
     let root = vp("file:///casa");
     p.begin_search(root.clone());
@@ -211,6 +211,6 @@ fn begin_search_limpia_los_previews_anteriores() {
     p.begin_search(root);
     assert!(
         p.search_matches.is_empty(),
-        "el mapa se limpia al reiniciar la búsqueda"
+        "the map clears when the search restarts"
     );
 }

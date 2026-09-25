@@ -1,9 +1,9 @@
-//! El plan, en celdas.
+//! The plan, in cells.
 //!
-//! Toma un paso o un fallo y devuelve las columnas ya saneadas y acotadas —
-//! con sus glifos y su reinterpretación de nombres— para que cada superficie
-//! solo tenga que colocarlas. Lo que NO hace es decidir: eso ya venía
-//! decidido.
+//! Takes a step or a failure and returns the columns already sanitized and
+//! bounded —with their glyphs and their name reinterpretation— so each
+//! surface only has to place them. What it does NOT do is decide: that was
+//! already decided.
 
 use norte_proto::methods::{DestTrash, SyncReason, SyncStep};
 use unicode_normalization::UnicodeNormalization;
@@ -13,63 +13,67 @@ use super::{
     undo_glyph,
 };
 
-/// Las reinterpretaciones de nombres (#57) de los dos lados de una
-/// sincronización.
+/// The name reinterpretations (#57) of a synchronization's two sides.
 ///
-/// Una struct con dos campos NOMBRADOS y no una tupla `(Option<_>,
-/// Option<_>)`: los dos valores son del mismo tipo, así que trasponerlos
-/// compila — y trasponerlos ES el #152, un `dest_rel` decodificado con el
-/// codepage del ORIGEN, o sea nombrando otros bytes que el fichero sobre el
-/// que cae la escritura. Aquí el compilador no ayuda; el nombre sí.
+/// A struct with two NAMED fields and not a `(Option<_>, Option<_>)` tuple:
+/// the two values are of the same type, so transposing them compiles — and
+/// transposing them IS #152, a `dest_rel` decoded with the SOURCE's
+/// codepage, i.e. naming different bytes than the file the write lands on.
+/// Here the compiler does not help; the name does.
 ///
-/// El default —ninguna de las dos— es lo correcto para un frontend que no
-/// tiene overrides por ubicación, como el CLI: los nombres se leen como
-/// vienen.
+/// The default —neither of the two— is the right one for a frontend with no
+/// per-location overrides, such as the CLI: names are read as they come.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct SyncEncodings {
-    /// La del lado ORIGEN.
+    /// The SOURCE side's.
     pub source: Option<norte_encoding::NameEncoding>,
-    /// La del lado DESTINO, que puede ser otra: los dos panes son dos
-    /// ubicaciones y pueden llevar overrides distintos.
+    /// The DESTINATION side's, which can be a different one: the two panes
+    /// are two locations and can carry different overrides.
     pub dest: Option<norte_encoding::NameEncoding>,
 }
 
 impl SyncEncodings {
-    /// Con cuál de las dos se lee una ruta anclada en `anchor`.
+    /// Which of the two a path anchored at `anchor` is read with.
     ///
-    /// Es la mitad del #152 que no estaba escrita en ninguna parte: la
-    /// ortografía del destino se leía con la del destino (eso ya lo hacía cada
-    /// frontend a mano), pero el `rel` de un [`norte_proto::methods::SyncStepKind::DeleteTree`]
-    /// —que cuelga del DESTINO, ver [`crate::sync::anchor_of`]— se leía con la del ORIGEN.
-    /// Con dos panes con overrides distintos, eso nombra el subárbol que se va
-    /// a borrar con el codepage del árbol que NO se toca, en la pantalla donde
-    /// se aprueba borrarlo.
+    /// This is the half of #152 that was not written down anywhere: the
+    /// destination's spelling was read with the destination's (every
+    /// frontend already did that by hand), but a
+    /// [`norte_proto::methods::SyncStepKind::DeleteTree`]'s `rel` —which
+    /// hangs from the DESTINATION, see [`crate::sync::anchor_of`]— was read
+    /// with the SOURCE's. With two panes carrying different overrides, that
+    /// names the subtree about to be deleted with the codepage of the tree
+    /// that is NOT being touched, on the very screen where deleting it gets
+    /// approved.
     ///
-    /// [`RelAnchor::Either`] se lee con la del origen, que es de donde cuelga
-    /// «casi siempre» un `rel` (normativo en el wire): no se sabe, y elegir la
-    /// otra no sería más cierto — lo que un pane no debe hacer con un `Either`
-    /// es afirmar la COLUMNA, y eso lo dice [`StepCells::anchor`].
+    /// [`RelAnchor::Either`] is read with the source's, since that is where a
+    /// `rel` hangs "almost always" (normative on the wire): it is not known,
+    /// and choosing the other one would not be any truer — what a pane must
+    /// not do with an `Either` is assert the COLUMN, and that is
+    /// [`StepCells::anchor`]'s job.
     ///
-    /// Dos cosas hacen ese brazo menos peligroso de lo que parece, y las dos
-    /// se pierden si no se escriben:
+    /// Two things make that branch less dangerous than it looks, and both
+    /// get lost if they are not written down:
     ///
-    /// * la elección solo CAMBIA algo para bytes que no son UTF-8 válido
-    ///   (`display_name_with` no reinterpreta el UTF-8 válido), y en ese caso
-    ///   el resultado es SIEMPRE `hostile = true` — o sea que un `Either`
-    ///   leído con el codepage del otro lado llega marcado como «este texto no
-    ///   son los bytes» a las dos superficies;
-    /// * **para un PASO**, el único camino destructivo hasta `Either` es un
-    ///   [`norte_proto::methods::SyncStepKind::Unknown`] ([`crate::sync::anchor_of`]), y un solo paso así deja el
-    ///   plan en [`crate::sync::PlanIntegrity::Unnameable`], que no se puede aprobar. Lo
-    ///   que queda bajo `Either` es un `Skip`, que no escribe nada.
+    /// * the choice only CHANGES anything for bytes that are not valid UTF-8
+    ///   (`display_name_with` does not reinterpret valid UTF-8), and in that
+    ///   case the result is ALWAYS `hostile = true` — meaning an `Either`
+    ///   read with the other side's codepage arrives marked "this text is
+    ///   not the bytes" on both surfaces;
+    /// * **for a STEP**, the only destructive path to `Either` is a
+    ///   [`norte_proto::methods::SyncStepKind::Unknown`]
+    ///   ([`crate::sync::anchor_of`]), and a single step like that leaves
+    ///   the plan in [`crate::sync::PlanIntegrity::Unnameable`], which
+    ///   cannot be approved. What is left under `Either` is a `Skip`, which
+    ///   writes nothing.
     ///
-    /// **Ese segundo punto NO vale para un FALLO del informe**
-    /// ([`render_failure`]), y decirlo importa: un `DeleteTree` que falla por
-    /// permisos contra un destino de solo lectura es la fila más corriente de
-    /// un `Mirror`, su `rel` cuelga del DESTINO, y el informe no trae la clase
-    /// que lo diría. Ahí este brazo sí puede nombrar un subárbol del destino
-    /// con el codepage del árbol que no se toca. Lo que lo acota es que el
-    /// resultado llega `hostile = true` y que el ancla se PINTA.
+    /// **That second point does NOT hold for a report FAILURE**
+    /// ([`render_failure`]), and saying so matters: a `DeleteTree` that
+    /// fails on permissions against a read-only destination is the most
+    /// common row of a `Mirror`, its `rel` hangs from the DESTINATION, and
+    /// the report does not carry the class that would say so. There, this
+    /// branch CAN name a subtree of the destination with the codepage of the
+    /// tree that is not being touched. What bounds it is that the result
+    /// arrives `hostile = true` and that the anchor gets PAINTED.
     ///
     /// ```
     /// use norte_frontend::sync::{RelAnchor, SyncEncodings};
@@ -78,12 +82,12 @@ impl SyncEncodings {
     ///     source: Some(NameEncoding::Cp437),
     ///     dest: None,
     /// };
-    /// // Un `DeleteTree` habla del DESTINO, aunque se pinte en la primera
-    /// // columna.
+    /// // A `DeleteTree` speaks about the DESTINATION, even though it paints
+    /// // in the first column.
     /// assert_eq!(enc.for_anchor(RelAnchor::Dest), None);
     /// assert_eq!(enc.for_anchor(RelAnchor::Source), Some(NameEncoding::Cp437));
-    /// // Y lo que no consta se lee como el origen, que es de donde cuelga
-    /// // «casi siempre» un `rel`.
+    /// // And what is not on record is read as the source, which is where a
+    /// // `rel` hangs "almost always".
     /// assert_eq!(enc.for_anchor(RelAnchor::Either), Some(NameEncoding::Cp437));
     /// ```
     #[must_use]
@@ -180,31 +184,30 @@ pub fn render_step(step: &SyncStep, dest_trash: DestTrash, enc: SyncEncodings) -
     let undo = step_undo(step, dest_trash);
     let anchor = anchor_of(step);
     let rel = rel_display(&step.rel, enc.for_anchor(anchor));
-    // Siempre con la del DESTINO, sea cual sea el ancla: `dest_rel` existe
-    // precisamente para enseñar la ortografía de allí, que es sobre la que
-    // cae la escritura.
+    // Always with the DESTINATION's, whatever the anchor is: `dest_rel`
+    // exists precisely to show that side's spelling, which is the one the
+    // write lands on.
     //
-    // Y se pliega AQUÍ cuando los BYTES coinciden, no en cada pintor y no
-    // por el texto pintado: `RelDisplay::text` es lossy, así que
-    // `caf\xe9.txt` y `caf\x82.txt` —dos ficheros distintos— son el mismo
-    // `caf\u{FFFD}.txt`, y un pintor que compare textos esconde justo el
-    // campo que existe para decir sobre qué nombre cae la escritura
-    // (#152). El wire ya compara por bytes
-    // (`SyncStep::shape_is_consistent`); esto es la misma regla, una sola
-    // vez, para los tres frontends.
+    // And it is folded HERE when the BYTES match, not in every painter and
+    // not by the painted text: `RelDisplay::text` is lossy, so
+    // `caf\xe9.txt` and `caf\x82.txt` —two different files— are the same
+    // `caf\u{FFFD}.txt`, and a painter that compares texts hides exactly the
+    // field that exists to say which name the write lands on (#152). The
+    // wire already compares by bytes (`SyncStep::shape_is_consistent`); this
+    // is the same rule, once, for the three frontends.
     let dest_rel = step
         .dest_rel
         .as_ref()
         .filter(|d| **d != step.rel)
         .map(|r| rel_display(r, enc.dest));
-    // #192: los BYTES ya distinguen las dos rutas (si no, `dest_rel` sería
-    // `None`), pero pueden RENDERIZAR igual de todas formas — un par NFC/NFD
-    // es UTF-8 válido en las dos mitades, así que ninguna llega `hostile`, y
-    // ni siquiera `text == text` lo detecta: "é" precompuesta y "e" + acento
-    // combinante son Strings DISTINTOS que una fuente compone al mismo
-    // glifo. Por NFC y no por bytes NI por igualdad de String a secas —la
-    // comparación es la única parte de esto que normaliza; `RelDisplay::text`
-    // en sí sigue siendo el enmascarado byte-exacto de siempre.
+    // #192: the BYTES already tell the two paths apart (otherwise `dest_rel`
+    // would be `None`), but they can still RENDER the same — an NFC/NFD pair
+    // is valid UTF-8 on both halves, so neither one arrives `hostile`, and
+    // not even `text == text` catches it: precomposed "é" and "e" + a
+    // combining accent are DIFFERENT Strings that a font composes to the
+    // same glyph. By NFC and not by bytes NOR by plain String equality —the
+    // comparison is the only part of this that normalizes; `RelDisplay::text`
+    // itself is still the same byte-exact masked form as always.
     let dest_rel_twin = dest_rel
         .as_ref()
         .is_some_and(|d| d.text.nfc().eq(rel.text.nfc()));
@@ -225,73 +228,79 @@ pub fn render_step(step: &SyncStep, dest_trash: DestTrash, enc: SyncEncodings) -
     }
 }
 
-/// Una fila del informe (`sync.report`), ya resuelta: las dos rutas leídas con
-/// la reinterpretación que le toca a cada una, y la del destino PLEGADA cuando
-/// los bytes coinciden.
+/// One row of the report (`sync.report`), already resolved: both paths read
+/// with the reinterpretation that fits each one, and the destination's
+/// FOLDED when the bytes match.
 ///
-/// Gemela de [`StepCells`], y separada de ella porque un
-/// [`norte_proto::methods::SyncFailure`] no es un paso: no lleva clase, así que
-/// no hay glifos que pintar ni undo que juzgar. Lo que sí comparte es lo que se
-/// puede equivocar.
+/// Twin of [`StepCells`], and kept separate from it because a
+/// [`norte_proto::methods::SyncFailure`] is not a step: it carries no class,
+/// so there are no glyphs to paint and no undo to judge. What it does share
+/// is what can go wrong.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FailureCells {
-    /// La ruta del fallo, enmascarada y badgeada.
+    /// The failure's path, masked and badged.
     pub rel: RelDisplay,
-    /// La ortografía del DESTINO, si el informe la manda y DIFIERE en bytes.
+    /// The DESTINATION's spelling, if the report sends it and it DIFFERS in
+    /// bytes.
     pub dest_rel: Option<RelDisplay>,
-    /// Gemelo de [`StepCells::dest_rel_twin`], y por el mismo motivo (#192):
-    /// `dest_rel` es `Some` pero pinta IGUAL que `rel` — un par NFC/NFD, por
-    /// ejemplo, es UTF-8 válido en las dos mitades y ninguna llega `hostile`.
+    /// Twin of [`StepCells::dest_rel_twin`], and for the same reason (#192):
+    /// `dest_rel` is `Some` but renders THE SAME as `rel` — an NFC/NFD pair,
+    /// for instance, is valid UTF-8 on both halves and neither arrives
+    /// `hostile`.
     pub dest_rel_twin: bool,
-    /// De qué raíz cuelga [`FailureCells::rel`]: [`RelAnchor::Source`] cuando
-    /// el informe manda `dest_rel`, y [`RelAnchor::Either`] cuando no — ver
-    /// [`render_failure`]. **Un pintor tiene que pintarlo**: en un panel donde
-    /// una ruta sin calificar significa «del origen», callar un `Either` es
-    /// afirmar el origen.
+    /// Which root [`FailureCells::rel`] hangs from:
+    /// [`RelAnchor::Source`] when the report sends `dest_rel`, and
+    /// [`RelAnchor::Either`] when it does not — see [`render_failure`]. **A
+    /// painter has to paint it**: on a panel where an unqualified path means
+    /// "from the source", staying silent about an `Either` is asserting the
+    /// source.
     pub anchor: RelAnchor,
 }
 
-/// Resuelve UNA fila del informe, con las mismas dos reglas que
-/// [`render_step`] y por los mismos dos motivos.
+/// Resolves ONE row of the report, with the same two rules as
+/// [`render_step`] and for the same two reasons.
 ///
-/// * **El plegado es por BYTES**, no por el texto pintado: `RelDisplay::text`
-///   es lossy, así que dos ficheros distintos con un byte inválido cada uno se
-///   pintan igual — y comparando textos, el campo que dice sobre qué nombre
-///   cayó la escritura desaparece justo cuando los nombres son adversarios.
-/// * **La ortografía del destino se lee con la del destino**, sea cual sea el
-///   ancla (#152): existe precisamente para nombrar el fichero de allí.
+/// * **The folding is by BYTES**, not by the painted text: `RelDisplay::text`
+///   is lossy, so two different files each carrying one invalid byte paint
+///   the same — and comparing texts makes the field that says which name the
+///   write landed on disappear exactly when the names are adversarial.
+/// * **The destination's spelling is read with the destination's**, whatever
+///   the anchor is (#152): it exists precisely to name the file over there.
 ///
-/// # El ancla de un fallo casi nunca consta, y entonces es `Either`
-/// [`SyncStep::rel`] es «casi siempre» del origen y [`crate::sync::anchor_of`] usa la CLASE
-/// del paso para saber cuándo no lo es —un `DeleteTree` habla del destino—.
-/// Un [`norte_proto::methods::SyncFailure`] no lleva clase: el informe se lee
-/// sin el plan delante. Queda UNA prueba, y es la misma que usa
-/// [`crate::sync::anchor_of`]: si el informe manda `dest_rel`, entonces `rel` es la mitad
-/// del ORIGEN de la pareja (misma regla y mismo campo, ver
-/// [`norte_proto::methods::SyncFailure::dest_rel`]). Sin `dest_rel` no se
-/// sabe, y decir «origen» sería justo lo que [`RelAnchor::Either`] existe
-/// para no hacer — **un `DeleteTree` que falla por permisos es la fila hostil
-/// MÁS común de un `Mirror`**, y su `rel` cuelga del destino.
+/// # A failure's anchor is almost never on record, and then it is `Either`
+/// [`SyncStep::rel`] is "almost always" the source's and
+/// [`crate::sync::anchor_of`] uses the step's CLASS to know when it is not
+/// —a `DeleteTree` speaks about the destination—. A
+/// [`norte_proto::methods::SyncFailure`] carries no class: the report is
+/// read with no plan in front of it. ONE piece of evidence is left, and it
+/// is the same one [`crate::sync::anchor_of`] uses: if the report sends
+/// `dest_rel`, then `rel` is the SOURCE half of the pair (same rule, same
+/// field, see [`norte_proto::methods::SyncFailure::dest_rel`]). With no
+/// `dest_rel` it is not known, and saying "source" would be exactly what
+/// [`RelAnchor::Either`] exists to avoid doing — **a `DeleteTree` that fails
+/// on permissions is the MOST common hostile row of a `Mirror`**, and its
+/// `rel` hangs from the destination.
 ///
-/// Lo que un pintor NO puede hacer con un `Either` es callarse: en un panel
-/// donde una ruta sin calificar significa «del origen» (así lo escribe
-/// [`StepCells::anchor`]), el silencio es la afirmación. El ancla viaja en
-/// [`FailureCells::anchor`] para que se pinte, y la auditoría de encoding de
-/// esta fase (MAJOR-2) es exactamente eso.
+/// What a painter must NOT do with an `Either` is stay silent: on a panel
+/// where an unqualified path means "from the source" (which is how
+/// [`StepCells::anchor`] writes it), silence is the assertion. The anchor
+/// travels in [`FailureCells::anchor`] so it gets painted, and this phase's
+/// encoding audit (MAJOR-2) is exactly that.
 ///
-/// La DECODIFICACIÓN de un `Either` sigue siendo la del origen
-/// ([`SyncEncodings::for_anchor`]) porque no hay nada mejor que elegir; con
-/// dos overrides #57 distintos eso puede nombrar un subárbol del destino con
-/// el codepage del árbol que no se tocó, y llega marcado como hostil pero no
-/// como «del otro lado».
+/// An `Either`'s DECODING is still the source's
+/// ([`SyncEncodings::for_anchor`]) because there is nothing better to
+/// choose; with two different #57 overrides that can name a subtree of the
+/// destination with the codepage of the tree that was not touched, and it
+/// arrives marked hostile but not as "from the other side".
 ///
-/// **Desde 0.42.0 hay con qué cerrarlo, y esta función todavía no lo usa**
-/// (#195 lo puso en el wire, #208 lo consume):
-/// [`norte_proto::methods::SyncFailure::kind`] lleva la clase que el core tenía
-/// en la mano y tiraba, así que un `DeleteTree` que falló ya se puede anclar en
-/// el DESTINO con la misma regla que [`crate::sync::anchor_of`] aplica a un paso, en vez de
-/// caer en `Either`. Cambiar lo que este módulo devuelve cambia lo que dos
-/// frontends pintan, así que no viaja en el bump del wire.
+/// **Since 0.42.0 there is something to close this with, and this function
+/// does not use it yet** (#195 put it on the wire, #208 consumes it):
+/// [`norte_proto::methods::SyncFailure::kind`] carries the class the core had
+/// in hand and was throwing away, so a `DeleteTree` that failed can already
+/// be anchored at the DESTINATION with the same rule
+/// [`crate::sync::anchor_of`] applies to a step, instead of falling into
+/// `Either`. Changing what this module returns changes what two frontends
+/// paint, so it does not travel in the wire's bump.
 ///
 /// ```
 /// use norte_frontend::sync::{RelAnchor, SyncEncodings, render_failure};
@@ -304,23 +313,25 @@ pub struct FailureCells {
 /// };
 /// let cells = render_failure(&f, SyncEncodings::default());
 /// assert_eq!(cells.rel.text, "sub/a.txt");
-/// assert!(cells.dest_rel.is_none(), "la misma ortografía no se repite");
-/// // Con `dest_rel` en el wire, `rel` es la mitad del ORIGEN de la pareja —
-/// // aunque las dos ortografías coincidan y no haya nada que pintar aparte.
+/// assert!(cells.dest_rel.is_none(), "the same spelling is not repeated");
+/// // With `dest_rel` on the wire, `rel` is the SOURCE half of the pair —
+/// // even though the two spellings match and there is nothing extra to
+/// // paint.
 /// assert_eq!(cells.anchor, RelAnchor::Source);
 ///
-/// // Sin `dest_rel` no hay prueba, y eso NO es «del origen»: el `rel` de un
-/// // `DeleteTree` que falló cuelga del destino.
-/// let solo = SyncFailure {
-///     rel: RelPath::parse_wire("viejo").expect("rel"),
+/// // With no `dest_rel` there is no evidence, and that is NOT "from the
+/// // source": a failed `DeleteTree`'s `rel` hangs from the destination.
+/// let alone = SyncFailure {
+///     rel: RelPath::parse_wire("old").expect("rel"),
 ///     dest_rel: None,
 ///     cause: SyncFailureCause::Io,
 ///     kind: SyncStepKind::DeleteTree,
 /// };
-/// // …y desde 0.42.0 el wire lo dice (`kind`), así que esta función lo LEE
-/// // (#208): un `DeleteTree` habla del destino, con `dest_rel` o sin él.
+/// // …and since 0.42.0 the wire says so (`kind`), so this function READS it
+/// // (#208): a `DeleteTree` speaks about the destination, with or without
+/// // `dest_rel`.
 /// assert_eq!(
-///     render_failure(&solo, SyncEncodings::default()).anchor,
+///     render_failure(&alone, SyncEncodings::default()).anchor,
 ///     RelAnchor::Dest
 /// );
 /// ```
@@ -329,12 +340,12 @@ pub fn render_failure(
     failure: &norte_proto::methods::SyncFailure,
     enc: SyncEncodings,
 ) -> FailureCells {
-    // #208: la MISMA regla que un paso (`anchor_of`), ahora que 0.42.0 pone la
-    // clase en el wire. La fila hostil más común de un espejo —un borrado
-    // rechazado por permisos, sin `dest_rel`, con `rel` medido contra el
-    // destino— deja de ser `Either`, que es lo que hacía que
-    // `SyncEncodings::for_anchor` la decodificara con la reinterpretación del
-    // ÁRBOL QUE NO SE TOCÓ (hallazgo del encoding-auditor).
+    // #208: the SAME rule as a step (`anchor_of`), now that 0.42.0 puts the
+    // class on the wire. The most common hostile row of a mirror —a delete
+    // rejected on permissions, with no `dest_rel`, its `rel` measured
+    // against the destination— stops being `Either`, which is what used to
+    // make `SyncEncodings::for_anchor` decode it with the reinterpretation of
+    // the TREE THAT WAS NOT TOUCHED (an encoding-auditor finding).
     let anchor = anchor_for(failure.kind, failure.dest_rel.is_some(), None);
     let rel = rel_display(&failure.rel, enc.for_anchor(anchor));
     let dest_rel = failure
@@ -342,9 +353,9 @@ pub fn render_failure(
         .as_ref()
         .filter(|d| **d != failure.rel)
         .map(|r| rel_display(r, enc.dest));
-    // #192, la misma regla que `render_step`: por NFC, no por igualdad de
-    // `String` a secas — "é" precompuesta y "e" + acento combinante son
-    // Strings distintos que rinden al mismo glifo.
+    // #192, the same rule as `render_step`: by NFC, not by plain `String`
+    // equality — precomposed "é" and "e" + a combining accent are different
+    // Strings that render to the same glyph.
     let dest_rel_twin = dest_rel
         .as_ref()
         .is_some_and(|d| d.text.nfc().eq(rel.text.nfc()));

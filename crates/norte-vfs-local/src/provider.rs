@@ -1,9 +1,9 @@
-//! [`LocalProvider`]: el filesystem local detrás del contrato [`Provider`].
+//! [`LocalProvider`]: the local filesystem behind the [`Provider`] contract.
 //!
-//! Regla dura 2 de `CLAUDE.md`: NADA de I/O bloqueante en contexto async —
-//! toda syscall va por `spawn_blocking`; los streams entregan por canal
-//! `mpsc` acotado (64), así el hilo bloqueante se libera entre chunks y
-//! soltar el stream cancela el productor.
+//! Hard rule 2 of `CLAUDE.md`: NO blocking I/O in async context — every
+//! syscall goes through `spawn_blocking`; streams deliver over a bounded
+//! `mpsc` channel (64), so the blocking thread is freed between chunks and
+//! dropping the stream cancels the producer.
 
 use std::path::{Path, PathBuf};
 
@@ -19,47 +19,48 @@ use tokio_stream::wrappers::ReceiverStream;
 use norte_vfs::native::{to_native, verbatim};
 use norte_vfs::wtf8::os_to_bytes;
 
-/// Tamaño de chunk de lectura (alineado con el copy engine: 256 KiB).
+/// Read chunk size (aligned with the copy engine: 256 KiB).
 const READ_CHUNK: usize = 256 * 1024;
 
-/// Provider del filesystem local, enraizado en un directorio nativo.
+/// Provider for the local filesystem, rooted in a native directory.
 ///
-/// El `VPath` raíz (`file:///`) se mapea a `base`; cada segmento es un
-/// componente nativo (bytes intactos; en Windows, WTF-8 validado en la
-/// frontera y paths SIEMPRE con prefijo `\\?\`).
+/// The root `VPath` (`file:///`) maps to `base`; each segment is a native
+/// component (bytes intact; on Windows, WTF-8 validated at the boundary and
+/// paths ALWAYS with the `\\?\` prefix).
 ///
-/// Las capabilities se sondean LAZY, al inicio de la primera operación
-/// async y dentro de `spawn_blocking` (issue #5 + regla 2): construir el
-/// provider jamás muta `base`, y el runtime jamás se bloquea con la sonda.
-/// Si el sondeo no puede decidir (base no escribible y sin API de
-/// plataforma) cae al default del OS.
+/// Capabilities are probed LAZILY, at the start of the first async operation
+/// and inside `spawn_blocking` (issue #5 + rule 2): constructing the
+/// provider never mutates `base`, and the runtime never blocks on the
+/// probe. If the probe cannot decide (base not writable and no platform
+/// API) it falls back to the OS default.
 pub struct LocalProvider {
     base: PathBuf,
     caps: std::sync::Arc<std::sync::OnceLock<Capabilities>>,
-    /// Capabilities sondeadas POR DIRECTORIO (ADR 0054), con la identidad del
-    /// directorio como clave (`dev`, `ino`, `ctime`): dos rutas al mismo sitio
-    /// son una entrada, un `..` o un symlink no multiplican el sondeo, y un
-    /// inodo reutilizado no hereda la respuesta del difunto. Acotado, con desalojo del
-    /// más antiguo — una sesión larga no puede acabar con un mapa de todos los
-    /// directorios que visitó.
+    /// Capabilities probed PER DIRECTORY (ADR 0054), keyed by the
+    /// directory's identity (`dev`, `ino`, `ctime`): two paths to the same
+    /// place are one entry, a `..` or a symlink does not multiply the
+    /// probing, and a reused inode does not inherit the dead one's answer.
+    /// Bounded, with eviction of the oldest — a long session cannot end up
+    /// with a map of every directory it visited.
     caps_at: std::sync::Arc<std::sync::Mutex<CapsAtCache>>,
-    /// Sustituto de `$XDG_DATA_HOME` para la papelera freedesktop; `None` =
-    /// resolver del entorno, que es lo que hace producción.
+    /// Substitute for `$XDG_DATA_HOME` for the freedesktop trash; `None` =
+    /// resolve from the environment, which is what production does.
     trash_home: Option<PathBuf>,
-    /// Mantiene vivo un recurso externo (p. ej. el `TempDir` de un test).
+    /// Keeps an external resource alive (e.g. a test's `TempDir`).
     _guard: Option<Box<dyn std::any::Any + Send + Sync>>,
 }
 
 impl LocalProvider {
-    /// Provider enraizado en `base` (debe ser un directorio existente).
+    /// Provider rooted in `base` (must be an existing directory).
     ///
-    /// No sondea nada: el sondeo de capabilities es lazy (arranca la primera
-    /// operación async, en `spawn_blocking`, una sola vez).
+    /// Probes nothing: capability probing is lazy (it starts on the first
+    /// async operation, in `spawn_blocking`, only once).
     #[must_use]
     pub fn rooted(base: impl Into<PathBuf>) -> Self {
         let base = base.into();
-        // Verbatim (`\\?\`) exige path absoluto y normalizado; en Windows,
-        // `absolute` usa GetFullPathNameW (separadores y `..` resueltos).
+        // Verbatim (`\\?\`) requires an absolute, normalized path; on
+        // Windows, `absolute` uses GetFullPathNameW (separators and `..`
+        // resolved).
         let base = std::path::absolute(&base).unwrap_or(base);
         Self {
             base,
@@ -70,9 +71,10 @@ impl LocalProvider {
         }
     }
 
-    /// Fuerza el paseo componente a componente aunque el kernel tenga
-    /// `openat2`, mientras el guard viva (costura de test): es la única forma
-    /// de ejercitar las dos ramas del confinamiento en una misma máquina.
+    /// Forces the component-by-component walk even when the kernel has
+    /// `openat2`, for as long as the guard lives (test seam): it is the
+    /// only way to exercise both branches of confinement on the same
+    /// machine.
     #[cfg(target_os = "linux")]
     #[doc(hidden)]
     #[must_use]
@@ -80,17 +82,17 @@ impl LocalProvider {
         crate::confined::ForceComponentWalk::new()
     }
 
-    /// Cuántas veces se ha SONDEADO de verdad una ubicación (costura de test:
-    /// lo que la caché ahorra no se ve de ninguna otra forma).
+    /// How many times a location has REALLY been probed (test seam: what
+    /// the cache saves is not visible any other way).
     #[doc(hidden)]
     #[must_use]
     pub fn caps_at_probe_count(&self) -> u64 {
-        self.caps_at.lock().expect("caps_at lock sano").probes
+        self.caps_at.lock().expect("caps_at lock is healthy").probes
     }
 
-    /// Sondea capabilities UNA vez, dentro de `spawn_blocking` (regla 2:
-    /// nada de I/O bloqueante en el runtime): lo llama cada operación async
-    /// antes de tocar el FS. Sondeadas ya, es una lectura atómica gratis.
+    /// Probes capabilities ONCE, inside `spawn_blocking` (rule 2: no
+    /// blocking I/O on the runtime): every async operation calls this
+    /// before touching the FS. Once probed, it's a free atomic read.
     async fn ensure_caps(&self) {
         if self.caps.get().is_some() {
             return;
@@ -104,51 +106,52 @@ impl LocalProvider {
         .await;
     }
 
-    /// Adjunta un guard que vive tanto como el provider (para tests que
-    /// enraízan en un `TempDir`).
+    /// Attaches a guard that lives as long as the provider (for tests that
+    /// root in a `TempDir`).
     #[doc(hidden)]
     #[must_use]
     #[expect(
         clippy::used_underscore_binding,
-        reason = "el campo existe solo por su Drop"
+        reason = "the field exists only for its Drop"
     )]
     pub fn with_guard(mut self, guard: Box<dyn std::any::Any + Send + Sync>) -> Self {
         self._guard = Some(guard);
         self
     }
 
-    /// Sustituye `$XDG_DATA_HOME` para la papelera freedesktop: la papelera
-    /// "home" pasa a ser `<dir>/Trash`.
+    /// Overrides `$XDG_DATA_HOME` for the freedesktop trash: the "home"
+    /// trash becomes `<dir>/Trash`.
     ///
-    /// Es una COSTURA DE TEST, y existe porque un test no puede tocar la
-    /// papelera de verdad del desarrollador ni averiguar en qué dispositivo
-    /// vive: `std::env::set_var` es `unsafe` en la edición 2024 (prohibido
-    /// fuera de los usos justificados de la regla 5) y además es global al
-    /// proceso. Producción no la llama y resuelve del entorno.
+    /// This is a TEST SEAM, and it exists because a test cannot touch the
+    /// developer's real trash nor find out which device it lives on:
+    /// `std::env::set_var` is `unsafe` in the 2024 edition (forbidden
+    /// outside the justified uses of rule 5) and is also global to the
+    /// process. Production never calls this and resolves from the
+    /// environment.
     ///
-    /// `dir` debe ser ABSOLUTO —una raíz de papelera relativa al cwd no es una
-    /// raíz— y, para que [`Provider::trash`] pueda NOMBRAR su destino, debe
-    /// caer bajo la raíz de este provider.
+    /// `dir` must be ABSOLUTE — a trash root relative to the cwd is not a
+    /// root — and, for [`Provider::trash`] to be able to NAME its
+    /// destination, it must fall under this provider's root.
     #[doc(hidden)]
     #[must_use]
     pub fn with_trash_home(mut self, dir: impl Into<PathBuf>) -> Self {
         let dir = dir.into();
-        // Una raíz relativa se ignoraría silenciosamente aguas abajo y la
-        // papelera acabaría siendo la del montaje de la víctima, que es un
-        // fallo desconcertante en un test (MINOR-3 del encoding-auditor).
-        debug_assert!(dir.is_absolute(), "la raíz de la papelera es absoluta");
+        // A relative root would be silently ignored downstream and the
+        // trash would end up being the victim's mount's trash, which is a
+        // baffling failure in a test (encoding-auditor MINOR-3).
+        debug_assert!(dir.is_absolute(), "the trash root is absolute");
         self.trash_home = Some(dir);
         self
     }
 
-    /// El `VPath` de un path NATIVO bajo la raíz de este provider — la inversa
-    /// de [`Self::native`].
+    /// The `VPath` of a NATIVE path under this provider's root — the
+    /// inverse of [`Self::native`].
     ///
-    /// `None` si el path no cuelga de la raíz: entonces este provider NO puede
-    /// nombrarlo, y quien pregunte se tiene que quedar sin ruta en vez de
-    /// recibir una que no resuelve. Pasa con un provider enraizado (los tests)
-    /// cuya papelera cae fuera; con `os_root`, que es lo que registra el
-    /// daemon, la raíz es `/` y no pasa nunca.
+    /// `None` if the path does not hang off the root: then this provider
+    /// CANNOT name it, and whoever asks has to go without a path instead of
+    /// getting one that doesn't resolve. This happens with a rooted
+    /// provider (tests) whose trash falls outside it; with `os_root`, which
+    /// is what the daemon registers, the root is `/` and it never happens.
     #[cfg(all(
         unix,
         not(target_os = "macos"),
@@ -168,10 +171,10 @@ impl LocalProvider {
         Some(out)
     }
 
-    /// Provider que sirve TODO el filesystem del OS: unix se enraíza en `/`;
-    /// Windows usa base vacía (el primer segmento del `VPath` es la unidad,
-    /// p. ej. `C:`) y capabilities por defecto del OS sin sondeo (la raíz no
-    /// es escribible y la sensibilidad varía por volumen).
+    /// Provider that serves the WHOLE OS filesystem: unix roots at `/`;
+    /// Windows uses an empty base (the `VPath`'s first segment is the
+    /// drive, e.g. `C:`) and default OS capabilities without probing (the
+    /// root is not writable and sensitivity varies by volume).
     #[must_use]
     pub fn os_root() -> Self {
         if cfg!(windows) {
@@ -189,25 +192,26 @@ impl LocalProvider {
             s
         } else {
             let s = Self::rooted("/");
-            // La raíz del OS no se sondea (corriendo como root, la sonda se
-            // ESCRIBIRÍA en `/`): defaults del OS, como la rama Windows.
+            // The OS root is not probed (running as root, the probe WOULD
+            // WRITE to `/`): OS defaults, like the Windows branch.
             let _ = s.caps.set(default_capabilities());
             s
         }
     }
 
-    /// La raíz de este provider: `file:///`.
+    /// This provider's root: `file:///`.
     ///
     /// # Panics
-    /// Nunca: el scheme es constante y válido.
+    /// Never: the scheme is constant and valid.
     #[must_use]
     pub fn root() -> VPath {
-        VPath::root(Scheme::new("file").expect("scheme constante válido"), None)
+        VPath::root(Scheme::new("file").expect("constant, valid scheme"), None)
     }
 
     fn native(&self, p: &VPath) -> Result<PathBuf, Error> {
-        // Este provider solo sirve `file://` sin authority: cualquier otra
-        // cosa es un path de OTRO provider — servirlo sería corrupción.
+        // This provider only serves `file://` with no authority: anything
+        // else is a path from ANOTHER provider — serving it would be
+        // corruption.
         if p.scheme() != "file" || p.authority().is_some() {
             return Err(Error::InvalidPath);
         }
@@ -215,9 +219,9 @@ impl LocalProvider {
     }
 }
 
-/// Papelera nativa. macOS: `NSFileManager` (headless, sin prompts TCC) —
-/// el default del crate sería Finder vía osascript: colgaría la task en
-/// un prompt de Automation y muere en CI (hallazgo B1, ADR 0009).
+/// Native trash. macOS: `NSFileManager` (headless, no TCC prompts) — the
+/// crate's default would be Finder via osascript: it would hang the task on
+/// an Automation prompt and die in CI (finding B1, ADR 0009).
 #[cfg(target_os = "macos")]
 fn trash_delete(p: &Path) -> Result<(), trash::Error> {
     use trash::macos::{DeleteMethod, TrashContextExtMacos};
@@ -226,9 +230,10 @@ fn trash_delete(p: &Path) -> Result<(), trash::Error> {
     ctx.delete(p)
 }
 
-/// Papelera nativa delegada al crate `trash` (Recycle Bin, y las unix que no
-/// son freedesktop). En freedesktop NO existe: la papelera la implementa
-/// [`crate::trash_fdo`], que además sabe decir dónde dejó el fichero.
+/// Native trash delegated to the `trash` crate (Recycle Bin, and the unix
+/// systems that aren't freedesktop). On freedesktop it does NOT exist: the
+/// trash is implemented by [`crate::trash_fdo`], which also knows how to say
+/// where it left the file.
 #[cfg(not(any(
     target_os = "macos",
     all(unix, not(target_os = "ios"), not(target_os = "android")),
@@ -237,37 +242,37 @@ fn trash_delete(p: &Path) -> Result<(), trash::Error> {
     trash::delete(p)
 }
 
-/// Contador de staging: junto al pid hace único el nombre del `.norte-partial`
-/// (dos writes al mismo destino jamás comparten staging, y un archivo REAL
-/// del usuario llamado `x.norte-partial` jamás se toca).
+/// Staging counter: together with the pid it makes the `.norte-partial`
+/// name unique (two writes to the same destination never share staging,
+/// and a REAL user file named `x.norte-partial` is never touched).
 static PARTIAL_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-/// Prefijo de todo staging de norte (write efímero y resume estable): lo
-/// usa el GC para reconocer parciales (ADR 0012).
+/// Prefix of every norte staging file (ephemeral write and stable resume):
+/// the GC uses it to recognize partials (ADR 0012).
 const PARTIAL_PREFIX: &str = ".norte-partial.";
 
-/// Longitud (en chars hex) del hash del nombre estable: 32 = 128 bits.
+/// Length (in hex chars) of the stable name's hash: 32 = 128 bits.
 const STABLE_HASH_HEX: usize = 32;
 
-/// Path del staging ESTABLE de resume para el destino `p`: mismo
-/// directorio, nombre `.norte-partial.<sha256-128-del-nombre-final>` — 47
-/// bytes (no roza `NAME_MAX`) y reencontrable entre invocaciones Y entre
-/// versiones de Rust. SHA-256 truncado a 128 bits: colisión accidental
-/// imposible (birthday 2^64) y adversarial 2^64 (nombres desde un archivo
-/// no confiable) — hallazgo H1/H3 del encoding-auditor. Hashea los BYTES
-/// crudos del nombre (regla 1), jamás lo decodifica.
+/// Path of the STABLE resume staging for destination `p`: same directory,
+/// name `.norte-partial.<sha256-128-of-the-final-name>` — 47 bytes (nowhere
+/// near `NAME_MAX`) and rediscoverable across invocations AND across Rust
+/// versions. SHA-256 truncated to 128 bits: accidental collision impossible
+/// (birthday 2^64) and adversarial 2^64 (names from an untrusted file) —
+/// encoding-auditor finding H1/H3. Hashes the RAW BYTES of the name (rule
+/// 1), never decodes it.
 fn stable_partial_vpath(p: &VPath) -> Result<VPath, Error> {
     let name = p.file_name().ok_or(Error::InvalidPath)?;
     let seg = Segment::new(stable_partial_name(name.as_bytes())).map_err(|_| Error::InvalidPath)?;
     p.with_file_name(seg).ok_or(Error::InvalidPath)
 }
 
-/// El nombre del staging estable a partir de los BYTES del nombre final.
+/// The stable staging name from the BYTES of the final name.
 ///
-/// La mitad de [`stable_partial_vpath`] que no necesita un `VPath`, porque la
-/// raíz confinada direcciona por segmentos y no tiene ninguno que darle. Una
-/// sola definición: dos formas de nombrar el mismo staging serían dos ficheros
-/// donde el resume espera uno.
+/// The half of [`stable_partial_vpath`] that doesn't need a `VPath`, because
+/// the confined root addresses by segments and has none to give it. A
+/// single definition: two ways of naming the same staging would be two
+/// files where resume expects one.
 pub(crate) fn stable_partial_name(final_name: &[u8]) -> Vec<u8> {
     use sha2::{Digest, Sha256};
     let digest = Sha256::digest(final_name);
@@ -279,43 +284,45 @@ pub(crate) fn stable_partial_name(final_name: &[u8]) -> Vec<u8> {
     format!("{PARTIAL_PREFIX}{hex}").into_bytes()
 }
 
-/// El modo con el que se PUBLICA lo que pasó por el staging ESTABLE (#299).
+/// The mode with which whatever went through the STABLE staging is
+/// PUBLISHED (#299).
 ///
-/// Ese staging nace `0o600` y no puede nacer de otra forma: su nombre es
-/// predecible, así que mientras dure tiene que ser nuestro y de nadie más
-/// (#298). Pero publicar es un `rename`, que no toca el modo, y sin esto una
-/// copia REANUDADA acabaría en `0o600` mientras la misma copia sin cortes
-/// acaba en `0o644`. Misma operación, dos resultados, y el reanudable es hoy
-/// el camino por defecto de una hoja.
+/// That staging is born `0o600` and cannot be born any other way: its name
+/// is predictable, so for as long as it lasts it has to be ours and no one
+/// else's (#298). But publishing is a `rename`, which doesn't touch the
+/// mode, and without this a RESUMED copy would end up `0o600` while the
+/// same uninterrupted copy ends up `0o644`. Same operation, two results,
+/// and resumable is today the default path for a leaf.
 ///
-/// Así que se reproduce lo que habría dado un `create`: `0o666` recortado por
-/// la umask. Lo que NO se hace es preservar el modo del ORIGEN —eso es lo que
-/// hace `cp -p` y es una decisión de producto que norte todavía no ha tomado
-/// (hoy no preserva permisos en ninguna copia); colarla aquí sería decidirla
-/// por descarte dentro de un arreglo.
+/// So it reproduces what a `create` would have given: `0o666` trimmed by
+/// the umask. What it does NOT do is preserve the SOURCE's mode — that's
+/// what `cp -p` does, and it's a product decision norte hasn't made yet
+/// (today it preserves no permissions in any copy); sneaking it in here
+/// would be deciding it by default inside a fix.
 #[cfg(unix)]
-pub(crate) fn modo_publicado() -> u32 {
-    0o666 & !umask_del_proceso()
+pub(crate) fn modo_published() -> u32 {
+    0o666 & !process_umask()
 }
 
-/// La umask del proceso, SIN cambiarla.
+/// The process's umask, WITHOUT changing it.
 ///
-/// `umask(2)` solo la devuelve poniéndola, y eso es global al proceso: hacerlo
-/// aquí sería una carrera con cualquier otra escritura en vuelo, en un daemon
-/// que escribe desde muchas tasks a la vez. Linux la publica de solo lectura
-/// en `/proc/self/status` (`Umask:`, desde 4.7).
+/// `umask(2)` only returns it by setting it, and that's global to the
+/// process: doing it here would race any other write in flight, in a
+/// daemon that writes from many tasks at once. Linux publishes it
+/// read-only in `/proc/self/status` (`Umask:`, since 4.7).
 ///
-/// Donde no se puede leer se supone `0o022`, que es la de una configuración
-/// corriente y da el `0o644` de siempre. Suponer de menos —`0o000`— publicaría
-/// más abierto de lo que el usuario pidió, y eso no se hace ni una vez.
+/// Where it can't be read, `0o022` is assumed, which is a common
+/// configuration's and gives the usual `0o644`. Assuming less — `0o000` —
+/// would publish more openly than the user asked for, and that never
+/// happens, not even once.
 #[cfg(unix)]
-fn umask_del_proceso() -> u32 {
+fn process_umask() -> u32 {
     #[cfg(target_os = "linux")]
     {
         if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
-            for linea in status.lines() {
-                if let Some(valor) = linea.strip_prefix("Umask:")
-                    && let Ok(u) = u32::from_str_radix(valor.trim(), 8)
+            for line in status.lines() {
+                if let Some(value) = line.strip_prefix("Umask:")
+                    && let Ok(u) = u32::from_str_radix(value.trim(), 8)
                 {
                     return u;
                 }
@@ -325,53 +332,56 @@ fn umask_del_proceso() -> u32 {
     0o022
 }
 
-/// Le da al fichero RECIÉN PUBLICADO el modo que habría tenido si la copia no
-/// se hubiera cortado (#299). No hace nada si el staging no era el estable.
+/// Gives the file JUST PUBLISHED the mode it would have had if the copy had
+/// not been interrupted (#299). Does nothing if the staging wasn't the
+/// stable one.
 ///
-/// Va sobre el DESCRIPTOR, que sigue apuntando al mismo inodo después del
-/// rename: por ruta habría una ventana entre publicar y ajustar en la que otro
-/// podría sustituir el nombre y recibir el `chmod`.
+/// Operates on the DESCRIPTOR, which keeps pointing at the same inode after
+/// the rename: by path there would be a window between publishing and
+/// adjusting during which someone else could replace the name and receive
+/// the `chmod`.
 ///
-/// **Best-effort a propósito, y en silencio.** Un fallo aquí deja el fichero
-/// en `0o600`: copiado, con sus bytes y su nombre buenos, y más restrictivo de
-/// lo pedido. Convertirlo en error tiraría una copia entera por un permiso.
-/// Y no se registra porque este crate no tiene `tracing` —es el único que
-/// puede usar `unsafe` y se mantiene sin dependencias de instrumentación—;
-/// quien quiera saberlo mira el modo del fichero.
+/// **Best-effort on purpose, and silent.** A failure here leaves the file
+/// at `0o600`: copied, with good bytes and a good name, and more
+/// restrictive than requested. Turning it into an error would throw away an
+/// entire copy over a permission. And it isn't logged because this crate
+/// has no `tracing` — it's the only one allowed to use `unsafe` and it
+/// stays free of instrumentation dependencies —; whoever wants to know
+/// looks at the file's mode.
 #[cfg(unix)]
-pub(crate) fn reponer_modo_publicado(file: &std::fs::File, estable: bool) {
+pub(crate) fn restore_modo_published(file: &std::fs::File, stable: bool) {
     use std::os::fd::AsRawFd as _;
 
-    if !estable {
+    if !stable {
         return;
     }
-    // SAFETY: `file` está vivo y su fd es válido durante toda la llamada.
-    // `fchmod` no toma punteros.
+    // SAFETY: `file` is alive and its fd is valid for the whole call.
+    // `fchmod` takes no pointers.
     #[allow(unsafe_code)]
-    let _ = unsafe { libc::fchmod(file.as_raw_fd(), modo_publicado() as libc::mode_t) };
+    let _ = unsafe { libc::fchmod(file.as_raw_fd(), modo_published() as libc::mode_t) };
 }
 
-/// Windows no tiene modo POSIX que reponer: el fichero hereda la ACL de su
-/// directorio y el staging nunca se restringió a mano.
+/// Windows has no POSIX mode to restore: the file inherits its directory's
+/// ACL and the staging was never restricted by hand.
 #[cfg(windows)]
 #[allow(clippy::needless_pass_by_value)]
-pub(crate) fn reponer_modo_publicado(_file: &std::fs::File, _estable: bool) {}
+pub(crate) fn restore_modo_published(_file: &std::fs::File, _stable: bool) {}
 
-/// Abre (o crea) el staging estable de `path` para REANUDAR, y dice cuántos
-/// bytes había.
+/// Opens (or creates) the stable staging of `path` to RESUME, and says how
+/// many bytes there already were.
 ///
-/// Unix mira lo que ha abierto —`O_NOFOLLOW`, fichero regular, un solo enlace,
-/// nuestro, `0o600`— porque el nombre lo calcula cualquiera que sepa el nombre
-/// de destino (#298).
+/// Unix checks what it opened — `O_NOFOLLOW`, regular file, single link,
+/// ours, `0o600` — because anyone who knows the destination name can
+/// compute the staging name (#298).
 #[cfg(unix)]
 fn open_stable_staging(path: &std::path::Path) -> Result<(std::fs::File, u64), Error> {
-    crate::confined::abre_staging_estable(path)
+    crate::confined::opens_staging_stable(path)
 }
 
-/// Windows: sin las comprobaciones de #298 todavía. Un reparse point plantado
-/// con el nombre del staging es el mismo agujero, y ahí no se cierra con una
-/// bandera de `open` — pide `NtCreateFile` con `FILE_OPEN_REPARSE_POINT`, que
-/// es lo que #220 y #217 tienen abierto.
+/// Windows: without #298's checks yet. A reparse point planted with the
+/// staging's name is the same hole, and there it isn't closed with an
+/// `open` flag — it needs `NtCreateFile` with `FILE_OPEN_REPARSE_POINT`,
+/// which is what #220 and #217 have open.
 #[cfg(windows)]
 fn open_stable_staging(path: &std::path::Path) -> Result<(std::fs::File, u64), Error> {
     let file = std::fs::OpenOptions::new()
@@ -383,12 +393,12 @@ fn open_stable_staging(path: &std::path::Path) -> Result<(std::fs::File, u64), E
     Ok((file, already))
 }
 
-/// Abre el staging estable de `path` para LEER su prefijo, o `None` si no hay
-/// uno nuestro. Mismas comprobaciones y mismo motivo que
+/// Opens the stable staging of `path` to READ its prefix, or `None` if
+/// there isn't one of ours. Same checks and same reason as
 /// [`open_stable_staging`].
 #[cfg(unix)]
 fn open_partial_for_digest(path: &std::path::Path) -> Result<Option<std::fs::File>, Error> {
-    crate::confined::abre_parcial_verificado(path)
+    crate::confined::opens_partial_verified(path)
 }
 
 #[cfg(windows)]
@@ -400,15 +410,15 @@ fn open_partial_for_digest(path: &std::path::Path) -> Result<Option<std::fs::Fil
     }
 }
 
-/// Nombre de staging EFÍMERO para el destino `final_name`:
+/// EPHEMERAL staging name for destination `final_name`:
 /// `.norte-partial.<16 hex>.<pid>-<seq>`.
 ///
-/// pid + secuencia: (a) un archivo real del usuario jamás se toca (el
-/// `O_EXCL`/`create_new` de quien lo abre además lo garantiza) y (b) dos
-/// writes concurrentes al mismo destino no comparten staging. El prefijo lo
-/// hace reconocible para el GC (ADR 0012) — la forma la valida
-/// [`is_norte_partial`], así que quien la construya debe hacerlo AQUÍ y no en
-/// una segunda copia del `format!`.
+/// pid + sequence: (a) a real user file is never touched (whoever opens it
+/// with `O_EXCL`/`create_new` also guarantees this) and (b) two concurrent
+/// writes to the same destination don't share staging. The prefix makes it
+/// recognizable to the GC (ADR 0012) — its shape is validated by
+/// [`is_norte_partial`], so whoever builds it must do so HERE and not in a
+/// second copy of the `format!`.
 pub(crate) fn ephemeral_partial_name(final_name: &[u8]) -> Vec<u8> {
     let hash = {
         use std::hash::{Hash, Hasher};
@@ -420,21 +430,21 @@ pub(crate) fn ephemeral_partial_name(final_name: &[u8]) -> Vec<u8> {
     format!("{PARTIAL_PREFIX}{hash:016x}.{}-{seq}", std::process::id()).into_bytes()
 }
 
-/// ¿`name` (bytes) tiene la FORMA de un staging de norte? Estrecho a las
-/// dos formas conocidas — NO al prefijo suelto (H2 del encoding-auditor:
-/// un archivo real del usuario `.norte-partial.backup` NO debe barrerse):
-/// - estable: prefijo + exactamente 32 hex.
-/// - efímero: prefijo + 16 hex + `.` + <pid> + `-` + <seq>.
+/// Does `name` (bytes) have the SHAPE of a norte staging file? Narrow to
+/// the two known shapes — NOT to the bare prefix (encoding-auditor H2: a
+/// real user file `.norte-partial.backup` must NOT be swept):
+/// - stable: prefix + exactly 32 hex.
+/// - ephemeral: prefix + 16 hex + `.` + <pid> + `-` + <seq>.
 fn is_norte_partial(name: &[u8]) -> bool {
     let Some(rest) = name.strip_prefix(PARTIAL_PREFIX.as_bytes()) else {
         return false;
     };
     let is_hex = |b: &u8| b.is_ascii_digit() || (b'a'..=b'f').contains(b);
-    // Estable: 32 hex y nada más.
+    // Stable: 32 hex and nothing else.
     if rest.len() == STABLE_HASH_HEX && rest.iter().all(is_hex) {
         return true;
     }
-    // Efímero: <16 hex>.<pid>-<seq>, todo dígitos/hex y separadores.
+    // Ephemeral: <16 hex>.<pid>-<seq>, all digits/hex and separators.
     let Some(dot) = rest.iter().position(|&b| b == b'.') else {
         return false;
     };
@@ -442,7 +452,7 @@ fn is_norte_partial(name: &[u8]) -> bool {
     if hash.len() != 16 || !hash.iter().all(is_hex) {
         return false;
     }
-    // tail = ".<pid>-<seq>": dígitos, un '-', dígitos.
+    // tail = ".<pid>-<seq>": digits, a '-', digits.
     let tail = &tail[1..];
     let Some(dash) = tail.iter().position(|&b| b == b'-') else {
         return false;
@@ -454,14 +464,15 @@ fn is_norte_partial(name: &[u8]) -> bool {
         && seq[1..].iter().all(u8::is_ascii_digit)
 }
 
-/// Mapea un error de OS a la taxonomía del protocolo (spec §17.7): los
-/// frontends renderizan por categoría, jamás parsean strings de OS.
+/// Maps an OS error to the protocol's taxonomy (spec §17.7): frontends
+/// render by category, they never parse OS strings.
 pub(crate) fn map_io(e: &std::io::Error) -> Error {
     use std::io::ErrorKind as K;
-    // EILSEQ: el FS rechaza los BYTES del nombre (APFS exige UTF-8 válido).
-    // std lo deja en `Uncategorized`, así que se mira el errno crudo. Con el
-    // staging corto (issue #4) este rechazo llega en el rename de commit —
-    // sin este mapeo sería un `Io` opaco (regresión cazada en CI de macOS).
+    // EILSEQ: the FS rejects the name's BYTES (APFS requires valid UTF-8).
+    // std leaves it as `Uncategorized`, so the raw errno is checked. With
+    // the short staging (issue #4) this rejection arrives at the commit
+    // rename — without this mapping it would be an opaque `Io` (regression
+    // caught in macOS CI).
     #[cfg(unix)]
     if e.raw_os_error() == Some(libc::EILSEQ) {
         return Error::InvalidPath;
@@ -476,21 +487,22 @@ pub(crate) fn map_io(e: &std::io::Error) -> Error {
             conflict: ConflictKind::TypeMismatch,
         },
         K::StorageFull | K::QuotaExceeded => Error::NoSpace,
-        // EXDEV: el FS no puede renombrar entre dispositivos — Unsupported
-        // dispara la degradación del move a copy+delete en el engine.
+        // EXDEV: the FS can't rename across devices — Unsupported triggers
+        // the engine's degradation of the move to copy+delete.
         K::CrossesDevices => Error::Unsupported,
-        // InvalidFilename = ENAMETOOLONG / nombre inválido para el FS:
-        // problema del PATH (el frontend debe decir "nombre demasiado
-        // largo", no "error de I/O").
+        // InvalidFilename = ENAMETOOLONG / invalid name for the FS: a PATH
+        // problem (the frontend should say "name too long", not "I/O
+        // error").
         K::InvalidFilename | K::InvalidInput => Error::InvalidPath,
         K::Interrupted | K::TimedOut | K::WouldBlock => Error::Io { retryable: true },
         _ => Error::Io { retryable: false },
     }
 }
 
-/// Corre un productor de stream en `spawn_blocking` protegido contra panics:
-/// un panic a mitad NO puede pasar por fin-de-stream limpio (sería un listado
-/// o lectura truncados en silencio) — el consumidor recibe `Internal{panic}`.
+/// Runs a stream producer in `spawn_blocking` guarded against panics: a
+/// mid-stream panic must NOT pass as a clean end-of-stream (that would be a
+/// silently truncated listing or read) — the consumer receives
+/// `Internal{panic}`.
 fn spawn_guarded_producer<T: Send + 'static>(
     tx: tokio::sync::mpsc::Sender<Result<T, Error>>,
     body: impl FnOnce(&tokio::sync::mpsc::Sender<Result<T, Error>>) + Send + 'static,
@@ -503,15 +515,15 @@ fn spawn_guarded_producer<T: Send + 'static>(
     });
 }
 
-/// Ejecuta I/O bloqueante; un panic dentro se supervisa y NO tumba el proceso
-/// (política de panics de la spec §17.7).
-/// Lo que `capabilities_at` espera a que el filesystem conteste (#213).
+/// Runs blocking I/O; a panic inside it is supervised and does NOT bring
+/// down the process (panic policy from spec §17.7).
+/// What `capabilities_at` waits for the filesystem to answer (#213).
 ///
-/// El mismo número que usan las consultas de volúmenes del core
-/// (`SPACE_QUERY_DEADLINE`, `ENUMERATE_DEADLINE`, `QUERY_DEADLINE`) y por el
-/// mismo motivo: la escalera son un `statfs` y un `ioctl` sobre un montaje
-/// vivo —microsegundos—, así que 200 ms no recorta ninguna respuesta real y
-/// sí acota lo que un montaje muerto puede hacer esperar a quien pregunta.
+/// The same number used by the core's volume queries
+/// (`SPACE_QUERY_DEADLINE`, `ENUMERATE_DEADLINE`, `QUERY_DEADLINE`) and for
+/// the same reason: the ladder is a `statfs` and an `ioctl` over a live
+/// mount — microseconds — so 200 ms doesn't clip any real response and does
+/// bound how long a dead mount can make whoever's asking wait.
 const CAPS_AT_DEADLINE: std::time::Duration = std::time::Duration::from_millis(200);
 
 pub(crate) async fn blocking<T: Send + 'static>(
@@ -550,12 +562,12 @@ fn entry_from(path: VPath, md: &std::fs::Metadata, req: &norte_vfs::AttrRequest)
     }
 }
 
-/// Catálogo de attrs del provider local (#108 bloque 2): POSIX en unix,
-/// `win.attributes` en Windows. Todo sale de la `Metadata` ya en mano —
-/// cero syscalls extra sobre `stat`; en `list` exige la promoción por
-/// entrada (ver `list_with`).
+/// Attr catalogue of the local provider (#108 block 2): POSIX on unix,
+/// `win.attributes` on Windows. Everything comes from the `Metadata`
+/// already in hand — zero extra syscalls beyond `stat`; in `list` it
+/// requires per-entry promotion (see `list_with`).
 #[cfg(unix)]
-fn catalogo_local() -> &'static [norte_proto::AttrInfo] {
+fn local_catalog() -> &'static [norte_proto::AttrInfo] {
     use norte_proto::{AttrHint, AttrInfo, AttrType};
     static CAT: std::sync::LazyLock<Vec<AttrInfo>> = std::sync::LazyLock::new(|| {
         let mk = |id: &str, label: &str, ty, hint| AttrInfo {
@@ -568,9 +580,9 @@ fn catalogo_local() -> &'static [norte_proto::AttrInfo] {
             mk("posix.mode", "Mode", AttrType::Uint, AttrHint::Mode),
             mk("posix.uid", "UID", AttrType::Uint, AttrHint::Identity),
             mk("posix.gid", "GID", AttrType::Uint, AttrHint::Identity),
-            // Los NOMBRES (ADR 0145): bytes, porque POSIX no obliga a que un
-            // nombre de usuario sea UTF-8. Cuestan una pregunta a NSS por id
-            // distinto, así que solo se resuelven si se piden.
+            // The NAMES (ADR 0145): bytes, because POSIX doesn't require a
+            // username to be UTF-8. They cost one NSS lookup per distinct
+            // id, so they're resolved only if requested.
             mk("posix.owner", "Owner", AttrType::Bytes, AttrHint::Identity),
             mk("posix.group", "Group", AttrType::Bytes, AttrHint::Identity),
             mk("posix.nlink", "Links", AttrType::Uint, AttrHint::Opaque),
@@ -585,9 +597,9 @@ fn catalogo_local() -> &'static [norte_proto::AttrInfo] {
     &CAT
 }
 
-/// Ver [`catalogo_local`] (variante Windows).
+/// See [`local_catalog`] (Windows variant).
 #[cfg(windows)]
-fn catalogo_local() -> &'static [norte_proto::AttrInfo] {
+fn local_catalog() -> &'static [norte_proto::AttrInfo] {
     use norte_proto::{AttrHint, AttrInfo, AttrType};
     static CAT: std::sync::LazyLock<Vec<AttrInfo>> = std::sync::LazyLock::new(|| {
         vec![AttrInfo {
@@ -601,13 +613,13 @@ fn catalogo_local() -> &'static [norte_proto::AttrInfo] {
 }
 
 #[cfg(not(any(unix, windows)))]
-fn catalogo_local() -> &'static [norte_proto::AttrInfo] {
+fn local_catalog() -> &'static [norte_proto::AttrInfo] {
     &[]
 }
 
-/// Materializa los attrs pedidos desde una `Metadata` YA en mano. `mode` es
-/// el `st_mode` crudo (bits de tipo incluidos); los formatters deciden la
-/// presentación (octal/rwx).
+/// Materializes the requested attrs from a `Metadata` ALREADY in hand.
+/// `mode` is the raw `st_mode` (type bits included); the formatters decide
+/// the presentation (octal/rwx).
 fn attrs_from_md(
     md: &std::fs::Metadata,
     req: &norte_vfs::AttrRequest,
@@ -632,16 +644,16 @@ fn attrs_from_md(
         if req.wants("posix.gid") {
             out.insert("posix.gid".to_owned(), AttrValue::Uint(u64::from(md.gid())));
         }
-        // Sin nombre (un uid huérfano, un NSS caído) la celda queda en
-        // blanco: inventar el número en su lugar sería decir otra cosa, y
-        // para eso ya están `posix.uid` y `posix.gid`.
+        // With no name (an orphan uid, a downed NSS) the cell stays blank:
+        // inventing the number instead would say something else, and
+        // that's what `posix.uid` and `posix.gid` are already for.
         if req.wants("posix.owner")
-            && let Some(n) = crate::identidad::usuario(md.uid())
+            && let Some(n) = crate::identity::user(md.uid())
         {
             out.insert("posix.owner".to_owned(), AttrValue::Bytes(n));
         }
         if req.wants("posix.group")
-            && let Some(n) = crate::identidad::grupo(md.gid())
+            && let Some(n) = crate::identity::group(md.gid())
         {
             out.insert("posix.group".to_owned(), AttrValue::Bytes(n));
         }
@@ -649,10 +661,10 @@ fn attrs_from_md(
             out.insert("posix.nlink".to_owned(), AttrValue::Uint(md.nlink()));
         }
         if req.wants("posix.ctime_ms") {
-            // ctime en ms, exactamente floor(ms real): tv_nsec ∈ [0, 1e9),
-            // así que también en pre-1970 la desviación es < 1ms (redondeo
-            // hacia −∞). Saturante: un FUSE/imagen forjada puede devolver
-            // st_ctime cerca de i64::MAX y el overflow mataría el listado.
+            // ctime in ms, exactly floor(real ms): tv_nsec ∈ [0, 1e9), so
+            // even pre-1970 the deviation is < 1ms (rounding toward −∞).
+            // Saturating: a forged FUSE/image can return st_ctime near
+            // i64::MAX and the overflow would kill the listing.
             let ms = md
                 .ctime()
                 .saturating_mul(1000)
@@ -675,18 +687,19 @@ fn attrs_from_md(
     out
 }
 
-/// Ante una colisión ya confirmada: ¿el nombre EXACTO (bytes) está en el
-/// directorio, una variante de normalización Unicode (macOS NFD, issue #8)
-/// o una variante de caja? La colisión se evalúa contra el FS destino.
+/// Given an already confirmed collision: is the EXACT name (bytes) in the
+/// directory, a Unicode normalization variant (macOS NFD, issue #8), or a
+/// case variant? The collision is evaluated against the destination FS.
 fn collision_kind_for(path: &Path) -> ConflictKind {
     let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
         return ConflictKind::Exists;
     };
     match std::fs::read_dir(parent) {
         Ok(rd) => {
-            // Precedencia: byte-exacto > caja > normalización — en NTFS
-            // (insensible a caja, sensible a normalización) el EEXIST real
-            // viene de la variante de caja aunque haya un dirent NFD cerca.
+            // Precedence: byte-exact > case > normalization — on NTFS
+            // (case-insensitive, normalization-sensitive) the real EEXIST
+            // comes from the case variant even when an NFD dirent is
+            // nearby.
             let mut case_hit = false;
             let mut norm_hit = false;
             for d in rd.flatten() {
@@ -713,8 +726,8 @@ fn collision_kind_for(path: &Path) -> ConflictKind {
     }
 }
 
-/// ¿Variante solo-de-caja? (lowercase Unicode de std; el fold real del FS
-/// puede ser más ancho — suficiente como etiqueta para el frontend).
+/// Case-only variant? (std's Unicode lowercase; the FS's real fold may be
+/// wider — good enough as a label for the frontend).
 fn case_eq_os(a: &std::ffi::OsStr, b: &std::ffi::OsStr) -> bool {
     match (a.to_str(), b.to_str()) {
         (Some(a), Some(b)) => a != b && a.to_lowercase() == b.to_lowercase(),
@@ -722,8 +735,8 @@ fn case_eq_os(a: &std::ffi::OsStr, b: &std::ffi::OsStr) -> bool {
     }
 }
 
-/// ¿Misma forma NFC? Solo comparable si ambos nombres son UTF-8 válido
-/// (la normalización no está definida sobre bytes arbitrarios).
+/// Same NFC form? Only comparable if both names are valid UTF-8
+/// (normalization isn't defined over arbitrary bytes).
 fn nfc_eq_os(a: &std::ffi::OsStr, b: &std::ffi::OsStr) -> bool {
     use unicode_normalization::UnicodeNormalization;
     match (a.to_str(), b.to_str()) {
@@ -732,20 +745,20 @@ fn nfc_eq_os(a: &std::ffi::OsStr, b: &std::ffi::OsStr) -> bool {
     }
 }
 
-/// Contador de sondas: junto al pid hace único el nombre de cada sonda de
-/// caja (restos de un crash o archivos del usuario jamás interfieren).
+/// Probe counter: together with the pid it makes each case probe's name
+/// unique (leftovers from a crash or user files never interfere).
 static PROBE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-/// Sensibilidad a la caja vía API del OS, sin mutar nada: `pathconf`
-/// `_PC_CASE_SENSITIVE` (macOS; por-volumen). `None` = indeterminado.
+/// Case sensitivity via the OS API, without mutating anything: `pathconf`
+/// `_PC_CASE_SENSITIVE` (macOS; per-volume). `None` = undetermined.
 #[cfg(target_os = "macos")]
 #[allow(unsafe_code)]
 fn case_sensitivity_from_os(base: &Path) -> Option<bool> {
     use std::os::unix::ffi::OsStrExt;
     let c = std::ffi::CString::new(base.as_os_str().as_bytes()).ok()?;
-    // SAFETY: `c` es una CString NUL-terminada viva durante toda la llamada;
-    // `_PC_CASE_SENSITIVE` es constante de la ABI. El resultado se valida en
-    // `tests/local.rs::capabilities_are_probed` sobre el FS real de CI.
+    // SAFETY: `c` is a NUL-terminated CString alive for the whole call;
+    // `_PC_CASE_SENSITIVE` is an ABI constant. The result is validated in
+    // `tests/local.rs::capabilities_are_probed` against the real FS of CI.
     let rc = unsafe { libc::pathconf(c.as_ptr(), libc::_PC_CASE_SENSITIVE) };
     match rc {
         0 => Some(false),
@@ -754,22 +767,22 @@ fn case_sensitivity_from_os(base: &Path) -> Option<bool> {
     }
 }
 
-/// Resto de OS: sin API fiable — se usa la sonda de escritura.
+/// Rest of the OSes: no reliable API — the write probe is used.
 #[cfg(not(target_os = "macos"))]
 fn case_sensitivity_from_os(_base: &Path) -> Option<bool> {
     None
 }
 
-/// Sondeo de sensibilidad por escritura: crea una sonda de nombre ÚNICO
-/// (pid + secuencia) terminada en `-A` y comprueba si la variante `-a`
-/// resuelve al MISMO archivo — identidad `(dev, ino)`, no `exists()`: un
-/// archivo ajeno homónimo o un symlink mentirían (issue #5).
-/// `None` si `base` no es escribible o el sondeo es indeterminado.
+/// Write-based sensitivity probe: creates a probe with a UNIQUE name (pid +
+/// sequence) ending in `-A` and checks whether the `-a` variant resolves to
+/// the SAME file — identity `(dev, ino)`, not `exists()`: an unrelated file
+/// with the same name or a symlink would lie (issue #5).
+/// `None` if `base` isn't writable or the probe is undetermined.
 fn probe_case_sensitivity(base: &Path) -> Option<bool> {
     let seq = PROBE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let pid = std::process::id();
-    // verbatim: la sonda debe funcionar también bajo paths >260 en Windows
-    // (misma promesa que el resto del provider).
+    // verbatim: the probe must also work under paths >260 on Windows (same
+    // promise as the rest of the provider).
     let upper = verbatim(base.join(format!(".norte-probe-{pid}-{seq}-A")));
     let lower = verbatim(base.join(format!(".norte-probe-{pid}-{seq}-a")));
     let file = std::fs::OpenOptions::new()
@@ -787,24 +800,25 @@ fn probe_case_sensitivity(base: &Path) -> Option<bool> {
     sensitive
 }
 
-/// ¿La variante en minúscula de la sonda ES el propio archivo de sonda?
+/// Is the lowercase variant of the probe the probe's OWN file?
 #[cfg(unix)]
 fn probe_same_file(upper_md: &std::fs::Metadata, lower_md: &std::fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt;
     upper_md.dev() == lower_md.dev() && upper_md.ino() == lower_md.ino()
 }
 
-/// Windows: std no expone la identidad real, pero la sonda es de nombre
-/// único (pid + secuencia) — que la variante "exista" ya significa que el
-/// FS pliega la caja. Suficiente aquí; no lo sería para `rename`.
+/// Windows: std doesn't expose the real identity, but the probe has a
+/// unique name (pid + sequence) — the variant merely "existing" already
+/// means the FS folds case. Good enough here; it wouldn't be for `rename`.
 #[cfg(windows)]
 fn probe_same_file(_upper_md: &std::fs::Metadata, _lower_md: &std::fs::Metadata) -> bool {
     true
 }
 
-/// Identidad real del nodo en unix: `(dev, ino)` de lstat/stat según
-/// `follow`. Es la misma identidad que ya usan la sonda de caja y el
-/// case-rename (`same_node`) — aquí se expone por el trait (issue #16).
+/// Real node identity on unix: `(dev, ino)` from lstat/stat depending on
+/// `follow`. It's the same identity already used by the case probe and
+/// case-rename (`same_node`) — here it's exposed through the trait
+/// (issue #16).
 #[cfg(unix)]
 fn node_id_native(
     p: &Path,
@@ -822,11 +836,11 @@ fn node_id_native(
     }))
 }
 
-/// Identidad real del nodo en Windows: `FILE_ID_INFO` (serial de volumen
-/// u64 + `FileId` de 128 bits, cubre `ReFS`) vía `GetFileInformationByHandleEx`.
-/// Si el volumen no lo soporta (FAT32, SMB antiguo), degrada a `Ok(None)` —
-/// "no hay identidad estable aquí" es la respuesta honesta del contrato,
-/// jamás un id inventado.
+/// Real node identity on Windows: `FILE_ID_INFO` (u64 volume serial +
+/// 128-bit `FileId`, covers `ReFS`) via `GetFileInformationByHandleEx`. If
+/// the volume doesn't support it (FAT32, old SMB), it degrades to
+/// `Ok(None)` — "no stable identity here" is the contract's honest answer,
+/// never a made-up id.
 #[cfg(windows)]
 #[allow(unsafe_code)]
 fn node_id_native(
@@ -840,10 +854,10 @@ fn node_id_native(
         FileIdInfo, GetFileInformationByHandleEx,
     };
 
-    // access_mode 0 = solo consultar metadatos (ni read ni write: funciona
-    // incluso sin permiso de lectura). BACKUP_SEMANTICS es obligatorio para
-    // abrir directorios; OPEN_REPARSE_POINT da la identidad del PROPIO link
-    // (semántica lstat) cuando follow = No.
+    // access_mode 0 = query metadata only (neither read nor write: works
+    // even without read permission). BACKUP_SEMANTICS is mandatory to open
+    // directories; OPEN_REPARSE_POINT gives the identity of the link
+    // ITSELF (lstat semantics) when follow = No.
     let mut opts = std::fs::OpenOptions::new();
     opts.access_mode(0);
     let mut flags = FILE_FLAG_BACKUP_SEMANTICS;
@@ -859,21 +873,21 @@ fn node_id_native(
             Identifier: [0; 16],
         },
     };
-    // SAFETY: el handle es válido y vive durante toda la llamada (file no se
-    // suelta antes); el buffer es exactamente un FILE_ID_INFO y el tamaño
-    // pasado es size_of del mismo tipo. Contrato verificado en el test
-    // `node_id_identifica_el_mismo_archivo` (y la suite contractual de
-    // node_id) sobre el FS real de la CI de Windows.
+    // SAFETY: the handle is valid and lives for the whole call (file isn't
+    // dropped before it); the buffer is exactly a FILE_ID_INFO and the size
+    // passed is size_of the same type. Contract verified in the test
+    // `node_id_identifies_the_same_file` (and node_id's contract suite)
+    // against the real FS of Windows CI.
     let ok = unsafe {
         GetFileInformationByHandleEx(
             file.as_raw_handle().cast(),
             FileIdInfo,
             std::ptr::from_mut(&mut info).cast(),
-            u32::try_from(std::mem::size_of::<FILE_ID_INFO>()).expect("tamaño fijo pequeño"),
+            u32::try_from(std::mem::size_of::<FILE_ID_INFO>()).expect("small fixed size"),
         )
     };
     if ok == 0 {
-        // El volumen no sabe dar FileId de 128 bits: sin identidad estable.
+        // The volume can't give a 128-bit FileId: no stable identity.
         return Ok(None);
     }
     Ok(Some(norte_vfs::NodeId {
@@ -882,12 +896,12 @@ fn node_id_native(
     }))
 }
 
-/// Kind efectivo de un symlink a crear cuando el caller pasó `Unknown`
-/// (issue #18): resuelve el target RELATIVO AL PADRE del link en este FS,
-/// siguiendo la cadena (metadata). Target roto o indeterminable degrada a
-/// `File` — el mismo default que un `mklink` sin `/D`. Solo Windows lo
-/// consulta (unix ignora el kind); se compila en todos los OS para poder
-/// testearlo en cualquier CI.
+/// Effective kind of a symlink to create when the caller passed `Unknown`
+/// (issue #18): resolves the target RELATIVE TO THE LINK'S PARENT on this
+/// FS, following the chain (metadata). A broken or undeterminable target
+/// degrades to `File` — the same default as a `mklink` without `/D`. Only
+/// Windows consults this (unix ignores the kind); it's compiled on every OS
+/// so it can be tested on any CI.
 #[cfg_attr(unix, allow(dead_code))]
 fn effective_symlink_kind(
     link: &Path,
@@ -897,17 +911,18 @@ fn effective_symlink_kind(
     match kind {
         norte_vfs::SymlinkKind::Unknown => {
             let resolved = match link.parent() {
-                // join con target absoluto LO respeta (semántica de Path).
+                // join with an absolute target RESPECTS it (Path semantics).
                 Some(parent) => parent.join(target),
                 None => std::path::PathBuf::from(target),
             };
-            // `link` llega verbatim (`\\?\`) en Windows y bajo verbatim el
-            // kernel NO pliega `..` ni convierte `/`: normalizar léxicamente
-            // (GetFullPathNameW vía `absolute`) y re-aplicar verbatim antes
-            // de sondear, o un target relativo con `..` degradaría a File
-            // aunque apunte a un dir (hallazgo del encoding-auditor).
-            // Target drive-relative (`C:foo`): irresoluble sin el CWD de
-            // aquella unidad — degrada a File, documentado.
+            // `link` arrives verbatim (`\\?\`) on Windows, and under
+            // verbatim the kernel does NOT fold `..` nor convert `/`:
+            // normalize lexically (GetFullPathNameW via `absolute`) and
+            // re-apply verbatim before probing, or a relative target with
+            // `..` would degrade to File even when it points at a dir
+            // (encoding-auditor finding).
+            // Drive-relative target (`C:foo`): unresolvable without that
+            // drive's CWD — degrades to File, documented.
             let resolved = verbatim(std::path::absolute(&resolved).unwrap_or(resolved));
             match std::fs::metadata(&resolved) {
                 Ok(md) if md.is_dir() => norte_vfs::SymlinkKind::Dir,
@@ -918,8 +933,8 @@ fn effective_symlink_kind(
     }
 }
 
-/// Crea el symlink nativo. Pre-chequeo de colisión no hace falta: el
-/// syscall falla con EEXIST atómicamente.
+/// Creates the native symlink. No pre-check for collision needed: the
+/// syscall fails with EEXIST atomically.
 #[cfg(unix)]
 fn make_symlink(
     target: &std::ffi::OsStr,
@@ -937,10 +952,10 @@ fn make_symlink(
     })
 }
 
-/// Windows distingue archivo/dir en la creación; exige privilegio
-/// (`SeCreateSymbolicLinkPrivilege` o Developer Mode) — por eso el provider
-/// no declara `SYMLINKS` en Windows y este camino responde vía
-/// `Unsupported` antes de llegar aquí salvo sondeos futuros.
+/// Windows distinguishes file/dir at creation; it requires a privilege
+/// (`SeCreateSymbolicLinkPrivilege` or Developer Mode) — that's why the
+/// provider doesn't declare `SYMLINKS` on Windows and this path answers via
+/// `Unsupported` before reaching here, except for future probes.
 #[cfg(windows)]
 fn make_symlink(
     target: &std::ffi::OsStr,
@@ -949,7 +964,7 @@ fn make_symlink(
 ) -> Result<(), Error> {
     let res = match effective_symlink_kind(link, target, kind) {
         norte_vfs::SymlinkKind::Dir => std::os::windows::fs::symlink_dir(target, link),
-        // `Unknown` ya quedó resuelto arriba; el brazo existe por exhaustividad.
+        // `Unknown` was already resolved above; this arm exists for exhaustiveness.
         norte_vfs::SymlinkKind::File | norte_vfs::SymlinkKind::Unknown => {
             std::os::windows::fs::symlink_file(target, link)
         }
@@ -965,22 +980,22 @@ fn make_symlink(
     })
 }
 
-/// Capabilities por defecto del OS, sin tocar el FS: lo que responde
-/// `capabilities()` si aún no corrió ninguna operación async.
+/// Default OS capabilities, without touching the FS: what `capabilities()`
+/// answers if no async operation has run yet.
 fn default_capabilities() -> Capabilities {
     let mut flags = CapabilityFlags::RENAME_ATOMIC
         | CapabilityFlags::CASE_PRESERVING
-        // FS local: escritura en offset arbitrario y append (resume M2).
+        // Local FS: write at an arbitrary offset and append (resume M2).
         | CapabilityFlags::APPEND
         | CapabilityFlags::RANDOM_WRITE
-        // Papelera nativa en los 3 OS (crate trash, ADR 0009).
+        // Native trash on all 3 OSes (crate trash, ADR 0009).
         | CapabilityFlags::TRASH;
     if cfg!(unix) {
-        // Crear symlinks en Windows exige privilegio: no se declara en M0.
+        // Creating symlinks on Windows requires a privilege: not declared in M0.
         flags |= CapabilityFlags::SYMLINKS;
-        // Permisos POSIX (#314): en Windows no los hay —`set_permissions` solo
-        // sabe del bit de solo lectura—, y anunciarlos ahí sería prometer que
-        // `fs.set_mode` hace algo que no hace.
+        // POSIX permissions (#314): Windows has none — `set_permissions`
+        // only knows the read-only bit —, and announcing them there would
+        // promise that `fs.set_mode` does something it doesn't.
         flags |= CapabilityFlags::POSIX_MODE;
     }
     if cfg!(all(unix, not(target_os = "macos"))) {
@@ -988,31 +1003,30 @@ fn default_capabilities() -> Capabilities {
     }
     Capabilities {
         flags,
-        // Con prefijo verbatim, el límite real de Windows es 32767 UTF-16.
+        // With the verbatim prefix, Windows's real limit is 32767 UTF-16.
         max_path: cfg!(windows).then_some(32767),
     }
 }
 
-/// Caché acotada de capabilities por directorio, con la identidad del nodo
-/// como clave.
+/// Bounded per-directory capability cache, keyed by the node's identity.
 ///
-/// No es un LRU de acceso sino de INSERCIÓN: lo que hay que impedir es que un
-/// recorrido largo haga crecer el mapa sin fin, y para eso basta con desalojar
-/// la entrada más vieja. Un comparador toca un puñado de raíces; un indexador
-/// que recorra miles pagará una syscall de más al volver sobre la primera, que
-/// es más barato que la contabilidad de un LRU de verdad.
+/// It's not an access LRU but an INSERTION one: what must be prevented is a
+/// long walk growing the map without end, and evicting the oldest entry is
+/// enough for that. A comparator touches a handful of roots; an indexer
+/// that walks thousands will pay one extra syscall when it comes back to
+/// the first one, which is cheaper than the bookkeeping of a real LRU.
 #[derive(Debug, Default)]
 struct CapsAtCache {
-    /// `(dev, ino)` → capabilities ya sondeadas.
+    /// `(dev, ino)` → already-probed capabilities.
     map: std::collections::HashMap<(u64, u64, i64), Capabilities>,
-    /// Orden de inserción, para el desalojo.
+    /// Insertion order, for eviction.
     order: std::collections::VecDeque<(u64, u64, i64)>,
-    /// Sondeos REALES (los que no salieron de aquí). Costura de test.
+    /// REAL probes (the ones that didn't come out of here). Test seam.
     probes: u64,
 }
 
-/// Techo de la caché. Un directorio ocupa decenas de bytes; 256 cubre de sobra
-/// las raíces de una comparación, una sincronización y los dos paneles.
+/// Cache ceiling. A directory occupies a few dozen bytes; 256 comfortably
+/// covers the roots of a comparison, a sync, and the two panes.
 const CAPS_AT_CACHE_MAX: usize = 256;
 
 impl CapsAtCache {
@@ -1024,47 +1038,47 @@ impl CapsAtCache {
         if self.map.insert(key, caps).is_none() {
             self.order.push_back(key);
             while self.order.len() > CAPS_AT_CACHE_MAX {
-                if let Some(viejo) = self.order.pop_front() {
-                    self.map.remove(&viejo);
+                if let Some(oldest) = self.order.pop_front() {
+                    self.map.remove(&oldest);
                 }
             }
         }
     }
 }
 
-/// Identidad de un directorio para la caché: `(dev, ino, ctime_nsec)`.
+/// A directory's identity for the cache: `(dev, ino, ctime_nsec)`.
 ///
-/// El `ctime` está ahí por la REUTILIZACIÓN de inodos, que es lo que hace
-/// insuficiente a `(dev, ino)` solo: ext4 recicla números de inodo dentro del
-/// mismo grupo de bloques, así que borrar un directorio `+F` y crear otro
-/// corriente puede devolver la misma pareja y servirle la respuesta del
-/// muerto — un `FULL_FOLD` falso, que empareja dos ficheros que son distintos.
-/// El `ctime` cambia en toda reasignación de inodo y ya viene en la `Metadata`
-/// que se acaba de leer, así que cuesta cero.
+/// The `ctime` is there because of inode REUSE, which is what makes
+/// `(dev, ino)` alone insufficient: ext4 recycles inode numbers within the
+/// same block group, so deleting a `+F` directory and creating an ordinary
+/// one can return the same pair and serve it the dead one's answer — a
+/// false `FULL_FOLD`, pairing up two files that are distinct. `ctime`
+/// changes on every inode reassignment and already comes in the `Metadata`
+/// that was just read, so it costs nothing.
 ///
-/// (El flag `+F` de un directorio VIVO no cambia: se hereda al crearlo, no se
-/// puede poner sobre un directorio no vacío ni quitar. Lo que se invalida aquí
-/// es la identidad, no el veredicto.)
+/// (A LIVE directory's `+F` flag doesn't change: it's inherited at
+/// creation, and it can't be set on a non-empty directory nor removed.
+/// What's invalidated here is the identity, not the verdict.)
 #[cfg(unix)]
 #[expect(
     clippy::unnecessary_wraps,
-    reason = "firma común con Windows, que no tiene inodo; en Unix siempre hay identidad"
+    reason = "shared signature with Windows, which has no inode; on Unix there's always identity"
 )]
 fn dir_identity(md: &std::fs::Metadata) -> Option<(u64, u64, i64)> {
     use std::os::unix::fs::MetadataExt as _;
     Some((md.dev(), md.ino(), md.ctime_nsec()))
 }
 
-/// Windows: `std` no expone la identidad del volumen ni el índice del fichero
-/// desde `Metadata`, así que aquí no hay clave y cada pregunta se sondea. En
-/// Windows la escalera de solo lectura no responde nada todavía (ver
-/// `caps_at::windows`), así que sondear es leer una `Metadata` y poco más.
+/// Windows: `std` doesn't expose the volume identity nor the file index
+/// from `Metadata`, so there's no key here and every question gets probed.
+/// On Windows the read-only ladder doesn't answer anything yet (see
+/// `caps_at::windows`), so probing is reading a `Metadata` and little else.
 #[cfg(windows)]
 fn dir_identity(_md: &std::fs::Metadata) -> Option<(u64, u64, i64)> {
     None
 }
 
-/// La clave de caché de un directorio, stateándolo.
+/// A directory's cache key, by stat-ing it.
 fn dir_key(dir: &Path) -> Option<(u64, u64, i64)> {
     std::fs::metadata(dir).ok().as_ref().and_then(dir_identity)
 }
@@ -1081,19 +1095,19 @@ fn probe_capabilities(base: &Path) -> Capabilities {
 
 #[async_trait]
 impl Provider for LocalProvider {
-    // La firma del trait es `-> &str`; devolver un literal aquí es correcto.
+    // The trait's signature is `-> &str`; returning a literal here is correct.
     #[expect(
         clippy::unnecessary_literal_bound,
-        reason = "La firma del trait es `-> &str`; devolver un literal aquí es correcto"
+        reason = "The trait's signature is `-> &str`; returning a literal here is correct"
     )]
     fn scheme(&self) -> &str {
         "file"
     }
 
     fn capabilities(&self) -> Capabilities {
-        // Lectura pura (regla 2: aquí no se puede hacer I/O — esto se llama
-        // desde contexto async). Exactas tras la primera operación async
-        // (el sondeo corre ahí, en spawn_blocking); antes, default del OS.
+        // Pure read (rule 2: no I/O can happen here — this is called from
+        // async context). Exact after the first async operation (the probe
+        // runs there, in spawn_blocking); before that, the OS default.
         self.caps
             .get()
             .copied()
@@ -1103,48 +1117,53 @@ impl Provider for LocalProvider {
     async fn capabilities_at(&self, p: &VPath) -> Result<Capabilities, Error> {
         self.ensure_caps().await;
         let mut declared = self.capabilities();
-        // Confinar es de la PLATAFORMA, no de la ubicación ni del estado del
-        // árbol: en unix hay `openat` —con `openat2` o con el paseo, los dos
-        // garantizan lo mismo—, y en Windows todavía no. Va antes de cualquier
-        // sonda porque tiene que valer también en el camino degradado de abajo:
-        // si no, `file:///destino-que-aun-no-existe` diría «no sé confinar» y
-        // `file:///` diría que sí, que es una respuesta distinta para la misma
-        // máquina y el caso corriente de planificar un mirror.
+        // Confinement is a PLATFORM property, not one of the location or
+        // the tree's state: on unix there's `openat` — with `openat2` or
+        // with the walk, both guarantee the same thing —, and on Windows
+        // not yet. It goes before any probe because it must also hold in
+        // the degraded path below: otherwise,
+        // `file:///destination-that-doesnt-exist-yet` would say "I can't
+        // confine" and `file:///` would say yes, which is a different
+        // answer for the same machine and the common case of planning a
+        // mirror.
         declared
             .flags
             .set(CapabilityFlags::CONFINED_WRITES, cfg!(unix));
         let native = self.native(p)?;
         let cache = std::sync::Arc::clone(&self.caps_at);
-        // Con PLAZO, y en un hilo desacoplado (#213). Todo lo que hay dentro
-        // —el `symlink_metadata`, el `statfs` y el `ioctl` de la escalera— se
-        // cuelga indefinidamente sobre un NFS o un CIFS muerto, y una syscall
-        // en vuelo no se cancela. En el pool de bloqueo eso ataría una plaza
-        // COMPARTIDA por montaje caído; peor todavía, `sync.plan` pregunta
-        // esto dos veces ANTES de `sched.submit`, o sea fuera de toda Task y
-        // de todo `CancellationToken` (regla dura 3): la RPC se quedaba colgada
-        // sin nada que cancelar.
+        // With a DEADLINE, and on a detached thread (#213). Everything
+        // inside — the `symlink_metadata`, the `statfs` and the ladder's
+        // `ioctl` — hangs indefinitely over a dead NFS or CIFS, and an
+        // in-flight syscall can't be cancelled. In the blocking pool that
+        // would tie up a slot SHARED by a downed mount; worse still,
+        // `sync.plan` asks this twice BEFORE `sched.submit`, i.e. outside
+        // any Task and any `CancellationToken` (hard rule 3): the RPC would
+        // hang with nothing to cancel.
         //
-        // Vencido el plazo se responde lo DECLARADO por el provider, que es la
-        // degradación que el ADR 0054 ya define para «no lo sé», y no se
-        // cachea nada: un montaje que vuelve contesta la próxima vez.
+        // Once the deadline expires, whatever the provider DECLARED is
+        // returned, which is the degradation ADR 0054 already defines for
+        // "I don't know", and nothing is cached: a mount that comes back
+        // answers next time.
         let declared_on_timeout = declared;
         norte_vfs::deadline::blocking_with_deadline(
             move || {
-                // La pregunta es SIEMPRE sobre el directorio que CONTIENE al
-                // nombre: lo que se decide con la respuesta es si dos nombres
-                // pueden coexistir ahí, y eso lo manda el directorio donde van a
-                // estar. Para un fichero —o para un symlink, que es un nombre en
-                // el directorio del enlace y no en el de su destino— eso es su
-                // padre; para un directorio, él mismo. `symlink_metadata`, por
-                // tanto, y no `metadata`.
+                // The question is ALWAYS about the directory that CONTAINS
+                // the name: what the answer decides is whether two names
+                // can coexist there, and that's ruled by the directory
+                // they're going to be in. For a file — or for a symlink,
+                // which is a name in the link's directory and not in its
+                // target's — that's its parent; for a directory, itself.
+                // `symlink_metadata`, therefore, and not `metadata`.
                 let Ok(md) = std::fs::symlink_metadata(&native) else {
-                    // Una ruta que no está (o que no se deja mirar) NO es un error
-                    // aquí: `capabilities()` jamás pudo fallar, y hacer fallar a
-                    // su versión por ubicación convertiría «planificar hacia un
-                    // destino que aún no existe» —el caso corriente de un mirror—
-                    // en un error, además de cambiar el contrato de un método del
-                    // wire ya publicado. Se declara lo del provider (ADR 0054: la
-                    // degradación es el comportamiento de siempre).
+                    // A path that isn't there (or can't be looked at) is
+                    // NOT an error here: `capabilities()` could never
+                    // fail, and making its per-location version fail would
+                    // turn "planning toward a destination that doesn't
+                    // exist yet" — the common case of a mirror — into an
+                    // error, on top of changing an already published wire
+                    // method's contract. What the provider declares is
+                    // returned (ADR 0054: degradation is the usual
+                    // behavior).
                     return Ok(declared);
                 };
                 let dir: &Path = if md.is_dir() {
@@ -1155,7 +1174,7 @@ impl Provider for LocalProvider {
                 let key = dir_key(dir);
 
                 if let Some(k) = key
-                    && let Some(hit) = cache.lock().expect("caps_at lock sano").get(k)
+                    && let Some(hit) = cache.lock().expect("caps_at lock is healthy").get(k)
                 {
                     return Ok(hit);
                 }
@@ -1165,12 +1184,13 @@ impl Provider for LocalProvider {
                 if let Some(sensitive) = found.case_sensitive {
                     caps.flags.set(CapabilityFlags::CASE_SENSITIVE, sensitive);
                 }
-                // `None` = la escalera no supo; se deja lo declarado en vez de
-                // apagar un flag que nadie contradijo.
+                // `None` = the ladder didn't know; what was declared is
+                // left as is instead of turning off a flag nobody
+                // contradicted.
                 if let Some(full) = found.full_fold {
                     caps.flags.set(CapabilityFlags::FULL_FOLD, full);
                 }
-                let mut guard = cache.lock().expect("caps_at lock sano");
+                let mut guard = cache.lock().expect("caps_at lock is healthy");
                 guard.probes += 1;
                 if let Some(k) = key {
                     guard.insert(k, caps);
@@ -1183,28 +1203,27 @@ impl Provider for LocalProvider {
         .unwrap_or(Ok(declared_on_timeout))
     }
 
-    /// Las reglas de nombre de ESTA plataforma (#163).
+    /// This PLATFORM's naming rules (#163).
     ///
-    /// En unix, cualquier secuencia de bytes sin `/` ni NUL — y un `Segment`
-    /// ya lo garantiza, así que aquí no hay nada que rechazar.
+    /// On unix, any byte sequence without `/` or NUL — and a `Segment`
+    /// already guarantees that, so there's nothing to reject here.
     ///
-    /// En Windows sí: los nombres de dispositivo (`CON`, `NUL`, `COM1`…) no
-    /// son ficheros, los `<>:"|?*` y los controles no son legales, y un punto
-    /// o un espacio FINALES los borra Win32 en silencio — con lo que el
-    /// fichero que queda no es el que se pidió. `f:ads` es el peor de todos y
-    /// por eso los dos puntos están en la lista: ahí no falla, escribe un
-    /// flujo alternativo, y la copia dice que fue bien mientras el fichero no
-    /// está.
+    /// On Windows there is: device names (`CON`, `NUL`, `COM1`…) aren't
+    /// files, `<>:"|?*` and control characters aren't legal, and a
+    /// TRAILING dot or space is silently stripped by Win32 — leaving a
+    /// file that isn't the one requested. `f:ads` is the worst of all,
+    /// which is why the colon is on the list: it doesn't fail there, it
+    /// writes an alternate data stream, and the copy reports success while
+    /// the file isn't there.
     ///
-    /// **Sin verificar en una máquina Windows**, como el resto de la deuda de
-    /// esa plataforma (#217, #220, #221, #222): las reglas salen de la
-    /// documentación de Win32, no de una ejecución. Lo que sí está probado es
-    /// el CABLEADO —que un nombre rehusado bloquea el plan en vez de
-    /// descubrirse al ejecutar—, con un provider de test que rehúsa a
-    /// propósito.
+    /// **Unverified on a Windows machine**, like the rest of that
+    /// platform's debt (#217, #220, #221, #222): the rules come from Win32
+    /// documentation, not from a run. What IS tested is the WIRING — that
+    /// a rejected name blocks the plan instead of being discovered at
+    /// execution — with a test provider that refuses on purpose.
     fn name_is_legal(&self, name: &[u8]) -> bool {
-        /// Los nombres de dispositivo de Win32, que no son ficheros.
-        const RESERVADOS: &[&[u8]] = &[
+        /// Win32's device names, which aren't files.
+        const RESERVED: &[&[u8]] = &[
             b"CON", b"PRN", b"AUX", b"NUL", b"COM1", b"COM2", b"COM3", b"COM4", b"COM5", b"COM6",
             b"COM7", b"COM8", b"COM9", b"LPT1", b"LPT2", b"LPT3", b"LPT4", b"LPT5", b"LPT6",
             b"LPT7", b"LPT8", b"LPT9",
@@ -1216,7 +1235,7 @@ impl Provider for LocalProvider {
         if name.is_empty() {
             return false;
         }
-        // Los bytes prohibidos por Win32, más los controles.
+        // The bytes forbidden by Win32, plus control characters.
         if name.iter().any(|b| {
             matches!(
                 b,
@@ -1225,16 +1244,16 @@ impl Provider for LocalProvider {
         }) {
             return false;
         }
-        // Punto o espacio finales: Win32 los quita, así que el nombre que
-        // queda no es el que se pidió.
+        // Trailing dot or space: Win32 strips them, so the name that's
+        // left isn't the one requested.
         if matches!(name.last(), Some(b'.' | b' ')) {
             return false;
         }
-        // Los nombres de dispositivo, con o sin extensión detrás.
-        let raiz: &[u8] = name.split(|b| *b == b'.').next().unwrap_or(name);
-        !RESERVADOS
+        // Device names, with or without an extension after them.
+        let stem: &[u8] = name.split(|b| *b == b'.').next().unwrap_or(name);
+        !RESERVED
             .iter()
-            .any(|r| r.eq_ignore_ascii_case(&raiz.to_ascii_uppercase()))
+            .any(|r| r.eq_ignore_ascii_case(&stem.to_ascii_uppercase()))
     }
 
     #[cfg(unix)]
@@ -1243,9 +1262,9 @@ impl Provider for LocalProvider {
         let native = self.native(root)?;
         let vpath = root.clone();
         blocking(move || {
-            let abierta = crate::confined::LocalRoot::open(&native)?;
+            let opened = crate::confined::LocalRoot::open(&native)?;
             Ok(
-                Box::new(crate::confined::LocalConfinedRoot::new(abierta, vpath))
+                Box::new(crate::confined::LocalConfinedRoot::new(opened, vpath))
                     as Box<dyn norte_vfs::ConfinedRoot>,
             )
         })
@@ -1269,16 +1288,17 @@ impl Provider for LocalProvider {
     }
 
     fn attrs(&self) -> &[norte_proto::AttrInfo] {
-        catalogo_local()
+        local_catalog()
     }
 
     async fn list(&self, p: &VPath) -> Result<EntryStream, Error> {
         self.ensure_caps().await;
         let native = self.native(p)?;
-        // Validación previa síncrona: NotFound / no-dir se devuelven en el
-        // Result, no como primer item del stream. `metadata` SIGUE symlinks
-        // (semántica opendir): listar un dir-symlink lista su target, y un
-        // link roto es NotFound — igual que el FS real por debajo.
+        // Synchronous upfront validation: NotFound / not-a-dir are
+        // returned in the Result, not as the stream's first item.
+        // `metadata` FOLLOWS symlinks (opendir semantics): listing a
+        // dir-symlink lists its target, and a broken link is NotFound —
+        // same as the real FS underneath.
         {
             let probe = native.clone();
             blocking(move || {
@@ -1307,10 +1327,11 @@ impl Provider for LocalProvider {
                 let item = dent.map_err(|e| map_io(&e)).and_then(|d| {
                     let seg = Segment::new(os_to_bytes(&d.file_name()))
                         .map_err(|_| Error::InvalidPath)?;
-                    // #52: kind por d_type del readdir (std solo statea con
-                    // DT_UNKNOWN); size/mtime LAZY (None = «no lo sé»,
-                    // contrato de Entry) — el copy engine hidrata sus hojas
-                    // (hydrate_plan) y la UI sondea la enfocada.
+                    // #52: kind from readdir's d_type (std only stats on
+                    // DT_UNKNOWN); size/mtime LAZY (None = "I don't know",
+                    // Entry's contract) — the copy engine hydrates its
+                    // leaves (hydrate_plan) and the UI probes the focused
+                    // one.
                     let ft = d.file_type().map_err(|e| map_io(&e))?;
                     let kind = if ft.is_symlink() {
                         EntryKind::Symlink
@@ -1331,7 +1352,7 @@ impl Provider for LocalProvider {
                 });
                 let stop = item.is_err();
                 if tx.blocking_send(item).is_err() {
-                    // Receptor soltado: cancelación cooperativa del listado.
+                    // Receiver dropped: cooperative cancellation of the listing.
                     return;
                 }
                 if stop {
@@ -1347,8 +1368,8 @@ impl Provider for LocalProvider {
         p: &VPath,
         opt: &norte_vfs::ListOptions,
     ) -> Result<EntryStream, Error> {
-        // Sin attr anunciado en la petición: camino rápido lazy (#52) intacto.
-        let advertised = catalogo_local();
+        // No attr advertised in the request: the lazy fast path (#52) stays intact.
+        let advertised = local_catalog();
         if !opt
             .attrs
             .iter()
@@ -1358,8 +1379,8 @@ impl Provider for LocalProvider {
         }
         self.ensure_caps().await;
         let native = self.native(p)?;
-        // Misma validación previa síncrona que `list` (NotFound / no-dir en
-        // el Result, no como primer item del stream).
+        // Same synchronous upfront validation as `list` (NotFound / not-a-dir
+        // in the Result, not as the stream's first item).
         {
             let probe = native.clone();
             blocking(move || {
@@ -1389,15 +1410,17 @@ impl Provider for LocalProvider {
                 let item = dent.map_err(|e| map_io(&e)).and_then(|d| {
                     let seg = Segment::new(os_to_bytes(&d.file_name()))
                         .map_err(|_| Error::InvalidPath)?;
-                    // Promoción (#108 bloque 2): attrs pedidos → un lstat por
-                    // entrada (`DirEntry::metadata` NO sigue symlinks), que
-                    // además hidrata size/mtime de gratis. Sigue dentro del
-                    // productor bloqueante — jamás I/O en el ejecutor async.
+                    // Promotion (#108 block 2): requested attrs → one lstat
+                    // per entry (`DirEntry::metadata` does NOT follow
+                    // symlinks), which also hydrates size/mtime for free.
+                    // Still inside the blocking producer — never I/O on
+                    // the async executor.
                     //
-                    // Carrera readdir→lstat: una entrada borrada entre ambos
-                    // ya NO existe — se OMITE (None), no mata un listado de
-                    // un dir vivo (/tmp, build dirs). Otros errores sí son
-                    // fatales, como en el camino sin promoción.
+                    // readdir→lstat race: an entry deleted between the two
+                    // no longer exists — it's SKIPPED (None), it doesn't
+                    // kill a listing of a live dir (/tmp, build dirs).
+                    // Other errors are still fatal, as in the non-promoted
+                    // path.
                     match d.metadata() {
                         Ok(md) => Ok(Some(entry_from(base_vpath.join(seg), &md, &req))),
                         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -1411,7 +1434,7 @@ impl Provider for LocalProvider {
                 };
                 let stop = item.is_err();
                 if tx.blocking_send(item).is_err() {
-                    // Receptor soltado: cancelación cooperativa del listado.
+                    // Receiver dropped: cooperative cancellation of the listing.
                     return;
                 }
                 if stop {
@@ -1430,37 +1453,39 @@ impl Provider for LocalProvider {
         self.ensure_caps().await;
         let native = self.native(p)?;
         let file = blocking(move || {
-            // `metadata` SIGUE symlinks (semántica open): leer un
-            // dir-symlink es TypeMismatch — el sondeo del copy engine
-            // distingue así archivo/dir — y un link roto es NotFound.
+            // `metadata` FOLLOWS symlinks (open semantics): reading a
+            // dir-symlink is TypeMismatch — that's how the copy engine's
+            // probe distinguishes file/dir — and a broken link is
+            // NotFound.
             let md = std::fs::metadata(&native).map_err(|e| map_io(&e))?;
             if md.is_dir() {
                 return Err(Error::Conflict {
                     conflict: ConflictKind::TypeMismatch,
                 });
             }
-            // No-regulares (FIFO/socket/device): el open puede BLOQUEAR el
-            // hilo indefinidamente (una FIFO sin escritor) y la cancelación
-            // no puede interrumpirlo (regla 3) — rechazo honesto ANTES del
-            // open. El engine los trata como Other/Unsupported igualmente.
+            // Non-regular files (FIFO/socket/device): the open can BLOCK
+            // the thread indefinitely (a FIFO with no writer) and
+            // cancellation can't interrupt it (rule 3) — an honest
+            // rejection BEFORE the open. The engine treats them as
+            // Other/Unsupported anyway.
             if !md.is_file() {
                 return Err(Error::Unsupported);
             }
             let mut file = std::fs::File::open(&native).map_err(|e| map_io(&e))?;
             if let Some(r) = range {
                 use std::io::Seek;
-                // Semántica pread (ADR 0005): offset pasado de EOF no es
-                // error — el stream simplemente termina vacío.
+                // pread semantics (ADR 0005): an offset past EOF isn't an
+                // error — the stream simply ends empty.
                 file.seek(std::io::SeekFrom::Start(r.offset))
                     .map_err(|e| map_io(&e))?;
             }
             Ok(file)
         })
         .await?;
-        // `None` = sin límite (hasta EOF).
+        // `None` = no limit (until EOF).
         let mut remaining: Option<u64> = range.and_then(|r| r.len);
-        // Buffer de 8 chunks: 2 MiB máximos retenidos si el consumidor se
-        // atasca (con blocking_send el productor espera igual de bien).
+        // 8-chunk buffer: 2 MiB maximum retained if the consumer stalls
+        // (with blocking_send the producer waits just as well anyway).
         let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, Error>>(8);
         spawn_guarded_producer(tx, move |tx| {
             use std::io::Read;
@@ -1469,9 +1494,9 @@ impl Provider for LocalProvider {
             loop {
                 let want = match remaining {
                     Some(0) => return,
-                    // INVARIANTE: min(n, READ_CHUNK=256Ki) siempre cabe.
+                    // INVARIANT: min(n, READ_CHUNK=256Ki) always fits.
                     Some(n) => usize::try_from(n.min(READ_CHUNK as u64))
-                        .expect("min con READ_CHUNK cabe en usize"),
+                        .expect("min with READ_CHUNK fits in usize"),
                     None => READ_CHUNK,
                 };
                 match file.read(&mut buf[..want]) {
@@ -1508,20 +1533,22 @@ impl Provider for LocalProvider {
         blocking(move || node_id_native(&native, follow)).await
     }
 
-    /// Freedesktop (Linux/BSD): la papelera la implementa este crate (módulo
-    /// interno `trash_fdo`, la spec de freedesktop.org), y NOMBRA su destino.
+    /// Freedesktop (Linux/BSD): this crate implements the trash (internal
+    /// module `trash_fdo`, the freedesktop.org spec), and it NAMES its
+    /// destination.
     ///
-    /// Es la diferencia entre poder deshacer una sobrescritura y no poder: con
-    /// `Ok(None)` el journal se queda sin `reversal_ref` y el undo tiene que
-    /// adivinar por ruta original, que sobre una pareja `trashed`+`created`
-    /// desentierra el fichero equivocado. Aquí el destino sale de una decisión
-    /// nuestra, así que se sabe.
+    /// It's the difference between being able to undo an overwrite and
+    /// not: with `Ok(None)` the journal is left without a `reversal_ref`
+    /// and undo has to guess by original path, which over a
+    /// `trashed`+`created` pair digs up the wrong file. Here the
+    /// destination comes from a decision of ours, so it's known.
     ///
-    /// `Ok(None)` sigue siendo posible en un caso: que la papelera que toca
-    /// caiga FUERA de la raíz de este provider (un provider enraizado, cosa de
-    /// tests — `os_root`, que es el que registra el daemon, no puede). El
-    /// efecto ya ocurrió; lo que falta es una ruta que este provider sepa
-    /// resolver, y devolver una que no resuelve sería peor.
+    /// `Ok(None)` is still possible in one case: the trash that applies
+    /// falls OUTSIDE this provider's root (a rooted provider, a testing
+    /// thing — `os_root`, which is what the daemon registers, can't). The
+    /// effect already happened; what's missing is a path this provider
+    /// knows how to resolve, and returning one that doesn't resolve would
+    /// be worse.
     #[cfg(all(
         unix,
         not(target_os = "macos"),
@@ -1544,14 +1571,14 @@ impl Provider for LocalProvider {
         Ok(self.vpath_of(&dest))
     }
 
-    /// macOS y Windows: sigue delegando en el crate `trash`, que no expone
-    /// dónde puso el fichero — de ahí el `Ok(None)`, y de ahí que
-    /// [`Provider::trash_restorable`] diga que no.
+    /// macOS and Windows: still delegates to the `trash` crate, which
+    /// doesn't expose where it put the file — hence the `Ok(None)`, and
+    /// hence why [`Provider::trash_restorable`] says no.
     ///
-    /// Reimplementar la papelera de esas dos plataformas no es lo mismo que
-    /// implementar una spec de tres ficheros: `NSFileManager` y la Recycle Bin
-    /// son APIs con su propio índice, y falsear uno sería peor que decir la
-    /// verdad (issues #25/#26).
+    /// Reimplementing those two platforms' trash isn't the same as
+    /// implementing a three-file spec: `NSFileManager` and the Recycle Bin
+    /// are APIs with their own index, and faking one would be worse than
+    /// telling the truth (issues #25/#26).
     #[cfg(not(all(
         unix,
         not(target_os = "macos"),
@@ -1561,9 +1588,10 @@ impl Provider for LocalProvider {
     async fn trash(
         &self,
         p: &VPath,
-        // La papelera NATIVA del OS no tiene destino recuperable estable: el
-        // id determinista del engine (#99) no aplica aquí (dest = None; el undo
-        // degrada como siempre en trash nativa). Solo lo usan las lógicas.
+        // The OS's NATIVE trash has no stable recoverable destination: the
+        // engine's deterministic id (#99) doesn't apply here (dest = None;
+        // undo degrades as always in native trash). Only used by the
+        // logics.
         _id: &norte_vfs::trash::TrashId,
     ) -> Result<Option<VPath>, Error> {
         self.ensure_caps().await;
@@ -1572,43 +1600,45 @@ impl Provider for LocalProvider {
         }
         let native = self.native(p)?;
         blocking(move || {
-            // Existencia primero: el crate trash da errores variopintos.
-            // (TOCTOU cosmético: si la víctima desaparece entre el stat y
-            // el delete, saldrá PermissionDenied en vez de NotFound.)
+            // Existence first: the trash crate gives assorted errors.
+            // (Cosmetic TOCTOU: if the victim disappears between the stat
+            // and the delete, PermissionDenied comes out instead of
+            // NotFound.)
             std::fs::symlink_metadata(&native).map_err(|e| map_io(&e))?;
             trash_delete(&native).map_err(|e| match e {
                 trash::Error::CouldNotAccess { .. } => Error::PermissionDenied,
                 trash::Error::TargetedRoot => Error::InvalidPath,
-                // "Sin papelera utilizable AQUÍ" (mount sin topdir, sin
-                // $HOME…): Unsupported — el TUI reofrece PERMANENTE con
-                // aviso (ADR 0009). Variantes del crate stringly: Unknown
-                // es su cajón para "no pude"; upstream además panickea con
-                // /proc/mounts no-UTF8 (contenido por `blocking()` como
-                // Internal{panic}).
+                // "No usable trash HERE" (mount without a topdir, no
+                // $HOME…): Unsupported — the TUI re-offers PERMANENT with a
+                // warning (ADR 0009). The crate's stringly variants: Unknown
+                // is its catch-all for "couldn't do it"; upstream also
+                // panics on non-UTF8 /proc/mounts (contained by
+                // `blocking()` as Internal{panic}).
                 trash::Error::Unknown { .. } => Error::Unsupported,
                 _ => Error::Io { retryable: false },
             })
         })
         .await?;
-        // Papelera NATIVA del OS: no exponemos una ruta estable de destino; el
-        // handle de restauración se resuelve en el undo (M3-2, ADR 0009).
+        // The OS's NATIVE trash: we don't expose a stable destination
+        // path; the restore handle is resolved in undo (M3-2, ADR 0009).
         Ok(None)
     }
 
-    /// Freedesktop sí, **si además este provider sabe NOMBRAR su papelera**.
+    /// Freedesktop yes, **but only if this provider also knows how to NAME
+    /// its trash**.
     ///
-    /// No es una constante de plataforma: `trash()` devuelve la ruta traducida
-    /// a `VPath`, y eso no puede nombrar lo que cae fuera de la raíz del
-    /// provider. Un provider enraizado en un directorio cuya papelera queda
-    /// fuera contestaría `Ok(None)` tras haber prometido que sí — y el journal
-    /// se quedaría sin `reversal_ref` justo donde el plan dijo `RestoreTrash`,
-    /// que es el bug entero de esta tarea con otro disfraz (MAJOR-3 del
-    /// encoding-auditor, MINOR del security-reviewer). Así que la promesa se
-    /// mide, y quien no puede cumplirla contesta `false`: el plan marca los
-    /// pasos IRREVERSIBLES antes de que nadie apruebe (regla dura 4).
+    /// It's not a platform constant: `trash()` returns the path translated
+    /// to `VPath`, and that can't name what falls outside the provider's
+    /// root. A provider rooted in a directory whose trash falls outside it
+    /// would answer `Ok(None)` after having promised yes — and the journal
+    /// would be left without a `reversal_ref` right where the plan said
+    /// `RestoreTrash`, which is this whole task's bug wearing another
+    /// disguise (encoding-auditor MAJOR-3, security-reviewer MINOR). So the
+    /// promise is measured, and whoever can't keep it answers `false`: the
+    /// plan marks IRREVERSIBLE steps before anyone approves (hard rule 4).
     ///
-    /// `os_root`, que es lo que registra el daemon, tiene la raíz en `/` y
-    /// nombra cualquier ruta.
+    /// `os_root`, which is what the daemon registers, has its root at `/`
+    /// and names any path.
     #[cfg(all(
         unix,
         not(target_os = "macos"),
@@ -1621,8 +1651,9 @@ impl Provider for LocalProvider {
                 .is_some_and(|t| t.starts_with(&self.base))
     }
 
-    /// macOS y Windows no: ahí la papelera la pone el crate `trash`, que no
-    /// dice dónde deja las cosas (issues #25/#26, ADR 0009).
+    /// macOS and Windows: no — there the `trash` crate provides the trash,
+    /// and it doesn't say where it leaves things (issues #25/#26,
+    /// ADR 0009).
     #[cfg(not(all(
         unix,
         not(target_os = "macos"),
@@ -1633,20 +1664,20 @@ impl Provider for LocalProvider {
         false
     }
 
-    /// Saca de la papelera freedesktop el fichero que
-    /// [`Provider::trash`] enterró, y se lleva su sidecar con él.
+    /// Pulls out of the freedesktop trash the file [`Provider::trash`]
+    /// buried, and takes its sidecar along with it.
     ///
-    /// El movimiento primero y el sidecar después, nunca al revés: un
-    /// `files/x` sin su `info/x.trashinfo` no lo enseña ninguna papelera
-    /// gráfica, así que borrar los metadatos y fallar luego el movimiento
-    /// escondería el fichero en vez de devolverlo. Al revés lo peor que queda
-    /// es un sidecar huérfano, que es cosmético.
+    /// The move first and the sidecar after, never the other way around: a
+    /// `files/x` without its `info/x.trashinfo` isn't shown by any
+    /// graphical trash, so deleting the metadata and then failing the move
+    /// would hide the file instead of returning it. The other way around,
+    /// the worst that's left is an orphan sidecar, which is cosmetic.
     ///
-    /// El borrado del sidecar es best-effort a propósito: el contrato de este
-    /// método es "el fichero está de vuelta en `original`", y eso ya se
-    /// cumplió cuando el `rename` volvió `Ok`. Devolver `Err` por no haber
-    /// podido limpiar metadatos haría que el undo contase como bloqueada una
-    /// entrada que sí se revirtió.
+    /// Deleting the sidecar is best-effort on purpose: this method's
+    /// contract is "the file is back at `original`", and that's already
+    /// been fulfilled once the `rename` returned `Ok`. Returning `Err`
+    /// because metadata couldn't be cleaned up would make undo count as
+    /// blocked an entry that DID get reverted.
     #[cfg(all(
         unix,
         not(target_os = "macos"),
@@ -1665,16 +1696,18 @@ impl Provider for LocalProvider {
         .await
     }
 
-    /// Restaura desde la papelera nativa del OS el ítem cuya ruta ORIGINAL es
-    /// `original` (undo M3-2). Lista la papelera (`os_limited`), casa por ruta
-    /// original el ítem más reciente (desempate estable por id) y lo restaura.
-    /// Estricto: si el destino ya existe, `Conflict` (jamás pisa).
+    /// Restores from the OS's native trash the item whose ORIGINAL path is
+    /// `original` (undo M3-2). Lists the trash (`os_limited`), matches by
+    /// original path the most recent item (stable tiebreak by id) and
+    /// restores it. Strict: if the destination already exists, `Conflict`
+    /// (never overwrites).
     ///
-    /// SOLO freedesktop (Linux/BSD): la papelera guarda el parent CANONICALIZADO
-    /// (symlinks resueltos), así que se canoniza el parent de `original` antes de
-    /// casar; sin ello, una raíz colgada de un symlink nunca acertaría. Windows
-    /// (prefijo verbatim vs `C:\` del shell) y macOS/iOS/Android quedan
-    /// `Unsupported` por el default del trait (deuda: restore Windows/macOS).
+    /// ONLY freedesktop (Linux/BSD): the trash stores the CANONICALIZED
+    /// parent (symlinks resolved), so `original`'s parent is canonicalized
+    /// before matching; without that, a root hanging off a symlink would
+    /// never match. Windows (verbatim prefix vs. the shell's `C:\`) and
+    /// macOS/iOS/Android stay `Unsupported` via the trait's default (debt:
+    /// Windows/macOS restore).
     #[cfg(all(
         unix,
         not(target_os = "macos"),
@@ -1685,16 +1718,17 @@ impl Provider for LocalProvider {
         self.ensure_caps().await;
         let native = self.native(original)?;
         blocking(move || {
-            // Destino LIBRE (estricto: jamás pisa). symlink_metadata NO sigue el
-            // link (un symlink colgante en el destino ES «ocupado»), coherente
-            // con `trash()`.
+            // FREE destination (strict: never overwrites). symlink_metadata
+            // does NOT follow the link (a dangling symlink at the
+            // destination IS "occupied"), consistent with `trash()`.
             if native.symlink_metadata().is_ok() {
                 return Err(Error::Conflict {
                     conflict: ConflictKind::Exists,
                 });
             }
-            // La papelera almacena `parent.canonicalize().join(name)`: casa contra
-            // esa MISMA forma o el match falla si la raíz cuelga de un symlink.
+            // The trash stores `parent.canonicalize().join(name)`: match
+            // against that SAME form or the match fails if the root hangs
+            // off a symlink.
             let name = native.file_name().ok_or(Error::InvalidPath)?;
             let parent = native.parent().ok_or(Error::InvalidPath)?;
             let target = parent.canonicalize().map_err(|e| map_io(&e))?.join(name);
@@ -1703,9 +1737,10 @@ impl Provider for LocalProvider {
             let pick = items
                 .into_iter()
                 .filter(|it| it.original_path() == target)
-                // Más reciente; desempate por id → determinista bajo empate de
-                // segundo (deuda: resolución de 1s no distingue trash-recrea-trash
-                // en el mismo segundo — capturar el id al tirar sería exacto).
+                // Most recent; tiebreak by id → deterministic under a
+                // same-second tie (debt: 1s resolution doesn't distinguish
+                // trash-recreate-trash within the same second — capturing
+                // the id at delete time would be exact).
                 .max_by_key(|it| (it.time_deleted, it.id.clone()))
                 .ok_or(Error::NotFound)?;
             trash::os_limited::restore_all([pick]).map_err(|e| match e {
@@ -1719,19 +1754,21 @@ impl Provider for LocalProvider {
         .await
     }
 
-    /// GC de `.norte-partial` huérfanos en el directorio `dir` (ADR 0012, #11):
-    /// borra los staging cuya última modificación es anterior a `older_than`.
-    /// Reconoce los parciales por su FORMA exacta (`is_norte_partial`), no por
-    /// el prefijo suelto — un archivo real del usuario `.norte-partial.backup`
-    /// JAMÁS se toca (H2 del encoding-auditor). Devuelve cuántos borró.
+    /// GC of orphaned `.norte-partial` files in directory `dir` (ADR 0012,
+    /// #11): deletes staging files whose last modification is older than
+    /// `older_than`. Recognizes partials by their exact SHAPE
+    /// (`is_norte_partial`), not by the bare prefix — a real user file
+    /// `.norte-partial.backup` is NEVER touched (encoding-auditor H2).
+    /// Returns how many it deleted.
     ///
-    /// No distingue un parcial de una copia VIVA (esa correlación es del
-    /// journal M3): usar un `older_than` holgado (horas) para no barrer una
-    /// reanudación en curso. Es una operación puntual, no una Task.
+    /// Doesn't distinguish a partial from a LIVE copy (that correlation
+    /// belongs to journal M3): use a generous `older_than` (hours) so as
+    /// not to sweep an in-progress resume. It's a one-off operation, not a
+    /// Task.
     ///
     /// # Errors
-    /// [`Error`] si `dir` no se puede listar; los fallos de borrado
-    /// individuales se cuentan como no-borrados, sin abortar el barrido.
+    /// [`Error`] if `dir` can't be listed; individual deletion failures
+    /// are counted as not-deleted, without aborting the sweep.
     async fn gc_partials(
         &self,
         dir: &VPath,
@@ -1748,7 +1785,7 @@ impl Provider for LocalProvider {
                 if !is_norte_partial(&os_to_bytes(&name)) {
                     continue;
                 }
-                // Edad por mtime; sin metadata legible, se deja (conservador).
+                // Age by mtime; if metadata isn't readable, it's left alone (conservative).
                 let old = dent
                     .metadata()
                     .ok()
@@ -1775,7 +1812,7 @@ impl Provider for LocalProvider {
                 });
             }
             let target = std::fs::read_link(&native).map_err(|e| map_io(&e))?;
-            // Bytes CRUDOS del target (regla 1): jamás String ni VPath.
+            // RAW target bytes (rule 1): never String nor VPath.
             Ok(os_to_bytes(target.as_os_str()))
         })
         .await
@@ -1803,14 +1840,15 @@ impl Provider for LocalProvider {
     async fn write(&self, p: &VPath) -> Result<Box<dyn ByteSink>, Error> {
         self.ensure_caps().await;
         let final_native = self.native(p)?;
-        // Staging junto al destino, con nombre CORTO y único:
-        // `.norte-partial.<hash>.<pid>-<n>`. Corto porque NO deriva del
-        // nombre final (242–255 bytes son legales en ext4/APFS/NTFS y un
-        // sufijo daría ENAMETOOLONG, issue #4) sino de su hash. Único por
-        // pid + secuencia: (a) un archivo real del usuario jamás se toca
-        // (create_new además lo garantiza) y (b) dos writes concurrentes al
-        // mismo destino no comparten staging. El prefijo `.norte-partial` lo
-        // hace reconocible para el GC del journal (M3).
+        // Staging next to the destination, with a SHORT, unique name:
+        // `.norte-partial.<hash>.<pid>-<n>`. Short because it does NOT
+        // derive from the final name (242–255 bytes are legal on
+        // ext4/APFS/NTFS and a suffix would give ENAMETOOLONG, issue #4)
+        // but from its hash. Unique via pid + sequence: (a) a real user
+        // file is never touched (create_new also guarantees this) and (b)
+        // two concurrent writes to the same destination don't share
+        // staging. The `.norte-partial` prefix makes it recognizable to
+        // the journal's GC (M3).
         let name = p.file_name().ok_or(Error::InvalidPath)?;
         let partial_name = ephemeral_partial_name(name.as_bytes());
         let partial_seg = Segment::new(partial_name).map_err(|_| Error::InvalidPath)?;
@@ -1827,8 +1865,8 @@ impl Provider for LocalProvider {
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                 Err(e) => return Err(map_io(&e)),
             }
-            // create_new: si aun así existe algo con este nombre, error antes
-            // que tocar un archivo ajeno.
+            // create_new: if something with this name exists anyway, error
+            // before touching a file that isn't ours.
             let file = std::fs::OpenOptions::new()
                 .write(true)
                 .create_new(true)
@@ -1840,12 +1878,12 @@ impl Provider for LocalProvider {
 
         Ok(Box::new(LocalSink {
             file: Some(file),
-            // Staging recién creado: se empieza en cero.
+            // Freshly created staging: starts at zero.
             pos: 0,
             partial: partial_native,
             final_path: final_native,
             done: false,
-            estable: false,
+            stable: false,
         }))
     }
 
@@ -1854,13 +1892,14 @@ impl Provider for LocalProvider {
 
         use sha2::{Digest, Sha256};
         self.ensure_caps().await;
-        // Mismo staging estable que open_resumable (#35): SHA-256 de sus
-        // primeros `len` bytes. I/O síncrono en spawn_blocking (regla 2).
+        // Same stable staging as open_resumable (#35): SHA-256 of its first
+        // `len` bytes. Synchronous I/O in spawn_blocking (rule 2).
         let partial_native = self.native(&stable_partial_vpath(p)?)?;
         blocking(move || {
-            // Sin staging NUESTRO = sin digest (el engine degrada a Length):
-            // el prefijo de un fichero que no es el que se va a continuar no
-            // dice nada sobre lo que se va a continuar (#298).
+            // No staging of OURS = no digest (the engine degrades to
+            // Length): the prefix of a file that isn't the one about to be
+            // continued says nothing about what's about to be continued
+            // (#298).
             let Some(file) = open_partial_for_digest(&partial_native)? else {
                 return Ok(None);
             };
@@ -1876,8 +1915,9 @@ impl Provider for LocalProvider {
                 hasher.update(&buf[..n]);
                 seen += n as u64;
             }
-            // El staging es más corto que `len` (raro: `len` viene de
-            // open_resumable): sin prefijo completo, degrada a Length.
+            // The staging is shorter than `len` (rare: `len` comes from
+            // open_resumable): without the full prefix, it degrades to
+            // Length.
             if seen < len {
                 return Ok(None);
             }
@@ -1889,17 +1929,18 @@ impl Provider for LocalProvider {
     async fn open_resumable(&self, p: &VPath) -> Result<(Box<dyn ByteSink>, u64), Error> {
         self.ensure_caps().await;
         let final_native = self.native(p)?;
-        // Staging con nombre ESTABLE por destino (ADR 0012): sin pid+seq,
-        // así una segunda invocación lo reencuentra y REANUDA. Sigue siendo
-        // corto (deriva del hash del nombre final, no del nombre) para no
-        // rozar NAME_MAX (issue #4). Prefijo `.norte-partial` reconocible
-        // para el GC.
+        // Staging with a STABLE name per destination (ADR 0012): no
+        // pid+seq, so a second invocation finds it again and RESUMES.
+        // Still short (derives from the final name's hash, not the name)
+        // so as not to brush NAME_MAX (issue #4). `.norte-partial` prefix
+        // recognizable to the GC.
         let partial_vpath = stable_partial_vpath(p)?;
         let partial_native = self.native(&partial_vpath)?;
 
         let (file, already, partial_native, final_native) = blocking(move || {
-            // El destino final NO debe existir todavía (mismo contrato que
-            // write): si existe, la política de colisión es del core.
+            // The final destination must NOT exist yet (same contract as
+            // write): if it exists, the collision policy belongs to the
+            // core.
             match std::fs::symlink_metadata(&final_native) {
                 Ok(_) => {
                     return Err(Error::Conflict {
@@ -1909,9 +1950,10 @@ impl Provider for LocalProvider {
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                 Err(e) => return Err(map_io(&e)),
             }
-            // Abre (o crea) el parcial en APPEND: si ya había bytes de una
-            // copia previa, se reanuda tras ellos. Y MIRA lo que ha abierto,
-            // porque este nombre es predecible (#298).
+            // Opens (or creates) the partial in APPEND: if there were
+            // already bytes from a previous copy, it resumes after them.
+            // And it CHECKS what it opened, because this name is
+            // predictable (#298).
             let (file, already) = open_stable_staging(&partial_native)?;
             Ok((file, already, partial_native, final_native))
         })
@@ -1920,14 +1962,15 @@ impl Provider for LocalProvider {
         Ok((
             Box::new(LocalSink {
                 file: Some(file),
-                // REANUDANDO: la posición es lo que ya hay, y no lo que diga el
-                // descriptor — se abrió con `O_APPEND`, que deja el offset en 0
-                // hasta la primera escritura (ver `write_maybe_sparse`).
+                // RESUMING: the position is what's already there, not
+                // whatever the descriptor says — it was opened with
+                // `O_APPEND`, which leaves the offset at 0 until the first
+                // write (see `write_maybe_sparse`).
                 pos: already,
                 partial: partial_native,
                 final_path: final_native,
                 done: false,
-                estable: true,
+                stable: true,
             }),
             already,
         ))
@@ -1950,13 +1993,13 @@ impl Provider for LocalProvider {
         .await
     }
 
-    /// #314: `chmod(2)`, en `spawn_blocking` como todo lo demás de este
-    /// provider (regla 2).
+    /// #314: `chmod(2)`, in `spawn_blocking` like everything else in this
+    /// provider (rule 2).
     ///
-    /// Solo en unix. En Windows `set_permissions` únicamente sabe del bit de
-    /// solo lectura, así que fingir un modo POSIX ahí sería escribir algo que
-    /// no es lo que se pidió: se responde `Unsupported`, que es lo mismo que
-    /// dice la capability.
+    /// Unix only. On Windows `set_permissions` only knows the read-only
+    /// bit, so faking a POSIX mode there would write something other than
+    /// what was requested: it answers `Unsupported`, which is the same as
+    /// what the capability says.
     #[cfg(unix)]
     async fn set_mode(&self, p: &VPath, mode: u32) -> Result<(), Error> {
         use std::os::unix::fs::PermissionsExt as _;
@@ -1964,9 +2007,9 @@ impl Provider for LocalProvider {
         self.ensure_caps().await;
         let native = self.native(p)?;
         blocking(move || {
-            // `set_permissions` SIGUE el enlace, que es lo que hace `chmod(2)`
-            // y lo que espera quien lo pide desde un listado: los permisos de
-            // un symlink no significan nada en Linux.
+            // `set_permissions` FOLLOWS the link, which is what `chmod(2)`
+            // does and what whoever asks for it from a listing expects: a
+            // symlink's permissions mean nothing on Linux.
             std::fs::set_permissions(&native, std::fs::Permissions::from_mode(mode))
                 .map_err(|e| map_io(&e))
         })
@@ -1985,7 +2028,8 @@ impl Provider for LocalProvider {
         blocking(move || {
             let md = std::fs::symlink_metadata(&native).map_err(|e| map_io(&e))?;
             if md.file_type().is_dir() {
-                // No recursivo: dir con hijos → Conflict (el walk es del core).
+                // Not recursive: a dir with children → Conflict (the walk
+                // belongs to the core).
                 std::fs::remove_dir(&native).map_err(|e| map_io(&e))
             } else {
                 std::fs::remove_file(&native).map_err(|e| map_io(&e))
@@ -2002,9 +2046,10 @@ impl Provider for LocalProvider {
     }
 }
 
-/// Rename con contrato no-replace: la colisión la detecta el PROPIO rename
-/// (atómico, sin ventana check→rename). Un destino existente solo se tolera
-/// si es el origen con otra caja (case-rename en FS insensitive).
+/// Rename with a no-replace contract: the collision is detected by the
+/// rename ITSELF (atomic, no check→rename window). An existing destination
+/// is only tolerated if it's the source under a different case
+/// (case-rename on an insensitive FS).
 pub(crate) fn do_rename(nf: &Path, nt: &Path) -> Result<(), Error> {
     match rename_noreplace(nf, nt) {
         Ok(()) => Ok(()),
@@ -2012,9 +2057,9 @@ pub(crate) fn do_rename(nf: &Path, nt: &Path) -> Result<(), Error> {
             let from_md = std::fs::symlink_metadata(nf).map_err(|e| map_io(&e))?;
             let to_md = std::fs::symlink_metadata(nt).map_err(|e| map_io(&e))?;
             if same_node(&from_md, &to_md) {
-                // Case-rename del propio origen: rename plano. La ventana
-                // que reabre es mínima y solo en este camino (el destino ES
-                // este mismo inode, verificado por (dev,ino)).
+                // Case-rename of the source itself: plain rename. The
+                // window it reopens is minimal and only on this path (the
+                // destination IS this same inode, verified by (dev,ino)).
                 std::fs::rename(nf, nt).map_err(|e| map_io(&e))
             } else {
                 Err(Error::Conflict {
@@ -2027,8 +2072,8 @@ pub(crate) fn do_rename(nf: &Path, nt: &Path) -> Result<(), Error> {
     }
 }
 
-/// Fallback para FS sin primitiva no-replace (NFS viejo, EINVAL/ENOSYS):
-/// el check→rename de M0, con su ventana TOCTOU documentada.
+/// Fallback for an FS without a no-replace primitive (old NFS,
+/// EINVAL/ENOSYS): M0's check→rename, with its documented TOCTOU window.
 fn checked_rename(nf: &Path, nt: &Path) -> Result<(), Error> {
     let from_md = std::fs::symlink_metadata(nf).map_err(|e| map_io(&e))?;
     match std::fs::symlink_metadata(nt) {
@@ -2045,13 +2090,15 @@ fn checked_rename(nf: &Path, nt: &Path) -> Result<(), Error> {
     std::fs::rename(nf, nt).map_err(|e| map_io(&e))
 }
 
-/// ¿El error dice "este FS/kernel no sabe hacer rename no-replace"?
-/// (EINVAL/ENOSYS/ENOTSUP). Distinto de EXDEV (degradar a copy+delete) y de
-/// EEXIST (colisión real): aquí se degrada a check→rename.
+/// Does the error say "this FS/kernel doesn't know how to do a no-replace
+/// rename"? (EINVAL/ENOSYS/ENOTSUP). Different from EXDEV (degrade to
+/// copy+delete) and from EEXIST (real collision): here it degrades to
+/// check→rename.
 ///
-/// EINVAL es ambiguo: `renameat2` también lo devuelve para "destino dentro
-/// del origen". El fallback re-falla igual por `std::fs::rename` (resultado
-/// correcto, solo syscalls extra) y el core ya pre-filtra descendientes.
+/// EINVAL is ambiguous: `renameat2` also returns it for "destination inside
+/// the source". The fallback fails the same way anyway via
+/// `std::fs::rename` (correct result, just extra syscalls) and the core
+/// already pre-filters descendants.
 fn noreplace_unsupported(e: &std::io::Error) -> bool {
     matches!(
         e.kind(),
@@ -2059,19 +2106,20 @@ fn noreplace_unsupported(e: &std::io::Error) -> bool {
     )
 }
 
-/// Rename que NUNCA reemplaza un destino existente, atómico en el FS:
-/// `renameat2(RENAME_NOREPLACE)`. Errores relevantes: `AlreadyExists`
-/// (destino ocupado), `CrossesDevices` (EXDEV), `InvalidInput`/`Unsupported`
-/// (FS o kernel sin soporte del flag — el caller degrada).
+/// A rename that NEVER replaces an existing destination, atomic on the FS:
+/// `renameat2(RENAME_NOREPLACE)`. Relevant errors: `AlreadyExists`
+/// (destination occupied), `CrossesDevices` (EXDEV),
+/// `InvalidInput`/`Unsupported` (FS or kernel without support for the flag
+/// — the caller degrades).
 #[cfg(target_os = "linux")]
 #[allow(unsafe_code)]
 fn rename_noreplace(from: &Path, to: &Path) -> std::io::Result<()> {
     use std::os::unix::ffi::OsStrExt;
     let f = std::ffi::CString::new(from.as_os_str().as_bytes())?;
     let t = std::ffi::CString::new(to.as_os_str().as_bytes())?;
-    // SAFETY: `f` y `t` son CStrings NUL-terminadas vivas durante toda la
-    // llamada; `AT_FDCWD` y `RENAME_NOREPLACE` son constantes de la ABI.
-    // Contrato testeado en `tests::rename_noreplace_jamas_pisa_el_destino`.
+    // SAFETY: `f` and `t` are NUL-terminated CStrings alive for the whole
+    // call; `AT_FDCWD` and `RENAME_NOREPLACE` are ABI constants. Contract
+    // tested in `tests::rename_noreplace_never_overwrites_destination`.
     let rc = unsafe {
         libc::renameat2(
             libc::AT_FDCWD,
@@ -2088,16 +2136,16 @@ fn rename_noreplace(from: &Path, to: &Path) -> std::io::Result<()> {
     }
 }
 
-/// Rename no-replace atómico de macOS: `renamex_np(RENAME_EXCL)`.
+/// macOS's atomic no-replace rename: `renamex_np(RENAME_EXCL)`.
 #[cfg(target_os = "macos")]
 #[allow(unsafe_code)]
 fn rename_noreplace(from: &Path, to: &Path) -> std::io::Result<()> {
     use std::os::unix::ffi::OsStrExt;
     let f = std::ffi::CString::new(from.as_os_str().as_bytes())?;
     let t = std::ffi::CString::new(to.as_os_str().as_bytes())?;
-    // SAFETY: `f` y `t` son CStrings NUL-terminadas vivas durante toda la
-    // llamada; `RENAME_EXCL` es constante de la ABI. Contrato testeado en
-    // `tests::rename_noreplace_jamas_pisa_el_destino`.
+    // SAFETY: `f` and `t` are NUL-terminated CStrings alive for the whole
+    // call; `RENAME_EXCL` is an ABI constant. Contract tested in
+    // `tests::rename_noreplace_never_overwrites_destination`.
     let rc = unsafe { libc::renamex_np(f.as_ptr(), t.as_ptr(), libc::RENAME_EXCL) };
     if rc == 0 {
         Ok(())
@@ -2106,11 +2154,11 @@ fn rename_noreplace(from: &Path, to: &Path) -> std::io::Result<()> {
     }
 }
 
-/// Rename no-replace de Windows: `MoveFileExW` con flags 0 — sin
-/// `MOVEFILE_REPLACE_EXISTING` (no-replace) y sin `MOVEFILE_COPY_ALLOWED`
-/// (cross-volumen → `ERROR_NOT_SAME_DEVICE`, jamás una copia silenciosa no
-/// cancelable). El case-rename del propio archivo SÍ procede: es la vía
-/// estándar de NTFS para cambiar la caja (issue #2, sin heurística).
+/// Windows's no-replace rename: `MoveFileExW` with flags 0 — without
+/// `MOVEFILE_REPLACE_EXISTING` (no-replace) and without
+/// `MOVEFILE_COPY_ALLOWED` (cross-volume → `ERROR_NOT_SAME_DEVICE`, never a
+/// silent, non-cancellable copy). The file's own case-rename DOES proceed:
+/// it's NTFS's standard way to change case (issue #2, no heuristics).
 #[cfg(windows)]
 #[allow(unsafe_code)]
 fn rename_noreplace(from: &Path, to: &Path) -> std::io::Result<()> {
@@ -2125,14 +2173,14 @@ fn rename_noreplace(from: &Path, to: &Path) -> std::io::Result<()> {
         .encode_wide()
         .chain(std::iter::once(0))
         .collect();
-    // Un NUL interior (posible en un `base` arbitrario del caller, no en
-    // segmentos) truncaría el wide-string y renombraría OTRO path.
+    // An interior NUL (possible in an arbitrary caller `base`, not in
+    // segments) would truncate the wide string and rename ANOTHER path.
     if f[..f.len() - 1].contains(&0) || t[..t.len() - 1].contains(&0) {
         return Err(std::io::ErrorKind::InvalidInput.into());
     }
-    // SAFETY: `f` y `t` son buffers UTF-16 NUL-terminados (NUL interior
-    // rechazado arriba) vivos durante toda la llamada. Contrato testeado en
-    // `tests::rename_noreplace_jamas_pisa_el_destino`.
+    // SAFETY: `f` and `t` are NUL-terminated UTF-16 buffers (interior NUL
+    // rejected above) alive for the whole call. Contract tested in
+    // `tests::rename_noreplace_never_overwrites_destination`.
     let rc =
         unsafe { windows_sys::Win32::Storage::FileSystem::MoveFileExW(f.as_ptr(), t.as_ptr(), 0) };
     if rc == 0 {
@@ -2142,8 +2190,8 @@ fn rename_noreplace(from: &Path, to: &Path) -> std::io::Result<()> {
     }
 }
 
-/// Resto de unix (fuera de la matriz de CI): sin primitiva no-replace
-/// portable — emulación check→rename con ventana TOCTOU.
+/// The rest of unix (outside the CI matrix): no portable no-replace
+/// primitive — check→rename emulation with a TOCTOU window.
 #[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
 fn rename_noreplace(from: &Path, to: &Path) -> std::io::Result<()> {
     if std::fs::symlink_metadata(to).is_ok() {
@@ -2152,63 +2200,66 @@ fn rename_noreplace(from: &Path, to: &Path) -> std::io::Result<()> {
     std::fs::rename(from, to)
 }
 
-/// ¿Puede el rename proceder aunque el destino "exista"? Solo si el destino
-/// ES el propio origen con otra caja (case-rename en FS insensitive) — y con
-/// un único dirent: entre dos hardlinks del mismo inode, `rename(2)` es un
-/// no-op con éxito que el journal registraría como un move que no ocurrió.
+/// Can the rename proceed even though the destination "exists"? Only if
+/// the destination IS the source itself under a different case
+/// (case-rename on an insensitive FS) — and with a single dirent: between
+/// two hardlinks of the same inode, `rename(2)` is a successful no-op that
+/// the journal would log as a move that didn't happen.
 #[cfg(unix)]
 fn same_node(from_md: &std::fs::Metadata, to_md: &std::fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt;
-    // La guarda de nlink solo aplica a archivos: un dir no puede tener
-    // hardlinks (su nlink es 2 + subdirs) y bloquearía el case-rename de
-    // directorios en FS insensitive.
+    // The nlink guard only applies to files: a dir can't have hardlinks
+    // (its nlink is 2 + subdirs) and would block the case-rename of
+    // directories on an insensitive FS.
     from_md.dev() == to_md.dev()
         && from_md.ino() == to_md.ino()
         && (to_md.is_dir() || to_md.nlink() == 1)
 }
 
-/// Windows: el case-rename del propio archivo lo resuelve YA el
-/// `rename_noreplace` (`MoveFileExW` lo permite sin `REPLACE_EXISTING`), así
-/// que llegar a `EEXIST` significa colisión real — `false` sin heurística
-/// (una por nombre machacaría archivos DISTINTOS en directorios NTFS
-/// case-sensitive, los que crea WSL). Cierra la deuda del issue #2.
+/// Windows: the file's own case-rename is ALREADY resolved by
+/// `rename_noreplace` (`MoveFileExW` allows it without `REPLACE_EXISTING`),
+/// so reaching `EEXIST` means a real collision — `false` with no
+/// heuristics (one by name would clobber DISTINCT files in case-sensitive
+/// NTFS directories, the ones WSL creates). Closes issue #2's debt.
 #[cfg(windows)]
 fn same_node(_from_md: &std::fs::Metadata, _to_md: &std::fs::Metadata) -> bool {
     false
 }
 
-/// Escribe `chunk` dejando AGUJERO donde es todo ceros (roadmap ítem 8).
+/// Writes `chunk`, leaving a HOLE where it's all zeros (roadmap item 8).
 ///
-/// Un chunk entero de ceros no se escribe: se extiende la longitud y se coloca
-/// la posición al final. Quien decide si eso es un agujero de verdad es el
-/// filesystem —ext4, XFS y APFS sí; uno que no los tenga asigna al escribir y
-/// sale igual de correcto—, y lo que se lee después son los mismos bytes en los
-/// dos casos.
+/// A whole chunk of zeros isn't written: the length is extended and the
+/// position is moved to the end. Whether that's a real hole is up to the
+/// filesystem — ext4, XFS and APFS do it; one without that support
+/// allocates on write and comes out just as correct —, and what's read
+/// back afterward is the same bytes either way.
 ///
-/// **`pos` lo lleva el sink y NO se pregunta al descriptor**, que es la parte
-/// donde esto se rompió una vez y de la peor manera. La primera versión saltaba
-/// con `SeekFrom::Current` y fijaba la longitud con lo que devolviera el salto,
-/// apoyándose en que el sink escribe secuencialmente desde el final. Es falso
-/// para el sink REANUDADO: se abre con `O_APPEND`, y `O_APPEND` no coloca el
-/// offset al final al abrir —lo deja en 0 y solo se reposiciona justo antes de
-/// cada `write`—, así que sobre un parcial de N bytes el salto arrancaba de 0 y
-/// el `set_len` truncaba en vez de extender. Se comía lo ya copiado, el commit
-/// lo publicaba y nadie lo comprobaba. Con `pos` explícito la invariante deja
-/// de ser una afirmación en un comentario y pasa a ser cierta por construcción:
-/// `pos` solo crece, así que el `set_len` solo puede extender.
+/// **`pos` is tracked by the sink and is NEVER asked of the descriptor**,
+/// which is the part where this broke once, and in the worst way. The
+/// first version seeked with `SeekFrom::Current` and set the length from
+/// whatever the seek returned, relying on the sink writing sequentially
+/// from the end. That's false for the RESUMED sink: it's opened with
+/// `O_APPEND`, and `O_APPEND` doesn't place the offset at the end on open —
+/// it leaves it at 0 and only repositions right before each `write` — so
+/// over an N-byte partial the seek started from 0 and `set_len` truncated
+/// instead of extending. It ate what had already been copied, the commit
+/// published it, and nobody checked. With an explicit `pos` the invariant
+/// stops being a claim in a comment and becomes true by construction:
+/// `pos` only grows, so `set_len` can only extend.
 ///
-/// La longitud se fija SOBRE LA MARCHA y no en el commit: `open_resumable`
-/// deriva su `already` del tamaño del staging y `partial_digest` lee sus
-/// primeros bytes. Con la longitud aplazada, un parcial que acabara en agujero
-/// diría tener menos bytes de los que tiene.
+/// The length is set ON THE FLY and not at commit: `open_resumable`
+/// derives its `already` from the staging's size and `partial_digest`
+/// reads its first bytes. With the length deferred, a partial that ended
+/// in a hole would claim fewer bytes than it has.
 ///
-/// Límite honesto: la unidad es el CHUNK. Un agujero más pequeño que un chunk,
-/// o desalineado con él, se materializa — esto no busca huecos dentro de los
-/// datos, solo se abstiene de escribir los que ya vienen enteros.
+/// Honest limit: the unit is the CHUNK. A hole smaller than a chunk, or
+/// misaligned with one, gets materialized — this doesn't look for holes
+/// inside the data, it only refrains from writing the ones that already
+/// arrive whole.
 ///
-/// Windows: `set_len` sobre un handle abierto solo para APPEND puede contestar
-/// `ERROR_ACCESS_DENIED`, así que el camino de reanudación con un chunk de
-/// ceros está sin verificar ahí (#222, bloqueada por CI como #220 y #221).
+/// Windows: `set_len` on a handle opened only for APPEND can answer
+/// `ERROR_ACCESS_DENIED`, so the resume path with a zero chunk is
+/// unverified there (#222, blocked by CI like #220 and #221).
 pub(crate) fn write_maybe_sparse(
     file: &mut std::fs::File,
     pos: &mut u64,
@@ -2222,13 +2273,13 @@ pub(crate) fn write_maybe_sparse(
     if chunk.iter().any(|&b| b != 0) {
         file.write_all(chunk)?;
     } else {
-        let fin = pos.checked_add(len).ok_or_else(|| {
-            std::io::Error::new(std::io::ErrorKind::InvalidInput, "posición desbordada")
+        let end = pos.checked_add(len).ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "position overflowed")
         })?;
-        // Primero extender, después colocarse: en este orden la longitud nunca
-        // pasa por un valor menor del que ya tenía.
-        file.set_len(fin)?;
-        file.seek(SeekFrom::Start(fin))?;
+        // Extend first, then seek: in this order the length never passes
+        // through a value smaller than what it already had.
+        file.set_len(end)?;
+        file.seek(SeekFrom::Start(end))?;
     }
     *pos += len;
     Ok(())
@@ -2236,19 +2287,20 @@ pub(crate) fn write_maybe_sparse(
 
 struct LocalSink {
     file: Option<std::fs::File>,
-    /// Bytes ya entregados a este sink, agujeros incluidos. Es el ancla de
-    /// [`write_maybe_sparse`]: el descriptor NO sabe dónde está cuando se
-    /// abrió con `O_APPEND` para reanudar.
+    /// Bytes already delivered to this sink, holes included. It's the
+    /// anchor for [`write_maybe_sparse`]: the descriptor does NOT know
+    /// where it is when it was opened with `O_APPEND` to resume.
     pos: u64,
     partial: PathBuf,
     final_path: PathBuf,
-    /// `true` cuando commit/abort ya se ocuparon del staging (Drop no toca nada).
+    /// `true` once commit/abort have already dealt with the staging (Drop
+    /// touches nothing).
     done: bool,
-    /// El staging es el ESTABLE, o sea que nació `0o600` (#298) y hay que
-    /// darle en el `commit` el modo que habría tenido una copia sin cortes
-    /// (#299). El efímero nace `0o666` recortado por la umask y no necesita
-    /// nada.
-    estable: bool,
+    /// The staging is the STABLE one, meaning it was born `0o600` (#298)
+    /// and needs to be given, in `commit`, the mode an uninterrupted copy
+    /// would have had (#299). The ephemeral one is born `0o666` trimmed by
+    /// the umask and needs nothing.
+    stable: bool,
 }
 
 #[async_trait]
@@ -2272,20 +2324,21 @@ impl ByteSink for LocalSink {
         let file = self.file.take().ok_or(Error::Io { retryable: false })?;
         let partial = self.partial.clone();
         let final_path = self.final_path.clone();
-        let estable = self.estable;
+        let stable = self.stable;
         let res = blocking(move || {
             file.sync_all().map_err(|e| map_io(&e))?;
-            // El descriptor sigue VIVO durante el rename a propósito (#299):
-            // el modo se arregla DESPUÉS de publicar y sobre el fd, no sobre
-            // la ruta. Al revés —relajar el `0o600` mientras todavía se llama
-            // `.norte-partial`— dejaría legible por otros un staging con el
-            // nombre más predecible del directorio, y por un fichero que aún
-            // no es el que nadie pidió.
-            // No-replace atómico: la colisión aparecida entre write() y
-            // commit() la detecta el PROPIO rename, sin ventana TOCTOU.
+            // The descriptor stays ALIVE during the rename on purpose
+            // (#299): the mode is fixed AFTER publishing and on the fd,
+            // not on the path. The other way — relaxing `0o600` while it's
+            // still called `.norte-partial` — would leave readable by
+            // others a staging file with the directory's most predictable
+            // name, for a file that isn't yet the one nobody asked for.
+            // Atomic no-replace: a collision that appeared between
+            // write() and commit() is detected by the rename ITSELF, no
+            // TOCTOU window.
             match rename_noreplace(&partial, &final_path) {
                 Ok(()) => {
-                    reponer_modo_publicado(&file, estable);
+                    restore_modo_published(&file, stable);
                     Ok(())
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
@@ -2294,7 +2347,7 @@ impl ByteSink for LocalSink {
                     Err(Error::Conflict { conflict: kind })
                 }
                 Err(e) if noreplace_unsupported(&e) => {
-                    // FS sin no-replace: check→rename de M0 (mejor esfuerzo).
+                    // FS without no-replace: M0's check→rename (best effort).
                     match std::fs::symlink_metadata(&final_path) {
                         Ok(_) => {
                             let kind = collision_kind_for(&final_path);
@@ -2306,7 +2359,7 @@ impl ByteSink for LocalSink {
                                 let _ = std::fs::remove_file(&partial);
                                 map_io(&e)
                             })?;
-                            reponer_modo_publicado(&file, estable);
+                            restore_modo_published(&file, stable);
                             Ok(())
                         }
                         Err(e) => {
@@ -2322,8 +2375,9 @@ impl ByteSink for LocalSink {
             }
         })
         .await;
-        // Éxito o error "limpio": el closure ya se ocupó del staging. Si el
-        // closure PANICÓ (Internal), deja que Drop intente la limpieza.
+        // Success or a "clean" error: the closure already dealt with the
+        // staging. If the closure PANICKED (Internal), let Drop try the
+        // cleanup.
         if !matches!(res, Err(Error::Internal { .. })) {
             self.done = true;
         }
@@ -2343,9 +2397,9 @@ impl ByteSink for LocalSink {
     }
 
     async fn keep(mut self: Box<Self>) -> Result<(), Error> {
-        // Conserva el staging para un open_resumable posterior (ADR 0012):
-        // durabiliza (fsync) y NO renombra ni borra. `done` evita que Drop
-        // lo barra.
+        // Keeps the staging for a later open_resumable (ADR 0012):
+        // durabilizes it (fsync) and does NOT rename or delete it. `done`
+        // prevents Drop from sweeping it.
         let file = self.file.take();
         self.done = true;
         blocking(move || {
@@ -2360,8 +2414,9 @@ impl ByteSink for LocalSink {
 
 impl Drop for LocalSink {
     fn drop(&mut self) {
-        // Contrato de ByteSink: soltar sin commit = abort best-effort. Es un
-        // unlink síncrono y rápido; la limpieza GARANTIZADA es abort().
+        // ByteSink's contract: dropping without commit = best-effort
+        // abort. It's a fast, synchronous unlink; the GUARANTEED cleanup
+        // is abort().
         if !self.done {
             self.file.take();
             let _ = std::fs::remove_file(&self.partial);
@@ -2376,59 +2431,61 @@ mod tests {
     use super::{map_io, rename_noreplace};
 
     #[test]
-    fn exdev_mapea_a_unsupported() {
-        // EXDEV en rename (issue #3): el FS no puede hacerlo — el engine
-        // degrada el move a copy+delete. Io{retryable:false} sería un error
-        // terminal opaco para el usuario.
+    fn exdev_maps_to_unsupported() {
+        // EXDEV on rename (issue #3): the FS can't do it — the engine
+        // degrades the move to copy+delete. Io{retryable:false} would be
+        // an opaque terminal error for the user.
         let e = std::io::Error::from(std::io::ErrorKind::CrossesDevices);
         assert_eq!(map_io(&e), Error::Unsupported);
     }
 
     #[test]
-    fn enametoolong_mapea_a_invalid_path() {
-        // Con el staging corto (issue #4), un nombre >NAME_MAX ya no revienta
-        // al abrir el staging: el rechazo del OS llega en el stat/rename del
-        // path FINAL. Es un problema del path, no de I/O: InvalidPath.
+    fn enametoolong_maps_to_invalid_path() {
+        // With the short staging (issue #4), a name >NAME_MAX no longer
+        // blows up when opening the staging: the OS's rejection arrives at
+        // the FINAL path's stat/rename. It's a path problem, not an I/O
+        // one: InvalidPath.
         let e = std::io::Error::from(std::io::ErrorKind::InvalidFilename);
         assert_eq!(map_io(&e), Error::InvalidPath);
     }
 
-    /// EILSEQ (APFS rechaza nombres no-UTF8) llega como `Uncategorized`:
-    /// hay que mirar el errno crudo. Mismo desplazamiento del issue #4: con
-    /// el staging corto el rechazo ocurre en el rename de commit, y sin este
-    /// mapeo saldría como `Io` opaco (lo cazó la CI de macOS).
+    /// EILSEQ (APFS rejects non-UTF8 names) arrives as `Uncategorized`: the
+    /// raw errno has to be checked. Same shift as issue #4: with the short
+    /// staging the rejection happens at the commit rename, and without
+    /// this mapping it would come out as an opaque `Io` (caught by macOS
+    /// CI).
     #[cfg(unix)]
     #[test]
-    fn eilseq_mapea_a_invalid_path() {
+    fn eilseq_maps_to_invalid_path() {
         let e = std::io::Error::from_raw_os_error(libc::EILSEQ);
         assert_eq!(map_io(&e), Error::InvalidPath);
     }
 
-    /// Test del `unsafe` de `rename_noreplace` (regla 5): el contrato
-    /// no-replace se cumple en el FS real de los tres OS de CI.
+    /// Test of `rename_noreplace`'s `unsafe` (rule 5): the no-replace
+    /// contract holds on the real FS of all three CI OSes.
     #[test]
-    fn rename_noreplace_jamas_pisa_el_destino() {
+    fn rename_noreplace_never_overwrites_destination() {
         let dir = tempfile::tempdir().expect("tempdir");
         let a = dir.path().join("a");
         let b = dir.path().join("b");
-        std::fs::write(&a, b"origen").unwrap();
-        std::fs::write(&b, b"destino").unwrap();
+        std::fs::write(&a, b"source").unwrap();
+        std::fs::write(&b, b"dest").unwrap();
 
-        let err = rename_noreplace(&a, &b).expect_err("destino ocupado");
+        let err = rename_noreplace(&a, &b).expect_err("destination occupied");
         assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
-        assert_eq!(std::fs::read(&b).unwrap(), b"destino", "intacto");
-        assert_eq!(std::fs::read(&a).unwrap(), b"origen", "intacto");
+        assert_eq!(std::fs::read(&b).unwrap(), b"dest", "unchanged");
+        assert_eq!(std::fs::read(&a).unwrap(), b"source", "unchanged");
 
         let c = dir.path().join("c");
-        rename_noreplace(&a, &c).expect("destino libre");
-        assert_eq!(std::fs::read(&c).unwrap(), b"origen");
+        rename_noreplace(&a, &c).expect("free destination");
+        assert_eq!(std::fs::read(&c).unwrap(), b"source");
         assert!(!a.exists());
     }
 
-    /// Guardián del hash del nombre estable (H3 del encoding-auditor): el
-    /// valor DEBE ser constante entre versiones de Rust — SHA-256 lo
-    /// garantiza; un cambio de algoritmo rompería la reanudación
-    /// cross-versión en silencio, así que se congela aquí.
+    /// Guardian of the stable name's hash (encoding-auditor H3): the value
+    /// MUST be constant across Rust versions — SHA-256 guarantees this; an
+    /// algorithm change would silently break cross-version resumption, so
+    /// it's frozen here.
     #[test]
     fn stable_partial_name_is_frozen() {
         use norte_proto::{Scheme, Segment, VPath};
@@ -2438,55 +2495,56 @@ mod tests {
         assert_eq!(
             partial.file_name().unwrap().as_bytes(),
             b".norte-partial.80dcee3a35d0eff397ec041e9ee27a3c",
-            "sha256(\"dst.bin\")[..16] hex — congelado (H3)"
+            "sha256(\"dst.bin\")[..16] hex — frozen (H3)"
         );
     }
 
-    /// `is_norte_partial` (H2): reconoce las dos formas de staging y NADA
-    /// más — un archivo de usuario con el prefijo no se confunde.
+    /// `is_norte_partial` (H2): recognizes the two staging shapes and
+    /// NOTHING else — a user file with the prefix isn't mistaken for one.
     #[test]
-    fn is_norte_partial_reconoce_solo_las_formas() {
+    fn is_norte_partial_recognizes_only_the_known_forms() {
         use super::is_norte_partial as f;
-        // Estable: prefijo + 32 hex.
+        // Stable: prefix + 32 hex.
         assert!(f(b".norte-partial.80dcee3a35d0eff397ec041e9ee27a3c"));
-        // Efímero: prefijo + 16 hex + .<pid>-<seq>.
+        // Ephemeral: prefix + 16 hex + .<pid>-<seq>.
         assert!(f(b".norte-partial.80dcee3a35d0eff3.12345-7"));
-        // NO son staging:
+        // NOT staging:
         assert!(!f(b".norte-partial.backup"));
-        assert!(!f(b".norte-partial.notas.txt"));
-        assert!(!f(b".norte-partial.")); // vacío
+        assert!(!f(b".norte-partial.notes.txt"));
+        assert!(!f(b".norte-partial.")); // empty
         assert!(!f(b".norte-partial.80dcee3a35d0eff397ec041e9ee27a3")); // 31 hex
-        assert!(!f(b".norte-partial.ZZZZ")); // no-hex
-        assert!(!f(b"otro.norte-partial.80dcee3a35d0eff397ec041e9ee27a3c")); // sin prefijo al inicio
-        assert!(!f(b".norte-partial.80dcee3a35d0eff3.abc-7")); // pid no-dígito
+        assert!(!f(b".norte-partial.ZZZZ")); // not hex
+        assert!(!f(b"other.norte-partial.80dcee3a35d0eff397ec041e9ee27a3c")); // no prefix at the start
+        assert!(!f(b".norte-partial.80dcee3a35d0eff3.abc-7")); // pid not a digit
     }
 
-    /// `SymlinkKind::Unknown` (issue #18): el kind se resuelve contra el
-    /// target REAL relativo al padre del link; roto degrada a File; los
-    /// kinds explícitos pasan tal cual sin tocar el FS.
+    /// `SymlinkKind::Unknown` (issue #18): the kind is resolved against the
+    /// REAL target relative to the link's parent; broken degrades to File;
+    /// explicit kinds pass through untouched, without touching the FS.
     #[test]
-    fn unknown_symlink_kind_se_resuelve_contra_el_target() {
+    fn unknown_symlink_kind_resolves_against_the_target() {
         use norte_vfs::SymlinkKind;
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::create_dir(dir.path().join("subdir")).unwrap();
-        std::fs::write(dir.path().join("archivo"), b"x").unwrap();
-        let link = dir.path().join("el-link");
+        std::fs::write(dir.path().join("file"), b"x").unwrap();
+        let link = dir.path().join("the-link");
 
         let kind_of = |target: &str, kind| {
             super::effective_symlink_kind(&link, std::ffi::OsStr::new(target), kind)
         };
         assert_eq!(kind_of("subdir", SymlinkKind::Unknown), SymlinkKind::Dir);
-        assert_eq!(kind_of("archivo", SymlinkKind::Unknown), SymlinkKind::File);
+        assert_eq!(kind_of("file", SymlinkKind::Unknown), SymlinkKind::File);
         assert_eq!(
-            kind_of("no-existe", SymlinkKind::Unknown),
+            kind_of("does-not-exist", SymlinkKind::Unknown),
             SymlinkKind::File
         );
-        // Target con `..` y con separador `/` anidado: canarios de la
-        // normalización pre-verbatim en la CI de Windows (bajo `\\?\` el
-        // kernel no pliega `..` ni convierte `/` — hallazgo del auditor).
+        // Target with `..` and with a nested `/` separator: canaries for
+        // pre-verbatim normalization in Windows CI (under `\\?\` the
+        // kernel doesn't fold `..` nor convert `/` — the auditor's
+        // finding).
         std::fs::create_dir_all(dir.path().join("inner")).unwrap();
         std::fs::create_dir_all(dir.path().join("nested").join("leaf")).unwrap();
-        let inner_link = dir.path().join("inner").join("el-link");
+        let inner_link = dir.path().join("inner").join("the-link");
         assert_eq!(
             super::effective_symlink_kind(
                 &inner_link,
@@ -2494,29 +2552,32 @@ mod tests {
                 SymlinkKind::Unknown
             ),
             SymlinkKind::Dir,
-            "target relativo con .."
+            "relative target with .."
         );
         assert_eq!(
             kind_of("nested/leaf", SymlinkKind::Unknown),
             SymlinkKind::Dir,
-            "target anidado con separador /"
+            "nested target with / separator"
         );
-        // Target ABSOLUTO: join lo respeta.
+        // ABSOLUTE target: join respects it.
         let abs = dir.path().join("subdir");
         assert_eq!(
             super::effective_symlink_kind(&link, abs.as_os_str(), SymlinkKind::Unknown),
             SymlinkKind::Dir
         );
-        // Explícito: jamás se re-resuelve (no-existe seguiría siendo Dir).
-        assert_eq!(kind_of("no-existe", SymlinkKind::Dir), SymlinkKind::Dir);
+        // Explicit: never re-resolved (does-not-exist would still be Dir).
+        assert_eq!(
+            kind_of("does-not-exist", SymlinkKind::Dir),
+            SymlinkKind::Dir
+        );
     }
 
-    /// Identidad de nodo sobre el FS real (issue #16): estable, distinta
-    /// entre nodos, sobrevive al rename y — donde hay symlinks — `follow`
-    /// resuelve al destino. En volúmenes sin identidad (`Ok(None)`) el test
-    /// se auto-salta, igual que el contrato.
+    /// Node identity over the real FS (issue #16): stable, distinct
+    /// between nodes, survives the rename and — where there are symlinks —
+    /// `follow` resolves to the target. On volumes without identity
+    /// (`Ok(None)`) the test auto-skips, just like the contract.
     #[tokio::test]
-    async fn node_id_identifica_el_mismo_archivo() {
+    async fn node_id_identifies_the_same_file() {
         use norte_vfs::{FollowLinks, Provider};
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(dir.path().join("a"), b"x").unwrap();
@@ -2527,38 +2588,39 @@ mod tests {
         let b = root.join(norte_proto::Segment::new(b"b".to_vec()).unwrap());
 
         let Some(id_a) = p.node_id(&a, FollowLinks::No).await.expect("node_id a") else {
-            eprintln!("skip: volumen sin identidad estable");
+            eprintln!("skip: volume without stable identity");
             return;
         };
         let id_b = p
             .node_id(&b, FollowLinks::No)
             .await
             .expect("node_id b")
-            .expect("mismo volumen: o siempre o nunca");
-        assert_ne!(id_a, id_b, "nodos distintos");
+            .expect("same volume: always or never");
+        assert_ne!(id_a, id_b, "distinct nodes");
         assert_eq!(
             p.node_id(&a, FollowLinks::Yes).await.unwrap().unwrap(),
             id_a,
-            "follow sobre un archivo normal no cambia nada"
+            "follow on a normal file changes nothing"
         );
 
-        // El rename mueve el nodo, no lo recrea.
+        // The rename moves the node, it doesn't recreate it.
         std::fs::rename(dir.path().join("a"), dir.path().join("c")).unwrap();
         let c = root.join(norte_proto::Segment::new(b"c".to_vec()).unwrap());
         assert_eq!(p.node_id(&c, FollowLinks::No).await.unwrap().unwrap(), id_a);
 
-        // Inexistente: NotFound, jamás None-silencioso.
+        // Nonexistent: NotFound, never a silent None.
         assert_eq!(
             p.node_id(&a, FollowLinks::No).await.unwrap_err(),
             norte_proto::Error::NotFound
         );
     }
 
-    /// Colisión por normalización (issue #8): el dirent existe en NFD (lo
-    /// que escribe macOS) y el pedido llega en NFC — bytes distintos, forma
-    /// NFC idéntica. Etiquetarla `CaseCollision` despistaría al frontend.
+    /// Collision by normalization (issue #8): the dirent exists in NFD
+    /// (what macOS writes) and the request arrives in NFC — different
+    /// bytes, identical NFC form. Labeling it `CaseCollision` would
+    /// mislead the frontend.
     #[test]
-    fn collision_por_normalizacion_se_etiqueta() {
+    fn collision_by_normalization_is_labeled() {
         use norte_proto::ConflictKind;
         let dir = tempfile::tempdir().expect("tempdir");
         let nfd = String::from_utf8(vec![0x65, 0xCC, 0x81]).unwrap(); // e + ́
@@ -2568,16 +2630,17 @@ mod tests {
             super::collision_kind_for(&dir.path().join(&nfc)),
             ConflictKind::Normalization
         );
-        // Caja distinta sin tema de normalización: sigue siendo CaseCollision.
-        std::fs::write(dir.path().join("caja"), b"x").unwrap();
+        // Different case with no normalization involved: still CaseCollision.
+        std::fs::write(dir.path().join("box"), b"x").unwrap();
         assert_eq!(
-            super::collision_kind_for(&dir.path().join("CAJA")),
+            super::collision_kind_for(&dir.path().join("BOX")),
             ConflictKind::CaseCollision
         );
     }
 
-    /// Un path con NUL interior (posible en un `base` hostil del caller)
-    /// truncaría el wide-string y renombraría OTRO path: rechazo limpio.
+    /// A path with an interior NUL (possible in a hostile caller `base`)
+    /// would truncate the wide string and rename ANOTHER path: clean
+    /// rejection.
     #[cfg(windows)]
     #[test]
     fn rename_noreplace_rejects_interior_nul() {
@@ -2592,10 +2655,10 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let ok = dir.path().join("a");
         std::fs::write(&ok, b"x").unwrap();
-        let err = rename_noreplace(&evil, &ok).expect_err("NUL interior en origen");
+        let err = rename_noreplace(&evil, &ok).expect_err("interior NUL in source");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
-        let err = rename_noreplace(&ok, &evil).expect_err("NUL interior en destino");
+        let err = rename_noreplace(&ok, &evil).expect_err("interior NUL in destination");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
-        assert_eq!(std::fs::read(&ok).unwrap(), b"x", "nada se movió");
+        assert_eq!(std::fs::read(&ok).unwrap(), b"x", "nothing moved");
     }
 }

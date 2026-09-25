@@ -1,33 +1,33 @@
-//! Saneado de nombres para pintar en cualquier frontend: un nombre es bytes
-//! (spec §6) y el texto que se pinta es SIEMPRE lossy y MARCADO — jamás
-//! pérdida silenciosa, jamás controles/bidi crudos.
+//! Name sanitisation for painting in any frontend: a name is bytes (spec
+//! §6) and the text that gets painted is ALWAYS lossy and MARKED — never
+//! silent loss, never raw controls/bidi.
 
 use norte_proto::VPath;
 use unicode_width::UnicodeWidthChar;
 
-/// ¿Debe enmascararse en un terminal? DELEGA en
-/// [`norte_encoding::is_terminal_hazard`] (fuente ÚNICA del set — antes vivía
-/// atrapado aquí; ahora lo comparte con el saneo de preview de `fs.search`).
-/// Cubre Cc (controles: `\n`, ESC — ratatui los BORRA en silencio y un
-/// frontend directo los ejecutaría), los overrides bidi Cf (spoofing RTL del
-/// orden visual) y los INVISIBLES Cf/Zl/Zp (encoding-auditor H4 de M3-3b: dos
-/// nombres visualmente idénticos que difieren en bytes engañan a un humano que
-/// aprueba "el que ya vio"). Los invisibles se deciden por la propiedad
-/// Unicode `Default_Ignorable_Code_Point` más los que se pintan en blanco sin
-/// serlo (BRAILLE BLANK, las anotaciones interlineales, Zl/Zp) — antes era una
-/// lista escrita a mano que se dejaba fuera los rellenos Hangul, que ni
-/// siquiera son Cf (#125). ZWJ (U+200D) y los selectores de variación se
-/// PERMITEN a sabiendas: enmascararlos rompería los emoji compuestos legítimos
-/// (fixture `emoji_zwj_family`) — fidelidad de emoji > el residual de un twin
-/// invisible.
+/// Should this be masked in a terminal? DELEGATES to
+/// [`norte_encoding::is_terminal_hazard`] (the SINGLE source for the set —
+/// it used to live trapped here; now it is shared with `fs.search`'s
+/// preview sanitisation). Covers Cc (controls: `\n`, ESC — ratatui SILENTLY
+/// DELETES them and a direct frontend would execute them), the bidi Cf
+/// overrides (RTL visual-order spoofing), and the INVISIBLE Cf/Zl/Zp
+/// (encoding-auditor H4 of M3-3b: two visually identical names that differ
+/// in bytes trick a human who approves "the one I already saw"). The
+/// invisibles are decided by the Unicode `Default_Ignorable_Code_Point`
+/// property plus the ones that paint blank without being one (BRAILLE
+/// BLANK, the interlinear annotations, Zl/Zp) — it used to be a hand-written
+/// list that left out the Hangul fillers, which are not even Cf (#125). ZWJ
+/// (U+200D) and the variation selectors are PERMITTED knowingly: masking
+/// them would break legitimate composed emoji (fixture `emoji_zwj_family`)
+/// — emoji fidelity > the residual of an invisible twin.
 fn must_mask(c: char) -> bool {
     norte_encoding::is_terminal_hazard(c)
 }
 
-/// Nombre listo para pintar: `(texto, hostil)`. `hostil = true` cuando el
-/// texto pintado DIFIERE del nombre real: bytes no-UTF8 (lossy `�`),
-/// controles o bidi enmascarados a `�` (spec §6: display siempre lossy y
-/// MARCADO — jamás pérdida silenciosa, jamás controles crudos).
+/// A name ready to paint: `(text, hostile)`. `hostile = true` when the
+/// painted text DIFFERS from the real name: non-UTF8 bytes (lossy `�`),
+/// controls or bidi masked to `�` (spec §6: display is always lossy and
+/// MARKED — never silent loss, never raw controls).
 #[must_use]
 pub fn display_name(bytes: &[u8]) -> (String, bool) {
     let (raw, lossy) = match std::str::from_utf8(bytes) {
@@ -35,7 +35,7 @@ pub fn display_name(bytes: &[u8]) -> (String, bool) {
         Err(_) => (String::from_utf8_lossy(bytes), true),
     };
     let mut masked = false;
-    let texto: String = raw
+    let text: String = raw
         .chars()
         .map(|c| {
             if must_mask(c) {
@@ -46,16 +46,16 @@ pub fn display_name(bytes: &[u8]) -> (String, bool) {
             }
         })
         .collect();
-    (texto, lossy || masked)
+    (text, lossy || masked)
 }
 
-/// [`display_name`] para un nombre del SISTEMA DE FICHEROS.
+/// [`display_name`] for a FILESYSTEM name.
 ///
-/// Un [`std::ffi::OsStr`] no es texto, y en Unix son bytes: se pintan por el
-/// mismo camino que cualquier otro nombre —lossy MARCADO, hazards
-/// enmascarados— sin tocar los bytes con los que se abre el fichero. En
-/// Windows no hay bytes que sacar sin pasar por UTF-16, así que se usa la
-/// conversión lossy de la plataforma y el flag se pone igual.
+/// An [`std::ffi::OsStr`] is not text, and on Unix it is bytes: it is
+/// painted through the same path as any other name —lossy MARKED, hazards
+/// masked— without touching the bytes the file is opened with. On Windows
+/// there are no bytes to extract without going through UTF-16, so the
+/// platform's lossy conversion is used and the flag is set the same way.
 ///
 /// ```
 /// use std::ffi::OsStr;
@@ -72,35 +72,35 @@ pub fn display_os_name(name: &std::ffi::OsStr) -> (String, bool) {
     }
     #[cfg(not(unix))]
     {
-        let texto = name.to_string_lossy();
-        let (pintado, hostil) = display_name(texto.as_bytes());
+        let text = name.to_string_lossy();
+        let (painted, hostile) = display_name(text.as_bytes());
         (
-            pintado,
-            hostil || matches!(texto, std::borrow::Cow::Owned(_)),
+            painted,
+            hostile || matches!(text, std::borrow::Cow::Owned(_)),
         )
     }
 }
 
-/// [`display_name`] con REINTERPRETACIÓN opcional (#57, spec §6.1): con
-/// `Some(enc)`, un nombre NO-UTF8 se decodifica con `enc` para display en
-/// vez de al lossy `�` — los bytes jamás se mutan (regla 1) y el flag
-/// hostil queda en `true` (el texto pintado DIFIERE del nombre real: es
-/// una VISTA elegida por el usuario, el badge lo delata igual).
+/// [`display_name`] with optional REINTERPRETATION (#57, spec §6.1): with
+/// `Some(enc)`, a NON-UTF8 name is decoded with `enc` for display instead of
+/// falling back to lossy `�` — the bytes are never mutated (rule 1) and the
+/// hostile flag stays `true` (the painted text DIFFERS from the real name:
+/// it is a VIEW the user chose, the badge gives it away all the same).
 ///
-/// Un nombre UTF-8 VÁLIDO no se reinterpreta nunca: ya es texto — en un
-/// contenedor mixto (entradas UTF-8 + entradas cp866) reinterpretar las
-/// UTF-8 fabricaría mojibake donde no había problema. El enmascarado de
-/// hazards aplica igual en ambos caminos.
+/// A VALID UTF-8 name is never reinterpreted: it is already text — in a
+/// mixed container (UTF-8 entries + cp866 entries), reinterpreting the UTF-8
+/// ones would manufacture mojibake where there was no problem. Hazard
+/// masking applies the same on both paths.
 ///
 /// ```
 /// use norte_encoding::NameEncoding;
 /// use norte_frontend::display_name_with;
-/// // No-UTF8 en cp437: decodifica Y marca (el texto no son los bytes).
-/// let (texto, hostil) = display_name_with(b"CAF\x90.TXT", Some(NameEncoding::Cp437));
-/// assert_eq!((texto.as_str(), hostil), ("CAFÉ.TXT", true));
-/// // UTF-8 válido: JAMÁS se reinterpreta (contenedor mixto sin mojibake).
-/// let (texto, hostil) = display_name_with("año.txt".as_bytes(), Some(NameEncoding::Cp437));
-/// assert_eq!((texto.as_str(), hostil), ("año.txt", false));
+/// // Non-UTF8 in cp437: decodes AND flags (the text is not the bytes).
+/// let (text, hostile) = display_name_with(b"CAF\x90.TXT", Some(NameEncoding::Cp437));
+/// assert_eq!((text.as_str(), hostile), ("CAFÉ.TXT", true));
+/// // Valid UTF-8: NEVER reinterpreted (mixed container, no mojibake).
+/// let (text, hostile) = display_name_with("año.txt".as_bytes(), Some(NameEncoding::Cp437));
+/// assert_eq!((text.as_str(), hostile), ("año.txt", false));
 /// ```
 #[must_use]
 pub fn display_name_with(
@@ -111,60 +111,61 @@ pub fn display_name_with(
         return display_name(bytes);
     };
     let decoded = norte_encoding::decode_name(bytes, enc);
-    let texto: String = decoded
+    let text: String = decoded
         .chars()
         .map(|c| if must_mask(c) { '\u{FFFD}' } else { c })
         .collect();
-    (texto, true)
+    (text, true)
 }
 
-/// Path completo listo para pintar: prefijo `⟨scheme authority⟩/` **salvo para
-/// `file` sin authority**, que no se anuncia (ver [`path_display_with`]) + cada
-/// segmento por [`display_name`], y marca si CUALQUIER segmento saldría
-/// alterado.
+/// A full path ready to paint: `⟨scheme authority⟩/` prefix **except for
+/// `file` with no authority**, which is not announced (see
+/// [`path_display_with`]) + each segment through [`display_name`], and
+/// flagged if ANY segment would come out altered.
 ///
-/// Ya NO calca `VPath::display_lossy`, y eso es deliberado: `display_lossy` es
-/// la forma de un LOG y de un error —donde el esquema siempre importa, porque
-/// no hay pantalla alrededor que lo diga— y esta es la de una pantalla, donde
-/// el esquema por defecto es ruido en cada fila. Con cualquier otro esquema
-/// las dos siguen coincidiendo.
+/// No longer mirrors `VPath::display_lossy`, and that is deliberate:
+/// `display_lossy` is a LOG's and an error's form —where the scheme always
+/// matters, because there is no screen around it to say so— and this is a
+/// screen's, where the default scheme is noise on every row. With any other
+/// scheme the two still agree.
 ///
-/// El texto se construye segmento a segmento con `display_name` (no con
-/// `display_lossy`, review encoding MEDIA-2): el criterio de enmascarado del
-/// TEXTO es el MISMO que el del flag — `display_lossy` solo tapa Cc+bidi y
-/// dejaba ZWSP/TAG crudos (twins invisibles idénticos, ambos con badge).
-/// Nota ZWNJ: proto lo PERMITE en `display_lossy` (legítimo en persa);
-/// `must_mask` lo enmascara — aquí gana `must_mask` a sabiendas: en la TUI
-/// un twin invisible en una superficie de decisión pesa más que la
-/// fidelidad tipográfica (el badge ya delata la alteración).
+/// The text is built segment by segment with `display_name` (not with
+/// `display_lossy`, encoding review MEDIA-2): the TEXT's masking criterion
+/// is the SAME as the flag's — `display_lossy` only covers Cc+bidi and left
+/// ZWSP/TAG raw (identical invisible twins, both badged).
+/// Note on ZWNJ: proto PERMITS it in `display_lossy` (legitimate in
+/// Persian); `must_mask` masks it — here `must_mask` wins knowingly: in the
+/// TUI, an invisible twin on a decision surface weighs more than
+/// typographic fidelity (the badge already gives away the alteration).
 #[must_use]
 pub fn path_display(p: &VPath) -> (String, bool) {
     path_display_with(p, None)
 }
 
-/// [`path_display`] con reinterpretación opcional (#98/F2): cada segmento
-/// pasa por [`display_name_with`] — las superficies de DECISIÓN (modales de
-/// confirmar/colisión, título del viewer, dir de la barra) muestran el mismo
-/// texto por el que el usuario navega, no el lossy crudo. Mismo contrato de
-/// badge: cualquier segmento alterado (incluida la reinterpretación) marca.
+/// [`path_display`] with optional reinterpretation (#98/F2): each segment
+/// goes through [`display_name_with`] — the DECISION surfaces (confirm/
+/// collision modals, the viewer's title, the bar's dir) show the same text
+/// the user navigates by, not the raw lossy one. Same badge contract: any
+/// altered segment (reinterpretation included) flags it.
 ///
-/// **`file` sin authority no se anuncia.** Es el caso por defecto —esta
-/// máquina, este disco— así que su etiqueta no distingue nada de nada: se
-/// pintaba en cada ruta de cada listado, cabecera y modal, gastando ocho
-/// columnas justo donde el sitio escasea. Lo que informa es el esquema que NO
-/// es el de siempre, y esos se siguen diciendo. Un `file` CON authority
-/// también: entonces es otra máquina, y eso hay que decirlo.
+/// **`file` with no authority is not announced.** It is the default case
+/// —this machine, this disk— so its label distinguishes nothing at all: it
+/// used to be painted on every path of every listing, header, and modal,
+/// spending eight columns exactly where space is scarce. What is
+/// informative is the scheme that is NOT the usual one, and those still get
+/// said. A `file` WITH authority too: then it is another machine, and that
+/// has to be said.
 ///
 /// ```
 /// use norte_encoding::NameEncoding;
 /// use norte_frontend::path_display_with;
 /// let p = norte_proto::VPath::parse("mem:///CAF%90.TXT").unwrap();
-/// let (texto, hostil) = path_display_with(&p, Some(NameEncoding::Cp437));
-/// assert_eq!((texto.as_str(), hostil), ("⟨mem⟩/CAFÉ.TXT", true));
+/// let (text, hostile) = path_display_with(&p, Some(NameEncoding::Cp437));
+/// assert_eq!((text.as_str(), hostile), ("⟨mem⟩/CAFÉ.TXT", true));
 ///
-/// // Lo local se lee como lo escribe cualquiera.
-/// let local = norte_proto::VPath::parse("file:///home/o/notas.txt").unwrap();
-/// assert_eq!(path_display_with(&local, None).0, "/home/o/notas.txt");
+/// // A local one reads the way anyone would write it.
+/// let local = norte_proto::VPath::parse("file:///home/o/notes.txt").unwrap();
+/// assert_eq!(path_display_with(&local, None).0, "/home/o/notes.txt");
 /// ```
 #[must_use]
 pub fn path_display_with(
@@ -182,34 +183,34 @@ pub fn path_display_with(
         out.push('⟩');
     }
     out.push('/');
-    let mut hostil = false;
+    let mut hostile = false;
     let mut first = true;
     for seg in p.segments() {
         if !first {
             out.push('/');
         }
         first = false;
-        let (texto, h) = display_name_with(seg, reinterpret);
-        hostil |= h;
-        out.push_str(&texto);
+        let (text, h) = display_name_with(seg, reinterpret);
+        hostile |= h;
+        out.push_str(&text);
     }
-    (out, hostil)
+    (out, hostile)
 }
 
-/// Ancho de DISPLAY de `s` en celdas de terminal.
+/// `s`'s DISPLAY width in terminal cells.
 ///
-/// La misma medida contra la que presupuesta [`middle_ellipsis`], expuesta al
-/// crate para que quien reserve sitio a un campo POSTERIOR lo mida igual que lo
-/// mide el truncador.
+/// The same measure [`middle_ellipsis`] budgets against, exposed to the
+/// crate so whoever reserves room for a LATER field measures it the same
+/// way the truncator does.
 ///
-/// Se suma POR CARÁCTER, y eso no es la anchura que `unicode-width` da a la
-/// cadena entera: un VS16 o una pareja de indicadores regionales pintan menos
-/// de lo que suman sus partes. Es deliberado — los caminantes de este módulo
-/// solo pueden contar por carácter, y una medida que no cuente como ellos deja
-/// presupuestos que no cuadran con el recorte.
+/// It is summed PER CHARACTER, and that is not the width `unicode-width`
+/// gives the whole string: a VS16 or a pair of regional indicators paint
+/// less than the sum of their parts. This is deliberate — this module's
+/// walkers can only count per character, and a measure that does not count
+/// like they do leaves budgets that do not match the truncation.
 ///
-/// `width()` devuelve `None` solo para CONTROLES, y aquí pesan 0. Todo llamante
-/// de este módulo los ha enmascarado ya a `�` antes de medir.
+/// `width()` returns `None` only for CONTROLS, and here they weigh 0. Every
+/// caller of this module has already masked them to `�` before measuring.
 #[must_use]
 pub fn cells(s: &str) -> usize {
     s.chars()
@@ -217,33 +218,33 @@ pub fn cells(s: &str) -> usize {
         .sum()
 }
 
-/// Tira las primeras `n` CELDAS de `s` y devuelve el resto, alineado.
+/// Drops the first `n` CELLS of `s` and returns the rest, aligned.
 ///
-/// Es el desplazamiento horizontal del visor: la ventana empieza en la columna
-/// `n`, y «columna» en un terminal es celda, no byte ni carácter. Contar por
-/// bytes movería el texto de golpe al llegar a un acento; contar por
-/// caracteres desalinearía cualquier línea con CJK, donde un carácter ocupa
-/// dos columnas.
+/// This is the viewer's horizontal scroll: the window starts at column `n`,
+/// and "column" in a terminal is a cell, not a byte or a character.
+/// Counting by bytes would jump the text around the moment it hit an
+/// accent; counting by characters would misalign any line with CJK, where
+/// one character takes up two columns.
 ///
-/// **Un carácter ANCHO a caballo del corte se va ENTERO y deja su hueco en
-/// blanco.** Su mitad izquierda no se puede pintar —no hay medio ideograma—,
-/// pero tirarlo sin más corre esa fila una columna respecto a las de al lado, y
-/// eso rompe exactamente lo que un desplazamiento horizontal sirve para leer:
-/// un CSV, un log alineado, una tabla. El espacio que se devuelve en su lugar
-/// es lo que mantiene la rejilla.
+/// **A WIDE character straddling the cut goes ENTIRELY and leaves its gap
+/// blank.** Its left half cannot be painted —there is no half ideogram—,
+/// but simply dropping it shifts that row one column relative to the ones
+/// next to it, and that breaks exactly what a horizontal scroll is for
+/// reading: a CSV, an aligned log, a table. The space returned in its place
+/// is what keeps the grid.
 ///
-/// **Las marcas de ancho cero que abrirían el resto se TIRAN**, igual que hacen
-/// [`middle_ellipsis`] y [`ellipsis_at_bytes`] con la cola: han perdido su base
-/// por construcción, y dejarlas las reparenta a la letra siguiente. Un cúmulo
-/// ZWJ cortado por la mitad pintaría, si no, una familia distinta de la que hay
-/// en el fichero.
+/// **The zero-width marks that would open the rest are DROPPED**, the same
+/// as [`middle_ellipsis`] and [`ellipsis_at_bytes`] do at the tail: they
+/// have lost their base by construction, and leaving them re-parents them
+/// to the next letter. A ZWJ cluster cut in half would otherwise paint a
+/// different family than the one in the file.
 ///
-/// El ancho se cuenta POR CARÁCTER, igual que [`cells`], y eso es deliberado
-/// aunque no sea la anchura que `unicode-width` daría a la cadena entera (un
-/// VS16 o una pareja de indicadores regionales pintan menos de lo que suman sus
-/// partes): quien camina la cadena solo puede contar por carácter, y una cota
-/// que no cuente igual que el caminante deja llegar el desplazamiento a donde
-/// el caminante no llega.
+/// Width is counted PER CHARACTER, same as [`cells`], and that is
+/// deliberate even though it is not the width `unicode-width` would give the
+/// whole string (a VS16 or a pair of regional indicators paint less than
+/// the sum of their parts): whoever walks the string can only count per
+/// character, and a bound that does not count the same way the walker does
+/// lets the scroll reach where the walker does not.
 ///
 /// ```
 /// use norte_frontend::display::skip_cells;
@@ -251,8 +252,8 @@ pub fn cells(s: &str) -> usize {
 /// assert_eq!(skip_cells("hola", 0), "hola");
 /// assert_eq!(skip_cells("hola", 2), "la");
 /// assert_eq!(skip_cells("hola", 9), "");
-/// // Un ideograma ocupa DOS celdas: cortarlo por la primera se lo lleva
-/// // entero, y su hueco queda en blanco para no correr la fila.
+/// // An ideogram takes up TWO cells: cutting it at the first one takes it
+/// // whole, and its gap stays blank so the row does not shift.
 /// assert_eq!(skip_cells("漢字", 1), " 字");
 /// assert_eq!(skip_cells("漢字", 2), "字");
 /// ```
@@ -261,168 +262,168 @@ pub fn skip_cells(s: &str, n: usize) -> String {
     if n == 0 {
         return s.to_owned();
     }
-    let mut saltadas = 0usize;
-    let mut resto = "";
+    let mut skipped = 0usize;
+    let mut rest = "";
     for (i, c) in s.char_indices() {
-        if saltadas >= n {
-            resto = &s[i..];
+        if skipped >= n {
+            rest = &s[i..];
             break;
         }
-        saltadas += UnicodeWidthChar::width(c).unwrap_or(0);
+        skipped += UnicodeWidthChar::width(c).unwrap_or(0);
     }
-    // Lo que se saltó de MÁS es la mitad de un carácter ancho que no cabía: su
-    // hueco va en blanco.
-    let hueco = saltadas.saturating_sub(n);
-    // Y las marcas huérfanas del principio, fuera: su base se quedó al otro
-    // lado del corte.
-    let resto = sin_marcas_de_cabeza(resto);
-    let mut out = String::with_capacity(hueco + resto.len());
-    for _ in 0..hueco {
+    // What was skipped in EXCESS is half of a wide character that did not
+    // fit: its gap goes blank.
+    let gap = skipped.saturating_sub(n);
+    // And the orphaned marks at the start, out: their base stayed on the
+    // other side of the cut.
+    let rest = strip_leading_marks(rest);
+    let mut out = String::with_capacity(gap + rest.len());
+    for _ in 0..gap {
         out.push(' ');
     }
-    out.push_str(resto);
+    out.push_str(rest);
     out
 }
 
-/// Lo que queda de `s` tras tirar las marcas de ancho CERO de su cabeza.
+/// What is left of `s` after dropping the ZERO-width marks from its head.
 ///
-/// Una marca de cabeza perdió su base al otro lado de un corte por la
-/// izquierda, y dejarla la reparenta a la letra siguiente: un cúmulo ZWJ
-/// partido pintaría un glifo que no está en el fichero. Es la misma regla que
-/// [`middle_ellipsis`] y [`ellipsis_at_bytes`] aplican a la COLA, por el mismo
-/// motivo y en el otro extremo.
+/// A leading mark lost its base on the other side of a cut from the left,
+/// and leaving it re-parents it to the next letter: a ZWJ cluster split in
+/// half would paint a glyph that is not in the file. It is the same rule
+/// [`middle_ellipsis`] and [`ellipsis_at_bytes`] apply to the TAIL, for the
+/// same reason and at the other end.
 ///
-/// Público en el crate porque el recorte con estilo del visor tiene que
-/// aplicarlo en el mismo sitio del corte que el de la cadena entera; dos
-/// respuestas a esto son dos pinturas distintas del mismo fichero.
-pub(crate) fn sin_marcas_de_cabeza(s: &str) -> &str {
+/// Public within the crate because the viewer's styled truncation has to
+/// apply it at the same cut point as the whole string's; two different
+/// answers to this are two different paintings of the same file.
+pub(crate) fn strip_leading_marks(s: &str) -> &str {
     s.trim_start_matches(|c| UnicodeWidthChar::width(c) == Some(0))
 }
 
-/// Recorta a un tope de BYTES por la cola, marcando el recorte con `…`.
+/// Truncates to a BYTE cap at the tail, marking the cut with `…`.
 ///
-/// Es el truncador de las fronteras que miden en bytes —el bridge del host
-/// gráfico, un campo de un mensaje— y no de las que miden en celdas, que es
-/// lo que hace [`middle_ellipsis`]. Comparten lo que importa: no se pierde
-/// nada en silencio (el `…` lo dice) y no se parte un clúster.
+/// This is the truncator for boundaries measured in bytes —the graphical
+/// host's bridge, a message field— and not for ones measured in cells, which
+/// is what [`middle_ellipsis`] does. They share what matters: nothing is
+/// lost silently (the `…` says so) and a cluster is not split.
 ///
-/// El corte cae en frontera de CARÁCTER y luego retrocede mientras lo último
-/// que queda sea de ancho cero —una marca combinante, un ZWJ, un selector de
-/// variación—: si no, el `…` que se añade después se compone con la marca
-/// huérfana y el acento se muda de su letra a la elipsis (el mismo FIX 3(b)
-/// que este módulo ya aplica en la cola de `middle_ellipsis`), o una familia
-/// de emoji se corta por su unión y se pinta como gente suelta.
+/// The cut falls on a CHARACTER boundary and then backs up while whatever is
+/// left at the end is zero-width —a combining mark, a ZWJ, a variation
+/// selector—: otherwise the `…` added afterwards composes with the orphaned
+/// mark and the accent moves from its letter to the ellipsis (the same FIX
+/// 3(b) this module already applies at `middle_ellipsis`'s tail), or an
+/// emoji family gets cut at its joiner and paints as separate people.
 ///
 /// ```
 /// use norte_frontend::display::ellipsis_at_bytes;
 ///
 /// assert_eq!(ellipsis_at_bytes("hola", 16), "hola");
-/// let recortado = ellipsis_at_bytes(&"a".repeat(100), 10);
-/// assert!(recortado.len() <= 10 && recortado.ends_with('…'));
+/// let truncated = ellipsis_at_bytes(&"a".repeat(100), 10);
+/// assert!(truncated.len() <= 10 && truncated.ends_with('…'));
 /// ```
 #[must_use]
 pub fn ellipsis_at_bytes(s: &str, max_bytes: usize) -> String {
     if s.len() <= max_bytes {
         return s.to_owned();
     }
-    let elipsis = '…';
-    let Some(presupuesto) = max_bytes.checked_sub(elipsis.len_utf8()) else {
-        // No cabe ni la marca: mejor nada que una marca sola, que no dice
-        // qué se recortó.
+    let ellipsis = '…';
+    let Some(budget) = max_bytes.checked_sub(ellipsis.len_utf8()) else {
+        // Not even the mark fits: better nothing than a lone mark, which
+        // does not say what was cut.
         return String::new();
     };
-    let mut corte = presupuesto;
-    while corte > 0 && !s.is_char_boundary(corte) {
-        corte -= 1;
+    let mut cut = budget;
+    while cut > 0 && !s.is_char_boundary(cut) {
+        cut -= 1;
     }
-    let mut recortado = &s[..corte];
-    // Y atrás mientras lo último sea de ancho cero: esas marcas ya perdieron
-    // su base, y dejarlas es reparentarlas al `…`.
-    while let Some(c) = recortado.chars().next_back() {
+    let mut truncated = &s[..cut];
+    // And backwards while the last one is zero-width: those marks have
+    // already lost their base, and leaving them re-parents them to the `…`.
+    while let Some(c) = truncated.chars().next_back() {
         if UnicodeWidthChar::width(c).unwrap_or(0) > 0 {
             break;
         }
-        recortado = &recortado[..recortado.len() - c.len_utf8()];
+        truncated = &truncated[..truncated.len() - c.len_utf8()];
     }
-    let mut out = recortado.to_owned();
-    out.push(elipsis);
+    let mut out = truncated.to_owned();
+    out.push(ellipsis);
     out
 }
 
-/// Elipsis MEDIA a `max` CELDAS de terminal: conserva cabeza (scheme) y cola
-/// (nombre) —lo que identifica la ruta ante un humano— y marca el recorte con
-/// `…`. Presupuesta por ANCHO DE CELDA (CJK/emoji ocupan 2 columnas), no por
-/// chars: contar chars desbordaba `max` con nombres densos y ratatui
-/// re-truncaba por la DERECHA, comiéndose justo la cola que la elipsis media
-/// existe para preservar (#79). Para ASCII (celdas == chars) el resultado es
-/// idéntico al anterior.
+/// MIDDLE ellipsis at `max` terminal CELLS: keeps the head (scheme) and the
+/// tail (name) —what identifies the path to a human— and marks the cut with
+/// `…`. Budgets by CELL WIDTH (CJK/emoji take up 2 columns), not by chars:
+/// counting chars overflowed `max` with dense names and ratatui re-truncated
+/// from the RIGHT, eating exactly the tail the middle ellipsis exists to
+/// preserve (#79). For ASCII (cells == chars) the result is identical to the
+/// previous one.
 ///
-/// COMPARTIDA por ambos frontends (encoding audit M4-IA-2 H1): vivía privada
-/// en la TUI, pero el motivo por el que existe no es cosmético ni propio de un
-/// terminal — es que un path kilométrico JAMÁS expulse de la caja el campo que
-/// va DESPUÉS de él (el score de un hit semántico, el `→ destino` de un plan).
-/// La GUI se apoyaba en el `.truncate()` del div, que recorta por la derecha
-/// en silencio: un path largo con un `· 0.99` incrustado (chars imprimibles,
-/// sin badge) dejaba visible SOLO el score falso. En GPUI el presupuesto por
-/// celdas no mide píxeles, pero es una cota CONSERVADORA (un char ancho cuenta
-/// 2) y suficiente para reservar sitio al campo de cola.
+/// SHARED by both frontends (encoding audit M4-IA-2 H1): it used to live
+/// private in the TUI, but the reason it exists is not cosmetic nor specific
+/// to a terminal — it is that a mile-long path must NEVER push the field
+/// that comes AFTER it (a semantic hit's score, a plan's `→ destination`)
+/// out of the box. The GUI relied on the div's `.truncate()`, which cuts
+/// from the right silently: a long path with a `· 0.99` embedded (printable
+/// chars, no badge) left ONLY the fake score visible. In GPUI the cell
+/// budget does not measure pixels, but it is a CONSERVATIVE bound (a wide
+/// char counts 2) and enough to reserve room for the tail field.
 ///
-/// P1 encoding audit F2 (LOW): backstop por CUENTA DE CHARS antes del
-/// caminante por ancho. Un combining mark (`U+0301`…) o un ZWJ pesa CERO
-/// celdas — un flood de millones de ellos pegados a un solo char visible
-/// tiene ancho total ≤ `max` (el early-return de abajo lo devolvería
-/// INTACTO, sin cortar nada) o, si desborda por el char visible, el
-/// caminante de cabeza/cola seguiría acumulando chars de ancho 0 sin nunca
-/// tocar su presupuesto — en ningún caso el tamaño del STRING (memoria,
-/// trabajo de `display_name`/render aguas arriba) queda acotado por `max`
-/// aunque el ANCHO sí. Si `s` trae más de `4*max` chars, se pre-recorta por
-/// CHARS (generoso: bastante mayor que cualquier `max` de celdas real de la
-/// TUI hoy) a cabeza+cola ANTES de medir nada — el resto de la función seguía
-/// igual sobre esa entrada ya acotada.
+/// P1 encoding audit F2 (LOW): a CHAR-COUNT backstop before the width
+/// walker. A combining mark (`U+0301`…) or a ZWJ weighs ZERO cells — a flood
+/// of millions of them stuck to a single visible char has total width ≤
+/// `max` (the early-return below would return it INTACT, cutting nothing)
+/// or, if it overflows because of the visible char, the head/tail walker
+/// would keep accumulating zero-width chars without ever touching its
+/// budget — in no case is the STRING's size (memory, upstream
+/// `display_name`/render work) bounded by `max`, even though the WIDTH is.
+/// If `s` carries more than `4*max` chars, it is pre-truncated by CHARS
+/// (generous: well above any real cell `max` the TUI has today) to
+/// head+tail BEFORE measuring anything — the rest of the function stayed the
+/// same over that already-bounded input.
 ///
 /// ```
 /// use norte_frontend::middle_ellipsis;
-/// // Lo que ya cabe vuelve INTACTO.
+/// // What already fits comes back INTACT.
 /// assert_eq!(middle_ellipsis("file:///d/a.txt", 46), "file:///d/a.txt");
-/// // Lo que desborda conserva cabeza y cola, y MARCA el recorte.
-/// let out = middle_ellipsis("file:///muy/larga/ruta/hacia/final.txt", 20);
+/// // What overflows keeps head and tail, and MARKS the cut.
+/// let out = middle_ellipsis("file:///muy/long/ruta/hacia/final.txt", 20);
 /// assert!(out.starts_with("file:") && out.ends_with(".txt") && out.contains('…'));
 /// ```
 #[must_use]
 pub fn middle_ellipsis(s: &str, max: usize) -> String {
     if max == 0 {
-        // review #108-5 M2: con presupuesto 0 devolvía "…" (ancho 1 > 0) y
-        // rompía por una celda el invariante del caller.
+        // review #108-5 M2: with a 0 budget it used to return "…" (width 1 >
+        // 0) and broke the caller's invariant by one cell.
         return String::new();
     }
     let char_cap = max.saturating_mul(4);
     let chars: Vec<char> = s.chars().collect();
-    // `true` si el backstop tuvo que descartar chars por CUENTA (no por
-    // ancho) — en ese caso se FUERZA la elipsis más abajo aunque el ancho
-    // resultante quepa en `max`: spec §6, jamás pérdida silenciosa. Sin
-    // esto, un flood de zero-width recortado a `char_cap` podría terminar
-    // pesando 0 celdas y devolverse INTACTO (ya recortado, pero sin marcar)
-    // por el early-return de ancho.
-    let (chars, cortado_por_chars) = if chars.len() > char_cap {
+    // `true` if the backstop had to discard chars by COUNT (not by width) —
+    // in that case the ellipsis is FORCED further below even if the
+    // resulting width fits in `max`: spec §6, never silent loss. Without
+    // this, a flood of zero-width chars truncated to `char_cap` could end up
+    // weighing 0 cells and be returned INTACT (already truncated, but
+    // unmarked) by the width early-return.
+    let (chars, cut_by_chars) = if chars.len() > char_cap {
         let head_n = char_cap / 2;
         let tail_n = char_cap - head_n;
-        let recorte: Vec<char> = chars[..head_n]
+        let truncated: Vec<char> = chars[..head_n]
             .iter()
             .chain(chars[chars.len() - tail_n..].iter())
             .copied()
             .collect();
-        (recorte, true)
+        (truncated, true)
     } else {
         (chars, false)
     };
     let cell = |c: char| UnicodeWidthChar::width(c).unwrap_or(0);
-    if !cortado_por_chars && chars.iter().copied().map(cell).sum::<usize>() <= max {
+    if !cut_by_chars && chars.iter().copied().map(cell).sum::<usize>() <= max {
         return chars.into_iter().collect();
     }
     let s = &chars[..];
-    // Una celda para el `…`; el resto se reparte cabeza/cola. Cada mitad
-    // acumula chars mientras el siguiente QUEPA entero en su presupuesto: un
-    // char ancho que no cabe se descarta (nunca se parte una celda).
+    // One cell for the `…`; the rest splits head/tail. Each half
+    // accumulates chars while the next one FITS whole in its budget: a wide
+    // char that does not fit is discarded (a cell is never split).
     let budget = max.saturating_sub(1);
     let head_budget = budget / 2;
     let tail_budget = budget - head_budget;
@@ -475,89 +476,89 @@ mod tests {
         VPath::root(Scheme::new("mem").unwrap(), None)
     }
 
-    /// `skip_cells` cuenta COLUMNAS, no bytes ni caracteres.
+    /// `skip_cells` counts COLUMNS, not bytes or characters.
     #[test]
-    fn skip_cells_cuenta_columnas_y_no_parte_un_ancho() {
+    fn skip_cells_counts_columns_and_does_not_split_a_width() {
         assert_eq!(skip_cells("hola", 0), "hola");
         assert_eq!(skip_cells("hola", 1), "ola");
         assert_eq!(skip_cells("hola", 4), "");
-        assert_eq!(skip_cells("hola", 99), "", "pasarse no es un error");
+        assert_eq!(skip_cells("hola", 99), "", "overshooting is not an error");
     }
 
-    /// **Un carácter ancho partido por el corte deja su hueco en blanco.**
+    /// **A wide character split by the cut leaves its gap blank.**
     ///
-    /// Tirarlo sin más corría esa fila una columna respecto a las de al lado, y
-    /// eso rompe justo lo que un desplazamiento horizontal sirve para leer: un
-    /// CSV, un log alineado. La rejilla es la característica.
+    /// Simply dropping it shifted that row one column relative to the ones
+    /// next to it, and that breaks exactly what a horizontal scroll is for
+    /// reading: a CSV, an aligned log. The grid is the feature.
     #[test]
-    fn skip_cells_mantiene_la_rejilla_cuando_parte_un_ancho() {
-        // Un ideograma son DOS columnas: cortar por la primera se lo lleva
-        // entero, y deja un espacio donde estaba su mitad derecha.
+    fn skip_cells_keeps_the_grid_when_it_splits_a_width() {
+        // An ideogram is TWO columns: cutting at the first one takes it
+        // whole, and leaves a space where its right half was.
         assert_eq!(skip_cells("漢字x", 1), " 字x");
         assert_eq!(skip_cells("漢字x", 2), "字x");
         assert_eq!(skip_cells("漢字x", 3), " x");
         assert_eq!(skip_cells("漢字x", 4), "x");
 
-        // Y lo que importa de verdad: la fila con CJK y la de ASCII miden lo
-        // MISMO tras el mismo desplazamiento, así que sus columnas siguen
-        // enfrentadas.
+        // And what really matters: the CJK row and the ASCII one measure the
+        // SAME after the same scroll, so their columns stay lined up.
         for n in 0..6 {
             assert_eq!(
                 cells(&skip_cells("漢字x", n)),
                 cells(&skip_cells("abcde", n)),
-                "desplazadas {n} columnas, las dos filas miden igual"
+                "scrolled {n} columns, both rows measure the same"
             );
         }
     }
 
-    /// Una marca de ancho cero que abriría el resto se TIRA: perdió su base al
-    /// otro lado del corte, y dejarla la reparenta a la letra siguiente. Es lo
-    /// mismo que hacen `middle_ellipsis` y `ellipsis_at_bytes` con la cola.
+    /// A zero-width mark that would open the rest is DROPPED: it lost its
+    /// base on the other side of the cut, and leaving it re-parents it to
+    /// the next letter. It is the same thing `middle_ellipsis` and
+    /// `ellipsis_at_bytes` do at the tail.
     #[test]
-    fn skip_cells_no_deja_una_marca_huerfana_al_principio() {
+    fn skip_cells_does_not_leave_an_orphaned_mark_at_the_start() {
         assert_eq!(
             skip_cells("ae\u{301}b", 1),
             "e\u{301}b",
-            "la `e` trae la suya"
+            "the `e` brings its own"
         );
-        assert_eq!(skip_cells("ae\u{301}b", 2), "b", "el acento perdió su `e`");
+        assert_eq!(skip_cells("ae\u{301}b", 2), "b", "the accent lost its `e`");
 
-        // Un cúmulo ZWJ cortado por la mitad pintaría una familia DISTINTA de
-        // la que hay en el fichero. Sin el ZWJ de cabeza, son personas sueltas
-        // —que es lo que queda— y no otra familia inventada.
-        let familia = "👨\u{200D}👩\u{200D}👧\u{200D}👦";
-        let resto = skip_cells(familia, 2);
+        // A ZWJ cluster cut in half would paint a DIFFERENT family than the
+        // one in the file. With no leading ZWJ, they are separate people
+        // —which is what is left— and not another invented family.
+        let family = "👨\u{200D}👩\u{200D}👧\u{200D}👦";
+        let rest = skip_cells(family, 2);
         assert!(
-            !resto.starts_with('\u{200D}'),
-            "jamás se empieza por un unificador: {resto:?}"
+            !rest.starts_with('\u{200D}'),
+            "never starts with a joiner: {rest:?}"
         );
 
-        // Y ninguna fila empieza nunca por algo de ancho cero, para cualquier
-        // desplazamiento.
+        // And no row ever starts with something of zero width, for any
+        // scroll offset.
         for n in 0..12 {
-            let r = skip_cells(familia, n);
+            let r = skip_cells(family, n);
             if let Some(c) = r.chars().next() {
                 assert_ne!(
                     UnicodeWidthChar::width(c),
                     Some(0),
-                    "n={n} empieza en ancho cero: {r:?}"
+                    "n={n} starts at zero width: {r:?}"
                 );
             }
         }
     }
 
-    /// Encoding MEDIA-2: el TEXTO de `path_display` no puede contener NINGÚN
-    /// char del set `must_mask` — el flag ya salía de `display_name`
-    /// (criterio amplio), pero el texto era `display_lossy` (solo Cc+bidi):
-    /// ZWSP/TAG crudos pintaban twins invisibles idénticos en los popups de
-    /// navegación, ambos con badge. Corpus-driven: todo nombre hostil
-    /// canónico, como segmento de un `VPath` real.
+    /// Encoding MEDIA-2: `path_display`'s TEXT must not contain ANY char
+    /// from the `must_mask` set — the flag already came from `display_name`
+    /// (broad criterion), but the text was `display_lossy`'s (Cc+bidi
+    /// only): raw ZWSP/TAG painted identical invisible twins in the
+    /// navigation popups, both badged. Corpus-driven: every canonical
+    /// hostile name, as a real `VPath`'s segment.
     #[test]
-    fn path_display_jamas_pinta_chars_enmascarables() {
-        // #98/F2 del audit: el sweep itera TAMBIÉN todo el ciclo de
-        // reinterpretación — sin esto, `w1252_c1_controls` era inerte (con
-        // enc=None los bytes caen a U+FFFD ANTES de que must_mask vea los
-        // controles C1 que windows-1252 sí decodifica: U+009D es OSC).
+    fn path_display_never_paints_maskable_chars() {
+        // #98/F2 of the audit: the sweep ALSO iterates the whole
+        // reinterpretation cycle — without this, `w1252_c1_controls` was
+        // inert (with enc=None the bytes fall to U+FFFD BEFORE must_mask
+        // sees the C1 controls windows-1252 does decode: U+009D is OSC).
         let encs = std::iter::once(None).chain(
             norte_encoding::name_reinterpret_cycle()
                 .iter()
@@ -567,94 +568,95 @@ mod tests {
         for enc in encs {
             for n in norte_testkit::corpus::hostile_names() {
                 let p = root().join(norte_proto::Segment::new(n.bytes.clone()).unwrap());
-                let (texto, _) = path_display_with(&p, enc);
+                let (text, _) = path_display_with(&p, enc);
                 assert!(
-                    !texto.chars().any(must_mask),
-                    "{} bajo {enc:?}: sin chars de must_mask: {texto:?}",
+                    !text.chars().any(must_mask),
+                    "{} under {enc:?}: no must_mask chars: {text:?}",
                     n.id
                 );
             }
         }
     }
 
-    /// #98 (fixture `utf8_accidental_cp866`): bytes legacy que TAMBIÉN son
-    /// UTF-8 válido («а» cirílica) JAMÁS se reinterpretan — bajo cualquier
-    /// encoding del ciclo salen intactos y sin badge (regla mixto-sin-
-    /// mojibake, indistinguible sin metadatos).
+    /// #98 (fixture `utf8_accidental_cp866`): legacy bytes that are ALSO
+    /// valid UTF-8 (Cyrillic "а") are NEVER reinterpreted — under any
+    /// encoding of the cycle they come out intact and unbadged (the
+    /// mixed-no-mojibake rule, indistinguishable with no metadata).
     #[test]
-    fn utf8_accidental_no_se_reinterpreta_bajo_ningun_encoding() {
+    fn accidental_utf8_is_not_reinterpreted_under_any_encoding() {
         let accidental = norte_testkit::corpus::hostile_names()
             .into_iter()
             .find(|n| n.id == "utf8_accidental_cp866")
-            .expect("fixture del corpus")
+            .expect("corpus fixture")
             .bytes;
         for enc in norte_encoding::name_reinterpret_cycle() {
-            let (texto, hostil) = display_name_with(&accidental, Some(*enc));
+            let (text, hostile) = display_name_with(&accidental, Some(*enc));
             assert_eq!(
-                (texto.as_str(), hostil),
+                (text.as_str(), hostile),
                 ("а", false),
-                "{}: UTF-8 válido intacto",
+                "{}: valid UTF-8 intact",
                 enc.label()
             );
         }
     }
 
-    /// #57: la reinterpretación decodifica SOLO nombres no-UTF8 (display),
-    /// conserva el badge hostil, jamás toca un nombre UTF-8 válido y el
-    /// enmascarado de hazards sobrevive a la decodificación (un cp437 que
-    /// produzca un char de control no se pinta crudo).
+    /// #57: reinterpretation decodes ONLY non-UTF8 names (display), keeps
+    /// the hostile badge, never touches a valid UTF-8 name, and hazard
+    /// masking survives decoding (a cp437 that produces a control char is
+    /// not painted raw).
     #[test]
-    fn display_name_with_reinterpreta_solo_no_utf8_y_enmascara() {
+    fn display_name_with_reinterprets_only_non_utf8_and_masks() {
         use norte_encoding::NameEncoding;
-        // "CAFÉ.TXT" en cp437 (É = 0x90): decodifica y MARCA.
-        let (texto, hostil) = display_name_with(b"CAF\x90.TXT", Some(NameEncoding::Cp437));
-        assert_eq!(texto, "CAFÉ.TXT");
-        assert!(hostil, "reinterpretado = pintado difiere de los bytes");
-        // UTF-8 válido: intacto aunque haya reinterpretación activa.
-        let (texto, hostil) = display_name_with("año.txt".as_bytes(), Some(NameEncoding::Cp437));
-        assert_eq!(texto, "año.txt");
-        assert!(!hostil);
-        // None = display_name de siempre (lossy marcado).
+        // "CAFÉ.TXT" in cp437 (É = 0x90): decodes and FLAGS.
+        let (text, hostile) = display_name_with(b"CAF\x90.TXT", Some(NameEncoding::Cp437));
+        assert_eq!(text, "CAFÉ.TXT");
+        assert!(hostile, "reinterpreted = painted differs from the bytes");
+        // Valid UTF-8: intact even with reinterpretation active.
+        let (text, hostile) = display_name_with("año.txt".as_bytes(), Some(NameEncoding::Cp437));
+        assert_eq!(text, "año.txt");
+        assert!(!hostile);
+        // None = the usual display_name (lossy marked).
         assert_eq!(
             display_name_with(b"\xFF\xFE", None),
             display_name(b"\xFF\xFE")
         );
-        // Hazards post-decodificación: IBM866 decodifica 0x1B… no — 0x1B es
-        // ASCII (ESC pasa tal cual por la mitad baja de cp437): debe salir
-        // enmascarado, jamás un ESC crudo en el terminal.
-        let (texto, hostil) = display_name_with(b"\x1b]0;x\x90", Some(NameEncoding::Cp437));
-        assert!(!texto.contains('\u{1b}'), "ESC jamás crudo: {texto:?}");
-        assert!(hostil);
+        // Post-decoding hazards: does IBM866 decode 0x1B… no — 0x1B is ASCII
+        // (ESC passes through unchanged in cp437's lower half): it must come
+        // out masked, never a raw ESC in the terminal.
+        let (text, hostile) = display_name_with(b"\x1b]0;x\x90", Some(NameEncoding::Cp437));
+        assert!(!text.contains('\u{1b}'), "ESC never raw: {text:?}");
+        assert!(hostile);
     }
 
-    /// El prefijo `⟨scheme authority⟩/` de `path_display` calca EXACTO el
-    /// formato de `VPath::display_lossy` (proto vpath.rs) para todo esquema
-    /// que se anuncie: con segmentos limpios ambos textos son idénticos.
+    /// `path_display`'s `⟨scheme authority⟩/` prefix EXACTLY mirrors
+    /// `VPath::display_lossy`'s format (proto vpath.rs) for every scheme
+    /// that gets announced: with clean segments both texts are identical.
     ///
-    /// **Con una excepción, y aquí se fija**: `file` sin authority. Son dos
-    /// superficies distintas —`display_lossy` es la de un LOG, donde no hay
-    /// pantalla alrededor que diga de qué máquina se habla; ésta es la de una
-    /// fila, donde el esquema por defecto es ruido en cada línea— y el test
-    /// tiene que decir cuál es la diferencia en vez de dejar que se descubra
-    /// leyendo el código.
+    /// **With one exception, and it is pinned here**: `file` with no
+    /// authority. They are two different surfaces —`display_lossy` is a
+    /// LOG's, where there is no screen around it to say which machine is
+    /// being talked about; this one is a row's, where the default scheme is
+    /// noise on every line— and the test has to state what the difference
+    /// is instead of letting it be discovered by reading the code.
     #[test]
-    fn path_display_calca_el_prefijo_de_display_lossy() {
-        let limpio = VPath::parse("sftp://oscar-host/docs/notas.txt").unwrap();
-        assert_eq!(path_display(&limpio).0, limpio.display_lossy());
-        let sin_auth = VPath::parse("mem:///a/b").unwrap();
-        assert_eq!(path_display(&sin_auth).0, sin_auth.display_lossy());
-        let raiz = root();
-        assert_eq!(path_display(&raiz).0, raiz.display_lossy());
+    fn path_display_mirrors_display_lossys_prefix() {
+        let clean = VPath::parse("sftp://oscar-host/docs/notas.txt").unwrap();
+        assert_eq!(path_display(&clean).0, clean.display_lossy());
+        let no_auth = VPath::parse("mem:///a/b").unwrap();
+        assert_eq!(path_display(&no_auth).0, no_auth.display_lossy());
+        let rt = root();
+        assert_eq!(path_display(&rt).0, rt.display_lossy());
 
-        // Lo local diverge, y de una forma concreta: la misma cadena menos la
-        // etiqueta.
+        // The local one diverges, and in a specific way: the same string
+        // minus the label.
         let local = VPath::parse("file:///home/o/notas.txt").unwrap();
         assert_eq!(path_display(&local).0, "/home/o/notas.txt");
         assert_eq!(local.display_lossy(), "⟨file⟩/home/o/notas.txt");
 
-        // Y un `file` CON authority sí se anuncia: entonces es otra máquina.
-        let remoto = VPath::parse("file://otra/home/o").unwrap();
-        assert_eq!(path_display(&remoto).0, remoto.display_lossy());
+        // And a `file` WITH authority IS announced: then it is another
+        // machine.
+        let remote = VPath::parse("file://otra/home/o").unwrap();
+        assert_eq!(path_display(&remote).0, remote.display_lossy());
     }
 
     /// H3b encoding audit, FIX 3(b): the tail of a middle-truncated string
@@ -668,29 +670,29 @@ mod tests {
     /// joiner. Corpus-driven: `nfd_e_acute` and `emoji_zwj_family` are the
     /// canonical fixtures for exactly this.
     #[test]
-    fn middle_ellipsis_jamas_deja_la_cola_empezando_en_ancho_cero() {
+    fn middle_ellipsis_never_leaves_the_tail_starting_at_zero_width() {
         let corpus = norte_testkit::corpus::hostile_names();
         for id in ["nfd_e_acute", "emoji_zwj_family"] {
             let n = corpus
                 .iter()
                 .find(|n| n.id == id)
-                .unwrap_or_else(|| panic!("{id} está en el corpus canónico"));
-            let pieza =
-                String::from_utf8(n.bytes.clone()).unwrap_or_else(|_| panic!("{id} es UTF-8"));
-            // Repetida: así el corte cae en TODAS las posiciones posibles
-            // dentro y entre clusters según el presupuesto, sin fijar a mano
-            // el `max` que reproduce el fallo.
-            let s = pieza.repeat(8);
+                .unwrap_or_else(|| panic!("{id} is in the canonical corpus"));
+            let piece =
+                String::from_utf8(n.bytes.clone()).unwrap_or_else(|_| panic!("{id} is UTF-8"));
+            // Repeated: this way the cut falls at EVERY possible position
+            // within and between clusters depending on the budget, without
+            // hand-picking the `max` that reproduces the bug.
+            let s = piece.repeat(8);
             for max in 1..=32 {
                 let out = middle_ellipsis(&s, max);
-                let Some(cola) = out.split('…').nth(1) else {
+                let Some(tail) = out.split('…').nth(1) else {
                     continue;
                 };
-                if let Some(c) = cola.chars().next() {
+                if let Some(c) = tail.chars().next() {
                     assert!(
                         UnicodeWidthChar::width(c).unwrap_or(0) > 0,
-                        "[{id}] max={max}: la cola empieza en U+{:04X} (ancho 0), \
-                         que se compone sobre el `…`: {out:?}",
+                        "[{id}] max={max}: the tail starts at U+{:04X} (width 0), \
+                         which composes onto the `…`: {out:?}",
                         c as u32
                     );
                 }
@@ -698,37 +700,36 @@ mod tests {
         }
     }
 
-    /// FIX 3(b) otra vez, pero sobre un TÍTULO de display en vez de sobre un
-    /// nombre de fichero: la superficie que estrena H3b (la lateral de la
-    /// ayuda, las filas de una página) y que H3f alimentará desde manifiestos
-    /// de plugin.
+    /// FIX 3(b) again, but over a display TITLE instead of a file name: the
+    /// surface H3b introduces (help's sidebar, a page's rows) and that H3f
+    /// will feed from plugin manifests.
     ///
-    /// El corpus canónico tenía nombres hostiles (bytes) y chords hostiles
-    /// (un codepoint), pero nada con la forma de un título recortado en una
-    /// columna estrecha: `hostile_titles` es esa clase, y `nfd_accent_on_the_
-    /// cut` la fija aquí. Un acento NFD pesa CERO celdas, así que el caminante
-    /// de la cola no rompe nunca sobre él; cuando la letra a la que pertenece
-    /// es la que desborda el presupuesto, el acento sobrevive SOLO al frente
-    /// de la cola y el terminal lo compone sobre el `…` — el acento migra de
-    /// su letra a la elipsis. El cluster ZWJ tiene la misma forma.
+    /// The canonical corpus had hostile names (bytes) and hostile chords (a
+    /// codepoint), but nothing shaped like a title truncated in a narrow
+    /// column: `hostile_titles` is that class, and `nfd_accent_on_the_cut`
+    /// pins it here. An NFD accent weighs ZERO cells, so the tail walker
+    /// never breaks on it; when the letter it belongs to is the one that
+    /// overflows the budget, the accent survives ALONE at the front of the
+    /// tail and the terminal composes it onto the `…` — the accent migrates
+    /// from its letter to the ellipsis. The ZWJ cluster has the same shape.
     ///
-    /// Los tres títulos se barren a todos los anchos: cuál es el `max` que
-    /// reproduce el fallo depende del texto, y fijarlo a mano es fijar el bug
-    /// de hoy en vez del invariante.
+    /// The three titles are swept across every width: which `max` reproduces
+    /// the bug depends on the text, and hand-picking it pins today's bug
+    /// instead of the invariant.
     #[test]
-    fn middle_ellipsis_sobre_titulos_hostiles_no_orfana_marcas() {
+    fn middle_ellipsis_over_hostile_titles_does_not_orphan_marks() {
         for t in norte_testkit::corpus::hostile_titles() {
-            for texto in std::iter::once(t.text).chain(t.twin) {
+            for text in std::iter::once(t.text).chain(t.twin) {
                 for max in 1..=40 {
-                    let out = middle_ellipsis(texto, max);
-                    let Some(cola) = out.split('…').nth(1) else {
+                    let out = middle_ellipsis(text, max);
+                    let Some(tail) = out.split('…').nth(1) else {
                         continue;
                     };
-                    if let Some(c) = cola.chars().next() {
+                    if let Some(c) = tail.chars().next() {
                         assert!(
                             UnicodeWidthChar::width(c).unwrap_or(0) > 0,
-                            "[{}] max={max}: la cola empieza en U+{:04X} (ancho \
-                             0), que se compone sobre el `…`: {out:?}",
+                            "[{}] max={max}: the tail starts at U+{:04X} (width \
+                             0), which composes onto the `…`: {out:?}",
                             t.id,
                             c as u32
                         );
@@ -738,7 +739,7 @@ mod tests {
                             .map(|c| UnicodeWidthChar::width(c).unwrap_or(0))
                             .sum::<usize>()
                             <= max,
-                        "[{}] max={max}: el recorte desborda su presupuesto: {out:?}",
+                        "[{}] max={max}: the truncation overflows its budget: {out:?}",
                         t.id
                     );
                 }
@@ -746,59 +747,60 @@ mod tests {
         }
     }
 
-    /// La otra mitad de `truncation_twins`: la colisión es REAL y no se puede
-    /// prevenir, así que lo que se exige es que el recorte se MARQUE.
+    /// The other half of `truncation_twins`: the collision is REAL and
+    /// cannot be prevented, so what is required is that the truncation be
+    /// MARKED.
     ///
-    /// Dos títulos distintos que comparten todo hasta el corte se pintan
-    /// idénticos en una columna estrecha — eso es geometría, no un bug. Lo que
-    /// spec §6 no permite es que la pérdida sea SILENCIOSA: el `…` es lo que
-    /// le dice al lector que lo que ve no es el título entero y que la fila de
-    /// al lado puede ser otra cosa.
+    /// Two different titles that share everything up to the cut paint
+    /// identically in a narrow column — that is geometry, not a bug. What
+    /// spec §6 does not allow is for the loss to be SILENT: the `…` is what
+    /// tells the reader that what they see is not the whole title and that
+    /// the row next to it might be something else.
     #[test]
-    fn dos_titulos_que_colisionan_al_recortarse_llevan_marca() {
-        let par = norte_testkit::corpus::hostile_titles()
+    fn two_titles_that_collide_when_truncated_carry_a_mark() {
+        let pair = norte_testkit::corpus::hostile_titles()
             .into_iter()
             .find(|t| t.id == "truncation_twins")
-            .expect("fixture del corpus");
-        let gemelo = par.twin.expect("una colisión necesita dos cadenas");
-        assert_ne!(par.text, gemelo, "la fixture tiene que ser un PAR distinto");
-        let a = middle_ellipsis(par.text, 20);
-        let b = middle_ellipsis(gemelo, 20);
+            .expect("corpus fixture");
+        let twin = pair.twin.expect("a collision needs two strings");
+        assert_ne!(pair.text, twin, "the fixture has to be a DIFFERENT pair");
+        let a = middle_ellipsis(pair.text, 20);
+        let b = middle_ellipsis(twin, 20);
         assert!(
             a.contains('…') && b.contains('…'),
-            "el recorte se marca SIEMPRE: {a:?} / {b:?}"
+            "the truncation is ALWAYS marked: {a:?} / {b:?}"
         );
-        // Y sin recorte, no colisionan: la colisión es del ancho, no de los
-        // datos.
+        // And with no truncation, they do not collide: the collision is the
+        // width's, not the data's.
         assert_ne!(
-            middle_ellipsis(par.text, 200),
-            middle_ellipsis(gemelo, 200),
-            "con sitio de sobra los dos títulos son distinguibles"
+            middle_ellipsis(pair.text, 200),
+            middle_ellipsis(twin, 200),
+            "with room to spare the two titles are distinguishable"
         );
     }
 
-    /// El recorte por bytes no parte un clúster: ni deja una marca
-    /// combinante huérfana pegada al `…`, ni corta una familia de emoji por
-    /// su unión. Es el mismo FIX 3(b) por la otra punta.
+    /// Byte truncation does not split a cluster: it neither leaves an
+    /// orphaned combining mark stuck to the `…`, nor cuts an emoji family at
+    /// its joiner. It is the same FIX 3(b) from the other end.
     #[test]
-    fn ellipsis_at_bytes_no_deja_marcas_huerfanas() {
+    fn ellipsis_at_bytes_leaves_no_orphaned_marks() {
         let corpus = norte_testkit::corpus::hostile_names();
         for id in ["nfd_e_acute", "emoji_zwj_family"] {
             let n = corpus
                 .iter()
                 .find(|n| n.id == id)
-                .unwrap_or_else(|| panic!("{id} en el corpus"));
-            let texto = String::from_utf8_lossy(&n.bytes).into_owned();
-            // Un tope justo DENTRO del clúster, probado en cada byte posible.
-            for tope in 4..=texto.len() + 4 {
-                let out = ellipsis_at_bytes(&texto, tope);
-                assert!(out.len() <= tope, "[{id}/{tope}] se pasa del tope");
+                .unwrap_or_else(|| panic!("{id} in the corpus"));
+            let text = String::from_utf8_lossy(&n.bytes).into_owned();
+            // A cap right INSIDE the cluster, tried at every possible byte.
+            for cap in 4..=text.len() + 4 {
+                let out = ellipsis_at_bytes(&text, cap);
+                assert!(out.len() <= cap, "[{id}/{cap}] exceeds the cap");
                 if out.ends_with('…') {
-                    let sin_marca = &out[..out.len() - '…'.len_utf8()];
-                    if let Some(ultimo) = sin_marca.chars().next_back() {
+                    let without_mark = &out[..out.len() - '…'.len_utf8()];
+                    if let Some(last) = without_mark.chars().next_back() {
                         assert!(
-                            UnicodeWidthChar::width(ultimo).unwrap_or(0) > 0,
-                            "[{id}/{tope}] la elipsis se queda con una marca huérfana: {out:?}"
+                            UnicodeWidthChar::width(last).unwrap_or(0) > 0,
+                            "[{id}/{cap}] the ellipsis is left with an orphaned mark: {out:?}"
                         );
                     }
                 }
@@ -806,57 +808,60 @@ mod tests {
         }
     }
 
-    /// Lo que cabe viaja intacto, y un tope que no da ni para la marca
-    /// devuelve vacío en vez de una elipsis que no dice qué se recortó.
+    /// What fits travels intact, and a cap that does not even leave room for
+    /// the mark returns empty instead of an ellipsis that does not say what
+    /// was cut.
     #[test]
-    fn ellipsis_at_bytes_en_los_bordes() {
+    fn ellipsis_at_bytes_at_the_edges() {
         assert_eq!(ellipsis_at_bytes("hola", 4), "hola");
         assert_eq!(ellipsis_at_bytes("hola", 2), "");
         assert!(ellipsis_at_bytes("holaaa", 5).ends_with('…'));
     }
 
-    /// La premisa de `clean_utf8_path_over_clamp` (#277): una ruta de
-    /// segmentos UTF-8 LIMPIOS cuyo `path_display` pasa del tope del puente.
+    /// `clean_utf8_path_over_clamp`'s premise (#277): a path of CLEAN UTF-8
+    /// segments whose `path_display` goes past the bridge's cap.
     ///
-    /// Lo que se afirma aquí es lo que hace útil a la fixture: `path_display`
-    /// la declara FIEL, porque no hay nada que enmascarar. O sea que si la
-    /// superficie que la pinta la recorta y no lo dice, no queda ninguna
-    /// bandera que delate el recorte —y la elipsis es un carácter legal en un
-    /// nombre—. `display_expansion_over_clamp` no sirve para esto: sus 0xFF
-    /// escogen el camino lossy y su bandera ya sale `true` por ahí.
+    /// What is asserted here is what makes the fixture useful:
+    /// `path_display` declares it FAITHFUL, because there is nothing to
+    /// mask. Meaning that if the surface that paints it truncates it and
+    /// does not say so, no flag is left to give the truncation away —and the
+    /// ellipsis is a legal character in a name—. `display_expansion_over_clamp`
+    /// is no use for this: its 0xFF bytes choose the lossy path and its flag
+    /// already comes out `true` because of that.
     #[test]
-    fn la_ruta_limpia_sobre_el_tope_no_tiene_nada_que_enmascarar() {
+    fn the_clean_path_over_the_cap_has_nothing_to_mask() {
         let segs = norte_testkit::corpus::clean_utf8_path_over_clamp();
-        let mut p = VPath::parse("mem:///").expect("raíz");
+        let mut p = VPath::parse("mem:///").expect("root");
         for s in &segs {
-            p = p.join(norte_proto::Segment::new(s.clone()).expect("segmento"));
+            p = p.join(norte_proto::Segment::new(s.clone()).expect("segment"));
         }
-        let (texto, hostil) = path_display(&p);
+        let (text, hostile) = path_display(&p);
         assert!(
-            !hostil,
-            "la fixture existe para el RECORTE: si ya marca por otra cosa, no distingue nada"
+            !hostile,
+            "the fixture exists for the TRUNCATION: if it already flags for another reason, it distinguishes nothing"
         );
         assert!(
-            texto.len() > 4096,
-            "la ruta tiene que pasar de MAX_STRING_BYTES: {}",
-            texto.len()
+            text.len() > 4096,
+            "the path has to exceed MAX_STRING_BYTES: {}",
+            text.len()
         );
     }
 
-    /// El prefijo `⟨scheme⟩/` de una línea de ruta es un MARCADOR DE ROL, y
-    /// esto es lo que lo pinea (#277).
+    /// A path line's `⟨scheme⟩/` prefix is a ROLE MARKER, and this is what
+    /// pins it (#277).
     ///
-    /// Tres nombres del corpus renderizan, letra por letra, una línea que el
-    /// host escribe por su cuenta: el plazo de una aprobación en los dos
-    /// idiomas y el veredicto de un informe de lote. Todos son texto
-    /// imprimible corriente, así que no se enmascaran y ninguna bandera salta;
-    /// lo único que impide que un fichero fabrique la frase del host es que
-    /// una línea de RUTA se distinga de una de CUERPO al pintarla.
+    /// Three corpus names render, letter for letter, a line the host writes
+    /// on its own: an approval's TTL in both languages and a batch report's
+    /// verdict. All of them are ordinary printable text, so nothing gets
+    /// masked and no flag trips; the only thing that stops a file from
+    /// forging the host's sentence is that a PATH line is told apart from a
+    /// BODY one when painted.
     ///
-    /// Quien quite ese prefijo por «ruido» no encuentra nada rojo sin esto.
+    /// Whoever removes that prefix as "noise" finds nothing red without
+    /// this.
     #[test]
-    fn una_linea_de_ruta_no_puede_fabricar_una_frase_del_host() {
-        let casos = [
+    fn a_path_line_cannot_forge_a_host_sentence() {
+        let cases = [
             (
                 "approval_ttl_line_spoof",
                 norte_i18n::Lang::Es,
@@ -874,53 +879,57 @@ mod tests {
             ),
         ];
         let corpus = norte_testkit::corpus::hostile_names();
-        for (id, lang, clave) in casos {
+        for (id, lang, key) in cases {
             let n = corpus
                 .iter()
                 .find(|n| n.id == id)
-                .unwrap_or_else(|| panic!("la fixture {id} está en el corpus"));
+                .unwrap_or_else(|| panic!("fixture {id} is in the corpus"));
 
-            // La premisa: el nombre ES la frase, sin una sola diferencia.
-            let frase = if clave == "modal-approval-ttl" {
-                norte_i18n::ta_in(lang, clave, &[("s", "3600")])
+            // The premise: the name IS the sentence, with not a single
+            // difference.
+            let sentence = if key == "modal-approval-ttl" {
+                norte_i18n::ta_in(lang, key, &[("s", "3600")])
             } else {
-                norte_i18n::t_in(lang, clave)
+                norte_i18n::t_in(lang, key)
             };
-            let (nombre, hostil) = display_name(&n.bytes);
-            assert_eq!(nombre, frase, "[{id}] la fixture dejó de ser la frase");
+            let (name, hostile) = display_name(&n.bytes);
+            assert_eq!(
+                name, sentence,
+                "[{id}] the fixture stopped being the sentence"
+            );
             assert!(
-                !hostil,
-                "[{id}] no hay nada que enmascarar: por eso hace falta el marcador"
+                !hostile,
+                "[{id}] there is nothing to mask: that is why the marker is needed"
             );
 
-            // Y el marcador de rol es lo que lo desactiva. Sobre los TRES
-            // esquemas que se pintan distinto, `file` incluido: este test
-            // existe para atrapar a quien quite el prefijo por ruido, y
-            // probando solo `mem` no atrapó exactamente eso — el prefijo de
-            // `file` se quitó con el test en verde. Lo que se afirma ahora es
-            // el marcador que a cada uno le toca, no una cadena literal.
-            for raiz in ["mem:///", "file:///", "sftp://h/"] {
-                let p = VPath::parse(raiz)
-                    .expect("raíz")
-                    .join(norte_proto::Segment::new(n.bytes.clone()).expect("segmento"));
-                let (linea, _) = path_display(&p);
+            // And the role marker is what disarms it. Over the THREE
+            // schemes that paint differently, `file` included: this test
+            // exists to catch whoever removes the prefix as noise, and
+            // testing only `mem` did not catch exactly that — `file`'s
+            // prefix was removed with the test green. What is asserted now
+            // is the marker each one gets, not a literal string.
+            for root_ in ["mem:///", "file:///", "sftp://h/"] {
+                let p = VPath::parse(root_)
+                    .expect("root")
+                    .join(norte_proto::Segment::new(n.bytes.clone()).expect("segment"));
+                let (line, _) = path_display(&p);
                 assert_ne!(
-                    linea, frase,
-                    "[{id}/{raiz}] una ruta se pintó como una frase del host"
+                    line, sentence,
+                    "[{id}/{root_}] a path was painted as a host sentence"
                 );
-                // `file` sin authority no lleva `⟨…⟩`: su marcador es la `/`
-                // inicial, que un nombre no puede llevar (ningún SO soportado
-                // admite `/` en un segmento). Los demás llevan el suyo.
-                if raiz == "file:///" {
+                // `file` with no authority carries no `⟨…⟩`: its marker is
+                // the leading `/`, which a name cannot carry (no supported
+                // OS allows `/` in a segment). The others carry their own.
+                if root_ == "file:///" {
                     assert!(
-                        linea.starts_with('/') && !linea.starts_with("⟨"),
-                        "[{id}] lo local se pinta sin etiqueta y con la barra \
-                         delante: {linea:?}"
+                        line.starts_with('/') && !line.starts_with("⟨"),
+                        "[{id}] the local one paints with no label and with the \
+                         slash in front: {line:?}"
                     );
                 } else {
                     assert!(
-                        linea.starts_with('⟨'),
-                        "[{id}/{raiz}] el marcador de rol desapareció: {linea:?}"
+                        line.starts_with('⟨'),
+                        "[{id}/{root_}] the role marker disappeared: {line:?}"
                     );
                 }
             }

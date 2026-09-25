@@ -1,27 +1,29 @@
-//! El gestor de extensiones (`app.extensions`) visto desde el host: qué hay
-//! instalado, en qué estado, y qué se le ha configurado.
+//! The extension manager (`app.extensions`) as seen from the host: what is
+//! installed, in what state, and what has been configured on it.
 //!
-//! **Ya gobierna, y con el freno puesto.** Aprobar las capabilities de un
-//! plugin es la decisión de seguridad del sistema de extensiones: es lo que
-//! separa «este código está en tu disco» de «este código puede leer tus
-//! ficheros». Desde la 6.4 esta ventana la toma, con tres cosas que no son
-//! adorno:
+//! **It already governs, with the brake on.** Approving a plugin's
+//! capabilities is the extension system's security decision: it is what
+//! separates "this code is on your disk" from "this code can read your
+//! files". Since 6.4 this window makes that call, with three things that are
+//! not decoration:
 //!
-//! - **Aprobar PREGUNTA**, y la pregunta enumera las capabilities una por
-//!   línea. Revocar y apagar no preguntan: van en la dirección segura.
-//! - **Nada de esto existe en `SoloLectura`.** El mismo interruptor que
-//!   decide si la ventana borra decide si concede permisos.
-//! - **La verdad vive en el core.** Tras un cambio se REPIDE el catálogo en
-//!   vez de tocar el `bool` de aquí: un optimismo local que el daemon no
-//!   confirmó es una pantalla que miente sobre quién puede leer tus ficheros.
+//! - **Approve ASKS**, and the question lists the capabilities one per
+//!   line. Revoke and disable do not ask: they go in the safe direction.
+//! - **None of this exists in `SoloRead`.** The same switch that decides
+//!   whether the window deletes decides whether it grants permissions.
+//! - **The truth lives in the core.** After a change the catalogue is
+//!   RE-REQUESTED instead of touching the `bool` here: a local optimism the
+//!   daemon has not confirmed is a screen lying about who can read your
+//!   files.
 //!
-//! Todo lo que un plugin escribe —su nombre, su publicador, su versión, su
-//! descripción, la descripción de cada clave, el VALOR de cada clave, su
-//! defecto y los valores de un `enum`— es texto de TERCERO y se enmascara en
-//! la ENTRADA, que es este módulo. Lo único que no lo es son la CLAVE (charset
-//! validado por el manifiesto) y el TIPO (conjunto cerrado); las cotas son
-//! números. Esa lista decía antes que el valor, el defecto y el dominio eran
-//! seguros: no lo son — el manifiesto les acota la longitud y nada más.
+//! Everything a plugin writes — its name, its publisher, its version, its
+//! description, each key's description, each key's VALUE, its default and
+//! an `enum`'s values — is THIRD-PARTY text and is masked at the ENTRY
+//! point, which is this module. The only things that are not are the KEY
+//! (charset validated by the manifest) and the TYPE (a closed set); the
+//! bounds are numbers. That list used to say the value, default and domain
+//! were safe: they are not — the manifest only bounds their length, nothing
+//! else.
 
 use norte_frontend::help_badge::{plugin_description, plugin_label, plugin_label_flagged};
 use norte_frontend::plugin_config::{PendingConfigWrite, PluginConfigState, sanitize_config_keys};
@@ -35,479 +37,491 @@ use crate::dto::{
     ExtensionRowView, ExtensionsView,
 };
 
-/// Tope de filas del catálogo que cruzan.
+/// Cap on catalogue rows that cross over.
 ///
-/// Un daemon hostil puede anunciar los plugins que quiera, y cada fila cuesta
-/// varias cadenas enmascaradas. El tope acota el trabajo y el mensaje; lo que
-/// se deja fuera NO se calla, se dice en la propia vista.
-pub(crate) const MAX_EXTENSIONES: usize = 512;
+/// A hostile daemon can announce as many plugins as it likes, and each row
+/// costs several masked strings. The cap bounds the work and the message;
+/// what is left out is NOT kept silent, it is stated in the view itself.
+pub(crate) const MAX_EXTENSIONS: usize = 512;
 
-/// El gestor abierto.
-pub(crate) struct Extensiones {
-    /// Lo instalado, ya saneado. Vacío mientras el catálogo no llega.
-    filas: Vec<ExtensionRowView>,
-    /// Los directorios que no cargaron, ya saneados.
-    errores: Vec<ExtensionErrorView>,
-    /// Cuál está elegida.
+/// The open manager.
+pub(crate) struct Extensions {
+    /// What is installed, already sanitized. Empty while the catalogue has
+    /// not arrived.
+    rows: Vec<ExtensionRowView>,
+    /// The directories that failed to load, already sanitized.
+    errors: Vec<ExtensionErrorView>,
+    /// Which one is selected.
     cursor: usize,
-    /// El catálogo todavía no ha contestado.
-    cargando: bool,
-    /// La ficha abierta, si alguna.
-    ficha: Option<Ficha>,
-    /// El catálogo CRUDO tal como llegó, ya filtrado y acotado.
+    /// The catalogue has not answered yet.
+    loading: bool,
+    /// The open detail card, if any.
+    detail: Option<Detail>,
+    /// The RAW catalogue as it arrived, already filtered and capped.
     ///
-    /// Las filas de arriba son su proyección enmascarada, y de una máscara no
-    /// se vuelve: para preguntar «¿apruebas ESTAS capabilities?» hace falta
-    /// enmascarar cada una POR SEPARADO y saber cuál difiere, y eso solo se
-    /// puede hacer desde el texto original.
-    catalogo: Vec<PluginInfo>,
-    /// Los comandos de cada extensión, ya enmascarados, por id de extensión.
+    /// The rows above are its masked projection, and there is no going back
+    /// from a mask: asking "do you approve THESE capabilities?" requires
+    /// masking each one SEPARATELY and knowing which one differs, and that
+    /// can only be done from the original text.
+    catalog: Vec<PluginInfo>,
+    /// Each extension's commands, already masked, by extension id.
     ///
-    /// Aparte de la fila y no dentro: la fila cruza el puente en CADA
-    /// repintado del catálogo, y los títulos de los comandos solo hacen falta
-    /// cuando alguien abre una ficha. El enmascarado se hace una vez, aquí.
-    comandos: std::collections::HashMap<String, Vec<ExtensionCommandView>>,
-    /// La extensión cuya ficha se ha PEDIDO. Se guarda para descartar una
-    /// respuesta que llega cuando el lector ya se fue a otra fila: sin esto,
-    /// una ficha lenta aterrizaba encima de otra extensión.
-    pedida: Option<String>,
+    /// Kept apart from the row, not inside it: the row crosses the bridge on
+    /// EVERY catalogue repaint, and the commands' titles are only needed
+    /// when someone opens a detail card. The masking is done once, here.
+    commands: std::collections::HashMap<String, Vec<ExtensionCommandView>>,
+    /// The extension whose detail card has been REQUESTED. Kept to discard a
+    /// response that arrives after the reader has already moved to another
+    /// row: without this, a slow detail card would land on top of a
+    /// different extension.
+    requested: Option<String>,
 }
 
-impl Extensiones {
-    /// Abre el gestor vacío: el catálogo se pide y llega después.
-    pub(crate) fn abrir() -> Self {
+impl Extensions {
+    /// Opens the empty manager: the catalogue is requested and arrives
+    /// later.
+    pub(crate) fn open() -> Self {
         Self {
-            filas: Vec::new(),
-            errores: Vec::new(),
+            rows: Vec::new(),
+            errors: Vec::new(),
             cursor: 0,
-            cargando: true,
-            ficha: None,
-            catalogo: Vec::new(),
-            comandos: std::collections::HashMap::new(),
-            pedida: None,
+            loading: true,
+            detail: None,
+            catalog: Vec::new(),
+            commands: std::collections::HashMap::new(),
+            requested: None,
         }
     }
 
-    /// Mete el catálogo que contestó el daemon.
-    pub(crate) fn set_catalogo(&mut self, lista: &PluginListResult) {
-        self.cargando = false;
-        // Quién estaba elegida, por ID. Un cambio de estado REPIDE el
-        // catálogo entero, y el core lo ordena por categoría e id: aprobar
-        // una extensión puede moverla de sitio, y un cursor por posición
-        // dejaría al lector señalando otra distinta justo después de haberle
-        // concedido permisos a la primera.
-        let elegida = self.elegida().map(str::to_owned);
-        // Y una ROTA, por lo que se pinta de ella: se queda señalada aunque
-        // el catálogo de encima cambie de tamaño. Por posición, un catálogo
-        // con una cargada menos dejaba el cursor sobre otra fila, y la
-        // siguiente `e` encendía una extensión que nadie eligió.
-        let rota_elegida = self.rota_elegida().map(|r| (r.dir.clone(), r.hostile));
-        self.catalogo = lista
+    /// Feeds in the catalogue the daemon answered with.
+    pub(crate) fn set_catalog(&mut self, list: &PluginListResult) {
+        self.loading = false;
+        // Who was selected, by ID. A state change RE-REQUESTS the whole
+        // catalogue, and the core sorts it by category and id: approving
+        // an extension can move it elsewhere, and a cursor by position
+        // would leave the reader pointing at a different one right after
+        // granting permissions to the first.
+        let selected = self.chosen().map(str::to_owned);
+        // And a BROKEN one, by what is painted for it: it stays selected
+        // even if the catalogue above changes size. By position, a
+        // catalogue with one fewer loaded entry left the cursor on a
+        // different row, and the next `e` enabled an extension nobody chose.
+        let broken_selected = self.broken_chosen().map(|r| (r.dir.clone(), r.hostile));
+        self.catalog = list
             .plugins
             .iter()
             .filter(|p| norte_proto::methods::is_valid_plugin_id(&p.id))
-            .take(MAX_EXTENSIONES)
+            .take(MAX_EXTENSIONS)
             .cloned()
             .collect();
-        self.comandos = lista
+        self.commands = list
             .plugins
             .iter()
             .filter(|p| norte_proto::methods::is_valid_plugin_id(&p.id))
-            .take(MAX_EXTENSIONES)
-            .map(|p| (p.id.clone(), comandos_de(p)))
+            .take(MAX_EXTENSIONS)
+            .map(|p| (p.id.clone(), commands_of(p)))
             .collect();
-        self.filas = lista
+        self.rows = list
             .plugins
             .iter()
             .filter(|p| norte_proto::methods::is_valid_plugin_id(&p.id))
-            .take(MAX_EXTENSIONES)
-            .map(fila_de)
+            .take(MAX_EXTENSIONS)
+            .map(row_from)
             .collect();
-        self.errores = lista
+        self.errors = list
             .errors
             .iter()
-            .take(MAX_EXTENSIONES)
+            .take(MAX_EXTENSIONS)
             .map(|e| {
-                // Los BYTES si el peer los manda (#265), y solo entonces
-                // `display_name` puede hacer la conversión y MARCARLA. La
-                // cadena `dir` es el respaldo para un peer 0.52, que es donde
-                // sigue valiendo la heurística de abajo.
-                let (dir, enmascarado) = norte_frontend::display_name(
+                // The BYTES if the peer sends them (#265), and only then can
+                // `display_name` do the conversion and FLAG it. The `dir`
+                // string is the fallback for a 0.52 peer, which is where the
+                // heuristic below still applies.
+                let (dir, masked) = norte_frontend::display_name(
                     e.dir_bytes.as_deref().unwrap_or(e.dir.as_bytes()),
                 );
-                let (reason, reason_enmascarado) =
-                    norte_frontend::display_name(e.reason.as_bytes());
+                let (reason, reason_masked) = norte_frontend::display_name(e.reason.as_bytes());
                 ExtensionErrorView {
                     dir: clamp_display(dir),
-                    // O el U+FFFD ya estaba. El daemon manda `dir` como
-                    // `String` y lo produce con un `to_string_lossy` SIN
-                    // marcar, así que un directorio llamado `caf\xff` llega
-                    // aquí ya convertido: `display_name` no vuelve a
-                    // marcarlo —U+FFFD no es un peligro de terminal, es
-                    // Specials— y la fila decía ser fiel. Ver la trampa del
-                    // doble lossy: la bandera no se recupera, pero el
-                    // REEMPLAZO sí se ve, y verlo ya significa que lo
-                    // pintado difiere de lo que hay.
+                    // Or the U+FFFD was already there. The daemon sends `dir`
+                    // as a `String` and produces it with an UNFLAGGED
+                    // `to_string_lossy`, so a directory named `caf\xff`
+                    // arrives here already converted: `display_name` does
+                    // not flag it again — U+FFFD is not a terminal hazard, it
+                    // is Specials — and the row claimed to be faithful. See
+                    // the double-lossy trap: the flag is not recovered, but
+                    // the REPLACEMENT character IS visible, and seeing it
+                    // already means what is painted differs from what is
+                    // there.
                     //
-                    // Era media solución: `lossy_collapse_ff` y
-                    // `lossy_collapse_fe` colapsaban en la misma fila, y
-                    // distinguirlas pedía los bytes. Desde 0.53.0 el daemon
-                    // los manda (#265) y esta rama es solo el respaldo para
-                    // un peer viejo.
-                    // Con bytes, la bandera de `display_name` es la buena y
-                    // la heurística sobra —y sería un falso positivo sobre un
-                    // directorio que se llame `caf\u{FFFD}` de verdad—. Sin
-                    // ellos, sigue siendo lo único que hay.
-                    hostile: enmascarado || (e.dir_bytes.is_none() && dir_ya_convertido(&e.dir)),
-                    // El motivo lo escribe el core, pero puede CITAR el
-                    // manifiesto del plugin —y un `Path::display()`—, así que
-                    // entra por la misma puerta que el resto del texto de
-                    // tercero.
+                    // It used to be a half-solution: `lossy_collapse_ff` and
+                    // `lossy_collapse_fe` collapsed into the same row, and
+                    // telling them apart needed the bytes. Since 0.53.0 the
+                    // daemon sends them (#265) and this branch is only the
+                    // fallback for an old peer.
+                    // With bytes, `display_name`'s flag is the trustworthy
+                    // one and the heuristic is redundant — and would be a
+                    // false positive on a directory truly named
+                    // `caf\u{FFFD}`. Without them, it remains the only thing
+                    // there is.
+                    hostile: masked || (e.dir_bytes.is_none() && already_lossy_converted(&e.dir)),
+                    // The core writes the reason, but it can QUOTE the
+                    // plugin's manifest — and a `Path::display()` — so it
+                    // enters through the same door as the rest of the
+                    // third-party text.
                     reason: clamp_display(reason),
-                    reason_hostile: reason_enmascarado || dir_ya_convertido(&e.reason),
-                    id: norte_frontend::broken_plugin::uninstallable_id(e, &lista.plugins),
+                    reason_hostile: reason_masked || already_lossy_converted(&e.reason),
+                    id: norte_frontend::broken_plugin::uninstallable_id(e, &list.plugins),
                 }
             })
             .collect();
-        if let Some(i) = elegida.and_then(|id| self.filas.iter().position(|f| f.id == id)) {
+        if let Some(i) = selected.and_then(|id| self.rows.iter().position(|f| f.id == id)) {
             self.cursor = i;
-        } else if let Some(j) = rota_elegida.and_then(|(dir, hostil)| {
-            self.errores
+        } else if let Some(j) = broken_selected.and_then(|(dir, hostile)| {
+            self.errors
                 .iter()
-                .position(|e| e.dir == dir && e.hostile == hostil)
+                .position(|e| e.dir == dir && e.hostile == hostile)
         }) {
-            self.cursor = self.filas.len() + j;
+            self.cursor = self.rows.len() + j;
         } else {
-            // La que estaba elegida ya no está —o el catálogo llegó
-            // vacío, que es lo que pasa cuando la petición vence—: el
-            // cursor cae donde puede y la FICHA se cierra. Sin esto, el
-            // detalle seguía describiendo a una extensión mientras el
-            // cursor señalaba a otra, y la siguiente tecla se aplicaba a
-            // la señalada.
+            // The one that was selected is gone — or the catalogue arrived
+            // empty, which is what happens when the request times out: the
+            // cursor falls wherever it can and the DETAIL CARD closes.
+            // Without this, the detail kept describing one extension while
+            // the cursor pointed at another, and the next key press applied
+            // to the one pointed at.
             self.cursor = self.cursor.min(self.total().saturating_sub(1));
-            self.cerrar_ficha();
+            self.close_detail();
         }
     }
 
-    /// La fila elegida entera: lo que hace falta para gobernarla.
-    pub(crate) fn fila_elegida(&self) -> Option<&ExtensionRowView> {
-        self.filas.get(self.cursor)
+    /// The whole selected row: what is needed to govern it.
+    pub(crate) fn row_chosen(&self) -> Option<&ExtensionRowView> {
+        self.rows.get(self.cursor)
     }
 
-    /// Filas que recorre el cursor: las cargadas y, detrás, las que no.
+    /// Rows the cursor walks: the loaded ones and, behind them, the ones
+    /// that failed.
     fn total(&self) -> usize {
-        self.filas.len() + self.errores.len()
+        self.rows.len() + self.errors.len()
     }
 
-    /// La que NO cargó bajo el cursor, si el cursor está en una.
+    /// The one that did NOT load under the cursor, if the cursor is on one.
     ///
-    /// Van detrás de las cargadas, en el orden en que viajaron: la fila
-    /// `filas.len() + j` es `errores[j]`. Un cursor que solo recorría el
-    /// catálogo dejaba una extensión rota sin forma de pedir que se quitara.
-    pub(crate) fn rota_elegida(&self) -> Option<&ExtensionErrorView> {
+    /// They go behind the loaded ones, in the order they traveled: row
+    /// `rows.len() + j` is `errors[j]`. A cursor that only walked the
+    /// catalogue left a broken extension with no way to ask for its removal.
+    pub(crate) fn broken_chosen(&self) -> Option<&ExtensionErrorView> {
         self.cursor
-            .checked_sub(self.filas.len())
-            .and_then(|j| self.errores.get(j))
+            .checked_sub(self.rows.len())
+            .and_then(|j| self.errors.get(j))
     }
 
-    /// Qué fila está señalada. Cuenta las cargadas y, detrás, las rotas.
+    /// Which row is pointed to. Counts the loaded ones and, behind them, the
+    /// broken ones.
     pub(crate) fn cursor(&self) -> usize {
         self.cursor
     }
 
-    /// La que no cargó y se desinstala con este id, si la hay.
-    pub(crate) fn rota(&self, id: &str) -> Option<&ExtensionErrorView> {
-        self.errores.iter().find(|e| e.id.as_deref() == Some(id))
+    /// The one that failed to load and is uninstalled with this id, if any.
+    pub(crate) fn broken(&self, id: &str) -> Option<&ExtensionErrorView> {
+        self.errors.iter().find(|e| e.id.as_deref() == Some(id))
     }
 
-    /// El id de la fila `fila` —cargada o rota— tal como viajó. Una rota sin
-    /// id no nombra nada.
-    pub(crate) fn id_de_fila(&self, fila: usize) -> Option<&str> {
-        match fila.checked_sub(self.filas.len()) {
-            None => self.filas.get(fila).map(|f| f.id.as_str()),
-            Some(j) => self.errores.get(j).and_then(|e| e.id.as_deref()),
+    /// The id of row `row` — loaded or broken — as it traveled. A broken
+    /// one with no id names nothing.
+    pub(crate) fn row_id(&self, row: usize) -> Option<&str> {
+        match row.checked_sub(self.rows.len()) {
+            None => self.rows.get(row).map(|f| f.id.as_str()),
+            Some(j) => self.errors.get(j).and_then(|e| e.id.as_deref()),
         }
     }
 
-    /// El catálogo crudo, para dárselo a la ayuda: sus páginas de extensión
-    /// salen de la misma lista que estas filas.
-    pub(crate) fn catalogo(&self) -> &[PluginInfo] {
-        &self.catalogo
+    /// The raw catalogue, to hand to help: its extension pages come from the
+    /// same list as these rows.
+    pub(crate) fn catalog(&self) -> &[PluginInfo] {
+        &self.catalog
     }
 
-    /// Lo que hay que ENSEÑAR antes de conceder capabilities: el nombre de
-    /// la extensión y sus capabilities, cada una enmascarada por su cuenta y
-    /// con su propia bandera.
+    /// What must be SHOWN before granting capabilities: the extension's
+    /// name and its capabilities, each masked on its own and with its own
+    /// flag.
     ///
-    /// Una bandera para todo el bloque no sirve aquí: quien lee tiene que
-    /// saber CUÁL de las líneas se pinta distinta de lo que dice, y esa
-    /// línea es justo la que un manifiesto hostil escribe para que parezca
-    /// otra capability.
-    pub(crate) fn concesion(&self, id: &str) -> Option<Concesion> {
-        let p = self.catalogo.iter().find(|p| p.id == id)?;
-        Some(Concesion {
-            nombre: texto_de_tercero(&p.name),
-            capabilities: p.capabilities.iter().map(|c| texto_de_tercero(c)).collect(),
+    /// One flag for the whole block does not work here: the reader needs to
+    /// know WHICH of the lines paints differently from what it says, and
+    /// that line is exactly the one a hostile manifest writes to look like
+    /// another capability.
+    pub(crate) fn grant(&self, id: &str) -> Option<Grant> {
+        let p = self.catalog.iter().find(|p| p.id == id)?;
+        Some(Grant {
+            name: third_party_text(&p.name),
+            capabilities: p.capabilities.iter().map(|c| third_party_text(c)).collect(),
             digest: p.manifest_digest.clone(),
         })
     }
 
-    /// `true` si la ficha abierta es la de esta extensión.
-    pub(crate) fn es_ficha_de(&self, id: &str) -> bool {
-        self.ficha.as_ref().is_some_and(|f| f.id == id)
+    /// `true` if the open detail card belongs to this extension.
+    pub(crate) fn is_tab_of(&self, id: &str) -> bool {
+        self.detail.as_ref().is_some_and(|f| f.id == id)
     }
 
-    /// Los comandos de una extensión, ya enmascarados.
-    pub(crate) fn comandos_de_id(&self, id: &str) -> &[ExtensionCommandView] {
-        self.comandos.get(id).map_or(&[], Vec::as_slice)
+    /// An extension's commands, already masked.
+    pub(crate) fn id_commands(&self, id: &str) -> &[ExtensionCommandView] {
+        self.commands.get(id).map_or(&[], Vec::as_slice)
     }
 
-    /// La extensión elegida, si hay alguna.
-    pub(crate) fn elegida(&self) -> Option<&str> {
-        self.filas.get(self.cursor).map(|f| f.id.as_str())
+    /// The selected extension, if there is one.
+    pub(crate) fn chosen(&self) -> Option<&str> {
+        self.rows.get(self.cursor).map(|f| f.id.as_str())
     }
 
-    /// Mueve el cursor y TIRA la ficha: describe otra extensión.
+    /// Moves the cursor and DISCARDS the detail card: it now describes a
+    /// different extension.
     pub(crate) fn mover(&mut self, delta: i64) {
         let total = self.total();
         if total == 0 {
             return;
         }
-        let destino = i64::try_from(self.cursor)
+        let target = i64::try_from(self.cursor)
             .unwrap_or(0)
             .saturating_add(delta);
-        let nuevo = usize::try_from(destino.max(0)).unwrap_or(0).min(total - 1);
-        if nuevo != self.cursor {
-            self.cursor = nuevo;
-            self.cerrar_ficha();
+        let new_cursor = usize::try_from(target.max(0)).unwrap_or(0).min(total - 1);
+        if new_cursor != self.cursor {
+            self.cursor = new_cursor;
+            self.close_detail();
         }
     }
 
-    /// Pone el cursor en una fila concreta (un click). Fuera de rango no hace
-    /// nada: quien pinta puede ir un frame por detrás.
-    pub(crate) fn senalar(&mut self, fila: usize) {
-        if fila < self.total() && fila != self.cursor {
-            self.cursor = fila;
-            self.cerrar_ficha();
+    /// Points the cursor at a specific row (a click). Out of range does
+    /// nothing: the painter can be one frame behind.
+    pub(crate) fn point_at(&mut self, row: usize) {
+        if row < self.total() && row != self.cursor {
+            self.cursor = row;
+            self.close_detail();
         }
     }
 
-    /// Cierra la ficha y olvida lo pedido.
-    pub(crate) fn cerrar_ficha(&mut self) {
-        self.ficha = None;
-        self.pedida = None;
+    /// Closes the detail card and forgets what was requested.
+    pub(crate) fn close_detail(&mut self) {
+        self.detail = None;
+        self.requested = None;
     }
 
-    /// `true` si hay una ficha abierta que cerrar.
-    pub(crate) fn tiene_ficha(&self) -> bool {
-        self.ficha.is_some()
+    /// `true` if there is an open detail card to close.
+    pub(crate) fn has_detail(&self) -> bool {
+        self.detail.is_some()
     }
 
-    /// Reclama la ficha de la extensión elegida, si no está ya pedida.
-    pub(crate) fn reclamar_ficha(&mut self) -> Option<String> {
-        let id = self.elegida()?.to_owned();
-        if self.pedida.as_deref() == Some(id.as_str()) {
+    /// Claims the detail card of the selected extension, if not already
+    /// requested.
+    pub(crate) fn claim_detail(&mut self) -> Option<String> {
+        let id = self.chosen()?.to_owned();
+        if self.requested.as_deref() == Some(id.as_str()) {
             return None;
         }
-        self.pedida = Some(id.clone());
+        self.requested = Some(id.clone());
         Some(id)
     }
 
-    /// Instala la ficha que contestó el daemon.
+    /// Installs the detail card the daemon answered with.
     ///
-    /// Se descarta si el lector ya se fue a otra fila: una respuesta lenta no
-    /// puede describir una extensión distinta de la que está señalada.
-    pub(crate) fn set_ficha(&mut self, id: &str, res: &PluginGetConfigResult, lang: Lang) {
-        if self.pedida.as_deref() != Some(id) {
+    /// Discarded if the reader has already moved to another row: a slow
+    /// response cannot describe an extension other than the one selected.
+    pub(crate) fn set_detail(&mut self, id: &str, res: &PluginGetConfigResult, lang: Lang) {
+        if self.requested.as_deref() != Some(id) {
             return;
         }
-        // El EDITOR compartido es el modelo, no una lista proyectada: es
-        // quien sabe que un `bool` cicla, que un `int` se teclea y valida
-        // contra sus cotas, y que un `kind` que este build no conoce —un
-        // peer más nuevo— es de solo lectura en vez de un pánico.
-        self.ficha = Some(Ficha {
+        // The shared EDITOR is the model, not a projected list: it is the
+        // one that knows a `bool` cycles, an `int` is typed and validated
+        // against its bounds, and a `kind` this build does not know — a
+        // newer peer — is read-only instead of a panic.
+        self.detail = Some(Detail {
             id: id.to_owned(),
-            estado: PluginConfigState::new(sanitize_config_keys(&res.keys)),
-            comandos: self.comandos.get(id).cloned().unwrap_or_default(),
+            state: PluginConfigState::new(sanitize_config_keys(&res.keys)),
+            commands: self.commands.get(id).cloned().unwrap_or_default(),
             lang,
         });
     }
 
-    /// Mueve el cursor DENTRO de la ficha. `false` si no hay ficha —o si la
-    /// que hay no tiene claves que recorrer, y entonces las flechas son del
-    /// catálogo: una ficha sin nada que andar que se quedara las teclas
-    /// dejaría al lector sin poder moverse sin cerrarla primero.
-    pub(crate) fn mover_en_ficha(&mut self, delta: i64) -> bool {
-        let Some(f) = self.ficha.as_mut() else {
+    /// Moves the cursor INSIDE the detail card. `false` if there is no
+    /// detail card — or if the one there has no keys to walk, in which case
+    /// the arrows belong to the catalogue: a detail card with nothing to
+    /// walk that kept the keys would leave the reader unable to move
+    /// without closing it first.
+    pub(crate) fn move_in_card(&mut self, delta: i64) -> bool {
+        let Some(f) = self.detail.as_mut() else {
             return false;
         };
-        if f.estado.rows().is_empty() {
+        if f.state.rows().is_empty() {
             return false;
         }
-        // El modelo compartido mueve de uno en uno y clampa; una página son N
-        // pasos suyos, no un índice calculado aquí — que es cómo se acaba
-        // teniendo dos respuestas a dónde está el cursor.
-        let pasos = delta.unsigned_abs().min(f.estado.rows().len() as u64);
-        for _ in 0..pasos {
+        // The shared model moves one at a time and clamps; a page is N of
+        // its own steps, not an index computed here — which is how you end
+        // up with two answers for where the cursor is.
+        let steps = delta.unsigned_abs().min(f.state.rows().len() as u64);
+        for _ in 0..steps {
             if delta < 0 {
-                f.estado.up();
+                f.state.up();
             } else {
-                f.estado.down();
+                f.state.down();
             }
         }
         true
     }
 
-    /// `Enter` sobre la clave elegida: cicla un `bool`/`enum` —y entonces hay
-    /// algo que escribir— o abre el buffer de edición de un `string`/`int`.
+    /// `Enter` on the selected key: cycles a `bool`/`enum` — and then there
+    /// is something to write — or opens the edit buffer of a `string`/`int`.
     ///
-    /// Un `kind` desconocido no hace nada, que es la respuesta del modelo
-    /// compartido: editar a ciegas una forma que este build no entiende es
-    /// escribir en el `config.toml` de un plugin lo que a nadie le consta.
-    pub(crate) fn activar_clave(&mut self) -> Option<(String, PendingConfigWrite)> {
-        let f = self.ficha.as_mut()?;
-        let write = f.estado.activate()?;
+    /// An unknown `kind` does nothing, which is the shared model's answer:
+    /// blindly editing a shape this build does not understand is writing
+    /// into a plugin's `config.toml` something nobody can vouch for.
+    pub(crate) fn activate_key(&mut self) -> Option<(String, PendingConfigWrite)> {
+        let f = self.detail.as_mut()?;
+        let write = f.state.activate()?;
         Some((f.id.clone(), write))
     }
 
-    /// `true` si el buffer de edición de la ficha está abierto.
-    pub(crate) fn editando(&self) -> bool {
-        self.ficha.as_ref().is_some_and(|f| f.estado.is_editing())
+    /// `true` if the detail card's edit buffer is open.
+    pub(crate) fn editing(&self) -> bool {
+        self.detail.as_ref().is_some_and(|f| f.state.is_editing())
     }
 
-    /// Un carácter al buffer de edición.
-    pub(crate) fn escribir(&mut self, c: char) {
-        if let Some(f) = self.ficha.as_mut() {
-            f.estado.edit_push_char(c);
+    /// A character into the edit buffer.
+    pub(crate) fn write(&mut self, c: char) {
+        if let Some(f) = self.detail.as_mut() {
+            f.state.edit_push_char(c);
         }
     }
 
-    /// Borra el último carácter del buffer.
-    pub(crate) fn borrar(&mut self) {
-        if let Some(f) = self.ficha.as_mut() {
-            f.estado.edit_backspace();
+    /// Deletes the last character of the buffer.
+    pub(crate) fn delete(&mut self) {
+        if let Some(f) = self.detail.as_mut() {
+            f.state.edit_backspace();
         }
     }
 
-    /// Cierra el buffer SIN escribir.
-    pub(crate) fn cancelar_edicion(&mut self) {
-        if let Some(f) = self.ficha.as_mut() {
-            f.estado.edit_cancel();
+    /// Closes the buffer WITHOUT writing.
+    pub(crate) fn cancel_edit(&mut self) {
+        if let Some(f) = self.detail.as_mut() {
+            f.state.edit_cancel();
         }
     }
 
-    /// Confirma el buffer: el valor a escribir, o por qué no vale.
+    /// Commits the buffer: the value to write, or why it is not valid.
     ///
     /// # Errors
-    /// Lo que diga el modelo compartido: no parsea como entero, o parsea y se
-    /// sale de las cotas del esquema.
-    pub(crate) fn confirmar_edicion(
+    /// Whatever the shared model says: it does not parse as an integer, or
+    /// it parses and falls outside the schema's bounds.
+    pub(crate) fn confirm_edit(
         &mut self,
     ) -> Option<Result<(String, PendingConfigWrite), SettingsEditError>> {
-        let f = self.ficha.as_mut()?;
+        let f = self.detail.as_mut()?;
         let id = f.id.clone();
-        Some(f.estado.edit_commit().map(|w| (id, w)))
+        Some(f.state.edit_commit().map(|w| (id, w)))
     }
 
-    /// La proyección.
+    /// The projection.
     pub(crate) fn vista(&self) -> ExtensionsView {
         ExtensionsView {
-            rows: self.filas.clone(),
+            rows: self.rows.clone(),
             cursor: self.cursor as u64,
-            detail: self.ficha.as_ref().map(Ficha::vista),
-            loading: self.cargando,
-            errors: self.errores.clone(),
+            detail: self.detail.as_ref().map(Detail::view),
+            loading: self.loading,
+            errors: self.errors.clone(),
         }
     }
 }
 
-/// Una cadena de tercero lista para pintar y si difiere de lo que dice.
-pub(crate) type Texto = (String, bool);
+/// A third-party string ready to paint, and whether it differs from what it
+/// says.
+pub(crate) type Text = (String, bool);
 
-/// Lo que hay que ENSEÑAR antes de conceder capabilities.
-pub(crate) struct Concesion {
-    /// De quién son.
-    pub(crate) nombre: Texto,
-    /// Qué se concede, una por línea.
-    pub(crate) capabilities: Vec<Texto>,
-    /// El ancla del manifiesto que se ENSEÑÓ (#282), si el peer la manda.
+/// What must be SHOWN before granting capabilities.
+pub(crate) struct Grant {
+    /// Whose they are.
+    pub(crate) name: Text,
+    /// What is granted, one per line.
+    pub(crate) capabilities: Vec<Text>,
+    /// The manifest anchor that was SHOWN (#282), if the peer sends it.
     ///
-    /// La comparación de capabilities que hace `conceder` cubre lo que se
-    /// PINTA; ésta cubre lo que se CONCEDE, que es más: `category` y
-    /// `contributions` —cuándo y cómo se dispara la extensión— entran en el
-    /// ancla y no en la lista. Y la comparación local solo ve cambios dentro
-    /// de este cliente: el `plugin.toml` que cambia bajo el core lo caza el
-    /// core, con esto.
+    /// The capability comparison `grant` does covers what is PAINTED;
+    /// this one covers what is GRANTED, which is more: `category` and
+    /// `contributions` — when and how the extension fires — go into the
+    /// anchor and not into the list. And the local comparison only sees
+    /// changes within this client: the `plugin.toml` that changes under the
+    /// core is caught by the core, with this.
     pub(crate) digest: Option<String>,
 }
 
-/// La ficha abierta: QUIÉN, su editor de `[config]` y qué comandos aporta.
+/// The open detail card: WHO, its `[config]` editor and what commands it
+/// contributes.
 ///
-/// El editor es `norte_frontend::plugin_config::PluginConfigState`, el mismo
-/// que mueve el gestor del TUI. Aquí no se decide qué cicla ni qué se teclea:
-/// eso tendría dos respuestas en cuanto una de las dos superficies cambiara.
-struct Ficha {
-    /// De quién es la ficha.
+/// The editor is `norte_frontend::plugin_config::PluginConfigState`, the
+/// same one that drives the TUI's manager. What cycles and what is typed is
+/// not decided here: that would have two answers as soon as either of the
+/// two surfaces changed.
+struct Detail {
+    /// Whose detail card it is.
     id: String,
-    /// El editor compartido sobre sus claves.
-    estado: PluginConfigState,
-    /// Sus comandos, ya enmascarados.
-    comandos: Vec<ExtensionCommandView>,
-    /// Con qué idioma se compuso el dominio de cada clave.
+    /// The shared editor over its keys.
+    state: PluginConfigState,
+    /// Its commands, already masked.
+    commands: Vec<ExtensionCommandView>,
+    /// Which language each key's domain was composed in.
     lang: Lang,
 }
 
-impl Ficha {
-    /// La proyección de la ficha.
-    fn vista(&self) -> ExtensionDetailView {
+impl Detail {
+    /// The detail card's projection.
+    fn view(&self) -> ExtensionDetailView {
         ExtensionDetailView {
             id: self.id.clone(),
             config: self
-                .estado
+                .state
                 .rows()
                 .iter()
                 .map(|k| {
-                    let domain = dominio(k, self.lang);
+                    let domain = domain_of(k, self.lang);
                     ExtensionConfigRowView {
                         key: clamp_display(k.key.clone()),
                         kind: clamp_display(k.kind.clone()),
-                        // Del lado de PINTAR, nunca del operando: `k.value`
-                        // es lo que un editor escribiría de vuelta.
+                        // On the PAINT side, never the operand: `k.value` is
+                        // what an editor would write back.
                         value: clamp_display(k.display.value.clone()),
                         default: clamp_display(k.display.default.clone()),
                         description: clamp_display(k.description.clone()),
                         domain: clamp_display(domain),
                         hostile: k.display.hostile,
-                        // Lo dice el MISMO conjunto cerrado que el modelo
-                        // compartido sabe editar. Sin esto, la pantalla
-                        // ofrece `Enter` sobre una clave que no va a cambiar
-                        // y el lector concluye que la escritura falló.
+                        // It is decided by the SAME closed set the shared
+                        // model knows how to edit. Without this, the screen
+                        // offers `Enter` on a key that is not going to
+                        // change and the reader concludes the write failed.
                         editable: k.is_editable(),
                     }
                 })
                 .collect(),
-            commands: self.comandos.clone(),
-            cursor: self.estado.cursor() as u64,
-            editing: self.estado.edit_buffer().map(|b| {
-                // El buffer se pinta SANEADO —lo teclea un humano, pero el
-                // valor de partida lo escribió el plugin— y el operando
-                // sigue crudo dentro del modelo compartido.
+            commands: self.commands.clone(),
+            cursor: self.state.cursor() as u64,
+            editing: self.state.edit_buffer().map(|b| {
+                // The buffer is painted SANITIZED — a human types it, but the
+                // starting value was written by the plugin — and the operand
+                // stays raw inside the shared model.
                 clamp_display(norte_frontend::display_name(b.as_bytes()).0)
             }),
             editing_hostile: self
-                .estado
+                .state
                 .edit_buffer()
                 .is_some_and(|b| norte_frontend::display_name(b.as_bytes()).1),
         }
     }
 }
 
-/// Los comandos de una extensión, ya enmascarados.
+/// An extension's commands, already masked.
 ///
-/// El `id` de un comando NO se enmascara y NO se recorta: es la clave de
-/// despacho que vuelve al daemon, y el manifiesto no le valida charset — por
-/// eso NO se pinta nunca. Lo que se pinta es el título.
-fn comandos_de(p: &PluginInfo) -> Vec<ExtensionCommandView> {
+/// A command's `id` is NOT masked and NOT clamped: it is the dispatch key
+/// that goes back to the daemon, and the manifest does not validate its
+/// charset — that is why it is NEVER painted. What is painted is the title.
+fn commands_of(p: &PluginInfo) -> Vec<ExtensionCommandView> {
     p.commands
         .iter()
         .map(|c| {
@@ -521,12 +535,11 @@ fn comandos_de(p: &PluginInfo) -> Vec<ExtensionCommandView> {
         .collect()
 }
 
-/// Qué acota una clave: los valores de un `enum`, las cotas de un `int`, o
-/// nada.
-fn dominio(k: &norte_frontend::plugin_config::ConfigKeyRow, lang: Lang) -> String {
+/// What bounds a key: an `enum`'s values, an `int`'s bounds, or nothing.
+fn domain_of(k: &norte_frontend::plugin_config::ConfigKeyRow, lang: Lang) -> String {
     if !k.display.values.is_empty() {
-        // Los ENMASCARADOS: un valor de `enum` es texto que escribe el
-        // plugin, y este `·` es una composición en banda.
+        // The MASKED ones: an `enum` value is text the plugin writes, and
+        // this `·` is an in-band composition.
         return k.display.values.join(" · ");
     }
     match (k.min, k.max) {
@@ -545,27 +558,27 @@ fn dominio(k: &norte_frontend::plugin_config::ConfigKeyRow, lang: Lang) -> Strin
     }
 }
 
-/// Una fila del catálogo, saneada.
-fn fila_de(p: &norte_proto::methods::PluginInfo) -> ExtensionRowView {
-    let nombre = plugin_label(&p.name);
+/// A catalogue row, sanitized.
+fn row_from(p: &norte_proto::methods::PluginInfo) -> ExtensionRowView {
+    let name = plugin_label(&p.name);
     ExtensionRowView {
-        // El id NO se enmascara y NO se recorta: es una clave validada
-        // (reverse-DNS), y las dos cosas la romperían — enmascarar no es
-        // inyectivo y recortar tampoco.
+        // The id is NOT masked and NOT clamped: it is a validated key
+        // (reverse-DNS), and either operation would break it — masking is
+        // not injective and neither is clamping.
         id: p.id.clone(),
-        name: clamp_display(if norte_help::is_blank_id(&nombre) {
-            // Un `name` de rellenos invisibles es un manifiesto legal cuya
-            // fila se pinta en blanco: se cae al id, que es lo único que el
-            // host asigna.
+        name: clamp_display(if norte_help::is_blank_id(&name) {
+            // A `name` made of invisible filler is a legal manifest whose
+            // row paints blank: it falls back to the id, the only thing the
+            // host assigns.
             plugin_label(&p.id)
         } else {
-            nombre
+            name
         }),
         publisher: clamp_display(plugin_label(&p.publisher)),
         version: clamp_display(plugin_label(&p.version)),
-        // La categoría es vocabulario del CORE (`previewer`, `indexer`…), no
-        // texto libre del manifiesto: aun así entra por la misma puerta,
-        // porque quien la manda es el daemon y no este proceso.
+        // The category is CORE vocabulary (`previewer`, `indexer`…), not
+        // free text from the manifest: it still enters through the same
+        // door, because it is the daemon that sends it, not this process.
         category: clamp_display(plugin_label(&p.category)),
         description: clamp_display(
             p.description
@@ -586,23 +599,23 @@ fn fila_de(p: &norte_proto::methods::PluginInfo) -> ExtensionRowView {
     }
 }
 
-/// Una cadena que escribió un TERCERO, lista para pintar: enmascarada,
-/// acotada, y con la bandera de si lo pintado difiere de lo que dice.
+/// A string a THIRD PARTY wrote, ready to paint: masked, clamped, and with
+/// the flag for whether what is painted differs from what it says.
 ///
-/// Es `plugin_label` con su bandera —la misma función, no una copia— más el
-/// recorte de pantalla de este host. Donde la decisión ES la cadena (aprobar
-/// una capability), la bandera es parte de la pregunta.
-pub(crate) fn texto_de_tercero(raw: &str) -> (String, bool) {
-    let (pintable, hostil) = plugin_label_flagged(raw);
-    (clamp_display(pintable), hostil)
+/// It is `plugin_label` with its flag — the same function, not a copy —
+/// plus this host's screen clamping. Where the decision IS the string
+/// (approving a capability), the flag is part of the question.
+pub(crate) fn third_party_text(raw: &str) -> (String, bool) {
+    let (paintable, hostile) = plugin_label_flagged(raw);
+    (clamp_display(paintable), hostile)
 }
 
-/// La cadena ya trae el reemplazo de una conversión con pérdida que hizo
-/// OTRO.
+/// The string already carries the replacement from a lossy conversion
+/// SOMEONE ELSE did.
 ///
-/// norte no escribe U+FFFD nunca salvo como máscara, así que encontrarlo en
-/// algo que todavía no ha pasado por la máscara significa que alguien aguas
-/// arriba convirtió bytes que no eran UTF-8 y no lo dijo.
-fn dir_ya_convertido(s: &str) -> bool {
+/// norte never writes U+FFFD except as a mask, so finding it in something
+/// that has not gone through the mask yet means someone upstream converted
+/// bytes that were not UTF-8 and did not say so.
+fn already_lossy_converted(s: &str) -> bool {
     s.contains('\u{fffd}')
 }

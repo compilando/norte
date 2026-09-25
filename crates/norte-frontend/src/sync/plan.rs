@@ -1,8 +1,8 @@
-//! El plan y lo que se puede prometer sobre él.
+//! The plan, and what can be promised about it.
 //!
-//! Aquí viven la integridad (¿lo que se enseña es TODO lo que se va a hacer?),
-//! el pronóstico de deshacer, y las cuatro fases por las que pasa una
-//! sincronización desde que se pide hasta que termina.
+//! This is where integrity lives (is what is shown ALL of what is going to
+//! happen?), the undo forecast, and the four phases a synchronization goes
+//! through from the moment it is requested until it finishes.
 
 use norte_i18n::{Lang, t_in, ta_in};
 use norte_proto::TaskId;
@@ -108,13 +108,13 @@ impl UndoOutlook {
     /// };
     /// assert_eq!(UndoOutlook::of_report(&base), UndoOutlook::Full);
     ///
-    /// // Sin unidad de journal no hay nada que deshacer, diga lo que diga la
-    /// // papelera del destino.
-    /// let sin_lote = SyncReportResult { batch_id: None, ..base.clone() };
-    /// assert_eq!(UndoOutlook::of_report(&sin_lote), UndoOutlook::Nothing);
+    /// // With no journal unit there is nothing to undo, whatever the
+    /// // destination's trash says.
+    /// let no_batch = SyncReportResult { batch_id: None, ..base.clone() };
+    /// assert_eq!(UndoOutlook::of_report(&no_batch), UndoOutlook::Nothing);
     ///
-    /// let sin_papelera = SyncReportResult { dest_trash: DestTrash::Absent, ..base };
-    /// assert_eq!(UndoOutlook::of_report(&sin_papelera), UndoOutlook::Nothing);
+    /// let no_trash = SyncReportResult { dest_trash: DestTrash::Absent, ..base };
+    /// assert_eq!(UndoOutlook::of_report(&no_trash), UndoOutlook::Nothing);
     /// ```
     #[must_use]
     pub fn of_report(report: &norte_proto::methods::SyncReportResult) -> Self {
@@ -391,11 +391,10 @@ pub struct SyncPlan {
     pub(super) selected: Option<u64>,
     /// Steps counted but not retained ([`PLAN_STEPS_RETAINED_MAX`], #196).
     pub(super) dropped: u64,
-    /// La primera fila VISIBLE de la lista de pasos, PEGAJOSA (#210): se
-    /// arrastra solo cuando el cursor se sale — ver
-    /// [`crate::viewport::sticky_offset`]. Un plan tiene cientos de miles de
-    /// pasos, así que es la lista donde más se nota que el cursor viva clavado
-    /// en la última fila.
+    /// The first VISIBLE row of the step list, STICKY (#210): it drags only
+    /// when the cursor goes off it — see [`crate::viewport::sticky_offset`].
+    /// A plan has hundreds of thousands of steps, so this is the list where a
+    /// cursor pinned to the last row shows the most.
     pub(super) viewport_offset: usize,
 }
 
@@ -412,8 +411,8 @@ impl SyncPlan {
         &self.done.counts
     }
 
-    /// Deja la ventana de la lista de pasos lista para pintar `rows` filas
-    /// (#210): se arrastra solo cuando el cursor se sale.
+    /// Leaves the step list's viewport ready to paint `rows` rows (#210): it
+    /// drags only when the cursor goes off it.
     pub fn reconcile_viewport(&mut self, rows: usize) {
         let cursor = self
             .selected
@@ -423,7 +422,7 @@ impl SyncPlan {
             crate::viewport::sticky_offset(self.viewport_offset, cursor, self.steps.len(), rows);
     }
 
-    /// La primera fila visible de la lista de pasos — ver
+    /// The first visible row of the step list — see
     /// [`Self::reconcile_viewport`].
     #[must_use]
     pub fn viewport_offset(&self) -> usize {

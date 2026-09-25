@@ -1,6 +1,6 @@
-//! Tests del panel de tasks (fase 5): snapshots vivos desde el watch del
-//! `TaskHandle`, detección de terminales y cancelación — sin terminal,
-//! con el `Engine` real sobre `MemProvider`.
+//! Tests of the tasks panel (phase 5): live snapshots from the
+//! `TaskHandle`'s watch, terminal detection and cancellation — no terminal,
+//! with the real `Engine` over `MemProvider`.
 
 use std::sync::Arc;
 
@@ -13,7 +13,7 @@ use norte_tui::tasks::TaskBoard;
 use norte_vfs::Provider;
 
 fn vp(wire: &str) -> VPath {
-    VPath::parse(wire).expect("wire válido")
+    VPath::parse(wire).expect("valid wire")
 }
 
 async fn write_file(mem: &MemProvider, wire: &str, content: &[u8]) {
@@ -30,9 +30,9 @@ fn backend_mem() -> (Backend, Arc<MemProvider>) {
 }
 
 #[tokio::test]
-async fn el_board_ve_terminar_una_task() {
+async fn the_board_sees_a_task_finish() {
     let (backend, mem) = backend_mem();
-    write_file(&mem, "mem:///a", b"datos").await;
+    write_file(&mem, "mem:///a", b"data").await;
     let mut board = TaskBoard::default();
     let task = backend
         .copy(&vp("mem:///a"), &vp("mem:///b"), TransferOptions::default())
@@ -41,25 +41,25 @@ async fn el_board_ve_terminar_una_task() {
     board.push(&task, None);
     assert_eq!(board.rows().len(), 1);
 
-    // La task termina; el tick la detecta como terminal UNA sola vez.
-    let mut terminales = Vec::new();
+    // The task finishes; the tick detects it as terminal EXACTLY once.
+    let mut terminals = Vec::new();
     for _ in 0..200 {
-        // El reloj del pintado: aquí no se mide ritmo, así que cero vale.
-        terminales.extend(board.tick(0));
-        if !terminales.is_empty() {
+        // The paint clock: no pacing is measured here, so zero is fine.
+        terminals.extend(board.tick(0));
+        if !terminals.is_empty() {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     }
-    assert_eq!(terminales.len(), 1, "exactamente un evento terminal");
-    assert_eq!(terminales[0].state, TaskState::Completed);
-    assert!(board.tick(0).is_empty(), "no se re-emite");
+    assert_eq!(terminals.len(), 1, "exactly one terminal event");
+    assert_eq!(terminals[0].state, TaskState::Completed);
+    assert!(board.tick(0).is_empty(), "not re-emitted");
 }
 
 #[tokio::test]
-async fn cancelar_la_ultima_en_marcha() {
+async fn cancel_the_last_running_one() {
     let (backend, mem) = backend_mem();
-    write_file(&mem, "mem:///a", b"datos").await;
+    write_file(&mem, "mem:///a", b"data").await;
     mem.faults()
         .set_latency_per_op(Some(std::time::Duration::from_millis(20)));
     let mut board = TaskBoard::default();
@@ -68,18 +68,18 @@ async fn cancelar_la_ultima_en_marcha() {
         .await
         .unwrap();
     board.push(&task, None);
-    assert!(board.cancel_last_running(), "había una en marcha");
+    assert!(board.cancel_last_running(), "one was running");
 
-    let mut terminales = Vec::new();
+    let mut terminals = Vec::new();
     for _ in 0..200 {
-        // El reloj del pintado: aquí no se mide ritmo, así que cero vale.
-        terminales.extend(board.tick(0));
-        if !terminales.is_empty() {
+        // The paint clock: no pacing is measured here, so zero is fine.
+        terminals.extend(board.tick(0));
+        if !terminals.is_empty() {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     }
     mem.faults().clear();
-    assert_eq!(terminales[0].state, TaskState::Cancelled);
-    assert!(!board.cancel_last_running(), "ya no queda nada en marcha");
+    assert_eq!(terminals[0].state, TaskState::Cancelled);
+    assert!(!board.cancel_last_running(), "nothing left running");
 }

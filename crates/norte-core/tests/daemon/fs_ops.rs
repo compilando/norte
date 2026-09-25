@@ -1,7 +1,7 @@
 use super::*;
 
 #[tokio::test]
-async fn fs_stat_devuelve_solo_lo_pedido_y_anunciado() {
+async fn fs_stat_returns_only_what_was_asked_and_advertised() {
     let d = spawn_daemon_attrs().await;
     write_file(&d.mem, "mem:///f.txt", b"hola").await;
     let c = connected_client(&d).await;
@@ -10,7 +10,7 @@ async fn fs_stat_devuelve_solo_lo_pedido_y_anunciado() {
             methods::FS_STAT,
             &FsStatParams {
                 path: vp("mem:///f.txt"),
-                attrs: vec!["mem.mode".into(), "zz.desconocido".into()],
+                attrs: vec!["mem.mode".into(), "zz.unknown".into()],
             },
         )
         .await
@@ -20,22 +20,22 @@ async fn fs_stat_devuelve_solo_lo_pedido_y_anunciado() {
             r.entry.attrs.get("mem.mode"),
             Some(norte_proto::AttrValue::Uint(_))
         ),
-        "mem.mode materializado: {:?}",
+        "mem.mode materialized: {:?}",
         r.entry.attrs
     );
-    // Id válido pero no anunciado: AUSENTE, jamás error.
-    assert!(!r.entry.attrs.contains_key("zz.desconocido"));
+    // Valid but unadvertised id: ABSENT, never an error.
+    assert!(!r.entry.attrs.contains_key("zz.unknown"));
     assert_eq!(r.entry.attrs.len(), 1);
 }
 
 #[tokio::test]
-async fn call_tracked_reporta_el_id_asignado() {
+async fn call_tracked_reports_the_assigned_id() {
     let d = spawn_daemon(None).await;
     let client = connected_client(&d).await;
     let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u64>::new()));
     let s = std::sync::Arc::clone(&seen);
-    // fs.stat de un path inexistente: da igual el desenlace (Err), lo que se
-    // comprueba es que on_id se invocó exactamente una vez con un id > 0.
+    // fs.stat of a nonexistent path: the outcome (Err) does not matter, what
+    // is checked is that on_id was invoked exactly once with an id > 0.
     let _res: Result<norte_proto::methods::FsStatResult, _> = client
         .call_tracked(
             norte_proto::methods::FS_STAT,
@@ -47,13 +47,13 @@ async fn call_tracked_reporta_el_id_asignado() {
         )
         .await;
     let seen = seen.lock().expect("lock");
-    assert_eq!(seen.len(), 1, "on_id se invoca exactamente una vez");
-    assert!(seen[0] > 0, "id asignado > 0");
+    assert_eq!(seen.len(), 1, "on_id is invoked exactly once");
+    assert!(seen[0] > 0, "assigned id > 0");
 }
 
-// ---------- paginación de fs.list (ADR 0017) ----------
+// ---------- fs.list pagination (ADR 0017) ----------
 
-/// Una página de `fs.list` con `limit`/`cursor`.
+/// A page of `fs.list` with `limit`/`cursor`.
 pub(super) async fn list_page(
     c: &Client,
     path: &str,
@@ -79,47 +79,48 @@ pub(super) async fn seed(mem: &MemProvider, n: usize) {
     }
 }
 
-/// Paginar por cursor devuelve EXACTAMENTE las mismas entradas que el listado
-/// completo, sin duplicar ni perder.
+/// Paginating by cursor returns EXACTLY the same entries as the complete
+/// listing, with no duplicates and none lost.
 #[tokio::test]
-async fn fs_list_paginado_concatena_igual_que_completo() {
+async fn fs_list_paginated_concatenates_the_same_as_complete() {
     let d = spawn_daemon(None).await;
     seed(&d.mem, 5).await;
     let c = connected_client(&d).await;
 
-    let completo = list_page(&c, "mem:///", None, None).await;
-    assert_eq!(completo.entries.len(), 5);
+    let complete = list_page(&c, "mem:///", None, None).await;
+    assert_eq!(complete.entries.len(), 5);
     assert!(
-        completo.next_cursor.is_none(),
-        "sin cursor = listado completo"
+        complete.next_cursor.is_none(),
+        "no cursor = complete listing"
     );
 
-    // Páginas de 2.
-    let mut acumulado = Vec::new();
+    // Pages of 2.
+    let mut accumulated = Vec::new();
     let mut cursor = None;
     loop {
         let page = list_page(&c, "mem:///", Some(2), cursor).await;
-        assert!(page.entries.len() <= 2, "respeta el limit");
-        acumulado.extend(page.entries);
+        assert!(page.entries.len() <= 2, "respects the limit");
+        accumulated.extend(page.entries);
         match page.next_cursor {
             Some(cur) => cursor = Some(cur),
             None => break,
         }
     }
-    // Mismo conjunto de paths (el orden del provider puede variar).
-    let mut a: Vec<_> = acumulado.iter().map(|e| e.path.clone()).collect();
-    let mut b: Vec<_> = completo.entries.iter().map(|e| e.path.clone()).collect();
+    // Same set of paths (the provider's order can vary).
+    let mut a: Vec<_> = accumulated.iter().map(|e| e.path.clone()).collect();
+    let mut b: Vec<_> = complete.entries.iter().map(|e| e.path.clone()).collect();
     a.sort();
     b.sort();
-    assert_eq!(a, b, "paginado == completo");
+    assert_eq!(a, b, "paginated == complete");
 }
 
-/// #93: `skipped` (omitidas del contenedor) viaja en el result de `fs.list` y
-/// se REPITE en cada página (el cliente puede engancharse en cualquiera). Con
-/// un provider normal (sin omitidas) el campo va ausente (`None`).
+/// #93: `skipped` (omitted from the container) travels in `fs.list`'s result
+/// and is REPEATED on every page (the client can latch onto any of them).
+/// With a normal provider (nothing omitted) the field comes back absent
+/// (`None`).
 #[tokio::test]
-async fn fs_list_skipped_viaja_en_todas_las_paginas() {
-    // Daemon con un MemProvider que simula un contenedor con 7 omitidas.
+async fn fs_list_skipped_travels_on_every_page() {
+    // A daemon with a MemProvider that simulates a container with 7 omitted.
     let dir = tempfile::tempdir().expect("tempdir");
     let socket = dir.path().join("d.sock");
     let engine = Arc::new(Engine::new());
@@ -147,25 +148,26 @@ async fn fs_list_skipped_viaja_en_todas_las_paginas() {
     seed(&d.mem, 5).await;
     let c = connected_client(&d).await;
 
-    // Listado completo (sin cursor): lo lleva.
-    let completo = list_page(&c, "mem:///", None, None).await;
-    assert_eq!(completo.skipped, Some(7));
+    // Complete listing (no cursor): it carries it.
+    let complete = list_page(&c, "mem:///", None, None).await;
+    assert_eq!(complete.skipped, Some(7));
 
-    // Paginado: TODAS las páginas lo repiten (primera, intermedias y última).
+    // Paginated: EVERY page repeats it (first, middle and last).
     let mut cursor = None;
-    let mut paginas = 0;
+    let mut pages = 0;
     loop {
         let page = list_page(&c, "mem:///", Some(2), cursor).await;
-        assert_eq!(page.skipped, Some(7), "página {paginas}");
-        paginas += 1;
+        assert_eq!(page.skipped, Some(7), "page {pages}");
+        pages += 1;
         match page.next_cursor {
             Some(cur) => cursor = Some(cur),
             None => break,
         }
     }
-    assert!(paginas >= 3, "hubo continuaciones de verdad");
+    assert!(pages >= 3, "there really were continuations");
 
-    // Provider sin omitidas (spawn normal): el campo va ausente.
+    // Provider with nothing omitted (normal spawn): the field comes back
+    // absent.
     let d2 = spawn_daemon(None).await;
     seed(&d2.mem, 1).await;
     let c2 = connected_client(&d2).await;
@@ -173,7 +175,7 @@ async fn fs_list_skipped_viaja_en_todas_las_paginas() {
 }
 
 #[tokio::test]
-async fn fs_stat_de_inexistente_viaja_como_taxonomia_en_data() {
+async fn fs_stat_of_nonexistent_travels_as_taxonomy_in_data() {
     let d = spawn_daemon(None).await;
     let c = connected_client(&d).await;
     let err = c
@@ -185,21 +187,21 @@ async fn fs_stat_de_inexistente_viaja_como_taxonomia_en_data() {
             },
         )
         .await
-        .expect_err("no existe");
+        .expect_err("does not exist");
     match err {
         ClientError::Rpc(rpc) => {
             assert_eq!(rpc.code, codes::APP_ERROR);
             assert_eq!(rpc.data, Some(norte_proto::Error::NotFound));
         }
-        other => panic!("esperaba Rpc con data, fue {other:?}"),
+        other => panic!("expected Rpc with data, got {other:?}"),
     }
 }
 
-/// H1 (encoding review #108-b2): los valores HOSTILES cruzan el socket de
-/// verdad — `Bytes` no-UTF-8 byte-exacto tras `encode(bytes_b64)+decode`, y
-/// `Text` con RTL override/ZWJ char-exacto tras el cinturón de emisión.
+/// H1 (encoding review #108-b2): HOSTILE values cross the real socket —
+/// non-UTF-8 `Bytes`, byte-exact after `encode(bytes_b64)+decode`, and `Text`
+/// with an RTL override/ZWJ, char-exact after the emission belt.
 #[tokio::test]
-async fn attrs_hostiles_cruzan_el_socket_byte_exactos() {
+async fn hostile_attrs_cross_the_socket_byte_exact() {
     let d = spawn_daemon_attrs().await;
     write_file(&d.mem, "mem:///f.txt", b"x").await;
     let c = connected_client(&d).await;
@@ -218,13 +220,13 @@ async fn attrs_hostiles_cruzan_el_socket_byte_exactos() {
         Some(&norte_proto::AttrValue::Bytes(
             b"due\xf1o-\xff\xfe".to_vec()
         )),
-        "bytes crudos byte-exactos tras el wire"
+        "raw bytes byte-exact after the wire"
     );
     assert_eq!(
         r.entry.attrs.get("mem.note"),
         Some(&norte_proto::AttrValue::Text(
             "\u{202e}atón\u{202c} a\u{200d}b".to_owned()
         )),
-        "texto hostil char-exacto tras el wire"
+        "hostile text char-exact after the wire"
     );
 }

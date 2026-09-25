@@ -1,6 +1,6 @@
 [package]
 name = "norte-proto"
-description = "Tipos del protocolo norte (serde): wire format, versionado, sin lógica"
+description = "norte protocol types (serde): wire format, versioning, no logic"
 license = "MIT OR Apache-2.0"
 version.workspace = true
 edition.workspace = true
@@ -16,15 +16,15 @@ bitflags.workspace = true
 # (`norte-core` uses it for `fs.read`); MIT OR Apache-2.0, no transitive deps.
 base64.workspace = true
 serde.workspace = true
-# El framing de los digests del protocolo (ADR 0051, #174): `hashing::feed` es
-# la primitiva que `norte-sync` usa para el `plan_hash` y contra la que
-# `norte-core` fija su propia copia —congelada por el formato del journal— con
-# un test de igualdad. Vivía duplicada en dos crates; el sitio que los dos ven
-# es éste. RustCrypto, MIT OR Apache-2.0, sin dependencias transitivas fuera de
-# su familia, y ya estaba en el árbol (norte-core, norte-sync, norte-index).
+# The protocol digests' framing (ADR 0051, #174): `hashing::feed` is the
+# primitive `norte-sync` uses for `plan_hash` and the one `norte-core` pins its
+# own copy against — frozen by the journal's format — with an equality test.
+# It lived duplicated across two crates; this is the place both see. RustCrypto,
+# MIT OR Apache-2.0, no transitive dependencies outside its family, and it was
+# already in the tree (norte-core, norte-sync, norte-index).
 sha2.workspace = true
-# El encoding JSON del protocolo (envelope ADR 0011): Value en params/result
-# y el framing NDJSON. Ya estaba en el árbol como dev-dep de todo el workspace.
+# The protocol's JSON encoding (envelope ADR 0011): Value in params/result and
+# the NDJSON framing. Already in the tree as a dev-dep of the whole workspace.
 serde_json.workspace = true
 thiserror.workspace = true
 # JSON Schema generation for docs/schema/proto.schema.json (ADR 0038, spec §11).

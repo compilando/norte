@@ -96,30 +96,31 @@ pub fn check_config(layers: &Layers, env: &impl Fn(&str) -> Option<OsString>) ->
     findings
 }
 
-/// `[ui] layout`: el fichero nombrado tiene que existir y describir un árbol
-/// coherente.
+/// `[ui] layout`: the named file has to exist and describe a coherent
+/// tree.
 ///
-/// Es `Warn` y no `Error` por la misma razón por la que el arranque no muere:
-/// un layout que no carga cae a `orthodox`, así que norte sigue siendo usable
-/// — pero en silencio el usuario habría creído que su disposición se aplicó.
+/// It is `Warn` and not `Error` for the same reason startup does not die:
+/// a layout that fails to load falls back to `orthodox`, so norte remains
+/// usable — but silently the user would have believed their layout was
+/// applied.
 #[must_use]
 pub fn check_layout(layers: &Layers) -> Vec<Finding> {
     let Ok(cfg) = norte_config::load(layers) else {
-        return Vec::new(); // el parse ya lo reporta check_config
+        return Vec::new(); // the parse is already reported by check_config
     };
-    let Some(nombre) = cfg.ui_layout.as_deref() else {
+    let Some(name) = cfg.ui_layout.as_deref() else {
         return Vec::new();
     };
-    if nombre == "orthodox" {
+    if name == "orthodox" {
         return vec![Finding {
             section: "layout",
             severity: Severity::Ok,
             code: "layout-builtin",
-            detail: nombre.to_owned(),
+            detail: name.to_owned(),
         }];
     }
-    // El layout es del USUARIO: un layout de sistema o de proyecto podría
-    // repartir la pantalla de alguien que no lo escribió.
+    // The layout is the USER's: a system or project layout could carve up
+    // the screen of someone who did not write it.
     let Some((dir, _)) = layers
         .dirs
         .iter()
@@ -127,31 +128,31 @@ pub fn check_layout(layers: &Layers) -> Vec<Finding> {
     else {
         return Vec::new();
     };
-    match norte_frontend::layout::config::load(dir, std::ffi::OsStr::new(nombre)) {
+    match norte_frontend::layout::config::load(dir, std::ffi::OsStr::new(name)) {
         Ok(_) => vec![Finding {
             section: "layout",
             severity: Severity::Ok,
             code: "layout-ok",
-            detail: nombre.to_owned(),
+            detail: name.to_owned(),
         }],
         Err(e) => vec![Finding {
             section: "layout",
             severity: Severity::Warn,
             code: "layout-unusable",
-            detail: format!("{nombre}: {e} (se arrancará con «orthodox»)"),
+            detail: format!("{name}: {e} (will start with «orthodox»)"),
         }],
     }
 }
 
-/// `[ui.columns]` (#108 b4): ids que no parsean = Warn (se saltan al
-/// pintar — «un id configurado que desaparece en silencio es un bug, no
-/// una degradación», spec de columnas §Diagnostics). Los `plugin:` y los
-/// `attr:` se pintan ambos por el funnel (#117 y su follow-up): sus
-/// diagnósticos restantes son los caps y la legalidad wire de los attrs.
+/// `[ui.columns]` (#108 b4): ids that fail to parse = Warn (skipped while
+/// painting — "a configured id that disappears silently is a bug, not a
+/// degradation", the columns spec's §Diagnostics). Both `plugin:` and
+/// `attr:` cells are now painted by the funnel (#117 and its follow-up):
+/// their remaining diagnostics are the caps and the attrs' wire legality.
 #[must_use]
 pub fn check_columns(layers: &Layers) -> Vec<Finding> {
     let Ok(cfg) = norte_config::load(layers) else {
-        return Vec::new(); // el parse ya lo reporta check_config
+        return Vec::new(); // the parse is already reported by check_config
     };
     let st = norte_frontend::columns::ColumnsSettings::resolve(&cfg.ui_columns);
     let mut findings = Vec::new();
@@ -161,67 +162,68 @@ pub fn check_columns(layers: &Layers) -> Vec<Finding> {
             severity: Severity::Warn,
             code: "columns-bad-id",
             detail: format!(
-                "[ui.columns] id no reconocido (se salta al pintar): {}",
+                "[ui.columns] unrecognized id (skipped while painting): {}",
                 sanitize_detail(raw)
             ),
         });
     }
-    // #117-follow-up: las celdas `plugin:` ya se pintan — `columns-no-
-    // renderer` se retira; el único diagnóstico que les queda es el cap
-    // (espejo de `columns-attrs-over-cap`).
+    // #117-follow-up: `plugin:` cells are already painted — `columns-no-
+    // renderer` is retired; the only diagnostic left for them is the cap
+    // (mirroring `columns-attrs-over-cap`).
     for raw in &st.plugins_over_cap {
         findings.push(Finding {
             section: "config",
             severity: Severity::Warn,
             code: "columns-plugins-over-cap",
             detail: format!(
-                "[ui.columns] columna de plugin por encima del cap de {} por lista (ni se pinta ni se pide): {}",
+                "[ui.columns] plugin column above the cap of {} per list (neither painted nor requested): {}",
                 norte_frontend::columns::PLUGIN_COLUMNS_MAX_REQUEST,
                 sanitize_detail(raw)
             ),
         });
     }
-    // #117: un `attr:` por encima del cap de petición por lista — el funnel
-    // no lo pinta ni lo pide (pintado == pedido), así que doctor es quien
-    // lo cuenta.
+    // #117: an `attr:` above the per-list request cap — the funnel
+    // neither paints it nor requests it (painted == requested), so doctor
+    // is the one that counts it.
     for raw in &st.attrs_over_cap {
         findings.push(Finding {
             section: "config",
             severity: Severity::Warn,
             code: "columns-attrs-over-cap",
             detail: format!(
-                "[ui.columns] attr por encima del cap de {} por lista (ni se pinta ni se pide): {}",
+                "[ui.columns] attr above the cap of {} per list (neither painted nor requested): {}",
                 norte_proto::attrs::ATTRS_MAX_REQUEST,
                 sanitize_detail(raw)
             ),
         });
     }
-    // #117 encoding-audit M1: un `attr:` que parsea como columna pero cuyo
-    // id no es legal en el wire (`is_valid_attr_id`: minúsculas con
-    // namespace) — el funnel lo salta y el pane no lo pide (pedido a un
-    // daemon sería -32602 y tumbaría el fs.list entero): doctor lo nombra
-    // porque el id "parece" bien y nada más lo cuenta.
+    // #117 encoding-audit M1: an `attr:` that parses as a column but whose
+    // id is not wire-legal (`is_valid_attr_id`: lowercase with a
+    // namespace) — the funnel skips it and the pane does not request it
+    // (requesting it from a daemon would be -32602 and would bring down
+    // the whole fs.list): doctor names it because the id "looks" fine and
+    // nothing else counts it.
     for raw in &st.attrs_not_wire_safe {
         findings.push(Finding {
             section: "config",
             severity: Severity::Warn,
             code: "columns-attr-id-not-wire-safe",
             detail: format!(
-                "[ui.columns] attr que parsea pero no es un id legal del wire (minúsculas con namespace, p. ej. posix.mode — la columna se salta): {}",
+                "[ui.columns] attr that parses but is not a wire-legal id (lowercase with a namespace, e.g. posix.mode — the column is skipped): {}",
                 sanitize_detail(raw)
             ),
         });
     }
-    // #108 7b: un `[[ui.columns.spec]]` con id imposible o con un formato
-    // que no casa con su columna (p. ej. `iec` en mtime) — se aplicó el
-    // default al pintar, jamás un drop mudo.
+    // #108 7b: a `[[ui.columns.spec]]` with an impossible id or a format
+    // that does not match its column (e.g. `iec` on mtime) — the default
+    // was applied while painting, never a silent drop.
     for raw in &st.bad_specs {
         findings.push(Finding {
             section: "config",
             severity: Severity::Warn,
             code: "columns-bad-spec",
             detail: format!(
-                "[ui.columns.spec] id imposible o formato que no casa con su columna (se aplica el default al pintar): {}",
+                "[ui.columns.spec] impossible id or a format that does not match its column (the default is applied while painting): {}",
                 sanitize_detail(raw)
             ),
         });
@@ -229,10 +231,10 @@ pub fn check_columns(layers: &Layers) -> Vec<Finding> {
     findings
 }
 
-/// Un id de columna —o un `run` de keymap— viene de un TOML del usuario pero
-/// puede llegar por copy-paste hostil: enmascarado + tope, jamás crudo en la
-/// salida. El tope de 64 chars es holgado para ambos: el nombre de comando
-/// más largo del catálogo compartido no llega a 24.
+/// A column id — or a keymap `run` — comes from a user's TOML but can
+/// arrive via a hostile copy-paste: masked + capped, never raw in the
+/// output. The 64-char cap is generous for both: the shared catalog's
+/// longest command name does not reach 24.
 fn sanitize_detail(raw: &str) -> String {
     let masked = norte_frontend::display_name(raw.as_bytes()).0;
     masked.chars().take(64).collect()
@@ -716,21 +718,22 @@ fn masked_and_capped(value: &str) -> String {
     truncated
 }
 
-/// El estado del log local (roadmap ítem 9): dónde está, cuánto ocupa, y si se
-/// puede escribir en él.
+/// The local log's state (roadmap item 9): where it is, how much space it
+/// takes, and whether it can be written to.
 ///
-/// **Es la fila que convierte «hay logs» en «alguien que no seas tú puede
-/// reportar un fallo».** `doctor` es donde un usuario mira cuando algo va mal, y
-/// hasta ahora no había forma de que supiera que el fichero existe ni dónde.
+/// **It is the row that turns "there are logs" into "someone other than
+/// you can report a failure".** `doctor` is where a user looks when
+/// something goes wrong, and until now there was no way for them to know
+/// the file exists, or where.
 ///
-/// Ninguno de sus estados es [`Severity::Error`], a propósito: una máquina sin
-/// directorio de estado, o con uno que no se deja escribir, FUNCIONA — solo no
-/// deja rastro. Un `Error` haría que `norte doctor` saliera distinto de cero
-/// (decisión 4) por algo que no rompe nada, y eso entrena a ignorar su código
-/// de salida.
+/// None of its states is [`Severity::Error`], on purpose: a machine with
+/// no state directory, or one that cannot be written to, WORKS — it just
+/// leaves no trace. An `Error` would make `norte doctor` exit non-zero
+/// (decision 4) for something that breaks nothing, and that trains people
+/// to ignore its exit code.
 ///
-/// `dir` es lo que resuelva [`norte_core::logging::log_dir`]; `None` = no hay
-/// directorio de estado en esta máquina.
+/// `dir` is whatever [`norte_core::logging::log_dir`] resolves; `None` =
+/// no state directory on this machine.
 #[must_use]
 pub fn check_logs(dir: Option<&Path>) -> Vec<Finding> {
     let Some(dir) = dir else {
@@ -741,30 +744,33 @@ pub fn check_logs(dir: Option<&Path>) -> Vec<Finding> {
             detail: String::new(),
         }];
     };
-    // Escribible se comprueba INTENTÁNDOLO, no leyendo permisos: los permisos
-    // no cuentan ACLs, ni un montaje de solo lectura, ni SELinux. Se crea y se
-    // borra, que es exactamente lo que hará el appender.
+    // Writability is checked by TRYING IT, not by reading permissions:
+    // permissions do not account for ACLs, a read-only mount, or SELinux.
+    // It is created and deleted, which is exactly what the appender will
+    // do.
     //
-    // **`create_new`, jamás `fs::write`.** `write` es `O_TRUNC` y SIGUE
-    // symlinks: con un enlace plantado en el nombre de la sonda —fijo y
-    // predecible, así que no hay carrera que ganar— un `norte doctor` truncaba
-    // a cero lo que apuntara, y el `remove_file` de después borraba el ENLACE y
-    // no el destino, así que el fichero se quedaba vacío y la prueba
-    // desaparecía. `O_EXCL` se niega a seguir un enlace y se niega a pisar algo
-    // que ya exista, que es exactamente lo que hace falta aquí.
-    let sonda = dir.join(format!(".norte-doctor-probe.{}", std::process::id()));
-    let escribible = std::fs::create_dir_all(dir).is_ok()
+    // **`create_new`, never `fs::write`.** `write` is `O_TRUNC` and DOES
+    // follow symlinks: with a link planted at the probe's name — fixed
+    // and predictable, so there is no race to win — a `norte doctor`
+    // would truncate to zero whatever it pointed at, and the
+    // `remove_file` afterward would delete the LINK and not the target,
+    // so the file would end up empty and the evidence would vanish.
+    // `O_EXCL` refuses to follow a link and refuses to overwrite
+    // something that already exists, which is exactly what is needed
+    // here.
+    let probe = dir.join(format!(".norte-doctor-probe.{}", std::process::id()));
+    let writable = std::fs::create_dir_all(dir).is_ok()
         && std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
-            .open(&sonda)
+            .open(&probe)
             .is_ok();
-    // Un borrado que falle no se reporta: acaba de demostrarse que el
-    // directorio se deja escribir, así que el único resto posible es uno por
-    // pid, y el `create_new` de la próxima vez lo detectaría como no-escribible
-    // en vez de pisarlo — que es el lado seguro del error.
-    let _ = std::fs::remove_file(&sonda);
-    if !escribible {
+    // A failed delete is not reported: it has just been proven that the
+    // directory can be written to, so the only possible leftover is one
+    // per pid, and the next `create_new` would detect it as unwritable
+    // instead of overwriting it — which is the safe side of the error.
+    let _ = std::fs::remove_file(&probe);
+    if !writable {
         return vec![Finding {
             section: "logs",
             severity: Severity::Warn,
@@ -799,7 +805,7 @@ pub fn check_logs(dir: Option<&Path>) -> Vec<Finding> {
 /// single [`Severity::Error`] `connections-parse`. Per connection:
 /// [`ConnectionSpec::endpoint`][ep] parsing is [`Severity::Error`] on
 /// failure (its `Display` never echoes a password — `spec.rs`'s own
-/// `password_inline_en_url_rechazado_sin_eco`/`scheme_invalido_con_password_inline_no_eco`
+/// `inline_password_in_url_rejected_without_echo`/`an_invalid_scheme_with_an_inline_password_is_not_echoed`
 /// tests pin that); `Agent`/`Key` auth need no secret and are
 /// [`Severity::Ok`]; `Password`/`AccessKey` (secret-bearing, decision 2) are
 /// checked for [`norte_connect::env_key`]'s var via `env`, which has FOUR
@@ -849,11 +855,12 @@ pub fn check_connections(
             detail: String::new(),
         });
     } else {
-        // El parser de conexiones acepta cualquier scheme (un provider plugin
-        // sirve el que declara, ADR 0093), así que `sfpt://` ya no muere al
-        // parsear: se contesta al conectar con un `Unsupported` pelado. Aquí
-        // están el fichero y el catálogo uno al lado del otro, que es el
-        // único sitio donde se puede decir «nadie sirve ese scheme».
+        // The connections parser accepts any scheme (a provider plugin
+        // serves whatever it declares, ADR 0093), so `sfpt://` no longer
+        // dies while parsing: connecting answers with a bare
+        // `Unsupported`. Here the file and the catalog sit side by side,
+        // which is the only place that can say "nobody serves that
+        // scheme".
         let plugin_schemes = norte_core::plugins::installed_provider_schemes(config_dir);
         for (name, spec) in &file.connections {
             match spec.endpoint() {
@@ -883,13 +890,14 @@ pub fn check_connections(
                 }
             }
             match spec.auth {
-                // #325: `secret = "prompt"` solo hace algo con `password` y
-                // `access-key`. Con `agent` no hay secreto que pedir, y con
-                // `key` el secreto es la PASSPHRASE de la clave, donde vacío y
-                // ausente son lo mismo — preguntar ahí sacaría un diálogo cada
-                // vez que alguien usa una clave sin cifrar. Que la clave no
-                // haga nada es defendible; que no lo diga NADIE es la misma
-                // clase de mentira silenciosa que #320 vino a quitar.
+                // #325: `secret = "prompt"` only does something with
+                // `password` and `access-key`. With `agent` there is no
+                // secret to ask for, and with `key` the secret is the
+                // key's PASSPHRASE, where empty and absent are the same
+                // thing — asking there would pop a dialog every time
+                // someone uses an unencrypted key. That the key does
+                // nothing is defensible; that NOBODY says so is the same
+                // kind of silent lie #320 came to remove.
                 AuthMethod::Agent | AuthMethod::Key => {
                     if spec.secret == norte_connect::SecretSource::Prompt {
                         findings.push(Finding {
@@ -909,7 +917,7 @@ pub fn check_connections(
                     // inspected inside this expression and dropped there — an
                     // `OsString` cannot be zeroized, so it must not outlive the
                     // question being asked of it.
-                    let estado = env(&var).map(|v| {
+                    let state = env(&var).map(|v| {
                         if v.is_empty() {
                             (Severity::Error, "conn-secret-env-empty")
                         } else if v.to_str().is_none() {
@@ -922,7 +930,7 @@ pub fn check_connections(
                             (Severity::Ok, "conn-secret-env-present")
                         }
                     });
-                    if let Some((severity, code)) = estado {
+                    if let Some((severity, code)) = state {
                         findings.push(Finding {
                             section: "connections",
                             severity,
@@ -930,11 +938,11 @@ pub fn check_connections(
                             detail: format!("{name}: {var}"),
                         });
                     } else if spec.secret == norte_connect::SecretSource::Prompt {
-                        // #325: la entrada dice `prompt`, así que la ausencia
-                        // está PREVISTA — norte la pedirá. Avisar aquí sería
-                        // el mismo tipo de mentira que #320 vino a quitar,
-                        // solo que del otro signo: un Warn sobre la única
-                        // configuración que no tiene nada roto.
+                        // #325: the entry says `prompt`, so the absence is
+                        // EXPECTED — norte will ask for it. Warning here
+                        // would be the same kind of lie #320 came to
+                        // remove, only the other way around: a Warn about
+                        // the one configuration with nothing broken.
                         findings.push(Finding {
                             section: "connections",
                             severity: Severity::Ok,
@@ -956,18 +964,18 @@ pub fn check_connections(
     findings
 }
 
-/// ADR 0150: `allow_rsa` es un riesgo aceptado, no una preferencia, así que se
-/// recuerda mientras esté puesto. Solo actúa en sftp con `auth = "key"`; en
-/// otra parte no hace nada, y eso también se dice (como #325).
+/// ADR 0150: `allow_rsa` is an accepted risk, not a preference, so it is
+/// recalled while it stays set. It only acts on sftp with `auth = "key"`;
+/// elsewhere it does nothing, and that is also said (like #325).
 fn rsa_finding(name: &str, spec: &ConnectionSpec, scheme: &str) -> Option<Finding> {
     if !spec.allow_rsa {
         return None;
     }
-    let actua = scheme == "sftp" && spec.auth == AuthMethod::Key;
+    let acts = scheme == "sftp" && spec.auth == AuthMethod::Key;
     Some(Finding {
         section: "connections",
         severity: Severity::Warn,
-        code: if actua {
+        code: if acts {
             "conn-rsa-allowed"
         } else {
             "conn-rsa-allowed-inert"
@@ -979,12 +987,12 @@ fn rsa_finding(name: &str, spec: &ConnectionSpec, scheme: &str) -> Option<Findin
 #[cfg(test)]
 mod tests {
 
-    /// #108 b4: un id roto = Warn nombrado (jamás drop silencioso).
-    /// #117-follow-up: los `plugin:` YA se pintan (como los `attr:` desde
-    /// #117) — `columns-no-renderer` está RETIRADO y no dispara para nadie;
-    /// solo les queda el diagnóstico del cap.
+    /// #108 b4: a broken id = a named Warn (never a silent drop).
+    /// #117-follow-up: `plugin:` cells are ALREADY painted (like `attr:`
+    /// since #117) — `columns-no-renderer` is RETIRED and fires for
+    /// nobody; only the cap diagnostic is left for them.
     #[test]
-    fn columns_ids_rotos_se_reportan_y_no_renderer_esta_retirado() {
+    fn broken_columns_ids_are_reported_and_no_renderer_is_retired() {
         let dir = tempfile::tempdir().expect("tmp");
         std::fs::write(
             dir.path().join("norte.toml"),
@@ -1002,15 +1010,15 @@ mod tests {
         );
         assert!(
             !f.iter().any(|x| x.code == "columns-no-renderer"),
-            "columns-no-renderer retirado — plugin: se pinta: {f:?}"
+            "columns-no-renderer retired — plugin: is painted: {f:?}"
         );
     }
 
-    /// #117-follow-up: la columna de plugin 9.ª de una lista supera el cap
-    /// de petición — ni se pinta ni se pide, y doctor la nombra
-    /// (`columns-plugins-over-cap`, espejo del cap de attrs).
+    /// #117-follow-up: a list's 9th plugin column exceeds the request cap
+    /// — neither painted nor requested, and doctor names it
+    /// (`columns-plugins-over-cap`, mirroring the attrs cap).
     #[test]
-    fn columns_plugins_sobre_el_cap_se_reportan() {
+    fn columns_plugins_over_the_cap_are_reported() {
         let dir = tempfile::tempdir().expect("tmp");
         let cols: Vec<String> = (0..9).map(|i| format!("\"plugin:p/c{i}\"")).collect();
         std::fs::write(
@@ -1030,10 +1038,11 @@ mod tests {
         );
     }
 
-    /// #117: el attr 17.º de una lista supera el cap de petición — ni se
-    /// pinta ni se pide, y doctor lo nombra (`columns-attrs-over-cap`).
+    /// #117: a list's 17th attr exceeds the request cap — neither
+    /// painted nor requested, and doctor names it
+    /// (`columns-attrs-over-cap`).
     #[test]
-    fn columns_attrs_sobre_el_cap_se_reportan() {
+    fn columns_attrs_over_the_cap_are_reported() {
         let dir = tempfile::tempdir().expect("tmp");
         let attrs: Vec<String> = (0..17).map(|i| format!("\"attr:mem.a{i:02}\"")).collect();
         std::fs::write(
@@ -1052,12 +1061,12 @@ mod tests {
         );
     }
 
-    /// #117 encoding-audit M1: un `attr:` que parsea pero no es un id
-    /// legal del wire (typo de caja) — la columna se salta y doctor lo
-    /// nombra (`columns-attr-id-not-wire-safe`); sin esto sería invisible
-    /// (el id parsea bien y nada más lo cuenta).
+    /// #117 encoding-audit M1: an `attr:` that parses but is not a
+    /// wire-legal id (a case typo) — the column is skipped and doctor
+    /// names it (`columns-attr-id-not-wire-safe`); without this it would
+    /// be invisible (the id parses fine and nothing else counts it).
     #[test]
-    fn columns_attr_id_no_wire_safe_se_reporta() {
+    fn columns_attr_id_not_wire_safe_is_reported() {
         let dir = tempfile::tempdir().expect("tmp");
         std::fs::write(
             dir.path().join("norte.toml"),
@@ -1074,7 +1083,7 @@ mod tests {
                     && x.detail.contains("Posix.Mode")),
             "{f:?}"
         );
-        // El bien formado no dispara nada.
+        // The well-formed one triggers nothing.
         assert!(
             !f.iter().any(|x| x.code == "columns-attr-id-not-wire-safe"
                 && x.detail.contains("attr:posix.mode")),
@@ -1082,11 +1091,11 @@ mod tests {
         );
     }
 
-    /// #108 7b: un spec cuyo formato no casa con su columna (`iec` en un
-    /// timestamp) = Warn `columns-bad-spec` nombrando el id — el render
-    /// aplica el default en silencio, así que doctor es quien lo cuenta.
+    /// #108 7b: a spec whose format does not match its column (`iec` on a
+    /// timestamp) = Warn `columns-bad-spec` naming the id — the renderer
+    /// applies the default silently, so doctor is the one that counts it.
     #[test]
-    fn columns_spec_que_no_casa_se_reporta() {
+    fn a_mismatched_columns_spec_is_reported() {
         let dir = tempfile::tempdir().expect("tmp");
         std::fs::write(
             dir.path().join("norte.toml"),
@@ -1123,7 +1132,7 @@ mod tests {
     /// happens to already be clean — a defense-in-depth boundary must hold
     /// on its own, not just because nothing hostile reaches it today.
     #[test]
-    fn masked_and_capped_enmascara_hazards_y_recorta_largos() {
+    fn masked_and_capped_masks_hazards_and_trims_long_ones() {
         let hostile = format!("safe{}rest", '\u{1b}');
         let out = masked_and_capped(&hostile);
         assert!(!out.contains('\u{1b}'), "{out}");
@@ -1140,7 +1149,7 @@ mod tests {
     /// TDD: valid layers → every finding is `Ok`; a broken `norte.toml` in
     /// one layer → an `Error` finding carrying the culprit path.
     #[test]
-    fn config_ok_y_toml_roto() {
+    fn config_ok_and_broken_toml() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("norte.toml"), "[ui]\ntheme = \"nord\"\n").unwrap();
         let layers = Layers {
@@ -1153,10 +1162,10 @@ mod tests {
             "{findings:?}"
         );
 
-        let roto = tempfile::tempdir().unwrap();
-        std::fs::write(roto.path().join("norte.toml"), "esto no es toml [[[").unwrap();
+        let broken = tempfile::tempdir().unwrap();
+        std::fs::write(broken.path().join("norte.toml"), "this is not toml [[[").unwrap();
         let layers = Layers {
-            dirs: vec![(roto.path().to_path_buf(), Layer::User)],
+            dirs: vec![(broken.path().to_path_buf(), Layer::User)],
         };
         let findings = check_config(&layers, &env(&[]));
         let err = findings
@@ -1166,7 +1175,7 @@ mod tests {
         assert_eq!(err.code, "config-parse");
         assert!(
             err.detail
-                .contains(&roto.path().join("norte.toml").display().to_string()),
+                .contains(&broken.path().join("norte.toml").display().to_string()),
             "detail must name the culprit path: {}",
             err.detail
         );
@@ -1176,7 +1185,7 @@ mod tests {
     /// via `XDG_CONFIG_HOME` once the override is omitted) that ALSO has a
     /// `norte.toml` → a `Warn` split-brain finding.
     #[test]
-    fn split_brain_avisa() {
+    fn split_brain_warns() {
         let legacy_xdg = tempfile::tempdir().unwrap();
         let legacy_norte_dir = legacy_xdg.path().join("norte");
         std::fs::create_dir_all(&legacy_norte_dir).unwrap();
@@ -1226,7 +1235,7 @@ mod tests {
     /// one (`home` from orthodox's `[pane]` vs. a layer's `home g`) is an
     /// `AmbiguousPrefix` — structural, `Error`, naming both sequences.
     #[test]
-    fn keymap_prefijo_ambiguo_es_error() {
+    fn keymap_ambiguous_prefix_is_error() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("keymap.toml"),
@@ -1249,7 +1258,7 @@ mod tests {
     /// TDD (decision 1): a layer binding to a `run` name no bundled preset
     /// recognizes for that screen is a `Warn`, not an `Error`.
     #[test]
-    fn keymap_comando_desconocido_es_aviso() {
+    fn keymap_unknown_command_is_a_warning() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("keymap.toml"),
@@ -1279,7 +1288,7 @@ mod tests {
     /// the real one; `"app.quit\u{1B}]0;x\u{7}"` sets the terminal title.
     /// `--json` is no refuge: `serde_json` escapes C0 but not U+202E.
     #[test]
-    fn keymap_run_hostil_sale_enmascarado_jamas_crudo() {
+    fn a_hostile_keymap_run_comes_out_masked_never_raw() {
         for h in norte_testkit::corpus::hostile_runs() {
             let dir = tempfile::tempdir().unwrap();
             // TOML basic string: escape the hazards the way an attacker would
@@ -1306,7 +1315,7 @@ mod tests {
             for f in check_keymaps(&layers) {
                 assert!(
                     !f.detail.chars().any(norte_encoding::is_terminal_hazard),
-                    "{}: {} salió crudo — {}",
+                    "{}: {} came out raw — {}",
                     h.id,
                     f.detail.escape_debug(),
                     h.why
@@ -1323,7 +1332,7 @@ mod tests {
     /// `keymap-too-many-unknown-commands`; that code and its escalation are
     /// gone, and this test guards that they stay gone.
     #[test]
-    fn keymap_lua_charset_invalido_es_un_solo_error_estructural() {
+    fn keymap_invalid_lua_charset_is_a_single_structural_error() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("keymap.toml"),
@@ -1376,7 +1385,7 @@ fs-read = "scoped"
     /// TDD: a discovered plugin with a valid manifest but no `plugin.wasm`
     /// on disk → `Ok` for the plugin itself, `Warn` `plugin-no-binary`.
     #[test]
-    fn plugins_manifest_valido_sin_wasm_es_aviso() {
+    fn plugins_valid_manifest_without_wasm_is_a_warning() {
         let dir = tempfile::tempdir().unwrap();
         write_plugin(dir.path(), "org.norte.demo", DEMO_MANIFEST);
 
@@ -1413,7 +1422,7 @@ fs-read = "scoped"
                     .any(|l| l == "wasm32-wasip2")
             });
         if !installed {
-            eprintln!("SKIP: target wasm32-wasip2 no instalado");
+            eprintln!("SKIP: target wasm32-wasip2 not installed");
             return None;
         }
         let guest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1434,10 +1443,10 @@ fs-read = "scoped"
             ])
             .arg(&target_dir)
             .status()
-            .expect("cargo build del guest");
-        assert!(status.success(), "previewer-demo no compiló");
+            .expect("cargo build of the guest");
+        assert!(status.success(), "previewer-demo did not compile");
         let wasm = target_dir.join("wasm32-wasip2/release/previewer_demo.wasm");
-        Some(std::fs::read(wasm).expect("lee el guest"))
+        Some(std::fs::read(wasm).expect("reads the guest"))
     }
 
     /// A plugin whose binary was built against another WIT is its own
@@ -1446,11 +1455,11 @@ fs-read = "scoped"
     /// edit (ADR 0094). Made by rewriting `@0.10.0` to `@0.70.0` in the bytes
     /// of the real demo guest (same length, sections stay valid).
     #[test]
-    fn un_plugin_de_otro_wit_es_un_hallazgo_propio() {
+    fn a_plugin_from_another_wit_is_its_own_finding() {
         let Some(bytes) = demo_guest_bytes() else {
             return;
         };
-        let viejo: Vec<u8> = {
+        let old: Vec<u8> = {
             let mut out = bytes.clone();
             let (from, to) = (b"@0.10.0", b"@0.70.0");
             let mut i = 0;
@@ -1466,7 +1475,7 @@ fs-read = "scoped"
         };
         let dir = tempfile::tempdir().unwrap();
         write_plugin(dir.path(), "org.norte.demo", DEMO_MANIFEST);
-        std::fs::write(dir.path().join("plugins/org.norte.demo/plugin.wasm"), viejo).unwrap();
+        std::fs::write(dir.path().join("plugins/org.norte.demo/plugin.wasm"), old).unwrap();
 
         let findings = check_plugins(dir.path());
         let f = findings
@@ -1479,11 +1488,11 @@ fs-read = "scoped"
         assert!(f.detail.contains("@0.10.0"), "{}", f.detail);
         assert!(
             !findings.iter().any(|f| f.code == "plugin-manifest-broken"),
-            "no es un manifiesto roto: {findings:?}"
+            "not a broken manifest: {findings:?}"
         );
         assert!(
             !findings.iter().any(|f| f.code == "plugin-ok"),
-            "no se carga: {findings:?}"
+            "does not load: {findings:?}"
         );
     }
 
@@ -1491,10 +1500,10 @@ fs-read = "scoped"
     /// finding, WITHOUT stopping the valid plugin from also being reported
     /// (mirrors `PluginRegistry::list`'s own best-effort contract).
     #[test]
-    fn plugins_manifest_roto_es_error() {
+    fn plugins_broken_manifest_is_error() {
         let dir = tempfile::tempdir().unwrap();
         write_plugin(dir.path(), "org.norte.demo", DEMO_MANIFEST);
-        write_plugin(dir.path(), "roto", "esto no es toml [ valido =");
+        write_plugin(dir.path(), "broken", "this is not valid toml [ =");
 
         let findings = check_plugins(dir.path());
         assert!(
@@ -1506,7 +1515,7 @@ fs-read = "scoped"
             .find(|f| f.code == "plugin-manifest-broken")
             .unwrap_or_else(|| panic!("expected a manifest-broken finding: {findings:?}"));
         assert_eq!(err.severity, Severity::Error);
-        assert!(err.detail.contains("roto"), "{}", err.detail);
+        assert!(err.detail.contains("broken"), "{}", err.detail);
     }
 
     /// TDD: `plugins-state.toml` says `approved = true` with a `digest` that
@@ -1515,7 +1524,7 @@ fs-read = "scoped"
     /// must surface that gap as `plugin-digest-stale`, not silently agree
     /// with the (now stale) raw flag.
     #[test]
-    fn plugins_digest_obsoleto_es_aviso() {
+    fn plugins_stale_digest_is_a_warning() {
         let dir = tempfile::tempdir().unwrap();
         write_plugin(dir.path(), "org.norte.demo", DEMO_MANIFEST);
         std::fs::write(
@@ -1566,7 +1575,7 @@ max = 10
     /// `config.toml` on disk → one `Severity::Ok` `plugin-config` finding
     /// PER KEY, showing the DEFAULT (`key=value`, id-prefixed).
     #[test]
-    fn plugins_config_sin_fichero_muestra_los_defaults() {
+    fn plugins_config_without_a_file_shows_the_defaults() {
         let dir = tempfile::tempdir().unwrap();
         write_plugin(dir.path(), "org.norte.cfg", CONFIG_MANIFEST);
 
@@ -1594,7 +1603,7 @@ max = 10
     /// A valid override in `config.toml` is reflected in the finding's
     /// value, not the schema default.
     #[test]
-    fn plugins_config_con_override_muestra_el_valor_efectivo() {
+    fn plugins_config_with_override_shows_the_effective_value() {
         let dir = tempfile::tempdir().unwrap();
         write_plugin(dir.path(), "org.norte.cfg", CONFIG_MANIFEST);
         write_config_values(dir.path(), "org.norte.cfg", "retries = 9\n");
@@ -1611,7 +1620,7 @@ max = 10
     /// A plugin with NO `[config]` schema gets no `plugin-config` findings
     /// at all (empty settings map, decision 5 — nothing to show).
     #[test]
-    fn plugins_sin_config_no_tiene_findings_plugin_config() {
+    fn plugins_without_config_have_no_plugin_config_findings() {
         let dir = tempfile::tempdir().unwrap();
         write_plugin(dir.path(), "org.norte.demo", DEMO_MANIFEST);
 
@@ -1622,14 +1631,14 @@ max = 10
     /// TDD (P2 Task 2, fail-closed): a `config.toml` that fails validation
     /// against the manifest's `[config]` schema excludes the WHOLE plugin —
     /// it surfaces via the EXISTING `plugin-manifest-broken` catalog-error
-    /// path (mirrors `plugins_manifest_roto_es_error`), not as a
+    /// path (mirrors `plugins_broken_manifest_is_error`), not as a
     /// `plugin-config`/`plugin-ok` finding. The error names the KEY, never
     /// the value (#73).
     #[test]
-    fn plugins_config_toml_invalido_excluye_el_plugin_y_reporta_error() {
+    fn plugins_invalid_config_toml_excludes_the_plugin_and_reports_error() {
         let dir = tempfile::tempdir().unwrap();
         write_plugin(dir.path(), "org.norte.cfg", CONFIG_MANIFEST);
-        write_config_values(dir.path(), "org.norte.cfg", "no-declarada = \"x\"\n");
+        write_config_values(dir.path(), "org.norte.cfg", "not-declared = \"x\"\n");
 
         let findings = check_plugins(dir.path());
         assert!(
@@ -1645,7 +1654,7 @@ max = 10
             .find(|f| f.code == "plugin-manifest-broken")
             .unwrap_or_else(|| panic!("expected a manifest-broken finding: {findings:?}"));
         assert_eq!(err.severity, Severity::Error);
-        assert!(err.detail.contains("no-declarada"), "{}", err.detail);
+        assert!(err.detail.contains("not-declared"), "{}", err.detail);
     }
 
     /// P2 Task 4a security review: an UNKNOWN key from a hostile
@@ -1655,12 +1664,12 @@ max = 10
     /// crosses both `norte doctor`'s stdout and the wire
     /// (`PluginLoadError.reason`).
     #[test]
-    fn plugins_manifest_broken_con_clave_hostil_se_enmascara() {
+    fn plugins_manifest_broken_with_hostile_key_is_masked() {
         let dir = tempfile::tempdir().unwrap();
         write_plugin(dir.path(), "org.norte.cfg", CONFIG_MANIFEST);
-        // Clave TOML entrecomillada con ESC + un override RLO (bidi) —
-        // ninguno de los dos es válido en el charset [a-z0-9-]{1,32} que
-        // exige toda clave DECLARADA, así que este es TOML puro de usuario.
+        // Quoted TOML key with an ESC + an RLO (bidi) override — neither
+        // is valid in the [a-z0-9-]{1,32} charset every DECLARED key
+        // requires, so this is pure user TOML.
         write_config_values(
             dir.path(),
             "org.norte.cfg",
@@ -1683,7 +1692,7 @@ max = 10
     /// a config value carrying a terminal hazard (ESC) must never reach the
     /// finding's `detail` raw — it is masked to U+FFFD.
     #[test]
-    fn plugins_config_value_con_hazard_de_terminal_se_enmascara() {
+    fn plugins_config_value_with_terminal_hazard_is_masked() {
         let dir = tempfile::tempdir().unwrap();
         write_plugin(dir.path(), "org.norte.cfg", CONFIG_MANIFEST);
         write_config_values(
@@ -1707,7 +1716,7 @@ max = 10
 
     /// A config value longer than the display cap is truncated.
     #[test]
-    fn plugins_config_value_largo_se_recorta() {
+    fn plugins_config_long_value_is_trimmed() {
         let dir = tempfile::tempdir().unwrap();
         write_plugin(dir.path(), "org.norte.cfg", CONFIG_MANIFEST);
         let long = "a".repeat(200);
@@ -1748,7 +1757,7 @@ max = 10
     /// TDD (H3e): a `help.md` past the untrusted cap is served cut short, and
     /// the author only finds out here.
     #[test]
-    fn un_help_md_recortado_sale_como_hallazgo() {
+    fn a_truncated_help_md_comes_out_as_a_finding() {
         let dir = tempfile::tempdir().unwrap();
         write_plugin(dir.path(), "acme.ftp", &manifest_for("acme.ftp"));
         // Over `Limits::untrusted().max_bytes` (64 KiB), and valid UTF-8 so
@@ -1768,7 +1777,7 @@ max = 10
     /// bare high bytes as a legacy encoding, so only a BOM makes the encoding
     /// a CERTAINTY and the following invalid sequence a genuine loss.
     #[test]
-    fn un_help_md_con_bytes_que_no_decodifican_sale_como_hallazgo() {
+    fn a_help_md_with_non_decoding_bytes_comes_out_as_a_finding() {
         let dir = tempfile::tempdir().unwrap();
         write_plugin(dir.path(), "acme.ftp", &manifest_for("acme.ftp"));
         write_help(dir.path(), "acme.ftp", b"\xef\xbb\xbf# T\xc3\x28tulo\n");
@@ -1776,7 +1785,7 @@ max = 10
         let f = check_plugins(dir.path())
             .into_iter()
             .find(|f| f.code == "plugin-help-lossy")
-            .expect("se reporta la pérdida");
+            .expect("the loss is reported");
         assert_eq!(f.severity, Severity::Warn);
         assert!(f.detail.contains("acme.ftp"), "detail: {}", f.detail);
     }
@@ -1785,7 +1794,7 @@ max = 10
     /// parser drops that row in silence, so this finding is the only place
     /// the author learns of it.
     #[test]
-    fn un_help_md_con_comandos_ajenos_sale_como_hallazgo() {
+    fn a_help_md_with_foreign_commands_comes_out_as_a_finding() {
         let dir = tempfile::tempdir().unwrap();
         write_plugin(dir.path(), "acme.ftp", &manifest_for("acme.ftp"));
         write_help(
@@ -1810,7 +1819,7 @@ max = 10
     /// broken header must NOT show up as a foreign-command defect, and
     /// without `plugin-help-bad-header` it would not show up at all.
     #[test]
-    fn un_help_md_con_la_cabecera_rota_sale_como_hallazgo() {
+    fn a_help_md_with_a_broken_header_comes_out_as_a_finding() {
         let dir = tempfile::tempdir().unwrap();
         write_plugin(dir.path(), "acme.ftp", &manifest_for("acme.ftp"));
         write_help(
@@ -1830,7 +1839,7 @@ max = 10
             !findings
                 .iter()
                 .any(|f| f.code == "plugin-help-foreign-command"),
-            "una cabecera que no parsea no tiene lista de comandos que revisar: {findings:?}"
+            "a header that fails to parse has no command list to check: {findings:?}"
         );
     }
 
@@ -1852,7 +1861,7 @@ max = 10
     /// spaces cannot overlap" is a property of two crates that neither of them
     /// promises to the other.
     #[test]
-    fn la_colision_de_id_con_el_corpus_es_hoy_estructuralmente_imposible() {
+    fn an_id_collision_with_the_corpus_is_structurally_impossible_today() {
         for id in norte_help::topic_ids(norte_help::Lang::En) {
             assert!(
                 !id.as_str().contains('.'),
@@ -1887,7 +1896,7 @@ max = 10
     /// finding is the only thing that surfaces the case at all.
     #[cfg(unix)]
     #[test]
-    fn un_help_md_que_escapa_del_directorio_del_plugin_sale_como_vacio() {
+    fn a_help_md_that_escapes_the_plugin_directory_comes_out_as_absent() {
         let dir = tempfile::tempdir().unwrap();
         write_plugin(dir.path(), "acme.ftp", &manifest_for("acme.ftp"));
         let outside = dir.path().join("secreto.md");
@@ -1910,7 +1919,7 @@ max = 10
     /// Not documenting yourself is not a defect: a plugin without `help.md`
     /// must produce no `plugin-help` noise at all.
     #[test]
-    fn un_plugin_sin_help_md_no_genera_ruido() {
+    fn a_plugin_without_help_md_generates_no_noise() {
         let dir = tempfile::tempdir().unwrap();
         write_plugin(dir.path(), "org.norte.demo", DEMO_MANIFEST);
 
@@ -1925,7 +1934,7 @@ max = 10
     /// …and neither is documenting yourself WELL: a clean `help.md` declaring
     /// only its own commands is silent too.
     #[test]
-    fn un_help_md_limpio_no_genera_ruido() {
+    fn a_clean_help_md_generates_no_noise() {
         let dir = tempfile::tempdir().unwrap();
         write_plugin(dir.path(), "acme.ftp", &manifest_for("acme.ftp"));
         write_help(
@@ -1938,7 +1947,7 @@ max = 10
         let findings = check_plugins(dir.path());
         assert!(
             !findings.iter().any(|f| f.code.starts_with("plugin-help")),
-            "un help.md correcto no es un hallazgo: {findings:?}"
+            "a correct help.md is not a finding: {findings:?}"
         );
     }
 
@@ -1946,7 +1955,7 @@ max = 10
     /// var absent → `Warn` naming the var; present (via an injected env
     /// closure) → `Ok`. Never the secret VALUE, only presence.
     #[test]
-    fn conexiones_secreto_env_ausente_y_presente() {
+    fn connections_secret_env_absent_and_present() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("connections.toml"),
@@ -1983,12 +1992,13 @@ max = 10
         assert_eq!(ok.severity, Severity::Ok);
     }
 
-    /// #325: con `secret = "prompt"` la ausencia está PREVISTA —norte lo va a
-    /// pedir—, así que es `Ok` con su propio código y no el `Warn` de arriba.
-    /// Avisar aquí sería la misma mentira que #320 vino a quitar, del otro
-    /// signo: un aviso sobre la única configuración que no tiene nada roto.
+    /// #325: with `secret = "prompt"` the absence is EXPECTED — norte is
+    /// going to ask for it — so it is `Ok` with its own code and not the
+    /// `Warn` above. Warning here would be the same lie #320 came to
+    /// remove, the other way around: a warning about the one
+    /// configuration with nothing broken.
     #[test]
-    fn conexion_con_prompt_no_avisa_por_la_variable_ausente() {
+    fn a_connection_with_prompt_does_not_warn_about_the_absent_variable() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("connections.toml"),
@@ -2000,7 +2010,7 @@ max = 10
         let findings = check_connections(dir.path(), &env(&[]));
         assert!(
             !findings.iter().any(|f| f.code == "conn-secret-env-absent"),
-            "con prompt no hay aviso por ausencia: {findings:?}"
+            "with prompt there is no warning for the absence: {findings:?}"
         );
         let ok = findings
             .iter()
@@ -2009,14 +2019,14 @@ max = 10
         assert_eq!(ok.severity, Severity::Ok);
         assert!(ok.detail.contains("NORTE_SECRET_BACKUP"), "{}", ok.detail);
 
-        // Y una variable VACÍA sigue siendo Error aunque haya prompt: #320 va
-        // primero — una variable puesta a vacío es un fallo de configuración,
-        // no una forma de pedir el diálogo.
-        let vacia = check_connections(dir.path(), &env(&[("NORTE_SECRET_BACKUP", "")]));
-        let err = vacia
+        // And an EMPTY variable is still Error even with prompt: #320
+        // comes first — a variable set to empty is a configuration
+        // failure, not a way to ask for the dialog.
+        let empty = check_connections(dir.path(), &env(&[("NORTE_SECRET_BACKUP", "")]));
+        let err = empty
             .iter()
             .find(|f| f.code == "conn-secret-env-empty")
-            .unwrap_or_else(|| panic!("expected an env-empty finding: {vacia:?}"));
+            .unwrap_or_else(|| panic!("expected an env-empty finding: {empty:?}"));
         assert_eq!(err.severity, Severity::Error);
     }
 
@@ -2027,7 +2037,7 @@ max = 10
     /// rejects it and no later step can rescue it, so a `norte doctor`
     /// preflight must not exit 0 on it.
     #[test]
-    fn conexiones_secreto_env_vacio_no_cuenta_como_presente() {
+    fn connections_empty_secret_env_does_not_count_as_present() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("connections.toml"),
@@ -2038,7 +2048,7 @@ max = 10
         let findings = check_connections(dir.path(), &env(&[("NORTE_SECRET_BACKUP", "")]));
         assert!(
             !findings.iter().any(|f| f.code == "conn-secret-env-present"),
-            "un valor vacío no es un secreto presente: {findings:?}"
+            "an empty value is not a present secret: {findings:?}"
         );
         let f = findings
             .iter()
@@ -2056,7 +2066,7 @@ max = 10
     /// policy.
     #[cfg(unix)]
     #[test]
-    fn conexiones_secreto_env_no_utf8_no_cuenta_como_presente() {
+    fn connections_non_utf8_secret_env_does_not_count_as_present() {
         use std::os::unix::ffi::OsStrExt;
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
@@ -2065,13 +2075,13 @@ max = 10
         )
         .unwrap();
 
-        // 0xFF nunca es UTF-8 válido, en ninguna posición.
-        let crudo = OsString::from(std::ffi::OsStr::from_bytes(b"clave\xffrota"));
-        let entorno = |k: &str| (k == "NORTE_SECRET_BACKUP").then(|| crudo.clone());
-        let findings = check_connections(dir.path(), &entorno);
+        // 0xFF is never valid UTF-8, in any position.
+        let raw = OsString::from(std::ffi::OsStr::from_bytes(b"clave\xffrota"));
+        let environment = |k: &str| (k == "NORTE_SECRET_BACKUP").then(|| raw.clone());
+        let findings = check_connections(dir.path(), &environment);
         assert!(
             !findings.iter().any(|f| f.code == "conn-secret-env-present"),
-            "unos bytes que el resolver no puede leer no son un secreto presente: {findings:?}"
+            "bytes the resolver cannot read are not a present secret: {findings:?}"
         );
         let f = findings
             .iter()
@@ -2086,7 +2096,7 @@ max = 10
     /// value, per review MINOR-3 — the narrative sentence is the text
     /// renderer's job.
     #[test]
-    fn conexiones_ausentes_es_ok_vacio() {
+    fn absent_connections_is_an_empty_ok() {
         let dir = tempfile::tempdir().unwrap();
         let findings = check_connections(dir.path(), &env(&[]));
         assert!(
@@ -2098,12 +2108,12 @@ max = 10
         assert!(findings[0].detail.is_empty(), "{}", findings[0].detail);
     }
 
-    /// Un scheme que nadie sirve —ni el core ni un provider plugin
-    /// instalado— es un aviso con el nombre de la conexión. Antes era un
-    /// error de parseo; con el parser abierto a los schemes de plugin, este
-    /// es el único sitio que puede cazar el `sfpt://` tecleado.
+    /// A scheme nobody serves — neither the core nor an installed
+    /// provider plugin — is a warning naming the connection. It used to
+    /// be a parse error; with the parser open to plugin schemes, this is
+    /// the only place that can catch a typed `sfpt://`.
     #[test]
-    fn un_scheme_que_nadie_sirve_es_un_aviso() {
+    fn a_scheme_nobody_serves_is_a_warning() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("connections.toml"),
@@ -2114,16 +2124,16 @@ max = 10
         let typo = findings
             .iter()
             .find(|f| f.detail == "typo")
-            .expect("la conexión con el typo tiene hallazgo");
+            .expect("the connection with the typo has a finding");
         assert_eq!(typo.code, "connection-scheme-unserved");
         assert_eq!(typo.severity, Severity::Warn);
         let ok = findings
             .iter()
             .find(|f| f.detail == "ok")
-            .expect("la buena");
+            .expect("the good one");
         assert_eq!(ok.code, "connection-ok");
 
-        // Instalado un provider que declara `sfpt`, deja de ser un typo.
+        // Once a provider that declares `sfpt` is installed, it stops being a typo.
         let plugin = dir.path().join("plugins/org.demo.sfpt");
         std::fs::create_dir_all(&plugin).unwrap();
         std::fs::write(
@@ -2136,12 +2146,13 @@ max = 10
         assert_eq!(typo.code, "connection-ok");
     }
 
-    /// ADR 0150: `allow_rsa` es un riesgo ACEPTADO, y `doctor` lo recuerda
-    /// mientras esté puesto (`Warn`, no `Ok`). Donde no puede hacer nada —auth
-    /// que no es `key`, o un scheme que no es sftp— se dice aparte, como
-    /// `conn-secret-prompt-inert`: una clave que no hace nada no se calla.
+    /// ADR 0150: `allow_rsa` is an ACCEPTED risk, and `doctor` recalls it
+    /// while it stays set (`Warn`, not `Ok`). Where it can do nothing —
+    /// auth other than `key`, or a scheme other than sftp — it is said
+    /// separately, like `conn-secret-prompt-inert`: a key that does
+    /// nothing is not kept quiet.
     #[test]
-    fn allow_rsa_avisa_y_donde_no_aplica_se_dice() {
+    fn allow_rsa_warns_and_says_where_it_does_not_apply() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("connections.toml"),
@@ -2169,7 +2180,7 @@ max = 10
     /// empty (review MINOR-3: machine-only; the sentence is the text
     /// renderer's `cli-doctor-detail-connections-parse`).
     #[test]
-    fn conexiones_toml_roto_es_error() {
+    fn connections_broken_toml_is_error() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("connections.toml"), "esto no es toml [[[").unwrap();
         let findings = check_connections(dir.path(), &env(&[]));
@@ -2187,7 +2198,7 @@ max = 10
     /// straight into `connections.toml` by mistake (rule 10) — this pins
     /// that `check_connections` never propagates it, in `--json` or text.
     #[test]
-    fn conexiones_toml_con_secreto_roto_no_filtra_el_valor() {
+    fn connections_toml_with_a_broken_secret_does_not_leak_the_value() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("connections.toml"),
@@ -2203,62 +2214,63 @@ max = 10
         assert!(!f.detail.contains('"'), "{}", f.detail);
     }
 
-    /// El log es lo que hace posible un reporte de bug de alguien que no somos
-    /// nosotros, así que lo primero que tiene que decir `doctor` es DÓNDE está.
+    /// The log is what makes a bug report from someone who is not us
+    /// possible, so the first thing `doctor` has to say is WHERE it is.
     #[test]
-    fn doctor_nombra_el_fichero_de_log() {
+    fn doctor_names_the_log_file() {
         let dir = tempfile::tempdir().expect("tmp");
         let logs = dir.path().join("logs");
         std::fs::create_dir_all(&logs).expect("logs");
-        std::fs::write(logs.join("norte.log.2026-08-16"), b"una linea\n").expect("log");
+        std::fs::write(logs.join("norte.log.2026-08-16"), b"a line\n").expect("log");
 
-        let hallazgos = check_logs(Some(&logs));
-        let f = una(&hallazgos, "logs");
+        let findings = check_logs(Some(&logs));
+        let f = only(&findings, "logs");
         assert_eq!(f.severity, Severity::Ok);
         assert_eq!(f.code, "logs-ok");
         assert!(
             f.detail.contains(&logs.display().to_string()),
-            "la fila lleva la RUTA: {}",
+            "the row carries the PATH: {}",
             f.detail
         );
     }
 
-    /// Un directorio de estado que no existe es una DEGRADACIÓN, no una avería:
-    /// la máquina funciona, simplemente no deja rastro. `Error` haría que
-    /// `norte doctor` saliera distinto de cero por algo que no rompe nada
-    /// (decisión 4).
+    /// A state directory that does not exist is a DEGRADATION, not a
+    /// breakage: the machine works, it just leaves no trace. `Error`
+    /// would make `norte doctor` exit non-zero for something that breaks
+    /// nothing (decision 4).
     #[test]
-    fn sin_directorio_de_estado_es_aviso_y_no_error() {
-        let hallazgos = check_logs(None);
-        let f = una(&hallazgos, "logs");
+    fn without_a_state_dir_is_a_warning_not_an_error() {
+        let findings = check_logs(None);
+        let f = only(&findings, "logs");
         assert_eq!(f.severity, Severity::Warn);
         assert_eq!(f.code, "logs-no-state-dir");
     }
 
-    /// Y un directorio que no se deja escribir tampoco es una avería: se avisa
-    /// y el programa arranca igual, que es lo que hace `logging::init_to_file`.
+    /// And a directory that cannot be written to is not a breakage
+    /// either: it warns and the program starts anyway, which is what
+    /// `logging::init_to_file` does.
     #[cfg(unix)]
     #[test]
-    fn un_directorio_no_escribible_avisa() {
+    fn an_unwritable_directory_warns() {
         use std::os::unix::fs::PermissionsExt as _;
         let dir = tempfile::tempdir().expect("tmp");
         let logs = dir.path().join("logs");
         std::fs::create_dir_all(&logs).expect("logs");
         std::fs::set_permissions(&logs, std::fs::Permissions::from_mode(0o500)).expect("chmod");
 
-        let hallazgos = check_logs(Some(&logs));
-        let f = una(&hallazgos, "logs");
-        // Restaurar antes de cualquier assert: si falla, el TempDir tiene que
-        // poder borrarse igual.
+        let findings = check_logs(Some(&logs));
+        let f = only(&findings, "logs");
+        // Restore before any assert: if it fails, the TempDir still has
+        // to be deletable.
         std::fs::set_permissions(&logs, std::fs::Permissions::from_mode(0o700)).expect("chmod");
         assert_eq!(f.severity, Severity::Warn);
         assert_eq!(f.code, "logs-unwritable");
     }
 
-    /// La única fila de `section` en `findings`.
-    fn una<'a>(findings: &'a [Finding], section: &str) -> &'a Finding {
-        let filas: Vec<&Finding> = findings.iter().filter(|f| f.section == section).collect();
-        assert_eq!(filas.len(), 1, "una fila de {section}: {findings:?}");
-        filas[0]
+    /// The single `section` row in `findings`.
+    fn only<'a>(findings: &'a [Finding], section: &str) -> &'a Finding {
+        let rows: Vec<&Finding> = findings.iter().filter(|f| f.section == section).collect();
+        assert_eq!(rows.len(), 1, "one row for {section}: {findings:?}");
+        rows[0]
     }
 }

@@ -1,42 +1,43 @@
-//! Política de LISTA de un modal de confirmación: cuántos ítems se pintan
-//! antes de resumir el resto, y cómo se sanea cada uno.
+//! LIST policy for a confirmation modal: how many items get painted before
+//! summarizing the rest, and how each one is sanitized.
 //!
-//! Vivía duplicada en la GUI (#103 T10 la sube aquí): un lote de copia,
-//! movimiento o borrado se confirma sobre una LISTA de nombres, y esa lista
-//! es superficie de ataque — un nombre hostil que cuele un `\n`, un override
-//! bidi o un separador podría FABRICAR una entrada falsa y hacer que el
-//! humano apruebe algo que no leyó. La regla es una sola para ambos
-//! frontends: una ruta POR LÍNEA, siempre por [`display_name_with`]
-//! (`crate::display_name_with`), y el badge del flag hostil.
+//! It used to live duplicated in the GUI (#103 T10 brings it up here): a
+//! batch copy, move or delete is confirmed over a LIST of names, and that
+//! list is attack surface — a hostile name smuggling in a `\n`, a bidi
+//! override or a separator could FORGE a fake entry and make the human
+//! approve something they did not read. There is a single rule for both
+//! frontends: one path PER LINE, always through [`display_name_with`]
+//! (`crate::display_name_with`), and the hostile-flag badge.
 
 use norte_proto::{Segment, VPath};
 
-/// Cuántos ítems lista un modal antes de resumir el resto en «… y N más».
+/// How many items a modal lists before summarizing the rest as "... and N
+/// more".
 ///
-/// Es tope de LEGIBILIDAD, no de seguridad: el resumen final jamás calla
-/// cuántos quedan fuera (un lote de 500 no puede parecer uno de 10).
+/// It is a READABILITY cap, not a security one: the final summary never
+/// hides how many are left out (a batch of 500 cannot look like one of 10).
 pub const MODAL_ITEM_LIMIT: usize = 10;
 
-/// Parejas del plan de rename IA (M4-IA) visibles a la vez en el modal del
-/// plan (ventana de scroll, audit MAJOR-3: el plan ENTERO es revisable por
-/// scroll — sin ventana, la cola de un plan largo se aplicaría sin poder
-/// verse). Única fuente para el render, el alto del modal (TUI) y el clamp
-/// del scroll en ambos frontends.
+/// AI rename plan (M4-IA) pairs visible at once in the plan modal (a scroll
+/// window, audit MAJOR-3: the WHOLE plan is reviewable by scrolling —
+/// without a window, the tail of a long plan would apply without ever being
+/// seen). Single source for the render, the modal's height (TUI) and the
+/// scroll clamp in both frontends.
 pub const AI_RENAME_PAIR_LIMIT: usize = 5;
 
-/// Hits de la búsqueda semántica (M4-IA-2) visibles a la vez en el modal de
-/// hits (ventana de scroll con cursor, molde [`AI_RENAME_PAIR_LIMIT`]).
-/// Única fuente para el render, el alto del modal (TUI) y el clamp del
-/// cursor en ambos frontends. El `k` que se PIDE al server es
-/// [`SEMANTIC_K`]: mayor que esta ventana (el resto queda a un scroll).
+/// Semantic search hits (M4-IA-2) visible at once in the hits modal (a
+/// cursor scroll window, molded on [`AI_RENAME_PAIR_LIMIT`]). Single source
+/// for the render, the modal's height (TUI) and the cursor clamp in both
+/// frontends. The `k` REQUESTED from the server is [`SEMANTIC_K`]: larger
+/// than this window (the rest is left to a scroll).
 pub const SEMANTIC_HIT_LIMIT: usize = 10;
 
-/// `k` que ambos frontends piden a `index.search_semantic` (M4-IA-2): mayor
-/// que la ventana del modal ([`SEMANTIC_HIT_LIMIT`] — el resto queda a un
-/// scroll) y muy por debajo del techo contractual del server
-/// (`INDEX_SEMANTIC_MAX_K` = 100, que además recorta por su cuenta). Única
-/// fuente para TUI y GUI: pedir `k` distintos haría que la MISMA consulta
-/// devolviera resultados distintos por frontend.
+/// `k` both frontends request from `index.search_semantic` (M4-IA-2): larger
+/// than the modal's window ([`SEMANTIC_HIT_LIMIT`] — the rest is left to a
+/// scroll) and well below the server's contractual ceiling
+/// (`INDEX_SEMANTIC_MAX_K` = 100, which also clips on its own). Single
+/// source for TUI and GUI: requesting different `k`s would make the SAME
+/// query return different results per frontend.
 ///
 /// ```
 /// assert!(norte_frontend::SEMANTIC_K as usize > norte_frontend::SEMANTIC_HIT_LIMIT);
@@ -44,29 +45,29 @@ pub const SEMANTIC_HIT_LIMIT: usize = 10;
 /// ```
 pub const SEMANTIC_K: u32 = 20;
 
-/// Tope de parejas que un frontend ACEPTA de `ai.rename_plan` (M4-IA,
-/// cinturón de ingestión): el engine acota los planes legítimos MUY por
-/// debajo (los basenames de UN directorio), así que un plan que lo supere
-/// delata un daemon hostil/N+1 inflando la respuesta — se rechaza EN BLOQUE
-/// (mismo mensaje que un plan adulterado), jamás se trocea ni se revisa "lo
-/// que quepa".
+/// Cap on the pairs a frontend ACCEPTS from `ai.rename_plan` (M4-IA, an
+/// ingestion belt): the engine bounds legitimate plans MUCH lower (the
+/// basenames of ONE directory), so a plan that exceeds it gives away a
+/// hostile/N+1 daemon inflating the response — it is rejected AS A WHOLE
+/// (same message as a tampered plan), never chunked nor reviewed for "what
+/// fits".
 pub const MAX_AI_PLAN_ENTRIES: usize = 256;
 
-/// Valida TODAS las parejas del plan como [`Segment`] (cinturón fail-loud,
-/// audit MAJOR-2, compartido por TUI y GUI): un plan bien formado del engine
-/// JAMÁS trae un segmento inválido (el daemon los validó al armarlo), así
-/// que UN rechazo aquí delata un daemon hostil/roto — `None` aborta el lote
-/// ENTERO, jamás un skip silencioso que aplique «lo demás» de un plan
-/// adulterado.
+/// Validates ALL of the plan's pairs as [`Segment`] (a fail-loud belt, audit
+/// MAJOR-2, shared by TUI and GUI): a well-formed plan from the engine NEVER
+/// carries an invalid segment (the daemon validated them when building it),
+/// so ONE rejection here gives away a hostile/broken daemon — `None` aborts
+/// the WHOLE batch, never a silent skip that applies "the rest" of a
+/// tampered plan.
 ///
-/// PURA a propósito: testeable sin backend (audit MINOR-6e).
+/// PURE on purpose: testable without a backend (audit MINOR-6e).
 ///
 /// ```
 /// use norte_proto::methods::AiRenameEntry;
 /// let ok = AiRenameEntry { from: "a.txt".into(), to: "b.txt".into() };
 /// assert!(norte_frontend::validate_ai_plan(std::slice::from_ref(&ok)).is_some());
 /// let evil = AiRenameEntry { from: "c.txt".into(), to: "../evil".into() };
-/// // UNA pareja inválida tumba el plan ENTERO, aunque el resto sea legítimo.
+/// // ONE invalid pair brings down the WHOLE plan, even if the rest is legitimate.
 /// assert!(norte_frontend::validate_ai_plan(&[ok, evil]).is_none());
 /// ```
 #[must_use]
@@ -76,28 +77,28 @@ pub fn validate_ai_plan(
     validate_ai_plan_in(entries, None)
 }
 
-/// Como [`validate_ai_plan`], y además exige que cada `from` EXISTA entre
-/// `names` cuando se pasan.
+/// Like [`validate_ai_plan`], and additionally requires that each `from`
+/// EXISTS among `names` when it is passed.
 ///
-/// El cinturón existe para sobrevivir a un daemon hostil o roto, y era más
-/// flojo que el validador del que defiende (#275): `norte_core::ai` comprueba
-/// tres cosas más que aquí no se miraban.
+/// The belt exists to survive a hostile or broken daemon, and it used to be
+/// looser than the validator it defends against (#275): `norte_core::ai`
+/// checks three more things that were not looked at here.
 ///
-/// - **`!` no es un nombre**: es el marcador de archivo-como-directorio
-///   (ADR 0018), y dejarlo pasar convierte un renombrado en una travesía
-///   hacia dentro de un archivo.
-/// - **`\` tampoco**: es separador en Windows, así que `..\evil` es un
-///   traversal que `Segment` no ve porque solo mira `/`. Que
-///   `norte-vfs-local::native_path` lo rechace después no lo arregla: es un
-///   error lejos de su causa, y el cinturón está aquí precisamente para que
-///   el error salga donde se puede explicar.
-/// - **`from` tiene que existir** donde se va a aplicar. Sin esa comprobación
-///   un plan adulterado puede renombrar algo que el lector no está mirando.
-///   `None` en `names` significa «este llamante no tiene el listado
-///   delante», no «da igual»: los dos frontends sí lo tienen y lo pasan.
+/// - **`!` is not a name**: it is the file-as-directory marker (ADR 0018),
+///   and letting it through turns a rename into a traversal into a file.
+/// - **Neither is `\`**: it is a separator on Windows, so `..\evil` is a
+///   traversal `Segment` does not see because it only looks at `/`. Having
+///   `norte-vfs-local::native_path` reject it afterward does not fix it: it
+///   is an error far from its cause, and the belt is here precisely so the
+///   error surfaces where it can be explained.
+/// - **`from` has to exist** where it is going to be applied. Without that
+///   check a tampered plan can rename something the reader is not looking
+///   at. `None` in `names` means "this caller does not have the listing in
+///   front of it", not "it does not matter": both frontends do have it and
+///   pass it.
 ///
-/// UNA pareja inválida tumba el plan ENTERO, como antes: nunca un skip
-/// silencioso que aplique «lo demás» de un plan adulterado.
+/// ONE invalid pair brings down the WHOLE plan, as before: never a silent
+/// skip that applies "the rest" of a tampered plan.
 ///
 /// ```
 /// use norte_proto::methods::AiRenameEntry;
@@ -105,8 +106,8 @@ pub fn validate_ai_plan(
 ///
 /// let e = AiRenameEntry { from: "a.txt".into(), to: "b.txt".into() };
 /// assert!(validate_ai_plan_in(std::slice::from_ref(&e), Some(&[b"a.txt".to_vec()])).is_some());
-/// // El mismo plan sobre un directorio donde `a.txt` no está: se rechaza.
-/// assert!(validate_ai_plan_in(std::slice::from_ref(&e), Some(&[b"otro.txt".to_vec()])).is_none());
+/// // The same plan over a directory where `a.txt` is not: it is rejected.
+/// assert!(validate_ai_plan_in(std::slice::from_ref(&e), Some(&[b"other.txt".to_vec()])).is_none());
 /// ```
 #[must_use]
 pub fn validate_ai_plan_in(
@@ -134,20 +135,20 @@ pub fn validate_ai_plan_in(
         .collect()
 }
 
-/// Las MISMAS parejas de [`validate_ai_plan`], ya en la forma que piden
-/// `fs.rename_batch_plan` y `fs.rename_batch` (spec §17, ADR 0042).
+/// The SAME pairs from [`validate_ai_plan`], now in the shape
+/// `fs.rename_batch_plan` and `fs.rename_batch` ask for (spec §17, ADR 0042).
 ///
-/// Único convertidor plan-IA → parejas de lote para TUI y GUI: los dos
-/// frontends mandan exactamente la misma INTENCIÓN, y por tanto el core les
-/// contesta el mismo `plan_hash`. `None` con el mismo criterio fail-loud que
-/// [`validate_ai_plan`] — un segmento inválido tumba el lote ENTERO.
+/// The single AI-plan → batch-pairs converter for TUI and GUI: both
+/// frontends send exactly the same INTENT, and so the core answers them the
+/// same `plan_hash`. `None` under the same fail-loud criterion as
+/// [`validate_ai_plan`] — an invalid segment brings down the WHOLE batch.
 ///
 /// ```
 /// use norte_proto::methods::AiRenameEntry;
 /// let e = AiRenameEntry { from: "ep1.mkv".into(), to: "ep01.mkv".into() };
-/// let pares = norte_frontend::rename_pairs(std::slice::from_ref(&e)).expect("válido");
-/// assert_eq!(pares[0].from.as_bytes(), b"ep1.mkv");
-/// assert_eq!(pares[0].to.as_bytes(), b"ep01.mkv");
+/// let pairs = norte_frontend::rename_pairs(std::slice::from_ref(&e)).expect("valid");
+/// assert_eq!(pairs[0].from.as_bytes(), b"ep1.mkv");
+/// assert_eq!(pairs[0].to.as_bytes(), b"ep01.mkv");
 /// ```
 #[must_use]
 pub fn rename_pairs(
@@ -156,7 +157,7 @@ pub fn rename_pairs(
     rename_pairs_in(entries, None)
 }
 
-/// Como [`rename_pairs`], con la comprobación de existencia de
+/// Like [`rename_pairs`], with the existence check from
 /// [`validate_ai_plan_in`].
 #[must_use]
 pub fn rename_pairs_in(
@@ -171,37 +172,37 @@ pub fn rename_pairs_in(
     )
 }
 
-/// Colisiones del plan de lote que se pintan antes de resumir el resto
-/// (molde [`AI_RENAME_PAIR_LIMIT`]). Tope de LEGIBILIDAD, no de seguridad: el
-/// resumen final jamás calla cuántas quedan fuera, y ninguna colisión hace
-/// aplicable un plan que el core marcó como no aplicable.
+/// Batch plan collisions painted before summarizing the rest (molded on
+/// [`AI_RENAME_PAIR_LIMIT`]). A READABILITY cap, not a security one: the
+/// final summary never hides how many are left out, and no collision makes
+/// applicable a plan the core marked as not applicable.
 pub const RENAME_COLLISION_LIMIT: usize = 5;
 
-/// Celdas a las que se acota la línea ENTERA de una colisión.
+/// Cells the WHOLE line of a collision is bounded to.
 ///
-/// El presupuesto es de la LÍNEA, no del nombre, porque lo que hay que
-/// impedir es el recorte mudo por la derecha que hace cada frontend cuando la
-/// línea no cabe (el ancho de la caja en la TUI —suelo de 60 columnas, 56 de
-/// interior con bordes y padding—, el `.truncate()` del div en la GUI). Del
-/// presupuesto se descuenta lo que ocupa el prefijo YA TRADUCIDO —marca,
-/// índice de pareja y veredicto— y lo que sobra es lo que se le da al nombre:
-/// un veredicto largo (o un locale con etiquetas largas) acorta el nombre en
-/// vez de empujarlo fuera de la caja sin marca.
+/// The budget belongs to the LINE, not the name, because what has to be
+/// prevented is the silent right-side truncation each frontend does when
+/// the line does not fit (the TUI box's width — a 60-column floor, 56 of
+/// interior once borders and padding are subtracted —, the GUI's div
+/// `.truncate()`). What the ALREADY-TRANSLATED prefix takes up — mark, pair
+/// index and verdict — is subtracted from the budget, and what is left over
+/// is what the name gets: a long verdict (or a locale with long labels)
+/// shortens the name instead of pushing it out of the box unmarked.
 const COLLISION_LINE_COLS: usize = 56;
 
-/// Suelo de celdas para el nombre ofensor: por muy largo que sea el
-/// veredicto, el nombre no se queda en nada. Si el prefijo se come el
-/// presupuesto, quien se recorta es la línea —marcada por `middle_ellipsis`—
-/// y no el nombre hasta desaparecer.
+/// Floor of cells for the offending name: no matter how long the verdict is,
+/// the name never gets whittled down to nothing. If the prefix eats the
+/// budget, what gets truncated is the line — marked by `middle_ellipsis` —
+/// not the name until it disappears.
 const COLLISION_NAME_MIN_COLS: usize = 12;
 
-/// Clave Fluent del VEREDICTO de una colisión de lote (spec §17): única
-/// fuente para TUI y GUI — el frontend pinta la etiqueta, jamás deduce el
-/// veredicto.
+/// Fluent key for the VERDICT of a batch collision (spec §17): single source
+/// for TUI and GUI — the frontend paints the label, never infers the
+/// verdict.
 ///
 /// [`RenameCollisionKind::Unknown`](norte_proto::methods::RenameCollisionKind)
-/// (clase de un daemon N+1) tiene su propia
-/// clave genérica: degrada UNA línea, jamás el modal entero.
+/// (the class for an N+1 daemon) has its own
+/// generic key: it degrades ONE line, never the whole modal.
 ///
 /// ```
 /// use norte_proto::methods::RenameCollisionKind as K;
@@ -209,7 +210,7 @@ const COLLISION_NAME_MIN_COLS: usize = 12;
 ///     norte_frontend::collision_kind_key(K::External),
 ///     "modal-rename-batch-collision-external",
 /// );
-/// // Un veredicto que este binario no conoce sigue teniendo etiqueta.
+/// // A verdict this binary does not know still gets a label.
 /// assert_eq!(
 ///     norte_frontend::collision_kind_key(K::Unknown),
 ///     "modal-rename-batch-collision-unknown",
@@ -223,85 +224,90 @@ pub fn collision_kind_key(kind: norte_proto::methods::RenameCollisionKind) -> &'
         K::External => "modal-rename-batch-collision-external",
         K::AbsentSource => "modal-rename-batch-collision-absent-source",
         K::AmbiguousSource => "modal-rename-batch-collision-ambiguous-source",
-        // Cualquier clase futura cae aquí (el enum es `non_exhaustive` y
-        // `Unknown` es su fallback de deserialización): «rechazado, motivo que
-        // no entiendo» es honesto; adivinar no lo sería.
+        // Any future class falls here (the enum is `non_exhaustive` and
+        // `Unknown` is its deserialization fallback): "rejected, reason I
+        // don't understand" is honest; guessing would not be.
         _ => "modal-rename-batch-collision-unknown",
     }
 }
 
-/// En qué punto está el plan de lote (`fs.rename_batch_plan`, spec §17) que
-/// Una línea del DETALLE de un veredicto, EN PARTES.
+/// What point the batch plan (`fs.rename_batch_plan`, spec §17) is at, that
+// TODO(translation): review — this line reads as leftover text from a stale
+// doc-comment merge in the original Spanish; translated as-is.
+/// A line of a verdict's DETAIL, IN PARTS.
 ///
-/// En partes y no en una cadena (#273): la forma anterior componía
-/// `✗ { $n }. { $kind }: { $name }` aquí, y ni el `✗`, ni los dígitos, ni el
-/// `.`, ni el `:` los enmascara `display_name` —son todos legítimos en un
-/// nombre—, así que un fichero llamado `✗ 4. ya existe: otro.txt` producía
-/// `✗ 3. ya existe: ✗ 4. ya existe: otro.txt`. Es la forma exacta que la
-/// fixture `cause_join_spoof` del corpus existe para prohibir: la causa y la
-/// ortografía del destino se separan FUERA de banda. Agrava que `norte-i18n`
-/// llama a `set_use_isolating(false)`, así que Fluent no mete FSI/PDI
-/// alrededor del placeable y un nombre con letras RTL fuertes reordena el
-/// `✗`, el índice y el `:` dentro de la línea.
+/// In parts and not in a single string (#273): the earlier form composed
+/// `✗ { $n }. { $kind }: { $name }` here, and `display_name` masks neither
+/// the `✗`, nor the digits, nor the `.`, nor the `:` — they are all legal in
+/// a name — so a file named `✗ 4. already exists: other.txt` produced
+/// `✗ 3. already exists: ✗ 4. already exists: other.txt`. This is the exact
+/// shape the corpus's `cause_join_spoof` fixture exists to forbid: the cause
+/// and the destination's spelling are kept OUT OF BAND. It gets worse
+/// because `norte-i18n` calls `set_use_isolating(false)`, so Fluent does not
+/// put FSI/PDI around the placeable, and a name with strong RTL letters
+/// reorders the `✗`, the index and the `:` inside the line.
 ///
-/// Cada frontend las coloca como pueda: la ventana con un elemento por
-/// parte, el terminal poniendo el nombre en su propia línea.
+/// Each frontend places them however it can: the window with one element
+/// per part, the terminal putting the name on its own line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DetailPart {
-    /// El planificador necesitó pasos temporales. No lleva nada de nadie.
+    /// The planner needed temporary steps. It carries nothing from anyone.
     Temp {
-        /// Cuántos.
+        /// How many.
         count: usize,
     },
-    /// Una colisión concreta.
+    /// A specific collision.
     Collision {
-        /// Índice 1-based de la pareja, si de verdad señala una fila.
+        /// 1-based index of the pair, if it really points to a row.
         index: Option<usize>,
-        /// Clave Fluent del veredicto.
+        /// Fluent key of the verdict.
         kind_key: &'static str,
-        /// El nombre, YA saneado y recortado. Es lo único que controla un
-        /// tercero, y por eso viaja solo.
+        /// The name, ALREADY sanitized and truncated. It is the only thing a
+        /// third party controls, and that is why it travels alone.
         name: String,
-        /// El nombre difiere del real.
+        /// The name differs from the real one.
         hostile: bool,
     },
-    /// Las colisiones que no caben.
+    /// The collisions that do not fit.
     More {
-        /// Cuántas se enseñan.
+        /// How many are shown.
         shown: usize,
-        /// Cuántas hay.
+        /// How many there are.
         total: usize,
-        /// Alguna de las OCULTAS tiene nombre hostil.
+        /// One of the HIDDEN ones has a hostile name.
         hostile: bool,
     },
 }
 
-/// el modal del rename IA necesita para poder confirmar.
+/// what the AI rename modal needs in order to be able to confirm.
+// TODO(translation): review — this summary line reads as truncated in the
+// original Spanish (missing a leading clause); translated as-is.
 ///
-/// Tres estados y no un `Option`, porque «todavía no ha contestado» y «no va
-/// a contestar» no se le pueden enseñar igual al humano: el primero se
-/// resuelve solo, el segundo no, y una etiqueta de «comprobando…» que no
-/// avanza nunca es una mentira con forma de spinner.
+/// Three states and not an `Option`, because "has not answered yet" and "is
+/// not going to answer" cannot be shown to the human the same way: the first
+/// resolves on its own, the second does not, and a "checking…" label that
+/// never advances is a lie shaped like a spinner.
 ///
-/// El tipo es COMPARTIDO por todas las superficies, y con él toda la política
-/// de presentación del veredicto ([`Self::status_key`],
-/// [`Self::detail_parts`]): cada superficie pinta nombres que un atacante
-/// controla, y una que derive por su cuenta es exactamente cómo se pierde el
-/// saneado en ella sin que nadie lo note.
+/// The type is SHARED by every surface, and with it the whole verdict
+/// presentation policy ([`Self::status_key`], [`Self::detail_parts`]): every
+/// surface paints names an attacker controls, and one that derives its own
+/// is exactly how the sanitizing gets lost in it without anyone noticing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BatchPlan {
-    /// Pedido al core y en vuelo: el modal abre y se rellena.
+    /// Requested from the core and in flight: the modal opens and fills in.
     Pending,
-    /// El core contestó.
+    /// The core answered.
     Ready(Box<norte_proto::methods::FsRenameBatchPlanResult>),
-    /// El core no pudo contestar (o ni se le pudo preguntar). El motivo
-    /// concreto fue a la barra; aquí solo se sabe que NO hay plan, y sin plan
-    /// no hay `plan_hash` aprobado que mandar.
+    /// The core could not answer (or could not even be asked). The specific
+    /// reason went to the status bar; here all that is known is that there
+    /// is NO plan, and without a plan there is no approved `plan_hash` to
+    /// send.
     Failed,
 }
 
 impl BatchPlan {
-    /// El plan si lo hay. `None` en [`Self::Pending`] y [`Self::Failed`].
+    /// The plan, if there is one. `None` in [`Self::Pending`] and
+    /// [`Self::Failed`].
     #[must_use]
     pub fn ready(&self) -> Option<&norte_proto::methods::FsRenameBatchPlanResult> {
         match self {
@@ -310,14 +316,14 @@ impl BatchPlan {
         }
     }
 
-    /// Si confirmar puede hacer algo: hace falta un plan y que el CORE lo
-    /// haya marcado aplicable. Única fuente del gate en ambos frontends — la
-    /// TUI enmudece sus comandos de confirmar y la GUI su tecla, y las dos
-    /// preguntan aquí.
+    /// Whether confirming can do anything: a plan is needed and the CORE
+    /// has to have marked it applicable. Single source for the gate in both
+    /// frontends — the TUI mutes its confirm commands and the GUI its key,
+    /// and both ask here.
     ///
-    /// Lee `executable`, JAMÁS `collisions.is_empty()`: el campo es normativo
-    /// (ver su rustdoc en `norte_proto`) y un veredicto futuro puede parar un
-    /// plan sin nombre ofensor que listar.
+    /// Reads `executable`, NEVER `collisions.is_empty()`: the field is
+    /// normative (see its rustdoc in `norte_proto`) and a future verdict can
+    /// stop a plan with no offending name to list.
     ///
     /// ```
     /// use norte_frontend::BatchPlan;
@@ -329,10 +335,10 @@ impl BatchPlan {
         self.ready().is_some_and(|p| p.executable)
     }
 
-    /// Clave Fluent del ESTADO, la línea que va ARRIBA del modal (junto al
-    /// dir, antes de las parejas): un modal más alto que el terminal se
-    /// recorta por abajo, y de todo el cuerpo esta es la línea que no puede
-    /// perderse.
+    /// Fluent key of the STATUS, the line that goes ABOVE the modal (next to
+    /// the dir, before the pairs): a modal taller than the terminal gets cut
+    /// off at the bottom, and of the whole body this is the line that must
+    /// not be lost.
     ///
     /// ```
     /// use norte_frontend::BatchPlan;
@@ -349,40 +355,41 @@ impl BatchPlan {
         }
     }
 
-    /// Cuántos pasos del plan son MAQUINARIA del planificador (temporales que
-    /// rompen un ciclo). Se cuentan, jamás se enseña el nombre: un
-    /// `.norte-rename-…` no es nada que el humano haya pedido, y pintarlo
-    /// entre sus parejas le haría creer que norte va a dejar ese nombre en su
-    /// disco.
+    /// How many of the plan's steps are planner MACHINERY (temporaries that
+    /// break a cycle). They are counted, the name is never shown: a
+    /// `.norte-rename-…` is nothing the human asked for, and painting it
+    /// among their pairs would make them think norte is going to leave that
+    /// name on their disk.
     #[must_use]
     pub fn temp_steps(&self) -> usize {
         self.ready()
             .map_or(0, |p| p.steps.iter().filter(|s| s.temp).count())
     }
 
-    /// Renames que este lote va a hacer DE VERDAD: los pasos que no son
-    /// maquinaria. No es `pairs.len()`: el planificador tira las parejas
-    /// nulas (`from == to`), así que contar lo PEDIDO le prometería al humano
-    /// más renombrados de los que el core se comprometió a hacer.
+    /// Renames this batch is REALLY going to do: the steps that are not
+    /// machinery. It is not `pairs.len()`: the planner drops null pairs
+    /// (`from == to`), so counting what was REQUESTED would promise the
+    /// human more renames than the core committed to doing.
     #[must_use]
     pub fn real_steps(&self) -> usize {
         self.ready()
             .map_or(0, |p| p.steps.iter().filter(|s| !s.temp).count())
     }
 
-    /// El DETALLE del veredicto, que va BAJO las parejas: la maquinaria del
-    /// planificador (su número) y las colisiones, UNA POR LÍNEA, hasta
-    /// [`RENAME_COLLISION_LIMIT`] más un resumen de las que no caben.
+    /// The verdict's DETAIL, which goes BELOW the pairs: the planner's
+    /// machinery (its count) and the collisions, ONE PER LINE, up to
+    /// [`RENAME_COLLISION_LIMIT`] plus a summary of the ones that do not fit.
     ///
-    /// Cada línea vuelve con su flag HOSTIL: el badge lo pone cada frontend
-    /// (la TUI usa `!` ASCII, la GUI `⚠`), pero el saneado —quién se
-    /// enmascara, quién se acorta y por dónde— se decide aquí una sola vez.
+    /// Each line comes back with its HOSTILE flag: each frontend puts on the
+    /// badge (the TUI uses ASCII `!`, the GUI `⚠`), but the sanitizing —
+    /// who gets masked, who gets shortened and where — is decided here just
+    /// once.
     ///
-    /// `pair_count` es cuántas parejas tiene la petición, y sirve para UNA
-    /// cosa: un `pair_index` que se salga de ella no se pinta. Un daemon
-    /// hostil que conteste «pareja 41» sobre un plan de 3 no puede hacer que
-    /// el modal señale una fila que no existe; la línea pierde el índice y
-    /// conserva el veredicto.
+    /// `pair_count` is how many pairs the request has, and it is used for
+    /// ONE thing: a `pair_index` that falls outside it is not painted. A
+    /// hostile daemon answering "pair 41" about a plan of 3 cannot make the
+    /// modal point at a row that does not exist; the line loses the index
+    /// and keeps the verdict.
     #[must_use]
     pub fn detail_parts(&self, pair_count: usize, lang: norte_i18n::Lang) -> Vec<DetailPart> {
         let mut out = Vec::new();
@@ -396,11 +403,11 @@ impl BatchPlan {
         let shown = plan.collisions.len().min(RENAME_COLLISION_LIMIT);
         for c in plan.collisions.iter().take(shown) {
             let (name, hostile) = crate::display_name(c.name.as_bytes());
-            // El presupuesto del nombre sale de lo que MIDE el prefijo ya
-            // traducido, no de una constante adivinada contra la etiqueta más
-            // corta.
+            // The name's budget comes from what the already-translated
+            // prefix MEASURES, not from a constant guessed against the
+            // shortest label.
             let kind_key = collision_kind_key(c.kind);
-            let prefijo = crate::cells(&norte_i18n::ta_in(
+            let prefix = crate::cells(&norte_i18n::ta_in(
                 lang,
                 "modal-rename-batch-collision-prefix",
                 &[
@@ -408,25 +415,24 @@ impl BatchPlan {
                     ("kind", &norte_i18n::t_in(lang, kind_key)),
                 ],
             ));
-            let presupuesto = COLLISION_LINE_COLS
-                .saturating_sub(prefijo)
+            let budget = COLLISION_LINE_COLS
+                .saturating_sub(prefix)
                 .max(COLLISION_NAME_MIN_COLS);
             out.push(DetailPart::Collision {
-                // El índice de pareja es 1-based, como la etiqueta del
-                // `from`, y solo viaja si de verdad señala una fila de la
-                // petición: un daemon hostil que conteste «pareja 41» sobre
-                // un plan de 3 no puede hacer que el modal señale una fila
-                // que no existe.
+                // The pair index is 1-based, like the `from`'s label, and it
+                // only travels if it really points to a row of the request:
+                // a hostile daemon answering "pair 41" about a plan of 3
+                // cannot make the modal point at a row that does not exist.
                 index: ((c.pair_index as usize) < pair_count)
                     .then(|| c.pair_index.saturating_add(1) as usize),
                 kind_key,
-                name: crate::middle_ellipsis(&name, presupuesto),
+                name: crate::middle_ellipsis(&name, budget),
                 hostile,
             });
         }
         if plan.collisions.len() > shown {
-            // Lo escondido no se cuela limpio: una colisión OCULTA con nombre
-            // hostil marca el resumen.
+            // What is hidden does not slip through clean: a HIDDEN collision
+            // with a hostile name marks the summary.
             let hostile = plan
                 .collisions
                 .iter()
@@ -441,38 +447,39 @@ impl BatchPlan {
         out
     }
 
-    /// Cuántas líneas pinta [`Self::detail_parts`], sin construirlas. El alto
-    /// del modal de la TUI se recalcula en CADA frame; interpolar Fluent y
-    /// alocar un `Vec<String>` solo para contar sería trabajo por frame.
+    /// How many lines [`Self::detail_parts`] paints, without building them.
+    /// The TUI modal's height is recomputed on EVERY frame; interpolating
+    /// Fluent and allocating a `Vec<String>` just to count would be
+    /// per-frame work.
     #[must_use]
     pub fn detail_line_count(&self) -> usize {
         let Some(plan) = self.ready() else {
             return 0;
         };
         let shown = plan.collisions.len().min(RENAME_COLLISION_LIMIT);
-        // DOS por colisión desde #273: la causa y el nombre no comparten
-        // línea, para que un nombre no pueda fabricar la causa de otra.
+        // TWO per collision since #273: the cause and the name do not share
+        // a line, so a name cannot forge another one's cause.
         usize::from(self.temp_steps() > 0) + shown * 2 + usize::from(plan.collisions.len() > shown)
     }
 }
 
-/// Cinturón de INGESTIÓN de los hits semánticos (M4-IA-2, paridad con el
-/// belt del plan IA, compartido por TUI y GUI): un daemon CONFORME jamás
-/// supera [`norte_proto::methods::INDEX_SEMANTIC_MAX_K`] (el server recorta
-/// `k` a ese techo contractual) ni emite scores no finitos (el engine los
-/// filtra) — superar el techo o colar un NaN/∞ delata un daemon hostil/N+1
-/// inflando o envenenando la respuesta. `None` = rechazo EN BLOQUE (cero
-/// hits pintados, jamás un recorte silencioso); `Some` devuelve los hits
-/// intactos.
+/// INGESTION belt for the semantic hits (M4-IA-2, parity with the AI plan's
+/// belt, shared by TUI and GUI): a COMPLIANT daemon never exceeds
+/// [`norte_proto::methods::INDEX_SEMANTIC_MAX_K`] (the server clips `k` to
+/// that contractual ceiling) nor emits non-finite scores (the engine
+/// filters them) — exceeding the ceiling or slipping in a NaN/∞ gives away
+/// a hostile/N+1 daemon inflating or poisoning the response. `None` = a
+/// BLOCK rejection (zero hits painted, never a silent clip); `Some` returns
+/// the hits intact.
 ///
-/// PURA a propósito: testeable sin backend, como [`validate_ai_plan`].
+/// PURE on purpose: testable without a backend, like [`validate_ai_plan`].
 ///
 /// ```
 /// use norte_proto::VPath;
 /// use norte_proto::methods::SemanticHit;
 /// let ok = SemanticHit { path: VPath::parse("mem:///a").unwrap(), score: 0.9 };
 /// assert!(norte_frontend::validate_semantic_hits(vec![ok.clone()]).is_some());
-/// // UN score no finito tumba la respuesta ENTERA, aunque el resto sea legítimo.
+/// // ONE non-finite score brings down the WHOLE response, even if the rest is legitimate.
 /// let evil = SemanticHit { path: VPath::parse("mem:///b").unwrap(), score: f64::NAN };
 /// assert!(norte_frontend::validate_semantic_hits(vec![ok, evil]).is_none());
 /// ```
@@ -485,119 +492,125 @@ pub fn validate_semantic_hits(
     .then_some(hits)
 }
 
-/// Si un plan se puede APROBAR: el core lo acepta **y** el lector ha llegado
-/// al final.
+/// Whether a plan can be APPROVED: the core accepts it **and** the reader
+/// has reached the end.
 ///
-/// Dos preguntas, y ninguna de las dos puede contestar la otra. Que el plan
-/// sea ejecutable lo sabe el core y no el lector; que el lector lo haya visto
-/// no lo sabe el core. Una aprobación es una firma, y la firma de algo que no
-/// se ha leído no es una aprobación — con un plan de doscientos renombrados,
-/// los que importan pueden estar en la fila ciento ochenta.
+/// Two questions, and neither can answer the other. Whether the plan is
+/// executable is known by the core and not the reader; whether the reader
+/// has seen it is not known by the core. An approval is a signature, and the
+/// signature of something that has not been read is not an approval — with
+/// a plan of two hundred renames, the ones that matter can be at row one
+/// hundred eighty.
 ///
-/// Vivía solo en la ventana: el terminal dejaba aprobar sin bajar, así que la
-/// misma pregunta tenía dos respuestas en la superficie donde más caro sale
-/// (ADR 0077). Aquí la respuesta es una.
+/// It used to live only in the window: the terminal let you approve without
+/// scrolling down, so the same question had two answers on the surface
+/// where getting it wrong costs the most (ADR 0077). Here there is one
+/// answer.
 ///
-/// `visto` es la marca de agua ALTA —hasta dónde se ha llegado alguna vez—,
-/// no la posición actual: volver arriba no des-lee lo que ya se leyó.
+/// `seen` is the HIGH watermark — how far it has ever been scrolled — not
+/// the current position: scrolling back up does not un-read what was
+/// already read.
 ///
 /// ```
 /// use norte_frontend::approval_ready;
 ///
-/// // Visto entero y el core lo acepta.
+/// // Seen in full and the core accepts it.
 /// assert!(approval_ready(true, 20, 20));
-/// // Visto entero pero el core lo rechaza: no hay hash que mandar.
+/// // Seen in full but the core rejects it: no hash to send.
 /// assert!(!approval_ready(false, 20, 20));
-/// // El core lo acepta y el lector se ha quedado a mitad.
+/// // The core accepts it and the reader stopped halfway.
 /// assert!(!approval_ready(true, 10, 20));
-/// // Un plan vacío está visto por definición.
+/// // An empty plan is seen by definition.
 /// assert!(approval_ready(true, 0, 0));
 /// ```
 #[must_use]
-pub fn approval_ready(plan_confirmable: bool, visto: usize, total: usize) -> bool {
-    plan_confirmable && visto >= total
+pub fn approval_ready(plan_confirmable: bool, seen: usize, total: usize) -> bool {
+    plan_confirmable && seen >= total
 }
 
-/// ¿Alguna de las rutas que NO se enseñan se pintaría alterada?
+/// Would any of the paths that are NOT shown paint as altered?
 ///
-/// El badge de una ruta visible dice «lo que lees no son los bytes que hay».
-/// Sobre lo recortado no se puede decir eso —no está delante para mirarlo—,
-/// pero sí que ahí fuera hay algo así, que es lo que decide si merece la pena
-/// ampliar antes de aprobar. `saltar` es cuántas se enseñan.
+/// A visible path's badge says "what you read is not the bytes that are
+/// there". That cannot be said about what got truncated — it is not there
+/// to look at — but it CAN be said that something like that is out there,
+/// which is what decides whether it is worth expanding before approving.
+/// `skip` is how many are shown.
 ///
-/// De los dos frontends porque es la misma pregunta sobre las mismas rutas y
-/// sobre la superficie donde equivocarse sale más caro: el terminal lo decía
-/// desde siempre y la ventana no (ADR 0077).
+/// For both frontends because it is the same question about the same paths
+/// and on the surface where getting it wrong costs the most: the terminal
+/// always said so and the window did not (ADR 0077).
 ///
 /// ```
 /// use norte_proto::VPath;
 /// use norte_frontend::overflow_hostile;
 ///
-/// let limpia = VPath::parse("file:///casa/a.txt").unwrap();
-/// let rara = VPath::parse("file:///casa/a%E2%80%AE.txt").unwrap();
+/// let clean = VPath::parse("file:///home/a.txt").unwrap();
+/// let weird = VPath::parse("file:///home/a%E2%80%AE.txt").unwrap();
 ///
-/// // La hostil se ENSEÑA: el badge es suyo, no del resumen.
-/// assert!(!overflow_hostile(&[rara.clone(), limpia.clone()], 2));
-/// // La hostil se queda fuera: el resumen lo dice.
-/// assert!(overflow_hostile(&[limpia.clone(), rara], 1));
-/// // Nada recortado, nada que decir.
-/// assert!(!overflow_hostile(&[limpia], 9));
+/// // The hostile one is SHOWN: the badge is its own, not the summary's.
+/// assert!(!overflow_hostile(&[weird.clone(), clean.clone()], 2));
+/// // The hostile one is left out: the summary says so.
+/// assert!(overflow_hostile(&[clean.clone(), weird], 1));
+/// // Nothing truncated, nothing to say.
+/// assert!(!overflow_hostile(&[clean], 9));
 /// ```
 #[must_use]
-pub fn overflow_hostile(rutas: &[VPath], saltar: usize) -> bool {
-    rutas.iter().skip(saltar).any(|p| crate::path_display(p).1)
+pub fn overflow_hostile(paths: &[VPath], skip: usize) -> bool {
+    paths.iter().skip(skip).any(|p| crate::path_display(p).1)
 }
 
-/// ¿Este texto YA REDACTADO se pintaría alterado?
+/// Would this ALREADY-REDACTED text paint as altered?
 ///
-/// Para las rutas que llegan como TEXTO y no como [`VPath`] — las de una
-/// petición de aprobación, que el daemon manda redactadas porque los bytes
-/// originales no salen de ahí.
+/// For paths that arrive as TEXT and not as [`VPath`] — the ones from an
+/// approval request, which the daemon sends redacted because the original
+/// bytes do not leave there.
 ///
-/// Dos motivos para marcar, y el segundo es el que se olvida: comparar contra
-/// el original no detecta nada, porque el daemon ya pasó los bytes por su
-/// `display_lossy` y los controles, los overrides bidi y los bytes inválidos
-/// YA son `U+FFFD`. Ese carácter ES la señal de que lo que se lee no es lo que
-/// hay; no se puede recuperar qué había, pero sí decir que no es fiel.
+/// Two reasons to flag, and the second is the one that gets forgotten:
+/// comparing against the original detects nothing, because the daemon
+/// already ran the bytes through its `display_lossy` and controls, bidi
+/// overrides and invalid bytes are ALREADY `U+FFFD`. That character IS the
+/// signal that what is read is not what is there; what was there cannot be
+/// recovered, but it can be said that it is not faithful.
 ///
 /// ```
 /// use norte_frontend::redacted_hostile;
-/// assert!(!redacted_hostile("casa/a.txt"));
-/// // Lo que el daemon ya sustituyó.
-/// assert!(redacted_hostile("casa/a\u{FFFD}.txt"));
-/// // Y lo que llega entero y hay que enmascarar aquí.
-/// assert!(redacted_hostile("casa/a\u{200B}.txt"));
+/// assert!(!redacted_hostile("home/a.txt"));
+/// // What the daemon already substituted.
+/// assert!(redacted_hostile("home/a\u{FFFD}.txt"));
+/// // And what arrives whole and has to be masked here.
+/// assert!(redacted_hostile("home/a\u{200B}.txt"));
 /// ```
 #[must_use]
-pub fn redacted_hostile(texto: &str) -> bool {
-    norte_encoding::mask_terminal_hazards(texto) != texto || texto.contains('\u{FFFD}')
+pub fn redacted_hostile(text: &str) -> bool {
+    norte_encoding::mask_terminal_hazards(text) != text || text.contains('\u{FFFD}')
 }
 
-/// [`overflow_hostile`] para rutas que llegan como texto redactado.
+/// [`overflow_hostile`] for paths that arrive as redacted text.
 ///
 /// ```
 /// use norte_frontend::overflow_hostile_redacted;
-/// let rutas = ["a.txt".to_owned(), "b\u{FFFD}.txt".to_owned()];
-/// assert!(overflow_hostile_redacted(&rutas, 1), "la rara se queda fuera");
-/// assert!(!overflow_hostile_redacted(&rutas, 2), "se enseñan las dos");
+/// let paths = ["a.txt".to_owned(), "b\u{FFFD}.txt".to_owned()];
+/// assert!(overflow_hostile_redacted(&paths, 1), "the weird one is left out");
+/// assert!(!overflow_hostile_redacted(&paths, 2), "both are shown");
 /// ```
 #[must_use]
-pub fn overflow_hostile_redacted(rutas: &[String], saltar: usize) -> bool {
-    rutas.iter().skip(saltar).any(|p| redacted_hostile(p))
+pub fn overflow_hostile_redacted(paths: &[String], skip: usize) -> bool {
+    paths.iter().skip(skip).any(|p| redacted_hostile(p))
 }
 
-/// Badge por defecto de [`item_lines`]: el aviso que ya usaba el modal de la
-/// GUI. Los frontends con un badge propio (el TUI usa `!`, ASCII, por los
-/// terminales que no pintan `⚠`) pasan el suyo a [`item_lines_with`] — el
-/// crate no elige badge, solo garantiza que el flag hostil se MARCA.
+/// Default badge for [`item_lines`]: the warning the GUI's modal already
+/// used. Frontends with their own badge (the TUI uses ASCII `!`, for
+/// terminals that do not render `⚠`) pass theirs to [`item_lines_with`] —
+/// the crate does not choose a badge, it only guarantees the hostile flag
+/// gets MARKED.
 const DEFAULT_BADGE: &str = "⚠";
 
-/// Hasta [`MODAL_ITEM_LIMIT`] nombres saneados (una línea por ítem, jamás
-/// dos rutas en la misma); si sobran, una línea final localizada con cuántos
-/// quedan fuera.
+/// Up to [`MODAL_ITEM_LIMIT`] sanitized names (one line per item, never two
+/// paths on the same one); if there are more, a final localized line with
+/// how many are left out.
 ///
-/// Pinta el NOMBRE de cada ítem, no la ruta entera: en un lote todos
-/// comparten directorio (el del pane) y el destino va en su propia línea.
+/// Paints the NAME of each item, not the whole path: in a batch they all
+/// share a directory (the pane's) and the destination goes on its own line.
 ///
 /// ```
 /// use norte_proto::VPath;
@@ -607,7 +620,7 @@ const DEFAULT_BADGE: &str = "⚠";
 /// let lines = norte_frontend::item_lines(&items);
 /// assert_eq!(lines.len(), norte_frontend::MODAL_ITEM_LIMIT + 1);
 /// assert_eq!(lines[0], "f0");
-/// // La última RESUME los que no caben: 12 - 10 = 2.
+/// // The last one SUMMARIZES the ones that do not fit: 12 - 10 = 2.
 /// assert!(lines.last().unwrap().contains('2'));
 /// ```
 #[must_use]
@@ -615,17 +628,17 @@ pub fn item_lines(items: &[VPath]) -> Vec<String> {
     item_lines_with(items, DEFAULT_BADGE, None)
 }
 
-/// [`item_lines`] con el badge del frontend y la REINTERPRETACIÓN de nombres
-/// del pane origen (#57): el diálogo debe pintar el MISMO texto por el que el
-/// usuario navegó — con un pane en cp866, confirmar un borrado mostrando el
-/// lossy `�����` en vez de `Папка` sería preguntar por otra cosa.
+/// [`item_lines`] with the frontend's badge and the source pane's name
+/// REINTERPRETATION (#57): the dialog has to paint the SAME text the user
+/// navigated by — with a pane in cp866, confirming a delete by showing the
+/// lossy `�����` instead of `Папка` would be asking about something else.
 ///
 /// ```
 /// use norte_encoding::NameEncoding;
 /// use norte_proto::VPath;
 /// let items = vec![VPath::parse("mem:///CAF%90.TXT").unwrap()];
 /// let lines = norte_frontend::item_lines_with(&items, "!", Some(NameEncoding::Cp437));
-/// // Reinterpretado Y marcado: el texto pintado no son los bytes.
+/// // Reinterpreted AND flagged: the text painted is not the bytes.
 /// assert_eq!(lines, vec!["! CAFÉ.TXT".to_string()]);
 /// ```
 #[must_use]
@@ -649,29 +662,31 @@ pub fn item_lines_with(
         .collect();
     if items.len() > MODAL_ITEM_LIMIT {
         let n = (items.len() - MODAL_ITEM_LIMIT).to_string();
-        // Clave heredada de la GUI (GUI-e T1): la comparte ahora el TUI —
-        // renombrarla no cambiaría el texto y rompería las traducciones.
+        // Key inherited from the GUI (GUI-e T1): now shared by the TUI —
+        // renaming it would not change the text and would break the
+        // translations.
         lines.push(norte_i18n::ta("gui-modal-more", &[("n", n.as_str())]));
     }
     lines
 }
 
-/// Una línea del informe de un lote de renombrado (`fs.rename_batch_report`).
+/// A line of a rename batch's report (`fs.rename_batch_report`).
 ///
-/// Las frases van traducidas; las rutas NO se convierten en texto aquí,
-/// porque cada frontend las pinta con su saneado y su badge. Lo que sí se
-/// decide aquí es que una ruta va SOLA en su línea: metida en una frase, otra
-/// ruta la puede suplantar (#273).
+/// Phrases travel translated; paths are NOT turned into text here, because
+/// each frontend paints them with its own sanitizing and badge. What IS
+/// decided here is that a path goes ALONE on its line: embedded in a
+/// phrase, another path can impersonate it (#273).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReportLine {
-    /// Una frase del informe, ya traducida. No lleva nada de nadie.
+    /// A phrase from the report, already translated. It carries nothing
+    /// from anyone.
     Phrase(String),
-    /// Una ruta que buscar: el nombre que lleva AHORA lo que se quedó a
-    /// medias.
+    /// A path to look for: the name that whatever got stuck halfway now
+    /// carries.
     Path(norte_proto::VPath),
 }
 
-/// `true` si el lote no dejó nada que buscar ni que rematar.
+/// `true` if the batch left nothing to look for or finish off.
 ///
 /// ```
 /// use norte_proto::methods::FsRenameBatchReportResult;
@@ -690,20 +705,20 @@ pub fn batch_report_is_clean(r: &norte_proto::methods::FsRenameBatchReportResult
         && r.rolled_back == 0
 }
 
-/// El cuerpo del informe de un lote: qué se aplicó, qué no se pudo devolver,
-/// y CÓMO SE LLAMA AHORA lo que se quedó a medias.
+/// The body of a batch's report: what was applied, what could not be
+/// reverted, and WHAT IT IS NOW CALLED, whatever got stuck halfway.
 ///
-/// `stuck` y `uncertain` pueden venir LOS DOS, y dicen cosas distintas: uno
-/// es «no se pudo devolver», el otro «no se sabe si surtió efecto». Las
-/// compensaciones perdidas son el único aviso de que un undo de sesión se
-/// parará ahí.
+/// `stuck` and `uncertain` can BOTH show up, and they say different things:
+/// one is "could not be reverted", the other "not known whether it took
+/// effect". Lost compensations are the only warning that a session undo
+/// will stop there.
 #[must_use]
 pub fn batch_report_lines(
     r: &norte_proto::methods::FsRenameBatchReportResult,
     lang: norte_i18n::Lang,
 ) -> Vec<ReportLine> {
-    let frase = |clave: &str| ReportLine::Phrase(norte_i18n::t_in(lang, clave));
-    let mut cuerpo = vec![ReportLine::Phrase(norte_i18n::ta_in(
+    let phrase = |key: &str| ReportLine::Phrase(norte_i18n::t_in(lang, key));
+    let mut body = vec![ReportLine::Phrase(norte_i18n::ta_in(
         lang,
         "modal-batch-summary",
         &[
@@ -711,35 +726,35 @@ pub fn batch_report_lines(
             ("back", &r.rolled_back.to_string()),
         ],
     ))];
-    if let Some(paso) = &r.stuck {
-        cuerpo.push(frase("modal-batch-stuck"));
-        cuerpo.push(ReportLine::Path(paso.to.clone()));
-        cuerpo.push(frase(if paso.journalled {
+    if let Some(step) = &r.stuck {
+        body.push(phrase("modal-batch-stuck"));
+        body.push(ReportLine::Path(step.to.clone()));
+        body.push(phrase(if step.journalled {
             "modal-batch-stuck-journalled"
         } else {
             "modal-batch-stuck-unjournalled"
         }));
     }
-    if let Some(paso) = &r.uncertain {
-        cuerpo.push(frase("modal-batch-uncertain"));
-        cuerpo.push(ReportLine::Path(paso.to.clone()));
+    if let Some(step) = &r.uncertain {
+        body.push(phrase("modal-batch-uncertain"));
+        body.push(ReportLine::Path(step.to.clone()));
     }
     if r.compensations_lost > 0 {
-        cuerpo.push(ReportLine::Phrase(norte_i18n::ta_in(
+        body.push(ReportLine::Phrase(norte_i18n::ta_in(
             lang,
             "modal-batch-compensations-lost",
             &[("n", &r.compensations_lost.to_string())],
         )));
     }
-    cuerpo
+    body
 }
 
-/// `true` si el undo devolvió TODO lo que tocaba.
+/// `true` if the undo reverted EVERYTHING it was supposed to.
 ///
-/// Lo saltado cuenta como no-limpio: una entrada irreversible o una creación
-/// que se queda porque el destino no tiene papelera son cosas que NO
-/// volvieron, y un informe que las callara diría que el árbol está como
-/// estaba.
+/// What got skipped counts as not-clean: an irreversible entry or a
+/// creation that stays because the destination has no trash are things that
+/// did NOT come back, and a report that hid them would say the tree is as
+/// it was.
 #[must_use]
 pub fn undo_report_is_clean(r: &norte_proto::methods::PolicyUndoReportResult) -> bool {
     r.blocked.is_none()
@@ -750,15 +765,15 @@ pub fn undo_report_is_clean(r: &norte_proto::methods::PolicyUndoReportResult) ->
         && r.skipped_created_no_trash == 0
 }
 
-/// El cuerpo del informe de un undo: qué volvió y qué no. Las mismas líneas
-/// en la ventana y en la terminal.
+/// The body of an undo's report: what came back and what did not. The same
+/// lines in the window and in the terminal.
 #[must_use]
 pub fn undo_report_lines(
     r: &norte_proto::methods::PolicyUndoReportResult,
     lang: norte_i18n::Lang,
 ) -> Vec<ReportLine> {
-    let frase = |texto: String| ReportLine::Phrase(texto);
-    let mut cuerpo = vec![frase(norte_i18n::ta_in(
+    let phrase = |text: String| ReportLine::Phrase(text);
+    let mut body = vec![phrase(norte_i18n::ta_in(
         lang,
         "modal-undo-summary",
         &[
@@ -767,16 +782,16 @@ pub fn undo_report_lines(
         ],
     ))];
     if r.skipped_created_no_trash > 0 {
-        cuerpo.push(frase(norte_i18n::ta_in(
+        body.push(phrase(norte_i18n::ta_in(
             lang,
             "modal-undo-left-in-place",
             &[("n", &r.skipped_created_no_trash.to_string())],
         )));
     }
     if let Some(b) = &r.blocked {
-        // El `seq` es una referencia OPACA: sirve para CITAR la entrada contra
-        // el journal del server, no para interpretarla aquí.
-        cuerpo.push(frase(norte_i18n::ta_in(
+        // The `seq` is an OPAQUE reference: it is used to CITE the entry
+        // against the server's journal, not to interpret it here.
+        body.push(phrase(norte_i18n::ta_in(
             lang,
             "modal-undo-blocked",
             &[
@@ -788,25 +803,25 @@ pub fn undo_report_lines(
             ],
         )));
     }
-    if let Some(paso) = &r.batch_stuck {
-        cuerpo.push(frase(norte_i18n::t_in(lang, "modal-undo-batch-stuck")));
-        cuerpo.push(ReportLine::Path(paso.to.clone()));
+    if let Some(step) = &r.batch_stuck {
+        body.push(phrase(norte_i18n::t_in(lang, "modal-undo-batch-stuck")));
+        body.push(ReportLine::Path(step.to.clone()));
     }
     if r.compensations_lost > 0 {
-        cuerpo.push(frase(norte_i18n::ta_in(
+        body.push(phrase(norte_i18n::ta_in(
             lang,
             "modal-batch-compensations-lost",
             &[("n", &r.compensations_lost.to_string())],
         )));
     }
     if r.denied_total > 0 {
-        cuerpo.push(frase(norte_i18n::ta_in(
+        body.push(phrase(norte_i18n::ta_in(
             lang,
             "modal-undo-denied",
             &[("n", &r.denied_total.to_string())],
         )));
     }
-    cuerpo
+    body
 }
 
 #[cfg(test)]
@@ -815,7 +830,7 @@ mod batch_report_tests {
     use norte_proto::VPath;
     use norte_proto::methods::{FsRenameBatchReportResult, RenameStuckStep};
 
-    fn paso(to: &str) -> RenameStuckStep {
+    fn step(to: &str) -> RenameStuckStep {
         RenameStuckStep {
             from: VPath::parse("mem:///d/.norte-rename-1").expect("vpath"),
             to: VPath::parse(to).expect("vpath"),
@@ -826,21 +841,21 @@ mod batch_report_tests {
         }
     }
 
-    /// Con `stuck` Y `uncertain`, salen los dos, cada uno con su frase y su
-    /// ruta en una línea propia.
+    /// With `stuck` AND `uncertain`, both come out, each with its own
+    /// phrase and its own path on its own line.
     #[test]
     fn stuck_and_uncertain_both_show_each_path_on_its_own_line() {
         let r = FsRenameBatchReportResult {
             applied: 1,
             rolled_back: 1,
             failed_pair: Some(1),
-            stuck: Some(paso("mem:///d/a")),
-            uncertain: Some(paso("mem:///d/b")),
+            stuck: Some(step("mem:///d/a")),
+            uncertain: Some(step("mem:///d/b")),
             compensations_lost: 2,
         };
         assert!(!batch_report_is_clean(&r));
-        let lineas = batch_report_lines(&r, norte_i18n::Lang::En);
-        let rutas: Vec<_> = lineas
+        let lines = batch_report_lines(&r, norte_i18n::Lang::En);
+        let paths: Vec<_> = lines
             .iter()
             .filter_map(|l| match l {
                 ReportLine::Path(p) => Some(p.clone()),
@@ -848,17 +863,17 @@ mod batch_report_tests {
             })
             .collect();
         assert_eq!(
-            rutas,
+            paths,
             vec![
                 VPath::parse("mem:///d/a").expect("vpath"),
                 VPath::parse("mem:///d/b").expect("vpath")
             ]
         );
         assert!(
-            lineas
+            lines
                 .iter()
                 .any(|l| matches!(l, ReportLine::Phrase(t) if t.contains("compensations"))),
-            "las compensaciones perdidas se dicen: {lineas:?}"
+            "the lost compensations are stated: {lines:?}"
         );
     }
 }
@@ -875,30 +890,30 @@ mod ai_plan_tests {
         }
     }
 
-    /// Audit MAJOR-2 (fail-loud): UNA pareja inválida — traversal `..`,
-    /// separador embebido o nombre vacío — tumba el plan ENTERO (`None`),
-    /// jamás un skip silencioso que aplique "lo demás" de un plan
-    /// adulterado por un daemon hostil/roto.
+    /// Audit MAJOR-2 (fail-loud): ONE invalid pair — a `..` traversal, an
+    /// embedded separator or an empty name — brings down the WHOLE plan
+    /// (`None`), never a silent skip that applies "the rest" of a plan
+    /// tampered with by a hostile/broken daemon.
     #[test]
-    fn una_pareja_invalida_tumba_el_plan_entero() {
+    fn one_invalid_pair_brings_down_the_whole_plan() {
         assert!(validate_ai_plan(&[e("a", "b"), e("c", "..")]).is_none());
         assert!(validate_ai_plan(&[e("a/b", "c"), e("d", "e")]).is_none());
         assert!(validate_ai_plan(&[e("", "x")]).is_none());
-        // #275: lo que el validador del engine rechaza y el cinturón dejaba
-        // pasar. `!` es el marcador de archivo-como-directorio (ADR 0018) y
-        // `\\` es separador en Windows, o sea travesía que `Segment` no ve
-        // porque solo mira `/`.
+        // #275: what the engine's validator rejects and the belt used to let
+        // through. `!` is the file-as-directory marker (ADR 0018) and `\\`
+        // is a separator on Windows, i.e. a traversal `Segment` does not see
+        // because it only looks at `/`.
         assert!(validate_ai_plan(&[e("a.txt", "!")]).is_none());
         assert!(validate_ai_plan(&[e("!", "a.txt")]).is_none());
         assert!(validate_ai_plan(&[e("a.txt", "..\\evil")]).is_none());
         assert!(validate_ai_plan(&[e("a.txt", "sub\\x")]).is_none());
-        assert!(validate_ai_plan(&[e("ok", "tambien-ok"), e("x", "a/b")]).is_none());
+        assert!(validate_ai_plan(&[e("ok", "also-ok"), e("x", "a/b")]).is_none());
     }
 
-    /// Un plan bien formado conserva orden y longitud, bytes exactos.
+    /// A well-formed plan keeps order and length, exact bytes.
     #[test]
-    fn un_plan_valido_conserva_orden_y_longitud() {
-        let pairs = validate_ai_plan(&[e("a", "b"), e("c", "d")]).expect("plan válido");
+    fn a_valid_plan_keeps_order_and_length() {
+        let pairs = validate_ai_plan(&[e("a", "b"), e("c", "d")]).expect("valid plan");
         assert_eq!(pairs.len(), 2);
         assert_eq!(pairs[0].0.as_bytes(), b"a");
         assert_eq!(pairs[0].1.as_bytes(), b"b");
@@ -906,27 +921,27 @@ mod ai_plan_tests {
         assert_eq!(pairs[1].1.as_bytes(), b"d");
     }
 
-    /// El plan vacío es válido (los frontends no encolan nada con él).
+    /// The empty plan is valid (frontends do not queue anything with it).
     #[test]
-    fn un_plan_vacio_es_valido() {
-        assert_eq!(validate_ai_plan(&[]).expect("vacío válido").len(), 0);
+    fn an_empty_plan_is_valid() {
+        assert_eq!(validate_ai_plan(&[]).expect("empty is valid").len(), 0);
     }
 
-    /// Regla 1, en la costura: `AiRenameEntry` viaja como `String` porque el
-    /// core rechaza fail-loud un dir con nombres no-UTF8 ANTES de llamar al
-    /// proveedor, así que su `from_utf8_lossy` es la identidad. Eso valía
-    /// mientras el valor solo se PINTABA; ahora es el `from` de un rename de
-    /// verdad, y lo que hay que pinear es qué pasa si esa premisa se rompiera:
-    /// un `U+FFFD` es un `Segment` perfectamente legal, así que la pareja
-    /// viaja tal cual y el core contesta `AbsentSource` — el lote no ejecuta
-    /// NADA. Falla cerrado, nunca renombra el fichero equivocado.
+    /// Rule 1, at the seam: `AiRenameEntry` travels as `String` because the
+    /// core fail-loud rejects a dir with non-UTF8 names BEFORE calling the
+    /// provider, so its `from_utf8_lossy` is the identity. That held while
+    /// the value was only PAINTED; now it is the `from` of a real rename,
+    /// and what has to be pinned down is what happens if that premise broke:
+    /// a `U+FFFD` is a perfectly legal `Segment`, so the pair travels as-is
+    /// and the core answers `AbsentSource` — the batch executes NOTHING.
+    /// It fails closed, it never renames the wrong file.
     #[test]
-    fn un_nombre_con_residuo_lossy_viaja_tal_cual_y_muere_en_el_core() {
-        let pares = super::rename_pairs(&[e("caf\u{FFFD}.txt", "cafe.txt")]).expect("segmento");
+    fn a_name_with_lossy_residue_travels_as_is_and_dies_in_the_core() {
+        let pairs = super::rename_pairs(&[e("caf\u{FFFD}.txt", "cafe.txt")]).expect("segment");
         assert_eq!(
-            pares[0].from.as_bytes(),
+            pairs[0].from.as_bytes(),
             "caf\u{FFFD}.txt".as_bytes(),
-            "el frontend no inventa bytes: manda lo que le dieron",
+            "the frontend does not invent bytes: it sends what it was given",
         );
     }
 }
@@ -941,10 +956,10 @@ mod batch_plan_tests {
     };
 
     fn seg(b: &[u8]) -> Segment {
-        Segment::new(b.to_vec()).expect("segmento")
+        Segment::new(b.to_vec()).expect("segment")
     }
 
-    fn listo(
+    fn ready(
         collisions: Vec<RenameCollision>,
         steps: Vec<RenameStep>,
         executable: bool,
@@ -957,7 +972,7 @@ mod batch_plan_tests {
         }))
     }
 
-    fn colision(pair_index: u32, name: &[u8], kind: RenameCollisionKind) -> RenameCollision {
+    fn collision(pair_index: u32, name: &[u8], kind: RenameCollisionKind) -> RenameCollision {
         RenameCollision {
             pair_index,
             name: seg(name),
@@ -965,27 +980,27 @@ mod batch_plan_tests {
         }
     }
 
-    /// Los tres estados dicen cosas DISTINTAS y solo uno deja confirmar. Sin
-    /// esto, «en vuelo» y «no se pudo comprobar» se pintarían igual y el
-    /// segundo sería un spinner que no avanza nunca.
+    /// The three states say DIFFERENT things and only one lets you confirm.
+    /// Without this, "in flight" and "could not be checked" would paint the
+    /// same, and the second would be a spinner that never advances.
     #[test]
-    fn los_tres_estados_no_se_confunden() {
+    fn the_three_states_are_not_confused() {
         assert!(!BatchPlan::Pending.confirmable());
         assert!(!BatchPlan::Failed.confirmable());
-        assert!(!listo(vec![], vec![], false).confirmable());
-        assert!(listo(vec![], vec![], true).confirmable());
-        let claves = [
+        assert!(!ready(vec![], vec![], false).confirmable());
+        assert!(ready(vec![], vec![], true).confirmable());
+        let keys = [
             BatchPlan::Pending.status_key(),
             BatchPlan::Failed.status_key(),
-            listo(vec![], vec![], true).status_key(),
-            listo(vec![], vec![], false).status_key(),
+            ready(vec![], vec![], true).status_key(),
+            ready(vec![], vec![], false).status_key(),
         ];
-        for (i, a) in claves.iter().enumerate() {
-            for b in &claves[i + 1..] {
-                assert_ne!(a, b, "dos estados con la misma etiqueta: {a}");
+        for (i, a) in keys.iter().enumerate() {
+            for b in &keys[i + 1..] {
+                assert_ne!(a, b, "two states with the same label: {a}");
             }
         }
-        // Sin plan no hay detalle que pintar (ni una línea fantasma).
+        // With no plan there is no detail to paint (not even a ghost line).
         assert!(
             BatchPlan::Pending
                 .detail_parts(1, norte_i18n::active())
@@ -998,43 +1013,45 @@ mod batch_plan_tests {
         );
     }
 
-    /// El VEREDICTO es lo accionable y va antes del nombre, en los DOS
-    /// locales: un traductor que reordenase `{ $name }` delante de `{ $kind }`
-    /// dejaría el veredicto a merced del recorte mudo por la derecha.
+    /// The VERDICT is the actionable part and goes before the name, in
+    /// BOTH locales: a translator reordering `{ $name }` ahead of
+    /// `{ $kind }` would leave the verdict at the mercy of silent
+    /// right-side truncation.
     #[test]
-    fn el_veredicto_precede_al_nombre_en_los_dos_locales() {
-        let plan = listo(
-            vec![colision(0, b"zzzzz.txt", RenameCollisionKind::External)],
+    fn the_verdict_precedes_the_name_in_both_locales() {
+        let plan = ready(
+            vec![collision(0, b"zzzzz.txt", RenameCollisionKind::External)],
             vec![],
             false,
         );
         for lang in [Lang::En, Lang::Es] {
             let _ = norte_i18n::force(lang);
-            let partes = plan.detail_parts(1, lang);
-            let super::DetailPart::Collision { kind_key, name, .. } = &partes[0] else {
-                panic!("{lang:?}: la parte es una colisión: {partes:?}");
+            let parts = plan.detail_parts(1, lang);
+            let super::DetailPart::Collision { kind_key, name, .. } = &parts[0] else {
+                panic!("{lang:?}: the part is a collision: {parts:?}");
             };
             assert_eq!(
                 *kind_key,
                 super::collision_kind_key(RenameCollisionKind::External)
             );
             assert_eq!(name, "zzzzz.txt");
-            // El veredicto va en SU parte y el nombre en la suya: el orden lo
-            // decide el frontend, y ninguno puede recortar al otro.
+            // The verdict goes in ITS OWN part and the name in its own: the
+            // order is decided by the frontend, and neither can truncate
+            // the other.
             assert!(
                 !name.contains(&norte_i18n::t_in(lang, kind_key)),
-                "{lang:?}: el nombre no lleva el veredicto dentro"
+                "{lang:?}: the name does not carry the verdict inside it"
             );
         }
         let _ = norte_i18n::force(Lang::En);
     }
 
-    /// El presupuesto es de la LÍNEA: con la etiqueta más larga de cada
-    /// locale y un nombre kilométrico, la línea entera sigue cabiendo — quien
-    /// se acorta es el nombre, y el recorte va MARCADO.
+    /// The budget belongs to the LINE: with each locale's longest label and
+    /// a mile-long name, the whole line still fits — what gets shortened is
+    /// the name, and the truncation is MARKED.
     #[test]
-    fn la_linea_entera_cabe_en_su_presupuesto_en_los_dos_locales() {
-        let largo = vec![b'x'; 300];
+    fn the_whole_line_fits_its_budget_in_both_locales() {
+        let long_name = vec![b'x'; 300];
         for lang in [Lang::En, Lang::Es] {
             let _ = norte_i18n::force(lang);
             for kind in [
@@ -1044,87 +1061,91 @@ mod batch_plan_tests {
                 RenameCollisionKind::AmbiguousSource,
                 RenameCollisionKind::Unknown,
             ] {
-                let plan = listo(vec![colision(0, &largo, kind)], vec![], false);
-                let partes = plan.detail_parts(1, lang);
-                let super::DetailPart::Collision { kind_key, name, .. } = &partes[0] else {
-                    panic!("{lang:?} {kind:?}: {partes:?}");
+                let plan = ready(vec![collision(0, &long_name, kind)], vec![], false);
+                let parts = plan.detail_parts(1, lang);
+                let super::DetailPart::Collision { kind_key, name, .. } = &parts[0] else {
+                    panic!("{lang:?} {kind:?}: {parts:?}");
                 };
-                // El presupuesto sigue siendo de la LÍNEA entera: causa más
-                // nombre. Quien se acorta es el nombre, y va MARCADO.
-                let causa = norte_i18n::ta_in(
+                // The budget is still that of the WHOLE line: cause plus
+                // name. What gets shortened is the name, and it is MARKED.
+                let cause = norte_i18n::ta_in(
                     lang,
                     "modal-rename-batch-collision-prefix",
                     &[("n", "1"), ("kind", &norte_i18n::t_in(lang, kind_key))],
                 );
-                let celdas = crate::cells(&causa) + crate::cells(name);
+                let cells = crate::cells(&cause) + crate::cells(name);
                 assert!(
-                    celdas <= COLLISION_LINE_COLS,
-                    "{lang:?} {kind:?}: {celdas} celdas > {COLLISION_LINE_COLS}"
+                    cells <= COLLISION_LINE_COLS,
+                    "{lang:?} {kind:?}: {cells} cells > {COLLISION_LINE_COLS}"
                 );
-                assert!(name.contains('…'), "el recorte se MARCA: {name}");
+                assert!(name.contains('…'), "the truncation is MARKED: {name}");
             }
         }
         let _ = norte_i18n::force(Lang::En);
     }
 
-    /// Dos nombres que solo se distinguen por la COLA no pueden renderizarse
-    /// idénticos: si el presupuesto se los come, la elipsis media conserva la
-    /// cola. (Mutación de control: cambiar `middle_ellipsis` por un truncado
-    /// por la derecha rompe este test.)
+    /// Two names that only differ by the TAIL cannot render identically: if
+    /// the budget eats them, the middle ellipsis keeps the tail. (Mutation
+    /// control: swapping `middle_ellipsis` for a right-side truncation
+    /// breaks this test.)
     #[test]
-    fn dos_nombres_gemelos_por_la_cola_no_se_pintan_iguales() {
+    fn two_names_twin_by_the_tail_do_not_render_identical() {
         let _ = norte_i18n::force(Lang::Es);
-        let v2 = b"factura-2024-enero-final-revisada-v2.pdf";
-        let v3 = b"factura-2024-enero-final-revisada-v3.pdf";
+        let v2 = b"invoice-2024-january-final-revised-v2.pdf";
+        let v3 = b"invoice-2024-january-final-revised-v3.pdf";
         let render = |n: &[u8]| {
-            listo(
-                vec![colision(0, n, RenameCollisionKind::Unknown)],
+            ready(
+                vec![collision(0, n, RenameCollisionKind::Unknown)],
                 vec![],
                 false,
             )
             .detail_parts(1, norte_i18n::active())
             .remove(0)
         };
-        assert_ne!(render(v2), render(v3), "la cola distingue, y sobrevive");
+        assert_ne!(
+            render(v2),
+            render(v3),
+            "the tail distinguishes, and survives"
+        );
         let _ = norte_i18n::force(Lang::En);
     }
 
-    /// Un `pair_index` que no señala ninguna fila de la petición se CAE: un
-    /// daemon hostil no puede hacer que el modal apunte a una pareja que no
-    /// existe. El veredicto y el nombre siguen ahí.
+    /// A `pair_index` that does not point at any row of the request is
+    /// DROPPED: a hostile daemon cannot make the modal point at a pair that
+    /// does not exist. The verdict and the name are still there.
     #[test]
-    fn un_indice_fuera_de_rango_no_senala_una_fila_inexistente() {
+    fn an_out_of_range_index_does_not_point_at_a_nonexistent_row() {
         let _ = norte_i18n::force(Lang::En);
-        let plan = listo(
-            vec![colision(u32::MAX, b"z.txt", RenameCollisionKind::Internal)],
+        let plan = ready(
+            vec![collision(u32::MAX, b"z.txt", RenameCollisionKind::Internal)],
             vec![],
             false,
         );
-        let partes = plan.detail_parts(3, norte_i18n::active());
-        let super::DetailPart::Collision { index, name, .. } = &partes[0] else {
-            panic!("{partes:?}");
+        let parts = plan.detail_parts(3, norte_i18n::active());
+        let super::DetailPart::Collision { index, name, .. } = &parts[0] else {
+            panic!("{parts:?}");
         };
-        assert_eq!(*index, None, "un índice imposible no viaja");
-        assert_eq!(name, "z.txt", "el nombre sigue ahí");
-        // Con la petición de verdad detrás, el índice SÍ viaja 1-based.
-        let plan = listo(
-            vec![colision(1, b"z.txt", RenameCollisionKind::Internal)],
+        assert_eq!(*index, None, "an impossible index does not travel");
+        assert_eq!(name, "z.txt", "the name is still there");
+        // With the real request behind it, the index DOES travel 1-based.
+        let plan = ready(
+            vec![collision(1, b"z.txt", RenameCollisionKind::Internal)],
             vec![],
             false,
         );
         let super::DetailPart::Collision { index, .. } =
             &plan.detail_parts(3, norte_i18n::active())[0]
         else {
-            panic!("colisión");
+            panic!("collision");
         };
         assert_eq!(*index, Some(2));
     }
 
-    /// El tope de colisiones se respeta, el resumen no calla cuántas quedan
-    /// fuera, y `detail_line_count` cuenta EXACTAMENTE lo que se pinta (el
-    /// alto del modal de la TUI se calcula con él).
+    /// The collision cap is respected, the summary does not hide how many
+    /// are left out, and `detail_line_count` counts EXACTLY what is painted
+    /// (the TUI modal's height is computed with it).
     #[test]
-    fn el_tope_de_colisiones_y_el_contador_van_a_una() {
+    fn the_collision_cap_and_the_counter_agree() {
         let _ = norte_i18n::force(Lang::En);
         for n in [
             0usize,
@@ -1134,14 +1155,14 @@ mod batch_plan_tests {
         ] {
             let cs: Vec<_> = (0..n)
                 .map(|i| {
-                    colision(
-                        u32::try_from(i).expect("cabe"),
+                    collision(
+                        u32::try_from(i).expect("fits"),
                         format!("f{i}.txt").as_bytes(),
                         RenameCollisionKind::Internal,
                     )
                 })
                 .collect();
-            let plan = listo(
+            let plan = ready(
                 cs,
                 vec![RenameStep {
                     from: seg(b"a"),
@@ -1150,60 +1171,60 @@ mod batch_plan_tests {
                 }],
                 false,
             );
-            let partes = plan.detail_parts(n.max(1), norte_i18n::active());
-            // Cada colisión pinta DOS líneas (causa y nombre); el aviso de
-            // temporales una, y el resumen otra.
-            let pintadas: usize = partes
+            let parts = plan.detail_parts(n.max(1), norte_i18n::active());
+            // Each collision paints TWO lines (cause and name); the
+            // temporaries notice one, and the summary another.
+            let painted: usize = parts
                 .iter()
                 .map(|p| usize::from(matches!(p, super::DetailPart::Collision { .. })) + 1)
                 .sum();
-            assert_eq!(pintadas, plan.detail_line_count(), "n={n}");
+            assert_eq!(painted, plan.detail_line_count(), "n={n}");
             assert!(
-                partes.len() <= 1 + RENAME_COLLISION_LIMIT + 1,
-                "n={n}: {partes:?}"
+                parts.len() <= 1 + RENAME_COLLISION_LIMIT + 1,
+                "n={n}: {parts:?}"
             );
             if n > RENAME_COLLISION_LIMIT {
-                let super::DetailPart::More { total, .. } = partes.last().expect("resumen") else {
-                    panic!("n={n}: el último es el resumen: {partes:?}");
+                let super::DetailPart::More { total, .. } = parts.last().expect("summary") else {
+                    panic!("n={n}: the last one is the summary: {parts:?}");
                 };
                 assert_eq!(*total, n, "n={n}");
             }
-            // Un temporal se CUENTA, jamás se nombra.
-            assert!(!partes.iter().any(|p| matches!(
+            // A temporary gets COUNTED, never named.
+            assert!(!parts.iter().any(|p| matches!(
                 p,
                 super::DetailPart::Collision { name, .. } if name.contains(".norte-rename-")
             )));
         }
     }
 
-    /// Cada nombre del corpus canónico: ninguna línea trae un hazard, ninguna
-    /// se parte en dos, y el enmascarado viene MARCADO para que el frontend
-    /// pueda ponerle su badge.
+    /// Every name in the canonical corpus: no line carries a hazard, none
+    /// splits in two, and the masked one comes MARKED so the frontend can
+    /// put its badge on it.
     #[test]
-    fn barrido_del_corpus_en_el_nombre_ofensor() {
+    fn corpus_sweep_on_the_offending_name() {
         let _ = norte_i18n::force(Lang::En);
         for fixture in norte_testkit::corpus::hostile_names() {
-            let plan = listo(
-                vec![colision(0, &fixture.bytes, RenameCollisionKind::External)],
+            let plan = ready(
+                vec![collision(0, &fixture.bytes, RenameCollisionKind::External)],
                 vec![],
                 false,
             );
-            let partes = plan.detail_parts(1, norte_i18n::active());
-            assert_eq!(partes.len(), 1, "corpus {}: {partes:?}", fixture.id);
-            let super::DetailPart::Collision { name, hostile, .. } = &partes[0] else {
-                panic!("corpus {}: {partes:?}", fixture.id);
+            let parts = plan.detail_parts(1, norte_i18n::active());
+            assert_eq!(parts.len(), 1, "corpus {}: {parts:?}", fixture.id);
+            let super::DetailPart::Collision { name, hostile, .. } = &parts[0] else {
+                panic!("corpus {}: {parts:?}", fixture.id);
             };
             assert!(
                 !name.chars().any(norte_encoding::is_terminal_hazard),
-                "corpus {}: hazard vivo: {name:?}",
+                "corpus {}: live hazard: {name:?}",
                 fixture.id
             );
-            // Ni un salto: un nombre no puede fabricar una línea de la lista.
+            // Not a single newline: a name cannot forge a line of the list.
             assert!(!name.contains('\n'), "corpus {}: {name:?}", fixture.id);
             assert_eq!(
                 *hostile,
                 crate::display_name(&fixture.bytes).1,
-                "corpus {}: el flag hostil tiene que llegar al frontend",
+                "corpus {}: the hostile flag has to reach the frontend",
                 fixture.id
             );
         }
@@ -1219,43 +1240,43 @@ mod semantic_hits_tests {
     fn hits(n: usize) -> Vec<SemanticHit> {
         (1..=n)
             .map(|i| SemanticHit {
-                path: VPath::parse(&format!("mem:///d/f{i}")).expect("wire válido"),
+                path: VPath::parse(&format!("mem:///d/f{i}")).expect("valid wire"),
                 score: 0.5,
             })
             .collect()
     }
 
-    /// M4-IA-2 (paridad IA-1 con el belt del plan): el cinturón acepta hasta
-    /// el techo contractual del server (`INDEX_SEMANTIC_MAX_K` — un daemon
-    /// conforme jamás lo supera) con los hits INTACTOS, y rechaza EN BLOQUE
-    /// una respuesta inflada (daemon hostil/N+1) — jamás un recorte
-    /// silencioso.
+    /// M4-IA-2 (parity with the plan's belt, IA-1): the belt accepts up to
+    /// the server's contractual ceiling (`INDEX_SEMANTIC_MAX_K` — a
+    /// compliant daemon never exceeds it) with the hits INTACT, and rejects
+    /// AS A WHOLE an inflated response (hostile/N+1 daemon) — never a
+    /// silent clip.
     #[test]
-    fn el_techo_exacto_pasa_y_uno_mas_se_rechaza_en_bloque() {
-        let max = usize::try_from(INDEX_SEMANTIC_MAX_K).expect("techo pequeño");
+    fn the_exact_ceiling_passes_and_one_more_is_rejected_as_a_whole() {
+        let max = usize::try_from(INDEX_SEMANTIC_MAX_K).expect("small ceiling");
         let ok = validate_semantic_hits(hits(max));
         assert_eq!(
             ok.as_ref().map(Vec::len),
             Some(max),
-            "el techo exacto pasa intacto"
+            "the exact ceiling passes intact"
         );
         assert!(
             validate_semantic_hits(hits(max + 1)).is_none(),
-            "uno más = rechazo en bloque"
+            "one more = rejected as a whole"
         );
     }
 
-    /// UN score no finito (NaN/∞ — el engine los filtra, así que solo un
-    /// daemon hostil/roto los emite) tumba la respuesta ENTERA, aunque el
-    /// resto sea legítimo.
+    /// ONE non-finite score (NaN/∞ — the engine filters them, so only a
+    /// hostile/broken daemon emits them) brings down the WHOLE response,
+    /// even if the rest is legitimate.
     #[test]
-    fn un_score_no_finito_tumba_la_respuesta_entera() {
+    fn a_non_finite_score_brings_down_the_whole_response() {
         for evil in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
-            let mut lote = hits(3);
-            lote[1].score = evil;
+            let mut batch = hits(3);
+            batch[1].score = evil;
             assert!(
-                validate_semantic_hits(lote).is_none(),
-                "score {evil} debe rechazar en bloque"
+                validate_semantic_hits(batch).is_none(),
+                "score {evil} must reject as a whole"
             );
         }
     }
@@ -1265,9 +1286,9 @@ mod semantic_hits_tests {
 mod tests {
     use norte_proto::VPath;
 
-    /// La lista de un modal se corta en [`super::MODAL_ITEM_LIMIT`] y RESUME
-    /// el resto en una última línea localizada — jamás pinta 500 rutas ni,
-    /// peor, calla las que no caben.
+    /// A modal's list is cut at [`super::MODAL_ITEM_LIMIT`] and SUMMARIZES
+    /// the rest in one final localized line — it never paints 500 paths, nor,
+    /// worse, hides the ones that do not fit.
     #[test]
     fn the_modal_lists_the_first_items_and_summarises_the_rest() {
         let many: Vec<VPath> = (0..20)
@@ -1283,7 +1304,8 @@ mod tests {
         );
     }
 
-    /// Un lote que cabe entero NO lleva línea de resumen (ni un «y 0 más»).
+    /// A batch that fits whole carries NO summary line (not even a "and 0
+    /// more").
     #[test]
     fn a_batch_that_fits_has_no_summary_line() {
         let few: Vec<VPath> = (0..crate::MODAL_ITEM_LIMIT)
@@ -1292,27 +1314,27 @@ mod tests {
         assert_eq!(crate::item_lines(&few).len(), crate::MODAL_ITEM_LIMIT);
     }
 
-    /// El corpus hostil entero: ni una línea deja un hazard crudo, ni una
-    /// línea contiene un salto (una ruta por línea, siempre) — la lista no
-    /// se puede FABRICAR desde un nombre.
+    /// The whole hostile corpus: not one line leaks a raw hazard, not one
+    /// line contains a newline (one path per line, always) — the list
+    /// cannot be FORGED from a name.
     #[test]
     fn item_lines_never_leak_raw_hazards_nor_forge_a_line() {
         for fixture in norte_testkit::corpus::hostile_names() {
             let Ok(seg) = norte_proto::Segment::new(fixture.bytes.clone()) else {
-                continue; // un nombre no representable como segmento no llega aquí
+                continue; // a name that cannot be represented as a segment does not reach here
             };
             let p = VPath::root(norte_proto::Scheme::new("mem").unwrap(), None).join(seg);
             let lines = crate::item_lines(std::slice::from_ref(&p));
-            assert_eq!(lines.len(), 1, "{}: una línea por ítem", fixture.id);
+            assert_eq!(lines.len(), 1, "{}: one line per item", fixture.id);
             let line = &lines[0];
             assert!(
                 !line.chars().any(norte_encoding::is_terminal_hazard),
-                "{}: hazard crudo en {line:?}",
+                "{}: raw hazard in {line:?}",
                 fixture.id,
             );
             assert!(
                 !line.contains('\n'),
-                "{}: un nombre no puede fabricar una línea: {line:?}",
+                "{}: a name cannot forge a line: {line:?}",
                 fixture.id,
             );
         }
@@ -1324,27 +1346,29 @@ mod belt_tests {
     use super::ai_plan_tests::e;
     use super::validate_ai_plan_in;
 
-    /// El `from` tiene que existir DONDE se va a aplicar (#275).
+    /// The `from` has to exist WHERE it is going to be applied (#275).
     ///
-    /// Sin esto, un plan adulterado renombra algo que el lector no está
-    /// mirando: la pantalla que aprueba enseña un directorio y la operación
-    /// toca otro fichero del mismo.
+    /// Without this, a tampered plan renames something the reader is not
+    /// looking at: the screen approving it shows one directory and the
+    /// operation touches another file in the same one.
     #[test]
-    fn un_from_que_no_esta_en_el_listado_tumba_el_plan() {
-        let nombres = vec![b"a.txt".to_vec(), b"b.txt".to_vec()];
-        assert!(validate_ai_plan_in(&[e("a.txt", "c.txt")], Some(&nombres)).is_some());
-        assert!(validate_ai_plan_in(&[e("z.txt", "c.txt")], Some(&nombres)).is_none());
-        // Y una sola mala tumba el lote entero, como el resto del cinturón.
+    fn a_from_not_in_the_listing_brings_down_the_plan() {
+        let names = vec![b"a.txt".to_vec(), b"b.txt".to_vec()];
+        assert!(validate_ai_plan_in(&[e("a.txt", "c.txt")], Some(&names)).is_some());
+        assert!(validate_ai_plan_in(&[e("z.txt", "c.txt")], Some(&names)).is_none());
+        // And a single bad one brings down the whole batch, like the rest
+        // of the belt.
         assert!(
-            validate_ai_plan_in(&[e("a.txt", "c.txt"), e("z.txt", "d.txt")], Some(&nombres))
+            validate_ai_plan_in(&[e("a.txt", "c.txt"), e("z.txt", "d.txt")], Some(&names))
                 .is_none()
         );
     }
 
-    /// Sin listado delante se comprueba la FORMA y nada más: `None` significa
-    /// «este llamante no lo tiene», no «da igual».
+    /// With no listing in front, only the SHAPE is checked, nothing else:
+    /// `None` means "this caller does not have it", not "it does not
+    /// matter".
     #[test]
-    fn sin_listado_solo_se_comprueba_la_forma() {
+    fn with_no_listing_only_the_shape_is_checked() {
         assert!(validate_ai_plan_in(&[e("z.txt", "c.txt")], None).is_some());
         assert!(validate_ai_plan_in(&[e("z.txt", "..")], None).is_none());
     }

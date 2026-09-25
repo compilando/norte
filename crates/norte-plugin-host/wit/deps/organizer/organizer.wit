@@ -1,69 +1,71 @@
-// `norte:organizer` (fase 8 del programa WOW): un plugin PROPONE a dónde
-// mover cada fichero —con subdirectorios— y el core lo ejecuta como un lote:
-// crea las carpetas que falten y mueve, todo bajo un `batch_id`, con
-// revisión delante del humano, `plan_hash`, journal y un solo deshacer.
+// `norte:organizer` (phase 8 of the WOW program): a plugin PROPOSES where to
+// move each file — with subdirectories — and the core runs it as a batch:
+// creates the missing folders and moves, all under one `batch_id`, with
+// review in front of the human, `plan_hash`, journal and a single undo.
 //
-// Es el hermano de `norte:renamer` y la diferencia cabe en una frase: allí
-// el destino es un NOMBRE y aquí es una RUTA RELATIVA. Eso es lo que
-// convierte un renombrado en una reorganización, y también lo que obliga a
-// validar: un `..` en ese destino es una escritura fuera del directorio que
-// el humano estaba mirando, así que el host lo comprueba ANTES de crear
-// nada. Un guest no puede saltárselo — su propuesta es texto, y el core la
-// pasa por la misma puerta que la de un modelo de IA.
+// It is `norte:renamer`'s sibling and the difference fits in one sentence:
+// there the destination is a NAME and here it is a RELATIVE PATH. That is
+// what turns a rename into a reorganization, and also what forces
+// validation: a `..` in that destination is a write outside the directory
+// the human was looking at, so the host checks it BEFORE creating
+// anything. A guest cannot skip it — its proposal is text, and the core
+// runs it through the same gate as an AI model's.
 //
-// Paquete propio y no una interfaz más de `norte:renamer`, por lo mismo que
-// aquél lo es de `norte:plugin` (ADR 0041 decisión 4, ADR 0094): la versión
-// viaja dentro del nombre de cada interfaz, y un cambio aquí no puede
-// invalidar a los renamers de terceros. Empieza en 0.1.0 y sube por su
-// cuenta.
+// Its own package and not one more interface of `norte:renamer`, for the
+// same reason that one is of `norte:plugin` (ADR 0041 decision 4, ADR
+// 0094): the version travels inside the name of each interface, and a
+// change here must not invalidate third-party renamers. It starts at
+// 0.1.0 and bumps on its own.
 package norte:organizer@0.1.0;
 
-/// Un proponente de ORGANIZACIÓN. Recibe los nombres sobre los que actúa el
-/// lote —lo marcado, o lo señalado— y devuelve a dónde va cada uno. Solo
-/// esos: un nombre que no aparece se queda donde está.
+/// An ORGANIZATION proposer. Receives the names the batch acts on — what
+/// is marked, or what is pointed at — and returns where each one goes. Only
+/// those: a name that does not appear stays where it is.
 interface organizer {
-    /// La ubicación que el host abrió para esta llamada (el directorio de
-    /// los nombres), para un guest al que se le aprobó la capacidad
-    /// `location`: el token opaco con el que se lee (`norte:location`) y el
-    /// `prefix` relativo a la raíz abierta. `none` = no se le aprobó, o el
-    /// host no pudo abrirlo. Un guest que reciba `none` tiene que seguir
-    /// contestando —con lo que sepa del nombre solo— en vez de fallar.
+    /// The location the host opened for this call (the names' directory),
+    /// for a guest approved for the `location` capability: the opaque
+    /// token used to read it (`norte:location`) and the `prefix` relative
+    /// to the opened root. `none` = it was not approved, or the host could
+    /// not open it. A guest that receives `none` still has to keep
+    /// answering — with only what it knows from the name — instead of
+    /// failing.
     record location-ref {
         token: string,
         prefix: list<u8>,
     }
 
-    /// Un movimiento: el nombre que hay y a dónde va.
+    /// A move: the name there is and where it goes.
     ///
-    /// `proposed-rel` es RELATIVO al directorio del lote, con `/` de
-    /// separador, y termina en el nombre nuevo del fichero:
-    /// `facturas/2026/marzo.pdf`. Lo que el host RECHAZA, y con ello el plan
-    /// entero: que sea absoluto, que lleve un segmento `.` o `..`, que esté
-    /// vacío, que tenga segmentos vacíos (`a//b`, o terminar en `/`), o que
-    /// pase del tope de profundidad. No es una recomendación: se comprueba.
+    /// `proposed-rel` is RELATIVE to the batch's directory, with `/` as
+    /// separator, and ends in the file's new name:
+    /// `invoices/2026/march.pdf`. What the host REJECTS, and with it the
+    /// whole plan: being absolute, carrying a `.` or `..` segment, being
+    /// empty, having empty segments (`a//b`, or ending in `/`), or exceeding
+    /// the depth cap. It is not a recommendation: it is checked.
     ///
-    /// Texto y no bytes, como en el renamer: un movimiento del plan viaja
-    /// UTF-8 por protocolo, así que un nombre que no lo sea no puede formar
-    /// parte de un lote — el host lo aparta ANTES de llamar.
+    /// Text and not bytes, as in the renamer: a plan move travels
+    /// UTF-8 over the protocol, so a name that is not UTF-8 cannot be part
+    /// of a batch — the host sets it aside BEFORE calling.
     record proposal {
         current: string,
         proposed-rel: string,
     }
 
-    /// `id` es el organizer del manifiesto que se pidió (un plugin puede
-    /// aportar varios: «por año», «por tipo»). Un `err` es una frase para el
-    /// lector: el plan no se abre y se dice por qué.
+    /// `id` is the manifest's organizer that was requested (a plugin can
+    /// contribute several: "by year", "by type"). An `err` is a sentence
+    /// for the reader: the plan does not open and it says why.
     plan: func(id: string, location: option<location-ref>,
                names: list<string>) -> result<list<proposal>, string>;
 }
 
-/// El world de un plugin `organizer`: importa lo mismo que `norte-renamer` y
-/// exporta `organizer`.
+/// The world of an `organizer` plugin: imports the same as `norte-renamer`
+/// and exports `organizer`.
 world norte-organizer {
     import norte:host/host-log@0.1.0;
     import norte:host/host-config@0.1.0;
-    // Importado SIEMPRE, como en `norte-renamer`: el linker lo ofrece a todo
-    // guest y lo que decide si SIRVE algo es la capacidad aprobada.
+    // ALWAYS imported, as in `norte-renamer`: the linker offers it to every
+    // guest and what decides whether it SERVES anything is the approved
+    // capability.
     import norte:location/location@0.2.0;
     export organizer;
 }

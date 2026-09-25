@@ -1,23 +1,24 @@
-//! Lo que el core cuenta de cada localización y lo que la ayuda hace con
-//! ello: catálogos de atributos, caché de `Capabilities` por localización,
-//! el predicado de solo lectura y los hechos con los que se atenúa la ayuda.
+//! What the core counts about each location and what the help does with it:
+//! attribute catalogues, `Capabilities` cache by location, the read-only
+//! predicate and the facts that dim the help.
 
 use super::plugins::plugin_label;
 use super::{App, CAPS_CACHE_MAX, caps_key};
 use norte_proto::{EntryKind, VPath};
 
 impl App {
-    /// El catálogo cacheado del scheme dado, si llegó (#117): `None` = el
-    /// `fs.capabilities` aún no corrió o falló — se pinta con defaults
-    /// Opaque y la cabecera cae al id, jamás se bloquea el render.
+    /// The given scheme's cached catalogue, if it arrived (#117): `None` =
+    /// `fs.capabilities` hasn't run yet or failed — it paints with Opaque
+    /// defaults and the header falls back to the id, the render never
+    /// blocks.
     #[must_use]
     pub fn attr_catalog(&self, scheme: &str) -> Option<&norte_proto::AttrCatalog> {
         self.attr_catalogs.get(scheme)
     }
 
-    /// Cachea el catálogo de `scheme` (#117): lo llaman el arranque y el
-    /// flujo de cd tras su `fs.capabilities` — una vez por scheme y sesión
-    /// (un fallo no cachea nada: el próximo cd al scheme reintenta).
+    /// Caches `scheme`'s catalogue (#117): called by startup and the cd flow
+    /// after its `fs.capabilities` — once per scheme and session (a failure
+    /// caches nothing: the next cd to the scheme retries).
     pub fn insert_attr_catalog(&mut self, scheme: String, catalog: norte_proto::AttrCatalog) {
         self.attr_catalogs.insert(scheme, catalog);
     }
@@ -46,12 +47,12 @@ impl App {
     pub fn insert_caps(&mut self, at: &VPath, caps: norte_proto::Capabilities) {
         let key = caps_key(at);
         if !self.caps.contains_key(&key) && self.caps.len() >= CAPS_CACHE_MAX {
-            // El más viejo por ORDEN DE LLEGADA, que es lo que
-            // `caps_order` recuerda: un `HashMap` no tiene orden y elegir
-            // «cualquiera» dejaría la caché tirando la ubicación que se acaba
-            // de mirar tan a menudo como la de hace media hora.
-            if let Some(viejo) = self.caps_order.pop_front() {
-                self.caps.remove(&viejo);
+            // The oldest one by ARRIVAL ORDER, which is what `caps_order`
+            // remembers: a `HashMap` has no order, and picking "whichever"
+            // would leave the cache dropping the location that was just
+            // looked at as often as the one from half an hour ago.
+            if let Some(oldest) = self.caps_order.pop_front() {
+                self.caps.remove(&oldest);
             }
         }
         if self.caps.insert(key.clone(), caps).is_none() {
@@ -82,10 +83,10 @@ impl App {
         let Some(p) = self.panes.get(pane) else {
             return false;
         };
-        // El par «flag si lo hay, esquema si no» lo decide el sitio
-        // COMPARTIDO: la ventana lo tenía escrito por su cuenta, que es la
-        // forma que tiene una decisión de divergir sin que nadie lo note
-        // (ADR 0077).
+        // The pair "flag if there is one, scheme if not" is decided by the
+        // SHARED spot: the window had it written on its own, which is the
+        // shape a decision takes when it drifts apart without anyone
+        // noticing (ADR 0077).
         norte_frontend::availability::read_only(self.caps(p.dir()).copied(), p.dir().scheme())
     }
 
@@ -126,27 +127,28 @@ impl App {
         let pane = self.focused();
         let sel = pane.selected();
         norte_frontend::availability::Facts {
-            // El predicado del DESPACHO, entero y sin repetirlo: esta lista
-            // rehacía a mano lo que `enter_target` decide (y la ventana lo
-            // contestaba de una tercera manera, ADR 0077), pero además lo
-            // preguntaba por `selected()`, que sobre la fila `..` contesta
-            // `None` — el embudo del operando— y ahí la ayuda atenuaba una
-            // tecla que sube. `nav_enter_target` es el que corre al pulsarla,
-            // fila de subir incluida.
+            // The DISPATCH predicate, whole and without re-deriving it: this
+            // list used to redo by hand what `enter_target` decides (and the
+            // window answered it a third way, ADR 0077), but it also asked
+            // `selected()`, which over the `..` row answers `None` — the
+            // operand's funnel — and there the help dimmed a key that goes
+            // up. `nav_enter_target` is what runs on pressing it, the parent
+            // row included.
             enterable: crate::trail::nav_enter_target(self).is_some(),
             viewable: sel.is_some_and(|e| matches!(e.kind, EntryKind::File | EntryKind::Symlink)),
             rename_single: true,
             source_read_only: self.pane_read_only(self.focus),
-            // El destino es el del ROL, como en todo lo demás. Sin ninguno
-            // designado (tres o más paneles) se contesta por el propio: es un
-            // AVISO, y decir «solo lectura» de más no bloquea nada.
+            // The destination is the ROLE's, as in everything else. With
+            // none designated (three or more panels) it answers with its
+            // own: it's a WARNING, and saying "read only" when it isn't
+            // blocks nothing.
             dest_read_only: self
                 .pane_read_only(self.target_index().unwrap_or_else(|| self.focus())),
             degraded: self.degraded_for(pane.dir().scheme()).is_some(),
             journalled: self.backend_journalled,
-            // Fase 9: los dos impedimentos del relevo, que se deciden UNA vez
-            // al arrancar (el brazo del backend no cambia en vida del proceso,
-            // y tampoco aparece un escritorio a mitad de sesión).
+            // Phase 9: the handoff's two blockers, decided ONCE at startup
+            // (the backend's branch doesn't change during the process'
+            // life, and a desktop doesn't appear mid-session either).
             daemon: self.backend_daemon,
             windowed: self.has_desktop,
         }
@@ -249,33 +251,33 @@ mod tests {
     use crate::app::testutil::*;
     use norte_proto::{Entry, EntryKind};
 
-    /// Las caps se cachean por LOCALIZACIÓN, y por la misma razón que el
-    /// catálogo de atributos se pide: `fs.capabilities` devuelve las dos
-    /// mitades en UNA llamada y la TUI ya la hace para las columnas. Tirar la
-    /// mitad de caps y luego sondear otra vez sería pagar dos rondas por un
-    /// dato que ya llegó.
+    /// Caps are cached by LOCATION, for the same reason the attr catalogue
+    /// is requested: `fs.capabilities` returns both halves in ONE call and
+    /// the TUI already does it for the columns. Dropping the caps half and
+    /// then probing again would be paying two round trips for data that
+    /// already arrived.
     #[test]
-    fn las_caps_se_cachean_por_localizacion() {
-        let mut app = app_dos_panes();
+    fn caps_are_cached_by_location() {
+        let mut app = app_two_panes();
         let mem = vp("mem:///");
-        assert!(app.caps(&mem).is_none(), "sin sembrar, no se inventa nada");
-        app.insert_caps(&mem, caps_de_test());
+        assert!(app.caps(&mem).is_none(), "nothing gets made up unseeded");
+        app.insert_caps(&mem, test_caps());
         assert!(app.caps(&mem).is_some());
         assert!(
-            app.caps(&vp("sftp://ejemplo.org/")).is_none(),
-            "un scheme no responde por otro"
+            app.caps(&vp("sftp://example.org/")).is_none(),
+            "one scheme doesn't answer for another"
         );
     }
 
-    /// MAJOR-1: `sftp` no es UN sitio. Dos hosts del mismo scheme son dos
-    /// backends distintos, y el caché tiene que contarlos aparte o el primero
-    /// que contesta decide por todos los demás durante la sesión entera. Hoy
-    /// ningún provider del árbol declara `READ_ONLY` por localización (el
-    /// archivo y los plugins lo deciden por scheme), así que la clave por
-    /// scheme sola no fallaba — por suerte, no por diseño, y `App::caps` es un
-    /// accesor general que invita a leer cualquier flag.
+    /// MAJOR-1: `sftp` isn't ONE place. Two hosts of the same scheme are two
+    /// different backends, and the cache has to count them apart or the
+    /// first one to answer decides for all the others for the whole
+    /// session. Today no provider in the tree declares `READ_ONLY` per
+    /// location (the archive and the plugins decide it by scheme), so the
+    /// scheme-only key wasn't failing — by luck, not by design, and
+    /// `App::caps` is a general accessor that invites reading any flag.
     #[test]
-    fn dos_authorities_del_mismo_scheme_no_se_responden() {
+    fn two_authorities_of_the_same_scheme_dont_answer_for_each_other() {
         let a = vp("sftp://a.org/");
         let b = vp("sftp://b.org/");
         let mut app = App::new(
@@ -289,40 +291,40 @@ mod tests {
                 max_path: None,
             },
         );
-        assert!(app.pane_read_only(0), "a.org dijo que es de solo lectura");
+        assert!(app.pane_read_only(0), "a.org said it's read-only");
         assert!(
             app.caps(&b).is_none(),
-            "a b.org no se le ha preguntado nada todavía"
+            "b.org hasn't been asked anything yet"
         );
         assert!(
             !app.pane_read_only(1),
-            "b.org no puede heredar el veto de a.org: son dos backends"
+            "b.org can't inherit a.org's veto: they're two backends"
         );
     }
 
-    /// Antes de que llegue la primera respuesta, la respuesta honesta es «no
-    /// lo sé», y quien pregunta cae al criterio SINTÁCTICO (el scheme dice si
-    /// es un archivo comprimido). Lo que no puede hacer es afirmar que se
-    /// puede escribir.
+    /// Before the first answer arrives, the honest answer is "don't know",
+    /// and whoever asks falls back to the SYNTACTIC criterion (the scheme
+    /// says whether it's a compressed archive). What it cannot do is claim
+    /// it can be written to.
     #[test]
-    fn sin_caps_todavia_el_solo_lectura_lo_decide_el_scheme() {
-        let app = app_dos_panes();
-        assert!(!app.pane_read_only(0), "mem:// no es de solo lectura");
+    fn without_caps_yet_the_scheme_decides_read_only() {
+        let app = app_two_panes();
+        assert!(!app.pane_read_only(0), "mem:// isn't read-only");
 
-        let inside_a_zip = app_en("zip+file:///a.zip/!", "file:///casa");
+        let inside_a_zip = app_en("zip+file:///a.zip/!", "file:///home");
         assert!(
             inside_a_zip.pane_read_only(0),
-            "un scheme de archivo es de solo lectura por construcción"
+            "an archive scheme is read-only by construction"
         );
         assert!(!inside_a_zip.pane_read_only(1));
     }
 
-    /// Cuando las caps SÍ llegaron mandan ellas: un provider que anuncia
-    /// `READ_ONLY` sobre un scheme que sintácticamente no lo es (un montaje
-    /// remoto en solo lectura) se veta igual.
+    /// Once caps DO arrive they take over: a provider that announces
+    /// `READ_ONLY` over a scheme that isn't syntactically one (a read-only
+    /// remote mount) gets vetoed just the same.
     #[test]
-    fn con_caps_manda_el_flag_read_only() {
-        let mut app = app_dos_panes();
+    fn once_caps_arrive_the_read_only_flag_rules() {
+        let mut app = app_two_panes();
         let dir = app.panes[0].dir().clone();
         app.insert_caps(
             &dir,
@@ -332,27 +334,27 @@ mod tests {
             },
         );
         assert!(app.pane_read_only(0));
-        app.insert_caps(&dir, caps_de_test());
-        assert!(!app.pane_read_only(0), "sin el flag, escribible");
+        app.insert_caps(&dir, test_caps());
+        assert!(!app.pane_read_only(0), "without the flag, writable");
     }
 
-    /// Los hechos que la ayuda congela salen de los MISMOS predicados que usan
-    /// los brazos de `dispatch`: un `.zip` se ENTRA en la TUI (`nav.enter`
-    /// compone el scheme) aunque sea un File, y `pane.view` quiere File o
-    /// Symlink. Derivarlos otra vez aquí sería atenuar filas que la app
-    /// ejecutaría.
+    /// The facts the help freezes come from the SAME predicates the
+    /// `dispatch` arms use: a `.zip` gets ENTERED in the TUI (`nav.enter`
+    /// composes the scheme) even though it's a File, and `pane.view` wants a
+    /// File or a Symlink. Re-deriving them here would dim rows the app
+    /// would run.
     #[test]
-    fn los_hechos_de_la_ayuda_siguen_a_los_predicados_del_dispatch() {
-        let mut app = app_dos_panes();
-        // El cursor está sobre un File normal: no se entra, se ve.
+    fn help_facts_follow_the_dispatch_predicates() {
+        let mut app = app_two_panes();
+        // The cursor is on a plain File: it isn't entered, it's viewed.
         let f = app.help_facts();
-        assert!(!f.enterable, "un fichero cualquiera no se entra");
+        assert!(!f.enterable, "an ordinary file isn't entered");
         assert!(f.viewable);
-        assert!(f.rename_single, "shift+F6 renombra UNA: la del cursor");
+        assert!(f.rename_single, "shift+F6 renames ONE: the cursor's");
         assert!(!f.source_read_only && !f.dest_read_only);
         assert!(!f.degraded);
 
-        // Un `.zip` ES entrable en la TUI aunque su kind sea File.
+        // A `.zip` IS enterable in the TUI even though its kind is File.
         let zip = Pane::new(
             root(),
             vec![Entry {
@@ -366,58 +368,58 @@ mod tests {
         let app_zip = App::new(zip, pane_con(&["b"]));
         assert!(
             app_zip.help_facts().enterable,
-            "en la TUI un .zip se entra: la ayuda no puede decir lo contrario"
+            "in the TUI a .zip is entered: the help can't say otherwise"
         );
 
-        // Y la degradación del scheme del pane con foco llega al hecho.
-        app.note_degraded(degradacion_de_test("mem", "sin-host"));
+        // And the focused pane's scheme degradation reaches the fact.
+        app.note_degraded(test_degraded("mem", "no-host"));
         assert!(app.help_facts().degraded);
     }
 
-    /// Y con el cursor sobre `..` la ayuda ofrece `Enter`, que es lo que la
-    /// tecla hace ahí: SUBIR.
+    /// And with the cursor on `..` the help offers `Enter`, which is what
+    /// the key does there: GO UP.
     ///
-    /// El hecho salía de `selected()`, que contesta `None` sobre la fila de
-    /// subir a propósito —ese es el embudo que impide que F8 borre el padre—,
-    /// así que `enterable` era `false` justo donde nace el cursor después de
-    /// cada `cd`. El despacho nunca lo preguntó por ahí: `nav_enter_target`
-    /// mira primero `cursor_is_parent_row()`. O sea la trampa de siempre,
-    /// «describir» leyendo por la puerta de «operar», y la ayuda atenuaba una
-    /// tecla que sube perfectamente.
+    /// The fact used to come from `selected()`, which answers `None` over
+    /// the parent row on purpose — that's the funnel that keeps F8 from
+    /// deleting the parent — so `enterable` was `false` right where the
+    /// cursor is born after every `cd`. Dispatch never asked it that way:
+    /// `nav_enter_target` checks `cursor_is_parent_row()` first. The usual
+    /// trap, "describing" by reading through "operating"'s door, and the
+    /// help was dimming a key that goes up perfectly well.
     #[test]
-    fn con_el_cursor_en_la_fila_de_subir_la_ayuda_ofrece_entrar() {
+    fn with_the_cursor_on_the_up_row_the_help_offers_enter() {
         let mut app = App::new(
-            Pane::new(vp("mem:///casa"), vec![file("a")]),
+            Pane::new(vp("mem:///home"), vec![file("a")]),
             pane_con(&["b"]),
         );
         app.set_parent_row(true);
         assert!(
             app.focused().cursor_is_parent_row(),
-            "la premisa: el cursor nace en `..`"
+            "the premise: the cursor is born on `..`"
         );
         assert!(
             crate::trail::nav_enter_target(&app).is_some(),
-            "la premisa: la tecla SÍ hace algo aquí"
+            "the premise: the key DOES do something here"
         );
 
         assert!(
             app.help_facts().enterable,
-            "`Enter` sube desde `..`: la ayuda no puede decir «no aplica a esto»"
+            "`Enter` goes up from `..`: the help can't say \"doesn't apply here\""
         );
     }
 
-    /// Con VARIAS marcas la ayuda NO atenúa shift+F6, porque la TUI lo
-    /// ejecuta: `Command::PaneRename` va a `open_rename`, que renombra
-    /// `selected()` y no mira las marcas. Atenuarlo sería el fallo exacto que
-    /// H3d existe para no cometer — apagar una fila que la app habría corrido,
-    /// que enseña al lector a no volver a intentarlo.
+    /// With SEVERAL marks the help does NOT dim shift+F6, because the TUI
+    /// runs it: `Command::PaneRename` goes to `open_rename`, which renames
+    /// `selected()` and doesn't look at the marks. Dimming it would be the
+    /// exact mistake H3d exists to not make — turning off a row the app
+    /// would have run, which teaches the reader not to try it again.
     ///
-    /// (La GUI sí se niega con selección múltiple, y su menú lo sigue haciendo:
-    /// `norte_gui::context_menu`, `renombrar_es_una_sola_entrada_y_la_de_ia_es_otra`.
-    /// El hecho es del llamador precisamente porque las dos respuestas son
-    /// correctas.)
+    /// (The GUI does refuse with a multiple selection, and its menu still
+    /// does: `norte_gui::context_menu`,
+    /// `renombrar_es_una_sola_entrada_y_la_de_ia_es_otra`. The fact belongs
+    /// to the caller precisely because both answers are correct.)
     #[test]
-    fn con_varias_marcas_la_ayuda_no_atenua_renombrar() {
+    fn with_several_marks_the_help_does_not_dim_rename() {
         use norte_help::ChordResolver as _;
 
         let mut app = App::new(pane_con(&["a", "b", "c"]), pane_con(&["z"]));
@@ -426,17 +428,17 @@ mod tests {
         assert_eq!(
             app.focused().marked_paths().len(),
             2,
-            "hay DOS marcas: el caso que se atenuaba"
+            "there are TWO marks: the case that was being dimmed"
         );
         assert!(app.help_facts().rename_single);
 
         app.freeze_help_facts();
         assert!(
             app.help_chords.availability("pane.rename").is_available(),
-            "la TUI renombra la del cursor con marcas puestas: la ayuda no puede negarlo"
+            "the TUI renames the cursor's with marks set: the help can't deny it"
         );
-        // Y dentro de un archivo sí se apaga, por el backend — el veto real
-        // sigue en pie.
+        // And inside an archive it does turn off, via the backend — the real
+        // veto still stands.
         let mut zip = App::new(
             Pane::new(vp("zip+file:///a.zip/!"), Vec::new()),
             pane_con(&["z"]),
@@ -448,22 +450,22 @@ mod tests {
         );
     }
 
-    /// Congelar los hechos al abrir la ayuda: el resolver que la vista usa
-    /// pasa a responder con los hechos de ESE momento.
+    /// Freezing the facts on opening the help: the resolver the view uses
+    /// starts answering with the facts from THAT moment.
     #[test]
-    fn congelar_los_hechos_reescribe_el_resolver_de_la_ayuda() {
+    fn freezing_the_facts_rewrites_the_help_resolver() {
         use norte_help::ChordResolver as _;
 
         let mut app = app_en("zip+file:///a.zip/!", "zip+file:///b.zip/!");
         assert!(
             app.help_chords.availability("pane.copy").is_available(),
-            "antes de congelar el resolver no sabe nada del contexto"
+            "before freezing the resolver knows nothing about the context"
         );
         app.freeze_help_facts();
         assert_eq!(
             app.help_chords.availability("pane.copy").reason(),
             Some(norte_help::Reason::ReadOnlyBackend),
-            "los dos panes son de solo lectura: copiar no tiene destino"
+            "both panes are read-only: copying has no destination"
         );
     }
 }

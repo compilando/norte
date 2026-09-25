@@ -1,6 +1,6 @@
 [package]
 name = "norte-vfs"
-description = "Contrato central del VFS: trait Provider, streams, capabilities"
+description = "VFS central contract: Provider trait, streams, capabilities"
 license = "MIT OR Apache-2.0"
 version.workspace = true
 edition.workspace = true
@@ -14,12 +14,13 @@ bytes.workspace = true
 futures.workspace = true
 norte-proto.workspace = true
 norte-encoding.workspace = true
-# `deadline::blocking_with_deadline` (#213): un plazo sobre una syscall que no
-# se puede cancelar, compartido por el core y por los providers. Vive aquí
-# porque el motivo por el que existe —un montaje de red muerto— no es de nadie
-# en particular, y dos copias que puedan divergir en si el hilo es DESACOPLADO
-# es exactamente el fallo del que protege. `rt`/`sync`/`time` y nada más: este
-# crate no impone runtime a quien no llame a esa función.
+# `deadline::blocking_with_deadline` (#213): a deadline over a syscall that
+# can't be cancelled, shared by the core and by the providers. Lives here
+# because the reason it exists — a dead network mount — doesn't belong to
+# anyone in particular, and two copies that could diverge on whether the
+# thread is DETACHED is exactly the failure it protects against.
+# `rt`/`sync`/`time` and nothing else: this crate imposes no runtime on
+# whoever doesn't call that function.
 tokio = { workspace = true, features = ["rt", "sync", "time"] }
 
 [dev-dependencies]

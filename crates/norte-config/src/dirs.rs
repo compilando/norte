@@ -4,13 +4,12 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-/// Clase de una capa de config (ADR 0007), en precedencia ASCENDENTE. Se
-/// lleva POR DIR en [`Layers`] (deuda #75) en vez de inferirse por la
-/// POSICIÓN en `dirs`: en Windows sin `%ProgramData%` la capa `System` está
-/// ausente, así que `%APPDATA%` (`User`) caería en el índice 0 y la
-/// inferencia posicional la etiquetaría como `System`. `Layer` se reexporta
-/// desde `norte_tui::lua` para el `init.lua` (config es dueña del concepto
-/// de capa; el scripting solo lo consume).
+/// Class of a config layer (ADR 0007), in ASCENDING precedence. Carried PER
+/// DIR in [`Layers`] (debt #75) instead of inferred from POSITION in `dirs`:
+/// on Windows without `%ProgramData%` the `System` layer is absent, so
+/// `%APPDATA%` (`User`) would fall at index 0 and positional inference would
+/// tag it as `System`. `Layer` is re-exported from `norte_tui::lua` for
+/// `init.lua` (config owns the layer concept; scripting only consumes it).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Layer {
     /// `/etc/norte` (o `%ProgramData%\norte`).
@@ -22,16 +21,16 @@ pub enum Layer {
     /// to override what the user's own `norte.toml` says; below `Project` so
     /// ADR 0026 and #260 are untouched.
     Profile,
-    /// `./.norte` — SOLO tras trust (ADR 0026).
+    /// `./.norte` — ONLY after trust (ADR 0026).
     Project,
 }
 
-/// Los directorios de capas, en precedencia ASCENDENTE, cada uno con su
-/// [`Layer`] (deuda #75: el kind viaja POR DIR, no se infiere por posición).
+/// The layer directories, in ASCENDING precedence, each with its [`Layer`]
+/// (debt #75: the kind travels PER DIR, it is not inferred from position).
 #[derive(Debug, Clone)]
 pub struct Layers {
-    /// sistema → usuario → proyecto (los ausentes simplemente no aportan),
-    /// cada dir etiquetado con su clase de capa.
+    /// system → user → project (the absent ones simply contribute nothing),
+    /// each dir tagged with its layer class.
     pub dirs: Vec<(PathBuf, Layer)>,
 }
 
@@ -134,14 +133,13 @@ pub fn config_dir() -> PathBuf {
 #[doc(hidden)]
 #[must_use]
 pub fn state_dir_on(windows: bool, get: &impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
-    // Una variable VACÍA es ausente, en las tres. Sin este filtro, `HOME=""`
-    // devolvía `.local/state/norte` RELATIVO al cwd — y el cwd de un gestor de
-    // ficheros es el directorio desde el que lo lanzaste, a menudo un
-    // repositorio. Como `state_dir` decide también dónde vive
-    // `lua-trust.toml`, eso dejaba que un repo hostil trajera su propio almacén
-    // de confianza pre-aprobando su `.norte/init.lua`, y el prompt de TOFU no
-    // aparecía nunca. Es el mismo peligro que ADR 0035 C1 documenta para el
-    // directorio de config, con la misma respuesta.
+    // An EMPTY variable is absent, across all three. Without this filter,
+    // `HOME=""` returned `.local/state/norte` RELATIVE to the cwd — and a
+    // file manager's cwd is the directory you launched it from, often a
+    // repository. Since `state_dir` also decides where `lua-trust.toml`
+    // lives, that let a hostile repo bring its own trust store pre-approving
+    // its `.norte/init.lua`, and the TOFU prompt never appeared. Same danger
+    // ADR 0035 C1 documents for the config directory, same fix.
     if windows {
         return get("LOCALAPPDATA")
             .filter(|v| !v.is_empty())
@@ -155,32 +153,34 @@ pub fn state_dir_on(windows: bool, get: &impl Fn(&str) -> Option<OsString>) -> O
         .map(|h| PathBuf::from(h).join(".local/state/norte"))
 }
 
-/// El directorio de ESTADO del usuario: `$XDG_STATE_HOME/norte`,
-/// `~/.local/state/norte`, o `%LOCALAPPDATA%\norte\state` en Windows.
+/// The user's STATE directory: `$XDG_STATE_HOME/norte`,
+/// `~/.local/state/norte`, or `%LOCALAPPDATA%\norte\state` on Windows.
 ///
-/// **Estado, no configuración, y la diferencia importa**: aquí van el trust
-/// store de Lua, el journal embebido y el log local — cosas de ESTA máquina que
-/// no deben viajar con los dotfiles del usuario. Por eso `XDG_STATE_HOME` y no
-/// `XDG_CONFIG_HOME`, que es lo que resuelve [`user_config_dir`].
+/// **State, not configuration, and the difference matters**: this is where
+/// the Lua trust store, the embedded journal and the local log live — things
+/// belonging to THIS machine that must not travel with the user's dotfiles.
+/// That is why `XDG_STATE_HOME` and not `XDG_CONFIG_HOME`, which is what
+/// [`user_config_dir`] resolves.
 ///
-/// `None` si el entorno no define nada (una CI pelada, un servicio sin `HOME`):
-/// el caller DEGRADA con aviso, nunca inventa una ruta relativa al cwd. Para el
-/// trust store eso significa fail-closed (sin store no corre el script de
-/// proyecto); para el log, no hay fichero y queda stderr.
+/// `None` when the environment defines nothing (a bare CI, a service without
+/// `HOME`): the caller DEGRADES with a warning, never invents a path relative
+/// to the cwd. For the trust store that means fail-closed (with no store the
+/// project script does not run); for the log, there is no file and stderr is
+/// what is left.
 ///
 /// ```
-/// // En una máquina con `HOME`, resuelve; sin nada definido, `None`.
+/// // On a machine with `HOME`, it resolves; with nothing defined, `None`.
 /// let d = norte_config::dirs::state_dir();
-/// assert!(d.is_none() || d.expect("hay").ends_with("norte"));
+/// assert!(d.is_none() || d.expect("present").ends_with("norte"));
 /// ```
 #[must_use]
 pub fn state_dir() -> Option<PathBuf> {
     state_dir_on(cfg!(windows), &|k| std::env::var_os(k)).or_else(|| {
-        // Paridad con `user_config_dir`: sin variables de entorno se le
-        // pregunta al SO (getpwuid_r en unix, el perfil en Windows). Sin esto,
-        // un daemon sin `HOME` —unidad de systemd, cron, contenedor— se
-        // quedaría sin directorio de estado, que es fail-closed para el almacén
-        // de confianza pero también deja al log sin sitio.
+        // Parity with `user_config_dir`: with no environment variables, the
+        // OS is asked (getpwuid_r on unix, the profile on Windows). Without
+        // this, a daemon with no `HOME` — a systemd unit, cron, a container —
+        // would end up with no state directory, which is fail-closed for the
+        // trust store but also leaves the log with nowhere to go.
         #[allow(deprecated)]
         std::env::home_dir().map(|h| h.join(".local/state/norte"))
     })
@@ -256,33 +256,34 @@ mod tests {
         }
     }
 
-    /// El orden del enum ES la precedencia (ADR 0007): sistema → usuario →
-    /// perfil → proyecto. Un `Profile` colocado en otro sitio compila igual y
-    /// deja la capa mandando donde no debe, así que se fija aquí.
+    /// The enum's order IS the precedence (ADR 0007): system → user →
+    /// profile → project. A `Profile` placed elsewhere compiles just as well
+    /// and leaves the layer taking precedence where it should not, so it is
+    /// pinned here.
     #[test]
-    fn el_perfil_va_entre_usuario_y_proyecto() {
+    fn profile_sits_between_user_and_project() {
         assert!(Layer::System < Layer::User);
         assert!(Layer::User < Layer::Profile);
         assert!(Layer::Profile < Layer::Project);
     }
 
-    /// Precedencia del directorio de ESTADO, con el entorno inyectado — así la
-    /// rama de Windows la fija una suite que solo corre en Linux, igual que
-    /// hace `user_config_dir_on`.
+    /// Precedence of the STATE directory, with the environment injected — this
+    /// way the Windows branch is pinned by a suite that only runs on Linux,
+    /// same as `user_config_dir_on` does.
     #[test]
-    fn state_dir_sigue_su_precedencia() {
-        // XDG gana al HOME.
+    fn state_dir_follows_its_precedence() {
+        // XDG beats HOME.
         assert_eq!(
             state_dir_on(false, &env(&[("XDG_STATE_HOME", "/x"), ("HOME", "/h")])),
             Some(PathBuf::from("/x/norte"))
         );
-        // Vacío es AUSENTE, no una ruta a la raíz — mismo criterio que la
-        // config con su `XDG_CONFIG_HOME`.
+        // Empty is ABSENT, not a path to the root — same rule as config with
+        // its `XDG_CONFIG_HOME`.
         assert_eq!(
             state_dir_on(false, &env(&[("XDG_STATE_HOME", ""), ("HOME", "/h")])),
             Some(PathBuf::from("/h/.local/state/norte"))
         );
-        // Windows no mira XDG.
+        // Windows does not look at XDG.
         assert_eq!(
             state_dir_on(
                 true,
@@ -290,11 +291,13 @@ mod tests {
             ),
             Some(PathBuf::from("C:/s").join("norte").join("state"))
         );
-        // Y un entorno pelado no inventa nada: el caller degrada con aviso.
+        // And a bare environment invents nothing: the caller degrades with a
+        // warning.
         assert_eq!(state_dir_on(false, &env(&[])), None);
-        // `HOME` vacío es AUSENTE, no una ruta relativa al cwd: ahí acaba
-        // también `lua-trust.toml`, y un almacén de confianza dentro del árbol
-        // de trabajo lo escribe el repositorio que estés mirando.
+        // An empty `HOME` is ABSENT, not a path relative to the cwd: that is
+        // also where `lua-trust.toml` ends up, and a trust store inside the
+        // working tree would be written by whatever repository you are
+        // looking at.
         assert_eq!(state_dir_on(false, &env(&[("HOME", "")])), None);
         assert_eq!(state_dir_on(true, &env(&[("LOCALAPPDATA", "")])), None);
     }
@@ -322,7 +325,7 @@ mod tests {
     }
 
     #[test]
-    fn sin_entorno_es_none() {
+    fn no_environment_is_none() {
         assert_eq!(user_config_dir_from(&env(&[])), None);
     }
 
@@ -339,7 +342,7 @@ mod tests {
     /// ADR 0035 decision 2: an explicit override is HERMETIC — no system
     /// layer, only (override, User) + (./.norte, Project).
     #[test]
-    fn standard_layers_con_override_es_hermetico() {
+    fn standard_layers_with_override_is_hermetic() {
         let l = standard_layers_from(&env(&[
             ("NORTE_CONFIG_DIR", "/custom"),
             ("HOME", "/home/u"),
@@ -359,7 +362,7 @@ mod tests {
     /// foreign repo's `norte.toml` reach `deny_unknown_fields` and abort
     /// `norte daemon run`.
     #[test]
-    fn standard_layers_no_project_excluye_proyecto() {
+    fn standard_layers_no_project_excludes_project() {
         let l = standard_layers_no_project();
         assert!(
             !l.dirs.iter().any(|(_, kind)| *kind == Layer::Project),
@@ -370,7 +373,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn standard_layers_sin_override_incluye_sistema() {
+    fn standard_layers_without_override_includes_system() {
         let l = standard_layers_from(&env(&[("HOME", "/home/u")]));
         assert_eq!(
             l.dirs,
@@ -387,7 +390,7 @@ mod tests {
     /// pointing at the empty path — otherwise `config_dir()` would resolve to
     /// `""` and hermetic layering would read the process cwd.
     #[test]
-    fn norte_config_dir_vacio_cuenta_como_no_definido() {
+    fn norte_config_dir_empty_counts_as_unset() {
         let e = env(&[("NORTE_CONFIG_DIR", ""), ("HOME", "/home/u")]);
         assert_eq!(
             user_config_dir_from(&e),
@@ -412,7 +415,7 @@ mod tests {
     // instead of the `cfg!(windows)`-driven `_from` wrappers.
 
     #[test]
-    fn windows_xdg_gana_a_appdata() {
+    fn windows_xdg_beats_appdata() {
         let e = env(&[
             ("XDG_CONFIG_HOME", "/xdg"),
             ("APPDATA", r"C:\Users\u\AppData\Roaming"),
@@ -423,7 +426,7 @@ mod tests {
     }
 
     #[test]
-    fn windows_appdata_gana_a_home_sin_xdg() {
+    fn windows_appdata_beats_home_without_xdg() {
         let e = env(&[
             ("APPDATA", r"C:\Users\u\AppData\Roaming"),
             ("HOME", "/home/u"),
@@ -441,7 +444,7 @@ mod tests {
     /// `%USERPROFILE%` on Windows; losing that fallback would be a
     /// regression for those environments.
     #[test]
-    fn windows_sin_appdata_cae_a_userprofile() {
+    fn windows_without_appdata_falls_back_to_userprofile() {
         let e = env(&[("USERPROFILE", r"C:\Users\u")]);
         let d = user_config_dir_on(true, &e);
         assert_eq!(
@@ -451,7 +454,7 @@ mod tests {
     }
 
     #[test]
-    fn windows_standard_layers_con_programdata_y_appdata() {
+    fn windows_standard_layers_with_programdata_and_appdata() {
         let e = env(&[
             ("ProgramData", r"C:\ProgramData"),
             ("APPDATA", r"C:\Users\u\AppData\Roaming"),

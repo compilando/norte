@@ -1,19 +1,20 @@
-//! El overlay de ayuda (H3b): una tecla dentro, y el comando que el bucle de
-//! eventos tiene que despachar al salir.
+//! The help overlay (H3b): one key inside, and the command the event loop
+//! has to dispatch on exit.
 //!
-//! Vivía en el root del binario `ntc` —un crate DISTINTO de esta lib—, así que
-//! sus 951 líneas de test no podían ser un fichero de `tests/`, que es lo que
-//! son.
+//! It used to live in the `ntc` binary's root — a crate DISTINCT from this
+//! lib — so its 951 lines of tests could not be a `tests/` file, which is
+//! what they are.
 //!
-//! Fichero aparte de [`crate::help`] (los chords que la ayuda PINTA), de
-//! [`crate::help_context`] (qué tema abre una pantalla) y de
-//! [`crate::help_render`] (el pipeline de render): esto es solo quien lee sus
-//! teclas.
+//! A file separate from [`crate::help`] (the chords help PAINTS), from
+//! [`crate::help_context`] (which topic opens on which screen) and from
+//! [`crate::help_render`] (the render pipeline): this is only the one that
+//! reads its keys.
 //!
-//! El rustdoc de [`on_help_key`] estaba PARTIDO en dos por `main.rs`: la
-//! introducción y el «TWO REGIMES ...:» que la cierra habían quedado sobre
-//! [`HelpDispatch`], y la lista de bullets que ese dos puntos anuncia seguía
-//! sobre la función. Aquí vuelven a ser un solo bloque, sin tocar una palabra.
+//! [`on_help_key`]'s rustdoc was SPLIT in two by `main.rs`: the
+//! introduction and the "TWO REGIMES ...:" that closes it had ended up over
+//! [`HelpDispatch`], and the bullet list that colon announces was still over
+//! the function. Here they go back to being a single block, without a word
+//! changed.
 
 use crossterm::event::{KeyCode, KeyModifiers};
 use norte_core::backend::Backend;
@@ -22,23 +23,23 @@ use norte_i18n::{t, ta};
 use crate::app::{App, HelpOutcome, PAGE, Palette, detail_for_bar, error_message};
 use crate::keymap::{Command, Resolution, Resolver, chord_from_crossterm, parse_plugin_key};
 
-/// Las teclas que MUEVEN, en la lateral o en el cuerpo: flechas, página,
-/// extremos y saltos de sección.
+/// Keys that MOVE, in the sidebar or in the body: arrows, page, ends and
+/// section jumps.
 ///
-/// Una página, en la lateral, son diez temas; en el cuerpo es la ventana que
-/// se ve, que es lo que un lector entiende por «una pantalla» — con diez
-/// fijas, `PgDn` bajaba media pantalla en un terminal alto.
-fn desplazar(help: &mut crate::app::HelpView, mover: HelpOutcome) {
-    let pagina = if help.state.focus() == norte_frontend::help::Focus::Body {
+/// A page, in the sidebar, is ten topics; in the body it is the window that
+/// is visible, which is what a reader means by "one screen" — with a fixed
+/// ten, `PgDn` scrolled down half a screen on a tall terminal.
+fn scroll(help: &mut crate::app::HelpView, outcome: HelpOutcome) {
+    let page = if help.state.focus() == norte_frontend::help::Focus::Body {
         help.page()
     } else {
         PAGE
     };
-    match mover {
+    match outcome {
         HelpOutcome::Up => help.line_up(),
         HelpOutcome::Down => help.line_down(),
-        HelpOutcome::PageUp => help.state.page_up(pagina),
-        HelpOutcome::PageDown => help.state.page_down(pagina),
+        HelpOutcome::PageUp => help.state.page_up(page),
+        HelpOutcome::PageDown => help.state.page_down(page),
         HelpOutcome::Top => help.state.top(),
         HelpOutcome::Bottom => help.state.bottom(),
         HelpOutcome::SectionPrev => help.section_prev(),
@@ -128,61 +129,61 @@ pub fn on_help_key(
     mods: KeyModifiers,
     code: KeyCode,
 ) -> Option<HelpDispatch> {
-    // Salida de emergencia global, hardcodeada ANTES de resolver — como en
-    // todos los overlays (la de este fichero, jamás `Command::AppQuit`: no
-    // pregunta).
+    // Global emergency exit, hardcoded BEFORE resolving — as in every
+    // overlay (this file's, never `Command::AppQuit`: it does not ask).
     if mods.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('c') {
         app.quit = true;
         return None;
     }
     if mods.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('p') {
         let help = app.help.as_ref()?;
-        // Review H3c MAJOR-1: el MISMO guard que el brazo `Action::Run` de
-        // abajo, y por una razón peor. Cruzar a la palette dejaría el modal en
-        // pie, y la rama de la palette del run loop está gateada por
-        // `!modal_wins`: la palette quedaría PINTADA con aspecto de viva y sin
-        // recibir una sola tecla — todas caen en la rama del modal y se
-        // resuelven contra su allowlist. Teclear `copy` para filtrar sobre una
-        // aprobación de agente descartaría `c`, `o`, `p` y la `y` APROBARÍA la
-        // mutación. La ayuda se queda abierta y se dice por qué.
+        // Review H3c MAJOR-1: the SAME guard as the `Action::Run` arm
+        // below, and for a worse reason. Crossing to the palette would
+        // leave the modal standing, and the run loop's palette branch is
+        // gated by `!modal_wins`: the palette would end up PAINTED looking
+        // alive and receiving not a single key — all of them fall into the
+        // modal branch and resolve against its allowlist. Typing `copy` to
+        // filter over an agent approval would discard `c`, `o`, `p`, and
+        // the `y` would APPROVE the mutation. Help stays open and says why.
         if help.over_modal {
             app.message = Some(t("msg-help-modal-waiting"));
             return None;
         }
         let filter = help.state.filter_raw().to_owned();
         app.help = None;
-        // Sin filas de plugin: `Command::AppPalette` las pide al backend y
-        // esta función es SÍNCRONA a propósito (todo lo demás aquí lo es).
-        // Degradación conocida y acotada — los built-ins, que es lo que la
-        // ayuda documenta, están todos.
+        // With no plugin rows: `Command::AppPalette` requests them from the
+        // backend and this function is SYNC on purpose (everything else
+        // here is too). A known, bounded degradation — the built-ins, which
+        // are what help documents, are all there.
         let mut palette = Palette::new(crate::palette::rows_for_context(
             &app.palette_rows,
             app.viewer.is_some(),
         ));
-        // El filtro CRUDO (`filter_raw`, no el enmascarado para pintar): es
-        // lo que se empareja, y la palette lo vuelve a enmascarar al pintarlo.
+        // The RAW filter (`filter_raw`, not the masked one used for
+        // painting): it is what gets matched, and the palette masks it
+        // again when painting it.
         for c in filter.chars() {
             palette.push_char(c);
         }
         app.palette = Some(palette);
         return None;
     }
-    // Régimen 1: editor de filtro. Teclas FIJAS (ver la doc de arriba).
+    // Regime 1: filter editor. FIXED keys (see doc above).
     if app.help.as_ref()?.state.filtering() {
-        // `plain` como en la palette: SHIFT es parte de teclear una mayúscula,
-        // no un modificador que cambie el significado de la tecla.
+        // `plain` as in the palette: SHIFT is part of typing an uppercase
+        // letter, not a modifier that changes the key's meaning.
         let plain = mods.is_empty() || mods == KeyModifiers::SHIFT;
         let help = app.help.as_mut()?;
         match code {
             KeyCode::Char(c) if plain => help.state.push_char(c),
             KeyCode::Backspace if plain => help.state.backspace(),
-            // Ambas SALEN de la caja conservando el texto: Esc porque el
-            // modelo lo promete, Enter porque el filtro ya está aplicado (la
-            // lateral se rehace en cada carácter) y lo único que queda por
-            // hacer es devolverle las flechas a la navegación.
+            // Both LEAVE the box keeping the text: Esc because the model
+            // promises it, Enter because the filter is already applied
+            // (the sidebar rebuilds on every character) and all that is
+            // left to do is give the arrows back to navigation.
             KeyCode::Esc | KeyCode::Enter if plain => help.state.end_filter(),
-            // Sin salir de la caja: elegir un acierto mientras se sigue
-            // afinando la búsqueda es el gesto que hace útil un filtro.
+            // Without leaving the box: picking a hit while still refining
+            // the search is the gesture that makes a filter useful.
             KeyCode::Up if plain => help.state.up(),
             KeyCode::Down if plain => help.state.down(),
             _ => {}
@@ -190,45 +191,47 @@ pub fn on_help_key(
         return None;
     }
 
-    // Régimen 2: el keymap manda (contexto `dialog`, rebindeable).
+    // Regime 2: the keymap decides (`dialog` context, rebindable).
     let chord = chord_from_crossterm(mods, code)?;
     let cmd = match resolver.push(chord) {
         Resolution::Run { command: cmd, .. } => cmd,
-        // Sin semántica de secuencia definida para overlays (T2), y lo mismo
-        // para una tecla ligada a algo que esta build no corre (K1 T4):
-        // ignorar y reiniciar el estado de resolución.
+        // No sequence semantics defined for overlays (T2), and likewise for
+        // a key bound to something this build does not run (K1 T4): ignore
+        // and reset the resolution state.
         Resolution::Pending(_) | Resolution::Counting(_) | Resolution::Unavailable { .. } => {
             resolver.reset();
             return None;
         }
         Resolution::Reset => return None,
     };
-    // La tecla que ABRE la ayuda la CIERRA. `app.help` es un comando de
-    // `[global]`, no un verbo de diálogo, así que no vive en `ALLOW_HELP` y
-    // sin esta rama F1 sería inerte dentro de la ayuda — la única tecla del
-    // teclado que el lector tiene garantizada para este overlay, sin efecto.
-    // Se resuelve por el keymap igual que todo lo demás (un rebind de
-    // `app.help` mueve las DOS mitades del interruptor a la vez); lo
-    // hardcodeado es el significado, no la tecla. Mismo criterio que F9 en
+    // The key that OPENS help CLOSES it. `app.help` is a `[global]`
+    // command, not a dialog verb, so it does not live in `ALLOW_HELP` and
+    // without this branch F1 would be inert inside help — the one key on
+    // the keyboard the reader is guaranteed for this overlay, with no
+    // effect. It resolves through the keymap like everything else (a
+    // rebind of `app.help` moves BOTH halves of the switch at once); what
+    // is hardcoded is the meaning, not the key. Same criterion as F9 in
     // `on_theme_picker_key`.
     if cmd == "app.help" {
         app.help = None;
         return None;
     }
-    // Fuera de `ALLOW_HELP` la tecla es INERTE (misma disciplina que el resto
-    // de overlays: la semántica vive en código, el keymap solo asigna teclas).
+    // Outside `ALLOW_HELP` the key is INERT (same discipline as the rest of
+    // the overlays: semantics live in code, the keymap only assigns keys).
     let outcome = crate::app::help_action(&cmd)?;
 
     let help = app.help.as_mut()?;
-    // Leído ANTES del `match`: el brazo que lo consulta ya no tiene `help` a
-    // mano (asigna `app.message`, que reclama el préstamo de vuelta).
+    // Read BEFORE the `match`: the arm that consults it no longer has
+    // `help` at hand (it assigns `app.message`, which claims the borrow
+    // back).
     let over_modal = help.over_modal;
     match outcome {
         HelpOutcome::TogglePane => help.state.toggle_focus(),
         HelpOutcome::StartFilter => help.state.start_filter(),
-        // Con historial, vuelve; SIN historial, cierra. Es lo que convierte
-        // `Backspace` en una tecla honesta en vez de una muerta en la raíz:
-        // "atrás" desde donde no se puede ir más atrás es salir.
+        // With history, it goes back; with NO history, it closes. This is
+        // what turns `Backspace` into an honest key instead of a dead one
+        // at the root: "back" from where you cannot go back further is
+        // exiting.
         HelpOutcome::Back => {
             if !help.state.back() {
                 app.help = None;
@@ -236,43 +239,44 @@ pub fn on_help_key(
         }
         HelpOutcome::Close => app.help = None,
         HelpOutcome::Activate => match help.state.action().cloned() {
-            // Un enlace se sigue y la ayuda SIGUE abierta: leer no es salir.
+            // A link is followed and help STAYS open: reading is not
+            // leaving.
             Some(norte_frontend::help::Action::Open(id)) => help.state.open(&id),
             Some(norte_frontend::help::Action::Run(cmd)) => {
-                // H3c: una ayuda abierta ENCIMA de un modal no despacha nada
-                // sobre los panes. `dispatch` planta sus propios modales (una
-                // confirmación de copia), así que el comando SUSTITUIRÍA al
-                // que está esperando respuesta: una aprobación de agente
-                // desaparecería de la pantalla sin que nadie la haya
-                // contestado. Se dice y la ayuda se queda abierta — mismo
-                // trato que la fila no despachable de abajo.
+                // H3c: help open ON TOP of a modal dispatches nothing on
+                // the panes. `dispatch` plants its own modals (a copy
+                // confirmation), so the command would REPLACE the one
+                // waiting for an answer: an agent approval would vanish
+                // from the screen with nobody having answered it. It is
+                // said and help stays open — same treatment as the
+                // non-dispatchable row below.
                 if over_modal {
                     app.message = Some(t("msg-help-modal-waiting"));
                     return None;
                 }
-                // La lista `commands` de un tema puede nombrar un verbo
-                // `dialog.*` — el tema `help` documenta tres — y ésos son
-                // vocabulario de overlay, no algo que un pane pueda correr:
-                // no están en `COMMANDS` y `Command::parse` los rechaza. Se
-                // dice y la ayuda se queda abierta; comerse el Enter en
-                // silencio se leería como que el comando corrió. (El resto
-                // de ids del corpus SÍ parsean: la puerta de documentación
-                // los cruza byte a byte contra `COMMANDS ∪ DIALOG_COMMANDS`.)
-                // (H3e) Una fila de PLUGIN. Su clave es `plugin:{id}:{cmd}`,
-                // que no vive en `COMMANDS` y que `Command::parse` rechaza —
-                // así que sin este brazo el Enter caía en el `msg-help-not-
-                // runnable` de abajo y la app se negaba a correr justo la fila
-                // que ella misma acababa de pintar como disponible, con el pie
-                // prometiendo `⏎ ejecutar`. La atenuación era decorativa.
+                // A topic's `commands` list can name a `dialog.*` verb —
+                // the `help` topic documents three — and those are overlay
+                // vocabulary, not something a pane can run: they are not in
+                // `COMMANDS` and `Command::parse` rejects them. It is said
+                // and help stays open; eating the Enter silently would
+                // read as though the command ran. (The rest of the
+                // corpus's ids DO parse: the documentation gate checks them
+                // byte for byte against `COMMANDS ∪ DIALOG_COMMANDS`.)
+                // (H3e) A PLUGIN row. Its key is `plugin:{id}:{cmd}`, which
+                // does not live in `COMMANDS` and which `Command::parse`
+                // rejects — so without this arm the Enter fell into the
+                // `msg-help-not-runnable` below and the app refused to run
+                // exactly the row it had just painted as available, with
+                // the footer promising `⏎ run`. The dimming was decorative.
                 if let Some((id, command)) = parse_plugin_key(&cmd) {
-                    // La foto congelada DIMEA; jamás AUTORIZA. Negarse aquí es
-                    // coherencia con lo que el lector tiene delante — una fila
-                    // atenuada que al pulsarla corriera sería peor que no
-                    // atenuar nada — pero la autoridad sigue siendo
-                    // `resolve_runnable` en el servidor, que comprueba
-                    // aprobado+activo por su cuenta y no se fía de ningún
-                    // cliente. Dos comprobaciones que dicen lo mismo, una
-                    // cortés y otra vinculante.
+                    // The frozen snapshot DIMS; it never AUTHORIZES.
+                    // Refusing here is consistent with what the reader has
+                    // in front of them — a dimmed row that ran when
+                    // clicked would be worse than not dimming anything —
+                    // but authority still belongs to `resolve_runnable` on
+                    // the server, which checks approved+enabled on its own
+                    // and trusts no client. Two checks saying the same
+                    // thing, one polite and one binding.
                     if !norte_help::ChordResolver::availability(&*app.help_chords, &cmd)
                         .is_available()
                     {
@@ -280,31 +284,32 @@ pub fn on_help_key(
                         return None;
                     }
                     let (id, command) = (id.to_owned(), command.to_owned());
-                    // Cerrar ANTES de despachar, como abajo.
+                    // Close BEFORE dispatching, as below.
                     app.help = None;
                     return Some(HelpDispatch::Plugin(id, command));
                 }
                 let Some(parsed) = Command::parse(&cmd) else {
-                    // La barra de estado se ve: el overlay ocupa el frame
-                    // menos una fila arriba y otra abajo, y la barra es esa
-                    // última fila (`ui::help_layout`).
+                    // The status bar is visible: the overlay takes the
+                    // frame minus one row on top and one on the bottom, and
+                    // the bar is that last row (`ui::help_layout`).
                     app.message = Some(t("msg-help-not-runnable"));
                     return None;
                 };
-                // Cerrar ANTES de despachar es deliberado: el comando actúa
-                // sobre los panes de debajo y la ayuda taparía la
-                // confirmación que abra.
+                // Closing BEFORE dispatching is deliberate: the command
+                // acts on the panes below and help would cover whatever
+                // confirmation it opens.
                 app.help = None;
                 return Some(HelpDispatch::Command(parsed));
             }
-            // Foco en la lateral. Arrear el cursor ya PREVISUALIZA (abre lo
-            // que pisa), así que el tema resaltado suele ser YA el abierto y
-            // `open` no haría nada: un Enter mudo, indistinguible de un fallo.
-            // Cuando coinciden, Enter entra AL CUERPO; cuando no —el único
-            // caso que queda, seguir un `see_also` desde una lista filtrada,
-            // donde el resalte se quedó en la fila visible más cercana— abre.
-            // En las dos ramas Enter significa lo mismo: «ir a lo que estoy
-            // mirando».
+            // Focus in the sidebar. Steering the cursor already PREVIEWS
+            // (opens whatever it lands on), so the highlighted topic is
+            // usually ALREADY the open one and `open` would do nothing: a
+            // silent Enter, indistinguishable from a failure. When they
+            // match, Enter enters THE BODY; when they do not — the only
+            // remaining case, following a `see_also` from a filtered list,
+            // where the highlight stayed on the nearest visible row —
+            // opens. In both branches Enter means the same thing: "go to
+            // what I am looking at."
             None => {
                 let selected = help.state.selected_topic().cloned();
                 if selected.is_some_and(|id| id != *help.state.current()) {
@@ -314,10 +319,9 @@ pub fn on_help_key(
                 }
             }
         },
-        // Lo que queda son las teclas que desplazan (flechas, página,
-        // extremos, secciones): todas las demás variantes tienen su brazo
-        // arriba.
-        mover => desplazar(help, mover),
+        // What is left are the scrolling keys (arrows, page, ends,
+        // sections): every other variant has its arm above.
+        outcome => scroll(help, outcome),
     }
     None
 }
@@ -347,40 +351,40 @@ mod help_key_tests {
         let (_, preset) = presets()
             .into_iter()
             .find(|(n, _)| *n == "orthodox")
-            .expect("preset orthodox");
+            .expect("orthodox preset");
         let known: Vec<&str> = COMMANDS
             .iter()
             .copied()
             .chain(DIALOG_COMMANDS.iter().copied())
             .collect();
-        Effective::build_for(&preset, &[], &known, screen).expect("efectivo del preset")
+        Effective::build_for(&preset, &[], &known, screen).expect("preset effective")
     }
 
     fn dialog_resolver() -> Resolver {
         Resolver::new(eff(Screen::Dialog))
     }
 
-    /// Bajo **vim** el preset liga `app.help` a `f1` Y a `?`. La TUI resuelve
-    /// el cierre por el keymap (`cmd == "app.help"` en `on_help_key`), así que
-    /// las dos cierran sin que nada las enumere — es la propiedad que la GUI no
-    /// tenía y que su `closes_help` le da ahora. El test la pinea aquí para que
-    /// un cambio en la resolución del contexto `dialog` no la pierda en
-    /// silencio.
+    /// Under **vim** the preset binds `app.help` to `f1` AND to `?`. The TUI
+    /// resolves closing through the keymap (`cmd == "app.help"` in
+    /// `on_help_key`), so both close with nothing having to enumerate
+    /// them — it is the property the GUI did not have, which its
+    /// `closes_help` now gives it. The test pins it here so a change in the
+    /// `dialog` context's resolution does not lose it silently.
     #[test]
-    fn bajo_vim_las_dos_teclas_de_ayuda_cierran() {
+    fn under_vim_both_help_keys_close() {
         use norte_frontend::keymap::Resolution;
 
         let (_, preset) = presets()
             .into_iter()
             .find(|(n, _)| *n == "vim")
-            .expect("preset vim");
+            .expect("vim preset");
         let known: Vec<&str> = COMMANDS
             .iter()
             .copied()
             .chain(DIALOG_COMMANDS.iter().copied())
             .collect();
         let dialog = Effective::build_for(&preset, &[], &known, Screen::Dialog)
-            .expect("efectivo dialog del preset vim");
+            .expect("vim preset's dialog effective");
 
         for (mods, code) in [
             (KeyModifiers::NONE, KeyCode::F(1)),
@@ -388,19 +392,19 @@ mod help_key_tests {
         ] {
             let mut app = app_with_help();
             let mut resolver = Resolver::new(dialog.clone());
-            let chord = chord_from_crossterm(mods, code).expect("chord modelado");
+            let chord = chord_from_crossterm(mods, code).expect("modeled chord");
             assert!(
                 matches!(resolver.push(chord), Resolution::Run { command: cmd, .. } if cmd == "app.help"),
-                "{code:?} es `app.help` en el contexto dialog"
+                "{code:?} is `app.help` in the dialog context"
             );
             let mut resolver = Resolver::new(dialog.clone());
             assert!(on_help_key(&mut app, &mut resolver, mods, code).is_none());
-            assert!(app.help.is_none(), "{code:?} cierra la ayuda");
+            assert!(app.help.is_none(), "{code:?} closes help");
         }
     }
 
     fn app_with_help() -> App {
-        let d = VPath::parse("file:///x").expect("wire de test");
+        let d = VPath::parse("file:///x").expect("test wire");
         let mut app = App::new(Pane::new(d.clone(), Vec::new()), Pane::new(d, Vec::new()));
         app.help = Some(HelpView::new(Lang::En, Vec::new()));
         app
@@ -417,7 +421,7 @@ mod help_key_tests {
 
     /// `Command::AppHelp`'s whole body ([`open_contextual_help`]), which is
     /// what `F1` runs.
-    fn abrir_ayuda(app: &mut App) {
+    fn open_help(app: &mut App) {
         open_contextual_help(app, Lang::En, &[], None);
     }
 
@@ -425,26 +429,26 @@ mod help_key_tests {
     /// half of the map is data being written page by page (H3h): a test that
     /// hard-coded `copying` here would fail the day a context is claimed and
     /// pass for the wrong reason until then.
-    fn pagina_de(context: &str) -> String {
+    fn page_of(context: &str) -> String {
         norte_help::topic_for_context(Lang::En, context)
             .map_or_else(|| "index".to_owned(), |t| t.id.as_str().to_owned())
     }
 
-    fn collision_modal_de_test() -> Modal {
+    fn test_collision_modal() -> Modal {
         Modal::Collision {
             retry: crate::tasks::RetrySpec {
                 kind: crate::app::TransferKind::Move,
-                from: VPath::parse("file:///a").expect("wire de test"),
-                to: VPath::parse("file:///b").expect("wire de test"),
+                from: VPath::parse("file:///a").expect("test wire"),
+                to: VPath::parse("file:///b").expect("test wire"),
                 opts: norte_core::TransferOptions::default(),
                 name_encoding: None,
             },
         }
     }
 
-    /// Una aprobación de agente: el modal cuyo secuestro por un overlay es el
-    /// defecto que `modal_wins` existe para cerrar (H1 MINOR-4).
-    fn approval_modal_de_test() -> Modal {
+    /// An agent approval: the modal whose hijacking by an overlay is the
+    /// defect `modal_wins` exists to close (H1 MINOR-4).
+    fn test_approval_modal() -> Modal {
         Modal::ApproveAgentOp {
             req: norte_proto::methods::PolicyApprovalRequired {
                 approval_id: 1,
@@ -458,238 +462,242 @@ mod help_key_tests {
         }
     }
 
-    /// El TOFU de una host key: la superficie de SEGURIDAD que una ayuda sí
-    /// puede tapar, porque `dialog.trust-host` tiene página (`remote`) y la
-    /// aprobación de agente no — sobre ésa `F1` ya no abre nada (MAJOR-2), así
-    /// que los tests de «los verbos de debajo son inertes» viven aquí. La
-    /// consecuencia es de la misma clase: `dialog.approve` (la `y` del preset)
-    /// CONFÍA en una clave sin verificar.
-    fn trust_host_modal_de_test() -> Modal {
+    /// A host key's TOFU: the SECURITY surface help CAN cover, because
+    /// `dialog.trust-host` has a page (`remote`) and the agent approval does
+    /// not — over that one `F1` no longer opens anything (MAJOR-2), so the
+    /// "the verbs underneath are inert" tests live here. The consequence is
+    /// of the same class: `dialog.approve` (the preset's `y`) TRUSTS an
+    /// unverified key.
+    fn test_trust_host_modal() -> Modal {
         Modal::TrustHostKey {
             host: "h".into(),
             port: Some(22),
             algo: "ssh-ed25519".into(),
             fingerprint: "SHA256:AAAA".into(),
-            dir: VPath::parse("sftp://h/").expect("wire de test"),
+            dir: VPath::parse("sftp://h/").expect("test wire"),
             pane: 0,
             trail: crate::app::Trail::Record,
         }
     }
 
-    /// `F1` desde un pane abre la página del PANE, no el índice, y llega con
-    /// el historial vacío: `Esc` cierra el overlay, no camina hacia atrás a un
-    /// sitio que el lector no pidió.
+    /// `F1` from a pane opens the PANE's page, not the index, and arrives
+    /// with an empty history: `Esc` closes the overlay, it does not walk
+    /// back to a place the reader did not ask for.
     #[test]
-    fn f1_abre_la_pagina_del_contexto_y_sin_historial() {
+    fn f1_opens_the_contexts_page_with_no_history() {
         let mut app = app_with_help_closed();
-        abrir_ayuda(&mut app);
-        let help = app.help.as_ref().expect("la ayuda se abrió");
+        open_help(&mut app);
+        let help = app.help.as_ref().expect("help opened");
         assert_eq!(
             help.state.current().as_str(),
             "panes",
-            "el corpus reclama `browse`"
+            "the corpus claims `browse`"
         );
-        assert!(!help.over_modal, "no había modal ninguno");
+        assert!(!help.over_modal, "there was no modal at all");
 
         let mut r = dialog_resolver();
         press(&mut app, &mut r, KeyCode::Backspace);
         assert!(
             app.help.is_none(),
-            "«atrás» en la raíz cierra: la página contextual NO es un paso de navegación"
+            "\"back\" at the root closes: the contextual page is NOT a navigation step"
         );
     }
 
-    /// Review H3c MAJOR-2: sobre un modal SIN página escrita, `F1` no abre
-    /// NADA — lo dice y deja la pregunta contestable.
+    /// Review H3c MAJOR-2: over a modal with NO page written, `F1` opens
+    /// NOTHING — it says so and leaves the question answerable.
     ///
-    /// El fallback al índice vale desde un pane o desde el visor (nadie espera
-    /// una decisión), pero sobre un diálogo tapaba una pregunta viva con
-    /// «Bienvenido a norte — norte es un gestor de ficheros ortodoxo. Dos
-    /// paneles…», congelaba sus verbos, le sustituía el pie y dejaba al lector
-    /// caminar del índice a `copying` para leer la prosa de `y`/`n` de OTRO
-    /// diálogo mientras la aprobación esperaba detrás. Es la misma decisión que
-    /// [`palette_help`] ya había tomado para una fila sin documentar, aplicada
-    /// donde importa más.
+    /// Falling back to the index is fine from a pane or from the viewer
+    /// (nobody expects a decision), but over a dialog it covered a live
+    /// question with "Welcome to norte — norte is an orthodox file manager.
+    /// Two panes…," froze its verbs, replaced its footer and let the reader
+    /// walk from the index to `copying` to read ANOTHER dialog's `y`/`n`
+    /// prose while the approval waited behind it. It is the same decision
+    /// [`palette_help`] had already made for an undocumented row, applied
+    /// where it matters most.
     #[test]
-    fn f1_sobre_un_modal_sin_pagina_no_tapa_la_pregunta() {
-        // Se prueba la GUARDA, no el hueco: desde H3h todo contexto tiene
-        // página (la puerta de documentación se quedó sin allowlist), así que
-        // un test que necesitara un modal indocumentado se quedaría sin sujeto
-        // y habría que reescribirlo con cada página nueva. El contexto es
-        // sintético; lo que se fija es que sobre un modal la respuesta a «no
-        // hay página» es no abrir nada.
+    fn f1_over_a_modal_with_no_page_does_not_cover_the_question() {
+        // The GUARD is tested, not the gap: since H3h every context has a
+        // page (the documentation gate went allowlist-free), so a test that
+        // needed an undocumented modal would be left with no subject and
+        // would have to be rewritten with every new page. The context is
+        // synthetic; what is pinned is that over a modal the answer to "no
+        // page" is to open nothing.
         for lang in [Lang::En, Lang::Es] {
             assert!(
                 refuses_over_modal(lang, "dialog.no-such-context", true),
-                "sobre un modal, sin página, F1 no abre nada"
+                "over a modal, with no page, F1 opens nothing"
             );
             assert!(
                 !refuses_over_modal(lang, "dialog.no-such-context", false),
-                "desde un pane el índice SÍ es un aterrizaje razonable"
+                "from a pane the index IS a reasonable landing"
             );
             assert!(
                 !refuses_over_modal(lang, "dialog.approval", true),
-                "y con página escrita se abre esa página"
+                "and with a page written, that page opens"
             );
         }
     }
 
-    /// La otra mitad, y lo que de verdad cambió en H3h: ningún modal que la
-    /// TUI sepa abrir se queda sin página. Es lo mismo que cruza la puerta de
-    /// documentación (`tests/help_gate.rs`), comprobado aquí desde el lado del
-    /// lector — `F1` sobre una pregunta viva abre prosa sobre ESA pregunta, y
-    /// nunca el mensaje de arriba.
+    /// The other half, and what really changed in H3h: no modal the TUI
+    /// knows how to open is left without a page. It is the same thing the
+    /// documentation gate checks (`tests/help_gate.rs`), verified here from
+    /// the reader's side — `F1` over a live question opens prose about THAT
+    /// question, and never the message above.
     #[test]
-    fn todo_contexto_de_modal_tiene_pagina() {
+    fn every_modal_context_has_a_page() {
         for lang in [Lang::En, Lang::Es] {
             for context in crate::help_context::CONTEXTS {
                 assert!(
                     !refuses_over_modal(lang, context, true),
-                    "[{lang:?}] el contexto `{context}` no tiene página que abrir"
+                    "[{lang:?}] context `{context}` has no page to open"
                 );
             }
         }
     }
 
-    /// Y sobre un modal con página, `F1` la abre sin tapar la pregunta.
+    /// And over a modal with a page, `F1` opens it without covering the
+    /// question.
     #[test]
-    fn f1_sobre_una_aprobacion_abre_su_pagina() {
+    fn f1_over_an_approval_opens_its_page() {
         let mut app = app_with_help_closed();
-        app.modal = Some(approval_modal_de_test());
-        abrir_ayuda(&mut app);
-        let help = app.help.as_ref().expect("la ayuda se abrió");
+        app.modal = Some(test_approval_modal());
+        open_help(&mut app);
+        let help = app.help.as_ref().expect("help opened");
         assert_eq!(help.state.current().as_str(), "agents");
-        assert!(help.over_modal, "la ayuda sabe que hay una pregunta detrás");
-        assert!(app.modal.is_some(), "y la pregunta sigue ahí");
+        assert!(help.over_modal, "help knows there is a question behind it");
+        assert!(app.modal.is_some(), "and the question is still there");
     }
 
-    /// `F1` sobre un modal abre la página de ESE modal (o el índice mientras
-    /// nadie la haya escrito) y deja el modal donde estaba.
+    /// `F1` over a modal opens THAT modal's page (or the index while nobody
+    /// has written it) and leaves the modal where it was.
     #[test]
-    fn f1_sobre_un_modal_abre_la_pagina_del_modal() {
+    fn f1_over_a_modal_opens_the_modals_page() {
         let mut app = app_with_help_closed();
-        app.modal = Some(collision_modal_de_test());
-        abrir_ayuda(&mut app);
-        let help = app.help.as_ref().expect("la ayuda se abrió");
+        app.modal = Some(test_collision_modal());
+        open_help(&mut app);
+        let help = app.help.as_ref().expect("help opened");
         assert_eq!(
             help.state.current().as_str(),
-            pagina_de("dialog.collision"),
-            "la página del contexto del modal, jamás la de otro modal"
+            page_of("dialog.collision"),
+            "the modal's context's page, never another modal's"
         );
-        assert!(help.over_modal, "se abrió ENCIMA de un modal");
-        assert!(app.modal.is_some(), "y el modal sigue ahí");
+        assert!(help.over_modal, "it opened ON TOP of a modal");
+        assert!(app.modal.is_some(), "and the modal is still there");
         assert!(
             help_owns_keys(&app),
-            "…con las teclas: sin esto la rama del modal se las quedaría y el \
-             lector no podría ni mover el cursor de la ayuda que acaba de abrir"
+            "…with the keys: without this the modal branch would keep them and \
+             the reader could not even move the cursor of the help that just opened"
         );
     }
 
-    /// La ayuda abierta desde un modal se queda las teclas, y `Esc` cierra
-    /// SOLO la ayuda: el modal no se responde por accidente.
+    /// Help opened from a modal keeps the keys, and `Esc` closes ONLY help:
+    /// the modal is not answered by accident.
     #[test]
-    fn esc_cierra_la_ayuda_y_deja_el_modal_intacto() {
+    fn esc_closes_help_and_leaves_the_modal_intact() {
         let mut app = app_with_help_closed();
-        app.modal = Some(trust_host_modal_de_test());
-        abrir_ayuda(&mut app);
-        assert!(help_owns_keys(&app), "la rama de la ayuda es la que corre");
+        app.modal = Some(test_trust_host_modal());
+        open_help(&mut app);
+        assert!(help_owns_keys(&app), "the help branch is the one that runs");
         let mut r = dialog_resolver();
         press(&mut app, &mut r, KeyCode::Esc);
-        assert!(app.help.is_none(), "la ayuda se cerró");
+        assert!(app.help.is_none(), "help closed");
         assert!(
             app.modal.is_some(),
-            "una host key desconocida NO se contesta cerrando una ayuda"
+            "an unknown host key is NOT answered by closing help"
         );
         assert!(
             !help_owns_keys(&app),
-            "y cerrada, la tecla siguiente vuelve al modal"
+            "and closed, the next key goes back to the modal"
         );
     }
 
-    /// Mientras la ayuda tapa el modal, los verbos del modal son inertes: se
-    /// decide con la ayuda cerrada, mirándolo.
+    /// While help covers the modal, the modal's verbs are inert: it is
+    /// decided with help closed, looking at it.
     #[test]
-    fn los_verbos_del_modal_no_se_alcanzan_por_debajo_de_la_ayuda() {
+    fn the_modals_verbs_are_not_reached_underneath_help() {
         let mut app = app_with_help_closed();
-        app.modal = Some(trust_host_modal_de_test());
-        abrir_ayuda(&mut app);
-        // La rama que corre es la de la ayuda (`help_owns_keys`), así que la
-        // del modal —la única que llama a `dialog_action`— no ve esta tecla.
+        app.modal = Some(test_trust_host_modal());
+        open_help(&mut app);
+        // The branch that runs is help's (`help_owns_keys`), so the
+        // modal's — the only one that calls `dialog_action` — does not see
+        // this key.
         assert!(help_owns_keys(&app));
         let mut r = dialog_resolver();
         press(&mut app, &mut r, KeyCode::Char('y')); // dialog.approve
-        assert!(app.modal.is_some(), "no se confió en nada a ciegas");
-        assert!(app.help.is_some(), "y `y` tampoco cierra la ayuda");
+        assert!(app.modal.is_some(), "nothing was trusted blindly");
+        assert!(app.help.is_some(), "and `y` does not close help either");
     }
 
-    /// Un modal que LLEGA sobre una ayuda abierta la cierra: la tecla
-    /// siguiente tiene que ir donde apuntan los píxeles (el modal se pinta
-    /// ÚLTIMO, por encima de todo), y una aprobación no se contesta a través
-    /// de una página.
+    /// A modal that ARRIVES over an open help closes it: the next key has
+    /// to go where the pixels point (the modal is painted LAST, over
+    /// everything), and an approval is not answered through a page.
     #[test]
-    fn un_modal_que_llega_cierra_la_ayuda() {
+    fn a_modal_that_arrives_closes_help() {
         let mut app = app_with_help_closed();
-        abrir_ayuda(&mut app); // sin modal: over_modal == false
-        assert!(!app.help.as_ref().expect("abierta").over_modal);
-        app.modal = Some(approval_modal_de_test());
+        open_help(&mut app); // no modal: over_modal == false
+        assert!(!app.help.as_ref().expect("open").over_modal);
+        app.modal = Some(test_approval_modal());
         assert!(
             !help_owns_keys(&app),
-            "la ayuda que ya estaba abierta NO se queda la tecla del modal"
+            "help that was already open does NOT keep the modal's key"
         );
         close_stale_overlays(&mut app);
-        assert!(app.help.is_none(), "la ayuda cede la pantalla");
+        assert!(app.help.is_none(), "help yields the screen");
     }
 
-    /// Review MINOR-1: `over_modal` es un hecho del PRESENTE, no un recuerdo.
+    /// Review MINOR-1: `over_modal` is a fact about the PRESENT, not a
+    /// memory.
     ///
-    /// Si el modal sobre el que se abrió la ayuda desaparece y llega OTRO, la
-    /// bandera vieja haría que la ayuda se quedara las teclas y
-    /// `close_stale_overlays` no la retirara nunca: el modal nuevo sería
-    /// incontestable hasta cerrar una página sobre un diálogo que ya no existe.
-    /// `settle_help_over_modal` la limpia en cuanto no hay modal, así que el
-    /// segundo modal se trata como lo que es — uno que LLEGA sobre una ayuda
-    /// abierta.
+    /// If the modal help was opened over disappears and ANOTHER arrives,
+    /// the old flag would make help keep the keys and
+    /// `close_stale_overlays` would never remove it: the new modal would be
+    /// unanswerable until a page over a dialog that no longer exists was
+    /// closed. `settle_help_over_modal` clears it as soon as there is no
+    /// modal, so the second modal is treated as what it is — one that
+    /// ARRIVES over an open help.
     #[test]
-    fn over_modal_no_sobrevive_al_modal_que_lo_justificaba() {
+    fn over_modal_does_not_survive_the_modal_that_justified_it() {
         let mut app = app_with_help_closed();
-        app.modal = Some(collision_modal_de_test());
-        abrir_ayuda(&mut app);
-        assert!(app.help.as_ref().expect("abierta").over_modal);
+        app.modal = Some(test_collision_modal());
+        open_help(&mut app);
+        assert!(app.help.as_ref().expect("open").over_modal);
 
-        // El modal se contesta; la ayuda sigue abierta (Esc cerraría solo la
-        // ayuda, pero el modal puede irse por su propio camino: un retry).
+        // The modal is answered; help stays open (Esc would close only
+        // help, but the modal can leave through its own path: a retry).
         app.modal = None;
         settle_help_over_modal(&mut app);
         assert!(
-            !app.help.as_ref().expect("sigue abierta").over_modal,
-            "la bandera no sobrevive a lo que era un recuerdo DE"
+            !app.help.as_ref().expect("still open").over_modal,
+            "the flag does not survive what was a memory OF"
         );
 
-        // …y ahora llega otro modal, que NO hereda las teclas de la ayuda.
-        app.modal = Some(approval_modal_de_test());
+        // …and now another modal arrives, which does NOT inherit help's
+        // keys.
+        app.modal = Some(test_approval_modal());
         assert!(
             !help_owns_keys(&app),
-            "el modal nuevo se queda la tecla: nadie pidió una página sobre ÉL"
+            "the new modal keeps the key: nobody asked for a page over IT"
         );
         close_stale_overlays(&mut app);
-        assert!(app.help.is_none(), "y la ayuda caduca como el resto");
+        assert!(app.help.is_none(), "and help expires like the rest");
     }
 
-    /// Y la ayuda que tapa un modal tampoco DESPACHA: `dispatch` planta sus
-    /// propios modales, así que correr `pane.copy` desde la página sustituiría
-    /// la pregunta que espera respuesta — desaparecería de la pantalla sin que
-    /// nadie la haya contestado. Se dice y la página se queda.
+    /// And help that covers a modal does not DISPATCH either: `dispatch`
+    /// plants its own modals, so running `pane.copy` from the page would
+    /// replace the question waiting for an answer — it would vanish from
+    /// the screen with nobody having answered it. It is said and the page
+    /// stays.
     #[test]
-    fn una_fila_ejecutable_no_se_despacha_por_encima_de_un_modal() {
+    fn a_runnable_row_is_not_dispatched_over_a_modal() {
         let mut app = app_with_help_closed();
-        app.modal = Some(trust_host_modal_de_test());
-        abrir_ayuda(&mut app);
+        app.modal = Some(test_trust_host_modal());
+        open_help(&mut app);
         let mut r = dialog_resolver();
-        // A una página con filas ejecutables (la del contexto puede no
-        // tenerlas todavía) y al cuerpo, que es donde vive el Enter.
+        // To a page with runnable rows (the context's may not have any
+        // yet) and to the body, where Enter lives.
         app.help
             .as_mut()
-            .expect("abierta")
+            .expect("open")
             .state
             .open(&TopicId::new("copying"));
         press(&mut app, &mut r, KeyCode::Tab);
@@ -700,116 +708,121 @@ mod help_key_tests {
         ));
 
         let cmd = press(&mut app, &mut r, KeyCode::Enter);
-        assert_eq!(cmd, None, "nada que el run loop pueda despachar");
-        assert!(app.help.is_some(), "y la ayuda no se cierra sola");
-        assert!(app.modal.is_some(), "la pregunta sigue en pie");
+        assert_eq!(cmd, None, "nothing the run loop can dispatch");
+        assert!(app.help.is_some(), "and help does not close on its own");
+        assert!(app.modal.is_some(), "the question is still standing");
         assert_eq!(
             app.message.as_deref(),
             Some(norte_i18n::t("msg-help-modal-waiting").as_str()),
-            "el Enter no puede desaparecer en silencio"
+            "the Enter cannot vanish silently"
         );
     }
 
-    /// Y el PUENTE a la palette tampoco cruza por encima de un modal (review
-    /// H3c MAJOR-1), por la misma razón que el brazo de arriba y con una
-    /// consecuencia peor.
+    /// And the BRIDGE to the palette does not cross over a modal either
+    /// (review H3c MAJOR-1), for the same reason as the arm above and with
+    /// a worse consequence.
     ///
-    /// `Ctrl+P` cerraba la ayuda y abría la palette dejando el modal en pie.
-    /// La rama de la palette del run loop está gateada por `!modal_wins`, así
-    /// que la palette quedaba PINTADA y con aspecto de viva pero sin recibir
-    /// una sola tecla: todas caían en la rama del modal y se resolvían contra
-    /// su allowlist. Teclear `copy` para filtrar sobre este TOFU descarta `c`,
-    /// `o`, `p`… y la `y` CONFÍA en la host key.
+    /// `Ctrl+P` used to close help and open the palette leaving the modal
+    /// standing. The run loop's palette branch is gated by `!modal_wins`,
+    /// so the palette ended up PAINTED looking alive but receiving not a
+    /// single key: all of them fell into the modal branch and resolved
+    /// against its allowlist. Typing `copy` to filter over this TOFU
+    /// discards `c`, `o`, `p`… and the `y` TRUSTS the host key.
     #[test]
-    fn el_puente_a_la_palette_no_cruza_por_encima_de_un_modal() {
+    fn the_bridge_to_the_palette_does_not_cross_over_a_modal() {
         let mut app = app_with_help_closed();
-        app.modal = Some(trust_host_modal_de_test());
-        abrir_ayuda(&mut app);
+        app.modal = Some(test_trust_host_modal());
+        open_help(&mut app);
         assert!(
-            app.help.as_ref().expect("abierta").over_modal,
-            "precondición: la ayuda se abrió ENCIMA del modal"
+            app.help.as_ref().expect("open").over_modal,
+            "precondition: help opened ON TOP of the modal"
         );
         let mut r = dialog_resolver();
 
         let cmd = on_help_key(&mut app, &mut r, KeyModifiers::CONTROL, KeyCode::Char('p'));
-        assert_eq!(cmd, None, "nada que despachar");
+        assert_eq!(cmd, None, "nothing to dispatch");
         assert!(
             app.palette.is_none(),
-            "la palette NO se abre: sus teclas se las quedaría el modal"
+            "the palette does NOT open: its keys would be kept by the modal"
         );
-        assert!(app.help.is_some(), "la ayuda se queda donde estaba");
-        assert!(app.modal.is_some(), "y el modal sigue esperando respuesta");
+        assert!(app.help.is_some(), "help stays where it was");
+        assert!(
+            app.modal.is_some(),
+            "and the modal is still waiting for an answer"
+        );
         assert_eq!(
             app.message.as_deref(),
             Some(norte_i18n::t("msg-help-modal-waiting").as_str()),
-            "el Ctrl+P no puede desaparecer en silencio"
+            "the Ctrl+P cannot vanish silently"
         );
     }
 
-    /// La tecla de la ayuda tiene que LLEGAR con un modal abierto. `app.help`
-    /// es un comando de `[global]`, no un verbo `dialog.*`, así que el
-    /// allowlist del modal (`dialog_action`) lo deja caer: sin la rama de
-    /// `modal_help_toggle` en `on_dialog_key`, `F1` sobre un diálogo es INERTE
-    /// y toda esta tarea no se puede usar. (Pillado pilotando la TUI en tmux:
-    /// la suite en verde no lo veía porque abría la ayuda por `dispatch`.)
+    /// Help's own key has to ARRIVE with a modal open. `app.help` is a
+    /// `[global]` command, not a `dialog.*` verb, so the modal's allowlist
+    /// (`dialog_action`) drops it: without `modal_help_toggle`'s branch in
+    /// `on_dialog_key`, `F1` over a dialog is INERT and this whole task
+    /// cannot be used. (Caught piloting the TUI in tmux: the green suite
+    /// did not see it because it opened help through `dispatch`.)
     #[test]
-    fn f1_resuelve_y_abre_la_ayuda_con_un_modal_abierto() {
+    fn f1_resolves_and_opens_help_with_a_modal_open() {
         let mut app = app_with_help_closed();
-        app.modal = Some(collision_modal_de_test());
+        app.modal = Some(test_collision_modal());
         let mut r = dialog_resolver();
 
-        // El MISMO camino que el run loop: el chord de F1 resuelto contra el
-        // efectivo `dialog` — la tecla es del keymap (rebindeable), el
-        // significado es de aquí.
-        let chord =
-            chord_from_crossterm(KeyModifiers::NONE, KeyCode::F(1)).expect("F1 es un chord");
+        // The SAME path as the run loop: F1's chord resolved against the
+        // `dialog` effective — the key is the keymap's (rebindable), the
+        // meaning is this file's.
+        let chord = chord_from_crossterm(KeyModifiers::NONE, KeyCode::F(1)).expect("F1 is a chord");
         let cmd = match r.push(chord) {
             Resolution::Run { command: cmd, .. } => cmd,
-            otro => panic!("F1 resuelve a un comando en el contexto dialog: {otro:?}"),
+            other => panic!("F1 resolves to a command in the dialog context: {other:?}"),
         };
-        assert_eq!(cmd, "app.help", "el preset orthodox ata F1 a `app.help`");
+        assert_eq!(
+            cmd, "app.help",
+            "the orthodox preset binds F1 to `app.help`"
+        );
 
         assert!(
             modal_help_toggle(&mut app, &cmd, Lang::En, &[]),
-            "la tecla se CONSUME: el modal no la ve como una decisión"
+            "the key is CONSUMED: the modal does not see it as a decision"
         );
-        let help = app.help.as_ref().expect("F1 abrió la ayuda sobre el modal");
-        assert_eq!(help.state.current().as_str(), pagina_de("dialog.collision"));
+        let help = app.help.as_ref().expect("F1 opened help over the modal");
+        assert_eq!(help.state.current().as_str(), page_of("dialog.collision"));
         assert!(help.over_modal);
-        assert!(app.modal.is_some(), "y el modal sigue en pie");
+        assert!(app.modal.is_some(), "and the modal is still standing");
 
-        // Y con la ayuda ya abierta la MISMA tecla la cierra (el interruptor
-        // vive en `on_help_key`), así que este hook no puede reabrirla: la
-        // rama de la ayuda gana la tecla antes de llegar aquí.
+        // And with help already open the SAME key closes it (the switch
+        // lives in `on_help_key`), so this hook cannot reopen it: help's
+        // branch wins the key before reaching here.
         assert!(help_owns_keys(&app));
     }
 
-    /// Cualquier otro comando `dialog.*` no lo toca el hook: quien decide
-    /// sigue siendo el allowlist del modal.
+    /// Any other `dialog.*` command is untouched by the hook: what decides
+    /// is still the modal's allowlist.
     #[test]
-    fn el_hook_de_la_ayuda_no_se_come_los_verbos_del_modal() {
+    fn the_help_hook_does_not_eat_the_modals_verbs() {
         let mut app = app_with_help_closed();
-        app.modal = Some(approval_modal_de_test());
+        app.modal = Some(test_approval_modal());
         assert!(!modal_help_toggle(
             &mut app,
             "dialog.approve",
             Lang::En,
             &[]
         ));
-        assert!(app.help.is_none(), "ni abre nada");
+        assert!(app.help.is_none(), "nor does it open anything");
     }
 
-    /// Review H3c MINOR-3: los SEIS modales que el run loop intercepta antes de
-    /// `on_dialog_key` no admiten ayuda por encima, y ahora eso es una DECISIÓN
-    /// (`help_context::help_over_modal_allowed`) en vez de la resaca del
-    /// enrutado de teclas.
+    /// Review H3c MINOR-3: the SIX modals the run loop intercepts before
+    /// `on_dialog_key` do not admit help on top, and now that is a DECISION
+    /// (`help_context::help_over_modal_allowed`) instead of a hangover from
+    /// key routing.
     ///
-    /// Antes quedaban fuera solo porque cada uno hace `continue` 3000 líneas
-    /// más arriba; mover uno al keymap `dialog` —una limpieza plausible— habría
-    /// abierto el agujero en silencio sobre un editor de texto libre y sobre el
-    /// TOFU de `init.lua`, que NO tiene TTL.
+    /// Before, they were left out only because each one does `continue`
+    /// 3000 lines further up; moving one to the `dialog` keymap — a
+    /// plausible cleanup — would have silently opened the hole over a free
+    /// text editor and over `init.lua`'s TOFU, which has NO TTL.
     #[test]
-    fn los_modales_interceptados_no_admiten_ayuda_por_encima() {
+    fn the_intercepted_modals_do_not_admit_help_on_top() {
         let intercepted = [
             Modal::TrustLuaInit {
                 path: "repo/.norte/init.lua".into(),
@@ -821,7 +834,7 @@ mod help_key_tests {
                 error: None,
             },
             Modal::Mkdir {
-                name: "nuevo".into(),
+                name: "new".into(),
                 error: None,
             },
             Modal::CommandLine {
@@ -829,17 +842,17 @@ mod help_key_tests {
                 error: None,
             },
             Modal::AiRenameInstruction {
-                instruction: "en snake_case".into(),
+                instruction: "in snake_case".into(),
                 error: None,
             },
             Modal::SemanticQuery {
-                query: "facturas".into(),
+                query: "invoices".into(),
                 error: None,
             },
             Modal::TransferName {
                 kind: crate::app::TransferKind::Copy,
-                from: VPath::parse("file:///x/a").expect("wire de test"),
-                to_dir: VPath::parse("file:///y").expect("wire de test"),
+                from: VPath::parse("file:///x/a").expect("test wire"),
+                to_dir: VPath::parse("file:///y").expect("test wire"),
                 name: "a".into(),
                 original: b"a".to_vec(),
                 touched: false,
@@ -856,32 +869,32 @@ mod help_key_tests {
             app.modal = Some(modal);
             assert!(
                 !modal_help_toggle(&mut app, "app.help", Lang::En, &[]),
-                "{label}: el hook no puede CONSUMIR la tecla de un modal que \
-                 no admite ayuda — quien decide vuelve a ser el allowlist"
+                "{label}: the hook cannot CONSUME the key of a modal that \
+                 does not admit help — what decides goes back to the allowlist"
             );
             assert!(
                 app.help.is_none(),
-                "{label}: F1 no abre una página sobre un editor de texto \
-                 libre ni sobre el TOFU de Lua"
+                "{label}: F1 does not open a page over a free text editor \
+                 nor over Lua's TOFU"
             );
-            assert!(app.modal.is_some(), "{label}: y el modal sigue ahí");
+            assert!(app.modal.is_some(), "{label}: and the modal is still there");
         }
     }
 
-    /// …y la dirección contraria NO: una ayuda que el lector abrió DESDE el
-    /// modal sobrevive a la limpieza, o `F1` sobre un diálogo abriría una
-    /// página que la siguiente tecla se lleva.
+    /// …and the reverse direction is NOT true: help the reader opened FROM
+    /// the modal survives the cleanup, or `F1` over a dialog would open a
+    /// page the next key takes away.
     #[test]
-    fn la_ayuda_abierta_desde_el_modal_sobrevive_a_la_limpieza() {
+    fn help_opened_from_the_modal_survives_the_cleanup() {
         let mut app = app_with_help_closed();
-        app.modal = Some(trust_host_modal_de_test());
-        abrir_ayuda(&mut app);
+        app.modal = Some(test_trust_host_modal());
+        open_help(&mut app);
         app.palette = Some(Palette::new(Vec::new()));
         close_stale_overlays(&mut app);
-        assert!(app.palette.is_none(), "la palette sí caduca");
+        assert!(app.palette.is_none(), "the palette does expire");
         assert!(
             app.help.is_some(),
-            "la ayuda que el lector pidió sobre ESTE modal se queda"
+            "the help the reader asked for over THIS modal stays"
         );
     }
 
@@ -891,7 +904,7 @@ mod help_key_tests {
     }
 
     fn state(app: &App) -> &norte_frontend::help::HelpState {
-        &app.help.as_ref().expect("overlay abierto").state
+        &app.help.as_ref().expect("overlay open").state
     }
 
     fn topic_ids(app: &App) -> Vec<String> {
@@ -913,11 +926,11 @@ mod help_key_tests {
     fn the_filter_editor_types_narrows_and_keeps_its_text_on_esc() {
         let mut app = app_with_help();
         let mut r = dialog_resolver();
-        let todos = topic_ids(&app);
-        assert!(todos.len() > 3, "el corpus trae varias páginas: {todos:?}");
+        let all = topic_ids(&app);
+        assert!(all.len() > 3, "the corpus brings several pages: {all:?}");
 
         press(&mut app, &mut r, KeyCode::Char('/'));
-        assert!(state(&app).filtering(), "`/` abre el filtro");
+        assert!(state(&app).filtering(), "`/` opens the filter");
 
         for c in "copying".chars() {
             press(&mut app, &mut r, KeyCode::Char(c));
@@ -926,61 +939,61 @@ mod help_key_tests {
         assert_eq!(
             filtered,
             vec!["copying".to_owned()],
-            "la lateral se estrecha a lo tecleado"
+            "the sidebar narrows to what was typed"
         );
         assert!(
-            filtered.len() < todos.len(),
-            "el filtro tiene que quitar algo o no filtra nada"
+            filtered.len() < all.len(),
+            "the filter has to remove something or it filters nothing"
         );
 
-        // Y las teclas son FIJAS: `/` es un carácter más dentro de la caja, no
-        // el verbo `dialog.filter` otra vez.
+        // And the keys are FIXED: `/` is one more character inside the box,
+        // not the `dialog.filter` verb again.
         press(&mut app, &mut r, KeyCode::Char('/'));
         assert_eq!(state(&app).filter_raw(), "copying/");
         press(&mut app, &mut r, KeyCode::Backspace);
         assert_eq!(state(&app).filter_raw(), "copying");
 
         press(&mut app, &mut r, KeyCode::Esc);
-        assert!(!state(&app).filtering(), "Esc sale de la caja");
+        assert!(!state(&app).filtering(), "Esc leaves the box");
         assert_eq!(
             state(&app).filter_raw(),
             "copying",
-            "…CONSERVANDO el texto: salir de una búsqueda no es deshacerla"
+            "…KEEPING the text: leaving a search is not undoing it"
         );
-        assert!(app.help.is_some(), "y Esc en la caja NO cierra el overlay");
+        assert!(
+            app.help.is_some(),
+            "and Esc in the box does NOT close the overlay"
+        );
     }
 
-    /// Enter sobre una fila `Action::Run` devuelve el comando que el run loop
-    /// debe despachar — el MISMO id que mandaría la palette — y deja el
-    /// overlay CERRADO: el comando actúa sobre los panes de debajo.
+    /// Enter on an `Action::Run` row returns the command the run loop must
+    /// dispatch — the SAME id the palette would send — and leaves the
+    /// overlay CLOSED: the command acts on the panes below.
     #[test]
     fn enter_on_a_runnable_row_hands_the_command_over_and_closes() {
         let mut app = app_with_help();
         let mut r = dialog_resolver();
         app.help
             .as_mut()
-            .expect("abierto")
+            .expect("open")
             .state
             .open(&TopicId::new("copying"));
         press(&mut app, &mut r, KeyCode::Tab);
-        assert_eq!(state(&app).focus(), Focus::Body, "Tab pasa al cuerpo");
+        assert_eq!(state(&app).focus(), Focus::Body, "Tab moves to the body");
 
         let cmd = press(&mut app, &mut r, KeyCode::Enter);
         assert_eq!(
             cmd,
             Some(HelpDispatch::Command(Command::PaneCopy)),
-            "la primera fila de `copying` es `pane.copy`"
+            "the first row of `copying` is `pane.copy`"
         );
-        assert!(
-            app.help.is_none(),
-            "el overlay se cierra ANTES de despachar"
-        );
+        assert!(app.help.is_none(), "the overlay closes BEFORE dispatching");
     }
 
-    /// Deja la ayuda abierta sobre la página de `acme.ftp`, con una fila
-    /// ejecutable y el foco ya en el cuerpo: lo que ve un lector que llegó por
-    /// `F1` desde el gestor de extensiones.
-    fn app_con_pagina_de_plugin(activo: bool) -> (App, Resolver) {
+    /// Leaves help open on `acme.ftp`'s page, with a runnable row and focus
+    /// already in the body: what a reader who arrived via `F1` from the
+    /// extension manager sees.
+    fn app_with_plugin_page(active: bool) -> (App, Resolver) {
         let mut app = app_with_help();
         let mut plugin = norte_proto::methods::PluginInfo {
             id: "acme.ftp".into(),
@@ -989,12 +1002,12 @@ mod help_key_tests {
             version: "1.0.0".into(),
             category: "command".into(),
             capabilities: Vec::new(),
-            approved: activo,
-            enabled: activo,
+            approved: active,
+            enabled: active,
             description: None,
             commands: vec![norte_proto::methods::PluginCommandInfo {
                 id: "sync".into(),
-                title: "Sincronizar".into(),
+                title: "Sync".into(),
                 kind: norte_proto::methods::PluginCommandKind::Command,
             }],
             columns: Vec::new(),
@@ -1004,36 +1017,36 @@ mod help_key_tests {
         };
         plugin.has_help = true;
         app.freeze_help_plugins(std::slice::from_ref(&plugin));
-        let help = app.help.as_mut().expect("abierto");
+        let help = app.help.as_mut().expect("open");
         help.state.open(&TopicId::new("acme.ftp"));
         let parsed = norte_help::parse_untrusted(
             b"+++\nid = \"acme.ftp\"\ntitle = \"FTP\"\n\
-              commands = [\"plugin:acme.ftp:sync\"]\n+++\ncuerpo",
+              commands = [\"plugin:acme.ftp:sync\"]\n+++\nbody",
             "acme.ftp",
             None,
         );
         help.state.install_plugin_topic(parsed.topic);
         let mut r = dialog_resolver();
         press(&mut app, &mut r, KeyCode::Tab);
-        assert_eq!(state(&app).focus(), Focus::Body, "Tab pasa al cuerpo");
+        assert_eq!(state(&app).focus(), Focus::Body, "Tab moves to the body");
         (app, r)
     }
 
-    /// H3e: Enter sobre la fila de un plugin ACTIVO la despacha de verdad.
+    /// H3e: Enter on an ACTIVE plugin's row really dispatches it.
     ///
-    /// No lo hacía. La clave es `plugin:{id}:{cmd}`, que no vive en `COMMANDS`
-    /// y que `Command::parse` rechaza, así que el Enter caía en el brazo de
-    /// «esta fila no es ejecutable» — sobre una fila que el propio resolver
-    /// acababa de pintar como DISPONIBLE, con el pie prometiendo `⏎ ejecutar`.
-    /// La atenuación de `verdict_with_plugins` era decorativa: la app se negaba
-    /// tanto con la fila encendida como con la apagada.
+    /// It did not use to. Its key is `plugin:{id}:{cmd}`, which does not
+    /// live in `COMMANDS` and which `Command::parse` rejects, so the Enter
+    /// fell into the "this row is not runnable" arm — over a row the
+    /// resolver itself had just painted as AVAILABLE, with the footer
+    /// promising `⏎ run`. `verdict_with_plugins`'s dimming was decorative:
+    /// the app refused whether the row was lit or dimmed.
     #[test]
-    fn enter_sobre_la_fila_de_un_plugin_activo_la_despacha() {
-        let (mut app, mut r) = app_con_pagina_de_plugin(true);
+    fn enter_on_an_active_plugins_row_dispatches_it() {
+        let (mut app, mut r) = app_with_plugin_page(true);
         assert!(
             norte_help::ChordResolver::availability(&*app.help_chords, "plugin:acme.ftp:sync")
                 .is_available(),
-            "la premisa: el resolver la pinta disponible"
+            "premise: the resolver paints it available"
         );
         let cmd = press(&mut app, &mut r, KeyCode::Enter);
         assert_eq!(
@@ -1042,99 +1055,100 @@ mod help_key_tests {
                 "acme.ftp".to_owned(),
                 "sync".to_owned()
             )),
-            "el run loop recibe qué plugin y qué comando, ya separados"
+            "the run loop receives which plugin and which command, already split"
         );
         assert!(
             app.help.is_none(),
-            "y el overlay se cierra ANTES de despachar, como con un built-in"
+            "and the overlay closes BEFORE dispatching, as with a built-in"
         );
     }
 
-    /// Y sobre la de un plugin APAGADO se niega. La foto congelada no autoriza
-    /// nada —`plugin.run_command` comprueba aprobado+activo por su cuenta en el
-    /// servidor— pero una fila atenuada que al pulsarla corriera sería peor que
-    /// no atenuar nada: el lector aprendería que la atenuación no significa
-    /// nada.
+    /// And a DISABLED plugin's row is refused. The frozen snapshot
+    /// authorizes nothing — `plugin.run_command` checks approved+enabled on
+    /// its own on the server — but a dimmed row that ran when clicked would
+    /// be worse than not dimming anything: the reader would learn that
+    /// dimming means nothing.
     #[test]
-    fn enter_sobre_la_fila_de_un_plugin_apagado_se_niega() {
-        let (mut app, mut r) = app_con_pagina_de_plugin(false);
+    fn enter_on_a_disabled_plugins_row_is_refused() {
+        let (mut app, mut r) = app_with_plugin_page(false);
         assert_eq!(
             norte_help::ChordResolver::availability(&*app.help_chords, "plugin:acme.ftp:sync")
                 .reason(),
             Some(norte_help::Reason::PluginInactive),
-            "la premisa: el resolver la pinta atenuada"
+            "premise: the resolver paints it dimmed"
         );
         let cmd = press(&mut app, &mut r, KeyCode::Enter);
-        assert_eq!(cmd, None, "no se despacha nada");
-        assert!(app.help.is_some(), "y la ayuda se queda abierta");
+        assert_eq!(cmd, None, "nothing is dispatched");
+        assert!(app.help.is_some(), "and help stays open");
         assert_eq!(
             app.message.as_deref(),
             Some(norte_i18n::t("msg-help-not-runnable").as_str()),
-            "comerse el Enter en silencio se leería como que el comando corrió"
+            "eating the Enter silently would read as though the command ran"
         );
     }
 
-    /// La lista `commands` de un tema puede nombrar un verbo `dialog.*` (el
-    /// tema `help` documenta tres): no son despachables desde un pane. No se
-    /// despacha nada, el overlay SIGUE abierto y se dice — comerse el Enter
-    /// en silencio se leería como que el comando corrió.
+    /// A topic's `commands` list can name a `dialog.*` verb (the `help`
+    /// topic documents three): they are not dispatchable from a pane.
+    /// Nothing is dispatched, the overlay STAYS open, and it says so —
+    /// eating the Enter silently would read as though the command ran.
     #[test]
     fn enter_on_a_dialog_verb_row_dispatches_nothing_and_says_so() {
         let mut app = app_with_help();
         let mut r = dialog_resolver();
         app.help
             .as_mut()
-            .expect("abierto")
+            .expect("open")
             .state
             .open(&TopicId::new("help"));
         press(&mut app, &mut r, KeyCode::Tab);
-        // `commands` del tema `help`: app.help, app.palette, dialog.filter…
+        // The `help` topic's `commands`: app.help, app.palette, dialog.filter…
         press(&mut app, &mut r, KeyCode::Down);
         press(&mut app, &mut r, KeyCode::Down);
         assert_eq!(
             state(&app).action(),
             Some(&norte_frontend::help::Action::Run("dialog.filter".into())),
-            "la tercera fila del tema `help` es un verbo de overlay"
+            "the `help` topic's third row is an overlay verb"
         );
 
         let cmd = press(&mut app, &mut r, KeyCode::Enter);
-        assert_eq!(cmd, None, "un `dialog.*` no se despacha desde un pane");
-        assert!(app.help.is_some(), "y el overlay se queda donde estaba");
+        assert_eq!(cmd, None, "a `dialog.*` is not dispatched from a pane");
+        assert!(app.help.is_some(), "and the overlay stays where it was");
         assert_eq!(
             app.message.as_deref(),
             Some(norte_i18n::t("msg-help-not-runnable").as_str()),
-            "el Enter no puede desaparecer en silencio"
+            "the Enter cannot vanish silently"
         );
     }
 
-    /// Enter sobre un enlace lo SIGUE y el overlay sigue abierto (leer no es
-    /// salir); `dialog.back` vuelve a la página de la que venía.
+    /// Enter on a link FOLLOWS it and the overlay stays open (reading is
+    /// not leaving); `dialog.back` returns to the page it came from.
     #[test]
     fn enter_on_a_link_follows_it_and_back_returns() {
         let mut app = app_with_help();
         let mut r = dialog_resolver();
         assert_eq!(state(&app).current().as_str(), "index");
-        // El índice no tiene `commands`: todas sus acciones son `see_also`.
+        // The index has no `commands`: all its actions are `see_also`.
         press(&mut app, &mut r, KeyCode::Tab);
         assert_eq!(state(&app).focus(), Focus::Body);
         let dest = match state(&app).action() {
             Some(norte_frontend::help::Action::Open(id)) => id.as_str().to_owned(),
-            otro => panic!("la primera acción del índice es un enlace: {otro:?}"),
+            other => panic!("the index's first action is a link: {other:?}"),
         };
 
         let cmd = press(&mut app, &mut r, KeyCode::Enter);
-        assert_eq!(cmd, None, "un enlace no despacha nada");
-        assert!(app.help.is_some(), "…y el overlay SIGUE abierto");
+        assert_eq!(cmd, None, "a link dispatches nothing");
+        assert!(app.help.is_some(), "…and the overlay STAYS open");
         assert_eq!(state(&app).current().as_str(), dest);
 
         press(&mut app, &mut r, KeyCode::Backspace);
-        assert!(app.help.is_some(), "volver tampoco cierra");
+        assert!(app.help.is_some(), "going back does not close it either");
         assert_eq!(state(&app).current().as_str(), "index");
     }
 
-    /// Enter en la lateral SOBRE EL TEMA YA ABIERTO entra al cuerpo. Arrear la
-    /// lateral previsualiza, así que ése es el caso normal y `open` sería un
-    /// no-op: un Enter mudo que nadie puede distinguir de un fallo.
+    /// Enter in the sidebar OVER THE ALREADY-OPEN TOPIC moves into the
+    /// body. Steering the sidebar previews, so that is the normal case and
+    /// `open` would be a no-op: a silent Enter nobody can tell apart from a
+    /// failure.
     #[test]
     fn enter_on_the_open_topic_moves_the_focus_into_the_body() {
         let mut app = app_with_help();
@@ -1143,28 +1157,29 @@ mod help_key_tests {
         assert_eq!(
             state(&app).selected_topic().map(TopicId::as_str),
             Some(state(&app).current().as_str()),
-            "el cursor de la lateral se apoya en el tema abierto"
+            "the sidebar's cursor rests on the open topic"
         );
 
         let cmd = press(&mut app, &mut r, KeyCode::Enter);
-        assert_eq!(cmd, None, "entrar al cuerpo no despacha nada");
-        assert!(app.help.is_some(), "…ni cierra el overlay");
+        assert_eq!(cmd, None, "entering the body dispatches nothing");
+        assert!(app.help.is_some(), "…nor closes the overlay");
         assert_eq!(
             state(&app).focus(),
             Focus::Body,
-            "Enter significa «ir a lo que estoy mirando»"
+            "Enter means \"go to what I am looking at\""
         );
     }
 
-    /// La otra rama: con el resalte sobre un tema DISTINTO del abierto —lo
-    /// que pasa al seguir un `see_also` desde una lista filtrada, donde el
-    /// resalte se queda en la fila visible más cercana— Enter lo abre.
+    /// The other branch: with the highlight on a topic DIFFERENT from the
+    /// open one — what happens after following a `see_also` from a
+    /// filtered list, where the highlight stays on the nearest visible row
+    /// — Enter opens it.
     #[test]
     fn enter_on_a_topic_that_is_not_the_open_one_opens_it() {
         let mut app = app_with_help();
         let mut r = dialog_resolver();
-        // Filtrar a `copying` y seguir su primer enlace: el destino no está
-        // en la lateral filtrada, así que el resalte se queda en `copying`.
+        // Filter to `copying` and follow its first link: the destination is
+        // not in the filtered sidebar, so the highlight stays on `copying`.
         press(&mut app, &mut r, KeyCode::Char('/'));
         for c in "copying".chars() {
             press(&mut app, &mut r, KeyCode::Char(c));
@@ -1181,14 +1196,15 @@ mod help_key_tests {
         }
         press(&mut app, &mut r, KeyCode::Enter);
         let open = state(&app).current().as_str().to_owned();
-        assert_ne!(open, "copying", "el enlace llevó a otra página");
+        assert_ne!(open, "copying", "the link led to another page");
         assert_eq!(
             state(&app).selected_topic().map(TopicId::as_str),
             Some("copying"),
-            "…y el resalte se quedó donde el filtro lo dejó"
+            "…and the highlight stayed where the filter left it"
         );
 
-        // Enter en la lateral abre lo resaltado, que NO es lo abierto.
+        // Enter in the sidebar opens what is highlighted, which is NOT
+        // what is open.
         press(&mut app, &mut r, KeyCode::Tab);
         assert_eq!(state(&app).focus(), Focus::Topics);
         let cmd = press(&mut app, &mut r, KeyCode::Enter);
@@ -1196,12 +1212,12 @@ mod help_key_tests {
         assert_eq!(
             state(&app).current().as_str(),
             "copying",
-            "Enter abre el tema resaltado"
+            "Enter opens the highlighted topic"
         );
     }
 
-    /// `dialog.back` en la RAÍZ (sin historial) cierra el overlay. Es lo que
-    /// convierte `Backspace` en una tecla honesta en vez de una muerta.
+    /// `dialog.back` at the ROOT (with no history) closes the overlay. It is
+    /// what turns `Backspace` into an honest key instead of a dead one.
     #[test]
     fn back_at_the_root_closes_the_overlay() {
         let mut app = app_with_help();
@@ -1209,13 +1225,13 @@ mod help_key_tests {
         press(&mut app, &mut r, KeyCode::Backspace);
         assert!(
             app.help.is_none(),
-            "sin historial, «atrás» solo puede significar salir"
+            "with no history, \"back\" can only mean leaving"
         );
     }
 
-    /// Un verbo `dialog.*` FUERA de `ALLOW_HELP` es INERTE aquí, aunque el
-    /// keymap lo tenga bien atado: la semántica de cada overlay vive en
-    /// código. `y` es `dialog.approve` en el preset orthodox.
+    /// A `dialog.*` verb OUTSIDE `ALLOW_HELP` is INERT here, even if the
+    /// keymap has it well bound: each overlay's semantics live in code. `y`
+    /// is `dialog.approve` in the orthodox preset.
     #[test]
     fn a_verb_outside_the_allowlist_is_inert() {
         let mut app = app_with_help();
@@ -1223,24 +1239,24 @@ mod help_key_tests {
         let before = state(&app).current().clone();
         let cmd = press(&mut app, &mut r, KeyCode::Char('y'));
         assert_eq!(cmd, None);
-        assert!(app.help.is_some(), "`dialog.approve` no cierra la ayuda");
-        assert_eq!(state(&app).current(), &before, "ni navega");
+        assert!(app.help.is_some(), "`dialog.approve` does not close help");
+        assert_eq!(state(&app).current(), &before, "nor does it navigate");
     }
 
-    /// La tecla que abre la ayuda la cierra: F1 resuelve a `app.help`, que
-    /// NO está en `ALLOW_HELP` (es de `[global]`), y sin su rama propia sería
-    /// inerte justo dentro del overlay que abre.
+    /// The key that opens help closes it: F1 resolves to `app.help`, which
+    /// is NOT in `ALLOW_HELP` (it belongs to `[global]`), and without its
+    /// own branch it would be inert right inside the overlay it opens.
     #[test]
     fn the_key_that_opens_the_help_closes_it() {
         let mut app = app_with_help();
         let mut r = dialog_resolver();
         let cmd = press(&mut app, &mut r, KeyCode::F(1));
-        assert_eq!(cmd, None, "cerrar no despacha nada");
-        assert!(app.help.is_none(), "F1 dentro de la ayuda la cierra");
+        assert_eq!(cmd, None, "closing dispatches nothing");
+        assert!(app.help.is_none(), "F1 inside help closes it");
     }
 
-    /// …pero no mientras se teclea en el filtro: ahí la caja consume la
-    /// tecla, como en la palette y el diálogo de búsqueda.
+    /// …but not while typing in the filter: there the box consumes the
+    /// key, as in the palette and the search dialog.
     #[test]
     fn the_filter_box_keeps_the_toggle_key() {
         let mut app = app_with_help();
@@ -1250,19 +1266,19 @@ mod help_key_tests {
         press(&mut app, &mut r, KeyCode::F(1));
         assert!(
             app.help.is_some(),
-            "una tecla de función dentro del editor no cierra el overlay"
+            "a function key inside the editor does not close the overlay"
         );
     }
 
-    /// `ctrl+c` conserva su salida global y `ctrl+p` cruza a la palette
-    /// LLEVÁNDOSE el filtro — los dos son el mismo modelo a dos velocidades
-    /// (lo dice el tema `help`), así que no hay que reteclearlo.
+    /// `ctrl+c` keeps its global quit and `ctrl+p` crosses to the palette
+    /// TAKING the filter along — both are the same model at two speeds (the
+    /// `help` topic says so), so there is no need to retype it.
     #[test]
     fn ctrl_c_quits_and_ctrl_p_hands_the_filter_to_the_palette() {
         let mut app = app_with_help();
         let mut r = dialog_resolver();
         on_help_key(&mut app, &mut r, KeyModifiers::CONTROL, KeyCode::Char('c'));
-        assert!(app.quit, "la salida de emergencia va antes que todo");
+        assert!(app.quit, "the emergency exit comes before anything else");
 
         let mut app = app_with_help();
         app.palette_rows = crate::palette::build_rows(&eff(Screen::Browse), &eff(Screen::Viewer));
@@ -1271,15 +1287,15 @@ mod help_key_tests {
             press(&mut app, &mut r, KeyCode::Char(c));
         }
         on_help_key(&mut app, &mut r, KeyModifiers::CONTROL, KeyCode::Char('p'));
-        assert!(app.help.is_none(), "la ayuda cede el sitio");
-        let palette = app.palette.as_ref().expect("la palette abrió");
+        assert!(app.help.is_none(), "help yields its spot");
+        let palette = app.palette.as_ref().expect("the palette opened");
         assert!(
             !palette.visible().is_empty(),
-            "el filtro llegó y sigue casando algo"
+            "the filter arrived and still matches something"
         );
         assert!(
             palette.visible().len() < palette.rows().len(),
-            "…y de verdad filtró: {} de {}",
+            "…and it really filtered: {} of {}",
             palette.visible().len(),
             palette.rows().len()
         );

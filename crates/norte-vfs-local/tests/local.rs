@@ -1,10 +1,10 @@
-//! Tests específicos del provider local que el contrato genérico no cubre:
-//! symlinks (nunca seguidos), chunking multi-chunk, limpieza del partial,
-//! sondeo de capabilities.
+//! Local-provider-specific tests the generic contract doesn't cover:
+//! symlinks (never followed), multi-chunk chunking, partial cleanup,
+//! capability probing.
 
 use bytes::Bytes;
 use futures::StreamExt;
-// EntryKind solo lo usan los tests de symlinks, que son cfg(unix).
+// EntryKind is only used by the symlink tests, which are cfg(unix).
 #[cfg(unix)]
 use norte_proto::EntryKind;
 use norte_proto::{CapabilityFlags, Segment, VPath};
@@ -19,11 +19,11 @@ fn provider() -> (LocalProvider, VPath, std::path::PathBuf) {
 }
 
 fn child(base: &VPath, name: &[u8]) -> VPath {
-    base.join(Segment::new(name.to_vec()).expect("segmento válido"))
+    base.join(Segment::new(name.to_vec()).expect("valid segment"))
 }
 
-/// Cuenta ficheros de staging en `base` (nombre `.norte-partial.<hash>.…`:
-/// corto y único, jamás derivado del nombre final — issue #4).
+/// Counts staging files in `base` (name `.norte-partial.<hash>.…`: short
+/// and unique, never derived from the final name — issue #4).
 fn partials_with_prefix(base: &std::path::Path, prefix: &str) -> usize {
     std::fs::read_dir(base)
         .expect("read_dir")
@@ -35,13 +35,13 @@ fn partials_with_prefix(base: &std::path::Path, prefix: &str) -> usize {
 #[tokio::test]
 async fn capabilities_are_probed() {
     let (p, root, _) = provider();
-    // El sondeo es lazy: corre con la primera operación async (regla 2).
+    // The probe is lazy: it runs on the first async operation (rule 2).
     let _ = p.stat(&root).await;
     let caps = p.capabilities();
     assert!(caps.flags.contains(CapabilityFlags::RENAME_ATOMIC));
     assert!(caps.flags.contains(CapabilityFlags::CASE_PRESERVING));
-    // El sondeo decide CASE_SENSITIVE según el FS real del tempdir: solo
-    // exigimos coherencia con el default del OS en CI (linux=sí, macos=no).
+    // The probe decides CASE_SENSITIVE based on the tempdir's real FS: we
+    // only require consistency with the OS default in CI (linux=yes, macos=no).
     if cfg!(target_os = "linux") {
         assert!(caps.flags.contains(CapabilityFlags::CASE_SENSITIVE));
     }
@@ -50,32 +50,32 @@ async fn capabilities_are_probed() {
     }
 }
 
-/// Issue #5: un archivo AJENO que coincida con el nombre de sonda no puede
-/// mentirle al sondeo de caja (en M0 `.norte-probe-cs-a` residual volvía
-/// "insensitive" un ext4). La sonda usa sufijo único e identidad (dev,ino).
+/// Issue #5: a FOREIGN file matching the probe's name can't lie to the
+/// case probe (in M0 a leftover `.norte-probe-cs-a` turned an ext4 into
+/// "insensitive"). The probe uses a unique suffix and identity (dev,ino).
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn probe_not_fooled_by_leftover_lowercase_file() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join(".norte-probe-cs-a"), b"del usuario").unwrap();
+    std::fs::write(dir.path().join(".norte-probe-cs-a"), b"from the user").unwrap();
     let p = LocalProvider::rooted(dir.path().to_path_buf());
-    // Primera operación async: dispara el sondeo real.
+    // First async operation: triggers the real probe.
     let _ = p.stat(&LocalProvider::root()).await;
     assert!(
         p.capabilities()
             .flags
             .contains(CapabilityFlags::CASE_SENSITIVE),
-        "archivo ajeno homónimo no puede volver 'insensitive' un ext4"
+        "an unrelated file with the same name can't turn an ext4 'insensitive'"
     );
     assert_eq!(
         std::fs::read(dir.path().join(".norte-probe-cs-a")).unwrap(),
-        b"del usuario",
-        "el archivo del usuario queda intacto"
+        b"from the user",
+        "the user's file stays intact"
     );
 }
 
-/// Issue #5: la construcción NO muta el directorio base — el sondeo es lazy
-/// (ocurre, como mucho, en la primera `capabilities()`).
+/// Issue #5: construction does NOT mutate the base directory — the probe
+/// is lazy (it happens, at most, on the first `capabilities()`).
 #[cfg(unix)]
 #[tokio::test]
 async fn construction_does_not_touch_base_dir() {
@@ -83,14 +83,17 @@ async fn construction_does_not_touch_base_dir() {
     let before = std::fs::metadata(dir.path()).unwrap().modified().unwrap();
     let _p = LocalProvider::rooted(dir.path().to_path_buf());
     let after = std::fs::metadata(dir.path()).unwrap().modified().unwrap();
-    assert_eq!(before, after, "construir no crea ni borra sondas");
+    assert_eq!(
+        before, after,
+        "constructing creates no probes and deletes none"
+    );
 }
 
 #[tokio::test]
 async fn read_streams_multiple_chunks() {
     let (p, root, _) = provider();
-    let f = child(&root, b"grande.bin");
-    // 600 KiB > 2 chunks de 256 KiB.
+    let f = child(&root, b"big.bin");
+    // 600 KiB > 2 chunks of 256 KiB.
     let content: Vec<u8> = (0..600_usize * 1024)
         .map(|i| u8::try_from(i % 251).expect("i % 251 < 256"))
         .collect();
@@ -107,45 +110,45 @@ async fn read_streams_multiple_chunks() {
     }
     assert!(
         chunks >= 3,
-        "600 KiB deben llegar en ≥3 chunks, fueron {chunks}"
+        "600 KiB must arrive in ≥3 chunks, there were {chunks}"
     );
-    assert_eq!(got, content, "bytes idénticos");
+    assert_eq!(got, content, "identical bytes");
 }
 
 #[tokio::test]
 async fn partial_file_cleaned_on_abort() {
     let (p, root, base) = provider();
-    let f = child(&root, b"obra");
+    let f = child(&root, b"work");
     let mut sink = p.write(&f).await.unwrap();
-    sink.write(Bytes::from_static(b"a medias")).await.unwrap();
+    sink.write(Bytes::from_static(b"halfway")).await.unwrap();
     assert_eq!(
         partials_with_prefix(&base, ".norte-partial"),
         1,
-        "el staging existe durante la escritura"
+        "the staging exists during the write"
     );
     sink.abort().await.unwrap();
     assert_eq!(
         partials_with_prefix(&base, ".norte-partial"),
         0,
-        "abort no deja rastro"
+        "abort leaves no trace"
     );
-    assert!(!base.join("obra").exists());
+    assert!(!base.join("work").exists());
 }
 
 #[tokio::test]
 async fn partial_file_cleaned_on_drop() {
     let (p, root, base) = provider();
-    let f = child(&root, b"tirada");
+    let f = child(&root, b"dropped");
     {
         let mut sink = p.write(&f).await.unwrap();
         sink.write(Bytes::from_static(b"x")).await.unwrap();
         assert_eq!(partials_with_prefix(&base, ".norte-partial"), 1);
-        // Soltar sin commit: abort best-effort en Drop.
+        // Dropped without commit: best-effort abort in Drop.
     }
     assert_eq!(
         partials_with_prefix(&base, ".norte-partial"),
         0,
-        "Drop limpia el staging"
+        "Drop cleans up the staging"
     );
 }
 
@@ -154,31 +157,31 @@ async fn commit_renames_partial_to_final() {
     let (p, root, base) = provider();
     let f = child(&root, b"final");
     let mut sink = p.write(&f).await.unwrap();
-    sink.write(Bytes::from_static(b"contenido")).await.unwrap();
+    sink.write(Bytes::from_static(b"content")).await.unwrap();
     sink.commit().await.unwrap();
     assert_eq!(
         partials_with_prefix(&base, ".norte-partial"),
         0,
-        "sin staging tras commit"
+        "no staging after commit"
     );
-    assert_eq!(std::fs::read(base.join("final")).unwrap(), b"contenido");
+    assert_eq!(std::fs::read(base.join("final")).unwrap(), b"content");
 }
 
 #[cfg(unix)]
 #[tokio::test]
 async fn symlink_stat_never_follows() {
     let (p, root, base) = provider();
-    std::fs::write(base.join("destino"), b"real").unwrap();
-    std::os::unix::fs::symlink(base.join("destino"), base.join("enlace")).unwrap();
+    std::fs::write(base.join("target"), b"real").unwrap();
+    std::os::unix::fs::symlink(base.join("target"), base.join("link")).unwrap();
 
-    let e = p.stat(&child(&root, b"enlace")).await.unwrap();
+    let e = p.stat(&child(&root, b"link")).await.unwrap();
     assert_eq!(
         e.kind,
         EntryKind::Symlink,
-        "describe el LINK, no el destino"
+        "describes the LINK, not the target"
     );
 
-    // En list también.
+    // In list too.
     let kinds: Vec<(Vec<u8>, EntryKind)> = p
         .list(&root)
         .await
@@ -189,64 +192,65 @@ async fn symlink_stat_never_follows() {
         })
         .collect()
         .await;
-    let enlace = kinds.iter().find(|(n, _)| n == b"enlace").expect("listado");
-    assert_eq!(enlace.1, EntryKind::Symlink);
+    let link = kinds.iter().find(|(n, _)| n == b"link").expect("listed");
+    assert_eq!(link.1, EntryKind::Symlink);
 }
 
 #[cfg(unix)]
 #[tokio::test]
 async fn remove_symlink_not_target() {
     let (p, root, base) = provider();
-    std::fs::write(base.join("destino"), b"real").unwrap();
-    std::os::unix::fs::symlink(base.join("destino"), base.join("enlace")).unwrap();
-    p.remove(&child(&root, b"enlace")).await.unwrap();
-    assert!(!base.join("enlace").exists(), "el link se fue");
-    assert!(base.join("destino").exists(), "el destino queda intacto");
+    std::fs::write(base.join("target"), b"real").unwrap();
+    std::os::unix::fs::symlink(base.join("target"), base.join("link")).unwrap();
+    p.remove(&child(&root, b"link")).await.unwrap();
+    assert!(!base.join("link").exists(), "the link is gone");
+    assert!(base.join("target").exists(), "the target stays intact");
 }
 
-/// Nombre en el límite de `NAME_MAX` (fixture `name_max_255` del corpus:
-/// 255 bytes, legal en ext4/APFS/NTFS): el staging no puede derivar del
-/// nombre final o revienta con ENAMETOOLONG opaco (issue #4). Verificación
-/// vía provider (el path nativo sin verbatim superaría `MAX_PATH` en Windows).
+/// A name at the `NAME_MAX` limit (corpus fixture `name_max_255`: 255
+/// bytes, legal on ext4/APFS/NTFS): the staging can't derive from the
+/// final name or it blows up with an opaque ENAMETOOLONG (issue #4).
+/// Verified via the provider (the native path without verbatim would
+/// exceed `MAX_PATH` on Windows).
 #[tokio::test]
 async fn write_commits_names_at_name_max() {
     let (p, root, _) = provider();
     let name = norte_testkit::corpus::hostile_names()
         .into_iter()
         .find(|n| n.id == "name_max_255")
-        .expect("fixture en el corpus");
+        .expect("fixture in the corpus");
     let f = child(&root, &name.bytes);
-    let mut sink = p.write(&f).await.expect("write abre pese a NAME_MAX");
-    sink.write(Bytes::from_static(b"cabe")).await.unwrap();
-    sink.commit().await.expect("commit publica");
-    let mut stream = p.read(&f, None).await.expect("read abre");
+    let mut sink = p.write(&f).await.expect("write opens despite NAME_MAX");
+    sink.write(Bytes::from_static(b"fits")).await.unwrap();
+    sink.commit().await.expect("commit publishes");
+    let mut stream = p.read(&f, None).await.expect("read opens");
     let mut got = Vec::new();
     while let Some(chunk) = stream.next().await {
         got.extend_from_slice(&chunk.expect("chunk ok"));
     }
-    assert_eq!(got, b"cabe");
+    assert_eq!(got, b"fits");
 }
 
 #[tokio::test]
 async fn mtime_is_recent_and_positive() {
     let (p, root, _) = provider();
-    let f = child(&root, b"con-fecha");
+    let f = child(&root, b"with-date");
     let mut sink = p.write(&f).await.unwrap();
     sink.write(Bytes::from_static(b"x")).await.unwrap();
     sink.commit().await.unwrap();
     let e = p.stat(&f).await.unwrap();
-    let mtime = e.mtime_ms.expect("el FS local siempre tiene mtime");
-    // Posterior a 2020-01-01 y anterior a 2100: sanity, no exactitud.
-    assert!(mtime > 1_577_836_800_000, "mtime sospechoso: {mtime}");
-    assert!(mtime < 4_102_444_800_000, "mtime sospechoso: {mtime}");
+    let mtime = e.mtime_ms.expect("the local FS always has an mtime");
+    // After 2020-01-01 and before 2100: sanity, not exactness.
+    assert!(mtime > 1_577_836_800_000, "suspicious mtime: {mtime}");
+    assert!(mtime < 4_102_444_800_000, "suspicious mtime: {mtime}");
 }
 
-/// #52: el listado no statea (kind por `d_type`, size/mtime None); `stat()`
-/// sigue trayendo los metadatos completos on-demand.
+/// #52: listing doesn't stat (kind from `d_type`, size/mtime None);
+/// `stat()` still brings the full metadata on demand.
 #[tokio::test]
-async fn list_es_lazy_y_stat_hidrata() {
+async fn list_is_lazy_and_stat_hydrates() {
     let (p, root, _) = provider();
-    let f = child(&root, b"cinco");
+    let f = child(&root, b"five");
     let mut sink = p.write(&f).await.unwrap();
     sink.write(Bytes::from_static(b"12345")).await.unwrap();
     sink.commit().await.unwrap();
@@ -260,12 +264,12 @@ async fn list_es_lazy_y_stat_hidrata() {
         .await;
     let e = entries
         .iter()
-        .find(|e| e.path.file_name().unwrap().as_bytes() == b"cinco")
-        .expect("listado");
+        .find(|e| e.path.file_name().unwrap().as_bytes() == b"five")
+        .expect("listed");
     assert_eq!(e.kind, norte_proto::EntryKind::File);
     assert!(
         e.size.is_none() && e.mtime_ms.is_none(),
-        "listado lazy (#52)"
+        "lazy listing (#52)"
     );
 
     let st = p.stat(&f).await.expect("stat");
@@ -273,20 +277,20 @@ async fn list_es_lazy_y_stat_hidrata() {
     assert!(st.mtime_ms.is_some());
 }
 
-/// Encoding B2: round-trip corpus hostil list→stat. La hidratación lazy
-/// (#52) statea con los BYTES que devolvió el `list`, no con los que se
-/// pidieron al crear el archivo — en un FS que normaliza (APFS/NFD) esos
-/// dos difieren y un stat con los bytes "originales" podría fallar o, peor,
-/// acertar por casualidad sin probar nada. Por cada nombre del corpus: si el
-/// OS lo acepta, listar el dir y statear TODOS los paths que devolvió,
-/// esperando `size == Some(1)`.
+/// Encoding B2: list→stat round-trip over the hostile corpus. Lazy
+/// hydration (#52) stats with the BYTES `list` returned, not the ones
+/// requested when creating the file — on a normalizing FS (APFS/NFD)
+/// those two differ, and a stat with the "original" bytes could fail or,
+/// worse, succeed by accident without proving anything. For each corpus
+/// name: if the OS accepts it, list the dir and stat EVERY path it
+/// returned, expecting `size == Some(1)`.
 #[tokio::test]
-async fn list_lazy_stat_hidrata_nombres_del_corpus() {
+async fn list_lazy_stat_hydrates_corpus_names() {
     for name in norte_testkit::corpus::hostile_names() {
         let (p, root, _guard) = provider();
         let f = child(&root, &name.bytes);
-        // Rechazo limpio del OS al nombre: skip (no es lo que este test
-        // prueba — ver prop_filename_bytes_survive_fs para esa cobertura).
+        // Clean OS rejection of the name: skip (not what this test proves
+        // — see prop_filename_bytes_survive_fs for that coverage).
         let Ok(mut sink) = p.write(&f).await else {
             continue;
         };
@@ -296,40 +300,41 @@ async fn list_lazy_stat_hidrata_nombres_del_corpus() {
             Err(norte_proto::Error::InvalidPath | norte_proto::Error::Conflict { .. }) => {
                 continue;
             }
-            Err(e) => panic!("{}: commit inesperado: {e:?}", name.id),
+            Err(e) => panic!("{}: unexpected commit: {e:?}", name.id),
         }
 
         let listed: Vec<norte_proto::VPath> = p
             .list(&root)
             .await
             .unwrap_or_else(|e| panic!("{}: list: {e:?}", name.id))
-            .map(|r| r.unwrap_or_else(|e| panic!("{}: entrada: {e:?}", name.id)))
+            .map(|r| r.unwrap_or_else(|e| panic!("{}: entry: {e:?}", name.id)))
             .map(|e| e.path)
             .collect()
             .await;
         assert!(
             !listed.is_empty(),
-            "{}: el listado debe ver el archivo recién escrito",
+            "{}: the listing must see the freshly written file",
             name.id
         );
         for path in &listed {
             let st = p
                 .stat(path)
                 .await
-                .unwrap_or_else(|e| panic!("{}: stat de {path:?}: {e:?}", name.id));
+                .unwrap_or_else(|e| panic!("{}: stat of {path:?}: {e:?}", name.id));
             assert_eq!(
                 st.size,
                 Some(1),
-                "{}: stat de un path LISTADO debe hidratar el tamaño real",
+                "{}: stat of a LISTED path must hydrate the real size",
                 name.id
             );
         }
     }
 }
 
-/// Case-rename (`caja` → `CAJA`) en FS case-insensitive: el "destino" es el
-/// propio origen con otra caja y debe proceder (issue #2: en Windows M0
-/// devolvía `Conflict` por no poder comprobar la identidad real del archivo).
+/// Case-rename (`box` → `BOX`) on a case-insensitive FS: the "destination"
+/// is the source itself under a different case and must proceed (issue
+/// #2: on Windows M0 returned `Conflict` for not being able to check the
+/// file's real identity).
 #[cfg(any(windows, target_os = "macos"))]
 #[tokio::test]
 async fn case_rename_succeeds_on_insensitive_fs() {
@@ -338,20 +343,20 @@ async fn case_rename_succeeds_on_insensitive_fs() {
         .flags
         .contains(CapabilityFlags::CASE_SENSITIVE)
     {
-        // El tempdir vive en un FS case-sensitive (posible en macOS):
-        // el caso lo cubre el contract test de colisión por caja.
+        // The tempdir lives on a case-sensitive FS (possible on macOS):
+        // the case-collision contract test covers this case.
         return;
     }
-    std::fs::write(base.join("caja"), b"x").unwrap();
-    p.rename(&child(&root, b"caja"), &child(&root, b"CAJA"))
+    std::fs::write(base.join("box"), b"x").unwrap();
+    p.rename(&child(&root, b"box"), &child(&root, b"BOX"))
         .await
-        .expect("case-rename de archivo permitido");
-    // También para DIRECTORIOS (nlink de un dir nunca es 1: la guarda de
-    // hardlinks no puede bloquearlo).
-    std::fs::create_dir(base.join("carpeta")).unwrap();
-    p.rename(&child(&root, b"carpeta"), &child(&root, b"CARPETA"))
+        .expect("file case-rename allowed");
+    // Also for DIRECTORIES (a dir's nlink is never 1: the hardlink guard
+    // can't block it).
+    std::fs::create_dir(base.join("folder")).unwrap();
+    p.rename(&child(&root, b"folder"), &child(&root, b"FOLDER"))
         .await
-        .expect("case-rename de dir permitido");
+        .expect("dir case-rename allowed");
     let mut names: Vec<String> = std::fs::read_dir(&base)
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
@@ -359,31 +364,32 @@ async fn case_rename_succeeds_on_insensitive_fs() {
     names.sort();
     assert_eq!(
         names,
-        vec!["CAJA".to_owned(), "CARPETA".to_owned()],
-        "dos dirents, caja nueva preservada"
+        vec!["BOX".to_owned(), "FOLDER".to_owned()],
+        "two dirents, new case preserved"
     );
 }
 
 #[cfg(unix)]
 #[tokio::test]
 async fn rename_between_hardlinks_is_conflict() {
-    // rename(2) entre dos hardlinks del mismo inode es un no-op con éxito:
-    // reportarlo como move sería mentirle al journal. Debe ser Conflict.
+    // rename(2) between two hardlinks of the same inode is a successful
+    // no-op: reporting it as a move would lie to the journal. It must be
+    // Conflict.
     let (p, root, base) = provider();
     std::fs::write(base.join("a"), b"x").unwrap();
     std::fs::hard_link(base.join("a"), base.join("b")).unwrap();
     match p.rename(&child(&root, b"a"), &child(&root, b"b")).await {
         Err(norte_proto::Error::Conflict { .. }) => {}
-        other => panic!("esperaba Conflict, fue {other:?}"),
+        other => panic!("expected Conflict, was {other:?}"),
     }
-    assert!(base.join("a").exists(), "origen intacto");
-    assert!(base.join("b").exists(), "destino intacto");
+    assert!(base.join("a").exists(), "source intact");
+    assert!(base.join("b").exists(), "destination intact");
 }
 
-// ---------- issue #10: soltar un stream libera el fd del productor ----------
+// ---------- issue #10: dropping a stream releases the producer's fd ----------
 
-/// Número de fds abiertos del proceso (incluye el del propio `read_dir`:
-/// constante entre llamadas, válido para comparar).
+/// Number of fds the process has open (includes `read_dir`'s own:
+/// constant between calls, valid for comparison).
 #[cfg(target_os = "linux")]
 fn open_fds() -> usize {
     std::fs::read_dir("/proc/self/fd")
@@ -391,8 +397,8 @@ fn open_fds() -> usize {
         .count()
 }
 
-/// Espera (con deadline) a que el productor bloqueante note el canal
-/// cerrado y suelte sus recursos.
+/// Waits (with a deadline) for the blocking producer to notice the closed
+/// channel and release its resources.
 #[cfg(target_os = "linux")]
 async fn wait_fds_back_to(baseline: usize) -> usize {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -405,15 +411,15 @@ async fn wait_fds_back_to(baseline: usize) -> usize {
     }
 }
 
-/// Soltar un `ByteStream` a mitad de lectura debe liberar el fd del archivo
-/// (issue #10): el productor nota el canal cerrado en el siguiente send.
+/// Dropping a `ByteStream` mid-read must release the file's fd (issue
+/// #10): the producer notices the closed channel on the next send.
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn dropping_byte_stream_mid_read_releases_fd() {
     let (p, root, _) = provider();
-    let f = child(&root, b"gordo.bin");
-    // 8 MiB = 32 chunks: mucho más que el buffer del canal (8) — el
-    // productor queda BLOQUEADO con el archivo abierto al soltar el stream.
+    let f = child(&root, b"big.bin");
+    // 8 MiB = 32 chunks: much more than the channel's buffer (8) — the
+    // producer stays BLOCKED with the file open when the stream is dropped.
     let mut sink = p.write(&f).await.unwrap();
     sink.write(Bytes::from(vec![0x5A; 8 * 1024 * 1024]))
         .await
@@ -422,51 +428,55 @@ async fn dropping_byte_stream_mid_read_releases_fd() {
 
     let baseline = open_fds();
     let mut stream = p.read(&f, None).await.unwrap();
-    let first = stream.next().await.expect("hay datos").expect("chunk ok");
+    let first = stream
+        .next()
+        .await
+        .expect("there is data")
+        .expect("chunk ok");
     assert!(!first.is_empty());
     assert!(
         open_fds() > baseline,
-        "sanidad: el productor tiene el archivo abierto"
+        "sanity: the producer has the file open"
     );
     drop(stream);
     let now = wait_fds_back_to(baseline).await;
     assert!(
         now <= baseline,
-        "fd del productor filtrado tras soltar el ByteStream: {now} > {baseline}"
+        "producer's fd leaked after dropping the ByteStream: {now} > {baseline}"
     );
 }
 
-/// Soltar un `EntryStream` a mitad de listado debe liberar el fd del
-/// `read_dir` del productor (issue #10).
+/// Dropping an `EntryStream` mid-listing must release the producer's
+/// `read_dir` fd (issue #10).
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn dropping_entry_stream_mid_list_releases_fd() {
     let (p, root, base) = provider();
-    // Más entradas (200) que el buffer del canal (64): productor bloqueado.
+    // More entries (200) than the channel's buffer (64): producer blocked.
     for i in 0..200 {
         std::fs::write(base.join(format!("f{i:03}")), b"x").unwrap();
     }
     let baseline = open_fds();
     let mut stream = p.list(&root).await.unwrap();
-    let first = stream.next().await.expect("hay entradas");
+    let first = stream.next().await.expect("there are entries");
     assert!(first.is_ok());
     drop(stream);
     let now = wait_fds_back_to(baseline).await;
     assert!(
         now <= baseline,
-        "fd del productor filtrado tras soltar el EntryStream: {now} > {baseline}"
+        "producer's fd leaked after dropping the EntryStream: {now} > {baseline}"
     );
 }
 
-/// Variante Windows del issue #10: si el productor filtrara su handle, el
-/// borrado del árbol no terminaría (archivo delete-pending → dir no vacío).
+/// Windows variant of issue #10: if the producer leaked its handle, the
+/// tree deletion would never finish (delete-pending file → non-empty dir).
 #[cfg(windows)]
 #[tokio::test]
 async fn dropping_byte_stream_mid_read_releases_handle() {
     let dir = tempfile::tempdir().unwrap();
     let base = dir.path().to_path_buf();
     let p = LocalProvider::rooted(base.clone());
-    let f = child(&LocalProvider::root(), b"gordo.bin");
+    let f = child(&LocalProvider::root(), b"big.bin");
     let mut sink = p.write(&f).await.unwrap();
     sink.write(Bytes::from(vec![0x5A; 8 * 1024 * 1024]))
         .await
@@ -474,40 +484,44 @@ async fn dropping_byte_stream_mid_read_releases_handle() {
     sink.commit().await.unwrap();
 
     let mut stream = p.read(&f, None).await.unwrap();
-    let _ = stream.next().await.expect("hay datos").expect("chunk ok");
+    let _ = stream
+        .next()
+        .await
+        .expect("there is data")
+        .expect("chunk ok");
     drop(stream);
     drop(p);
 
-    // El borrado solo culmina cuando el productor suelta el handle.
+    // The deletion only completes once the producer releases the handle.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
         match std::fs::remove_dir_all(&base) {
             Ok(()) => break,
             Err(e) if std::time::Instant::now() > deadline => {
-                panic!("handle del productor filtrado: {e}");
+                panic!("producer's handle leaked: {e}");
             }
             Err(_) => tokio::time::sleep(std::time::Duration::from_millis(50)).await,
         }
     }
 }
 
-/// Purga de la papelera REAL tras la suite (hallazgo M3 de fase 8): el
-/// contrato trasheaba `norte-contract-trash-<pid>` en cada run — sin esto,
-/// la papelera del desarrollador crecía para siempre. macOS no tiene
-/// `os_limited`: aceptado y documentado en ADR 0009.
+/// Purges the REAL trash after the suite (phase 8 finding M3): the
+/// contract trashed `norte-contract-trash-<pid>` on every run — without
+/// this, the developer's trash grew forever. macOS has no `os_limited`:
+/// accepted and documented in ADR 0009.
 ///
-/// Desde la tarea 11b el contrato local se lleva su papelera dentro del
-/// tempdir (`with_trash_home`), así que ya no ensucia nada; esto queda para
-/// barrer lo que dejaron las runs anteriores, y porque los tests de
-/// `restore_trashed` de aquí abajo SÍ usan la papelera de verdad (es lo que
-/// prueban: que el crate `trash` sabe leer lo que escribimos).
+/// Since task 11b the local contract carries its trash inside the tempdir
+/// (`with_trash_home`), so it no longer litters anything; this stays to
+/// sweep what earlier runs left behind, and because the
+/// `restore_trashed` tests below DO use the real trash (that's what
+/// they're testing: that the `trash` crate can read what we write).
 #[cfg(any(target_os = "linux", windows))]
 #[test]
-fn purga_los_restos_del_contrato_en_la_papelera() {
+fn purges_the_contracts_leftovers_from_the_trash() {
     let Ok(items) = trash::os_limited::list() else {
-        return; // sin papelera consultable: nada que purgar
+        return; // no queryable trash: nothing to purge
     };
-    let nuestros: Vec<_> = items
+    let ours: Vec<_> = items
         .into_iter()
         .filter(|i| {
             i.name
@@ -515,23 +529,23 @@ fn purga_los_restos_del_contrato_en_la_papelera() {
                 .starts_with("norte-contract-trash-")
         })
         .collect();
-    if !nuestros.is_empty() {
-        let _ = trash::os_limited::purge_all(nuestros);
+    if !ours.is_empty() {
+        let _ = trash::os_limited::purge_all(ours);
     }
 }
 
-/// Regla 3 vía `read`: una FIFO (o symlink a FIFO) jamás cuelga el hilo —
-/// `read` la rechaza con `Unsupported` ANTES del open (un open de FIFO sin
-/// escritor bloquea para siempre y la cancelación no lo interrumpe).
+/// Rule 3 via `read`: a FIFO (or a symlink to one) never hangs the thread
+/// — `read` rejects it with `Unsupported` BEFORE the open (opening a FIFO
+/// with no writer blocks forever and cancellation can't interrupt it).
 #[cfg(unix)]
 #[tokio::test]
-async fn read_de_fifo_no_cuelga() {
+async fn read_of_a_fifo_does_not_hang() {
     use norte_proto::Error;
     use norte_vfs::Provider;
     let dir = tempfile::tempdir().expect("tempdir");
     let fifo = dir.path().join("pipe");
     let c = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
-    // SAFETY del test: CString NUL-terminada válida; mkfifo no retiene el puntero.
+    // Test SAFETY: a valid, NUL-terminated CString; mkfifo doesn't retain the pointer.
     assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o644) }, 0, "mkfifo");
     std::os::unix::fs::symlink("pipe", dir.path().join("lpipe")).unwrap();
 
@@ -543,35 +557,35 @@ async fn read_de_fifo_no_cuelga() {
         let path = root.join(seg(name));
         let res = tokio::time::timeout(deadline, p.read(&path, None))
             .await
-            .expect("read responde, jamás cuelga");
-        let err = res.err().expect("no-regular rechazado honesto");
+            .expect("read answers, never hangs");
+        let err = res.err().expect("non-regular honestly rejected");
         assert_eq!(err, Error::Unsupported);
     }
 }
 
-/// Resume real sobre el FS (ADR 0012): keep conserva el `.norte-partial`
-/// con nombre ESTABLE, `open_resumable` lo reencuentra y reanuda; el GC
-/// barre los huérfanos por edad.
+/// Real resume over the FS (ADR 0012): keep preserves the `.norte-partial`
+/// with a STABLE name, `open_resumable` finds it again and resumes; the GC
+/// sweeps orphans by age.
 #[tokio::test]
-async fn resume_local_conserva_reanuda_y_gc() {
+async fn local_resume_keeps_resumes_and_gcs() {
     use norte_vfs::Provider;
     let dir = tempfile::tempdir().expect("tempdir");
     let p = norte_vfs_local::LocalProvider::rooted(dir.path());
     let root = norte_vfs_local::LocalProvider::root();
     let seg = |b: &[u8]| norte_proto::Segment::new(b.to_vec()).unwrap();
-    let f = root.join(seg(b"grande.bin"));
+    let f = root.join(seg(b"big.bin"));
 
-    // Primer tramo: 4 bytes, keep (conserva el parcial, no publica).
+    // First stage: 4 bytes, keep (preserves the partial, doesn't publish).
     let (mut sink, already) = p.open_resumable(&f).await.expect("open 1");
     assert_eq!(already, 0);
-    sink.write(Bytes::from_static(b"hola")).await.unwrap();
+    sink.write(Bytes::from_static(b"hi")).await.unwrap();
     sink.keep().await.expect("keep");
     assert_eq!(
         p.stat(&f).await.unwrap_err(),
         norte_proto::Error::NotFound,
-        "keep no publica"
+        "keep does not publish"
     );
-    // Hay UN .norte-partial en disco (nombre estable).
+    // There's ONE .norte-partial on disk (stable name).
     let partials: Vec<_> = std::fs::read_dir(dir.path())
         .unwrap()
         .flatten()
@@ -581,19 +595,19 @@ async fn resume_local_conserva_reanuda_y_gc() {
                 .starts_with(".norte-partial.")
         })
         .collect();
-    assert_eq!(partials.len(), 1, "un parcial estable conservado");
+    assert_eq!(partials.len(), 1, "one stable partial kept");
 
-    // Segundo tramo: reanuda desde los 4 bytes.
+    // Second stage: resumes from the 2 bytes.
     let (mut sink, already) = p.open_resumable(&f).await.expect("open 2");
-    assert_eq!(already, 4, "reanuda tras lo conservado");
-    sink.write(Bytes::from_static(b"mundo")).await.unwrap();
+    assert_eq!(already, 2, "resumes after what was kept");
+    sink.write(Bytes::from_static(b"world")).await.unwrap();
     sink.commit().await.expect("commit");
     assert_eq!(
-        std::fs::read(dir.path().join("grande.bin")).unwrap(),
-        b"holamundo"
+        std::fs::read(dir.path().join("big.bin")).unwrap(),
+        b"hiworld"
     );
-    // El parcial desapareció al commitear.
-    let quedan = std::fs::read_dir(dir.path())
+    // The partial disappeared on commit.
+    let left = std::fs::read_dir(dir.path())
         .unwrap()
         .flatten()
         .filter(|d| {
@@ -602,10 +616,10 @@ async fn resume_local_conserva_reanuda_y_gc() {
                 .starts_with(".norte-partial.")
         })
         .count();
-    assert_eq!(quedan, 0, "commit publica y limpia el parcial");
+    assert_eq!(left, 0, "commit publishes and cleans up the partial");
 
-    // GC de un huérfano: keep otro parcial y bárrelo con older_than=0.
-    let g = root.join(seg(b"otro.bin"));
+    // GC of an orphan: keep another partial and sweep it with older_than=0.
+    let g = root.join(seg(b"other.bin"));
     let (mut sink, _) = p.open_resumable(&g).await.expect("open g");
     sink.write(Bytes::from_static(b"x")).await.unwrap();
     sink.keep().await.expect("keep g");
@@ -613,25 +627,25 @@ async fn resume_local_conserva_reanuda_y_gc() {
         .gc_partials(&root, std::time::Duration::ZERO)
         .await
         .expect("gc");
-    assert_eq!(removed, 1, "el huérfano se barre");
+    assert_eq!(removed, 1, "the orphan gets swept");
 }
 
-/// H2 del encoding-auditor: `gc_partials` reconoce el staging por su FORMA
-/// exacta, no por el prefijo — un archivo REAL del usuario que empiece por
-/// `.norte-partial.` JAMÁS se borra.
+/// encoding-auditor H2: `gc_partials` recognizes staging by its exact
+/// SHAPE, not by the prefix — a REAL user file starting with
+/// `.norte-partial.` is NEVER deleted.
 #[tokio::test]
-async fn gc_partials_no_toca_archivos_del_usuario() {
+async fn gc_partials_does_not_touch_user_files() {
     use norte_vfs::Provider;
     let dir = tempfile::tempdir().expect("tempdir");
     let p = norte_vfs_local::LocalProvider::rooted(dir.path());
     let root = norte_vfs_local::LocalProvider::root();
     let seg = |b: &[u8]| norte_proto::Segment::new(b.to_vec()).unwrap();
 
-    // Archivo del usuario con el prefijo pero NO la forma de un staging.
-    std::fs::write(dir.path().join(".norte-partial.backup"), b"mio").unwrap();
-    std::fs::write(dir.path().join(".norte-partial.notas.txt"), b"mio").unwrap();
-    // Un parcial de verdad (forma estable: 32 hex).
-    let g = root.join(seg(b"grande.bin"));
+    // User file with the prefix but NOT the shape of a staging.
+    std::fs::write(dir.path().join(".norte-partial.backup"), b"mine").unwrap();
+    std::fs::write(dir.path().join(".norte-partial.notes.txt"), b"mine").unwrap();
+    // A real partial (stable shape: 32 hex).
+    let g = root.join(seg(b"big.bin"));
     let (mut sink, _) = p.open_resumable(&g).await.expect("open");
     sink.write(Bytes::from_static(b"x")).await.unwrap();
     sink.keep().await.expect("keep");
@@ -640,12 +654,12 @@ async fn gc_partials_no_toca_archivos_del_usuario() {
         .gc_partials(&root, std::time::Duration::ZERO)
         .await
         .expect("gc");
-    assert_eq!(removed, 1, "solo el parcial de verdad se barre");
+    assert_eq!(removed, 1, "only the real partial gets swept");
     assert!(
         dir.path().join(".norte-partial.backup").exists(),
-        "el archivo del usuario sobrevive"
+        "the user's file survives"
     );
-    assert!(dir.path().join(".norte-partial.notas.txt").exists());
+    assert!(dir.path().join(".norte-partial.notes.txt").exists());
 }
 
 #[cfg(all(
@@ -661,7 +675,7 @@ async fn restore_trashed_brings_back_by_original_path() {
     let p = LocalProvider::rooted(dir.path().to_path_buf());
     let victim = child(&LocalProvider::root(), b"v.txt");
 
-    // Si la papelera del OS no está disponible en el runner, skip limpio.
+    // If the OS trash isn't available on the runner, clean skip.
     if p.trash(
         &victim,
         &norte_vfs::trash::TrashId::new(0, u64::from(line!())),
@@ -669,7 +683,7 @@ async fn restore_trashed_brings_back_by_original_path() {
     .await
     .is_err()
     {
-        eprintln!("skip: papelera del OS no disponible");
+        eprintln!("skip: OS trash not available");
         return;
     }
     assert!(matches!(
@@ -679,13 +693,13 @@ async fn restore_trashed_brings_back_by_original_path() {
 
     p.restore_trashed(&victim).await.expect("restore");
     assert_eq!(
-        std::fs::read(dir.path().join("v.txt")).expect("restaurado"),
+        std::fs::read(dir.path().join("v.txt")).expect("restored"),
         b"data"
     );
 }
 
-/// Regla 1: el match por ruta original y la restauración preservan bytes
-/// hostiles (nombre no-UTF8) — round-trip byte-exacto por la papelera real.
+/// Rule 1: matching by original path and restoring preserve hostile bytes
+/// (a non-UTF8 name) — byte-exact round-trip through the real trash.
 #[cfg(all(
     unix,
     not(target_os = "macos"),
@@ -695,7 +709,7 @@ async fn restore_trashed_brings_back_by_original_path() {
 #[tokio::test]
 async fn restore_trashed_preserves_hostile_bytes() {
     use std::os::unix::ffi::OsStrExt;
-    let name: &[u8] = b"h\xffstil.bin"; // 0xFF: inválido en cualquier UTF-8
+    let name: &[u8] = b"h\xffstile.bin"; // 0xFF: invalid in any UTF-8
     let dir = tempfile::tempdir().expect("tempdir");
     let native = dir.path().join(std::ffi::OsStr::from_bytes(name));
     std::fs::write(&native, b"payload").expect("seed");
@@ -708,7 +722,7 @@ async fn restore_trashed_preserves_hostile_bytes() {
     .await
     .is_err()
     {
-        eprintln!("skip: papelera del OS no disponible");
+        eprintln!("skip: OS trash not available");
         return;
     }
     assert!(matches!(
@@ -717,13 +731,13 @@ async fn restore_trashed_preserves_hostile_bytes() {
     ));
     p.restore_trashed(&victim).await.expect("restore");
     assert_eq!(
-        std::fs::read(&native).expect("restaurado byte-exacto"),
+        std::fs::read(&native).expect("byte-exact restore"),
         b"payload"
     );
 }
 
-/// Estricto: sin ítem en la papelera → `NotFound`; destino ocupado → `Conflict`
-/// (jamás pisa — la invariante de seguridad del undo).
+/// Strict: no item in the trash → `NotFound`; an occupied destination →
+/// `Conflict` (never overwrites — undo's security invariant).
 #[cfg(all(
     unix,
     not(target_os = "macos"),
@@ -734,16 +748,16 @@ async fn restore_trashed_preserves_hostile_bytes() {
 async fn restore_trashed_is_strict() {
     let dir = tempfile::tempdir().expect("tempdir");
     let p = LocalProvider::rooted(dir.path().to_path_buf());
-    let ghost = child(&LocalProvider::root(), b"jamas_borrado.bin");
-    // Sin ítem correspondiente en la papelera → NotFound (o Unsupported si el
-    // runner no tiene papelera; ambos son fallos limpios, nunca pisa).
+    let ghost = child(&LocalProvider::root(), b"never_deleted.bin");
+    // No matching item in the trash → NotFound (or Unsupported if the
+    // runner has no trash; both are clean failures, never overwrites).
     assert!(matches!(
         p.restore_trashed(&ghost).await,
         Err(norte_proto::Error::NotFound | norte_proto::Error::Unsupported)
     ));
 
-    // Destino ocupado: trashear, recrear algo en su sitio, restaurar → Conflict.
-    std::fs::write(dir.path().join("v.txt"), b"orig").expect("seed");
+    // Occupied destination: trash it, recreate something in its place, restore → Conflict.
+    std::fs::write(dir.path().join("v.txt"), b"original").expect("seed");
     let victim = child(&LocalProvider::root(), b"v.txt");
     if p.trash(
         &victim,
@@ -752,28 +766,28 @@ async fn restore_trashed_is_strict() {
     .await
     .is_err()
     {
-        eprintln!("skip: papelera del OS no disponible");
+        eprintln!("skip: OS trash not available");
         return;
     }
-    std::fs::write(dir.path().join("v.txt"), b"nuevo").expect("recrea");
+    std::fs::write(dir.path().join("v.txt"), b"new").expect("recreate");
     assert!(matches!(
         p.restore_trashed(&victim).await,
         Err(norte_proto::Error::Conflict { .. })
     ));
-    // No pisó: el nuevo contenido sigue intacto.
-    assert_eq!(std::fs::read(dir.path().join("v.txt")).unwrap(), b"nuevo");
+    // Didn't overwrite: the new content is still intact.
+    assert_eq!(std::fs::read(dir.path().join("v.txt")).unwrap(), b"new");
 }
 
-// ---------- attrs posix (#108 bloque 2) ----------
+// ---------- posix attrs (#108 block 2) ----------
 
 #[cfg(unix)]
 #[tokio::test]
-async fn attrs_posix_en_stat_y_list() {
+async fn attrs_posix_in_stat_and_list() {
     use norte_proto::AttrValue;
     use norte_vfs::{AttrRequest, ListOptions};
     use std::os::unix::fs::MetadataExt;
     let (p, root, base) = provider();
-    std::fs::write(base.join("a.txt"), b"hola").expect("seed");
+    std::fs::write(base.join("a.txt"), b"hi").expect("seed");
     let opt = ListOptions {
         attrs: AttrRequest::sanitized(
             [
@@ -812,37 +826,37 @@ async fn attrs_posix_en_stat_y_list() {
         Some(AttrValue::TimeMs(_))
     ));
 
-    // list_with promociona: attrs presentes Y size/mtime hidratados de paso.
+    // list_with promotes: attrs present AND size/mtime hydrated along the way.
     let mut s = p.list_with(&root, &opt).await.expect("list_with");
-    let le = s.next().await.expect("una entrada").expect("ok");
+    let le = s.next().await.expect("one entry").expect("ok");
     assert!(le.attrs.contains_key("posix.mode"));
-    assert!(le.size.is_some(), "la promoción a metadata llena size");
+    assert!(le.size.is_some(), "promotion to metadata fills size");
 
-    // Camino rápido intacto (#52): sin petición, lazy como siempre.
+    // Fast path intact (#52): no request, lazy as always.
     let mut s = p.list(&root).await.expect("list");
-    let le = s.next().await.expect("una entrada").expect("ok");
+    let le = s.next().await.expect("one entry").expect("ok");
     assert!(le.attrs.is_empty() && le.size.is_none());
 
-    // Petición SIN attr local anunciado: también camino lazy.
-    let ajeno = ListOptions {
+    // Request with NO locally advertised attr: also the lazy path.
+    let foreign = ListOptions {
         attrs: AttrRequest::sanitized(["s3.etag".to_owned()]),
     };
-    let mut s = p.list_with(&root, &ajeno).await.expect("list_with");
-    let le = s.next().await.expect("una entrada").expect("ok");
+    let mut s = p.list_with(&root, &foreign).await.expect("list_with");
+    let le = s.next().await.expect("one entry").expect("ok");
     assert!(le.attrs.is_empty() && le.size.is_none());
 }
 
-/// ADR 0145: el dueño y el grupo por NOMBRE, en bytes, por los dos caminos
-/// (`stat` y la promoción de `list`). Qué nombre sea depende de la máquina;
-/// lo que se fija es que llega, sin el NUL de C, y que es el mismo en los
-/// dos caminos.
+/// ADR 0145: owner and group BY NAME, in bytes, through both paths (`stat`
+/// and `list`'s promotion). Which name it is depends on the machine; what
+/// gets fixed is that it arrives, with no C NUL, and that it's the same
+/// through both paths.
 #[cfg(unix)]
 #[tokio::test]
-async fn attrs_posix_dueno_y_grupo_por_nombre() {
+async fn attrs_posix_owner_and_group_by_name() {
     use norte_proto::AttrValue;
     use norte_vfs::{AttrRequest, ListOptions};
     let (p, root, base) = provider();
-    std::fs::write(base.join("a.txt"), b"hola").expect("seed");
+    std::fs::write(base.join("a.txt"), b"hi").expect("seed");
     let opt = ListOptions {
         attrs: AttrRequest::sanitized(["posix.owner", "posix.group"].map(str::to_owned)),
     };
@@ -855,20 +869,20 @@ async fn attrs_posix_dueno_y_grupo_por_nombre() {
             Some(AttrValue::Bytes(n)) => {
                 assert!(!n.is_empty() && !n.contains(&0), "{id}: {n:?}");
             }
-            otro => panic!("{id} por nombre en bytes: {otro:?}"),
+            other => panic!("{id} by name in bytes: {other:?}"),
         }
     }
     let mut s = p.list_with(&root, &opt).await.expect("list_with");
-    let le = s.next().await.expect("una entrada").expect("ok");
+    let le = s.next().await.expect("one entry").expect("ok");
     assert_eq!(le.attrs.get("posix.owner"), e.attrs.get("posix.owner"));
     assert_eq!(le.attrs.get("posix.group"), e.attrs.get("posix.group"));
 }
 
 // ---------------------------------------------------------------------------
-// Papelera freedesktop (`trash_fdo`): la que SABE dónde dejó el fichero.
+// freedesktop trash (`trash_fdo`): the one that KNOWS where it left the file.
 //
-// Todos estos tests inyectan su propia raíz XDG bajo el tempdir: ni tocan la
-// papelera de verdad del desarrollador ni dependen de en qué dispositivo vive.
+// All these tests inject their own XDG root under the tempdir: they neither
+// touch the developer's real trash nor depend on which device it lives on.
 // ---------------------------------------------------------------------------
 
 #[cfg(all(
@@ -877,32 +891,32 @@ async fn attrs_posix_dueno_y_grupo_por_nombre() {
     not(target_os = "ios"),
     not(target_os = "android")
 ))]
-mod papelera_freedesktop {
+mod freedesktop_trash {
     use super::{LocalProvider, Provider, Segment, VPath, child};
     use std::os::unix::ffi::OsStrExt;
 
-    /// Provider enraizado en un tempdir con su papelera DENTRO: así el destino
-    /// recuperable es una ruta que este mismo provider sabe resolver.
+    /// Provider rooted in a tempdir with its trash INSIDE: this way the
+    /// recoverable destination is a path this same provider knows how to
+    /// resolve.
     fn provider() -> (tempfile::TempDir, LocalProvider) {
         let dir = tempfile::tempdir().expect("tempdir");
         let p = LocalProvider::rooted(dir.path()).with_trash_home(dir.path().join(".xdg"));
         (dir, p)
     }
 
-    /// Un id de engine distinto por operación. El instante manda —es lo que
-    /// viaja al sidecar, con resolución de SEGUNDO—, así que los ids de test
-    /// se separan por segundos enteros.
+    /// A distinct engine id per operation. The instant is what matters —
+    /// it's what travels to the sidecar, with SECOND resolution —, so the
+    /// test ids are separated by whole seconds.
     fn id(n: u64) -> norte_vfs::trash::TrashId {
         norte_vfs::trash::TrashId::new(1_726_000_000_000 + n * 1000, n)
     }
 
-    /// Raíz de la papelera en el disco real del test.
+    /// The trash's root on the test's real disk.
     fn trash_root(dir: &tempfile::TempDir) -> std::path::PathBuf {
         dir.path().join(".xdg").join("Trash")
     }
 
-    /// Siembra un fichero con BYTES de nombre arbitrarios (regla 1: jamás pasa
-    /// por `str`).
+    /// Seeds a file with arbitrary name BYTES (rule 1: never goes through `str`).
     fn seed(dir: &tempfile::TempDir, name: &[u8], body: &[u8]) -> VPath {
         let native = dir.path().join(std::ffi::OsStr::from_bytes(name));
         std::fs::write(&native, body).expect("seed");
@@ -917,10 +931,10 @@ mod papelera_freedesktop {
         out
     }
 
-    /// El sidecar que le toca a un destino `…/files/<n>`.
+    /// The sidecar that belongs to a `…/files/<n>` destination.
     fn sidecar_of(dir: &tempfile::TempDir, dest: &VPath) -> std::path::PathBuf {
         let native = native_of(dir, dest);
-        let name = native.file_name().expect("nombre");
+        let name = native.file_name().expect("name");
         let mut file = name.as_bytes().to_vec();
         file.extend_from_slice(b".trashinfo");
         trash_root(dir)
@@ -931,27 +945,27 @@ mod papelera_freedesktop {
     #[tokio::test]
     async fn trashing_returns_the_path_it_actually_used() {
         let (dir, p) = provider();
-        let victim = seed(&dir, b"a.txt", b"datos");
+        let victim = seed(&dir, b"a.txt", b"data");
         let dest = p
             .trash(&victim, &id(1))
             .await
             .expect("trash")
-            .expect("freedesktop nombra su destino");
+            .expect("freedesktop names its destination");
         assert!(
             dest.to_wire().contains("/Trash/files/"),
             "{}",
             dest.to_wire()
         );
-        p.stat(&dest).await.expect("el fichero ESTÁ ahí");
+        p.stat(&dest).await.expect("the file IS there");
         assert_eq!(
             std::fs::read(native_of(&dir, &dest)).expect("bytes"),
-            b"datos"
+            b"data"
         );
-        assert!(p.trash_restorable(), "y el provider lo promete");
+        assert!(p.trash_restorable(), "and the provider promises it");
     }
 
-    /// El bug en un test: sin destinos distintos, el undo de una pareja
-    /// `trashed`+`created` desentierra su propio entierro.
+    /// The bug in a test: without distinct destinations, undoing a
+    /// `trashed`+`created` pair digs up its own burial.
     #[tokio::test]
     async fn two_victims_with_one_name_get_two_destinations() {
         let (dir, p) = provider();
@@ -974,7 +988,7 @@ mod papelera_freedesktop {
             std::fs::read(native_of(&dir, &second)).expect("2"),
             b"second"
         );
-        // La deduplicación que la spec describe.
+        // The deduplication the spec describes.
         assert!(
             second.to_wire().ends_with("a.txt.2"),
             "{}",
@@ -993,35 +1007,36 @@ mod papelera_freedesktop {
             .expect("dest");
 
         let bytes = std::fs::read(sidecar_of(&dir, &dest)).expect("sidecar");
-        let text = String::from_utf8(bytes).expect("el trashinfo es UTF-8 por spec");
+        let text = String::from_utf8(bytes).expect("the trashinfo is UTF-8 by spec");
         assert!(text.starts_with("[Trash Info]\n"), "{text}");
-        let esperada = dir.path().canonicalize().expect("canon").join("a.txt");
+        let expected = dir.path().canonicalize().expect("canon").join("a.txt");
         assert!(
-            text.contains(&format!("Path={}\n", esperada.display())),
+            text.contains(&format!("Path={}\n", expected.display())),
             "{text}"
         );
         assert!(text.contains("DeletionDate="), "{text}");
     }
 
-    /// Regla 1. El sidecar percent-codifica; el FICHERO conserva sus bytes. Lo
-    /// que este test comprueba de verdad —y lo que la primera versión NO
-    /// comprobaba (MINOR-1 del encoding-auditor)— es que la ruta del sidecar,
-    /// DECODIFICADA, es byte a byte la ruta original: `restore_from` no lee el
-    /// sidecar, así que sin esta aserción un fallo sistemático de escapado
-    /// pasaría verde y solo lo notaría una papelera gráfica.
+    /// Rule 1. The sidecar percent-encodes; the FILE keeps its bytes.
+    /// What this test really checks — and what the first version did NOT
+    /// check (encoding-auditor MINOR-1) — is that the sidecar's path,
+    /// DECODED, is byte-for-byte the original path: `restore_from`
+    /// doesn't read the sidecar, so without this assertion a systematic
+    /// escaping failure would pass green and only a graphical trash would
+    /// ever notice.
     #[tokio::test]
     async fn a_hostile_name_survives_the_round_trip() {
         let (dir, p) = provider();
-        let raiz = dir.path().canonicalize().expect("canon");
-        let mut probados = 0usize;
+        let root_dir = dir.path().canonicalize().expect("canon");
+        let mut tested = 0usize;
         for (n, name) in norte_testkit::corpus::hostile_names()
             .into_iter()
             .enumerate()
         {
             let native = dir.path().join(std::ffi::OsStr::from_bytes(&name.bytes));
-            // Un nombre que este FS no acepta simplemente no está (APFS/NTFS).
-            // El payload es DISTINTO por fixture: con uno común, devolver el
-            // destino de otra entrada pasaría desapercibido.
+            // A name this FS doesn't accept simply isn't there (APFS/NTFS).
+            // The payload is DIFFERENT per fixture: with a common one,
+            // returning another entry's destination would go unnoticed.
             if std::fs::write(&native, name.id.as_bytes()).is_err() {
                 continue;
             }
@@ -1030,16 +1045,16 @@ mod papelera_freedesktop {
             else {
                 continue;
             };
-            probados += 1;
+            tested += 1;
             let dest = p
                 .trash(&victim, &id(1000 + n as u64))
                 .await
                 .expect("trash")
                 .expect("dest");
 
-            // El sidecar es ASCII puro aunque el nombre no sea ni UTF-8, y son
-            // tres líneas exactas: un `\n` en un nombre no puede inyectar una
-            // cuarta ni un segundo `Path=`.
+            // The sidecar is pure ASCII even when the name is neither, and
+            // it's exactly three lines: a `\n` in a name can't inject a
+            // fourth line nor a second `Path=`.
             let text = std::fs::read_to_string(sidecar_of(&dir, &dest)).expect("sidecar");
             assert!(text.is_ascii(), "{}: {text}", name.id);
             assert_eq!(text.lines().count(), 3, "{}: {text}", name.id);
@@ -1051,35 +1066,39 @@ mod papelera_freedesktop {
                 name.id
             );
 
-            // Y la ruta que guarda es, decodificada, la original BYTE A BYTE.
-            let codificada = text
+            // And the path it stores is, decoded, the original BYTE FOR BYTE.
+            let encoded = text
                 .lines()
                 .find_map(|l| l.strip_prefix("Path="))
                 .expect("Path=");
             assert_eq!(
-                percent_decode(codificada),
-                raiz.join(std::ffi::OsStr::from_bytes(&name.bytes))
+                percent_decode(encoded),
+                root_dir
+                    .join(std::ffi::OsStr::from_bytes(&name.bytes))
                     .as_os_str()
                     .as_bytes(),
                 "{}",
                 name.id
             );
 
-            // Y vuelve a SU ruta, con SUS bytes.
+            // And it goes back to ITS path, with ITS bytes.
             p.restore_from(&dest, &victim).await.expect("restore_from");
             assert_eq!(
-                std::fs::read(&native).expect("de vuelta"),
+                std::fs::read(&native).expect("back"),
                 name.id.as_bytes(),
                 "{}",
                 name.id
             );
-            std::fs::remove_file(&native).expect("limpia");
+            std::fs::remove_file(&native).expect("cleans up");
         }
-        assert!(probados >= 40, "el corpus se saltó casi entero: {probados}");
+        assert!(
+            tested >= 40,
+            "the corpus was almost entirely skipped: {tested}"
+        );
     }
 
-    /// Decodifica el `Path=` de un `.trashinfo` a BYTES (jamás a `String`: la
-    /// ruta original puede no ser UTF-8).
+    /// Decodes a `.trashinfo`'s `Path=` to BYTES (never to `String`: the
+    /// original path may not be UTF-8).
     fn percent_decode(s: &str) -> Vec<u8> {
         let raw = s.as_bytes();
         let mut out = Vec::with_capacity(raw.len());
@@ -1087,7 +1106,7 @@ mod papelera_freedesktop {
         while i < raw.len() {
             if raw[i] == b'%' && i + 2 < raw.len() {
                 let hex = std::str::from_utf8(&raw[i + 1..i + 3]).expect("ascii");
-                out.push(u8::from_str_radix(hex, 16).expect("hex válido"));
+                out.push(u8::from_str_radix(hex, 16).expect("valid hex"));
                 i += 3;
             } else {
                 out.push(raw[i]);
@@ -1107,20 +1126,20 @@ mod papelera_freedesktop {
             .expect("trash")
             .expect("dest");
         let sidecar = sidecar_of(&dir, &dest);
-        assert!(sidecar.exists(), "el sidecar estaba");
+        assert!(sidecar.exists(), "the sidecar was there");
 
         p.restore_from(&dest, &victim).await.expect("restore");
-        assert_eq!(
-            std::fs::read(dir.path().join("a.txt")).expect("vuelto"),
-            b"x"
+        assert_eq!(std::fs::read(dir.path().join("a.txt")).expect("back"), b"x");
+        assert!(!sidecar.exists(), "the sidecar goes with it");
+        assert!(
+            p.stat(&dest).await.is_err(),
+            "and the payload is no longer there"
         );
-        assert!(!sidecar.exists(), "el sidecar se va con él");
-        assert!(p.stat(&dest).await.is_err(), "y el payload ya no está");
     }
 
-    /// #99: el `id` lo genera el engine y un reintento tras un fallo
-    /// transitorio tiene que CONVERGER en la misma entrada, no crear una
-    /// segunda ni perder el `reversal_ref`.
+    /// #99: the engine generates the `id`, and a retry after a transient
+    /// failure has to CONVERGE on the same entry, not create a second one
+    /// nor lose the `reversal_ref`.
     #[tokio::test]
     async fn a_retry_with_the_same_id_converges_on_the_same_entry() {
         let (dir, p) = provider();
@@ -1130,32 +1149,32 @@ mod papelera_freedesktop {
             .await
             .expect("trash")
             .expect("dest");
-        // La víctima ya no está: el reintento reconoce su propia entrada.
+        // The victim is no longer there: the retry recognizes its own entry.
         let again = p
             .trash(&victim, &id(7))
             .await
-            .expect("el reintento converge")
-            .expect("y conserva el destino");
+            .expect("the retry converges")
+            .expect("and keeps the destination");
         assert_eq!(first.to_wire(), again.to_wire());
-        // Y no ha creado una segunda entrada.
+        // And it hasn't created a second entry.
         let n = std::fs::read_dir(trash_root(&dir).join("files"))
             .expect("files")
             .count();
-        assert_eq!(n, 1, "una sola entrada");
+        assert_eq!(n, 1, "a single entry");
     }
 
-    /// Sin entrada previa nuestra, una víctima ausente es `NotFound` — no se
-    /// reclama la entrada de OTRA operación sobre la misma ruta.
+    /// With no earlier entry of ours, a missing victim is `NotFound` — the
+    /// entry of ANOTHER operation on the same path isn't claimed.
     #[tokio::test]
     async fn a_missing_victim_without_our_entry_is_not_found() {
         let (dir, p) = provider();
-        let fantasma = child(&LocalProvider::root(), b"jamas.txt");
+        let ghost = child(&LocalProvider::root(), b"never.txt");
         assert_eq!(
-            p.trash(&fantasma, &id(1)).await,
+            p.trash(&ghost, &id(1)).await,
             Err(norte_proto::Error::NotFound)
         );
-        // Y una entrada AJENA con el mismo nombre tampoco se reclama.
-        let victim = seed(&dir, b"a.txt", b"del vecino");
+        // And a FOREIGN entry with the same name isn't claimed either.
+        let victim = seed(&dir, b"a.txt", b"from the neighbor");
         p.trash(&victim, &id(1))
             .await
             .expect("trash")
@@ -1163,20 +1182,21 @@ mod papelera_freedesktop {
         assert_eq!(
             p.trash(&victim, &id(2)).await,
             Err(norte_proto::Error::NotFound),
-            "otra operación no hereda la entrada de nadie"
+            "another operation inherits nobody's entry"
         );
     }
 
-    /// Un sidecar SEMBRADO en `info/` no se pisa ni se reclama: la víctima se
-    /// va al siguiente nombre libre.
+    /// A sidecar PLANTED in `info/` is neither overwritten nor claimed:
+    /// the victim goes to the next free name.
     #[tokio::test]
     async fn a_planted_sidecar_is_never_overwritten() {
         let (dir, p) = provider();
         let info = trash_root(&dir).join("info");
         std::fs::create_dir_all(&info).expect("info");
-        std::fs::write(info.join("a.txt.trashinfo"), b"[Trash Info]\nPath=/otro\n").expect("plant");
+        std::fs::write(info.join("a.txt.trashinfo"), b"[Trash Info]\nPath=/other\n")
+            .expect("plant");
 
-        let victim = seed(&dir, b"a.txt", b"mio");
+        let victim = seed(&dir, b"a.txt", b"mine");
         let dest = p
             .trash(&victim, &id(1))
             .await
@@ -1184,24 +1204,24 @@ mod papelera_freedesktop {
             .expect("dest");
         assert!(dest.to_wire().ends_with("a.txt.2"), "{}", dest.to_wire());
         assert_eq!(
-            std::fs::read(info.join("a.txt.trashinfo")).expect("intacto"),
-            b"[Trash Info]\nPath=/otro\n"
+            std::fs::read(info.join("a.txt.trashinfo")).expect("intact"),
+            b"[Trash Info]\nPath=/other\n"
         );
     }
 
-    /// Un `files/<n>` SEMBRADO (aquí un symlink a algo valioso) tampoco se
-    /// pisa: el movimiento es no-replace y la víctima se va al siguiente
-    /// nombre.
+    /// A PLANTED `files/<n>` (here a symlink to something valuable) isn't
+    /// overwritten either: the move is no-replace and the victim goes to
+    /// the next name.
     #[tokio::test]
     async fn a_planted_payload_is_never_clobbered() {
         let (dir, p) = provider();
         let files = trash_root(&dir).join("files");
         std::fs::create_dir_all(&files).expect("files");
-        let valioso = dir.path().join("valioso.txt");
-        std::fs::write(&valioso, b"no me toques").expect("seed");
-        std::os::unix::fs::symlink(&valioso, files.join("a.txt")).expect("plant");
+        let valuable = dir.path().join("valuable.txt");
+        std::fs::write(&valuable, b"do not touch me").expect("seed");
+        std::os::unix::fs::symlink(&valuable, files.join("a.txt")).expect("plant");
 
-        let victim = seed(&dir, b"a.txt", b"mio");
+        let victim = seed(&dir, b"a.txt", b"mine");
         let dest = p
             .trash(&victim, &id(1))
             .await
@@ -1209,20 +1229,20 @@ mod papelera_freedesktop {
             .expect("dest");
         assert!(dest.to_wire().ends_with("a.txt.2"), "{}", dest.to_wire());
         assert_eq!(
-            std::fs::read(&valioso).expect("intacto"),
-            b"no me toques",
-            "el symlink sembrado no se siguió ni se pisó"
+            std::fs::read(&valuable).expect("intact"),
+            b"do not touch me",
+            "the planted symlink was neither followed nor overwritten"
         );
     }
 }
 
-// ---------- capabilities por DIRECTORIO (ADR 0054, #153/#145) ----------
+// ---------- per-DIRECTORY capabilities (ADR 0054, #153/#145) ----------
 
-/// `capabilities_at` no escribe NUNCA, en ningún filesystem: se responde tras
-/// el gate de LECTURA, así que una sonda de escritura ahí sería un fichero
-/// creado por un actor que solo tiene permiso para mirar. El tempdir de este
-/// test está en tmpfs, que la escalera de solo lectura NO reconoce — es decir,
-/// es justo el caso que antes caía en la sonda de escritura.
+/// `capabilities_at` NEVER writes, on any filesystem: it's answered behind
+/// the READ gate, so a write probe there would be a file created by an
+/// actor who only has permission to look. This test's tempdir is on
+/// tmpfs, which the read-only ladder does NOT recognize — i.e. it's
+/// exactly the case that used to fall to the write probe.
 #[tokio::test]
 async fn capabilities_at_never_writes_anywhere() {
     let (p, root, base) = provider();
@@ -1230,24 +1250,24 @@ async fn capabilities_at_never_writes_anywhere() {
     std::fs::create_dir(&sub).expect("mkdir");
     let vsub = child(&root, b"sub");
 
-    let _ = p.capabilities_at(&vsub).await.expect("responde");
+    let _ = p.capabilities_at(&vsub).await.expect("answers");
 
-    let restos: Vec<_> = std::fs::read_dir(&sub)
-        .expect("listar")
-        .map(|e| e.expect("entrada").file_name())
+    let leftover: Vec<_> = std::fs::read_dir(&sub)
+        .expect("list")
+        .map(|e| e.expect("entry").file_name())
         .collect();
     assert!(
-        restos.is_empty(),
-        "ni durante ni después: la escalera no muta nada ({restos:?})"
+        leftover.is_empty(),
+        "neither during nor after: the ladder mutates nothing ({leftover:?})"
     );
 }
 
 #[cfg(unix)]
 #[tokio::test]
 async fn a_directory_without_write_permission_still_gets_an_answer() {
-    // Un mount de solo lectura no se puede fabricar en CI; un directorio sin
-    // permiso de escritura sí, y es lo que rompía a la sonda de ESCRITURA:
-    // fallaba y no distinguía "no escribible" de "no pliega".
+    // A read-only mount can't be manufactured in CI; a directory without
+    // write permission can, and it's what used to break the WRITE probe:
+    // it failed and didn't distinguish "not writable" from "doesn't fold".
     use std::os::unix::fs::PermissionsExt;
     let (p, root, base) = provider();
     let ro = base.join("ro");
@@ -1257,16 +1277,16 @@ async fn a_directory_without_write_permission_still_gets_an_answer() {
     let caps = p
         .capabilities_at(&child(&root, b"ro"))
         .await
-        .expect("responde igual");
+        .expect("answers all the same");
 
-    // Qué responda depende del FS de CI; lo que se afirma es que RESPONDE lo
-    // mismo que para la raíz, que está en el mismo filesystem — y sin haber
-    // podido escribir en el directorio para averiguarlo.
+    // What it answers depends on CI's FS; what's asserted is that it
+    // ANSWERS the same as the root, which is on the same filesystem —
+    // and without having been able to write into the directory to find out.
     assert_eq!(
         caps.flags.contains(CapabilityFlags::CASE_SENSITIVE),
         p.capabilities_at(&root)
             .await
-            .expect("responde")
+            .expect("answers")
             .flags
             .contains(CapabilityFlags::CASE_SENSITIVE)
     );
@@ -1276,15 +1296,15 @@ async fn a_directory_without_write_permission_still_gets_an_answer() {
 async fn two_paths_to_one_directory_probe_once() {
     let (p, root, base) = provider();
     std::fs::create_dir(base.join("sub")).expect("mkdir");
-    let directo = child(&root, b"sub");
+    let direct = child(&root, b"sub");
 
-    let antes = p.caps_at_probe_count();
-    let _ = p.capabilities_at(&directo).await.expect("responde");
-    let _ = p.capabilities_at(&directo).await.expect("responde");
+    let before = p.caps_at_probe_count();
+    let _ = p.capabilities_at(&direct).await.expect("answers");
+    let _ = p.capabilities_at(&direct).await.expect("answers");
     assert_eq!(
-        p.caps_at_probe_count() - antes,
+        p.caps_at_probe_count() - before,
         1,
-        "la clave es (dev, ino): la segunda pregunta sale de la caché"
+        "the key is (dev, ino): the second question comes from the cache"
     );
 }
 
@@ -1293,56 +1313,57 @@ async fn a_file_is_answered_by_its_containing_directory() {
     let (p, root, base) = provider();
     std::fs::write(base.join("f.txt"), b"x").expect("write");
 
-    let del_fichero = p
+    let for_file = p
         .capabilities_at(&child(&root, b"f.txt"))
         .await
-        .expect("responde");
-    let del_dir = p.capabilities_at(&root).await.expect("responde");
+        .expect("answers");
+    let for_dir = p.capabilities_at(&root).await.expect("answers");
 
     assert_eq!(
-        del_fichero, del_dir,
-        "la pregunta es siempre sobre el directorio que lo contiene"
+        for_file, for_dir,
+        "the question is always about the directory that contains it"
     );
 }
 
-/// Una ruta que no está NO es un error: `capabilities()` jamás pudo fallar, y
-/// hacer fallar a su versión por ubicación rompería el caso corriente de
-/// planificar hacia un destino que todavía no existe.
+/// A path that isn't there is NOT an error: `capabilities()` could never
+/// fail, and making its per-location version fail would break the common
+/// case of planning toward a destination that doesn't exist yet.
 ///
-/// Lo que sí lleva ese camino degradado es `CONFINED_WRITES`, y no es una
-/// excepción caprichosa: confinar es de la PLATAFORMA —hay `openat` o no lo
-/// hay—, no del árbol ni de si la ruta existe todavía. Sin esto,
-/// `file:///destino-que-no-existe` contestaría «no sé confinar» y `file:///`
-/// que sí, dos respuestas distintas de la misma máquina — y la primera es
-/// justo la que ve un mirror al planificar (revisión de seguridad de W5 B).
+/// What DOES take that degraded path is `CONFINED_WRITES`, and it isn't a
+/// whimsical exception: confinement is a PLATFORM property — there's
+/// `openat` or there isn't —, not one of the tree or of whether the path
+/// exists yet. Without this, `file:///destination-that-does-not-exist`
+/// would answer "I can't confine" and `file:///` would answer yes, two
+/// different answers from the same machine — and the first is exactly
+/// what a mirror sees while planning (W5 B's security review).
 #[tokio::test]
 async fn a_missing_path_answers_the_declaration() {
     let (p, root, _) = provider();
-    let mut esperado = p.capabilities();
-    esperado
+    let mut expected = p.capabilities();
+    expected
         .flags
         .set(norte_proto::CapabilityFlags::CONFINED_WRITES, cfg!(unix));
     assert_eq!(
-        p.capabilities_at(&child(&root, b"no-existe"))
+        p.capabilities_at(&child(&root, b"does-not-exist"))
             .await
-            .expect("responde igualmente"),
-        esperado
+            .expect("answers all the same"),
+        expected
     );
 }
 
-/// El caso que DISCRIMINA la escalera: un directorio sin permiso de escritura
-/// **en ext4**. La sonda de escritura no puede responder ahí —es justo su
-/// límite—, así que una respuesta correcta solo puede venir del peldaño de
-/// solo lectura (`statfs` + `FS_IOC_GETFLAGS`).
+/// The case that DISCRIMINATES the ladder: a directory without write
+/// permission **on ext4**. The write probe can't answer there — that's
+/// exactly its limit —, so a correct answer can only come from the
+/// read-only step (`statfs` + `FS_IOC_GETFLAGS`).
 ///
-/// Se enraíza en el árbol del repo y no en `/tmp`, que en esta máquina es
-/// tmpfs: sobre tmpfs la escalera cae al peldaño de escritura y el test no
-/// probaría nada.
+/// Rooted in the repo's own tree and not in `/tmp`, which on this machine
+/// is tmpfs: over tmpfs the ladder falls to the write step and the test
+/// wouldn't prove anything.
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn a_read_only_ext4_directory_is_answered_without_writing() {
     use std::os::unix::fs::PermissionsExt;
-    let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("tempdir en el repo");
+    let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("tempdir in the repo");
     let base = dir.path().to_path_buf();
     let ro = base.join("ro");
     std::fs::create_dir(&ro).expect("mkdir");
@@ -1352,167 +1373,170 @@ async fn a_read_only_ext4_directory_is_answered_without_writing() {
     let caps = p
         .capabilities_at(&child(&LocalProvider::root(), b"ro"))
         .await
-        .expect("responde");
+        .expect("answers");
 
-    // Si el árbol del repo no está en ext4/f2fs (un contenedor con overlayfs,
-    // por ejemplo), la escalera cae al peldaño de escritura, que sobre este
-    // directorio no puede responder — y entonces el test no aplica.
-    let en_ext4 = std::process::Command::new("stat")
-        .args(["-f", "-c", "%T", base.to_str().expect("ruta de test ASCII")])
+    // If the repo's tree isn't on ext4/f2fs (a container with overlayfs,
+    // for instance), the ladder falls to the write step, which can't
+    // answer for this directory — and then the test doesn't apply.
+    let on_ext4 = std::process::Command::new("stat")
+        .args(["-f", "-c", "%T", base.to_str().expect("test path is ASCII")])
         .output()
         .ok()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned());
-    if en_ext4.as_deref() != Some("ext2/ext3") {
-        eprintln!("skip: el árbol del repo no está en ext4 ({en_ext4:?})");
+    if on_ext4.as_deref() != Some("ext2/ext3") {
+        eprintln!("skip: the repo's tree isn't on ext4 ({on_ext4:?})");
         return;
     }
 
     assert!(
         caps.flags.contains(CapabilityFlags::CASE_SENSITIVE),
-        "ext4 sin +F distingue caja, y aquí no se pudo escribir para averiguarlo"
+        "ext4 without +F distinguishes case, and here it couldn't write to find out"
     );
     assert!(
         !caps.flags.contains(CapabilityFlags::FULL_FOLD),
-        "y sin +F no expande"
+        "and without +F it doesn't expand"
     );
 }
 
-/// Roadmap ítem 8: un fichero con un agujero se copia SIN materializarlo.
+/// Roadmap item 8: a file with a hole gets copied WITHOUT materializing it.
 ///
-/// Las dos aserciones dicen cosas distintas y las dos hacen falta: los bytes
-/// son idénticos (que es la corrección) y los BLOQUES no (que es lo único que
-/// demuestra que la optimización ocurrió). Sin la segunda, el test pasaría
-/// igual con la implementación de antes.
+/// The two assertions say different things and both are needed: the bytes
+/// are identical (which is correctness) and the BLOCKS aren't (which is
+/// the only thing that proves the optimization happened). Without the
+/// second, the test would pass just the same with the earlier
+/// implementation.
 #[cfg(unix)]
 #[tokio::test]
-async fn un_destino_con_agujero_no_se_materializa() {
+async fn a_destination_with_a_hole_is_not_materialized() {
     use std::os::unix::fs::MetadataExt as _;
 
-    // 64 MiB de agujero: el caso de la imagen de VM que nombra el roadmap.
-    const HUECO: u64 = 64 * 1024 * 1024;
+    // 64 MiB hole: the VM-image case the roadmap names.
+    const HOLE: u64 = 64 * 1024 * 1024;
 
     let (p, root, base) = provider();
-    let f = std::fs::File::create(base.join("origen.img")).expect("crear");
-    f.set_len(HUECO).expect("agujero");
+    let f = std::fs::File::create(base.join("source.img")).expect("create");
+    f.set_len(HOLE).expect("hole");
     drop(f);
 
-    let mut sink = p.write(&child(&root, b"destino.img")).await.expect("write");
-    let mut leido = p
-        .read(&child(&root, b"origen.img"), None)
+    let mut sink = p.write(&child(&root, b"target.img")).await.expect("write");
+    let mut read_stream = p
+        .read(&child(&root, b"source.img"), None)
         .await
         .expect("read");
-    while let Some(chunk) = leido.next().await {
-        sink.write(chunk.expect("chunk")).await.expect("escribe");
+    while let Some(chunk) = read_stream.next().await {
+        sink.write(chunk.expect("chunk")).await.expect("writes");
     }
     sink.commit().await.expect("commit");
 
-    let md = std::fs::metadata(base.join("destino.img")).expect("stat");
-    assert_eq!(md.len(), HUECO, "el tamaño LÓGICO se conserva entero");
+    let md = std::fs::metadata(base.join("target.img")).expect("stat");
+    assert_eq!(md.len(), HOLE, "the LOGICAL size is kept whole");
     assert_eq!(
-        std::fs::read(base.join("destino.img")).expect("leer"),
-        vec![0u8; usize::try_from(HUECO).expect("cabe")],
-        "y los bytes que se leen son los mismos"
+        std::fs::read(base.join("target.img")).expect("read"),
+        vec![0u8; usize::try_from(HOLE).expect("fits")],
+        "and the bytes read back are the same"
     );
     assert!(
-        md.blocks() * 512 < HUECO / 8,
-        "pero el disco no los guarda: {} bloques para {HUECO} bytes",
+        md.blocks() * 512 < HOLE / 8,
+        "but the disk doesn't store them: {} blocks for {HOLE} bytes",
         md.blocks()
     );
 }
 
-/// El caso que la optimización NO puede romper: ceros que alguien escribió a
-/// propósito, en medio de datos. Que el destino salga disperso está permitido;
-/// que un byte cambie, no.
+/// The case the optimization must NOT break: zeros someone wrote on
+/// purpose, in the middle of data. The destination coming out sparse is
+/// allowed; a byte changing is not.
 #[tokio::test]
-async fn unos_ceros_en_medio_se_leen_igual() {
+async fn zeros_in_the_middle_read_back_the_same() {
     let (p, root, _base) = provider();
-    let mut contenido = vec![b'a'; 1024];
-    contenido.extend(std::iter::repeat_n(0u8, 256 * 1024));
-    contenido.extend(std::iter::repeat_n(b'z', 1024));
+    let mut content = vec![b'a'; 1024];
+    content.extend(std::iter::repeat_n(0u8, 256 * 1024));
+    content.extend(std::iter::repeat_n(b'z', 1024));
 
-    let mut sink = p.write(&child(&root, b"mixto.bin")).await.expect("write");
-    sink.write(Bytes::from(contenido.clone()))
+    let mut sink = p.write(&child(&root, b"mixed.bin")).await.expect("write");
+    sink.write(Bytes::from(content.clone()))
         .await
-        .expect("escribe");
+        .expect("writes");
     sink.commit().await.expect("commit");
 
-    let mut leido = p
-        .read(&child(&root, b"mixto.bin"), None)
+    let mut read_stream = p
+        .read(&child(&root, b"mixed.bin"), None)
         .await
         .expect("read");
     let mut out = Vec::new();
-    while let Some(chunk) = leido.next().await {
+    while let Some(chunk) = read_stream.next().await {
         out.extend_from_slice(&chunk.expect("chunk"));
     }
-    assert_eq!(out, contenido, "byte a byte, sin excepciones");
+    assert_eq!(out, content, "byte for byte, no exceptions");
 }
 
-/// Y la reanudación sigue sabiendo por dónde iba: el agujero tiene que contar
-/// en la LONGITUD del staging desde que se escribe, no desde el commit — es lo
-/// que leen `open_resumable` (su `already`) y `partial_digest`. Con la longitud
-/// aplazada, un parcial que acabara en agujero diría tener menos bytes de los
-/// que tiene y el reintento escribiría encima de lo ya hecho.
+/// And resume still knows where it was: the hole has to count in the
+/// staging's LENGTH from the moment it's written, not from the commit —
+/// that's what `open_resumable` (its `already`) and `partial_digest`
+/// read. With the length deferred, a partial ending in a hole would claim
+/// fewer bytes than it has and the retry would write over what was
+/// already done.
 #[tokio::test]
-async fn un_agujero_cuenta_en_el_offset_de_reanudacion() {
+async fn a_hole_counts_in_the_resume_offset() {
     let (p, root, _base) = provider();
-    let destino = child(&root, b"resume.bin");
+    let dest = child(&root, b"resume.bin");
 
-    let (mut sink, already) = p.open_resumable(&destino).await.expect("abre");
-    assert_eq!(already, 0, "staging fresco");
+    let (mut sink, already) = p.open_resumable(&dest).await.expect("opens");
+    assert_eq!(already, 0, "fresh staging");
     sink.write(Bytes::from(vec![0u8; 128 * 1024]))
         .await
-        .expect("todo ceros");
-    sink.keep().await.expect("conserva el parcial");
+        .expect("all zeros");
+    sink.keep().await.expect("keeps the partial");
 
-    let (_sink, already) = p.open_resumable(&destino).await.expect("reabre");
+    let (_sink, already) = p.open_resumable(&dest).await.expect("reopens");
     assert_eq!(
         already,
         128 * 1024,
-        "el agujero YA cuenta: reanudar desde 0 recopiaría lo hecho"
+        "the hole ALREADY counts: resuming from 0 would recopy what was done"
     );
 }
 
-/// **El caso que la escritura dispersa casi rompe, y es corrupción silenciosa.**
+/// **The case sparse writing almost broke, and it's silent corruption.**
 ///
-/// Un staging reabierto para reanudar se abre con `O_APPEND`, y `O_APPEND` NO
-/// coloca el offset al final: lo deja en 0 y solo se reposiciona justo antes de
-/// cada `write`. Así que un salto RELATIVO sobre un parcial de N bytes saltaba
-/// desde 0, y el `set_len` que venía detrás no extendía — TRUNCABA, tirando lo
-/// ya copiado sin que nada lo comprobara (el commit publica y ya está).
+/// A staging reopened to resume is opened with `O_APPEND`, and
+/// `O_APPEND` does NOT place the offset at the end: it leaves it at 0 and
+/// only repositions right before each `write`. So a RELATIVE seek over an
+/// N-byte partial used to jump from 0, and the `set_len` that followed
+/// didn't extend — it TRUNCATED, throwing away what had already been
+/// copied with nothing checking it (the commit publishes and that's that).
 ///
-/// Es justo el caso corriente que la feature persigue: una imagen de disco,
-/// interrumpida una vez, reanudada — y una imagen es mayormente ceros, así que
-/// el primer chunk tras reanudar siendo todo ceros es lo NORMAL, no el borde.
+/// It's exactly the common case the feature chases: a disk image,
+/// interrupted once, resumed — and an image is mostly zeros, so the first
+/// chunk after resuming being all zeros is the NORMAL case, not the edge.
 #[tokio::test]
-async fn reanudar_con_un_chunk_de_ceros_no_se_come_lo_ya_copiado() {
+async fn resuming_with_a_zero_chunk_does_not_eat_what_was_already_copied() {
     let (p, root, base) = provider();
-    let destino = child(&root, b"reanudado.img");
+    let dest = child(&root, b"resumed.img");
 
-    // Primer tramo: datos de verdad, y se conserva el parcial.
-    let (mut sink, already) = p.open_resumable(&destino).await.expect("abre");
+    // First stage: real data, and the partial is kept.
+    let (mut sink, already) = p.open_resumable(&dest).await.expect("opens");
     assert_eq!(already, 0);
     sink.write(Bytes::from(vec![b'a'; 64 * 1024]))
         .await
-        .expect("datos");
-    sink.keep().await.expect("conserva");
+        .expect("data");
+    sink.keep().await.expect("keeps");
 
-    // Se reanuda, y lo primero que llega es un hueco.
-    let (mut sink, already) = p.open_resumable(&destino).await.expect("reabre");
-    assert_eq!(already, 64 * 1024, "el parcial sigue entero");
+    // Resumed, and the first thing that arrives is a hole.
+    let (mut sink, already) = p.open_resumable(&dest).await.expect("reopens");
+    assert_eq!(already, 64 * 1024, "the partial is still whole");
     sink.write(Bytes::from(vec![0u8; 256 * 1024]))
         .await
-        .expect("ceros");
+        .expect("zeros");
     sink.write(Bytes::from(vec![b'z'; 1024]))
         .await
-        .expect("cola");
+        .expect("tail");
     sink.commit().await.expect("commit");
 
-    let mut esperado = vec![b'a'; 64 * 1024];
-    esperado.extend(std::iter::repeat_n(0u8, 256 * 1024));
-    esperado.extend(std::iter::repeat_n(b'z', 1024));
+    let mut expected = vec![b'a'; 64 * 1024];
+    expected.extend(std::iter::repeat_n(0u8, 256 * 1024));
+    expected.extend(std::iter::repeat_n(b'z', 1024));
     assert_eq!(
-        std::fs::read(base.join("reanudado.img")).expect("leer"),
-        esperado,
-        "los bytes de antes de reanudar tienen que seguir ahí"
+        std::fs::read(base.join("resumed.img")).expect("read"),
+        expected,
+        "the bytes from before resuming have to still be there"
     );
 }

@@ -1,5 +1,5 @@
-//! [`SftpProvider`]: el trait [`Provider`] sobre un `SftpSession` de
-//! `russh-sftp` (ADR 0013). Contención del servidor hostil incluida.
+//! [`SftpProvider`]: the [`Provider`] trait over an `SftpSession` from
+//! `russh-sftp` (ADR 0013). Includes containment of a hostile server.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -17,31 +17,32 @@ use russh_sftp::client::SftpSession;
 use russh_sftp::protocol::OpenFlags;
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 
-/// Tamaño de chunk de lectura (256 KiB, alineado con el copy engine).
+/// Read chunk size (256 KiB, aligned with the copy engine).
 const READ_CHUNK: usize = 256 * 1024;
-/// Prefijo del staging de escritura (ADR 0012, mismo convenio que local).
+/// Prefix for the write staging (ADR 0012, same convention as local).
 const PARTIAL_PREFIX: &str = ".norte-partial.";
 
-/// Provider VFS sobre una sesión SFTP ya establecida (ADR 0013).
+/// VFS provider over an already-established SFTP session (ADR 0013).
 ///
-/// La conexión SSH con auth y verificación de host key llega en la fase 6;
-/// aquí la sesión se INYECTA ([`SftpProvider::new`]) — así el provider se
-/// testea contra un servidor sftp in-process sobre `duplex`, sin SSH.
+/// The SSH connection with auth and host key verification lands in phase 6;
+/// here the session is INJECTED ([`SftpProvider::new`]) — this way the
+/// provider is tested against an in-process sftp server over `duplex`,
+/// without SSH.
 pub struct SftpProvider {
     session: Arc<SftpSession>,
-    /// Raíz remota absoluta (POSIX) bajo la que vive todo. Sin `..`.
+    /// Absolute remote (POSIX) root everything lives under. No `..`.
     base: String,
-    /// Contador de staging (nombre efímero único para `write`).
+    /// Staging counter (unique ephemeral name for `write`).
     seq: AtomicU64,
-    /// Papelera lógica `.norte-trash/` activa (opt-in por conexión, ADR
-    /// 0019). Off por defecto → no declara `TRASH` → borrado permanente.
+    /// Logical `.norte-trash/` trash active (opt-in per connection, ADR
+    /// 0019). Off by default → does not declare `TRASH` → permanent delete.
     logical_trash: bool,
 }
 
 impl SftpProvider {
-    /// Provider sobre una sesión ya establecida, enraizado en `base`
-    /// (path remoto absoluto POSIX, p. ej. `/home/user`). `base` se
-    /// normaliza a sin barra final.
+    /// Provider over an already-established session, rooted at `base`
+    /// (absolute POSIX remote path, e.g. `/home/user`). `base` is
+    /// normalized to have no trailing slash.
     #[must_use]
     pub fn new(session: SftpSession, base: impl Into<String>) -> Self {
         let mut base = base.into();
@@ -56,18 +57,19 @@ impl SftpProvider {
         }
     }
 
-    /// Activa/desactiva la papelera lógica `.norte-trash/` (ADR 0019).
-    /// Sin ella el provider no declara `TRASH` y `trash()` da `Unsupported`.
+    /// Enables/disables the logical `.norte-trash/` trash (ADR 0019).
+    /// Without it the provider does not declare `TRASH` and `trash()` gives
+    /// `Unsupported`.
     #[must_use]
     pub fn with_logical_trash(mut self, enabled: bool) -> Self {
         self.logical_trash = enabled;
         self
     }
 
-    /// Lee y valida la `.norte-info` de una entrada de papelera: `true` solo si
-    /// decodifica exactamente a `p` (misma víctima). Distingue NUESTRA entrada
-    /// de una colisión ajena con el mismo id (#99, review rust MAJOR). Ausente,
-    /// ilegible o de otra víctima = `false`.
+    /// Reads and validates the `.norte-info` of a trash entry: `true` only if
+    /// it decodes to exactly `p` (same victim). Distinguishes OUR entry from
+    /// someone else's collision with the same id (#99, review rust MAJOR).
+    /// Absent, unreadable or from another victim = `false`.
     async fn trash_info_matches(&self, info: &VPath, p: &VPath) -> bool {
         let Ok(mut stream) = self.read(info, None).await else {
             return false;
@@ -82,10 +84,11 @@ impl SftpProvider {
         trash::info_decode(&buf, p).is_ok_and(|i| i.original == *p)
     }
 
-    /// Crea `dir` tolerando que ya exista (idempotente). Bajo concurrencia
-    /// v3 puede devolver `Failure` genérico (→ `Io`) en vez de `Conflict`
-    /// si otra sesión lo crea entre el `exists()` y el `create_dir`; si al
-    /// final el directorio está, el resultado es benigno.
+    /// Creates `dir` tolerating that it already exists (idempotent). Under
+    /// v3 concurrency it can return a generic `Failure` (→ `Io`) instead of
+    /// `Conflict` if another session creates it between the `exists()` and
+    /// the `create_dir`; if in the end the directory is there, the result is
+    /// benign.
     async fn ensure_dir_idempotent(&self, dir: &VPath) -> Result<(), Error> {
         match self.mkdir(dir).await {
             Ok(())
@@ -103,24 +106,23 @@ impl SftpProvider {
         }
     }
 
-    /// La raíz de este provider para un `authority` dado
-    /// (`sftp://host:22/`).
+    /// This provider's root for a given `authority` (`sftp://host:22/`).
     ///
     /// # Panics
-    /// Nunca: el scheme es constante y válido.
+    /// Never: the scheme is constant and valid.
     #[must_use]
     pub fn root(authority: norte_proto::Authority) -> VPath {
         VPath::root(
-            Scheme::new("sftp").expect("scheme constante válido"),
+            Scheme::new("sftp").expect("constant, valid scheme"),
             Some(authority),
         )
     }
 
-    /// Traduce un [`VPath`] al path remoto POSIX absoluto bajo la `base`.
-    /// Los segmentos son BYTES; SFTP (vía russh-sftp) exige UTF-8 — un
-    /// nombre no representable es [`Error::InvalidPath`] (rechazo LIMPIO,
-    /// jamás lossy — regla 1, ADR 0013 D2). El provider construye el path
-    /// SIEMPRE así, nunca desde un path ecoado por el servidor.
+    /// Translates a [`VPath`] into the absolute remote POSIX path under
+    /// `base`. Segments are BYTES; SFTP (via russh-sftp) requires UTF-8 — a
+    /// non-representable name is [`Error::InvalidPath`] (CLEAN rejection,
+    /// never lossy — rule 1, ADR 0013 D2). The provider ALWAYS builds the
+    /// path this way, never from a path echoed back by the server.
     fn remote(&self, p: &VPath) -> Result<String, Error> {
         if p.scheme() != "sftp" {
             return Err(Error::InvalidPath);
@@ -128,8 +130,8 @@ impl SftpProvider {
         let mut out = String::from(&self.base);
         for seg in p.segments() {
             let name = std::str::from_utf8(seg).map_err(|_| Error::InvalidPath)?;
-            // Un segmento jamás lleva separador ni es `.`/`..` (el VPath ya
-            // lo garantiza); defensa en profundidad por si acaso.
+            // A segment never carries a separator nor is `.`/`..` (VPath
+            // already guarantees it); defense in depth just in case.
             if name.contains('/') || name == "." || name == ".." {
                 return Err(Error::InvalidPath);
             }
@@ -141,18 +143,18 @@ impl SftpProvider {
         Ok(out)
     }
 
-    /// Path del staging estable de resume para `p` (ADR 0012).
+    /// Path of the stable resume staging for `p` (ADR 0012).
     fn stable_partial(&self, p: &VPath) -> Result<String, Error> {
         let parent = self.remote_parent(p)?;
         let name = p.file_name().ok_or(Error::InvalidPath)?;
-        // Hash de los bytes del nombre final (SHA no hace falta aquí: el
-        // servidor de test es de confianza; el nombre solo debe ser estable
-        // y único por destino — se usa el mismo esquema que el efímero).
+        // Hash of the final name's bytes (SHA is not needed here: the test
+        // server is trusted; the name only needs to be stable and unique per
+        // destination — the same scheme as the ephemeral one is used).
         let hash = fnv1a_128(name.as_bytes());
         Ok(format!("{parent}/{PARTIAL_PREFIX}{hash:032x}"))
     }
 
-    /// El path remoto del DIRECTORIO padre de `p`.
+    /// The remote path of `p`'s parent DIRECTORY.
     fn remote_parent(&self, p: &VPath) -> Result<String, Error> {
         let parent = p.parent().ok_or(Error::InvalidPath)?;
         self.remote(&parent)
@@ -171,9 +173,9 @@ impl std::fmt::Debug for SftpProvider {
     }
 }
 
-/// FNV-1a de 128 bits: hash estable (no depende de la versión de Rust) para
-/// nombrar staging. No es cripto — el servidor sftp de test es de confianza
-/// y el hash solo necesita ser estable y único por destino.
+/// 128-bit FNV-1a: stable hash (does not depend on the Rust version) for
+/// naming staging. Not crypto — the test sftp server is trusted and the hash
+/// only needs to be stable and unique per destination.
 fn fnv1a_128(bytes: &[u8]) -> u128 {
     const OFFSET: u128 = 0x6c62_272e_07bb_0142_62b8_2175_6295_c58d;
     const PRIME: u128 = 0x0000_0000_0100_0000_0000_0000_0000_013b;
@@ -185,35 +187,35 @@ fn fnv1a_128(bytes: &[u8]) -> u128 {
     h
 }
 
-/// Mapea el error de russh-sftp a la taxonomía del protocolo (spec §17.7):
-/// los frontends renderizan por categoría, jamás parsean strings.
+/// Maps a russh-sftp error to the protocol's taxonomy (spec §17.7):
+/// frontends render by category, never parse strings.
 fn map_err(e: &russh_sftp::client::error::Error) -> Error {
     use russh_sftp::client::error::Error as E;
     use russh_sftp::protocol::StatusCode as S;
     match e {
         E::Status(st) => match st.status_code {
-            // Eof al pedir metadatos/leer un inexistente = NotFound.
+            // Eof when requesting metadata/reading a nonexistent one = NotFound.
             S::NoSuchFile | S::Eof => Error::NotFound,
             S::PermissionDenied => Error::PermissionDenied,
             S::OpUnsupported => Error::Unsupported,
-            // v3 devuelve `Failure` genérico para casi todo (incluido "ya
-            // existe" en mkdir/rename): el caller que sepa el contexto lo
-            // reinterpreta; por defecto, I/O no reintentable.
+            // v3 returns a generic `Failure` for almost everything (including
+            // "already exists" in mkdir/rename): the caller who knows the
+            // context reinterprets it; by default, non-retryable I/O.
             _ => Error::Io { retryable: false },
         },
-        // Fallo de transporte: el provider "no responde" — reintentable.
+        // Transport failure: the provider "is not responding" — retryable.
         E::IO(_) | E::Timeout | E::Limited(_) => Error::ProviderUnavailable { retryable: true },
         E::UnexpectedPacket | E::UnexpectedBehavior(_) => Error::Io { retryable: false },
     }
 }
 
-/// Reconstruye una [`Entry`] a partir de la `Metadata` de sftp sobre el
-/// `VPath` pedido (la authority/scheme se preservan — la identidad del path
-/// en el wire no cambia por pasar por el provider).
-/// ¿`name` tiene la FORMA exacta de un staging sftp? (#11) Estrecho a las
-/// dos formas de ESTE provider — jamás el prefijo suelto (H2):
-/// - estable: prefijo + exactamente 32 hex ([`SftpProvider`] resumable)
-/// - efímero: prefijo + `eph.` + dígitos (contador de `write`)
+/// Reconstructs an [`Entry`] from sftp's `Metadata` over the requested
+/// [`VPath`] (the authority/scheme are preserved — the path's identity on
+/// the wire does not change by going through the provider).
+/// Does `name` have the exact SHAPE of an sftp staging file? (#11) Narrow to
+/// this provider's two forms — never the bare prefix (H2):
+/// - stable: prefix + exactly 32 hex ([`SftpProvider`] resumable)
+/// - ephemeral: prefix + `eph.` + digits (`write`'s counter)
 fn is_norte_partial(name: &str) -> bool {
     let Some(rest) = name.strip_prefix(PARTIAL_PREFIX) else {
         return false;
@@ -226,14 +228,14 @@ fn is_norte_partial(name: &str) -> bool {
         .is_some_and(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
 }
 
-/// Catálogo de attrs del provider sftp (#108 bloque 2): lo que el
-/// `SSH_FXP_ATTRS` de v3 YA trae parseado — cero round-trips extra.
+/// Attribute catalogue of the sftp provider (#108 block 2): what v3's
+/// `SSH_FXP_ATTRS` ALREADY brings parsed — zero extra round-trips.
 ///
-/// NOTA (deuda): `sftp.owner`/`sftp.group` como `Bytes` exigen el longname
-/// crudo de `SSH_FXP_NAME`; russh-sftp 2.3 lo descarta antes de su API de
-/// cliente y decodifica `user`/`group` a `None` SIEMPRE en v3 (el wire solo
-/// lleva uid/gid). Adyacente a #37 — issue propio en el cierre del bloque.
-fn catalogo_sftp() -> &'static [norte_proto::AttrInfo] {
+/// NOTE (debt): `sftp.owner`/`sftp.group` as `Bytes` require the raw longname
+/// from `SSH_FXP_NAME`; russh-sftp 2.3 discards it before its client API and
+/// ALWAYS decodes `user`/`group` to `None` in v3 (the wire only carries
+/// uid/gid). Adjacent to #37 — its own issue when the block closes.
+fn sftp_catalogue() -> &'static [norte_proto::AttrInfo] {
     use norte_proto::{AttrHint, AttrInfo, AttrType};
     static CAT: std::sync::LazyLock<Vec<AttrInfo>> = std::sync::LazyLock::new(|| {
         let mk = |id: &str, label: &str, hint| AttrInfo {
@@ -266,10 +268,10 @@ fn entry_from(
         EntryKind::Other
     };
     let size = (kind == EntryKind::File).then(|| md.len());
-    // mtime de sftp v3 es segundos u32 desde epoch.
+    // sftp v3's mtime is u32 seconds since epoch.
     let mtime_ms = md.mtime.map(|s| i64::from(s) * 1000);
-    // Ausencia significa ausencia: un campo que el servidor no mandó se
-    // omite, jamás se fabrica un 0 (#108 bloque 2).
+    // Absence means absence: a field the server did not send is omitted,
+    // never faked as a 0 (#108 block 2).
     let mut attrs = std::collections::BTreeMap::new();
     if let Some(perm) = md.permissions
         && req.wants("posix.mode")
@@ -308,30 +310,31 @@ fn entry_from(
 impl Provider for SftpProvider {
     #[expect(
         clippy::unnecessary_literal_bound,
-        reason = "la firma del trait es `-> &str`"
+        reason = "the trait's signature is `-> &str`"
     )]
     fn scheme(&self) -> &str {
         "sftp"
     }
 
     fn capabilities(&self) -> Capabilities {
-        // Honestas (ADR 0013): sftp tiene symlinks y escritura en offset/
-        // append (habilita el resume de ADR 0012), y se asume remoto POSIX
-        // case-sensitive. NO declara: rename atómico (v3 no lo garantiza) ni
-        // server-copy. TRASH solo si la conexión activó la papelera lógica
-        // `.norte-trash/` (ADR 0019).
+        // Honest (ADR 0013): sftp has symlinks and offset/append writes
+        // (enabling the ADR 0012 resume), and a POSIX case-sensitive remote
+        // is assumed. It does NOT declare: atomic rename (v3 does not
+        // guarantee it) nor server-copy. TRASH only if the connection
+        // enabled the logical `.norte-trash/` trash (ADR 0019).
         let mut flags = CapabilityFlags::SYMLINKS
             | CapabilityFlags::APPEND
             | CapabilityFlags::RANDOM_WRITE
             | CapabilityFlags::CASE_PRESERVING
-            // El remoto se asume POSIX (case-sensitive): declararla evita
-            // que el engine invente colisiones de caja que un servidor
-            // Linux no tiene (bytes exactos = conservador correcto).
+            // The remote is assumed POSIX (case-sensitive): declaring it
+            // keeps the engine from inventing case collisions that a Linux
+            // server does not have (exact bytes = the conservative correct
+            // choice).
             | CapabilityFlags::CASE_SENSITIVE
-            // Permisos POSIX (#314): `SSH_FXP_SETSTAT` con el campo de
-            // permisos, que es lo que hace `chmod` sobre sftp. El remoto se
-            // asume POSIX igual que arriba; si no lo fuera, el servidor
-            // rechaza y eso llega como el error que es.
+            // POSIX permissions (#314): `SSH_FXP_SETSTAT` with the
+            // permissions field, which is what `chmod` does over sftp. The
+            // remote is assumed POSIX as above; if it were not, the server
+            // rejects it and that arrives as the error it is.
             | CapabilityFlags::POSIX_MODE;
         if self.logical_trash {
             flags |= CapabilityFlags::TRASH;
@@ -348,8 +351,8 @@ impl Provider for SftpProvider {
 
     async fn stat_with(&self, p: &VPath, opt: &norte_vfs::ListOptions) -> Result<Entry, Error> {
         let remote = self.remote(p)?;
-        // lstat: describe el LINK, jamás lo sigue (contención de symlinks
-        // trampa — ADR 0013).
+        // lstat: describes the LINK, never follows it (containment of trap
+        // symlinks — ADR 0013).
         let md = self
             .session
             .symlink_metadata(remote)
@@ -359,7 +362,7 @@ impl Provider for SftpProvider {
     }
 
     fn attrs(&self) -> &[norte_proto::AttrInfo] {
-        catalogo_sftp()
+        sftp_catalogue()
     }
 
     async fn list(&self, p: &VPath) -> Result<EntryStream, Error> {
@@ -381,18 +384,18 @@ impl Provider for SftpProvider {
         let mut entries: Vec<Result<Entry, Error>> = Vec::new();
         for dent in dir {
             let name = dent.file_name();
-            // `.`/`..` no son hijos; un nombre con `/` es un servidor
-            // hostil intentando escapar la base — se rechaza, el listado
-            // NO continúa a ciegas (ADR 0013).
+            // `.`/`..` are not children; a name with `/` is a hostile server
+            // trying to escape the base — it is rejected, the listing does
+            // NOT blindly continue (ADR 0013).
             if name == "." || name == ".." {
                 continue;
             }
-            // russh-sftp decodifica los nombres del servidor con
-            // `from_utf8_lossy`: un byte no-UTF8 llega ya sustituido por U+FFFD
-            // y los bytes originales se perdieron BAJO nuestra frontera. No se
-            // puede garantizar identidad de bytes → rechazo LIMPIO en vez de
-            // emitir un Entry corrupto (regla 1 / ADR 0013 D2). Deuda: leer los
-            // bytes crudos del paquete SSH_FXP_NAME (issue #37).
+            // russh-sftp decodes the server's names with `from_utf8_lossy`: a
+            // non-UTF8 byte arrives already substituted by U+FFFD and the
+            // original bytes were lost BELOW our boundary. Byte identity
+            // cannot be guaranteed → CLEAN rejection instead of emitting a
+            // corrupt Entry (rule 1 / ADR 0013 D2). Debt: read the raw bytes
+            // of the SSH_FXP_NAME packet (issue #37).
             if name.contains('\u{FFFD}') || name.contains('/') {
                 entries.push(Err(Error::InvalidPath));
                 break;
@@ -410,15 +413,15 @@ impl Provider for SftpProvider {
     async fn read(&self, p: &VPath, range: Option<ByteRange>) -> Result<ByteStream, Error> {
         let remote = self.remote(p)?;
         let session = self.session();
-        // Rechaza dirs (leerlos es error, como el resto de providers).
+        // Rejects dirs (reading them is an error, like the other providers).
         let md = session
             .symlink_metadata(&remote)
             .await
             .map_err(|e| map_err(&e))?;
         if md.is_dir() || md.is_symlink() {
-            // Un dir no se lee; un symlink NO se sigue (coherente con el
-            // invariante lstat de stat/node_id — ADR 0013). El engine recorre
-            // symlinks vía read_link, jamás vía read().
+            // A dir is not read; a symlink is NOT followed (consistent with
+            // the lstat invariant of stat/node_id — ADR 0013). The engine
+            // walks symlinks via read_link, never via read().
             return Err(Error::Conflict {
                 conflict: ConflictKind::TypeMismatch,
             });
@@ -437,10 +440,10 @@ impl Provider for SftpProvider {
     }
 
     async fn write(&self, p: &VPath) -> Result<Box<dyn ByteSink>, Error> {
-        // Staging efímero: nombre corto único (no deriva del nombre final,
-        // que puede rozar NAME_MAX; ADR 0012). Contrato: el destino final
-        // debe NO existir (create-new) — sftp v3 no tiene O_EXCL, así que
-        // se comprueba con stat (ventana TOCTOU documentada).
+        // Ephemeral staging: short unique name (not derived from the final
+        // name, which may brush against NAME_MAX; ADR 0012). Contract: the
+        // final destination must NOT exist (create-new) — sftp v3 has no
+        // O_EXCL, so it is checked with stat (documented TOCTOU window).
         let final_remote = self.remote(p)?;
         self.check_final_absent(&final_remote).await?;
         let parent = self.remote_parent(p)?;
@@ -450,10 +453,10 @@ impl Provider for SftpProvider {
             .session
             .open_with_flags(
                 &staging,
-                // EXCLUDE (create-new atómico): si el servidor pre-plantó el
-                // staging predecible como symlink fuera de base, el open FALLA
-                // en vez de seguirlo y escribir en el target (contención de
-                // escritura — ADR 0013 / threat model §14).
+                // EXCLUDE (atomic create-new): if the server pre-planted the
+                // predictable staging path as a symlink outside base, the
+                // open FAILS instead of following it and writing into the
+                // target (write containment — ADR 0013 / threat model §14).
                 OpenFlags::CREATE | OpenFlags::EXCLUDE | OpenFlags::WRITE | OpenFlags::TRUNCATE,
             )
             .await
@@ -469,12 +472,12 @@ impl Provider for SftpProvider {
     async fn partial_digest(&self, p: &VPath, len: u64) -> Result<Option<[u8; 32]>, Error> {
         use sha2::{Digest, Sha256};
         use tokio::io::AsyncReadExt as _;
-        // Mismo staging estable que open_resumable (#35): SHA-256 de sus
-        // primeros `len` bytes.
+        // Same stable staging as open_resumable (#35): SHA-256 of its first
+        // `len` bytes.
         let staging = self.stable_partial(p)?;
-        // Sin staging = sin digest (el engine degrada a Length). El servidor
-        // puede señalar la ausencia de varias formas; cualquier fallo al abrir
-        // el staging efímero se trata como "no hay".
+        // No staging = no digest (the engine degrades to Length). The server
+        // can signal absence in several ways; any failure opening the
+        // ephemeral staging is treated as "there is none".
         let Ok(mut file) = self
             .session
             .open_with_flags(&staging, OpenFlags::READ)
@@ -498,7 +501,7 @@ impl Provider for SftpProvider {
             remaining -= n as u64;
         }
         if remaining > 0 {
-            // Staging más corto que `len`: sin prefijo completo → Length.
+            // Staging shorter than `len`: without the full prefix → Length.
             return Ok(None);
         }
         Ok(Some(hasher.finalize().into()))
@@ -508,11 +511,12 @@ impl Provider for SftpProvider {
         let final_remote = self.remote(p)?;
         self.check_final_absent(&final_remote).await?;
         let staging = self.stable_partial(p)?;
-        // Un staging PRE-EXISTENTE debe ser un fichero regular: si el servidor
-        // lo pre-plantó como symlink (el nombre es determinista), reanudar en
-        // APPEND escribiría en el target fuera de base. Se rechaza (no se puede
-        // usar EXCLUDE: el resume reabre legítimamente un parcial). TOCTOU
-        // documentada, de la misma clase que check_final_absent.
+        // A PRE-EXISTING staging must be a regular file: if the server
+        // pre-planted it as a symlink (the name is deterministic), resuming
+        // in APPEND would write into the target outside base. It is
+        // rejected (EXCLUDE cannot be used: resume legitimately reopens a
+        // partial). Documented TOCTOU, of the same class as
+        // check_final_absent.
         match self.session.symlink_metadata(&staging).await {
             Ok(md) if md.file_type().is_symlink() => {
                 return Err(Error::Conflict {
@@ -521,8 +525,8 @@ impl Provider for SftpProvider {
             }
             _ => {}
         }
-        // Abre (o crea) el staging en APPEND: si había bytes de una copia
-        // previa, se reanuda tras ellos (ADR 0012).
+        // Opens (or creates) the staging in APPEND: if there were bytes from
+        // a previous copy, it resumes after them (ADR 0012).
         let mut file = self
             .session
             .open_with_flags(
@@ -532,9 +536,10 @@ impl Provider for SftpProvider {
             .await
             .map_err(|e| map_err(&e))?;
         let already = file.metadata().await.map_err(|e| map_err(&e))?.len();
-        // El offset de escritura del cliente arranca en 0 aunque el flag sea
-        // APPEND (sftp lleva el offset explícito en cada WRITE): hay que
-        // posicionarlo al final para AÑADIR y no pisar lo ya escrito.
+        // The client's write offset starts at 0 even though the flag is
+        // APPEND (sftp carries the explicit offset in every WRITE): it must
+        // be positioned at the end to APPEND and not overwrite what was
+        // already written.
         if already > 0 {
             file.seek(std::io::SeekFrom::Start(already))
                 .await
@@ -553,8 +558,9 @@ impl Provider for SftpProvider {
 
     async fn mkdir(&self, p: &VPath) -> Result<(), Error> {
         let remote = self.remote(p)?;
-        // v3 devuelve `Failure` genérico si ya existe: se comprueba antes
-        // para dar `Conflict` honesto (el engine lo distingue).
+        // v3 returns a generic `Failure` if it already exists: checked
+        // beforehand to give an honest `Conflict` (the engine distinguishes
+        // it).
         if self.exists(&remote).await? {
             return Err(Error::Conflict {
                 conflict: ConflictKind::Exists,
@@ -566,12 +572,11 @@ impl Provider for SftpProvider {
             .map_err(|e| map_err(&e))
     }
 
-    /// #314: `SSH_FXP_SETSTAT` con SOLO el campo de permisos.
+    /// #314: `SSH_FXP_SETSTAT` with ONLY the permissions field.
     ///
-    /// Los demás campos del atributo van a `None` a propósito: `setstat` fija
-    /// lo que se le manda, así que rellenar tamaño o fechas con lo que se
-    /// hubiera leído antes convertiría un `chmod` en un `touch` con una
-    /// carrera dentro.
+    /// The other attribute fields go to `None` on purpose: `setstat` fixes
+    /// whatever it is sent, so filling size or dates with whatever had been
+    /// read before would turn a `chmod` into a `touch` with a race inside.
     async fn set_mode(&self, p: &VPath, mode: u32) -> Result<(), Error> {
         let remote = self.remote(p)?;
         let attrs = russh_sftp::protocol::FileAttributes {
@@ -597,7 +602,7 @@ impl Provider for SftpProvider {
                 .await
                 .map_err(|e| map_err(&e))
         } else {
-            // remove_file borra archivos Y symlinks (jamás sigue el link).
+            // remove_file deletes files AND symlinks (never follows the link).
             self.session
                 .remove_file(remote)
                 .await
@@ -605,12 +610,12 @@ impl Provider for SftpProvider {
         }
     }
 
-    /// GC de staging huérfano (#11, ADR 0012): barre los `.norte-partial.*`
-    /// de `dir` cuya mtime supera `older_than`, reconocidos por su FORMA
-    /// exacta (`is_norte_partial`) — un archivo real del usuario con el
-    /// prefijo jamás se toca (H2). Los nombres del staging son ASCII por
-    /// construcción: la decodificación lossy de russh-sftp (#37) no puede
-    /// producir un falso positivo (U+FFFD no matchea la forma).
+    /// GC of orphaned staging (#11, ADR 0012): sweeps `dir`'s
+    /// `.norte-partial.*` whose mtime exceeds `older_than`, recognized by
+    /// their exact SHAPE (`is_norte_partial`) — a real user file with the
+    /// prefix is never touched (H2). Staging names are ASCII by
+    /// construction: russh-sftp's lossy decoding (#37) cannot produce a
+    /// false positive (U+FFFD does not match the shape).
     async fn gc_partials(
         &self,
         dir: &VPath,
@@ -632,8 +637,8 @@ impl Provider for SftpProvider {
             if !is_norte_partial(&name) {
                 continue;
             }
-            // Edad por mtime (sftp v3: segundos u32); sin mtime legible se
-            // deja (conservador, como el provider local).
+            // Age by mtime (sftp v3: u32 seconds); left alone when mtime is
+            // not readable (conservative, like the local provider).
             let old = dent
                 .metadata()
                 .mtime
@@ -646,7 +651,7 @@ impl Provider for SftpProvider {
             } else {
                 format!("{parent}/{name}")
             };
-            // Un fallo individual cuenta como no-borrado, sin abortar.
+            // An individual failure counts as not-removed, without aborting.
             if self.session.remove_file(&path).await.is_ok() {
                 removed += 1;
             }
@@ -657,8 +662,9 @@ impl Provider for SftpProvider {
     async fn rename(&self, from: &VPath, to: &VPath) -> Result<(), Error> {
         let from_r = self.remote(from)?;
         let to_r = self.remote(to)?;
-        // v3 rename no garantiza no-replace: se comprueba el destino antes
-        // (ventana TOCTOU documentada) para dar `Conflict`, no pisar.
+        // v3 rename does not guarantee no-replace: the destination is
+        // checked beforehand (documented TOCTOU window) to give `Conflict`,
+        // not overwrite.
         if self.exists(&to_r).await? {
             return Err(Error::Conflict {
                 conflict: ConflictKind::Exists,
@@ -674,23 +680,25 @@ impl Provider for SftpProvider {
         if !self.logical_trash {
             return Err(Error::Unsupported);
         }
-        // Entrada DETERMINISTA a partir del id del engine (#99): un reintento
-        // apunta a la misma `.norte-trash/<id>/`. `plan` valida `p` (rechaza
-        // papelerizar la propia papelera, ADR 0019) y da la raíz.
+        // DETERMINISTIC entry from the engine's id (#99): a retry points at
+        // the same `.norte-trash/<id>/`. `plan` validates `p` (rejects
+        // trashing the trash itself, ADR 0019) and gives the root.
         let paths = trash::plan(p, &id.as_segment())?;
         let trash_root = paths.dir.parent().ok_or(Error::Unsupported)?;
 
-        // Idempotencia: si la víctima ya no está, esta op pudo aplicar en un
-        // intento transitorio anterior. Si nuestro payload determinista existe,
-        // devuélvelo (recupera el `reversal_ref`); si no, es un `NotFound`
-        // genuino (la víctima nunca existió), como `remove`.
+        // Idempotence: if the victim is no longer there, this op may have
+        // applied in a previous, transient attempt. If our deterministic
+        // payload exists, return it (recovers the `reversal_ref`); if not,
+        // it is a genuine `NotFound` (the victim never existed), same as
+        // `remove`.
         match self.stat(p).await {
             Ok(_) => {}
             Err(Error::NotFound) => {
                 return match self.stat(&paths.payload).await {
-                    // Solo se reclama el payload si la `.norte-info` de la
-                    // entrada decodifica a `p` (misma víctima): una entrada
-                    // AJENA con el mismo id NO es nuestra (review rust MAJOR).
+                    // The payload is only claimed if the entry's
+                    // `.norte-info` decodes to `p` (same victim): a
+                    // FOREIGN entry with the same id is NOT ours (review
+                    // rust MAJOR).
                     Ok(_) if self.trash_info_matches(&paths.info, p).await => {
                         Ok(Some(paths.payload))
                     }
@@ -704,15 +712,16 @@ impl Provider for SftpProvider {
             Err(e) => return Err(e),
         }
 
-        // `.norte-trash/` idempotente: bajo concurrencia el `create_dir`
-        // perdedor puede dar `Failure` genérico (→ `Io`) en vez de `Conflict`;
-        // si ya existe, es benigno.
+        // `.norte-trash/` is idempotent: under concurrency the losing
+        // `create_dir` may give a generic `Failure` (→ `Io`) instead of
+        // `Conflict`; if it already exists, it is benign.
         self.ensure_dir_idempotent(&trash_root).await?;
 
-        // La entrada `<id>/`: `Conflict::Exists` es NUESTRO parcial (info
-        // ausente o decodifica a `p`) → sigue; una info AJENA con el mismo id
-        // es colisión REAL (el id es fijo, ya no se regenera) → se propaga sin
-        // pisar sus metadatos ni mezclar el árbol (review rust MAJOR).
+        // The `<id>/` entry: `Conflict::Exists` is OUR partial (info absent
+        // or decodes to `p`) → continues; a FOREIGN info with the same id is
+        // a REAL collision (the id is fixed, it is no longer regenerated) →
+        // propagated without overwriting its metadata nor mixing the tree
+        // (review rust MAJOR).
         match self.mkdir(&paths.dir).await {
             Ok(()) => {}
             Err(Error::Conflict {
@@ -730,32 +739,32 @@ impl Provider for SftpProvider {
             Err(e) => return Err(e),
         }
 
-        // Escribe `.norte-info` ANTES de mover: si el rename falla, el origen
-        // queda intacto y solo hay un info huérfano (basura limpiable), nunca
-        // un payload sin metadatos. `deleted_ms` viene del id (mismo en cada
-        // reintento).
+        // Writes `.norte-info` BEFORE moving: if the rename fails, the
+        // source stays intact and there is only an orphaned info (cleanable
+        // garbage), never a payload without metadata. `deleted_ms` comes
+        // from the id (the same on every retry).
         let info = trash::info_encode(p, id.deleted_ms());
         let mut sink = self.write(&paths.info).await?;
         sink.write(Bytes::from(info)).await?;
         sink.commit().await?;
 
-        // Mueve el árbol entero (un rename del server — ADR 0009,
+        // Moves the whole tree (a single rename by the server — ADR 0009,
         // entries_total = 1).
         self.rename(p, &paths.payload).await?;
-        // Papelera LÓGICA: el payload ES la ruta recuperable → reversal_ref.
+        // LOGICAL trash: the payload IS the recoverable path → reversal_ref.
         Ok(Some(paths.payload))
     }
 
-    /// La papelera lógica elige su destino (`.norte-trash/<id>/payload`), así
-    /// que lo nombra siempre; sin ella no hay papelera que prometer.
+    /// The logical trash chooses its destination (`.norte-trash/<id>/payload`),
+    /// so it always names it; without it there is no trash to promise.
     fn trash_restorable(&self) -> bool {
         self.logical_trash
     }
 
     async fn read_link(&self, p: &VPath) -> Result<Vec<u8>, Error> {
         let remote = self.remote(p)?;
-        // Un no-symlink da TypeMismatch honesto (v3 devuelve Failure
-        // genérico para readlink sobre un archivo normal).
+        // A non-symlink gives an honest TypeMismatch (v3 returns a generic
+        // Failure for readlink on a normal file).
         let md = self
             .session
             .symlink_metadata(&remote)
@@ -766,16 +775,16 @@ impl Provider for SftpProvider {
                 conflict: ConflictKind::TypeMismatch,
             });
         }
-        // Bytes CRUDOS del target (regla 1): el target puede ser `../../`
-        // — es DATO, jamás se resuelve.
+        // RAW target bytes (rule 1): the target may be `../../` — it is
+        // DATA, never resolved.
         let target = self
             .session
             .read_link(remote)
             .await
             .map_err(|e| map_err(&e))?;
-        // russh-sftp decodifica lossy: un target no-UTF8 llega mutilado a
-        // U+FFFD. No se pueden devolver bytes crudos fiables → rechazo limpio
-        // (Hallazgo A / ADR 0013 D2), jamás un target corrupto.
+        // russh-sftp decodes lossily: a non-UTF8 target arrives mangled as
+        // U+FFFD. Reliable raw bytes cannot be returned → clean rejection
+        // (Finding A / ADR 0013 D2), never a corrupt target.
         if target.contains('\u{FFFD}') {
             return Err(Error::InvalidPath);
         }
@@ -784,7 +793,7 @@ impl Provider for SftpProvider {
 
     async fn symlink(&self, link: &VPath, target: &[u8], _kind: SymlinkKind) -> Result<(), Error> {
         let link_r = self.remote(link)?;
-        // El target son bytes crudos; sftp (russh-sftp) exige UTF-8.
+        // The target is raw bytes; sftp (russh-sftp) requires UTF-8.
         let target = std::str::from_utf8(target).map_err(|_| Error::InvalidPath)?;
         if self.exists(&link_r).await? {
             return Err(Error::Conflict {
@@ -798,10 +807,10 @@ impl Provider for SftpProvider {
     }
 
     async fn node_id(&self, p: &VPath, _follow: FollowLinks) -> Result<Option<NodeId>, Error> {
-        // SFTP no expone identidad estable (las FileAttributes no llevan
-        // inodo): el engine degrada a heurística y `Follow` sobre
-        // dir-symlinks responde `Unsupported` — la contención que queremos
-        // (ADR 0013). Se stat-ea igual para propagar NotFound honesto.
+        // SFTP exposes no stable identity (FileAttributes carries no inode):
+        // the engine degrades to a heuristic and `Follow` over dir-symlinks
+        // answers `Unsupported` — the containment we want (ADR 0013). It is
+        // stat-ed anyway to propagate an honest NotFound.
         let remote = self.remote(p)?;
         self.session
             .symlink_metadata(remote)
@@ -812,8 +821,9 @@ impl Provider for SftpProvider {
 }
 
 impl SftpProvider {
-    /// El destino FINAL no debe existir (contrato de `write`/`open_resumable`;
-    /// la política de sobrescritura es del core, no del provider).
+    /// The FINAL destination must not exist (contract of `write`/
+    /// `open_resumable`; the overwrite policy belongs to the core, not the
+    /// provider).
     async fn check_final_absent(&self, remote: &str) -> Result<(), Error> {
         if self.exists(remote).await? {
             return Err(Error::Conflict {
@@ -823,7 +833,7 @@ impl SftpProvider {
         Ok(())
     }
 
-    /// ¿Existe `remote`? (lstat; un symlink cuenta como existente.)
+    /// Does `remote` exist? (lstat; a symlink counts as existing.)
     async fn exists(&self, remote: &str) -> Result<bool, Error> {
         match self.session.symlink_metadata(remote).await {
             Ok(_) => Ok(true),
@@ -835,8 +845,8 @@ impl SftpProvider {
     }
 }
 
-/// Sink de escritura sobre sftp: los bytes van a un staging remoto;
-/// `commit` renombra a final (contrato de [`ByteSink`], ADR 0012).
+/// Write sink over sftp: bytes go to a remote staging file; `commit` renames
+/// to the final path (contract of [`ByteSink`], ADR 0012).
 struct SftpSink {
     session: Arc<SftpSession>,
     file: Option<russh_sftp::client::fs::File>,
@@ -867,10 +877,10 @@ impl ByteSink for SftpSink {
             file.sync_all().await.map_err(|e| map_err(&e))?;
             drop(file);
         }
-        // El destino final no debe existir (create-new): comprobado en
-        // write()/open_resumable; la ventana hasta aquí es TOCTOU (v3 sin
-        // rename atómico) — si aparece algo, Conflict y el staging se
-        // queda para el GC.
+        // The final destination must not exist (create-new): checked in
+        // write()/open_resumable; the window up to here is TOCTOU (v3 has no
+        // atomic rename) — if something appears, Conflict and the staging
+        // stays behind for the GC.
         match self.session.symlink_metadata(&self.final_remote).await {
             Ok(_) => {
                 return Err(Error::Conflict {
@@ -896,8 +906,8 @@ impl ByteSink for SftpSink {
     }
 
     async fn keep(mut self: Box<Self>) -> Result<(), Error> {
-        // Conserva el staging para un open_resumable posterior (ADR 0012):
-        // durabiliza y suelta sin renombrar ni borrar.
+        // Keeps the staging for a later open_resumable (ADR 0012): durably
+        // flushes and releases without renaming or deleting.
         if let Some(file) = self.file.take() {
             let _ = file.sync_all().await;
         }
@@ -905,14 +915,14 @@ impl ByteSink for SftpSink {
     }
 }
 
-/// Productor del stream de lectura, aislado para no arrastrar genéricos al
-/// método del trait.
+/// Producer of the read stream, isolated so as not to drag generics into the
+/// trait method.
 mod read_stream {
     use super::{ByteStream, Bytes, Error, READ_CHUNK, StreamExt};
     use tokio::io::AsyncReadExt;
 
-    /// Stream de chunks desde un `File` sftp abierto (ya posicionado en el
-    /// offset). `len` acota los bytes a entregar (`None` = hasta EOF).
+    /// Stream of chunks from an open sftp `File` (already positioned at the
+    /// offset). `len` bounds the bytes to deliver (`None` = until EOF).
     pub(super) fn sftp_read_stream(
         file: russh_sftp::client::fs::File,
         len: Option<u64>,

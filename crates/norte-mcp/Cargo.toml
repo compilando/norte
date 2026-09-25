@@ -1,6 +1,6 @@
 [package]
 name = "norte-mcp"
-description = "Puente MCP (stdio) → daemon norte: los agentes gestionan archivos a través de norte, bajo policy y journal"
+description = "MCP (stdio) bridge → norte daemon: agents manage files through norte, under policy and journal"
 license = "AGPL-3.0-only"
 version.workspace = true
 edition.workspace = true

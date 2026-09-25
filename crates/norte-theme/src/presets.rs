@@ -1,13 +1,13 @@
-//! Presets embebidos (ADR 0020 D3): temas cuidados que viajan en el binario.
-//! `[ui].theme` acepta uno de estos NOMBRES o una ruta a un `.toml` propio (la
-//! lectura del fichero la hace el frontend; este crate solo parsea).
+//! Embedded presets (ADR 0020 D3): curated themes that travel in the binary.
+//! `[ui].theme` accepts one of these NAMES or a path to a custom `.toml` (the
+//! frontend reads the file; this crate only parses).
 
 use crate::theme::{Theme, ThemeError};
 
-/// Nombre del preset por defecto (el que se aplica sin `[ui].theme`).
+/// Name of the default preset (the one applied without `[ui].theme`).
 pub const DEFAULT_PRESET: &str = "default";
 
-/// `(nombre, fuente TOML)` de cada preset embebido.
+/// `(name, TOML source)` of each embedded preset.
 const PRESETS: &[(&str, &str)] = &[
     ("default", include_str!("../presets/default.toml")),
     (
@@ -16,7 +16,7 @@ const PRESETS: &[(&str, &str)] = &[
     ),
     ("gruvbox-dark", include_str!("../presets/gruvbox-dark.toml")),
     ("nord", include_str!("../presets/nord.toml")),
-    // Claros.
+    // Light ones.
     (
         "gruvbox-light",
         include_str!("../presets/gruvbox-light.toml"),
@@ -25,13 +25,13 @@ const PRESETS: &[(&str, &str)] = &[
         "catppuccin-latte",
         include_str!("../presets/catppuccin-latte.toml"),
     ),
-    // VSCode (spec 2026-09-11): transcripciones de Dark/Light Modern, con los
-    // valores por defecto del registro de colores del editor para los ids que
-    // NINGÚN fichero de la cadena `include` define. Cada fichero lleva en su
-    // cabecera de dónde sale cada rol y en qué diverge.
+    // VSCode (spec 2026-09-11): transcriptions of Dark/Light Modern, with the
+    // editor color registry's default values for the ids that NO file in the
+    // `include` chain defines. Each file states in its header where each role
+    // comes from and where it diverges.
     ("vscode-dark", include_str!("../presets/vscode-dark.toml")),
     ("vscode-light", include_str!("../presets/vscode-light.toml")),
-    // Retro (G1): [effects] interpretados por la GUI (ADR 0036).
+    // Retro (G1): [effects] interpreted by the GUI (ADR 0036).
     ("retro-crt", include_str!("../presets/retro-crt.toml")),
     (
         "retro-crt-amber",
@@ -39,13 +39,13 @@ const PRESETS: &[(&str, &str)] = &[
     ),
 ];
 
-/// Nombres de todos los presets embebidos (para autocompletar / validar).
+/// Names of all embedded presets (for autocompletion / validation).
 #[must_use]
 pub fn preset_names() -> Vec<&'static str> {
     PRESETS.iter().map(|(n, _)| *n).collect()
 }
 
-/// La fuente TOML cruda de un preset, si existe con ese nombre.
+/// The raw TOML source of a preset, if one exists with that name.
 #[must_use]
 pub fn preset_source(name: &str) -> Option<&'static str> {
     PRESETS
@@ -55,14 +55,14 @@ pub fn preset_source(name: &str) -> Option<&'static str> {
 }
 
 impl Theme {
-    /// Carga un preset embebido por nombre.
+    /// Loads an embedded preset by name.
     ///
     /// # Errors
-    /// [`ThemeError::Toml`] jamás en la práctica (los presets se testean); es
-    /// un `Result` por coherencia con [`Theme::from_toml`].
+    /// [`ThemeError::Toml`] never in practice (the presets are tested); it is
+    /// a `Result` for consistency with [`Theme::from_toml`].
     ///
-    /// Devuelve `Ok(None)` si el nombre no es un preset conocido (el caller lo
-    /// trata como ruta de fichero).
+    /// Returns `Ok(None)` if the name is not a known preset (the caller treats
+    /// it as a file path).
     pub fn preset(name: &str) -> Result<Option<Theme>, ThemeError> {
         match preset_source(name) {
             Some(src) => Theme::from_toml(src).map(Some),
@@ -70,13 +70,13 @@ impl Theme {
         }
     }
 
-    /// El tema por defecto (`default`), garantizado presente.
+    /// The default theme (`default`), guaranteed present.
     ///
     /// # Panics
-    /// Nunca: el preset `default` está embebido y se testea que parsea.
+    /// Never: the `default` preset is embedded and tested to parse.
     #[must_use]
     pub fn preset_default() -> Theme {
-        Theme::from_toml(preset_source(DEFAULT_PRESET).expect("preset default embebido"))
-            .expect("preset default parsea")
+        Theme::from_toml(preset_source(DEFAULT_PRESET).expect("default preset embedded"))
+            .expect("default preset parses")
     }
 }

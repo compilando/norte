@@ -1,5 +1,5 @@
-//! [`Theme`]: un conjunto de [`Style`]s por [`Role`], más una capa de efectos
-//! OPACA reservada a la GPU de la GUI (ADR 0020 D4). Se parsea desde TOML.
+//! [`Theme`]: a set of [`Style`]s per [`Role`], plus an OPAQUE effects layer
+//! reserved for the GUI's GPU (ADR 0020 D4). Parsed from TOML.
 
 use std::collections::HashMap;
 
@@ -9,75 +9,75 @@ use crate::files::{FileColors, FileKind};
 use crate::role::Role;
 use crate::style::Style;
 
-/// Un tema completo. Los roles ausentes heredan su
-/// [`fallback`](Role::fallback), así que un tema parcial SIEMPRE resuelve.
+/// A complete theme. Absent roles inherit their
+/// [`fallback`](Role::fallback), so a partial theme ALWAYS resolves.
 ///
-/// Deliberadamente TOLERANTE a claves desconocidas de nivel superior (no
-/// `deny_unknown_fields`): así un tema con secciones de una versión más nueva
-/// (p. ej. `[effects]` de la GUI, o `[files]`) no rompe un parser viejo.
+/// Deliberately TOLERANT of unknown top-level keys (no
+/// `deny_unknown_fields`): that way a theme with sections from a newer version
+/// (e.g. the GUI's `[effects]`, or `[files]`) does not break an old parser.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct Theme {
-    /// Nombre legible del tema (informativo).
+    /// Human-readable theme name (informative).
     #[serde(default)]
     pub name: Option<String>,
-    /// Estilos explícitos por rol; lo que falte cae al fallback.
+    /// Explicit styles per role; whatever is missing falls back.
     #[serde(default)]
     pub roles: HashMap<Role, Style>,
-    /// Colores por tipo de archivo (`[files.kind]` / `[files.ext]`).
+    /// Colors by file type (`[files.kind]` / `[files.ext]`).
     #[serde(default)]
     pub files: FileColors,
-    /// Efectos de GPU (gradientes, glow, animación…): OPACOS. Un frontend de
-    /// terminal los IGNORA; la GUI de M5 los interpretará (ADR 0020 D4). Se
-    /// guardan sin tipar para no romper temas cuando M5 defina el esquema.
+    /// GPU effects (gradients, glow, animation…): OPAQUE. A terminal
+    /// frontend IGNORES them; the M5 GUI will interpret them (ADR 0020 D4). They are
+    /// stored untyped so themes do not break when M5 defines the schema.
     #[serde(default)]
     pub effects: Option<toml::Value>,
 }
 
-/// Error al cargar un tema.
+/// Error loading a theme.
 #[derive(Debug, thiserror::Error)]
 pub enum ThemeError {
-    /// El TOML no parsea.
-    #[error("tema TOML inválido: {0}")]
+    /// The TOML does not parse.
+    #[error("invalid TOML theme: {0}")]
     Toml(#[from] toml::de::Error),
 }
 
 impl Theme {
-    /// Parsea un tema desde su fuente TOML.
+    /// Parses a theme from its TOML source.
     ///
     /// # Errors
-    /// [`ThemeError::Toml`] si el TOML no es válido.
+    /// [`ThemeError::Toml`] if the TOML is not valid.
     pub fn from_toml(src: &str) -> Result<Self, ThemeError> {
         Ok(toml::from_str(src)?)
     }
 
-    /// Escribe el tema como TOML que [`Theme::from_toml`] vuelve a leer igual.
+    /// Writes the theme as TOML that [`Theme::from_toml`] reads back identically.
     ///
-    /// La salida es DETERMINISTA —roles en el orden de [`Role::ALL`], clases
-    /// en el de [`FileKind::ALL`], extensiones alfabéticas— y con tablas en
-    /// línea, una por rol: es un fichero que alguien va a abrir y retocar a
-    /// mano, así que se escribe como se escriben los presets, no como lo
-    /// dejaría un serializador genérico con una sección por rol.
+    /// The output is DETERMINISTIC —roles in [`Role::ALL`] order, classes
+    /// in [`FileKind::ALL`] order, extensions alphabetical— and uses inline
+    /// tables, one per role: it is a file someone will open and tweak by
+    /// hand, so it is written the way the presets are written, not the way
+    /// a generic serializer would leave it with one section per role.
     ///
     /// ```
     /// use norte_theme::{Role, Theme};
     /// let nord = Theme::preset("nord").unwrap().unwrap();
-    /// let vuelta = Theme::from_toml(&nord.to_toml()).unwrap();
-    /// assert_eq!(vuelta.style(Role::Selection), nord.style(Role::Selection));
+    /// let reread = Theme::from_toml(&nord.to_toml()).unwrap();
+    /// assert_eq!(reread.style(Role::Selection), nord.style(Role::Selection));
     /// ```
     #[must_use]
     pub fn to_toml(&self) -> String {
         use std::fmt::Write as _;
-        // Escribir en un `String` no falla: los `let _ =` de abajo descartan
-        // un `Result` que siempre es `Ok`.
+        // Writing to a `String` does not fail: the `let _ =` below discard
+        // a `Result` that is always `Ok`.
         let mut out = String::new();
         if let Some(name) = &self.name {
             let _ = writeln!(out, "name = {}", toml::Value::from(name.as_str()));
         }
-        // `[effects]` va justo detrás del nombre: sea tabla o clave suelta,
-        // ahí es válido, y una clave suelta DETRÁS de una sección cambiaría
-        // de dueño. `toml::to_string` de una tabla con un solo `Value` que
-        // vino de parsear TOML no puede fallar; si fallara, el tema perdería
-        // sus efectos y no el resto.
+        // `[effects]` goes right after the name: table or bare key,
+        // it is valid there, and a bare key AFTER a section would change
+        // owner. `toml::to_string` of a table with a single `Value` that
+        // came from parsing TOML cannot fail; if it did, the theme would lose
+        // its effects and not the rest.
         if let Some(v) = &self.effects {
             let mut t = toml::Table::new();
             t.insert("effects".to_owned(), v.clone());
@@ -89,17 +89,17 @@ impl Theme {
             out.push_str("\n[roles]\n");
             for role in Role::ALL {
                 if let Some(s) = self.roles.get(role) {
-                    let _ = writeln!(out, "{} = {}", role.as_kebab(), estilo_en_linea(*s));
+                    let _ = writeln!(out, "{} = {}", role.as_kebab(), inline_style(*s));
                 }
             }
         }
         if !self.files.kind.is_empty() {
             out.push_str("\n[files.kind]\n");
-            // `regular` no está en `ALL` (no es una clase que un preset deba
-            // colorear), pero un tema PUEDE traerlo y `style_for` lo lee.
+            // `regular` is not in `ALL` (it is not a class a preset should
+            // color), but a theme MAY carry it and `style_for` reads it.
             for kind in FileKind::ALL.iter().chain([&FileKind::Regular]) {
                 if let Some(s) = self.files.kind.get(kind) {
-                    let _ = writeln!(out, "{} = {}", kind.as_kebab(), estilo_en_linea(*s));
+                    let _ = writeln!(out, "{} = {}", kind.as_kebab(), inline_style(*s));
                 }
             }
         }
@@ -108,24 +108,24 @@ impl Theme {
             let mut exts: Vec<_> = self.files.ext.iter().collect();
             exts.sort_by(|a, b| a.0.cmp(b.0));
             for (ext, s) in exts {
-                let _ = writeln!(out, "{} = {}", clave(ext), estilo_en_linea(*s));
+                let _ = writeln!(out, "{} = {}", toml_key(ext), inline_style(*s));
             }
         }
         out
     }
 
-    /// El [`Style`] efectivo de un rol: el del tema si lo define, o su
-    /// [`fallback`](Role::fallback) monocromo. Un rol EXPLÍCITO del tema
-    /// REEMPLAZA al fallback entero (el autor toma control total del rol), no
-    /// se mezcla — así `selection = { bg = "…" }` da fondo sin heredar el
-    /// `reverse` del fallback.
+    /// The effective [`Style`] of a role: the theme's if it defines one, or its
+    /// monochrome [`fallback`](Role::fallback). An EXPLICIT theme role
+    /// REPLACES the whole fallback (the author takes full control of the role), it is
+    /// not merged — so `selection = { bg = "…" }` gives a background without inheriting
+    /// the fallback's `reverse`.
     #[must_use]
     pub fn style(&self, role: Role) -> Style {
         self.roles.get(&role).copied().unwrap_or(role.fallback())
     }
 
-    /// El [`Style`] de una ENTRADA de fichero `name` (bytes, regla 1) de tipo
-    /// `kind` (ADR 0020 D2). Prioridad: extensión > kind > rol `regular`.
+    /// The [`Style`] of a file ENTRY `name` (bytes, rule 1) of type
+    /// `kind` (ADR 0020 D2). Priority: extension > kind > `regular` role.
     #[must_use]
     pub fn file_style(&self, name: &[u8], kind: FileKind) -> Style {
         self.files
@@ -133,34 +133,34 @@ impl Theme {
             .unwrap_or_else(|| self.style(Role::Regular))
     }
 
-    /// `true` si el tema tiene efectos declarados (los ignora un frontend de
-    /// terminal; útil para que la GUI decida si activar el render de GPU).
+    /// `true` if the theme has declared effects (a terminal frontend ignores
+    /// them; useful for the GUI to decide whether to enable GPU rendering).
     #[must_use]
     pub fn has_effects(&self) -> bool {
         self.effects.is_some()
     }
 
-    /// Los nombres de los efectos declarados, si el bloque es una tabla.
+    /// The names of the declared effects, if the block is a table.
     ///
-    /// El bloque `[effects]` es LIBRE a propósito (ADR 0036): lo interpreta
-    /// cada renderer, y este crate no sabe qué significa ninguno. Lo que sí
-    /// puede decir es cómo se llaman, que es lo que un frontend necesita para
-    /// enumerar los que NO sabe pintar — un tema retro que se ve idéntico se
-    /// lee como roto, así que la degradación tiene que ser visible.
+    /// The `[effects]` block is FREE-FORM on purpose (ADR 0036): each
+    /// renderer interprets it, and this crate does not know what any of them means. What it
+    /// can say is what they are called, which is what a frontend needs to
+    /// list the ones it CANNOT paint — a retro theme that looks identical
+    /// reads as broken, so the degradation has to be visible.
     ///
-    /// `None` = no hay bloque, o no es una tabla. Las dos son «no hay nada
-    /// que nombrar» y no se distinguen a propósito: un `[effects]` que no es
-    /// una tabla es un tema mal escrito, no una lista vacía de efectos.
+    /// `None` = there is no block, or it is not a table. Both are "nothing
+    /// to name" and are not distinguished on purpose: an `[effects]` that is not
+    /// a table is a badly written theme, not an empty list of effects.
     ///
     /// ```
     /// use norte_theme::Theme;
     ///
-    /// // El tema de fábrica declara uno: el desenfoque de los diálogos de
-    /// // la ventana (spec 2026-09-11, V6). El terminal lo ignora.
+    /// // The factory theme declares one: the window's dialog backdrop
+    /// // blur (spec 2026-09-11, V6). The terminal ignores it.
     /// let t = Theme::preset_default();
     /// assert_eq!(t.effect_names().as_deref(), Some(&["backdrop".to_owned()][..]));
     ///
-    /// // Uno que no declara ninguno no tiene nada que nombrar.
+    /// // One that declares none has nothing to name.
     /// let nord = Theme::preset("nord").unwrap().unwrap();
     /// assert!(nord.effect_names().is_none());
     /// ```
@@ -172,8 +172,8 @@ impl Theme {
         }
     }
 
-    /// El valor de UN efecto, si es una cadena (`[effects] backdrop =
-    /// "blur"`). Para el frontend que lo interprete sin depender de `toml`.
+    /// The value of ONE effect, if it is a string (`[effects] backdrop =
+    /// "blur"`). For the frontend that interprets it without depending on `toml`.
     #[must_use]
     pub fn effect_str(&self, key: &str) -> Option<&str> {
         match self.effects.as_ref()? {
@@ -183,43 +183,43 @@ impl Theme {
     }
 }
 
-/// `{ fg = "#…", bg = "#…", bold = true }`, con solo lo que el estilo tiene.
-fn estilo_en_linea(s: Style) -> String {
-    let mut partes = Vec::new();
+/// `{ fg = "#…", bg = "#…", bold = true }`, with only what the style has.
+fn inline_style(s: Style) -> String {
+    let mut parts = Vec::new();
     if let Some(fg) = s.fg {
-        partes.push(format!("fg = \"{}\"", fg.to_hex()));
+        parts.push(format!("fg = \"{}\"", fg.to_hex()));
     }
     if let Some(bg) = s.bg {
-        partes.push(format!("bg = \"{}\"", bg.to_hex()));
+        parts.push(format!("bg = \"{}\"", bg.to_hex()));
     }
-    for (activo, nombre) in [
+    for (on, name) in [
         (s.bold, "bold"),
         (s.dim, "dim"),
         (s.italic, "italic"),
         (s.underline, "underline"),
         (s.reverse, "reverse"),
     ] {
-        if activo {
-            partes.push(format!("{nombre} = true"));
+        if on {
+            parts.push(format!("{name} = true"));
         }
     }
-    if partes.is_empty() {
+    if parts.is_empty() {
         "{}".to_owned()
     } else {
-        format!("{{ {} }}", partes.join(", "))
+        format!("{{ {} }}", parts.join(", "))
     }
 }
 
-/// Una clave TOML: desnuda si puede, entre comillas si no.
-fn clave(k: &str) -> String {
+/// A TOML key: bare if possible, quoted otherwise.
+fn toml_key(k: &str) -> String {
     if !k.is_empty()
         && k.chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
     {
         k.to_owned()
     } else {
-        // A mano: el escritor de `toml` elige una cadena de TRIPLE comilla
-        // cuando el texto lleva un salto de línea, y eso no vale como clave.
+        // By hand: the `toml` writer picks a TRIPLE-quoted string
+        // when the text has a line break, and that is not valid as a key.
         let mut out = String::from("\"");
         for c in k.chars() {
             match c {
@@ -241,15 +241,15 @@ fn clave(k: &str) -> String {
 mod tests {
     use super::*;
 
-    /// Cada preset hace ida y vuelta por `to_toml` sin perder nada: roles,
-    /// clases, extensiones, nombre y efectos.
+    /// Every preset round-trips through `to_toml` without losing anything: roles,
+    /// classes, extensions, name and effects.
     #[test]
-    fn to_toml_ida_y_vuelta_en_cada_preset() {
+    fn to_toml_round_trips_every_preset() {
         for name in crate::preset_names() {
             let t = Theme::preset(name).unwrap().unwrap();
-            let escrito = t.to_toml();
-            let v = Theme::from_toml(&escrito)
-                .unwrap_or_else(|e| panic!("[{name}] no relee: {e}\n{escrito}"));
+            let written = t.to_toml();
+            let v = Theme::from_toml(&written)
+                .unwrap_or_else(|e| panic!("[{name}] does not reread: {e}\n{written}"));
             assert_eq!(v.name, t.name, "[{name}]");
             assert_eq!(v.roles, t.roles, "[{name}]");
             assert_eq!(v.files.kind, t.files.kind, "[{name}]");
@@ -258,10 +258,10 @@ mod tests {
         }
     }
 
-    /// Un nombre con comillas o saltos, una extensión que no es clave desnuda
-    /// y un `[effects]` que no es tabla: lo que un serializador a mano rompe.
+    /// A name with quotes or line breaks, an extension that is not a bare key
+    /// and an `[effects]` that is not a table: what a hand-written serializer breaks.
     #[test]
-    fn to_toml_escapa_lo_raro() {
+    fn to_toml_escapes_the_odd_cases() {
         let mut t = Theme {
             name: Some("dice \"hola\"\ny adiós".to_owned()),
             ..Theme::default()
@@ -274,8 +274,8 @@ mod tests {
             Style::new().fg(crate::Color::rgb(1, 2, 3)),
         );
         t.roles.insert(Role::Mark, Style::new());
-        t.effects = Some(toml::Value::from("suelto"));
-        let v = Theme::from_toml(&t.to_toml()).expect("relee");
+        t.effects = Some(toml::Value::from("loose"));
+        let v = Theme::from_toml(&t.to_toml()).expect("rereads");
         assert_eq!(v.name, t.name);
         assert_eq!(v.files.ext, t.files.ext);
         assert_eq!(v.files.kind, t.files.kind);

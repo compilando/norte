@@ -1,5 +1,5 @@
-// Pintores de `Screen` para menus (ola W10): funciones con `this: Screen`,
-// enganchadas como propiedades en `render.ts`. El estado sigue en la clase.
+// `Screen` painters for menus (wave W10): functions with `this: Screen`,
+// hooked in as properties in `render.ts`. State stays in the class.
 
 import type { Screen } from "../render";
 import type {
@@ -15,411 +15,413 @@ import type {
   WhichKeyView,
   WindowVerb,
 } from "../types";
-import { badge, colVar, revelar, sinCambios } from "./dom";
+import { badge, colVar, revealInView, unchanged } from "./dom";
 import type { SlotDom } from "./dom";
-import { cifraDeInsignia, icono as iconoDePanel } from "./iconos";
-import { hacerArrastrable } from "./mover";
+import { badgeCount, icon as panelIcon } from "./icons";
+import { makeDraggable } from "./move";
 
 /**
- * La barra de paneles (#324): un botón por panel que se abre y se cierra,
- * con su estado y su marca de novedad.
+ * The panel bar (#324): one button per panel that opens and closes, with its
+ * state and its novelty mark.
  *
- * Los botones vienen DECIDIDOS del host —qué hay, en qué orden, con qué
- * letra— porque la decisión es de `norte-frontend` y la TUI pinta la
- * misma (ADR 0077). Aquí solo se pintan y se pulsan; un click vuelve como
- * el índice del botón, nunca como un comando (ADR 0069).
+ * The buttons come DECIDED by the host — what there is, in what order, with
+ * what letter — because the decision belongs to `norte-frontend` and the TUI
+ * paints the same one (ADR 0077). Here they are only painted and clicked; a
+ * click comes back as the button's index, never as a command (ADR 0069).
  *
- * Reserva su sitio igual que la barra de menús: el host reparte sobre lo
- * que este renderer declara, y una barra flotante taparía la primera fila
- * —o la primera columna— del listado.
+ * Reserves its spot the same way the menu bar does: the host lays things out
+ * over what this renderer declares, and a floating bar would cover the
+ * listing's first row — or its first column.
  *
- * Dos formas (puente 84, `[ui] panel_bar_position`): la FILA bajo el menú,
- * con letra y nombre como en la TUI, o la COLUMNA del borde izquierdo, la
- * barra de actividad de VS Code, con un icono por panel y la cifra de sus
- * novedades. Cuál toca lo decide el host; aquí solo se reserva el alto o
- * el ancho que corresponda.
+ * Two shapes (bridge 84, `[ui] panel_bar_position`): the ROW under the menu,
+ * with letter and name as in the TUI, or the COLUMN on the left edge, VS
+ * Code's activity bar, with an icon per panel and its novelty count. Which
+ * one applies is decided by the host; here only the matching height or width
+ * is reserved.
  */
 export function paintPanelBar(this: Screen, bar: PanelBarView): void {
-  const columna = bar.bar && bar.vertical === true;
-  const alto = bar.bar && !columna ? "var(--cell-h)" : "0px";
-  const ancho = columna ? "var(--activity-size)" : "0px";
-  if (this.panelBarHeight !== alto || this.activityWidth !== ancho) {
-    document.documentElement.style.setProperty("--panelbar-h", alto);
-    document.documentElement.style.setProperty("--activity-w", ancho);
-    this.panelBarHeight = alto;
-    this.activityWidth = ancho;
-    this.viewportSucio = true;
+  const column = bar.bar && bar.vertical === true;
+  const height = bar.bar && !column ? "var(--cell-h)" : "0px";
+  const width = column ? "var(--activity-size)" : "0px";
+  if (this.panelBarHeight !== height || this.activityWidth !== width) {
+    document.documentElement.style.setProperty("--panelbar-h", height);
+    document.documentElement.style.setProperty("--activity-w", width);
+    this.panelBarHeight = height;
+    this.activityWidth = width;
+    this.viewportDirty = true;
   }
-  if (sinCambios(this.panelBarRoot, JSON.stringify(bar))) {
+  if (unchanged(this.panelBarRoot, JSON.stringify(bar))) {
     return;
   }
   if (!bar.bar) {
     this.panelBarRoot.replaceChildren();
     return;
   }
-  const fila = document.createElement("nav");
-  fila.className = "panelbar";
-  fila.setAttribute("role", "toolbar");
-  fila.setAttribute("aria-label", this.t("panelbar-label"));
-  fila.setAttribute("aria-orientation", columna ? "vertical" : "horizontal");
-  fila.dataset["vertical"] = String(columna);
-  // `[ui] panel_bar_style`: con nombres o solo con la letra. El nombre
-  // sigue en el título del botón en los dos casos.
-  fila.dataset["names"] = String(bar.names !== false);
+  const row = document.createElement("nav");
+  row.className = "panelbar";
+  row.setAttribute("role", "toolbar");
+  row.setAttribute("aria-label", this.t("panelbar-label"));
+  row.setAttribute("aria-orientation", column ? "vertical" : "horizontal");
+  row.dataset["vertical"] = String(column);
+  // `[ui] panel_bar_style`: with names or just the letter. The name stays in
+  // the button's title either way.
+  row.dataset["names"] = String(bar.names !== false);
   for (const [i, b] of bar.buttons.entries()) {
-    const boton = document.createElement("button");
-    boton.type = "button";
-    boton.className = "panelbar-button";
-    boton.dataset["kind"] = b.kind;
-    boton.dataset["state"] = b.state;
-    // `aria-pressed` es lo que un lector de pantalla entiende por «este
-    // panel está abierto»; el foco del teclado va aparte, en el estado.
-    boton.setAttribute("aria-pressed", String(b.state !== "closed"));
-    boton.title = b.chord === "—" ? b.label : `${b.label} (${b.chord})`;
-    const icono = columna ? iconoDePanel(document, b.kind) : null;
-    if (icono !== null) {
-      // En columna no hay texto visible: el nombre va en la etiqueta, que
-      // es lo que oye un lector de pantalla, y en el título al pasar.
-      boton.setAttribute("aria-label", b.label);
-      boton.append(icono);
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "panelbar-button";
+    button.dataset["kind"] = b.kind;
+    button.dataset["state"] = b.state;
+    // `aria-pressed` is what a screen reader understands as "this panel is
+    // open"; keyboard focus is separate, in the state.
+    button.setAttribute("aria-pressed", String(b.state !== "closed"));
+    button.title = b.chord === "—" ? b.label : `${b.label} (${b.chord})`;
+    const icon = column ? panelIcon(document, b.kind) : null;
+    if (icon !== null) {
+      // In column mode there is no visible text: the name goes in the label,
+      // which is what a screen reader hears, and in the title on hover.
+      button.setAttribute("aria-label", b.label);
+      button.append(icon);
     } else {
-      const letra = document.createElement("span");
-      letra.className = "panelbar-letter";
-      letra.textContent = b.letter;
-      boton.append(letra);
-      if (columna) {
-        boton.setAttribute("aria-label", b.label);
+      const letter = document.createElement("span");
+      letter.className = "panelbar-letter";
+      letter.textContent = b.letter;
+      button.append(letter);
+      if (column) {
+        button.setAttribute("aria-label", b.label);
       } else {
-        const nombre = document.createElement("span");
-        nombre.className = "panelbar-name";
-        nombre.textContent = b.label;
-        boton.append(nombre);
+        const name = document.createElement("span");
+        name.className = "panelbar-name";
+        name.textContent = b.label;
+        button.append(name);
       }
     }
     if (b.attention) {
-      // La marca es un span APARTE y el botón conserva el estilo de su
-      // estado: pintarlo entero de aviso le quitaría al lector la
-      // respuesta a «¿a dónde van mis teclas?» justo cuando más la busca.
-      // Con cifra si el host la manda; un host anterior solo dice «algo».
-      const marca = document.createElement("span");
-      marca.className = "panelbar-attention";
+      // The mark is a SEPARATE span and the button keeps its state's style:
+      // painting it whole as a warning would take away the reader's answer
+      // to "where do my keys go?" right when they need it most. With a
+      // count if the host sends one; an older host only says "something".
+      const mark = document.createElement("span");
+      mark.className = "panelbar-attention";
       const n = b.count ?? 0;
-      marca.textContent = n > 0 ? cifraDeInsignia(n) : "·";
-      marca.setAttribute(
+      mark.textContent = n > 0 ? badgeCount(n) : "·";
+      mark.setAttribute(
         "aria-label",
         n > 0
           ? `${this.t("panelbar-attention")}: ${String(n)}`
           : this.t("panelbar-attention"),
       );
-      boton.append(marca);
+      button.append(mark);
     }
-    boton.addEventListener("click", () => {
+    button.addEventListener("click", () => {
       this.send({ action: "panel_bar_activate", button: i });
     });
-    fila.append(boton);
+    row.append(button);
   }
-  this.panelBarRoot.replaceChildren(fila);
+  this.panelBarRoot.replaceChildren(row);
 }
 
 /**
- * El asistente de primer arranque (puente 63): el título del paso, la
- * pregunta, las filas con el cursor y la línea de teclas. Todo llega ya
- * traducido; un click en una fila la elige y la confirma. Su raíz se busca
- * por id y, si el documento no la trae, se crea al final del cuerpo: es un
- * velo a pantalla completa, y el orden del documento no le importa.
+ * The first-run wizard (bridge 63): the step's title, the question, the rows
+ * with the cursor, and the key line. Everything arrives already translated;
+ * a click on a row chooses it and confirms it. Its root is looked up by id
+ * and, if the document does not have it, created at the end of the body: it
+ * is a full-screen veil, and document order does not matter to it.
  */
 export function paintWizard(this: Screen, wizard: WizardView | null): void {
   const doc = this.root.ownerDocument;
-  let raiz = doc.getElementById("wizard");
-  if (raiz === null) {
-    raiz = doc.createElement("div");
-    raiz.id = "wizard";
-    doc.body.append(raiz);
+  let root = doc.getElementById("wizard");
+  if (root === null) {
+    root = doc.createElement("div");
+    root.id = "wizard";
+    doc.body.append(root);
   }
   if (wizard === null) {
-    raiz.replaceChildren();
-    raiz.dataset["open"] = "false";
+    root.replaceChildren();
+    root.dataset["open"] = "false";
     return;
   }
-  raiz.dataset["open"] = "true";
-  const caja = doc.createElement("section");
-  caja.className = "wizard";
-  caja.setAttribute("role", "dialog");
-  caja.setAttribute("aria-modal", "true");
-  caja.setAttribute("aria-label", wizard.title);
-  const titulo = doc.createElement("h2");
-  titulo.className = "wizard-title";
-  titulo.textContent = wizard.title;
-  const pregunta = doc.createElement("p");
-  pregunta.className = "wizard-question";
-  pregunta.textContent = wizard.question;
-  const lista = doc.createElement("ul");
-  lista.className = "wizard-rows";
-  lista.setAttribute("role", "listbox");
-  for (const [i, texto] of wizard.rows.entries()) {
-    const fila = doc.createElement("li");
-    fila.className = "wizard-row";
-    fila.id = `wizard-row-${String(i)}`;
-    fila.setAttribute("role", "option");
-    fila.setAttribute("aria-selected", String(wizard.cursor === i));
-    fila.textContent = texto;
-    fila.addEventListener("click", () => {
+  root.dataset["open"] = "true";
+  const box = doc.createElement("section");
+  box.className = "wizard";
+  box.setAttribute("role", "dialog");
+  box.setAttribute("aria-modal", "true");
+  box.setAttribute("aria-label", wizard.title);
+  const title = doc.createElement("h2");
+  title.className = "wizard-title";
+  title.textContent = wizard.title;
+  const question = doc.createElement("p");
+  question.className = "wizard-question";
+  question.textContent = wizard.question;
+  const list = doc.createElement("ul");
+  list.className = "wizard-rows";
+  list.setAttribute("role", "listbox");
+  for (const [i, text] of wizard.rows.entries()) {
+    const row = doc.createElement("li");
+    row.className = "wizard-row";
+    row.id = `wizard-row-${String(i)}`;
+    row.setAttribute("role", "option");
+    row.setAttribute("aria-selected", String(wizard.cursor === i));
+    row.textContent = text;
+    row.addEventListener("click", () => {
       this.send({ action: "wizard_activate_row", row: i });
     });
-    lista.append(fila);
+    list.append(row);
   }
-  lista.setAttribute("aria-activedescendant", `wizard-row-${String(wizard.cursor)}`);
-  const pista = doc.createElement("p");
-  pista.className = "wizard-hint";
-  pista.textContent = wizard.hint;
-  caja.append(titulo, pregunta, lista, pista);
-  raiz.replaceChildren(caja);
+  list.setAttribute("aria-activedescendant", `wizard-row-${String(wizard.cursor)}`);
+  const hint = doc.createElement("p");
+  hint.className = "wizard-hint";
+  hint.textContent = wizard.hint;
+  box.append(title, question, list, hint);
+  root.replaceChildren(box);
 }
 
-/** Los tres botones de la ventana, en el orden del escritorio. */
-const VERBOS_DE_VENTANA = [
+/** The window's three buttons, in desktop order. */
+const WINDOW_VERBS = [
   ["minimize", "window-minimize"],
   ["toggle_maximize", "window-maximize"],
   ["close", "window-close"],
 ] as const;
 
 /**
- * La barra de menús como barra de TÍTULO (ADR 0136): el hueco libre
- * arrastra la ventana, un doble clic la maximiza, y al final van minimizar,
- * maximizar y cerrar.
+ * The menu bar as the TITLE bar (ADR 0136): the free space drags the window,
+ * a double click maximizes it, and at the end come minimize, maximize and
+ * close.
  *
- * Solo el hueco de la propia barra arrastra: empezar a arrastrar sobre un
- * título de menú o un botón se comería su clic. Nada de esto pasa por el
- * host — no es estado de pantalla — sino por `window_control`, un comando
- * del binario con un verbo cerrado; la capacidad de la webview sigue sin
- * permisos de ventana (D11).
+ * Only the bar's own free space drags: starting a drag over a menu title or
+ * a button would eat its click. None of this goes through the host — it is
+ * not screen state — but through `window_control`, a binary command with a
+ * closed verb; the webview's capability still carries no window permissions
+ * (D11).
  */
-function barraDeTitulo(this: Screen, barra: HTMLElement, hayAcciones: boolean): void {
-  montarBarraDeTitulo(
-    barra,
+function titleBar(this: Screen, bar: HTMLElement, hasActions: boolean): void {
+  mountTitleBar(
+    bar,
     (k) => this.t(k),
     (v) => {
       this.windowControl(v);
     },
-    hayAcciones,
+    hasActions,
   );
 }
 
 /**
- * Lo mismo sin `Screen`: el arrastre del hueco libre y los tres botones,
- * sobre `barra`. Aparte porque la pantalla de error FATAL también la
- * necesita — tapa la barra de menús, y sin la del escritorio una ventana
- * con el daemon muerto no se podría ni mover ni cerrar con el ratón.
+ * The same thing without `Screen`: the free space's drag and the three
+ * buttons, over `bar`. Kept separate because the FATAL error screen also
+ * needs it — it covers the menu bar, and without the desktop's, a window
+ * with a dead daemon could not be moved nor closed with the mouse.
  */
-export function montarBarraDeTitulo(
-  barra: HTMLElement,
-  t: (clave: string) => string,
-  pedir: (verbo: WindowVerb) => void,
-  hayAcciones: boolean,
+export function mountTitleBar(
+  bar: HTMLElement,
+  t: (key: string) => string,
+  ask: (verb: WindowVerb) => void,
+  hasActions: boolean,
 ): void {
-  const doc = barra.ownerDocument;
-  barra.dataset["titlebar"] = "true";
-  barra.addEventListener("mousedown", (e) => {
-    if (e.button === 0 && e.target === barra && e.detail === 1) {
-      pedir("drag");
+  const doc = bar.ownerDocument;
+  bar.dataset["titlebar"] = "true";
+  bar.addEventListener("mousedown", (e) => {
+    if (e.button === 0 && e.target === bar && e.detail === 1) {
+      ask("drag");
     }
   });
-  barra.addEventListener("dblclick", (e) => {
-    if (e.target === barra) {
-      pedir("toggle_maximize");
+  bar.addEventListener("dblclick", (e) => {
+    if (e.target === bar) {
+      ask("toggle_maximize");
     }
   });
-  const ventana = doc.createElement("div");
-  ventana.className = "window-controls";
-  // Sin botones de disposición nada empuja los de la ventana al borde.
-  ventana.dataset["alone"] = String(!hayAcciones);
-  ventana.setAttribute("role", "toolbar");
-  ventana.setAttribute("aria-label", t("window-controls-label"));
-  for (const [verbo, clave] of VERBOS_DE_VENTANA) {
-    const boton = doc.createElement("button");
-    boton.type = "button";
-    boton.className = "window-control";
-    boton.dataset["verb"] = verbo;
-    boton.title = t(clave);
-    boton.setAttribute("aria-label", t(clave));
-    const dibujo = iconoDePanel(doc, `window:${verbo}`);
-    if (dibujo !== null) {
-      boton.append(dibujo);
+  const window_ = doc.createElement("div");
+  window_.className = "window-controls";
+  // With no layout buttons, nothing pushes the window's to the edge.
+  window_.dataset["alone"] = String(!hasActions);
+  window_.setAttribute("role", "toolbar");
+  window_.setAttribute("aria-label", t("window-controls-label"));
+  for (const [verb, key] of WINDOW_VERBS) {
+    const button = doc.createElement("button");
+    button.type = "button";
+    button.className = "window-control";
+    button.dataset["verb"] = verb;
+    button.title = t(key);
+    button.setAttribute("aria-label", t(key));
+    const drawing = panelIcon(doc, `window:${verb}`);
+    if (drawing !== null) {
+      button.append(drawing);
     }
-    boton.addEventListener("click", () => {
-      pedir(verbo);
+    button.addEventListener("click", () => {
+      ask(verb);
     });
-    ventana.append(boton);
+    window_.append(button);
   }
-  barra.append(ventana);
+  bar.append(window_);
 }
 
 /**
- * La barra de menús, y el desplegable si hay uno abierto.
+ * The menu bar, and the dropdown if one is open.
  *
- * Las mismas órdenes que el teclado, ordenadas por tema. No añade
- * capacidades: añade una forma de encontrarlas, para quien no sabe el
- * nombre de lo que busca.
+ * The same commands as the keyboard, sorted by topic. It adds no
+ * capabilities: it adds a way to find them, for whoever does not know the
+ * name of what they are looking for.
  *
- * Una entrada apagada SIGUE saliendo, atenuada: esconder lo que esta
- * ventana no hace convertiría una limitación en un misterio.
+ * A disabled entry STILL shows, dimmed: hiding what this window does not do
+ * would turn a limitation into a mystery.
  */
 export function paintMenu(
   this: Screen,
   menu: MenuView,
-  botones: ChromeButtonView[] = [],
+  buttons: ChromeButtonView[] = [],
 ): void {
-  // La fila que la barra ocupa sale del CSS y entra en el reparto: el host
-  // reparte sobre el alto que este renderer le declare, así que si la barra
-  // no reservara su fila taparía la primera del listado — el mismo bug que
-  // el TUI tuvo con el visor a pantalla completa.
+  // The row the bar occupies comes from the CSS and enters the layout: the
+  // host lays out over the height this renderer declares to it, so if the
+  // bar did not reserve its row it would cover the listing's first one —
+  // the same bug the TUI had with the full-screen viewer.
   //
-  // Con la barra de título PROPIA (ADR 0136) la fila existe siempre, con o
-  // sin menús: es lo único que arrastra y cierra la ventana, y esconderla
-  // dejaría una ventana sin forma de moverla ni de cerrarla con el ratón.
-  const propia = document.documentElement.dataset["titlebar"] === "custom";
-  const hayBarra = menu.bar || propia;
-  const alto = hayBarra ? "var(--cell-h)" : "0px";
-  if (this.menuBarHeight !== alto) {
-    document.documentElement.style.setProperty("--menubar-h", alto);
-    this.menuBarHeight = alto;
-    this.viewportSucio = true;
+  // With its OWN title bar (ADR 0136) the row always exists, with or without
+  // menus: it is the only thing that drags and closes the window, and hiding
+  // it would leave a window with no way to move it nor close it with the
+  // mouse.
+  const custom = document.documentElement.dataset["titlebar"] === "custom";
+  const hasBar = menu.bar || custom;
+  const height = hasBar ? "var(--cell-h)" : "0px";
+  if (this.menuBarHeight !== height) {
+    document.documentElement.style.setProperty("--menubar-h", height);
+    this.menuBarHeight = height;
+    this.viewportDirty = true;
   }
-  if (sinCambios(this.menuRoot, JSON.stringify({ menu, botones, propia }))) {
+  if (unchanged(this.menuRoot, JSON.stringify({ menu, buttons, own: custom }))) {
     return;
   }
-  if (!hayBarra && menu.open === null) {
+  if (!hasBar && menu.open === null) {
     this.menuRoot.replaceChildren();
     this.menuRoot.dataset["open"] = "false";
     return;
   }
   this.menuRoot.dataset["open"] = String(menu.open !== null);
-  const barra = document.createElement("nav");
-  barra.className = "menubar";
-  barra.setAttribute("role", "menubar");
-  barra.setAttribute("aria-label", this.t("menu-bar-label"));
-  for (const [i, titulo] of (menu.bar ? menu.titles : []).entries()) {
-    const boton = document.createElement("button");
-    boton.type = "button";
-    boton.className = "menubar-title";
-    boton.id = `menu-title-${String(i)}`;
-    boton.textContent = titulo;
-    boton.setAttribute("role", "menuitem");
-    boton.setAttribute("aria-haspopup", "true");
-    boton.setAttribute("aria-expanded", String(menu.open === i));
-    boton.addEventListener("click", () => {
+  const bar = document.createElement("nav");
+  bar.className = "menubar";
+  bar.setAttribute("role", "menubar");
+  bar.setAttribute("aria-label", this.t("menu-bar-label"));
+  for (const [i, title] of (menu.bar ? menu.titles : []).entries()) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "menubar-title";
+    button.id = `menu-title-${String(i)}`;
+    button.textContent = title;
+    button.setAttribute("role", "menuitem");
+    button.setAttribute("aria-haspopup", "true");
+    button.setAttribute("aria-expanded", String(menu.open === i));
+    button.addEventListener("click", () => {
       this.send({ action: "menu_open", menu: i });
     });
-    barra.append(boton);
+    bar.append(button);
   }
-  // Los botones de disposición (ADR 0133), en el borde derecho: un icono
-  // por orden, con su nombre y su atajo al pasar. Un clic vuelve como el
-  // id; la orden la corre el host (ADR 0069).
-  if (botones.length > 0) {
-    const acciones = document.createElement("div");
-    acciones.className = "menubar-actions";
-    acciones.setAttribute("role", "toolbar");
-    acciones.setAttribute("aria-label", this.t("layout-buttons-label"));
-    for (const b of botones) {
-      const boton = document.createElement("button");
-      boton.type = "button";
-      boton.className = "menubar-action";
-      boton.dataset["id"] = b.id;
-      boton.title = b.chord === "—" ? b.label : `${b.label} (${b.chord})`;
-      boton.setAttribute("aria-label", b.label);
-      const icono = iconoDePanel(document, `layout:${b.id}`);
-      if (icono !== null) {
-        boton.append(icono);
+  // The layout buttons (ADR 0133), on the right edge: one icon per command,
+  // with its name and its shortcut on hover. A click comes back as the id;
+  // the host runs the command (ADR 0069).
+  if (buttons.length > 0) {
+    const actions = document.createElement("div");
+    actions.className = "menubar-actions";
+    actions.setAttribute("role", "toolbar");
+    actions.setAttribute("aria-label", this.t("layout-buttons-label"));
+    for (const b of buttons) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "menubar-action";
+      button.dataset["id"] = b.id;
+      button.title = b.chord === "—" ? b.label : `${b.label} (${b.chord})`;
+      button.setAttribute("aria-label", b.label);
+      const icon = panelIcon(document, `layout:${b.id}`);
+      if (icon !== null) {
+        button.append(icon);
       } else {
-        boton.textContent = b.label;
+        button.textContent = b.label;
       }
-      boton.addEventListener("click", () => {
+      button.addEventListener("click", () => {
         this.send({ action: "layout_button_activate", id: b.id });
       });
-      acciones.append(boton);
+      actions.append(button);
     }
-    barra.append(acciones);
+    bar.append(actions);
   }
-  if (propia) {
-    barraDeTitulo.call(this, barra, botones.length > 0);
+  if (custom) {
+    titleBar.call(this, bar, buttons.length > 0);
   }
-  const caja = document.createElement("div");
-  caja.className = "menu";
-  caja.append(barra);
+  const box = document.createElement("div");
+  box.className = "menu";
+  box.append(bar);
 
   if (menu.open !== null) {
-    const lista = document.createElement("ul");
-    lista.className = "menu-items";
-    lista.setAttribute("role", "menu");
-    // El desplegable cuelga de SU título, no del borde de la ventana: un
-    // menú que se abre siempre a la izquierda no dice de cuál es.
-    lista.style.setProperty("--menu-open", String(menu.open));
+    const list = document.createElement("ul");
+    list.className = "menu-items";
+    list.setAttribute("role", "menu");
+    // The dropdown hangs from ITS OWN title, not from the window's edge: a
+    // menu that always opens to the left does not say whose it is.
+    list.style.setProperty("--menu-open", String(menu.open));
     for (const [i, item] of menu.items.entries()) {
-      // Una sección empieza AQUÍ (puente 74): una raya, con su rótulo si lo
-      // tiene. Es un `separator` y no una entrada, así que el cursor, que
-      // cuenta entradas, no la ve.
+      // A section starts HERE (bridge 74): a rule, with its label if it has
+      // one. It is a `separator` and not an entry, so the cursor, which
+      // counts entries, does not see it.
       if (item.section !== null) {
-        const raya = document.createElement("li");
-        raya.className = "menu-section";
-        raya.setAttribute("role", "separator");
+        const rule = document.createElement("li");
+        rule.className = "menu-section";
+        rule.setAttribute("role", "separator");
         if (item.section !== "") {
-          raya.textContent = item.section;
-          raya.dataset["titled"] = "true";
+          rule.textContent = item.section;
+          rule.dataset["titled"] = "true";
         }
-        lista.append(raya);
+        list.append(rule);
       }
-      const fila = document.createElement("li");
-      fila.className = "menu-item";
-      fila.id = `menu-item-${String(i)}`;
-      fila.setAttribute("role", "menuitem");
-      fila.setAttribute("aria-disabled", String(!item.enabled));
-      fila.dataset["enabled"] = String(item.enabled);
-      fila.dataset["current"] = String(menu.cursor === i);
-      fila.dataset["role"] = item.role;
+      const row = document.createElement("li");
+      row.className = "menu-item";
+      row.id = `menu-item-${String(i)}`;
+      row.setAttribute("role", "menuitem");
+      row.setAttribute("aria-disabled", String(!item.enabled));
+      row.dataset["enabled"] = String(item.enabled);
+      row.dataset["current"] = String(menu.cursor === i);
+      row.dataset["role"] = item.role;
       const label = document.createElement("span");
       label.className = "menu-label";
       label.textContent = item.label;
       const chord = document.createElement("span");
       chord.className = "menu-chord";
       chord.textContent = item.chord;
-      fila.append(label, chord);
-      fila.addEventListener("mousemove", () => {
+      row.append(label, chord);
+      row.addEventListener("mousemove", () => {
         this.send({ action: "menu_point_row", row: i });
       });
-      fila.addEventListener("click", () => {
+      row.addEventListener("click", () => {
         this.send({ action: "menu_activate_row", row: i });
       });
-      lista.append(fila);
+      list.append(row);
     }
-    lista.setAttribute("aria-activedescendant", `menu-item-${String(menu.cursor)}`);
-    caja.append(lista);
-    // Un click FUERA cierra, que es lo que hace un menú en todas partes.
-    // El velo va DETRÁS del desplegable en el DOM y sin `z-index`, igual
-    // que el resto de esta pantalla.
-    const velo = document.createElement("div");
-    velo.className = "menu-veil";
-    velo.addEventListener("click", () => {
+    list.setAttribute("aria-activedescendant", `menu-item-${String(menu.cursor)}`);
+    box.append(list);
+    // A click OUTSIDE closes it, which is what a menu does everywhere. The
+    // veil goes BEHIND the dropdown in the DOM and with no `z-index`, same
+    // as the rest of this screen.
+    const veil = document.createElement("div");
+    veil.className = "menu-veil";
+    veil.addEventListener("click", () => {
       this.send({ action: "menu_close" });
     });
-    caja.prepend(velo);
+    box.prepend(veil);
   }
-  this.menuRoot.replaceChildren(caja);
+  this.menuRoot.replaceChildren(box);
   if (menu.open !== null) {
-    // El desplegable cuelga del título PINTADO, medido una vez montado: los
-    // títulos se pintan con relleno en píxeles y no miden lo mismo, así que
-    // una cuenta en celdas se desviaba más cuanto más a la derecha estaba el
-    // menú. Se mide después de `replaceChildren` porque antes no hay
-    // geometría; forzar un reparto aquí es barato, un menú se abre a mano.
-    const titulo = this.menuRoot.querySelector(`#menu-title-${String(menu.open)}`);
-    const lista = this.menuRoot.querySelector(".menu-items");
-    if (titulo instanceof HTMLElement && lista instanceof HTMLElement) {
-      const x = titulo.getBoundingClientRect().left;
-      lista.style.setProperty("--menu-left", `${String(Math.max(0, x))}px`);
+    // The dropdown hangs from the PAINTED title, measured once it is
+    // mounted: titles are painted with padding in pixels and do not all
+    // measure the same, so a count in cells drifted more the further right
+    // the menu was. Measured after `replaceChildren` because there is no
+    // geometry before that; forcing a layout here is cheap, a menu is
+    // opened by hand.
+    const title = this.menuRoot.querySelector(`#menu-title-${String(menu.open)}`);
+    const list = this.menuRoot.querySelector(".menu-items");
+    if (title instanceof HTMLElement && list instanceof HTMLElement) {
+      const x = title.getBoundingClientRect().left;
+      list.style.setProperty("--menu-left", `${String(Math.max(0, x))}px`);
     }
   }
 }
 
-/** La paleta de comandos. */
+/** The command palette. */
 export function paintPalette(this: Screen, palette: PaletteView | null): void {
   if (palette === null) {
     this.paletteRoot.replaceChildren();
@@ -427,74 +429,74 @@ export function paintPalette(this: Screen, palette: PaletteView | null): void {
     return;
   }
   this.paletteRoot.dataset["open"] = "true";
-  const caja = document.createElement("section");
-  caja.className = "palette";
-  // Modal: mientras está abierta, las teclas son suyas — y el host lo
-  // sabe, así que el lector de pantalla debe saberlo también.
-  caja.setAttribute("role", "dialog");
-  caja.setAttribute("aria-modal", "true");
-  caja.setAttribute("aria-label", this.t("palette-title"));
+  const box = document.createElement("section");
+  box.className = "palette";
+  // Modal: while it is open, the keys are its own — and the host knows it,
+  // so the screen reader has to know it too.
+  box.setAttribute("role", "dialog");
+  box.setAttribute("aria-modal", "true");
+  box.setAttribute("aria-label", this.t("palette-title"));
 
   const query = document.createElement("div");
   query.className = "palette-query";
   query.textContent = palette.query;
-  const cuenta = document.createElement("span");
-  cuenta.className = "palette-count";
-  cuenta.textContent = `${String(palette.rows.length)}/${String(palette.total)}`;
-  query.append(cuenta);
-  caja.append(query);
+  const count = document.createElement("span");
+  count.className = "palette-count";
+  count.textContent = `${String(palette.rows.length)}/${String(palette.total)}`;
+  query.append(count);
+  box.append(query);
 
-  const lista = document.createElement("ul");
-  lista.className = "palette-rows";
-  lista.setAttribute("role", "listbox");
+  const list = document.createElement("ul");
+  list.className = "palette-rows";
+  list.setAttribute("role", "listbox");
   for (const [i, r] of palette.rows.entries()) {
-    const fila = document.createElement("li");
-    fila.className = "palette-row";
-    fila.id = `palette-row-${String(i)}`;
-    fila.setAttribute("role", "option");
-    fila.setAttribute("aria-selected", String(palette.cursor === i));
-    fila.dataset["enabled"] = String(r.enabled);
-    fila.dataset["hostile"] = String(r.hostile);
-    fila.dataset["recent"] = String(r.recent === true);
-    // La etiqueta humana primero y entera, el id atenuado, el chord a la
-    // derecha: es lo que se lee, en ese orden. El id sigue en el DOM porque
-    // es lo que un lector que ya lo sabe teclea.
+    const row = document.createElement("li");
+    row.className = "palette-row";
+    row.id = `palette-row-${String(i)}`;
+    row.setAttribute("role", "option");
+    row.setAttribute("aria-selected", String(palette.cursor === i));
+    row.dataset["enabled"] = String(r.enabled);
+    row.dataset["hostile"] = String(r.hostile);
+    row.dataset["recent"] = String(r.recent === true);
+    // The human label first and whole, the id dimmed, the chord on the
+    // right: that is the reading order. The id stays in the DOM because it
+    // is what a reader who already knows it types.
     const desc = document.createElement("span");
     desc.className = "palette-desc";
     desc.textContent = r.desc;
-    const texto = document.createElement("span");
-    texto.className = "palette-text";
-    texto.textContent = r.text;
+    const text = document.createElement("span");
+    text.className = "palette-text";
+    text.textContent = r.text;
     const chord = document.createElement("span");
     chord.className = "palette-chord";
     chord.textContent = r.chord;
-    fila.append(desc, texto, chord);
+    row.append(desc, text, chord);
     if (r.hostile) {
-      // Solo una fila de PLUGIN puede serlo, y esta es la pantalla donde
-      // se elige qué código de tercero correr: un texto enmascarado que
-      // viaja sin decirlo se lee como fiel.
-      fila.append(badge(this.t("hostile-name")));
+      // Only a PLUGIN row can be, and this is the screen where you choose
+      // what third-party code to run: masked text that travels without
+      // saying so reads as trustworthy.
+      row.append(badge(this.t("hostile-name")));
     }
-    lista.append(fila);
+    list.append(row);
   }
   if (palette.cursor !== null) {
-    lista.setAttribute("aria-activedescendant", `palette-row-${String(palette.cursor)}`);
+    list.setAttribute("aria-activedescendant", `palette-row-${String(palette.cursor)}`);
   }
   if (palette.rows.length === 0) {
-    const vacio = document.createElement("li");
-    vacio.className = "empty";
-    vacio.textContent = this.t("palette-empty");
-    lista.append(vacio);
+    const empty = document.createElement("li");
+    empty.className = "empty";
+    empty.textContent = this.t("palette-empty");
+    list.append(empty);
   }
-  caja.append(lista);
-  this.paletteRoot.replaceChildren(caja);
+  box.append(list);
+  this.paletteRoot.replaceChildren(box);
 }
 
 /**
- * «Ir a cualquier sitio» (#357, puente 77): la consulta y las líneas en
- * orden —cabeceras de sección y filas—, con la del cursor marcada. Qué hay en
- * cada sección y en qué orden lo decide el host con el modelo compartido; aquí
- * solo se pinta.
+ * "Go to anywhere" (#357, bridge 77): the query and the lines in order —
+ * section headers and rows — with the cursor's marked. What is in each
+ * section and in what order is decided by the host with the shared model;
+ * here it is only painted.
  */
 export function paintGoto(this: Screen, goto: GotoView | null): void {
   if (goto === null) {
@@ -503,31 +505,31 @@ export function paintGoto(this: Screen, goto: GotoView | null): void {
     return;
   }
   this.gotoRoot.dataset["open"] = "true";
-  const caja = document.createElement("section");
-  // Las clases de la paleta: es la misma forma de pantalla —una consulta y
-  // una lista que se acota— y dos hojas de estilo para lo mismo divergen.
-  caja.className = "palette goto";
-  caja.setAttribute("role", "dialog");
-  caja.setAttribute("aria-modal", "true");
-  caja.setAttribute("aria-label", this.t("goto-title"));
+  const box = document.createElement("section");
+  // The palette's classes: it is the same screen shape — a query and a list
+  // that narrows — and two stylesheets for the same thing drift apart.
+  box.className = "palette goto";
+  box.setAttribute("role", "dialog");
+  box.setAttribute("aria-modal", "true");
+  box.setAttribute("aria-label", this.t("goto-title"));
 
   const query = document.createElement("div");
   query.className = "palette-query";
   query.textContent = goto.query;
-  caja.append(query);
+  box.append(query);
 
-  const lista = document.createElement("ul");
-  lista.className = "palette-rows";
-  lista.setAttribute("role", "listbox");
+  const list = document.createElement("ul");
+  list.className = "palette-rows";
+  list.setAttribute("role", "listbox");
   for (const [i, l] of goto.lines.entries()) {
     const item = document.createElement("li");
     if (l.line === "header") {
-      // Una cabecera no es una opción: no recibe el cursor ni se anuncia
-      // como elegible.
+      // A header is not an option: it does not get the cursor nor is it
+      // announced as selectable.
       item.className = "goto-header";
       item.setAttribute("role", "presentation");
       item.textContent = l.title;
-      lista.append(item);
+      list.append(item);
       continue;
     }
     item.className = "palette-row";
@@ -535,38 +537,39 @@ export function paintGoto(this: Screen, goto: GotoView | null): void {
     item.setAttribute("role", "option");
     item.setAttribute("aria-selected", String(goto.cursor === i));
     item.dataset["hostile"] = String(l.hostile);
-    const texto = document.createElement("span");
-    texto.className = "palette-text";
-    texto.textContent = l.text;
+    const text = document.createElement("span");
+    text.className = "palette-text";
+    text.textContent = l.text;
     const desc = document.createElement("span");
     desc.className = "palette-desc";
     desc.textContent = l.desc;
-    item.append(texto, desc);
+    item.append(text, desc);
     if (l.hostile) {
-      // Un nombre enmascarado en la pantalla donde se elige a dónde ir: el
-      // lector tiene que saber que no se llama así.
+      // A masked name on the screen where you choose where to go: the reader
+      // has to know it is not really called that.
       item.append(badge(this.t("hostile-name")));
     }
-    lista.append(item);
+    list.append(item);
   }
   if (goto.cursor !== null) {
-    lista.setAttribute("aria-activedescendant", `goto-row-${String(goto.cursor)}`);
+    list.setAttribute("aria-activedescendant", `goto-row-${String(goto.cursor)}`);
   }
   if (goto.lines.length === 0) {
-    const vacio = document.createElement("li");
-    vacio.className = "empty";
-    vacio.textContent = goto.empty;
-    lista.append(vacio);
+    const empty = document.createElement("li");
+    empty.className = "empty";
+    empty.textContent = goto.empty;
+    list.append(empty);
   }
-  caja.append(lista);
-  this.gotoRoot.replaceChildren(caja);
-  // Con la consulta vacía, las secciones pueden pasar del alto de la caja, y
-  // la lista se rehace en cada parche con el scroll arriba: sin esto, bajar
-  // movía un cursor invisible y Enter iba a un sitio que el lector no veía.
-  revelar(lista.querySelector('[aria-selected="true"]') ?? undefined);
+  box.append(list);
+  this.gotoRoot.replaceChildren(box);
+  // With an empty query, the sections can go past the box's height, and the
+  // list is rebuilt on every patch with the scroll at the top: without this,
+  // going down moved an invisible cursor and Enter went to a spot the reader
+  // could not see.
+  revealInView(list.querySelector('[aria-selected="true"]') ?? undefined);
 }
 
-/** Lo que puede seguir a un prefijo a medias. */
+/** What can follow a half-finished prefix. */
 export function paintWhichKey(this: Screen, panel: WhichKeyView | null): void {
   if (panel === null) {
     this.whichKeyRoot.replaceChildren();
@@ -574,62 +577,62 @@ export function paintWhichKey(this: Screen, panel: WhichKeyView | null): void {
     return;
   }
   this.whichKeyRoot.dataset["open"] = "true";
-  const caja = document.createElement("section");
-  caja.className = "whichkey";
-  // No es un diálogo: no captura el foco ni espera respuesta. Es una ayuda
-  // que aparece mientras la secuencia está a medias.
-  caja.setAttribute("role", "group");
-  caja.setAttribute("aria-label", panel.title);
+  const box = document.createElement("section");
+  box.className = "whichkey";
+  // Not a dialog: it does not capture focus nor wait for an answer. It is a
+  // hint that shows up while the sequence is half-finished.
+  box.setAttribute("role", "group");
+  box.setAttribute("aria-label", panel.title);
 
-  const titulo = document.createElement("header");
-  titulo.className = "whichkey-title";
-  titulo.textContent = panel.title;
-  caja.append(titulo);
+  const title = document.createElement("header");
+  title.className = "whichkey-title";
+  title.textContent = panel.title;
+  box.append(title);
 
-  const lista = document.createElement("ul");
-  lista.className = "whichkey-rows";
+  const list = document.createElement("ul");
+  list.className = "whichkey-rows";
   for (const r of panel.rows) {
-    const fila = document.createElement("li");
-    fila.className = "whichkey-row";
-    fila.dataset["enabled"] = String(r.enabled);
+    const row = document.createElement("li");
+    row.className = "whichkey-row";
+    row.dataset["enabled"] = String(r.enabled);
     const chord = document.createElement("span");
     chord.className = "whichkey-chord";
     chord.textContent = r.chord;
     const label = document.createElement("span");
     label.className = "whichkey-label";
-    // `opens_sequence` se MARCA en vez de nombrar un comando que la tecla
-    // no ejecuta; el motivo de un atajo apagado ya viene traducido.
+    // `opens_sequence` is MARKED instead of naming a command the key does
+    // not run; a disabled shortcut's reason already arrives translated.
     label.textContent = r.opens_sequence ? `${r.label}…` : r.label;
-    fila.append(chord, label);
+    row.append(chord, label);
     if (!r.enabled && r.reason !== "") {
-      const motivo = document.createElement("span");
-      motivo.className = "whichkey-reason";
-      motivo.textContent = r.reason;
-      fila.append(motivo);
+      const reason = document.createElement("span");
+      reason.className = "whichkey-reason";
+      reason.textContent = r.reason;
+      row.append(reason);
     }
-    lista.append(fila);
+    list.append(row);
   }
-  caja.append(lista);
-  this.whichKeyRoot.replaceChildren(caja);
+  box.append(list);
+  this.whichKeyRoot.replaceChildren(box);
 }
 
 /**
- * La barra de PESTAÑAS de un hueco, si está en un grupo.
+ * A slot's TAB bar, if it is in a group.
  *
- * Se pinta aunque solo se vea el contenido de una: lo que hay detrás sigue
- * abierto, y una ventana que no lo dice esconde trabajo. El rótulo llega ya
- * enmascarado del host —un directorio hostil dentro de una pestaña es tan
- * hostil como dentro de un listado— con su bandera al lado.
+ * Painted even when only one's content is visible: what is behind it is
+ * still open, and a window that does not say so hides work. The label
+ * arrives already masked by the host — a hostile directory inside a tab is
+ * as hostile as inside a listing — with its flag alongside.
  */
 export function paintTabs(
   this: Screen,
   dom: SlotDom,
-  grupo: TabGroupView | undefined,
+  group: TabGroupView | undefined,
 ): void {
-  if (sinCambios(dom.tabs, JSON.stringify(grupo ?? null))) {
+  if (unchanged(dom.tabs, JSON.stringify(group ?? null))) {
     return;
   }
-  if (grupo === undefined) {
+  if (group === undefined) {
     if (dom.tabs.dataset["open"] === "true") {
       dom.tabs.replaceChildren();
       dom.tabs.dataset["open"] = "false";
@@ -637,92 +640,94 @@ export function paintTabs(
     return;
   }
   dom.tabs.dataset["open"] = "true";
-  const lista = document.createElement("ul");
-  lista.className = "tabs";
-  lista.setAttribute("role", "tablist");
-  for (const [i, t] of grupo.tabs.entries()) {
+  const list = document.createElement("ul");
+  list.className = "tabs";
+  list.setAttribute("role", "tablist");
+  for (const [i, t] of group.tabs.entries()) {
     const li = document.createElement("li");
     li.className = "tab";
     li.setAttribute("role", "tab");
-    li.setAttribute("aria-selected", String(i === grupo.active));
-    li.dataset["active"] = String(i === grupo.active);
+    li.setAttribute("aria-selected", String(i === group.active));
+    li.dataset["active"] = String(i === group.active);
     li.dataset["hostile"] = String(t.title_hostile);
     li.textContent = t.title;
     if (t.title_hostile) {
       li.append(badge(this.t("hostile-name")));
     }
     li.addEventListener("click", () => {
-      // Por SLOT y no por posición: la lista puede haberse movido entre el
-      // pintado y el clic, y el host rehúsa un hueco que ya no está en
-      // ningún grupo en vez de acertar por casualidad.
+      // By SLOT and not by position: the list may have moved between the
+      // paint and the click, and the host refuses a slot that is no longer
+      // in any group instead of getting it right by chance.
       this.send({ action: "select_tab", slot_id: t.slot_id });
     });
-    // Arrastrar la pestaña saca ESE hueco del grupo (ADR 0138).
-    hacerArrastrable(this, li, t.slot_id);
-    // Cerrar ESTA pestaña (ADR 0133): la `×` de cada una, visible en la
-    // activa y al pasar por encima, como en VS Code. El host la elige y
-    // luego la cierra, por el despacho de `pane.tab-close`.
-    const cerrar = document.createElement("button");
-    cerrar.type = "button";
-    cerrar.className = "tab-close";
-    cerrar.textContent = "×";
-    cerrar.title = this.t("menu-item-pane-tab-close");
-    cerrar.setAttribute("aria-label", this.t("menu-item-pane-tab-close"));
-    cerrar.addEventListener("click", (e) => {
-      // Sin esto el clic también elegiría la pestaña, y serían dos órdenes.
+    // Dragging the tab takes THAT slot out of the group (ADR 0138).
+    makeDraggable(this, li, t.slot_id);
+    // Close THIS tab (ADR 0133): each one's `×`, visible on the active one
+    // and on hover, as in VS Code. The host chooses it and then closes it,
+    // through `pane.tab-close`'s dispatch.
+    const close = document.createElement("button");
+    close.type = "button";
+    close.className = "tab-close";
+    close.textContent = "×";
+    close.title = this.t("menu-item-pane-tab-close");
+    close.setAttribute("aria-label", this.t("menu-item-pane-tab-close"));
+    close.addEventListener("click", (e) => {
+      // Without this the click would also select the tab, making it two
+      // commands.
       e.stopPropagation();
       this.send({ action: "tab_action", slot_id: t.slot_id, verb: "close" });
     });
-    if (grupo.panels !== true) {
-      li.append(cerrar);
+    if (group.panels !== true) {
+      li.append(close);
     }
-    lista.append(li);
+    list.append(li);
   }
-  // Un grupo de PANELES (ADR 0134) no lleva `+` ni `×`: abren y cierran
-  // listados. Sus paneles se abren y se cierran desde la barra de
-  // actividad, como las vistas del panel de VS Code.
-  dom.tabs.dataset["panels"] = String(grupo.panels === true);
-  if (grupo.panels === true) {
-    dom.tabs.replaceChildren(lista);
+  // A group of PANELS (ADR 0134) carries no `+` nor `×`: they open and close
+  // as listings. Its panels open and close from the activity bar, like VS
+  // Code's panel views.
+  dom.tabs.dataset["panels"] = String(group.panels === true);
+  if (group.panels === true) {
+    dom.tabs.replaceChildren(list);
     return;
   }
-  // Abrir una pestaña EN ESTE GRUPO: se elige la activa del grupo y se abre
-  // detrás, igual que el `[+]` de la barra de la TUI.
-  const nueva = document.createElement("button");
-  nueva.type = "button";
-  nueva.className = "tab-new";
-  nueva.textContent = "+";
-  nueva.title = this.t("menu-item-pane-tab-new");
-  nueva.setAttribute("aria-label", this.t("menu-item-pane-tab-new"));
-  const activa = grupo.tabs[grupo.active] ?? grupo.tabs[0];
-  if (activa !== undefined) {
-    nueva.addEventListener("click", () => {
-      this.send({ action: "tab_action", slot_id: activa.slot_id, verb: "new" });
+  // Opening a tab IN THIS GROUP: the group's active one is chosen and it
+  // opens behind it, same as the TUI bar's `[+]`.
+  const add = document.createElement("button");
+  add.type = "button";
+  add.className = "tab-new";
+  add.textContent = "+";
+  add.title = this.t("menu-item-pane-tab-new");
+  add.setAttribute("aria-label", this.t("menu-item-pane-tab-new"));
+  const active = group.tabs[group.active] ?? group.tabs[0];
+  if (active !== undefined) {
+    add.addEventListener("click", () => {
+      this.send({ action: "tab_action", slot_id: active.slot_id, verb: "new" });
     });
   }
-  dom.tabs.replaceChildren(lista, nueva);
+  dom.tabs.replaceChildren(list, add);
 }
 
 /**
- * La cabecera: etiquetas y marca de orden, ambas resueltas en Rust.
+ * The header: labels and sort mark, both resolved in Rust.
  *
- * El ancho fijo y la alineación de cada columna (puente 64) se escriben como
- * variables en la RAÍZ del hueco, no en cada celda: las filas ya pintadas
- * las leen sin repintarse, y arrastrar el tirador solo cambia una variable.
- * La del nombre nunca: es la que crece.
+ * Each column's fixed width and alignment (bridge 64) are written as
+ * variables on the slot's ROOT, not on every cell: rows already painted
+ * read them without repainting, and dragging the grip only changes one
+ * variable. The name's, never: it is the one that grows.
  */
 export function paintHeader(this: Screen, dom: SlotDom, slot: BrowserSlotView): void {
-  if (sinCambios(dom.header, JSON.stringify(slot.columns))) {
-    // Las mismas columnas: los nodos y las variables de ancho ya están. Lo
-    // que NO se puede saltar es el descarte, que depende del ancho del hueco
-    // y no de las columnas — un hueco que se ensanchó recupera la columna que
-    // descartó de estrecho, y por eso se vuelve a decidir desde cero.
+  if (unchanged(dom.header, JSON.stringify(slot.columns))) {
+    // Same columns: the nodes and the width variables are already there.
+    // What CANNOT be skipped is the drop check, which depends on the slot's
+    // width and not on the columns — a slot that widened gets back the
+    // column it dropped when narrow, and that is why it is decided from
+    // scratch again.
     for (const c of slot.columns) {
       if (c.id !== "name") {
         dom.root.style.removeProperty(`${colVar(c.id)}-show`);
       }
     }
-    descartarLasQueNoCaben(dom, slot, this.cell().w);
+    dropOverflowingColumns(dom, slot, this.cell().w);
     return;
   }
   const nodes = slot.columns.map((c) => {
@@ -730,14 +735,14 @@ export function paintHeader(this: Screen, dom: SlotDom, slot: BrowserSlotView): 
     el.className = c.id === "name" ? "col col-name" : "col";
     el.setAttribute("role", "columnheader");
     el.dataset["column"] = c.id;
-    // `aria-sort` va en la cabecera que ordena y en ninguna otra.
+    // `aria-sort` goes on the column that sorts and no other.
     el.setAttribute("aria-sort", c.sort === null ? "none" : `${c.sort}ending`);
     el.textContent = c.label;
     if (c.sort !== null) {
-      const marca = document.createElement("span");
-      marca.className = "sort-mark";
-      marca.textContent = c.sort === "asc" ? "▲" : "▼";
-      el.append(marca);
+      const mark = document.createElement("span");
+      mark.className = "sort-mark";
+      mark.textContent = c.sort === "asc" ? "▲" : "▼";
+      el.append(mark);
     }
     if (c.sortable) {
       el.dataset["sortable"] = "true";
@@ -758,8 +763,8 @@ export function paintHeader(this: Screen, dom: SlotDom, slot: BrowserSlotView): 
     el.style.width = `var(${v}, auto)`;
     el.style.textAlign = `var(${v}-align, left)`;
     el.style.display = `var(${v}-show, block)`;
-    // Se vuelve a decidir en cada pintado: un hueco que se ensanchó recupera
-    // la columna que descartó cuando era estrecho.
+    // Decided again on every paint: a slot that widened gets back the column
+    // it dropped when it was narrow.
     dom.root.style.removeProperty(`${v}-show`);
     const grip = document.createElement("span");
     grip.className = "col-grip";
@@ -768,24 +773,24 @@ export function paintHeader(this: Screen, dom: SlotDom, slot: BrowserSlotView): 
     return el;
   });
   dom.header.replaceChildren(...nodes);
-  descartarLasQueNoCaben(dom, slot, this.cell().w);
+  dropOverflowingColumns(dom, slot, this.cell().w);
 }
 
 /**
- * La regla 2 del reparto compartido (`columns::layout`): si las columnas
- * no dejan al nombre su suelo, se descartan desde la MÁS A LA DERECHA hasta
- * que quepan. Se hace aquí y no en el host porque el ancho útil del hueco
- * en píxeles —bordes, relleno, tiradores— solo lo sabe quien pinta.
+ * The shared layout's rule 2 (`columns::layout`): if the columns do not
+ * leave the name its floor, they are dropped starting from the RIGHTMOST
+ * until they fit. Done here and not in the host because only whoever paints
+ * knows the slot's usable width in pixels — borders, padding, grips.
  *
- * El suelo del nombre viene del HOST en la propia cabecera (`width` de la
- * columna `name` es `NAME_MIN`, no un ancho): un número que viviera aquí
- * también se separaría del de Rust sin que nadie lo viera. Y cuenta TODAS
- * las columnas, no solo las fijas: una `auto` o `flex` pesa lo que mide su
- * cabecera ya pintada. Sin medida (un documento sin layout, como el de los
- * tests) no se descarta nada: mejor una columna de más que un listado sin
- * columnas.
+ * The name's floor comes from the HOST in the header itself (the `name`
+ * column's `width` is `NAME_MIN`, not a width): a number living here too
+ * would also drift from Rust's without anyone seeing it. And it counts ALL
+ * columns, not just the fixed ones: an `auto` or `flex` one weighs whatever
+ * its already-painted header measures. With no measurement (a document with
+ * no layout, like the tests') nothing is dropped: an extra column beats a
+ * listing with none.
  */
-function descartarLasQueNoCaben(
+function dropOverflowingColumns(
   dom: SlotDom,
   slot: BrowserSlotView,
   cellW: number,
@@ -794,27 +799,24 @@ function descartarLasQueNoCaben(
   if (total <= 0 || cellW <= 0) {
     return;
   }
-  const suelo = slot.columns.find((c) => c.id === "name")?.width ?? 10;
-  const cabeceras = [...dom.header.querySelectorAll<HTMLElement>(".col")];
-  const anchoDe = (c: ColumnHeader, i: number): number =>
-    c.width === null
-      ? (cabeceras[i]?.getBoundingClientRect().width ?? 0)
-      : c.width * cellW;
-  // Relleno de la fila (6 px a cada lado), el borde del hueco, la casilla
-  // de marca (1,1 em ≈ una celda y media) y una celda de separación por
-  // columna.
-  let libre = total - 14 - cellW * 1.5 - cellW * slot.columns.length;
-  const otras = slot.columns.map((c, i) => ({ c, i })).filter(({ c }) => c.id !== "name");
-  for (const { c, i } of otras) {
-    libre -= anchoDe(c, i);
+  const floor = slot.columns.find((c) => c.id === "name")?.width ?? 10;
+  const headers = [...dom.header.querySelectorAll<HTMLElement>(".col")];
+  const widthOf = (c: ColumnHeader, i: number): number =>
+    c.width === null ? (headers[i]?.getBoundingClientRect().width ?? 0) : c.width * cellW;
+  // Row padding (6px each side), the slot's border, the mark checkbox
+  // (1.1em ≈ a cell and a half) and one gap cell per column.
+  let free = total - 14 - cellW * 1.5 - cellW * slot.columns.length;
+  const rest = slot.columns.map((c, i) => ({ c, i })).filter(({ c }) => c.id !== "name");
+  for (const { c, i } of rest) {
+    free -= widthOf(c, i);
   }
-  const minimo = suelo * cellW;
-  for (let k = otras.length - 1; k >= 0 && libre < minimo; k -= 1) {
-    const entrada = otras[k];
-    if (entrada === undefined) {
+  const minimum = floor * cellW;
+  for (let k = rest.length - 1; k >= 0 && free < minimum; k -= 1) {
+    const entry = rest[k];
+    if (entry === undefined) {
       break;
     }
-    dom.root.style.setProperty(`${colVar(entrada.c.id)}-show`, "none");
-    libre += anchoDe(entrada.c, entrada.i) + cellW;
+    dom.root.style.setProperty(`${colVar(entry.c.id)}-show`, "none");
+    free += widthOf(entry.c, entry.i) + cellW;
   }
 }

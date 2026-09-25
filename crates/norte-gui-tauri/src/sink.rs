@@ -1,59 +1,62 @@
-//! El bombeo: del host a la ventana, EN ORDEN y sin inventarse nada.
+//! The pump: from the host to the window, IN ORDER and without making
+//! anything up.
 //!
-//! Está detrás de un trait a propósito. Lo que hay que probar aquí —que la
-//! secuencia sale en orden, que un suscriptor que se queda atrás recibe el
-//! aviso en vez de un parche imposible, y que al morir el host se deja de
-//! emitir— no necesita ni pantalla ni `WebKitGTK`: necesita un sumidero que
-//! apunte lo que le llega.
+//! It sits behind a trait on purpose. What has to be tested here — that the
+//! sequence comes out in order, that a subscriber that falls behind gets the
+//! notice instead of an impossible patch, and that emitting stops once the
+//! host dies — needs neither a screen nor `WebKitGTK`: it needs a sink that
+//! records what reaches it.
 
 use norte_ui_host::{BridgeEnvelope, UiSubscription, Update, dto::UiUpdate};
 
-/// El evento por el que viajan las actualizaciones.
+/// The event updates travel through.
 pub const EVENT_UPDATE: &str = "norte://update";
 
-/// El evento que dice «te has quedado atrás, pide una foto».
+/// The event that says "you fell behind, ask for a frame".
 pub const EVENT_LAGGED: &str = "norte://lagged";
 
-/// El evento que dice «el catálogo cambió, vuelve a pedirlo».
+/// The event that says "the catalogue changed, ask for it again".
 ///
-/// Hoy solo lo mueve el TEMA. Va como aviso y no con el catálogo dentro
-/// porque el catálogo ya tiene su comando, y mandarlo por dos caminos sería
-/// dos formas de tener una versión distinta de la misma cosa.
+/// Today only the THEME triggers it. It travels as a notice and not with the
+/// catalogue inside because the catalogue already has its own command, and
+/// sending it two ways would be two ways of having a different version of the
+/// same thing.
 pub const EVENT_CATALOG: &str = "norte://catalog";
 
-/// A dónde van las actualizaciones.
+/// Where the updates go.
 pub trait UpdateSink: Send + 'static {
-    /// Manda una actualización. Un fallo PARA el bombeo: si la ventana ya no
-    /// recibe, seguir serializando es trabajo para nadie.
+    /// Sends an update. A failure STOPS the pump: if the window no longer
+    /// receives, continuing to serialize is work for nobody.
     ///
     /// # Errors
-    /// [`SinkError`] cuando la ventana ya no acepta eventos.
+    /// [`SinkError`] when the window no longer accepts events.
     fn update(&self, env: &BridgeEnvelope<UiUpdate>) -> Result<(), SinkError>;
 
-    /// Avisa de que el suscriptor se quedó atrás.
+    /// Notifies that the subscriber fell behind.
     ///
     /// # Errors
-    /// [`SinkError`] cuando la ventana ya no acepta eventos.
+    /// [`SinkError`] when the window no longer accepts events.
     fn lagged(&self) -> Result<(), SinkError>;
 }
 
-/// La ventana ya no recibe.
+/// The window no longer receives.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("el sumidero de actualizaciones no acepta más: {0}")]
+#[error("the update sink no longer accepts anything: {0}")]
 pub struct SinkError(pub String);
 
-/// Drena la suscripción hacia el sumidero hasta que uno de los dos se acabe.
+/// Drains the subscription into the sink until one of the two ends.
 ///
-/// No reordena, no fusiona y no descarta: el orden ES la garantía que el
-/// bridge promete (ADR 0066, decisión D7). Lo único que traduce es el
-/// `Lagged` del canal, que no es una actualización sino una instrucción.
+/// It does not reorder, does not merge and does not drop: order IS the
+/// guarantee the bridge promises (ADR 0066, decision D7). The only thing it
+/// translates is the channel's `Lagged`, which is not an update but an
+/// instruction.
 pub async fn pump<S: UpdateSink>(mut sub: UiSubscription, sink: S) {
     while let Some(u) = sub.recv().await {
-        let enviado = match u {
+        let sent = match u {
             Update::Message(env) => sink.update(&env),
             Update::Lagged => sink.lagged(),
         };
-        if enviado.is_err() {
+        if sent.is_err() {
             return;
         }
     }
@@ -69,33 +72,30 @@ mod tests {
     use super::*;
 
     #[derive(Default)]
-    struct Falso {
-        vistos: Arc<Mutex<Vec<String>>>,
-        muerto: bool,
+    struct Fake {
+        seen: Arc<Mutex<Vec<String>>>,
+        dead: bool,
     }
 
-    impl UpdateSink for Falso {
+    impl UpdateSink for Fake {
         fn update(&self, env: &BridgeEnvelope<UiUpdate>) -> Result<(), SinkError> {
-            if self.muerto {
-                return Err(SinkError("ventana cerrada".to_owned()));
+            if self.dead {
+                return Err(SinkError("window closed".to_owned()));
             }
-            self.vistos
+            self.seen
                 .lock()
-                .expect("lock sano")
+                .expect("sound lock")
                 .push(format!("u{}", env.sequence));
             Ok(())
         }
 
         fn lagged(&self) -> Result<(), SinkError> {
-            self.vistos
-                .lock()
-                .expect("lock sano")
-                .push("lag".to_owned());
+            self.seen.lock().expect("sound lock").push("lag".to_owned());
             Ok(())
         }
     }
 
-    fn aviso(seq: u64) -> BridgeEnvelope<UiUpdate> {
+    fn notice(seq: u64) -> BridgeEnvelope<UiUpdate> {
         BridgeEnvelope::new(
             InstanceId::new("i"),
             seq,
@@ -106,64 +106,64 @@ mod tests {
         )
     }
 
-    /// Lo que entra por la suscripción sale en el MISMO orden.
+    /// What comes in through the subscription comes out in the SAME order.
     #[tokio::test]
-    async fn el_orden_se_respeta() {
-        let (host, _snap) = crate::commands::tests_soporte::host_de_prueba().await;
+    async fn order_is_respected() {
+        let (host, _snap) = crate::commands::tests_support::test_host().await;
         let sub = host.subscribe();
-        let vistos = Arc::new(Mutex::new(Vec::new()));
-        let sink = Falso {
-            vistos: Arc::clone(&vistos),
-            muerto: false,
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let sink = Fake {
+            seen: Arc::clone(&seen),
+            dead: false,
         };
-        let bombeo = tokio::spawn(pump(sub, sink));
+        let pump_task = tokio::spawn(pump(sub, sink));
         for _ in 0..3 {
             host.dispatch(norte_ui_host::UiAction::MoveCursor {
                 slot_id: 1,
                 delta: 1,
             })
             .await
-            .expect("host vivo");
+            .expect("host is alive");
         }
-        host.shutdown().await.expect("apaga");
-        // El asa del host CONSERVA el emisor de actualizaciones: mientras
-        // viva, el bombeo espera. Soltarla es lo que cierra el canal — y es
-        // lo que hace el proceso de verdad al cerrar la ventana.
+        host.shutdown().await.expect("shuts down");
+        // The host's handle KEEPS the update emitter alive: while it lives,
+        // the pump waits. Dropping it is what closes the channel — and that
+        // is what the real process does when it closes the window.
         drop(host);
-        tokio::time::timeout(std::time::Duration::from_secs(5), bombeo)
+        tokio::time::timeout(std::time::Duration::from_secs(5), pump_task)
             .await
-            .expect("el bombeo termina cuando el host se va")
-            .expect("sin panic");
-        let v = vistos.lock().expect("lock sano").clone();
-        let secuencias: Vec<&String> = v.iter().filter(|s| s.starts_with('u')).collect();
-        assert!(secuencias.len() >= 3, "llegaron las tres: {v:?}");
-        let mut ordenadas = secuencias.clone();
-        ordenadas.sort_by_key(|s| s[1..].parse::<u64>().unwrap_or(0));
-        assert_eq!(secuencias, ordenadas, "y en orden: {v:?}");
+            .expect("the pump ends when the host goes away")
+            .expect("no panic");
+        let v = seen.lock().expect("sound lock").clone();
+        let sequences: Vec<&String> = v.iter().filter(|s| s.starts_with('u')).collect();
+        assert!(sequences.len() >= 3, "all three arrived: {v:?}");
+        let mut sorted = sequences.clone();
+        sorted.sort_by_key(|s| s[1..].parse::<u64>().unwrap_or(0));
+        assert_eq!(sequences, sorted, "and in order: {v:?}");
     }
 
-    /// Una ventana que ya no recibe PARA el bombeo; no se serializa contra
-    /// una pared.
+    /// A window that no longer receives STOPS the pump; it does not keep
+    /// serializing against a wall.
     #[tokio::test]
-    async fn una_ventana_muerta_para_el_bombeo() {
+    async fn a_dead_window_stops_the_pump() {
         let (tx, rx) = tokio::sync::broadcast::channel(8);
         drop(rx);
-        let _ = tx.send(aviso(1));
-        let (host, _snap) = crate::commands::tests_soporte::host_de_prueba().await;
+        let _ = tx.send(notice(1));
+        let (host, _snap) = crate::commands::tests_support::test_host().await;
         let sub = host.subscribe();
-        let sink = Falso {
-            vistos: Arc::new(Mutex::new(Vec::new())),
-            muerto: true,
+        let sink = Fake {
+            seen: Arc::new(Mutex::new(Vec::new())),
+            dead: true,
         };
-        let bombeo = tokio::spawn(pump(sub, sink));
+        let pump_task = tokio::spawn(pump(sub, sink));
         host.dispatch(norte_ui_host::UiAction::MoveCursor {
             slot_id: 1,
             delta: 1,
         })
         .await
-        .expect("host vivo");
-        let fin = tokio::time::timeout(std::time::Duration::from_secs(5), bombeo).await;
-        assert!(fin.is_ok(), "el bombeo termina en cuanto la ventana falla");
+        .expect("host is alive");
+        let end = tokio::time::timeout(std::time::Duration::from_secs(5), pump_task).await;
+        assert!(end.is_ok(), "the pump ends as soon as the window fails");
         drop(host);
     }
 }

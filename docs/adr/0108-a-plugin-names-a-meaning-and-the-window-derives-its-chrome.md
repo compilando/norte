@@ -165,7 +165,7 @@ Where a transcribed value cannot be used, the value is changed and the
 original is named in the header — never the reverse. Three did not survive:
 on white, VSCode's `errorForeground` gives 3.35:1 and its `editorWarning`
 3.12:1, both under the 4.5:1 that
-`las_senales_semanticas_llegan_a_wcag_aa_en_todo_preset` requires of the
+`semantic_signals_reach_wcag_aa_in_every_preset` requires of the
 signals a reader must read when something has gone wrong. The test does not
 move. This is the same discipline the imported keymap presets already use for
 chords their source does not attest.

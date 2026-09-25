@@ -1,17 +1,18 @@
-//! El ancla del destino por el camino EMBEBIDO (#301, ADR 0073/0076).
+//! The destination's anchor through the EMBEDDED path (#301, ADR 0073/0076).
 //!
-//! `engine_dest_anchor` prueba que el ENGINE rehúsa cuando alguien le pasa el
-//! ancla. Esto prueba la otra mitad, que es la que faltaba: que el
-//! `Backend::Embedded` la PASA — recordando, como hace el SDK sobre el wire, la
-//! identidad de cada directorio que él mismo listó.
+//! `engine_dest_anchor` tests that the ENGINE refuses when someone passes it
+//! the anchor. This tests the other half, which was missing: that
+//! `Backend::Embedded` PASSES it — remembering, as the SDK does over the wire,
+//! the identity of every directory it itself listed.
 //!
-//! Importa porque `ntc` corre embebido por defecto (`--daemon` es la
-//! excepción), así que sin esto el frontend con más motivo para la comprobación
-//! —el que lanza `$EDITOR` sobre el fichero que `fs.create` acaba de crear— era
-//! justo el que no la tenía.
+//! It matters because `ntc` runs embedded by default (`--daemon` is the
+//! exception), so without this the frontend with the most reason for the
+//! check — the one that launches `$EDITOR` on the file `fs.create` just
+//! created — was exactly the one that lacked it.
 //!
-//! `file://` y no `MemProvider` por lo mismo que el otro fichero: sin enlaces
-//! que seguir ni identidad de nodo que comparar no hay nada que probar.
+//! `file://` and not `MemProvider` for the same reason as the other file:
+//! without links to follow nor node identity to compare there is nothing to
+//! test.
 #![cfg(unix)]
 
 use std::sync::Arc;
@@ -22,253 +23,256 @@ use norte_proto::{TaskState, VPath};
 use norte_vfs::Provider;
 
 fn vp(wire: &str) -> VPath {
-    VPath::parse(wire).expect("wire válido")
+    VPath::parse(wire).expect("valid wire")
 }
 
-struct Arbol {
+struct Tree {
     backend: Backend,
     dir: tempfile::TempDir,
 }
 
-/// Un origen, un destino `d/sub` de verdad, y un `fuera/` al que un atacante
-/// querría desviar la escritura.
-fn arbol() -> Arbol {
+/// A source, a real `d/sub` destination, and an `outside/` an attacker would
+/// want to divert the write to.
+fn tree() -> Tree {
     let dir = tempfile::tempdir().expect("tempdir");
-    std::fs::write(dir.path().join("origen.txt"), b"contenido").expect("origen");
-    std::fs::create_dir(dir.path().join("d")).expect("destino");
+    std::fs::write(dir.path().join("source.txt"), b"content").expect("source");
+    std::fs::create_dir(dir.path().join("d")).expect("destination");
     std::fs::create_dir(dir.path().join("d/sub")).expect("sub");
-    std::fs::create_dir(dir.path().join("fuera")).expect("fuera");
-    // Con la memoria de anclas de un cliente, que es lo que instala
-    // `embedded::engine_in` y por tanto lo que tiene el engine de un frontend
-    // (#317). Un engine sin ella no ancla nada — eso lo fija su propio test.
+    std::fs::create_dir(dir.path().join("outside")).expect("outside");
+    // With a client's anchor memory, which is what `embedded::engine_in`
+    // installs and therefore what a frontend's engine has (#317). An engine
+    // without it anchors nothing — its own test pins that down.
     let engine = Engine::new().with_client_anchors();
     engine.register_provider(
         Arc::new(norte_vfs_local::LocalProvider::rooted(dir.path())) as Arc<dyn Provider>
     );
-    Arbol {
+    Tree {
         backend: Backend::Embedded(Arc::new(engine)),
         dir,
     }
 }
 
-/// Lo que hace un PANEL al abrir un directorio: listarlo y retener su ancla.
+/// What a PANE does when opening a directory: list it and retain its anchor.
 ///
-/// Las dos cosas, y por separado, porque el backend no ancla todo lo que lista:
-/// el árbol lateral y el `fs.list` de un script también pasan por `list`, y
-/// como recordar sobrescribe, cualquiera de ellos rebendeciría el ancla del
-/// panel con lo que viera en ese momento (#301).
-async fn listar_como_un_panel(backend: &Backend, dir: &str) {
-    backend.list(&vp(dir)).await.expect("lista");
+/// Both things, and separately, because the backend does not anchor
+/// everything it lists: the side tree and a script's `fs.list` also go
+/// through `list`, and since remembering overwrites, either of them would
+/// re-bless the pane's anchor with whatever it saw at that moment (#301).
+async fn list_like_a_pane(backend: &Backend, dir: &str) {
+    backend.list(&vp(dir)).await.expect("lists");
     backend.remember_listing_anchor(&vp(dir)).await;
 }
 
-/// Quitar el directorio de verdad y dejar un enlace a `fuera` con su nombre:
-/// el ataque entero, en dos syscalls.
-fn sustituir_por_enlace(a: &Arbol) {
-    std::fs::remove_dir(a.dir.path().join("d/sub")).expect("quitar el de verdad");
-    std::os::unix::fs::symlink(a.dir.path().join("fuera"), a.dir.path().join("d/sub"))
-        .expect("plantar el enlace");
+/// Removes the real directory and leaves a link to `outside` with its name:
+/// the whole attack, in two syscalls.
+fn replace_with_link(a: &Tree) {
+    std::fs::remove_dir(a.dir.path().join("d/sub")).expect("remove the real one");
+    std::os::unix::fs::symlink(a.dir.path().join("outside"), a.dir.path().join("d/sub"))
+        .expect("plant the link");
 }
 
-/// La forma EXACTA del rechazo, igual que en `engine_dest_anchor`: los
-/// frontends pintan por categoría, así que la categoría es contrato.
+/// The EXACT shape of the rejection, same as in `engine_dest_anchor`:
+/// frontends paint by category, so the category is the contract.
 #[track_caller]
-fn rehusado(estado: &TaskState) {
+fn refused(state: &TaskState) {
     assert!(
         matches!(
-            estado,
+            state,
             TaskState::Failed {
                 error: norte_proto::Error::Conflict {
                     conflict: norte_proto::ConflictKind::EscapesRoot
                 }
             }
         ),
-        "tenía que rehusar por identidad del destino, fue {estado:?}"
+        "it had to refuse by destination identity, was {state:?}"
     );
 }
 
-/// **El caso del issue, sobre `fs.create`.** El panel listó `d/sub`; entre eso
-/// y el Enter del diálogo, `d/sub` pasó a ser un enlace a `fuera`. El fichero
-/// NO se crea al otro lado — que es lo que el `$EDITOR` habría abierto.
+/// **The case from the issue, over `fs.create`.** The pane listed `d/sub`;
+/// between that and the dialog's Enter, `d/sub` became a link to `outside`.
+/// The file is NOT created on the other side — which is what `$EDITOR` would
+/// have opened.
 #[tokio::test]
-async fn crear_en_un_destino_sustituido_por_un_enlace_se_rehusa() {
-    let a = arbol();
-    // Lo que hace un panel al abrir el directorio, y lo único que hace falta
-    // para que el ancla exista: listarlo por el backend.
-    listar_como_un_panel(&a.backend, "file:///d/sub").await;
+async fn creating_at_a_destination_replaced_by_a_link_is_refused() {
+    let a = tree();
+    // What a pane does when opening the directory, and the only thing needed
+    // for the anchor to exist: list it through the backend.
+    list_like_a_pane(&a.backend, "file:///d/sub").await;
 
-    sustituir_por_enlace(&a);
+    replace_with_link(&a);
 
     let task = a
         .backend
-        .create_file(&vp("file:///d/sub/notas.txt"))
+        .create_file(&vp("file:///d/sub/notes.txt"))
         .await
-        .expect("encola");
-    rehusado(&task.join().await);
+        .expect("enqueues");
+    refused(&task.join().await);
     assert!(
-        !a.dir.path().join("fuera/notas.txt").exists(),
-        "y nada aterrizó al otro lado del enlace"
+        !a.dir.path().join("outside/notes.txt").exists(),
+        "and nothing landed on the other side of the link"
     );
 }
 
-/// Y lo mismo copiando: `pane.copy` sobre el panel que se listó.
+/// And the same for copying: `pane.copy` over the pane that was listed.
 #[tokio::test]
-async fn copiar_a_un_destino_sustituido_por_un_enlace_se_rehusa() {
-    let a = arbol();
-    listar_como_un_panel(&a.backend, "file:///d/sub").await;
+async fn copying_to_a_destination_replaced_by_a_link_is_refused() {
+    let a = tree();
+    list_like_a_pane(&a.backend, "file:///d/sub").await;
 
-    sustituir_por_enlace(&a);
+    replace_with_link(&a);
 
     let task = a
         .backend
         .copy(
-            &vp("file:///origen.txt"),
-            &vp("file:///d/sub/botin.txt"),
+            &vp("file:///source.txt"),
+            &vp("file:///d/sub/loot.txt"),
             TransferOptions::default(),
         )
         .await
-        .expect("encola");
-    rehusado(&task.join().await);
-    assert!(!a.dir.path().join("fuera/botin.txt").exists());
+        .expect("enqueues");
+    refused(&task.join().await);
+    assert!(!a.dir.path().join("outside/loot.txt").exists());
 }
 
-/// Y moviendo, que es la otra escritura anclada.
+/// And moving, which is the other anchored write.
 #[tokio::test]
-async fn mover_a_un_destino_sustituido_por_un_enlace_se_rehusa() {
-    let a = arbol();
-    listar_como_un_panel(&a.backend, "file:///d/sub").await;
+async fn moving_to_a_destination_replaced_by_a_link_is_refused() {
+    let a = tree();
+    list_like_a_pane(&a.backend, "file:///d/sub").await;
 
-    sustituir_por_enlace(&a);
+    replace_with_link(&a);
 
     let task = a
         .backend
         .move_(
-            &vp("file:///origen.txt"),
-            &vp("file:///d/sub/botin.txt"),
+            &vp("file:///source.txt"),
+            &vp("file:///d/sub/loot.txt"),
             TransferOptions::default(),
         )
         .await
-        .expect("encola");
-    rehusado(&task.join().await);
-    assert!(!a.dir.path().join("fuera/botin.txt").exists());
+        .expect("enqueues");
+    refused(&task.join().await);
+    assert!(!a.dir.path().join("outside/loot.txt").exists());
     assert!(
-        a.dir.path().join("origen.txt").exists(),
-        "y el origen sigue donde estaba: un move rehusado no borra nada"
+        a.dir.path().join("source.txt").exists(),
+        "and the source is still where it was: a refused move deletes nothing"
     );
 }
 
-/// **Un listado que NO es una pantalla no rebendice el ancla** (#301).
+/// **A listing that is NOT a screen does not re-bless the anchor** (#301).
 ///
-/// El árbol lateral pide una rama por vuelta del bucle, y un script Lua puede
-/// llamar a `fs.list` cuando quiera. Si esos listados escribieran la caché,
-/// bastaría con que uno pasara por el destino DESPUÉS del cambiazo para que la
-/// copia del humano pasara la comprobación contra el nodo del atacante.
+/// The side tree asks for one branch per loop iteration, and a Lua script can
+/// call `fs.list` whenever it wants. If those listings wrote to the cache, it
+/// would be enough for one of them to pass over the destination AFTER the
+/// swap for the human's copy to pass the check against the attacker's node.
 #[tokio::test]
-async fn un_listado_que_no_es_de_panel_no_rebendice_el_ancla() {
-    let a = arbol();
-    listar_como_un_panel(&a.backend, "file:///d/sub").await;
+async fn a_listing_that_is_not_a_panes_does_not_rebless_the_anchor() {
+    let a = tree();
+    list_like_a_pane(&a.backend, "file:///d/sub").await;
 
-    sustituir_por_enlace(&a);
-    // El árbol lateral pasa por ahí y ve el enlace ya puesto.
-    a.backend.list(&vp("file:///d/sub")).await.expect("lista");
+    replace_with_link(&a);
+    // The side tree passes through there and sees the link already in place.
+    a.backend.list(&vp("file:///d/sub")).await.expect("lists");
 
     let task = a
         .backend
-        .create_file(&vp("file:///d/sub/notas.txt"))
+        .create_file(&vp("file:///d/sub/notes.txt"))
         .await
-        .expect("encola");
-    rehusado(&task.join().await);
+        .expect("enqueues");
+    refused(&task.join().await);
 }
 
-/// Sin haber listado el destino no hay ancla que mandar, y entonces esto se
-/// comporta como 0.53. Está aquí para que la diferencia sea del ANCLA y no de
-/// otra cosa: es el mismo enlace y el mismo backend.
+/// Without having listed the destination there is no anchor to send, and then
+/// this behaves like 0.53. This is here so the difference comes from the
+/// ANCHOR and not from something else: it is the same link and the same
+/// backend.
 #[tokio::test]
-async fn sin_listar_el_destino_no_hay_ancla_y_el_enlace_desvia() {
-    let a = arbol();
-    sustituir_por_enlace(&a);
+async fn without_listing_the_destination_there_is_no_anchor_and_the_link_diverts() {
+    let a = tree();
+    replace_with_link(&a);
 
     let task = a
         .backend
-        .create_file(&vp("file:///d/sub/notas.txt"))
+        .create_file(&vp("file:///d/sub/notes.txt"))
         .await
-        .expect("encola");
+        .expect("enqueues");
     assert_eq!(task.join().await, TaskState::Completed);
-    assert!(a.dir.path().join("fuera/notas.txt").exists());
+    assert!(a.dir.path().join("outside/notes.txt").exists());
 }
 
-/// Y el del FRONTEND sí la tiene, que es la otra mitad y la que se puede
-/// borrar sin que nada se ponga rojo (#317).
+/// And a FRONTEND's does have it, which is the other half and the one that can
+/// be deleted without anything going red (#317).
 ///
-/// `embedded::engine_in` es la única constructora que llama a
-/// `with_client_anchors`. Sin este test, quitarle esa llamada deja la TUI y la
-/// CLI sin comprobación de ancla en silencio.
+/// `embedded::engine_in` is the only constructor that calls
+/// `with_client_anchors`. Without this test, removing that call silently
+/// leaves the TUI and the CLI without an anchor check.
 #[test]
-fn el_engine_de_un_frontend_si_ancla() {
+fn a_frontends_engine_does_anchor() {
     let dir = tempfile::tempdir().expect("tempdir");
     assert!(norte_core::embedded::engine_in(dir.path()).has_client_anchors());
     assert!(
         !Engine::new().has_client_anchors(),
-        "y el que no pasa por ahí, no"
+        "and one that does not go through there, does not"
     );
 }
 
-/// **El engine del DAEMON no puede anclar, monte quien monte un
-/// `Backend::Embedded` encima** (#317).
+/// **The DAEMON's engine cannot anchor, no matter who mounts a
+/// `Backend::Embedded` over it** (#317).
 ///
-/// El ancla dice quién MIRÓ, y eso solo significa algo en un proceso con un
-/// cliente. En el daemon hay muchos, así que una caché compartida pasaría el
-/// listado del cliente A a la escritura del cliente B. La propiedad la sostiene
-/// el tipo —la memoria la instala `with_client_anchors`, y a esa solo la llama
-/// `embedded::engine_in`— y esto la fija desde fuera: mismo listado y mismo
-/// cambiazo, y aquí la escritura SE HACE, porque sin ancla se está en 0.53.
+/// The anchor says who LOOKED, and that only means something in a process
+/// with one client. The daemon has many, so a shared cache would pass client
+/// A's listing to client B's write. The property is held by the type — the
+/// memory is installed by `with_client_anchors`, and only
+/// `embedded::engine_in` calls it — and this pins it down from the outside:
+/// same listing and same swap, and here the write DOES happen, because
+/// without an anchor it is 0.53.
 #[tokio::test]
-async fn el_engine_del_daemon_no_ancla_aunque_le_monten_un_backend_embebido() {
+async fn the_daemons_engine_does_not_anchor_even_with_an_embedded_backend_mounted() {
     let dir = tempfile::tempdir().expect("tempdir");
-    std::fs::create_dir(dir.path().join("d")).expect("destino");
+    std::fs::create_dir(dir.path().join("d")).expect("destination");
     std::fs::create_dir(dir.path().join("d/sub")).expect("sub");
-    std::fs::create_dir(dir.path().join("fuera")).expect("fuera");
-    // Como lo construye el daemon: sin pasar por `embedded::engine_in`.
+    std::fs::create_dir(dir.path().join("outside")).expect("outside");
+    // As the daemon builds it: without going through `embedded::engine_in`.
     let engine = Engine::new();
     assert!(
         !engine.has_client_anchors(),
-        "un engine que no es de frontend no tiene memoria de anclas"
+        "an engine that is not a frontend's has no anchor memory"
     );
     engine.register_provider(
         Arc::new(norte_vfs_local::LocalProvider::rooted(dir.path())) as Arc<dyn Provider>
     );
-    let a = Arbol {
+    let a = Tree {
         backend: Backend::Embedded(Arc::new(engine)),
         dir,
     };
 
-    listar_como_un_panel(&a.backend, "file:///d/sub").await;
-    sustituir_por_enlace(&a);
+    list_like_a_pane(&a.backend, "file:///d/sub").await;
+    replace_with_link(&a);
 
     let task = a
         .backend
-        .create_file(&vp("file:///d/sub/notas.txt"))
+        .create_file(&vp("file:///d/sub/notes.txt"))
         .await
-        .expect("encola");
+        .expect("enqueues");
     assert_eq!(task.join().await, TaskState::Completed);
     assert!(
-        a.dir.path().join("fuera/notas.txt").exists(),
-        "sin memoria de cliente no hay ancla, y sin ancla es el 0.53 de siempre"
+        a.dir.path().join("outside/notes.txt").exists(),
+        "no client memory means no anchor, and no anchor is the usual 0.53"
     );
 }
 
-/// El directorio de verdad, listado y sin tocar: el ancla no cuesta la
-/// operación. Sin este test, «rehúsa siempre» pasaría los tres de arriba.
+/// The real directory, listed and untouched: the anchor does not cost the
+/// operation. Without this test, "always refuse" would pass the three above.
 #[tokio::test]
-async fn el_destino_que_sigue_siendo_el_mismo_deja_crear() {
-    let a = arbol();
-    listar_como_un_panel(&a.backend, "file:///d/sub").await;
+async fn a_destination_that_stays_the_same_lets_creation_through() {
+    let a = tree();
+    list_like_a_pane(&a.backend, "file:///d/sub").await;
 
     let task = a
         .backend
-        .create_file(&vp("file:///d/sub/notas.txt"))
+        .create_file(&vp("file:///d/sub/notes.txt"))
         .await
-        .expect("encola");
+        .expect("enqueues");
     assert_eq!(task.join().await, TaskState::Completed);
-    assert!(a.dir.path().join("d/sub/notas.txt").exists());
+    assert!(a.dir.path().join("d/sub/notes.txt").exists());
 }

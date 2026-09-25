@@ -1,7 +1,7 @@
-//! Detección y decodificación de encodings de texto (spec §6): pipeline
-//! BOM → heurística de binario (NUL) → chardetng, y decodificación con
-//! `encoding_rs`. Aísla la superficie de esas deps (plan M1): el resto del
-//! workspace consume ESTA API, jamás `chardetng`/`encoding_rs` directos.
+//! Text-encoding detection and decoding (spec §6): BOM → binary heuristic
+//! (NUL) → chardetng pipeline, and decoding with `encoding_rs`. Isolates the
+//! surface of those deps (M1 plan): the rest of the workspace consumes THIS
+//! API, never `chardetng`/`encoding_rs` directly.
 #![forbid(unsafe_code)]
 
 mod fold;
@@ -12,28 +12,28 @@ pub use fold::{
     is_default_ignorable, name_key,
 };
 
-/// Muestra de cabecera para chardetng: 64 KiB (spec §6.2).
+/// Header sample for chardetng: 64 KiB (spec §6.2).
 const SNIFF_LEN: usize = 64 * 1024;
 
-/// Resultado de la detección.
+/// Result of detection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Detection {
-    /// Texto en el encoding detectado.
+    /// Text in the detected encoding.
     Text {
-        /// El encoding más probable.
+        /// The most likely encoding.
         encoding: &'static Encoding,
-        /// `true` si lo decidió un BOM (certeza, no estadística).
+        /// `true` if a BOM decided it (certainty, not statistics).
         bom: bool,
     },
-    /// Binario (NUL sin BOM): al hexview, jamás decodificar a ciegas.
+    /// Binary (NUL with no BOM): to the hexview, never decode blindly.
     Binary,
 }
 
-/// Detecta el encoding de `bytes` (spec §6): BOM primero (certeza), NUL
-/// sin BOM = binario (sobre TODO el buffer: un binario con preámbulo
-/// textual largo no cuela), y si no, chardetng sobre la cabecera
-/// (64 KiB). UTF-16 SIN BOM cae a binario por diseño — recuperable
-/// a mano con «recargar como…» ([`decode_forced`]).
+/// Detects `bytes`'s encoding (spec §6): BOM first (certainty), NUL with no
+/// BOM = binary (over the WHOLE buffer: a binary with a long textual
+/// preamble does not sneak through), and otherwise chardetng over the
+/// header (64 KiB). UTF-16 WITH NO BOM falls to binary by design —
+/// recoverable by hand with "reload as…" ([`decode_forced`]).
 ///
 /// ```
 /// use norte_encoding::{Detection, detect};
@@ -52,10 +52,10 @@ pub fn detect(bytes: &[u8]) -> Detection {
         return Detection::Binary;
     }
     let head = &bytes[..bytes.len().min(SNIFF_LEN)];
-    // ISO-2022-JP fuera: su detección abre confusiones de escape en
-    // contextos web; un archivo local que lo necesite usará «recargar
-    // como…». UTF-8 permitido: esto no es un navegador con legado que
-    // proteger — un archivo local en UTF-8 válido ES UTF-8.
+    // ISO-2022-JP left out: detecting it opens escape confusions in web
+    // contexts; a local file that needs it will use "reload as…". UTF-8
+    // allowed: this is not a browser with legacy content to protect — a
+    // local file in valid UTF-8 IS UTF-8.
     let mut det = chardetng::EncodingDetector::new(chardetng::Iso2022JpDetection::Deny);
     det.feed(head, bytes.len() <= SNIFF_LEN);
     Detection::Text {
@@ -64,26 +64,26 @@ pub fn detect(bytes: &[u8]) -> Detection {
     }
 }
 
-/// Texto decodificado.
+/// Decoded text.
 #[derive(Debug, Clone)]
 pub struct Decoded {
-    /// El texto (con `�` donde hubo bytes inválidos).
+    /// The text (with `�` where bytes were invalid).
     pub text: String,
-    /// El encoding usado (informativo, para la status bar).
+    /// The encoding used (informative, for the status bar).
     pub encoding: &'static Encoding,
-    /// `true` si algún byte no decodificó (el `�` es visible).
+    /// `true` if some byte did not decode (the `�` is visible).
     pub had_errors: bool,
 }
 
-/// Decodifica `bytes` como `encoding`, quitando SU BOM si lo lleva.
-/// `complete = false` cuando `bytes` es una CABECERA truncada: la
-/// secuencia multibyte partida del final queda pendiente en vez de
-/// marcarse como pérdida (un archivo válido cortado NO "tiene pérdidas").
+/// Decodes `bytes` as `encoding`, stripping ITS BOM if it has one.
+/// `complete = false` when `bytes` is a truncated HEADER: the multibyte
+/// sequence split off the end is left pending instead of being marked as
+/// loss (a genuinely valid file that was cut off does NOT "have losses").
 ///
 /// ```
 /// use norte_encoding::{UTF_8, decode};
 /// assert_eq!(decode("año".as_bytes(), UTF_8, true).text, "año");
-/// // ñ partida por un truncado: pendiente, no pérdida.
+/// // ñ split by a truncation: pending, not a loss.
 /// assert!(!decode(b"a\xC3", UTF_8, false).had_errors);
 /// ```
 #[must_use]
@@ -91,9 +91,9 @@ pub fn decode(bytes: &[u8], encoding: &'static Encoding, complete: bool) -> Deco
     run_decoder(encoding.new_decoder(), encoding, bytes, complete)
 }
 
-/// Como [`decode`] pero SIN honrar ningún BOM: lo que el usuario fuerza
-/// con «recargar como…» MANDA (spec §6.2: siempre corregible a mano) —
-/// unos bytes `FE FF` iniciales son DATO del encoding forzado.
+/// Like [`decode`] but WITHOUT honoring any BOM: what the user forces with
+/// "reload as…" RULES (spec §6.2: always correctable by hand) — leading
+/// `FE FF` bytes are DATA under the forced encoding.
 ///
 /// ```
 /// use norte_encoding::{Encoding, decode_forced};
@@ -129,22 +129,23 @@ fn run_decoder(
     }
 }
 
-/// Decodificador con ESTADO para consumir un fichero por chunks respetando
-/// las secuencias multibyte partidas por el borde de un chunk (a diferencia de
-/// [`decode`], que decodifica un buffer completo de una vez). Imprescindible
-/// para partir en `'\n'` sobre el TEXTO decodificado: en UTF-16 el `LF` es
-/// `0A 00`/`00 0A` y cortar por el byte crudo `0x0A` desalinea los pares.
+/// STATEFUL decoder for consuming a file in chunks while respecting
+/// multibyte sequences split across a chunk boundary (unlike [`decode`],
+/// which decodes a complete buffer at once). Essential for splitting on
+/// `'\n'` over the DECODED TEXT: in UTF-16 `LF` is `0A 00`/`00 0A` and
+/// cutting on the raw byte `0x0A` misaligns the pairs.
 ///
-/// El BOM inicial se consume (no aparece en la salida), igual que [`decode`].
+/// The initial BOM is consumed (it does not appear in the output), same as
+/// [`decode`].
 ///
 /// ```
 /// use norte_encoding::{Encoding, StreamDecoder};
 /// let utf16le = Encoding::for_label(b"utf-16le").unwrap();
 /// let mut dec = StreamDecoder::new(utf16le);
 /// let mut out = String::new();
-/// // "hi" en UTF-16LE con BOM, partido a mitad de un code unit.
-/// dec.feed(&[0xFF, 0xFE, 0x68], false, &mut out); // BOM + 'h' incompleto
-/// dec.feed(&[0x00, 0x69, 0x00], true, &mut out);  // resto de 'h' + 'i'
+/// // "hi" in UTF-16LE with a BOM, split mid code unit.
+/// dec.feed(&[0xFF, 0xFE, 0x68], false, &mut out); // BOM + incomplete 'h'
+/// dec.feed(&[0x00, 0x69, 0x00], true, &mut out);  // rest of 'h' + 'i'
 /// assert_eq!(out, "hi");
 /// ```
 pub struct StreamDecoder {
@@ -153,7 +154,7 @@ pub struct StreamDecoder {
 }
 
 impl StreamDecoder {
-    /// Crea un decodificador con estado para `encoding` (honra el BOM inicial).
+    /// Creates a stateful decoder for `encoding` (honors the initial BOM).
     #[must_use]
     pub fn new(encoding: &'static Encoding) -> Self {
         Self {
@@ -162,16 +163,16 @@ impl StreamDecoder {
         }
     }
 
-    /// El encoding de este decodificador.
+    /// This decoder's encoding.
     #[must_use]
     pub fn encoding(&self) -> &'static Encoding {
         self.encoding
     }
 
-    /// Decodifica `bytes` y APPENDEA el texto a `out`, reteniendo internamente
-    /// cualquier secuencia multibyte incompleta del final para el próximo
-    /// `feed`. `last = true` en el chunk final vacía lo pendiente (los bytes
-    /// colgando salen como `�`). Los bytes inválidos se sustituyen por `�`.
+    /// Decodes `bytes` and APPENDS the text to `out`, internally retaining
+    /// any incomplete multibyte sequence off the end for the next `feed`.
+    /// `last = true` on the final chunk flushes whatever is pending (the
+    /// dangling bytes come out as `�`). Invalid bytes are replaced by `�`.
     pub fn feed(&mut self, bytes: &[u8], last: bool, out: &mut String) {
         out.reserve(
             self.decoder
@@ -182,24 +183,24 @@ impl StreamDecoder {
     }
 }
 
-/// Fin de línea dominante de un texto (para la status bar del viewer).
+/// Dominant line ending of a text (for the viewer's status bar).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Eol {
-    /// Solo `\n`.
+    /// Only `\n`.
     Lf,
-    /// Solo `\r\n`.
+    /// Only `\r\n`.
     CrLf,
-    /// Solo `\r` (Mac clásico).
+    /// Only `\r` (classic Mac).
     Cr,
-    /// Mezcla (sospechoso: merece verse).
+    /// Mixed (suspicious: worth surfacing).
     Mixed,
-    /// Sin saltos de línea.
+    /// No line breaks.
     None,
 }
 
 impl std::fmt::Display for Eol {
-    /// Identificador TÉCNICO estable (una lib no localiza; el frontend
-    /// mapea a texto de UI).
+    /// Stable TECHNICAL identifier (a lib does not localize; the frontend
+    /// maps it to UI text).
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Self::Lf => "LF",
@@ -211,7 +212,7 @@ impl std::fmt::Display for Eol {
     }
 }
 
-/// Detecta el EOL de un texto ya decodificado.
+/// Detects an already-decoded text's EOL.
 ///
 /// ```
 /// use norte_encoding::{Eol, detect_eol};
@@ -248,8 +249,8 @@ pub fn detect_eol(text: &str) -> Eol {
     }
 }
 
-/// El ciclo de «recargar como…» del viewer: los encodings que un usuario
-/// real necesita probar a mano (cubre el corpus del testkit; ampliable).
+/// The viewer's "reload as…" cycle: the encodings a real user needs to try
+/// by hand (covers the testkit's corpus; extensible).
 ///
 /// ```
 /// assert!(norte_encoding::reload_cycle().len() >= 10);
@@ -260,7 +261,7 @@ pub fn reload_cycle() -> &'static [&'static Encoding] {
         encoding_rs::UTF_8,
         encoding_rs::WINDOWS_1252,
         encoding_rs::ISO_8859_15,
-        // GB18030 (la etiqueta que nombra la spec; superset de GBK).
+        // GB18030 (the label the spec names; superset of GBK).
         encoding_rs::GB18030,
         encoding_rs::SHIFT_JIS,
         encoding_rs::EUC_JP,
@@ -272,16 +273,16 @@ pub fn reload_cycle() -> &'static [&'static Encoding] {
     CYCLE
 }
 
-/// Los encodings a los que transcodificar una AGUJA para búsqueda literal
-/// de contenido (fs.search): [`reload_cycle`] MENOS UTF-16LE/BE.
+/// The encodings to transcode a NEEDLE into for literal content search
+/// (fs.search): [`reload_cycle`] MINUS UTF-16LE/BE.
 ///
-/// La decisión vive JUNTO a los datos (no en el consumidor por nombre).
-/// Codificar a UTF-16 con `encoding_rs` NO produce bytes UTF-16: la regla
-/// WHATWG «output encoding» mapea UTF-16LE/BE a UTF-8 (ver el gotcha de
-/// [`encode_lossless`]), así que como aguja solo duplicarían la de UTF-8 —
-/// inútiles. Un literal en un fichero GENUINAMENTE UTF-16 se busca
-/// decodificando el fichero (el detector da UTF-16-con-BOM como texto;
-/// sin-BOM cae a binario y el walker lo salta), no con una aguja cruda.
+/// The decision lives ALONGSIDE the data (not in the consumer, by name).
+/// Encoding to UTF-16 with `encoding_rs` does NOT produce UTF-16 bytes: the
+/// WHATWG "output encoding" rule maps UTF-16LE/BE to UTF-8 (see
+/// [`encode_lossless`]'s gotcha), so as a needle they would only duplicate
+/// the UTF-8 one — useless. A literal in a GENUINELY UTF-16 file is searched
+/// by decoding the file (the detector gives UTF-16-with-BOM as text;
+/// no-BOM falls to binary and the walker skips it), not with a raw needle.
 ///
 /// ```
 /// assert!(norte_encoding::needle_cycle().len() == norte_encoding::reload_cycle().len() - 2);
@@ -301,27 +302,27 @@ pub fn needle_cycle() -> &'static [&'static Encoding] {
     CYCLE
 }
 
-/// Codifica `text` a `enc` SIN pérdida: `None` si algún carácter no es
-/// mapeable en ese encoding, o si el resultado es vacío. Encapsula el gotcha
-/// de `encoding_rs::Encoding::encode` (que en un unmappable emite una
-/// referencia numérica HTML `&#NNN;` en vez de fallar) exponiendo un
-/// contrato honesto: bytes representables o nada.
+/// Encodes `text` to `enc` WITHOUT loss: `None` if some character is not
+/// mappable in that encoding, or if the result is empty. Encapsulates
+/// `encoding_rs::Encoding::encode`'s gotcha (which on an unmappable emits an
+/// HTML numeric reference `&#NNN;` instead of failing) by exposing an
+/// honest contract: representable bytes or nothing.
 ///
-/// **Gotcha UTF-16 → UTF-8**: `encoding_rs` sigue la regla WHATWG «get an
-/// output encoding» — UTF-16LE/BE y `replacement` son encodings SOLO de
-/// decodificación, y al codificar se sustituyen por UTF-8. Así,
-/// `encode_lossless(UTF_16LE, "A")` devuelve los bytes UTF-8 `[0x41]`, NO los
-/// UTF-16 `[0x41, 0x00]`. Consecuencia: esta función jamás produce bytes
-/// UTF-16 reales; para buscar en un fichero genuinamente UTF-16 hay que
-/// decodificarlo. Por eso [`needle_cycle`] excluye UTF-16 (solo duplicaría la
-/// aguja UTF-8).
+/// **UTF-16 → UTF-8 gotcha**: `encoding_rs` follows the WHATWG "get an
+/// output encoding" rule — UTF-16LE/BE and `replacement` are DECODE-ONLY
+/// encodings, and when encoding they are substituted with UTF-8. So,
+/// `encode_lossless(UTF_16LE, "A")` returns the UTF-8 bytes `[0x41]`, NOT
+/// the UTF-16 `[0x41, 0x00]`. Consequence: this function never produces real
+/// UTF-16 bytes; to search in a genuinely UTF-16 file it must be decoded.
+/// That is why [`needle_cycle`] excludes UTF-16 (it would only duplicate the
+/// UTF-8 needle).
 ///
 /// ```
 /// use norte_encoding::{encode_lossless, UTF_8};
 /// let w1252 = norte_encoding::Encoding::for_label(b"windows-1252").unwrap();
 /// assert_eq!(encode_lossless(UTF_8, "año").unwrap(), "año".as_bytes());
 /// assert_eq!(encode_lossless(w1252, "año").unwrap(), b"a\xF1o");
-/// // π no es mapeable en windows-1252 → None (jamás el "&#960;" lossy):
+/// // π is not mappable in windows-1252 → None (never the lossy "&#960;"):
 /// assert!(encode_lossless(w1252, "π").is_none());
 /// ```
 #[must_use]
@@ -333,84 +334,87 @@ pub fn encode_lossless(enc: &'static Encoding, text: &str) -> Option<Vec<u8>> {
     Some(bytes.into_owned())
 }
 
-/// Rangos de `Default_Ignorable_Code_Point` (UCD `DerivedCoreProperties`,
-/// Unicode 16.0) — la propiedad que dice «esto no se pinta».
+/// `Default_Ignorable_Code_Point` ranges (UCD `DerivedCoreProperties`,
+/// Unicode 16.0) — the property that says "this does not get painted".
 ///
-/// Va como TABLA y no como llamada a una librería porque ninguna del árbol la
-/// expone: `unicode-properties` da categoría general y emoji, y nada más. Una
-/// tabla derivada de la UCD, con su versión escrita al lado y un test que la
-/// recorre, es auditable; la lista de codepoints sueltos que había antes no lo
-/// era — se escribió a mano, afirmaba en su rustdoc cubrir «los INVISIBLES
-/// Cf/Zl/Zp», y se dejaba fuera ocho (#125), entre ellos los dos rellenos
-/// Hangul, que son **Lo** y ninguna enumeración de Cf iba a coger nunca.
+/// It is a TABLE and not a call to a library because none in the tree
+/// exposes it: `unicode-properties` gives general category and emoji, and
+/// nothing else. A table derived from the UCD, with its version written
+/// alongside and a test that walks it, is auditable; the loose list of
+/// codepoints there used to be was not — it was written by hand, claimed in
+/// its rustdoc to cover "the Cf/Zl/Zp INVISIBLES", and left eight out
+/// (#125), among them the two Hangul fillers, which are **Lo** and no Cf
+/// enumeration was ever going to catch.
 ///
-/// Ordenada: [`is_terminal_hazard`] la recorre con búsqueda binaria.
+/// Sorted: [`is_terminal_hazard`] walks it with binary search.
 const DEFAULT_IGNORABLE: &[(char, char)] = &[
     ('\u{00AD}', '\u{00AD}'),   // SOFT HYPHEN
     ('\u{034F}', '\u{034F}'),   // COMBINING GRAPHEME JOINER
     ('\u{061C}', '\u{061C}'),   // ARABIC LETTER MARK
-    ('\u{115F}', '\u{1160}'),   // rellenos HANGUL (Lo)
-    ('\u{17B4}', '\u{17B5}'),   // vocales inherentes khmer
-    ('\u{180B}', '\u{180F}'),   // selectores de variación mongoles + MVS
+    ('\u{115F}', '\u{1160}'),   // HANGUL fillers (Lo)
+    ('\u{17B4}', '\u{17B5}'),   // Khmer inherent vowels
+    ('\u{180B}', '\u{180F}'),   // Mongolian variation selectors + MVS
     ('\u{200B}', '\u{200F}'),   // ZWSP/ZWNJ/ZWJ/LRM/RLM
-    ('\u{202A}', '\u{202E}'),   // embedding y overrides bidi
+    ('\u{202A}', '\u{202E}'),   // bidi embedding and overrides
     ('\u{2060}', '\u{2064}'),   // WORD JOINER … INVISIBLE PLUS
-    ('\u{2065}', '\u{2069}'),   // no asignado + isolates bidi
-    ('\u{206A}', '\u{206F}'),   // deprecados de formato (NATIONAL DIGIT SHAPES…)
+    ('\u{2065}', '\u{2069}'),   // unassigned + bidi isolates
+    ('\u{206A}', '\u{206F}'),   // deprecated format chars (NATIONAL DIGIT SHAPES…)
     ('\u{3164}', '\u{3164}'),   // HANGUL FILLER (Lo)
-    ('\u{FE00}', '\u{FE0F}'),   // selectores de variación
+    ('\u{FE00}', '\u{FE0F}'),   // variation selectors
     ('\u{FEFF}', '\u{FEFF}'),   // ZWNBSP / BOM
     ('\u{FFA0}', '\u{FFA0}'),   // HALFWIDTH HANGUL FILLER
-    ('\u{FFF0}', '\u{FFF8}'),   // no asignados reservados
-    ('\u{1BCA0}', '\u{1BCA3}'), // controles de formato Duployan
-    ('\u{1D173}', '\u{1D17A}'), // controles de formato musical
-    ('\u{E0000}', '\u{E0FFF}'), // TAG chars y selectores de variación suplementarios
+    ('\u{FFF0}', '\u{FFF8}'),   // reserved unassigned
+    ('\u{1BCA0}', '\u{1BCA3}'), // Duployan format controls
+    ('\u{1D173}', '\u{1D17A}'), // musical format controls
+    ('\u{E0000}', '\u{E0FFF}'), // TAG chars and supplementary variation selectors
 ];
 
-/// Invisibles que `Default_Ignorable_Code_Point` NO cubre y que aun así se
-/// pintan en blanco. Cada uno con su motivo, porque cada uno es una excepción
-/// y una excepción sin motivo es una lista a la que se le añaden cosas.
-/// Ordenada, como las demás: la recorre la misma búsqueda binaria.
-const INVISIBLES_FUERA_DE_DI: &[(char, char)] = &[
-    // Zl/Zp: separadores de línea y de párrafo, que `is_control` no coge.
+/// Invisibles `Default_Ignorable_Code_Point` does NOT cover and that still
+/// get painted blank. Each with its reason, because each is an exception and
+/// an exception with no reason is a list things get added to. Sorted, like
+/// the others: walked by the same binary search.
+const INVISIBLE_OUTSIDE_DI: &[(char, char)] = &[
+    // Zl/Zp: line and paragraph separators, which `is_control` does not catch.
     ('\u{2028}', '\u{2029}'),
-    // BRAILLE PATTERN BLANK: categoría So, ni Cf ni ignorable para nadie —
-    // simplemente es un braille sin puntos, o sea, un carácter en blanco de
-    // ancho completo.
+    // BRAILLE PATTERN BLANK: category So, neither Cf nor ignorable to
+    // anyone — it is simply a braille with no dots, i.e. a full-width blank
+    // character.
     ('\u{2800}', '\u{2800}'),
-    // Cf, pero la UCD los EXCLUYE de DI (llevan semántica de anotación). Se
-    // pintan en blanco igual, así que sirven para fabricar un gemelo.
+    // Cf, but the UCD EXCLUDES them from DI (they carry annotation
+    // semantics). They still get painted blank, so they work to forge a
+    // twin.
     ('\u{FFF9}', '\u{FFFB}'),
 ];
 
-/// Ignorables que se PERMITEN a sabiendas: componen emoji legítimos, y
-/// enmascararlos rompería nombres reales a cambio del residual de un gemelo
-/// que solo se diferencia en esto.
+/// Ignorables that are KNOWINGLY ALLOWED: they compose legitimate emoji, and
+/// masking them would break real names in exchange for the residual of a
+/// twin that only differs in this.
 ///
-/// ZWJ une las partes de un emoji compuesto (familia, profesiones); los
-/// selectores de variación eligen presentación emoji frente a texto. Ambos son
-/// `Default_Ignorable`, así que sin esta excepción la propiedad los cogería.
-const IGNORABLES_PERMITIDOS: &[(char, char)] = &[
+/// ZWJ joins the parts of a compound emoji (family, professions); the
+/// variation selectors choose emoji presentation over text. Both are
+/// `Default_Ignorable`, so without this exception the property would catch
+/// them.
+const ALLOWED_IGNORABLES: &[(char, char)] = &[
     ('\u{200D}', '\u{200D}'),   // ZERO WIDTH JOINER
-    ('\u{FE00}', '\u{FE0F}'),   // selectores de variación 1..16
-    ('\u{E0100}', '\u{E01EF}'), // selectores de variación suplementarios
+    ('\u{FE00}', '\u{FE0F}'),   // variation selectors 1..16
+    ('\u{E0100}', '\u{E01EF}'), // supplementary variation selectors
 ];
 
-/// ¿Es `c` `Default_Ignorable_Code_Point`, según la MISMA tabla que usa el
-/// pintado de invisibles?
+/// Is `c` `Default_Ignorable_Code_Point`, per the SAME table the invisibles
+/// painting uses?
 ///
-/// Lo pregunta [`fold::is_default_ignorable`], que es la cara pública: el
-/// pliegue completo los descarta antes de comparar (#214). La tabla es una y
-/// las políticas son dos — `is_terminal_hazard` exime el ZWJ y los selectores
-/// de variación por fidelidad de emoji, y el pliegue no puede eximir nada
-/// porque el sistema de ficheros tampoco.
-pub(crate) fn es_ignorable_por_defecto(c: char) -> bool {
-    en_rangos(DEFAULT_IGNORABLE, c)
+/// Asked by [`fold::is_default_ignorable`], which is the public face: the
+/// full fold discards them before comparing (#214). The table is one and the
+/// policies are two — `is_terminal_hazard` exempts ZWJ and the variation
+/// selectors for emoji fidelity, and the fold cannot exempt anything because
+/// the filesystem does not either.
+pub(crate) fn is_default_ignorable_impl(c: char) -> bool {
+    in_ranges(DEFAULT_IGNORABLE, c)
 }
 
-/// ¿Está `c` en alguno de los rangos ORDENADOS de `tabla`?
-fn en_rangos(tabla: &[(char, char)], c: char) -> bool {
-    tabla
+/// Is `c` within any of `table`'s SORTED ranges?
+fn in_ranges(table: &[(char, char)], c: char) -> bool {
+    table
         .binary_search_by(|(lo, hi)| {
             if c < *lo {
                 std::cmp::Ordering::Greater
@@ -423,26 +427,25 @@ fn en_rangos(tabla: &[(char, char)], c: char) -> bool {
         .is_ok()
 }
 
-/// ¿Es `c` un peligro para un terminal? Tres familias:
+/// Is `c` a hazard for a terminal? Three families:
 ///
-/// - **Cc, los controles** (`\n`, ESC): un frontend directo los EJECUTARÍA —
-///   inyección ANSI/OSC.
-/// - **Los overrides bidi**: falsifican el ORDEN VISUAL del texto sin tocar
-///   sus bytes (`202A..=202E`, `2066..=2069`).
-/// - **Los invisibles**: dos textos visualmente idénticos que difieren en
-///   bytes engañan a un humano, y con él a cualquier «aprueba lo que ya
-///   viste». Se deciden por la propiedad Unicode
-///   `Default_Ignorable_Code_Point` (`DEFAULT_IGNORABLE`) más los que se
-///   pintan en blanco sin ser ignorables (`INVISIBLES_FUERA_DE_DI`).
+/// - **Cc, the controls** (`\n`, ESC): a direct frontend would EXECUTE
+///   them — ANSI/OSC injection.
+/// - **The bidi overrides**: falsify the text's VISUAL ORDER without
+///   touching its bytes (`202A..=202E`, `2066..=2069`).
+/// - **The invisibles**: two visually identical texts that differ in
+///   bytes fool a human, and through them any "approve what you already
+///   saw". Decided by the Unicode `Default_Ignorable_Code_Point` property
+///   (`DEFAULT_IGNORABLE`) plus the ones that get painted blank without
+///   being ignorable (`INVISIBLE_OUTSIDE_DI`).
 ///
-/// ZWJ (`U+200D`) y los selectores de variación se PERMITEN a sabiendas
-/// (`IGNORABLES_PERMITIDOS`): enmascararlos rompería los emoji compuestos —
-/// fidelidad de emoji > el residual de un gemelo que solo se diferencia en
-/// eso.
+/// ZWJ (`U+200D`) and the variation selectors are KNOWINGLY ALLOWED
+/// (`ALLOWED_IGNORABLES`): masking them would break compound emoji — emoji
+/// fidelity > the residual of a twin that only differs in that.
 ///
-/// Fuente ÚNICA del set (spec §6: jamás controles/bidi crudos en superficies
-/// de terminal). La consumen el saneo de preview de `fs.search` (productor,
-/// en origen) y el `display_name`/`must_mask` de los frontends.
+/// SINGLE source of the set (spec §6: never raw controls/bidi in terminal
+/// surfaces). Consumed by `fs.search`'s preview sanitization (producer, at
+/// the source) and the frontends' `display_name`/`must_mask`.
 ///
 /// ```
 /// use norte_encoding::is_terminal_hazard;
@@ -457,20 +460,20 @@ fn en_rangos(tabla: &[(char, char)], c: char) -> bool {
 /// ```
 #[must_use]
 pub fn is_terminal_hazard(c: char) -> bool {
-    if en_rangos(IGNORABLES_PERMITIDOS, c) {
+    if in_ranges(ALLOWED_IGNORABLES, c) {
         return false;
     }
-    c.is_control() || en_rangos(DEFAULT_IGNORABLE, c) || en_rangos(INVISIBLES_FUERA_DE_DI, c)
+    c.is_control() || in_ranges(DEFAULT_IGNORABLE, c) || in_ranges(INVISIBLE_OUTSIDE_DI, c)
 }
 
-/// Reemplaza cada char de [`is_terminal_hazard`] por `U+FFFD` (`�`). Sanea
-/// EN ORIGEN un texto destinado a pintarse: controles, overrides bidi e
-/// invisibles jamás salen crudos. Mismo set y misma decisión ZWJ que
+/// Replaces every [`is_terminal_hazard`] char with `U+FFFD` (`�`). Sanitizes
+/// AT THE SOURCE a text meant to be painted: controls, bidi overrides and
+/// invisibles never come out raw. Same set and same ZWJ decision as
 /// [`is_terminal_hazard`].
 ///
 /// ```
 /// use norte_encoding::mask_terminal_hazards;
-/// // RLO + isolate sin cerrar + ESC+OSC + C0 → todos a U+FFFD:
+/// // RLO + isolate sin cerrar + ESC+OSC + C0 → all a U+FFFD:
 /// let out = mask_terminal_hazards("ok \u{202E}\u{2066}\u{1B}]0;x\u{07}\u{01}");
 /// assert_eq!(out, "ok \u{FFFD}\u{FFFD}\u{FFFD}]0;x\u{FFFD}\u{FFFD}");
 /// // ZWJ (emoji) se preserva:
@@ -483,22 +486,21 @@ pub fn mask_terminal_hazards(s: &str) -> String {
         .collect()
 }
 
-/// Encoding para REINTERPRETAR nombres de archivo como texto (#57, spec
-/// §6.1, fila ZIP): SOLO display — los bytes del nombre jamás se mutan
-/// (regla 1) y la elección es una acción explícita del usuario («ver
-/// nombres como…»), nunca una decodificación a ciegas.
+/// Encoding for REINTERPRETING filenames as text (#57, spec §6.1, ZIP row):
+/// display ONLY — the name's bytes are never mutated (rule 1) and the choice
+/// is an explicit user action ("view names as…"), never a blind decoding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NameEncoding {
-    /// IBM cp437 (DOS US), el legado clásico de los zip pre-Unicode.
-    /// `encoding_rs` NO lo trae (WHATWG no lo incluye): tabla propia TOTAL
-    /// (los 256 bytes mapean, la decodificación jamás falla).
+    /// IBM cp437 (DOS US), the classic legacy of pre-Unicode zips.
+    /// `encoding_rs` does NOT carry it (WHATWG does not include it): a
+    /// TOTAL table of our own (all 256 bytes map, decoding never fails).
     Cp437,
-    /// Un encoding de `encoding_rs` (IBM866, `Shift_JIS`, GBK…).
+    /// An `encoding_rs` encoding (IBM866, `Shift_JIS`, GBK…).
     Rs(&'static Encoding),
 }
 
 impl NameEncoding {
-    /// Etiqueta corta para UI (`cp437`, `IBM866`, `Shift_JIS`…).
+    /// Short UI label (`cp437`, `IBM866`, `Shift_JIS`…).
     ///
     /// ```
     /// use norte_encoding::NameEncoding;
@@ -514,9 +516,9 @@ impl NameEncoding {
     }
 }
 
-/// cp437, mitad alta (0x80–0xFF). La mitad baja es ASCII tal cual (los
-/// controles 0x00–0x1F se dejan como controles: el enmascarado de display
-/// los tapa aguas arriba, igual que en un nombre UTF-8 con controles).
+/// cp437, high half (0x80–0xFF). The low half is ASCII as-is (the
+/// 0x00–0x1F controls are left as controls: display masking covers them
+/// upstream, same as in a UTF-8 name with controls).
 const CP437_HIGH: [char; 128] = [
     'Ç', 'ü', 'é', 'â', 'ä', 'à', 'å', 'ç', 'ê', 'ë', 'è', 'ï', 'î', 'ì', 'Ä', 'Å', 'É', 'æ', 'Æ',
     'ô', 'ö', 'ò', 'û', 'ù', 'ÿ', 'Ö', 'Ü', '¢', '£', '¥', '₧', 'ƒ', 'á', 'í', 'ó', 'ú', 'ñ', 'Ñ',
@@ -527,18 +529,18 @@ const CP437_HIGH: [char; 128] = [
     '≥', '≤', '⌠', '⌡', '÷', '≈', '°', '∙', '·', '√', 'ⁿ', '²', '■', '\u{00A0}',
 ];
 
-/// Decodifica un NOMBRE con `enc` para display. TOTAL: siempre produce
-/// texto (cp437 mapea los 256 bytes; `encoding_rs` sustituye lo inválido
-/// por `U+FFFD`). El saneado de hazards (controles/bidi/invisibles) es del
-/// CALLER de display, igual que con nombres UTF-8.
+/// Decodes a NAME with `enc` for display. TOTAL: always produces text
+/// (cp437 maps all 256 bytes; `encoding_rs` replaces what is invalid with
+/// `U+FFFD`). Sanitizing hazards (controls/bidi/invisibles) is the display
+/// CALLER's job, same as with UTF-8 names.
 ///
 /// ```
 /// use norte_encoding::{NameEncoding, decode_name};
-/// // "CAFÉ.TXT" en cp437 (É = 0x90):
+/// // "CAFÉ.TXT" in cp437 (É = 0x90):
 /// assert_eq!(decode_name(b"CAF\x90.TXT", NameEncoding::Cp437), "CAFÉ.TXT");
-/// // Cirílico en IBM866:
-/// let ruso = decode_name(b"\x8f\xa0\xaf\xaa\xa0", NameEncoding::Rs(encoding_rs::IBM866));
-/// assert_eq!(ruso, "Папка");
+/// // Cyrillic in IBM866:
+/// let russian = decode_name(b"\x8f\xa0\xaf\xaa\xa0", NameEncoding::Rs(encoding_rs::IBM866));
+/// assert_eq!(russian, "Папка");
 /// ```
 #[must_use]
 pub fn decode_name(bytes: &[u8], enc: NameEncoding) -> String {
@@ -557,9 +559,9 @@ pub fn decode_name(bytes: &[u8], enc: NameEncoding) -> String {
     }
 }
 
-/// El ciclo de «ver nombres como…» (#57): los encodings de nombres que un
-/// usuario real necesita probar sobre un zip/tar pre-Unicode. cp437 primero
-/// (el default histórico del formato zip cuando el bit 11 está apagado).
+/// The "view names as…" cycle (#57): the name encodings a real user needs
+/// to try over a pre-Unicode zip/tar. cp437 first (the zip format's
+/// historical default when bit 11 is off).
 ///
 /// ```
 /// assert_eq!(norte_encoding::name_reinterpret_cycle().len(), 5);
@@ -576,15 +578,15 @@ pub fn name_reinterpret_cycle() -> &'static [NameEncoding] {
     CYCLE
 }
 
-/// Sugiere un encoding del ciclo para un conjunto de NOMBRES no-UTF8
-/// (chardetng sobre las muestras). `None` = sin sugerencia útil (la
-/// adivinanza cayó fuera del ciclo — p. ej. UTF-8 — o no hay muestras).
-/// cp437 jamás se sugiere (chardetng no lo modela); el ciclo del frontend
-/// da la vuelta completa, así que sigue siendo alcanzable a mano.
+/// Suggests a cycle encoding for a set of non-UTF8 NAMES (chardetng over the
+/// samples). `None` = no useful suggestion (the guess fell outside the
+/// cycle — e.g. UTF-8 — or there are no samples). cp437 is never suggested
+/// (chardetng does not model it); the frontend's cycle goes all the way
+/// around, so it stays reachable by hand.
 ///
 /// ```
 /// use norte_encoding::{NameEncoding, suggest_name_encoding};
-/// // "Папка" en cp866 → IBM866 (miembro del ciclo):
+/// // "Папка" in cp866 → IBM866 (a cycle member):
 /// let s = suggest_name_encoding(&[b"\x8f\xa0\xaf\xaa\xa0"]);
 /// assert_eq!(s, Some(NameEncoding::Rs(encoding_rs::IBM866)));
 /// assert_eq!(suggest_name_encoding(&[]), None);
@@ -597,10 +599,10 @@ pub fn suggest_name_encoding(samples: &[&[u8]]) -> Option<NameEncoding> {
     let mut det = chardetng::EncodingDetector::new(chardetng::Iso2022JpDetection::Deny);
     for (i, s) in samples.iter().enumerate() {
         det.feed(s, false);
-        // Separador ASCII neutro entre muestras (F3 del audit): sin él, un
-        // lead byte colgante al final de un nombre se emparejaría con el
-        // primer byte del siguiente, fabricando secuencias multibyte
-        // fantasma que sesgan la adivinanza.
+        // Neutral ASCII separator between samples (audit finding F3):
+        // without it, a dangling lead byte at the end of a name would pair
+        // up with the next one's first byte, forging phantom multibyte
+        // sequences that bias the guess.
         det.feed(b" ", i + 1 == samples.len());
     }
     let guess = det.guess(None, chardetng::Utf8Detection::Deny);

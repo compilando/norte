@@ -1,30 +1,31 @@
-//! Property-based tests de `VPath` (spec §12): el roundtrip byte-exacto es
-//! la propiedad fundacional del proyecto — un path jamás se corrompe.
+//! Property-based tests of `VPath` (spec §12): the byte-exact roundtrip is
+//! the project's foundational property — a path is never corrupted.
 //!
-//! Las estrategias canónicas migrarán a `norte-testkit::strategies` en la
-//! fase de testkit; aquí viven las definiciones originales.
+//! The canonical strategies will migrate to `norte-testkit::strategies` in
+//! the testkit phase; the original definitions live here.
 
 use norte_proto::{Authority, Scheme, Segment, VPath};
 use proptest::prelude::*;
 
 fn arb_segment_bytes() -> impl Strategy<Value = Vec<u8>> {
     proptest::collection::vec(any::<u8>(), 1..64)
-        .prop_filter("sin NUL ni separador", |b| {
+        .prop_filter("no NUL nor separator", |b| {
             !b.contains(&0x00) && !b.contains(&0x2F)
         })
-        .prop_filter("sin dot-segments", |b| b != b"." && b != b"..")
+        .prop_filter("no dot-segments", |b| b != b"." && b != b"..")
 }
 
 fn arb_scheme() -> impl Strategy<Value = String> {
-    proptest::string::string_regex("[a-z][a-z0-9+.-]{0,10}").expect("regex válida")
+    proptest::string::string_regex("[a-z][a-z0-9+.-]{0,10}").expect("valid regex")
 }
 
 fn arb_authority() -> impl Strategy<Value = Option<Authority>> {
-    // Charset de Authority: ASCII imprimible menos `%` (0x25) y `/` (0x2F). El
-    // charset incluye `:` y `@`, así que un `user:pass@host` puede caer y ya
-    // NO es válido (#46, proto 0.8.0): se FILTRA en vez de `expect`.
-    let valid = proptest::string::string_regex("[!-$&-.0-~]{1,16}").expect("regex válida");
-    proptest::option::of(valid.prop_filter_map("authority válida", |s| Authority::new(&s).ok()))
+    // Authority's charset: printable ASCII minus `%` (0x25) and `/` (0x2F).
+    // The charset includes `:` and `@`, so a `user:pass@host` can fall out and
+    // is NOT valid anymore (#46, proto 0.8.0): it is FILTERED instead of
+    // `expect`ed.
+    let valid = proptest::string::string_regex("[!-$&-.0-~]{1,16}").expect("valid regex");
+    proptest::option::of(valid.prop_filter_map("valid authority", |s| Authority::new(&s).ok()))
 }
 
 prop_compose! {
@@ -33,21 +34,21 @@ prop_compose! {
         authority in arb_authority(),
         segs in proptest::collection::vec(arb_segment_bytes(), 0..8),
     ) -> VPath {
-        let scheme = Scheme::new(&scheme).expect("estrategia genera schemes válidos");
+        let scheme = Scheme::new(&scheme).expect("the strategy generates valid schemes");
         let mut p = VPath::root(scheme, authority);
         for s in segs {
-            p = p.join(Segment::new(s).expect("estrategia genera segmentos válidos"));
+            p = p.join(Segment::new(s).expect("the strategy generates valid segments"));
         }
         p
     }
 }
 
 proptest! {
-    /// LA propiedad crítica: bytes arbitrarios → wire → parse → bytes idénticos.
+    /// THE critical property: arbitrary bytes → wire → parse → identical bytes.
     #[test]
     fn prop_roundtrip_bytes(p in arb_vpath()) {
         let wire = p.to_wire();
-        let q = VPath::parse(&wire).expect("to_wire siempre produce wire parseable");
+        let q = VPath::parse(&wire).expect("to_wire always produces parseable wire");
         let a: Vec<&[u8]> = p.segments().collect();
         let b: Vec<&[u8]> = q.segments().collect();
         prop_assert_eq!(a, b);
@@ -55,13 +56,13 @@ proptest! {
         prop_assert_eq!(p.authority(), q.authority());
     }
 
-    /// parse jamás panica, con cualquier basura.
+    /// parse never panics, with any garbage.
     #[test]
     fn prop_parse_never_panics(s in ".*") {
         let _ = VPath::parse(&s);
     }
 
-    /// Basura sesgada hacia la gramática (escapes truncados, dobles slashes…).
+    /// Garbage biased toward the grammar (truncated escapes, double slashes…).
     #[test]
     fn prop_parse_never_panics_grammarlike(
         s in "[a-zA-Z0-9]{0,4}(://)?[a-z0-9%/.]{0,30}%?[0-9A-Fa-f]?"
@@ -69,7 +70,7 @@ proptest! {
         let _ = VPath::parse(&s);
     }
 
-    /// Todo parse Ok cumple las invariantes de segmento.
+    /// Every Ok parse satisfies the segment invariants.
     #[test]
     fn prop_parse_ok_implies_invariants(s in ".*") {
         if let Ok(p) = VPath::parse(&s) {
@@ -82,18 +83,18 @@ proptest! {
         }
     }
 
-    /// Reparse idempotente: to_wire es punto fijo tras un parse.
+    /// Idempotent reparse: to_wire is a fixed point after a parse.
     #[test]
     fn prop_reparse_idempotent(s in ".*") {
         if let Ok(p) = VPath::parse(&s) {
             let w1 = p.to_wire();
-            let q = VPath::parse(&w1).expect("wire canónico parsea");
+            let q = VPath::parse(&w1).expect("canonical wire parses");
             prop_assert_eq!(&p, &q);
             prop_assert_eq!(w1, q.to_wire());
         }
     }
 
-    /// El wire es inyectivo: wires iguales ⇒ paths iguales.
+    /// The wire is injective: equal wires ⇒ equal paths.
     #[test]
     fn prop_wire_injective(p1 in arb_vpath(), p2 in arb_vpath()) {
         if p1.to_wire() == p2.to_wire() {
@@ -101,16 +102,16 @@ proptest! {
         }
     }
 
-    /// join/parent/file_name coherentes.
+    /// join/parent/file_name are consistent.
     #[test]
     fn prop_join_parent_inverse(p in arb_vpath(), s in arb_segment_bytes()) {
-        let seg = Segment::new(s).expect("segmento válido");
+        let seg = Segment::new(s).expect("valid segment");
         let child = p.join(seg.clone());
         prop_assert_eq!(child.parent(), Some(p));
         prop_assert_eq!(child.file_name(), Some(&seg));
     }
 
-    /// Serde roundtrip por JSON real.
+    /// Serde roundtrip through real JSON.
     #[test]
     fn prop_serde_roundtrip(p in arb_vpath()) {
         let json = serde_json::to_string(&p).expect("serializable");
@@ -118,26 +119,26 @@ proptest! {
         prop_assert_eq!(p, q);
     }
 
-    /// Serde roundtrip de `Segment` por JSON real — la propiedad análoga a
-    /// `prop_serde_roundtrip` pero para el tipo de UN componente.
+    /// `Segment`'s serde roundtrip through real JSON — the property analogous
+    /// to `prop_serde_roundtrip` but for the ONE-component type.
     #[test]
     fn prop_segment_serde_roundtrip(bytes in arb_segment_bytes()) {
-        let s = Segment::new(bytes).expect("estrategia genera segmentos válidos");
+        let s = Segment::new(bytes).expect("the strategy generates valid segments");
         let json = serde_json::to_string(&s).expect("serializable");
         let q: Segment = serde_json::from_str(&json).expect("deserializable");
         prop_assert_eq!(s, q);
     }
 
-    /// El wire de un `Segment` jamás lleva controles crudos (terminal
-    /// injection en logs) — análoga a `prop_wire_no_raw_controls` para `VPath`.
+    /// A `Segment`'s wire never carries raw controls (terminal injection in
+    /// logs) — analogous to `prop_wire_no_raw_controls` for `VPath`.
     #[test]
     fn prop_segment_wire_no_raw_controls(bytes in arb_segment_bytes()) {
-        let s = Segment::new(bytes).expect("estrategia genera segmentos válidos");
+        let s = Segment::new(bytes).expect("the strategy generates valid segments");
         prop_assert!(!s.to_wire().chars().any(|c| c.is_ascii_control()));
     }
 
-    /// display_lossy termina siempre; segmentos UTF-8 limpios (sin U+FFFD
-    /// legítimo ni controles) no introducen `�`.
+    /// display_lossy always terminates; clean UTF-8 segments (no legitimate
+    /// U+FFFD nor controls) introduce no `�`.
     #[test]
     fn prop_display_never_panics(p in arb_vpath()) {
         let d = p.display_lossy();
@@ -152,29 +153,29 @@ proptest! {
         }
     }
 
-    /// El wire jamás lleva controles crudos (terminal injection en logs).
+    /// The wire never carries raw controls (terminal injection in logs).
     #[test]
     fn prop_wire_no_raw_controls(p in arb_vpath()) {
         prop_assert!(!p.to_wire().chars().any(|c| c.is_ascii_control()));
     }
 
-    /// El display jamás es un wire válido: imposible reconstruir un path desde él.
+    /// The display is never a valid wire: a path can never be reconstructed from it.
     #[test]
     fn prop_display_never_reparses(p in arb_vpath()) {
         prop_assert!(VPath::parse(&p.display_lossy()).is_err());
     }
 
-    /// El display jamás emite caracteres de control, vengan de donde vengan los bytes.
+    /// The display never emits control characters, wherever the bytes came from.
     #[test]
     fn prop_display_no_controls(p in arb_vpath()) {
         prop_assert!(!p.display_lossy().chars().any(char::is_control));
     }
 }
 
-/// `VPath`s plausibles como EXTERIOR de un archivo (ADR 0018): scheme sin
-/// prefijo de formato, ≥1 segmento, sin segmentos `!`.
+/// `VPath`s plausible as the OUTER part of an archive (ADR 0018): scheme with
+/// no format prefix, ≥1 segment, no `!` segments.
 fn arb_archive_outer() -> impl Strategy<Value = VPath> {
-    arb_vpath().prop_filter("exterior componible", |p| {
+    arb_vpath().prop_filter("composable outer", |p| {
         !p.is_root()
             && p.archive_split().is_ok_and(|r| r.is_none())
             && p.segments().all(|s| s != b"!")
@@ -182,7 +183,7 @@ fn arb_archive_outer() -> impl Strategy<Value = VPath> {
 }
 
 proptest! {
-    /// El "roundtrip garantizado" del rustdoc de `archive_compose`:
+    /// `archive_compose`'s rustdoc's "guaranteed roundtrip":
     /// split(compose(f, outer, inner)) == (f, outer, inner).
     #[test]
     fn prop_archive_compose_split_roundtrip(
@@ -190,14 +191,14 @@ proptest! {
         inner_bytes in proptest::collection::vec(arb_segment_bytes(), 0..6),
         format in proptest::sample::select(norte_proto::ARCHIVE_FORMATS),
     ) {
-        // `outer` y `format` se generan de forma independiente: con tokens
-        // compuestos como `tar+gz` en la whitelist, algunas combinaciones
-        // (p. ej. format="tar" sobre un outer de scheme "gz+algo") formarían
-        // un scheme ambiguo que `archive_compose` rechaza a propósito (ver
-        // `archive_compose_rechaza_roundtrip_ambiguo_con_tar_gz` en
-        // `tests/vpath.rs`, ADR 0028) — no es representativo del roundtrip
-        // que esta propiedad ejercita, así que la combinación se descarta en
-        // vez de fabricar un panic espurio del `.expect()`.
+        // `outer` and `format` are generated independently: with compound
+        // tokens like `tar+gz` in the whitelist, some combinations (e.g.
+        // format="tar" over an outer with scheme "gz+something") would form
+        // an ambiguous scheme `archive_compose` rejects on purpose (see
+        // `archive_compose_rechaza_roundtrip_ambiguo_con_tar_gz` in
+        // `tests/vpath.rs`, ADR 0028) — not representative of the roundtrip
+        // this property exercises, so the combination is discarded instead of
+        // manufacturing a spurious `.expect()` panic.
         prop_assume!(
             norte_proto::scheme_archive_format(&format!("{format}+{}", outer.scheme()))
                 == Some(format)
@@ -205,21 +206,21 @@ proptest! {
         let inner: Vec<Segment> = inner_bytes
             .into_iter()
             .filter(|b| b.as_slice() != b"!")
-            .map(|b| Segment::new(b).expect("estrategia válida"))
+            .map(|b| Segment::new(b).expect("valid strategy"))
             .collect();
-        let p = VPath::archive_compose(format, &outer, &inner).expect("compose válido");
-        let r = p.archive_split().expect("bien formado").expect("compuesto");
+        let p = VPath::archive_compose(format, &outer, &inner).expect("valid compose");
+        let r = p.archive_split().expect("well-formed").expect("compound");
         prop_assert_eq!(r.format.as_str(), format);
         prop_assert_eq!(r.outer, outer);
         prop_assert_eq!(r.inner, inner);
-        // Y el wire del compuesto reparsea al mismo path (transitividad con
-        // prop_reparse_idempotent).
-        prop_assert_eq!(VPath::parse(&p.to_wire()).expect("wire válido"), p);
+        // And the compound's wire re-parses to the same path (transitivity
+        // with prop_reparse_idempotent).
+        prop_assert_eq!(VPath::parse(&p.to_wire()).expect("valid wire"), p);
     }
 
-    /// #56: roundtrip por CAPAS — componer una segunda capa sobre un path de
-    /// archivo bien formado y pelarla devuelve exactamente lo compuesto, y
-    /// la capa de abajo queda intacta.
+    /// #56: roundtrip across LAYERS — composing a second layer over a
+    /// well-formed archive path and peeling it returns exactly what was
+    /// composed, and the layer below stays intact.
     #[test]
     fn prop_archive_nested_two_layers_roundtrip(
         outer in arb_archive_outer(),
@@ -232,28 +233,29 @@ proptest! {
             norte_proto::scheme_archive_format(&format!("{f1}+{}", outer.scheme()))
                 == Some(f1)
         );
-        // La capa 2 se antepone al scheme YA compuesto: misma guardia de
-        // ambigüedad (p. ej. f2="tar" sobre "gz+…" resolvería "tar+gz").
+        // Layer 2 is prepended to the ALREADY composed scheme: same
+        // ambiguity guard (e.g. f2="tar" over "gz+…" would resolve to
+        // "tar+gz").
         prop_assume!(
             norte_proto::scheme_archive_format(&format!("{f2}+{f1}+{}", outer.scheme()))
                 == Some(f2)
         );
         let seg_ok = |b: &Vec<u8>| b.as_slice() != b"!";
         let inner1: Vec<Segment> = inner1_bytes.into_iter().filter(seg_ok)
-            .map(|b| Segment::new(b).expect("estrategia válida")).collect();
+            .map(|b| Segment::new(b).expect("valid strategy")).collect();
         let inner2: Vec<Segment> = inner2_bytes.into_iter().filter(seg_ok)
-            .map(|b| Segment::new(b).expect("estrategia válida")).collect();
-        prop_assume!(!inner1.is_empty()); // la capa 1 nombra un contenedor real
-        let capa1 = VPath::archive_compose(f1, &outer, &inner1).expect("capa 1");
-        let capa2 = VPath::archive_compose(f2, &capa1, &inner2).expect("capa 2");
-        let r = capa2.archive_split().expect("bien formado").expect("compuesto");
+            .map(|b| Segment::new(b).expect("valid strategy")).collect();
+        prop_assume!(!inner1.is_empty()); // layer 1 names a real container
+        let layer1 = VPath::archive_compose(f1, &outer, &inner1).expect("layer 1");
+        let layer2 = VPath::archive_compose(f2, &layer1, &inner2).expect("layer 2");
+        let r = layer2.archive_split().expect("well-formed").expect("compound");
         prop_assert_eq!(r.format.as_str(), f2);
-        prop_assert_eq!(&r.outer, &capa1);
+        prop_assert_eq!(&r.outer, &layer1);
         prop_assert_eq!(r.inner, inner2);
-        let r1 = r.outer.archive_split().expect("bien formada").expect("compuesta");
+        let r1 = r.outer.archive_split().expect("well-formed").expect("compound");
         prop_assert_eq!(r1.format.as_str(), f1);
         prop_assert_eq!(r1.outer, outer);
         prop_assert_eq!(r1.inner, inner1);
-        prop_assert_eq!(VPath::parse(&capa2.to_wire()).expect("wire válido"), capa2);
+        prop_assert_eq!(VPath::parse(&layer2.to_wire()).expect("valid wire"), layer2);
     }
 }

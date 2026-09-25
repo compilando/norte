@@ -1,6 +1,6 @@
-//! El área de comparación y sincronización de árboles de
-//! [`Backend`](super::Backend) (ADR 0048/0049): `fs.compare`, y el ciclo
-//! `sync.plan` / `sync.apply` / `sync.report`.
+//! [`Backend`](super::Backend)'s tree comparison and sync area (ADR
+//! 0048/0049): `fs.compare`, and the `sync.plan` / `sync.apply` /
+//! `sync.report` cycle.
 
 use norte_proto::{Error, TaskId};
 use tokio::sync::mpsc;
@@ -8,46 +8,47 @@ use tokio::sync::mpsc;
 use super::{Backend, EMBEDDED_CONN_ID, TaskRef};
 
 impl Backend {
-    /// Comparación de dos árboles (`fs.compare`, 0.39.0, ADR 0048): devuelve
-    /// la Task ([`TaskRef`], cancelable) y el STREAM de lotes de filas
+    /// Comparison of two trees (`fs.compare`, 0.39.0, ADR 0048): returns the
+    /// Task ([`TaskRef`], cancelable) and the row-batch STREAM
     /// ([`norte_proto::methods::CompareRowsBatch`]).
     ///
-    /// Mismo ciclo de vida del canal que [`Self::search`]: embebido, el walk
-    /// cierra el `tx` al terminar; remoto, la bomba enruta cada `compare.rows`
-    /// por `task_id` y el route se retira tras el terminal (con la misma
-    /// gracia). El criterio de "comparación terminada" es el estado terminal
-    /// de la [`TaskRef`]; el cierre del `rx` es la señal cómoda.
+    /// Same channel lifecycle as [`Self::search`]: embedded, the walk
+    /// closes `tx` on finishing; remote, the pump routes each `compare.rows`
+    /// by `task_id` and the route is retired after the terminal (with the
+    /// same grace). The criterion for "comparison finished" is the
+    /// [`TaskRef`]'s terminal state; the `rx` closing is the convenient
+    /// signal.
     ///
-    /// **No muta nada**: sin journal, sin undo (regla dura 4 no aplica).
+    /// **Mutates nothing**: no journal, no undo (hard rule 4 does not
+    /// apply).
     ///
-    /// # Cuándo están TODAS las filas
-    /// El cierre del `rx` NO significa «llegaron todas»: una notificación se
-    /// puede perder (el daemon expulsa a un suscriptor que no drena, la bomba
-    /// del cliente descarta un lote si su buffer se llena, y una reconexión
-    /// suelta los routes cerrando el `rx` de forma indistinguible de un final
-    /// limpio). La señal es
+    /// # When ALL the rows are in
+    /// `rx` closing does NOT mean "all arrived": a notification can be
+    /// lost (the daemon evicts a subscriber that doesn't drain, the
+    /// client's pump discards a batch if its buffer fills, and a
+    /// reconnection drops the routes, closing `rx` indistinguishably from a
+    /// clean end). The signal is
     /// [`TaskProgress::entries_done`](norte_proto::TaskProgress::entries_done),
-    /// que en una Task [`TaskKind::Compare`](norte_proto::TaskKind::Compare)
-    /// cuenta FILAS emitidas: se comparan las recibidas con ese número, y
-    /// **DESPUÉS de que el `rx` se cierre**, no al llegar el snapshot terminal
-    /// —la bomba de filas y la de progreso son tasks distintas, así que el
-    /// terminal puede adelantar al último lote—. Quien vaya a ESCRIBIR a
-    /// partir de estas filas (el plan de sincronización de la spec 2) tiene
-    /// que hacer esa comprobación.
+    /// which on a [`TaskKind::Compare`](norte_proto::TaskKind::Compare) Task
+    /// counts ROWS emitted: received rows are compared against that number,
+    /// and **AFTER `rx` closes**, not when the terminal snapshot arrives
+    /// —the row pump and the progress pump are different tasks, so the
+    /// terminal can get ahead of the last batch—. Whoever is going to WRITE
+    /// from these rows (spec 2's sync plan) has to make that check.
     ///
     /// # Errors
-    /// Dos raíces iguales → [`Error::InvalidPath`]; `follow_symlinks: true` →
-    /// [`Error::Unsupported`]. Los dos se comprueban AQUÍ, antes de elegir
-    /// brazo, para que el embebido y el remoto contesten lo mismo: el daemon
-    /// los rechaza con `-32602` pelado (es su contrato publicado) y
-    /// `to_taxonomy` convertiría eso en `Internal`, o sea la misma respuesta
-    /// que da un provider que panica. El daemon los sigue comprobando por su
-    /// cuenta: aquello es la frontera, esto es la paridad de las dos vías
-    /// (mismo criterio que `check_pairs_cap`).
+    /// Two equal roots → [`Error::InvalidPath`]; `follow_symlinks: true` →
+    /// [`Error::Unsupported`]. Both are checked HERE, before picking an
+    /// arm, so embedded and remote answer the same thing: the daemon
+    /// rejects them with a bare `-32602` (that's its published contract)
+    /// and `to_taxonomy` would turn that into `Internal`, i.e. the same
+    /// answer a panicking provider gives. The daemon keeps checking them on
+    /// its own: that is the boundary, this is parity between the two paths
+    /// (same criterion as `check_pairs_cap`).
     ///
-    /// Un daemon N-1 (0.38.x) sin el método responde `METHOD_NOT_FOUND`, que
-    /// se entrega como [`Error::Unsupported`] — «tu daemon es más viejo», no
-    /// un fallo real. Resto, taxonomía del protocolo; daemon caído =
+    /// An N-1 daemon (0.38.x) with no such method answers `METHOD_NOT_FOUND`,
+    /// delivered as [`Error::Unsupported`] — "your daemon is older", not a
+    /// real failure. Otherwise, protocol taxonomy; daemon down =
     /// `ProviderUnavailable`.
     pub async fn compare(
         &self,
@@ -80,78 +81,81 @@ impl Backend {
         }
     }
 
-    /// Planifica una sincronización de un sentido (`sync.plan`, 0.40.0, ADR
-    /// 0049): devuelve la Task ([`TaskRef`], cancelable) y el STREAM de eventos
-    /// del plan — lotes de pasos acotados y, al final, el
-    /// [`SyncPlanDone`](norte_proto::methods::SyncPlanDone) que lo CIERRA y trae
-    /// el `plan_hash`.
+    /// Plans a one-way sync (`sync.plan`, 0.40.0, ADR 0049): returns the
+    /// Task ([`TaskRef`], cancelable) and the plan's event STREAM — capped
+    /// batches of steps and, at the end, the
+    /// [`SyncPlanDone`](norte_proto::methods::SyncPlanDone) that CLOSES it
+    /// and carries the `plan_hash`.
     ///
-    /// **No muta nada**: por debajo es una comparación con una decisión por
-    /// fila. Quien escribe es [`Self::sync_apply`], y solo con el hash que llega
-    /// aquí.
+    /// **Mutates nothing**: underneath it's a comparison with a
+    /// per-row decision. [`Self::sync_apply`] is the one that writes, and
+    /// only with the hash that arrives here.
     ///
-    /// # El orden de los eventos es el del canal
-    /// `sync.plan_done` llega SIEMPRE después del último lote de pasos, en los
-    /// dos brazos: el core mete ambos en un `mpsc` y la bomba del cliente los
-    /// enruta al mismo `rx`. Un cierre que llegara antes que un lote sería un
-    /// cliente aprobando el hash de un plan que todavía estaba llegando.
+    /// # Event order is channel order
+    /// `sync.plan_done` ALWAYS arrives after the last batch of steps, on
+    /// both arms: the core puts both into an `mpsc` and the client's pump
+    /// routes them to the same `rx`. A close arriving before a batch would
+    /// be a client approving the hash of a plan that was still arriving.
     ///
-    /// # Cuándo están TODOS los pasos
-    /// El `sync.plan_done` es la señal, y su ausencia es la protección: sin él
-    /// no hay `plan_hash`, y sin `plan_hash` no se puede aplicar nada. Las TRES
-    /// formas de perder un lote fallan por ese lado:
+    /// # When ALL the steps are in
+    /// `sync.plan_done` is the signal, and its absence is the protection:
+    /// without it there's no `plan_hash`, and with no `plan_hash` nothing
+    /// can be applied. All THREE ways of losing a batch fail on that side:
     ///
-    /// 1. el daemon expulsa a quien no drena su outbox → su bomba para y sus
-    ///    planes retenidos se barren;
-    /// 2. una reconexión suelta los routes → el `rx` se cierra;
-    /// 3. **el buffer de este proceso se llena** porque quien consume el `rx` va
-    ///    más lento que el daemon. Este es el único que un cliente se hace a sí
-    ///    mismo, y por eso el enrutado CIERRA el feed en vez de descartar el
-    ///    lote (`OnFull::CloseFeed`): descartarlo y entregar el cierre detrás
-    ///    —que es lo que hacen `search.hits` y `compare.rows`, donde un lote es
-    ///    pintura— dejaría a un humano aprobando un hash que cubre pasos que
-    ///    nunca vio.
+    /// 1. the daemon evicts whoever doesn't drain its outbox → its pump
+    ///    stops and its retained plans are swept;
+    /// 2. a reconnection drops the routes → `rx` closes;
+    /// 3. **this process's buffer fills up** because whoever consumes `rx`
+    ///    is slower than the daemon. This is the only one a client does to
+    ///    itself, and that's why the routing CLOSES the feed instead of
+    ///    discarding the batch (`OnFull::CloseFeed`): discarding it and
+    ///    delivering the close afterward —which is what `search.hits` and
+    ///    `compare.rows` do, where a batch is just paint— would leave a
+    ///    human approving a hash that covers steps they never saw.
     ///
-    /// Aun así, quien pinte estos pasos debería cuadrarlos:
-    /// `SyncPlanDone::counts` suma el plan ENTERO (`create_dir + copy +
-    /// overwrite + delete_tree + skip`), así que comparar esa suma con los pasos
-    /// recibidos detecta cualquier pérdida futura sin depender de que el
-    /// transporte la señale. `TaskProgress::entries_done` cuenta lo mismo desde
-    /// el otro lado.
+    /// Even so, whoever paints these steps should tally them:
+    /// `SyncPlanDone::counts` sums the WHOLE plan (`create_dir + copy +
+    /// overwrite + delete_tree + skip`), so comparing that sum against the
+    /// received steps detects any future loss without depending on the
+    /// transport signaling it. `TaskProgress::entries_done` counts the same
+    /// thing from the other side.
     ///
-    /// # El plan queda RETENIDO
-    /// Aprobar cuesta un fichero en el directorio de estado del daemon, vivo
-    /// durante [`SYNC_PLAN_TTL_MS`](norte_proto::methods::SYNC_PLAN_TTL_MS) y
-    /// atado a esta conexión. Hay un tope de planes retenidos por conexión:
-    /// pasado, el daemon contesta `OVERLOADED` sin taxonomía —la petición es
-    /// válida, el momento no— y este brazo lo entrega como
-    /// [`Error::Internal`], igual que el resto de los `-32602`/`-32603` pelados
-    /// del daemon. No se puede adelantar aquí porque solo el daemon sabe cuántos
-    /// planes retiene esta conexión.
+    /// # The plan is left RETAINED
+    /// Approving costs a file in the daemon's state directory, alive for
+    /// [`SYNC_PLAN_TTL_MS`](norte_proto::methods::SYNC_PLAN_TTL_MS) and
+    /// bound to this connection. There's a cap on retained plans per
+    /// connection: past it, the daemon answers `OVERLOADED` with no
+    /// taxonomy —the request is valid, the moment isn't— and this arm
+    /// delivers it as [`Error::Internal`], same as the rest of the
+    /// daemon's bare `-32602`/`-32603`s. This cannot be anticipated here
+    /// because only the daemon knows how many plans this connection is
+    /// retaining.
     ///
     /// # Errors
-    /// [`Error::Unsupported`] si `compare.follow_symlinks` o
-    /// `compare.descend_orphans` vienen puestos (ninguno de los dos es del
-    /// llamante: el planificador fija el segundo al lado del origen);
-    /// [`Error::InvalidPath`] si `include` pasa de
-    /// [`SYNC_MAX_INCLUDE`](norte_proto::methods::SYNC_MAX_INCLUDE). Los tres se
-    /// comprueban AQUÍ, antes de elegir brazo, por lo mismo que en
-    /// [`Self::compare`]: el daemon los rechaza con `-32602` pelado y
-    /// `to_taxonomy` convertiría eso en `Internal`, o sea la misma respuesta que
-    /// da un provider que panica. El engine los sigue comprobando por su cuenta.
+    /// [`Error::Unsupported`] if `compare.follow_symlinks` or
+    /// `compare.descend_orphans` are set (neither belongs to the caller:
+    /// the planner sets the second one alongside the source);
+    /// [`Error::InvalidPath`] if `include` exceeds
+    /// [`SYNC_MAX_INCLUDE`](norte_proto::methods::SYNC_MAX_INCLUDE). All
+    /// three are checked HERE, before picking an arm, for the same reason
+    /// as in [`Self::compare`]: the daemon rejects them with a bare
+    /// `-32602` and `to_taxonomy` would turn that into `Internal`, i.e. the
+    /// same answer a panicking provider gives. The engine keeps checking
+    /// them on its own.
     ///
-    /// Adelantarlos cambia el ORDEN de dos rechazos, y conviene saberlo: contra
-    /// un engine sin spool, esto contesta por el parámetro (`InvalidPath`)
-    /// donde el engine habría contestado por la retención (`Unsupported`); y
-    /// contra un daemon, un agente sin scope recibe la queja del parámetro desde
-    /// su propio proceso en vez del `PolicyDenied` del daemon, que gatea antes
-    /// de validar. Ninguno filtra nada —estas tres comprobaciones no miran las
-    /// rutas— y es la misma asimetría que [`Self::compare`] ya tiene.
+    /// Anticipating them changes the ORDER of two rejections, worth
+    /// knowing: against an engine with no spool, this answers by the
+    /// parameter (`InvalidPath`) where the engine would have answered by
+    /// retention (`Unsupported`); and against a daemon, a scopeless agent
+    /// gets the parameter complaint from its own process instead of the
+    /// daemon's `PolicyDenied`, which gates before validating. Neither one
+    /// filters anything —these three checks don't look at paths— and it's
+    /// the same asymmetry [`Self::compare`] already has.
     ///
-    /// Además: [`Error::OverlappingRoots`] si las dos raíces se solapan (esa sí
-    /// es categoría del wire y viene del engine, sin copia aquí),
-    /// [`Error::Unsupported`] si el daemon no tiene spool instalado o es un
-    /// daemon N-1 sin el método; resto, taxonomía del protocolo.
+    /// Also: [`Error::OverlappingRoots`] if the two roots overlap (that one
+    /// IS a wire category and comes from the engine, no copy here),
+    /// [`Error::Unsupported`] if the daemon has no spool installed or is an
+    /// N-1 daemon with no such method; otherwise, protocol taxonomy.
     pub async fn sync_plan(
         &self,
         params: norte_proto::methods::SyncPlanParams,
@@ -181,28 +185,31 @@ impl Backend {
         }
     }
 
-    /// Ejecuta el plan APROBADO que `plan_hash` nombra (`sync.apply`, 0.40.0,
-    /// ADR 0049) como UNA Task y UN lote deshacible del journal.
+    /// Executes the APPROVED plan `plan_hash` names (`sync.apply`, 0.40.0,
+    /// ADR 0049) as ONE Task and ONE undoable journal batch.
     ///
-    /// **El hash es el único parámetro**, y esa es la garantía: no hay forma de
-    /// pedir que se ejecute algo distinto de lo que [`Self::sync_plan`] enseñó.
-    /// Las dos raíces, el modo y los criterios salen del plan retenido.
+    /// **The hash is the only parameter**, and that's the guarantee: there's
+    /// no way to ask for something other than what [`Self::sync_plan`]
+    /// showed to be executed. The two roots, the mode and the criteria come
+    /// from the retained plan.
     ///
-    /// **El plan se gasta**: aplicarlo lo consume, pase lo que pase. Un segundo
-    /// `sync_apply` del mismo hash es [`Error::PlanStale`], que es verdad.
+    /// **The plan is spent**: applying it consumes it, no matter what
+    /// happens. A second `sync_apply` of the same hash is
+    /// [`Error::PlanStale`], which is true.
     ///
-    /// Qué pasó de verdad se pide con [`Self::sync_report`]: un paso que falla
-    /// es una FILA del informe y no el final de la Task, así que el estado
-    /// terminal no cuenta ni la mitad.
+    /// What really happened is requested with [`Self::sync_report`]: a
+    /// step that fails is a ROW of the report and not the Task's ending, so
+    /// the terminal state doesn't tell even half of it.
     ///
     /// # Errors
-    /// [`Error::PlanStale`] si el hash no nombra un plan vivo de este proceso
-    /// (no existe, caducó, está manipulado o ya se aplicó);
-    /// [`Error::PlanNotExecutable`] si el plan traía bloqueos;
-    /// [`Error::PolicyDenied`] del gate, que corre sobre las raíces leídas del
-    /// plan y AHORA, no cuando se planificó; [`Error::Unsupported`] sin spool o
-    /// sin journal (aplicar sin journal sería enterrar sin dejar vuelta atrás,
-    /// regla dura 4), o contra un daemon N-1; resto, taxonomía del protocolo.
+    /// [`Error::PlanStale`] if the hash doesn't name a live plan of this
+    /// process (doesn't exist, expired, was tampered with, or was already
+    /// applied); [`Error::PlanNotExecutable`] if the plan carried blocks;
+    /// [`Error::PolicyDenied`] from the gate, which runs over the roots read
+    /// from the plan and NOW, not when it was planned; [`Error::Unsupported`]
+    /// with no spool or no journal (applying with no journal would be
+    /// burying with no way back, hard rule 4), or against an N-1 daemon;
+    /// otherwise, protocol taxonomy.
     pub async fn sync_apply(
         &self,
         plan_hash: &norte_proto::methods::PlanHash,
@@ -212,8 +219,9 @@ impl Backend {
                 let (handle, _report) = engine
                     .sync_apply_as(plan_hash, EMBEDDED_CONN_ID, crate::journal::Actor::User)
                     .await?;
-                // El informe queda en el anillo del engine, que es de donde lo
-                // lee `sync_report`: los dos brazos se piden igual.
+                // The report stays in the engine's ring, which is where
+                // `sync_report` reads it from: both arms are requested the
+                // same way.
                 Ok(TaskRef::from_handle(&handle))
             }
             #[cfg(unix)]
@@ -221,35 +229,35 @@ impl Backend {
         }
     }
 
-    /// El informe de una aplicación ya lanzada (`sync.report`, 0.40.0): cuántos
-    /// pasos se ejecutaron, cuántos fallaron y por qué —con la ruta de cada
-    /// uno— y bajo qué lote del journal quedó lo que sí se aplicó.
+    /// The report for an already-launched application (`sync.report`,
+    /// 0.40.0): how many steps ran, how many failed and why —with each
+    /// one's path— and under which journal batch what did apply landed.
     ///
-    /// Es un SNAPSHOT: definitivo cuando la Task es terminal, parcial antes.
-    /// Míralo también cuando diga `cancelled`: lo aplicado hasta el corte se
-    /// queda, journalizado — media sincronización es un estado real.
+    /// It's a SNAPSHOT: final once the Task is terminal, partial before.
+    /// Check it too when it says `cancelled`: what was applied up to the
+    /// cutoff stays, journalled — half a sync is a real state.
     ///
-    /// # Quién ve qué
-    /// El daemon sirve el informe a quien podría ver la Task: su dueño, o
-    /// cualquier conexión HUMANA. Un `Backend::Remote` abierto con
-    /// [`super::remote::RemoteBackend::connect`] es humano, y por él se ven también
-    /// los informes de las aplicaciones de los AGENTES — deliberado, y la
-    /// simetría del undo: un humano que gobierna el daemon puede leer lo que un
-    /// agente hizo. Uno abierto con
-    /// [`super::remote::RemoteBackend::connect_as_agent`] NO lo es (lo estrenó el
-    /// puente MCP): ve lo suyo y nada más, y para él «no es tuya» y «no existe»
-    /// son la misma respuesta.
+    /// # Who sees what
+    /// The daemon serves the report to whoever could see the Task: its
+    /// owner, or any HUMAN connection. A `Backend::Remote` opened with
+    /// [`super::remote::RemoteBackend::connect`] is human, and through it
+    /// AGENTS' application reports are also visible — deliberate, and
+    /// undo's symmetry: a human who governs the daemon can read what an
+    /// agent did. One opened with
+    /// [`super::remote::RemoteBackend::connect_as_agent`] is NOT (the MCP
+    /// bridge introduced it): it sees only its own and nothing else, and
+    /// for it "not yours" and "doesn't exist" are the same answer.
     ///
-    /// Nótese la asimetría, que no es un descuido: la AUTORIZACIÓN (el plan) va
-    /// por conexión, y su informe por ACTOR. Dos conexiones humanas son el mismo
-    /// `Actor::User`, así que una lee el informe de la otra aunque no pudiera
-    /// aplicar su plan.
+    /// Note the asymmetry, which isn't an oversight: AUTHORIZATION (the
+    /// plan) is per connection, and its report is per ACTOR. Two human
+    /// connections are the same `Actor::User`, so one reads the other's
+    /// report even though it couldn't have applied its plan.
     ///
     /// # Errors
-    /// [`Error::NotFound`] si ese `task_id` nunca fue una aplicación de este
-    /// proceso, si el anillo ya lo desalojó, o si el que pregunta no podía verla.
-    /// [`Error::Unsupported`] contra un daemon N-1; resto, taxonomía del
-    /// protocolo.
+    /// [`Error::NotFound`] if that `task_id` was never an application of
+    /// this process, if the ring already evicted it, or if whoever's asking
+    /// couldn't see it. [`Error::Unsupported`] against an N-1 daemon;
+    /// otherwise, protocol taxonomy.
     pub async fn sync_report(
         &self,
         task_id: TaskId,
@@ -258,8 +266,8 @@ impl Backend {
             Self::Embedded(engine) => engine
                 .sync_report(task_id)
                 .map(|(_owner, r)| r)
-                // Embebido no hay actor que comprobar: este `Backend` ES el
-                // humano en proceso (mismo criterio que `rename_batch_report`).
+                // Embedded has no actor to check: this `Backend` IS the
+                // human in-process (same criterion as `rename_batch_report`).
                 .ok_or(Error::NotFound),
             #[cfg(unix)]
             Self::Remote(r) => r.sync_report(task_id).await,

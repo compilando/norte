@@ -1,30 +1,30 @@
-//! La caché de capacidades por `(scheme, authority)`: qué la reutiliza, qué
-//! la invalida y dónde está su tope. La primera página de un `cd` es quien
-//! las trae, y `apply_cd` quien las guarda.
+//! The capabilities cache by `(scheme, authority)`: what reuses it, what
+//! invalidates it and where its cap is. A `cd`'s first page is what brings
+//! them in, and `apply_cd` is what stores them.
 
 use norte_proto::VPath;
 use norte_tui::app::{App, Pane};
 use norte_tui::navigate::{cache_capabilities, needs_capabilities};
 
 fn vp(wire: &str) -> VPath {
-    VPath::parse(wire).expect("wire de test")
+    VPath::parse(wire).expect("test wire")
 }
 
-fn app_en(dir: &VPath) -> App {
+fn test_app_at(dir: &VPath) -> App {
     App::new(
         Pane::new(dir.clone(), Vec::new()),
         Pane::new(dir.clone(), Vec::new()),
     )
 }
 
-/// H3d: `fs.capabilities` devuelve catálogo Y flags en una respuesta, y
-/// las dos mitades se cachean. La que se tiraba era la de los flags, y
-/// tirarla costaba una ronda de red extra la próxima vez que alguien
-/// preguntase si el pane era de solo lectura.
+/// H3d: `fs.capabilities` returns catalog AND flags in one response, and
+/// both halves get cached. The one that used to be thrown away was the
+/// flags half, and throwing it away cost an extra network round trip the
+/// next time anyone asked whether the pane was read-only.
 #[test]
-fn se_cachean_las_dos_mitades_de_una_respuesta() {
+fn both_halves_of_a_response_are_cached() {
     let dir = vp("mem:///");
-    let mut app = app_en(&dir);
+    let mut app = test_app_at(&dir);
     let caps = norte_proto::Capabilities {
         flags: norte_proto::CapabilityFlags::READ_ONLY,
         max_path: None,
@@ -33,27 +33,29 @@ fn se_cachean_las_dos_mitades_de_una_respuesta() {
 
     cache_capabilities(&mut app, &dir, (caps, catalog));
 
-    assert_eq!(app.caps(&dir), Some(&caps), "los flags se quedaron");
+    assert_eq!(app.caps(&dir), Some(&caps), "the flags stayed");
     assert!(
         app.attr_catalog("mem").is_some(),
-        "y el catálogo, que es la mitad que ya se guardaba"
+        "and the catalog, which is the half that was already being saved"
     );
-    // Y el efecto que la ayuda consume: con el flag puesto, el pane es de
-    // solo lectura sin volver a preguntar a nadie.
+    // And the effect help consumes: with the flag set, the pane is
+    // read-only without asking anyone again.
     assert!(app.pane_read_only(0));
 }
 
-/// MAJOR-1, la otra mitad: la puerta que decide si se pregunta tiene que
-/// preguntar lo MISMO que responde el caché. Gateada solo por el catálogo
-/// —que es por scheme—, un `cd` a un segundo host de `sftp` no volvía a
-/// llamar jamás, así que las caps del primero contestaban por él durante
-/// toda la sesión.
+/// MAJOR-1, the other half: the gate that decides whether to ask has to ask
+/// the SAME thing the cache answers. Gated only by the catalog —which is
+/// per scheme—, a `cd` to a second `sftp` host never called again, so the
+/// first one's caps answered for it for the rest of the session.
 #[test]
-fn otra_authority_del_mismo_scheme_vuelve_a_preguntar() {
+fn another_authority_of_the_same_scheme_asks_again() {
     let a = vp("sftp://a.org/");
     let b = vp("sftp://b.org/");
-    let mut app = app_en(&a);
-    assert!(needs_capabilities(&app, &a), "sin nada cacheado, se pide");
+    let mut app = test_app_at(&a);
+    assert!(
+        needs_capabilities(&app, &a),
+        "with nothing cached, it is asked"
+    );
 
     cache_capabilities(
         &mut app,
@@ -69,29 +71,29 @@ fn otra_authority_del_mismo_scheme_vuelve_a_preguntar() {
 
     assert!(
         !needs_capabilities(&app, &a),
-        "al mismo host no se le pregunta dos veces"
+        "the same host is not asked twice"
     );
     assert!(
         needs_capabilities(&app, &b),
-        "b.org no ha contestado nunca: hay que preguntarle a ÉL"
+        "b.org has never answered: IT has to be asked"
     );
 }
 
-/// #215: otro DIRECTORIO del mismo backend vuelve a preguntar.
+/// #215: another DIRECTORY of the same backend asks again.
 ///
-/// Desde ADR 0054 el daemon contesta por UBICACIÓN, y la caché seguía
-/// indexando por conexión: bajo un mismo `file://` hay montajes —un pincho
-/// exFAT que pliega caja, un subárbol ext4 en `+F`, un bind de solo
-/// lectura— y la respuesta de `/home` se servía para todos ellos.
+/// Since ADR 0054 the daemon answers by LOCATION, and the cache was still
+/// indexing by connection: under one `file://` there are mounts —an exFAT
+/// stick that boxes itself in, an ext4 subtree in `+F`, a read-only bind—
+/// and `/home`'s answer was being served for all of them.
 #[test]
-fn otro_directorio_del_mismo_backend_vuelve_a_preguntar() {
-    let casa = vp("file:///home/yo");
-    let pincho = vp("file:///media/pincho");
-    let mut app = app_en(&casa);
+fn another_directory_of_the_same_backend_asks_again() {
+    let home = vp("file:///home/me");
+    let usb_stick = vp("file:///media/usb-stick");
+    let mut app = test_app_at(&home);
 
     cache_capabilities(
         &mut app,
-        &casa,
+        &home,
         (
             norte_proto::Capabilities {
                 flags: norte_proto::CapabilityFlags::empty(),
@@ -101,24 +103,24 @@ fn otro_directorio_del_mismo_backend_vuelve_a_preguntar() {
         ),
     );
 
-    assert!(!needs_capabilities(&app, &casa));
+    assert!(!needs_capabilities(&app, &home));
     assert!(
-        needs_capabilities(&app, &pincho),
-        "un montaje distinto contesta por su cuenta"
+        needs_capabilities(&app, &usb_stick),
+        "a different mount answers on its own"
     );
     assert!(
-        app.caps(&pincho).is_none(),
-        "y hasta que conteste, no hay respuesta suya que servir"
+        app.caps(&usb_stick).is_none(),
+        "and until it answers, there is no answer of its own to serve"
     );
 }
 
-/// La caché tiene TOPE: una clave por directorio ya no está acotada por
-/// los siete schemes que existen, y recorrer un árbol grande la haría
-/// crecer sin fin. Se desaloja el más viejo por orden de llegada.
+/// The cache has a CAP: a key per directory is no longer bounded by the
+/// seven schemes that exist, and walking a large tree would make it grow
+/// without end. The oldest one is evicted, arrival order.
 #[test]
-fn la_cache_de_capacidades_tiene_tope() {
-    let primero = vp("file:///d0");
-    let mut app = app_en(&primero);
+fn the_capabilities_cache_has_a_cap() {
+    let first_dir = vp("file:///d0");
+    let mut app = test_app_at(&first_dir);
     let caps = norte_proto::Capabilities {
         flags: norte_proto::CapabilityFlags::empty(),
         max_path: None,
@@ -127,22 +129,25 @@ fn la_cache_de_capacidades_tiene_tope() {
         app.insert_caps(&vp(&format!("file:///d{i}")), caps);
     }
     assert!(
-        app.caps(&primero).is_none(),
-        "el primero se fue al llenarse"
+        app.caps(&first_dir).is_none(),
+        "the first one left once it filled up"
     );
-    assert!(app.caps(&vp("file:///d199")).is_some(), "y el último sigue");
+    assert!(
+        app.caps(&vp("file:///d199")).is_some(),
+        "and the last one is still there"
+    );
 }
 
-/// La costura entera, contra un backend REAL: `first_page` con la puerta
-/// abierta trae las caps y el `cd` las guarda.
+/// The whole seam, against a REAL backend: `first_page` with the gate open
+/// brings the caps and the `cd` saves them.
 ///
-/// Sin esto, el cableado podía revertirse en silencio y la suite quedaba
-/// verde: `App::pane_read_only` cae al criterio SINTÁCTICO del scheme
-/// cuando no hay caps, y hoy los dos coinciden en todo provider que
-/// existe. Ninguna otra prueba distingue «llegaron los flags» de «el
-/// scheme lo parecía».
+/// Without this, the wiring could silently revert and the suite would
+/// stay green: `App::pane_read_only` falls back to the SYNTACTIC criterion
+/// of the scheme when there are no caps, and today the two agree on every
+/// provider that exists. No other test tells "the flags arrived" apart
+/// from "the scheme looked like it".
 #[tokio::test]
-async fn la_primera_pagina_trae_las_caps_y_el_cd_las_guarda() {
+async fn the_first_page_brings_the_caps_and_the_cd_saves_them() {
     use norte_core::backend::Backend;
     use std::sync::Arc;
 
@@ -154,23 +159,23 @@ async fn la_primera_pagina_trae_las_caps_y_el_cd_las_guarda() {
     let (_first, _stream, _skipped, both) =
         norte_tui::navigate::first_page(&backend, &dir, &[], true)
             .await
-            .expect("el listado del provider de memoria");
-    let both = both.expect("con la puerta abierta llegan las DOS mitades");
+            .expect("the memory provider's listing");
+    let both = both.expect("with the gate open both HALVES arrive");
 
-    let mut app = app_en(&dir);
+    let mut app = test_app_at(&dir);
     assert!(app.caps(&dir).is_none());
     cache_capabilities(&mut app, &dir, both);
     assert!(
         app.caps(&dir).is_some(),
-        "las caps de la respuesta tienen que quedarse en el caché"
+        "the response's caps have to stay in the cache"
     );
 
-    // Y con la puerta CERRADA no se pregunta: el cuarto elemento es None.
-    let (_f, _s, _k, ninguna) = norte_tui::navigate::first_page(&backend, &dir, &[], false)
+    // And with the gate CLOSED it is not asked: the fourth element is None.
+    let (_f, _s, _k, none_result) = norte_tui::navigate::first_page(&backend, &dir, &[], false)
         .await
-        .expect("el listado igual");
+        .expect("the same listing");
     assert!(
-        ninguna.is_none(),
-        "con la puerta cerrada no hay ronda extra"
+        none_result.is_none(),
+        "with the gate closed there is no extra round trip"
     );
 }

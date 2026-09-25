@@ -1,26 +1,26 @@
-//! El asistente de primer arranque (spec 2026-09-10): tres preguntas —el
-//! preset de teclas, el tema y los iconos— cuando no hay `norte.toml` de
-//! usuario. Puro: qué paso, qué filas, qué se eligió. Cada frontend lo
-//! pinta y escribe lo elegido por su propio camino de ajustes.
+//! The first-run wizard (spec 2026-09-10): three questions —the key preset,
+//! the theme, and the icons— when there is no user `norte.toml`. Pure: which
+//! step, which rows, what was chosen. Each frontend paints it and writes what
+//! was chosen through its own settings path.
 //!
-//! Esc en cualquier paso es «no volver a preguntar»: el frontend escribe un
-//! fichero con lo que ya tenía, y la existencia del fichero es la marca.
+//! Esc at any step means "do not ask again": the frontend writes a file with
+//! what it already had, and the file's existence is the mark.
 
 use norte_i18n::{Lang, t_in};
 
-/// Los tres pasos, en orden.
+/// The three steps, in order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Step {
-    /// Qué preset de teclas.
+    /// Which key preset.
     Preset,
-    /// Qué tema.
+    /// Which theme.
     Theme,
-    /// Si la fuente pinta los iconos.
+    /// Whether the font paints the icons.
     Icons,
 }
 
 impl Step {
-    /// `1`..=`3`, para el título.
+    /// `1`..=`3`, for the title.
     #[must_use]
     pub fn number(self) -> u8 {
         match self {
@@ -35,35 +35,35 @@ impl Step {
     }
 }
 
-/// Lo elegido. `None` = el lector no llegó a ese paso.
+/// What was chosen. `None` = the reader did not get to that step.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Choices {
-    /// El preset de teclas.
+    /// The key preset.
     pub preset: Option<String>,
-    /// El tema.
+    /// The theme.
     pub theme: Option<String>,
-    /// `Some(true)` = los iconos se ven (emoji); `Some(false)` = ASCII.
+    /// `Some(true)` = the icons are shown (emoji); `Some(false)` = ASCII.
     pub icons: Option<bool>,
 }
 
-/// Qué pasó al confirmar o al salir.
+/// What happened on confirming or on leaving.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
-    /// Otro paso por delante.
+    /// Another step ahead.
     Continue,
-    /// El último paso contestado: escribir esto.
+    /// The last step answered: write this.
     Done(Choices),
-    /// El lector salió: no volver a preguntar, sin cambiar nada. Lleva el
-    /// tema VIGENTE para que el frontend escriba exactamente ese y el
-    /// fichero exista — nunca `default` sobre un tema que ya había
-    /// (revisión B1).
+    /// The reader left: do not ask again, without changing anything. Carries
+    /// the CURRENT theme so the frontend writes exactly that one and the file
+    /// exists — never `default` over a theme that was already there (review
+    /// B1).
     Dismissed {
-        /// El tema con el que se abrió el asistente.
+        /// The theme the wizard was opened with.
         keep_theme: String,
     },
 }
 
-/// El asistente.
+/// The wizard.
 #[derive(Debug, Clone)]
 pub struct Wizard {
     step: Step,
@@ -71,13 +71,14 @@ pub struct Wizard {
     themes: Vec<String>,
     cursor: [usize; 3],
     choices: Choices,
-    /// El tema con el que se abrió: lo que se conserva al salir con Esc.
+    /// The theme it was opened with: what is kept on leaving with Esc.
     current_theme: String,
 }
 
 impl Wizard {
-    /// Con los presets y los temas que hay. El cursor arranca en el preset
-    /// y el tema VIGENTES, para que Enter sin mirar deje todo como estaba.
+    /// With the presets and themes there are. The cursor starts on the
+    /// CURRENT preset and theme, so pressing Enter without looking leaves
+    /// everything as it was.
     #[must_use]
     pub fn new(
         presets: &[&str],
@@ -102,16 +103,16 @@ impl Wizard {
         }
     }
 
-    /// El paso actual.
+    /// The current step.
     #[must_use]
     pub fn step(&self) -> Step {
         self.step
     }
 
-    /// El título del paso, en el idioma dado: `norte · 1/3 · Keys`.
+    /// The step's title, in the given language: `norte · 1/3 · Keys`.
     #[must_use]
     pub fn title(&self, lang: Lang) -> String {
-        let clave = match self.step {
+        let key = match self.step {
             Step::Preset => "wizard-step-preset",
             Step::Theme => "wizard-step-theme",
             Step::Icons => "wizard-step-icons",
@@ -120,23 +121,23 @@ impl Wizard {
             "{} · {}/3 · {}",
             t_in(lang, "wizard-title"),
             self.step.number(),
-            t_in(lang, clave)
+            t_in(lang, key)
         )
     }
 
-    /// La pregunta del paso, en el idioma dado.
+    /// The step's question, in the given language.
     #[must_use]
     pub fn question(&self, lang: Lang) -> String {
-        let clave = match self.step {
+        let key = match self.step {
             Step::Preset => "wizard-ask-preset",
             Step::Theme => "wizard-ask-theme",
             Step::Icons => "wizard-ask-icons",
         };
-        t_in(lang, clave)
+        t_in(lang, key)
     }
 
-    /// Las filas del paso, en el idioma dado: cada preset con su línea,
-    /// los temas por nombre, y sí/no para los iconos.
+    /// The step's rows, in the given language: each preset with its line,
+    /// the themes by name, and yes/no for the icons.
     #[must_use]
     pub fn rows(&self, lang: Lang) -> Vec<String> {
         match self.step {
@@ -144,12 +145,12 @@ impl Wizard {
                 .presets
                 .iter()
                 .map(|p| {
-                    let clave = format!("wizard-preset-{p}");
-                    let linea = t_in(lang, &clave);
-                    if linea == clave {
+                    let key = format!("wizard-preset-{p}");
+                    let line = t_in(lang, &key);
+                    if line == key {
                         p.clone()
                     } else {
-                        format!("{p} — {linea}")
+                        format!("{p} — {line}")
                     }
                 })
                 .collect(),
@@ -161,7 +162,7 @@ impl Wizard {
         }
     }
 
-    /// Qué fila está elegida en el paso actual.
+    /// Which row is chosen at the current step.
     #[must_use]
     pub fn cursor(&self) -> usize {
         self.cursor[self.step.index()]
@@ -175,13 +176,13 @@ impl Wizard {
         }
     }
 
-    /// Sube una fila (tope arriba).
+    /// Moves up one row (stops at the top).
     pub fn up(&mut self) {
         let i = self.step.index();
         self.cursor[i] = self.cursor[i].saturating_sub(1);
     }
 
-    /// Baja una fila (tope abajo).
+    /// Moves down one row (stops at the bottom).
     pub fn down(&mut self) {
         let i = self.step.index();
         if self.cursor[i] + 1 < self.len() {
@@ -189,15 +190,15 @@ impl Wizard {
         }
     }
 
-    /// Pone el cursor en `row`, si existe: lo que hace un clic.
+    /// Puts the cursor on `row`, if it exists: what a click does.
     pub fn select(&mut self, row: usize) {
         if row < self.len() {
             self.cursor[self.step.index()] = row;
         }
     }
 
-    /// El tema bajo el cursor mientras se elige tema: para la vista previa
-    /// en vivo. `None` en los otros pasos.
+    /// The theme under the cursor while choosing a theme: for the live
+    /// preview. `None` in the other steps.
     #[must_use]
     pub fn preview_theme(&self) -> Option<&str> {
         (self.step == Step::Theme)
@@ -205,7 +206,7 @@ impl Wizard {
             .flatten()
     }
 
-    /// Enter: guarda la fila y pasa al siguiente paso, o termina.
+    /// Enter: saves the row and moves to the next step, or finishes.
     pub fn confirm(&mut self) -> Outcome {
         match self.step {
             Step::Preset => {
@@ -225,7 +226,7 @@ impl Wizard {
         }
     }
 
-    /// Backspace: el paso anterior, si lo hay.
+    /// Backspace: the previous step, if there is one.
     pub fn back(&mut self) {
         self.step = match self.step {
             Step::Preset | Step::Theme => Step::Preset,
@@ -233,8 +234,8 @@ impl Wizard {
         };
     }
 
-    /// Esc: salir sin cambiar nada y no volver a preguntar. Lleva el tema
-    /// vigente para que quien escribe conserve exactamente ese.
+    /// Esc: leave without changing anything and do not ask again. Carries the
+    /// current theme so whoever writes it keeps exactly that one.
     #[must_use]
     pub fn dismiss(&self) -> Outcome {
         Outcome::Dismissed {
@@ -251,13 +252,13 @@ mod tests {
         Wizard::new(&["orthodox", "vim"], &["default", "nord"], "vim", "nord")
     }
 
-    /// Arranca en lo vigente; Enter tres veces devuelve lo elegido; el
-    /// cursor de cada paso es suyo; Backspace vuelve.
+    /// Starts on the current values; pressing Enter three times returns what
+    /// was chosen; each step keeps its own cursor; Backspace goes back.
     #[test]
-    fn tres_pasos_y_lo_elegido() {
+    fn three_steps_and_what_was_chosen() {
         let mut w = w();
         assert_eq!(w.step(), Step::Preset);
-        assert_eq!(w.cursor(), 1, "arranca en el preset vigente");
+        assert_eq!(w.cursor(), 1, "starts on the current preset");
         assert!(w.title(Lang::En).contains("1/3"));
         assert!(w.rows(Lang::En)[0].starts_with("orthodox"));
         w.up();
@@ -266,7 +267,7 @@ mod tests {
         assert_eq!(
             w.preview_theme(),
             Some("nord"),
-            "el tema vigente, bajo el cursor"
+            "the current theme, under the cursor"
         );
         w.up();
         assert_eq!(w.preview_theme(), Some("default"));
@@ -274,7 +275,7 @@ mod tests {
         assert_eq!(
             (w.step(), w.cursor()),
             (Step::Preset, 0),
-            "cada paso conserva su cursor"
+            "each step keeps its own cursor"
         );
         assert_eq!(w.confirm(), Outcome::Continue);
         assert_eq!(w.confirm(), Outcome::Continue);
@@ -282,7 +283,7 @@ mod tests {
         assert_eq!(w.rows(Lang::Es).len(), 2);
         w.down();
         w.down();
-        assert_eq!(w.cursor(), 1, "tope abajo");
+        assert_eq!(w.cursor(), 1, "stops at the bottom");
         assert_eq!(
             w.confirm(),
             Outcome::Done(Choices {
@@ -296,13 +297,13 @@ mod tests {
             Outcome::Dismissed {
                 keep_theme: "nord".into()
             },
-            "salir conserva el tema con el que se abrió, no `default`"
+            "leaving keeps the theme it was opened with, not `default`"
         );
     }
 
-    /// Un clic fuera de las filas no mueve nada; uno dentro, sí.
+    /// A click outside the rows moves nothing; one inside does.
     #[test]
-    fn select_solo_dentro() {
+    fn select_only_inside() {
         let mut w = w();
         w.select(7);
         assert_eq!(w.cursor(), 1);

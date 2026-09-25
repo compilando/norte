@@ -1,38 +1,39 @@
-//! Un plazo para una syscall que no se puede cancelar.
+//! A deadline for a syscall that can't be cancelled.
 //!
-//! Vive aquí, y no en cada crate que lo necesita, porque el motivo por el que
-//! existe no es de nadie en particular: **un montaje de red muerto no se
-//! cancela**. Un `statfs` sobre un NFS caído entra en D-state y no sale hasta
-//! que el montaje conteste o alguien lo desmonte a la fuerza; no hay señal, no
-//! hay token, y `spawn_blocking` no cancela nada — solo elige quién espera.
+//! Lives here, and not in every crate that needs it, because the reason it
+//! exists doesn't belong to anyone in particular: **a dead network mount
+//! doesn't cancel**. A `statfs` over a downed NFS enters D-state and
+//! doesn't come out until the mount answers or someone force-unmounts it;
+//! there's no signal, no token, and `spawn_blocking` cancels nothing — it
+//! only chooses who waits.
 
 use std::time::Duration;
 
-/// Corre `query` (bloqueante) en un [`std::thread`] DESACOPLADO, no en
-/// [`tokio::task::spawn_blocking`], y se rinde a los `deadline`.
+/// Runs `query` (blocking) on a DETACHED [`std::thread`], not on
+/// [`tokio::task::spawn_blocking`], and gives up at `deadline`.
 ///
-/// # Por qué un hilo suelto y no el pool
+/// # Why a loose thread and not the pool
 ///
-/// El pool de bloqueo de tokio está ACOTADO (512 hilos por defecto) y es
-/// COMPARTIDO con todo lo demás del proceso, incluido cada `spawn_blocking`
-/// que un provider hace para trabajo de disco corriente. Una consulta a un
-/// montaje muerto se cuelga indefinidamente y no hay forma de cancelar una
-/// syscall en vuelo: si eso pasara en el pool, un montaje caído ataría una
-/// plaza mientras siguiera caído, y unos cuantos dejarían sin pool al daemon
-/// para CUALQUIER otra operación local.
+/// Tokio's blocking pool is BOUNDED (512 threads by default) and SHARED
+/// with everything else in the process, including every `spawn_blocking` a
+/// provider does for ordinary disk work. A query against a dead mount
+/// hangs indefinitely and there's no way to cancel an in-flight syscall:
+/// if that happened in the pool, a downed mount would tie up a slot for as
+/// long as it stayed down, and a few of those would leave the daemon
+/// without a pool for ANY other local operation.
 ///
-/// Un `std::thread` cuesta un hilo del sistema filtrado por sonda colgada en
-/// vez de una plaza de un recurso compartido — peor en aislamiento (pila
-/// nueva, nunca reutilizada) y mucho mejor en conjunto, porque no puede
-/// bloquear a nadie más. Y el `oneshot` del que el `timeout` se marcha deja
-/// que el runtime se apague sin esperarlo, cosa que una task de
-/// `spawn_blocking` no permite: el runtime la espera al cerrar aunque su
-/// llamante ya no.
+/// A `std::thread` costs one system thread leaked per hung probe instead
+/// of a slot of a shared resource — worse in isolation (a fresh stack,
+/// never reused) and much better in aggregate, because it can't block
+/// anyone else. And the `oneshot` the `timeout` walks away from lets the
+/// runtime shut down without waiting for it, which a `spawn_blocking` task
+/// doesn't allow: the runtime waits for it on shutdown even after its
+/// caller no longer does.
 ///
-/// `None` = no contestó a tiempo. Qué significa eso lo decide el llamante:
-/// para los volúmenes es «este montaje no dice su tamaño», y para
-/// `capabilities_at` es «me quedo con lo que el provider declara». Esta
-/// función no tiene opinión.
+/// `None` = didn't answer in time. What that means is up to the caller:
+/// for volumes it's "this mount doesn't say its size", and for
+/// `capabilities_at` it's "I keep what the provider declares". This
+/// function has no opinion.
 ///
 /// ```
 /// use norte_vfs::deadline::blocking_with_deadline;
@@ -43,17 +44,17 @@ use std::time::Duration;
 ///     .build()
 ///     .expect("runtime");
 /// rt.block_on(async {
-///     // Contesta a tiempo.
+///     // Answers in time.
 ///     assert_eq!(blocking_with_deadline(|| 7, Duration::from_secs(5)).await, Some(7));
 ///
-///     // No contesta: el llamante sigue vivo, y el hilo se queda a solas con
-///     // su syscall hasta que el sistema lo suelte.
-///     let tarde = blocking_with_deadline(
+///     // Doesn't answer: the caller stays alive, and the thread is left
+///     // alone with its syscall until the system releases it.
+///     let late = blocking_with_deadline(
 ///         || std::thread::sleep(Duration::from_secs(30)),
 ///         Duration::from_millis(20),
 ///     )
 ///     .await;
-///     assert!(tarde.is_none());
+///     assert!(late.is_none());
 /// });
 /// ```
 pub async fn blocking_with_deadline<T, F>(query: F, deadline: Duration) -> Option<T>
@@ -63,9 +64,9 @@ where
 {
     let (tx, rx) = tokio::sync::oneshot::channel();
     std::thread::spawn(move || {
-        // El receptor puede haberse ido ya (venció el plazo y el `timeout`
-        // soltó su mitad): que `send` falle solo significa que ya no escucha
-        // nadie, no que haya pasado nada malo.
+        // The receiver may already be gone (the deadline expired and
+        // `timeout` dropped its half): `send` failing only means nobody's
+        // listening anymore, not that anything went wrong.
         let _ = tx.send(query());
     });
     tokio::time::timeout(deadline, rx)
@@ -78,23 +79,23 @@ where
 mod tests {
     use super::*;
 
-    /// Lo corriente: contesta y se devuelve su respuesta.
+    /// The ordinary case: it answers and its answer is returned.
     #[tokio::test]
-    async fn una_respuesta_a_tiempo_llega_entera() {
+    async fn an_answer_in_time_arrives_whole() {
         assert_eq!(
-            blocking_with_deadline(|| "hola", Duration::from_secs(5)).await,
-            Some("hola")
+            blocking_with_deadline(|| "hi", Duration::from_secs(5)).await,
+            Some("hi")
         );
     }
 
-    /// Y lo que importa: quien pregunta NO se queda colgado con el hilo.
+    /// And what matters: whoever asks does NOT stay hung with the thread.
     ///
-    /// La medida es del llamante, no del hilo: el hilo sigue dentro de su
-    /// syscall —no hay forma de cancelarla— y de eso trata la función. Lo que
-    /// se comprueba es que el `await` vuelve en el plazo y no en los 30
-    /// segundos del bloqueo.
+    /// The measurement is of the caller, not of the thread: the thread
+    /// stays inside its syscall — there's no way to cancel it — and that's
+    /// what this function is about. What's checked is that the `await`
+    /// returns within the deadline and not after the block's 30 seconds.
     #[tokio::test]
-    async fn quien_pregunta_vuelve_en_el_plazo_aunque_el_hilo_siga() {
+    async fn the_caller_returns_within_the_deadline_even_if_the_thread_keeps_going() {
         let t0 = std::time::Instant::now();
         let r = blocking_with_deadline(
             || std::thread::sleep(Duration::from_secs(30)),
@@ -102,21 +103,21 @@ mod tests {
         )
         .await;
         let dt = t0.elapsed();
-        assert!(r.is_none(), "no contestó a tiempo: la respuesta es `None`");
+        assert!(r.is_none(), "did not answer in time: the answer is `None`");
         assert!(
             dt < Duration::from_secs(5),
-            "el llamante volvió en {dt:?}, o sea que se quedó esperando al hilo"
+            "the caller returned in {dt:?}, meaning it waited on the thread"
         );
     }
 
-    /// Un pánico dentro de la consulta es «no contestó», no un pánico del
-    /// llamante: el hilo se muere con su `Sender` y el receptor lee un canal
-    /// cerrado. Sin esto, una sonda de plataforma que reventara se llevaría por
-    /// delante al que preguntó, que es la tarea del daemon.
+    /// A panic inside the query is "did not answer", not a panic of the
+    /// caller's: the thread dies with its `Sender` and the receiver reads
+    /// a closed channel. Without this, a platform probe blowing up would
+    /// take down whoever asked, which is the daemon's task.
     #[tokio::test]
-    async fn un_panico_en_la_consulta_es_no_contesto() {
+    async fn a_panic_in_the_query_is_did_not_answer() {
         let r = blocking_with_deadline(
-            || -> u8 { panic!("la sonda revienta") },
+            || -> u8 { panic!("the probe blows up") },
             Duration::from_secs(5),
         )
         .await;

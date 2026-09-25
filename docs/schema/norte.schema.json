@@ -106,7 +106,7 @@
           ]
         },
         "max_nesting": {
-          "description": "`[archive] max_nesting` (#56): tope de capas de archivo anidadas.",
+          "description": "`[archive] max_nesting` (#56): cap on nested archive layers.",
           "format": "uint",
           "minimum": 0,
           "type": [
@@ -115,7 +115,7 @@
           ]
         },
         "rar_delegate": {
-          "description": "`[archive] rar_delegate` (roadmap ítem 11): ruta ABSOLUTA del programa\nexterno que lee RAR (`7z`, `7zz` o `unrar`). Ausente = se sondea\n`PATH`. **Nunca se honra desde la capa Project**: una clave que nombra\nun ejecutable, leída de un `.norte.toml` dentro de un repositorio,\nsería ejecución de código arbitrario al entrar en el directorio.",
+          "description": "`[archive] rar_delegate` (roadmap item 11): ABSOLUTE path of the\nexternal program that reads RAR (`7z`, `7zz` or `unrar`). Absent =\nprobe `PATH`. **Never honoured from the Project layer**: a key that\nnames an executable, read from a `.norte.toml` inside a repository,\nwould be arbitrary code execution on entering the directory.",
           "type": [
             "string",
             "null"
@@ -587,7 +587,7 @@
         },
         "layout": {
           "default": null,
-          "description": "Qué disposición de paneles arranca. Ausente = `orthodox`, la de\nsiempre: dos paneles al 50 %, la franja de tareas y la barra de estado.\n\nCualquier otro nombre se busca en `layouts/<nombre>.toml` dentro del\ndirectorio de configuración. Un layout que no carga NO deja a norte sin\npantalla: se avisa y se arranca con `orthodox`.",
+          "description": "Which panel layout starts up. Absent = `orthodox`, the usual one: two\npanes at 50%, the task strip and the status bar.\n\nAny other name is looked up in `layouts/<name>.toml` inside the\nconfiguration directory. A layout that fails to load does NOT leave\nnorte with no screen: it warns and starts with `orthodox`.",
           "type": [
             "string",
             "null"
@@ -829,7 +829,7 @@
           "type": "object"
         }
       ],
-      "description": "The `width` of a spec entry. NOTE: this enum is `untagged`, and serde\nignores `deny_unknown_fields` inside untagged struct-syntax variants —\nan unknown key next to `fixed`/`min` is silently ignored, never an\nerror (pinned by `width_fixed_con_campo_extra_comportamiento_serde` in\n`load.rs`). The vocabularies and ranges themselves ARE validated at\nload."
+      "description": "The `width` of a spec entry. NOTE: this enum is `untagged`, and serde\nignores `deny_unknown_fields` inside untagged struct-syntax variants —\nan unknown key next to `fixed`/`min` is silently ignored, never an\nerror (pinned by `width_fixed_with_extra_field_is_serdes_behavior` in\n`load.rs`). The vocabularies and ranges themselves ARE validated at\nload."
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",

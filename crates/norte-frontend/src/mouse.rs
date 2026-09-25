@@ -369,16 +369,16 @@ impl Drag {
             cursor,
             mods,
         } = p;
-        // Una pulsación nueva sustituye a cualquier gesto armado: si el
-        // frontend perdió un release (ventana desenfocada, terminal que no
-        // reporta el botón), el gesto viejo muere aquí en vez de barrer con
-        // un ancla rancia.
+        // A new press replaces any armed gesture: if the frontend lost a
+        // release (an unfocused window, a terminal that does not report the
+        // button), the old gesture dies here instead of sweeping with a
+        // stale anchor.
         self.active = None;
         if mods.ctrl {
-            // Toggle discreto y sin arrastre. Gana sobre TODO lo demás
-            // (incluido `marked`): si no, una fila marcada no tendría forma
-            // de desmarcarse con el ratón, porque cualquier otra lectura de
-            // una fila marcada arma una transferencia.
+            // A discrete toggle with no drag. Wins over EVERYTHING else
+            // (including `marked`): otherwise a marked row would have no
+            // way to be unmarked with the mouse, because any other reading
+            // of a marked row arms a transfer.
             return vec![
                 Effect::MoveCursor {
                     pane: at.pane,
@@ -392,18 +392,18 @@ impl Drag {
             ];
         }
         if mods.shift {
-            // Rango desde el CURSOR, que se queda donde está: el ancla
-            // sigue visible y un segundo shift+click extiende el MISMO
-            // rango en vez de colapsarlo sobre la fila anterior. El
-            // `MoveCursor` sobre el propio cursor no mueve nada: dice
-            // «enfoca este pane».
+            // Range from the CURSOR, which stays where it is: the anchor
+            // stays visible and a second shift+click extends the SAME
+            // range instead of collapsing it onto the previous row. The
+            // `MoveCursor` onto the cursor itself moves nothing: it says
+            // "focus this pane".
             //
-            // Gana sobre `marked` a propósito: extender un rango cuyo
-            // extremo cae sobre una fila YA marcada es el gesto de todos
-            // los días (ctrl+click a unos cuantos, shift+click más allá),
-            // y leerlo como transferencia no solo perdería la extensión —
-            // con shift todavía pulsado al soltar sobre el otro pane
-            // MOVERÍA la selección entera.
+            // Wins over `marked` on purpose: extending a range whose end
+            // lands on an ALREADY marked row is the everyday gesture
+            // (ctrl+click a few, shift+click past them), and reading it as
+            // a transfer would not only drop the extension — with shift
+            // still held at release over the other pane it would MOVE the
+            // whole selection.
             let anchor = Spot::new(at.pane, cursor);
             self.active = Some(Active {
                 kind: DragKind::MarkSweep,
@@ -412,11 +412,11 @@ impl Drag {
                 last_in_pane: at,
                 last: at,
                 moved: false,
-                // NO promovible: shift dice «extiende el rango», y el
-                // extremo cae rutinariamente al otro lado del borde entre
-                // panes con el modificador todavía pulsado — leer eso como
-                // un drop convertiría un gesto de marcar en un MOVIMIENTO
-                // de toda la selección.
+                // NOT promotable: shift means "extend the range", and the
+                // end routinely lands on the other side of the pane
+                // boundary with the modifier still held — reading that as
+                // a drop would turn a marking gesture into a MOVE of the
+                // whole selection.
                 promotable: false,
                 outside: false,
             });
@@ -425,10 +425,11 @@ impl Drag {
                     pane: at.pane,
                     index: cursor,
                 },
-                // Aditivo (no `SweepRange`): un shift+click extiende lo que
-                // ya había marcado a mano y no debe devolver nada. El
-                // rubber-band solo empieza si el gesto se convierte en
-                // arrastre, y su baseline incluirá ya este rango.
+                // Additive (not `SweepRange`): a shift+click extends what
+                // was already marked by hand and must not give anything
+                // back. The rubber-band only starts if the gesture becomes
+                // a drag, and its baseline will already include this
+                // range.
                 Effect::MarkRange {
                     pane: at.pane,
                     from: cursor,
@@ -438,8 +439,8 @@ impl Drag {
             ];
         }
         if marked {
-            // Fila YA marcada y sin modificadores = transferencia de las
-            // marcas. El modificador de copiar/mover se lee AL SOLTAR.
+            // ALREADY marked row and no modifiers = transfer of the marks.
+            // The copy/move modifier is read AT RELEASE.
             self.active = Some(Active {
                 kind: DragKind::Transfer,
                 anchor: at,
@@ -447,7 +448,7 @@ impl Drag {
                 last_in_pane: at,
                 last: at,
                 moved: false,
-                // Ya es una transferencia: no hay nada que promover.
+                // Already a transfer: nothing to promote.
                 promotable: false,
                 outside: false,
             });
@@ -456,10 +457,9 @@ impl Drag {
                 index: at.index,
             }];
         }
-        // Fila sin marcar y sin modificadores: arma el barrido pero NO
-        // marca todavía. Un click suelto debe seguir siendo lo que siempre
-        // fue (foco + cursor, marcas intactas); solo el movimiento lo
-        // convierte en selección.
+        // Unmarked row and no modifiers: arms the sweep but does NOT mark
+        // yet. A plain click must keep being what it always was (focus +
+        // cursor, marks untouched); only motion turns it into a selection.
         self.active = Some(Active {
             kind: DragKind::MarkSweep,
             anchor: at,
@@ -467,8 +467,8 @@ impl Drag {
             last_in_pane: at,
             last: at,
             moved: false,
-            // El ÚNICO gesto promovible: cruzar al otro pane lo convierte en
-            // una transferencia de esta fila (ver la cabecera del módulo).
+            // The ONLY promotable gesture: crossing into the other pane
+            // turns it into a transfer of this row (see the module docs).
             promotable: true,
             outside: false,
         });
@@ -502,49 +502,49 @@ impl Drag {
             return Vec::new();
         };
         if at == active.last {
-            // Misma fila que el último evento: nada que re-emitir. Seguro
-            // precisamente porque cada efecto de barrido re-enuncia el
-            // rango entero — tirar un repetido no puede perder nada.
+            // Same row as the last event: nothing to re-emit. Safe
+            // precisely because every sweep effect re-states the whole
+            // range — dropping a repeat cannot lose anything.
             return Vec::new();
         }
         active.last = at;
         if at != active.origin {
             active.moved = true;
         }
-        let en_casa = at.pane == active.anchor.pane;
-        if en_casa {
+        let at_home = at.pane == active.anchor.pane;
+        if at_home {
             active.last_in_pane = at;
         }
-        // Primer evento fuera del pane del ancla: el cruce (los siguientes,
-        // ya fuera, no vuelven a serlo).
-        let cruce = !en_casa && !active.outside;
-        active.outside = !en_casa;
+        // First event outside the anchor's pane: the crossing (later ones,
+        // already outside, are not crossings again).
+        let crossing = !at_home && !active.outside;
+        active.outside = !at_home;
         let active = *active;
         match active.kind {
-            // La transferencia no produce efecto al pasar por encima: el
-            // resaltado del pane de destino lo pinta el frontend con su
-            // propio evento; aquí no hay ninguna decisión que tomar hasta
-            // que se suelta.
+            // A transfer produces no effect while passing over: the
+            // destination pane's highlight is painted by the frontend with
+            // its own event; there is no decision to make here until it is
+            // released.
             DragKind::Transfer => Vec::new(),
             DragKind::MarkSweep => {
-                // Fuera del pane del ancla el barrido no marca, y el gesto
-                // no se cancela: el puntero puede volver (y al volver,
-                // `SweepRange` re-enuncia el rango entero contra la misma
-                // baseline, así que no se pierde nada).
+                // Outside the anchor's pane the sweep does not mark, and
+                // the gesture is not cancelled: the pointer can come back
+                // (and coming back, `SweepRange` re-states the whole range
+                // against the same baseline, so nothing is lost).
                 //
-                // Si el barrido es PROMOVIBLE, el cruce lo convierte en una
-                // transferencia de su fila de origen — y devuelve lo que
-                // llevara marcado, porque una promoción cambia lo que el
-                // gesto HACE, no lo que está seleccionado. Lo que un
-                // release haría a partir de aquí lo dice `pending`.
+                // If the sweep is PROMOTABLE, the crossing turns it into a
+                // transfer of its origin row — and it gives back whatever
+                // it had marked, because a promotion changes what the
+                // gesture DOES, not what is selected. What a release would
+                // do from here on is what `pending` says.
                 //
-                // El temblor dentro de la fila del press (que marcaría esa
-                // fila en un simple click) no necesita guard propio: `last`
-                // nace en `origin`, así que el early-return de arriba ya lo
-                // ha descartado. Un `!moved` aquí sería una condición que
-                // ningún test puede tumbar.
-                if !en_casa {
-                    return if cruce && active.promotable {
+                // The jitter inside the press's own row (which would mark
+                // that row on a plain click) needs no guard of its own:
+                // `last` is seeded at `origin`, so the early return above
+                // already discarded it. A `!moved` here would be a
+                // condition no test could kill.
+                if !at_home {
+                    return if crossing && active.promotable {
                         vec![Effect::RevertSweep {
                             pane: active.anchor.pane,
                         }]
@@ -590,20 +590,21 @@ impl Drag {
         let Some(at) = at else {
             return Vec::new();
         };
-        // Un gesto que nunca salió de su fila es un click: la pulsación ya
-        // emitió lo suyo (foco + cursor, o el toggle/rango de los
-        // modificadores) y aquí no queda nada que hacer.
+        // A gesture that never left its row is a click: the press already
+        // emitted its own effects (focus + cursor, or the modifiers'
+        // toggle/range) and there is nothing left to do here.
         if !active.moved && at == active.origin {
             return Vec::new();
         }
         match active.kind {
             DragKind::MarkSweep if active.promotable && at.pane != active.anchor.pane => {
-                // Barrido PROMOVIDO: soltar sobre el otro pane transfiere la
-                // fila donde bajó el botón, no las marcas (que pueden ser
-                // otras) y no el rango barrido (por el que el puntero solo
-                // pasó de camino). El `RevertSweep` se re-emite aquí porque
-                // el frontend pudo coalescer el gesto entero y no haber
-                // reportado nunca el cruce; sin extent armado no hace nada.
+                // PROMOTED sweep: releasing over the other pane transfers
+                // the row the button went down on, not the marks (which
+                // can be others) and not the swept range (which the
+                // pointer only passed over on the way). `RevertSweep` is
+                // re-emitted here because the frontend may have coalesced
+                // the whole gesture and never reported the crossing;
+                // without an armed extent it does nothing.
                 vec![
                     Effect::RevertSweep {
                         pane: active.anchor.pane,
@@ -617,11 +618,11 @@ impl Drag {
                 ]
             }
             DragKind::MarkSweep => {
-                // Soltar fuera del pane del ancla: el barrido se cierra
-                // sobre la ÚLTIMA fila vista dentro de ese pane. Confiar en
-                // que las motions ya marcaron dejaba el gesto en NADA
-                // cuando el frontend las coalescía — el mismo arrastre daba
-                // marcas distintas en la TUI y en la GUI.
+                // Releasing outside the anchor's pane: the sweep closes on
+                // the LAST row seen inside that pane. Trusting that the
+                // motions already marked left the gesture as NOTHING
+                // whenever the frontend coalesced them — the same drag gave
+                // different marks in the TUI and the GUI.
                 let end = if at.pane == active.anchor.pane {
                     at
                 } else {
@@ -641,16 +642,16 @@ impl Drag {
             }
             DragKind::Transfer => {
                 if at.pane == active.origin.pane {
-                    // Soltar sobre el pane de origen es un no-op explícito
-                    // (no una copia de un dir sobre sí mismo).
+                    // Releasing over the source pane is an explicit no-op
+                    // (not a copy of a dir onto itself).
                     return Vec::new();
                 }
                 vec![Effect::Transfer {
                     from_pane: active.origin.pane,
                     to_pane: at.pane,
                     move_files: mods.shift,
-                    // Las MARCAS del pane de origen: este gesto nació sobre
-                    // una fila marcada.
+                    // The source pane's MARKS: this gesture was born over a
+                    // marked row.
                     promoted: None,
                 }]
             }
@@ -720,7 +721,7 @@ impl Drag {
             DragKind::Transfer => None,
             DragKind::MarkSweep => {
                 if !(a.promotable && a.last.pane != a.anchor.pane) {
-                    // Sigue siendo un barrido: en casa, o no promovible.
+                    // Still a sweep: at home, or not promotable.
                     return Some(Pending::Marking {
                         pane: a.anchor.pane,
                     });
@@ -729,8 +730,9 @@ impl Drag {
             }
         };
         if a.last.pane == a.origin.pane {
-            // Soltar en casa es un no-op explícito, así que no se anuncia
-            // como drop: no hay destino sobre el que prometer nada.
+            // Releasing at home is an explicit no-op, so it is not
+            // announced as a drop: there is no destination to promise
+            // anything about.
             return Some(Pending::Carrying {
                 from_pane: a.origin.pane,
             });
@@ -748,9 +750,9 @@ impl Drag {
 mod tests {
     use super::*;
 
-    /// Arrastrar desde una fila SIN marcar barre marcando lo que cubre.
+    /// Dragging from an UNMARKED row sweeps, marking what it covers.
     #[test]
-    fn arrastre_desde_fila_sin_marcar_barre_marcando() {
+    fn dragging_from_an_unmarked_row_sweeps_and_marks() {
         let mut d = Drag::default();
         let fx = d.press(Press {
             at: Spot::new(0, 1),
@@ -764,8 +766,8 @@ mod tests {
                 Effect::MoveCursor { pane: 0, index: 1 },
                 Effect::BeginSweep { pane: 0 },
             ],
-            "la pulsación arma el barrido pero no marca: un click suelto no \
-             cambia la selección"
+            "the press arms the sweep but does not mark: a plain click does \
+             not change the selection"
         );
         assert_eq!(d.kind(), Some(DragKind::MarkSweep));
         assert_eq!(
@@ -789,19 +791,19 @@ mod tests {
                     to: 3
                 },
             ],
-            "el release re-emite el rango final: el frontend puede haber \
-             coalescido o perdido motions"
+            "the release re-states the final range: the frontend may have \
+             coalesced or lost motions"
         );
-        assert_eq!(d.kind(), None, "el gesto muere al soltar");
+        assert_eq!(d.kind(), None, "the gesture dies on release");
     }
 
-    /// Arrastrar desde una fila YA marcada es una transferencia de las
-    /// marcas, no un barrido. Es la regla que deja que UN solo gesto haga
-    /// los dos trabajos; si se invirtiera, arrastrar una selección hecha a
-    /// mano la ampliaría en vez de moverla y el usuario copiaría ficheros
-    /// que nunca eligió.
+    /// Dragging from an ALREADY marked row is a transfer of the marks, not
+    /// a sweep. It is the rule that lets ONE gesture do both jobs; if it
+    /// were reversed, dragging a hand-made selection would extend it
+    /// instead of moving it, and the user would copy files they never
+    /// chose.
     #[test]
-    fn arrastre_desde_fila_marcada_es_transferencia() {
+    fn dragging_from_a_marked_row_is_a_transfer() {
         let mut d = Drag::default();
         let _ = d.press(Press {
             at: Spot::new(0, 2),
@@ -812,7 +814,7 @@ mod tests {
         assert_eq!(d.kind(), Some(DragKind::Transfer));
         assert!(
             d.motion(Spot::new(1, 0)).is_empty(),
-            "una transferencia no marca nada por el camino"
+            "a transfer marks nothing along the way"
         );
         assert_eq!(
             d.release(Some(Spot::new(1, 0)), Mods::NONE),
@@ -825,12 +827,13 @@ mod tests {
         );
     }
 
-    /// El flag copiar/mover se lee AL SOLTAR, no al pulsar: es la única
-    /// forma de que quien empieza a arrastrar y cambia de idea a mitad no
-    /// acabe MOVIENDO (mutación destructiva en el origen) lo que creía
-    /// copiar. Mismo press en los dos casos, distinto release.
+    /// The copy/move flag is read AT RELEASE, not at press: it is the only
+    /// way for someone who starts dragging and changes their mind halfway
+    /// not to end up MOVING (a destructive mutation at the source) what
+    /// they thought they were copying. Same press in both cases, different
+    /// release.
     #[test]
-    fn el_flag_copiar_mover_se_lee_al_soltar_no_al_pulsar() {
+    fn the_copy_move_flag_is_read_at_release_not_at_press() {
         let press = Press {
             at: Spot::new(0, 2),
             marked: true,
@@ -847,7 +850,7 @@ mod tests {
                 move_files: false,
                 promoted: None,
             }],
-            "soltó sin shift: copia"
+            "released without shift: copy"
         );
 
         let mut d = Drag::default();
@@ -860,22 +863,22 @@ mod tests {
                 move_files: true,
                 promoted: None,
             }],
-            "MISMA pulsación, shift pulsado solo al soltar: mueve"
+            "SAME press, shift held only at release: it moves"
         );
     }
 
-    /// shift GANA sobre el estado de marca de la fila. Marcar unos cuantos
-    /// con ctrl+click y shift+click más allá deja el extremo del rango
-    /// sobre una fila YA marcada: leer eso como transferencia perdería la
-    /// extensión EN SILENCIO y, como el gesto se hace con shift pulsado,
-    /// un roce hasta el otro pane lo soltaría como `move_files: true` — un
-    /// MOVIMIENTO de toda la selección salido de un gesto de marcar.
+    /// shift WINS over the row's mark state. Marking a few with ctrl+click
+    /// and shift+clicking past them leaves the range's end on an ALREADY
+    /// marked row: reading that as a transfer would SILENTLY drop the
+    /// extension and, since the gesture is done with shift held, a brush
+    /// past into the other pane would release it as `move_files: true` — a
+    /// MOVE of the whole selection born out of a marking gesture.
     #[test]
-    fn shift_gana_sobre_una_fila_ya_marcada() {
+    fn shift_wins_over_an_already_marked_row() {
         let mut d = Drag::default();
         let fx = d.press(Press {
             at: Spot::new(0, 9),
-            marked: true, // el extremo del rango ya estaba marcado
+            marked: true, // the range's end was already marked
             cursor: 2,
             mods: Mods::SHIFT,
         });
@@ -890,24 +893,23 @@ mod tests {
                 },
                 Effect::BeginSweep { pane: 0 },
             ],
-            "extiende el rango; NO lo lee como transferencia"
+            "extends the range; does NOT read it as a transfer"
         );
         assert_eq!(d.kind(), Some(DragKind::MarkSweep));
         assert!(
             !d.release(Some(Spot::new(1, 4)), Mods::SHIFT)
                 .iter()
                 .any(|e| matches!(e, Effect::Transfer { .. })),
-            "y jamás degenera en un movimiento de ficheros"
+            "and it never degenerates into moving files"
         );
     }
 
-    /// Soltar fuera de toda fila CANCELA en vez de adivinar. Adivinar un
-    /// destino (el pane más cercano, la última fila) convertiría un gesto
-    /// abortado — soltar sobre la cabecera, sobre la barra de estado,
-    /// fuera de la ventana — en una copia o un movimiento de ficheros que
-    /// nadie pidió.
+    /// Releasing outside every row CANCELS instead of guessing. Guessing a
+    /// destination (the nearest pane, the last row) would turn an aborted
+    /// gesture — releasing over the header, over the status bar, outside
+    /// the window — into a copy or move of files nobody asked for.
     #[test]
-    fn soltar_fuera_de_toda_fila_cancela() {
+    fn releasing_outside_every_row_cancels() {
         let mut d = Drag::default();
         let _ = d.press(Press {
             at: Spot::new(0, 2),
@@ -916,7 +918,7 @@ mod tests {
             mods: Mods::NONE,
         });
         assert!(d.release(None, Mods::SHIFT).is_empty());
-        assert_eq!(d.kind(), None, "el gesto queda desarmado, no colgado");
+        assert_eq!(d.kind(), None, "the gesture ends up disarmed, not hanging");
 
         let mut d = Drag::default();
         let _ = d.press(Press {
@@ -928,15 +930,15 @@ mod tests {
         let _ = d.motion(Spot::new(0, 5));
         assert!(
             d.release(None, Mods::NONE).is_empty(),
-            "un barrido soltado en el vacío tampoco cierra el rango"
+            "a sweep released into the void does not close the range either"
         );
     }
 
-    /// Un arrastre que no sale de su fila degrada a click: foco + cursor y
-    /// nada más. Si no, cada temblor del ratón sobre una fila marcada
-    /// dispararía una transferencia entre panes.
+    /// A drag that never leaves its row degrades to a click: focus +
+    /// cursor and nothing else. Otherwise every jitter of the mouse over a
+    /// marked row would fire a transfer between panes.
     #[test]
-    fn arrastre_que_no_sale_de_su_fila_degrada_a_click() {
+    fn a_drag_that_never_leaves_its_row_degrades_to_a_click() {
         let mut d = Drag::default();
         let fx = d.press(Press {
             at: Spot::new(0, 4),
@@ -947,13 +949,13 @@ mod tests {
         assert_eq!(fx, vec![Effect::MoveCursor { pane: 0, index: 4 }]);
         assert!(
             d.motion(Spot::new(0, 4)).is_empty(),
-            "moverse dentro de la misma fila no es movimiento"
+            "moving within the same row is not motion"
         );
         assert!(d.release(Some(Spot::new(0, 4)), Mods::SHIFT).is_empty());
 
-        // Igual con un barrido: press + motion en la misma fila + release
-        // no marca NADA. Sin el guard de `moved`, el temblor emitiría un
-        // `SweepRange{origin, origin}` y un simple click marcaría su fila.
+        // Same with a sweep: press + motion on the same row + release
+        // marks NOTHING. Without the `moved` guard, the jitter would emit a
+        // `SweepRange{origin, origin}` and a plain click would mark its row.
         let mut d = Drag::default();
         let _ = d.press(Press {
             at: Spot::new(1, 0),
@@ -963,17 +965,16 @@ mod tests {
         });
         assert!(
             d.motion(Spot::new(1, 0)).is_empty(),
-            "un temblor dentro de la fila del press no marca"
+            "a jitter inside the press's row does not mark"
         );
         assert!(d.release(Some(Spot::new(1, 0)), Mods::NONE).is_empty());
     }
 
-    /// ctrl+click togglea UNA sola entrada (el primitivo `set_mark`), en
-    /// los dos sentidos, y no arma arrastre. Gana sobre la bifurcación de
-    /// la transferencia: sin eso una fila marcada no podría desmarcarse
-    /// con el ratón.
+    /// ctrl+click toggles A SINGLE entry (the `set_mark` primitive), both
+    /// ways, and does not arm a drag. Wins over the transfer fork: without
+    /// that a marked row could not be unmarked with the mouse.
     #[test]
-    fn ctrl_click_togglea_una_sola_entrada() {
+    fn ctrl_click_toggles_a_single_entry() {
         let mut d = Drag::default();
         assert_eq!(
             d.press(Press {
@@ -991,7 +992,7 @@ mod tests {
                 },
             ]
         );
-        assert_eq!(d.kind(), None, "gesto discreto: no arma arrastre");
+        assert_eq!(d.kind(), None, "discrete gesture: does not arm a drag");
         assert_eq!(
             d.press(Press {
                 at: Spot::new(0, 3),
@@ -1007,17 +1008,17 @@ mod tests {
                     marked: false
                 },
             ],
-            "sobre una fila marcada DESMARCA en vez de arrancar transferencia"
+            "over a marked row it UNMARKS instead of starting a transfer"
         );
     }
 
-    /// shift+click marca el rango desde el CURSOR y deja el cursor donde
-    /// estaba: el ancla sigue a la vista y un segundo shift+click extiende
-    /// el mismo rango en vez de colapsarlo sobre la fila anterior. El
-    /// rango del press es ADITIVO (`MarkRange`): extiende lo marcado a
-    /// mano y no devuelve nada.
+    /// shift+click marks the range from the CURSOR and leaves the cursor
+    /// where it was: the anchor stays visible and a second shift+click
+    /// extends the same range instead of collapsing it onto the previous
+    /// row. The press's range is ADDITIVE (`MarkRange`): it extends what
+    /// was marked by hand and gives nothing back.
     #[test]
-    fn shift_click_marca_el_rango_desde_el_cursor() {
+    fn shift_click_marks_the_range_from_the_cursor() {
         let mut d = Drag::default();
         assert_eq!(
             d.press(Press {
@@ -1036,7 +1037,7 @@ mod tests {
                 Effect::BeginSweep { pane: 1 },
             ]
         );
-        // Y shift+arrastre sigue extendiendo desde el MISMO ancla.
+        // And shift+drag keeps extending from the SAME anchor.
         assert_eq!(
             d.motion(Spot::new(1, 8)),
             vec![
@@ -1050,15 +1051,15 @@ mod tests {
         );
     }
 
-    /// `Press.cursor` es el cursor del pane de `at`, NO el del pane con
-    /// foco — difieren exactamente cuando se hace shift+click sobre el
-    /// pane que no tiene el foco, que es cuando importa. Todo lo que sale
-    /// apunta al pane pulsado.
+    /// `Press.cursor` is the cursor of the pane in `at`, NOT the focused
+    /// pane's — they differ exactly when shift+clicking on the pane that
+    /// does not have focus, which is when it matters. Everything that comes
+    /// out points at the pressed pane.
     #[test]
-    fn el_cursor_del_press_es_el_del_pane_pulsado() {
+    fn the_press_cursor_is_the_pressed_panes_cursor() {
         let mut d = Drag::default();
-        // Foco en el pane 0; el usuario hace shift+click en el pane 1,
-        // cuyo cursor está en 7.
+        // Focus on pane 0; the user shift+clicks on pane 1, whose cursor
+        // is at 7.
         let fx = d.press(Press {
             at: Spot::new(1, 3),
             marked: false,
@@ -1076,15 +1077,15 @@ mod tests {
                 },
                 Effect::BeginSweep { pane: 1 },
             ],
-            "ancla = cursor DEL PANE PULSADO, y el rango va hacia arriba"
+            "anchor = the PRESSED PANE's cursor, and the range goes upward"
         );
     }
 
-    /// Soltar una transferencia sobre el pane de ORIGEN es un no-op: copiar
-    /// un directorio sobre sí mismo no es lo que pidió nadie que arrastró y
-    /// se arrepintió a medio camino.
+    /// Releasing a transfer over the SOURCE pane is a no-op: copying a
+    /// directory onto itself is not what anyone who dragged and changed
+    /// their mind halfway asked for.
     #[test]
-    fn soltar_en_el_pane_de_origen_no_transfiere() {
+    fn releasing_on_the_source_pane_does_not_transfer() {
         let mut d = Drag::default();
         let _ = d.press(Press {
             at: Spot::new(0, 2),
@@ -1092,21 +1093,21 @@ mod tests {
             cursor: 2,
             mods: Mods::NONE,
         });
-        let _ = d.motion(Spot::new(1, 1)); // pasea por el otro pane…
+        let _ = d.motion(Spot::new(1, 1)); // wanders over the other pane…
         assert!(
             d.release(Some(Spot::new(0, 7)), Mods::NONE).is_empty(),
-            "…pero vuelve y suelta en casa"
+            "…but comes back and releases at home"
         );
     }
 
-    /// El barrido RETROCEDE: al volver sobre sus pasos re-enuncia un rango
-    /// más corto (`SweepRange`, que el pane aplica contra su baseline), en
-    /// vez de dejar marcado todo lo que el puntero llegó a tocar. Un
-    /// `MarkRange` aditivo aquí dejaría marcadas las filas del exceso — y
-    /// como el exceso ocurre en el borde del viewport bajo autoscroll, son
-    /// justo las que acaban de salir de la pantalla.
+    /// The sweep RETREATS: coming back over its own steps re-states a
+    /// shorter range (`SweepRange`, which the pane applies against its
+    /// baseline), instead of leaving marked everything the pointer ever
+    /// touched. An additive `MarkRange` here would leave the excess rows
+    /// marked — and since the excess happens at the viewport's edge under
+    /// autoscroll, they are exactly the ones that just scrolled off screen.
     #[test]
-    fn el_barrido_retrocede_en_vez_de_acumular() {
+    fn the_sweep_retreats_instead_of_accumulating() {
         let mut d = Drag::default();
         let _ = d.press(Press {
             at: Spot::new(0, 2),
@@ -1125,25 +1126,25 @@ mod tests {
                     to: 4
                 },
             ],
-            "rango más corto Y no-aditivo: las filas 5..20 se sueltan"
+            "a shorter AND non-additive range: rows 5..20 are released"
         );
         assert!(
             !d.release(Some(Spot::new(0, 4)), Mods::NONE)
                 .iter()
                 .any(|e| matches!(e, Effect::MarkRange { .. })),
-            "un barrido no emite JAMÁS el marcador aditivo"
+            "a sweep NEVER emits the additive marker"
         );
     }
 
-    /// La entrega no cambia el resultado: el mismo gesto reportado fila a
-    /// fila y reportado de una sola vez deja EXACTAMENTE las mismas
-    /// marcas. crossterm reporta por celda y GPUI por píxel, y ambos
-    /// coalescen bajo carga — sin esto, el mismo arrastre marcaría cosas
-    /// distintas en cada frontend, que es justo la deriva que este módulo
-    /// existe para evitar.
+    /// Delivery does not change the outcome: the same gesture reported row
+    /// by row and reported all at once leaves EXACTLY the same marks.
+    /// crossterm reports per cell and GPUI per pixel, and both coalesce
+    /// under load — without this, the same drag would mark different
+    /// things in each frontend, which is exactly the drift this module
+    /// exists to prevent.
     #[test]
-    fn la_granularidad_de_la_entrega_no_cambia_las_marcas() {
-        let rangos = |fx: &[Effect]| -> Vec<(usize, usize)> {
+    fn delivery_granularity_does_not_change_the_marks() {
+        let ranges = |fx: &[Effect]| -> Vec<(usize, usize)> {
             fx.iter()
                 .filter_map(|e| match e {
                     Effect::SweepRange { from, to, .. } => Some((*from, *to)),
@@ -1158,37 +1159,37 @@ mod tests {
             mods: Mods::NONE,
         };
 
-        // Entrega granular: cada fila por la que pasa el puntero.
+        // Granular delivery: every row the pointer passes over.
         let mut granular = Drag::default();
         let _ = granular.press(press);
         for i in [3, 4, 5] {
             let _ = granular.motion(Spot::new(0, i));
         }
-        let fin_granular = rangos(&granular.release(Some(Spot::new(0, 5)), Mods::NONE));
+        let granular_end = ranges(&granular.release(Some(Spot::new(0, 5)), Mods::NONE));
 
-        // Entrega coalescida: un único motion al final del recorrido.
-        let mut coalescida = Drag::default();
-        let _ = coalescida.press(press);
-        let _ = coalescida.motion(Spot::new(0, 5));
-        let fin_coalescida = rangos(&coalescida.release(Some(Spot::new(0, 5)), Mods::NONE));
+        // Coalesced delivery: a single motion at the end of the run.
+        let mut coalesced = Drag::default();
+        let _ = coalesced.press(press);
+        let _ = coalesced.motion(Spot::new(0, 5));
+        let coalesced_end = ranges(&coalesced.release(Some(Spot::new(0, 5)), Mods::NONE));
 
-        assert_eq!(fin_granular, vec![(2, 5)]);
+        assert_eq!(granular_end, vec![(2, 5)]);
         assert_eq!(
-            fin_granular, fin_coalescida,
-            "el rango final es el mismo con y sin motions intermedias"
+            granular_end, coalesced_end,
+            "the final range is the same with and without intermediate motions"
         );
     }
 
-    /// Soltar el barrido FUERA del pane del ancla lo cierra sobre la
-    /// última fila vista dentro de ese pane, en vez de no emitir nada
-    /// fiándose de que las motions ya marcaron: con la entrega coalescida
-    /// no hubo motions dentro del pane y el gesto entero se perdía.
+    /// Releasing the sweep OUTSIDE the anchor's pane closes it on the last
+    /// row seen inside that pane, instead of emitting nothing on the trust
+    /// that the motions already marked: with coalesced delivery there were
+    /// no motions inside the pane and the whole gesture was lost.
     ///
-    /// El barrido de este test es el de shift (NO promovible): el de una
-    /// pulsación limpia sobre fila sin marcar sí se promueve al cruzar, y
-    /// eso lo clava `un_barrido_que_cruza_de_pane_se_promueve_a_transferencia`.
+    /// This test's sweep is the shift one (NOT promotable): a plain press
+    /// on an unmarked row DOES get promoted on crossing, and that is pinned
+    /// by `a_sweep_that_crosses_panes_is_promoted_to_a_transfer`.
     #[test]
-    fn soltar_el_barrido_fuera_del_pane_lo_cierra_sobre_la_ultima_fila_vista() {
+    fn releasing_the_sweep_outside_the_pane_closes_it_on_the_last_row_seen() {
         let mut d = Drag::default();
         let _ = d.press(Press {
             at: Spot::new(0, 2),
@@ -1197,7 +1198,7 @@ mod tests {
             mods: Mods::SHIFT,
         });
         let _ = d.motion(Spot::new(0, 5));
-        let _ = d.motion(Spot::new(1, 5)); // se sale al otro pane
+        let _ = d.motion(Spot::new(1, 5)); // steps out to the other pane
         assert_eq!(
             d.release(Some(Spot::new(1, 5)), Mods::NONE),
             vec![
@@ -1208,16 +1209,17 @@ mod tests {
                     to: 5
                 },
             ],
-            "el rango se cierra en la fila 5 del pane 0, no en el pane 1"
+            "the range closes on row 5 of pane 0, not on pane 1"
         );
     }
 
-    /// Un barrido que se sale al otro pane no cancela: el puntero puede
-    /// volver, y al volver sigue barriendo desde el MISMO ancla — el
-    /// `SweepRange` re-enuncia el rango entero contra la misma baseline, así
-    /// que el paseo por el otro pane no cuesta ni una marca.
+    /// A sweep that leaves to the other pane does not cancel: the pointer
+    /// can come back, and coming back it keeps sweeping from the SAME
+    /// anchor — `SweepRange` re-states the whole range against the same
+    /// baseline, so the walk through the other pane costs not a single
+    /// mark.
     #[test]
-    fn el_barrido_que_sale_al_otro_pane_vuelve_a_barrer_al_regresar() {
+    fn a_sweep_that_leaves_to_the_other_pane_sweeps_again_on_return() {
         let mut d = Drag::default();
         let _ = d.press(Press {
             at: Spot::new(0, 1),
@@ -1228,13 +1230,13 @@ mod tests {
         assert_eq!(
             d.motion(Spot::new(1, 4)),
             vec![Effect::RevertSweep { pane: 0 }],
-            "el cruce promueve: devuelve lo barrido y no marca en el destino"
+            "the crossing promotes: gives back what was swept and marks nothing at the destination"
         );
         assert!(
             d.motion(Spot::new(1, 6)).is_empty(),
-            "una vez fuera, pasear por el otro pane no re-emite nada"
+            "once outside, walking through the other pane re-emits nothing"
         );
-        assert_eq!(d.kind(), Some(DragKind::MarkSweep), "sigue armado");
+        assert_eq!(d.kind(), Some(DragKind::MarkSweep), "still armed");
         assert_eq!(
             d.motion(Spot::new(0, 3)),
             vec![
@@ -1245,27 +1247,27 @@ mod tests {
                     to: 3
                 },
             ],
-            "de vuelta en casa vuelve a ser un barrido"
+            "back home it goes back to being a sweep"
         );
         assert_eq!(
             d.pending(Mods::NONE),
             Some(Pending::Marking { pane: 0 }),
-            "y lo dice: soltar aquí no toca ni un fichero"
+            "and it says so: releasing here touches not a single file"
         );
     }
 
-    /// Un barrido que nace en una fila SIN marcar y cruza al otro pane se
-    /// PROMUEVE a transferencia de ESA fila. Es el arrastre más común de
-    /// cualquier file manager de escritorio (coger un fichero y tirarlo al
-    /// otro panel) y sin esto no transferiría nada: barrería una fila y la
-    /// marcaría.
+    /// A sweep born on an UNMARKED row that crosses to the other pane gets
+    /// PROMOTED to a transfer of THAT row. It is the most common drag in
+    /// any desktop file manager (grab a file and drop it on the other
+    /// panel) and without this it would transfer nothing: it would sweep a
+    /// row and mark it.
     ///
-    /// Lleva la fila del PRESS, no las marcas del pane (pueden ser otras
-    /// once) ni el rango barrido (por el que el puntero solo pasó de
-    /// camino), y devuelve lo que hubiera marcado: una promoción cambia lo
-    /// que el gesto HACE, no lo que está seleccionado.
+    /// It carries the PRESS's row, not the pane's marks (there can be
+    /// eleven others) nor the swept range (which the pointer only passed
+    /// over on the way), and it gives back whatever it had marked: a
+    /// promotion changes what the gesture DOES, not what is selected.
     #[test]
-    fn un_barrido_que_cruza_de_pane_se_promueve_a_transferencia() {
+    fn a_sweep_that_crosses_panes_is_promoted_to_a_transfer() {
         let mut d = Drag::default();
         let _ = d.press(Press {
             at: Spot::new(0, 2),
@@ -1273,11 +1275,11 @@ mod tests {
             cursor: 2,
             mods: Mods::NONE,
         });
-        let _ = d.motion(Spot::new(0, 5)); // barre 2..=5 de camino
+        let _ = d.motion(Spot::new(0, 5)); // sweeps 2..=5 along the way
         assert_eq!(
             d.motion(Spot::new(1, 3)),
             vec![Effect::RevertSweep { pane: 0 }],
-            "al cruzar devuelve las filas que barrió por el camino"
+            "crossing gives back the rows it swept along the way"
         );
         assert_eq!(
             d.release(Some(Spot::new(1, 3)), Mods::NONE),
@@ -1290,15 +1292,15 @@ mod tests {
                     promoted: Some(2),
                 },
             ],
-            "transfiere la fila del press, no el rango barrido"
+            "transfers the press's row, not the swept range"
         );
     }
 
-    /// La promoción sobrevive a la entrega coalescida: un frontend que no
-    /// reporta NINGUNA motion (todo el gesto en press + release) transfiere
-    /// igual. Y el flag copiar/mover se sigue leyendo al soltar.
+    /// Promotion survives coalesced delivery: a frontend that reports NO
+    /// motion at all (the whole gesture in press + release) still
+    /// transfers. And the copy/move flag is still read at release.
     #[test]
-    fn la_promocion_no_depende_de_que_lleguen_motions() {
+    fn promotion_does_not_depend_on_motions_arriving() {
         let press = Press {
             at: Spot::new(1, 7),
             marked: false,
@@ -1318,17 +1320,17 @@ mod tests {
                     promoted: Some(7),
                 },
             ],
-            "sin motions: sigue siendo una transferencia, y con shift MUEVE"
+            "with no motions: it is still a transfer, and shift MOVES"
         );
     }
 
-    /// Una promoción CANCELADA no deja nada: ni transferencia (soltar fuera
-    /// de toda fila no adivina destino) ni marcas nuevas. Es la mitad del
-    /// contrato que hace la promoción aceptable — el gesto significa dos
-    /// cosas según dónde acabe, así que abortarlo tiene que devolver el
-    /// estado exacto de antes.
+    /// A CANCELLED promotion leaves nothing: no transfer (releasing
+    /// outside every row does not guess a destination) and no new marks.
+    /// It is half the contract that makes promotion acceptable — the
+    /// gesture means two things depending on where it ends, so aborting it
+    /// has to restore the exact prior state.
     #[test]
-    fn una_promocion_cancelada_no_deja_transferencia_ni_marcas() {
+    fn a_cancelled_promotion_leaves_no_transfer_or_marks() {
         let mut d = Drag::default();
         let _ = d.press(Press {
             at: Spot::new(0, 2),
@@ -1340,17 +1342,17 @@ mod tests {
         let _ = d.motion(Spot::new(1, 1));
         assert!(
             d.release(None, Mods::NONE).is_empty(),
-            "soltar sobre el cromo no transfiere ni cierra rango"
+            "releasing over chrome neither transfers nor closes the range"
         );
         assert_eq!(d.kind(), None);
     }
 
-    /// `pending` y `release` no pueden discrepar: es la promesa que se le
-    /// pinta al usuario ANTES de soltar (qué filas, a dónde, copiar o
-    /// mover) frente a lo que el drop hace de verdad. Se comprueban los
-    /// tres estados de un mismo gesto promovido, con y sin shift.
+    /// `pending` and `release` cannot disagree: it is the promise painted
+    /// to the user BEFORE releasing (which rows, where to, copy or move)
+    /// against what the drop really does. The three states of the same
+    /// promoted gesture are checked, with and without shift.
     #[test]
-    fn lo_que_pending_promete_es_lo_que_release_hace() {
+    fn what_pending_promises_is_what_release_does() {
         for mods in [Mods::NONE, Mods::SHIFT] {
             let mut d = Drag::default();
             let _ = d.press(Press {
@@ -1362,12 +1364,12 @@ mod tests {
             assert_eq!(
                 d.pending(mods),
                 Some(Pending::Marking { pane: 0 }),
-                "en casa: marcando"
+                "at home: marking"
             );
             let _ = d.motion(Spot::new(1, 2));
-            let prometido = d.pending(mods);
+            let promised = d.pending(mods);
             assert_eq!(
-                prometido,
+                promised,
                 Some(Pending::Drop {
                     from_pane: 0,
                     to_pane: 1,
@@ -1375,33 +1377,33 @@ mod tests {
                     promoted: Some(4),
                 })
             );
-            let hecho = d.release(Some(Spot::new(1, 2)), mods);
+            let done = d.release(Some(Spot::new(1, 2)), mods);
             let Some(Pending::Drop {
                 from_pane,
                 to_pane,
                 move_files,
                 promoted,
-            }) = prometido
+            }) = promised
             else {
-                panic!("prometía un drop");
+                panic!("promised a drop");
             };
             assert!(
-                hecho.contains(&Effect::Transfer {
+                done.contains(&Effect::Transfer {
                     from_pane,
                     to_pane,
                     move_files,
                     promoted,
                 }),
-                "el drop hace EXACTAMENTE lo prometido"
+                "the drop does EXACTLY what was promised"
             );
         }
     }
 
-    /// Un gesto de transferencia que todavía no ha salido de su pane no se
-    /// anuncia como drop: soltar ahí es un no-op explícito, y prometer una
-    /// copia que no va a ocurrir es peor que no prometer nada.
+    /// A transfer gesture that has not yet left its pane is not announced
+    /// as a drop: releasing there is an explicit no-op, and promising a
+    /// copy that is not going to happen is worse than promising nothing.
     #[test]
-    fn una_transferencia_en_casa_se_anuncia_como_tal_y_no_como_drop() {
+    fn a_transfer_at_home_is_announced_as_such_not_as_a_drop() {
         let mut d = Drag::default();
         let _ = d.press(Press {
             at: Spot::new(1, 3),
@@ -1422,13 +1424,13 @@ mod tests {
                 move_files: false,
                 promoted: None,
             }),
-            "sobre el otro pane sí: y lleva las MARCAS, no una fila"
+            "over the other pane it is: and it carries the MARKS, not a row"
         );
     }
 
-    /// Sin gesto armado no hay nada que anunciar.
+    /// With no armed gesture there is nothing to announce.
     #[test]
-    fn sin_gesto_armado_no_hay_nada_pendiente() {
+    fn with_no_armed_gesture_there_is_nothing_pending() {
         let mut d = Drag::default();
         assert_eq!(d.pending(Mods::NONE), None);
         let _ = d.press(Press {
@@ -1440,16 +1442,16 @@ mod tests {
         assert_eq!(
             d.pending(Mods::NONE),
             None,
-            "ctrl+click es discreto: no arma arrastre"
+            "ctrl+click is discrete: it does not arm a drag"
         );
     }
 
-    /// Un motion que no cambia de fila no emite nada: a ritmo de evento
-    /// por píxel (GPUI), re-enunciar el rango sobre un listado grande
-    /// cuesta milisegundos por evento. Seguro porque cada efecto de
-    /// barrido re-enuncia el rango entero.
+    /// A motion that does not change row emits nothing: at GPUI's
+    /// per-pixel event rate, re-stating the range over a large listing
+    /// costs milliseconds per event. Safe because every sweep effect
+    /// re-states the whole range.
     #[test]
-    fn un_motion_repetido_no_emite_nada() {
+    fn a_repeated_motion_emits_nothing() {
         let mut d = Drag::default();
         let _ = d.press(Press {
             at: Spot::new(0, 2),
@@ -1457,32 +1459,32 @@ mod tests {
             cursor: 2,
             mods: Mods::NONE,
         });
-        assert!(!d.motion(Spot::new(0, 6)).is_empty(), "primera vez: emite");
+        assert!(!d.motion(Spot::new(0, 6)).is_empty(), "first time: emits");
         assert!(
             d.motion(Spot::new(0, 6)).is_empty(),
-            "misma fila otra vez: nada"
+            "same row again: nothing"
         );
         assert!(
             !d.motion(Spot::new(0, 7)).is_empty(),
-            "fila nueva: vuelve a emitir"
+            "new row: emits again"
         );
     }
 
-    /// Motions y releases sin pulsación previa no hacen nada: un frontend
-    /// que reporta el movimiento del ratón continuamente (o que perdió el
-    /// press) no debe marcar por su cuenta.
+    /// Motions and releases with no prior press do nothing: a frontend that
+    /// reports mouse movement continuously (or that lost the press) must
+    /// not mark on its own.
     #[test]
-    fn eventos_sin_pulsacion_no_hacen_nada() {
+    fn events_with_no_press_do_nothing() {
         let mut d = Drag::default();
         assert!(d.motion(Spot::new(0, 3)).is_empty());
         assert!(d.release(Some(Spot::new(1, 3)), Mods::SHIFT).is_empty());
     }
 
-    /// Una pulsación nueva sustituye al gesto armado: si el frontend perdió
-    /// un release (ventana desenfocada, terminal que no reporta el botón),
-    /// el ancla rancia no debe sobrevivir al siguiente click.
+    /// A new press replaces the armed gesture: if the frontend lost a
+    /// release (an unfocused window, a terminal that does not report the
+    /// button), the stale anchor must not survive the next click.
     #[test]
-    fn una_pulsacion_nueva_desarma_el_gesto_anterior() {
+    fn a_new_press_disarms_the_previous_gesture() {
         let mut d = Drag::default();
         let _ = d.press(Press {
             at: Spot::new(0, 2),

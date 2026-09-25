@@ -1,10 +1,10 @@
-//! Pintar un pane: la fila por entrada, la cabecera de columnas y el reparto de
-//! anchos que las dos comparten.
+//! Painting a pane: the row per entry, the column header and the width
+//! layout the two share.
 //!
-//! `entry_item` es la función más caliente del render — se llama una vez por fila
-//! visible y por frame — y por eso recibe todo por parámetro en vez de mirar
-//! `App`: agrupar sus argumentos en una struct de un solo uso solo movería la
-//! lista de sitio.
+//! `entry_item` is the hottest function in the render — it is called once
+//! per visible row and per frame — and that is why it receives everything
+//! by parameter instead of looking at `App`: grouping its arguments into a
+//! single-use struct would only move the list somewhere else.
 
 use norte_proto::EntryKind;
 use norte_theme::Role;
@@ -21,38 +21,40 @@ use crate::theme::TuiTheme;
 use norte_frontend::middle_ellipsis;
 use norte_i18n::t;
 
-/// Celdas de la columna de iconos (ADR 0105): dos para el glifo —un emoji
-/// mide dos— y una de separación. Se abre en todas las filas de un listado
-/// en cuanto una tiene icono, y la cabecera se corre lo mismo.
+/// Cells of the icon column (ADR 0105): two for the glyph — an emoji
+/// measures two — and one for separation. It opens on every row of a
+/// listing as soon as one has an icon, and the header shifts by the same
+/// amount.
 pub(crate) const ICON_GUTTER: usize = 3;
 
-/// La celda de la columna de iconos de UNA fila (ADR 0105): dos celdas y un
-/// espacio, ANTES del nombre. Un icono de una celda (`$`) se rellena a dos;
-/// uno que no cabe en dos (un emoji con modificador) se recorta, porque la
-/// columna es lo que alinea los nombres y un icono ancho la rompería. Sin
-/// icono en esta fila, el hueco vacío: la fila sigue alineada.
+/// ONE row's icon-column cell (ADR 0105): two cells and a space, BEFORE the
+/// name. A one-cell icon (`$`) is padded to two; one that does not fit in
+/// two (an emoji with a modifier) is clipped, because the column is what
+/// aligns the names and a wide icon would break it. With no icon on this
+/// row, the slot stays empty: the row stays aligned.
 ///
-/// Se pinta con el color de la entrada: dice qué es, no en qué estado está,
-/// y ese color ya lo tiene el nombre.
+/// It is painted with the entry's color: it says what it IS, not what state
+/// it is in, and the name already carries that color.
 fn icon_span<'a>(
     decoration: Option<&norte_frontend::Decoration>,
     theme: &TuiTheme,
     name: &[u8],
     kind: EntryKind,
 ) -> Span<'a> {
-    let glifo = decoration.and_then(|d| d.icon.as_deref()).unwrap_or("");
-    let glifo = take_width(glifo, ICON_GUTTER - 1);
-    let relleno = (ICON_GUTTER - 1).saturating_sub(glifo.width());
+    let glyph = decoration.and_then(|d| d.icon.as_deref()).unwrap_or("");
+    let glyph = take_width(glyph, ICON_GUTTER - 1);
+    let fill = (ICON_GUTTER - 1).saturating_sub(glyph.width());
     Span::styled(
-        format!("{glifo}{} ", " ".repeat(relleno)),
+        format!("{glyph}{} ", " ".repeat(fill)),
         theme.entry(name, kind),
     )
 }
 
-/// Cuántos items pinta un pane y cuál va resaltado, EN COORDENADAS DE LO
-/// PINTADO (posición dentro del filtro cuando hay quick search en modo
-/// filtro, índice absoluto si no). Lo comparten `draw_pane` y
-/// [`super::geometry::pane_geometry`] para que el scroll salga del mismo cálculo.
+/// How many items a pane paints and which is highlighted, IN PAINTED
+/// COORDINATES (position within the filter when quick search is in filter
+/// mode, absolute index otherwise). Shared by `draw_pane` and
+/// [`super::geometry::pane_geometry`] so the scroll comes from the same
+/// calculation.
 pub fn painted_len_and_selection(pane: &Pane) -> (usize, Option<usize>) {
     match pane.quick_visible() {
         Some(vis) => (
@@ -68,123 +70,123 @@ pub fn painted_len_and_selection(pane: &Pane) -> (usize, Option<usize>) {
     }
 }
 
-/// Los índices que el pintor formatea de verdad: LA VENTANA, no el listado.
+/// The indices the painter actually formats: THE WINDOW, not the listing.
 ///
-/// `offset` es la ventana del MODELO (`PaneState::reconcile_viewport`,
-/// pegajosa) y `alto` las filas que el frame deja para el listado. El rango
-/// se recorta al `total`, así que el final del listado pinta lo que queda y
-/// un `offset` que se quedó más allá (el listado encogió bajo una ventana
-/// vieja) da rango VACÍO en vez de reventar.
+/// `offset` is the MODEL's window (`PaneState::reconcile_viewport`,
+/// sticky) and `alto` the rows the frame leaves for the listing. The range
+/// is clipped to `total`, so the end of the listing paints what is left and
+/// an `offset` that ended up past it (the listing shrank under a stale
+/// window) gives an EMPTY range instead of blowing up.
 ///
-/// Existe porque formatear una fila por ENTRADA para enseñar treinta y tres
-/// costaba ~50 ms de CPU por frame en un directorio de 3794 entradas, con el
-/// bucle repintando once veces por segundo: casi un núcleo entero quemado
-/// estando quieto, y el coste crecía con el tamaño del directorio.
+/// It exists because formatting one row per ENTRY to show thirty-three used
+/// to cost ~50ms of CPU per frame in a 3794-entry directory, with the loop
+/// repainting eleven times a second: almost a whole core burned while idle,
+/// and the cost grew with the directory's size.
 ///
-/// UNA cuenta y no una segunda al lado de [`Pane::viewport_offset`]: el hit
-/// test del ratón resuelve contra esa misma ventana, y dos cuentas del mismo
-/// hueco divergen en silencio — ahí es donde un click acaba marcando el
-/// fichero de al lado (memoria `funcion-compartida-no-basta`).
-pub(crate) fn filas_pintadas(offset: usize, total: usize, alto: usize) -> std::ops::Range<usize> {
-    let desde = offset.min(total);
-    let hasta = desde.saturating_add(alto).min(total);
-    desde..hasta
+/// ONE calculation and not a second one next to [`Pane::viewport_offset`]:
+/// the mouse's hit test resolves against that same window, and two
+/// calculations of the same slot diverge silently — that is where a click
+/// ends up marking the file next door (`funcion-compartida-no-basta`
+/// memory).
+pub(crate) fn painted_rows(offset: usize, total: usize, alto: usize) -> std::ops::Range<usize> {
+    let from = offset.min(total);
+    let until = from.saturating_add(alto).min(total);
+    from..until
 }
 
-/// El estado con el que ratatui pinta la lista, para una `ventana` ya
-/// recortada.
+/// The state ratatui paints the list with, for an already-clipped `window`.
 ///
-/// Dos cosas, y las dos se siguen de que `items` sea SOLO la ventana:
+/// Two things, and both follow from `items` being ONLY the window:
 ///
-/// - la selección va en coordenadas de lo PINTADO, así que se rebasa
-///   restándole el inicio de la ventana; un cursor fuera de ella no resalta
-///   ninguna fila, que es lo que ya pasaba cuando el recorte lo hacía
-///   ratatui;
-/// - el `offset` es CERO a propósito. Poner ahí el del modelo saltaría filas
-///   dos veces y pintaría el hueco vacío.
+/// - the selection is in PAINTED coordinates, so it is rebased by
+///   subtracting the window's start; a cursor outside it highlights no row,
+///   which is what already happened when ratatui did the clipping;
+/// - the `offset` is ZERO on purpose. Putting the model's there would skip
+///   rows twice and paint the slot empty.
 ///
-/// La ventana del MODELO (`PaneState::reconcile_viewport`, pegajosa) sigue
-/// viviendo en `Pane::viewport_offset`, y es la que `pane_geometry` declara
-/// al ratón: las dos salen del mismo sitio, que es lo que impide que un
-/// click resuelva la fila de al lado.
-fn estado_de_lista(selected: Option<usize>, ventana: &std::ops::Range<usize>) -> ListState {
+/// The MODEL's window (`PaneState::reconcile_viewport`, sticky) still lives
+/// in `Pane::viewport_offset`, and it is the one `pane_geometry` declares to
+/// the mouse: both come from the same place, which is what keeps a click
+/// from resolving to the row next door.
+fn list_state(selected: Option<usize>, window: &std::ops::Range<usize>) -> ListState {
     let mut state = ListState::default();
     state.select(
         selected
-            .and_then(|s| s.checked_sub(ventana.start))
-            .filter(|k| *k < ventana.len()),
+            .and_then(|s| s.checked_sub(window.start))
+            .filter(|k| *k < window.len()),
     );
     *state.offset_mut() = 0;
     state
 }
 
-/// La ventana que este frame pinta de `pane`, resuelta ANTES de formatear
-/// ninguna fila.
+/// The window this frame paints of `pane`, resolved BEFORE formatting any
+/// row.
 ///
-/// El alto sale de la misma cuenta que [`draw_tab_strip`] hace al repartir el
-/// interior del bloque —barra de pestañas si la hay, cabecera de columnas, y
-/// el listado debajo—; aquí solo se adelanta, el pintado sigue en su sitio.
-/// Adelantarlo es lo que permite formatear la VENTANA en vez del listado
-/// entero, que es de donde salía el coste.
-fn ventana_del_pane(
+/// The height comes from the same calculation [`draw_tab_strip`] does when
+/// laying out the block's interior — tab strip if there is one, column
+/// header, and the listing below; here it is only anticipated, the
+/// painting stays in its place. Anticipating it is what allows formatting
+/// the WINDOW instead of the whole listing, which is where the cost came
+/// from.
+fn pane_window(
     pane: &Pane,
     area: Rect,
-    con_pestanas: bool,
+    with_tabs: bool,
     painted_len: usize,
 ) -> std::ops::Range<usize> {
     let inner = super::geometry::block_inner(area);
-    let bar = u16::from(con_pestanas);
+    let bar = u16::from(with_tabs);
     let alto = usize::from(inner.height.saturating_sub(bar).saturating_sub(1));
-    filas_pintadas(pane.viewport_offset(), painted_len, alto)
+    painted_rows(pane.viewport_offset(), painted_len, alto)
 }
 
 #[cfg(test)]
-mod filas_pintadas_tests {
-    use super::filas_pintadas;
+mod painted_rows_tests {
+    use super::painted_rows;
 
-    /// El caso que costó encontrar: un directorio grande NO puede formatear
-    /// una fila por entrada para enseñar la ventana.
+    /// The case that was hard to find: a large directory must NOT format
+    /// one row per entry to show the window.
     ///
-    /// Medido antes del arreglo: `/usr/share/man/man1` (3794 entradas) daba
-    /// ~550 ms de CPU por segundo en el pintado, 11 frames por segundo, o sea
-    /// ~50 ms por frame para enseñar 33 filas. El coste era lineal en el
-    /// tamaño del listado, que es exactamente lo que este rango impide.
+    /// Measured before the fix: `/usr/share/man/man1` (3794 entries) cost
+    /// ~550ms of CPU per second in the painting, 11 frames per second, i.e.
+    /// ~50ms per frame to show 33 rows. The cost was linear in the
+    /// listing's size, which is exactly what this range prevents.
     #[test]
-    fn un_listado_enorme_pinta_solo_la_ventana() {
-        let r = filas_pintadas(0, 3794, 33);
-        assert_eq!(r.len(), 33, "33 filas de ventana, no 3794");
-        let r = filas_pintadas(3000, 100_000, 40);
-        assert_eq!(r.len(), 40, "el tamaño del listado no cambia el coste");
-        assert_eq!(r.start, 3000, "empieza donde dice la ventana del modelo");
+    fn a_huge_listing_paints_only_the_window() {
+        let r = painted_rows(0, 3794, 33);
+        assert_eq!(r.len(), 33, "33 window rows, not 3794");
+        let r = painted_rows(3000, 100_000, 40);
+        assert_eq!(r.len(), 40, "the listing's size does not change the cost");
+        assert_eq!(r.start, 3000, "starts where the model's window says");
     }
 
-    /// El final del listado se recorta al total: pedir más filas de las que
-    /// quedan no inventa entradas ni desborda.
+    /// The end of the listing is clipped to the total: asking for more rows
+    /// than remain does not invent entries nor overflow.
     #[test]
-    fn el_ultimo_tramo_se_recorta_al_total() {
-        let r = filas_pintadas(95, 100, 33);
-        assert_eq!(r, 95..100, "solo quedan cinco");
+    fn the_last_stretch_is_clipped_to_the_total() {
+        let r = painted_rows(95, 100, 33);
+        assert_eq!(r, 95..100, "only five are left");
     }
 
-    /// Un offset más allá del final da rango VACÍO, no un pánico ni un rango
-    /// invertido. Pasa de verdad: el listado encoge (un refresco, un filtro)
-    /// mientras la ventana del modelo sigue donde estaba.
+    /// An offset past the end gives an EMPTY range, not a panic nor an
+    /// inverted range. It really happens: the listing shrinks (a refresh, a
+    /// filter) while the model's window stays where it was.
     #[test]
-    fn un_offset_fuera_de_rango_no_revienta() {
-        assert!(filas_pintadas(500, 100, 33).is_empty());
-        assert!(filas_pintadas(0, 0, 33).is_empty(), "listado vacío");
+    fn an_out_of_range_offset_does_not_blow_up() {
+        assert!(painted_rows(500, 100, 33).is_empty());
+        assert!(painted_rows(0, 0, 33).is_empty(), "empty listing");
         assert!(
-            filas_pintadas(0, 100, 0).is_empty(),
-            "sin alto no hay filas"
+            painted_rows(0, 100, 0).is_empty(),
+            "no height means no rows"
         );
     }
 }
 
-/// La línea de cabecera (#108 L5): etiquetas Fluent (o la `header` custom
-/// del spec, #108 7b — YA saneada y capada al resolver, aquí solo el
-/// recorte por ancho), la del orden activo con `▲`/`▼`. Ancho fiel al de
-/// las celdas de las filas; el `align` del estilo elige el lado del
-/// relleno en las no-nombre, en paso con sus celdas.
+/// The header line (#108 L5): Fluent labels (or the spec's custom `header`,
+/// #108 7b — ALREADY sanitized and capped when resolved, here only the
+/// width clip), the active sort's with `▲`/`▼`. Width faithful to the
+/// rows' cells; the style's `align` picks the padding side on the
+/// non-name ones, in step with their cells.
 pub(crate) fn column_header_line(
     cols: &[(
         norte_frontend::columns::ColumnId,
@@ -193,18 +195,18 @@ pub(crate) fn column_header_line(
     )],
     sort: &norte_frontend::SortSpec,
     catalog: Option<&norte_proto::AttrCatalog>,
-    // Las celdas que la columna de iconos (ADR 0105) le quita al bloque del
-    // nombre: 0 sin iconos, [`ICON_GUTTER`] con ellos. La cabecera «Nombre»
-    // se corre lo mismo que los nombres, o deja de estar encima de ellos.
+    // The cells the icon column (ADR 0105) takes from the name block: 0
+    // with no icons, [`ICON_GUTTER`] with them. The "Name" header shifts by
+    // the same amount as the names, or stops sitting above them.
     icon_gutter: usize,
 ) -> String {
     use norte_frontend::SortDir;
     use norte_frontend::columns::Align;
     let mut out = String::new();
     for (i, (col, w, style)) in cols.iter().enumerate() {
-        // #117: etiqueta compartida TUI/GUI (header custom del spec →
-        // Fluent → catálogo enmascarado → id). NO se re-enmascara aquí:
-        // `header_label` ya devuelve texto seguro.
+        // #117: label shared TUI/GUI (spec's custom header → Fluent →
+        // masked catalog → id). It is NOT re-masked here: `header_label`
+        // already returns safe text.
         let label = norte_frontend::columns::header_label(col, style, catalog);
         let active = norte_frontend::columns::sort_column_id(col).as_ref() == Some(&sort.column);
         let w = usize::from(*w);
@@ -214,14 +216,14 @@ pub(crate) fn column_header_line(
             '▼'
         };
         if i == 0 {
-            // Nombre: alineado a la izquierda (deja el hueco del canalón).
-            // La flecha se añade TRAS recortar (review MN2): el indicador
-            // de dirección sobrevive a cualquier locale; recorte por ANCHO
-            // (take_width), jamás por chars. El layout del nombre no lo
-            // toca ningún `align` (#108 7b): su bloque manda.
-            // El canalón nunca desborda la columna: en una de una o dos
-            // celdas —lo que deja `full` en un terminal de 40— se pinta lo
-            // que cabe y el resto de cabeceras se queda en su sitio.
+            // Name: left-aligned (leaves room for the gutter). The arrow is
+            // added AFTER clipping (review MN2): the direction indicator
+            // survives any locale; clip by WIDTH (take_width), never by
+            // chars. No `align` touches the name's layout (#108 7b): its
+            // block rules.
+            // The gutter never overflows the column: on one of one or two
+            // cells — what `full` leaves on a 40-column terminal — what
+            // fits is painted and the rest of the headers stay in place.
             let icon_gutter = icon_gutter.min(w);
             let w = w - icon_gutter;
             let budget = if active { w.saturating_sub(1) } else { w };
@@ -234,10 +236,10 @@ pub(crate) fn column_header_line(
             out.push_str(&cab);
             out.push_str(&" ".repeat(pad));
         } else {
-            // No-nombre: el ancho incluye el separador — contenido dentro
-            // de w-1, misma cuenta que la celda. Derecha: relleno delante.
-            // Izquierda (#108 7b): el separador sigue ABRIENDO el ancho,
-            // el contenido va tras él y el relleno cae a la derecha.
+            // Non-name: the width includes the separator — content within
+            // w-1, same count as the cell. Right: padding up front.
+            // Left (#108 7b): the separator keeps OPENING the width, the
+            // content follows it and the padding falls on the right.
             let content = w.saturating_sub(1);
             let budget = if active {
                 content.saturating_sub(1)
@@ -255,11 +257,11 @@ pub(crate) fn column_header_line(
                     out.push_str(&cab);
                 }
                 Align::Left => {
-                    // m1 revisión 7b: emisión clampada a EXACTAMENTE `w`
-                    // celdas — con `w == 1` y flecha activa, «espacio +
-                    // flecha» emitía 2 y corría toda la cabecera a su
-                    // derecha (el separador gana: abre el ancho, como en
-                    // las celdas).
+                    // m1 review 7b: emission clamped to EXACTLY `w` cells —
+                    // with `w == 1` and an active arrow, "space + arrow"
+                    // used to emit 2 and shift the whole header to the
+                    // right (the separator wins: it opens the width, as in
+                    // the cells).
                     let clamped = take_width(&format!(" {cab}"), w);
                     let pad = w.saturating_sub(clamped.width());
                     out.push_str(&clamped);
@@ -271,13 +273,13 @@ pub(crate) fn column_header_line(
     out
 }
 
-/// Columnas VIVAS de un pane con su estilo resuelto (#108 7b, #117 sobre
-/// `ColumnId`): los anchos del layout compartido más `style_for_id`, UNA
-/// vez por columna y por frame (`style_for_id` pliega mapas y clona el
-/// header — por fila × columna sería O(filas × columnas) de lookups
-/// idénticos). El catálogo viene del cache por scheme de `App` (#117
-/// tarea 2): refina los defaults de las columnas attr (hint); `None` =
-/// aún no llegó o falló — defaults Opaque, jamás bloquea el render.
+/// A pane's LIVE columns with their style resolved (#108 7b, #117 over
+/// `ColumnId`): the shared layout's widths plus `style_for_id`, ONCE per
+/// column and per frame (`style_for_id` folds maps and clones the header —
+/// per row × column would be O(rows × columns) of identical lookups). The
+/// catalog comes from `App`'s per-scheme cache (#117 task 2): it refines
+/// the attr columns' defaults (hint); `None` = it has not arrived yet or
+/// failed — Opaque defaults, never blocks the render.
 pub(crate) fn styled_columns(
     settings: &norte_frontend::columns::ColumnsSettings,
     pane: &Pane,
@@ -300,47 +302,50 @@ pub(crate) fn styled_columns(
         .collect()
 }
 
-/// Las columnas de un pane, ajustadas para que sus NOMBRES se lean
-/// ([`norte_frontend::columns::fitted_columns`]). Única fuente de los
-/// anchos: la pintura y el borde que arrastra el ratón salen de aquí, y dos
-/// cálculos distintos harían que el arrastre agarrase la columna de al lado.
+/// A pane's columns, adjusted so their NAMES can be read
+/// ([`norte_frontend::columns::fitted_columns`]). The single source of
+/// widths: the painting and the border the mouse drags come from here, and
+/// two different calculations would make the drag grab the column next
+/// door.
 ///
-/// Lo que el nombre quiere es lo que miden sus nombres más lo que va delante
-/// de ellos en la fila: canalón, badge, clase y —si los hay— iconos.
+/// What the name wants is what its names measure plus what goes ahead of
+/// them on the row: gutter, badge, class and — if there are any — icons.
 pub(crate) fn pane_columns(
     settings: &norte_frontend::columns::ColumnsSettings,
     pane: &Pane,
     inner_w: u16,
-    // El catálogo del scheme de este pane, si ya llegó: decide si se pinta la
-    // columna de permisos que pone el listado (spec 2026-09-20).
+    // This pane's scheme's catalog, if it already arrived: decides whether
+    // the permissions column the listing sets is painted (spec 2026-09-20).
     catalog: Option<&norte_proto::AttrCatalog>,
 ) -> Vec<norte_frontend::columns::Fitted> {
-    let delante = 3 + if pane.any_icon() { ICON_GUTTER } else { 0 };
-    let quiere = pane
+    let ahead = 3 + if pane.any_icon() { ICON_GUTTER } else { 0 };
+    let wants = pane
         .name_width_p80()
-        .saturating_add(u16::try_from(delante).unwrap_or(u16::MAX));
-    norte_frontend::columns::fitted_columns(settings, pane.dir().scheme(), inner_w, quiere, catalog)
+        .saturating_add(u16::try_from(ahead).unwrap_or(u16::MAX));
+    norte_frontend::columns::fitted_columns(settings, pane.dir().scheme(), inner_w, wants, catalog)
 }
 
-/// El título del borde del pane: dónde está, qué le pasa y a dónde va.
+/// The pane's border title: where it is, what is happening to it and where
+/// it is going.
 ///
-/// Sale de [`draw_pane`] por tamaño —eran seis marcas encadenadas sobre la
-/// misma `String`— y se queda junto a él porque el ORDEN es la regla: los
-/// marcadores de estado (paginación, sin listar) cuelgan del nombre, el badge
-/// de destino lo antepone, y la espera reemplaza el nombre por el DESTINO.
-/// Cada marca va FUERA del nombre del directorio a propósito: un directorio
-/// llamado «→» no puede fingir que es el destino.
+/// Split out of [`draw_pane`] for size — there were six marks chained onto
+/// the same `String` — and stays next to it because ORDER is the rule: the
+/// status markers (pagination, unlisted) hang off the name, the destination
+/// badge goes in front of it, and waiting replaces the name with the
+/// DESTINATION. Each mark goes OUTSIDE the directory's name on purpose: a
+/// directory named "→" cannot pretend to be the destination.
 ///
-/// `ancho` es el del borde: el título de la espera SÍ se acota, porque es el
-/// primero que lleva a propósito un texto largo (un destino remoto con esquema
-/// y host) y ratatui recorta por la derecha SIN marcar el corte. Perder la cola
-/// de una ruta es perder qué carpeta es; perder la cabeza, dónde estás — así
-/// que se recorta por el medio, como hace la barra de estado.
+/// `width` is the border's: the waiting title IS clipped, because it is the
+/// first one to carry, on purpose, a long text (a remote destination with a
+/// scheme and a host) and ratatui clips on the right WITHOUT marking the
+/// cut. Losing a path's tail is losing which folder it is; losing the head,
+/// where you are — so it is clipped in the middle, like the status bar
+/// does.
 fn pane_title(
     pane: &Pane,
     is_dest: bool,
     busy: Option<&norte_frontend::busy::Busy>,
-    ancho: u16,
+    width: u16,
 ) -> String {
     let (title, title_hostile) =
         norte_frontend::path_display_with(pane.dir(), pane.name_encoding());
@@ -349,23 +354,24 @@ fn pane_title(
     } else {
         title
     };
-    // Un listado RELLENÁNDOSE (paginación, ADR 0017) se marca SIEMPRE: un
-    // listado incompleto jamás es silencioso.
+    // A listing FILLING UP (pagination, ADR 0017) is ALWAYS marked: an
+    // incomplete listing is never silent.
     if pane.loading() {
         use std::fmt::Write as _;
-        // La FRASE la redacta el crate compartido, que es de donde la coge
-        // también la cabecera de la ventana; los corchetes son de esta
-        // cabecera y se quedan aquí.
+        // The PHRASE is written by the shared crate, which is also where
+        // the window's header takes it from; the brackets belong to this
+        // header and stay here.
         let _ = write!(
             title,
             " [{}]",
             norte_frontend::notes::filling(true, pane.entries().len(), norte_i18n::active())
         );
     }
-    // Un pane que NO se pudo listar al restaurar la sesión lo dice mientras
-    // dure (#235): sin esto la pantalla afirma que el directorio está vacío,
-    // que es precisamente lo que no se sabe. Va donde la paginación y por la
-    // misma razón — un listado que no es el listado jamás es silencioso.
+    // A pane that could NOT be listed when restoring the session says so
+    // for as long as it lasts (#235): without this the screen claims the
+    // directory is empty, which is precisely what is not known. It goes
+    // where pagination does and for the same reason — a listing that is
+    // not the listing is never silent.
     if pane.unlisted {
         use std::fmt::Write as _;
         let _ = write!(
@@ -374,65 +380,67 @@ fn pane_title(
             norte_frontend::notes::unlisted(true, norte_i18n::active())
         );
     }
-    // El DESTINO se marca en el cromo, y solo cuando hace falta: con dos
-    // paneles el destino es el otro y nadie necesita que se lo digan, pero a
-    // partir de tres una copia hacia un panel que el lector no tenía en la
-    // cabeza es pérdida de datos silenciosa (ADR 0058 D7).
+    // The DESTINATION is marked in the chrome, and only when needed: with
+    // two panels the destination is the other one and nobody needs to be
+    // told, but from three on a copy toward a panel the reader did not have
+    // in mind is silent data loss (ADR 0058 D7).
     if is_dest {
         title = format!("{TARGET_BADGE} {title}");
     }
-    // Esperando (#323): el spinner va DELANTE y el título pasa a ser el
-    // DESTINO, no el directorio actual. El cuerpo sigue enseñando el listado de
-    // antes —a propósito: si la conexión falla, el lector se queda donde
-    // estaba— y sin el destino en la cabecera esa mezcla no se podría leer
-    // («¿esto qué está haciendo?»). Con el spinner al lado se lee «yendo aquí».
+    // Waiting (#323): the spinner goes UP FRONT and the title becomes the
+    // DESTINATION, not the current directory. The body keeps showing the
+    // previous listing — on purpose: if the connection fails, the reader
+    // stays where they were — and without the destination in the header
+    // that mix could not be read ("what is this doing?"). With the spinner
+    // next to it, it reads "going here".
     if let Some(b) = busy {
-        let Some(destino) = b.target.as_ref() else {
+        let Some(dest) = b.target.as_ref() else {
             return format!("{} {title}", b.frame());
         };
-        // Por `path_display_with` con la codificación DEL PANEL, igual que
-        // arriba: es el mismo panel que va a aterrizar, su reinterpretación
-        // (#98/F2) es la que rige, y el badge de nombre alterado se conserva.
-        // Renderizarlo sin badge era pintar una ruta enmascarada sin la marca
-        // que dice que se enmascaró, justo donde además se ofrece cancelar.
-        let (destino, alterado) = norte_frontend::path_display_with(destino, pane.name_encoding());
-        // 2 celdas del spinner + el espacio, más el badge si lo lleva.
-        let gastado =
-            2 + usize::from(alterado) * (norte_frontend::display::cells(HOSTILE_BADGE) + 1);
-        let hueco = usize::from(ancho).saturating_sub(gastado);
-        let destino = norte_frontend::middle_ellipsis(&destino, hueco);
-        title = if alterado {
-            format!("{} {HOSTILE_BADGE} {destino}", b.frame())
+        // Through `path_display_with` with the PANE's encoding, same as
+        // above: it is the same pane that is going to land, its
+        // reinterpretation (#98/F2) is the one that rules, and the
+        // altered-name badge is kept. Rendering it with no badge was
+        // painting a masked path with no mark saying it was masked, right
+        // where cancel is also offered.
+        let (dest, altered) = norte_frontend::path_display_with(dest, pane.name_encoding());
+        // 2 cells for the spinner + the space, plus the badge if it carries
+        // one.
+        let spent = 2 + usize::from(altered) * (norte_frontend::display::cells(HOSTILE_BADGE) + 1);
+        let slot = usize::from(width).saturating_sub(spent);
+        let dest = norte_frontend::middle_ellipsis(&dest, slot);
+        title = if altered {
+            format!("{} {HOSTILE_BADGE} {dest}", b.frame())
         } else {
-            format!("{} {destino}", b.frame())
+            format!("{} {dest}", b.frame())
         };
     }
     title
 }
 
-// Once argumentos: es el cableado del render de un pane, no una API. Agruparlos
-// en un struct solo movería la lista a otro sitio y añadiría un tipo que nadie
-// usa dos veces.
+// Eleven arguments: this is a pane's render wiring, not an API. Grouping
+// them into a struct would only move the list somewhere else and add a
+// type nobody uses twice.
 //
-// Y una línea por encima del tope de `too_many_lines`, DESPUÉS de sacar de aquí
-// todo lo que tenía nombre propio: el reparto de la ventana
-// (`ventana_del_pane`) y el estado de la lista (`estado_de_lista`), 34 líneas
-// entre las dos. Lo que queda es secuencia de pintado sin juntas naturales —
-// bloque, cabecera, listado—, y trocearla más para ganar una línea sería
-// partirla por donde no se parte.
-/// El texto de una celda dentro de `content` celdas, con el corte MARCADO.
+// And one line over `too_many_lines`'s cap, AFTER pulling out everything
+// here that had a name of its own: the window's layout (`pane_window`) and
+// the list's state (`list_state`), 34 lines between the two. What is left
+// is a painting sequence with no natural joints — block, header, listing —
+// and chopping it up further to gain one line would be splitting it where
+// it does not split.
+/// A cell's text within `content` cells, with the cut MARKED.
 ///
-/// Un corte se ve (auditoría de codificación, 2026-09-20). Antes se recortaba
-/// a secas y el resultado seguía pareciendo un valor entero: estrechando la
-/// columna de permisos con el ratón, `-rw-r--r--` y `-rw-r-----` se quedaban
-/// los dos en `-rw-r--`, y «lo lee todo el mundo» y «solo el grupo» pasaban a
-/// ser la misma celda sin que nada dijera que faltaba texto. Es la regla que
-/// el corpus llama `truncation_twins` y que `sanitize_cell` ya cumplía para
-/// el texto de un plugin.
+/// A cut is visible (encoding audit, 2026-09-20). It used to be clipped
+/// plainly and the result still looked like a whole value: narrowing the
+/// permissions column with the mouse, `-rw-r--r--` and `-rw-r-----` both
+/// ended up as `-rw-r--`, and "everyone can read it" and "only the group
+/// can" became the same cell with nothing saying text was missing. It is
+/// the rule the corpus calls `truncation_twins` and that `sanitize_cell`
+/// already satisfied for a plugin's text.
 ///
-/// La marca gasta una celda de las que HAY, no una de más: pasarse del
-/// presupuesto correría la columna siguiente.
-fn celda_cortada(cell: String, content: usize) -> String {
+/// The mark spends one of the cells there ARE, not an extra one: going over
+/// budget would shift the next column.
+fn clipped_cell(cell: String, content: usize) -> String {
     if cell.width() <= content {
         return cell;
     }
@@ -443,18 +451,19 @@ fn celda_cortada(cell: String, content: usize) -> String {
     s
 }
 
-/// Pone la banda del pijama bajo una fila IMPAR, y deja la par como estaba.
+/// Puts the pyjama stripe under an ODD row, and leaves the even one as it
+/// was.
 ///
-/// `banda` viene ya resuelta contra el tema: `None` es el pijama apagado o un
-/// tema que no lo define, y las dos cosas significan lo mismo para quien
-/// pinta — ninguna banda.
+/// `band` arrives already resolved against the theme: `None` is pyjama
+/// turned off or a theme that does not define it, and both things mean the
+/// same to whoever paints — no stripe.
 ///
-/// La paridad es la de la fila PINTADA. Como estilo BASE del `ListItem`, de
-/// modo que los spans de la fila se pintan encima y `highlight_style` —el
-/// cursor— gana por ir después.
-fn raya(banda: Option<ratatui::style::Style>, fila: usize, item: ListItem<'_>) -> ListItem<'_> {
-    match banda {
-        Some(style) if fila % 2 == 1 => item.style(style),
+/// The parity is the PAINTED row's. As the `ListItem`'s BASE style, so that
+/// the row's spans are painted on top and `highlight_style` — the cursor —
+/// wins by coming after.
+fn stripe(band: Option<ratatui::style::Style>, row: usize, item: ListItem<'_>) -> ListItem<'_> {
+    match band {
+        Some(style) if row % 2 == 1 => item.style(style),
         _ => item,
     }
 }
@@ -462,7 +471,7 @@ fn raya(banda: Option<ratatui::style::Style>, fila: usize, item: ListItem<'_>) -
 #[expect(
     clippy::too_many_arguments,
     clippy::too_many_lines,
-    reason = "cableado del render de un pane; lo extraíble ya salió a ventana_del_pane, estado_de_lista, celda_cortada y raya"
+    reason = "a pane's render wiring; what could be extracted already went to pane_window, list_state, clipped_cell and stripe"
 )]
 pub(crate) fn draw_pane(
     frame: &mut Frame<'_>,
@@ -475,19 +484,20 @@ pub(crate) fn draw_pane(
     catalog: Option<&norte_proto::AttrCatalog>,
     tabs: Option<&TabStrip>,
     is_dest: bool,
-    // La espera que afecta a ESTE panel, si alguna y si ya pasa del umbral.
-    // El filtro lo hace el llamante, que es quien sabe qué índice es este.
+    // The wait affecting THIS panel, if any and if it is already past the
+    // threshold. The filtering is done by the caller, which is the one who
+    // knows what index this is.
     busy: Option<&norte_frontend::busy::Busy>,
-    // El pie del panel (spec 2026-09-10), ya redactado por el llamante, que
-    // es quien tiene los volúmenes y el ajuste. `None` = apagado.
+    // The panel's footer (spec 2026-09-10), already composed by the caller,
+    // which is the one that has the volumes and the setting. `None` = off.
     footer: Option<&str>,
-    // `[ui] dir_indicator` (spec 2026-09-15): qué hacer con la `/` de las
-    // carpetas. Llega la CLAVE y no el booleano porque `auto` depende de algo
-    // que solo se sabe aquí: si este listado abrió la columna de iconos.
+    // `[ui] dir_indicator` (spec 2026-09-15): what to do with folders' `/`.
+    // The KEY arrives, not the boolean, because `auto` depends on something
+    // only known here: whether this listing opened the icon column.
     dir_indicator: norte_config::load::DirIndicator,
-    // `[ui] row_stripes` (spec 2026-09-20): el «pijama». La paridad es la de
-    // la fila PINTADA, no la del índice de la entrada — un listado filtrado
-    // por la búsqueda rápida sigue alternando, que es de lo que va la banda.
+    // `[ui] row_stripes` (spec 2026-09-20): the "pyjama". The parity is the
+    // PAINTED row's, not the entry's index — a listing filtered by quick
+    // search still alternates, which is what the stripe is about.
     stripes: bool,
 ) {
     let border_style = if focused {
@@ -495,20 +505,21 @@ pub(crate) fn draw_pane(
     } else {
         theme.role(Role::BorderUnfocused)
     };
-    // El ancho del BORDE menos sus dos esquinas: es lo que ratatui deja para
-    // el título antes de recortar sin avisar.
+    // The BORDER's width minus its two corners: it is what ratatui leaves
+    // for the title before clipping without warning.
     let title = pane_title(pane, is_dest, busy, area.width.saturating_sub(2));
     let mut block = Block::default()
         .borders(Borders::ALL)
         .border_style(border_style)
         .title_style(theme.role(Role::Title))
         .title(title);
-    // Quick search activo (spec 2026-07-18): línea de input al pie del pane
-    // `/{query} n/m` (+ «parcial» si el fill sigue: filtra sobre lo YA
-    // drenado, jamás en silencio). La query pasa por el MISMO mask que los
-    // nombres (review MINOR-1 T4): «la tecleó el usuario» se rompe con un
-    // PASTE — sin bracketed paste llega como stream de Chars y un nombre
-    // hostil pegado pintaría bidi/invisibles crudos en el borde.
+    // Active quick search (spec 2026-07-18): input line at the pane's
+    // footer `/{query} n/m` (+ "partial" if the fill is still going: it
+    // filters over what has ALREADY drained, never silently). The query
+    // goes through the SAME mask as the names (review MINOR-1 T4): "the
+    // user typed it" breaks with a PASTE — with no bracketed paste it
+    // arrives as a stream of Chars, and a pasted hostile name would paint
+    // raw bidi/invisibles on the border.
     if let Some(q) = pane.quick() {
         let (query, _) = display_name(q.query_display().as_bytes());
         let mut input = format!(" /{} {}/{}", query, q.visible().len(), pane.entries().len());
@@ -519,53 +530,53 @@ pub(crate) fn draw_pane(
         input.push(' ');
         block = block.title_bottom(Line::styled(input, theme.role(Role::Title)));
     } else if let Some(footer) = footer {
-        // El pie (spec 2026-09-10) va en el mismo hueco que el buscador y
-        // manda el más específico: mientras se teclea, lo tecleado. Se
-        // recorta por celdas a lo que el borde deja, sin comerse las
-        // esquinas.
+        // The footer (spec 2026-09-10) goes in the same slot as the search
+        // box and the more specific one rules: while typing, what is typed.
+        // It is clipped in cells to what the border leaves, without eating
+        // into the corners.
         let room = usize::from(area.width.saturating_sub(4));
         let text = format!(" {} ", middle_ellipsis(footer, room));
-        // Con el rol del borde de SU panel, no siempre el del panel sin foco
-        // (spec 2026-09-15): el pie va escrito ENCIMA del borde, y pintarlo
-        // siempre atenuado lo dejaba ilegible justo en el panel que el lector
-        // está mirando.
+        // With the border role of ITS OWN panel, not always the unfocused
+        // panel's (spec 2026-09-15): the footer is written OVER the border,
+        // and always painting it dimmed left it illegible right on the
+        // panel the reader is looking at.
         block = block.title_bottom(Line::styled(text, border_style));
     }
-    // Filtro activo: SOLO los índices visibles, con el cursor visual en la
-    // posición DENTRO del filtrado. En Jump (quick_visible = None) el
-    // listado va entero y manda el cursor real.
+    // Active filter: ONLY the visible indices, with the visual cursor at
+    // the position WITHIN the filtering. In Jump (quick_visible = None) the
+    // whole listing is used and the real cursor rules.
     let reinterpret = pane.name_encoding();
-    // #108 L5: anchos de columna del ancho INTERIOR del pane, una vez por
-    // frame — las filas y la cabecera comparten el mismo layout (con el
-    // estilo 7b resuelto por columna, ver `styled_columns`).
+    // #108 L5: column widths from the pane's INTERIOR width, once per
+    // frame — the rows and the header share the same layout (with the 7b
+    // style resolved per column, see `styled_columns`).
     let inner_w = block.inner(area).width;
     let cols = &styled_columns(settings, pane, inner_w, catalog);
-    // La selección PINTADA sale de la misma función que la usa el hit test
-    // del ratón ([`painted_len_and_selection`]): el scroll de abajo se
-    // deriva de ella, y dos cálculos distintos harían que un click cayera
-    // en la fila de al lado.
+    // The PAINTED selection comes from the same function the mouse's hit
+    // test uses ([`painted_len_and_selection`]): the scroll below is
+    // derived from it, and two different calculations would make a click
+    // land on the row next door.
     let (painted_len, selected) = painted_len_and_selection(pane);
-    // La columna de iconos la decide el LISTADO, una vez: si alguna fila
-    // tiene icono, todas llevan el hueco.
+    // The icon column is decided by the LISTING, once: if any row has an
+    // icon, all of them carry the slot.
     let icons = pane.any_icon();
-    let dir_slash = pinta_barra(dir_indicator, icons);
-    let ventana = ventana_del_pane(pane, area, tabs.is_some(), painted_len);
-    // La banda de las filas impares. Se resuelve UNA vez por pintada: el rol
-    // sin color (el tema no lo define) deja el listado exactamente como
-    // estaba, así que el ajuste encendido sobre un tema mudo no es un fallo,
-    // es un listado normal.
-    let banda = stripes.then(|| theme.role(Role::Stripe));
+    let dir_slash = paint_slash(dir_indicator, icons);
+    let window = pane_window(pane, area, tabs.is_some(), painted_len);
+    // The odd rows' stripe. Resolved ONCE per paint: the role with no
+    // color (the theme does not define it) leaves the listing exactly as
+    // it was, so the setting being on over a mute theme is not a failure,
+    // it is a normal listing.
+    let band = stripes.then(|| theme.role(Role::Stripe));
     let items: Vec<ListItem<'_>> = match pane.quick_visible() {
         Some(vis) => vis
             .iter()
             .enumerate()
-            .skip(ventana.start)
-            .take(ventana.len())
-            .filter_map(|(fila, &i)| pane.entries().get(i).map(|e| (fila, i, e)))
-            .map(|(fila, i, e)| {
-                raya(
-                    banda,
-                    fila,
+            .skip(window.start)
+            .take(window.len())
+            .filter_map(|(row, &i)| pane.entries().get(i).map(|e| (row, i, e)))
+            .map(|(row, i, e)| {
+                stripe(
+                    band,
+                    row,
                     entry_item(
                         e,
                         theme,
@@ -586,11 +597,11 @@ pub(crate) fn draw_pane(
             .entries()
             .iter()
             .enumerate()
-            .skip(ventana.start)
-            .take(ventana.len())
+            .skip(window.start)
+            .take(window.len())
             .map(|(i, e)| {
-                raya(
-                    banda,
+                stripe(
+                    band,
                     i,
                     entry_item(
                         e,
@@ -609,8 +620,8 @@ pub(crate) fn draw_pane(
             })
             .collect(),
     };
-    // #108 L5: bloque a mano — dentro, UNA línea de cabecera de columnas
-    // (dim, con el indicador ▲/▼ del orden activo) y el listado debajo.
+    // #108 L5: hand-built block — inside, ONE column-header line (dim,
+    // with the active sort's ▲/▼ indicator) and the listing below.
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.height == 0 || inner.width == 0 {
@@ -627,24 +638,24 @@ pub(crate) fn draw_pane(
         .style(ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::DIM)),
         header_area,
     );
-    // Dos cursores igual de vivos no dicen cuál recibe las teclas: el del
-    // panel sin foco lleva su propio rol (spec 2026-09-10).
+    // Two cursors equally alive do not say which receives the keys: the
+    // unfocused panel's carries its own role (spec 2026-09-10).
     let cursor_role = if focused {
         Role::Selection
     } else {
         Role::SelectionUnfocused
     };
     let list = List::new(items).highlight_style(theme.role(cursor_role));
-    let mut state = estado_de_lista(selected, &ventana);
+    let mut state = list_state(selected, &window);
     frame.render_stateful_widget(list, list_area, &mut state);
 }
 
-/// ¿Se pinta la `/` delante de un directorio? (`[ui] dir_indicator`, spec
+/// Is the `/` painted in front of a directory? (`[ui] dir_indicator`, spec
 /// 2026-09-15.)
 ///
-/// `auto` la quita cuando la columna de iconos está abierta: el icono ya dice
-/// qué es la fila, y la barra solo gasta una celda del nombre.
-fn pinta_barra(indicator: norte_config::load::DirIndicator, icons: bool) -> bool {
+/// `auto` removes it when the icon column is open: the icon already says
+/// what the row is, and the slash only spends a cell of the name.
+fn paint_slash(indicator: norte_config::load::DirIndicator, icons: bool) -> bool {
     match indicator {
         norte_config::load::DirIndicator::Slash => true,
         norte_config::load::DirIndicator::None => false,
@@ -652,14 +663,15 @@ fn pinta_barra(indicator: norte_config::load::DirIndicator, icons: bool) -> bool
     }
 }
 
-// Cuatro booleanos: son cuatro HECHOS del listado que la fila no puede
-// deducir (marcada, fila de subir, columna de iconos abierta, barra de
-// directorio), y agruparlos en un struct movería la lista a otro sitio sin
-// quitar ninguno. Mismo criterio que el `too_many_arguments` de `draw_pane`.
+// Four booleans: they are four FACTS about the listing the row cannot
+// deduce (marked, parent row, icon column open, directory slash), and
+// grouping them into a struct would move the list elsewhere without
+// removing any of them. Same criterion as `draw_pane`'s
+// `too_many_arguments`.
 #[expect(
     clippy::fn_params_excessive_bools,
     clippy::too_many_arguments,
-    reason = "fila de render: cada arg es una fuente de pintado, no API"
+    reason = "render row: each arg is a source of painting, not an API"
 )]
 pub(crate) fn entry_item<'a>(
     entry: &'a norte_proto::Entry,
@@ -672,64 +684,66 @@ pub(crate) fn entry_item<'a>(
         u16,
         norte_frontend::columns::ColumnStyle,
     )],
-    // #117-follow-up: fuente de las celdas `plugin:` (side-map del pane —
-    // sus valores no viven en la `Entry`). `None` solo en tests de formato
-    // sin columnas de plugin.
+    // #117-follow-up: source of the `plugin:` cells (the pane's side-map —
+    // their values do not live in the `Entry`). `None` only in format tests
+    // with no plugin columns.
     plugin_cells: Option<&Pane>,
     now_ms: i64,
-    // La fila de SUBIR (`[ui] parent_entry`): se pinta `..` y no el nombre
-    // del directorio padre, que es lo que dice su ruta. El nombre del padre
-    // en la primera fila se lee como «hay aquí un directorio que se llama
-    // así», que es justo lo que no hay.
+    // The PARENT row (`[ui] parent_entry`): `..` is painted, not the parent
+    // directory's name, which is what its path says. The parent's name on
+    // the first row reads as "there is a directory here called that",
+    // which is exactly what there is not.
     parent_row: bool,
-    // La columna de iconos (ADR 0105) está abierta en este listado: ALGUNA
-    // fila tiene icono, así que todas llevan el hueco, con o sin él, para
-    // que los nombres sigan alineados. La decide el pane, no la fila.
+    // The icon column (ADR 0105) is open in this listing: SOME row has an
+    // icon, so all of them carry the slot, with or without one, so the
+    // names stay aligned. The pane decides it, not the row.
     icons: bool,
-    // Pinta la `/` delante de un directorio (`[ui] dir_indicator`, spec
-    // 2026-09-15). Llega DECIDIDA: quien pinta el listado sabe si la columna
-    // de iconos está abierta, y `auto` significa «solo si no lo está».
+    // Paints the `/` in front of a directory (`[ui] dir_indicator`, spec
+    // 2026-09-15). It arrives ALREADY DECIDED: whoever paints the listing
+    // knows whether the icon column is open, and `auto` means "only if it
+    // is not".
     dir_slash: bool,
 ) -> ListItem<'a> {
     let name = entry.path.file_name().map_or(&[][..], |n| n.as_bytes());
-    // #57: con reinterpretación activa, los nombres no-UTF8 se decodifican
-    // con el encoding elegido (display-only; el badge hostil se conserva —
-    // el texto pintado difiere de los bytes reales).
+    // #57: with reinterpretation active, non-UTF8 names are decoded with
+    // the chosen encoding (display-only; the hostile badge is kept — the
+    // painted text differs from the real bytes).
     let (text, hostile) = if parent_row {
-        // Dos puntos y nada más: ni badge hostil —`..` son dos ASCII— ni
-        // reinterpretación, porque no es el nombre de nadie.
+        // Two dots and nothing else: no hostile badge — `..` is two ASCII
+        // chars — nor reinterpretation, because it is nobody's name.
         ("..".to_owned(), false)
     } else {
         norte_frontend::display_name_with(name, reinterpret)
     };
-    // `[ui] dir_indicator` (spec 2026-09-15): la `/` de una carpeta es de
-    // cuando no había iconos. Con la columna de iconos abierta, el icono ya
-    // dice qué es la fila y la barra solo gasta una celda del nombre; `auto` la
-    // quita ahí y la conserva donde sigue haciendo falta. El `@` del enlace no
-    // se toca: no hay icono que lo diga.
+    // `[ui] dir_indicator` (spec 2026-09-15): a folder's `/` is from when
+    // there were no icons. With the icon column open, the icon already
+    // says what the row is and the slash only spends a cell of the name;
+    // `auto` removes it there and keeps it where it is still needed. The
+    // symlink's `@` is not touched: there is no icon that says it.
     let kind_glyph = match entry.kind {
         EntryKind::Dir if dir_slash => "/",
         EntryKind::Symlink => "@",
-        // Un directorio SIN barra se pinta como un fichero: el hueco se queda,
-        // para que los nombres sigan alineados.
+        // A directory with NO slash is painted like a file: the slot
+        // stays, so the names remain aligned.
         EntryKind::Dir | EntryKind::File | EntryKind::Other => " ",
     };
     let badge = Span::styled(
         if hostile { HOSTILE_BADGE } else { " " },
         theme.role(Role::HostileBadge),
     );
-    // Color por tipo/extensión de la entrada (ADR 0020 D2).
+    // Color by the entry's type/extension (ADR 0020 D2).
     let body = Span::styled(format!("{kind_glyph}{text}"), theme.entry(name, entry.kind));
-    // Canalón de marca (#103): señal TEXTUAL, jamás solo color — el fallback
-    // monocromo de `Role::Mark` es `dim`, que por sí solo se lee «inactivo»,
-    // no «seleccionado». Va ANTES del badge hostil para que ni el badge ni la
-    // decoración cambien de columna respecto a como se pintaban.
+    // Mark gutter (#103): a TEXTUAL signal, never color alone — the
+    // monochrome fallback of `Role::Mark` is `dim`, which on its own reads
+    // as "inactive", not "selected". It goes BEFORE the hostile badge so
+    // that neither the badge nor the decoration change column compared to
+    // how they used to be painted.
     //
-    // El ESTILO también debe ser condicional, no solo el glyph (review
-    // BLOCKER): cada preset embarcado define `mark` como SOLO un `bg` (ver
-    // `crates/norte-theme/presets/*.toml`), así que un `Span::styled`
-    // incondicional pintaba esa franja de color en la columna 1 de CADA fila
-    // sin marcar — una franja permanente, no una señal de marca.
+    // The STYLE also has to be conditional, not just the glyph (BLOCKER
+    // review): every bundled preset defines `mark` as ONLY a `bg` (see
+    // `crates/norte-theme/presets/*.toml`), so an unconditional
+    // `Span::styled` painted that color stripe in column 1 of EVERY
+    // unmarked row — a permanent stripe, not a mark signal.
     let gutter = if marked {
         Span::styled("*", theme.role(Role::Mark))
     } else {
@@ -738,37 +752,39 @@ pub(crate) fn entry_item<'a>(
     let mut spans = vec![gutter, badge];
     spans.extend(icons.then(|| icon_span(decoration, theme, name, entry.kind)));
     spans.push(body);
-    // Lo que va delante del nombre y no se recorta: canalón, badge, iconos.
+    // What goes ahead of the name and is not clipped: gutter, badge, icons.
     let fijos = spans.len() - 1;
-    // G3b (ADR 0037): badge de decorator, TRAS el hueco del badge hostil —
-    // ya SANEADO y acotado (`norte_frontend::sanitize_decoration`, aplicado
-    // antes de llegar aquí). Sin decoración para esta entrada, ningún span
-    // extra (ni siquiera un hueco): la fila se ve EXACTAMENTE igual que
-    // antes de G3b para quien no usa decoradores.
+    // G3b (ADR 0037): decorator badge, AFTER the hostile-badge slot —
+    // already SANITIZED and bounded (`norte_frontend::sanitize_decoration`,
+    // applied before it gets here). With no decoration for this entry, no
+    // extra span (not even a slot): the row looks EXACTLY like it did
+    // before G3b for anyone not using decorators.
     if let Some(badge_text) = decoration.and_then(|d| d.badge.as_deref()) {
         let style = match decoration.and_then(|d| d.role) {
             Some(role) => theme.role(role),
-            // Sin rol reconocido: dim por defecto — visible pero discreto,
-            // nunca el color "normal" de la entrada (se confundiría con el
-            // nombre) ni un color inventado por este frontend (ADR 0037: el
-            // tema del usuario manda, jamás un color crudo que no pidió).
+            // No recognized role: dim by default — visible but discreet,
+            // never the entry's "normal" color (it would be confused with
+            // the name) nor a color invented by this frontend (ADR 0037:
+            // the user's theme rules, never a raw color it did not ask
+            // for).
             None => ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::DIM),
         };
         spans.push(Span::raw(" "));
         spans.push(Span::styled(badge_text.to_string(), style));
     }
-    // #108 L5: celdas de columnas tras el nombre. El bloque del nombre
-    // (canalón+badge+glyph+texto+decoración) se TRUNCA a su ancho de layout
-    // (elipsis central, consciente de celdas — CJK/emoji no desbordan) y
-    // se rellena; cada celda no-nombre va alineada según su estilo (#108
-    // 7b, derecha por defecto) en su ancho, dim, con un espacio separador.
-    // Ausencia = celda en blanco, jamás un 0 fabricado.
+    // #108 L5: column cells after the name. The name block
+    // (gutter+badge+glyph+text+decoration) is TRUNCATED to its layout width
+    // (middle ellipsis, cell-aware — CJK/emoji do not overflow) and padded;
+    // each non-name cell is aligned according to its style (#108 7b, right
+    // by default) within its width, dim, with a separating space. Absence =
+    // a blank cell, never a fabricated 0.
     if let Some((_, name_w, _)) = cols.first() {
         let name_w = usize::from(*name_w);
-        // review #108-5 M2: la DECORACIÓN también entra en el presupuesto
-        // del nombre — un badge CJK (8 chars = 16 celdas) desplazaba todas
-        // las celdas de la fila. Si no cabe dejando ≥3 celdas de nombre,
-        // fuera la decoración entera (separador incluido): el nombre manda.
+        // review #108-5 M2: the DECORATION also counts against the name's
+        // budget — a CJK badge (8 chars = 16 cells) used to shift every
+        // cell in the row. If it does not fit while leaving ≥3 cells for
+        // the name, out goes the whole decoration (separator included): the
+        // name rules.
         if spans.len() > fijos + 1 {
             let deco: usize = spans[fijos + 1..].iter().map(|sp| sp.content.width()).sum();
             let fixed: usize = spans[..fijos].iter().map(|sp| sp.content.width()).sum();
@@ -778,12 +794,13 @@ pub(crate) fn entry_item<'a>(
         }
         let used: usize = spans.iter().map(|sp| sp.content.width()).sum();
         if used > name_w {
-            // Recorta el TEXTO del nombre (el span del body, índice `fijos`:
-            // tras el canalón, el badge y —si la hay— la columna de iconos)
-            // con elipsis central a lo que quede tras los demás spans — los
-            // fijos y la decoración se quedan. Con un índice literal aquí,
-            // la columna de iconos corría el nombre un sitio y el recorte se
-            // comía el ICONO de cada fila larga en vez del nombre.
+            // Clips the name's TEXT (the body span, index `fixed`: after
+            // the gutter, the badge and — if there is one — the icon
+            // column) with middle ellipsis to what is left after the other
+            // spans — the fixed ones and the decoration stay. With a
+            // literal index here, the icon column used to shift the name
+            // over by one slot and the clip ate the ICON of every long row
+            // instead of the name.
             let others: usize = spans
                 .iter()
                 .enumerate()
@@ -795,26 +812,27 @@ pub(crate) fn entry_item<'a>(
             spans[fijos] = Span::styled(truncated, spans[fijos].style);
         }
         let used: usize = spans.iter().map(|sp| sp.content.width()).sum();
-        // Ni con el nombre recortado a cero cabe siempre: en una columna de
-        // una o dos celdas —lo que deja `full` en un terminal de 40— el
-        // canalón y el badge ya la llenan solos. Se recorta el bloque ENTERO
-        // por la derecha. Antes esto era un `debug_assert`, que en tests es un
-        // panic y en release una fila pintando fuera de su columna.
+        // Not even with the name clipped to zero does it always fit: in a
+        // column of one or two cells — what `full` leaves on a 40-column
+        // terminal — the gutter and the badge already fill it on their
+        // own. The WHOLE block is clipped on the right. This used to be a
+        // `debug_assert`, which in tests is a panic and in release a row
+        // painting outside its column.
         if used > name_w {
             spans = clamp_spans(std::mem::take(&mut spans), name_w);
         }
         let used: usize = spans.iter().map(|sp| sp.content.width()).sum();
         debug_assert!(
             used <= name_w,
-            "el bloque del nombre desborda su columna: {used} > {name_w}"
+            "the name block overflows its column: {used} > {name_w}"
         );
         if used < name_w {
             spans.push(Span::raw(" ".repeat(name_w - used)));
         }
         for (col, w, style) in cols.iter().skip(1) {
-            // #117-follow-up: las celdas `plugin:` salen del side-map del
-            // pane (re-enmascaradas allí); el resto, de la Entry como
-            // siempre. Ausencia = blanco en ambos caminos.
+            // #117-follow-up: the `plugin:` cells come from the pane's
+            // side-map (re-masked there); the rest, from the Entry as
+            // always. Absence = blank on both paths.
             let cell = match col {
                 norte_frontend::columns::ColumnId::Plugin { .. } => plugin_cells
                     .and_then(|p| p.plugin_cell(&col.to_string(), &entry.path))
@@ -822,15 +840,15 @@ pub(crate) fn entry_item<'a>(
                 _ => norte_frontend::columns::styled_cell(entry, col, now_ms, style)
                     .unwrap_or_default(),
             };
-            // El ancho INCLUYE el separador (default_layout_items): el
-            // contenido vive dentro de w-1 y siempre queda ≥1 espacio de
-            // separador. Derecha (default): relleno delante. Izquierda
-            // (#108 7b): el separador sigue ABRIENDO el presupuesto, el
-            // contenido va tras él y el relleno cae a la derecha — la
-            // misma cuenta, invertida.
+            // The width INCLUDES the separator (default_layout_items): the
+            // content lives within w-1 and there is always ≥1 separator
+            // space left. Right (default): padding up front. Left (#108
+            // 7b): the separator keeps OPENING the budget, the content
+            // follows it and the padding falls on the right — the same
+            // count, reversed.
             let w = usize::from(*w);
             let content = w.saturating_sub(1);
-            let truncated = celda_cortada(cell, content);
+            let truncated = clipped_cell(cell, content);
             let text = match style.align {
                 norte_frontend::columns::Align::Right => {
                     let pad = w.saturating_sub(truncated.width());
@@ -858,11 +876,11 @@ mod entry_item_columns_tests {
     use ratatui::layout::Rect;
     use ratatui::widgets::{List, Widget as _};
 
-    /// review #108-5 M2: una decoración CJK (16 celdas) con la columna del
-    /// nombre a su mínimo NO desplaza las celdas — la decoración cae antes
-    /// que romper la alineación, y el ancho total de la fila es EXACTO.
+    /// review #108-5 M2: a CJK decoration (16 cells) with the name column
+    /// at its minimum does NOT shift the cells — the decoration falls
+    /// before it breaks alignment, and the row's total width is EXACT.
     #[test]
-    fn una_decoracion_ancha_jamas_desplaza_las_columnas() {
+    fn a_wide_decoration_never_shifts_the_columns() {
         use norte_frontend::columns::{Builtin, ColumnId, ColumnStyle, LayoutItem, WidthPolicy};
         let entry = norte_proto::Entry {
             attrs: std::collections::BTreeMap::new(),
@@ -907,8 +925,8 @@ mod entry_item_columns_tests {
             false,
             false,
         );
-        // Renderiza a un buffer del ancho EXACTO del presupuesto: si la
-        // fila desbordara, la celda de tamaño perdería su cola.
+        // Renders to a buffer of the EXACT width of the budget: if the row
+        // overflowed, the size cell would lose its tail.
         let area = Rect::new(0, 0, 21, 1);
         let mut buf = Buffer::empty(area);
         List::new(vec![item]).render(area, &mut buf);
@@ -916,12 +934,12 @@ mod entry_item_columns_tests {
         assert_eq!(row, "   f.txt          7 B", "{row:?}");
     }
 
-    /// ADR 0105: con la columna de iconos abierta, un nombre que no cabe se
-    /// recorta a ÉL —con su elipsis central, que es lo que salva la
-    /// extensión—, y el icono se queda. Con un índice literal, el recorte
-    /// se comía el icono de cada fila larga.
+    /// ADR 0105: with the icon column open, a name that does not fit is
+    /// clipped ITSELF — with its middle ellipsis, which is what saves the
+    /// extension — and the icon stays. With a literal index, the clip used
+    /// to eat the icon of every long row.
     #[test]
-    fn con_iconos_el_recorte_va_al_nombre_y_el_icono_se_queda() {
+    fn with_icons_the_clip_hits_the_name_and_the_icon_stays() {
         use norte_frontend::columns::{Builtin, ColumnId, ColumnStyle};
         let entry = norte_proto::Entry {
             attrs: std::collections::BTreeMap::new(),
@@ -957,8 +975,8 @@ mod entry_item_columns_tests {
             None,
             0,
             false,
-            // (columna de iconos, barra de directorio: con icono, `auto` la
-            // quita — es justo lo que este test pinta)
+            // (icon column, directory slash: with an icon, `auto` removes
+            // it — which is exactly what this test paints)
             true,
             false,
         );
@@ -966,11 +984,14 @@ mod entry_item_columns_tests {
         let mut buf = Buffer::empty(area);
         List::new(vec![item]).render(area, &mut buf);
         let row: String = (0..24).map(|x| buf[(x, 0)].symbol().to_string()).collect();
-        assert!(row.starts_with("  🦀 "), "el icono se queda: {row:?}");
-        assert!(row.contains('…'), "y el nombre lleva la elipsis: {row:?}");
+        assert!(row.starts_with("  🦀 "), "the icon stays: {row:?}");
+        assert!(
+            row.contains('…'),
+            "and the name carries the ellipsis: {row:?}"
+        );
         assert!(
             row.ends_with("7 B"),
-            "y la celda de tamaño está en su sitio: {row:?}"
+            "and the size cell is in its place: {row:?}"
         );
     }
 }
@@ -992,14 +1013,14 @@ mod draw_pane_attr_tests {
         }
     }
 
-    /// #117 tarea 2: celdas attr con valores HOSTILES de un provider pintadas
-    /// end-to-end por `draw_pane` (config resuelta → layout → celda): jamás
-    /// un char peligroso crudo, lossy MARCADO (U+FFFD) para Bytes no-UTF8,
-    /// ausencia = blanco y cabecera con el id como fallback (sin catálogo).
+    /// #117 task 2: attr cells with HOSTILE values from a provider, painted
+    /// end-to-end by `draw_pane` (resolved config → layout → cell): never a
+    /// raw dangerous char, FLAGGED lossy (U+FFFD) for non-UTF8 Bytes,
+    /// absence = blank, and a header with the id as fallback (no catalog).
     #[test]
-    fn celdas_attr_hostiles_enmascaradas_y_ausencia_en_blanco() {
+    fn hostile_attr_cells_are_masked_and_absence_is_blank() {
         use norte_proto::attrs::AttrValue;
-        // Config: name + attr:mem.owner (Bytes no-UTF8) + attr:mem.note
+        // Config: name + attr:mem.owner (non-UTF8 Bytes) + attr:mem.note
         // (bidi RTL + ZWJ).
         let cfg = norte_config::ColumnsConfig {
             default_columns: Some(vec![
@@ -1020,10 +1041,10 @@ mod draw_pane_attr_tests {
             "mem.note".into(),
             AttrValue::Text("\u{202e}at\u{f3}n\u{202c} a\u{200d}b".into()),
         );
-        let e2 = entry(&dir, "bbb"); // SIN attrs: celdas en blanco
+        let e2 = entry(&dir, "bbb"); // NO attrs: blank cells
         let pane = Pane::new(dir, vec![e1, e2]);
         let theme = TuiTheme::default();
-        let mut terminal = Terminal::new(TestBackend::new(80, 8)).expect("terminal de test");
+        let mut terminal = Terminal::new(TestBackend::new(80, 8)).expect("test terminal");
         terminal
             .draw(|f| {
                 draw_pane(
@@ -1045,51 +1066,44 @@ mod draw_pane_attr_tests {
             })
             .expect("draw");
         let text = terminal.backend().to_string();
-        // 1. Ninguna celda del buffer lleva un char peligroso crudo
-        //    (controles, overrides bidi, invisibles — spec §6). Por línea:
-        //    los `\n` que une `to_string` son del harness, no del buffer.
+        // 1. No cell in the buffer carries a raw dangerous char (controls,
+        //    bidi overrides, invisibles — spec §6). Per line: the `\n`s
+        //    `to_string` joins with are the harness's, not the buffer's.
         assert!(
             text.lines()
                 .all(|l| l.chars().all(|c| !norte_encoding::is_terminal_hazard(c))),
-            "hazard crudo en el render: {text:?}"
+            "raw hazard in the render: {text:?}"
         );
-        // 2. La fila de e1 pinta el owner LOSSY y MARCADO (U+FFFD visible).
-        let row_e1 = text
-            .lines()
-            .find(|l| l.contains("aaa"))
-            .expect("fila de aaa");
+        // 2. e1's row paints the owner LOSSY and FLAGGED (visible U+FFFD).
+        let row_e1 = text.lines().find(|l| l.contains("aaa")).expect("aaa's row");
         assert!(
             row_e1.contains('\u{FFFD}'),
-            "owner lossy sin marcar: {row_e1:?}"
+            "lossy owner not flagged: {row_e1:?}"
         );
-        // 3. La fila de e2 (sin attrs) pinta las columnas attr EN BLANCO:
-        //    quitando el nombre, los bordes y los espacios no queda nada
-        //    (blanco = AUSENTE, jamás un valor fabricado).
-        let row_e2 = text
-            .lines()
-            .find(|l| l.contains("bbb"))
-            .expect("fila de bbb");
-        // (Las comillas por línea las pone el Display de `TestBackend`.)
+        // 3. e2's row (no attrs) paints the attr columns BLANK: removing
+        //    the name, the borders and the spaces, nothing is left (blank
+        //    = ABSENT, never a fabricated value).
+        let row_e2 = text.lines().find(|l| l.contains("bbb")).expect("bbb's row");
+        // (The quotes per line are put there by `TestBackend`'s Display.)
         let rest: String = row_e2
             .replace("bbb", "")
             .chars()
             .filter(|c| !c.is_whitespace() && *c != '│' && *c != '"')
             .collect();
-        assert_eq!(rest, "", "ausencia debe ser blanco: {row_e2:?}");
-        // 4. La cabecera lleva el id como fallback (sin catálogo aquí).
-        assert!(text.contains("mem.owner"), "cabecera sin id: {text}");
+        assert_eq!(rest, "", "absence must be blank: {row_e2:?}");
+        // 4. The header carries the id as fallback (no catalog here).
+        assert!(text.contains("mem.owner"), "header with no id: {text}");
     }
 
-    /// #117 encoding-audit L2: una celda attr ANCHA (CJK double-width + la
-    /// familia emoji ZWJ del corpus — el valor `mem.wide` de `MemProvider`)
-    /// JAMÁS desplaza la columna vecina: la x de la celda del tamaño es
-    /// idéntica entre la fila ancha y una fila en blanco (espejo de
-    /// `una_decoracion_ancha_jamas_desplaza_las_columnas`). Lo pineado es
-    /// la alineación de celdas del buffer de ratatui; el colapso de ZWJ en
-    /// un terminal real es la limitación preexistente que ya comparte la
-    /// columna del nombre.
+    /// #117 encoding-audit L2: a WIDE attr cell (CJK double-width + the
+    /// corpus's ZWJ emoji family — `MemProvider`'s `mem.wide` value) NEVER
+    /// shifts the neighboring column: the size cell's x is identical
+    /// between the wide row and a blank row (mirror of
+    /// `a_wide_decoration_never_shifts_the_columns`). What is pinned is the
+    /// ratatui buffer's cell alignment; ZWJ collapsing on a real terminal
+    /// is the preexisting limitation the name column already shares.
     #[test]
-    fn celda_attr_ancha_jamas_desplaza_la_columna_vecina() {
+    fn a_wide_attr_cell_never_shifts_the_neighboring_column() {
         use norte_proto::attrs::AttrValue;
         let cfg = norte_config::ColumnsConfig {
             default_columns: Some(vec!["name".into(), "attr:mem.wide".into(), "size".into()]),
@@ -1102,10 +1116,10 @@ mod draw_pane_attr_tests {
             "mem.wide".into(),
             AttrValue::Text("日本語👨\u{200d}👩\u{200d}👧\u{200d}👦".into()),
         );
-        let e2 = entry(&dir, "bbb"); // SIN attrs: la celda ancha en blanco
+        let e2 = entry(&dir, "bbb"); // NO attrs: the wide cell blank
         let pane = Pane::new(dir, vec![e1, e2]);
         let theme = TuiTheme::default();
-        let mut terminal = Terminal::new(TestBackend::new(60, 8)).expect("terminal de test");
+        let mut terminal = Terminal::new(TestBackend::new(60, 8)).expect("test terminal");
         terminal
             .draw(|f| {
                 draw_pane(
@@ -1127,8 +1141,8 @@ mod draw_pane_attr_tests {
             })
             .expect("draw");
         let buf = terminal.backend().buffer();
-        // La x (en CELDAS del buffer, no chars) del «1» del tamaño en la
-        // fila que contiene `name`.
+        // The x (in buffer CELLS, not chars) of the size's "1" in the row
+        // that contains `name`.
         let size_x = |name: &str| -> u16 {
             for y in 0..buf.area.height {
                 let row: String = (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect();
@@ -1140,24 +1154,24 @@ mod draw_pane_attr_tests {
                     }
                 }
             }
-            panic!("fila {name} sin celda de tamaño");
+            panic!("row {name} has no size cell");
         };
         assert_eq!(
             size_x("aaa"),
             size_x("bbb"),
-            "la celda ancha desplazó la columna del tamaño"
+            "the wide cell shifted the size column"
         );
     }
 
-    /// #323: esperando, la cabecera dice A DÓNDE se va y gira; el cuerpo sigue
-    /// enseñando el listado de antes.
+    /// #323: while waiting, the header says WHERE it is going and spins;
+    /// the body keeps showing the previous listing.
     ///
-    /// Las dos mitades importan. Si la cabecera se quedara con el directorio
-    /// actual, un lector con dos paneles no sabría cuál de los dos está
-    /// esperando ni a qué; y si el cuerpo se vaciara, una conexión fallida le
-    /// habría costado el sitio donde estaba.
+    /// Both halves matter. If the header kept the current directory, a
+    /// reader with two panels would not know which of the two is waiting
+    /// nor for what; and if the body emptied out, a failed connection would
+    /// have cost them the place they were at.
     #[test]
-    fn esperando_la_cabecera_gira_y_dice_el_destino() {
+    fn while_waiting_the_header_spins_and_says_the_destination() {
         use norte_frontend::busy::{Busy, BusyKind};
         let settings = norte_frontend::columns::ColumnsSettings::resolve(
             &norte_config::ColumnsConfig::default(),
@@ -1166,8 +1180,8 @@ mod draw_pane_attr_tests {
         let pane = Pane::new(dir.clone(), vec![entry(&dir, "fichero-de-antes")]);
         let theme = TuiTheme::default();
 
-        let pintar = |busy: Option<&Busy>| {
-            let mut terminal = Terminal::new(TestBackend::new(60, 6)).expect("terminal de test");
+        let paint = |busy: Option<&Busy>| {
+            let mut terminal = Terminal::new(TestBackend::new(60, 6)).expect("test terminal");
             terminal
                 .draw(|f| {
                     draw_pane(
@@ -1191,72 +1205,73 @@ mod draw_pane_attr_tests {
             terminal.backend().to_string()
         };
 
-        let destino = VPath::parse("mem:///alli").unwrap();
-        let mut busy = Busy::new(BusyKind::Connecting, Some(destino), Some(0));
+        let dest = VPath::parse("mem:///alli").unwrap();
+        let mut busy = Busy::new(BusyKind::Connecting, Some(dest), Some(0));
         busy.elapsed = norte_frontend::busy::THRESHOLD;
-        let esperando = pintar(Some(&busy));
+        let waiting = paint(Some(&busy));
         assert!(
-            esperando.contains("alli"),
-            "la cabecera no dice el destino: {esperando}"
+            waiting.contains("alli"),
+            "the header does not say the destination: {waiting}"
         );
-        // El marcador de rol va delante SIEMPRE, y es lo que impide que un
-        // directorio llamado «⠋ conectando…» se haga pasar por la cabecera de
-        // una espera. Para un esquema que no es el de siempre, ese marcador es
-        // `⟨scheme⟩`; para `file` es la `/` inicial, que un nombre no puede
-        // llevar. Los DOS se comprueban: la afirmación «⟨ va siempre» dejó de
-        // ser cierta el día que lo local dejó de anunciarse, y este test seguía
-        // verde porque solo probaba `mem`.
+        // The role marker ALWAYS goes up front, and it is what keeps a
+        // directory named "⠋ connecting…" from passing itself off as a
+        // waiting header. For a scheme that is not the usual one, that
+        // marker is `⟨scheme⟩`; for `file` it is the leading `/`, which a
+        // name cannot carry. BOTH are checked: the claim "⟨ always appears"
+        // stopped being true the day local paths stopped announcing
+        // themselves, and this test stayed green because it only tested
+        // `mem`.
         assert!(
-            esperando.contains('⟨'),
-            "la cabecera perdió el marcador de esquema: {esperando}"
+            waiting.contains('⟨'),
+            "the header lost the scheme marker: {waiting}"
         );
         let local = VPath::parse("file:///alli").unwrap();
         let mut busy_local = Busy::new(BusyKind::Connecting, Some(local), Some(0));
         busy_local.elapsed = norte_frontend::busy::THRESHOLD;
-        let esperando_local = pintar(Some(&busy_local));
+        let waiting_local = paint(Some(&busy_local));
         assert!(
-            esperando_local.contains("/alli"),
-            "lo local lleva su barra por delante: {esperando_local}"
+            waiting_local.contains("/alli"),
+            "a local path carries its slash up front: {waiting_local}"
         );
         assert!(
-            esperando.contains(busy.frame()),
-            "la cabecera no lleva el spinner: {esperando}"
+            waiting.contains(busy.frame()),
+            "the header does not carry the spinner: {waiting}"
         );
         assert!(
-            esperando.contains("fichero-de-antes"),
-            "el cuerpo se vació mientras esperaba: {esperando}"
+            waiting.contains("fichero-de-antes"),
+            "the body emptied out while waiting: {waiting}"
         );
 
-        // Sin espera, la cabecera es la de siempre y no hay rastro de nada.
-        let quieto = pintar(None);
-        assert!(!quieto.contains("alli"), "{quieto}");
-        assert!(!quieto.contains(busy.frame()), "{quieto}");
+        // With no wait, the header is the usual one and there is no trace
+        // of anything.
+        let idle = paint(None);
+        assert!(!idle.contains("alli"), "{idle}");
+        assert!(!idle.contains(busy.frame()), "{idle}");
     }
 
-    /// #323, hallazgo BLOCKER de la auditoría de codificación: el destino de una
-    /// espera lleva el MISMO badge de nombre alterado que llevará cuando el
-    /// panel aterrice.
+    /// #323, encoding-audit BLOCKER finding: a wait's destination carries the
+    /// SAME altered-name badge it will carry once the panel lands.
     ///
-    /// Sin esto, el lector veía la ruta enmascarada sin la marca que dice que
-    /// se enmascaró —y precisamente mientras se le ofrece cancelar—, y si la
-    /// conexión fallaba el panel no aterrizaba nunca, así que el badge no
-    /// llegaba a pintarse jamás. La regla del repositorio no admite matices:
-    /// el texto que se pinta es siempre lossy y MARCADO.
+    /// Without this, the reader saw the masked path with no mark saying it
+    /// was masked — and precisely while cancel is being offered — and if
+    /// the connection failed the panel never landed, so the badge never got
+    /// to be painted at all. The repository's rule allows no nuance: the
+    /// text that is painted is always lossy and FLAGGED.
     #[test]
-    fn el_destino_alterado_lleva_su_badge_mientras_se_espera() {
+    fn the_altered_destination_carries_its_badge_while_waiting() {
         use norte_frontend::busy::{Busy, BusyKind};
         let settings = norte_frontend::columns::ColumnsSettings::resolve(
             &norte_config::ColumnsConfig::default(),
         );
-        let aqui = VPath::parse("mem:///aqui").unwrap();
-        let pane = Pane::new(aqui.clone(), vec![entry(&aqui, "x")]);
+        let here = VPath::parse("mem:///aqui").unwrap();
+        let pane = Pane::new(here.clone(), vec![entry(&here, "x")]);
         let theme = TuiTheme::default();
-        // `rtl_override` del corpus hostil: `abc<U+202E>gpj.exe`.
-        let hostil = VPath::parse("mem:///abc%E2%80%AEgpj.exe").unwrap();
+        // The hostile corpus's `rtl_override`: `abc<U+202E>gpj.exe`.
+        let hostile = VPath::parse("mem:///abc%E2%80%AEgpj.exe").unwrap();
 
-        let mut busy = Busy::new(BusyKind::Connecting, Some(hostil), Some(0));
+        let mut busy = Busy::new(BusyKind::Connecting, Some(hostile), Some(0));
         busy.elapsed = norte_frontend::busy::THRESHOLD;
-        let mut terminal = Terminal::new(TestBackend::new(60, 6)).expect("terminal de test");
+        let mut terminal = Terminal::new(TestBackend::new(60, 6)).expect("test terminal");
         terminal
             .draw(|f| {
                 draw_pane(
@@ -1277,36 +1292,37 @@ mod draw_pane_attr_tests {
                 );
             })
             .expect("draw");
-        let pintado = terminal.backend().to_string();
+        let painted = terminal.backend().to_string();
         assert!(
-            pintado.contains(HOSTILE_BADGE),
-            "el destino alterado se pintó SIN badge: {pintado}"
+            painted.contains(HOSTILE_BADGE),
+            "the altered destination was painted with NO badge: {painted}"
         );
         assert!(
-            !pintado.contains('\u{202e}'),
-            "el override bidi llegó crudo a la terminal: {pintado}"
+            !painted.contains('\u{202e}'),
+            "the bidi override reached the terminal raw: {painted}"
         );
     }
 
-    /// El destino se acota al ancho del borde: ratatui recorta por la derecha
-    /// y NO marca el corte, así que sin presupuesto una ruta larga pierde el
-    /// final —qué carpeta es— en silencio. Con dos hosts que comparten los
-    /// primeros 40 caracteres, eso son dos destinos distintos pintados igual.
+    /// The destination is bounded to the border's width: ratatui clips on
+    /// the right and does NOT mark the cut, so with no budget a long path
+    /// silently loses its end — which folder it is. With two hosts that
+    /// share the first 40 characters, that is two different destinations
+    /// painted the same.
     #[test]
-    fn un_destino_largo_se_recorta_por_el_medio_y_lo_dice() {
+    fn a_long_destination_is_clipped_in_the_middle_and_says_so() {
         use norte_frontend::busy::{Busy, BusyKind};
         let settings = norte_frontend::columns::ColumnsSettings::resolve(
             &norte_config::ColumnsConfig::default(),
         );
-        let aqui = VPath::parse("mem:///aqui").unwrap();
-        let pane = Pane::new(aqui.clone(), vec![entry(&aqui, "x")]);
+        let here = VPath::parse("mem:///aqui").unwrap();
+        let pane = Pane::new(here.clone(), vec![entry(&here, "x")]);
         let theme = TuiTheme::default();
-        let largo =
+        let long =
             VPath::parse("mem:///produccion/equipo/almacen/interno/example/org/carpeta").unwrap();
 
-        let mut busy = Busy::new(BusyKind::Connecting, Some(largo), Some(0));
+        let mut busy = Busy::new(BusyKind::Connecting, Some(long), Some(0));
         busy.elapsed = norte_frontend::busy::THRESHOLD;
-        let mut terminal = Terminal::new(TestBackend::new(40, 6)).expect("terminal de test");
+        let mut terminal = Terminal::new(TestBackend::new(40, 6)).expect("test terminal");
         terminal
             .draw(|f| {
                 draw_pane(
@@ -1327,32 +1343,33 @@ mod draw_pane_attr_tests {
                 );
             })
             .expect("draw");
-        let pintado = terminal.backend().to_string();
+        let painted = terminal.backend().to_string();
         assert!(
-            pintado.contains('…'),
-            "se recortó sin marcar el corte: {pintado}"
+            painted.contains('…'),
+            "it was clipped with no mark for the cut: {painted}"
         );
         assert!(
-            pintado.contains("carpeta"),
-            "se perdió la COLA, que es qué carpeta es: {pintado}"
+            painted.contains("carpeta"),
+            "the TAIL was lost, which is what folder it is: {painted}"
         );
     }
 
-    /// Pinta un listado con el pijama encendido y devuelve el fondo de cada
-    /// fila, de arriba abajo. `filtro` teclea una búsqueda rápida.
-    fn fondos_con_pijama(nombres: &[&str], filtro: Option<&str>) -> Vec<ratatui::style::Color> {
+    /// Paints a listing with pyjama on and returns each row's background,
+    /// top to bottom. `filter` types a quick search.
+    fn pyjama_backgrounds(names: &[&str], filter: Option<&str>) -> Vec<ratatui::style::Color> {
         use norte_theme::{Role, Style, Theme};
         let dir = VPath::parse("mem:///d").expect("vpath");
-        let entradas: Vec<_> = nombres.iter().map(|n| entry(&dir, n)).collect();
-        let mut pane = Pane::new(dir, entradas);
-        if let Some(f) = filtro {
+        let entries: Vec<_> = names.iter().map(|n| entry(&dir, n)).collect();
+        let mut pane = Pane::new(dir, entries);
+        if let Some(f) = filter {
             pane.quick_start(crate::nav::Mode::Filter);
             for c in f.chars() {
                 pane.quick_char(c);
             }
         }
-        // Un tema que SÍ define la banda: sin color, el rol cae al monocromo
-        // y el test no distinguiría «apagado» de «sin tema».
+        // A theme that DOES define the stripe: with no color, the role
+        // falls back to monochrome and the test could not tell "off" apart
+        // from "no theme".
         let mut theme = Theme::preset_default();
         theme.roles.insert(
             Role::Stripe,
@@ -1360,7 +1377,7 @@ mod draw_pane_attr_tests {
         );
         let theme = TuiTheme::new(theme, norte_theme::ColorDepth::Truecolor);
         let settings = norte_frontend::columns::ColumnsSettings::default();
-        let mut terminal = Terminal::new(TestBackend::new(40, 8)).expect("terminal de test");
+        let mut terminal = Terminal::new(TestBackend::new(40, 8)).expect("test terminal");
         terminal
             .draw(|f| {
                 draw_pane(
@@ -1382,51 +1399,51 @@ mod draw_pane_attr_tests {
             })
             .expect("draw");
         let buf = terminal.backend().buffer().clone();
-        // La primera fila del listado va tras el borde y la cabecera.
+        // The listing's first row comes after the border and the header.
         (0..4).map(|i| buf[(2, 2 + i)].bg).collect()
     }
 
-    /// El pijama pinta las filas IMPARES y deja las pares como estaban
+    /// The pyjama paints the ODD rows and leaves the even ones as they were
     /// (spec 2026-09-20).
     ///
-    /// La fila 0 es la del CURSOR, y por eso el test empieza en la 1: que no
-    /// lleve ni la banda ni el fondo llano es la otra mitad de lo que hay
-    /// que comprobar, y está abajo.
+    /// Row 0 is the CURSOR's, and that is why the test starts at row 1:
+    /// that it carries neither the stripe nor the plain background is the
+    /// other half of what needs checking, and it is below.
     #[test]
-    fn el_pijama_alterna_las_filas() {
-        let fondos = fondos_con_pijama(&["a0", "a1", "a2", "a3"], None);
-        let banda = ratatui::style::Color::Rgb(0x33, 0x33, 0x33);
-        assert_eq!(fondos[1], banda, "la 1 es impar: banda");
-        assert_eq!(fondos[3], banda, "la 3 también");
-        assert_ne!(fondos[2], fondos[1], "la 2 es par: sin banda");
+    fn the_pyjama_alternates_the_rows() {
+        let fondos = pyjama_backgrounds(&["a0", "a1", "a2", "a3"], None);
+        let band = ratatui::style::Color::Rgb(0x33, 0x33, 0x33);
+        assert_eq!(fondos[1], band, "row 1 is odd: stripe");
+        assert_eq!(fondos[3], band, "so is row 3");
+        assert_ne!(fondos[2], fondos[1], "row 2 is even: no stripe");
     }
 
-    /// El cursor se pinta ENCIMA de la banda: es lo que la ADR, el rol y los
-    /// dos temas de ayuda prometen, y lo que convierte el pijama en una
-    /// ayuda de lectura en vez de una mentira sobre a dónde van las teclas.
+    /// The cursor is painted OVER the stripe: that is what the ADR, the
+    /// role and the two help themes promise, and what turns the pyjama
+    /// into a reading aid instead of a lie about where the keys go.
     #[test]
-    fn el_cursor_gana_a_la_banda() {
-        // Con el cursor en una fila IMPAR, que es donde la banda estaría.
-        let fondos = fondos_con_pijama(&["a0", "a1", "a2", "a3"], None);
-        let banda = ratatui::style::Color::Rgb(0x33, 0x33, 0x33);
-        assert_ne!(fondos[0], banda, "la fila del cursor no lleva banda");
-        assert_ne!(fondos[0], fondos[2], "ni el fondo llano de las pares");
+    fn the_cursor_beats_the_stripe() {
+        // With the cursor on an ODD row, which is where the stripe would be.
+        let fondos = pyjama_backgrounds(&["a0", "a1", "a2", "a3"], None);
+        let band = ratatui::style::Color::Rgb(0x33, 0x33, 0x33);
+        assert_ne!(fondos[0], band, "the cursor's row carries no stripe");
+        assert_ne!(fondos[0], fondos[2], "nor the even rows' plain background");
     }
 
-    /// La paridad es la de la fila PINTADA, no la del índice de la entrada.
+    /// The parity is the PAINTED row's, not the entry's index.
     ///
-    /// Es la parte sutil: con la búsqueda rápida filtrando, un listado que
-    /// alternara por índice de entrada enseñaría dos bandas seguidas en
-    /// cuanto el filtro se saltara una fila — que es exactamente cuando el
-    /// pijama sirve para algo.
+    /// This is the subtle part: with quick search filtering, a listing that
+    /// alternated by entry index would show two stripes in a row as soon as
+    /// the filter skipped a row — which is exactly when the pyjama is good
+    /// for something.
     #[test]
-    fn la_banda_alterna_lo_que_se_ve_y_no_lo_que_hay() {
-        // `b` cae en los índices 1 y 3 del listado entero; filtradas, son
-        // las filas pintadas 0 y 1, así que tienen que salir DISTINTAS.
-        let fondos = fondos_con_pijama(&["a0", "b0", "a1", "b1"], Some("b"));
+    fn the_stripe_alternates_what_is_seen_not_what_there_is() {
+        // `b` falls on indices 1 and 3 of the whole listing; filtered, they
+        // are painted rows 0 and 1, so they have to come out DIFFERENT.
+        let fondos = pyjama_backgrounds(&["a0", "b0", "a1", "b1"], Some("b"));
         assert_ne!(
             fondos[0], fondos[1],
-            "dos filas seguidas del listado filtrado con la misma banda"
+            "two consecutive rows of the filtered listing with the same stripe"
         );
     }
 }
@@ -1448,8 +1465,8 @@ mod entry_item_tests {
         }
     }
 
-    /// Nombre no-UTF8 (bytes crudos vía `Segment`): dispara el badge hostil
-    /// sin pasar por reinterpretación.
+    /// Non-UTF8 name (raw bytes via `Segment`): triggers the hostile badge
+    /// with no reinterpretation involved.
     fn e_hostile() -> Entry {
         Entry {
             attrs: std::collections::BTreeMap::new(),
@@ -1555,7 +1572,7 @@ mod column_header_line_tests {
     use norte_frontend::{SortColumn, SortDir, SortSpec};
     use unicode_width::UnicodeWidthStr;
 
-    fn estilo(b: Builtin, align: Align, header: &str) -> ColumnStyle {
+    fn style(b: Builtin, align: Align, header: &str) -> ColumnStyle {
         ColumnStyle {
             align,
             header: Some(header.to_owned()),
@@ -1563,12 +1580,12 @@ mod column_header_line_tests {
         }
     }
 
-    /// m1 revisión 7b: columna IZQUIERDA de una celda con la flecha del
-    /// sort activa — la emisión queda clampada a exactamente `w` (antes
-    /// «espacio + flecha» eran 2 celdas y corrían toda la cabecera a su
-    /// derecha; con 2 celdas la flecha sí cabe tras el separador).
+    /// m1 review 7b: LEFT-aligned column of one cell with the sort's arrow
+    /// active — the emission stays clamped to exactly `w` (before,
+    /// "space + arrow" were 2 cells and shifted the whole header to the
+    /// right; with 2 cells the arrow does fit after the separator).
     #[test]
-    fn header_izquierda_de_una_celda_con_flecha_no_desborda() {
+    fn a_left_header_of_one_cell_with_an_arrow_does_not_overflow() {
         let sort = SortSpec {
             column: SortColumn::Size,
             dir: SortDir::Asc,
@@ -1578,27 +1595,27 @@ mod column_header_line_tests {
             (
                 ColumnId::Builtin(Builtin::Name),
                 6,
-                estilo(Builtin::Name, Align::Left, "N"),
+                style(Builtin::Name, Align::Left, "N"),
             ),
             (
                 ColumnId::Builtin(Builtin::Size),
                 1,
-                estilo(Builtin::Size, Align::Left, "S"),
+                style(Builtin::Size, Align::Left, "S"),
             ),
         ];
         let line = column_header_line(&cols, &sort, None, 0);
-        assert_eq!(line.width(), 7, "exactamente la suma de anchos: {line:?}");
+        assert_eq!(line.width(), 7, "exactly the sum of widths: {line:?}");
         assert_eq!(line, "N      ");
         let cols = [
             (
                 ColumnId::Builtin(Builtin::Name),
                 6,
-                estilo(Builtin::Name, Align::Left, "N"),
+                style(Builtin::Name, Align::Left, "N"),
             ),
             (
                 ColumnId::Builtin(Builtin::Size),
                 2,
-                estilo(Builtin::Size, Align::Left, "S"),
+                style(Builtin::Size, Align::Left, "S"),
             ),
         ];
         let line = column_header_line(&cols, &sort, None, 0);
@@ -1606,11 +1623,11 @@ mod column_header_line_tests {
         assert_eq!(line, "N      ▲");
     }
 
-    /// ADR 0105: la cabecera se corre lo mismo que los nombres cuando la
-    /// columna de iconos está abierta, y NUNCA desborda su columna — ni
-    /// cuando el nombre tiene menos celdas que el canalón.
+    /// ADR 0105: the header shifts by the same amount as the names when the
+    /// icon column is open, and NEVER overflows its column — not even when
+    /// the name has fewer cells than the gutter.
     #[test]
-    fn la_cabecera_se_corre_con_los_iconos_y_no_desborda() {
+    fn the_header_shifts_with_the_icons_and_does_not_overflow() {
         let sort = SortSpec {
             column: SortColumn::Size,
             dir: SortDir::Asc,
@@ -1620,12 +1637,12 @@ mod column_header_line_tests {
             (
                 ColumnId::Builtin(Builtin::Name),
                 8,
-                estilo(Builtin::Name, Align::Left, "Nombre"),
+                style(Builtin::Name, Align::Left, "Nombre"),
             ),
             (
                 ColumnId::Builtin(Builtin::Size),
                 4,
-                estilo(Builtin::Size, Align::Left, "S"),
+                style(Builtin::Size, Align::Left, "S"),
             ),
         ];
         let line = column_header_line(&cols, &sort, None, 3);
@@ -1635,19 +1652,15 @@ mod column_header_line_tests {
             (
                 ColumnId::Builtin(Builtin::Name),
                 2,
-                estilo(Builtin::Name, Align::Left, "N"),
+                style(Builtin::Name, Align::Left, "N"),
             ),
             (
                 ColumnId::Builtin(Builtin::Size),
                 4,
-                estilo(Builtin::Size, Align::Left, "S"),
+                style(Builtin::Size, Align::Left, "S"),
             ),
         ];
         let line = column_header_line(&cols, &sort, None, 3);
-        assert_eq!(
-            line.width(),
-            6,
-            "un nombre más estrecho que el canalón: {line:?}"
-        );
+        assert_eq!(line.width(), 6, "a name narrower than the gutter: {line:?}");
     }
 }

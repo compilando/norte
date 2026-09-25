@@ -1,9 +1,10 @@
-//! Provider VFS sobre object storage vía opendal (ADR 0016): S3 primero,
-//! GCS/Azure después activando features del workspace sin tocar este código.
+//! VFS provider over object storage via opendal (ADR 0016): S3 first,
+//! GCS/Azure later by turning on workspace features without touching this
+//! code.
 //!
-//! El [`opendal::Operator`] llega INYECTADO ya configurado (bucket, region,
-//! endpoint, credenciales) desde `norte-connect` (fase 7d): este crate jamás
-//! ve un secreto (reglas 7/10 de CLAUDE.md).
+//! The [`opendal::Operator`] arrives INJECTED already configured (bucket,
+//! region, endpoint, credentials) from `norte-connect` (phase 7d): this
+//! crate never sees a secret (CLAUDE.md rules 7/10).
 
 #![forbid(unsafe_code)]
 
@@ -11,7 +12,7 @@ mod provider;
 
 pub use provider::ObjectProvider;
 
-// El único tipo de opendal que cruza la frontera pública es el del
-// constructor (patrón `FtpStream` de norte-vfs-ftp): norte-connect lo
-// construye y el core no depende de opendal directamente.
+// The only opendal type that crosses the public boundary is the
+// constructor's (norte-vfs-ftp's `FtpStream` pattern): norte-connect builds
+// it and the core does not depend on opendal directly.
 pub use opendal::Operator;

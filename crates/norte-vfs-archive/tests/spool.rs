@@ -1,9 +1,9 @@
-//! Spool de tar.gz calientes (#95.1): a partir de la segunda lectura de un
-//! mismo contenedor, el provider descomprime el stream entero UNA vez a un
-//! tempfile anónimo y las siguientes lecturas son seeks locales — cero
-//! lecturas del contenedor (verificado con el contador de Faults del
-//! `MemProvider`). Generación, presupuesto 0 y sobre-presupuesto degradan al
-//! forward-decode de siempre, byte-exacto.
+//! Spool for hot tar.gz files (#95.1): from the second read of the same
+//! container onward, the provider decompresses the whole stream ONCE into
+//! an anonymous tempfile and subsequent reads are local seeks — zero
+//! container reads (verified with the `MemProvider`'s Faults counter).
+//! Generation, zero budget and over-budget degrade to the usual
+//! forward-decode, byte-exact.
 
 mod common;
 
@@ -19,9 +19,9 @@ fn seg(b: &[u8]) -> Segment {
     Segment::new(b.to_vec()).expect("seg")
 }
 
-/// Ruido xorshift32: incompresible de verdad — el gz resultante es
-/// ~proporcional al descomprimido, así que una lectura forward-decode paga
-/// varios bloques de 256 KiB del `ProviderReader` (medibles en Faults).
+/// xorshift32 noise: genuinely incompressible — the resulting gz is
+/// ~proportional to the decompressed size, so a forward-decode read pays
+/// for several 256 KiB `ProviderReader` blocks (measurable via Faults).
 fn noise(len: usize, seed: u32) -> Vec<u8> {
     let mut state = seed;
     (0..len)
@@ -43,9 +43,9 @@ async fn read_all(p: &ArchiveProvider, f: &VPath, range: Option<ByteRange>) -> V
     out
 }
 
-/// Contenedor con DOS entradas de ruido (a.bin cruza varios bloques de
-/// 256 KiB) + provider tar.gz con `limits`, conservando el Mem (Faults) y
-/// el path del contenedor (para reescribirlo).
+/// A container with TWO noise entries (a.bin crosses several 256 KiB
+/// blocks) + a tar.gz provider with `limits`, keeping the Mem (Faults) and
+/// the container's path (to rewrite it).
 async fn setup(
     data_a: &[u8],
     data_b: &[u8],
@@ -67,48 +67,48 @@ async fn setup(
     (mem, provider, root, container)
 }
 
-/// El corazón de #95.1: dos lecturas completas calientan el contenedor y
-/// construyen el spool; la TERCERA no paga NI UNA lectura del contenedor
-/// (delta de `read_calls` ≤ 1) y sigue siendo byte-exacta.
+/// #95.1's core: two complete reads warm up the container and build the
+/// spool; the THIRD one pays NOT A SINGLE container read (a `read_calls`
+/// delta ≤ 1) and is still byte-exact.
 #[tokio::test(flavor = "multi_thread")]
-async fn segunda_lectura_caliente_usa_el_spool() {
+async fn a_second_hot_read_uses_the_spool() {
     let data_a = noise(600_000, 0x2545_F491);
     let data_b = noise(50_000, 0x9E37_79B9);
     let (mem, p, root, _) = setup(&data_a, &data_b, Limits::default()).await;
     let f = root.join(seg(b"a.bin"));
 
-    let primera = read_all(&p, &f, None).await;
-    assert_eq!(primera, data_a, "primera lectura byte-exacta");
-    // Segunda lectura: cruza el umbral de calor — construye el spool y
-    // sirve desde él DENTRO de la misma lectura.
-    assert_eq!(read_all(&p, &f, None).await, primera, "segunda == primera");
+    let first = read_all(&p, &f, None).await;
+    assert_eq!(first, data_a, "first read byte-exact");
+    // Second read: crosses the heat threshold — builds the spool and
+    // serves from it WITHIN the same read.
+    assert_eq!(read_all(&p, &f, None).await, first, "second == first");
 
-    let antes = mem.faults().read_calls();
-    let tercera = read_all(&p, &f, None).await;
-    let delta = mem.faults().read_calls() - antes;
-    assert_eq!(tercera, primera, "tercera lectura byte-exacta");
+    let before = mem.faults().read_calls();
+    let third = read_all(&p, &f, None).await;
+    let delta = mem.faults().read_calls() - before;
+    assert_eq!(third, first, "third read byte-exact");
     assert!(
         delta <= 1,
-        "la tercera lectura debe salir del spool, no del contenedor \
-         (delta de read_calls = {delta})"
+        "the third read must come from the spool, not the container \
+         (read_calls delta = {delta})"
     );
 }
 
-/// Mutar el contenedor invalida el spool: la lectura posterior sirve el
-/// contenido NUEVO (jamás el spool rancio) y el calor arranca de cero.
+/// Mutating the container invalidates the spool: the later read serves
+/// the NEW content (never the stale spool) and the heat starts from zero.
 #[tokio::test(flavor = "multi_thread")]
-async fn spool_respeta_generation() {
+async fn the_spool_respects_generation() {
     let data_a = noise(400_000, 0xDEAD_BEE5);
     let data_b = noise(30_000, 0x0BAD_F00D);
     let (mem, p, root, container) = setup(&data_a, &data_b, Limits::default()).await;
     let f = root.join(seg(b"a.bin"));
 
-    // Calienta hasta construir el spool de la generación vieja.
+    // Warms up until the old generation's spool gets built.
     assert_eq!(read_all(&p, &f, None).await, data_a);
     assert_eq!(read_all(&p, &f, None).await, data_a);
 
-    // Reescribe el contenedor: mismo nombre de entrada, contenido y TAMAÑO
-    // distintos (la generación cambia seguro aunque el mtime sea grueso).
+    // Rewrites the container: same entry name, different content and
+    // SIZE (the generation surely changes even if the mtime is coarse).
     let data_a2 = noise(500_000, 0x1234_5678);
     let tar2 = TarSmith::new()
         .file(b"a.bin", &data_a2)
@@ -119,22 +119,22 @@ async fn spool_respeta_generation() {
     assert_eq!(
         read_all(&p, &f, None).await,
         data_a2,
-        "tras mutar el contenedor se sirve el contenido NUEVO, no el spool rancio"
+        "after mutating the container the NEW content is served, not the stale spool"
     );
-    // Y el spool de la generación nueva vuelve a funcionar al recalentar.
+    // And the new generation's spool works again once reheated.
     assert_eq!(read_all(&p, &f, None).await, data_a2);
-    let antes = mem.faults().read_calls();
+    let before = mem.faults().read_calls();
     assert_eq!(read_all(&p, &f, None).await, data_a2);
     assert!(
-        mem.faults().read_calls() - antes <= 1,
-        "la generación nueva se spoolea igual que la vieja"
+        mem.faults().read_calls() - before <= 1,
+        "the new generation gets spooled just like the old one"
     );
 }
 
-/// `spool_max_bytes = 0` desactiva el spool: la tercera lectura sigue
-/// pagando el contenedor (forward-decode) — y sigue siendo correcta.
+/// `spool_max_bytes = 0` disables the spool: the third read still pays for
+/// the container (forward-decode) — and is still correct.
 #[tokio::test(flavor = "multi_thread")]
-async fn presupuesto_cero_desactiva_el_spool() {
+async fn zero_budget_disables_the_spool() {
     let data_a = noise(600_000, 0xACED_C0DE);
     let data_b = noise(20_000, 0xFEED_FACE);
     let limits = Limits {
@@ -146,60 +146,61 @@ async fn presupuesto_cero_desactiva_el_spool() {
 
     assert_eq!(read_all(&p, &f, None).await, data_a);
     assert_eq!(read_all(&p, &f, None).await, data_a);
-    let antes = mem.faults().read_calls();
+    let before = mem.faults().read_calls();
     assert_eq!(read_all(&p, &f, None).await, data_a);
-    let delta = mem.faults().read_calls() - antes;
+    let delta = mem.faults().read_calls() - before;
     assert!(
         delta > 1,
-        "con presupuesto 0 la tercera lectura sigue leyendo el contenedor \
-         (delta de read_calls = {delta})"
+        "with a zero budget the third read still reads the container \
+         (read_calls delta = {delta})"
     );
 }
 
-/// Descomprimido > `spool_max_bytes`: el build aborta (negative-cache), no
-/// hay spool, y TODAS las lecturas siguen correctas por forward-decode.
+/// Decompressed size > `spool_max_bytes`: the build aborts
+/// (negative-cache), there's no spool, and ALL reads stay correct via
+/// forward-decode.
 #[tokio::test(flavor = "multi_thread")]
-async fn sobre_presupuesto_no_spoolea() {
+async fn over_budget_does_not_spool() {
     let data_a = noise(300_000, 0x5EED_5EED);
     let data_b = noise(10_000, 0xB16B_00B5);
     let limits = Limits {
-        spool_max_bytes: 1024, // el descomprimido del contenedor lo supera
+        spool_max_bytes: 1024, // the container's decompressed size exceeds it
         ..Limits::default()
     };
     let (mem, p, root, _) = setup(&data_a, &data_b, limits).await;
     let f = root.join(seg(b"a.bin"));
 
     assert_eq!(read_all(&p, &f, None).await, data_a);
-    // La segunda dispara el build, que aborta por presupuesto y degrada a
-    // forward-decode — byte-exacta igualmente.
+    // The second one triggers the build, which aborts over budget and
+    // degrades to forward-decode — still byte-exact.
     assert_eq!(read_all(&p, &f, None).await, data_a);
-    let antes = mem.faults().read_calls();
+    let before = mem.faults().read_calls();
     assert_eq!(read_all(&p, &f, None).await, data_a);
-    let delta = mem.faults().read_calls() - antes;
+    let delta = mem.faults().read_calls() - before;
     assert!(
         delta > 1,
-        "sin spool (no-spooleable), la tercera lectura paga el contenedor \
-         (delta de read_calls = {delta})"
+        "with no spool (non-spoolable), the third read pays for the container \
+         (read_calls delta = {delta})"
     );
 }
 
-/// Lecturas RANGED servidas del spool: byte-exactas con offset en medio de
-/// la entrada, cruzando bloques, de cola, sobre la OTRA entrada del mismo
-/// contenedor, y past-EOF — todo sin tocar el contenedor.
+/// RANGED reads served from the spool: byte-exact with an offset in the
+/// middle of the entry, crossing blocks, at the tail, over the OTHER entry
+/// of the same container, and past-EOF — all without touching the container.
 #[tokio::test(flavor = "multi_thread")]
-async fn rangos_desde_el_spool_son_byte_exactos() {
+async fn ranges_from_the_spool_are_byte_exact() {
     let data_a = noise(600_000, 0xCAFE_BABE);
     let data_b = noise(50_000, 0x8BAD_BEEF);
     let (mem, p, root, _) = setup(&data_a, &data_b, Limits::default()).await;
     let a = root.join(seg(b"a.bin"));
     let b = root.join(seg(b"b.bin"));
 
-    // Calienta el contenedor (el calor es POR CONTENEDOR): el spool cubre
-    // ambas entradas.
+    // Warms up the container (heat is PER CONTAINER): the spool covers
+    // both entries.
     assert_eq!(read_all(&p, &a, None).await, data_a);
     assert_eq!(read_all(&p, &a, None).await, data_a);
 
-    let antes = mem.faults().read_calls();
+    let before = mem.faults().read_calls();
     let mid = read_all(
         &p,
         &a,
@@ -209,8 +210,12 @@ async fn rangos_desde_el_spool_son_byte_exactos() {
         }),
     )
     .await;
-    assert_eq!(mid, &data_a[300_123..310_123], "rango en medio de a.bin");
-    let cola = read_all(
+    assert_eq!(
+        mid,
+        &data_a[300_123..310_123],
+        "range in the middle of a.bin"
+    );
+    let tail = read_all(
         &p,
         &a,
         Some(ByteRange {
@@ -219,8 +224,8 @@ async fn rangos_desde_el_spool_son_byte_exactos() {
         }),
     )
     .await;
-    assert_eq!(cola, &data_a[599_995..], "rango de cola sin len");
-    let otra = read_all(
+    assert_eq!(tail, &data_a[599_995..], "tail range with no len");
+    let other = read_all(
         &p,
         &b,
         Some(ByteRange {
@@ -230,9 +235,9 @@ async fn rangos_desde_el_spool_son_byte_exactos() {
     )
     .await;
     assert_eq!(
-        otra,
+        other,
         &data_b[1_000..1_500],
-        "la OTRA entrada del contenedor también sale del spool"
+        "the container's OTHER entry also comes from the spool"
     );
     let past = read_all(
         &p,
@@ -243,11 +248,11 @@ async fn rangos_desde_el_spool_son_byte_exactos() {
         }),
     )
     .await;
-    assert_eq!(past, b"", "past-EOF de la ENTRADA: stream vacío");
-    let delta = mem.faults().read_calls() - antes;
+    assert_eq!(past, b"", "past-EOF of the ENTRY: empty stream");
+    let delta = mem.faults().read_calls() - before;
     assert!(
         delta <= 1,
-        "todos los rangos salen del spool, no del contenedor \
-         (delta de read_calls = {delta})"
+        "every range comes from the spool, not the container \
+         (read_calls delta = {delta})"
     );
 }

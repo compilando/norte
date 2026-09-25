@@ -1,10 +1,10 @@
-//! El puente: MCP (JSON-RPC 2.0 NDJSON por stdio) ↔ protocolo norte (UDS).
+//! The bridge: MCP (JSON-RPC 2.0 NDJSON over stdio) ↔ norte protocol (UDS).
 //!
-//! Regla 9: aquí NO hay decisiones de policy ni acceso al FS — cada tool es
-//! un reenvío 1:1 al daemon, que gobierna (scope, ask, journal, actor)
-//! server-side. El puente es un cliente-agente más: comprometerlo no salta
-//! la policy. Los tipos del wire MCP se construyen con `serde_json::json!`
-//! (NO son los `Response` de norte-proto: solo comparten el framing NDJSON).
+//! Rule 9: there are NO policy decisions or FS access here — every tool is a
+//! 1:1 forward to the daemon, which governs (scope, ask, journal, actor)
+//! server-side. The bridge is just another agent client: compromising it
+//! does not skip policy. The MCP wire types are built with `serde_json::json!`
+//! (they are NOT norte-proto's `Response`: they only share the NDJSON framing).
 
 use std::sync::Arc;
 
@@ -17,96 +17,96 @@ use norte_proto::{ByteRange, DeleteMode, VPath};
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
-/// Versión MCP que respondemos, fija (ADR 0024).
+/// The MCP version we answer with, fixed (ADR 0024).
 const MCP_VERSION: &str = "2025-06-18";
-/// Tope de espera del estado terminal de una Task encolada por un tool
-/// mutante. Holgado: una op bajo regla `ask` YA esperó su aprobación DENTRO
-/// de la llamada al daemon; esto solo cubre la ejecución.
+/// Wait cap for the terminal state of a Task a mutating tool queued.
+/// Generous: an op under an `ask` rule ALREADY waited for its approval
+/// INSIDE the daemon call; this only covers execution.
 const TASK_WAIT: std::time::Duration = std::time::Duration::from_mins(10);
-/// Intervalo del poll de `task.list` esperando el terminal.
+/// Poll interval for `task.list` while waiting for the terminal.
 const TASK_POLL: std::time::Duration = std::time::Duration::from_millis(100);
 
-/// Filas de `compare` por llamada si el caller no pide `limit` (~2 lotes de
-/// [`norte_proto::methods::COMPARE_ROWS_MAX_BATCH`]). `fs.compare` no pagina
-/// como `fs.list` (no hay `cursor`, y el walk no tiene `max_hits` como
-/// `fs.search`): sin este tope, comparar dos árboles grandes metería un
-/// millón de filas en un solo resultado de tool y reventaría el contexto del
-/// modelo.
+/// `compare` rows per call if the caller does not ask for `limit` (~2 batches
+/// of [`norte_proto::methods::COMPARE_ROWS_MAX_BATCH`]). `fs.compare` does
+/// not paginate like `fs.list` (no `cursor`, and the walk has no `max_hits`
+/// like `fs.search`): without this cap, comparing two large trees would put
+/// a million rows in a single tool result and blow up the model's context.
 const COMPARE_ROWS_DEFAULT: usize = 500;
-/// Tope DURO de `limit`, aunque el caller pida más: una `limit` sin techo
-/// sería el mismo problema que no tener tope, con un paso extra.
+/// HARD cap on `limit`, even if the caller asks for more: an uncapped
+/// `limit` would be the same problem as no cap, with an extra step.
 const COMPARE_ROWS_MAX: usize = 5000;
 
-/// Pasos de `sync_plan` por llamada si el caller no pide `limit`. MISMO valor
-/// que [`COMPARE_ROWS_DEFAULT`] y el mismo motivo: `sync.plan` tampoco pagina
-/// (no hay `cursor`), y un plan sobre dos árboles grandes metería cientos de
-/// miles de pasos en un solo resultado de tool. El nombre y el vocabulario del
-/// payload (`limit`/`truncated`/`complete`) son deliberadamente los mismos que
-/// en `compare`: un modelo que lea las dos tools no debe aprender dos
-/// vocabularios para la misma idea.
+/// `sync_plan` steps per call if the caller does not ask for `limit`. SAME
+/// value as [`COMPARE_ROWS_DEFAULT`] and the same reason: `sync.plan` does
+/// not paginate either (no `cursor`), and a plan over two large trees would
+/// put hundreds of thousands of steps in a single tool result. The payload's
+/// name and vocabulary (`limit`/`truncated`/`complete`) are deliberately the
+/// same as `compare`'s: a model reading both tools should not have to learn
+/// two vocabularies for the same idea.
 const SYNC_STEPS_DEFAULT: usize = 500;
-/// Tope DURO de `limit` de `sync_plan`, por el mismo motivo que
+/// HARD cap on `sync_plan`'s `limit`, for the same reason as
 /// [`COMPARE_ROWS_MAX`].
 const SYNC_STEPS_MAX: usize = 5000;
 
-/// Celda del id JSON-RPC de la `fs.*` mutante en vuelo de un tool (#72).
+/// Cell for the JSON-RPC id of a tool's in-flight mutating `fs.*` (#72).
 type DaemonIdCell = Arc<std::sync::OnceLock<u64>>;
 
-/// Errores del ciclo de vida del puente (conexión/transporte). Los errores
-/// de una TOOL no llegan aquí: viajan como `isError: true` en el result MCP
-/// (el agente puede leerlos y reaccionar).
+/// Errors from the bridge's lifecycle (connection/transport). A TOOL's
+/// errors do not reach here: they travel as `isError: true` in the MCP
+/// result (the agent can read them and react).
 ///
-/// `non_exhaustive`: la lista crece con cada superficie nueva del puente
-/// (`Streams` la estrenó) y ninguna de esas adiciones debe ser un break.
+/// `non_exhaustive`: the list grows with every new bridge surface (`Streams`
+/// introduced it) and none of those additions should be a break.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum BridgeError {
-    /// I/O de stdio.
+    /// stdio I/O.
     #[error("stdio: {0}")]
     Io(#[from] std::io::Error),
-    /// Fallo hablando con el daemon (conexión/handshake).
+    /// Failure talking to the daemon (connection/handshake).
     #[error("daemon: {0}")]
     Daemon(#[from] ClientError),
-    /// Fallo abriendo el brazo de streams ([`Bridge::streams`]). Separado de
-    /// [`Self::Daemon`] porque llega en taxonomía del protocolo, no como
-    /// `ClientError`, y porque distingue «el puente no arrancó» de «una tool
-    /// no pudo abrir su segunda conexión».
-    #[error("brazo de streams: {0}")]
+    /// Failure opening the streams arm ([`Bridge::streams`]). Separate from
+    /// [`Self::Daemon`] because it arrives in the protocol's taxonomy, not
+    /// as a `ClientError`, and because it distinguishes "the bridge did not
+    /// start" from "a tool could not open its second connection".
+    #[error("streams arm: {0}")]
     Streams(#[source] norte_proto::Error),
 }
 
-/// El puente conectado al daemon como SESIÓN DE AGENTE.
+/// The bridge connected to the daemon as an AGENT SESSION.
 pub struct Bridge {
     client: Client,
     session: String,
-    /// El socket, guardado para poder abrir [`Bridge::streams`] al vuelo.
+    /// The socket, kept so [`Bridge::streams`] can be opened on the fly.
     socket: std::path::PathBuf,
-    /// La conexión que drena notificaciones, abierta en la PRIMERA tool que
-    /// la necesita.
+    /// The connection that drains notifications, opened on the FIRST tool
+    /// that needs it.
     ///
-    /// Perezosa a propósito: un agente que solo lista y lee jamás la abre, y
-    /// una segunda conexión al daemon no es gratis. Una sola, cacheada: dos
-    /// serían dos `conn_id` sin ninguna ventaja.
+    /// Lazy on purpose: an agent that only lists and reads never opens it,
+    /// and a second connection to the daemon is not free. A single one,
+    /// cached: two would be two `conn_id`s with no advantage.
     streams: tokio::sync::OnceCell<Backend>,
 }
 
 impl Bridge {
-    /// Conecta al daemon por `socket` y negocia el handshake declarando
-    /// `agent_session = session`: todas las mutaciones de este puente quedan
-    /// ligadas a ese actor server-side.
+    /// Connects to the daemon over `socket` and negotiates the handshake
+    /// declaring `agent_session = session`: every mutation from this bridge
+    /// stays tied to that actor server-side.
     ///
     /// # Errors
-    /// [`BridgeError::Daemon`]: socket inalcanzable, versión incompatible o
-    /// sesión rechazada (charset `[A-Za-z0-9._-]`, 1..=64).
+    /// [`BridgeError::Daemon`]: unreachable socket, incompatible version, or
+    /// rejected session (charset `[A-Za-z0-9._-]`, 1..=64).
     pub async fn connect(socket: &std::path::Path, session: &str) -> Result<Self, BridgeError> {
         let mut client = Client::connect(socket).await?;
-        // El MISMO handshake que usa el brazo de streams
-        // (`RemoteBackend::connect_as_agent` llama aquí también). Aquí hubo un
-        // `InitializeParams` literal, con un comentario que lo justificaba
-        // diciendo que el puente guarda el `InitializeResult`: no lo guardaba
-        // —lo tiraba a `_init`—, y el motivo real era que el método estaba
-        // `pub(crate)`. Dos literales para las dos mitades de UNA sesión de
-        // agente es como un `encodings` ampliado llega a una y no a la otra.
+        // The SAME handshake the streams arm uses
+        // (`RemoteBackend::connect_as_agent` calls here too). There used to
+        // be a literal `InitializeParams` here, with a comment justifying it
+        // by saying the bridge keeps the `InitializeResult`: it did not keep
+        // it —it dropped it into `_init`—, and the real reason was that the
+        // method was `pub(crate)`. Two literals for the two halves of ONE
+        // agent session is how an expanded `encodings` reaches one and not
+        // the other.
         let _init: methods::InitializeResult = client
             .initialize_as_agent(client_info(), session.to_owned())
             .await?;
@@ -118,49 +118,52 @@ impl Bridge {
         })
     }
 
-    /// El brazo que drena notificaciones, abriéndolo si es la primera vez.
+    /// The arm that drains notifications, opening it the first time.
     ///
-    /// `fs.compare` y `sync.plan` no contestan con su resultado: lo entregan
-    /// por notificaciones (`compare.rows`, `sync.steps`), y el [`Client`] de
-    /// este puente no las enruta — su canal se toma con `&mut self` y, con
-    /// ocho tools en vuelo, habría que demultiplexarlas por `task_id`. Ese
-    /// demultiplexor ya existe en [`Backend::Remote`], así que el puente abre
-    /// una SEGUNDA conexión al daemon y la usa para esos dos métodos.
+    /// `fs.compare` and `sync.plan` do not answer with their result: they
+    /// deliver it via notifications (`compare.rows`, `sync.steps`), and this
+    /// bridge's [`Client`] does not route them — its channel is taken with
+    /// `&mut self` and, with eight tools in flight, they would need to be
+    /// demultiplexed by `task_id`. That demultiplexer already exists in
+    /// [`Backend::Remote`], so the bridge opens a SECOND connection to the
+    /// daemon and uses it for those two methods.
     ///
-    /// Es el MISMO actor: se abre con `connect_as_agent(self.session)`, y los
-    /// scopes de policy están indexados por SESIÓN
-    /// (`ScopeRegistry::grant(session, …)`), no por conexión — lo concedido al
-    /// agente vale igual aquí. Lo que NO se comparte es el `conn_id`: un plan
-    /// retenido en el spool para esta conexión no es redimible desde la de
-    /// tools, lo que es exactamente por qué el puente no ofrece `sync_apply`.
+    /// It is the SAME actor: it is opened with `connect_as_agent(self.session)`,
+    /// and policy scopes are indexed by SESSION
+    /// (`ScopeRegistry::grant(session, …)`), not by connection — what was
+    /// granted to the agent is worth the same here. What is NOT shared is
+    /// the `conn_id`: a plan retained in the spool for this connection is
+    /// not redeemable from the tools' one, which is exactly why the bridge
+    /// does not offer `sync_apply`.
     ///
-    /// Perezosa y cacheada: se abre una vez y, en el camino normal, muere con
-    /// el puente (el `Backend` es un campo, no un `spawn`; al soltarlo, su
-    /// bomba de notificaciones ve caer el último `Arc` y sale sola). «Normal»
-    /// es literal: `Backend` es `Clone` y todo `TaskRef` que salga de aquí
-    /// lleva dentro un clon, así que un clon retenido —o una task viva— la
-    /// mantiene abierta más allá del puente. No la retengas.
+    /// Lazy and cached: it is opened once and, on the normal path, dies with
+    /// the bridge (the `Backend` is a field, not a `spawn`; when it is
+    /// dropped, its notification pump sees the last `Arc` fall and exits on
+    /// its own). "Normal" is literal: `Backend` is `Clone` and every
+    /// `TaskRef` that comes out of here carries a clone inside, so a
+    /// retained clone —or a live task— keeps it open past the bridge. Do not
+    /// hold onto it.
     ///
-    /// **Ninguna operación lógica puede repartirse entre las dos conexiones**
-    /// (comprobar por una y actuar por la otra). Entre las dos llamadas puede
-    /// cambiar el estado de scopes e incluso el daemon: este brazo
-    /// RECONECTA solo y la conexión de tools no, de modo que tras un reinicio
-    /// el brazo puede estar hablando con un daemon nuevo —`ScopeRegistry`
-    /// vacío— mientras la otra está muerta. Los dos lados fallan cerrados,
-    /// pero la carrera existe: cada tool decide por UNA conexión.
+    /// **No logical operation can be split across the two connections**
+    /// (check on one and act on the other). Between the two calls, scope
+    /// state and even the daemon can change: this arm RECONNECTS on its own
+    /// and the tools connection does not, so after a restart the arm can be
+    /// talking to a new daemon —empty `ScopeRegistry`— while the other one
+    /// is dead. Both sides fail closed, but the race exists: each tool
+    /// commits to ONE connection.
     ///
-    /// # Solo para tests
-    /// `pub` únicamente porque el E2E de `norte-mcp` necesita comprobar que el
-    /// brazo se abre UNA vez; no es API estable (`doc(hidden)`, puede cambiar
-    /// sin bump), y el precedente en el árbol es
-    /// `norte_core::backend::TaskRef::synthetic_for_tests`. Un llamante que la
-    /// use tiene el [`Backend`] ENTERO de la conexión autenticada del agente —
-    /// `sync_apply` incluido, cuya ausencia es justo lo que decide ADR 0050.
-    /// Las tools pasan por aquí; nadie más debería.
+    /// # Tests only
+    /// `pub` only because `norte-mcp`'s E2E needs to check that the arm
+    /// opens ONCE; it is not stable API (`doc(hidden)`, can change without a
+    /// bump), and the precedent in the tree is
+    /// `norte_core::backend::TaskRef::synthetic_for_tests`. A caller that
+    /// uses it has the agent's authenticated connection's WHOLE [`Backend`] —
+    /// `sync_apply` included, whose absence is exactly what ADR 0050
+    /// decides. Tools go through here; nobody else should.
     ///
     /// # Errors
-    /// [`BridgeError::Streams`] si el daemon no acepta la segunda conexión
-    /// (socket caído, sesión rechazada).
+    /// [`BridgeError::Streams`] if the daemon does not accept the second
+    /// connection (socket down, session rejected).
     #[doc(hidden)]
     pub async fn streams(&self) -> Result<&Backend, BridgeError> {
         self.streams
@@ -173,23 +176,23 @@ impl Bridge {
                 .await
                 .map_err(BridgeError::Streams)?;
                 let mut backend = Backend::Remote(remote);
-                // El daemon difunde a esta conexión el progreso de las tasks
-                // de su MISMA sesión —o sea, las de la conexión de tools—, y
-                // el backend las encola como «foráneas» en un canal sin tope.
-                // El puente no las mira (cada tool sigue su propia task por
-                // `task.list`), así que se suelta el receptor: sin él, el
-                // `send` es un no-op y la cola no crece durante toda la vida
-                // del proceso.
+                // The daemon broadcasts to this connection the progress of
+                // its SAME session's tasks —i.e. the tools connection's—,
+                // and the backend queues them as "foreign" in an uncapped
+                // channel. The bridge does not look at them (each tool
+                // follows its own task via `task.list`), so the receiver is
+                // dropped: without it, `send` is a no-op and the queue does
+                // not grow for the process's whole lifetime.
                 let _ = backend.take_foreign_tasks();
                 Ok(backend)
             })
             .await
     }
 
-    /// Procesa UNA línea del transporte MCP y devuelve la respuesta ya
-    /// serializada (`None` para notificaciones — MCP 2025-06-18 no tiene
-    /// batches, así que un request produce EXACTAMENTE una respuesta).
-    /// Separado de stdio para que los tests lo conduzcan sin proceso.
+    /// Processes ONE line of the MCP transport and returns the already
+    /// serialized response (`None` for notifications — MCP 2025-06-18 has no
+    /// batches, so a request produces EXACTLY one response). Separate from
+    /// stdio so tests can drive it without a process.
     pub async fn handle_line(&self, line: &str) -> Option<String> {
         let msg: Value = match serde_json::from_str(line) {
             Ok(v) => v,
@@ -203,7 +206,7 @@ impl Bridge {
         };
         let id = msg.get("id").cloned();
         let method = msg.get("method").and_then(Value::as_str).unwrap_or("");
-        // Notificaciones MCP (sin id): initialized/cancelled/… — sin respuesta.
+        // MCP notifications (no id): initialized/cancelled/… — no response.
         let id = id?;
         let params = msg.get("params").cloned().unwrap_or(Value::Null);
         let out = match method {
@@ -226,22 +229,22 @@ impl Bridge {
         Some(out)
     }
 
-    /// `tools/call` completo: ejecuta la tool y devuelve la respuesta MCP
-    /// serializada. Es la unidad que el transporte concurrente (#67) despacha
-    /// a su propia task.
+    /// A complete `tools/call`: runs the tool and returns the serialized MCP
+    /// response. It is the unit the concurrent transport (#67) dispatches to
+    /// its own task.
     pub async fn tools_call(&self, id: &Value, params: &Value, daemon_id: &DaemonIdCell) -> String {
         let name = params.get("name").and_then(Value::as_str).unwrap_or("");
         let args = params.get("arguments").cloned().unwrap_or(json!({}));
         match self.call_tool(name, &args, daemon_id).await {
             Ok(v) => rpc_result(id, &tool_content(&v, false)),
-            // Error de TOOL: el agente lo LEE (isError) y reacciona —
-            // p. ej. pedir scope tras un out-of-scope.
+            // TOOL error: the agent READS it (isError) and reacts — e.g.
+            // requesting scope after an out-of-scope.
             Err(text) => rpc_result(id, &tool_content(&json!(text), true)),
         }
     }
 
-    /// Despacha una tool a su método de wire. `Err(texto)` = fallo de tool
-    /// (viaja como `isError`, jamás rompe el transporte).
+    /// Dispatches a tool to its wire method. `Err(text)` = tool failure
+    /// (travels as `isError`, never breaks the transport).
     async fn call_tool(
         &self,
         name: &str,
@@ -278,8 +281,8 @@ impl Bridge {
                     path,
                     limit,
                     cursor,
-                    // El puente no expone atributos de provider (ADR 0039,
-                    // bloque 1 = solo wire): vacío = no se entrega ninguno.
+                    // The bridge does not expose provider attrs (ADR 0039,
+                    // block 1 = wire only): empty = none delivered.
                     attrs: Vec::new(),
                 },
             )
@@ -334,8 +337,8 @@ impl Bridge {
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(&r.content_b64)
             .map_err(|e| format!("daemon sent invalid base64: {e}"))?;
-        // Texto si LO ES; si no, lossy marcado + los bytes fieles en base64
-        // (el agente elige qué mirar; nada se pierde).
+        // Text if it IS one; if not, marked lossy + the faithful bytes in
+        // base64 (the agent chooses what to look at; nothing is lost).
         match String::from_utf8(bytes) {
             Ok(text) => Ok(json!({"text": text, "eof": r.eof})),
             Err(e) => {
@@ -349,9 +352,9 @@ impl Bridge {
         }
     }
 
-    /// `copy` y `move` comparten cuerpo pero cada uno serializa SU tipo de
-    /// params (M3 del rust-reviewer: reutilizar `FsCopyParams` para `fs.move`
-    /// funcionaba por coincidencia de shape — divergencia futura invisible).
+    /// `copy` and `move` share a body but each serializes ITS OWN params
+    /// type (rust-reviewer M3: reusing `FsCopyParams` for `fs.move` worked
+    /// by shape coincidence — an invisible future divergence).
     async fn tool_transfer(
         &self,
         name: &str,
@@ -370,10 +373,11 @@ impl Bridge {
                     symlinks: norte_proto::SymlinkPolicy::default(),
                     resume: norte_proto::ResumePolicy::default(),
                     verify: norte_proto::VerifyPolicy::default(),
-                    // Un agente no ancla su destino (#295): el ancla dice qué
-                    // estaba mirando un HUMANO cuando aprobó, y aquí no hay
-                    // listado humano detrás. Lo que acota a un agente es su
-                    // scope de policy, que es otra cosa y sigue aplicando.
+                    // An agent does not anchor its destination (#295): the
+                    // anchor says what a HUMAN was looking at when they
+                    // approved, and there is no human listing behind this.
+                    // What bounds an agent is its policy scope, which is a
+                    // different thing and still applies.
                     dest_anchor: None,
                     queued: false,
                 },
@@ -390,7 +394,7 @@ impl Bridge {
                     symlinks: norte_proto::SymlinkPolicy::default(),
                     resume: norte_proto::ResumePolicy::default(),
                     verify: norte_proto::VerifyPolicy::default(),
-                    // Sin ancla, por lo mismo que la copia de arriba.
+                    // No anchor, for the same reason as the copy above.
                     dest_anchor: None,
                     queued: false,
                 },
@@ -404,10 +408,10 @@ impl Bridge {
     async fn tool_delete(&self, args: &Value, daemon_id: &DaemonIdCell) -> Result<Value, String> {
         let path = vpath_arg(args, "path")?;
         let mode = match args.get("mode") {
-            // Default TRASH (spec §10): un borrado agéntico es SIEMPRE
-            // recuperable salvo petición explícita (que la policy puede
-            // seguir denegando). Un `mode` PRESENTE con tipo/valor ilegal es
-            // error — jamás degradar en silencio (sec MINOR-1).
+            // Default TRASH (spec §10): an agentic delete is ALWAYS
+            // recoverable unless explicitly requested (which policy can
+            // still deny). A `mode` PRESENT with an illegal type/value is an
+            // error — never degrade silently (sec MINOR-1).
             None | Some(Value::Null) => DeleteMode::Trash,
             Some(Value::String(s)) if s == "trash" => DeleteMode::Trash,
             Some(Value::String(s)) if s == "permanent" => DeleteMode::Permanent,
@@ -465,8 +469,8 @@ impl Bridge {
             .call(
                 methods::POLICY_REQUEST_SCOPE,
                 &methods::RequestScopeParams {
-                    // SIEMPRE la sesión del puente: la identidad no es un
-                    // argumento (el daemon lo re-valida igualmente).
+                    // ALWAYS the bridge's session: identity is not an
+                    // argument (the daemon re-validates it anyway).
                     session: self.session.clone(),
                     roots,
                     ops,
@@ -484,50 +488,50 @@ impl Bridge {
         }))
     }
 
-    /// `compare`: dos árboles, y qué difiere entre ellos. NO muta nada (sin
-    /// journal, sin undo — regla dura 4 no aplica: `Backend::compare` no
-    /// escribe).
+    /// `compare`: two trees, and what differs between them. Mutates NOTHING
+    /// (no journal, no undo — hard rule 4 does not apply: `Backend::compare`
+    /// does not write).
     ///
-    /// Va por [`Self::streams`], no por [`Self::call`]: `fs.compare` entrega
-    /// sus filas por notificación (`compare.rows`), y esta conexión de tools
-    /// no las enruta (ver la rustdoc de `streams`). `Backend::compare` valida
-    /// raíces iguales y `follow_symlinks` ANTES de elegir brazo, así que esa
-    /// comprobación llega gratis aquí.
+    /// Goes through [`Self::streams`], not [`Self::call`]: `fs.compare`
+    /// delivers its rows via notification (`compare.rows`), and this tools
+    /// connection does not route them (see `streams`'s rustdoc).
+    /// `Backend::compare` validates equal roots and `follow_symlinks` BEFORE
+    /// picking an arm, so that check comes free here.
     ///
-    /// # El tope de filas
-    /// `fs.compare` no pagina (no hay `cursor`) ni tiene `max_hits` como
-    /// `fs.search`: sin un tope, comparar dos árboles grandes metería un
-    /// millón de filas en un solo resultado de tool. Al llegar a `limit`
-    /// ([`COMPARE_ROWS_DEFAULT`], techo [`COMPARE_ROWS_MAX`]) se deja de
-    /// drenar, se CANCELA la task y el payload dice `truncated: true`. Una
-    /// truncación silenciosa sería peor que el tope: un modelo que la lea como
-    /// completa reportaría dos árboles como iguales cuando no se sabe.
+    /// # The row cap
+    /// `fs.compare` does not paginate (no `cursor`) nor has `max_hits` like
+    /// `fs.search`: without a cap, comparing two large trees would put a
+    /// million rows in a single tool result. On reaching `limit`
+    /// ([`COMPARE_ROWS_DEFAULT`], ceiling [`COMPARE_ROWS_MAX`]) draining
+    /// stops, the task is CANCELLED and the payload says `truncated: true`.
+    /// A silent truncation would be worse than the cap: a model reading it
+    /// as complete would report two trees as equal when it is not known.
     ///
-    /// # El deadline
-    /// Mismo tope que el resto de tools que esperan una task
-    /// ([`TASK_WAIT`]): con el rung de `hash` encendido una comparación puede
-    /// durar horas —lo dice la propia rustdoc de `fs.compare`— y ocuparía uno
-    /// de los [`MAX_INFLIGHT_TOOLS`] huecos sin contestar jamás. Pasado el
-    /// deadline se devuelve lo drenado con `timed_out: true` y `complete:
-    /// false`, y la task del daemon se cancela al soltar el guard.
+    /// # The deadline
+    /// Same cap as the rest of the tools that wait on a task ([`TASK_WAIT`]):
+    /// with the `hash` rung on, a comparison can take hours —`fs.compare`'s
+    /// own rustdoc says so— and would occupy one of the
+    /// [`MAX_INFLIGHT_TOOLS`] slots without ever answering. Past the
+    /// deadline, what was drained is returned with `timed_out: true` and
+    /// `complete: false`, and the daemon's task is cancelled when the guard
+    /// is dropped.
     ///
-    /// # `complete`, y por qué no basta el estado terminal
-    /// La misma distinción que el código de salida 2 de `norte compare` (el
-    /// comando del CLI, `compare_cmd`), MÁS la cuenta de filas. El feed de
-    /// `compare.rows` se enruta con `OnFull::DropBatch`: un lote descartado
-    /// —buffer del cliente lleno, carrera de teardown del route, evicción del
-    /// outbox— solo deja un `warn!`, el canal se cierra LIMPIO y la task acaba
-    /// `Completed`. O sea que «terminal y sin truncar» no demuestra que las
-    /// filas estén todas. `TaskProgress::entries_done` cuenta las filas
-    /// ENVIADAS y es —por contrato de `norte_core::compare`— la única señal
-    /// con la que un cliente detecta que se le perdió una notificación, así
-    /// que `complete` exige además que cuadre con las filas recibidas, y
-    /// `rows_total` la publica para que el modelo VEA el hueco en vez de
-    /// tener que deducirlo.
+    /// # `complete`, and why the terminal state is not enough
+    /// The same distinction as `norte compare`'s (the CLI command,
+    /// `compare_cmd`) exit code 2, PLUS the row count. The `compare.rows`
+    /// feed is routed with `OnFull::DropBatch`: a dropped batch —a full
+    /// client buffer, a route teardown race, an outbox eviction— only leaves
+    /// a `warn!`, the channel closes CLEANLY and the task ends `Completed`.
+    /// In other words, "terminal and not truncated" does not prove all the
+    /// rows are there. `TaskProgress::entries_done` counts the SENT rows and
+    /// is —by `norte_core::compare`'s contract— the only signal a client can
+    /// use to detect it lost a notification, so `complete` also requires it
+    /// to match the received rows, and `rows_total` publishes it so the
+    /// model SEES the gap instead of having to deduce it.
     ///
-    /// Esto se apartó una vez por paridad con el CLI. La paridad no aplica: un
-    /// humano lee un pane de diferencias, y un booleano llamado `complete` en
-    /// un esquema le dice a un modelo que la comparación llegó al final.
+    /// This was pulled out once for parity with the CLI. Parity does not
+    /// apply: a human reads a diff pane, and a boolean named `complete` in a
+    /// schema tells a model the comparison reached the end.
     async fn tool_compare(&self, args: &Value) -> Result<Value, String> {
         let left = vpath_arg(args, "left")?;
         let right = vpath_arg(args, "right")?;
@@ -547,9 +551,10 @@ impl Bridge {
             criteria,
             max_depth,
             mtime_tolerance_ms,
-            // El puente no ofrece seguir symlinks (`Backend::compare` lo
-            // rechaza de todos modos): ver la rustdoc de `tool_transfer`
-            // para el motivo de no exponer opciones que el core no soporta.
+            // The bridge does not offer following symlinks
+            // (`Backend::compare` rejects it anyway): see `tool_transfer`'s
+            // rustdoc for why options the core does not support are not
+            // exposed.
             follow_symlinks: false,
             descend_orphans: None,
         };
@@ -563,19 +568,20 @@ impl Bridge {
             .map_err(map_backend_err)?;
         let task_id = task.id();
         let progress = task.progress();
-        // Armado ANTES del primer await sobre el stream: si el agente manda
-        // `notifications/cancelled` (o el transporte muere), el future de esta
-        // tool se SUELTA y el walk del daemon seguiría leyendo —y hasheando—
-        // los dos árboles enteros. Ver la rustdoc del guard.
+        // Armed BEFORE the stream's first await: if the agent sends
+        // `notifications/cancelled` (or the transport dies), this tool's
+        // future is DROPPED and the daemon's walk would keep reading —and
+        // hashing— both whole trees. See the guard's rustdoc.
         let mut guard = CancelOnAbandon::new(task.canceller());
 
-        // Filas fieles al wire: `CompareRow` serializa `verdict`/`criterion`/
-        // `confidence` como los valores snake_case del protocolo (nunca una
-        // etiqueta traducida) y las rutas de sus `Entry` como `to_wire()` —
-        // es la MISMA forma que `norte compare --json` ya expone (regla 1;
-        // jamás una cadena lossy). Se decide fila a fila si truncar en vez de
-        // colectar el lote entero primero: un lote agotando exactamente el
-        // resto del tope no debe arrastrar una fila de más.
+        // Rows faithful to the wire: `CompareRow` serializes
+        // `verdict`/`criterion`/`confidence` as the protocol's snake_case
+        // values (never a translated label) and its `Entry`'s paths as
+        // `to_wire()` — the SAME shape `norte compare --json` already
+        // exposes (rule 1; never a lossy string). Whether to truncate is
+        // decided row by row instead of collecting the whole batch first: a
+        // batch that exactly exhausts the remaining cap must not drag in
+        // one extra row.
         let mut rows: Vec<methods::CompareRow> = Vec::new();
         let mut truncated = false;
         let drained = tokio::time::timeout(TASK_WAIT, async {
@@ -589,16 +595,16 @@ impl Bridge {
                 }
             }
             if truncated {
-                // Cooperativa (regla dura 3): sin esto, una comparación de
-                // millones de filas seguiría leyendo (y hasheando) los dos
-                // árboles enteros para un `rx` que ya nadie drena.
+                // Cooperative (hard rule 3): without this, a comparison of
+                // millions of rows would keep reading (and hashing) both
+                // whole trees for an `rx` nobody drains anymore.
                 task.cancel();
             }
             task.join().await
         })
         .await;
-        // Solo el camino que VIO el terminal desarma: el del deadline deja que
-        // el guard cancele al volver.
+        // Only the path that SAW the terminal disarms: the deadline's path
+        // lets the guard cancel on return.
         let state = match drained {
             Ok(state) => {
                 guard.disarm();
@@ -623,54 +629,54 @@ impl Bridge {
         }))
     }
 
-    /// `sync_plan`: qué HARÍA una sincronización de un lado al otro. NO aplica
-    /// nada — no hay tool `sync_apply` (spec 3 §2.1): aplicar es una acción de
-    /// un HUMANO en su propio cliente, y el puente no la ofrece.
+    /// `sync_plan`: what a one-way synchronisation WOULD DO. Applies
+    /// NOTHING — there is no `sync_apply` tool (spec 3 §2.1): applying is a
+    /// HUMAN's action in their own client, and the bridge does not offer it.
     ///
-    /// Va por [`Self::streams`], igual que [`Self::tool_compare`]: `sync.plan`
-    /// entrega sus pasos por notificación (`sync.steps`* y un
-    /// `sync.plan_done`) y esta conexión de tools no las enruta (ver la
-    /// rustdoc de [`Self::streams`]).
+    /// Goes through [`Self::streams`], same as [`Self::tool_compare`]:
+    /// `sync.plan` delivers its steps via notification (`sync.steps`* and a
+    /// `sync.plan_done`) and this tools connection does not route them (see
+    /// [`Self::streams`]'s rustdoc).
     ///
-    /// # El hash NO viaja
-    /// [`methods::SyncPlanDone::plan_hash`] queda retenido SOLO para la
-    /// conexión de [`Self::streams`] — un plan aprobado por esta llamada no es
-    /// redimible desde la conexión de tools (no hay tool que lo intente), así
-    /// que el hash es un valor que NADIE fuera de esta llamada puede usar. Se
-    /// omite del payload a propósito: un valor que no sirve para nada es una
-    /// invitación a intentarlo de todos modos.
+    /// # The hash does NOT travel
+    /// [`methods::SyncPlanDone::plan_hash`] stays retained ONLY for the
+    /// [`Self::streams`] connection — a plan approved by this call is not
+    /// redeemable from the tools connection (no tool tries it), so the hash
+    /// is a value NOBODY outside this call can use. It is omitted from the
+    /// payload on purpose: a value that is good for nothing is an invitation
+    /// to try it anyway.
     ///
-    /// El `task_id` sí viaja, y no por el hash: las dos conexiones del puente
-    /// son el MISMO `Actor::Agent { session }`, y el criterio de visibilidad
-    /// del daemon es igualdad de actor, así que la conexión de tools puede
-    /// observar (`task_status`) y cancelar la task que abrió el brazo de
-    /// streams. Quitarlo dejaba a un agente sin nada que hacer con un plan que
-    /// tardaba.
+    /// The `task_id` DOES travel, and not for the hash's sake: the bridge's
+    /// two connections are the SAME `Actor::Agent { session }`, and the
+    /// daemon's visibility criterion is actor equality, so the tools
+    /// connection can observe (`task_status`) and cancel the task the
+    /// streams arm opened. Removing it left an agent with nothing to do
+    /// about a plan that was taking a while.
     ///
-    /// # El tope de pasos, y el deadline
-    /// Mismo contrato que [`Self::tool_compare`] (mismos nombres de campo, a
-    /// propósito): al llegar a `limit` ([`SYNC_STEPS_DEFAULT`], techo
-    /// [`SYNC_STEPS_MAX`]) se deja de drenar, se CANCELA la task y el payload
-    /// dice `truncated: true`; pasado [`TASK_WAIT`] se devuelve lo drenado con
-    /// `timed_out: true`. Cancelada la task, `sync.plan_done` JAMÁS llega
-    /// (`run_sync_plan` no lo emite en el camino de error: ver
-    /// `norte_core::sync::run_sync_plan`), así que `counts`/`dest_trash`/
-    /// `blockers`/`blockers_total`/`executable` quedan AUSENTES del payload —
-    /// nunca puestos a cero ni inventados — y es exactamente lo que
-    /// `complete: false` avisa.
+    /// # The step cap, and the deadline
+    /// Same contract as [`Self::tool_compare`] (same field names, on
+    /// purpose): on reaching `limit` ([`SYNC_STEPS_DEFAULT`], ceiling
+    /// [`SYNC_STEPS_MAX`]) draining stops, the task is CANCELLED and the
+    /// payload says `truncated: true`; past [`TASK_WAIT`], what was drained
+    /// is returned with `timed_out: true`. With the task cancelled,
+    /// `sync.plan_done` NEVER arrives (`run_sync_plan` does not emit it on
+    /// the error path: see `norte_core::sync::run_sync_plan`), so
+    /// `counts`/`dest_trash`/`blockers`/`blockers_total`/`executable` are
+    /// ABSENT from the payload — never zeroed nor invented — and that is
+    /// exactly what `complete: false` warns about.
     ///
-    /// # `complete` cuadra los pasos contra `counts`
-    /// El `Done` es un detector de pérdida más fuerte que el de
-    /// [`Self::tool_compare`] —el feed de `sync.steps` se enruta con
-    /// `OnFull::CloseFeed`, así que un lote perdido cierra el canal y el
-    /// `Done` no llega— pero no lo cubre todo: un lote que llega ANTES de que
-    /// el route esté registrado y encuentra el `pending` lleno se descarta con
-    /// una traza y sin cerrar nada, de modo que el `Done` puede aparecer con
-    /// una lista de pasos que no es la que `counts` cuenta. `counts` se rehace
-    /// paso a paso en el spool (es lo que el ejecutor mira para pedir sus
-    /// puertas de policy), así que la suma de sus clases ES el total de pasos
-    /// del plan: si no cuadra con los recibidos, esto no está completo. Va
-    /// también en el payload como `steps_total`.
+    /// # `complete` checks the steps against `counts`
+    /// The `Done` is a stronger loss detector than [`Self::tool_compare`]'s
+    /// —the `sync.steps` feed is routed with `OnFull::CloseFeed`, so a
+    /// dropped batch closes the channel and the `Done` never arrives— but it
+    /// does not cover everything: a batch that arrives BEFORE the route is
+    /// registered and finds `pending` full is dropped with a trace and
+    /// without closing anything, so the `Done` can show up with a step list
+    /// that is not what `counts` counts. `counts` is rebuilt step by step in
+    /// the spool (it is what the executor looks at to request its policy
+    /// gates), so the sum of its classes IS the plan's total step count: if
+    /// it does not match what was received, this is not complete. It also
+    /// goes into the payload as `steps_total`.
     async fn tool_sync_plan(&self, args: &Value) -> Result<Value, String> {
         let (params, limit) = sync_plan_args(args)?;
 
@@ -684,10 +690,10 @@ impl Bridge {
         let task_id = task.id();
         let mut guard = CancelOnAbandon::new(task.canceller());
 
-        // Pasos fieles al wire: `SyncStep` serializa `kind`/`criterion`/
-        // `confidence`/`reversal`/`reason` como los valores snake_case del
-        // protocolo (regla 1; jamás una etiqueta traducida) y `rel`/`dest_rel`
-        // como sus bytes de wire.
+        // Steps faithful to the wire: `SyncStep` serializes
+        // `kind`/`criterion`/`confidence`/`reversal`/`reason` as the
+        // protocol's snake_case values (rule 1; never a translated label)
+        // and `rel`/`dest_rel` as their wire bytes.
         let mut steps: Vec<methods::SyncStep> = Vec::new();
         let mut truncated = false;
         let mut done: Option<methods::SyncPlanDone> = None;
@@ -704,17 +710,18 @@ impl Bridge {
                         }
                     }
                     norte_core::sync::SyncPlanEvent::Done(d) => {
-                        // Como mucho UNO por Task, y siempre el último — nada que
-                        // seguir drenando después.
+                        // At most ONE per Task, and always the last — nothing
+                        // left to drain afterward.
                         done = Some(d);
                         break;
                     }
                 }
             }
             if truncated {
-                // Cooperativa (regla dura 3): igual que en `tool_compare`, sin
-                // esto el planificador seguiría recorriendo (y comparando) los dos
-                // árboles enteros para un `rx` que ya nadie drena.
+                // Cooperative (hard rule 3): same as in `tool_compare`,
+                // without this the planner would keep walking (and
+                // comparing) both whole trees for an `rx` nobody drains
+                // anymore.
                 task.cancel();
             }
             task.join().await
@@ -753,8 +760,8 @@ impl Bridge {
         Ok(payload)
     }
 
-    /// `call` del wire con los errores RPC convertidos a texto de tool. La
-    /// taxonomía viaja en `data`: un `PolicyDenied` sale ACCIONABLE.
+    /// The wire's `call` with RPC errors converted to tool text. The
+    /// taxonomy travels in `data`: a `PolicyDenied` comes out ACTIONABLE.
     async fn call<P, R>(&self, method: &str, params: &P) -> Result<R, String>
     where
         P: serde::Serialize,
@@ -766,10 +773,10 @@ impl Bridge {
             .map_err(map_client_err)
     }
 
-    /// Como [`Self::call`], pero registra el id JSON-RPC asignado en
-    /// `daemon_id` (una celda `OnceLock`) ANTES de suspenderse — para que el
-    /// handler de `notifications/cancelled` pueda reenviar un `rpc.cancel` de
-    /// esa request mientras sigue suspendida en un Ask (#72).
+    /// Like [`Self::call`], but records the assigned JSON-RPC id into
+    /// `daemon_id` (a `OnceLock` cell) BEFORE suspending — so the
+    /// `notifications/cancelled` handler can forward an `rpc.cancel` for
+    /// that request while it is still suspended in an Ask (#72).
     async fn call_tracked<P, R>(
         &self,
         method: &str,
@@ -782,20 +789,20 @@ impl Bridge {
     {
         self.client
             .call_tracked(method, params, |id| {
-                // OnceLock: el PRIMER `fs.*` mutante de este tool fija el id;
-                // los polls de task.list posteriores NO lo pisan.
+                // OnceLock: the FIRST mutating `fs.*` of this tool sets the
+                // id; later task.list polls do NOT overwrite it.
                 let _ = daemon_id.set(id);
             })
             .await
             .map_err(map_client_err)
     }
 
-    /// Espera el estado terminal de `task_id` por poll de `task.list`. La
-    /// task ACABA de ser ack-eada por el daemon, así que existe: si un poll
-    /// no la encuentra NI viva NI en los desenlaces recientes, es que
-    /// terminó y su desenlace fue EVICTADO del buffer de recientes (64,
-    /// global) — se devuelve un error HONESTO inmediato en vez de agotar el
-    /// deadline afirmando "still running" (M1 del rust-reviewer).
+    /// Waits for `task_id`'s terminal state by polling `task.list`. The task
+    /// was JUST ack'd by the daemon, so it exists: if a poll finds it
+    /// NEITHER alive NOR among the recent outcomes, it means it finished and
+    /// its outcome was EVICTED from the recent-outcomes buffer (64, global)
+    /// — an immediate HONEST error is returned instead of exhausting the
+    /// deadline claiming "still running" (rust-reviewer M1).
     async fn wait_terminal(&self, task_id: norte_proto::TaskId) -> Result<Value, String> {
         let deadline = tokio::time::Instant::now() + TASK_WAIT;
         loop {
@@ -824,10 +831,11 @@ impl Bridge {
         }
     }
 
-    /// Reenvía al daemon un `rpc.cancel` de la request `daemon_id` (#72): si
-    /// esa `fs.*` sigue suspendida en un Ask, el daemon la retira (fail-closed).
-    /// Best-effort: un id ya resuelto es no-op en el daemon; un canal muerto se
-    /// descarta. El daemon gobierna: comprometer el puente NO salta la policy.
+    /// Forwards an `rpc.cancel` for request `daemon_id` to the daemon (#72):
+    /// if that `fs.*` is still suspended in an Ask, the daemon withdraws it
+    /// (fail-closed). Best-effort: an already-resolved id is a no-op on the
+    /// daemon; a dead channel is dropped. The daemon governs: compromising
+    /// the bridge does NOT skip policy.
     pub fn cancel_daemon_request(&self, daemon_id: u64) {
         let _ = self.client.notify(
             methods::RPC_CANCEL,
@@ -838,8 +846,8 @@ impl Bridge {
     }
 }
 
-/// Traduce un error del `Client` al texto de tool (la taxonomía en `data`;
-/// un `PolicyDenied` sale ACCIONABLE). Compartido por `call` y `call_tracked`.
+/// Translates a `Client` error into tool text (the taxonomy is in `data`; a
+/// `PolicyDenied` comes out ACTIONABLE). Shared by `call` and `call_tracked`.
 fn map_client_err(e: ClientError) -> String {
     match e {
         ClientError::Rpc(rpc) => match rpc.data {
@@ -853,10 +861,11 @@ fn map_client_err(e: ClientError) -> String {
     }
 }
 
-/// Traduce un [`norte_proto::Error`] de [`Bridge::tool_compare`] (que habla
-/// con [`Bridge::streams`], NO con [`Client`], así que no hay `ClientError`
-/// que envolver) al mismo texto ACCIONABLE que [`map_client_err`]: un
-/// `PolicyDenied` tiene que decir "pide scope" salga por el brazo que salga.
+/// Translates a [`norte_proto::Error`] from [`Bridge::tool_compare`] (which
+/// talks to [`Bridge::streams`], NOT to [`Client`], so there is no
+/// `ClientError` to wrap) into the same ACTIONABLE text as
+/// [`map_client_err`]: a `PolicyDenied` has to say "ask for scope" no matter
+/// which arm it comes out of.
 fn map_backend_err(e: norte_proto::Error) -> String {
     match e {
         norte_proto::Error::PolicyDenied { ref rule } => format!(
@@ -866,16 +875,17 @@ fn map_backend_err(e: norte_proto::Error) -> String {
     }
 }
 
-/// Los args de `sync_plan` → `(params, limit)`. Aparte de la tool solo por el
-/// lint de longitud, y el reparto es el natural: aquí no se toca el daemon.
+/// `sync_plan`'s args → `(params, limit)`. Split out from the tool only for
+/// the length lint, and the split is the natural one: the daemon is not
+/// touched here.
 fn sync_plan_args(args: &Value) -> Result<(methods::SyncPlanParams, usize), String> {
     let source = vpath_arg(args, "source")?;
     let dest = vpath_arg(args, "dest")?;
-    // `mode` no tiene valor neutro entre copiar y borrar (igual que en el
-    // wire, `SyncPlanParams::mode` no lleva `#[serde(default)]`): AUSENTE es
-    // tan error como MALFORMADO — jamás una degradación silenciosa (mismo
-    // criterio que `tool_delete::mode`, con el matiz de que aquí no hay
-    // default que ofrecer).
+    // `mode` has no neutral value between copying and deleting (same as on
+    // the wire, `SyncPlanParams::mode` carries no `#[serde(default)]`):
+    // ABSENT is as much an error as MALFORMED — never a silent degradation
+    // (same criterion as `tool_delete::mode`, with the nuance that there is
+    // no default to offer here).
     let mode = match args.get("mode") {
         Some(Value::String(s)) if s == "update" => methods::SyncMode::Update,
         Some(Value::String(s)) if s == "mirror" => methods::SyncMode::Mirror,
@@ -898,40 +908,40 @@ fn sync_plan_args(args: &Value) -> Result<(methods::SyncPlanParams, usize), Stri
         mode,
         compare: methods::SyncCompareOptions {
             criteria,
-            // `max_depth`/`mtime_tolerance_ms` no son argumentos de esta tool
-            // (spec 3 §4): el default del wire alcanza para un plan agéntico,
-            // y `follow_symlinks`/`descend_orphans` NO son del llamante en
-            // `sync.plan` — pedirlos es `-32602` server-side. La descripción
-            // de la tool lo DICE, porque un agente que acaba de comparar con
-            // `max_depth: 2` recibiría si no un plan sobre el árbol entero sin
-            // ninguna señal.
+            // `max_depth`/`mtime_tolerance_ms` are not arguments of this
+            // tool (spec 3 §4): the wire default is enough for an agentic
+            // plan, and `follow_symlinks`/`descend_orphans` are NOT the
+            // caller's to set in `sync.plan` — asking for them is `-32602`
+            // server-side. The tool's description SAYS so, because an agent
+            // that just compared with `max_depth: 2` would otherwise get a
+            // plan over the whole tree with no signal at all.
             ..methods::SyncCompareOptions::default()
         },
         on_unknown,
-        // El puente no ofrece seleccionar un subárbol del plan: es una
-        // superficie del panel de diferencias (spec 3 §4), no de un agente que
-        // aún no ha visto las filas.
+        // The bridge does not offer selecting a subtree of the plan: that is
+        // a surface of the diff panel (spec 3 §4), not of an agent that has
+        // not seen the rows yet.
         include: None,
     };
     Ok((params, limit))
 }
 
-/// Funde el `sync.plan_done` en el payload de la tool.
+/// Merges `sync.plan_done` into the tool's payload.
 ///
-/// Serializado del wire y NO reconstruido campo a campo: así la ortografía de
-/// `counts`/`dest_trash`/`blockers`/`executable` es EXACTAMENTE la del
-/// protocolo sin copiarla a mano dos veces. Se quitan antes `plan_hash` (no le
-/// sirve a nadie fuera de la conexión de streams) y el `task_id` del wire, que
-/// es EL MISMO que el puente ya puso.
+/// Serialized from the wire and NOT rebuilt field by field: this way
+/// `counts`/`dest_trash`/`blockers`/`executable`'s spelling is EXACTLY the
+/// protocol's without copying it by hand twice. `plan_hash` (of no use to
+/// anyone outside the streams connection) and the wire's `task_id` — the
+/// SAME one the bridge already set — are removed first.
 ///
-/// **La fusión no PISA.** `serde_json::Map::extend` sobrescribe, y extender el
-/// payload CON el `Done` significa que un campo futuro del wire llamado
-/// `complete` —o `truncated`, o `state`— reemplazaría en silencio la bandera
-/// de honestidad que este puente calcula. Latente hoy; una clave nueva del
-/// wire no debería poder romperlo.
+/// **The merge does NOT OVERWRITE.** `serde_json::Map::extend` overwrites,
+/// and extending the payload WITH the `Done` would mean a future wire field
+/// named `complete` —or `truncated`, or `state`— would silently replace the
+/// honesty flag this bridge computes. Latent today; a new wire key should
+/// not be able to break it.
 ///
 /// # Errors
-/// Si el `SyncPlanDone` no serializa (no puede: struct plano).
+/// If the `SyncPlanDone` fails to serialize (it cannot: a flat struct).
 fn merge_plan_done(
     payload: &mut Value,
     done: &methods::SyncPlanDone,
@@ -951,7 +961,7 @@ fn merge_plan_done(
             }
             serde_json::map::Entry::Occupied(e) => tracing::warn!(
                 key = %e.key(),
-                "sync.plan_done trae una clave que el puente ya fija: se conserva la del puente"
+                "sync.plan_done carries a key the bridge already sets: keeping the bridge's"
             ),
         }
     }
@@ -959,20 +969,20 @@ fn merge_plan_done(
     Ok(())
 }
 
-/// Como [`map_backend_err`], pero para `sync.plan`: el rechazo que un agente
-/// alcanza sin hacer nada raro es el tope de planes RETENIDOS por conexión, y
-/// lo que hay que decirle es qué hacer con él.
+/// Like [`map_backend_err`], but for `sync.plan`: the rejection an agent
+/// reaches without doing anything odd is the per-connection cap on RETAINED
+/// plans, and what it needs to be told is what to do about it.
 ///
-/// Desde #182 ese rechazo llega con TAXONOMÍA
+/// Since #182 that rejection arrives with TAXONOMY
 /// ([`Error::LIMIT_RETAINED_SYNC_PLANS`](norte_proto::Error::LIMIT_RETAINED_SYNC_PLANS)),
-/// no como «internal error», así que esta función ya no adivina la causa: la
-/// LEE. Lo que queda es el consejo, que la taxonomía no lleva y el agente
-/// necesita — sobre todo el «no reintentes en bucle», porque reintentar es lo
-/// que llena este tope.
+/// not as "internal error", so this function no longer guesses the cause: it
+/// READS it. What is left is the advice, which the taxonomy does not carry
+/// and the agent needs — above all "do not retry in a loop", because
+/// retrying is what fills this cap.
 ///
-/// Se fue con el arreglo: las dos constantes copiadas de `daemon::server` (que
-/// las tiene privadas) y el párrafo que nombraba la causa «probable» sin poder
-/// afirmarla.
+/// Gone with the fix: the two constants copied from `daemon::server` (which
+/// keeps them private) and the paragraph that named the "probable" cause
+/// without being able to assert it.
 fn map_plan_err(e: norte_proto::Error) -> String {
     match e {
         norte_proto::Error::LimitExceeded { ref limit }
@@ -989,33 +999,35 @@ fn map_plan_err(e: norte_proto::Error) -> String {
     }
 }
 
-/// El TTL del plan retenido, en minutos ([`methods::SYNC_PLAN_TTL_MS`]): lo
-/// ÚNICO que sigue haciendo falta nombrar, y viene del wire en vez de copiado.
+/// The retained plan's TTL, in minutes ([`methods::SYNC_PLAN_TTL_MS`]): the
+/// ONLY thing still worth naming, and it comes from the wire instead of
+/// being copied.
 const SYNC_PLAN_TTL_MIN_HINT: u64 = methods::SYNC_PLAN_TTL_MS / 60_000;
 
-/// Traduce el arg opcional `criteria` (array de strings) de `compare` y de
-/// `sync_plan` a [`methods::CompareCriteria`]: ausente o `null` = el default
-/// del wire (tamaño + fecha, sin hash); presente = EXACTAMENTE la lista
-/// pedida, nunca sumada al default (`["hash"]` a secas enciende solo `hash`).
+/// Translates `compare`'s and `sync_plan`'s optional `criteria` arg (array of
+/// strings) into [`methods::CompareCriteria`]: absent or `null` = the wire's
+/// default (size + date, no hash); present = EXACTLY the requested list,
+/// never added to the default (a bare `["hash"]` turns on only `hash`).
 ///
-/// Una lista VACÍA es un ERROR, y es aquí donde este contrato **no** es el del
-/// `--criteria` del CLI. `parse_compare_criteria` trata la lista vacía como
-/// ausente porque clap no distingue «no lo dijo» de «lo dijo vacío»; JSON sí
-/// los distingue, y tratarlos igual costaría lo siguiente:
+/// An EMPTY list is an ERROR, and this is where this contract is **not** the
+/// CLI's `--criteria`'s. `parse_compare_criteria` treats an empty list as
+/// absent because clap does not distinguish "did not say it" from "said it
+/// empty"; JSON does distinguish them, and treating them the same would cost
+/// the following:
 ///
-/// - en `compare`, ningún rung decide, así que `norte_compare` da
-///   `same`/`presence`/`unknown` a TODA pareja presente en los dos lados. Con
-///   `complete: true`. El agente reporta dos árboles idénticos sin haber
-///   comparado nada.
-/// - en `sync_plan`, peor: `Same` + `Unknown` con el `on_unknown: copy` que es
-///   el default de esta tool produce un `Overwrite` POR FICHERO. `criteria:
-///   []` convertiría «planifica una actualización» en «reescribe el destino
-///   entero», con `executable: true`.
+/// - in `compare`, no rung decides, so `norte_compare` gives
+///   `same`/`presence`/`unknown` to EVERY pair present on both sides. With
+///   `complete: true`. The agent reports two identical trees without having
+///   compared anything.
+/// - in `sync_plan`, worse: `Same` + `Unknown` with `on_unknown: copy`, this
+///   tool's default, produces an `Overwrite` PER FILE. `criteria: []` would
+///   turn "plan an update" into "rewrite the entire destination", with
+///   `executable: true`.
 ///
-/// Un argumento vacío no puede ser la forma más corta de pedir eso. Se rechaza
-/// con el mismo criterio que `mode`, que tampoco tiene valor neutro, y los dos
-/// esquemas llevan además `"minItems": 1` — que es asesor, así que el chequeo
-/// vive aquí.
+/// An empty argument cannot be the shortest way to ask for that. It is
+/// rejected with the same criterion as `mode`, which also has no neutral
+/// value, and both schemas also carry `"minItems": 1` — which is advisory,
+/// so the check lives here.
 fn compare_criteria_arg(args: &Value) -> Result<methods::CompareCriteria, String> {
     let names = match args.get("criteria") {
         None | Some(Value::Null) => return Ok(methods::CompareCriteria::default()),
@@ -1047,23 +1059,24 @@ fn compare_criteria_arg(args: &Value) -> Result<methods::CompareCriteria, String
     Ok(criteria)
 }
 
-/// Tolerancia de mtime por defecto, LEÍDA del wire en vez de copiada: el
-/// literal vive en `norte_proto`'s `default_mtime_tolerance_ms` (privado) y
-/// [`methods::SyncCompareOptions::default`] es su única salida pública. Copiar
-/// el `2000` aquí es como el día que el wire lo cambie el puente se quede con
-/// el viejo.
+/// Default mtime tolerance, READ from the wire instead of copied: the
+/// literal lives in `norte_proto`'s `default_mtime_tolerance_ms` (private)
+/// and [`methods::SyncCompareOptions::default`] is its only public exit.
+/// Copying the `2000` here means the day the wire changes it the bridge is
+/// left with the old one.
 fn default_mtime_tolerance_ms() -> u32 {
     methods::SyncCompareOptions::default().mtime_tolerance_ms
 }
 
-/// El `limit` de una tool de stream (`compare`, `sync_plan`): ausente = su
-/// default, recortado al techo duro, y `0` es ERROR.
+/// A stream tool's (`compare`, `sync_plan`) `limit`: absent = its default,
+/// clamped to the hard ceiling, and `0` is an ERROR.
 ///
-/// `limit: 0` no es «cero filas por decisión del caller», es un argumento sin
-/// sentido (encoding-auditor, revisión de la tarea 2): sin este chequeo saldría
-/// `truncated: true` con la lista vacía en el PRIMER elemento, indistinguible
-/// de un árbol de verdad truncado. El esquema JSON ya dice `"minimum": 1`, pero
-/// eso es asesor — un MCP client real puede mandarlo igual.
+/// `limit: 0` is not "zero rows by the caller's choice", it is a nonsensical
+/// argument (encoding-auditor, task 2 review): without this check it would
+/// come out `truncated: true` with the empty list on the VERY FIRST element,
+/// indistinguishable from a genuinely truncated tree. The JSON schema
+/// already says `"minimum": 1`, but that is advisory — a real MCP client can
+/// send it anyway.
 fn stream_limit_arg(args: &Value, default: usize, max: usize) -> Result<usize, String> {
     let limit = opt_u64_arg(args, "limit")?
         .map(|l| usize::try_from(l).map_err(|_| format!("arg limit too large: {l}")))
@@ -1076,15 +1089,15 @@ fn stream_limit_arg(args: &Value, default: usize, max: usize) -> Result<usize, S
     Ok(limit)
 }
 
-/// El total de PASOS de un plan según sus contadores: la suma de las clases
-/// (`unknown_kind` incluida, que existe justo para que no falte ninguna).
+/// A plan's total STEPS per its counters: the sum of the classes
+/// (`unknown_kind` included, which exists precisely so none is missing).
 ///
-/// Es lo que [`Bridge::tool_sync_plan`] cuadra contra los pasos recibidos.
-/// Saturante, como las sumas de [`methods::SyncCounts::add`]: un contador
-/// desbordado es un número raro, un pánico en el camino de un plan de medio
-/// millón de pasos es una tool muerta. `irreversible` NO se suma — es
-/// transversal a las clases, lo dice su rustdoc — ni `unmeasured_steps`, que
-/// es un subconjunto de `copy`+`overwrite`.
+/// It is what [`Bridge::tool_sync_plan`] checks against the received steps.
+/// Saturating, like [`methods::SyncCounts::add`]'s sums: an overflowed
+/// counter is a weird number, a panic on the path of a half-million-step
+/// plan is a dead tool. `irreversible` is NOT summed — it is orthogonal to
+/// the classes, its rustdoc says so — nor is `unmeasured_steps`, which is a
+/// subset of `copy`+`overwrite`.
 fn plan_steps_total(counts: &methods::SyncCounts) -> u64 {
     counts
         .create_dir
@@ -1095,18 +1108,18 @@ fn plan_steps_total(counts: &methods::SyncCounts) -> u64 {
         .saturating_add(counts.unknown_kind)
 }
 
-/// ¿Se puede afirmar que este resultado de stream es TODO lo que había?
+/// Can it be asserted that this stream result is ALL there was?
 ///
-/// Cuatro condiciones, y ninguna sobra:
+/// Four conditions, and none is extra:
 ///
-/// 1. no se truncó (el caller puso el tope);
-/// 2. se vio el estado terminal (`None` = venció [`TASK_WAIT`]);
-/// 3. ese estado es `Completed` — `Cancelled` y `Failed` no son un final
-///    limpio, y devolver una lista vacía sin decirlo se lee como «no hay
-///    diferencias»;
-/// 4. lo recibido cuadra con lo que el daemon dice haber emitido. Es la
-///    condición que faltaba: los lotes se pueden perder DEJANDO la task en
-///    `Completed` (ver la rustdoc de [`Bridge::tool_compare`]).
+/// 1. it was not truncated (the caller hit the cap);
+/// 2. the terminal state was seen (`None` = [`TASK_WAIT`] expired);
+/// 3. that state is `Completed` — `Cancelled` and `Failed` are not a clean
+///    ending, and returning an empty list without saying so reads as "no
+///    differences";
+/// 4. what was received matches what the daemon says it emitted. It is the
+///    condition that was missing: batches can be lost while LEAVING the task
+///    `Completed` (see [`Bridge::tool_compare`]'s rustdoc).
 fn stream_is_complete(
     truncated: bool,
     state: Option<&norte_proto::TaskState>,
@@ -1118,9 +1131,9 @@ fn stream_is_complete(
         && u64::try_from(got).is_ok_and(|got| got == emitted)
 }
 
-/// Nombre del estado terminal para el payload de una tool de stream. `None`
-/// (venció el deadline sin verlo) es `"running"`: la task del daemon seguía
-/// viva cuando esta tool dejó de mirarla.
+/// Terminal state name for a stream tool's payload. `None` (the deadline
+/// expired without seeing it) is `"running"`: the daemon's task was still
+/// alive when this tool stopped watching it.
 fn state_label(state: Option<&norte_proto::TaskState>) -> &'static str {
     match state {
         Some(norte_proto::TaskState::Completed) => "completed",
@@ -1130,9 +1143,9 @@ fn state_label(state: Option<&norte_proto::TaskState>) -> &'static str {
     }
 }
 
-/// El porqué de un `"failed"`, o `null`. Va al lado de [`state_label`]: sin él,
-/// una comparación que reventó y una que no encontró diferencias son la misma
-/// lista vacía.
+/// The reason for a `"failed"`, or `null`. Goes alongside [`state_label`]:
+/// without it, a comparison that blew up and one that found no differences
+/// are the same empty list.
 fn state_error(state: Option<&norte_proto::TaskState>) -> Value {
     match state {
         Some(norte_proto::TaskState::Failed { error }) => json!(error.to_string()),
@@ -1140,7 +1153,7 @@ fn state_error(state: Option<&norte_proto::TaskState>) -> Value {
     }
 }
 
-/// `ClientInfo` del puente, uno solo para las DOS conexiones de la sesión.
+/// The bridge's `ClientInfo`, a single one for the session's TWO connections.
 fn client_info() -> methods::ClientInfo {
     methods::ClientInfo {
         name: "norte-mcp".into(),
@@ -1148,25 +1161,25 @@ fn client_info() -> methods::ClientInfo {
     }
 }
 
-/// Cancela la Task de una tool de stream al SOLTARSE, salvo que se haya
-/// desarmado.
+/// Cancels a stream tool's Task on DROP, unless it was disarmed.
 ///
-/// El puente ya cancelaba al truncar. Faltaba el otro motivo, que es el mismo
-/// hecho: `notifications/cancelled` (y la muerte del transporte) sueltan el
-/// future de la tool, y `TaskRef` no tiene `Drop` — soltar el `rx` local solo
-/// quita el route del cliente, mientras la bomba del daemon sigue mandando
-/// lotes por una conexión viva, cobra `true` y no ve jamás un `ReceiverGone`.
-/// El walk (y con `criteria: ["hash"]`, la lectura ENTERA de los dos árboles)
-/// seguía hasta el final para nadie. Cancelar porque dejamos de leer pero no
-/// porque el agente dejó de querer no es una regla coherente; y el hueco era
-/// explotable dentro de un scope legítimo: abrir comparaciones con hash y
-/// cancelarlas al momento devuelve el hueco de [`MAX_INFLIGHT_TOOLS`] al
-/// instante y deja el walk corriendo, hasta `MAX_LIVE_TASKS_AGENTS`.
+/// The bridge already cancelled on truncation. The other reason was
+/// missing, and it is the same fact: `notifications/cancelled` (and the
+/// transport dying) drop the tool's future, and `TaskRef` has no `Drop` —
+/// dropping the local `rx` only removes the client's route, while the
+/// daemon's pump keeps sending batches over a live connection, gets `true`
+/// back and never sees a `ReceiverGone`. The walk (and, with
+/// `criteria: ["hash"]`, the ENTIRE reading of both trees) kept going to the
+/// end for nobody. Cancelling because we stopped reading but not because the
+/// agent stopped wanting it is not a coherent rule; and the gap was
+/// exploitable within a legitimate scope: opening hash comparisons and
+/// cancelling them right away returns the [`MAX_INFLIGHT_TOOLS`] slot
+/// instantly and leaves the walk running, up to `MAX_LIVE_TASKS_AGENTS`.
 ///
-/// Mismo patrón que `CancelOnAbandon` de `norte_core::backend::remote`
-/// (drop-guard armado que se desarma en el camino normal).
+/// Same pattern as `norte_core::backend::remote`'s `CancelOnAbandon`
+/// (an armed drop-guard that disarms on the normal path).
 struct CancelOnAbandon {
-    /// `None` = desarmado (se vio el terminal: no hay nada que cancelar).
+    /// `None` = disarmed (the terminal was seen: nothing to cancel).
     canceller: Option<norte_core::backend::TaskCanceller>,
 }
 
@@ -1177,7 +1190,7 @@ impl CancelOnAbandon {
         }
     }
 
-    /// El camino normal: la Task ya es terminal.
+    /// The normal path: the Task is already terminal.
     fn disarm(&mut self) {
         self.canceller = None;
     }
@@ -1191,12 +1204,12 @@ impl Drop for CancelOnAbandon {
     }
 }
 
-/// Snapshot de una task como JSON de tool (estado + error por categoría).
+/// Snapshot of a task as tool JSON (state + error by category).
 fn task_json(t: &norte_proto::TaskProgress) -> Value {
     json!({
         "task_id": t.task_id.get(),
-        // Mismo vocabulario que las tools de stream: un modelo que lea
-        // `task_status` y `compare` no aprende dos nombres para un estado.
+        // Same vocabulary as the stream tools: a model reading
+        // `task_status` and `compare` does not learn two names for one state.
         "state": state_label(Some(&t.state)),
         "error": state_error(Some(&t.state)),
         "bytes_done": t.bytes_done,
@@ -1204,10 +1217,10 @@ fn task_json(t: &norte_proto::TaskProgress) -> Value {
     })
 }
 
-/// Argumento entero OPCIONAL con criterio único (sec MINOR-1 / enc H3):
-/// ausente = `None`, presente con tipo malo (float, string, negativo) =
-/// error de tool — jamás una degradación silenciosa que confunda a un
-/// agente en bucle (un `offset: 2.0` ignorado parecería aplicado).
+/// OPTIONAL integer argument with a single criterion (sec MINOR-1 / enc H3):
+/// absent = `None`, present with a bad type (float, string, negative) = a
+/// tool error — never a silent degradation that confuses a looping agent
+/// (an ignored `offset: 2.0` would look applied).
 fn opt_u64_arg(args: &Value, key: &str) -> Result<Option<u64>, String> {
     match args.get(key) {
         None | Some(Value::Null) => Ok(None),
@@ -1218,7 +1231,7 @@ fn opt_u64_arg(args: &Value, key: &str) -> Result<Option<u64>, String> {
     }
 }
 
-/// Extrae y parsea un argumento `VPath` obligatorio.
+/// Extracts and parses a required `VPath` argument.
 fn vpath_arg(args: &Value, key: &str) -> Result<VPath, String> {
     let s = args
         .get(key)
@@ -1227,7 +1240,7 @@ fn vpath_arg(args: &Value, key: &str) -> Result<VPath, String> {
     VPath::parse(s).map_err(|e| format!("invalid VPath {s:?}: {e}"))
 }
 
-/// Result MCP de `tools/call`: el payload va como texto JSON en `content`.
+/// `tools/call`'s MCP Result: the payload goes as JSON text inside `content`.
 fn tool_content(payload: &Value, is_error: bool) -> Value {
     let text = if let Value::String(s) = payload {
         s.clone()
@@ -1245,21 +1258,21 @@ fn rpc_error(id: &Value, code: i64, message: &str) -> String {
     json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}}).to_string()
 }
 
-/// Descripción del argumento `path` de toda tool que toma uno. Una sola vez:
-/// estaba copiada en tres sitios, y tres copias de una descripción de esquema
-/// divergen igual que dos copias de un handshake.
+/// Description of the `path` argument for every tool that takes one. A
+/// single time: it used to be copied in three places, and three copies of a
+/// schema description diverge just like two copies of a handshake.
 const PATH_DESC: &str =
     "VPath URL: file:///…, sftp://host/…, s3://bucket/…, or composed zip:file:///a.zip!/inside";
 
-/// Las diez tools del puente: las ocho v1 (ADR 0024, superficie = lo que el
-/// wire ya ofrece) más `compare` y `sync_plan` (spec 3 fase B), las primeras
-/// que consumen el brazo de streams en vez de responder directo.
+/// The bridge's ten tools: the eight v1 ones (ADR 0024, surface = what the
+/// wire already offers) plus `compare` and `sync_plan` (spec 3 phase B), the
+/// first ones to consume the streams arm instead of answering directly.
 ///
-/// **Una función por tool, y esta lista es solo el orden.** Antes eran ocho
-/// dentro de un `json!([…])` y dos aparte, sin nada que dijera cuál de las dos
-/// convenciones estrena la undécima; y ese `json!([…])` obligaba a un
-/// `unreachable!` para desempaquetar el `Value::Array`, o sea un camino de
-/// pánico en código que no es de test.
+/// **One function per tool, and this list is only the order.** They used to
+/// be eight inside a `json!([…])` plus two apart, with nothing saying which
+/// of the two conventions the eleventh one debuted; and that `json!([…])`
+/// forced an `unreachable!` to unpack the `Value::Array`, i.e. a panic path
+/// in non-test code.
 fn tool_defs() -> Value {
     Value::Array(vec![
         list_dir_tool_def(),
@@ -1319,8 +1332,8 @@ fn read_file_tool_def() -> Value {
     })
 }
 
-/// `copy` y `move`: MISMO esquema y misma gobernanza, así que una función con
-/// el nombre por parámetro en vez de dos copias que se separen.
+/// `copy` and `move`: the SAME schema and the same governance, so one
+/// function with the name as a parameter instead of two copies drifting apart.
 fn transfer_tool_def(name: &str) -> Value {
     let description = if name == "copy" {
         "Copy a file or directory (recursive). Runs as a cancellable task and this call waits for its outcome. Requires a granted scope; an `ask` policy suspends until a human approves."
@@ -1384,11 +1397,11 @@ fn request_scope_tool_def() -> Value {
     })
 }
 
-/// La definición de `compare` (spec 3 fase B, tarea 2).
+/// `compare`'s definition (spec 3 phase B, task 2).
 ///
-/// Los argumentos se llaman `left`/`right` y no `a`/`b` porque las filas
-/// contestan en `left`/`right`: un modelo no debería tener que deducir cuál de
-/// los dos era `a`.
+/// The arguments are called `left`/`right` and not `a`/`b` because the rows
+/// answer in `left`/`right`: a model should not have to deduce which of the
+/// two was `a`.
 fn compare_tool_def() -> Value {
     json!({
         "name": "compare",
@@ -1408,7 +1421,7 @@ fn compare_tool_def() -> Value {
     })
 }
 
-/// La definición de `sync_plan` (spec 3 fase B, tarea 3).
+/// `sync_plan`'s definition (spec 3 phase B, task 3).
 fn sync_plan_tool_def() -> Value {
     json!({
         "name": "sync_plan",
@@ -1428,58 +1441,61 @@ fn sync_plan_tool_def() -> Value {
     })
 }
 
-/// Tope de una línea del transporte (16 MiB, como `MAX_FRAME_BYTES` del
-/// wire de norte): una "línea" sin `\n` jamás acumula memoria sin límite
-/// (MINOR-2 del security-reviewer) — se descarta y se responde `-32700`.
+/// Cap on one transport line (16 MiB, like the norte wire's
+/// `MAX_FRAME_BYTES`): a "line" with no `\n` never accumulates memory
+/// unboundedly (security-reviewer MINOR-2) — it is dropped and `-32700` is
+/// answered.
 pub const MAX_LINE_BYTES: usize = 16 * 1024 * 1024;
 
-/// Tools/call CONCURRENTES en vuelo por transporte (#67): un cliente MCP
-/// razonable lleva 1-2; el tope corta a un cliente desbocado con un error
-/// de respuesta, jamás acumulando tasks sin límite.
+/// CONCURRENT tools/call in flight per transport (#67): a reasonable MCP
+/// client carries 1-2; the cap cuts off a runaway client with a response
+/// error, never accumulating tasks without bound.
 pub const MAX_INFLIGHT_TOOLS: usize = 8;
 
-/// Un tool en vuelo (#67 + #72): su token de cancelación local y la celda con
-/// el id JSON-RPC de su `fs.*` mutante (para reenviar `rpc.cancel` al daemon).
+/// An in-flight tool (#67 + #72): its local cancellation token and the cell
+/// holding its mutating `fs.*`'s JSON-RPC id (to forward `rpc.cancel` to the
+/// daemon).
 #[derive(Clone)]
 struct InflightTool {
     token: CancellationToken,
     daemon_id: DaemonIdCell,
 }
 
-/// Sirve MCP por stdio hasta EOF (el agente cierra el pipe al terminar). Un
-/// mensaje por línea (NDJSON, el transporte stdio de MCP; tope
-/// [`MAX_LINE_BYTES`]). stdout es EXCLUSIVO del transporte: cualquier
-/// diagnóstico va por tracing (el binario debe fijar el subscriber a
+/// Serves MCP over stdio until EOF (the agent closes the pipe when done).
+/// One message per line (NDJSON, MCP's stdio transport; cap
+/// [`MAX_LINE_BYTES`]). stdout is EXCLUSIVE to the transport: any
+/// diagnostics go through tracing (the binary must point the subscriber at
 /// stderr).
 ///
 /// # Errors
-/// I/O de stdio o la conexión/handshake inicial con el daemon.
+/// stdio I/O or the initial connection/handshake with the daemon.
 pub async fn serve_stdio(socket: &std::path::Path, session: &str) -> Result<(), BridgeError> {
     let bridge = Bridge::connect(socket, session).await?;
-    tracing::info!(session, "puente MCP conectado al daemon");
+    tracing::info!(session, "MCP bridge connected to the daemon");
     let stdin = tokio::io::BufReader::new(tokio::io::stdin());
     let stdout = tokio::io::stdout();
     serve_transport(bridge, stdin, stdout).await
 }
 
-/// Transporte del puente sobre CUALQUIER par lectura/escritura (#67): las
-/// `tools/call` se despachan a tasks CONCURRENTES (tope
-/// [`MAX_INFLIGHT_TOOLS`]) y las respuestas salen por un canal único hacia
-/// el writer — jamás dos líneas entrelazadas. Un tool suspendido (ask de
-/// policy, `wait_terminal` de una task larga) ya no retiene `ping` ni
-/// `notifications/cancelled`. OJO: concurrentes EN EL PUENTE — el daemon
-/// sirve su conexión en SERIE, así que dos tools que lo toquen se encolan
-/// allí; lo que queda siempre vivo es lo que no toca el daemon
-/// (ping/initialize/tools\/list/cancelled). `notifications/cancelled {requestId}` aborta
-/// el tool en vuelo SIN respuesta (spec MCP); la Task del daemon subyacente
-/// sigue viva y GOBERNADA (journal + undo) — solo se abandona la espera.
+/// The bridge's transport over ANY read/write pair (#67): `tools/call`s are
+/// dispatched to CONCURRENT tasks (cap [`MAX_INFLIGHT_TOOLS`]) and the
+/// responses go out through a single channel toward the writer — never two
+/// interleaved lines. A suspended tool (a policy ask, `wait_terminal` on a
+/// long task) no longer holds up `ping` or `notifications/cancelled`.
+/// WATCH OUT: concurrent IN THE BRIDGE — the daemon serves its connection in
+/// SERIES, so two tools that touch it queue up there; what always stays
+/// alive is what does not touch the daemon
+/// (ping/initialize/tools\/list/cancelled). `notifications/cancelled {requestId}`
+/// aborts the in-flight tool WITHOUT a response (MCP spec); the underlying
+/// daemon Task stays alive and GOVERNED (journal + undo) — only the wait is
+/// abandoned.
 ///
 /// # Errors
-/// I/O del transporte.
+/// Transport I/O.
 ///
 /// # Panics
-/// Nunca: los `expect` de los locks documentan la invariante de poisoning
-/// (nada paniquea con ellos tomados).
+/// Never: the locks' `expect`s document the poisoning invariant (nothing
+/// panics with them held).
 pub async fn serve_transport<R, W>(
     bridge: Bridge,
     mut reader: R,
@@ -1491,8 +1507,8 @@ where
 {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
     let bridge = Arc::new(bridge);
-    // Salida única: respuestas inline y de tasks compiten por el canal, el
-    // writer serializa líneas completas.
+    // Single output: inline and task responses compete for the channel, the
+    // writer serializes whole lines.
     let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<String>(64);
     let writer_task = tokio::spawn(async move {
         let mut writer = writer;
@@ -1505,25 +1521,25 @@ where
             }
         }
     });
-    // Tools en vuelo, por id serializado: `notifications/cancelled` cancela
-    // su token; el guard del task retira la entrada al terminar.
+    // In-flight tools, by serialized id: `notifications/cancelled` cancels
+    // its token; the task's guard removes the entry when it ends.
     let inflight: Arc<std::sync::Mutex<std::collections::HashMap<String, InflightTool>>> =
         Arc::default();
 
     let mut line: Vec<u8> = Vec::new();
-    // `true` = la línea actual ya excedió el tope: se drena hasta el `\n`
-    // sin acumular y se responde -32700 al cerrarse.
+    // `true` = the current line already exceeded the cap: it is drained up
+    // to the `\n` without accumulating and `-32700` is answered on close.
     let mut overflow = false;
     let result: Result<(), BridgeError> = loop {
-        // fill_buf/consume a mano: `read_until` acumularía sin tope. La
-        // lectura se racea contra la muerte del WRITER (stdout roto): sin
-        // salida no se despachan más tools con efectos (m3 del review).
+        // Manual fill_buf/consume: `read_until` would accumulate without a
+        // cap. The read races against the WRITER dying (broken stdout): with
+        // no output, no more tools with effects are dispatched (review m3).
         let (nl_at, used) = {
             let chunk = tokio::select! {
                 r = reader.fill_buf() => match r {
                     Ok(c) => c,
-                    // Un error de lectura TAMBIÉN pasa por el teardown común
-                    // (cancelar in-flight, drenar writer) — B3 del review.
+                    // A read error ALSO goes through the common teardown
+                    // (cancel in-flight, drain writer) — review B3.
                     Err(e) => break Err(e.into()),
                 },
                 () = out_tx.closed() => break Ok(()),
@@ -1547,7 +1563,7 @@ where
         if nl_at.is_none() {
             continue;
         }
-        // Línea completa.
+        // Complete line.
         if overflow {
             overflow = false;
             let _ = out_tx
@@ -1562,13 +1578,14 @@ where
         }
         dispatch_line(&bridge, &text, &out_tx, &inflight).await;
     };
-    tracing::info!("fin del transporte (EOF/errores): puente terminado");
-    // Teardown COMÚN a todos los caminos: los tools en vuelo se abandonan
-    // (el peer ya no leerá sus respuestas) y el writer se drena.
-    for (_, tool) in inflight.lock().expect("inflight lock sano").drain() {
+    tracing::info!("end of transport (EOF/errors): bridge terminated");
+    // Teardown COMMON to every path: in-flight tools are abandoned (the peer
+    // will no longer read their responses) and the writer is drained.
+    for (_, tool) in inflight.lock().expect("sound inflight lock").drain() {
         tool.token.cancel();
-        // #72: si el tool tenía una fs.* mutante en vuelo, reenvía su
-        // rpc.cancel — retira el Ask suspendido en vez de esperar al TTL.
+        // #72: if the tool had a mutating fs.* in flight, forward its
+        // rpc.cancel — withdraws the suspended Ask instead of waiting out
+        // the TTL.
         if let Some(&daemon_id) = tool.daemon_id.get() {
             bridge.cancel_daemon_request(daemon_id);
         }
@@ -1578,13 +1595,13 @@ where
     result
 }
 
-/// Clave de correlación MCP: el `id` JSON serializado (número o string).
+/// MCP correlation key: the serialized JSON `id` (number or string).
 fn id_key(id: &Value) -> String {
     id.to_string()
 }
 
-/// Retira la entrada de `inflight` a CUALQUIER salida de la task del tool
-/// (respuesta, cancel o panic) — mismo patrón RAII que `PendingGuard`.
+/// Removes the `inflight` entry on ANY exit from the tool's task (response,
+/// cancel or panic) — same RAII pattern as `PendingGuard`.
 struct InflightGuard {
     key: String,
     map: Arc<std::sync::Mutex<std::collections::HashMap<String, InflightTool>>>,
@@ -1594,13 +1611,13 @@ impl Drop for InflightGuard {
     fn drop(&mut self) {
         self.map
             .lock()
-            .expect("inflight lock sano")
+            .expect("sound inflight lock")
             .remove(&self.key);
     }
 }
 
-/// Clasifica y despacha UNA línea (#67): lo barato responde inline; un
-/// `tools/call` se va a su task con token de cancelación.
+/// Classifies and dispatches ONE line (#67): cheap ones answer inline; a
+/// `tools/call` goes to its own task with a cancellation token.
 async fn dispatch_line(
     bridge: &Arc<Bridge>,
     text: &str,
@@ -1622,20 +1639,21 @@ async fn dispatch_line(
     };
     let method = msg.get("method").and_then(Value::as_str).unwrap_or("");
     let Some(id) = msg.get("id").cloned() else {
-        // Notificación: `cancelled` aborta el tool en vuelo; el resto
-        // (initialized…) se ignora sin respuesta (JSON-RPC).
+        // Notification: `cancelled` aborts the in-flight tool; the rest
+        // (initialized…) is ignored without a response (JSON-RPC).
         if method == "notifications/cancelled"
             && let Some(req_id) = msg.pointer("/params/requestId")
             && let Some(tool) = inflight
                 .lock()
-                .expect("inflight lock sano")
+                .expect("sound inflight lock")
                 .remove(&id_key(req_id))
         {
             tool.token.cancel();
-            // #72: si el tool había lanzado una fs.* mutante contra el daemon,
-            // reenvía un rpc.cancel de ESA request — retira su Ask suspendido en
-            // vez de dejarlo zombi hasta el TTL. Un id aún sin fijar (tool que no
-            // llegó a llamar al daemon) = nada que cancelar.
+            // #72: if the tool had launched a mutating fs.* against the
+            // daemon, forward an rpc.cancel for THAT request — withdraws its
+            // suspended Ask instead of leaving it zombie until the TTL. An
+            // id not yet set (a tool that never got to call the daemon) =
+            // nothing to cancel.
             if let Some(&daemon_id) = tool.daemon_id.get() {
                 bridge.cancel_daemon_request(daemon_id);
             }
@@ -1645,17 +1663,17 @@ async fn dispatch_line(
     if method == "tools/call" {
         let params = msg.get("params").cloned().unwrap_or(Value::Null);
         let token = CancellationToken::new();
-        // Celda del id JSON-RPC de la fs.* mutante del tool (#72): se comparte
-        // entre la task del tool (que lo fija) y el handler de cancelled (que
-        // lo lee para reenviar rpc.cancel).
+        // Cell for the tool's mutating fs.*'s JSON-RPC id (#72): shared
+        // between the tool's task (which sets it) and the cancelled handler
+        // (which reads it to forward rpc.cancel).
         let daemon_id: DaemonIdCell = Arc::default();
-        // El lock vive en su propio scope SIN awaits (Send del future). La
-        // admisión es por ENTRY VACANTE: un id repetido en vuelo NO
-        // sobrescribe (sobrescribir dejaría el token anterior huérfano y el
-        // tope seria bypasseable reutilizando el mismo id — A1 del
-        // security-reviewer).
+        // The lock lives in its own scope with NO awaits (the future's
+        // Send). Admission is by VACANT ENTRY: a repeated in-flight id does
+        // NOT overwrite (overwriting would orphan the previous token and the
+        // cap would be bypassable by reusing the same id — security-reviewer
+        // A1).
         let admission = {
-            let mut map = inflight.lock().expect("inflight lock sano");
+            let mut map = inflight.lock().expect("sound inflight lock");
             if map.len() >= MAX_INFLIGHT_TOOLS {
                 Err("too many concurrent tool calls")
             } else {
@@ -1684,24 +1702,24 @@ async fn dispatch_line(
             map: Arc::clone(inflight),
         };
         tokio::spawn(async move {
-            // El guard retira la entrada a CUALQUIER salida — incluido un
-            // panic de la tool (sin él, 8 panics agotarían el transporte
-            // para siempre; M1 del rust-reviewer).
+            // The guard removes the entry on ANY exit — including a panic
+            // from the tool (without it, 8 panics would exhaust the
+            // transport forever; rust-reviewer M1).
             let _guard = guard;
             tokio::select! {
                 biased;
                 out = bridge.tools_call(&id, &params, &daemon_id) => {
                     let _ = out_tx.send(out).await;
                 }
-                // Cancelado: SIN respuesta (spec MCP) — la espera se
-                // abandona; la Task del daemon sigue, gobernada.
+                // Cancelled: WITHOUT a response (MCP spec) — the wait is
+                // abandoned; the daemon's Task keeps going, governed.
                 () = token.cancelled() => {}
             }
         });
         return;
     }
-    // Lo barato (initialize/ping/tools/list/desconocido) responde inline:
-    // jamás bloquea (no toca el daemon).
+    // The cheap ones (initialize/ping/tools/list/unknown) answer inline:
+    // never blocks (does not touch the daemon).
     if let Some(out) = bridge.handle_line(text).await {
         let _ = out_tx.send(out).await;
     }
@@ -1711,31 +1729,32 @@ async fn dispatch_line(
 mod tests {
     use super::*;
 
-    /// BLOCKER: `criteria: []` no es "el default", es apagar los TRES rungs.
-    /// En `compare` deja `same/presence/unknown` en toda pareja presente en los
-    /// dos lados —dos árboles "idénticos" sin comparar nada— y en `sync_plan`,
-    /// con el `on_unknown: copy` que es su default, un `Overwrite` por fichero.
+    /// BLOCKER: `criteria: []` is not "the default", it is turning off all
+    /// THREE rungs. In `compare` it leaves `same/presence/unknown` on every
+    /// pair present on both sides —two "identical" trees without comparing
+    /// anything— and in `sync_plan`, with the `on_unknown: copy` that is its
+    /// default, an `Overwrite` per file.
     #[test]
-    fn criteria_vacia_es_error_y_no_el_default_del_wire() {
-        let err = compare_criteria_arg(&json!({"criteria": []})).expect_err("lista vacía");
+    fn empty_criteria_is_error_not_wire_default() {
+        let err = compare_criteria_arg(&json!({"criteria": []})).expect_err("empty list");
         assert!(err.contains("criteria"), "{err}");
-        // Ausente sí es el default del wire (tamaño + fecha, sin hash).
-        let d = compare_criteria_arg(&json!({})).expect("ausente");
+        // Absent IS the wire default (size + date, no hash).
+        let d = compare_criteria_arg(&json!({})).expect("absent");
         assert_eq!(d, methods::CompareCriteria::default());
         assert!(d.size && d.mtime && !d.hash, "{d:?}");
-        // Y `null` también: es "no lo dijo", no "lo dijo vacío".
+        // And `null` too: it is "did not say it", not "said it empty".
         assert_eq!(
             compare_criteria_arg(&json!({"criteria": Value::Null})).expect("null"),
             methods::CompareCriteria::default()
         );
-        // Presente = exactamente lo pedido, jamás sumado al default.
+        // Present = exactly what was asked for, never added to the default.
         let solo_hash = compare_criteria_arg(&json!({"criteria": ["hash"]})).expect("hash");
         assert!(!solo_hash.size && !solo_hash.mtime && solo_hash.hash);
     }
 
-    /// Los dos esquemas lo dicen además en el contrato que el modelo lee.
+    /// The two schemas also say so in the contract the model reads.
     #[test]
-    fn los_esquemas_prohiben_la_lista_vacia_de_criteria() {
+    fn schemas_forbid_an_empty_criteria_list() {
         for def in [compare_tool_def(), sync_plan_tool_def()] {
             assert_eq!(
                 def["inputSchema"]["properties"]["criteria"]["minItems"],
@@ -1745,25 +1764,26 @@ mod tests {
         }
     }
 
-    /// BLOCKER: el estado terminal NO demuestra que estén todas las filas. El
-    /// feed de `compare.rows` se enruta con `OnFull::DropBatch`, así que un
-    /// lote perdido deja la Task en `Completed` y el canal cerrado limpio.
+    /// BLOCKER: the terminal state does NOT prove all the rows are there.
+    /// The `compare.rows` feed is routed with `OnFull::DropBatch`, so a
+    /// dropped batch leaves the Task `Completed` and the channel cleanly
+    /// closed.
     #[test]
-    fn completo_exige_que_las_filas_cuadren_con_las_emitidas() {
+    fn complete_requires_rows_to_match_the_emitted_ones() {
         let completed = norte_proto::TaskState::Completed;
         assert!(stream_is_complete(false, Some(&completed), 7, 7));
         assert!(
             !stream_is_complete(false, Some(&completed), 6, 7),
-            "una fila perdida en vuelo con la task en Completed NO es completo"
+            "a row lost in transit with the task Completed is NOT complete"
         );
         assert!(
             !stream_is_complete(true, Some(&completed), 7, 7),
-            "truncado"
+            "truncated"
         );
-        assert!(!stream_is_complete(false, None, 7, 7), "sin terminal visto");
+        assert!(!stream_is_complete(false, None, 7, 7), "no terminal seen");
         assert!(
             !stream_is_complete(false, Some(&norte_proto::TaskState::Cancelled), 7, 7),
-            "cancelada"
+            "cancelled"
         );
         assert!(
             !stream_is_complete(
@@ -1774,15 +1794,14 @@ mod tests {
                 7,
                 7
             ),
-            "fallida"
+            "failed"
         );
     }
 
-    /// El total de pasos de un plan es la suma de las CLASES; `irreversible`
-    /// es transversal y `unmeasured_steps` un subconjunto, así que ninguno
-    /// suma.
+    /// A plan's step total is the sum of the CLASSES; `irreversible` is
+    /// orthogonal and `unmeasured_steps` a subset, so neither is summed.
     #[test]
-    fn el_total_de_pasos_suma_las_clases_y_solo_las_clases() {
+    fn the_total_steps_add_up_the_classes_and_only_the_classes() {
         let counts = methods::SyncCounts {
             create_dir: 1,
             copy: 2,
@@ -1798,10 +1817,11 @@ mod tests {
         assert_eq!(plan_steps_total(&methods::SyncCounts::default()), 0);
     }
 
-    /// El deadline y el estado terminal se cuentan aparte en el payload: `None`
-    /// es "seguía viva cuando dejamos de mirar", no "acabó".
+    /// The deadline and the terminal state are counted separately in the
+    /// payload: `None` is "was still alive when we stopped watching", not
+    /// "ended".
     #[test]
-    fn el_estado_viaja_con_nombre_y_el_fallo_con_su_causa() {
+    fn the_status_travels_with_a_name_and_the_failure_with_its_cause() {
         assert_eq!(state_label(None), "running");
         assert_eq!(
             state_label(Some(&norte_proto::TaskState::Completed)),
@@ -1815,97 +1835,97 @@ mod tests {
             error: norte_proto::Error::PermissionDenied,
         };
         assert_eq!(state_label(Some(&failed)), "failed");
-        assert!(state_error(Some(&failed)).is_string(), "el porqué viaja");
+        assert!(state_error(Some(&failed)).is_string(), "the reason travels");
         assert!(state_error(Some(&norte_proto::TaskState::Completed)).is_null());
     }
 
-    /// `limit: 0` no es "cero filas a propósito": sin el rechazo saldría
-    /// `truncated: true` con la lista vacía, indistinguible de un árbol de
-    /// verdad truncado.
+    /// `limit: 0` is not "zero rows on purpose": without the rejection it
+    /// would come out `truncated: true` with an empty list, indistinguishable
+    /// from a genuinely truncated tree.
     #[test]
-    fn el_limit_cero_es_error_y_el_ausente_es_el_default() {
+    fn zero_limit_is_error_and_absent_is_default() {
         assert!(stream_limit_arg(&json!({"limit": 0}), 500, 5000).is_err());
         assert_eq!(
-            stream_limit_arg(&json!({}), 500, 5000).expect("ausente"),
+            stream_limit_arg(&json!({}), 500, 5000).expect("absent"),
             500
         );
         assert_eq!(
-            stream_limit_arg(&json!({"limit": 9_000_000}), 500, 5000).expect("techo"),
+            stream_limit_arg(&json!({"limit": 9_000_000}), 500, 5000).expect("ceiling"),
             5000,
-            "el techo duro manda sobre lo que pida el caller"
+            "the hard ceiling overrides whatever the caller asks for"
         );
     }
 
-    /// El default de tolerancia se LEE del wire, no se copia.
+    /// The default tolerance is READ from the wire, not copied.
     #[test]
-    fn la_tolerancia_por_defecto_es_la_del_wire() {
+    fn the_default_tolerance_is_the_wires() {
         assert_eq!(
             default_mtime_tolerance_ms(),
             methods::SyncCompareOptions::default().mtime_tolerance_ms
         );
     }
 
-    /// El guard cancela al soltarse, y NO cancela si se desarmó (camino
-    /// normal: se vio el terminal).
+    /// The guard cancels on drop, and does NOT cancel if it was disarmed
+    /// (the normal path: the terminal was seen).
     #[test]
-    fn el_guard_cancela_al_abandonar_y_calla_si_se_desarma() {
+    fn the_guard_cancels_on_drop_and_stays_quiet_if_disarmed() {
         let token = CancellationToken::new();
         drop(CancelOnAbandon::new(
             norte_core::backend::TaskCanceller::Embedded(token.clone()),
         ));
-        assert!(token.is_cancelled(), "soltar el future cancela el walk");
+        assert!(token.is_cancelled(), "dropping the future cancels the walk");
 
         let token = CancellationToken::new();
         let mut guard =
             CancelOnAbandon::new(norte_core::backend::TaskCanceller::Embedded(token.clone()));
         guard.disarm();
         drop(guard);
-        assert!(!token.is_cancelled(), "el camino normal no cancela nada");
+        assert!(!token.is_cancelled(), "the normal path cancels nothing");
     }
 
-    /// #182: el 17.º plan de una conexión llega con su TAXONOMÍA, y el texto
-    /// que se le da al agente le dice qué hacer — nunca «internal error», que
-    /// es justo la cadena que le hace reintentar, y reintentar es lo que llena
-    /// este tope.
+    /// #182: a connection's 17th plan arrives with its TAXONOMY, and the text
+    /// given to the agent tells it what to do — never "internal error",
+    /// which is exactly the string that makes it retry, and retrying is what
+    /// fills this cap.
     #[test]
-    fn el_error_de_plan_nombra_el_tope_en_vez_de_decir_internal() {
-        let texto = map_plan_err(norte_proto::Error::LimitExceeded {
+    fn the_plan_error_names_the_cap_instead_of_saying_internal() {
+        let text = map_plan_err(norte_proto::Error::LimitExceeded {
             limit: norte_proto::Error::LIMIT_RETAINED_SYNC_PLANS.to_owned(),
         });
-        assert!(texto.contains("retained plans"), "{texto}");
+        assert!(text.contains("retained plans"), "{text}");
         assert!(
-            texto.contains("Do NOT retry"),
-            "el consejo que importa: {texto}"
+            text.contains("Do NOT retry"),
+            "the advice that matters: {text}"
         );
         assert!(
-            !texto.contains("internal error"),
-            "ni siquiera nombrándolo: es LA cadena que hace reintentar: {texto}"
+            !text.contains("internal error"),
+            "not even naming it: it is THE string that causes a retry: {text}"
         );
-        // Y OTRO límite (un contenedor enorme) no se disfraza de tope de
-        // planes: cada token dice lo suyo.
-        let otro = map_plan_err(norte_proto::Error::LimitExceeded {
+        // And ANOTHER limit (a huge container) does not disguise itself as
+        // the plan cap: each token says its own thing.
+        let other = map_plan_err(norte_proto::Error::LimitExceeded {
             limit: norte_proto::Error::LIMIT_ENTRIES.to_owned(),
         });
-        assert!(!otro.contains("retained plans"), "{otro}");
-        // Lo demás sigue saliendo con el texto accionable de siempre.
-        let denegado = map_plan_err(norte_proto::Error::PolicyDenied {
+        assert!(!other.contains("retained plans"), "{other}");
+        // Everything else still comes out with the usual actionable text.
+        let denied = map_plan_err(norte_proto::Error::PolicyDenied {
             rule: "r".to_owned(),
         });
-        assert!(denegado.contains("request_scope"), "{denegado}");
+        assert!(denied.contains("request_scope"), "{denied}");
     }
 
-    /// Las diez tools, cada una con su función, y ninguna se llama `sync_apply`.
+    /// The ten tools, each with its own function, and none named `sync_apply`.
     #[test]
-    fn el_catalogo_de_tools_no_tiene_dos_convenciones() {
+    fn the_tools_catalog_does_not_have_two_conventions() {
         let Value::Array(defs) = tool_defs() else {
-            panic!("tool_defs devuelve un array")
+            panic!("tool_defs returns an array")
         };
-        let nombres: Vec<&str> = defs
+        let names: Vec<&str> = defs
             .iter()
-            .map(|d| d["name"].as_str().expect("nombre"))
+            .map(|d| d["name"].as_str().expect("name"))
             .collect();
         assert_eq!(
-            nombres,
+            names,
             [
                 "list_dir",
                 "stat",
@@ -1919,7 +1939,7 @@ mod tests {
                 "sync_plan"
             ]
         );
-        // `path_desc` estaba copiado tres veces; ahora es una constante.
+        // `path_desc` used to be copied three times; now it is a constant.
         for def in &defs {
             for prop in ["path", "from", "left", "right"] {
                 let d = &def["inputSchema"]["properties"][prop]["description"];
@@ -1930,9 +1950,9 @@ mod tests {
         }
     }
 
-    /// `compare` pregunta por los mismos nombres con los que contesta.
+    /// `compare` asks with the same names it answers with.
     #[test]
-    fn compare_pregunta_en_left_y_right_como_contesta() {
+    fn compare_asks_with_the_same_names_it_answers_with() {
         let def = compare_tool_def();
         assert_eq!(def["inputSchema"]["required"], json!(["left", "right"]));
     }

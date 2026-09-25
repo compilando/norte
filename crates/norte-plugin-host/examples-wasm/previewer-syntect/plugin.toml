@@ -1,10 +1,10 @@
-# El manifiesto REAL de este plugin, y el que sus tests leen.
+# This plugin's REAL manifest, and the one its tests read.
 #
-# Vivía como literal dentro de `plugins_preview_syntect_e2e.rs`, lo que dejaba
-# el plugin sin manifiesto propio: no había nada que instalar, solo un fixture
-# que describía lo que un manifiesto habría dicho. Ahora el fichero es la
-# fuente y el test lo lee — probar una copia de lo que se distribuye no prueba
-# lo que se distribuye.
+# It used to live as a literal inside `plugins_preview_syntect_e2e.rs`, which
+# left the plugin without its own manifest: there was nothing to install, only
+# a fixture describing what a manifest would have said. Now the file is the
+# source and the test reads it — testing a copy of what gets distributed does
+# not test what gets distributed.
 
 [plugin]
 id = "org.norte.syntect"
@@ -12,14 +12,14 @@ name = "Syntect Highlighter"
 publisher = "norte"
 version = "0.1.0"
 category = "previewer"
-description = "Resaltado de sintaxis en el visor, con los conjuntos por defecto de syntect."
+description = "Syntax highlighting in the viewer, with syntect's default sets."
 
 [contributions]
 previewer = [{ mimetypes = ["text/*", "application/json"] }]
 
-# `fs-read = "scoped"`: el guest NO abre ficheros. Lee los bytes que el host ya
-# leyó y le entrega bajo token (regla 9). La capability existe porque el host
-# comprueba que esté declarada antes de servir ese token, no porque el plugin
-# tenga acceso a nada.
+# `fs-read = "scoped"`: the guest does NOT open files. It reads the bytes the
+# host already read and hands over under a token (rule 9). The capability
+# exists because the host checks that it is declared before serving that
+# token, not because the plugin has access to anything.
 [capabilities]
 fs-read = "scoped"

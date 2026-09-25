@@ -1,177 +1,190 @@
-//! El estado del mapa de disco (fase 4), compartido por las dos superficies.
+//! The disk map's state (phase 4), shared by both surfaces.
 //!
-//! Aquí no se pinta nada: el reparto en rectángulos es [`crate::treemap`], y
-//! quién lo dibuja es cada frontend. Esto es lo que los DOS necesitan saber —
-//! qué directorio se está enseñando, qué se ha medido, cuál es el hijo elegido
-//! y si la medida sigue en marcha— y vive junto por lo de siempre: una
-//! decisión escrita dos veces diverge en silencio (ADR 0077).
+//! Nothing gets painted here: the layout into rectangles is
+//! [`crate::treemap`], and who draws it is each frontend's job. This is what
+//! BOTH need to know — which directory is being shown, what has been
+//! measured, which child is chosen, and whether the measurement is still
+//! running— and it lives together for the usual reason: a decision written
+//! twice diverges silently (ADR 0077).
 //!
-//! # El hijo elegido se recuerda por NOMBRE
-//! Un mapa se vuelve a medir: al refrescar, al volver de un cambio externo, al
-//! entrar y salir. Si el elegido fuera un índice, una medida que ya no trae al
-//! hijo de arriba movería la selección a otro fichero sin que nadie tocara una
-//! tecla — y en un mapa la tecla siguiente ENTRA en lo elegido. El nombre lo
-//! identifica; la posición solo lo encuentra.
+//! # The chosen child is remembered by NAME
+//! A map gets measured again: on refresh, on returning from an external
+//! change, on entering and leaving. If the chosen one were an index, a
+//! measurement that no longer brings back the child above it would move the
+//! selection to a different file without anyone pressing a key — and in a map
+//! the next key ENTERS whatever is chosen. The name identifies it; the
+//! position only finds it.
+//!
+//! `pub` identifiers in this module (`State`/`Idle`/`Measuring`/`Done`/
+//! `Failure`, and the `DiskMap` methods `report`/`chosen`/`state`/
+//! `aim`/`measuring`/`failure`/`land`/`mover`/`choose`) are Spanish and
+//! reported for a cross-file rename in phase 2: they are called from
+//! `norte-tui` (`src/jobs/diskmap.rs`, `src/ui/panels.rs`,
+//! `src/screens/side_nav.rs`) and `norte-ui-host`
+//! (`src/controller/diskmap.rs`), both outside this task's file set.
 
 use norte_proto::methods::{DirUsageChild, FsDirUsageReportResult};
 use norte_proto::{Segment, TaskId, VPath};
 
-/// En qué punto está la medida de este mapa.
+/// What point this map's measurement is at.
 ///
-/// Cuatro estados y no un `Option`, porque «no se ha pedido», «se está
-/// midiendo» y «se pidió y falló» se enseñan distinto: un panel que
-/// colapsara los tres diría «vacío» sobre un directorio que nadie ha mirado y
-/// sobre uno al que se denegó el permiso.
+/// Four states and not an `Option`, because "not requested", "measuring", and
+/// "requested and failed" have to be shown differently: a panel that
+/// collapsed the three would say "empty" both about a directory nobody has
+/// looked at and about one whose permission was denied.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub enum Estado {
-    /// Nadie ha pedido nada todavía.
+pub enum State {
+    /// Nobody has requested anything yet.
     #[default]
-    Quieto,
-    /// Hay una medida en marcha; se puede cancelar.
-    Midiendo(TaskId),
-    /// Terminó y lo medido está en el informe.
-    Hecho,
-    /// Falló, y esto es el motivo ya traducido para enseñarlo.
-    Fallo(String),
+    Idle,
+    /// A measurement is running; it can be cancelled.
+    Measuring(TaskId),
+    /// It finished and what was measured is in the report.
+    Done,
+    /// It failed, and this is the reason, already translated, to show it.
+    Failure(String),
 }
 
-/// Lo que el mapa de disco de un hueco sabe ahora mismo.
+/// What a slot's disk map knows right now.
 #[derive(Debug, Default)]
 pub struct DiskMap {
-    /// Qué directorio se está describiendo. `None` = ninguno todavía.
+    /// Which directory is being described. `None` = none yet.
     dir: Option<VPath>,
-    /// Lo medido. Vacío mientras no aterrice nada.
-    informe: FsDirUsageReportResult,
-    /// El nombre del hijo elegido, si hay alguno.
-    elegido: Option<Segment>,
-    /// En qué punto está la medida.
-    estado: Estado,
+    /// What has been measured. Empty while nothing has landed.
+    report: FsDirUsageReportResult,
+    /// The name of the chosen child, if there is one.
+    chosen: Option<Segment>,
+    /// What point the measurement is at.
+    state: State,
 }
 
 impl DiskMap {
-    /// Un mapa vacío.
+    /// An empty map.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// El directorio que se está describiendo.
+    /// The directory being described.
     #[must_use]
     pub fn dir(&self) -> Option<&VPath> {
         self.dir.as_ref()
     }
 
-    /// Lo medido hasta ahora.
+    /// What has been measured so far.
     #[must_use]
-    pub fn informe(&self) -> &FsDirUsageReportResult {
-        &self.informe
+    pub fn report(&self) -> &FsDirUsageReportResult {
+        &self.report
     }
 
-    /// En qué punto está la medida.
+    /// What point the measurement is at.
     #[must_use]
-    pub fn estado(&self) -> &Estado {
-        &self.estado
+    pub fn state(&self) -> &State {
+        &self.state
     }
 
-    /// Apunta a otro directorio: se olvida lo medido y la elección.
+    /// Points at another directory: forgets what was measured and the
+    /// selection.
     ///
-    /// Lo medido es DE un directorio, así que conservarlo al cambiar pintaría
-    /// el mapa del anterior bajo el título del nuevo — durante el rato que
-    /// tarde la medida, que es justo el rato en que alguien lo mira.
-    pub fn apuntar(&mut self, dir: VPath) {
+    /// What was measured is OF a directory, so keeping it on change would
+    /// paint the previous one's map under the new one's title — for however
+    /// long the measurement takes, which is exactly the moment someone is
+    /// looking at it.
+    pub fn aim(&mut self, dir: VPath) {
         self.dir = Some(dir);
-        self.informe = FsDirUsageReportResult::default();
-        self.elegido = None;
-        self.estado = Estado::Quieto;
+        self.report = FsDirUsageReportResult::default();
+        self.chosen = None;
+        self.state = State::Idle;
     }
 
-    /// Dice que hay una medida en marcha.
-    pub fn midiendo(&mut self, task: TaskId) {
-        self.estado = Estado::Midiendo(task);
+    /// Says that a measurement is running.
+    pub fn measuring(&mut self, task: TaskId) {
+        self.state = State::Measuring(task);
     }
 
-    /// La task de la medida en marcha, si la hay (para cancelarla).
+    /// The running measurement's task, if there is one (to cancel it).
     #[must_use]
     pub fn task(&self) -> Option<TaskId> {
-        match self.estado {
-            Estado::Midiendo(id) => Some(id),
+        match self.state {
+            State::Measuring(id) => Some(id),
             _ => None,
         }
     }
 
-    /// Dice por qué no se pudo medir.
-    pub fn fallo(&mut self, motivo: String) {
-        self.estado = Estado::Fallo(motivo);
+    /// Says why the measurement could not be taken.
+    pub fn failure(&mut self, motivo: String) {
+        self.state = State::Failure(motivo);
     }
 
-    /// Aterriza un informe —parcial o definitivo— sobre este mapa.
+    /// Lands a report —partial or final— onto this map.
     ///
-    /// **La elección se conserva por nombre**, y se suelta solo si ese hijo ya
-    /// no está. Un informe parcial llega varias veces mientras la medida corre,
-    /// y con la elección atada a la posición el cursor iría saltando de
-    /// fichero en fichero según fueran llegando los hijos.
+    /// **The selection is kept by name**, and dropped only if that child is
+    /// no longer there. A partial report arrives several times while the
+    /// measurement runs, and with the selection tied to a position the
+    /// cursor would go jumping from file to file as the children kept
+    /// arriving.
     ///
-    /// `listo` distingue el último informe de los de en medio: es lo que
-    /// decide si esto se puede guardar en la caché.
-    pub fn aterrizar(&mut self, informe: FsDirUsageReportResult, listo: bool) {
-        let sigue = self
-            .elegido
+    /// `ready` distinguishes the last report from the ones in between: it is
+    /// what decides whether this can be saved to the cache.
+    pub fn land(&mut self, report: FsDirUsageReportResult, ready: bool) {
+        let follows = self
+            .chosen
             .as_ref()
-            .is_some_and(|n| informe.children.iter().any(|c| c.name == *n));
-        if !sigue {
-            self.elegido = None;
+            .is_some_and(|n| report.children.iter().any(|c| c.name == *n));
+        if !follows {
+            self.chosen = None;
         }
-        self.informe = informe;
-        if listo {
-            self.estado = Estado::Hecho;
+        self.report = report;
+        if ready {
+            self.state = State::Done;
         }
     }
 
-    /// El hijo elegido, si lo hay y sigue estando.
+    /// The chosen child, if there is one and it is still there.
     #[must_use]
-    pub fn elegido(&self) -> Option<&DirUsageChild> {
-        let n = self.elegido.as_ref()?;
-        self.informe.children.iter().find(|c| c.name == *n)
+    pub fn chosen(&self) -> Option<&DirUsageChild> {
+        let n = self.chosen.as_ref()?;
+        self.report.children.iter().find(|c| c.name == *n)
     }
 
-    /// Mueve la elección `delta` posiciones sobre los hijos NOMBRADOS.
+    /// Moves the selection `delta` positions over the NAMED children.
     ///
-    /// Sin nada elegido, el primer movimiento elige el primero —que es el
-    /// mayor, porque el informe llega ordenado por listado pero el mapa se
-    /// recorre como se pinta— en vez de no hacer nada: una tecla que no hace
-    /// nada la primera vez parece rota.
+    /// With nothing chosen, the first move chooses the first one —which is
+    /// the largest, because the report arrives ordered by listing but the
+    /// map is walked the way it is painted— instead of doing nothing: a key
+    /// that does nothing the first time seems broken.
     ///
-    /// Se ACOTA en los extremos y no da la vuelta: en una lista de rectángulos
-    /// el borde es una posición legítima donde quedarse, y envolver haría que
-    /// bajar desde el último saltara al otro lado de la pantalla.
+    /// It is CLAMPED at both ends and does not wrap: in a list of rectangles
+    /// the edge is a legitimate position to stay at, and wrapping would make
+    /// moving down from the last one jump to the other side of the screen.
     pub fn mover(&mut self, delta: isize) {
-        if self.informe.children.is_empty() {
-            self.elegido = None;
+        if self.report.children.is_empty() {
+            self.chosen = None;
             return;
         }
         let actual = self
-            .elegido
+            .chosen
             .as_ref()
-            .and_then(|n| self.informe.children.iter().position(|c| c.name == *n));
-        let nuevo = match actual {
+            .and_then(|n| self.report.children.iter().position(|c| c.name == *n));
+        let new = match actual {
             None => 0,
             Some(i) => {
-                let max = self.informe.children.len().saturating_sub(1);
+                let max = self.report.children.len().saturating_sub(1);
                 let cand = isize::try_from(i).unwrap_or(0).saturating_add(delta);
                 usize::try_from(cand).unwrap_or(0).min(max)
             }
         };
-        self.elegido = self.informe.children.get(nuevo).map(|c| c.name.clone());
+        self.chosen = self.report.children.get(new).map(|c| c.name.clone());
     }
 
-    /// Elige un hijo por su nombre —lo que hace un clic en su rectángulo—, y
-    /// dice si existía.
-    pub fn elegir(&mut self, name: &Segment) -> bool {
-        let existe = self.informe.children.iter().any(|c| c.name == *name);
-        if existe {
-            self.elegido = Some(name.clone());
+    /// Chooses a child by its name —what a click on its rectangle does— and
+    /// says whether it existed.
+    pub fn choose(&mut self, name: &Segment) -> bool {
+        let exists = self.report.children.iter().any(|c| c.name == *name);
+        if exists {
+            self.chosen = Some(name.clone());
         }
-        existe
+        exists
     }
 }
 
@@ -181,10 +194,10 @@ mod tests {
     use norte_proto::EntryKind;
 
     fn seg(s: &str) -> Segment {
-        Segment::new(s.as_bytes().to_vec()).expect("segmento")
+        Segment::new(s.as_bytes().to_vec()).expect("segment")
     }
 
-    fn hijo(name: &str, bytes: u64) -> DirUsageChild {
+    fn child(name: &str, bytes: u64) -> DirUsageChild {
         DirUsageChild {
             name: seg(name),
             kind: EntryKind::Dir,
@@ -194,94 +207,99 @@ mod tests {
         }
     }
 
-    fn informe(nombres: &[&str]) -> FsDirUsageReportResult {
+    fn report(names: &[&str]) -> FsDirUsageReportResult {
         FsDirUsageReportResult {
-            children: nombres.iter().map(|n| hijo(n, 10)).collect(),
+            children: names.iter().map(|n| child(n, 10)).collect(),
             listed: true,
             ..FsDirUsageReportResult::default()
         }
     }
 
-    /// Lo elegido se recuerda por NOMBRE: un informe que ya no trae al vecino
-    /// de arriba no mueve la selección a otro fichero.
+    /// The chosen one is remembered by NAME: a report that no longer brings
+    /// back the neighbour above it does not move the selection to a
+    /// different file.
     ///
-    /// Es la diferencia que importa, porque la tecla siguiente ENTRA en lo
-    /// elegido: con un índice, medir otra vez podía dejar el cursor sobre un
-    /// directorio distinto del que el lector estaba mirando.
+    /// It is the difference that matters, because the next key ENTERS the
+    /// chosen one: with an index, measuring again could leave the cursor
+    /// over a directory different from the one the reader was looking at.
     #[test]
-    fn lo_elegido_se_recuerda_por_nombre_y_no_por_posicion() {
+    fn the_chosen_one_is_remembered_by_name_and_not_by_position() {
         let mut m = DiskMap::new();
-        m.aterrizar(informe(&["a", "b", "c"]), true);
-        assert!(m.elegir(&seg("c")));
-        // Vuelve a medir y ya no está `a`: `c` sigue siendo lo elegido aunque
-        // ahora esté una posición más arriba.
-        m.aterrizar(informe(&["b", "c"]), true);
-        assert_eq!(m.elegido().map(|c| c.name.clone()), Some(seg("c")));
+        m.land(report(&["a", "b", "c"]), true);
+        assert!(m.choose(&seg("c")));
+        // Measures again and `a` is no longer there: `c` is still chosen even
+        // though it is now one position higher.
+        m.land(report(&["b", "c"]), true);
+        assert_eq!(m.chosen().map(|c| c.name.clone()), Some(seg("c")));
     }
 
-    /// Si el elegido desaparece, se suelta: enseñar como elegido algo que ya no
-    /// está es prometer una tecla que no puede funcionar.
+    /// If the chosen one disappears, it is dropped: showing something as
+    /// chosen when it is no longer there is promising a key that cannot
+    /// work.
     #[test]
-    fn si_lo_elegido_desaparece_se_suelta() {
+    fn if_the_chosen_one_disappears_it_is_dropped() {
         let mut m = DiskMap::new();
-        m.aterrizar(informe(&["a", "b"]), true);
-        assert!(m.elegir(&seg("a")));
-        m.aterrizar(informe(&["b"]), true);
-        assert!(m.elegido().is_none());
+        m.land(report(&["a", "b"]), true);
+        assert!(m.choose(&seg("a")));
+        m.land(report(&["b"]), true);
+        assert!(m.chosen().is_none());
     }
 
-    /// El primer movimiento elige: una tecla que no hace nada la primera vez
-    /// parece rota.
+    /// The first move chooses: a key that does nothing the first time seems
+    /// broken.
     #[test]
-    fn el_primer_movimiento_elige_el_primero() {
+    fn the_first_move_chooses_the_first_one() {
         let mut m = DiskMap::new();
-        m.aterrizar(informe(&["a", "b"]), true);
+        m.land(report(&["a", "b"]), true);
         m.mover(1);
-        assert_eq!(m.elegido().map(|c| c.name.clone()), Some(seg("a")));
+        assert_eq!(m.chosen().map(|c| c.name.clone()), Some(seg("a")));
     }
 
-    /// Se ACOTA en los extremos, no da la vuelta.
+    /// It is CLAMPED at the ends, it does not wrap.
     #[test]
-    fn moverse_se_acota_en_los_bordes() {
+    fn moving_clamps_at_the_edges() {
         let mut m = DiskMap::new();
-        m.aterrizar(informe(&["a", "b", "c"]), true);
-        m.elegir(&seg("c"));
+        m.land(report(&["a", "b", "c"]), true);
+        m.choose(&seg("c"));
         m.mover(1);
         assert_eq!(
-            m.elegido().map(|c| c.name.clone()),
+            m.chosen().map(|c| c.name.clone()),
             Some(seg("c")),
-            "abajo del todo se queda abajo"
+            "all the way down stays down"
         );
-        m.elegir(&seg("a"));
+        m.choose(&seg("a"));
         m.mover(-1);
-        assert_eq!(m.elegido().map(|c| c.name.clone()), Some(seg("a")));
+        assert_eq!(m.chosen().map(|c| c.name.clone()), Some(seg("a")));
     }
 
-    /// Apuntar a otro directorio olvida lo medido: el mapa del anterior bajo el
-    /// título del nuevo es la respuesta equivocada durante justo el rato en que
-    /// alguien lo está mirando.
+    /// Pointing at another directory forgets what was measured: the previous
+    /// one's map under the new one's title is the wrong answer for exactly
+    /// the moment someone is looking at it.
     #[test]
-    fn apuntar_a_otro_directorio_olvida_lo_medido() {
+    fn pointing_at_another_directory_forgets_what_was_measured() {
         let mut m = DiskMap::new();
-        m.aterrizar(informe(&["a"]), true);
-        m.elegir(&seg("a"));
-        m.apuntar(VPath::parse("mem:///otro").expect("wire"));
-        assert!(m.informe().children.is_empty());
-        assert!(m.elegido().is_none());
-        assert_eq!(m.estado(), &Estado::Quieto);
+        m.land(report(&["a"]), true);
+        m.choose(&seg("a"));
+        m.aim(VPath::parse("mem:///other").expect("wire"));
+        assert!(m.report().children.is_empty());
+        assert!(m.chosen().is_none());
+        assert_eq!(m.state(), &State::Idle);
     }
 
-    /// Un mapa a medias no se declara hecho: `aterrizar(_, false)` deja el
-    /// estado donde estaba para que el panel siga diciendo que mide.
+    /// A half-done map is not declared finished: `land(_, false)` leaves
+    /// the state where it was so the panel keeps saying it is measuring.
     #[test]
-    fn un_informe_parcial_no_declara_la_medida_terminada() {
+    fn a_partial_report_does_not_declare_the_measurement_finished() {
         let mut m = DiskMap::new();
-        m.midiendo(TaskId::new(7));
-        m.aterrizar(informe(&["a"]), false);
-        assert_eq!(m.estado(), &Estado::Midiendo(TaskId::new(7)));
+        m.measuring(TaskId::new(7));
+        m.land(report(&["a"]), false);
+        assert_eq!(m.state(), &State::Measuring(TaskId::new(7)));
         assert_eq!(m.task(), Some(TaskId::new(7)));
-        m.aterrizar(informe(&["a", "b"]), true);
-        assert_eq!(m.estado(), &Estado::Hecho);
-        assert!(m.task().is_none(), "terminada ya no hay nada que cancelar");
+        m.land(report(&["a", "b"]), true);
+        assert_eq!(m.state(), &State::Done);
+        assert!(
+            m.task().is_none(),
+            "once finished there is nothing left to cancel"
+        );
     }
 }

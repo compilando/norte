@@ -1,6 +1,6 @@
 [package]
 name = "norte-testkit"
-description = "MemProvider determinista, corpus de fixtures hostiles y estrategias proptest"
+description = "Deterministic MemProvider, hostile fixture corpus and proptest strategies"
 license = "MIT OR Apache-2.0"
 version.workspace = true
 edition.workspace = true
@@ -12,25 +12,25 @@ authors.workspace = true
 async-trait.workspace = true
 bytes.workspace = true
 futures.workspace = true
-# Predicado `is_terminal_hazard` que documenta por qué cada chord del corpus
-# `hostile_chords()` es hostil (encoding audit H1): dependencia de doctest y
-# de la doc, no del runtime del crate — norte-encoding ya dev-depende de este
-# crate (patrón de ciclo-en-dev-deps que cargo soporta).
+# `is_terminal_hazard` predicate that documents why each chord in the
+# `hostile_chords()` corpus is hostile (encoding audit H1): a doctest and doc
+# dependency, not a runtime one for this crate — norte-encoding already
+# dev-depends on this crate (a cycle-in-dev-deps pattern cargo supports).
 norte-encoding.workspace = true
 norte-proto.workspace = true
 norte-vfs.workspace = true
-# SHA-256 del staging para VerifyPolicy::Hash (#35), hermana de la del core.
+# SHA-256 for staging, for VerifyPolicy::Hash (#35), sibling of the core's.
 sha2.workspace = true
 unicode-normalization.workspace = true
-# proptest es dependencia normal: este crate PUBLICA las estrategias canónicas.
+# proptest is a normal dependency: this crate PUBLISHES the canonical strategies.
 proptest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["time"] }
-# `CancellationToken` para el mando `cancel_after_renames` (#274): cancelar
-# ENTRE dos renames es la única forma de fijar que un cambio de ortografía no
-# deja el fichero con el nombre del rodeo. Ya está en el grafo (norte-core,
-# norte-vfs y otros la usan); no entra nada nuevo a compilar (regla 8).
+# `CancellationToken` for the `cancel_after_renames` control (#274): cancelling
+# BETWEEN two renames is the only way to pin that a spelling change does not
+# leave the file under the bypass name. Already in the graph (norte-core,
+# norte-vfs and others use it); nothing new enters the build (rule 8).
 tokio-util.workspace = true
 
 [dev-dependencies]

@@ -1,31 +1,31 @@
 use super::*;
 
 // ---------------------------------------------------------------------------
-// La pantalla de arranque (spec 2026-09-15, ADR 0115): qué la pone, qué la
-// quita, y qué promete su pie.
+// The splash screen (spec 2026-09-15, ADR 0115): what puts it up, what takes
+// it down, and what its footer promises.
 // ---------------------------------------------------------------------------
 
-/// Un host con el modo de pantalla que se le pida.
+/// A host with whichever splash mode is requested.
 ///
-/// Los demás constructores de prueba fijan `ajustes_de_prueba()` por dentro,
-/// y aquí lo que se prueba ES la clave de configuración: `brief` se quita
-/// sola, `home` se queda hasta que alguien la toque, y `off` no pone nada.
+/// The other test constructors fix `test_settings()` internally, and
+/// here what is being tested IS the configuration key: `brief` takes itself
+/// down, `home` stays until someone touches it, and `off` puts up nothing.
 async fn host_con_splash(
-    backend: Arc<Falso>,
-    modo: norte_config::load::SplashMode,
+    backend: Arc<Fake>,
+    mode: norte_config::load::SplashMode,
 ) -> (UiHost, norte_ui_host::ViewSnapshot) {
-    let mut settings = norte_ui_host::ajustes_por_defecto();
+    let mut settings = norte_ui_host::default_settings();
     settings.common.ui_parent_entry = Some(false);
-    settings.common.ui_chrome.splash = Some(modo);
+    settings.common.ui_chrome.splash = Some(mode);
     UiHost::start(UiHostOptions {
         backend,
         initial_dir: dir(),
-        initial_dir_pedido: false,
+        initial_dir_requested: false,
         attach: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
-        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::preset_dialog_keymap("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
         settings,
@@ -33,120 +33,126 @@ async fn host_con_splash(
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
         profile: None,
-        columns: norte_ui_host::columnas_por_defecto(),
-        effects: norte_ui_host::commands::Efectos::Completo,
+        columns: norte_ui_host::default_columns(),
+        effects: norte_ui_host::commands::Effects::Full,
         log_ring: None,
     })
     .await
-    .expect("arranca")
+    .expect("starts")
 }
 
-/// `off` no pone nada: la clave se respeta, no se negocia.
+/// `off` puts up nothing: the key is honored, not negotiated.
 #[tokio::test]
-async fn apagada_no_pone_pantalla() {
-    let (h, _snap) = host_con_splash(arbol(), norte_config::load::SplashMode::Off).await;
+async fn off_puts_up_no_screen() {
+    let (h, _snap) = host_con_splash(fake_tree(), norte_config::load::SplashMode::Off).await;
     let mut sub = h.subscribe();
-    h.dispatch(UiAction::SplashOpen).await.expect("host vivo");
-    let foto = crate::sync::siguiente_foto_tras_resync(&h, &mut sub).await;
-    assert!(foto.splash.is_none(), "con `splash = off` no se pone nada");
+    h.dispatch(UiAction::SplashOpen).await.expect("host alive");
+    let snap = crate::sync::next_snapshot_after_resync(&h, &mut sub).await;
+    assert!(snap.splash.is_none(), "with `splash = off` nothing goes up");
 }
 
-/// `brief` trae su PLAZO, porque quien lo cumple es el renderer.
+/// `brief` carries its own DEADLINE, because the renderer is the one who
+/// honors it.
 ///
-/// Del lado de la ventana no hay bucle de eventos que despierte al host —eso
-/// es del terminal—, así que una pantalla que se promete breve y no dice
-/// cuánto le queda se quedaría puesta hasta que alguien tocara una tecla.
+/// On the window's side there is no event loop that wakes the host up —
+/// that belongs to the terminal — so a screen that promises to be brief and
+/// does not say how much time it has left would stay up until someone
+/// pressed a key.
 #[tokio::test]
-async fn la_breve_dice_cuanto_le_queda() {
-    let (h, _snap) = host_con_splash(arbol(), norte_config::load::SplashMode::Brief).await;
+async fn brief_says_how_much_time_is_left() {
+    let (h, _snap) = host_con_splash(fake_tree(), norte_config::load::SplashMode::Brief).await;
     let mut sub = h.subscribe();
-    h.dispatch(UiAction::SplashOpen).await.expect("host vivo");
-    let v = crate::sync::siguiente_foto_tras_resync(&h, &mut sub)
+    h.dispatch(UiAction::SplashOpen).await.expect("host alive");
+    let v = crate::sync::next_snapshot_after_resync(&h, &mut sub)
         .await
         .splash
-        .expect("se puso");
-    let queda = v.close_after_ms.expect("la breve trae plazo");
+        .expect("went up");
+    let left = v.close_after_ms.expect("brief carries a deadline");
     assert!(
-        queda > 0 && i64::from(queda) <= norte_frontend::splash::BRIEF_MS,
-        "el plazo es lo que le QUEDA, no un instante de otro reloj: {queda}"
+        left > 0 && i64::from(left) <= norte_frontend::splash::BRIEF_MS,
+        "the deadline is what is LEFT, not an instant from another clock: {left}"
     );
-    // Y va sin secciones: se quita sola, así que una lista de sitios sería
-    // una oferta que se retira antes de poder aceptarla.
-    assert!(v.sections.is_empty(), "la breve no ofrece sitios");
+    // And it carries no sections: it takes itself down, so a list of places
+    // would be an offer withdrawn before it could be accepted.
+    assert!(v.sections.is_empty(), "brief offers no places");
 }
 
-/// Una tecla cualquiera la quita, y no significa nada más.
+/// Any key takes it down, and means nothing else.
 ///
-/// Lo que está delante manda: escribir esa tecla en el listado de detrás
-/// sería actuar sobre algo que el lector no está viendo.
+/// What is in front rules: typing that key into the listing behind it would
+/// be acting on something the reader is not looking at.
 #[tokio::test]
-async fn una_tecla_cualquiera_la_quita_y_no_llega_al_listado() {
-    let (h, snap) = host_con_splash(arbol(), norte_config::load::SplashMode::Home).await;
-    let antes = listado(&snap).path_display.clone();
+async fn any_key_takes_it_down_and_never_reaches_the_listing() {
+    let (h, snap) = host_con_splash(fake_tree(), norte_config::load::SplashMode::Home).await;
+    let before = listing(&snap).path_display.clone();
     let mut sub = h.subscribe();
-    h.dispatch(UiAction::SplashOpen).await.expect("host vivo");
+    h.dispatch(UiAction::SplashOpen).await.expect("host alive");
     assert!(
-        crate::sync::siguiente_foto_tras_resync(&h, &mut sub)
+        crate::sync::next_snapshot_after_resync(&h, &mut sub)
             .await
             .splash
             .is_some(),
-        "se puso"
+        "went up"
     );
 
-    h.dispatch(tecla("j")).await.expect("host vivo");
-    let foto = crate::sync::siguiente_foto_tras_resync(&h, &mut sub).await;
-    assert!(foto.splash.is_none(), "la tecla la quitó");
+    h.dispatch(press("j")).await.expect("host alive");
+    let snap2 = crate::sync::next_snapshot_after_resync(&h, &mut sub).await;
+    assert!(snap2.splash.is_none(), "the key took it down");
     assert_eq!(
-        listado(&foto).cursor,
-        listado(&snap).cursor,
-        "y la tecla NO movió el cursor del listado de detrás"
+        listing(&snap2).cursor,
+        listing(&snap).cursor,
+        "and the key did NOT move the listing's cursor behind it"
     );
-    assert_eq!(listado(&foto).path_display, antes, "ni navegó a otro sitio");
+    assert_eq!(
+        listing(&snap2).path_display,
+        before,
+        "nor navigated anywhere"
+    );
 }
 
-/// `home` ofrece sitios por número, y el número ABRE.
+/// `home` offers places by number, and the number OPENS it.
 ///
-/// La pantalla los pinta numerados y su pie lo promete; sin esto las filas
-/// serían una oferta que no se puede aceptar.
+/// The screen paints them numbered and its footer promises it; without this
+/// the rows would be an offer that cannot be accepted.
 #[tokio::test]
-async fn en_casa_un_digito_abre_su_fila() {
-    let (h, snap) = host_con_splash(arbol(), norte_config::load::SplashMode::Home).await;
-    // Una visita primero: la lista sale de a dónde SUELES ir, y un host
-    // recién arrancado no ha ido a ninguna parte.
-    let b = listado(&snap);
+async fn at_home_a_digit_opens_its_row() {
+    let (h, snap) = host_con_splash(fake_tree(), norte_config::load::SplashMode::Home).await;
+    // A visit first: the list comes from where you USUALLY go, and a
+    // freshly started host has gone nowhere.
+    let b = listing(&snap);
     let docs = b
         .rows
         .iter()
         .find(|r| r.display_name == "docs")
-        .expect("el directorio está");
+        .expect("the directory is there");
     h.dispatch(UiAction::Activate {
         slot_id: 1,
         key: docs.key,
         generation: b.generation,
     })
     .await
-    .expect("host vivo");
-    asentar().await;
+    .expect("host alive");
+    settle().await;
 
-    // La suscripción va DESPUÉS de navegar: los sobres de la navegación se
-    // quedan en la cola, y `siguiente_foto` devolvería una foto anterior a
-    // que la pantalla se pusiera —verde o rojo según lo que hubiera dejado
-    // el aterrizaje, que es un test que no demuestra nada.
+    // The subscription goes AFTER navigating: the navigation's envelopes
+    // stay queued, and `next_snapshot` would return a snapshot from before
+    // the screen went up — green or red depending on what the landing left
+    // behind, which is a test that proves nothing.
     let mut sub = h.subscribe();
-    h.dispatch(UiAction::SplashOpen).await.expect("host vivo");
-    let v = crate::sync::siguiente_foto_tras_resync(&h, &mut sub)
+    h.dispatch(UiAction::SplashOpen).await.expect("host alive");
+    let v = crate::sync::next_snapshot_after_resync(&h, &mut sub)
         .await
         .splash
-        .expect("se puso");
-    let fila = v
+        .expect("went up");
+    let row = v
         .sections
         .iter()
         .flat_map(|s| s.rows.iter())
         .find(|f| f.number == 1)
-        .expect("hay una fila numerada");
-    assert!(!fila.label.is_empty(), "la fila dice a dónde va");
+        .expect("there is a numbered row");
+    assert!(!row.label.is_empty(), "the row says where it goes");
 
-    h.dispatch(tecla("1")).await.expect("host vivo");
-    let foto = crate::sync::siguiente_foto_tras_resync(&h, &mut sub).await;
-    assert!(foto.splash.is_none(), "abrir una fila también la quita");
+    h.dispatch(press("1")).await.expect("host alive");
+    let snap2 = crate::sync::next_snapshot_after_resync(&h, &mut sub).await;
+    assert!(snap2.splash.is_none(), "opening a row also takes it down");
 }

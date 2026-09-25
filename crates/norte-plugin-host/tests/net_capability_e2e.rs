@@ -1,13 +1,17 @@
-//! E2E del gating de la capability `net` (#30 stage 3a): compila el guest
-//! `net-probe` (conecta por TCP y devuelve el eco) y verifica que la RED se
-//! concede SOLO con `net` declarada y RESTRINGIDA al allow-list de hosts:
+//! E2E of the `net` capability's gating (#30 stage 3a): compiles the
+//! `net-probe` guest (connects over TCP and returns the echo) and verifies
+//! that NETWORK access is granted ONLY with `net` declared and RESTRICTED
+//! to the host allow-list:
 //!
-//! - CON `net` (allow-list = el listener local) → conecta y recibe el eco.
-//! - SIN `net` → `connect` FALLA (el `socket_addr_check` por defecto rechaza).
-//! - CON `net` pero el listener NO está en el allow-list → conexión RECHAZADA.
+//! - WITH `net` (allow-list = the local listener) → connects and receives
+//!   the echo.
+//! - WITHOUT `net` → `connect` FAILS (the default `socket_addr_check`
+//!   rejects).
+//! - WITH `net` but the listener is NOT in the allow-list → connection
+//!   REJECTED.
 //!
-//! Todo con un `TcpListener` local — sin servidor externo. SKIP sin el target
-//! `wasm32-wasip2`.
+//! All with a local `TcpListener` — no external server. SKIP without the
+//! `wasm32-wasip2` target.
 
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -16,9 +20,9 @@ use std::process::Command;
 
 use norte_plugin_host::{Capabilities, PluginRuntime};
 
-/// Arranca un servidor de eco local en `127.0.0.1:0`; devuelve su `addr` y
-/// atiende conexiones en un hilo (lee un chunk, lo devuelve) hasta que el
-/// listener se cierra al terminar el test.
+/// Starts a local echo server on `127.0.0.1:0`; returns its `addr` and
+/// serves connections on a thread (reads a chunk, returns it) until the
+/// listener closes when the test ends.
 fn spawn_echo() -> std::net::SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let addr = listener.local_addr().expect("addr");
@@ -41,51 +45,53 @@ fn net_caps(hosts: &[&str]) -> Capabilities {
 #[test]
 fn net_capability_gating_e2e() {
     let Some(wasm) = build_guest("net-probe") else {
-        eprintln!("SKIP: target wasm32-wasip2 no instalado");
+        eprintln!("SKIP: target wasm32-wasip2 not installed");
         return;
     };
     let rt = PluginRuntime::new().expect("runtime");
     let addr = spawn_echo();
     let target = addr.to_string(); // "127.0.0.1:PORT"
 
-    // 1) CON `net` (allow-list = el propio addr): conecta y recibe el eco.
+    // 1) WITH `net` (allow-list = the addr itself): connects and receives
+    //    the echo.
     let mut inst = rt
         .instantiate(&wasm, net_caps(&[&target]))
-        .expect("instanciar con net");
+        .expect("instantiate with net");
     let out = inst
         .run_command("connect", &target)
-        .expect("connect con net");
-    assert_eq!(out, "ping", "con net concedida, la sonda recibe el eco");
+        .expect("connect with net");
+    assert_eq!(out, "ping", "with net granted, the probe receives the echo");
 
-    // 2) SIN `net`: el socket_addr_check por defecto RECHAZA → connect falla.
+    // 2) WITHOUT `net`: the default socket_addr_check REJECTS → connect
+    //    fails.
     let mut inst = rt
         .instantiate(&wasm, Capabilities::default())
-        .expect("instanciar sin net");
+        .expect("instantiate without net");
     let err = inst
         .run_command("connect", &target)
-        .expect_err("sin net, connect debe fallar");
+        .expect_err("without net, connect must fail");
     let msg = format!("{err:?}");
     assert!(
         msg.contains("connect") || msg.contains("Guest"),
-        "el fallo viene del connect rechazado: {msg}"
+        "the failure comes from the rejected connect: {msg}"
     );
 
-    // 3) CON `net` pero el listener NO está en el allow-list: RECHAZADO.
+    // 3) WITH `net` but the listener is NOT in the allow-list: REJECTED.
     let mut inst = rt
         .instantiate(&wasm, net_caps(&["10.0.0.1", "10.0.0.1:1"]))
-        .expect("instanciar net allow-list ajeno");
+        .expect("instantiate with a foreign net allow-list");
     let err = inst
         .run_command("connect", &target)
-        .expect_err("host fuera del allow-list debe fallar");
+        .expect_err("a host outside the allow-list must fail");
     assert!(
         format!("{err:?}").contains("connect") || format!("{err:?}").contains("Guest"),
-        "conexión a un host fuera del allow-list rechazada"
+        "connection to a host outside the allow-list rejected"
     );
 }
 
 fn build_guest(name: &str) -> Option<norte_plugin_host::WasmArtifact> {
     if !target_installed("wasm32-wasip2") {
-        eprintln!("SKIP: target wasm32-wasip2 no instalado");
+        eprintln!("SKIP: target wasm32-wasip2 not installed");
         return None;
     }
     let guest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -103,14 +109,14 @@ fn build_guest(name: &str) -> Option<norte_plugin_host::WasmArtifact> {
         ])
         .arg(&target_dir)
         .status()
-        .expect("cargo build del guest");
-    assert!(status.success(), "el guest {name} no compiló");
+        .expect("cargo build of the guest");
+    assert!(status.success(), "guest {name} did not compile");
     let wasm = target_dir
         .join("wasm32-wasip2")
         .join("release")
         .join(format!("{}.wasm", name.replace('-', "_")));
-    assert!(wasm.exists(), "no se encontró {}", wasm.display());
-    // Con la huella de lo que se acaba de compilar (ADR 0142).
+    assert!(wasm.exists(), "{} was not found", wasm.display());
+    // With the fingerprint of what was just compiled (ADR 0142).
     Some(norte_plugin_host::WasmArtifact::trusting_current(wasm).expect("guest"))
 }
 

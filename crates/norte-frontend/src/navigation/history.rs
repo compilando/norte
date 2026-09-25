@@ -1,44 +1,46 @@
-//! La historia de navegación vista como LISTAS: las filas que pintan los dos
-//! frontends, los directorios populares y la única decisión de «esto cuenta
-//! como visita» (spec 2026-09-15, fase 1).
+//! Navigation history seen as LISTS: the rows both frontends paint, the
+//! popular directories, and the one decision of "this counts as a visit"
+//! (spec 2026-09-15, phase 1).
 //!
-//! [`crate::nav::History`] es la estructura de UN panel —MRU, rastro, punto de
-//! salto—. Esto es lo que se construye encima para enseñarla y lo que no es de
-//! ningún panel: [`Popular`] es de la sesión entera, como en Krusader.
+//! [`crate::nav::History`] is ONE pane's structure — MRU, trail, jump
+//! point. This is what is built on top to show it, and what belongs to no
+//! pane: [`Popular`] is the whole session's, as in Krusader.
 //!
-//! Vive aquí y no en cada frontend por lo mismo que `History` (ADR 0066 D14):
-//! qué filas salen, en qué orden y con qué marca no puede depender de quién
-//! las pinte.
+//! Lives here and not in each frontend for the same reason as `History`
+//! (ADR 0066 D14): which rows come out, in what order and with what mark
+//! cannot depend on who paints them.
 
 use crate::nav::{History, Trail};
 use norte_proto::VPath;
 use serde::{Deserialize, Serialize};
 
-/// Cuántos directorios populares recuerda la sesión.
+/// How many popular directories the session remembers.
 pub const POPULAR_CAP: usize = 50;
 
-/// Clave Fluent de «no hay punto de salto».
+/// Fluent key for "there is no jump point".
 pub const NO_JUMP_POINT: &str = "msg-nav-no-jump-point";
 
-/// Un directorio popular: cuántas veces se llegó a él y cuándo fue la última.
+/// A popular directory: how many times it was reached and when the last
+/// time was.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PopularEntry {
-    /// El directorio.
+    /// The directory.
     pub path: VPath,
-    /// Cuántas navegaciones del lector acabaron aquí.
+    /// How many of the reader's navigations ended up here.
     pub visits: u32,
-    /// Orden de la última visita: un contador de la propia lista, no un
-    /// reloj — así el desempate es determinista y no depende de la hora de la
-    /// máquina que escribió la sesión.
+    /// Order of the last visit: a counter of the list itself, not a clock —
+    /// this way the tiebreak is deterministic and does not depend on the
+    /// clock of the machine that wrote the session.
     #[serde(default)]
     pub last: u64,
 }
 
-/// Los directorios a los que más se va (Krusader «Popular URLs», `Ctrl+Z`).
+/// The directories most often visited (Krusader's "Popular URLs",
+/// `Ctrl+Z`).
 ///
-/// UNA lista para toda la sesión y no una por panel: la pregunta es «a dónde
-/// suelo ir», y la respuesta no cambia según el lado de la pantalla desde el
-/// que se pregunte.
+/// ONE list for the whole session and not one per pane: the question is
+/// "where do I usually go", and the answer does not change depending on
+/// which side of the screen it is asked from.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Popular {
     entries: Vec<PopularEntry>,
@@ -46,9 +48,9 @@ pub struct Popular {
 }
 
 impl Popular {
-    /// Reconstruye la lista desde una sesión. Una ruta repetida (un fichero
-    /// editado a mano) se queda con su PRIMERA aparición, y lo que pase de
-    /// [`POPULAR_CAP`] se expulsa por la misma regla que al visitar.
+    /// Rebuilds the list from a session. A repeated path (a hand-edited
+    /// file) keeps its FIRST appearance, and whatever goes over
+    /// [`POPULAR_CAP`] is evicted by the same rule as when visiting.
     #[must_use]
     pub fn from_entries(entries: Vec<PopularEntry>) -> Self {
         let mut p = Self::default();
@@ -60,20 +62,20 @@ impl Popular {
             p.entries.push(e);
         }
         while p.entries.len() > POPULAR_CAP {
-            p.expulsa();
+            p.expels();
         }
         p
     }
 
-    /// Las entradas en el orden en que se guardan (no el de pintar: ver
+    /// The entries in the order they are stored (not the paint order: see
     /// [`Self::ranked`]).
     #[must_use]
     pub fn entries(&self) -> &[PopularEntry] {
         &self.entries
     }
 
-    /// Anota una visita a `path`. Con la lista llena, una ruta nueva expulsa a
-    /// la de menos visitas y, en empate, a la visitada hace más tiempo.
+    /// Notes a visit to `path`. With the list full, a new path evicts the
+    /// one with fewest visits and, on a tie, the one visited longest ago.
     pub fn visit(&mut self, path: &VPath) {
         self.clock += 1;
         if let Some(e) = self.entries.iter_mut().find(|e| e.path == *path) {
@@ -82,7 +84,7 @@ impl Popular {
             return;
         }
         if self.entries.len() >= POPULAR_CAP {
-            self.expulsa();
+            self.expels();
         }
         self.entries.push(PopularEntry {
             path: path.clone(),
@@ -91,18 +93,19 @@ impl Popular {
         });
     }
 
-    /// Quita `path` (`dialog.remove`, o un directorio que ya no existe).
+    /// Removes `path` (`dialog.remove`, or a directory that no longer
+    /// exists).
     pub fn remove(&mut self, path: &VPath) {
         self.entries.retain(|e| e.path != *path);
     }
 
-    /// Vacía la lista (`dialog.clear`).
+    /// Empties the list (`dialog.clear`).
     pub fn clear(&mut self) {
         self.entries.clear();
     }
 
-    /// Las entradas de más a menos visitadas; en empate, la más reciente
-    /// primero.
+    /// The entries from most to least visited; on a tie, the most recent
+    /// first.
     #[must_use]
     pub fn ranked(&self) -> Vec<&PopularEntry> {
         let mut v: Vec<&PopularEntry> = self.entries.iter().collect();
@@ -110,33 +113,33 @@ impl Popular {
         v
     }
 
-    fn expulsa(&mut self) {
-        let victima = self
+    fn expels(&mut self) {
+        let victim = self
             .entries
             .iter()
             .enumerate()
             .min_by_key(|(_, e)| (e.visits, e.last))
             .map(|(i, _)| i);
-        if let Some(i) = victima {
+        if let Some(i) = victim {
             self.entries.swap_remove(i);
         }
     }
 }
 
-/// Registra una navegación en el rastro del panel y en los populares, si es
-/// que cuenta. Devuelve si contó.
+/// Records a navigation in the pane's trail and in the popular ones, if it
+/// counts. Returns whether it counted.
 ///
-/// La ÚNICA decisión de «esto es un paso del lector», compartida por los dos
-/// frontends. Dos condiciones, las mismas que ya guardaba el rastro:
+/// The ONE decision of "this is a reader step", shared by both frontends.
+/// Two conditions, the same ones the trail already kept:
 ///
-/// - `prev != dir`: navegar al directorio que ya se enseña es un refresco, no
-///   un paso.
-/// - `trail == Trail::Record`: un `Replay` es el rastro andándose a sí mismo
-///   (contarlo lo haría oscilar), y un `Seed` coloca el panel sin que el
-///   lector fuera a ninguna parte — tampoco es una visita.
+/// - `prev != dir`: navigating to the directory already shown is a
+///   refresh, not a step.
+/// - `trail == Trail::Record`: a `Replay` is the trail walking itself
+///   (counting it would make it oscillate), and a `Seed` places the pane
+///   with the reader never going anywhere — not a visit either.
 ///
-/// El rastro guarda de dónde se SALE (`prev`); los populares, a dónde se
-/// LLEGA (`dir`).
+/// The trail saves where you LEAVE FROM (`prev`); the popular ones, where
+/// you ARRIVE (`dir`).
 ///
 /// ```
 /// use norte_frontend::history::{Popular, record_visit};
@@ -164,52 +167,51 @@ pub fn record_visit(
     true
 }
 
-/// La decisión de [`record_visit`], sola: si navegar de `prev` a `dir` es un
-/// paso del lector.
+/// [`record_visit`]'s decision, alone: whether navigating from `prev` to
+/// `dir` is a reader step.
 ///
-/// Suelta porque la ventana tiene que partir el evento en dos: el rastro se
-/// graba al PEDIR el listado —el terminal, cuando llega— y la visita a los
-/// populares espera a que llegue, porque un listado que falla no es un sitio
-/// al que se fue. Las dos mitades preguntan AQUÍ, y así no pueden discrepar
-/// sobre qué cuenta.
+/// Separate because the window has to split the event in two: the trail is
+/// recorded when the listing is REQUESTED — the terminal, when it arrives —
+/// and the visit to the popular ones waits until it arrives, because a
+/// listing that fails is not a place that was gone to. Both halves ask
+/// HERE, so they cannot disagree about what counts.
 #[must_use]
 pub fn counts_as_step(prev: &VPath, dir: &VPath, trail: Trail) -> bool {
     prev != dir && trail == Trail::Record
 }
 
-/// A dónde lleva `nav.jump-back`, o la clave Fluent de por qué no lleva a
-/// ningún sitio.
+/// Where `nav.jump-back` leads, or the Fluent key for why it leads nowhere.
 ///
 /// # Errors
 ///
-/// [`NO_JUMP_POINT`] si el panel no tiene punto de salto.
+/// [`NO_JUMP_POINT`] if the pane has no jump point.
 pub fn jump_target(history: &History) -> Result<VPath, &'static str> {
     history.jump().cloned().ok_or(NO_JUMP_POINT)
 }
 
-/// Qué es una fila de una lista de historia respecto al lector.
+/// What a history list's row is with respect to the reader.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HistoryMark {
-    /// El directorio en el que está el panel ahora (el check de Krusader).
+    /// The directory the pane is in right now (Krusader's check).
     Current,
-    /// Un sitio por el que se pasó.
+    /// A place that was passed through.
     Visited,
-    /// Un sitio de la rama de delante: el lector fue atrás y puede volver.
+    /// A place on the forward branch: the reader went back and can return.
     Forward,
 }
 
-/// Una fila de la lista de historia o de populares.
+/// A row of the history or popular list.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HistoryRow {
-    /// A dónde navega.
+    /// Where it navigates to.
     pub path: VPath,
-    /// Qué es respecto al lector.
+    /// What it is with respect to the reader.
     pub mark: HistoryMark,
 }
 
-/// La clave Fluent de la marca de una fila, o `None` si la fila no lleva
-/// ninguna. Una sola tabla para los dos frontends: la TUI la pinta detrás de la
-/// ruta y la ventana en el detalle de la fila, pero la PALABRA es la misma.
+/// A row's mark's Fluent key, or `None` if the row carries none. A single
+/// table for both frontends: the TUI paints it behind the path and the
+/// window in the row's detail, but the WORD is the same.
 #[must_use]
 pub fn mark_key(mark: HistoryMark) -> Option<&'static str> {
     match mark {
@@ -219,19 +221,21 @@ pub fn mark_key(mark: HistoryMark) -> Option<&'static str> {
     }
 }
 
-/// Dónde empieza el cursor de una lista de historia: en la SEGUNDA fila si la
-/// primera es el directorio actual, porque a donde ya estás no se quiere ir.
+/// Where a history list's cursor starts: on the SECOND row if the first is
+/// the current directory, because you do not want to go where you already
+/// are.
 #[must_use]
 pub fn start_cursor(rows: &[HistoryRow]) -> usize {
     usize::from(rows.len() > 1 && rows.first().is_some_and(|r| r.mark == HistoryMark::Current))
 }
 
-/// Las filas de la lista de historia de un panel (`pane.history`).
+/// A pane's history list rows (`pane.history`).
 ///
-/// Primero el directorio ACTUAL, marcado; luego el MRU, del más reciente al
-/// más viejo, sin volver a listar el actual. Las que están en la rama de
-/// delante llevan [`HistoryMark::Forward`]. `filter` casa por subsecuencia
-/// sobre la ruta pintable plegada, igual que la paleta; vacío casa todo.
+/// First the CURRENT directory, marked; then the MRU, from most to least
+/// recent, without listing the current one again. Those on the forward
+/// branch carry [`HistoryMark::Forward`]. `filter` matches by subsequence
+/// over the folded paintable path, same as the palette; empty matches
+/// everything.
 #[must_use]
 pub fn history_rows(
     history: &History,
@@ -239,16 +243,16 @@ pub fn history_rows(
     filter: &str,
     enc: Option<norte_encoding::NameEncoding>,
 ) -> Vec<HistoryRow> {
-    let casa = matcher(filter, enc);
+    let matches = matcher(filter, enc);
     let mut rows = Vec::with_capacity(history.entries().len() + 1);
-    if casa(current) {
+    if matches(current) {
         rows.push(HistoryRow {
             path: current.clone(),
             mark: HistoryMark::Current,
         });
     }
     for p in history.entries().iter().filter(|p| *p != current) {
-        if !casa(p) {
+        if !matches(p) {
             continue;
         }
         let mark = if history.forward_trail().contains(p) {
@@ -264,18 +268,19 @@ pub fn history_rows(
     rows
 }
 
-/// Las filas de la lista de populares (`pane.popular`), de más a menos
-/// visitada. La del directorio actual lleva [`HistoryMark::Current`] pero no
-/// se mueve de su puesto: aquí el orden ES la información.
+/// The popular list's rows (`pane.popular`), from most to least visited.
+/// The current directory's carries [`HistoryMark::Current`] but does not
+/// move from its spot: here the order IS the information.
 #[must_use]
 pub fn popular_rows(popular: &Popular, current: &VPath, filter: &str) -> Vec<HistoryRow> {
-    // Sin reinterpretación: los populares son de toda la sesión, y aplicarles
-    // el encoding de un panel sería inventar lo que no está escrito.
-    let casa = matcher(filter, None);
+    // No reinterpretation: the popular ones belong to the whole session,
+    // and applying a pane's encoding to them would be inventing what is
+    // not written.
+    let matches = matcher(filter, None);
     popular
         .ranked()
         .into_iter()
-        .filter(|e| casa(&e.path))
+        .filter(|e| matches(&e.path))
         .map(|e| HistoryRow {
             path: e.path.clone(),
             mark: if e.path == *current {
@@ -287,22 +292,22 @@ pub fn popular_rows(popular: &Popular, current: &VPath, filter: &str) -> Vec<His
         .collect()
 }
 
-/// Si una ruta casa con `filter`, leída con la reinterpretación `enc`.
+/// Whether a path matches `filter`, read with reinterpretation `enc`.
 ///
-/// Se pliega SEGMENTO A SEGMENTO con [`crate::nav::fold_with`] —el nombre
-/// decodificado y sin enmascarar, lo mismo que el buscador rápido— y no la
-/// ruta pintable, que ya viene enmascarada y no sabe de encodings: con esa, un
-/// `Папка` que el panel enseña bien bajo CP866 no casaba con `п`
-/// (encoding-auditor, fase 1). Filtrar nunca cambia un destino.
+/// Folded SEGMENT BY SEGMENT with [`crate::nav::fold_with`] — the decoded,
+/// unmasked name, same as the quick search — and not the paintable path,
+/// which already comes masked and knows nothing about encodings: with that
+/// one, a `Папка` the pane correctly shows under CP866 would not match `п`
+/// (encoding-auditor, phase 1). Filtering never changes a destination.
 fn matcher(filter: &str, enc: Option<norte_encoding::NameEncoding>) -> impl Fn(&VPath) -> bool {
     let needle = crate::nav::fold(filter.as_bytes());
     move |p: &VPath| {
         needle.is_empty() || {
-            let hay: Vec<String> = p
+            let haystack: Vec<String> = p
                 .segments()
                 .map(|s| crate::nav::fold_with(s, enc))
                 .collect();
-            crate::palette_state::is_subsequence(&needle, &hay.join("/"))
+            crate::palette_state::is_subsequence(&needle, &haystack.join("/"))
         }
     }
 }
@@ -317,11 +322,11 @@ mod tests {
         VPath::parse(wire).expect("wire")
     }
 
-    /// `norte-config` valida `[ui] history_size` con sus propios números
-    /// porque no puede depender de este crate; este test es lo que impide que
-    /// los dos topes diverjan.
+    /// `norte-config` validates `[ui] history_size` with its own numbers
+    /// because it cannot depend on this crate; this test is what stops the
+    /// two ceilings from drifting apart.
     #[test]
-    fn los_topes_de_la_config_son_los_del_historial() {
+    fn the_configs_caps_are_the_historys() {
         use norte_config::load::UiChrome;
         assert_eq!(UiChrome::MIN_HISTORY_SIZE as usize, HISTORY_MIN);
         assert_eq!(UiChrome::MAX_HISTORY_SIZE as usize, HISTORY_MAX);
@@ -329,7 +334,7 @@ mod tests {
     }
 
     #[test]
-    fn un_replay_o_un_seed_no_cuentan_como_visita() {
+    fn a_replay_or_a_seed_does_not_count_as_a_visit() {
         let (mut h, mut p) = (History::default(), Popular::default());
         let (a, b) = (vp("mem:///a"), vp("mem:///b"));
         assert!(!record_visit(
@@ -344,29 +349,29 @@ mod tests {
         assert_eq!((h.back_len(), p.entries().len()), (0, 0));
         assert!(record_visit(&mut h, &mut p, &a, &b, Trail::Record));
         assert_eq!(h.trail(), &[a]);
-        assert_eq!(p.entries()[0].path, b, "cuenta a dónde se LLEGA");
+        assert_eq!(p.entries()[0].path, b, "counts where you ARRIVE");
     }
 
     #[test]
-    fn populares_expulsa_la_menos_visitada_y_en_empate_la_mas_vieja() {
+    fn popular_evicts_the_least_visited_and_on_a_tie_the_oldest() {
         let mut p = Popular::default();
         for i in 0..POPULAR_CAP {
             p.visit(&vp(&format!("mem:///d{i}")));
         }
-        // d1 sube a dos visitas: ya no es candidata.
+        // d1 goes up to two visits: no longer a candidate.
         p.visit(&vp("mem:///d1"));
         p.visit(&vp("mem:///nueva"));
         assert_eq!(p.entries().len(), POPULAR_CAP);
         assert!(
             !p.entries().iter().any(|e| e.path == vp("mem:///d0")),
-            "d0: una visita y la más vieja"
+            "d0: one visit and the oldest"
         );
         assert!(p.entries().iter().any(|e| e.path == vp("mem:///d1")));
         assert_eq!(p.ranked()[0].path, vp("mem:///d1"));
     }
 
     #[test]
-    fn populares_desde_sesion_quita_repetidas_y_respeta_el_tope() {
+    fn popular_from_session_removes_duplicates_and_respects_the_cap() {
         let e = |s: &str, visits, last| PopularEntry {
             path: vp(s),
             visits,
@@ -389,28 +394,28 @@ mod tests {
             .iter()
             .find(|x| x.path == vp("mem:///a"))
             .expect("a");
-        assert_eq!(a.visits, 4, "se quedó la primera aparición");
-        assert!(a.last > 9, "el reloj sigue al más alto de la sesión");
+        assert_eq!(a.visits, 4, "the first appearance was kept");
+        assert!(a.last > 9, "the clock follows the session's highest");
     }
 
     #[test]
-    fn las_filas_marcan_el_actual_primero_y_la_rama_de_delante() {
+    fn rows_mark_the_current_first_and_the_branch_ahead() {
         let mut h = History::default();
         h.record(vp("mem:///a"));
         h.record(vp("mem:///b"));
-        // Estamos en C; atrás a B: C queda en la rama de delante.
+        // We are at C; back to B: C is left on the forward branch.
         assert_eq!(h.step_back(vp("mem:///c")), Some(vp("mem:///b")));
         let rows = history_rows(&h, &vp("mem:///b"), "", None);
         assert_eq!(rows[0].mark, HistoryMark::Current);
         assert_eq!(rows[0].path, vp("mem:///b"));
         assert!(
             rows[1..].iter().all(|r| r.path != vp("mem:///b")),
-            "el actual no se repite"
+            "the current one is not repeated"
         );
         let a = rows.iter().find(|r| r.path == vp("mem:///a")).expect("a");
         assert_eq!(a.mark, HistoryMark::Visited);
-        // C no está en el MRU (nunca se salió de C con un Record), así que no
-        // es fila; lo que sí se comprueba es la marca cuando lo está.
+        // C is not in the MRU (C was never left with a Record), so it is
+        // not a row; what IS checked is the mark when it is one.
         h.push(vp("mem:///c"));
         let rows = history_rows(&h, &vp("mem:///b"), "", None);
         let c = rows.iter().find(|r| r.path == vp("mem:///c")).expect("c");
@@ -418,7 +423,7 @@ mod tests {
     }
 
     #[test]
-    fn el_filtro_casa_por_subsecuencia_sin_mayusculas() {
+    fn the_filter_matches_by_subsequence_case_insensitively() {
         let mut h = History::default();
         h.record(vp("mem:///Documentos/facturas"));
         h.record(vp("mem:///tmp"));
@@ -428,7 +433,7 @@ mod tests {
     }
 
     #[test]
-    fn quitar_una_ruta_borra_su_punto_de_salto() {
+    fn removing_a_path_erases_its_jump_point() {
         let mut h = History::default();
         h.set_jump(vp("mem:///a"));
         assert_eq!(jump_target(&h), Ok(vp("mem:///a")));
@@ -437,7 +442,7 @@ mod tests {
     }
 
     #[test]
-    fn vaciar_conserva_el_punto_de_salto_y_el_tope() {
+    fn clearing_preserves_the_jump_point_and_the_cap() {
         let mut h = History::with_capacity(10);
         h.record(vp("mem:///a"));
         h.set_jump(vp("mem:///j"));
@@ -448,7 +453,7 @@ mod tests {
     }
 
     #[test]
-    fn el_tope_se_acota_y_al_bajar_se_queda_lo_cercano() {
+    fn the_cap_is_bounded_and_lowering_it_keeps_what_is_near() {
         assert_eq!(History::with_capacity(0).capacity(), HISTORY_MIN);
         assert_eq!(History::with_capacity(9999).capacity(), HISTORY_MAX);
         assert_eq!(History::default().capacity(), HISTORY_DEFAULT);
@@ -461,29 +466,29 @@ mod tests {
         assert_eq!(
             h.trail().last(),
             Some(&vp("mem:///d19")),
-            "lo último andado"
+            "the last one walked"
         );
         assert_eq!(h.entries()[0], vp("mem:///d19"));
         assert_eq!(h.entries().len(), 5);
     }
 
     #[test]
-    fn al_bajar_el_tope_la_rama_de_delante_pierde_su_punta_lejana() {
+    fn lowering_the_cap_makes_the_forward_branch_lose_its_far_tip() {
         let mut h = History::with_capacity(10);
         for i in 0..6 {
             h.record(vp(&format!("mem:///d{i}")));
         }
-        // En d6; tres atrás: fwd = [d6, d5, d4], el siguiente adelante es d4.
+        // At d6; three back: fwd = [d6, d5, d4], the next one forward is d4.
         let mut cur = vp("mem:///d6");
         for _ in 0..3 {
-            cur = h.step_back(cur).expect("atrás");
+            cur = h.step_back(cur).expect("back");
         }
         h.set_capacity(5);
         assert_eq!(h.back_len() + h.fwd_len(), 5);
         assert_eq!(
             h.step_forward(cur),
             Some(vp("mem:///d4")),
-            "lo cercano se queda"
+            "the near one stays"
         );
     }
 
@@ -494,8 +499,9 @@ mod tests {
         Forward(u8),
         Remove(u8),
         Cap(usize),
-        // Una sesión escrita con OTRO tope (rust-reviewer, fase 1): `seed` no
-        // pasa por `record`, así que el invariante lo tiene que restituir ella.
+        // A session written with ANOTHER cap (rust-reviewer, phase 1):
+        // `seed` does not go through `record`, so it has to restore the
+        // invariant itself.
         Seed(Vec<u8>, Vec<u8>),
     }
 
@@ -515,10 +521,10 @@ mod tests {
     }
 
     proptest! {
-        /// El invariante que acota la memoria del rastro, bajo cualquier
-        /// secuencia de operaciones — incluido cambiar el tope en caliente.
+        /// The invariant that bounds the trail's memory, under any
+        /// sequence of operations — including changing the cap on the fly.
         #[test]
-        fn el_invariante_del_rastro_aguanta_cualquier_secuencia(
+        fn the_trail_invariant_holds_up_under_any_sequence(
             ops in proptest::collection::vec(op(), 0..200),
             cap in 0usize..80,
         ) {

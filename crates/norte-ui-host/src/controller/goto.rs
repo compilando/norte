@@ -1,327 +1,333 @@
-//! «Ir a cualquier sitio» en la ventana (#357, fase 6 del programa WOW).
+//! "Go to anywhere" in the window (#357, phase 6 of the WOW programme).
 //!
-//! El modelo —secciones, orden, filtrado, cursor—, cómo se construye cada
-//! clase de fila y qué significa confirmarla son de `norte_frontend::goto`,
-//! los mismos que usa la TUI. Aquí vive lo que sólo esta ventana sabe: de qué
-//! listas suyas salen las filas, cómo le llegan las conexiones (las da el
-//! daemon) y cómo se pregunta al índice sin congelar la pantalla.
+//! The model — sections, order, filtering, cursor —, how each row class is
+//! built and what confirming it means belong to `norte_frontend::goto`, the
+//! same ones the TUI uses. What lives here is what only this window knows:
+//! which of its own lists the rows come from, how connections reach it (the
+//! daemon provides them), and how the index is queried without freezing the
+//! screen.
 //!
-//! Parte de `controller`: son métodos de `Estado`. El único escritor sigue
-//! siendo el actor.
+//! Part of `controller`: these are methods of `State`. The only writer is
+//! still the actor.
 
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
 use norte_frontend::goto::{
-    Accion, FixedSource, Goto, GotoLine, GotoRow, GotoSource, MINIMO_PARA_EL_INDICE, RutaSource,
-    SECCION_COMANDOS, SECCION_CONEXIONES, SECCION_FAVORITOS, SECCION_HISTORIA, SECCION_INDICE,
-    SECCION_POPULARES, TOPE_DEL_INDICE, TRAIDAS_POR_LISTA,
+    Action, BROUGHT_BY_LIST, FixedSource, Goto, GotoLine, GotoRow, GotoSource, INDEX_CAP,
+    MINIMUM_FOR_THE_INDEX, PathSource, SECTION_COMMANDS, SECTION_CONNECTIONS, SECTION_FAVORITES,
+    SECTION_HISTORY, SECTION_INDEX, SECTION_POPULAR,
 };
 
-impl Estado {
-    /// Abre «ir a».
+impl State {
+    /// Opens "go to".
     ///
-    /// Las filas se toman como una FOTO al abrir, igual que la paleta: una
-    /// lista que cambia bajo el cursor mientras se lee es cómo un Enter acaba
-    /// en otro sitio. Las dos excepciones llegan tarde y por el buzón: las
-    /// CONEXIONES (las sabe el daemon, no este proceso) y lo que encuentre el
-    /// índice (una pregunta por consulta).
-    pub(super) fn abrir_ir_a(
+    /// The rows are taken as a SNAPSHOT on open, just like the palette: a
+    /// list that changes under the cursor while it is being read is how an
+    /// Enter ends up somewhere else. The two exceptions arrive late, through
+    /// the mailbox: CONNECTIONS (only the daemon knows them, not this
+    /// process) and whatever the index finds (one question per query).
+    pub(super) fn open_go_to(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let fuentes = self.fuentes_de_ir_a();
-        // Reabrir con la pantalla ya abierta (desde un menú, por ejemplo)
-        // cierra la anterior como es debido: su pregunta al índice se aborta
-        // en vez de seguir gastando proveedor para una consulta que ya no hay.
-        self.cerrar_ir_a();
-        self.ir_a = Some(Goto::new(fuentes));
-        let apertura = self.gen_ir_a;
+        let sources = self.go_to_sources();
+        // Reopening while the screen is already open (from a menu, say)
+        // closes the previous one properly: its question to the index is
+        // aborted instead of continuing to spend a provider on a query that
+        // no longer exists.
+        self.close_go_to();
+        self.ir_a = Some(Goto::new(sources));
+        let generation = self.gen_ir_a;
         let backend = Arc::clone(backend);
-        let buzon = buzon.clone();
+        let mailbox = mailbox.clone();
         tokio::spawn(async move {
-            let res = match tokio::time::timeout(PLAZO_PLUGINS, backend.connections()).await {
+            let res = match tokio::time::timeout(DEADLINE_PLUGINS, backend.connections()).await {
                 Ok(r) => r,
                 Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
             };
-            // «Ir a cualquier sitio» es una lista de DESTINOS, y una entrada
-            // que no se entiende no lo es: aquí se quedan solo las buenas. El
-            // sitio donde se dice qué le pasa a la otra es el selector de
-            // conexiones (#365), que es adonde se va a arreglarla.
+            // "Go to anywhere" is a list of DESTINATIONS, and an entry that
+            // does not parse is not one: only the good ones stay here. Where
+            // it says what is wrong with the other one is the connection
+            // selector (#365), which is where it will get fixed.
             let res = res.map(|r| r.connections);
-            let _ = buzon
-                .send(Mensaje::Fondo(Box::new(Fondo::ConexionesDeIrA(
-                    apertura, res,
+            let _ = mailbox
+                .send(Message::Background(Box::new(Background::GoToConnections(
+                    generation, res,
                 ))))
                 .await;
         });
-        let cambio = ViewChange::Goto {
+        let change = ViewChange::Goto {
             goto: self.vista_ir_a(),
         };
-        (self.aplicada(), vec![self.parche(vec![cambio])])
+        (self.applied(), vec![self.parche(vec![change])])
     }
 
-    /// Las fuentes SÍNCRONAS: lo que esta ventana ya tiene en memoria. Las
-    /// conexiones empiezan vacías y se rellenan cuando el daemon contesta.
-    fn fuentes_de_ir_a(&self) -> Vec<Box<dyn GotoSource + Send>> {
-        let hueco = self.hueco();
-        let enc = hueco.pane.name_encoding();
-        let actual = hueco.pane.dir().clone();
+    /// The SYNCHRONOUS sources: what this window already has in memory.
+    /// Connections start empty and fill in once the daemon answers.
+    fn go_to_sources(&self) -> Vec<Box<dyn GotoSource + Send>> {
+        let slot = self.slot();
+        let encoding = slot.pane.name_encoding();
+        let current = slot.pane.dir().clone();
         let mut out: Vec<Box<dyn GotoSource + Send>> = Vec::new();
-        out.push(Box::new(RutaSource::new(norte_i18n::t_in(
+        out.push(Box::new(PathSource::new(norte_i18n::t_in(
             self.lang,
             "goto-path-desc",
         ))));
-        // La historia es la ÚNICA sección que lleva la reinterpretación del
-        // panel, porque es la única cuyas rutas son de ese panel.
-        let historia: Vec<GotoRow> =
-            norte_frontend::history::history_rows(&hueco.historial, &actual, "", enc)
+        // History is the ONLY section that carries the panel's
+        // reinterpretation, because it is the only one whose paths belong to
+        // that panel.
+        let history: Vec<GotoRow> =
+            norte_frontend::history::history_rows(&slot.history, &current, "", encoding)
                 .into_iter()
                 .filter(|r| r.mark != norte_frontend::history::HistoryMark::Current)
-                .take(TRAIDAS_POR_LISTA)
-                .map(|r| norte_frontend::goto::fila_ruta(SECCION_HISTORIA.id, None, &r.path, enc))
+                .take(BROUGHT_BY_LIST)
+                .map(|r| {
+                    norte_frontend::goto::row_path(SECTION_HISTORY.id, None, &r.path, encoding)
+                })
                 .collect();
-        out.push(Box::new(FixedSource::new(SECCION_HISTORIA, historia)));
-        let populares: Vec<GotoRow> =
-            norte_frontend::history::popular_rows(&self.popular, &actual, "")
+        out.push(Box::new(FixedSource::new(SECTION_HISTORY, history)));
+        let popular: Vec<GotoRow> =
+            norte_frontend::history::popular_rows(&self.popular, &current, "")
                 .into_iter()
-                .take(TRAIDAS_POR_LISTA)
-                .map(|r| norte_frontend::goto::fila_ruta(SECCION_POPULARES.id, None, &r.path, None))
+                .take(BROUGHT_BY_LIST)
+                .map(|r| norte_frontend::goto::row_path(SECTION_POPULAR.id, None, &r.path, None))
                 .collect();
-        out.push(Box::new(FixedSource::new(SECCION_POPULARES, populares)));
-        // Un favorito cuyo destino no parsea NO se ofrece: la lista de sitios
-        // ya lo enseña con su error.
-        let favoritos: Vec<GotoRow> = self
+        out.push(Box::new(FixedSource::new(SECTION_POPULAR, popular)));
+        // A favorite whose destination does not parse is NOT offered: the
+        // places list already shows it with its error.
+        let favorites: Vec<GotoRow> = self
             .config
             .common
             .hotlist
             .iter()
             .filter_map(|h| {
                 h.target.as_ref().ok().map(|p| {
-                    norte_frontend::goto::fila_ruta(SECCION_FAVORITOS.id, Some(&h.name), p, None)
+                    norte_frontend::goto::row_path(SECTION_FAVORITES.id, Some(&h.name), p, None)
                 })
             })
             .collect();
-        out.push(Box::new(FixedSource::new(SECCION_FAVORITOS, favoritos)));
-        out.push(Box::new(FixedSource::new(SECCION_CONEXIONES, Vec::new())));
-        // Los comandos, los MISMOS que la paleta de esta ventana ofrece: la
-        // paleta ya resuelve cuáles implementa este host y con qué efectos.
-        let comandos = norte_frontend::goto::filas_de_comandos(self.filas_de_paleta());
+        out.push(Box::new(FixedSource::new(SECTION_FAVORITES, favorites)));
+        out.push(Box::new(FixedSource::new(SECTION_CONNECTIONS, Vec::new())));
+        // The commands, the SAME ones this window's palette offers: the
+        // palette already resolves which ones this host implements and with
+        // what effects.
+        let commands = norte_frontend::goto::command_rows(self.palette_rows());
         out.push(Box::new(
-            FixedSource::new(SECCION_COMANDOS, comandos).solo_con_consulta(),
+            FixedSource::new(SECTION_COMMANDS, commands).only_with_query(),
         ));
         out
     }
 
-    /// Llegaron las conexiones: se ponen en su sección, SIN mover el cursor
-    /// (lo garantiza `reemplazar_seccion`). Un fallo deja la sección vacía y
-    /// no se anuncia: es una sección menos, no una pantalla que no abre.
-    pub(super) fn conexiones_de_ir_a(
+    /// The connections arrived: they go into their section, WITHOUT moving
+    /// the cursor (`replace_section` guarantees it). A failure leaves the
+    /// section empty and is not announced: it is one section fewer, not a
+    /// screen that fails to open.
+    pub(super) fn goto_connections(
         &mut self,
-        apertura: u64,
+        generation: u64,
         res: Result<Vec<norte_proto::methods::ConnectionEntry>, Error>,
     ) -> Option<BridgeEnvelope<UiUpdate>> {
-        if apertura != self.gen_ir_a {
+        if generation != self.gen_ir_a {
             return None;
         }
         let goto = self.ir_a.as_mut()?;
-        let filas: Vec<GotoRow> = res
+        let rows: Vec<GotoRow> = res
             .ok()?
             .iter()
             .take(crate::bridge::MAX_ROWS_PER_BATCH)
-            .map(|c| norte_frontend::goto::fila_conexion(&c.name, &c.url))
+            .map(|c| norte_frontend::goto::row_connection(&c.name, &c.url))
             .collect();
-        goto.reemplazar_seccion(SECCION_CONEXIONES, filas, false);
-        let cambio = ViewChange::Goto {
+        goto.replace_section(SECTION_CONNECTIONS, rows, false);
+        let change = ViewChange::Goto {
             goto: self.vista_ir_a(),
         };
-        Some(self.parche(vec![cambio]))
+        Some(self.parche(vec![change]))
     }
 
-    /// Pregunta al índice por lo que hay escrito, si vale la pena.
+    /// Asks the index about what is typed, if it is worth it.
     ///
-    /// Relanzar ABORTA la pregunta anterior. Por debajo de
-    /// [`MINIMO_PARA_EL_INDICE`] no se pregunta y se VACÍA la sección: dejar
-    /// ahí lo que contestó a una consulta más larga es enseñar una respuesta
-    /// a una pregunta que ya no se hizo.
-    fn pedir_al_indice_de_ir_a(
+    /// Relaunching ABORTS the previous question. Below
+    /// [`MINIMUM_FOR_THE_INDEX`] it does not ask and EMPTIES the section:
+    /// leaving there what answered a longer query is showing an answer to a
+    /// question that is no longer being asked.
+    fn request_goto_from_index(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) {
-        if let Some(vieja) = self.ir_a_indice.take() {
-            vieja.abort();
+        if let Some(old) = self.go_to_index.take() {
+            old.abort();
         }
         let Some(goto) = self.ir_a.as_mut() else {
             return;
         };
-        let consulta = goto.query().to_owned();
-        // Tres casos en los que no se pregunta, y los tres VACÍAN la sección:
-        // - una consulta corta no puede ser buena;
-        // - una RUTA tecleada no es una consulta semántica, y mandarla a un
-        //   proveedor de embeddings —quizá remoto— es mandarle el nombre de
-        //   un directorio del lector;
-        // - una ventana de solo lectura no deja salir consultas del proceso,
-        //   igual que su búsqueda semántica explícita (`ConsultaSemantica`).
-        let solo_lectura = self.efectos == crate::commands::Efectos::SoloLectura;
-        if consulta.chars().count() < MINIMO_PARA_EL_INDICE
-            || norte_frontend::goto::parece_ruta(&consulta).is_some()
-            || solo_lectura
+        let query = goto.query().to_owned();
+        // Three cases where it does not ask, and all three EMPTY the section:
+        // - a short query cannot be good;
+        // - a typed PATH is not a semantic query, and sending it to an
+        //   embeddings provider — maybe remote — is sending it the name of a
+        //   directory of the reader's;
+        // - a read-only window does not let queries leave the process, same
+        //   as its explicit semantic search (`QuerySemantic`).
+        let read_only = self.effects == crate::commands::Effects::SoloRead;
+        if query.chars().count() < MINIMUM_FOR_THE_INDEX
+            || norte_frontend::goto::looks_path(&query).is_some()
+            || read_only
         {
-            goto.reemplazar_seccion(SECCION_INDICE, Vec::new(), true);
+            goto.replace_section(SECTION_INDEX, Vec::new(), true);
             return;
         }
-        let apertura = self.gen_ir_a;
+        let generation = self.gen_ir_a;
         let backend = Arc::clone(backend);
-        let buzon = buzon.clone();
-        self.ir_a_indice = Some(tokio::spawn(async move {
+        let mailbox = mailbox.clone();
+        self.go_to_index = Some(tokio::spawn(async move {
             let res = match tokio::time::timeout(
-                PLAZO_PLUGINS,
-                backend.semantic_search(consulta.clone(), TOPE_DEL_INDICE),
+                DEADLINE_PLUGINS,
+                backend.semantic_search(query.clone(), INDEX_CAP),
             )
             .await
             {
                 Ok(r) => r,
                 Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
             };
-            let _ = buzon
-                .send(Mensaje::Fondo(Box::new(Fondo::IndiceDeIrA(
-                    apertura, consulta, res,
+            let _ = mailbox
+                .send(Message::Background(Box::new(Background::GoToIndex(
+                    generation, query, res,
                 ))))
                 .await;
         }));
     }
 
-    /// Mete la respuesta del índice en su sección.
+    /// Puts the index's answer into its section.
     ///
-    /// No abre nada ni escribe en la barra (un índice apagado contesta
-    /// `Unsupported`, y eso es lo normal de quien no lo tiene); no se fía del
-    /// tamaño de la respuesta (el MISMO `validate_semantic_hits` que la
-    /// búsqueda semántica); y no toca nada si la pantalla ya se cerró o lo
-    /// escrito cambió mientras el índice pensaba.
-    pub(super) fn indice_de_ir_a(
+    /// It opens nothing and does not write to the bar (an index that is off
+    /// answers `Unsupported`, and that is normal for whoever does not have
+    /// one); it does not trust the size of the answer (the SAME
+    /// `validate_semantic_hits` as semantic search); and it touches nothing
+    /// if the screen already closed or what was typed changed while the
+    /// index was thinking.
+    pub(super) fn goto_index(
         &mut self,
-        apertura: u64,
-        consulta: &str,
+        generation: u64,
+        query: &str,
         res: Result<Vec<norte_proto::methods::SemanticHit>, Error>,
     ) -> Option<BridgeEnvelope<UiUpdate>> {
-        if apertura != self.gen_ir_a {
+        if generation != self.gen_ir_a {
             return None;
         }
         let goto = self.ir_a.as_mut()?;
-        if goto.query() != consulta {
+        if goto.query() != query {
             return None;
         }
         let hits = norte_frontend::validate_semantic_hits(res.ok()?)?;
-        goto.reemplazar_seccion(
-            SECCION_INDICE,
-            norte_frontend::goto::filas_del_indice(&hits),
-            true,
-        );
-        let cambio = ViewChange::Goto {
+        goto.replace_section(SECTION_INDEX, norte_frontend::goto::index_rows(&hits), true);
+        let change = ViewChange::Goto {
             goto: self.vista_ir_a(),
         };
-        Some(self.parche(vec![cambio]))
+        Some(self.parche(vec![change]))
     }
 
-    /// Cierra «ir a» y abandona la pregunta al índice: lo que venga detrás
-    /// manda, y una respuesta tardía ya no tiene dónde caer.
-    fn cerrar_ir_a(&mut self) {
+    /// Closes "go to" and abandons the question to the index: whatever comes
+    /// after rules, and a late answer no longer has anywhere to land.
+    fn close_go_to(&mut self) {
         self.ir_a = None;
         self.gen_ir_a += 1;
-        if let Some(vieja) = self.ir_a_indice.take() {
-            vieja.abort();
+        if let Some(old) = self.go_to_index.take() {
+            old.abort();
         }
     }
 
-    /// Las teclas mientras «ir a» está abierto.
+    /// The keys while "go to" is open.
     ///
-    /// FIJAS, como las de la paleta y por lo mismo: no hay verbos `dialog.*`
-    /// para teclear un carácter o correr la selección. `Escape` cierra,
-    /// `Enter` va, las flechas mueven y lo demás teclea.
-    pub(super) fn tecla_en_ir_a(
+    /// FIXED, like the palette's and for the same reason: there are no
+    /// `dialog.*` verbs for typing a character or moving the selection.
+    /// `Escape` closes, `Enter` goes, the arrows move and everything else
+    /// types.
+    pub(super) fn key_in_goto(
         &mut self,
         k: &crate::keys::KeyInput,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let Some(g) = self.ir_a.as_mut() else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
         match k.key.as_str() {
-            "Escape" | "esc" => self.cerrar_ir_a(),
+            "Escape" | "esc" => self.close_go_to(),
             "Enter" | "enter" => {
-                let clave = g.selected().map(|r| r.key.clone());
-                return self.confirmar_ir_a(clave, backend, buzon);
+                let key = g.selected().map(|r| r.key.clone());
+                return self.confirm_go_to(key, backend, mailbox);
             }
             "ArrowDown" | "down" => g.down(),
             "ArrowUp" | "up" => g.up(),
             "Backspace" | "backspace" => {
                 g.backspace();
-                self.pedir_al_indice_de_ir_a(backend, buzon);
+                self.request_goto_from_index(backend, mailbox);
             }
-            otra => {
-                // Una tecla de TEXTO es un punto de código, no una unidad
-                // UTF-16 ni un nombre de tecla: `ArrowLeft` no se teclea.
-                let mut chars = otra.chars();
+            other => {
+                // A TEXT key is a code point, not a UTF-16 unit nor a key
+                // name: `ArrowLeft` is not typed.
+                let mut chars = other.chars();
                 match (chars.next(), chars.next()) {
                     (Some(c), None) if !k.ctrl && !k.alt && !k.meta => {
                         g.push_char(c);
-                        self.pedir_al_indice_de_ir_a(backend, buzon);
+                        self.request_goto_from_index(backend, mailbox);
                     }
-                    _ => return (self.aplicada(), Vec::new()),
+                    _ => return (self.applied(), Vec::new()),
                 }
             }
         }
-        let cambio = ViewChange::Goto {
+        let change = ViewChange::Goto {
             goto: self.vista_ir_a(),
         };
-        (self.aplicada(), vec![self.parche(vec![cambio])])
+        (self.applied(), vec![self.parche(vec![change])])
     }
 
-    /// Confirma la fila elegida: cierra la pantalla ANTES de actuar —el cierre
-    /// en su propio parche, como la paleta, para que lo que abra el efecto no
-    /// quede debajo— y hace lo que decide `norte_frontend::goto::accion`.
-    fn confirmar_ir_a(
+    /// Confirms the chosen row: closes the screen BEFORE acting — the close
+    /// in its own patch, like the palette, so that whatever the effect opens
+    /// does not end up underneath it — and does what
+    /// `norte_frontend::goto::action` decides.
+    fn confirm_go_to(
         &mut self,
-        clave: Option<String>,
+        key: Option<String>,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        self.cerrar_ir_a();
-        let cierre = self.parche(vec![ViewChange::Goto { goto: None }]);
-        let Some(clave) = clave else {
-            return (self.aplicada(), vec![cierre]);
+        self.close_go_to();
+        let closing = self.parche(vec![ViewChange::Goto { goto: None }]);
+        let Some(key) = key else {
+            return (self.applied(), vec![closing]);
         };
-        let (ack, mut resto) = match norte_frontend::goto::accion(&clave) {
-            Accion::Ir(dir) => (
-                self.aplicada(),
-                self.navegar(&dir, Trail::Record, backend, buzon),
+        let (ack, mut rest) = match norte_frontend::goto::action(&key) {
+            Action::Ir(dir) => (
+                self.applied(),
+                self.navigate(&dir, Trail::Record, backend, mailbox),
             ),
-            // Por el MISMO camino que una tecla: «ir a» es otra puerta al
-            // catálogo, no un segundo despachador.
-            Accion::Comando(cmd) => match efecto_de(&cmd, 1) {
-                Some(efecto) => self.aplicar_efecto(efecto, backend, buzon),
-                None => self.no_implementado(&cmd),
+            // Through the SAME path as a key: "go to" is another door into
+            // the catalogue, not a second dispatcher.
+            Action::Command(cmd) => match effect_of(&cmd, 1) {
+                Some(effect) => self.apply_effect(effect, backend, mailbox),
+                None => self.no_implemented(&cmd),
             },
-            Accion::Nada(motivo) => (self.aplicada(), self.decir(motivo)),
+            Action::Nothing(reason) => (self.applied(), self.say(reason)),
         };
-        let mut envios = vec![cierre];
-        envios.append(&mut resto);
-        (ack, envios)
+        let mut outgoing = vec![closing];
+        outgoing.append(&mut rest);
+        (ack, outgoing)
     }
 
-    /// La proyección de «ir a».
+    /// "Go to"'s projection.
     pub(super) fn vista_ir_a(&self) -> Option<crate::dto::GotoView> {
         let g = self.ir_a.as_ref()?;
-        let filas = g.rows();
-        // UNA línea de vista por línea del modelo, sin saltarse ninguna: el
-        // cursor es un índice en `lines`, y una línea caída lo descuadraría en
-        // silencio. El invariante —`GotoLine::Row(i)` siempre nombra una fila
-        // que existe— lo mantiene `Goto::refrescar`, que empuja las dos a la
-        // vez; si algún día se rompiera, sale una fila vacía y el cursor sigue
-        // señalando lo mismo que el modelo.
+        let rows = g.rows();
+        // ONE view line per model line, without skipping any: the cursor is
+        // an index into `lines`, and a dropped line would throw it off
+        // silently. The invariant — `GotoLine::Row(i)` always names a row
+        // that exists — is kept by `Goto::refresh`, which pushes both at
+        // once; if it ever broke, an empty row comes out and the cursor keeps
+        // pointing at the same thing as the model.
         let lines: Vec<crate::dto::GotoLineView> = g
             .lines()
             .iter()
@@ -330,7 +336,7 @@ impl Estado {
                     title: norte_i18n::t_in(self.lang, s.title_key),
                 },
                 GotoLine::Row(i) => {
-                    let r = filas.get(*i);
+                    let r = rows.get(*i);
                     crate::dto::GotoLineView::Row {
                         text: clamp_display(r.map(|r| r.text.clone()).unwrap_or_default()),
                         desc: clamp_display(r.map(|r| r.desc.clone()).unwrap_or_default()),

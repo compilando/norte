@@ -1,114 +1,117 @@
-//! Vigilancia de los directorios VISIBLES de los panes (#106, mitad
-//! watching): un watcher nativo (inotify/FSEvents/ReadDirectoryChangesW)
-//! sobre los dirs `file://` de ambos panes, con FALLBACK a sondeo de mtime
-//! cada 2 s cuando el nativo no arranca o `watch()` falla — el pitfall de
-//! CLAUDE.md: los watches de inotify están LIMITADOS; degradar con aviso,
-//! jamás fallar. Los eventos llegan al run loop DEBOUNCED (coalesce con
-//! flanco de cola): una ráfaga de escrituras = un refresh, no una tormenta.
+//! Watching panes' VISIBLE directories (#106, watching half): a native
+//! watcher (inotify/FSEvents/ReadDirectoryChangesW) over both panes'
+//! `file://` dirs, with a FALLBACK to mtime polling every 2s when the
+//! native one does not start or `watch()` fails — the CLAUDE.md pitfall:
+//! inotify watches are LIMITED; degrade with a notice, never fail. Events
+//! reach the run loop DEBOUNCED (trailing-edge coalesce): a burst of
+//! writes = one refresh, not a storm.
 //!
-//! Alcance v1: solo panes locales no-virtuales (un dir sftp/S3/archive no
-//! tiene inotify; su refresh sigue siendo manual). Quien consume reacciona a
-//! cada evento con SU camino de refresco —el de una mutación, no el de un
-//! `cd`—, que es lo que conserva las marcas: `Ctrl+R` en la TUI,
-//! `refresh_dir` en la GUI. Las dos lo usan desde el ítem 7 del roadmap
-//! post-alpha; lo estrenó la TUI y por eso el vocabulario de aquí es el suyo.
+//! v1 scope: only non-virtual local panes (an sftp/S3/archive dir has no
+//! inotify; its refresh stays manual). The consumer reacts to each event
+//! with ITS OWN refresh path — a mutation's, not a `cd`'s — which is what
+//! preserves the marks: `Ctrl+R` in the TUI, `refresh_dir` in the GUI.
+//! Both use it since item 7 of the post-alpha roadmap; the TUI debuted it
+//! and that is why the vocabulary here is its own.
 //!
-//! Límites documentados del modo degradado: el sondeo mira el mtime del
-//! DIRECTORIO — crear/borrar/renombrar dentro se ve; escribir en un
-//! fichero existente NO cambia el mtime del padre y no se detecta (el
-//! aviso de barra lo dice). La degradación es un latch de sesión (una
-//! sola dirección): un tope transitorio de inotify deja el sondeo activo
-//! hasta reiniciar — simplicidad antes que histéresis (v1).
+//! Documented limits of degraded mode: polling looks at the DIRECTORY's
+//! mtime — creating/deleting/renaming inside it is seen; writing to an
+//! existing file does NOT change the parent's mtime and is not detected
+//! (the bar's notice says so). Degradation is a session latch (one
+//! direction only): a transient inotify limit leaves polling active until
+//! restart — simplicity over hysteresis (v1).
 
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-/// Coalesce del flanco de cola: tras el primer evento crudo se espera este
-/// hueco (drenando lo que siga llegando) antes de emitir UNO debounced.
+/// Trailing-edge coalesce: after the first raw event, this gap is waited
+/// out (draining whatever keeps arriving) before emitting ONE debounced
+/// one.
 const DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(300);
-/// Período del sondeo de mtimes en modo degradado (pitfall inotify).
+/// Period of mtime polling in degraded mode (inotify pitfall).
 const POLL: std::time::Duration = std::time::Duration::from_secs(2);
-/// Suelo entre EMISIONES (review MAJOR-3): una tormenta sostenida (copia
-/// grande al dir, nuestra o ajena) emite como mucho una vez por suelo —
-/// jamás un refresh cada `DEBOUNCE`. Derivado de `debounce` en tests.
+/// Floor between EMISSIONS (review MAJOR-3): a sustained storm (a big
+/// copy into the dir, ours or someone else's) emits at most once per
+/// floor — never a refresh every `DEBOUNCE`. Derived from `debounce` in
+/// tests.
 const fn emit_floor(debounce: std::time::Duration) -> std::time::Duration {
     debounce.saturating_mul(3)
 }
-/// Tope de latencia del coalesce (review MAJOR-3): con eventos llegando
-/// sin pausa, la espera de ventana tranquila no puede diferir el refresh
-/// para siempre — pasado el tope se emite igual.
+/// Coalesce latency cap (review MAJOR-3): with events arriving with no
+/// pause, the wait for a quiet window cannot defer the refresh forever —
+/// past the cap it is emitted anyway.
 const fn max_coalesce(debounce: std::time::Duration) -> std::time::Duration {
     debounce.saturating_mul(10)
 }
 
-/// ¿Este evento del watcher es un CAMBIO en el directorio, o solo una
-/// lectura?
+/// Is this watcher event a CHANGE in the directory, or just a read?
 ///
-/// Descartar las lecturas no es una optimización, es lo que impide que la
-/// vigilancia se realimente: listar un directorio lo abre y lo recorre, e
-/// inotify emite `IN_OPEN`/`IN_ACCESS`/`IN_CLOSE_NOWRITE` **sobre el propio
-/// directorio vigilado**. Sin este filtro, cada refresco generaba los
-/// eventos que provocaban el siguiente, así que tras el primer `cd` los dos
-/// panes se re-listaban para siempre al ritmo del suelo de emisión (~1,2 s)
-/// — el «parpadeo constante» que se veía en las columnas, y un gesto de
-/// ratón cancelado cada vez que el listado cambiaba bajo él.
+/// Dropping reads is not an optimization, it is what stops watching from
+/// feeding back on itself: listing a directory opens and walks it, and
+/// inotify emits `IN_OPEN`/`IN_ACCESS`/`IN_CLOSE_NOWRITE` **on the watched
+/// directory itself**. Without this filter, every refresh generated the
+/// events that triggered the next one, so after the first `cd` both panes
+/// re-listed forever at the pace of the emission floor (~1.2s) — the
+/// "constant flicker" seen in the columns, and a mouse gesture cancelled
+/// every time the listing changed under it.
 ///
-/// `norte_config::watch` ya tenía este filtro por la misma razón (recargar
-/// abre `norte.toml`, y ese open disparaba otra recarga). Toda escritura
-/// real sigue llegando como `Create`/`Modify`/`Remove`, y un `Err` cuenta
-/// como cambio a propósito: significa «puedes haber perdido eventos».
-fn es_cambio(res: &Result<notify::Event, notify::Error>) -> bool {
+/// `norte_config::watch` already had this filter for the same reason
+/// (reloading opens `norte.toml`, and that open triggered another reload).
+/// Every real write still arrives as `Create`/`Modify`/`Remove`, and an
+/// `Err` counts as a change on purpose: it means "you may have missed
+/// events".
+fn es_change(res: &Result<notify::Event, notify::Error>) -> bool {
     match res {
         Err(_) => true,
         Ok(ev) => !matches!(ev.kind, notify::EventKind::Access(_)),
     }
 }
 
-/// Estado compartido watcher/poller ↔ [`DirWatch`].
+/// Shared watcher/poller <-> [`DirWatch`] state.
 struct Shared {
-    /// Dirs nativos vigilados (uno por pane; `None` = pane no vigilable).
+    /// Natively watched dirs (one per pane; `None` = pane not watchable).
     dirs: Mutex<[Option<PathBuf>; 2]>,
-    /// Modo degradado: el poller sondea mtimes (el nativo no cubre).
+    /// Degraded mode: the poller polls mtimes (the native one does not
+    /// cover it).
     degraded: AtomicBool,
 }
 
-/// Vigilancia viva de los dirs de los panes. Soltar este valor la DETIENE
-/// (regla 3, cancelación drop-based: el watcher nativo se cierra y el task
-/// debouncer/poller ve su canal crudo cerrado y retorna).
+/// Live watch of the panes' dirs. Dropping this value STOPS it (rule 3,
+/// drop-based cancellation: the native watcher closes and the
+/// debouncer/poller task sees its raw channel closed and returns).
 pub struct DirWatch {
-    /// Recibe UN evento por ráfaga (debounced): «algo cambió en un dir
-    /// vigilado» — el consumidor refresca ambos panes (paridad Ctrl+R).
+    /// Receives ONE event per burst (debounced): "something changed in a
+    /// watched dir" — the consumer refreshes both panes (Ctrl+R parity).
     pub rx: tokio::sync::mpsc::Receiver<()>,
-    /// Emisor crudo retenido A PROPÓSITO (y usado por tests): en modo
-    /// degradado el watcher es `None` y sin este extremo vivo el canal
-    /// crudo se cerraría, matando también al POLLER. Su drop (con el del
-    /// watcher) es lo que cierra el task — cancelación drop-based.
+    /// Raw sender kept on PURPOSE (and used by tests): in degraded mode the
+    /// watcher is `None` and without this end alive the raw channel would
+    /// close, killing the POLLER too. Its drop (with the watcher's) is
+    /// what closes the task — drop-based cancellation.
     #[cfg_attr(not(test), allow(dead_code))]
     raw_tx: tokio::sync::mpsc::UnboundedSender<()>,
     watcher: Option<notify::RecommendedWatcher>,
     shared: Arc<Shared>,
-    /// Aviso de degradación pendiente de mostrar (una sola vez).
+    /// Degradation notice pending to show (once only).
     degraded_pending: bool,
 }
 
 impl DirWatch {
-    /// Arranca el pipeline: watcher nativo (si puede) + task
-    /// debouncer/poller. Nunca falla: sin nativo queda DEGRADADO (sondeo).
+    /// Starts the pipeline: native watcher (if it can) + debouncer/poller
+    /// task. Never fails: with no native one it stays DEGRADED (polling).
     ///
     /// # Panics
-    /// Si se llama FUERA de un runtime de tokio: el debouncer es un
-    /// `tokio::spawn`. En la GUI eso significa el hilo de sesión y no el de
-    /// GPUI, que no tiene runtime al que pedírselo.
+    /// If called OUTSIDE a tokio runtime: the debouncer is a
+    /// `tokio::spawn`. In the GUI that means the session thread and not
+    /// GPUI's, which has no runtime to ask for one.
     #[must_use]
     pub fn new() -> Self {
         Self::new_with(DEBOUNCE, POLL)
     }
 
-    /// Como [`Self::new`] con períodos inyectables (tests: tiempo real con
-    /// períodos cortos — el poller hace I/O real y el reloj pausado de
-    /// tokio no la espera).
+    /// Like [`Self::new`] with injectable periods (tests: real time with
+    /// short periods — the poller does real I/O and tokio's paused clock
+    /// does not wait for it).
     fn new_with(debounce: std::time::Duration, poll: std::time::Duration) -> Self {
         let (raw_tx, mut raw_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
         let (out_tx, rx) = tokio::sync::mpsc::channel::<()>(1);
@@ -116,14 +119,14 @@ impl DirWatch {
             dirs: Mutex::new([None, None]),
             degraded: AtomicBool::new(false),
         });
-        // Watcher nativo: un evento de CAMBIO (también Err: «puedes haber
-        // perdido eventos») = ping crudo; el debouncer coalesce. Mismo
-        // criterio que `norte_config::watch`, incluido su filtro — ver
-        // [`es_cambio`], que es lo que impide que esto se realimente.
+        // Native watcher: a CHANGE event (also Err: "you may have missed
+        // events") = raw ping; the debouncer coalesces. Same criterion as
+        // `norte_config::watch`, including its filter — see [`es_change`],
+        // which is what stops this from feeding back on itself.
         let cb_tx = raw_tx.clone();
         let watcher =
             notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
-                if es_cambio(&res) {
+                if es_change(&res) {
                     let _ = cb_tx.send(());
                 }
             })
@@ -132,9 +135,9 @@ impl DirWatch {
             shared.degraded.store(true, Ordering::Relaxed);
         }
         let degraded_pending = watcher.is_none();
-        // Task debouncer + poller (regla 3: retorna cuando TODOS los
-        // emisores crudos mueren — drop de `DirWatch` suelta watcher y
-        // `raw_tx` — o cuando el consumidor suelta `rx`).
+        // Debouncer + poller task (rule 3: returns when ALL raw senders
+        // die — dropping `DirWatch` drops the watcher and `raw_tx` — or
+        // when the consumer drops `rx`).
         let sh = Arc::clone(&shared);
         tokio::spawn(async move {
             let mut mtimes: std::collections::HashMap<PathBuf, std::time::SystemTime> =
@@ -143,56 +146,59 @@ impl DirWatch {
                 tokio::select! {
                     ev = raw_rx.recv() => {
                         if ev.is_none() {
-                            return; // todos los emisores muertos (drop)
+                            return; // all senders dead (drop)
                         }
-                        // Flanco de cola REAL (review MAJOR-3): drenar y
-                        // esperar hasta una ventana tranquila; una tormenta
-                        // sin pausa emite igual al tope de latencia.
-                        let inicio = tokio::time::Instant::now();
+                        // REAL trailing edge (review MAJOR-3): drain and
+                        // wait for a quiet window; a storm with no pause
+                        // emits anyway at the latency cap.
+                        let start = tokio::time::Instant::now();
                         loop {
                             while raw_rx.try_recv().is_ok() {}
                             tokio::time::sleep(debounce).await;
                             if raw_rx.try_recv().is_err() {
-                                break; // ventana tranquila
+                                break; // quiet window
                             }
-                            if inicio.elapsed() >= max_coalesce(debounce) {
+                            if start.elapsed() >= max_coalesce(debounce) {
                                 while raw_rx.try_recv().is_ok() {}
                                 break;
                             }
                         }
                         if out_tx.send(()).await.is_err() {
-                            return; // consumidor muerto
+                            return; // consumer dead
                         }
-                        // Suelo entre emisiones: lo que llegue durante la
-                        // espera se acumula y coalesce en la siguiente.
+                        // Floor between emissions: whatever arrives during
+                        // the wait accumulates and coalesces into the next
+                        // one.
                         tokio::time::sleep(emit_floor(debounce)).await;
                     }
                     () = tokio::time::sleep(poll), if sh.degraded.load(Ordering::Relaxed) => {
                         if out_tx.is_closed() {
                             return;
                         }
-                        // Poison imposible en la práctica (nadie panica
-                        // con el lock): los datos siguen siendo válidos.
+                        // Poisoning is impossible in practice (nobody
+                        // panics holding the lock): the data is still
+                        // valid.
                         let dirs = sh
                             .dirs
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner)
                             .clone();
-                        // MINOR-4: poda de líneas base de dirs ya no
-                        // vigilados (sin ella el mapa crece toda la sesión).
+                        // MINOR-4: prune baselines of dirs no longer
+                        // watched (without this the map grows all
+                        // session).
                         mtimes.retain(|d, _| dirs.iter().flatten().any(|w| w == d));
                         let mut changed = false;
                         for dir in dirs.into_iter().flatten() {
                             let Ok(meta) = tokio::fs::metadata(&dir).await else {
-                                continue; // dir desaparecido: el refresh lo dirá
+                                continue; // dir gone: the refresh will say so
                             };
                             let Ok(modified) = meta.modified() else {
                                 continue;
                             };
                             match mtimes.insert(dir, modified) {
                                 Some(prev) if prev != modified => changed = true,
-                                // Primera vista = línea base (arrancar no
-                                // es un cambio); mtime igual = nada.
+                                // First sighting = baseline (starting up is
+                                // not a change); same mtime = nothing.
                                 None | Some(_) => {}
                             }
                         }
@@ -212,15 +218,15 @@ impl DirWatch {
         }
     }
 
-    /// Actualiza el conjunto vigilado al de `targets` (uno por pane,
-    /// `None` = no vigilable). Diff barato: sin cambios, cero syscalls —
-    /// llamable en cada iteración del run loop. Un `watch()` que falla
-    /// (tope de inotify) degrada a sondeo con aviso, jamás falla.
+    /// Updates the watched set to `targets`' (one per pane, `None` = not
+    /// watchable). Cheap diff: no changes, zero syscalls — callable on
+    /// every run-loop iteration. A `watch()` that fails (inotify limit)
+    /// degrades to polling with a notice, never fails.
     pub fn rewatch(&mut self, targets: &[Option<PathBuf>; 2]) {
         use notify::Watcher as _;
         let old = {
-            // Un solo scope de lock (compare+replace atómico); poison
-            // imposible en la práctica → into_inner.
+            // A single lock scope (atomic compare+replace); poisoning is
+            // impossible in practice -> into_inner.
             let mut d = self
                 .shared
                 .dirs
@@ -242,27 +248,27 @@ impl DirWatch {
                     && w.watch(dir, notify::RecursiveMode::NonRecursive).is_err()
                     && !self.shared.degraded.swap(true, Ordering::Relaxed)
                 {
-                    // Tope de watches (pitfall inotify): degradar con
-                    // aviso, el poller cubre desde ya.
+                    // Watch limit (inotify pitfall): degrade with a
+                    // notice, the poller covers it from now on.
                     self.degraded_pending = true;
                 }
             }
         }
     }
 
-    /// `true` UNA vez cuando la vigilancia acaba de degradar a sondeo — el
-    /// caller pinta el aviso (`status-watch-degraded`) y no repite.
+    /// `true` ONCE when watching just degraded to polling — the caller
+    /// paints the notice (`status-watch-degraded`) and does not repeat it.
     pub fn take_degraded_notice(&mut self) -> bool {
         std::mem::take(&mut self.degraded_pending)
     }
 
-    /// Inyector de eventos crudos para tests (mismo canal que el watcher).
+    /// Raw-event injector for tests (same channel as the watcher).
     #[cfg(test)]
     fn inject(&self) {
         let _ = self.raw_tx.send(());
     }
 
-    /// Fuerza el modo degradado (tests del poller).
+    /// Forces degraded mode (poller tests).
     #[cfg(test)]
     fn force_degraded(&self) {
         self.shared.degraded.store(true, Ordering::Relaxed);
@@ -286,103 +292,103 @@ mod tests {
         tokio::time::timeout(d, rx.recv()).await.is_ok()
     }
 
-    /// Una LECTURA del dir vigilado no es un cambio. Es el filtro que
-    /// impide que la vigilancia se realimente: listar abre y recorre el
-    /// directorio, e inotify emite `Access` sobre él, así que contarlo
-    /// haría que cada refresco provocase el siguiente.
+    /// A READ of the watched dir is not a change. It is the filter that
+    /// stops watching from feeding back on itself: listing opens and walks
+    /// the directory, and inotify emits `Access` on it, so counting it
+    /// would make every refresh trigger the next one.
     #[test]
-    fn una_lectura_no_cuenta_como_cambio() {
+    fn a_read_does_not_count_as_a_change() {
         use notify::event::{AccessKind, CreateKind, EventKind, ModifyKind, RemoveKind};
 
         let ev = |kind| Ok(notify::Event::new(kind));
-        assert!(!es_cambio(&ev(EventKind::Access(AccessKind::Any))));
-        assert!(!es_cambio(&ev(EventKind::Access(AccessKind::Read))));
-        assert!(!es_cambio(&ev(EventKind::Access(AccessKind::Open(
+        assert!(!es_change(&ev(EventKind::Access(AccessKind::Any))));
+        assert!(!es_change(&ev(EventKind::Access(AccessKind::Read))));
+        assert!(!es_change(&ev(EventKind::Access(AccessKind::Open(
             notify::event::AccessMode::Read
         )))));
-        // Toda escritura real sigue contando.
-        assert!(es_cambio(&ev(EventKind::Create(CreateKind::File))));
-        assert!(es_cambio(&ev(EventKind::Modify(ModifyKind::Any))));
-        assert!(es_cambio(&ev(EventKind::Remove(RemoveKind::File))));
-        // Y un error significa «puedes haber perdido eventos»: refrescar.
-        assert!(es_cambio(&Err(notify::Error::generic("perdidos"))));
+        // Every real write still counts.
+        assert!(es_change(&ev(EventKind::Create(CreateKind::File))));
+        assert!(es_change(&ev(EventKind::Modify(ModifyKind::Any))));
+        assert!(es_change(&ev(EventKind::Remove(RemoveKind::File))));
+        // And an error means "you may have missed events": refresh.
+        assert!(es_change(&Err(notify::Error::generic("perdidos"))));
     }
 
-    /// El bucle completo, con watcher real: leer el directorio vigilado —
-    /// que es LO QUE HACE un refresco— no debe producir ni un evento,
-    /// mientras que crear un fichero sí. Sin el filtro, este test emite en
-    /// la primera lectura y el TUI se re-lista para siempre tras el primer
-    /// `cd`.
+    /// The whole loop, with a real watcher: reading the watched directory —
+    /// which is WHAT a refresh DOES — must not produce a single event,
+    /// while creating a file does. Without the filter, this test emits on
+    /// the first read and the TUI re-lists forever after the first `cd`.
     #[tokio::test]
-    async fn listar_el_dir_vigilado_no_dispara_refrescos() {
+    async fn listing_the_watched_dir_does_not_trigger_refreshes() {
         let dir = tempfile::tempdir().unwrap();
-        // Sondeo prácticamente apagado: este test mira SOLO el watcher.
+        // Polling practically off: this test looks ONLY at the watcher.
         let mut w = DirWatch::new_with(FAST_DEBOUNCE, std::time::Duration::from_hours(1));
         w.rewatch(&[Some(dir.path().to_path_buf()), None]);
-        // Deja que el watcher nativo se registre antes de leer.
+        // Let the native watcher register before reading.
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
         for _ in 0..5 {
             let _: Vec<_> = std::fs::read_dir(dir.path())
-                .expect("leer el dir vigilado")
+                .expect("read the watched dir")
                 .collect();
         }
         assert!(
             !recv_within(&mut w.rx, std::time::Duration::from_millis(600)).await,
-            "leer el directorio no es un cambio: si esto emite, el refresco se realimenta"
+            "reading the directory is not a change: if this emits, the refresh feeds back on itself"
         );
 
-        std::fs::write(dir.path().join("nuevo.txt"), b"x").expect("crear");
+        std::fs::write(dir.path().join("nuevo.txt"), b"x").expect("create");
         assert!(
             recv_within(&mut w.rx, std::time::Duration::from_secs(2)).await,
-            "una escritura real sí refresca"
+            "a real write does refresh"
         );
     }
 
-    /// Una ráfaga de eventos crudos = UN evento debounced (flanco de cola)
-    /// — sin esto, una copia grande al dir vigilado sería una tormenta de
+    /// A burst of raw events = ONE debounced event (trailing edge) —
+    /// without this, a big copy into the watched dir would be a storm of
     /// refreshes.
     #[tokio::test]
-    async fn rafaga_coalesce_a_un_evento() {
+    async fn burst_coalesces_to_one_event() {
         let mut w = DirWatch::new_with(FAST_DEBOUNCE, FAST_POLL);
         for _ in 0..5 {
             w.inject();
         }
         assert!(
             recv_within(&mut w.rx, std::time::Duration::from_secs(2)).await,
-            "un evento debounced"
+            "one debounced event"
         );
         tokio::time::sleep(FAST_DEBOUNCE * 3).await;
-        assert!(w.rx.try_recv().is_err(), "y SOLO uno");
+        assert!(w.rx.try_recv().is_err(), "and ONLY one");
     }
 
-    /// Modo degradado (pitfall inotify): el poller detecta un cambio de
-    /// mtime del dir vigilado y emite; la primera vista es línea base (el
-    /// arranque no es un cambio).
+    /// Degraded mode (inotify pitfall): the poller detects a mtime change
+    /// on the watched dir and emits; the first sighting is the baseline
+    /// (starting up is not a change).
     #[tokio::test]
-    async fn poller_degradado_detecta_mtime() {
+    async fn poller_degraded_detects_mtime() {
         let dir = tempfile::tempdir().unwrap();
         let mut w = DirWatch::new_with(FAST_DEBOUNCE, FAST_POLL);
-        // Sin watcher nativo: solo el poller puede emitir (aísla el test
-        // de un inotify real sobre el tempdir).
+        // No native watcher: only the poller can emit (isolates the test
+        // from a real inotify over the tempdir).
         w.watcher = None;
         w.force_degraded();
         w.rewatch(&[Some(dir.path().to_path_buf()), None]);
-        // Línea base: varias pasadas de poll SIN tocar el dir.
+        // Baseline: several poll passes WITHOUT touching the dir.
         tokio::time::sleep(FAST_POLL * 4).await;
-        assert!(w.rx.try_recv().is_err(), "línea base sin evento");
-        // Cambio real (el mtime del DIRECTORIO cambia al crear dentro).
+        assert!(w.rx.try_recv().is_err(), "baseline with no event");
+        // Real change (the DIRECTORY's mtime changes when creating inside).
         std::fs::write(dir.path().join("nuevo"), b"x").unwrap();
         assert!(
             recv_within(&mut w.rx, std::time::Duration::from_secs(5)).await,
-            "el cambio de mtime emite un evento"
+            "the mtime change emits an event"
         );
     }
 
-    /// Regla 3 (cancelación drop-based): soltar los emisores mata el task —
-    /// el canal debounced se cierra (recv devuelve None), nada queda vivo.
+    /// Rule 3 (drop-based cancellation): dropping the senders kills the
+    /// task — the debounced channel closes (recv returns None), nothing is
+    /// left alive.
     #[tokio::test]
-    async fn drop_cierra_el_pipeline() {
+    async fn drop_closes_the_pipeline() {
         let w = DirWatch::new_with(FAST_DEBOUNCE, FAST_POLL);
         let mut rx = w.rx;
         drop(w.watcher);
@@ -390,17 +396,17 @@ mod tests {
         assert_eq!(
             tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
                 .await
-                .expect("el task debe morir, no colgarse"),
+                .expect("the task must die, not hang"),
             None,
-            "pipeline muerto tras el drop"
+            "pipeline dead after the drop"
         );
     }
 
-    /// Review MINOR-7: quitar un dir del conjunto (pane a virtual, cd a
-    /// remoto) actualiza el estado compartido — el poller deja de sondearlo
-    /// y su línea base se poda.
+    /// Review MINOR-7: removing a dir from the set (pane to virtual, cd to
+    /// remote) updates the shared state — the poller stops polling it and
+    /// its baseline is pruned.
     #[tokio::test]
-    async fn rewatch_a_menos_dirs_actualiza_el_conjunto() {
+    async fn rewatch_with_fewer_dirs_updates_the_set() {
         let dir = tempfile::tempdir().unwrap();
         let mut w = DirWatch::new_with(FAST_DEBOUNCE, FAST_POLL);
         w.rewatch(&[Some(dir.path().to_path_buf()), None]);
@@ -414,30 +420,31 @@ mod tests {
         );
     }
 
-    /// Review MINOR-7: el aviso de degradación es one-shot.
+    /// Review MINOR-7: the degradation notice is one-shot.
     #[tokio::test]
     async fn take_degraded_notice_es_one_shot() {
         let mut w = DirWatch::new_with(FAST_DEBOUNCE, FAST_POLL);
         w.degraded_pending = true;
         assert!(w.take_degraded_notice());
-        assert!(!w.take_degraded_notice(), "solo la primera vez");
+        assert!(!w.take_degraded_notice(), "only the first time");
     }
 
-    /// Review MINOR-7: drop del VALOR ENTERO (el camino real de
-    /// producción) también mata el pipeline.
+    /// Review MINOR-7: dropping the WHOLE VALUE (the real production path)
+    /// also kills the pipeline.
     #[tokio::test]
-    async fn drop_entero_cierra_el_pipeline() {
+    async fn dropping_entirely_closes_the_pipeline() {
         let (probe_tx, mut probe_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
         {
             let w = DirWatch::new_with(FAST_DEBOUNCE, FAST_POLL);
-            // Sonda: cuando el task muera, su out_tx se suelta… no es
-            // observable desde fuera sin rx (que muere con w). Se observa
-            // vía el emisor crudo: tras el drop, mandar falla.
+            // Probe: when the task dies, its out_tx is dropped… not
+            // observable from outside with no rx (which dies with w). It
+            // is observed via the raw sender: after the drop, sending
+            // fails.
             let raw = w.raw_tx.clone();
             drop(w);
             tokio::spawn(async move {
-                // El task ve raw_rx colgando de ESTE clone; al soltarlo el
-                // canal muere del todo y el task retorna.
+                // The task sees raw_rx hanging off THIS clone; dropping it
+                // kills the channel completely and the task returns.
                 drop(raw);
                 let _ = probe_tx.send(());
             });
@@ -449,10 +456,10 @@ mod tests {
         );
     }
 
-    /// Review MAJOR-3: una TORMENTA sostenida de eventos crudos no emite
-    /// un refresh por debounce — el suelo entre emisiones acota la tasa.
+    /// Review MAJOR-3: a sustained STORM of raw events does not emit one
+    /// refresh per debounce — the floor between emissions caps the rate.
     #[tokio::test]
-    async fn tormenta_sostenida_respeta_el_suelo() {
+    async fn a_sustained_storm_respects_the_floor() {
         let mut w = DirWatch::new_with(FAST_DEBOUNCE, FAST_POLL);
         let raw = w.raw_tx.clone();
         let storm = tokio::spawn(async move {
@@ -461,8 +468,9 @@ mod tests {
                 tokio::time::sleep(std::time::Duration::from_millis(2)).await;
             }
         });
-        // Tormenta ≈ 400 ms = 20×debounce. Sin suelo serían ~20 emisiones;
-        // con coalesce+tope+suelo caben ~2-3. Cota generosa anti-flake.
+        // Storm ~= 400ms = 20x debounce. With no floor there would be ~20
+        // emissions; with coalesce+cap+floor, ~2-3 fit. Generous
+        // anti-flake bound.
         let mut emitted = 0;
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
         while tokio::time::Instant::now() < deadline {
@@ -475,15 +483,15 @@ mod tests {
                 }
             }
         }
-        assert!(emitted >= 1, "la tormenta debe emitir al menos una vez");
+        assert!(emitted >= 1, "the storm must emit at least once");
         assert!(
             emitted <= 6,
-            "tasa acotada por el suelo, no una por debounce: {emitted}"
+            "rate capped by the floor, not one per debounce: {emitted}"
         );
     }
 
-    /// `rewatch` con el MISMO conjunto es no-op — se llama en cada
-    /// iteración del run loop.
+    /// `rewatch` with the SAME set is a no-op — called on every run-loop
+    /// iteration.
     #[tokio::test]
     async fn rewatch_es_idempotente() {
         let dir = tempfile::tempdir().unwrap();
@@ -494,22 +502,22 @@ mod tests {
         assert_eq!(*w.shared.dirs.lock().unwrap(), t);
     }
 
-    /// Camino nativo REAL end-to-end: escribir en un dir vigilado produce
-    /// un evento debounced (si notify no puede arrancar en este entorno,
-    /// el constructor ya queda degradado y el test se salta — el poller
-    /// tiene su propio test).
+    /// REAL end-to-end native path: writing to a watched dir produces a
+    /// debounced event (if notify cannot start in this environment, the
+    /// constructor is already degraded and the test skips — the poller has
+    /// its own test).
     #[tokio::test]
-    async fn watcher_nativo_detecta_escritura() {
+    async fn native_watcher_detects_a_write() {
         let dir = tempfile::tempdir().unwrap();
         let mut w = DirWatch::new_with(FAST_DEBOUNCE, FAST_POLL);
         if w.watcher.is_none() {
-            return; // entorno sin inotify: cubierto por el poller
+            return; // environment with no inotify: covered by the poller
         }
         w.rewatch(&[Some(dir.path().to_path_buf()), None]);
         std::fs::write(dir.path().join("nuevo"), b"x").unwrap();
         assert!(
             recv_within(&mut w.rx, std::time::Duration::from_secs(5)).await,
-            "el watcher nativo emite ante una escritura real"
+            "the native watcher emits on a real write"
         );
     }
 }

@@ -1,28 +1,30 @@
-//! El pie de un listado (spec 2026-09-10): cuántos directorios y ficheros
-//! hay y cuánto pesan, qué está marcado, y el espacio libre del volumen.
+//! A listing's footer (spec 2026-09-10): how many directories and files
+//! there are and how much they weigh, what is marked, and the volume's
+//! free space.
 //!
-//! Una sola redacción para los dos frontends, como las notas de la cabecera
-//! (`notes`): la TUI lo pone en el borde inferior del panel y la ventana en
-//! una fila bajo el listado, y dos redacciones del mismo hecho es de donde
-//! salió media auditoría de paridad (ADR 0077).
+//! One single wording for both frontends, like the header's notes
+//! (`notes`): the TUI puts it on the pane's bottom border and the window
+//! in a row below the listing, and two wordings of the same fact is where
+//! half a parity audit came from (ADR 0077).
 
 use norte_i18n::{Lang, ta_in};
 use norte_proto::{Entry, EntryKind};
 
-/// Lo que hay en un listado, contado.
+/// What is in a listing, counted.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Counts {
-    /// Directorios (los symlinks a directorio cuentan como directorio).
+    /// Directories (symlinks to a directory count as a directory).
     pub dirs: usize,
-    /// Todo lo demás.
+    /// Everything else.
     pub files: usize,
-    /// Bytes de lo que declara tamaño. Un provider que no lo trae (el local,
-    /// para los directorios) no suma: la cuenta es de lo que se sabe.
+    /// Bytes of what declares a size. A provider that does not bring it (the
+    /// local one, for directories) does not add: the count is of what is
+    /// known.
     pub bytes: u64,
 }
 
-/// Cuenta `entries`, saltándose la fila `..` si `parent_row` la pone en
-/// cabeza: es sintética y no está en el directorio.
+/// Counts `entries`, skipping the `..` row if `parent_row` puts it at the
+/// head: it is synthetic and is not in the directory.
 #[must_use]
 pub fn counts(entries: &[Entry], parent_row: bool) -> Counts {
     let mut c = Counts::default();
@@ -36,19 +38,19 @@ pub fn counts(entries: &[Entry], parent_row: bool) -> Counts {
     c
 }
 
-/// Lo marcado, en crudo.
+/// What is marked, raw.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Marked {
-    /// Cuántas entradas.
+    /// How many entries.
     pub n: usize,
-    /// Cuánto pesan las que declaran tamaño.
+    /// How much the ones that declare a size weigh.
     pub bytes: u64,
-    /// Cuántas de ellas son directorios.
+    /// How many of them are directories.
     pub dirs: usize,
 }
 
-/// El pie, redactado: `12 dirs · 84 files · 1.3 GiB`, más `2 marked, 4.0
-/// MiB` si hay marcas y `120 GiB free` si se sabe.
+/// The footer, worded: `12 dirs · 84 files · 1.3 GiB`, plus `2 marked, 4.0
+/// MiB` if there are marks and `120 GiB free` if it is known.
 ///
 /// ```
 /// use norte_frontend::footer::{Counts, Marked, pane_footer};
@@ -66,10 +68,10 @@ pub fn pane_footer(counts: Counts, marked: Marked, free: Option<u64>, lang: Lang
     join(&segments(counts, marked, free, lang))
 }
 
-/// Los tramos del pie con su PRIORIDAD (mayor = más importante): lo
-/// marcado es lo que el lector acaba de hacer, las cuentas dicen qué hay,
-/// y el espacio libre es lo primero que cede cuando no cabe. Van en el
-/// orden de pantalla; la prioridad solo decide qué se cae.
+/// The footer's segments with their PRIORITY (higher = more important): what
+/// is marked is what the reader just did, the counts say what is there, and
+/// the free space is the first thing to give way when it does not fit. They
+/// go in screen order; the priority only decides what falls off.
 #[must_use]
 pub fn segments(
     counts: Counts,
@@ -89,9 +91,9 @@ pub fn segments(
             ],
         ),
     )];
-    let marcado = crate::notes::marked(marked.n, marked.bytes, marked.dirs, lang);
-    if !marcado.is_empty() {
-        out.push((2, marcado));
+    let marked_text = crate::notes::marked(marked.n, marked.bytes, marked.dirs, lang);
+    if !marked_text.is_empty() {
+        out.push((2, marked_text));
     }
     if let Some(free) = free {
         out.push((
@@ -114,10 +116,10 @@ fn join(segments: &[(u8, String)]) -> String {
         .join(" · ")
 }
 
-/// El pie que CABE en `width` celdas: se van cayendo los tramos de menor
-/// prioridad hasta que quepa, y si ni el último cabe, se recorta. Un pie
-/// que dice «2 marcadas» entero vale más que uno que dice «…ked» y el
-/// espacio libre.
+/// The footer that FITS in `width` cells: the lowest-priority segments get
+/// dropped until it fits, and if not even the last one fits, it gets
+/// truncated. A footer that says "2 marked" whole is worth more than one
+/// that says "…ked" and the free space.
 #[must_use]
 pub fn fit(mut segments: Vec<(u8, String)>, width: usize) -> String {
     loop {
@@ -149,14 +151,14 @@ mod tests {
         }
     }
 
-    /// La fila `..` no cuenta, un directorio sin tamaño no suma, y el
-    /// symlink cuenta como fichero.
+    /// The `..` row does not count, a directory with no size does not add,
+    /// and the symlink counts as a file.
     #[test]
-    fn cuenta_sin_la_fila_padre_y_solo_lo_que_declara_tamano() {
-        // La fila padre es SINTÉTICA (un `..` no es un segmento válido);
-        // aquí cualquier primera entrada hace de ella.
+    fn counts_without_the_parent_row_and_only_what_declares_size() {
+        // The parent row is SYNTHETIC (a `..` is not a valid segment); here
+        // any first entry stands in for it.
         let entries = [
-            entry("padre", EntryKind::Dir, None),
+            entry("parent", EntryKind::Dir, None),
             entry("a", EntryKind::Dir, None),
             entry("b", EntryKind::File, Some(100)),
             entry("c", EntryKind::Symlink, Some(5)),
@@ -172,19 +174,19 @@ mod tests {
         assert_eq!(
             counts(&entries, false).dirs,
             2,
-            "sin fila padre, `..` es un dir más"
+            "without a parent row, `..` is one more dir"
         );
         assert_eq!(
             counts(&[], true),
             Counts::default(),
-            "vacío con fila padre: nada"
+            "empty with a parent row: nothing"
         );
     }
 
-    /// Sin sitio, cae primero el espacio libre y después las cuentas; lo
-    /// marcado es lo último que se pierde, y entero.
+    /// With no room, the free space falls first and then the counts; what
+    /// is marked is the last thing lost, and whole.
     #[test]
-    fn el_pie_cede_por_prioridad_y_no_por_el_medio() {
+    fn the_footer_gives_way_by_priority_and_not_in_the_middle() {
         let c = Counts {
             dirs: 1,
             files: 2,
@@ -196,23 +198,23 @@ mod tests {
             dirs: 0,
         };
         let s = segments(c, m, Some(120 << 30), Lang::En);
-        let entero = fit(s.clone(), 200);
+        let whole = fit(s.clone(), 200);
         assert!(
-            entero.contains("free") && entero.contains("marked"),
-            "{entero}"
+            whole.contains("free") && whole.contains("marked"),
+            "{whole}"
         );
-        let sin_libre = fit(s.clone(), crate::display::cells(&entero) - 1);
+        let without_free = fit(s.clone(), crate::display::cells(&whole) - 1);
         assert!(
-            !sin_libre.contains("free") && sin_libre.contains("marked"),
-            "{sin_libre}"
+            !without_free.contains("free") && without_free.contains("marked"),
+            "{without_free}"
         );
-        let solo_marcado = fit(s, 20);
-        assert!(solo_marcado.starts_with("2 marked"), "{solo_marcado}");
+        let marked_only = fit(s, 20);
+        assert!(marked_only.starts_with("2 marked"), "{marked_only}");
     }
 
-    /// Las dos lenguas redactan, y el pie es corto: cabe en un borde.
+    /// Both languages word it, and the footer is short: it fits on one edge.
     #[test]
-    fn el_pie_redacta_en_las_dos_lenguas() {
+    fn the_footer_words_in_both_languages() {
         let c = Counts {
             dirs: 12,
             files: 84,
@@ -224,7 +226,7 @@ mod tests {
                 s.contains("12") && s.contains("84") && s.contains("120"),
                 "{s}"
             );
-            assert!(!s.contains("pane-footer"), "clave sin traducir: {s}");
+            assert!(!s.contains("pane-footer"), "untranslated key: {s}");
             assert!(crate::display::cells(&s) <= 56, "{s}");
         }
     }

@@ -1,63 +1,64 @@
-// Pintor de `Screen` para el mapa de disco (puente 71, fase 4): función con
-// `this: Screen`, enganchada como propiedad en `render.ts`.
+// `Screen` painter for the disk map (bridge 71, phase 4): a function with
+// `this: Screen`, hooked in as a property in `render.ts`.
 //
-// El treemap ya viene REPARTIDO por el host: aquí no se calcula nada. Es
-// deliberado — un reparto hecho dos veces son dos repartos distintos en cuanto
-// alguien toque un redondeo, y entonces el rectángulo que se ve y el que
-// resuelve un clic dejan de ser el mismo.
+// The treemap already comes LAID OUT by the host: nothing is computed here.
+// This is deliberate — a layout done twice is two different layouts as soon
+// as someone touches a rounding, and then the rectangle that is shown and the
+// one a click resolves stop being the same one.
 
 import type { Screen } from "../render";
 import type { DiskMapSlotView } from "../types";
 import type { SlotDom } from "./dom";
-// El MISMO tramo que pinta un panel de plugin, no una copia: es la conversión
-// de un tramo estilado a DOM, y dos copias se separan en cuanto una aprenda
-// algo que la otra no —un rol nuevo, otro enmascarado—.
+// The SAME span that paints a plugin panel, not a copy: it is the conversion
+// of a styled span to DOM, and two copies drift apart as soon as one learns
+// something the other does not — a new role, another one masked.
 import { tramo } from "./panel";
 
 /**
- * Pinta el mapa de un hueco: sus líneas y un botón por rectángulo.
+ * Paints a slot's map: its lines and a button per rectangle.
  *
- * El clic manda la CELDA (`panel_click`), no el hijo: quién es cada rectángulo
- * lo resuelve el host contra el marco que él mismo repartió. Si el nombre
- * viajara, habría que elegir entre la forma que se pinta —enmascarada, que no
- * identifica ningún fichero— y la reversible, y encima sería un nombre que
- * puede mandar cualquiera que hable con este renderer.
+ * The click sends the CELL (`panel_click`), not the child: who each
+ * rectangle is gets resolved by the host against the frame it laid out
+ * itself. If the name traveled, a choice would have to be made between the
+ * shape that is painted — masked, which identifies no file — and the
+ * reversible one, and on top of that it would be a name anyone talking to
+ * this renderer could send.
  */
 export function paintDiskMap(this: Screen, dom: SlotDom, slot: DiskMapSlotView): void {
-  const titulo = slot.measuring
+  const title = slot.measuring
     ? `${slot.title} — ${this.t("disk-map-measuring")}`
     : slot.title;
-  dom.root.setAttribute("aria-label", titulo);
+  dom.root.setAttribute("aria-label", title);
   dom.scroller.className = "disk-map";
-  // El nodo se REUSA mientras la geometría no cambie, así que un hueco que era
-  // un registro o un visor llega con el manejador de rueda del anterior
-  // puesto. Mismo cuidado que el panel de plugin.
+  // The node is REUSED as long as the geometry does not change, so a slot
+  // that used to be a log or a viewer arrives with the previous one's wheel
+  // handler still set. Same care as the plugin panel.
   dom.scroller.onwheel = null;
-  dom.title.replaceChildren(document.createTextNode(titulo));
+  dom.title.replaceChildren(document.createTextNode(title));
 
-  // Las zonas, agrupadas por fila en UNA pasada: un mapa puede traer 256
-  // líneas y 128 zonas, y filtrar la lista entera por cada línea sería
-  // recorrerla 256 veces para pintar lo mismo.
-  const porFila = new Map<number, typeof slot.hits>();
+  // The zones, grouped by row in ONE pass: a map can carry 256 lines and 128
+  // zones, and filtering the whole list for every line would mean walking it
+  // 256 times to paint the same thing.
+  const byRow = new Map<number, typeof slot.hits>();
   for (const h of slot.hits) {
-    const fila = porFila.get(h.row) ?? [];
-    fila.push(h);
-    porFila.set(h.row, fila);
+    const row = byRow.get(h.row) ?? [];
+    row.push(h);
+    byRow.set(h.row, row);
   }
 
-  const cuerpo = document.createElement("div");
-  cuerpo.className = "panel-lines";
-  for (const [fila, linea] of slot.lines.entries()) {
+  const body = document.createElement("div");
+  body.className = "panel-lines";
+  for (const [row, line] of slot.lines.entries()) {
     const li = document.createElement("div");
     li.className = "panel-line";
-    li.replaceChildren(...linea.map(tramo));
-    for (const hit of porFila.get(fila) ?? []) {
-      const boton = document.createElement("button");
-      boton.type = "button";
-      boton.className = "panel-hit";
-      boton.style.setProperty("--hit-col", String(hit.col));
-      boton.style.setProperty("--hit-width", String(hit.width));
-      boton.addEventListener("click", () => {
+    li.replaceChildren(...line.map(tramo));
+    for (const hit of byRow.get(row) ?? []) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "panel-hit";
+      button.style.setProperty("--hit-col", String(hit.col));
+      button.style.setProperty("--hit-width", String(hit.width));
+      button.addEventListener("click", () => {
         this.send({
           action: "panel_click",
           slot_id: slot.slot_id,
@@ -65,9 +66,9 @@ export function paintDiskMap(this: Screen, dom: SlotDom, slot: DiskMapSlotView):
           col: hit.col,
         });
       });
-      li.append(boton);
+      li.append(button);
     }
-    cuerpo.append(li);
+    body.append(li);
   }
-  dom.scroller.replaceChildren(cuerpo);
+  dom.scroller.replaceChildren(body);
 }

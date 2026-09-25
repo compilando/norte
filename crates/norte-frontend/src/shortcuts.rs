@@ -682,16 +682,17 @@ pub fn plan_rebind(
     Ok(rebind_dry_run(&split.sources(), seq, command)?)
 }
 
-/// A qué capa apuntaría el rebind, por su índice en `kinds`/`layers`.
+/// Which layer the rebind would target, by its index in `kinds`/`layers`.
 ///
-/// El destino y el DIRECTORIO donde se escribe tienen que salir del mismo
-/// sitio. D10 movió el destino al `keymap.toml` del perfil activo y el escritor
-/// seguía resolviendo el directorio del usuario por su cuenta: la puerta
-/// planificaba sobre un fichero y la escritura caía en otro, donde el perfil la
-/// tapaba (#305).
+/// The destination and the DIRECTORY it is written into have to come from
+/// the same place. D10 moved the destination to the active profile's
+/// `keymap.toml`, and the writer kept resolving the user's directory on its
+/// own: the gate planned against one file and the write landed in another,
+/// where the profile shadowed it (#305).
 ///
-/// `None` = la escritura crea un fichero que no existía, y entonces el llamante
-/// elige dónde (el directorio del perfil activo si lo hay, o el del usuario).
+/// `None` = the write creates a file that did not exist, and then the caller
+/// chooses where (the active profile's directory if there is one, or the
+/// user's).
 #[must_use]
 pub fn rebind_target_index(
     preset_name: &str,
@@ -872,9 +873,10 @@ keymap = [
             .find(|r| r.command == "pane.pack")
             .expect("the preset binds it");
         assert!(pack.is_bound());
-        // No ejecutable, y con su motivo escrito. Era una capacidad `Planned`
-        // con número de issue hasta que #132 construyó la última; hoy la fila
-        // no ejecutable es la del comando que este build no implementa.
+        // Not runnable, and with its reason written. It was a `Planned`
+        // capability with an issue number until #132 built the last one;
+        // today the not-runnable row is the one for the command this build
+        // does not implement.
         assert!(
             matches!(pack.avail, Availability::NotHere),
             "{:?}",

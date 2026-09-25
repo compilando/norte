@@ -1,8 +1,8 @@
-//! Buscar bajo un directorio, y el pane VIRTUAL que enseña los hits.
+//! Search under a directory, and the VIRTUAL pane that shows the hits.
 //!
-//! Los hits llegan por lotes y se acumulan en un pane que no es un directorio:
-//! salir de él (un `cd`) suelta la búsqueda y cancela la Task, que es por qué
-//! [`super::super::navigate`] tiene que conocer [`SearchRun`].
+//! Hits arrive in batches and accumulate in a pane that isn't a directory:
+//! leaving it (a `cd`) drops the search and cancels the Task, which is why
+//! [`super::super::navigate`] has to know about [`SearchRun`].
 
 use crossterm::event::{KeyCode, KeyModifiers};
 use norte_core::backend::{Backend, TaskRef};
@@ -16,41 +16,42 @@ use crate::fill::Fill;
 use crate::navigate::{apply_cd, cd};
 use crate::probes::{DecorateFetch, Probed};
 
-/// Una búsqueda viva EN CURSO (`Alt+F7`, liveSearch T6): la Task cancelable,
-/// el canal de lotes de hits y el pane virtual que los muestra. Molde `Fill`:
-/// vive en el run loop, se drena en el `select!` y se suelta al salir del modo
-/// virtual (un `cd`) cancelando la Task (regla 3).
+/// A live search IN PROGRESS (`Alt+F7`, liveSearch T6): the cancelable Task,
+/// the channel of hit batches and the virtual pane that shows them. `Fill`
+/// mold: it lives in the run loop, gets drained in the `select!` and gets
+/// dropped on leaving virtual mode (a `cd`), cancelling the Task (rule 3).
 pub struct SearchRun {
-    /// Task de `fs.search` (cancelable con `TaskRef::cancel`).
+    /// `fs.search` Task (cancelable with `TaskRef::cancel`).
     pub task: TaskRef,
-    /// Canal de lotes de hits (embebido: lo cierra el walker; remoto: la
-    /// bomba del `RemoteBackend` lo cierra al terminal).
+    /// Channel of hit batches (embedded: closed by the walker; remote: the
+    /// `RemoteBackend`'s pump closes it at the end).
     pub rx: tokio::sync::mpsc::Receiver<SearchHits>,
-    /// Pane que muestra los hits (índice en `App::panes`).
+    /// Pane showing the hits (index into `App::panes`).
     pub pane: usize,
-    /// Directorio ANTERIOR del pane, para restaurarlo al salir del modo
-    /// virtual (Esc tras terminar).
+    /// The pane's PREVIOUS directory, to restore it on leaving virtual mode
+    /// (Esc after finishing).
     pub prev_dir: VPath,
-    /// Hits acumulados (== `panes[pane].entries().len()`, contador propio para
-    /// no depender del re-sort del pane).
+    /// Accumulated hits (== `panes[pane].entries().len()`, its own counter so
+    /// it doesn't depend on the pane's re-sort).
     pub hits: usize,
-    /// Estado del run: `Running` mientras el walker emite; terminal tras
-    /// cerrarse el canal (se lee del `TaskProgress`).
+    /// The run's state: `Running` while the walker emits; terminal once the
+    /// channel closes (read from `TaskProgress`).
     pub state: SearchState,
 }
 
-/// Tope por defecto de hits de una búsqueda viva (`Alt+F7`, liveSearch T6):
-/// el diálogo v1 no expone el campo, así que se fija un tope razonable —
-/// acota la memoria del pane virtual (los hits se acumulan en `entries`) y
-/// hace alcanzable el estado `Truncated`. Al llegar, la Task completa y la
-/// barra pinta «truncada».
+/// Default cap of hits for a live search (`Alt+F7`, liveSearch T6): the v1
+/// dialog doesn't expose the field, so a reasonable cap is fixed — it bounds
+/// the virtual pane's memory (hits accumulate in `entries`) and makes the
+/// `Truncated` state reachable. On reaching it, the Task completes and the
+/// status bar shows "truncated".
 pub const SEARCH_MAX_HITS: u32 = 10_000;
 
-/// Traduce una tecla del diálogo de búsqueda (`Alt+F7`, liveSearch T6) a un
-/// efecto sobre `App::search_dialog`. Teclas fijas como los demás overlays
-/// (#24); `ctrl+c` conserva su salida global. Devuelve `Some(params)` SOLO
-/// cuando Enter con algún criterio no vacío debe LANZAR la búsqueda (el caller
-/// cierra el diálogo y abre el pane virtual); Enter sin criterio avisa y sigue.
+/// Translates a search dialog key (`Alt+F7`, liveSearch T6) into an effect
+/// on `App::search_dialog`. Fixed keys like the rest of the overlays (#24);
+/// `ctrl+c` keeps its global quit. Returns `Some(params)` ONLY when Enter
+/// with some non-empty criterion must LAUNCH the search (the caller closes
+/// the dialog and opens the virtual pane); Enter with no criterion warns and
+/// continues.
 pub fn on_search_dialog_key(
     app: &mut App,
     mods: KeyModifiers,
@@ -61,12 +62,12 @@ pub fn on_search_dialog_key(
         return None;
     }
     let dialog = app.search_dialog.as_mut()?;
-    // SHIFT pasa (mayúsculas/símbolos llegan como Char+SHIFT); ctrl/alt no
-    // escriben en los campos.
+    // SHIFT passes through (uppercase/symbols arrive as Char+SHIFT); ctrl/alt
+    // don't write into the fields.
     let plain = mods.is_empty() || mods == KeyModifiers::SHIFT;
     match code {
-        // Toggles/Tab exigen `plain` (sin ctrl/alt): un Ctrl+F2 no togglea
-        // (review MINOR-4), igual que el resto de la captura del diálogo.
+        // Toggles/Tab require `plain` (no ctrl/alt): a Ctrl+F2 doesn't toggle
+        // (review MINOR-4), same as the rest of the dialog's capture.
         KeyCode::F(2) if plain => dialog.toggle_regex(),
         KeyCode::F(3) if plain => dialog.toggle_case(),
         KeyCode::F(4) if plain => dialog.toggle_whole_word(),
@@ -77,12 +78,13 @@ pub fn on_search_dialog_key(
         KeyCode::Backspace if plain => dialog.backspace(),
         KeyCode::Esc => app.search_dialog = None,
         KeyCode::Enter => {
-            // Un campo que no se entiende para ANTES de lanzar y lleva el
-            // foco a él (0.81.0). Lanzar ignorándolo devuelve el árbol
-            // entero, y eso se lee igual que un resultado: es la misma
-            // trampa que el aviso de versión evita contra un daemon viejo.
-            if let Some(campo) = dialog.campo_ilegible() {
-                dialog.field = campo;
+            // A field that doesn't parse STOPS things BEFORE launching and
+            // moves focus to it (0.81.0). Launching while ignoring it would
+            // return the whole tree, and that reads just like a result: it's
+            // the same trap the version warning avoids against an old
+            // daemon.
+            if let Some(field) = dialog.field_unreadable() {
+                dialog.field = field;
                 app.message = Some(t("search-bad-field"));
                 return None;
             }
@@ -90,8 +92,8 @@ pub fn on_search_dialog_key(
                 let root = app.focused().dir().clone();
                 return Some(search_params(app.search_dialog.as_ref()?, root));
             }
-            // Sin ningún criterio: no-op con aviso (una búsqueda sin criterio
-            // no tiene sentido). El diálogo sigue abierto.
+            // No criterion at all: no-op with a warning (a search with no
+            // criterion makes no sense). The dialog stays open.
             app.message = Some(t("search-empty"));
         }
         _ => {}
@@ -99,29 +101,30 @@ pub fn on_search_dialog_key(
     None
 }
 
-/// Construye los [`FsSearchParams`] del diálogo.
+/// Builds the dialog's [`FsSearchParams`].
 ///
-/// El mapeo en sí es del crate COMPARTIDO
-/// ([`norte_frontend::search::params`]): la ventana pregunta la misma
-/// búsqueda, y dos mapeos divergen en silencio. Lo que se hace aquí es lo
-/// único que es de este frontend — leer el RELOJ, porque «cambiado hace siete
-/// días» se cuenta desde el instante en que se pulsa Enter, y un mapeo que
-/// preguntara la hora por su cuenta no se podría probar sin esperar.
+/// The mapping itself belongs to the SHARED crate
+/// ([`norte_frontend::search::params`]): the window asks for the same
+/// search, and two mappings would drift apart silently. What's done here is
+/// the only thing that belongs to this frontend — reading the CLOCK, because
+/// "changed seven days ago" is counted from the instant Enter is pressed,
+/// and a mapping that asked for the time on its own couldn't be tested
+/// without waiting.
 ///
-/// `max_hits` se fija al tope por defecto ([`SEARCH_MAX_HITS`]) — el diálogo
-/// v1 no lo expone.
+/// `max_hits` is fixed to the default cap ([`SEARCH_MAX_HITS`]) — the v1
+/// dialog doesn't expose it.
 #[must_use]
 pub fn search_params(dialog: &SearchDialog, root: VPath) -> FsSearchParams {
-    let ahora_ms = std::time::SystemTime::now()
+    let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0_i64, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
-    norte_frontend::search::params(dialog, root, ahora_ms, SEARCH_MAX_HITS)
+    norte_frontend::search::params(dialog, root, now_ms, SEARCH_MAX_HITS)
 }
 
-/// Lanza la búsqueda: `backend.search` → Err deja el diálogo abierto y avisa
-/// por la barra (`search-status-failed`); Ok cierra el diálogo, guarda el dir
-/// anterior, arranca el pane virtual y registra el [`SearchRun`] (cancelando
-/// uno previo — el pane virtual es uno).
+/// Launches the search: `backend.search` → Err leaves the dialog open and
+/// warns via the status bar (`search-status-failed`); Ok closes the dialog,
+/// saves the previous dir, starts the virtual pane and registers the
+/// [`SearchRun`] (cancelling a previous one — the virtual pane is one).
 pub async fn launch_search(
     app: &mut App,
     backend: &Backend,
@@ -133,22 +136,23 @@ pub async fn launch_search(
     let root = params.root.clone();
     match backend.search(params).await {
         Ok((task, rx)) => {
-            // `prev_dir` y `root` son el MISMO directorio: la raíz sale de
-            // `app.focused().dir()` en el Enter del diálogo. `back_target` se
-            // apoya en esa igualdad — el `dir()` de un pane virtual es lo que
-            // deja en la rama de delante, y solo es honesto porque es el sitio
-            // donde el lector estaba. Si algún día la raíz se puede teclear,
-            // el rastro necesita `prev_dir`, no `dir()`.
+            // `prev_dir` and `root` are the SAME directory: the root comes
+            // from `app.focused().dir()` on the dialog's Enter. `back_target`
+            // leans on that equality — a virtual pane's `dir()` is what it
+            // leaves in the forward branch, and it's only honest because
+            // it's the place the reader was. If the root can ever be typed
+            // in, the trail needs `prev_dir`, not `dir()`.
             let prev_dir = app.panes[pane].dir().clone();
             app.search_dialog = None;
             app.message = None;
             app.panes[pane].begin_search(root);
-            // El pane pasa a virtual: un relleno paginado en vuelo de ESTE
-            // pane (dir aún cargándose) alimentaría el listado real como hits
-            // (review MAJOR T6) — se suelta ya (tirante; `apply_fill_msg` es
-            // el cinturón por si llega un lote antes).
+            // The pane becomes virtual: a paginated fill in flight for THIS
+            // pane (dir still loading) would feed the real listing as hits
+            // (review MAJOR T6) — it's dropped right away (belt-and-braces;
+            // `apply_fill_msg` is the belt in case a batch arrives first).
             fill.remove(app.panes.slot_of(pane));
-            // Un run previo (raro: el diálogo se cierra al lanzar) se cancela.
+            // A previous run (rare: the dialog closes on launch) gets
+            // cancelled.
             if let Some(old) = search_run.replace(SearchRun {
                 task,
                 rx,
@@ -160,9 +164,9 @@ pub async fn launch_search(
                 old.task.cancel();
             }
         }
-        // Criterios inválidos u otro fallo del daemon/engine: el diálogo
-        // SIGUE abierto (el usuario corrige) y el detalle va saneado a la
-        // barra (categoría del error — jamás el patrón crudo).
+        // Invalid criteria or another daemon/engine failure: the dialog
+        // STAYS open (the user fixes it) and the detail goes sanitized to
+        // the status bar (the error's category — never the raw pattern).
         Err(e) => {
             app.message = Some(ta(
                 "search-status-failed",
@@ -172,23 +176,25 @@ pub async fn launch_search(
     }
 }
 
-/// Aplica un lote de hits (o el cierre del canal) al pane virtual. Un lote
-/// llega mientras el pane siga en modo virtual; si un `cd` lo apagó, se suelta
-/// el run (su drenador alimentaría un listado real) cancelando la Task.
-/// `None` = fin del stream: se lee el estado terminal y se refleja en el pane.
+/// Applies a batch of hits (or the channel closing) to the virtual pane. A
+/// batch arrives as long as the pane stays in virtual mode; if a `cd` turned
+/// it off, the run is dropped (its drainer would feed a real listing),
+/// cancelling the Task. `None` = end of stream: the terminal state is read
+/// and reflected on the pane.
 pub fn drain_search(app: &mut App, search_run: &mut Option<SearchRun>, hits: Option<SearchHits>) {
     let Some(s) = search_run else {
         return;
     };
     if let Some(batch) = hits {
         if app.panes[s.pane].virtual_search {
-            // #81: el contexto del match (línea + preview, saneado EN ORIGEN
-            // por el core) se guarda por path — la barra lo pinta para el
-            // hit bajo el cursor. Vista del pane sigue plana (v1).
+            // #81: the match's context (line + preview, sanitized AT THE
+            // SOURCE by the core) is saved by path — the status bar paints
+            // it for the hit under the cursor. The pane's view stays flat
+            // (v1).
             if let Some(infos) = batch.matches {
-                // Contrato del wire: alineado 1:1. Un server bug que mande
-                // menos matches truncaría el zip EN SILENCIO — ruido en dev.
-                debug_assert_eq!(batch.entries.len(), infos.len(), "matches desalineados");
+                // Wire contract: aligned 1:1. A server bug sending fewer
+                // matches would truncate the zip SILENTLY — noisy in dev.
+                debug_assert_eq!(batch.entries.len(), infos.len(), "matches out of alignment");
                 for (e, info) in batch.entries.iter().zip(infos) {
                     app.panes[s.pane]
                         .search_matches
@@ -203,13 +209,13 @@ pub fn drain_search(app: &mut App, search_run: &mut Option<SearchRun>, hits: Opt
             *search_run = None;
         }
     } else {
-        // Canal cerrado: el walker terminó. Estado terminal no bloqueante.
+        // Channel closed: the walker finished. Non-blocking terminal state.
         let state = finalize_search_state(s);
         s.state = state;
         app.panes[s.pane].search_state = state;
-        // El detalle concreto va a la barra UNA vez (error_message); el pane
-        // guarda la CATEGORÍA para pintar `search-status-failed` de forma
-        // persistente tras limpiarse el mensaje (review MINOR-2).
+        // The concrete detail goes to the status bar ONCE (error_message);
+        // the pane keeps the CATEGORY to paint `search-status-failed`
+        // persistently after the message clears (review MINOR-2).
         if state == SearchState::Failed {
             let mut rx = s.task.progress();
             if let norte_proto::TaskState::Failed { error } = rx.borrow_and_update().state.clone() {
@@ -220,10 +226,11 @@ pub fn drain_search(app: &mut App, search_run: &mut Option<SearchRun>, hits: Opt
     }
 }
 
-/// Lee el estado terminal de un [`SearchRun`] del `TaskProgress` (no
-/// bloqueante) y lo mapea a [`SearchState`]. `Completed` con los hits al tope
-/// = `Truncated`; sin tope = `Done`. Un canal cerrado sin estado terminal aún
-/// publicado (carrera) se trata como `Done` (el walker ya no emite).
+/// Reads a [`SearchRun`]'s terminal state from `TaskProgress` (non-blocking)
+/// and maps it to [`SearchState`]. `Completed` with hits at the cap =
+/// `Truncated`; without the cap = `Done`. A channel closed without a
+/// terminal state published yet (a race) is treated as `Done` (the walker no
+/// longer emits).
 pub fn finalize_search_state(s: &SearchRun) -> SearchState {
     let mut rx = s.task.progress();
     match rx.borrow_and_update().state.clone() {
@@ -236,10 +243,10 @@ pub fn finalize_search_state(s: &SearchRun) -> SearchState {
     }
 }
 
-/// Esc en el pane virtual de búsqueda (liveSearch T6): con la Task viva pide
-/// cancelación (los hits ya llegados se conservan; el estado pasará a
-/// `Cancelled` al cerrarse el canal); ya terminada, sale del modo virtual
-/// restaurando el dir anterior con un `cd` normal.
+/// Esc in the search virtual pane (liveSearch T6): with the Task alive, asks
+/// for cancellation (hits already received stay; the state will move to
+/// `Cancelled` when the channel closes); once finished, leaves virtual mode
+/// restoring the previous dir with a normal `cd`.
 pub async fn on_search_escape(
     app: &mut App,
     backend: &Backend,
@@ -269,9 +276,9 @@ pub async fn on_search_escape(
     );
 }
 
-/// Enter sobre un hit del pane virtual (liveSearch T6): cd al PADRE del hit y
-/// deja el cursor sobre él (por path, si ya está en la primera página).
-/// Cancela la Task si sigue viva y sale del modo virtual.
+/// Enter over a hit in the virtual pane (liveSearch T6): cd to the hit's
+/// PARENT and leaves the cursor on it (by path, if it's already on the first
+/// page). Cancels the Task if still alive and leaves virtual mode.
 pub async fn on_search_enter(
     app: &mut App,
     backend: &Backend,
@@ -303,8 +310,8 @@ pub async fn on_search_enter(
         search_run,
         outcome,
     );
-    // Re-ancla el cursor sobre el hit por path (el cd resetea a 0); si cayó
-    // en una página aún no drenada, el cursor se queda arriba (v1).
+    // Re-anchors the cursor on the hit by path (the cd resets it to 0); if it
+    // landed on a page not yet drained, the cursor stays at the top (v1).
     if let Some(i) = app.panes[pane].entries().iter().position(|e| e.path == hit) {
         app.panes[pane].set_cursor(i);
     }

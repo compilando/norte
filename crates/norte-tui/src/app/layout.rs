@@ -1,6 +1,6 @@
-//! La disposición vista desde `App`: cambiar el árbol entero, abrir y cerrar
-//! los huecos laterales (places, preview, tree, procesos, metadatos),
-//! redimensionar y mover el foco de hueco en hueco.
+//! The layout as seen from `App`: changing the whole tree, opening and
+//! closing the side slots (places, preview, tree, processes, metadata),
+//! resizing and moving focus from slot to slot.
 
 use super::{
     ALLOW_DISK_MAP, ALLOW_LOG, ALLOW_PANEL, ALLOW_PROCESSES, App, KeyOwner, PlacesClick, TreeClick,
@@ -10,25 +10,26 @@ use norte_i18n::t;
 use norte_proto::VPath;
 
 impl App {
-    /// Cambia la disposición entera, poniendo al día lo que depende de ella.
+    /// Changes the whole layout, bringing what depends on it up to date.
     ///
-    /// Los huecos del árbol nuevo que no tengan listado se crean vacíos en el
-    /// directorio del panel enfocado: un layout guardado nombra huecos, no
-    /// dice qué había dentro, y arrancar con paneles muertos sería peor que
-    /// arrancar con paneles repetidos.
+    /// The new tree's slots with no listing are created empty in the
+    /// focused panel's directory: a saved layout names slots, it doesn't say
+    /// what was inside them, and starting with dead panels would be worse
+    /// than starting with duplicated ones.
     pub fn set_layout(&mut self, tree: norte_frontend::layout::Node) {
         let dir = self.panes[self.focus].dir().clone();
         for id in tree.slot_ids() {
-            // Se siembra TODO kind con estado propio, no solo el listado: un
-            // preset trae sidebar, visor, procesos y hoja de atributos, y un
-            // hueco sin su estado se pinta vacío para siempre —el toggle que
-            // lo habría creado no se va a pulsar, porque el panel ya está ahí.
-            // Lo que ya existe se respeta: cambiar de layout no borra tu
-            // navegación.
+            // EVERY kind with its own state gets seeded, not just the
+            // listing: a preset brings the sidebar, the viewer, processes
+            // and the attribute sheet, and a slot with no state paints
+            // empty forever — the toggle that would have created it isn't
+            // going to be pressed, because the panel is already there.
+            // What already exists is respected: switching layouts doesn't
+            // erase your navigation.
             match tree.kind_of(id).map(norte_frontend::layout::KindId::as_str) {
                 Some("browser") if self.panes.browser(id).is_none() => {
-                    let nuevo = self.nuevo_pane(dir.clone(), Vec::new());
-                    self.panes.insert_browser(id, nuevo);
+                    let new_pane = self.new_pane(dir.clone(), Vec::new());
+                    self.panes.insert_browser(id, new_pane);
                 }
                 Some("places") if self.panes.places(id).is_none() => {
                     self.panes
@@ -45,23 +46,23 @@ impl App {
                 Some(crate::metadata::KIND) if self.panes.metadata(id).is_none() => {
                     self.panes.insert_metadata(id, None);
                 }
-                // #136: anclado donde está el listado, igual que al abrirlo a
-                // mano. Un layout guardado con el árbol dentro —una sesión de
-                // ayer, un preset que lo traiga— llega por aquí, y sin este
-                // brazo el hueco se pinta en blanco para siempre: el toggle
-                // que habría creado su estado no se va a pulsar, porque el
-                // panel ya está en pantalla.
+                // #136: anchored where the listing is, same as opening it by
+                // hand. A saved layout with the tree inside — yesterday's
+                // session, a preset that brings it — arrives through here,
+                // and without this arm the slot paints blank forever: the
+                // toggle that would have created its state isn't going to be
+                // pressed, because the panel is already on screen.
                 Some(crate::tree::KIND) if self.panes.tree(id).is_none() => {
                     let mut tree = crate::tree::Tree::default();
                     tree.anchor_near(&dir, &norte_frontend::shell::home_vpath());
                     self.panes.insert_tree(id, tree);
                 }
-                // Fase 7, y por el mismo motivo que el árbol de arriba: una
-                // disposición que trae la línea de tiempo —la sesión de ayer,
-                // un perfil— no pasa por el toggle que le habría creado el
-                // estado, y sin esto el hueco se queda en blanco para
-                // siempre. Nace VACÍA; quien la llena es el bucle, que es
-                // quien tiene el backend.
+                // Phase 7, and for the same reason as the tree above: a
+                // layout that brings the timeline — yesterday's session, a
+                // profile — doesn't go through the toggle that would have
+                // created its state, and without this the slot stays blank
+                // forever. Born EMPTY; the loop, which is what has the
+                // backend, is what fills it.
                 Some(crate::timeline::KIND) if self.panes.timeline(id).is_none() => {
                     self.panes
                         .insert_timeline(id, norte_frontend::timeline::Timeline::default());
@@ -69,45 +70,46 @@ impl App {
                 }
                 _ => {}
             }
-            // Los ids del layout no pueden chocar con los que se acuñen luego.
+            // The layout's ids can't collide with the ones minted later.
             self.next_slot = self.next_slot.max(id.0.saturating_add(1));
         }
         self.layout = tree;
         self.panes.refresh_visible(&self.layout);
-        self.podar_por_arbol();
+        self.prune_by_tree();
         self.settle_key_owner();
-        // Un sidebar recién sembrado nace VACÍO, y quien lo llenaba era su
-        // tecla. Una disposición que lo trae —`full`, `explorer`, la sesión de
-        // ayer, un perfil— no la pulsa nunca, así que el panel se quedaba en
-        // blanco para siempre: los favoritos van aquí mismo y las unidades se
-        // piden por la bandera, porque son I/O.
+        // A freshly seeded sidebar is born EMPTY, and its key was what used
+        // to fill it. A layout that brings it — `full`, `explorer`,
+        // yesterday's session, a profile — never presses it, so the panel
+        // used to stay blank forever: favorites go right here and drives
+        // are requested through the flag, because they're I/O.
         self.sync_places_favorites();
         self.places_wants_drives |= self.places_drives_visible();
         self.set_focus(0);
     }
 
-    /// Devuelve el teclado a los listados si quien lo tenía ya no está en la
-    /// disposición.
+    /// Hands the keyboard back to the listings if whoever had it is no
+    /// longer in the layout.
     ///
-    /// Sin esto, cambiar de disposición con un panel lateral ENFOCADO —cambiar
-    /// de perfil, aplicar un preset, restaurar una sesión— dejaba `key_owner`
-    /// apuntando a un panel que ya no existe. Y entonces TODA tecla se enruta
-    /// a su manejador, `<panel>_slot()` devuelve `None`, cada brazo es un
-    /// no-op, y el gestor entero deja de responder sin nada en pantalla que
-    /// explique por qué. Ni siquiera es reversible a ojo: la tecla del panel
-    /// lo REABRE, así que parece que abrirlo «arregla» el teclado.
+    /// Without this, switching layouts with a FOCUSED side panel —
+    /// switching profiles, applying a preset, restoring a session — left
+    /// `key_owner` pointing at a panel that no longer exists. And then
+    /// EVERY key gets routed to its handler, `<panel>_slot()` returns
+    /// `None`, each arm is a no-op, and the whole manager stops responding
+    /// with nothing on screen to explain why. It isn't even reversible by
+    /// eye: the panel's key RE-OPENS it, so opening it looks like it "fixes"
+    /// the keyboard.
     ///
-    /// Se comprueba por el KIND en el árbol y no por una bandera aparte: la
-    /// pregunta es literalmente «¿sigue ahí?», y una bandera es un segundo
-    /// sitio donde equivocarse.
-    /// Desde #329 pregunta si el panel SE VE, no si existe. Un panel que se
-    /// queda detrás de una pestaña —porque el lector cambió de pestaña, no
-    /// porque cerrara nada— tiene el teclado igual de inútil que uno cerrado:
-    /// las teclas van a algo que no está en pantalla. Y la barra lo pinta
-    /// cerrado, así que el estado que el lector ve y el que manda dejaban de
-    /// ser el mismo.
+    /// Checked by the KIND in the tree and not by a separate flag: the
+    /// question is literally "is it still there?", and a flag is a second
+    /// place to get it wrong.
+    /// Since #329 it asks whether the panel IS VISIBLE, not whether it
+    /// exists. A panel left behind a tab — because the reader switched
+    /// tabs, not because they closed anything — has a keyboard just as
+    /// useless as a closed one: keys go to something not on screen. And the
+    /// status bar paints it closed, so what the reader sees and what's in
+    /// charge stopped being the same.
     pub(crate) fn settle_key_owner(&mut self) {
-        let sigue = match self.key_owner {
+        let still_there = match self.key_owner {
             KeyOwner::Panes => true,
             KeyOwner::Places => self.slot_of_kind_visible("places").is_some(),
             KeyOwner::Preview => self.slot_of_kind_visible(crate::preview::KIND).is_some(),
@@ -116,38 +118,38 @@ impl App {
             KeyOwner::DiskMap => self.slot_of_kind_visible(crate::diskmap::KIND).is_some(),
             KeyOwner::Timeline => self.slot_of_kind_visible(crate::timeline::KIND).is_some(),
             KeyOwner::Log => self.slot_of_kind_visible(crate::logview::KIND).is_some(),
-            // El terminal, igual que los demás: si su hueco se va detrás de
-            // una pestaña, las teclas vuelven a los listados. El shell sigue
-            // vivo detrás — lo que se pierde es el teclado, no el proceso.
+            // The terminal, same as the rest: if its slot goes behind a
+            // tab, the keys go back to the listings. The shell stays alive
+            // behind it — what's lost is the keyboard, not the process.
             KeyOwner::Terminal => self.slot_of_kind_visible(crate::termpanel::KIND).is_some(),
-            // Un panel de plugin sigue teniendo el teclado mientras se VEA.
-            // Si el plugin se desactiva, o su hueco se va detrás de una
-            // pestaña, las teclas vuelven a los listados como con cualquier
-            // otro panel.
+            // A plugin panel keeps the keyboard as long as it's VISIBLE. If
+            // the plugin gets disabled, or its slot goes behind a tab, the
+            // keys go back to the listings like with any other panel.
             KeyOwner::Panel => self.panel_slot().is_some(),
         };
-        if !sigue {
+        if !still_there {
             self.key_owner = KeyOwner::Panes;
         }
     }
 
-    /// Parte el panel enfocado en dos, con el nuevo al lado.
+    /// Splits the focused panel in two, with the new one next to it.
     ///
-    /// El panel nuevo hereda directorio y entradas del que se partió, igual
-    /// que una pestaña nueva: es lo mismo que se está mirando, así que aparece
-    /// lleno en vez de parpadear vacío mientras alguien relee lo mismo. Y se
-    /// queda con el FOCO, que es lo que uno acaba de pedir.
+    /// The new panel inherits the split one's directory and entries, same
+    /// as a new tab: it's the same thing being looked at, so it shows up
+    /// full instead of flickering empty while someone rereads the same
+    /// thing. And it keeps the FOCUS, which is what was just requested.
     ///
-    /// Se NIEGA cuando el hueco enfocado ya no da para dos, y lo dice en la
-    /// barra. Sin eso, la tecla creaba un panel que el reparto escondía en el
-    /// mismo frame —el `Split` no cabe, se degrada a pestañas y la pantalla
-    /// vuelve a enseñar uno, con el árbol guardando el nuevo igualmente—, así
-    /// que desde fuera unas veces partía, otras no hacía nada y otras parecía
-    /// deshacer lo anterior. La cuenta la hace el mismo sitio que decide el
-    /// colapso ([`norte_frontend::layout::has_room_to_split`]) sobre el
-    /// rectángulo del ÚLTIMO frame: el tamaño de un hueco no lo sabe el árbol,
-    /// lo sabe la pantalla. Sin frame todavía no se niega nada — no saber no
-    /// es lo mismo que saber que no.
+    /// It's REFUSED when the focused slot no longer has room for two, and
+    /// it says so on the status bar. Without that, the key created a panel
+    /// the layout hid in the same frame — the `Split` doesn't fit,
+    /// degrades to tabs and the screen shows one again, with the tree
+    /// keeping the new one regardless — so from the outside it sometimes
+    /// split, sometimes did nothing and sometimes looked like it undid the
+    /// previous action. The count is done by the same spot that decides the
+    /// collapse ([`norte_frontend::layout::has_room_to_split`]) over the
+    /// LAST frame's rectangle: a slot's size isn't known by the tree, it's
+    /// known by the screen. With no frame yet, nothing gets refused — not
+    /// knowing isn't the same as knowing it doesn't fit.
     pub fn layout_split(&mut self, dir: norte_frontend::layout::Dir) {
         let focus = self.focused_slot();
         if let Some(rect) = self.mouse.slot_rect(focus)
@@ -162,53 +164,53 @@ impl App {
             return;
         }
         let id = self.mint_slot();
-        let nuevo = self.fork_pane(self.focus);
-        self.panes.insert_browser(id, nuevo);
+        let new_pane = self.fork_pane(self.focus);
+        self.panes.insert_browser(id, new_pane);
         self.layout = self.layout.split_slot(
             focus,
             dir,
             &norte_frontend::layout::Node::slot(id, norte_frontend::layout::KindId::browser()),
         );
         self.panes.refresh_visible(&self.layout);
-        self.podar_por_arbol();
-        // El foco al recién nacido: partir es pedir sitio para trabajar en él.
+        self.prune_by_tree();
+        // Focus to the newborn: splitting is asking for room to work in it.
         if let Some(i) = (0..self.panes.len()).find(|i| self.panes.slot_of(*i) == id) {
             self.set_focus(i);
         }
     }
 
-    /// Quién tiene el teclado del cuerpo ahora mismo (L3).
+    /// Who has the body's keyboard right now (L3).
     #[must_use]
     pub const fn key_owner(&self) -> KeyOwner {
         self.key_owner
     }
 
-    /// Devuelve el teclado a los listados.
+    /// Hands the keyboard back to the listings.
     ///
-    /// Lo llaman `dialog.cancel` desde el sidebar y `viewer.close` desde el
-    /// visor acoplado: los dos sueltan las teclas SIN cerrar el panel — cerrar
-    /// algo que el lector solo quería dejar de manejar es la respuesta
-    /// equivocada, y cerrarlo es lo que hace su propio comando de layout.
+    /// Called by `dialog.cancel` from the sidebar and `viewer.close` from
+    /// the docked viewer: both release the keys WITHOUT closing the panel —
+    /// closing something the reader only wanted to stop operating is the
+    /// wrong answer, and its own layout command is what closes it.
     pub const fn return_keys_to_panes(&mut self) {
         self.key_owner = KeyOwner::Panes;
     }
 
-    /// El hueco del sidebar de sitios, si está en el árbol.
+    /// The places sidebar's slot, if it's in the tree.
     #[must_use]
     pub fn places_slot(&self) -> Option<norte_frontend::layout::SlotId> {
         self.slot_of_kind("places")
     }
 
-    /// Copia los favoritos vigentes al sidebar, si está en la disposición.
+    /// Copies the current favorites to the sidebar, if it's in the layout.
     ///
-    /// De [`Self::hotlist`], que es la copia que mantienen el arranque y cada
-    /// alta o baja: el sidebar no vuelve a leer la config ni se queda con una
-    /// foto vieja de ella.
+    /// From [`Self::hotlist`], the copy startup and every add or remove
+    /// keep: the sidebar never rereads the config nor keeps an old snapshot
+    /// of it.
     ///
-    /// El popup de `Ctrl+D` y este panel pintan EL MISMO dato, y durante un
-    /// tiempo solo el popup se enteraba de los cambios: añadías un favorito,
-    /// salía en el popup, y el panel de al lado seguía sin él. Por eso todo
-    /// lo que toca la lista pasa por aquí.
+    /// The `Ctrl+D` popup and this panel paint THE SAME data, and for a
+    /// while only the popup found out about changes: you added a favorite,
+    /// it showed up in the popup, and the panel next to it stayed without
+    /// it. That's why everything that touches the list goes through here.
     pub fn sync_places_favorites(&mut self) {
         let Some(id) = self.places_slot() else {
             return;
@@ -223,11 +225,11 @@ impl App {
         }
     }
 
-    /// El primer hueco del ÁRBOL con ese kind, visible o no.
+    /// The first slot of the TREE with that kind, visible or not.
     ///
-    /// Del árbol y no del reparto: quien pregunta si el sidebar está abierto
-    /// quiere saber si existe, y un hueco detrás de una pestaña sigue
-    /// existiendo.
+    /// From the tree and not from the layout: whoever asks if the sidebar
+    /// is open wants to know if it exists, and a slot behind a tab still
+    /// exists.
     fn slot_of_kind(&self, kind: &str) -> Option<norte_frontend::layout::SlotId> {
         self.layout
             .slot_ids()
@@ -235,14 +237,15 @@ impl App {
             .find(|id| self.layout.kind_of(*id).is_some_and(|k| k.as_str() == kind))
     }
 
-    /// El primer hueco con ese kind que el lector VE ahora mismo (#329).
+    /// The first slot with that kind the reader SEES right now (#329).
     ///
-    /// La pareja de [`Self::slot_of_kind`], y las dos hacen falta porque hay
-    /// dos preguntas: quien va a colocar un panel quiere saber si ya existe
-    /// —duplicarlo sería lo malo—, y quien pinta un botón o cuenta una novedad
-    /// quiere saber si el lector lo tiene delante. Preguntar la primera y
-    /// actuar como si fuera la segunda es lo que hacía que un panel escondido
-    /// en una pestaña se pintara abierto y se comiera su marca de aviso.
+    /// [`Self::slot_of_kind`]'s pair, and both are needed because there are
+    /// two questions: whoever is about to place a panel wants to know if it
+    /// already exists — duplicating it would be the bad outcome — and
+    /// whoever paints a button or counts something new wants to know if the
+    /// reader has it in front of them. Asking the first and acting as if it
+    /// were the second is what made a panel hidden in a tab paint open and
+    /// swallow its notification mark.
     pub(crate) fn slot_of_kind_visible(
         &self,
         kind: &str,
@@ -253,62 +256,65 @@ impl App {
             .find(|id| self.layout.kind_of(*id).is_some_and(|k| k.as_str() == kind))
     }
 
-    /// ¿Tiene el lector este hueco delante?
+    /// Does the reader have this slot in front of them?
     ///
-    /// Responde por PESTAÑAS, no por sitio, y esa asimetría con la barra es
-    /// deliberada (#331): la barra deriva de las colocaciones del reparto —sabe
-    /// qué cabe—, y aquí no se puede, porque `App` no guarda el área pintada.
-    /// Un toggle razona sobre el árbol, que es lo único que tiene.
+    /// Answers by TAB, not by fit, and that asymmetry with the status bar
+    /// is deliberate (#331): the status bar derives from the layout's
+    /// placements — it knows what fits — and here that can't be done,
+    /// because `App` doesn't keep the painted area. A toggle reasons over
+    /// the tree, which is all it has.
     ///
-    /// Consecuencia, escrita para que nadie la descubra de nuevo: un panel cuya
-    /// pestaña está activa pero que el reparto descarta por falta de sitio se
-    /// pinta cerrado y esta tecla lo cierra. Arreglarlo pediría meter el último
-    /// área en el estado —un dato de presentación viviendo donde no vive—, que
-    /// es una decisión aparte y probablemente peor que la asimetría.
-    fn se_ve(&self, id: norte_frontend::layout::SlotId) -> bool {
+    /// Consequence, written down so nobody rediscovers it: a panel whose tab
+    /// is active but that the layout drops for lack of room paints closed
+    /// and this key closes it. Fixing it would require putting the last
+    /// area into the state — presentation data living where it doesn't
+    /// belong — which is a separate decision and probably worse than the
+    /// asymmetry.
+    fn is_visible(&self, id: norte_frontend::layout::SlotId) -> bool {
         self.layout.visible_slot_ids().contains(&id)
     }
 
-    /// Saca a la luz el hueco `id`: activa su pestaña en cada grupo del camino.
+    /// Brings slot `id` into view: activates its tab in every group along
+    /// the path.
     ///
-    /// No es un gesto propio y por eso no toca el teclado: lo llaman los
-    /// toggles antes de enfocar, porque enfocar algo que no se ve es mandar las
-    /// teclas a ninguna parte.
-    fn revelar(&mut self, id: norte_frontend::layout::SlotId) {
-        let nuevo = self.layout.reveal(id);
-        if nuevo != self.layout {
-            self.layout = nuevo;
+    /// It isn't a gesture of its own and that's why it doesn't touch the
+    /// keyboard: the toggles call it before focusing, because focusing
+    /// something not visible is sending the keys nowhere.
+    fn reveal(&mut self, id: norte_frontend::layout::SlotId) {
+        let new_layout = self.layout.reveal(id);
+        if new_layout != self.layout {
+            self.layout = new_layout;
             self.panes.refresh_visible(&self.layout);
         }
     }
 
-    /// Abre el sidebar de sitios, lo enfoca, o lo cierra.
+    /// Opens the places sidebar, focuses it, or closes it.
     ///
-    /// Las tres en una tecla, y en este orden: si no está, se acopla a la
-    /// IZQUIERDA del reparto donde vive el listado enfocado y se queda el
-    /// teclado; si está y el teclado lo tienen los listados, se lo lleva; y
-    /// solo si ya lo tenía, se cierra. Una segunda pulsación no puede cerrar
-    /// lo que el lector acaba de mirar de reojo.
+    /// All three on one key, in this order: if it isn't there, it docks to
+    /// the LEFT of the layout the focused listing lives in and takes the
+    /// keyboard; if it's there and the listings have the keyboard, it takes
+    /// it; and only if it already had it, it closes. A second press can't
+    /// close what the reader just glanced at.
     ///
-    /// Abrirlo NO toca los listados: ni cuántos hay, ni cuál está enfocado, ni
-    /// dónde está su cursor.
+    /// Opening it does NOT touch the listings: not how many there are, not
+    /// which is focused, not where its cursor is.
     pub fn toggle_places(&mut self) {
         use norte_frontend::layout::{Edge, KindId, Node, Size};
         match self.places_slot() {
-            // `se_ve` en la guarda desde #329: un panel escondido en una
-            // pestaña no se cierra, se enseña. Cerrar lo que el lector no
-            // tiene delante es la única de las tres acciones que no puede
-            // deshacer mirando.
-            Some(id) if self.key_owner == KeyOwner::Places && self.se_ve(id) => {
-                if let Some(nuevo) = self.layout.close_slot(id) {
-                    self.layout = nuevo;
+            // `se_ve` in the guard since #329: a panel hidden in a tab
+            // doesn't close, it gets shown. Closing what the reader doesn't
+            // have in front of them is the only one of the three actions
+            // that can't be undone by looking.
+            Some(id) if self.key_owner == KeyOwner::Places && self.is_visible(id) => {
+                if let Some(new_layout) = self.layout.close_slot(id) {
+                    self.layout = new_layout;
                     self.panes.refresh_visible(&self.layout);
-                    self.podar_por_arbol();
+                    self.prune_by_tree();
                 }
                 self.key_owner = KeyOwner::Panes;
             }
             Some(id) => {
-                self.revelar(id);
+                self.reveal(id);
                 self.key_owner = KeyOwner::Places;
             }
             None => {
@@ -318,15 +324,15 @@ impl App {
                 self.layout = self.layout.dock_grouped(
                     self.focused_slot(),
                     Edge::Left,
-                    // 16 celdas: el mínimo del kind son 14 y un `Fixed` gana
-                    // al mínimo, así que este número es el ancho de verdad.
+                    // 16 cells: the kind's minimum is 14 and a `Fixed` beats
+                    // the minimum, so this number is the real width.
                     Size::Fixed(16),
                     &Node::slot(id, KindId::new("places")),
                 );
                 self.panes.refresh_visible(&self.layout);
-                // El sidebar nace vacío: los favoritos son suyos desde el
-                // primer frame, no desde el primer refresco de fuera, y las
-                // unidades se piden por la bandera que drena el bucle.
+                // The sidebar is born empty: favorites are its own from the
+                // first frame, not from the first outside refresh, and
+                // drives are requested through the flag the loop drains.
                 self.sync_places_favorites();
                 self.places_wants_drives = true;
                 self.key_owner = KeyOwner::Places;
@@ -334,7 +340,7 @@ impl App {
         }
     }
 
-    /// Mueve el cursor del sidebar, si está abierto.
+    /// Moves the sidebar's cursor up, if it's open.
     pub fn places_up(&mut self) {
         if let Some(id) = self.places_slot()
             && let Some(s) = self.panes.places_mut(id)
@@ -343,7 +349,7 @@ impl App {
         }
     }
 
-    /// Baja el cursor del sidebar.
+    /// Moves the sidebar's cursor down.
     pub fn places_down(&mut self) {
         if let Some(id) = self.places_slot()
             && let Some(s) = self.panes.places_mut(id)
@@ -352,21 +358,22 @@ impl App {
         }
     }
 
-    /// Un CLICK sobre la fila `index` del sidebar (#226).
+    /// A CLICK over the sidebar's `index` row (#226).
     ///
-    /// La decisión vive aquí y no en el módulo del ratón para que se pueda
-    /// probar sin terminal, y porque es la misma que toma el teclado con otras
-    /// teclas: el ratón no puede tener su propia idea de qué hace activar una
-    /// fila. Tres desenlaces:
+    /// The decision lives here and not in the mouse module so it can be
+    /// tested without a terminal, and because it's the same one the
+    /// keyboard makes with other keys: the mouse can't have its own idea of
+    /// what activating a row does. Three outcomes:
     ///
-    /// - una CABECERA pliega o despliega su sección de una sola pulsación —
-    ///   es lo que dice la flecha que ya pinta;
-    /// - una fila que NO está seleccionada se selecciona, y el teclado se
-    ///   viene al sidebar: el click dice «me interesa esto», no «vete ahí»;
-    /// - la fila que YA estaba seleccionada se activa, que es lo mismo que
-    ///   `Enter`. Sin ventana de tiempo: un doble click funciona por ser dos
-    ///   clicks sobre la misma fila, y quien prefiera dos pulsaciones lentas
-    ///   obtiene lo mismo.
+    /// - a HEADER folds or unfolds its section with a single press — it's
+    ///   what the arrow it already paints says;
+    /// - a row that ISN'T selected gets selected, and the keyboard comes to
+    ///   the sidebar: the click says "I'm interested in this", not "go
+    ///   there";
+    /// - the row that WAS ALREADY selected gets activated, same as
+    ///   `Enter`. No time window: a double click works by being two clicks
+    ///   over the same row, and whoever prefers two slow presses gets the
+    ///   same result.
     pub fn places_click(&mut self, index: usize) -> PlacesClick {
         use norte_frontend::places::PlaceRow;
         let Some(id) = self.places_slot() else {
@@ -394,24 +401,24 @@ impl App {
         }
     }
 
-    /// Pliega o despliega la sección donde está el cursor del sidebar.
+    /// Folds or unfolds the section the sidebar's cursor is on.
     pub fn places_toggle_fold(&mut self) {
         if let Some(id) = self.places_slot()
             && let Some(s) = self.panes.places_mut(id)
         {
             s.toggle_fold();
         }
-        // Desplegar las unidades ES el momento de volver a pedirlas: un disco
-        // montado o desmontado desde que se abrió el panel se ve aquí, y sin
-        // un reloj de por medio.
+        // Unfolding drives IS the moment to request them again: a disk
+        // mounted or unmounted since the panel opened shows up here, and
+        // with no clock in between.
         self.places_wants_drives |= self.places_drives_visible();
     }
 
-    /// ¿Están DESPLEGADAS las unidades del sidebar?
+    /// Are the sidebar's drives UNFOLDED?
     ///
-    /// `false` también cuando no hay sidebar: quien pregunta es el run loop
-    /// para decidir si vuelve a pedir `host.volumes`, y sin panel no hay a
-    /// quién dárselos.
+    /// `false` also when there's no sidebar: the run loop asks in order to
+    /// decide whether to request `host.volumes` again, and with no panel
+    /// there's nobody to hand them to.
     #[must_use]
     pub fn places_drives_visible(&self) -> bool {
         self.places_slot()
@@ -419,30 +426,32 @@ impl App {
             .is_some_and(|s| !s.is_folded(norte_frontend::places::Section::Drives))
     }
 
-    /// Confirma la fila del sidebar: a dónde hay que llevar el listado.
+    /// Confirms the sidebar's row: where the listing has to go.
     ///
-    /// Devuelve la ruta en vez de navegar porque un `cd` es I/O y esto es
-    /// estado puro; quien tiene el `Backend` delante lo hace.
+    /// Returns the path instead of navigating because a `cd` is I/O and
+    /// this is pure state; whoever has the `Backend` in front of them does
+    /// it.
     ///
-    /// Tres desenlaces y los tres importan:
+    /// Three outcomes and all three matter:
     ///
-    /// - una fila que lleva a un sitio: se devuelve la ruta y el teclado vuelve
-    ///   a los listados, porque el sidebar es un MANDO y no un panel con
-    ///   directorio propio;
-    /// - una cabecera: aquí no pasa nada, y el teclado se queda donde está —
-    ///   quien decide qué hace Enter ahí pregunta antes por
-    ///   [`Self::places_cursor_on_header`] y pliega;
-    /// - un favorito roto: la barra dice POR QUÉ. Es la otra mitad de pintarlo
-    ///   marcado: en catorce celdas cabe el aviso, no la explicación.
+    /// - a row that leads somewhere: the path gets returned and the
+    ///   keyboard goes back to the listings, because the sidebar is a
+    ///   REMOTE and not a panel with its own directory;
+    /// - a header: nothing happens here, and the keyboard stays where it
+    ///   is — whoever decides what Enter does there asks
+    ///   [`Self::places_cursor_on_header`] first and folds;
+    /// - a broken favorite: the status bar says WHY. It's the other half of
+    ///   painting it marked: fourteen cells fit the warning, not the
+    ///   explanation.
     pub fn places_activate(&mut self) -> Option<VPath> {
         use norte_frontend::places::PlaceRow;
         let id = self.places_slot()?;
         let state = self.panes.places(id)?;
         if let Some(PlaceRow::Favorite {
-            target: Err(clave), ..
+            target: Err(key), ..
         }) = state.rows().get(state.cursor())
         {
-            let reason = t(clave);
+            let reason = t(key);
             self.message = Some(reason);
             return None;
         }
@@ -451,12 +460,13 @@ impl App {
         Some(dest)
     }
 
-    /// Si el cursor del sidebar está sobre una CABECERA de sección.
+    /// Whether the sidebar's cursor is over a section HEADER.
     ///
-    /// Lo pregunta quien decide qué hace Enter: sobre una cabecera pliega,
-    /// sobre una unidad o un favorito navega. Sin esta pregunta, Enter sobre
-    /// «Unidades» era inerte —[`Self::places_activate`] devuelve `None` ahí— y
-    /// plegar era Espacio y solo Espacio.
+    /// Asked by whoever decides what Enter does: over a header it folds,
+    /// over a drive or a favorite it navigates. Without this question,
+    /// Enter over "Drives" was inert —
+    /// [`Self::places_activate`] returns `None` there — and folding was
+    /// Space and only Space.
     #[must_use]
     pub fn places_cursor_on_header(&self) -> bool {
         use norte_frontend::places::PlaceRow;
@@ -465,47 +475,49 @@ impl App {
             .is_some_and(|s| matches!(s.rows().get(s.cursor()), Some(PlaceRow::Header { .. })))
     }
 
-    /// El hueco del visor acoplado, si está en el árbol.
+    /// The docked viewer's slot, if it's in the tree.
     #[must_use]
     pub fn preview_slot(&self) -> Option<norte_frontend::layout::SlotId> {
         self.slot_of_kind(crate::preview::KIND)
     }
 
-    /// Abre el visor acoplado, lo enfoca, o lo cierra.
+    /// Opens the docked viewer, focuses it, or closes it.
     ///
-    /// Abre SIN llevarse el teclado, al revés que [`Self::toggle_places`], y
-    /// la diferencia no es un capricho: el sidebar se abre para elegir algo en
-    /// él, y el preview se abre para seguir mirando el listado. Con el teclado
-    /// dentro, las flechas dejarían de mover el cursor —el mismo cursor al que
-    /// el panel sigue—, o sea que abrirlo apagaría lo único que hace. Pilotar
-    /// la TUI en tmux lo enseñó en la primera pulsación.
+    /// Opens WITHOUT taking the keyboard, unlike [`Self::toggle_places`],
+    /// and the difference isn't a whim: the sidebar opens to choose
+    /// something in it, and the preview opens to keep looking at the
+    /// listing. With the keyboard inside, the arrows would stop moving the
+    /// cursor — the same cursor the panel follows — so opening it would
+    /// turn off the only thing it does. Piloting the TUI in tmux showed it
+    /// on the first press.
     ///
-    /// La secuencia es abrir → enfocar (para `viewer.*`: hex, encoding,
-    /// desplazar) → cerrar.
+    /// The sequence is open → focus (for `viewer.*`: hex, encoding,
+    /// scrolling) → close.
     ///
-    /// Se acopla a la DERECHA, ponderado, y con `follows: Role(Active)`: no es
-    /// un kind nuevo, es el `viewer` de siempre con un vínculo puesto. El kind
-    /// dice qué hay dentro y el vínculo de quién es vista (ADR 0058), así que
-    /// un visor fijado y uno que sigue al cursor son el MISMO renderer.
+    /// Docks to the RIGHT, weighted, and with `follows: Role(Active)`: it
+    /// isn't a new kind, it's the usual `viewer` with a binding set. The
+    /// kind says what's inside and the binding says whose view it is
+    /// (ADR 0058), so a pinned viewer and one that follows the cursor are
+    /// the SAME renderer.
     pub fn toggle_preview(&mut self) {
         use norte_frontend::layout::{Bindings, Edge, Follow, KindId, Node, RoleId, Size};
         match self.preview_slot() {
-            Some(id) if self.key_owner == KeyOwner::Preview && self.se_ve(id) => {
-                if let Some(nuevo) = self.layout.close_slot(id) {
-                    self.layout = nuevo;
+            Some(id) if self.key_owner == KeyOwner::Preview && self.is_visible(id) => {
+                if let Some(new_layout) = self.layout.close_slot(id) {
+                    self.layout = new_layout;
                     self.panes.refresh_visible(&self.layout);
-                    self.podar_por_arbol();
+                    self.prune_by_tree();
                 }
                 self.key_owner = KeyOwner::Panes;
             }
-            // Sacarlo a la luz NO se lleva el teclado, y aquí está la
-            // diferencia con los otros cinco (#329): para el lector, revelar
-            // un visor escondido es ABRIRLO, y este toggle abre sin coger las
-            // teclas por lo que dice el párrafo de arriba — con el teclado
-            // dentro, las flechas dejan de mover el cursor al que el panel
-            // sigue. Siguen siendo tres pulsaciones desde escondido: enseñar,
-            // enfocar, cerrar; las mismas que desde cerrado.
-            Some(id) if !self.se_ve(id) => self.revelar(id),
+            // Bringing it into view does NOT take the keyboard, and here's
+            // the difference with the other five (#329): to the reader,
+            // revealing a hidden viewer IS opening it, and this toggle
+            // opens without grabbing the keys for what the paragraph above
+            // says — with the keyboard inside, the arrows stop moving the
+            // cursor the panel follows. It's still three presses from
+            // hidden: show, focus, close; the same as from closed.
+            Some(id) if !self.is_visible(id) => self.reveal(id),
             Some(_) => self.key_owner = KeyOwner::Preview,
             None => {
                 let id = self.mint_slot();
@@ -528,54 +540,55 @@ impl App {
         }
     }
 
-    /// El hueco del árbol, si está abierto.
+    /// The tree's slot, if it's open.
     #[must_use]
     pub fn tree_slot(&self) -> Option<norte_frontend::layout::SlotId> {
         self.slot_of_kind(crate::tree::KIND)
     }
 
-    /// Abre el árbol de directorios, lo enfoca, o lo cierra (#136).
+    /// Opens the directory tree, focuses it, or closes it (#136).
     ///
-    /// Tres estados como el sidebar y el panel de procesos: un árbol se abre
-    /// para MOVERSE por él, así que llevarse el teclado al abrir es lo que se
-    /// espera.
+    /// Three states like the sidebar and the processes panel: a tree opens
+    /// to MOVE around it, so taking the keyboard on open is what's
+    /// expected.
     ///
-    /// Se ancla en el directorio del listado con foco. Un árbol que colgara
-    /// siempre de la raíz del sistema enseñaría diez mil ramas para llegar a
-    /// donde ya estás.
+    /// Anchored at the focused listing's directory. A tree that always hung
+    /// off the system's root would show ten thousand branches to reach
+    /// where you already are.
     pub fn toggle_tree(&mut self) {
         use norte_frontend::layout::{Edge, KindId, Node, Size};
         match self.tree_slot() {
-            Some(id) if self.key_owner == KeyOwner::Tree && self.se_ve(id) => {
-                if let Some(nuevo) = self.layout.close_slot(id) {
-                    self.layout = nuevo;
+            Some(id) if self.key_owner == KeyOwner::Tree && self.is_visible(id) => {
+                if let Some(new_layout) = self.layout.close_slot(id) {
+                    self.layout = new_layout;
                     self.panes.refresh_visible(&self.layout);
-                    self.podar_por_arbol();
+                    self.prune_by_tree();
                 }
                 self.key_owner = KeyOwner::Panes;
             }
             Some(id) => {
-                // Re-anclar al abrirlo de nuevo: el listado puede estar en otro
-                // sitio desde la última vez.
+                // Re-anchor on opening it again: the listing may be
+                // somewhere else since last time.
                 let dir = self.focused().dir().clone();
                 if let Some(t) = self.panes.tree_mut(id) {
                     t.anchor_near(&dir, &norte_frontend::shell::home_vpath());
                 }
-                self.revelar(id);
+                self.reveal(id);
                 self.key_owner = KeyOwner::Tree;
             }
             None => {
                 let id = self.mint_slot();
                 let mut tree = crate::tree::Tree::default();
-                // Cerca del listado y no EN él (captura del 2026-09-21).
+                // Near the listing and not ON it (2026-09-21 capture).
                 tree.anchor_near(self.focused().dir(), &norte_frontend::shell::home_vpath());
                 self.panes.insert_tree(id, tree);
                 self.layout = self.layout.dock_grouped(
                     self.focused_slot(),
                     Edge::Left,
-                    // A la izquierda y con el ancho del sidebar: es el mismo
-                    // gesto —una columna de navegación al lado del listado— y
-                    // dos anchos distintos para lo mismo se notan.
+                    // On the left and with the sidebar's width: it's the
+                    // same gesture — a navigation column next to the
+                    // listing — and two different widths for the same
+                    // thing get noticed.
                     Size::Fixed(24),
                     &Node::slot(id, KindId::new(crate::tree::KIND)),
                 );
@@ -585,17 +598,18 @@ impl App {
         }
     }
 
-    /// El árbol sigue al listado ENFOCADO: revela su directorio y conserva lo
-    /// que estuviera abierto ([`norte_frontend::tree::Tree::follow`]).
+    /// The tree follows the FOCUSED listing: reveals its directory and
+    /// keeps whatever was open ([`norte_frontend::tree::Tree::follow`]).
     ///
-    /// Se llama desde los dos sitios en los que «dónde mira el panel» cambia
-    /// —[`crate::navigate::settle_cd`], el embudo de todo `cd`, y el aterrizaje
-    /// del foco— y no desde cada gesto que provoca uno: la lista de gestos que
-    /// navegan ya se quedó corta una vez, y de ahí salió el propio `settle_cd`.
+    /// Called from the two spots where "where the panel looks" changes —
+    /// [`crate::navigate::settle_cd`], every `cd`'s funnel, and focus
+    /// landing — and not from each gesture that triggers one: the list of
+    /// gestures that navigate already fell short once, and that's where
+    /// `settle_cd` itself came from.
     ///
-    /// Las ramas que hagan falta las pide el bucle solo
-    /// ([`norte_frontend::tree::Tree::wants`], una por vuelta), así que aquí no
-    /// hay I/O.
+    /// The branches needed are requested by the loop alone
+    /// ([`norte_frontend::tree::Tree::wants`], one per turn), so there's no
+    /// I/O here.
     pub fn follow_tree(&mut self) {
         let dir = self.focused().dir().clone();
         if let Some(t) = self.tree_mut() {
@@ -603,39 +617,40 @@ impl App {
         }
     }
 
-    /// El árbol abierto, para mutarlo.
+    /// The open tree, to mutate it.
     pub fn tree_mut(&mut self) -> Option<&mut crate::tree::Tree> {
         let id = self.tree_slot()?;
         self.panes.tree_mut(id)
     }
 
-    /// El árbol abierto.
+    /// The open tree.
     #[must_use]
     pub fn tree(&self) -> Option<&crate::tree::Tree> {
         let id = self.tree_slot()?;
         self.panes.tree(id)
     }
 
-    /// Un CLICK sobre la fila `index` del árbol (#136).
+    /// A CLICK over the tree's `index` row (#136).
     ///
-    /// La decisión vive aquí y no en el módulo del ratón, por lo mismo que la
-    /// del sidebar: se prueba sin terminal, y es la misma que toma el teclado
-    /// con otras teclas — el ratón no puede tener su propia idea de qué hace
-    /// activar una fila. Tres desenlaces:
+    /// The decision lives here and not in the mouse module, for the same
+    /// reason as the sidebar's: it's tested without a terminal, and it's
+    /// the same one the keyboard makes with other keys — the mouse can't
+    /// have its own idea of what activating a row does. Three outcomes:
     ///
-    /// - sobre la MARCA, la rama se pliega o se despliega de una sola
-    ///   pulsación: es lo que dice la flecha que ya se pinta, y es lo único
-    ///   que el ratón no podría hacer de otra forma —`Enter` despliega y
-    ///   navega, nunca pliega;
-    /// - una fila que NO está seleccionada se selecciona, y el teclado se
-    ///   viene al árbol: el click dice «me interesa esto», no «vete ahí»;
-    /// - la fila que YA estaba seleccionada se activa, que es lo mismo que
-    ///   `Enter`. Sin ventana de tiempo, igual que el sidebar.
+    /// - over the MARK, the branch folds or unfolds with a single press:
+    ///   it's what the arrow it already paints says, and it's the one
+    ///   thing the mouse couldn't do any other way — `Enter` unfolds and
+    ///   navigates, never folds;
+    /// - a row that ISN'T selected gets selected, and the keyboard comes to
+    ///   the tree: the click says "I'm interested in this", not "go
+    ///   there";
+    /// - the row that WAS ALREADY selected gets activated, same as
+    ///   `Enter`. No time window, same as the sidebar.
     pub fn tree_click(&mut self, index: usize, spot: TreeSpot) -> TreeClick {
         let Some(id) = self.tree_slot() else {
             return TreeClick::Focused;
         };
-        let ya_estaba = self.key_owner == KeyOwner::Tree
+        let was_already = self.key_owner == KeyOwner::Tree
             && self.panes.tree(id).is_some_and(|t| t.cursor() == index);
         let Some(t) = self.panes.tree_mut(id) else {
             return TreeClick::Focused;
@@ -651,65 +666,65 @@ impl App {
             }
             return TreeClick::Focused;
         }
-        if ya_estaba {
+        if was_already {
             TreeClick::Activate
         } else {
             TreeClick::Focused
         }
     }
 
-    /// El directorio al que activar una fila del árbol lleva el listado.
+    /// The directory activating a tree row sends the listing to.
     ///
-    /// Despliega Y devuelve el destino, que es lo que hace `Enter` dentro del
-    /// árbol: quien lo activa quiere ver qué hay dentro, y verlo en el listado
-    /// es la respuesta completa.
+    /// Unfolds AND returns the destination, which is what `Enter` does
+    /// inside the tree: whoever activates it wants to see what's inside,
+    /// and seeing it in the listing is the complete answer.
     pub fn tree_activate(&mut self) -> Option<VPath> {
         let t = self.tree_mut()?;
         t.expand();
         t.selected()
     }
 
-    /// El hueco del mapa de disco, si está abierto.
+    /// The disk map's slot, if it's open.
     #[must_use]
     pub fn disk_map_slot(&self) -> Option<norte_frontend::layout::SlotId> {
         self.slot_of_kind(crate::diskmap::KIND)
     }
 
-    /// El hueco de la línea de tiempo, si está abierta (fase 7).
+    /// The timeline's slot, if it's open (phase 7).
     #[must_use]
     pub fn timeline_slot(&self) -> Option<norte_frontend::layout::SlotId> {
         self.slot_of_kind(crate::timeline::KIND)
     }
 
-    /// Abre la línea de tiempo, la enfoca, o la cierra.
+    /// Opens the timeline, focuses it, or closes it.
     ///
-    /// Tres estados, como el mapa: se abre para ANDAR por ella —elegir hasta
-    /// dónde volver— así que llevarse el teclado al abrir es lo que se
-    /// espera.
+    /// Three states, like the map: it opens to WALK through it — choosing
+    /// how far back to go — so taking the keyboard on open is what's
+    /// expected.
     ///
-    /// **Lo que hay dentro no se pide aquí.** Abrir es colocar el hueco; leer
-    /// el journal es del bucle, que es quien tiene el backend. Separarlo evita
-    /// que abrir un panel dispare una lectura desde un sitio que no puede
-    /// esperarla.
+    /// **What's inside isn't requested here.** Opening is placing the slot;
+    /// reading the journal belongs to the loop, which is what has the
+    /// backend. Separating it keeps opening a panel from firing off a read
+    /// from a spot that can't wait for it.
     pub fn toggle_timeline(&mut self) {
         match self.timeline_slot() {
-            Some(id) if self.key_owner == KeyOwner::Timeline && self.se_ve(id) => {
+            Some(id) if self.key_owner == KeyOwner::Timeline && self.is_visible(id) => {
                 self.close_timeline();
             }
             Some(id) => {
-                self.revelar(id);
+                self.reveal(id);
                 self.key_owner = KeyOwner::Timeline;
             }
             None => self.open_timeline(),
         }
     }
 
-    /// Coloca la línea de tiempo si no estaba, y la revela si estaba
-    /// escondida.
+    /// Places the timeline if it wasn't there, and reveals it if it was
+    /// hidden.
     pub fn open_timeline(&mut self) {
         use norte_frontend::layout::{Edge, KindId, Node, Size};
         if let Some(id) = self.timeline_slot() {
-            self.revelar(id);
+            self.reveal(id);
             self.key_owner = KeyOwner::Timeline;
             return;
         }
@@ -719,9 +734,9 @@ impl App {
         self.layout = self.layout.dock_grouped(
             self.focused_slot(),
             Edge::Bottom,
-            // Doce filas: una lista de la que se elige un punto necesita ver
-            // varios a la vez para poder compararlos, y el mínimo del kind
-            // son cuatro, que sólo enseña dos filas con el marco.
+            // Twelve rows: a list you pick a point from needs to see
+            // several at once to compare them, and the kind's minimum is
+            // four, which only shows two rows with the frame.
             Size::Fixed(12),
             &Node::slot(id, KindId::new(crate::timeline::KIND)),
         );
@@ -729,50 +744,52 @@ impl App {
         self.key_owner = KeyOwner::Timeline;
     }
 
-    /// Cierra la línea de tiempo si está abierta, y devuelve el teclado a los
-    /// listados si lo tenía ella.
+    /// Closes the timeline if it's open, and hands the keyboard back to the
+    /// listings if it had it.
     pub fn close_timeline(&mut self) {
         let Some(id) = self.timeline_slot() else {
             return;
         };
-        if let Some(nuevo) = self.layout.close_slot(id) {
-            self.layout = nuevo;
+        if let Some(new_layout) = self.layout.close_slot(id) {
+            self.layout = new_layout;
             self.panes.refresh_visible(&self.layout);
-            self.podar_por_arbol();
+            self.prune_by_tree();
         }
         if self.key_owner == KeyOwner::Timeline {
             self.key_owner = KeyOwner::Panes;
         }
     }
 
-    /// Abre el mapa de disco, lo enfoca, o lo cierra.
+    /// Opens the disk map, focuses it, or closes it.
     ///
-    /// Tres estados como el panel de procesos y NO como el visor acoplado: un
-    /// mapa se abre para ANDAR por él —elegir un rectángulo y entrar—, así que
-    /// llevarse el teclado al abrir es lo que se espera.
+    /// Three states like the processes panel and NOT like the docked
+    /// viewer: a map opens to WALK through it — choosing a rectangle and
+    /// entering it — so taking the keyboard on open is what's expected.
     ///
-    /// **Qué directorio describe no se decide aquí.** Abrir es colocar el
-    /// hueco; apuntarlo al listado activo y pedir la medida es trabajo del
-    /// bucle, que es quien tiene el backend. Separarlo evita que abrir el panel
-    /// dispare una medida desde un sitio que no puede esperarla.
+    /// **Which directory it describes isn't decided here.** Opening is
+    /// placing the slot; pointing it at the active listing and requesting
+    /// the measurement is the loop's work, which is what has the backend.
+    /// Separating it keeps opening the panel from firing off a measurement
+    /// from a spot that can't wait for it.
     pub fn toggle_disk_map(&mut self) {
         match self.disk_map_slot() {
-            Some(id) if self.key_owner == KeyOwner::DiskMap && self.se_ve(id) => {
+            Some(id) if self.key_owner == KeyOwner::DiskMap && self.is_visible(id) => {
                 self.close_disk_map();
             }
             Some(id) => {
-                self.revelar(id);
+                self.reveal(id);
                 self.key_owner = KeyOwner::DiskMap;
             }
             None => self.open_disk_map(),
         }
     }
 
-    /// Coloca el mapa de disco si no estaba, y lo revela si estaba escondido.
+    /// Places the disk map if it wasn't there, and reveals it if it was
+    /// hidden.
     pub fn open_disk_map(&mut self) {
         use norte_frontend::layout::{Edge, KindId, Node, Size};
         if let Some(id) = self.disk_map_slot() {
-            self.revelar(id);
+            self.reveal(id);
             self.key_owner = KeyOwner::DiskMap;
             return;
         }
@@ -782,9 +799,9 @@ impl App {
         self.layout = self.layout.dock_grouped(
             self.focused_slot(),
             Edge::Bottom,
-            // Doce filas: un treemap necesita alto para repartir en tiras —con
-            // cuatro es una barra— y el mínimo del kind son seis. Doce deja
-            // ver la forma sin comerse el listado.
+            // Twelve rows: a treemap needs height to lay out in strips —
+            // with four it's a bar — and the kind's minimum is six. Twelve
+            // lets the shape show without eating into the listing.
             Size::Fixed(12),
             &Node::slot(id, KindId::new(crate::diskmap::KIND)),
         );
@@ -792,67 +809,68 @@ impl App {
         self.key_owner = KeyOwner::DiskMap;
     }
 
-    /// Cierra el mapa de disco si está abierto, y devuelve el teclado a los
-    /// listados si lo tenía él.
+    /// Closes the disk map if it's open, and hands the keyboard back to the
+    /// listings if it had it.
     pub fn close_disk_map(&mut self) {
         let Some(id) = self.disk_map_slot() else {
             return;
         };
-        if let Some(nuevo) = self.layout.close_slot(id) {
-            self.layout = nuevo;
+        if let Some(new_layout) = self.layout.close_slot(id) {
+            self.layout = new_layout;
             self.panes.refresh_visible(&self.layout);
-            self.podar_por_arbol();
+            self.prune_by_tree();
         }
         if self.key_owner == KeyOwner::DiskMap {
             self.key_owner = KeyOwner::Panes;
         }
     }
 
-    /// El hueco del panel de procesos, si está abierto.
+    /// The processes panel's slot, if it's open.
     #[must_use]
     pub fn processes_slot(&self) -> Option<norte_frontend::layout::SlotId> {
         self.slot_of_kind(crate::processes::KIND)
     }
 
-    /// Abre el panel de procesos, lo enfoca, o lo cierra.
+    /// Opens the processes panel, focuses it, or closes it.
     ///
-    /// Tres estados como el sidebar y NO como el visor acoplado: un panel de
-    /// procesos se abre para mirar Y para cancelar algo concreto, así que
-    /// llevarse el teclado al abrir es lo que se espera. (El preview hace lo
-    /// contrario porque se abre para seguir navegando; L3 aprendió la
-    /// distinción pilotando la TUI en tmux.)
+    /// Three states like the sidebar and NOT like the docked viewer: a
+    /// processes panel opens to look AND to cancel something specific, so
+    /// taking the keyboard on open is what's expected. (The preview does
+    /// the opposite because it opens to keep navigating; L3 learned the
+    /// distinction by piloting the TUI in tmux.)
     ///
-    /// La franja `tasks` no se toca: sigue ahí, y sigue siendo lo que trae
-    /// `orthodox`. Este panel es lo que se abre para ACTUAR sobre una tarea.
+    /// The `tasks` strip isn't touched: it's still there, and it's still
+    /// what `orthodox` brings. This panel is what opens to ACT on a task.
     pub fn toggle_processes(&mut self) {
         match self.processes_slot() {
-            Some(id) if self.key_owner == KeyOwner::Processes && self.se_ve(id) => {
+            Some(id) if self.key_owner == KeyOwner::Processes && self.is_visible(id) => {
                 self.close_processes();
             }
             Some(id) => {
-                self.revelar(id);
+                self.reveal(id);
                 self.key_owner = KeyOwner::Processes;
             }
             None => self.open_processes(true),
         }
     }
 
-    /// Abre el panel de procesos si no estaba, y lo revela si estaba escondido.
+    /// Opens the processes panel if it wasn't there, and reveals it if it
+    /// was hidden.
     ///
-    /// La MITAD de [`Self::toggle_processes`], separada porque el automático
-    /// (`[ui] processes_panel = "auto"`, spec 2026-09-15) necesita abrir sin
-    /// alternar: reutilizar el interruptor cerraría el panel justo cuando
-    /// empieza la segunda tarea.
+    /// HALF of [`Self::toggle_processes`], separated because the automatic
+    /// one (`[ui] processes_panel = "auto"`, spec 2026-09-15) needs to open
+    /// without toggling: reusing the switch would close the panel right as
+    /// the second task starts.
     ///
-    /// `con_teclado` es lo que distingue las dos puertas: quien lo abre con la
-    /// tecla va a actuar sobre una tarea, y quien lo abre porque acaba de
-    /// empezar una copia está mirando su listado — robarle el teclado ahí sería
-    /// quitarle las flechas a mitad de frase.
-    pub fn open_processes(&mut self, con_teclado: bool) {
+    /// `with_keyboard` is what tells the two doors apart: whoever opens it
+    /// with the key is about to act on a task, and whoever opens it because
+    /// a copy just started is looking at their listing — stealing the
+    /// keyboard there would be taking the arrows away mid-sentence.
+    pub fn open_processes(&mut self, with_keyboard: bool) {
         use norte_frontend::layout::{Edge, KindId, Node, Size};
         if let Some(id) = self.processes_slot() {
-            self.revelar(id);
-            if con_teclado {
+            self.reveal(id);
+            if with_keyboard {
                 self.key_owner = KeyOwner::Processes;
             }
             return;
@@ -863,92 +881,93 @@ impl App {
         self.layout = self.layout.dock_grouped(
             self.focused_slot(),
             Edge::Bottom,
-            // Ocho filas: seis de tareas —el tope del `TaskBoard`— más el
-            // marco. `Auto` es de la franja, que vale cero en reposo; un panel
-            // que se abre a mano no desaparece.
+            // Eight rows: six of tasks — the `TaskBoard`'s cap — plus the
+            // frame. `Auto` belongs to the strip, which is zero at rest; a
+            // panel opened by hand doesn't disappear.
             Size::Fixed(8),
             &Node::slot(id, KindId::new(crate::processes::KIND)),
         );
         self.panes.refresh_visible(&self.layout);
-        if con_teclado {
+        if with_keyboard {
             self.key_owner = KeyOwner::Processes;
         }
     }
 
-    /// Cierra el panel de procesos si está abierto, y devuelve el teclado a los
-    /// listados si lo tenía él.
+    /// Closes the processes panel if it's open, and hands the keyboard back
+    /// to the listings if it had it.
     pub fn close_processes(&mut self) {
         let Some(id) = self.processes_slot() else {
             return;
         };
-        if let Some(nuevo) = self.layout.close_slot(id) {
-            self.layout = nuevo;
+        if let Some(new_layout) = self.layout.close_slot(id) {
+            self.layout = new_layout;
             self.panes.refresh_visible(&self.layout);
-            self.podar_por_arbol();
+            self.prune_by_tree();
         }
         if self.key_owner == KeyOwner::Processes {
             self.key_owner = KeyOwner::Panes;
         }
     }
 
-    /// Tira lo que pertenecía a huecos que el árbol ya no tiene.
+    /// Drops what belonged to slots the tree no longer has.
     ///
-    /// Los historiales y —desde la fase 3— lo que un panel de plugin tiene
-    /// vivo: su último marco y el ESTADO OPACO del guest. Juntos en una
-    /// función porque son la misma regla, y porque tenerla escrita quince
-    /// veces era la forma de que el siguiente inquilino de `BySlot` se
-    /// olvidara.
+    /// The histories and — since phase 3 — what a plugin panel keeps
+    /// alive: its last frame and the guest's OPAQUE STATE. Together in one
+    /// function because they're the same rule, and because having it
+    /// written fifteen times was how the next `BySlot` tenant forgot it.
     ///
-    /// Que el estado se pode importa más que el marco: los ids de hueco de un
-    /// preset son pequeños y fijos, así que cambiar de disposición puede poner
-    /// el panel de OTRO plugin en el mismo `SlotId`. Sin esto, el segundo
-    /// recibía el blob opaco del primero —que para norte no significa nada,
-    /// pero para un guest que reconozca su propio formato sí—.
-    pub(crate) fn podar_por_arbol(&mut self) {
+    /// Pruning the state matters more than the frame: a preset's slot ids
+    /// are small and fixed, so switching layouts can put ANOTHER plugin's
+    /// panel on the same `SlotId`. Without this, the second one received
+    /// the first one's opaque blob — which means nothing to norte, but does
+    /// to a guest that recognizes its own format.
+    pub(crate) fn prune_by_tree(&mut self) {
         self.history.retain_tree(&self.layout);
-        self.paneles.retain_tree(&self.layout);
-        // Y el shell del panel de terminal se va con su hueco (#362).
+        self.panels.retain_tree(&self.layout);
+        // And the terminal panel's shell goes with its slot (#362).
         //
-        // Sin esto, cerrar el hueco quitaba el nodo y dejaba el shell VIVO con
-        // su hilo lector, su pty y su directorio abierto —un montaje ocupado
-        // seguía ocupado—, sin panel donde verlo y sin forma de volver a él.
-        // La documentación de `App::terminal` ya prometía lo contrario.
+        // Without this, closing the slot removed the node and left the
+        // shell ALIVE with its reader thread, its pty and its directory
+        // open — a busy mount stayed busy — with no panel to see it in and
+        // no way back to it. `App::terminal`'s documentation already
+        // promised the opposite.
         //
-        // Se mira si EXISTE el hueco, no si se ve: detrás de una pestaña el
-        // panel sigue ahí y su shell tiene que seguir corriendo, que es medio
-        // sentido de tener un shell dentro del gestor.
+        // It checks whether the slot EXISTS, not whether it's visible:
+        // behind a tab the panel is still there and its shell has to keep
+        // running, which is half the point of having a shell inside the
+        // manager.
         if self.terminal.is_some() && self.terminal_slot().is_none() {
             self.terminal = None;
         }
     }
 
-    /// El hueco del panel de PLUGIN que el lector ve, si hay alguno.
+    /// The visible PLUGIN panel's slot, the reader sees, if there's one.
     ///
-    /// Por PREFIJO y no por igualdad, al revés que sus hermanos: el kind de un
-    /// panel de plugin es `plugin:<id>:<kind>` y no se conoce al compilar. Con
-    /// `multi: false` en su declaración hay como mucho uno visible, que es lo
-    /// que permite que [`crate::app::KeyOwner::Panel`] no tenga que decir cuál
-    /// es.
+    /// By PREFIX and not by equality, unlike its siblings: a plugin panel's
+    /// kind is `plugin:<id>:<kind>` and isn't known at compile time. With
+    /// `multi: false` in its declaration there's at most one visible, which
+    /// is what lets [`crate::app::KeyOwner::Panel`] not have to say which
+    /// one it is.
     ///
-    /// VISIBLE y no «existe»: un panel escondido detrás de una pestaña tiene
-    /// el teclado igual de inútil que uno cerrado (#329).
+    /// VISIBLE and not "exists": a panel hidden behind a tab has a keyboard
+    /// just as useless as a closed one (#329).
     #[must_use]
     pub fn panel_slot(&self) -> Option<norte_frontend::layout::SlotId> {
-        let visibles = self.layout.visible_slot_ids();
-        let es_panel = |id: norte_frontend::layout::SlotId| {
+        let visible = self.layout.visible_slot_ids();
+        let is_panel = |id: norte_frontend::layout::SlotId| {
             self.layout
                 .kind_of(id)
                 .is_some_and(|k| k.as_str().starts_with("plugin:"))
         };
-        // El que el lector señaló, mientras siga a la vista y siga siendo un
-        // panel: `multi: false` no lo enforza nadie, así que «el panel» no
-        // puede ser «el primero» cuando hay dos.
+        // The one the reader pointed at, as long as it's still visible and
+        // still a panel: nobody enforces `multi: false`, so "the panel"
+        // can't be "the first one" when there are two.
         self.panel_focus
-            .filter(|id| visibles.contains(id) && es_panel(*id))
-            .or_else(|| visibles.into_iter().find(|id| es_panel(*id)))
+            .filter(|id| visible.contains(id) && is_panel(*id))
+            .or_else(|| visible.into_iter().find(|id| is_panel(*id)))
     }
 
-    /// El kind del panel de plugin visible, si lo hay.
+    /// The visible plugin panel's kind, if there is one.
     #[must_use]
     pub fn panel_kind(&self) -> Option<&str> {
         let id = self.panel_slot()?;
@@ -957,54 +976,58 @@ impl App {
             .map(norte_frontend::layout::KindId::as_str)
     }
 
-    /// El hueco del panel de registro, exista o no en pantalla.
+    /// The log panel's slot, whether it's on screen or not.
     #[must_use]
     pub fn log_slot(&self) -> Option<norte_frontend::layout::SlotId> {
         self.slot_of_kind(crate::logview::KIND)
     }
 
-    /// Devuelve el teclado a los listados.
+    /// Hands the keyboard back to the listings.
     ///
-    /// Existe porque el campo es privado fuera de este módulo y hay dos sitios
-    /// fuera que lo necesitan: el brazo de teclas del terminal y el barrido de
-    /// antes del frame, cuando el shell se va con el teclado dentro.
-    pub fn soltar_teclado(&mut self) {
+    /// Exists because the field is private outside this module and there
+    /// are two spots outside it that need it: the terminal's key arm and
+    /// the pre-frame sweep, for when the shell leaves with the keyboard
+    /// inside.
+    pub fn release_keyboard(&mut self) {
         self.key_owner = KeyOwner::Panes;
     }
 
-    /// El hueco del panel de terminal, si existe.
+    /// The terminal panel's slot, if it exists.
     #[must_use]
     pub fn terminal_slot(&self) -> Option<norte_frontend::layout::SlotId> {
         self.slot_of_kind(crate::termpanel::KIND)
     }
 
-    /// Abre el panel de terminal, o le da o le quita el teclado.
+    /// Opens the terminal panel, or gives it the keyboard, or takes it away.
     ///
-    /// **No lo cierra nunca, y ahí diverge de sus vecinos a propósito.**
-    /// `toggle_log` y los demás cierran el panel al segundo toque; aquí el
-    /// segundo toque devuelve el teclado a los listados y deja el shell VIVO,
-    /// que es lo que `app.toggle-panels` hace con el subshell. Cerrarlo mata
-    /// un proceso del lector —con lo que tuviera a medias dentro— y eso no
-    /// puede ser lo que hace la misma tecla con la que se entra. Para cerrarlo
-    /// está `layout.close-slot`, que se llama como lo que hace.
+    /// **Never closes it, and that's a deliberate divergence from its
+    /// neighbors.** `toggle_log` and the rest close the panel on the second
+    /// touch; here the second touch hands the keyboard back to the listings
+    /// and leaves the shell ALIVE, which is what `app.toggle-panels` does
+    /// with the subshell. Closing it kills a process of the reader's — with
+    /// whatever it had half done inside — and that can't be what the same
+    /// key you enter with does. `layout.close-slot` is there to close it,
+    /// and it's named for what it does.
     ///
-    /// El shell arranca en el directorio del listado con foco, igual que
+    /// The shell starts in the focused listing's directory, same as
     /// `app.terminal`.
     pub fn toggle_terminal(&mut self) {
         use norte_frontend::layout::{Edge, KindId, Node, Size};
-        // Sin acorde suelto que saque el teclado, el panel se abre pero NO lo
-        // toma: dentro, cada tecla sería del shell y ninguna volvería. Es la
-        // misma regla que el subshell aplica antes de ceder la terminal, y el
-        // mismo criterio: mejor una capacidad a medias que una trampa.
-        let puede_tomar_teclas = self.terminal_chord.is_some();
+        // With no loose chord to pull the keyboard out, the panel opens but
+        // does NOT take it: inside, every key would belong to the shell and
+        // none would come back. It's the same rule the subshell applies
+        // before handing over the terminal, and the same criterion: a
+        // half-baked capability beats a trap.
+        let can_take_keys = self.terminal_chord.is_some();
         match self.terminal_slot() {
-            // Ya lo tenía: se devuelve el teclado y el shell se queda.
-            Some(id) if self.key_owner == KeyOwner::Terminal && self.se_ve(id) => {
+            // Already had it: the keyboard gets handed back and the shell
+            // stays.
+            Some(id) if self.key_owner == KeyOwner::Terminal && self.is_visible(id) => {
                 self.key_owner = KeyOwner::Panes;
             }
             Some(id) => {
-                self.revelar(id);
-                if puede_tomar_teclas {
+                self.reveal(id);
+                if can_take_keys {
                     self.key_owner = KeyOwner::Terminal;
                 }
             }
@@ -1013,80 +1036,85 @@ impl App {
                 self.layout = self.layout.dock_grouped(
                     self.focused_slot(),
                     Edge::Bottom,
-                    // Doce filas: diez de shell más el marco. Con menos, cada
-                    // orden que responda algo borra la anterior y lo que queda
-                    // no es un terminal, es una ventanita que parpadea — el
-                    // mismo motivo por el que el registro pide diez.
+                    // Twelve rows: ten of shell plus the frame. With fewer,
+                    // every order that answers something erases the
+                    // previous one and what's left isn't a terminal, it's a
+                    // blinking little window — the same reason the log asks
+                    // for ten.
                     Size::Fixed(12),
                     &Node::slot(id, KindId::new(crate::termpanel::KIND)),
                 );
                 self.panes.refresh_visible(&self.layout);
-                if puede_tomar_teclas {
+                if can_take_keys {
                     self.key_owner = KeyOwner::Terminal;
                 }
             }
         }
     }
 
-    /// El hueco del panel de registro **si de verdad está en pantalla**.
+    /// The log panel's slot **only if it's really on screen**.
     ///
-    /// Distinto de [`Self::log_slot`], que dice si EXISTE: un hueco detrás de
-    /// una pestaña que no es la activa sigue existiendo y no se ve. La
-    /// diferencia importa donde algo CUESTA — el sondeo del registro del daemon
-    /// (#328) son dos RPC por segundo, y pagarlas por un panel que nadie tiene
-    /// delante, durante toda la sesión, es gastar red por nada.
+    /// Different from [`Self::log_slot`], which says whether it EXISTS: a
+    /// slot behind a tab that isn't active still exists and isn't visible.
+    /// The difference matters where something COSTS — probing the daemon's
+    /// log (#328) is two RPCs per second, and paying for them for a panel
+    /// nobody has in front of them, for the whole session, is spending
+    /// network for nothing.
     ///
-    /// Nació aquí con #328 y ahora delega en `slot_of_kind_visible` —sin
-    /// enlace: es `pub(crate)` y esto es público, y rustdoc deniega el enlace
-    /// de lo público a lo privado—: #329 encontró la misma pregunta en la barra
-    /// de paneles y en los cinco toggles, así que la respuesta dejó de ser cosa
-    /// del registro.
+    /// Born here with #328 and now delegates to `slot_of_kind_visible` — no
+    /// link: it's `pub(crate)` and this is public, and rustdoc denies
+    /// linking from public to private — #329 found the same question in
+    /// the panel bar and in the five toggles, so the answer stopped being
+    /// the log's own business.
     #[must_use]
     pub fn log_slot_visible(&self) -> Option<norte_frontend::layout::SlotId> {
         self.slot_of_kind_visible(crate::logview::KIND)
     }
 
-    /// Abre el panel de registro, lo enfoca, o lo cierra (#323).
+    /// Opens the log panel, focuses it, or closes it (#323).
     ///
-    /// Tres estados y con el teclado al abrir, igual que el de procesos: se
-    /// abre para LEER algo concreto —filtrando por nivel o por texto—, no de
-    /// paso mientras navegas.
+    /// Three states and with the keyboard on open, same as the processes
+    /// one: it opens to READ something specific — filtering by level or by
+    /// text — not incidentally while navigating.
     ///
-    /// No hay estado por hueco que insertar: hay un panel de registro y su
-    /// nivel y su filtro son de la sesión, no del sitio donde lo pongas.
+    /// There's no per-slot state to insert: there's one log panel and its
+    /// level and its filter belong to the session, not to where you put it.
     pub fn toggle_log(&mut self) {
         use norte_frontend::layout::{Edge, KindId, Node, Size};
         match self.log_slot() {
-            Some(id) if self.key_owner == KeyOwner::Log && self.se_ve(id) => {
-                if let Some(nuevo) = self.layout.close_slot(id) {
-                    self.layout = nuevo;
+            Some(id) if self.key_owner == KeyOwner::Log && self.is_visible(id) => {
+                if let Some(new_layout) = self.layout.close_slot(id) {
+                    self.layout = new_layout;
                     self.panes.refresh_visible(&self.layout);
-                    self.podar_por_arbol();
+                    self.prune_by_tree();
                 }
                 self.key_owner = KeyOwner::Panes;
-                // Cerrar BAJA el nivel del anillo al que se estaba enseñando.
-                // Es la única forma de volver atrás: subirlo nunca baja
-                // —para que ir a DEBUG y volver no borre lo de en medio—, y sin
-                // esto una sola pulsación de `t` dejaba el proceso capturando
-                // TRACE el resto de la sesión, con su coste, mucho después de
-                // que nadie mirara. Cerrar el panel es decir «ya está».
+                // Closing LOWERS the ring's level to whatever was being
+                // shown. It's the only way back: raising it never lowers
+                // it — so going to DEBUG and back doesn't erase what's in
+                // between — and without this a single `t` press left the
+                // process capturing TRACE for the rest of the session, with
+                // its cost, long after nobody was watching. Closing the
+                // panel says "that's enough".
                 if let Some(ring) = self.log_ring.as_ref() {
                     ring.set_level(self.log_panel.level());
                 }
                 self.log_filter_input = None;
-                // Y lo del daemon se suelta (#328): sus líneas y su cursor son
-                // de ESTA apertura, y una respuesta que llegue tarde no puede
-                // aterrizar en la siguiente. Lo que NO se olvida es si sirve su
-                // registro — es un hecho sobre el daemon, no sobre el panel—,
-                // y su nivel tampoco: no lo baja nadie.
+                // And the daemon's gets released (#328): its lines and its
+                // cursor belong to THIS opening, and an answer that arrives
+                // late can't land in the next one. What does NOT get
+                // forgotten is whether its log serves — it's a fact about
+                // the daemon, not about the panel — nor is its level: nobody
+                // lowers it.
                 //
-                // El anillo del daemon no se baja al cerrar, al revés que el
-                // local: es global a todos sus clientes, y bajárselo desde aquí
-                // apagaría la captura de otro frontend que esté mirando.
-                self.log_remote.reiniciar();
+                // The daemon's ring doesn't get lowered on close, unlike the
+                // local one: it's global to all its clients, and lowering it
+                // from here would turn off another frontend's capture while
+                // it's watching.
+                self.log_remote.restart();
             }
             Some(id) => {
-                self.revelar(id);
+                self.reveal(id);
                 self.key_owner = KeyOwner::Log;
             }
             None => {
@@ -1094,9 +1122,9 @@ impl App {
                 self.layout = self.layout.dock_grouped(
                     self.focused_slot(),
                     Edge::Bottom,
-                    // Diez filas: ocho de mensajes más el marco. Un log de
-                    // cuatro líneas obliga a desplazarse para leer una frase
-                    // que ocupa dos, y entonces no se usa.
+                    // Ten rows: eight of messages plus the frame. A
+                    // four-line log forces scrolling to read a sentence
+                    // that takes two, and then it doesn't get used.
                     Size::Fixed(10),
                     &Node::slot(id, KindId::new(crate::logview::KIND)),
                 );
@@ -1106,7 +1134,7 @@ impl App {
         }
     }
 
-    /// Sube el cursor del panel de procesos. No-op si no está abierto.
+    /// Moves the processes panel's cursor up. No-op if it isn't open.
     pub fn processes_up(&mut self) {
         let ids = self.board.task_ids();
         if let Some(id) = self.processes_slot()
@@ -1116,7 +1144,8 @@ impl App {
         }
     }
 
-    /// Baja el cursor del panel de procesos, sin pasarse de la última fila.
+    /// Moves the processes panel's cursor down, without going past the
+    /// last row.
     pub fn processes_down(&mut self) {
         let ids = self.board.task_ids();
         if let Some(id) = self.processes_slot()
@@ -1126,76 +1155,78 @@ impl App {
         }
     }
 
-    /// Cancela la tarea bajo el cursor del panel. `false` si no hay panel,
-    /// ni filas, o si esa ya había terminado.
+    /// Cancels the task under the panel's cursor. `false` if there's no
+    /// panel, no rows, or that one already finished.
     ///
-    /// Es lo que el CHANGELOG y los dos temas de ayuda llevaban prometiendo
-    /// desde la fase A —«cancela la que está bajo el cursor»— sin que ninguna
-    /// tecla llegara al panel: el `KeyOwner` se ponía y no lo leía nadie, así
-    /// que las flechas movían el LISTADO de detrás y F8 abría el diálogo de
-    /// borrar sobre su selección (#243).
-    /// La task señalada en el panel de procesos —o la más reciente si ese
-    /// panel no está abierto—, para moverla en la cola (ADR 0149).
+    /// It's what the CHANGELOG and the two help topics had been promising
+    /// since phase A — "cancels the one under the cursor" — with no key
+    /// ever reaching the panel: `KeyOwner` was being set and nobody read
+    /// it, so the arrows moved the LISTING behind it and F8 opened the
+    /// delete dialog over its selection (#243).
+    /// The task pointed at in the processes panel — or the most recent one
+    /// if that panel isn't open — to move it in the queue (ADR 0149).
     #[must_use]
     pub fn processes_selected(&self) -> Option<norte_core::backend::TaskObserver> {
         let ids = self.board.task_ids();
-        let fila = self
+        let row = self
             .processes_slot()
             .and_then(|id| self.panes.processes(id))
-            .and_then(|p| p.fila(&ids))
+            .and_then(|p| p.row(&ids))
             .unwrap_or_else(|| ids.len().saturating_sub(1));
-        self.board.task_at(fila)
+        self.board.task_at(row)
     }
 
-    /// Cancela la task señalada en el panel de procesos. `false` si no hay
-    /// panel, no hay fila señalada o esa task ya terminó.
+    /// Cancels the task pointed at in the processes panel. `false` if
+    /// there's no panel, no row pointed at, or that task already finished.
     pub fn processes_cancel(&mut self) -> bool {
         let Some(id) = self.processes_slot() else {
             return false;
         };
         let ids = self.board.task_ids();
-        let Some(cursor) = self.panes.processes(id).and_then(|p| p.fila(&ids)) else {
+        let Some(cursor) = self.panes.processes(id).and_then(|p| p.row(&ids)) else {
             return false;
         };
         self.board.cancel_at(cursor)
     }
 
-    /// Despacha UN comando del keymap sobre el panel de procesos.
+    /// Dispatches ONE keymap command over the processes panel.
     ///
-    /// Vive aquí y no en el binario para que un test pueda meter una tecla de
-    /// verdad —preset → `Effective` → `Resolver` → comando— y ver qué hace el
-    /// panel. Los tests que había afirmaban `key_owner()`, que es exactamente
-    /// lo que dejó invisible que ninguna tecla llegara (#243).
+    /// Lives here and not in the binary so a test can feed it a real key —
+    /// preset → `Effective` → `Resolver` → command — and see what the panel
+    /// does. The tests that existed asserted `key_owner()`, which is
+    /// exactly what left invisible that no key ever arrived (#243).
     ///
-    /// Devuelve el mensaje para la barra, si el comando deja uno.
+    /// Returns the message for the status bar, if the command leaves one.
     pub fn processes_command(&mut self, cmd: &str) -> Option<String> {
         if !ALLOW_PROCESSES.contains(&cmd) {
-            return None; // fuera del allowlist de este panel: inerte
+            return None; // outside this panel's allowlist: inert
         }
-        // El cromo de la aplicación, antes que lo de este panel: mismo embudo
-        // que el sidebar y el árbol.
+        // The application's chrome, before this panel's own: same funnel
+        // as the sidebar and the tree.
         if self.panel_chrome_command(cmd) {
             return None;
         }
         match cmd {
             "dialog.up" => self.processes_up(),
             "dialog.down" => self.processes_down(),
-            // `Esc` suelta el teclado y NO cierra el panel: cerrarlo es
-            // `layout.processes`. Y `Tab` hace lo mismo, por la misma razón
-            // que el sidebar y el árbol: abrir un panel con teclado no puede
-            // costarte la tecla con la que se cambia de panel toda la vida.
+            // `Esc` releases the keyboard and does NOT close the panel:
+            // closing it is `layout.processes`. And `Tab` does the same,
+            // for the same reason as the sidebar and the tree: opening a
+            // panel with the keyboard can't cost you the key you've always
+            // switched panels with.
             "dialog.cancel" | "dialog.pane" | "pane.switch" => self.return_keys_to_panes(),
-            // El anillo pasa al panel de AL LADO, y por eso no es lo mismo que
-            // `Tab`: hay que poder recorrer la pantalla desde dentro de
-            // cualquier panel, no solo volviendo antes a los listados.
+            // The ring moves to the panel NEXT DOOR, and that's why it
+            // isn't the same as `Tab`: you have to be able to walk the
+            // screen from inside any panel, not only by going back to the
+            // listings first.
             "layout.focus-next" => self.layout_focus(1),
             "layout.focus-prev" => self.layout_focus(-1),
             "layout.grow" => self.layout_resize(1),
             "layout.shrink" => self.layout_resize(-1),
             "layout.processes" => self.toggle_processes(),
-            // Y las de los otros paneles, igual que en el sidebar: el sidebar
-            // deja las unidades pedidas y las sirve el bucle, así que abrirlo
-            // desde aquí no necesita backend.
+            // And the other panels': the sidebar leaves the drives
+            // requested and the loop serves them, so opening it from here
+            // needs no backend.
             "layout.places" => self.toggle_places(),
             "layout.preview" => self.toggle_preview(),
             "layout.metadata" => self.toggle_metadata(),
@@ -1212,15 +1243,16 @@ impl App {
         None
     }
 
-    /// Despacha un comando del keymap con el teclado en el panel de registro
-    /// (#323), filtrado por [`ALLOW_LOG`].
+    /// Dispatches a keymap command with the keyboard in the log panel
+    /// (#323), filtered by [`ALLOW_LOG`].
     ///
-    /// Su propio embudo y no el de procesos: aquel deja pasar `dialog.confirm`,
-    /// que allí CANCELA la tarea bajo el cursor. Un `Enter` en un visor de log
-    /// que cancela una copia es justo lo que una allowlist existe para impedir.
+    /// Its own funnel and not the processes one's: that one lets
+    /// `dialog.confirm` through, which there CANCELS the task under the
+    /// cursor. An `Enter` in a log viewer that cancels a copy is exactly
+    /// what an allowlist exists to prevent.
     pub fn log_command(&mut self, cmd: &str) {
         if !ALLOW_LOG.contains(&cmd) {
-            return; // fuera del allowlist de este panel: inerte
+            return; // outside this panel's allowlist: inert
         }
         if self.panel_chrome_command(cmd) {
             return;
@@ -1242,16 +1274,17 @@ impl App {
         }
     }
 
-    /// Despacha un comando del keymap con el teclado en un panel de plugin
-    /// (fase 4), filtrado por [`ALLOW_DISK_MAP`].
+    /// Dispatches a keymap command with the keyboard in a plugin panel
+    /// (phase 4), filtered by [`ALLOW_DISK_MAP`].
     ///
-    /// Embudo propio y no el de sus vecinos: aquí `dialog.confirm` NO está en
-    /// la lista porque `Enter` es del panel —entra en el hijo elegido— y lo
-    /// reclama [`crate::diskmap::key`] antes del keymap. Dejarlo pasar sería un
-    /// `Enter` con dos significados según quién lo mirase primero.
+    /// Its own funnel and not its neighbors': here `dialog.confirm` is NOT
+    /// on the list because `Enter` belongs to the panel — it enters the
+    /// chosen child — and [`crate::diskmap::key`] claims it before the
+    /// keymap. Letting it through would be an `Enter` with two meanings
+    /// depending on who looked first.
     pub fn disk_map_command(&mut self, cmd: &str) {
         if !ALLOW_DISK_MAP.contains(&cmd) {
-            return; // fuera del allowlist de este panel: inerte
+            return; // outside this panel's allowlist: inert
         }
         if self.panel_chrome_command(cmd) {
             return;
@@ -1273,16 +1306,17 @@ impl App {
         }
     }
 
-    /// Despacha un comando del keymap con el teclado en un panel de plugin
-    /// (fase 3), filtrado por [`ALLOW_PANEL`].
+    /// Dispatches a keymap command with the keyboard in a plugin panel
+    /// (phase 3), filtered by [`ALLOW_PANEL`].
     ///
-    /// Embudo propio y vacío de contenido: lo único que un panel aportado
-    /// entiende hoy es el cromo. Cuando T4 le dé pintado y el guest reciba
-    /// `panel-event::command`, es AQUÍ donde entra —y seguirá filtrado, que es
-    /// lo que impide que un plugin se quede con `F8`.
+    /// Its own funnel and empty of content: the only thing a contributed
+    /// panel understands today is the chrome. When T4 gives it rendering
+    /// and the guest receives `panel-event::command`, this is where it
+    /// comes IN — and it'll still be filtered, which is what keeps a
+    /// plugin from grabbing `F8`.
     pub fn panel_command(&mut self, cmd: &str) {
         if !ALLOW_PANEL.contains(&cmd) {
-            return; // fuera del allowlist de este panel: inerte
+            return; // outside this panel's allowlist: inert
         }
         if self.panel_chrome_command(cmd) {
             return;
@@ -1304,34 +1338,35 @@ impl App {
         }
     }
 
-    /// El hueco de la hoja de atributos, si está abierta.
+    /// The attribute sheet's slot, if it's open.
     #[must_use]
     pub fn metadata_slot(&self) -> Option<norte_frontend::layout::SlotId> {
         self.slot_of_kind(crate::metadata::KIND)
     }
 
-    /// Abre la hoja de atributos, o la cierra.
+    /// Opens the attribute sheet, or closes it.
     ///
-    /// DOS estados y no tres, al contrario que el sidebar y el panel de
-    /// procesos: la hoja sigue al cursor del listado, así que llevarse el
-    /// teclado apagaría lo único que hace. Antes tenía un `KeyOwner` propio
-    /// que se ponía en la segunda pulsación y no consumía nadie: la hoja
-    /// cogía el borde de foco, las flechas seguían moviendo el listado de al
-    /// lado, y la tercera pulsación era la única que cerraba (#243).
-    /// Se acopla a la DERECHA con `follows: Role(Active)`.
+    /// TWO states and not three, unlike the sidebar and the processes
+    /// panel: the sheet follows the listing's cursor, so taking the
+    /// keyboard would turn off the only thing it does. It used to have a
+    /// `KeyOwner` of its own that got set on the second press and nobody
+    /// consumed: the sheet grabbed the focus border, the arrows kept
+    /// moving the listing next to it, and the third press was the only one
+    /// that closed it (#243).
+    /// Docks to the RIGHT with `follows: Role(Active)`.
     pub fn toggle_metadata(&mut self) {
         use norte_frontend::layout::{Bindings, Edge, Follow, KindId, Node, RoleId, Size};
         if let Some(id) = self.metadata_slot() {
-            // #329: si está escondido detrás de una pestaña, esta tecla lo
-            // ENSEÑA. La hoja de atributos no toma el teclado —se mira, no se
-            // recorre—, así que sus estados son dos, y el que falta cuando no
-            // se ve no es «cerrar» sino «tráelo».
-            if !self.se_ve(id) {
-                self.revelar(id);
-            } else if let Some(nuevo) = self.layout.close_slot(id) {
-                self.layout = nuevo;
+            // #329: if it's hidden behind a tab, this key SHOWS it. The
+            // attribute sheet doesn't take the keyboard — it's looked at,
+            // not walked through — so it has two states, and what's
+            // missing when it isn't visible isn't "close" but "bring it".
+            if !self.is_visible(id) {
+                self.reveal(id);
+            } else if let Some(new_layout) = self.layout.close_slot(id) {
+                self.layout = new_layout;
                 self.panes.refresh_visible(&self.layout);
-                self.podar_por_arbol();
+                self.prune_by_tree();
             }
         } else {
             let id = self.mint_slot();
@@ -1339,9 +1374,9 @@ impl App {
             self.layout = self.layout.dock_grouped(
                 self.focused_slot(),
                 Edge::Right,
-                // Treinta celdas: la etiqueta más larga con su valor al lado.
-                // Fijo y no ponderado porque una hoja de atributos no gana
-                // nada con la mitad de la pantalla.
+                // Thirty cells: the longest label plus its value next to
+                // it. Fixed and not weighted because an attribute sheet
+                // gains nothing from half the screen.
                 Size::Fixed(30),
                 &Node::slot_bound(
                     id,
@@ -1355,50 +1390,50 @@ impl App {
         }
     }
 
-    /// El preview no pudo leer: se pinta el motivo DENTRO del hueco.
+    /// The preview couldn't read: the reason gets painted INSIDE the slot.
     ///
-    /// Y no se pregunta nada. El preview sigue al cursor, así que una
-    /// denegación de policy no puede abrir un diálogo: bajar por un directorio
-    /// sería una ráfaga de modales, y el lector no ha pedido abrir nada.
-    pub fn preview_failed(&mut self, slot: norte_frontend::layout::SlotId, clave: &str) {
-        let text = t(clave);
+    /// And nothing gets asked. The preview follows the cursor, so a policy
+    /// denial can't open a dialog: scrolling down a directory would be a
+    /// burst of modals, and the reader hasn't asked to open anything.
+    pub fn preview_failed(&mut self, slot: norte_frontend::layout::SlotId, key: &str) {
+        let text = t(key);
         if let Some(p) = self.panes.preview_mut(slot) {
             p.say(None, text);
         }
     }
 
-    /// Cierra el panel enfocado.
+    /// Closes the focused panel.
     ///
-    /// Se NIEGA a cerrar el último `browser`: una pantalla sin ningún listado
-    /// no es un layout, es un cuelgue con bordes. Además es el invariante que
-    /// mantiene distintos los dos lados — con un solo listado, «el otro pane»
-    /// sería este mismo y una copia tendría por destino su propio origen.
+    /// REFUSES to close the last `browser`: a screen with no listing at all
+    /// isn't a layout, it's a hang with borders. It's also the invariant
+    /// that keeps the two sides distinct — with a single listing, "the
+    /// other pane" would be this very one and a copy would target its own
+    /// source.
     ///
-    /// Devuelve `false` si no se pudo, para que el llamante avise.
+    /// Returns `false` if it couldn't, so the caller can warn.
     pub fn layout_close_slot(&mut self) -> bool {
         if self.browsers_in_tree() <= 2 {
             return false;
         }
         let focus = self.focused_slot();
-        let Some(nuevo) = self.layout.close_slot(focus) else {
+        let Some(new_layout) = self.layout.close_slot(focus) else {
             return false;
         };
-        self.layout = nuevo;
+        self.layout = new_layout;
         self.panes.refresh_visible(&self.layout);
-        self.podar_por_arbol();
+        self.prune_by_tree();
         true
     }
 
-    /// El hueco al que apuntan `layout.grow`/`layout.shrink`: el que tiene el
-    /// TECLADO, no el listado enfocado.
+    /// The slot `layout.grow`/`layout.shrink` point at: the one that has
+    /// the KEYBOARD, not the focused listing.
     ///
-    /// `focused_slot()` es siempre un listado visible —`layout_focus` cicla
-    /// sobre `panes.len()`—, así que con él la rama de `Size::Fixed` de
-    /// `Node::resize` no la alcanzaba ningún camino de producción: la barra
-    /// lateral se quedaba con el ancho con el que abría y el CHANGELOG
-    /// anunciaba lo contrario (#244 M1). Los tests pasaban porque llamaban a
-    /// `resize` con el id del sidebar a mano, un argumento que el llamante de
-    /// verdad no sabía producir.
+    /// `focused_slot()` is always a visible listing — `layout_focus` cycles
+    /// over `panes.len()` — so with it `Node::resize`'s `Size::Fixed` arm
+    /// was unreachable by any production path: the side bar kept the width
+    /// it opened with and the CHANGELOG announced the opposite (#244 M1).
+    /// The tests passed because they called `resize` with the sidebar's id
+    /// by hand, an argument the real caller had no way to produce.
     #[must_use]
     fn resize_target(&self) -> norte_frontend::layout::SlotId {
         match self.key_owner {
@@ -1408,90 +1443,92 @@ impl App {
             KeyOwner::Log => self.log_slot(),
             KeyOwner::DiskMap => self.disk_map_slot(),
             KeyOwner::Timeline => self.timeline_slot(),
-            // El terminal se agranda como cualquier otro: doce filas es el
-            // arranque, y un `make` dentro pide más.
+            // The terminal grows like any other: twelve rows is the
+            // start, and a `make` inside asks for more.
             KeyOwner::Terminal => self.terminal_slot(),
-            // Un panel de plugin se agranda como cualquier otro lateral: la
-            // tecla es la misma y el hueco lo dice el reparto.
+            // A plugin panel grows like any other side one: the key is
+            // the same and the layout says which slot.
             KeyOwner::Panel => self.panel_slot(),
             KeyOwner::Panes | KeyOwner::Preview => None,
         }
         .unwrap_or_else(|| self.focused_slot())
     }
 
-    /// Agranda (`delta > 0`) o encoge el panel que tiene el teclado.
+    /// Grows (`delta > 0`) or shrinks the panel that has the keyboard.
     pub fn layout_resize(&mut self, delta: i16) {
         let target = self.resize_target();
         self.layout = self.layout.resize(target, delta);
     }
 
-    /// Devuelve a los hermanos del panel enfocado el mismo tamaño.
+    /// Gives the focused panel's siblings the same size.
     pub fn layout_equalize(&mut self) {
         let focus = self.focused_slot();
         self.layout = self.layout.equalize(focus);
     }
 
-    /// Gira el reparto del panel que tiene el teclado: lado a lado pasa a
-    /// uno encima del otro (ADR 0138). Un reparto con cromo no se gira.
+    /// Flips the layout of the panel that has the keyboard: side by side
+    /// becomes one over the other (ADR 0138). A layout with chrome doesn't
+    /// flip.
     pub fn layout_flip(&mut self) {
         let target = self.resize_target();
-        let nuevo = self.layout.flip(target);
-        self.cambiar_disposicion(nuevo, None);
+        let new_layout = self.layout.flip(target);
+        self.change_layout(new_layout, None);
     }
 
-    /// Mueve el hueco `id` junto a `target` (ADR 0138): lo que hace soltar
-    /// un panel arrastrado por su título.
+    /// Moves slot `id` next to `target` (ADR 0138): what dropping a panel
+    /// dragged by its title does.
     pub fn layout_move(
         &mut self,
         id: norte_frontend::layout::SlotId,
         target: norte_frontend::layout::SlotId,
-        zona: norte_frontend::layout::DropZone,
+        zone: norte_frontend::layout::DropZone,
     ) {
-        let nuevo = self.layout.move_slot(id, target, zona);
-        // En el centro, el destino se va detrás de una pestaña a propósito.
-        let tolerado = (zona == norte_frontend::layout::DropZone::Center).then_some(target);
-        self.cambiar_disposicion(nuevo, tolerado);
+        let new_layout = self.layout.move_slot(id, target, zone);
+        // In the center, the destination goes behind a tab on purpose.
+        let tolerated = (zone == norte_frontend::layout::DropZone::Center).then_some(target);
+        self.change_layout(new_layout, tolerated);
     }
 
-    /// Se queda con `nuevo` si deja a la vista lo que se veía
-    /// (`keeps_on_screen`, sobre el ÚLTIMO frame), y pone al día los panes,
-    /// sus historias y el dueño del teclado, con el foco en el MISMO hueco.
-    /// Si no cabe, no toca nada y lo dice en la barra, como partir.
-    fn cambiar_disposicion(
+    /// Keeps `new_layout` if it leaves visible what was visible
+    /// (`keeps_on_screen`, over the LAST frame), and brings the panes,
+    /// their histories and the keyboard's owner up to date, with focus on
+    /// the SAME slot. If it doesn't fit, nothing is touched and it says so
+    /// on the status bar, like splitting.
+    fn change_layout(
         &mut self,
-        nuevo: norte_frontend::layout::Node,
-        tolerado: Option<norte_frontend::layout::SlotId>,
+        new_layout: norte_frontend::layout::Node,
+        tolerated: Option<norte_frontend::layout::SlotId>,
     ) {
-        if nuevo == self.layout {
+        if new_layout == self.layout {
             return;
         }
-        let viejo = std::mem::replace(&mut self.layout, nuevo);
-        if let Some(area) = self.ultimo_frame {
-            let despues = crate::ui::resolved_for(self, area);
-            let actual = std::mem::replace(&mut self.layout, viejo);
-            let antes = crate::ui::resolved_for(self, area);
-            if !norte_frontend::layout::keeps_on_screen(&antes, &despues, &actual, tolerado) {
+        let old_layout = std::mem::replace(&mut self.layout, new_layout);
+        if let Some(area) = self.last_frame {
+            let after = crate::ui::resolved_for(self, area);
+            let current = std::mem::replace(&mut self.layout, old_layout);
+            let before = crate::ui::resolved_for(self, area);
+            if !norte_frontend::layout::keeps_on_screen(&before, &after, &current, tolerated) {
                 self.message = Some(t("msg-layout-move-no-room"));
                 return;
             }
-            self.layout = actual;
+            self.layout = current;
         }
-        // El foco se queda en su HUECO: la posición de un hueco cambia al
-        // moverlo, y un índice viejo nombraría el panel de al lado.
-        let enfocado = self.focused_slot();
+        // Focus stays on its SLOT: a slot's position changes when it's
+        // moved, and an old index would name the panel next to it.
+        let focused = self.focused_slot();
         self.panes.refresh_visible(&self.layout);
-        self.podar_por_arbol();
+        self.prune_by_tree();
         self.settle_key_owner();
-        if let Some(i) = (0..self.panes.len()).find(|i| self.panes.slot_of(*i) == enfocado) {
+        if let Some(i) = (0..self.panes.len()).find(|i| self.panes.slot_of(*i) == focused) {
             self.set_focus(i);
         }
     }
 
-    /// Designa el OTRO lado visible como destino de las operaciones.
+    /// Designates the OTHER visible side as the operations' destination.
     ///
-    /// Con dos paneles el destino ya es el otro y esto no cambia nada; existe
-    /// para el día en que haya más de dos y el motor deje de poder desempatar
-    /// solo (ADR 0058 D7).
+    /// With two panels the destination is already the other one and this
+    /// changes nothing; it exists for the day there are more than two and
+    /// the engine can no longer break the tie on its own (ADR 0058 D7).
     pub fn layout_set_target(&mut self) {
         let n = self.panes.len();
         if n < 2 {
@@ -1502,8 +1539,8 @@ impl App {
             .get(norte_frontend::layout::RoleId::Target)
             .and_then(|t| (0..n).find(|i| self.panes.slot_of(*i) == t))
             .unwrap_or(self.focus);
-        // El siguiente que no sea el enfocado: designarse a uno mismo como
-        // destino es pedirle a una copia que se copie encima.
+        // The next one that isn't the focused one: designating yourself as
+        // the destination is asking a copy to copy onto itself.
         let mut i = (current + 1) % n;
         if i == self.focus {
             i = (i + 1) % n;
@@ -1512,12 +1549,12 @@ impl App {
         self.roles.set(norte_frontend::layout::RoleId::Target, slot);
     }
 
-    /// La posición del panel DESTINO, si la hay.
+    /// The DESTINATION panel's position, if there is one.
     ///
-    /// Con dos paneles es el otro y nadie tuvo que decirlo. Con tres o más
-    /// hace falta haberlo designado: adivinar aquí es cómo una copia sale
-    /// hacia un panel que el lector no tenía en la cabeza, que es pérdida de
-    /// datos silenciosa (ADR 0058 D7).
+    /// With two panels it's the other one and nobody had to say so. With
+    /// three or more it has to have been designated: guessing here is how a
+    /// copy ends up heading to a panel the reader didn't have in mind,
+    /// which is silent data loss (ADR 0058 D7).
     #[must_use]
     pub fn target_index(&self) -> Option<usize> {
         let n = self.panes.len();
@@ -1540,13 +1577,13 @@ impl App {
         self.swap_seq
     }
 
-    /// Da el foco al pane `i`. Un índice fuera de `0|1` se IGNORA (el
-    /// invariante de `focus` es de la propia `App`): el único emisor de
-    /// índices que no son literales es el hit test del ratón, y ahí un
-    /// índice imposible es un bug nuestro, no algo que deba dejar el foco
-    /// apuntando a un pane que no existe.
+    /// Gives focus to pane `i`. An index outside `0|1` gets IGNORED (`focus`'s
+    /// invariant belongs to `App` itself): the only emitter of indices that
+    /// aren't literals is the mouse's hit test, and there an impossible
+    /// index is our own bug, not something that should leave focus pointing
+    /// at a pane that doesn't exist.
     pub fn set_focus(&mut self, i: usize) {
-        debug_assert!(i < self.panes.len(), "pane fuera de rango");
+        debug_assert!(i < self.panes.len(), "pane out of range");
         if i < self.panes.len() {
             self.focus = i;
         }
@@ -1558,31 +1595,32 @@ mod tests {
     use super::*;
     use crate::app::testutil::*;
 
-    /// Una pantalla con sitio de sobra, para cuando lo que se prueba no es la
-    /// falta de sitio.
-    const PANTALLA: ratatui::layout::Rect = ratatui::layout::Rect {
+    /// A screen with plenty of room, for when what's being tested isn't the
+    /// lack of room.
+    const SCREEN: ratatui::layout::Rect = ratatui::layout::Rect {
         x: 0,
         y: 0,
         width: 110,
         height: 30,
     };
 
-    /// Un panel APORTADO por un plugin es un hueco de pleno derecho: se
-    /// encuentra, toma el teclado y el selector lo ofrece (fase 3).
+    /// A panel CONTRIBUTED by a plugin is a slot in full standing: it gets
+    /// found, it takes the keyboard and the picker offers it (phase 3).
     ///
-    /// El test recorre el camino entero porque cada tramo tenía su propia
-    /// tabla de nombres de casa: `focus_stop` miraba el registro de serie
-    /// —donde un kind aportado no existe—, `panel_slot` resuelve por prefijo
-    /// porque `plugin:<id>:<kind>` no se conoce al compilar, y `KeyOwner::Panel`
-    /// no lleva cuál es, que es lo que `multi: false` permite.
+    /// The test walks the whole path because each stretch had its own
+    /// built-in name table: `focus_stop` looked at the stock registry —
+    /// where a contributed kind doesn't exist — `panel_slot` resolves by
+    /// prefix because `plugin:<id>:<kind>` isn't known at compile time, and
+    /// `KeyOwner::Panel` doesn't carry which one it is, which is what
+    /// `multi: false` allows.
     #[test]
-    fn un_panel_de_plugin_se_encuentra_toma_el_teclado_y_se_nombra() {
+    fn a_plugin_panel_is_found_takes_the_keyboard_and_is_named() {
         use norte_frontend::layout::{Dir, KindId, KindRegistry, Node, Size, SlotId};
 
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.kinds
-            .insert_panels(&[plugin_con_panel("git", "status")]);
-        let arbol = Node::Split {
+            .insert_panels(&[plugin_with_panel("git", "status")]);
+        let tree = Node::Split {
             dir: Dir::Horizontal,
             sizes: vec![Size::Weight(1), Size::Fixed(24)],
             children: vec![
@@ -1590,13 +1628,13 @@ mod tests {
                 Node::slot(SlotId(71), KindId::new("plugin:git:status")),
             ],
         };
-        app.set_layout(arbol);
+        app.set_layout(tree);
 
-        let id = app.panel_slot().expect("el panel aportado se encuentra");
+        let id = app.panel_slot().expect("the contributed panel gets found");
         assert_eq!(id, SlotId(71));
         assert_eq!(app.panel_kind(), Some("plugin:git:status"));
-        // Y lo toma de verdad: un hueco que no pasa `focus_stop` devuelve
-        // `false` aquí y deja el teclado donde estaba.
+        // And it really takes it: a slot that doesn't pass `focus_stop`
+        // returns `false` here and leaves the keyboard where it was.
         assert!(app.focus_slot(id));
         assert_eq!(app.key_owner, crate::app::KeyOwner::Panel);
         assert!(
@@ -1604,75 +1642,77 @@ mod tests {
                 .decls()
                 .iter()
                 .any(|d| d.id.as_str() == "plugin:git:status"),
-            "el registro declara el kind aportado"
+            "the registry declares the contributed kind"
         );
-        // Y lo declara con SU mínimo, que es lo que consumen el reparto al
-        // colocar el hueco y la miniatura del selector al dibujarlo. Con el
-        // registro de serie —el que recibían antes de la fase 3— ese kind es
-        // desconocido y vale `(1, 1)`: el hueco se colocaba donde no cabe.
+        // And it declares it with ITS OWN minimum, which is what the
+        // layout consumes when placing the slot and the picker's thumbnail
+        // when drawing it. With the stock registry — the one received
+        // before phase 3 — that kind is unknown and evaluates to `(1, 1)`:
+        // the slot got placed where it doesn't fit.
         let kid = KindId::new("plugin:git:status");
         assert_eq!(app.kinds.min_of(&kid), (20, 4));
         assert_eq!(KindRegistry::builtin().min_of(&kid), (1, 1));
     }
 
-    /// Retirarle el consentimiento a un plugin RETIRA su panel, en la misma
-    /// sesión.
+    /// Withdrawing a plugin's consent WITHDRAWS its panel, in the same
+    /// session.
     ///
-    /// Declarar añadiendo dejaba el kind puesto hasta el siguiente arranque:
-    /// el hueco se seguía colocando y seguía tomando el teclado de un plugin
-    /// que el lector acababa de desactivar. El catálogo se relee al aprobar,
-    /// activar o desinstalar, así que la declaración se REHACE entera.
+    /// Declaring additively left the kind set until the next startup: the
+    /// slot kept getting placed and kept taking the keyboard for a plugin
+    /// the reader had just disabled. The catalogue gets reread on
+    /// approving, activating or uninstalling, so the declaration gets
+    /// REBUILT whole.
     #[test]
-    fn quitarle_el_consentimiento_a_un_plugin_retira_su_panel() {
-        let mut app = app_dos_panes();
+    fn revoking_a_plugins_consent_removes_its_panel() {
+        let mut app = app_two_panes();
         app.kinds
-            .insert_panels(&[plugin_con_panel("git", "status")]);
-        assert!(app.kinds.decls().iter().any(es_panel_de_git));
+            .insert_panels(&[plugin_with_panel("git", "status")]);
+        assert!(app.kinds.decls().iter().any(is_git_panel));
 
-        let mut apagado = plugin_con_panel("git", "status");
-        apagado.enabled = false;
-        app.kinds.insert_panels(&[apagado]);
+        let mut disabled = plugin_with_panel("git", "status");
+        disabled.enabled = false;
+        app.kinds.insert_panels(&[disabled]);
         assert!(
-            !app.kinds.decls().iter().any(es_panel_de_git),
-            "un panel sin consentimiento deja de existir para el reparto"
+            !app.kinds.decls().iter().any(is_git_panel),
+            "a panel with no consent stops existing for the layout"
         );
     }
 
-    /// Un `kind` con caracteres fuera del alfabeto no se declara.
+    /// A `kind` with characters outside the alphabet doesn't get declared.
     ///
-    /// El id y el kind son texto de un tercero y acaban dentro de un `KindId`,
-    /// que no valida nada: de ahí salen el nombre que se pinta y la clave que
-    /// se guarda en la sesión.
+    /// The id and the kind are third-party text and end up inside a
+    /// `KindId`, which validates nothing: that's where the painted name and
+    /// the key saved in the session both come from.
     #[test]
-    fn un_kind_con_caracteres_hostiles_no_se_declara() {
-        let mut app = app_dos_panes();
+    fn a_kind_with_hostile_characters_is_not_declared() {
+        let mut app = app_two_panes();
         app.kinds.insert_panels(&[
-            plugin_con_panel("git", "sta\ntus"),
-            plugin_con_panel("git", "está"),
-            plugin_con_panel("git", ""),
+            plugin_with_panel("git", "sta\ntus"),
+            plugin_with_panel("git", "está"),
+            plugin_with_panel("git", ""),
         ]);
         assert!(
             !app.kinds
                 .decls()
                 .iter()
                 .any(|d| d.id.as_str().starts_with("plugin:")),
-            "ninguno de los tres pasa el alfabeto"
+            "none of the three passes the alphabet"
         );
     }
 
-    /// El embudo de teclas de un panel de plugin deja pasar el cromo y NADA
-    /// más.
+    /// A plugin panel's key funnel lets the chrome through and NOTHING
+    /// else.
     ///
-    /// Sin embudo, las teclas seguían hasta el resolver de `browse` y actuaban
-    /// sobre el listado de detrás mientras el borde de foco decía que el
-    /// teclado estaba en el panel — el fallo de #243.
+    /// With no funnel, keys kept going to `browse`'s resolver and acted on
+    /// the listing behind it while the focus border said the keyboard was
+    /// in the panel — #243's bug.
     #[test]
-    fn un_panel_de_plugin_solo_deja_pasar_el_cromo() {
+    fn a_plugin_panel_only_lets_the_chrome_through() {
         use norte_frontend::layout::{Dir, KindId, Node, Size, SlotId};
 
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.kinds
-            .insert_panels(&[plugin_con_panel("git", "status")]);
+            .insert_panels(&[plugin_with_panel("git", "status")]);
         app.set_layout(Node::Split {
             dir: Dir::Horizontal,
             sizes: vec![Size::Weight(1), Size::Fixed(24)],
@@ -1681,25 +1721,25 @@ mod tests {
                 Node::slot(SlotId(71), KindId::new("plugin:git:status")),
             ],
         });
-        let id = app.panel_slot().expect("hay panel");
+        let id = app.panel_slot().expect("there is a panel");
         assert!(app.focus_slot(id));
 
-        // Un comando de listado no hace nada Y no devuelve el teclado: el
-        // panel sigue teniéndolo, que es lo que el lector ve.
+        // A listing command does nothing AND doesn't hand back the
+        // keyboard: the panel keeps it, which is what the reader sees.
         app.panel_command("pane.select-all");
         assert_eq!(app.key_owner, crate::app::KeyOwner::Panel);
-        // Y el cromo sí: soltar el teclado es del panel.
+        // And the chrome does: releasing the keyboard belongs to the panel.
         app.panel_command("dialog.cancel");
         assert_eq!(app.key_owner, crate::app::KeyOwner::Panes);
     }
 
-    /// ¿Es la declaración del panel de git?
-    fn es_panel_de_git(d: &norte_frontend::layout::KindDecl) -> bool {
+    /// Is this git panel's declaration?
+    fn is_git_panel(d: &norte_frontend::layout::KindDecl) -> bool {
         d.id.as_str() == "plugin:git:status"
     }
 
-    /// Un `PluginInfo` aprobado y activo que aporta un panel.
-    fn plugin_con_panel(id: &str, kind: &str) -> norte_proto::methods::PluginInfo {
+    /// An approved and active `PluginInfo` that contributes a panel.
+    fn plugin_with_panel(id: &str, kind: &str) -> norte_proto::methods::PluginInfo {
         norte_proto::methods::PluginInfo {
             id: id.to_owned(),
             name: id.to_owned(),
@@ -1723,11 +1763,11 @@ mod tests {
         }
     }
 
-    /// Un árbol con el registro escondido en la pestaña que no está activa.
-    fn app_con_registro_escondido() -> App {
+    /// A tree with the log hidden in the tab that isn't active.
+    fn app_with_hidden_log() -> App {
         use norte_frontend::layout::{Dir, KindId, Node, Size, SlotId};
 
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.set_layout(Node::Split {
             dir: Dir::Vertical,
             sizes: vec![Size::Weight(1), Size::Fixed(10)],
@@ -1745,38 +1785,39 @@ mod tests {
         app
     }
 
-    /// El botón de un panel escondido en una pestaña dice CERRADO (#329).
+    /// A panel hidden in a tab's button says CLOSED (#329).
     ///
-    /// Decía abierto, porque la barra preguntaba si el hueco EXISTE. Para el
-    /// lector no existe: no lo ve, y lo que el botón le promete es enseñárselo.
+    /// It used to say open, because the status bar asked if the slot
+    /// EXISTS. To the reader it doesn't exist: they don't see it, and what
+    /// the button promises is showing it to them.
     #[test]
-    fn un_panel_escondido_en_una_pestana_se_pinta_cerrado() {
+    fn a_panel_hidden_in_a_tab_paints_closed() {
         use norte_frontend::panelbar::PanelState;
 
-        let app = app_con_registro_escondido();
-        let boton = crate::ui::panel_buttons(&app, PANTALLA)
+        let app = app_with_hidden_log();
+        let button = crate::ui::panel_buttons(&app, SCREEN)
             .into_iter()
             .find(|b| b.kind == crate::logview::KIND)
-            .expect("el registro tiene botón");
-        assert_eq!(boton.state, PanelState::Closed);
+            .expect("the log has a button");
+        assert_eq!(button.state, PanelState::Closed);
     }
 
-    /// Un panel que el reparto descarta por falta de sitio tampoco está
-    /// abierto (#331).
+    /// A panel the layout drops for lack of room isn't open either (#331).
     ///
-    /// `visible_slot_ids` contesta qué pestaña está activa, no qué CABE. El
-    /// MISMO árbol, con el panel en la pestaña activa, se lee distinto en dos
-    /// pantallas — y eso es exactamente lo que hay que ver, porque prueba que
-    /// el botón mira el reparto y no el árbol.
+    /// `visible_slot_ids` answers which tab is active, not what FITS. The
+    /// SAME tree, with the panel on the active tab, reads differently on
+    /// two screens — and that's exactly what has to be seen, because it
+    /// proves the button looks at the layout and not at the tree.
     #[test]
-    fn un_panel_que_no_cabe_se_pinta_cerrado() {
+    fn a_panel_that_doesnt_fit_paints_closed() {
         use norte_frontend::layout::{Dir, KindId, Node, Size, SlotId};
         use norte_frontend::panelbar::PanelState;
 
-        let mut app = app_dos_panes();
-        // En horizontal, porque el caso que DESCARTA un hueco es el colapso:
-        // dos hermanos que se disputan el mismo eje y cuyos mínimos no caben.
-        // Un `Fixed` no vale para probar esto — se recorta, no se cae.
+        let mut app = app_two_panes();
+        // Horizontal, because the case that DROPS a slot is the collapse:
+        // two siblings competing for the same axis whose minimums don't
+        // fit. A `Fixed` won't do to test this — it gets trimmed, it
+        // doesn't fall.
         app.set_layout(Node::Split {
             dir: Dir::Horizontal,
             sizes: vec![Size::Weight(1), Size::Weight(1)],
@@ -1786,91 +1827,88 @@ mod tests {
             ],
         });
 
-        let estado = |app: &App, ancho: u16| {
+        let state = |app: &App, width: u16| {
             crate::ui::panel_buttons(
                 app,
                 ratatui::layout::Rect {
                     x: 0,
                     y: 0,
-                    width: ancho,
+                    width,
                     height: 30,
                 },
             )
             .into_iter()
             .find(|b| b.kind == crate::logview::KIND)
-            .expect("el registro tiene botón")
+            .expect("the log has a button")
             .state
         };
 
-        assert_eq!(estado(&app, 110), PanelState::Open, "con sitio, abierto");
+        assert_eq!(state(&app, 110), PanelState::Open, "with room, open");
         assert_eq!(
-            estado(&app, 24),
+            state(&app, 24),
             PanelState::Closed,
-            "el reparto lo descartó, así que el botón no puede decir que sí"
+            "the layout dropped it, so the button can't say yes"
         );
     }
 
-    /// Y pulsarlo lo SACA A LA LUZ y se lleva el teclado, en vez de mandar el
-    /// teclado a algo invisible (#329).
+    /// And clicking it BRINGS IT INTO VIEW and takes the keyboard, instead
+    /// of sending the keyboard to something invisible (#329).
     ///
-    /// Antes caía en la rama «ya está abierto, enfócalo»: las teclas dejaban de
-    /// llegar a lo que sí se veía, la barra decía «enfocado», y la siguiente
-    /// pulsación cerraba un panel que nadie había visto nunca.
+    /// It used to fall into the "already open, focus it" branch: the keys
+    /// stopped reaching what was actually visible, the status bar said
+    /// "focused", and the next press closed a panel nobody had ever seen.
     #[test]
-    fn pulsar_un_panel_escondido_lo_ensena() {
+    fn pressing_a_hidden_panel_shows_it() {
         use norte_frontend::layout::SlotId;
 
-        let mut app = app_con_registro_escondido();
+        let mut app = app_with_hidden_log();
         app.toggle_log();
         assert!(
             app.layout.visible_slot_ids().contains(&SlotId(82)),
-            "sigue detrás de la otra pestaña"
+            "still behind the other tab"
         );
         assert_eq!(app.key_owner(), KeyOwner::Log);
-        assert!(app.log_slot().is_some(), "y desde luego no lo ha cerrado");
+        assert!(app.log_slot().is_some(), "and certainly hasn't closed it");
     }
 
-    /// Un panel que se ESCONDE pierde el teclado, igual que uno que se cierra
-    /// (#329).
+    /// A panel that gets HIDDEN loses the keyboard, same as one that gets
+    /// closed (#329).
     ///
-    /// `settle_key_owner` preguntaba si el panel existe. Cambiar de pestaña no
-    /// cierra nada, así que el registro se quedaba con las teclas detrás de
-    /// otra pestaña: se pulsaba y no pasaba nada visible, mientras la barra ya
-    /// lo pintaba cerrado — el estado que el lector ve y el que manda dejaban
-    /// de ser el mismo. `tab_cycle` y `tab_goto` lo llaman por eso.
+    /// `settle_key_owner` used to ask whether the panel exists. Switching
+    /// tabs closes nothing, so the log kept the keys behind another tab: it
+    /// got pressed and nothing visible happened, while the status bar
+    /// already painted it closed — what the reader sees and what's in
+    /// charge stopped being the same. `tab_cycle` and `tab_goto` call it
+    /// for that reason.
     #[test]
-    fn un_panel_que_se_esconde_suelta_el_teclado() {
+    fn a_panel_that_hides_releases_the_keyboard() {
         use norte_frontend::layout::SlotId;
 
-        let mut app = app_con_registro_escondido();
+        let mut app = app_with_hidden_log();
         app.toggle_log();
-        assert_eq!(app.key_owner(), KeyOwner::Log, "visible y con las teclas");
+        assert_eq!(app.key_owner(), KeyOwner::Log, "visible and with the keys");
 
-        // Lo que hace cualquier camino que cambia de pestaña.
+        // What any path that switches tabs does.
         app.layout = app.layout.set_active_for(SlotId(82), 0);
         assert!(!app.layout.visible_slot_ids().contains(&SlotId(82)));
 
         app.settle_key_owner();
-        assert_eq!(
-            app.key_owner(),
-            KeyOwner::Panes,
-            "se escondió y se quedó con las teclas"
-        );
+        assert_eq!(app.key_owner(), KeyOwner::Panes, "it hid and kept the keys");
     }
 
-    /// El visor escondido se ENSEÑA sin llevarse el teclado, al revés que los
-    /// otros cinco.
+    /// The hidden viewer gets SHOWN without taking the keyboard, unlike the
+    /// other five.
     ///
-    /// No es una excepción caprichosa: este toggle abre sin coger las teclas
-    /// porque el visor sigue al cursor del listado, y para el lector revelar
-    /// uno escondido ES abrirlo. Con el teclado dentro, las flechas dejarían de
-    /// mover el cursor al que el panel sigue — o sea que enseñarlo apagaría lo
-    /// único que hace.
+    /// It isn't an arbitrary exception: this toggle opens without grabbing
+    /// the keys because the viewer follows the listing's cursor, and to the
+    /// reader revealing a hidden one IS opening it. With the keyboard
+    /// inside, the arrows would stop moving the cursor the panel follows —
+    /// meaning showing it would turn off the only thing it does.
     #[test]
-    fn revelar_el_visor_no_se_lleva_el_teclado() {
+    fn revealing_the_viewer_doesnt_take_the_keyboard() {
         use norte_frontend::layout::{Dir, KindId, Node, Size, SlotId};
 
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.set_layout(Node::Split {
             dir: Dir::Horizontal,
             sizes: vec![Size::Weight(1), Size::Fixed(30)],
@@ -1890,19 +1928,23 @@ mod tests {
         assert_eq!(
             app.key_owner(),
             KeyOwner::Panes,
-            "enseñarlo no puede apagar las flechas del listado"
+            "showing it can't turn off the listing's arrows"
         );
         app.toggle_preview();
-        assert_eq!(app.key_owner(), KeyOwner::Preview, "y la segunda lo enfoca");
+        assert_eq!(
+            app.key_owner(),
+            KeyOwner::Preview,
+            "and the second focuses it"
+        );
     }
 
-    /// La hoja de atributos es de DOS estados, así que lo que le falta cuando
-    /// está escondida no es «cerrar» sino «tráela».
+    /// The attribute sheet has TWO states, so what it's missing when hidden
+    /// isn't "close" but "bring it".
     #[test]
-    fn la_hoja_de_atributos_escondida_se_ensena_en_vez_de_cerrarse() {
+    fn the_hidden_attribute_sheet_shows_instead_of_closing() {
         use norte_frontend::layout::{Dir, KindId, Node, Size, SlotId};
 
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.set_layout(Node::Split {
             dir: Dir::Horizontal,
             sizes: vec![Size::Weight(1), Size::Fixed(30)],
@@ -1920,18 +1962,22 @@ mod tests {
         app.toggle_metadata();
         assert!(
             app.layout.visible_slot_ids().contains(&SlotId(62)),
-            "la cerró sin que el lector la hubiera visto"
+            "closed it without the reader ever having seen it"
         );
         app.toggle_metadata();
-        assert!(app.metadata_slot().is_none(), "y la segunda sí cierra");
+        assert!(
+            app.metadata_slot().is_none(),
+            "and the second one does close it"
+        );
     }
 
-    /// Un panel de procesos escondido tampoco se come su marca de novedad.
+    /// A hidden processes panel doesn't swallow its notification mark
+    /// either.
     #[test]
-    fn procesos_escondido_conserva_su_marca_de_novedad() {
+    fn hidden_processes_keeps_its_new_mark() {
         use norte_frontend::layout::{Dir, KindId, Node, Size, SlotId};
 
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.set_layout(Node::Split {
             dir: Dir::Vertical,
             sizes: vec![Size::Weight(1), Size::Fixed(8)],
@@ -1946,100 +1992,106 @@ mod tests {
                 },
             ],
         });
-        let boton = crate::ui::panel_buttons(&app, PANTALLA)
+        let button = crate::ui::panel_buttons(&app, SCREEN)
             .into_iter()
             .find(|b| b.kind == crate::processes::KIND)
-            .expect("procesos tiene botón");
+            .expect("processes has a button");
         assert_eq!(
-            boton.attention,
-            norte_frontend::panelbar::cifra(app.board.rows().len()),
-            "la marca depende de si hay tareas, no de que el hueco exista"
+            button.attention,
+            norte_frontend::panelbar::figure(app.board.rows().len()),
+            "the mark depends on whether there are tasks, not on the slot existing"
         );
     }
 
-    /// La segunda pulsación ya sí cierra: enseñar y enfocar es UN paso, no dos.
+    /// The second press does close it: showing and focusing is ONE step,
+    /// not two.
     ///
-    /// Si sacarlo a la luz costara una pulsación y enfocarlo otra, el panel que
-    /// el lector acaba de pedir se quedaría sin teclado, y la promesa de los
-    /// tres estados —abre y coge el teclado, coge el teclado, cierra— tendría
-    /// cuatro.
+    /// If bringing it into view cost one press and focusing it another, the
+    /// panel the reader just requested would end up with no keyboard, and
+    /// the three-state promise — open and take the keyboard, take the
+    /// keyboard, close — would have four.
     #[test]
-    fn la_segunda_pulsacion_cierra_lo_que_la_primera_ensena() {
-        let mut app = app_con_registro_escondido();
+    fn the_second_press_closes_what_the_first_showed() {
+        let mut app = app_with_hidden_log();
         app.toggle_log();
         app.toggle_log();
         assert!(app.log_slot().is_none());
         assert_eq!(app.key_owner(), KeyOwner::Panes);
     }
 
-    /// Un panel ESCONDIDO no se come la marca de novedad (#329).
+    /// A HIDDEN panel doesn't swallow its notification mark (#329).
     ///
-    /// La marca se calla cuando el panel está abierto porque entonces ya lo
-    /// estás viendo. Escondido no lo estás viendo, así que callarla apagaba el
-    /// aviso justo en el caso en que hace falta.
+    /// The mark stays quiet when the panel is open because then you're
+    /// already looking at it. Hidden, you aren't, so keeping it quiet
+    /// turned off the warning right when it's needed.
     #[test]
-    fn un_registro_escondido_conserva_su_marca_de_novedad() {
+    fn a_hidden_log_keeps_its_new_mark() {
         use norte_config::logring::LogRing;
         use tracing_subscriber::layer::SubscriberExt as _;
 
-        let mut app = app_con_registro_escondido();
-        let anillo = LogRing::new(16);
-        let s = tracing_subscriber::registry().with(norte_config::logring::ring_layer(&anillo));
+        let mut app = app_with_hidden_log();
+        let ring = LogRing::new(16);
+        let s = tracing_subscriber::registry().with(norte_config::logring::ring_layer(&ring));
         tracing::subscriber::with_default(s, || {
-            tracing::warn!(target: "norte_core::prueba", "algo se degradó");
+            tracing::warn!(target: "norte_core::prueba", "something degraded");
         });
-        app.log_ring = Some(anillo);
+        app.log_ring = Some(ring);
 
-        let boton = crate::ui::panel_buttons(&app, PANTALLA)
+        let button = crate::ui::panel_buttons(&app, SCREEN)
             .into_iter()
             .find(|b| b.kind == crate::logview::KIND)
-            .expect("el registro tiene botón");
+            .expect("the log has a button");
         assert_eq!(
-            boton.attention, 1,
-            "hay un aviso y el lector no lo tiene delante"
+            button.attention, 1,
+            "there's a warning and the reader doesn't have it in front of them"
         );
     }
 
-    /// El caso corriente no cambia: un panel acoplado, visible, se enfoca y se
-    /// cierra como siempre.
+    /// The everyday case doesn't change: a docked, visible panel focuses and
+    /// closes as always.
     #[test]
-    fn un_panel_a_la_vista_sigue_haciendo_los_tres_pasos() {
-        let mut app = app_dos_panes();
+    fn a_visible_panel_still_does_the_three_steps() {
+        let mut app = app_two_panes();
         app.toggle_log();
-        assert_eq!(app.key_owner(), KeyOwner::Log, "abre y coge el teclado");
+        assert_eq!(
+            app.key_owner(),
+            KeyOwner::Log,
+            "opens and takes the keyboard"
+        );
         app.key_owner = KeyOwner::Panes;
         app.toggle_log();
-        assert_eq!(app.key_owner(), KeyOwner::Log, "se lo lleva de vuelta");
+        assert_eq!(app.key_owner(), KeyOwner::Log, "takes it back");
         app.toggle_log();
-        assert!(app.log_slot().is_none(), "y solo entonces cierra");
+        assert!(app.log_slot().is_none(), "and only then closes");
     }
 
-    /// #136: el árbol se abre anclado DONDE está el listado, no en la raíz del
-    /// sistema: un árbol que colgara siempre de `/` enseñaría diez mil ramas
-    /// para llegar a donde ya estás.
+    /// #136: the tree opens anchored WHERE the listing is, not at the
+    /// system's root: a tree that always hung off `/` would show ten
+    /// thousand branches to reach where you already are.
     #[test]
-    fn el_arbol_se_ancla_donde_esta_el_listado() {
-        let mut app = app_dos_panes();
+    fn the_tree_anchors_where_the_listing_is() {
+        let mut app = app_two_panes();
         let dir = app.focused().dir().clone();
         app.toggle_tree();
         assert_eq!(app.tree().and_then(|t| t.root().cloned()), Some(dir));
-        assert_eq!(app.key_owner(), KeyOwner::Tree, "se lleva el teclado");
+        assert_eq!(app.key_owner(), KeyOwner::Tree, "takes the keyboard");
     }
 
-    /// Y una vez abierto SIGUE al listado: navegar dentro de su raíz mueve el
-    /// cursor a esa rama y conserva lo que hubiera abierto. Anclado y quieto,
-    /// el panel decía dónde estabas cuando lo abriste y nada más.
+    /// And once open it FOLLOWS the listing: navigating inside its root
+    /// moves the cursor to that branch and keeps whatever was open.
+    /// Anchored and still, the panel said where you were when you opened it
+    /// and nothing more.
     #[test]
-    fn el_arbol_sigue_al_listado_que_navega() {
-        let mut app = app_en("mem:///r", "mem:///otro");
+    fn the_tree_follows_the_navigating_listing() {
+        let mut app = app_en("mem:///r", "mem:///other");
         app.toggle_tree();
-        let t = app.tree_mut().expect("árbol");
-        // Lo que se mira aquí es SEGUIR, no anclar: se parte de un árbol
-        // colgado del listado para que la cuenta de filas sea la de siempre
-        // (abrirlo lo cuelga más arriba desde el 2026-09-21).
+        let t = app.tree_mut().expect("tree");
+        // What's looked at here is FOLLOWING, not anchoring: it starts from
+        // a tree hung off the listing so the row count is the usual one
+        // (opening it hangs it further up since 2026-09-21).
         t.anchor(vp("mem:///r"));
         t.insert_children(vp("mem:///r"), vec![vp("mem:///r/a"), vp("mem:///r/b")]);
-        // `b` abierta a mano: es lo que un re-anclado habría cerrado.
+        // `b` opened by hand: it's what a re-anchor would have closed.
         t.set_cursor(2);
         t.expand();
         t.insert_children(vp("mem:///r/b"), vec![vp("mem:///r/b/x")]);
@@ -2048,27 +2100,28 @@ mod tests {
         *app.focused_mut() = crate::app::pane::Pane::new(vp("mem:///r/a/y"), Vec::new());
         app.follow_tree();
 
-        let t = app.tree().expect("árbol");
+        let t = app.tree().expect("tree");
         assert_eq!(t.selected(), Some(vp("mem:///r/a/y")));
-        assert_eq!(t.rows().len(), 5, "`b` sigue desplegada");
+        assert_eq!(t.rows().len(), 5, "`b` is still unfolded");
     }
 
-    /// Cambiar de panel también cambia a dónde mira el árbol: los dos lados
-    /// están en sitios distintos, y un árbol que se quedara en el del panel
-    /// anterior describiría el que ya no tiene el foco.
+    /// Switching panels also changes what the tree looks at: the two sides
+    /// are in different places, and a tree left on the previous panel's
+    /// would describe the one that no longer has focus.
     ///
-    /// Y la raíz sube al ancestro COMÚN de los dos, sin tirar nada: `Tab` es la
-    /// tecla más usada del programa, y re-anclar en el destino cerraba el árbol
-    /// entero en cada pulsación. Aquí los dos lados solo comparten la raíz del
-    /// provider, así que ahí acaba subiendo; con dos directorios hermanos —el
-    /// caso normal— sube un nivel y se queda.
+    /// And the root climbs to the two sides' COMMON ancestor, without
+    /// dropping anything: `Tab` is the program's most-used key, and
+    /// re-anchoring at the destination closed the whole tree on every
+    /// press. Here the two sides only share the provider's root, so that's
+    /// where it ends up climbing to; with two sibling directories — the
+    /// normal case — it climbs one level and stops.
     #[test]
-    fn el_arbol_sigue_al_cambio_de_panel() {
-        let mut app = app_en("mem:///r", "mem:///otro");
+    fn the_tree_follows_the_panel_change() {
+        let mut app = app_en("mem:///r", "mem:///other");
         app.toggle_tree();
         app.return_keys_to_panes();
-        // Abrirlo lo cuelga CERCA del listado (2026-09-21): `mem:///r` no
-        // cuelga de casa, así que de la raíz de su provider, revelando `r`.
+        // Opening it hangs it NEAR the listing (2026-09-21): `mem:///r`
+        // doesn't hang off home, so off its provider's root, revealing `r`.
         assert_eq!(
             app.tree().and_then(|t| t.root().cloned()),
             Some(vp("mem:///"))
@@ -2083,15 +2136,15 @@ mod tests {
         assert_eq!(
             app.tree().and_then(|t| t.root().cloned()),
             Some(vp("mem:///")),
-            "sube al ancestro común de los dos lados"
+            "climbs to the two sides' common ancestor"
         );
         assert_eq!(
             app.tree().and_then(norte_frontend::tree::Tree::revealing),
-            Some(&vp("mem:///otro")),
-            "y el cursor irá a donde está el panel que ahora tiene el foco"
+            Some(&vp("mem:///other")),
+            "and the cursor will go to where the now-focused panel is"
         );
 
-        // Y la vuelta ya no mueve la raíz: los dos cuelgan de ella.
+        // And switching back no longer moves the root: both hang off it.
         app.switch_focus();
         assert_eq!(
             app.tree().and_then(|t| t.root().cloned()),
@@ -2099,18 +2152,18 @@ mod tests {
         );
     }
 
-    /// **Un layout RESTAURADO con el árbol dentro trae su estado.**
+    /// **A RESTORED layout with the tree inside brings its state.**
     ///
-    /// Es el fallo que encontró pilotar la TUI: la sesión de ayer guarda el
-    /// árbol, al arrancar el hueco vuelve… y se pinta en blanco, porque el
-    /// toggle que habría creado su estado no se va a pulsar — el panel ya está
-    /// ahí. `set_layout` siembra el estado de CADA kind por esta razón, y el
-    /// árbol tenía que entrar en esa lista.
+    /// It's the bug piloting the TUI found: yesterday's session saves the
+    /// tree, on startup the slot comes back… and paints blank, because the
+    /// toggle that would have created its state isn't going to be pressed —
+    /// the panel is already there. `set_layout` seeds EVERY kind's state
+    /// for this reason, and the tree had to enter that list.
     #[test]
-    fn un_layout_con_arbol_trae_su_estado() {
+    fn a_layout_with_a_tree_brings_its_state() {
         use norte_frontend::layout::{Dir, KindId, Node, Size, SlotId};
 
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         let tree = Node::Split {
             dir: Dir::Horizontal,
             sizes: vec![Size::Fixed(24), Size::Weight(1)],
@@ -2122,23 +2175,24 @@ mod tests {
         app.set_layout(tree);
         assert!(
             app.panes.tree(SlotId(90)).is_some(),
-            "el hueco del árbol llegó sin estado y se pintaría vacío"
+            "the tree's slot arrived with no state and would paint empty"
         );
         assert!(
             app.panes.tree(SlotId(90)).and_then(|t| t.root()).is_some(),
-            "y anclado en algún sitio, o no pide nada"
+            "and anchored somewhere, or it requests nothing"
         );
     }
 
-    /// Y el hueco del árbol SE COLOCA en el reparto: sin esto el layout le
-    /// reserva sitio y nadie lo pinta, que es una columna en blanco.
+    /// And the tree's slot GETS PLACED in the layout: without this the
+    /// layout reserves room for it and nobody paints it, which is a blank
+    /// column.
     #[test]
-    fn el_hueco_del_arbol_se_coloca() {
+    fn the_trees_slot_is_placed() {
         use norte_frontend::layout::{KindRegistry, Rect, resolve};
 
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.toggle_tree();
-        let id = app.tree_slot().expect("abierto");
+        let id = app.tree_slot().expect("open");
         let res = resolve(
             Rect::new(0, 0, 110, 30),
             &app.layout,
@@ -2146,29 +2200,29 @@ mod tests {
         );
         assert!(
             res.placements.iter().any(|(p, _)| *p == id),
-            "el hueco del árbol no se colocó: {:?}",
+            "the tree's slot didn't get placed: {:?}",
             res.placements
         );
-        assert!(app.panes.tree(id).is_some(), "y su panel está");
+        assert!(app.panes.tree(id).is_some(), "and its panel is there");
     }
 
-    /// Tres pulsaciones, como el sidebar: abre y enfoca, vuelve a enfocar,
-    /// cierra. La del medio es la que hace que soltar el teclado no cierre el
-    /// panel.
+    /// Three presses, like the sidebar: opens and focuses, focuses again,
+    /// closes. The middle one is what makes releasing the keyboard not
+    /// close the panel.
     #[test]
-    fn el_arbol_abre_enfoca_y_cierra() {
-        let mut app = app_dos_panes();
+    fn the_tree_opens_focuses_and_closes() {
+        let mut app = app_two_panes();
         app.toggle_tree();
         assert!(app.tree_slot().is_some());
         app.return_keys_to_panes();
         app.toggle_tree();
         assert!(
             app.tree_slot().is_some(),
-            "la segunda solo recupera el teclado"
+            "the second one only regains the keyboard"
         );
         assert_eq!(app.key_owner(), KeyOwner::Tree);
         app.toggle_tree();
-        assert!(app.tree_slot().is_none(), "y la tercera cierra");
+        assert!(app.tree_slot().is_none(), "and the third one closes");
         assert_eq!(app.key_owner(), KeyOwner::Panes);
     }
 }

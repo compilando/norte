@@ -1,8 +1,8 @@
-//! El estado de la superficie de sincronización, y lo que dice la barra.
+//! The synchronization surface's state, and what the bar says.
 //!
-//! La máquina de estados que un frontend pinta: qué fase es, qué teclas
-//! tienen sentido en ella y qué frase la resume. Sin nada de terminal ni de
-//! ventana: las dos superficies la comparten entera.
+//! The state machine a frontend paints: which phase it is, which keys make
+//! sense in it, and what sentence sums it up. With nothing of the terminal
+//! nor the window: both surfaces share it whole.
 
 use norte_i18n::{Lang, t_in, ta_in};
 use norte_proto::methods::{
@@ -251,38 +251,38 @@ fn integrity_of(
     }
 }
 
-/// Cómo va la Task de un panel de sincronización, para la barra de estado.
+/// How the Task of a sync pane is going, for the status bar.
 ///
-/// Deliberadamente MÁS CORTO que [`crate::compare::CompareState`]: aquí el
-/// «llegaron todas las filas» no se deduce de un conteo, lo DICE el
-/// `sync.plan_done` — sin él no hay `plan_hash` y no hay nada que aprobar, así
-/// que un plan incompleto no es un estado que pintar sino un plan que no
-/// existe (`SyncPlanEvent`, ADR 0049).
+/// Deliberately SHORTER than [`crate::compare::CompareState`]: here "all the
+/// rows arrived" is not deduced from a count, `sync.plan_done` SAYS so —
+/// without it there is no `plan_hash` and nothing to approve, so an
+/// incomplete plan is not a state to paint but a plan that does not exist
+/// (`SyncPlanEvent`, ADR 0049).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SyncRunState {
-    /// Una Task viva: se está planificando, o se está aplicando.
+    /// A live Task: it is planning, or applying.
     #[default]
     Running,
-    /// La Task terminó bien.
+    /// The Task ended well.
     Done,
-    /// El usuario canceló.
+    /// The user cancelled.
     Cancelled,
-    /// La Task falló (el error va por la barra).
+    /// The Task failed (the error goes on the bar).
     Failed,
 }
 
 impl SyncRunState {
-    /// El desenlace de la Task que corre detrás del panel —la del plan
-    /// primero, la de la aplicación después— leído de su [`TaskState`]
-    /// terminal.
+    /// The outcome of the Task running behind the pane —the plan's first,
+    /// the apply's afterwards— read from its terminal [`TaskState`].
     ///
-    /// Deliberadamente NO toca el error localizado que cada frontend pinta
-    /// (una barra truncada en la TUI, algo distinto en la GUI): eso es la
-    /// única mitad que legítimamente difiere entre las dos, y mezclarla aquí
-    /// ataría este mapeo puro a un [`Lang`] sin necesidad. Lo que SÍ era una
-    /// sola decisión repetida a mano —`Cancelled`/`Failed`/lo demás→`Done`—
-    /// es lo que vive aquí, para que un `_ => Done` no se transcriba dos
-    /// veces y un día se le olvide un brazo a una de las dos copias.
+    /// Deliberately does NOT touch the localised error each frontend paints
+    /// (a truncated bar in the TUI, something different in the GUI): that is
+    /// the one half that legitimately differs between the two, and mixing it
+    /// in here would tie this pure mapping to a [`Lang`] with no need to.
+    /// What WAS one decision repeated by hand
+    /// —`Cancelled`/`Failed`/everything else→`Done`— is what lives here, so
+    /// a `_ => Done` is not transcribed twice with one arm forgotten from
+    /// one of the two copies some day.
     ///
     /// ```
     /// use norte_frontend::sync::SyncRunState;
@@ -303,77 +303,79 @@ impl SyncRunState {
     }
 }
 
-/// El panel de sincronización abierto: el modelo puro de [`SyncState`] más lo
-/// que un frontend necesita para pintarlo y para hablar con el backend.
+/// The open sync pane: [`SyncState`]'s pure model plus what a frontend needs
+/// to paint it and to talk to the backend.
 ///
-/// El reparto es el mismo que el de [`crate::compare::CompareView`] (regla
-/// dura 7): el estado del diálogo —qué pasos llegaron, si cuadran con lo que
-/// el daemon cerró, qué devuelve el undo y cuál es la segunda pregunta— vive
-/// aquí, donde se prueba sin terminal. Lo que cada frontend añade son las dos
-/// raíces que la cabecera pinta, el estado del run y la pregunta de
-/// confirmación EN CURSO — y esas también viven aquí (#161): la TUI y la GUI
-/// necesitan el MISMO envoltorio, no dos reimplementados por separado.
+/// The split is the same as [`crate::compare::CompareView`]'s (hard rule 7):
+/// the dialog's state —which steps arrived, whether they match what the
+/// daemon closed with, what the undo gives back, and what the second
+/// question is— lives here, where it is tested without a terminal. What each
+/// frontend adds are the two roots the header paints, the run's state, and
+/// the confirmation question IN PROGRESS — and those also live here (#161):
+/// the TUI and the GUI need the SAME wrapper, not two reimplemented
+/// separately.
 #[derive(Debug)]
 pub struct SyncView {
-    /// El modelo del diálogo (Task 12).
+    /// The dialog's model (Task 12).
     pub state: SyncState,
-    /// Cómo va la Task que está corriendo ahora mismo (la del plan primero, la
-    /// de la aplicación después).
+    /// How the Task currently running is going (the plan's first, the
+    /// apply's afterwards).
     pub run: SyncRunState,
-    /// Modo pedido, que la cabecera pinta: un `Mirror` borra y un `Update` no,
-    /// y el lector tiene que verlo antes de aprobar.
+    /// The requested mode, which the header paints: a `Mirror` deletes and
+    /// an `Update` does not, and the reader has to see it before approving.
     pub mode: SyncMode,
-    /// Raíz ORIGEN. De ella cuelgan las `rel` de casi todos los pasos.
+    /// SOURCE root. Almost all steps' `rel` hangs from it.
     pub source_root: VPath,
-    /// Raíz DESTINO. De ella cuelgan las de un `DeleteTree` y las de un `Skip`
-    /// ilegible ([`crate::sync::anchor_of`]).
+    /// DESTINATION root. A `DeleteTree`'s and an unreadable `Skip`'s hang
+    /// from it ([`crate::sync::anchor_of`]).
     pub dest_root: VPath,
-    /// Reinterpretación de nombres (#57) del pane ORIGEN, congelada al abrir.
+    /// The SOURCE pane's name reinterpretation (#57), frozen at open time.
     pub source_encoding: Option<norte_encoding::NameEncoding>,
-    /// La del pane DESTINO, que puede ser otra.
+    /// The DESTINATION pane's, which may be another one.
     ///
-    /// Dos y no una, por lo mismo que el panel de diferencias lleva dos: los
-    /// dos panes son dos ubicaciones y pueden llevar overrides distintos. Aquí
-    /// además importa más, porque `SyncStep::dest_rel` existe precisamente
-    /// para enseñar la ortografía del DESTINO (#152) — decodificarla con el
-    /// codepage del ORIGEN nombraría con otros bytes el fichero sobre el que
-    /// va a caer la escritura.
+    /// Two and not one, for the same reason the diff pane carries two: the
+    /// two panes are two locations and can carry different overrides. Here
+    /// it matters even more, because `SyncStep::dest_rel` exists precisely
+    /// to show the DESTINATION's spelling (#152) — decoding it with the
+    /// SOURCE's codepage would name the file the write is about to land on
+    /// with different bytes.
     pub dest_encoding: Option<norte_encoding::NameEncoding>,
-    /// La segunda pregunta, ya formulada y esperando un `y`.
+    /// The second question, already asked and waiting for a `y`.
     ///
-    /// `None` = todavía no se ha pulsado aprobar, o el plan no la necesitaba.
-    /// Vive aquí y no en el modelo porque es estado de INTERACCIÓN —a medio
-    /// contestar— y el modelo de Task 12 no retrocede: preguntar es de la
-    /// pantalla, decidir es suyo.
+    /// `None` = approve has not been pressed yet, or the plan did not need
+    /// it. Lives here and not in the model because it is INTERACTION
+    /// state —half-answered— and Task 12's model does not go backwards:
+    /// asking belongs to the screen, deciding belongs to it.
     pub confirming: Option<Confirmation>,
-    /// Ya se pidió cancelar (el primer `Esc`), igual que en el panel de
-    /// diferencias y por el mismo motivo: el segundo `Esc` cierra pase lo que
-    /// pase con la Task.
+    /// Cancellation was already requested (the first `Esc`), same as in the
+    /// diff pane and for the same reason: the second `Esc` closes whatever
+    /// happens to the Task.
     pub cancel_requested: bool,
-    /// Categoría del error de una Task que FALLÓ, ya localizada y saneada.
+    /// A FAILED Task's error category, already localised and sanitised.
     pub error: Option<String>,
-    /// El `sync.apply` ya SALIÓ y el daemon todavía no ha contestado.
+    /// `sync.apply` has already GONE OUT and the daemon has not answered
+    /// yet.
     ///
-    /// Privado a propósito: la única forma de echarlo es [`SyncView::submit`]
-    /// y la única de leerlo, [`SyncView::is_submitted`]. Lo que lo hace
-    /// necesario es que `Applying` NO llega con la tecla sino una vuelta
-    /// entera después, cuando el daemon devuelve la Task — en una GUI que lee
-    /// eventos entre teclas esa ventana admite un segundo `a`, y también un
-    /// `Esc` (revisión de seguridad MAJOR-1).
+    /// Private on purpose: the only way to set it is [`SyncView::submit`]
+    /// and the only way to read it, [`SyncView::is_submitted`]. What makes
+    /// it necessary is that `Applying` does NOT arrive with the keystroke
+    /// but a whole round trip later, when the daemon returns the Task — in
+    /// a GUI that reads events between keystrokes that window admits a
+    /// second `a`, and also an `Esc` (security review MAJOR-1).
     ///
-    /// Vivió en `norte-gui` hasta la revisión de rama de C2, y ahí estaba mal:
-    /// `can_approve`, [`hint_id`] y [`status_line`] viven en ESTE crate y no
-    /// podían verlo, así que el pie seguía ofreciendo `a aprobar` sobre un
-    /// plan que `approve` ya rechazaba — justo la pantalla rota que `hint_id`
-    /// existe para no pintar. Lo limpian las TRANSICIONES DE ESTADO
-    /// ([`SyncView::on_apply_started`], [`SyncView::on_apply_ended`]), nunca
-    /// la generación de la petición: atarlo a la generación lo dejaba echado
-    /// para siempre cuando un evento superado se descartaba.
+    /// Lived in `norte-gui` until C2's branch review, and it was wrong
+    /// there: `can_approve`, [`hint_id`], and [`status_line`] live in THIS
+    /// crate and could not see it, so the footer kept offering `a to
+    /// approve` over a plan `approve` already rejected — exactly the broken
+    /// screen `hint_id` exists to never paint. STATE TRANSITIONS clear it
+    /// ([`SyncView::on_apply_started`], [`SyncView::on_apply_ended`]), never
+    /// the request's generation: tying it to the generation left it set
+    /// forever when a superseded event got discarded.
     submitted: bool,
 }
 
 impl SyncView {
-    /// Un panel recién abierto sobre estas dos raíces, sin pasos todavía.
+    /// A freshly opened pane over these two roots, with no steps yet.
     #[must_use]
     pub fn new(
         task_id: TaskId,
@@ -384,9 +386,9 @@ impl SyncView {
         dest_encoding: Option<norte_encoding::NameEncoding>,
     ) -> Self {
         Self {
-            // Con el `task_id` desde el principio: es lo que hace que un lote
-            // de OTRO plan —el lector replanifica con menos marcas— se caiga
-            // en vez de mezclarse con éste (Task 12, nota 3).
+            // With the `task_id` from the start: it is what makes a batch
+            // from ANOTHER plan —the reader re-plans with fewer marks—
+            // dropped instead of mixed with this one (Task 12, note 3).
             state: SyncState::Planning(Planning::new(task_id)),
             run: SyncRunState::Running,
             mode,
@@ -401,13 +403,14 @@ impl SyncView {
         }
     }
 
-    /// Qué papelera tiene el DESTINO, según el plan.
+    /// What trash the DESTINATION has, according to the plan.
     ///
-    /// [`DestTrash::Unknown`] mientras el plan no ha cerrado, que es la
-    /// respuesta honesta: sin `sync.plan_done` no se sabe, y el modelo pinta
-    /// cada paso como «esta versión no puede decirlo» en vez de prometer que
-    /// vuelve. Nunca se lee [`SyncStep::reversal`] a pelo — esa es la mitad de
-    /// la respuesta y la que miente cuando el destino no tiene papelera.
+    /// [`DestTrash::Unknown`] while the plan has not closed, which is the
+    /// honest answer: with no `sync.plan_done` it is not known, and the
+    /// model paints every step as "this version cannot say" instead of
+    /// promising it comes back. [`SyncStep::reversal`] is never read raw —
+    /// that is half the answer, and the half that lies when the destination
+    /// has no trash.
     #[must_use]
     pub fn dest_trash(&self) -> DestTrash {
         self.state
@@ -415,8 +418,9 @@ impl SyncView {
             .map_or(DestTrash::Unknown, SyncPlan::dest_trash)
     }
 
-    /// Las dos reinterpretaciones, juntas y nombradas, para pasárselas a
-    /// [`crate::sync::render_step`] de una pieza — que es lo que evita cruzarlas (#152).
+    /// The two reinterpretations, together and named, to hand to
+    /// [`crate::sync::render_step`] as one piece — which is what stops them
+    /// from being crossed (#152).
     #[must_use]
     pub fn encodings(&self) -> SyncEncodings {
         SyncEncodings {
@@ -425,15 +429,16 @@ impl SyncView {
         }
     }
 
-    /// Los pasos que hay AHORA MISMO, esté cerrado el plan o no.
+    /// The steps there are RIGHT NOW, whether the plan has closed or not.
     ///
-    /// Mientras el plan llega, [`SyncState::plan`] contesta `None` —no hay
-    /// plan hasta el `sync.plan_done`, que es lo que le da su `plan_hash`— y
-    /// aun así los pasos ya recibidos existen y se pintan. Sin esto el panel
-    /// enseñaba un hueco vacío mientras el pie contaba «planificando… 6
-    /// pasos», que es la pantalla diciéndose la contraria a sí misma. La
-    /// columna del undo de esos pasos sale «esta versión no puede decirlo»,
-    /// que es la verdad hasta que se sepa la papelera del destino.
+    /// While the plan is arriving, [`SyncState::plan`] answers `None` —there
+    /// is no plan until `sync.plan_done`, which is what gives it its
+    /// `plan_hash`— and yet the steps already received exist and get
+    /// painted. Without this, the pane showed an empty gap while the footer
+    /// counted "planning… 6 steps", which is the screen contradicting
+    /// itself. The undo column of those steps comes out "this version
+    /// cannot say", which is the truth until the destination's trash is
+    /// known.
     #[must_use]
     pub fn steps(&self) -> &[SyncStep] {
         match &self.state {
@@ -442,36 +447,37 @@ impl SyncView {
         }
     }
 
-    /// ¿Sigue habiendo algo que aprobar?
+    /// Is there still something to approve?
     ///
-    /// `false` en cuanto el plan se manda: la línea de teclas no puede seguir
-    /// ofreciendo `a aprobar` sobre un plan que ya se gastó —aplicarlo lo
-    /// consume, y un segundo `sync.apply` del mismo hash es `PlanStale`—.
+    /// `false` as soon as the plan is submitted: the key hint cannot keep
+    /// offering `a to approve` over a plan that has already been spent
+    /// —applying it consumes it, and a second `sync.apply` of the same hash
+    /// is `PlanStale`.
     #[must_use]
     pub fn awaiting_approval(&self) -> bool {
         matches!(self.state, SyncState::Ready(_))
     }
 
-    /// ¿Se puede aprobar este panel AHORA MISMO?
+    /// Can this pane be approved RIGHT NOW?
     ///
-    /// Envuelve [`SyncState::can_approve`] y NUNCA
-    /// [`SyncPlan::can_approve`] — el segundo, alcanzable por
-    /// [`SyncState::plan`], sigue contestando que sí sobre un plan que ya se
-    /// aprobó, porque sus tres factores no cambian al gastarse. Este método
-    /// es la forma de que un llamante no tenga ocasión de coger el atajo
-    /// equivocado (#161, la trampa que la fase A del CLI no vio: no preguntó
-    /// nada, y un plan `Malformed` se aplicó entero desde el spool).
+    /// Wraps [`SyncState::can_approve`] and NEVER
+    /// [`SyncPlan::can_approve`] — the latter, reachable through
+    /// [`SyncState::plan`], still answers yes about a plan already approved,
+    /// because its three factors do not change on being spent. This method
+    /// is how a caller never gets a chance to take the wrong shortcut (#161,
+    /// the trap phase A's CLI did not see: it asked nothing, and a
+    /// `Malformed` plan got applied whole from the spool).
     ///
-    /// # Y el desenlace de la Task cuenta
-    /// Un run `Cancelled` o `Failed` no se aprueba, aunque el plan HAYA
-    /// cerrado. Los dos hechos son compatibles —`sync.plan_done` llega antes
-    /// de que el canal se cierre, así que un `Esc` (o una caída del daemon)
-    /// en esa ventana deja `Ready` + `Cancelled`—, y sin esta cláusula la
-    /// pantalla decía las dos cosas a la vez: el pie pintaba «cancelado — no
-    /// hay plan que aprobar» ([`status_line`]) mientras la línea de teclas
-    /// seguía ofreciendo aprobar, y la tecla FUNCIONABA (revisión rust
-    /// MAJOR-1). Se resuelve del lado conservador: quien pulsó `Esc` pidió
-    /// parar, y esta pantalla escribe en el disco de alguien.
+    /// # And the Task's outcome counts
+    /// A `Cancelled` or `Failed` run is not approved, even if the plan HAS
+    /// closed. The two facts are compatible —`sync.plan_done` arrives before
+    /// the channel closes, so an `Esc` (or a daemon crash) in that window
+    /// leaves `Ready` + `Cancelled`— and without this clause the screen said
+    /// both things at once: the footer painted "cancelled — there is no plan
+    /// to approve" ([`status_line`]) while the key hint kept offering to
+    /// approve, and the key WORKED (rust review MAJOR-1). It is resolved on
+    /// the conservative side: whoever pressed `Esc` asked to stop, and this
+    /// screen writes to someone's disk.
     #[must_use]
     pub fn can_approve(&self) -> bool {
         if self.submitted || matches!(self.run, SyncRunState::Cancelled | SyncRunState::Failed) {
@@ -480,45 +486,46 @@ impl SyncView {
         self.state.can_approve()
     }
 
-    /// ¿Hay un `sync.apply` en vuelo sin contestar?
+    /// Is there a `sync.apply` in flight with no answer?
     ///
-    /// Lo pregunta quien pinta la línea de teclas y quien interpreta un `Esc`:
-    /// en esta ventana el daemon YA está escribiendo, así que un `Esc` tiene
-    /// que pedir cancelación y no cerrar el panel. Cerrarlo pierde el informe
-    /// —y con él el recuento, los fallos y el asa del undo— sobre un destino
-    /// que se reescribió a medias (revisión de seguridad MAJOR-1).
+    /// Asked by whoever paints the key hint and whoever interprets an
+    /// `Esc`: in this window the daemon is ALREADY writing, so an `Esc` has
+    /// to request cancellation and not close the pane. Closing it loses the
+    /// report —and with it the count, the failures, and the undo handle—
+    /// over a destination that got half rewritten (security review
+    /// MAJOR-1).
     #[must_use]
     pub fn is_submitted(&self) -> bool {
         self.submitted
     }
 
-    /// La petición se resolvió SIN Task: el daemon la rechazó, o llegó una
-    /// Task que este panel no adopta.
+    /// The request resolved WITH NO Task: the daemon rejected it, or a Task
+    /// arrived that this pane does not adopt.
     ///
-    /// Suelta el pestillo, porque si no la `a` queda muerta para siempre y el
-    /// pie sigue ofreciéndola. Se llama también en los caminos donde el evento
-    /// se descarta por generación superada: atar la suelta a la generación es
-    /// justo lo que dejaba el panel encallado cuando el segundo plan se
-    /// rechazaba y ningún panel nuevo sustituía al primero (revisión de rama
-    /// de C2, MINOR de las dos revisiones).
+    /// Releases the latch, because otherwise the `a` stays dead forever and
+    /// the footer keeps offering it. Also called on the paths where the
+    /// event is discarded for a superseded generation: tying the release to
+    /// the generation is exactly what left the pane stuck when the second
+    /// plan got rejected and no new pane replaced the first one (C2's
+    /// branch review, MINOR of both reviews).
     pub fn on_apply_abandoned(&mut self) {
         self.submitted = false;
-        // Y la petición de cancelación se olvida con él. Un `Esc` que no
-        // llegó a cancelar NADA —porque el apply ni nació— dejaba
-        // `cancel_requested` puesto para siempre, y entonces cada apply
-        // posterior lo negaba `on_apply_started`: el panel se convertía en una
-        // máquina de lanzar escrituras que nunca se adoptan.
+        // And the cancellation request is forgotten with it. An `Esc` that
+        // never cancelled ANYTHING —because the apply was never even
+        // born— left `cancel_requested` set forever, and then every later
+        // apply had it rejected by `on_apply_started`: the pane turned into
+        // a machine that launches writes that are never adopted.
         self.cancel_requested = false;
     }
 
-    /// Echa el pestillo y devuelve el hash que se manda, o `None` si este
-    /// panel no se puede aprobar.
+    /// Sets the latch and returns the hash to submit, or `None` if this
+    /// pane cannot be approved.
     ///
-    /// Una sola puerta para los dos frontends: quien quiera aplicar pasa por
-    /// aquí, y lo que impide el segundo `sync.apply` es esta función, no que
-    /// el estado sea `Applying` —no lo es todavía—. La TUI lo espera en línea
-    /// y no puede leer una tecla en medio, así que para ella es un no-op; la
-    /// GUI sí puede, y es la que lo necesita.
+    /// One single door for both frontends: whoever wants to apply goes
+    /// through here, and what stops a second `sync.apply` is this function,
+    /// not the state being `Applying` —it is not, yet. The TUI awaits it
+    /// inline and cannot read a key in between, so for it this is a no-op;
+    /// the GUI can, and it is the one that needs it.
     pub fn submit(&mut self) -> Option<PlanHash> {
         if !self.can_approve() {
             return None;
@@ -528,30 +535,31 @@ impl SyncView {
         Some(hash)
     }
 
-    /// Se lanzó `sync.apply` y el daemon contestó con una Task: junta las
-    /// CUATRO actualizaciones que ese instante exige — el modelo avanza a
-    /// `Applying` ([`SyncState::on_apply_started`]), el run vuelve a
-    /// `Running`, la segunda pregunta se cae (ya se contestó) y la
-    /// cancelación pedida por un run anterior deja de aplicar al nuevo.
+    /// `sync.apply` was launched and the daemon answered with a Task: joins
+    /// the FOUR updates that instant demands — the model advances to
+    /// `Applying` ([`SyncState::on_apply_started`]), the run goes back to
+    /// `Running`, the second question falls (already answered), and a
+    /// cancellation requested by a previous run stops applying to the new
+    /// one.
     ///
-    /// Antes de que esto viviera aquí, `norte-tui` hacía las cuatro a mano en
-    /// el sitio que lanza la Task; la GUI habría necesitado exactamente las
-    /// mismas cuatro, y una reimplementación por su cuenta es justo la
-    /// oportunidad de olvidar una — la trampa que este movimiento existe para
-    /// no repetir (#161, revisión de C1).
-    /// # Y puede NEGARSE
-    /// Devuelve `false` sin tocar nada si ya se pidió cancelar. El `Esc` que
-    /// pidió parar llegó ANTES que la Task, así que adoptarla aquí resucitaría
-    /// un run que el lector dio por cortado y, peor, borraría la petición de
-    /// cancelación con el `cancel_requested = false` de abajo — que existe
-    /// para que una cancelación vieja no manche el run nuevo, no para
-    /// descartar la que acaba de pedirse.
+    /// Before this lived here, `norte-tui` did the four by hand at the spot
+    /// that launches the Task; the GUI would have needed exactly the same
+    /// four, and a separate reimplementation is exactly the chance to forget
+    /// one — the trap this move exists to not repeat (#161, C1's review).
+    /// # And it can be REFUSED
+    /// Returns `false` without touching anything if cancellation was already
+    /// requested. The `Esc` that asked to stop arrived BEFORE the Task, so
+    /// adopting it here would resurrect a run the reader considered cut
+    /// short and, worse, would erase the cancellation request with the
+    /// `cancel_requested = false` below — which exists so an old
+    /// cancellation does not stain the new run, not to discard the one that
+    /// was just requested.
     ///
-    /// El guard estaba en el envoltorio de la GUI y no aquí, así que la TUI se
-    /// quedaba con el agujero: hoy no lo alcanza porque espera el `sync.apply`
-    /// en línea, o sea por casualidad del flujo de control y no por diseño
-    /// (revisión de rama de C2, rust MAJOR-2). Quien lo niegue tiene que
-    /// cancelar la Task que le devolvieron: nadie más la conoce.
+    /// The guard was in the GUI's wrapper and not here, so the TUI was left
+    /// with the hole: today it does not reach it because it awaits
+    /// `sync.apply` inline, i.e. by accident of control flow and not by
+    /// design (C2's branch review, rust MAJOR-2). Whoever refuses it has to
+    /// cancel the Task it was given back: nobody else knows about it.
     pub fn on_apply_started(&mut self, task_id: TaskId) -> bool {
         if self.cancel_requested {
             return false;
@@ -560,107 +568,111 @@ impl SyncView {
         self.run = SyncRunState::Running;
         self.confirming = None;
         self.cancel_requested = false;
-        // El daemon contestó: la ventana que el pestillo cubre se acabó, y a
-        // partir de aquí quien impide el segundo `sync.apply` es el estado
-        // `Applying`.
+        // The daemon answered: the window the latch covers is over, and from
+        // here on what stops a second `sync.apply` is the `Applying` state.
         self.submitted = false;
         true
     }
 
-    /// Terminó la Task de `sync.apply`, con lo que `sync.report` contestó:
-    /// mete el informe y fija el desenlace. Devuelve la categoría del error que
-    /// hay que decir, SIN sanear — cada frontend la mete donde y como pinta.
+    /// The `sync.apply` Task ended, with whatever `sync.report` answered:
+    /// stores the report and sets the outcome. Returns the error category
+    /// that has to be said, UNSANITISED — each frontend places it where and
+    /// however it paints.
     ///
-    /// Compartida (#161) porque las tres reglas de aquí son de las que un
-    /// frontend arregla y el otro se queda:
+    /// Shared (#161) because the three rules here are the kind one frontend
+    /// fixes and the other keeps:
     ///
-    /// 1. **El error de la TASK manda sobre el del informe**: es el que dice
-    ///    por qué se paró.
-    /// 2. **Sin informe no se dice que terminó bien.** `sync.report` es lo
-    ///    ÚNICO que dice cuánto se llegó a escribir; si no se pudo pedir, el
-    ///    desenlace es `Failed` con la categoría de ESE error aunque la Task
-    ///    dijera `Completed`. `norte-tui` se quedaba aquí en `Applying` con una
-    ///    barra transitoria, y el pie decía «aplicando…» para siempre.
-    /// 3. **Un estado NO terminal también es fallo.** Solo se llega a él con
-    ///    los emisores del progreso caídos: la conexión murió sin decir qué
-    ///    pasó, y una sincronización a medias no es un éxito.
+    /// 1. **The TASK's error rules over the report's**: it is the one that
+    ///    says why it stopped.
+    /// 2. **With no report it is not said that it ended well.** `sync.report`
+    ///    is the ONLY thing that says how much got written; if it could not
+    ///    be requested, the outcome is `Failed` with THAT error's category
+    ///    even if the Task said `Completed`. `norte-tui` used to get stuck
+    ///    here in `Applying` with a transient bar, and the footer said
+    ///    "applying…" forever.
+    /// 3. **A NON-terminal state is also a failure.** It is only reached
+    ///    with the progress emitters down: the connection died without
+    ///    saying what happened, and a synchronization cut halfway through
+    ///    is not a success.
     ///
-    /// Con UNA excepción a las dos últimas: una Task **cancelada** se dice
-    /// cancelada aunque el informe falte. El lector pidió parar y eso ya lo
-    /// sabe; convertirlo en «falló» le quita el único dato firme que tiene, y
-    /// que el informe no llegara lo cuenta la categoría que esto devuelve.
+    /// With ONE exception to the last two: a **cancelled** Task is reported
+    /// as cancelled even if the report is missing. The reader asked to stop
+    /// and that much is already known; turning it into "failed" would take
+    /// away the one solid fact it has, and that the report never arrived is
+    /// told by the category this returns.
     ///
-    /// La segunda pregunta se cae con la petición que la motivó: dejarla puesta
-    /// bajo un pie que ya dice «falló» es cómo un `y` posterior contesta a otra
-    /// cosa.
+    /// The second question falls with the request that motivated it: leaving
+    /// it set under a footer that already says "failed" is how a later `y`
+    /// answers something else.
     ///
-    /// El informe se mete TAMBIÉN cuando la Task se canceló: lo aplicado hasta
-    /// el corte se queda journalizado, y media sincronización es un estado real
-    /// que el lector tiene que poder ver.
+    /// The report is stored ALSO when the Task was cancelled: what got
+    /// applied up to the cut stays journalled, and a half synchronization is
+    /// a real state the reader has to be able to see.
     pub fn on_apply_ended(
         &mut self,
         state: &TaskState,
         report: Result<SyncReportResult, norte_proto::Error>,
         lang: Lang,
     ) -> Option<String> {
-        // El idioma va como PARÁMETRO y no se lee del global: la ventana
-        // gráfica tiene uno por instancia, y el desenlace de una escritura en
-        // el idioma de otra ventana es un desenlace que no se lee.
-        let categoria = match (state, &report) {
+        // The language goes as a PARAMETER and is not read from the global:
+        // the graphical window has one per instance, and the outcome of a
+        // write in another window's language is an outcome that is not
+        // read.
+        let category = match (state, &report) {
             (TaskState::Failed { error }, _) => Some(crate::error::error_category_in(lang, error)),
             (_, Err(e)) => Some(crate::error::error_category_in(lang, e)),
             _ => None,
         };
-        if let Ok(informe) = report {
-            self.state.on_report(informe);
+        if let Ok(report) = report {
+            self.state.on_report(report);
         }
         self.run = if matches!(state, TaskState::Cancelled) {
-            // Una cancelación se dice CANCELADA aunque el informe no llegue:
-            // el lector pidió parar y eso ya lo sabe, así que llamarlo «falló»
-            // le quita el único dato firme que tiene. Que no se pueda decir
-            // cuánto se escribió lo dice el banner, con la categoría que esto
-            // devuelve.
+            // A cancellation is reported as CANCELLED even if the report
+            // never arrives: the reader asked to stop and that much is
+            // already known, so calling it "failed" would take away the one
+            // solid fact it has. That how much got written cannot be said is
+            // stated by the banner, with the category this returns.
             SyncRunState::Cancelled
-        } else if categoria.is_some() || !state.is_terminal() {
+        } else if category.is_some() || !state.is_terminal() {
             SyncRunState::Failed
         } else {
             SyncRunState::from_task_state(state)
         };
         self.confirming = None;
-        // Terminó: el pestillo se suelta pase lo que pase, incluso si esto
-        // llega sin que `on_apply_started` haya pasado nunca (una Task que
-        // falla antes de adoptarse). Si no, el panel se queda sin poder
-        // aprobar y con el pie ofreciéndolo.
+        // It ended: the latch releases whatever happens, even if this
+        // arrives without `on_apply_started` ever having run (a Task that
+        // fails before being adopted). Otherwise the pane is left unable to
+        // approve with the footer still offering to.
         self.submitted = false;
-        categoria
+        category
     }
 }
 
-/// Qué línea de TECLAS toca ahora mismo, como id de Fluent.
+/// Which KEY hint applies right now, as a Fluent id.
 ///
-/// Tres, y la diferencia entre las dos últimas es la única tecla de esta
-/// pantalla que escribe en el disco de alguien:
+/// Three, and the difference between the last two is the only key on this
+/// screen that writes to someone's disk:
 ///
-/// * `sync-hint-confirm` con la segunda pregunta puesta — el teclado se ha
-///   reducido a `y` y «cualquier otra», y decir «↑↓ mover» ahí es ofrecer algo
-///   que ya no funciona;
-/// * `sync-hint`, que NOMBRA la tecla de aprobar, solo cuando aprobar hace
-///   algo;
-/// * `sync-hint-done` en todo lo demás.
+/// * `sync-hint-confirm` with the second question set — the keyboard has
+///   shrunk to `y` and "anything else", and saying "↑↓ move" there would
+///   offer something that no longer works;
+/// * `sync-hint`, which NAMES the approve key, only when approving does
+///   something;
+/// * `sync-hint-done` for everything else.
 ///
-/// # Por qué es compartida
-/// El segundo brazo pregunta por [`SyncView::can_approve`] y no solo por
-/// [`SyncView::awaiting_approval`], y ésa es la corrección: un plan que cerró
-/// pero que el daemon marcó no ejecutable —o cuya Task se canceló— está en
-/// `Ready` y NO se puede aprobar, y la línea de teclas seguía ofreciendo `a
-/// aprobar` encima de un pie que ya decía «este plan no se puede aprobar»
-/// ([`status_line`]). Es el mismo desacuerdo que la revisión rust MAJOR-1
-/// arregló entre el pie y la tecla, una capa más arriba; vive aquí para que
-/// haya UNA respuesta para los dos frontends y no una arreglada y otra no
-/// —que es exactamente lo que C1 shipeó (#161)—.
+/// # Why it is shared
+/// The second arm asks about [`SyncView::can_approve`] and not only
+/// [`SyncView::awaiting_approval`], and that is the fix: a plan that closed
+/// but that the daemon marked non-executable —or whose Task got
+/// cancelled— is in `Ready` and CANNOT be approved, and the key hint kept
+/// offering `a to approve` over a footer that already said "this plan
+/// cannot be approved" ([`status_line`]). It is the same disagreement rust
+/// review MAJOR-1 fixed between the footer and the key, one layer up; it
+/// lives here so there is ONE answer for both frontends and not one fixed
+/// and one not —which is exactly what C1 shipped (#161).
 ///
-/// Aplicar GASTA el plan, así que en `Applying`/`Applied` la `a` desaparece:
-/// un segundo `sync.apply` del mismo hash contesta `PlanStale`.
+/// Applying SPENDS the plan, so in `Applying`/`Applied` the `a` disappears:
+/// a second `sync.apply` of the same hash answers `PlanStale`.
 ///
 /// ```
 /// use norte_frontend::sync::{SyncView, hint_id};
@@ -674,13 +686,14 @@ impl SyncView {
 ///     None,
 ///     None,
 /// );
-/// // Todavía planificando: no hay nada que aprobar, así que no se ofrece.
+/// // Still planning: there is nothing to approve, so it is not offered.
 /// assert_eq!(hint_id(&v), "sync-hint-done");
 /// ```
 #[must_use]
 pub fn hint_id(view: &SyncView) -> &'static str {
-    // Mientras el daemon ESCRIBE, `Esc` pide cancelar y no cierra: decir
-    // «Esc cierra» ahí es ofrecer irse de una escritura en curso.
+    // While the daemon is WRITING, `Esc` requests cancellation and does not
+    // close: saying "Esc closes" there would be offering to leave a write in
+    // progress.
     if view.is_submitted() || matches!(view.state, SyncState::Applying(_)) {
         return "sync-hint-applying";
     }
@@ -730,7 +743,7 @@ pub fn hint_id(view: &SyncView) -> &'static str {
 ///     None,
 ///     None,
 /// );
-/// // Recién abierto: planificando, con cero pasos.
+/// // Freshly opened: planning, with zero steps.
 /// assert!(!status_line(&v, Lang::En).is_empty());
 /// ```
 #[must_use]
@@ -749,23 +762,25 @@ pub fn status_line(view: &SyncView, lang: Lang) -> String {
     );
     let n = n.to_string();
     match (&view.state, view.run) {
-        // **El informe manda, y va PRIMERO** — pero SIN perder cómo acabó.
+        // **The report rules, and it goes FIRST** — but WITHOUT losing how it
+        // ended.
         //
-        // Una aplicación cortada a medias TIENE informe (lo aplicado hasta el
-        // corte se queda, journalizado) y es justo el estado en el que el
-        // lector más necesita saber cuánto llegó a escribirse. Con este brazo
-        // detrás del de `Cancelled`, la pantalla decía «cancelado — habían
-        // llegado N pasos, y no hay plan que aprobar» —una frase sobre el PLAN,
-        // que ya se aprobó— encima de la lista de fallos de la APLICACIÓN.
+        // An apply cut short halfway through HAS a report (what got applied
+        // up to the cut stays, journalled) and it is exactly the state where
+        // the reader most needs to know how much got written. With this arm
+        // behind `Cancelled`'s, the screen said "cancelled — N steps had
+        // arrived, and there is no plan to approve" —a sentence about the
+        // PLAN, already approved— over the APPLY's failure list.
         //
-        // Y el desenlace elige la FRASE en vez de perderse: «cancelado tras
-        // aplicar N» y «falló tras aplicar N» dicen las dos mitades. Poner el
-        // brazo de `Failed` delante escondía las cuentas de un `Mirror` que
-        // borró cuarenta árboles y luego murió, que es el sitio donde menos se
-        // pueden esconder; ponerlo detrás sin frases propias borraba la palabra
-        // «cancelado», y el color habría sido la única señal — en la rama cuyo
-        // commit anterior se titula «legible sin color» (#161, fase C2 tarea 4;
-        // revisiones rust MAJOR-2 y de seguridad MAJOR-4).
+        // And the outcome chooses the SENTENCE instead of getting lost:
+        // "cancelled after applying N" and "failed after applying N" say
+        // both halves. Putting the `Failed` arm in front hid the count of a
+        // `Mirror` that deleted forty trees and then died, which is the
+        // place they can least afford to be hidden; putting it behind with
+        // no sentences of its own erased the word "cancelled", and the color
+        // would have been the only signal — on the branch whose previous
+        // commit is titled "readable without color" (#161, phase C2 task 4;
+        // rust review MAJOR-2 and security review MAJOR-4).
         (SyncState::Applied(a), run) => {
             let done = a.report().done.to_string();
             let failed = a.report().failed.to_string();
@@ -791,8 +806,8 @@ pub fn status_line(view: &SyncView, lang: Lang) -> String {
                 ],
             )
         }
-        // Sin informe, el fallo manda: un error tiene que llegar entero, y no
-        // hay recuento que lo pueda sustituir.
+        // With no report, the failure rules: an error has to arrive whole,
+        // and no tally can stand in for it.
         (_, SyncRunState::Failed) => ta_in(
             lang,
             "sync-status-failed",
@@ -800,10 +815,10 @@ pub fn status_line(view: &SyncView, lang: Lang) -> String {
         ),
         (_, SyncRunState::Cancelled) => ta_in(lang, "sync-status-cancelled", &[("n", &n)]),
         (SyncState::Planning(_), _) => ta_in(lang, "sync-planning", &[("n", &n)]),
-        // `view.can_approve()` y no `p.can_approve()`: UNA sola función
-        // contesta esa pregunta, y es la misma que la línea de teclas
-        // consulta. Con la del plan a secas, este brazo y aquella podían
-        // discrepar en cuanto el desenlace de la Task entraba en juego.
+        // `view.can_approve()` and not `p.can_approve()`: ONE single
+        // function answers that question, and it is the same one the key
+        // hint consults. With the plan's alone, this arm and that one could
+        // disagree as soon as the Task's outcome came into play.
         (SyncState::Ready(_), _) => {
             let id = if view.can_approve() {
                 "sync-status-ready"

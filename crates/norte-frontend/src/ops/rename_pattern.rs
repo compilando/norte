@@ -1,41 +1,43 @@
-//! El generador DETERMINISTA de un plan de renombrado en lote (#310).
+//! The DETERMINISTIC generator of a batch rename plan (#310).
 //!
-//! La maquinaria del lote ya existía entera —plan revisable, `plan_hash`,
-//! colisiones, journal y undo (ADR 0042)— y el único que sabía producir un
-//! plan era el modelo de lenguaje (`ai.rename_plan`). O sea que renombrar
-//! veinte ficheros exigía un LLM. Esto es la otra mitad: una PLANTILLA que el
-//! humano escribe y una expansión que no consulta a nadie.
+//! The batch machinery already existed whole — a reviewable plan,
+//! `plan_hash`, collisions, journal and undo (ADR 0042) — and the only
+//! thing that knew how to produce a plan was the language model
+//! (`ai.rename_plan`). Meaning renaming twenty files required an LLM. This
+//! is the other half: a TEMPLATE the human writes and an expansion that
+//! asks nobody.
 //!
-//! Lo que sale de aquí entra por el MISMO sitio que el plan de la IA
-//! —`fs.rename_batch_plan`, la misma revisión, el mismo hash— porque lo que
-//! hace segura la operación no es de dónde salieron los nombres.
+//! What comes out of here enters through the SAME door as the AI's plan —
+//! `fs.rename_batch_plan`, the same review, the same hash — because what
+//! makes the operation safe is not where the names came from.
 //!
-//! # Por qué texto y no bytes
+//! # Why text and not bytes
 //!
-//! Un nombre son bytes (regla 1) y este módulo trabaja sobre `str`. No es un
-//! descuido: el par que viaja en el plan (`AiRenameEntry`) es UTF-8 por
-//! protocolo, así que un nombre que no lo sea no puede formar parte de un
-//! lote — hoy tampoco por el camino de la IA. El llamante los aparta ANTES y
-//! lo dice; aquí no se inventa una conversión con pérdida que renombraría un
-//! fichero a un nombre que no es el suyo.
+//! A name is bytes (rule 1) and this module works on `str`. It is not an
+//! oversight: the pair that travels in the plan (`AiRenameEntry`) is UTF-8
+//! by protocol, so a name that is not cannot be part of a batch — not
+//! today, not through the AI path either. The caller sets those aside
+//! BEFORE and says so; here no lossy conversion is invented that would
+//! rename a file to a name that is not its own.
 
-/// Los códigos que entiende una plantilla, tal como se escriben.
+/// The codes a template understands, as they are written.
 ///
-/// `[N]` el nombre sin extensión, `[E]` la extensión sin el punto, `[C]` un
-/// contador que empieza en 1 — y `[C3]` el mismo contador acolchado con ceros
-/// a tres dígitos. Todo lo demás es literal, incluido un corchete suelto.
+/// `[N]` the name without extension, `[E]` the extension without the dot,
+/// `[C]` a counter starting at 1 — and `[C3]` the same counter padded with
+/// zeros to three digits. Everything else is literal, including a stray
+/// bracket.
 ///
-/// Es el subconjunto de Total Commander que se usa a diario; su herramienta
-/// tiene además rangos de subcadena y fechas, y esos se pueden añadir aquí
-/// sin mover nada de lo que hay alrededor.
+/// It is the subset of Total Commander used daily; its tool also has
+/// substring ranges and dates, and those can be added here without moving
+/// anything around them.
 pub const CODES: &[&str] = &["[N]", "[E]", "[C]"];
 
-/// Parte un nombre en `(base, extensión)`, sin el punto.
+/// Splits a name into `(base, extension)`, without the dot.
 ///
-/// El punto que separa es el ÚLTIMO, y un nombre que empieza por punto y no
-/// tiene otro —`.bashrc`— es todo base y sin extensión: renombrar un fichero
-/// oculto con `[N].[E]` y que se convirtiera en `.bashrc.` sería la clase de
-/// sorpresa que un renombrado en lote no se puede permitir.
+/// The separating dot is the LAST one, and a name that starts with a dot
+/// and has no other — `.bashrc` — is all base and no extension: renaming a
+/// hidden file with `[N].[E]` and having it turn into `.bashrc.` would be
+/// the kind of surprise a batch rename cannot afford.
 #[must_use]
 pub fn split_name(name: &str) -> (&str, &str) {
     match name.rfind('.') {
@@ -44,13 +46,13 @@ pub fn split_name(name: &str) -> (&str, &str) {
     }
 }
 
-/// Expande `pattern` para `name`, con `n` como valor del contador.
+/// Expands `pattern` for `name`, with `n` as the counter's value.
 ///
 /// ```
 /// use norte_frontend::rename_pattern::expand;
-/// assert_eq!(expand("[N].[E]", "foto.JPG", 1), "foto.JPG");
-/// assert_eq!(expand("vacaciones-[C3].[E]", "foto.jpg", 7), "vacaciones-007.jpg");
-/// assert_eq!(expand("[N]", "notas.txt", 1), "notas");
+/// assert_eq!(expand("[N].[E]", "snapshot.JPG", 1), "snapshot.JPG");
+/// assert_eq!(expand("vacaciones-[C3].[E]", "snapshot.jpg", 7), "vacaciones-007.jpg");
+/// assert_eq!(expand("[N]", "notes.txt", 1), "notes");
 /// ```
 #[must_use]
 pub fn expand(pattern: &str, name: &str, n: usize) -> String {
@@ -60,16 +62,16 @@ pub fn expand(pattern: &str, name: &str, n: usize) -> String {
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'['
-            && let Some(fin) = pattern[i..].find(']')
-            && let Some(sustituto) = expand_code(&pattern[i + 1..i + fin], base, ext, n)
+            && let Some(end) = pattern[i..].find(']')
+            && let Some(replacement) = expand_code(&pattern[i + 1..i + end], base, ext, n)
         {
-            out.push_str(&sustituto);
-            i += fin + 1;
+            out.push_str(&replacement);
+            i += end + 1;
             continue;
         }
-        // Un corchete que no abre un código conocido es un carácter más: un
-        // nombre puede llevarlos, y tragárselos convertiría `[borrador]` en
-        // nada sin decir por qué.
+        // A bracket that does not open a known code is one more character:
+        // a name can carry them, and swallowing it would turn `[draft]`
+        // into nothing without saying why.
         let c = pattern[i..].chars().next().unwrap_or('[');
         out.push(c);
         i += c.len_utf8();
@@ -77,38 +79,40 @@ pub fn expand(pattern: &str, name: &str, n: usize) -> String {
     out
 }
 
-/// Un código entre corchetes, ya sin ellos. `None` = no es uno de los
-/// nuestros, y entonces el texto se queda tal cual.
+/// A code between brackets, already without them. `None` = not one of
+/// ours, and then the text stays as is.
 fn expand_code(code: &str, base: &str, ext: &str, n: usize) -> Option<String> {
     match code {
         "N" => Some(base.to_owned()),
         "E" => Some(ext.to_owned()),
         "C" => Some(n.to_string()),
         _ => {
-            let ancho: usize = code.strip_prefix('C')?.parse().ok()?;
-            // Un ancho absurdo no rellena la memoria: lo que pide un lote de
-            // ficheros cabe de sobra en dos dígitos y el tope deja margen.
-            let ancho = ancho.min(12);
-            Some(format!("{n:0ancho$}"))
+            let width: usize = code.strip_prefix('C')?.parse().ok()?;
+            // An absurd width does not fill up memory: what a batch of
+            // files asks for fits comfortably in two digits and the cap
+            // leaves margin.
+            let width = width.min(12);
+            Some(format!("{n:0width$}"))
         }
     }
 }
 
-/// El plan que produce `pattern` sobre `names`, en orden.
+/// The plan `pattern` produces over `names`, in order.
 ///
-/// Devuelve pares `(from, to)` y **omite los que no cambian**: un plan que
-/// promete renombrar algo a su propio nombre hace que el resumen mienta sobre
-/// cuántas cosas van a pasar. El contador cuenta TODOS los nombres de la
-/// entrada, cambien o no, porque lo contrario haría que el número dependiera
-/// de la plantilla y saltaría huecos sin explicación.
+/// Returns `(from, to)` pairs and **omits the ones that do not change**: a
+/// plan that promises to rename something to its own name makes the
+/// summary lie about how many things are going to happen. The counter
+/// counts ALL the input names, whether they change or not, because the
+/// opposite would make the number depend on the template and skip gaps
+/// with no explanation.
 ///
 /// ```
 /// use norte_frontend::rename_pattern::plan;
 /// let names = ["a.txt".to_owned(), "b.txt".to_owned()];
-/// let pares = plan("nota-[C].[E]", &names, 1);
-/// assert_eq!(pares, vec![
-///     ("a.txt".to_owned(), "nota-1.txt".to_owned()),
-///     ("b.txt".to_owned(), "nota-2.txt".to_owned()),
+/// let pairs = plan("note-[C].[E]", &names, 1);
+/// assert_eq!(pairs, vec![
+///     ("a.txt".to_owned(), "note-1.txt".to_owned()),
+///     ("b.txt".to_owned(), "note-2.txt".to_owned()),
 /// ]);
 /// ```
 #[must_use]
@@ -117,23 +121,23 @@ pub fn plan(pattern: &str, names: &[String], start: usize) -> Vec<(String, Strin
         .iter()
         .enumerate()
         .filter_map(|(i, name)| {
-            let nuevo = expand(pattern, name, start.saturating_add(i));
-            (nuevo != *name).then(|| (name.clone(), nuevo))
+            let new_name = expand(pattern, name, start.saturating_add(i));
+            (new_name != *name).then(|| (name.clone(), new_name))
         })
         .collect()
 }
 
-/// Por qué una plantilla no sirve.
+/// Why a template is no good.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PatternError {
-    /// Vacía: no hay nombre que construir.
+    /// Empty: there is no name to build.
     Empty,
-    /// Expandiría a un nombre vacío, o a uno que el sistema de ficheros no
-    /// puede llevar (`/` o NUL dentro).
+    /// Would expand to an empty name, or one the filesystem cannot carry
+    /// (a `/` or NUL inside).
     BadResult,
 }
 
-/// La clave Fluent del diagnóstico.
+/// The diagnostic's Fluent key.
 #[must_use]
 pub const fn error_key(e: PatternError) -> &'static str {
     match e {
@@ -142,23 +146,24 @@ pub const fn error_key(e: PatternError) -> &'static str {
     }
 }
 
-/// Comprueba la plantilla contra los nombres que va a tocar.
+/// Checks the template against the names it is going to touch.
 ///
-/// Se valida ANTES de pedirle un plan al core: un `/` en la plantilla no es
-/// un rename, es un movimiento a otro directorio disfrazado, y el sitio donde
-/// eso se explica es el diálogo que el humano tiene delante — no un error del
-/// daemon tres pasos después.
+/// Validated BEFORE asking the core for a plan: a `/` in the template is
+/// not a rename, it is a move to another directory in disguise, and the
+/// place that gets explained is the dialog the human has in front of
+/// them — not a daemon error three steps later.
 ///
 /// # Errors
-/// [`PatternError::Empty`] con una plantilla en blanco;
-/// [`PatternError::BadResult`] si algún nombre saldría vacío o con `/`/NUL.
+/// [`PatternError::Empty`] with a blank template;
+/// [`PatternError::BadResult`] if any name would come out empty or with
+/// `/`/NUL.
 pub fn check(pattern: &str, names: &[String]) -> Result<(), PatternError> {
     if pattern.trim().is_empty() {
         return Err(PatternError::Empty);
     }
     for (i, name) in names.iter().enumerate() {
-        let nuevo = expand(pattern, name, i + 1);
-        if nuevo.is_empty() || nuevo.contains('/') || nuevo.contains('\0') {
+        let new_name = expand(pattern, name, i + 1);
+        if new_name.is_empty() || new_name.contains('/') || new_name.contains('\0') {
             return Err(PatternError::BadResult);
         }
     }
@@ -170,51 +175,54 @@ mod tests {
     use super::*;
 
     #[test]
-    fn los_tres_codigos_y_el_contador_acolchado() {
+    fn the_three_codes_and_the_padded_counter() {
         assert_eq!(expand("[N].[E]", "foto.jpg", 1), "foto.jpg");
         assert_eq!(expand("[C]-[N].[E]", "foto.jpg", 4), "4-foto.jpg");
         assert_eq!(expand("[C2]", "foto.jpg", 4), "04");
         assert_eq!(expand("[C12]", "x", 1), "000000000001");
-        // Ancho absurdo: se acota, no se cree.
+        // Absurd width: it is capped, not trusted.
         assert_eq!(expand("[C99]", "x", 1).len(), 12);
     }
 
     #[test]
-    fn la_extension_es_el_ultimo_punto_y_un_oculto_no_tiene() {
+    fn the_extension_is_the_last_dot_and_a_hidden_file_has_none() {
         assert_eq!(split_name("a.tar.gz"), ("a.tar", "gz"));
         assert_eq!(split_name("sin-extension"), ("sin-extension", ""));
         assert_eq!(split_name(".bashrc"), (".bashrc", ""));
-        // Y por eso `[N].[E]` sobre un oculto no le cuelga un punto al final.
+        // And that is why `[N].[E]` on a hidden file does not hang a dot
+        // off the end.
         assert_eq!(expand("[N]", ".bashrc", 1), ".bashrc");
     }
 
-    /// Un corchete que no es un código nuestro se queda tal cual: hay
-    /// nombres con corchetes, y tragárselos sería perder texto sin decirlo.
+    /// A bracket that is not one of our codes stays as is: there are names
+    /// with brackets, and swallowing it would be losing text without
+    /// saying so.
     #[test]
-    fn un_corchete_que_no_es_codigo_es_literal() {
+    fn a_bracket_that_is_not_code_is_literal() {
         assert_eq!(expand("[borrador] [N]", "a.txt", 1), "[borrador] a");
         assert_eq!(expand("[X]-[N]", "a.txt", 1), "[X]-a");
         assert_eq!(expand("sin cerrar [N", "a.txt", 1), "sin cerrar [N");
     }
 
-    /// El texto de la plantilla puede no ser ASCII, y no se parte por bytes.
+    /// The template's text may not be ASCII, and it is not split by bytes.
     #[test]
-    fn la_plantilla_admite_texto_no_ascii() {
+    fn the_template_accepts_non_ascii_text() {
         assert_eq!(expand("añó-[C]-[N].[E]", "a.txt", 2), "añó-2-a.txt");
     }
 
-    /// Los que no cambian NO entran en el plan, y el contador no se salta
-    /// nada por ello.
+    /// The ones that do not change do NOT enter the plan, and the counter
+    /// does not skip anything because of it.
     #[test]
-    fn el_plan_omite_lo_que_no_cambia_y_el_contador_no_salta() {
+    fn the_plan_omits_what_does_not_change_and_the_counter_does_not_skip() {
         let names = vec!["a.txt".to_owned(), "b.txt".to_owned(), "c.txt".to_owned()];
-        // `b` ya se llama como saldría, así que no hay nada que hacer con él.
-        let pares = plan("[N].[E]", &names, 1);
-        assert!(pares.is_empty(), "nada cambia: plan vacío");
+        // `b` is already named what it would come out as, so there is
+        // nothing to do with it.
+        let pairs = plan("[N].[E]", &names, 1);
+        assert!(pairs.is_empty(), "nothing changes: empty plan");
 
-        let pares = plan("f[C].[E]", &names, 1);
+        let pairs = plan("f[C].[E]", &names, 1);
         assert_eq!(
-            pares,
+            pairs,
             vec![
                 ("a.txt".to_owned(), "f1.txt".to_owned()),
                 ("b.txt".to_owned(), "f2.txt".to_owned()),
@@ -224,7 +232,7 @@ mod tests {
     }
 
     #[test]
-    fn el_contador_puede_arrancar_donde_se_diga() {
+    fn the_counter_can_start_wherever_told() {
         let names = vec!["a".to_owned()];
         assert_eq!(
             plan("[C]", &names, 10),
@@ -232,10 +240,11 @@ mod tests {
         );
     }
 
-    /// Una plantilla vacía, o una que fabricaría un nombre imposible, se
-    /// rechaza AQUÍ: con el humano delante y antes de pedir plan ninguno.
+    /// An empty template, or one that would manufacture an impossible
+    /// name, is rejected HERE: with the human in front and before asking
+    /// for any plan at all.
     #[test]
-    fn una_plantilla_imposible_se_rechaza_antes_de_pedir_plan() {
+    fn an_impossible_template_is_rejected_before_requesting_a_plan() {
         let names = vec!["a.txt".to_owned()];
         assert_eq!(check("", &names), Err(PatternError::Empty));
         assert_eq!(check("   ", &names), Err(PatternError::Empty));

@@ -1,6 +1,6 @@
-//! Integración engine↔journal (M3-1b): las mutaciones del engine con un
-//! `SqliteJournal` real producen las entradas esperadas, en orden y con
-//! hash-chain válida. `MemProvider` in-memory → determinista, sin harness.
+//! engine↔journal integration (M3-1b): the engine's mutations with a real
+//! `SqliteJournal` produce the expected entries, in order and with a valid
+//! hash chain. In-memory `MemProvider` → deterministic, no harness.
 
 use std::sync::Arc;
 
@@ -11,19 +11,19 @@ use norte_testkit::MemProvider;
 use norte_vfs::Provider;
 
 fn vp(wire: &str) -> VPath {
-    VPath::parse(wire).expect("wire válido")
+    VPath::parse(wire).expect("valid wire")
 }
 
 async fn write_file(mem: &MemProvider, wire: &str, content: &[u8]) {
-    let mut sink = mem.write(&vp(wire)).await.expect("write abre");
+    let mut sink = mem.write(&vp(wire)).await.expect("write opens");
     sink.write(Bytes::copy_from_slice(content))
         .await
         .expect("chunk");
     sink.commit().await.expect("commit");
 }
 
-/// Engine con journal in-memory + `MemProvider` (sus caps por defecto incluyen
-/// `TRASH`). Devuelve el `SqliteJournal` para inspeccionar las entradas.
+/// Engine with an in-memory journal + `MemProvider` (its default caps include
+/// `TRASH`). Returns the `SqliteJournal` to inspect the entries.
 async fn setup() -> (Engine, Arc<MemProvider>, Arc<SqliteJournal>) {
     let journal = Arc::new(SqliteJournal::new(
         Journal::open_in_memory().await.expect("journal open"),
@@ -37,7 +37,7 @@ async fn setup() -> (Engine, Arc<MemProvider>, Arc<SqliteJournal>) {
 #[tokio::test]
 async fn copy_records_created_with_valid_chain() {
     let (engine, mem, journal) = setup().await;
-    write_file(&mem, "mem:///src.txt", b"hola").await;
+    write_file(&mem, "mem:///src.txt", b"hello").await;
 
     let h = engine
         .copy(&vp("mem:///src.txt"), &vp("mem:///dst.txt"))
@@ -96,7 +96,7 @@ async fn permanent_delete_records_removed_irreversible() {
     assert_eq!(h.join().await, TaskState::Completed);
 
     let es = journal.journal().entries().await.expect("entries");
-    let last = es.last().expect("entrada");
+    let last = es.last().expect("entry");
     assert_eq!(last.op, "removed");
     assert_eq!(last.reversal, "irreversible");
     assert_eq!(last.reversal_ref, None);
@@ -125,7 +125,7 @@ async fn trash_records_trashed_restore() {
     assert_eq!(es.len(), 1);
     assert_eq!(es[0].op, "trashed");
     assert_eq!(es[0].reversal, "restore_trash");
-    // MemProvider = papelera "vanish": sin ruta recuperable.
+    // MemProvider = "vanish" trash: no recoverable path.
     assert_eq!(es[0].reversal_ref, None);
     assert!(
         journal
@@ -137,11 +137,12 @@ async fn trash_records_trashed_restore() {
     );
 }
 
-/// #99 — la papelera NATIVA (dest `None`) tras un transitorio-tras-efecto
-/// degrada a `Ok(None)` (undo sin `reversal_ref`) pero NO falla la task: el
-/// ítem ya se trasheó, jamás pérdida. Antes fallaba al propagar el transitorio.
+/// #99 — NATIVE trash (dest `None`) after an applied-then-ambiguous mutation
+/// degrades to `Ok(None)` (undo without `reversal_ref`) but does NOT fail the
+/// task: the item was already trashed, never lost. It used to fail by
+/// propagating the ambiguous result.
 #[tokio::test]
-async fn trash_nativo_transitorio_degrada_sin_fallar() {
+async fn native_trash_ambiguity_degrades_without_failing() {
     let (engine, mem, journal) = setup().await; // MemProvider vanish (dest None)
     write_file(&mem, "mem:///n.txt", b"x").await;
 
@@ -156,16 +157,16 @@ async fn trash_nativo_transitorio_degrada_sin_fallar() {
     assert_eq!(es[0].op, "trashed");
     assert_eq!(
         es[0].reversal_ref, None,
-        "papelera nativa: el undo degrada, la task NO falla"
+        "native trash: the undo degrades, the task does NOT fail"
     );
 }
 
-/// #99 — un trash lógico que APLICA el movimiento pero devuelve transitorio
-/// no debe fallar la task ni perder el `reversal_ref`: el engine reintenta con
-/// el MISMO id determinista y el provider recupera el payload. Antes (sin
-/// `trash_retrying`) la task fallaba en el primer transitorio.
+/// #99 — a logical trash that APPLIES the move but returns an ambiguous result
+/// must not fail the task nor lose the `reversal_ref`: the engine retries with
+/// the SAME deterministic id and the provider recovers the payload. Before
+/// (without `trash_retrying`) the task failed on the first ambiguous result.
 #[tokio::test]
-async fn trash_logico_transitorio_conserva_el_reversal_ref() {
+async fn logical_trash_ambiguity_keeps_the_reversal_ref() {
     let journal = Arc::new(SqliteJournal::new(
         Journal::open_in_memory().await.expect("journal open"),
     ));
@@ -174,7 +175,7 @@ async fn trash_logico_transitorio_conserva_el_reversal_ref() {
     engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
     write_file(&mem, "mem:///t.txt", b"x").await;
 
-    // El movimiento aplica y aun así devuelve transitorio (una vez).
+    // The move applies and still returns an ambiguous result (once).
     mem.faults().ambiguous_mutations(1);
     let h = engine
         .delete_with(&vp("mem:///t.txt"), DeleteMode::Trash)
@@ -185,24 +186,24 @@ async fn trash_logico_transitorio_conserva_el_reversal_ref() {
     let es = journal.journal().entries().await.expect("entries");
     assert_eq!(es.len(), 1);
     assert_eq!(es[0].op, "trashed");
-    let comp_ref = es[0].reversal_ref.clone().expect("reversal_ref preservado");
+    let comp_ref = es[0].reversal_ref.clone().expect("reversal_ref preserved");
     assert!(
         String::from_utf8_lossy(&comp_ref).contains(".norte-trash/"),
-        "el payload recuperable sobrevive al transitorio: {:?}",
+        "the recoverable payload survives the ambiguous result: {:?}",
         String::from_utf8_lossy(&comp_ref)
     );
 }
 
-/// #32.1 — un COMMIT del write que APLICA (rename staging→final) pero
-/// devuelve transitorio no debe fallar la task ni perder el `Created`: se
-/// desambigua por presencia+tamaño del destino. Antes: el retry recopiaba,
-/// su commit no-replace daba Conflict → task FALLIDA con el archivo bien
-/// copiado y sin evento en el journal (regla 4).
+/// #32.1 — a write COMMIT that APPLIES (rename staging→final) but returns an
+/// ambiguous result must not fail the task nor lose the `Created`: it is
+/// disambiguated by the destination's presence + size. Before: the retry
+/// recopied, its non-replace commit gave a Conflict → the task FAILED with the
+/// file correctly copied and no journal event (rule 4).
 #[tokio::test]
-async fn commit_ambiguo_no_pierde_el_created() {
+async fn ambiguous_commit_does_not_lose_the_created() {
     let (engine, mem, journal) = setup().await;
-    write_file(&mem, "mem:///src.bin", b"contenido de prueba").await;
-    // El PRÓXIMO commit aplica su efecto y devuelve transitorio (una vez).
+    write_file(&mem, "mem:///src.bin", b"test content").await;
+    // The NEXT commit applies its effect and returns an ambiguous result (once).
     mem.faults().ambiguous_mutations(1);
 
     let h = engine
@@ -212,30 +213,30 @@ async fn commit_ambiguo_no_pierde_el_created() {
     assert_eq!(
         h.join().await,
         TaskState::Completed,
-        "el commit aplicó: la task no debe fallar por el transitorio"
+        "the commit applied: the task must not fail over the ambiguous result"
     );
-    // El destino existe con el tamaño del origen.
+    // The destination exists with the source's size.
     assert_eq!(
         mem.stat(&vp("mem:///dst.bin")).await.unwrap().size,
-        Some(19)
+        Some(12)
     );
-    // Y HAY exactamente un `Created` (regla 4): el undo lo conocerá.
+    // And there IS exactly one `Created` (rule 4): undo will know about it.
     let es = journal.journal().entries().await.expect("entries");
-    assert_eq!(es.len(), 1, "un único Created pese al commit ambiguo");
+    assert_eq!(es.len(), 1, "a single Created despite the ambiguous commit");
     assert_eq!(es[0].op, "created");
     assert_eq!(es[0].path, b"mem:///dst.bin");
 }
 
-/// #32.1 con archivo 0-byte: `final_size == 0` desambigua igual (el destino
-/// existe con tamaño 0), un único `Created`.
+/// #32.1 with a 0-byte file: `final_size == 0` disambiguates the same way (the
+/// destination exists with size 0), a single `Created`.
 #[tokio::test]
-async fn commit_ambiguo_archivo_vacio() {
+async fn ambiguous_commit_empty_file() {
     let (engine, mem, journal) = setup().await;
-    write_file(&mem, "mem:///vacio.bin", b"").await;
+    write_file(&mem, "mem:///empty.bin", b"").await;
     mem.faults().ambiguous_mutations(1);
 
     let h = engine
-        .copy(&vp("mem:///vacio.bin"), &vp("mem:///dst.bin"))
+        .copy(&vp("mem:///empty.bin"), &vp("mem:///dst.bin"))
         .await
         .expect("copy");
     assert_eq!(h.join().await, TaskState::Completed);
@@ -245,18 +246,19 @@ async fn commit_ambiguo_archivo_vacio() {
     assert_eq!(es[0].op, "created");
 }
 
-/// #32.2 — mkdir ambiguo: el mkdir del dir destino APLICA su efecto y
-/// devuelve transitorio; el retry ve `Conflict`. Antes: bajo política Fail
-/// la task FALLABA con el dir bien creado, y bajo merge completaba pero SIN
-/// `Created` del dir (el undo de M3 no lo conocía). Ahora `ensure_dir`
-/// pre-statea el destino: si NO preexistía, el Conflict ambiguo es nuestra
-/// primera aplicación — la task completa y el journal registra el dir.
+/// #32.2 — ambiguous mkdir: the destination dir's mkdir APPLIES its effect and
+/// returns an ambiguous result; the retry sees `Conflict`. Before: under the
+/// Fail policy the task FAILED with the dir correctly created, and under merge
+/// it completed but WITHOUT the dir's `Created` (M3's undo did not know about
+/// it). Now `ensure_dir` pre-stats the destination: if it did NOT preexist,
+/// the ambiguous Conflict is our first application — the task completes and
+/// the journal records the dir.
 #[tokio::test]
-async fn mkdir_ambiguo_no_pierde_el_created() {
+async fn ambiguous_mkdir_does_not_lose_the_created() {
     let (engine, mem, journal) = setup().await;
     mem.mkdir(&vp("mem:///d")).await.expect("mkdir src");
-    write_file(&mem, "mem:///d/f.bin", b"contenido").await;
-    // La PRÓXIMA mutación (el mkdir de mem:///d2) aplica y da transitorio.
+    write_file(&mem, "mem:///d/f.bin", b"content").await;
+    // The NEXT mutation (the mkdir for mem:///d2) applies and gives an ambiguous result.
     mem.faults().ambiguous_mutations(1);
 
     let h = engine
@@ -266,30 +268,34 @@ async fn mkdir_ambiguo_no_pierde_el_created() {
     assert_eq!(
         h.join().await,
         TaskState::Completed,
-        "el mkdir aplicó: la task no debe fallar por el transitorio"
+        "the mkdir applied: the task must not fail over the ambiguous result"
     );
-    // El árbol copió entero.
+    // The tree copied entirely.
     assert_eq!(
         mem.stat(&vp("mem:///d2/f.bin")).await.unwrap().size,
-        Some(9)
+        Some(7)
     );
-    // Y el journal tiene el `Created` del DIR (regla 4): el undo lo conoce.
+    // And the journal has the DIR's `Created` (rule 4): undo knows about it.
     let es = journal.journal().entries().await.expect("entries");
     let dir_created = es
         .iter()
         .filter(|e| e.op == "created" && e.path == b"mem:///d2")
         .count();
-    assert_eq!(dir_created, 1, "un único Created del dir ambiguo: {es:?}");
+    assert_eq!(
+        dir_created, 1,
+        "a single Created for the ambiguous dir: {es:?}"
+    );
 }
 
-/// #32.2 (contracara): un dir destino PREEXISTENTE bajo merge sigue SIN
-/// `Created` — el pre-stat sabe que no es nuestro y el undo jamás lo tocará.
+/// #32.2 (counterpart): a PREEXISTING destination dir under merge still gets
+/// NO `Created` — the pre-stat knows it is not ours and undo will never touch
+/// it.
 #[tokio::test]
-async fn mkdir_sobre_dir_preexistente_no_emite_created() {
+async fn mkdir_over_preexisting_dir_emits_no_created() {
     let (engine, mem, journal) = setup().await;
     mem.mkdir(&vp("mem:///d")).await.expect("mkdir src");
-    write_file(&mem, "mem:///d/f.bin", b"contenido").await;
-    mem.mkdir(&vp("mem:///d2")).await.expect("dst preexistente");
+    write_file(&mem, "mem:///d/f.bin", b"content").await;
+    mem.mkdir(&vp("mem:///d2")).await.expect("preexisting dst");
 
     let h = engine
         .copy_with(
@@ -307,24 +313,24 @@ async fn mkdir_sobre_dir_preexistente_no_emite_created() {
     assert!(
         !es.iter()
             .any(|e| e.op == "created" && e.path == b"mem:///d2"),
-        "un dir preexistente jamás gana Created: {es:?}"
+        "a preexisting dir never earns a Created: {es:?}"
     );
 }
 
-/// #104 `fs.mkdir`: crear UN dir journalea `Created` con undo (regla 4).
+/// #104 `fs.mkdir`: creating A SINGLE dir journals `Created` with undo (rule 4).
 #[tokio::test]
 async fn mkdir_records_created_with_valid_chain() {
     let (engine, mem, journal) = setup().await;
-    let h = engine.mkdir(&vp("mem:///nueva")).await.expect("mkdir");
+    let h = engine.mkdir(&vp("mem:///new")).await.expect("mkdir");
     assert_eq!(h.join().await, TaskState::Completed);
 
-    let entry = mem.stat(&vp("mem:///nueva")).await.expect("stat");
+    let entry = mem.stat(&vp("mem:///new")).await.expect("stat");
     assert_eq!(entry.kind, norte_proto::EntryKind::Dir);
 
     let es = journal.journal().entries().await.expect("entries");
     assert_eq!(es.len(), 1);
     assert_eq!(es[0].op, "created");
-    assert_eq!(es[0].path, b"mem:///nueva");
+    assert_eq!(es[0].path, b"mem:///new");
     assert_eq!(es[0].reversal, "delete");
     assert!(
         journal
@@ -336,30 +342,33 @@ async fn mkdir_records_created_with_valid_chain() {
     );
 }
 
-/// #104: un nodo previo en el destino es `Conflict` — crear afirma un nombre
-/// LIBRE, sin idempotencia silenciosa — y JAMÁS journalea un Created ajeno.
+/// #104: an existing node at the destination is `Conflict` — creating asserts
+/// a FREE name, with no silent idempotence — and NEVER journals someone else's
+/// Created.
 #[tokio::test]
-async fn mkdir_sobre_nodo_existente_es_conflict_sin_created() {
+async fn mkdir_over_existing_node_is_conflict_without_created() {
     let (engine, mem, journal) = setup().await;
-    write_file(&mem, "mem:///ocupado", b"x").await;
+    write_file(&mem, "mem:///taken", b"x").await;
 
-    let h = engine.mkdir(&vp("mem:///ocupado")).await.expect("submit");
+    let h = engine.mkdir(&vp("mem:///taken")).await.expect("submit");
     assert!(matches!(h.join().await, TaskState::Failed { .. }));
     let es = journal.journal().entries().await.expect("entries");
-    assert!(es.is_empty(), "un fallo no journalea nada");
+    assert!(es.is_empty(), "a failure journals nothing");
 
-    // Un DIR preexistente tampoco es éxito (no somos mkdir -p ni merge).
-    mem.mkdir(&vp("mem:///ya")).await.expect("mkdir directo");
-    let h = engine.mkdir(&vp("mem:///ya")).await.expect("submit");
+    // A PREEXISTING dir is not a success either (we are neither mkdir -p nor merge).
+    mem.mkdir(&vp("mem:///already"))
+        .await
+        .expect("direct mkdir");
+    let h = engine.mkdir(&vp("mem:///already")).await.expect("submit");
     assert!(matches!(h.join().await, TaskState::Failed { .. }));
 }
 
-/// #104: sin `-p` — el padre debe existir.
+/// #104: without `-p` — the parent must exist.
 #[tokio::test]
-async fn mkdir_sin_padre_falla() {
+async fn mkdir_without_parent_fails() {
     let (engine, _mem, journal) = setup().await;
     let h = engine
-        .mkdir(&vp("mem:///no-existe/hija"))
+        .mkdir(&vp("mem:///does-not-exist/child"))
         .await
         .expect("submit");
     assert!(matches!(h.join().await, TaskState::Failed { .. }));

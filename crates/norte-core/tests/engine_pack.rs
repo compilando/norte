@@ -1,9 +1,8 @@
-//! Empaquetar, comprobar, partir y juntar (#132), de punta a punta por el
-//! engine.
+//! Pack, test, split and combine (#132), end to end through the engine.
 //!
-//! El oráculo del empaquetado es el LECTOR de este mismo repositorio: si lo
-//! que sale se lista y se lee por el provider de archivos, el archivo es al
-//! menos tan bueno como los que norte acepta de fuera.
+//! Packing's oracle is this same repository's READER: if what comes out lists
+//! and reads through the archive provider, the archive is at least as good as
+//! the ones norte accepts from outside.
 
 use std::sync::Arc;
 
@@ -15,30 +14,30 @@ use norte_testkit::MemProvider;
 use norte_vfs::Provider;
 
 fn vp(w: &str) -> VPath {
-    VPath::parse(w).expect("wire de test")
+    VPath::parse(w).expect("test wire")
 }
 
-/// Un engine sobre un `MemProvider` sembrado, y el provider para mirar dentro.
-async fn engine_con(ficheros: &[(&str, &[u8])]) -> (Engine, Arc<MemProvider>) {
+/// An engine over a seeded `MemProvider`, and the provider to look inside it.
+async fn engine_with(files: &[(&str, &[u8])]) -> (Engine, Arc<MemProvider>) {
     let mem = Arc::new(MemProvider::new());
-    for (wire, datos) in ficheros {
+    for (wire, data) in files {
         let p = vp(wire);
-        // Toda la cadena de padres, no solo el inmediato: `mem:///p/a/b`
-        // necesita `p` y `p/a`.
-        let mut cadena = Vec::new();
-        let mut actual = p.parent();
-        while let Some(d) = actual {
+        // The whole chain of parents, not just the immediate one:
+        // `mem:///p/a/b` needs `p` and `p/a`.
+        let mut chain = Vec::new();
+        let mut current = p.parent();
+        while let Some(d) = current {
             if d.is_root() {
                 break;
             }
-            actual = d.parent();
-            cadena.push(d);
+            current = d.parent();
+            chain.push(d);
         }
-        for d in cadena.into_iter().rev() {
+        for d in chain.into_iter().rev() {
             let _ = mem.mkdir(&d).await;
         }
         let mut sink = mem.write(&p).await.expect("write");
-        sink.write(Bytes::copy_from_slice(datos))
+        sink.write(Bytes::copy_from_slice(data))
             .await
             .expect("chunk");
         sink.commit().await.expect("commit");
@@ -48,8 +47,8 @@ async fn engine_con(ficheros: &[(&str, &[u8])]) -> (Engine, Arc<MemProvider>) {
     (engine, mem)
 }
 
-/// Lee un fichero entero del provider.
-async fn lee(mem: &MemProvider, wire: &str) -> Vec<u8> {
+/// Reads a whole file from the provider.
+async fn read(mem: &MemProvider, wire: &str) -> Vec<u8> {
     let mut out = Vec::new();
     let mut s = mem.read(&vp(wire), None).await.expect("read");
     while let Some(c) = s.next().await {
@@ -58,32 +57,32 @@ async fn lee(mem: &MemProvider, wire: &str) -> Vec<u8> {
     out
 }
 
-/// El árbol interior del archivo, como pares `(nombre relativo, contenido)`.
-async fn dentro(engine: &Engine, contenedor: &str, token: &str) -> Vec<(String, Vec<u8>)> {
-    let raiz = VPath::archive_compose(token, &vp(contenedor), &[]).expect("compose");
+/// An archive's interior tree, as `(relative name, content)` pairs.
+async fn inside(engine: &Engine, container: &str, token: &str) -> Vec<(String, Vec<u8>)> {
+    let root = VPath::archive_compose(token, &vp(container), &[]).expect("compose");
     let mut out = Vec::new();
-    let mut pend = vec![raiz.clone()];
-    while let Some(dir) = pend.pop() {
+    let mut pending = vec![root.clone()];
+    while let Some(dir) = pending.pop() {
         let mut stream = engine.list(&dir).await.expect("list");
         while let Some(e) = stream.next().await {
-            let e = e.expect("entrada");
+            let e = e.expect("entry");
             match e.kind {
-                norte_proto::EntryKind::Dir => pend.push(e.path),
+                norte_proto::EntryKind::Dir => pending.push(e.path),
                 norte_proto::EntryKind::File => {
-                    let nombre = String::from_utf8_lossy(
+                    let name = String::from_utf8_lossy(
                         &e.path
                             .segments()
-                            .skip(raiz.segments().count())
+                            .skip(root.segments().count())
                             .collect::<Vec<_>>()
                             .join(&b'/'),
                     )
                     .into_owned();
-                    let mut datos = Vec::new();
+                    let mut data = Vec::new();
                     let mut bs = engine.read(&e.path, None).await.expect("read");
                     while let Some(c) = bs.next().await {
-                        datos.extend_from_slice(&c.expect("chunk"));
+                        data.extend_from_slice(&c.expect("chunk"));
                     }
-                    out.push((nombre, datos));
+                    out.push((name, data));
                 }
                 _ => {}
             }
@@ -103,16 +102,16 @@ fn pack_params(sources: &[&str], dest: &str, base: &str) -> methods::ArchivePack
     }
 }
 
-/// El caso entero: se empaqueta un árbol y el propio provider de archivos lo
-/// lee de vuelta, con los nombres relativos a la base.
+/// The whole case: a tree is packed and the archive provider itself reads it
+/// back, with names relative to the base.
 ///
-/// La base es el directorio del que CUELGAN las fuentes, no la fuente misma:
-/// con `base == source` la raíz no tendría nombre dentro del archivo, y eso es
-/// justo lo que el op rehúsa en vez de inventárselo.
+/// The base is the directory the sources HANG from, not the source itself:
+/// with `base == source` the root would have no name inside the archive, and
+/// that is exactly what the op refuses instead of making one up.
 #[tokio::test]
-async fn empaquetar_y_volver_a_leer() {
-    let (engine, mem) = engine_con(&[
-        ("mem:///proj/LEEME", b"hola"),
+async fn packing_and_reading_it_back() {
+    let (engine, mem) = engine_with(&[
+        ("mem:///proj/README", b"hello"),
         ("mem:///proj/src/main.rs", b"fn main() {}"),
     ])
     .await;
@@ -122,34 +121,34 @@ async fn empaquetar_y_volver_a_leer() {
             norte_core::journal::Actor::User,
         )
         .await
-        .expect("arranca");
+        .expect("starts");
     assert!(
         matches!(handle.join().await, TaskState::Completed),
-        "la task termina"
+        "the task finishes"
     );
-    assert!(!lee(&mem, "mem:///proj.zip").await.is_empty());
+    assert!(!read(&mem, "mem:///proj.zip").await.is_empty());
 
     assert_eq!(
-        dentro(&engine, "mem:///proj.zip", "zip").await,
+        inside(&engine, "mem:///proj.zip", "zip").await,
         vec![
-            ("proj/LEEME".to_owned(), b"hola".to_vec()),
+            ("proj/README".to_owned(), b"hello".to_vec()),
             ("proj/src/main.rs".to_owned(), b"fn main() {}".to_vec()),
         ],
-        "los nombres cuelgan de la base, y el contenido vuelve entero"
+        "the names hang from the base, and the content comes back whole"
     );
 }
 
-/// **Regla 1 de punta a punta**: un nombre que no es UTF-8 entra en el archivo
-/// y sale byte a byte, pasando por el engine entero.
+/// **Rule 1 end to end**: a name that is not UTF-8 goes into the archive and
+/// comes out byte for byte, passing through the whole engine.
 #[tokio::test]
-async fn un_nombre_hostil_sobrevive_al_engine() {
-    let hostil = b"cafe\xff.txt";
+async fn a_hostile_name_survives_the_engine() {
+    let hostile = b"cafe\xff.txt";
     let mem = Arc::new(MemProvider::new());
     let dir = vp("mem:///d");
     mem.mkdir(&dir).await.expect("mkdir");
-    let p = dir.join(Segment::new(hostil.to_vec()).expect("seg"));
+    let p = dir.join(Segment::new(hostile.to_vec()).expect("seg"));
     let mut sink = mem.write(&p).await.expect("write");
-    sink.write(Bytes::from_static(b"dentro"))
+    sink.write(Bytes::from_static(b"inside"))
         .await
         .expect("chunk");
     sink.commit().await.expect("commit");
@@ -162,38 +161,39 @@ async fn un_nombre_hostil_sobrevive_al_engine() {
             norte_core::journal::Actor::User,
         )
         .await
-        .expect("arranca");
+        .expect("starts");
     assert!(matches!(handle.join().await, TaskState::Completed));
 
-    let raiz = VPath::archive_compose("zip", &vp("mem:///d.zip"), &[]).expect("compose");
-    let mut nombres = Vec::new();
-    let mut pend = vec![raiz];
-    while let Some(d) = pend.pop() {
+    let root = VPath::archive_compose("zip", &vp("mem:///d.zip"), &[]).expect("compose");
+    let mut names = Vec::new();
+    let mut pending = vec![root];
+    while let Some(d) = pending.pop() {
         let mut stream = engine.list(&d).await.expect("list");
         while let Some(e) = stream.next().await {
-            let e = e.expect("entrada");
+            let e = e.expect("entry");
             if e.kind == norte_proto::EntryKind::Dir {
-                pend.push(e.path);
+                pending.push(e.path);
             } else if let Some(n) = e.path.file_name() {
-                nombres.push(n.as_bytes().to_vec());
+                names.push(n.as_bytes().to_vec());
             }
         }
     }
-    assert_eq!(nombres, vec![hostil.to_vec()], "byte a byte");
+    assert_eq!(names, vec![hostile.to_vec()], "byte for byte");
 }
 
-/// Una fuente que no cuelga de la base no tiene nombre dentro del archivo, y
-/// inventárselo pondría la entrada donde nadie la espera al desempaquetar.
+/// A source that does not hang from the base has no name inside the archive,
+/// and making one up would put the entry where nobody expects it when
+/// unpacking.
 #[tokio::test]
-async fn una_fuente_fuera_de_la_base_se_niega() {
-    let (engine, _mem) = engine_con(&[("mem:///a/x", b"1"), ("mem:///b/y", b"2")]).await;
+async fn a_source_outside_the_base_is_refused() {
+    let (engine, _mem) = engine_with(&[("mem:///a/x", b"1"), ("mem:///b/y", b"2")]).await;
     let handle = engine
         .pack_as(
             pack_params(&["mem:///b/y"], "mem:///out.zip", "mem:///a"),
             norte_core::journal::Actor::User,
         )
         .await
-        .expect("la task arranca; el rechazo es suyo");
+        .expect("the task starts; the refusal is its own");
     assert!(
         matches!(
             handle.join().await,
@@ -202,19 +202,19 @@ async fn una_fuente_fuera_de_la_base_se_niega() {
                 ..
             }
         ),
-        "una fuente fuera de la base es InvalidPath"
+        "a source outside the base is InvalidPath"
     );
 }
 
-/// Dos fuentes que dan el MISMO nombre dentro del archivo se rehúsan.
+/// Two sources that give the SAME name inside the archive are refused.
 ///
-/// Pasa con raíces que se solapan, que el wire acepta aunque las marcas de la
-/// TUI no las formen: el archivo llevaría la entrada dos veces con su
-/// contenido dos veces, nuestro índice resolvería «gana la última» y otras
-/// herramientas la extraerían dos veces.
+/// This happens with overlapping roots, which the wire accepts even though
+/// the TUI's marks never form them: the archive would carry the entry twice
+/// with its content twice, our index would resolve it as "the last one wins",
+/// and other tools would extract it twice.
 #[tokio::test]
-async fn dos_fuentes_con_el_mismo_nombre_se_niegan() {
-    let (engine, _mem) = engine_con(&[("mem:///p/a/b", b"x")]).await;
+async fn two_sources_with_the_same_name_are_refused() {
+    let (engine, _mem) = engine_with(&[("mem:///p/a/b", b"x")]).await;
     let h = engine
         .pack_as(
             methods::ArchivePackParams {
@@ -227,7 +227,7 @@ async fn dos_fuentes_con_el_mismo_nombre_se_niegan() {
             norte_core::journal::Actor::User,
         )
         .await
-        .expect("arranca");
+        .expect("starts");
     assert!(matches!(
         h.join().await,
         TaskState::Failed {
@@ -237,18 +237,19 @@ async fn dos_fuentes_con_el_mismo_nombre_se_niegan() {
     ));
 }
 
-/// El destino no se sobrescribe: fabricar un archivo encima de un fichero que
-/// ya está es pérdida silenciosa.
+/// The destination is not overwritten: making an archive over a file that is
+/// already there is silent data loss.
 #[tokio::test]
-async fn no_se_empaqueta_encima_de_algo() {
-    let (engine, _mem) = engine_con(&[("mem:///a/x", b"1"), ("mem:///ya.zip", b"soy yo")]).await;
+async fn it_does_not_pack_over_something() {
+    let (engine, _mem) =
+        engine_with(&[("mem:///a/x", b"1"), ("mem:///already.zip", b"it's me")]).await;
     let handle = engine
         .pack_as(
-            pack_params(&["mem:///a"], "mem:///ya.zip", "mem:///"),
+            pack_params(&["mem:///a"], "mem:///already.zip", "mem:///"),
             norte_core::journal::Actor::User,
         )
         .await
-        .expect("arranca");
+        .expect("starts");
     assert!(matches!(
         handle.join().await,
         TaskState::Failed {
@@ -258,54 +259,54 @@ async fn no_se_empaqueta_encima_de_algo() {
     ));
 }
 
-/// **Regla 3**: cancelar deja el destino LIMPIO. Un archivo a medias que
-/// parece un archivo es peor que ninguno.
+/// **Rule 3**: cancelling leaves the destination CLEAN. A half archive that
+/// looks like an archive is worse than none.
 #[tokio::test]
-async fn cancelar_no_deja_medio_archivo() {
-    let ficheros: Vec<(String, Vec<u8>)> = (0..64)
-        .map(|i| (format!("mem:///grande/f{i:03}"), vec![b'x'; 200_000]))
+async fn cancelling_leaves_no_half_archive() {
+    let files: Vec<(String, Vec<u8>)> = (0..64)
+        .map(|i| (format!("mem:///big/f{i:03}"), vec![b'x'; 200_000]))
         .collect();
-    let refs: Vec<(&str, &[u8])> = ficheros
+    let refs: Vec<(&str, &[u8])> = files
         .iter()
         .map(|(n, d)| (n.as_str(), d.as_slice()))
         .collect();
-    let (engine, mem) = engine_con(&refs).await;
+    let (engine, mem) = engine_with(&refs).await;
 
     let handle = engine
         .pack_as(
-            pack_params(&["mem:///grande"], "mem:///grande.zip", "mem:///"),
+            pack_params(&["mem:///big"], "mem:///big.zip", "mem:///"),
             norte_core::journal::Actor::User,
         )
         .await
-        .expect("arranca");
+        .expect("starts");
     handle.cancel();
-    let estado = handle.join().await;
+    let state = handle.join().await;
     assert!(
-        matches!(estado, TaskState::Cancelled | TaskState::Completed),
-        "o se canceló o ganó la carrera: {estado:?}"
+        matches!(state, TaskState::Cancelled | TaskState::Completed),
+        "either it was cancelled or it won the race: {state:?}"
     );
-    if matches!(estado, TaskState::Cancelled) {
+    if matches!(state, TaskState::Cancelled) {
         assert!(
-            mem.stat(&vp("mem:///grande.zip")).await.is_err(),
-            "cancelado = destino limpio, ni un fichero a medias"
+            mem.stat(&vp("mem:///big.zip")).await.is_err(),
+            "cancelled = clean destination, not even a half file"
         );
     }
 }
 
-/// `archive.test` sobre un archivo sano: sin fallos, y diciendo QUÉ comprobó.
+/// `archive.test` over a healthy archive: no failures, and saying WHAT it checked.
 #[tokio::test]
-async fn comprobar_un_archivo_sano() {
-    let (engine, _mem) = engine_con(&[("mem:///a/x", b"contenido"), ("mem:///a/y", b"otro")]).await;
+async fn testing_a_healthy_archive() {
+    let (engine, _mem) = engine_with(&[("mem:///a/x", b"content"), ("mem:///a/y", b"other")]).await;
     let h = engine
         .pack_as(
             pack_params(&["mem:///a"], "mem:///a.zip", "mem:///"),
             norte_core::journal::Actor::User,
         )
         .await
-        .expect("arranca");
+        .expect("starts");
     assert!(matches!(h.join().await, TaskState::Completed));
 
-    let (h, informe) = engine
+    let (h, report) = engine
         .test_archive_as(
             methods::ArchiveTestParams {
                 path: vp("mem:///a.zip"),
@@ -313,116 +314,116 @@ async fn comprobar_un_archivo_sano() {
             norte_core::journal::Actor::User,
         )
         .await
-        .expect("arranca");
+        .expect("starts");
     assert!(matches!(h.join().await, TaskState::Completed));
-    let r = informe.lock().expect("informe").clone();
-    assert_eq!(r.entries, 2, "las dos entradas");
-    assert!(r.failed.is_empty(), "sano: {:?}", r.failed);
+    let r = report.lock().expect("report").clone();
+    assert_eq!(r.entries, 2, "the two entries");
+    assert!(r.failed.is_empty(), "healthy: {:?}", r.failed);
     assert!(!r.truncated);
-    assert_eq!(r.checked, vec!["crc".to_owned()], "un zip trae CRC");
+    assert_eq!(r.checked, vec!["crc".to_owned()], "a zip carries a CRC");
 }
 
-/// Un fichero que no es de un formato conocido no se «comprueba»: decir que
-/// pasa no significaría nada.
+/// A file that is not a known format is not "tested": saying it passes would
+/// mean nothing.
 #[tokio::test]
-async fn comprobar_algo_que_no_es_un_archivo_es_unsupported() {
-    let (engine, _mem) = engine_con(&[("mem:///notas.txt", b"hola")]).await;
+async fn testing_something_that_is_not_an_archive_is_unsupported() {
+    let (engine, _mem) = engine_with(&[("mem:///notes.txt", b"hello")]).await;
     let r = engine
         .test_archive_as(
             methods::ArchiveTestParams {
-                path: vp("mem:///notas.txt"),
+                path: vp("mem:///notes.txt"),
             },
             norte_core::journal::Actor::User,
         )
         .await;
     match r {
         Err(e) => assert_eq!(e, norte_proto::Error::Unsupported),
-        Ok(_) => panic!("un .txt no es un archivo que comprobar"),
+        Ok(_) => panic!("a .txt is not an archive to test"),
     }
 }
 
-/// Partir y volver a juntar da el fichero original, byte a byte.
+/// Splitting and combining back gives the original file, byte for byte.
 #[tokio::test]
-async fn partir_y_juntar_da_el_original() {
-    let datos: Vec<u8> = (0..30_000_u32).map(|i| (i % 251) as u8).collect();
-    let (engine, mem) = engine_con(&[("mem:///g.bin", &datos)]).await;
-    mem.mkdir(&vp("mem:///trozos")).await.expect("mkdir");
+async fn splitting_and_combining_gives_the_original() {
+    let data: Vec<u8> = (0..30_000_u32).map(|i| (i % 251) as u8).collect();
+    let (engine, mem) = engine_with(&[("mem:///g.bin", &data)]).await;
+    mem.mkdir(&vp("mem:///parts")).await.expect("mkdir");
 
     let h = engine
         .split_as(
             methods::FileSplitParams {
                 path: vp("mem:///g.bin"),
                 part_bytes: 8192,
-                dest_dir: vp("mem:///trozos"),
+                dest_dir: vp("mem:///parts"),
             },
             norte_core::journal::Actor::User,
         )
         .await
-        .expect("arranca");
+        .expect("starts");
     assert!(matches!(h.join().await, TaskState::Completed));
 
-    // 30 000 / 8192 = 3 trozos y pico → cuatro, y el último más corto.
-    assert_eq!(lee(&mem, "mem:///trozos/g.bin.001").await.len(), 8192);
+    // 30 000 / 8192 = 3 parts and some → four, and the last one shorter.
+    assert_eq!(read(&mem, "mem:///parts/g.bin.001").await.len(), 8192);
     assert_eq!(
-        lee(&mem, "mem:///trozos/g.bin.004").await.len(),
+        read(&mem, "mem:///parts/g.bin.004").await.len(),
         30_000 - 3 * 8192
     );
 
     let h = engine
         .combine_as(
             methods::FileCombineParams {
-                first: vp("mem:///trozos/g.bin.001"),
-                dest: vp("mem:///vuelta.bin"),
+                first: vp("mem:///parts/g.bin.001"),
+                dest: vp("mem:///back.bin"),
             },
             norte_core::journal::Actor::User,
         )
         .await
-        .expect("arranca");
+        .expect("starts");
     assert!(matches!(h.join().await, TaskState::Completed));
-    assert_eq!(lee(&mem, "mem:///vuelta.bin").await, datos, "byte a byte");
+    assert_eq!(read(&mem, "mem:///back.bin").await, data, "byte for byte");
 }
 
-/// **Cancelar un split no deja medio conjunto.**
+/// **Cancelling a split leaves no half set.**
 ///
-/// Y es lo contrario de lo que hace una copia cancelada, a propósito: un árbol
-/// copiado a medias se ve a simple vista, pero medio conjunto de trozos es
-/// indistinguible de uno entero —todos del tamaño pedido, sin huecos— y
-/// juntarlo da un fichero corto que pasa todos los guardas. Así que los que ya
-/// estaban publicados se retiran.
+/// And this is the opposite of what a cancelled copy does, on purpose: a
+/// half-copied tree is visible at a glance, but half a set of parts is
+/// indistinguishable from a whole one — all of them the requested size, no
+/// gaps — and combining it gives a short file that passes every guard. So the
+/// ones already published are retracted.
 #[tokio::test]
-async fn cancelar_un_split_retira_los_trozos_ya_escritos() {
-    let datos = vec![b'x'; 4096 * 40];
-    let (engine, mem) = engine_con(&[("mem:///big.bin", &datos)]).await;
-    mem.mkdir(&vp("mem:///piezas")).await.expect("mkdir");
+async fn cancelling_a_split_retracts_the_parts_already_written() {
+    let data = vec![b'x'; 4096 * 40];
+    let (engine, mem) = engine_with(&[("mem:///big.bin", &data)]).await;
+    mem.mkdir(&vp("mem:///pieces")).await.expect("mkdir");
     let h = engine
         .split_as(
             methods::FileSplitParams {
                 path: vp("mem:///big.bin"),
                 part_bytes: 4096,
-                dest_dir: vp("mem:///piezas"),
+                dest_dir: vp("mem:///pieces"),
             },
             norte_core::journal::Actor::User,
         )
         .await
-        .expect("arranca");
+        .expect("starts");
     h.cancel();
-    let estado = h.join().await;
-    if matches!(estado, TaskState::Cancelled) {
+    let state = h.join().await;
+    if matches!(state, TaskState::Cancelled) {
         assert!(
-            mem.stat(&vp("mem:///piezas/big.bin.001")).await.is_err(),
-            "cancelado = ni un trozo suelto que parezca el principio de un conjunto"
+            mem.stat(&vp("mem:///pieces/big.bin.001")).await.is_err(),
+            "cancelled = not even a lone part that looks like the start of a set"
         );
     }
 }
 
-/// Un trozo del conjunto que YA existe para el intento anterior se dice antes
-/// de escribir el primero: mezclar trozos nuevos con rancios produce un
-/// conjunto que se junta sin que nada chirríe.
+/// A part of the set that ALREADY exists from a previous attempt is reported
+/// before writing the first one: mixing new parts with stale ones produces a
+/// set that combines without anything squeaking.
 #[tokio::test]
-async fn un_trozo_preexistente_para_el_split_antes_de_empezar() {
-    let datos = vec![b'y'; 4096 * 3];
-    let (engine, mem) = engine_con(&[
-        ("mem:///d.bin", &datos[..]),
+async fn a_preexisting_part_for_the_split_is_caught_before_starting() {
+    let data = vec![b'y'; 4096 * 3];
+    let (engine, mem) = engine_with(&[
+        ("mem:///d.bin", &data[..]),
         ("mem:///p/d.bin.002", &vec![b'z'; 10][..]),
     ])
     .await;
@@ -436,7 +437,7 @@ async fn un_trozo_preexistente_para_el_split_antes_de_empezar() {
             norte_core::journal::Actor::User,
         )
         .await
-        .expect("arranca");
+        .expect("starts");
     assert!(matches!(
         h.join().await,
         TaskState::Failed {
@@ -446,16 +447,16 @@ async fn un_trozo_preexistente_para_el_split_antes_de_empezar() {
     ));
     assert!(
         mem.stat(&vp("mem:///p/d.bin.001")).await.is_err(),
-        "ni el primero se escribió"
+        "not even the first one was written"
     );
 }
 
-/// Una división EXACTA no deja un trozo vacío al final: un `.004` de cero
-/// bytes es un fichero que nadie sabe si sobra o falta.
+/// An EXACT split leaves no empty part at the end: a zero-byte `.004` is a
+/// file nobody can tell is extra or missing.
 #[tokio::test]
-async fn una_division_exacta_no_deja_trozo_vacio() {
-    let datos = vec![b'z'; 16_384];
-    let (engine, mem) = engine_con(&[("mem:///e.bin", &datos)]).await;
+async fn an_exact_split_leaves_no_empty_part() {
+    let data = vec![b'z'; 16_384];
+    let (engine, mem) = engine_with(&[("mem:///e.bin", &data)]).await;
     mem.mkdir(&vp("mem:///t")).await.expect("mkdir");
     let h = engine
         .split_as(
@@ -467,27 +468,27 @@ async fn una_division_exacta_no_deja_trozo_vacio() {
             norte_core::journal::Actor::User,
         )
         .await
-        .expect("arranca");
+        .expect("starts");
     assert!(matches!(h.join().await, TaskState::Completed));
     assert!(mem.stat(&vp("mem:///t/e.bin.002")).await.is_ok());
     assert!(
         mem.stat(&vp("mem:///t/e.bin.003")).await.is_err(),
-        "no hay un tercer trozo vacío"
+        "there is no empty third part"
     );
 }
 
-/// Un hueco en la numeración NO se une a través, **y tampoco se une lo que
-/// hay antes de él**.
+/// A gap in the numbering does NOT get bridged, **and neither does what comes
+/// before it get combined**.
 ///
-/// Este test afirmaba lo contrario y pasaba: el paseo se paraba en el número
-/// que falta, veía un conjunto de UN trozo y lo unía. La task decía
-/// `Completed`, el journal anotaba un `Created`, y en disco quedaba el 20 % de
-/// una ISO que monta como imagen corrupta — sin error, sin marca de parcial, y
-/// contra lo que prometen el ADR 0060 y cuatro rustdocs. Lo encontró
-/// `rust-reviewer` leyendo el nombre del test contra su assert.
+/// This test used to assert the opposite and pass: the walk stopped at the
+/// missing number, saw a set of ONE part and combined it. The task said
+/// `Completed`, the journal recorded a `Created`, and what was left on disk
+/// was 20% of an ISO that mounts as a corrupt image — no error, no partial
+/// mark, and against what ADR 0060 and four rustdocs promise. `rust-reviewer`
+/// found it by reading the test's name against its assert.
 #[tokio::test]
-async fn juntar_con_un_hueco_se_niega() {
-    let (engine, mem) = engine_con(&[
+async fn combining_with_a_gap_is_refused() {
+    let (engine, mem) = engine_with(&[
         ("mem:///t/x.bin.001", &vec![b'a'; 100][..]),
         ("mem:///t/x.bin.003", &vec![b'c'; 100][..]),
     ])
@@ -501,7 +502,7 @@ async fn juntar_con_un_hueco_se_niega() {
             norte_core::journal::Actor::User,
         )
         .await
-        .expect("arranca");
+        .expect("starts");
     assert!(
         matches!(
             h.join().await,
@@ -510,23 +511,23 @@ async fn juntar_con_un_hueco_se_niega() {
                 ..
             }
         ),
-        "un conjunto incompleto es un error, no un fichero corto"
+        "an incomplete set is an error, not a short file"
     );
     assert!(
         mem.stat(&vp("mem:///x.bin")).await.is_err(),
-        "y no se creó el destino"
+        "and the destination was not created"
     );
 }
 
-/// Un conjunto COMPLETO de tres se une entero: la comprobación del hueco no
-/// puede rechazar lo que sí está bien.
+/// A COMPLETE set of three combines whole: the gap check must not reject what
+/// is actually fine.
 #[tokio::test]
-async fn juntar_un_conjunto_completo_los_une_todos() {
-    let (engine, mem) = engine_con(&[
+async fn combining_a_complete_set_combines_all_of_them() {
+    let (engine, mem) = engine_with(&[
         ("mem:///t/y.bin.001", &vec![b'a'; 100][..]),
         ("mem:///t/y.bin.002", &vec![b'b'; 100][..]),
         ("mem:///t/y.bin.003", &vec![b'c'; 40][..]),
-        // Un vecino que NO es un trozo no estorba.
+        // A neighbor that is NOT a part does not get in the way.
         ("mem:///t/y.bin.001.bak", &vec![b'z'; 5][..]),
     ])
     .await;
@@ -539,16 +540,16 @@ async fn juntar_un_conjunto_completo_los_une_todos() {
             norte_core::journal::Actor::User,
         )
         .await
-        .expect("arranca");
+        .expect("starts");
     assert!(matches!(h.join().await, TaskState::Completed));
-    assert_eq!(lee(&mem, "mem:///y.bin").await.len(), 240);
+    assert_eq!(read(&mem, "mem:///y.bin").await.len(), 240);
 }
 
-/// Un trozo intermedio más corto que el primero es un trozo que se copió a
-/// medias: se rechaza ANTES de crear el destino.
+/// A middle part shorter than the first is a part that was copied halfway: it
+/// is rejected BEFORE creating the destination.
 #[tokio::test]
-async fn juntar_con_un_trozo_corto_en_medio_se_niega() {
-    let (engine, mem) = engine_con(&[
+async fn combining_with_a_short_part_in_the_middle_is_refused() {
+    let (engine, mem) = engine_with(&[
         ("mem:///t/z.bin.001", &vec![b'a'; 100][..]),
         ("mem:///t/z.bin.002", &vec![b'b'; 40][..]),
         ("mem:///t/z.bin.003", &vec![b'c'; 100][..]),
@@ -563,7 +564,7 @@ async fn juntar_con_un_trozo_corto_en_medio_se_niega() {
             norte_core::journal::Actor::User,
         )
         .await
-        .expect("arranca");
+        .expect("starts");
     assert!(matches!(
         h.join().await,
         TaskState::Failed {
@@ -573,18 +574,18 @@ async fn juntar_con_un_trozo_corto_en_medio_se_niega() {
     ));
     assert!(
         mem.stat(&vp("mem:///z.bin")).await.is_err(),
-        "y no se creó el destino"
+        "and the destination was not created"
     );
 }
 
-/// Un trozo por debajo del mínimo produciría un millón de ficheros: se rehúsa
-/// antes de escribir nada.
+/// A part below the minimum would produce a million files: it is refused
+/// before writing anything.
 #[tokio::test]
-async fn un_trozo_minusculo_se_niega() {
-    let (engine, _mem) = engine_con(&[("mem:///p.bin", b"12345678")]).await;
-    // **En el SUBMIT, no en la Task.** Con la negativa dentro del cuerpo, el
-    // RPC contestaba `{task_id}` y un cliente con guion leía un éxito: escribía
-    // «partiendo…», salía, y no había pasado nada.
+async fn a_tiny_part_is_refused() {
+    let (engine, _mem) = engine_with(&[("mem:///p.bin", b"12345678")]).await;
+    // **At SUBMIT, not inside the Task.** With the refusal inside the body,
+    // the RPC answered `{task_id}` and a scripted client read a success: it
+    // printed "splitting…", exited, and nothing had happened.
     let r = engine
         .split_as(
             methods::FileSplitParams {
@@ -597,22 +598,22 @@ async fn un_trozo_minusculo_se_niega() {
         .await;
     match r {
         Err(e) => assert_eq!(e, norte_proto::Error::InvalidPath),
-        Ok(_) => panic!("un trozo de dos bytes no es una petición"),
+        Ok(_) => panic!("a two-byte part is not a request"),
     }
 }
 
-/// Más de 999 trozos no cabe en la convención `.001`, y se dice ANTES de
-/// escribir: descubrirlo en el trozo 1000 deja un conjunto que nadie puede
-/// volver a juntar.
+/// More than 999 parts does not fit the `.001` convention, and it is said
+/// BEFORE writing: discovering it at part 1000 leaves a set nobody can
+/// combine back.
 #[tokio::test]
-async fn demasiados_trozos_se_niegan_antes_de_escribir() {
-    let datos = vec![b'x'; 4096 * 1001];
-    let (engine, mem) = engine_con(&[("mem:///enorme.bin", &datos)]).await;
+async fn too_many_parts_are_refused_before_writing() {
+    let data = vec![b'x'; 4096 * 1001];
+    let (engine, mem) = engine_with(&[("mem:///huge.bin", &data)]).await;
     mem.mkdir(&vp("mem:///td")).await.expect("mkdir");
     let r = engine
         .split_as(
             methods::FileSplitParams {
-                path: vp("mem:///enorme.bin"),
+                path: vp("mem:///huge.bin"),
                 part_bytes: 4096,
                 dest_dir: vp("mem:///td"),
             },
@@ -621,66 +622,66 @@ async fn demasiados_trozos_se_niegan_antes_de_escribir() {
         .await;
     match r {
         Err(norte_proto::Error::LimitExceeded { .. }) => {}
-        Err(otro) => panic!("esperaba LimitExceeded, fue {otro:?}"),
-        Ok(_) => panic!("más de 999 trozos se dice en el SUBMIT, no después"),
+        Err(other) => panic!("expected LimitExceeded, was {other:?}"),
+        Ok(_) => panic!("more than 999 parts is said at SUBMIT, not afterward"),
     }
     assert!(
-        mem.stat(&vp("mem:///td/enorme.bin.001")).await.is_err(),
-        "ni el primero se llegó a escribir"
+        mem.stat(&vp("mem:///td/huge.bin.001")).await.is_err(),
+        "not even the first one got written"
     );
 }
 
-/// #250 — dos entradas que PLIEGAN al mismo nombre tampoco se empaquetan.
+/// #250 — two entries that FOLD to the same name are not packed either.
 ///
-/// Los bytes distintos no bastan: lo que decide es si colisionan allí donde el
-/// archivo se extraiga, y un archivo no puede saberlo — se manda por ahí. Se
-/// pliega con el modo más ancho a propósito, así que la pregunta no es «¿aquí?»
-/// sino «¿en alguna parte?». Extraído allí, uno de los dos desaparece sin decir
-/// nada, y ésa es la dirección que ADR 0005 dice no tomar.
+/// Different bytes are not enough: what decides is whether they collide where
+/// the archive gets extracted, and an archive cannot know that — it gets sent
+/// there. It folds with the widest mode on purpose, so the question is not
+/// "here?" but "anywhere?". Extracted there, one of the two disappears without
+/// a word, and that is the direction ADR 0005 says not to take.
 ///
-/// Cuatro parejas del corpus canónico, y son cuatro pliegues distintos:
-/// normalización NFD/NFC, singleton NFC, mu contra micro, y el pliegue completo
-/// de un ext4 `+F`. Un arreglo que solo mirase la caja no pasaría ninguno.
+/// Four pairs from the canonical corpus, and they are four different folds:
+/// NFD/NFC normalization, an NFC singleton, mu versus micro, and a real ext4
+/// `+F`'s full fold. A fix that only looked at case would pass none of them.
 ///
-/// La quinta que el issue lista —`win_trailing_dot` contra
-/// `win_trailing_space`— NO entra, y es deliberado: esos dos no pliegan a lo
-/// mismo bajo ninguna clave Unicode. Lo que hace que colisionen es que Windows
-/// RECORTA la cola de un nombre sin el prefijo `\\?\`, que es mangling de
-/// rutas y no plegado. Cazarlo pide otra comprobación, y va en el punto 2 de
-/// #250 —el aviso de «este nombre significa otra cosa allí»— junto a `a\b`,
-/// `f:ads` y `CON`.
+/// The fifth pair the issue lists — `win_trailing_dot` against
+/// `win_trailing_space` — does NOT go in, and that is deliberate: those two do
+/// not fold to the same thing under any Unicode key. What makes them collide
+/// is that Windows TRIMS the tail of a name without the `\\?\` prefix, which
+/// is path mangling and not folding. Catching that needs a different check,
+/// and it belongs in #250's point 2 — the "this name means something else
+/// there" warning — alongside `a\b`, `f:ads` and `CON`.
 #[tokio::test]
-async fn dos_entradas_que_pliegan_al_mismo_nombre_no_se_empaquetan() {
+async fn two_entries_that_fold_to_the_same_name_are_not_packed() {
     let corpus = norte_testkit::corpus::hostile_names();
-    let bytes_de = |id: &str| {
+    let bytes_of = |id: &str| {
         corpus
             .iter()
             .find(|n| n.id == id)
-            .unwrap_or_else(|| panic!("la fixture {id} está"))
+            .unwrap_or_else(|| panic!("fixture {id} is there"))
             .bytes
             .clone()
     };
-    let parejas = [
+    let pairs = [
         ("nfd_e_acute", "nfc_e_acute"),
         ("singleton_kelvin_sign", "ascii_capital_k"),
         ("micro_sign_mu", "greek_mu_twin"),
         ("ext4_full_fold_es_zett", "ext4_full_fold_ss"),
-        // Y el quinto pliegue, desde #214: un invisible. El pliegue completo
-        // DESCARTA los `Default_Ignorable`, como hace la tabla del kernel, así
-        // que dos nombres que solo se diferencian en un guion suave son uno al
-        // extraerlos en un `+F`. Este empaquetado se rechazaba con los cuatro
-        // de arriba y no con éste, y es el que un lector no puede ver venir:
-        // los dos nombres se pintan igual.
+        // And the fifth fold, from #214: an invisible one. The full fold
+        // DISCARDS `Default_Ignorable` codepoints, as the kernel's table does,
+        // so two names that only differ by a soft hyphen are one when
+        // extracted on a `+F`. This packing was rejected by the four above and
+        // not by this one, and it is the one a reader cannot see coming: both
+        // names render the same.
         ("full_fold_soft_hyphen", "full_fold_soft_hyphen_plain"),
     ];
-    for (a, b) in parejas {
-        let (uno, otro) = (bytes_de(a), bytes_de(b));
-        assert_ne!(uno, otro, "[{a}/{b}] la premisa: bytes distintos");
+    for (a, b) in pairs {
+        let (one, other) = (bytes_of(a), bytes_of(b));
+        assert_ne!(one, other, "[{a}/{b}] the premise: different bytes");
 
         let mem = Arc::new(MemProvider::new());
         mem.mkdir(&vp("mem:///p")).await.expect("p");
-        for nombre in [&uno, &otro] {
-            let p = vp("mem:///p").join(Segment::new(nombre.clone()).expect("segmento"));
+        for name in [&one, &other] {
+            let p = vp("mem:///p").join(Segment::new(name.clone()).expect("segment"));
             let mut sink = mem.write(&p).await.expect("write");
             sink.write(Bytes::from_static(b"x")).await.expect("chunk");
             sink.commit().await.expect("commit");
@@ -694,7 +695,7 @@ async fn dos_entradas_que_pliegan_al_mismo_nombre_no_se_empaquetan() {
                 norte_core::journal::Actor::User,
             )
             .await
-            .expect("arranca");
+            .expect("starts");
         assert!(
             matches!(
                 h.join().await,
@@ -703,23 +704,23 @@ async fn dos_entradas_que_pliegan_al_mismo_nombre_no_se_empaquetan() {
                     ..
                 }
             ),
-            "[{a}/{b}] se empaquetaron las dos: una se pierde al extraer"
+            "[{a}/{b}] both got packed: one gets lost on extraction"
         );
     }
 }
 
-/// #250 punto 2 — un nombre que significa OTRA COSA fuera se empaqueta, y se
-/// dice.
+/// #250 point 2 — a name that means SOMETHING ELSE outside is packed, and it
+/// is reported.
 ///
-/// La diferencia con el test de arriba es la que sostiene todo el diseño: dos
-/// entradas que pliegan al mismo nombre hacen que al extraer DESAPAREZCA un
-/// fichero, así que se rechazan. `a\b.txt` extraído en Linux sigue siendo
-/// `a\b.txt` y en Windows es un `b.txt` dentro de una carpeta `a`: no se pierde
-/// nada, se coloca distinto. Rechazarlo se llevaría por delante árboles Unix
-/// legítimos para prevenir algo que ni siquiera es una pérdida.
+/// The difference from the test above is what holds up the whole design: two
+/// entries that fold to the same name make a file DISAPPEAR on extraction, so
+/// they are rejected. `a\b.txt` extracted on Linux is still `a\b.txt` and on
+/// Windows is a `b.txt` inside an `a` folder: nothing is lost, it is placed
+/// differently. Rejecting it would take down legitimate Unix trees to prevent
+/// something that is not even a loss.
 #[tokio::test]
-async fn un_nombre_que_significa_otra_cosa_fuera_se_empaqueta_y_se_dice() {
-    let (engine, mem) = engine_con(&[
+async fn a_name_that_means_something_else_outside_is_packed_and_reported() {
+    let (engine, mem) = engine_with(&[
         ("mem:///p/normal.txt", b"1"),
         ("mem:///p/a\\b.txt", b"2"),
         ("mem:///p/CON", b"3"),
@@ -731,78 +732,79 @@ async fn un_nombre_que_significa_otra_cosa_fuera_se_empaqueta_y_se_dice() {
             norte_core::journal::Actor::User,
         )
         .await
-        .expect("arranca");
+        .expect("starts");
     let id = h.id();
     assert_eq!(
         h.join().await,
         TaskState::Completed,
-        "el archivo SE ESCRIBE"
+        "the archive IS WRITTEN"
     );
-    assert!(!lee(&mem, "mem:///out.zip").await.is_empty());
+    assert!(!read(&mem, "mem:///out.zip").await.is_empty());
 
-    let leido = engine
-        .archive_pack_report(id)
-        .expect("el anillo lo tiene")
-        .1;
+    let report = engine.archive_pack_report(id).expect("the ring has it").1;
     assert_eq!(
-        leido.checked,
+        report.checked,
         vec!["separator", "stream", "reserved", "trailing"],
-        "el informe declara QUÉ miró: sin eso, uno limpio no afirma nada"
+        "the report declares WHAT it looked at: without that, a clean one asserts nothing"
     );
 
-    let riesgos: Vec<(&str, &str)> = leido
+    let risks: Vec<(&str, &str)> = report
         .risky
         .iter()
         .map(|r| (r.name.as_str(), r.risk.as_str()))
         .collect();
     assert!(
-        riesgos.contains(&("p/a\\b.txt", "separator")),
-        "la barra invertida es separador en 7-Zip y en el Explorador: {riesgos:?}"
+        risks.contains(&("p/a\\b.txt", "separator")),
+        "backslash is a separator in 7-Zip and in Explorer: {risks:?}"
     );
     assert!(
-        riesgos.contains(&("p/CON", "reserved")),
-        "`CON` no se extrae en Windows en absoluto: {riesgos:?}"
+        risks.contains(&("p/CON", "reserved")),
+        "`CON` does not extract on Windows at all: {risks:?}"
     );
     assert!(
-        !riesgos.iter().any(|(n, _)| *n == "p/normal.txt"),
-        "y lo corriente no se nombra: un informe que avisa de todo no lo lee nadie"
+        !risks.iter().any(|(n, _)| *n == "p/normal.txt"),
+        "and the ordinary one is not named: a report that warns about everything is read by nobody"
     );
-    assert!(leido.entries >= 3, "cuántas se comprobaron");
-    assert!(!leido.truncated);
+    assert!(report.entries >= 3, "how many were checked");
+    assert!(!report.truncated);
 }
 
-/// Y un archivo cuyos nombres viajan todos intactos deja un informe VACÍO, que
-/// no es lo mismo que no haber mirado: `entries` lo dice.
+/// And an archive whose names all travel intact leaves an EMPTY report, which
+/// is not the same as not having looked: `entries` says so.
 #[tokio::test]
-async fn un_archivo_limpio_deja_un_informe_que_afirma_en_vez_de_callar() {
+async fn a_clean_archive_leaves_a_report_that_asserts_instead_of_staying_silent() {
     let (engine, _mem) =
-        engine_con(&[("mem:///p/uno.txt", b"1"), ("mem:///p/dos.txt", b"2")]).await;
+        engine_with(&[("mem:///p/one.txt", b"1"), ("mem:///p/two.txt", b"2")]).await;
     let h = engine
         .pack_as(
             pack_params(&["mem:///p"], "mem:///out.zip", "mem:///"),
             norte_core::journal::Actor::User,
         )
         .await
-        .expect("arranca");
+        .expect("starts");
     let id = h.id();
     assert_eq!(h.join().await, TaskState::Completed);
-    let leido = engine.archive_pack_report(id).expect("informe").1;
-    assert!(leido.risky.is_empty());
-    assert!(leido.entries >= 2, "se miraron, que es lo que lo hace útil");
+    let report = engine.archive_pack_report(id).expect("report").1;
+    assert!(report.risky.is_empty());
+    assert!(
+        report.entries >= 2,
+        "they were looked at, which is what makes it useful"
+    );
 }
 
-/// Y dos nombres que NO pliegan a lo mismo se empaquetan, que es lo normal. La
-/// comprobación no puede costar la operación legítima.
+/// And two names that truly do NOT fold to the same thing get packed, which is
+/// the normal case. The check must not cost the legitimate operation.
 #[tokio::test]
-async fn dos_nombres_distintos_de_verdad_si_se_empaquetan() {
-    let (engine, mem) = engine_con(&[("mem:///p/uno.txt", b"1"), ("mem:///p/dos.txt", b"2")]).await;
+async fn two_genuinely_different_names_do_get_packed() {
+    let (engine, mem) =
+        engine_with(&[("mem:///p/one.txt", b"1"), ("mem:///p/two.txt", b"2")]).await;
     let h = engine
         .pack_as(
             pack_params(&["mem:///p"], "mem:///out.zip", "mem:///"),
             norte_core::journal::Actor::User,
         )
         .await
-        .expect("arranca");
+        .expect("starts");
     assert_eq!(h.join().await, TaskState::Completed);
-    assert!(!lee(&mem, "mem:///out.zip").await.is_empty());
+    assert!(!read(&mem, "mem:///out.zip").await.is_empty());
 }

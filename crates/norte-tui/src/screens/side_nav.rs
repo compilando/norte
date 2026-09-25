@@ -1,20 +1,20 @@
-//! Los cuatro paneles de navegación laterales y el popup que los precede:
-//! árbol, procesos, sidebar de sitios y el popup de historial/hotlist/
-//! volúmenes.
+//! The four side navigation panels and the popup that precedes them: tree,
+//! processes, the places sidebar, and the history/hotlist/volumes popup.
 //!
-//! Los cuatro tienen la misma forma —resuelven la tecla contra el contexto
-//! `dialog` del keymap, la filtran por el ALLOWLIST de su overlay, y devuelven
-//! un [`Cd`] porque confirmar es navegar por el camino de `cd` normal— y los
-//! cuatro vivían en el root del binario `ntc`, un crate DISTINTO de esta lib.
+//! All four have the same shape — they resolve the key against the keymap's
+//! `dialog` context, filter it by their overlay's ALLOWLIST, and return a
+//! [`Cd`] because confirming means navigating by the normal `cd` path — and
+//! all four used to live in the `ntc` binary's root, a crate DISTINCT from
+//! this lib.
 //!
-//! `side_nav` y no `nav` porque [`crate::nav`] ya existe y es otra cosa (el
-//! modelo del popup); esto es quien lee sus teclas.
+//! `side_nav` and not `nav` because [`crate::nav`] already exists and is
+//! something else (the popup's model); this is the one that reads its keys.
 //!
-//! Los dos bloques de rustdoc de [`on_places_key`] y [`on_nav_popup_key`]
-//! estaban APILADOS sobre `on_tree_key` en `main.rs`, tres doc-comments
-//! seguidos delante de una sola función: un movimiento anterior dejó atrás la
-//! documentación de las otras dos. Aquí vuelve cada bloque a su función, sin
-//! tocar una palabra.
+//! The two rustdoc blocks of [`on_places_key`] and [`on_nav_popup_key`] were
+//! STACKED on top of `on_tree_key` in `main.rs`, three doc comments in a row
+//! in front of a single function: an earlier move left the other two's
+//! documentation behind. Here each block goes back to its own function,
+//! without a word changed.
 
 use crossterm::event::{KeyCode, KeyModifiers};
 use norte_core::backend::Backend;
@@ -47,13 +47,13 @@ pub async fn open_drive_popup(app: &mut App, backend: &Backend, pane: usize, inc
     }
 }
 
-/// Teclas del árbol (#136): mismo reparto y mismo allowlist que el sidebar.
+/// Tree keys (#136): same layout and same allowlist as the sidebar.
 ///
-/// `⏎` sobre una rama la despliega o la pliega; `dialog.confirm` con la rama ya
-/// abierta MANDA el listado ahí, que es para lo que se abre un árbol. `Esc` y
-/// `Tab` sueltan el teclado y dejan el panel abierto — cerrarlo es `pane.tree`,
-/// la misma SEGUNDA pulsación que el sidebar: abrir cualquiera de los dos ya
-/// les da el teclado.
+/// `⏎` over a branch expands or collapses it; `dialog.confirm` with the
+/// branch already open SENDS the listing there, which is what a tree is
+/// opened for. `Esc` and `Tab` release the keyboard and leave the panel
+/// open — closing it is `pane.tree`, the same SECOND keystroke as the
+/// sidebar: opening either of the two already gives them the keyboard.
 pub async fn on_tree_key(
     app: &mut App,
     backend: &Backend,
@@ -80,8 +80,9 @@ pub async fn on_tree_key(
     if !ALLOW_PLACES.contains(&cmd.as_str()) {
         return Cd::Cancelled;
     }
-    // El cromo de la aplicación antes que nada: no es de este panel, y por eso
-    // no lo decide este panel (`App::panel_chrome_command`, uno para los tres).
+    // The application's chrome comes before anything else: it is not this
+    // panel's, and that is why this panel does not decide it
+    // (`App::panel_chrome_command`, one for all three).
     if app.panel_chrome_command(&cmd) {
         return Cd::Cancelled;
     }
@@ -101,21 +102,21 @@ pub async fn on_tree_key(
                 t.toggle();
             }
         }
-        // `Esc` suelta el teclado, y `Tab` también: la misma regla que el
-        // sidebar y el panel de procesos. Ninguno de los dos CIERRA el árbol
-        // —eso es `pane.tree`—, y abrir una columna lateral no puede costarte
-        // la tecla con la que se cambia de panel toda la vida.
+        // `Esc` releases the keyboard, and so does `Tab`: the same rule as
+        // the sidebar and the processes panel. Neither one CLOSES the
+        // tree — that is `pane.tree` — and opening a side column cannot
+        // cost you the key that switches panes throughout the whole app.
         "dialog.cancel" | "dialog.pane" | "pane.switch" => app.return_keys_to_panes(),
-        // El anillo pasa al panel de AL LADO, que es lo que `Tab` no hace: la
-        // tecla con la que se recorre la pantalla tiene que funcionar también
-        // dentro del panel del que se quiere salir.
+        // The ring moves to the panel NEXT TO it, which is what `Tab` does
+        // not do: the key that cycles the screen also has to work from
+        // inside the panel you want to leave.
         "layout.focus-next" => app.layout_focus(1),
         "layout.focus-prev" => app.layout_focus(-1),
-        // El ancho del árbol, por lo mismo que el del sidebar (#244 M1).
+        // The tree's width, for the same reason as the sidebar's (#244 M1).
         "layout.grow" => app.layout_resize(1),
         "layout.shrink" => app.layout_resize(-1),
         "pane.tree" => app.toggle_tree(),
-        // Y las de los otros paneles, igual que en el sidebar.
+        // And the other panels' keys, same as in the sidebar.
         "layout.places" => app.toggle_places(),
         "layout.preview" => app.toggle_preview(),
         "layout.processes" => app.toggle_processes(),
@@ -125,9 +126,9 @@ pub async fn on_tree_key(
         "dialog.confirm" => {
             let dest = app.tree().and_then(crate::tree::Tree::selected);
             if let Some(dir) = dest {
-                // Desplegar Y navegar: quien pulsa Enter sobre una rama quiere
-                // ver qué hay dentro, y verlo en el listado es la respuesta
-                // completa.
+                // Expand AND navigate: whoever presses Enter on a branch
+                // wants to see what is inside, and seeing it in the listing
+                // is the complete answer.
                 if let Some(t) = app.tree_mut() {
                     t.expand();
                 }
@@ -139,19 +140,20 @@ pub async fn on_tree_key(
     Cd::Cancelled
 }
 
-/// Teclas del panel de procesos (#243): resuelve por keymap (pantalla
-/// `dialog`) y filtra por [`crate::app::ALLOW_PROCESSES`] — misma disciplina de
-/// única-fuente que el resto de paneles con teclado (#24).
+/// Processes panel keys (#243): resolves through the keymap (`dialog`
+/// screen) and filters by [`crate::app::ALLOW_PROCESSES`] — same
+/// single-source discipline as the rest of the panels with a keyboard
+/// (#24).
 ///
-/// Síncrona y sin backend: cancelar es soltarle el token a una task que este
-/// proceso ya observa, no una llamada.
+/// Synchronous and backend-free: cancelling is releasing the token on a task
+/// this process already observes, not a call.
 pub fn on_processes_key(app: &mut App, resolver: &mut Resolver, mods: KeyModifiers, code: KeyCode) {
     if mods.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('c') {
         app.quit = true;
         return;
     }
     let Some(chord) = chord_from_crossterm(mods, code) else {
-        return; // tecla no modelada por el keymap: ignorar
+        return; // key not modeled by the keymap: ignore
     };
     let cmd = match resolver.push(chord) {
         Resolution::Run { command: cmd, .. } => cmd,
@@ -161,27 +163,29 @@ pub fn on_processes_key(app: &mut App, resolver: &mut Resolver, mods: KeyModifie
         }
         Resolution::Reset => return,
     };
-    // El despacho vive en el `App` (biblioteca) para que un test pueda meter
-    // una tecla de verdad por él; aquí queda la resolución, que es lo que este
-    // binario tiene y el `App` no.
+    // The dispatch lives in `App` (library) so a test can feed it a real key
+    // directly; what stays here is the resolution, which this binary has
+    // and `App` does not.
     if let Some(msg) = app.processes_command(&cmd) {
         app.message = Some(msg);
     }
 }
 
-/// Teclas de la línea de tiempo del journal (fase 7).
+/// Journal timeline keys (phase 7).
 ///
-/// Cuatro cosas: moverse, pedir más historia al llegar abajo, devolver el
-/// teclado a los listados, y preguntar si se deshace hasta la fila señalada.
+/// Four things: moving, requesting more history on reaching the bottom,
+/// returning the keyboard to the listings, and asking whether to undo up to
+/// the marked row.
 ///
-/// Es `async` porque dos de ellas necesitan el backend, y por lo mismo que el
-/// mapa NO navega desde su handler: pedir una página es I/O, y aquí sí se
-/// puede esperar porque este handler ya vive en el bucle.
+/// It is `async` because two of them need the backend, and for the same
+/// reason the map does NOT navigate from its handler: requesting a page is
+/// I/O, and here it is fine to await it because this handler already lives
+/// in the loop.
 ///
-/// **Intro no deshace: pregunta.** Y la pregunta lleva el RECUENTO, que se
-/// calcula sobre lo que hay cargado —todo lo posterior al cursor lo está, por
-/// definición: se pagina hacia atrás desde lo más nuevo—. Deshacer sin decir
-/// cuánto sería la peor tecla de este programa.
+/// **Enter does not undo: it asks.** And the question carries the COUNT,
+/// computed over what is loaded — everything after the cursor is, by
+/// definition: it pages backward from the newest. Undoing without saying how
+/// much would be the worst key in this program.
 pub async fn on_timeline_key(
     app: &mut App,
     backend: &Backend,
@@ -214,15 +218,15 @@ pub async fn on_timeline_key(
             }
         }
         "dialog.down" => {
-            let (al_final, cursor) = app.panes.timeline_mut(slot).map_or((false, None), |t| {
+            let (at_bottom, cursor) = app.panes.timeline_mut(slot).map_or((false, None), |t| {
                 t.down();
                 (t.cursor() + 1 >= t.len(), t.next_before_seq())
             });
-            // Llegar abajo pide la siguiente página. Es el único momento en
-            // que se pide más: una lista que se cargara entera al abrir
-            // traería meses de journal para enseñar doce filas.
-            if al_final && let Some(desde) = cursor {
-                crate::dispatch::cargar_timeline(app, backend, Some(desde)).await;
+            // Reaching the bottom requests the next page. It is the only
+            // moment more is asked for: a list loaded whole on open would
+            // pull in months of journal to show twelve rows.
+            if at_bottom && let Some(from) = cursor {
+                crate::dispatch::load_timeline(app, backend, Some(from)).await;
             }
         }
         "dialog.cancel" | "dialog.pane" | "pane.switch" => app.return_keys_to_panes(),
@@ -230,23 +234,23 @@ pub async fn on_timeline_key(
             let Some(tl) = app.panes.timeline(slot) else {
                 return;
             };
-            let (Some(seq), resumen) = (tl.corte(), tl.resumen()) else {
+            let (Some(seq), summary) = (tl.cutoff(), tl.summary()) else {
                 return;
             };
-            // Un corte que no se lleva nada NO abre un diálogo: preguntar
-            // «¿seguro?» por algo que no va a pasar enseña a decir que sí sin
-            // leer, que es la forma de que la siguiente pregunta —una que sí
-            // importa— tampoco se lea.
-            if resumen.no_hace_nada() {
+            // A cut that carries nothing away does NOT open a dialog: asking
+            // "are you sure?" about something that will not happen teaches
+            // people to say yes without reading, which is how the next
+            // question — one that DOES matter — also goes unread.
+            if summary.no_does_nothing() {
                 app.message = Some(t("timeline-undo-nothing"));
                 return;
             }
             app.modal = Some(crate::app::Modal::ConfirmUndoAfter {
                 seq,
-                a_deshacer: resumen.a_deshacer,
-                irreversibles: resumen.irreversibles,
-                ajenas: resumen.ajenas,
-                // Congelado AHORA, con el recuento que se va a enseñar.
+                to_undo: summary.to_undo,
+                irreversible: summary.irreversible,
+                foreign: summary.foreign,
+                // Frozen NOW, with the count that is about to be shown.
                 techo: tl.techo(),
             });
         }
@@ -254,21 +258,21 @@ pub async fn on_timeline_key(
     }
 }
 
-/// Teclas del mapa de disco (fase 4).
+/// Disk map keys (phase 4).
 ///
-/// Dos capas, como en el panel de registro y por el mismo motivo. Primero las
-/// teclas PROPIAS del mapa ([`crate::diskmap::key`]): flechas, páginas,
-/// extremos, `Enter`, `r` y `Esc` son suyas mientras tenga el teclado, y no
-/// pasan por el keymap porque fuera de aquí no significan nada — meterlas
-/// obligaría a los siete presets a declarar atajos inútiles. Lo que no
-/// reclame, al resolver de la pantalla `dialog`, filtrado por
+/// Two layers, as in the log panel and for the same reason. First the map's
+/// OWN keys ([`crate::diskmap::key`]): arrows, pages, ends, `Enter`, `r` and
+/// `Esc` are its own while it has the keyboard, and they do not go through
+/// the keymap because outside here they mean nothing — putting them there
+/// would force all seven presets to declare useless shortcuts. Whatever it
+/// does not claim goes to the `dialog` screen's resolver, filtered by
 /// [`crate::app::ALLOW_DISK_MAP`].
 ///
-/// **`Enter` no navega aquí.** Deja el hijo elegido en `pending_disk_map_enter`
-/// y lo consume el bucle, que es quien tiene el backend: entrar en un
-/// directorio es un `cd` como cualquier otro, con su relleno y su refresco, y
-/// hacerlo a medias desde una función síncrona sería el segundo camino de
-/// navegación que ADR 0077 existe para impedir.
+/// **`Enter` does not navigate here.** It leaves the chosen child in
+/// `pending_disk_map_enter` and the loop consumes it, since that is where
+/// the backend is: entering a directory is a `cd` like any other, with its
+/// padding and its refresh, and doing it halfway from a synchronous function
+/// would be the second navigation path ADR 0077 exists to prevent.
 pub fn on_disk_map_key(app: &mut App, resolver: &mut Resolver, mods: KeyModifiers, code: KeyCode) {
     use crate::diskmap::MapAction;
 
@@ -276,38 +280,38 @@ pub fn on_disk_map_key(app: &mut App, resolver: &mut Resolver, mods: KeyModifier
         app.quit = true;
         return;
     }
-    if let Some(accion) = crate::diskmap::key(code, mods) {
+    if let Some(action) = crate::diskmap::key(code, mods) {
         let Some(slot) = app.disk_map_slot() else {
             return;
         };
-        match accion {
+        match action {
             MapAction::Mover(n) => {
                 if let Some(m) = app.panes.disk_map_mut(slot) {
                     m.mover(n);
                 }
             }
-            MapAction::Entrar => {
-                let elegido = app
+            MapAction::Enter => {
+                let chosen = app
                     .panes
                     .disk_map(slot)
-                    .and_then(|m| m.elegido().map(|c| c.name.clone()));
-                // Solo un DIRECTORIO se abre: entrar en un fichero no es
-                // navegar, y el mapa enseña las dos cosas.
-                let es_dir = app
+                    .and_then(|m| m.chosen().map(|c| c.name.clone()));
+                // Only a DIRECTORY opens: entering a file is not navigating,
+                // and the map shows both.
+                let is_dir = app
                     .panes
                     .disk_map(slot)
-                    .and_then(|m| m.elegido().map(|c| c.kind == norte_proto::EntryKind::Dir));
-                if let (Some(name), Some(true)) = (elegido, es_dir) {
+                    .and_then(|m| m.chosen().map(|c| c.kind == norte_proto::EntryKind::Dir));
+                if let (Some(name), Some(true)) = (chosen, is_dir) {
                     app.pending_disk_map_enter = Some(name);
                 }
             }
-            MapAction::Remedir => app.disk_map_stale = true,
+            MapAction::Remeasure => app.disk_map_stale = true,
             MapAction::Leave => app.return_keys_to_panes(),
         }
         return;
     }
     let Some(chord) = chord_from_crossterm(mods, code) else {
-        return; // tecla no modelada por el keymap: ignorar
+        return; // key not modeled by the keymap: ignore
     };
     let cmd = match resolver.push(chord) {
         Resolution::Run { command: cmd, .. } => cmd,
@@ -320,19 +324,20 @@ pub fn on_disk_map_key(app: &mut App, resolver: &mut Resolver, mods: KeyModifier
     app.disk_map_command(&cmd);
 }
 
-/// Teclas de un panel APORTADO por un plugin (fase 3), resueltas por el mismo
-/// camino que las de procesos y filtradas por `App::panel_command`.
+/// Keys of a panel CONTRIBUTED by a plugin (phase 3), resolved through the
+/// same path as the processes panel's and filtered by `App::panel_command`.
 ///
-/// Sin este brazo el panel cogía el borde de foco y sus teclas seguían hasta
-/// el resolver de `browse`: el lector creía tener el teclado en el panel y
-/// `F8` abría el diálogo de borrar sobre la selección del listado de detrás.
+/// Without this arm the panel took the focus border and its keys kept going
+/// to the `browse` resolver: the reader believed the keyboard was in the
+/// panel and `F8` opened the delete dialog over the listing's selection
+/// behind it.
 pub fn on_panel_key(app: &mut App, resolver: &mut Resolver, mods: KeyModifiers, code: KeyCode) {
     if mods.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('c') {
         app.quit = true;
         return;
     }
     let Some(chord) = chord_from_crossterm(mods, code) else {
-        return; // tecla no modelada por el keymap: ignorar
+        return; // key not modeled by the keymap: ignore
     };
     let cmd = match resolver.push(chord) {
         Resolution::Run { command: cmd, .. } => cmd,
@@ -345,11 +350,11 @@ pub fn on_panel_key(app: &mut App, resolver: &mut Resolver, mods: KeyModifiers, 
     app.panel_command(&cmd);
 }
 
-/// Teclas del sidebar de sitios (L3), resueltas por el contexto`dialog`.
+/// Places sidebar keys (L3), resolved by the `dialog` context.
 ///
-/// El sidebar no navega por su cuenta: Enter devuelve una ruta y el `cd` va al
-/// LISTADO enfocado, por el mismo camino que cualquier otro. Es lo que hace
-/// que abrirlo no cambie a dónde van las operaciones.
+/// The sidebar does not navigate on its own: Enter returns a path and the
+/// `cd` goes to the FOCUSED listing, by the same path as any other. That is
+/// what keeps opening it from changing where operations go.
 pub async fn on_places_key(
     app: &mut App,
     backend: &Backend,
@@ -363,7 +368,7 @@ pub async fn on_places_key(
         return Cd::Cancelled;
     }
     let Some(chord) = chord_from_crossterm(mods, code) else {
-        return Cd::Cancelled; // tecla no modelada por el keymap: ignorar
+        return Cd::Cancelled; // key not modeled by the keymap: ignore
     };
     let cmd = match resolver.push(chord) {
         Resolution::Run { command: cmd, .. } => cmd,
@@ -374,62 +379,62 @@ pub async fn on_places_key(
         Resolution::Reset => return Cd::Cancelled,
     };
     if !ALLOW_PLACES.contains(&cmd.as_str()) {
-        return Cd::Cancelled; // fuera del allowlist de este panel: inerte
+        return Cd::Cancelled; // outside this panel's allowlist: inert
     }
-    // El cromo de la aplicación, antes que lo de este panel: mismo embudo que
-    // el árbol y el panel de procesos.
+    // The application's chrome, before this panel's own: same funnel as the
+    // tree and the processes panel.
     if app.panel_chrome_command(&cmd) {
         return Cd::Cancelled;
     }
     match cmd.as_str() {
         "dialog.up" => app.places_up(),
         "dialog.down" => app.places_down(),
-        // `places_toggle_fold` deja pedidas las unidades si la sección quedó
-        // desplegada; las sirve el bucle.
+        // `places_toggle_fold` leaves the drives requested if the section
+        // ended up expanded; the loop serves them.
         "dialog.toggle-enabled" => app.places_toggle_fold(),
-        // `Esc` suelta el teclado, y `Tab` también. Ninguno CIERRA el panel:
-        // cerrarlo es `layout.places`.
+        // `Esc` releases the keyboard, and so does `Tab`. Neither one
+        // CLOSES the panel: closing it is `layout.places`.
         //
-        // Lo de `Tab` no es simetría por gusto: sin él, abrir el sidebar
-        // dejaba muerta la tecla con la que se cambia de panel toda la vida.
-        // `pane.switch` no está en el vocabulario `dialog.*` y el panel se come
-        // lo que no esté en su allowlist. Sale a los listados sin cambiar de
-        // panel, así que el SIGUIENTE `Tab` hace lo de siempre y la tecla
-        // significa una sola cosa: «a la región siguiente», con el sidebar
-        // contando como región.
+        // `Tab`'s behavior is not symmetry for its own sake: without it,
+        // opening the sidebar left dead the key that switches panes
+        // throughout the whole app. `pane.switch` is not in the `dialog.*`
+        // vocabulary and the panel swallows whatever is not in its
+        // allowlist. It exits to the listings without changing pane, so the
+        // NEXT `Tab` does what it always does and the key means only one
+        // thing: "to the next region," with the sidebar counting as a
+        // region.
         "dialog.cancel" | "dialog.pane" | "pane.switch" => app.return_keys_to_panes(),
-        // El anillo pasa al panel de AL LADO, que es lo que `Tab` no hace: la
-        // tecla con la que se recorre la pantalla tiene que funcionar también
-        // dentro del panel del que se quiere salir.
+        // The ring moves to the panel NEXT TO it, which is what `Tab` does
+        // not do: the key that cycles the screen also has to work from
+        // inside the panel you want to leave.
         "layout.focus-next" => app.layout_focus(1),
         "layout.focus-prev" => app.layout_focus(-1),
-        // El ancho del sidebar, que es el ÚNICO camino por el que se puede
-        // cambiar: el llamante de `layout_resize` pasa siempre un listado
-        // visible, así que la rama de `Size::Fixed` no la alcanzaba nadie
-        // (#244 M1).
+        // The sidebar's width, which is the ONLY path that can change it:
+        // `layout_resize`'s caller always passes a visible listing, so the
+        // `Size::Fixed` arm was unreachable by anyone (#244 M1).
         "layout.grow" => app.layout_resize(1),
         "layout.shrink" => app.layout_resize(-1),
-        // Y `layout.places` con el teclado DENTRO cierra: es la SEGUNDA
-        // pulsación, porque abrir este panel ya le da el teclado.
+        // And `layout.places` with the keyboard INSIDE closes: it is the
+        // SECOND keystroke, because opening this panel already gives it the
+        // keyboard.
         "layout.places" => app.toggle_places(),
-        // Las teclas de los otros paneles siguen abriendo lo suyo: estar en
-        // una columna lateral no puede dejar sin efecto la que abre la de al
-        // lado.
+        // The other panels' keys keep opening theirs: being in a side
+        // column cannot cancel the key that opens the one next to it.
         "layout.preview" => app.toggle_preview(),
         "layout.processes" => app.toggle_processes(),
         "layout.metadata" => app.toggle_metadata(),
         "layout.log" => app.toggle_log(),
         "layout.disk-map" => app.toggle_disk_map(),
         "pane.tree" => app.toggle_tree(),
-        // `⏎` sobre una CABECERA pliega o despliega su sección, como en el
-        // árbol de al lado. Antes no hacía nada: `activate()` devuelve `None`
-        // para una cabecera, así que Enter sobre «Unidades» era inerte y
-        // plegar era Espacio y solo Espacio. Enter es el gesto que se prueba
-        // primero sobre algo que se abre, y los dos paneles laterales deben
-        // contestarlo igual.
+        // `⏎` over a HEADER folds or unfolds its section, as in the tree
+        // next to it. Before, it did nothing: `activate()` returns `None`
+        // for a header, so Enter over "Drives" was inert and folding was
+        // Space and only Space. Enter is the gesture people try first on
+        // something that opens, and the two side panels must answer it the
+        // same way.
         //
-        // Sobre una unidad o un favorito sigue NAVEGANDO, que es lo que Enter
-        // significa sobre una hoja.
+        // Over a drive or a favorite it still NAVIGATES, which is what Enter
+        // means over a leaf.
         "dialog.confirm" => {
             if app.places_cursor_on_header() {
                 app.places_toggle_fold();
@@ -443,31 +448,33 @@ pub async fn on_places_key(
     Cd::Cancelled
 }
 
-/// Sirve la petición de unidades que haya pendiente, si la hay.
+/// Serves the pending drives request, if there is one.
 ///
-/// El ÚNICO consumidor de [`App::places_wants_drives`]: lo drena el run loop
-/// una vez por vuelta y el arranque una vez antes de entrar en él, para que el
-/// primer frame ya salga con la lista puesta.
+/// The ONLY consumer of [`App::places_wants_drives`]: the run loop drains it
+/// once per turn and startup once before entering it, so the first frame
+/// already comes out with the list set.
 ///
-/// Existe porque `host.volumes` es I/O y quien enciende la bandera —abrir el
-/// sidebar, desplegar su sección, montar una disposición que ya lo trae— no
-/// siempre tiene un backend delante. Cuando cada uno de esos sitios pedía los
-/// volúmenes por su cuenta, faltaban justo en los que nadie recordó.
+/// It exists because `host.volumes` is I/O and whatever sets the flag —
+/// opening the sidebar, expanding its section, loading a layout that
+/// already carries it — does not always have a backend in front of it. When
+/// each of those places requested the volumes on its own, they were missing
+/// exactly where nobody remembered to.
 pub async fn drain_places_drives(app: &mut App, backend: &Backend) {
     if std::mem::take(&mut app.places_wants_drives) {
         refresh_places_drives(app, backend).await;
     }
 }
 
-/// Pide los volúmenes al host y los deja en el sidebar.
+/// Requests the volumes from the host and leaves them in the sidebar.
 ///
-/// Lo llama [`drain_places_drives`] y nadie más: un sidebar con reloj sería la
-/// regla de suspensión del ADR 0058 rota
-/// desde el primer frame, y `host.volumes` no es gratis (monta y consulta
-/// espacio en cada filesystem).
+/// Called by [`drain_places_drives`] and nobody else: a sidebar with a clock
+/// would break ADR 0058's suspension rule from the first frame, and
+/// `host.volumes` is not free (it mounts and queries space on every
+/// filesystem).
 ///
-/// Un fallo NO vacía la lista que hubiera: lo que se veía sigue siendo lo
-/// último que el host dijo, y el error sale por la barra como cualquier otro.
+/// A failure does NOT empty whatever list there was: what was showing stays
+/// as the last thing the host said, and the error goes out through the bar
+/// like any other.
 pub async fn refresh_places_drives(app: &mut App, backend: &Backend) {
     let Some(id) = app.places_slot() else {
         return;
@@ -487,23 +494,22 @@ pub async fn refresh_places_drives(app: &mut App, backend: &Backend) {
     }
 }
 
-/// Teclas del popup de navegación (historial `Alt+↓` / hotlist `Ctrl+D` /
-/// volúmenes `Alt+F1`/`Alt+F2`, design §D); `ctrl+c` conserva su salida
-/// global, hardcodeado ANTES de nada. Con `name_input` activo (el `a` de
-/// hotlist abre un campo para el nombre del favorito) los
-/// imprimibles/backspace se capturan como editor de texto RAW — H1 T2
-/// decisión: NO es un comando `dialog.*`, es entrada libre, se queda
-/// hardcodeado. Fuera de `name_input`, la tecla resuelve contra el contexto
-/// `dialog` del keymap (H1 T2, issue #24); `add`/`remove` los filtra el
-/// ALLOWLIST de este overlay a `kind == Hotlist` (el historial no tiene nada
-/// que nombrar ni borrar — mismo criterio que antes de H1) y
-/// `toggle-enabled` a `kind == Volumes` (el toggle "mostrar todo" del design
-/// §D). Enter sobre un item válido NAVEGA por el flujo de cd normal, contra
-/// [`crate::app::NavPopup::target_pane`] y no `app.focus()` — historial y
-/// hotlist congelan el foco ahí, pero `-left`/`-right` congelan un LADO fijo
-/// (design §D); si el cd desde el HISTORIAL falla con `NotFound`, la entrada
-/// se retira (spec 2026-07-18) — la de hotlist y volúmenes NO (hotlist es
-/// config del usuario y un volumen no se retira porque un cd puntual falle).
+/// Navigation popup keys (history `Alt+↓` / hotlist `Ctrl+D` / volumes
+/// `Alt+F1`/`Alt+F2`, design §D); `ctrl+c` keeps its global quit, hardcoded
+/// BEFORE anything else. With `name_input` active (hotlist's `a` opens a
+/// field for the favorite's name) printables/backspace are captured as a RAW
+/// text editor — H1 T2 decision: it is NOT a `dialog.*` command, it is free
+/// input, it stays hardcoded. Outside `name_input`, the key resolves against
+/// the keymap's `dialog` context (H1 T2, issue #24); `add`/`remove` are
+/// filtered by this overlay's ALLOWLIST to `kind == Hotlist` (history has
+/// nothing to name or delete — same criterion as before H1) and
+/// `toggle-enabled` to `kind == Volumes` (design §D's "show all" toggle).
+/// Enter on a valid item NAVIGATES through the normal cd flow, against
+/// [`crate::app::NavPopup::target_pane`] and not `app.focus()` — history and
+/// hotlist freeze the focus there, but `-left`/`-right` freeze a fixed SIDE
+/// (design §D); if the cd from HISTORY fails with `NotFound`, the entry is
+/// removed (spec 2026-07-18) — hotlist's and volumes' are NOT (hotlist is
+/// user config and a volume is not removed because a one-off cd failed).
 pub async fn on_nav_popup_key(
     app: &mut App,
     backend: &Backend,
@@ -520,32 +526,33 @@ pub async fn on_nav_popup_key(
         return Cd::Cancelled;
     };
     let kind = popup.kind;
-    // SHIFT pasa (mayúsculas llegan como Char+SHIFT); ctrl/alt no escriben.
+    // SHIFT passes through (uppercase arrives as Char+SHIFT); ctrl/alt do
+    // not type.
     let plain = mods.is_empty() || mods == KeyModifiers::SHIFT;
     if name_input_key(app, code, plain).await || filter_key(app, code, plain) {
         return Cd::Cancelled;
     }
     let Some(chord) = chord_from_crossterm(mods, code) else {
-        return Cd::Cancelled; // tecla no modelada por el keymap: ignorar
+        return Cd::Cancelled; // key not modeled by the keymap: ignore
     };
     let cmd = match resolver.push(chord) {
         Resolution::Run { command: cmd, .. } => cmd,
-        // Secuencia en curso, o tecla ligada a algo que esta build no corre
-        // (K1 T4): ignorar y reiniciar el estado de resolución.
+        // Sequence in progress, or a key bound to something this build does
+        // not run (K1 T4): ignore and reset the resolution state.
         Resolution::Pending(_) | Resolution::Counting(_) | Resolution::Unavailable { .. } => {
             resolver.reset();
             return Cd::Cancelled;
         }
         Resolution::Reset => return Cd::Cancelled,
     };
-    // H1 T3: el MISMO allowlist que consume cada hint generado
-    // (`hints::DialogHints::build`, campos `nav_list`/`nav_volumes`) — una
-    // sola fuente para dispatch, aunque el hint IMPRESO es más estrecho por
-    // kind. Cubre los tres kinds (History es un subconjunto: `add`/`remove`
-    // los filtra el guard `kind == Hotlist` de más abajo, `toggle-enabled` el
-    // guard `kind == Volumes`).
+    // H1 T3: the SAME allowlist each generated hint consumes
+    // (`hints::DialogHints::build`, `nav_list`/`nav_volumes` fields) — a
+    // single source for dispatch, even though the PRINTED hint is narrower
+    // per kind. Covers all three kinds (History is a subset: `add`/`remove`
+    // are filtered by the `kind == Hotlist` guard below, `toggle-enabled` by
+    // the `kind == Volumes` guard).
     if !ALLOW_NAV_POPUP.contains(&cmd.as_str()) {
-        return Cd::Cancelled; // fuera del allowlist de este overlay: inerte
+        return Cd::Cancelled; // outside this overlay's allowlist: inert
     }
     match cmd.as_str() {
         "dialog.up" => {
@@ -557,8 +564,8 @@ pub async fn on_nav_popup_key(
         "dialog.cancel" => {
             app.nav_popup_input(PickerAction::Cancel);
         }
-        // En favoritos crea uno para el panel; en una historia o en populares,
-        // para la fila del cursor (spec 2026-09-15 D2).
+        // In favorites it creates one for the panel; in history or popular,
+        // for the cursor row (spec 2026-09-15 D2).
         "dialog.add" if kind != NavPopupKind::Volumes => {
             app.nav_popup_open_name_input();
         }
@@ -567,7 +574,7 @@ pub async fn on_nav_popup_key(
                 hotlist_remove(app, &name).await;
             }
         }
-        // Spec 2026-09-15 D2: la historia y los populares también se editan.
+        // Spec 2026-09-15 D2: history and popular are also editable.
         "dialog.remove" if matches!(kind, NavPopupKind::History | NavPopupKind::Popular) => {
             app.nav_popup_remove_selected();
         }
@@ -577,9 +584,9 @@ pub async fn on_nav_popup_key(
         "dialog.clear" if matches!(kind, NavPopupKind::History | NavPopupKind::Popular) => {
             app.nav_popup_clear();
         }
-        // Lo elegido va al OTRO panel y el foco se queda donde está. Vale para
-        // toda lista que navega: una ruta de la historia, un favorito o un
-        // volumen se abren en el otro lado igual.
+        // The chosen item goes to the OTHER pane and the focus stays where
+        // it is. Holds for every navigating list: a history path, a
+        // favorite, or a volume all open on the other side the same way.
         "dialog.confirm-other" => {
             let Some(other) = app.nav_popup_other_pane() else {
                 app.message = Some(t("host-no-other-slot"));
@@ -610,20 +617,20 @@ pub async fn on_nav_popup_key(
                 .map_or_else(|| app.focus(), NavPopup::target_pane);
             return confirm_nav_popup(app, backend, events, kind, pane).await;
         }
-        _ => {} // fuera del allowlist de este overlay (o kind): inerte
+        _ => {} // outside this overlay's (or kind's) allowlist: inert
     }
     Cd::Cancelled
 }
 
-/// Navega lo elegido en el popup al pane `to` y cierra el popup.
+/// Navigates the popup's choice to pane `to` and closes the popup.
 ///
-/// `to` es el pane del popup para `dialog.confirm` y el OTRO para
-/// `dialog.confirm-other` (spec 2026-09-15 D2); el resto es lo mismo, y por eso
-/// es una sola función. Confirm sobre un item inválido o una lista vacía es
-/// no-op: el popup sigue abierto. Si el destino salió de la HISTORIA y ya no
-/// existe, se retira de la historia de la lista (spec 2026-07-18) —la de
-/// `from`, que no tiene por qué ser `to`—; la barra ya muestra el error normal
-/// del cd fallido.
+/// `to` is the popup's pane for `dialog.confirm` and the OTHER one for
+/// `dialog.confirm-other` (spec 2026-09-15 D2); the rest is identical, and
+/// that is why this is a single function. Confirm on an invalid item or an
+/// empty list is a no-op: the popup stays open. If the destination came from
+/// HISTORY and no longer exists, it is removed from that list's history
+/// (spec 2026-07-18) — `from`'s, which need not be `to`'s —; the bar already
+/// shows the normal error for a failed cd.
 async fn confirm_nav_popup(
     app: &mut App,
     backend: &Backend,
@@ -640,8 +647,8 @@ async fn confirm_nav_popup(
     };
     let outcome = cd_in(app, backend, events, to, path.clone(), Trail::Record).await;
     if matches!(&outcome, Cd::Failed(Error::NotFound)) {
-        // Un directorio que ya no existe sale de la lista de la que vino: de la
-        // historia de `from`, o de los populares (rust-reviewer, fase 1).
+        // A directory that no longer exists leaves the list it came from:
+        // `from`'s history, or popular (rust-reviewer, phase 1).
         match kind {
             NavPopupKind::History => app.history[from].remove(&path),
             NavPopupKind::Popular => app.popular.remove(&path),
@@ -651,18 +658,18 @@ async fn confirm_nav_popup(
     outcome
 }
 
-/// Las teclas de TEXTO mientras se filtra una lista de historia o de
-/// populares (spec 2026-09-15 D2): imprimibles y borrar escriben el filtro,
-/// `Esc` lo quita, y el resto —Enter, flechas, `Supr`— sigue yendo al keymap
-/// como sin filtro. `true` si la tecla era del filtro.
+/// TEXT keys while filtering a history or popular list (spec 2026-09-15
+/// D2): printables and backspace write the filter, `Esc` removes it, and the
+/// rest — Enter, arrows, `Del` — keeps going to the keymap as if there were
+/// no filter. `true` if the key belonged to the filter.
 fn filter_key(app: &mut App, code: KeyCode, plain: bool) -> bool {
-    let Some(mut filtro) = app.nav_popup.as_ref().and_then(|p| p.filter.clone()) else {
+    let Some(mut filter) = app.nav_popup.as_ref().and_then(|p| p.filter.clone()) else {
         return false;
     };
     match code {
-        KeyCode::Char(c) if plain => filtro.push(c),
+        KeyCode::Char(c) if plain => filter.push(c),
         KeyCode::Backspace if plain => {
-            filtro.pop();
+            filter.pop();
         }
         KeyCode::Esc => {
             app.nav_popup_set_filter(None);
@@ -670,14 +677,14 @@ fn filter_key(app: &mut App, code: KeyCode, plain: bool) -> bool {
         }
         _ => return false,
     }
-    app.nav_popup_set_filter(Some(filtro));
+    app.nav_popup_set_filter(Some(filter));
     true
 }
 
-/// Las teclas mientras el nombre de un favorito está abierto (`a`): un editor
-/// de texto RAW, no comandos `dialog.*` (H1 T2). Enter guarda con el destino
-/// del popup; Esc cierra el campo sin cerrar el popup. `true` si el campo
-/// estaba abierto: mientras lo esté, toda tecla es suya.
+/// The keys while a favorite's name field is open (`a`): a RAW text editor,
+/// not `dialog.*` commands (H1 T2). Enter saves with the popup's target;
+/// Esc closes the field without closing the popup. `true` if the field was
+/// open: while it is, every key is its own.
 async fn name_input_key(app: &mut App, code: KeyCode, plain: bool) -> bool {
     let Some(input) = app.nav_popup.as_mut().and_then(|p| p.name_input.as_mut()) else {
         return false;
@@ -698,7 +705,7 @@ async fn name_input_key(app: &mut App, code: KeyCode, plain: bool) -> bool {
                 .as_mut()
                 .and_then(|p| p.name_input.take())
                 .unwrap_or_default();
-            // Input vacío = cancela (plan T5): no hay favorito sin nombre.
+            // Empty input = cancel (plan T5): there is no nameless favorite.
             if !name.is_empty() {
                 hotlist_add(app, &name).await;
             }
@@ -708,37 +715,35 @@ async fn name_input_key(app: &mut App, code: KeyCode, plain: bool) -> bool {
     true
 }
 
-/// `config::user_config_dir()` o el MISMO io `NotFound` que fabrica
-/// `persist_ui_theme` sin entorno (CI pelada): la barra lo pinta como
-/// `err-not-found` vía categoría (#73), clave existente y razonable.
+/// `config::user_config_dir()` or the SAME `NotFound` io that
+/// `persist_ui_theme` fabricates with no environment (bare CI): the bar
+/// paints it as `err-not-found` through the category (#73), an existing and
+/// reasonable key.
 fn user_config_dir_io() -> std::io::Result<std::path::PathBuf> {
     config::user_config_dir().ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "sin directorio de config de usuario",
-        )
+        std::io::Error::new(std::io::ErrorKind::NotFound, "no user config directory")
     })
 }
 
-/// Persiste el favorito `name` = el destino del popup
-/// ([`App::nav_popup_add_target`]: el cwd del pane con foco en favoritos, la
-/// fila del cursor en una historia) en el `norte.toml` del USUARIO
-/// (`spawn_blocking`, regla 2 — `persist_hotlist_add` es bloqueante por
-/// contrato). Solo si el disco fue bien se refresca la copia en `App`
-/// (consistencia con disco) y sale `msg-hotlist-saved`; un fallo io sale por
-/// categoría y la copia NO se toca.
+/// Persists the favorite `name` = the popup's target
+/// ([`App::nav_popup_add_target`]: the focused pane's cwd in favorites, the
+/// cursor row in a history) to the USER's `norte.toml` (`spawn_blocking`,
+/// rule 2 — `persist_hotlist_add` is blocking by contract). Only if the disk
+/// write succeeded is the copy in `App` refreshed (consistency with disk)
+/// and `msg-hotlist-saved` shown; an io failure goes out by category and the
+/// copy is left UNTOUCHED.
 async fn hotlist_add(app: &mut App, name: &str) {
     let Some(target) = app.nav_popup_add_target() else {
         return;
     };
     let wire = target.to_wire();
     let n = name.to_owned();
-    // Al PERFIL activo si lo hay: los favoritos son de un espacio de trabajo,
-    // y escribirlos en la capa del usuario mientras un perfil también los fija
-    // los deja tapados (ADR 0079).
-    let destino = app.config_write_dir();
+    // To the active PROFILE if there is one: favorites belong to a
+    // workspace, and writing them to the user's layer while a profile also
+    // sets them leaves them covered (ADR 0079).
+    let dest = app.config_write_dir();
     let res = tokio::task::spawn_blocking(move || -> std::io::Result<()> {
-        let dir = destino.map_or_else(user_config_dir_io, Ok)?;
+        let dir = dest.map_or_else(user_config_dir_io, Ok)?;
         config::persist_hotlist_add(&dir, &n, &wire)?;
         Ok(())
     })
@@ -746,8 +751,9 @@ async fn hotlist_add(app: &mut App, name: &str) {
     match res {
         Ok(Ok(())) => {
             app.hotlist_apply_saved(name, target);
-            // El name lo tecleó el usuario, pero un PASTE puede colar
-            // bidi/controles: por `detail_for_bar` como todo detalle (#73).
+            // The user typed the name, but a PASTE can smuggle in
+            // bidi/control characters: through `detail_for_bar` like any
+            // other detail (#73).
             app.message = Some(ta("msg-hotlist-saved", &[("name", &detail_for_bar(name))]));
         }
         Ok(Err(e)) => {
@@ -756,20 +762,21 @@ async fn hotlist_add(app: &mut App, name: &str) {
                 &[("error", &io_error_category(&e))],
             ));
         }
-        // Un panic al persistir es un bug NUESTRO: que reviente visible
-        // (criterio del binario, mismo que `config::load_async`).
+        // A panic while persisting is OUR bug: let it blow up visibly
+        // (binary's criterion, same as `config::load_async`).
         Err(e) => std::panic::resume_unwind(e.into_panic()),
     }
 }
 
-/// Retira el favorito `name` del `norte.toml` de la capa que se esté editando
-/// —el PERFIL activo si lo hay, si no la del usuario— (`spawn_blocking`, regla
-/// 2). Mismo contrato de consistencia que [`hotlist_add`].
+/// Removes the favorite `name` from the `norte.toml` of whichever layer is
+/// being edited — the active PROFILE if there is one, otherwise the user's
+/// — (`spawn_blocking`, rule 2). Same consistency contract as
+/// [`hotlist_add`].
 async fn hotlist_remove(app: &mut App, name: &str) {
     let n = name.to_owned();
-    let destino = app.config_write_dir();
+    let dest = app.config_write_dir();
     let res = tokio::task::spawn_blocking(move || -> std::io::Result<()> {
-        let dir = destino.map_or_else(user_config_dir_io, Ok)?;
+        let dir = dest.map_or_else(user_config_dir_io, Ok)?;
         config::persist_hotlist_remove(&dir, &n)?;
         Ok(())
     })

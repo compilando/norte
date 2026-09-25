@@ -1,35 +1,36 @@
-//! Paridad: el TERMINAL y la VENTANA hacen lo mismo, y las dos hacen lo que
-//! dicen las primitivas compartidas.
+//! Parity: the TERMINAL and the WINDOW do the same thing, and both do what
+//! the shared primitives say.
 //!
-//! Ningún frontend debe reimplementar una regla de presentación. Eso es fácil
-//! de decir en un comentario y difícil de mantener: basta un `sort` propio,
-//! un clamp de cursor a mano o un «esto es más cómodo así» para que dos
-//! superficies empiecen a leerse distinto sin que nada se ponga rojo.
+//! No frontend should reimplement a presentation rule. That is easy to say
+//! in a comment and hard to maintain: it only takes one homegrown `sort`, a
+//! hand-rolled cursor clamp, or a "this is more convenient this way" for two
+//! surfaces to start reading differently without anything turning red.
 //!
-//! Cada escenario se ejecuta TRES veces —contra `norte_frontend::PaneState` +
-//! `nav::History` a pelo, contra el host por sus acciones y sus fotos, y
-//! contra `norte-tui` por sus propias funciones de decisión— y se compara el
-//! estado SEMÁNTICO paso a paso: dónde está el cursor, qué hay marcado, qué
-//! directorio se ve y con qué nombres. Nunca píxeles.
+//! Each scenario runs THREE times — against bare `norte_frontend::PaneState`
+//! plus `nav::History`, against the host through its actions and snapshots, and
+//! against `norte-tui` through its own decision functions — and the
+//! SEMANTIC state is compared step by step: where the cursor is, what is
+//! marked, which directory is shown and with which names. Never pixels.
 //!
-//! **La tercera pata es la que guarda algo, y faltaba** (ADR 0097, D1). Las
-//! dos primeras miden el host contra un arnés escrito con las reglas DEL
-//! HOST: su paso `Entrar` era `selected().filter(|e| e.kind == Dir)`, que es
-//! lo que hace la ventana y no lo que hace el terminal, así que la
-//! comparación no podía fallar. La auditoría de paridad del 2026-09-05
-//! encontró diecisiete decisiones ya divergidas por debajo de este fichero.
+//! **The third leg is the one that actually catches something, and it was
+//! missing** (ADR 0097, D1). The first two measure the host against a
+//! harness written with the HOST's OWN rules: its `Enter` step was
+//! `selected().filter(|e| e.kind == Dir)`, which is what the window does and
+//! not what the terminal does, so the comparison could not fail. The
+//! 2026-09-05 parity audit found seventeen decisions already diverged
+//! beneath this file.
 //!
-//! El árbol de prueba ya trae un `.zip` y un symlink, que era la divergencia
-//! número uno del inventario: `Enter` sobre uno de los dos navegaba en el
-//! terminal y llamaba a `xdg-open` en la ventana. Las tres patas preguntan
-//! ahora por `norte_frontend::nav::enter_target`, así que la pregunta «¿esto
-//! se entra?» tiene UNA respuesta y los escenarios pueden ejercitarla.
+//! The test tree already brings a `.zip` and a symlink, which was
+//! divergence number one in the inventory: `Enter` on either navigated in
+//! the terminal and called `xdg-open` in the window. All three legs now ask
+//! `norte_frontend::nav::enter_target`, so the question "does this get
+//! entered?" has ONE answer and the scenarios can exercise it.
 //!
-//! Lo que todavía NO alcanza: un arnés de paridad caza DIVERGENCIA, no error
-//! compartido. Si las dos superficies se equivocan igual —porque las dos leen
-//! la misma primitiva— aquí sale verde. Al añadir un escenario, sabotea una
-//! sola de las patas y compruébalo rojo; estrechar la primitiva estrecha las
-//! tres y no demuestra nada.
+//! What this still does NOT reach: a parity harness catches DIVERGENCE, not
+//! a shared bug. If both surfaces get it wrong the same way — because both
+//! read the same primitive — this comes out green. When adding a scenario,
+//! sabotage just one of the legs and check it turns red; narrowing the
+//! primitive narrows all three and proves nothing.
 
 use std::sync::Arc;
 
@@ -40,56 +41,55 @@ use norte_ui_host::action::UiAction;
 use norte_ui_host::dto::SlotView;
 use norte_ui_host::{UiHost, UiHostOptions, UiSubscription, Update, ViewSnapshot, dto::UiUpdate};
 
-mod backend_falso;
-use backend_falso::{Falso, arbol_de_prueba};
+mod backend_fake;
+use backend_fake::{Fake, test_tree};
 
-/// Un paso del escenario, en vocabulario SEMÁNTICO: ni teclas ni acciones del
-/// bridge, para que la comparación no dependa de por dónde entra cada
-/// superficie.
+/// A scenario step, in SEMANTIC vocabulary: neither keys nor bridge actions,
+/// so the comparison does not depend on how each surface gets there.
 #[derive(Debug, Clone, Copy)]
-enum Paso {
-    /// Mueve el cursor tantas filas.
+enum Step {
+    /// Moves the cursor this many rows.
     Cursor(i64),
-    /// Pone el cursor en la fila que se llama así, bajando desde arriba.
+    /// Puts the cursor on the row with this name, coming down from the top.
     ///
-    /// Por NOMBRE y no por índice porque `compara` corre cada escenario con
-    /// la fila `..` puesta y quitada, y el índice de la misma entrada no es
-    /// el mismo en las dos. Cada superficie lo hace con sus propias teclas de
-    /// cursor: lo que se compara sigue siendo dónde acaba.
-    CursorA(&'static str),
-    /// Marca o desmarca la fila del cursor.
-    Marcar,
-    /// Entra en el directorio bajo el cursor.
-    Entrar,
-    /// Sube al padre.
-    Subir,
-    /// Atrás en el rastro.
-    Atras,
-    /// Adelante en el rastro.
-    Adelante,
+    /// By NAME and not by index because `compare` runs each scenario with
+    /// the `..` row both on and off, and the same entry's index is not the
+    /// same in both. Each surface does it with its own cursor keys: what is
+    /// compared is still where it ends up.
+    CursorTo(&'static str),
+    /// Marks or unmarks the cursor's row.
+    Mark,
+    /// Enters the directory under the cursor.
+    Enter,
+    /// Goes up to the parent.
+    Up,
+    /// Back in the trail.
+    Back,
+    /// Forward in the trail.
+    Forward,
 }
 
-/// Lo que se compara: el estado que un usuario podría describir en voz alta.
+/// What is compared: the state a user could describe out loud.
 #[derive(Debug, PartialEq, Eq)]
-struct Semantico {
+struct Semantic {
     dir: String,
     cursor: usize,
-    marcas: usize,
-    nombres: Vec<String>,
+    marks: usize,
+    names: Vec<String>,
 }
 
-/// El escenario corrido contra las primitivas compartidas, a pelo.
-fn via_primitivas(pasos: &[Paso], fila_de_subir: bool) -> Vec<Semantico> {
-    let arbol = arbol_de_prueba();
-    let inicio = VPath::parse("mem:///casa").expect("vpath");
-    let mut pane = PaneState::new(inicio.clone(), entradas(&arbol, &inicio));
-    pane.set_parent_row(fila_de_subir);
-    let mut historial = History::default();
-    let mut salida = vec![foto_primitivas(&pane)];
+/// The scenario run against the bare shared primitives.
+fn via_primitives(steps: &[Step], parent_row: bool) -> Vec<Semantic> {
+    let tree = test_tree();
+    let start = VPath::parse("mem:///casa").expect("vpath");
+    let mut pane = PaneState::new(start.clone(), entries_of(&tree, &start));
+    pane.set_parent_row(parent_row);
+    let mut history = History::default();
+    let mut out = vec![primitives_snapshot(&pane)];
 
-    for paso in pasos {
-        match paso {
-            Paso::Cursor(delta) => {
+    for step in steps {
+        match step {
+            Step::Cursor(delta) => {
                 for _ in 0..delta.unsigned_abs() {
                     if *delta < 0 {
                         pane.cursor_up();
@@ -98,111 +98,112 @@ fn via_primitivas(pasos: &[Paso], fila_de_subir: bool) -> Vec<Semantico> {
                     }
                 }
             }
-            Paso::CursorA(nombre) => {
+            Step::CursorTo(name) => {
                 for _ in 0..pane.entries().len() {
                     pane.cursor_up();
                 }
                 for _ in 0..pane.entries().len() {
-                    if foto_primitivas(&pane).nombres.get(pane.cursor())
-                        == Some(&(*nombre).to_owned())
+                    if primitives_snapshot(&pane).names.get(pane.cursor())
+                        == Some(&(*name).to_owned())
                     {
                         break;
                     }
                     pane.cursor_down();
                 }
             }
-            Paso::Marcar => pane.toggle_mark(),
-            Paso::Entrar => {
-                // Sobre `..`, Enter SUBE: es lo único que esa fila sabe
-                // hacer, y lo hacen las dos superficies —el TUI en
-                // `trail::nav_enter_target` y el host en `UiAction::Activate`,
-                // que ve la `Entry` sintética y navega a su ruta—. Modelarlo
-                // como «no hay operando, no pasa nada» mediría el arnés y no
-                // el producto.
+            Step::Mark => pane.toggle_mark(),
+            Step::Enter => {
+                // On `..`, Enter GOES UP: it is the only thing that row
+                // knows how to do, and both surfaces do it — the TUI in
+                // `trail::nav_enter_target` and the host in
+                // `UiAction::Activate`, which sees the synthetic `Entry` and
+                // navigates to its path. Modeling it as "no operand, nothing
+                // happens" would measure the harness and not the product.
                 //
-                // Y qué es «entrable» lo contesta `nav::enter_target`, que es
-                // la función COMPARTIDA que usan las dos superficies. Aquí
-                // había un `selected().filter(kind == Dir)` escrito a mano —o
-                // sea la regla de la ventana— y por eso esta comparación no
-                // podía fallar sobre un `.zip` o un enlace: medía el arnés y
-                // no el producto. Es la avería que la cabecera de este fichero
-                // describe, y ya se puede quitar.
-                let destino = if pane.is_parent_row(pane.cursor()) {
+                // And what is "enterable" is answered by `nav::enter_target`,
+                // the SHARED function both surfaces use. There used to be a
+                // hand-written `selected().filter(kind == Dir)` here — i.e.
+                // the window's rule — and that is why this comparison could
+                // not fail on a `.zip` or a link: it measured the harness
+                // and not the product. It is the failure this file's header
+                // describes, and it can now be removed.
+                let target = if pane.is_parent_row(pane.cursor()) {
                     pane.parent_target().cloned()
                 } else {
                     pane.selected().and_then(norte_frontend::nav::enter_target)
                 };
-                let Some(destino) = destino else {
-                    salida.push(foto_primitivas(&pane));
+                let Some(target) = target else {
+                    out.push(primitives_snapshot(&pane));
                     continue;
                 };
-                navega(&mut pane, &mut historial, &destino, Trail::Record, &arbol);
+                navigate(&mut pane, &mut history, &target, Trail::Record, &tree);
             }
-            Paso::Subir => {
-                let actual = pane.dir().clone();
-                let Some(padre) = actual.parent() else {
-                    salida.push(foto_primitivas(&pane));
+            Step::Up => {
+                let current = pane.dir().clone();
+                let Some(parent) = current.parent() else {
+                    out.push(primitives_snapshot(&pane));
                     continue;
                 };
-                pane.set_pending_focus(actual);
-                navega(&mut pane, &mut historial, &padre, Trail::Record, &arbol);
+                pane.set_pending_focus(current);
+                navigate(&mut pane, &mut history, &parent, Trail::Record, &tree);
             }
-            Paso::Atras | Paso::Adelante => {
-                let actual = pane.dir().clone();
-                let destino = if matches!(paso, Paso::Atras) {
-                    historial.step_back(actual)
+            Step::Back | Step::Forward => {
+                let current = pane.dir().clone();
+                let target = if matches!(step, Step::Back) {
+                    history.step_back(current)
                 } else {
-                    historial.step_forward(actual)
+                    history.step_forward(current)
                 };
-                let Some(destino) = destino else {
-                    salida.push(foto_primitivas(&pane));
+                let Some(target) = target else {
+                    out.push(primitives_snapshot(&pane));
                     continue;
                 };
-                navega(
+                navigate(
                     &mut pane,
-                    &mut historial,
-                    &destino,
-                    Trail::Replay(if matches!(paso, Paso::Atras) {
+                    &mut history,
+                    &target,
+                    Trail::Replay(if matches!(step, Step::Back) {
                         norte_frontend::nav::TrailStep::Back
                     } else {
                         norte_frontend::nav::TrailStep::Forward
                     }),
-                    &arbol,
+                    &tree,
                 );
             }
         }
-        salida.push(foto_primitivas(&pane));
+        out.push(primitives_snapshot(&pane));
     }
-    salida
+    out
 }
 
-/// El mismo escenario, contra el TERMINAL, por sus propias decisiones.
+/// The same scenario, against the TERMINAL, by its own decisions.
 ///
-/// Ésta es la pata que faltaba (ADR 0097, D1). Las otras dos comparan el host
-/// contra las primitivas, y el arnés de las primitivas está escrito con las
-/// reglas del host —su `Entrar` era `selected().filter(|e| e.kind == Dir)`,
-/// que es lo que hace la ventana y no lo que hace el terminal—, así que esa
-/// comparación no podía fallar por construcción.
+/// This is the leg that was missing (ADR 0097, D1). The other two compare
+/// the host against the primitives, and the primitives' harness is written
+/// with the host's rules — its `Enter` was
+/// `selected().filter(|e| e.kind == Dir)`, which is what the window does and
+/// not what the terminal does — so that comparison could not fail by
+/// construction.
 ///
-/// Aquí los pasos pasan por las funciones de decisión del TUI: `enter_action`
-/// para Enter y `nav_enter_target` por debajo, que es donde el terminal
-/// decide que un `.zip` se navega y un symlink se sigue.
-fn via_tui(pasos: &[Paso], fila_de_subir: bool) -> Vec<Semantico> {
+/// Here the steps go through the TUI's decision functions: `enter_action`
+/// for Enter and `nav_enter_target` underneath, which is where the terminal
+/// decides that a `.zip` is navigated and a symlink is followed.
+fn via_tui(steps: &[Step], parent_row: bool) -> Vec<Semantic> {
     use norte_tui::app::{App, Pane};
 
-    let arbol = arbol_de_prueba();
-    let inicio = VPath::parse("mem:///casa").expect("vpath");
+    let tree = test_tree();
+    let start = VPath::parse("mem:///casa").expect("vpath");
     let mut app = App::new(
-        Pane::new(inicio.clone(), entradas(&arbol, &inicio)),
-        Pane::new(inicio.clone(), Vec::new()),
+        Pane::new(start.clone(), entries_of(&tree, &start)),
+        Pane::new(start.clone(), Vec::new()),
     );
-    app.set_parent_row(fila_de_subir);
+    app.set_parent_row(parent_row);
     app.set_focus(0);
-    let mut salida = vec![foto_tui(&app)];
+    let mut out = vec![tui_snapshot(&app)];
 
-    for paso in pasos {
-        match paso {
-            Paso::Cursor(delta) => {
+    for step in steps {
+        match step {
+            Step::Cursor(delta) => {
                 for _ in 0..delta.unsigned_abs() {
                     if *delta < 0 {
                         app.focused_mut().move_up(1);
@@ -211,88 +212,89 @@ fn via_tui(pasos: &[Paso], fila_de_subir: bool) -> Vec<Semantico> {
                     }
                 }
             }
-            Paso::CursorA(nombre) => {
-                let filas = app.focused().entries().len();
-                app.focused_mut().move_up(filas);
-                for _ in 0..filas {
-                    if foto_tui(&app).nombres.get(app.focused().cursor())
-                        == Some(&(*nombre).to_owned())
+            Step::CursorTo(name) => {
+                let rows = app.focused().entries().len();
+                app.focused_mut().move_up(rows);
+                for _ in 0..rows {
+                    if tui_snapshot(&app).names.get(app.focused().cursor())
+                        == Some(&(*name).to_owned())
                     {
                         break;
                     }
                     app.focused_mut().move_down(1);
                 }
             }
-            Paso::Marcar => app.focused_mut().toggle_mark(),
-            Paso::Entrar => {
-                // La decisión del TERMINAL, no una copia de ella.
+            Step::Mark => app.focused_mut().toggle_mark(),
+            Step::Enter => {
+                // The TERMINAL's decision, not a copy of it.
                 match norte_tui::gestures::enter_action(&app) {
-                    norte_tui::gestures::EnterAction::Cd(dir) => cd_tui(&mut app, &dir, &arbol),
-                    norte_tui::gestures::EnterAction::Up(padre) => {
-                        let hijo = app.focused().dir().clone();
-                        app.focused_mut().set_pending_focus(hijo);
-                        cd_tui(&mut app, &padre, &arbol);
+                    norte_tui::gestures::EnterAction::Cd(dir) => cd_tui(&mut app, &dir, &tree),
+                    norte_tui::gestures::EnterAction::Up(parent) => {
+                        let child = app.focused().dir().clone();
+                        app.focused_mut().set_pending_focus(child);
+                        cd_tui(&mut app, &parent, &tree);
                     }
-                    // Abrir fuera o ver no mueve el listado: el escenario
-                    // observa el listado, así que esto es un paso quieto.
+                    // Opening externally or viewing does not move the
+                    // listing: the scenario observes the listing, so this is
+                    // a no-op step.
                     _ => {}
                 }
             }
-            Paso::Subir => {
-                let actual = app.focused().dir().clone();
-                let Some(padre) = actual.parent() else {
-                    salida.push(foto_tui(&app));
+            Step::Up => {
+                let current = app.focused().dir().clone();
+                let Some(parent) = current.parent() else {
+                    out.push(tui_snapshot(&app));
                     continue;
                 };
-                app.focused_mut().set_pending_focus(actual);
-                cd_tui(&mut app, &padre, &arbol);
+                app.focused_mut().set_pending_focus(current);
+                cd_tui(&mut app, &parent, &tree);
             }
-            Paso::Atras | Paso::Adelante => {
-                let actual = app.focused().dir().clone();
+            Step::Back | Step::Forward => {
+                let current = app.focused().dir().clone();
                 let slot = app.panes.slot_of(app.focus());
-                let destino = {
+                let target = {
                     let h = app.history.for_slot_mut(slot);
-                    if matches!(paso, Paso::Atras) {
-                        h.step_back(actual)
+                    if matches!(step, Step::Back) {
+                        h.step_back(current)
                     } else {
-                        h.step_forward(actual)
+                        h.step_forward(current)
                     }
                 };
-                let Some(destino) = destino else {
-                    salida.push(foto_tui(&app));
+                let Some(target) = target else {
+                    out.push(tui_snapshot(&app));
                     continue;
                 };
-                let filas = entradas(&arbol, &destino);
-                // `begin_listing` es el cd de VERDAD del terminal: graba el
-                // cursor del dir viejo antes de reemplazar el listado.
-                app.focused_mut().begin_listing(destino, filas, false, None);
+                let rows = entries_of(&tree, &target);
+                // `begin_listing` is the terminal's REAL cd: it records the
+                // old dir's cursor before replacing the listing.
+                app.focused_mut().begin_listing(target, rows, false, None);
             }
         }
-        salida.push(foto_tui(&app));
+        out.push(tui_snapshot(&app));
     }
-    salida
+    out
 }
 
-/// Un `cd` del terminal: registrar el paso, recordar el cursor, listar.
-fn cd_tui(app: &mut norte_tui::app::App, destino: &VPath, arbol: &Falso) {
-    let anterior = app.focused().dir().clone();
+/// A terminal `cd`: record the step, remember the cursor, list.
+fn cd_tui(app: &mut norte_tui::app::App, target: &VPath, tree: &Fake) {
+    let previous = app.focused().dir().clone();
     let slot = app.panes.slot_of(app.focus());
-    if anterior != *destino {
-        app.history.for_slot_mut(slot).record(anterior);
+    if previous != *target {
+        app.history.for_slot_mut(slot).record(previous);
     }
-    let filas = entradas(arbol, destino);
+    let rows = entries_of(tree, target);
     app.focused_mut()
-        .begin_listing(destino.clone(), filas, false, None);
+        .begin_listing(target.clone(), rows, false, None);
 }
 
-/// La misma foto semántica, leída del terminal.
-fn foto_tui(app: &norte_tui::app::App) -> Semantico {
+/// The same semantic snapshot, read from the terminal.
+fn tui_snapshot(app: &norte_tui::app::App) -> Semantic {
     let pane = app.focused();
-    Semantico {
+    Semantic {
         dir: norte_frontend::path_display(pane.dir()).0,
         cursor: pane.cursor(),
-        marcas: pane.marks_len(),
-        nombres: pane
+        marks: pane.marks_len(),
+        names: pane
             .entries()
             .iter()
             .enumerate()
@@ -311,41 +313,42 @@ fn foto_tui(app: &norte_tui::app::App) -> Semantico {
     }
 }
 
-/// El mismo ritual de navegación que el host: registrar el paso si no es el
-/// rastro reproduciéndose, recordar el cursor, y listar.
-fn navega(
+/// The same navigation ritual as the host: record the step unless the trail
+/// is replaying, remember the cursor, and list.
+fn navigate(
     pane: &mut PaneState,
-    historial: &mut History,
-    destino: &VPath,
+    history: &mut History,
+    target: &VPath,
     trail: Trail,
-    arbol: &Falso,
+    tree: &Fake,
 ) {
-    let anterior = pane.dir().clone();
-    if anterior != *destino && trail == Trail::Record {
-        historial.record(anterior);
+    let previous = pane.dir().clone();
+    if previous != *target && trail == Trail::Record {
+        history.record(previous);
     }
     pane.remember_cursor();
-    pane.set_listing(destino.clone(), entradas(arbol, destino));
+    pane.set_listing(target.clone(), entries_of(tree, target));
 }
 
-fn entradas(arbol: &Falso, dir: &VPath) -> Vec<Entry> {
-    arbol.entradas_de(dir)
+fn entries_of(tree: &Fake, dir: &VPath) -> Vec<Entry> {
+    tree.entries_of(dir)
 }
 
-fn foto_primitivas(pane: &PaneState) -> Semantico {
-    Semantico {
+fn primitives_snapshot(pane: &PaneState) -> Semantic {
+    Semantic {
         dir: norte_frontend::path_display(pane.dir()).0,
         cursor: pane.cursor(),
-        marcas: pane.marks_len(),
-        nombres: pane
+        marks: pane.marks_len(),
+        names: pane
             .entries()
             .iter()
             .enumerate()
             .map(|(i, e)| {
-                // La fila `..` se pinta `..` y no con el nombre del padre —el
-                // suyo es la ruta del padre, cuyo `file_name` en la raíz ni
-                // siquiera existe—. Es lo que hacen los dos renderers, y esta
-                // vía tiene que pintar igual o la comparación mide el arnés.
+                // The `..` row paints as `..` and not with the parent's
+                // name — its own is the parent's path, whose `file_name` at
+                // the root does not even exist. That is what both renderers
+                // do, and this path has to paint the same or the comparison
+                // measures the harness.
                 if pane.is_parent_row(i) {
                     return "..".to_owned();
                 }
@@ -360,100 +363,100 @@ fn foto_primitivas(pane: &PaneState) -> Semantico {
     }
 }
 
-/// El mismo escenario, contra el host, por sus acciones y sus fotos.
-async fn via_host(pasos: &[Paso], fila_de_subir: bool) -> Vec<Semantico> {
-    let backend = Arc::new(arbol_de_prueba());
-    let (host, primera) = UiHost::start(UiHostOptions {
+/// The same scenario, against the host, through its actions and snapshots.
+async fn via_host(steps: &[Step], parent_row: bool) -> Vec<Semantic> {
+    let backend = Arc::new(test_tree());
+    let (host, first) = UiHost::start(UiHostOptions {
         backend,
         initial_dir: VPath::parse("mem:///casa").expect("vpath"),
-        initial_dir_pedido: false,
+        initial_dir_requested: false,
         attach: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
-        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::preset_dialog_keymap("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
-        // Cada escenario se corre DOS veces, con la fila `..` apagada y
-        // encendida, y las dos vías tienen que coincidir en las dos. Correrlo
-        // solo apagada probaba el único estado en el que nadie arranca: de
-        // fábrica la fila está puesta, y el cursor nace justo encima de ella.
+        // Each scenario runs TWICE, with the `..` row off and on, and both
+        // paths have to agree on both. Running it only with it off would
+        // test the one state nobody starts in: out of the box the row is
+        // there, and the cursor is born right on top of it.
         settings: {
-            let mut cfg = norte_ui_host::ajustes_por_defecto();
-            cfg.common.ui_parent_entry = Some(fila_de_subir);
+            let mut cfg = norte_ui_host::default_settings();
+            cfg.common.ui_parent_entry = Some(parent_row);
             cfg
         },
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
         profile: None,
-        columns: norte_ui_host::columnas_por_defecto(),
-        effects: norte_ui_host::commands::Efectos::Completo,
+        columns: norte_ui_host::default_columns(),
+        effects: norte_ui_host::commands::Effects::Full,
         log_ring: None,
     })
     .await
-    .expect("arranca");
+    .expect("starts");
     let mut sub = host.subscribe();
-    let mut salida = vec![foto_host(&primera)];
-    // La generación VIVA del listado. Una acción de fila la lleva porque sin
-    // ella la clave es un índice, y este arnés navega entre pasos: el índice
-    // de la pantalla anterior nombraría otro fichero.
-    let mut epoca = listado_de(&primera).generation;
+    let mut out = vec![host_snapshot(&first)];
+    // The listing's LIVE generation. A row action carries it because
+    // without it the key is an index, and this harness navigates between
+    // steps: the previous screen's index would name a different file.
+    let mut generation = listing_of(&first).generation;
 
-    for paso in pasos {
-        let (accion, navega) = match paso {
-            Paso::Cursor(delta) => (
+    for step in steps {
+        let (action, navigates) = match step {
+            Step::Cursor(delta) => (
                 UiAction::MoveCursor {
                     slot_id: 1,
                     delta: *delta,
                 },
                 false,
             ),
-            Paso::CursorA(nombre) => {
-                // De una sola acción: esta superficie mueve el cursor por
-                // DELTA, así que la fila buscada se convierte en uno. Lo que
-                // se compara es dónde acaba, no cuántas teclas costó.
-                let actual = salida.last().expect("hay foto");
-                let destino = actual
-                    .nombres
+            Step::CursorTo(name) => {
+                // As a single action: this surface moves the cursor by
+                // DELTA, so the sought row becomes one. What is compared is
+                // where it ends up, not how many keystrokes it cost.
+                let current = out.last().expect("there is a snapshot");
+                let target = current
+                    .names
                     .iter()
-                    .position(|n| n == nombre)
-                    .unwrap_or(actual.cursor);
+                    .position(|n| n == name)
+                    .unwrap_or(current.cursor);
                 let delta =
-                    i64::try_from(destino).unwrap_or(0) - i64::try_from(actual.cursor).unwrap_or(0);
+                    i64::try_from(target).unwrap_or(0) - i64::try_from(current.cursor).unwrap_or(0);
                 (UiAction::MoveCursor { slot_id: 1, delta }, false)
             }
-            Paso::Marcar => {
-                let actual = salida.last().expect("hay foto");
+            Step::Mark => {
+                let current = out.last().expect("there is a snapshot");
                 (
                     UiAction::ToggleMark {
                         slot_id: 1,
-                        key: norte_ui_host::RowKey(u64::try_from(actual.cursor).unwrap_or(0)),
-                        generation: epoca,
+                        key: norte_ui_host::RowKey(u64::try_from(current.cursor).unwrap_or(0)),
+                        generation,
                     },
                     false,
                 )
             }
-            Paso::Entrar => {
-                let actual = salida.last().expect("hay foto");
+            Step::Enter => {
+                let current = out.last().expect("there is a snapshot");
                 (
                     UiAction::Activate {
                         slot_id: 1,
-                        key: norte_ui_host::RowKey(u64::try_from(actual.cursor).unwrap_or(0)),
-                        generation: epoca,
+                        key: norte_ui_host::RowKey(u64::try_from(current.cursor).unwrap_or(0)),
+                        generation,
                     },
                     true,
                 )
             }
-            Paso::Subir => (UiAction::Parent { slot_id: 1 }, true),
-            Paso::Atras => (
+            Step::Up => (UiAction::Parent { slot_id: 1 }, true),
+            Step::Back => (
                 UiAction::History {
                     slot_id: 1,
                     back: true,
                 },
                 true,
             ),
-            Paso::Adelante => (
+            Step::Forward => (
                 UiAction::History {
                     slot_id: 1,
                     back: false,
@@ -461,45 +464,44 @@ async fn via_host(pasos: &[Paso], fila_de_subir: bool) -> Vec<Semantico> {
                 true,
             ),
         };
-        let ack = host.dispatch(accion).await.expect("host vivo");
-        // Una navegación que no se puede hacer (raíz, rastro agotado, fila
-        // que no es directorio) deja la pantalla como estaba: es el MISMO
-        // desenlace que en las primitivas.
-        // Sin adivinar si va a llegar una foto: se espera un momento por si
-        // la pantalla se mueve sola —un `cd` la mueve— y, si no se mueve, se
-        // pide.
+        let ack = host.dispatch(action).await.expect("host alive");
+        // A navigation that cannot happen (root, exhausted trail, a row that
+        // is not a directory) leaves the screen as it was: it is the SAME
+        // outcome as in the primitives.
+        // Without guessing whether a snapshot will arrive: it waits a moment
+        // in case the screen moves on its own — a `cd` moves it — and, if it
+        // does not move, it is requested.
         //
-        // Antes se deducía del acuse (`navega && Applied`), y eso era el
-        // arnés encodificando una regla del producto: `Activate` sobre un
-        // fichero contesta `Applied` porque LO ABRE FUERA, así que el
-        // escenario se quedaba esperando un listado que nunca iba a existir.
-        // Deducirlo es además justo lo que este fichero no puede hacer: si
-        // supiera qué navega, no estaría midiendo si las dos superficies
-        // están de acuerdo en qué navega.
-        let _ = (navega, &ack);
-        let foto = match espera_foto_opcional(&mut sub).await {
+        // It used to be inferred from the ack (`navigates && Applied`), and
+        // that was the harness encoding a rule of the product: `Activate` on
+        // a file answers `Applied` because IT OPENS EXTERNALLY, so the
+        // scenario would sit waiting for a listing that was never going to
+        // exist. Inferring it is also exactly what this file must not do: if
+        // it knew what navigates, it would not be measuring whether the two
+        // surfaces agree on what navigates.
+        let _ = (navigates, &ack);
+        let snap = match optional_next_snapshot(&mut sub).await {
             Some(f) => f,
-            None => pide_foto(&host, &mut sub).await,
+            None => request_snapshot(&host, &mut sub).await,
         };
-        epoca = listado_de(&foto).generation;
-        salida.push(foto_host(&foto));
+        generation = listing_of(&snap).generation;
+        out.push(host_snapshot(&snap));
     }
-    salida
+    out
 }
 
-/// Una foto que llegue SOLA, o `None` si la pantalla no se movió.
+/// A snapshot that arrives ON ITS OWN, or `None` if the screen did not move.
 ///
-/// El plazo es el presupuesto de FALLO: en el camino verde —un `cd`— la foto
-/// ya está esperando, y en el que no se mueve nada este plazo se gasta entero
-/// una vez por paso.
-async fn espera_foto_opcional(sub: &mut UiSubscription) -> Option<ViewSnapshot> {
+/// The deadline is the FAILURE budget: on the green path — a `cd` — the
+/// snapshot is already waiting, and on the one where nothing moves this
+/// whole deadline is spent once per step.
+async fn optional_next_snapshot(sub: &mut UiSubscription) -> Option<ViewSnapshot> {
     for _ in 0..20 {
-        let siguiente =
-            tokio::time::timeout(std::time::Duration::from_millis(100), sub.recv()).await;
-        let Ok(recibido) = siguiente else {
+        let next = tokio::time::timeout(std::time::Duration::from_millis(100), sub.recv()).await;
+        let Ok(received) = next else {
             return None;
         };
-        if let Update::Message(m) = recibido.expect("el host sigue vivo")
+        if let Update::Message(m) = received.expect("the host is still alive")
             && let UiUpdate::Snapshot(s) = m.payload
         {
             return Some(*s);
@@ -508,223 +510,220 @@ async fn espera_foto_opcional(sub: &mut UiSubscription) -> Option<ViewSnapshot> 
     None
 }
 
-async fn espera_foto(sub: &mut UiSubscription) -> ViewSnapshot {
+async fn wait_for_snapshot(sub: &mut UiSubscription) -> ViewSnapshot {
     for _ in 0..20 {
-        let siguiente = tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv())
+        let next = tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv())
             .await
-            .expect("una foto, no un cuelgue")
-            .expect("el host sigue vivo");
-        if let Update::Message(m) = siguiente
+            .expect("a snapshot, not a hang")
+            .expect("the host is still alive");
+        if let Update::Message(m) = next
             && let UiUpdate::Snapshot(s) = m.payload
         {
             return *s;
         }
     }
-    panic!("no llegó ninguna foto");
+    panic!("no snapshot ever arrived");
 }
 
-async fn pide_foto(host: &UiHost, sub: &mut UiSubscription) -> ViewSnapshot {
-    host.dispatch(UiAction::Resync).await.expect("host vivo");
-    espera_foto(sub).await
+async fn request_snapshot(host: &UiHost, sub: &mut UiSubscription) -> ViewSnapshot {
+    host.dispatch(UiAction::Resync).await.expect("host alive");
+    wait_for_snapshot(sub).await
 }
 
-/// El listado de una foto.
-fn listado_de(snap: &ViewSnapshot) -> &norte_ui_host::dto::BrowserSlotView {
+/// A snapshot's listing.
+fn listing_of(snap: &ViewSnapshot) -> &norte_ui_host::dto::BrowserSlotView {
     let SlotView::Browser(b) = snap
         .slots
         .iter()
         .find(|s| matches!(s, SlotView::Browser(_)))
-        .expect("hay listado")
+        .expect("there is a listing")
     else {
-        unreachable!("filtrado arriba")
+        unreachable!("filtered above")
     };
     b
 }
 
-fn foto_host(snap: &ViewSnapshot) -> Semantico {
+fn host_snapshot(snap: &ViewSnapshot) -> Semantic {
     let SlotView::Browser(b) = snap
         .slots
         .iter()
         .find(|s| matches!(s, SlotView::Browser(_)))
-        .expect("hay listado")
+        .expect("there is a listing")
     else {
-        unreachable!("filtrado arriba")
+        unreachable!("filtered above")
     };
-    Semantico {
+    Semantic {
         dir: b.path_display.clone(),
         cursor: b.cursor.map_or(0, |k| usize::try_from(k.0).unwrap_or(0)),
-        marcas: usize::try_from(b.marks).unwrap_or(0),
-        nombres: b.rows.iter().map(|r| r.display_name.clone()).collect(),
+        marks: usize::try_from(b.marks).unwrap_or(0),
+        names: b.rows.iter().map(|r| r.display_name.clone()).collect(),
     }
 }
 
-/// Corre un escenario por las dos vías y compara paso a paso.
-async fn compara(nombre: &str, pasos: &[Paso]) {
-    // Las dos configuraciones de la fila `..`. La encendida es la de fábrica
-    // y la que ve cualquiera que abra norte; la apagada se sigue corriendo
-    // porque es una opción de verdad y su listado tiene otros índices.
-    for fila_de_subir in [false, true] {
-        let etiqueta = if fila_de_subir {
-            "con fila `..`"
+/// Runs a scenario through both paths and compares step by step.
+async fn compare(name: &str, steps: &[Step]) {
+    // Both configurations of the `..` row. On is the factory default and
+    // what anyone opening norte sees; off is still run because it is a real
+    // option and its listing has different indices.
+    for parent_row in [false, true] {
+        let label = if parent_row {
+            "with `..` row"
         } else {
-            "sin fila `..`"
+            "without `..` row"
         };
-        let esperado = via_primitivas(pasos, fila_de_subir);
-        // En caja: el futuro que monta el host entero pasa del umbral de
-        // `clippy::large_futures` en cuanto el controlador gana un campo, y
-        // copiarlo por la pila de cada test no mide nada.
-        let obtenido = Box::pin(via_host(pasos, fila_de_subir)).await;
+        let expected = via_primitives(steps, parent_row);
+        // Boxed: the future that builds the whole host goes over
+        // `clippy::large_futures`'s threshold as soon as the controller
+        // gains one more field, and copying it on every test's stack
+        // measures nothing.
+        let got = Box::pin(via_host(steps, parent_row)).await;
         assert_eq!(
-            esperado.len(),
-            obtenido.len(),
-            "[{nombre}, {etiqueta}] distinto número de pasos observados"
+            expected.len(),
+            got.len(),
+            "[{name}, {label}] different number of steps observed"
         );
-        for (i, (a, b)) in esperado.iter().zip(obtenido.iter()).enumerate() {
+        for (i, (a, b)) in expected.iter().zip(got.iter()).enumerate() {
             assert_eq!(
                 a, b,
-                "[{nombre}, {etiqueta}] paso {i}: el host y las primitivas divergen"
+                "[{name}, {label}] step {i}: the host and the primitives diverge"
             );
         }
 
-        // Y la comparación que de verdad guarda algo: los DOS frontends, uno
-        // contra otro. Las de arriba miden al host contra un arnés escrito
-        // con las reglas del host.
-        let terminal = via_tui(pasos, fila_de_subir);
+        // And the comparison that actually catches something: the TWO
+        // frontends, against each other. The ones above measure the host
+        // against a harness written with the host's rules.
+        let terminal = via_tui(steps, parent_row);
         assert_eq!(
             terminal.len(),
-            obtenido.len(),
-            "[{nombre}, {etiqueta}] el terminal y la ventana observan distinto número de pasos"
+            got.len(),
+            "[{name}, {label}] the terminal and the window observe a different number of steps"
         );
-        for (i, (a, b)) in terminal.iter().zip(obtenido.iter()).enumerate() {
+        for (i, (a, b)) in terminal.iter().zip(got.iter()).enumerate() {
             assert_eq!(
                 a, b,
-                "[{nombre}, {etiqueta}] paso {i}: el TERMINAL y la VENTANA divergen"
+                "[{name}, {label}] step {i}: the TERMINAL and the WINDOW diverge"
             );
         }
     }
 }
 
-/// Listar, moverse y marcar.
+/// Listing, moving and marking.
 #[tokio::test]
-async fn listar_moverse_marcar() {
-    compara(
-        "listar → mover → marcar",
-        &[Paso::Cursor(1), Paso::Marcar, Paso::Cursor(1), Paso::Marcar],
+async fn listing_moving_marking() {
+    compare(
+        "list → move → mark",
+        &[Step::Cursor(1), Step::Mark, Step::Cursor(1), Step::Mark],
     )
     .await;
 }
 
-/// El cursor topa en los extremos igual en las dos superficies.
+/// The cursor stops at both ends the same way on both surfaces.
 #[tokio::test]
-async fn el_cursor_topa_igual() {
-    compara(
-        "cursor a los extremos",
-        &[Paso::Cursor(-5), Paso::Cursor(99), Paso::Cursor(1)],
+async fn the_cursor_stops_the_same_way() {
+    compare(
+        "cursor to the ends",
+        &[Step::Cursor(-5), Step::Cursor(99), Step::Cursor(1)],
     )
     .await;
 }
 
-/// Entrar, volver, avanzar y subir: el rastro y la memoria del cursor se
-/// comportan igual.
+/// Enter, go back, go forward and go up: the trail and the cursor's memory
+/// behave the same.
 #[tokio::test]
-async fn entrar_atras_adelante_subir() {
-    compara(
-        "abrir dir → atrás → adelante → subir",
-        &[
-            Paso::Entrar,
-            Paso::Atras,
-            Paso::Adelante,
-            Paso::Subir,
-            Paso::Atras,
-        ],
+async fn enter_back_forward_up() {
+    compare(
+        "open dir → back → forward → up",
+        &[Step::Enter, Step::Back, Step::Forward, Step::Up, Step::Back],
     )
     .await;
 }
 
-/// `Enter` sobre un COMPRIMIDO entra en él, en las dos superficies.
+/// `Enter` on a COMPRESSED file enters it, on both surfaces.
 ///
-/// La divergencia número uno del inventario, y la que este arnés no podía
-/// tocar: su árbol solo tenía directorios y ficheros, así que el paso
-/// `Entrar` nunca se encontraba con nada sobre lo que las dos pudieran
-/// contestar distinto. El terminal navegaba al `zip+…!/` y la ventana se lo
-/// daba a `xdg-open`, y esta comparación pasaba verde por debajo.
+/// Divergence number one in the inventory, and the one this harness could
+/// not touch: its tree only had directories and files, so the `Enter` step
+/// never ran into anything the two could answer differently about. The
+/// terminal navigated to the `zip+…!/` and the window handed it to
+/// `xdg-open`, and this comparison passed green underneath.
 #[tokio::test]
-async fn entrar_en_un_comprimido_es_lo_mismo_en_las_dos() {
-    compara(
-        "cursor al zip → entrar → atrás",
-        &[Paso::CursorA("cosas.zip"), Paso::Entrar, Paso::Atras],
+async fn entering_a_compressed_file_is_the_same_on_both() {
+    compare(
+        "cursor to the zip → enter → back",
+        &[Step::CursorTo("cosas.zip"), Step::Enter, Step::Back],
     )
     .await;
 }
 
-/// Y sobre un ENLACE, igual: se sigue sin resolver a dónde apunta.
+/// And on a SYMLINK, the same: it is still followed without resolving where
+/// it points.
 ///
-/// Que el provider liste o falle es cosa suya; lo que se compara es que las
-/// dos superficies hagan la MISMA pregunta. Aquí el enlace lleva a un
-/// directorio que sí se lista, que es el caso en el que un desacuerdo se ve.
+/// Whether the provider lists or fails is its own business; what is compared
+/// is that both surfaces ask the SAME question. Here the link leads to a
+/// directory that does get listed, which is the case where a disagreement
+/// shows.
 #[tokio::test]
-async fn entrar_en_un_enlace_es_lo_mismo_en_las_dos() {
-    compara(
-        "cursor al enlace → entrar → subir",
-        &[Paso::CursorA("atajo"), Paso::Entrar, Paso::Subir],
+async fn entering_a_symlink_is_the_same_on_both() {
+    compare(
+        "cursor to the link → enter → up",
+        &[Step::CursorTo("atajo"), Step::Enter, Step::Up],
     )
     .await;
 }
 
-/// Y sobre un FICHERO corriente, `Enter` no navega en ninguna de las dos.
+/// And on a plain FILE, `Enter` navigates on neither.
 ///
-/// La otra mitad del contrato: si `enter_target` se volviera permisivo, los
-/// dos tests de arriba seguirían verdes y este se pondría rojo.
+/// The other half of the contract: if `enter_target` became permissive, the
+/// two tests above would stay green and this one would turn red.
 #[tokio::test]
-async fn entrar_en_un_fichero_no_navega_en_ninguna() {
-    compara(
-        "cursor a un fichero → entrar",
-        &[Paso::CursorA("notas.txt"), Paso::Entrar],
+async fn entering_a_file_navigates_on_neither() {
+    compare(
+        "cursor to a file → enter",
+        &[Step::CursorTo("notas.txt"), Step::Enter],
     )
     .await;
 }
 
-/// Un escenario que mezcla marcas y navegación: las marcas NO sobreviven a un
-/// listado nuevo, y eso también tiene que coincidir.
+/// A scenario mixing marks and navigation: marks do NOT survive a new
+/// listing, and that also has to match.
 #[tokio::test]
-async fn las_marcas_no_sobreviven_a_un_cd() {
-    compara(
-        "marcar → entrar → volver",
-        &[Paso::Marcar, Paso::Entrar, Paso::Atras],
+async fn marks_do_not_survive_a_cd() {
+    compare(
+        "mark → enter → go back",
+        &[Step::Mark, Step::Enter, Step::Back],
     )
     .await;
 }
 
-/// `[profile.start]` abre el mismo directorio en las dos superficies, y solo
-/// la primera vez en las dos (ADR 0098).
+/// `[profile.start]` opens the same directory on both surfaces, and only the
+/// first time on both (ADR 0098).
 ///
-/// Fuera del arnés de `Paso` porque no es una navegación: es el ARRANQUE de
-/// cada frontend con la misma configuración y sin sesión. Y hace falta que sea
-/// una comparación y no dos tests sueltos, porque las dos averías que la
-/// revisión encontró eran exactamente de esta forma —el terminal no sembraba
-/// nunca y la ventana sembraba de más— y cada frontend por su lado se veía
-/// verde: los dos llamaban bien a la función compartida y la llamaban en el
-/// sitio equivocado.
+/// Outside the `Step` harness because it is not a navigation: it is each
+/// frontend's STARTUP with the same configuration and no session. And it
+/// has to be one comparison and not two separate tests, because the two
+/// bugs the review found were exactly this shape — the terminal never
+/// seeded and the window seeded too much — and each frontend looked green on
+/// its own: both called the shared function correctly and called it in the
+/// wrong place.
 #[tokio::test]
-async fn profile_start_abre_lo_mismo_en_las_dos() {
+async fn profile_start_opens_the_same_thing_on_both() {
     let start =
         std::collections::BTreeMap::from([(1, VPath::parse("mem:///casa/fotos").expect("vpath"))]);
 
-    // La VENTANA: arranca con la configuración y sin sesión que leer.
-    let backend = Arc::new(arbol_de_prueba());
-    let (host, primera) = UiHost::start(UiHostOptions {
+    // The WINDOW: starts with the configuration and no session to read.
+    let backend = Arc::new(test_tree());
+    let (host, first) = UiHost::start(UiHostOptions {
         backend,
         initial_dir: VPath::parse("mem:///casa").expect("vpath"),
-        initial_dir_pedido: false,
+        initial_dir_requested: false,
         attach: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
-        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::preset_dialog_keymap("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
         settings: {
-            let mut cfg = norte_ui_host::ajustes_por_defecto();
+            let mut cfg = norte_ui_host::default_settings();
             cfg.common.profile_start = start.clone();
             cfg
         },
@@ -732,21 +731,21 @@ async fn profile_start_abre_lo_mismo_en_las_dos() {
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
         profile: None,
-        columns: norte_ui_host::columnas_por_defecto(),
-        effects: norte_ui_host::commands::Efectos::Completo,
+        columns: norte_ui_host::default_columns(),
+        effects: norte_ui_host::commands::Effects::Full,
         log_ring: None,
     })
     .await
-    .expect("arranca");
-    let ventana = listado_de(&primera).path_display.clone();
+    .expect("starts");
+    let window = listing_of(&first).path_display.clone();
     drop(host);
 
-    // El TERMINAL: el mismo arranque, por su propio camino.
-    let arbol = arbol_de_prueba();
-    let inicio = VPath::parse("mem:///casa").expect("vpath");
+    // The TERMINAL: the same startup, by its own path.
+    let tree = test_tree();
+    let start_dir = VPath::parse("mem:///casa").expect("vpath");
     let mut app = norte_tui::app::App::new(
-        norte_tui::app::Pane::new(inicio.clone(), entradas(&arbol, &inicio)),
-        norte_tui::app::Pane::new(inicio, Vec::new()),
+        norte_tui::app::Pane::new(start_dir.clone(), entries_of(&tree, &start_dir)),
+        norte_tui::app::Pane::new(start_dir, Vec::new()),
     );
     app.apply_session_value(
         norte_frontend::session::SCHEMA_VERSION,
@@ -756,19 +755,19 @@ async fn profile_start_abre_lo_mismo_en_las_dos() {
     let terminal = norte_frontend::path_display(
         app.panes
             .browser(norte_frontend::layout::SlotId(1))
-            .expect("hay listado")
+            .expect("there is a listing")
             .dir(),
     )
     .0;
 
     assert!(
-        ventana.ends_with("/casa/fotos"),
-        "la ventana abre donde dice el perfil: {ventana}"
+        window.ends_with("/casa/fotos"),
+        "the window opens where the profile says: {window}"
     );
-    assert_eq!(terminal, ventana, "y el terminal abre lo mismo");
+    assert_eq!(terminal, window, "and the terminal opens the same thing");
 
-    // Y las dos solo la PRIMERA vez: volver a entrar al perfil no saca al
-    // lector de donde estaba.
+    // And both only the FIRST time: re-entering the profile does not pull
+    // the reader out of where they were.
     app.adoptar_pane(
         norte_frontend::layout::SlotId(1),
         norte_tui::app::Pane::new(VPath::parse("mem:///casa/docs").expect("vpath"), Vec::new()),
@@ -777,6 +776,6 @@ async fn profile_start_abre_lo_mismo_en_las_dos() {
     );
     assert!(
         app.seed_profile_start(&start).is_empty(),
-        "sembrar es de la primera vez, también en el terminal"
+        "seeding is a first-time thing, in the terminal too"
     );
 }

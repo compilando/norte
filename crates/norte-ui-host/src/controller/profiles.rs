@@ -1,419 +1,430 @@
-//! Perfiles de configuración: elegirlos, aplicarlos y guardarlos.
+//! Configuration profiles: choosing them, applying them, and saving them.
 //!
-//! Parte de `controller`: son métodos de `Estado`, movidos aquí sin
-//! tocarlos (ADR 0086). El único escritor sigue siendo el actor.
+//! Part of `controller`: these are methods of `State`, moved here without
+//! touching them (ADR 0086). The only writer is still the actor.
 
-// Estos módulos son el mismo `impl Estado` partido en trozos, así que usan
-// los mismos imports que el padre. Enumerarlos aquí sería una lista de
-// cuarenta líneas por fichero, en 32 ficheros, que se desincroniza en cuanto
-// el padre importa algo — `super::*` la sigue sola.
+// These modules are the same `impl State` split into pieces, so they use
+// the same imports as the parent. Listing them here would be a forty-line
+// list per file, across 32 files, that goes out of sync the moment the
+// parent imports something — `super::*` keeps it in sync on its own.
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
-/// El selector de tema abierto.
+/// The open theme selector.
 ///
-/// Mismo modelo que el del terminal: la lista, el cursor, y el que había
-/// puesto al abrir — sin el último, `Escape` dejaría puesto lo que el cursor
-/// rozó de paso, que es cambiar de tema sin querer.
-pub(super) struct SeleccionDeTema {
-    /// Los presets, en el orden en que se declaran.
-    pub(super) nombres: Vec<String>,
-    /// Cuál está señalado.
+/// Same model as the terminal's: the list, the cursor, and what was set on
+/// opening — without the last one, `Escape` would leave whatever the cursor
+/// brushed past in place, which is changing the theme by accident.
+pub(super) struct ThemeSelection {
+    /// The presets, in the order they are declared.
+    pub(super) names: Vec<String>,
+    /// Which one is pointed at.
     pub(super) cursor: usize,
-    /// El que estaba puesto al abrir, ENTERO y no su nombre.
+    /// The one that was set on opening, WHOLE and not just its name.
     ///
-    /// Entero porque el que había puede no ser un preset —un fichero de tema
-    /// del usuario lo es igual— y volver a resolverlo por nombre lo perdería.
-    /// La lista solo ofrece presets; lo que se restaura es lo que había.
+    /// Whole because the one that was set might not be a preset — a user
+    /// theme file is one just as much — and resolving it again by name would
+    /// lose it. The list only offers presets; what gets restored is what was
+    /// there.
     pub(super) previo: Box<crate::pickers::HostTheme>,
 }
 
-/// Qué de un perfil NO se puede aplicar sin reiniciar ESTA VENTANA.
+/// What about a profile CANNOT be applied without restarting THIS WINDOW.
 ///
-/// Medido, no supuesto, y distinto de la lista del terminal — por eso no se
-/// comparte. Aquí el tema SÍ se aplica: el catálogo vuelve a cruzar cuando
-/// cambia, y el renderer reenchufa sus variables CSS.
+/// Measured, not assumed, and different from the terminal's list — which is
+/// why it is not shared. Here the theme IS applied: the catalogue crosses
+/// over again when it changes, and the renderer replugs its CSS variables.
 ///
-/// Las FUENTES y `reduce_motion` viajan por ese mismo catálogo y se aplican al
-/// ARRANCAR, pero no en un cambio de perfil: lo único que provoca un catálogo
-/// nuevo es el tema, y ese camino conserva la apariencia que había en vez de
-/// releerla. Hacerlas calientes es la pregunta de si esta ventana recarga su
-/// configuración en caliente, que tiene ADR propia pendiente — así que hasta
-/// entonces se DICE, que es lo que esta lista existe para hacer.
+/// FONTS and `reduce_motion` travel through that same catalogue and are
+/// applied on STARTUP, but not on a profile change: the only thing that
+/// triggers a new catalogue is the theme, and that path keeps the appearance
+/// that was there instead of rereading it. Making them hot is the question of
+/// whether this window reloads its configuration live, which has its own ADR
+/// pending — so until then it is SAID, which is what this list exists to do.
 ///
-/// `[ui] lang` tampoco: `norte_i18n::force` corre una vez por proceso.
+/// `[ui] lang` neither: `norte_i18n::force` runs once per process.
 ///
-/// Un cambio que se callara esto sería un cambio que miente (ADR 0079, D8).
-fn fuera_de_alcance_en_caliente(
-    antes: &norte_config::CommonConfig,
-    despues: &norte_config::CommonConfig,
+/// A change that stayed quiet about this would be a change that lies (ADR
+/// 0079, D8).
+fn out_of_scope_hot(
+    before: &norte_config::CommonConfig,
+    after: &norte_config::CommonConfig,
 ) -> Vec<&'static str> {
-    let mut fuera = Vec::new();
-    if antes.ui_lang != despues.ui_lang {
-        fuera.push("ui.lang");
+    let mut out = Vec::new();
+    if before.ui_lang != after.ui_lang {
+        out.push("ui.lang");
     }
-    if antes.ui_font != despues.ui_font
-        || antes.ui_mono_font != despues.ui_mono_font
-        || antes.ui_font_size != despues.ui_font_size
+    if before.ui_font != after.ui_font
+        || before.ui_mono_font != after.ui_mono_font
+        || before.ui_font_size != after.ui_font_size
     {
-        fuera.push("ui.font");
+        out.push("ui.font");
     }
-    if antes.ui_reduce_motion != despues.ui_reduce_motion {
-        fuera.push("ui.reduce_motion");
+    if before.ui_reduce_motion != after.ui_reduce_motion {
+        out.push("ui.reduce_motion");
     }
-    fuera
+    out
 }
 
-impl Estado {
-    /// El perfil cargó (o no): se aplica todo lo que se puede aplicar sin
-    /// reiniciar, y se DICE lo que no.
+impl State {
+    /// The profile loaded (or did not): everything that can be applied
+    /// without restarting is applied, and what cannot is SAID.
     ///
-    /// El orden importa. Primero el tema, que es lo que se ve; después el
-    /// keymap entero, las columnas y los favoritos; y al final la disposición
-    /// que el perfil nombre, porque cambia los huecos y todo lo anterior tiene
-    /// que estar puesto cuando se re-listen.
+    /// Order matters. First the theme, which is what is seen; then the whole
+    /// keymap, the columns and the favorites; and last the layout the profile
+    /// names, because it changes the slots and everything before it has to
+    /// be in place when they are relisted.
     ///
-    /// Un perfil que NO carga no cambia nada: se sigue donde estabas y se dice
-    /// por qué (ADR 0079, D7).
-    pub(super) fn aplicar_perfil(
+    /// A profile that does NOT load changes nothing: you stay where you were
+    /// and it says why (ADR 0079, D7).
+    pub(super) fn apply_profile(
         &mut self,
-        nombre: &std::ffi::OsStr,
-        cargada: Result<norte_frontend::config::FrontendConfig, &'static str>,
+        name: &std::ffi::OsStr,
+        loaded: Result<norte_frontend::config::FrontendConfig, &'static str>,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        let cfg = match cargada {
+        let cfg = match loaded {
             Ok(c) => c,
-            Err(clave) => return self.decir(clave),
+            Err(key) => return self.say(key),
         };
-        self.perfil_activo = Some(nombre.to_os_string());
-        self.selector_perfil = None;
-        let fuera = self.aplicar_config(cfg, backend, buzon);
-        // Y `[profile.start]`: dónde abre cada hueco del que la sesión no sabe
-        // nada. Es lo que hace útil un perfil recién creado o uno que llega de
-        // otra máquina — sin esto, entrar en «trabajo» dejaba los dos paneles
-        // donde estaban y el perfil solo cambiaba los colores.
+        self.profile_active = Some(name.to_os_string());
+        self.selector_profile = None;
+        let out = self.apply_config(cfg, backend, mailbox);
+        // And `[profile.start]`: where each slot the session knows nothing
+        // about opens. That is what makes a freshly created profile, or one
+        // arriving from another machine, useful — without this, switching
+        // into "work" left both panels where they were and the profile only
+        // changed the colors.
         //
-        // Va DESPUÉS de la disposición porque el hueco tiene que existir para
-        // poder sembrarlo, y por `navegar_hueco` porque ahí ya puede haber una
-        // petición en vuelo del listado anterior: un testigo nuevo la releva,
-        // y poner el dir a mano dejaría aterrizar la vieja encima.
+        // It goes AFTER the layout because the slot has to exist to be able
+        // to seed it, and through `navigate_slot` because there may already
+        // be a request in flight for the previous listing: a new token
+        // supersedes it, and setting the dir by hand would let the old one
+        // land on top.
         //
-        // `Seed` y no `Record`: sembrar no es un paso que el lector anduvo, y
-        // meter en el «atrás» de este perfil el directorio del anterior es
-        // ofrecer una vuelta a un sitio del que nunca se vino. Es además lo
-        // que hace el terminal, que siembra construyendo el pane de cero.
+        // `Seed` and not `Record`: seeding is not a step the reader walked,
+        // and putting the previous profile's directory into this one's
+        // "back" is offering a way back to a place you never came from. It is
+        // also what the terminal does, seeding by building the pane from
+        // scratch.
         //
-        // Los parches que `navegar_hueco` devuelve se DESCARTAN, igual que los
-        // de la disposición y por lo mismo: esto acaba en una foto entera. Se
-        // gastan números de secuencia que el renderer no llega a ver, y no es
-        // un agujero — una foto cierra cualquier hueco de la secuencia, que es
-        // justo para lo que existe.
-        for (id, destino) in self.siembra_de_perfil() {
-            let _ = self.navegar_hueco(id, &destino, Trail::Seed, backend, buzon);
+        // The patches `navigate_slot` returns are DISCARDED, same as the
+        // layout's and for the same reason: this ends in a whole snapshot.
+        // Sequence numbers the renderer never gets to see are spent, and it
+        // is not a hole — a snapshot closes any gap in the sequence, which is
+        // exactly what it exists for.
+        for (id, target) in self.profile_seed() {
+            let _ = self.navigate_slot(id, &target, Trail::Seed, backend, mailbox);
         }
-        let mut cambios = Vec::new();
-        // Y lo que el FICHERO del perfil trae y no se entiende, que gana a los
-        // otros dos mensajes: «no se pudo aplicar en caliente» describe un
-        // límite de este proceso, y esto describe líneas que no van a hacer
-        // nada nunca. Callarlas es lo que convirtió `[profile.start]` en una
-        // trampa — una ruta sin esquema se tiraba y el hueco abría donde le
-        // parecía, sin que nada lo dijera.
-        let avisos = self.config.common.profile_warnings.len();
-        for aviso in &self.config.common.profile_warnings {
-            tracing::warn!(motivo = %aviso, "línea del perfil ignorada");
+        let mut changes = Vec::new();
+        // And whatever the profile's FILE brings that is not understood,
+        // which outranks the other two messages: "could not apply live"
+        // describes a limit of this process, and this describes lines that
+        // are never going to do anything. Staying quiet about them is what
+        // turned `[profile.start]` into a trap — a path with no scheme was
+        // dropped and the slot opened wherever it felt like, with nothing
+        // saying so.
+        let warnings = self.config.common.profile_warnings.len();
+        for warning in &self.config.common.profile_warnings {
+            tracing::warn!(motivo = %warning, "profile line ignored");
         }
-        if avisos > 0 {
+        if warnings > 0 {
             self.status.message = Some(clamp_display(norte_i18n::ta_in(
                 self.lang,
                 "msg-profile-config-ignored",
                 &[
-                    ("profile", &nombre.to_string_lossy()),
-                    ("n", &avisos.to_string()),
+                    ("profile", &name.to_string_lossy()),
+                    ("n", &warnings.to_string()),
                 ],
             )));
-        } else if fuera.is_empty() {
+        } else if out.is_empty() {
             self.status.message = Some(clamp_display(norte_i18n::ta_in(
                 self.lang,
                 "msg-profile-switched",
-                &[("profile", &nombre.to_string_lossy())],
+                &[("profile", &name.to_string_lossy())],
             )));
         } else {
             self.status.message = Some(clamp_display(norte_i18n::ta_in(
                 self.lang,
                 "msg-profile-switched-partial",
                 &[
-                    ("profile", &nombre.to_string_lossy()),
-                    ("keys", &fuera.join(", ")),
+                    ("profile", &name.to_string_lossy()),
+                    ("keys", &out.join(", ")),
                 ],
             )));
         }
         let snap = self.snapshot();
-        cambios.push(self.sobre(UiUpdate::Snapshot(Box::new(snap))));
-        cambios
+        changes.push(self.over(UiUpdate::Snapshot(Box::new(snap))));
+        changes
     }
 
-    /// Pone `cfg` como la configuración vigente y aplica todo lo que esta
-    /// ventana sabe aplicar sin reiniciar: tema, keymap entero, columnas,
-    /// favoritos y la disposición si cambia de nombre.
+    /// Sets `cfg` as the current configuration and applies everything this
+    /// window knows how to apply without restarting: theme, whole keymap,
+    /// columns, favorites, and the layout if its name changes.
     ///
-    /// Es el camino del cambio de perfil, y también el de un ajuste escrito
-    /// desde F11: una recarga es una recarga, venga de donde venga (ADR 0077
-    /// otra vez — dos formas de aplicar la misma configuración divergen en
-    /// silencio). Devuelve los ids de lo que NO se pudo aplicar en caliente,
-    /// para que quien llama lo diga por su nombre (D8).
+    /// This is the profile-change path, and also the one for a setting
+    /// written from F11: a reload is a reload, wherever it comes from (ADR
+    /// 0077 again — two ways of applying the same configuration diverge
+    /// silently). It returns the ids of what could NOT be applied live, so
+    /// the caller can say so by name (D8).
     ///
-    /// Un keymap que no se puede construir deja el que había: un
-    /// `keymap.toml` roto no puede dejar la ventana sin teclas. Lo que
-    /// devuelven la disposición y los listados se DESCARTA: quien llama
-    /// termina con una foto completa, y mandar parches antes es mandarlos
-    /// para nada.
-    pub(super) fn aplicar_config(
+    /// A keymap that cannot be built leaves the one that was there: a broken
+    /// `keymap.toml` cannot leave the window without keys. What the layout
+    /// and the listings return is DISCARDED: the caller ends up with a
+    /// complete snapshot, and sending patches before that is sending them for
+    /// nothing.
+    pub(super) fn apply_config(
         &mut self,
         cfg: norte_frontend::config::FrontendConfig,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<&'static str> {
-        let antes = self.config.common.clone();
-        // El TEMA. Se pone por nombre, y el aviso al que hospeda sale de aquí:
-        // es lo que se ve.
-        if let Some(tema) = cfg.common.ui_theme.clone() {
-            self.aplicar_tema(&tema, buzon);
+        let before = self.config.common.clone();
+        // The THEME. It is set by name, and the notice to whoever hosts it
+        // comes from here: it is what is seen.
+        if let Some(theme) = cfg.common.ui_theme.clone() {
+            self.apply_theme(&theme, mailbox);
         }
-        // El KEYMAP entero, con las capas dentro.
-        if let Ok(browse) = crate::keys::keymap_de_preset_con_capas(
+        // The WHOLE keymap, with the layers inside.
+        if let Ok(browse) = crate::keys::preset_keymap_with_layers(
             &cfg.common.preset,
             &cfg.keymap_layers,
-            self.efectos,
+            self.effects,
         ) {
-            self.efectivo = browse.clone();
+            self.effective = browse.clone();
             self.resolver = Resolver::new(browse);
         }
         if let Ok(visor) =
-            crate::keys::keymap_visor_de_preset_con_capas(&cfg.common.preset, &cfg.keymap_layers)
+            crate::keys::preset_viewer_keymap_with_layers(&cfg.common.preset, &cfg.keymap_layers)
         {
-            self.efectivo_visor = visor.clone();
+            self.effective_visor = visor.clone();
             self.resolver_visor = Resolver::new(visor);
         }
-        if let Ok(dialogo) =
-            crate::keys::keymap_dialogo_de_preset_con_capas(&cfg.common.preset, &cfg.keymap_layers)
+        if let Ok(dialog) =
+            crate::keys::keymap_dialog_preset_with_layers(&cfg.common.preset, &cfg.keymap_layers)
         {
-            self.resolver_dialogo = Resolver::new(dialogo);
+            self.resolver_dialog = Resolver::new(dialog);
         }
-        // Columnas y favoritos.
-        self.columnas = norte_frontend::columns::ColumnsSettings::resolve(&cfg.common.ui_columns)
+        // Columns and favorites.
+        self.columns = norte_frontend::columns::ColumnsSettings::resolve(&cfg.common.ui_columns)
             .with_date_format(cfg.common.ui_chrome.date_format());
         self.config = cfg;
-        self.sembrar_sitios();
-        // Y la DISPOSICIÓN que la configuración nombre, si nombra otra: es lo
-        // que hace que un perfil sea «otra pantalla» y no solo otros colores.
-        if antes.ui_layout != self.config.common.ui_layout
-            && let Some(nombre) = self.config.common.ui_layout.clone()
-            && let Ok(arbol) = norte_frontend::layout::presets::tree(&nombre)
+        self.seed_places();
+        // And the LAYOUT the configuration names, if it names a different
+        // one: that is what makes a profile "a different screen" and not
+        // just different colors.
+        if before.ui_layout != self.config.common.ui_layout
+            && let Some(name) = self.config.common.ui_layout.clone()
+            && let Ok(tree) = norte_frontend::layout::presets::tree(&name)
         {
-            let _ = self.aplicar_disposicion(arbol, backend, buzon);
+            let _ = self.apply_layout(tree, backend, mailbox);
         }
-        // Lo que NO se puede aplicar sin reiniciar se dice por su nombre: un
-        // cambio que se callara esto sería un cambio que miente (D8).
-        fuera_de_alcance_en_caliente(&antes, &self.config.common)
+        // Whatever cannot be applied without restarting is said by name: a
+        // change that stayed quiet about this would be a change that lies
+        // (D8).
+        out_of_scope_hot(&before, &self.config.common)
     }
 
-    /// Las capas de configuración tal como están puestas AHORA: las que
-    /// resolvió el arranque, con el perfil activo encima si lo hay.
+    /// The configuration layers exactly as they are set NOW: the ones
+    /// startup resolved, with the active profile on top if there is one.
     ///
-    /// Es de donde se relee tras escribir un ajuste: la ventana relee de
-    /// donde leyó (ADR 0066 D14), y con el perfil que tiene puesto, que puede
-    /// no ser el del arranque.
-    pub(super) fn capas_actuales(&self) -> norte_config::Layers {
+    /// This is where it is reread from after writing a setting: the window
+    /// rereads from where it actually read (ADR 0066 D14), and with whatever
+    /// profile it currently has set, which may not be the startup one.
+    pub(super) fn layers_actuales(&self) -> norte_config::Layers {
         use crate::settings::ConfigLayer;
-        if let Some(perfil) = &self.perfil_activo
-            && let Some(capas) = self.capas_con_perfil(perfil)
+        if let Some(profile) = &self.profile_active
+            && let Some(layers) = self.layers_with_profile(profile)
         {
-            return capas;
+            return layers;
         }
         let dirs = self
             .paths
             .config_layers
             .iter()
-            .map(|(capa, ruta)| {
-                let kind = match capa {
+            .map(|(layer, path)| {
+                let kind = match layer {
                     ConfigLayer::System => norte_config::Layer::System,
                     ConfigLayer::User => norte_config::Layer::User,
                     ConfigLayer::Profile => norte_config::Layer::Profile,
                     ConfigLayer::Project => norte_config::Layer::Project,
                 };
-                (ruta.path.clone(), kind)
+                (path.path.clone(), kind)
             })
             .collect();
         norte_config::Layers { dirs }
     }
 
-    /// Pide la lista de perfiles, FUERA del actor.
+    /// Requests the profile list, OUTSIDE the actor.
     ///
-    /// `vecino` dice qué se hace con ella cuando llegue: `None` abre el
-    /// selector, `Some(hacia_delante)` salta al de al lado sin abrir nada —
-    /// que es lo que quiere quien tiene dos perfiles y alterna.
+    /// `neighbor` says what to do with it once it arrives: `None` opens the
+    /// selector, `Some(forward)` jumps to the next one without opening
+    /// anything — which is what whoever has two profiles and alternates
+    /// wants.
     ///
-    /// Leer `profiles/` es un directorio y un `norte.toml` por perfil: en el
-    /// actor congelaría la ventana, y con un directorio en un NFS caído la
-    /// congelaría hasta que expire el montaje (regla 2, #244).
-    pub(super) fn pedir_perfiles(
+    /// Reading `profiles/` is a directory and a `norte.toml` per profile: in
+    /// the actor it would freeze the window, and with a directory on a
+    /// downed NFS it would freeze it until the mount expires (rule 2, #244).
+    pub(super) fn request_profiles(
         &mut self,
-        vecino: Option<bool>,
-        buzon: &mpsc::Sender<Mensaje>,
+        neighbor: Option<bool>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(dir) = self.dir_de_perfiles() else {
-            return self.no_hay_perfiles();
+        let Some(dir) = self.profiles_dir() else {
+            return self.no_hay_profiles();
         };
-        let buzon = buzon.clone();
+        let mailbox = mailbox.clone();
         tokio::task::spawn_blocking(move || {
-            let perfiles = norte_frontend::config::read_profiles(&dir);
-            let _ =
-                buzon.blocking_send(Mensaje::Fondo(Box::new(Fondo::Perfiles(perfiles, vecino))));
+            let profiles = norte_frontend::config::read_profiles(&dir);
+            let _ = mailbox.blocking_send(Message::Background(Box::new(Background::Profiles(
+                profiles, neighbor,
+            ))));
         });
-        (self.aplicada(), Vec::new())
+        (self.applied(), Vec::new())
     }
 
-    /// Dónde vive `profiles/`: la capa del USUARIO.
+    /// Where `profiles/` lives: the USER layer.
     ///
-    /// Del usuario y solo de ella, aunque haya un perfil activo: los perfiles
-    /// no anidan (D1), y buscarlos dentro del perfil puesto sería inventarse
-    /// una jerarquía que la ADR no tiene.
-    pub(super) fn dir_de_perfiles(&self) -> Option<std::path::PathBuf> {
+    /// The user's and only the user's, even with an active profile: profiles
+    /// do not nest (D1), and looking for them inside the current profile
+    /// would be inventing a hierarchy the ADR does not have.
+    pub(super) fn profiles_dir(&self) -> Option<std::path::PathBuf> {
         use crate::settings::ConfigLayer;
         self.paths
             .config_layers
             .iter()
-            .find(|(capa, _)| matches!(capa, ConfigLayer::User))
+            .find(|(layer, _)| matches!(layer, ConfigLayer::User))
             .map(|(_, p)| p.path.clone())
     }
 
-    /// No hay dónde buscar perfiles, y se dice.
-    pub(super) fn no_hay_perfiles(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let envios = self.decir("host-no-profiles");
+    /// There is nowhere to look for profiles, and it says so.
+    pub(super) fn no_hay_profiles(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let outgoing = self.say("host-no-profiles");
         (
             ActionAck::Unavailable {
                 reason_key: "host-no-profiles".to_owned(),
             },
-            envios,
+            outgoing,
         )
     }
 
-    /// La lista de perfiles llegó: o se abre el selector, o se salta al
-    /// vecino.
-    pub(super) fn con_los_perfiles(
+    /// The profile list arrived: either the selector opens, or it jumps to
+    /// the neighbor.
+    pub(super) fn with_the_profiles(
         &mut self,
-        perfiles: Vec<norte_frontend::profile_picker::UserProfile>,
-        vecino: Option<bool>,
-        buzon: &mpsc::Sender<Mensaje>,
+        profiles: Vec<norte_frontend::profile_picker::UserProfile>,
+        neighbor: Option<bool>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        self.gen_perfiles += 1;
-        let Some(hacia_delante) = vecino else {
-            self.selector_perfil = Some(norte_frontend::profile_picker::ProfilePicker::open(
-                perfiles,
-                self.perfil_activo.as_deref(),
+        self.gen_profiles += 1;
+        let Some(forward) = neighbor else {
+            self.selector_profile = Some(norte_frontend::profile_picker::ProfilePicker::open(
+                profiles,
+                self.profile_active.as_deref(),
             ));
             return vec![self.parche(vec![ViewChange::Profiles {
-                profiles: self.vista_perfiles(),
+                profiles: self.vista_profiles(),
             }])];
         };
-        // Girar sobre uno solo no es un cambio: tirar y recargar la pantalla
-        // para dejarla igual sería peor que no hacer nada, y decirlo es más
-        // honesto que fingir que pasó algo.
-        let Some(siguiente) = norte_frontend::profile_picker::next_profile(
-            &perfiles,
-            self.perfil_activo.as_deref(),
-            hacia_delante,
+        // Spinning around a single one is not a change: tearing down and
+        // reloading the screen to leave it the same would be worse than doing
+        // nothing, and saying so is more honest than pretending something
+        // happened.
+        let Some(next) = norte_frontend::profile_picker::next_profile(
+            &profiles,
+            self.profile_active.as_deref(),
+            forward,
         ) else {
-            return self.decir("host-no-other-profile");
+            return self.say("host-no-other-profile");
         };
-        self.cambiar_de_perfil(&siguiente, buzon)
+        self.switch_profile(&next, mailbox)
     }
 
-    /// Empieza un cambio de perfil: carga su configuración FUERA del actor.
+    /// Starts a profile change: loads its configuration OUTSIDE the actor.
     ///
-    /// El cambio no se aplica aquí. Cargar la configuración lee entre uno y
-    /// cuatro ficheros por capa, y hasta que no se sabe si carga no se toca
-    /// nada: un perfil roto deja al lector donde estaba (ADR 0079, D7).
-    pub(super) fn cambiar_de_perfil(
+    /// The change is not applied here. Loading the configuration reads
+    /// between one and four files per layer, and until it is known whether
+    /// it loads, nothing is touched: a broken profile leaves the reader where
+    /// they were (ADR 0079, D7).
+    pub(super) fn switch_profile(
         &mut self,
-        nombre: &std::ffi::OsStr,
-        buzon: &mpsc::Sender<Mensaje>,
+        name: &std::ffi::OsStr,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        let Some(capas) = self.capas_con_perfil(nombre) else {
-            return self.decir("host-no-profiles");
+        let Some(layers) = self.layers_with_profile(name) else {
+            return self.say("host-no-profiles");
         };
-        let nombre = nombre.to_os_string();
-        let buzon = buzon.clone();
+        let name = name.to_os_string();
+        let mailbox = mailbox.clone();
         tokio::task::spawn_blocking(move || {
-            let res = norte_frontend::config::load(&capas).map_err(|_| "host-profile-broken");
-            let _ = buzon.blocking_send(Mensaje::Fondo(Box::new(Fondo::PerfilCargado(
-                nombre,
-                Box::new(res),
-            ))));
+            let res = norte_frontend::config::load(&layers).map_err(|_| "host-profile-broken");
+            let _ = mailbox.blocking_send(Message::Background(Box::new(
+                Background::ProfileLoaded(name, Box::new(res)),
+            )));
         });
         Vec::new()
     }
 
-    /// Las capas de configuración CON el perfil puesto.
+    /// The configuration layers WITH the profile set.
     ///
-    /// Se construyen sobre las que quien arrancó el host resolvió, no mirando
-    /// el entorno otra vez: la ventana lee de donde de verdad leyó (ADR 0066
-    /// D14). El perfil entra por encima de la del usuario y por debajo de la
-    /// del proyecto, que es su sitio (ADR 0079, D1) — y como aquí las capas
-    /// vienen en precedencia ascendente, basta insertarla justo detrás de la
-    /// del usuario.
-    pub(super) fn capas_con_perfil(
+    /// They are built on top of the ones whoever started the host resolved,
+    /// without looking at the environment again: the window reads from where
+    /// it actually read (ADR 0066 D14). The profile goes in above the user's
+    /// and below the project's, which is its place (ADR 0079, D1) — and since
+    /// here the layers come in ascending precedence, it is enough to insert
+    /// it right after the user's.
+    pub(super) fn layers_with_profile(
         &self,
-        nombre: &std::ffi::OsStr,
+        name: &std::ffi::OsStr,
     ) -> Option<norte_config::Layers> {
         use crate::settings::ConfigLayer;
         let mut dirs = Vec::new();
-        let mut puesto = false;
-        for (capa, ruta) in &self.paths.config_layers {
-            match capa {
-                ConfigLayer::System => dirs.push((ruta.path.clone(), norte_config::Layer::System)),
+        let mut set = false;
+        for (layer, path) in &self.paths.config_layers {
+            match layer {
+                ConfigLayer::System => dirs.push((path.path.clone(), norte_config::Layer::System)),
                 ConfigLayer::User => {
-                    dirs.push((ruta.path.clone(), norte_config::Layer::User));
+                    dirs.push((path.path.clone(), norte_config::Layer::User));
                     dirs.push((
-                        ruta.path.join("profiles").join(nombre),
+                        path.path.join("profiles").join(name),
                         norte_config::Layer::Profile,
                     ));
-                    puesto = true;
+                    set = true;
                 }
-                // La que hubiera se REEMPLAZA: cambiar de perfil no apila
-                // perfiles.
+                // Whichever one there was is REPLACED: switching profiles
+                // does not stack profiles.
                 ConfigLayer::Profile => {}
                 ConfigLayer::Project => {
-                    dirs.push((ruta.path.clone(), norte_config::Layer::Project));
+                    dirs.push((path.path.clone(), norte_config::Layer::Project));
                 }
             }
         }
-        puesto.then_some(norte_config::Layers { dirs })
+        set.then_some(norte_config::Layers { dirs })
     }
 
-    /// Abre el selector de tema, con el cursor en el vigente.
+    /// Opens the theme selector, with the cursor on the current one.
     ///
-    /// Antes solo ENSEÑABA el tema activo por dentro, y no por falta de
-    /// ganas: lo que hospeda a esta ventana resuelve el tema una vez al
-    /// arrancar, así que no había forma de que un tema elegido se viera. Con
-    /// [`NativeEffect::ThemeChanged`] la hay, y este selector es el mismo que
-    /// el del terminal — presets, cursor en el que está puesto, y preview EN
-    /// VIVO al moverse.
-    pub(super) fn abrir_tema(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let nombres = norte_frontend::theme::theme_names(&self.config.user_themes);
-        let cursor = nombres
+    /// It used to only SHOW the active theme from the inside, and not for
+    /// lack of trying: whatever hosts this window resolves the theme once on
+    /// startup, so there was no way for a chosen theme to be seen. With
+    /// [`NativeEffect::ThemeChanged`] there is, and this selector is the same
+    /// as the terminal's — presets, cursor on the one that is set, and LIVE
+    /// preview while moving.
+    pub(super) fn open_theme(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let names = norte_frontend::theme::theme_names(&self.config.user_themes);
+        let cursor = names
             .iter()
-            .position(|n| *n == self.tema.name)
+            .position(|n| *n == self.theme.name)
             .unwrap_or(0);
-        self.tema_elegido = Some(SeleccionDeTema {
-            nombres,
+        self.theme_chosen = Some(ThemeSelection {
+            names,
             cursor,
-            previo: Box::new(self.tema.clone()),
+            previo: Box::new(self.theme.clone()),
         });
-        let cambio = ViewChange::Theme {
-            theme: self.vista_tema(),
+        let change = ViewChange::Theme {
+            theme: self.vista_theme(),
         };
-        (self.aplicada(), vec![self.parche(vec![cambio])])
+        (self.applied(), vec![self.parche(vec![change])])
     }
 }

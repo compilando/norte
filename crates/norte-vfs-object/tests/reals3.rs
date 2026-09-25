@@ -1,11 +1,11 @@
-//! NIGHTLY: provider object contra un servidor S3 REAL (`MinIO`) por
-//! testcontainers (ADR 0016 J, spec §12). Fuera del gate de PR (exige
-//! Docker): lo corre `just it-remote` desde el workflow nightly.
+//! NIGHTLY: the object provider against a REAL S3 server (`MinIO`) via
+//! testcontainers (ADR 0016 J, spec §12). Outside the PR gate (requires
+//! Docker): run by `just it-remote` from the nightly workflow.
 //!
-//! Cubre lo que el harness in-process NO da (issue #50): semántica de dirs
-//! (markers/prefix-probe, que s3s-fs rompe), keys largas (>`NAME_MAX` del FS
-//! host), `copy_native` con `If-None-Match` real (s3s-fs lo ignora) y el
-//! conditional write que `MinIO` SÍ valida.
+//! Covers what the in-process harness does NOT give (issue #50): dir
+//! semantics (markers/prefix-probe, which s3s-fs breaks), long keys
+//! (>the host FS's `NAME_MAX`), `copy_native` with a real `If-None-Match`
+//! (s3s-fs ignores it) and the conditional write `MinIO` DOES validate.
 #![cfg(feature = "it-s3")]
 
 use bytes::Bytes;
@@ -26,7 +26,7 @@ fn root() -> VPath {
 }
 
 fn child(base: &VPath, name: &[u8]) -> VPath {
-    base.join(Segment::new(name.to_vec()).expect("segmento"))
+    base.join(Segment::new(name.to_vec()).expect("segment"))
 }
 
 async fn read_all(p: &ObjectProvider, f: &VPath) -> Vec<u8> {
@@ -46,29 +46,30 @@ async fn write_all(p: &ObjectProvider, f: &VPath, data: &[u8]) {
     sink.commit().await.expect("commit");
 }
 
-/// Un contenedor `MinIO` (bitnami: auto-crea el bucket vía `MINIO_DEFAULT_BUCKETS`)
-/// más el provider y el `Operator` crudo. El Operator siembra keys "desde
-/// fuera" (como otra herramienta): un prefijo sin marker que el propio provider
-/// no crearía por su check de padre-existe. Un solo test por contenedor.
+/// A `MinIO` container (bitnami: auto-creates the bucket via
+/// `MINIO_DEFAULT_BUCKETS`) plus the provider and the raw `Operator`. The
+/// Operator seeds keys "from outside" (like another tool): a marker-less
+/// prefix the provider itself would not create because of its
+/// parent-exists check. One test per container.
 async fn setup() -> (
     testcontainers::ContainerAsync<GenericImage>,
     ObjectProvider,
     Operator,
 ) {
-    // bitnamilegacy: bitnami movió sus imágenes públicas a este namespace en
-    // 2025 (auto-crea el bucket con MINIO_DEFAULT_BUCKETS, lo que la imagen
-    // oficial minio/minio no soporta). El WaitFor es laxo: setup() reintenta
-    // el list hasta que el bucket exista.
+    // bitnamilegacy: bitnami moved its public images to this namespace in
+    // 2025 (auto-creates the bucket with MINIO_DEFAULT_BUCKETS, which the
+    // official minio/minio image does not support). The WaitFor is lax:
+    // setup() retries the list until the bucket exists.
     let container = GenericImage::new("bitnamilegacy/minio", "latest")
-        // El banner de MinIO va a STDERR (el setup de bitnami a stdout).
+        // MinIO's banner goes to STDERR (bitnami's setup goes to stdout).
         .with_wait_for(WaitFor::message_on_stderr("MinIO Object Storage Server"))
         .with_env_var("MINIO_ROOT_USER", AK)
         .with_env_var("MINIO_ROOT_PASSWORD", SK)
         .with_env_var("MINIO_DEFAULT_BUCKETS", BUCKET)
         .start()
         .await
-        .expect("arrancar MinIO");
-    let port = container.get_host_port_ipv4(9000).await.expect("puerto");
+        .expect("start MinIO");
+    let port = container.get_host_port_ipv4(9000).await.expect("port");
     opendal::install_default();
     let builder = opendal::services::S3::default()
         .bucket(BUCKET)
@@ -78,7 +79,7 @@ async fn setup() -> (
         .secret_access_key(SK)
         .disable_config_load()
         .disable_ec2_metadata();
-    // El bucket puede tardar un instante en existir tras el arranque: reintenta.
+    // The bucket can take a moment to exist after startup: retry.
     let op = Operator::new(builder).expect("operator");
     for _ in 0..40 {
         if op.list_with("").limit(1).await.is_ok() {
@@ -89,17 +90,18 @@ async fn setup() -> (
     (container, ObjectProvider::new(op.clone(), "s3"), op)
 }
 
-/// Semántica de dirs contra S3 real: mkdir (marker) + stat, prefijo sin marker
-/// = Dir, `remove` de dir no vacío = Conflict, `rename` de subárbol.
+/// Dir semantics against real S3: mkdir (marker) + stat, marker-less prefix
+/// = Dir, `remove` of a non-empty dir = Conflict, subtree `rename`.
 #[tokio::test]
 async fn dirs_markers_y_rename() {
     let (_c, p, op) = setup().await;
     let r = root();
-    // mkdir + stat del marker (dir VACÍO: el caso que s3s-fs no da bien).
+    // mkdir + stat of the marker (an EMPTY dir: the case s3s-fs does not
+    // get right).
     let d = child(&r, b"undir");
     p.mkdir(&d).await.expect("mkdir");
     assert_eq!(p.stat(&d).await.expect("stat dir").kind, EntryKind::Dir);
-    // Fichero dentro; dir no vacío no se borra.
+    // A file inside; a non-empty dir does not delete.
     write_all(&p, &child(&d, b"f.txt"), b"x").await;
     assert!(matches!(
         p.remove(&d).await,
@@ -107,19 +109,20 @@ async fn dirs_markers_y_rename() {
             conflict: ConflictKind::TypeMismatch
         })
     ));
-    // Prefijo SIN marker (sembrado por el Operator crudo, como otra
-    // herramienta): el provider no lo crearía por su check de padre-existe.
+    // A prefix WITHOUT a marker (seeded by the raw Operator, like another
+    // tool would): the provider would not create it because of its
+    // parent-exists check.
     op.write("prefijo/hijo.txt", b"y".to_vec())
         .await
-        .expect("seed prefijo");
+        .expect("seed prefix");
     assert_eq!(
         p.stat(&child(&r, b"prefijo"))
             .await
-            .expect("stat prefijo")
+            .expect("stat prefix")
             .kind,
         EntryKind::Dir
     );
-    // rename del subárbol: contenido byte-exacto en destino, origen desaparecido.
+    // Subtree rename: byte-exact content at the destination, source gone.
     let dst = child(&r, b"movido");
     p.rename(&d, &dst).await.expect("rename dir");
     assert_eq!(read_all(&p, &child(&dst, b"f.txt")).await, b"x");
@@ -129,20 +132,21 @@ async fn dirs_markers_y_rename() {
     );
 }
 
-/// Keys largas que el harness fs in-process (`NAME_MAX` del host + el `.XXXXXXXX`
-/// del `atomic_write_dir` = tope 246) no cubre. `MinIO` (backend de FS) limita cada
-/// COMPONENTE a 255 bytes como un `NAME_MAX` real — así que se prueba 250
-/// (>246 del harness, ≤255 de `MinIO`). AWS real acepta hasta 1024 en la key
-/// completa (ADR 0016 D); esa cota total solo la valida AWS, no `MinIO`.
+/// Long keys the in-process fs harness does not cover (the host's
+/// `NAME_MAX` + `atomic_write_dir`'s `.XXXXXXXX` = a 246 cap). `MinIO` (an
+/// FS backend) limits each COMPONENT to 255 bytes like a real `NAME_MAX` —
+/// so 250 is tested (>246 of the harness, ≤255 of `MinIO`). Real AWS
+/// accepts up to 1024 in the full key (ADR 0016 D); that total ceiling is
+/// only validated by AWS, not `MinIO`.
 #[tokio::test]
-async fn keys_largas_byte_exactas() {
+async fn keys_long_byte_exactas() {
     let (_c, p, _op) = setup().await;
     let r = root();
-    let nombre_largo = "x".repeat(250);
-    let f = child(&r, nombre_largo.as_bytes());
+    let long_name = "x".repeat(250);
+    let f = child(&r, long_name.as_bytes());
     write_all(&p, &f, b"contenido").await;
     assert_eq!(read_all(&p, &f).await, b"contenido");
-    // Aparece byte-exacto en el listado.
+    // Appears byte-exact in the listing.
     let listed: Vec<Vec<u8>> = p
         .list(&r)
         .await
@@ -151,14 +155,14 @@ async fn keys_largas_byte_exactas() {
         .await
         .expect("stream")
         .into_iter()
-        .map(|e| e.path.file_name().expect("nombre").as_bytes().to_vec())
+        .map(|e| e.path.file_name().expect("name").as_bytes().to_vec())
         .collect();
-    assert!(listed.contains(&nombre_largo.into_bytes()));
+    assert!(listed.contains(&long_name.into_bytes()));
 }
 
-/// `copy_native` con `If-None-Match` REAL: `MinIO` valida el conditional copy
-/// (s3s-fs lo ignora). Copia byte-exacta; segundo copy al mismo destino =
-/// Conflict.
+/// `copy_native` with a REAL `If-None-Match`: `MinIO` validates the
+/// conditional copy (s3s-fs ignores it). Byte-exact copy; a second copy to
+/// the same destination = Conflict.
 #[tokio::test]
 async fn copy_native_conditional_real() {
     let (_c, p, _op) = setup().await;
@@ -168,16 +172,16 @@ async fn copy_native_conditional_real() {
     let dst = child(&r, b"copia.bin");
     assert!(matches!(p.copy_native(&src, &dst).await, Some(Ok(()))));
     assert_eq!(read_all(&p, &dst).await, b"payload");
-    // Segundo copy al MISMO destino → Conflict (If-None-Match).
+    // A second copy to the SAME destination → Conflict (If-None-Match).
     assert!(matches!(
         p.copy_native(&src, &dst).await,
         Some(Err(Error::Conflict { .. }))
     ));
 }
 
-/// Igual que [`setup`], pero con el `Operator` enraizado en un PREFIJO
-/// (`/equipo/proyecto/`), que es lo que hace un despliegue real compartiendo
-/// bucket. Es la única forma de ejercitar el presupuesto de key con `root`.
+/// Like [`setup`], but with the `Operator` rooted at a PREFIX
+/// (`/team/project/`), which is what a real deployment sharing a bucket
+/// does. It is the only way to exercise the key budget with `root`.
 async fn setup_con_root(
     root_prefix: &str,
 ) -> (
@@ -192,8 +196,8 @@ async fn setup_con_root(
         .with_env_var("MINIO_DEFAULT_BUCKETS", BUCKET)
         .start()
         .await
-        .expect("arrancar MinIO");
-    let port = container.get_host_port_ipv4(9000).await.expect("puerto");
+        .expect("start MinIO");
+    let port = container.get_host_port_ipv4(9000).await.expect("port");
     opendal::install_default();
     let builder = opendal::services::S3::default()
         .bucket(BUCKET)
@@ -214,83 +218,86 @@ async fn setup_con_root(
     (container, ObjectProvider::new(op.clone(), "s3"), op)
 }
 
-/// **El presupuesto de key descuenta el prefijo `root`, y el rechazo es de
-/// AQUÍ, no del servidor** (#50 punto 2).
+/// **The key budget deducts the `root` prefix, and the rejection happens
+/// HERE, not at the server** (#50 point 2).
 ///
-/// Una key de S3 son 1024 bytes contando el `root` que el `Operator` antepone
-/// antes de mandarla. Si el provider no lo descuenta, deja pasar nombres que
-/// el servidor rechaza a media operación — y a media operación significa con
-/// un multipart abierto y un error que no dice qué pasó. La escalera se toma
-/// alrededor del presupuesto EFECTIVO, no de 1024: es lo que distingue
-/// descontar el prefijo de no descontarlo.
+/// An S3 key is 1024 bytes counting the `root` the `Operator` prepends
+/// before sending it. If the provider does not deduct it, it lets through
+/// names the server rejects midway through an operation — and midway
+/// through means with an open multipart and an error that does not say
+/// what happened. The staircase is built around the EFFECTIVE budget, not
+/// 1024: that is what distinguishes deducting the prefix from not
+/// deducting it.
 #[tokio::test]
-async fn el_presupuesto_de_key_descuenta_el_prefijo_root() {
-    let prefijo = "equipo/proyecto/";
-    let (_c, p, _op) = setup_con_root(&format!("/{prefijo}")).await;
+async fn the_key_budget_deducts_the_root_prefix() {
+    let prefix = "equipo/proyecto/";
+    let (_c, p, _op) = setup_con_root(&format!("/{prefix}")).await;
     let r = root();
-    // 1024 − len(prefijo) − 1 (la `/` que reserva la variante directorio).
-    let presupuesto = 1024 - prefijo.len() - 1;
+    // 1024 − len(prefix) − 1 (the `/` the directory variant reserves).
+    let budget = 1024 - prefix.len() - 1;
 
-    // Un nombre que cabe JUSTO. No se escribe: MinIO limita cada componente a
-    // 255 bytes como un NAME_MAX de verdad, así que se comprueba lo que este
-    // test existe para comprobar —dónde cae la frontera— con un path de
-    // varios segmentos cortos.
-    let segmentos = presupuesto / 10; // "sssssssss/" = 10 bytes por vuelta
-    let mut cabe = r.clone();
-    for _ in 0..segmentos {
-        cabe = child(&cabe, b"sssssssss");
+    // A name that fits EXACTLY. Not written: MinIO limits each component to
+    // 255 bytes like a real NAME_MAX, so what this test exists to check —
+    // where the boundary falls— is checked with a path of several short
+    // segments.
+    let segments = budget / 10; // "sssssssss/" = 10 bytes per round
+    let mut fits = r.clone();
+    for _ in 0..segments {
+        fits = child(&fits, b"sssssssss");
     }
-    // El último segmento completa el presupuesto exacto.
-    let resto = presupuesto - (segmentos * 10) + 1;
-    if resto > 0 {
-        cabe = child(&cabe, "z".repeat(resto).as_bytes());
+    // The last segment completes the exact budget.
+    let remainder = budget - (segments * 10) + 1;
+    if remainder > 0 {
+        fits = child(&fits, "z".repeat(remainder).as_bytes());
     }
-    // Un byte más NO cabe, y se dice ANTES de tocar la red.
-    let pasado = child(&cabe, b"y");
+    // One byte more does NOT fit, and it is said BEFORE touching the network.
+    let over = child(&fits, b"y");
     assert_eq!(
-        p.stat(&pasado).await.unwrap_err(),
+        p.stat(&over).await.unwrap_err(),
         Error::InvalidPath,
-        "pasado el presupuesto tiene que ser InvalidPath de aquí, no un 400 del servidor"
+        "past the budget it has to be InvalidPath from here, not a 400 from the server"
     );
 
-    // Y las capabilities lo DICEN: `max_path` es el presupuesto efectivo, no
-    // 1024. Un cliente que componga nombres necesita el número de verdad.
+    // And the capabilities SAY so: `max_path` is the effective budget, not
+    // 1024. A client that composes names needs the real number.
     let caps = p.capabilities_at(&r).await.expect("caps");
     assert_eq!(
         caps.max_path,
-        Some(u32::try_from(presupuesto).expect("cabe")),
-        "las capabilities anuncian el presupuesto YA descontado"
+        Some(u32::try_from(budget).expect("fits")),
+        "the capabilities announce the budget ALREADY deducted"
     );
 }
 
-/// **Una key ecoada más CORTA que el `root` no puede tumbar la task** (#50
-/// punto 4).
+/// **An echoed key SHORTER than `root` must not crash the task** (#50
+/// point 4).
 ///
-/// `build_rel_path` de opendal 0.58 recorta la key por el largo del `root` con
-/// solo un `debug_assert`: en release, una key más corta que el prefijo hace
-/// slicing fuera de rango —o corta a mitad de un carácter multibyte—. Un
-/// servidor que ecoe algo que no empieza por el `root` (mentiroso, o un proxy
-/// que reescribe) convertiría eso en un panic dentro de la Task.
+/// opendal 0.58's `build_rel_path` trims the key by `root`'s length with
+/// only a `debug_assert`: in release, a key shorter than the prefix does
+/// out-of-range slicing —or cuts mid multibyte character—. A server that
+/// echoes something not starting with `root` (a liar, or a proxy that
+/// rewrites) would turn that into a panic inside the Task.
 ///
-/// Aquí se siembra por debajo del prefijo con el `Operator` CRUDO —o sea con
-/// keys que sí llevan el root— y se comprueba lo que el provider promete: que
-/// listar y statear lo sembrado desde fuera no revienta. Reproducir el panic
-/// pide un servidor mentiroso, que es otra pieza; esto fija que el camino
-/// normal no lo dispara y deja el caso escrito.
+/// Here it is seeded below the prefix with the RAW `Operator` —i.e. with
+/// keys that DO carry the root— and what the provider promises is checked:
+/// that listing and stating what was seeded from outside does not blow up.
+/// Reproducing the panic requires a lying server, which is a different
+/// piece; this pins that the normal path does not trigger it and leaves
+/// the case written down.
 #[tokio::test]
-async fn una_siembra_bajo_el_root_no_revienta_el_listado() {
+async fn seeding_under_the_root_does_not_blow_up_the_listing() {
     let (_c, p, op) = setup_con_root("/equipo/proyecto/").await;
     let r = root();
-    // El Operator ya lleva el root: esta key es `equipo/proyecto/desde-fuera/a.txt`.
+    // The Operator already carries the root: this key is
+    // `team/project/from-outside/a.txt`.
     op.write("desde-fuera/a.txt", b"contenido".to_vec())
         .await
         .expect("seed");
     let dir = child(&r, b"desde-fuera");
     assert_eq!(p.stat(&dir).await.expect("stat").kind, EntryKind::Dir);
     assert_eq!(read_all(&p, &child(&dir, b"a.txt")).await, b"contenido");
-    // Y el listado de la raíz la ve, sin que el recorte del prefijo se lleve
-    // por delante ningún byte del nombre.
-    let nombres: Vec<Vec<u8>> = p
+    // And the root's listing sees it, with the prefix trim not taking away
+    // any byte of the name.
+    let names: Vec<Vec<u8>> = p
         .list(&r)
         .await
         .expect("list")
@@ -298,53 +305,53 @@ async fn una_siembra_bajo_el_root_no_revienta_el_listado() {
         .await
         .expect("stream")
         .into_iter()
-        .map(|e| e.path.file_name().expect("nombre").as_bytes().to_vec())
+        .map(|e| e.path.file_name().expect("name").as_bytes().to_vec())
         .collect();
-    assert!(nombres.contains(&b"desde-fuera".to_vec()), "{nombres:?}");
+    assert!(names.contains(&b"desde-fuera".to_vec()), "{names:?}");
 }
 
-/// **Keys que el provider NO puede crear pero que SÍ pueden existir** (#50
-/// punto 3): sembradas por otra herramienta, tienen que dar una respuesta
-/// honesta —correcta o fail-loud— y jamás una corrupción silenciosa.
+/// **Keys the provider CANNOT create but that CAN exist** (#50 point 3):
+/// seeded by another tool, they have to give an honest answer —correct or
+/// fail-loud— and never silent corruption.
 ///
-/// Las tres del issue: un espacio final (que nuestro `key()` rechaza porque
-/// opendal lo recortaría, #48), un segmento vacío (`dir//x`) y un marker de
-/// directorio vacío.
+/// The issue's three: a trailing space (which our `key()` rejects because
+/// opendal would trim it, #48), an empty segment (`dir//x`) and an
+/// empty-directory marker.
 #[tokio::test]
-async fn keys_sembradas_desde_fuera_que_nosotros_no_creariamos() {
+async fn keys_seeded_from_outside_that_we_would_not_create() {
     let (_c, p, op) = setup().await;
     let r = root();
 
-    // 1. Espacio final. Nuestro `key()` lo rechaza ANTES de la red porque
-    //    `normalize_path` de opendal hace `trim()` y corromperia el nombre.
+    // 1. Trailing space. Our `key()` rejects it BEFORE the network because
+    //    opendal's `normalize_path` does `trim()` and would corrupt the name.
     op.write("sembrado/con espacio ", b"a".to_vec())
         .await
-        .expect("seed espacio");
-    let con_espacio = child(&child(&r, b"sembrado"), b"con espacio ");
+        .expect("seed space");
+    let with_space = child(&child(&r, b"sembrado"), b"con espacio ");
     assert_eq!(
-        p.stat(&con_espacio).await.unwrap_err(),
+        p.stat(&with_space).await.unwrap_err(),
         Error::InvalidPath,
-        "un nombre que opendal recortaría se rehúsa fail-loud, no se lee otro fichero"
+        "a name opendal would trim is refused fail-loud, another file is not read instead"
     );
 
-    // 2. Segmento vacío (`dir//x`): no hay `VPath` que lo nombre —`Segment`
-    //    rechaza el vacío— así que el provider no puede pedirlo ni por
-    //    accidente. Lo que importa es que su presencia no rompa el listado
-    //    del directorio de al lado.
+    // 2. Empty segment (`dir//x`): there is no `VPath` that can name it
+    //    —`Segment` rejects the empty one— so the provider cannot request
+    //    it even by accident. What matters is that its presence does not
+    //    break the neighboring directory's listing.
     op.write("sembrado//hueco.txt", b"b".to_vec())
         .await
-        .expect("seed vacío");
-    let listado = p.list(&child(&r, b"sembrado")).await;
+        .expect("seed empty");
+    let listing = p.list(&child(&r, b"sembrado")).await;
     assert!(
-        listado.is_ok(),
-        "una key con segmento vacío al lado no puede tumbar el listado"
+        listing.is_ok(),
+        "a key with an empty segment next to it must not crash the listing"
     );
 
-    // 3. Marker de directorio vacío, que es como otra herramienta representa
-    //    un dir sin contenido. Tiene que verse como Dir.
-    // `write` de una key acabada en `/` lo rehúsa el propio opendal
-    // (`IsADirectory`), así que el marker se siembra como lo sembraría otra
-    // herramienta: con la operación de crear directorio.
+    // 3. Empty-directory marker, which is how another tool represents a dir
+    //    with no content. It has to show up as Dir.
+    // `write`ing a key ending in `/` is refused by opendal itself
+    // (`IsADirectory`), so the marker is seeded the way another tool would
+    // seed it: with the create-directory operation.
     op.create_dir("vacio/").await.expect("seed marker");
     assert_eq!(
         p.stat(&child(&r, b"vacio"))
@@ -355,16 +362,16 @@ async fn keys_sembradas_desde_fuera_que_nosotros_no_creariamos() {
     );
 }
 
-/// Las fixtures LARGAS del corpus canónico contra un S3 real (#50 punto 1).
+/// The canonical corpus's LONG fixtures against a real S3 (#50 point 1).
 ///
-/// El test de arriba prueba 250 bytes elegidos a mano; estas son las del
-/// corpus, que es lo que el resto del proyecto usa para decir «nombre largo».
-/// `name_over_max_256` pasa de los 255 que MinIO impone por componente: eso
-/// **no es un defecto nuestro** —AWS acepta hasta 1024 en la key completa— y
-/// el test lo fija como lo que es, una diferencia entre servidores, en vez de
-/// dejar la afirmación sin comprobar.
+/// The test above tries a hand-picked 250 bytes; these are the corpus's,
+/// which is what the rest of the project uses to say "long name".
+/// `name_over_max_256` goes past the 255 MinIO enforces per component: that
+/// **is not a bug of ours** —AWS accepts up to 1024 in the full key— and
+/// the test pins it for what it is, a difference between servers, instead
+/// of leaving the claim unchecked.
 #[tokio::test]
-async fn las_fixtures_largas_del_corpus_contra_s3_real() {
+async fn the_corpus_long_fixtures_against_real_s3() {
     let (_c, p, _op) = setup().await;
     let r = root();
     let corpus = norte_testkit::corpus::hostile_names();
@@ -373,13 +380,13 @@ async fn las_fixtures_largas_del_corpus_contra_s3_real() {
         let f = corpus
             .iter()
             .find(|f| f.id == id)
-            .unwrap_or_else(|| panic!("el corpus canónico tiene `{id}`"));
+            .unwrap_or_else(|| panic!("the canonical corpus has `{id}`"));
         let path = child(&r, &f.bytes);
         write_all(&p, &path, b"x").await;
         assert_eq!(read_all(&p, &path).await, b"x", "[{id}] round-trip");
-        // Y vuelve BYTE-EXACTO del listado: 255 bytes multibyte es donde un
-        // recorte por cuenta de bytes partiría un carácter.
-        let listado: Vec<Vec<u8>> = p
+        // And it comes back BYTE-EXACT from the listing: 255 multibyte
+        // bytes is where a byte-count trim would split a character.
+        let listing: Vec<Vec<u8>> = p
             .list(&r)
             .await
             .expect("list")
@@ -387,23 +394,26 @@ async fn las_fixtures_largas_del_corpus_contra_s3_real() {
             .await
             .expect("stream")
             .into_iter()
-            .map(|e| e.path.file_name().expect("nombre").as_bytes().to_vec())
+            .map(|e| e.path.file_name().expect("name").as_bytes().to_vec())
             .collect();
-        assert!(listado.contains(&f.bytes), "[{id}] no volvió byte-exacto");
+        assert!(
+            listing.contains(&f.bytes),
+            "[{id}] did not come back byte-exact"
+        );
     }
 
-    // 256 bytes: MinIO lo rechaza por componente. Se documenta el veredicto
-    // real en vez de suponerlo.
+    // 256 bytes: MinIO rejects it per component. The real verdict is
+    // documented instead of assumed.
     let over = corpus
         .iter()
         .find(|f| f.id == "name_over_max_256")
-        .expect("el corpus tiene `name_over_max_256`");
+        .expect("the corpus has `name_over_max_256`");
     let res = p.write(&child(&r, &over.bytes)).await;
     match res {
         Err(e) => {
-            // Lo que NO puede pasar es un panic ni un éxito silencioso que
-            // luego no se pueda leer.
-            eprintln!("name_over_max_256 contra MinIO: {e:?}");
+            // What CANNOT happen is a panic or a silent success that later
+            // cannot be read.
+            eprintln!("name_over_max_256 against MinIO: {e:?}");
         }
         Ok(mut sink) => {
             let commit = async {
@@ -411,20 +421,21 @@ async fn las_fixtures_largas_del_corpus_contra_s3_real() {
                 sink.commit().await
             }
             .await;
-            eprintln!("name_over_max_256 contra MinIO: commit = {commit:?}");
+            eprintln!("name_over_max_256 against MinIO: commit = {commit:?}");
         }
     }
 }
 
-/// Conditional write REAL: dos writes al mismo key; el segundo commit pierde
-/// con Conflict (`If-None-Match` en el `CompleteMultipartUpload`/`PutObject`).
+/// REAL conditional write: two writes to the same key; the second commit
+/// loses with Conflict (`If-None-Match` in the
+/// `CompleteMultipartUpload`/`PutObject`).
 #[tokio::test]
 async fn conditional_write_real() {
     let (_c, p, _op) = setup().await;
     let f = child(&root(), b"unico.txt");
     write_all(&p, &f, b"primero").await;
-    // Segundo write sobre la key existente: Conflict al abrir (stat-check) o al
-    // commit (If-None-Match) — en ambos casos jamás sobrescribe.
+    // A second write over the existing key: Conflict on open (stat-check) or
+    // on commit (If-None-Match) — in both cases it never overwrites.
     match p.write(&f).await {
         Err(Error::Conflict { .. }) => {}
         Ok(mut sink) => {
@@ -433,7 +444,7 @@ async fn conditional_write_real() {
                 .expect("chunk");
             assert!(matches!(sink.commit().await, Err(Error::Conflict { .. })));
         }
-        Err(e) => panic!("esperaba Conflict, fue {e:?}"),
+        Err(e) => panic!("expected Conflict, was {e:?}"),
     }
     assert_eq!(read_all(&p, &f).await, b"primero");
 }

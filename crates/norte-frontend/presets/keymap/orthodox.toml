@@ -1,8 +1,8 @@
-# Preset orthodox (mc clásico) — el default del producto (decisión 2026-07-10).
-# Tab entre panes es sagrado (spec §12). F5/F6/F7/F8 llegan con la fase 5.
+# Orthodox preset (classic mc) — the product's default (decision 2026-07-10).
+# Tab between panes is sacred (spec §12). F5/F6/F7/F8 arrive with phase 5.
 #
-# `layout.flip` (ADR 0138) va sin tecla a propósito, como en los siete: vive
-# en el botón `[/]` de la barra de disposición, el menú Paneles y la paleta.
+# `layout.flip` (ADR 0138) deliberately ships with no key, as in all seven: it
+# lives on the `[/]` button of the layout bar, the Panes menu and the palette.
 
 [global]
 keymap = [
@@ -11,89 +11,92 @@ keymap = [
     { on = ["ctrl+c"], run = "app.quit" },
     { on = ["tab"], run = "pane.switch" },
     { on = ["f1"], run = "app.help" },
-    # F9 abre el MENÚ, como en mc, far y Norton Commander (spec 2026-09-10):
-    # es memoria muscular de toda la familia. El tema pasa a alt+9, donde ya
-    # estaba en los cuatro presets importados.
+    # F9 opens the MENU, as in mc, far and Norton Commander (spec 2026-09-10):
+    # it is muscle memory across the whole family. The theme moves to alt+9,
+    # where it already was in the four imported presets.
     { on = ["f9"], run = "app.menu" },
     { on = ["alt+9"], run = "app.theme" },
     { on = ["f11"], run = "app.settings" },
     { on = ["f12"], run = "app.extensions" },
     { on = ["ctrl+p"], run = "app.palette" },
-    # Al lado de la paleta porque es su hermana: la paleta pregunta «qué
-    # hago», ésta «a dónde voy» —y también qué hago, porque los comandos son
-    # una de sus secciones—.
+    # Next to the palette because it is its sibling: the palette asks "what
+    # do I do", this one "where do I go" —and also what to do, because
+    # commands are one of its sections—.
     { on = ["ctrl+g"], run = "app.goto" },
     { on = ["alt+m"], run = "app.menu" },
     { on = ["alt+b"], run = "layout.places" },
     { on = ["alt+q"], run = "layout.preview" },
-    # Los paneles laterales tenían tecla para ABRIRSE y ninguna para
-    # recorrerse: `tab` alterna los dos listados y nada más, así que con el
-    # sidebar y el visor en pantalla había que acordarse de la tecla de cada
-    # uno para moverse entre ellos. `alt+o` pasa al SIGUIENTE panel del anillo
-    # —los listados y todo panel que sepa quedarse el teclado, en el orden en
-    # que están en pantalla— y `alt+O` al anterior. Es el «otro» del `C-x o`
-    # de Emacs; aquí no hay nada que transcribir de ningún gestor de
-    # referencia, porque ninguno tenía paneles laterales que enfocar.
+    # The side panels had a key to OPEN and none to cycle: `tab` toggles the
+    # two listings and nothing else, so with the sidebar and the viewer on
+    # screen you had to remember each one's own key to move between them.
+    # `alt+o` moves to the NEXT panel of the ring —the listings and any panel
+    # that can hold the keyboard, in the order they are on screen— and
+    # `alt+O` to the previous one. It is Emacs's `C-x o`'s "other"; there is
+    # nothing to transcribe here from any reference manager, because none of
+    # them had side panels to focus.
     { on = ["alt+o"], run = "layout.focus-next" },
     { on = ["alt+O"], run = "layout.focus-prev" },
-    # Y el panel de procesos no tenía tecla en NINGUNO de los siete: al único
-    # sitio que dice qué está copiando norte se llegaba solo por el menú.
-    # `alt+j` de «jobs».
+    # And the process panel had no key in ANY of the seven: the only place
+    # that says what norte is copying was reached only through the menu.
+    # `alt+j` for "jobs".
     { on = ["alt+j"], run = "layout.processes" },
-    # El registro (#323). `alt+l` de «log», libre en los siete presets.
+    # The log (#323). `alt+l` for "log", free in all seven presets.
     { on = ["alt+l"], run = "layout.log" },
-    # El mapa de disco (fase 4). `alt+z` era la ÚNICA letra libre en los siete
-    # presets: de la `a` a la `y` no queda ninguna sin atar en alguno. El
-    # mnemónico es malo y se asume — una tecla rara se aprende, una que hace
-    # dos cosas distintas según el preset, no.
+    # The disk map (phase 4). `alt+z` was the ONLY letter free across all
+    # seven presets: from `a` to `y` none is left unbound in at least one of
+    # them. The mnemonic is bad and that is accepted — a strange key is
+    # learned, one that does two different things depending on the preset is
+    # not.
     { on = ["alt+z"], run = "layout.disk-map" },
-    # El panel de terminal (#362). `ctrl+alt+s`, de «shell», y NO `ctrl+alt+t`,
-    # que es la letra obvia y está libre en los siete: lo secuestra el
-    # escritorio —GNOME y KDE lo atan de fábrica a «abrir un terminal»—, así
-    # que norte no lo vería nunca. Un binding que existe, que la hoja de
-    # referencia imprime y que no hace nada es justo lo que #250 arregló.
-    # `alt+<letra>` tampoco era opción: ese espacio lo agotó el mapa de disco.
+    # The terminal panel (#362). `ctrl+alt+s`, for "shell", and NOT
+    # `ctrl+alt+t`, which is the obvious letter and is free in all seven: the
+    # desktop hijacks it —GNOME and KDE bind it out of the box to "open a
+    # terminal"—, so norte would never see it. A binding that exists, that
+    # the reference sheet prints and that does nothing is exactly what #250
+    # fixed. `alt+<letter>` was not an option either: that space was used up
+    # by the disk map.
     #
-    # Es el panel que más se queda el teclado —los demás consumen comandos, y
-    # éste consume bytes—, así que sin tecla no se entra y sobre todo no se
-    # sale. El segundo toque devuelve el foco y deja el shell VIVO; cerrarlo es
-    # `layout.close-slot`.
+    # It is the panel that holds the keyboard the most —the others consume
+    # commands, and this one consumes bytes—, so with no key you cannot enter
+    # it and, above all, cannot leave it. The second press returns focus and
+    # leaves the shell ALIVE; closing it is `layout.close-slot`.
     { on = ["ctrl+alt+s"], run = "layout.terminal" },
-    # El resto de la familia `layout.*`, que estaba SIN TECLA en los siete
-    # presets: cerrar un hueco, cambiarle el ancho, igualarlos y designar el
-    # destino. Se llegaba solo por el menú o la paleta, y el menú los pintaba
-    # con `—`. Designar el destino además hacía falta para poder usar los
-    # gestos de panel con tres o más (ADR 0058 D7): la barra decía «designa
-    # antes un destino» y no había tecla con la que hacerlo.
+    # The rest of the `layout.*` family, which had NO KEY across all seven
+    # presets: closing a slot, resizing it, equalizing them and setting the
+    # target. It was reached only through the menu or the palette, and the
+    # menu painted them with `—`. Setting the target was also needed to use
+    # the pane gestures with three or more (ADR 0058 D7): the bar said "set a
+    # target first" and there was no key to do it with.
     #
-    # Ninguno de los siete gestores originales tenía estos conceptos, así que
-    # no hay nada que transcribir y la tecla se elige a mano — igual que
-    # `alt+j` de arriba. Van en `[global]` y no en `[pane]` a propósito: los
-    # paneles laterales los aceptan en su allowlist, y ahí solo llega lo que
-    # `[global]` mezcla en la pantalla de diálogo.
+    # None of the seven original managers had these concepts, so there is
+    # nothing to transcribe and the key is chosen by hand — same as `alt+j`
+    # above. They go in `[global]` and not in `[pane]` on purpose: the side
+    # panels accept them in their allowlist, and there only what `[global]`
+    # mixes into the dialog screen arrives.
     #
-    # `alt+x` cierra, los corchetes estrechan y ensanchan, `alt+=` iguala. Los
-    # cinco acordes están libres en los SIETE presets, así que la familia se
-    # escribe igual en todos: una tecla de disposición no debería cambiar
-    # porque cambies de preset.
+    # `alt+x` closes, the brackets shrink and grow, `alt+=` equalizes. All
+    # five chords are free in all SEVEN presets, so the family is written the
+    # same in every one: a layout key should not change just because you
+    # switch presets.
     { on = ["alt+x"], run = "layout.close-slot" },
     { on = ["alt+["], run = "layout.shrink" },
     { on = ["alt+]"], run = "layout.grow" },
     { on = ["alt+="], run = "layout.equalize" },
-    # Y el destino. `alt+g` no tiene mnemónico y no lo finge: las letras con
-    # uno (`d` de destino, `t` de target) ya están cogidas en otros presets, y
-    # lo que importa es que sea la MISMA en los siete.
+    # And the target. `alt+g` has no mnemonic and does not fake one: the
+    # letters that would have one (`d` for destination, `t` for target) are
+    # already taken in other presets, and what matters is that it be the
+    # SAME across all seven.
     { on = ["alt+g"], run = "layout.set-target" },
 ]
 
 [pane]
 keymap = [
-    # Navegación SINCRONIZADA: mientras está puesta, cada `cd` del panel con
-    # foco lo repite el otro. Ninguno de los cuatro gestores importados
-    # atestigua un acorde para esto —Krusader lo lleva en un botón, y Far,
-    # Norton y Total Commander no lo tienen—, así que la elección es nuestra y
-    # va IGUAL en los siete, como el zoom del visor. `ctrl+e` porque está
-    # libre en los siete y es entregable en cualquier terminal.
+    # SYNCHRONIZED navigation: while it is on, every `cd` in the focused pane
+    # is repeated by the other one. None of the four imported managers
+    # attests a chord for this —Krusader carries it on a button, and Far,
+    # Norton and Total Commander do not have it—, so the choice is ours and
+    # is the SAME across all seven, like the viewer's zoom. `ctrl+e` because
+    # it is free in all seven and deliverable in any terminal.
     { on = ["ctrl+e"], run = "pane.sync-nav" },
     { on = ["up"], run = "cursor.up" },
     { on = ["down"], run = "cursor.down" },
@@ -105,11 +108,12 @@ keymap = [
     { on = ["backspace"], run = "nav.parent" },
     { on = ["alt+left"], run = "nav.back" },
     { on = ["alt+right"], run = "nav.forward" },
-    # mc: `Alt+Y` es atrás en la historia de directorios, y ESE se ata. Su
-    # pareja `Alt+U` (adelante) no: aquí `alt+u` es `pane.pull` desde julio y
-    # un lector de norte ya lo tiene en los dedos; adelante sigue en
-    # `alt+right`. El punto de salto y los populares no tienen tecla en mc:
-    # están en el menú Ir y en la paleta, igual que la historia de un lado.
+    # mc: `Alt+Y` is back in the directory history, and THAT one is bound.
+    # Its partner `Alt+U` (forward) is not: here `alt+u` has been
+    # `pane.pull` since July and a norte reader already has it in their
+    # fingers; forward stays on `alt+right`. The jump point and the
+    # favourites have no key in mc: they are in the Go menu and the palette,
+    # same as one side's history.
     { on = ["alt+y"], run = "nav.back" },
     { on = ["alt+i"], run = "pane.mirror" },
     { on = ["alt+u"], run = "pane.pull" },
@@ -118,9 +122,9 @@ keymap = [
     { on = ["f6"], run = "pane.move" },
     { on = ["f7"], run = "pane.mkdir" },
     { on = ["shift+f6"], run = "pane.rename" },
-    # El lote por plantilla (#310). Sin tecla atestiguada aquí —TC lo pone
-    # en `ctrl+m` y Krusader en `shift+f2`, y los dos presets la llevan—,
-    # así que se elige: `alt+r` de «rename», libre en los siete.
+    # Template batch rename (#310). No attested key here —TC puts it on
+    # `ctrl+m` and Krusader on `shift+f2`, and both presets carry it—, so
+    # one is chosen: `alt+r` for "rename", free in all seven.
     { on = ["alt+r"], run = "pane.rename-batch" },
     { on = ["f8"], run = "pane.delete" },
     { on = ["shift+f8"], run = "pane.delete-permanent" },
@@ -131,39 +135,39 @@ keymap = [
     { on = ["ctrl+alt+up"], run = "task.up" },
     { on = ["ctrl+alt+down"], run = "task.down" },
     { on = ["f3"], run = "pane.view" },
-    # F4 EDITA (#133), que es lo que hace en los cuatro managers que este
-    # preset recoge y lo que un lector espera de la tecla. Abrir con el
-    # programa del sistema —lo que hacía F4 antes— se queda en `alt+f4`: sigue
-    # a una tecla de distancia y ya no ocupa la que todo el mundo usa para
-    # editar.
+    # F4 EDITS (#133), which is what it does in the four managers this
+    # preset draws from and what a reader expects from the key. Opening with
+    # the system's program —what F4 used to do— stays on `alt+f4`: still one
+    # key away and no longer occupying the one everyone uses to edit.
     { on = ["f4"], run = "pane.edit" },
     { on = ["shift+f4"], run = "pane.edit-new" },
     { on = ["alt+f4"], run = "pane.open" },
-    # #138: el orden por tecla, con los chords de Far/TC (Ctrl+F3..F6). El menú
-    # de orden es el diálogo de columnas, que ya tiene el suyo en `alt+c`.
+    # #138: sort by key, with Far/TC's chords (Ctrl+F3..F6). The sort menu
+    # is the columns dialog, which already has its own on `alt+c`.
     { on = ["ctrl+f3"], run = "pane.sort-name" },
     { on = ["ctrl+f4"], run = "pane.sort-ext" },
     { on = ["ctrl+f5"], run = "pane.sort-time" },
     { on = ["ctrl+f6"], run = "pane.sort-size" },
-    # #139: propiedades y recuento, con los chords de TC/Krusader.
+    # #139: properties and dir-size, with TC/Krusader's chords.
     { on = ["alt+enter"], run = "pane.properties" },
     { on = ["ctrl+l"], run = "pane.dir-size" },
-    # #136: el árbol de directorios. Far usa Ctrl+T; aquí `alt+t`, porque
-    # Ctrl+T en este preset ya es una pestaña nueva.
+    # #136: the directory tree. Far uses Ctrl+T; here `alt+t`, because
+    # Ctrl+T in this preset is already a new tab.
     { on = ["alt+t"], run = "pane.tree" },
-    # #140: abrir una conexión guardada y cerrarla. Ctrl+N es el de TC y
-    # Krusader; el cierre no tiene chord común entre managers, así que va con
-    # el mismo modificador que el resto de esta familia.
+    # #140: opening a saved connection and closing it. Ctrl+N is TC's and
+    # Krusader's; closing has no chord common between managers, so it goes
+    # with the same modifier as the rest of this family.
     { on = ["ctrl+n"], run = "pane.connect" },
-    # `alt+d`, y no `alt+n`: ese ya era de `pane.tab-next` unas líneas más
-    # abajo, y un acorde atado dos veces en la misma sección no da dos
-    # comandos — da uno, y el otro se queda SIN TECLA sin decirlo (salía como
-    # `—` en el menú, en la paleta y en la hoja de atajos). `alt+d` estaba
-    # libre aquí y es el que `krusader` ya usa para desconectar. Hay test.
+    # `alt+d`, and not `alt+n`: that one already belonged to `pane.tab-next`
+    # a few lines below, and a chord bound twice in the same section does
+    # not give two commands — it gives one, and the other is silently left
+    # WITHOUT A KEY (it showed as `—` in the menu, the palette and the
+    # shortcut sheet). `alt+d` was free here and is the one `krusader`
+    # already uses to disconnect. There is a test.
     { on = ["alt+d"], run = "pane.disconnect" },
     { on = ["/"], run = "pane.quick-search" },
     { on = ["alt+down"], run = "pane.history" },
-    # mc abre la misma lista con `Alt+Shift+H`.
+    # mc opens the same list with `Alt+Shift+H`.
     { on = ["alt+H"], run = "pane.history" },
     { on = ["alt+f7"], run = "pane.search" },
     # Total Commander's key for it, adopted as the product default: mc's own
@@ -174,11 +178,11 @@ keymap = [
     # feature a chord at all. Deliberately NOT a modified function key: under
     # tmux none of them reaches the app (#159), and this repo has already
     # shipped one documented dead shortcut.
-    # #312: comparar DOS FICHEROS, que es otra pregunta que comparar dos
-    # árboles. `alt+C` porque `alt+c` ya es el diálogo de columnas y la
-    # mayúscula es la variante, como en las sumas. NO es una tecla de
-    # función con modificador, por lo mismo que `ctrl+y`: bajo tmux no
-    # llegan (#159).
+    # #312: comparing TWO FILES, which is a different question than
+    # comparing two trees. `alt+C` because `alt+c` is already the columns
+    # dialog and the uppercase letter is the variant, as with the checksums.
+    # NOT a function key with a modifier, for the same reason as `ctrl+y`:
+    # they do not arrive under tmux (#159).
     { on = ["alt+C"], run = "pane.compare-files" },
     { on = ["ctrl+y"], run = "pane.sync-dirs" },
     { on = ["alt+e"], run = "pane.names-encoding" },
@@ -190,35 +194,39 @@ keymap = [
     { on = ["insert"], run = "mark.toggle" },
     { on = ["space"], run = "mark.toggle" },
     { on = ["ctrl+a"], run = "mark.all" },
-    # #314: cambiar los permisos POSIX. `alt+A` porque `ctrl+a` es marcar
-    # todo en este preset y la mayúscula queda para la variante, como en
-    # las sumas; en FAR sí hay acorde atestiguado y allí es el suyo.
+    # #314: change POSIX permissions. `alt+A` because `ctrl+a` is mark-all
+    # in this preset and the uppercase letter is left for the variant, as
+    # with the checksums; FAR does have an attested chord and there it is
+    # its own.
     { on = ["alt+A"], run = "pane.chmod" },
-    # `alt+a` y no `ctrl+A`: la mayúscula ES el shift en la gramática de
-    # acordes, pero un terminal manda el MISMO byte para Ctrl+A y Ctrl+Shift+A,
-    # así que el binding existía y la tecla no hacía nada. Hay test.
+    # `alt+a` and not `ctrl+A`: the uppercase letter IS the shift in the
+    # chord grammar, but a terminal sends the SAME byte for Ctrl+A and
+    # Ctrl+Shift+A, so the binding existed and the key did nothing. There is
+    # a test.
     { on = ["alt+a"], run = "mark.clear" },
     { on = ["*"], run = "mark.invert" },
-    # #313: los tres huecos de la familia Gray de Total Commander, que norte
-    # no tenía. `alt+plus`/`alt+-` son los acordes que TC atestigua para la
-    # selección por EXTENSIÓN; ficheros/carpetas y restaurar son mayúsculas
-    # de su inicial, porque las de TC (`Shift+Gray+`, `NUM/`) no se pueden
-    # escribir en esta gramática o ya significan otra cosa aquí.
+    # #313: the three gaps in Total Commander's Gray family, which norte did
+    # not have. `alt+plus`/`alt+-` are the chords TC attests for selecting
+    # by EXTENSION; files/dirs and restore are the uppercase of their
+    # initial, because TC's (`Shift+Gray+`, `NUM/`) cannot be written in
+    # this grammar or already mean something else here.
     { on = ["alt+plus"], run = "mark.extension-add" },
     { on = ["alt+-"], run = "mark.extension-remove" },
-    # Minúscula: `alt+f` estaba libre, y una mayúscula bajo Alt es pedir Shift
-    # sin decirlo. Las otras cuatro (`alt+C/A/D/R`) siguen con Shift porque su
-    # minúscula está ocupada, y la etiqueta lo dice ahora (`Alt+Shift+C`).
+    # Lowercase: `alt+f` was free, and an uppercase letter under Alt asks
+    # for Shift without saying so. The other four (`alt+C/A/D/R`) keep Shift
+    # because their lowercase is taken, and the label now says so
+    # (`Alt+Shift+C`).
     { on = ["alt+f"], run = "mark.files" },
     { on = ["alt+D"], run = "mark.dirs" },
     { on = ["alt+R"], run = "mark.restore" },
     { on = ["plus"], run = "mark.pattern-add" },
     { on = ["-"], run = "mark.pattern-remove" },
-    # Marcar MOVIÉNDOSE: la otra mitad de la familia. `space`/`insert` marcan
-    # BAJANDO y no había nada para subir ni para un tramo. Los seis van aquí
-    # —el preset de la casa— y los cuatro importados los toman de aquí, que es
-    # la regla que ya siguen las flechas y PgUp/PgDn: sus fuentes no itemizan
-    # el movimiento del cursor del panel.
+    # Marking WHILE MOVING: the other half of the family. `space`/`insert`
+    # mark while GOING DOWN and there was nothing for going up nor for a
+    # range. The six go here —the house preset— and the four imported ones
+    # take them from here, which is the rule the arrows and PgUp/PgDn
+    # already follow: their sources do not itemise the pane cursor's
+    # movement.
     { on = ["shift+down"], run = "mark.toggle" },
     { on = ["shift+up"], run = "mark.toggle-up" },
     { on = ["shift+pgdn"], run = "mark.toggle-page-down" },
@@ -229,10 +237,11 @@ keymap = [
     { on = ["ctrl+w"], run = "pane.tab-close" },
     { on = ["alt+n"], run = "pane.tab-next" },
     { on = ["alt+p"], run = "pane.tab-prev" },
-    # Las sumas (#311). Krusader las tiene en su menú File y ninguno de los
-    # cuatro importados les da acorde, así que la tecla se ELIGE: `alt+k`
-    # calcula y `alt+K` comprueba — libre en los siete, y la mayúscula
-    # para la variante, como `alt+o`/`alt+O` en el anillo de paneles.
+    # Checksums (#311). Krusader has them in its File menu and none of the
+    # four imported managers gives them a chord, so the key is CHOSEN:
+    # `alt+k` computes and `alt+K` verifies — free in all seven, and the
+    # uppercase letter for the variant, as with `alt+o`/`alt+O` in the pane
+    # ring.
     { on = ["alt+k"], run = "pane.checksum" },
     { on = ["alt+K"], run = "pane.checksum-verify" },
     { on = ["alt+h"], run = "layout.split-h" },
@@ -256,21 +265,23 @@ keymap = [
     { on = ["e"], run = "viewer.encoding" },
     { on = ["E"], run = "viewer.encoding-auto" },
     { on = ["x"], run = "viewer.hex" },
-    # El zoom de una imagen. Teclas de función porque son las que la barra
-    # del visor NOMBRA: un zoom que no se ve en ningún sitio es un zoom que
-    # nadie encuentra. Ningún gestor de referencia atesta estas tres, así
-    # que la elección es nuestra y va igual en los siete presets.
+    # An image's zoom. Function keys because they are what the viewer's
+    # status bar NAMES: a zoom that shows nowhere is a zoom nobody finds. No
+    # reference manager attests these three, so the choice is ours and is
+    # the same across all seven presets.
     { on = ["f5"], run = "viewer.zoom-out" },
     { on = ["f6"], run = "viewer.zoom-in" },
     { on = ["f7"], run = "viewer.zoom-fit" },
-    # Las hermanas del listado, por lo mismo que el zoom: teclas de función
-    # porque son las que la barra del visor NOMBRA. Van igual en los siete.
+    # The listing's siblings, for the same reason as zoom: function keys
+    # because they are what the viewer's status bar NAMES. They are the same
+    # across all seven.
     #
-    # DIVERGENCIA consciente: `f9` es `app.menu` en global, así que dentro del
-    # visor el menú deja de abrirse con esa tecla y se abre con `alt+m`, que ya
-    # lo abre en los siete. Se acepta porque el menú es de la APLICACIÓN y el
-    # visor es una pantalla propia —sus teclas son suyas mientras dura—,
-    # mientras que pasar de foto es justo lo que se quiere hacer ahí.
+    # Deliberate DIVERGENCE: `f9` is `app.menu` in global, so inside the
+    # viewer the menu stops opening with that key and opens with `alt+m`,
+    # which already opens it in all seven. This is accepted because the menu
+    # belongs to the APPLICATION and the viewer is a screen of its own —its
+    # keys are its own while it lasts—, while flipping to the next photo is
+    # exactly what one wants to do there.
     { on = ["f8"], run = "viewer.prev" },
     { on = ["f9"], run = "viewer.next" },
 ]
@@ -306,11 +317,11 @@ keymap = [
     { on = ["tab"], run = "dialog.pane" },
     { on = ["backspace"], run = "dialog.back" },
     { on = ["/"], run = "dialog.filter" },
-    # Las listas de historia (spec 2026-09-15 D2), con las teclas de la lista
-    # de Far —la única fuente que las itemiza— donde un terminal las entrega:
-    # `Del` quita y `Shift+Del` vacía. Abrir en el OTRO panel es
-    # `Ctrl+Shift+Enter` en Far, y ningún terminal lo distingue de Enter:
-    # `alt+enter` sí llega.
+    # The history lists (spec 2026-09-15 D2), with the keys from Far's list
+    # —the only source that itemises them— where a terminal delivers them:
+    # `Del` removes and `Shift+Del` clears. Opening in the OTHER pane is
+    # `Ctrl+Shift+Enter` in Far, and no terminal tells it apart from Enter:
+    # `alt+enter` does arrive.
     { on = ["delete"], run = "dialog.remove" },
     { on = ["shift+delete"], run = "dialog.clear" },
     { on = ["alt+enter"], run = "dialog.confirm-other" },

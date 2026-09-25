@@ -1,7 +1,7 @@
-# Guest WASM (#30 stage 3a): sonda de RED — conecta por TCP al `arg` del
-# comando, envía "ping", devuelve la respuesta. Prueba el gating de la
-# capability `net` (con red concedida conecta; sin ella, connect falla). NO es
-# miembro del workspace. Manifiesto AUTÓNOMO: empty `[workspace]`.
+# WASM guest (#30 stage 3a): NETWORK probe — connects over TCP to the
+# command's `arg`, sends "ping", returns the response. Tests the `net`
+# capability's gating (with network granted it connects; without it, connect
+# fails). NOT a workspace member. STANDALONE manifest: empty `[workspace]`.
 [workspace]
 
 [package]

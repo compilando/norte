@@ -1,17 +1,17 @@
-//! Guest WASM (#30 stage 2, ADR 0032): un provider READ-ONLY sobre un árbol
-//! FIJO en memoria — dogfood de la interfaz WIT `provider`.
+//! WASM guest (#30 stage 2, ADR 0032): a READ-ONLY provider over a FIXED
+//! in-memory tree — dogfooding the WIT `provider` interface.
 //!
-//! Prueba la proyección async→sync del trait `Provider`: `list` paginado
-//! (páginas de 2) y `read` por rango. Los nombres viajan como BYTES CRUDOS
-//! (regla 1) — incluye uno hostil (`a\xff\xfeb`) para pinear el round-trip.
-//! El árbol es el canónico de `readonly_provider_contract!` (subconjunto).
+//! Tests the `Provider` trait's async→sync projection: paginated `list`
+//! (pages of 2) and ranged `read`. Names travel as RAW BYTES (rule 1) —
+//! includes a hostile one (`a\xff\xfeb`) to pin the round trip. The tree is
+//! the canonical one from `readonly_provider_contract!` (a subset).
 
 wit_bindgen::generate!({
     world: "norte:provider/norte-provider",
     path: "wit",
-    // `host-log`/`host-config` viven en OTRO paquete desde la partición
-    // (ADR 0041 decisión 4); wit-bindgen exige decidir explícitamente qué
-    // hacer con los imports de fuera del paquete del world.
+    // `host-log`/`host-config` live in ANOTHER package since the split
+    // (ADR 0041 decision 4); wit-bindgen requires explicitly deciding what
+    // to do with imports from outside the world's package.
     generate_all,
 });
 
@@ -21,8 +21,8 @@ use exports::norte::provider::provider::{
 
 struct Mem;
 
-/// Un nodo del árbol fijo: fichero (con contenido) o directorio (con hijos y su
-/// tipo). Nombres en bytes crudos.
+/// A node of the fixed tree: file (with content) or directory (with
+/// children and their type). Names in raw bytes.
 enum Node {
     File(&'static [u8]),
     Dir(&'static [(&'static [u8], NodeKind)]),
@@ -34,13 +34,15 @@ enum NodeKind {
     Dir,
 }
 
-/// Nombres hostiles sembrados en `/hostile`: bytes no-UTF8 (`a\xff\xfeb`) y un
-/// nombre con un `/` INTERIOR (`a/b` — un solo segmento) que prueba que el
-/// modelo de segmentos NO trata el `/` como separador. Contenido = sus bytes.
+/// Hostile names seeded under `/hostile`: non-UTF-8 bytes (`a\xff\xfeb`)
+/// and a name with an INTERIOR `/` (`a/b` — a single segment) that tests
+/// that the segment model does NOT treat `/` as a separator. Content =
+/// its bytes.
 const HOSTILE: &[u8] = b"a\xff\xfeb";
 const HOSTILE_SLASH: &[u8] = b"a/b";
 
-/// Resuelve un path (segmentos) al nodo del árbol, o `None` si no existe.
+/// Resolves a path (segments) to the tree's node, or `None` if it does not
+/// exist.
 fn resolve(path: &[Vec<u8>]) -> Option<Node> {
     match path.len() {
         0 => Some(Node::Dir(&[
@@ -86,14 +88,14 @@ fn entry(name: &[u8], kind: EntryKind, size: Option<u64>) -> Entry {
     }
 }
 
-/// Tamaño en u64 de un contenido `&[u8]`.
+/// Size as u64 of a `&[u8]` content.
 fn len_u64(b: &[u8]) -> u64 {
     b.len() as u64
 }
 
 impl Guest for Mem {
     fn configure(_cfg: ProviderConfig) -> Result<(), VfsError> {
-        // El provider en memoria no establece conexión: no-op.
+        // The in-memory provider establishes no connection: no-op.
         Ok(())
     }
 
@@ -122,12 +124,12 @@ impl Guest for Mem {
     fn list_dir(p: Vec<Vec<u8>>, cursor: Option<Vec<u8>>) -> Result<Page, VfsError> {
         let children = match resolve(&p) {
             Some(Node::Dir(kids)) => kids,
-            Some(Node::File(_)) => return Err(VfsError::Unsupported), // list de un fichero
+            Some(Node::File(_)) => return Err(VfsError::Unsupported), // list of a file
             None => return Err(VfsError::NotFound),
         };
-        // Paginación real (páginas de 2) para ejercitar el cursor. El cursor es
-        // OPACO (bytes): este guest codifica el índice de inicio en 4 bytes LE;
-        // un cursor con otra longitud es basura → CursorExpired.
+        // Real pagination (pages of 2) to exercise the cursor. The cursor
+        // is OPAQUE (bytes): this guest encodes the start index in 4 LE
+        // bytes; a cursor with another length is garbage → CursorExpired.
         const PAGE: usize = 2;
         let start = match cursor {
             None => 0usize,
@@ -138,8 +140,8 @@ impl Guest for Mem {
         };
         let mut out = Vec::new();
         for (name, kind) in children.iter().skip(start).take(PAGE) {
-            // El size de un hijo se resuelve mirando su nodo (una llamada de
-            // stat lo daría igual; aquí basta con file/dir).
+            // A child's size is resolved by looking at its node (a stat
+            // call would give the same; file/dir is enough here).
             let (ek, size) = match kind {
                 NodeKind::File => {
                     let mut child = p.clone();
@@ -169,7 +171,7 @@ impl Guest for Mem {
     fn read(p: Vec<Vec<u8>>, offset: u64, len: u64) -> Result<Vec<u8>, VfsError> {
         let data = match resolve(&p) {
             Some(Node::File(d)) => d,
-            Some(Node::Dir(_)) => return Err(VfsError::Unsupported), // read de un dir
+            Some(Node::Dir(_)) => return Err(VfsError::Unsupported), // read of a dir
             None => return Err(VfsError::NotFound),
         };
         let start = usize::try_from(offset)
@@ -180,8 +182,9 @@ impl Guest for Mem {
         Ok(data[start..end].to_vec())
     }
 
-    // ---- escritura: este guest es READ-ONLY → todo Unsupported (#30 stage
-    // 2b-write). El writer resource se declara pero jamás se construye.
+    // ---- write: this guest is READ-ONLY → everything Unsupported (#30
+    // stage 2b-write). The writer resource is declared but never
+    // constructed.
     type Writer = NoWriter;
 
     fn open_writer(_s: Vec<Vec<u8>>) -> Result<Writer, VfsError> {
@@ -201,7 +204,7 @@ impl Guest for Mem {
     }
 }
 
-/// Writer inalcanzable de un guest read-only (nunca se construye).
+/// Unreachable writer of a read-only guest (never constructed).
 struct NoWriter;
 
 impl GuestWriter for NoWriter {

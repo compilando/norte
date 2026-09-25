@@ -1,134 +1,136 @@
-// Pintores de `Screen` para log (ola W10): funciones con `this: Screen`,
-// enganchadas como propiedades en `render.ts`. El estado sigue en la clase.
+// `Screen` painters for log (wave W10): functions with `this: Screen`, hooked
+// in as properties in `render.ts`. State stays in the class.
 
 import type { Screen } from "../render";
 import type { LogSlotView } from "../types";
-import { nota, chip, badge } from "./dom";
+import { note, chip, badge } from "./dom";
 import type { SlotDom } from "./dom";
 
 /**
- * El panel de registro (#326): lo que este proceso está registrando.
+ * The log panel (#326): what this process is logging.
  *
- * La cabecera lleva tres cosas que el panel no puede callar. El NIVEL y el
- * FILTRO, porque un panel que se ve vacío con un filtro puesto se lee como
- * un panel roto. Si está pegado al final, porque «no pasa nada» y «te has
- * despegado y esto es historia» son indistinguibles sin decirlo. Y de qué
- * PROCESO son las líneas: la ventana arranca su propio daemon, así que aquí
- * NO está lo del daemon —los providers, el journal, la política—, y quien lo
- * abra buscando el motivo de una conexión fallida no lo va a encontrar.
+ * The header carries three things the panel cannot stay silent about. LEVEL
+ * and FILTER, because a panel that looks empty with a filter set reads as a
+ * broken panel. Whether it is stuck to the end, because "nothing is
+ * happening" and "you have detached and this is history" are
+ * indistinguishable without saying so. And which PROCESS the lines belong
+ * to: the window starts its own daemon, so the daemon's own lines — the
+ * providers, the journal, the policy — are NOT here, and whoever opens it
+ * looking for the reason a connection failed will not find it.
  *
- * Las líneas tiradas por el anillo también se dicen: un registro con un
- * agujero silencioso miente sobre lo que pasó, porque la ausencia de una
- * línea es indistinguible de que el evento no ocurriera.
+ * Lines dropped by the ring are also stated: a log with a silent hole lies
+ * about what happened, because a missing line is indistinguishable from the
+ * event never occurring.
  */
 export function paintLog(this: Screen, dom: SlotDom, slot: LogSlotView): void {
   dom.root.setAttribute("aria-label", this.t("log-title"));
   dom.scroller.className = "log";
   dom.title.replaceChildren(
     document.createTextNode(this.t("log-title")),
-    // La ETIQUETA, no el id de cable: el chip decía `trace` mientras los
-    // botones de al lado decían «traza» y cada línea decía `trace` otra
-    // vez. `TRACE` es lo que pinta el terminal, lo que se escribe en
-    // `RUST_LOG` y lo que alguien busca con la vista en una lista larga.
+    // The LABEL, not the wire id: the chip said `trace` while the buttons
+    // next to it said "traza" and each line said `trace` again. `TRACE` is
+    // what the terminal paints, what gets written in `RUST_LOG` and what
+    // someone scans for by eye in a long list.
     chip(`${this.t("log-level")}: ${slot.level_label ?? slot.level}`),
     ...(slot.filter === "" ? [] : [chip(`/${slot.filter}`)]),
     ...(slot.following ? [] : [chip(this.t("log-detached"))]),
-    // Se está guardando MÁS de lo que se ve: quien mira tiene derecho a
-    // saberlo, sobre todo antes de hacer una captura de pantalla.
+    // MORE is being kept than what is shown: whoever is looking has a right
+    // to know, especially before taking a screenshot.
     ...(slot.capturing === "" ? [] : [chip(slot.capturing)]),
     ...(slot.dropped_note === "" ? [] : [chip(slot.dropped_note)]),
-    // La fuente. Con un daemon que sirve su registro es un SELECTOR —una
-    // pulsación recorre ventana, daemon y los dos—; sin él es una etiqueta,
-    // porque un mando entre tres vistas de un mismo anillo promete algo que
-    // no existe. El host ya colapsa `both` a `window` en ese caso, así que
-    // aquí solo hay que decidir si se puede pulsar.
-    slot.sources_available ? this.selectorDeFuente(slot) : chip(slot.source),
-    // Y lo que haya que decir de ella: que el daemon no sirve su registro,
-    // o de quién es el nivel que se está enseñando.
+    // The source. With a daemon that serves its own log this is a SELECTOR
+    // — a click cycles window, daemon and both; without one it is a label,
+    // because a control between three views of the same ring promises
+    // something that does not exist. The host already collapses `both` to
+    // `window` in that case, so here only whether it can be clicked needs
+    // deciding.
+    slot.sources_available ? this.sourceSelector(slot) : chip(slot.source),
+    // And whatever needs to be said about it: that the daemon does not
+    // serve its log, or whose level is being shown.
     ...(slot.source_note === "" ? [] : [chip(slot.source_note)]),
   );
-  // El bloque de mandos se REUSA mientras siga siendo el mismo hueco. Se
-  // creaba en cada repintado, y como cada tecla del filtro provoca una foto
-  // —o sea un repintado—, el campo se destruía con el primer carácter y se
-  // perdían el foco y el caret. Es el mismo fallo que el campo de un diálogo
-  // ya tuvo, y la misma cura: conservar el nodo.
-  let mandos = this.logControles;
-  if (mandos === null || this.logPintado !== slot.slot_id) {
-    mandos = this.crearControlesDeRegistro();
-    this.logControles = mandos;
-    this.logPintado = slot.slot_id;
+  // The controls block is REUSED as long as it is still the same slot. It
+  // used to be created on every repaint, and since every filter keystroke
+  // triggers a frame — i.e. a repaint — the field was destroyed on the first
+  // character and focus and caret were lost. Same bug a dialog's field
+  // already had, and the same cure: keep the node.
+  let controls = this.logControls;
+  if (controls === null || this.logControlsSlot !== slot.slot_id) {
+    controls = this.createLogControls();
+    this.logControls = controls;
+    this.logControlsSlot = slot.slot_id;
   }
-  for (const b of mandos.querySelectorAll("button[data-level]")) {
+  for (const b of controls.querySelectorAll("button[data-level]")) {
     const el = b as HTMLElement;
     el.dataset["on"] = String(el.dataset["level"] === slot.level);
   }
-  const filtro = mandos.querySelector(".log-filter");
-  // Solo si NO se está escribiendo en él: resembrarlo mientras tiene el foco
-  // devolvería la proyección del host encima de lo que el lector teclea.
-  if (filtro instanceof HTMLInputElement && document.activeElement !== filtro) {
-    filtro.value = slot.filter;
+  const filter = controls.querySelector(".log-filter");
+  // Only if it is NOT being typed into: reseeding it while it has focus
+  // would drop the host's projection on top of what the reader is typing.
+  if (filter instanceof HTMLInputElement && document.activeElement !== filter) {
+    filter.value = slot.filter;
   }
-  const seguir = mandos.querySelector(".log-follow");
-  if (seguir instanceof HTMLButtonElement) {
-    seguir.disabled = slot.following;
+  const follow = controls.querySelector(".log-follow");
+  if (follow instanceof HTMLButtonElement) {
+    follow.disabled = slot.following;
   }
 
-  const lista = document.createElement("ul");
-  lista.className = "log-lines";
-  lista.setAttribute("role", "log");
+  const list = document.createElement("ul");
+  list.className = "log-lines";
+  list.setAttribute("role", "log");
   for (const l of slot.lines) {
-    const fila = document.createElement("li");
-    fila.className = "log-line";
-    fila.dataset["level"] = l.level;
-    // De qué proceso salió. En la lista mezclada es lo que separa «el
-    // provider falló» de «la ventana no pudo pintarlo», que se leen igual y
-    // son dos averías distintas.
-    fila.dataset["source"] = l.source;
-    const hora = document.createElement("span");
-    hora.className = "log-time";
-    hora.textContent = l.time;
-    const nivel = document.createElement("span");
-    nivel.className = "log-level";
-    nivel.textContent = l.level_label ?? l.level;
+    const row = document.createElement("li");
+    row.className = "log-line";
+    row.dataset["level"] = l.level;
+    // Which process it came from. In the merged list this is what tells
+    // apart "the provider failed" from "the window could not paint it",
+    // which read the same and are two different failures.
+    row.dataset["source"] = l.source;
+    const time = document.createElement("span");
+    time.className = "log-time";
+    time.textContent = l.time;
+    const level = document.createElement("span");
+    level.className = "log-level";
+    level.textContent = l.level_label ?? l.level;
     const target = document.createElement("span");
     target.className = "log-target";
     target.textContent = l.target;
     const msg = document.createElement("span");
     msg.className = "log-message";
     msg.textContent = l.message;
-    fila.append(hora, nivel, target, msg);
+    row.append(time, level, target, msg);
     if (l.hostile) {
-      fila.append(badge(this.t("hostile-name")));
+      row.append(badge(this.t("hostile-name")));
     }
-    lista.append(fila);
+    list.append(row);
   }
-  // La rueda desplaza el registro por el HOST, no por el DOM: la ventana
-  // visible la decide él, y dejar que el navegador desplace un trozo que
-  // solo tiene las líneas visibles no llegaría a ninguna parte.
+  // The wheel scrolls the log through the HOST, not the DOM: it decides the
+  // visible window, and letting the browser scroll a chunk that only has the
+  // visible lines would not get anywhere.
   dom.scroller.onwheel = (e) => {
     e.preventDefault();
     this.send({ action: "log_scroll", delta: e.deltaY > 0 ? 3 : -3 });
   };
-  // Un panel vacío lo DICE. Sin esto, «no hay nada», «el filtro se lo come
-  // todo» y «este proceso no tiene anillo» se pintan los tres igual: una
-  // caja en blanco, que se lee como un panel roto.
-  const cuerpo: HTMLElement = slot.lines.length === 0 ? nota(this.t("log-empty")) : lista;
-  dom.scroller.replaceChildren(mandos, cuerpo);
+  // An empty panel SAYS SO. Without this, "there is nothing", "the filter
+  // eats everything" and "this process has no ring" all paint the same: a
+  // blank box, which reads as a broken panel.
+  const body: HTMLElement = slot.lines.length === 0 ? note(this.t("log-empty")) : list;
+  dom.scroller.replaceChildren(controls, body);
   this.scheduleLogRows(dom);
 }
 
 /**
- * El selector de fuente del registro (#328).
+ * The log's source selector (#328).
  *
- * Se crea en cada pintado y no se reusa como el bloque de mandos: no tiene
- * estado del DOM que perder —ni foco ni caret— y su etiqueta cambia con la
- * fuente, que es justo lo que hay que repintar.
+ * Created on every paint and not reused like the controls block: it has no
+ * DOM state to lose — no focus, no caret — and its label changes with the
+ * source, which is exactly what needs repainting.
  *
- * `data-source` lleva el identificador de WIRE y no la etiqueta traducida:
- * es lo que permite comprobar cuál está puesta sin atar la prueba al idioma,
- * la misma regla que los botones de nivel.
+ * `data-source` carries the WIRE identifier and not the translated label: it
+ * is what lets a test check which one is set without tying it to the
+ * language, the same rule as the level buttons.
  */
-export function selectorDeFuente(this: Screen, slot: LogSlotView): HTMLElement {
+export function sourceSelector(this: Screen, slot: LogSlotView): HTMLElement {
   const b = document.createElement("button");
   b.type = "button";
   b.className = "chip log-source";
@@ -141,55 +143,55 @@ export function selectorDeFuente(this: Screen, slot: LogSlotView): HTMLElement {
 }
 
 /**
- * Los mandos del registro, UNA vez por hueco.
+ * The log's controls, built ONCE per slot.
  *
- * Aparte del pintado porque llevan estado del DOM que no se puede tirar en
- * cada foto: el foco y el caret del filtro.
+ * Separate from painting because they carry DOM state that cannot be thrown
+ * away on every frame: the filter's focus and caret.
  */
-export function crearControlesDeRegistro(this: Screen): HTMLElement {
-  const mandos = document.createElement("div");
-  mandos.className = "log-controls";
-  // Un botón por valor del vocabulario CERRADO. Se comparan por el
-  // identificador de wire y no por su etiqueta traducida: comparar frases
-  // traducidas ataría el nivel al idioma.
-  for (const nivel of ["error", "warn", "info", "debug", "trace"]) {
+export function createLogControls(this: Screen): HTMLElement {
+  const controls = document.createElement("div");
+  controls.className = "log-controls";
+  // One button per value of the CLOSED vocabulary. Compared by the wire
+  // identifier and not by its translated label: comparing translated
+  // sentences would tie the level to the language.
+  for (const level of ["error", "warn", "info", "debug", "trace"]) {
     const b = document.createElement("button");
     b.type = "button";
-    b.dataset["level"] = nivel;
-    b.textContent = this.t(`log-level-${nivel}`);
+    b.dataset["level"] = level;
+    b.textContent = this.t(`log-level-${level}`);
     b.addEventListener("click", () => {
-      this.send({ action: "log_set_level", level: nivel });
+      this.send({ action: "log_set_level", level });
     });
-    mandos.append(b);
+    controls.append(b);
   }
-  const filtro = document.createElement("input");
-  filtro.type = "text";
-  filtro.className = "log-filter";
-  filtro.placeholder = this.t("log-filter");
-  filtro.setAttribute("aria-label", this.t("log-filter"));
-  filtro.addEventListener("input", () => {
-    this.send({ action: "log_set_filter", filter: filtro.value });
+  const filter = document.createElement("input");
+  filter.type = "text";
+  filter.className = "log-filter";
+  filter.placeholder = this.t("log-filter");
+  filter.setAttribute("aria-label", this.t("log-filter"));
+  filter.addEventListener("input", () => {
+    this.send({ action: "log_set_filter", filter: filter.value });
   });
-  mandos.append(filtro);
-  const seguir = document.createElement("button");
-  seguir.type = "button";
-  seguir.className = "log-follow";
-  seguir.textContent = this.t("log-follow");
-  seguir.addEventListener("click", () => {
+  controls.append(filter);
+  const follow = document.createElement("button");
+  follow.type = "button";
+  follow.className = "log-follow";
+  follow.textContent = this.t("log-follow");
+  follow.addEventListener("click", () => {
     this.send({ action: "log_follow" });
   });
-  mandos.append(seguir);
-  return mandos;
+  controls.append(follow);
+  return controls;
 }
 
 /**
- * Cuántas líneas caben, medidas del DOM y mandadas al host.
+ * How many lines fit, measured from the DOM and sent to the host.
  *
- * El host no puede adivinarlo, y mientras nadie se lo dijo se quedó con su
- * valor de arranque —UNA fila— así que el panel enseñaba una línea recortada
- * dentro de una caja de doce, y la rueda se saltaba dos por muesca. Es la
- * misma medida que hace el listado y por el mismo motivo: la ventana visible
- * la decide quien la pinta.
+ * The host cannot guess it, and while nobody told it, it stayed at its
+ * startup value — ONE row — so the panel showed one truncated line inside a
+ * box for twelve, and the wheel skipped two per notch. Same measurement the
+ * listing makes and for the same reason: the visible window is decided by
+ * whoever paints it.
  */
 export function scheduleLogRows(this: Screen, dom: SlotDom): void {
   if (this.pendingLogRows !== null) {
@@ -198,14 +200,14 @@ export function scheduleLogRows(this: Screen, dom: SlotDom): void {
   this.pendingLogRows = requestAnimationFrame(() => {
     this.pendingLogRows = null;
     const { h } = this.cell();
-    const cuerpo = dom.scroller.querySelector(".log-lines, .slot-note");
-    const alto =
-      cuerpo instanceof HTMLElement ? cuerpo.clientHeight : dom.scroller.clientHeight;
-    const rows = Math.max(1, Math.floor(alto / h));
-    if (this.logFilas === rows) {
+    const body = dom.scroller.querySelector(".log-lines, .slot-note");
+    const height =
+      body instanceof HTMLElement ? body.clientHeight : dom.scroller.clientHeight;
+    const rows = Math.max(1, Math.floor(height / h));
+    if (this.logRows === rows) {
       return;
     }
-    this.logFilas = rows;
+    this.logRows = rows;
     this.send({ action: "log_set_visible_range", rows });
   });
 }

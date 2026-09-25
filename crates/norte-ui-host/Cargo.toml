@@ -1,6 +1,6 @@
 [package]
 name = "norte-ui-host"
-description = "El estado semántico de un frontend gráfico, independiente del toolkit que lo pinte"
+description = "The semantic state of a graphical frontend, independent of the toolkit that paints it"
 license = "MIT OR Apache-2.0"
 version.workspace = true
 edition.workspace = true
@@ -8,43 +8,46 @@ rust-version.workspace = true
 repository.workspace = true
 authors.workspace = true
 
-# Este crate NO conoce renderer alguno: ni Tauri, ni web, ni GPUI, ni ratatui
-# (ADR 0066, decisión D2). Su test de frontera lo vigila igual que el del SDK.
+# This crate knows NO renderer at all: not Tauri, not web, not GPUI, not
+# ratatui (ADR 0066, decision D2). Its boundary test watches this the same
+# way the SDK's does.
 [dependencies]
 futures.workspace = true
 norte-client.workspace = true
 norte-encoding.workspace = true
 norte-vfs.workspace = true
 norte-frontend.workspace = true
-# La rejilla del panel de terminal (#362), la MISMA que pinta la terminal: es
-# lo que hace que los dos frontends enseñen lo mismo por construcción en vez de
-# por comparar dos emuladores. Es de casa y su única dependencia externa es
-# `vte`, justificada en su Cargo.toml.
+# The terminal panel's grid (#362), the SAME one that paints the terminal:
+# it is what makes the two frontends show the same thing by construction
+# instead of by comparing two emulators. It is in-house and its only
+# external dependency is `vte`, justified in its own Cargo.toml.
 norte-term = { workspace = true, features = ["pty"] }
-# La configuración YA cargada entra en el host para la vista de ajustes en
-# solo lectura (tarea 4.5). El host no la LEE de disco —quien lo arranca se la
-# pasa—, pero sí necesita nombrar su tipo. Ya estaba en el grafo vía
-# `norte-frontend`, y era dev-dependency de este crate: no compila nada nuevo.
+# The ALREADY loaded configuration enters the host for the read-only settings
+# view (task 4.5). The host does not READ it from disk — whoever starts it
+# passes it in — but it does need to name its type. It was already in the
+# graph via `norte-frontend`, and was a dev-dependency of this crate: nothing
+# new compiles.
 #
-# `logging` desde #326: el panel de registro LEE el anillo
-# (`norte_config::logring::LogRing`), que vive tras esa feature porque el módulo
-# lleva también la capa del subscriber. El binario que hospeda este host
-# (`norte-gui-tauri`) ya la enciende para montar esa capa, así que aquí no
-# compila nada nuevo — es el mismo grafo, declarado donde de verdad se usa.
+# `logging` since #326: the log panel READS the ring
+# (`norte_config::logring::LogRing`), which lives behind that feature because
+# the module also carries the subscriber layer. The binary that hosts this
+# host (`norte-gui-tauri`) already turns it on to mount that layer, so
+# nothing new compiles here either — it is the same graph, declared where it
+# is actually used.
 norte-config = { workspace = true, features = ["logging"] }
-# La ayuda (tarea 4.4): el corpus y su modelo de bloques. La dependencia va
-# host → help y nunca al revés (`norte_help::resolve` explica por qué): un
-# `norte-help` que conociera un frontend solo podría servir a uno. Ya está en
-# el grafo vía `norte-frontend`, no entra nada nuevo a compilar.
+# Help (task 4.4): the corpus and its block model. The dependency runs
+# host → help and never the other way (`norte_help::resolve` explains why): a
+# `norte-help` that knew a frontend could only serve one. It is already in
+# the graph via `norte-frontend`, nothing new compiles.
 norte-help.workspace = true
 norte-i18n.workspace = true
 norte-proto.workspace = true
-# El TEMA. El host ya modelaba uno (`pickers::HostTheme`) con los colores que
-# le pasaban al arrancar; desde que su selector ELIGE, tiene que resolver por
-# nombre el que el lector señala, y eso es este crate. Es una hoja de datos
-# —colores y roles, sin toolkit y sin core— que ya estaba en el grafo por el
-# TUI y por la ventana: no entra nada nuevo a compilar, y la frontera que el
-# ADR 0066 dibuja (ni core ni toolkit) queda donde estaba.
+# The THEME. The host already modeled one (`pickers::HostTheme`) with the
+# colors passed to it at startup; now that its picker CHOOSES, it has to
+# resolve by name the one the reader points to, and that is this crate. It
+# is a data sheet — colors and roles, no toolkit and no core — that was
+# already in the graph via the TUI and the window: nothing new compiles, and
+# the boundary ADR 0066 draws (neither core nor toolkit) stays where it was.
 norte-theme.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -53,37 +56,38 @@ tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 tracing.workspace = true
 
 [dev-dependencies]
-# El arnés de paridad compara los DOS frontends (ADR 0097, D1). Hasta ahora
-# comparaba este host contra las primitivas compartidas con un arnés cuyos
-# pasos codificaban la respuesta DEL HOST, o sea que no podía fallar; la
-# auditoría del 2026-09-05 encontró diecisiete decisiones ya divergidas que
-# pasaron por debajo. Para comparar hace falta ver el otro lado.
+# The parity harness compares the TWO frontends (ADR 0097, D1). Until now it
+# compared this host against the shared primitives with a harness whose
+# steps encoded the HOST's own response, so it could never fail; the
+# 2026-09-05 audit found seventeen decisions already diverged that had
+# slipped through underneath. Comparing needs seeing the other side.
 #
-# DEV-dependency y solo eso: el árbol de release de este crate no puede
-# contener un frontend, y `tests/dependency_boundary.rs` lo comprueba ahí. No
-# entra nada nuevo a compilar — el gate ya construye el workspace entero.
+# DEV-dependency and only that: this crate's release tree cannot contain a
+# frontend, and `tests/dependency_boundary.rs` checks exactly that. Nothing
+# new compiles — the gate already builds the whole workspace.
 norte-tui.workspace = true
-# El e2e levanta un daemon REAL y conecta el SDK contra él. Son
-# dev-dependencies: el test de frontera solo mira el árbol de release, que es
-# donde el core no puede estar.
+# The e2e test brings up a REAL daemon and connects the SDK against it. They
+# are dev-dependencies: the boundary test only looks at the release tree,
+# which is where the core must never be.
 bytes.workspace = true
 norte-core.workspace = true
 norte-testkit.workspace = true
 norte-vfs.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
-# El panel de registro (#326) se prueba llenando el anillo por su camino de
-# VERDAD —la capa de `tracing` que lo alimenta—, y no con un `push` público.
-# Un `push` público se saltaría el filtro donde vive la cota de `suppaftp`
-# (que loguea `PASS <password>` a nivel TRACE), y esa cota no es negociable.
+# The log panel (#326) is tested by filling the ring through its path of
+# TRUTH — the `tracing` layer that feeds it — and not with a public `push`.
+# A public `push` would skip the filter that carries the `suppaftp` guard
+# (which logs `PASS <password>` at TRACE level), and that guard is not
+# negotiable.
 tracing-subscriber.workspace = true
-# Una disposición de TRES listados, que ningún preset de fábrica trae: el
-# destino solo se puede adivinar mal cuando hay más de un candidato.
+# A layout of THREE listings, which no factory preset ships: the destination
+# can only be guessed wrong when there is more than one candidate.
 toml.workspace = true
-# test-util: `start_paused` para el TTL del tablero de tasks — el test salta
-# los diez segundos en vez de esperarlos, que es la diferencia entre un test
-# determinista y uno que dura lo que dura el plazo. Mismo motivo por el que ya
-# está en norte-tui, norte-core y norte-frontend.
+# test-util: `start_paused` for the task board's TTL — the test skips the
+# ten seconds instead of waiting them out, which is the difference between a
+# deterministic test and one that takes as long as the deadline. Same reason
+# it is already in norte-tui, norte-core and norte-frontend.
 tokio = { workspace = true, features = [
     "macros",
     "rt-multi-thread",

@@ -1,41 +1,41 @@
-//! Las marcas: qué está elegido para operar, y el barrido que las pinta con
-//! el ratón.
+//! The marks: what is chosen to operate on, and the sweep that paints them
+//! with the mouse.
 //!
-//! Es la mitad del pane que decide SOBRE QUÉ actúa una operación, así que
-//! vive junta: marcar una a una, todas, por patrón, invertir, y el barrido
-//! —que es una edición TENTATIVA con su línea base, para que soltar el botón
-//! donde empezaste no deje media selección hecha.
+//! It is the half of the pane that decides WHAT an operation acts on, so it
+//! lives together: marking one by one, all of them, by pattern, inverting,
+//! and the sweep —which is a TENTATIVE edit with its baseline, so releasing
+//! the button where you started does not leave half a selection made.
 
 use super::{
     Entry, EntryKind, GlobBuilder, HashSet, Mode, PaneState, PatternError, VPath,
     unicode_glob_regex,
 };
 
-/// Lo que se sabe de las marcas de un listado en una sola pasada
+/// What is known about a listing's marks in a single pass
 /// ([`PaneState::marks_summary`]).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MarksSummary {
-    /// Lo que pesan los FICHEROS marcados que declaran tamaño.
+    /// What the marked FILES that declare a size weigh.
     pub bytes: u64,
-    /// Cuántos de los marcados son directorios.
+    /// How many of the marked ones are directories.
     pub dirs: usize,
-    /// La regla de marcas: los tramos con alguna, en orden.
+    /// The mark ruler: the segments carrying any, in order.
     pub ruler: Vec<u16>,
 }
 
-/// La extensión de un nombre BASE, en bytes y sin el punto; `None` si no
-/// tiene.
+/// A BASE name's extension, in bytes and without the dot; `None` if it has
+/// none.
 ///
-/// Misma regla que [`crate::rename_pattern::split_name`], y a propósito: el
-/// punto que separa es el ÚLTIMO, y un nombre que empieza por punto y no tiene
-/// otro —`.bashrc`— no tiene extensión, tiene nombre. Dos definiciones de «la
-/// extensión» en el mismo programa acabarían marcando un conjunto y
-/// renombrando otro.
+/// Same rule as [`crate::rename_pattern::split_name`], and on purpose: the
+/// separating dot is the LAST one, and a name that starts with a dot and has
+/// no other —`.bashrc`— has no extension, it has a name. Two definitions of
+/// "the extension" in the same program would end up marking one set and
+/// renaming another.
 ///
-/// En bytes porque un nombre no tiene por qué ser texto (regla 1): pasarlo por
-/// `String` haría que dos nombres distintos que colapsan al mismo carácter de
-/// reemplazo se marcaran juntos.
-fn extension_de(name: &[u8]) -> Option<&[u8]> {
+/// In bytes because a name need not be text (rule 1): passing it through
+/// `String` would make two different names that collapse to the same
+/// replacement character get marked together.
+fn extension_of(name: &[u8]) -> Option<&[u8]> {
     match name.iter().rposition(|b| *b == b'.') {
         Some(0) | None => None,
         Some(i) => Some(&name[i + 1..]),
@@ -43,55 +43,57 @@ fn extension_de(name: &[u8]) -> Option<&[u8]> {
 }
 
 impl PaneState {
-    /// La ÚNICA puerta por la que una ruta entra en el conjunto de marcas.
-    /// `true` = no estaba y ahora sí.
+    /// The ONLY door through which a path enters the mark set. `true` = it
+    /// was not there and now it is.
     ///
-    /// Rechaza la ruta del directorio PADRE, y esa es la red bajo todo lo
-    /// demás: la defensa principal es que la fila `..` no sea marcable (por
-    /// `markable_indices`) y que no se copie a otro pane (por
-    /// [`PaneState::real_entries`]) — esta es la que convierte el próximo
-    /// escape en «no pasa nada» en vez de en un borrado del directorio de
-    /// arriba, que es lo que pasó cuando partir un panel la copiaba como
-    /// entrada normal.
+    /// Rejects the PARENT directory's path, and that is the safety net under
+    /// everything else: the main defense is that the `..` row is not
+    /// markable (through `markable_indices`) and is not copied to another
+    /// pane (through [`PaneState::real_entries`]) — this one turns the next
+    /// slip into "nothing happens" instead of deleting the directory above,
+    /// which is what happened when splitting a panel copied it as a normal
+    /// entry.
     ///
-    /// Mirar la RUTA es seguro AQUÍ y seguiría sin serlo en
-    /// [`PaneState::is_parent_row`]: la ruta de una entrada de este directorio
-    /// es siempre `dir/nombre`, así que solo la fila sintética —o una copia
-    /// suya— puede ser exactamente el padre; un enlace o un montaje que
-    /// APUNTEN al padre tienen la suya propia y se marcan como cualquiera.
-    fn marcar(&mut self, path: VPath) -> bool {
+    /// Looking at the PATH is safe HERE and would still not be safe in
+    /// [`PaneState::is_parent_row`]: an entry's path in this directory is
+    /// always `dir/name`, so only the synthetic row —or a copy of it— can be
+    /// exactly the parent; a link or a mount that POINTS at the parent has
+    /// its own and gets marked like any other.
+    fn mark(&mut self, path: VPath) -> bool {
         if self.parent_target() == Some(&path) {
             return false;
         }
         self.marks.insert(path)
     }
 
-    /// Siembra las marcas que traía un relevo entre frontends (fase 9).
+    /// Seeds the marks carried over by a hand-off between frontends (phase
+    /// 9).
     ///
-    /// Se puede llamar ANTES de que el listado llegue, y es lo normal: el
-    /// pane se levanta sobre la ruta guardada y sus entradas se drenan
-    /// después. Las marcas viven en un conjunto de `VPath`, así que sembrarlas
-    /// pronto no depende de que la fila exista todavía — cuando llegue,
-    /// aparecerá marcada.
+    /// It can be called BEFORE the listing arrives, and that is the normal
+    /// case: the pane comes up on the saved path and its entries drain in
+    /// afterwards. The marks live in a set of `VPath`, so seeding them early
+    /// does not depend on the row existing yet — when it arrives, it will
+    /// show up marked.
     ///
-    /// Una ruta que ya no está en el directorio se queda en el conjunto y no
-    /// hace nada: [`Self::marked_paths`] filtra por las entradas, así que no
-    /// puede ser el operando de una operación. Y la fila `..` no entra, por
-    /// la misma puerta que el resto.
+    /// A path that is no longer in the directory stays in the set and does
+    /// nothing: [`Self::marked_paths`] filters by the entries, so it cannot
+    /// be an operation's operand. And the `..` row does not get in, through
+    /// the same door as everything else.
     pub fn seed_marks(&mut self, paths: impl IntoIterator<Item = VPath>) {
         for p in paths {
-            self.marcar(p);
+            self.mark(p);
         }
     }
 
-    /// Togglea la marca de la entrada seleccionada (respeta el filtro quick:
-    /// marca la entrada VISIBLE bajo la selección). No-op si no hay selección.
+    /// Toggles the selected entry's mark (respects the quick filter: marks
+    /// the VISIBLE entry under the selection). No-op if there is no
+    /// selection.
     pub fn toggle_mark(&mut self) {
         let Some(path) = self.selected().map(|e| e.path.clone()) else {
             return;
         };
         if !self.marks.remove(&path) {
-            self.marcar(path);
+            self.mark(path);
         }
     }
 
@@ -118,11 +120,12 @@ impl PaneState {
         }
     }
 
-    /// El índice de la fila bajo el cursor EN `entries`, respetando el filtro.
+    /// The index of the row under the cursor IN `entries`, honouring the
+    /// filter.
     ///
-    /// Es la coordenada en la que hablan `mark_range` y `set_mark`, y no es la
-    /// misma que `cursor()` cuando hay un filtro quick puesto.
-    fn indice_bajo_el_cursor(&self) -> Option<usize> {
+    /// It is the coordinate `mark_range` and `set_mark` speak in, and it is
+    /// not the same as `cursor()` when a quick filter is on.
+    fn index_under_cursor(&self) -> Option<usize> {
         if let Some(q) = &self.quick
             && q.mode() == Mode::Filter
         {
@@ -131,12 +134,13 @@ impl PaneState {
         self.is_markable(self.cursor).then_some(self.cursor)
     }
 
-    /// Toggle-and-move hacia ARRIBA: el espejo de
-    /// [`Self::toggle_mark_and_advance`] (`shift+↑` de Far y del resto).
+    /// Toggle-and-move UPWARD: the mirror of
+    /// [`Self::toggle_mark_and_advance`] (Far's and everyone else's
+    /// `shift+↑`).
     ///
-    /// Existe porque la familia estaba a medias: `space`/`insert` marcan
-    /// bajando, y no había forma de marcar subiendo — el lector que se pasaba
-    /// una fila tenía que subir, desmarcar a mano y volver.
+    /// Exists because the family was half-done: `space`/`insert` mark going
+    /// down, and there was no way to mark going up — a reader who went one
+    /// row too far had to go back up, unmark by hand, and return.
     pub fn toggle_mark_and_retreat(&mut self) {
         self.toggle_mark();
         let filtering = self
@@ -150,48 +154,45 @@ impl PaneState {
         }
     }
 
-    /// Aplica a TODO el tramo entre el cursor y `n` filas más abajo (o arriba,
-    /// con `hacia_abajo` en falso) lo contrario de lo que tenga la fila del
-    /// cursor, y deja el cursor al final del tramo.
+    /// Applies to the WHOLE stretch between the cursor and `n` rows below (or
+    /// above, with `downward` false) the opposite of whatever the cursor's
+    /// row has, and leaves the cursor at the end of the stretch.
     ///
-    /// Lo decide la fila del CURSOR, no cada fila: así el gesto es reversible
-    /// —repetirlo deshace lo que hizo— y una selección a medias no se queda
-    /// alternando. Es la regla de `shift+PgDn`/`shift+PgUp` de Far y Total
-    /// Commander, y la misma que hace que «para deseleccionar, mueve en la
-    /// dirección contraria» tenga sentido.
+    /// It is the CURSOR's row that decides, not each row: that way the
+    /// gesture is reversible —repeating it undoes what it did— and a
+    /// half-made selection does not keep flip-flopping. It is Far's and
+    /// Total Commander's `shift+PgDn`/`shift+PgUp` rule, and the same one
+    /// that makes "to deselect, move in the opposite direction" make sense.
     ///
-    /// Con un filtro quick puesto no sale de lo VISIBLE: `mark_range` y
-    /// `set_mark` ya lo respetan, y el cursor se mueve por el camino filtrado.
-    pub fn toggle_mark_page(&mut self, n: usize, hacia_abajo: bool) {
-        let Some(desde) = self.indice_bajo_el_cursor() else {
+    /// With a quick filter on it does not leave the VISIBLE set: `mark_range`
+    /// and `set_mark` already honour it, and the cursor moves along the
+    /// filtered path.
+    pub fn toggle_mark_page(&mut self, n: usize, downward: bool) {
+        let Some(from) = self.index_under_cursor() else {
             return;
         };
-        let marcar = !self.marks.contains(&self.entries[desde].path);
-        self.fotografiar_marcas();
-        // Mover PRIMERO y leer el destino después: cuánto avanza de verdad lo
-        // decide el pane (topes, filtro), y suponerlo aquí marcaría un tramo
-        // que el cursor no recorre.
+        let should_mark = !self.marks.contains(&self.entries[from].path);
+        self.snapshot_marks();
+        // Move FIRST and read the destination afterwards: how far it really
+        // advances is decided by the pane (limits, filter), and assuming it
+        // here would mark a stretch the cursor does not travel through.
         let filtering = self
             .quick
             .as_ref()
             .is_some_and(|q| q.mode() == Mode::Filter);
         for _ in 0..n {
-            match (filtering, hacia_abajo) {
+            match (filtering, downward) {
                 (true, true) => self.quick_down(),
                 (true, false) => self.quick_up(),
                 (false, true) => self.page_down(1),
                 (false, false) => self.page_up(1),
             }
         }
-        let hasta = self.indice_bajo_el_cursor().unwrap_or(desde);
-        if marcar {
-            self.mark_range(desde, hasta);
+        let to = self.index_under_cursor().unwrap_or(from);
+        if should_mark {
+            self.mark_range(from, to);
         } else {
-            let (a, b) = if desde <= hasta {
-                (desde, hasta)
-            } else {
-                (hasta, desde)
-            };
+            let (a, b) = if from <= to { (from, to) } else { (to, from) };
             for i in self.markable_indices() {
                 if (a..=b).contains(&i) {
                     self.set_mark(i, false);
@@ -200,64 +201,64 @@ impl PaneState {
         }
     }
 
-    /// Krusader `Shift+Home`: marca todo lo que hay del cursor hacia ARRIBA y
-    /// DESMARCA lo que quede por debajo.
+    /// Krusader `Shift+Home`: marks everything from the cursor UPWARD and
+    /// UNMARKS whatever is left below.
     ///
-    /// La segunda mitad no es un extra: es lo que la documentación de Krusader
-    /// dice literalmente («selects everything above the cursor **and
-    /// deselects everything below the cursor, if selected**»), y es lo que
-    /// distingue este gesto de un «añade un tramo». Sin ella, el lector que lo
-    /// usa para acotar una selección se lleva por delante lo que creía haber
-    /// dejado fuera.
+    /// The second half is not an extra: it is what Krusader's documentation
+    /// says literally ("selects everything above the cursor **and
+    /// deselects everything below the cursor, if selected**"), and it is
+    /// what tells this gesture apart from an "add a stretch". Without it, a
+    /// reader using it to bound a selection would sweep away what they
+    /// thought they had left out.
     pub fn mark_to_top(&mut self) {
-        self.marcar_hasta_el_borde(true);
+        self.mark_to_edge(true);
     }
 
-    /// Krusader `Shift+End`: marca del cursor hacia ABAJO y desmarca lo de
-    /// arriba. El espejo de [`Self::mark_to_top`].
+    /// Krusader `Shift+End`: marks from the cursor DOWNWARD and unmarks
+    /// what is above. The mirror of [`Self::mark_to_top`].
     pub fn mark_to_bottom(&mut self) {
-        self.marcar_hasta_el_borde(false);
+        self.mark_to_edge(false);
     }
 
-    /// El cuerpo de los dos de arriba: `hacia_arriba` elige qué lado se marca.
+    /// The body of the two above: `upward` picks which side gets marked.
     ///
-    /// El cursor NO se mueve. Krusader tampoco lo mueve, y aquí importa más:
-    /// el tramo se define desde donde está, así que moverlo dejaría al lector
-    /// sin el punto desde el que acaba de acotar.
-    fn marcar_hasta_el_borde(&mut self, hacia_arriba: bool) {
-        let Some(desde) = self.indice_bajo_el_cursor() else {
+    /// The cursor does NOT move. Krusader does not move it either, and here
+    /// it matters more: the stretch is defined from where it is, so moving
+    /// it would leave the reader without the point they just bounded from.
+    fn mark_to_edge(&mut self, upward: bool) {
+        let Some(from) = self.index_under_cursor() else {
             return;
         };
-        self.fotografiar_marcas();
+        self.snapshot_marks();
         for i in self.markable_indices() {
-            let dentro = if hacia_arriba { i <= desde } else { i >= desde };
-            self.set_mark(i, dentro);
+            let inside = if upward { i <= from } else { i >= from };
+            self.set_mark(i, inside);
         }
     }
 
-    /// ¿Está marcada esta entrada? (por su `VPath` absoluto).
+    /// Is this entry marked? (by its absolute `VPath`).
     #[must_use]
     pub fn is_marked(&self, entry: &Entry) -> bool {
         self.marks.contains(&entry.path)
     }
 
-    /// Cuántas entradas marcadas.
+    /// How many marked entries there are.
     #[must_use]
     pub fn marks_len(&self) -> usize {
         self.marks.len()
     }
 
-    /// Lo que la cabecera de un listado dice de sus marcas, en UNA pasada:
-    /// cuánto pesan los ficheros marcados, cuántos directorios hay entre
-    /// ellos y la regla de marcas de `tramos` tramos.
+    /// What a listing's header says about its marks, in ONE pass: how much
+    /// the marked files weigh, how many directories are among them, and the
+    /// mark ruler over `segments` segments.
     ///
-    /// Es [`Self::marked_bytes`], [`Self::marked_dirs`] y
-    /// [`Self::mark_ruler`] juntas, y por eso existe: las tres recorrían el
-    /// listado entero cada una, y la cabecera las pide con cada tecla —
-    /// marcar en un directorio de veinte mil entradas costaba tres pasadas
-    /// por pulsación.
+    /// It is [`Self::marked_bytes`], [`Self::marked_dirs`] and
+    /// [`Self::mark_ruler`] together, and that is why it exists: the three
+    /// used to walk the whole listing each, and the header asks for them on
+    /// every keystroke — marking in a directory of twenty thousand entries
+    /// cost three passes per keypress.
     #[must_use]
-    pub fn marks_summary(&self, tramos: u16) -> MarksSummary {
+    pub fn marks_summary(&self, segments: u16) -> MarksSummary {
         let mut out = MarksSummary::default();
         let total = self.entries.len();
         if self.marks.is_empty() || total == 0 {
@@ -272,53 +273,55 @@ impl PaneState {
             } else {
                 out.bytes = out.bytes.saturating_add(e.size.unwrap_or(0));
             }
-            if tramos > 0 {
-                // `i < total`, así que el cociente es `< tramos`.
-                let tramo = u16::try_from(i * usize::from(tramos) / total).unwrap_or(tramos - 1);
-                if out.ruler.last() != Some(&tramo) {
-                    out.ruler.push(tramo);
+            if segments > 0 {
+                // `i < total`, so the quotient is `< segments`.
+                let segment =
+                    u16::try_from(i * usize::from(segments) / total).unwrap_or(segments - 1);
+                if out.ruler.last() != Some(&segment) {
+                    out.ruler.push(segment);
                 }
             }
         }
         out
     }
 
-    /// Qué tramos del listado llevan alguna marca, para la regla junto a la
-    /// barra de desplazamiento de la ventana (ADR 0135).
+    /// Which segments of the listing carry any mark, for the ruler next to
+    /// the window's scrollbar (ADR 0135).
     ///
-    /// El listado se parte en `tramos` trozos iguales por POSICIÓN en
-    /// `entries` —el mismo espacio que `total_rows`— y se devuelven, en
-    /// orden y sin repetir, los índices de los que tienen al menos una
-    /// marca. Acotado por `tramos` y no por el número de marcas: diez mil
-    /// marcadas no cruzan el puente como diez mil números. Vacío si no hay
-    /// marcas o `tramos` es cero.
+    /// The listing is split into `segments` equal chunks by POSITION in
+    /// `entries` —the same space as `total_rows`— and the indices of the
+    /// ones that have at least one mark are returned, in order and without
+    /// repeats. Bounded by `segments` and not by the number of marks: ten
+    /// thousand marked entries do not cross the bridge as ten thousand
+    /// numbers. Empty if there are no marks or `segments` is zero.
     #[must_use]
-    pub fn mark_ruler(&self, tramos: u16) -> Vec<u16> {
+    pub fn mark_ruler(&self, segments: u16) -> Vec<u16> {
         let total = self.entries.len();
-        if self.marks.is_empty() || total == 0 || tramos == 0 {
+        if self.marks.is_empty() || total == 0 || segments == 0 {
             return Vec::new();
         }
-        let mut fuera: Vec<u16> = Vec::new();
+        let mut out: Vec<u16> = Vec::new();
         for (i, e) in self.entries.iter().enumerate() {
             if !self.marks.contains(&e.path) {
                 continue;
             }
-            // `i < total`, así que el cociente es `< tramos` y cabe en u16.
-            let tramo = u16::try_from(i * usize::from(tramos) / total).unwrap_or(tramos - 1);
-            if fuera.last() != Some(&tramo) {
-                fuera.push(tramo);
+            // `i < total`, so the quotient is `< segments` and fits in u16.
+            let segment = u16::try_from(i * usize::from(segments) / total).unwrap_or(segments - 1);
+            if out.last() != Some(&segment) {
+                out.push(segment);
             }
         }
-        fuera
+        out
     }
 
-    /// Las entradas MARCADAS, sin caer al cursor cuando no hay ninguna.
+    /// The MARKED entries, without falling back to the cursor when there are
+    /// none.
     ///
-    /// Es lo que necesita quien tiene que distinguir «no hay marcas» de «hay
-    /// una»: [`Self::marked_paths`] devuelve el cursor en el primer caso, que
-    /// es lo correcto para copiar y lo equivocado para una regla que exige
-    /// exactamente dos (#312). Entradas y no rutas porque esa regla mira
-    /// además el `kind`.
+    /// This is what whoever has to tell "no marks" apart from "there is one"
+    /// needs: [`Self::marked_paths`] returns the cursor in the first case,
+    /// which is right for copying and wrong for a rule that requires exactly
+    /// two (#312). Entries and not paths because that rule also looks at
+    /// `kind`.
     #[must_use]
     pub fn marked_entries(&self) -> Vec<&Entry> {
         self.entries
@@ -327,10 +330,10 @@ impl PaneState {
             .collect()
     }
 
-    /// Los `VPath` sobre los que opera la acción: las marcas (en el ORDEN de
-    /// `entries`, determinista), o la selección (respeta el filtro quick) si
-    /// no hay marcas (vacío si tampoco hay selección). Fuente única de "sobre
-    /// qué opera la op".
+    /// The `VPath`s the action operates on: the marks (in `entries`'
+    /// ORDER, deterministic), or the selection (honours the quick filter) if
+    /// there are no marks (empty if there is no selection either). The single
+    /// source for "what the op acts on".
     #[must_use]
     pub fn marked_paths(&self) -> Vec<VPath> {
         if self.marks.is_empty() {
@@ -347,27 +350,28 @@ impl PaneState {
             .collect()
     }
 
-    /// Guarda la selección de AHORA como la que `mark.restore` devuelve.
+    /// Saves the CURRENT selection as the one `mark.restore` returns.
     ///
-    /// Lo llama todo gesto EN BLOQUE, y solo ellos: marcar o desmarcar una
-    /// fila a mano no pierde nada que haya que rescatar, y guardar una foto
-    /// por pulsación dejaría «restaurar» significando «deshaz la última tecla»,
-    /// que es otra función y no la que TC tiene.
-    fn fotografiar_marcas(&mut self) {
+    /// Every BULK gesture calls it, and only those: marking or unmarking a
+    /// row by hand loses nothing worth rescuing, and saving a snapshot per
+    /// keystroke would leave "restore" meaning "undo the last key", which is
+    /// a different function and not the one TC has.
+    fn snapshot_marks(&mut self) {
         self.marks_previous = Some(self.marks.clone());
     }
 
-    /// Devuelve la selección anterior a la última operación en bloque (#313),
-    /// y deja la de ahora como la nueva «anterior».
+    /// Returns the selection from before the last bulk operation (#313), and
+    /// leaves the current one as the new "previous".
     ///
-    /// Devuelve cuántas entradas quedan marcadas, o `None` si no hay foto —
-    /// nada que restaurar, y el llamante lo dice en vez de dejar el panel sin
-    /// marcas fingiendo que eso era lo de antes.
+    /// Returns how many entries remain marked, or `None` if there is no
+    /// snapshot — nothing to restore, and the caller says so instead of
+    /// leaving the panel with no marks while pretending that was the earlier
+    /// state.
     ///
-    /// Va y VUELVE a propósito: lo que rescata a quien pulsó «desmarcar todo»
-    /// sin querer tiene que rescatar también a quien pulsó «restaurar» sin
-    /// querer. Solo se conservan las rutas que sigan en el listado, con la
-    /// misma identidad byte a byte de siempre.
+    /// It goes and it COMES BACK on purpose: what rescues someone who pressed
+    /// "unmark all" by accident also has to rescue someone who pressed
+    /// "restore" by accident. Only the paths still in the listing are kept,
+    /// with the same byte-exact identity as always.
     ///
     /// ```
     /// use norte_frontend::PaneState;
@@ -378,70 +382,73 @@ impl PaneState {
     /// #             kind: EntryKind::File, size: None, mtime_ms: None, attrs: Default::default() }
     /// # }
     /// let mut p = PaneState::new(dir.clone(), vec![e(&dir, "a"), e(&dir, "b")]);
-    /// assert_eq!(p.restore_previous_marks(), None, "todavía no hay nada que restaurar");
+    /// assert_eq!(p.restore_previous_marks(), None, "there is nothing to restore yet");
     /// p.mark_all();
     /// p.clear_marks();
     /// assert_eq!(p.marks_len(), 0);
-    /// assert_eq!(p.restore_previous_marks(), Some(2), "vuelven las dos");
-    /// assert_eq!(p.restore_previous_marks(), Some(0), "y restaurar se deshace");
+    /// assert_eq!(p.restore_previous_marks(), Some(2), "both come back");
+    /// assert_eq!(p.restore_previous_marks(), Some(0), "and restoring undoes itself");
     /// ```
     pub fn restore_previous_marks(&mut self) -> Option<usize> {
-        let anterior = self.marks_previous.take()?;
-        let actual = std::mem::take(&mut self.marks);
-        self.marks_previous = Some(actual);
-        for path in anterior {
-            // Por el embudo, que es lo que deja fuera la fila `..`, y solo lo
-            // que siga existiendo: una entrada borrada entre medias no vuelve.
+        let previous = self.marks_previous.take()?;
+        let current = std::mem::take(&mut self.marks);
+        self.marks_previous = Some(current);
+        for path in previous {
+            // Through the funnel, which is what leaves out the `..` row, and
+            // only what is still there: an entry deleted in between does not
+            // come back.
             if self.entries.iter().any(|e| e.path == path) {
-                self.marcar(path);
+                self.mark(path);
             }
         }
         Some(self.marks.len())
     }
 
-    /// Limpia todas las marcas.
+    /// Clears every mark.
     pub fn clear_marks(&mut self) {
-        self.fotografiar_marcas();
+        self.snapshot_marks();
         self.marks.clear();
     }
 
-    /// Marca (o desmarca) las entradas visibles con la MISMA extensión que la
-    /// que está bajo el cursor (#313). Devuelve cuántas marcas cambió.
+    /// Marks (or unmarks) the visible entries with the SAME extension as the
+    /// one under the cursor (#313). Returns how many marks it changed.
     ///
-    /// La extensión es la cola tras el ÚLTIMO punto del nombre base, en bytes
-    /// y sin pasar por `String` (regla 1), y un punto inicial no la abre:
-    /// `.bashrc` no tiene extensión, tiene nombre. Sin nada bajo el cursor, o
-    /// sobre algo sin extensión, no hace nada y devuelve 0 — marcar «todo lo
-    /// que tampoco tiene extensión» es una regla distinta que nadie pidió.
+    /// The extension is the tail after the LAST dot of the base name, in
+    /// bytes and without going through `String` (rule 1), and a leading dot
+    /// does not open it: `.bashrc` has no extension, it has a name. With
+    /// nothing under the cursor, or over something with no extension, it
+    /// does nothing and returns 0 — marking "everything that also has no
+    /// extension" is a different rule nobody asked for.
     ///
-    /// La comparación es EXACTA en bytes, no plegada: `.TXT` y `.txt` son la
-    /// misma extensión en Windows y dos distintas en Linux, y el listado que
-    /// se está mirando ya sabe cuál de los dos es — pero esa decisión es del
-    /// volumen y no de esta función, así que aquí manda lo que hay escrito.
+    /// The comparison is EXACT in bytes, not folded: `.TXT` and `.txt` are
+    /// the same extension on Windows and two different ones on Linux, and
+    /// the listing being looked at already knows which of the two it is —
+    /// but that decision belongs to the volume and not to this function, so
+    /// what is written on disk rules here.
     pub fn mark_same_extension(&mut self, mark: bool) -> usize {
         let Some(ext) = self.selected().and_then(|e| {
             e.path
                 .file_name()
-                .and_then(|n| extension_de(n.as_bytes()).map(<[u8]>::to_vec))
+                .and_then(|n| extension_of(n.as_bytes()).map(<[u8]>::to_vec))
         }) else {
             return 0;
         };
-        self.fotografiar_marcas();
+        self.snapshot_marks();
         let mut changed = 0usize;
         for i in self.markable_indices() {
             let Some(entry) = self.entries.get(i) else {
                 continue;
             };
-            let suya = entry
+            let its_ext = entry
                 .path
                 .file_name()
-                .and_then(|n| extension_de(n.as_bytes()));
-            if suya != Some(ext.as_slice()) {
+                .and_then(|n| extension_of(n.as_bytes()));
+            if its_ext != Some(ext.as_slice()) {
                 continue;
             }
             let path = entry.path.clone();
             let hit = if mark {
-                self.marcar(path)
+                self.mark(path)
             } else {
                 self.marks.remove(&path)
             };
@@ -452,14 +459,15 @@ impl PaneState {
         changed
     }
 
-    /// Marca las entradas visibles que son FICHEROS (`dirs = false`) o las que
-    /// son DIRECTORIOS (`dirs = true`) (#313). Devuelve cuántas añadió.
+    /// Marks the visible entries that are FILES (`dirs = false`) or the ones
+    /// that are DIRECTORIES (`dirs = true`) (#313). Returns how many it
+    /// added.
     ///
-    /// ADITIVO, como `mark.pattern-add`: extiende lo que ya hubiera marcado en
-    /// vez de reemplazarlo. Un enlace cuenta como fichero — es lo que hace con
-    /// él cualquier operación de este panel.
+    /// ADDITIVE, like `mark.pattern-add`: it extends whatever was already
+    /// marked instead of replacing it. A link counts as a file — that is
+    /// what any operation of this panel does with it.
     pub fn mark_kind(&mut self, dirs: bool) -> usize {
-        self.fotografiar_marcas();
+        self.snapshot_marks();
         let mut changed = 0usize;
         for i in self.markable_indices() {
             let Some(entry) = self.entries.get(i) else {
@@ -469,34 +477,34 @@ impl PaneState {
                 continue;
             }
             let path = entry.path.clone();
-            if self.marcar(path) {
+            if self.mark(path) {
                 changed += 1;
             }
         }
         changed
     }
 
-    /// Vuelve a marcar, POR RUTA, lo que siga estando en el listado.
+    /// Marks again, BY PATH, whatever is still in the listing.
     ///
-    /// Existe para el REFRESCO: `set_listing` limpia las marcas porque las
-    /// filas son otras y una marca por índice apuntaría a otro fichero. Eso
-    /// es correcto para un `cd`, y castiga a quien no se movió — un listado
-    /// que se recarga solo (una copia que termina, un vigilante) se llevaba
-    /// por delante una selección que el lector había hecho a mano.
+    /// Exists for the REFRESH: `set_listing` clears the marks because the
+    /// rows are different ones and a mark by index would point at a
+    /// different file. That is correct for a `cd`, and it punishes someone
+    /// who did not move — a listing that reloads on its own (a copy that
+    /// finishes, a watcher) used to sweep away a selection the reader had
+    /// made by hand.
     ///
-    /// La identidad es el `VPath` BYTE A BYTE, como en todo el resto: una
-    /// entrada que ya no está —la acaba de borrar la operación— simplemente
-    /// no se vuelve a marcar, y no se inventa nada. Lo que devuelve es
-    /// cuántas se perdieron, porque una selección que encoge sin decirlo es
-    /// una operación posterior sobre menos ficheros de los que el lector
-    /// cree.
+    /// Identity is the `VPath` BYTE FOR BYTE, as everywhere else: an entry
+    /// that is no longer there —the operation just deleted it— simply does
+    /// not get marked again, and nothing is invented. What it returns is how
+    /// many were lost, because a selection that shrinks without saying so is
+    /// a later operation over fewer files than the reader believes.
     ///
     /// ```
     /// use norte_frontend::PaneState;
     /// use norte_proto::{Entry, EntryKind, VPath};
     ///
     /// let dir = VPath::parse("mem:///d").unwrap();
-    /// fn entrada(dir: &VPath, n: &str) -> Entry {
+    /// fn entry(dir: &VPath, n: &str) -> Entry {
     ///     Entry {
     ///         path: dir.join(norte_proto::Segment::new(n.as_bytes().to_vec()).unwrap()),
     ///         kind: EntryKind::File,
@@ -507,32 +515,33 @@ impl PaneState {
     /// }
     /// let mut p = PaneState::new(
     ///     dir.clone(),
-    ///     vec![entrada(&dir, "a"), entrada(&dir, "b")],
+    ///     vec![entry(&dir, "a"), entry(&dir, "b")],
     /// );
     /// p.mark_all();
-    /// let antes = p.marked_paths();
-    /// assert_eq!(antes.len(), 2);
+    /// let before = p.marked_paths();
+    /// assert_eq!(before.len(), 2);
     ///
-    /// // El listado se recarga y `b` ya no está.
-    /// p.set_listing(dir.clone(), vec![entrada(&dir, "a")]);
-    /// assert_eq!(p.marks_len(), 0, "un listado nuevo llega sin marcas");
-    /// assert_eq!(p.restore_marks(&antes), 1, "una se perdió, y se dice");
+    /// // The listing reloads and `b` is no longer there.
+    /// p.set_listing(dir.clone(), vec![entry(&dir, "a")]);
+    /// assert_eq!(p.marks_len(), 0, "a new listing arrives with no marks");
+    /// assert_eq!(p.restore_marks(&before), 1, "one was lost, and it is said");
     /// assert_eq!(p.marks_len(), 1);
     /// ```
     pub fn restore_marks(&mut self, paths: &[VPath]) -> usize {
-        let mut perdidas = 0;
+        let mut lost = 0;
         for path in paths {
             if self.entries.iter().any(|e| &e.path == path) {
-                // Por el embudo: si lo que se restaura es el PADRE (una marca
-                // heredada de cuando la fila `..` se podía colar como entrada),
-                // se cae aquí en vez de reaparecer sobre la fila de subir tras
-                // cada refresco. No cuenta como perdida: nunca fue una entrada.
-                self.marcar(path.clone());
+                // Through the funnel: if what is being restored is the
+                // PARENT (a mark inherited from when the `..` row could
+                // sneak in as an entry), it falls here instead of
+                // reappearing on the go-up row after every refresh. It does
+                // not count as lost: it was never an entry.
+                self.mark(path.clone());
             } else {
-                perdidas += 1;
+                lost += 1;
             }
         }
-        perdidas
+        lost
     }
 
     /// The indices a BULK mark acts on: the VISIBLE subset under an active
@@ -541,28 +550,28 @@ impl PaneState {
     /// has been drained so far; the pane already marks an in-progress listing
     /// (the title in the TUI, a status line in the GUI), so the partial reach
     /// is never silent.
-    /// La fila `..` NUNCA entra: no es una entrada de este directorio, y una
-    /// marca sobre ella pondría el PADRE en la lista de lo que se copia o se
-    /// borra. Aquí y no en cada llamante, porque este es el sitio por el que
-    /// pasan todos los marcados en bloque.
+    /// The `..` row NEVER gets in: it is not an entry of this directory, and
+    /// marking it would put the PARENT in the list of what gets copied or
+    /// deleted. Here and not in every caller, because this is the choke
+    /// point every bulk mark passes through.
     pub(super) fn markable_indices(&self) -> Vec<usize> {
-        let desde = usize::from(self.is_parent_row(0));
+        let from = usize::from(self.is_parent_row(0));
         match self.quick_visible() {
-            Some(vis) => vis.iter().copied().filter(|i| *i >= desde).collect(),
-            None => (desde..self.entries.len()).collect(),
+            Some(vis) => vis.iter().copied().filter(|i| *i >= from).collect(),
+            None => (from..self.entries.len()).collect(),
         }
     }
 
     /// Marks every entry of the visible set (see `markable_indices`).
     pub fn mark_all(&mut self) {
-        self.fotografiar_marcas();
+        self.snapshot_marks();
         for i in self.markable_indices() {
             let Some(path) = self.entries.get(i).map(|e| &e.path) else {
                 continue;
             };
             if !self.marks.contains(path) {
                 let path = path.clone();
-                self.marcar(path);
+                self.mark(path);
             }
         }
     }
@@ -614,9 +623,9 @@ impl PaneState {
     /// ```
     pub fn mark_range(&mut self, from: usize, to: usize) -> usize {
         let (lo, hi) = if from <= to { (from, to) } else { (to, from) };
-        // Recorre el RANGO, no todo el listado: un barrido re-enuncia su
-        // rango a ritmo de evento de puntero, y `markable_indices` cuesta
-        // un `Vec` del tamaño del listado en cada llamada.
+        // Walks the RANGE, not the whole listing: a sweep re-states its
+        // range at pointer-event rate, and `markable_indices` costs a `Vec`
+        // the size of the listing on every call.
         let Some(last) = self.entries.len().checked_sub(1) else {
             return 0;
         };
@@ -632,15 +641,15 @@ impl PaneState {
             let Some(entry) = self.entries.get(i) else {
                 continue;
             };
-            // `contains` antes de clonar: la re-emisión de un barrido pasa
-            // por aquí a ritmo de evento de puntero y la inmensa mayoría de
-            // las filas del rango ya están marcadas — clonar un `VPath`
-            // para que el `HashSet` lo tire era el coste dominante.
+            // `contains` before cloning: a sweep's re-emission passes
+            // through here at pointer-event rate and the vast majority of
+            // the range's rows are already marked — cloning a `VPath` just
+            // for the `HashSet` to throw it away was the dominant cost.
             if self.marks.contains(&entry.path) {
                 continue;
             }
             let path = entry.path.clone();
-            if self.marcar(path) {
+            if self.mark(path) {
                 changed += 1;
             }
         }
@@ -696,15 +705,15 @@ impl PaneState {
     pub fn apply_sweep(&mut self, from: usize, to: usize) -> usize {
         let (lo, hi) = if from <= to { (from, to) } else { (to, from) };
         if self.sweep_baseline.is_none() {
-            // Foto perezosa: el gesto pudo armarse en un simple click que
-            // jamás barre, y clonar el conjunto de marcas en cada click
-            // sería un coste que nadie pidió.
+            // Lazy snapshot: the gesture might have been armed by a plain
+            // click that never sweeps, and cloning the mark set on every
+            // click would be a cost nobody asked for.
             self.sweep_baseline = Some(self.marks.clone());
             self.sweep_extent = None;
         }
         if let (Some(baseline), Some((plo, phi))) = (&self.sweep_baseline, self.sweep_extent) {
             let phi = phi.min(self.entries.len().saturating_sub(1));
-            let mut soltar: Vec<VPath> = Vec::new();
+            let mut release: Vec<VPath> = Vec::new();
             for i in plo..=phi {
                 if i >= lo && i <= hi {
                     continue;
@@ -712,23 +721,24 @@ impl PaneState {
                 let Some(entry) = self.entries.get(i) else {
                     continue;
                 };
-                // Solo se suelta lo que puso ESTE barrido: lo que ya estaba
-                // marcado antes del gesto está en la baseline y no se toca.
+                // Only what THIS sweep put down gets released: whatever was
+                // already marked before the gesture is in the baseline and
+                // is not touched.
                 if !baseline.contains(&entry.path) {
-                    soltar.push(entry.path.clone());
+                    release.push(entry.path.clone());
                 }
             }
-            for path in soltar {
+            for path in release {
                 self.marks.remove(&path);
             }
         }
-        // Marca solo lo que ENTRA en el rango: el resto del solape ya lo
-        // marcó una llamada anterior de este mismo barrido. Dos intervalos
-        // como mucho, así que un motion de una fila cuesta una fila y no un
-        // repaso del listado entero.
-        let previo = self.sweep_extent;
+        // Marks only what ENTERS the range: the rest of the overlap was
+        // already marked by an earlier call of this same sweep. Two
+        // intervals at most, so a one-row motion costs one row and not a
+        // pass over the whole listing.
+        let previous = self.sweep_extent;
         self.sweep_extent = Some((lo, hi));
-        match previo {
+        match previous {
             Some((plo, phi)) if lo <= phi && hi >= plo => {
                 let mut changed = 0usize;
                 if lo < plo {
@@ -770,30 +780,31 @@ impl PaneState {
     ///     VPath::parse("mem:///").unwrap(),
     ///     vec![e("mem:///a"), e("mem:///b"), e("mem:///c")],
     /// );
-    /// p.set_mark(2, true); // marca previa al gesto
+    /// p.set_mark(2, true); // mark from before the gesture
     /// p.begin_sweep();
     /// p.apply_sweep(0, 1);
     /// assert_eq!(p.marks_len(), 3);
     /// p.revert_sweep();
-    /// assert_eq!(p.marks_len(), 1, "solo sobrevive la marca previa");
+    /// assert_eq!(p.marks_len(), 1, "only the earlier mark survives");
     /// ```
     pub fn revert_sweep(&mut self) {
         let extent = self.sweep_extent.take();
-        let mut soltar: Vec<VPath> = Vec::new();
+        let mut release: Vec<VPath> = Vec::new();
         if let (Some(baseline), Some((lo, hi))) = (self.sweep_baseline.as_ref(), extent) {
             let hi = hi.min(self.entries.len().saturating_sub(1));
             for i in lo..=hi {
                 let Some(entry) = self.entries.get(i) else {
                     continue;
                 };
-                // Solo se suelta lo que puso ESTE barrido: lo anterior al
-                // gesto está en la baseline y no se toca.
+                // Only what THIS sweep put down gets released: whatever was
+                // there before the gesture is in the baseline and is not
+                // touched.
                 if !baseline.contains(&entry.path) {
-                    soltar.push(entry.path.clone());
+                    release.push(entry.path.clone());
                 }
             }
         }
-        for path in soltar {
+        for path in release {
             self.marks.remove(&path);
         }
     }
@@ -810,18 +821,18 @@ impl PaneState {
     /// under an active [`Mode::Filter`] quick search, any listed index
     /// otherwise — `markable_indices` without materialising it.
     pub(super) fn is_markable(&self, index: usize) -> bool {
-        // La fila `..` no se marca nunca: marcarla pondría el PADRE en lo que
-        // se copia o se borra. Es la misma regla que `markable_indices`, y
-        // está en los dos porque son los dos embudos por los que se marca —
-        // uno para los bloques, otro para una fila suelta.
+        // The `..` row is never marked: marking it would put the PARENT in
+        // what gets copied or deleted. Same rule as `markable_indices`, and
+        // it is in both because they are the two choke points marking goes
+        // through — one for bulk operations, one for a single row.
         if self.is_parent_row(index) {
             return false;
         }
         match self.quick_visible() {
-            // `vis` viene en orden ASCENDENTE (`nav::matches_folded`
-            // enumera `entries` en orden y filtra), invariante clavada por
-            // `quick_visible_viene_en_orden_ascendente`: la búsqueda
-            // binaria evita un barrido lineal por cada fila del rango.
+            // `vis` comes in ASCENDING order (`nav::matches_folded`
+            // enumerates `entries` in order and filters), an invariant
+            // pinned by `quick_visible_comes_in_ascending_order`: the binary
+            // search avoids a linear scan for every row of the range.
             Some(vis) => vis.binary_search(&index).is_ok(),
             None => index < self.entries.len(),
         }
@@ -853,7 +864,7 @@ impl PaneState {
             return;
         };
         if marked {
-            self.marcar(path);
+            self.mark(path);
         } else {
             self.marks.remove(&path);
         }
@@ -865,13 +876,13 @@ impl PaneState {
     /// complement" — under a filter, [`Self::marked_paths`] can therefore
     /// still return entries the user is not looking at.
     pub fn invert_marks(&mut self) {
-        self.fotografiar_marcas();
+        self.snapshot_marks();
         for i in self.markable_indices() {
             let Some(path) = self.entries.get(i).map(|e| e.path.clone()) else {
                 continue;
             };
             if !self.marks.remove(&path) {
-                self.marcar(path);
+                self.mark(path);
             }
         }
     }
@@ -916,32 +927,34 @@ impl PaneState {
     /// [`PatternError::Glob`] if the pattern does not compile. Nothing is
     /// marked in that case.
     pub fn mark_glob(&mut self, pattern: &str, mark: bool) -> Result<usize, PatternError> {
-        self.fotografiar_marcas();
-        // El patrón se pliega con el MISMO pipeline que el nombre (#103): el
-        // fold es Unicode, `case_insensitive` de globset es solo-ASCII
-        // (emite `(?-u)`), así que sin plegar la aguja un patrón NFD o una
-        // mayúscula no-ASCII no casarían NADA en silencio.
+        self.snapshot_marks();
+        // The pattern is folded with the SAME pipeline as the name (#103):
+        // the fold is Unicode, globset's `case_insensitive` is ASCII-only
+        // (it emits `(?-u)`), so without folding the needle an NFD pattern
+        // or a non-ASCII uppercase letter would match NOTHING, silently.
         let folded = crate::nav::fold(pattern.as_bytes());
-        // SIN `case_insensitive`: el fold ya minusculiza AMBOS lados, y el
-        // `(?i)` del regex Unicode es case-folding MÁS ANCHO que el fold
-        // (`s` casaría `ſ` U+017F, `μ` casaría `µ` U+00B5) — marcaría
-        // ficheros que el quick search considera distintos. UNA sola
-        // definición de igualdad: la del fold (audit #110).
+        // WITHOUT `case_insensitive`: the fold already lowercases BOTH
+        // sides, and the Unicode regex's `(?i)` is a WIDER case-folding than
+        // the fold (`s` would match `ſ` U+017F, `μ` would match `µ` U+00B5)
+        // — it would mark files the quick search considers distinct. ONE
+        // single definition of equality: the fold's (audit #110).
         let glob = GlobBuilder::new(&folded)
-            .backslash_escape(true) // si no, la semántica de `\` depende del SO (globset la
-            // hace depender de `is_separator('\\')`, true en unix, false en
-            // windows) — `\` es un byte de nombre legal en Linux (corpus
-            // `win_backslash`) y el patrón debe casarlo igual en las dos.
+            .backslash_escape(true) // otherwise `\`'s semantics depend on the
+            // OS (globset makes it depend on `is_separator('\\')`, true on
+            // unix, false on windows) — `\` is a legal name byte on Linux
+            // (corpus `win_backslash`) and the pattern must match it the
+            // same way on both.
             .build()
             .map_err(|e| PatternError::Glob(e.to_string()))?;
-        // Modo Unicode (#110): `?`/clases cuentan CARACTERES, no bytes.
-        // `size_limit` porque esto es API pública sin tope propio (el modal
-        // de la TUI acota a 256 chars, pero nada obliga a otros callers);
-        // el motor de `regex` es lineal, así que el guard es de memoria del
-        // programa compilado, no de backtracking. `dot_matches_new_line`:
-        // globset compila su matcher con ese flag y `*`/`?` traducen a
-        // `.`-derivados — sin él, un nombre con `\n` (byte legal en unix,
-        // corpus `control_newline`) dejaría de casar `*` EN SILENCIO.
+        // Unicode mode (#110): `?`/classes count CHARACTERS, not bytes.
+        // `size_limit` because this is a public API with no cap of its own
+        // (the TUI's modal bounds it to 256 chars, but nothing forces other
+        // callers to); the `regex` engine is linear, so the guard is about
+        // the compiled program's memory, not backtracking.
+        // `dot_matches_new_line`: globset compiles its matcher with that
+        // flag and `*`/`?` translate to `.`-derived expressions — without
+        // it, a name with `\n` (a legal byte on unix, corpus
+        // `control_newline`) would stop matching `*`, SILENTLY.
         let matcher = regex::RegexBuilder::new(&unicode_glob_regex(&glob)?)
             .size_limit(1 << 20)
             .dot_matches_new_line(true)
@@ -959,7 +972,7 @@ impl PaneState {
             }
             let path = entry.path.clone();
             let hit = if mark {
-                self.marcar(path)
+                self.mark(path)
             } else {
                 self.marks.remove(&path)
             };
@@ -977,9 +990,9 @@ impl PaneState {
     /// computed.
     #[must_use]
     pub fn marked_bytes(&self) -> u64 {
-        // Sin marcas no hay nada que sumar: recorrer veinte mil entradas
-        // resumiendo cada ruta, por cada tecla, era la mitad del coste de
-        // mover el cursor en un directorio grande.
+        // With no marks there is nothing to add up: walking twenty thousand
+        // entries summing every path, on every keystroke, was half the cost
+        // of moving the cursor in a large directory.
         if self.marks.is_empty() {
             return 0;
         }

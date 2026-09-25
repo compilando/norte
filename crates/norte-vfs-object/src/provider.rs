@@ -1,6 +1,6 @@
-//! [`ObjectProvider`]: el trait [`Provider`] sobre un [`opendal::Operator`]
-//! (ADR 0016). Object storage no tiene directorios: se modelan como marker
-//! objects (`clave/`) + sondeo de prefijo, con precedencia fichero > dir.
+//! [`ObjectProvider`]: the [`Provider`] trait over an [`opendal::Operator`]
+//! (ADR 0016). Object storage has no directories: they are modeled as
+//! marker objects (`key/`) + prefix probing, with file > dir precedence.
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -12,66 +12,68 @@ use norte_proto::{
 use norte_vfs::{ByteSink, ByteStream, EntryStream, Provider, trash};
 use opendal::{ErrorKind, Metadata, Operator};
 
-/// Límite de S3 para la longitud de la KEY COMPLETA: 1024 BYTES de UTF-8. El
-/// presupuesto EFECTIVO para el path del provider se calcula en [`new`]
-/// restando el prefijo `root` del `Operator` (que opendal antepone a cada key
-/// antes de enviarla) — sin ese descuento, un `Operator` con `root` largo
-/// dejaría pasar keys que el servidor rechaza a media operación con un error
-/// ambiguo. No hay límite por segmento (a diferencia del `NAME_MAX` de un FS
-/// POSIX): un segmento de 300 bytes es una key S3 legal.
+/// S3's limit for the FULL KEY's length: 1024 UTF-8 BYTES. The EFFECTIVE
+/// budget for the provider's path is computed in [`new`] by subtracting the
+/// `Operator`'s `root` prefix (which opendal prepends to every key before
+/// sending it) — without that discount, an `Operator` with a long `root`
+/// would let through keys the server rejects midway through an operation
+/// with an ambiguous error. There is no per-segment limit (unlike a POSIX
+/// FS's `NAME_MAX`): a 300-byte segment is a legal S3 key.
 const MAX_KEY_BYTES: usize = 1024;
 
-/// Chunk del writer multiparte: 8 MiB (mínimo S3 = 5 MiB; opendal bufferiza
-/// hasta esto antes de subir una parte — objetos menores van por `PutObject`).
+/// The multipart writer's chunk: 8 MiB (S3's minimum = 5 MiB; opendal
+/// buffers up to this before uploading a part — smaller objects go through
+/// `PutObject`).
 const WRITE_CHUNK: usize = 8 * 1024 * 1024;
 
-/// Provider VFS sobre object storage (ADR 0016).
+/// VFS provider over object storage (ADR 0016).
 ///
-/// El [`Operator`] llega YA configurado (bucket/region/endpoint/credenciales
-/// se resuelven en `norte-connect`, fase 7d): este provider jamás ve un
-/// secreto. Semántica S3 sobre el contrato del trait:
+/// The [`Operator`] arrives ALREADY configured (bucket/region/endpoint/
+/// credentials are resolved in `norte-connect`, phase 7d): this provider
+/// never sees a secret. S3 semantics over the trait's contract:
 ///
-/// - **Directorios** = marker objects (`clave/`) + sondeo de prefijo;
-///   precedencia fichero > dir (S3 permite que `x` y `x/` coexistan; desde
-///   este provider es imposible crearlo porque `write`/`mkdir` se comprueban
-///   mutuamente).
-/// - **Keys UTF-8-only** (límite del protocolo S3, no de la librería): un
-///   nombre no representable es [`Error::InvalidPath`], regla 1.
-/// - **`rename` NO es atómico y es O(n)** en directorios (copy-all luego
-///   delete-all: un fallo a mitad deja duplicados, jamás pérdida) — por eso
-///   no se declara `RENAME_ATOMIC`.
-/// - **Resume**: diferido (ADR 0016 F) — opendal 0.58 no expone reanudar un
-///   multipart upload; `open_resumable` hereda el default `(write, 0)` y
-///   cancelar deja el destino limpio (sin `.norte-partial` remoto).
+/// - **Directories** = marker objects (`key/`) + prefix probing; file > dir
+///   precedence (S3 lets `x` and `x/` coexist; from this provider it is
+///   impossible to create because `write`/`mkdir` check each other).
+/// - **UTF-8-only keys** (an S3 protocol limit, not the library's): a name
+///   that cannot be represented is [`Error::InvalidPath`], rule 1.
+/// - **`rename` is NOT atomic and is O(n)** on directories (copy-all then
+///   delete-all: a mid-way failure leaves duplicates, never loss) — that is
+///   why `RENAME_ATOMIC` is not declared.
+/// - **Resume**: deferred (ADR 0016 F) — opendal 0.58 does not expose
+///   resuming a multipart upload; `open_resumable` inherits the `(write, 0)`
+///   default and cancelling leaves the destination clean (no remote
+///   `.norte-partial`).
 pub struct ObjectProvider {
     op: Operator,
     scheme: String,
-    /// Bytes disponibles para el path del provider = 1024 − prefijo `root` del
-    /// `Operator` − 1 (la variante dir añade `/`). Calculado en [`new`].
+    /// Bytes available for the provider's path = 1024 − the `Operator`'s
+    /// `root` prefix − 1 (the dir variant adds a `/`). Computed in [`new`].
     key_budget: usize,
-    /// El backend anuncia `copy` server-side (S3 sí; otro `Operator` podría
-    /// no). Gatea `SERVER_COPY`: sin él, declararlo haría que el engine
-    /// fallara en duro un fichero (`Some(Err(Unsupported))`, sin fallback a
-    /// streaming) donde el streaming habría funcionado.
+    /// The backend announces server-side `copy` (S3 does; another
+    /// `Operator` might not). Gates `SERVER_COPY`: without it, declaring it
+    /// would make the engine hard-fail a file (`Some(Err(Unsupported))`, no
+    /// fallback to streaming) where streaming would have worked.
     server_copy: bool,
-    /// Papelera lógica `.norte-trash/` activa (opt-in por conexión, ADR
-    /// 0019). Off por defecto → no declara `TRASH` → borrado permanente.
+    /// Logical `.norte-trash/` trash active (per-connection opt-in, ADR
+    /// 0019). Off by default → does not declare `TRASH` → permanent delete.
     logical_trash: bool,
 }
 
 impl ObjectProvider {
-    /// Provider sobre un `Operator` ya configurado, para `scheme` (`"s3"`).
+    /// Provider over an already-configured `Operator`, for `scheme` (`"s3"`).
     ///
-    /// La raíz del `Operator` (bucket + prefijo `root` del builder) es la
-    /// raíz del provider: aquí no hay `base` — la fija quien lo construye.
+    /// The `Operator`'s root (bucket + the builder's `root` prefix) is the
+    /// provider's root: there is no `base` here — whoever builds it sets it.
     #[must_use]
     pub fn new(op: Operator, scheme: impl Into<String>) -> Self {
-        // El `root` del Operator (p. ej. `/equipo/proyecto/`) se antepone a
-        // cada key ANTES de enviarla al servidor (la `/` inicial no cuenta —
-        // opendal la recorta). Se descuenta del presupuesto de 1024 para no
-        // dejar pasar keys que el servidor rechazaría a media operación.
+        // The Operator's `root` (e.g. `/team/project/`) is prepended to
+        // every key BEFORE sending it to the server (the leading `/` does
+        // not count — opendal trims it). It is deducted from the 1024
+        // budget so as not to let through keys the server would reject
+        // midway through an operation.
         let root_prefix = op.info().root().trim_start_matches('/').len();
-        // −1: reserva el `/` final de la variante directorio.
+        // −1: reserves the directory variant's trailing `/`.
         let key_budget = MAX_KEY_BYTES.saturating_sub(root_prefix).saturating_sub(1);
         let server_copy = op.info().capability().copy;
         Self {
@@ -83,18 +85,19 @@ impl ObjectProvider {
         }
     }
 
-    /// Activa/desactiva la papelera lógica `.norte-trash/` (ADR 0019).
-    /// Sin ella el provider no declara `TRASH` y `trash()` da `Unsupported`.
+    /// Turns the logical `.norte-trash/` trash on/off (ADR 0019). Without
+    /// it the provider does not declare `TRASH` and `trash()` gives
+    /// `Unsupported`.
     #[must_use]
     pub fn with_logical_trash(mut self, enabled: bool) -> Self {
         self.logical_trash = enabled;
         self
     }
 
-    /// Lee y valida la `.norte-info` de una entrada de papelera: `true` solo si
-    /// decodifica exactamente a `p` (misma víctima). Distingue NUESTRA entrada
-    /// de una colisión ajena con el mismo id (#99, review rust MAJOR). Ausente,
-    /// ilegible o de otra víctima = `false`.
+    /// Reads and validates a trash entry's `.norte-info`: `true` only if it
+    /// decodes to exactly `p` (same victim). Distinguishes OUR entry from a
+    /// foreign collision with the same id (#99, rust review MAJOR). Absent,
+    /// unreadable or a different victim = `false`.
     async fn trash_info_matches(&self, info: &VPath, p: &VPath) -> bool {
         let Ok(mut stream) = self.read(info, None).await else {
             return false;
@@ -109,8 +112,9 @@ impl ObjectProvider {
         trash::info_decode(&buf, p).is_ok_and(|i| i.original == *p)
     }
 
-    /// Crea el marker `dir` tolerando que ya exista (idempotente): útil para
-    /// `.norte-trash/` bajo concurrencia entre sesiones.
+    /// Creates the `dir` marker, tolerating that it already exists
+    /// (idempotent): useful for `.norte-trash/` under cross-session
+    /// concurrency.
     async fn ensure_dir_idempotent(&self, dir: &VPath) -> Result<(), Error> {
         match self.mkdir(dir).await {
             Ok(())
@@ -124,23 +128,23 @@ impl ObjectProvider {
         }
     }
 
-    /// La raíz de este provider para un `scheme`/`authority` (`s3://bucket/`).
+    /// This provider's root for a `scheme`/`authority` (`s3://bucket/`).
     ///
     /// # Panics
-    /// Si `scheme` no es un scheme válido (`[a-z][a-z0-9+.-]*`). Los llamantes
-    /// pasan una constante (`"s3"`), así que en la práctica nunca ocurre.
+    /// If `scheme` is not a valid scheme (`[a-z][a-z0-9+.-]*`). Callers pass
+    /// a constant (`"s3"`), so in practice this never happens.
     #[must_use]
     pub fn root(scheme: &str, authority: Authority) -> VPath {
-        VPath::root(Scheme::new(scheme).expect("scheme válido"), Some(authority))
+        VPath::root(Scheme::new(scheme).expect("valid scheme"), Some(authority))
     }
 
-    /// Traduce un [`VPath`] a la key del objeto (sin `/` final). Los
-    /// segmentos son BYTES; las keys S3 son UTF-8 — un nombre no
-    /// representable es [`Error::InvalidPath`] (rechazo LIMPIO, regla 1,
-    /// ADR 0016 D). La key se construye SIEMPRE así, nunca desde una ecoada.
+    /// Translates a [`VPath`] into the object's key (no trailing `/`).
+    /// Segments are BYTES; S3 keys are UTF-8 — a name that cannot be
+    /// represented is [`Error::InvalidPath`] (a CLEAN rejection, rule 1, ADR
+    /// 0016 D). The key is ALWAYS built this way, never from an echoed one.
     ///
-    /// Sin filtro CRLF (a diferencia de FTP): S3 viaja por HTTP firmado
-    /// (sigv4 cubre el path), no hay protocolo de líneas que inyectar.
+    /// No CRLF filter (unlike FTP): S3 travels over signed HTTP (sigv4
+    /// covers the path), there is no line protocol to inject into.
     fn key(&self, p: &VPath) -> Result<String, Error> {
         if p.scheme() != self.scheme {
             return Err(Error::InvalidPath);
@@ -151,19 +155,20 @@ impl ObjectProvider {
             if name.contains('/') || name == "." || name == ".." {
                 return Err(Error::InvalidPath);
             }
-            // U+FFFD a ESCRIBIR: S3-legal (UTF-8), pero `list` lo usa como
-            // centinela de "bytes perdidos en decodificación lossy" y corta
-            // el listado ante él. Crearlo dejaría el directorio padre
-            // ilistable (self-DoS) — se rechaza aquí para que write y list
-            // sean simétricos (deuda: distinguir U+FFFD legítimo, #37).
+            // U+FFFD TO WRITE: S3-legal (UTF-8), but `list` uses it as the
+            // sentinel for "bytes lost in lossy decoding" and cuts the
+            // listing short at it. Creating one would leave the parent
+            // directory unlistable (self-DoS) — rejected here so write and
+            // list stay symmetric (debt: distinguish a legitimate U+FFFD,
+            // #37).
             if name.contains('\u{FFFD}') {
                 return Err(Error::InvalidPath);
             }
-            // El `normalize_path` de opendal-core hace `path.trim()`: un
-            // nombre con whitespace Unicode inicial/final se RENOMBRARÍA en
-            // silencio ("file " → "file") en TODOS los backends — corrupción
-            // de bytes, regla 1. Rechazo fail-loud uniforme por segmento
-            // (S3 los permite; deuda upstream registrada, issue #48).
+            // opendal-core's `normalize_path` does `path.trim()`: a name
+            // with leading/trailing Unicode whitespace would be SILENTLY
+            // RENAMED ("file " → "file") on EVERY backend — byte corruption,
+            // rule 1. Uniform fail-loud rejection per segment (S3 allows
+            // them; upstream debt logged, issue #48).
             if name.trim() != name {
                 return Err(Error::InvalidPath);
             }
@@ -178,8 +183,8 @@ impl ObjectProvider {
         Ok(out)
     }
 
-    /// La key en su forma DIRECTORIO (`clave/`); la raíz es `""` (opendal
-    /// lista la raíz del Operator con el path vacío).
+    /// The key in its DIRECTORY form (`key/`); the root is `""` (opendal
+    /// lists the Operator's root with an empty path).
     fn dir_key(&self, p: &VPath) -> Result<String, Error> {
         let k = self.key(p)?;
         if k.is_empty() {
@@ -189,26 +194,27 @@ impl ObjectProvider {
         }
     }
 
-    /// `stat` interno: fichero primero, dir (marker o prefijo con hijos)
-    /// después. `None` = no existe. La precedencia fichero > dir está
-    /// documentada en el ADR 0016 C.
+    /// Internal `stat`: file first, dir (marker or prefix with children)
+    /// after. `None` = does not exist. The file > dir precedence is
+    /// documented in ADR 0016 C.
     async fn stat_kind(&self, key: &str) -> Result<Option<(EntryKind, Metadata)>, Error> {
         match self.op.stat(key).await {
-            // services-fs (harness del contrato) responde al stat SIN barra
-            // de un directorio real con mode=DIR; S3 solo con ficheros.
+            // services-fs (the contract's harness) answers stat on a real
+            // directory's key WITHOUT a slash with mode=DIR; S3 only does
+            // so for files.
             Ok(m) if m.mode().is_dir() => return Ok(Some((EntryKind::Dir, m))),
             Ok(m) => return Ok(Some((EntryKind::File, m))),
             Err(e) if e.kind() == ErrorKind::NotFound => {}
-            // stat de un dir por la key sin barra: algunos backends lo
-            // señalan en vez de NotFound — cae al sondeo de dir de abajo.
+            // stat of a dir by its slash-less key: some backends flag this
+            // instead of NotFound — falls through to the dir probe below.
             Err(e) if e.kind() == ErrorKind::IsADirectory => {}
             Err(e) => return Err(map_err(&e)),
         }
-        // ¿Dir? En S3 `stat("clave/")` es el sondeo del CompleteLayer de
-        // opendal: marker O prefijo con hijos (list limit 1); en fs, el stat
-        // real del directorio. Asimetría deliberada fs/S3: bajo un fichero
-        // (`a.txt/hijo`) el harness fs da TypeMismatch (ENOTDIR) y S3 da
-        // NotFound — el contrato solo ejercita el primero.
+        // A dir? On S3 `stat("key/")` is opendal's CompleteLayer probe:
+        // a marker OR a prefix with children (list limit 1); on fs, the
+        // directory's real stat. Deliberate fs/S3 asymmetry: under a file
+        // (`a.txt/child`) the fs harness gives TypeMismatch (ENOTDIR) and
+        // S3 gives NotFound — the contract only exercises the former.
         match self.op.stat(&format!("{key}/")).await {
             Ok(m) => Ok(Some((EntryKind::Dir, m))),
             Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
@@ -216,14 +222,14 @@ impl ObjectProvider {
         }
     }
 
-    /// ¿Existe `p` el padre de la key como directorio? La raíz siempre existe.
+    /// Does `p`'s parent exist as a directory? The root always exists.
     async fn parent_dir_exists(&self, p: &VPath) -> Result<bool, Error> {
         let Some(parent) = p.parent() else {
-            // Sin padre = `p` es la raíz; su "padre" no aplica.
+            // No parent = `p` is the root; its "parent" does not apply.
             return Ok(true);
         };
         if parent.parent().is_none() {
-            return Ok(true); // el padre es la raíz del provider
+            return Ok(true); // the parent is the provider's root
         }
         let key = self.key(&parent)?;
         Ok(matches!(
@@ -232,7 +238,7 @@ impl ObjectProvider {
         ))
     }
 
-    /// Comprueba destino libre (ni fichero ni dir) → si no, `Conflict`.
+    /// Checks the destination is free (neither file nor dir) → if not, `Conflict`.
     async fn ensure_absent(&self, key: &str) -> Result<(), Error> {
         if self.stat_kind(key).await?.is_some() {
             return Err(Error::Conflict {
@@ -251,12 +257,12 @@ impl std::fmt::Debug for ObjectProvider {
     }
 }
 
-/// Sufijo VALIDADO de una entrada listada relativo a `from_dir` (#49): la
-/// contención anti-servidor-mentiroso del rename de prefijo — `None` = el
-/// propio dir listado (se salta); `Err(InvalidPath)` = la entrada sale del
-/// prefijo o trae componentes ilegales (lossy `�`, `.`/`..`/vacío). Las keys
-/// de copy/delete se RECONSTRUYEN siempre desde este sufijo, jamás se ecoa
-/// el path del servidor.
+/// A listed entry's VALIDATED suffix relative to `from_dir` (#49): the
+/// anti-lying-server containment for the prefix rename — `None` = the
+/// listed dir itself (skipped); `Err(InvalidPath)` = the entry falls outside
+/// the prefix or carries illegal components (lossy `�`, `.`/`..`/empty).
+/// The copy/delete keys are ALWAYS REBUILT from this suffix, the server's
+/// path is never echoed.
 fn validated_suffix<'a>(from_dir: &str, path: &'a str) -> Result<Option<&'a str>, Error> {
     if path == from_dir {
         return Ok(None);
@@ -267,8 +273,8 @@ fn validated_suffix<'a>(from_dir: &str, path: &'a str) -> Result<Option<&'a str>
     if suffix.contains('\u{FFFD}') {
         return Err(Error::InvalidPath);
     }
-    // Cada segmento del sufijo (recursivo → puede llevar `/`; un subdir
-    // acaba en `/`) debe ser un nombre legal.
+    // Every segment of the suffix (recursive → can carry `/`; a subdir ends
+    // in `/`) must be a legal name.
     let trimmed = suffix.strip_suffix('/').unwrap_or(suffix);
     if trimmed.is_empty()
         || trimmed
@@ -280,12 +286,12 @@ fn validated_suffix<'a>(from_dir: &str, path: &'a str) -> Result<Option<&'a str>
     Ok(Some(suffix))
 }
 
-/// Mapea el error de opendal a la taxonomía del protocolo (spec §17.7).
+/// Maps opendal's error onto the protocol's taxonomy (spec §17.7).
 fn map_err(e: &opendal::Error) -> Error {
     match e.kind() {
         ErrorKind::NotFound => Error::NotFound,
         ErrorKind::PermissionDenied => Error::PermissionDenied,
-        // Conditional write fallido (If-None-Match): el destino apareció.
+        // Failed conditional write (If-None-Match): the destination appeared.
         ErrorKind::ConditionNotMatch | ErrorKind::AlreadyExists => Error::Conflict {
             conflict: ConflictKind::Exists,
         },
@@ -294,22 +300,22 @@ fn map_err(e: &opendal::Error) -> Error {
         },
         ErrorKind::RateLimited => Error::Io { retryable: true },
         ErrorKind::Unsupported => Error::Unsupported,
-        // `is_temporary`: opendal marca así los errores de red/servicio que
-        // merecen reintento (el backoff cancelable es del engine).
+        // `is_temporary`: this is how opendal flags network/service errors
+        // that deserve a retry (the cancellable backoff is the engine's).
         _ if e.is_temporary() => Error::ProviderUnavailable { retryable: true },
         _ => Error::Io { retryable: false },
     }
 }
 
-/// Catálogo de attrs del provider object (#108 bloque 2).
+/// The object provider's attr catalogue (#108 block 2).
 ///
-/// `s3.etag` viaja en `ListObjectsV2` Y en `HeadObject` (gratis en ambos);
-/// `s3.content_type` SOLO llega en stat (`HeadObject`) — en listados va
-/// ausente, que es contrato-legal ("absence means absence"; la hidratación
-/// de la UI re-statea la entrada enfocada). `s3.storage_class` es imposible
-/// con opendal 0.58 (lo descarta al parsear el XML) — deuda con issue
-/// propio en el cierre del bloque.
-fn catalogo_s3() -> &'static [norte_proto::AttrInfo] {
+/// `s3.etag` travels in `ListObjectsV2` AND in `HeadObject` (free in both);
+/// `s3.content_type` ONLY arrives in stat (`HeadObject`) — in listings it is
+/// absent, which is contract-legal ("absence means absence"; the UI's
+/// hydration re-stats the focused entry). `s3.storage_class` is impossible
+/// with opendal 0.58 (it discards it while parsing the XML) — debt with its
+/// own issue at the block's close.
+fn catalog_s3() -> &'static [norte_proto::AttrInfo] {
     use norte_proto::{AttrHint, AttrInfo, AttrType};
     static CAT: std::sync::LazyLock<Vec<AttrInfo>> = std::sync::LazyLock::new(|| {
         let mk = |id: &str, label: &str| AttrInfo {
@@ -323,9 +329,9 @@ fn catalogo_s3() -> &'static [norte_proto::AttrInfo] {
     &CAT
 }
 
-/// Materializa los attrs pedidos desde la metadata de opendal. Un valor
-/// sobre el tope de Text se OMITE (jamás se trunca en silencio: la celda
-/// ausente es honesta, la recortada mentiría).
+/// Materializes the requested attrs from opendal's metadata. A value over
+/// Text's cap is OMITTED (never silently truncated: an absent cell is
+/// honest, a cropped one would lie).
 fn attrs_from_meta(
     m: &Metadata,
     req: &norte_vfs::AttrRequest,
@@ -335,7 +341,7 @@ fn attrs_from_meta(
     if req.is_empty() {
         return out;
     }
-    let mut texto = |id: &str, v: Option<&str>| {
+    let mut text = |id: &str, v: Option<&str>| {
         if let Some(s) = v
             && req.wants(id)
             && s.len() <= norte_proto::ATTR_TEXT_MAX
@@ -343,12 +349,12 @@ fn attrs_from_meta(
             out.insert(id.to_owned(), AttrValue::Text(s.to_owned()));
         }
     };
-    texto("s3.etag", m.etag());
-    texto("s3.content_type", m.content_type());
+    text("s3.etag", m.etag());
+    text("s3.content_type", m.content_type());
     out
 }
 
-/// `Entry` de un fichero a partir de la metadata de opendal.
+/// A file's `Entry` from opendal's metadata.
 fn file_entry(path: VPath, m: &Metadata, req: &norte_vfs::AttrRequest) -> Entry {
     Entry {
         attrs: attrs_from_meta(m, req),
@@ -370,14 +376,15 @@ impl Provider for ObjectProvider {
     }
 
     fn capabilities(&self) -> Capabilities {
-        // Honestas (ADR 0016 H): keys UTF-8 byte-exactas → case-sensitive y
-        // case-preserving. SERVER_COPY = CopyObject (fase 7c, primer provider
-        // del repo que lo implementa) SOLO si el backend anuncia `copy` — sin
-        // ese gate, un backend sin copia haría fallar en duro un fichero que
-        // el streaming habría copiado. NO declara: APPEND/RANDOM_WRITE (S3 no
-        // tiene), SYMLINKS, RENAME_ATOMIC (copy+delete O(n)). TRASH solo si la
-        // conexión activó la papelera lógica `.norte-trash/` (ADR 0019): la
-        // relocalización reusa el rename copy-all→delete-all.
+        // Honest ones (ADR 0016 H): byte-exact UTF-8 keys → case-sensitive
+        // and case-preserving. SERVER_COPY = CopyObject (phase 7c, the
+        // repo's first provider to implement it) ONLY if the backend
+        // announces `copy` — without that gate, a backend without copy
+        // would hard-fail a file that streaming would have copied. Does NOT
+        // declare: APPEND/RANDOM_WRITE (S3 has neither), SYMLINKS,
+        // RENAME_ATOMIC (O(n) copy+delete). TRASH only if the connection
+        // turned on the logical `.norte-trash/` trash (ADR 0019):
+        // relocation reuses the copy-all→delete-all rename.
         let mut flags = CapabilityFlags::CASE_SENSITIVE | CapabilityFlags::CASE_PRESERVING;
         if self.server_copy {
             flags |= CapabilityFlags::SERVER_COPY;
@@ -387,8 +394,8 @@ impl Provider for ObjectProvider {
         }
         Capabilities {
             flags,
-            // El presupuesto EFECTIVO (1024 − prefijo root − 1), no el límite
-            // bruto de S3: lo que `key()` acepta = lo que el core pre-valida.
+            // The EFFECTIVE budget (1024 − root prefix − 1), not S3's raw
+            // limit: what `key()` accepts = what the core pre-validates.
             max_path: u32::try_from(self.key_budget).ok(),
         }
     }
@@ -398,13 +405,13 @@ impl Provider for ObjectProvider {
     }
 
     fn attrs(&self) -> &[norte_proto::AttrInfo] {
-        catalogo_s3()
+        catalog_s3()
     }
 
     async fn stat_with(&self, p: &VPath, opt: &norte_vfs::ListOptions) -> Result<Entry, Error> {
         let key = self.key(p)?;
         if key.is_empty() {
-            // La raíz del provider (el bucket) siempre existe como dir.
+            // The provider's root (the bucket) always exists as a dir.
             return Ok(Entry {
                 attrs: std::collections::BTreeMap::new(),
                 path: p.clone(),
@@ -418,8 +425,9 @@ impl Provider for ObjectProvider {
             Some((_, _)) => Ok(Entry {
                 attrs: std::collections::BTreeMap::new(),
                 path: p.clone(),
-                // El mtime de un marker no describe el "directorio" (los
-                // objetos de dentro cambian sin tocarlo): None honesto.
+                // A marker's mtime does not describe the "directory" (the
+                // objects inside it change without touching it): an honest
+                // None.
                 kind: EntryKind::Dir,
                 size: None,
                 mtime_ms: None,
@@ -439,7 +447,7 @@ impl Provider for ObjectProvider {
     ) -> Result<EntryStream, Error> {
         let dir = self.dir_key(p)?;
         if !dir.is_empty() {
-            // NotFound / no-dir van en el Result, no como primer item.
+            // NotFound / not-a-dir go in the Result, not as the first item.
             match self.stat_kind(self.key(p)?.as_str()).await? {
                 Some((EntryKind::Dir, _)) => {}
                 Some(_) => {
@@ -453,42 +461,43 @@ impl Provider for ObjectProvider {
         let lister = self.op.lister(&dir).await.map_err(|e| map_err(&e))?;
         let base = p.clone();
         let self_key = dir;
-        // Arc: la petición es solo-lectura y el closure clona POR ENTRADA —
-        // sin Arc cada objeto listado pagaría un Vec<String> nuevo.
+        // Arc: the request is read-only and the closure clones PER ENTRY —
+        // without Arc, every listed object would pay for a new Vec<String>.
         let req = std::sync::Arc::new(opt.attrs.clone());
-        // Stream PEREZOSO: opendal pagina con su ContinuationToken por debajo
-        // (punto de contacto con la paginación por cursor, ADR 0017).
+        // LAZY stream: opendal paginates underneath with its own
+        // ContinuationToken (the contact point with cursor pagination, ADR
+        // 0017).
         let stream = lister.map_err(|e| map_err(&e)).try_filter_map(move |oe| {
             let base = base.clone();
             let self_key = self_key.clone();
             let req = std::sync::Arc::clone(&req);
             async move {
                 let path = oe.path();
-                // opendal devuelve el propio dir listado como entrada; al
-                // listar la RAÍZ (self_key vacío) la emite como `/`.
+                // opendal returns the listed dir itself as an entry; when
+                // listing the ROOT (empty self_key) it emits it as `/`.
                 if path == self_key || (self_key.is_empty() && path == "/") {
                     return Ok(None);
                 }
                 let is_dir = oe.metadata().mode().is_dir();
-                // El nombre DEBE colgar del prefijo pedido. Un servidor
-                // mentiroso que ecoe una key fuera de `self_key` (`otra`,
-                // `../x`) NO se acepta con fallback al path completo: corta
-                // fail-loud (jamás un Entry fantasma bajo `base`).
+                // The name MUST hang off the requested prefix. A lying
+                // server echoing a key outside `self_key` (`other`, `../x`)
+                // is NOT accepted with a fallback to the full path: it cuts
+                // fail-loud (never a phantom Entry under `base`).
                 let Some(rest) = path.strip_prefix(self_key.as_str()) else {
                     return Err(Error::InvalidPath);
                 };
                 let name = rest.trim_end_matches('/');
-                // `""` (de un `dir//x` con segmento vacío), `.` y `..` son
-                // keys S3 legales que el modelo de dirs no sabe representar:
-                // se CORTA (no se ocultan en silencio — serían datos
-                // invisibles en una migración dirigida por list).
+                // `""` (from a `dir//x` with an empty segment), `.` and
+                // `..` are legal S3 keys the dir model cannot represent:
+                // they are CUT (not silently hidden — they would be
+                // invisible data in a list-driven migration).
                 if name.is_empty() || name == "." || name == ".." {
                     return Err(Error::InvalidPath);
                 }
-                // Un nombre del backend con `/` (subprefijo inesperado, o un
-                // `/` inyectado para escapar del dir) o U+FFFD (bytes
-                // originales perdidos en una decodificación lossy) corta el
-                // listado: rechazo fail-loud, regla 1.
+                // A backend name with `/` (an unexpected sub-prefix, or a
+                // `/` injected to escape the dir) or U+FFFD (original bytes
+                // lost in a lossy decoding) cuts the listing: fail-loud
+                // rejection, rule 1.
                 if name.contains('/') || name.contains('\u{FFFD}') {
                     return Err(Error::InvalidPath);
                 }
@@ -513,7 +522,7 @@ impl Provider for ObjectProvider {
 
     async fn read(&self, p: &VPath, range: Option<ByteRange>) -> Result<ByteStream, Error> {
         let key = self.key(p)?;
-        // Rechaza dirs (leerlos es error) y ausentes (NotFound).
+        // Rejects dirs (reading them is an error) and absent ones (NotFound).
         let size = match self.stat_kind(&key).await? {
             None => return Err(Error::NotFound),
             Some((EntryKind::Dir, _)) => {
@@ -523,11 +532,10 @@ impl Provider for ObjectProvider {
             }
             Some((_, m)) => m.content_length(),
         };
-        // Semántica pread del trait: offset > EOF = stream vacío y len se
-        // recorta a EOF. Se CLAMPEA aquí con el size del stat (los objetos
-        // son inmutables) en vez de confiar en el 416 del servidor: el
-        // reader de opendal exige un fin dentro del fichero o falla a mitad
-        // de stream.
+        // The trait's pread semantics: offset > EOF = empty stream and len
+        // gets clamped to EOF. CLAMPED here with the stat's size (objects
+        // are immutable) instead of trusting the server's 416: opendal's
+        // reader demands an end within the file or it fails mid-stream.
         let (offset, len) = match range {
             Some(ByteRange { offset, len }) => (offset, len),
             None => (0, None),
@@ -545,9 +553,9 @@ impl Provider for ObjectProvider {
         {
             Ok(s) => Ok(s
                 .map_ok(Bytes::from)
-                // Un corte de red A MITAD de descarga conserva la marca
-                // `retryable` (el engine reintenta con backoff) — como el
-                // `map_io` de local; solo los transitorios de transporte.
+                // A network drop MID-DOWNLOAD keeps the `retryable` flag
+                // (the engine retries with backoff) — like local's
+                // `map_io`; only the transport's transient ones.
                 .map_err(|e| Error::Io {
                     retryable: matches!(
                         e.kind(),
@@ -560,8 +568,8 @@ impl Provider for ObjectProvider {
                     ),
                 })
                 .boxed()),
-            // Cinturón para el clamp de arriba (no debería dispararse con
-            // objetos inmutables): 416 = stream vacío, no error.
+            // A belt for the clamp above (should not trigger with immutable
+            // objects): 416 = empty stream, not an error.
             Err(e) if e.kind() == ErrorKind::RangeNotSatisfied => {
                 Ok(futures::stream::empty().boxed())
             }
@@ -577,14 +585,15 @@ impl Provider for ObjectProvider {
         if !self.parent_dir_exists(p).await? {
             return Err(Error::NotFound);
         }
-        // Create-new: el contrato exige `Conflict` AL ABRIR. Este stat-check
-        // upfront se mantiene SIEMPRE como cinturón (ADR 0016 E): contra un
-        // servidor que ignore If-None-Match la garantía degrada a esta
-        // comprobación (racy, nivel ftp), nunca a sobrescritura sin chequeo.
+        // Create-new: the contract requires `Conflict` ON OPEN. This upfront
+        // stat-check is ALWAYS kept as a belt (ADR 0016 E): against a server
+        // that ignores If-None-Match the guarantee degrades to this check
+        // (racy, ftp-level), never to an overwrite without one.
         self.ensure_absent(&key).await?;
-        // El staging invisible es el propio multipart upload (o el PutObject
-        // bufferizado): nada existe en la key hasta `close()`. If-None-Match
-        // viaja en el commit → create-new race-free en servidores honestos.
+        // The invisible staging is the multipart upload itself (or the
+        // buffered PutObject): nothing exists at the key until `close()`.
+        // If-None-Match travels in the commit → race-free create-new on
+        // honest servers.
         let mut w = self.op.writer_with(&key).chunk(WRITE_CHUNK);
         if self.op.info().capability().write_with_if_not_exists {
             w = w.if_not_exists(true);
@@ -598,7 +607,7 @@ impl Provider for ObjectProvider {
     async fn mkdir(&self, p: &VPath) -> Result<(), Error> {
         let key = self.key(p)?;
         if key.is_empty() {
-            // La raíz ya existe.
+            // The root already exists.
             return Err(Error::Conflict {
                 conflict: ConflictKind::Exists,
             });
@@ -607,9 +616,9 @@ impl Provider for ObjectProvider {
             return Err(Error::NotFound);
         }
         self.ensure_absent(&key).await?;
-        // En S3 el CompleteLayer de opendal escribe el marker (`clave/`
-        // vacío); en fs es el mkdir real. El `mkdir -p` implícito de algunos
-        // backends es inofensivo: el padre ya se validó arriba.
+        // On S3 opendal's CompleteLayer writes the marker (empty `key/`);
+        // on fs it is the real mkdir. Some backends' implicit `mkdir -p` is
+        // harmless: the parent was already validated above.
         self.op
             .create_dir(&format!("{key}/"))
             .await
@@ -621,19 +630,19 @@ impl Provider for ObjectProvider {
         if key.is_empty() {
             return Err(Error::InvalidPath);
         }
-        // stat previo: el delete de opendal es idempotente y mentiría con el
-        // NotFound honesto que el contrato exige.
+        // Prior stat: opendal's delete is idempotent and would lie about the
+        // honest NotFound the contract requires.
         match self.stat_kind(&key).await? {
             None => Err(Error::NotFound),
             Some((EntryKind::File, _)) => self.op.delete(&key).await.map_err(|e| map_err(&e)),
             Some(_) => {
                 let dir = format!("{key}/");
-                // Dir con hijos se niega (remove NO recursivo). El propio
-                // marker no cuenta como hijo.
+                // A dir with children is refused (remove is NOT recursive).
+                // The marker itself does not count as a child.
                 let mut lister = self.op.lister(&dir).await.map_err(|e| map_err(&e))?;
                 while let Some(oe) = lister.try_next().await.map_err(|e| map_err(&e))? {
                     if oe.path() != dir {
-                        // Dir con hijos, como local (`DirectoryNotEmpty`).
+                        // Dir with children, like local (`DirectoryNotEmpty`).
                         return Err(Error::Conflict {
                             conflict: ConflictKind::TypeMismatch,
                         });
@@ -650,10 +659,10 @@ impl Provider for ObjectProvider {
         if from_key.is_empty() || to_key.is_empty() {
             return Err(Error::InvalidPath);
         }
-        // Un dir NO puede renombrarse dentro de su propio subárbol
-        // (`a` → `a/b`): S3 lo "ejecutaría" reubicando y borrando el marker
-        // origen, y el harness fs fallaría a media operación (ENOTEMPTY).
-        // Se rechaza limpio, como el EINVAL de POSIX en local.
+        // A dir CANNOT be renamed into its own subtree (`a` → `a/b`): S3
+        // would "execute" it by relocating and deleting the source marker,
+        // and the fs harness would fail midway through (ENOTEMPTY). Rejected
+        // cleanly, like local's POSIX EINVAL.
         if to_key == from_key || to_key.starts_with(&format!("{from_key}/")) {
             return Err(Error::InvalidPath);
         }
@@ -661,8 +670,8 @@ impl Provider for ObjectProvider {
         if !self.parent_dir_exists(to).await? {
             return Err(Error::NotFound);
         }
-        // Destino libre (fichero y dir): comprobación racy documentada (S3
-        // no tiene rename; CopyObject sobrescribiría en silencio).
+        // Free destination (file and dir): a documented racy check (S3 has
+        // no rename; CopyObject would silently overwrite).
         self.ensure_absent(&to_key).await?;
         if src.0 == EntryKind::File {
             self.op
@@ -671,28 +680,29 @@ impl Provider for ObjectProvider {
                 .map_err(|e| map_err(&e))?;
             return self.op.delete(&from_key).await.map_err(|e| map_err(&e));
         }
-        // Dir = prefijo entero: copy-all EN STREAMING (#49: sin materializar
-        // el prefijo — pico de memoria O(dirs), no O(objetos)) y LUEGO
-        // borrado con re-list + deleter batcheado. El invariante se
-        // conserva: la fase de copia DRENA el lister entero antes del primer
-        // delete — un fallo a mitad deja duplicados, jamás pérdida.
+        // Dir = a whole prefix: copy-all IN STREAMING (#49: without
+        // materializing the prefix — O(dirs) memory peak, not O(objects))
+        // and THEN delete with a re-list + a batched deleter. The invariant
+        // is preserved: the copy phase DRAINS the whole lister before the
+        // first delete — a mid-way failure leaves duplicates, never loss.
         //
-        // Sufijos VALIDADOS relativos a `from_dir`, NUNCA la key ecoada: un
-        // servidor mentiroso podría listar keys fuera del prefijo y hacer
-        // que copy/delete operen (y BORREN) fuera del árbol — misma
-        // contención que `list()`. Por eso el borrado NO usa
-        // `Operator::remove_all` (borra lo que el servidor ecoe, sin
-        // contención): re-lista y RECONSTRUYE cada key desde el sufijo
-        // validado, con el `Deleter` de opendal batcheando por debajo
-        // (DeleteObjects en S3).
+        // Suffixes VALIDATED relative to `from_dir`, NEVER the echoed key: a
+        // lying server could list keys outside the prefix and make
+        // copy/delete operate on (and DELETE) outside the tree — same
+        // containment as `list()`. That is why the delete does NOT use
+        // `Operator::remove_all` (deletes whatever the server echoes, no
+        // containment): it re-lists and REBUILDS every key from the
+        // validated suffix, with opendal's `Deleter` batching underneath
+        // (DeleteObjects on S3).
         let from_dir = format!("{from_key}/");
         let to_dir = format!("{to_key}/");
-        // Fase 0 — PRE-VALIDACIÓN streaming (BLOCKER histórico de los
-        // reviewers: un listado hostil corta con CERO mutaciones): se drena
-        // el lister validando cada sufijo SIN copiar nada — O(1) de memoria,
-        // un sweep de LIST extra (n/1000 requests) frente a n copies. Una
-        // entrada hostil COLADA entre este sweep y la copia corta a mitad de
-        // la fase 1: deja duplicados (jamás pérdida) y jamás una key ecoada.
+        // Phase 0 — streaming PRE-VALIDATION (a historical reviewer
+        // BLOCKER: a hostile listing must cut with ZERO mutations): the
+        // lister is drained validating every suffix WITHOUT copying
+        // anything — O(1) memory, one extra LIST sweep (n/1000 requests)
+        // against n copies. A hostile entry SLIPPED IN between this sweep
+        // and the copy cuts midway through phase 1: leaves duplicates
+        // (never loss) and never an echoed key.
         let mut lister = self
             .op
             .lister_with(&from_dir)
@@ -702,9 +712,9 @@ impl Provider for ObjectProvider {
         while let Some(oe) = lister.try_next().await.map_err(|e| map_err(&e))? {
             let _ = validated_suffix(&from_dir, oe.path())?;
         }
-        // Fase 1 — copia streaming (dirs = create_dir en destino; el
-        // recursivo de services-fs incluye subdirs, el de S3 markers como
-        // objetos con mode DIR — ambos van por create_dir).
+        // Phase 1 — streaming copy (dirs = create_dir at the destination;
+        // services-fs's recursive mode includes subdirs, S3's markers as
+        // objects with mode DIR — both go through create_dir).
         let mut lister = self
             .op
             .lister_with(&from_dir)
@@ -713,7 +723,7 @@ impl Provider for ObjectProvider {
             .map_err(|e| map_err(&e))?;
         while let Some(oe) = lister.try_next().await.map_err(|e| map_err(&e))? {
             let Some(suffix) = validated_suffix(&from_dir, oe.path())? else {
-                continue; // el propio dir listado
+                continue; // the listed dir itself
             };
             if oe.metadata().mode().is_dir() {
                 self.op
@@ -728,31 +738,32 @@ impl Provider for ObjectProvider {
             }
         }
         self.op.create_dir(&to_dir).await.map_err(|e| map_err(&e))?;
-        // Fase 2 — borrado con re-list: ficheros primero (batcheados),
-        // dirs después en profundidad inversa (un dir de fs solo se borra
-        // vacío; O(dirs) en memoria, la fracción diminuta del árbol).
+        // Phase 2 — delete with a re-list: files first (batched), dirs
+        // after in reverse depth (an fs dir only deletes empty; O(dirs) in
+        // memory, the tiny fraction of the tree).
         //
-        // Guard del colado: un fichero solo se borra si su DESTINO existe —
-        // una KEY NUEVA colada por otro cliente entre las dos fases no fue
-        // copiada y queda SIN MOVER en el origen. OJO al overclaim (review
-        // #49 MAJOR-2): una SOBRESCRITURA colada de una key YA copiada sí se
-        // pierde (el dst v1 existe → se borra el src v2) — inherente al
-        // rename no atómico; el conditional delete por ETag sería el fix
-        // fino donde el backend lo soporte.
+        // Slip-in guard: a file is only deleted if its DESTINATION exists —
+        // a NEW key slipped in by another client between the two phases was
+        // not copied and stays UNMOVED at the source. Watch the overclaim
+        // (review #49 MAJOR-2): a slipped-in OVERWRITE of an ALREADY-copied
+        // key IS lost (the v1 dst exists → the v2 src gets deleted) —
+        // inherent to a non-atomic rename; a conditional delete by ETag
+        // would be the fine-grained fix where the backend supports it.
         //
-        // Presupuesto de requests (documentado a propósito): n HEAD
-        // secuenciales + n/1000 DeleteObjects + 3 sweeps de LIST. El HEAD
-        // por fichero es el precio del guard; la ganancia de #49 es la
-        // MEMORIA O(dirs) y el batch del delete, no menos round-trips.
+        // Request budget (documented on purpose): n sequential HEADs +
+        // n/1000 DeleteObjects + 3 LIST sweeps. The per-file HEAD is the
+        // guard's price; #49's gain is O(dirs) MEMORY and the delete's
+        // batching, not fewer round-trips.
         let mut lister = self
             .op
             .lister_with(&from_dir)
             .recursive(true)
             .await
             .map_err(|e| map_err(&e))?;
-        // Un `?` (o el drop del future, regla 3) suelta el `deleter` sin
-        // close(): los deletes encolados sin flush se DESCARTAN — quedan
-        // duplicados en el origen, jamás pérdida (el invariante de siempre).
+        // A `?` (or dropping the future, rule 3) drops the `deleter`
+        // without close(): deletes queued without a flush are DISCARDED —
+        // they stay as duplicates at the source, never a loss (the usual
+        // invariant).
         let mut deleter = self.op.deleter().await.map_err(|e| map_err(&e))?;
         let mut dirs: Vec<String> = Vec::new();
         while let Some(oe) = lister.try_next().await.map_err(|e| map_err(&e))? {
@@ -765,12 +776,12 @@ impl Provider for ObjectProvider {
             }
             let dst = format!("{to_dir}{suffix}");
             if !self.op.exists(&dst).await.map_err(|e| map_err(&e))? {
-                // escape_debug: el sufijo es legal pero puede llevar
-                // controles/ANSI — jamás crudo al log (convención VPath
-                // redactado).
+                // escape_debug: the suffix is legal but can carry
+                // controls/ANSI — never raw to the log (the redacted-VPath
+                // convention).
                 tracing::warn!(
                     suffix = %suffix.escape_debug(),
-                    "objeto colado durante el rename de prefijo: queda SIN MOVER en el origen"
+                    "object slipped in during the prefix rename: stays UNMOVED at the source"
                 );
                 continue;
             }
@@ -779,7 +790,7 @@ impl Provider for ObjectProvider {
                 .await
                 .map_err(|e| map_err(&e))?;
         }
-        // Flush del batch de ficheros ANTES de tocar dirs (fs exige vacío).
+        // Flush the files' batch BEFORE touching dirs (fs demands empty).
         deleter.close().await.map_err(|e| map_err(&e))?;
         dirs.sort_by_key(|s| std::cmp::Reverse(s.len()));
         for suffix in dirs {
@@ -795,21 +806,22 @@ impl Provider for ObjectProvider {
         if !self.logical_trash {
             return Err(Error::Unsupported);
         }
-        // Entrada DETERMINISTA a partir del id del engine (#99). `plan` valida
-        // `p` (rechaza papelerizar la propia papelera, ADR 0019) y da la raíz.
+        // A DETERMINISTIC entry from the engine's id (#99). `plan` validates
+        // `p` (rejects trashing the trash itself, ADR 0019) and gives the root.
         let paths = trash::plan(p, &id.as_segment())?;
         let trash_root = paths.dir.parent().ok_or(Error::Unsupported)?;
 
-        // Idempotencia: víctima ausente + payload determinista presente = esta
-        // op ya aplicó en un intento transitorio anterior → devuelve el payload
-        // (recupera el `reversal_ref`). Sin payload = `NotFound` genuino.
+        // Idempotency: victim absent + deterministic payload present = this
+        // op already applied in an earlier transient attempt → returns the
+        // payload (recovers the `reversal_ref`). No payload = genuine
+        // `NotFound`.
         match self.stat(p).await {
             Ok(_) => {}
             Err(Error::NotFound) => {
                 return match self.stat(&paths.payload).await {
-                    // Solo NUESTRA entrada (la `.norte-info` decodifica a `p`)
-                    // se reclama; una ajena con el mismo id es colisión (review
-                    // rust MAJOR).
+                    // Only OUR entry (the `.norte-info` decodes to `p`) is
+                    // claimed; a foreign one with the same id is a collision
+                    // (rust review MAJOR).
                     Ok(_) if self.trash_info_matches(&paths.info, p).await => {
                         Ok(Some(paths.payload))
                     }
@@ -825,10 +837,10 @@ impl Provider for ObjectProvider {
 
         self.ensure_dir_idempotent(&trash_root).await?;
 
-        // La entrada `<id>/`: `Conflict::Exists` es NUESTRO parcial (info
-        // ausente o decodifica a `p`) → sigue; una info AJENA con el mismo id
-        // es colisión REAL (id fijo) → se propaga sin pisar sus metadatos
-        // (review rust MAJOR).
+        // The `<id>/` entry: `Conflict::Exists` is OUR partial (info absent
+        // or decodes to `p`) → continue; a FOREIGN info with the same id is
+        // a REAL collision (fixed id) → propagated without overwriting its
+        // metadata (rust review MAJOR).
         match self.mkdir(&paths.dir).await {
             Ok(()) => {}
             Err(Error::Conflict {
@@ -846,61 +858,65 @@ impl Provider for ObjectProvider {
             Err(e) => return Err(e),
         }
 
-        // `.norte-info` ANTES de mover: si el rename falla, el origen queda
-        // intacto o recuperable (copiado a la papelera), nunca un payload sin
-        // metadatos. `deleted_ms` del id (estable en cada reintento).
+        // `.norte-info` BEFORE moving: if the rename fails, the source stays
+        // intact or recoverable (copied to the trash), never a payload
+        // without metadata. `deleted_ms` from the id (stable across retries).
         let info = trash::info_encode(p, id.deleted_ms());
         let mut sink = self.write(&paths.info).await?;
         sink.write(Bytes::from(info)).await?;
         sink.commit().await?;
 
-        // Mueve el árbol reutilizando el rename AUDITADO: copy-all →
-        // delete-all, keys reconstruidas desde sufijos validados (contención
-        // de servidor hostil), sin pérdida ante interrupción (ADR 0019/0016).
+        // Moves the tree, reusing the AUDITED rename: copy-all →
+        // delete-all, keys rebuilt from validated suffixes (hostile-server
+        // containment), no loss on interruption (ADR 0019/0016).
         self.rename(p, &paths.payload).await?;
-        // Papelera LÓGICA: el payload ES la ruta recuperable → reversal_ref.
+        // LOGICAL trash: the payload IS the recoverable path → reversal_ref.
         Ok(Some(paths.payload))
     }
 
-    /// La papelera lógica elige su destino (`.norte-trash/<id>/payload`), así
-    /// que lo nombra siempre; sin ella no hay papelera que prometer.
+    /// The logical trash chooses its destination
+    /// (`.norte-trash/<id>/payload`), so it always names it; without it
+    /// there is no trash to promise.
     ///
-    /// Sin esto, un destino S3 con papelera lógica devolvía `Some(dest)` a la
-    /// vez que el default del trait decía que no sabía nombrarlo: el plan
-    /// marcaba IRREVERSIBLE hasta la última copia y el ejecutor TIRABA un
-    /// `reversal_ref` que existía (MAJOR-4 del encoding-auditor).
+    /// Without this, an S3 destination with logical trash returned
+    /// `Some(dest)` while the trait's default said it did not know how to
+    /// name it: the plan marked IRREVERSIBLE up to the last copy and the
+    /// executor THREW AWAY a `reversal_ref` that existed (encoding-auditor
+    /// MAJOR-4).
     fn trash_restorable(&self) -> bool {
         self.logical_trash
     }
 
     async fn copy_native(&self, from: &VPath, to: &VPath) -> Option<Result<(), Error>> {
-        // Object storage SÍ tiene copia server-side (CopyObject) — el engine
-        // la prefiere a leer+reescribir. Aplica solo a UN objeto (fichero);
-        // el copy de un árbol lo orquesta el engine con list+copy_native por
-        // hoja. `Some(_)`: el engine solo llama aquí con SERVER_COPY y src==dst
-        // (mismo provider por puntero), así que la copia nativa siempre aplica;
-        // un error se propaga tal cual (el engine NO cae a streaming).
+        // Object storage DOES have server-side copy (CopyObject) — the
+        // engine prefers it to read+rewrite. Applies to only ONE object
+        // (file); a tree's copy is orchestrated by the engine with
+        // list+copy_native per leaf. `Some(_)`: the engine only calls here
+        // with SERVER_COPY and src==dst (same provider by pointer), so
+        // native copy always applies; an error is propagated as-is (the
+        // engine does NOT fall back to streaming).
         Some(self.copy_object(from, to).await)
     }
 }
 
 impl ObjectProvider {
-    /// `CopyObject` de un fichero (ADR 0016 G). Destino existente → `Conflict`
-    /// (jamás sobrescritura silenciosa, misma política que `write`). El
-    /// `ensure_absent` previo NO es solo cinturón: `If-None-Match: *` sobre la
-    /// key `to` NO ve un DIRECTORIO destino (marker `to/` ni prefijo con
-    /// hijos), así que el sondeo file+dir de `stat_kind` es el ÚNICO guard
-    /// contra copiar un fichero `to` que aliasa el dir `to/`. Para el destino
-    /// FICHERO: con `copy_with_if_not_exists` es race-free; si el backend no
-    /// lo soporta degrada a ese check (racy, mismo nivel aceptado en write/ftp).
+    /// A file's `CopyObject` (ADR 0016 G). Existing destination →
+    /// `Conflict` (never a silent overwrite, same policy as `write`). The
+    /// prior `ensure_absent` is NOT just a belt: `If-None-Match: *` on the
+    /// `to` key does NOT see a destination DIRECTORY (neither a `to/`
+    /// marker nor a prefix with children), so `stat_kind`'s file+dir probe
+    /// is the ONLY guard against copying a `to` file that aliases the `to/`
+    /// dir. For a FILE destination: with `copy_with_if_not_exists` it is
+    /// race-free; if the backend does not support it, it degrades to that
+    /// check (racy, the same accepted level as write/ftp).
     async fn copy_object(&self, from: &VPath, to: &VPath) -> Result<(), Error> {
         let from_key = self.key(from)?;
         let to_key = self.key(to)?;
         if from_key.is_empty() || to_key.is_empty() {
             return Err(Error::InvalidPath);
         }
-        // copy_native es de objeto único: un directorio origen es TypeMismatch
-        // (el engine copia árboles hoja a hoja, nunca pasa un dir aquí).
+        // copy_native is single-object: a source directory is TypeMismatch
+        // (the engine copies trees leaf by leaf, never passes a dir here).
         match self.stat_kind(&from_key).await? {
             None => return Err(Error::NotFound),
             Some((EntryKind::Dir, _)) => {
@@ -913,8 +929,8 @@ impl ObjectProvider {
         if !self.parent_dir_exists(to).await? {
             return Err(Error::NotFound);
         }
-        // Cinturón: el stat-check upfront cubre los backends que ignoran
-        // If-None-Match (degrada a nivel racy, jamás a sobrescritura).
+        // Belt: the upfront stat-check covers backends that ignore
+        // If-None-Match (degrades to a racy level, never to an overwrite).
         self.ensure_absent(&to_key).await?;
         if self.op.info().capability().copy_with_if_not_exists {
             self.op
@@ -933,19 +949,19 @@ impl ObjectProvider {
     }
 }
 
-/// Sink de escritura sobre object storage (ADR 0016 E). El staging invisible
-/// es el propio multipart upload de opendal: las partes suben en `write`
-/// (bufferizadas por chunk) y NADA existe en la key final hasta el
-/// `CompleteMultipartUpload`/`PutObject` del `commit`. `abort` =
-/// `AbortMultipartUpload` (o descartar el buffer). Sin `.norte-partial`
-/// remoto; `keep` hereda el default del trait (= abort): el resume multipart
-/// está diferido (ADR 0016 F).
+/// A write sink over object storage (ADR 0016 E). The invisible staging is
+/// opendal's own multipart upload: parts go up in `write` (buffered per
+/// chunk) and NOTHING exists at the final key until the `commit`'s
+/// `CompleteMultipartUpload`/`PutObject`. `abort` =
+/// `AbortMultipartUpload` (or discarding the buffer). No remote
+/// `.norte-partial`; `keep` inherits the trait's default (= abort):
+/// multipart resume is deferred (ADR 0016 F).
 ///
-/// El `writer` es `Option` para que [`Drop`] pueda EXTRAERLO y abortar el
-/// multipart huérfano: un writer soltado sin `close`/`abort` deja las partes
-/// ya subidas colgando en el bucket (invisibles pero facturables) y este
-/// provider no tiene resume que las reencuentre — el contrato de `ByteSink`
-/// exige limpieza best-effort en `Drop`.
+/// The `writer` is `Option` so [`Drop`] can EXTRACT it and abort the
+/// orphaned multipart: a writer dropped without `close`/`abort` leaves the
+/// already-uploaded parts hanging in the bucket (invisible but billable)
+/// and this provider has no resume to find them again — `ByteSink`'s
+/// contract requires best-effort cleanup in `Drop`.
 struct ObjectSink {
     writer: Option<opendal::Writer>,
 }
@@ -961,8 +977,8 @@ impl ByteSink for ObjectSink {
     }
 
     async fn commit(mut self: Box<Self>) -> Result<(), Error> {
-        // If-None-Match viaja aquí: `ConditionNotMatch` → Conflict (el
-        // destino apareció entre el stat-check del open y este commit).
+        // If-None-Match travels here: `ConditionNotMatch` → Conflict (the
+        // destination appeared between the open's stat-check and this commit).
         let mut w = self.writer.take().ok_or(Error::Io { retryable: false })?;
         w.close().await.map(|_| ()).map_err(|e| map_err(&e))
     }
@@ -975,11 +991,12 @@ impl ByteSink for ObjectSink {
 
 impl Drop for ObjectSink {
     fn drop(&mut self) {
-        // Contrato de ByteSink: soltar sin commit/abort = abort best-effort.
-        // El multipart no es un unlink síncrono (como local) sino una llamada
-        // de red — se lanza en la runtime actual si la hay; sin runtime
-        // (drop fuera de tokio) las partes quedan para la lifecycle rule
-        // `AbortIncompleteMultipartUpload` del bucket (recomendada en 7d).
+        // ByteSink's contract: dropping without commit/abort = best-effort
+        // abort. The multipart is not a synchronous unlink (like local) but
+        // a network call — it is spawned on the current runtime if there is
+        // one; without a runtime (a drop outside tokio) the parts are left
+        // for the bucket's `AbortIncompleteMultipartUpload` lifecycle rule
+        // (recommended in 7d).
         if let Some(mut w) = self.writer.take()
             && let Ok(handle) = tokio::runtime::Handle::try_current()
         {
@@ -995,20 +1012,20 @@ mod tests {
     use super::validated_suffix;
     use norte_proto::Error;
 
-    /// #49: la contención del rename, caso a caso — el helper es la única
-    /// puerta por la que un path ecoado se convierte en key de operación.
+    /// #49: the rename's containment, case by case — the helper is the only
+    /// gate through which an echoed path becomes an operation key.
     #[test]
-    fn validated_suffix_contiene_lo_hostil() {
+    fn validated_suffix_contains_the_hostile_part() {
         let d = "src/";
-        // El propio dir listado: se salta, no es error.
+        // The listed dir itself: skipped, not an error.
         assert_eq!(validated_suffix(d, "src/"), Ok(None));
-        // Legales: fichero, subdir (con `/` final), anidado.
+        // Legal: file, subdir (with a trailing `/`), nested.
         assert_eq!(validated_suffix(d, "src/a.txt"), Ok(Some("a.txt")));
         assert_eq!(validated_suffix(d, "src/sub/"), Ok(Some("sub/")));
         assert_eq!(validated_suffix(d, "src/sub/b"), Ok(Some("sub/b")));
-        // Hostiles: fuera del prefijo, absoluto, traversal, segmento
-        // vacío, lossy.
-        for hostil in [
+        // Hostile: outside the prefix, absolute, traversal, empty segment,
+        // lossy.
+        for hostile in [
             "otra/x",
             "/etc/passwd",
             "src/../victima",
@@ -1019,9 +1036,9 @@ mod tests {
             "src",
         ] {
             assert_eq!(
-                validated_suffix(d, hostil),
+                validated_suffix(d, hostile),
                 Err(Error::InvalidPath),
-                "{hostil}"
+                "{hostile}"
             );
         }
     }

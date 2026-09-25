@@ -1,33 +1,35 @@
-//! El sidebar de sitios: discos y favoritos, en un panel que se queda.
+//! The places sidebar: drives and favorites, in a panel that stays.
 //!
-//! Estado PURO, sin `Backend` y sin render: se le entregan los volúmenes que
-//! contestó `host.volumes` y los favoritos que ya trae la config, y devuelve
-//! filas, cursor y destino. Lo mismo que hace [`crate::help`] con la ayuda, y
-//! por el mismo motivo: así se prueba entero sin daemon y sin terminal.
+//! PURE state, with no `Backend` and no render: it is handed the volumes
+//! `host.volumes` answered and the favorites the config already carries,
+//! and it returns rows, cursor and target. The same thing [`crate::help`]
+//! does with help, and for the same reason: this way it is tested whole,
+//! with no daemon and no terminal.
 //!
-//! # Lo que NO decide este módulo
+//! # What this module does NOT decide
 //!
-//! CUÁNDO se piden los volúmenes. Un sidebar que sondea sería la regla de
-//! suspensión del ADR 0058 rota desde el primer frame, así que quien lo pinta
-//! los pide al abrirlo y al refrescar, y nunca por reloj.
+//! WHEN the volumes are requested. A sidebar that polled would be ADR
+//! 0058's suspension rule broken from the first frame, so whoever paints
+//! it requests them on opening and on refresh, and never by clock.
 //!
-//! # Dos secciones, no tres
+//! # Two sections, not three
 //!
-//! No hay «Remotos»: norte no tiene lista de conexiones todavía (#140), y un
-//! `sftp://` guardado como favorito ya sale bajo Favoritos. Inventar la
-//! sección sin la fuente sería una caja vacía prometiendo algo.
+//! There is no "Remote": norte has no connection list yet (#140), and an
+//! `sftp://` saved as a favorite already shows up under Favorites.
+//! Inventing the section with no source behind it would be an empty box
+//! promising something.
 
 use norte_proto::VPath;
 use norte_proto::methods::{Volume, VolumeKind};
 
-/// El nombre CORTO de una unidad: su etiqueta si la tiene y, si no, el último
-/// tramo de su punto de montaje (la raíz se dice entera). Con la bandera de
-/// enmascarado, como toda puerta de pintado.
+/// A drive's SHORT name: its label if it has one, and if not, the last
+/// segment of its mount point (the root is said whole). With the masking
+/// flag, like every paint gateway.
 ///
-/// El punto de montaje entero cortado —«/home/oscar/…» cinco veces en la
-/// barra de sitios de la captura del 2026-09-21— no distinguía una unidad de
-/// otra; su último tramo sí. La ruta entera sigue a mano donde cabe (el
-/// título de la fila en la ventana).
+/// The whole mount point cut off — "/home/oscar/…" five times in the
+/// 2026-09-21 capture's places bar — did not distinguish one drive from
+/// another; its last segment did. The whole path is still available where
+/// there is room for it (the row's title in the window).
 ///
 /// ```
 /// use norte_frontend::places::drive_name;
@@ -43,22 +45,22 @@ pub fn drive_name(label: &[u8], mount: &VPath) -> (String, bool) {
         return crate::display_name(label);
     }
     match mount.file_name() {
-        Some(tramo) => crate::display_name(tramo.as_bytes()),
+        Some(seg) => crate::display_name(seg.as_bytes()),
         None => crate::path_display(mount),
     }
 }
 
-/// Las secciones del sidebar, en el orden en que se pintan.
+/// The sidebar's sections, in the order they are painted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Section {
-    /// Los volúmenes del host, con su espacio.
+    /// The host's volumes, with their space.
     Drives,
-    /// La hotlist del usuario.
+    /// The user's hotlist.
     Favorites,
 }
 
 impl Section {
-    /// La clave Fluent de su cabecera.
+    /// Its header's Fluent key.
     ///
     /// ```
     /// use norte_frontend::places::Section;
@@ -73,51 +75,52 @@ impl Section {
     }
 }
 
-/// Una fila pintable del sidebar.
+/// A paintable sidebar row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlaceRow {
-    /// La cabecera de una sección. No navega.
+    /// A section's header. Does not navigate.
     Header {
-        /// De qué sección.
+        /// Which section.
         section: Section,
-        /// ¿Está plegada?
+        /// Is it folded?
         folded: bool,
     },
-    /// Un volumen del host.
+    /// A host volume.
     Drive {
-        /// Lo que el sistema lo llama, en BYTES: ninguna plataforma promete
-        /// que la etiqueta de un volumen sea UTF-8 (regla 1). Vacío = sin
-        /// etiqueta, y entonces se pinta el punto de montaje.
+        /// What the system calls it, in BYTES: no platform promises a
+        /// volume's label is UTF-8 (rule 1). Empty = no label, and then
+        /// the mount point is painted.
         label: Vec<u8>,
-        /// Dónde está montado.
+        /// Where it is mounted.
         mount: VPath,
-        /// Espacio libre, o `None` si el filesystem no contestó.
+        /// Free space, or `None` if the filesystem did not answer.
         ///
-        /// `None` NO es cero: un cero aquí se leería como «lleno». Es la misma
-        /// regla que [`crate::space`] aplica al aviso previo a una copia.
+        /// `None` is NOT zero: a zero here would read as "full". It is the
+        /// same rule [`crate::space`] applies to the notice before a copy.
         free: Option<u64>,
-        /// Espacio total, con la misma advertencia que [`Self::Drive::free`].
+        /// Total space, with the same warning as [`Self::Drive::free`].
         total: Option<u64>,
-        /// ¿Está montado de solo lectura?
+        /// Is it mounted read-only?
         read_only: bool,
-        /// Qué clase de unidad es (fija, extraíble, en red): lo que decide
-        /// su icono en la ventana.
+        /// What kind of drive it is (fixed, removable, network): what
+        /// decides its icon in the window.
         kind: VolumeKind,
     },
-    /// Un favorito de la hotlist.
+    /// A hotlist favorite.
     Favorite {
-        /// El nombre que le puso el usuario.
+        /// The name the user gave it.
         name: String,
-        /// Su destino, o la clave Fluent del error si la ruta no parsea.
+        /// Its target, or the Fluent key for the error if the path does
+        /// not parse.
         ///
-        /// Un favorito roto se PINTA, con su motivo: uno que desaparece en
-        /// silencio es un fallo de configuración que nadie puede ver.
+        /// A broken favorite IS PAINTED, with its reason: one that
+        /// disappears silently is a config failure nobody can see.
         target: Result<VPath, String>,
     },
 }
 
-/// El sidebar entero: sus dos fuentes, qué está plegado y dónde está el
-/// cursor.
+/// The whole sidebar: its two sources, what is folded and where the cursor
+/// is.
 ///
 /// ```
 /// use norte_frontend::places::{PlaceRow, PlacesState};
@@ -125,12 +128,12 @@ pub enum PlaceRow {
 ///
 /// let mut s = PlacesState::new();
 /// s.set_favorites(&[(
-///     "casa".to_owned(),
+///     "home".to_owned(),
 ///     Ok(VPath::parse("file:///home").expect("wire")),
 /// )]);
-/// // Las DOS cabeceras están siempre, aunque una sección esté vacía: sin
-/// // volúmenes todavía, la lista no da un brinco cuando lleguen. El cursor
-/// // arranca en la primera cabecera, que no navega a ningún sitio.
+/// // BOTH headers are always there, even if a section is empty: with no
+/// // volumes yet, the list does not jump when they arrive. The cursor
+/// // starts on the first header, which navigates nowhere.
 /// assert_eq!(s.rows().len(), 3);
 /// assert!(s.activate().is_none());
 /// s.down();
@@ -155,12 +158,12 @@ impl Default for PlacesState {
 }
 
 impl PlacesState {
-    /// Un sidebar vacío: sin volúmenes y sin favoritos todavía.
+    /// An empty sidebar: no volumes and no favorites yet.
     ///
-    /// Vacío de CONTENIDO, no de filas: las dos cabeceras existen desde el
-    /// primer frame. Sin ellas, el panel recién abierto sería una caja en
-    /// blanco mientras `host.volumes` contesta, y plegar no querría decir nada
-    /// porque el cursor no estaría en ninguna sección.
+    /// Empty of CONTENT, not of rows: both headers exist from the first
+    /// frame. Without them, a freshly opened panel would be a blank box
+    /// while `host.volumes` answers, and folding would mean nothing
+    /// because the cursor would not be in any section.
     #[must_use]
     pub fn new() -> Self {
         let mut s = Self {
@@ -175,35 +178,35 @@ impl PlacesState {
         s
     }
 
-    /// Lo que se dice del ESPACIO de un volumen, y si es de solo lectura.
+    /// What is said about a volume's SPACE, and whether it is read-only.
     ///
-    /// Una sola función porque había tres —dos de ellas en el mismo crate—, y
-    /// ya diferían en cómo escriben los números. Peor: con `free` conocido y
-    /// `total` desconocido las tres decían «desconocido», tirando el único
-    /// dato que había. Y cuánto QUEDA es justo la mitad que se mira antes de
-    /// copiar; de cuánto es el disco no la mira nadie.
+    /// One single function because there used to be three — two of them in
+    /// the same crate — and they already differed in how they write the
+    /// numbers. Worse: with `free` known and `total` unknown, all three
+    /// said "unknown", throwing away the one piece of data there was. And
+    /// how much is LEFT is exactly the half looked at before copying; how
+    /// big the disk is, nobody looks at.
     ///
-    /// Un tamaño que el sistema no contestó se DICE, y jamás se sustituye por
-    /// un cero: un cero se lee como «lleno», que es lo contrario de «no lo
-    /// sé».
+    /// A size the system did not answer IS SAID, and never replaced with a
+    /// zero: a zero reads as "full", which is the opposite of "I don't
+    /// know".
     ///
-    /// `corto` elige la escala de los números, y esa diferencia sí es real:
-    /// la barra lateral tiene la mitad de ancho que un selector a pantalla
-    /// completa.
+    /// `short` picks the numbers' scale, and that difference is real: the
+    /// side bar is half the width of a full-screen picker.
     ///
     /// ```
     /// use norte_frontend::places::PlacesState;
     /// use norte_i18n::Lang;
     ///
-    /// // Lo normal: los dos números.
+    /// // The normal case: both numbers.
     /// let d = PlacesState::volume_detail(Some(1_000), Some(4_000), false, false, Lang::En);
     /// assert!(d.contains("free of"));
-    /// // Solo lo que queda: se dice lo que se sabe, en vez de «desconocido».
-    /// let medio = PlacesState::volume_detail(Some(1_000), None, false, false, Lang::En);
-    /// assert!(medio.contains("free") && !medio.contains("unknown"));
-    /// // Nada: entonces sí.
+    /// // Only what is left: what is known is said, instead of "unknown".
+    /// let middle = PlacesState::volume_detail(Some(1_000), None, false, false, Lang::En);
+    /// assert!(middle.contains("free") && !middle.contains("unknown"));
+    /// // Nothing: then yes.
     /// assert!(PlacesState::volume_detail(None, None, false, false, Lang::En).contains("unknown"));
-    /// // Y lo de solo lectura se añade, no sustituye.
+    /// // And read-only is added, not substituted.
     /// let ro = PlacesState::volume_detail(None, None, true, false, Lang::En);
     /// assert!(ro.contains("read-only") && ro.contains("unknown"));
     /// ```
@@ -212,43 +215,44 @@ impl PlacesState {
         free: Option<u64>,
         total: Option<u64>,
         read_only: bool,
-        corto: bool,
+        short: bool,
         lang: norte_i18n::Lang,
     ) -> String {
         let bytes = |n: u64| {
-            if corto {
+            if short {
                 crate::human_bytes_short(n)
             } else {
                 crate::human_bytes(n)
             }
         };
-        let mut trozos = Vec::new();
+        let mut parts = Vec::new();
         match (free, total) {
-            (Some(f), Some(t)) => trozos.push(norte_i18n::ta_in(
+            (Some(f), Some(t)) => parts.push(norte_i18n::ta_in(
                 lang,
                 "picker-volume-space",
                 &[("free", &bytes(f)), ("total", &bytes(t))],
             )),
-            // Lo que se sabe, aunque sea la mitad.
-            (Some(f), None) => trozos.push(norte_i18n::ta_in(
+            // What is known, even if it is only half.
+            (Some(f), None) => parts.push(norte_i18n::ta_in(
                 lang,
                 "picker-volume-free",
                 &[("free", &bytes(f))],
             )),
-            // Con el total solo, no hay nada útil que decir: de cuánto es el
-            // disco no cambia ninguna decisión.
-            _ => trozos.push(norte_i18n::t_in(lang, "volumes-size-unknown")),
+            // With only the total, there is nothing useful to say: how big
+            // the disk is changes no decision.
+            _ => parts.push(norte_i18n::t_in(lang, "volumes-size-unknown")),
         }
         if read_only {
-            trozos.push(norte_i18n::t_in(lang, "picker-volume-read-only"));
+            parts.push(norte_i18n::t_in(lang, "picker-volume-read-only"));
         }
-        trozos.join(" · ")
+        parts.join(" · ")
     }
 
-    /// Sustituye los volúmenes por los que acaba de contestar el host.
+    /// Replaces the volumes with the ones the host just answered.
     ///
-    /// Sustituye, no fusiona: la lista de montajes es una FOTO, y conservar
-    /// uno que ya no está sería ofrecer un sitio al que no se puede ir.
+    /// Replaces, does not merge: the mount list is a SNAPSHOT, and keeping
+    /// one that is no longer there would be offering a place you cannot go
+    /// to.
     pub fn set_drives(&mut self, volumes: &[Volume]) {
         self.drives = volumes
             .iter()
@@ -264,12 +268,12 @@ impl PlacesState {
         self.rebuild();
     }
 
-    /// Sustituye los favoritos.
+    /// Replaces the favorites.
     ///
-    /// Recibe el par ya desmenuzado y no el tipo de la config: este crate no
-    /// tiene por qué depender de `norte-config` para una struct de dos
-    /// campos, y el frontend que la tiene delante la traduce en el sitio de
-    /// llamada.
+    /// Receives the pair already broken down and not the config's type:
+    /// this crate has no reason to depend on `norte-config` for a
+    /// two-field struct, and the frontend that has it in front translates
+    /// it at the call site.
     pub fn set_favorites(&mut self, items: &[(String, Result<VPath, String>)]) {
         self.favorites = items
             .iter()
@@ -281,44 +285,44 @@ impl PlacesState {
         self.rebuild();
     }
 
-    /// Las filas VISIBLES, cabeceras incluidas y sin lo que esté plegado.
+    /// The VISIBLE rows, headers included and without what is folded.
     #[must_use]
     pub fn rows(&self) -> &[PlaceRow] {
         &self.rows
     }
 
-    /// Dónde está el cursor dentro de [`Self::rows`].
+    /// Where the cursor is within [`Self::rows`].
     #[must_use]
     pub const fn cursor(&self) -> usize {
         self.cursor
     }
 
-    /// Pone el cursor en la fila `i`, acotado a las que hay.
+    /// Puts the cursor on row `i`, clamped to what there is.
     ///
-    /// Lo pide el RATÓN (#226): un click nombra una fila por su POSICIÓN, y
-    /// llegar a ella a base de `up`/`down` sería reimplementar la aritmética
-    /// del cursor en el frontend. Fuera de rango se acota en vez de no hacer
-    /// nada: una lista que encogió entre el frame y el click no debe dejar el
-    /// cursor donde estaba.
+    /// Requested by the MOUSE (#226): a click names a row by its POSITION,
+    /// and reaching it by `up`/`down` would mean reimplementing the
+    /// cursor's arithmetic in the frontend. Out of range is clamped
+    /// instead of doing nothing: a list that shrank between the frame and
+    /// the click must not leave the cursor where it was.
     pub fn set_cursor(&mut self, i: usize) {
         self.cursor = i.min(self.rows.len().saturating_sub(1));
     }
 
-    /// Sube una fila. En la primera se queda.
+    /// Moves the cursor up one row. Stays on the first one.
     pub const fn up(&mut self) {
         self.cursor = self.cursor.saturating_sub(1);
     }
 
-    /// Baja una fila. En la última se queda.
+    /// Moves the cursor down one row. Stays on the last one.
     pub fn down(&mut self) {
-        let ultimo = self.rows.len().saturating_sub(1);
-        self.cursor = self.cursor.saturating_add(1).min(ultimo);
+        let last = self.rows.len().saturating_sub(1);
+        self.cursor = self.cursor.saturating_add(1).min(last);
     }
 
-    /// Pliega o despliega la sección donde está el cursor.
+    /// Folds or unfolds the section the cursor is on.
     ///
-    /// Sobre una fila cualquiera vale la sección a la que pertenece, así que
-    /// plegar no obliga a subir hasta la cabecera primero.
+    /// From any row, the section it belongs to is enough, so folding does
+    /// not require going up to the header first.
     pub fn toggle_fold(&mut self) {
         match self.section_at(self.cursor) {
             Some(Section::Drives) => self.drives_folded = !self.drives_folded,
@@ -328,10 +332,10 @@ impl PlacesState {
         self.rebuild();
     }
 
-    /// A dónde lleva la fila del cursor, o `None`.
+    /// Where the cursor's row leads, or `None`.
     ///
-    /// `None` en una cabecera y en un favorito roto: los dos se pintan, y
-    /// ninguno de los dos es un sitio.
+    /// `None` on a header and on a broken favorite: both are painted, and
+    /// neither is a place.
     #[must_use]
     pub fn activate(&self) -> Option<&VPath> {
         match self.rows.get(self.cursor)? {
@@ -341,11 +345,11 @@ impl PlacesState {
         }
     }
 
-    /// ¿Está plegada esa sección?
+    /// Is that section folded?
     ///
-    /// Lo pregunta quien tiene el `Backend` delante: desplegar las unidades es
-    /// el momento de volver a pedirlas, y plegarlas es el momento de NO
-    /// pedirlas.
+    /// Asked by whoever has the `Backend` in front: unfolding the drives
+    /// is the moment to request them again, and folding them is the
+    /// moment NOT to.
     #[must_use]
     pub const fn is_folded(&self, section: Section) -> bool {
         match section {
@@ -354,24 +358,25 @@ impl PlacesState {
         }
     }
 
-    /// A qué sección pertenece la fila `i`.
+    /// Which section row `i` belongs to.
     fn section_at(&self, i: usize) -> Option<Section> {
-        let mut actual = None;
-        for (j, fila) in self.rows.iter().enumerate() {
-            if let PlaceRow::Header { section, .. } = fila {
-                actual = Some(*section);
+        let mut current = None;
+        for (j, row) in self.rows.iter().enumerate() {
+            if let PlaceRow::Header { section, .. } = row {
+                current = Some(*section);
             }
             if j == i {
-                return actual;
+                return current;
             }
         }
         None
     }
 
-    /// Rehace las filas visibles y recoloca el cursor dentro de ellas.
+    /// Rebuilds the visible rows and repositions the cursor within them.
     ///
-    /// Lo segundo es la mitad que se olvida: plegar una sección con el cursor
-    /// dentro lo dejaría apuntando a una fila que ya no existe.
+    /// The second part is the half that gets forgotten: folding a section
+    /// with the cursor inside would leave it pointing at a row that no
+    /// longer exists.
     fn rebuild(&mut self) {
         let mut out = Vec::with_capacity(self.rows.len() + 2);
         out.push(PlaceRow::Header {
@@ -393,8 +398,8 @@ impl PlacesState {
     }
 }
 
-/// La etiqueta con la que se PRESENTA un directorio: su último segmento
-/// saneado, y en la raíz el host (o la barra, si el scheme no nombra ninguno).
+/// The label a directory is PRESENTED with: its sanitized last segment,
+/// and at the root the host (or the slash, if the scheme names none).
 fn dir_label(dir: &VPath) -> String {
     dir.file_name().map_or_else(
         || {
@@ -405,22 +410,23 @@ fn dir_label(dir: &VPath) -> String {
     )
 }
 
-/// El nombre que se PROPONE para un favorito nuevo sobre `dir`, ya libre de
-/// los `taken` que la hotlist tiene puestos.
+/// The name PROPOSED for a new favorite over `dir`, already clear of the
+/// `taken` ones the hotlist has set.
 ///
-/// El nombre de un favorito es una ETIQUETA, no una ruta —el destino viaja
-/// aparte, en `path`—, así que se sugiere SANEADO ([`crate::display_name`]):
-/// un nombre no-UTF8 o con hazards de terminal no entra crudo en el
-/// `norte.toml` del usuario.
+/// A favorite's name is a LABEL, not a path — the target travels
+/// separately, in `path` — so it is suggested SANITIZED
+/// ([`crate::display_name`]): a non-UTF-8 name or one with terminal hazards
+/// does not go raw into the user's `norte.toml`.
 ///
-/// # Por qué esquiva los nombres ocupados
+/// # Why it dodges names already taken
 ///
-/// `persist_hotlist_add` REEMPLAZA la entrada cuyo nombre ya existe. Con el
-/// campo prellenado, el reflejo de aceptar sin leer pisaría en silencio un
-/// favorito que apuntaba a otro sitio, y `src` o `docs` chocan constantemente.
-/// Así que la sugerencia se cualifica con el directorio padre —que además dice
-/// más que un número— y solo numera cuando eso tampoco basta. Un nombre
-/// TECLEADO que colisione sigue reemplazando: eso es lo que el humano pidió.
+/// `persist_hotlist_add` REPLACES the entry whose name already exists.
+/// With the field pre-filled, the reflex of accepting without reading
+/// would silently overwrite a favorite that pointed somewhere else, and
+/// `src` or `docs` collide constantly. So the suggestion is qualified with
+/// the parent directory — which also says more than a number — and only
+/// numbers when even that is not enough. A TYPED name that collides still
+/// replaces: that is what the human asked for.
 ///
 /// ```
 /// use norte_frontend::places::suggested_hotlist_name;
@@ -436,18 +442,18 @@ pub fn suggested_hotlist_name(dir: &VPath, taken: &[&str]) -> String {
     if !taken.contains(&base.as_str()) {
         return base;
     }
-    if let Some(padre) = dir.parent().and_then(|p| p.file_name().cloned()) {
-        let cualificado = format!("{}/{base}", crate::display_name(padre.as_bytes()).0);
-        if !taken.contains(&cualificado.as_str()) {
-            return cualificado;
+    if let Some(parent) = dir.parent().and_then(|p| p.file_name().cloned()) {
+        let qualified = format!("{}/{base}", crate::display_name(parent.as_bytes()).0);
+        if !taken.contains(&qualified.as_str()) {
+            return qualified;
         }
     }
-    // Termina: `taken` es finito, así que algún `n` queda libre.
+    // Terminates: `taken` is finite, so some `n` is free.
     let mut n = 2u32;
     loop {
-        let candidato = format!("{base} ({n})");
-        if !taken.contains(&candidato.as_str()) {
-            return candidato;
+        let candidate = format!("{base} ({n})");
+        if !taken.contains(&candidate.as_str()) {
+            return candidate;
         }
         n += 1;
     }
@@ -459,10 +465,10 @@ mod tests {
     use norte_proto::methods::{Volume, VolumeKind};
 
     fn vp(wire: &str) -> VPath {
-        VPath::parse(wire).expect("wire válido")
+        VPath::parse(wire).expect("valid wire")
     }
 
-    fn volumen(mount: &str, free: Option<u64>, total: Option<u64>) -> Volume {
+    fn volume(mount: &str, free: Option<u64>, total: Option<u64>) -> Volume {
         Volume {
             mount: vp(mount),
             label: None,
@@ -477,20 +483,20 @@ mod tests {
     fn con_label(label: Vec<u8>) -> Volume {
         Volume {
             label: Some(label),
-            ..volumen("file:///", Some(1), Some(2))
+            ..volume("file:///", Some(1), Some(2))
         }
     }
 
-    /// Un favorito roto se PINTA, con su motivo. Uno que desaparece en
-    /// silencio es un fallo de config que no puedes ver.
+    /// A broken favorite IS PAINTED, with its reason. One that disappears
+    /// silently is a config failure you cannot see.
     #[test]
-    fn un_favorito_roto_sale_en_la_lista_y_no_navega() {
+    fn a_broken_favorite_shows_in_the_list_and_does_not_navigate() {
         let mut s = PlacesState::new();
         s.set_favorites(&[
             ("bueno".to_owned(), Ok(vp("file:///casa"))),
             ("roto".to_owned(), Err("err-invalid-path".to_owned())),
         ]);
-        // Cabecera de discos (vacía), cabecera de favoritos, y los dos.
+        // Drives header (empty), favorites header, and both.
         assert_eq!(s.rows().len(), 4);
         assert!(matches!(
             s.rows()[1],
@@ -503,31 +509,31 @@ mod tests {
         s.down();
         s.down();
         assert!(matches!(s.rows()[s.cursor()], PlaceRow::Favorite { .. }));
-        assert!(s.activate().is_none(), "el roto no lleva a ningún sitio");
+        assert!(s.activate().is_none(), "the broken one leads nowhere");
     }
 
-    /// `free_bytes` ausente NO es cero: es «no contestó». La regla vive en
-    /// `space.rs` y aquí se conserva el `Option` tal cual, sin sustituirlo por
-    /// un número que se leería como «lleno».
+    /// A missing `free_bytes` is NOT zero: it is "did not answer". The rule
+    /// lives in `space.rs` and here the `Option` is kept as is, without
+    /// substituting it with a number that would read as "full".
     #[test]
-    fn un_volumen_sin_espacio_conserva_el_none() {
+    fn a_volume_without_space_preserves_the_none() {
         let mut s = PlacesState::new();
-        s.set_drives(&[volumen("file:///mnt", None, None)]);
+        s.set_drives(&[volume("file:///mnt", None, None)]);
         let PlaceRow::Drive { free, total, .. } = &s.rows()[1] else {
-            panic!("la fila 1 es el volumen");
+            panic!("row 1 is the volume");
         };
         assert!(free.is_none() && total.is_none());
     }
 
-    /// Plegar esconde las filas de la sección y deja el cursor dentro de lo
-    /// que queda.
+    /// Folding hides the section's rows and leaves the cursor within what
+    /// remains.
     #[test]
-    fn plegar_una_seccion_esconde_sus_filas_y_recoloca_el_cursor() {
+    fn folding_a_section_hides_its_rows_and_relocates_the_cursor() {
         let mut s = PlacesState::new();
-        s.set_drives(&[volumen("file:///", Some(1000), Some(4000))]);
+        s.set_drives(&[volume("file:///", Some(1000), Some(4000))]);
         s.set_favorites(&[("casa".to_owned(), Ok(vp("file:///casa")))]);
         assert_eq!(s.rows().len(), 4);
-        // El cursor al final del todo, que es donde plegar duele.
+        // Cursor all the way at the end, which is where folding hurts.
         for _ in 0..10 {
             s.down();
         }
@@ -537,10 +543,10 @@ mod tests {
         assert!(s.cursor() < s.rows().len());
     }
 
-    /// `is_folded` dice lo mismo que la cabecera pinta: es lo que mira quien
-    /// decide si toca volver a pedir los volúmenes.
+    /// `is_folded` says the same thing the header paints: it is what
+    /// whoever decides whether to request the volumes again looks at.
     #[test]
-    fn is_folded_sigue_al_toggle() {
+    fn is_folded_follows_the_toggle() {
         let mut s = PlacesState::new();
         assert!(!s.is_folded(Section::Drives));
         s.toggle_fold();
@@ -548,13 +554,13 @@ mod tests {
         assert!(!s.is_folded(Section::Favorites));
     }
 
-    /// Plegar desde una fila cualquiera pliega SU sección, no la primera.
+    /// Folding from any row folds ITS section, not the first one.
     #[test]
-    fn plegar_desde_una_fila_pliega_su_propia_seccion() {
+    fn folding_from_a_row_folds_its_own_section() {
         let mut s = PlacesState::new();
-        s.set_drives(&[volumen("file:///", Some(1), Some(2))]);
+        s.set_drives(&[volume("file:///", Some(1), Some(2))]);
         s.set_favorites(&[("casa".to_owned(), Ok(vp("file:///casa")))]);
-        s.down(); // sobre el volumen
+        s.down(); // on the volume
         s.toggle_fold();
         assert!(matches!(
             s.rows()[0],
@@ -572,58 +578,59 @@ mod tests {
         ));
     }
 
-    /// La etiqueta de un volumen son BYTES (regla 1): un nombre que no es
-    /// UTF-8 no revienta ni se pierde por el camino.
+    /// A volume's label is BYTES (rule 1): a name that is not UTF-8 does
+    /// not blow up or get lost along the way.
     #[test]
-    fn una_etiqueta_no_utf8_sobrevive_como_bytes() {
+    fn a_non_utf8_label_survives_as_bytes() {
         let mut s = PlacesState::new();
         s.set_drives(&[con_label(b"\xffdisco".to_vec())]);
         let PlaceRow::Drive { label, .. } = &s.rows()[1] else {
-            panic!("volumen")
+            panic!("volume")
         };
         assert_eq!(label, b"\xffdisco");
     }
 
-    /// Un volumen que desaparece del host desaparece de la lista: ofrecer un
-    /// montaje que ya no está es ofrecer un sitio al que no se puede ir.
+    /// A volume that disappears from the host disappears from the list:
+    /// offering a mount that is no longer there is offering a place you
+    /// cannot go to.
     #[test]
-    fn set_drives_sustituye_no_fusiona() {
+    fn set_drives_replaces_it_does_not_merge() {
         let mut s = PlacesState::new();
-        s.set_drives(&[volumen("file:///", Some(1), Some(2))]);
-        s.set_drives(&[volumen("file:///mnt", Some(1), Some(2))]);
+        s.set_drives(&[volume("file:///", Some(1), Some(2))]);
+        s.set_drives(&[volume("file:///mnt", Some(1), Some(2))]);
         assert_eq!(s.rows().len(), 3);
         let PlaceRow::Drive { mount, .. } = &s.rows()[1] else {
-            panic!("volumen")
+            panic!("volume")
         };
         assert_eq!(*mount, vp("file:///mnt"));
     }
 
     #[test]
-    fn la_sugerencia_es_el_ultimo_segmento() {
+    fn the_suggestion_is_the_last_segment() {
         assert_eq!(
             suggested_hotlist_name(&vp("file:///home/o/work"), &[]),
             "work"
         );
     }
 
-    /// La raíz local no tiene último segmento, y `file` no nombra un sitio:
-    /// el nombre que un humano reconoce ahí es la barra.
+    /// The local root has no last segment, and `file` names no place: the
+    /// name a human recognizes there is the slash.
     #[test]
-    fn la_raiz_local_se_sugiere_como_barra() {
+    fn the_local_root_is_suggested_as_the_slash() {
         assert_eq!(suggested_hotlist_name(&vp("file:///"), &[]), "/");
     }
 
-    /// En la raíz de un remoto sí hay algo que nombra el sitio: el host.
+    /// At a remote's root there IS something naming the place: the host.
     #[test]
-    fn la_raiz_remota_se_sugiere_con_su_authority() {
+    fn the_remote_root_is_suggested_with_its_authority() {
         assert_eq!(suggested_hotlist_name(&vp("sftp://host/"), &[]), "host");
     }
 
-    /// El nombre es una ETIQUETA (el destino viaja aparte, en `path`), así que
-    /// se sugiere SANEADO: los bytes no-UTF8 salen lossy y los hazards de
-    /// terminal enmascarados, y no entran crudos en el `norte.toml`.
+    /// The name is a LABEL (the target travels separately, in `path`), so
+    /// it is suggested SANITIZED: non-UTF-8 bytes come out lossy and
+    /// terminal hazards masked, and none go raw into `norte.toml`.
     #[test]
-    fn la_sugerencia_va_saneada_como_cualquier_nombre_pintado() {
+    fn the_suggestion_is_sanitized_like_any_painted_name() {
         assert_eq!(
             suggested_hotlist_name(&vp("file:///home/%FFdir"), &[]),
             "\u{FFFD}dir"
@@ -634,22 +641,23 @@ mod tests {
         );
     }
 
-    /// `persist_hotlist_add` REEMPLAZA si el nombre ya existe: una sugerencia
-    /// que colisiona convierte el reflejo `a`+Enter en pisar un favorito que
-    /// apuntaba a otro sitio. La sugerencia se cualifica con el padre, que
-    /// además dice más que un número.
+    /// `persist_hotlist_add` REPLACES if the name already exists: a
+    /// colliding suggestion turns the `a`+Enter reflex into overwriting a
+    /// favorite that pointed somewhere else. The suggestion is qualified
+    /// with the parent, which also says more than a number.
     #[test]
-    fn una_sugerencia_ocupada_se_cualifica_con_el_padre() {
+    fn a_taken_suggestion_is_qualified_with_the_parent() {
         assert_eq!(
             suggested_hotlist_name(&vp("file:///home/o/norte/src"), &["src"]),
             "norte/src"
         );
     }
 
-    /// Si el padre tampoco basta, se numera. Y el número sube hasta encontrar
-    /// hueco: parar en el primero ocupado sería colisionar otra vez.
+    /// If the parent is not enough either, it numbers. And the number goes
+    /// up until it finds room: stopping at the first taken one would
+    /// collide again.
     #[test]
-    fn si_el_padre_tampoco_basta_se_numera_hasta_encontrar_hueco() {
+    fn if_the_parent_is_not_enough_either_it_numbers_until_it_finds_room() {
         assert_eq!(
             suggested_hotlist_name(&vp("file:///home/o/norte/src"), &["src", "norte/src"]),
             "src (2)"
@@ -663,9 +671,9 @@ mod tests {
         );
     }
 
-    /// Sin padre que cualificar (la raíz), se numera directamente.
+    /// With no parent to qualify with (the root), it numbers directly.
     #[test]
-    fn la_raiz_ocupada_se_numera_sin_padre() {
+    fn the_taken_root_is_numbered_without_parent() {
         assert_eq!(suggested_hotlist_name(&vp("file:///"), &["/"]), "/ (2)");
     }
 }

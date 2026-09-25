@@ -1,10 +1,10 @@
-//! El transporte de hoy: un socket UNIX autenticado por credenciales del peer.
+//! Today's transport: a UNIX socket authenticated by peer credentials.
 //!
-//! Aquí vive TODO lo que sabe que hay un `UnixStream` debajo. El JSON-RPC
-//! enmarcado ([`crate::rpc`]) solo ve una mitad de lectura y otra de
-//! escritura, así que añadir un named pipe de Windows —milestone aparte, ver
-//! ADR 0066— es escribir otro módulo como este, no copiar la correlación ni
-//! el enmarcado.
+//! EVERYTHING that knows there is a `UnixStream` underneath lives here. The
+//! framed JSON-RPC ([`crate::rpc`]) only sees one read half and one write
+//! half, so adding a Windows named pipe — a separate milestone, see ADR 0066
+//! — means writing another module like this one, not copying the
+//! correlation or the framing.
 
 use std::path::Path;
 use std::time::Duration;
@@ -14,46 +14,48 @@ use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 
 use crate::ClientError;
 
-/// Conecta al socket y comprueba que lo sirve NUESTRO uid.
+/// Connects to the socket and checks it is served by OUR uid.
 ///
-/// El cliente también autentica al servidor (simetría de la spec §17.6): en
-/// el fallback de `/tmp`, un directorio pre-creado por otro usuario podría
-/// servir un daemon impostor (hallazgo M2 del security-reviewer).
+/// The client also authenticates the server (symmetry with spec §17.6): in
+/// the `/tmp` fallback, a directory pre-created by another user could serve
+/// an impostor daemon (security-reviewer finding M2).
 ///
 /// # Errors
-/// I/O de conexión, o [`ClientError::ForeignDaemon`] si el peer no es nuestro.
+/// Connection I/O, or [`ClientError::ForeignDaemon`] if the peer is not
+/// ours.
 pub(crate) async fn connect(socket: &Path) -> Result<(OwnedReadHalf, OwnedWriteHalf), ClientError> {
     let stream = UnixStream::connect(socket).await?;
     authenticated(stream).await
 }
 
-/// Conecta y, si no hay nadie escuchando, ARRANCA el daemon y reintenta con
-/// backoff hasta ~3 s.
+/// Connects and, if nobody is listening, STARTS the daemon and retries with
+/// backoff for up to ~3s.
 ///
-/// El hijo no se espera (`wait`): si el daemon muere antes que este proceso
-/// queda un zombie hasta que salgamos — coste asumido de no hacer double-fork
-/// (exigiría unsafe).
+/// The child is not waited on (`wait`): if the daemon dies before this
+/// process does, it leaves a zombie until we exit — an accepted cost of not
+/// double-forking (which would require unsafe).
 ///
-/// # Un daemon que MUERE al arrancar
+/// # A daemon that DIES on startup
 ///
-/// Es un caso distinto de «tarda», y antes se leían igual: el `stderr` del
-/// hijo iba a `/dev/null`, así que la única frase que explicaba el fallo —«el
-/// journal es de antes de `undoes_seq`», «el socket lo tiene otro»— se perdía,
-/// y el llamante esperaba los 3,2 s enteros para recibir un `SpawnTimeout` que
-/// invita a reintentar algo que no va a cambiar nunca.
+/// This is a different case from "is slow", and used to be read the same
+/// way: the child's `stderr` went to `/dev/null`, so the one sentence that
+/// explained the failure — "the journal predates `undoes_seq`", "the socket
+/// is held by someone else" — was lost, and the caller waited the whole
+/// 3.2s just to get a `SpawnTimeout` inviting a retry of something that will
+/// never change.
 ///
-/// Ahora el `stderr` se captura y el hijo se vigila con `try_wait` en cada
-/// vuelta: si murió, se devuelve [`ClientError::SpawnFailed`] con lo que dijo,
-/// **sin agotar el backoff**.
+/// Now `stderr` is captured and the child is watched with `try_wait` on
+/// every round: if it died, [`ClientError::SpawnFailed`] is returned with
+/// what it said, **without exhausting the backoff**.
 ///
-/// Con un daemon que SÍ arranca queda una tubería que nadie lee, y eso se
-/// llena: un daemon que escriba un aviso por stderr con el buffer lleno se
-/// BLOQUEA en el `write`, o sea que la ventana lo colgaría por haberlo
-/// arrancado. Por eso el éxito deja un hilo drenándola.
+/// With a daemon that DOES start, a pipe is left that nobody reads, and that
+/// fills up: a daemon writing a warning to stderr with the buffer full
+/// BLOCKS on the `write`, meaning the window would hang it for having
+/// started it. That is why success leaves a thread draining it.
 ///
 /// # Errors
-/// I/O; [`ClientError::SpawnFailed`] si el daemon arrancó y murió; o
-/// [`ClientError::SpawnTimeout`] si sigue vivo y no llega a aceptar.
+/// I/O; [`ClientError::SpawnFailed`] if the daemon started and died; or
+/// [`ClientError::SpawnTimeout`] if it is still alive and never accepts.
 pub(crate) async fn connect_or_spawn(
     socket: &Path,
     spawn: impl FnOnce() -> std::process::Command,
@@ -68,45 +70,46 @@ pub(crate) async fn connect_or_spawn(
         Err(e) => return Err(e.into()),
     }
     let mut cmd = spawn();
-    // El daemon es un proceso INDEPENDIENTE del frontend que lo parió, salvo
-    // por el `stderr`: es por donde dice por qué no pudo arrancar, y tirarlo
-    // deja al llamante sin la única explicación que existe.
+    // The daemon is a process INDEPENDENT from the frontend that spawned it,
+    // except for `stderr`: that is where it says why it could not start, and
+    // dropping it leaves the caller with no explanation at all.
     cmd.stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped());
     let mut child = cmd.spawn()?;
-    // Backoff total ≈ 3,2 s (documentado: "hasta ~3 s").
+    // Total backoff ≈ 3.2s (documented as "up to ~3s").
     for backoff_ms in [25u64, 50, 100, 200, 400, 800, 1600] {
         tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
         if let Ok(stream) = UnixStream::connect(socket).await {
-            drenar_stderr(child.stderr.take());
+            drain_stderr(child.stderr.take());
             return authenticated(stream).await;
         }
-        // ¿Murió? Entonces esperar el resto del backoff no cambia nada, y lo
-        // que escribió es lo único que explica el fallo. `try_wait` no
-        // bloquea, y tras la muerte el `stderr` está cerrado: leerlo termina.
+        // Did it die? Then waiting out the rest of the backoff changes
+        // nothing, and what it wrote is the only thing that explains the
+        // failure. `try_wait` does not block, and after death `stderr` is
+        // closed: reading it terminates.
         if let Ok(Some(status)) = child.try_wait() {
             return Err(ClientError::SpawnFailed {
                 status: status.code(),
-                stderr: leer_stderr(child.stderr.take()).await,
+                stderr: read_stderr(child.stderr.take()).await,
             });
         }
     }
-    drenar_stderr(child.stderr.take());
+    drain_stderr(child.stderr.take());
     Err(ClientError::SpawnTimeout)
 }
 
-/// Lo que el daemon dijo antes de morir, recortado y sin bytes de control.
+/// What the daemon said before dying, trimmed and with no control bytes.
 ///
-/// Acotado a 4 KiB: es un mensaje de error para enseñar, no un log, y lo que
-/// llega es la salida de otro proceso. Se lee en `spawn_blocking` porque es
-/// I/O síncrona (regla 2) — y termina, porque el hijo ya murió y el extremo
-/// de escritura está cerrado.
-async fn leer_stderr(stderr: Option<std::process::ChildStderr>) -> String {
+/// Capped to 4 KiB: it is an error message meant to be displayed, not a log,
+/// and what arrives is another process's output. Read in `spawn_blocking`
+/// because it is synchronous I/O (rule 2) — and it terminates, because the
+/// child already died and the write end is closed.
+async fn read_stderr(stderr: Option<std::process::ChildStderr>) -> String {
     let Some(mut stderr) = stderr else {
         return String::new();
     };
-    let leido = tokio::task::spawn_blocking(move || {
+    let read = tokio::task::spawn_blocking(move || {
         use std::io::Read as _;
         let mut buf = Vec::new();
         let _ = std::io::Read::by_ref(&mut stderr)
@@ -116,15 +119,15 @@ async fn leer_stderr(stderr: Option<std::process::ChildStderr>) -> String {
     })
     .await
     .unwrap_or_default();
-    String::from_utf8_lossy(&leido).trim().to_owned()
+    String::from_utf8_lossy(&read).trim().to_owned()
 }
 
-/// Deja la tubería vaciándose para siempre, tirando lo que llegue.
+/// Leaves the pipe draining forever, discarding whatever arrives.
 ///
-/// Sin esto, un daemon que arranca bien y luego escribe por `stderr` se
-/// bloquea en cuanto llena el buffer de la tubería, porque en este proceso no
-/// hay nadie leyendo. El hilo muere solo cuando el daemon cierra su extremo.
-fn drenar_stderr(stderr: Option<std::process::ChildStderr>) {
+/// Without this, a daemon that starts fine and later writes to `stderr`
+/// blocks as soon as it fills the pipe's buffer, because nobody in this
+/// process is reading. The thread only dies when the daemon closes its end.
+fn drain_stderr(stderr: Option<std::process::ChildStderr>) {
     let Some(mut stderr) = stderr else {
         return;
     };
@@ -135,7 +138,7 @@ fn drenar_stderr(stderr: Option<std::process::ChildStderr>) {
 
 async fn authenticated(stream: UnixStream) -> Result<(OwnedReadHalf, OwnedWriteHalf), ClientError> {
     let peer = stream.peer_cred()?;
-    // uid propio sin unsafe (regla 5), en spawn_blocking (regla 2).
+    // Our own uid with no unsafe (rule 5), in spawn_blocking (rule 2).
     let my_uid = tokio::task::spawn_blocking(crate::socket::process_uid_best_effort)
         .await
         .map_err(|e| ClientError::Io(std::io::Error::other(e)))?;
@@ -149,47 +152,47 @@ async fn authenticated(stream: UnixStream) -> Result<(OwnedReadHalf, OwnedWriteH
 mod tests {
     use super::*;
 
-    fn socket_que_no_existe() -> std::path::PathBuf {
+    fn nonexistent_socket() -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("norte-test-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
-        dir.join("no-hay-nadie.sock")
+        dir.join("nobody-here.sock")
     }
 
-    /// **Un daemon que arranca y MUERE devuelve lo que dijo**, y no el
-    /// `SpawnTimeout` que invita a esperar (#300).
+    /// **A daemon that starts and DIES returns what it said**, not the
+    /// `SpawnTimeout` that invites waiting (#300).
     ///
-    /// La frase por `stderr` es lo único que explica por qué no va a arrancar
-    /// nunca —un journal que no se puede migrar es el caso real—, y antes se
-    /// tiraba a `/dev/null`.
+    /// The sentence on `stderr` is the only thing that explains why it will
+    /// never start — a journal that cannot be migrated is the real case —
+    /// and it used to be thrown away to `/dev/null`.
     #[tokio::test]
-    async fn un_daemon_que_muere_devuelve_lo_que_dijo() {
-        let socket = socket_que_no_existe();
+    async fn a_daemon_that_dies_returns_what_it_said() {
+        let socket = nonexistent_socket();
         let e = connect_or_spawn(&socket, || {
             let mut cmd = std::process::Command::new("sh");
-            cmd.args(["-c", "echo 'el journal no se puede migrar' >&2; exit 3"]);
+            cmd.args(["-c", "echo 'the journal cannot be migrated' >&2; exit 3"]);
             cmd
         })
         .await
-        .expect_err("el daemon murió");
+        .expect_err("the daemon died");
 
         match e {
             ClientError::SpawnFailed { status, stderr } => {
-                assert_eq!(status, Some(3), "el código de salida se conserva");
+                assert_eq!(status, Some(3), "the exit code is kept");
                 assert!(
-                    stderr.contains("el journal no se puede migrar"),
-                    "lo que dijo tiene que llegar entero: {stderr:?}"
+                    stderr.contains("the journal cannot be migrated"),
+                    "what it said has to arrive whole: {stderr:?}"
                 );
             }
-            otro => panic!("tenía que ser SpawnFailed, fue {otro:?}"),
+            other => panic!("expected SpawnFailed, got {other:?}"),
         }
     }
 
-    /// Y no se agota el backoff esperándolo: ~3,2 s de espera sobre algo que
-    /// ya murió son 3,2 s de ventana en blanco por nada.
+    /// And the backoff is not exhausted waiting for it: ~3.2s of waiting on
+    /// something that already died is 3.2s of blank window for nothing.
     #[tokio::test]
-    async fn morir_no_agota_el_backoff() {
-        let socket = socket_que_no_existe();
-        let antes = std::time::Instant::now();
+    async fn dying_does_not_exhaust_the_backoff() {
+        let socket = nonexistent_socket();
+        let before = std::time::Instant::now();
         let _ = connect_or_spawn(&socket, || {
             let mut cmd = std::process::Command::new("sh");
             cmd.args(["-c", "exit 1"]);
@@ -197,24 +200,24 @@ mod tests {
         })
         .await;
         assert!(
-            antes.elapsed() < Duration::from_secs(2),
-            "se esperó el backoff entero: {:?}",
-            antes.elapsed()
+            before.elapsed() < Duration::from_secs(2),
+            "the whole backoff was waited out: {:?}",
+            before.elapsed()
         );
     }
 
-    /// Un daemon que arranca y NO dice nada por `stderr` sigue siendo un
-    /// fallo con su código: el error existe aunque no haya frase que enseñar.
+    /// A daemon that starts and says NOTHING on `stderr` is still a failure
+    /// with its code: the error exists even with no sentence to show.
     #[tokio::test]
-    async fn morir_en_silencio_tambien_es_un_fallo() {
-        let socket = socket_que_no_existe();
+    async fn dying_silently_is_also_a_failure() {
+        let socket = nonexistent_socket();
         let e = connect_or_spawn(&socket, || {
             let mut cmd = std::process::Command::new("sh");
             cmd.args(["-c", "exit 9"]);
             cmd
         })
         .await
-        .expect_err("murió");
+        .expect_err("died");
         assert!(
             matches!(
                 e,
@@ -227,19 +230,20 @@ mod tests {
         );
     }
 
-    /// Un proceso que arranca, NO muere y tampoco escucha agota el backoff y
-    /// da `SpawnTimeout`: eso sí es «todavía no», y el consejo de reintentar
-    /// es el bueno. Es la distinción entera de #300 en una aserción.
+    /// A process that starts, does NOT die, and does not listen either
+    /// exhausts the backoff and gives `SpawnTimeout`: that IS "not yet", and
+    /// the advice to retry is the right one. This is the whole distinction
+    /// #300 makes, in one assertion.
     #[tokio::test]
-    async fn el_que_sigue_vivo_y_no_escucha_sigue_siendo_timeout() {
-        let socket = socket_que_no_existe();
+    async fn still_alive_and_not_listening_is_still_a_timeout() {
+        let socket = nonexistent_socket();
         let e = connect_or_spawn(&socket, || {
             let mut cmd = std::process::Command::new("sh");
             cmd.args(["-c", "sleep 30"]);
             cmd
         })
         .await
-        .expect_err("nadie escucha");
+        .expect_err("nobody is listening");
         assert!(matches!(e, ClientError::SpawnTimeout), "{e:?}");
     }
 }

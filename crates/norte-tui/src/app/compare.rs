@@ -1,39 +1,40 @@
-//! Comparar y sincronizar vistos desde `App`: resolver QUÉ se compara y qué
-//! se sincroniza, cerrar los dos paneles, y la sonda de tamaño con la que se
-//! hidrata la fila seleccionada del panel de diferencias (#157).
+//! Comparing and syncing as seen from `App`: resolving WHAT gets compared
+//! and what gets synced, closing both panels, and the size probe that
+//! hydrates the diff panel's selected row (#157).
 
 use super::{App, CompareView};
-/// Las dos raíces de una sincronización y cómo se leen sus nombres.
+/// A sync's two roots and how their names get read.
 ///
-/// Vive en [`norte_frontend::sync`] desde #161, con la función que las decide:
-/// la GUI llegó a tener la MISMA regla escrita a mano (su brazo «el pane con
-/// foco es el origen»), y dos copias de «qué árbol se sobrescribe» es la clase
-/// de divergencia que produce un plan perfectamente plausible sobre el árbol
-/// equivocado.
+/// Lives in [`norte_frontend::sync`] since #161, together with the function
+/// that decides them: the GUI came to have the SAME rule written by hand
+/// (its "the focused pane is the source" arm), and two copies of "which tree
+/// gets overwritten" is the kind of drift that produces a perfectly
+/// plausible plan against the wrong tree.
 use norte_frontend::sync::SyncRoots;
 use norte_i18n::t;
 use norte_proto::{EntryKind, VPath};
 
 impl App {
-    /// `Shift+F2`: resuelve QUÉ comparar y lo deja pendiente para el run loop.
+    /// `Shift+F2`: resolves WHAT to compare and leaves it pending for the
+    /// run loop.
     ///
-    /// El izquierdo es el pane con FOCO (spec: «el panel que lanzó la
-    /// comparación es el izquierdo»), el derecho el otro — no `panes[0]` y
-    /// `panes[1]`, porque el lector que pulsa la tecla desde el pane derecho
-    /// espera que su directorio sea el suyo.
+    /// The left one is the FOCUSED pane (spec: "the panel that launched the
+    /// comparison is the left one"), the right one is the other — not
+    /// `panes[0]` and `panes[1]`, because a reader who presses the key from
+    /// the right pane expects their directory to be theirs.
     ///
-    /// Dos negativas se dan AQUÍ, sin ir y volver al daemon:
+    /// Two refusals happen HERE, without a round trip to the daemon:
     ///
-    /// * **Los dos panes en el mismo sitio.** El daemon responde `-32602` a
-    ///   eso (C6) y tiene razón, pero la frase que el lector necesita no
-    ///   depende de una vuelta por la red.
-    /// * **Un pane virtual.** Una lista de hits no es un directorio, así que
-    ///   no hay raíz que mandar — la misma negativa que ya dan mirror y pull.
+    /// * **Both panes in the same place.** The daemon answers `-32602` to
+    ///   that (C6) and it's right, but the phrase the reader needs doesn't
+    ///   depend on a trip over the network.
+    /// * **A virtual pane.** A list of hits isn't a directory, so there's no
+    ///   root to send — the same refusal mirror and pull already give.
     pub fn request_compare(&mut self) {
-        // El visor sustituye a los panes en la pantalla y `ui::draw` le da
-        // precedencia sobre este panel, así que abrirlo por detrás dejaría
-        // los píxeles diciendo una cosa y el teclado yendo a otra — el bug
-        // exacto contra el que está escrito el rustdoc de `modal_wins`.
+        // The viewer replaces the panes on screen and `ui::draw` gives it
+        // precedence over this panel, so opening it behind would leave the
+        // pixels saying one thing and the keyboard going to another — the
+        // exact bug `modal_wins`'s rustdoc is written against.
         if self.viewer.is_some() {
             return;
         }
@@ -52,34 +53,34 @@ impl App {
             right,
             criteria: norte_proto::methods::CompareCriteria::default(),
             max_depth: None,
-            // Vive con el modelo (#158), no aquí: la GUI pide la MISMA
-            // comparación, y dos copias que se separaran darían veredictos
-            // distintos para los mismos dos directorios.
+            // Lives with the model (#158), not here: the GUI requests the
+            // SAME comparison, and two copies that drifted apart would give
+            // different verdicts for the same two directories.
             mtime_tolerance_ms: norte_frontend::compare::MTIME_TOLERANCE_MS,
-            // Sin toggle en la UI, y a propósito: `Backend::compare` responde
-            // `Unsupported` a `true` antes de que exista Task alguna, porque
-            // el engine acepta el campo y lo ignora. Ofrecer la casilla sería
-            // ofrecer una promesa que nadie cumple.
+            // No toggle in the UI, on purpose: `Backend::compare` answers
+            // `Unsupported` for `true` before any Task exists, because the
+            // engine accepts the field and ignores it. Offering the checkbox
+            // would be offering a promise nobody keeps.
             follow_symlinks: false,
-            // Tampoco hay toggle: el pane de diferencias enseña un huérfano
-            // como UNA fila, y descenderlo es lo que un plan de
-            // sincronización pide por su cuenta (spec 2).
+            // No toggle either: the diff pane shows an orphan as ONE row,
+            // and descending it is what a sync plan requests on its own
+            // (spec 2).
             descend_orphans: None,
         });
     }
 
-    /// Las dos raíces de una sincronización, en el orden `(origen, destino)`.
+    /// A sync's two roots, in `(source, dest)` order.
     ///
-    /// Con el panel de diferencias abierto las decide su lado ACTIVO, que es
-    /// lo que `Tab` cambia: nada se infiere del foco ni del orden de los
-    /// panes, porque el sentido de una sincronización es la mitad de lo que
-    /// hay que aprobar. Sin panel abierto son el pane con foco y el otro, el
-    /// mismo reparto que [`Self::request_compare`].
+    /// With the diff panel open they're decided by its ACTIVE side, which is
+    /// what `Tab` changes: nothing is inferred from focus or from the panes'
+    /// order, because a sync's direction is half of what has to be approved.
+    /// With no panel open they're the focused pane and the other one, the
+    /// same split as [`Self::request_compare`].
     ///
-    /// La decisión ENTERA es [`norte_frontend::sync::sync_roots`] (#161), no
-    /// una copia local de sus dos brazos: la GUI necesita exactamente la misma
-    /// —incluido el brazo del lado activo, que es el que llega con su panel—
-    /// y aquí solo se le da lo que esta TUI sabe.
+    /// The WHOLE decision is [`norte_frontend::sync::sync_roots`] (#161),
+    /// not a local copy of its two arms: the GUI needs exactly the same one
+    /// — active-side arm included, which is the one that arrives with its
+    /// panel — and here it's only given what this TUI knows.
     #[must_use]
     fn sync_roots(&self) -> SyncRoots {
         let other = &self.panes[self.target_index().unwrap_or_else(|| self.focus())];
@@ -94,30 +95,32 @@ impl App {
         )
     }
 
-    /// El panel de diferencias del que sale la selección, si lo hay.
+    /// The diff panel the selection comes from, if there is one.
     fn sync_source_view(&self) -> Option<&CompareView> {
         self.compare.as_ref()
     }
 
-    /// `sync.plan`: resuelve QUÉ sincronizar y lo deja pendiente para el run
-    /// loop, o dice por qué no.
+    /// `sync.plan`: resolves WHAT to sync and leaves it pending for the run
+    /// loop, or says why not.
     ///
-    /// Devuelve los params que dejó pendientes, para que un test lea la
-    /// decisión sin run loop.
+    /// Returns the params it left pending, so a test can read the decision
+    /// without a run loop.
     ///
-    /// Las negativas que se dan AQUÍ, sin ir y volver al daemon:
+    /// The refusals that happen HERE, without a round trip to the daemon:
     ///
-    /// * **Sin journal.** Lo dice [`norte_core::backend::Backend::is_journalled`],
-    ///   que es `false` en embebido: desde #167 ese engine sí lleva el journal
-    ///   del directorio de estado, pero no instala spool, y sin spool
-    ///   `sync.plan` se niega en cerrado (regla dura 4). Planificar contra él
-    ///   sería enseñar un plan que nadie puede aprobar. La misma verdad que
-    ///   [`norte_frontend::availability::Facts::journalled`] ya atenúa en la
-    ///   hoja de referencia; esto es lo que pasa si el lector llega igual.
-    /// * **Un pane virtual**, y **las dos raíces en el mismo sitio**: idénticas
-    ///   a las de comparar, por las mismas razones.
-    /// * **Más marcas que [`SYNC_MAX_INCLUDE`]**. `Backend::sync_plan` lo
-    ///   rechaza con `InvalidPath`, que no dice cuántas sobran.
+    /// * **No journal.** Said by
+    ///   [`norte_core::backend::Backend::is_journalled`], which is `false`
+    ///   in embedded: since #167 that engine does carry the state
+    ///   directory's journal, but doesn't install a spool, and with no spool
+    ///   `sync.plan` refuses outright (hard rule 4). Planning against it
+    ///   would show a plan nobody can approve. The same truth the reference
+    ///   sheet's [`norte_frontend::availability::Facts::journalled`] already
+    ///   dims; this is what happens if the reader gets there anyway.
+    /// * **A virtual pane**, and **both roots in the same place**: identical
+    ///   to comparison's, for the same reasons.
+    /// * **More marks than [`SYNC_MAX_INCLUDE`]**. `Backend::sync_plan`
+    ///   rejects it with `InvalidPath`, which doesn't say how many are too
+    ///   many.
     ///
     /// [`SYNC_MAX_INCLUDE`]: norte_proto::methods::SYNC_MAX_INCLUDE
     pub fn request_sync(
@@ -160,32 +163,35 @@ impl App {
             source,
             dest,
             mode,
-            // Los criterios son los de comparar y el default del wire ya los
-            // trae. `follow_symlinks` y `descend_orphans` se quedan en su
-            // default a propósito: `Backend::sync_plan` responde `Unsupported`
-            // a los dos, porque el segundo no es del llamante —lo fija el
-            // planificador al lado del origen— y el primero no lo cumple nadie.
+            // The criteria are comparison's and the wire's default already
+            // carries them. `follow_symlinks` and `descend_orphans` stay at
+            // their default on purpose: `Backend::sync_plan` answers
+            // `Unsupported` for both, because the second one isn't the
+            // caller's — the planner fixes it alongside the source — and
+            // nobody satisfies the first.
             compare: norte_proto::methods::SyncCompareOptions::default(),
             on_unknown: norte_proto::methods::OnUnknown::default(),
             include,
         });
-        // La reinterpretación del ORIGEN se congela aquí, con las raíces, y
-        // viaja al panel: un lector que había pulsado `Alt+E` para leer un
-        // share CP1251 no puede recuperar `????.txt` al sincronizarlo (#57,
-        // el mismo fallo que el panel de diferencias arregló en su review).
+        // The SOURCE's reinterpretation gets frozen here, with the roots,
+        // and travels to the panel: a reader who had pressed `Alt+E` to read
+        // a CP1251 share can't get `????.txt` back when syncing it (#57, the
+        // same bug the diff panel fixed in its review).
         self.pending_sync_encoding = (source_encoding, dest_encoding);
         self.pending_sync.as_ref()
     }
 
-    /// La lista `include` que sale de las marcas del panel de diferencias, o
-    /// el motivo por el que no hay una.
+    /// The `include` list built from the diff panel's marks, or the reason
+    /// there isn't one.
     ///
-    /// QUÉ cuenta como negativa —y contra qué raíz se mide cada marca— lo
-    /// decide [`norte_frontend::sync::include_from_rows`], que vive junto a
-    /// `anchor_of` porque contesta la misma pregunta del otro lado del viaje.
+    /// WHAT counts as a refusal — and which root each mark is measured
+    /// against — is decided by [`norte_frontend::sync::include_from_rows`],
+    /// which lives next to `anchor_of` because it answers the same question
+    /// from the other end of the trip.
     ///
     /// # Errors
-    /// Lo que devuelva aquella; [`Self::request_sync`] lo traduce a una frase.
+    /// Whatever that one returns; [`Self::request_sync`] translates it into
+    /// a phrase.
     fn sync_include(
         &self,
         source: &VPath,
@@ -200,18 +206,18 @@ impl App {
         norte_frontend::sync::include_from_rows(source, dest, &marked)
     }
 
-    /// Cierra el panel de sincronización. La cancelación de la Task es del run
-    /// loop (es suya); esto solo suelta el estado de presentación.
+    /// Closes the sync panel. Cancelling the Task belongs to the run loop
+    /// (it's its own); this only drops the presentation state.
     pub fn close_sync(&mut self) {
         self.sync = None;
         self.pending_sync_apply = None;
     }
 
-    /// El pane al que pertenece el lado ACTIVO del panel de diferencias.
+    /// The pane the diff panel's ACTIVE side belongs to.
     ///
-    /// `None` con el panel cerrado. Es lo que hace que el `Enter` de una fila
-    /// lleve al lector a donde esa fila vive DE VERDAD sin costarle el otro
-    /// directorio.
+    /// `None` with the panel closed. It's what makes a row's `Enter` take
+    /// the reader to where that row REALLY lives without costing them the
+    /// other directory.
     #[must_use]
     pub fn compare_active_pane(&self) -> Option<usize> {
         let view = self.compare.as_ref()?;
@@ -221,22 +227,22 @@ impl App {
         })
     }
 
-    /// Cierra el panel de diferencias. La cancelación de la Task es del run
-    /// loop (es suya); esto solo suelta el estado de presentación.
+    /// Closes the diff panel. Cancelling the Task belongs to the run loop
+    /// (it's its own); this only drops the presentation state.
     pub fn close_compare(&mut self) {
         self.compare = None;
     }
 
-    /// Paths de la fila SELECCIONADA del panel de diferencias que valen la
-    /// pena sondear con un `stat` (#157): un lado con entrada, de tipo
-    /// `File` (los directorios y los enlaces no tienen un tamaño que un
-    /// `stat` corriente resuelva — mismo criterio que
-    /// [`Self::focused_needs_stat`]), sin `size` ya, y que
-    /// [`Self::compare_size_probed`] no haya pedido todavía.
+    /// Paths of the diff panel's SELECTED row worth probing with a `stat`
+    /// (#157): a side with an entry, of kind `File` (directories and links
+    /// don't have a size an ordinary `stat` resolves — same criterion as
+    /// [`Self::focused_needs_stat`]), without `size` already, and that
+    /// [`Self::compare_size_probed`] hasn't requested yet.
     ///
-    /// `None` cuando no hay panel abierto o su fila seleccionada no tiene
-    /// nada que hidratar — que es el caso normal en cuanto la sonda ya
-    /// contestó, así que el run loop no vuelve a pedir lo mismo cada frame.
+    /// `None` when there's no open panel or its selected row has nothing to
+    /// hydrate — which is the normal case as soon as the probe already
+    /// answered, so the run loop doesn't request the same thing every
+    /// frame.
     #[must_use]
     pub fn compare_size_probe_targets(&self) -> Vec<VPath> {
         let Some(view) = &self.compare else {
@@ -257,15 +263,15 @@ impl App {
             .collect()
     }
 
-    /// Mete el resultado de la sonda #157 en la caché de presentación
-    /// ([`Self::compare_size_hints`]) y lo marca sondeado
-    /// ([`Self::compare_size_probed`]) pase lo que pase — un `stat` que
-    /// falló tampoco se reintenta hasta la próxima comparación, mismo
-    /// criterio que el pane normal con `last_probed`.
+    /// Puts the #157 probe's result into the presentation cache
+    /// ([`Self::compare_size_hints`]) and marks it probed
+    /// ([`Self::compare_size_probed`]) no matter what — a `stat` that failed
+    /// doesn't get retried until the next comparison either, same criterion
+    /// as the normal pane's `last_probed`.
     pub fn hydrate_compare_size(&mut self, generation: u64, path: VPath, size: Option<u64>) {
-        // #198: de OTRA comparación. Ni el tamaño ni la marca de sondeado —
-        // marcarlo dejaría a la comparación viva sin pedirlo nunca, que es la
-        // mitad silenciosa del mismo fallo.
+        // #198: from ANOTHER comparison. Neither the size nor the probed
+        // mark — marking it would leave the live comparison never
+        // requesting it, which is the silent half of the same bug.
         if generation != self.compare_generation {
             return;
         }
@@ -275,16 +281,16 @@ impl App {
         }
     }
 
-    /// La comparación que empieza. Vacía la caché de tamaños y su dedup, y
-    /// AVANZA la generación: lo uno sin lo otro es el fallo de #198.
+    /// The comparison that's starting. Clears the size cache and its dedup,
+    /// and ADVANCES the generation: one without the other is #198's bug.
     pub fn begin_compare_generation(&mut self) {
         self.compare_size_hints.clear();
         self.compare_size_probed.clear();
         self.compare_generation = self.compare_generation.wrapping_add(1);
     }
 
-    /// La comparación a la que pertenecen las tablas de tamaños ahora mismo.
-    /// El run loop la guarda al lanzar la sonda y la devuelve al hidratar.
+    /// The comparison the size tables currently belong to. The run loop
+    /// saves it when launching the probe and returns it on hydrating.
     #[must_use]
     pub fn compare_generation(&self) -> u64 {
         self.compare_generation
@@ -298,14 +304,14 @@ mod tests {
     use crate::app::testutil::*;
     use norte_proto::EntryKind;
 
-    /// #157: un huérfano `File` sin `size` es candidato a la sonda de la fila
-    /// seleccionada, y deja de serlo en cuanto `hydrate_compare_size` lo
-    /// resuelve — con éxito o sin él, para no reintentarlo cada frame.
+    /// #157: an orphan `File` with no `size` is a candidate for the selected
+    /// row's probe, and stops being one as soon as `hydrate_compare_size`
+    /// resolves it — successfully or not, so it isn't retried every frame.
     #[test]
-    fn compare_size_probe_targets_solo_file_sin_size_y_no_repite() {
+    fn compare_size_probe_targets_lone_file_with_no_size_and_no_repeat() {
         let mut app = App::new(Pane::new(root(), vec![]), Pane::new(root(), vec![]));
         let mut view = CompareView::new(vp("mem:///a"), vp("mem:///b"), 0, None, None);
-        let row = fila_huerfana(1, EntryKind::File, None);
+        let row = orphan_row(1, EntryKind::File, None);
         let path = row.left.as_ref().unwrap().path.clone();
         view.pane.extend(vec![row]);
         app.compare = Some(view);
@@ -313,67 +319,68 @@ mod tests {
         assert_eq!(
             app.compare_size_probe_targets(),
             vec![path.clone()],
-            "huérfano File sin size es candidato"
+            "an orphan File with no size is a candidate"
         );
 
-        // Sondeado con ÉXITO: ya no es candidato, y el hint queda puesto.
+        // Probed SUCCESSFULLY: no longer a candidate, and the hint is set.
         app.hydrate_compare_size(app.compare_generation(), path.clone(), Some(42));
         assert!(
             app.compare_size_probe_targets().is_empty(),
-            "ya hidratado, no se repite"
+            "already hydrated, doesn't repeat"
         );
         assert_eq!(app.compare_size_hints.get(&path), Some(&42));
     }
 
-    /// #198: una sonda lanzada para la comparación A no puede aterrizar en
-    /// la B. La sonda vive en el run loop y `launch_compare` no la ve, así
-    /// que la única defensa es que el resultado traiga la generación bajo la
-    /// que se pidió — sin eso, la caché que el rustdoc llama «de ESTA
-    /// comparación» tiene dentro un tamaño de la anterior, en el panel cuyo
-    /// asunto entero es si lo que estás mirando es exacto.
+    /// #198: a probe launched for comparison A cannot land on B. The probe
+    /// lives in the run loop and `launch_compare` doesn't see it, so the
+    /// only defense is that the result carries the generation it was
+    /// requested under — without that, the cache the rustdoc calls "of THIS
+    /// comparison" ends up holding a size from the previous one, in the
+    /// panel whose whole point is whether what you're looking at is exact.
     #[test]
-    fn una_sonda_de_la_comparacion_anterior_no_aterriza_en_la_nueva() {
+    fn a_probe_from_the_previous_comparison_doesnt_land_in_the_new_one() {
         let mut app = App::new(Pane::new(root(), vec![]), Pane::new(root(), vec![]));
         let mut view = CompareView::new(vp("mem:///a"), vp("mem:///b"), 0, None, None);
-        let row = fila_huerfana(1, EntryKind::File, None);
-        let path = row.left.as_ref().expect("izquierda").path.clone();
+        let row = orphan_row(1, EntryKind::File, None);
+        let path = row.left.as_ref().expect("left").path.clone();
         view.pane.extend(vec![row.clone()]);
         app.compare = Some(view);
         let old = app.compare_generation();
 
-        // Otra comparación empieza: la caché se vacía y la generación avanza.
+        // Another comparison starts: the cache clears and the generation
+        // advances.
         app.begin_compare_generation();
         let mut view = CompareView::new(vp("mem:///c"), vp("mem:///d"), 0, None, None);
         view.pane.extend(vec![row]);
         app.compare = Some(view);
         assert_ne!(app.compare_generation(), old);
 
-        // Llega la sonda de la comparación VIEJA.
+        // The OLD comparison's probe arrives.
         app.hydrate_compare_size(old, path.clone(), Some(42));
         assert!(
             app.compare_size_hints.is_empty(),
-            "ni el tamaño de la anterior"
+            "not even the previous one's size"
         );
         assert_eq!(
             app.compare_size_probe_targets(),
             vec![path.clone()],
-            "ni marcado sondeado: la nueva todavía tiene que pedirlo"
+            "not marked probed either: the new one still has to request it"
         );
 
-        // Y la de la nueva sí.
+        // And the new one's does land.
         let now = app.compare_generation();
         app.hydrate_compare_size(now, path.clone(), Some(7));
         assert_eq!(app.compare_size_hints.get(&path), Some(&7));
     }
 
-    /// Un `stat` que falla (`None`) también se marca sondeado: no se
-    /// reintenta cada frame contra un provider roto, mismo criterio que
-    /// `last_probed` en el pane normal.
+    /// A `stat` that fails (`None`) also gets marked probed: it isn't
+    /// retried every frame against a broken provider, same criterion as
+    /// `last_probed` in the normal pane.
     #[test]
-    fn compare_size_probe_targets_no_reintenta_un_stat_fallido() {
+    fn compare_size_probe_targets_doesnt_retry_a_failed_stat() {
         let mut app = App::new(Pane::new(root(), vec![]), Pane::new(root(), vec![]));
         let mut view = CompareView::new(vp("mem:///a"), vp("mem:///b"), 0, None, None);
-        let row = fila_huerfana(1, EntryKind::File, None);
+        let row = orphan_row(1, EntryKind::File, None);
         let path = row.left.as_ref().unwrap().path.clone();
         view.pane.extend(vec![row]);
         app.compare = Some(view);
@@ -381,27 +388,27 @@ mod tests {
         app.hydrate_compare_size(app.compare_generation(), path, None);
         assert!(
             app.compare_size_probe_targets().is_empty(),
-            "un fallo también se marca sondeado"
+            "a failure also gets marked probed"
         );
-        assert!(app.compare_size_hints.is_empty(), "sin hint sobre un fallo");
+        assert!(app.compare_size_hints.is_empty(), "no hint over a failure");
     }
 
-    /// Un directorio o un huérfano que YA trae `size` no son candidatos —
-    /// mismo criterio que `focused_needs_stat` para el pane normal: un `Dir`
-    /// no tiene un tamaño que un `stat` corriente resuelva.
+    /// A directory or an orphan that ALREADY carries `size` aren't
+    /// candidates — same criterion as `focused_needs_stat` for the normal
+    /// pane: a `Dir` has no size an ordinary `stat` resolves.
     #[test]
-    fn compare_size_probe_targets_ignora_dir_y_lo_ya_hidratado() {
+    fn compare_size_probe_targets_ignores_dir_and_already_hydrated() {
         let mut app = App::new(Pane::new(root(), vec![]), Pane::new(root(), vec![]));
         let mut view = CompareView::new(vp("mem:///a"), vp("mem:///b"), 0, None, None);
         view.pane.extend(vec![
-            fila_huerfana(1, EntryKind::Dir, None),
-            fila_huerfana(2, EntryKind::File, Some(7)),
+            orphan_row(1, EntryKind::Dir, None),
+            orphan_row(2, EntryKind::File, Some(7)),
         ]);
         app.compare = Some(view);
 
         assert!(
             app.compare_size_probe_targets().is_empty(),
-            "un Dir sin size y un File que ya lo trae no son candidatos"
+            "a Dir with no size and a File that already has one aren't candidates"
         );
     }
 }

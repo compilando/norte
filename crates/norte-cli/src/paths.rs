@@ -123,7 +123,7 @@ pub fn layer_name(layer: Layer) -> &'static str {
 mod tests {
     use super::*;
 
-    fn layers_de(dirs: &[(&str, Layer)]) -> Layers {
+    fn layers_from(dirs: &[(&str, Layer)]) -> Layers {
         Layers {
             dirs: dirs.iter().map(|(p, k)| (PathBuf::from(p), *k)).collect(),
         }
@@ -133,10 +133,10 @@ mod tests {
     /// named here with its path. A file that norte reads but this command
     /// cannot locate leaves the reader exactly where they were.
     #[test]
-    fn nombra_todas_las_superficies_de_config() {
+    fn names_every_config_surface() {
         let dir = tempfile::tempdir().unwrap();
         let entries = collect(
-            &layers_de(&[("/etc/norte", Layer::System)]),
+            &layers_from(&[("/etc/norte", Layer::System)]),
             dir.path(),
             None,
             None,
@@ -156,41 +156,42 @@ mod tests {
             let e = entries
                 .iter()
                 .find(|e| e.id == id)
-                .unwrap_or_else(|| panic!("falta la ruta «{id}»: {entries:?}"));
+                .unwrap_or_else(|| panic!("missing path «{id}»: {entries:?}"));
             assert!(
                 e.path.starts_with(dir.path()),
-                "«{id}» no cuelga del config dir: {:?}",
+                "«{id}» does not hang off the config dir: {:?}",
                 e.path
             );
         }
     }
 
-    /// `exists` es un hecho comprobado, no una suposición: es la mitad de la
-    /// respuesta a «¿por qué norte ignora mi fichero?».
+    /// `exists` is a checked fact, not an assumption: it is half the
+    /// answer to "why is norte ignoring my file".
     #[test]
-    fn exists_distingue_lo_que_esta_de_lo_que_no() {
+    fn exists_distinguishes_what_is_there_from_what_is_not() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("connections.toml"), "").unwrap();
         let entries = collect(
-            &layers_de(&[]),
+            &layers_from(&[]),
             dir.path(),
             None,
             None,
             Path::new("/tmp/x.sock"),
         );
-        let de = |id: &str| entries.iter().find(|e| e.id == id).unwrap().exists;
-        assert!(de("connections"), "el fichero escrito debe constar");
-        assert!(!de("policy"), "el ausente no puede constar");
+        let exists_of = |id: &str| entries.iter().find(|e| e.id == id).unwrap().exists;
+        assert!(exists_of("connections"), "the written file must show up");
+        assert!(!exists_of("policy"), "the absent one must not show up");
     }
 
-    /// Las capas salen en el MISMO orden y con la MISMA etiqueta que da
-    /// `norte-config`: la precedencia es la pregunta que trae aquí a un lector
-    /// con dos `norte.toml`, y renumerarla al pintar sería contestarle mal.
+    /// Layers come out in the SAME order and with the SAME label
+    /// `norte-config` gives: precedence is the question that brings a
+    /// reader with two `norte.toml`s here, and renumbering it while
+    /// painting would answer wrong.
     #[test]
-    fn las_capas_conservan_orden_y_etiqueta() {
+    fn layers_keep_their_order_and_label() {
         let dir = tempfile::tempdir().unwrap();
         let entries = collect(
-            &layers_de(&[
+            &layers_from(&[
                 ("/etc/norte", Layer::System),
                 ("/home/x/.config/norte", Layer::User),
                 (".norte", Layer::Project),
@@ -200,21 +201,22 @@ mod tests {
             None,
             Path::new("/tmp/x.sock"),
         );
-        let capas: Vec<_> = entries
+        let layers: Vec<_> = entries
             .iter()
             .filter(|e| e.id == "layer")
-            .map(|e| layer_name(e.layer.expect("una capa lleva su clase")))
+            .map(|e| layer_name(e.layer.expect("a layer carries its class")))
             .collect();
-        assert_eq!(capas, ["system", "user", "project"]);
+        assert_eq!(layers, ["system", "user", "project"]);
     }
 
-    /// Un `state_dir`/`log_dir` ausente no inventa una fila: decir «no hay»
-    /// es distinto de apuntar a un sitio donde no hay nada.
+    /// An absent `state_dir`/`log_dir` does not invent a row: saying
+    /// "there is none" is different from pointing at a place where there
+    /// is nothing.
     #[test]
-    fn sin_state_ni_log_no_hay_filas() {
+    fn without_state_or_log_there_are_no_rows() {
         let dir = tempfile::tempdir().unwrap();
         let entries = collect(
-            &layers_de(&[]),
+            &layers_from(&[]),
             dir.path(),
             None,
             None,
@@ -225,14 +227,14 @@ mod tests {
                 .iter()
                 .any(|e| e.id == "state-dir" || e.id == "logs")
         );
-        let con = collect(
-            &layers_de(&[]),
+        let with = collect(
+            &layers_from(&[]),
             dir.path(),
             Some(Path::new("/var/lib/norte")),
             Some(Path::new("/var/log/norte")),
             Path::new("/tmp/x.sock"),
         );
-        assert!(con.iter().any(|e| e.id == "state-dir"));
-        assert!(con.iter().any(|e| e.id == "logs"));
+        assert!(with.iter().any(|e| e.id == "state-dir"));
+        assert!(with.iter().any(|e| e.id == "logs"));
     }
 }

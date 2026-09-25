@@ -1,236 +1,241 @@
-//! Errores de `norte-connect`. Diseñados para que NINGUNA variante pueda
-//! contener material secreto (regla 10): las causas del store de secretos son
-//! mensajes ESTÁTICOS (`&'static str`), nunca strings derivados del plaintext.
+//! Errors of `norte-connect`. Designed so that NO variant can carry secret
+//! material (rule 10): the causes coming from the secret store are STATIC
+//! messages (`&'static str`), never strings derived from the plaintext.
 
 use std::path::PathBuf;
 
 use thiserror::Error;
 
-/// De cuál de los tres escalones del resolver salió un secreto (ADR 0015 C).
+/// Which of the resolver's three rungs a secret came from (ADR 0015 C).
 ///
-/// Vocabulario CERRADO a propósito: es lo único que le dice al usuario DÓNDE
-/// está el hueco, y con `&'static str` sueltos un intercambio entre dos sitios
-/// de llamada apuntaría al escalón equivocado sin que ningún test se pusiera
-/// rojo (revisión rust MINOR-1).
+/// Vocabulary deliberately CLOSED: it is the only thing that tells the user
+/// WHERE the gap is, and with loose `&'static str`s a swap between two call
+/// sites would point at the wrong rung without any test going red (rust
+/// review MINOR-1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SecretOrigin {
     /// `NORTE_SECRET_<CONN>`.
     Env,
-    /// Keyring del OS.
+    /// The OS keyring.
     Keyring,
-    /// Fichero `secrets.age`.
+    /// `secrets.age` file.
     AgeFile,
-    /// Lo que un humano tecleó en esta sesión (#325).
+    /// What a human typed in this session (#325).
     Session,
 }
 
 impl std::fmt::Display for SecretOrigin {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
-            Self::Env => "variable de entorno",
+            Self::Env => "environment variable",
             Self::Keyring => "keyring",
             Self::AgeFile => "secrets.age",
-            Self::Session => "lo tecleado en esta sesión",
+            Self::Session => "what was typed in this session",
         })
     }
 }
 
-/// Error al resolver una conexión o su secreto.
+/// Error resolving a connection or its secret.
 ///
-/// Se proyecta a la taxonomía del protocolo con `norte_proto::Error::from`:
-/// las variantes TOFU van 1:1; el resto degrada a categoría (el detalle se
-/// queda en el log del core).
+/// Projected onto the protocol's taxonomy with `norte_proto::Error::from`:
+/// the TOFU variants go 1:1; the rest degrade to a category (the detail
+/// stays in the core's log).
 #[derive(Debug, Error)]
 pub enum ConnectError {
-    /// `connections.toml` mal formado o inválido (referencias, sin secretos).
+    /// Malformed or invalid `connections.toml` (references only, no secrets).
     #[error("connections.toml: {0}")]
     Config(String),
-    /// Una URL de conexión no parseable.
-    #[error("URL de conexión inválida: {0}")]
+    /// A connection URL that could not be parsed.
+    #[error("invalid connection URL: {0}")]
     InvalidUrl(String),
-    /// Fallo resolviendo el secreto de una conexión. Solo lleva el NOMBRE de
-    /// la conexión, jamás el secreto (regla 10).
-    #[error("no se pudo resolver el secreto de la conexión «{conn}»")]
+    /// Failed to resolve a connection's secret. Carries only the connection's
+    /// NAME, never the secret (rule 10).
+    #[error("could not resolve the secret for connection «{conn}»")]
     Secret {
-        /// Nombre de la conexión (nunca el secreto).
+        /// Connection name (never the secret).
         conn: String,
     },
-    /// El secreto de una conexión se resolvió, pero es la cadena VACÍA (#320).
-    /// Se rechaza en vez de pasarlo: opendal descarta un `secret_access_key`
-    /// vacío (`if !v.is_empty()`), no registra el proveedor estático y la
-    /// conexión acabaría autenticando con la cadena ambiente (perfil, SSO,
-    /// IMDS) — una identidad que nadie pidió. Lleva el nombre de la conexión y
-    /// el ORIGEN del hueco, jamás el secreto (regla 10).
+    /// A connection's secret resolved, but is the EMPTY string (#320).
+    /// Rejected instead of passed along: opendal discards an empty
+    /// `secret_access_key` (`if !v.is_empty()`), never registers the static
+    /// provider, and the connection would end up authenticating with the
+    /// ambient chain (profile, SSO, IMDS) — an identity nobody asked for.
+    /// Carries the connection's name and the ORIGIN of the gap, never the
+    /// secret (rule 10).
     ///
-    /// NO aplica a `auth = "key"`: ahí el secreto es la passphrase de la clave,
-    /// donde vacío y ausente son lo mismo y no hay nada que suplantar. Lo
-    /// filtra `establish` en el core.
+    /// Does NOT apply to `auth = "key"`: there the secret is the key's
+    /// passphrase, where empty and absent are the same thing and there is
+    /// nothing to impersonate. `establish` filters that out in the core.
     #[error(
-        "el secreto de la conexión «{conn}» está definido pero VACÍO ({origin}): dale un valor real o quítalo"
+        "the secret for connection «{conn}» is set but EMPTY ({origin}): give it a real value or remove it"
     )]
     SecretEmpty {
-        /// Nombre de la conexión (nunca el secreto).
+        /// Connection name (never the secret).
         conn: String,
-        /// En qué escalón del resolver apareció el vacío.
+        /// Which rung of the resolver the empty value came from.
         origin: SecretOrigin,
     },
-    /// La env var del secreto existe pero sus bytes NO son UTF-8 válido.
+    /// The secret's env var exists but its bytes are NOT valid UTF-8.
     ///
-    /// Antes se trataba como «no está» (`env::var(..).ok()`) y la resolución
-    /// seguía al keyring: una contraseña en Latin-1 desaparecía en silencio y
-    /// `norte doctor` la daba por presente (revisión rust MAJOR-4). Un secreto
-    /// viaja como `String`, así que aquí no hay nada que preservar: lo honesto
-    /// es decirlo. Lleva solo el nombre de la conexión (regla 10).
+    /// It used to be treated as "not there" (`env::var(..).ok()`) and
+    /// resolution fell through to the keyring: a Latin-1 password vanished
+    /// silently and `norte doctor` reported it as present (rust review
+    /// MAJOR-4). A secret travels as a `String`, so there is nothing to
+    /// preserve here: the honest thing is to say so. Carries only the
+    /// connection's name (rule 10).
     #[error(
-        "el secreto de la conexión «{conn}» ({origin}) no es UTF-8 válido: reescríbelo, o guárdalo en el keyring o en secrets.age"
+        "the secret for connection «{conn}» ({origin}) is not valid UTF-8: rewrite it, or store it in the keyring or in secrets.age"
     )]
     SecretNotUtf8 {
-        /// Nombre de la conexión (nunca el secreto).
+        /// Connection name (never the secret).
         conn: String,
-        /// En qué escalón del resolver apareció (hoy solo el entorno).
+        /// Which rung of the resolver it came from (today only the
+        /// environment).
         origin: SecretOrigin,
     },
-    /// Causa estructural del store de secretos (`secrets.age`). El mensaje es
-    /// ESTÁTICO por construcción: garantiza por tipo que jamás se interpola el
-    /// plaintext descifrado ni la passphrase en un error que acabe en logs.
+    /// Structural cause from the secret store (`secrets.age`). The message
+    /// is STATIC by construction: it guarantees, by type, that the decrypted
+    /// plaintext or the passphrase is never interpolated into an error that
+    /// ends up in logs.
     #[error("secrets.age: {0}")]
     SecretStore(&'static str),
-    /// Error de I/O (lectura de config / fichero de secretos).
+    /// I/O error (reading config / the secrets file).
     #[error("I/O: {0}")]
     Io(#[from] std::io::Error),
-    /// Host key SSH sin registrar en el primer contacto (TOFU, ADR 0015 D).
-    /// El core lo mapea 1:1 a `Error::HostKeyUnknown` del protocolo; el
-    /// frontend muestra el fingerprint y confirma con
-    /// `connection.trust_host_key` antes de reintentar.
-    #[error(
-        "host key desconocida para {host}:{port} ({algo} {fingerprint}); confirma antes de conectar"
-    )]
+    /// SSH host key not on record on first contact (TOFU, ADR 0015 D). The
+    /// core maps it 1:1 to the protocol's `Error::HostKeyUnknown`; the
+    /// frontend shows the fingerprint and confirms with
+    /// `connection.trust_host_key` before retrying.
+    #[error("unknown host key for {host}:{port} ({algo} {fingerprint}); confirm before connecting")]
     HostKeyUnknown {
-        /// Host desnudo (sin puerto).
+        /// Bare host (no port).
         host: String,
-        /// Puerto ya resuelto (22 si la URL no lo lleva).
+        /// Already-resolved port (22 if the URL does not carry one).
         port: u16,
-        /// Algoritmo de la clave presentada (p. ej. `ssh-ed25519`).
+        /// Algorithm of the presented key (e.g. `ssh-ed25519`).
         algo: String,
-        /// Fingerprint OpenSSH `SHA256:<base64>` de la clave presentada.
+        /// OpenSSH `SHA256:<base64>` fingerprint of the presented key.
         fingerprint: String,
     },
-    /// La host key CAMBIÓ respecto a la registrada: posible MITM. Jamás se
-    /// acepta en silencio (ADR 0015 D).
-    #[error("la host key de {host}:{port} CAMBIÓ ({algo} {fingerprint}): posible MITM")]
+    /// The host key CHANGED from the one on record: possible MITM. Never
+    /// accepted silently (ADR 0015 D).
+    #[error("the host key for {host}:{port} CHANGED ({algo} {fingerprint}): possible MITM")]
     HostKeyMismatch {
-        /// Host desnudo (sin puerto).
+        /// Bare host (no port).
         host: String,
-        /// Puerto ya resuelto.
+        /// Already-resolved port.
         port: u16,
-        /// Algoritmo de la clave presentada.
+        /// Algorithm of the presented key.
         algo: String,
-        /// Fingerprint OpenSSH `SHA256:<base64>` de la clave PRESENTADA.
+        /// OpenSSH `SHA256:<base64>` fingerprint of the PRESENTED key.
         fingerprint: String,
     },
-    /// El servidor rechazó la autenticación. Solo lleva user/host, jamás
-    /// material secreto (regla 10).
-    #[error("autenticación rechazada para {user}@{host}")]
+    /// The server rejected authentication. Carries only user/host, never
+    /// secret material (rule 10).
+    #[error("authentication rejected for {user}@{host}")]
     AuthFailed {
-        /// Usuario con el que se intentó.
+        /// User the attempt was made as.
         user: String,
-        /// Host de destino.
+        /// Destination host.
         host: String,
     },
-    /// Clave de cliente de un algoritmo no admitido. Solo ed25519 (ADR 0015 E,
-    /// cierra #36/RUSTSEC-2023-0071): RSA se rechaza salvo que la conexión
-    /// lleve `allow_rsa = true` (ADR 0150).
+    /// Client key of an unsupported algorithm. Only ed25519 (ADR 0015 E,
+    /// closes #36/RUSTSEC-2023-0071): RSA is rejected unless the connection
+    /// carries `allow_rsa = true` (ADR 0150).
     #[error(
-        "clave {} de tipo {algo}: solo se admite ed25519 (genera una con `ssh-keygen -t ed25519`)",
+        "key {} of type {algo}: only ed25519 is supported (generate one with `ssh-keygen -t ed25519`)",
         path.display()
     )]
     KeyUnsupported {
-        /// Ruta de la clave rechazada.
+        /// Path of the rejected key.
         path: PathBuf,
-        /// Algoritmo detectado (p. ej. `ssh-rsa`).
+        /// Detected algorithm (e.g. `ssh-rsa`).
         algo: String,
     },
-    /// Clave RSA con un módulo por debajo del mínimo (#370), incluso con
+    /// RSA key with a modulus below the minimum (#370), even with
     /// `allow_rsa = true`.
     ///
-    /// **`allow_rsa` no levanta esto, y ésa es la corrección.** La ADR 0150
-    /// compra UN riesgo, nombrado y acotado: el canal lateral de tiempos de
-    /// RUSTSEC-2023-0071 en las operaciones de clave privada del crate `rsa`.
-    /// Ese riesgo es el mismo con 1024 bits que con 4096. Un módulo de 1024 es
-    /// un riesgo DISTINTO —debilidad criptográfica clásica, no un canal
-    /// lateral— que la ADR no menciona, así que quien firmó el opt-in no lo
-    /// aceptó: se lo llevaba en silencio.
+    /// **`allow_rsa` does not lift this, and that is the fix.** ADR 0150 buys
+    /// ONE risk, named and bounded: the timing side channel of
+    /// RUSTSEC-2023-0071 in the `rsa` crate's private-key operations. That
+    /// risk is the same at 1024 bits as at 4096. A 1024-bit modulus is a
+    /// DIFFERENT risk — classic cryptographic weakness, not a side channel —
+    /// which the ADR does not mention, so whoever signed off on the opt-in
+    /// did not accept it: it was riding along silently.
     ///
-    /// NIST SP 800-57 retiró 1024 en 2013 y RFC 8332 §3 pide 2048 como mínimo
-    /// para `rsa-sha2-*`; OpenSSH lleva desde 2017 negándose a generarlas.
+    /// NIST SP 800-57 retired 1024 in 2013 and RFC 8332 §3 asks for 2048 as
+    /// the minimum for `rsa-sha2-*`; OpenSSH has refused to generate them
+    /// since 2017.
     #[error(
-        "la clave {} tiene un módulo RSA de {bits} bits y hacen falta al menos {minimo}: \
-         pide una clave nueva al administrador del servidor (`ssh-keygen -t ed25519`, o \
-         `-t rsa -b 4096` si ese servidor no admite otra cosa)",
+        "key {} has a {bits}-bit RSA modulus and at least {min} are required: \
+         ask the server administrator for a new key (`ssh-keygen -t ed25519`, or \
+         `-t rsa -b 4096` if that server does not support anything else)",
         path.display()
     )]
     RsaTooSmall {
-        /// Ruta de la clave rechazada.
+        /// Path of the rejected key.
         path: PathBuf,
-        /// Los bits que tiene.
+        /// The bits it has.
         bits: usize,
-        /// Los que hacen falta.
-        minimo: usize,
+        /// The bits required.
+        min: usize,
     },
-    /// Clave RSA permitida (`allow_rsa`), pero el servidor solo acepta firmas
-    /// `ssh-rsa` con SHA-1. El opt-in de la ADR 0150 abre RSA, nunca SHA-1.
+    /// RSA key allowed (`allow_rsa`), but the server only accepts `ssh-rsa`
+    /// signatures with SHA-1. ADR 0150's opt-in opens up RSA, never SHA-1.
     #[error(
-        "{host} solo acepta firmas RSA con SHA-1 (`ssh-rsa`), que norte no usa; hace falta rsa-sha2 o una clave ed25519"
+        "{host} only accepts RSA signatures with SHA-1 (`ssh-rsa`), which norte does not use; rsa-sha2 or an ed25519 key is required"
     )]
     RsaSha1Only {
-        /// Host de destino.
+        /// Destination host.
         host: String,
     },
-    /// La clave de cliente no se pudo cargar (formato, passphrase incorrecta…).
-    /// La causa viene de russh y no contiene la passphrase.
-    #[error("no se pudo cargar la clave {}: {cause}", path.display())]
+    /// The client key could not be loaded (format, wrong passphrase…). The
+    /// cause comes from russh and does not contain the passphrase.
+    #[error("could not load key {}: {cause}", path.display())]
     KeyLoad {
-        /// Ruta de la clave.
+        /// Path of the key.
         path: PathBuf,
-        /// Causa (de russh; sin material secreto).
+        /// Cause (from russh; no secret material).
         cause: String,
     },
-    /// Agente SSH no disponible o sin identidades utilizables. Mensaje
-    /// ESTÁTICO: nunca interpola material del agente.
-    #[error("agente SSH: {0}")]
+    /// SSH agent unavailable or with no usable identities. STATIC message:
+    /// never interpolates material from the agent.
+    #[error("SSH agent: {0}")]
     Agent(&'static str),
-    /// La URL no lleva usuario y el entorno no permite deducirlo.
-    #[error("la conexión no especifica usuario (usa user@host) y no hay $USER en el entorno")]
+    /// The URL carries no user and the environment gives no way to guess one.
+    #[error(
+        "the connection does not specify a user (use user@host) and there is no $USER in the environment"
+    )]
     MissingUser,
-    /// Error del transporte SSH (handshake, red, canal). El Display de russh
-    /// no contiene secretos.
+    /// SSH transport error (handshake, network, channel). russh's Display
+    /// does not contain secrets.
     #[error("SSH: {0}")]
     Ssh(String),
-    /// El fichero `known_hosts` propio no se pudo leer/parsear.
+    /// Our own `known_hosts` file could not be read/parsed.
     #[error("known_hosts: {0}")]
     KnownHosts(String),
-    /// Error del transporte FTP (control, red, protocolo). El texto viene
-    /// SANEADO (`redact_ftp_err`): los bodies de respuesta los controla el
-    /// servidor y podrían llevar control chars o ecoar credenciales — el
-    /// camino de login ni siquiera pasa por aquí (va a `AuthFailed`).
+    /// FTP transport error (control, network, protocol). The text comes
+    /// SANITIZED (`redact_ftp_err`): response bodies are controlled by the
+    /// server and could carry control chars or echo credentials — the login
+    /// path does not even go through here (it goes to `AuthFailed`).
     #[error("FTP: {0}")]
     Ftp(String),
-    /// TLS de FTPS falló: el servidor no lo ofrece con `tls = "require"`, o
-    /// su certificado no valida contra las raíces (+ CA extra). Jamás se
-    /// degrada en silencio (ADR 0015 F).
+    /// FTPS TLS failed: the server does not offer it with `tls = "require"`,
+    /// or its certificate does not validate against the roots (+ extra CA).
+    /// Never degraded silently (ADR 0015 F).
     #[error("FTPS/TLS: {0}")]
     Tls(String),
-    /// Error de object storage (construcción del `Operator` o sondeo): red,
-    /// bucket ausente, config. El texto lleva solo la CATEGORÍA de opendal
-    /// (`ErrorKind`), jamás el secreto (regla 10, ADR 0016 K).
+    /// Object storage error (building the `Operator` or probing): network,
+    /// missing bucket, config. The text only carries opendal's CATEGORY
+    /// (`ErrorKind`), never the secret (rule 10, ADR 0016 K).
     #[error("s3: {0}")]
     S3(String),
 }
 
-// EXCEPCIÓN consciente a "los tipos de russh no cruzan la frontera" (ADR
-// 0015 A): `russh::client::Handler` exige `type Error: From<russh::Error>`,
-// así que este impl es superficie pública forzada. El contenido sí queda
-// contenido: se degrada a String (Display de russh, sin material secreto).
+// Conscious EXCEPTION to "russh's types do not cross the boundary" (ADR
+// 0015 A): `russh::client::Handler` requires `type Error: From<russh::Error>`,
+// so this impl is forced public surface. The content IS kept contained: it
+// degrades to a String (russh's Display, no secret material).
 impl From<russh::Error> for ConnectError {
     fn from(e: russh::Error) -> Self {
         Self::Ssh(e.to_string())
@@ -238,45 +243,48 @@ impl From<russh::Error> for ConnectError {
 }
 
 impl ConnectError {
-    /// La frase que SÍ puede cruzar el cable y acabar en una pantalla, si la
-    /// hay (#322).
+    /// The sentence that CAN cross the wire and end up on a screen, if there
+    /// is one (#322).
     ///
-    /// Un fallo de conexión llegaba al frontend como una categoría y nada
-    /// más: `permiso denegado`, indistinguible de una clave equivocada, una
-    /// passphrase mal escrita o un bucket sin permisos. El diagnóstico exacto
-    /// —«el secreto de «miconn» está definido pero VACÍO»— se escribía en el
-    /// log del daemon y se tiraba. Peor: con la CLI embebida sí se leía,
-    /// porque el `tracing` sale por el stderr del propio proceso, o sea que el
-    /// mismo fallo se diagnosticaba o no según el TRANSPORTE.
+    /// A connection failure used to reach the frontend as a category and
+    /// nothing else: `permission denied`, indistinguishable from a wrong key,
+    /// a mistyped passphrase or a bucket without permissions. The exact
+    /// diagnosis — «the secret for «myconn» is set but EMPTY» — was written
+    /// to the daemon's log and discarded. Worse: with the embedded CLI it WAS
+    /// visible, because `tracing` goes out through the process's own stderr,
+    /// so the same failure was diagnosable or not depending on the
+    /// TRANSPORT.
     ///
-    /// # Por qué es una lista blanca, y por qué es corta
+    /// # Why this is an allowlist, and why it is short
     ///
-    /// Esto manda texto a la pantalla de alguien y, por el wire, a cualquier
-    /// cliente. La regla 10 no distingue entre «un secreto» y «algo que
-    /// contiene un secreto», así que solo pasan las variantes cuyo mensaje se
-    /// compone de campos que ponemos NOSOTROS. Queda fuera:
+    /// This sends text to someone's screen and, over the wire, to any
+    /// client. Rule 10 does not distinguish between "a secret" and
+    /// "something that contains a secret", so only the variants whose
+    /// message is composed of fields WE set get through. Left out:
     ///
-    /// - `Config`: envuelve el error de `toml`, que ecoa la línea ofensora —y
-    ///   esa línea puede ser la del secreto. `doctor` ya lo evita por esto.
-    /// - `InvalidUrl`: una URL puede llevar `user:contraseña@host`.
-    /// - `Io`, `KeyLoad`, `KeyUnsupported`: llevan RUTAS, y `path.display()`
-    ///   es una conversión con pérdida silenciosa (regla 1).
-    /// - `Ssh`, `Ftp`, `Tls`, `S3`, `KnownHosts`: texto libre de una
-    ///   biblioteca de terceros. El de `s3` puede traer la URL firmada.
+    /// - `Config`: wraps `toml`'s error, which echoes the offending line —
+    ///   and that line can be the secret's. `doctor` already avoids this for
+    ///   that reason.
+    /// - `InvalidUrl`: a URL can carry `user:password@host`.
+    /// - `Io`, `KeyLoad`, `KeyUnsupported`: carry PATHS, and `path.display()`
+    ///   is a silently lossy conversion (rule 1).
+    /// - `Ssh`, `Ftp`, `Tls`, `S3`, `KnownHosts`: free-form text from a
+    ///   third-party library. The one from `s3` can carry the signed URL.
     ///
-    /// Las TOFU no están porque no las necesitan: viajan 1:1 como variantes
-    /// tipadas con host, puerto, algoritmo y huella.
+    /// The TOFU variants are not here because they do not need it: they
+    /// travel 1:1 as typed variants with host, port, algorithm and
+    /// fingerprint.
     ///
-    /// El `match` es exhaustivo a propósito: una variante nueva no compila
-    /// hasta que alguien decida si su texto puede salir.
+    /// The `match` is exhaustive on purpose: a new variant will not compile
+    /// until someone decides whether its text may go out.
     #[must_use]
     #[expect(
         clippy::match_same_arms,
-        reason = "`AuthFailed` calla por un motivo distinto del resto —su frase \
-                  interpola el USUARIO, no texto ajeno— y ese comentario es lo \
-                  que hay que releer al añadir una variante"
+        reason = "`AuthFailed` stays silent for a different reason than the rest \
+                  —its sentence interpolates the USER, not third-party text— and \
+                  that comment is what needs re-reading when adding a variant"
     )]
-    pub fn detalle_publico(&self) -> Option<String> {
+    pub fn detail_publico(&self) -> Option<String> {
         match self {
             Self::Secret { .. }
             | Self::SecretEmpty { .. }
@@ -285,13 +293,14 @@ impl ConnectError {
             | Self::MissingUser
             | Self::Agent(_) => Some(self.to_string()),
 
-            // `AuthFailed` SÍ tiene motivo publicable —y lo publica, por su
-            // `reason` cerrado— pero su Display es «autenticación rechazada
-            // para {user}@{host}», o sea el USUARIO. El core quema un
-            // `rsplit('@')` dos ficheros más allá justo para que el userinfo
-            // no salga en `host`; devolverlo aquí lo desharía por la misma
-            // notificación. Y no se pierde nada: la frase traducida del motivo
-            // ya dice todo lo que esta aportaba.
+            // `AuthFailed` DOES have a publishable reason —and it publishes
+            // it, through its closed `reason`— but its Display is
+            // "authentication rejected for {user}@{host}", i.e. the USER. The
+            // core burns an `rsplit('@')` two files further away precisely so
+            // the userinfo does not leak into `host`; returning it here would
+            // undo that through the same notification. And nothing is lost:
+            // the translated reason sentence already says everything this
+            // one added.
             Self::AuthFailed { .. } => None,
 
             Self::Config(_)
@@ -299,9 +308,10 @@ impl ConnectError {
             | Self::Io(_)
             | Self::KeyLoad { .. }
             | Self::KeyUnsupported { .. }
-            // Lleva RUTA, como sus dos vecinas de arriba. Los bits sí saldrían
-            // sin problema, pero la frase que hace accionable el fallo es la
-            // que dice QUÉ clave, y sin ella no vale la pena cruzar el cable.
+            // Carries a PATH, like its two neighbors above. The bits WOULD
+            // cross fine, but the sentence that makes the failure actionable
+            // is the one that says WHICH key, and without it it is not worth
+            // crossing the wire.
             | Self::RsaTooSmall { .. }
             | Self::RsaSha1Only { .. }
             | Self::Ssh(_)
@@ -315,11 +325,12 @@ impl ConnectError {
     }
 }
 
-// Proyección a la taxonomía del protocolo (spec §17.7): el core la usa para
-// que el fallo de conexión viaje por el wire. Las variantes TOFU van 1:1
-// (portan host/port/algo/fingerprint para el flujo `connection.trust_host_key`,
-// ADR 0015 D); el resto degrada a la categoría más cercana — el detalle queda
-// en el log del core (el Display de ConnectError), no en el wire.
+// Projection onto the protocol's taxonomy (spec §17.7): the core uses this
+// so a connection failure can travel over the wire. The TOFU variants go 1:1
+// (they carry host/port/algo/fingerprint for the
+// `connection.trust_host_key` flow, ADR 0015 D); the rest degrade to the
+// closest category — the detail stays in the core's log (ConnectError's
+// Display), not on the wire.
 impl From<ConnectError> for norte_proto::Error {
     fn from(e: ConnectError) -> Self {
         match e {
@@ -345,8 +356,8 @@ impl From<ConnectError> for norte_proto::Error {
                 algo,
                 fingerprint,
             },
-            // Credenciales rechazadas o irresolubles / material de clave
-            // inutilizable: el usuario no puede autenticarse.
+            // Credentials rejected or unresolvable / unusable key material:
+            // the user cannot authenticate.
             ConnectError::AuthFailed { .. }
             | ConnectError::Secret { .. }
             | ConnectError::SecretEmpty { .. }
@@ -355,17 +366,19 @@ impl From<ConnectError> for norte_proto::Error {
             | ConnectError::RsaTooSmall { .. }
             | ConnectError::RsaSha1Only { .. }
             | ConnectError::KeyLoad { .. } => Self::PermissionDenied,
-            // NOTA (#325): `Error::SecretNeeded` no se produce aquí. Es una
-            // PREGUNTA, no un fallo, y necesita el ENDPOINT además del nombre
-            // —un diálogo de contraseña que no dice a quién se la va a dar no
-            // es contestable—; el endpoint lo conoce `establish`, en el core,
-            // no este resolutor. Se construye allí (`connect::secret_needed`).
-            // La URL/config de la conexión no es válida.
+            // NOTE (#325): `Error::SecretNeeded` is not produced here. It is
+            // a QUESTION, not a failure, and needs the ENDPOINT in addition
+            // to the name —a password dialog that does not say who it is
+            // going to is not answerable—; the endpoint is known by
+            // `establish`, in the core, not by this resolver. It is built
+            // there (`connect::secret_needed`). The connection's URL/config
+            // is not valid.
             ConnectError::InvalidUrl(_) | ConnectError::MissingUser | ConnectError::Config(_) => {
                 Self::InvalidPath
             }
-            // Transporte: la red puede reintentarse; una validación TLS o un
-            // known_hosts/secret-store rotos NO (reintentar no los arregla).
+            // Transport: the network can be retried; a broken TLS
+            // validation or known_hosts/secret-store CANNOT (retrying does
+            // not fix them).
             ConnectError::Ssh(_) | ConnectError::Ftp(_) | ConnectError::S3(_) => {
                 Self::ProviderUnavailable { retryable: true }
             }
@@ -382,11 +395,11 @@ impl From<ConnectError> for norte_proto::Error {
 mod tests {
     use super::*;
 
-    /// Las variantes TOFU cruzan 1:1 al protocolo (mismo fingerprint y
-    /// puerto RESUELTO): es lo que permite el mapeo error→trust en el
-    /// frontend sin ambigüedad (ADR 0015 D).
+    /// The TOFU variants cross 1:1 to the protocol (same fingerprint and
+    /// RESOLVED port): that is what makes the error→trust mapping in the
+    /// frontend unambiguous (ADR 0015 D).
     #[test]
-    fn tofu_va_uno_a_uno_al_proto() {
+    fn tofu_maps_one_to_one_to_the_proto() {
         let e = ConnectError::HostKeyUnknown {
             host: "h".into(),
             port: 2222,
@@ -401,7 +414,7 @@ mod tests {
             fingerprint,
         } = p
         else {
-            panic!("esperaba HostKeyUnknown, fue {p:?}");
+            panic!("expected HostKeyUnknown, got {p:?}");
         };
         assert_eq!(host, "h");
         assert_eq!(port, Some(2222));
@@ -410,7 +423,7 @@ mod tests {
     }
 
     #[test]
-    fn auth_degrada_a_permission_denied() {
+    fn auth_degrades_to_permission_denied() {
         let e = ConnectError::AuthFailed {
             user: "u".into(),
             host: "h".into(),
@@ -421,65 +434,70 @@ mod tests {
         ));
     }
 
-    /// #322 / regla 10: `AuthFailed` NO publica su frase.
+    /// #322 / rule 10: `AuthFailed` does NOT publish its sentence.
     ///
-    /// Su `Display` es «autenticación rechazada para {user}@{host}», o sea el
-    /// USUARIO. El core quema un `rsplit('@')` para que el userinfo no salga
-    /// en el campo `host` de la notificación; devolverlo aquí lo desharía por
-    /// la misma notificación, y su `reason` cerrado ya dice lo mismo.
+    /// Its `Display` is "authentication rejected for {user}@{host}", i.e.
+    /// the USER. The core burns an `rsplit('@')` so the userinfo does not
+    /// leak into the notification's `host` field; returning it here would
+    /// undo that through the same notification, and its closed `reason`
+    /// already says the same thing.
     #[test]
-    fn el_usuario_no_sale_en_el_detalle_de_un_rechazo() {
+    fn the_user_does_not_appear_in_a_rejections_detail() {
         let e = ConnectError::AuthFailed {
             user: "alice".into(),
             host: "servidor.example".into(),
         };
         assert!(
             e.to_string().contains("alice@"),
-            "el mensaje interno sigue siendo útil en el log"
+            "the internal message is still useful in the log"
         );
-        assert_eq!(e.detalle_publico(), None, "pero no cruza el cable: {e}");
+        assert_eq!(
+            e.detail_publico(),
+            None,
+            "but it does not cross the wire: {e}"
+        );
     }
 
-    /// Ninguna frase publicable INTERPOLA algo con forma de userinfo.
+    /// No publishable sentence INTERPOLATES anything shaped like userinfo.
     ///
-    /// Estructural y no por variante: `@` es la forma que tiene el userinfo, y
-    /// la afirmación tiene que seguir siendo cierta cuando alguien añada la
-    /// variante número veinte. Los campos van con centinelas para que, si una
-    /// frase futura los junta con un `@`, el `@` aparezca.
+    /// Structural, not per-variant: `@` is the shape userinfo takes, and the
+    /// claim needs to stay true when someone adds variant number twenty. The
+    /// fields carry sentinels so that, if a future sentence joins them with
+    /// an `@`, the `@` shows up.
     ///
-    /// `MissingUser` queda fuera y es la excepción que enseña la regla: su
-    /// frase lleva un `user@host` LITERAL, como ejemplo de lo que hay que
-    /// escribir, y no interpola nada — no tiene campos. Lo que este test
-    /// persigue es dato interpolado, no la letra `@`.
+    /// `MissingUser` is excluded, and it is the exception that proves the
+    /// rule: its sentence carries a LITERAL `user@host`, as an example of
+    /// what to type, and interpolates nothing — it has no fields. What this
+    /// test is after is interpolated data, not the `@` character itself.
     #[test]
-    fn ninguna_frase_publicable_interpola_userinfo() {
-        const USUARIO: &str = "CENTINELA-USUARIO";
+    fn no_publishable_phrase_interpolates_userinfo() {
+        const USER: &str = "CENTINELA-USUARIO";
         let publicables = [
-            ConnectError::Secret {
-                conn: USUARIO.into(),
-            },
+            ConnectError::Secret { conn: USER.into() },
             ConnectError::SecretEmpty {
-                conn: USUARIO.into(),
+                conn: USER.into(),
                 origin: SecretOrigin::Env,
             },
             ConnectError::SecretNotUtf8 {
-                conn: USUARIO.into(),
+                conn: USER.into(),
                 origin: SecretOrigin::Env,
             },
-            ConnectError::SecretStore("el almacén no abre"),
-            ConnectError::Agent("el agente no responde"),
+            ConnectError::SecretStore("the store did not open"),
+            ConnectError::Agent("the agent is not responding"),
         ];
         for e in &publicables {
-            let d = e.detalle_publico().expect("esta variante publica");
+            let d = e.detail_publico().expect("this variant publishes");
             assert!(
-                !d.contains(&format!("{USUARIO}@")) && !d.contains(&format!("@{USUARIO}")),
-                "una frase publicable interpola algo con forma de userinfo: {d}"
+                !d.contains(&format!("{USER}@")) && !d.contains(&format!("@{USER}")),
+                "a publishable sentence interpolates something shaped like userinfo: {d}"
             );
         }
         assert_eq!(
-            ConnectError::MissingUser.detalle_publico().as_deref(),
-            Some("la conexión no especifica usuario (usa user@host) y no hay $USER en el entorno"),
-            "su `user@host` es LITERAL: si alguien le añade campos, este assert lo dice"
+            ConnectError::MissingUser.detail_publico().as_deref(),
+            Some(
+                "the connection does not specify a user (use user@host) and there is no $USER in the environment"
+            ),
+            "its `user@host` is LITERAL: if someone adds fields to it, this assert will say so"
         );
     }
 }

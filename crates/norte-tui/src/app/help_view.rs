@@ -1,5 +1,5 @@
-//! El modelo de la pantalla de ayuda: qué tema está abierto, su scroll y el
-//! historial de navegación dentro de la propia ayuda.
+//! The help screen's model: which topic is open, its scroll and the
+//! navigation history within the help itself.
 
 use super::plugins::plugin_label;
 use norte_i18n::t;
@@ -196,7 +196,7 @@ impl HelpView {
     pub fn section_next(&mut self) {
         let scroll = self.state.body_scroll();
         match self.body.heading_lines.iter().find(|&&l| l > scroll) {
-            Some(&linea) => self.state.scroll_body_to(linea),
+            Some(&line) => self.state.scroll_body_to(line),
             None => self.state.scroll_body_to(usize::MAX),
         }
     }
@@ -205,7 +205,7 @@ impl HelpView {
     /// heading, the start of the page.
     pub fn section_prev(&mut self) {
         let scroll = self.state.body_scroll();
-        let linea = self
+        let line = self
             .body
             .heading_lines
             .iter()
@@ -213,7 +213,7 @@ impl HelpView {
             .find(|&&l| l < scroll)
             .copied()
             .unwrap_or(0);
-        self.state.scroll_body_to(linea);
+        self.state.scroll_body_to(line);
     }
 
     /// Down arrow: one topic in the sidebar; in the body, the next action if
@@ -263,11 +263,11 @@ impl HelpView {
         } else {
             // The cursor is off screen: the arrow lands on the nearest action
             // that is on it, in the direction of travel, before any scroll.
-            let mut en_vista = (0..lines.len()).filter(|&i| visible(i));
+            let mut in_view = (0..lines.len()).filter(|&i| visible(i));
             let hit = if down {
-                en_vista.next()
+                in_view.next()
             } else {
-                en_vista.next_back()
+                in_view.next_back()
             };
             if let Some(i) = hit {
                 self.state.settle_action_cursor(i);
@@ -432,12 +432,13 @@ impl HelpView {
         if self.state.focus() != norte_frontend::help::Focus::Body {
             return;
         }
-        // El foco ACABA de llegar al cuerpo (o el lector acaba de paginar):
-        // entonces manda la VISTA. El cursor se posa en la primera acción que
-        // cae dentro de la ventana, y si no hay ninguna se queda donde esté
-        // sin arrastrar nada. Antes de esto, `Tab` te llevaba a la primera
-        // línea ejecutable —detrás de toda la prosa en una página larga—, así
-        // que no parecía cambiar de columna: parecía saltar al final.
+        // Focus JUST arrived at the body (or the reader just paged):
+        // then the VIEW leads. The cursor lands on the first action that
+        // falls inside the window, and if there's none it stays wherever it
+        // is without dragging anything. Before this, `Tab` took you to the
+        // first runnable line — behind all the prose on a long page — so it
+        // didn't look like switching columns: it looked like jumping to the
+        // end.
         if self.state.action_follows_view() {
             let window = self.state.body_scroll()..self.state.body_scroll().saturating_add(height);
             if let Some(i) = self
@@ -450,7 +451,7 @@ impl HelpView {
             }
             return;
         }
-        // Y si el cursor se movió, manda ÉL: la vista lo persigue.
+        // And if the cursor moved, IT leads: the view follows it.
         //
         // The guard is not defensive noise: a topic with neither commands nor
         // `see_also` has no line to reveal, and `HelpState` only refuses the
@@ -787,38 +788,35 @@ mod help_view_tests {
         assert_eq!(view.state.action_cursor(), first + 1, "the next action");
     }
 
-    /// `]` pone arriba la SIGUIENTE sección y `[` la anterior; pasado el
-    /// último encabezado, `]` va al final, y antes del primero `[` al
-    /// principio — una tecla que no hace nada se lee como rota.
+    /// `]` puts the NEXT section at the top and `[` the previous one; past
+    /// the last heading, `]` goes to the end, and before the first one `[`
+    /// goes to the start — a key that does nothing reads as broken.
     #[test]
-    fn los_saltos_de_seccion_van_de_encabezado_en_encabezado() {
+    fn section_jumps_go_from_heading_to_heading() {
         let mut view = HelpView::new(Lang::Es, Vec::new());
         view.state.open(&TopicId::new("panes"));
         refresh(&mut view, 60, 8);
-        let encabezados = view.heading_lines().to_vec();
-        assert!(
-            encabezados.len() >= 3,
-            "panes tiene secciones: {encabezados:?}"
-        );
+        let headings = view.heading_lines().to_vec();
+        assert!(headings.len() >= 3, "panes has sections: {headings:?}");
 
         view.section_next();
         refresh(&mut view, 60, 8);
-        assert_eq!(view.state.body_scroll(), encabezados[0]);
+        assert_eq!(view.state.body_scroll(), headings[0]);
         view.section_next();
         refresh(&mut view, 60, 8);
-        assert_eq!(view.state.body_scroll(), encabezados[1]);
+        assert_eq!(view.state.body_scroll(), headings[1]);
         view.section_prev();
         refresh(&mut view, 60, 8);
-        assert_eq!(view.state.body_scroll(), encabezados[0]);
+        assert_eq!(view.state.body_scroll(), headings[0]);
         view.section_prev();
         refresh(&mut view, 60, 8);
         assert_eq!(
             view.state.body_scroll(),
             0,
-            "antes del primero, al principio"
+            "before the first one, to the start"
         );
 
-        for _ in 0..encabezados.len() + 2 {
+        for _ in 0..headings.len() + 2 {
             view.section_next();
             refresh(&mut view, 60, 8);
         }
@@ -826,7 +824,7 @@ mod help_view_tests {
         assert_eq!(
             view.state.body_scroll(),
             total - 8,
-            "después del último, al final"
+            "after the last one, to the end"
         );
     }
 
@@ -898,7 +896,7 @@ mod help_view_tests {
         assert!(!view.body().1.is_empty());
     }
 
-    /// Un plugin del catálogo, con la forma que llega por el wire.
+    /// A plugin from the catalogue, in the shape that arrives over the wire.
     fn plugin(id: &str, name: &str) -> norte_proto::methods::PluginInfo {
         norte_proto::methods::PluginInfo {
             id: id.to_owned(),
@@ -918,27 +916,24 @@ mod help_view_tests {
         }
     }
 
-    /// H3e: la página de un plugin que aún NO ha llegado se pinta VACÍA, jamás
-    /// como la página de teclado. Las dos son «no hay tema del corpus» para
-    /// `HelpState::topic`, y sin la distinción el chuletario entero aparecería
-    /// bajo el nombre de una extensión, leyéndose como su documentación.
+    /// H3e: a plugin's page that hasn't arrived YET paints EMPTY, never like
+    /// the keyboard page. Both are "no corpus topic" for `HelpState::topic`,
+    /// and without the distinction the whole cheatsheet would show up under
+    /// an extension's name, reading as its documentation.
     #[test]
-    fn una_pagina_de_plugin_en_vuelo_sale_vacia_y_no_es_el_teclado() {
+    fn an_in_flight_plugin_page_comes_out_empty_and_is_not_the_keyboard() {
         let mut view = HelpView::new(Lang::En, vec![ratatui::text::Line::raw("  f5   copy")]);
         view.set_plugins(&[plugin("acme.ftp", "FTP")]);
         view.state.open(&TopicId::new("acme.ftp"));
-        assert!(
-            !view.on_keys_page(),
-            "una página de plugin no es la de teclado"
-        );
+        assert!(!view.on_keys_page(), "a plugin page isn't the keyboard one");
         refresh(&mut view, 60, 10);
         let (lines, action_lines) = view.body();
-        assert!(lines.is_empty(), "cuerpo vacío mientras llega: {lines:?}");
+        assert!(lines.is_empty(), "empty body while it arrives: {lines:?}");
         assert!(action_lines.is_empty());
 
-        // Y cuando llega, se pinta — con su insignia de procedencia.
+        // And once it arrives, it paints — with its origin badge.
         let parsed = norte_help::parse_untrusted(
-            b"+++\nid = \"acme.ftp\"\ntitle = \"FTP\"\n+++\ncuerpo del plugin",
+            b"+++\nid = \"acme.ftp\"\ntitle = \"FTP\"\n+++\nthe plugin's body",
             "acme.ftp",
             view.publisher_of("acme.ftp"),
         )
@@ -946,22 +941,22 @@ mod help_view_tests {
         view.state.install_plugin_topic(parsed.topic);
         refresh(&mut view, 60, 10);
         let painted = flatten(view.body().0);
-        assert!(painted.contains("cuerpo del plugin"), "{painted}");
+        assert!(painted.contains("the plugin's body"), "{painted}");
         assert!(
             painted.contains("ACME"),
-            "el publicador acompaña: {painted}"
+            "the publisher comes along: {painted}"
         );
         assert!(
             painted.contains(&norte_i18n::t_in(Lang::En, "help-plugin-truncated")),
-            "y la insignia de recorte: {painted}"
+            "and the truncation badge: {painted}"
         );
     }
 
-    /// El texto de terceros se enmascara y se acota en el PUNTO DE ENTRADA:
-    /// `PluginNode::title` promete llegar seguro y el modelo no enmascara nada
-    /// — filtra sobre lo que le den.
+    /// Third-party text is masked and bounded at the ENTRY POINT:
+    /// `PluginNode::title` promises to arrive safe and the model masks
+    /// nothing — it just filters whatever it's given.
     #[test]
-    fn el_nombre_de_un_plugin_entra_enmascarado_y_acotado() {
+    fn plugin_name_arrives_masked_and_bounded() {
         let mut view = HelpView::new(Lang::En, Vec::new());
         let mut p = plugin("acme.ftp", &format!("a\u{202E}{}", "x".repeat(5_000)));
         p.publisher = "AC\u{202E}ME".to_owned();
@@ -978,32 +973,32 @@ mod help_view_tests {
                 }
                 _ => None,
             })
-            .expect("el nodo está en la barra");
-        assert!(!row.contains('\u{202E}'), "sin bidi crudo: {row:?}");
+            .expect("the node is on the sidebar");
+        assert!(!row.contains('\u{202E}'), "no raw bidi: {row:?}");
         assert!(
             row.chars().count() <= crate::app::PLUGIN_NAME_WIRE_CAP + 1,
-            "acotado: {} chars",
+            "capped: {} chars",
             row.chars().count()
         );
         assert!(
             row.ends_with('…'),
-            "y el recorte se MARCA, como lo marcan los vecinos que hacen esto \
-             mismo: presentar un nombre cortado como completo es la mentira \
-             que la fase fue a perseguir: {row:?}"
+            "and the truncation gets MARKED, as the neighbors that do this \
+             same thing mark it: presenting a cut name as complete is the lie \
+             this phase went to hunt down: {row:?}"
         );
-        let pub_ = view.publisher_of("acme.ftp").expect("hay publicador");
-        assert!(!pub_.contains('\u{202E}'), "publicador limpio: {pub_:?}");
+        let pub_ = view.publisher_of("acme.ftp").expect("there is a publisher");
+        assert!(!pub_.contains('\u{202E}'), "clean publisher: {pub_:?}");
     }
 
-    /// H3e: un `name` en BLANCO cae al id del plugin.
+    /// H3e: a BLANK `name` falls back to the plugin's id.
     ///
-    /// `name` es obligatorio en el manifiesto pero nadie comprueba que tenga
-    /// contenido, y U+3164 (HANGUL FILLER) no es espacio en blanco: sobrevive
-    /// al `trim` y al enmascarado. Sin el repliegue, la barra pinta una fila
-    /// VACÍA bajo la cabecera «Extensiones» — una página que el lector puede
-    /// pisar, abrir y leer, colgando de un nombre que no dice nada.
+    /// `name` is required in the manifest but nobody checks it has content,
+    /// and U+3164 (HANGUL FILLER) isn't whitespace: it survives `trim` and
+    /// masking. Without the fallback, the sidebar paints an EMPTY row under
+    /// the "Extensions" header — a page the reader can move onto, open and
+    /// read, attached to a name that says nothing.
     #[test]
-    fn un_nombre_en_blanco_cae_al_id_del_plugin() {
+    fn a_blank_name_falls_back_to_the_plugin_id() {
         let mut view = HelpView::new(Lang::En, Vec::new());
         let mut p = plugin("acme.ftp", "\u{3164}\u{3164}");
         p.publisher = "\u{3164}".to_owned();
@@ -1020,15 +1015,15 @@ mod help_view_tests {
                 }
                 _ => None,
             })
-            .expect("el nodo está en la barra");
-        assert_eq!(row, "acme.ftp", "la fila se nombra con el id: {row:?}");
+            .expect("the node is on the sidebar");
+        assert_eq!(row, "acme.ftp", "the row is named with the id: {row:?}");
 
-        // Y un publicador en blanco no se atribuye: la insignia pintaría
-        // «publicada por » sin nada detrás, que se lee como un fallo del
-        // pintor y no como una ausencia.
+        // And a blank publisher isn't attributed: the badge would paint
+        // "published by " with nothing behind it, which reads as a
+        // rendering fault and not as an absence.
         assert_eq!(view.publisher_of("acme.ftp"), None);
 
-        // Anti-vacuidad: un nombre REAL no se toca.
+        // Anti-emptiness: a REAL name isn't touched.
         let mut view = HelpView::new(Lang::En, Vec::new());
         view.set_plugins(&[plugin("acme.ftp", "FTP")]);
         assert!(view.state.rows().iter().any(|r| matches!(
@@ -1038,19 +1033,19 @@ mod help_view_tests {
         assert_eq!(view.publisher_of("acme.ftp").as_deref(), Some("ACME"));
     }
 
-    /// H3e: un id que NO es un id de plugin válido se DESCARTA en el punto de
-    /// entrada — nunca se repara.
+    /// H3e: an id that is NOT a valid plugin id gets DISCARDED at the entry
+    /// point — never repaired.
     ///
-    /// El id llega por el wire y es una CLAVE: viaja a `TopicId`, a
-    /// `plugin_needs_fetch` y de vuelta como argumento de `plugin.help`.
-    /// Enmascararlo no sería una medida de seguridad (el enmascarado no es
-    /// inyectivo: dos plugins distintos caerían en la misma fila) y un id
-    /// «reparado» sería una clave que no resuelve a nada, o peor, a otra cosa.
-    /// Negarse es la única respuesta que no puede mentir. Mismo criterio que
-    /// las claves de comando de `parse_untrusted`, que se rechazan en vez de
-    /// reescribirse.
+    /// The id arrives over the wire and is a KEY: it travels to `TopicId`,
+    /// to `plugin_needs_fetch` and back out as `plugin.help`'s argument.
+    /// Masking it wouldn't be a security measure (masking isn't injective:
+    /// two different plugins would land on the same row) and a "repaired"
+    /// id would be a key that resolves to nothing, or worse, to something
+    /// else. Refusing it is the only answer that can't lie. Same criterion
+    /// as `parse_untrusted`'s command keys, which get rejected instead of
+    /// rewritten.
     #[test]
-    fn un_id_que_no_es_de_plugin_se_descarta_en_la_entrada() {
+    fn an_id_that_is_not_a_plugins_is_discarded_at_entry() {
         let mut view = HelpView::new(Lang::En, Vec::new());
         let mut bidi = plugin("acme.\u{202E}ftp", "Bidi");
         bidi.publisher = "ACME".to_owned();
@@ -1058,7 +1053,7 @@ mod help_view_tests {
             plugin("acme.ftp", "Bueno"),
             bidi,
             plugin("sinpunto", "Sin punto"),
-            plugin(&"a.".repeat(500), "Kilométrico"),
+            plugin(&"a.".repeat(500), "Mile-long"),
         ]);
         let ids: Vec<String> = view
             .state
@@ -1068,9 +1063,9 @@ mod help_view_tests {
                 norte_frontend::help::SidebarRow::Topic { id, .. } => Some(id.as_str().to_owned()),
                 norte_frontend::help::SidebarRow::Group { .. } => None,
             })
-            // La barra lleva TODO el corpus además de las extensiones: lo que
-            // se mira aquí son las filas de plugin, que son las que este
-            // filtro decide.
+            // The sidebar carries the WHOLE corpus besides the extensions:
+            // what's looked at here are the plugin rows, which are the ones
+            // this filter decides.
             .filter(|id| {
                 id != norte_frontend::help::KEYS_ID && norte_help::topic(Lang::En, id).is_none()
             })
@@ -1078,18 +1073,17 @@ mod help_view_tests {
         assert_eq!(
             ids,
             vec!["acme.ftp".to_owned()],
-            "solo sobrevive el id válido: {ids:?}"
+            "only the valid id survives: {ids:?}"
         );
-        // Y no se queda una atribución colgando del que se fue.
+        // And no attribution is left hanging off the one that got dropped.
         assert_eq!(view.publisher_of("acme.\u{202E}ftp"), None);
     }
 
-    /// Un nombre de invisibles que son HAZARDS (no `INVISIBLE`) también cuenta
-    /// como blanco — porque se pregunta DESPUÉS de enmascarar, cuando ya son
-    /// `U+FFFD`. Es el orden lo que hace que una sola pregunta cubra las dos
-    /// familias.
+    /// A name of invisibles that are HAZARDS (not `INVISIBLE`) also counts
+    /// as blank — because it's asked AFTER masking, when they're already
+    /// `U+FFFD`. It's the order that lets one question cover both families.
     #[test]
-    fn un_nombre_de_espacios_de_ancho_cero_tambien_cae_al_id() {
+    fn a_name_of_zero_width_spaces_also_falls_back_to_the_id() {
         let mut view = HelpView::new(Lang::En, Vec::new());
         view.set_plugins(&[plugin("acme.ftp", "\u{200B}\u{200B}")]);
         assert!(view.state.rows().iter().any(|r| matches!(
@@ -1098,11 +1092,12 @@ mod help_view_tests {
         )));
     }
 
-    /// `plugin_needs_fetch` PREGUNTA, no avisa: sigue contestando `Some` hasta
-    /// que la página se instala, y el run loop lo visita en cada vuelta. Sin la
-    /// reclamación, un daemon que no contesta se reintentaría a ritmo de frame.
+    /// `plugin_needs_fetch` ASKS, it doesn't notify: it keeps answering
+    /// `Some` until the page is installed, and the run loop visits it every
+    /// turn. Without the claim, a daemon that doesn't answer would get
+    /// retried at frame rate.
     #[test]
-    fn la_pagina_se_pide_una_sola_vez_por_overlay() {
+    fn the_page_is_requested_only_once_per_overlay() {
         let mut view = HelpView::new(Lang::En, Vec::new());
         view.set_plugins(&[plugin("acme.ftp", "FTP")]);
         view.state.open(&TopicId::new("acme.ftp"));
@@ -1111,32 +1106,37 @@ mod help_view_tests {
             assert_eq!(
                 view.claim_plugin_fetch(),
                 None,
-                "un fallo no se reintenta dentro del mismo overlay"
+                "a failure isn't retried within the same overlay"
             );
             assert_eq!(
                 view.state.plugin_needs_fetch(),
                 Some("acme.ftp"),
-                "y el modelo sigue diciendo que falta: es la reclamación la que \
-                 corta el bucle, no el modelo"
+                "and the model keeps saying it's missing: it's the claim that \
+                 cuts the loop, not the model"
             );
         }
-        // Cerrar y reabrir la ayuda SÍ vuelve a pedir: es el único reintento
-        // que el lector tiene, y el único que puede pedir.
+        // Closing and reopening the help DOES ask again: it's the only
+        // retry the reader has, and the only one they can ask for.
         let mut other = HelpView::new(Lang::En, Vec::new());
         other.set_plugins(&[plugin("acme.ftp", "FTP")]);
         other.state.open(&TopicId::new("acme.ftp"));
         assert_eq!(other.claim_plugin_fetch().as_deref(), Some("acme.ftp"));
     }
 
-    /// Una página del corpus no pide nada, y la de teclado tampoco: pedir por
-    /// ellas sería una llamada al daemon por frame durante toda la lectura.
+    /// A corpus page requests nothing, and neither does the keyboard one:
+    /// requesting for them would be a call to the daemon every frame for
+    /// the whole reading session.
     #[test]
-    fn una_pagina_del_corpus_no_pide_nada() {
+    fn a_corpus_page_asks_for_nothing() {
         let mut view = HelpView::new(Lang::En, Vec::new());
         view.set_plugins(&[plugin("acme.ftp", "FTP")]);
-        assert_eq!(view.claim_plugin_fetch(), None, "el índice no pide nada");
+        assert_eq!(
+            view.claim_plugin_fetch(),
+            None,
+            "the index requests nothing"
+        );
         view.state.open(&TopicId::new(KEYS_ID));
-        assert_eq!(view.claim_plugin_fetch(), None, "el teclado tampoco");
+        assert_eq!(view.claim_plugin_fetch(), None, "neither does the keyboard");
     }
 }
 
@@ -1147,7 +1147,7 @@ mod help_plugin_snapshot_tests {
     use norte_vfs::VPath;
 
     fn app() -> App {
-        let d = VPath::parse("file:///x").expect("wire de test");
+        let d = VPath::parse("file:///x").expect("test wire");
         App::new(
             crate::app::Pane::new(d.clone(), Vec::new()),
             crate::app::Pane::new(d, Vec::new()),
@@ -1173,42 +1173,42 @@ mod help_plugin_snapshot_tests {
         }
     }
 
-    /// El MISMO `help.md` en los dos casos del test de abajo: declara el
-    /// comando en su front matter (la fila) y lo cita en la prosa (la marca en
-    /// línea). Fíjese en lo que NO lleva: un título. El header de un tema no
-    /// tiene dónde ponerlo — `parse_untrusted` solo conserva claves de
-    /// despacho — así que el nombre solo puede salir del manifiesto.
-    const PAGINA: &[u8] = b"+++\nid = \"org.norte.demo\"\ntitle = \"Demo\"\n\
+    /// The SAME `help.md` in the test's two cases below: it declares the
+    /// command in its front matter (the row) and cites it in the prose (the
+    /// inline mark). Notice what it does NOT carry: a title. A topic's
+    /// header has nowhere to put it — `parse_untrusted` only keeps dispatch
+    /// keys — so the name can only come from the manifest.
+    const PAGE: &[u8] = b"+++\nid = \"org.norte.demo\"\ntitle = \"Demo\"\n\
                             commands = [\"plugin:org.norte.demo:greet\"]\n+++\n\
-                            La marca propia: {{cmd:plugin:org.norte.demo:greet}}";
+                            Its own mark: {{cmd:plugin:org.norte.demo:greet}}";
 
-    /// El nombre de un comando sale de la FOTO (el manifiesto), jamás del
-    /// `help.md`. El plugin escribe los dos, así que solo uno puede mandar, y
-    /// tiene que ser el que ve el humano que aprueba el plugin: el gestor de
-    /// extensiones, la paleta y la solicitud de aprobación muestran el del
-    /// manifiesto, y una página que llamara `greet` de otra manera dejaría al
-    /// lector sin saber qué está aprobando.
+    /// A command's name comes from the SNAPSHOT (the manifest), never from
+    /// `help.md`. The plugin writes both, so only one can win, and it has
+    /// to be the one the human approving the plugin sees: the extensions
+    /// manager, the palette and the approval request show the manifest's,
+    /// and a page calling `greet` something else would leave the reader not
+    /// knowing what they're approving.
     ///
-    /// Se demuestra cambiando el manifiesto con los MISMOS bytes de página: si
-    /// el texto pintado sigue al manifiesto, la página no es la fuente.
+    /// Demonstrated by changing the manifest with the SAME page bytes: if
+    /// the painted text follows the manifest, the page isn't the source.
     #[test]
-    fn el_nombre_de_un_comando_sale_de_la_foto_no_de_la_pagina() {
-        let painted_with = |titulo: &str| -> String {
+    fn a_commands_name_comes_from_the_snapshot_not_the_page() {
+        let painted_with = |title: &str| -> String {
             let mut app = app();
             app.help = Some(crate::app::HelpView::new(norte_help::Lang::En, Vec::new()));
             let mut p = plugin("org.norte.demo", true, true);
             p.commands = vec![norte_proto::methods::PluginCommandInfo {
                 id: "greet".to_owned(),
-                title: titulo.to_owned(),
+                title: title.to_owned(),
                 kind: norte_proto::methods::PluginCommandKind::Command,
             }];
             app.freeze_help_plugins(&[p]);
-            let help = app.help.as_mut().expect("abierta");
+            let help = app.help.as_mut().expect("open");
             help.state.open(&norte_help::TopicId::new("org.norte.demo"));
-            let parsed = norte_help::parse_untrusted(PAGINA, "org.norte.demo", None);
+            let parsed = norte_help::parse_untrusted(PAGE, "org.norte.demo", None);
             help.state.install_plugin_topic(parsed.topic);
             app.refresh_help(70, 20);
-            let (lines, _) = app.help.as_ref().expect("abierta").body();
+            let (lines, _) = app.help.as_ref().expect("open").body();
             lines
                 .iter()
                 .map(|l| {
@@ -1224,29 +1224,30 @@ mod help_plugin_snapshot_tests {
         let text = painted_with("Greet the world");
         assert!(
             text.contains("Greet the world"),
-            "la fila y la marca llevan el nombre del manifiesto: {text}"
+            "the row and the mark carry the manifest's name: {text}"
         );
         assert!(
             !text.contains("plugin:org.norte.demo:greet"),
-            "y NO su clave de despacho, ni en la prosa ni en la fila: {text}"
+            "and NOT its dispatch key, neither in the prose nor in the row: {text}"
         );
-        // Dos veces: una en la prosa (la marca en línea) y otra en la tabla de
-        // filas ejecutables. `render_command` y `rows_of` comparten
-        // `label_or_id` justo para que no puedan discrepar.
+        // Twice: once in the prose (the inline mark) and once in the
+        // runnable-rows table. `render_command` and `rows_of` share
+        // `label_or_id` exactly so they can't disagree.
         assert_eq!(text.matches("Greet the world").count(), 2, "{text}");
 
-        // Mismos bytes de página, otro manifiesto: manda el manifiesto.
+        // Same page bytes, different manifest: the manifest wins.
         let other = painted_with("Saludar al mundo");
         assert!(other.contains("Saludar al mundo"), "{other}");
         assert!(!other.contains("Greet the world"), "{other}");
     }
 
-    /// H3e: la foto congela las DOS mitades a la vez — la barra ofrece la
-    /// página de cada plugin con `help.md`, y el resolver atenúa los comandos
-    /// de los que no están aprobados-y-activos. Si sólo cuajara una, el lector
-    /// leería una página cuyas filas prometen lo que la app va a rechazar.
+    /// H3e: the snapshot freezes BOTH halves at once — the sidebar offers
+    /// every plugin's page with `help.md`, and the resolver dims the
+    /// commands of the ones that aren't approved-and-active. If only one
+    /// took, the reader would read a page whose rows promise what the app
+    /// is going to refuse.
     #[test]
-    fn la_foto_llega_a_la_barra_y_al_resolver() {
+    fn the_snapshot_reaches_the_bar_and_the_resolver() {
         let mut app = app();
         app.help = Some(crate::app::HelpView::new(norte_help::Lang::En, Vec::new()));
         app.freeze_help_plugins(&[
@@ -1254,7 +1255,7 @@ mod help_plugin_snapshot_tests {
             plugin("otro.off", true, false),
         ]);
 
-        let help = app.help.as_ref().expect("la ayuda está abierta");
+        let help = app.help.as_ref().expect("the help is open");
         let ids: Vec<String> = help
             .state
             .rows()
@@ -1267,8 +1268,8 @@ mod help_plugin_snapshot_tests {
         assert!(ids.iter().any(|i| i == "acme.ftp"), "{ids:?}");
         assert!(
             ids.iter().any(|i| i == "otro.off"),
-            "un plugin apagado CONSERVA su página — leerla es cómo se decide \
-             encenderlo: {ids:?}"
+            "a disabled plugin KEEPS its page — reading it is how you decide \
+             whether to enable it: {ids:?}"
         );
 
         assert!(
@@ -1281,38 +1282,38 @@ mod help_plugin_snapshot_tests {
                 .availability("plugin:otro.off:sync")
                 .reason(),
             Some(norte_help::Reason::PluginInactive),
-            "pero sus filas no se ofrecen"
+            "but its rows aren't offered"
         );
     }
 
-    /// La misma puerta, en la mitad del RESOLVER: ni el conjunto de activos ni
-    /// el mapa de títulos pueden guardar un id que el host no debió anunciar.
+    /// The same gate, in the RESOLVER's half: neither the active set nor the
+    /// title map can hold an id the host shouldn't have announced.
     ///
-    /// El id sale del corpus canónico (`plugin_id_bidi_segment`) y no de un
-    /// literal: la GUI prueba su mitad de esta misma puerta contra la misma
-    /// fixture, y dos frontends con su propia ortografía del adversario es
-    /// justo la deriva que el corpus existe para no tener.
+    /// The id comes from the canonical corpus (`plugin_id_bidi_segment`) and
+    /// not from a literal: the GUI tests its half of this same gate against
+    /// the same fixture, and two frontends with their own spelling of the
+    /// adversary is exactly the drift the corpus exists to not have.
     #[test]
-    fn un_id_invalido_no_entra_en_la_foto_del_resolver() {
+    fn an_invalid_id_does_not_enter_the_resolvers_snapshot() {
         let fixture = norte_testkit::corpus::hostile_names()
             .into_iter()
             .find(|n| n.id == "plugin_id_bidi_segment")
-            .expect("la fixture vive en el corpus canónico");
-        let id = String::from_utf8(fixture.bytes).expect("la fixture es UTF-8");
+            .expect("the fixture lives in the canonical corpus");
+        let id = String::from_utf8(fixture.bytes).expect("the fixture is UTF-8");
         let key = format!("plugin:{id}:sync");
         let mut app = app();
         app.help = Some(crate::app::HelpView::new(norte_help::Lang::En, Vec::new()));
         let mut bad = plugin(&id, true, true);
         bad.commands = vec![norte_proto::methods::PluginCommandInfo {
             id: "sync".to_owned(),
-            title: "Sincronizar".to_owned(),
+            title: "Sync".to_owned(),
             kind: norte_proto::methods::PluginCommandKind::Command,
         }];
         app.freeze_help_plugins(&[bad]);
         assert_eq!(
             norte_help::ChordResolver::availability(&*app.help_chords, &key).reason(),
             Some(norte_help::Reason::PluginInactive),
-            "no está activo: su id nunca entró en el conjunto"
+            "it isn't active: its id never entered the set"
         );
         assert_eq!(
             norte_help::ChordResolver::label(&*app.help_chords, &key)
@@ -1320,15 +1321,16 @@ mod help_plugin_snapshot_tests {
                 .filter(|c| norte_encoding::is_terminal_hazard(*c))
                 .count(),
             0,
-            "y su título no llegó al mapa: la etiqueta cae al repliegue seguro"
+            "and its title never reached the map: the label falls back to the \
+             safe default"
         );
     }
 
-    /// El re-congelado de hechos que el embudo de refresco hace con la ayuda
-    /// abierta (`main::after_panes_refresh`) NO puede apagar las filas de
-    /// plugin a mitad de lectura, ni al revés.
+    /// The re-freeze of facts the refresh funnel does with the help open
+    /// (`main::after_panes_refresh`) must NOT turn off plugin rows mid-read,
+    /// nor the other way around.
     #[test]
-    fn recongelar_los_hechos_no_pierde_la_foto_de_plugins() {
+    fn refreezing_the_facts_does_not_lose_the_plugins_snapshot() {
         let mut app = app();
         app.help = Some(crate::app::HelpView::new(norte_help::Lang::En, Vec::new()));
         app.freeze_help_plugins(&[plugin("acme.ftp", true, true)]);

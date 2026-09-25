@@ -41,7 +41,7 @@ pub struct CommandDef {
 /// // Renames too, but the listing has left the machine first.
 /// assert_eq!(effect("pane.ai-rename"), Some(Effect::SendsOut));
 /// assert!(effect("cursor.down").is_some_and(Effect::is_inert));
-/// assert_eq!(effect("pane.no-existe-jamas"), None);
+/// assert_eq!(effect("pane.no-exists-jamas"), None);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Effect {
@@ -107,17 +107,16 @@ const fn live(name: &'static str, counts: bool, effect: Effect) -> CommandDef {
     }
 }
 
-/// Un comando que un preset puede nombrar honestamente y que norte todavía
-/// no hace.
+/// A command a preset can honestly name and that norte does not do yet.
 ///
-/// **Ahora mismo no hay ninguno**, y el constructor se queda por lo que
-/// costó descubrirlo: con #132 la tabla se quedó sin `Planned`, y luego la
-/// matriz de paridad de la fase 6 destapó tres (`task.next`/`prev`/
-/// `dismiss`) declarados VIVOS sin que los implementara ningún frontend —
-/// que es peor, porque una tecla así no hace nada y tampoco dice por qué.
-/// Esta maquinaria (fila atenuada, motivo traducido, número de issue) es la
-/// respuesta a eso, y reconstruirla costaría más que dejarla.
-#[allow(dead_code, reason = "el vocabulario está entero: ver el doc de arriba")]
+/// **There is none right now**, and the constructor stays for what it cost
+/// to discover: with #132 the table ran out of `Planned` entries, and then
+/// phase 6's parity matrix uncovered three (`task.next`/`prev`/`dismiss`)
+/// declared LIVE with no frontend implementing them — which is worse,
+/// because a key like that does nothing and does not say why either. This
+/// machinery (dimmed row, translated reason, issue number) is the answer
+/// to that, and rebuilding it would cost more than keeping it.
+#[allow(dead_code, reason = "the vocabulary is complete: see the doc above")]
 const fn planned(
     name: &'static str,
     reason: &'static str,
@@ -143,18 +142,20 @@ pub const CATALOGUE: &[CommandDef] = &[
     live("app.theme", false, Inert),
     live("app.settings", false, Inert),
     live("app.extensions", false, Inert),
-    // Las sesiones de AGENTE que este cliente ha visto pedir permiso, y el
-    // deshacer de una entera (#276). Vive en el catálogo compartido —y no
-    // solo en el host gráfico— porque el vocabulario de comandos es UNO: un
-    // preset puede atarlo, la ayuda lo documenta, y el frontend que aún no lo
-    // implementa lo dice con la misma frase que cualquier otro que no tenga.
+    // The AGENT sessions this client has seen ask for permission, and
+    // undoing a whole one (#276). Lives in the shared catalogue — and not
+    // only in the graphical host — because the command vocabulary is ONE:
+    // a preset can bind it, help documents it, and the frontend that does
+    // not implement it yet says so with the same sentence as any other
+    // that lacks it.
     live("app.agents", false, Inert),
     live("app.palette", false, Inert),
-    // «Ir a cualquier sitio» (fase 6 del programa WOW): una pantalla sobre
-    // lo que ya había repartido en cinco —historia, populares, favoritos,
-    // conexiones y la paleta— más una ruta tecleada y lo que encuentre el
-    // índice. No sustituye a ninguna: cada una sigue teniendo su tecla, y
-    // ésta es la que sirve cuando no sabes en cuál de las cinco está.
+    // "Go anywhere" (phase 6 of the WOW program): a screen over what was
+    // already split across five — history, popular, favorites, connections
+    // and the palette — plus a typed path and whatever the index finds. It
+    // does not replace any of them: each still has its own key, and this
+    // is the one that helps when you do not know which of the five it is
+    // in.
     live("app.goto", false, Inert),
     live("app.menu", false, Inert),
     // `--pick` (S2): being in this table only means the NAME is known to the
@@ -174,20 +175,20 @@ pub const CATALOGUE: &[CommandDef] = &[
     // reference sheet greys out.
     live("app.terminal", false, Launches),
     live("app.toggle-panels", false, Launches),
-    // Fase 9: el RELEVO entre frontends. Vive aquí y no en un preset porque
-    // lo que decide si se puede hacer es estado de ejecución —hay daemon,
-    // hay a dónde abrir una ventana— que un fichero de keymap no sabe
-    // expresar; la disponibilidad lo dice con su motivo.
+    // Phase 9: the HANDOFF between frontends. Lives here and not in a
+    // preset because what decides whether it can be done is runtime state
+    // — is there a daemon, is there somewhere to open a window — that a
+    // keymap file cannot express; availability says so with its reason.
     live("app.handoff", false, Launches),
     // --- pane ---
     live("pane.command-line", false, Launches),
     live("pane.switch", false, Inert),
-    // --- pestañas (L1b, cierra #137) ---
+    // --- tabs (L1b, closes #137) ---
     //
-    // Los cuatro primeros estaban RESERVADOS aquí como `planned` desde K2, y
-    // varios presets ya los ataban: `total-commander` y `krusader` los tenían
-    // escritos y en gris. Construirlos con otro nombre habría dejado dos
-    // vocabularios para lo mismo y esas teclas muertas para siempre.
+    // The first four were RESERVED here as `planned` since K2, and several
+    // presets already bound them: `total-commander` and `krusader` had them
+    // written and greyed out. Building them under another name would have
+    // left two vocabularies for the same thing and those keys dead forever.
     live("pane.tab-new", false, Inert),
     live("pane.tab-close", false, Inert),
     live("pane.tab-next", false, Inert),
@@ -212,96 +213,103 @@ pub const CATALOGUE: &[CommandDef] = &[
     live("layout.grow", true, Inert),
     live("layout.shrink", true, Inert),
     live("layout.equalize", false, Inert),
-    // ADR 0138: girar el reparto del panel con foco. Sin tecla en ningún
-    // preset a propósito: vive en el botón de disposición, el menú y la
-    // paleta, y cada preset lo dice en su cabecera.
+    // ADR 0138: flip the focused pane's split. Deliberately no key in any
+    // preset: it lives in the layout button, the menu and the palette, and
+    // every preset says so in its header.
     live("layout.flip", false, Inert),
     live("layout.set-target", false, Inert),
-    // L3: el sidebar de sitios. En la familia `layout.*` y no en `pane.*`
-    // porque lo que hace es REORGANIZAR la pantalla —acopla un panel nuevo—,
-    // no operar sobre un listado.
+    // L3: the places sidebar. In the `layout.*` family and not `pane.*`
+    // because what it does is REORGANIZE the screen — it docks a new pane
+    // — not operate on a listing.
     live("layout.places", false, Inert),
-    // L3: el visor acoplado. Mismo motivo para estar en `layout.*`: acopla un
-    // panel. Lo que hay DENTRO es el kind `viewer` de siempre.
+    // L3: the docked viewer. Same reason to be in `layout.*`: it docks a
+    // pane. What is INSIDE it is the usual `viewer` kind.
     live("layout.preview", false, Inert),
-    // Fase A: el panel de procesos y la hoja de atributos. Sin acorde en
-    // ningún preset: quince `layout.*` por siete presets es #228, y ligar dos
-    // aquí dejaría la familia a medias sin regla que diga qué mitad. Se
-    // alcanzan desde la paleta y desde el menú.
+    // Phase A: the processes panel and the attribute sheet. No chord in
+    // any preset: fifteen `layout.*` across seven presets is #228, and
+    // binding two here would leave the family half-done with no rule
+    // saying which half. They are reached from the palette and the menu.
     live("layout.processes", false, Inert),
     live("layout.metadata", false, Inert),
-    // El registro (#323). Este SÍ lleva acorde en los siete, a diferencia de
-    // sus vecinos: lo que se abre aquí es lo que explica por qué acaba de
-    // fallar algo, y buscarlo en la paleta justo cuando algo va mal es pedirle
-    // al lector el paso de más en el peor momento. `alt+l` estaba libre en los
-    // siete presets.
+    // The log (#323). This one DOES carry a chord in all seven, unlike its
+    // neighbors: what opens here is what explains why something just
+    // failed, and looking for it in the palette right when something goes
+    // wrong is asking the reader for one extra step at the worst moment.
+    // `alt+l` was free in all seven presets.
     live("layout.log", false, Inert),
-    // El mapa de disco (fase 4). Lleva acorde en los siete por lo mismo que el
-    // registro: es un panel que se queda el TECLADO —se anda por los
-    // rectángulos y se entra en uno—, y a un panel así hay que poder entrar y
-    // salir sin ratón. Eso lo exige a máquina el test
-    // `los_paneles_con_teclado_se_abren_y_se_recorren_en_los_siete_presets`.
+    // The disk map (phase 4). Carries a chord in all seven for the same
+    // reason as the log: it is a panel that keeps the KEYBOARD — you walk
+    // the rectangles and enter one — and a panel like that has to be
+    // enterable and exitable without a mouse. The test
+    // `keyboard_panels_open_and_are_browsed_in_all_seven_presets` requires
+    // this by machine.
     //
-    // `alt+z`, y el mnemónico es malo a propósito: era la ÚNICA letra libre en
-    // los siete. De la `a` a la `y` no queda ninguna sin atar en algún preset
-    // —`alt+d` es `pane.disconnect` en orthodox y krusader, `alt+m` el menú,
-    // `alt+j` procesos, `alt+l` el registro—, así que o era esta o era un
-    // acorde que ya significa otra cosa en el gestor que alguien viene
-    // imitando. Una tecla rara se aprende; una que hace dos cosas, no.
+    // `alt+z`, and the mnemonic is bad on purpose: it was the ONLY free
+    // letter in all seven. From `a` to `y` none is left unbound in some
+    // preset — `alt+d` is `pane.disconnect` in orthodox and krusader,
+    // `alt+m` the menu, `alt+j` processes, `alt+l` the log — so it was
+    // either this or a chord that already means something else in the
+    // manager someone is imitating. An odd key is learned; one that does
+    // two things is not.
     live("layout.disk-map", false, Inert),
-    // La línea de tiempo del journal (fase 7): qué se ha hecho y hasta dónde
-    // se puede volver. SIN tecla en ningún preset, y es deliberado: el
-    // espacio de `alt+<letra>` para paneles está agotado —b, j, l, t, z ya
-    // son otros— y no queda ninguna libre en los siete a la vez. Atarla en
-    // tres y en cuatro no es peor que no atarla en ninguno: es una capacidad
-    // que la mitad de los lectores no tendría y que nadie les diría por qué.
-    // Se llega por la barra de paneles, que se genera del registro de kinds y
-    // por tanto la tiene en LOS SIETE, y por el menú Ver.
+    // The journal's timeline (phase 7): what has been done and how far
+    // back you can go. NO key in any preset, and it is deliberate: the
+    // `alt+<letter>` space for panels is exhausted — b, j, l, t, z are
+    // already others — and none is free in all seven at once. Binding it
+    // in three and in four is no worse than binding it in none: it is a
+    // capability half the readers would not have and nobody would tell
+    // them why. It is reached through the panel bar, which is generated
+    // from the kind registry and therefore has it in ALL SEVEN, and
+    // through the View menu.
     live("layout.timeline", false, Inert),
-    // El panel de terminal (#362). `Launches` y no `Inert`: lo que abre es un
-    // SHELL, con el entorno y el directorio de quien lo abre, y eso es lo
-    // primero de lo que hay que avisar al lector — el mismo efecto que
-    // `app.terminal` y `app.toggle-panels`, que hacen lo mismo en otra forma.
+    // The terminal panel (#362). `Launches` and not `Inert`: what it opens
+    // is a SHELL, with the environment and directory of whoever opened it,
+    // and that is the first thing the reader must be warned about — the
+    // same effect as `app.terminal` and `app.toggle-panels`, which do the
+    // same thing in another form.
     //
-    // Lleva acorde en los siete, y aquí no es discutible: es el panel que MÁS
-    // se queda el teclado de todos: los demás consumen comandos del catálogo
-    // y éste consume bytes, o sea también los acordes que serían de norte. Sin
-    // tecla no se entra y, sobre todo, no se sale.
+    // Carries a chord in all seven, and here it is not debatable: it is
+    // the panel that keeps the keyboard the MOST of all: the others
+    // consume catalogue commands and this one consumes bytes, i.e. also
+    // the chords that would be norte's. With no key you cannot enter and,
+    // above all, cannot leave.
     //
-    // `ctrl+alt+s`, de «shell». La letra obvia sería la `t`, y está libre en
-    // los siete, pero `ctrl+alt+t` lo SECUESTRA el escritorio —GNOME y KDE lo
-    // atan de fábrica a «abrir un terminal»—, así que norte no lo vería nunca:
-    // es la misma clase de fallo que `ctrl+<MAYÚSCULA>`, un binding que
-    // existe, que la ayuda imprime y que no hace nada. `alt+<letra>` no era
-    // opción: ese espacio se agotó con el mapa de disco.
+    // `ctrl+alt+s`, from "shell". The obvious letter would be `t`, and it
+    // is free in all seven, but `ctrl+alt+t` is HIJACKED by the desktop —
+    // GNOME and KDE bind it out of the box to "open a terminal" — so norte
+    // would never see it: it is the same class of failure as
+    // `ctrl+<UPPERCASE>`, a binding that exists, that help prints and that
+    // does nothing. `alt+<letter>` was not an option: that space ran out
+    // with the disk map.
     //
-    // Y a diferencia de sus vecinos, el segundo toque NO cierra el panel:
-    // devuelve el foco y deja el shell vivo, que es lo que `app.toggle-panels`
-    // hace con el subshell. Cerrarlo mata un proceso del lector, y para eso
-    // está `layout.close-slot`, que lo dice.
+    // And unlike its neighbors, the second tap does NOT close the panel:
+    // it gives back the focus and leaves the shell alive, which is what
+    // `app.toggle-panels` does with the subshell. Closing it kills a
+    // process of the reader's, and that is what `layout.close-slot` is
+    // for, and says so.
     live("layout.terminal", false, Launches),
-    // El selector de disposición. Sin acorde por el mismo #228, y además
-    // porque el nombre de una disposición NO es el de un preset de teclas
-    // aunque coincida: el diálogo lo dice en su pie.
+    // The layout picker. No chord for the same #228, and also because a
+    // layout's name is NOT a keymap preset's even when they coincide: the
+    // dialog says so in its footer.
     live("layout.pick", false, Inert),
-    // Los perfiles (ADR 0079). Sin acorde por el mismo #228 —atar cuatro
-    // teclas nuevas en siete presets sin que nadie lo haya pedido es el error
-    // contrario al que #228 arregló— y llegando por la paleta y el menú.
+    // The profiles (ADR 0079). No chord for the same #228 — binding four
+    // new keys in seven presets with nobody asking for it is the opposite
+    // error #228 fixed — reached through the palette and the menu.
     //
-    // El selector avisa además de que un nombre de perfil que coincide con
-    // una disposición o con un preset de teclas NO es esa otra cosa: son tres
-    // ajustes distintos que pueden compartir nombre.
+    // The picker also warns that a profile name matching a layout's or a
+    // keymap preset's is NOT that other thing: they are three different
+    // settings that can share a name.
     live("profile.pick", false, Inert),
     live("profile.next", false, Inert),
     live("profile.prev", false, Inert),
     live("profile.save-as", false, Inert),
     live("pane.mirror", false, Inert),
     live("pane.mirror-target", false, Inert),
-    // El espejo PERMANENTE: mientras está puesto, cada navegación del panel
-    // con foco la repite el otro. Es un interruptor, no un gesto — por eso no
-    // se llama `pane.mirror-mode`: lo que se enciende no es un espejo, es que
-    // los dos paneles andan juntos. Y nada que ver con `pane.sync-dirs`, que
-    // ESCRIBE ficheros.
+    // The PERMANENT mirror: while it is on, every navigation of the
+    // focused pane is repeated by the other one. It is a switch, not a
+    // gesture — that is why it is not called `pane.mirror-mode`: what gets
+    // turned on is not a mirror, it is that the two panes walk together.
+    // And nothing to do with `pane.sync-dirs`, which WRITES files.
     live("pane.sync-nav", false, Inert),
     live("pane.pull", false, Inert),
     live("pane.swap", false, Inert),
@@ -318,9 +326,9 @@ pub const CATALOGUE: &[CommandDef] = &[
     live("pane.quick-search", false, Inert),
     live("pane.history", false, Inert),
     live("pane.hotlist", false, Inert),
-    // La historia entera (spec 2026-09-15, fase 1). `pane.popular` es la lista
-    // de la sesión ordenada por visitas (Krusader `Ctrl+Z`); `-left`/`-right`
-    // nombran un LADO, como los volúmenes. Ninguno lleva contador: son listas.
+    // The whole history (spec 2026-09-15, phase 1). `pane.popular` is the
+    // session's list sorted by visits (Krusader `Ctrl+Z`); `-left`/`-right`
+    // name a SIDE, like the volumes. None carries a count: they are lists.
     live("pane.popular", false, Inert),
     live("pane.history-left", false, Inert),
     live("pane.history-right", false, Inert),
@@ -340,9 +348,10 @@ pub const CATALOGUE: &[CommandDef] = &[
     // instead of an issue number nobody can close. Neither takes a count: two
     // whole trees are a task, not a clamped mover (ADR 0044).
     live("pane.compare-dirs", false, Inert),
-    // #312: la PAREJA, que es otra pregunta que comparar dos árboles. Se
-    // delega en el programa de `[ui] diff`, así que lo que norte decide es el
-    // operando —dos ficheros, o lo dice— y no el formato de la diferencia.
+    // #312: the PAIR, which is a different question than comparing two
+    // trees. It delegates to the `[ui] diff` program, so what norte decides
+    // is the operand — two files, or it says so — and not the diff's
+    // format.
     live("pane.compare-files", false, Launches),
     live("pane.sync-dirs", false, Writes),
     live("pane.search", false, Inert),
@@ -365,8 +374,8 @@ pub const CATALOGUE: &[CommandDef] = &[
     live("nav.parent", false, Inert),
     live("nav.back", true, Inert),
     live("nav.forward", true, Inert),
-    // El punto de salto de Krusader (`Ctrl+J`). Sin contador: hay UN punto, y
-    // saltar a él cinco veces es saltar a él.
+    // Krusader's jump point (`Ctrl+J`). No count: there is ONE point, and
+    // jumping to it five times is jumping to it.
     live("nav.jump-back", false, Inert),
     live("nav.set-jump-point", false, Inert),
     // --- mark ---
@@ -376,24 +385,25 @@ pub const CATALOGUE: &[CommandDef] = &[
     live("mark.clear", false, Inert),
     live("mark.pattern-add", false, Inert),
     live("mark.pattern-remove", false, Inert),
-    // #313: los tres huecos que Total Commander tiene en su familia Gray y
-    // norte no tenía. `extension-*` actúa sobre la extensión de la entrada
-    // BAJO EL CURSOR; `files`/`dirs` son aditivos como `pattern-add`; y
-    // `restore` devuelve la selección de antes del último gesto en bloque,
-    // que es la red del que pulsó «desmarcar todo» sin querer.
+    // #313: the three gaps Total Commander has in its Gray family that
+    // norte did not. `extension-*` acts on the extension of the entry
+    // UNDER THE CURSOR; `files`/`dirs` are additive like `pattern-add`; and
+    // `restore` gives back the selection from before the last block
+    // gesture, which is the safety net for whoever clicked "unmark all" by
+    // accident.
     live("mark.extension-add", false, Inert),
     live("mark.extension-remove", false, Inert),
     live("mark.files", false, Inert),
     live("mark.dirs", false, Inert),
     live("mark.restore", false, Inert),
-    // Marcar MOVIÉNDOSE, que es la mitad de la familia que faltaba: `space` e
-    // `insert` marcan bajando y no había nada para subir ni para un tramo.
-    // `toggle-up` es el espejo exacto de `mark.toggle`; los dos `page-*`
-    // aplican a todo el tramo lo contrario de lo que tenga la fila del cursor,
-    // que es lo que hace el gesto reversible; y `to-top`/`to-bottom` son el
-    // `Shift+Home`/`Shift+End` de Krusader, que además DESMARCAN el otro lado
-    // — eso es literal de su documentación y es lo que los distingue de
-    // «añade un tramo».
+    // Marking WHILE MOVING, which is the missing half of the family:
+    // `space` and `insert` mark going down and there was nothing for going
+    // up or for a range. `toggle-up` is `mark.toggle`'s exact mirror; the
+    // two `page-*` ones apply to the whole range the opposite of what the
+    // cursor's row has, which is what makes the gesture reversible; and
+    // `to-top`/`to-bottom` are Krusader's `Shift+Home`/`Shift+End`, which
+    // also UNMARK the other side — that is literal from its documentation
+    // and is what distinguishes them from "adds a range".
     live("mark.toggle-up", false, Inert),
     live("mark.toggle-page-down", false, Inert),
     live("mark.toggle-page-up", false, Inert),
@@ -401,20 +411,20 @@ pub const CATALOGUE: &[CommandDef] = &[
     live("mark.to-bottom", false, Inert),
     // --- task ---
     live("task.cancel", false, Inert),
-    // Pausa y reanuda la misma tarea que cancelaría (ADR 0147).
+    // Pauses and resumes the same task it would cancel (ADR 0147).
     live("task.pause", false, Inert),
-    // Relanza la transferencia fallida (ADR 0148).
+    // Relaunches the failed transfer (ADR 0148).
     live("task.retry", false, Inert),
-    // La cola en serie (ADR 0149): el interruptor y el reordenado.
+    // The serial queue (ADR 0149): the switch and the reordering.
     live("task.queue", false, Inert),
     live("task.up", false, Inert),
     live("task.down", false, Inert),
-    // Los tres de RECORRER el tablero estuvieron un rato en `Planned`: la
-    // matriz de paridad de la fase 6 destapó que la tabla los declaraba vivos
-    // sin que los implementara NINGÚN frontend. Vuelven a vivos porque la
-    // ventana ya los hace (#292); el TUI sigue atando solo `task.cancel`, que
-    // es una asimetría normal —lo que no es normal es que la tabla prometa lo
-    // que no hace nadie.
+    // The three for BROWSING the board sat in `Planned` for a while: phase
+    // 6's parity matrix uncovered that the table declared them live with
+    // NO frontend implementing them. They go back to live because the
+    // window already does it (#292); the TUI still binds only
+    // `task.cancel`, which is a normal asymmetry — what is not normal is
+    // the table promising what nobody does.
     live("task.next", false, Inert),
     live("task.prev", false, Inert),
     live("task.dismiss", false, Inert),
@@ -426,23 +436,23 @@ pub const CATALOGUE: &[CommandDef] = &[
     live("viewer.page-down", true, Inert),
     live("viewer.top", false, Inert),
     live("viewer.bottom", false, Inert),
-    // A lo ANCHO. Con cuenta, como sus gemelas verticales: el visor no
-    // envuelve, así que una línea larga se recorre igual que un fichero alto.
+    // SIDEWAYS. With a count, like its vertical twins: the viewer does not
+    // wrap, so a long line is browsed just like a tall file.
     live("viewer.left", true, Inert),
     live("viewer.right", true, Inert),
     live("viewer.encoding", false, Inert),
     live("viewer.encoding-auto", false, Inert),
     live("viewer.hex", false, Inert),
-    // El ZOOM de una imagen (spec 2026-09-20). Sin cuenta: `3` delante de
-    // «acercar» leería como «tres peldaños», y el peldaño ya es la unidad —
-    // pulsar tres veces es exactamente eso y se ve mientras ocurre.
+    // An image's ZOOM (spec 2026-09-20). No count: `3` in front of "zoom
+    // in" would read as "three steps", and the step is already the unit —
+    // pressing it three times is exactly that and is seen as it happens.
     live("viewer.zoom-in", false, Inert),
     live("viewer.zoom-out", false, Inert),
     live("viewer.zoom-fit", false, Inert),
-    // Las HERMANAS del listado: pasar a la foto siguiente sin salir del visor.
-    // `Inert` como `pane.view`, que es lo mismo que hacen —abrir para LEER—, y
-    // sin cuenta por el mismo motivo que el zoom: el peldaño ya es la unidad y
-    // pulsar tres veces se ve mientras ocurre.
+    // The listing's SIBLINGS: moving to the next photo without leaving the
+    // viewer. `Inert` like `pane.view`, which does the same thing — open to
+    // READ — and no count for the same reason as the zoom: the step is
+    // already the unit and pressing it three times is seen as it happens.
     live("viewer.next", false, Inert),
     live("viewer.prev", false, Inert),
     // --- dialog ---
@@ -470,7 +480,7 @@ pub const CATALOGUE: &[CommandDef] = &[
     // The two ends. Same count rule as the movers above: no overlay repeats.
     live("dialog.top", false, Inert),
     live("dialog.bottom", false, Inert),
-    // Saltar de sección en una página de texto (la ayuda).
+    // Jumping between sections in a text page (help).
     live("dialog.section-prev", false, Inert),
     live("dialog.section-next", false, Inert),
     live("dialog.add", false, Inert),
@@ -483,8 +493,9 @@ pub const CATALOGUE: &[CommandDef] = &[
     live("dialog.pane", false, Inert),
     live("dialog.back", false, Inert),
     live("dialog.filter", false, Inert),
-    // Las listas de historia (spec 2026-09-15 D2): abrir lo elegido en el
-    // OTRO panel sin mover el foco, y vaciar la lista entera.
+    // The history lists (spec 2026-09-15 D2): opening what is chosen in
+    // the OTHER pane without moving the focus, and clearing the whole
+    // list.
     live("dialog.confirm-other", false, Inert),
     live("dialog.clear", false, Inert),
     // --- planned: named by a preset, not built yet ---
@@ -502,17 +513,18 @@ pub const CATALOGUE: &[CommandDef] = &[
     // seven families remain. Each is one capability and one issue;
     // `planned()` forces `counts: false`, which is right for all of them —
     // none is a clamped in-memory mover (ADR 0044).
-    // #132: los cinco, construidos. Ninguno escribe DENTRO de un contenedor
-    // —el provider de archivos sigue read-only, ADR 0018—: empaquetar, partir
-    // y juntar fabrican ficheros nuevos, comprobar solo lee, y desempaquetar
-    // es la copia de siempre desde el interior del archivo.
+    // #132: the five, built. None writes INSIDE a container — the archive
+    // provider is still read-only, ADR 0018 — packing, splitting and
+    // combining make new files, checking only reads, and unpacking is the
+    // usual copy from inside the archive.
     live("pane.pack", false, Writes),
     live("pane.unpack", false, Writes),
     live("pane.test-archive", false, Inert),
     live("pane.split-file", false, Writes),
     live("pane.combine-files", false, Writes),
-    // #133: norte no trae editor —lo suyo es el gestor— y F4 abre el TUYO,
-    // que es lo que hacen los cuatro presets al atarlo.
+    // #133: norte does not bring an editor — its business is the file
+    // manager — and F4 opens YOURS, which is what the four presets do when
+    // binding it.
     live("pane.edit", false, Launches),
     live("pane.edit-new", false, Writes),
     // #134's second half (`pane.sync-dirs`) left this block and is `live`
@@ -522,29 +534,32 @@ pub const CATALOGUE: &[CommandDef] = &[
     // The three of issue #135 left this block in S4 and are `live` above; the
     // family's reason id (`keymap-reason-shell`) went with them, out of both
     // locales, because nothing else claimed it.
-    // #136: el árbol de directorios, acoplado a la izquierda del listado.
+    // #136: the directory tree, docked to the left of the listing.
     live("pane.tree", false, Inert),
-    // Orden por tecla (#138). `sort-menu` no abre un menú propio: abre el
-    // diálogo de columnas, que es donde vive el orden desde #108 —tiene la
-    // columna, la dirección y `dirs_first` en un sitio— y así no hay dos
-    // pantallas que digan lo mismo con distinta letra.
+    // Sort by key (#138). `sort-menu` does not open its own menu: it opens
+    // the columns dialog, which is where the sort has lived since #108 —
+    // it has the column, the direction and `dirs_first` in one place — so
+    // there are not two screens saying the same thing with a different
+    // letter.
     live("pane.sort-name", false, Inert),
     live("pane.sort-ext", false, Inert),
     live("pane.sort-size", false, Inert),
     live("pane.sort-time", false, Inert),
     live("pane.sort-menu", false, Inert),
-    // #139: las propiedades salen del listado; el tamaño de una carpeta se
-    // CUENTA, y por eso es una Task cancelable y no un campo del diálogo.
+    // #139: properties come out of the listing; a folder's size is
+    // COUNTED, and that is why it is a cancelable Task and not a field of
+    // the dialog.
     live("pane.properties", false, Inert),
-    // #314: la única categoría en la que los tres gestores de referencia TOCAN
-    // y norte solo miraba. Es una mutación entera —journal con reversa,
-    // política— y por eso vive aquí y no dentro del cuadro de propiedades.
+    // #314: the one category where the three reference managers TOUCH and
+    // norte only looked. It is a whole mutation — journal with a reversal,
+    // policy — and that is why it lives here and not inside the properties
+    // dialog.
     live("pane.chmod", false, Writes),
     live("pane.dir-size", false, Inert),
     live("pane.checksum", false, ReadsContent),
     live("pane.checksum-verify", false, ReadsContent),
-    // #140: abrir es elegir de `connections.toml`; desconectar SUELTA la
-    // sesión de verdad, no solo se va del panel.
+    // #140: opening is picking from `connections.toml`; disconnecting
+    // actually DROPS the session, not just leaves the pane.
     live("pane.connect", false, Inert),
     live("pane.disconnect", false, Inert),
 ];
@@ -557,13 +572,13 @@ pub const CATALOGUE: &[CommandDef] = &[
 ///
 /// assert_eq!(lookup("cursor.down").map(|d| d.counts), Some(true));
 /// assert_eq!(lookup("app.quit").map(|d| d.counts), Some(false));
-/// // #132 construyó el último `Planned` del vocabulario: hoy no queda
-/// // ninguno, y `pane.pack` es `Live` como todo lo demás que un preset ata.
+/// // #132 built the vocabulary's last `Planned` entry: today none is left,
+/// // and `pane.pack` is `Live` like everything else a preset binds.
 /// assert_eq!(lookup("pane.pack").map(|d| d.status), Some(Status::Live));
 /// assert_eq!(lookup("pane.select-drive").map(|d| d.status), Some(Status::Live));
 /// assert_eq!(lookup("pane.compare-dirs").map(|d| d.status), Some(Status::Live));
 /// assert_eq!(lookup("pane.sync-dirs").map(|d| d.status), Some(Status::Live));
-/// assert!(lookup("pane.no-existe-jamas").is_none());
+/// assert!(lookup("pane.no-exists-jamas").is_none());
 /// ```
 #[must_use]
 pub fn lookup(name: &str) -> Option<&'static CommandDef> {
@@ -586,22 +601,22 @@ mod tests {
     /// A duplicated name would make `lookup` order-dependent, and the table is
     /// hand-maintained: pin it.
     #[test]
-    fn no_hay_nombres_duplicados() {
+    fn no_hay_names_duplicates() {
         let mut names: Vec<&str> = CATALOGUE.iter().map(|d| d.name).collect();
         names.sort_unstable();
         let before = names.len();
         names.dedup();
-        assert_eq!(before, names.len(), "nombre duplicado en CATALOGUE");
+        assert_eq!(before, names.len(), "duplicated name in CATALOGUE");
     }
 
     /// A `Planned` entry with an empty reason or a zero issue is a promise
     /// nobody can chase — the exact failure this state exists to prevent.
     #[test]
-    fn todo_planned_tiene_motivo_e_issue() {
+    fn every_planned_one_has_a_reason_and_an_issue() {
         for d in CATALOGUE {
             if let Status::Planned { reason, issue } = d.status {
-                assert!(!reason.is_empty(), "{} sin motivo", d.name);
-                assert!(issue > 0, "{} sin issue", d.name);
+                assert!(!reason.is_empty(), "{} has no reason", d.name);
+                assert!(issue > 0, "{} has no issue", d.name);
             }
         }
     }
@@ -610,12 +625,12 @@ mod tests {
     /// key would then explain itself with `keymap-reason-...`, which is worse
     /// than saying nothing. Pin both locales.
     #[test]
-    fn todo_motivo_planned_esta_traducido_en_ambos_locales() {
+    fn every_planned_reason_is_translated_in_both_locales() {
         for d in CATALOGUE {
             if let Status::Planned { reason, .. } = d.status {
                 for lang in [norte_i18n::Lang::En, norte_i18n::Lang::Es] {
                     let s = norte_i18n::t_in(lang, reason);
-                    assert_ne!(s, reason, "{} sin traducir en {lang:?}", d.name);
+                    assert_ne!(s, reason, "{} not translated in {lang:?}", d.name);
                 }
             }
         }
@@ -635,38 +650,38 @@ mod tests {
     /// (a failed or cancelled step is put BACK on the trail, so without that
     /// the next turn would re-issue the identical listing).
     #[test]
-    fn el_conjunto_con_contador_es_exactamente_este() {
-        let mut con_contador: Vec<&str> = CATALOGUE
+    fn the_set_with_a_counter_is_exactly_this() {
+        let mut with_count: Vec<&str> = CATALOGUE
             .iter()
             .filter(|d| d.counts)
             .map(|d| d.name)
             .collect();
-        con_contador.sort_unstable();
+        with_count.sort_unstable();
         assert_eq!(
-            con_contador,
+            with_count,
             [
                 "cursor.down",
                 "cursor.page-down",
                 "cursor.page-up",
                 "cursor.up",
-                // Un contador REPITE el despacho (ADR 0044), así que «3
-                // agrandar» agranda tres veces. Es la misma lectura que
-                // `cursor.down`, no una excepción.
+                // A count REPEATS the dispatch (ADR 0044), so "3 grow" grows
+                // three times. The same reading as `cursor.down`, not an
+                // exception.
                 "layout.grow",
                 "layout.shrink",
                 "nav.back",
                 "nav.forward",
                 "viewer.down",
-                // Los dos del eje horizontal, por lo mismo que sus gemelas
-                // verticales: acotados a la línea más larga, en memoria, sin
-                // task ni pantalla nueva.
+                // The two of the horizontal axis, for the same reason as
+                // their vertical twins: clamped to the longest line, in
+                // memory, with no task or new screen.
                 "viewer.left",
                 "viewer.page-down",
                 "viewer.page-up",
                 "viewer.right",
                 "viewer.up",
             ],
-            "un comando ganó o perdió `counts`: ver ADR 0044 antes de tocar esta lista"
+            "a command gained or lost `counts`: see ADR 0044 before touching this list"
         );
     }
 
@@ -675,18 +690,18 @@ mod tests {
     /// hand: a family whose issue number drifts on one line would send a user
     /// to the wrong tracker and nothing else would notice.
     #[test]
-    fn cada_motivo_apunta_a_un_solo_issue() {
-        let mut vistos: Vec<(&str, u32)> = Vec::new();
+    fn each_reason_points_to_a_single_issue() {
+        let mut seen: Vec<(&str, u32)> = Vec::new();
         for d in CATALOGUE {
             if let Status::Planned { reason, issue } = d.status {
-                if let Some(&(_, otro)) = vistos.iter().find(|(r, _)| *r == reason) {
+                if let Some(&(_, other)) = seen.iter().find(|(r, _)| *r == reason) {
                     assert_eq!(
-                        otro, issue,
-                        "{reason} apunta a #{otro} y a #{issue} ({})",
+                        other, issue,
+                        "{reason} points to #{other} and to #{issue} ({})",
                         d.name
                     );
                 } else {
-                    vistos.push((reason, issue));
+                    seen.push((reason, issue));
                 }
             }
         }
@@ -698,22 +713,22 @@ mod tests {
     /// test, so the argument is made in review: a mutating command classed
     /// `Inert` is one a read-only window would run.
     #[test]
-    fn el_conjunto_que_no_es_inerte_es_exactamente_este() {
+    fn the_set_that_is_not_inert_is_exactly_this() {
         use super::Effect::{Destroys, Launches, ReadsContent, SendsOut, Writes};
-        let mut actuan: Vec<(&str, super::Effect)> = CATALOGUE
+        let mut acting: Vec<(&str, super::Effect)> = CATALOGUE
             .iter()
             .filter(|d| !d.effect.is_inert())
             .map(|d| (d.name, d.effect))
             .collect();
-        actuan.sort_unstable_by_key(|(n, _)| *n);
+        acting.sort_unstable_by_key(|(n, _)| *n);
         assert_eq!(
-            actuan,
+            acting,
             [
                 ("app.handoff", Launches),
                 ("app.terminal", Launches),
                 ("app.toggle-panels", Launches),
-                // Abre un shell dentro de un panel: lo mismo que `app.terminal`
-                // en otra forma, y por tanto el mismo efecto.
+                // Opens a shell inside a panel: the same as `app.terminal`
+                // in another form, and therefore the same effect.
                 ("layout.terminal", Launches),
                 ("pane.ai-rename", SendsOut),
                 ("pane.checksum", ReadsContent),
@@ -739,12 +754,12 @@ mod tests {
                 ("pane.sync-dirs", Writes),
                 ("pane.unpack", Writes),
             ],
-            "un comando cambió de efecto: ver ADR 0126 antes de tocar esta lista"
+            "a command changed effect: see ADR 0126 before touching this list"
         );
     }
 
     #[test]
-    fn lookup_encuentra_y_falla_bien() {
+    fn lookup_finds_and_fails_correctly() {
         assert!(lookup("pane.copy").is_some());
         assert!(lookup("pane.no-existe-jamas").is_none());
     }

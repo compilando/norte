@@ -1,8 +1,8 @@
-//! Proveedor Ollama (ADR 0031): chat por `/api/chat` (NDJSON streaming) y
-//! embeddings por `/api/embed`. Local: sin credenciales (no recibe secreto) y
-//! `is_local()` = `true` — v1 confía en que el host configurado es local
-//! (apuntarlo a un host no-loopback es decisión del operador; el gate
-//! `local_only` del core es la barrera real).
+//! Ollama provider (ADR 0031): chat over `/api/chat` (NDJSON streaming) and
+//! embeddings over `/api/embed`. Local: no credentials (receives no secret)
+//! and `is_local()` = `true` — v1 trusts that the configured host is local
+//! (pointing it at a non-loopback host is the operator's decision; the
+//! core's `local_only` gate is the real barrier).
 
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -10,15 +10,15 @@ use serde_json::{Value, json};
 use crate::http::{self, WireEvent};
 use crate::provider::{AiCaps, AiError, AiProvider, ChatRequest, ChatRole, ChatStream, ModelInfo};
 
-/// URL base por defecto del daemon local de Ollama.
+/// Default base URL of the local Ollama daemon.
 const DEFAULT_BASE_URL: &str = "http://127.0.0.1:11434";
 
-/// Cliente de un daemon Ollama local (`/api/chat` NDJSON, `/api/embed`).
+/// Client for a local Ollama daemon (`/api/chat` NDJSON, `/api/embed`).
 ///
 /// - `capabilities()` = `STREAMING | EMBEDDINGS`.
-/// - `is_local()` = `true`: el modo `local_only` del core lo deja pasar.
+/// - `is_local()` = `true`: the core's `local_only` mode lets it through.
 ///
-/// # Ejemplos
+/// # Examples
 /// ```
 /// use norte_ai::AiProvider as _;
 /// use norte_ai::ollama::OllamaProvider;
@@ -32,17 +32,18 @@ pub struct OllamaProvider {
     base_url: String,
     model: String,
     client: reqwest::Client,
-    /// `true` solo si el `base_url` apunta a loopback (`127.0.0.0/8`, `::1`,
-    /// `localhost`). Un host remoto configurado como ollama NO es local — el
-    /// gate `local_only` del core lo rechaza (security MAJOR del review #M4:
-    /// `is_local()` incondicional dejaba exfiltrar nombres a un host remoto).
+    /// `true` only if `base_url` points to loopback (`127.0.0.0/8`, `::1`,
+    /// `localhost`). A remote host configured as ollama is NOT local — the
+    /// core's `local_only` gate rejects it (security MAJOR from review #M4:
+    /// an unconditional `is_local()` let names be exfiltrated to a remote
+    /// host).
     local: bool,
 }
 
 impl OllamaProvider {
-    /// Construye el proveedor. `base_url` `None` = el daemon local por
-    /// defecto (`http://127.0.0.1:11434`). Sin secreto: Ollama es local. El
-    /// flag `is_local` se DERIVA del host del `base_url` (solo loopback).
+    /// Builds the provider. `base_url` `None` = the default local daemon
+    /// (`http://127.0.0.1:11434`). No secret: Ollama is local. The
+    /// `is_local` flag is DERIVED from `base_url`'s host (loopback only).
     #[must_use]
     pub fn new(base_url: Option<String>, model: String) -> Self {
         let base_url = base_url
@@ -53,16 +54,16 @@ impl OllamaProvider {
         Self {
             base_url,
             model,
-            // Client::new() solo panica si la pila TLS no inicializa; con
-            // rustls compilado estático es un invariante del build.
+            // Client::new() only panics if the TLS stack fails to init; with
+            // rustls compiled statically that is a build invariant.
             client: reqwest::Client::new(),
             local,
         }
     }
 
-    /// Body de `/api/chat`: Ollama acepta el rol `system` inline, así que
-    /// `req.system` se antepone como primer mensaje `system`. `max_tokens`
-    /// se mapea a `options.num_predict` (el equivalente de Ollama).
+    /// `/api/chat` body: Ollama accepts an inline `system` role, so
+    /// `req.system` is prepended as the first `system` message.
+    /// `max_tokens` maps to `options.num_predict` (Ollama's equivalent).
     fn build_body(&self, req: &ChatRequest) -> Result<Value, AiError> {
         http::validate_turns(req)?;
         let mut messages = Vec::new();
@@ -89,10 +90,11 @@ impl OllamaProvider {
     }
 }
 
-/// `true` si el host del `base_url` es loopback (`127.0.0.0/8`, `::1`,
-/// `localhost`). Un `base_url` sin host parseable = NO local (fail-closed:
-/// ante la duda, el gate `local_only` lo rechaza). No hace resolución DNS —
-/// un nombre que no sea literalmente `localhost` se trata como remoto.
+/// `true` if `base_url`'s host is loopback (`127.0.0.0/8`, `::1`,
+/// `localhost`). A `base_url` with no parseable host = NOT local
+/// (fail-closed: when in doubt, the `local_only` gate rejects it). Does no
+/// DNS resolution — a name that is not literally `localhost` is treated as
+/// remote.
 fn base_url_is_loopback(base_url: &str) -> bool {
     let Ok(url) = reqwest::Url::parse(base_url) else {
         return false;
@@ -108,14 +110,14 @@ fn base_url_is_loopback(base_url: &str) -> bool {
     }
 }
 
-/// Interpreta UNA línea NDJSON de `/api/chat`: `.message.content` es un
-/// delta; `.done == true` termina; `.error` → [`AiError::Protocol`].
+/// Interprets ONE NDJSON line from `/api/chat`: `.message.content` is a
+/// delta; `.done == true` ends it; `.error` → [`AiError::Protocol`].
 fn parse_line(line: &str) -> Result<WireEvent, AiError> {
     if line.trim().is_empty() {
         return Ok(WireEvent::Skip);
     }
     let v: Value = serde_json::from_str(line)
-        .map_err(|e| AiError::Protocol(format!("línea NDJSON inválida: {e}")))?;
+        .map_err(|e| AiError::Protocol(format!("invalid NDJSON line: {e}")))?;
     if let Some(err) = v.get("error") {
         let msg = err
             .as_str()
@@ -131,7 +133,7 @@ fn parse_line(line: &str) -> Result<WireEvent, AiError> {
     }
 }
 
-/// Respuesta de `/api/embed` (Ollama moderno: campo `embeddings`).
+/// `/api/embed` response (modern Ollama: `embeddings` field).
 #[derive(serde::Deserialize)]
 struct EmbedResponse {
     embeddings: Vec<Vec<f32>>,
@@ -162,8 +164,8 @@ impl AiProvider for OllamaProvider {
             .await
             .map_err(|e| http::transport(&e))?;
         let resp = http::check_status(resp)?;
-        // El stream devuelto posee el body: dropearlo aborta la petición
-        // HTTP (regla 3, cancelación drop-based).
+        // The returned stream owns the body: dropping it aborts the HTTP
+        // request (rule 3, drop-based cancellation).
         Ok(http::delta_stream(resp, parse_line))
     }
 
@@ -180,12 +182,12 @@ impl AiProvider for OllamaProvider {
         let resp = http::check_status(resp)?;
         let raw = resp.bytes().await.map_err(|e| http::transport(&e))?;
         let parsed: EmbedResponse = serde_json::from_slice(&raw)
-            .map_err(|e| AiError::Protocol(format!("respuesta de /api/embed inválida: {e}")))?;
+            .map_err(|e| AiError::Protocol(format!("invalid /api/embed response: {e}")))?;
         Ok(parsed.embeddings)
     }
 
-    /// El modelo configurado, sin tocar la red (v1 no consulta `/api/tags`:
-    /// offline-testable, ADR 0031).
+    /// The configured model, without touching the network (v1 does not
+    /// query `/api/tags`: offline-testable, ADR 0031).
     async fn list_models(&self) -> Result<Vec<ModelInfo>, AiError> {
         Ok(vec![ModelInfo {
             id: self.model.clone(),
@@ -202,11 +204,11 @@ mod tests {
     use crate::http::testutil::{response, serve_once};
     use crate::provider::ChatMessage;
 
-    /// `chat()` debe fallar en el establecimiento (el `ChatStream` no es
-    /// `Debug`, así que `unwrap_err` no aplica).
+    /// `chat()` must fail at setup time (`ChatStream` is not `Debug`, so
+    /// `unwrap_err` does not apply).
     async fn chat_err(p: &OllamaProvider, req: ChatRequest) -> AiError {
         match p.chat(req).await {
-            Ok(_) => panic!("esperaba un error de establecimiento"),
+            Ok(_) => panic!("expected a setup error"),
             Err(e) => e,
         }
     }
@@ -215,44 +217,45 @@ mod tests {
         OllamaProvider::new(Some(base_url.to_string()), "llama-test".to_string())
     }
 
-    /// NDJSON feliz: los `.message.content` se concatenan, `done: true` para
-    /// el stream y las líneas posteriores se ignoran.
+    /// Happy NDJSON: the `.message.content`s concatenate, `done: true` ends
+    /// the stream and later lines are ignored.
     #[tokio::test]
-    async fn chat_concatena_y_done_para() {
+    async fn chat_concatenates_and_done_ends_it() {
         let body = [
-            r#"{"model":"llama-test","message":{"role":"assistant","content":"Ho"},"done":false}"#,
-            r#"{"model":"llama-test","message":{"role":"assistant","content":"la"},"done":false}"#,
+            r#"{"model":"llama-test","message":{"role":"assistant","content":"He"},"done":false}"#,
+            r#"{"model":"llama-test","message":{"role":"assistant","content":"llo"},"done":false}"#,
             r#"{"model":"llama-test","message":{"role":"assistant","content":""},"done":true}"#,
-            r#"{"message":{"content":"IGNORADO"},"done":false}"#,
+            r#"{"message":{"content":"IGNORED"},"done":false}"#,
             "",
         ]
         .join("\n");
         let srv = serve_once(response(200, "OK", &[], &body)).await;
         let p = provider(&srv.base_url);
-        let mut req = ChatRequest::new(vec![ChatMessage::user("hola")]);
-        req.system = Some("tono seco".to_string());
+        let mut req = ChatRequest::new(vec![ChatMessage::user("hello")]);
+        req.system = Some("dry tone".to_string());
         let stream = p.chat(req).await.unwrap();
         let parts: Vec<String> = stream.map(Result::unwrap).collect().await;
-        assert_eq!(parts.concat(), "Hola");
+        assert_eq!(parts.concat(), "Hello");
 
         let raw = srv.request().await;
         assert!(raw.contains("POST /api/chat"), "{raw}");
-        // El system va inline como primer mensaje con rol `system`.
+        // system goes inline as the first message with role `system`.
         assert!(
-            raw.contains(r#"{"content":"tono seco","role":"system"}"#),
+            raw.contains(r#"{"content":"dry tone","role":"system"}"#),
             "{raw}"
         );
     }
 
-    /// **Ollama no promete salida estructurada y no la manda** (ADR 0088).
+    /// **Ollama does not promise structured output and does not send it**
+    /// (ADR 0088).
     ///
-    /// Es el camino de FALLBACK, y hasta ahora se daba por supuesto. Que un
-    /// contrato en la petición no cambie ni el cuerpo ni la capability es lo
-    /// que sostiene que activar la salida tipada en otros proveedores no
-    /// rompiera a éste: aquí se sigue contestando a lo que pide el prompt, y
-    /// el core acepta esa forma.
+    /// This is the FALLBACK path, and until now it was taken for granted.
+    /// That a contract in the request changes neither the body nor the
+    /// capability is what backs enabling typed output in other providers
+    /// without breaking this one: here it keeps answering whatever the
+    /// prompt asks for, and the core accepts that shape.
     #[tokio::test]
-    async fn un_contrato_no_cambia_ni_el_cuerpo_ni_la_capability() {
+    async fn a_contract_changes_neither_the_body_nor_the_capability() {
         let body = [
             r#"{"model":"llama-test","message":{"role":"assistant","content":"[]"},"done":true}"#,
             "",
@@ -262,9 +265,9 @@ mod tests {
         let p = provider(&srv.base_url);
         assert!(
             !p.capabilities().contains(AiCaps::JSON_OUTPUT),
-            "no se promete lo que no se atiende"
+            "nothing is promised that is not honored"
         );
-        let mut req = ChatRequest::new(vec![ChatMessage::user("hola")]);
+        let mut req = ChatRequest::new(vec![ChatMessage::user("hello")]);
         req.json_schema = Some(crate::provider::JsonContract::new(
             "norte_rename_plan",
             json!({"type": "object"}),
@@ -278,9 +281,9 @@ mod tests {
         assert!(!raw.contains("output_config"), "{raw}");
     }
 
-    /// El campo `.error` del daemon sale como `Err(Protocol)` con el mensaje.
+    /// The daemon's `.error` field comes out as `Err(Protocol)` with the message.
     #[tokio::test]
-    async fn error_del_daemon_es_protocol() {
+    async fn a_daemon_error_is_protocol() {
         let body = "{\"error\":\"model 'nope' not found\"}\n";
         let srv = serve_once(response(200, "OK", &[], body)).await;
         let p = provider(&srv.base_url);
@@ -296,9 +299,9 @@ mod tests {
         assert!(stream.next().await.is_none());
     }
 
-    /// Una línea NDJSON rota (cola truncada sin `\n`) es `Protocol`.
+    /// A broken NDJSON line (a tail truncated with no `\n`) is `Protocol`.
     #[tokio::test]
-    async fn ndjson_truncado_es_protocol() {
+    async fn truncated_ndjson_is_protocol() {
         let body = "{\"message\":{\"content\":\"a\"},\"done\":false}\n{\"mess";
         let srv = serve_once(response(200, "OK", &[], body)).await;
         let p = provider(&srv.base_url);
@@ -311,37 +314,37 @@ mod tests {
         assert!(matches!(err, AiError::Protocol(_)), "{err:?}");
     }
 
-    /// `/api/embed`: devuelve los vectores en orden.
+    /// `/api/embed`: returns the vectors in order.
     #[tokio::test]
-    async fn embed_devuelve_vectores() {
+    async fn embed_returns_vectors() {
         let body = r#"{"model":"llama-test","embeddings":[[1.0,2.0],[3.5]]}"#;
         let srv = serve_once(response(200, "OK", &[], body)).await;
         let p = provider(&srv.base_url);
         let vecs = p
-            .embed(&["uno".to_string(), "dos".to_string()])
+            .embed(&["one".to_string(), "two".to_string()])
             .await
             .unwrap();
         assert_eq!(vecs, vec![vec![1.0, 2.0], vec![3.5]]);
 
         let raw = srv.request().await;
         assert!(raw.contains("POST /api/embed"), "{raw}");
-        assert!(raw.contains(r#""input":["uno","dos"]"#), "{raw}");
+        assert!(raw.contains(r#""input":["one","two"]"#), "{raw}");
     }
 
-    /// Un status no-2xx del daemon se mapea a `Http` con el código.
+    /// A non-2xx status from the daemon maps to `Http` with the code.
     #[tokio::test]
-    async fn status_500_es_http() {
+    async fn status_500_is_http() {
         let srv = serve_once(response(500, "Internal Server Error", &[], "")).await;
         let p = provider(&srv.base_url);
         let err = chat_err(&p, ChatRequest::new(vec![ChatMessage::user("x")])).await;
         assert!(matches!(err, AiError::Http { status: 500 }), "{err:?}");
     }
 
-    /// security MAJOR #M4: `is_local()` es `true` SOLO para loopback. Un host
-    /// remoto configurado como ollama NO es local → el gate `local_only` del
-    /// core lo rechaza.
+    /// security MAJOR #M4: `is_local()` is `true` ONLY for loopback. A
+    /// remote host configured as ollama is NOT local → the core's
+    /// `local_only` gate rejects it.
     #[test]
-    fn is_local_solo_loopback() {
+    fn is_local_only_loopback() {
         let loc = |u: &str| OllamaProvider::new(Some(u.into()), "m".into()).is_local();
         assert!(loc("http://127.0.0.1:11434"));
         assert!(loc("http://localhost:11434"));
@@ -350,7 +353,7 @@ mod tests {
         assert!(!loc("http://attacker.example:11434"));
         assert!(!loc("http://10.0.0.9:11434"));
         assert!(!loc("http://192.168.1.5:11434"));
-        // Default (None) es loopback.
+        // Default (None) is loopback.
         assert!(OllamaProvider::new(None, "m".into()).is_local());
     }
 }

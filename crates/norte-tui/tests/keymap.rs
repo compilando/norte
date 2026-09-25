@@ -1,10 +1,10 @@
-//! Tests de integración del keymap de la TUI (ADR 0006): parseo, fusión
-//! Yazi, prefix-free al cargar y resolución determinista por trie. Ejercen
-//! el motor COMPARTIDO de [`norte_frontend::keymap`] A TRAVÉS del re-export
-//! de `norte_tui::keymap` (GUI-c T2) — no una copia local: si la extracción
-//! rompiera algo, estos tests lo cazarían igual que antes.
+//! TUI keymap integration tests (ADR 0006): parsing, Yazi merging,
+//! prefix-free on load, and deterministic trie resolution. They exercise
+//! [`norte_frontend::keymap`]'s SHARED engine THROUGH `norte_tui::keymap`'s
+//! re-export (GUI-c T2) — not a local copy: if the extraction broke
+//! something, these tests would catch it just the same.
 
-use norte_tui::keymap::{COMMANDS as COMANDOS, KeyCode};
+use norte_tui::keymap::{COMMANDS, KeyCode};
 use norte_tui::keymap::{
     Chord, Count, Effective, KeymapError, Mods, Resolution, Resolver, Screen, parse_chord,
     parse_keymap,
@@ -13,8 +13,8 @@ use norte_tui::keymap::{
 fn eff(preset: &str, user: Option<&str>) -> Result<Effective, KeymapError> {
     let preset = parse_keymap(preset)?;
     let user = user.map(parse_keymap).transpose()?;
-    // El conjunto REAL de la TUI, que lleva `LUA_HOST` (ADR 0110): con
-    // `COMMANDS` a secas un `lua:` se diría no disponible aquí.
+    // The TUI's REAL set, which carries `LUA_HOST` (ADR 0110): with plain
+    // `COMMANDS` a `lua:` would be said to be unavailable here.
     Effective::build(
         &preset,
         user.as_ref(),
@@ -48,7 +48,7 @@ fn parse_de_chords() {
             KeyCode::Enter
         )
     );
-    // Mayúscula: el char YA codifica shift.
+    // Uppercase: the char ALREADY encodes shift.
     assert_eq!(
         parse_chord("G").unwrap(),
         Chord::new(Mods::default(), KeyCode::Char('G'))
@@ -64,18 +64,18 @@ fn parse_de_chords() {
         )
     );
     for s in ["", "ctrl+", "megatecla", "ctrl+ctrl+c", "f99"] {
-        assert!(parse_chord(s).is_err(), "{s:?} debe fallar");
+        assert!(parse_chord(s).is_err(), "{s:?} must fail");
     }
 }
 
-/// El chord canónico ([`Chord::new`], re-exportado desde
-/// `norte_frontend::keymap`) descarta `shift` en teclas `Char` — el
-/// carácter YA lo codifica (`'G'` vs `'g'`) — pero lo conserva en el resto
-/// (p. ej. `shift+f5`). Este era el comportamiento de `Chord::from_event`
-/// (crossterm) antes de GUI-c T2; ahora vive en el propio `Chord::new`
-/// neutro y el adaptador `chord_from_crossterm` lo hereda gratis.
+/// The canonical chord ([`Chord::new`], re-exported from
+/// `norte_frontend::keymap`) discards `shift` on `Char` keys — the
+/// character ALREADY encodes it (`'G'` vs `'g'`) — but keeps it on the rest
+/// (e.g. `shift+f5`). This used to be `Chord::from_event`'s (crossterm)
+/// behavior before GUI-c T2; now it lives in `Chord::new` itself, neutral,
+/// and the `chord_from_crossterm` adapter inherits it for free.
 #[test]
-fn chord_new_normaliza_shift_en_chars_pero_no_en_otras_teclas() {
+fn chord_new_normalizes_shift_in_chars_but_not_in_other_keys() {
     let c = Chord::new(
         Mods {
             shift: true,
@@ -84,7 +84,7 @@ fn chord_new_normaliza_shift_en_chars_pero_no_en_otras_teclas() {
         KeyCode::Char('G'),
     );
     assert_eq!(c, Chord::new(Mods::default(), KeyCode::Char('G')));
-    // En teclas no-char, shift ES información.
+    // On non-char keys, shift IS information.
     let f = Chord::new(
         Mods {
             shift: true,
@@ -105,7 +105,7 @@ fn chord_new_normaliza_shift_en_chars_pero_no_en_otras_teclas() {
 }
 
 #[test]
-fn resuelve_secuencias_multi_tecla() {
+fn resolves_multi_key_sequences() {
     let preset = r#"
         [pane]
         keymap = [
@@ -120,7 +120,7 @@ fn resuelve_secuencias_multi_tecla() {
     assert_eq!(
         r.push(parse_chord("g").unwrap()),
         Resolution::Pending(1),
-        "prefijo válido: espera"
+        "valid prefix: waits"
     );
     assert_eq!(
         r.push(parse_chord("g").unwrap()),
@@ -129,7 +129,7 @@ fn resuelve_secuencias_multi_tecla() {
             count: Count::None
         }
     );
-    // Tras ejecutar, el estado queda limpio.
+    // After running, the state is left clean.
     assert_eq!(
         r.push(parse_chord("G").unwrap()),
         Resolution::Run {
@@ -137,12 +137,12 @@ fn resuelve_secuencias_multi_tecla() {
             count: Count::None
         }
     );
-    // Tecla sin binding: reset silencioso.
+    // Key with no binding: silent reset.
     assert_eq!(r.push(parse_chord("z").unwrap()), Resolution::Reset);
-    // Prefijo pendiente + tecla que no continúa: reset (no ejecuta nada).
+    // Pending prefix + a key that does not continue it: reset (runs nothing).
     r.push(parse_chord("g").unwrap());
     assert_eq!(r.push(parse_chord("q").unwrap()), Resolution::Reset);
-    // q suelto (contexto global) sí corre.
+    // q on its own (global context) does run.
     assert_eq!(
         r.push(parse_chord("q").unwrap()),
         Resolution::Run {
@@ -153,7 +153,7 @@ fn resuelve_secuencias_multi_tecla() {
 }
 
 #[test]
-fn esc_cancela_la_secuencia_pendiente() {
+fn esc_cancels_the_pending_sequence() {
     let preset = r#"
         [pane]
         keymap = [
@@ -164,9 +164,9 @@ fn esc_cancela_la_secuencia_pendiente() {
     let eff = eff(preset, None).unwrap();
     let mut r = Resolver::new(eff.clone());
     r.push(parse_chord("g").unwrap());
-    // Con secuencia pendiente, Esc SIEMPRE cancela (jamás ejecuta binding).
+    // With a pending sequence, Esc ALWAYS cancels (never runs a binding).
     assert_eq!(r.push(parse_chord("esc").unwrap()), Resolution::Reset);
-    // Sin pendiente, Esc es una tecla más.
+    // With nothing pending, Esc is just another key.
     assert_eq!(
         r.push(parse_chord("esc").unwrap()),
         Resolution::Run {
@@ -177,7 +177,7 @@ fn esc_cancela_la_secuencia_pendiente() {
 }
 
 #[test]
-fn prefijo_ambiguo_es_error_de_carga() {
+fn ambiguous_prefix_is_a_load_error() {
     let preset = r#"
         [pane]
         keymap = [
@@ -187,26 +187,26 @@ fn prefijo_ambiguo_es_error_de_carga() {
     "#;
     match eff(preset, None) {
         Err(KeymapError::AmbiguousPrefix { .. }) => {}
-        other => panic!("esperaba AmbiguousPrefix, fue {other:?}"),
+        other => panic!("expected AmbiguousPrefix, got {other:?}"),
     }
 }
 
 #[test]
-fn shift_con_char_es_error_diagnosticable() {
-    // Un binding "shift+g" jamás matchearía (el evento canónico descarta
-    // shift en chars): rechazo al parsear, no binding muerto.
+fn shift_with_char_is_a_diagnosable_error() {
+    // A "shift+g" binding would never match (the canonical event discards
+    // shift on chars): a rejection on parse, not a dead binding.
     match parse_chord("shift+g") {
         Err(KeymapError::ShiftWithChar { .. }) => {}
-        other => panic!("esperaba ShiftWithChar, fue {other:?}"),
+        other => panic!("expected ShiftWithChar, got {other:?}"),
     }
     assert!(parse_chord("ctrl+shift+c").is_err());
-    // En teclas no-char, shift es legítimo.
+    // On non-char keys, shift is legitimate.
     assert!(parse_chord("shift+f5").is_ok());
 }
 
 #[test]
-fn lista_equivocada_en_una_capa_es_error() {
-    // Usuario con `keymap` (en vez de prepend/append): error, no silencio.
+fn wrong_list_in_a_layer_is_an_error() {
+    // User with `keymap` (instead of prepend/append): an error, not silence.
     let preset = r#"
         [pane]
         keymap = [{ on = ["j"], run = "cursor.down" }]
@@ -219,9 +219,9 @@ fn lista_equivocada_en_una_capa_es_error() {
         Err(KeymapError::WrongLayerKey {
             layer: "usuario", ..
         }) => {}
-        other => panic!("esperaba WrongLayerKey usuario, fue {other:?}"),
+        other => panic!("expected WrongLayerKey usuario, got {other:?}"),
     }
-    // Preset con prepend: mismo trato.
+    // Preset with prepend: same treatment.
     let preset_malo = r#"
         [pane]
         prepend_keymap = [{ on = ["j"], run = "cursor.down" }]
@@ -230,15 +230,15 @@ fn lista_equivocada_en_una_capa_es_error() {
         Err(KeymapError::WrongLayerKey {
             layer: "preset", ..
         }) => {}
-        other => panic!("esperaba WrongLayerKey preset, fue {other:?}"),
+        other => panic!("expected WrongLayerKey preset, got {other:?}"),
     }
 }
 
 #[test]
-fn la_especificidad_de_contexto_prevalece_sobre_la_capa() {
-    // ADR 0006 (desambiguado en fase 4): las capas se fusionan POR
-    // contexto; entre contextos gana el específico. Un append de usuario
-    // en [pane] pisa al keymap [global] del preset…
+fn context_specificity_prevails_over_the_layer() {
+    // ADR 0006 (disambiguated in phase 4): layers merge PER context; among
+    // contexts the specific one wins. A user append in [pane] overrides the
+    // preset's [global] keymap…
     let preset = r#"
         [global]
         keymap = [{ on = ["q"], run = "app.quit" }]
@@ -259,67 +259,67 @@ fn la_especificidad_de_contexto_prevalece_sobre_la_capa() {
             command: "cursor.up".into(),
             count: Count::None
         },
-        "pane.append gana a global.keymap (especificidad > capa)"
+        "pane.append wins over global.keymap (specificity > layer)"
     );
-    // …y un prepend de usuario en [global] NO pisa al keymap [pane].
+    // …and a user prepend in [global] does NOT override [pane]'s keymap.
     assert_eq!(
         r.push(parse_chord("j").unwrap()),
         Resolution::Run {
             command: "cursor.down".into(),
             count: Count::None
         },
-        "global.prepend no pisa a pane.keymap"
+        "global.prepend does not override pane.keymap"
     );
 }
 
 #[test]
-fn esc_dentro_de_secuencia_es_error_de_carga() {
+fn esc_inside_sequence_is_a_load_error() {
     let preset = r#"
         [pane]
         keymap = [{ on = ["a", "esc"], run = "cursor.up" }]
     "#;
     match eff(preset, None) {
         Err(KeymapError::EscInSequence { .. }) => {}
-        other => panic!("esperaba EscInSequence, fue {other:?}"),
+        other => panic!("expected EscInSequence, got {other:?}"),
     }
 }
 
 #[test]
-fn comando_desconocido_es_error_de_carga() {
+fn unknown_command_is_a_load_error() {
     let preset = r#"
         [pane]
         keymap = [{ on = ["x"], run = "comando.inventado" }]
     "#;
     match eff(preset, None) {
         Err(KeymapError::UnknownCommand { .. }) => {}
-        other => panic!("esperaba UnknownCommand, fue {other:?}"),
+        other => panic!("expected UnknownCommand, got {other:?}"),
     }
 }
 
-/// M4 Lua (T8): un binding a `lua:<nombre>` pasa la validación aunque el
-/// nombre no esté en COMMANDS — el registro Lua es dinámico (runtime); un
-/// comando lua no registrado NO es error de keymap (al invocar, la barra
-/// avisa con `err-lua-unknown`). El NOMBRE sí se valida con el mismo charset
-/// que `norte.command` (`[a-z0-9._-]{1,64}`): un binding a un nombre que
-/// jamás podría registrarse es config rota diagnosticable, no un binding
-/// muerto en silencio.
+/// M4 Lua (T8): a binding to `lua:<name>` passes validation even if the
+/// name is not in COMMANDS — the Lua registry is dynamic (runtime); an
+/// unregistered lua command is NOT a keymap error (on invocation, the bar
+/// warns with `err-lua-unknown`). The NAME is validated with the same
+/// charset as `norte.command` (`[a-z0-9._-]{1,64}`): a binding to a name
+/// that could never register is diagnosable broken config, not a silently
+/// dead binding.
 #[test]
-fn lua_prefijado_pasa_la_validacion_de_comandos() {
+fn prefixed_lua_passes_command_validation() {
     let preset = r#"
         [pane]
         keymap = [{ on = ["x"], run = "lua:mi-comando.v2" }]
     "#;
-    let mut r = Resolver::new(eff(preset, None).expect("lua: con nombre válido pasa"));
+    let mut r = Resolver::new(eff(preset, None).expect("lua: with a valid name passes"));
     assert_eq!(
         r.push(parse_chord("x").unwrap()),
         Resolution::Run {
             command: "lua:mi-comando.v2".into(),
             count: Count::None
         },
-        "el binding resuelve al comando lua: completo"
+        "the binding resolves to the full lua: command"
     );
 
-    // Nombres fuera del charset [a-z0-9._-]{1,64}: error de CARGA.
+    // Names outside the [a-z0-9._-]{1,64} charset: a LOAD error.
     let long = format!("lua:{}", "a".repeat(65));
     for bad in ["lua:", "lua:Mayuscula", "lua:con espacio", long.as_str()] {
         let preset = format!(
@@ -330,13 +330,13 @@ fn lua_prefijado_pasa_la_validacion_de_comandos() {
         );
         match eff(&preset, None) {
             Err(KeymapError::UnknownCommand { .. }) => {}
-            other => panic!("esperaba UnknownCommand para {bad:?}, fue {other:?}"),
+            other => panic!("expected UnknownCommand for {bad:?}, got {other:?}"),
         }
     }
 }
 
 #[test]
-fn capas_yazi_prepend_pisa_y_append_solo_anade() {
+fn yazi_layers_prepend_overrides_and_append_only_adds() {
     let preset = r#"
         [pane]
         keymap = [
@@ -360,7 +360,7 @@ fn capas_yazi_prepend_pisa_y_append_solo_anade() {
             command: "cursor.top".into(),
             count: Count::None
         },
-        "prepend PISA al preset"
+        "prepend OVERRIDES the preset"
     );
     assert_eq!(
         r.push(parse_chord("k").unwrap()),
@@ -368,7 +368,7 @@ fn capas_yazi_prepend_pisa_y_append_solo_anade() {
             command: "cursor.up".into(),
             count: Count::None
         },
-        "append NO pisa una secuencia existente"
+        "append does NOT override an existing sequence"
     );
     assert_eq!(
         r.push(parse_chord("x").unwrap()),
@@ -376,12 +376,12 @@ fn capas_yazi_prepend_pisa_y_append_solo_anade() {
             command: "app.quit".into(),
             count: Count::None
         },
-        "append añade lo nuevo"
+        "append adds the new one"
     );
 }
 
 #[test]
-fn el_contexto_especifico_pisa_al_global_por_secuencia_exacta() {
+fn specific_context_overrides_global_by_exact_sequence() {
     let preset = r#"
         [global]
         keymap = [
@@ -410,64 +410,64 @@ fn el_contexto_especifico_pisa_al_global_por_secuencia_exacta() {
 }
 
 #[test]
-fn los_tres_presets_de_fabrica_cargan_y_cubren_lo_basico() {
-    for (nombre, preset) in norte_tui::keymap::presets() {
-        let eff = Effective::build(&preset, None, COMANDOS)
-            .unwrap_or_else(|e| panic!("preset {nombre}: {e:?}"));
+fn the_three_factory_presets_load_and_cover_the_basics() {
+    for (name, preset) in norte_tui::keymap::presets() {
+        let eff = Effective::build(&preset, None, COMMANDS)
+            .unwrap_or_else(|e| panic!("preset {name}: {e:?}"));
         let mut r = Resolver::new(eff.clone());
-        // Todo preset debe poder salir y cambiar de pane. `alt+f4` es el
-        // quit real de Total Commander (K2b): su F10 significa "activar/
-        // dejar el menú", no salir, así que NO lo comparte con q/f10/ctrl+q.
-        let quit_posible = ["q", "f10", "ctrl+q", "alt+f4"].iter().any(|k| {
+        // Every preset must be able to quit and switch pane. `alt+f4` is
+        // Total Commander's real quit (K2b): its F10 means "activate/leave
+        // the menu," not quit, so it does NOT share it with q/f10/ctrl+q.
+        let quit_possible = ["q", "f10", "ctrl+q", "alt+f4"].iter().any(|k| {
             let res = r.push(parse_chord(k).unwrap());
             res == Resolution::Run {
                 command: "app.quit".into(),
                 count: Count::None,
             }
         });
-        assert!(quit_posible, "preset {nombre}: sin salida");
+        assert!(quit_possible, "preset {name}: no way to quit");
         assert_eq!(
             r.push(parse_chord("tab").unwrap()),
             Resolution::Run {
                 command: "pane.switch".into(),
                 count: Count::None
             },
-            "preset {nombre}: Tab es sagrado (spec)"
+            "preset {name}: Tab is sacred (spec)"
         );
     }
 }
 
 #[test]
-fn los_presets_ligan_las_operaciones_de_archivo() {
-    for (nombre, preset) in norte_tui::keymap::presets() {
-        let eff = Effective::build(&preset, None, COMANDOS)
-            .unwrap_or_else(|e| panic!("preset {nombre}: {e:?}"));
+fn presets_bind_file_operations() {
+    for (name, preset) in norte_tui::keymap::presets() {
+        let eff = Effective::build(&preset, None, COMMANDS)
+            .unwrap_or_else(|e| panic!("preset {name}: {e:?}"));
         let mut r = Resolver::new(eff.clone());
-        for (tecla, cmd) in [
+        for (key, cmd) in [
             ("f5", "pane.copy"),
             ("f6", "pane.move"),
             ("f8", "pane.delete"),
         ] {
             assert_eq!(
-                r.push(parse_chord(tecla).unwrap()),
+                r.push(parse_chord(key).unwrap()),
                 Resolution::Run {
                     command: cmd.into(),
                     count: Count::None
                 },
-                "preset {nombre}: {tecla}"
+                "preset {name}: {key}"
             );
         }
     }
-    // `ctrl+k` → `task.cancel` es la convención PROPIA de norte (orthodox/
-    // vim/cua): ni Total Commander ni Krusader documentan una tecla de
-    // cancelar-tarea en sus fuentes (K2b rule 1), así que no se inventa una
-    // ahí — este segundo bucle se queda en los tres presets nativos.
-    for (nombre, preset) in norte_tui::keymap::presets()
+    // `ctrl+k` → `task.cancel` is norte's OWN convention (orthodox/vim/cua):
+    // neither Total Commander nor Krusader document a cancel-task key in
+    // their sources (K2b rule 1), so one is not invented there — this
+    // second loop stays within the three native presets.
+    for (name, preset) in norte_tui::keymap::presets()
         .into_iter()
         .filter(|(n, _)| matches!(*n, "orthodox" | "vim" | "cua"))
     {
-        let eff = Effective::build(&preset, None, COMANDOS)
-            .unwrap_or_else(|e| panic!("preset {nombre}: {e:?}"));
+        let eff = Effective::build(&preset, None, COMMANDS)
+            .unwrap_or_else(|e| panic!("preset {name}: {e:?}"));
         let mut r = Resolver::new(eff);
         assert_eq!(
             r.push(parse_chord("ctrl+k").unwrap()),
@@ -475,14 +475,14 @@ fn los_presets_ligan_las_operaciones_de_archivo() {
                 command: "task.cancel".into(),
                 count: Count::None
             },
-            "preset {nombre}: ctrl+k"
+            "preset {name}: ctrl+k"
         );
     }
 }
 
 #[test]
-fn capas_multiples_se_pliegan_por_precedencia() {
-    // ADR 0007: prepends de capas superiores primero; appends igual.
+fn multiple_layers_fold_by_precedence() {
+    // ADR 0007: higher layers' prepends first; appends the same.
     let preset = parse_keymap(
         r#"
         [pane]
@@ -490,7 +490,7 @@ fn capas_multiples_se_pliegan_por_precedencia() {
     "#,
     )
     .unwrap();
-    let sistema = parse_keymap(
+    let system = parse_keymap(
         r#"
         [pane]
         prepend_keymap = [{ on = ["j"], run = "cursor.up" }]
@@ -498,7 +498,7 @@ fn capas_multiples_se_pliegan_por_precedencia() {
     "#,
     )
     .unwrap();
-    let usuario = parse_keymap(
+    let user = parse_keymap(
         r#"
         [pane]
         prepend_keymap = [{ on = ["j"], run = "cursor.top" }]
@@ -507,7 +507,7 @@ fn capas_multiples_se_pliegan_por_precedencia() {
     )
     .unwrap();
     // Capas en precedencia ASCENDENTE: sistema, usuario.
-    let eff = Effective::build_layered(&preset, &[sistema, usuario], COMANDOS).unwrap();
+    let eff = Effective::build_layered(&preset, &[system, user], COMMANDS).unwrap();
     let mut r = Resolver::new(eff);
     assert_eq!(
         r.push(parse_chord("j").unwrap()),
@@ -515,7 +515,7 @@ fn capas_multiples_se_pliegan_por_precedencia() {
             command: "cursor.top".into(),
             count: Count::None
         },
-        "el prepend de la capa MÁS alta gana"
+        "the HIGHEST layer's prepend wins"
     );
     assert_eq!(
         r.push(parse_chord("x").unwrap()),
@@ -523,12 +523,12 @@ fn capas_multiples_se_pliegan_por_precedencia() {
             command: "cursor.bottom".into(),
             count: Count::None
         },
-        "entre appends también gana la capa más alta"
+        "among appends, the highest layer also wins"
     );
 }
 
 #[test]
-fn el_contexto_viewer_se_fusiona_para_su_pantalla() {
+fn the_viewer_context_merges_for_its_screen() {
     let preset = parse_keymap(
         r#"
         [global]
@@ -540,8 +540,8 @@ fn el_contexto_viewer_se_fusiona_para_su_pantalla() {
     "#,
     )
     .unwrap();
-    // En Browse, el q global manda y enter existe.
-    let browse = Effective::build_for(&preset, &[], COMANDOS, Screen::Browse).unwrap();
+    // In Browse, the global q rules and enter exists.
+    let browse = Effective::build_for(&preset, &[], COMMANDS, Screen::Browse).unwrap();
     let mut r = Resolver::new(browse);
     assert_eq!(
         r.push(parse_chord("q").unwrap()),
@@ -557,8 +557,8 @@ fn el_contexto_viewer_se_fusiona_para_su_pantalla() {
             count: Count::None
         }
     );
-    // En Viewer, su q específico PISA al global y enter NO existe.
-    let viewer = Effective::build_for(&preset, &[], COMANDOS, Screen::Viewer).unwrap();
+    // In Viewer, its specific q OVERRIDES global and enter does NOT exist.
+    let viewer = Effective::build_for(&preset, &[], COMMANDS, Screen::Viewer).unwrap();
     let mut r = Resolver::new(viewer);
     assert_eq!(
         r.push(parse_chord("q").unwrap()),
@@ -570,67 +570,68 @@ fn el_contexto_viewer_se_fusiona_para_su_pantalla() {
     assert_eq!(r.push(parse_chord("enter").unwrap()), Resolution::Reset);
 }
 
-/// Extensibilidad de la ayuda: TODO comando tiene descripción en AMBOS
-/// locales — un comando nuevo sin entrada help-cmd-* rompe aquí. La
-/// decoración de la pantalla (título, secciones) también.
+/// Help extensibility: EVERY command has a description in BOTH locales — a
+/// new command with no help-cmd-* entry fails here. The screen's decoration
+/// (title, sections) too.
 ///
-/// `help-hint` YA NO está: el pie del overlay se GENERA del keymap efectivo
-/// (`hints::DialogHints::help`) desde H3b, y la cadena estática que quedaba
-/// anunciaba una tecla (`q`) que el enrutado por keymap ya no acepta.
+/// `help-hint` is GONE: the overlay's footer is GENERATED from the
+/// effective keymap (`hints::DialogHints::help`) since H3b, and the static
+/// string that was left announced a key (`q`) keymap routing no longer
+/// accepts.
 #[test]
-fn todo_comando_tiene_ayuda_traducida() {
+fn every_command_has_translated_help() {
     use norte_tui::keymap::help_id;
-    let ids_decoracion = [
+    let ids_decoration = [
         "help-title".to_owned(),
-        // H3b: la etiqueta de la entrada sintética `keys` de la lateral. Se
-        // resuelve en `HelpView::new` y viaja al modelo como TÍTULO de fila:
-        // sin entrada Fluent, la lateral pintaría `help-topic-keys` literal.
+        // H3b: the sidebar's synthetic `keys` entry's label. It is resolved
+        // in `HelpView::new` and travels to the model as a row TITLE: with
+        // no Fluent entry, the sidebar would paint `help-topic-keys` literally.
         "help-topic-keys".to_owned(),
         "help-section-browse".to_owned(),
         "help-section-viewer".to_owned(),
     ];
-    let ids = COMANDOS.iter().map(|cmd| help_id(cmd));
-    for id in ids.chain(ids_decoracion) {
+    let ids = COMMANDS.iter().map(|cmd| help_id(cmd));
+    for id in ids.chain(ids_decoration) {
         for lang in [norte_i18n::Lang::Es, norte_i18n::Lang::En] {
             let text = norte_i18n::t_in(lang, &id);
-            assert_ne!(text, id, "{id}: sin traducción en {lang:?}");
+            assert_ne!(text, id, "{id}: no translation in {lang:?}");
         }
     }
 }
 
-/// H3b: TODA cabecera de grupo de la lateral de la ayuda tiene entrada Fluent
-/// en AMBOS locales.
+/// H3b: EVERY group header of the help sidebar has a Fluent entry in BOTH
+/// locales.
 ///
-/// `draw_help` pinta `t(&format!("help-group-{tag}"))` con el tag que viene
-/// del FRONT MATTER del corpus, y `norte_i18n::t` contesta un fallo de
-/// búsqueda con el id: un tema archivado bajo un tag nuevo pintaría una banda
-/// `help-group-advanced` literal en la lateral. Es el mismo defecto que esta
-/// misma fase arregló un fichero más allá (el `label_id` de `help.rs`, fijado
-/// por `the_cheatsheet_never_paints_a_fluent_id`), y la búsqueda gemela no
-/// tenía guardia.
+/// `draw_help` paints `t(&format!("help-group-{tag}"))` with the tag coming
+/// from the corpus's FRONT MATTER, and `norte_i18n::t` answers a lookup
+/// failure with the id: a topic filed under a new tag would paint a literal
+/// `help-group-advanced` strip in the sidebar. It is the same defect this
+/// same phase fixed one file over (`help.rs`'s `label_id`, pinned by
+/// `the_cheatsheet_never_paints_a_fluent_id`), and the twin lookup had no
+/// guard.
 ///
-/// La suite de paridad de i18n NO lo cubre: solo afirma que EN y ES tienen el
-/// MISMO conjunto de ids, así que un tag ausente en los dos pasa de largo.
+/// The i18n parity suite does NOT cover it: it only asserts EN and ES have
+/// the SAME set of ids, so a tag absent from both slips through.
 ///
-/// Los tags se sacan del MODELO (`HelpState::rows`), no de una lista escrita
-/// a mano: son exactamente las filas `Group` que el pintor recorre. H3h
-/// escribe el corpus completo y este barrido crece con él sin tocarlo.
+/// The tags are pulled from the MODEL (`HelpState::rows`), not from a
+/// hand-written list: they are exactly the `Group` rows the painter walks.
+/// H3h writes the whole corpus and this sweep grows with it untouched.
 ///
-/// Las que el pintor NO pinta quedan fuera, y quién es quién lo dice él
-/// (`ui::help_group_is_painted`), no una copia de la regla: la cabecera del
-/// grupo sintético `keys` se suprime —es un grupo de uno cuya cabecera se
-/// llamaría igual que su única fila— así que exigirle entrada Fluent sería
-/// exigir una cadena que nadie busca. Si alguna vez un tema del corpus se
-/// archiva bajo ese tag, su cabecera SÍ se pinta y este barrido vuelve a
-/// pedirla.
+/// The ones the painter does NOT paint are left out, and it says who is who
+/// itself (`ui::help_group_is_painted`), not a copy of the rule: the
+/// synthetic `keys` group's header is suppressed — it is a group of one
+/// whose header would be named the same as its only row — so requiring a
+/// Fluent entry for it would demand a string nobody looks up. If a corpus
+/// topic is ever filed under that tag, its header DOES paint and this sweep
+/// asks for it again.
 #[test]
-fn toda_cabecera_de_grupo_de_la_ayuda_tiene_etiqueta_traducida() {
+fn every_help_group_header_has_a_translated_label() {
     use norte_frontend::help::{HelpState, SidebarRow};
 
     let mut seen = 0usize;
     for lang in [norte_i18n::Lang::Es, norte_i18n::Lang::En] {
-        // La etiqueta de `keys` no se está probando aquí (la cubre
-        // `ids_decoracion`); da igual cuál sea mientras no esté vacía.
+        // `keys`'s label is not being tested here (`ids_decoration` covers
+        // it); it does not matter what it is as long as it is not empty.
         let state = HelpState::new(lang, "Teclado".to_owned());
         for (i, row) in state.rows().iter().enumerate() {
             let SidebarRow::Group { tag } = row else {
@@ -644,9 +645,9 @@ fn toda_cabecera_de_grupo_de_la_ayuda_tiene_etiqueta_traducida() {
             assert_ne!(
                 norte_i18n::t_in(lang, &id),
                 id,
-                "{id}: sin traducción en {lang:?} — la lateral pintaría el id \
-                 Fluent como si fuera el nombre del grupo. Añade la entrada en \
-                 i18n/{}.ftl",
+                "{id}: no translation in {lang:?} — the sidebar would paint \
+                 the Fluent id as if it were the group's name. Add the entry \
+                 in i18n/{}.ftl",
                 match lang {
                     norte_i18n::Lang::Es => "es",
                     norte_i18n::Lang::En => "en",
@@ -654,40 +655,40 @@ fn toda_cabecera_de_grupo_de_la_ayuda_tiene_etiqueta_traducida() {
             );
         }
     }
-    // Anti-vacuidad: sin filas `Group` el bucle no afirma nada. Hoy hay 3
-    // grupos PINTADOS por locale (`basics`, `doing`, `remote`; la cabecera de
-    // la sintética `keys` no se pinta).
+    // Anti-emptiness: with no `Group` rows the loop asserts nothing. Today
+    // there are 3 PAINTED groups per locale (`basics`, `doing`, `remote`;
+    // the synthetic `keys`'s header does not paint).
     assert!(
         seen >= 6,
-        "el barrido no vio cabeceras de grupo suficientes ({seen}): el modelo \
-         dejó de agrupar y este test pasaría en vacío"
+        "the sweep did not see enough group headers ({seen}): the model \
+         stopped grouping and this test would pass vacuously"
     );
 }
 
-/// H1 T3 (#24): TODO comando de [`DIALOG_COMMANDS`] tiene etiqueta CORTA en
-/// AMBOS locales — la fuente de los hints generados de los overlays
-/// (`dialog_hints`/`DialogHints`). Mismo mangling que `help_id` (puntos→
-/// guiones) pero para el sufijo tras `dialog.`, vía `dialog_hint_id`: un
-/// comando nuevo en `DIALOG_COMMANDS` sin su `dialog-cmd-*` rompe aquí,
-/// jamás en silencio en el footer.
+/// H1 T3 (#24): EVERY command in [`DIALOG_COMMANDS`] has a SHORT label in
+/// BOTH locales — the source of the overlays' generated hints
+/// (`dialog_hints`/`DialogHints`). Same mangling as `help_id` (dots→dashes)
+/// but for the suffix after `dialog.`, via `dialog_hint_id`: a new command
+/// in `DIALOG_COMMANDS` with no `dialog-cmd-*` fails here, never silently
+/// in the footer.
 #[test]
-fn todo_dialog_command_tiene_etiqueta_traducida() {
+fn every_dialog_command_has_a_translated_label() {
     use norte_tui::keymap::{DIALOG_COMMANDS, dialog_hint_id};
     for cmd in DIALOG_COMMANDS {
         let id = dialog_hint_id(cmd);
         for lang in [norte_i18n::Lang::Es, norte_i18n::Lang::En] {
             let text = norte_i18n::t_in(lang, &id);
-            assert_ne!(text, id, "{id}: sin traducción en {lang:?}");
+            assert_ne!(text, id, "{id}: no translation in {lang:?}");
         }
     }
 }
 
-/// La ayuda se construye del keymap EFECTIVO: los bindings expuestos
-/// reflejan preset + capas EN ORDEN de precedencia, y un binding
-/// sombreado aparece UNA vez con el comando que gana (lo que la tecla
-/// hace de verdad, no lo que el preset dice).
+/// Help is built from the EFFECTIVE keymap: the exposed bindings reflect
+/// preset + layers IN PRECEDENCE ORDER, and a shadowed binding appears ONCE
+/// with the command that wins (what the key really does, not what the
+/// preset says).
 #[test]
-fn bindings_expuestos_reflejan_las_capas() {
+fn exposed_bindings_reflect_the_layers() {
     let preset = parse_keymap(
         r#"
         [pane]
@@ -706,31 +707,31 @@ fn bindings_expuestos_reflejan_las_capas() {
     "#,
     )
     .unwrap();
-    let eff = Effective::build_layered(&preset, std::slice::from_ref(&user), COMANDOS).unwrap();
+    let eff = Effective::build_layered(&preset, std::slice::from_ref(&user), COMMANDS).unwrap();
     let b = eff.bindings();
-    // Sombreado: "j" UNA sola vez y gana el prepend del usuario.
+    // Shadowed: "j" just ONCE and the user's prepend wins.
     let jotas: Vec<_> = b.iter().filter(|(seq, _)| seq == "j").collect();
-    assert_eq!(jotas.len(), 1, "binding sombreado duplicado: {b:?}");
-    assert_eq!(jotas[0].1, "cursor.top", "debe ganar la capa del usuario");
-    // Orden de precedencia: prepend del usuario antes que el preset.
+    assert_eq!(jotas.len(), 1, "duplicated shadowed binding: {b:?}");
+    assert_eq!(jotas[0].1, "cursor.top", "the user layer must win");
+    // Precedence order: the user's prepend before the preset.
     let pos = |wanted: &str| b.iter().position(|(seq, _)| seq == wanted).unwrap();
-    assert!(pos("j") < pos("k"), "prepend antes que preset: {b:?}");
+    assert!(pos("j") < pos("k"), "prepend before preset: {b:?}");
     assert!(
         b.iter()
             .any(|(seq, cmd)| seq == "g g" && *cmd == "cursor.top"),
-        "el append del usuario aparece en la ayuda: {b:?}"
+        "the user's append shows up in help: {b:?}"
     );
 }
 
-/// ALTA (security review M4 Lua): `./.norte/keymap.toml` carga SIN trust,
-/// así que un repo hostil podría rebindear una tecla común (`j`, `enter`) a
-/// un comando `lua:` del init.lua de USUARIO (sin sandbox, sin confirmación,
-/// con cwd = el repo hostil). Los bindings `lua:` originados en la capa de
-/// PROYECTO se DESCARTAN (contados para el aviso de barra); los rebinds de
-/// proyecto a builtins siguen funcionando; el mismo binding en una capa de
-/// usuario SÍ resuelve.
+/// HIGH (security review M4 Lua): `./.norte/keymap.toml` loads WITHOUT
+/// trust, so a hostile repo could rebind a common key (`j`, `enter`) to a
+/// `lua:` command from the USER's init.lua (no sandbox, no confirmation,
+/// with cwd = the hostile repo). `lua:` bindings originating in the
+/// PROJECT layer are DISCARDED (counted for the bar's warning); project
+/// rebinds to builtins keep working; the same binding in a user layer DOES
+/// resolve.
 #[test]
-fn lua_de_keymap_de_proyecto_se_descarta_con_aviso() {
+fn project_keymap_lua_is_discarded_with_a_warning() {
     let preset = parse_keymap(
         r#"
         [pane]
@@ -738,19 +739,19 @@ fn lua_de_keymap_de_proyecto_se_descarta_con_aviso() {
     "#,
     )
     .unwrap();
-    let capa = r#"
+    let layer = r#"
         [pane]
         prepend_keymap = [{ on = ["j"], run = "lua:pwn" }]
     "#;
 
-    // Capa de PROYECTO: el binding lua: se descarta — la tecla cae al
-    // builtin del preset — y queda contado para el aviso.
-    let mut proyecto = parse_keymap(capa).unwrap();
-    proyecto.mark_project();
+    // PROJECT layer: the lua: binding is discarded — the key falls to the
+    // preset's builtin — and it is counted for the warning.
+    let mut project = parse_keymap(layer).unwrap();
+    project.mark_project();
     let known = norte_tui::shortcuts_editor::known_commands(Screen::Browse);
-    let eff = Effective::build_layered(&preset, std::slice::from_ref(&proyecto), &known)
-        .expect("descartar no es error de carga");
-    assert_eq!(eff.discarded_lua_bindings(), 1, "contado para el aviso");
+    let eff = Effective::build_layered(&preset, std::slice::from_ref(&project), &known)
+        .expect("discarding is not a load error");
+    assert_eq!(eff.discarded_lua_bindings(), 1, "counted for the warning");
     let mut r = Resolver::new(eff);
     assert_eq!(
         r.push(parse_chord("j").unwrap()),
@@ -758,12 +759,12 @@ fn lua_de_keymap_de_proyecto_se_descarta_con_aviso() {
             command: "cursor.down".into(),
             count: Count::None
         },
-        "la tecla cae al builtin, jamás al lua: del proyecto"
+        "the key falls to the builtin, never to the project's lua:"
     );
 
-    // El MISMO binding en capa de USUARIO (sin marcar): resuelve normal.
-    let usuario = parse_keymap(capa).unwrap();
-    let eff = Effective::build_layered(&preset, std::slice::from_ref(&usuario), &known).unwrap();
+    // The SAME binding in a USER layer (unmarked): resolves normally.
+    let user = parse_keymap(layer).unwrap();
+    let eff = Effective::build_layered(&preset, std::slice::from_ref(&user), &known).unwrap();
     assert_eq!(eff.discarded_lua_bindings(), 0);
     let mut r = Resolver::new(eff);
     assert_eq!(
@@ -772,20 +773,20 @@ fn lua_de_keymap_de_proyecto_se_descarta_con_aviso() {
             command: "lua:pwn".into(),
             count: Count::None
         },
-        "en capa de usuario el binding lua: es legítimo"
+        "in a user layer the lua: binding is legitimate"
     );
 
-    // Rebind de proyecto a un BUILTIN: sigue funcionando (el descarte es
-    // SOLO de `lua:` — config de proyecto inocua no se rompe).
-    let mut proyecto = parse_keymap(
+    // Project rebind to a BUILTIN: still works (the discard is ONLY for
+    // `lua:` — innocuous project config is not broken).
+    let mut project = parse_keymap(
         r#"
         [pane]
         prepend_keymap = [{ on = ["x"], run = "cursor.up" }]
     "#,
     )
     .unwrap();
-    proyecto.mark_project();
-    let eff = Effective::build_layered(&preset, std::slice::from_ref(&proyecto), COMANDOS).unwrap();
+    project.mark_project();
+    let eff = Effective::build_layered(&preset, std::slice::from_ref(&project), COMMANDS).unwrap();
     assert_eq!(eff.discarded_lua_bindings(), 0);
     let mut r = Resolver::new(eff);
     assert_eq!(

@@ -1,27 +1,27 @@
-//! El sistema de ventanas: un árbol de huecos que los frontends reparten desde
-//! el mismo código puro.
+//! The window system: a tree of slots that frontends lay out from the same
+//! pure code.
 //!
-//! La pantalla de norte estaba escrita a mano —`draw` partía el frame y
-//! `pane_geometry`/`pane_list_rows` REPLICABAN esa aritmética para el ratón y
-//! la paginación—, y era correcta precisamente porque era fija: no tenía sitio
-//! para una quinta cosa. Aquí vive lo que la sustituye.
+//! norte's screen used to be hand-written — `draw` split the frame and
+//! `pane_geometry`/`pane_list_rows` REPLICATED that arithmetic for the mouse
+//! and pagination — and it was correct precisely because it was fixed: there
+//! was no room for a fifth thing. What replaces it lives here.
 //!
-//! # Cuatro conceptos que no se solapan
+//! # Four concepts that do not overlap
 //!
-//! - **Hueco** ([`Node::Slot`]) — dónde va un panel, con su identidad.
-//! - **Kind** ([`KindId`]) — QUÉ panel es. Un string, no un enum, para que un
-//!   plugin pueda aportar uno.
-//! - **Rol** ([`RoleId`]) — QUIÉN es quién: `active` y `target`, punteros
-//!   resueltos en cada frame.
-//! - **Vínculo** ([`Bindings`]) — DE QUIÉN es vista un hueco. Sin esto, un
-//!   panel auxiliar es una caja sin nada dentro.
+//! - **Slot** ([`Node::Slot`]) — where a pane goes, with its identity.
+//! - **Kind** ([`KindId`]) — WHAT panel it is. A string, not an enum, so a
+//!   plugin can contribute one.
+//! - **Role** ([`RoleId`]) — WHO is who: `active` and `target`, pointers
+//!   resolved on every frame.
+//! - **Binding** ([`Bindings`]) — WHOSE view a slot is. Without this, a side
+//!   panel is a box with nothing inside.
 //!
-//! Las pestañas ([`Node::Tabs`]) no son un concepto aparte: son un tipo de
-//! nodo, y dónde caen en el árbol decide si son espacios de trabajo, pestañas
-//! de panel, o media pantalla alternando vistas.
+//! Tabs ([`Node::Tabs`]) are not a separate concept: they are a kind of
+//! node, and where they fall in the tree decides whether they are
+//! workspaces, pane tabs, or half a screen alternating views.
 //!
-//! La decisión y sus alternativas descartadas están en la ADR 0058; el diseño,
-//! en `docs/superpowers/specs/2026-08-17-layout-slots-tabs-design.md`.
+//! The decision and its discarded alternatives are in ADR 0058; the design
+//! is in `docs/superpowers/specs/2026-08-17-layout-slots-tabs-design.md`.
 
 mod by_slot;
 pub mod config;
@@ -43,97 +43,100 @@ pub use tree::{
     Bindings, Dir, DropZone, Edge, Follow, KindId, Node, Params, Rect, RoleId, Size, SlotId,
 };
 
-/// Lo que impide usar un layout.
+/// What prevents using a layout.
 ///
-/// Se distingue del diagnóstico igual que el keymap distingue
-/// [`crate::keymap::KeymapError`] de [`crate::keymap::KeymapDiagnostic`]: un
-/// error deja el layout anterior en pie (o cae al preset por defecto en
-/// arranque frío), un diagnóstico se arregla solo y se CUENTA.
+/// Distinguished from the diagnostic the same way the keymap distinguishes
+/// [`crate::keymap::KeymapError`] from [`crate::keymap::KeymapDiagnostic`]:
+/// an error leaves the previous layout standing (or falls back to the
+/// default preset on a cold start), a diagnostic fixes itself and is
+/// COUNTED.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum LayoutError {
-    /// Dos huecos con el mismo id. No se adivina cuál gana.
-    #[error("dos huecos con el mismo id: {0:?}")]
+    /// Two slots with the same id. There is no guessing which one wins.
+    #[error("two slots with the same id: {0:?}")]
     DuplicateSlotId(SlotId),
-    /// Un `Split` sin hijos no reparte nada.
-    #[error("un `Split` sin hijos")]
+    /// A `Split` with no children lays out nothing.
+    #[error("a `Split` with no children")]
     EmptySplit,
-    /// El nombre de un layout no puede llevar una ruta dentro.
-    #[error("nombre de layout inválido: {0:?}")]
+    /// A layout's name cannot carry a path inside it.
+    #[error("invalid layout name: {0:?}")]
     BadName(String),
-    /// No hay fichero con ese nombre.
-    #[error("no hay layout en {0}")]
+    /// There is no file with that name.
+    #[error("no layout at {0}")]
     NotFound(String),
-    /// El fichero no es TOML válido, o no describe un árbol.
-    #[error("el layout no se pudo leer: {0}")]
+    /// The file is not valid TOML, or does not describe a tree.
+    #[error("the layout could not be read: {0}")]
     Parse(String),
-    /// Un árbol sin ningún `browser` no es una disposición: es una pantalla
-    /// sin listado, y el frontend que la aplique se queda sin panel al que
-    /// apuntar.
-    #[error("la disposición no tiene ningún hueco de listado")]
+    /// A tree with no `browser` at all is not a layout: it is a screen with
+    /// no listing, and the frontend that applies it is left with no pane to
+    /// point at.
+    #[error("the layout has no listing slot at all")]
     NoBrowser,
-    /// Los tamaños son índice-paralelos a los hijos.
-    #[error("{count} tamaños para {children} hijos")]
+    /// Sizes are index-parallel to the children.
+    #[error("{count} sizes for {children} children")]
     WeightsMismatch {
-        /// Cuántos tamaños había.
+        /// How many sizes there were.
         count: usize,
-        /// Cuántos hijos hay.
+        /// How many children there are.
         children: usize,
     },
 }
 
-/// Lo que se arregla solo y hay que CONTAR. `norte doctor` los muestra.
+/// What fixes itself and has to be COUNTED. `norte doctor` shows them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LayoutDiagnostic {
-    /// La pestaña activa estaba fuera de rango.
+    /// The active tab was out of range.
     ActiveClamped {
-        /// El índice que traía.
+        /// The index it carried.
         was: usize,
-        /// A cuál se clampó.
+        /// What it was clamped to.
         to: usize,
     },
-    /// Un peso de cero no reparte nada; se sube a uno.
+    /// A weight of zero lays out nothing; it is raised to one.
     ZeroWeightRaised {
-        /// Posición del hijo dentro de su `Split`.
+        /// The child's position within its `Split`.
         at: usize,
     },
-    /// Un `follows` apuntaba a un hueco que no existe; pasa a seguir al rol
-    /// `active`, que es lo que se quería el 95 % de las veces.
+    /// A `follows` pointed at a slot that does not exist; it switches to
+    /// following the `active` role, which is what was wanted 95% of the
+    /// time.
     FollowRetargeted {
-        /// El hueco cuyo vínculo se redirigió.
+        /// The slot whose binding was redirected.
         slot: SlotId,
     },
-    /// Cromo apartado PARA ESTE FRAME porque, con él, no cabía ni un listado
-    /// usable (#229). El árbol no se toca: al crecer el terminal vuelve.
+    /// Chrome set aside FOR THIS FRAME because, with it, not even one usable
+    /// listing fit (#229). The tree is not touched: as the terminal grows it
+    /// comes back.
     ///
-    /// Hoy no lo pinta nadie —los frontends no leen `diagnostics`—, así que
-    /// «por qué no está mi sidebar» todavía no tiene respuesta en pantalla:
-    /// eso es #232, junto con la marca de ventana suelta.
+    /// Nobody paints it today — the frontends do not read `diagnostics` —
+    /// so "why isn't my sidebar there" still has no answer on screen: that
+    /// is #232, together with the loose-window mark.
     ChromeSetAside {
-        /// El hueco que se apartó.
+        /// The slot that was set aside.
         slot: SlotId,
     },
 }
 
-/// Valida un árbol antes de usarlo.
+/// Validates a tree before using it.
 ///
-/// Solo lo INCOHERENTE: lo clampable (una pestaña activa fuera de rango, un
-/// peso de cero) no es un error, se arregla durante el reparto y se cuenta
-/// como [`LayoutDiagnostic`].
+/// Only what is INCONSISTENT: what is clampable (an active tab out of
+/// range, a weight of zero) is not an error, it is fixed during layout and
+/// counted as a [`LayoutDiagnostic`].
 ///
 /// # Errors
 ///
-/// [`LayoutError`] si hay ids repetidos, un `Split` sin hijos, o pesos que no
-/// son índice-paralelos a los hijos.
+/// [`LayoutError`] if there are repeated ids, a `Split` with no children, or
+/// sizes that are not index-parallel to the children.
 pub fn validate(tree: &Node) -> Result<(), LayoutError> {
     if let Some(id) = tree.duplicate_slot_ids().first() {
         return Err(LayoutError::DuplicateSlotId(*id));
     }
-    // Sin listado no hay disposición (#242). La regla es la misma que ya
-    // aplica `layout.close-slot` —«una pantalla sin ningún listado no es un
-    // layout, es un cuelgue con bordes»—, y aquí es donde hay que aplicarla:
-    // el frontend siembra un panel POR HUECO, así que un árbol que llame
-    // `places` al hueco donde estaba el listado no deja ninguno, y el primer
-    // acceso por lado panica en modo raw sobre la pantalla alternativa.
+    // No listing, no layout (#242). The rule is the same one
+    // `layout.close-slot` already applies — "a screen with no listing at
+    // all is not a layout, it is a hang with borders" — and here is where
+    // it has to be applied: the frontend seeds a panel PER SLOT, so a tree
+    // that calls the slot where the listing was `places` leaves none, and
+    // the first side access panics in raw mode over the alternate screen.
     if !tree
         .slot_ids()
         .into_iter()
@@ -181,8 +184,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn un_arbol_con_ids_repetidos_no_se_usa() {
-        let arbol = Node::Split {
+    fn a_tree_with_repeated_ids_is_not_used() {
+        let tree = Node::Split {
             dir: Dir::Vertical,
             sizes: vec![Size::Weight(1), Size::Weight(1)],
             children: vec![
@@ -191,16 +194,16 @@ mod tests {
             ],
         };
         assert_eq!(
-            validate(&arbol),
+            validate(&tree),
             Err(LayoutError::DuplicateSlotId(SlotId(1)))
         );
     }
 
-    /// Los tamaños son índice-paralelos: uno de menos y el reparto pintaría
-    /// un hueco donde no toca en vez de fallar.
+    /// Sizes are index-parallel: one short and layout would paint a slot
+    /// somewhere wrong instead of failing.
     #[test]
-    fn los_tamanos_tienen_que_ser_tantos_como_hijos() {
-        let arbol = Node::Split {
+    fn sizes_must_be_as_many_as_children() {
+        let tree = Node::Split {
             dir: Dir::Horizontal,
             sizes: vec![Size::Weight(1)],
             children: vec![
@@ -209,7 +212,7 @@ mod tests {
             ],
         };
         assert_eq!(
-            validate(&arbol),
+            validate(&tree),
             Err(LayoutError::WeightsMismatch {
                 count: 1,
                 children: 2
@@ -217,13 +220,14 @@ mod tests {
         );
     }
 
-    /// Un árbol sin `browser` PASABA la validación, y entonces el frontend
-    /// sembraba el hueco con el kind que el árbol pedía —pisando el listado
-    /// que había en ese id— y el primer acceso por lado panicaba (#242).
-    /// Persistido en la sesión, panicaba en CADA arranque.
+    /// A tree with no `browser` USED TO PASS validation, and then the
+    /// frontend seeded the slot with the kind the tree asked for —
+    /// overwriting the listing that was at that id — and the first side
+    /// access panicked (#242). Persisted in the session, it panicked on
+    /// EVERY startup.
     #[test]
-    fn un_arbol_sin_listado_no_es_una_disposicion() {
-        let arbol = Node::Split {
+    fn a_tree_without_a_listing_is_not_a_layout() {
+        let tree = Node::Split {
             dir: Dir::Horizontal,
             sizes: vec![Size::Weight(1), Size::Weight(1)],
             children: vec![
@@ -231,27 +235,28 @@ mod tests {
                 Node::slot(SlotId(4), KindId::new("status")),
             ],
         };
-        assert_eq!(validate(&arbol), Err(LayoutError::NoBrowser));
+        assert_eq!(validate(&tree), Err(LayoutError::NoBrowser));
     }
 
-    /// Un listado dentro de una pestaña que ahora no se ve SIGUE siendo un
-    /// listado: la pestaña activa cambia con una tecla, y rechazar el árbol
-    /// por dónde estaba el foco al guardarlo sería rechazar layouts sanos.
+    /// A listing inside a tab that is not currently shown STILL counts as a
+    /// listing: the active tab changes with a key, and rejecting the tree
+    /// based on where the focus was when it was saved would reject healthy
+    /// layouts.
     #[test]
-    fn un_listado_en_una_pestana_oculta_cuenta() {
-        let arbol = Node::Tabs {
+    fn a_listing_in_a_hidden_tab_counts() {
+        let tree = Node::Tabs {
             active: 1,
             children: vec![
                 Node::slot(SlotId(1), KindId::browser()),
                 Node::slot(SlotId(2), KindId::new("viewer")),
             ],
         };
-        assert_eq!(validate(&arbol), Ok(()));
+        assert_eq!(validate(&tree), Ok(()));
     }
 
     #[test]
-    fn un_arbol_sano_valida() {
-        let arbol = Node::Split {
+    fn a_healthy_tree_validates() {
+        let tree = Node::Split {
             dir: Dir::Horizontal,
             sizes: vec![Size::Weight(1), Size::Weight(1)],
             children: vec![
@@ -259,6 +264,6 @@ mod tests {
                 Node::slot(SlotId(2), KindId::browser()),
             ],
         };
-        assert_eq!(validate(&arbol), Ok(()));
+        assert_eq!(validate(&tree), Ok(()));
     }
 }

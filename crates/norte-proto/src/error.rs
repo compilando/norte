@@ -1,93 +1,95 @@
-//! Taxonomía de errores del protocolo (spec §17.7): estable, documentada,
-//! renderizable por categoría. Los frontends NUNCA parsean strings de error;
-//! el mapeo desde errores de OS/provider ocurre en el borde (vfs-local, core).
+//! Protocol error taxonomy (spec §17.7): stable, documented, renderable by
+//! category. Frontends NEVER parse error strings; the mapping from OS/provider
+//! errors happens at the edge (vfs-local, core).
 
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-/// Subtipo de conflicto en el destino de una operación.
-/// Tolerancia N/N-1 (patrón de ADR 0004; el fallback lo introduce ADR
-/// 0005): un subtipo desconocido deserializa a [`ConflictKind::Unknown`] —
-/// el cliente viejo degrada a "conflicto genérico", no revienta.
+/// Subtype of a conflict at the destination of an operation.
+/// N/N-1 tolerance (ADR 0004's pattern; ADR 0005 introduces the fallback): an
+/// unknown subtype deserializes to [`ConflictKind::Unknown`] — the old client
+/// degrades to "generic conflict", it does not break.
 ///
 /// ```
 /// use norte_proto::ConflictKind;
-/// let futuro: ConflictKind = serde_json::from_str(r#""subtipo_del_futuro""#).unwrap();
-/// assert_eq!(futuro, ConflictKind::Unknown);
+/// let future: ConflictKind = serde_json::from_str(r#""subtipo_del_futuro""#).unwrap();
+/// assert_eq!(future, ConflictKind::Unknown);
 /// ```
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum ConflictKind {
-    /// El destino ya existe.
+    /// The destination already exists.
     Exists,
-    /// Colisión solo-por-caja en FS case-insensitive (evaluada contra el
-    /// FS DESTINO, no el origen).
+    /// Case-only collision on a case-insensitive FS (evaluated against the
+    /// DESTINATION FS, not the source).
     CaseCollision,
-    /// Colisión solo-por-normalización Unicode: los bytes difieren pero la
-    /// forma NFC coincide (macOS almacena NFD; issue #8, ADR 0005).
+    /// Unicode-normalization-only collision: the bytes differ but the NFC
+    /// form matches (macOS stores NFD; issue #8, ADR 0005).
     Normalization,
-    /// El destino existe con otro tipo (dir donde va un archivo o viceversa).
+    /// The destination exists with a different type (a dir where a file
+    /// would go, or vice versa).
     TypeMismatch,
-    /// La ruta relativa se sale de su raíz confinada (0.45.0, #164, ADR 0054):
-    /// un componente INTERMEDIO es un symlink, y seguirlo escribiría fuera de
-    /// la raíz que nombró el caller.
+    /// The relative path escapes its confined root (0.45.0, #164, ADR 0054):
+    /// an INTERMEDIATE component is a symlink, and following it would write
+    /// outside the root the caller named.
     ///
-    /// No es [`Self::Exists`] ni `Error::NotFound` a propósito: un caller que
-    /// ve `NotFound` responde creando el padre, que es exactamente la
-    /// operación que este subtipo existe para impedir.
+    /// Deliberately not [`Self::Exists`] nor `Error::NotFound`: a caller that
+    /// sees `NotFound` responds by creating the parent, which is exactly the
+    /// operation this subtype exists to prevent.
     EscapesRoot,
-    /// El DIRECTORIO DE DESTINO dejó de estar donde se pidió, con la tarea ya
-    /// en marcha (0.84.0, ADR 0151).
+    /// The DESTINATION DIRECTORY stopped being where it was requested, with
+    /// the task already running (0.84.0, ADR 0151).
     ///
-    /// Lo borraron, lo movieron o lo sustituyeron por otro mientras se
-    /// copiaba. Pasa de verdad y no hace falta mala fe: basta borrar la
-    /// carpeta de destino desde otro sitio —otro gestor, un `rm` en una
-    /// terminal, otra máquina sobre el mismo montaje— mientras la barra de
-    /// progreso corre.
+    /// It was deleted, moved, or replaced by something else while it was
+    /// being copied to. This really happens and needs no bad faith: it is
+    /// enough to delete the destination folder from somewhere else — another
+    /// manager, an `rm` in a terminal, another machine on the same mount —
+    /// while the progress bar is running.
     ///
-    /// **Es distinto de [`Self::EscapesRoot`] y la diferencia importa.**
-    /// `EscapesRoot` dice que la ruta lleva a otro sitio por un enlace, o sea
-    /// que escribir ahí sería salirse: es una respuesta sobre la FORMA de la
-    /// ruta, y quien la lee piensa en seguridad. Esto dice que el sitio que
-    /// nombraste ya no es ese: no hay nada malo en la ruta, es que la carpeta
-    /// se fue. El remedio también es otro —volver a crearla y reintentar— y
-    /// por eso no podían compartir subtipo.
+    /// **It is different from [`Self::EscapesRoot`], and the difference
+    /// matters.** `EscapesRoot` says the path leads somewhere else through a
+    /// link, i.e. that writing there would be escaping: it is an answer about
+    /// the SHAPE of the path, and whoever reads it thinks about security.
+    /// This one says the place you named is no longer that place: there is
+    /// nothing wrong with the path, it is that the folder is gone. The remedy
+    /// is different too — recreate it and retry — and that is why they could
+    /// not share a subtype.
     ///
-    /// Tampoco es `Error::NotFound`: eso no dice QUÉ no se encontró, y en
-    /// mitad de una copia de miles de ficheros se lee como «no encuentra un
-    /// fichero del origen», que es lo contrario de lo que ha pasado.
+    /// Nor is it `Error::NotFound`: that does not say WHAT was not found, and
+    /// in the middle of copying thousands of files it reads as "cannot find a
+    /// file from the source", which is the opposite of what happened.
     ///
-    /// **Qué lo emite**: la copia de un ÁRBOL, la de un fichero suelto (#367)
-    /// y `sync.apply` (#368). Antes de 0.84.0 el caso no tenía respuesta: las
-    /// tres daban `Completed` con los ficheros en la carpeta borrada.
+    /// **What emits it**: copying a TREE, copying a single file (#367), and
+    /// `sync.apply` (#368). Before 0.84.0 the case had no answer: all three
+    /// returned `Completed` with the files in the deleted folder.
     ///
-    /// Un directorio de destino que sea un ENLACE no está exento: se comprueba
-    /// A TRAVÉS del enlace. Así un `~/copias -> /mnt/disco/copias` intacto
-    /// —o un `/tmp` de macOS— pasa sin ruido, y los dos casos que sí importan
-    /// se detectan: si lo que había al otro lado se fue a la papelera, el
-    /// enlace queda roto; si alguien lo reapunta, lleva a otro sitio. Los dos
-    /// son este subtipo, porque en los dos el sitio que nombraste ya no es
-    /// ése.
+    /// A destination directory that is a LINK is not exempt: it is checked
+    /// THROUGH the link. So an intact `~/copias -> /mnt/disco/copias` — or a
+    /// macOS `/tmp` — passes without noise, and the two cases that do matter
+    /// are detected: if what was on the other end went to the trash, the link
+    /// ends up broken; if someone repoints it, it leads somewhere else. Both
+    /// are this subtype, because in both the place you named is no longer
+    /// that place.
     ///
-    /// Un cliente N-1 lo degrada a [`Self::Unknown`] y enseña «conflicto» a
-    /// secas. Lo que pierde es la frase, no la protección: quien comprueba es
-    /// el daemon, así que la tarea falla en vez de decir que copió. Lo ya
-    /// escrito se queda en la carpeta que se borró, para los dos por igual
-    /// (#369).
+    /// An N-1 client degrades it to [`Self::Unknown`] and shows plain
+    /// "conflict". What it loses is the phrase, not the protection: the one
+    /// that checks is the daemon, so the task fails instead of claiming it
+    /// copied. What was already written stays in the deleted folder, for
+    /// both alike (#369).
     DestinationGone,
-    /// La `revision` que traía el escritor no es la vigente (0.48.0, L2): otro
-    /// cliente escribió la sesión de UI entre su lectura y su escritura.
+    /// The `revision` the writer carried is not the current one (0.48.0, L2):
+    /// another client wrote the UI session between its read and its write.
     ///
-    /// Es un conflicto y no un error de parámetros porque cumple lo que esta
-    /// categoría promete: NADA se escribió, y el caller arregla releyendo. Un
-    /// cliente N-1 lo degrada a [`Self::Unknown`] y enseña «conflicto» a
-    /// secas, que sigue siendo la conducta correcta: volver a leer.
+    /// It is a conflict and not a parameter error because it keeps this
+    /// category's promise: NOTHING was written, and the caller fixes it by
+    /// re-reading. An N-1 client degrades it to [`Self::Unknown`] and shows
+    /// plain "conflict", which is still the correct behavior: read again.
     StaleRevision,
-    /// Subtipo de un protocolo más nuevo (fallback de deserialización).
-    /// El core JAMÁS lo emite.
+    /// Subtype of a newer protocol (deserialization fallback). The core NEVER
+    /// emits it.
     #[doc(hidden)]
     #[serde(other)]
     Unknown,
@@ -101,9 +103,9 @@ impl fmt::Display for ConflictKind {
             Self::Normalization => "unicode normalization collision",
             Self::TypeMismatch => "destination type mismatch",
             Self::EscapesRoot => "path escapes its confined root",
-            // Escueto como sus hermanos, y no es cosmética: esta cadena acaba
-            // en el `message` de un `RpcError` y `norte-mcp` se la entrega
-            // tal cual a un agente.
+            // As terse as its siblings, and not cosmetic: this string ends up
+            // in an `RpcError`'s `message` and `norte-mcp` hands it to an
+            // agent verbatim.
             Self::DestinationGone => "destination directory is gone",
             Self::StaleRevision => "stale revision",
             Self::Unknown => "unknown conflict kind (newer protocol)",
@@ -111,20 +113,21 @@ impl fmt::Display for ConflictKind {
     }
 }
 
-/// Cómo se solapan las dos raíces de un `sync.plan` (0.40.0, ADR 0049): la
-/// carga de [`Error::OverlappingRoots`].
+/// How the two roots of a `sync.plan` overlap (0.40.0, ADR 0049): the payload
+/// of [`Error::OverlappingRoots`].
 ///
-/// Son TRES casos y no dos, y por eso no es un [`Side`](crate::methods::Side):
-/// «son el mismo árbol» no es «una está dentro de la otra», y es justo la
-/// frase que un frontend necesita pintar. Con dos valores habría que elegir uno
-/// por convenio y el mensaje mentiría en ese caso.
+/// There are THREE cases, not two, and that is why this is not a
+/// [`Side`](crate::methods::Side): "they are the same tree" is not "one is
+/// inside the other", and it is exactly the phrase a frontend needs to
+/// render. With two values one would have to be chosen by convention and the
+/// message would lie in that case.
 ///
-/// Nombra `source` y `dest`, no `left` y `right`: comparar es simétrico y
-/// sincronizar no (diseño §«Params name sides, not hands»).
+/// Names `source` and `dest`, not `left` and `right`: comparing is symmetric
+/// and syncing is not (design §"Params name sides, not hands").
 ///
-/// Tolerancia N/N-1 (ADR 0004), como [`ConflictKind`]: viaja daemon→client, así
-/// que una relación desconocida degrada a [`RootOverlap::Unknown`] en vez de
-/// reventar el parse del error.
+/// N/N-1 tolerance (ADR 0004), like [`ConflictKind`]: it travels daemon→client,
+/// so an unknown relation degrades to [`RootOverlap::Unknown`] instead of
+/// breaking the error's parse.
 ///
 /// ```
 /// use norte_proto::RootOverlap;
@@ -132,24 +135,24 @@ impl fmt::Display for ConflictKind {
 ///     serde_json::to_string(&RootOverlap::DestInsideSource).expect("json"),
 ///     r#""dest_inside_source""#
 /// );
-/// let futuro: RootOverlap = serde_json::from_str(r#""braided""#).expect("degrada");
-/// assert_eq!(futuro, RootOverlap::Unknown);
+/// let future: RootOverlap = serde_json::from_str(r#""braided""#).expect("degrades");
+/// assert_eq!(future, RootOverlap::Unknown);
 /// ```
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum RootOverlap {
-    /// Las dos raíces nombran el MISMO árbol. Ninguna está dentro de la otra:
-    /// son la misma.
+    /// The two roots name the SAME tree. Neither is inside the other: they
+    /// are the same.
     Same,
-    /// El ORIGEN está dentro del destino.
+    /// The SOURCE is inside the destination.
     SourceInsideDest,
-    /// El DESTINO está dentro del origen. Es el que convertiría una copia en un
-    /// bucle.
+    /// The DESTINATION is inside the source. The one that would turn a copy
+    /// into a loop.
     DestInsideSource,
-    /// Relación de un protocolo más nuevo (fallback de deserialización).
-    /// El core JAMÁS la emite.
+    /// Relation of a newer protocol (deserialization fallback). The core
+    /// NEVER emits it.
     #[doc(hidden)]
     #[serde(other)]
     Unknown,
@@ -166,309 +169,316 @@ impl fmt::Display for RootOverlap {
     }
 }
 
-/// Error del protocolo norte (spec §17.7).
+/// norte protocol error (spec §17.7).
 ///
-/// Wire: objeto tagged `{"kind": "...", …campos}`. La variante es la API:
-/// los frontends hacen match por categoría y el detalle humano viaja aparte
-/// (campo `message` del error JSON-RPC), nunca dentro de esta taxonomía.
+/// Wire: an object tagged `{"kind": "...", …fields}`. The variant is the API:
+/// frontends match by category and the human-readable detail travels
+/// separately (the JSON-RPC error's `message` field), never inside this
+/// taxonomy.
 ///
-/// Tolerancia N/N-1 (ADR 0004): una categoría desconocida deserializa a
-/// [`Error::Unknown`] — el cliente viejo degrada a "error genérico", no
-/// revienta. `#[non_exhaustive]` obliga además al brazo `_` en Rust.
+/// N/N-1 tolerance (ADR 0004): an unknown category deserializes to
+/// [`Error::Unknown`] — the old client degrades to "generic error", it does
+/// not break. `#[non_exhaustive]` also forces the `_` arm in Rust.
 ///
 /// ```
 /// use norte_proto::Error;
 /// let e: Error = serde_json::from_str(r#"{"kind": "not_found"}"#).unwrap();
 /// assert_eq!(e, Error::NotFound);
-/// let futuro: Error = serde_json::from_str(r#"{"kind": "quota_del_futuro"}"#).unwrap();
-/// assert_eq!(futuro, Error::Unknown);
+/// let future: Error = serde_json::from_str(r#"{"kind": "quota_del_futuro"}"#).unwrap();
+/// assert_eq!(future, Error::Unknown);
 /// ```
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum Error {
-    /// El path no existe.
+    /// The path does not exist.
     #[error("not found")]
     NotFound,
-    /// El provider/OS denegó el acceso.
+    /// The provider/OS denied access.
     #[error("permission denied")]
     PermissionDenied,
-    /// Conflicto en el destino; la operación NO escribió nada.
+    /// Conflict at the destination; the operation did NOT write anything.
     #[error("conflict: {conflict}")]
     Conflict {
-        /// Subtipo del conflicto.
+        /// Subtype of the conflict.
         conflict: ConflictKind,
     },
-    /// El provider no responde (red caída, daemon remoto muerto…).
+    /// The provider is not responding (network down, remote daemon dead…).
     #[error("provider unavailable (retryable: {retryable})")]
     ProviderUnavailable {
-        /// `true` si reintentar con backoff tiene sentido.
+        /// `true` if retrying with backoff makes sense.
         retryable: bool,
     },
-    /// Sin espacio o cuota en el destino (ENOSPC/EDQUOT) — el fallo de copia
-    /// más común tras permisos; merece render propio, no un cajón genérico.
+    /// No space or quota left at the destination (ENOSPC/EDQUOT) — the most
+    /// common copy failure after permissions; it deserves its own rendering,
+    /// not a generic bucket.
     #[error("no space left on destination")]
     NoSpace,
-    /// I/O falló a mitad de operación (EIO, reset de conexión…): el provider
-    /// responde, pero esta operación concreta murió.
+    /// I/O failed mid-operation (EIO, connection reset…): the provider
+    /// responds, but this particular operation died.
     #[error("i/o error (retryable: {retryable})")]
     Io {
-        /// `true` si repetir la operación puede funcionar.
+        /// `true` if repeating the operation might work.
         retryable: bool,
     },
-    /// Cancelado por el usuario o por shutdown; estado limpio garantizado.
+    /// Cancelled by the user or by shutdown; clean state guaranteed.
     #[error("cancelled")]
     Cancelled,
-    /// El policy engine denegó la operación (agentes/plugins, M3-3).
+    /// The policy engine denied the operation (agents/plugins, M3-3).
     #[error("denied by policy rule `{rule}`")]
     PolicyDenied {
-        /// Categoría GRUESA de la causa de denegación — NO el identificador de
-        /// la regla concreta de `policy.toml` (que no se filtra, por
-        /// seguridad). Vocabulario cerrado, comparable por igualdad:
-        /// `"out-of-scope"` (ruta/op fuera del scope del agente),
-        /// `"scope-expired"` (el scope aplicable venció),
-        /// `"policy-rule"` (una regla `deny` de `policy.toml` hizo match),
-        /// `"no-rule"` (fail-closed: dentro del scope pero sin regla que
-        /// aplique), `"not-approved"` (un `ask` fue denegado o su TTL venció).
+        /// COARSE category of the reason for denial — NOT the identifier of
+        /// the specific `policy.toml` rule (which is not leaked, for
+        /// security). Closed vocabulary, comparable by equality:
+        /// `"out-of-scope"` (path/op outside the agent's scope),
+        /// `"scope-expired"` (the applicable scope expired),
+        /// `"policy-rule"` (a `policy.toml` `deny` rule matched),
+        /// `"no-rule"` (fail-closed: inside the scope but no rule applies),
+        /// `"not-approved"` (an `ask` was denied or its TTL expired).
         ///
-        /// Esos seis son los que CRUZAN EL CABLE. El SDK sintetiza además el
-        /// NOMBRE DEL MÉTODO cuando un result de dos estados vuelve en falso
-        /// (`connection.trust_host_key`, `connection.provide_secret`): ese
-        /// valor no viene del daemon, se construye en el cliente para no
-        /// tratar un rechazo como un éxito. Un lector del wire no lo verá
-        /// nunca, y el vocabulario de arriba sigue siendo cerrado.
+        /// Those six are the ones that CROSS THE WIRE. The SDK additionally
+        /// synthesizes the METHOD NAME when a two-state result comes back
+        /// false (`connection.trust_host_key`, `connection.provide_secret`):
+        /// that value does not come from the daemon, it is built on the
+        /// client so a rejection is never treated as a success. A reader of
+        /// the wire will never see it, and the vocabulary above stays closed.
         rule: String,
     },
-    /// La aprobación que se intentaba decidir ya no está (#279, desde 0.55.0).
+    /// The approval being decided is no longer there (#279, since 0.55.0).
     ///
-    /// Existe porque las tres formas de «ya no está» piden respuestas
-    /// distintas de quien mira la pantalla, y antes se colapsaban en un
-    /// `INVALID_PARAMS` con un texto en inglés dentro del `message`: un
-    /// frontend solo podía decir «la aprobación no llegó al daemon», que es
-    /// verdad en UNO de los tres casos y mentira en los otros dos. «Llegó y el
-    /// daemon ya la había denegado por TTL» se leía como «tu clic se perdió».
+    /// Exists because the three ways of "no longer there" call for different
+    /// answers from whoever is looking at the screen, and before they
+    /// collapsed into an `INVALID_PARAMS` with an English text inside
+    /// `message`: a frontend could only say "the approval never reached the
+    /// daemon", which is true in ONE of the three cases and false in the
+    /// other two. "It arrived and the daemon had already denied it by TTL"
+    /// read as "your click got lost".
     #[error("the approval is gone: {reason}")]
     ApprovalGone {
-        /// Cuál de las tres. Vocabulario CERRADO y comparable por igualdad,
-        /// como `PolicyDenied.rule`: `"unknown"` (ese id nunca existió, o el
-        /// daemon se reinició), `"expired"` (estaba pendiente pero quien la
-        /// pidió ya no escucha) y `"already-decided"` (ese id existió y
-        /// alguien lo resolvió antes — otra ventana, su TTL, o el propio
-        /// peticionario retirándolo).
+        /// Which of the three. CLOSED vocabulary, comparable by equality,
+        /// like `PolicyDenied.rule`: `"unknown"` (that id never existed, or
+        /// the daemon restarted), `"expired"` (it was pending but whoever
+        /// asked for it is no longer listening), and `"already-decided"`
+        /// (that id existed and someone resolved it before — another
+        /// window, its TTL, or the requester itself withdrawing it).
         ///
-        /// Un valor que este binario no conozca se trata como `"unknown"`: el
-        /// conjunto puede CRECER de forma aditiva, y quien no lo reconozca no
-        /// debe inventar una explicación.
+        /// A value this binary does not know is treated as `"unknown"`: the
+        /// set can GROW additively, and whoever does not recognize it must
+        /// not invent an explanation.
         reason: String,
     },
-    /// Una transcodificación habría perdido datos y se abortó.
+    /// A transcoding would have lost data and was aborted.
     #[error("encoding loss")]
     EncodingLoss,
-    /// La operación no está soportada por este provider (ver `Capabilities`).
+    /// The operation is not supported by this provider (see `Capabilities`).
     #[error("unsupported operation")]
     Unsupported,
-    /// El `VPath` recibido no parsea o viola invariantes.
+    /// The `VPath` received does not parse or violates invariants.
     #[error("invalid path")]
     InvalidPath,
-    /// Error interno del core; `panic: true` = task supervisada que reventó
-    /// (el daemon sigue vivo, spec §17.7).
+    /// Internal core error; `panic: true` = a supervised task that panicked
+    /// (the daemon stays alive, spec §17.7).
     #[error("internal error (panic: {panic})")]
     Internal {
-        /// `true` si el origen fue un panic capturado en una task.
+        /// `true` if the source was a panic caught in a task.
         panic: bool,
     },
-    /// Ciclo de symlinks detectado al recorrer con `Follow` (visited set
-    /// de la spec §17.9; issue #31). Un cliente N-1 degrada a `Unknown`.
+    /// Symlink loop detected while walking with `Follow` (the visited set of
+    /// spec §17.9; issue #31). An N-1 client degrades to `Unknown`.
     #[error("symlink loop")]
     Loop,
-    /// Contenedor/formato ROTO (0.17.0, #58): un zip/tar corrupto, truncado
-    /// o estructuralmente mentiroso. No es un fallo de I/O (reintentar no
-    /// ayuda; un fallo del provider subyacente se propaga con su propia
-    /// categoría, jamás como `Corrupt`); la UX honesta es «no es un
-    /// contenedor válido». Desde 0.23.0 (#95) exceder los topes anti-bomba
-    /// LOCALES ya no es `Corrupt`: es [`Error::LimitExceeded`] — el
-    /// contenedor puede ser perfectamente válido. Un cliente N-1 degrada a
-    /// `Unknown`.
+    /// BROKEN container/format (0.17.0, #58): a corrupt, truncated or
+    /// structurally lying zip/tar. Not an I/O failure (retrying does not
+    /// help; a failure of the underlying provider propagates with its own
+    /// category, never as `Corrupt`); the honest UX is "not a valid
+    /// container". Since 0.23.0 (#95) exceeding the LOCAL anti-bomb caps is
+    /// no longer `Corrupt`: it is [`Error::LimitExceeded`] — the container
+    /// may be perfectly valid. An N-1 client degrades to `Unknown`.
     #[error("corrupt or invalid container/format")]
     Corrupt,
-    /// El contenedor excede un LÍMITE LOCAL anti-bomba del índice (0.23.0,
-    /// #95, ADR 0018 D2). Distinto de [`Error::Corrupt`]: el contenedor
-    /// puede ser VÁLIDO (un tar.gz legítimo enorme) — norte REHÚSA pagar su
-    /// coste con los límites vigentes, no lo declara roto. Un cliente N-1
-    /// degrada a `Unknown` (misma UX gruesa que el `Corrupt` de antes).
+    /// The container exceeds a LOCAL anti-bomb limit of the index (0.23.0,
+    /// #95, ADR 0018 D2). Different from [`Error::Corrupt`]: the container
+    /// may be VALID (a legitimately huge tar.gz) — norte REFUSES to pay its
+    /// cost under the current limits, it does not declare it broken. An N-1
+    /// client degrades to `Unknown` (the same coarse UX as the old
+    /// `Corrupt`).
     #[error("container exceeds local limit: {limit}")]
     LimitExceeded {
-        /// QUÉ límite se excedió — vocabulario CERRADO, comparable por
-        /// igualdad (nunca el valor numérico, que es configuración local):
-        /// [`Error::LIMIT_ENTRIES`] (entradas del índice — o anunciadas por
-        /// el EOCD — por encima de `max_entries`, presupuesto de omitidas
-        /// incluido), [`Error::LIMIT_DECOMPRESSED_BYTES`] (inflado
-        /// acumulado por encima de `max_decompressed_bytes`) o
-        /// [`Error::LIMIT_NESTING`] (capas de archivo anidadas por encima
-        /// de `max_nesting`, #56/proto 0.24) o
-        /// [`Error::LIMIT_RETAINED_SYNC_PLANS`] (planes de sincronización
-        /// retenidos por una conexión, 0.44.0) o
-        /// [`Error::LIMIT_SESSION_BODY`] (cuerpo de la sesión de UI por
-        /// encima de 1 MiB, 0.48.0). Los emisores usan las
-        /// constantes, jamás literales sueltos (fuente única, pin en
-        /// tests). Forward-compat: un token DESCONOCIDO (peer más nuevo)
-        /// se trata como límite genérico — mostrar el string tal cual,
-        /// jamás fallar el parse ni adivinar.
+        /// WHICH limit was exceeded — CLOSED vocabulary, comparable by
+        /// equality (never the numeric value, which is local
+        /// configuration): [`Error::LIMIT_ENTRIES`] (index entries — or ones
+        /// announced by the EOCD — above `max_entries`, including the
+        /// skipped-entries budget), [`Error::LIMIT_DECOMPRESSED_BYTES`]
+        /// (accumulated inflation above `max_decompressed_bytes`), or
+        /// [`Error::LIMIT_NESTING`] (nested archive layers above
+        /// `max_nesting`, #56/proto 0.24), or
+        /// [`Error::LIMIT_RETAINED_SYNC_PLANS`] (sync plans retained by a
+        /// connection, 0.44.0), or [`Error::LIMIT_SESSION_BODY`] (UI
+        /// session body above 1 MiB, 0.48.0). Emitters use the constants,
+        /// never bare literals (single source, pinned by a test).
+        /// Forward-compat: an UNKNOWN token (a newer peer) is treated as a
+        /// generic limit — show the string as is, never fail the parse nor
+        /// guess.
         limit: String,
     },
-    /// Host key SSH DESCONOCIDA en el primer contacto (TOFU — ADR 0015 D). El
-    /// frontend muestra el `fingerprint` y, si el usuario confía, llama a
-    /// `connection.trust_host_key` y reintenta. Un cliente N-1 degrada a
-    /// `Unknown` (0.7.0, fase 6).
+    /// UNKNOWN SSH host key on first contact (TOFU — ADR 0015 D). The
+    /// frontend shows the `fingerprint` and, if the user trusts it, calls
+    /// `connection.trust_host_key` and retries. An N-1 client degrades to
+    /// `Unknown` (0.7.0, phase 6).
     #[error("unknown host key for {host} ({algo})")]
     HostKeyUnknown {
-        /// Host DESNUDO al que se conecta (sin puerto; el puerto va aparte
-        /// para que el mapeo error→`connection.trust_host_key` sea 1:1).
+        /// BARE host being connected to (no port; the port travels
+        /// separately so the error→`connection.trust_host_key` mapping is
+        /// 1:1).
         host: String,
-        /// Puerto (ausente = default del scheme).
+        /// Port (absent = the scheme's default).
         #[serde(default)]
         port: Option<u16>,
-        /// Algoritmo de la clave (p. ej. `ssh-ed25519`).
+        /// Key algorithm (e.g. `ssh-ed25519`).
         algo: String,
-        /// Fingerprint en formato OpenSSH `SHA256:<base64>` — la MISMA cadena
-        /// que core y frontend comparan y que va en `trust_host_key`.
+        /// Fingerprint in OpenSSH `SHA256:<base64>` format — the SAME string
+        /// the core and the frontend compare and that goes into
+        /// `trust_host_key`.
         fingerprint: String,
     },
-    /// La conexión pide un secreto que no está en ninguna parte, y su
-    /// `connections.toml` dice que hay que PREGUNTARLO (`secret = "prompt"`,
-    /// #325).
+    /// The connection needs a secret that is nowhere to be found, and its
+    /// `connections.toml` says to ASK for it (`secret = "prompt"`, #325).
     ///
-    /// Mismo flujo que el TOFU de arriba, y a propósito: el frontend abre su
-    /// diálogo, manda lo tecleado con `connection.provide_secret` y REINTENTA
-    /// esta misma navegación. El core no puede preguntar por su cuenta —el
-    /// resolver de secretos no tiene interfaz de usuario ni debe tenerla—, así
-    /// que la única forma de que un humano conteste es que la pregunta suba
-    /// por aquí.
+    /// Same flow as the TOFU above, on purpose: the frontend opens its
+    /// dialog, sends what was typed with `connection.provide_secret`, and
+    /// RETRIES this same navigation. The core cannot ask on its own — the
+    /// secret resolver has no user interface and must not have one — so the
+    /// only way a human gets asked is for the question to travel up this way.
     ///
-    /// Lleva el nombre de la conexión Y su destino, y el destino es
-    /// obligatorio: **un diálogo de contraseña que no dice a quién se la va a
-    /// dar no es contestable.** El nombre lo eligió `connections.toml`, que
-    /// puede venir de un dotfiles ajeno o de una línea editada; `trabajo` no
-    /// dice nada sobre si esa entrada apunta hoy a la máquina de siempre o a
-    /// `ftp://evil.example`. Es la misma razón por la que el TOFU de arriba
-    /// lleva host, algoritmo y huella: quien contesta verifica al OTRO EXTREMO,
-    /// no una etiqueta local.
+    /// Carries the connection's name AND its destination, and the
+    /// destination is mandatory: **a password dialog that does not say who
+    /// it is going to hand it to is not answerable.** The name was chosen by
+    /// `connections.toml`, which may come from someone else's dotfiles or an
+    /// edited line; `work` says nothing about whether that entry points
+    /// today at the usual machine or at `ftp://evil.example`. It is the same
+    /// reason the TOFU above carries host, algorithm and fingerprint: whoever
+    /// answers verifies the OTHER END, not a local label.
     ///
-    /// Y el riesgo no es teórico en todos los esquemas: con `sftp` el
-    /// handshake SSH todavía pasa por el TOFU antes de mandar nada, pero un
-    /// `ftp` va en claro y un `s3` con `endpoint` ajeno firma una petición
-    /// contra el servidor que la entrada eligió.
+    /// And the risk is not theoretical across every scheme: with `sftp` the
+    /// SSH handshake still goes through TOFU before sending anything, but an
+    /// `ftp` goes in the clear and an `s3` with a foreign `endpoint` signs a
+    /// request against whatever server the entry chose.
     ///
-    /// Un cliente 0.62 degrada a `Unknown` y enseña un error en vez de un
-    /// diálogo — o sea que no puede conectar esa conexión, igual que hoy.
+    /// A 0.62 client degrades to `Unknown` and shows an error instead of a
+    /// dialog — i.e. it cannot connect that connection, same as today.
     #[error("connection {conn} ({endpoint}) needs a secret")]
     SecretNeeded {
-        /// Nombre de la conexión en `connections.toml`, el mismo que va en
+        /// Connection name in `connections.toml`, the same one that goes in
         /// [`crate::methods::CONNECTION_PROVIDE_SECRET`].
         conn: String,
-        /// A dónde se conectaría, `scheme://host[:puerto]`, **sin userinfo**
-        /// (misma redacción que [`crate::methods::ConnectionDegraded`]: un
-        /// `user:pass@` en la URL no se reenvía a la pantalla ni al log).
-        /// Solo para MOSTRAR: el frontend no lo reparsea ni lo usa para
-        /// conectar.
+        /// Where it would connect to, `scheme://host[:port]`, **without
+        /// userinfo** (the same redaction as
+        /// [`crate::methods::ConnectionDegraded`]: a `user:pass@` in the URL
+        /// is not forwarded to the screen or the log). For DISPLAY only: the
+        /// frontend does not reparse it or use it to connect.
         endpoint: String,
     },
-    /// La host key SSH CAMBIÓ respecto a la registrada en `known_hosts`:
-    /// posible MITM. JAMÁS se acepta en silencio (0.7.0, fase 6).
+    /// The SSH host key CHANGED from the one registered in `known_hosts`:
+    /// possible MITM. NEVER accepted silently (0.7.0, phase 6).
     #[error("host key MISMATCH for {host} ({algo}) — possible MITM")]
     HostKeyMismatch {
-        /// Host DESNUDO afectado (sin puerto).
+        /// Affected BARE host (no port).
         host: String,
-        /// Puerto (ausente = default del scheme).
+        /// Port (absent = the scheme's default).
         #[serde(default)]
         port: Option<u16>,
-        /// Algoritmo de la clave presentada.
+        /// Algorithm of the presented key.
         algo: String,
-        /// Fingerprint OpenSSH `SHA256:<base64>` de la clave presentada.
+        /// OpenSSH `SHA256:<base64>` fingerprint of the presented key.
         fingerprint: String,
     },
-    /// Un `cursor` de paginación de `fs.list` ya no es válido: expiró (TTL),
-    /// fue expulsado (LRU) o murió con la conexión (ADR 0017, 0.8.0). El
-    /// cliente reinicia el listado desde cero. Un cliente N-1 (0.7.x) jamás la
-    /// ve — no envía cursores — pero degrada a `Unknown` si la recibiera.
+    /// An `fs.list` pagination `cursor` is no longer valid: it expired (TTL),
+    /// was evicted (LRU), or died with the connection (ADR 0017, 0.8.0). The
+    /// client restarts the listing from scratch. An N-1 client (0.7.x) never
+    /// sees it — it does not send cursors — but it would degrade to `Unknown`
+    /// if it received one.
     #[error("list cursor expired; restart the listing")]
     CursorExpired,
-    /// El directorio cambió entre la vista previa y la ejecución de un lote de
-    /// renames (`fs.rename_batch`, 0.36.0): re-planificar las MISMAS parejas
-    /// produjo un plan distinto del `plan_hash` que el llamante aprobó. Nada se
-    /// intentó. Accionable: re-planificar y volver a confirmar. NO reintentable
-    /// tal cual — el humano tiene que ver el plan nuevo. Un cliente N-1
-    /// (0.35.x) jamás la ve (no llama al método) pero degradaría a `Unknown`.
+    /// The directory changed between the preview and the execution of a
+    /// rename batch (`fs.rename_batch`, 0.36.0): re-planning the SAME pairs
+    /// produced a plan different from the `plan_hash` the caller approved.
+    /// Nothing was attempted. Actionable: re-plan and confirm again. NOT
+    /// retryable as is — the human has to see the new plan. An N-1 client
+    /// (0.35.x) never sees it (it does not call the method) but would
+    /// degrade to `Unknown`.
     #[error("rename plan is stale; re-plan and confirm again")]
     PlanStale,
-    /// El plan de renames tiene colisiones, así que no se intentó nada
-    /// (`fs.rename_batch`, 0.36.0). Accionable: corregir los nombres (o el
-    /// directorio de origen) y re-planificar. Un cliente N-1 (0.35.x) jamás la
-    /// ve pero degradaría a `Unknown`.
+    /// The rename plan has collisions, so nothing was attempted
+    /// (`fs.rename_batch`, 0.36.0). Actionable: fix the names (or the source
+    /// directory) and re-plan. An N-1 client (0.35.x) never sees it but would
+    /// degrade to `Unknown`.
     #[error("rename plan has collisions; nothing was attempted")]
     PlanNotExecutable,
-    /// Las dos raíces de un `sync.plan` son EL MISMO ÁRBOL: iguales, o una
-    /// dentro de la otra (0.40.0, ADR 0049). No se creó Task alguna.
-    /// Accionable: elegir otro par de raíces.
+    /// The two roots of a `sync.plan` are THE SAME TREE: equal, or one inside
+    /// the other (0.40.0, ADR 0049). No Task was created.
+    /// Actionable: choose another pair of roots.
     ///
-    /// Es un rechazo ESTRUCTURAL, previo al walk, y por eso es una categoría y
-    /// no un `-32602` con mensaje: los frontends hacen match por categoría y
-    /// jamás parsean strings de error, así que «estas dos carpetas son la
-    /// misma» solo se puede pintar —y traducir— si viaja como variante. La
-    /// comprobación gemela que corre DURANTE el walk, y que caza lo que un
-    /// symlink o una segunda authority esconden, no es un error sino un
+    /// It is a STRUCTURAL rejection, prior to the walk, and that is why it is
+    /// a category and not a `-32602` with a message: frontends match by
+    /// category and never parse error strings, so "these two folders are the
+    /// same" can only be rendered — and translated — if it travels as a
+    /// variant. The twin check that runs DURING the walk, and that catches
+    /// what a symlink or a second authority hides, is not an error but a
     /// [`SyncBlockerKind::OverlapDetected`](crate::methods::SyncBlockerKind::OverlapDetected):
-    /// para entonces ya hay un plan al que pertenecer.
+    /// by then there is already a plan to belong to.
     ///
-    /// `fs.compare` NO la emite: comparar `/a` contra `/a/sub` cuesta un walk y
-    /// no escribe un byte. Un cliente N-1 (0.39.x) jamás la ve —no llama al
-    /// método— pero degradaría a `Unknown`.
+    /// `fs.compare` does NOT emit it: comparing `/a` against `/a/sub` costs a
+    /// walk and writes not a byte. An N-1 client (0.39.x) never sees it — it
+    /// does not call the method — but would degrade to `Unknown`.
     #[error("sync roots overlap: {relation}")]
     OverlappingRoots {
-        /// CÓMO se solapan: son la misma, o una contiene a la otra y cuál. Las
-        /// tres se pintan distinto y la primera no es un caso degenerado de las
-        /// otras dos.
+        /// HOW they overlap: they are the same, or one contains the other and
+        /// which one. The three render differently and the first is not a
+        /// degenerate case of the other two.
         relation: RootOverlap,
     },
-    /// El journal de ESTA sesión no se puede abrir, así que la mutación se
-    /// RECHAZÓ y no se tocó nada (0.41.0, #178).
+    /// THIS session's journal cannot be opened, so the mutation was REJECTED
+    /// and nothing was touched (0.41.0, #178).
     ///
-    /// No es «el fichero está ocupado»: un journal que tiene otro proceso —un
-    /// daemon vivo, otra sesión embebida— deja seguir, avisando, porque
-    /// refusarlo convertiría «hay un daemon» en «el CLI no funciona». Esto es
-    /// el otro caso: sin permisos, corrupto, no-es-una-base-de-datos, o de una
-    /// era anterior a la cadena de hoy. Ahí seguir significaría mutar sin
-    /// registro y sin undo, que es exactamente lo que la regla dura 4 prohíbe y
-    /// lo que `norte daemon run` ya rehúsa con esa misma entrada.
+    /// This is not "the file is busy": a journal that has another process on
+    /// it — a live daemon, another embedded session — lets it through, with a
+    /// warning, because refusing it would turn "there is a daemon" into "the
+    /// CLI does not work". This is the other case: no permissions, corrupt,
+    /// not-a-database, or from an era before today's chain. There, continuing
+    /// would mean mutating with no record and no undo, which is exactly what
+    /// hard rule 4 forbids and what `norte daemon run` already refuses with
+    /// this same entry.
     ///
-    /// **Es la variante que un atacante con escritura en el directorio de
-    /// estado hace aparecer.** Corromper `journal.db` desactivaba en silencio
-    /// el registro de TODAS las sesiones embebidas —incluido el de
-    /// `norte ai rename --yes`, que es el que más falta hace—; ahora las para.
-    /// Accionable: arreglar o quitar `journal.db` del directorio de estado.
+    /// **This is the variant an attacker with write access to the state
+    /// directory can make appear.** Corrupting `journal.db` used to silently
+    /// disable the recording of ALL embedded sessions — including
+    /// `norte ai rename --yes`'s, which needs it the most; now it stops
+    /// them. Actionable: fix or remove `journal.db` from the state
+    /// directory.
     ///
-    /// Sin campos A PROPÓSITO: la ruta del fichero es local del proceso que la
-    /// emite y no significa nada en el otro extremo de un socket, y el motivo
-    /// es el error crudo de `SQLite` —texto que moldea en parte quien pueda
-    /// escribir el fichero— que no tiene por qué cruzar la frontera. Los dos
-    /// viajan por el canal de avisos del journal
-    /// (`norte_core::embedded::NoJournal`), que es in-process y saneado.
+    /// No fields ON PURPOSE: the file's path is local to the process that
+    /// emits it and means nothing on the other end of a socket, and the
+    /// reason is `SQLite`'s raw error — text partly shaped by whoever can
+    /// write the file — which has no business crossing the boundary. Both
+    /// travel through the journal's warning channel
+    /// (`norte_core::embedded::NoJournal`), which is in-process and
+    /// sanitized.
     ///
-    /// Eso no deja el detalle sin sitio: si algún día hace falta nombrar el
-    /// fichero POR EL WIRE, el `message` del `RpcError` ya lleva el `Display`
-    /// de este error, que es donde ADR 0004 pone lo legible por humanos. La
-    /// taxonomía se queda con la categoría; añadir un campo aquí no haría
-    /// falta.
+    /// That does not leave the detail with nowhere to go: if naming the file
+    /// OVER THE WIRE is ever needed, the `RpcError`'s `message` already
+    /// carries this error's `Display`, which is where ADR 0004 puts what is
+    /// human-readable. The taxonomy keeps the category; adding a field here
+    /// would not be needed.
     ///
-    /// Hoy solo la emite el transporte EMBEBIDO: el daemon con esta misma
-    /// entrada no llega a arrancar. Un cliente N-1 (0.40.x) degradaría a
+    /// Today only the EMBEDDED transport emits it: the daemon with this same
+    /// entry does not even start. An N-1 client (0.40.x) would degrade to
     /// `Unknown`.
     #[error("this session's journal cannot be opened; the mutation was refused")]
     JournalUnavailable,
-    /// Categoría de un protocolo más nuevo (fallback de deserialización).
-    /// El core JAMÁS la emite; existe para que un cliente N degrade con
-    /// elegancia ante categorías N+1.
+    /// Category of a newer protocol (deserialization fallback). The core
+    /// NEVER emits it; it exists so an N client degrades gracefully in the
+    /// face of N+1 categories.
     #[doc(hidden)]
     #[error("unknown error category (newer protocol)")]
     #[serde(other)]
@@ -476,9 +486,10 @@ pub enum Error {
 }
 
 impl Error {
-    /// Vocabulario de [`Error::LimitExceeded`]: entradas del índice (o
-    /// anunciadas por el EOCD) por encima de `max_entries`, presupuesto de
-    /// omitidas incluido. Fuente ÚNICA — los emisores no escriben literales.
+    /// Vocabulary of [`Error::LimitExceeded`]: index entries (or ones
+    /// announced by the EOCD) above `max_entries`, including the
+    /// skipped-entries budget. SINGLE source — emitters do not write
+    /// literals.
     ///
     /// ```
     /// use norte_proto::Error;
@@ -487,34 +498,35 @@ impl Error {
     ///            r#"{"kind":"limit_exceeded","limit":"entries"}"#);
     /// ```
     pub const LIMIT_ENTRIES: &'static str = "entries";
-    /// Vocabulario de [`Error::LimitExceeded`]: inflado acumulado por encima
-    /// de `max_decompressed_bytes` (gzip bomb o contenedor legítimo enorme).
+    /// Vocabulary of [`Error::LimitExceeded`]: accumulated inflation above
+    /// `max_decompressed_bytes` (gzip bomb or a legitimately huge container).
     pub const LIMIT_DECOMPRESSED_BYTES: &'static str = "decompressed-bytes";
-    /// Vocabulario de [`Error::LimitExceeded`] (#56, proto 0.24): capas de
-    /// archivo anidadas por encima de `max_nesting` (lo gobierna el engine —
-    /// el direccionamiento en sí es ilimitado sintácticamente).
+    /// Vocabulary of [`Error::LimitExceeded`] (#56, proto 0.24): nested
+    /// archive layers above `max_nesting` (governed by the engine — the
+    /// addressing itself is syntactically unbounded).
     pub const LIMIT_NESTING: &'static str = "nesting";
-    /// Vocabulario de [`Error::LimitExceeded`] (0.44.0, #182): planes de
-    /// sincronización RETENIDOS por una conexión, por encima del tope del
-    /// daemon.
+    /// Vocabulary of [`Error::LimitExceeded`] (0.44.0, #182): sync plans
+    /// RETAINED by a connection, above the daemon's cap.
     ///
-    /// No es un contenedor —los otros tres hablan de archivos— y aun así vive
-    /// aquí, porque lo que el cliente necesita saber es exactamente lo mismo:
-    /// «esto NO está roto; norte se niega a pagar su coste con los límites de
-    /// hoy». La alternativa era una variante nueva de la taxonomía para decir
-    /// lo mismo con otra palabra.
+    /// Not a container — the other three are about archives — and yet it
+    /// lives here, because what the client needs to know is exactly the
+    /// same: "this is NOT broken; norte refuses to pay its cost under
+    /// today's limits". The alternative was a new taxonomy variant to say the
+    /// same thing with another word.
     ///
-    /// Lo que arregla es concreto (#182): ese rechazo viajaba con su frase en
-    /// `message` y SIN taxonomía en `data`, así que el cliente lo recibía como
-    /// `Internal { panic: false }` — «internal error», que es justo el texto
-    /// que hace a un modelo reintentar, y reintentar es lo que llenaba el
-    /// tope. Un cliente N-1 lo lee como límite genérico y enseña el token tal
-    /// cual, que es el contrato de este campo desde que existe.
+    /// What it fixes is concrete (#182): that rejection used to travel with
+    /// its phrase in `message` and WITHOUT a taxonomy in `data`, so the
+    /// client received it as `Internal { panic: false }` — "internal error",
+    /// which is exactly the text that makes a model retry, and retrying was
+    /// what filled the cap. An N-1 client reads it as a generic limit and
+    /// shows the token as is, which has been this field's contract since it
+    /// existed.
     pub const LIMIT_RETAINED_SYNC_PLANS: &'static str = "retained-sync-plans";
 
-    /// El cuerpo de una sesión de UI pasa de
-    /// [`crate::methods::SESSION_BODY_MAX`] (0.48.0, L2). El core lo mide en
-    /// bytes serializados y rehúsa entero: no trunca un documento cuyo
-    /// esquema no conoce. El cliente tira historial y reintenta UNA vez.
+    /// A UI session's body goes over
+    /// [`crate::methods::SESSION_BODY_MAX`] (0.48.0, L2). The core measures it
+    /// in serialized bytes and refuses it whole: it does not truncate a
+    /// document whose schema it does not know. The client discards history
+    /// and retries ONCE.
     pub const LIMIT_SESSION_BODY: &'static str = "session-body";
 }

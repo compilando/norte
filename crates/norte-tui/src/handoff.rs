@@ -1,38 +1,38 @@
-//! El RELEVO a la ventana (fase 9 del programa WOW): qué se lanza y cómo.
+//! The HANDOFF to the window (phase 9 of the WOW program): what gets
+//! launched, and how.
 //!
-//! Lo de AQUÍ es sólo la mitad que este proceso puede decidir sin hablar con
-//! nadie: qué binario es la ventana y con qué argumentos arranca. Volcar la
-//! pantalla y soltar la sesión es del escritor de sesión
-//! ([`crate::session_push::request_handoff`]), y lanzarlo, del bucle.
+//! What is HERE is only the half this process can decide without talking to
+//! anyone: which binary the window is and with what arguments it starts.
+//! Dumping the screen and releasing the session belongs to the session writer
+//! ([`crate::session_push::request_handoff`]), and launching it, to the loop.
 
 use std::ffi::OsString;
 
-/// Los nombres bajo los que la ventana puede estar instalada, en orden de
-/// preferencia.
+/// The names the window may be installed under, in order of preference.
 ///
-/// Dos y no uno porque `just link-gui` deja los dos: `ntc-gui` es el nombre
-/// del binario y `norte-gui` el alias que la gente escribe. Buscarlos por
-/// PATH —y no una ruta compilada— es lo que hace que un norte instalado de
-/// cualquiera de las tres maneras (paquete, `cargo install`, symlink al árbol
-/// de desarrollo) releve al que el lector tiene de verdad.
-const VENTANA: &[&str] = &["ntc-gui", "norte-gui"];
+/// Two and not one because `just link-gui` leaves both: `ntc-gui` is the
+/// binary's name and `norte-gui` the alias people type. Looking them up by
+/// PATH — and not a compiled-in path — is what makes a norte installed any of
+/// the three ways (package, `cargo install`, symlink to the development tree)
+/// hand off to the one the reader actually has.
+const WINDOW: &[&str] = &["ntc-gui", "norte-gui"];
 
-/// El `argv` con el que arranca la ventana de un relevo.
+/// The `argv` a handoff starts the window with.
 ///
-/// `--attach` es lo que la distingue de un arranque cualquiera: además de la
-/// pantalla, reclama lo MARCADO que este proceso acaba de dejar en la sesión.
-/// Sin él la ventana abriría donde estabas pero sin lo que tenías señalado,
-/// que es justo la mitad que no se puede rehacer con un `cd`.
+/// `--attach` is what sets it apart from an ordinary launch: besides the
+/// screen, it claims what this process just left MARKED in the session.
+/// Without it, the window would open where you were but without what you had
+/// selected, which is exactly the half that a `cd` cannot redo.
 ///
-/// Los argumentos salen de [`norte_frontend::handoff::window_args`], el
-/// MISMO sitio del que la ventana saca su test de que los acepta. Antes se
-/// escribían aquí a mano y llevaban `--daemon`, que la ventana no tiene
-/// —siempre va con daemon—: salía con código 2 y, con `stderr` cerrado,
-/// sin decir nada. El relevo quedaba en una terminal que se cerraba y una
-/// ventana que no llegaba.
+/// The arguments come from [`norte_frontend::handoff::window_args`], the SAME
+/// place the window's own test that it accepts them draws from. They used to
+/// be written here by hand and carried `--daemon`, which the window does not
+/// have — it always runs with a daemon: it exited with code 2 and, with
+/// `stderr` closed, said nothing. The handoff was left with a terminal that
+/// closed and a window that never arrived.
 #[must_use]
 pub fn window_argv() -> Vec<OsString> {
-    let mut argv = vec![OsString::from(programa())];
+    let mut argv = vec![OsString::from(program())];
     argv.extend(
         norte_frontend::handoff::window_args()
             .into_iter()
@@ -41,87 +41,91 @@ pub fn window_argv() -> Vec<OsString> {
     argv
 }
 
-/// El primero de [`VENTANA`] que está en el PATH, o el primero a secas.
+/// The first of [`WINDOW`] that is on the PATH, or just the first one.
 ///
-/// Devolver el primero cuando no hay ninguno no es fingir que existe: el
-/// lanzamiento falla, el bucle lo dice y el lector se queda donde estaba. La
-/// alternativa —negarse aquí— convertiría «no tienes la ventana instalada» en
-/// un `Option` que el llamante tendría que explicar dos veces.
-fn programa() -> &'static str {
-    VENTANA
+/// Returning the first when none is found is not pretending it exists: the
+/// launch fails, the loop says so, and the reader stays where they were. The
+/// alternative — refusing here — would turn "you do not have the window
+/// installed" into an `Option` the caller would have to explain twice.
+fn program() -> &'static str {
+    WINDOW
         .iter()
         .copied()
         .find(|p| norte_frontend::openers::program_available(std::ffi::OsStr::new(p)))
-        .unwrap_or(VENTANA[0])
+        .unwrap_or(WINDOW[0])
 }
 
-/// Lanza `argv` SUELTO: este proceso se va detrás, así que la ventana no puede
-/// quedarse colgando de él.
+/// Launches `argv` DETACHED: this process is about to go away, so the window
+/// must not be left hanging off it.
 ///
-/// Ni `stdin` ni `stdout` ni `stderr` se heredan. La terminal es de la TUI, y
-/// una ventana que escriba en ella después de que el relevo la devuelva al
-/// shell ensucia el prompt del lector con trazas que no pidió.
+/// Neither `stdin` nor `stdout` nor `stderr` are inherited. The terminal
+/// belongs to the TUI, and a window writing to it after the handoff returns
+/// it to the shell would litter the reader's prompt with traces they never
+/// asked for.
 ///
-/// Devuelve el `Child` para que quien llama compruebe con [`esperar_arranque`]
-/// que la ventana SIGUE viva: un `spawn` correcto sólo dice que el proceso
-/// empezó.
+/// Returns the `Child` so the caller can check with [`wait_startup`] that
+/// the window is STILL alive: a successful `spawn` only says the process
+/// started.
 ///
 /// # Errors
-/// Lo que dé el `spawn`: que el binario no esté es el caso normal, y se dice.
+/// Whatever `spawn` gives: the binary being missing is the normal case, and
+/// is reported.
 pub fn spawn_window(argv: &[OsString]) -> std::io::Result<std::process::Child> {
-    let (programa, resto) = argv
+    let (program, rest) = argv
         .split_first()
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "argv vacío"))?;
-    std::process::Command::new(programa)
-        .args(resto)
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "empty argv"))?;
+    std::process::Command::new(program)
+        .args(rest)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
 }
 
-/// Cuánto se espera a que la ventana demuestre que va a vivir.
+/// How long to wait for the window to prove it is going to live.
 ///
-/// Lo que se quiere cazar es la muerte INMEDIATA —un flag desconocido, una
-/// librería que falta, un daemon que no arranca—, que ocurre en decenas de
-/// milisegundos. Un segundo y medio sobra para eso y no se nota al entregar la
-/// pantalla, que es un gesto de una vez; lo que no caza —una ventana que muere
-/// a los diez segundos— tampoco lo cazaría esperar tres.
-pub const GRACIA: std::time::Duration = std::time::Duration::from_millis(1_500);
+/// What is worth catching is IMMEDIATE death — an unknown flag, a missing
+/// library, a daemon that fails to start — which happens within tens of
+/// milliseconds. A second and a half is plenty for that and goes unnoticed
+/// when handing over the screen, which is a one-time gesture; what it does
+/// not catch — a window that dies ten seconds later — waiting three would not
+/// catch either.
+pub const GRACE: std::time::Duration = std::time::Duration::from_millis(1_500);
 
-/// ¿Sigue viva la ventana pasado `gracia`? `Err` con su código de salida si
-/// murió antes (`None` si la mató una señal).
+/// Is the window still alive past `grace`? `Err` with its exit code if it
+/// died before that (`None` if a signal killed it).
 ///
-/// Es la mitad del relevo que faltaba: sin esto, la terminal se iba en cuanto
-/// `spawn` decía `Ok`, y una ventana que salía con código 2 dejaba al lector
-/// sin ninguna de las dos — lo contrario de lo que promete la ADR 0123.
+/// It is the missing half of the handoff: without this, the terminal left as
+/// soon as `spawn` said `Ok`, and a window that exited with code 2 left the
+/// reader with neither of the two — the opposite of what ADR 0123 promises.
 ///
-/// Sondea con `try_wait`, que NO bloquea, y duerme con el reloj de tokio: el
-/// bucle de eventos no se queda parado en una llamada al sistema (regla 2).
-/// El `Child` que se suelta al volver no mata al proceso: `std` no lo hace al
-/// dropearlo, y la ventana sigue su vida.
+/// Polls with `try_wait`, which does NOT block, and sleeps with tokio's
+/// clock: the event loop does not sit stalled in a system call (rule 2). The
+/// `Child` released on return does not kill the process: `std` does not do
+/// that on drop, and the window goes on with its life.
 ///
 /// # Errors
-/// El código de salida de una ventana que murió dentro de `gracia`.
-pub async fn esperar_arranque(
-    mut hijo: std::process::Child,
-    gracia: std::time::Duration,
+/// The exit code of a window that died within `grace`.
+pub async fn wait_startup(
+    mut child: std::process::Child,
+    grace: std::time::Duration,
 ) -> Result<(), Option<i32>> {
-    const PASO: std::time::Duration = std::time::Duration::from_millis(100);
-    let limite = tokio::time::Instant::now() + gracia;
+    const STEP: std::time::Duration = std::time::Duration::from_millis(100);
+    let deadline = tokio::time::Instant::now() + grace;
     loop {
-        match hijo.try_wait() {
-            Ok(Some(estado)) => return Err(estado.code()),
-            // Sin poder preguntar no se sabe si murió, y la respuesta que no
-            // deja al lector sin nada es darla por viva: la sesión ya está
-            // escrita y suelta, y la ventana la reclamará si arranca.
+        match child.try_wait() {
+            Ok(Some(status)) => return Err(status.code()),
+            // Unable to ask means not knowing whether it died, and the answer
+            // that does not leave the reader with nothing is to assume it is
+            // alive: the session is already written and released, and the
+            // window will claim it if it starts.
             Err(_) => return Ok(()),
             Ok(None) => {}
         }
-        if tokio::time::Instant::now() >= limite {
+        if tokio::time::Instant::now() >= deadline {
             return Ok(());
         }
-        tokio::time::sleep(PASO).await;
+        tokio::time::sleep(STEP).await;
     }
 }
 
@@ -129,56 +133,57 @@ pub async fn esperar_arranque(
 mod tests {
     use super::*;
 
-    /// `--attach` va SIEMPRE, y `--daemon` NUNCA: la ventana no lo tiene, y un
-    /// flag desconocido la mataba sin decir nada. Que la ventana acepta este
-    /// `argv` lo prueba su propio parser, en su crate.
+    /// `--attach` is ALWAYS present, and `--daemon` NEVER: the window does
+    /// not have it, and an unknown flag killed it without saying so. That the
+    /// window accepts this `argv` is proven by its own parser, in its crate.
     #[test]
-    fn a_la_ventana_se_le_pide_attach_y_nada_que_no_conozca() {
+    fn the_window_is_asked_for_attach_and_nothing_it_does_not_know() {
         let argv = window_argv();
         assert!(argv.iter().any(|a| a == "--attach"), "{argv:?}");
         assert!(!argv.iter().any(|a| a == "--daemon"), "{argv:?}");
     }
 
-    /// Un `argv` vacío no llega a `spawn`: se rechaza con un error en vez de
-    /// indexar.
+    /// An empty `argv` never reaches `spawn`: it is rejected with an error
+    /// instead of indexing.
     #[test]
-    fn un_argv_vacio_no_revienta() {
+    fn an_empty_argv_does_not_panic() {
         assert!(spawn_window(&[]).is_err());
     }
 
-    /// Una ventana que MUERE nada más nacer no cuenta como relevo hecho.
+    /// A window that DIES right after being born does not count as a handoff
+    /// done.
     ///
-    /// El bug que lo pidió: la ventana salía con código 2 por un flag que no
-    /// conocía, y la terminal ya se había ido porque `spawn` había dicho `Ok`
-    /// — que sólo significa que el proceso EMPEZÓ. El lector se quedaba sin
-    /// ninguna de las dos, que es exactamente lo que la ADR 0123 promete que
-    /// no pasa.
+    /// The bug that asked for this: the window exited with code 2 over a flag
+    /// it did not know, and the terminal had already left because `spawn` had
+    /// said `Ok` — which only means the process STARTED. The reader was left
+    /// with neither of the two, exactly what ADR 0123 promises does not
+    /// happen.
     #[tokio::test]
-    async fn una_ventana_que_muere_al_nacer_no_es_un_relevo() {
-        let hijo = std::process::Command::new("sh")
+    async fn a_window_that_dies_at_birth_is_not_a_handoff() {
+        let child = std::process::Command::new("sh")
             .args(["-c", "exit 2"])
             .spawn()
-            .expect("sh existe");
+            .expect("sh exists");
         assert_eq!(
-            esperar_arranque(hijo, std::time::Duration::from_millis(1_500)).await,
+            wait_startup(child, std::time::Duration::from_millis(1_500)).await,
             Err(Some(2)),
-            "y dice con qué código salió"
+            "and it says which code it exited with"
         );
     }
 
-    /// Y una que sigue viva pasado el rato de gracia, sí.
+    /// And one that is still alive past the grace period, is one.
     #[tokio::test]
-    async fn una_ventana_que_sigue_viva_es_un_relevo() {
-        let mut hijo = std::process::Command::new("sleep")
+    async fn a_window_that_stays_alive_is_a_handoff() {
+        let mut child = std::process::Command::new("sleep")
             .arg("5")
             .spawn()
-            .expect("sleep existe");
-        let pid = hijo.id();
-        // El `Child` se lo queda la espera; para no dejar un `sleep` suelto,
-        // se mata después por su pid.
-        let _ = &mut hijo;
+            .expect("sleep exists");
+        let pid = child.id();
+        // The wait keeps the `Child`; to avoid leaving a loose `sleep`, it is
+        // killed afterwards by its pid.
+        let _ = &mut child;
         assert_eq!(
-            esperar_arranque(hijo, std::time::Duration::from_millis(300)).await,
+            wait_startup(child, std::time::Duration::from_millis(300)).await,
             Ok(())
         );
         let _ = std::process::Command::new("kill")

@@ -1,11 +1,11 @@
-//! Enrutar un pegado de la terminal al campo que tenga el foco.
+//! Routing a terminal paste to whichever field has focus.
 //!
-//! Vivía en el root del binario `ntc` —un crate DISTINTO de esta lib—, con sus
-//! 334 líneas de test dentro de `main.rs` porque era el único sitio desde el
-//! que se podía llamar. Y no es solo cosa del binario: el editor de atajos lo
-//! prueba también (un pegado sobre el campo que captura un chord no puede
-//! entrar como texto), así que mientras esto estuviera en el binario ese test
-//! tampoco podía salir.
+//! Used to live in the `ntc` binary's root — a crate DIFFERENT from this
+//! lib — with its 334 lines of tests inside `main.rs` because that was the
+//! only place from which it could be called. And it is not just the binary's
+//! problem: the shortcuts editor tests it too (a paste over the field that
+//! captures a chord must not enter as text), so as long as this stayed in the
+//! binary that test could not leave either.
 
 use norte_i18n::{t, ta};
 
@@ -68,7 +68,7 @@ fn first_pasted_line(text: &str) -> (String, usize) {
 /// (`msg-shortcut-not-bindable`) instead of being fed to `capture_chord`.
 #[expect(
     clippy::too_many_lines,
-    reason = "wiring del run loop: orden 1:1 con la cadena `Event::Key`"
+    reason = "run loop wiring: 1:1 order with the `Event::Key` chain"
 )]
 pub fn route_paste(app: &mut App, text: &str) {
     let (first_line, discarded) = first_pasted_line(text);
@@ -167,18 +167,18 @@ pub fn route_paste(app: &mut App, text: &str) {
             PasteOutcome::Ignored // help navigation: keymap context, not free text
         }
     } else if app.modal.is_some() {
-        // Todo prompt de TEXTO LIBRE recibe el pegado igual, y son los diez
-        // que `prompt_kind` reconoce: antes esto era una lista escrita a mano
-        // y se le habían quedado fuera dos (empaquetar y partir), que aceptan
-        // teclas pero rechazaban un pegado. Los demás modales
-        // —confirmaciones, TOFU, colisión— resuelven por el contexto `dialog`
-        // del keymap: aquí no hay nada que rellenar.
-        // #325: el campo de contraseña también, y es el caso donde MÁS
-        // importa — pegar desde un gestor de contraseñas es como la mayoría de
-        // la gente contesta ese diálogo, y sin este brazo no pasaba nada y
-        // nada lo decía. Va antes del `prompt_kind` porque a propósito NO es
-        // un `PromptKind` (esa maquinaria presta el campo como `&mut String`,
-        // que es justo lo que un secreto no puede dar).
+        // Every FREE-TEXT prompt receives the paste the same way, and those
+        // are the ten `prompt_kind` recognizes: this used to be a
+        // hand-written list and had left two out (pack and split), which
+        // accepted keys but rejected a paste. The other modals —
+        // confirmations, TOFU, collision — resolve through the keymap's
+        // `dialog` context: there is nothing to fill here.
+        // #325: the password field too, and it is the case where it matters
+        // MOST — pasting from a password manager is how most people answer
+        // that dialog, and without this arm nothing happened and nothing said
+        // so. It comes before `prompt_kind` because it is deliberately NOT a
+        // `PromptKind` (that machinery lends the field as `&mut String`,
+        // which is exactly what a secret cannot give).
         if let Some(Modal::AskSecret { input, .. }) = app.modal.as_mut() {
             for c in first_line.chars() {
                 input.push(c);
@@ -216,7 +216,7 @@ mod paste_tests {
     use norte_proto::VPath;
 
     fn app() -> App {
-        let d = VPath::parse("file:///x").expect("wire de test");
+        let d = VPath::parse("file:///x").expect("test wire");
         App::new(Pane::new(d.clone(), Vec::new()), Pane::new(d, Vec::new()))
     }
 
@@ -549,20 +549,20 @@ mod paste_tests {
         assert_eq!(a.message, None);
     }
 
-    /// Empaquetar y partir aceptan un pegado como cualquier otro prompt de
-    /// texto. La lista escrita a mano que había antes se los dejaba fuera:
-    /// teclear valía, pegar no hacía nada y no lo decía.
+    /// Pack and split accept a paste like any other text prompt. The
+    /// hand-written list that existed before left these two out: typing
+    /// worked, pasting did nothing, and nothing said so.
     #[test]
-    fn empaquetar_y_partir_tambien_reciben_el_pegado() {
+    fn pack_and_split_also_receive_the_paste() {
         let mut a = app();
         a.modal = Some(Modal::Pack {
             name: String::new(),
             error: None,
         });
-        route_paste(&mut a, "cosas.zip");
+        route_paste(&mut a, "stuff.zip");
         assert!(
-            matches!(&a.modal, Some(Modal::Pack { name, .. }) if name.ends_with("cosas.zip")),
-            "el pegado no llegó al nombre del archivo: {:?}",
+            matches!(&a.modal, Some(Modal::Pack { name, .. }) if name.ends_with("stuff.zip")),
+            "the paste did not reach the file name: {:?}",
             a.modal
         );
 
@@ -574,7 +574,7 @@ mod paste_tests {
         route_paste(&mut b, "700M");
         assert!(
             matches!(&b.modal, Some(Modal::Split { size, .. }) if size == "700M"),
-            "el pegado no llegó al tamaño del trozo: {:?}",
+            "the paste did not reach the chunk size: {:?}",
             b.modal
         );
     }

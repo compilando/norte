@@ -1,38 +1,41 @@
-//! `norte audit` (M3-5, ADR 0025): cadena + anclas + export.
+//! `norte audit` (M3-5, ADR 0025): chain + anchors + export.
 
 use std::process::ExitCode;
 
 use anyhow::Context;
 
-use crate::cmd::entorno::append_line_0600;
+use crate::cmd::environment::append_line_0600;
 use crate::{AuditCmd, AuditFormat};
 
-/// `norte audit <verify|export|anchor>` (M3-5, ADR 0025): opera sobre la DB
-/// del journal en SOLO-LECTURA. Con el daemon corriendo, `SQLite` devuelve
-/// `database is locked` (su lock es exclusivo): el mensaje lo dice claro.
+/// `norte audit <verify|export|anchor>` (M3-5, ADR 0025): operates on the
+/// journal's DB in READ-ONLY. With the daemon running, `SQLite` returns
+/// `database is locked` (its lock is exclusive): the message says so plainly.
 ///
-/// Desde #167 el daemon no es el único que puede tenerlo: un frontend embebido
-/// —un `ntc` sin `--daemon`— se queda el mismo lock. Pero solo DESDE QUE MUTA
-/// algo (#177): un `ntc` navegando no estorba a este comando, y por eso el
-/// texto de ayuda no manda cerrar los frontends, solo dice quién puede tenerlo.
+/// Since #167 the daemon is not the only one that can hold it: an embedded
+/// frontend — an `ntc` without `--daemon` — takes the same lock. But only
+/// FROM THE MOMENT it MUTATES something (#177): an `ntc` just browsing does
+/// not get in this command's way, and that is why the help text does not
+/// tell you to close the frontends, only says who can hold it.
 pub(crate) async fn audit_cmd(cmd: AuditCmd) -> anyhow::Result<ExitCode> {
     use norte_core::{Journal, audit};
     let dir = norte_core::connect::config_dir();
     let journal_path = dir.join("journal.db");
     let anchors_path = dir.join("journal-anchors.jsonl");
-    // Las anclas del MARCADOR viven en su PROPIO fichero (#146), y no como una
-    // línea más de las del head. El motivo es de compatibilidad y es del tipo
-    // que se paga caro: `verify_anchors` busca cada `seq` anclado en el mapa
-    // que le pasa el llamante, y un binario ANTERIOR a este cambio no siembra
-    // el `seq` 0 — así que leería la línea del marcador como `MissingSeq`, o
-    // sea «el seq anclado ya no existe: truncación o rollback». Una acusación
-    // FALSA de manipulación contra un fichero que nadie tocó, emitida por el
-    // arreglo del ADR cuya razón de ser es no emitir exactamente eso. Y no se
-    // arregla con otra forma de línea: ese verificador falla en cerrado ante
-    // todo lo que no entiende, así que un JSON distinto saldría por `BadLine`.
+    // The MARKER's anchors live in their OWN file (#146), not as one more
+    // line among the head's. The reason is compatibility and of the kind
+    // that is paid for dearly: `verify_anchors` looks up each anchored `seq`
+    // in the map the caller passes it, and a binary OLDER than this change
+    // does not seed `seq` 0 — so it would read the marker's line as
+    // `MissingSeq`, i.e. "the anchored seq no longer exists: truncation or
+    // rollback". A FALSE accusation of tampering against a file nobody
+    // touched, raised by the very ADR fix whose purpose is to not raise
+    // exactly that. And it is not fixed with another line shape either: that
+    // verifier fails closed on anything it does not understand, so a
+    // different JSON would still come out as `BadLine`.
     //
-    // Con dos ficheros, un binario viejo simplemente no lo abre: no gana la
-    // cobertura nueva —que tampoco tenía— y no pierde nada.
+    // With two files, an old binary simply does not open it: it gains
+    // nothing from the new coverage — which it did not have either — and
+    // loses nothing.
     let marker_anchors_path = dir.join("journal-marker-anchors.jsonl");
     let journal = Journal::open_read_only(&journal_path)
         .await
@@ -53,9 +56,9 @@ pub(crate) async fn audit_cmd(cmd: AuditCmd) -> anyhow::Result<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
         AuditCmd::Anchor => {
-            // Jamás se ancla una cadena que este binario no haya podido
-            // verificar: el ancla fijaría como «buena» una historia rota, o una
-            // que no sabe leer (ADR 0046).
+            // A chain this binary could not verify is NEVER anchored: the
+            // anchor would fix as "good" either a broken history, or one it
+            // does not know how to read (ADR 0046).
             let status = journal
                 .verify_chain()
                 .await
@@ -65,49 +68,50 @@ pub(crate) async fn audit_cmd(cmd: AuditCmd) -> anyhow::Result<ExitCode> {
                 report_chain_not_certified(&status, declared);
                 return Ok(ExitCode::FAILURE);
             }
-            let cabeza = journal.head().await.map_err(|e| anyhow::anyhow!("{e}"))?;
-            // El MARCADOR DE FORMATO (`seq 0`) se ancla también, y primero
-            // (#146). ADR 0046 concedía que re-declararlo cuesta tres
-            // escrituras de columna y ninguna clave, y que las anclas del HEAD
-            // no lo cazan porque esa edición no mueve ningún `entry_hash` de
-            // `seq >= 1`. Firmarlo aparte convierte esa re-declaración en un
-            // `HashMismatch` en el `seq` 0: localizada, y con una clave detrás.
+            let head = journal.head().await.map_err(|e| anyhow::anyhow!("{e}"))?;
+            // The FORMAT MARKER (`seq 0`) is anchored too, and FIRST (#146).
+            // ADR 0046 granted that re-declaring it costs three column writes
+            // and no key, and that the head's anchors do not catch it because
+            // that edit does not move any `entry_hash` of `seq >= 1`. Signing
+            // it separately turns that re-declaration into a `HashMismatch`
+            // at `seq` 0: localized, and with a key behind it.
             //
-            // Va antes que la del head para que un journal que solo tiene
-            // marcador —recién creado, sin una sola mutación— quede cubierto
-            // igual; ahí `head()` es `None` y abajo se sale.
-            let marcador = journal
+            // It goes before the head's so that a journal that only has a
+            // marker — just created, without a single mutation — is covered
+            // too; there `head()` is `None` and the function returns below.
+            let marker = journal
                 .marker_hash()
                 .await
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
-            if marcador.is_none() && cabeza.is_none() {
+            if marker.is_none() && head.is_none() {
                 println!("{}", norte_i18n::t("cli-audit-empty"));
                 return Ok(ExitCode::SUCCESS);
             }
-            // La clave del keyring puede bloquear (D-Bus/prompt): fuera del
-            // reactor (regla 2).
+            // The keyring key can block (D-Bus/prompt): outside the reactor
+            // (rule 2).
             let key = tokio::task::spawn_blocking(norte_core::connect::journal_anchor_key)
                 .await
                 .map_err(|_| anyhow::anyhow!("keyring task panicked"))?
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
-            // Las líneas salen por stdout A PROPÓSITO: la copia EXTERNA de las
-            // anclas (log remoto, otro host) es lo que hace detectable el
-            // recorte del fichero local (ADR 0025).
-            if let Some(head) = marcador {
+            // The lines go out over stdout ON PURPOSE: the EXTERNAL copy of
+            // the anchors (remote log, another host) is what makes trimming
+            // the local file detectable (ADR 0025).
+            if let Some(head) = marker {
                 let line = audit::anchor_line(&key, &audit::Anchor { seq: 0, head });
-                // El ancla del marcador es DETERMINISTA: el marcador no cambia
-                // nunca, así que anclar diez veces escribiría diez líneas
-                // idénticas y el informe contaría diez anclas verificadas donde
-                // hay una. Se escribe solo si no está ya.
-                if !ya_anclado(&marker_anchors_path, &line).await? {
+                // The marker's anchor is DETERMINISTIC: the marker never
+                // changes, so anchoring ten times would write ten identical
+                // lines and the report would count ten verified anchors
+                // where there is one. It is written only if not already
+                // there.
+                if !already_anchored(&marker_anchors_path, &line).await? {
                     append_line_0600(&marker_anchors_path, &line).await?;
                 }
                 println!("{line}");
                 println!("{}", norte_i18n::t("cli-audit-anchored-marker"));
             }
-            let Some((seq, head)) = cabeza else {
-                // Y no «journal vacío: nada que anclar», que contradiría en la
-                // misma pantalla a la línea de arriba.
+            let Some((seq, head)) = head else {
+                // And not "empty journal: nothing to anchor", which would
+                // contradict the line above on the very same screen.
                 println!("{}", norte_i18n::t("cli-audit-only-marker"));
                 return Ok(ExitCode::SUCCESS);
             };
@@ -132,28 +136,29 @@ pub(crate) async fn audit_cmd(cmd: AuditCmd) -> anyhow::Result<ExitCode> {
     }
 }
 
-/// Por qué la cadena NO quedó certificada, en la voz que corresponde: una
-/// rotura es una acusación y se cita dónde; un formato desconocido (ADR 0046)
-/// NO lo es —este binario no sabe recomputar lo que escribió uno más nuevo— y
-/// se dice sin acusar a nadie, pero también sin absolver: en los dos casos el
-/// audit sale con FALLO.
+/// Why the chain was NOT certified, in the voice that fits: a break is an
+/// accusation and cites where; an unknown format (ADR 0046) is NOT one — this
+/// binary does not know how to recompute what a newer one wrote — and is
+/// stated without accusing anyone, but also without clearing anyone: in both
+/// cases the audit exits with FAILURE.
 ///
-/// Va por STDOUT, igual que `cli-audit-chain-ok`: el veredicto es la SALIDA del
-/// audit, no un diagnóstico suelto, y un `norte audit verify > informe.txt` que
-/// guarde la cobertura y las anclas pero no el veredicto es justo el fichero
-/// que no hay que producir. El fallo lo lleva el código de salida.
+/// Goes over STDOUT, same as `cli-audit-chain-ok`: the verdict IS the audit's
+/// OUTPUT, not a stray diagnostic, and a `norte audit verify > report.txt`
+/// that keeps the coverage and the anchors but not the verdict is exactly the
+/// file that must not be produced. The failure is carried by the exit code.
 ///
-/// `declared` viene del journal porque el veredicto `Broken` no lo lleva: una
-/// cadena rota EN un journal que además está escrito en un formato ilegible es
-/// una rotura que hay que leer con esa luz.
+/// `declared` comes from the journal because the `Broken` verdict does not
+/// carry it: a broken chain IN a journal that is also written in an
+/// unreadable format is a break that has to be read in that light.
 fn report_chain_not_certified(
     status: &norte_core::ChainStatus,
     declared: norte_core::JournalFormat,
 ) {
     use norte_core::{ChainStatus, JournalFormat};
-    // `Unmarked` no llega por la rama de formato desconocido (un journal sin
-    // marcador se verifica con las reglas de hoy), y cualquier variante futura
-    // es, por definición, algo que este binario no sabe leer.
+    // `Unmarked` does not arrive via the unknown-format branch (a journal
+    // without a marker is verified with today's rules), and any future
+    // variant is, by definition, something this binary does not know how to
+    // read.
     let name = |f: JournalFormat| match f {
         JournalFormat::Version(v) => v.to_string(),
         _ => norte_i18n::t("cli-audit-format-unreadable"),
@@ -196,18 +201,18 @@ fn report_chain_not_certified(
                 );
             }
         }
-        // Un veredicto que este binario no conoce se trata como NO certificado.
-        // `ChainStatus` es `#[non_exhaustive]` justamente para que un veredicto
-        // nuevo llegue aquí en vez de colarse por la rama de «íntegra».
+        // A verdict this binary does not know is treated as NOT certified.
+        // `ChainStatus` is `#[non_exhaustive]` precisely so a new verdict
+        // lands here instead of slipping through the "intact" branch.
         _ => println!("{}", norte_i18n::t("cli-audit-chain-not-certified")),
     }
 }
 
-/// `norte audit verify`: cadena (cita la primera rotura, B2) + anclas +
-/// COBERTURA (hasta qué seq llegan las anclas Ok — el recorte del fichero de
-/// anclas se manifiesta como cobertura que retrocede). Sin anclas = FALLO
-/// salvo `--allow-no-anchors`: la ausencia es indistinguible de un borrado
-/// hostil (H1 del security-reviewer).
+/// `norte audit verify`: chain (cites the first break, B2) + anchors +
+/// COVERAGE (up to which seq the anchors reach Ok — trimming the anchors
+/// file shows up as coverage moving backwards). No anchors = FAILURE unless
+/// `--allow-no-anchors`: absence is indistinguishable from a hostile deletion
+/// (H1 from the security-reviewer).
 async fn audit_verify(
     journal: &norte_core::Journal,
     anchors_path: &std::path::Path,
@@ -219,12 +224,13 @@ async fn audit_verify(
         .verify_chain()
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
-    // Una cadena ROTA ya trae su culpable y su sitio: no hay segunda opinión
-    // que buscar. Una que este binario NO SABE LEER (ADR 0046) es al revés —
-    // las anclas son la única evidencia que discrimina «journal más nuevo» de
-    // «marcador re-declarado», no necesitan recomputar la cadena (contrastan
-    // hashes ALMACENADOS) y el operador ya las tiene en disco. Así que se sigue
-    // hasta el informe de anclas y se sale con FALLO igual.
+    // A BROKEN chain already carries its culprit and its spot: there is no
+    // second opinion to seek. One this binary DOES NOT KNOW HOW TO READ (ADR
+    // 0046) is the opposite — the anchors are the only evidence that tells
+    // "newer journal" apart from "re-declared marker", they do not need to
+    // recompute the chain (they compare STORED hashes) and the operator
+    // already has them on disk. So it keeps going to the anchors report and
+    // still exits with FAILURE.
     let certified = match status {
         ChainStatus::Intact { entries } => {
             println!(
@@ -247,9 +253,9 @@ async fn audit_verify(
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?
         .map(|(seq, _)| seq);
-    // La clave ANTES de decidir nada sobre las anclas del head: el marcador se
-    // contrasta pase lo que pase con ellas, y sin clave no se puede contrastar
-    // ninguna de las dos familias.
+    // The key BEFORE deciding anything about the head's anchors: the marker
+    // is checked no matter what happens with them, and without the key
+    // neither family can be checked.
     let key = tokio::task::spawn_blocking(norte_core::connect::journal_anchor_key)
         .await
         .map_err(|_| anyhow::anyhow!("keyring task panicked"))?
@@ -257,34 +263,36 @@ async fn audit_verify(
     let lines = match tokio::fs::read_to_string(&anchors_path).await {
         Ok(s) => s,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            // El MARCADOR se comprueba igual, y esta es la razón de que su
-            // comprobación viva antes de esta salida: un journal con marcador y
-            // sin mutaciones tiene ancla de marcador y NINGUNA de head, y sin
-            // esto `anchor` y `verify` se contradecían dentro del mismo commit
-            // —una escribía el ancla y la otra jamás la miraba—. Es además el
-            // estado que deja un atacante que borra el fichero de anclas del
-            // head: la señal del marcador es lo único que queda.
-            let marcador_ok = verify_marker_anchors(journal, marker_anchors_path, &key).await?;
+            // The MARKER is checked just the same, and this is why its check
+            // lives before this early return: a journal with a marker and no
+            // mutations has a marker anchor and NONE for the head, and
+            // without this, `anchor` and `verify` would contradict each
+            // other within the same commit — one would write the anchor and
+            // the other would never look at it. It is also the state left by
+            // an attacker who deletes the head's anchors file: the marker's
+            // signal is all that remains.
+            let marker_ok = verify_marker_anchors(journal, marker_anchors_path, &key).await?;
             let msg = norte_i18n::t("cli-audit-no-anchors");
             if allow_no_anchors {
                 println!("{msg}");
-                // `--allow-no-anchors` perdona la AUSENCIA de anclas de head, no
-                // una cadena sin certificar ni un marcador sin anclar.
-                return Ok(if marcador_ok {
+                // `--allow-no-anchors` forgives the ABSENCE of head anchors,
+                // not an uncertified chain nor an unanchored marker.
+                return Ok(if marker_ok {
                     exit_for(certified)
                 } else {
                     ExitCode::FAILURE
                 });
             }
-            // Ausencia = fallo por defecto: un atacante sin clave puede
-            // BORRAR el fichero; solo el humano decide que «no hay» es ok.
+            // Absence = failure by default: an attacker without the key can
+            // DELETE the file; only the human decides that "there is none"
+            // is fine.
             eprintln!("{msg}");
             return Ok(ExitCode::FAILURE);
         }
         Err(e) => return Err(e).context("journal-anchors.jsonl"),
     };
-    // UN snapshot de la cadena para todo el veredicto (sin TOCTOU entre el
-    // verify de arriba y los contrastes de anclas).
+    // ONE snapshot of the chain for the whole verdict (no TOCTOU between the
+    // verify above and the anchor comparisons).
     let hash_by_seq: std::collections::HashMap<i64, [u8; 32]> = journal
         .entries()
         .await
@@ -295,8 +303,8 @@ async fn audit_verify(
 
     let report = audit::verify_anchors(&key, &lines, &hash_by_seq);
     report_anchors(&report, head_seq, certified);
-    let marcador_ok = verify_marker_anchors(journal, marker_anchors_path, &key).await?;
-    if !report.bad.is_empty() || !marcador_ok {
+    let marker_ok = verify_marker_anchors(journal, marker_anchors_path, &key).await?;
+    if !report.bad.is_empty() || !marker_ok {
         return Ok(ExitCode::FAILURE);
     }
     if certified {
@@ -311,42 +319,45 @@ async fn audit_verify(
     Ok(exit_for(certified))
 }
 
-/// Contrasta las anclas del MARCADOR (#146) y dice si el marcador se quedó SIN
-/// anclar. `false` = hay algo que reprochar y el comando sale con fallo.
+/// Checks the MARKER's anchors (#146) and says whether the marker was left
+/// UNANCHORED. `false` = there is something to report and the command exits
+/// with failure.
 ///
-/// # Por qué el «sin anclar» es una línea propia y no un silencio
-/// La defensa de ADR 0025 contra el recorte del fichero de anclas es que la
-/// COBERTURA retrocede, y eso solo funciona para la COLA. El ancla del marcador
-/// es la de `seq` más bajo que existe, así que borrarla —o borrar su fichero
-/// entero— no mueve `max_ok_seq` ni un dígito: el informe no diría nada. La
-/// receta del atacante pasaría de tres escrituras a cuatro sobre ficheros que
-/// ya puede escribir.
+/// # Why "unanchored" is its own line and not silence
+/// ADR 0025's defense against trimming the anchors file is that COVERAGE
+/// moves backwards, and that only works for the TAIL. The marker's anchor is
+/// the one with the lowest `seq` that exists, so deleting it — or deleting
+/// its whole file — does not move `max_ok_seq` a single digit: the report
+/// would say nothing. The attacker's recipe would go from three writes to
+/// four over files it can already write.
 ///
-/// La misma línea cubre el otro hueco, y este no se puede cerrar de ninguna
-/// otra forma: un journal SIN marcador (todos los que existían antes de ADR
-/// 0046, que por diseño no lo ganan nunca) admite que le INYECTEN uno —
-/// insertar la fila del `seq` 0 y reencadenar el `seq` 1— y eso convierte un
-/// `Broken` localizado en `UnknownFormat` igual que la re-declaración. Ahí no
-/// hay ancla previa que contradecir, porque cuando se ancló no había marcador.
-/// Lo que sí se puede decir es que AHORA hay un marcador y nadie lo ha
-/// anclado, que es exactamente lo que un marcador inyectado produce.
+/// The same line covers the other gap, and it cannot be closed any other
+/// way: a journal WITHOUT a marker (all the ones that existed before ADR
+/// 0046, which by design never gain one) allows one to be INJECTED into it —
+/// inserting the `seq` 0 row and re-chaining `seq` 1 — and that turns a
+/// localized `Broken` into `UnknownFormat` just like the re-declaration.
+/// There is no prior anchor to contradict there, because there was no marker
+/// when it was anchored. What CAN be said is that there is a marker NOW and
+/// nobody has anchored it, which is exactly what an injected marker
+/// produces.
 ///
 /// # Errors
-/// Lectura del fichero de anclas del marcador, o del journal.
+/// Reading the marker's anchors file, or the journal.
 async fn verify_marker_anchors(
     journal: &norte_core::Journal,
     path: &std::path::Path,
     key: &[u8],
 ) -> anyhow::Result<bool> {
     use norte_core::audit;
-    let Some(marcador) = journal
+    let Some(marker) = journal
         .marker_hash()
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?
     else {
-        // Sin marcador no hay nada que anclar ni nada que reprochar. Un fichero
-        // de anclas de marcador SOBRE un journal sin marcador sí sería raro,
-        // pero es el caso de abajo (`MissingSeq`) y se cuenta como malo.
+        // Without a marker there is nothing to anchor and nothing to
+        // report. A marker anchors file OVER a journal without a marker
+        // would indeed be odd, but that is the case below (`MissingSeq`) and
+        // counts as bad.
         return Ok(true);
     };
     let lines = match tokio::fs::read_to_string(path).await {
@@ -354,8 +365,7 @@ async fn verify_marker_anchors(
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(e) => return Err(e).context("journal-marker-anchors.jsonl"),
     };
-    let snapshot: std::collections::HashMap<i64, [u8; 32]> =
-        std::iter::once((0, marcador)).collect();
+    let snapshot: std::collections::HashMap<i64, [u8; 32]> = std::iter::once((0, marker)).collect();
     let report = audit::verify_anchors(key, &lines, &snapshot);
     for (line_no, verdict) in &report.bad {
         let Some(detail) = verdict_detail(verdict) else {
@@ -377,12 +387,12 @@ async fn verify_marker_anchors(
     Ok(report.bad.is_empty())
 }
 
-/// ¿Está ya esa línea EXACTA en el fichero? Evita duplicar un ancla que es
-/// determinista (la del marcador, que no cambia nunca).
+/// Is that EXACT line already in the file? Avoids duplicating an anchor that
+/// is deterministic (the marker's, which never changes).
 ///
 /// # Errors
-/// Lectura del fichero, salvo su ausencia.
-async fn ya_anclado(path: &std::path::Path, line: &str) -> anyhow::Result<bool> {
+/// Reading the file, except for its absence.
+async fn already_anchored(path: &std::path::Path, line: &str) -> anyhow::Result<bool> {
     match tokio::fs::read_to_string(path).await {
         Ok(s) => Ok(s.lines().any(|l| l == line)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
@@ -390,14 +400,14 @@ async fn ya_anclado(path: &std::path::Path, line: &str) -> anyhow::Result<bool> 
     }
 }
 
-/// El informe de anclas: las malas una por una, la salvedad cuando la cadena
-/// NO quedó certificada, y la cobertura.
+/// The anchors report: the bad ones one by one, the caveat when the chain
+/// was NOT certified, and the coverage.
 ///
-/// El orden importa. «Ancladas contra la cadena» presupone una cadena
-/// verificada; si este binario no pudo verificarla, lo que las anclas dicen es
-/// OTRA frase —los hashes almacenados no se han movido desde que se ancló— y
-/// esa salvedad va ANTES de la cobertura, porque «hasta el seq 100 de 100»
-/// leída sin ella es la línea que el operador citará como visto bueno.
+/// Order matters. "Anchored against the chain" presupposes a verified chain;
+/// if this binary could not verify it, what the anchors say is a DIFFERENT
+/// sentence — the stored hashes have not moved since it was anchored — and
+/// that caveat goes BEFORE the coverage, because "up to seq 100 of 100" read
+/// without it is the line the operator will cite as a clean bill of health.
 fn report_anchors(
     report: &norte_core::audit::AnchorsReport,
     head_seq: Option<i64>,
@@ -424,8 +434,8 @@ fn report_anchors(
             )
         );
     }
-    // Cobertura SIEMPRE visible: anclas hasta X, cadena hasta Y. Un recorte
-    // del fichero de anclas retrocede X sin tocar la cadena.
+    // Coverage ALWAYS visible: anchors up to X, chain up to Y. Trimming the
+    // anchors file moves X backwards without touching the chain.
     println!(
         "{}",
         norte_i18n::ta(
@@ -446,14 +456,14 @@ fn report_anchors(
     );
 }
 
-/// El formato que DECLARA el journal, para poner el veredicto en contexto.
+/// The format the journal DECLARES, to put the verdict in context.
 async fn declared_format(
     journal: &norte_core::Journal,
 ) -> anyhow::Result<norte_core::JournalFormat> {
     journal.format().await.map_err(|e| anyhow::anyhow!("{e}"))
 }
 
-/// Éxito solo si la cadena quedó certificada.
+/// Success only if the chain was certified.
 fn exit_for(certified: bool) -> ExitCode {
     if certified {
         ExitCode::SUCCESS
@@ -462,7 +472,7 @@ fn exit_for(certified: bool) -> ExitCode {
     }
 }
 
-/// Traduce un veredicto NO-Ok de ancla a su mensaje Fluent.
+/// Translates a NON-Ok anchor verdict to its Fluent message.
 fn verdict_detail(verdict: &norte_core::audit::AnchorVerdict) -> Option<String> {
     use norte_core::audit::AnchorVerdict;
     Some(match verdict {
@@ -487,7 +497,7 @@ mod tests {
     /// accusing anyone. A missing Fluent key falls back to the key itself,
     /// which in this path would be the whole message the operator gets.
     #[test]
-    fn cada_veredicto_no_certificado_tiene_su_mensaje_en_los_dos_idiomas() {
+    fn every_uncertified_verdict_has_its_message_in_both_languages() {
         use norte_core::{ChainStatus, JournalFormat};
         for lang in [norte_i18n::Lang::En, norte_i18n::Lang::Es] {
             let unknown = norte_i18n::ta_in(
@@ -496,7 +506,7 @@ mod tests {
                 &[("declared", "999"), ("known", "1")],
             );
             assert!(unknown.contains("999"), "{lang:?}: {unknown}");
-            assert!(!unknown.starts_with("cli-audit"), "{lang:?}: sin traducir");
+            assert!(!unknown.starts_with("cli-audit"), "{lang:?}: untranslated");
             for key in [
                 "cli-audit-chain-unverifiable-from",
                 "cli-audit-chain-not-certified",
@@ -505,12 +515,12 @@ mod tests {
                 let msg = norte_i18n::ta_in(lang, key, &[("seq", "7")]);
                 assert!(
                     !msg.starts_with("cli-audit"),
-                    "{lang:?}/{key}: sin traducir"
+                    "{lang:?}/{key}: untranslated"
                 );
             }
         }
-        // Y no panica con ninguna forma del veredicto (incluida la rama de
-        // cierre en falso, que es lo que verá un veredicto futuro).
+        // And it does not panic on any shape of the verdict (including the
+        // fail-closed branch, which is what a future verdict will hit).
         for status in [
             ChainStatus::Broken { first_bad_seq: 3 },
             ChainStatus::UnknownFormat {
@@ -526,9 +536,9 @@ mod tests {
         ] {
             report_chain_not_certified(&status, JournalFormat::Version(999));
         }
-        // Y una rotura en un journal cuyo formato tampoco se puede leer dice
-        // las DOS cosas: la rotura es verdad, y sin la salvedad no se puede
-        // interpretar.
+        // And a break in a journal whose format also cannot be read says
+        // BOTH things: the break is real, and without the caveat it cannot
+        // be interpreted.
         report_chain_not_certified(
             &ChainStatus::Broken { first_bad_seq: 3 },
             JournalFormat::Unreadable,

@@ -1,6 +1,7 @@
-//! M2 (#30, ADR 0033): un servidor que acepta y CALLA cuelga la op del guest en
-//! el socket; el timeout por-op del adapter la corta y marca el provider muerto,
-//! y la SIGUIENTE op falla rápido (no espera otro timeout).
+//! M2 (#30, ADR 0033): a server that accepts and stays SILENT hangs the
+//! guest's op on the socket; the adapter's per-op timeout cuts it and marks
+//! the provider dead, and the NEXT op fails fast (it does not wait out
+//! another timeout).
 #![cfg(target_os = "linux")]
 
 use std::time::Duration;
@@ -11,12 +12,12 @@ use norte_plugin_host::{Capabilities as HostCaps, PluginRuntime};
 const FTP_WASM: &[u8] = include_bytes!("../resources/ftp-provider.wasm");
 
 #[tokio::test]
-async fn op_bloqueada_expira_y_marca_muerto() {
-    // Listener que acepta y jamás responde: el login del guest se cuelga leyendo.
+async fn a_blocked_op_times_out_and_marks_it_dead() {
+    // Listener that accepts and never responds: the guest's login hangs reading.
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().unwrap().port();
     std::thread::spawn(move || {
-        // Acepta y retiene las conexiones abiertas sin hablar.
+        // Accepts and keeps the connections open without speaking.
         let mut held = Vec::new();
         while let Ok((sock, _)) = listener.accept() {
             held.push(sock);
@@ -33,7 +34,7 @@ async fn op_bloqueada_expira_y_marca_muerto() {
     .expect("provider")
     .with_op_timeout(Duration::from_millis(300));
 
-    // configure() cuelga en el login → expira ~300 ms → ProviderUnavailable.
+    // configure() hangs at login → times out at ~300 ms → ProviderUnavailable.
     let t0 = std::time::Instant::now();
     let err = provider
         .configure(
@@ -43,18 +44,18 @@ async fn op_bloqueada_expira_y_marca_muerto() {
             "/".to_owned(),
         )
         .await
-        .expect_err("configure debe expirar");
+        .expect_err("configure must time out");
     assert!(
         matches!(err, norte_proto::Error::ProviderUnavailable { .. }),
-        "fue {err:?}"
+        "was {err:?}"
     );
     assert!(
         t0.elapsed() < Duration::from_secs(5),
-        "expiró rápido, no colgó: {:?}",
+        "it timed out fast, it did not hang: {:?}",
         t0.elapsed()
     );
 
-    // 2ª op: el provider está muerto → falla INMEDIATA (no otro timeout de 300 ms).
+    // 2nd op: the provider is dead → fails IMMEDIATELY (not another 300 ms timeout).
     let t1 = std::time::Instant::now();
     let err2 = provider
         .configure(
@@ -64,14 +65,14 @@ async fn op_bloqueada_expira_y_marca_muerto() {
             "/".to_owned(),
         )
         .await
-        .expect_err("2ª op también falla");
+        .expect_err("the 2nd op also fails");
     assert!(matches!(
         err2,
         norte_proto::Error::ProviderUnavailable { .. }
     ));
     assert!(
         t1.elapsed() < Duration::from_millis(100),
-        "la 2ª op fue inmediata (dead flag), tardó {:?}",
+        "the 2nd op was immediate (dead flag), it took {:?}",
         t1.elapsed()
     );
 }

@@ -166,13 +166,13 @@ mod tests {
                         crate::keymap::catalogue::lookup(n)
                             .is_none_or(|d| d.status == crate::keymap::Status::Live)
                     })
-                    // `pane.pack` se deja FUERA a propósito: la hoja tiene que
-                    // tener alguna fila no ejecutable para que estos tests
-                    // digan algo, y desde #132 el catálogo no tiene ni un
-                    // `Planned` — así que la que queda es la otra clase, un
-                    // comando vivo que ESTE frontend no implementa. Es
-                    // exactamente lo que le pasa a la GUI con la mitad de la
-                    // lista, no un caso inventado.
+                    // `pane.pack` is left OUT on purpose: the sheet needs at
+                    // least one non-runnable row for these tests to mean
+                    // anything, and since #132 the catalogue has not a single
+                    // `Planned` left — so what remains is the other class, a
+                    // live command THIS frontend does not implement. It is
+                    // exactly what happens to the GUI with half the list, not
+                    // a made-up case.
                     .filter(|n| *n != "pane.pack")
                     .collect();
                 Effective::build_for(&kf, &[], &known, screen)

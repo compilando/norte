@@ -1,9 +1,10 @@
-//! [`RarProvider`]: el `Provider` read-only de un `.rar`, servido por un
-//! programa externo.
+//! [`RarProvider`]: the read-only `Provider` for a `.rar`, served by an
+//! external program.
 //!
-//! No compone sobre otro provider: sostiene la RUTA LOCAL del archivo. Quién
-//! puede montar un `rar` —solo sobre `file://`— lo decide el dispatch del
-//! engine, que es donde se sabe qué hay al otro lado del scheme interior.
+//! It does not compose over another provider: it holds the archive's LOCAL
+//! PATH. Who gets to mount a `rar` —only over `file://`— is decided by the
+//! engine's dispatch, which is where it is known what is on the other side
+//! of the inner scheme.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -21,21 +22,20 @@ use crate::index::{ArchiveIndex, InnerPath};
 use crate::listing::Listing;
 use crate::{LIST_TIMEOUT, RarLimits};
 
-/// El provider de UN archivo `.rar`.
+/// The provider for ONE `.rar` archive.
 pub struct RarProvider {
     archive: PathBuf,
     delegate: Delegate,
     limits: RarLimits,
-    /// Índice cacheado y su generación. Un solo archivo, un solo slot.
+    /// Cached index and its generation. One archive, one slot.
     cache: Mutex<Option<Arc<ArchiveIndex>>>,
-    /// El índice viene puesto y NO se reconstruye: solo lo usan los tests que
-    /// fijan política sin un `.rar` que la contenga.
+    /// The index arrives already set and is NOT rebuilt: only tests that pin
+    /// policy without a `.rar` to back it use this.
     pinned: bool,
 }
 
 impl RarProvider {
-    /// Un provider para el `.rar` que vive en `archive`, servido por
-    /// `delegate`.
+    /// A provider for the `.rar` living at `archive`, served by `delegate`.
     #[must_use]
     pub fn new(archive: PathBuf, delegate: Delegate, limits: RarLimits) -> Self {
         Self {
@@ -47,9 +47,9 @@ impl RarProvider {
         }
     }
 
-    /// Un provider con el índice ya puesto: para tests que fijan política
-    /// (una entrada cifrada, un nombre ambiguo) sin necesitar un `.rar` que
-    /// los contenga de verdad.
+    /// A provider with the index already set: for tests that pin policy (an
+    /// encrypted entry, an ambiguous name) without needing a `.rar` that
+    /// genuinely contains them.
     #[must_use]
     pub fn with_index_for_test(index: ArchiveIndex) -> Self {
         Self {
@@ -61,7 +61,7 @@ impl RarProvider {
         }
     }
 
-    /// Desmonta el path y comprueba que habla de ESTE provider.
+    /// Splits the path apart and checks it talks about THIS provider.
     fn split(p: &VPath) -> Result<InnerPath, Error> {
         match p.archive_split() {
             Ok(Some(aref)) if aref.format == "rar" => {
@@ -71,11 +71,11 @@ impl RarProvider {
         }
     }
 
-    /// `(mtime_ms, size)` del `.rar`: la moneda de invalidación.
+    /// `(mtime_ms, size)` of the `.rar`: the invalidation currency.
     ///
-    /// El `metadata` es I/O bloqueante, así que va a `spawn_blocking` (regla
-    /// 2). Sin mtime nada se cachea: un índice rancio enseña ficheros que ya
-    /// no están.
+    /// `metadata` is blocking I/O, so it goes to `spawn_blocking` (rule 2).
+    /// Without an mtime nothing gets cached: a stale index would show files
+    /// that are no longer there.
     async fn generation(&self) -> Result<(Option<i64>, Option<u64>), Error> {
         let path = self.archive.clone();
         let meta = tokio::task::spawn_blocking(move || std::fs::metadata(&path))
@@ -99,15 +99,15 @@ impl RarProvider {
         Ok((mtime_ms, Some(meta.len())))
     }
 
-    /// El índice, de caché o reconstruido llamando al delegado.
+    /// The index, from cache or rebuilt by calling the delegate.
     async fn index(&self) -> Result<Arc<ArchiveIndex>, Error> {
         if self.pinned {
-            let cache = self.cache.lock().expect("cache lock sano");
-            return Ok(Arc::clone(cache.as_ref().expect("índice fijado")));
+            let cache = self.cache.lock().expect("cache lock is sound");
+            return Ok(Arc::clone(cache.as_ref().expect("pinned index")));
         }
         let generation = self.generation().await?;
         if generation.0.is_some() {
-            let cache = self.cache.lock().expect("cache lock sano");
+            let cache = self.cache.lock().expect("cache lock is sound");
             if let Some(hit) = cache.as_ref().filter(|i| i.generation == generation) {
                 return Ok(Arc::clone(hit));
             }
@@ -118,7 +118,7 @@ impl RarProvider {
             .run_capture(&argv, LIST_TIMEOUT)
             .await
             .map_err(|e| {
-                tracing::warn!(error = %e, "el listado del rar falló");
+                tracing::warn!(error = %e, "the rar listing failed");
                 Error::from(e)
             })?;
         let Listing { entries, skipped } = match self.delegate {
@@ -132,7 +132,7 @@ impl RarProvider {
             skipped,
         ));
         if generation.0.is_some() {
-            *self.cache.lock().expect("cache lock sano") = Some(Arc::clone(&index));
+            *self.cache.lock().expect("cache lock is sound") = Some(Arc::clone(&index));
         }
         Ok(index)
     }
@@ -158,13 +158,13 @@ impl Provider for RarProvider {
         self.index().await?.entry_for(p, &inner)
     }
 
-    /// Listado de un dir del árbol virtual.
+    /// Listing of a dir in the virtual tree.
     ///
-    /// CONTRATO (ADR 0018 C2, y una regla más que es propia del RAR): no
-    /// aparecen las entradas cuyo nombre no mapea a segmentos `VPath`
-    /// (`..`, `.`, vacío, NUL, absoluto, componente `!`) NI las que el
-    /// listado por líneas del delegado no puede llevar (un nombre con `\n`
-    /// o `\r`). Todas se cuentan en [`Provider::list_skipped`].
+    /// CONTRACT (ADR 0018 C2, plus one rule that is RAR's own): entries
+    /// whose name does not map to `VPath` segments do NOT appear (`..`,
+    /// `.`, empty, NUL, absolute, `!` component), NOR do the ones the
+    /// delegate's line-based listing cannot carry (a name with `\n` or
+    /// `\r`). All of them are counted in [`Provider::list_skipped`].
     async fn list(&self, p: &VPath) -> Result<EntryStream, Error> {
         let inner = Self::split(p)?;
         let index = self.index().await?;
@@ -182,7 +182,7 @@ impl Provider for RarProvider {
         let mut entries = Vec::new();
         for name in index.children.get(&inner).into_iter().flatten() {
             let seg = norte_proto::Segment::new(name.clone())
-                .expect("el índice solo contiene segmentos válidos");
+                .expect("the index only contains valid segments");
             let child_path = p.join(seg);
             let mut child_key = inner.clone();
             child_key.push(name.clone());
@@ -196,20 +196,21 @@ impl Provider for RarProvider {
         Ok(Some(self.index().await?.skipped()))
     }
 
-    /// Lee UNA entrada haciendo que el delegado la escupa por `stdout`.
+    /// Reads ONE entry by making the delegate spit it out through `stdout`.
     ///
-    /// Dos negativas explícitas antes de arrancar nada:
+    /// Two explicit refusals before starting anything:
     ///
-    /// - una entrada **cifrada** se lista pero no se lee: la contraseña no se
-    ///   puede pedir (el hijo tiene `stdin` cerrado a propósito) y fingir que
-    ///   el fichero está vacío sería peor;
-    /// - un nombre que el delegado trataría como **patrón** y alcanzase a
-    ///   otra entrada se rehúsa: el flujo equivocado es indistinguible del
-    ///   correcto.
+    /// - an **encrypted** entry gets listed but not read: the password
+    ///   cannot be asked for (the child has `stdin` deliberately closed) and
+    ///   pretending the file is empty would be worse;
+    /// - a name the delegate would treat as a **pattern** and that reaches
+    ///   another entry is refused: the wrong stream is indistinguishable
+    ///   from the right one.
     ///
-    /// El `range` se sirve descartando del flujo, porque una tubería no tiene
-    /// seek: se pide lo mismo al delegado y se corta en cuanto hay bastante
-    /// —matando al hijo—, en vez de esperar a que termine de descomprimir.
+    /// `range` is served by discarding from the stream, because a pipe has
+    /// no seek: the same thing is asked of the delegate and it is cut off as
+    /// soon as there is enough —killing the child—, instead of waiting for
+    /// it to finish decompressing.
     async fn read(&self, p: &VPath, range: Option<ByteRange>) -> Result<ByteStream, Error> {
         let inner = Self::split(p)?;
         let index = self.index().await?;
@@ -228,13 +229,13 @@ impl Provider for RarProvider {
         if node.encrypted {
             tracing::warn!(
                 name = ?String::from_utf8_lossy(&name),
-                "entrada cifrada: se lista, pero leerla exigiría una contraseña que nadie puede teclear"
+                "encrypted entry: it gets listed, but reading it would demand a password nobody can type"
             );
             return Err(Error::Unsupported);
         }
         index.addressable(&name).map_err(Error::from)?;
         let argv = self.delegate.read_argv(&self.archive, &name);
-        // El token es del stream: soltarlo mata al hijo (regla 3).
+        // The token belongs to the stream: dropping it kills the child (rule 3).
         let cancel = CancellationToken::new();
         let guard = cancel.clone().drop_guard();
         let stream = self
@@ -262,9 +263,10 @@ impl Provider for RarProvider {
     }
 }
 
-/// Recorta el flujo del delegado al `range` pedido y lo corta en cuanto está
-/// servido. `guard` mata al hijo al soltarse: viaja DENTRO del stream para
-/// que el corte temprano y el drop del consumidor tengan el mismo efecto.
+/// Trims the delegate's stream to the requested `range` and cuts it off as
+/// soon as it is served. `guard` kills the child when dropped: it travels
+/// INSIDE the stream so that an early cutoff and the consumer's drop have
+/// the same effect.
 fn apply_range(
     stream: ByteStream,
     range: Option<ByteRange>,
@@ -274,15 +276,16 @@ fn apply_range(
         Some(r) => (r.offset, r.len),
         None => (0, None),
     };
-    // El recorte va en el ESTADO del unfold, no capturado por el bloque async:
-    // un `async move` copiaría los contadores en cada chunk y el recorte se
-    // reaplicaría desde cero — el fallo lo delató `unused_assignments`.
+    // The trimming state lives in the unfold's STATE, not captured by the
+    // async block: an `async move` would copy the counters into every chunk
+    // and the trim would be reapplied from scratch — `unused_assignments`
+    // is what gave the bug away.
     futures::stream::unfold(
         (Some(stream), guard, to_skip, left),
         |(stream, guard, mut to_skip, mut left)| async move {
             let mut stream = stream?;
             if left == Some(0) {
-                return None; // servido: soltar el guard mata al hijo
+                return None; // served: dropping the guard kills the child
             }
             loop {
                 let chunk = match stream.next().await {

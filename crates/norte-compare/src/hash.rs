@@ -1,27 +1,28 @@
-//! El rung caro: el sha256 de UN fichero, leído en streaming a través de
+//! The expensive rung: the sha256 of ONE file, read in streaming through
 //! [`Provider::read`].
 //!
-//! Es privado a propósito. La cascada no sabe hashear —le llega el resultado ya
-//! hecho, en [`HashOutcome`](crate::cascade::HashOutcome)— y quien use el motor
-//! desde fuera pide el rung con
-//! [`CompareOptions::with_hash`](crate::CompareOptions::with_hash), no
-//! llamando aquí. Publicar esto sería ofrecer una segunda forma de hashear un
-//! fichero, y la de verdad —la del copy engine y la del índice— no vive en este
-//! crate.
+//! Private on purpose. The cascade does not know how to hash — it receives
+//! the result already made, in [`HashOutcome`](crate::cascade::HashOutcome)
+//! — and whoever uses the engine from outside asks for the rung with
+//! [`CompareOptions::with_hash`](crate::CompareOptions::with_hash), not by
+//! calling here. Publishing this would offer a second way to hash a file,
+//! and the real one — the copy engine's and the index's — does not live in
+//! this crate.
 //!
-//! # Qué se lee, y qué no
+//! # What is read, and what is not
 //!
-//! El fichero ENTERO, en los trozos que dé el provider, y nunca se materializa
-//! más de un trozo: un fichero de 40 GB cuesta 40 GB de red o de disco, no de
-//! memoria. Un rango no serviría —el hash es de todo el contenido— y un
-//! `read` con `range: None` es lo que todos los providers implementan.
+//! The WHOLE file, in whatever chunks the provider gives, and never more
+//! than one chunk is materialized at a time: a 40 GB file costs 40 GB of
+//! network or disk, not memory. A range would not do — the hash is of the
+//! whole content — and a `read` with `range: None` is what every provider
+//! implements.
 //!
-//! # Cancelación
+//! # Cancellation
 //!
-//! El token se mira **una vez por trozo**, no una vez por fichero (regla dura
-//! 3): si se mirase por fichero, cancelar una comparación parada en un fichero
-//! enorme esperaría a que terminase de leerlo entero. Ese es justo el caso en
-//! el que un usuario cancela.
+//! The token is checked **once per chunk**, not once per file (hard rule
+//! 3): if it were checked per file, cancelling a comparison stuck on a huge
+//! file would wait for it to finish reading entirely. That is exactly the
+//! case where a user cancels.
 
 use futures::StreamExt;
 use norte_proto::VPath;
@@ -29,31 +30,31 @@ use norte_vfs::{ByteStream, Provider};
 use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
 
-/// Un sha256 crudo. No se enseña a nadie: solo se compara con otro.
+/// A raw sha256. Never shown to anyone: only compared against another.
 pub(crate) type Digest256 = [u8; 32];
 
-/// Por qué no hay digest.
+/// Why there is no digest.
 ///
-/// Las dos razones se tratan MUY distinto arriba: una lectura rota es una fila
-/// de error y el walk sigue; una cancelación termina el flujo entero.
+/// The two reasons are treated VERY differently above: a broken read is an
+/// error row and the walk continues; a cancellation ends the whole stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum HashFailure {
-    /// El provider no pudo abrir o no pudo terminar de leer el fichero.
+    /// The provider could not open the file, or could not finish reading it.
     Read,
-    /// El token se disparó a mitad de la lectura. No hay nada que limpiar: no
-    /// se ha escrito un solo byte.
+    /// The token fired halfway through the read. There is nothing to clean
+    /// up: not a single byte has been written.
     Cancelled,
 }
 
-/// El sha256 de `path`, leído en streaming.
+/// `path`'s sha256, read in streaming.
 pub(crate) async fn sha256_of(
     provider: &dyn Provider,
     path: &VPath,
     cancel: &CancellationToken,
 ) -> Result<Digest256, HashFailure> {
-    // Antes de ABRIR: con el token ya disparado no se le pide al provider una
-    // lectura que nadie va a usar (y un fichero vacío no tiene trozo en el que
-    // mirarlo después).
+    // Before OPENING: with the token already fired, the provider is not
+    // asked for a read nobody is going to use (and an empty file has no
+    // chunk to check it on afterward).
     if cancel.is_cancelled() {
         return Err(HashFailure::Cancelled);
     }
@@ -64,15 +65,15 @@ pub(crate) async fn sha256_of(
     fold_digest(stream, cancel).await
 }
 
-/// El bucle que consume el flujo de bytes: separado de [`sha256_of`] para que
-/// el chequeo del token se pueda probar sin un provider que colabore.
+/// The loop that consumes the byte stream: separated from [`sha256_of`] so
+/// the token check can be tested without a cooperating provider.
 async fn fold_digest(
     mut stream: ByteStream,
     cancel: &CancellationToken,
 ) -> Result<Digest256, HashFailure> {
     let mut hasher = Sha256::new();
     while let Some(chunk) = stream.next().await {
-        // Por TROZO. Ver la nota de cancelación de la cabecera del módulo.
+        // PER CHUNK. See the module header's cancellation note.
         if cancel.is_cancelled() {
             return Err(HashFailure::Cancelled);
         }
@@ -90,7 +91,7 @@ mod tests {
     use super::*;
 
     fn path(name: &str) -> VPath {
-        MemProvider::root().join(Segment::new(name.as_bytes().to_vec()).expect("segmento"))
+        MemProvider::root().join(Segment::new(name.as_bytes().to_vec()).expect("segment"))
     }
 
     async fn seed(mem: &MemProvider, name: &str, content: &[u8]) {
@@ -105,14 +106,15 @@ mod tests {
         futures::stream::iter(items).boxed()
     }
 
-    /// Mismo contenido, mismo digest; un byte distinto, digest distinto. Y el
-    /// troceado no cuenta: el hash es del contenido, no de cómo llegó.
+    /// Same content, same digest; a different byte, a different digest. And
+    /// the chunking does not count: the hash is of the content, not of how
+    /// it arrived.
     #[tokio::test]
-    async fn el_digest_es_del_contenido_y_no_del_troceado() {
+    async fn the_digest_is_of_the_content_and_not_the_chunking() {
         let mem = MemProvider::new();
-        seed(&mem, "a", b"hola").await;
-        seed(&mem, "b", b"hola").await;
-        seed(&mem, "c", b"holA").await;
+        seed(&mem, "a", b"hello").await;
+        seed(&mem, "b", b"hello").await;
+        seed(&mem, "c", b"hellO").await;
         let cancel = CancellationToken::new();
         let a = sha256_of(&mem, &path("a"), &cancel).await.expect("a");
         let b = sha256_of(&mem, &path("b"), &cancel).await.expect("b");
@@ -120,35 +122,35 @@ mod tests {
         assert_eq!(a, b);
         assert_ne!(a, c);
 
-        // El mismo contenido partido en dos trozos da el mismo digest.
-        let partido = fold_digest(
+        // The same content split into two chunks gives the same digest.
+        let split = fold_digest(
             chunks(vec![
-                Ok(Bytes::from_static(b"ho")),
-                Ok(Bytes::from_static(b"la")),
+                Ok(Bytes::from_static(b"he")),
+                Ok(Bytes::from_static(b"llo")),
             ]),
             &cancel,
         )
         .await
         .expect("digest");
-        assert_eq!(partido, a);
+        assert_eq!(split, a);
     }
 
-    /// Un fichero que no se puede abrir es [`HashFailure::Read`], no un panic
-    /// ni un digest de cero bytes.
+    /// A file that cannot be opened is [`HashFailure::Read`], not a panic
+    /// nor a zero-byte digest.
     #[tokio::test]
-    async fn un_fichero_que_no_existe_es_un_fallo_de_lectura() {
+    async fn a_file_that_does_not_exist_is_a_read_failure() {
         let mem = MemProvider::new();
-        let outcome = sha256_of(&mem, &path("no-existe"), &CancellationToken::new()).await;
+        let outcome = sha256_of(&mem, &path("does-not-exist"), &CancellationToken::new()).await;
         assert_eq!(outcome, Err(HashFailure::Read));
     }
 
-    /// Un error a MITAD del flujo también: medio fichero hasheado no es un
-    /// digest, es una mentira del tamaño de un fichero.
+    /// An error HALFWAY through the stream too: half a file hashed is not a
+    /// digest, it is a lie the size of a file.
     #[tokio::test]
-    async fn un_flujo_que_se_rompe_a_mitad_es_un_fallo_de_lectura() {
+    async fn a_stream_that_breaks_halfway_is_a_read_failure() {
         let outcome = fold_digest(
             chunks(vec![
-                Ok(Bytes::from_static(b"ho")),
+                Ok(Bytes::from_static(b"he")),
                 Err(Error::Io { retryable: false }),
             ]),
             &CancellationToken::new(),
@@ -157,21 +159,22 @@ mod tests {
         assert_eq!(outcome, Err(HashFailure::Read));
     }
 
-    /// El token se mira POR TROZO, y este test es lo único que lo demuestra.
+    /// The token is checked PER CHUNK, and this test is the only thing that
+    /// proves it.
     ///
-    /// El flujo dispara el token al entregar su primer trozo: un bucle que
-    /// solo mirase el token al empezar el fichero devolvería tan campante el
-    /// digest de los dos trozos. Con 40 GB en vez de ocho bytes, esa
-    /// diferencia es media hora de espera después de pulsar cancelar.
+    /// The stream fires the token on delivering its first chunk: a loop that
+    /// only checked the token at the start of the file would happily return
+    /// the digest of both chunks. With 40 GB instead of eight bytes, that
+    /// difference is half an hour of waiting after pressing cancel.
     #[tokio::test]
-    async fn el_token_se_mira_una_vez_por_trozo() {
+    async fn the_token_is_checked_once_per_chunk() {
         let cancel = CancellationToken::new();
-        let disparador = cancel.clone();
+        let trigger = cancel.clone();
         let stream = futures::stream::iter(vec![
             Ok(Bytes::from_static(b"aaaa")),
             Ok(Bytes::from_static(b"bbbb")),
         ])
-        .inspect(move |_| disparador.cancel())
+        .inspect(move |_| trigger.cancel())
         .boxed();
         assert_eq!(
             fold_digest(stream, &cancel).await,
@@ -179,17 +182,17 @@ mod tests {
         );
     }
 
-    /// Con el token ya disparado no se abre siquiera el fichero.
+    /// With the token already fired, the file is not even opened.
     #[tokio::test]
-    async fn un_token_ya_disparado_no_abre_el_fichero() {
+    async fn an_already_fired_token_does_not_open_the_file() {
         let mem = MemProvider::new();
-        seed(&mem, "a", b"hola").await;
+        seed(&mem, "a", b"hello").await;
         let cancel = CancellationToken::new();
         cancel.cancel();
         assert_eq!(
             sha256_of(&mem, &path("a"), &cancel).await,
             Err(HashFailure::Cancelled)
         );
-        assert_eq!(mem.faults().read_calls(), 0, "no se abrió nada");
+        assert_eq!(mem.faults().read_calls(), 0, "nothing was opened");
     }
 }

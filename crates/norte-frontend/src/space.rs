@@ -1,45 +1,47 @@
-//! ¿Cabe en el destino? (#149)
+//! Does it fit at the destination? (#149)
 //!
-//! Una copia jamás preguntaba si el destino tenía sitio, y el espacio libre ya
-//! se enumera desde el ítem 3 del roadmap. Lo que faltaba era la pregunta, y
-//! sobre todo **qué hacer con la respuesta**: aquí se AVISA y se deja seguir,
-//! nunca se rehúsa.
+//! A copy never used to ask whether the destination had room, and free space
+//! has been enumerated since item 3 of the roadmap. What was missing was the
+//! question, and above all **what to do with the answer**: here it WARNS and
+//! lets things proceed, it never refuses.
 //!
-//! El motivo de no rehusar no es timidez. «No cabe» se equivoca a menudo:
-//! ficheros dispersos, compresión del propio filesystem, cuotas por usuario, y
-//! un destino que informa del espacio de OTRO filesystem que el que va a
-//! recibir los bytes. Negar una copia que sí cabía es peor que dejar que el
-//! humano decida con el número delante.
+//! The reason for not refusing is not timidity. "Does not fit" is often
+//! wrong: sparse files, the filesystem's own compression, per-user quotas,
+//! and a destination that reports the space of a DIFFERENT filesystem than
+//! the one that will receive the bytes. Denying a copy that did fit is worse
+//! than letting the human decide with the number in front of them.
 //!
-//! # Cuándo se calla, que es la mitad del contrato
+//! # When it stays quiet, which is half the contract
 //!
-//! - **El destino no sabe contestar.** SFTP, S3 y un archivo no tienen
-//!   concepto de espacio libre, o lo tienen y no es fiable.
-//!   [`norte_proto::methods::Volume::free_bytes`] es `Option<u64>` y ausente
-//!   significa «no contestó a tiempo», JAMÁS cero — confundirlos convertiría
-//!   cada montaje lento en una falsa alarma.
-//! - **No se sabe cuánto se va a mover.** Un directorio no trae tamaño en el
-//!   listado, y sumar solo lo que sí lo trae daría un total menor que el real:
-//!   avisar con él sería avisar de menos, y no avisar con él es lo honesto.
+//! - **The destination cannot answer.** SFTP, S3 and an archive have no
+//!   concept of free space, or have one that is not reliable.
+//!   [`norte_proto::methods::Volume::free_bytes`] is `Option<u64>` and absent
+//!   means "did not answer in time", NEVER zero — confusing the two would
+//!   turn every slow mount into a false alarm.
+//! - **It is not known how much is about to move.** A directory carries no
+//!   size in the listing, and adding up only what does carry one would give
+//!   a total lower than the real one: warning with it would be warning too
+//!   little, and not warning at all is the honest choice.
 
 use norte_i18n::{Lang, ta_in};
 
-/// El aviso de espacio, o `None` cuando no hay nada honesto que decir.
+/// The space warning, or `None` when there is nothing honest to say.
 ///
-/// `total` es lo que se va a escribir y `free` lo que el destino dice tener;
-/// cualquiera de los dos ausente calla. Que quepa también calla: un «sí cabe»
-/// en cada copia es ruido que enseña a ignorar la línea.
+/// `total` is what is about to be written and `free` what the destination
+/// says it has; either one being absent stays quiet. Fitting also stays
+/// quiet: a "yes, it fits" on every copy is noise that teaches people to
+/// ignore the line.
 ///
 /// ```
 /// use norte_frontend::space::warning;
 /// use norte_i18n::Lang;
 ///
-/// // No cabe: se dice, con los dos números.
+/// // Does not fit: it is said, with both numbers.
 /// assert!(warning(Some(4_200_000_000), Some(1_100_000_000), Lang::En).is_some());
-/// // Cabe: nada que decir.
+/// // Fits: nothing to say.
 /// assert!(warning(Some(10), Some(1_000), Lang::En).is_none());
-/// // El destino no contesta, o no se sabe cuánto se mueve: silencio, jamás
-/// // una falsa alarma.
+/// // The destination does not answer, or how much is moving is not known:
+/// // silence, never a false alarm.
 /// assert!(warning(Some(10), None, Lang::En).is_none());
 /// assert!(warning(None, Some(10), Lang::En).is_none());
 /// ```
@@ -59,85 +61,86 @@ pub fn warning(total: Option<u64>, free: Option<u64>, lang: Lang) -> Option<Stri
     ))
 }
 
-/// Los bytes que una transferencia va a escribir, o `None` si alguno de los
-/// ítems no lo dice.
+/// The bytes a transfer is about to write, or `None` if some item does not
+/// say how much it takes up.
 ///
-/// La otra mitad del contrato de [`warning`], y la que decide si hay pregunta
-/// que hacer. Es TODO o nada: un directorio no trae tamaño en el listado, así
-/// que sumar solo lo que sí lo trae daría un total menor que el real y
-/// avisaría de menos — que es peor que callar, porque la línea que sí sale se
-/// lee como completa.
+/// The other half of [`warning`]'s contract, and the one that decides whether
+/// there is a question to ask. It is ALL or nothing: a directory carries no
+/// size in the listing, so adding up only what does carry one would give a
+/// total lower than the real one and warn too little — which is worse than
+/// staying quiet, because the line that does show up reads as complete.
 ///
-/// Vive aquí y no en un frontend porque los dos hacen la misma pregunta al
-/// abrir el mismo diálogo, y un total calculado con otra regla es una alarma
-/// que aparece en un frontend y no en el otro (ADR 0077).
+/// It lives here and not in a frontend because both ask the same question
+/// when opening the same dialog, and a total computed with a different rule
+/// is an alarm that shows up in one frontend and not the other (ADR 0077).
 ///
-/// Un ítem que no está en `entries` tampoco suma: no es que ocupe cero, es
-/// que no se sabe.
+/// An item not in `entries` does not add up either: it is not that it takes
+/// up zero, it is that it is not known.
 ///
 /// ```
 /// use norte_frontend::space::total_to_write;
 /// use norte_proto::{Entry, EntryKind, VPath};
 ///
-/// let en = |wire: &str, kind, size| Entry {
+/// let entry = |wire: &str, kind, size| Entry {
 ///     attrs: std::collections::BTreeMap::new(),
 ///     path: VPath::parse(wire).unwrap(),
 ///     kind,
 ///     size,
 ///     mtime_ms: None,
 /// };
-/// let uno = VPath::parse("file:///a").unwrap();
-/// let dos = VPath::parse("file:///b").unwrap();
+/// let one = VPath::parse("file:///a").unwrap();
+/// let two = VPath::parse("file:///b").unwrap();
 /// let dir = VPath::parse("file:///d").unwrap();
-/// let listado = [
-///     en("file:///a", EntryKind::File, Some(10)),
-///     en("file:///b", EntryKind::File, Some(32)),
-///     en("file:///d", EntryKind::Dir, None),
+/// let listing = [
+///     entry("file:///a", EntryKind::File, Some(10)),
+///     entry("file:///b", EntryKind::File, Some(32)),
+///     entry("file:///d", EntryKind::Dir, None),
 /// ];
 ///
-/// assert_eq!(total_to_write(&listado, &[uno.clone(), dos]), Some(42));
-/// // Un directorio no dice cuánto ocupa: NO hay total, ni siquiera parcial.
-/// assert_eq!(total_to_write(&listado, &[uno, dir]), None);
+/// assert_eq!(total_to_write(&listing, &[one.clone(), two]), Some(42));
+/// // A directory does not say how much it takes up: there is NO total, not
+/// // even a partial one.
+/// assert_eq!(total_to_write(&listing, &[one, dir]), None);
 /// ```
 #[must_use]
 pub fn total_to_write(entries: &[norte_proto::Entry], items: &[norte_proto::VPath]) -> Option<u64> {
-    // Por índice cuando el producto se va de las manos, y lineal cuando no.
-    // El caso corriente son tres marcas sobre un listado normal, donde
-    // construir un mapa cuesta más que buscar; el caso que importa son 512
-    // marcas —el tope de un lote— sobre un directorio de cien mil entradas,
-    // que son cincuenta millones de comparaciones de `VPath` con la interfaz
-    // parada, porque esto corre en el hilo del actor antes de emitir el
-    // parche.
+    // By index when the product gets out of hand, and linear otherwise. The
+    // common case is three marks over a normal listing, where building a map
+    // costs more than searching; the case that matters is 512 marks — a
+    // batch's cap — over a directory of a hundred thousand entries, which is
+    // fifty million `VPath` comparisons with the interface frozen, because
+    // this runs on the actor's thread before emitting the patch.
     if items.len().saturating_mul(entries.len()) > 100_000 {
-        let indice: std::collections::HashMap<&norte_proto::VPath, &norte_proto::Entry> =
+        let index: std::collections::HashMap<&norte_proto::VPath, &norte_proto::Entry> =
             entries.iter().map(|e| (&e.path, e)).collect();
         return items
             .iter()
-            .try_fold(0_u64, |total, p| bytes_de(indice.get(p).copied()?, total));
+            .try_fold(0_u64, |total, p| bytes_of(index.get(p).copied()?, total));
     }
     items.iter().try_fold(0_u64, |total, path| {
-        bytes_de(entries.iter().find(|e| &e.path == path)?, total)
+        bytes_of(entries.iter().find(|e| &e.path == path)?, total)
     })
 }
 
-/// Suma una entrada al total, o `None` si esa entrada no dice cuánto ocupa.
-fn bytes_de(entry: &norte_proto::Entry, total: u64) -> Option<u64> {
+/// Adds one entry to the total, or `None` if that entry does not say how much
+/// it takes up.
+fn bytes_of(entry: &norte_proto::Entry, total: u64) -> Option<u64> {
     if entry.kind != norte_proto::EntryKind::File {
         return None;
     }
     total.checked_add(entry.size?)
 }
 
-/// El espacio libre del volumen que sirve `path`, o `None` si ninguno lo
-/// sirve o el que lo sirve no contestó.
+/// The free space of the volume serving `path`, or `None` if none serves it
+/// or the one that does did not answer.
 ///
-/// El volumen es el de punto de montaje MÁS LARGO que sea prefijo del path:
-/// con `/` y `/home` montados aparte, un fichero de `/home/u` lo sirve
-/// `/home`, y preguntarle a `/` daría el número de otro disco.
+/// The volume is the one with the LONGEST mount point that is a prefix of
+/// path: with `/` and `/home` mounted separately, a file under `/home/u` is
+/// served by `/home`, and asking `/` would give another disk's number.
 ///
-/// Solo `file://`: un `sftp://` o un `s3://` no cuelgan de ningún montaje de
-/// esta máquina, y responder con el espacio del disco local sería contestar
-/// otra pregunta.
+/// Only `file://`: an `sftp://` or an `s3://` hangs off no mount of this
+/// machine, and answering with the local disk's space would be answering a
+/// different question.
 #[must_use]
 pub fn free_for(
     path: &norte_proto::VPath,
@@ -146,10 +149,10 @@ pub fn free_for(
     volume_for(path, volumes)?.free_bytes
 }
 
-/// Cuánto del volumen de `path` está OCUPADO, en `0.0..=1.0` (spec
-/// 2026-09-11 V5: el indicador de espacio del pie de la ventana). `None`
-/// cuando no se sabe el total o lo libre, o el esquema no es local — el
-/// mismo criterio que [`free_for`].
+/// How much of `path`'s volume is USED, as `0.0..=1.0` (spec 2026-09-11 V5:
+/// the window footer's space indicator). `None` when the total or the free
+/// space is not known, or the scheme is not local — the same criterion as
+/// [`free_for`].
 #[must_use]
 pub fn used_ratio_for(
     path: &norte_proto::VPath,
@@ -158,18 +161,18 @@ pub fn used_ratio_for(
     let v = volume_for(path, volumes)?;
     let total = v.total_bytes.filter(|t| *t > 0)?;
     let free = v.free_bytes?.min(total);
-    // Precisión de f32 de sobra para una barra: el cociente cabe en 24 bits
-    // mucho antes de que un píxel lo note.
+    // Plenty of f32 precision for a bar: the ratio fits in 24 bits long
+    // before a pixel would notice.
     #[expect(
         clippy::cast_precision_loss,
         clippy::cast_possible_truncation,
-        reason = "un cociente en [0, 1] para una barra de dos píxeles"
+        reason = "a ratio in [0, 1] for a two-pixel bar"
     )]
     let ratio = (1.0 - (free as f64 / total as f64)).clamp(0.0, 1.0) as f32;
     Some(ratio)
 }
 
-/// El volumen MÁS PROFUNDO que contiene a `path`, solo para rutas locales.
+/// The DEEPEST volume that contains `path`, only for local paths.
 fn volume_for<'a>(
     path: &norte_proto::VPath,
     volumes: &'a [norte_proto::methods::Volume],
@@ -201,7 +204,7 @@ mod tests {
         }
     }
 
-    fn entrada(wire: &str, kind: norte_proto::EntryKind, size: Option<u64>) -> norte_proto::Entry {
+    fn entry(wire: &str, kind: norte_proto::EntryKind, size: Option<u64>) -> norte_proto::Entry {
         norte_proto::Entry {
             attrs: std::collections::BTreeMap::new(),
             path: VPath::parse(wire).expect("wire"),
@@ -211,93 +214,94 @@ mod tests {
         }
     }
 
-    /// Las tres formas de «no se sabe», que son las que el doctest no toca y
-    /// las que importan: las tres tienen que dar `None` entero, jamás una
-    /// suma parcial. Un total menor que el real avisa de menos, y la línea
-    /// que sí sale se lee como completa.
+    /// The three forms of "not known", which the doctest does not touch and
+    /// which matter: all three must give a whole `None`, never a partial sum.
+    /// A total lower than the real one warns too little, and the line that
+    /// does show up reads as complete.
     #[test]
-    fn lo_que_no_se_sabe_no_suma_a_medias() {
+    fn what_is_unknown_does_not_add_up_halfway() {
         use norte_proto::EntryKind;
-        let listado = [
-            entrada("file:///a", EntryKind::File, Some(10)),
-            entrada("file:///sin", EntryKind::File, None),
-            entrada("file:///enlace", EntryKind::Symlink, Some(4)),
+        let listing = [
+            entry("file:///a", EntryKind::File, Some(10)),
+            entry("file:///unknown", EntryKind::File, None),
+            entry("file:///link", EntryKind::Symlink, Some(4)),
         ];
         let p = |w: &str| VPath::parse(w).expect("wire");
 
         assert_eq!(
-            total_to_write(&listado, &[p("file:///a"), p("file:///sin")]),
+            total_to_write(&listing, &[p("file:///a"), p("file:///unknown")]),
             None,
-            "un fichero que no dice cuánto ocupa se lleva el total entero"
+            "a file that does not say how much it takes up voids the whole total"
         );
         assert_eq!(
-            total_to_write(&listado, &[p("file:///a"), p("file:///enlace")]),
+            total_to_write(&listing, &[p("file:///a"), p("file:///link")]),
             None,
-            "un enlace tampoco: lo que se copia es a lo que apunta, y eso no \
-             está en este listado"
+            "neither does a symlink: what is copied is what it points to, and \
+             that is not in this listing"
         );
         assert_eq!(
-            total_to_write(&listado, &[p("file:///a"), p("file:///fantasma")]),
+            total_to_write(&listing, &[p("file:///a"), p("file:///ghost")]),
             None,
-            "lo que no está en el listado no ocupa cero: no se sabe"
+            "what is not in the listing does not take up zero: it is not known"
         );
         assert_eq!(
-            total_to_write(&listado, &[]),
+            total_to_write(&listing, &[]),
             Some(0),
-            "no copiar nada sí se sabe cuánto ocupa"
+            "copying nothing does have a known size"
         );
     }
 
-    /// Y una suma que desborda tampoco inventa: `checked_add` calla.
+    /// And a sum that overflows does not invent anything either:
+    /// `checked_add` stays quiet.
     #[test]
-    fn una_suma_que_desborda_calla() {
+    fn a_sum_that_overflows_stays_quiet() {
         use norte_proto::EntryKind;
-        let listado = [
-            entrada("file:///a", EntryKind::File, Some(u64::MAX)),
-            entrada("file:///b", EntryKind::File, Some(1)),
+        let listing = [
+            entry("file:///a", EntryKind::File, Some(u64::MAX)),
+            entry("file:///b", EntryKind::File, Some(1)),
         ];
         let items = [
             VPath::parse("file:///a").expect("wire"),
             VPath::parse("file:///b").expect("wire"),
         ];
-        assert_eq!(total_to_write(&listado, &items), None);
+        assert_eq!(total_to_write(&listing, &items), None);
     }
 
-    /// El montaje más ESPECÍFICO manda: con `/` y `/home` montados aparte,
-    /// preguntar por `/home/u` y que conteste `/` sería el número de otro
-    /// disco.
+    /// The most SPECIFIC mount point wins: with `/` and `/home` mounted
+    /// separately, asking about `/home/u` and getting `/`'s answer would be
+    /// another disk's number.
     #[test]
-    fn gana_el_punto_de_montaje_mas_largo() {
+    fn the_longest_mount_point_wins() {
         let vols = [vol("file:///", Some(10)), vol("file:///home", Some(99))];
-        let libre = free_for(&VPath::parse("file:///home/u/x.txt").expect("wire"), &vols);
-        assert_eq!(libre, Some(99));
+        let free = free_for(&VPath::parse("file:///home/u/x.txt").expect("wire"), &vols);
+        assert_eq!(free, Some(99));
     }
 
-    /// Un provider que no cuelga de esta máquina no tiene volumen que
-    /// preguntar, y contestar con el del disco local sería contestar otra
-    /// pregunta.
+    /// A provider that does not hang off this machine has no volume to ask,
+    /// and answering with the local disk's would be answering a different
+    /// question.
     #[test]
-    fn un_destino_remoto_no_tiene_espacio_que_mirar() {
+    fn a_remote_destination_has_no_space_to_check() {
         let vols = [vol("file:///", Some(10))];
         assert_eq!(
-            free_for(&VPath::parse("sftp://h/casa/x").expect("wire"), &vols),
+            free_for(&VPath::parse("sftp://h/home/x").expect("wire"), &vols),
             None
         );
         assert_eq!(
-            free_for(&VPath::parse("file://servidor/x").expect("wire"), &vols),
+            free_for(&VPath::parse("file://server/x").expect("wire"), &vols),
             None,
-            "un `file://` CON authority tampoco es este disco"
+            "a `file://` WITH an authority is not this disk either"
         );
     }
 
-    /// Y un volumen que no contestó a tiempo se distingue de uno lleno:
-    /// `None` no es cero, y tratarlo como cero sería una falsa alarma en cada
-    /// montaje lento.
+    /// And a volume that did not answer in time is told apart from a full
+    /// one: `None` is not zero, and treating it as zero would be a false
+    /// alarm on every slow mount.
     #[test]
-    fn un_volumen_que_no_contesta_calla() {
+    fn a_volume_that_does_not_answer_stays_quiet() {
         let vols = [vol("file:///", None)];
-        let libre = free_for(&VPath::parse("file:///x").expect("wire"), &vols);
-        assert_eq!(libre, None);
-        assert!(warning(Some(1_000_000), libre, Lang::En).is_none());
+        let free = free_for(&VPath::parse("file:///x").expect("wire"), &vols);
+        assert_eq!(free, None);
+        assert!(warning(Some(1_000_000), free, Lang::En).is_none());
     }
 }

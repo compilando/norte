@@ -1,36 +1,37 @@
-//! Los roles y los vínculos: quién es quién, y de quién es vista cada hueco.
+//! Roles and bindings: who is who, and whose view each slot is.
 
 use std::collections::BTreeMap;
 
 use super::{Follow, KindRegistry, LayoutDiagnostic, Node, Resolved, RoleId, SlotId};
 
-/// Los punteros con nombre dentro del árbol.
+/// The named pointers inside the tree.
 ///
-/// `active` es el foco; `target` es a dónde va una operación que necesita un
-/// segundo sitio. Se resuelven en cada frame porque son afirmaciones sobre lo
-/// que hay AHORA en pantalla, no propiedades guardadas del layout.
+/// `active` is the focus; `target` is where an operation that needs a
+/// second place goes. They are resolved on every frame because they are
+/// claims about what is on screen NOW, not saved layout properties.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Roles {
     map: BTreeMap<RoleId, SlotId>,
-    /// ¿Lo designó una PERSONA?
+    /// Did a PERSON designate it?
     ///
-    /// Distinguirlo importa porque con dos paneles el destino se asigna solo
-    /// —es el otro, y nadie lo nota— y ese default NO puede sobrevivir a un
-    /// split: quien parte un panel se encuentra tres, y un destino que él no
-    /// eligió marcado en uno de ellos es exactamente la adivinanza que la
-    /// ADR 0058 D7 prohíbe.
+    /// Distinguishing this matters because with two panes the target is
+    /// assigned automatically — it is the other one, and nobody notices —
+    /// and that default must NOT survive a split: whoever splits a pane
+    /// ends up with three, and a target they did not choose marked on one
+    /// of them is exactly the guesswork ADR 0058 D7 forbids.
     target_explicit: bool,
 }
 
 impl Roles {
-    /// Quién tiene el rol `role`, si alguien.
+    /// Who has role `role`, if anyone.
     #[must_use]
     pub fn get(&self, role: RoleId) -> Option<SlotId> {
         self.map.get(&role).copied()
     }
 
-    /// Da el rol `role` a `slot`. Un `target` puesto por aquí es EXPLÍCITO:
-    /// lo eligió alguien, así que sobrevive a que aparezcan más candidatos.
+    /// Gives role `role` to `slot`. A `target` set through here is
+    /// EXPLICIT: someone chose it, so it survives more candidates
+    /// appearing.
     pub fn set(&mut self, role: RoleId, slot: SlotId) {
         if role == RoleId::Target {
             self.target_explicit = true;
@@ -38,7 +39,7 @@ impl Roles {
         self.map.insert(role, slot);
     }
 
-    /// Quita el rol `role` a quien lo tuviera.
+    /// Removes role `role` from whoever had it.
     pub fn clear(&mut self, role: RoleId) {
         if role == RoleId::Target {
             self.target_explicit = false;
@@ -46,13 +47,14 @@ impl Roles {
         self.map.remove(&role);
     }
 
-    /// ¿Eligió alguien el destino, o se lo asignó el motor por no haber otro?
+    /// Did someone choose the target, or did the engine assign it for lack
+    /// of another?
     #[must_use]
     pub const fn target_is_explicit(&self) -> bool {
         self.target_explicit
     }
 
-    /// Solo el foco. Atajo para el arranque y para los tests.
+    /// Only the focus. Shorthand for startup and for tests.
     #[must_use]
     pub fn con_active(slot: SlotId) -> Self {
         let mut r = Self::default();
@@ -60,46 +62,48 @@ impl Roles {
         r
     }
 
-    /// Deja los roles coherentes con lo que hay en pantalla. Se llama tras
-    /// CADA `resolve`.
+    /// Leaves the roles consistent with what is on screen. Called after
+    /// EVERY `resolve`.
     ///
-    /// - `active` pasa a ser `foco`, siempre.
-    /// - `target` se conserva si sigue visible y elegible. Si no, se reubica al
-    ///   ÚNICO otro candidato visible; con cero o con varios se queda SIN
-    ///   fijar, y quien lo necesite pedirá una ruta.
+    /// - `active` always becomes the FOCUS.
+    /// - `target` is kept if it is still visible and eligible. If not, it is
+    ///   relocated to the ONE other visible candidate; with zero or with
+    ///   several it is left UNSET, and whoever needs it will ask for a
+    ///   path.
     ///
-    /// Ese último punto es la regla, no un detalle: con dos panes el destino
-    /// es obvio y nadie nota que el concepto existe, pero con varios —o con
-    /// uno detrás de una pestaña— una copia hacia el que el motor desempate
-    /// solo es pérdida de datos silenciosa (ADR 0058 D7).
+    /// That last point is the rule, not a detail: with two panes the target
+    /// is obvious and nobody notices the concept exists, but with several —
+    /// or with one behind a tab — a copy toward whichever the engine
+    /// tie-breaks to is silent data loss (ADR 0058 D7).
     pub fn reconcile(
         &mut self,
         tree: &Node,
         resolved: &Resolved,
         decls: &KindRegistry,
-        foco: SlotId,
+        focus: SlotId,
     ) {
-        self.set(RoleId::Active, foco);
-        let candidatos: Vec<SlotId> = resolved
+        self.set(RoleId::Active, focus);
+        let candidates: Vec<SlotId> = resolved
             .placements
             .iter()
             .map(|(id, _)| *id)
-            .filter(|id| *id != foco)
+            .filter(|id| *id != focus)
             .filter(|id| {
                 tree.kind_of(*id)
                     .is_some_and(|k| decls.holds_role(k, RoleId::Target))
             })
             .collect();
-        // Un destino EXPLÍCITO sobrevive mientras siga siendo candidato. El
-        // asignado por defecto, no: en cuanto hay más de un candidato deja de
-        // ser «el otro» y pasa a ser una adivinanza.
-        let actual = self.get(RoleId::Target);
-        let sigue_valiendo = actual.is_some_and(|a| candidatos.contains(&a));
-        if sigue_valiendo && (self.target_explicit || candidatos.len() == 1) {
+        // An EXPLICIT target survives as long as it is still a candidate.
+        // The default-assigned one does not: as soon as there is more than
+        // one candidate it stops being "the other one" and becomes a
+        // guess.
+        let current = self.get(RoleId::Target);
+        let still_valid = current.is_some_and(|a| candidates.contains(&a));
+        if still_valid && (self.target_explicit || candidates.len() == 1) {
             return;
         }
-        if let [unico] = candidatos[..] {
-            self.map.insert(RoleId::Target, unico);
+        if let [only] = candidates[..] {
+            self.map.insert(RoleId::Target, only);
             self.target_explicit = false;
         } else {
             self.clear(RoleId::Target);
@@ -107,24 +111,25 @@ impl Roles {
     }
 }
 
-/// Si el papel de DESTINO merece marcarse en la pantalla, con estos huecos
-/// colocados.
+/// Whether the TARGET role deserves to be marked on screen, with these
+/// slots placed.
 ///
-/// Que el rol EXISTA y que se PINTE son dos preguntas, y esta es la segunda.
-/// Con dos huecos el destino es «el otro» y nadie necesita que se lo digan:
-/// la marca sería ruido en el caso de siempre, y una marca que sale siempre
-/// deja de leerse. A partir de tres, una copia hacia el hueco que el motor
-/// desempate solo es pérdida de datos silenciosa (ADR 0058 D7), y ahí la
-/// marca es lo único que lo dice.
+/// Whether the role EXISTS and whether it is PAINTED are two questions, and
+/// this is the second. With two slots the target is "the other one" and
+/// nobody needs to be told: the mark would be noise in the usual case, and
+/// a mark that always shows stops being read. From three on, a copy toward
+/// whichever slot the engine tie-breaks to is silent data loss (ADR 0058
+/// D7), and there the mark is the only thing that says so.
 ///
-/// Vive aquí porque la contestaban los dos frontends y ya discrepaban: el
-/// terminal la reserva para tres o más y la ventana la encendía siempre.
+/// Lives here because both frontends used to answer it and already
+/// disagreed: the terminal reserves it for three or more and the window
+/// turned it on always.
 ///
 /// ```
 /// use norte_frontend::layout::target_worth_marking;
 ///
 /// assert!(!target_worth_marking(1));
-/// assert!(!target_worth_marking(2), "con dos, el destino es el otro");
+/// assert!(!target_worth_marking(2), "with two, the target is the other one");
 /// assert!(target_worth_marking(3));
 /// ```
 #[must_use]
@@ -132,12 +137,12 @@ pub fn target_worth_marking(visible_slots: usize) -> bool {
     visible_slots > 2
 }
 
-/// A qué hueco mira el hueco `de`. `None` = no mira a nadie.
+/// Which slot slot `de` looks at. `None` = looks at nobody.
 ///
-/// Un `follows` a un hueco que ya no existe degrada a seguir al rol `active` y
-/// deja un [`LayoutDiagnostic::FollowRetargeted`]: es lo que se quería casi
-/// siempre, y dejarlo roto en silencio es un panel auxiliar mirando al vacío
-/// sin que nada lo diga.
+/// A `follows` to a slot that no longer exists degrades to following the
+/// `active` role and leaves a [`LayoutDiagnostic::FollowRetargeted`]: it is
+/// what was wanted almost always, and leaving it silently broken is a side
+/// panel staring into the void with nothing saying so.
 #[must_use]
 pub fn resolve_follow(
     tree: &Node,
@@ -170,118 +175,119 @@ mod tests {
     fn browser(id: u32) -> Node {
         Node::slot(SlotId(id), KindId::browser())
     }
-    fn pintado(arbol: Node) -> (Node, Resolved) {
-        let res = resolve(Rect::new(0, 0, 100, 30), &arbol, &reg());
-        (arbol, res)
+    fn painted(tree: Node) -> (Node, Resolved) {
+        let res = resolve(Rect::new(0, 0, 100, 30), &tree, &reg());
+        (tree, res)
     }
     fn split(children: Vec<Node>) -> Node {
         Node::split(Dir::Horizontal, children)
     }
 
-    /// Con dos browsers, `target` es el otro. Eso es lo que hace que el layout
-    /// ortodoxo se comporte EXACTAMENTE como hoy con el concepto ya presente
-    /// pero invisible: `F5` copia al otro pane y nadie se entera.
+    /// With two browsers, `target` is the other one. That is what makes the
+    /// orthodox layout behave EXACTLY as it does today with the concept now
+    /// present but invisible: `F5` copies to the other pane and nobody
+    /// notices.
     #[test]
-    fn con_dos_browsers_el_destino_es_el_otro() {
-        let (arbol, res) = pintado(split(vec![browser(1), browser(2)]));
+    fn with_two_browsers_the_destination_is_the_other() {
+        let (tree, res) = painted(split(vec![browser(1), browser(2)]));
         let mut roles = Roles::default();
-        roles.reconcile(&arbol, &res, &reg(), SlotId(1));
+        roles.reconcile(&tree, &res, &reg(), SlotId(1));
         assert_eq!(roles.get(RoleId::Active), Some(SlotId(1)));
         assert_eq!(roles.get(RoleId::Target), Some(SlotId(2)));
     }
 
-    /// Con UN solo browser no hay destino, y eso NO es un estado roto: la
-    /// operación que lo necesite pedirá una ruta.
+    /// With ONE single browser there is no target, and that is NOT a broken
+    /// state: the operation that needs it will ask for a path.
     #[test]
-    fn con_un_solo_browser_no_hay_destino() {
-        let (arbol, res) = pintado(browser(1));
+    fn with_a_single_browser_there_is_no_destination() {
+        let (tree, res) = painted(browser(1));
         let mut roles = Roles::default();
-        roles.reconcile(&arbol, &res, &reg(), SlotId(1));
+        roles.reconcile(&tree, &res, &reg(), SlotId(1));
         assert_eq!(roles.get(RoleId::Target), None);
     }
 
-    /// El destino se OCULTA (cambio de pestaña): el rol se reubica al
-    /// candidato visible. Un destino detrás de una pestaña es pérdida de datos
-    /// silenciosa.
+    /// The target gets HIDDEN (tab switch): the role relocates to the
+    /// visible candidate. A target behind a tab is silent data loss.
     #[test]
-    fn un_destino_que_se_oculta_se_reubica() {
-        let (arbol, res) = pintado(split(vec![
+    fn a_destination_that_hides_gets_relocated() {
+        let (tree, res) = painted(split(vec![
             browser(1),
             Node::Tabs {
                 children: vec![browser(2), browser(3)],
                 active: 1,
             },
         ]));
-        assert_eq!(res.hidden, vec![SlotId(2)], "el 2 está oculto");
+        assert_eq!(res.hidden, vec![SlotId(2)], "2 is hidden");
         let mut roles = Roles::default();
         roles.set(RoleId::Target, SlotId(2));
-        roles.reconcile(&arbol, &res, &reg(), SlotId(1));
+        roles.reconcile(&tree, &res, &reg(), SlotId(1));
         assert_eq!(
             roles.get(RoleId::Target),
             Some(SlotId(3)),
-            "se reubica al visible"
+            "relocates to the visible one"
         );
     }
 
-    /// Con TRES browsers visibles y ninguno designado, no hay default: dos
-    /// candidatos no se desempatan solos.
+    /// With THREE visible browsers and none designated, there is no
+    /// default: two candidates do not tie-break themselves.
     #[test]
-    fn con_varios_candidatos_no_hay_destino_por_defecto() {
-        let (arbol, res) = pintado(split(vec![browser(1), browser(2), browser(3)]));
+    fn with_several_candidates_there_is_no_default_destination() {
+        let (tree, res) = painted(split(vec![browser(1), browser(2), browser(3)]));
         let mut roles = Roles::default();
-        roles.reconcile(&arbol, &res, &reg(), SlotId(1));
+        roles.reconcile(&tree, &res, &reg(), SlotId(1));
         assert_eq!(roles.get(RoleId::Target), None);
     }
 
-    /// El destino ASIGNADO por defecto (había un solo candidato) NO sobrevive
-    /// a que aparezca un segundo: entonces deja de ser «el otro» y pasa a ser
-    /// una adivinanza. Lo destapó pilotar la TUI en tmux — tras partir un
-    /// panel aparecía marcado un destino que nadie había elegido.
+    /// The DEFAULT-assigned target (there was a single candidate) does NOT
+    /// survive a second one appearing: it then stops being "the other one"
+    /// and becomes a guess. Uncovered by piloting the TUI in tmux — after
+    /// splitting a pane, a target nobody had chosen showed up marked.
     #[test]
-    fn el_destino_por_defecto_no_sobrevive_a_un_tercer_panel() {
-        let (arbol, res) = pintado(split(vec![browser(1), browser(2)]));
+    fn the_default_destination_does_not_survive_a_third_pane() {
+        let (tree, res) = painted(split(vec![browser(1), browser(2)]));
         let mut roles = Roles::default();
-        roles.reconcile(&arbol, &res, &reg(), SlotId(1));
+        roles.reconcile(&tree, &res, &reg(), SlotId(1));
         assert_eq!(roles.get(RoleId::Target), Some(SlotId(2)));
-        assert!(!roles.target_is_explicit(), "lo puso el motor, no nadie");
+        assert!(!roles.target_is_explicit(), "the engine set it, not anyone");
 
-        let (arbol, res) = pintado(split(vec![browser(1), browser(2), browser(3)]));
-        roles.reconcile(&arbol, &res, &reg(), SlotId(1));
+        let (tree, res) = painted(split(vec![browser(1), browser(2), browser(3)]));
+        roles.reconcile(&tree, &res, &reg(), SlotId(1));
         assert_eq!(
             roles.get(RoleId::Target),
             None,
-            "con dos candidatos no hay destino que el motor pueda dar"
+            "with two candidates there is no target the engine can give"
         );
     }
 
-    /// Pero un destino designado A MANO se respeta aunque haya varios: el
-    /// motor no desempata, el usuario sí.
+    /// But a target designated BY HAND is respected even with several: the
+    /// engine does not tie-break, the user does.
     #[test]
-    fn un_destino_designado_a_mano_sobrevive_a_la_reconciliacion() {
-        let (arbol, res) = pintado(split(vec![browser(1), browser(2), browser(3)]));
+    fn a_hand_designated_destination_survives_reconciliation() {
+        let (tree, res) = painted(split(vec![browser(1), browser(2), browser(3)]));
         let mut roles = Roles::default();
         roles.set(RoleId::Target, SlotId(3));
-        roles.reconcile(&arbol, &res, &reg(), SlotId(1));
+        roles.reconcile(&tree, &res, &reg(), SlotId(1));
         assert_eq!(roles.get(RoleId::Target), Some(SlotId(3)));
     }
 
-    /// Un kind que no puede tomar el rol no es candidato aunque esté visible:
-    /// `tasks` jamás es destino de una copia.
+    /// A kind that cannot take the role is not a candidate even if visible:
+    /// `tasks` is never a copy's target.
     #[test]
-    fn un_kind_sin_ese_rol_no_es_candidato() {
-        let (arbol, res) = pintado(split(vec![
+    fn a_kind_without_that_role_is_not_a_candidate() {
+        let (tree, res) = painted(split(vec![
             browser(1),
             Node::slot(SlotId(2), KindId::new("tasks")),
         ]));
         let mut roles = Roles::default();
-        roles.reconcile(&arbol, &res, &reg(), SlotId(1));
+        roles.reconcile(&tree, &res, &reg(), SlotId(1));
         assert_eq!(roles.get(RoleId::Target), None);
     }
 
-    /// Un `follows` roto degrada a seguir al rol `active` y lo CUENTA.
+    /// A broken `follows` degrades to following the `active` role and
+    /// COUNTS it.
     #[test]
-    fn un_follow_a_un_hueco_que_no_existe_degrada_a_active() {
-        let arbol = Node::Slot {
+    fn a_follow_to_a_slot_that_does_not_exist_degrades_to_active() {
+        let tree = Node::Slot {
             id: SlotId(1),
             kind: KindId::new("metadata"),
             params: Params::new(),
@@ -290,8 +296,8 @@ mod tests {
             },
         };
         let mut diags = vec![];
-        let objetivo = resolve_follow(&arbol, SlotId(1), &Roles::con_active(SlotId(1)), &mut diags);
-        assert_eq!(objetivo, Some(SlotId(1)));
+        let target = resolve_follow(&tree, SlotId(1), &Roles::con_active(SlotId(1)), &mut diags);
+        assert_eq!(target, Some(SlotId(1)));
         assert!(
             diags
                 .iter()
@@ -299,11 +305,11 @@ mod tests {
         );
     }
 
-    /// Un `follows: Role(Active)` sigue al foco, que es el default útil de un
-    /// panel de metadatos o de un preview acoplado.
+    /// A `follows: Role(Active)` follows the focus, which is the useful
+    /// default for a metadata panel or a docked preview.
     #[test]
-    fn un_follow_al_rol_active_sigue_al_foco() {
-        let arbol = Node::Slot {
+    fn a_follow_to_the_active_role_follows_focus() {
+        let tree = Node::Slot {
             id: SlotId(1),
             kind: KindId::new("metadata"),
             params: Params::new(),
@@ -312,8 +318,8 @@ mod tests {
             },
         };
         let mut diags = vec![];
-        let objetivo = resolve_follow(&arbol, SlotId(1), &Roles::con_active(SlotId(5)), &mut diags);
-        assert_eq!(objetivo, Some(SlotId(5)));
+        let target = resolve_follow(&tree, SlotId(1), &Roles::con_active(SlotId(5)), &mut diags);
+        assert_eq!(target, Some(SlotId(5)));
         assert!(diags.is_empty());
     }
 }

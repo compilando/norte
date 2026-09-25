@@ -1,14 +1,15 @@
-//! Los ajustes (F11 / `app.settings`) vistos desde el host: qué hay
-//! configurado, de dónde sale, y cambiarlo.
+//! Settings (F11 / `app.settings`) as seen from the host: what is
+//! configured, where it comes from, and changing it.
 //!
-//! Nada de esto lo decide este módulo. El registro de ajustes, el valor
-//! efectivo de cada entrada, su texto localizado y la MÁQUINA de edición
-//! —girar un booleano, validar un entero— son `norte_frontend::settings`: el
-//! mismo catálogo y el mismo editor que el terminal, con los mismos ids
-//! estables. Lo que se aporta aquí es la PROYECCIÓN al vocabulario del
-//! bridge, una sección que no es configuración sino diagnóstico —dónde vive
-//! cada cosa—, y la forma de pedir un valor: el terminal teclea en línea, y
-//! la ventana abre el diálogo de un campo, que es su forma de preguntar.
+//! None of this is decided by this module. The settings catalog, each
+//! entry's effective value, its localized text and the editing MACHINE
+//! — cycling a boolean, validating an integer — are `norte_frontend::settings`:
+//! the same catalog and the same editor as the terminal, with the same
+//! stable ids. What is contributed here is the PROJECTION onto the bridge's
+//! vocabulary, a section that is not configuration but diagnostics — where
+//! each thing lives — and the way of asking for a value: the terminal types
+//! it inline, and the window opens a field's dialog, which is its way of
+//! asking.
 
 use std::path::PathBuf;
 
@@ -22,27 +23,27 @@ use crate::dto::{
     PathRowView, SectionIndexView, SettingRowView, SettingsSectionView, SettingsView,
 };
 
-/// Una capa de configuración, nombrada como la nombra el usuario.
+/// A configuration layer, named the way the user names it.
 ///
-/// Espejo de `norte_config::Layer` sin depender de ese crate: el host no
-/// descubre ficheros —quien lo arranca ya resolvió las capas— y arrastrar el
-/// buscador de directorios aquí sería darle una segunda idea de dónde vive la
-/// configuración (ADR 0066, decisión D14).
+/// Mirrors `norte_config::Layer` without depending on that crate: the host
+/// does not discover files — whoever launched it already resolved the
+/// layers — and dragging the directory finder in here would give it a
+/// second idea of where the configuration lives (ADR 0066, decision D14).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConfigLayer {
-    /// `/etc/norte` (o `%ProgramData%\norte`).
+    /// `/etc/norte` (or `%ProgramData%\norte`).
     System,
     /// `$XDG_CONFIG_HOME/norte`.
     User,
-    /// `<config>/profiles/<nombre>`, la capa que el lector ELIGE por nombre
+    /// `<config>/profiles/<name>`, the layer the reader CHOOSES by name
     /// (spec 2026-08-26, D1).
     Profile,
-    /// `./.norte`, solo tras trust (ADR 0026).
+    /// `./.norte`, only after trust (ADR 0026).
     Project,
 }
 
 impl ConfigLayer {
-    /// La clave Fluent de su nombre.
+    /// Its name's Fluent key.
     fn label_id(self) -> &'static str {
         match self {
             Self::System => "settings-path-config-system",
@@ -53,141 +54,143 @@ impl ConfigLayer {
     }
 }
 
-/// Una ubicación que la ventana puede enseñar, con su existencia YA resuelta.
+/// A location the window can show, with its existence ALREADY resolved.
 ///
-/// El `missing` viene de fuera a propósito. Saber si un directorio está es
-/// `std::fs::metadata`, o sea I/O bloqueante, y esta proyección corre en el
-/// bucle del ÚNICO ESCRITOR: con una capa de configuración en un NFS colgado,
-/// abrir los ajustes congelaba la ventana entera —ni teclas, ni listados
-/// aterrizando, ni progreso de tasks— hasta que expirase el montaje. Es la
-/// regla 2, y el arranque ya tiene un `spawn_blocking` donde hacerlo bien.
+/// The `missing` field comes from outside on purpose. Knowing whether a
+/// directory exists is `std::fs::metadata`, i.e. blocking I/O, and this
+/// projection runs on the SOLE WRITER's loop: with a configuration layer on
+/// a hung NFS mount, opening settings froze the whole window — no keys, no
+/// listings landing, no task progress — until the mount timed out. This is
+/// rule 2, and startup already has a `spawn_blocking` where it can be done
+/// right.
 #[derive(Debug, Clone)]
 pub struct HostPath {
-    /// La ruta, en bytes nativos. Se pinta con `display_os_name`.
+    /// The path, in native bytes. Painted with `display_os_name`.
     pub path: PathBuf,
-    /// No existe. Una capa que nadie ha creado se DICE, en vez de pintar una
-    /// ruta que parece estar ahí.
+    /// It does not exist. A layer nobody created is STATED, instead of
+    /// painting a path that looks like it is there.
     pub missing: bool,
 }
 
-/// Dónde vive cada cosa, tal como lo resolvió quien arrancó el host.
+/// Where each thing lives, as resolved by whoever launched the host.
 ///
-/// Se recibe ya resuelto a propósito. El host no lee ficheros ni consulta el
-/// entorno: si lo hiciera, una ventana podría acabar diciendo que su
-/// configuración está en un sitio distinto de donde la leyó de verdad — y lo
-/// haría bloqueando el actor.
+/// Received already resolved on purpose. The host does not read files or
+/// query the environment: if it did, a window could end up saying its
+/// configuration lives somewhere other than where it actually read it from
+/// — and it would do so while blocking the actor.
 #[derive(Debug, Clone, Default)]
 pub struct HostPaths {
-    /// Las capas de configuración, en precedencia ASCENDENTE.
+    /// The configuration layers, in ASCENDING precedence.
     pub config_layers: Vec<(ConfigLayer, HostPath)>,
-    /// El directorio de estado (sesión, historial).
+    /// The state directory (session, history).
     pub state_dir: Option<HostPath>,
-    /// Dónde escribe sus logs esta ventana.
+    /// Where this window writes its logs.
     pub logs_dir: Option<HostPath>,
-    /// El socket del daemon con el que habla.
+    /// The daemon socket it talks to.
     pub socket: Option<HostPath>,
 }
 
-/// Los ajustes abiertos: el modelo mínimo, que es un cursor.
-///
-/// No hay más estado porque no hay edición. Cuando la fase 5 la traiga, lo
-/// Lo que hace Enter (o el doble clic) sobre la fila del cursor.
+/// What Enter (or a double click) does on the cursor's row.
 #[derive(Debug)]
-pub(crate) enum Activacion {
-    /// Nada que activar: una ruta, o ninguna fila.
-    Nada,
-    /// La fila giró sola —booleano, enumerado, tema, preset— y esto es lo que
-    /// hay que escribir. En caja: un `PendingWrite` lleva un `toml_edit::Value`
-    /// y es grande al lado de las otras variantes.
-    Escribir(Box<PendingWrite>),
-    /// La fila quiere un valor tecleado: `nombre` y `actual` para el diálogo
-    /// que lo pide.
-    PedirTexto {
-        /// Cómo se llama la entrada, ya traducido.
-        nombre: String,
-        /// Qué dice ahora.
+pub(crate) enum Activation {
+    /// Nothing to activate: a path, or no row at all.
+    Nothing,
+    /// The row cycled on its own — boolean, enum, theme, preset — and this
+    /// is what has to be written. Boxed: a `PendingWrite` carries a
+    /// `toml_edit::Value` and is large next to the other variants.
+    Write(Box<PendingWrite>),
+    /// The row wants a typed value: `name` and `actual` for the dialog
+    /// that asks for it.
+    RequestText {
+        /// The entry's name, already translated.
+        name: String,
+        /// What it currently says.
         actual: String,
-        /// SOBRE QUÉ se preguntó, por su id del catálogo.
+        /// WHAT it was asked ABOUT, by its catalog id.
         ///
-        /// Un id y no un número de fila: el diálogo se queda abierto
-        /// mientras el buscador de detrás sigue vivo, y una posición deja de
-        /// nombrar la misma fila en cuanto el filtro cambia — confirmar
-        /// escribiría el valor tecleado en OTRO ajuste. Una posición no
-        /// nombra una fila en una lista que se mueve.
+        /// An id and not a row number: the dialog stays open while the
+        /// search behind it stays alive, and a position stops naming the
+        /// same row as soon as the filter changes — confirming would write
+        /// the typed value onto ANOTHER setting. A position does not name a
+        /// row in a list that moves.
         id: &'static str,
     },
 }
 
-/// Los ajustes abiertos: el editor compartido más las ubicaciones.
+/// The open settings: the shared editor plus the locations.
 ///
-/// El cursor es sobre la lista PLANA —las entradas del registro y después
-/// las rutas—, y se proyecta sobre el del editor solo cuando toca activar
-/// una entrada: el editor no sabe de rutas, y no tiene por qué.
-pub(crate) struct Ajustes {
-    /// El editor compartido con el terminal, sobre las filas del registro.
+/// The cursor is over the FLAT list — the catalog's entries and then the
+/// paths — and is only projected onto the editor's when it is time to
+/// activate an entry: the editor knows nothing about paths, and has no
+/// reason to.
+pub(crate) struct Settings {
+    /// The editor shared with the terminal, over the catalog's rows.
     ///
-    /// Sin filtro: el terminal filtra tecleando porque su overlay se come
-    /// todo imprimible, y aquí las teclas imprimibles no llegan al host. Lo
-    /// que cuenta es que girar, validar y proponer un valor sea UNA máquina.
-    estado: SettingsState,
-    /// Las ubicaciones, ya saneadas.
-    rutas: Vec<PathRowView>,
-    /// Qué fila tiene el cursor, sobre la lista PLANA.
+    /// No filter: the terminal filters by typing because its overlay eats
+    /// every printable character, and here printable keys never reach the
+    /// host. What matters is that cycling, validating and proposing a value
+    /// is ONE machine.
+    state: SettingsState,
+    /// The locations, already sanitized.
+    paths: Vec<PathRowView>,
+    /// Which row the cursor is on, over the FLAT list.
     cursor: usize,
 }
 
-impl Ajustes {
-    /// Abre la vista con la configuración que el host tiene puesta.
+impl Settings {
+    /// Opens the view with the configuration the host currently has set.
     ///
-    /// La sección de plugins del modelo compartido se deja fuera: sus filas
-    /// necesitan el esquema `[config]` de cada extensión, que llega con la
-    /// siguiente rebanada. Enseñar su fila de «ninguna extensión declara
-    /// ajustes» sin haber preguntado sería afirmar algo que no se ha mirado.
-    pub(crate) fn abrir(
+    /// The shared model's plugins section is left out: its rows need each
+    /// extension's `[config]` schema, which arrives with the next slice.
+    /// Showing its "no extension declares settings" row without having
+    /// asked would assert something that has not been checked.
+    pub(crate) fn open(
         cfg: &norte_frontend::config::FrontendConfig,
         paths: &HostPaths,
         lang: Lang,
     ) -> Self {
         Self {
-            estado: SettingsState::new(filas_de(cfg, lang)),
-            rutas: rutas_de(paths, lang),
+            state: SettingsState::new(rows_of(cfg, lang)),
+            paths: paths_of(paths, lang),
             cursor: 0,
         }
     }
 
-    /// Las filas se vuelven a construir sobre la configuración RECARGADA,
-    /// con el cursor donde estaba.
+    /// The rows are rebuilt over the RELOADED configuration, with the
+    /// cursor where it was.
     ///
-    /// Es lo que le pasa al terminal en cada recarga en caliente, y por lo
-    /// mismo: la fila que se acaba de girar ya enseña el valor nuevo
-    /// (optimista), y esto la deja diciendo lo que el fichero dice de verdad.
-    pub(crate) fn refrescar(&mut self, cfg: &norte_frontend::config::FrontendConfig, lang: Lang) {
-        self.estado.refresh(filas_de(cfg, lang));
+    /// This is what happens to the terminal on every hot reload, and for
+    /// the same reason: the row that just cycled already shows the new
+    /// value (optimistically), and this leaves it saying what the file
+    /// actually says.
+    pub(crate) fn refresh(&mut self, cfg: &norte_frontend::config::FrontendConfig, lang: Lang) {
+        self.state.refresh(rows_of(cfg, lang));
     }
 
-    /// Cuántas filas elegibles hay AHORA: las que el filtro deja ver, más
-    /// las ubicaciones, que no se filtran (son diagnóstico, no ajustes).
+    /// How many eligible rows there are NOW: the ones the filter lets
+    /// through, plus the locations, which are not filtered (they are
+    /// diagnostics, not settings).
     fn total(&self) -> usize {
-        self.estado.shown() + self.rutas.len()
+        self.state.shown() + self.paths.len()
     }
 
-    /// La fila plana `fila` como posición dentro de las VISIBLES del editor,
-    /// o `None` si cae en las ubicaciones (o fuera).
+    /// Flat row `row` as a position among the editor's VISIBLE ones, or
+    /// `None` if it falls on the locations (or out of range).
     ///
-    /// Es la traducción que el `debug_assert` de antes decía que haría falta
-    /// el día que esta ventana filtrara: con filtro puesto, la fila plana
-    /// tercera no es la tercera del registro.
-    fn fila_visible(&self, fila: usize) -> Option<usize> {
-        (fila < self.estado.shown()).then_some(fila)
+    /// This is the translation the earlier `debug_assert` said would be
+    /// needed the day this window filtered: with a filter set, the third
+    /// flat row is not the catalog's third.
+    fn visible_row(&self, row: usize) -> Option<usize> {
+        (row < self.state.shown()).then_some(row)
     }
 
-    /// Pone la consulta del buscador.
+    /// Sets the search query.
     ///
-    /// El cursor se re-encaja: filtrando, la fila a la que apuntaba puede
-    /// haberse ido, y un cursor fuera de la lista es un Enter que activa
-    /// otra cosa.
-    pub(crate) fn consultar(&mut self, texto: &str) {
-        self.estado.set_query(texto);
+    /// The cursor is re-clamped: while filtering, the row it was pointing
+    /// at may be gone, and a cursor outside the list is an Enter that
+    /// activates something else.
+    pub(crate) fn query(&mut self, text: &str) {
+        self.state.set_query(text);
         let total = self.total();
         self.cursor = if total == 0 {
             0
@@ -196,191 +199,193 @@ impl Ajustes {
         };
     }
 
-    /// Lleva el cursor a la primera fila de una sección, nombrada por su
-    /// clave estable. Una que no existe, o que el filtro vació, no mueve
-    /// nada.
-    pub(crate) fn saltar(&mut self, clave: &str) {
-        let Some(seccion) = Section::ORDER
+    /// Takes the cursor to a section's first row, named by its stable key.
+    /// One that does not exist, or that the filter emptied, moves nothing.
+    pub(crate) fn skip(&mut self, key: &str) {
+        let Some(section) = Section::ORDER
             .iter()
             .copied()
-            .find(|s| s.stable_key() == clave)
+            .find(|s| s.stable_key() == key)
         else {
             return;
         };
-        if seccion == Section::Paths {
-            // Las ubicaciones van detrás de todo y no las lleva el editor.
-            if !self.rutas.is_empty() {
-                self.cursor = self.estado.shown();
+        if section == Section::Paths {
+            // The locations go behind everything and the editor does not
+            // carry them.
+            if !self.paths.is_empty() {
+                self.cursor = self.state.shown();
             }
             return;
         }
-        // Se decide con la PROYECCIÓN, no comparando el cursor del editor
-        // antes y después: ese cursor y el de esta ventana son dos, y solo
-        // `activar` los sincroniza — así que «no se movió» no significaba
-        // nada, y saltar a una sección vacía movía el cursor a la primera
-        // fila de la lista.
-        let Some(vista) = self
-            .estado
+        // Decided from the PROJECTION, not by comparing the editor's cursor
+        // before and after: that cursor and this window's are two different
+        // ones, and only `activate` synchronizes them — so "it did not move"
+        // meant nothing, and jumping to an empty section moved the cursor to
+        // the list's first row.
+        let Some(view) = self
+            .state
             .sections()
             .into_iter()
-            .find(|v| v.section == seccion)
+            .find(|v| v.section == section)
         else {
             return;
         };
-        let Some(primera) = vista.first_row else {
-            return; // Vacía por el filtro: no es un sitio al que ir.
+        let Some(first) = view.first_row else {
+            return; // Empty because of the filter: not a place to go to.
         };
-        self.estado.set_cursor(primera);
-        self.cursor = primera;
+        self.state.set_cursor(first);
+        self.cursor = first;
     }
 
-    /// Pone un valor concreto en el ajuste `id` — lo que manda un control.
+    /// Sets a specific value on setting `id` — what a control sends.
     ///
     /// # Errors
-    /// Lo que el editor compartido rechaza, sin escribir nada.
-    pub(crate) fn poner(
+    /// Whatever the shared editor rejects, without writing anything.
+    pub(crate) fn set(
         &mut self,
         id: &str,
-        valor: &str,
-        temas: &[String],
+        value: &str,
+        themes: &[String],
         presets: &[&str],
     ) -> Result<PendingWrite, SettingsEditError> {
-        self.estado.set_value(id, valor, temas, presets)
+        self.state.set_value(id, value, themes, presets)
     }
 
-    /// ¿La fila de este id sigue diciendo que no es de fábrica?
+    /// Does this id's row still say it is not the factory value?
     ///
-    /// Se pregunta DESPUÉS de releer, y es lo que distingue «restablecido»
-    /// de «lo fija otra capa» sin construir procedencia de capas.
-    pub(crate) fn sigue_modificada(&self, id: &str) -> bool {
-        self.estado
+    /// Asked AFTER rereading, and it is what distinguishes "reset" from
+    /// "another layer sets it" without building layer provenance.
+    pub(crate) fn follows_modified(&self, id: &str) -> bool {
+        self.state
             .rows()
             .iter()
             .find(|r| r.id() == Some(id))
             .is_some_and(|r| r.modified)
     }
 
-    /// Restablecer la fila `fila`: la clave que hay que quitar, o `None`.
+    /// Reset row `row`: the key that has to be removed, or `None`.
     ///
-    /// Una ubicación no se restablece —no es un ajuste— y una fila que ya
-    /// está en su valor de fábrica tampoco.
-    pub(crate) fn restablecer(
-        &mut self,
-        fila: usize,
-    ) -> Option<norte_frontend::settings::PendingReset> {
-        let visible = self.fila_visible(fila)?;
-        self.estado.set_cursor(visible);
-        self.estado.reset()
+    /// A location is not reset — it is not a setting — and neither is a row
+    /// that is already at its factory value.
+    pub(crate) fn reset(&mut self, row: usize) -> Option<norte_frontend::settings::PendingReset> {
+        let visible = self.visible_row(row)?;
+        self.state.set_cursor(visible);
+        self.state.reset()
     }
 
-    /// Enter sobre la fila del cursor.
+    /// Enter on the cursor's row.
     ///
-    /// Las listas de temas y presets llegan de fuera y VIVAS, como en el
-    /// terminal: el tema efectivo puede haber cambiado en caliente.
-    pub(crate) fn activar(&mut self, temas: &[String], presets: &[&str]) -> Activacion {
-        // De fila PLANA a fila VISIBLE: con el buscador puesto, la tercera
-        // fila de la pantalla no es la tercera del registro.
-        let Some(fila) = self.fila_visible(self.cursor) else {
-            return Activacion::Nada;
+    /// The theme and preset lists arrive from outside and LIVE, as in the
+    /// terminal: the effective theme may have changed hot.
+    pub(crate) fn activate(&mut self, themes: &[String], presets: &[&str]) -> Activation {
+        // From FLAT row to VISIBLE row: with the search box set, the
+        // screen's third row is not the catalog's third.
+        let Some(row) = self.visible_row(self.cursor) else {
+            return Activation::Nothing;
         };
-        self.estado.set_cursor(fila);
-        if let Some(write) = self.estado.activate(temas, presets) {
-            return Activacion::Escribir(Box::new(write));
+        self.state.set_cursor(row);
+        if let Some(write) = self.state.activate(themes, presets) {
+            return Activation::Write(Box::new(write));
         }
-        if !self.estado.is_editing() {
-            return Activacion::Nada;
+        if !self.state.is_editing() {
+            return Activation::Nothing;
         }
-        // La ventana no teclea en línea: pregunta con un diálogo, y el valor
-        // vuelve ENTERO al confirmar. Hasta entonces el editor no queda a
-        // medias — `confirmar_texto` vuelve a abrir la edición sobre la
-        // misma fila, y un diálogo cancelado no deja nada que cerrar.
-        let actual = self.estado.edit_buffer().unwrap_or_default().to_owned();
-        self.estado.edit_cancel();
-        // Por `visible[fila]`, no por `fila`: `fila` es una posición entre
-        // las VISIBLES, y con filtro puesto indexar `rows()` con ella daba
-        // el nombre de otro ajuste — el diálogo decía «Tema» y escribía el
-        // editor.
-        let real = self.estado.visible()[fila];
-        let fila_actual = &self.estado.rows()[real];
-        let nombre = fila_actual.name.clone();
-        let Some(id) = fila_actual.id() else {
-            return Activacion::Nada;
+        // The window does not type inline: it asks with a dialog, and the
+        // value comes back WHOLE on confirmation. Until then the editor is
+        // not left half-open — `confirm_text` reopens editing on the same
+        // row, and a cancelled dialog leaves nothing to close.
+        let current = self.state.edit_buffer().unwrap_or_default().to_owned();
+        self.state.edit_cancel();
+        // By `visible[row]`, not by `row`: `row` is a position among the
+        // VISIBLE ones, and with a filter set, indexing `rows()` with it gave
+        // the name of a different setting — the dialog said "Theme" and
+        // wrote to a different one.
+        let resolved = self.state.visible()[row];
+        let current_row = &self.state.rows()[resolved];
+        let name = current_row.name.clone();
+        let Some(id) = current_row.id() else {
+            return Activation::Nothing;
         };
-        Activacion::PedirTexto { nombre, actual, id }
+        Activation::RequestText {
+            name,
+            actual: current,
+            id,
+        }
     }
 
-    /// El valor que el diálogo trajo para el ajuste `id`.
+    /// The value the dialog brought back for setting `id`.
     ///
-    /// Vuelve a entrar en la edición de esa fila, pone el texto entero y
-    /// confirma: la validación —rango de un entero, forma de una línea de
-    /// órdenes— es la del editor compartido, no una copia.
+    /// Re-enters that row's editing, puts in the whole text and confirms:
+    /// the validation — an integer's range, a command line's shape — is the
+    /// shared editor's, not a copy.
     ///
-    /// Se busca POR ID y no por posición: el buscador de detrás sigue vivo
-    /// mientras el diálogo está abierto, y una posición deja de nombrar la
-    /// misma fila en cuanto el filtro cambia.
+    /// Looked up BY ID and not by position: the search behind it stays alive
+    /// while the dialog is open, and a position stops naming the same row as
+    /// soon as the filter changes.
     ///
     /// # Errors
-    /// Lo que el editor rechaza, sin escribir nada. Un ajuste que ya no está
-    /// visible —el filtro cambió bajo el diálogo— o que ya no pide texto se
-    /// rechaza como un entero inválido: es el fallo inerte del editor, y no
-    /// hay nada que escribir.
-    pub(crate) fn confirmar_texto(
+    /// Whatever the editor rejects, without writing anything. A setting that
+    /// is no longer visible — the filter changed under the dialog — or that
+    /// no longer wants text is rejected like an invalid integer: it is the
+    /// editor's inert failure, and there is nothing to write.
+    pub(crate) fn confirm_text(
         &mut self,
         id: &str,
-        texto: &str,
+        text: &str,
     ) -> Result<PendingWrite, SettingsEditError> {
         let Some(visible) = self
-            .estado
+            .state
             .visible()
             .iter()
-            .position(|&i| self.estado.rows()[i].id() == Some(id))
+            .position(|&i| self.state.rows()[i].id() == Some(id))
         else {
             return Err(SettingsEditError::NotAnInt);
         };
-        self.estado.set_cursor(visible);
-        // Sin listas: una fila de texto no las mira, y una que las mirara
-        // giraría en vez de editar, que es justo lo que el guard de abajo
-        // rechaza. Con la lista vacía `cycle` devuelve el valor que había, así
-        // que el `PendingWrite` que se descarta aquí era además un no-op.
-        if self.estado.activate(&[], &[]).is_some() || !self.estado.is_editing() {
-            self.estado.edit_cancel();
+        self.state.set_cursor(visible);
+        // No lists: a text row does not look at them, and one that did would
+        // cycle instead of edit, which is exactly what the guard below
+        // rejects. With an empty list `cycle` returns the value that was
+        // there, so the `PendingWrite` discarded here was also a no-op.
+        if self.state.activate(&[], &[]).is_some() || !self.state.is_editing() {
+            self.state.edit_cancel();
             return Err(SettingsEditError::NotAnInt);
         }
-        self.estado.edit_set(texto);
-        let salida = self.estado.edit_commit();
-        // Un rechazo deja el buffer abierto en el editor (el terminal lo
-        // conserva para corregirlo); aquí el diálogo ya se cerró, y una
-        // edición colgada haría que el siguiente Enter no girase.
-        self.estado.edit_cancel();
-        salida
+        self.state.edit_set(text);
+        let result = self.state.edit_commit();
+        // A rejection leaves the buffer open in the editor (the terminal
+        // keeps it so it can be corrected); here the dialog has already
+        // closed, and a hanging edit would make the next Enter fail to
+        // cycle.
+        self.state.edit_cancel();
+        result
     }
 
-    /// Cambia de lado: índice ↔ lista.
+    /// Switches sides: index <-> list.
     ///
-    /// El foco vive en el editor compartido, no aquí: es la misma decisión
-    /// —y las mismas flechas— en las dos pantallas, y duplicarla es cómo se
-    /// separan.
-    pub(crate) fn cambiar_lado(&mut self) {
-        self.estado.toggle_focus();
+    /// Focus lives in the shared editor, not here: it is the same decision
+    /// — and the same arrow keys — on both screens, and duplicating it is
+    /// how they drift apart.
+    pub(crate) fn change_side(&mut self) {
+        self.state.toggle_focus();
     }
 
-    /// Qué lado tiene el teclado.
-    pub(crate) fn foco(&self) -> Focus {
-        self.estado.focus()
+    /// Which side has the keyboard.
+    pub(crate) fn focus(&self) -> Focus {
+        self.state.focus()
     }
 
-    /// Mueve el cursor `delta` filas, sin salirse.
+    /// Moves the cursor `delta` rows, without going out of bounds.
     ///
-    /// Con el foco en el ÍNDICE no mueve filas: cambia de sección, una por
-    /// pulsación, y el cursor plano sigue a la primera fila de la sección
-    /// nueva. Una página en el índice es una sección, no diez: el índice
-    /// tiene siete filas y paginar en él no significa nada.
+    /// With focus on the INDEX it does not move rows: it changes section,
+    /// one per keypress, and the flat cursor follows the new section's first
+    /// row. A page on the index is one section, not ten: the index has seven
+    /// rows and paging through it means nothing.
     pub(crate) fn mover(&mut self, delta: i64) {
-        if self.estado.focus() == Focus::Index {
+        if self.state.focus() == Focus::Index {
             if delta != 0 {
-                let paso = if delta > 0 { 1 } else { -1 };
-                self.estado.step_section(paso);
-                self.cursor = self.estado.cursor();
+                let step = if delta > 0 { 1 } else { -1 };
+                self.state.step_section(step);
+                self.cursor = self.state.cursor();
             }
             return;
         }
@@ -388,57 +393,58 @@ impl Ajustes {
         if total == 0 {
             return;
         }
-        let destino = i64::try_from(self.cursor)
+        let target = i64::try_from(self.cursor)
             .unwrap_or(0)
             .saturating_add(delta);
-        self.cursor = usize::try_from(destino.max(0)).unwrap_or(0).min(total - 1);
+        self.cursor = usize::try_from(target.max(0)).unwrap_or(0).min(total - 1);
     }
 
-    /// Pone el cursor en una fila concreta (un click). Fuera de rango no hace
-    /// nada: quien pinta puede ir un frame por detrás.
-    pub(crate) fn senalar(&mut self, fila: usize) {
-        if fila < self.total() {
-            self.cursor = fila;
+    /// Puts the cursor on a specific row (a click). Out of range does
+    /// nothing: whoever is painting can be one frame behind.
+    pub(crate) fn point_at(&mut self, row: usize) {
+        if row < self.total() {
+            self.cursor = row;
         }
     }
 
-    /// La proyección: una sección por cada una que tenga filas, en el orden
-    /// de la pantalla, más el índice y las dos cifras del buscador.
+    /// The projection: one section for each one that has rows, in screen
+    /// order, plus the index and the search box's two counts.
     ///
-    /// Una sección que el FILTRO vació sigue en el índice, apagada; una que
-    /// esta superficie no tiene no aparece. Las ubicaciones van al final y
-    /// no las toca el filtro: son diagnóstico, no ajustes.
-    pub(crate) fn vista(&self, lang: Lang, temas: &[String], presets: &[&str]) -> SettingsView {
-        let indice = self.estado.sections();
+    /// A section the FILTER emptied stays in the index, dimmed; one this
+    /// surface does not have does not appear. The locations go at the end
+    /// and the filter does not touch them: they are diagnostics, not
+    /// settings.
+    pub(crate) fn vista(&self, lang: Lang, themes: &[String], presets: &[&str]) -> SettingsView {
+        let sections_list = self.state.sections();
         let mut sections = Vec::new();
-        for v in &indice {
+        for v in &sections_list {
             if v.section == Section::Paths || v.total == 0 {
                 continue;
             }
-            let filas: Vec<_> = self
-                .estado
+            let rows: Vec<_> = self
+                .state
                 .visible()
                 .iter()
-                .map(|&i| &self.estado.rows()[i])
+                .map(|&i| &self.state.rows()[i])
                 .filter(|r| r.section == v.section)
-                .map(|r| proyectar_fila(r, temas, presets))
+                .map(|r| project_row(r, themes, presets))
                 .collect();
-            if filas.is_empty() {
+            if rows.is_empty() {
                 continue;
             }
             sections.push(SettingsSectionView::Settings {
                 key: v.section.stable_key().to_owned(),
                 title: clamp_display(norte_i18n::t_in(lang, v.section.label_key())),
-                rows: filas,
+                rows,
             });
         }
-        if !self.rutas.is_empty() {
+        if !self.paths.is_empty() {
             sections.push(SettingsSectionView::Paths {
                 title: clamp_display(norte_i18n::t_in(lang, "settings-section-paths")),
-                rows: self.rutas.clone(),
+                rows: self.paths.clone(),
             });
         }
-        let mut index: Vec<SectionIndexView> = indice
+        let mut index: Vec<SectionIndexView> = sections_list
             .iter()
             .filter(|v| v.section != Section::Paths && v.total > 0)
             .map(|v| SectionIndexView {
@@ -447,55 +453,56 @@ impl Ajustes {
                 visible: v.visible as u64,
             })
             .collect();
-        if !self.rutas.is_empty() {
+        if !self.paths.is_empty() {
             index.push(SectionIndexView {
                 key: Section::Paths.stable_key().to_owned(),
                 title: clamp_display(norte_i18n::t_in(lang, "settings-section-paths")),
-                visible: self.rutas.len() as u64,
+                visible: self.paths.len() as u64,
             });
         }
         SettingsView {
             sections,
             index,
-            focus: match self.foco() {
+            focus: match self.focus() {
                 Focus::Index => "index",
                 Focus::List => "list",
             }
             .to_owned(),
             cursor: self.cursor as u64,
-            query: clamp_display(self.estado.query_display()),
-            shown: self.estado.shown() as u64,
-            total: self.estado.total() as u64,
+            query: clamp_display(self.state.query_display()),
+            shown: self.state.shown() as u64,
+            total: self.state.total() as u64,
         }
     }
 }
 
-/// Las filas del registro, en el idioma del HOST.
+/// The catalog's rows, in the HOST's language.
 ///
-/// Los títulos de sección ya iban con él y el nombre y la descripción de
-/// cada opción con el del proceso: media pantalla en cada idioma es peor que
-/// ninguna traducción.
-fn filas_de(cfg: &norte_frontend::config::FrontendConfig, lang: Lang) -> Vec<Row> {
+/// Section titles already came with it, and each option's name and
+/// description with the process's: half a screen in each language is worse
+/// than no translation at all.
+fn rows_of(cfg: &norte_frontend::config::FrontendConfig, lang: Lang) -> Vec<Row> {
     build_rows_in(cfg, &[], lang)
         .into_iter()
         .filter(|r| !r.is_plugins_note())
         .collect()
 }
 
-/// Lo que la ventana NO puede aplicar sin reiniciar, por id del catálogo.
+/// What the window CANNOT apply without restarting, by catalog id.
 ///
-/// El catálogo compartido dice qué se aplica en caliente desde el punto de
-/// vista del terminal, que recarga todo. La ventana relee la configuración
-/// ENTERA al escribir un ajuste (`aplicar_config`), y casi todo se lee en el
-/// momento de usarse —las barras al proyectar cada foto, el editor y el
-/// comparador al lanzarlos, el modo de búsqueda al buscar, si pregunta al
-/// salir al salir—, así que cambia al instante. Lo que no: lo que quien
-/// hospeda resuelve una vez al arrancar —el idioma, las fuentes, el
-/// movimiento reducido, que es lo que `fuera_de_alcance_en_caliente`
-/// nombra—, y lo que se fija al crear cada hueco —los ocultos y la fila
-/// `..`—, que los huecos ya abiertos no releen. Marcar TODO lo demás como
-/// «requiere reinicio» era mentir dieciséis veces en una pantalla.
-fn pide_reinicio(id: &str) -> bool {
+/// The shared catalog says what applies hot from the terminal's point of
+/// view, which reloads everything. The window rereads the WHOLE
+/// configuration when a setting is written (`apply_config`), and almost
+/// everything is read at the moment it is used — the bars when projecting
+/// each frame, the editor and the comparer when launching them, the search
+/// mode when searching, whether it asks on exit when exiting — so it
+/// changes instantly. What does not: what the host resolves once at startup
+/// — the language, the fonts, reduced motion, which is what
+/// `out_of_scope_hot` names — and what gets fixed when creating
+/// each slot — the hidden files and the `..` row — which already-open slots
+/// do not reread. Marking EVERYTHING else as "requires restart" was lying
+/// sixteen times on one screen.
+fn needs_restart(id: &str) -> bool {
     matches!(
         id,
         "ui.lang"
@@ -508,20 +515,20 @@ fn pide_reinicio(id: &str) -> bool {
     )
 }
 
-/// El control de una fila, con sus valores ya RESUELTOS.
+/// A row's control, with its values already RESOLVED.
 ///
-/// Las listas vivas se resuelven aquí y no en el renderer: los temas
-/// instalados y los presets cambian en caliente, y un desplegable que
-/// llevara la lista cocida enseñaría la de hace dos recargas.
-fn proyectar_control(
+/// The live lists are resolved here and not in the renderer: installed
+/// themes and presets change hot, and a dropdown carrying the baked-in list
+/// would show the one from two reloads ago.
+fn project_control(
     r: &Row,
-    temas: &[String],
+    themes: &[String],
     presets: &[&str],
 ) -> (String, Vec<String>, Option<i64>, Option<i64>) {
     use norte_frontend::settings::{Control, control_of};
     let Some(control) = r.id().and_then(control_of) else {
-        // Una fila que no sale del catálogo —el resumen de un plugin— no se
-        // edita desde aquí: se entra en ella.
+        // A row that does not come from the catalog — a plugin's summary —
+        // is not edited from here: you enter it instead.
         return ("none".to_owned(), Vec::new(), None, None);
     };
     match control {
@@ -532,7 +539,7 @@ fn proyectar_control(
             None,
             None,
         ),
-        Control::ThemeChoice => ("choice".to_owned(), temas.to_vec(), None, None),
+        Control::ThemeChoice => ("choice".to_owned(), themes.to_vec(), None, None),
         Control::PresetChoice => (
             "choice".to_owned(),
             presets.iter().map(|s| (*s).to_owned()).collect(),
@@ -545,31 +552,32 @@ fn proyectar_control(
     }
 }
 
-/// Una fila del registro, proyectada.
-fn proyectar_fila(r: &Row, temas: &[String], presets: &[&str]) -> SettingRowView {
-    let (control, choices, min, max) = proyectar_control(r, temas, presets);
-    let (valor, hostile) = norte_frontend::display_name(r.value.as_bytes());
+/// A catalog row, projected.
+fn project_row(r: &Row, themes: &[String], presets: &[&str]) -> SettingRowView {
+    let (control, choices, min, max) = project_control(r, themes, presets);
+    let (value_text, hostile) = norte_frontend::display_name(r.value.as_bytes());
     SettingRowView {
-        // El id es una IDENTIDAD del catálogo compartido, no prosa: viaja
-        // entero, sin recorte, y el renderer no lo pinta.
+        // The id is an IDENTITY from the shared catalog, not prose: it
+        // travels whole, unclamped, and the renderer never paints it.
         id: r.id().unwrap_or_default().to_owned(),
         name: clamp_display(r.name.clone()),
         desc: clamp_display(r.desc.clone()),
-        // El VALOR sale de `norte.toml` tal cual —`ui.font`, `ui.theme`,
-        // `keymap.preset` son cadenas que escribe el usuario, y la capa de
-        // PROYECTO es «he abierto este repositorio», no «doy fe de esta
-        // cadena» (ADR 0026)—. Era el único sitio de esta ventana donde texto
-        // de fuera llegaba al DOM sin pasar por la máscara.
-        value: clamp_display(valor),
+        // The VALUE comes from `norte.toml` as-is — `ui.font`, `ui.theme`,
+        // `keymap.preset` are strings the user writes, and the PROJECT
+        // layer is "I opened this repository", not "I vouch for this
+        // string" (ADR 0026). It was the only place in this window where
+        // outside text reached the DOM without going through the mask.
+        value: clamp_display(value_text),
         hostile,
-        // Por id y no por `SettingDef::applies_live`: ese campo está escrito
-        // desde el punto de vista del terminal, que recarga todo en caliente,
-        // y esta ventana solo recarga lo que el cambio de perfil sabe aplicar.
-        // Decir que una entrada se aplica sola cuando no lo hace es la clase
-        // de mentira que manda al usuario a buscar un bug que no existe.
-        restart_required: r.id().is_none_or(pide_reinicio),
-        // El valor de fábrica, enmascarado como cualquier otro: sale del
-        // catálogo, pero se pinta en la misma columna que uno del fichero.
+        // By id and not by `SettingDef::applies_live`: that field is written
+        // from the terminal's point of view, which reloads everything hot,
+        // and this window only reloads what a profile change knows how to
+        // apply. Saying an entry applies itself when it does not is the
+        // kind of lie that sends the user hunting for a bug that does not
+        // exist.
+        restart_required: r.id().is_none_or(needs_restart),
+        // The factory value, masked like any other: it comes from the
+        // catalog, but is painted in the same column as one from the file.
         default: r
             .id()
             .and_then(|id| {
@@ -587,39 +595,41 @@ fn proyectar_fila(r: &Row, temas: &[String], presets: &[&str]) -> SettingRowView
     }
 }
 
-/// Las ubicaciones, saneadas para pintar.
+/// The locations, sanitized for painting.
 ///
-/// CERO I/O: la existencia de cada sitio la trae [`HostPath`] ya resuelta por
-/// el arranque. Es lo que hace verdad que «el host no lee ficheros», que este
-/// módulo decía tres veces mientras llamaba a `exists()`.
-fn rutas_de(paths: &HostPaths, lang: Lang) -> Vec<PathRowView> {
+/// ZERO I/O: each location's existence comes from [`HostPath`], already
+/// resolved by startup. This is what makes "the host does not read files"
+/// true, which this module used to say three times while calling
+/// `exists()`.
+fn paths_of(paths: &HostPaths, lang: Lang) -> Vec<PathRowView> {
     let mut out = Vec::new();
-    for (capa, dir) in &paths.config_layers {
-        out.push(fila_de_ruta(norte_i18n::t_in(lang, capa.label_id()), dir));
+    for (layer, dir) in &paths.config_layers {
+        out.push(path_row_of(norte_i18n::t_in(lang, layer.label_id()), dir));
     }
-    for (clave, dir) in [
+    for (key, dir) in [
         ("settings-path-state", paths.state_dir.as_ref()),
         ("settings-path-logs", paths.logs_dir.as_ref()),
         ("settings-path-socket", paths.socket.as_ref()),
     ] {
         if let Some(d) = dir {
-            out.push(fila_de_ruta(norte_i18n::t_in(lang, clave), d));
+            out.push(path_row_of(norte_i18n::t_in(lang, key), d));
         }
     }
     out
 }
 
-/// Una ubicación: el texto ya enmascarado, si difiere del real, y si está.
+/// A location: the already-masked text, whether it differs from the real
+/// one, and whether it is there.
 ///
-/// Un path es BYTES y no una cadena (regla 1), así que se pinta por el mismo
-/// camino que un nombre de fichero del listado — `display_name` sobre los
-/// bytes nativos — y NUNCA por `to_string_lossy`, que se come la diferencia
-/// entre un nombre raro y uno hostil sin decirlo.
-fn fila_de_ruta(label: String, dir: &HostPath) -> PathRowView {
-    let (pintable, hostile) = norte_frontend::display::display_os_name(dir.path.as_os_str());
+/// A path is BYTES and not a string (rule 1), so it is painted the same way
+/// as a listing's file name — `display_name` over the native bytes — and
+/// NEVER via `to_string_lossy`, which swallows the difference between a
+/// strange name and a hostile one without saying so.
+fn path_row_of(label: String, dir: &HostPath) -> PathRowView {
+    let (paintable, hostile) = norte_frontend::display::display_os_name(dir.path.as_os_str());
     PathRowView {
         label: clamp_display(label),
-        display: clamp_display(pintable),
+        display: clamp_display(paintable),
         hostile,
         missing: dir.missing,
     }

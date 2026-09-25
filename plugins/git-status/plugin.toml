@@ -4,30 +4,31 @@ name = "Git status"
 publisher = "norte"
 version = "0.2.0"
 category = "columns"
-description = "Marca en el panel qué ficheros cambiaron respecto al índice de git."
+description = "Marks in the panel which files changed relative to git's index."
 
 [[contributions.columns]]
 id = "git-status"
 header = "S"
 
 [capabilities]
-# Leer bajo la ubicación, y que la ubicación sea la raíz del repositorio: sin
-# el marcador, el token confina al directorio visible y `.git` queda arriba,
-# fuera de alcance (ADR 0057).
+# Read under the location, with the location being the repository's root:
+# without the marker, the token confines to the visible directory and `.git`
+# is above it, out of reach (ADR 0057).
 location = "read"
 location-root-marker = ".git"
 
-# Las letras de `git status --short` (`M`, `D`, `?`, `!`) o símbolos de una
-# celda (`●`, `✖`, `+`, `·`), que se leen de un vistazo.
+# The letters from `git status --short` (`M`, `D`, `?`, `!`) or one-cell
+# symbols (`●`, `✖`, `+`, `·`), read at a glance.
 [config.glyphs]
 type = "enum"
 values = ["letters", "symbols"]
 default = "letters"
-description = "Cómo se marca cada estado: letras de git, o símbolos."
+description = "How each state is marked: git's letters, or symbols."
 
-# Con `.gitignore` grandes la marca de ignorado se repite en media pantalla
-# y deja de decir nada: apágala y un ignorado se pinta como limpio.
+# With large `.gitignore` files the ignored mark repeats across half the
+# screen and stops saying anything: turn it off and an ignored file paints
+# as clean.
 [config.ignored]
 type = "bool"
 default = true
-description = "Marcar también los ficheros ignorados."
+description = "Also mark ignored files."

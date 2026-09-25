@@ -1,26 +1,28 @@
-//! El estado semántico de un frontend gráfico, sin saber quién lo pinta.
+//! The semantic state of a graphical frontend, without knowing who paints it.
 //!
-//! Un renderer —una webview de Tauri, un shell Flutter, un test headless— no
-//! guarda estado que signifique algo: manda [`UiAction`] y recibe
-//! [`UiUpdate`] ordenados y versionados. Lo que significa algo vive aquí, en
-//! Rust, sobre `norte-frontend` (las reglas de presentación que ya comparten
-//! los frontends) y `norte-client` (la conversación con el daemon).
+//! A renderer — a Tauri webview, a Flutter shell, a headless test — does not
+//! hold state that means anything: it sends [`UiAction`] and receives
+//! [`UiUpdate`] in order and versioned. What means something lives here, in
+//! Rust, on top of `norte-frontend` (the presentation rules the frontends
+//! already share) and `norte-client` (the conversation with the daemon).
 //!
-//! Por qué existe esta frontera, y qué se decidió en ella: ADR 0066.
+//! Why this boundary exists, and what was decided at it: ADR 0066.
 //!
-//! # Lo que este crate NO hace
+//! # What this crate does NOT do
 //!
-//! - No conoce a ningún toolkit. Ni Tauri, ni web, ni GPUI, ni ratatui. Su
-//!   test de frontera lo comprueba contra el grafo real de cargo.
-//! - No reimplementa reglas de presentación: si el TUI y él ordenan un
-//!   listado distinto, es un bug de este crate, no una decisión suya.
-//! - No deja que un path crudo cruce al renderer. Lo que cruza es texto
-//!   saneado y claves opacas.
+//! - It does not know about any toolkit. Not Tauri, not web, not GPUI, not
+//!   ratatui. Its boundary test checks it against cargo's real graph.
+//! - It does not reimplement presentation rules: if the TUI and it order a
+//!   listing differently, that is a bug in this crate, not a decision of its
+//!   own.
+//! - It does not let a raw path cross to the renderer. What crosses is
+//!   sanitized text and opaque keys.
 
-// Este crate es un CONTRATO público con su propio corpus golden (ADR 0066),
-// que es el perfil al que apunta la convención de `missing_docs` aunque la
-// regla nombre proto/VFS/SDK. Y ojo: `just t` no corre doctests y `just c` no
-// comprueba enlaces intra-doc, así que lo de aquí solo se verifica en `docs`.
+// This crate is a public CONTRACT with its own golden corpus (ADR 0066),
+// which is the profile the `missing_docs` convention targets even though the
+// rule names proto/VFS/SDK. And watch out: `just t` does not run doctests and
+// `just c` does not check intra-doc links, so what is here is only verified
+// in `docs`.
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
@@ -31,15 +33,15 @@ pub mod bridge;
 pub mod commands;
 pub mod controller;
 pub mod dto;
-/// El gestor de extensiones (`app.extensions`), en solo lectura.
+/// The extension manager (`app.extensions`), read-only.
 mod extensions;
-/// La ayuda (F1): el corpus compartido proyectado al vocabulario del bridge.
+/// Help (F1): the shared corpus projected onto the bridge's vocabulary.
 mod help;
 pub mod keys;
-/// El tema y el selector de volúmenes, en solo lectura.
+/// The theme and the volume picker, read-only.
 ///
-/// De conexiones no hay selector todavía (#264), y anunciarlo aquí lo
-/// prometía en el índice de la documentación.
+/// There is no connection picker yet (#264), and announcing it here would
+/// have promised it in the documentation index.
 pub mod pickers;
 pub mod settings;
 
@@ -53,26 +55,26 @@ pub use controller::{ShutdownReport, UiHost, UiHostOptions, UiSubscription, Upda
 pub use dto::{UiNotice, UiUpdate, ViewPatch, ViewSnapshot};
 pub use keys::KeyInput;
 
-/// La configuración de un host SIN ficheros: los valores de fábrica.
+/// A host's configuration with NO files: the factory values.
 ///
-/// Existe para que un test o un primer arranque no tengan que fabricarla; un
-/// host de verdad recibe la que su arranque cargó de las capas del usuario.
+/// It exists so a test or a first launch does not have to build one; a real
+/// host receives the one its startup loaded from the user's layers.
 ///
 /// # Panics
-/// Nunca: cargar CERO capas no puede fallar (no hay fichero que parsear mal).
+/// Never: loading ZERO layers cannot fail (there is no file to mis-parse).
 #[must_use]
-pub fn ajustes_por_defecto() -> norte_frontend::config::FrontendConfig {
+pub fn default_settings() -> norte_frontend::config::FrontendConfig {
     norte_frontend::config::load(&norte_config::Layers { dirs: Vec::new() })
-        .expect("cargar cero capas no puede fallar")
+        .expect("loading zero layers cannot fail")
 }
 
-/// La configuración de columnas de un host sin configuración: las de fábrica
-/// (nombre, tamaño y fecha), iguales para todos los esquemas.
+/// A host's column configuration with no configuration: the factory ones
+/// (name, size and date), the same for every scheme.
 ///
-/// Existe para que un test o un primer arranque no tengan que construirla a
-/// mano; un host de verdad la resuelve de la configuración del usuario con
-/// `ColumnsSettings::resolve` y se la pasa en [`UiHostOptions`].
+/// It exists so a test or a first launch does not have to build it by hand;
+/// a real host resolves it from the user's configuration with
+/// `ColumnsSettings::resolve` and passes it in [`UiHostOptions`].
 #[must_use]
-pub fn columnas_por_defecto() -> norte_frontend::columns::ColumnsSettings {
+pub fn default_columns() -> norte_frontend::columns::ColumnsSettings {
     norte_frontend::columns::ColumnsSettings::default()
 }

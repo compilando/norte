@@ -1,15 +1,15 @@
 name = "retro-crt"
 
-# Fósforo verde (P1): terminal CRT clásica. [effects] es interpretado por la
-# GUI (scanlines/vignette/glow/bezel, ADR 0036); la TUI lo ignora y solo pinta
-# los [roles]/[files].
+# Green phosphor (P1): classic CRT terminal. [effects] is interpreted by the
+# GUI (scanlines/vignette/glow/bezel, ADR 0036); the TUI ignores it and only paints
+# the [roles]/[files].
 
 [roles]
 background       = { bg = "#0a0f0a" }
 regular          = { fg = "#2ee65c" }
 selection           = { fg = "#0a0f0a", bg = "#2ee65c" }
 selection-unfocused = { fg = "#aaffcc", bg = "#134f26" }
-# Un verde más apagado que la barra de estado, por lo mismo que en el ámbar.
+# A duller green than the status bar, for the same reason as in the amber one.
 button              = { fg = "#0a0f0a", bg = "#1f9e42" }
 border-focus     = { fg = "#2ee65c", bold = true }
 border-unfocused = { fg = "#1a8f3c", dim = true }

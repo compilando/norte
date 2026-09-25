@@ -1,9 +1,9 @@
-//! Estado puro del TUI (panes, cursor, presentación de nombres) y la
-//! presentación de ERRORES para la barra (#73): categorías Fluent
-//! ([`error_key`]/[`error_category`] y compañía) + saneado de detalle
-//! ([`detail_for_bar`]). Máquina testeable sin terminal — el render (`ui`)
-//! y el I/O (`main`) viven aparte; los scripts Lua (M4) consumen de aquí la
-//! clave ESTABLE de [`error_key`].
+//! Pure TUI state (panes, cursor, name presentation) and the ERROR
+//! presentation for the bar (#73): Fluent categories
+//! ([`error_key`]/[`error_category`] and company) + detail sanitizing
+//! ([`detail_for_bar`]). A testable machine with no terminal — the render
+//! (`ui`) and the I/O (`main`) live apart; the Lua scripts (M4) consume the
+//! STABLE key of [`error_key`] from here.
 
 use norte_i18n::Lang;
 use norte_proto::VPath;
@@ -42,110 +42,110 @@ pub use pane::*;
 pub use plugins::*;
 pub use trail::*;
 
-// Privados en `app` antes del reparto: el glob de arriba solo reexporta
-// lo `pub`, asi que estos tres se nombran uno a uno.
+// Private in `app` before the split: the glob above only re-exports what is
+// `pub`, so these three are named one by one.
 use help_view::default_help_chords;
 
-/// El formato que sugiere un nombre vive en el crate COMPARTIDO: el TUI y
-/// la ventana ofrecen el mismo diálogo (D14).
+/// The format a name suggests lives in the SHARED crate: the TUI and the
+/// window offer the same dialog (D14).
 pub use norte_frontend::nav::format_by_name;
 
-/// El tamaño con sufijo lo lee el crate COMPARTIDO: el mismo diálogo lo pide
-/// en las dos superficies (D14).
+/// The size with a suffix is read by the SHARED crate: the same dialog asks
+/// for it on both surfaces (D14).
 pub use norte_frontend::nav::parse_size;
 
-/// El estado del run (`CompareState`) y el panel abierto (`CompareView`)
-/// viven en [`norte_frontend::compare`] (#158): la GUI necesita exactamente
-/// esta máquina y no una reimplementada, que es como el CLI (fase A) y la
-/// tool MCP (fase B) se equivocaron cada uno por su lado — ambos dieron por
-/// completa una respuesta a la que le faltaban lotes. Ver
-/// [`CompareState::Incomplete`] para la razón de que el cierre del canal no
-/// baste.
+/// The run state (`CompareState`) and the open panel (`CompareView`) live in
+/// [`norte_frontend::compare`] (#158): the GUI needs exactly this machine and
+/// not a reimplemented one, which is how the CLI (phase A) and the MCP tool
+/// (phase B) each went wrong on their own — both treated a response missing
+/// batches as complete. See [`CompareState::Incomplete`] for why closing the
+/// channel is not enough.
 pub use norte_frontend::compare::{CompareState, CompareView};
 
-/// El estado del run (`SyncRunState`) y el panel abierto (`SyncView`) viven en
-/// [`norte_frontend::sync`] (#161, el mismo argumento que ya llevó
-/// [`CompareView`] allí): la GUI necesita exactamente este envoltorio del run
-/// y no uno reimplementado. C1 aprendió, a costa de una revisión de rama, que
-/// mover el TIPO y dejar sus decisiones a mano en cada frontend es peor que no
-/// moverlo — así que lo que viaja con él es el mapeo `TaskState` →
-/// [`SyncRunState`] ([`SyncRunState::from_task_state`]) y el paquete de
-/// actualizaciones de «se aprobó y arrancó `sync.apply`»
-/// ([`SyncView::on_apply_started`]), no solo la struct.
+/// The run state (`SyncRunState`) and the open panel (`SyncView`) live in
+/// [`norte_frontend::sync`] (#161, the same argument that already took
+/// [`CompareView`] there): the GUI needs exactly this wrapper around the run
+/// and not a reimplemented one. C1 learned, at the cost of a branch review,
+/// that moving the TYPE and leaving its decisions hand-written in each
+/// frontend is worse than not moving it — so what travels with it is the
+/// `TaskState` → [`SyncRunState`] mapping ([`SyncRunState::from_task_state`])
+/// and the update bundle for "`sync.apply` was approved and started"
+/// ([`SyncView::on_apply_started`]), not just the struct.
 pub use norte_frontend::sync::{SyncRunState, SyncView};
 
-// El saneado de nombres ([`display_name`]/[`path_display`]/`must_mask`) y el
-// orden del listado ([`sort_entries`] + `nfc_key`/`name_bytes`) viven ahora en
-// `norte-frontend` (lógica de presentación PURA compartida con la GUI). Se
-// re-exportan aquí para que los call-sites `crate::app::…`/`app::…` (main, ui,
-// viewer) sigan resolviendo sin cambios.
+// Name sanitizing ([`display_name`]/[`path_display`]/`must_mask`) and listing
+// order ([`sort_entries`] + `nfc_key`/`name_bytes`) now live in
+// `norte-frontend` (PURE presentation logic shared with the GUI). Re-exported
+// here so the call sites at `crate::app::…`/`app::…` (main, ui, viewer) keep
+// resolving unchanged.
 pub use norte_frontend::{display_name, path_display, sort_entries};
 
-/// Comando externo que `pane.open` (F4) dejó resuelto y el run loop lanzará
-/// (#28). Se separa la resolución del lanzamiento porque el dueño de la
-/// terminal es el run loop, no el despacho.
+/// External command that `pane.open` (F4) left resolved and the run loop will
+/// launch (#28). Resolving is split from launching because the terminal's
+/// owner is the run loop, not dispatch.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingOpen {
-    /// Binario a sondear en el `PATH` antes de lanzar nada.
+    /// Binary to probe on the `PATH` before launching anything.
     pub program: String,
-    /// argv completo, con el binario en `[0]` y las rutas byte-exactas.
+    /// The full argv, with the binary in `[0]` and byte-exact paths.
     pub argv: Vec<std::ffi::OsString>,
-    /// `true` cuando es el lanzador del escritorio (`xdg-open`/`open`/
-    /// `explorer.exe`): entrega el fichero al programa asociado y vuelve
-    /// enseguida, así que la TUI **no** se suspende — hacerlo pintaría un
-    /// parpadeo de pantalla completa para nada. `false` es un opener
-    /// declarado en `ns.toml`, que puede ser `bat` o un editor y necesita la
-    /// terminal entera para sí.
+    /// `true` when it is the desktop launcher (`xdg-open`/`open`/
+    /// `explorer.exe`): it hands the file to its associated program and
+    /// returns right away, so the TUI is **not** suspended — doing so would
+    /// paint a full-screen flicker for nothing. `false` is an opener declared
+    /// in `ns.toml`, which can be `bat` or an editor and needs the whole
+    /// terminal to itself.
     pub detached: bool,
-    /// El directorio del pane con el foco, que el hijo recibe como cwd
-    /// (#144).
+    /// The directory of the focused pane, which the child receives as its
+    /// cwd (#144).
     ///
-    /// Los tres comandos de shell (#135) ya lo pasaban y los openers no, así
-    /// que un editor abierto sobre un fichero del pane heredaba el cwd de
-    /// norte y guardaba donde no se estaba mirando. Se dejó así a propósito
-    /// en la ola de shell —cambiarlo cambia comportamiento— y se decidió el
-    /// 2026-08-14: pasa el del pane. `None` solo si la ruta no convierte a
-    /// nativa, donde no hay nada mejor que heredar.
+    /// The three shell commands (#135) already passed it and the openers did
+    /// not, so an editor opened on a file from the pane inherited norte's cwd
+    /// and saved where nobody was looking. This was left as is on purpose in
+    /// the shell wave —changing it changes behavior— and was decided on
+    /// 2026-08-14: pass the pane's. `None` only when the path does not
+    /// convert to native, where there is nothing better to inherit.
     pub cwd: Option<std::path::PathBuf>,
 }
 
-/// Una SUSPENSIÓN que el despacho resolvió y el run loop ejecutará (#135).
+/// A SUSPENSION that dispatch resolved and the run loop will execute (#135).
 ///
-/// Mismo reparto que [`PendingOpen`] y por la misma razón: quien es dueño de
-/// la terminal es el run loop, no el despacho. Lo que cambia es que aquí no
-/// hay sonda PREVIA que decir en la barra — el argv sale de `$SHELL`, de
-/// `$EDITOR` o de una línea que el usuario escribió, y que el programa no
-/// exista se dice con el error del lanzamiento, no con una sonda aparte que
-/// adivinaría lo mismo.
+/// Same split as [`PendingOpen`] and for the same reason: whoever owns the
+/// terminal is the run loop, not dispatch. What changes is that here there is
+/// no PRIOR probe to report in the bar — the argv comes from `$SHELL`, from
+/// `$EDITOR` or from a line the user typed, and the program not existing is
+/// reported through the launch error, not through a separate probe that
+/// would guess the same thing.
 ///
-/// Lo que sí pasa en el lanzamiento es la RESOLUCIÓN del programa a ruta
-/// absoluta (#302): el hijo se lanza con [`Self::cwd`] puesto, y en unix
-/// `current_dir` se aplica antes de resolver el programa. Ver
+/// What does happen at launch time is RESOLVING the program to an absolute
+/// path (#302): the child is launched with [`Self::cwd`] set, and on unix
+/// `current_dir` is applied before the program is resolved. See
 /// [`crate::suspend::run_suspended`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingShell {
-    /// argv completo, con el binario en `[0]`. VACÍO es legítimo y significa
-    /// «no lances nada»: es `app.toggle-panels`, que solo enseña la terminal
-    /// anfitriona.
+    /// The full argv, with the binary in `[0]`. EMPTY is legitimate and means
+    /// "launch nothing": it is `app.toggle-panels`, which only shows the
+    /// host terminal.
     pub argv: Vec<std::ffi::OsString>,
-    /// Directorio de trabajo del hijo. `None` = el de norte (que es lo que
-    /// hacen hoy los openers de #28).
+    /// The child's working directory. `None` = norte's own (which is what
+    /// the openers of #28 do today).
     pub cwd: Option<std::path::PathBuf>,
-    /// Esperar a una tecla ANTES de repintar los paneles. Es lo que hace
-    /// legible la salida de un comando: sin esto, el listado vuelve encima de
-    /// lo que acaba de escribirse.
+    /// Wait for a key BEFORE repainting the panes. This is what makes a
+    /// command's output legible: without it, the listing comes back over
+    /// whatever was just printed.
     pub wait_for_key: bool,
-    /// La ruta que tiene que seguir siendo un fichero REGULAR en el instante
-    /// del lanzamiento, o no se lanza nada (#303).
+    /// The path that has to still be a REGULAR file at the instant of the
+    /// launch, or nothing gets launched (#303).
     ///
-    /// La pone `pane.edit-new` y solo él: es el gesto en el que norte ANUNCIA
-    /// un nombre creándolo y después se lo entrega a otro programa. Viaja en la
-    /// suspensión —y no se comprueba donde se resuelve el gesto— porque entre
-    /// una cosa y otra corre el re-listado de los dos paneles: la comprobación
-    /// vale lo que vale el hueco que deja detrás, y aquí el hueco es el `exec`.
+    /// Set by `pane.edit-new` and only by it: it is the gesture where norte
+    /// ANNOUNCES a name by creating it and then hands it to another program.
+    /// It travels in the suspension —and is not checked where the gesture is
+    /// resolved— because between one thing and the other the two panes'
+    /// re-listing runs: the check is only worth the gap it leaves behind, and
+    /// here the gap is the `exec`.
     ///
-    /// `None` = nada que comprobar, que es lo que llevan el shell, la línea de
-    /// comandos y `app.toggle-panels`.
+    /// `None` = nothing to check, which is what the shell, the command line
+    /// and `app.toggle-panels` carry.
     pub check_regular: Option<norte_proto::VPath>,
 }
 
@@ -176,106 +176,108 @@ fn caps_key(at: &VPath) -> CapsKey {
 /// the oldest location is the one least likely to be the next cd.
 const CAPS_CACHE_MAX: usize = 64;
 
-/// Lo que el run loop tiene que preguntarle al DESTINO antes de que el humano
-/// diga que sí: si cabe (#149) y si sabe sujetar sus escrituras (#164).
+/// What the run loop has to ask the DESTINATION before the human says yes:
+/// whether it fits (#149) and whether it knows how to hold its writes (#164).
 ///
-/// Van juntas porque son la misma pregunta hecha al mismo sitio en el mismo
-/// momento, y separarlas costaría dos rondas de I/O por diálogo para pintar dos
-/// líneas contiguas.
+/// They travel together because they are the same question asked of the same
+/// place at the same time, and splitting them would cost two I/O round trips
+/// per dialog to paint two adjacent lines.
 #[derive(Debug, Clone)]
 pub struct DestCheck {
-    /// El directorio DESTINO, que es de quien se pregunta todo esto.
+    /// The DESTINATION directory, which everything here is asked of.
     pub to: VPath,
-    /// Bytes que la transferencia va a escribir, si se saben.
+    /// Bytes the transfer is going to write, if known.
     ///
-    /// `None` = alguno de los ítems no dice cuánto ocupa (un directorio no lo
-    /// trae en el listado), y entonces NO hay pregunta de espacio: sumar solo
-    /// lo conocido avisaría con un número menor que el real (lo calcula
-    /// `App::transfer_total`, privado). La de confinamiento se hace igual — no
-    /// depende del tamaño, y es justo el caso recursivo el que más la necesita.
+    /// `None` = some item does not say how much it takes up (a directory does
+    /// not carry it in the listing), and then there is NO space question:
+    /// adding up only what is known would warn with a number smaller than the
+    /// real one (computed by `App::transfer_total`, private). The confinement
+    /// question is the same — it does not depend on size, and it is exactly
+    /// the recursive case that needs it most.
     pub total: Option<u64>,
 }
 
-/// Lo que la barra dice del journal de ESTA sesión.
+/// What the bar says about THIS session's journal.
 ///
-/// Un enum y no un `Option<NoJournal>` más un bool: son estados excluyentes de
-/// una misma cosa —qué frase toca— y dos campos podrían contradecirse.
+/// An enum, not an `Option<NoJournal>` plus a bool: they are mutually
+/// exclusive states of one thing —which sentence applies— and two fields
+/// could disagree.
 #[derive(Debug, Clone)]
 enum JournalIndicator {
-    /// No se está registrando, por este motivo (#177/#178).
+    /// Not recording, for this reason (#177/#178).
     NotRecorded(norte_core::embedded::NoJournal),
-    /// Y además lleva minutos así sin daemon que lo explique (#203).
+    /// And has been like this for minutes with no daemon to explain it (#203).
     Squatted,
 }
 
-/// Quién se queda el teclado del cuerpo de la pantalla.
+/// Who holds the keyboard for the body of the screen.
 ///
-/// NO es el foco. [`App::focus`] sigue apuntando al LISTADO en el que estabas,
-/// y toda operación —una copia, un borrado, un `cd`— sigue yendo ahí: lo que
-/// esto decide es solo a quién se le entregan las teclas mientras un panel
-/// auxiliar está delante, igual que hacen la ayuda o la palette.
+/// This is NOT the focus. [`App::focus`] keeps pointing at the LISTING you
+/// were on, and every operation —a copy, a delete, a `cd`— still goes there:
+/// what this decides is only who the keys go to while an auxiliary panel is
+/// in front, the same as help or the palette do.
 ///
-/// Existe porque `App::focus` es un índice sobre los listados VISIBLES, así
-/// que un sidebar no puede tenerlo sin el refactor a `SlotId` que P6 aplazó.
-/// El día que ese refactor llegue, esto se pliega dentro de él.
+/// It exists because `App::focus` is an index over the VISIBLE listings, so a
+/// sidebar cannot have one without the refactor to `SlotId` that P6 deferred.
+/// The day that refactor lands, this folds into it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum KeyOwner {
-    /// Los listados, que es lo de siempre.
+    /// The listings, which is the usual case.
     #[default]
     Panes,
-    /// El sidebar de sitios.
+    /// The places sidebar.
     Places,
-    /// El visor acoplado.
+    /// The docked viewer.
     Preview,
-    /// El panel de procesos.
+    /// The processes panel.
     Processes,
-    /// El árbol de directorios (#136).
+    /// The directory tree (#136).
     Tree,
-    /// El panel de registro (#323).
+    /// The log panel (#323).
     Log,
-    /// El mapa de disco (fase 4).
+    /// The disk map (phase 4).
     ///
-    /// Sin carga, como todos: `KeyOwner` se compara por igualdad en ochenta y
-    /// seis sitios, y el mapa se declara `multi: false`, así que hay como mucho
-    /// uno y el reparto ya sabe cuál.
+    /// No payload, like all of these: `KeyOwner` is compared for equality in
+    /// eighty-six places, and the map declares `multi: false`, so there is at
+    /// most one and the layout already knows which.
     DiskMap,
-    /// La línea de tiempo del journal (fase 7). Sin carga, por lo mismo que
-    /// el mapa: se declara `multi: false`, así que hay como mucho una.
+    /// The journal timeline (phase 7). No payload, for the same reason as the
+    /// map: it declares `multi: false`, so there is at most one.
     Timeline,
-    /// El panel de terminal (#362). Sin carga, y esa es la razón por la que el
-    /// kind se declara `multi: false`: con varios habría que llevar dentro
-    /// CUÁL tiene las teclas, y este tipo se compara por igualdad en ochenta y
-    /// seis sitios.
+    /// The terminal panel (#362). No payload, and that is the reason the kind
+    /// declares `multi: false`: with several you would have to carry WHICH
+    /// one has the keys, and this type is compared for equality in
+    /// eighty-six places.
     ///
-    /// Es el único dueño que se queda los BYTES y no los comandos: mientras lo
-    /// es, todo lo que se teclea va al shell salvo el acorde suelto que lo
-    /// abrió (ver [`crate::termpanel`]).
+    /// It is the only owner that keeps the BYTES instead of the commands:
+    /// while it is, everything typed goes to the shell except the bare chord
+    /// that opened it (see [`crate::termpanel`]).
     Terminal,
-    /// Un panel aportado por un PLUGIN (fase 3, ADR 0115/0116).
+    /// A panel contributed by a PLUGIN (phase 3, ADR 0115/0116).
     ///
-    /// SIN decir cuál, a propósito. `KeyOwner` se compara por igualdad en
-    /// ochenta y seis sitios —`keys.rs`, `ui.rs`, `dispatch.rs`— y una
-    /// variante con carga los rompería todos; y no hace falta: un panel de
-    /// plugin se declara `multi: false`, así que hay como mucho uno visible y
-    /// el reparto ya sabe cuál es. Quién lo pinta se pregunta al árbol, que
-    /// es donde vive esa verdad.
+    /// WITHOUT saying which, on purpose. `KeyOwner` is compared for equality
+    /// in eighty-six places —`keys.rs`, `ui.rs`, `dispatch.rs`— and a variant
+    /// with a payload would break all of them; and it is not needed: a
+    /// plugin panel declares `multi: false`, so there is at most one visible
+    /// and the layout already knows which one it is. Who paints it is asked
+    /// of the tree, which is where that truth lives.
     Panel,
 }
 
-/// Las celdas de la barra de teclas de las tres pantallas (spec
-/// 2026-09-10), en el idioma vigente al construirlas.
+/// The key bar cells of the three screens (spec 2026-09-10), in the language
+/// in force when they were built.
 #[derive(Debug, Clone, Default)]
 pub struct KeyBars {
-    /// Con los listados o un panel lateral: el efectivo `browse`.
+    /// With the listings or a side panel: the effective `browse`.
     pub browse: Vec<norte_frontend::keybar::KeyCell>,
-    /// Con el visor a pantalla completa.
+    /// With the viewer full screen.
     pub viewer: Vec<norte_frontend::keybar::KeyCell>,
 }
 
 impl KeyBars {
-    /// De los dos efectivos con teclas de función, en el idioma activo. El
-    /// de `dialog` no entra: ningún preset ata una `F` ahí, y con un modal o
-    /// un overlay delante la fila va en blanco (`App::key_bar_cells`).
+    /// From the two effectives with function keys, in the active language.
+    /// `dialog`'s does not enter: no preset binds an `F` there, and with a
+    /// modal or an overlay in front the row goes blank (`App::key_bar_cells`).
     #[must_use]
     pub fn build(
         browse: &norte_frontend::keymap::Effective,
@@ -290,8 +292,8 @@ impl KeyBars {
 }
 
 impl App {
-    /// ¿Está el panel de registro en la disposición? Es lo que pone a cero
-    /// los avisos sin leer: si está, el lector los tiene delante.
+    /// Is the log panel in the layout? This is what zeroes the unread
+    /// notices: if it is there, the reader has them in front.
     #[must_use]
     pub fn log_panel_open(&self) -> bool {
         self.layout.slot_ids().into_iter().any(|id| {
@@ -301,12 +303,12 @@ impl App {
         })
     }
 
-    /// Un tic de un segundo sobre el aviso de la barra (spec 2026-09-10,
-    /// `[ui] notice_seconds`): pasado el tope, el mensaje sale de la barra,
-    /// va al registro (por `tracing`, que es lo que el panel enseña) y la
-    /// insignia `!n` cuenta uno más. Con `0` no caduca nada: el mensaje se
-    /// queda hasta la siguiente tecla, como siempre. Los banners
-    /// persistentes no pasan por aquí: son estado, no aviso.
+    /// A one-second tick over the bar's notice (spec 2026-09-10,
+    /// `[ui] notice_seconds`): past the cap, the message leaves the bar, goes
+    /// to the log (through `tracing`, which is what the panel shows) and the
+    /// `!n` badge counts one more. With `0` nothing expires: the message
+    /// stays until the next key, as always. Persistent banners do not go
+    /// through here: they are state, not a notice.
     pub fn tick_notices(&mut self) {
         if self.log_panel_open() {
             self.notices_unread = 0;
@@ -322,25 +324,25 @@ impl App {
             self.message_counted = Some(msg.to_owned());
             self.message_ticks = 1;
         }
-        let tope = self.chrome.notice_seconds();
-        if tope > 0 && self.message_ticks >= tope {
+        let cap = self.chrome.notice_seconds();
+        if cap > 0 && self.message_ticks >= cap {
             let text = self.message.take().unwrap_or_default();
             self.message_ticks = 0;
             self.message_counted = None;
             self.notices_unread = self.notices_unread.saturating_add(1);
-            // `info`, no `warn`: «copiado 1 fichero» no es un aviso, y el
-            // nivel es por lo que se filtra el panel de registro.
+            // `info`, not `warn`: "copied 1 file" is not a warning, and the
+            // level is what the log panel filters by.
             tracing::info!(target: "norte::notice", "{text}");
         }
     }
 
-    /// Las celdas de la pantalla que tiene las teclas AHORA: con un modal o
-    /// un overlay delante, NINGUNA —la fila va en blanco: ningún preset ata
-    /// una `F` en `[dialog]`, y una celda que anunciara un verbo que el modal
-    /// activo rehúsa sería la mentira que `hints` existe para no contar—; el
-    /// visor a pantalla completa, las suyas; si no, las de los listados. El
-    /// visor se pregunta ANTES que `overlay_open`, que lo incluye: es el mismo
-    /// orden que `vista_barra_de_teclas` en la ventana (ADR 0077).
+    /// The cells of the screen that has the keys RIGHT NOW: with a modal or
+    /// an overlay in front, NONE —the row goes blank: no preset binds an `F`
+    /// in `[dialog]`, and a cell announcing a verb the active modal refuses
+    /// would be the lie `hints` exists so as not to tell—; the viewer full
+    /// screen, its own; otherwise, the listings'. The viewer is asked BEFORE
+    /// `overlay_open`, which includes it: it is the same order as
+    /// `vista_barra_de_teclas` in the window (ADR 0077).
     #[must_use]
     pub fn key_bar_cells(&self) -> &[norte_frontend::keybar::KeyCell] {
         if self.modal.is_some() || self.help.is_some() || self.wizard.is_some() {
@@ -355,192 +357,199 @@ impl App {
     }
 }
 
-/// Lo que hace un click sobre una fila del sidebar de sitios (#226).
+/// What a click on a row of the places sidebar does (#226).
 ///
-/// Lo que el modelo podía hacer ya está hecho al volver; esto es lo que
-/// necesita al backend, que [`App`] no tiene.
+/// Whatever the model could do is already done by the time this returns;
+/// this is what needs the backend, which [`App`] does not have.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlacesClick {
-    /// Se movió el cursor y el teclado se vino al sidebar. Nada más que hacer.
+    /// The cursor moved and the keyboard came to the sidebar. Nothing else
+    /// to do.
     Focused,
-    /// Se plegó o desplegó una sección: desplegar las unidades es el momento
-    /// de volver a pedirlas, igual que por teclado.
+    /// A section was folded or unfolded: unfolding the drives is the moment
+    /// to ask for them again, same as by keyboard.
     Folded,
-    /// Hay que llevar el listado a donde diga [`App::places_activate`].
+    /// The listing has to be taken to wherever [`App::places_activate`] says.
     Activate,
 }
 
-/// El editor que la configuración nombra (`[ui] editor`).
+/// The editor the configuration names (`[ui] editor`).
 ///
-/// La plantilla TAL CUAL, con sus códigos de campo sin expandir: expandirlos
-/// necesita el fichero y el directorio, que solo se saben en el momento del
-/// gesto.
+/// The template AS IS, with its field codes unexpanded: expanding them needs
+/// the file and the directory, which are only known at the moment of the
+/// gesture.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EditorSpec {
-    /// El argv plantilla (`["zed", "%f"]`). El primer token es el binario.
+    /// The template argv (`["zed", "%f"]`). The first token is the binary.
     pub command: Vec<String>,
-    /// Abre ventana propia: no se suspende la terminal esperándolo.
+    /// Opens its own window: the terminal is not suspended waiting for it.
     pub detached: bool,
 }
 
-/// Dónde cayó un click dentro de una fila del árbol (#136).
+/// Where a click landed inside a row of the tree (#136).
 ///
-/// La MARCA y el resto de la fila no hacen lo mismo, y el nombre lo dice: un
-/// `bool` en la llamada se lee «true» en el sitio donde importa.
+/// The MARK and the rest of the row do not do the same thing, and the name
+/// says so: a `bool` in the call reads as "true" at the site where it
+/// matters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TreeSpot {
-    /// Sobre el `▾`/`▸`/`·`: pliega o despliega esa rama.
+    /// On the `▾`/`▸`/`·`: folds or unfolds that branch.
     Mark,
-    /// En cualquier otra celda de la fila.
+    /// On any other cell of the row.
     Row,
 }
 
-/// Lo que hace un click sobre una fila del árbol (#136).
+/// What a click on a row of the tree does (#136).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TreeClick {
-    /// Se movió el cursor (o se plegó la rama) y el teclado se vino al árbol.
-    /// Nada más que hacer.
+    /// The cursor moved (or the branch folded) and the keyboard came to the
+    /// tree. Nothing else to do.
     Focused,
-    /// Hay que llevar el listado a donde diga [`App::tree_activate`].
+    /// The listing has to be taken to wherever [`App::tree_activate`] says.
     Activate,
 }
 
-/// Lo que este proceso sabe de la sesión guardada (L2).
+/// What this process knows about the saved session (L2).
 ///
-/// Junto y no cinco campos sueltos en [`App`]: son una sola cosa —la pantalla
-/// que se guarda— y los tres privados solo tienen sentido entre ellos.
+/// Grouped instead of five loose fields on [`App`]: they are one thing —the
+/// screen that gets saved— and the three private ones only make sense among
+/// themselves.
 #[derive(Debug, Default)]
 pub struct SessionUi {
-    /// Esta ventana NO es la dueña: otra la tiene, así que ésta arranca con la
-    /// misma pantalla y a partir de ahí va por su cuenta sin escribir nada. Se
-    /// dice al abrir con un mensaje y, mientras dure, con una marca permanente
-    /// en la barra de estado ([`App::session_banner`], #232).
+    /// This window is NOT the owner: another one has it, so this one starts
+    /// with the same screen and from then on goes its own way without
+    /// writing anything. It is announced on open with a message and, for as
+    /// long as it lasts, with a permanent mark in the status bar
+    /// ([`App::session_banner`], #232).
     ///
-    /// También se pone suelta la ventana que encuentra un cuerpo de una
-    /// versión más nueva: no se lee, y sobre todo no se pisa.
+    /// The window that finds a body from a newer version also becomes
+    /// detached: it is not read, and above all it is not overwritten.
     pub detached: bool,
-    /// Este proceso viene de un RELEVO (`--attach`, fase 9), así que además de
-    /// la pantalla reclama lo MARCADO que el otro frontend dejó.
+    /// This process comes from a HANDOFF (`--attach`, phase 9), so besides
+    /// the screen it also claims the MARKS the other frontend left.
     ///
-    /// Sin este interruptor no se puede distinguir un relevo de un arranque
-    /// cualquiera, y son la misma lectura con dos respuestas correctas
-    /// distintas: en un relevo pasan segundos y devolver lo señalado es
-    /// devolver el trabajo que se estaba haciendo; en un arranque han pasado
-    /// horas, y sería poner un `F8` sobre lo que uno marcó ayer.
+    /// Without this switch there is no way to tell a handoff apart from an
+    /// ordinary start, and they are the same reading with two different
+    /// correct answers: in a handoff seconds have passed and returning what
+    /// was marked is returning the work that was in progress; in a start
+    /// hours have passed, and it would be like putting an `F8` on what you
+    /// marked yesterday.
     pub attach: bool,
-    /// La revisión que este proceso tiene por vigente, SOLO para arrancar el
-    /// escritor de la sesión.
+    /// The revision this process holds as current, ONLY to start the
+    /// session writer.
     ///
-    /// A partir de ahí la de verdad la lleva el escritor, que es quien ve las
-    /// respuestas del core; ésta solo se refresca cuando avisa de un relevo. No
-    /// se compara con nada: leerla para decidir algo sería leer un número
-    /// viejo.
+    /// From then on the real one is kept by the writer, which is the one
+    /// that sees the core's responses; this one is only refreshed when it
+    /// hears of a handoff. It is not compared against anything: reading it
+    /// to decide something would be reading a stale number.
     pub revision: u64,
-    /// Estado por hueco que vino en la sesión y que este layout NO tiene.
+    /// Per-slot state that came in the session and that this layout does NOT
+    /// have.
     ///
-    /// Se conserva y se vuelve a escribir tal cual: cambiar de disposición no
-    /// puede costarte el historial de un panel al que vas a volver. Lo recorta
-    /// [`norte_frontend::session::SessionBody::prune`], que es quien sabe
-    /// cuántos huérfanos caben.
+    /// Kept and written back as is: switching layout must not cost you the
+    /// history of a panel you are going to return to. Trimmed by
+    /// [`norte_frontend::session::SessionBody::prune`], which is the one that
+    /// knows how many orphans fit.
     orphans: std::collections::BTreeMap<u32, norte_frontend::session::SlotState>,
-    /// Las disposiciones de los OTROS perfiles, tal y como vinieron.
+    /// The layouts of the OTHER profiles, exactly as they arrived.
     ///
-    /// Mismo trato que los huérfanos y por el mismo motivo: esta sesión es la
-    /// pantalla de VARIOS perfiles y este proceso solo mira uno, así que lo de
-    /// los demás viaja de vuelta intacto. Escribir solo el activo borraría del
-    /// documento el sitio donde los otros habían dejado sus paneles (ADR
-    /// 0079, D5).
+    /// Same treatment as the orphans and for the same reason: this session is
+    /// the screen for SEVERAL profiles and this process only looks at one, so
+    /// the others' data travels back intact. Writing only the active one
+    /// would erase from the document the place where the others had left
+    /// their panels (ADR 0079, D5).
     other_layouts: std::collections::BTreeMap<String, norte_frontend::layout::Node>,
-    /// Cuándo se tocó cada hueco por última vez (epoch ms), para la barrida
-    /// por edad. Se guarda en vez de sellarse al capturar porque capturar no
-    /// es tocar: dos capturas seguidas de la misma pantalla tienen que dar el
-    /// mismo documento.
+    /// When each slot was last touched (epoch ms), for the age-based sweep.
+    /// Stored instead of stamped at capture time because capturing is not
+    /// touching: two captures of the same screen back to back have to
+    /// produce the same document.
     touched: std::collections::HashMap<u32, u64>,
-    /// El cursor que traía la sesión, hasta que llegue el listado que lo puede
-    /// colocar: sobre un pane vacío, poner el cursor en la fila 12 es ponerlo
-    /// en la 0.
+    /// The cursor the session carried, until the listing that can place it
+    /// arrives: on an empty pane, putting the cursor on row 12 is putting it
+    /// on row 0.
     cursors: std::collections::HashMap<u32, u64>,
-    /// Lo MARCADO que traía un relevo (fase 9), hasta que llegue el listado.
+    /// What a handoff (phase 9) had MARKED, until the listing arrives.
     ///
-    /// Mismo trato y mismo momento que [`Self::cursors`], y por una razón que
-    /// el piloto destapó: el pane nace vacío y `set_listing` limpia las marcas
-    /// cuando el listado llega —lo correcto para un cd—, así que sembrarlas
-    /// antes las borraba y el relevo devolvía la pantalla sin lo señalado.
+    /// Same treatment and same moment as [`Self::cursors`], and for a reason
+    /// the pilot uncovered: the pane is born empty and `set_listing` clears
+    /// the marks when the listing arrives —the right thing for a `cd`— so
+    /// seeding them earlier would wipe them and the handoff would return the
+    /// screen without what was marked.
     ///
-    /// Solo se llena con `--attach`: un arranque cualquiera no es un relevo.
+    /// Only filled with `--attach`: an ordinary start is not a handoff.
     marks: std::collections::HashMap<u32, Vec<norte_proto::VPath>>,
-    /// De qué huecos SABÍA la sesión guardada, tal y como se leyó del disco.
+    /// Which slots the saved session KNEW about, exactly as read from disk.
     ///
-    /// La necesita `[profile.start]`, que solo siembra el hueco del que la
-    /// sesión no sabe nada (ADR 0098). Y tiene que ser lo LEÍDO y no
-    /// `App::session_body()`, que es la pantalla de AHORA: aquélla nombra todos
-    /// los huecos vivos, así que preguntándole el perfil no sembraba nunca.
+    /// Needed by `[profile.start]`, which only seeds the slot the session
+    /// knows nothing about (ADR 0098). And it has to be what was READ, not
+    /// `App::session_body()`, which is the screen NOW: that one names every
+    /// live slot, so asking it would never seed the profile.
     read: std::collections::BTreeSet<u32>,
-    /// Los huecos que este proceso ya sembró desde `[profile.start]`.
+    /// The slots this process already seeded from `[profile.start]`.
     ///
-    /// Sembrar es de la PRIMERA vez, y sin esta cuenta un lector sin sesión
-    /// guardada —una instalación nueva— volvía al directorio de arranque del
-    /// perfil cada vez que entraba y salía de él, que es la decisión 2 de la
-    /// ADR 0098 puesta del revés.
+    /// Seeding is a FIRST-time thing, and without this count a reader with no
+    /// saved session —a fresh install— would return to the profile's start
+    /// directory every time they entered and left it, which is ADR 0098's
+    /// decision 2 turned backwards.
     seeded: std::collections::BTreeSet<u32>,
 }
 
-/// Filas que salta `cursor.page-up/down` (fijo hasta que el alto real del
-/// pane viaje con el comando).
+/// Rows `cursor.page-up/down` jumps (fixed until the pane's real height
+/// travels with the command).
 ///
-/// Vive aquí y no en el binario porque lo pagina TODO lo que tiene lista: los
-/// panes, la ayuda, los ajustes y el editor de atajos — y ese último salió del
-/// binario antes que el resto, que es cuando una constante compartida deja de
-/// poder vivir en el que se va.
+/// Lives here and not in the binary because EVERYTHING with a list paginates
+/// with it: the panes, help, settings and the shortcut editor — and that last
+/// one left the binary before the rest, which is when a shared constant stops
+/// being able to live in the one that is leaving.
 pub const PAGE: usize = 10;
 
-/// Estado completo del TUI: los paneles y el foco.
-// `struct_excessive_bools`: el lint busca APIs cuyos parámetros booleanos se
-// confunden entre sí en la llamada. Esto no es una API: es el estado completo
-// de la TUI, y sus banderas son independientes entre sí, se leen por nombre y
-// jamás viajan juntas como argumentos. Agruparlas en sub-structs por contar
-// bools escondería qué mira cada pintor a cambio de nada.
-#[expect(clippy::struct_excessive_bools, reason = "estado del TUI, no una API")]
+/// Complete TUI state: the panels and the focus.
+// `struct_excessive_bools`: the lint looks for APIs whose boolean parameters
+// get confused with each other at the call site. This is not an API: it is
+// the TUI's complete state, and its flags are independent of each other, are
+// read by name and never travel together as arguments. Grouping them into
+// sub-structs just to count bools would hide what each painter looks at, for
+// nothing in return.
+#[expect(clippy::struct_excessive_bools, reason = "TUI state, not an API")]
 pub struct App {
-    /// Los dos paneles (izquierda, derecha), guardados por hueco.
+    /// The two panels (left, right), stored by slot.
     pub panes: crate::panel::PaneSlots,
-    /// El árbol de huecos vigente. En L1a es siempre `orthodox`.
+    /// The current tree of slots. In L1a it is always `orthodox`.
     pub layout: norte_frontend::layout::Node,
-    /// Los kinds que este binario sabe pintar.
+    /// The kinds this binary knows how to paint.
     pub kinds: norte_frontend::layout::KindRegistry,
-    /// Los roles, reconciliados tras cada reparto.
+    /// The roles, reconciled after every layout pass.
     pub roles: norte_frontend::layout::Roles,
-    /// Quién tiene el teclado del cuerpo (L3). Ver [`KeyOwner`].
+    /// Who has the keyboard for the body (L3). See [`KeyOwner`].
     key_owner: KeyOwner,
-    /// La barra de menús, si está abierta. Overlay: se queda TODAS las teclas
-    /// mientras está, como el resto.
+    /// The menu bar, if open. An overlay: it keeps ALL the keys while it is,
+    /// like the rest.
     pub menu: Option<norte_frontend::menu::MenuState>,
-    /// Por qué menú se abrió la última vez.
+    /// Which menu was opened last.
     ///
-    /// Se reabre por ahí ([`norte_frontend::menu::MenuState::reopen_at`]):
-    /// empezar siempre por el primero obliga a recorrer la barra entera cada
-    /// vez, y quien usa dos entradas del mismo menú lo paga en cada gesto.
-    pub menu_ultimo: usize,
-    /// El siguiente `SlotId` a acuñar. Nunca decrece y nunca se reutiliza:
-    /// un id reciclado haría que el estado huérfano de un hueco cerrado
-    /// resucitara dentro de otro que no tiene nada que ver.
+    /// Reopened from there ([`norte_frontend::menu::MenuState::reopen_at`]):
+    /// always starting from the first would force walking the whole bar every
+    /// time, and whoever uses two entries of the same menu would pay for it
+    /// on every gesture.
+    pub menu_last: usize,
+    /// The next `SlotId` to mint. Never decreases and never reused: a
+    /// recycled id would make the orphaned state of a closed slot resurrect
+    /// inside another one that has nothing to do with it.
     next_slot: u32,
-    /// Config de columnas resuelta (#108 bloque 4): set por scheme + sort.
-    /// La siembra el arranque desde `[ui.columns]`; el render y los hooks
-    /// de cd la consultan.
+    /// Resolved column config (#108 block 4): a set per scheme + sort. Seeded
+    /// at startup from `[ui.columns]`; the render and the cd hooks read it.
     pub columns: norte_frontend::columns::ColumnsSettings,
-    /// Los temas del usuario (`<config>/themes/*.toml`) que cargó la config,
-    /// ya parseados. Los siembran el arranque y la recarga; el selector, el
-    /// asistente y los ajustes los listan y los previsualizan sin tocar disco.
+    /// The user's themes (`<config>/themes/*.toml`) loaded by the config,
+    /// already parsed. Seeded at startup and on reload; the selector, the
+    /// wizard and settings list and preview them without touching disk.
     pub user_themes: Vec<norte_frontend::theme::UserTheme>,
-    /// `now` para las celdas de tiempo RELATIVO (#108 L5): `None` = reloj
-    /// real; los tests de snapshot fijan `Some(ms)` para render estable.
+    /// `now` for the RELATIVE time cells (#108 L5): `None` = the real clock;
+    /// snapshot tests fix `Some(ms)` for a stable render.
     pub render_now_ms: Option<i64>,
-    /// Catálogo de attrs por SCHEME (#117): una llamada a
-    /// `fs.capabilities` por scheme nuevo y por sesión; alimenta hints y
-    /// cabeceras del render y las filas del picker (tarea 4). Privado:
-    /// lectura por [`Self::attr_catalog`], escritura por
-    /// [`Self::insert_attr_catalog`].
+    /// Attribute catalogue per SCHEME (#117): one `fs.capabilities` call per
+    /// new scheme and per session; feeds hints and render headers and the
+    /// picker's rows (task 4). Private: read through [`Self::attr_catalog`],
+    /// written through [`Self::insert_attr_catalog`].
     attr_catalogs: std::collections::HashMap<String, norte_proto::AttrCatalog>,
     /// Capability flags per LOCATION, the other half of the same response.
     ///
@@ -571,29 +580,30 @@ pub struct App {
     /// Private: read through [`Self::caps`], written through
     /// [`Self::insert_caps`].
     caps: std::collections::HashMap<CapsKey, norte_proto::Capabilities>,
-    /// Orden de llegada de las claves de [`Self::caps`], para desalojar la más
-    /// vieja cuando se llena ([`CAPS_CACHE_MAX`]).
+    /// Arrival order of [`Self::caps`]'s keys, to evict the oldest when it
+    /// fills up ([`CAPS_CACHE_MAX`]).
     caps_order: std::collections::VecDeque<CapsKey>,
-    /// Índice del pane con foco (invariante 0|1: privado, ver [`Self::focus`]).
+    /// Index of the focused pane (invariant 0|1: private, see
+    /// [`Self::focus`]).
     focus: usize,
-    /// `true` cuando el usuario pidió salir.
+    /// `true` when the user asked to quit.
     pub quit: bool,
-    /// Navegación SINCRONIZADA (`pane.sync-nav`): cada `cd` del panel con
-    /// foco lo repite el otro.
+    /// SYNCHRONIZED navigation (`pane.sync-nav`): every `cd` of the focused
+    /// panel is repeated by the other one.
     ///
-    /// Estado de ejecución y no configuración: es un modo que se enciende
-    /// mientras haces una cosa —comparar dos árboles a mano— y se apaga
-    /// después, como en Krusader. Guardarlo en el `norte.toml` del lector
-    /// sería convertir un gesto en una preferencia.
+    /// Run-time state, not configuration: it is a mode you switch on while
+    /// doing one thing —comparing two trees by hand— and switch off
+    /// afterward, as in Krusader. Storing it in the reader's `norte.toml`
+    /// would turn a gesture into a preference.
     pub sync_nav: bool,
-    /// `[ui] confirm_quit` vigente, para que salir desde DENTRO de un panel
-    /// lateral honre lo mismo que salir desde un listado. El run loop tiene
-    /// su copia para el despacho nombrado de `app.quit`; las dos se ponen en
-    /// los mismos dos sitios (arranque y recarga en caliente).
+    /// The current `[ui] confirm_quit`, so quitting from INSIDE a side panel
+    /// honors the same thing as quitting from a listing. The run loop keeps
+    /// its own copy for `app.quit`'s named dispatch; both are set in the
+    /// same two places (startup and hot reload).
     pub confirm_quit: crate::config::ConfirmQuit,
-    /// Secuencia de teclas pendiente, ya formateada (status bar). Se escribe
-    /// SOLO por [`App::show_pending`]/[`App::clear_pending`], que la mantienen
-    /// de acuerdo con [`App::which_key`].
+    /// Pending key sequence, already formatted (status bar). Written ONLY by
+    /// [`App::show_pending`]/[`App::clear_pending`], which keep it in
+    /// agreement with [`App::which_key`].
     pub pending: String,
     /// The which-key panel, open exactly while a chord sequence is pending
     /// (K3a). `None` = closed.
@@ -611,262 +621,269 @@ pub struct App {
     /// two fields that will eventually disagree — a panel left open over a
     /// keymap that was hot-reloaded under it would teach keys nobody has.
     pub which_key: Option<norte_frontend::whichkey::WhichKeyRows>,
-    /// Diálogo modal activo (bloquea el keymap hasta resolverse).
+    /// Active modal dialog (blocks the keymap until resolved).
     pub modal: Option<Modal>,
-    /// Último mensaje para la barra (error por categoría o resultado).
+    /// Last message for the bar (an error by category, or a result).
     pub message: Option<String>,
-    /// Cuántos tics de un segundo lleva [`Self::message`] en la barra (spec
-    /// 2026-09-10). Se cuenta en TICS y no con un `Instant` para que un test
-    /// lo haga avanzar sin dormir; `[ui] notice_seconds` es el tope.
+    /// How many one-second ticks [`Self::message`] has been on the bar (spec
+    /// 2026-09-10). Counted in TICKS and not with an `Instant` so a test can
+    /// advance it without sleeping; `[ui] notice_seconds` is the cap.
     pub message_ticks: u32,
-    /// El texto que se estaba contando: si cambia, la cuenta vuelve a cero.
+    /// The text that was being counted: if it changes, the count goes back
+    /// to zero.
     pub message_counted: Option<String>,
-    /// Avisos que caducaron sin que el lector abriera el registro. La barra
-    /// pinta `!n` a la derecha mientras haya alguno; abrir el panel de
-    /// registro lo pone a cero.
+    /// Notices that expired without the reader opening the log. The bar
+    /// paints `!n` on the right while there is any; opening the log panel
+    /// zeroes it.
     pub notices_unread: u32,
-    /// Todo lo que este proceso sabe de la sesión guardada (L2).
+    /// Everything this process knows about the saved session (L2).
     pub session: SessionUi,
-    /// Panel de tasks vivo.
+    /// Live tasks panel.
     pub board: crate::tasks::TaskBoard,
-    /// La barra de progreso ligera del item `tasks` (ADR 0146): sigue al
-    /// tablero en cada tic, con el reloj del pintado.
+    /// The lightweight progress bar of the `tasks` item (ADR 0146): tracks
+    /// the board on every tick, with the render clock.
     pub strip: norte_frontend::task_strip::TaskStrip,
-    /// Las transferencias que se lancen van A LA COLA (ADR 0149): de una en
-    /// una. Es de la sesión, no de la configuración: se enciende para un rato
-    /// de mover cosas en un disco mecánico y se apaga después.
-    pub encolar: bool,
-    /// Viewer abierto (F3); None = navegando.
+    /// Transfers that get launched go INTO THE QUEUE (ADR 0149): one at a
+    /// time. Session state, not configuration: it is switched on for a while
+    /// of moving things on a mechanical disk and switched off afterward.
+    pub enqueue: bool,
+    /// Open viewer (F3); None = browsing.
     pub viewer: Option<crate::viewer::Viewer>,
-    /// La miniatura pedida para [`Self::viewer`], si se pidió una (fase 5
-    /// WOW, T3): `[ui] images` resolvió a [`crate::viewer_open::Modo::Kitty`]
-    /// Y el fichero es una imagen. `None` cuando no aplica o el plugin no
-    /// supo — el visor se ve igual, sin píxeles (ADR 0037). Vive aquí y no
-    /// en [`crate::viewer::Viewer`] porque ese tipo es de `norte-frontend` y
-    /// lo comparten los dos frontends; la ventana pinta imágenes por su
-    /// propio camino y no necesita este campo.
-    pub viewer_imagen: Option<crate::viewer_open::ImagenColocada>,
-    /// El fichero cuya miniatura llegó en un formato que kitty no sabe
-    /// colocar, si pasó (`Miniatura::FormatoAjeno`).
+    /// The thumbnail requested for [`Self::viewer`], if one was requested
+    /// (phase 5 WOW, T3): `[ui] images` resolved to
+    /// [`crate::viewer_open::Modo::Kitty`] AND the file is an image. `None`
+    /// when it does not apply or the plugin did not know how — the viewer
+    /// looks the same, with no pixels (ADR 0037). Lives here and not in
+    /// [`crate::viewer::Viewer`] because that type belongs to `norte-frontend`
+    /// and both frontends share it; the window paints images through its own
+    /// path and does not need this field.
+    pub viewer_imagen: Option<crate::viewer_open::ImagenPlaced>,
+    /// The file whose thumbnail arrived in a format kitty does not know how
+    /// to place, if that happened (`Thumbnail::FormatForeign`).
     ///
-    /// Va el PATH y no un `bool` por la misma razón que
-    /// [`Self::viewer_imagen`] lleva el suyo: el lector puede estar viendo
-    /// otro fichero mientras esto sigue en pie, y un aviso sobre el fichero
-    /// de antes describe algo que ya no está en pantalla. El aviso sólo
-    /// sale cuando esto nombra el fichero que el visor enseña.
-    pub viewer_miniatura_ajena: Option<VPath>,
-    /// El [`crate::viewer_open::Modo`] con el que se abrió [`Self::viewer`]
-    /// — resuelto UNA VEZ, al abrir (`viewer_open::open_viewer`), no
-    /// recalculado en cada frame.
+    /// The PATH travels, not a `bool`, for the same reason
+    /// [`Self::viewer_imagen`] carries its own: the reader may be looking at
+    /// another file while this is still standing, and a warning about the
+    /// previous file describes something no longer on screen. The warning
+    /// only fires when this names the file the viewer is showing.
+    pub viewer_thumbnail_foreign: Option<VPath>,
+    /// The [`crate::viewer_open::Modo`] [`Self::viewer`] was opened with —
+    /// resolved ONCE, on open (`viewer_open::open_viewer`), not recomputed on
+    /// every frame.
     ///
-    /// Revisión de rama, hallazgo 3: `[ui] images` se recarga EN CALIENTE
-    /// (`applies_live` en `norte_frontend::settings`, `app.chrome` entero se
-    /// reasigna en `config_reload::reload_config`), y el aviso/colocación
-    /// recalculaban el modo EFECTIVO contra la config vigente en cada
-    /// frame, no contra lo que de verdad se pidió al abrir. Dos
-    /// consecuencias, las dos alcanzables sin cerrar el visor: cambiar de
-    /// `blocks` a `kitty` hacía salir el aviso «falta aprobar la extensión
-    /// de miniaturas» sobre un fichero al que NUNCA se le pidió una (el
-    /// aviso miente: lo que hace falta es reabrir, no aprobar nada); y
-    /// cambiar de `kitty` a `off`/`blocks` dejaba los píxeles ya colocados
-    /// en pantalla INDEFINIDAMENTE, violando lo que la ayuda promete de
-    /// `off` («deja el visor en hexview sin más»). Este campo fija el modo
-    /// resuelto al abrir para el aviso y la colocación; sólo
-    /// `config_reload::reload_config` lo cambia después, y sólo en la
-    /// dirección Kitty→algo-más (soltando [`Self::viewer_imagen`] a la vez)
-    /// — la dirección contraria se deja pineada a propósito, para no volver
-    /// a mentir sobre un fichero al que el modo nuevo nunca le pidió nada.
+    /// Branch review, finding 3: `[ui] images` reloads HOT
+    /// (`applies_live` in `norte_frontend::settings`, the whole `app.chrome`
+    /// is reassigned in `config_reload::reload_config`), and the
+    /// warning/placement used to recompute the EFFECTIVE mode against the
+    /// current config on every frame, not against what was actually
+    /// requested on open. Two consequences, both reachable without closing
+    /// the viewer: switching from `blocks` to `kitty` made the "thumbnail
+    /// extension needs approval" warning appear over a file that was NEVER
+    /// asked for one (the warning lies: what is needed is reopening, not
+    /// approving anything); and switching from `kitty` to `off`/`blocks` left
+    /// the pixels already placed on screen INDEFINITELY, violating what help
+    /// promises about `off` ("leaves the viewer in hexview, nothing more").
+    /// This field fixes the mode resolved on open for the warning and the
+    /// placement; only `config_reload::reload_config` changes it afterward,
+    /// and only in the Kitty→something-else direction (releasing
+    /// [`Self::viewer_imagen`] at the same time) — the opposite direction is
+    /// deliberately pinned, so as not to lie again about a file the new mode
+    /// never asked anything of.
     pub viewer_modo: crate::viewer_open::Modo,
     /// Help overlay open (F1, H3b): the navigable view over the `norte-help`
     /// corpus — sidebar, body, filter and history — plus the generated
     /// keyboard page, which is still built from the EFFECTIVE keymap (preset
     /// and the user's layers included, never a hand-kept list).
     pub help: Option<HelpView>,
-    /// Colisiones a la espera de diálogo: JAMÁS se pisa un modal abierto
-    /// (una tecla en vuelo respondería a la pregunta equivocada); se
-    /// atienden en orden al cerrarse el modal actual.
+    /// Collisions waiting for a dialog: an open modal is NEVER overwritten
+    /// (a key in flight would answer the wrong question); they are handled in
+    /// order as the current modal closes.
     pub pending_collisions: std::collections::VecDeque<crate::tasks::RetrySpec>,
-    /// Informes a la espera de diálogo (de un lote de renombrado o de un
-    /// undo), con la misma disciplina: lo que termina mientras se contesta
-    /// otra cosa no le quita la pantalla, pero tampoco se pierde. Cada uno
-    /// con su clase.
+    /// Reports waiting for a dialog (from a rename batch or an undo), with
+    /// the same discipline: whatever finishes while something else is being
+    /// answered does not take over the screen, but is not lost either. Each
+    /// one with its class.
     pub pending_reports:
         std::collections::VecDeque<(modal::ReportKind, Vec<norte_frontend::ReportLine>)>,
-    /// Aprobaciones de policy a la espera de diálogo (M3-3b T5): misma
-    /// disciplina que las colisiones (jamás pisar un modal abierto), pero con
-    /// PRIORIDAD sobre ellas — una aprobación tiene TTL en el daemon y una
-    /// colisión espera lo que haga falta.
+    /// Policy approvals waiting for a dialog (M3-3b T5): same discipline as
+    /// the collisions (never overwrite an open modal), but with PRIORITY over
+    /// them — an approval has a TTL in the daemon and a collision waits as
+    /// long as it takes.
     pub pending_approvals: std::collections::VecDeque<norte_proto::methods::PolicyApprovalRequired>,
-    /// Tema resuelto + profundidad de color (ADR 0020). El render lee de aquí;
-    /// el hot-reload lo reemplaza. Default = preset `default`.
+    /// Resolved theme + color depth (ADR 0020). The render reads from here;
+    /// hot reload replaces it. Default = the `default` preset.
     pub theme: crate::theme::TuiTheme,
-    /// Selector de tema abierto (popup): None = cerrado.
+    /// Open theme selector (popup): None = closed.
     pub theme_picker: Option<ThemePicker>,
-    /// Selector de disposición abierto (F9 → `layout.pick`): None = cerrado.
-    /// El modelo vive en norte-frontend (regla 7); aquí solo se guarda.
+    /// Open layout selector (F9 → `layout.pick`): None = closed. The model
+    /// lives in norte-frontend (rule 7); only stored here.
     pub layout_picker: Option<norte_frontend::layout_picker::LayoutPicker>,
-    /// Selector de PERFIL abierto (`profile.pick`): None = cerrado. Mismo
-    /// patrón que el de disposición, y por el mismo motivo: el modelo vive en
-    /// norte-frontend (regla 7) y aquí solo se guarda.
+    /// Open PROFILE selector (`profile.pick`): None = closed. Same pattern
+    /// as the layout one, and for the same reason: the model lives in
+    /// norte-frontend (rule 7) and is only stored here.
     pub profile_picker: Option<norte_frontend::profile_picker::ProfilePicker>,
-    /// Si la barra de menú está FIJADA en la fila de arriba (`[ui] menu_bar`).
+    /// Whether the menu bar is PINNED to the top row (`[ui] menu_bar`).
     ///
-    /// Fijada le quita una fila al cuerpo, y esa resta se hace en el reparto
-    /// del frame —el único sitio por el que pasan el pintado, el mapeo de
-    /// clics y las decisiones de «qué hueco se colocó» del bucle—, así que
-    /// las tres cosas cuadran solas.
+    /// Pinned takes a row away from the body, and that subtraction happens in
+    /// the frame's layout pass —the one place the paint, the click mapping
+    /// and the loop's "which slot got placed" decisions all go through— so
+    /// the three things line up on their own.
     ///
-    /// Suelta, el menú sigue abriéndose con su tecla y pintándose ENCIMA de
-    /// la primera fila, como siempre.
+    /// Unpinned, the menu still opens with its key and paints OVER the first
+    /// row, as always.
     pub menu_bar: bool,
-    /// El comando que dejó pedido un clic en la barra de paneles (#324).
+    /// The command a click on the panel bar left requested (#324).
     ///
-    /// Se despacha por el MISMO camino que su atajo, y no por uno propio: dos
-    /// caminos para abrir el mismo panel divergen en cuanto uno de los dos
-    /// crece un detalle.
+    /// Dispatched through the SAME path as its shortcut, not through one of
+    /// its own: two paths to open the same panel diverge the moment one of
+    /// the two grows a detail.
     pub pending_panel_command: Option<String>,
-    /// El hijo del mapa de disco en el que hay que entrar, si alguien lo pidió.
+    /// The disk map's child to enter, if someone asked for it.
     ///
-    /// Lo pone la tecla o el clic y lo consume el BUCLE, que es quien tiene el
-    /// backend: entrar en un directorio es un `cd` normal, con su relleno y su
-    /// refresco. Un segundo camino de navegación es justo lo que ADR 0077
-    /// existe para impedir.
+    /// Set by the key or the click and consumed by the LOOP, which is the one
+    /// with the backend: entering a directory is an ordinary `cd`, with its
+    /// filling and its refresh. A second navigation path is exactly what ADR
+    /// 0077 exists to prevent.
     ///
-    /// Un [`norte_proto::Segment`] y no una ruta: el mapa nombra HIJOS del
-    /// directorio que enseña, y quien lo consume los resuelve contra él. Una
-    /// ruta aquí sería un segundo modo de nombrar un fichero, saltándose el
-    /// que ya pasa por el gate.
+    /// A [`norte_proto::Segment`] and not a path: the map names CHILDREN of
+    /// the directory it shows, and whoever consumes them resolves them
+    /// against it. A path here would be a second way of naming a file,
+    /// skipping the one that already goes through the gate.
     pub pending_disk_map_enter: Option<norte_proto::Segment>,
-    /// El mapa de disco tiene que volver a medirse.
+    /// The disk map has to be measured again.
     ///
-    /// Lo enciende `r` dentro del panel, abrirlo, y el aviso de la vigilancia
-    /// —que no dice QUÉ cambió, así que lo único honesto es volver a medir—.
-    /// Lo drena el bucle.
+    /// Switched on by `r` inside the panel, by opening it, and by the watch's
+    /// notice —which does not say WHAT changed, so the only honest thing is
+    /// to measure again. Drained by the loop.
     pub disk_map_stale: bool,
-    /// La línea de tiempo tiene que (re)leerse (fase 7).
+    /// The timeline has to be (re)read (phase 7).
     ///
-    /// La pone quien la ABRE y quien la hereda de una disposición guardada:
-    /// un panel adoptado no pasa por el toggle que lo habría llenado, y sin
-    /// esto se quedaba diciendo «todavía no se ha hecho nada» sobre un
-    /// journal que ni había mirado — que es la peor frase posible en una
-    /// pantalla de historial.
+    /// Set by whoever OPENS it and by whoever inherits it from a saved
+    /// layout: an adopted panel does not go through the toggle that would
+    /// have filled it, and without this it kept saying "nothing has happened
+    /// yet" about a journal it had not even looked at — which is the worst
+    /// possible sentence on a history screen.
     pub timeline_stale: bool,
-    /// La barra de paneles está fijada (`[ui] panel_bar`, #324).
+    /// The panel bar is pinned (`[ui] panel_bar`, #324).
     ///
-    /// Los paneles laterales se abrían por atajo, por el menú o por la paleta,
-    /// y los tres exigen SABER que el panel existe: no había ninguna superficie
-    /// que los enseñara. Una fila permanente cuesta una celda de alto, así que
-    /// se elige — pero por defecto va puesta, porque el que no sabe que el
-    /// panel existe tampoco sabe que existe la opción de enseñarlo.
+    /// Side panels used to open by shortcut, by the menu or by the palette,
+    /// and all three require KNOWING the panel exists: there was no surface
+    /// that showed them. A permanent row costs one cell of height, so it is a
+    /// choice — but by default it is on, because whoever does not know the
+    /// panel exists also does not know the option to show it exists.
     pub panel_bar: bool,
-    /// El cromo configurable (spec 2026-09-10): barra de teclas, estilo de
-    /// la barra de paneles, pie del panel, formato de fecha, caducidad de
-    /// los avisos y botones de diálogo. Cada frame lo lee; `reload_config`
-    /// lo vuelve a copiar. Un `App` de test arranca con la barra de teclas
-    /// y el pie APAGADOS por lo mismo que la barra de paneles: una fila que
-    /// aparece sola cambiaría los índices de ochenta tests que no van de esto.
+    /// The configurable chrome (spec 2026-09-10): key bar, panel bar style,
+    /// panel footer, date format, notice expiry and dialog buttons. Read
+    /// every frame; `reload_config` copies it back in. A test `App` starts
+    /// with the key bar and the footer OFF for the same reason as the panel
+    /// bar: a row that appears on its own would shift the indices of eighty
+    /// tests that are not about this.
     pub chrome: norte_config::UiChrome,
-    /// `[ui] status_plugins` (ADR 0137): las columnas de plugin que la barra
-    /// de estado enseña para la entrada bajo el cursor. Vacío en un `App` de
-    /// test, como el resto del cromo.
+    /// `[ui] status_plugins` (ADR 0137): the plugin columns the status bar
+    /// shows for the entry under the cursor. Empty in a test `App`, like the
+    /// rest of the chrome.
     pub status_plugins: Vec<(String, String)>,
-    /// El área del último frame (ADR 0138): mover o girar un panel resuelve
-    /// el árbol nuevo contra ella antes de quedárselo, para no esconder un
-    /// listado. `None` antes del primero: no saber no es saber que no.
-    pub ultimo_frame: Option<ratatui::layout::Rect>,
-    /// Los volúmenes del host, cacheados para el pie de cada panel (spec
-    /// 2026-09-10). Los pide el bucle cuando [`Self::volumes_stale`] lo
-    /// dice —al aterrizar un listado y al refrescar—, nunca un frame:
-    /// `host.volumes` monta y consulta espacio en cada filesystem.
+    /// The last frame's area (ADR 0138): moving or rotating a panel resolves
+    /// the new tree against it before keeping it, so as not to hide a
+    /// listing. `None` before the first one: not knowing is not the same as
+    /// knowing there is none.
+    pub last_frame: Option<ratatui::layout::Rect>,
+    /// The host's volumes, cached for each panel's footer (spec 2026-09-10).
+    /// Requested by the loop when [`Self::volumes_stale`] says so —on landing
+    /// a listing and on refresh— never on a frame: `host.volumes` mounts and
+    /// queries space on every filesystem.
     pub volumes: Vec<norte_proto::methods::Volume>,
-    /// Hay que volver a pedir [`Self::volumes`].
+    /// [`Self::volumes`] has to be requested again.
     pub volumes_stale: bool,
-    /// La fila `..` está encendida (`[ui] parent_entry`).
+    /// The `..` row is switched on (`[ui] parent_entry`).
     ///
-    /// Se guarda aquí además de en cada pane porque un pane NUEVO —una
-    /// pestaña, un hueco de una disposición— tiene que nacer con la misma
-    /// respuesta que los demás.
+    /// Stored here as well as in each pane because a NEW pane —a tab, a slot
+    /// from a layout— has to be born with the same answer as the others.
     pub parent_row: bool,
-    /// El perfil activo, o `None` si no hay ninguno.
+    /// The active profile, or `None` if there is none.
     ///
-    /// Espejo en memoria de `SessionBody.active`. Se guarda como `OsString`
-    /// —no como el `String` del cuerpo— porque es lo que se le pasa al
-    /// resolutor de capas, y ahí es un nombre de directorio (D4).
+    /// An in-memory mirror of `SessionBody.active`. Stored as an `OsString`
+    /// —not the body's `String`— because that is what gets passed to the
+    /// layer resolver, and there it is a directory name (D4).
     pub active_profile: Option<std::ffi::OsString>,
-    /// Un cambio de perfil pedido y todavía sin hacer.
+    /// A requested profile switch, not yet done.
     ///
-    /// Lo pone `dispatch` y lo drena el run loop, como el resto de lo que un
-    /// comando pide y no puede ejecutar él mismo: cambiar de perfil recarga
-    /// capas y relista paneles, que es I/O, y `dispatch` ya devuelve un
-    /// [`crate::navigate::Cd`] — meter un segundo canal de salida en su firma
-    /// tocaría a todos sus llamantes para servir a tres brazos.
+    /// Set by `dispatch` and drained by the run loop, like the rest of what a
+    /// command requests and cannot execute itself: switching profile reloads
+    /// layers and re-lists panes, which is I/O, and `dispatch` already
+    /// returns a [`crate::navigate::Cd`] — adding a second output channel to
+    /// its signature would touch every caller to serve three arms.
     pub pending_profile: Option<std::ffi::OsString>,
-    /// El sidebar necesita que le vuelvan a pedir las unidades.
+    /// The sidebar needs the drives requested again.
     ///
-    /// Mismo patrón que [`Self::pending_profile`] y por lo mismo: `host.volumes`
-    /// es I/O y `App` no tiene backend. Lo enciende TODO lo que hace aparecer
-    /// la sección —abrir el sidebar, desplegarla, montar una disposición que
-    /// ya lo trae— y lo drena el run loop una vez por vuelta.
+    /// Same pattern as [`Self::pending_profile`] and for the same reason:
+    /// `host.volumes` is I/O and `App` has no backend. Switched on by
+    /// EVERYTHING that makes the section appear —opening the sidebar,
+    /// unfolding it, mounting a layout that already carries it— and drained
+    /// by the run loop once per turn.
     ///
-    /// Antes cada sitio pedía los volúmenes por su cuenta, y por eso faltaban
-    /// justo en los que nadie recordó: arrancar con `full`, cambiar de perfil,
-    /// abrir el sidebar desde dentro de otro panel. Una bandera y un drenaje
-    /// es un sitio donde equivocarse en vez de cinco.
+    /// Before, every site requested the volumes on its own, and that is why
+    /// they were missing exactly where nobody remembered: starting with
+    /// `full`, switching profile, opening the sidebar from inside another
+    /// panel. One flag and one drain is one place to get it wrong instead of
+    /// five.
     pub places_wants_drives: bool,
-    /// El selector de conexiones (#140), si está abierto.
+    /// The connections selector (#140), if open.
     pub connections_picker: Option<norte_frontend::connections_picker::ConnectionsPicker>,
-    /// El shell del panel de terminal (#362), si hay uno vivo.
+    /// The terminal panel's shell (#362), if one is alive.
     ///
-    /// Vive AQUÍ y no en el hueco porque el kind es `multi: false`: hay uno, y
-    /// sobrevive a que el panel se oculte y se vuelva a abrir. Lo que lo mata
-    /// es cerrar el hueco (`layout.close-slot`) o salir de norte.
+    /// Lives HERE and not in the slot because the kind is `multi: false`:
+    /// there is one, and it survives the panel being hidden and reopened.
+    /// What kills it is closing the slot (`layout.close-slot`) or quitting
+    /// norte.
     pub terminal: Option<crate::termpanel::TermPanel>,
-    /// El estado del panel de registro: qué nivel se enseña y qué se filtra.
+    /// The log panel's state: which level is shown and what is filtered.
     pub log_panel: norte_frontend::logpanel::LogPanel,
-    /// El filtro de texto del registro MIENTRAS se teclea.
+    /// The log's text filter WHILE it is being typed.
     ///
-    /// Aparte del filtro ya aplicado (`log_panel.filter()`) porque son dos
-    /// cosas: lo que se está escribiendo y lo que está filtrando. Sin la
-    /// separación, cada letra re-filtraría la lista y el lector vería la
-    /// pantalla saltar bajo el cursor mientras escribe.
+    /// Separate from the already-applied filter (`log_panel.filter()`)
+    /// because they are two things: what is being typed and what is
+    /// filtering. Without the split, every letter would re-filter the list
+    /// and the reader would see the screen jump under the cursor while
+    /// typing.
     pub log_filter_input: Option<String>,
-    /// El anillo del que lee ese panel.
+    /// The ring that panel reads from.
     ///
-    /// `Option` porque el subscriber lo instala `main`, y los tests construyen
-    /// `App` sin él: un panel sin anillo se pinta vacío diciendo que no hay
-    /// registro instalado, que es la verdad, y no se cae.
+    /// `Option` because the subscriber is installed by `main`, and the tests
+    /// build `App` without it: a panel with no ring paints empty saying there
+    /// is no log installed, which is the truth, and does not crash.
     pub log_ring: Option<norte_config::logring::LogRing>,
-    /// La mitad REMOTA de ese panel: lo que el daemon lleva contado (#328).
+    /// The REMOTE half of that panel: what the daemon has counted (#328).
     ///
-    /// Con `--socket` el anillo de arriba solo tiene las líneas de esta
-    /// terminal, y los providers, el journal, la política y el motivo por el
-    /// que una conexión falló están en el otro proceso. La petición en vuelo
-    /// no vive aquí sino en `InFlight`, que es quien habla con el backend.
-    pub log_remote: crate::logview::RegistroRemoto,
-    /// Lo que el lector está esperando ahora mismo, si algo (#323).
+    /// With `--socket` the ring above only has this terminal's own lines, and
+    /// the providers, the journal, the policy and the reason a connection
+    /// failed are in the other process. The in-flight request does not live
+    /// here but in `InFlight`, which is the one that talks to the backend.
+    pub log_remote: crate::logview::LogRemote,
+    /// What the reader is waiting on right now, if anything (#323).
     ///
-    /// Lo pone y lo quita quien espera, y solo dura la espera: un `Busy` que
-    /// sobrevive a su trabajo es exactamente el spinner que no avanza nunca.
-    /// No se pinta hasta cruzar el umbral de [`norte_frontend::busy`], así que
-    /// una navegación local —la inmensa mayoría— no llega a enseñar nada.
+    /// Set and cleared by whoever is waiting, and lasts only as long as the
+    /// wait: a `Busy` that survives its own work is exactly the spinner that
+    /// never advances. Not painted until it crosses
+    /// [`norte_frontend::busy`]'s threshold, so a local navigation —the vast
+    /// majority— never gets to show anything.
     pub busy: Option<norte_frontend::busy::Busy>,
-    /// Overlay del picker de columnas (#108 7a): mismo patrón que
-    /// `theme_picker` — un Option en App, NO una variante de Modal (Modal es
-    /// confirmación; esto es lista con cursor). El modelo vive en
-    /// norte-frontend (`ColumnsPicker`, regla 7).
+    /// Columns picker overlay (#108 7a): same pattern as `theme_picker` — an
+    /// Option on App, NOT a Modal variant (Modal is confirmation; this is a
+    /// list with a cursor). The model lives in norte-frontend
+    /// (`ColumnsPicker`, rule 7).
     pub columns_picker: Option<norte_frontend::columns_picker::ColumnsPicker>,
-    /// Gestor de extensiones abierto (overlay del catálogo, M4-P3): None =
-    /// cerrado.
+    /// Open extension manager (catalogue overlay, M4-P3): None = closed.
     pub extensions: Option<ExtensionManager>,
-    /// TOFU Lua pendiente (M4, [`Modal::TrustLuaInit`]): path CANÓNICO del
-    /// `init.lua` de proyecto + los BYTES leídos una sola vez. Al resolver
-    /// el modal se registra la decisión y, si se aprueba, se evalúan ESTOS
-    /// bytes — jamás se relee el disco entre el check y el eval
+    /// Pending Lua TOFU (M4, [`Modal::TrustLuaInit`]): the project
+    /// `init.lua`'s CANONICAL path + the BYTES read exactly once. Resolving
+    /// the modal records the decision and, if approved, evaluates THESE
+    /// bytes — disk is never re-read between the check and the eval
     /// (anti-TOCTOU).
     pub lua_pending_trust: Option<(std::path::PathBuf, Vec<u8>)>,
-    /// Salida del hook `norte.ui.statusbar` del `init.lua` activo (M4 Lua),
-    /// YA saneada por el host (`detail_for_bar`). `Some` sustituye la línea
-    /// default de la barra del pane con foco; `None` = barra normal.
+    /// Output of the active `init.lua`'s `norte.ui.statusbar` hook (M4 Lua),
+    /// ALREADY sanitized by the host (`detail_for_bar`). `Some` replaces the
+    /// focused pane's default bar line; `None` = the normal bar.
     pub lua_status: Option<String>,
     /// #44: remote sessions degraded to plaintext, BY SCHEME.
     ///
@@ -900,350 +917,360 @@ pub struct App {
     /// Private: read through [`Self::degraded_for`] /
     /// [`Self::connection_banner`], written through [`Self::note_degraded`].
     degraded: norte_frontend::banners::DegradedSet,
-    /// #177: esta sesión NO está registrando sus mutaciones en el journal.
+    /// #177: this session is NOT recording its mutations to the journal.
     ///
-    /// El brazo embebido abre el journal del directorio de estado en su primera
-    /// mutación, y si lo tiene otro proceso (un daemon vivo, otra sesión que ya
-    /// mutó) esta sigue adelante SIN registro: nada de lo que se copie, mueva o
-    /// borre a partir de ahí se podrá deshacer ni auditar.
+    /// The embedded arm opens the state directory's journal on its first
+    /// mutation, and if another process already has it (a live daemon,
+    /// another session that already mutated) this one carries on WITHOUT
+    /// recording: nothing that gets copied, moved or deleted from then on
+    /// can be undone or audited.
     ///
-    /// Persistente, y por el mismo motivo que `degraded`: llega UNA vez, en
-    /// mitad de una operación que el usuario acaba de lanzar con el teclado, y
-    /// `app.message` lo borra la siguiente tecla — hay 136 sitios que escriben
-    /// ese campo. Un aviso que dura hasta el siguiente `↓` no es un indicador
-    /// de seguridad.
+    /// Persistent, for the same reason as `degraded`: it arrives ONCE, in the
+    /// middle of an operation the user just launched from the keyboard, and
+    /// `app.message` is cleared by the next key — there are 136 sites that
+    /// write that field. A warning that lasts until the next `↓` is not a
+    /// security indicator.
     ///
-    /// No se limpia nunca: la decisión de esta sesión se toma una vez y no se
-    /// revisa (ver `norte_core::embedded`), así que mientras la sesión viva la
-    /// frase sigue siendo cierta. Si algún día se reintenta la apertura, esto
-    /// necesita el evento de recuperación ANTES que el reintento.
+    /// Never cleared: this session's decision is made once and not revisited
+    /// (see `norte_core::embedded`), so the sentence stays true for as long
+    /// as the session lives. If reopening is ever retried, this needs the
+    /// recovery event BEFORE the retry.
     ///
-    /// Se retiene el valor ESTRUCTURADO y no un `bool`, por el mismo criterio
-    /// que `degraded` (H3d): la frase se compone al pintarla, y el motivo sigue
-    /// disponible para quien lo necesite (una página de ayuda, un futuro
-    /// detalle en la barra).
+    /// The STRUCTURED value is kept rather than a `bool`, by the same
+    /// criterion as `degraded` (H3d): the sentence is composed when painted,
+    /// and the reason stays available to whoever needs it (a help page, a
+    /// future detail in the bar).
     ///
-    /// Privado: se lee por [`Self::journal_banner`] y se escribe por
+    /// Private: read through [`Self::journal_banner`] and written through
     /// [`Self::note_no_journal`].
     no_journal: Option<JournalIndicator>,
-    /// Historial de directorios por pane (spec 2026-07-18, `Alt+↓`): mismo
-    /// índice que `panes`. Vive en `App` y no en `Pane` (el historial no es
-    /// estado de render): cada cd EXITOSO empuja el dir anterior (main.rs).
+    /// Per-pane directory history (spec 2026-07-18, `Alt+↓`): same index as
+    /// `panes`. Lives on `App` and not on `Pane` (the history is not render
+    /// state): every SUCCESSFUL cd pushes the previous dir (main.rs).
     pub history: crate::panel::Histories,
-    /// Copia de la hotlist de `LoadedConfig` (clonada en arranque y en cada
-    /// hot-reload OK): la fuente para el popup `Ctrl+D`. Los adds/removes
-    /// SOLO la tocan tras persistir con éxito (consistencia con disco).
+    /// Copy of `LoadedConfig`'s hotlist (cloned at startup and on every OK
+    /// hot reload): the source for the `Ctrl+D` popup. Adds/removes only
+    /// touch it after a successful persist (consistency with disk).
     pub hotlist: Vec<crate::config::HotlistItem>,
-    /// Popup de navegación abierto (historial/hotlist): None = cerrado.
+    /// Open navigation popup (history/hotlist): None = closed.
     pub nav_popup: Option<NavPopup>,
-    /// «Ir a cualquier sitio» abierto (fase 6 del programa WOW): `None` =
-    /// cerrado. El modelo es de `norte-frontend`; de dónde salen sus filas
-    /// y qué significa confirmarlas, de [`crate::goto`].
+    /// "Go to anywhere" open (WOW program phase 6): `None` = closed. The
+    /// model belongs to `norte-frontend`; where its rows come from and what
+    /// confirming them means comes from [`crate::goto`].
     pub goto: Option<norte_frontend::goto::Goto>,
-    /// Diálogo de búsqueda viva abierto (`Alt+F7`, liveSearch T6): None =
-    /// cerrado. Captura imprimibles como el `name_input` del popup de nav.
+    /// Open live-search dialog (`Alt+F7`, liveSearch T6): None = closed.
+    /// Captures printables like the nav popup's `name_input`.
     pub search_dialog: Option<SearchDialog>,
-    /// Panel de diferencias abierto (`Shift+F2`,
-    /// 2026-08-11-directory-comparison.md): `None` = cerrado.
+    /// Open compare panel (`Shift+F2`,
+    /// 2026-08-11-directory-comparison.md): `None` = closed.
     ///
-    /// Un overlay (`Option` en `App`) y NO un modo del pane, a diferencia de
-    /// la búsqueda viva: una fila de comparación tiene DOS caras y un
-    /// veredicto entre ellas, así que no cabe en la columna de un pane ni es
-    /// una `Entry` que `extend_listing` pueda tragar. Ocupa el sitio de los
-    /// dos panes mientras está abierto, que es lo que un diff es.
+    /// An overlay (`Option` on `App`) and NOT a pane mode, unlike live
+    /// search: a compare row has TWO sides and a verdict between them, so it
+    /// does not fit in a pane's column nor is it an `Entry` `extend_listing`
+    /// can swallow. It takes the place of both panes while open, which is
+    /// what a diff is.
     pub compare: Option<CompareView>,
-    /// Tamaños hidratados bajo demanda para el panel de diferencias, por
-    /// `VPath` (#157).
+    /// Sizes hydrated on demand for the compare panel, by `VPath` (#157).
     ///
-    /// Solo la fila SELECCIONADA se sondea, nunca una ventana: a diferencia
-    /// del pane normal (radio de filas, #52), `list_offset` ya mete la fila
-    /// seleccionada dentro del área pintada en cuanto el panel de
-    /// diferencias es lo que se está pintando, así que "en pantalla" es casi
-    /// una tautología aquí — sondear solo esa fila cubre exactamente el caso
-    /// que el issue señala: un huérfano `OnlyLeft`/`OnlyRight` sin tamaño es
-    /// la fila que más lo pide, porque es la que decide si se copia.
+    /// Only the SELECTED row is probed, never a window: unlike the normal
+    /// pane (row radius, #52), `list_offset` already puts the selected row
+    /// inside the painted area as soon as the compare panel is what is being
+    /// painted, so "on screen" is almost a tautology here — probing only that
+    /// row covers exactly the case the issue points at: an orphan
+    /// `OnlyLeft`/`OnlyRight` with no size is the row that needs it most,
+    /// because it is the one that decides whether it gets copied.
     ///
-    /// Vive en la TUI y no en `ComparePane` (`norte-frontend`) A PROPÓSITO:
-    /// es una caché de PRESENTACIÓN, nunca viaja por el wire y ningún otro
-    /// frontend la necesita, y `ComparePane` no tiene hoy ninguna vía de
-    /// mutar una fila ya llegada — sus filas no cambian nunca tras `extend`
-    /// (ver su rustdoc: "Rows only ever grow"). Guardarlo aquí y pintarlo
-    /// como una superposición en `ui::draw_compare` evita necesitar esa vía.
+    /// Lives in the TUI and not in `ComparePane` (`norte-frontend`) ON
+    /// PURPOSE: it is a PRESENTATION cache, never travels over the wire and
+    /// no other frontend needs it, and `ComparePane` today has no way to
+    /// mutate a row that already arrived — its rows never change after
+    /// `extend` (see its rustdoc: "Rows only ever grow"). Storing it here and
+    /// painting it as an overlay in `ui::draw_compare` avoids needing that
+    /// path.
     pub compare_size_hints: std::collections::HashMap<VPath, u64>,
-    /// Paths YA sondeados para [`Self::compare_size_hints`], acierto o
-    /// fallo, para no reintentar un stat que falló en cada frame — mismo
-    /// criterio que `last_probed` para el pane normal. Se vacía cuando
-    /// `launch_compare` abre una comparación nueva, nunca durante una: las
-    /// filas de una comparación en curso no cambian bajo los pies (ver la
-    /// nota de [`Self::compare_size_hints`]).
+    /// Paths ALREADY probed for [`Self::compare_size_hints`], hit or miss,
+    /// so as not to retry a stat that failed on every frame — same criterion
+    /// as `last_probed` for the normal pane. Cleared when `launch_compare`
+    /// opens a new comparison, never during one: the rows of a comparison in
+    /// progress do not change under your feet (see [`Self::compare_size_hints`]'s
+    /// note).
     pub compare_size_probed: std::collections::HashSet<VPath>,
-    /// Qué comparación es la de esas dos ([`Self::begin_compare_generation`],
-    /// #198). La sonda vive en el run loop y `launch_compare` no la recibe,
-    /// así que un resultado en vuelo cuando empieza otra comparación llegaría
-    /// a las tablas recién vaciadas de la SIGUIENTE. Lo que impide eso es que
-    /// el resultado traiga la generación con la que se pidió.
+    /// Which comparison those two belong to
+    /// ([`Self::begin_compare_generation`], #198). The probe lives in the run
+    /// loop and `launch_compare` does not receive it, so a result in flight
+    /// when another comparison starts would land in the NEXT one's
+    /// just-cleared tables. What prevents that is the result carrying the
+    /// generation it was requested with.
     compare_generation: u64,
-    /// Lo que hay que preguntarle al destino y el run loop aún no ha
-    /// preguntado (#149, #164): `open_transfer` sabe QUÉ se va a mover, y
-    /// preguntar por los volúmenes y las capacidades es I/O, que es del run
-    /// loop. Mismo reparto que `pending_compare`.
+    /// What has to be asked of the destination and the run loop has not
+    /// asked yet (#149, #164): `open_transfer` knows WHAT is going to move,
+    /// and asking about volumes and capabilities is I/O, which belongs to the
+    /// run loop. Same split as `pending_compare`.
     pub pending_dest_check: Option<DestCheck>,
-    /// Params de `fs.compare` que el despacho resolvió y el run loop aún no
-    /// ha lanzado (`Shift+F2`). Mismo reparto que [`Self::pending_open`] y
-    /// [`Self::pending_shell`]: `dispatch` decide QUÉ, el run loop —dueño del
-    /// canal y de la Task— lo hace.
+    /// `fs.compare` params dispatch resolved and the run loop has not
+    /// launched yet (`Shift+F2`). Same split as [`Self::pending_open`] and
+    /// [`Self::pending_shell`]: `dispatch` decides WHAT, the run loop —owner
+    /// of the channel and the Task— does it.
     pub pending_compare: Option<norte_proto::methods::FsCompareParams>,
-    /// Lote de sumas que el despacho resolvió y el run loop aún no ha lanzado
-    /// (#311). Mismo reparto que [`Self::pending_compare`]: leer el fichero de
-    /// sumas y esperar el informe es I/O, y eso es del run loop.
+    /// Checksum batch dispatch resolved and the run loop has not launched
+    /// yet (#311). Same split as [`Self::pending_compare`]: reading the
+    /// checksum file and waiting for the report is I/O, and that belongs to
+    /// the run loop.
     pub pending_checksum: Option<ChecksumRequest>,
-    /// `true` cuando el despacho pidió un plan de ORGANIZAR al modelo (fase
-    /// 8) y el run loop aún no lo ha lanzado. Mismo reparto que
-    /// [`Self::pending_checksum`]: el despacho decide QUÉ, el run loop —dueño
-    /// de las peticiones en vuelo— lo pide.
+    /// `true` when dispatch asked the model for an ORGANIZE plan (phase 8)
+    /// and the run loop has not launched it yet. Same split as
+    /// [`Self::pending_checksum`]: dispatch decides WHAT, the run loop —owner
+    /// of the in-flight requests— asks for it.
     ///
-    /// Un booleano y no unos params porque no hay nada que elegir: el
-    /// operando es el directorio con foco, entero. El camino del PLUGIN no
-    /// pasa por aquí — la paleta ya despacha con `work` en la mano.
+    /// A boolean and not some params because there is nothing to choose: the
+    /// operand is the focused directory, whole. The PLUGIN path does not go
+    /// through here — the palette already dispatches with `work` in hand.
     pub pending_organize: bool,
-    /// Panel de sincronización abierto (`Ctrl+Y`, o `s`/`m` dentro del panel
-    /// de diferencias): `None` = cerrado. Se pinta POR ENCIMA del de
-    /// diferencias, que sigue vivo detrás con sus marcas.
+    /// Open sync panel (`Ctrl+Y`, or `s`/`m` inside the compare panel):
+    /// `None` = closed. Painted OVER the compare one, which stays alive
+    /// behind it with its marks.
     pub sync: Option<SyncView>,
-    /// Params de `sync.plan` resueltos y aún sin lanzar. Mismo reparto que
+    /// Resolved `sync.plan` params, not launched yet. Same split as
     /// [`Self::pending_compare`].
     pub pending_sync: Option<norte_proto::methods::SyncPlanParams>,
-    /// `plan_hash` que el lector aprobó y el run loop aún no ha aplicado.
+    /// The `plan_hash` the reader approved and the run loop has not applied
+    /// yet.
     ///
-    /// Es lo ÚNICO que viaja: `sync.apply` no lleva rutas ni modo, así que no
-    /// hay forma de que se ejecute algo distinto de lo que se enseñó (ADR
-    /// 0049). Un `Box` porque es el mayor de los `pending_*` con diferencia y
-    /// clippy mide el `App` entero.
+    /// It is the ONLY thing that travels: `sync.apply` carries no paths or
+    /// mode, so there is no way to run something other than what was shown
+    /// (ADR 0049). A `Box` because it is by far the largest of the
+    /// `pending_*` fields and clippy measures the whole `App`.
     pub pending_sync_apply: Option<Box<norte_proto::methods::PlanHash>>,
-    /// A dónde llevar el panel que acaba de desconectar (#140).
+    /// Where to take the panel that just disconnected (#140).
     ///
-    /// La RUTA y no una bandera, por dos razones: el bucle no tiene que
-    /// adivinar a dónde —lo decide quien desconectó— y `App` no engorda su
-    /// cuenta de `bool`s, que es un lint de este repo y una señal de que el
-    /// estado se estaba volviendo una bolsa de banderitas.
+    /// The PATH and not a flag, for two reasons: the loop does not have to
+    /// guess where —whoever disconnected decides it— and `App` does not
+    /// grow its `bool` count, which is a lint in this repo and a sign that
+    /// the state was turning into a bag of little flags.
     pub pending_disconnect_dest: Option<VPath>,
-    /// El fichero que `pane.edit-new` mandó crear y el editor abrirá CUANDO
-    /// exista (#290), con el id de la task que lo está creando.
+    /// The file `pane.edit-new` had created and the editor will open WHEN it
+    /// exists (#290), with the id of the task creating it.
     ///
-    /// Abrirlo al encolar sería abrir algo que todavía no está en el disco —y
-    /// que puede no llegar a estarlo: si la política deniega la creación, el
-    /// editor lo crearía él, que es justo lo que esta tecla dejó de hacer—.
-    /// El id es lo que distingue ESTA creación de cualquier otra task que
-    /// termine mientras tanto.
+    /// Opening it as soon as it is queued would be opening something not yet
+    /// on disk —and that may never get there: if policy denies the creation,
+    /// the editor would create it itself, which is exactly what this key
+    /// stopped doing. The id is what tells THIS creation apart from any other
+    /// task that finishes in the meantime.
     pub pending_edit_open: Option<(norte_proto::TaskId, VPath)>,
-    /// Reinterpretación de nombres (#57) del lado ORIGEN, congelada junto con
-    /// [`Self::pending_sync`] y no cuando el run loop abre el panel: entre una
-    /// cosa y la otra el lector puede haber pulsado `Alt+E`, y un plan que se
-    /// pintase con otra reinterpretación de la que se pidió enseñaría
-    /// `????.txt` donde el origen tenía un nombre CP1251.
+    /// Name reinterpretation (#57) of the SOURCE side, frozen together with
+    /// [`Self::pending_sync`] and not when the run loop opens the panel:
+    /// between one thing and the other the reader may have pressed `Alt+E`,
+    /// and a plan painted with a different reinterpretation than the one
+    /// requested would show `????.txt` where the source had a CP1251 name.
     pub pending_sync_encoding: (
         Option<norte_encoding::NameEncoding>,
         Option<norte_encoding::NameEncoding>,
     ),
-    /// Este backend registra sus mutaciones en un journal y por tanto puede
-    /// sincronizar (`--daemon`).
+    /// This backend records its mutations to a journal and can therefore
+    /// sync (`--daemon`).
     ///
-    /// Lo fija el arranque, una vez, porque el `Backend` no cambia de brazo en
-    /// vida del proceso. Es lo que alimenta
-    /// [`norte_frontend::availability::Facts::journalled`]: sin él la hoja de
-    /// referencia ofrecería `Ctrl+Y` y el core lo rechazaría en cerrado —una
-    /// tecla muerta documentada, que es lo que #159 acaba de costar una vez.
+    /// Fixed at startup, once, because the `Backend`'s arm does not change
+    /// for the life of the process. It feeds
+    /// [`norte_frontend::availability::Facts::journalled`]: without it the
+    /// reference sheet would offer `Ctrl+Y` and the core would reject it in
+    /// closed — a documented dead key, which is what #159 just cost once.
     pub backend_journalled: bool,
-    /// Este proceso habla con el DAEMON (fase 9). Mismo trato y mismo motivo
-    /// que [`Self::backend_journalled`]: se fija al arrancar porque el brazo
-    /// del backend no cambia en vida del proceso.
+    /// This process talks to the DAEMON (phase 9). Same treatment and same
+    /// reason as [`Self::backend_journalled`]: fixed at startup because the
+    /// backend's arm does not change for the life of the process.
     ///
-    /// Es otra pregunta que `backend_journalled`, aunque hoy casi coincidan:
-    /// aquélla dice si las mutaciones se apuntan, ésta si hay un daemon con
-    /// quien COMPARTIR la sesión, que es lo que un relevo necesita.
+    /// It is a different question from `backend_journalled`, though today
+    /// they almost coincide: that one says whether mutations get recorded,
+    /// this one whether there is a daemon to SHARE the session with, which
+    /// is what a handoff needs.
     pub backend_daemon: bool,
-    /// Hay un escritorio donde abrir una ventana (fase 9). `false` por SSH.
+    /// There is a desktop to open a window on (phase 9). `false` over SSH.
     ///
-    /// Se mira una vez al arrancar: un escritorio no aparece a mitad de
-    /// sesión, y consultarlo en cada dibujo sería preguntar al entorno por
-    /// algo que no se mueve.
+    /// Checked once at startup: a desktop does not appear mid-session, and
+    /// querying it on every draw would be asking the environment about
+    /// something that does not move.
     pub has_desktop: bool,
-    /// El RELEVO está hecho: la pantalla está escrita y la sesión, soltada
-    /// (fase 9). El bucle lanza la ventana y se va.
+    /// The HANDOFF is done: the screen is written and the session, released
+    /// (phase 9). The loop launches the window and leaves.
     ///
-    /// Una bandera y no una acción directa porque quien se entera es el
-    /// drenaje de avisos del escritor de sesión, y lanzar un proceso y salir
-    /// no es cosa suya: el mismo reparto que `pending_open` o
-    /// `pending_shell` — uno decide QUÉ, el bucle lo hace.
+    /// A flag and not a direct action because who finds out is the session
+    /// writer's notice drain, and launching a process and quitting is not its
+    /// business: the same split as `pending_open` or `pending_shell` — one
+    /// decides WHAT, the loop does it.
     pub handoff_ready: bool,
-    /// El despacho pidió un RELEVO y el run loop aún no lo ha lanzado (fase
-    /// 9). Mismo reparto que [`Self::pending_organize`]: el despacho decide
-    /// QUÉ, el bucle —dueño del escritor de sesión— lo pide.
+    /// Dispatch requested a HANDOFF and the run loop has not launched it yet
+    /// (phase 9). Same split as [`Self::pending_organize`]: dispatch decides
+    /// WHAT, the loop —owner of the session writer— asks for it.
     pub pending_handoff: bool,
-    /// Los listados tienen que OLVIDAR lo que los plugins dijeron y volver a
-    /// pedirlo: lo levanta cualquier cambio de gobierno o de ajustes de una
-    /// extensión (apagar el decorador de iconos dejaba los iconos hasta el
-    /// siguiente `cd`), y lo drena el bucle de eventos, que es quien tiene
-    /// las tandas en vuelo. Una bandera y no una llamada porque el gestor no
-    /// ve el bucle, igual que la barra lateral con lo que necesita backend.
+    /// The listings have to FORGET what the plugins said and ask again:
+    /// raised by any governance or settings change of an extension (turning
+    /// off the icon decorator left the icons up until the next `cd`), and
+    /// drained by the event loop, which is the one with the in-flight
+    /// batches. A flag and not a call because the manager cannot see the
+    /// loop, same as the sidebar with whatever it needs the backend for.
     pub redecorate: bool,
-    /// Openers declarativos fusionados (#28): clonados en arranque y en cada
-    /// hot-reload OK. Fuente de `pane.open` (F4). Vacío = sin openers.
+    /// Merged declarative openers (#28): cloned at startup and on every OK
+    /// hot reload. Source for `pane.open` (F4). Empty = no openers.
     pub openers: norte_frontend::openers::OpenersConfig,
-    /// El editor de `[ui] editor`, si la configuración nombra uno.
+    /// The `[ui] editor` editor, if the configuration names one.
     ///
-    /// `None` = el de siempre: `$VISUAL`, `$EDITOR`, y el fallback POSIX. Se
-    /// copia aquí al arrancar y en cada recarga, igual que [`Self::openers`]:
-    /// un gesto no vuelve a leer configuración del disco.
+    /// `None` = the usual one: `$VISUAL`, `$EDITOR`, and the POSIX fallback.
+    /// Copied here at startup and on every reload, same as [`Self::openers`]:
+    /// a gesture does not re-read configuration from disk.
     pub editor: Option<EditorSpec>,
-    /// El comparador de `[ui] diff` (#312), si lo hay.
+    /// The `[ui] diff` comparator (#312), if there is one.
     ///
-    /// `None` = `diff -u`, que POSIX garantiza. Misma forma que
-    /// [`Self::editor`] —un argv plantilla y si abre ventana— porque es el
-    /// mismo trato: norte elige el operando, el programa elige el formato.
+    /// `None` = `diff -u`, which POSIX guarantees. Same shape as
+    /// [`Self::editor`] —a template argv and whether it opens a window—
+    /// because it is the same deal: norte chooses the operand, the program
+    /// chooses the format.
     pub diff: Option<EditorSpec>,
-    /// Comando externo resuelto por `pane.open` y pendiente de lanzar (#28).
-    /// `dispatch` lo fija tras validar; el run loop —dueño de la terminal—
-    /// lo ejecuta.
+    /// External command resolved by `pane.open` and pending launch (#28).
+    /// `dispatch` sets it after validating; the run loop —owner of the
+    /// terminal— executes it.
     pub pending_open: Option<PendingOpen>,
-    /// Suspensión resuelta por el despacho y pendiente de ejecutar (#135):
-    /// `app.terminal`, `app.toggle-panels` y el Enter de
-    /// [`Modal::CommandLine`]. Mismo reparto que [`Self::pending_open`], y
-    /// drenado en UN solo sitio del run loop (arriba del todo de la vuelta,
-    /// antes del draw) para que ningún `continue` de los que responde teclas
-    /// pueda dejarla encallada.
+    /// Suspension resolved by dispatch and pending execution (#135):
+    /// `app.terminal`, `app.toggle-panels` and the Enter of
+    /// [`Modal::CommandLine`]. Same split as [`Self::pending_open`], and
+    /// drained in ONE single place in the run loop (at the very top of the
+    /// turn, before the draw) so that none of the `continue`s that answer
+    /// keys can leave it stuck.
     pub pending_shell: Option<PendingShell>,
-    /// `app.toggle-panels` pidió el SUBSHELL (#142).
+    /// `app.toggle-panels` requested the SUBSHELL (#142).
     ///
-    /// Mismo reparto que [`Self::pending_shell`] y por lo mismo: el dueño de
-    /// la terminal —y del shell de larga vida— es el run loop, no el despacho.
-    /// Va aparte porque no es una suspensión: no se lanza nada, se le cede la
-    /// terminal a un proceso que YA existe y que sigue vivo al volver.
+    /// Same split as [`Self::pending_shell`] and for the same reason: the
+    /// owner of the terminal —and of the long-lived shell— is the run loop,
+    /// not dispatch. Kept apart because it is not a suspension: nothing gets
+    /// launched, the terminal is handed to a process that ALREADY exists and
+    /// stays alive on return.
     pub pending_subshell: bool,
-    /// El acorde que RECUPERA los paneles del subshell, PRECOMPUTADO del
-    /// keymap efectivo — mismo criterio que [`Self::dialog_hints`] y
-    /// `palette_rows`, y por lo mismo: el efectivo se muda al `Resolver`
-    /// compartido, así que lo que se derive de él se saca antes.
+    /// The chord that RESTORES the panels from the subshell, PRECOMPUTED
+    /// from the effective keymap — same criterion as [`Self::dialog_hints`]
+    /// and `palette_rows`, and for the same reason: the effective map moves
+    /// into the shared `Resolver`, so whatever is derived from it is taken
+    /// out beforehand.
     ///
-    /// `None` = el preset no ata `app.toggle-panels` a un acorde suelto, y
-    /// entonces no se cede la terminal: ver
+    /// `None` = the preset does not bind `app.toggle-panels` to a bare
+    /// chord, and then the terminal is not handed over: see
     /// [`norte_frontend::subshell::detach_chord`].
     pub subshell_chord: Option<norte_frontend::keymap::Chord>,
-    /// El acorde que SACA el teclado del panel de terminal (#362),
-    /// precomputado igual que [`Self::subshell_chord`] y por lo mismo.
+    /// The chord that TAKES the keyboard out of the terminal panel (#362),
+    /// precomputed the same way as [`Self::subshell_chord`] and for the same
+    /// reason.
     ///
-    /// Es el mismo `layout.terminal` que lo abrió, y es el ÚNICO que el panel
-    /// no le pasa al shell. `None` = el preset no lo ata a un acorde suelto, y
-    /// entonces el panel no toma las teclas en absoluto: un panel del que no
-    /// se puede salir es peor que uno que sólo se mira.
+    /// It is the same `layout.terminal` that opened it, and it is the ONLY
+    /// one the panel does not pass to the shell. `None` = the preset does not
+    /// bind it to a bare chord, and then the panel does not take the keys at
+    /// all: a panel you cannot leave is worse than one you can only look at.
     pub terminal_chord: Option<norte_frontend::keymap::Chord>,
-    /// Bytes que hay que escribirle al EMULADOR de terminal, si los hay.
+    /// Bytes that have to be written to the terminal EMULATOR, if any.
     ///
-    /// Mismo reparto que [`Self::pending_shell`]: `dispatch` decide QUÉ y el
-    /// bucle —dueño de la salida— lo escribe. Hoy solo lo usa OSC 52, que es
-    /// la única forma de copiar al portapapeles por SSH: quien recibe la
-    /// secuencia es el terminal que el humano mira, no la máquina donde
-    /// corre norte (#286).
+    /// Same split as [`Self::pending_shell`]: `dispatch` decides WHAT and
+    /// the loop —owner of the output— writes it. Today only OSC 52 uses it,
+    /// which is the only way to copy to the clipboard over SSH: whoever
+    /// receives the sequence is the terminal the human is looking at, not the
+    /// machine norte runs on (#286).
     pub pending_osc52: Option<Vec<u8>>,
-    /// Hints de pie de página de los overlays de diálogo (H1 T3, #24),
-    /// PRECOMPUTADOS del efectivo `dialog` vigente — igual que `help_lines`
-    /// en `main.rs`, se reconstruyen en el arranque y en cada hot-reload OK
-    /// (`main::build_keymaps` + `DialogHints::build`), ANTES de que el
-    /// efectivo se mueva al `Resolver` compartido. `ui::draw_*` los lee en
-    /// vez de una clave Fluent estática.
+    /// Footer hints for the dialog overlays (H1 T3, #24), PRECOMPUTED from
+    /// the current effective `dialog` map — same as `help_lines` in
+    /// `main.rs`, rebuilt at startup and on every OK hot reload
+    /// (`main::build_keymaps` + `DialogHints::build`), BEFORE the effective
+    /// map moves into the shared `Resolver`. `ui::draw_*` reads them instead
+    /// of a static Fluent key.
     pub dialog_hints: crate::hints::DialogHints,
-    /// Las celdas de la barra de teclas por pantalla (spec 2026-09-10),
-    /// PRECOMPUTADAS de los tres efectivos como `dialog_hints`: en el
-    /// arranque y en cada hot-reload OK, antes de que se muden al
-    /// `Resolver`. Cada frame elige cuál pintar según qué pantalla tiene
-    /// las teclas.
+    /// The per-screen key bar cells (spec 2026-09-10), PRECOMPUTED from the
+    /// three effective maps like `dialog_hints`: at startup and on every OK
+    /// hot reload, before they move into the `Resolver`. Every frame picks
+    /// which one to paint based on which screen has the keys.
     pub key_bars: KeyBars,
-    /// El acorde que el preset PUESTO ata a `layout.split-h`, precomputado
-    /// como las barras y por lo mismo: al cerrar un panel hay que decir con
-    /// qué se vuelve a partir, y el resolver no llega hasta ahí. `None` = el
-    /// preset no lo ata y se nombra el menú.
+    /// The chord the CURRENT preset binds to `layout.split-h`, precomputed
+    /// like the bars and for the same reason: closing a panel has to say
+    /// what it is re-split with, and the resolver does not reach that far.
+    /// `None` = the preset does not bind it and the menu is named instead.
     pub chord_split_h: Option<String>,
-    /// Una tecla que el ratón pidió sintetizar: un clic en la barra de
-    /// teclas ES pulsar la tecla, y el bucle la despacha por `on_key`, que
-    /// es el único camino con los tres resolvers a mano.
+    /// A key the mouse asked to synthesize: a click on the key bar IS
+    /// pressing the key, and the loop dispatches it through `on_key`, which
+    /// is the only path with all three resolvers at hand.
     pub pending_key: Option<crossterm::event::KeyEvent>,
-    /// Versión y revisión del binario (`norte_frontend::version::VERSION_LINE`),
-    /// pintadas en el marco de la ayuda. Vacía = no se pinta: es lo que
-    /// reciben los tests, cuyos snapshots no pueden depender del commit.
+    /// Binary version and revision (`norte_frontend::version::VERSION_LINE`),
+    /// painted in the help frame. Empty = not painted: what the tests
+    /// receive, whose snapshots cannot depend on the commit.
     pub version_line: &'static str,
     /// Resolver of the help's live marks (H3b): rebuilt with the effective
     /// keymaps on every hot reload, exactly like `dialog_hints` and
     /// `help_lines` — a rebind must change the prose, and it does because the
     /// page is drawn through this.
     pub help_chords: std::sync::Arc<crate::help::TuiChords>,
-    /// Command palette abierta (`Ctrl+P`/vim `:`, H1 T4): `None` = cerrada.
+    /// Open command palette (`Ctrl+P`/vim `:`, H1 T4): `None` = closed.
     pub palette: Option<Palette>,
-    /// Las últimas claves lanzadas desde la paleta, la más reciente primero
-    /// (spec 2026-09-10). Viven en la sesión de UI: se leen al restaurarla y
-    /// se escriben con ella.
+    /// The last commands launched from the palette, most recent first (spec
+    /// 2026-09-10). Live in the UI session: read on restore and written back
+    /// with it.
     pub palette_recent: Vec<String>,
-    /// Los directorios a los que más se va, de la sesión entera (spec
-    /// 2026-09-15 D6). Como `palette_recent`: se leen al restaurar la sesión
-    /// y se escriben con ella.
+    /// The directories visited most, for the whole session (spec 2026-09-15
+    /// D6). Like `palette_recent`: read on session restore and written back
+    /// with it.
     pub popular: norte_frontend::history::Popular,
-    /// Filas de la palette PRECOMPUTADAS del keymap vigente
-    /// ([`crate::palette::build_rows`]) — igual criterio que `help_lines`/
-    /// `dialog_hints`: se reconstruyen en el arranque y en cada hot-reload
-    /// OK, ANTES de que los efectivos se muevan al `Resolver`. Abrir la
-    /// palette (`dispatch`, brazo `app.palette`) solo clona esta snapshot.
+    /// Palette rows PRECOMPUTED from the current keymap
+    /// ([`crate::palette::build_rows`]) — same criterion as `help_lines`/
+    /// `dialog_hints`: rebuilt at startup and on every OK hot reload, BEFORE
+    /// the effective maps move into the `Resolver`. Opening the palette
+    /// (`dispatch`, `app.palette` arm) only clones this snapshot.
     pub palette_rows: Vec<crate::palette::Row>,
-    /// El asistente de primer arranque (spec 2026-09-10), mientras está
-    /// abierto. Es un overlay más: se queda las teclas, y el modelo es el
-    /// compartido con la ventana.
+    /// The first-run wizard (spec 2026-09-10), while open. Just another
+    /// overlay: it keeps the keys, and the model is the one shared with the
+    /// window.
     pub wizard: Option<norte_frontend::wizard::Wizard>,
-    /// La pantalla de arranque (spec 2026-09-15, fase 2), mientras está
-    /// puesta. Es una CAPA, no un overlay con teclas propias: cualquier tecla
-    /// la quita, y el asistente le gana —si los dos quisieran salir, sale el
-    /// que pregunta algo—.
+    /// The splash screen (spec 2026-09-15, phase 2), while up. It is a
+    /// LAYER, not an overlay with its own keys: any key removes it, and the
+    /// wizard wins over it —if both wanted to leave, the one asking something
+    /// leaves—.
     pub splash: Option<norte_frontend::splash::SplashView>,
-    // (la constante del plazo vive fuera del struct: ver `SPLASH_BRIEF_MS`)
-    /// Cuándo deja de tapar el splash `brief`, en el reloj del pintado
-    /// ([`App::SPLASH_BRIEF_MS`] desde que se puso). `None` = no caduca
-    /// solo (`home`), o no hay splash.
+    // (the deadline constant lives outside the struct: see `SPLASH_BRIEF_MS`)
+    /// When the `brief` splash stops covering, in the render clock
+    /// ([`App::SPLASH_BRIEF_MS`] since it was set). `None` = it does not
+    /// expire on its own (`home`), or there is no splash.
     pub splash_until_ms: Option<i64>,
-    /// El panel de procesos lo abrió el AUTOMÁTICO (`[ui] processes_panel =
-    /// "auto"`), así que el automático puede cerrarlo. Un panel que abrió el
-    /// lector no se cierra solo: lo abrió para mirarlo.
+    /// The processes panel was opened by the AUTOMATIC setting (`[ui]
+    /// processes_panel = "auto"`), so the automatic setting can close it. A
+    /// panel the reader opened does not close on its own: they opened it to
+    /// look at it.
     pub processes_auto: bool,
-    /// Qué panel de plugin tiene el teclado, cuando [`KeyOwner::Panel`] lo
-    /// dice (fase 3).
+    /// Which plugin panel has the keyboard, when [`KeyOwner::Panel`] says so
+    /// (phase 3).
     ///
-    /// `KeyOwner::Panel` no lleva el hueco dentro —llevarlo rompería las 86
-    /// comparaciones por `==` que hay contra los otros dueños—, y `multi:
-    /// false` no lo enforza nadie: dos plugins pueden aportar un panel cada
-    /// uno y una disposición guardada puede colocar los dos. Sin este campo,
-    /// «el panel» era el PRIMERO visible, así que `layout.grow` agrandaba uno
-    /// y el borde de foco lo pintaba en otro.
+    /// `KeyOwner::Panel` does not carry the slot inside —carrying it would
+    /// break the 86 `==` comparisons against the other owners— and nobody
+    /// enforces `multi: false`: two plugins can each contribute a panel and a
+    /// saved layout can place both. Without this field, "the panel" was the
+    /// FIRST one visible, so `layout.grow` would enlarge one and the focus
+    /// border would paint on another.
     ///
-    /// `None` = el primero visible, que es lo correcto cuando el teclado llegó
-    /// por el anillo y no señalando un hueco concreto.
+    /// `None` = the first one visible, which is correct when the keyboard
+    /// arrived through the ring and not by pointing at a specific slot.
     pub panel_focus: Option<norte_frontend::layout::SlotId>,
-    /// Lo que cada panel de plugin tiene vivo: su marco, su estado opaco y qué
-    /// pidió (fase 3).
+    /// What each plugin panel has alive: its frame, its opaque state and what
+    /// it requested (phase 3).
     ///
-    /// Por HUECO y no un solo campo, aunque hoy solo pueda haber un panel de
-    /// plugin visible: el estado del guest pertenece a su hueco, y con
-    /// pestañas hay más huecos vivos que visibles — igual que los historiales.
-    pub paneles: norte_frontend::layout::BySlot<crate::panelplugin::PanelRuntime>,
-    /// La fila del splash que el lector acaba de elegir con su número, hasta
-    /// que el bucle la despache. Como el resto de intenciones pendientes: la
-    /// tecla decide, y quien tiene el backend delante ejecuta.
+    /// Per SLOT and not a single field, even though today there can only be
+    /// one plugin panel visible: the guest's state belongs to its slot, and
+    /// with tabs there are more live slots than visible ones — same as the
+    /// histories.
+    pub panels: norte_frontend::layout::BySlot<crate::panelplugin::PanelRuntime>,
+    /// The splash row the reader just picked with its number, until the loop
+    /// dispatches it. Like the rest of the pending intents: the key decides,
+    /// and whoever has the backend in front executes.
     pub pending_splash_row: Option<(String, Option<String>)>,
-    /// Estado del ratón (captura aparte, que es de la terminal): la
-    /// geometría PINTADA del último frame, el gesto armado y el último
-    /// click. La geometría la devuelve el run loop tras cada `draw`
-    /// (#124): sin ella no se resuelve ningún click.
+    /// Mouse state (capture is separate, belonging to the terminal): the
+    /// last frame's PAINTED geometry, the armed gesture and the last click.
+    /// The geometry is returned by the run loop after every `draw` (#124):
+    /// without it no click resolves.
     pub mouse: crate::mouse::MouseState,
-    /// Overlay de ajustes abierto (`app.settings`, S3): `None` = cerrado.
-    /// Sus filas se reconstruyen del `cfg` VIGENTE en cada hot-reload OK
-    /// (`main::reload_config`, `Settings::refresh`) — a diferencia de
-    /// `palette`/`help`, que se CIERRAN, este overlay se queda abierto y se
-    /// refresca en su sitio (ver el doc de `Settings::refresh`).
+    /// Open settings overlay (`app.settings`, S3): `None` = closed. Its rows
+    /// are rebuilt from the CURRENT `cfg` on every OK hot reload
+    /// (`main::reload_config`, `Settings::refresh`) — unlike `palette`/`help`,
+    /// which get CLOSED, this overlay stays open and refreshes in place (see
+    /// `Settings::refresh`'s doc).
     pub settings: Option<Settings>,
     /// Shortcut editor open (K3c, `Ctrl+K` from the settings overlay):
     /// `None` = closed.
@@ -1306,11 +1333,11 @@ pub use norte_frontend::settings::{PendingWrite, SettingsEditError, SettingsStat
 pub use norte_frontend::shortcuts::ShortcutsState as Shortcuts;
 
 impl App {
-    /// App con foco en el pane izquierdo.
+    /// An App with focus on the left pane.
     #[must_use]
     #[expect(
         clippy::too_many_lines,
-        reason = "un campo por línea: los defaults del App"
+        reason = "one field per line: the App's defaults"
     )]
     pub fn new(left: Pane, right: Pane) -> Self {
         Self {
@@ -1320,18 +1347,18 @@ impl App {
             roles: norte_frontend::layout::Roles::con_active(crate::panel::SLOT_LEFT),
             key_owner: KeyOwner::Panes,
             sync_nav: false,
-            // Perezoso, como el subshell: un shell por sesión que nadie va a
-            // usar es un proceso, un pty y el `.bashrc` de alguien corriendo
-            // por si acaso.
+            // Lazy, like the subshell: a shell per session that nobody is
+            // going to use is a process, a pty and someone's `.bashrc`
+            // running just in case.
             terminal: None,
             log_panel: norte_frontend::logpanel::LogPanel::default(),
             log_filter_input: None,
             log_ring: None,
-            log_remote: crate::logview::RegistroRemoto::default(),
+            log_remote: crate::logview::LogRemote::default(),
             busy: None,
             menu: None,
-            menu_ultimo: 0,
-            // Los cuatro primeros son los del preset `orthodox`.
+            menu_last: 0,
+            // The first four are the `orthodox` preset's.
             next_slot: 5,
             render_now_ms: None,
             attr_catalogs: std::collections::HashMap::new(),
@@ -1352,11 +1379,11 @@ impl App {
             session: SessionUi::default(),
             board: crate::tasks::TaskBoard::default(),
             strip: norte_frontend::task_strip::TaskStrip::default(),
-            encolar: false,
+            enqueue: false,
             viewer: None,
             viewer_imagen: None,
-            viewer_miniatura_ajena: None,
-            viewer_modo: crate::viewer_open::Modo::Nada,
+            viewer_thumbnail_foreign: None,
+            viewer_modo: crate::viewer_open::Modo::Nothing,
             help: None,
             pending_collisions: std::collections::VecDeque::new(),
             pending_reports: std::collections::VecDeque::new(),
@@ -1373,16 +1400,16 @@ impl App {
                 ..Default::default()
             },
             status_plugins: Vec::new(),
-            ultimo_frame: None,
+            last_frame: None,
             volumes: Vec::new(),
             volumes_stale: true,
             pending_panel_command: None,
             pending_disk_map_enter: None,
             disk_map_stale: false,
             timeline_stale: false,
-            // Apagada hasta que el arranque diga: un `App` de test no lee
-            // configuración, y una fila que aparece sola cambiaría los
-            // índices de ochenta tests que no van de esto.
+            // Off until startup says otherwise: a test `App` does not read
+            // configuration, and a row that appears on its own would shift
+            // the indices of eighty tests that are not about this.
             parent_row: false,
             active_profile: None,
             pending_profile: None,
@@ -1413,9 +1440,9 @@ impl App {
             pending_disconnect_dest: None,
             pending_edit_open: None,
             pending_sync_encoding: (None, None),
-            // Fail-CLOSED: el `App` de un test no tiene backend, y ofrecer
-            // sincronizar por defecto convertiría cada test en un permiso.
-            // `main` lo enciende cuando el backend es remoto.
+            // Fail-CLOSED: a test `App` has no backend, and offering sync by
+            // default would turn every test into a grant.
+            // `main` switches it on when the backend is remote.
             backend_journalled: false,
             backend_daemon: false,
             has_desktop: false,
@@ -1446,7 +1473,7 @@ impl App {
             splash_until_ms: None,
             processes_auto: false,
             panel_focus: None,
-            paneles: norte_frontend::layout::BySlot::new(),
+            panels: norte_frontend::layout::BySlot::new(),
             pending_splash_row: None,
             mouse: crate::mouse::MouseState::default(),
             settings: None,
@@ -1457,56 +1484,56 @@ impl App {
         }
     }
 
-    /// Un listado nuevo, ya con la configuración de esta sesión puesta.
+    /// A new listing, already with this session's configuration applied.
     ///
-    /// Los huecos nacen en cuatro sitios —una pestaña, una partición, un
-    /// hueco de una disposición, una sesión restaurada— y el que se olvidara
-    /// de la fila `..` sería una mitad de la pantalla comportándose distinto
-    /// de la otra.
+    /// Slots are born in four places —a tab, a split, a layout slot, a
+    /// restored session— and forgetting the `..` row would be one half of the
+    /// screen behaving differently from the other.
     #[must_use]
-    pub fn nuevo_pane(&self, dir: VPath, entradas: Vec<norte_proto::Entry>) -> Pane {
-        let mut pane = Pane::new(dir, entradas);
+    pub fn new_pane(&self, dir: VPath, entries: Vec<norte_proto::Entry>) -> Pane {
+        let mut pane = Pane::new(dir, entries);
         pane.set_parent_row(self.parent_row);
         pane
     }
 
-    /// Un pane nuevo con el listado del pane `i`: lo que necesitan partir un
-    /// panel y abrir una pestaña.
+    /// A new pane with pane `i`'s listing: what splitting a panel and
+    /// opening a tab need.
     ///
-    /// Hereda las entradas ya listadas en vez de pedir un listado —es el MISMO
-    /// directorio, así que el panel nuevo aparece lleno en el acto y no
-    /// parpadea vacío mientras alguien vuelve a leer lo mismo—, y hereda las de
-    /// VERDAD: [`norte_frontend::PaneState::real_entries`] deja fuera la fila
-    /// `..`, que el pane nuevo se pone él. Copiando `entries()` la heredada se
-    /// quedaba de entrada normal en medio del listado, con el nombre del
-    /// directorio padre y marcable — una más por cada partición.
+    /// Inherits the already-listed entries instead of requesting a listing
+    /// —it is the SAME directory, so the new panel appears full right away
+    /// and does not flicker empty while something reads the same thing
+    /// again— and inherits the REAL ones: [`norte_frontend::PaneState::real_entries`]
+    /// leaves out the `..` row, which the new pane sets for itself. Copying
+    /// `entries()` instead left the inherited `..` as a normal, markable
+    /// entry in the middle of the listing, with the parent directory's name —
+    /// one more per split.
     ///
-    /// UNA puerta para los dos, y no tres líneas repetidas en cada uno: el
-    /// tercero que apareciera las repetiría mal.
+    /// ONE gate for both, not three repeated lines in each: the third one
+    /// that showed up would repeat them wrong.
     #[must_use]
     pub fn fork_pane(&self, i: usize) -> Pane {
         let p = &self.panes[i];
-        self.nuevo_pane(p.dir().clone(), p.real_entries().to_vec())
+        self.new_pane(p.dir().clone(), p.real_entries().to_vec())
     }
 
-    /// Mete en `id` un listado que nació FUERA de [`Self::nuevo_pane`] y le
-    /// pone la configuración de esta sesión.
+    /// Puts into `id` a listing that was born OUTSIDE [`Self::new_pane`]
+    /// and applies this session's configuration to it.
     ///
-    /// Los tres que nacen fuera son de la SESIÓN: el que `apply_session`
-    /// levanta sobre la ruta guardada, el que el arranque lista para él, y el
-    /// que `pin_start_dir` pone cuando la línea de órdenes nombra un
-    /// directorio. Los tres reponían el orden y los ocultos y ninguno la fila
-    /// `..`, así que `[ui] parent_entry = true` se apagaba solo a partir de
-    /// la primera sesión guardada — y el lector lo veía como que el TUI no
-    /// tiene fila de subir y la ventana sí.
+    /// The three that are born outside belong to the SESSION: the one
+    /// `apply_session` builds over the saved path, the one startup lists for
+    /// it, and the one `pin_start_dir` sets when the command line names a
+    /// directory. All three restored the sort and the hidden flag and none
+    /// restored the `..` row, so `[ui] parent_entry = true` would switch
+    /// itself off from the first saved session onward — and the reader read
+    /// it as the TUI having no up row while the window does.
     ///
-    /// Estampa lo de la CONFIG (la fila `..`) y repone lo de la SESIÓN (el
-    /// orden y los ocultos), en ese orden y en un solo sitio.
+    /// Stamps the CONFIG side (the `..` row) and restores the SESSION side
+    /// (the sort and the hidden flag), in that order and in one place.
     ///
-    /// Los tres llamantes lo hacían por su cuenta y en órdenes distintos, que
-    /// es cómo uno se dejó la fila; el campo que se añada mañana se dejarían
-    /// dos. `None` en `sort`/`hidden` es «este llamante no tiene nada que
-    /// reponer», no «pon el de fábrica».
+    /// The three callers used to do it on their own and in different orders,
+    /// which is how one of them left the row out; the field added tomorrow
+    /// would be left out by two. `None` in `sort`/`hidden` means "this
+    /// caller has nothing to restore", not "use the factory default".
     pub fn adoptar_pane(
         &mut self,
         id: norte_frontend::layout::SlotId,
@@ -1524,11 +1551,12 @@ impl App {
         self.panes.insert_browser(id, pane);
     }
 
-    /// Enciende o apaga la fila `..` en TODOS los panes (`[ui] parent_entry`).
+    /// Turns the `..` row on or off in ALL panes (`[ui] parent_entry`).
     ///
-    /// En todos y no solo en los visibles: un pane detrás de una pestaña
-    /// vuelve a pintarse tal y como se dejó, y una mitad de la pantalla con la
-    /// fila y otra sin ella sería la misma configuración diciendo dos cosas.
+    /// In all of them and not only the visible ones: a pane behind a tab is
+    /// painted again exactly as it was left, and one half of the screen with
+    /// the row and the other without it would be the same configuration
+    /// saying two things.
     pub fn set_parent_row(&mut self, on: bool) {
         self.parent_row = on;
         for pane in self.panes.browsers_mut() {
@@ -1536,21 +1564,21 @@ impl App {
         }
     }
 
-    /// Cierra la barra de menús, apuntando por dónde iba.
+    /// Closes the menu bar, recording where it was.
     ///
-    /// UNA puerta, y no por gusto: el menú se cierra desde cinco sitios —la
-    /// tecla, `Esc`, elegir una entrada, pulsar fuera y pulsar en la barra— y
-    /// el que se olvidara de apuntar sería el que hace que la próxima
-    /// apertura empiece por el primero sin motivo aparente.
+    /// ONE gate, and not out of taste: the menu closes from five places —the
+    /// key, `Esc`, choosing an entry, clicking outside and clicking on the
+    /// bar— and whichever one forgot to record it would be the one that
+    /// makes the next opening start from the first with no apparent reason.
     pub fn close_menu(&mut self) {
         if let Some(m) = &self.menu {
-            self.menu_ultimo = m.menu();
+            self.menu_last = m.menu();
         }
         self.menu = None;
     }
 
-    /// El comando resaltado en el menú, y el menú cerrado: lo que hacen
-    /// `Enter` y el clic sobre un elemento, por la misma puerta.
+    /// The highlighted command in the menu, and the menu closed: what
+    /// `Enter` and clicking an entry do, through the same gate.
     pub fn take_menu_choice(&mut self) -> Option<String> {
         let chosen = self
             .menu
@@ -1561,40 +1589,43 @@ impl App {
         chosen
     }
 
-    /// Abre la barra de menús, o la cierra si ya estaba: la misma tecla hace
-    /// las dos cosas, como el resto de los overlays.
+    /// Opens the menu bar, or closes it if it was already open: the same key
+    /// does both things, like the rest of the overlays.
     ///
-    /// Se reabre por donde iba —empezar siempre por el primero obliga a
-    /// recorrer la barra entera en cada gesto— y por eso pasa por
-    /// [`Self::close_menu`], que es quien lo apunta.
+    /// Reopens from where it was —always starting from the first would force
+    /// walking the whole bar on every gesture— and that is why it goes
+    /// through [`Self::close_menu`], which is the one that records it.
     pub fn toggle_menu(&mut self) {
         if self.menu.is_some() {
             self.close_menu();
         } else {
-            self.menu = Some(norte_frontend::menu::MenuState::reopen_at(self.menu_ultimo));
+            self.menu = Some(norte_frontend::menu::MenuState::reopen_at(self.menu_last));
         }
     }
 
-    /// Lo que un panel lateral con teclado NO decide: el cromo de la
-    /// aplicación. `true` = atendido aquí y el panel no tiene que mirarlo.
+    /// What a side panel with the keyboard does NOT decide: the application's
+    /// chrome. `true` = handled here and the panel does not have to look at
+    /// it.
     ///
-    /// La barra de menús no es de los listados, es de la aplicación entera, y
-    /// estando dentro del árbol, del sidebar o del panel de procesos su tecla
-    /// se moría: no figuraba en el allowlist de ninguno, así que el panel se la
-    /// comía y la pantalla se quedaba igual. Es la misma lección que ya trajo
-    /// `layout.places` a esos allowlists, y por eso vive en UN sitio: tres
-    /// paneles con su propia copia son tres sitios donde olvidarse del cuarto.
+    /// The menu bar does not belong to the listings, it belongs to the whole
+    /// application, and while the keyboard was inside the tree, the sidebar
+    /// or the processes panel its key died: it was not in any of their
+    /// allowlists, so the panel swallowed it and the screen stayed the same.
+    /// It is the same lesson `layout.places` already brought to those
+    /// allowlists, and that is why it lives in ONE place: three panels with
+    /// their own copy are three places to forget the fourth.
     pub fn panel_chrome_command(&mut self, cmd: &str) -> bool {
         match cmd {
             "app.menu" => {
                 self.toggle_menu();
                 true
             }
-            // Salir tampoco es del panel. Sin esto, `F10` y `q` morían con el
-            // teclado dentro del árbol o del sidebar —solo `Ctrl+C` salía—, y
-            // el lector cerraba la ventana del terminal creyendo que había
-            // salido: el `ntc` seguía vivo con el lock de la sesión, y cada
-            // `ntc` siguiente arrancaba suelto sin guardar nada.
+            // Quitting is not the panel's either. Without this, `F10` and
+            // `q` died with the keyboard inside the tree or the sidebar
+            // —only `Ctrl+C` got out— and the reader closed the terminal
+            // window believing they had quit: `ntc` was still alive holding
+            // the session lock, and every next `ntc` started up detached
+            // without saving anything.
             "app.quit" => {
                 self.request_quit();
                 true
@@ -1603,10 +1634,10 @@ impl App {
         }
     }
 
-    /// `app.quit` honrando `[ui] confirm_quit`: pregunta si toca, y si no,
-    /// sale. La misma decisión de tres vías que el despacho nombrado
-    /// ([`quit_needs_confirm`]); los `app.quit = true` de `Ctrl+C` siguen
-    /// siendo la salida de emergencia, inmediata y sin preguntar.
+    /// `app.quit` honoring `[ui] confirm_quit`: asks if it should, and if
+    /// not, quits. The same three-way decision as the named dispatch
+    /// ([`quit_needs_confirm`]); `Ctrl+C`'s `app.quit = true` remains the
+    /// emergency exit, immediate and without asking.
     pub fn request_quit(&mut self) {
         if quit_needs_confirm(self.confirm_quit, self.board.has_active()) {
             self.modal = Some(Modal::ConfirmQuit);
@@ -1615,33 +1646,33 @@ impl App {
         }
     }
 
-    /// El reloj de la interfaz, en milisegundos de época.
+    /// The interface's clock, in epoch milliseconds.
     ///
-    /// UNA sola fuente: [`Self::render_now_ms`] cuando está fijada (los tests
-    /// la fijan para que un snapshot no dependa de la hora), y el reloj real
-    /// si no. Lo usan las celdas de tiempo relativo y la caducidad de las
-    /// filas terminales del tablero de tasks — dos sitios que tienen que
-    /// coincidir, porque un test que fija el reloj para el primero y no para
-    /// el segundo tendría un panel que cambia solo.
-    /// Cuánto tapa el splash `brief` como MUCHO.
+    /// ONE single source: [`Self::render_now_ms`] when it is fixed (the
+    /// tests fix it so a snapshot does not depend on the time), and the real
+    /// clock otherwise. Used by the relative time cells and the expiry of the
+    /// task board's terminal rows — two places that have to agree, because a
+    /// test that fixes the clock for the first and not the second would have
+    /// a panel that changes on its own.
+    /// How long the `brief` splash covers, AT MOST.
     ///
-    /// No es de los temporizadores que prohíbe la ADR 0006 —aquello va de
-    /// resolver TECLAS, y aquí ninguna tecla depende del reloj: cualquiera
-    /// quita el splash antes—. Es el plazo que impide que una portada se quede
-    /// puesta cuando el primer listado tarda: 1,2 s se leen de una vez y no se
-    /// sienten como un arranque lento.
+    /// It is not one of the timers ADR 0006 forbids —that one is about
+    /// resolving KEYS, and here no key depends on the clock: any of them
+    /// removes the splash first—. It is the deadline that stops a cover
+    /// screen from staying up when the first listing is slow: 1.2s reads as
+    /// instantaneous and does not feel like a slow start.
     ///
-    /// El número es el COMPARTIDO: dos plazos distintos serían dos arranques
-    /// distintos, y el que tardara más se leería como que el terminal va más
-    /// lento que la ventana.
+    /// The number is the SHARED one: two different deadlines would be two
+    /// different starts, and whichever took longer would read as the
+    /// terminal being slower than the window.
     pub const SPLASH_BRIEF_MS: i64 = norte_frontend::splash::BRIEF_MS;
 
-    /// Le enseña el tablero a la barra de progreso ligera (ADR 0146), con
-    /// el reloj del pintado.
+    /// Shows the board to the lightweight progress bar (ADR 0146), with the
+    /// render clock.
     pub fn note_strip(&mut self) {
-        let ahora = self.now_ms();
+        let now = self.now_ms();
         self.strip.update(
-            ahora,
+            now,
             self.board
                 .rows()
                 .iter()
@@ -1653,7 +1684,7 @@ impl App {
         );
     }
 
-    /// El reloj del pintado.
+    /// The paint clock.
     #[must_use]
     pub fn now_ms(&self) -> i64 {
         self.render_now_ms.unwrap_or_else(|| {
@@ -1739,23 +1770,23 @@ impl App {
         }
     }
 
-    /// Abre el diálogo de búsqueda viva (`Alt+F7`, liveSearch T6) vacío. La
-    /// raíz del walk se resuelve al lanzar (cwd del pane con foco).
+    /// Opens the live-search dialog (`Alt+F7`, liveSearch T6) empty. The
+    /// walk's root is resolved at launch time (the focused pane's cwd).
     pub fn open_search_dialog(&mut self) {
         self.search_dialog = Some(SearchDialog::new());
     }
 }
 
-/// Hits semánticos visibles a la vez en [`Modal::SemanticHits`] (ventana de
-/// scroll) — la constante vive en `norte-frontend` (compartida con la GUI,
-/// mismo criterio que [`AI_RENAME_PAIR_LIMIT`]); re-export para el render
-/// (`ui`), el alto del modal y el clamp de [`App::semantic_cursor`].
+/// Semantic hits visible at once in [`Modal::SemanticHits`] (scroll window)
+/// — the constant lives in `norte-frontend` (shared with the GUI, same
+/// criterion as [`AI_RENAME_PAIR_LIMIT`]); re-exported for the render (`ui`),
+/// the modal's height and [`App::semantic_cursor`]'s clamp.
 pub use norte_frontend::SEMANTIC_HIT_LIMIT;
 
-/// Parejas del plan IA visibles a la vez en [`Modal::AiRenamePlan`] (ventana
-/// de scroll, audit MAJOR-3) — la constante vive en `norte-frontend`
-/// (compartida con la GUI, quality review 78eb243 MAJOR-1); re-export para
-/// el render (`ui`), el alto del modal y el clamp de [`App::ai_plan_scroll`].
+/// AI plan pairs visible at once in [`Modal::AiRenamePlan`] (scroll window,
+/// audit MAJOR-3) — the constant lives in `norte-frontend` (shared with the
+/// GUI, quality review 78eb243 MAJOR-1); re-exported for the render (`ui`),
+/// the modal's height and [`App::ai_plan_scroll`]'s clamp.
 pub use norte_frontend::AI_RENAME_PAIR_LIMIT;
 
 #[cfg(test)]
@@ -1763,10 +1794,10 @@ mod tests {
     use super::testutil::*;
     use super::*;
 
-    /// Diálogo de búsqueda (liveSearch T6): Tab alterna el campo activo y los
-    /// imprimibles/backspace caen en el campo con foco.
+    /// Search dialog (liveSearch T6): Tab cycles the active field and
+    /// printables/backspace land in the focused field.
     #[test]
-    fn search_dialog_tab_y_edicion_por_campo() {
+    fn search_dialog_tab_and_field_edit() {
         let mut d = SearchDialog::new();
         assert_eq!(d.field, SearchField::Name);
         d.push_char('*');
@@ -1779,17 +1810,16 @@ mod tests {
         d.push_char('b');
         d.backspace();
         assert_eq!(d.content, "a");
-        assert_eq!(d.name, "*x", "backspace solo tocó el campo activo");
-        // Desde 0.81.0 Tab recorre SIETE campos, no dos: la vuelta entera la
-        // comprueba `tab_da_la_vuelta_entera` en `app::pane`.
+        assert_eq!(d.name, "*x", "backspace only touched the active field");
+        // Since 0.81.0 Tab cycles through SEVEN fields, not two: the full
+        // round trip is checked by `tab_da_la_vuelta_entera` in `app::pane`.
         d.toggle_field();
         assert_eq!(d.field, SearchField::Exclude);
     }
 
-    /// Los toggles (F2 regex / F3 case) alternan sus flags de forma
-    /// independiente.
+    /// The toggles (F2 regex / F3 case) flip their flags independently.
     #[test]
-    fn search_dialog_toggles_regex_y_case() {
+    fn search_dialog_toggles_regex_and_case() {
         let mut d = SearchDialog::new();
         assert!(!d.regex && !d.case);
         d.toggle_regex();
@@ -1800,50 +1830,50 @@ mod tests {
         assert!(!d.regex && d.case);
     }
 
-    /// Validación del criterio: sin ningún campo no hay búsqueda; basta con
-    /// uno (nombre O contenido) para que la haya.
+    /// Criteria validation: with no field there is no search; one (name OR
+    /// content) is enough for there to be one.
     #[test]
-    fn search_dialog_criterio_no_vacio() {
+    fn search_dialog_criteria_not_empty() {
         let mut d = SearchDialog::new();
-        assert!(!d.has_criteria(), "ambos vacíos: no lanza");
+        assert!(!d.has_criteria(), "both empty: does not launch");
         d.push_char('*');
-        assert!(d.has_criteria(), "solo nombre basta");
+        assert!(d.has_criteria(), "name alone is enough");
         let mut d = SearchDialog::new();
         d.toggle_field();
         d.push_char('a');
-        assert!(d.has_criteria(), "solo contenido basta");
+        assert!(d.has_criteria(), "content alone is enough");
     }
 
-    /// `begin_search` marca el pane como virtual, vacía las entries y resetea
-    /// el estado a `Running`; `extend_listing` alimenta los hits SIN apagar el
-    /// modo virtual (los hits siguen siendo de una búsqueda).
+    /// `begin_search` marks the pane as virtual, empties the entries and
+    /// resets the state to `Running`; `extend_listing` feeds the hits
+    /// WITHOUT turning off virtual mode (the hits are still from a search).
     #[test]
-    fn begin_search_marca_virtual_y_extend_conserva() {
+    fn begin_search_marks_virtual_and_extend_keeps_it() {
         let mut p = pane_con(&["basura"]);
         p.begin_search(root());
         assert!(p.virtual_search);
         assert_eq!(p.search_state, SearchState::Running);
-        assert!(p.entries().is_empty(), "los hits empiezan vacíos");
+        assert!(p.entries().is_empty(), "the hits start empty");
         p.extend_listing(vec![file("hit1"), file("hit2")]);
-        assert!(p.virtual_search, "extend no apaga el modo virtual");
+        assert!(p.virtual_search, "extend does not turn off virtual mode");
         assert_eq!(names(&p), vec!["hit1", "hit2"]);
     }
 
-    /// Un listado NORMAL (cd/refresh) apaga el modo virtual de búsqueda.
+    /// A NORMAL listing (cd/refresh) turns off search's virtual mode.
     #[test]
-    fn listados_normales_apagan_el_modo_virtual() {
+    fn normal_listings_turn_off_virtual_mode() {
         let mut p = pane_con(&[]);
         p.begin_search(root());
         assert!(p.virtual_search);
         p.begin_listing(root(), vec![file("a")], false, None);
-        assert!(!p.virtual_search, "begin_listing apaga virtual");
+        assert!(!p.virtual_search, "begin_listing turns off virtual");
 
         p.begin_search(root());
         p.set_listing(root(), vec![file("a")]);
-        assert!(!p.virtual_search, "set_listing apaga virtual");
+        assert!(!p.virtual_search, "set_listing turns off virtual");
 
         p.begin_search(root());
         p.refresh_listing(vec![file("a")]);
-        assert!(!p.virtual_search, "refresh_listing apaga virtual");
+        assert!(!p.virtual_search, "refresh_listing turns off virtual");
     }
 }

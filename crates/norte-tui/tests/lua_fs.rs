@@ -1,4 +1,4 @@
-//! Bindings norte.fs sobre Engine+MemProvider real: byte strings, journal.
+//! norte.fs bindings over a real Engine+MemProvider: byte strings, journal.
 
 use std::sync::Arc;
 
@@ -37,9 +37,9 @@ fn ctx(cwd: &str) -> PaneCtx {
 }
 
 #[tokio::test]
-async fn copy_list_stat_desde_lua() {
+async fn copy_list_stat_from_lua() {
     let (backend, mem) = backend_mem();
-    write_file(&mem, "mem:///a", b"datos").await;
+    write_file(&mem, "mem:///a", b"bytes").await;
     let h = LuaHost::new().expect("lua");
     let out = h
         .run_script_for_test(
@@ -59,13 +59,13 @@ async fn copy_list_stat_desde_lua() {
 }
 
 #[tokio::test]
-async fn bytes_no_utf8_round_trip() {
+async fn non_utf8_bytes_round_trip() {
     let (backend, mem) = backend_mem();
-    // Nombre con bytes 0xFF 0xFE: por el wire es percent-encoding.
+    // Name with bytes 0xFF 0xFE: over the wire it is percent-encoding.
     write_file(&mem, "mem:///%FF%FE", b"x").await;
     let h = LuaHost::new().expect("lua");
-    // list devuelve el NOMBRE como byte string; copy con ese byte string
-    // (concatenado en Lua) funciona — cero suposición UTF-8 (regla 1).
+    // list returns the NAME as a byte string; copy with that byte string
+    // (concatenated in Lua) works — zero UTF-8 assumption (rule 1).
     let out = h
         .run_script_for_test(
             backend,
@@ -74,18 +74,18 @@ async fn bytes_no_utf8_round_trip() {
                 local l = assert(norte.fs.list("mem:///"))
                 assert(#l == 1)
                 local name = l[1].name
-                assert(#name == 2, "dos bytes crudos")
-                assert(norte.fs.copy("mem:///" .. name, "mem:///copia"))
+                assert(#name == 2, "two raw bytes")
+                assert(norte.fs.copy("mem:///" .. name, "mem:///copy"))
                 return true
             "#,
         )
         .await
         .expect("script ok");
-    assert_eq!(out, 1); // true → 1 en la conversión del harness
+    assert_eq!(out, 1); // true → 1 in the harness's conversion
 }
 
 #[tokio::test]
-async fn error_del_protocolo_llega_como_nil_categoria() {
+async fn protocol_error_arrives_as_nil_category() {
     let (backend, _mem) = backend_mem();
     let h = LuaHost::new().expect("lua");
     let out = h
@@ -93,7 +93,7 @@ async fn error_del_protocolo_llega_como_nil_categoria() {
             backend,
             ctx("mem:///"),
             br#"
-                local ok, err = norte.fs.stat("mem:///no-existe")
+                local ok, err = norte.fs.stat("mem:///does-not-exist")
                 assert(ok == nil and type(err) == "string")
                 return true
             "#,
@@ -104,7 +104,7 @@ async fn error_del_protocolo_llega_como_nil_categoria() {
 }
 
 #[tokio::test]
-async fn pane_expone_el_snapshot() {
+async fn pane_exposes_the_snapshot() {
     let (backend, _mem) = backend_mem();
     let h = LuaHost::new().expect("lua");
     let mut c = ctx("mem:///");
@@ -116,35 +116,35 @@ async fn pane_expone_el_snapshot() {
     assert_eq!(out, 2);
 }
 
-/// Escribe `content` bajo la raíz con un nombre de BYTES crudos (corpus).
+/// Writes `content` under the root with a RAW-bytes name (corpus).
 async fn write_named(mem: &MemProvider, name: &[u8], content: &[u8]) -> VPath {
-    let p = MemProvider::root().join(norte_proto::Segment::new(name.to_vec()).expect("segmento"));
+    let p = MemProvider::root().join(norte_proto::Segment::new(name.to_vec()).expect("segment"));
     let mut sink = mem.write(&p).await.unwrap();
     sink.write(Bytes::copy_from_slice(content)).await.unwrap();
     sink.commit().await.unwrap();
     p
 }
 
-/// Encoding review M4 Lua: TODO el corpus hostil hace round-trip por la
-/// RUTA RECOMENDADA para absolutos (`entry.path`, el wire completo):
-/// `list` → `stat(l[1].path)` OK y `name` byte-exacto contra la fixture.
+/// Encoding review M4 Lua: the WHOLE hostile corpus round-trips via the
+/// RECOMMENDED PATH for absolutes (`entry.path`, the complete wire):
+/// `list` → `stat(l[1].path)` OK and `name` byte-exact against the fixture.
 #[tokio::test]
-async fn corpus_hostil_round_trip_por_entry_path() {
+async fn hostile_corpus_round_trips_via_entry_path() {
     for n in norte_testkit::corpus::hostile_names() {
         let (backend, mem) = backend_mem();
         write_named(&mem, &n.bytes, b"x").await;
         let h = LuaHost::new().expect("lua");
-        // Los bytes esperados entran a Lua como literal con escapes
-        // DECIMALES (`"\97\37…"`): byte-exacto sin suposición UTF-8 y sin
-        // el tope de registros de `string.char(...)` (name_max_255 lo
-        // revienta con 255 argumentos).
+        // The expected bytes enter Lua as a literal with DECIMAL escapes
+        // (`"\97\37…"`): byte-exact with no UTF-8 assumption and without
+        // `string.char(...)`'s argument cap (name_max_255 blows it with
+        // 255 arguments).
         let script = format!(
             "local expected = \"{bytes}\"\n\
              local l = assert(norte.fs.list('mem:///'))\n\
-             assert(#l == 1, 'una entrada')\n\
-             assert(l[1].name == expected, 'name byte-exacto')\n\
+             assert(#l == 1, 'one entry')\n\
+             assert(l[1].name == expected, 'byte-exact name')\n\
              local e = assert(norte.fs.stat(l[1].path))\n\
-             assert(e.name == expected, 'stat por entry.path round-trip')\n\
+             assert(e.name == expected, 'stat via entry.path round-trip')\n\
              return true",
             bytes = n.bytes.iter().fold(String::new(), |mut s, b| {
                 use std::fmt::Write as _;
@@ -160,17 +160,18 @@ async fn corpus_hostil_round_trip_por_entry_path() {
     }
 }
 
-/// Pin del riesgo ACEPTADO (spec M4 Lua, Desviaciones punto 8) con la
-/// fixture `percent_lookalike_download` (`a%20b.txt`, UTF-8 normal estilo
-/// descargas): concatenado como ABSOLUTO el `%20` se decodifica y NO llega
-/// al fichero original; la ruta recomendada (`entry.path`) y el RELATIVO
-/// con el `name` crudo sí llegan. Contrato VISIBLE de la ambigüedad.
+/// Pin of the ACCEPTED risk (spec M4 Lua, Deviations point 8) with the
+/// `percent_lookalike_download` fixture (`a%20b.txt`, normal downloads-style
+/// UTF-8): concatenated as ABSOLUTE the `%20` gets decoded and does NOT
+/// reach the original file; the recommended path (`entry.path`) and the
+/// RELATIVE one with the raw `name` do reach it. VISIBLE contract of the
+/// ambiguity.
 #[tokio::test]
-async fn ambiguedad_percent_en_absolutos_pinneada_con_el_corpus() {
+async fn percent_ambiguity_in_absolutes_pinned_by_the_corpus() {
     let n = norte_testkit::corpus::hostile_names()
         .into_iter()
         .find(|n| n.id == "percent_lookalike_download")
-        .expect("fixture del corpus");
+        .expect("corpus fixture");
     let (backend, mem) = backend_mem();
     write_named(&mem, &n.bytes, b"original").await;
     let h = LuaHost::new().expect("lua");
@@ -180,15 +181,15 @@ async fn ambiguedad_percent_en_absolutos_pinneada_con_el_corpus() {
             ctx("mem:///"),
             br"
                 local l = assert(norte.fs.list('mem:///'))
-                local name = l[1].name -- 'a%20b.txt' (bytes crudos)
-                -- ABSOLUTO concatenado: decodifica %20 -> 'a b.txt' -> NO
-                -- existe. Riesgo aceptado y documentado (to_vpath).
+                local name = l[1].name -- 'a%20b.txt' (raw bytes)
+                -- Concatenated ABSOLUTE: decodes %20 -> 'a b.txt' -> does
+                -- NOT exist. Accepted and documented risk (to_vpath).
                 local ok = norte.fs.stat('mem:///' .. name)
-                assert(ok == nil, 'el absoluto concatenado no llega al original')
-                -- Ruta recomendada: el wire completo hace round-trip.
-                assert(norte.fs.stat(l[1].path), 'entry.path llega')
-                -- Y el RELATIVO con el name crudo no decodifica: llega.
-                assert(norte.fs.stat(name), 'el relativo crudo llega')
+                assert(ok == nil, 'the concatenated absolute does not reach the original')
+                -- Recommended path: the complete wire round-trips.
+                assert(norte.fs.stat(l[1].path), 'entry.path reaches it')
+                -- And the RELATIVE one with the raw name does not decode: it reaches it.
+                assert(norte.fs.stat(name), 'the raw relative reaches it')
                 return true
             ",
         )

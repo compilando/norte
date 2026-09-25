@@ -92,30 +92,31 @@
 # has no such action to transcribe, and it lives on the `[/]` layout button,
 # the Panels menu and the palette.
 
-# `pane.compare-files` (#312) se queda SIN ATAR aquí, por la misma regla que
-# deja fuera a `pane.compare-dirs`: la fuente de este preset no le atribuye
-# acorde, y un preset cuyo objetivo es la fidelidad no inventa uno. Los tres
-# presets nativos lo llevan en `alt+C`.
+# `pane.compare-files` (#312) is left UNBOUND here, by the same rule that
+# leaves out `pane.compare-dirs`: this preset's source does not attribute a
+# chord to it, and a preset whose goal is fidelity does not invent one. The
+# three native presets carry it on `alt+C`.
 
-# La historia (spec 2026-09-15). Far no tiene atrás/adelante: sus Alt+←/→
-# desplazan los nombres largos, así que `nav.back`/`nav.forward` se quedan sin
-# tecla. Su historia de carpetas es la lista de Alt+F12, atada arriba, y las
-# teclas de ESA lista (Del quita, Shift+Del vacía) son las que norte usa en el
-# diálogo. `Ins` (bloquear una entrada) no se copia: una entrada que sobrevive
-# a todo es un favorito, y norte ya los tiene. El punto de salto, los populares
-# y la historia de un lado no están en la fuente: menú Ir y paleta.
+# History (spec 2026-09-15). Far has no back/forward: its Alt+←/→ scroll long
+# names, so `nav.back`/`nav.forward` are left with no key. Its folder history
+# is the Alt+F12 list, bound above, and THAT list's keys (Del removes,
+# Shift+Del clears) are the ones norte uses in the dialog. `Ins` (locking an
+# entry) is not copied: an entry that survives everything is a favourite, and
+# norte already has those. The jump point, the favourites and one side's
+# history are not in the source: the Go menu and the palette.
 #
-# `app.goto` («ir a cualquier sitio», fase 6) sigue ese mismo criterio y se
-# queda sin atar: es una pantalla propia de norte —historia, populares,
-# favoritos, conexiones, comandos y una ruta tecleada, todo en una lista— y
-# Far no tiene una sola tecla que haga eso. `ctrl+g` está libre en los siete
-# presets y lo llevan orthodox, cua y vim. Aquí se llega por el menú Ir
-# (F9), donde está el primero, y por la paleta.
+# `app.goto` ("go anywhere", phase 6) follows that same criterion and is left
+# unbound: it is a screen of norte's own —history, favourites, bookmarks,
+# connections, commands and a typed path, all in one list— and Far has no
+# single key that does that. `ctrl+g` is free in all seven presets and
+# orthodox, cua and vim carry it. Here it is reached through the Go menu
+# (F9), where it is first, and through the palette.
 #
-# `task.pause` (ADR 0147), `task.retry` (ADR 0148) y los tres de la cola
-# (`task.queue`, `task.up`, `task.down`, ADR 0149) se quedan SIN ATAR aquí,
-# igual que `task.cancel`:
-# Far pausa y cancela desde el diálogo de la operación en curso, no desde una tecla de panel que su documentación nombre. Los dos se alcanzan desde la paleta.
+# `task.pause` (ADR 0147), `task.retry` (ADR 0148) and the three queue ones
+# (`task.queue`, `task.up`, `task.down`, ADR 0149) are left UNBOUND here,
+# just like `task.cancel`:
+# Far pauses and cancels from the current operation's dialog, not from a
+# panel key its documentation names. Both are reached from the palette.
 
 dialog_from = "orthodox"
 
@@ -125,17 +126,16 @@ keymap = [
     { on = ["f1"], run = "app.help" },
     { on = ["f10"], run = "app.quit" },
     { on = ["ctrl+o"], run = "app.toggle-panels" },
-    # Las superficies PROPIAS de norte, que este gestor no tenía y por
-    # tanto no hay nada que transcribir: ajustes, extensiones y paleta.
-    # Sin ellas la configuración no se alcanza desde el teclado, que es
-    # lo que pasaba hasta ahora en este preset. F11/F12 están libres
-    # aquí y son lo que usan orthodox/vim/cua; para la paleta, ctrl+p
-    # (libre en Far).
+    # Surfaces of norte's OWN, which this manager did not have and so there
+    # is nothing to transcribe: settings, extensions and the palette.
+    # Without them, configuration cannot be reached from the keyboard, which
+    # is what happened in this preset until now. F11/F12 are free here and
+    # are what orthodox/vim/cua use; for the palette, ctrl+p (free in Far).
     { on = ["f11"], run = "app.settings" },
     { on = ["f12"], run = "app.extensions" },
-    # El tema, en `alt+9`. F9 está libre aquí pero es el MENÚ en FAR, y
-    # robársela pelearía con la memoria muscular de quien eligió este preset.
-    # Ver la nota larga en krusader.toml.
+    # The theme, on `alt+9`. F9 is free here but it is the MENU in FAR, and
+    # stealing it would fight the muscle memory of whoever chose this
+    # preset. See the long note in krusader.toml.
     { on = ["alt+9"], run = "app.theme" },
     { on = ["ctrl+p"], run = "app.palette" },
     # F9 is the menu bar in FAR (attested: "F9 — Show menu"); alt+m stays as
@@ -144,26 +144,26 @@ keymap = [
     { on = ["alt+m"], run = "app.menu" },
     { on = ["alt+b"], run = "layout.places" },
     { on = ["alt+q"], run = "layout.preview" },
-    # El anillo de paneles y el panel de procesos. Ver la nota larga en
-    # orthodox.toml: son superficies propias de norte y no hay nada que
-    # transcribir de FAR sobre ellas.
+    # The pane ring and the process panel. See the long note in
+    # orthodox.toml: these are surfaces of norte's own and there is nothing
+    # to transcribe from FAR about them.
     { on = ["alt+o"], run = "layout.focus-next" },
     { on = ["alt+O"], run = "layout.focus-prev" },
     { on = ["alt+j"], run = "layout.processes" },
-    # El registro (#323): no lo atestigua far, se ata igual porque es de norte
-    # y `alt+l` está libre. Ver el bloque de divergencias de la cabecera.
+    # The log (#323): far does not attest it, it is bound anyway because it
+    # is norte's own and `alt+l` is free. See the header's divergences block.
     { on = ["alt+l"], run = "layout.log" },
-    # El mapa de disco (fase 4). FAR no tiene un panel así y no atestigua
-    # acorde alguno, así que esto no es una transcripción: `alt+z` es la única
-    # letra libre en los siete presets. Ver orthodox.toml.
+    # The disk map (phase 4). FAR has no panel like this and attests no
+    # chord, so this is not a transcription: `alt+z` is the one letter free
+    # across all seven presets. See orthodox.toml.
     { on = ["alt+z"], run = "layout.disk-map" },
-    # El panel de terminal (#362). FAR no tiene un panel así —su consola es la
-    # de debajo de los paneles, que se enseña con `ctrl+o` y ocupa la pantalla
-    # entera, que es lo que en norte hace `app.toggle-panels`—, así que esto no
-    # es una transcripción: va el acorde común de norte. Ver orthodox.toml.
+    # The terminal panel (#362). FAR has no panel like this —its console is
+    # the one below the panels, shown with `ctrl+o` and taking up the whole
+    # screen, which in norte is what `app.toggle-panels` does—, so this is
+    # not a transcription: norte's common chord goes here. See orthodox.toml.
     { on = ["ctrl+alt+s"], run = "layout.terminal" },
-    # El resto de la familia `layout.*`, con los mismos acordes que en los
-    # otros seis presets: ver la nota larga en `orthodox.toml`.
+    # The rest of the `layout.*` family, with the same chords as in the
+    # other six presets: see the long note in `orthodox.toml`.
     { on = ["alt+x"], run = "layout.close-slot" },
     { on = ["alt+["], run = "layout.shrink" },
     { on = ["alt+]"], run = "layout.grow" },
@@ -173,8 +173,8 @@ keymap = [
 
 [pane]
 keymap = [
-    # Far no tiene navegación sincronizada, así que no hay acorde que
-    # transcribir: va el nuestro, igual en los siete (ver `orthodox`).
+    # Far has no synchronized navigation, so there is no chord to
+    # transcribe: ours goes here, the same in all seven (see `orthodox`).
     { on = ["ctrl+e"], run = "pane.sync-nav" },
     { on = ["up"], run = "cursor.up" },
     { on = ["down"], run = "cursor.down" },
@@ -214,15 +214,16 @@ keymap = [
     { on = ["shift+f1"], run = "pane.pack" },
     { on = ["shift+f2"], run = "pane.unpack" },
     { on = ["shift+f4"], run = "pane.edit-new" },
-    # #314: `Ctrl+A` es «Set file attributes» en far-panelcmd.txt, y ahora hay
-    # un comando que hace ESO. Aterrizaba en `pane.properties` porque norte
-    # solo sabía mirar; enseñar los permisos donde la fuente dice «cambiarlos»
-    # era la aproximación que este preset tenía y que ya no hace falta.
+    # #314: `Ctrl+A` is "Set file attributes" in far-panelcmd.txt, and now
+    # there is a command that does EXACTLY that. It used to land on
+    # `pane.properties` because norte could only look; showing the
+    # permissions where the source says "change them" was the approximation
+    # this preset used to make and no longer needs to.
     { on = ["ctrl+a"], run = "pane.chmod" },
-    # Y `pane.properties` se queda SIN ATAR aquí: FAR no tiene un cuadro de
-    # «propiedades» aparte del de atributos, así que darle una tecla sería
-    # inventarle una función a un preset que existe para no inventar. La hoja
-    # de referencia imprime `—`, que es la verdad.
+    # And `pane.properties` is left UNBOUND here: FAR has no "properties"
+    # dialog apart from the attributes one, so giving it a key would be
+    # inventing a function for a preset that exists to not invent one. The
+    # reference sheet prints `—`, which is the truth.
     { on = ["ctrl+u"], run = "pane.swap" },
     { on = ["ctrl+r"], run = "pane.refresh" },
     { on = ["ctrl+t"], run = "pane.tree" },
@@ -235,11 +236,11 @@ keymap = [
     { on = ["insert"], run = "mark.toggle" },
     { on = ["plus"], run = "mark.pattern-add" },
     { on = ["-"], run = "mark.pattern-remove" },
-    # Marcar MOVIÉNDOSE. La fuente lo atestigua en prosa («para deseleccionar,
-    # mantén Shift y muévete en la dirección contraria») pero no lo itemiza en
-    # su tabla de teclas, igual que el movimiento del cursor del panel: se ata
-    # como lo ata orthodox. Que el tramo lo decida la fila del CURSOR es justo
-    # lo que hace cierta esa frase.
+    # Marking WHILE MOVING. The source attests it in prose ("to deselect,
+    # hold Shift and move in the opposite direction") but does not itemise
+    # it in its key table, same as the pane cursor's movement: it is bound
+    # the way orthodox binds it. Having the CURSOR row decide the range is
+    # exactly what makes that sentence true.
     { on = ["shift+down"], run = "mark.toggle" },
     { on = ["shift+up"], run = "mark.toggle-up" },
     { on = ["shift+pgdn"], run = "mark.toggle-page-down" },
@@ -247,26 +248,29 @@ keymap = [
     { on = ["shift+home"], run = "mark.to-top" },
     { on = ["shift+end"], run = "mark.to-bottom" },
     { on = ["*"], run = "mark.invert" },
-    # #313: `Ctrl+M` es «restore previous selection» en far-panelcmd.txt, y
-    # estaba en la lista de omisiones de arriba por no haber comando al que
-    # atarlo. Las variantes por extensión y por nombre (`Ctrl+Gray+/-`,
-    # `Alt+Gray+/-`) siguen omitidas: la fuente las agrupa en una línea y no
-    # dice cuál de los dos modificadores es la EXTENSIÓN, y elegir uno a ojo
-    # marcaría un conjunto distinto del que el lector espera.
+    # #313: `Ctrl+M` is "restore previous selection" in far-panelcmd.txt, and
+    # it was on the omissions list above for having no command to bind it
+    # to. The by-extension and by-name variants (`Ctrl+Gray+/-`,
+    # `Alt+Gray+/-`) stay omitted: the source groups them on one line and
+    # does not say which of the two modifiers is the EXTENSION one, and
+    # picking one by guesswork would mark a different set than the reader
+    # expects.
     { on = ["ctrl+m"], run = "mark.restore" },
     { on = ["alt+shift+insert"], run = "pane.copy-path" },
-    # `alt+t`/`alt+w` y no `ctrl+T`/`ctrl+W`: la mayúscula es el shift en la
-    # gramática y NO en el cable — un terminal manda el mismo byte que para la
-    # minúscula, y `ctrl+t` aquí es `pane.tree`. Las pestañas estaban
-    # anunciadas y no se abrían. Ver la nota larga en krusader.toml.
+    # `alt+t`/`alt+w` and not `ctrl+T`/`ctrl+W`: the uppercase letter is the
+    # shift in the grammar and NOT on the wire — a terminal sends the same
+    # byte as for the lowercase one, and `ctrl+t` here is `pane.tree`. The
+    # tabs were advertised and would not open. See the long note in
+    # krusader.toml.
     { on = ["alt+t"], run = "pane.tab-new" },
     { on = ["alt+w"], run = "pane.tab-close" },
     { on = ["alt+n"], run = "pane.tab-next" },
     { on = ["alt+p"], run = "pane.tab-prev" },
-    # Las sumas (#311). Krusader las tiene en su menú File y ninguno de los
-    # cuatro importados les da acorde, así que la tecla se ELIGE: `alt+k`
-    # calcula y `alt+K` comprueba — libre en los siete, y la mayúscula
-    # para la variante, como `alt+o`/`alt+O` en el anillo de paneles.
+    # Checksums (#311). Krusader has them in its File menu and none of the
+    # four imported managers gives them a chord, so the key is CHOSEN:
+    # `alt+k` computes and `alt+K` verifies — free in all seven, and the
+    # uppercase letter for the variant, as with `alt+o`/`alt+O` in the pane
+    # ring.
     { on = ["alt+k"], run = "pane.checksum" },
     { on = ["alt+K"], run = "pane.checksum-verify" },
     { on = ["alt+h"], run = "layout.split-h" },
@@ -286,9 +290,9 @@ keymap = [
     { on = ["end"], run = "viewer.bottom" },
     { on = ["left"], run = "viewer.left" },
     { on = ["right"], run = "viewer.right" },
-    # Superficie propia de norte: Far no atesta un zoom en su visor, así que
-    # estas tres son elección nuestra y van igual en los siete presets (ver
-    # `orthodox.toml`).
+    # A surface of norte's own: Far attests no zoom in its viewer, so these
+    # three are our own choice and are the same across all seven presets
+    # (see `orthodox.toml`).
     { on = ["f5"], run = "viewer.zoom-out" },
     { on = ["f6"], run = "viewer.zoom-in" },
     { on = ["f7"], run = "viewer.zoom-fit" },

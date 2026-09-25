@@ -1,15 +1,15 @@
-//! El área de índice de [`Backend`](super::Backend) (M4): construir,
-//! consultar, generar embeddings y buscar semánticamente.
+//! [`Backend`](super::Backend)'s index area (M4): building, querying,
+//! generating embeddings and searching semantically.
 
 use norte_proto::{Error, VPath};
 
 use super::{AI_CALL_TIMEOUT, Backend, TaskRef, index_hit_to_proto};
 
 impl Backend {
-    /// (Re)construye el índice de `root` como Task (M4, ADR 0034).
+    /// (Re)builds `root`'s index as a Task (M4, ADR 0034).
     ///
     /// # Errors
-    /// [`Error::Unsupported`] si no hay índice; taxonomía del protocolo.
+    /// [`Error::Unsupported`] with no index; protocol taxonomy.
     pub async fn index_build(&self, root: &VPath) -> Result<TaskRef, Error> {
         match self {
             Self::Embedded(engine) => {
@@ -23,10 +23,10 @@ impl Backend {
         }
     }
 
-    /// Consulta el índice de `root` por `text` (M4). Devuelve hits del protocolo.
+    /// Queries `root`'s index for `text` (M4). Returns protocol hits.
     ///
     /// # Errors
-    /// [`Error::Unsupported`] si no hay índice; taxonomía del protocolo.
+    /// [`Error::Unsupported`] with no index; protocol taxonomy.
     pub async fn index_query(
         &self,
         root: &VPath,
@@ -45,14 +45,14 @@ impl Backend {
         }
     }
 
-    /// Genera embeddings de los ficheros ya indexados de `root` como Task
-    /// (M4-IA-2). Requiere `index.build` previo del MISMO root.
+    /// Generates embeddings for `root`'s already-indexed files as a Task
+    /// (M4-IA-2). Requires a prior `index.build` of the SAME root.
     ///
     /// # Errors
-    /// [`Error::Unsupported`] sin índice o sin proveedor de embeddings;
-    /// [`Error::NotFound`] sin `index.build` previo (en la RESPUESTA, no en
-    /// el join); [`Error::PolicyDenied`] del gate de IA; taxonomía del
-    /// protocolo.
+    /// [`Error::Unsupported`] with no index or no embeddings provider;
+    /// [`Error::NotFound`] with no prior `index.build` (in the RESPONSE, not
+    /// the join); [`Error::PolicyDenied`] from the AI gate; protocol
+    /// taxonomy.
     pub async fn index_embed(&self, root: &VPath) -> Result<TaskRef, Error> {
         match self {
             Self::Embedded(engine) => {
@@ -66,16 +66,14 @@ impl Backend {
         }
     }
 
-    /// Búsqueda semántica sobre los embeddings del índice (M4-IA-2):
-    /// `root = None` busca en todos los roots. AMBOS brazos acotados por
-    /// `AI_CALL_TIMEOUT` (el embed de la query va al proveedor), como
-    /// [`Backend::ai_rename_plan`].
+    /// Semantic search over the index's embeddings (M4-IA-2): `root = None`
+    /// searches every root. BOTH arms are bounded by `AI_CALL_TIMEOUT` (the
+    /// query's embed goes to the provider), like [`Backend::ai_rename_plan`].
     ///
     /// # Errors
-    /// [`Error::Unsupported`] sin índice o sin proveedor de embeddings;
-    /// [`Error::PolicyDenied`] del gate de IA;
-    /// [`Error::ProviderUnavailable`] (retryable) al agotar el timeout;
-    /// taxonomía del protocolo.
+    /// [`Error::Unsupported`] with no index or no embeddings provider;
+    /// [`Error::PolicyDenied`] from the AI gate; [`Error::ProviderUnavailable`]
+    /// (retryable) when the timeout runs out; protocol taxonomy.
     pub async fn index_search_semantic(
         &self,
         root: Option<&VPath>,

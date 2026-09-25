@@ -1,36 +1,37 @@
-//! La hoja de atributos (fase A): qué debería estar enseñando.
+//! The attributes sheet (phase A): what it should be showing.
 //!
-//! Como [`crate::preview`], aquí vive la DECISIÓN y solo la decisión, por la
-//! misma razón: es una función pura del árbol, los roles y el cursor, así que
-//! las reglas se fijan con tests en vez de con prosa.
+//! Like [`crate::preview`], the DECISION and only the decision lives here, for
+//! the same reason: it is a pure function of the tree, the roles, and the
+//! cursor, so the rules are pinned with tests instead of prose.
 //!
-//! A diferencia del visor acoplado, este panel **no lee nada**: la `Entry` que
-//! enseña ya está en el listado. Un panel que sigue al cursor y además pide
-//! datos por cada fila es como bajar por un directorio se convierte en una
-//! tormenta de peticiones.
+//! Unlike the docked viewer, this pane **reads nothing**: the `Entry` it shows
+//! is already in the listing. A pane that follows the cursor and also
+//! requests data per row is how walking down a directory turns into a storm
+//! of requests.
 
 use norte_frontend::layout::{Resolved, SlotId};
 use norte_proto::Entry;
 
 use crate::app::App;
 
-/// El kind que ocupa un hueco de atributos.
+/// The kind that occupies an attributes slot.
 pub const KIND: &str = "metadata";
 
-/// Qué debería estar enseñando la hoja.
+/// What the sheet should be showing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Want {
-    /// Esta entrada, que el listado ya tiene delante. El `bool` dice si es la
-    /// fila `..`: la hoja la describe como `..` y no con el nombre del padre.
+    /// This entry, which the listing already has in front of it. The `bool`
+    /// says whether it is the `..` row: the sheet describes it as `..` and
+    /// not by the parent's name.
     Entry(Box<Entry>, bool),
-    /// Nada que enseñar, y esta clave Fluent dice por qué.
+    /// Nothing to show, and this Fluent key says why.
     Note(&'static str),
 }
 
-/// El hueco de atributos COLOCADO en este reparto, si lo hay.
+/// The attributes slot PLACED in this layout, if any.
 ///
-/// Del reparto y no del árbol: un hueco detrás de una pestaña existe, pero no
-/// se está viendo, y lo que no se ve no enseña nada.
+/// From the layout, not the tree: a slot behind a tab exists but is not being
+/// seen, and what is not seen shows nothing.
 #[must_use]
 pub fn slot(app: &App, res: &Resolved) -> Option<SlotId> {
     res.placements
@@ -39,57 +40,57 @@ pub fn slot(app: &App, res: &Resolved) -> Option<SlotId> {
         .find(|id| app.layout.kind_of(*id).is_some_and(|k| k.as_str() == KIND))
 }
 
-/// El listado al que sigue la hoja del hueco `hueco`.
+/// The listing the sheet for slot `slot` follows.
 ///
-/// El vínculo se resuelve con el motor compartido, así que un hueco seguido
-/// que muere degrada al rol `active` con su diagnóstico en vez de quedarse
-/// mirando al vacío en silencio.
-fn seguido(app: &App, hueco: SlotId) -> Option<&crate::app::Pane> {
+/// The link is resolved by the shared engine, so a followed slot that dies
+/// degrades to the `active` role with its diagnostic instead of being left
+/// staring at emptiness in silence.
+fn followed(app: &App, slot: SlotId) -> Option<&crate::app::Pane> {
     let mut diags = Vec::new();
-    let en_fila =
-        norte_frontend::layout::resolve_follow(&app.layout, hueco, &app.roles, &mut diags)
+    let in_a_row =
+        norte_frontend::layout::resolve_follow(&app.layout, slot, &app.roles, &mut diags)
             .or_else(|| app.roles.get(norte_frontend::layout::RoleId::Active))?;
-    app.panes.browser(en_fila)
+    app.panes.browser(in_a_row)
 }
 
-/// La ruta del listado al que sigue la hoja colocada, ya pintable, para el
-/// TÍTULO del panel.
+/// The path of the listing the placed sheet follows, already paintable, for
+/// the pane's TITLE.
 ///
-/// «Detalles» a secas no dice de qué son los detalles: con dos listados
-/// abiertos, la única forma de saber cuál se está describiendo era mover el
-/// cursor y ver si la hoja se movía. La misma respuesta que da la ventana en
+/// "Details" on its own does not say details of what: with two listings open,
+/// the only way to tell which one was being described was to move the cursor
+/// and see whether the sheet moved. The same answer the window gives in
 /// `MetadataSlotView::follows_display` (ADR 0077).
 #[must_use]
 pub fn follows(app: &App, res: &Resolved) -> Option<(String, bool)> {
-    let pane = seguido(app, slot(app, res)?)?;
+    let pane = followed(app, slot(app, res)?)?;
     Some(norte_frontend::path_display_with(
         pane.dir(),
         pane.name_encoding(),
     ))
 }
 
-/// Qué toca enseñar, y en qué hueco. `None` si no hay hueco colocado.
+/// What to show, and in which slot. `None` if no slot is placed.
 ///
-/// El vínculo se resuelve con el motor, así que un hueco seguido que muere
-/// degrada al rol `active` con su diagnóstico en vez de quedarse mirando al
-/// vacío en silencio.
+/// The link is resolved by the engine, so a followed slot that dies degrades
+/// to the `active` role with its diagnostic instead of being left staring at
+/// emptiness in silence.
 #[must_use]
 pub fn want(app: &App, res: &Resolved) -> Option<(SlotId, Want)> {
-    let hueco = slot(app, res)?;
-    let pane = seguido(app, hueco)?;
-    // `cursor_entry` y no `selected`: la hoja DESCRIBE lo que hay bajo el
-    // cursor, y sobre la fila `..` «lo señalado» es `None` a propósito —esa
-    // fila no es un operando—. Preguntando por el operando el panel salía
-    // vacío justo donde el cursor nace.
-    // La bandera sale del MISMO índice que la entrada: preguntando por
-    // `cursor()` a mano, un filtro de quick search —que elige por su cuenta y
-    // no mueve el cursor real— dejaba la hoja describiendo `..` mientras el
-    // listado resaltaba otra fila.
+    let slot_id = slot(app, res)?;
+    let pane = followed(app, slot_id)?;
+    // `cursor_entry` and not `selected`: the sheet DESCRIBES what is under
+    // the cursor, and over the `..` row "what is targeted" is `None` on
+    // purpose — that row is not an operand. Asking for the operand left the
+    // pane empty right where the cursor is born.
+    // The flag comes from the SAME index as the entry: asking `cursor()` by
+    // hand, a quick-search filter — which chooses on its own and does not
+    // move the real cursor — left the sheet describing `..` while the listing
+    // highlighted another row.
     match pane.cursor_entry() {
         Some(e) => Some((
-            hueco,
+            slot_id,
             Want::Entry(Box::new(e.clone()), pane.cursor_is_parent_row()),
         )),
-        None => Some((hueco, Want::Note("metadata-empty"))),
+        None => Some((slot_id, Want::Note("metadata-empty"))),
     }
 }

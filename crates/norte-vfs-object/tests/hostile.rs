@@ -1,11 +1,11 @@
-//! Contención (threat model §14, ADR 0016 D): nombres imposibles se rechazan
-//! LIMPIO antes de tocar la red, y un servidor MENTIROSO (keys con `/`
-//! inyectado o U+FFFD en el listado) corta el stream con `InvalidPath` en vez
-//! de dejar escapar entradas fuera del directorio.
+//! Containment (threat model §14, ADR 0016 D): impossible names are
+//! rejected CLEANLY before touching the network, and a LYING server (keys
+//! with an injected `/` or U+FFFD in the listing) cuts the stream with
+//! `InvalidPath` instead of letting entries escape the directory.
 //!
-//! El servidor mentiroso es HTTP crudo (respuestas enlatadas): un s3s
-//! honesto jamás produciría esas keys, así que se falsifica la capa de
-//! transporte — mismo patrón que el servidor FTP falso de norte-connect.
+//! The lying server is raw HTTP (canned responses): an honest s3s would
+//! never produce those keys, so the transport layer is faked — the same
+//! pattern as norte-connect's fake FTP server.
 #![cfg(target_os = "linux")]
 
 mod common;
@@ -23,10 +23,10 @@ fn root() -> VPath {
 }
 
 fn child(base: &VPath, name: &[u8]) -> VPath {
-    base.join(Segment::new(name.to_vec()).expect("segmento"))
+    base.join(Segment::new(name.to_vec()).expect("segment"))
 }
 
-/// Provider sobre un Operator fs (los casos provider-level no llegan a red).
+/// Provider over an fs Operator (the provider-level cases never reach the network).
 fn fresh_fs() -> ObjectProvider {
     let dir = tempfile::tempdir().expect("tempdir");
     let base = dir.path().join("root");
@@ -39,7 +39,7 @@ fn fresh_fs() -> ObjectProvider {
 }
 
 #[tokio::test]
-async fn nombre_no_utf8_se_rechaza_limpio() {
+async fn a_non_utf8_name_is_rejected_cleanly() {
     let p = fresh_fs();
     let f = child(&root(), b"latin1-\xe9.txt");
     assert_eq!(p.stat(&f).await.unwrap_err(), Error::InvalidPath);
@@ -48,10 +48,11 @@ async fn nombre_no_utf8_se_rechaza_limpio() {
 }
 
 #[tokio::test]
-async fn key_de_mas_de_1024_bytes_se_rechaza_upfront() {
+async fn key_over_1024_bytes_is_rejected_upfront() {
     let p = fresh_fs();
-    // 5 segmentos de 250 bytes = 1254 de key: S3 la rechazaría a media
-    // operación con un error ambiguo — aquí es InvalidPath ANTES de la red.
+    // 5 segments of 250 bytes = a 1254-byte key: S3 would reject it midway
+    // through an operation with an ambiguous error — here it is InvalidPath
+    // BEFORE the network.
     let mut f = root();
     for _ in 0..5 {
         f = child(&f, "x".repeat(250).as_bytes());
@@ -61,40 +62,40 @@ async fn key_de_mas_de_1024_bytes_se_rechaza_upfront() {
 }
 
 #[tokio::test]
-async fn whitespace_en_extremos_se_rechaza_no_se_renombra() {
+async fn whitespace_at_the_ends_is_rejected_it_does_not_rename() {
     let p = fresh_fs();
-    // El normalize_path de opendal-core hace `path.trim()`: "file " se
-    // convertiría EN SILENCIO en "file" (corrupción de bytes, regla 1).
-    // Fail-loud hasta que upstream preserve los bytes.
+    // opendal-core's normalize_path does `path.trim()`: "file " would turn
+    // INTO "file" SILENTLY (byte corruption, rule 1). Fail-loud until
+    // upstream preserves the bytes.
     for name in [&b"file "[..], b" file", b"\tfile", b"file\n"] {
         let f = child(&root(), name);
         assert_eq!(
             p.stat(&f).await.unwrap_err(),
             Error::InvalidPath,
-            "{name:?} debe rechazarse"
+            "{name:?} must be rejected"
         );
         assert!(matches!(p.write(&f).await, Err(Error::InvalidPath)));
     }
 }
 
 #[tokio::test]
-async fn scheme_ajeno_se_rechaza() {
+async fn a_foreign_scheme_is_rejected() {
     let p = fresh_fs();
-    let ajeno = VPath::parse("ftp://host/f.txt").expect("vpath");
-    assert_eq!(p.stat(&ajeno).await.unwrap_err(), Error::InvalidPath);
+    let foreign = VPath::parse("ftp://host/f.txt").expect("vpath");
+    assert_eq!(p.stat(&foreign).await.unwrap_err(), Error::InvalidPath);
 }
 
-// ---------- servidor MENTIROSO ----------
+// ---------- LYING server ----------
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-/// Servidor HTTP S3 enlatado y MENTIROSO. Devuelve `keys` solo cuando el
-/// listado pide un `prefix` que empieza por `prefix_match` (para no fingir
-/// que TODO existe y disparar un Conflict antes del código bajo prueba);
-/// HEAD siempre 404. Cuenta las mutaciones (PUT/DELETE/POST no-list) en
-/// `mutations`: un provider seguro NO debe emitir ninguna cuando el listado
-/// es hostil.
+/// A canned, LYING S3 HTTP server. Returns `keys` only when the listing
+/// asks for a `prefix` starting with `prefix_match` (so it does not
+/// pretend EVERYTHING exists and trigger a Conflict before the code under
+/// test); HEAD is always 404. Counts mutations (non-list PUT/DELETE/POST)
+/// in `mutations`: a safe provider must NOT emit any when the listing is
+/// hostile.
 async fn lying_server(
     keys: Vec<String>,
     prefix_match: &'static str,
@@ -123,15 +124,15 @@ async fn lying_server(
                     "HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
                         .to_string()
                 } else if method == "GET" && is_list {
-                    // Solo miente para el prefijo bajo ataque; el resto
-                    // (p. ej. el sondeo de dir del destino) = vacío.
+                    // Only lies for the prefix under attack; the rest
+                    // (e.g. the destination's dir probe) = empty.
                     let serve = line.contains(&format!("prefix={prefix_match}"));
                     canned_list(if serve { &keys } else { &[] })
                 } else if method == "GET" {
                     "HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
                         .to_string()
                 } else {
-                    // PUT/DELETE/POST(copy/upload) = mutación observada.
+                    // PUT/DELETE/POST(copy/upload) = an observed mutation.
                     mutations.fetch_add(1, Ordering::SeqCst);
                     "HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n".to_string()
                 };
@@ -174,79 +175,80 @@ async fn lying_provider(keys: Vec<String>) -> ObjectProvider {
     ObjectProvider::new(common::s3_operator(addr), "s3")
 }
 
-/// Un `/` inyectado en el nombre (key `dir/../fuera` ecoada por el servidor)
-/// busca escapar del directorio listado: corta con `InvalidPath`.
+/// A `/` injected into the name (key `dir/../outside` echoed by the server)
+/// tries to escape the listed directory: cuts with `InvalidPath`.
 #[tokio::test]
-async fn listado_con_slash_inyectado_corta() {
+async fn listing_with_injected_slash_cuts_off() {
     let p = lying_provider(vec!["dir/../fuera".into(), "dir/normal.txt".into()]).await;
     let d = child(&root(), b"dir");
-    let res: Result<Vec<_>, Error> = p.list(&d).await.expect("abre").try_collect().await;
+    let res: Result<Vec<_>, Error> = p.list(&d).await.expect("opens").try_collect().await;
     assert_eq!(res.unwrap_err(), Error::InvalidPath);
 }
 
-/// U+FFFD en un nombre del servidor = bytes originales irrecuperables
-/// (decodificación lossy en algún salto): rechazo fail-loud, jamás un Entry
-/// corrupto (regla 1).
+/// U+FFFD in a name from the server = unrecoverable original bytes (a
+/// lossy decoding at some hop): fail-loud rejection, never a corrupt Entry
+/// (rule 1).
 #[tokio::test]
-async fn listado_con_ufffd_corta() {
+async fn listing_with_ufffd_cuts_off() {
     let p = lying_provider(vec!["dir/mal\u{FFFD}nombre".into()]).await;
     let d = child(&root(), b"dir");
-    let res: Result<Vec<_>, Error> = p.list(&d).await.expect("abre").try_collect().await;
+    let res: Result<Vec<_>, Error> = p.list(&d).await.expect("opens").try_collect().await;
     assert_eq!(res.unwrap_err(), Error::InvalidPath);
 }
 
-/// La self-entry del servidor (`dir/`) no aparece como hijo.
+/// The server's self-entry (`dir/`) does not appear as a child.
 #[tokio::test]
-async fn listado_filtra_self_entry() {
+async fn listing_filters_self_entry() {
     let p = lying_provider(vec!["dir/".into(), "dir/ok.txt".into()]).await;
     let d = child(&root(), b"dir");
     let entries: Vec<_> = p
         .list(&d)
         .await
-        .expect("abre")
+        .expect("opens")
         .try_collect::<Vec<_>>()
         .await
         .expect("stream");
     let names: Vec<Vec<u8>> = entries
         .iter()
-        .map(|e| e.path.file_name().expect("nombre").as_bytes().to_vec())
+        .map(|e| e.path.file_name().expect("name").as_bytes().to_vec())
         .collect();
     assert_eq!(names, vec![b"ok.txt".to_vec()]);
 }
 
-/// Una key FUERA del prefijo pedido (sin `/`, que el fallback viejo dejaba
-/// pasar como Entry fantasma) corta con `InvalidPath`.
+/// A key OUTSIDE the requested prefix (no `/`, which the old fallback let
+/// through as a phantom Entry) cuts with `InvalidPath`.
 #[tokio::test]
-async fn listado_key_fuera_de_prefijo_corta() {
-    // El server sirve estas keys al pedir prefix=dir; `dirx`/`otra` no
-    // cuelgan de `dir/`.
+async fn listing_key_outside_prefix_cuts_off() {
+    // The server serves these keys when asked for prefix=dir; `dirx`/`other`
+    // do not hang off `dir/`.
     let p = lying_provider(vec!["dirx".into(), "dir/ok.txt".into()]).await;
     let d = child(&root(), b"dir");
-    let res: Result<Vec<_>, Error> = p.list(&d).await.expect("abre").try_collect().await;
+    let res: Result<Vec<_>, Error> = p.list(&d).await.expect("opens").try_collect().await;
     assert_eq!(res.unwrap_err(), Error::InvalidPath);
 }
 
-/// Un segmento VACÍO (`dir//x` → nombre `""` tras el delimiter) es una key S3
-/// legal que el modelo de dirs no representa: corta en vez de ocultarla.
+/// An EMPTY segment (`dir//x` → name `""` after the delimiter) is a legal
+/// S3 key the dir model cannot represent: cuts instead of hiding it.
 #[tokio::test]
-async fn listado_segmento_vacio_corta() {
+async fn listing_empty_segment_cuts_off() {
     let p = lying_provider(vec!["dir//oculto".into()]).await;
     let d = child(&root(), b"dir");
-    let res: Result<Vec<_>, Error> = p.list(&d).await.expect("abre").try_collect().await;
+    let res: Result<Vec<_>, Error> = p.list(&d).await.expect("opens").try_collect().await;
     assert_eq!(res.unwrap_err(), Error::InvalidPath);
 }
 
-// ---------- rename contra servidor mentiroso: CERO mutaciones ----------
+// ---------- rename against a lying server: ZERO mutations ----------
 
-/// El BLOCKER de los reviewers: el walk de `rename` de dir NO debe operar
-/// (copy/delete) sobre keys que el servidor liste FUERA del prefijo origen.
-/// Un listado hostil (`otra/x`, `../victima`, `src/file `) debe cortar con
-/// `InvalidPath` habiendo emitido CERO PUT/DELETE.
+/// The reviewers' BLOCKER: a dir `rename`'s walk must NOT operate
+/// (copy/delete) on keys the server lists OUTSIDE the source prefix. A
+/// hostile listing (`other/x`, `../victim`, `src/file `) must cut with
+/// `InvalidPath` having emitted ZERO PUT/DELETE.
 #[tokio::test]
-async fn rename_dir_con_listado_hostil_no_muta_nada() {
+async fn renaming_a_dir_with_a_hostile_listing_mutates_nothing() {
     let mutations = Arc::new(AtomicUsize::new(0));
-    // El servidor sirve el listado hostil al pedir prefix=src (el from_dir);
-    // el sondeo del destino (prefix=dst) va vacío → no existe → sigue.
+    // The server serves the hostile listing when asked for prefix=src (the
+    // from_dir); the destination's probe (prefix=dst) comes back empty →
+    // does not exist → continues.
     let addr = lying_server(
         vec![
             "src/legit.txt".into(),
@@ -261,45 +263,45 @@ async fn rename_dir_con_listado_hostil_no_muta_nada() {
     let from = child(&root(), b"src");
     let to = child(&root(), b"dst");
     let err = p.rename(&from, &to).await.unwrap_err();
-    assert_eq!(err, Error::InvalidPath, "listado hostil debe cortar");
+    assert_eq!(err, Error::InvalidPath, "a hostile listing must cut");
     assert_eq!(
         mutations.load(Ordering::SeqCst),
         0,
-        "ni un solo copy/delete pudo salir hacia keys ecoadas"
+        "not a single copy/delete could go out toward echoed keys"
     );
 }
 
-// ---------- guards provider-level ----------
+// ---------- provider-level guards ----------
 
-/// `rename(a, a/b)` (destino dentro del propio subárbol) se rechaza limpio.
+/// `rename(a, a/b)` (destination inside its own subtree) is cleanly rejected.
 #[tokio::test]
-async fn rename_dentro_de_su_subarbol_se_rechaza() {
+async fn renaming_into_its_own_subtree_is_rejected() {
     let p = fresh_fs();
     let r = root();
     let a = child(&r, b"a");
     p.mkdir(&a).await.expect("mkdir a");
     let sub = child(&a, b"b");
     assert_eq!(p.rename(&a, &sub).await.unwrap_err(), Error::InvalidPath);
-    // y a sí mismo.
+    // and to itself.
     assert_eq!(p.rename(&a, &a).await.unwrap_err(), Error::InvalidPath);
 }
 
-/// NBSP final (`White_Space` Unicode que `str::trim` recorta pero
-/// `is_ascii_whitespace` no): blinda el predicado anti-trim contra una
-/// regresión a solo-ASCII (`normalize_path` de opendal usa `str::trim`).
+/// A trailing NBSP (Unicode `White_Space` that `str::trim` trims but
+/// `is_ascii_whitespace` does not): shields the anti-trim predicate against
+/// an ASCII-only regression (opendal's `normalize_path` uses `str::trim`).
 #[tokio::test]
-async fn nombre_con_nbsp_final_se_rechaza() {
+async fn a_name_with_trailing_nbsp_is_rejected() {
     let p = fresh_fs();
     let f = child(&root(), "file\u{A0}".as_bytes());
     assert_eq!(p.stat(&f).await.unwrap_err(), Error::InvalidPath);
     assert!(matches!(p.write(&f).await, Err(Error::InvalidPath)));
 }
 
-/// `copy_native` con origen DIRECTORIO → `TypeMismatch` (`copy_native` es de
-/// objeto único; el engine copia árboles hoja a hoja). Sobre services-fs
-/// porque s3s-fs miente en el HEAD de un path-directorio (issue #50).
+/// `copy_native` with a DIRECTORY source → `TypeMismatch` (`copy_native` is
+/// single-object; the engine copies trees leaf by leaf). Over services-fs
+/// because s3s-fs lies on a directory path's HEAD (issue #50).
 #[tokio::test]
-async fn copy_native_origen_dir_es_typemismatch() {
+async fn copy_native_source_dir_es_typemismatch() {
     let p = fresh_fs();
     let r = root();
     let d = child(&r, b"undir");
@@ -310,15 +312,15 @@ async fn copy_native_origen_dir_es_typemismatch() {
         Some(Err(Error::Conflict {
             conflict: norte_proto::ConflictKind::TypeMismatch,
         })) => {}
-        other => panic!("copy_native de un dir debía dar TypeMismatch, fue {other:?}"),
+        other => panic!("copy_native of a dir should have given TypeMismatch, was {other:?}"),
     }
 }
 
-/// `copy_native` a un DESTINO que es directorio → `Conflict`: el
-/// `If-None-Match` del copy no ve el dir, el guard es el `ensure_absent`.
-/// Sobre services-fs (dirs fiables).
+/// `copy_native` to a DESTINATION that is a directory → `Conflict`: the
+/// copy's `If-None-Match` does not see the dir, the guard is
+/// `ensure_absent`. Over services-fs (reliable dirs).
 #[tokio::test]
-async fn copy_native_destino_dir_es_conflict() {
+async fn copy_native_dest_dir_es_conflict() {
     let p = fresh_fs();
     let r = root();
     let src = child(&r, b"origen.bin");
@@ -327,6 +329,8 @@ async fn copy_native_destino_dir_es_conflict() {
     p.mkdir(&dst).await.expect("mkdir dst");
     match p.copy_native(&src, &dst).await {
         Some(Err(Error::Conflict { .. })) => {}
-        other => panic!("copy_native sobre un dir destino debía dar Conflict, fue {other:?}"),
+        other => {
+            panic!("copy_native onto a destination dir should have given Conflict, was {other:?}")
+        }
     }
 }

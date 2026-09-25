@@ -1,60 +1,62 @@
-//! Puerta de documentación (ADR 0040): todo comando que la TUI sabe
-//! despachar vive en algún tema del corpus de `norte-help`.
+//! Documentation gate (ADR 0040): every command the TUI knows how to
+//! dispatch lives in some topic of the `norte-help` corpus.
 //!
-//! Es fricción DELIBERADA y permanente, la misma idea que la suite de i18n
-//! que obliga a EN+ES para cada `help-cmd-*`.
+//! It is DELIBERATE, permanent friction, the same idea as the i18n suite
+//! that requires EN+ES for every `help-cmd-*`.
 //!
-//! # Qué mide exactamente esta puerta
+//! # What exactly this gate measures
 //!
-//! MENCIÓN, no explicación. Un comando queda cubierto en cuanto algún tema
-//! lo nombra, y nombrarlo es tan barato como añadir su id a la lista
-//! `commands` del front matter: cero prosa. Lo que la puerta garantiza, y no
-//! es poco, es que ningún comando pueda existir sin que NADIE lo haya mirado
-//! al escribir la ayuda, y que el corpus nunca prometa un comando que no
-//! existe. Que la mención sea además un párrafo útil lo decide la revisión
-//! de la página, que es donde puede decidirse — ninguna aserción sabe si un
-//! párrafo explica algo.
+//! MENTION, not explanation. A command is covered as soon as some topic
+//! names it, and naming it is as cheap as adding its id to the front
+//! matter's `commands` list: zero prose. What the gate guarantees, and it
+//! is not little, is that no command can exist without SOMEONE having
+//! looked at it while writing help, and that the corpus never promises a
+//! command that does not exist. Whether the mention is also a useful
+//! paragraph is decided by the page's review, which is where it can be
+//! decided — no assertion knows whether a paragraph explains anything.
 //!
-//! Hasta H3h esto llevaba una allowlist encogiente: los comandos que ningún
-//! tema documentaba todavía, escritos a mano y con un techo que solo podía
-//! bajar. H3h la dejó en cero y la lista se borró con ella, que era el plan
-//! desde el principio. Lo que queda es la puerta desnuda: un comando nuevo sin
-//! página rompe la suite y NO hay dónde apuntarlo — el arreglo es escribir el
-//! párrafo.
+//! Until H3h this carried a shrinking allowlist: the commands no topic
+//! documented yet, hand-written, with a ceiling that could only go down.
+//! H3h left it at zero and the list was deleted with it, which was the plan
+//! from the start. What is left is the bare gate: a new command with no
+//! page breaks the suite and there is NOWHERE to note it down — the fix is
+//! writing the paragraph.
 //!
-//! # La otra mitad: los CONTEXTOS
+//! # The other half: CONTEXTS
 //!
-//! Lo mismo, en las dos direcciones, para los sitios donde el lector puede
-//! estar (H3c): un tema no puede reclamar una pantalla que la TUI no tiene, y
-//! una pantalla que la TUI sabe abrir no puede quedarse sin página — F1 ahí
-//! abriría el índice y nadie se quejaría. El vocabulario sale de una sola
-//! fuente ([`contextos`]), y su allowlist se agotó en H3h igual que la de
-//! comandos: hoy todo contexto que la TUI sabe abrir tiene página.
+//! The same, in both directions, for the places the reader can be in
+//! (H3c): a topic cannot claim a screen the TUI does not have, and a screen
+//! the TUI knows how to open cannot be left with no page — F1 there would
+//! open the index and nobody would complain. The vocabulary comes from a
+//! single source ([`contextos`]), and its allowlist ran out in H3h the same
+//! as the commands' one: today every context the TUI knows how to open has
+//! a page.
 //!
-//! Aquí la puerta mide algo MÁS que una mención: reclamar un contexto es
-//! decirle al lector "esto es lo que explica lo que tienes delante". Que la
-//! página lo explique de verdad lo decide quien la escribe — una aprobación de
-//! agente no se explica con la página de copiar — y por eso la lista de
-//! pendientes lleva escrito, línea a línea, por qué cada contexto sigue ahí.
+//! Here the gate measures something MORE than a mention: claiming a
+//! context tells the reader "this is what explains what you have in front
+//! of you." Whether the page truly explains it is decided by whoever writes
+//! it — an agent approval is not explained by the copy page — and that is
+//! why the pending list has written, line by line, why each context is
+//! still there.
 
 use norte_help::{Issue, check_commands, check_contexts, check_corpus};
 use norte_tui::keymap::{COMMANDS, DIALOG_COMMANDS};
 
-/// El vocabulario contra el que se cruza el corpus: TODO lo que la TUI
-/// despacha, `COMMANDS` ∪ `DIALOG_COMMANDS`.
+/// The vocabulary the corpus is cross-checked against: EVERYTHING the TUI
+/// dispatches, `COMMANDS` ∪ `DIALOG_COMMANDS`.
 ///
-/// La unión y no solo `COMMANDS`, por la otra dirección del cruce. Un
-/// `{{cmd:dialog.approve}}` en la página del modal de aprobación es prosa
-/// legítima — el verbo existe, la TUI lo resuelve y F1 ya lo lista (#113) —
-/// pero con un vocabulario recortado a `COMMANDS` saldría como
-/// `UnknownCommand`, es decir "ese comando no existe", que es falso. El
-/// autor solo tendría dos salidas: no documentarlo, o ensanchar el
-/// vocabulario aquí. Se ensanchó, y H3h pagó la factura: los 19 verbos
-/// `dialog.*` tienen página.
+/// The union and not just `COMMANDS`, for the cross-check's other
+/// direction. A `{{cmd:dialog.approve}}` in the approval modal's page is
+/// legitimate prose — the verb exists, the TUI resolves it and F1 already
+/// lists it (#113) — but with a vocabulary trimmed to `COMMANDS` it would
+/// come out as `UnknownCommand`, i.e. "that command does not exist," which
+/// is false. The author would only have two ways out: not document it, or
+/// widen the vocabulary here. It was widened, and H3h paid the bill: the 19
+/// `dialog.*` verbs have a page.
 ///
-/// Se calcula (los dos listados ya están escritos a mano en `keymap.rs`, y
-/// duplicarlos aquí sería una tercera copia que se desincroniza).
-fn vocabulario() -> Vec<&'static str> {
+/// It is computed (both lists are already hand-written in `keymap.rs`, and
+/// duplicating them here would be a third copy that goes out of sync).
+fn vocabulary() -> Vec<&'static str> {
     COMMANDS
         .iter()
         .copied()
@@ -62,56 +64,56 @@ fn vocabulario() -> Vec<&'static str> {
         .collect()
 }
 
-/// Los contextos que la TUI sabe abrir. UNA fuente: el vocabulario cerrado de
-/// [`norte_tui::help_context::CONTEXTS`], anclado a `Modal` allí — el `match`
-/// sin comodín de `modal_context` es lo que impide que un modal nuevo llegue
-/// sin que alguien decida qué página lo explica.
+/// The contexts the TUI knows how to open. ONE source: the closed
+/// vocabulary of [`norte_tui::help_context::CONTEXTS`], anchored to `Modal`
+/// there — `modal_context`'s wildcard-free `match` is what stops a new
+/// modal from arriving without someone deciding which page explains it.
 ///
-/// Duplicar la lista aquí sería la tercera copia que se desincroniza (y la
-/// segunda ya se desincronizó: hasta H3c esta puerta pedía un contexto
-/// `dialog` que ningún modal produce). Se calcula, como [`vocabulario`], y por
-/// la misma razón.
+/// Duplicating the list here would be the third copy that goes out of sync
+/// (and the second already did: until H3c this gate asked for a `dialog`
+/// context no modal produces). It is computed, like [`vocabulary`], and
+/// for the same reason.
 fn contextos() -> Vec<&'static str> {
     norte_tui::help_context::CONTEXTS.to_vec()
 }
 
 #[test]
-fn el_corpus_que_enviamos_esta_integro() {
-    // Paridad de locales, ids únicos, enlaces que resuelven y ninguna marca
-    // viva escrita donde se pinta literal. No necesita vocabulario: es lo
-    // único que el propio `norte-help` ya comprueba solo.
+fn the_corpus_we_send_is_intact() {
+    // Locale parity, unique ids, links that resolve, and no live markup
+    // written where it paints literal. Needs no vocabulary: it is the only
+    // thing `norte-help` itself already checks on its own.
     let issues = check_corpus();
     assert!(
         issues.is_empty(),
-        "el corpus tiene problemas de integridad:\n{}",
+        "the corpus has integrity problems:\n{}",
         lines(&issues)
     );
 }
 
 #[test]
-fn el_corpus_no_nombra_comandos_que_no_existen() {
-    // SIN allowlist (`&[]`, literalmente), y no es una omisión: un tema que
-    // nombra un comando inexistente es siempre un bug — prosa que promete
-    // una tecla que no hace nada, o un id mal escrito. No hay deuda que
-    // tapar aquí, solo erratas que arreglar — y desde H3h tampoco queda
-    // allowlist que pasar en la otra dirección.
-    let desconocidos: Vec<Issue> = check_commands(&vocabulario(), &[])
+fn the_corpus_does_not_name_commands_that_do_not_exist() {
+    // WITHOUT an allowlist (`&[]`, literally), and it is not an omission: a
+    // topic that names a nonexistent command is always a bug — prose that
+    // promises a key that does nothing, or a misspelled id. There is no
+    // debt to paper over here, only typos to fix — and since H3h there is
+    // no allowlist left to pass in the other direction either.
+    let unknown: Vec<Issue> = check_commands(&vocabulary(), &[])
         .into_iter()
         .filter(|i| matches!(i, Issue::UnknownCommand { .. }))
         .collect();
     assert!(
-        desconocidos.is_empty(),
-        "el corpus nombra comandos fuera del vocabulario de la TUI:\n{}",
-        lines(&desconocidos)
+        unknown.is_empty(),
+        "the corpus names commands outside the TUI's vocabulary:\n{}",
+        lines(&unknown)
     );
 }
 
 #[test]
-fn todo_comando_del_vocabulario_esta_documentado() {
-    // `&[]` y no una allowlist: desde H3h no hay deuda que tapar. Un comando
-    // sin página es un fallo con un solo arreglo — escribir el párrafo — y no
-    // existe la línea que lo aplazaría.
-    let issues = check_commands(&vocabulario(), &[]);
+fn every_command_in_the_vocabulary_is_documented() {
+    // `&[]` and not an allowlist: since H3h there is no debt to paper over.
+    // A command with no page is a failure with a single fix — write the
+    // paragraph — and there is no line left to postpone it with.
+    let issues = check_commands(&vocabulary(), &[]);
 
     let sin_documentar: Vec<&Issue> = issues
         .iter()
@@ -119,8 +121,8 @@ fn todo_comando_del_vocabulario_esta_documentado() {
         .collect();
     assert!(
         sin_documentar.is_empty(),
-        "comandos que ningún tema documenta. Escribe el párrafo: la \
-         allowlist que aplazaba esto se agotó en H3h y no va a volver.\n{}",
+        "commands no topic documents. Write the paragraph: the allowlist \
+         that postponed this ran out in H3h and is not coming back.\n{}",
         sin_documentar
             .iter()
             .map(ToString::to_string)
@@ -128,24 +130,24 @@ fn todo_comando_del_vocabulario_esta_documentado() {
             .join("\n")
     );
 
-    // Y nada más. `check_commands` puede crecer con variantes nuevas: que
-    // una aparezca y este fichero la ignore en silencio sería exactamente
-    // el fallo que la puerta existe para no tener.
+    // And nothing else. `check_commands` can grow new variants: one showing
+    // up and this file silently ignoring it would be exactly the failure
+    // the gate exists to not have.
     assert!(
         issues.is_empty(),
-        "hallazgos que esta puerta no clasifica:\n{}",
+        "findings this gate does not classify:\n{}",
         lines(&issues)
     );
 }
 
 #[test]
-fn los_contextos_del_corpus_son_pantallas_que_la_tui_tiene() {
+fn the_corpus_contexts_are_screens_the_tui_has() {
     let contextos = contextos();
     let issues = check_contexts(&contextos);
 
-    // Una dirección: ningún tema declara un contexto inventado, y dos temas
-    // no se pelean por el mismo. Aquí la lista no se toca — el arreglo está
-    // en el front matter del tema, porque los contextos los define la TUI.
+    // One direction: no topic declares a made-up context, and two topics do
+    // not fight over the same one. The list is not touched here — the fix
+    // is in the topic's front matter, because the TUI defines the contexts.
     let del_corpus: Vec<&Issue> = issues
         .iter()
         .filter(|i| {
@@ -157,8 +159,8 @@ fn los_contextos_del_corpus_son_pantallas_que_la_tui_tiene() {
         .collect();
     assert!(
         del_corpus.is_empty(),
-        "arregla el front matter del tema, no esta lista: los contextos los \
-         define la TUI.\n{}",
+        "fix the topic's front matter, not this list: the TUI defines the \
+         contexts.\n{}",
         del_corpus
             .iter()
             .map(ToString::to_string)
@@ -166,9 +168,10 @@ fn los_contextos_del_corpus_son_pantallas_que_la_tui_tiene() {
             .join("\n")
     );
 
-    // La otra: cada contexto que la TUI sabe abrir tiene una página. Sin
-    // esto, F1 en una pantalla sin página abre el índice y nadie se queja.
-    let sin_pagina: Vec<&str> = issues
+    // The other one: every context the TUI knows how to open has a page.
+    // Without this, F1 on a page-less screen opens the index and nobody
+    // complains.
+    let no_page: Vec<&str> = issues
         .iter()
         .filter_map(|i| match i {
             Issue::ContextWithoutTopic { context, .. } => Some(context.as_str()),
@@ -176,15 +179,15 @@ fn los_contextos_del_corpus_son_pantallas_que_la_tui_tiene() {
         })
         .collect();
     assert!(
-        sin_pagina.is_empty(),
-        "contextos sin página. Reclámalos desde el `context` de la página que \
-         los explica, o escribe esa página: la allowlist que los aplazaba se \
-         agotó en H3h. {sin_pagina:?}"
+        no_page.is_empty(),
+        "contexts with no page. Claim them from the `context` of the page \
+         that explains them, or write that page: the allowlist that \
+         postponed them ran out in H3h. {no_page:?}"
     );
 
-    // Y nada más, por lo mismo que en la puerta de comandos: una variante
-    // nueva de `Issue` que este fichero ignorase en silencio sería
-    // exactamente el fallo que la puerta existe para no tener.
+    // And nothing else, for the same reason as the commands gate: a new
+    // `Issue` variant this file silently ignored would be exactly the
+    // failure the gate exists to not have.
     let sin_clasificar: Vec<&Issue> = issues
         .iter()
         .filter(|i| {
@@ -198,7 +201,7 @@ fn los_contextos_del_corpus_son_pantallas_que_la_tui_tiene() {
         .collect();
     assert!(
         sin_clasificar.is_empty(),
-        "hallazgos que esta puerta no clasifica:\n{}",
+        "findings this gate does not classify:\n{}",
         sin_clasificar
             .iter()
             .map(ToString::to_string)
@@ -207,7 +210,7 @@ fn los_contextos_del_corpus_son_pantallas_que_la_tui_tiene() {
     );
 }
 
-/// Un hallazgo por línea, como los imprimiría `norte doctor` (H3g).
+/// One finding per line, the way `norte doctor` (H3g) would print them.
 fn lines(issues: &[Issue]) -> String {
     issues
         .iter()

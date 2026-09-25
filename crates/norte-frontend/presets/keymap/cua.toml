@@ -1,14 +1,14 @@
-# Preset CUA (flechas + convenciones de escritorio).
+# CUA preset (arrows + desktop conventions).
 #
-# Decisión #23: Ctrl+C queda como SALIR (emergencia universal), NO como copy.
-# `pane.copy` de norte es "copiar al otro pane" (modelo ortodoxo de dos
-# paneles), no un copy-al-portapapeles: ligarlo a Ctrl+C sorprendería y, sobre
-# todo, DIVERGIRÍA del Ctrl-C hardcodeado que aborta el cd / refresh_panes
-# (esos loops transitorios no consultan el keymap). Copy se queda en F5.
-# Ctrl+Q y F10 también salen.
+# Decision #23: Ctrl+C stays as QUIT (universal emergency), NOT as copy.
+# norte's `pane.copy` is "copy to the other pane" (the orthodox two-pane
+# model), not a copy-to-clipboard: binding it to Ctrl+C would surprise and,
+# above all, would DIVERGE from the hardcoded Ctrl-C that aborts cd /
+# refresh_panes (those transient loops do not consult the keymap). Copy stays
+# on F5. Ctrl+Q and F10 also quit.
 #
-# `layout.flip` (ADR 0138) va sin tecla a propósito, como en los siete: vive
-# en el botón `[/]` de la barra de disposición, el menú Paneles y la paleta.
+# `layout.flip` (ADR 0138) deliberately ships with no key, as in all seven: it
+# lives on the `[/]` button of the layout bar, the Panes menu and the palette.
 
 [global]
 keymap = [
@@ -17,34 +17,34 @@ keymap = [
     { on = ["ctrl+c"], run = "app.quit" },
     { on = ["tab"], run = "pane.switch" },
     { on = ["f1"], run = "app.help" },
-    # F9 abre el MENÚ (spec 2026-09-10), como en orthodox; el tema, en alt+9.
+    # F9 opens the MENU (spec 2026-09-10), as in orthodox; the theme, on alt+9.
     { on = ["f9"], run = "app.menu" },
     { on = ["alt+9"], run = "app.theme" },
     { on = ["f11"], run = "app.settings" },
     { on = ["f12"], run = "app.extensions" },
     { on = ["ctrl+p"], run = "app.palette" },
-    # `ctrl+g` es «ir a» en casi todo editor CUA (goto line); aquí el sitio
-    # al que se va es un directorio, una conexión o un comando.
+    # `ctrl+g` is "go to" in nearly every CUA editor (goto line); here the
+    # place it goes to is a directory, a connection or a command.
     { on = ["ctrl+g"], run = "app.goto" },
     { on = ["alt+m"], run = "app.menu" },
     { on = ["alt+b"], run = "layout.places" },
     { on = ["alt+q"], run = "layout.preview" },
-    # El anillo de paneles y el panel de procesos. Ver la nota larga en
-    # orthodox.toml: son superficies propias de norte y ningún gestor de
-    # referencia tiene qué decir sobre ellas.
+    # The pane ring and the process panel. See the long note in
+    # orthodox.toml: these are surfaces of norte's own and no reference
+    # manager has anything to say about them.
     { on = ["alt+o"], run = "layout.focus-next" },
     { on = ["alt+O"], run = "layout.focus-prev" },
     { on = ["alt+j"], run = "layout.processes" },
-    # El registro (#323). `alt+l` de «log», libre en los siete presets.
+    # The log (#323). `alt+l` for "log", free in all seven presets.
     { on = ["alt+l"], run = "layout.log" },
-    # El mapa de disco (fase 4), `alt+z`: la única letra libre en los siete.
-    # Ver la nota en orthodox.toml.
+    # The disk map (phase 4), `alt+z`: the one letter free in all seven.
+    # See the note in orthodox.toml.
     { on = ["alt+z"], run = "layout.disk-map" },
-    # El panel de terminal (#362), con el acorde común de norte. Ver
-    # orthodox.toml para por qué `ctrl+alt+s` y no `ctrl+alt+t`.
+    # The terminal panel (#362), with norte's common chord. See
+    # orthodox.toml for why `ctrl+alt+s` and not `ctrl+alt+t`.
     { on = ["ctrl+alt+s"], run = "layout.terminal" },
-    # El resto de la familia `layout.*`, con los mismos acordes que en los
-    # otros seis presets: ver la nota larga en `orthodox.toml`.
+    # The rest of the `layout.*` family, with the same chords as in the
+    # other six presets: see the long note in `orthodox.toml`.
     { on = ["alt+x"], run = "layout.close-slot" },
     { on = ["alt+["], run = "layout.shrink" },
     { on = ["alt+]"], run = "layout.grow" },
@@ -54,7 +54,7 @@ keymap = [
 
 [pane]
 keymap = [
-    # Ver la cabecera de `orthodox`: el acorde es nuestro y va igual en los siete.
+    # See `orthodox`'s header: this chord is ours and is the same in all seven.
     { on = ["ctrl+e"], run = "pane.sync-nav" },
     { on = ["up"], run = "cursor.up" },
     { on = ["down"], run = "cursor.down" },
@@ -66,10 +66,10 @@ keymap = [
     { on = ["backspace"], run = "nav.parent" },
     { on = ["alt+left"], run = "nav.back" },
     { on = ["alt+right"], run = "nav.forward" },
-    # La convención de escritorio para la historia es solo atrás/adelante (y
-    # los botones laterales del ratón, que la ventana atiende sola). El punto
-    # de salto, los populares y la historia de un lado no tienen tecla de
-    # escritorio: van por el menú Ir y la paleta.
+    # The desktop convention for history is only back/forward (and the
+    # mouse's side buttons, which the window handles on its own). The jump
+    # point, the favourites and one side's history have no desktop key: they
+    # go through the Go menu and the palette.
     { on = ["alt+i"], run = "pane.mirror" },
     { on = ["alt+u"], run = "pane.pull" },
     { on = ["ctrl+u"], run = "pane.swap" },
@@ -77,9 +77,9 @@ keymap = [
     { on = ["f6"], run = "pane.move" },
     { on = ["f7"], run = "pane.mkdir" },
     { on = ["shift+f6"], run = "pane.rename" },
-    # El lote por plantilla (#310). Sin tecla atestiguada aquí —TC lo pone
-    # en `ctrl+m` y Krusader en `shift+f2`, y los dos presets la llevan—,
-    # así que se elige: `alt+r` de «rename», libre en los siete.
+    # Template batch rename (#310). No attested key here —TC puts it on
+    # `ctrl+m` and Krusader on `shift+f2`, and both presets carry it—, so
+    # one is chosen: `alt+r` for "rename", free in all seven.
     { on = ["alt+r"], run = "pane.rename-batch" },
     { on = ["f8"], run = "pane.delete" },
     { on = ["shift+f8"], run = "pane.delete-permanent" },
@@ -95,11 +95,11 @@ keymap = [
     { on = ["alt+down"], run = "pane.history" },
     { on = ["alt+f7"], run = "pane.search" },
     { on = ["shift+f2"], run = "pane.compare-dirs" },
-    # #312: comparar DOS FICHEROS, que es otra pregunta que comparar dos
-    # árboles. `alt+C` porque `alt+c` ya es el diálogo de columnas y la
-    # mayúscula es la variante, como en las sumas. NO es una tecla de
-    # función con modificador, por lo mismo que `ctrl+y`: bajo tmux no
-    # llegan (#159).
+    # #312: comparing TWO FILES, which is a different question than
+    # comparing two trees. `alt+C` because `alt+c` is already the columns
+    # dialog and the uppercase letter is the variant, as with the checksums.
+    # NOT a function key with a modifier, for the same reason as `ctrl+y`:
+    # they do not arrive under tmux (#159).
     { on = ["alt+C"], run = "pane.compare-files" },
     { on = ["ctrl+y"], run = "pane.sync-dirs" },
     { on = ["alt+e"], run = "pane.names-encoding" },
@@ -111,29 +111,31 @@ keymap = [
     { on = ["insert"], run = "mark.toggle" },
     { on = ["space"], run = "mark.toggle" },
     { on = ["ctrl+a"], run = "mark.all" },
-    # #314: cambiar los permisos POSIX. `alt+A` porque `ctrl+a` es marcar
-    # todo en este preset y la mayúscula queda para la variante, como en
-    # las sumas; en FAR sí hay acorde atestiguado y allí es el suyo.
+    # #314: change POSIX permissions. `alt+A` because `ctrl+a` is mark-all
+    # in this preset and the uppercase letter is left for the variant, as
+    # with the checksums; FAR does have an attested chord and there it is
+    # its own.
     { on = ["alt+A"], run = "pane.chmod" },
-    # `alt+a`: `ctrl+A` no llega (mismo byte que `ctrl+a`). Ver orthodox.
+    # `alt+a`: `ctrl+A` does not arrive (same byte as `ctrl+a`). See orthodox.
     { on = ["alt+a"], run = "mark.clear" },
     { on = ["*"], run = "mark.invert" },
-    # #313: los tres huecos de la familia Gray de Total Commander, que norte
-    # no tenía. `alt+plus`/`alt+-` son los acordes que TC atestigua para la
-    # selección por EXTENSIÓN; ficheros/carpetas y restaurar son mayúsculas
-    # de su inicial, porque las de TC (`Shift+Gray+`, `NUM/`) no se pueden
-    # escribir en esta gramática o ya significan otra cosa aquí.
+    # #313: the three gaps in Total Commander's Gray family, which norte did
+    # not have. `alt+plus`/`alt+-` are the chords TC attests for selecting
+    # by EXTENSION; files/dirs and restore are the uppercase of their
+    # initial, because TC's (`Shift+Gray+`, `NUM/`) cannot be written in
+    # this grammar or already mean something else here.
     { on = ["alt+plus"], run = "mark.extension-add" },
     { on = ["alt+-"], run = "mark.extension-remove" },
-    # Minúscula: `alt+f` estaba libre (ver la nota en orthodox.toml).
+    # Lowercase: `alt+f` was free (see the note in orthodox.toml).
     { on = ["alt+f"], run = "mark.files" },
     { on = ["alt+D"], run = "mark.dirs" },
     { on = ["alt+R"], run = "mark.restore" },
     { on = ["plus"], run = "mark.pattern-add" },
     { on = ["-"], run = "mark.pattern-remove" },
-    # Marcar MOVIÉNDOSE. En un entorno CUA esto es lo NATIVO: `Shift`+flechas
-    # extiende la selección en cualquier lista del escritorio, así que aquí no
-    # es una importación de un gestor ortodoxo sino lo que el lector ya espera.
+    # Marking WHILE MOVING. In a CUA environment this is the NATIVE
+    # behaviour: `Shift`+arrows extends the selection in any desktop list,
+    # so here it is not an import from an orthodox manager but what the
+    # reader already expects.
     { on = ["shift+down"], run = "mark.toggle" },
     { on = ["shift+up"], run = "mark.toggle-up" },
     { on = ["shift+pgdn"], run = "mark.toggle-page-down" },
@@ -144,10 +146,11 @@ keymap = [
     { on = ["ctrl+w"], run = "pane.tab-close" },
     { on = ["alt+n"], run = "pane.tab-next" },
     { on = ["alt+p"], run = "pane.tab-prev" },
-    # Las sumas (#311). Krusader las tiene en su menú File y ninguno de los
-    # cuatro importados les da acorde, así que la tecla se ELIGE: `alt+k`
-    # calcula y `alt+K` comprueba — libre en los siete, y la mayúscula
-    # para la variante, como `alt+o`/`alt+O` en el anillo de paneles.
+    # Checksums (#311). Krusader has them in its File menu and none of the
+    # four imported managers gives them a chord, so the key is CHOSEN:
+    # `alt+k` computes and `alt+K` verifies — free in all seven, and the
+    # uppercase letter for the variant, as with `alt+o`/`alt+O` in the pane
+    # ring.
     { on = ["alt+k"], run = "pane.checksum" },
     { on = ["alt+K"], run = "pane.checksum-verify" },
     { on = ["alt+h"], run = "layout.split-h" },
@@ -171,7 +174,7 @@ keymap = [
     { on = ["e"], run = "viewer.encoding" },
     { on = ["E"], run = "viewer.encoding-auto" },
     { on = ["x"], run = "viewer.hex" },
-    # Superficie propia: mismas tres teclas en los siete presets (ver
+    # A surface of our own: same three keys in all seven presets (see
     # `orthodox.toml`).
     { on = ["f5"], run = "viewer.zoom-out" },
     { on = ["f6"], run = "viewer.zoom-in" },
@@ -211,9 +214,9 @@ keymap = [
     { on = ["tab"], run = "dialog.pane" },
     { on = ["backspace"], run = "dialog.back" },
     { on = ["/"], run = "dialog.filter" },
-    # Las listas de historia (spec 2026-09-15 D2): las mismas que orthodox, que
-    # explica de dónde salen. `Supr` y `Mayús+Supr` son además lo que un
-    # escritorio espera para quitar.
+    # The history lists (spec 2026-09-15 D2): the same as orthodox, which
+    # explains where they come from. `Delete` and `Shift+Delete` are also
+    # what a desktop expects for removing.
     { on = ["delete"], run = "dialog.remove" },
     { on = ["shift+delete"], run = "dialog.clear" },
     { on = ["alt+enter"], run = "dialog.confirm-other" },

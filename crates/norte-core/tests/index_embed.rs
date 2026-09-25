@@ -1,7 +1,7 @@
-//! Integración `Engine::index_embed_as` (M4-IA-2, ADR 0031 A3): la task
-//! `index.embed` filtra ANTES de leer (`denied_prefixes`, heurística de texto),
-//! salta hashes sin cambios, reintenta rate-limits acotadamente y se cancela
-//! limpio. `MemProvider` + `FakeEmbed` in-memory → determinista.
+//! `Engine::index_embed_as` integration (M4-IA-2, ADR 0031 A3): the
+//! `index.embed` task filters BEFORE reading (`denied_prefixes`, text
+//! heuristic), skips unchanged hashes, retries rate limits within a bound, and
+//! cancels cleanly. In-memory `MemProvider` + `FakeEmbed` → deterministic.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -15,19 +15,19 @@ use norte_testkit::MemProvider;
 use norte_vfs::Provider;
 
 fn vp(wire: &str) -> VPath {
-    VPath::parse(wire).expect("wire válido")
+    VPath::parse(wire).expect("valid wire")
 }
 
 async fn write_file(mem: &MemProvider, wire: &str, content: &[u8]) {
-    let mut sink = mem.write(&vp(wire)).await.expect("write abre");
+    let mut sink = mem.write(&vp(wire)).await.expect("write opens");
     sink.write(Bytes::copy_from_slice(content))
         .await
         .expect("chunk");
     sink.commit().await.expect("commit");
 }
 
-/// Config `[ai]` habilitada con un único proveedor (→ `embed_provider_config`
-/// lo resuelve como "el único").
+/// `[ai]` config enabled with a single provider (→ `embed_provider_config`
+/// resolves it as "the only one").
 fn ai_cfg() -> AiConfig {
     AiConfig {
         enabled: true,
@@ -41,7 +41,7 @@ fn ai_cfg() -> AiConfig {
     }
 }
 
-/// Engine con índice in-memory + `FakeEmbed` inyectado + config dada.
+/// Engine with an in-memory index + an injected `FakeEmbed` + the given config.
 async fn setup_with(fake: FakeEmbed, cfg: AiConfig) -> (Engine, Arc<MemProvider>, Arc<FakeEmbed>) {
     let index = norte_index::Index::open_memory().await.expect("index");
     let engine = Engine::new().with_index(Arc::new(index));
@@ -57,7 +57,7 @@ async fn setup() -> (Engine, Arc<MemProvider>, Arc<FakeEmbed>) {
     setup_with(FakeEmbed::new(8), ai_cfg()).await
 }
 
-/// `index.build` del root y join (precondición de casi todos los tests).
+/// `index.build` of the root and join (a precondition for almost every test).
 async fn build(engine: &Engine, root: &str) {
     let (h, _report) = engine
         .index_build_as(vp(root), Actor::User)
@@ -66,7 +66,7 @@ async fn build(engine: &Engine, root: &str) {
     assert_eq!(h.join().await, TaskState::Completed);
 }
 
-/// Todos los textos que salieron hacia el proveedor, en orden.
+/// Every text that went out to the provider, in order.
 fn sent_inputs(fake: &FakeEmbed) -> Vec<String> {
     fake.calls
         .lock()
@@ -80,19 +80,19 @@ fn sent_inputs(fake: &FakeEmbed) -> Vec<String> {
 #[tokio::test]
 async fn embed_requires_prior_build() {
     let (engine, _mem, _fake) = setup().await;
-    // Sin `index.build` previo: el error va en la RESPUESTA, no en el join.
+    // Without a prior `index.build`: the error is in the RESPONSE, not the join.
     match engine.index_embed_as(vp("mem:///"), Actor::User).await {
         Err(norte_proto::Error::NotFound) => {}
-        Err(e) => panic!("esperaba NotFound, fue {e:?}"),
-        Ok(_) => panic!("esperaba NotFound sin build previo, abrió la Task"),
+        Err(e) => panic!("expected NotFound, was {e:?}"),
+        Ok(_) => panic!("expected NotFound without a prior build, it opened the Task"),
     }
 }
 
 #[tokio::test]
 async fn embed_skips_non_text_and_records_only_text() {
     let (engine, mem, fake) = setup().await;
-    write_file(&mem, "mem:///a.txt", b"contenido alfa").await;
-    write_file(&mem, "mem:///b.md", b"contenido beta").await;
+    write_file(&mem, "mem:///a.txt", b"alpha content").await;
+    write_file(&mem, "mem:///b.md", b"beta content").await;
     write_file(&mem, "mem:///c.bin", &[0u8, 159, 146, 150]).await;
     build(&engine, "mem:///").await;
 
@@ -103,60 +103,64 @@ async fn embed_skips_non_text_and_records_only_text() {
     assert_eq!(h.join().await, TaskState::Completed);
 
     let inputs = sent_inputs(&fake);
-    assert_eq!(inputs.len(), 2, "solo los 2 ficheros de texto: {inputs:?}");
+    assert_eq!(inputs.len(), 2, "only the 2 text files: {inputs:?}");
     assert!(
-        inputs.iter().any(|t| t.contains("alfa")),
-        "el contenido de a.txt salió hacia el proveedor"
+        inputs.iter().any(|t| t.contains("alpha")),
+        "a.txt's content went out to the provider"
     );
 }
 
 #[tokio::test]
 async fn embed_skip_unchanged_hash_and_reembed_on_model_change() {
     let (engine, mem, fake) = setup().await;
-    write_file(&mem, "mem:///a.txt", b"contenido alfa").await;
-    write_file(&mem, "mem:///b.md", b"contenido beta").await;
+    write_file(&mem, "mem:///a.txt", b"alpha content").await;
+    write_file(&mem, "mem:///b.md", b"beta content").await;
     build(&engine, "mem:///").await;
 
     let h = engine
         .index_embed_as(vp("mem:///"), Actor::User)
         .await
-        .expect("primer embed");
+        .expect("first embed");
     assert_eq!(h.join().await, TaskState::Completed);
-    assert_eq!(sent_inputs(&fake).len(), 2, "primer run embebe ambos");
+    assert_eq!(sent_inputs(&fake).len(), 2, "the first run embeds both");
 
-    // Segundo run: hashes sin cambios → 0 inputs nuevos.
+    // Second run: unchanged hashes → 0 new inputs.
     let h = engine
         .index_embed_as(vp("mem:///"), Actor::User)
         .await
-        .expect("segundo embed");
+        .expect("second embed");
     assert_eq!(h.join().await, TaskState::Completed);
     assert_eq!(
         sent_inputs(&fake).len(),
         2,
-        "hash sin cambios ⇒ nada nuevo sale al proveedor"
+        "unchanged hash ⇒ nothing new goes to the provider"
     );
 
-    // Cambio de MODELO configurado: los embeddings previos son stale → todo
-    // se re-embebe (el total se dobla).
+    // Configured MODEL change: the previous embeddings are stale → everything
+    // gets re-embedded (the total doubles).
     let mut cfg = ai_cfg();
-    cfg.providers[0].model = "otro-modelo".into();
+    cfg.providers[0].model = "another-model".into();
     engine.set_ai_config(cfg);
     let h = engine
         .index_embed_as(vp("mem:///"), Actor::User)
         .await
-        .expect("tercer embed");
+        .expect("third embed");
     assert_eq!(h.join().await, TaskState::Completed);
-    assert_eq!(sent_inputs(&fake).len(), 4, "modelo nuevo ⇒ re-embebe todo");
+    assert_eq!(
+        sent_inputs(&fake).len(),
+        4,
+        "new model ⇒ re-embeds everything"
+    );
 }
 
 #[tokio::test]
 async fn embed_denied_prefixes_excluded_before_read() {
     let mut cfg = ai_cfg();
-    cfg.denied_prefixes = vec![vp("mem:///secreto")];
+    cfg.denied_prefixes = vec![vp("mem:///secret")];
     let (engine, mem, fake) = setup_with(FakeEmbed::new(8), cfg).await;
-    mem.mkdir(&vp("mem:///secreto")).await.expect("mkdir");
-    write_file(&mem, "mem:///secreto/clave.txt", b"SECRETO").await;
-    write_file(&mem, "mem:///normal.txt", b"contenido normal").await;
+    mem.mkdir(&vp("mem:///secret")).await.expect("mkdir");
+    write_file(&mem, "mem:///secret/key.txt", b"SECRET").await;
+    write_file(&mem, "mem:///normal.txt", b"normal content").await;
     build(&engine, "mem:///").await;
 
     let h = engine
@@ -167,41 +171,37 @@ async fn embed_denied_prefixes_excluded_before_read() {
 
     let inputs = sent_inputs(&fake);
     assert!(
-        inputs.iter().all(|t| !t.contains("SECRETO")),
-        "contenido bajo denied_prefixes JAMÁS sale al proveedor: {inputs:?}"
+        inputs.iter().all(|t| !t.contains("SECRET")),
+        "content under denied_prefixes NEVER goes to the provider: {inputs:?}"
     );
-    assert_eq!(
-        inputs.len(),
-        1,
-        "solo el fichero fuera del prefijo denegado"
-    );
+    assert_eq!(inputs.len(), 1, "only the file outside the denied prefix");
 }
 
-/// #122: un ENLACE puesto entre el `build` y el `embed` no cuela el contenido
-/// de un prefijo denegado.
+/// #122: a LINK placed between the `build` and the `embed` does not sneak in
+/// the content of a denied prefix.
 ///
-/// El candidato sale de la fila que dejó el build (`kind = file`, ruta), y la
-/// lectura ocurre después: quien pueda escribir en el árbol indexado cambia un
-/// `.txt` por un enlace a un fichero denegado y sus 32 KiB se iban al
-/// proveedor de embeddings, con lo que «ni un byte de un prefijo denegado se
-/// lee» dejaba de ser cierto justo donde el módulo lo promete.
+/// The candidate comes from the row the build left behind (`kind = file`,
+/// path), and the read happens afterward: whoever can write to the indexed
+/// tree swaps a `.txt` for a link to a denied file and its 32 KiB would go to
+/// the embedding provider, which would make "not a single byte of a denied
+/// prefix is read" stop being true exactly where the module promises it.
 #[tokio::test]
-async fn un_enlace_puesto_tras_el_build_no_cuela_un_prefijo_denegado() {
+async fn a_link_placed_after_the_build_does_not_sneak_in_a_denied_prefix() {
     let mut cfg = ai_cfg();
-    cfg.denied_prefixes = vec![vp("mem:///secreto")];
+    cfg.denied_prefixes = vec![vp("mem:///secret")];
     let (engine, mem, fake) = setup_with(FakeEmbed::new(8), cfg).await;
-    mem.mkdir(&vp("mem:///secreto")).await.expect("mkdir");
-    write_file(&mem, "mem:///secreto/clave.txt", b"SECRETO").await;
-    // Un candidato legítimo, indexado como fichero de texto.
-    write_file(&mem, "mem:///normal.txt", b"contenido normal").await;
-    write_file(&mem, "mem:///trampa.txt", b"parece texto").await;
+    mem.mkdir(&vp("mem:///secret")).await.expect("mkdir");
+    write_file(&mem, "mem:///secret/key.txt", b"SECRET").await;
+    // A legitimate candidate, indexed as a text file.
+    write_file(&mem, "mem:///normal.txt", b"normal content").await;
+    write_file(&mem, "mem:///trap.txt", b"looks like text").await;
     build(&engine, "mem:///").await;
 
-    // Y ENTRE el build y el embed, la sustitución.
-    mem.remove(&vp("mem:///trampa.txt")).await.expect("remove");
+    // And BETWEEN the build and the embed, the swap.
+    mem.remove(&vp("mem:///trap.txt")).await.expect("remove");
     mem.symlink(
-        &vp("mem:///trampa.txt"),
-        b"secreto/clave.txt",
+        &vp("mem:///trap.txt"),
+        b"secret/key.txt",
         norte_vfs::SymlinkKind::File,
     )
     .await
@@ -215,24 +215,24 @@ async fn un_enlace_puesto_tras_el_build_no_cuela_un_prefijo_denegado() {
 
     let inputs = sent_inputs(&fake);
     assert!(
-        inputs.iter().all(|t| !t.contains("SECRETO")),
-        "el enlace no puede traer lo denegado: {inputs:?}"
+        inputs.iter().all(|t| !t.contains("SECRET")),
+        "the link cannot bring in what is denied: {inputs:?}"
     );
     assert_eq!(
         inputs.len(),
         1,
-        "el candidato sustituido se salta, y el legítimo sigue: {inputs:?}"
+        "the swapped candidate is skipped, and the legitimate one still goes: {inputs:?}"
     );
 }
 
-/// Espera (acotada) a que el proveedor fake haya recibido al menos un batch:
-/// la task está provablemente en vuelo.
+/// Waits (bounded) for the fake provider to have received at least one batch:
+/// the task is provably in flight.
 async fn wait_first_call(fake: &FakeEmbed) {
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     while fake.calls.lock().expect("calls lock").is_empty() {
         assert!(
             std::time::Instant::now() < deadline,
-            "el primer batch nunca llegó al proveedor"
+            "the first batch never reached the provider"
         );
         tokio::time::sleep(Duration::from_millis(2)).await;
     }
@@ -240,9 +240,9 @@ async fn wait_first_call(fake: &FakeEmbed) {
 
 #[tokio::test]
 async fn embed_clean_cancellation() {
-    // 40 ficheros → 3 batches; 50ms de latencia por batch. Se cancela cuando
-    // el primer batch está provablemente EN VUELO (observado en `calls`):
-    // quedan batches por delante, así que el corte es determinista.
+    // 40 files → 3 batches; 50ms of latency per batch. It cancels when the
+    // first batch is provably IN FLIGHT (observed in `calls`): there are
+    // batches ahead, so the cut is deterministic.
     let (engine, mem, fake) = setup_with(
         FakeEmbed::new(8).with_delay(Duration::from_millis(50)),
         ai_cfg(),
@@ -252,7 +252,7 @@ async fn embed_clean_cancellation() {
         write_file(
             &mem,
             &format!("mem:///f{i}.txt"),
-            format!("texto {i}").as_bytes(),
+            format!("text {i}").as_bytes(),
         )
         .await;
     }
@@ -266,23 +266,23 @@ async fn embed_clean_cancellation() {
     h.cancel();
     assert_eq!(h.join().await, TaskState::Cancelled);
 
-    // El índice queda coherente: un embed posterior completa sin problemas.
+    // The index stays coherent: a later embed completes without trouble.
     let h2 = engine
         .index_embed_as(vp("mem:///"), Actor::User)
         .await
-        .expect("embed tras cancelar");
+        .expect("embed after cancelling");
     assert_eq!(h2.join().await, TaskState::Completed);
 }
 
 #[tokio::test]
 async fn embed_cancel_during_rate_limit_retry_is_prompt() {
-    // Rate-limit persistente con retry_after alto: la task queda en el sleep
-    // de reintento (clamp 30s). El cancel debe cortarlo YA (select), no al
-    // vencer el sleep (que acabaría en Failed tras ~60s).
+    // Persistent rate limit with a high retry_after: the task sits in the
+    // retry sleep (clamped to 30s). Cancel must cut it RIGHT AWAY (select),
+    // not when the sleep expires (which would end in Failed after ~60s).
     let mut fake = FakeEmbed::new(8).with_rate_limited(99);
     fake.retry_after = Some(60);
     let (engine, mem, fake) = setup_with(fake, ai_cfg()).await;
-    write_file(&mem, "mem:///a.txt", b"contenido alfa").await;
+    write_file(&mem, "mem:///a.txt", b"alpha content").await;
     build(&engine, "mem:///").await;
 
     let h = engine
@@ -295,15 +295,15 @@ async fn embed_cancel_during_rate_limit_retry_is_prompt() {
     assert_eq!(h.join().await, TaskState::Cancelled);
     assert!(
         start.elapsed() < Duration::from_secs(10),
-        "la cancelación no espera al sleep de reintento"
+        "the cancellation does not wait out the retry sleep"
     );
 }
 
 #[tokio::test]
 async fn embed_rate_limit_retries_then_fails() {
-    // 2 rate-limits < EMBED_RETRY_MAX → la task reintenta por dentro y completa.
+    // 2 rate limits < EMBED_RETRY_MAX → the task retries internally and completes.
     let (engine, mem, fake) = setup_with(FakeEmbed::new(8).with_rate_limited(2), ai_cfg()).await;
-    write_file(&mem, "mem:///a.txt", b"contenido alfa").await;
+    write_file(&mem, "mem:///a.txt", b"alpha content").await;
     build(&engine, "mem:///").await;
     let h = engine
         .index_embed_as(vp("mem:///"), Actor::User)
@@ -313,13 +313,13 @@ async fn embed_rate_limit_retries_then_fails() {
     assert_eq!(
         fake.calls.lock().expect("calls lock").len(),
         3,
-        "2 intentos rate-limited + 1 bueno"
+        "2 rate-limited attempts + 1 good one"
     );
 
-    // Rate-limit persistente → la task FALLA con ProviderUnavailable (jamás
-    // cuelga en reintentos infinitos).
+    // Persistent rate limit → the task FAILS with ProviderUnavailable (never
+    // hangs in infinite retries).
     let (engine, mem, _fake) = setup_with(FakeEmbed::new(8).with_rate_limited(99), ai_cfg()).await;
-    write_file(&mem, "mem:///a.txt", b"contenido alfa").await;
+    write_file(&mem, "mem:///a.txt", b"alpha content").await;
     build(&engine, "mem:///").await;
     let h = engine
         .index_embed_as(vp("mem:///"), Actor::User)
@@ -329,7 +329,7 @@ async fn embed_rate_limit_retries_then_fails() {
         TaskState::Failed {
             error: norte_proto::Error::ProviderUnavailable { .. },
         } => {}
-        st => panic!("esperaba Failed(ProviderUnavailable), fue {st:?}"),
+        st => panic!("expected Failed(ProviderUnavailable), was {st:?}"),
     }
 }
 
@@ -338,24 +338,24 @@ async fn embed_gate_disabled_is_policy_denied() {
     let mut cfg = ai_cfg();
     cfg.enabled = false;
     let (engine, mem, fake) = setup_with(FakeEmbed::new(8), cfg).await;
-    write_file(&mem, "mem:///a.txt", b"contenido alfa").await;
+    write_file(&mem, "mem:///a.txt", b"alpha content").await;
     build(&engine, "mem:///").await;
 
     match engine.index_embed_as(vp("mem:///"), Actor::User).await {
         Err(norte_proto::Error::PolicyDenied { .. }) => {}
-        Err(e) => panic!("esperaba PolicyDenied con IA off, fue {e:?}"),
-        Ok(_) => panic!("esperaba PolicyDenied con IA off, abrió la Task"),
+        Err(e) => panic!("expected PolicyDenied with AI off, was {e:?}"),
+        Ok(_) => panic!("expected PolicyDenied with AI off, it opened the Task"),
     }
     assert!(
         fake.calls.lock().expect("calls lock").is_empty(),
-        "con IA deshabilitada nada sale al proveedor"
+        "with AI disabled nothing goes to the provider"
     );
 }
 
-/// Seed + build + embed (Completed): precondición de los tests de búsqueda.
+/// Seed + build + embed (Completed): precondition for the search tests.
 async fn seed_and_embed(engine: &Engine, mem: &MemProvider) {
-    write_file(mem, "mem:///a.txt", b"contenido alfa").await;
-    write_file(mem, "mem:///b.md", b"contenido beta").await;
+    write_file(mem, "mem:///a.txt", b"alpha content").await;
+    write_file(mem, "mem:///b.md", b"beta content").await;
     build(engine, "mem:///").await;
     let h = engine
         .index_embed_as(vp("mem:///"), Actor::User)
@@ -369,23 +369,23 @@ async fn semantic_search_finds_exact_content_top1() {
     let (engine, mem, _fake) = setup().await;
     seed_and_embed(&engine, &mem).await;
 
-    // query == contenido exacto de a.txt ⇒ FakeEmbed determinista ⇒ vector
-    // idéntico ⇒ cos ~1.0 y top-1.
+    // query == a.txt's exact content ⇒ deterministic FakeEmbed ⇒ identical
+    // vector ⇒ cos ~1.0 and top-1.
     let hits = engine
-        .index_search_semantic(Some(&vp("mem:///")), "contenido alfa", 10)
+        .index_search_semantic(Some(&vp("mem:///")), "alpha content", 10)
         .await
-        .expect("search alfa");
-    assert!(!hits.is_empty(), "hay embeddings, tiene que haber hits");
+        .expect("search alpha");
+    assert!(!hits.is_empty(), "there are embeddings, there must be hits");
     assert_eq!(hits[0].0, vp("mem:///a.txt"));
-    assert!((hits[0].1 - 1.0).abs() < 1e-5, "score top-1: {}", hits[0].1);
+    assert!((hits[0].1 - 1.0).abs() < 1e-5, "top-1 score: {}", hits[0].1);
 
-    // root None también encuentra (barrido global).
+    // root None also finds it (global sweep).
     let hits = engine
-        .index_search_semantic(None, "contenido beta", 10)
+        .index_search_semantic(None, "beta content", 10)
         .await
         .expect("search beta");
     assert_eq!(hits[0].0, vp("mem:///b.md"));
-    // Todos los scores finitos (cinturón anti-NaN del wire) y orden descendente.
+    // All scores finite (the wire's anti-NaN belt) and descending order.
     assert!(hits.iter().all(|(_, s)| s.is_finite()));
     assert!(hits.windows(2).all(|w| w[0].1 >= w[1].1));
 }
@@ -395,61 +395,61 @@ async fn semantic_search_clamps_k_and_ignores_stale_model() {
     let (engine, mem, _fake) = setup().await;
     seed_and_embed(&engine, &mem).await;
 
-    // k=0 ⇒ clamp a 1 ⇒ como mucho 1 hit (no error).
+    // k=0 ⇒ clamped to 1 ⇒ at most 1 hit (not an error).
     let hits = engine
-        .index_search_semantic(Some(&vp("mem:///")), "contenido alfa", 0)
+        .index_search_semantic(Some(&vp("mem:///")), "alpha content", 0)
         .await
-        .expect("k=0 no es error");
-    assert_eq!(hits.len(), 1, "k=0 se recorta a 1");
+        .expect("k=0 is not an error");
+    assert_eq!(hits.len(), 1, "k=0 is clamped to 1");
 
-    // k=1000 ⇒ clamp al MAX del wire, sin error.
+    // k=1000 ⇒ clamped to the wire's MAX, without error.
     let hits = engine
-        .index_search_semantic(Some(&vp("mem:///")), "contenido alfa", 1000)
+        .index_search_semantic(Some(&vp("mem:///")), "alpha content", 1000)
         .await
-        .expect("k=1000 no es error");
-    assert_eq!(hits.len(), 2, "solo hay 2 vectores");
+        .expect("k=1000 is not an error");
+    assert_eq!(hits.len(), 2, "there are only 2 vectors");
 
-    // Cambio de modelo en config ⇒ los vectores persistidos son stale para el
-    // modelo nuevo ⇒ invisibles ⇒ 0 hits.
+    // Model change in config ⇒ the persisted vectors are stale for the new
+    // model ⇒ invisible ⇒ 0 hits.
     let mut cfg = ai_cfg();
-    cfg.providers[0].model = "otro-modelo".into();
+    cfg.providers[0].model = "another-model".into();
     engine.set_ai_config(cfg);
     let hits = engine
-        .index_search_semantic(Some(&vp("mem:///")), "contenido alfa", 10)
+        .index_search_semantic(Some(&vp("mem:///")), "alpha content", 10)
         .await
-        .expect("modelo nuevo no es error");
-    assert!(hits.is_empty(), "vectores de otro modelo son invisibles");
+        .expect("new model is not an error");
+    assert!(hits.is_empty(), "vectors from another model are invisible");
 }
 
 #[tokio::test]
 async fn semantic_search_garbage_query_vector_is_provider_error() {
-    // `FakeEmbed` de dim 0 ⇒ vector de query VACÍO: proveedor basura. El
-    // cinturón lo convierte en error honesto (misma taxonomía que la mentira
-    // de 0 vectores), jamás 0 hits en silencio. Las variantes NaN/norma-cero
-    // comparten la misma rama (norm2 no finita o ≤0) y quedan documentadas en
-    // el engine; FakeEmbed no tiene knob para emitirlas.
+    // `FakeEmbed` of dim 0 ⇒ an EMPTY query vector: a garbage provider. The
+    // belt turns it into an honest error (same taxonomy as the 0-vectors lie),
+    // never silent 0 hits. The NaN/zero-norm variants share the same branch
+    // (norm2 not finite or ≤0) and are documented in the engine; FakeEmbed has
+    // no knob to emit them.
     let (engine, _mem, _fake) = setup_with(FakeEmbed::new(0), ai_cfg()).await;
-    match engine.index_search_semantic(None, "hola", 10).await {
+    match engine.index_search_semantic(None, "hello", 10).await {
         Err(norte_proto::Error::ProviderUnavailable { retryable: false }) => {}
-        other => panic!("esperaba ProviderUnavailable no-retryable, fue {other:?}"),
+        other => panic!("expected non-retryable ProviderUnavailable, was {other:?}"),
     }
 }
 
 #[tokio::test]
 async fn semantic_search_unsupported_and_gate() {
-    // Engine con índice pero SIN proveedor de embeddings ⇒ Unsupported.
+    // Engine with an index but WITHOUT an embedding provider ⇒ Unsupported.
     let index = norte_index::Index::open_memory().await.expect("index");
     let engine = Engine::new().with_index(Arc::new(index));
     engine.set_ai_config(ai_cfg());
     match engine
-        .index_search_semantic(Some(&vp("mem:///")), "hola", 10)
+        .index_search_semantic(Some(&vp("mem:///")), "hello", 10)
         .await
     {
         Err(norte_proto::Error::Unsupported) => {}
-        other => panic!("esperaba Unsupported sin proveedor, fue {other:?}"),
+        other => panic!("expected Unsupported without a provider, was {other:?}"),
     }
 
-    // Con proveedor pero IA off ⇒ PolicyDenied (gate PRE-embed).
+    // With a provider but AI off ⇒ PolicyDenied (PRE-embed gate).
     let (engine, mem, fake) = setup().await;
     seed_and_embed(&engine, &mem).await;
     let mut cfg = ai_cfg();
@@ -457,15 +457,15 @@ async fn semantic_search_unsupported_and_gate() {
     engine.set_ai_config(cfg);
     let before = fake.calls.lock().expect("calls lock").len();
     match engine
-        .index_search_semantic(Some(&vp("mem:///")), "contenido alfa", 10)
+        .index_search_semantic(Some(&vp("mem:///")), "alpha content", 10)
         .await
     {
         Err(norte_proto::Error::PolicyDenied { .. }) => {}
-        other => panic!("esperaba PolicyDenied con IA off, fue {other:?}"),
+        other => panic!("expected PolicyDenied with AI off, was {other:?}"),
     }
     assert_eq!(
         fake.calls.lock().expect("calls lock").len(),
         before,
-        "con IA off la query jamás sale al proveedor"
+        "with AI off the query never goes to the provider"
     );
 }

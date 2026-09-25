@@ -1,31 +1,32 @@
 [package]
 name = "norte-gui-tauri"
-description = "El renderer de referencia de norte: una webview de Tauri sobre norte-ui-host"
+description = "norte's reference renderer: a Tauri webview over norte-ui-host"
 license = "MIT OR Apache-2.0"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 authors.workspace = true
-# No se publica en crates.io: es una aplicación, y se distribuye como paquete
-# (deb, RPM, AppImage) con sus binarios hermanos dentro, no como biblioteca.
+# Not published to crates.io: it is an application, and it is distributed as a
+# package (deb, RPM, AppImage) with its sibling binaries inside, not as a
+# library.
 publish = false
 
-# El ÚNICO crate del workspace que puede nombrar a Tauri, a WRY o a un runtime
-# de JavaScript (ADR 0066, decisión D2). `norte-client`, `norte-frontend` y
-# `norte-ui-host` compilan y pasan sus tests sin Tauri y sin Node instalados, y
-# sus tests de frontera lo vigilan.
+# The ONLY workspace crate allowed to name Tauri, WRY or a JavaScript runtime
+# (ADR 0066, decision D2). `norte-client`, `norte-frontend` and `norte-ui-host`
+# build and pass their tests without Tauri and without Node installed, and
+# their boundary tests watch that.
 #
-# Fuera del gate PORTABLE (`core_pkgs` en el justfile lo excluye) y no por ser
-# provisional —es un frontend soportado (ADR 0087)—: arrastra WebKitGTK, GTK3 y
-# libsoup3 del sistema, que ninguna otra parte del árbol necesita para
-# compilar. Su gate es `just gui-ci`, con su propio workflow.
+# Outside the PORTABLE gate (`core_pkgs` in the justfile excludes it), and not
+# because it is provisional — it is a supported frontend (ADR 0087) — but
+# because it drags in the system's WebKitGTK, GTK3 and libsoup3, which no other
+# part of the tree needs to build. Its gate is `just gui-ci`, with its own
+# workflow.
 
 [features]
-# La instrumentación de la tarea 3.6: añade el comando `metrics`, por el que
-# el renderer devuelve lo que midió. NO está en el binario por defecto — la
-# superficie de comandos de producción es la que clava
-# `tests/webview_boundary.rs`.
+# Task 3.6's instrumentation: adds the `metrics` command, through which the
+# renderer returns what it measured. NOT in the shipped binary — the
+# production command surface is what `tests/webview_boundary.rs` pins.
 metrics = []
 
 [lib]
@@ -38,7 +39,7 @@ path = "src/main.rs"
 
 [dependencies]
 norte-client.workspace = true
-# El predicado de peligros de terminal: el MISMO que enmascara los nombres.
+# The terminal-hazard predicate: the SAME one that masks names.
 norte-encoding.workspace = true
 norte-config = { workspace = true, features = ["logging"] }
 norte-frontend.workspace = true
@@ -52,19 +53,19 @@ tauri.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
 tracing.workspace = true
-# El log al fichero se monta AQUÍ y no con el helper de `norte-core`: este
-# binario habla con el daemon por un socket y no puede arrastrar el motor, los
-# providers y el host de plugins para escribir una línea (ADR 0066). Las dos
-# ya son dependencias del workspace; no entra nada nuevo al árbol.
+# The file log is set up HERE, not with `norte-core`'s helper: this binary
+# talks to the daemon over a socket and cannot drag in the engine, the
+# providers and the plugin host to write one line (ADR 0066). Both are already
+# workspace dependencies; nothing new enters the tree.
 tracing-appender.workspace = true
 tracing-subscriber.workspace = true
-# `vpath_from_native`: la ÚNICA función que convierte una ruta del sistema en
-# un `VPath`. Re-derivar aquí las reglas del esquema local sería exactamente
-# la duplicación que esa función existe para evitar (regla 1). Vive en
-# `norte-vfs` —el crate del trait, que no toca disco— y no en el provider
-# local: este binario habla con el daemon por un socket, y arrastrar el único
-# crate con `unsafe`, `openat2` y `ConfinedRoot` para convertir una cadena es
-# lo contrario de lo que promete la ADR 0066 (#254).
+# `vpath_from_native`: the ONLY function that converts a system path into a
+# `VPath`. Re-deriving the local scheme's rules here would be exactly the
+# duplication that function exists to avoid (rule 1). It lives in `norte-vfs`
+# — the trait's crate, which does not touch disk — and not in the local
+# provider: this binary talks to the daemon over a socket, and dragging in the
+# one crate with `unsafe`, `openat2` and `ConfinedRoot` to convert a string is
+# the opposite of what ADR 0066 promises (#254).
 norte-vfs.workspace = true
 
 [build-dependencies]
@@ -73,9 +74,9 @@ tauri-build.workspace = true
 [dev-dependencies]
 norte-core.workspace = true
 norte-testkit.workspace = true
-# Solo en TESTS: `celdas_locales` monta un `LocalProvider` de verdad contra un
-# directorio temporal. Las dependencias de desarrollo no viajan en el binario,
-# y `tests/dependency_boundary.rs` las excluye a propósito (#254).
+# TEST-ONLY: `celdas_locales` mounts a real `LocalProvider` against a temp
+# directory. Dev-dependencies do not travel in the binary, and
+# `tests/dependency_boundary.rs` deliberately excludes them (#254).
 norte-vfs-local.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }

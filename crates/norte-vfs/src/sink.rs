@@ -1,47 +1,50 @@
-//! [`ByteSink`]: escritura transaccional de un archivo. La invariante de
-//! cancelación limpia del proyecto ("destino limpio o `.norte-partial`,
-//! jamás un archivo a medias sin marcar") vive AQUÍ, como contrato del sink —
-//! no es heroísmo del copy engine.
+//! [`ByteSink`]: transactional write of a file. The project's clean
+//! cancellation invariant ("clean destination or `.norte-partial`, never
+//! an unmarked half-done file") lives HERE, as the sink's contract — it's
+//! not heroics on the copy engine's part.
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use norte_proto::Error;
 
-/// Destino de escritura transaccional devuelto por
+/// Transactional write destination returned by
 /// [`Provider::write`](crate::Provider::write).
 ///
-/// Contrato (verificado por la suite contractual):
-/// - Los bytes van a un staging propio del provider (p. ej.
-///   `.norte-partial.<hash>.<pid>-<seq>` en FS reales — nombre corto que NO
-///   deriva del nombre final, que puede rozar `NAME_MAX`); el path final NO
-///   existe ni cambia hasta [`Self::commit`].
-/// - [`Self::commit`] publica el contenido completo en el path final, de
-///   forma atómica si el backend puede (`RENAME_ATOMIC`).
-/// - [`Self::abort`] elimina todo rastro del staging; es la vía de la
-///   cancelación y del fallo.
-/// - Soltar el sink sin commit equivale a un abort best-effort: un provider
-///   DEBE intentar limpiar en `Drop`, pero solo `abort()` explícito garantiza
-///   la limpieza (Drop no puede hacer I/O async de forma fiable).
+/// Contract (verified by the contract suite):
+/// - The bytes go to a staging file of the provider's own (e.g.
+///   `.norte-partial.<hash>.<pid>-<seq>` on real FSes — a short name that
+///   does NOT derive from the final name, which may brush `NAME_MAX`); the
+///   final path neither exists nor changes until [`Self::commit`].
+/// - [`Self::commit`] publishes the complete content at the final path,
+///   atomically if the backend can (`RENAME_ATOMIC`).
+/// - [`Self::abort`] removes every trace of the staging; it's the path
+///   cancellation and failure take.
+/// - Dropping the sink without a commit is equivalent to a best-effort
+///   abort: a provider MUST try to clean up in `Drop`, but only an
+///   explicit `abort()` guarantees the cleanup (Drop can't reliably do
+///   async I/O).
 #[async_trait]
 pub trait ByteSink: Send {
-    /// Añade un chunk al staging. Errores típicos: [`Error::NoSpace`],
+    /// Adds a chunk to the staging. Typical errors: [`Error::NoSpace`],
     /// [`Error::Io`].
     async fn write(&mut self, chunk: Bytes) -> Result<(), Error>;
 
-    /// Publica el contenido en el path final y consume el sink.
+    /// Publishes the content at the final path and consumes the sink.
     async fn commit(self: Box<Self>) -> Result<(), Error>;
 
-    /// Elimina el staging sin publicar nada y consume el sink.
-    /// Idempotente respecto a un staging ya desaparecido.
+    /// Removes the staging without publishing anything and consumes the
+    /// sink. Idempotent with respect to a staging that's already gone.
     async fn abort(self: Box<Self>) -> Result<(), Error>;
 
-    /// Suelta el staging SIN publicar y SIN borrar, durabilizándolo, para
-    /// que un [`Provider::open_resumable`](crate::Provider::open_resumable)
-    /// posterior lo reencuentre y REANUDE (ADR 0012). Es la vía de la
-    /// cancelación/fallo cuando el caller pidió resume.
+    /// Drops the staging WITHOUT publishing and WITHOUT deleting it,
+    /// durabilizing it, so a later
+    /// [`Provider::open_resumable`](crate::Provider::open_resumable) finds
+    /// it again and RESUMES it (ADR 0012). It's the path cancellation/
+    /// failure takes when the caller asked for resume.
     ///
-    /// Default: [`abort`](Self::abort) — un provider sin reanudación NO
-    /// deja parcial (degrada a destino limpio, coherente con `resume=Off`).
+    /// Default: [`abort`](Self::abort) — a provider without resume leaves
+    /// NO partial behind (degrades to a clean destination, consistent
+    /// with `resume=Off`).
     async fn keep(self: Box<Self>) -> Result<(), Error> {
         self.abort().await
     }

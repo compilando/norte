@@ -1,80 +1,79 @@
-//! Hook de statusbar (M4 Lua, task 7): `norte.ui.statusbar(fn)` deja que un
-//! `init.lua` pinte la barra de estado. A diferencia de un comando (task 5),
-//! esta llamada es SÍNCRONA y se dispara en CADA vuelta de render — un bucle
-//! infinito bloquearía el TUI entero — así que el presupuesto de
-//! instrucciones no CEDE (yield, como el de un comando): al agotarse ABORTA
-//! la llamada (`Err`) y `LuaHost::statusbar` deshabilita el hook para el
-//! resto de la vida de este host (se re-habilita solo con un `LuaHost`
-//! nuevo, hot-reload, task 8).
+//! Statusbar hook (M4 Lua, task 7): `norte.ui.statusbar(fn)` lets an
+//! `init.lua` paint the status bar. Unlike a command (task 5), this call is
+//! SYNCHRONOUS and fires on EVERY render pass — an infinite loop would
+//! block the entire TUI — so the instruction budget does NOT yield (like a
+//! command's does): once exhausted it ABORTS the call (`Err`) and
+//! `LuaHost::statusbar` disables the hook for the rest of this host's life
+//! (it is only re-enabled with a new `LuaHost`, hot-reload, task 8).
 //!
-//! Contexto heredado de T5, corregido tras revisión: `Lua::set_hook`
-//! instala en el estado PRINCIPAL; `Function::call` SÍNCRONO corre en ese
-//! mismo estado (a diferencia de `call_async`, que corre en una corrutina
-//! propia) — por eso el hook del estado principal SÍ dispara aquí.
+//! Context inherited from T5, corrected after review: `Lua::set_hook`
+//! installs on the MAIN state; a SYNCHRONOUS `Function::call` runs on that
+//! same state (unlike `call_async`, which runs on its own coroutine) —
+//! that is why the main state's hook DOES fire here.
 //!
-//! **CORRECCIÓN (spec-reviewer, reproducido fuera del repo con mlua 0.10.5):**
-//! la afirmación original de que el hook del driver («por thread») y el de
-//! esta barra («estado principal») son independientes es FALSA. mlua guarda
-//! `hook_callback`/`hook_thread` en una única ranura de `ExtraData`
-//! COMPARTIDA por el estado principal y TODAS las corrutinas — la propia
-//! doc de mlua lo dice: «cannot have more than one hook function set at a
-//! time». El trampolín en C (`hook_proc`, `state/raw.rs::set_thread_hook`)
-//! comprueba `hook_thread == state` en cada disparo; si no coincide, se
-//! autodesarma (`lua_sethook(state, None, 0, 0)`) SIN llamar al callback.
-//! Si esta barra llama `Lua::set_hook`/`remove_hook` mientras el driver
-//! tiene una corrutina viva con su propio `Thread::set_hook` (cancelación,
-//! regla 3), la próxima vez que el hook del driver dispare se encuentra con
-//! `hook_thread` apuntando a OTRO estado y se apaga solo — un bucle Lua puro
-//! en vuelo queda INCANCELABLE (ni token ni timeout lo matan; el driver
-//! tendría que esperar el timeout duro y ABANDONAR el future).
+//! **CORRECTION (spec-reviewer, reproduced outside the repo with mlua
+//! 0.10.5):** the original claim that the driver's hook ("per thread") and
+//! this bar's hook ("main state") are independent is FALSE. mlua stores
+//! `hook_callback`/`hook_thread` in a single `ExtraData` slot SHARED by the
+//! main state and ALL coroutines — mlua's own docs say so: "cannot have
+//! more than one hook function set at a time". The C trampoline
+//! (`hook_proc`, `state/raw.rs::set_thread_hook`) checks
+//! `hook_thread == state` on every firing; if it does not match, it
+//! self-disarms (`lua_sethook(state, None, 0, 0)`) WITHOUT calling the
+//! callback. If this bar calls `Lua::set_hook`/`remove_hook` while the
+//! driver has a live coroutine with its own `Thread::set_hook`
+//! (cancellation, rule 3), the next time the driver's hook fires it finds
+//! `hook_thread` pointing at ANOTHER state and shuts itself off — a pure
+//! Lua loop in flight becomes UNCANCELLABLE (neither token nor timeout
+//! kills it; the driver would have to wait out the hard timeout and
+//! ABANDON the future).
 //!
-//! Por eso `LuaHost` lleva `run_active: Rc<Cell<u32>>` (compartido con
-//! `driver.rs`: `invoke_with_timeout` lo INCREMENTA al arrancar, el `Drop` de
-//! `CommandRun` — no `RunGuard`, que vive DENTRO del future y jamás correría
-//! si el `CommandRun` se dropea sin pollear — lo DECREMENTA, TODOS los
-//! caminos incluido el abandono). Es un CONTADOR, no un booleano
-//! (spec-review 3): el patrón natural del caller (T8) `self.run =
-//! Some(host.invoke(...))` evalúa el run nuevo (incrementa) ANTES de dropear
-//! el viejo (decrementa) — con un booleano, ese decremento del viejo
-//! apagaría la protección del nuevo que acaba de arrancar. Mientras el
-//! contador sea `!= 0`, [`super::LuaHost::statusbar`] JAMÁS llama a esta
-//! función — ni de lejos toca `set_hook`/`remove_hook` — devuelve el valor
-//! cacheado si el `StatusInput` coincide o `None` si no: la barra se
-//! CONGELA mientras haya algún run vivo (incluido uno ya terminado que el
-//! caller aún no ha dropeado), a cambio de no poder desarmar jamás la
-//! cancelación de un run en vuelo.
+//! That is why `LuaHost` carries `run_active: Rc<Cell<u32>>` (shared with
+//! `driver.rs`: `invoke_with_timeout` INCREMENTS it on start, `CommandRun`'s
+//! `Drop` — not `RunGuard`, which lives INSIDE the future and would never
+//! run if the `CommandRun` is dropped without polling — DECREMENTS it, on
+//! ALL paths including abandonment). It is a COUNTER, not a boolean
+//! (spec-review 3): the caller's (T8) natural pattern `self.run =
+//! Some(host.invoke(...))` evaluates the new run (increments) BEFORE
+//! dropping the old one (decrements) — with a boolean, that old decrement
+//! would turn off the protection of the new one that just started. While
+//! the counter is `!= 0`, [`super::LuaHost::statusbar`] NEVER calls this
+//! function — it does not even remotely touch `set_hook`/`remove_hook` —
+//! it returns the cached value if the `StatusInput` matches, or `None`
+//! otherwise: the bar FREEZES while any run is alive (including one
+//! already finished that the caller has not yet dropped), in exchange for
+//! never being able to disarm an in-flight run's cancellation.
 
 use mlua::{Function, HookTriggers, Lua};
 
-/// Presupuesto de instrucciones de una llamada al hook de statusbar. Se
-/// dispara en CADA vuelta de render (a diferencia de un comando, que corre
-/// una vez): un tope bajo evita que un script lento se perciba como
-/// congelación antes de deshabilitarse.
+/// Instruction budget for one call to the statusbar hook. It fires on
+/// EVERY render pass (unlike a command, which runs once): a low cap keeps
+/// a slow script from being perceived as a freeze before it gets disabled.
 const STATUSBAR_BUDGET: u32 = 50_000;
 
-/// Snapshot del estado visible para el hook. `PartialEq` es la clave del
-/// cache de [`super::LuaHost::statusbar`]: dos snapshots iguales no
-/// reinvocan el script.
+/// Snapshot of the state visible to the hook. `PartialEq` is the key of
+/// [`super::LuaHost::statusbar`]'s cache: two equal snapshots do not
+/// re-invoke the script.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StatusInput {
-    /// Bytes wire del cwd del pane con foco.
+    /// Wire bytes of the focused pane's cwd.
     pub cwd: Vec<u8>,
-    /// Índice de la entrada bajo el cursor.
+    /// Index of the entry under the cursor.
     pub selected: usize,
-    /// Bytes totales de la selección marcada.
+    /// Total bytes of the marked selection.
     pub selected_bytes: u64,
-    /// Número de entradas del listado actual.
+    /// Number of entries in the current listing.
     pub entries: usize,
-    /// Tareas en vuelo.
+    /// Tasks in flight.
     pub tasks: usize,
 }
 
-/// RAII: `remove_hook` SIEMPRE al salir (retorno normal o `?` temprano). El
-/// hook vive en una ranura del estado Lua COMPARTIDA con el resto del host
-/// (comandos incluidos, `driver.rs`); dejarlo puesto tras un error o un
-/// panic-catch contaminaría cualquier llamada síncrona posterior sobre el
-/// mismo estado. `pub(super)`: lo reutiliza también el presupuesto de
-/// `eval_layer` (`api.rs`) — una sola pieza para el patrón.
+/// RAII: `remove_hook` ALWAYS on exit (normal return or an early `?`). The
+/// hook lives in a Lua state slot SHARED with the rest of the host
+/// (commands included, `driver.rs`); leaving it set after an error or a
+/// panic-catch would contaminate any later synchronous call on the same
+/// state. `pub(super)`: also reused by `eval_layer`'s budget (`api.rs`) —
+/// one single piece for the pattern.
 pub(super) struct HookGuard<'a>(pub(super) &'a Lua);
 
 impl Drop for HookGuard<'_> {
@@ -83,40 +82,40 @@ impl Drop for HookGuard<'_> {
     }
 }
 
-/// Invoca `f` con el snapshot `input` bajo presupuesto de instrucciones.
-/// SÍNCRONA a propósito: el hook de statusbar es una llamada bloqueante
-/// corta del hilo de render, no un comando de fondo (eso es `driver.rs`).
+/// Invokes `f` with the `input` snapshot under an instruction budget.
+/// SYNCHRONOUS on purpose: the statusbar hook is a short blocking call on
+/// the render thread, not a background command (that is `driver.rs`).
 ///
-/// El valor de retorno es el string CRUDO del script, sin sanear — el
-/// caller ([`super::LuaHost::statusbar`]) lo pasa por
-/// `crate::app::detail_for_bar` (enmascara bidi/control + tope de longitud)
-/// antes de mostrarlo.
+/// The return value is the script's RAW string, unsanitized — the caller
+/// ([`super::LuaHost::statusbar`]) passes it through
+/// `crate::app::detail_for_bar` (masks bidi/control + length cap) before
+/// showing it.
 ///
 /// # Errors
-/// Presupuesto agotado, error de runtime del script (incluyendo que el
-/// script no haya devuelto algo coercionable a string), o cualquier intento
-/// de ceder el control (p. ej. llamar una API async desde este contexto
-/// síncrono produce un error de mlua) — todos indistinguibles para el
-/// caller: cualquiera deshabilita el hook.
+/// Exhausted budget, a script runtime error (including the script not
+/// returning something coercible to a string), or any attempt to yield
+/// control (e.g. calling an async API from this synchronous context
+/// produces an mlua error) — all indistinguishable to the caller: any of
+/// them disables the hook.
 ///
-/// # Invariante del caller
-/// [`super::LuaHost::statusbar`] NUNCA llama a esta función mientras
-/// `run_active` esté encendido (un comando Lua en vuelo): la ranura de hook
-/// de mlua es ÚNICA por instancia — compartida entre el estado principal y
-/// TODAS las corrutinas — y `set_hook`/`remove_hook` aquí desarmaría en
-/// silencio el hook de cancelación del driver (ver el módulo).
+/// # Caller invariant
+/// [`super::LuaHost::statusbar`] NEVER calls this function while
+/// `run_active` is on (a Lua command in flight): mlua's hook slot is
+/// UNIQUE per instance — shared between the main state and ALL
+/// coroutines — and `set_hook`/`remove_hook` here would silently disarm
+/// the driver's cancellation hook (see the module docs).
 pub(super) fn call_hook(lua: &Lua, f: &Function, input: &StatusInput) -> mlua::Result<String> {
     lua.set_hook(
         HookTriggers::new().every_nth_instruction(STATUSBAR_BUDGET),
         |_, _| {
             Err(mlua::Error::RuntimeError(
-                "statusbar: presupuesto de instrucciones agotado".to_string(),
+                "statusbar: instruction budget exhausted".to_string(),
             ))
         },
     );
-    // Guard ANTES de cualquier operación falible: si `create_table`/`set`
-    // fallan (sin memoria; no ocurre en la práctica) o `f.call` erra, el
-    // hook se quita igual al salir por el `?` temprano.
+    // Guard BEFORE any fallible operation: if `create_table`/`set` fail (out
+    // of memory; does not happen in practice) or `f.call` errors, the hook
+    // is removed anyway on exit via the early `?`.
     let _guard = HookGuard(lua);
 
     let table = lua.create_table()?;
@@ -146,7 +145,7 @@ mod tests {
     }
 
     #[test]
-    fn hook_pinta_y_cachea() {
+    fn hook_paints_and_caches() {
         let h = LuaHost::new().unwrap();
         h.eval_layer(
             b"norte.ui.statusbar(function(s) return s.selected .. ' sel' end)",
@@ -155,8 +154,8 @@ mod tests {
         .unwrap();
         assert_eq!(h.statusbar(&input()).as_deref(), Some("2 sel"));
 
-        // Mismo input = cache (se comprueba que una función con contador
-        // global de Lua solo corre una vez para el mismo snapshot).
+        // Same input = cache (checks that a function with a global Lua
+        // counter only runs once for the same snapshot).
         let h2 = LuaHost::new().unwrap();
         h2.eval_layer(
             b"n = 0; norte.ui.statusbar(function(s) n = n + 1 return tostring(n) end)",
@@ -164,31 +163,27 @@ mod tests {
         )
         .unwrap();
         assert_eq!(h2.statusbar(&input()).as_deref(), Some("1"));
-        assert_eq!(h2.statusbar(&input()).as_deref(), Some("1"), "cacheado");
+        assert_eq!(h2.statusbar(&input()).as_deref(), Some("1"), "cached");
     }
 
     #[test]
-    fn presupuesto_excedido_deshabilita_sin_panic() {
+    fn budget_exceeded_disables_without_panic() {
         let h = LuaHost::new().unwrap();
         h.eval_layer(
             b"norte.ui.statusbar(function() while true do end end)",
             Layer::User,
         )
         .unwrap();
-        assert_eq!(
-            h.statusbar(&input()),
-            None,
-            "excedido -> None + deshabilitado"
-        );
-        assert_eq!(h.statusbar(&input()), None, "sigue deshabilitado");
+        assert_eq!(h.statusbar(&input()), None, "exceeded -> None + disabled");
+        assert_eq!(h.statusbar(&input()), None, "still disabled");
         assert!(
             h.statusbar_error().is_some(),
-            "el error queda para la barra"
+            "the error is kept for the bar"
         );
     }
 
     #[test]
-    fn salida_hostil_enmascarada() {
+    fn hostile_output_masked() {
         let h = LuaHost::new().unwrap();
         h.eval_layer(
             "norte.ui.statusbar(function() return 'a\u{202E}b' end)".as_bytes(),
@@ -196,16 +191,17 @@ mod tests {
         )
         .unwrap();
         let s = h.statusbar(&input()).unwrap();
-        assert!(!s.contains('\u{202E}'), "sin bidi: {s}");
+        assert!(!s.contains('\u{202E}'), "no bidi: {s}");
     }
 
-    /// Regresión: un `eval_layer` posterior sobre un host YA VIVO (p. ej. la
-    /// capa `Project`, evaluada tras resolver el modal TOFU — task 8 — en un
-    /// host que ya venía sirviendo `statusbar()` con las capas
-    /// `System`/`User`) que redefine el hook NO debe servir la respuesta
-    /// cacheada del hook viejo si el `StatusInput` no cambió entretanto.
+    /// Regression: a later `eval_layer` over an ALREADY-LIVE host (e.g. the
+    /// `Project` layer, evaluated after resolving the TOFU modal — task 8 —
+    /// on a host that was already serving `statusbar()` with the
+    /// `System`/`User` layers) that redefines the hook must NOT serve the
+    /// old hook's cached response if the `StatusInput` had not changed
+    /// meanwhile.
     #[test]
-    fn redefinir_el_hook_invalida_el_cache_previo() {
+    fn redefining_the_hook_invalidates_the_previous_cache() {
         let h = LuaHost::new().unwrap();
         h.eval_layer(
             b"norte.ui.statusbar(function() return 'v1' end)",
@@ -222,17 +218,17 @@ mod tests {
         assert_eq!(
             h.statusbar(&input()).as_deref(),
             Some("v2"),
-            "el cache del hook viejo no debe sobrevivir a la redefinicion"
+            "the old hook's cache must not survive the redefinition"
         );
     }
 
-    // ---- Regresión spec-reviewer (task 7, ranura de hook única) --------
+    // ---- spec-reviewer regressions (task 7, unique hook slot) -----------
 
-    /// Setup compartido de las regresiones `run_active`: un `Backend`
-    /// embebido sobre `MemProvider` con `mem:///a` escrito, listo para un
-    /// `copy` que se puede volver lento con `faults().set_latency_per_op`
-    /// (mismo patrón que `tests/lua_driver.rs::cancelar_mata_el_script_y_sus_tasks`).
-    async fn backend_con_origen() -> (
+    /// Shared setup for the `run_active` regressions: an embedded `Backend`
+    /// over a `MemProvider` with `mem:///a` written, ready for a `copy`
+    /// that can be made slow with `faults().set_latency_per_op` (same
+    /// pattern as `tests/lua_driver.rs::cancel_kills_the_script_and_its_tasks`).
+    async fn backend_with_source() -> (
         norte_core::backend::Backend,
         std::sync::Arc<norte_testkit::MemProvider>,
     ) {
@@ -260,24 +256,25 @@ mod tests {
         }
     }
 
-    /// Regresión: `statusbar()` con un comando en vuelo (latencia inyectada
-    /// en la copia — la Task NO ha terminado, el run está de verdad "en
-    /// vuelo", no resuelto en microsegundos) NUNCA debe ejecutar el hook: un
-    /// contador global de Lua debe seguir en `0` (visto por el `None`, ya
-    /// que sin cache previo la única salida honesta con un run vivo es
-    /// `None`). Al terminar el run, `statusbar()` vuelve a funcionar y
-    /// ejecuta el hook de verdad.
+    /// Regression: `statusbar()` with a command in flight (latency injected
+    /// into the copy — the Task has NOT finished, the run is truly "in
+    /// flight", not resolved in microseconds) must NEVER execute the hook: a
+    /// global Lua counter must stay at `0` (seen through the `None`, since
+    /// with no prior cache the only honest output with a live run is
+    /// `None`). Once the run finishes, `statusbar()` works again and
+    /// actually executes the hook.
     ///
-    /// Sin el guard `run_active` este test es rojo: nada impide que
-    /// `statusbar()` llame a Lua durante el run, así que devolvería
-    /// `Some("1")` en vez de `None` (verificado manualmente quitando el
+    /// Without the `run_active` guard this test is red: nothing stops
+    /// `statusbar()` from calling Lua during the run, so it would return
+    /// `Some("1")` instead of `None` (verified manually by removing the
     /// guard).
-    /// `start_paused`: la latencia inyectada y el probe usan timers tokio —
-    /// con el reloj pausado el runtime AVANZA el tiempo al quedar ocioso:
-    /// determinista e instantáneo, sin carreras de wall-clock (rust review).
+    /// `start_paused`: the injected latency and the probe use tokio timers —
+    /// with the clock paused the runtime ADVANCES time as soon as it goes
+    /// idle: deterministic and instant, with no wall-clock races (rust
+    /// review).
     #[tokio::test(start_paused = true)]
-    async fn statusbar_no_toca_lua_con_run_en_vuelo() {
-        let (backend, mem) = backend_con_origen().await;
+    async fn statusbar_does_not_touch_lua_with_a_run_in_flight() {
+        let (backend, mem) = backend_with_source().await;
         mem.faults()
             .set_latency_per_op(Some(std::time::Duration::from_millis(200)));
 
@@ -285,7 +282,7 @@ mod tests {
         h.eval_layer(
             b"n = 0\n\
               norte.ui.statusbar(function() n = n + 1 return tostring(n) end)\n\
-              norte.command('copia', function()\n\
+              norte.command('copy', function()\n\
                 norte.fs.copy('mem:///a', 'mem:///b')\n\
               end)",
             Layer::User,
@@ -294,21 +291,21 @@ mod tests {
 
         let run = h
             .invoke(
-                "copia",
+                "copy",
                 backend.clone(),
                 ctx_mem(),
                 tokio_util::sync::CancellationToken::new(),
             )
-            .expect("existe");
+            .expect("exists");
 
         let probe = async {
-            // Deja que la copia arranque de verdad (entre en la latencia
-            // inyectada) antes de sondear la barra.
+            // Let the copy actually start (enter the injected latency)
+            // before probing the bar.
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             assert_eq!(
                 h.statusbar(&input()),
                 None,
-                "run en vuelo: jamás debe ejecutar el hook (ni tocar Lua)"
+                "run in flight: must never execute the hook (nor touch Lua)"
             );
         };
 
@@ -318,27 +315,28 @@ mod tests {
             "{outcome:?}"
         );
 
-        // Tras terminar el run: statusbar() vuelve a ejecutar de verdad (el
-        // contador avanza a 1 — es la PRIMERA ejecución real).
+        // After the run finishes: statusbar() actually executes again (the
+        // counter advances to 1 — it is the FIRST real execution).
         assert_eq!(h.statusbar(&input()).as_deref(), Some("1"));
     }
 
-    /// Reproducción del reviewer: un comando con una copia lenta seguida de
-    /// un bucle Lua puro; SI, mientras el run está en vuelo, algo llamara
-    /// `Lua::set_hook`/`remove_hook` (statusbar SIN el guard), el hook de
-    /// cancelación del driver quedaría desarmado en silencio (ranura de
-    /// hook única de mlua) y el bucle sería INCANCELABLE — el test usa un
-    /// timeout corto (`invoke_with_timeout`) para que, si el bug reaparece,
-    /// falle rápido con `TimedOut` en vez de agotar el timeout por defecto
-    /// (5 min).
+    /// Reviewer's repro: a command with a slow copy followed by a pure Lua
+    /// loop; IF, while the run is in flight, something called
+    /// `Lua::set_hook`/`remove_hook` (statusbar WITHOUT the guard), the
+    /// driver's cancellation hook would be silently disarmed (mlua's
+    /// unique hook slot) and the loop would be UNCANCELLABLE — the test
+    /// uses a short timeout (`invoke_with_timeout`) so that, if the bug
+    /// reappears, it fails fast with `TimedOut` instead of exhausting the
+    /// default timeout (5 min).
     ///
-    /// Verificado en rojo quitando temporalmente el `if self.run_active.get()`
-    /// de `LuaHost::statusbar`: el outcome pasa a `TimedOut` (la cancelación
-    /// no llega a tiempo porque el hook del driver quedó inerte).
-    /// `start_paused`: ver [`statusbar_no_toca_lua_con_run_en_vuelo`].
+    /// Verified red by temporarily removing the `if self.run_active.get()`
+    /// from `LuaHost::statusbar`: the outcome becomes `TimedOut` (the
+    /// cancellation does not arrive in time because the driver's hook was
+    /// left inert).
+    /// `start_paused`: see [`statusbar_does_not_touch_lua_with_a_run_in_flight`].
     #[tokio::test(start_paused = true)]
-    async fn cancelar_sigue_funcionando_tras_statusbar_durante_run() {
-        let (backend, mem) = backend_con_origen().await;
+    async fn cancel_still_works_after_statusbar_during_a_run() {
+        let (backend, mem) = backend_with_source().await;
         mem.faults()
             .set_latency_per_op(Some(std::time::Duration::from_millis(200)));
 
@@ -352,18 +350,18 @@ mod tests {
             Layer::User,
         )
         .unwrap();
-        // Un hook DE VERDAD registrado: sin esto, `statusbar()` corta camino
-        // en `registry.statusbar.clone()?` (None) y NUNCA llega a tocar
-        // `Lua::set_hook`/`remove_hook` — la interferencia que este test
-        // reproduce exige que la barra intente ejecutar el hook de verdad.
+        // A REAL hook registered: without this, `statusbar()` shortcuts at
+        // `registry.statusbar.clone()?` (None) and NEVER gets to touch
+        // `Lua::set_hook`/`remove_hook` — the interference this test
+        // reproduces requires the bar to actually try to run the hook.
         assert!(
             h.statusbar(&input()).is_some(),
-            "precondición: el hook existe y corre en frío (sin run en vuelo)"
+            "precondition: the hook exists and runs cold (no run in flight)"
         );
-        // Input DISTINTO al de la precondición: si coincidiera, el cache de
-        // la línea de arriba serviría la respuesta sin tocar Lua durante el
-        // run, y este test no probaría nada — necesitamos que el intento de
-        // ejecutar el hook sea REAL.
+        // Input DIFFERENT from the precondition's: if it matched, the cache
+        // from the line above would serve the response without touching
+        // Lua during the run, and this test would prove nothing — we need
+        // the attempt to execute the hook to be REAL.
         let during_input = StatusInput {
             selected: 99,
             ..input()
@@ -378,19 +376,19 @@ mod tests {
                 token.clone(),
                 std::time::Duration::from_secs(2),
             )
-            .expect("existe");
+            .expect("exists");
 
         let cancel = async {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            // El punto del reviewer: llamar a statusbar() MIENTRAS el run
-            // está en vuelo, con un input SIN cache (fuerza el intento real
-            // de ejecutar el hook). Con el guard, no-op (`None`, sin tocar
-            // Lua); es justo lo que este test verifica indirectamente vía
-            // el outcome de la cancelación de abajo.
+            // The reviewer's point: call statusbar() WHILE the run is in
+            // flight, with an input that has NO cache (forces a real
+            // attempt to execute the hook). With the guard, it is a no-op
+            // (`None`, without touching Lua); that is exactly what this
+            // test verifies indirectly via the cancellation outcome below.
             assert_eq!(
                 h.statusbar(&during_input),
                 None,
-                "no debe tocar Lua con el run en vuelo"
+                "must not touch Lua with the run in flight"
             );
             token.cancel();
         };
@@ -402,20 +400,19 @@ mod tests {
         );
     }
 
-    /// El hook de statusbar llamando a una API que solo existe DURANTE un
-    /// run (`norte.fs`, instalada por `install_fs` en cada `invoke`, task
-    /// 4/5) revienta y deshabilita el hook. Con el guard `run_active` de
-    /// este fix, el caso "el hook llama de verdad a `norte.fs.stat` mientras
-    /// hay un run en vuelo" es INALCANZABLE: `statusbar()` nunca ejecuta el
-    /// hook con un run vivo, así que `norte.fs` JAMÁS está instalado cuando
-    /// el hook corre. Lo que SÍ es alcanzable — y es lo que prueba este
-    /// test — es el camino de error genérico: en el estado normal (sin run)
-    /// `norte.fs` no existe, así que la llamada revienta por indexar `nil`
-    /// — un mensaje de error distinto al de una llamada async real, pero
-    /// con el MISMO desenlace (deshabilita + `statusbar_error()` con Some)
-    /// que cualquier otro fallo del hook.
+    /// The statusbar hook calling an API that only exists DURING a run
+    /// (`norte.fs`, installed by `install_fs` on every `invoke`, task 4/5)
+    /// blows up and disables the hook. With this fix's `run_active` guard,
+    /// the case "the hook actually calls `norte.fs.stat` while a run is in
+    /// flight" is UNREACHABLE: `statusbar()` never executes the hook with a
+    /// live run, so `norte.fs` is NEVER installed when the hook runs. What
+    /// IS reachable — and what this test proves — is the generic error
+    /// path: in the normal state (no run) `norte.fs` does not exist, so the
+    /// call blows up indexing `nil` — a different error message from a real
+    /// async call, but with the SAME outcome (disables + `statusbar_error()`
+    /// with Some) as any other hook failure.
     #[test]
-    fn fs_async_desde_el_hook_deshabilita() {
+    fn fs_async_from_the_hook_disables() {
         let h = LuaHost::new().unwrap();
         h.eval_layer(
             b"norte.ui.statusbar(function() return norte.fs.stat('mem:///x') end)",
@@ -425,25 +422,25 @@ mod tests {
         assert_eq!(
             h.statusbar(&input()),
             None,
-            "norte.fs no existe fuera de un run -> revienta -> deshabilitado"
+            "norte.fs does not exist outside a run -> blows up -> disabled"
         );
         assert!(
             h.statusbar_error().is_some(),
-            "el detalle del fallo queda para la barra"
+            "the failure detail is kept for the bar"
         );
     }
 
-    /// Regresión (re-review de la task 7): si el caller (T8 o cualquier
-    /// futuro) crea un `CommandRun` y lo dropea SIN pollearlo ni una vez, el
-    /// cuerpo de la `async fn run_command` JAMÁS empieza a ejecutarse — así
-    /// que ningún guard interno de esa función corre nunca. Si `run_active`
-    /// dependiera de un guard construido DENTRO del future, quedaría
-    /// atascado en `true` para siempre (la barra congelada hasta el próximo
-    /// hot-reload). `CommandRun` debe apagarlo estructuralmente en su propio
-    /// `Drop`, sin depender de que se pollee.
+    /// Regression (task 7 re-review): if the caller (T8 or any future one)
+    /// creates a `CommandRun` and drops it WITHOUT ever polling it, the
+    /// `async fn run_command`'s body NEVER starts executing — so no
+    /// internal guard of that function ever runs. If `run_active` depended
+    /// on a guard built INSIDE the future, it would get stuck at `true`
+    /// forever (the bar frozen until the next hot-reload). `CommandRun`
+    /// must turn it off structurally in its own `Drop`, without depending
+    /// on it being polled.
     #[tokio::test]
-    async fn command_run_dropeado_sin_pollear_no_congela_la_statusbar() {
-        let (backend, _mem) = backend_con_origen().await;
+    async fn command_run_dropped_without_polling_does_not_freeze_the_statusbar() {
+        let (backend, _mem) = backend_with_source().await;
         let h = LuaHost::new().unwrap();
         h.eval_layer(
             b"norte.ui.statusbar(function() return 'ok' end)\n\
@@ -459,32 +456,32 @@ mod tests {
                 ctx_mem(),
                 tokio_util::sync::CancellationToken::new(),
             )
-            .expect("existe");
-        drop(run); // JAMÁS polleado: el cuerpo de la async fn nunca corrió.
+            .expect("exists");
+        drop(run); // NEVER polled: the async fn's body never ran.
 
         assert_eq!(
             h.statusbar(&input()).as_deref(),
             Some("ok"),
-            "un CommandRun dropeado sin pollear no debe dejar run_active atascado"
+            "a CommandRun dropped without polling must not leave run_active stuck"
         );
     }
 
-    /// Regresión (re-review 3, rust-reviewer MAJOR): el patrón natural del
-    /// caller (T8) `self.run = Some(host.invoke(...))` evalúa el RHS —
-    /// construye el run NUEVO, incrementa `run_active` — ANTES de dropear el
-    /// valor VIEJO que ocupaba el slot. Con un `run_active` booleano, el
-    /// `Drop` del viejo (que ya había terminado pero seguía vivo en el slot)
-    /// pisaría el `true` recién puesto por el nuevo, dejándolo SIN
-    /// protección: `statusbar()` podría tocar Lua mientras el run nuevo
-    /// sigue en vuelo, desarmando su hook de cancelación (mismo bug de fondo
-    /// que las regresiones de arriba, pero disparado por el ciclo de vida
-    /// del slot, no por una llamada directa a `statusbar()`). Con un
-    /// contador, el incremento del nuevo y el decremento del viejo se
-    /// compensan y el contador nunca baja a cero mientras el nuevo viva.
-    /// `start_paused`: ver [`statusbar_no_toca_lua_con_run_en_vuelo`].
+    /// Regression (re-review 3, rust-reviewer MAJOR): the caller's (T8)
+    /// natural pattern `self.run = Some(host.invoke(...))` evaluates the
+    /// RHS — builds the NEW run, increments `run_active` — BEFORE dropping
+    /// the OLD value that occupied the slot. With a boolean `run_active`,
+    /// the old one's `Drop` (which had already finished but was still alive
+    /// in the slot) would clobber the `true` just set by the new one,
+    /// leaving it UNPROTECTED: `statusbar()` could touch Lua while the new
+    /// run is still in flight, disarming its cancellation hook (the same
+    /// underlying bug as the regressions above, but triggered by the
+    /// slot's lifecycle, not by a direct call to `statusbar()`). With a
+    /// counter, the new one's increment and the old one's decrement cancel
+    /// out and the counter never drops to zero while the new one is alive.
+    /// `start_paused`: see [`statusbar_does_not_touch_lua_with_a_run_in_flight`].
     #[tokio::test(start_paused = true)]
-    async fn asignar_un_run_nuevo_sobre_el_slot_del_viejo_no_desprotege() {
-        let (backend, mem) = backend_con_origen().await;
+    async fn assigning_a_new_run_over_the_old_slot_does_not_unprotect() {
+        let (backend, mem) = backend_with_source().await;
         let h = LuaHost::new().unwrap();
         h.eval_layer(
             b"norte.ui.statusbar(function() return 'ok' end)\n\
@@ -497,10 +494,10 @@ mod tests {
         )
         .unwrap();
 
-        // Run VIEJO: trivial, se completa YA (sin latencia) pero se
-        // mantiene vivo sin dropear — pollado por REFERENCIA (`&mut old`),
-        // no consumido, para poder seguir sosteniéndolo tras el outcome
-        // (`CommandRun` es `Unpin`, así que `&mut CommandRun` es `Future`).
+        // OLD run: trivial, completes RIGHT AWAY (no latency) but is kept
+        // alive without dropping — polled BY REFERENCE (`&mut old`), not
+        // consumed, so it can keep being held after the outcome
+        // (`CommandRun` is `Unpin`, so `&mut CommandRun` is a `Future`).
         let mut old = h
             .invoke(
                 "trivial",
@@ -508,12 +505,11 @@ mod tests {
                 ctx_mem(),
                 tokio_util::sync::CancellationToken::new(),
             )
-            .expect("existe");
+            .expect("exists");
         let outcome_old = (&mut old).await;
         assert!(matches!(outcome_old, crate::lua::RunOutcome::Ok { .. }));
 
-        // Latencia para que el run NUEVO quede de verdad en vuelo cuando lo
-        // sondeamos.
+        // Latency so the NEW run is truly in flight when we probe it.
         mem.faults()
             .set_latency_per_op(Some(std::time::Duration::from_millis(200)));
         let token = tokio_util::sync::CancellationToken::new();
@@ -525,12 +521,12 @@ mod tests {
                 token.clone(),
                 std::time::Duration::from_secs(2),
             )
-            .expect("existe");
+            .expect("exists");
 
-        // El patrón natural `self.run = Some(host.invoke(...))`: `new` ya
-        // se construyó (RHS evaluado) arriba; AHORA se dropea el viejo que
-        // ocupaba el slot — el orden importa, es justo lo que reproduce el
-        // bug con un booleano.
+        // The natural pattern `self.run = Some(host.invoke(...))`: `new`
+        // has already been built (RHS evaluated) above; NOW the old value
+        // that occupied the slot is dropped — the order matters, it is
+        // exactly what reproduces the bug with a boolean.
         drop(old);
 
         let probe = async {
@@ -538,7 +534,7 @@ mod tests {
             assert_eq!(
                 h.statusbar(&input()),
                 None,
-                "el run nuevo debe seguir protegido pese al Drop del viejo"
+                "the new run must stay protected despite the old one's Drop"
             );
             token.cancel();
         };

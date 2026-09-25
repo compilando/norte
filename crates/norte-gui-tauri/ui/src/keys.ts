@@ -1,21 +1,22 @@
-// Del evento del navegador al vocabulario del keymap. Y nada más.
+// From the browser's event to the keymap's vocabulary. And nothing else.
 //
-// Quién resuelve la tecla —un prefijo a medias, un contador, qué comando lleva
-// ligado `ctrl+shift+f5`— es Rust, con el mismo resolver y los mismos presets
-// que el TUI (decisión D14). Aquí solo se traduce la FORMA del evento.
+// Who resolves the key — a half-finished prefix, a counter, which command
+// `ctrl+shift+f5` is bound to — is Rust, with the same resolver and the same
+// presets as the TUI (decision D14). Only the event's SHAPE is translated
+// here.
 
 import type { KeyInput, UiAction } from "./types";
 
-/** Teclas que por sí solas no son una tecla: solo modifican a la siguiente. */
-const SOLO_MODIFICADOR = new Set(["Shift", "Control", "Alt", "Meta", "AltGraph", "Dead"]);
+/** Keys that are not a key on their own: they only modify the next one. */
+const MODIFIER_ONLY = new Set(["Shift", "Control", "Alt", "Meta", "AltGraph", "Dead"]);
 
-/** `null` si el evento no es una tecla que el host deba ver. */
+/** `null` if the event is not a key the host should see. */
 export function keyInputOf(e: KeyboardEvent): KeyInput | null {
   if (e.isComposing) {
-    // Mitad de una composición de IME: el texto todavía no existe.
+    // Mid-IME composition: the text does not exist yet.
     return null;
   }
-  if (SOLO_MODIFICADOR.has(e.key)) {
+  if (MODIFIER_ONLY.has(e.key)) {
     return null;
   }
   return {
@@ -27,8 +28,8 @@ export function keyInputOf(e: KeyboardEvent): KeyInput | null {
   };
 }
 
-/** Teclas que EDITAN un campo de texto sin escribir un carácter. */
-const EDICION = new Set([
+/** Keys that EDIT a text field without typing a character. */
+const EDITING = new Set([
   "Backspace",
   "Delete",
   "ArrowLeft",
@@ -38,45 +39,45 @@ const EDICION = new Set([
 ]);
 
 /**
- * ¿Esta tecla es del CAMPO de texto que tiene el foco, y no del host?
+ * Is this key the focused text FIELD's, and not the host's?
  *
- * Un campo abierto es dueño de las teclas de texto y de las de edición. De las
- * de texto lo era ya; de las de edición no, y esa mitad que faltaba hacía que
- * `preventDefault` cancelara el borrado y el pegado del propio campo — y el
- * host se los tragaba sin hacer nada. O sea que un nombre a medio escribir no
- * se podía corregir y no se podía pegar nada dentro.
+ * An open field owns the text keys and the editing keys. It already owned
+ * the text ones; it did not own the editing ones, and that missing half made
+ * `preventDefault` cancel the field's own delete and paste — and the host
+ * swallowed them without doing anything. So a half-typed name could not be
+ * corrected and nothing could be pasted into it.
  *
- * Se notaba poco con un `mkdir` —se reescribe y ya— y deja de ser una molestia
- * en el campo de una CONTRASEÑA (#327): cuarenta caracteres aleatorios, sin ver
- * lo que se teclea, y la única salida de una errata era Escape, que abandona la
- * navegación. La TUI tiene las dos cosas desde siempre, y su comentario dice
- * por qué el pegado importa aquí más que en ningún sitio: pegar desde un gestor
- * de contraseñas es como la mayoría de la gente contesta ese diálogo.
+ * It barely showed with an `mkdir` — you just retype it — and stops being a
+ * minor annoyance in a PASSWORD field (#327): forty random characters,
+ * without seeing what is typed, and the only way out of a typo was Escape,
+ * which abandons navigation. The TUI has always had both, and its comment
+ * says why pasting matters here more than anywhere: pasting from a password
+ * manager is how most people answer that dialog.
  *
- * Vive aquí, exportada, y no dentro del manejador de `main.ts`, porque ahí no
- * había forma de probarla — y no estaba probada.
+ * Lives here, exported, and not inside `main.ts`'s handler, because there
+ * was no way to test it there — and it was not tested.
  */
-export function esParaElCampo(k: KeyInput, hayCampo: boolean): boolean {
-  if (!hayCampo) {
+export function isForTheField(k: KeyInput, hasField: boolean): boolean {
+  if (!hasField) {
     return false;
   }
-  // «Una tecla de texto» se mide en puntos de código, no en unidades UTF-16:
-  // `length === 1` deja fuera un emoji (dos unidades) y una `é` en NFD (macOS),
-  // así que `preventDefault` se los llevaba y no se podían escribir.
-  const esTexto = !k.ctrl && !k.alt && !k.meta && [...k.key].length === 1;
-  // El portapapeles y el deshacer del campo. `meta` fuera a propósito: en este
-  // escritorio no es un modificador de edición, y dejarlo pasar abriría un
-  // hueco por el que se colarían acordes del host.
-  const esPortapapeles = k.ctrl && !k.alt && !k.meta && "vacxz".includes(k.key);
-  return esTexto || EDICION.has(k.key) || esPortapapeles;
+  // "A text key" is measured in code points, not UTF-16 units: `length === 1`
+  // leaves out an emoji (two units) and an NFD `é` (macOS), so
+  // `preventDefault` used to take them and they could not be typed.
+  const isText = !k.ctrl && !k.alt && !k.meta && [...k.key].length === 1;
+  // The field's clipboard and undo. `meta` left out on purpose: on this
+  // desktop it is not an editing modifier, and letting it through would open
+  // a gap host chords could slip through.
+  const isClipboard = k.ctrl && !k.alt && !k.meta && "vacxz".includes(k.key);
+  return isText || EDITING.has(k.key) || isClipboard;
 }
 
 export function keyAction(k: KeyInput): UiAction {
   return { action: "key", ...k };
 }
 
-/** La forma mínima de un evento de teclado que mira [`AltSolo`]. */
-export interface TeclaCruda {
+/** The minimal shape of a keyboard event [`AltSolo`] looks at. */
+export interface RawKey {
   key: string;
   ctrlKey: boolean;
   shiftKey: boolean;
@@ -84,35 +85,35 @@ export interface TeclaCruda {
 }
 
 /**
- * Alt pulsado y soltado SOLO: el gesto de escritorio para ir a la barra de
- * menús (puente 68).
+ * Alt pressed and released ALONE: the desktop gesture for going to the menu
+ * bar (bridge 68).
  *
- * Se arma al bajar Alt sin otro modificador y se desarma con CUALQUIER otra
- * cosa en medio —otra tecla, un clic, perder el foco—, así que `Alt+F4`,
- * `Alt+Tab` o arrastrar con Alt no abren el menú al soltar. `AltGraph` no es
- * Alt: con un teclado español escribe `@` y `#`, y abrir el menú ahí
- * rompería la mitad de lo que se teclea.
+ * It arms when Alt goes down with no other modifier and disarms with
+ * ANYTHING else in between — another key, a click, losing focus — so
+ * `Alt+F4`, `Alt+Tab` or dragging with Alt do not open the menu on release.
+ * `AltGraph` is not Alt: on a Spanish keyboard it types `@` and `#`, and
+ * opening the menu there would break half of what gets typed.
  *
- * Solo detecta. Qué pasa después —plegar, abrir, nada si hay un diálogo— lo
- * decide el host.
+ * It only detects. What happens next — collapse, open, nothing if there is a
+ * dialog — is decided by the host.
  */
 export class AltSolo {
-  private armado = false;
+  private armed = false;
 
-  /** Un `keydown`. La repetición de Alt mantenido no desarma. */
-  abajo(e: TeclaCruda): void {
-    this.armado = e.key === "Alt" && !e.ctrlKey && !e.shiftKey && !e.metaKey;
+  /** A `keydown`. Alt's held-down repeat does not disarm it. */
+  down(e: RawKey): void {
+    this.armed = e.key === "Alt" && !e.ctrlKey && !e.shiftKey && !e.metaKey;
   }
 
-  /** Un `keyup`: `true` si cierra un Alt solo. */
-  arriba(e: TeclaCruda): boolean {
-    const fue = this.armado && e.key === "Alt";
-    this.armado = false;
-    return fue;
+  /** A `keyup`: `true` if it closes an Alt-alone. */
+  up(e: RawKey): boolean {
+    const was = this.armed && e.key === "Alt";
+    this.armed = false;
+    return was;
   }
 
-  /** Algo que no es teclado se metió en medio (clic, rueda, foco). */
-  soltar(): void {
-    this.armado = false;
+  /** Something that is not the keyboard got in the way (click, wheel, focus). */
+  release(): void {
+    this.armed = false;
   }
 }

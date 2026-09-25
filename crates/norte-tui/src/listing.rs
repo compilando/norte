@@ -1,41 +1,42 @@
-//! Listar un directorio para PONERLO en un pane.
+//! List a directory to PUT INTO a pane.
 //!
-//! Vivía en el root del binario `ntc`, que es un crate DISTINTO de esta lib, y
-//! eso lo hacía inalcanzable para todo lo demás — incluida
-//! [`crate::session_push`], que restaura la sesión listando los huecos que la
-//! sesión colocó.
+//! It used to live in the `ntc` binary's root, which is a crate DISTINCT
+//! from this lib, and that made it unreachable for everything else —
+//! including [`crate::session_push`], which restores the session by
+//! listing the slots the session placed.
 //!
-//! El error es el del `Backend` y no un `anyhow`: la regla 6 reserva `anyhow`
-//! para los binarios, y aquí el `anyhow` solo envolvía un
-//! [`norte_proto::Error`] en su propio `Display` — el tipo se perdía para no
-//! ganar nada. Los llamantes del binario siguen usando `?` dentro de una
-//! función `anyhow`, que es exactamente lo que `From` ya sabe hacer.
+//! The error is the `Backend`'s and not an `anyhow`: rule 6 reserves
+//! `anyhow` for binaries, and here the `anyhow` only wrapped a
+//! [`norte_proto::Error`] in its own `Display` — the type was lost for no
+//! gain. The binary's callers still use `?` inside an `anyhow` function,
+//! which is exactly what `From` already knows how to do.
 
 use norte_core::backend::Backend;
 use norte_proto::{Error, VPath};
 
 use crate::app::Pane;
 
-/// Pane inicial del arranque: listado COMPLETO de `start` pidiendo los
-/// attrs configurados (#117) — sin ellos las celdas attr nacerían en
-/// blanco hasta el primer cd/refresh. Regla 7: todo por el `Backend`.
+/// Startup's initial pane: a COMPLETE listing of `start` requesting the
+/// configured attrs (#117) — without them the attr cells would be born
+/// blank until the first cd/refresh. Rule 7: everything through the
+/// `Backend`.
 ///
 /// # Errors
 ///
-/// Lo que devuelva el `Backend` al listar `start`: no se traduce ni se
-/// envuelve, porque quien lo pinta necesita el tipo (un `PermissionDenied` de
-/// arranque no se dice igual que un `NotFound`).
+/// Whatever the `Backend` returns when listing `start`: not translated nor
+/// wrapped, because whoever paints it needs the type (a startup
+/// `PermissionDenied` is not said the same way as a `NotFound`).
 pub async fn initial_pane(
     backend: &Backend,
     start: &VPath,
     attrs: &[String],
 ) -> Result<Pane, Error> {
     let (entries, skipped) = backend.list_with_skipped_attrs(start, attrs).await?;
-    // El arranque de un panel es una pantalla: se retiene el ancla (#301).
+    // A pane's startup is a screen: the anchor is retained (#301).
     backend.remember_listing_anchor(start).await;
     let mut pane = Pane::new(start.clone(), entries);
-    // #93: las omitidas del contenedor también en el ARRANQUE — el badge no
-    // debe nacer vacío teniendo el dato gratis (review #117 tarea 2).
+    // #93: the container's skipped ones also on STARTUP — the badge should
+    // not be born empty when the data is free (review #117 task 2).
     pane.set_skipped(skipped);
     Ok(pane)
 }

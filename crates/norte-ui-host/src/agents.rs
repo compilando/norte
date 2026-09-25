@@ -1,263 +1,266 @@
-//! Las sesiones de AGENTE que esta ventana ha visto, y el deshacer de una
-//! entera (#276).
+//! The AGENT sessions this window has seen, and undoing one whole session
+//! (#276).
 //!
-//! **De dónde sale la lista, y por qué eso importa.** No hay método en el
-//! protocolo que enumere las sesiones de agente vivas: lo único que las
-//! nombra es la petición de aprobación que un agente dispara
-//! (`policy.approval_required`, cuyo `session` es opcional). Así que esta
-//! lista es exactamente «las que ESTA ventana ha visto pedir permiso», y la
-//! propia pantalla lo dice — una lista que se presenta como el censo de
-//! agentes del sistema y no lo es sería peor que no tenerla.
+//! **Where the list comes from, and why that matters.** There is no method in
+//! the protocol that enumerates live agent sessions: the only thing that
+//! names them is the approval request an agent fires
+//! (`policy.approval_required`, whose `session` is optional). So this list is
+//! exactly "the ones THIS window has seen ask for permission", and the screen
+//! itself says so — a list that presents itself as the system's census of
+//! agents and is not would be worse than not having one.
 //!
-//! Lo que compra frente a teclear el id a mano, que es lo que la tarea 5.3
-//! rechazó: el operando se ELIGE. Un id de sesión tecleado por un humano en
-//! una superficie de gobierno es un id que se puede equivocar, y deshacer la
-//! sesión equivocada es deshacer el trabajo de otro.
+//! What it buys over typing the id by hand, which is what task 5.3 rejected:
+//! the operand is CHOSEN. A session id typed by a human on a governance
+//! surface is an id that can be mistyped, and undoing the wrong session is
+//! undoing someone else's work.
 //!
-//! El id de una sesión es una clave OPACA del daemon: se pinta enmascarada
-//! —puede llevar cualquier byte— y viaja CRUDA, porque es la clave con la que
-//! el core la resuelve.
+//! A session's id is an OPAQUE key from the daemon: it is painted masked —it
+//! can carry any byte— and travels RAW, because it is the key the core
+//! resolves it with.
 
 use crate::bridge::clamp_display;
 use crate::dto::{AgentRowView, AgentsView};
 
-/// Tope de sesiones recordadas.
+/// Cap on remembered sessions.
 ///
-/// Un daemon que anuncia peticiones sin parar no puede hacer crecer esto sin
-/// fin. Se olvida la MÁS VIEJA por última vez vista, que es la que menos
-/// probablemente esté todavía haciendo algo.
-const MAX_SESIONES: usize = 128;
+/// A daemon that keeps announcing requests cannot be allowed to grow this
+/// without bound. The OLDEST by last-seen is forgotten first, since it is the
+/// one least likely to still be doing anything.
+const MAX_SESSIONS: usize = 128;
 
-/// Lo que se sabe de una sesión de agente.
+/// What is known about an agent session.
 #[derive(Debug, Clone)]
-struct Sesion {
-    /// El id CRUDO, tal como llegó: es lo que vuelve al daemon.
+struct Session {
+    /// The RAW id, exactly as it arrived: it is what goes back to the daemon.
     id: String,
-    /// Cuántas peticiones suyas ha visto esta ventana.
-    vistas: u32,
-    /// Cuántas se le aprobaron DESDE AQUÍ.
-    aprobadas: u32,
-    /// El último op-kind que pidió, ya enmascarado y con su bandera.
-    ultima: (String, bool),
-    /// El orden en que se la vio por última vez: manda el más alto.
-    sello: u64,
+    /// How many of its requests this window has seen.
+    seen: u32,
+    /// How many were approved FROM HERE.
+    approved: u32,
+    /// The last op-kind it asked for, already masked and with its flag.
+    last: (String, bool),
+    /// The order in which it was last seen: the highest wins.
+    stamp: u64,
 }
 
-/// Las sesiones vistas, y el panel abierto sobre ellas.
+/// The sessions seen, and the panel open over them.
 #[derive(Debug, Default)]
-pub(crate) struct Agentes {
-    /// Lo visto, por id.
-    sesiones: std::collections::HashMap<String, Sesion>,
-    /// El reloj lógico de «visto por última vez».
-    reloj: u64,
-    /// Cuál está elegida, POR ID y no por posición.
+pub(crate) struct Agents {
+    /// What was seen, by id.
+    sessions: std::collections::HashMap<String, Session>,
+    /// The logical "last seen" clock.
+    clock: u64,
+    /// Which one is chosen, BY ID and not by position.
     ///
-    /// La lista se reordena sola —una petición nueva sube a su sesión al
-    /// primer puesto— y una selección por índice significa otra fila en
-    /// cuanto eso pasa. Es la misma regla que la 6.2 dejó escrita para las
-    /// filas comparadas: se nombran por id, jamás por posición.
-    elegida: Option<String>,
-    /// Cuántas veces ha CAMBIADO la lista.
+    /// The list reorders itself —a new request bumps its session to first
+    /// place— and a selection by index means a different row the moment that
+    /// happens. It is the same rule 6.2 wrote down for compared rows: they
+    /// are named by id, never by position.
+    selected: Option<String>,
+    /// How many times the list has CHANGED.
     ///
-    /// Viaja con la vista y vuelve con el clic: un clic se resuelve contra la
-    /// lista que el lector estaba mirando, no contra la de ahora. Sin esto,
-    /// una petición que llega entre el clic y su llegada convierte «esta
-    /// fila» en otra — y aquí «esta fila» es de quién se deshace el trabajo.
-    generacion: u64,
-    /// Cuántas sesiones se han olvidado por el tope.
-    olvidadas: u64,
-    /// Las sesiones con un deshacer en marcha.
-    deshaciendo: std::collections::HashSet<String>,
+    /// It travels with the view and comes back with the click: a click is
+    /// resolved against the list the reader was looking at, not against the
+    /// current one. Without this, a request arriving between the click and
+    /// its delivery turns "this row" into another one — and here "this row"
+    /// is whose work gets undone.
+    generation: u64,
+    /// How many sessions have been forgotten because of the cap.
+    forgotten: u64,
+    /// The sessions with an undo in progress.
+    undoing: std::collections::HashSet<String>,
 }
 
-impl Agentes {
-    /// Apunta que esta sesión pidió permiso para `op`.
+impl Agents {
+    /// Notes that this session asked for permission for `op`.
     pub(crate) fn vista(&mut self, id: &str, op: &str) {
-        self.reloj += 1;
-        self.generacion += 1;
-        let sello = self.reloj;
-        let (pintable, hostil) = norte_frontend::display_name(op.as_bytes());
-        let entrada = self
-            .sesiones
+        self.clock += 1;
+        self.generation += 1;
+        let stamp = self.clock;
+        let (paintable, hostile) = norte_frontend::display_name(op.as_bytes());
+        let entry = self
+            .sessions
             .entry(id.to_owned())
-            .or_insert_with(|| Sesion {
+            .or_insert_with(|| Session {
                 id: id.to_owned(),
-                vistas: 0,
-                aprobadas: 0,
-                ultima: (String::new(), false),
-                sello,
+                seen: 0,
+                approved: 0,
+                last: (String::new(), false),
+                stamp,
             });
-        entrada.vistas = entrada.vistas.saturating_add(1);
-        entrada.ultima = (clamp_display(pintable), hostil);
-        entrada.sello = sello;
-        self.podar();
+        entry.seen = entry.seen.saturating_add(1);
+        entry.last = (clamp_display(paintable), hostile);
+        entry.stamp = stamp;
+        self.prune();
     }
 
-    /// Apunta que a esta sesión se le aprobó una op desde aquí.
-    pub(crate) fn aprobada(&mut self, id: &str) {
-        if let Some(s) = self.sesiones.get_mut(id) {
-            s.aprobadas = s.aprobadas.saturating_add(1);
-            self.generacion += 1;
+    /// Notes that this session had an op approved from here.
+    pub(crate) fn approved(&mut self, id: &str) {
+        if let Some(s) = self.sessions.get_mut(id) {
+            s.approved = s.approved.saturating_add(1);
+            self.generation += 1;
         }
     }
 
-    /// Apunta que a esta sesión se le lanzó un deshacer.
-    pub(crate) fn deshaciendo(&mut self, id: &str) {
-        self.deshaciendo.insert(id.to_owned());
-        self.generacion += 1;
+    /// Notes that an undo was launched for this session.
+    pub(crate) fn undoing(&mut self, id: &str) {
+        self.undoing.insert(id.to_owned());
+        self.generation += 1;
     }
 
-    /// El deshacer de esta sesión terminó, como sea.
-    pub(crate) fn deshecha(&mut self, id: &str) {
-        if self.deshaciendo.remove(id) {
-            self.generacion += 1;
+    /// This session's undo finished, one way or another.
+    pub(crate) fn undone(&mut self, id: &str) {
+        if self.undoing.remove(id) {
+            self.generation += 1;
         }
     }
 
-    /// `true` si esta sesión ya tiene un deshacer en marcha.
-    pub(crate) fn tiene_undo_vivo(&self, id: &str) -> bool {
-        self.deshaciendo.contains(id)
+    /// `true` if this session already has a live undo in progress.
+    pub(crate) fn has_undo_vivo(&self, id: &str) -> bool {
+        self.undoing.contains(id)
     }
 
-    /// Se olvida de alguna cuando sobran, y lo apunta.
+    /// Forgets some when there are too many, and notes it.
     ///
-    /// NO la más vieja a secas: el id de sesión lo elige el AGENTE, y nada le
-    /// impide reconectarse ciento veintiocho veces con ids nuevos, cada uno
-    /// pidiendo un permiso, para empujar fuera de la lista justo a la sesión
-    /// cuyo trabajo alguien querría deshacer. Se olvida primero lo que nadie
-    /// ha tocado —una sola petición y ninguna aprobación desde aquí—, nunca
-    /// una con un deshacer en marcha, y el recuento de olvidadas VIAJA:
-    /// una lista recortada que se presenta como completa es lo que convierte
-    /// el ataque en «esa sesión no existe».
-    fn podar(&mut self) {
-        while self.sesiones.len() > MAX_SESIONES {
-            let Some(vieja) = self
-                .sesiones
+    /// NOT plainly the oldest: the session id is chosen by the AGENT, and
+    /// nothing stops it from reconnecting a hundred and twenty-eight times
+    /// with new ids, each asking for a permission, to push out of the list
+    /// exactly the session whose work someone might want to undo. What is
+    /// forgotten first is whatever nobody has touched —a single request and
+    /// no approval from here—, never one with an undo in progress, and the
+    /// forgotten count TRAVELS: a trimmed list that presents itself as
+    /// complete is what turns the attack into "that session doesn't exist".
+    fn prune(&mut self) {
+        while self.sessions.len() > MAX_SESSIONS {
+            let Some(old) = self
+                .sessions
                 .values()
-                .filter(|s| !self.deshaciendo.contains(&s.id))
-                .min_by_key(|s| (s.aprobadas > 0 || s.vistas > 1, s.sello))
+                .filter(|s| !self.undoing.contains(&s.id))
+                .min_by_key(|s| (s.approved > 0 || s.seen > 1, s.stamp))
                 .map(|s| s.id.clone())
             else {
                 return;
             };
-            self.sesiones.remove(&vieja);
-            if self.elegida.as_deref() == Some(vieja.as_str()) {
-                self.elegida = None;
+            self.sessions.remove(&old);
+            if self.selected.as_deref() == Some(old.as_str()) {
+                self.selected = None;
             }
-            self.olvidadas = self.olvidadas.saturating_add(1);
+            self.forgotten = self.forgotten.saturating_add(1);
         }
     }
 
-    /// Las sesiones en el orden en que se pintan: la más reciente primero.
-    fn ordenadas(&self) -> Vec<&Sesion> {
-        let mut v: Vec<&Sesion> = self.sesiones.values().collect();
-        // Por sello descendente, y el id como desempate: dos sesiones no
-        // pueden compartir sello, pero un orden que dependa del recorrido de
-        // un `HashMap` hace que la lista baile entre repintados.
-        v.sort_by(|a, b| b.sello.cmp(&a.sello).then_with(|| a.id.cmp(&b.id)));
+    /// The sessions in the order in which they are painted: most recent
+    /// first.
+    fn sorted(&self) -> Vec<&Session> {
+        let mut v: Vec<&Session> = self.sessions.values().collect();
+        // By descending stamp, with id as the tiebreak: two sessions cannot
+        // share a stamp, but an order that depends on a `HashMap`'s
+        // iteration makes the list dance between repaints.
+        v.sort_by(|a, b| b.stamp.cmp(&a.stamp).then_with(|| a.id.cmp(&b.id)));
         v
     }
 
-    /// El id CRUDO de la sesión elegida.
-    pub(crate) fn elegida(&self) -> Option<String> {
-        match &self.elegida {
-            // Por ID: si la fila se movió —o desapareció—, la selección la
-            // sigue, y no se queda señalando a quien ocupó su hueco.
-            Some(id) if self.sesiones.contains_key(id) => Some(id.clone()),
-            _ => self.ordenadas().first().map(|s| s.id.clone()),
+    /// The RAW id of the chosen session.
+    pub(crate) fn chosen(&self) -> Option<String> {
+        match &self.selected {
+            // By ID: if the row moved —or disappeared—, the selection
+            // follows it, and it does not keep pointing at whoever took its
+            // spot.
+            Some(id) if self.sessions.contains_key(id) => Some(id.clone()),
+            _ => self.sorted().first().map(|s| s.id.clone()),
         }
     }
 
-    /// Dónde cae la selección dentro de la lista pintada.
-    fn indice(&self) -> usize {
-        let orden = self.ordenadas();
-        self.elegida
+    /// Where the selection falls within the painted list.
+    fn index(&self) -> usize {
+        let order = self.sorted();
+        self.selected
             .as_ref()
-            .and_then(|id| orden.iter().position(|s| &s.id == id))
+            .and_then(|id| order.iter().position(|s| &s.id == id))
             .unwrap_or(0)
     }
 
-    /// Mueve la selección dentro de la lista.
+    /// Moves the selection within the list.
     pub(crate) fn mover(&mut self, delta: i64) {
-        let orden = self.ordenadas();
-        if orden.is_empty() {
+        let order = self.sorted();
+        if order.is_empty() {
             return;
         }
-        let destino = i64::try_from(self.indice())
+        let target = i64::try_from(self.index())
             .unwrap_or(0)
             .saturating_add(delta);
-        let i = usize::try_from(destino.max(0))
+        let i = usize::try_from(target.max(0))
             .unwrap_or(0)
-            .min(orden.len() - 1);
-        self.elegida = Some(orden[i].id.clone());
+            .min(order.len() - 1);
+        self.selected = Some(order[i].id.clone());
     }
 
-    /// Pone la selección en una fila concreta (un click), si el clic habla de
-    /// la lista que se estaba pintando.
+    /// Puts the selection on a specific row (a click), if the click speaks
+    /// of the list that was being painted.
     ///
-    /// Fuera de generación NO se recorta ni se ignora: se rehúsa. Recortar
-    /// sobre una lista que se movió es elegir por el lector, y aquí lo que se
-    /// elige es de quién se deshace el trabajo.
-    pub(crate) fn senalar(&mut self, fila: usize, generacion: u64) -> bool {
-        if generacion != self.generacion {
+    /// Out of generation it is NOT clamped nor ignored: it is refused.
+    /// Clamping against a list that moved is choosing for the reader, and
+    /// here what is being chosen is whose work gets undone.
+    pub(crate) fn point_at(&mut self, row: usize, generation: u64) -> bool {
+        if generation != self.generation {
             return false;
         }
-        let orden = self.ordenadas();
-        let Some(s) = orden.get(fila) else {
+        let order = self.sorted();
+        let Some(s) = order.get(row) else {
             return false;
         };
-        self.elegida = Some(s.id.clone());
+        self.selected = Some(s.id.clone());
         true
     }
 
-    /// Empieza sin selección: el panel se abre y se cierra, y la de la vez
-    /// anterior describía una lista que puede haber cambiado entera.
-    pub(crate) fn al_abrir(&mut self) {
-        self.elegida = None;
+    /// Starts with no selection: the panel opens and closes, and the
+    /// previous one described a list that may have changed entirely.
+    pub(crate) fn on_open(&mut self) {
+        self.selected = None;
     }
 
-    /// La proyección del panel.
+    /// The panel's projection.
     ///
-    /// `escucha` es si esta ventana está suscrita al canal de aprobaciones:
-    /// una que no lo está —montada sin efectos— tiene la lista vacía POR ESO,
-    /// y decir ahí «ningún agente ha pedido permiso» es afirmar algo que no
-    /// puede saber.
-    pub(crate) fn vista_de(&self, lang: norte_i18n::Lang, escucha: bool) -> AgentsView {
+    /// `listening` is whether this window is subscribed to the approvals
+    /// channel: one that is not —mounted without effects— has an empty list
+    /// FOR THAT REASON, and saying there "no agent has asked for permission"
+    /// would claim something it cannot know.
+    pub(crate) fn vista_de(&self, lang: norte_i18n::Lang, listening: bool) -> AgentsView {
         AgentsView {
             rows: self
-                .ordenadas()
+                .sorted()
                 .into_iter()
                 .map(|s| {
-                    let (id, hostil) = norte_frontend::display_name(s.id.as_bytes());
+                    let (id, hostile) = norte_frontend::display_name(s.id.as_bytes());
                     AgentRowView {
                         session: clamp_display(id),
-                        session_hostile: hostil,
-                        undoing: self.deshaciendo.contains(&s.id),
+                        session_hostile: hostile,
+                        undoing: self.undoing.contains(&s.id),
                         counts: clamp_display(norte_i18n::ta_in(
                             lang,
                             "agents-counts",
                             &[
-                                ("seen", &s.vistas.to_string()),
-                                ("approved", &s.aprobadas.to_string()),
+                                ("seen", &s.seen.to_string()),
+                                ("approved", &s.approved.to_string()),
                             ],
                         )),
-                        last_op: s.ultima.0.clone(),
-                        last_op_hostile: s.ultima.1,
+                        last_op: s.last.0.clone(),
+                        last_op_hostile: s.last.1,
                     }
                 })
                 .collect(),
-            cursor: self.indice() as u64,
-            generation: self.generacion,
-            forgotten: self.olvidadas,
-            // Qué ES esta lista, dentro de la propia pantalla: las que ESTA
-            // ventana ha visto pedir permiso, que no es el censo de agentes
-            // del sistema. Sin decirlo, una lista vacía se lee como «ningún
-            // agente ha tocado nada», que es una afirmación que esta ventana
-            // no puede hacer.
+            cursor: self.index() as u64,
+            generation: self.generation,
+            forgotten: self.forgotten,
+            // What this list IS, right there on the screen: the ones THIS
+            // window has seen ask for permission, which is not the system's
+            // census of agents. Without saying so, an empty list reads as
+            // "no agent has touched anything", a claim this window cannot
+            // make.
             note: clamp_display(norte_i18n::t_in(lang, "agents-note")),
             empty: clamp_display(norte_i18n::t_in(
                 lang,
-                if escucha {
+                if listening {
                     "agents-empty"
                 } else {
                     "agents-not-listening"

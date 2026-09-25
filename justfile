@@ -1,56 +1,57 @@
-# Interfaz única de comandos: humanos, Claude y CI corren exactamente esto.
+# Single command interface: humans, Claude and CI all run exactly this.
 
 default: ci
 
-# El ÚNICO conjunto de features del gate. Una sola fuente porque cargo no
-# comparte artefactos entre conjuntos distintos: `cargo nextest -p norte-tui`
-# a secas y `just test` compilan DOS universos completos de norte-tui y de
-# todo lo que depende de él, y ninguno de los dos se borra jamás. Cada
-# universo del workspace pesa ~30 G. Toda receta que compile el workspace
-# usa esta variable; ver `just prune` y `just disk`.
+# The gate's ONLY set of features. A single source because cargo does not
+# share artifacts between different sets: a bare `cargo nextest -p norte-tui`
+# and `just test` compile TWO complete universes of norte-tui and everything
+# that depends on it, and neither is ever deleted. Each workspace universe
+# weighs ~30 G. Every recipe that compiles the workspace uses this variable;
+# see `just prune` and `just disk`.
 #
-# Features EXPLÍCITAS y no `--all-features`: `it-openssh` (norte-vfs-sftp) es
-# un test nightly contra Docker (ADR 0013) y no debe ni compilar aquí.
+# EXPLICIT features and not `--all-features`: `it-openssh` (norte-vfs-sftp) is
+# a nightly test against Docker (ADR 0013) and must not even compile here.
 #
-# `norte-core/testing` abre las puertas que los e2e necesitan y la biblioteca
-# publicada NO debe tener (#241): sin ella, `columns_git_e2e` no compila, que
-# es exactamente lo que se quiere de una puerta de test.
+# `norte-core/testing` opens the doors the e2e tests need and the published
+# library must NOT have (#241): without it, `columns_git_e2e` does not
+# compile, which is exactly what is wanted from a test-only door.
 features := "--features norte-tui/schema --features norte-config/watch --features norte-proto/schema --features norte-core/testing"
 
-# Los paquetes del gate: el workspace entero.
+# The gate's packages: the whole workspace.
 #
-# Hasta 2026-08-20 esto excluía `norte-gui`, y no por tiempo sino por
-# corrección: GPUI activaba `serde_json/preserve_order` y las features de cargo
-# se unifican POR invocación, así que meterla en el mismo `cargo` que el core
-# cambiaba el JSON que publicamos (mapas ordenados → orden de inserción) y
-# ponía cinco tests en rojo sin que nadie tocara código. Retirada la GUI GPUI
-# (ADR 0065), la exclusión sobra — pero la lección no: si un miembro nuevo trae
-# una feature que cambia el comportamiento del core, se saca de aquí otra vez.
-# `norte-gui-tauri` queda FUERA de ESTE gate, y no porque sea provisional: es
-# un frontend soportado desde el 2026-09-01 (ADR 0087). Queda fuera porque
-# compilarlo exige WebKitGTK, GTK3 y libsoup3 del sistema, y ninguna otra parte
-# del árbol los necesita — un gate que no arranca en una máquina sin ellos deja
-# de ser un gate. Está en `members` a propósito: así el `Cargo.lock` fija las
-# versiones de Tauri y `cargo fmt --all` lo cubre.
+# Until 2026-08-20 this excluded `norte-gui`, and not for time reasons but
+# for correctness: GPUI enabled `serde_json/preserve_order` and cargo's
+# features are unified PER invocation, so putting it in the same `cargo` call
+# as the core changed the JSON we publish (ordered maps → insertion order)
+# and turned five tests red without anyone touching code. With the GPUI GUI
+# retired (ADR 0065), the exclusion is no longer needed — but the lesson
+# isn't: if a new member brings a feature that changes the core's behavior,
+# it gets pulled out of here again. `norte-gui-tauri` stays OUT of THIS gate,
+# and not because it is provisional: it is a frontend supported since
+# 2026-09-01 (ADR 0087). It stays out because building it requires the
+# system's WebKitGTK, GTK3 and libsoup3, and no other part of the tree needs
+# them — a gate that does not start on a machine without them stops being a
+# gate. It is in `members` on purpose: this way `Cargo.lock` pins Tauri's
+# versions and `cargo fmt --all` covers it.
 #
-# Su gate es `just gui-ci`, y lo corre `.github/workflows/gui.yml` en cada
-# cambio que le llegue. Correrlo a mano no bastaba: el 2026-09-01 llevaba rojo
-# en `main` sin que nadie lo supiera.
+# Its gate is `just gui-ci`, run by `.github/workflows/gui.yml` on every
+# change that reaches it. Running it by hand was not enough: on 2026-09-01 it
+# had been red on `main` for weeks without anyone knowing.
 core_pkgs := "--workspace --exclude norte-gui-tauri"
 
-# Suelo de disco libre (GiB) por debajo del cual `just ci` se niega a
-# arrancar. Un `cargo build` del workspace más el target instrumentado de
-# cobertura necesitan del orden de 40 G; quedarse sin disco a mitad no da un
-# error limpio: corrompe artefactos y deja errores de linker (`os error 28`)
-# que parecen bugs del código.
+# Free-disk floor (GiB) below which `just ci` refuses to start. A workspace
+# `cargo build` plus the coverage-instrumented target need on the order of
+# 40 G; running out of disk midway does not give a clean error: it corrupts
+# artifacts and leaves linker errors (`os error 28`) that look like bugs in
+# the code.
 disk_floor := "40"
 
 fmt:
     cargo fmt --all
 
-# Recompila el guest ftp-provider a wasm32-wasip2 y actualiza el artefacto
-# EMBEBIDO en norte-core (ADR 0033). Correr tras tocar el guest ftp-provider o
-# la interfaz WIT `provider`.
+# Recompiles the ftp-provider guest to wasm32-wasip2 and updates the artifact
+# EMBEDDED in norte-core (ADR 0033). Run after touching the ftp-provider guest
+# or the `provider` WIT interface.
 build-ftp-wasm:
     cargo build --release --target wasm32-wasip2 \
         --manifest-path crates/norte-plugin-host/examples-wasm/ftp-provider/Cargo.toml
@@ -64,83 +65,91 @@ lint: fmt-check deny-guests
     CARGO_INCREMENTAL=0 cargo clippy {{core_pkgs}} --all-targets {{features}} -- -D warnings
     cargo deny check
 
-# Advisories de los guests WASM, que están FUERA del workspace y del lock (ver
-# deny-guests.toml). Solo `advisories`: no compila nada, resuelve el árbol.
+# Advisories for the WASM guests, which are OUTSIDE the workspace and the
+# lock (see deny-guests.toml). Only `advisories`: it compiles nothing, it
+# just resolves the tree.
 deny-guests:
     #!/usr/bin/env bash
     set -euo pipefail
     for m in crates/norte-plugin-host/examples-wasm/*/Cargo.toml plugins/*/Cargo.toml; do
-        # `--config` va ANTES de `check`: en cargo-deny 0.20 volvió a ser una
-        # opción del binario y el subcomando la rechaza («unexpected argument
-        # '--config' found»). La 0.19 la quería al revés — y el gate se quedó
-        # rojo DOS veces en cuanto alguien actualizó. Si vuelve a cambiar, es
-        # esta línea.
+        # `--config` goes BEFORE `check`: in cargo-deny 0.20 it went back to
+        # being a binary option and the subcommand rejects it ("unexpected
+        # argument '--config' found"). 0.19 wanted it the other way around —
+        # and the gate went red TWICE as soon as someone updated it. If it
+        # changes again, it's this line.
         cargo deny --manifest-path "$m" --config deny-guests.toml check -A advisory-not-detected advisories
     done
 
-# --no-tests=pass: el esqueleto de fase 1 no tiene tests aún; con código real
-# el gate de cobertura (85%) hace imposible un workspace sin tests que pase CI.
-# nextest no corre doctests: van aparte (los exige la convención de rustdoc).
-# Las features salen de `{{features}}`: una sola fuente para todo el gate.
-# CARGO_INCREMENTAL=0 porque la compilación incremental no aporta nada a una
-# corrida completa (se recompila todo igual) y su caché pesa ~8 G por universo.
+# --no-tests=pass: phase 1's skeleton has no tests yet; with real code the
+# coverage gate (85%) makes it impossible for a workspace with no tests to
+# pass CI. nextest does not run doctests: those run separately (rustdoc's
+# convention requires them). Features come from `{{features}}`: a single
+# source for the whole gate. CARGO_INCREMENTAL=0 because incremental
+# compilation adds nothing to a full run (everything gets recompiled anyway)
+# and its cache weighs ~8 G per universe.
 test:
     CARGO_INCREMENTAL=0 cargo nextest run {{core_pkgs}} {{features}} --no-tests=pass --no-fail-fast
     CARGO_INCREMENTAL=0 cargo test {{core_pkgs}} {{features}} --doc
 
-# Gate de cobertura (mismo umbral que CI): solo crates de lógica (spec §12).
+# Coverage gate (same threshold as CI): only logic crates (spec §12).
 #
-# `clean --profraw-only` ANTES: los `.profraw` de una corrida anterior dan
-# porcentajes FALSOS (se han visto 58 % y 76 % espurios donde el real era
-# 88 %). Sólo eso — `--workspace` borraría además el target instrumentado, que
-# es un universo aparte (proto/vfs/core y su árbol) y recompilarlo entero es la
-# mayor parte del coste de `just ci`. Ese universo lo tira `just prune`, que sí
-# corre `clean --workspace`: se paga cuando hace falta disco, no en cada gate.
+# `clean --profraw-only` FIRST: a previous run's `.profraw` files give FALSE
+# percentages (58% and 76% spurious have been seen where the real figure was
+# 88%). Only that — `--workspace` would also delete the instrumented target,
+# which is a separate universe (proto/vfs/core and its tree) and recompiling
+# it whole is most of `just ci`'s cost. That universe is thrown away by
+# `just prune`, which does run `clean --workspace`: it is paid for when disk
+# is actually needed, not on every gate run.
 cov:
     cargo llvm-cov clean --profraw-only
-    # `--features norte-core/testing` y no `{{features}}`: `cov` selecciona con
-    # `-p`, y con un solo paquete seleccionado cargo rechaza una feature de otro
-    # («el paquete no contiene esas features») — la misma trampa que la receta
-    # `t` documenta. Sin esta feature, `tests/columns_git_e2e.rs` no ve
-    # `plugins::run_column_values_for_test` (gateada
-    # `cfg(any(test, feature = "testing"))`) y `cov` no compilaba: un test de
-    # integración es otro crate y no hereda el `cfg(test)` de la lib. Roto desde
-    # que entró ese test, y no se vio porque `cov` es lo último de `just ci` y
-    # `ci-fast` no lo incluye.
+    # `--features norte-core/testing` and not `{{features}}`: `cov` selects
+    # with `-p`, and with a single package selected cargo rejects a feature
+    # from another one ("the package does not contain these features") — the
+    # same trap the `t` recipe documents. Without this feature,
+    # `tests/columns_git_e2e.rs` cannot see
+    # `plugins::run_column_values_for_test` (gated on
+    # `cfg(any(test, feature = "testing"))`) and `cov` did not compile: an
+    # integration test is a separate crate and does not inherit the lib's
+    # `cfg(test)`. Broken since that test landed, and it went unnoticed
+    # because `cov` is the last step of `just ci` and `ci-fast` does not
+    # include it.
     CARGO_INCREMENTAL=0 cargo llvm-cov nextest -p norte-proto -p norte-vfs -p norte-core -p norte-vfs-local -p norte-client --features norte-core/testing --fail-under-lines 85
 
 docs:
     RUSTDOCFLAGS="-D warnings" CARGO_INCREMENTAL=0 cargo doc {{core_pkgs}} --no-deps
 
-# Rupturas de API pública contra el último tag (ADR 0038, #13).
+# Public API breakage against the latest tag (ADR 0038, #13).
 #
-# Se nombran los paquetes UNO A UNO, y no con `--workspace`, por dos razones
-# distintas que empujan en la misma dirección:
+# Packages are named ONE BY ONE, and not with `--workspace`, for two
+# different reasons that push in the same direction:
 #
-# 1. Lo que importa son las librerías PUBLICABLES (MIT/Apache): son las que
-#    consume un tercero. Los binarios AGPL —cli y tui— y las librerías
-#    internas AGPL no tienen API pública que romper.
-# 2. `--workspace` ABORTA, no avisa, cuando un miembro no existía en la
-#    baseline: contra `v0.3.0-alpha.2` se para en `norte-help` con «package
-#    not found in <rev>» y no comprueba nada. `norte-help` nació después de
-#    ese tag; entra en esta lista con la primera baseline que lo contenga.
+# 1. What matters is the PUBLISHABLE libraries (MIT/Apache): those are what a
+#    third party consumes. The AGPL binaries —cli and tui— and the internal
+#    AGPL libraries have no public API to break.
+# 2. `--workspace` ABORTS, it does not just warn, when a member did not exist
+#    at the baseline: against `v0.3.0-alpha.2` it stops at `norte-help` with
+#    "package not found in <rev>" and checks nothing. `norte-help` was born
+#    after that tag; it enters this list with the first baseline that
+#    contains it.
 #
-# NO está en `ci`: cablearla antes de tener release publicado rompería cada
-# `just ci` (decisión de gate del ADR 0038). Corre en `just release-check`.
+# It is NOT in `ci`: wiring it in before there is a published release would
+# break every `just ci` (a gate decision from ADR 0038). It runs in
+# `just release-check`.
 semver baseline="v0.3.0-alpha.2":
     #!/usr/bin/env bash
-    # La versión del workspace tiene que haber SUBIDO respecto a la baseline.
-    # Si son iguales, cargo-semver-checks decide «no change; assume major» y se
-    # salta las 254 comprobaciones de cada crate: sale verde, en cero coma, sin
-    # haber mirado nada. Eso es peor que rojo — un gate que puede no comprobar
-    # nada y decir que sí no es un gate. Se falla aquí, con el motivo.
+    # The workspace version has to have GONE UP compared to the baseline. If
+    # they are equal, cargo-semver-checks decides "no change; assume major"
+    # and skips each crate's 254 checks: it comes out green, in zero time,
+    # without having looked at anything. That is worse than red — a gate that
+    # can check nothing and say yes is not a gate. It fails here, with the
+    # reason.
     set -euo pipefail
     actual=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
     previa=$(git show {{baseline}}:Cargo.toml | grep -m1 '^version = ' | cut -d'"' -f2)
     if [ "$actual" = "$previa" ]; then
-        echo "semver: la versión del workspace ($actual) es la de {{baseline}}." >&2
-        echo "cargo-semver-checks se saltaría TODAS las comprobaciones." >&2
-        echo "Sube la versión en Cargo.toml antes de correr esto." >&2
+        echo "semver: the workspace version ($actual) is {{baseline}}'s." >&2
+        echo "cargo-semver-checks would skip ALL checks." >&2
+        echo "Bump the version in Cargo.toml before running this." >&2
         exit 1
     fi
     cargo semver-checks --baseline-rev {{baseline}} \
@@ -149,120 +158,121 @@ semver baseline="v0.3.0-alpha.2":
         -p norte-vfs-archive -p norte-config -p norte-encoding \
         -p norte-frontend -p norte-i18n -p norte-theme
 
-# Lo que corre CI. `_disk` primero: quedarse sin disco a mitad de un build no
-# falla limpio, corrompe artefactos.
+# What CI runs. `_disk` first: running out of disk mid-build does not fail
+# clean, it corrupts artifacts.
 ci: _disk lint test cov docs
     @just _sellar
 
-# Iteración rápida: todo el gate MENOS cobertura (cov recompila proto/vfs/core
-# instrumentados en su propio target y re-corre sus tests: ~34 s fijos incluso
-# sin cambios). El gate real pre-commit sigue siendo `just ci`.
+# Fast iteration: the whole gate MINUS coverage (cov recompiles proto/vfs/core
+# instrumented in its own target and re-runs their tests: ~34s fixed cost even
+# with no changes). The real pre-commit gate is still `just ci`.
 ci-fast: _disk lint test docs
     @just _sellar
 
-# Deja constancia de que este CONTENIDO pasó el gate, para que el `pre-push`
-# no lo repita. Vive en `target/`: no se versiona ni viaja a otra máquina — el
-# sello vale donde se corrió.
+# Records that this CONTENT passed the gate, so `pre-push` does not repeat
+# it. Lives in `target/`: not versioned and does not travel to another
+# machine — the seal is only valid where it ran.
 #
-# Sin esto, quien hace lo correcto (correr el gate y luego empujar) lo paga dos
-# veces, y un suelo que cuesta veinte minutos acaba siendo un `--no-verify` de
-# costumbre.
+# Without this, whoever does the right thing (run the gate, then push) pays
+# for it twice, and a floor that costs twenty minutes ends up as a habitual
+# `--no-verify`.
 #
-# Se hashea el ÁRBOL DE TRABAJO y no `HEAD^{tree}`. La primera versión hacía lo
-# segundo y no servía para nada en el flujo normal: cuando corres el gate, tus
-# cambios todavía no están commiteados, así que sellaba el árbol del commit
-# ANTERIOR y el hook volvía a pagarlo entero. Lo demostró el primer push que lo
-# usó. Lo que el gate valida son los ficheros del disco, así que es eso lo que
-# se sella. Cuesta 0,2 s sobre 1.248 ficheros.
+# The WORKING TREE is hashed and not `HEAD^{tree}`. The first version did the
+# latter and was useless in the normal flow: when you run the gate, your
+# changes are not committed yet, so it sealed the PREVIOUS commit's tree and
+# the hook paid for it all again. The first push that used it proved it. What
+# the gate validates is the files on disk, so that is what gets sealed. Costs
+# 0.2s over 1,248 files.
 _sellar:
     @just _huella > target/.norte-gate-ok 2>/dev/null || true
 
 _sellar-gui:
     @just _huella > target/.norte-gui-gate-ok 2>/dev/null || true
 
-# La huella del contenido seguido por git, tal como está en el disco.
+# The fingerprint of git-tracked content, as it is on disk.
 _huella:
     @git ls-files -z | xargs -0 sha256sum 2>/dev/null | sha256sum | cut -d' ' -f1
 
-# Instala los hooks del repositorio (`.githooks/`). Una vez por clon.
+# Installs the repository's hooks (`.githooks/`). Once per clone.
 #
-# Hoy hay uno: `pre-push` corre `ci-fast`, y `gui-ci` si el push toca la
-# ventana o algo que entra en ella. Existe porque un gate que depende de que
-# alguien se acuerde se pudre — `gui-ci` llevaba semanas rojo en `main`
-# (ADR 0087) — y es el suelo que no depende de ningún servicio de nadie.
+# Today there is one: `pre-push` runs `ci-fast`, and `gui-ci` if the push
+# touches the window or something that feeds into it. It exists because a
+# gate that depends on someone remembering rots — `gui-ci` had been red on
+# `main` for weeks (ADR 0087) — and this is the floor that depends on no
+# one's service.
 #
-# Es un suelo, no una cerradura: `git push --no-verify` lo salta.
+# It is a floor, not a lock: `git push --no-verify` skips it.
 #
-# Instala los hooks del repositorio. Una vez por clon.
+# Installs the repository's hooks. Once per clone.
 hooks:
     git config core.hooksPath .githooks
-    @echo "hooks instalados desde .githooks/ (pre-push: ci-fast [+ gui-ci])"
+    @echo "hooks installed from .githooks/ (pre-push: ci-fast [+ gui-ci])"
 
-# ---------- disco: por qué se llena y cómo recuperarlo ----------
+# ---------- disk: why it fills up and how to reclaim it ----------
 
-# Guarda de espacio libre. Falla ANTES de compilar en vez de a mitad.
+# Free-space guard. Fails BEFORE compiling instead of halfway through.
 _disk:
     #!/usr/bin/env bash
     set -euo pipefail
     libre=$(df -BG --output=avail . | tail -1 | tr -dc '0-9')
     if [ "$libre" -lt {{disk_floor}} ]; then
-        echo "disco: ${libre} GiB libres, por debajo del suelo de {{disk_floor}} GiB." >&2
-        echo "corre 'just prune' (o 'just disk' para ver dónde está el espacio)." >&2
+        echo "disk: ${libre} GiB free, below the {{disk_floor}} GiB floor." >&2
+        echo "run 'just prune' (or 'just disk' to see where the space is)." >&2
         exit 1
     fi
 
-# Dónde está el espacio: el target de este árbol, sus piezas, los targets de
-# otros worktrees y el registro de cargo.
+# Where the space is: this tree's target, its pieces, other worktrees'
+# targets and cargo's registry.
 disk:
     #!/usr/bin/env bash
     set -euo pipefail
-    echo "== libre =="; df -h . | tail -1
-    echo "== target de este árbol =="
-    # `|| true` en cada du: un build en marcha borra ficheros bajo los pies
-    # de du y lo hace salir con error aunque el total sea correcto.
+    echo "== free =="; df -h . | tail -1
+    echo "== this tree's target =="
+    # `|| true` on every du: a build in progress deletes files out from under
+    # du and makes it exit with an error even though the total is correct.
     [ -d target ] && du -sh target 2>/dev/null || true
     for d in target/debug/deps target/debug/incremental target/debug/build target/llvm-cov-target target/tmp; do
         [ -d "$d" ] && du -sh "$d"
     done
-    echo "== targets de OTROS worktrees (no los toca 'just prune') =="
+    echo "== OTHER worktrees' targets ('just prune' does not touch them) =="
     git worktree list --porcelain | awk '/^worktree /{print $2}' | while read -r w; do
         [ "$w" = "$PWD" ] && continue
         [ -d "$w/target" ] && du -sh "$w/target"
     done
-    echo "== registro de cargo (compartido; no es del proyecto) =="
+    echo "== cargo's registry (shared; not the project's) =="
     du -sh "${CARGO_HOME:-$HOME/.cargo}" 2>/dev/null || true
 
-# Recupera espacio SIN tirar el build entero: la caché incremental (inútil
-# entre corridas completas) y el target instrumentado de cobertura (se
-# regenera en cada `just cov`). Deja intactos los artefactos que hacen que la
-# siguiente compilación sea rápida.
+# Reclaims space WITHOUT throwing away the whole build: the incremental
+# cache (useless between full runs) and the coverage-instrumented target (it
+# regenerates on every `just cov`). Leaves intact the artifacts that make the
+# next compile fast.
 #
-# Por qué hace falta una receta: cargo NUNCA recolecta basura. Cada conjunto
-# de features, cada versión de dependencia y cada toolchain deja su universo
-# de artefactos ahí para siempre, y cada universo del workspace pesa ~30 G.
-# Si esto no basta, `just prune-all` tira el target completo (la siguiente
-# compilación es desde cero, varios minutos).
+# Why a recipe is needed: cargo NEVER garbage-collects. Every feature set,
+# every dependency version and every toolchain leaves its universe of
+# artifacts there forever, and every workspace universe weighs ~30 G. If this
+# is not enough, `just prune-all` throws away the whole target (the next
+# compile is from scratch, several minutes).
 prune days="2":
     #!/usr/bin/env bash
     set -euo pipefail
     antes=$(du -sk target 2>/dev/null | cut -f1 || echo 0)
     cargo llvm-cov clean --workspace 2>/dev/null || true
     rm -rf target/debug/incremental target/release/incremental target/tmp
-    # El target de cargo-semver-checks (`just release-check`): 17 G medidos, y
-    # se regenera solo. No lo tocaba nadie.
+    # cargo-semver-checks's target (`just release-check`): 17 G measured, and
+    # it regenerates on its own. Nobody was touching it.
     rm -rf target/semver-checks
-    # Los ejecutables de test muertos. ESTE es el grueso: 184 GiB de los 288 G
-    # medidos eran 2075 exes en debug/deps, de los que 1262 (122 GiB) llevaban
-    # más de un día sin tocarse. Cargo no borra NINGUNO: cada relink deja el
-    # anterior ahí para siempre.
+    # Dead test executables. THIS is the bulk: 184 GiB of the 288 G measured
+    # were 2075 exes in debug/deps, of which 1262 (122 GiB) had gone untouched
+    # for more than a day. Cargo deletes NONE of them: every relink leaves the
+    # previous one there forever.
     #
-    # Se barren SÓLO los ejecutables (fichero sin extensión y con +x), nunca
-    # .rlib/.rmeta. Es deliberado: si el barrido se lleva uno que aún estaba
-    # vivo, cargo lo vuelve a ENLAZAR (segundos con lld), no a compilar. Un
-    # .rlib borrado por error sí costaría una compilación entera.
-    # Los directorios de `deps` que EXISTAN: sin `release/` (lo normal en una
-    # máquina que solo compila en debug) `find` sale con error, y con
-    # `pipefail` eso mataba la receta ENTERA justo antes de barrer nada.
+    # ONLY the executables are swept (a file with no extension and +x), never
+    # .rlib/.rmeta. This is deliberate: if the sweep takes one that was still
+    # alive, cargo just RELINKS it (seconds with lld), not recompiles it. An
+    # .rlib deleted by mistake would cost a full compile.
+    # The `deps` directories that EXIST: without `release/` (normal on a
+    # machine that only builds in debug) `find` exits with an error, and with
+    # `pipefail` that killed the WHOLE recipe right before sweeping anything.
     dirs=()
     for d in target/debug/deps target/release/deps; do
         [ -d "$d" ] && dirs+=("$d")
@@ -273,51 +283,55 @@ prune days="2":
             ! -name '*.*' -mtime +{{days}} -print -delete 2>/dev/null | wc -l)
     fi
     despues=$(du -sk target 2>/dev/null | cut -f1 || echo 0)
-    echo "exes de test barridos (>{{days}} días): $barridos"
+    echo "test exes swept (>{{days}} days): $barridos"
     echo "target: $((antes / 1024 / 1024)) GiB → $((despues / 1024 / 1024)) GiB"
     df -h . | tail -1
 
-# El martillo: tira TODO el target de este árbol.
+# The hammer: throws away this tree's WHOLE target.
 prune-all:
     cargo clean
     @df -h . | tail -1
 
-# ---------- desarrollo: ejecutar y probar a mano ----------
+# ---------- development: run and try things by hand ----------
 
-# El TUI (release: arranque frío <50 ms es presupuesto de la spec §12).
+# The TUI (release: <50ms cold start is spec §12's budget).
 #
-# `{{features}}` NO es decorativo aquí: cargo unifica features por invocación y
-# keya los artefactos por el conjunto resultante. Sin ellas, este `cargo run`
-# compilaba un universo COMPLETO y separado de norte-tui y de todo lo que
-# cuelga (~30 G) que ninguna otra receta reusaba jamás.
+# `{{features}}` is NOT decorative here: cargo unifies features per
+# invocation and keys artifacts by the resulting set. Without them, this
+# `cargo run` compiled a COMPLETE, separate universe of norte-tui and
+# everything hanging off it (~30 G) that no other recipe ever reused.
 run:
     cargo run --release -p norte-tui {{features}}
 
-# El TUI en debug (compila más rápido; para iterar). Mismas features que el
-# gate → reusa lo que ya compiló `just test`, coste normalmente cero.
+# The TUI in debug (compiles faster; for iterating). Same features as the
+# gate → reuses what `just test` already compiled, normally zero cost.
 dev:
     cargo run -p norte-tui {{features}}
 
-# La receta de PRIMERA VEZ en una máquina: deja `ntc`, `norte` y `ntc-gui` en
-# el PATH apuntando a este árbol, y no hay nada más que hacer después. Los
-# enlaces son symlinks al `target/` de aquí, así que a partir de ese momento
-# cualquier build (tuya o del gate) actualiza los tres comandos sola.
+# The FIRST-TIME-on-a-machine recipe: puts `ntc`, `norte` and `ntc-gui` on
+# the PATH pointing at this tree, and there is nothing else to do afterward.
+# The links are symlinks to this tree's `target/`, so from then on any build
+# (yours or the gate's) updates all three commands on its own.
 #
-# No se llama `setup` porque `make setup` ya es otra cosa — el bootstrap del
-# toolchain (rustup, just, nextest) — y dos `setup` que hacen cosas distintas
-# es exactamente el tipo de detalle que se teclea mal a las dos de la mañana.
+# It is not called `setup` because `make setup` is already something else —
+# the toolchain bootstrap (rustup, just, nextest) — and two `setup`s doing
+# different things is exactly the kind of detail that gets mistyped at two
+# in the morning.
 #
-# Tres cosas que esta receta hace y `just link` + `just link-gui` sueltas no:
+# Three things this recipe does that `just link` + `just link-gui` on their
+# own do not:
 #
-# - Comprueba que `~/.local/bin` está en el PATH y, si no, dice cómo meterlo
-#   en fish. Enlazar en un directorio que nadie mira es el fallo silencioso
-#   clásico: la receta dice "hecho" y el comando no existe.
-# - La ventana es OPCIONAL. Si falta WebKitGTK/GTK3/libsoup3/npm, la parte
-#   gráfica avisa y sigue, en vez de dejar la máquina sin `ntc` — que es el
-#   mismo motivo por el que `core_pkgs` deja la GUI fuera del gate.
-# - `--gui`/`--no-gui` fuerza la decisión cuando no quieras que la adivine.
+# - Checks that `~/.local/bin` is on the PATH and, if not, says how to add it
+#   in fish. Linking into a directory nobody looks at is the classic silent
+#   failure: the recipe says "done" and the command does not exist.
+# - The window is OPTIONAL. If WebKitGTK/GTK3/libsoup3/npm is missing, the
+#   graphical part warns and continues, instead of leaving the machine
+#   without `ntc` — the same reason `core_pkgs` leaves the GUI out of the
+#   gate.
+# - `--gui`/`--no-gui` forces the decision when you do not want it guessed.
 #
-# `dir` elige perfil igual que en `just link`: `just link-all release`.
+# `dir` picks the profile the same way as in `just link`:
+# `just link-all release`.
 link-all dir="debug" gui="auto":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -325,7 +339,7 @@ link-all dir="debug" gui="auto":
     case ":$PATH:" in
         *":$HOME/.local/bin:"*) ;;
         *)
-            echo "aviso: ~/.local/bin no está en el PATH. En fish:" >&2
+            echo "warning: ~/.local/bin is not on the PATH. In fish:" >&2
             echo "  fish_add_path ~/.local/bin" >&2
             ;;
     esac
@@ -336,7 +350,7 @@ link-all dir="debug" gui="auto":
             quiero_gui=yes
         else
             quiero_gui=no
-            echo "aviso: sin npm o sin WebKitGTK 4.1; me salto ntc-gui ('just gui-deps' y 'just link-all {{dir}} yes' cuando los tengas)" >&2
+            echo "warning: no npm or no WebKitGTK 4.1; skipping ntc-gui ('just gui-deps' and 'just link-all {{dir}} yes' once you have them)" >&2
         fi
     fi
     if [ "$quiero_gui" = "yes" ]; then
@@ -344,49 +358,50 @@ link-all dir="debug" gui="auto":
             just gui-deps
         fi
         if ! just link-gui {{dir}}; then
-            echo "aviso: la ventana no se pudo enlazar; ntc y norte sí están" >&2
+            echo "warning: the window could not be linked; ntc and norte are still there" >&2
         fi
     fi
     echo
-    echo "en el PATH ahora:"
+    echo "on the PATH now:"
     for b in ntc norte ntc-gui; do
         if [ -L ~/.local/bin/$b ]; then
             printf '  %-8s → %s\n' "$b" "$(readlink ~/.local/bin/$b)"
         fi
     done
 
-# Quita del PATH los enlaces que puso `just link-all`. No toca lo que instaló
-# `cargo install` (para eso está `just uninstall`) ni borra nada del árbol:
-# sólo desenlaza, y sólo si el enlace apunta a ESTE árbol — así una sesión en
-# un worktree no se lleva por delante los enlaces de otro.
+# Removes from the PATH the links `just link-all` put there. Does not touch
+# what `cargo install` installed (that is what `just uninstall` is for) nor
+# delete anything from the tree: it only unlinks, and only if the link points
+# at THIS tree — this way a session in a worktree does not sweep away
+# another one's links.
 unlink:
     #!/usr/bin/env bash
     set -euo pipefail
     for b in ntc norte ntc-gui norte-gui; do
         dest=$(readlink ~/.local/bin/$b 2>/dev/null || true)
         case "$dest" in
-            "$PWD"/*) rm -f ~/.local/bin/$b; echo "quitado: $b" ;;
+            "$PWD"/*) rm -f ~/.local/bin/$b; echo "removed: $b" ;;
             "") ;;
-            *) echo "intacto: $b (apunta a $dest, otro árbol)" ;;
+            *) echo "untouched: $b (points at $dest, another tree)" ;;
         esac
     done
 
-# Pone `ntc` en el PATH apuntando al binario de ESTE árbol. `~/.local/bin` va
-# antes que el bin de cargo en el PATH, así que gana al `cargo install`.
+# Puts `ntc` on the PATH pointing at THIS tree's binary. `~/.local/bin` comes
+# before cargo's bin on the PATH, so it beats `cargo install`.
 #
-# Por qué un symlink y no `just install`: `cargo install --path` compila en un
-# target temporal PROPIO, o sea un build en frío entero (~4-5 min y otro
-# universo de disco) cada vez que quieras probar un cambio. El symlink apunta
-# al binario que el gate ya construyó: coste cero y nunca rancio mientras
-# corras los tests. `just install` sigue ahí para instalar de verdad.
+# Why a symlink and not `just install`: `cargo install --path` compiles in
+# its OWN temporary target, i.e. a whole cold build (~4-5 min and another
+# universe of disk) every time you want to try a change. The symlink points
+# at the binary the gate already built: zero cost and never stale as long as
+# you run the tests. `just install` is still there for installing for real.
 #
-# `dir` (por defecto debug) elige el perfil: `just link release` para medir
-# arranque, que es lo único que debug no puede decirte.
+# `dir` (debug by default) picks the profile: `just link release` to measure
+# startup, which is the one thing debug cannot tell you.
 #
-# La ventana gráfica NO entra aquí: tiene su propia receta (`just link-gui`),
-# por el mismo motivo por el que `core_pkgs` la excluye del gate — compilarla
-# arrastra WebKitGTK, GTK3, libsoup3 y npm, y meterla en esta receta dejaría
-# sin `ntc` a cualquier máquina que no los tenga.
+# The graphical window does NOT come in here: it has its own recipe
+# (`just link-gui`), for the same reason `core_pkgs` excludes it from the
+# gate — building it drags in WebKitGTK, GTK3, libsoup3 and npm, and putting
+# it in this recipe would leave any machine without them with no `ntc`.
 link dir="debug":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -400,29 +415,30 @@ link dir="debug":
         ln -sfn "$PWD/target/{{dir}}/$b" ~/.local/bin/$b
         printf '%-6s → %s\n' "$b" "$(readlink ~/.local/bin/$b)"
     done
-    echo "recuerda: el symlink apunta a ESTE árbol; un 'just prune-all' lo deja colgando"
+    echo "remember: the symlink points at THIS tree; a 'just prune-all' leaves it dangling"
 
-# Como `just link`, pero `ntc`/`norte` RECOMPILAN antes de arrancar.
+# Like `just link`, but `ntc`/`norte` RECOMPILE before starting.
 #
-# El symlink de `just link` apunta al binario que produjo la última
-# compilación, no al código que hay ahora: si editas y ejecutas sin haber
-# corrido los tests, estás usando lo de antes sin que nada te avise. Esto lo
-# cierra poniendo un envoltorio en el PATH que compila y luego ejecuta.
+# `just link`'s symlink points at the binary the last compile produced, not
+# at the code that is there now: if you edit and run without having run the
+# tests, you are using the old one without anything warning you. This closes
+# that gap by putting a wrapper on the PATH that compiles and then runs.
 #
-# Tres decisiones dentro del envoltorio, y las tres importan:
+# Three decisions inside the wrapper, and all three matter:
 #
-# - Compila con las MISMAS `features` que el gate. Sin ellas cargo keya los
-#   artefactos por otro conjunto y fabrica un universo COMPLETO y separado de
-#   norte-tui y de todo lo que cuelga (~30 G) que ninguna otra receta reusa.
-#   Es la trampa del presupuesto de disco, y a mano es facilísimo pisarla.
-# - Si la compilación FALLA, arranca el binario anterior con un aviso en vez de
-#   dejarte sin gestor de ficheros. Un árbol a medio editar no debe costarte la
-#   herramienta.
-# - Si otra sesión está compilando, cargo espera al lock de `target/`. El
-#   envoltorio lo DICE antes de bloquearse, porque un arranque mudo de diez
-#   segundos parece colgado.
+# - It compiles with the SAME `features` as the gate. Without them cargo keys
+#   the artifacts by another set and builds a COMPLETE, separate universe of
+#   norte-tui and everything hanging off it (~30 G) that no other recipe
+#   reuses. It is the disk-budget trap, and by hand it is very easy to step
+#   on.
+# - If the build FAILS, it starts the previous binary with a warning instead
+#   of leaving you without a file manager. A half-edited tree should not cost
+#   you the tool.
+# - If another session is compiling, cargo waits on `target/`'s lock. The
+#   wrapper SAYS so before blocking, because a silent ten-second start looks
+#   hung.
 #
-# `just link` sigue ahí para cuando quieras coste cero de arranque.
+# `just link` is still there for when you want zero-cost startup.
 link-fresh:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -430,112 +446,115 @@ link-fresh:
     for b in ntc norte; do
         {
             echo '#!/usr/bin/env bash'
-            echo "# Generado por 'just link-fresh' en $PWD. No editar a mano."
+            echo "# Generated by 'just link-fresh' in $PWD. Do not edit by hand."
             echo 'set -uo pipefail'
             echo "tree=\"$PWD\""
             echo "bin=\"\$tree/target/debug/$b\""
             echo 'if [ -e "$tree/target/.cargo-lock" ]; then'
-            echo "  printf 'norte: otra compilación tiene el lock de target/, esperando…\\n' >&2"
+            echo "  printf 'norte: another build holds the target/ lock, waiting…\\n' >&2"
             echo 'fi'
             echo "if ! cargo build --quiet --manifest-path \"\$tree/Cargo.toml\" -p norte-tui -p norte-cli {{features}}; then"
             echo '  if [ -x "$bin" ]; then'
-            echo "    printf 'norte: el árbol no compila; arranco la última build buena\\n' >&2"
+            echo "    printf 'norte: the tree does not build; starting the last good build\\n' >&2"
             echo '  else'
-            echo "    printf 'norte: el árbol no compila y no hay build previa\\n' >&2"
+            echo "    printf 'norte: the tree does not build and there is no previous build\\n' >&2"
             echo '    exit 1'
             echo '  fi'
             echo 'fi'
             echo 'exec "$bin" "$@"'
         } > ~/.local/bin/$b
         chmod +x ~/.local/bin/$b
-        printf '%-6s → envoltorio que recompila antes de arrancar\n' "$b"
+        printf '%-6s → wrapper that recompiles before starting\n' "$b"
     done
 
-# El CLI de humo (paths NATIVOS): `just cli ls /tmp`, `just cli cp a b`…
-# Con `{{features}}` como todo lo que compila el core: sin ellas se fabricaba
-# su propio universo de artefactos que ninguna otra receta reusaba.
+# The smoke CLI (NATIVE paths): `just cli ls /tmp`, `just cli cp a b`…
+# With `{{features}}` like everything the core compiles: without them it
+# built its own universe of artifacts that no other recipe reused.
 cli *args:
     cargo run -p norte-cli {{features}} -- {{args}}
 
-# Tests de un crate concreto: `just t norte-vfs`, `just t norte-tui`.
+# Tests for a specific crate: `just t norte-vfs`, `just t norte-tui`.
 #
-# Con las MISMAS features del gate a propósito. Un `cargo nextest run -p
-# norte-tui` a secas no es más barato: compila un universo de artefactos
-# DISTINTO (otro conjunto de features = otro fingerprint) para ese crate y
-# todo su árbol, que además se queda en disco para siempre. Iterar con esta
-# receta reaprovecha lo que `just ci` ya compiló, y al revés.
+# With the gate's SAME features on purpose. A bare `cargo nextest run -p
+# norte-tui` is not cheaper: it compiles a DIFFERENT artifact universe
+# (another feature set = another fingerprint) for that crate and its whole
+# tree, which also stays on disk forever. Iterating with this recipe reuses
+# what `just ci` already compiled, and vice versa.
 #
-# El crate se elige FILTRANDO (`-E package(...)`), no con `-p`: `-p norte-vfs`
-# junto a `--features norte-tui/schema` es un error de cargo —«el paquete no
-# contiene esas features»— porque con un solo paquete seleccionado ya no hay
-# workspace donde resolver el resto. La receta llevaba tiempo rota por eso.
-# Filtrar selecciona los mismos tests SIN cambiar el conjunto de paquetes, que
-# es justo lo que hace que se reaproveche la compilación del gate.
+# The crate is chosen by FILTERING (`-E package(...)`), not with `-p`: `-p
+# norte-vfs` alongside `--features norte-tui/schema` is a cargo error —"the
+# package does not contain these features"— because with a single package
+# selected there is no longer a workspace to resolve the rest against. The
+# recipe was broken by this for a while. Filtering selects the same tests
+# WITHOUT changing the package set, which is exactly what makes the gate's
+# compile get reused.
 t crate:
     CARGO_INCREMENTAL=0 cargo nextest run {{core_pkgs}} {{features}} -E 'package({{crate}})'
 
-# Clippy con las features del gate. SIN argumento de crate, y no por descuido:
-# clippy no tiene el filtro que `nextest` sí tiene, y recortar los paquetes
-# cambia la unificación de features —o sea, el universo de artefactos— con lo
-# que se perdería justo lo que hace barata esta receta. Warm cuesta lo que
-# cuesta revisar lo que tocaste; el resto sale de la caché.
+# Clippy with the gate's features. WITHOUT a crate argument, and not by
+# oversight: clippy lacks the filter `nextest` has, and trimming the
+# packages changes the feature unification —i.e. the artifact universe—
+# which would lose exactly what makes this recipe cheap. Warm it costs
+# whatever it costs to check what you touched; the rest comes from the
+# cache.
 c:
     CARGO_INCREMENTAL=0 cargo clippy {{core_pkgs}} --all-targets {{features}} -- -D warnings
 
-# Loop de desarrollo: tests del workspace en cada guardado (exige cargo-watch).
-# Mismas features que el gate: `cargo watch` sin ellas recompilaba el
-# workspace entero en un universo propio a cada guardado de fichero.
+# Development loop: workspace tests on every save (requires cargo-watch).
+# Same features as the gate: without them `cargo watch` recompiled the whole
+# workspace in its own universe on every file save.
 watch:
     cargo watch -x "nextest run {{core_pkgs}} {{features}}"
 
-# Tests de integración NIGHTLY contra servidores REALES por Docker (ADR 0013/
-# 0016): sftp contra OpenSSH real (atmoz/sftp) y S3 real. EXIGEN Docker; fuera
-# del gate de PR (lo corre el workflow nightly, no `just ci`). (FTP real: el
-# provider es ahora un plugin WASM — ADR 0033 — cuyo contrato corre in-process
-# contra libunftp en `just ci`; no hay job nightly Docker propio.)
+# NIGHTLY integration tests against REAL servers via Docker (ADR 0013/0016):
+# sftp against real OpenSSH (atmoz/sftp) and real S3. They REQUIRE Docker;
+# outside the PR gate (the nightly workflow runs it, not `just ci`). (Real
+# FTP: the provider is now a WASM plugin — ADR 0033 — whose contract runs
+# in-process against libunftp in `just ci`; there is no dedicated nightly
+# Docker job.)
 it-remote:
     cargo nextest run -p norte-vfs-sftp --features it-openssh
     cargo nextest run -p norte-vfs-object --features it-s3 -E 'binary(reals3)'
 
-# Benchmarks de los presupuestos de la spec §12 (manual: tardan).
+# Benchmarks for spec §12's budgets (manual: they take a while).
 bench:
-    cargo bench -p norte-tui --bench presupuestos
+    cargo bench -p norte-tui --bench budgets
     cargo bench -p norte-core --bench copy_remoto
-    # El de la ADR 0002 / #12: el suelo del sistema contra el camino del
-    # provider. Es la vara que caduca la decisión de no meter `tokio-uring`.
+    # ADR 0002 / #12's: the system's floor against the provider's path. It is
+    # the yardstick that expires the decision not to bring in `tokio-uring`.
     cargo bench -p norte-vfs-local --bench local_io
 
-# ---------- instalación ----------
+# ---------- installation ----------
 
-# Instala en $CARGO_HOME/bin —~/.cargo/bin por defecto— (release):
-# `ntc` (el gestor) y `norte` (el CLI).
-# --locked: exactamente las versiones del Cargo.lock que pasó CI.
+# Installs into $CARGO_HOME/bin —~/.cargo/bin by default— (release):
+# `ntc` (the manager) and `norte` (the CLI).
+# --locked: exactly the Cargo.lock versions that passed CI.
 install:
     cargo install --path crates/norte-tui --locked
     cargo install --path crates/norte-cli --locked
-    @echo "instalados: $(command -v ntc) y $(command -v norte)"
+    @echo "installed: $(command -v ntc) and $(command -v norte)"
 
-# `cargo uninstall` toma el nombre del CRATE, no el del binario: el paquete
-# sigue llamándose `norte-tui` aunque instale un `ntc`. No es un despiste de la
-# línea de arriba.
+# `cargo uninstall` takes the CRATE's name, not the binary's: the package is
+# still called `norte-tui` even though it installs an `ntc`. It is not a slip
+# in the line above.
 uninstall:
     cargo uninstall norte-tui
     cargo uninstall norte-cli
 
 
-# Construye e INSTALA el previewer de syntect: el primer plugin real que se
-# puede tener instalado, en vez de existir solo como fixture de un test.
+# Builds and INSTALLS the syntect previewer: the first real plugin that can
+# be kept installed, instead of only existing as a test fixture.
 #
-# Se monta en `target/plugin-stage/` y se instala desde ahí: el `plugin.wasm`
-# es un artefacto de build y no tiene por qué aparecer junto al `plugin.toml`
-# en el árbol de fuentes.
+# Staged in `target/plugin-stage/` and installed from there: `plugin.wasm` is
+# a build artifact and has no reason to sit next to `plugin.toml` in the
+# source tree.
 #
-# Instalar NO aprueba: el plugin queda descubierto y sin consentir, y se
-# aprueba y activa en el gestor de extensiones (F12 en la TUI).
+# Installing does NOT approve: the plugin ends up discovered and unconsented,
+# and is approved and enabled in the extension manager (F12 in the TUI).
 #
-# `just plugin-syntect force` reemplaza uno ya instalado (retira su
-# consentimiento). La palabra y no `--force`: `just` toma cualquier argumento
-# que empiece por `-` como una receta más, y no hay `--` que lo evite.
+# `just plugin-syntect force` replaces one already installed (revokes its
+# consent). The word, not `--force`: `just` takes any argument starting with
+# `-` as another recipe, and there is no `--` to prevent that.
 plugin-syntect *ARGS:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -548,9 +567,10 @@ plugin-syntect *ARGS:
     cp $origen/target/wasm32-wasip2/release/previewer_syntect.wasm "$stage/plugin.wasm"
     cargo run --quiet -p norte-cli -- plugin install "$stage" $flag
 
-# Construye e INSTALA el plugin oficial de columnas de git (`plugins/git-status`,
-# ADR 0057). Mismo montaje que `plugin-syntect`: stage en `target/plugin-stage/`
-# y `norte plugin install` desde ahí. Instalar NO aprueba. `force` reemplaza.
+# Builds and INSTALLS the official git columns plugin (`plugins/git-status`,
+# ADR 0057). Same staging as `plugin-syntect`: stage in `target/plugin-stage/`
+# and `norte plugin install` from there. Installing does NOT approve. `force`
+# replaces.
 plugin-git-status *ARGS:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -564,10 +584,11 @@ plugin-git-status *ARGS:
     cp $origen/target/wasm32-wasip2/release/git_status.wasm "$stage/plugin.wasm"
     cargo run --quiet -p norte-cli -- plugin install "$stage" $flag
 
-# El panel oficial de git (`plugins/git-panel`, fase 3): un hueco entero
-# pintado por un plugin. Mismo montaje que el resto: stage en
-# `target/plugin-stage/` y `norte plugin install` desde ahí. Instalar NO
-# aprueba, y hasta que se apruebe su panel no existe para el reparto.
+# The official git panel (`plugins/git-panel`, phase 3): a whole slot
+# painted by a plugin. Same staging as the rest: stage in
+# `target/plugin-stage/` and `norte plugin install` from there. Installing
+# does NOT approve, and until it is approved its panel does not exist for
+# layout.
 plugin-git-panel *ARGS:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -581,7 +602,7 @@ plugin-git-panel *ARGS:
     cp $origen/target/wasm32-wasip2/release/git_panel.wasm "$stage/plugin.wasm"
     cargo run --quiet -p norte-cli -- plugin install "$stage" $flag
 
-# El decorator de iconos por tipo de fichero (`plugins/file-icons`, demo D1).
+# The file-type icon decorator (`plugins/file-icons`, demo D1).
 plugin-file-icons *ARGS:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -595,7 +616,7 @@ plugin-file-icons *ARGS:
     cp $origen/target/wasm32-wasip2/release/file_icons.wasm "$stage/plugin.wasm"
     cargo run --quiet -p norte-cli -- plugin install "$stage" $flag
 
-# La columna del tamaño como barra (`plugins/size-bar`, spec 2026-09-11 V4).
+# The size-as-a-bar column (`plugins/size-bar`, spec 2026-09-11 V4).
 plugin-size-bar *ARGS:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -609,7 +630,7 @@ plugin-size-bar *ARGS:
     cp $origen/target/wasm32-wasip2/release/size_bar.wasm "$stage/plugin.wasm"
     cargo run --quiet -p norte-cli -- plugin install "$stage" $flag
 
-# La columna de la edad de cada entrada (`plugins/age`, spec 2026-09-11 V4).
+# The column for each entry's age (`plugins/age`, spec 2026-09-11 V4).
 plugin-age *ARGS:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -623,8 +644,7 @@ plugin-age *ARGS:
     cp $origen/target/wasm32-wasip2/release/age.wasm "$stage/plugin.wasm"
     cargo run --quiet -p norte-cli -- plugin install "$stage" $flag
 
-# Las miniaturas de imagen para el visor de la ventana (`plugins/image-thumb`,
-# ADR 0107).
+# Image thumbnails for the window's viewer (`plugins/image-thumb`, ADR 0107).
 plugin-image-thumb *ARGS:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -638,7 +658,7 @@ plugin-image-thumb *ARGS:
     cp $origen/target/wasm32-wasip2/release/image_thumb.wasm "$stage/plugin.wasm"
     cargo run --quiet -p norte-cli -- plugin install "$stage" $flag
 
-# Las columnas de dimensiones y duración (`plugins/media-info`, demo D2).
+# The dimensions and duration columns (`plugins/media-info`, demo D2).
 plugin-media-info *ARGS:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -652,7 +672,7 @@ plugin-media-info *ARGS:
     cp $origen/target/wasm32-wasip2/release/media_info.wasm "$stage/plugin.wasm"
     cargo run --quiet -p norte-cli -- plugin install "$stage" $flag
 
-# El previewer de Markdown (`plugins/markdown`, demo D3).
+# The Markdown previewer (`plugins/markdown`, demo D3).
 plugin-markdown *ARGS:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -666,7 +686,7 @@ plugin-markdown *ARGS:
     cp $origen/target/wasm32-wasip2/release/markdown_preview.wasm "$stage/plugin.wasm"
     cargo run --quiet -p norte-cli -- plugin install "$stage" $flag
 
-# El previewer de imágenes (`plugins/image-ansi`, demo D4).
+# The image previewer (`plugins/image-ansi`, demo D4).
 plugin-image-ansi *ARGS:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -680,7 +700,7 @@ plugin-image-ansi *ARGS:
     cp $origen/target/wasm32-wasip2/release/image_ansi_preview.wasm "$stage/plugin.wasm"
     cargo run --quiet -p norte-cli -- plugin install "$stage" $flag
 
-# El renamer por fecha (`plugins/date-prefix`, demo C3).
+# The date renamer (`plugins/date-prefix`, demo C3).
 plugin-date-prefix *ARGS:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -694,7 +714,7 @@ plugin-date-prefix *ARGS:
     cp $origen/target/wasm32-wasip2/release/date_prefix.wasm "$stage/plugin.wasm"
     cargo run --quiet -p norte-cli -- plugin install "$stage" $flag
 
-# El hook que cuenta renombrados (`plugins/rename-log`, demo H1 / ADR 0100).
+# The hook that counts renames (`plugins/rename-log`, demo H1 / ADR 0100).
 plugin-rename-log *ARGS:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -708,8 +728,8 @@ plugin-rename-log *ARGS:
     cp $origen/target/wasm32-wasip2/release/rename_log.wasm "$stage/plugin.wasm"
     cargo run --quiet -p norte-cli -- plugin install "$stage" $flag
 
-# Todos los plugins oficiales, de una vez. `just plugins force` reemplaza los
-# ya instalados (y retira su consentimiento, como dice `plugin install`).
+# All the official plugins, at once. `just plugins force` replaces the ones
+# already installed (and revokes their consent, as `plugin install` states).
 [positional-arguments]
 plugins *ARGS:
     #!/usr/bin/env bash
@@ -726,117 +746,118 @@ plugins *ARGS:
     just plugin-date-prefix "$@"
     just plugin-rename-log "$@"
 
-# ---------- distribución ----------
+# ---------- distribution ----------
 
-# Los artefactos de release NO se construyen en esta máquina: su glibc es más
-# nueva que la de casi cualquier Linux instalado, y un `norte` de aquí pedía
-# GLIBC_2.39 y no arrancaba en Ubuntu 22.04 ni en Debian 12 — con un humo
-# verde, porque el humo corría aquí también. Se construyen, prueban y
-# verifican con `just baseline <ref>` (ADR 0112, recetas `baseline*` más
-# abajo). `dist` sigue siendo la herramienta; corre dentro de la imagen.
+# Release artifacts are NOT built on this machine: its glibc is newer than
+# almost any installed Linux's, and a `norte` from here required GLIBC_2.39
+# and did not start on Ubuntu 22.04 or Debian 12 — with a green smoke test,
+# because the smoke test also ran here. They are built, tested and verified
+# with `just baseline <ref>` (ADR 0112, `baseline*` recipes below). `dist` is
+# still the tool; it runs inside the image.
 #
-# `--target` explícito dentro de `build.sh` por lo que ya se sabía: sin él
-# dist intenta los cinco targets de `dist-workspace.toml` y se para en el
-# primer cruce a macOS, y los instaladores prometerían un archivo que la
-# release no contiene. Cross-compilar aws-lc-rs es lo que el ADR 0021 dio por
-# frágil; macOS y Windows necesitan sus máquinas.
+# Explicit `--target` inside `build.sh` for the reason already known: without
+# it dist tries the five targets in `dist-workspace.toml` and stops at the
+# first macOS crossing, and the installers would promise a file the release
+# does not contain. Cross-compiling aws-lc-rs is what ADR 0021 deemed
+# fragile; macOS and Windows need their own machines.
 
 # ---------------------------------------------------------------------------
-# La ventana: el renderer de Tauri (ADR 0087).
+# The window: the Tauri renderer (ADR 0087).
 #
-# Fuera del gate portable a propósito (ver `core_pkgs`): compilarlo exige
-# WebKitGTK, GTK3 y libsoup3 del sistema. Su gate es este, y lo corre
-# `.github/workflows/gui.yml`; a mano, `just gui-ci`.
+# Outside the portable gate on purpose (see `core_pkgs`): building it
+# requires the system's WebKitGTK, GTK3 and libsoup3. Its gate is this one,
+# run by `.github/workflows/gui.yml`; by hand, `just gui-ci`.
 # ---------------------------------------------------------------------------
 
 gui_dir := "crates/norte-gui-tauri"
 
-# Las features del gate de la ventana. Existe por la misma razón que `features`
-# de arriba: `cargo -p norte-gui-tauri` a secas resuelve un conjunto DISTINTO
-# del de `core_pkgs` para los crates compartidos (norte-core y norte-testkit
-# entran por dev-dependencies), así que se compilaban y se quedaban en disco
-# DOS veces. No puede tomar `{{features}}`: ese conjunto nombra
-# `norte-tui/schema`, que no está en este grafo.
+# The window gate's features. Exists for the same reason as `features`
+# above: a bare `cargo -p norte-gui-tauri` resolves a DIFFERENT set than
+# `core_pkgs`'s for the shared crates (norte-core and norte-testkit come in
+# via dev-dependencies), so they got compiled and left on disk TWICE. It
+# cannot take `{{features}}`: that set names `norte-tui/schema`, which is not
+# in this graph.
 gui_features := "--features norte-core/testing"
 
-# Las dependencias de JS, desde el lockfile y sin tocarlo (`npm ci`).
+# The JS dependencies, from the lockfile and without touching it (`npm ci`).
 gui-deps:
     cd {{gui_dir}}/ui && npm ci
 
-# El bundle de la webview: typecheck + Vite. Assets locales, nada remoto.
-gui-build: 
+# The webview bundle: typecheck + Vite. Local assets, nothing remote.
+gui-build:
     cd {{gui_dir}}/ui && npm run build
 
-# Los tests del renderer (vitest, jsdom): ni ventana ni WebKitGTK.
+# The renderer's tests (vitest, jsdom): no window, no WebKitGTK.
 gui-test-ui:
     cd {{gui_dir}}/ui && npm run test
 
-# Los tests de RUST de la ventana, solos: el bucle RED→GREEN de este crate.
+# The window's RUST tests, alone: this crate's RED→GREEN loop.
 #
-# Existe porque `just t norte-gui-tauri` no corre NADA —`core_pkgs` excluye
-# este paquete del gate portable— y la alternativa era `just gui-ci`, que
-# arrastra npm y el bundle de Vite para ver si un test de Rust pasa. Usa el
-# MISMO `gui_features` que `gui-ci`, que es lo que hace que comparta sus
-# artefactos en vez de compilar un universo aparte (ver el comentario de esa
-# variable).
-# Sin filtro a propósito: compilar domina el reloj y la suite entera de este
-# crate son segundos, así que `-E 'test(...)'` no compraría nada.
+# Exists because `just t norte-gui-tauri` runs NOTHING —`core_pkgs` excludes
+# this package from the portable gate— and the alternative was `just
+# gui-ci`, which drags in npm and the Vite bundle just to see whether a Rust
+# test passes. It uses the SAME `gui_features` as `gui-ci`, which is what
+# makes it share its artifacts instead of compiling a separate universe (see
+# that variable's comment).
+# No filter, on purpose: compiling dominates the clock and this crate's whole
+# suite takes seconds, so `-E 'test(...)'` would buy nothing.
 gui-test:
     CARGO_INCREMENTAL=0 cargo nextest run -p norte-gui-tauri {{gui_features}} --no-tests=pass
 
-# Formato y lint del renderer.
+# Format and lint the renderer.
 gui-lint-ui:
     cd {{gui_dir}}/ui && npm run fmt:check && npm run lint && npm run typecheck
 
-# El gate de la ventana, entero. `gui-build` va ANTES de los tests de Rust porque
-# uno de ellos audita el bundle empaquetado (`el_bundle_no_llama_a_casa`).
+# The window's whole gate. `gui-build` goes BEFORE the Rust tests because one
+# of them audits the packaged bundle (`el_bundle_no_llama_a_casa`).
 #
-# Sella APARTE (`_sellar-gui`), y eso no es simetría: `just ci` excluye
-# `norte-gui-tauri`, así que su sello no dice nada de esto. Con un solo sello,
-# el hook de pre-push salía por el atajo del gate portable y se saltaba este
-# gate en silencio sobre cambios de la ventana.
+# Seals SEPARATELY (`_sellar-gui`), and that is not symmetry: `just ci`
+# excludes `norte-gui-tauri`, so its seal says nothing about this one. With a
+# single seal, the pre-push hook took the portable gate's shortcut and
+# silently skipped this gate over window changes.
 gui-ci: gui-lint-ui gui-test-ui gui-build
     CARGO_INCREMENTAL=0 cargo clippy -p norte-gui-tauri --all-targets {{gui_features}} -- -D warnings
     CARGO_INCREMENTAL=0 cargo nextest run -p norte-gui-tauri {{gui_features}} --no-tests=pass
     CARGO_INCREMENTAL=0 cargo test -p norte-gui-tauri {{gui_features}} --doc
     @just _sellar-gui
 
-# Arranca el renderer contra el daemon. Necesita un daemon vivo.
+# Starts the renderer against the daemon. Needs a live daemon.
 gui-run *args: gui-build
     cargo run -p norte-gui-tauri --bin norte-gui -- {{args}}
 
-# Lo mismo en release: es lo ÚNICO que vale para medir (la 3.6).
+# The same in release: it is the ONLY one worth measuring with (3.6).
 gui-run-release *args: gui-build
     cargo run --release -p norte-gui-tauri --bin norte-gui -- {{args}}
 
-# Pone `ntc-gui` (y su alias histórico `norte-gui`) en el PATH apuntando al
-# binario de ESTE árbol, igual que `just link` hace con `ntc` y `norte`.
+# Puts `ntc-gui` (and its historic alias `norte-gui`) on the PATH pointing at
+# THIS tree's binary, the same way `just link` does with `ntc` and `norte`.
 #
-# Dos nombres para un solo binario a propósito: `ntc-gui` es el que se teclea,
-# y hace pareja con `ntc`; `norte-gui` es como se llama el ejecutable dentro
-# del crate y como lo nombran los paquetes, así que quitarlo rompería los
-# scripts que ya lo usan.
+# Two names for a single binary on purpose: `ntc-gui` is the one typed, and
+# pairs with `ntc`; `norte-gui` is what the executable inside the crate is
+# called and how the packages name it, so removing it would break the
+# scripts that already use it.
 #
-# Depende de `gui-build` y no es opcional: `frontendDist` es `ui/dist`, o sea
-# que Tauri EMBEBE la webview en el binario al compilar. Sin reconstruir el
-# bundle, el enlace apuntaría a un binario con una webview vieja dentro — y
-# eso no se ve, porque el ejecutable existe y arranca.
+# Depends on `gui-build` and it is not optional: `frontendDist` is `ui/dist`,
+# i.e. Tauri EMBEDS the webview into the binary at compile time. Without
+# rebuilding the bundle, the link would point at a binary carrying a stale
+# webview inside — and that is invisible, because the executable exists and
+# starts.
 #
-# Que esté embebida es también lo que hace que el symlink funcione: el binario
-# es autocontenido y no busca `ui/dist` en el cwd.
+# It being embedded is also what makes the symlink work: the binary is
+# self-contained and does not look for `ui/dist` in the cwd.
 #
-# Monta también los `externalBin` (`binaries/norte-<triple>`, `ntc-<triple>`)
-# y eso NO es cosa del empaquetado: el build script de Tauri los exige para
-# CUALQUIER compilación del crate, así que en un árbol limpio esta receta
-# moría con «resource path `binaries/norte-x86_64-…` doesn't exist» y sólo
-# funcionaba si alguien había corrido `just gui-package` antes.
+# It also assembles the `externalBin` (`binaries/norte-<triple>`,
+# `ntc-<triple>`) and that is NOT a packaging concern: Tauri's build script
+# requires them for ANY compile of the crate, so on a clean tree this recipe
+# used to die with "resource path `binaries/norte-x86_64-…` doesn't exist"
+# and only worked if someone had run `just gui-package` before.
 #
-# Se COPIAN, no se enlazan: `just gui-package` hace `cp` encima con los
-# binarios de release, y un `cp` sobre un symlink escribe A TRAVÉS de él —
-# o sea que un enlace aquí dejaría el binario de release dentro de
-# `target/debug/`, sin que nada lo dijera.
+# They are COPIED, not linked: `just gui-package` does a `cp` on top with
+# the release binaries, and a `cp` onto a symlink writes THROUGH it — i.e. a
+# link here would leave the release binary inside `target/debug/`, with
+# nothing saying so.
 #
-# Separada de `just link` a propósito: ver el comentario de aquella receta.
+# Separate from `just link` on purpose: see that recipe's comment.
 link-gui dir="debug":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -856,53 +877,56 @@ link-gui dir="debug":
         ln -sfn "$PWD/target/{{dir}}/norte-gui" ~/.local/bin/$b
         printf '%-9s → %s\n' "$b" "$(readlink ~/.local/bin/$b)"
     done
-    echo "recuerda: el symlink apunta a ESTE árbol; un 'just prune-all' lo deja colgando"
+    echo "remember: the symlink points at THIS tree; a 'just prune-all' leaves it dangling"
 
-# La build de PRODUCCIÓN, sin empaquetar. Necesita la CLI de Tauri del
-# lockfile.
+# The PRODUCTION build, unpackaged. Needs the lockfile's Tauri CLI.
 #
-# Se ejecuta desde el directorio del CRATE y no desde `ui/` (#256): la CLI
-# busca `tauri.conf.json` en el directorio actual y sus subdirectorios, y el
-# fichero vive aquí, no bajo `ui/`. Corriéndola desde `ui/` aborta con
-# «Couldn't recognize the current folder as a Tauri project» — que es lo que
-# hacía esta receta desde que se escribió, y por qué nunca produjo nada.
+# It runs from the CRATE's directory and not from `ui/` (#256): the CLI
+# looks for `tauri.conf.json` in the current directory and its
+# subdirectories, and the file lives here, not under `ui/`. Running it from
+# `ui/` aborts with "Couldn't recognize the current folder as a Tauri
+# project" — which is what this recipe did since it was written, and why it
+# never produced anything.
 #
-# Se invoca el binario del lockfile por su ruta en vez de con `npx`: `npx`
-# resuelve contra el directorio desde el que se llama, y desde el crate no hay
-# `node_modules`.
+# The lockfile's binary is invoked by its path instead of with `npx`: `npx`
+# resolves against the directory it is called from, and there is no
+# `node_modules` from the crate.
 gui-build-release: gui-build
     cd {{gui_dir}} && ./ui/node_modules/.bin/tauri build --no-bundle
 
-# El paquete de verdad: `.deb` y AppImage en `target/release/bundle/`.
+# The real package: `.deb` and AppImage in `target/release/bundle/`.
 #
-# **`NO_STRIP=1` no es opcional en un sistema moderno** (#256). El AppImage de
-# `linuxdeploy` trae su propio `strip`, de un binutils viejo que no reconoce la
-# sección `.relr.dyn` que usan las bibliotecas de una distribución al día. Sin
-# la variable, falla con `failed to run linuxdeploy` después de un muro de
-# «Unable to recognise the format of the input file» — que no dice en ningún
-# sitio que el problema sea el strip.
+# **`NO_STRIP=1` is not optional on a modern system** (#256). `linuxdeploy`'s
+# AppImage carries its own `strip`, from an old binutils that does not
+# recognize the `.relr.dyn` section an up-to-date distribution's libraries
+# use. Without the variable, it fails with `failed to run linuxdeploy` after
+# a wall of "Unable to recognise the format of the input file" — which never
+# says anywhere that the problem is the strip.
 #
-# La salida correcta a medio plazo es construir sobre la baseline más VIEJA de
-# glibc/WebKitGTK, que es lo que la tarea 7.1 del plan pide de todas formas;
-# esto es lo que hace que el paquete salga hoy, en la máquina de referencia.
-# Y el paquete lleva los TRES binarios (#256): `norte-gui`, el daemon `norte`
-# y el TUI `ntc`. Un paquete con solo la ventana no arranca en una instalación
-# limpia — desde #300 la ventana levanta su daemon, y para eso tiene que
-# haberlo. Van como `externalBin`, que es como Tauri mete un ejecutable de
-# al lado: en el `.deb` acaban en `/usr/bin`, que es donde la ventana los
-# busca (junto a su propio ejecutable, y si no en el `PATH`).
+# The correct fix in the medium term is building on the OLDEST
+# glibc/WebKitGTK baseline, which is what the plan's task 7.1 asks for
+# anyway; this is what makes the package come out today, on the reference
+# machine. And the package carries all THREE binaries (#256): `norte-gui`,
+# the `norte` daemon and the `ntc` TUI. A package with only the window does
+# not start on a clean install — since #300 the window starts its own
+# daemon, and for that it has to be there. They go in as `externalBin`,
+# which is how Tauri bundles a sidecar executable —next to it: in the
+# `.deb` they end up in `/usr/bin`, which is where the window looks for them
+# (next to its own executable, and otherwise on the `PATH`).
 #
-# Tauri exige que el fichero fuente lleve el TRIPLE del target en el nombre y
-# lo quita al empaquetar, así que se copian con ese sufijo a `binaries/`.
+# Tauri requires the source file to carry the target's TRIPLE in its name and
+# strips it when packaging, so they are copied with that suffix to
+# `binaries/`.
 gui-package: gui-build
     #!/usr/bin/env bash
     set -euo pipefail
     triple=$(rustc -vV | sed -n 's/^host: //p')
-    # SIN `{{features}}`, y un paquete por invocación: lo que se empaqueta es
-    # el producto que publica `dist` (`precise-builds`), no el universo del
-    # gate. Las cuatro features del gate son de test o de docs —`schema` está
-    # «fuera del binario final» (ADR 0007) y `norte-core/testing` metía en el
-    # paquete un camino de acuñado sin política—; `watch` ya lo pide `norte-tui`.
+    # WITHOUT `{{features}}`, and one package per invocation: what gets
+    # packaged is the product `dist` publishes (`precise-builds`), not the
+    # gate's universe. The gate's four features are for tests or docs
+    # —`schema` is "outside the final binary" (ADR 0007) and
+    # `norte-core/testing` would put an unpoliced minting path into the
+    # package—; `watch` is already required by `norte-tui`.
     cargo build --release -p norte-cli
     cargo build --release -p norte-tui
     mkdir -p {{gui_dir}}/binaries
@@ -912,60 +936,63 @@ gui-package: gui-build
     done
     cd {{gui_dir}} && NO_STRIP=1 ./ui/node_modules/.bin/tauri build
 
-# Instala el PAQUETE en un contenedor limpio y comprueba que ahí dentro
-# funciona: los tres binarios, el listado inicial, y la ventana arrancando bajo
-# Xvfb sin morirse.
+# Installs the PACKAGE in a clean container and checks that it works in
+# there: the three binaries, the initial listing, and the window starting
+# under Xvfb without dying.
 #
-# El hermano de `dist-smoke` para la ventana. Aquél desempaqueta los tarballs
-# portables; éste hace lo que ninguno hacía: instalar de verdad en una
-# distribución que no ha visto este árbol. `empaquetado.rs` comprueba lo que el
-# paquete PROMETE (lee `tauri.conf.json`); esto, lo que HACE.
+# The window's sibling to `dist-smoke`. That one unpacks the portable
+# tarballs; this one does what neither did: install for real on a
+# distribution that has not seen this tree. `empaquetado.rs` checks what the
+# package PROMISES (reads `tauri.conf.json`); this, what it DOES.
 #
-# Necesita Docker y un `just gui-package` previo. No necesita CI — que es el
-# punto: el fallo de instalación limpia no depende de quién apriete el botón.
+# Needs Docker and a prior `just gui-package`. It does not need CI — that is
+# the point: a clean-install failure should not depend on who presses the
+# button.
 #
-# Instala el paquete en un contenedor limpio y lo arranca.
+# Installs the package in a clean container and starts it.
 gui-smoke imagen="debian:trixie":
     ./scripts/gui-smoke.sh {{imagen}}
 
-# Las pruebas del sistema de base (`scripts/baseline/lib.sh`) y shellcheck de
-# todos sus scripts. Segundos, sin Docker: el bucle RED→GREEN de esa carpeta.
+# The baseline system's tests (`scripts/baseline/lib.sh`) and shellcheck over
+# all its scripts. Seconds, no Docker: that folder's RED→GREEN loop.
 baseline-selftest:
     shellcheck -S warning scripts/baseline/*.sh scripts/gui-smoke.sh
     ./scripts/baseline/selftest.sh
 
-# La imagen de construcción de la base (Ubuntu 22.04 fijada, Node 22.23.2, el
-# toolchain de `rust-toolchain.toml`, cargo-dist de `dist-workspace.toml`). Se
-# construye una vez; su tag cambia solo si cambia alguna de esas entradas.
+# The baseline's build image (Ubuntu 22.04 pinned, Node 22.23.2, the
+# `rust-toolchain.toml` toolchain, `dist-workspace.toml`'s cargo-dist). Built
+# once; its tag only changes if one of those entries changes.
 baseline-image:
     ./scripts/baseline/image.sh
 
-# Construye todo lo publicable de una referencia en la imagen de la base y
-# deja `target/baseline/<revisión>/` con dist/, gui/, MANIFEST y SHA256SUMS.
-# Falla si un binario pide glibc por encima del suelo (2.35) o dice otra
-# revisión. Lento en frío; los volúmenes `norte-baseline-*` lo abaratan.
+# Builds everything publishable from a ref in the baseline image and leaves
+# `target/baseline/<revision>/` with dist/, gui/, MANIFEST and SHA256SUMS.
+# Fails if a binary requires glibc above the floor (2.35) or reports another
+# revision. Slow cold; the `norte-baseline-*` volumes make it cheaper.
 baseline-build ref="HEAD":
     ./scripts/baseline/build.sh {{ref}}
 
-# Humo de una build de la base en la matriz de `scripts/baseline/matrix.txt`.
-# `artefacto` limita a uno (tarball, installer, deb, rpm, appimage).
+# Smoke test of a baseline build over the `scripts/baseline/matrix.txt`
+# matrix. `artefacto` limits it to one (tarball, installer, deb, rpm,
+# appimage).
 baseline-smoke dir artefacto="":
     ./scripts/baseline/smoke.sh {{dir}} {{artefacto}}
 
-# Una referencia de principio a fin: build en la base, humo en la matriz y
-# verificación. Verde = esta build se podría publicar.
+# A ref end to end: build on the baseline, smoke test over the matrix and
+# verification. Green = this build could be published.
 baseline ref="HEAD":
     ./scripts/baseline/all.sh {{ref}}
 
-# ¿Se puede publicar esta build? Sumas, suelo, revisiones y matriz completa.
+# Can this build be published? Checksums, floor, revisions and the full
+# matrix.
 baseline-verify dir:
     ./scripts/baseline/verify.sh {{dir}}
 
-# Sube a la release del tag una build VERIFICADA de ese mismo tag. Solo
-# publica: la release tiene que existir. Rechaza una build de otro commit (su
-# revisión tiene que ser `<tag>-0-g…`). Los esquemas van con los binarios a
-# propósito (#13): un tercero que quiera escribir un cliente no debería tener
-# que clonar el repositorio para saber la forma del protocolo.
+# Uploads a VERIFIED build of that same tag to the tag's release. It only
+# publishes: the release has to exist. Rejects a build from another commit
+# (its revision has to be `<tag>-0-g…`). The schemas go with the binaries on
+# purpose (#13): a third party wanting to write a client should not have to
+# clone the repository to learn the protocol's shape.
 baseline-publish tag dir:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -973,7 +1000,7 @@ baseline-publish tag dir:
     rev="$(awk '$1 == "revision" { print $2 }' {{dir}}/MANIFEST)"
     case "$rev" in
         {{tag}}-0-g*) ;;
-        *) echo "la build es de $rev, no de {{tag}}" >&2; exit 1 ;;
+        *) echo "the build is from $rev, not from {{tag}}" >&2; exit 1 ;;
     esac
     gh release upload {{tag}} \
         $(find {{dir}}/dist {{dir}}/gui -maxdepth 1 -type f) \
@@ -981,8 +1008,8 @@ baseline-publish tag dir:
         docs/schema/proto.schema.json docs/schema/norte.schema.json docs/schema/keymap.schema.json \
         --clobber
 
-# Lo que ocupa la base fuera de `target/`: volúmenes e imágenes de Docker.
-# `-cargo`, `-rustup` y `-node` son los volúmenes del `gui-baseline` retirado.
+# What the baseline occupies outside `target/`: Docker volumes and images.
+# `-cargo`, `-rustup` and `-node` are the retired `gui-baseline`'s volumes.
 baseline-prune:
     docker volume rm -f norte-baseline-registry norte-baseline-target norte-baseline-cargo norte-baseline-rustup norte-baseline-node
     docker image ls -q norte-builder | xargs -r docker image rm -f

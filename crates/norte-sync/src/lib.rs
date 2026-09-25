@@ -1,34 +1,34 @@
-//! `norte-sync`: convierte las filas de comparación de la spec 1 en un PLAN
+//! `norte-sync`: turns spec 1's comparison rows into a PLAN
 //! (spec `docs/superpowers/specs/2026-08-11-directory-sync-design.md`, ADR
 //! 0049).
 //!
-//! Es un **transductor**, no un recorrido:
+//! It is a **transducer**, not a walk:
 //!
 //! ```text
-//! Stream<CompareRow> + capabilities de los dos lados + SyncOptions
+//! Stream<CompareRow> + both sides' capabilities + SyncOptions
 //!     →  Stream<PlanItem>
 //! ```
 //!
-//! No abre un fichero, no lista un directorio y no toca un provider: lo único
-//! que sabe de ellos son los tres booleanos que [`SyncOptions`] trae ya
-//! resueltos —¿tiene papelera el destino?, ¿nombra esa papelera lo que
-//! entierra?, ¿se puede escribir en él?— leídos UNA vez del provider antes de
-//! empezar. Eso es lo que hace que la matriz entera —cinco clases de paso ×
-//! dos modos × papelera/sin papelera/papelera muda × tres confianzas— se pueda
-//! probar exhaustivamente sin levantar un daemon.
+//! It opens no file, lists no directory, and touches no provider: all it
+//! knows about them is the three booleans [`SyncOptions`] already brings
+//! resolved — does the destination have a trash?, does that trash name what
+//! it buries?, is it writable? — read ONCE from the provider before starting.
+//! That is what lets the whole matrix — five step classes × two modes ×
+//! trash/no-trash/mute-trash × three confidences — be tested exhaustively
+//! without standing up a daemon.
 //!
-//! No muta nada: planificar no escribe un byte. Quien ejecuta el plan
-//! —`norte_core::sync`— es quien pasa por el journal y por el motor de policy
-//! (reglas duras 4 y 9).
+//! It mutates nothing: planning writes not a byte. Whoever executes the
+//! plan — `norte_core::sync` — is the one that goes through the journal and
+//! the policy engine (hard rules 4 and 9).
 //!
-//! El vocabulario del plan vive en `norte-proto` porque viaja por el wire, y
-//! se reexporta aquí para que quien use el planificador no tenga que depender
-//! del protocolo a mano.
+//! The plan's vocabulary lives in `norte-proto` because it travels over the
+//! wire, and is re-exported here so whoever uses the planner does not have to
+//! depend on the protocol by hand.
 //!
-//! Junto al transductor va el [`PlanHasher`]: el `plan_hash` que resume lo que
-//! un humano aprueba, calculado en STREAMING sobre el mismo flujo (memoria
-//! O(1), sin juntar el plan). Los CONTADORES viven en `norte-proto`, con el
-//! tipo que viaja: [`SyncCounts::add`].
+//! Alongside the transducer sits [`PlanHasher`]: the `plan_hash` that
+//! summarizes what a human approves, computed in STREAMING fashion over the
+//! same flow (O(1) memory, without assembling the plan). The COUNTS live in
+//! `norte-proto`, with the type that travels: [`SyncCounts::add`].
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -46,11 +46,11 @@ pub use norte_proto::methods::{
 
 use norte_proto::VPath;
 
-/// Todo lo que el transductor necesita y las filas NO llevan.
+/// Everything the transducer needs that the rows do NOT carry.
 ///
-/// Las dos raíces son absolutas y pueden ser de providers distintos; el `rel`
-/// de cada paso es relativo a las dos ([`RelPath`]), que es justo lo que
-/// permite que un plan de `file://` a `sftp://` sea un solo vocabulario.
+/// The two roots are absolute and can belong to different providers; each
+/// step's `rel` is relative to both ([`RelPath`]), which is exactly what lets
+/// a plan from `file://` to `sftp://` be a single vocabulary.
 ///
 /// ```
 /// use norte_proto::VPath;
@@ -68,186 +68,191 @@ use norte_proto::VPath;
 /// assert_eq!(o.mode, SyncMode::Update);
 /// ```
 ///
-/// # Serializable, y aun así NO es un tipo de wire
-/// Lleva `Serialize`/`Deserialize` por UNA razón: el spool de
-/// `norte_core::sync` retiene el plan aprobado en un fichero, y el ejecutor
-/// necesita las dos raíces —`sync.apply` no lleva más que el hash, a propósito
-/// (ADR 0049)—. Ese fichero lo escribe y lo lee el MISMO binario dentro de la
-/// ventana de `SYNC_PLAN_TTL_MS`: no viaja por ningún socket, no está en el
-/// JSON Schema publicado y ningún peer lo parsea, así que añadir un campo aquí
-/// no es un cambio de protocolo.
+/// # Serializable, and still NOT a wire type
+/// It carries `Serialize`/`Deserialize` for ONE reason: `norte_core::sync`'s
+/// spool retains the approved plan in a file, and the executor needs both
+/// roots — `sync.apply` carries nothing more than the hash, on purpose
+/// (ADR 0049). That file is written and read by the SAME binary within
+/// `SYNC_PLAN_TTL_MS`'s window: it travels over no socket, is not in the
+/// published JSON Schema, and no peer parses it, so adding a field here is
+/// not a protocol change.
 ///
-/// `deny_unknown_fields` porque un spool que no se entiende ENTERO no se
-/// entiende: un plan a medio interpretar autoriza escrituras que nadie aprobó.
+/// `deny_unknown_fields` because a spool that is not understood WHOLE is not
+/// understood: a half-interpreted plan authorizes writes nobody approved.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SyncOptions {
-    /// De dónde salen los bytes.
+    /// Where the bytes come from.
     pub source_root: VPath,
-    /// …y a dónde van. El `rel` de cada paso es relativo a estas dos.
+    /// …and where they go. Each step's `rel` is relative to these two.
     ///
-    /// El `rel` se calcula sobre `source_root` y el ejecutor lo pega sobre
-    /// este: que sea LEGAL bajo el origen no lo hace legal bajo el destino, y
-    /// el planificador todavía no lo comprueba. Un nombre NFC de 172 bytes
-    /// ocupa 258 al descomponerse (fixture `name_max_nfd_overflow`, por encima
-    /// del `NAME_MAX` de ext4 y APFS), `CON` y un punto final no son nombres en
-    /// Windows, y `f:ads` sobre NTFS escribe un flujo alternativo en vez de un
-    /// fichero. Hoy eso falla al EJECUTAR, sobre un plan que el humano ya
-    /// aprobó; ni [`SyncBlockerKind`] ni [`SyncReason`] tienen todavía
-    /// vocabulario para decirlo antes.
+    /// `rel` is computed over `source_root` and the executor pastes it onto
+    /// this one: being LEGAL under the source does not make it legal under
+    /// the destination, and the planner does not check that yet. An NFC name
+    /// of 172 bytes takes up 258 when decomposed (fixture
+    /// `name_max_nfd_overflow`, above ext4's and APFS's `NAME_MAX`), `CON`
+    /// and a trailing dot are not names on Windows, and `f:ads` on NTFS
+    /// writes an alternate stream instead of a file. Today that fails at
+    /// EXECUTION, over a plan the human already approved; neither
+    /// [`SyncBlockerKind`] nor [`SyncReason`] has vocabulary yet to say so
+    /// earlier.
     pub dest_root: VPath,
-    /// Qué hace el plan con lo que sobra en el destino ([`SyncMode`]).
+    /// What the plan does with what is left over at the destination
+    /// ([`SyncMode`]).
     ///
-    /// [`SyncMode::Update`] no borra nada; [`SyncMode::Mirror`] convierte cada
-    /// huérfano del destino en UN [`SyncStepKind::DeleteTree`]. Un modo que este
-    /// planificador no conozca —solo lo puede añadir una versión futura de
-    /// `norte-proto`, porque el wire rechaza los que no nombra— es
-    /// [`SyncError::ModeNotPlanned`] y no degrada a ninguno de los dos.
+    /// [`SyncMode::Update`] deletes nothing; [`SyncMode::Mirror`] turns every
+    /// orphan at the destination into ONE [`SyncStepKind::DeleteTree`]. A mode
+    /// this planner does not know — only a future `norte-proto` version can
+    /// add one, because the wire rejects ones it does not name — is
+    /// [`SyncError::ModeNotPlanned`] and does not degrade to either of the
+    /// two.
     pub mode: SyncMode,
-    /// Qué hace con una fila cuya confianza es
+    /// What it does with a row whose confidence is
     /// [`CompareConfidence::Unknown`](norte_proto::methods::CompareConfidence::Unknown).
     pub on_unknown: OnUnknown,
-    /// Cuál de los dos lados de una [`CompareRow`](norte_proto::methods::CompareRow)
-    /// es el ORIGEN.
+    /// Which of the two sides of a [`CompareRow`](norte_proto::methods::CompareRow)
+    /// is the SOURCE.
     ///
-    /// La comparación es simétrica y la sincronización no. El frontend, que es
-    /// quien sabe en qué panel estaba el usuario, tradujo la dirección UNA vez;
-    /// a partir de aquí es un hecho y no una convención que cada capa vuelva a
-    /// interpretar.
+    /// The comparison is symmetric and the synchronization is not. The
+    /// frontend, which is the one that knows which pane the user was in,
+    /// translated the direction ONCE; from here on it is a fact, not a
+    /// convention every layer reinterprets.
     ///
-    /// [`Side::Unknown`] no nombra ningún lado: no hay origen, así que no hay
-    /// plan ([`SyncError::SourceSideUnknown`]). Es lo que produciría un `"lft"`
-    /// que hubiera llegado hasta aquí, y termina el flujo en vez de servir en
-    /// silencio un plan vacío.
+    /// [`Side::Unknown`] names no side: there is no source, so there is no
+    /// plan ([`SyncError::SourceSideUnknown`]). That is what an `"lft"` that
+    /// made it this far would produce, and it ends the flow instead of
+    /// silently serving an empty plan.
     pub source_side: Side,
-    /// ¿Tiene papelera el provider del DESTINO? Decide el
-    /// [`StepReversal`] de cada sobrescritura y de cada borrado, y por tanto
-    /// cuántos pasos el humano verá marcados como irreversibles ANTES de
-    /// aprobar (regla dura 4).
+    /// Does the DESTINATION provider have a trash? Decides the
+    /// [`StepReversal`] of every overwrite and every deletion, and therefore
+    /// how many steps the human will see marked irreversible BEFORE approving
+    /// (hard rule 4).
     pub dest_has_trash: bool,
-    /// Y esa papelera, ¿NOMBRA lo que entierra? (`Provider::trash_restorable`
-    /// de `norte-vfs`, que este crate no puede enlazar: no depende de él.)
+    /// And does that trash NAME what it buries? (`Provider::trash_restorable`
+    /// from `norte-vfs`, which this crate cannot link: it does not depend on
+    /// it.)
     ///
-    /// Tener papelera y poder deshacer no son lo mismo. Una papelera que
-    /// contesta `None` no da destino recuperable, el journal se queda sin
-    /// `reversal_ref` y el undo tiene que casar por ruta ORIGINAL: sobre la
-    /// pareja `trashed`+`created` de una sobrescritura eso desentierra el
-    /// fichero que el propio undo acaba de enterrar. Así que cuando el destino
-    /// TIENE papelera pero no la nombra, **todos** los pasos salen
-    /// [`StepReversal::Irreversible`] — no solo los que destruyen: deshacer una
-    /// creación también pasa por la papelera (#65), o sea que ni una `Copy`
-    /// vuelve.
+    /// Having a trash and being able to undo are not the same thing. A trash
+    /// that answers `None` gives no recoverable destination, the journal is
+    /// left without a `reversal_ref`, and the undo has to match by ORIGINAL
+    /// path: over an overwrite's `trashed`+`created` pair that unearths the
+    /// very file the undo just buried. So when the destination HAS a trash
+    /// but does not name it, **every** step comes out
+    /// [`StepReversal::Irreversible`] — not just the destructive ones:
+    /// undoing a creation also goes through the trash (#65), so not even a
+    /// `Copy` comes back.
     ///
-    /// Es una promesa del provider, no una medición por víctima: ver el
-    /// contrato de `trash_restorable`. Con `dest_has_trash` en `false` este
-    /// campo no decide nada (no hay papelera de la que hablar).
+    /// It is a promise from the provider, not a per-victim measurement: see
+    /// `trash_restorable`'s contract. With `dest_has_trash` at `false` this
+    /// field decides nothing (there is no trash to speak of).
     pub dest_trash_restorable: bool,
-    /// ¿Se puede escribir en el destino? Un destino de solo lectura no produce
-    /// pasos, produce un bloqueo.
+    /// Can the destination be written to? A read-only destination produces no
+    /// steps, it produces a blocker.
     pub dest_writable: bool,
 }
 
-/// Lo único que puede terminar un plan antes de tiempo.
+/// The only thing that can end a plan early.
 ///
-/// Lo que NO está aquí, a propósito: un nombre que colisiona, una entrada
-/// ilegible o un destino de solo lectura. Eso es un
-/// [`SyncStepKind::Skip`] o un [`SyncBlocker`], y el plan sigue — un árbol de
-/// tres horas no se muere en la hoja 40 000, igual que no lo hace la
-/// comparación de la que sale.
+/// What is deliberately NOT here: a colliding name, an unreadable entry or a
+/// read-only destination. That is a [`SyncStepKind::Skip`] or a
+/// [`SyncBlocker`], and the plan continues — a three-hour tree does not die
+/// at leaf 40,000, same as the comparison it comes from does not.
 ///
 /// ```
 /// use norte_sync::SyncError;
-/// assert_eq!(SyncError::Cancelled.to_string(), "planificación cancelada");
+/// assert_eq!(SyncError::Cancelled.to_string(), "planning cancelled");
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum SyncError {
-    /// El token de la Task se disparó (regla dura 3), o lo hizo el de la
-    /// comparación que alimenta el flujo. Se emite UNA vez y el flujo termina.
+    /// The Task's token fired (hard rule 3), or the comparison's feeding the
+    /// flow did. Emitted ONCE and the flow ends.
     ///
-    /// No hay nada que limpiar: planificar no escribe un byte.
-    #[error("planificación cancelada")]
+    /// There is nothing to clean up: planning writes not a byte.
+    #[error("planning cancelled")]
     Cancelled,
-    /// [`SyncOptions::source_side`] es [`Side::Unknown`]: no nombra ningún
-    /// lado, así que ninguna fila tiene origen.
+    /// [`SyncOptions::source_side`] is [`Side::Unknown`]: it names no side, so
+    /// no row has a source.
     ///
-    /// Es un fallo del LLAMANTE, no de los datos, y por eso mata el plan en vez
-    /// de saltarse las filas: un plan vacío se aprueba igual de fácil que uno
-    /// lleno, y no haber copiado nada porque el modo venía con una errata es
-    /// exactamente el fallo silencioso que ADR 0048 prohíbe.
-    #[error("el origen no nombra ningún lado")]
+    /// It is a CALLER failure, not a data one, and that is why it kills the
+    /// plan instead of skipping the rows: an empty plan is approved just as
+    /// easily as a full one, and having copied nothing because the mode came
+    /// with a typo is exactly the silent failure ADR 0048 forbids.
+    #[error("the source names no side")]
     SourceSideUnknown,
-    /// Una fila trae una ruta que no cuelga de la raíz que le tocaba, así que
-    /// no hay `rel` que calcular.
+    /// A row carries a path that does not hang off the root it belonged to,
+    /// so there is no `rel` to compute.
     ///
-    /// Con las filas que produce `norte-compare` sobre las raíces de este plan
-    /// no puede pasar; con otras (un llamante que emparejó mal las raíces con
-    /// el flujo, un provider que devuelve rutas de otro árbol) sí. Termina el
-    /// plan: escribir bajo el destino con un `rel` inventado es la clase de
-    /// fallo que esta spec existe para no tener.
+    /// With the rows `norte-compare` produces over this plan's roots it
+    /// cannot happen; with others (a caller that paired the roots with the
+    /// flow wrong, a provider that returns paths from another tree) it can.
+    /// It ends the plan: writing under the destination with a made-up `rel`
+    /// is exactly the class of failure this spec exists to not have.
     ///
-    /// Cubre también el caso —imposible en la práctica, porque un [`VPath`] ya
-    /// los validó— de un segmento que no vuelve a validar como
+    /// Also covers the case — impossible in practice, because a [`VPath`]
+    /// already validated them — of a segment that does not re-validate as a
     /// [`Segment`](norte_proto::Segment).
     ///
-    /// Los dos [`VPath`] van en `Box` porque un plan devuelve este error dentro
-    /// de un `Result` que se mueve por fila: dos rutas inline hacen del `Err`
-    /// más de 128 bytes y engordan el camino FELIZ (`clippy::result_large_err`).
+    /// Both [`VPath`]s go in a `Box` because a plan returns this error inside
+    /// a `Result` that moves per row: two inline paths make the `Err` more
+    /// than 128 bytes and fatten the HAPPY path (`clippy::result_large_err`).
     ///
-    /// El mensaje usa [`VPath::display_lossy`] —jamás bytes crudos hacia un
-    /// terminal (issue #21)—, y eso tiene un precio que quien lo registre debe
-    /// compensar: NFC y NFD se pintan igual, un espacio o un punto final no se
-    /// ven, y dos bytes inválidos distintos colapsan en el mismo `�`. La causa
-    /// más habitual es justamente una de esas, así que quien lo logue debe
-    /// adjuntar también las formas wire ([`VPath::to_wire`], lossless) como
-    /// campos de `tracing`.
-    #[error("la ruta {} no cuelga de {}", .path.display_lossy(), .root.display_lossy())]
+    /// The message uses [`VPath::display_lossy`] — never raw bytes toward a
+    /// terminal (issue #21) — and that has a price whoever logs it must
+    /// compensate for: NFC and NFD render the same, a space or a trailing dot
+    /// is invisible, and two different invalid bytes collapse into the same
+    /// `�`. The most common cause is exactly one of those, so whoever logs it
+    /// must also attach the wire forms ([`VPath::to_wire`], lossless) as
+    /// `tracing` fields.
+    #[error("path {} does not hang off {}", .path.display_lossy(), .root.display_lossy())]
     OutsideRoot {
-        /// La raíz bajo la que se esperaba encontrarla.
+        /// The root under which it was expected to be found.
         root: Box<VPath>,
-        /// La ruta que llegó.
+        /// The path that arrived.
         path: Box<VPath>,
     },
-    /// Una fila produciría un paso cuyo `rel` es la RAÍZ ([`RelPath::is_root`]):
-    /// su ruta es exactamente la raíz del plan, no algo bajo ella.
+    /// A row would produce a step whose `rel` IS the ROOT
+    /// ([`RelPath::is_root`]): its path is exactly the plan's root, not
+    /// something under it.
     ///
-    /// Un paso que actúa sobre la raíz del destino la sobrescribe o la borra
-    /// ENTERA, y ese es el blanco más destructivo del plan. Pasa con un
-    /// llamante cuyas raíces de [`SyncOptions`] son más profundas que las de la
-    /// comparación que alimenta el flujo, y con la fila de error que el walk
-    /// emite cuando no puede listar la propia raíz.
+    /// A step that acts on the destination's root overwrites or deletes it
+    /// WHOLE, and that is the plan's most destructive target. It happens with
+    /// a caller whose [`SyncOptions`] roots are deeper than the ones the
+    /// feeding comparison used, and with the error row the walk emits when it
+    /// cannot list its own root.
     ///
-    /// No se salta la fila, se termina el plan: las raíces con las que se
-    /// comparó y las raíces con las que se planifica tienen que ser las mismas,
-    /// y que no lo sean invalida todos los `rel`, no solo este.
-    #[error("la raíz {} no es un paso: un paso nombra algo BAJO ella", .root.display_lossy())]
+    /// The row is not skipped, the plan is ended: the roots compared against
+    /// and the roots planned against have to be the same, and their not being
+    /// so invalidates every `rel`, not just this one.
+    #[error("root {} is not a step: a step names something UNDER it", .root.display_lossy())]
     RootIsNotAStep {
-        /// La raíz sobre la que se iba a actuar.
+        /// The root that was about to be acted on.
         root: Box<VPath>,
     },
-    /// El modo pedido no lo sabe planificar este binario.
+    /// This binary does not know how to plan the requested mode.
     ///
-    /// [`SyncMode::Update`] y [`SyncMode::Mirror`] tienen tabla; esta variante
-    /// es el comodín que [`SyncMode`] obliga a escribir por ser
-    /// `#[non_exhaustive]`, y lo que hace es NEGARSE. No es alcanzable desde el
-    /// wire —un modo que este peer no nombra muere en el deserializador, que por
-    /// eso no lleva `#[serde(other)]`—, así que solo la alcanza un
-    /// `norte-proto` futuro que añada un modo sin que este crate se entere.
+    /// [`SyncMode::Update`] and [`SyncMode::Mirror`] have a table; this
+    /// variant is the wildcard [`SyncMode`] forces you to write because it is
+    /// `#[non_exhaustive]`, and what it does is REFUSE. It is not reachable
+    /// from the wire — a mode this peer does not name dies in the
+    /// deserializer, which is why it carries no `#[serde(other)]` — so only a
+    /// future `norte-proto` that adds a mode without this crate knowing
+    /// reaches it.
     ///
-    /// Que ese caso caiga en un error y no en `Update` es el motivo entero de la
-    /// variante: el plan de `Update` es un SUBCONJUNTO del de `Mirror`, así que
-    /// quien pidiera un modo nuevo y recibiera una actualización aprobaría un
-    /// plan que no hace lo que pidió sin forma de notarlo — el mismo fallo
-    /// silencioso que [`SyncError::SourceSideUnknown`] evita. El comodín cae del
-    /// lado de no planificar nada, igual que el de [`OnUnknown`] cae del lado
-    /// de no escribir.
-    #[error("este planificador no sabe planificar el modo {0:?}")]
+    /// That this case falls into an error and not into `Update` is this
+    /// variant's whole reason: `Update`'s plan is a SUBSET of `Mirror`'s, so
+    /// whoever requested a new mode and got an update back would approve a
+    /// plan that does not do what they asked with no way to notice — the same
+    /// silent failure [`SyncError::SourceSideUnknown`] avoids. The wildcard
+    /// falls on the side of planning nothing, same as [`OnUnknown`]'s falls
+    /// on the side of writing nothing.
+    #[error("this planner does not know how to plan mode {0:?}")]
     ModeNotPlanned(SyncMode),
-    /// El flujo de filas terminó con un fallo de la comparación que no es su
-    /// cancelación. Hoy no existe ninguno
-    /// ([`CompareError`](norte_compare::CompareError) solo tiene `Cancelled`);
-    /// la variante está para que uno futuro no se traduzca a «cancelado», que
-    /// es lo que haría un comodín.
-    #[error("la comparación terminó en fallo")]
+    /// The row flow ended with a comparison failure that is not its
+    /// cancellation. None exists today
+    /// ([`CompareError`](norte_compare::CompareError) only has `Cancelled`);
+    /// the variant is there so a future one does not get translated into
+    /// "cancelled", which is what a wildcard would do.
+    #[error("the comparison ended in failure")]
     Compare(#[source] norte_compare::CompareError),
 }

@@ -1,39 +1,39 @@
-//! Sanidad del corpus canónico: al menos 62 fixtures (48 nombres + 11+3
-//! contenidos), nombres válidos como segmentos `VPath`, contenidos con la
-//! forma declarada.
+//! Sanity of the canonical corpus: at least 62 fixtures (48 names + 11+3
+//! contents), names valid as `VPath` segments, contents with the declared
+//! shape.
 
 use norte_testkit::corpus::{content_fixtures, hostile_chords, hostile_names, spelling_twins};
 
 #[test]
 fn corpus_counts() {
-    // Suelo, no cuenta exacta (#169): antes esto y el doctest de
-    // `hostile_names` aserraban `== 48` cada uno, y se ponían rojos en
-    // momentos distintos porque `nextest` no corre doctests — añadir una
-    // fixture dejaba el doctest rojo sin que `just t` lo viera. Un suelo
-    // sigue cazando "el corpus se vació por accidente" sin que crecerlo
-    // cueste tocar dos sitios.
-    assert!(hostile_names().len() >= 48, "nombres hostiles");
-    assert_eq!(content_fixtures().len(), 11, "contenidos detectables");
+    // Floor, not an exact count (#169): this and `hostile_names`'s doctest
+    // used to assert `== 48` each, and went red at different times because
+    // `nextest` does not run doctests — adding a fixture left the doctest
+    // red without `just t` ever seeing it. A floor still catches "the
+    // corpus got emptied by accident" without growing it costing two
+    // touched places.
+    assert!(hostile_names().len() >= 48, "hostile names");
+    assert_eq!(content_fixtures().len(), 11, "detectable contents");
     assert_eq!(
         norte_testkit::corpus::content_fixtures_forced().len(),
         3,
-        "contenidos solo-forzables"
+        "forced-only contents"
     );
-    assert_eq!(hostile_chords().len(), 4, "chords hostiles (H1)");
+    assert_eq!(hostile_chords().len(), 4, "hostile chords (H1)");
 }
 
 #[test]
-fn hostile_chords_son_un_solo_codepoint_hazard_y_unicos() {
+fn hostile_chords_are_a_single_codepoint_hazard_and_unique() {
     let chords = hostile_chords();
     let mut seen = std::collections::HashSet::new();
     for c in &chords {
         assert!(
             norte_encoding::is_terminal_hazard(c.token),
-            "[{}] debe ser un hazard de terminal",
+            "[{}] must be a terminal hazard",
             c.id
         );
-        assert!(!c.why.is_empty(), "[{}] documenta por qué es hostil", c.id);
-        assert!(seen.insert(c.token), "[{}] token duplicado", c.id);
+        assert!(!c.why.is_empty(), "[{}] documents why it is hostile", c.id);
+        assert!(seen.insert(c.token), "[{}] duplicate token", c.id);
     }
 }
 
@@ -44,73 +44,70 @@ fn names_are_valid_segments_and_unique() {
     for n in &names {
         assert!(
             norte_proto::Segment::new(n.bytes.clone()).is_ok(),
-            "[{}] debe ser segmento válido",
+            "[{}] must be a valid segment",
             n.id
         );
-        assert!(seen.insert(n.bytes.clone()), "[{}] bytes duplicados", n.id);
-        assert!(!n.why.is_empty(), "[{}] documenta por qué es hostil", n.id);
+        assert!(seen.insert(n.bytes.clone()), "[{}] duplicate bytes", n.id);
+        assert!(!n.why.is_empty(), "[{}] documents why it is hostile", n.id);
     }
 }
 
-/// #169: las cuatro fixtures pedidas por las tres deferrals de
-/// `2026-08-11-directory-sync.md`, pinando la propiedad concreta que cada
-/// una dice tener y no solo que exista.
+/// #169: the four fixtures requested by `2026-08-11-directory-sync.md`'s
+/// three deferrals, pinning the specific property each one claims to have
+/// and not just that it exists.
 #[test]
-fn fixtures_nuevas_de_169_cumplen_lo_que_prometen() {
+fn new_fixtures_from_169_deliver_what_they_promise() {
     let names = hostile_names();
     let find = |id: &str| {
         names
             .iter()
             .find(|n| n.id == id)
-            .unwrap_or_else(|| panic!("fixture {id} en el corpus"))
+            .unwrap_or_else(|| panic!("fixture {id} in the corpus"))
     };
 
-    // `!`: el marcador de composición de archivos (ADR 0018) como nombre
-    // real, byte a byte y nada más.
+    // `!`: the archive-composition marker (ADR 0018) as a real name, byte
+    // for byte and nothing else.
     assert_eq!(find("archive_marker_literal").bytes, b"!");
 
-    // 255 bytes (NAME_MAX) que NO son UTF-8 válido, a diferencia de
-    // `name_max_255` (puro ASCII).
+    // 255 bytes (NAME_MAX) that are NOT valid UTF-8, unlike `name_max_255`
+    // (pure ASCII).
     let tail = find("name_max_255_invalid_tail");
     assert_eq!(tail.bytes.len(), 255);
     assert!(std::str::from_utf8(&tail.bytes).is_err());
 
-    // Un nombre que ES un sidecar `.trashinfo` completo, sin la barra que
-    // `Segment` prohíbe (el `Path` real va url-encoded).
+    // A name that IS a whole `.trashinfo` sidecar, without the slash
+    // `Segment` forbids (the real `Path` goes url-encoded).
     let spoof = find("trashinfo_record_spoof");
     assert!(!spoof.bytes.contains(&b'/'));
-    let texto = std::str::from_utf8(&spoof.bytes).expect("UTF-8 válido");
-    assert!(texto.contains("Path="));
-    assert!(texto.contains("DeletionDate="));
+    let text = std::str::from_utf8(&spoof.bytes).expect("valid UTF-8");
+    assert!(text.contains("Path="));
+    assert!(text.contains("DeletionDate="));
 
-    // U+0130, cuyo pliegue completo son DOS codepoints ('i' + U+0307), no
-    // una 'i' simple.
-    let turco = find("turkish_dotted_i_capital");
-    let texto = std::str::from_utf8(&turco.bytes).expect("UTF-8 válido");
-    assert!(texto.starts_with('\u{0130}'));
+    // U+0130, whose full fold is TWO codepoints ('i' + U+0307), not a plain
+    // 'i'.
+    let turkish = find("turkish_dotted_i_capital");
+    let text = std::str::from_utf8(&turkish.bytes).expect("valid UTF-8");
+    assert!(text.starts_with('\u{0130}'));
 }
 
-/// #169: `spelling_twins()` referencia `id`s del corpus, no bytes propios —
-/// los dos lados de cada par tienen que existir de verdad y ser distintos.
+/// #169: `spelling_twins()` references corpus `id`s, not its own bytes —
+/// both sides of each pair have to really exist and be different.
 #[test]
-fn spelling_twins_referencian_ids_reales_y_distintos() {
+fn spelling_twins_reference_real_and_distinct_ids() {
     let names = hostile_names();
     let ids: std::collections::HashSet<&str> = names.iter().map(|n| n.id.as_str()).collect();
     for twin in spelling_twins() {
         assert!(
             ids.contains(twin.left),
-            "[{}] no está en el corpus",
+            "[{}] is not in the corpus",
             twin.left
         );
         assert!(
             ids.contains(twin.right),
-            "[{}] no está en el corpus",
+            "[{}] is not in the corpus",
             twin.right
         );
-        assert_ne!(
-            twin.left, twin.right,
-            "un par no es un nombre consigo mismo"
-        );
+        assert_ne!(twin.left, twin.right, "a pair is not a name with itself");
     }
 }
 
@@ -124,7 +121,7 @@ fn names_roundtrip_via_wire() {
         assert_eq!(
             q.file_name().unwrap().as_bytes(),
             n.bytes.as_slice(),
-            "[{}] roundtrip byte-exacto",
+            "[{}] byte-exact roundtrip",
             n.id
         );
     }
@@ -135,7 +132,7 @@ fn contents_match_declared_shape() {
     for c in content_fixtures() {
         match c.id {
             "utf16le_bom" => {
-                assert_eq!(&c.bytes[..2], &[0xFF, 0xFE], "BOM LE");
+                assert_eq!(&c.bytes[..2], &[0xFF, 0xFE], "LE BOM");
                 let units: Vec<u16> = c.bytes[2..]
                     .chunks(2)
                     .map(|b| u16::from_le_bytes([b[0], b[1]]))
@@ -143,7 +140,7 @@ fn contents_match_declared_shape() {
                 assert_eq!(String::from_utf16(&units).unwrap(), c.decoded);
             }
             "utf16be_bom" => {
-                assert_eq!(&c.bytes[..2], &[0xFE, 0xFF], "BOM BE");
+                assert_eq!(&c.bytes[..2], &[0xFE, 0xFF], "BE BOM");
                 let units: Vec<u16> = c.bytes[2..]
                     .chunks(2)
                     .map(|b| u16::from_be_bytes([b[0], b[1]]))
@@ -153,64 +150,64 @@ fn contents_match_declared_shape() {
             "windows_1252_curly" => {
                 assert_eq!(c.bytes, b"it\x92s\n".to_vec());
                 assert_eq!(c.decoded, "it\u{2019}s\n");
-                // Un decoder ISO-8859-1 estricto daría U+0092 (control), no ’.
+                // A strict ISO-8859-1 decoder would give U+0092 (control), not ’.
                 assert_ne!(char::from(0x92u8), '\u{2019}');
             }
             "latin1" => {
                 assert!(
                     std::str::from_utf8(&c.bytes).is_err(),
-                    "latin1 con ñ NO es UTF-8 válido"
+                    "latin1 with ñ is NOT valid UTF-8"
                 );
-                // Decodificación Latin-1 manual: byte → codepoint.
+                // Manual Latin-1 decoding: byte → codepoint.
                 let decoded: String = c.bytes.iter().map(|&b| char::from(b)).collect();
                 assert_eq!(decoded, c.decoded);
             }
             "shift_jis" => {
                 assert!(
                     std::str::from_utf8(&c.bytes).is_err(),
-                    "Shift-JIS multibyte NO es UTF-8 válido"
+                    "multibyte Shift-JIS is NOT valid UTF-8"
                 );
                 assert_eq!(c.decoded, "テスト\n");
             }
             "utf8_bom" => {
-                assert_eq!(&c.bytes[..3], &[0xEF, 0xBB, 0xBF], "BOM UTF-8");
+                assert_eq!(&c.bytes[..3], &[0xEF, 0xBB, 0xBF], "UTF-8 BOM");
                 assert_eq!(std::str::from_utf8(&c.bytes[3..]).unwrap(), c.decoded);
             }
             "utf8_plain" => {
                 assert_eq!(std::str::from_utf8(&c.bytes).unwrap(), c.decoded);
-                assert!(!c.bytes.starts_with(&[0xEF, 0xBB, 0xBF]), "SIN BOM");
+                assert!(!c.bytes.starts_with(&[0xEF, 0xBB, 0xBF]), "NO BOM");
             }
             "gb18030" => {
-                assert_eq!(&c.bytes[..4], b"\x95\x32\x82\x36", "4 bytes de GB18030");
-                assert!(c.decoded.starts_with('\u{20000}'), "zona exclusiva");
+                assert_eq!(&c.bytes[..4], b"\x95\x32\x82\x36", "4 GB18030 bytes");
+                assert!(c.decoded.starts_with('\u{20000}'), "exclusive zone");
             }
             "cjk_utf8_lead_f1" => {
-                // UTF-8 válido con 0xF1 como byte LÍDER de un char de 4 bytes.
+                // Valid UTF-8 with 0xF1 as the LEAD byte of a 4-byte char.
                 assert_eq!(std::str::from_utf8(&c.bytes).unwrap(), c.decoded);
-                assert!(c.bytes.contains(&0xF1), "0xF1 líder presente");
+                assert!(c.bytes.contains(&0xF1), "lead 0xF1 present");
                 assert!(
                     c.decoded.contains('\u{44001}'),
-                    "el char de 4 bytes (F1 84 80 81) está"
+                    "the 4-byte char (F1 84 80 81) is there"
                 );
             }
             "preview_bidi_ctrl_injection" => {
-                // UTF-8 válido (decodifica exacto) pero PLAGADO de hazards de
-                // terminal: RLO, isolate sin cerrar, ESC+OSC y un C0 crudo.
+                // Valid UTF-8 (decodes exactly) but RIDDLED with terminal
+                // hazards: RLO, an unclosed isolate, ESC+OSC and a raw C0.
                 assert_eq!(std::str::from_utf8(&c.bytes).unwrap(), c.decoded);
-                assert!(!c.bytes.contains(&0x00), "sin NUL: detectable como texto");
+                assert!(!c.bytes.contains(&0x00), "no NUL: detectable as text");
                 assert!(
                     c.decoded.chars().any(char::is_control) && c.decoded.contains('\u{202E}'),
-                    "lleva controles y bidi crudos (el productor DEBE sanear)"
+                    "carries raw controls and bidi (the producer MUST sanitize)"
                 );
             }
             "koi8_r" => {
                 assert!(std::str::from_utf8(&c.bytes).is_err());
                 assert!(c.decoded.starts_with("Привет"));
-                // Solo cirílico: KOI8-R y KOI8-U coinciden ahí (el corpus
-                // no debe depender de la variante que adivine chardetng).
+                // Cyrillic only: KOI8-R and KOI8-U agree there (the corpus
+                // must not depend on the variant chardetng guesses).
                 assert!(c.bytes.iter().all(|&b| b != 0xA4 && b != 0xB4));
             }
-            other => panic!("fixture inesperada: {other}"),
+            other => panic!("unexpected fixture: {other}"),
         }
     }
 }

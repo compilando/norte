@@ -1,76 +1,76 @@
-//! [`Color`] RGB de 24 bits (autoría canónica en `#rrggbb`) y su degradación a
-//! paletas de 256 y 16 colores (ADR 0020 D2). El crate NO habla con ningún
-//! backend: entrega un [`ResolvedColor`] que el frontend traduce a su color
-//! nativo.
+//! 24-bit RGB [`Color`] (canonical authoring as `#rrggbb`) and its degradation to
+//! 256- and 16-color palettes (ADR 0020 D2). The crate does NOT talk to any
+//! backend: it hands over a [`ResolvedColor`] that the frontend translates to its
+//! native color.
 
 use std::fmt;
 
 use serde::de::{self, Deserialize, Deserializer, Visitor};
 use serde::ser::{Serialize, Serializer};
 
-/// Color RGB de 24 bits. Formato de autoría: `#rrggbb` (o `#rgb` abreviado).
+/// 24-bit RGB color. Authoring format: `#rrggbb` (or the short `#rgb`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Color {
-    /// Rojo.
+    /// Red.
     pub r: u8,
-    /// Verde.
+    /// Green.
     pub g: u8,
-    /// Azul.
+    /// Blue.
     pub b: u8,
 }
 
-/// Profundidad de color efectiva del frontend (ADR 0020 D2). El truecolor es
-/// el ideal; las otras dos son degradaciones para terminales pobres.
+/// Effective color depth of the frontend (ADR 0020 D2). Truecolor is the
+/// ideal; the other two are degradations for poor terminals.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ColorDepth {
-    /// 24 bits: el color viaja tal cual.
+    /// 24 bits: the color travels as is.
     Truecolor,
-    /// 256 colores xterm (cubo 6×6×6 + grises + 16 base).
+    /// 256 xterm colors (6×6×6 cube + grays + 16 base).
     Ansi256,
-    /// 16 colores ANSI base.
+    /// 16 base ANSI colors.
     Ansi16,
 }
 
-/// Color ya PROYECTADO a la profundidad del frontend. `Rgb` para truecolor;
-/// `Indexed` para paletas (0–255 en 256, 0–15 en 16) — el frontend lo mapea a
-/// `Color::Rgb`/`Color::Indexed` de su librería.
+/// Color already PROJECTED to the frontend's depth. `Rgb` for truecolor;
+/// `Indexed` for palettes (0–255 in 256, 0–15 in 16) — the frontend maps it to
+/// its library's `Color::Rgb`/`Color::Indexed`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ResolvedColor {
     /// Truecolor RGB.
     Rgb(u8, u8, u8),
-    /// Índice de paleta (xterm-256 o ANSI-16).
+    /// Palette index (xterm-256 or ANSI-16).
     Indexed(u8),
 }
 
-/// Error al parsear un color desde texto.
+/// Error parsing a color from text.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ColorParseError {
-    /// No empieza por `#` o la longitud no es 3/6 dígitos hex.
-    #[error("color inválido: se esperaba `#rgb` o `#rrggbb`")]
+    /// Does not start with `#` or the length is not 3/6 hex digits.
+    #[error("invalid color: expected `#rgb` or `#rrggbb`")]
     Format,
-    /// Un dígito no es hexadecimal.
-    #[error("dígito hex inválido en el color")]
+    /// A digit is not hexadecimal.
+    #[error("invalid hex digit in color")]
     Digit,
 }
 
 impl Color {
-    /// Construye desde componentes.
+    /// Builds from components.
     #[must_use]
     pub const fn rgb(r: u8, g: u8, b: u8) -> Self {
         Self { r, g, b }
     }
 
-    /// Parsea `#rrggbb` o `#rgb` (este último expande cada dígito, `#abc` =
+    /// Parses `#rrggbb` or `#rgb` (the latter expands each digit, `#abc` =
     /// `#aabbcc`).
     ///
     /// # Errors
-    /// [`ColorParseError`] si el formato o los dígitos no son válidos.
+    /// [`ColorParseError`] if the format or the digits are not valid.
     pub fn parse(s: &str) -> Result<Self, ColorParseError> {
         let hex = s.strip_prefix('#').ok_or(ColorParseError::Format)?;
         let comp = |a: u8, b: u8| -> Result<u8, ColorParseError> {
             let hi = char::from(a).to_digit(16).ok_or(ColorParseError::Digit)?;
             let lo = char::from(b).to_digit(16).ok_or(ColorParseError::Digit)?;
-            // hi,lo ∈ 0..=15 ⇒ hi*16+lo ∈ 0..=255: el try_from nunca falla.
+            // hi,lo ∈ 0..=15 ⇒ hi*16+lo ∈ 0..=255: the try_from never fails.
             u8::try_from(hi * 16 + lo).map_err(|_| ColorParseError::Digit)
         };
         match hex.len() {
@@ -84,7 +84,7 @@ impl Color {
             }
             3 => {
                 let x = hex.as_bytes();
-                // `#abc` → `#aabbcc`: cada dígito se duplica.
+                // `#abc` → `#aabbcc`: each digit is doubled.
                 Ok(Self {
                     r: comp(x[0], x[0])?,
                     g: comp(x[1], x[1])?,
@@ -95,14 +95,14 @@ impl Color {
         }
     }
 
-    /// Forma canónica `#rrggbb`.
+    /// Canonical `#rrggbb` form.
     #[must_use]
     pub fn to_hex(self) -> String {
         format!("#{:02x}{:02x}{:02x}", self.r, self.g, self.b)
     }
 
-    /// Proyecta a la profundidad `depth` (ADR 0020 D2). Truecolor = idéntico;
-    /// las paletas eligen el índice de color más cercano en distancia RGB.
+    /// Projects to depth `depth` (ADR 0020 D2). Truecolor = identical;
+    /// the palettes pick the nearest color index by RGB distance.
     #[must_use]
     pub fn resolve(self, depth: ColorDepth) -> ResolvedColor {
         match depth {
@@ -112,13 +112,13 @@ impl Color {
         }
     }
 
-    /// Índice xterm-256 más cercano (rango 16–255: cubo 6×6×6 + rampa de
-    /// grises). Se evitan los 16 primeros —configurables por el usuario del
-    /// terminal, poco fiables— salvo que el gris/cubo caiga ahí naturalmente.
+    /// Nearest xterm-256 index (range 16–255: 6×6×6 cube + gray
+    /// ramp). The first 16 —configurable by the terminal's user,
+    /// unreliable— are avoided unless the gray/cube naturally lands there.
     fn nearest_256(self) -> u8 {
-        // Niveles del cubo 6×6×6: 0,95,135,175,215,255.
+        // 6×6×6 cube levels: 0,95,135,175,215,255.
         const LV: [u8; 6] = [0, 95, 135, 175, 215, 255];
-        // Índice de cubo (0..6) más cercano a un componente.
+        // Nearest cube index (0..6) to a component.
         let cube_idx = |v: u8| -> u8 {
             let mut best = 0u8;
             let mut bd = u16::MAX;
@@ -139,18 +139,18 @@ impl Color {
         );
         let cube_index = 16 + 36 * ri + 6 * gi + bi;
 
-        // Candidato de la rampa de grises (232–255: niveles 8,18,…,238).
+        // Gray ramp candidate (232–255: levels 8,18,…,238).
         let avg = (u16::from(self.r) + u16::from(self.g) + u16::from(self.b)) / 3;
         let gray_n = if avg < 8 {
             0
         } else {
             ((avg - 8 + 5) / 10).min(23)
         };
-        let gray_n = u8::try_from(gray_n).unwrap_or(23); // gray_n ≤ 23 por construcción
+        let gray_n = u8::try_from(gray_n).unwrap_or(23); // gray_n ≤ 23 by construction
         let gray_v = 8 + gray_n * 10;
         let gray_index = 232 + gray_n;
 
-        // El más cercano de los dos candidatos (cubo vs gris).
+        // The nearer of the two candidates (cube vs gray).
         if self.dist2((gray_v, gray_v, gray_v)) < self.dist2(cube_rgb) {
             gray_index
         } else {
@@ -158,7 +158,7 @@ impl Color {
         }
     }
 
-    /// Índice ANSI-16 más cercano (tabla xterm por defecto).
+    /// Nearest ANSI-16 index (default xterm table).
     fn nearest_16(self) -> u8 {
         let mut best = 0u8;
         let mut bd = u32::MAX;
@@ -172,8 +172,8 @@ impl Color {
         best
     }
 
-    /// Distancia euclídea al cuadrado en RGB (evita `sqrt`, monótona igual).
-    /// Es una suma de cuadrados: siempre ≥ 0, por eso `unsigned_abs`.
+    /// Squared Euclidean distance in RGB (avoids `sqrt`, equally monotonic).
+    /// It is a sum of squares: always ≥ 0, hence `unsigned_abs`.
     fn dist2(self, o: (u8, u8, u8)) -> u32 {
         let dr = i32::from(self.r) - i32::from(o.0);
         let dg = i32::from(self.g) - i32::from(o.1);
@@ -182,8 +182,8 @@ impl Color {
     }
 }
 
-/// Paleta ANSI-16 por defecto de xterm (los 16 colores base). Los índices
-/// 8–15 son las variantes «brillantes».
+/// xterm's default ANSI-16 palette (the 16 base colors). Indices
+/// 8–15 are the "bright" variants.
 const ANSI16: [(u8, u8, u8); 16] = [
     (0x00, 0x00, 0x00), // 0 black
     (0x80, 0x00, 0x00), // 1 red
@@ -203,7 +203,7 @@ const ANSI16: [(u8, u8, u8); 16] = [
     (0xff, 0xff, 0xff), // 15 bright white
 ];
 
-// --- serde: un color viaja como el string `#rrggbb` ---
+// --- serde: a color travels as the string `#rrggbb` ---
 
 impl Serialize for Color {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
@@ -217,7 +217,7 @@ impl<'de> Deserialize<'de> for Color {
         impl Visitor<'_> for HexVisitor {
             type Value = Color;
             fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                f.write_str("un color `#rgb` o `#rrggbb`")
+                f.write_str("a `#rgb` or `#rrggbb` color")
             }
             fn visit_str<E: de::Error>(self, v: &str) -> Result<Color, E> {
                 Color::parse(v).map_err(E::custom)
@@ -233,7 +233,7 @@ impl schemars::JsonSchema for Color {
         "Color".into()
     }
     fn json_schema(_g: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        // Un string hex `#rgb`/`#rrggbb`.
+        // A hex string `#rgb`/`#rrggbb`.
         schemars::json_schema!({
             "type": "string",
             "pattern": "^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$"

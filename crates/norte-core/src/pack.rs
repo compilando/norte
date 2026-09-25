@@ -1,14 +1,14 @@
-//! Fabricar ficheros: empaquetar, comprobar, partir y juntar (#132).
+//! Manufacturing files: pack, test, split and combine (#132).
 //!
-//! Las cuatro operaciones que las teclas de los presets piden y norte no
-//! tenía. Ninguna escribe DENTRO de un contenedor —`norte-vfs-archive` sigue
-//! siendo `READ_ONLY` (ADR 0018)—: las cuatro leen por un provider y
-//! **fabrican ficheros nuevos** por otro, que puede ser cualquiera.
+//! The four operations the presets' keys ask for and norte did not have.
+//! None of them write INSIDE a container —`norte-vfs-archive` is still
+//! `READ_ONLY` (ADR 0018)—: all four read through one provider and
+//! **manufacture new files** through another, which can be any provider.
 //!
-//! Desempaquetar no está aquí porque no hace falta: el motor de copia ya
-//! acepta el interior de un archivo como ORIGEN, así que desempaquetar es un
-//! `fs.copy` desde `<contenedor>/!/` y hereda el journal, el undo, la política
-//! de colisiones y la cancelación que la copia ya tiene.
+//! Unpacking is not here because it does not need to be: the copy engine
+//! already accepts the inside of an archive as a SOURCE, so unpacking is an
+//! `fs.copy` from `<container>/!/` and inherits the journal, the undo, the
+//! collision policy and the cancellation the copy already has.
 
 use std::sync::Arc;
 
@@ -20,21 +20,21 @@ use norte_vfs_archive::write::{ArchiveWriter, PackEntry, PackFormat};
 use crate::observer::{Mutation, MutationObserver};
 use crate::scheduler::TaskCtx;
 
-/// Tope de bytes del nombre de una entrada, el MISMO con el que el índice de
-/// lectura mira un archivo (`norte_vfs_archive::Limits`).
+/// Cap on the byte length of an entry's name, the SAME one the read index
+/// uses to look at an archive (`norte_vfs_archive::Limits`).
 ///
-/// Escribir por encima produce entradas que este mismo programa omitirá al
-/// abrirlo: un archivo que se traga ficheros en silencio.
-const MAX_NOMBRE_ENTRADA: usize = 4_096;
+/// Writing above it produces entries that this very program will skip when
+/// opening it back: an archive that silently swallows files.
+const MAX_ENTRY_NAME_BYTES: usize = 4_096;
 
-/// Tope de componentes de una entrada, por lo mismo.
-const MAX_PROFUNDIDAD_ENTRADA: usize = 64;
+/// Cap on an entry's number of components, for the same reason.
+const MAX_ENTRY_DEPTH: usize = 64;
 
-/// Nivel de compresión por defecto cuando el cliente no dice ninguno.
-const NIVEL_POR_DEFECTO: u8 = 6;
+/// Default compression level when the client does not say one.
+const DEFAULT_LEVEL: u8 = 6;
 
-/// El formato del wire, traducido al del escritor.
-fn formato(f: methods::ArchiveFormat) -> PackFormat {
+/// The wire's format, translated into the writer's.
+fn pack_format(f: methods::ArchiveFormat) -> PackFormat {
     match f {
         methods::ArchiveFormat::Zip => PackFormat::Zip,
         methods::ArchiveFormat::Tar => PackFormat::Tar,
@@ -42,13 +42,13 @@ fn formato(f: methods::ArchiveFormat) -> PackFormat {
     }
 }
 
-/// El nombre que una ruta tiene DENTRO del archivo: lo que hay de `base` a
-/// `p`, en bytes crudos y separado por `/`.
+/// The name a path has INSIDE the archive: whatever lies between `base` and
+/// `p`, in raw bytes and separated by `/`.
 ///
-/// `None` si `p` no cuelga de `base` — el llamante lo rechaza en vez de
-/// inventarse un nombre, porque un nombre inventado acaba en un archivo que
-/// alguien desempaqueta encima de otra cosa.
-fn nombre_relativo(base: &VPath, p: &VPath) -> Option<Vec<u8>> {
+/// `None` if `p` does not hang off `base` — the caller rejects it instead of
+/// making up a name, because a made-up name ends up in an archive that
+/// someone unpacks on top of something else.
+fn relative_name(base: &VPath, p: &VPath) -> Option<Vec<u8>> {
     if p.scheme() != base.scheme() || p.authority() != base.authority() {
         return None;
     }
@@ -57,15 +57,15 @@ fn nombre_relativo(base: &VPath, p: &VPath) -> Option<Vec<u8>> {
     if segs.len() <= base_segs.len() || !segs.starts_with(&base_segs) {
         return None;
     }
-    let cola = &segs[base_segs.len()..];
-    // El marcador de archivo NO puede ser el nombre de una entrada: el índice
-    // de lectura omite justo ese componente (ADR 0018), así que escribirlo
-    // produciría una entrada que norte no puede volver a direccionar.
-    if cola.iter().any(|s| *s == b"!") {
+    let tail = &segs[base_segs.len()..];
+    // The archive marker CANNOT be an entry's name: the read index skips
+    // exactly that component (ADR 0018), so writing it would produce an
+    // entry that norte cannot address again.
+    if tail.iter().any(|s| *s == b"!") {
         return None;
     }
     let mut out = Vec::new();
-    for (i, s) in cola.iter().enumerate() {
+    for (i, s) in tail.iter().enumerate() {
         if i > 0 {
             out.push(b'/');
         }
@@ -74,130 +74,135 @@ fn nombre_relativo(base: &VPath, p: &VPath) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// El token de formato que sugiere el NOMBRE de un contenedor, con los alias
-/// que la gente escribe de verdad (`.tgz`, `.tar.gz`).
+/// The format token a container's NAME suggests, with the aliases people
+/// actually write (`.tgz`, `.tar.gz`).
 ///
-/// Gemelo del que usa la TUI para decidir si `Enter` entra en un fichero
-/// (`nav::archive_root_for`), y aquí por la misma razón que allí: es azúcar de
-/// presentación sobre la whitelist de proto, no una validación — de eso se
-/// encarga `archive_compose`.
-pub(crate) fn formato_de_nombre(name: &[u8]) -> Option<&'static str> {
+/// Twin of the one the TUI uses to decide whether `Enter` goes into a file
+/// (`nav::archive_root_for`), and here for the same reason as there: it is
+/// presentation sugar over proto's whitelist, not validation — `archive_compose`
+/// handles that.
+pub(crate) fn name_format(name: &[u8]) -> Option<&'static str> {
     const ALIAS: &[(&[u8], &str)] = &[(b".tar.gz", "tar+gz"), (b".tgz", "tar+gz")];
-    let acaba = |suf: &[u8]| {
+    let ends_with = |suf: &[u8]| {
         name.len() >= suf.len() && name[name.len() - suf.len()..].eq_ignore_ascii_case(suf)
     };
     ALIAS
         .iter()
-        .find(|(suf, _)| acaba(suf))
+        .find(|(suf, _)| ends_with(suf))
         .map(|(_, f)| *f)
         .or_else(|| {
             norte_proto::ARCHIVE_FORMATS
                 .iter()
-                .find(|f| acaba(format!(".{f}").as_bytes()))
+                .find(|f| ends_with(format!(".{f}").as_bytes()))
                 .copied()
         })
 }
 
-/// QUÉ se puede comprobar de verdad en cada formato.
+/// WHAT can actually be checked in each format.
 ///
-/// Va al resultado y no a la documentación porque «pasa» significa cosas
-/// distintas: un zip trae un CRC-32 por entrada y un `tar.gz` uno de todo el
-/// flujo, pero un tar plano no trae ninguna suma de contenido — lo único
-/// verificable ahí es que cada tamaño declarado se alcanza. Un cliente que
-/// pintara «íntegro» sobre eso estaría afirmando lo que el formato no sostiene.
-pub(crate) fn que_se_comprueba(token: &str) -> Vec<String> {
+/// It goes into the result and not into the documentation because "passes"
+/// means different things: a zip carries a CRC-32 per entry and a `tar.gz`
+/// one for the whole stream, but a plain tar carries no content checksum at
+/// all — the only thing verifiable there is that each declared size is
+/// reached. A client that painted "intact" over that would be claiming what
+/// the format cannot back up.
+pub(crate) fn that_is_checked(token: &str) -> Vec<String> {
     let v = match token {
         "zip" => "crc",
         "tar+gz" => "gzip_crc",
-        // tar plano y rar delegado: solo que los tamaños se alcanzan.
+        // Plain tar and delegated rar: only that the sizes are reached.
         _ => "sizes",
     };
     vec![v.to_owned()]
 }
 
-/// A dónde se escribe: el provider y la ruta.
+/// Where to write: the provider and the path.
 ///
-/// Un tipo y no dos parámetros sueltos porque `pack` ya llevaba ocho, y los
-/// dos que van juntos son exactamente estos: el provider es el DE esa ruta.
-pub(crate) struct Destino {
-    /// El provider del destino, que puede no ser el de las fuentes.
+/// A type and not two loose parameters because `pack` already carried eight,
+/// and the two that go together are exactly these: the provider is the ONE
+/// FOR that path.
+pub(crate) struct Dest {
+    /// The destination's provider, which may not be the sources' one.
     pub(crate) provider: Arc<dyn Provider>,
-    /// El fichero que se crea.
+    /// The file being created.
     pub(crate) dest: VPath,
 }
 
-/// Cómo se empaqueta: contra qué base se nombran las entradas, en qué formato
-/// y con cuánta compresión.
-pub(crate) struct Empaquetado {
-    /// El directorio del que cuelgan los nombres guardados.
+/// How to pack: against which base the entries are named, in which format
+/// and with how much compression.
+pub(crate) struct Packed {
+    /// The directory the stored names hang off of.
     pub(crate) base: VPath,
-    /// Formato, decidido por el cliente.
+    /// Format, decided by the client.
     pub(crate) format: methods::ArchiveFormat,
-    /// Nivel 0..=9, o el del core.
+    /// Level 0..=9, or the core's own.
     pub(crate) level: Option<u8>,
 }
 
-/// Una entrada del recorrido: qué escribir y de dónde leerlo.
-struct Pieza {
+/// One entry of the walk: what to write and where to read it from.
+struct Piece {
     provider: Arc<dyn Provider>,
     path: VPath,
     entry: PackEntry,
 }
 
-/// Recorre las raíces y enumera TODO lo que va a entrar en el archivo, antes
-/// de escribir un solo byte.
+/// Walks the roots and enumerates EVERYTHING that is going into the archive,
+/// before writing a single byte.
 ///
-/// Enumerar primero cuesta un recorrido y compra tres cosas: el total de
-/// entradas para la barra (una barra sin total es una barra que no informa),
-/// el rechazo de un nombre imposible ANTES de haber creado el destino, y un
-/// orden estable.
-/// Las clases de riesgo que este daemon SABE mirar, que es lo que viaja en
-/// `ArchivePackReportResult::checked` (#250).
+/// Enumerating first costs one walk and buys three things: the total entry
+/// count for the progress bar (a bar with no total is a bar that does not
+/// inform), rejecting an impossible name BEFORE the destination has been
+/// created, and a stable order.
+/// The risk classes this daemon KNOWS how to look for, which is what travels
+/// in `ArchivePackReportResult::checked` (#250).
 ///
-/// Es una lista y no una constante suelta porque tiene que poder crecer, y
-/// porque lo que hace útil a un informe limpio es exactamente esto: sin ella,
-/// «no encontré nada» se lee como «no hay nada», y hay clases —`<`, `>`, `"`,
-/// `|`, `?`, `*`, todas ilegales en Windows— que aquí no se miran.
-const RIESGOS_COMPROBADOS: &[&str] = &["separator", "stream", "reserved", "trailing"];
+/// It is a list and not a loose constant because it has to be able to grow,
+/// and because what makes a clean report useful is exactly this: without it,
+/// "I found nothing" reads as "there is nothing", and there are classes
+/// —`<`, `>`, `"`, `|`, `?`, `*`, all illegal on Windows— that are not looked
+/// at here.
+// TODO(translation): review — this doc block seems to merge two unrelated
+// notes (one about the walk performed by `walk_sources` below, one about
+// this constant) with no blank line between them, so rustdoc attaches all of
+// it to `CHECKED_RISKS`; translated as found, structure unchanged.
+const CHECKED_RISKS: &[&str] = &["separator", "stream", "reserved", "trailing"];
 
-/// Nombres reservados de Windows, sin extensión y sin distinguir mayúsculas.
-/// No se pueden extraer ahí EN ABSOLUTO — no es que se renombren: la llamada
-/// falla, porque el nombre lo tiene tomado un dispositivo.
-const RESERVADOS_WINDOWS: &[&str] = &[
+/// Windows-reserved names, without extension and case-insensitive. They
+/// cannot be extracted there AT ALL — it is not that they get renamed: the
+/// call fails, because a device has the name taken.
+const WINDOWS_RESERVED_NAMES: &[&str] = &[
     "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8",
     "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
 ];
 
-/// Qué guarda este empaquetado que SIGNIFICA otra cosa fuera de aquí (#250).
+/// What this pack stores that MEANS something else outside here (#250).
 ///
-/// `a\b` es un separador de directorios en 7-Zip y en el Explorador; `f:ads`
-/// abre un flujo alternativo en NTFS; `CON` no se extrae en Windows en
-/// absoluto; un punto o un espacio final se los come Windows sin decirlo.
-/// Nuestro propio lector round-trippea los cuatro exactos, que es justo por lo
-/// que el test de ida y vuelta no ve ninguno.
+/// `a\b` is a directory separator in 7-Zip and in Explorer; `f:ads` opens an
+/// alternate stream in NTFS; `CON` cannot be extracted on Windows at all; a
+/// trailing dot or space gets eaten by Windows without saying so. Our own
+/// reader round-trips exactly these four, which is precisely why the
+/// round-trip test does not see any of them.
 ///
-/// **Esto AVISA, no rechaza, y su hermano de arriba sí rechaza.** Dos entradas
-/// que pliegan al mismo nombre no se empaquetan (ver el chequeo de
-/// [`enumera`]): extraídas en otra parte, una de las dos DESAPARECE. Esto es
-/// otra cosa — `a\b.txt` extraído en Linux sigue siendo `a\b.txt`, y en Windows
-/// es un `b.txt` dentro de una carpeta `a`. No se pierde nada; se coloca
-/// distinto. Rechazarlo se llevaría por delante árboles Unix legítimos para
-/// prevenir algo que ni siquiera es una pérdida.
-fn informe_de_nombres(nombres: &[Vec<u8>]) -> methods::ArchivePackReportResult {
+/// **This WARNS, it does not reject, and its sibling above DOES reject.** Two
+/// entries that fold to the same name are not packed (see the check in
+/// [`walk_sources`]): extracted somewhere else, one of the two DISAPPEARS.
+/// This is something else — `a\b.txt` extracted on Linux is still `a\b.txt`,
+/// and on Windows it is a `b.txt` inside an `a` folder. Nothing is lost; it
+/// is placed differently. Rejecting it would take down legitimate Unix trees
+/// to prevent something that is not even a loss.
+fn name_report(names: &[Vec<u8>]) -> methods::ArchivePackReportResult {
     let mut out = methods::ArchivePackReportResult {
-        entries: nombres.len() as u64,
-        // Lo que de verdad se mira, y nada más. `<`, `>`, `"`, `|`, `?` y `*`
-        // también son ilegales en Windows y NO están aquí: un informe limpio
-        // que no dijera qué miró estaría afirmando que el archivo viaja
-        // intacto a cualquier parte, que es más de lo que nadie comprobó.
-        checked: RIESGOS_COMPROBADOS
-            .iter()
-            .map(|s| (*s).to_owned())
-            .collect(),
+        entries: names.len() as u64,
+        // What is actually checked, and nothing more. `<`, `>`, `"`, `|`, `?`
+        // and `*` are also illegal on Windows and are NOT here: a clean
+        // report that did not say what it checked would be claiming the
+        // archive travels intact anywhere, which is more than anyone
+        // verified.
+        checked: CHECKED_RISKS.iter().map(|s| (*s).to_owned()).collect(),
         ..Default::default()
     };
-    for n in nombres {
-        let Some(riesgo) = riesgo_de_nombre(n) else {
+    for n in names {
+        let Some(risk) = name_risk(n) else {
             continue;
         };
         if out.risky.len() >= methods::ARCHIVE_PACK_REPORT_MAX {
@@ -205,26 +210,27 @@ fn informe_de_nombres(nombres: &[Vec<u8>]) -> methods::ArchivePackReportResult {
             break;
         }
         out.risky.push(methods::PackRiskyName {
-            path: wire_de_nombre(n),
+            path: name_to_wire(n),
             name: String::from_utf8_lossy(n).into_owned(),
-            risk: riesgo.to_owned(),
+            risk: risk.to_owned(),
         });
     }
     out
 }
 
-/// El nombre guardado en forma WIRE: percent-encoding sobre los bytes, que es
-/// lo único que conserva un nombre que no es UTF-8 (regla 1). La barra se deja
-/// tal cual: separa componentes dentro del archivo y esconderla haría ilegible
-/// justamente el nombre que hay que ir a buscar.
-fn wire_de_nombre(nombre: &[u8]) -> String {
+/// The stored name in WIRE form: percent-encoding over the bytes, which is
+/// the only thing that preserves a name that is not UTF-8 (rule 1). The slash
+/// is left as is: it separates components inside the archive, and hiding it
+/// would make unreadable exactly the name that needs to be found.
+fn name_to_wire(name: &[u8]) -> String {
     use std::fmt::Write as _;
-    let mut out = String::with_capacity(nombre.len());
-    for b in nombre {
+    let mut out = String::with_capacity(name.len());
+    for b in name {
         match b {
             b'/' | b'-' | b'_' | b'.' | b'~' => out.push(*b as char),
             b if b.is_ascii_alphanumeric() => out.push(*b as char),
-            // El `write!` a un `String` no falla; el `_` no tapa un error real.
+            // `write!` to a `String` does not fail; the `_` is not hiding a
+            // real error.
             b => {
                 let _ = write!(out, "%{b:02X}");
             }
@@ -233,160 +239,158 @@ fn wire_de_nombre(nombre: &[u8]) -> String {
     out
 }
 
-/// Qué le pasa a este nombre fuera de aquí, o `None` si viaja intacto.
+/// What happens to this name outside here, or `None` if it travels intact.
 ///
-/// UNA respuesta por nombre y en este orden: lo que rompe la EXTRACCIÓN antes
-/// que lo que la deforma. Un nombre con dos problemas se cuenta una vez — el
-/// informe es para leerlo, y dos filas del mismo fichero se leen como dos
-/// ficheros.
-fn riesgo_de_nombre(nombre: &[u8]) -> Option<&'static str> {
-    if nombre.contains(&b'\\') {
+/// ONE answer per name and in this order: what breaks EXTRACTION before what
+/// distorts it. A name with two problems is counted once — the report is
+/// meant to be read, and two rows for the same file read as two files.
+fn name_risk(name: &[u8]) -> Option<&'static str> {
+    if name.contains(&b'\\') {
         return Some("separator");
     }
-    if nombre.contains(&b':') {
+    if name.contains(&b':') {
         return Some("stream");
     }
-    for componente in nombre.split(|b| *b == b'/') {
-        // Sin la extensión: en Windows `CON.txt` está tan tomado como `CON`.
-        let base = componente
-            .split(|b| *b == b'.')
-            .next()
-            .unwrap_or(componente);
-        let base = String::from_utf8_lossy(base).to_ascii_lowercase();
-        if RESERVADOS_WINDOWS.contains(&base.as_str()) {
+    for component in name.split(|b| *b == b'/') {
+        // Without the extension: on Windows `CON.txt` is just as taken as
+        // `CON`.
+        let stem = component.split(|b| *b == b'.').next().unwrap_or(component);
+        let stem = String::from_utf8_lossy(stem).to_ascii_lowercase();
+        if WINDOWS_RESERVED_NAMES.contains(&stem.as_str()) {
             return Some("reserved");
         }
     }
-    for componente in nombre.split(|b| *b == b'/') {
-        if matches!(componente.last(), Some(b'.' | b' ')) {
+    for component in name.split(|b| *b == b'/') {
+        if matches!(component.last(), Some(b'.' | b' ')) {
             return Some("trailing");
         }
     }
     None
 }
 
-async fn enumera(
-    fuentes: Vec<(Arc<dyn Provider>, VPath)>,
+async fn walk_sources(
+    sources: Vec<(Arc<dyn Provider>, VPath)>,
     base: &VPath,
     ctx: &TaskCtx,
-) -> Result<Vec<Pieza>, Error> {
-    // Lo que este ACTOR no puede recorrer (#209, y antes #165): el gate de
-    // lectura mira la RAÍZ de la petición y nada más, así que empaquetar
-    // `$HOME` es legítimo y se llevaba por delante el directorio de estado del
-    // daemon con él — `journal.db`, `secrets.age`, `connections.toml`,
-    // `session.json`. Y un archivo es peor que una comparación: el agente lo
-    // vuelve a leer entrada por entrada por el provider de archivos, sobre un
-    // fichero que está en su propio scope. Un `fs.read` de cualquiera de esos
-    // ficheros se deniega; sin esto, `archive.pack` los blanqueaba todos.
+) -> Result<Vec<Piece>, Error> {
+    // What this ACTOR cannot walk (#209, and before that #165): the read gate
+    // looks at the REQUEST's ROOT and nothing else, so packing `$HOME` is
+    // legitimate and used to take down the daemon's state directory along
+    // with it — `journal.db`, `secrets.age`, `connections.toml`,
+    // `session.json`. And an archive is worse than a comparison: the agent
+    // reads it back entry by entry through the archive provider, over a file
+    // that is in its own scope. An `fs.read` of any of those files is denied;
+    // without this, `archive.pack` laundered them all.
     //
-    // Sale del MISMO sitio que las exclusiones de `fs.search` y `fs.compare`:
-    // dos listas de lo que un agente no puede recorrer serían dos listas que
-    // divergen.
-    let excluidas = crate::policy::walk_exclusions(&ctx.actor);
+    // Comes from the SAME place as the exclusions for `fs.search` and
+    // `fs.compare`: two lists of what an agent cannot walk would be two lists
+    // that drift apart.
+    let excluded = crate::policy::walk_exclusions(&ctx.actor);
     let mut out = Vec::new();
-    for (provider, raiz) in fuentes {
+    for (provider, root) in sources {
         if ctx.cancel.is_cancelled() {
             return Err(Error::Cancelled);
         }
-        let mut pendientes = vec![raiz];
-        while let Some(p) = pendientes.pop() {
+        let mut pending = vec![root];
+        while let Some(p) = pending.pop() {
             if ctx.cancel.is_cancelled() {
                 return Err(Error::Cancelled);
             }
-            // Se comprueba ANTES del `stat`: que la entrada exista tampoco es
-            // asunto de quien no puede recorrerla.
-            if excluidas
+            // Checked BEFORE the `stat`: whether the entry exists is not the
+            // business either of someone who cannot walk it.
+            if excluded
                 .iter()
-                .any(|raiz| crate::policy::is_under(raiz, &p))
+                .any(|root| crate::policy::is_under(root, &p))
             {
-                tracing::debug!("archive.pack: subárbol excluido para este actor");
+                tracing::debug!("archive.pack: subtree excluded for this actor");
                 continue;
             }
             let e = provider.stat(&p).await?;
-            let nombre = nombre_relativo(base, &p).ok_or(Error::InvalidPath)?;
-            // Los MISMOS topes que el índice de lectura (ADR 0018): un nombre
-            // más largo que `max_name_bytes` o una profundidad por encima de
-            // `max_depth` se OMITEN al leer, así que escribirlos produce un
-            // archivo cuyas entradas norte no vuelve a ver — el mismo agujero
-            // que el rechazo del marcador `!` cierra, por otra puerta.
-            // `split` y no un contador de bytes: son nombres de ruta, no un
-            // flujo, y la sugerencia de clippy (traerse `bytecount`) es una
-            // dependencia entera para contar barras en 4 KiB.
-            let hondura = nombre.split(|b| *b == b'/').count();
-            if nombre.len() > MAX_NOMBRE_ENTRADA || hondura > MAX_PROFUNDIDAD_ENTRADA {
-                tracing::warn!("archive.pack: una entrada no cabría en el índice de lectura");
+            let name = relative_name(base, &p).ok_or(Error::InvalidPath)?;
+            // The SAME caps as the read index (ADR 0018): a name longer than
+            // `max_name_bytes` or a depth above `max_depth` gets SKIPPED when
+            // reading, so writing them produces an archive whose entries
+            // norte never sees again — the same hole the marker `!` rejection
+            // closes, through a different door. `split` and not a byte
+            // counter: these are path names, not a stream, and clippy's
+            // suggestion (pulling in `bytecount`) is a whole dependency to
+            // count slashes in 4 KiB.
+            let depth = name.split(|b| *b == b'/').count();
+            if name.len() > MAX_ENTRY_NAME_BYTES || depth > MAX_ENTRY_DEPTH {
+                tracing::warn!("archive.pack: an entry would not fit in the read index");
                 return Err(Error::InvalidPath);
             }
             match e.kind {
                 EntryKind::Dir => {
-                    out.push(Pieza {
+                    out.push(Piece {
                         provider: Arc::clone(&provider),
                         path: p.clone(),
-                        entry: PackEntry::dir(nombre),
+                        entry: PackEntry::dir(name),
                     });
                     let mut stream = provider.list(&p).await?;
-                    while let Some(hijo) = stream.next().await {
-                        pendientes.push(hijo?.path);
+                    while let Some(child) = stream.next().await {
+                        pending.push(child?.path);
                     }
                 }
                 EntryKind::File => {
-                    let mut pe = PackEntry::file(nombre, e.size.unwrap_or(0));
+                    let mut pe = PackEntry::file(name, e.size.unwrap_or(0));
                     pe.mtime_ms = e.mtime_ms;
-                    out.push(Pieza {
+                    out.push(Piece {
                         provider: Arc::clone(&provider),
                         path: p,
                         entry: pe,
                     });
                 }
-                // Un symlink no se sigue ni se guarda como enlace: guardar el
-                // target sería copiar lo apuntado sin decirlo, y guardar el
-                // enlace pide un tipo de entrada que el escritor no tiene
-                // todavía. Se OMITE con aviso, que es lo que hace el índice de
-                // lectura con lo que no sabe representar.
+                // A symlink is neither followed nor stored as a link: storing
+                // the target would be copying what it points to without
+                // saying so, and storing the link asks for an entry type the
+                // writer does not have yet. It is SKIPPED with a warning,
+                // which is what the read index does with what it cannot
+                // represent.
                 EntryKind::Symlink | EntryKind::Other => {
-                    tracing::warn!("archive.pack: entrada omitida por su tipo");
+                    tracing::warn!("archive.pack: entry skipped for its type");
                 }
             }
         }
     }
-    // Los directorios primero dentro de cada nivel, y estable: un archivo cuyo
-    // orden depende del orden de listado del provider no es reproducible.
+    // Directories first within each level, and stable: an archive whose order
+    // depends on the provider's listing order is not reproducible.
     out.sort_by(|a, b| a.entry.name.cmp(&b.entry.name));
-    // **Dos entradas con el MISMO nombre guardado no se escriben.** Pasa con
-    // raíces que se solapan —`sources: ["/p/a", "/p/a/b"]`, que el wire acepta
-    // aunque las marcas de la TUI no lo formen— y el archivo resultante lleva
-    // la entrada dos veces, con su contenido dos veces: nuestro índice resuelve
-    // «gana la última» y otras herramientas la extraen dos veces. Ordenado
-    // como está, encontrarlo es una comparación.
+    // **Two entries with the SAME stored name are not written.** It happens
+    // with overlapping roots —`sources: ["/p/a", "/p/a/b"]`, which the wire
+    // accepts even though the TUI's marks never form it— and the resulting
+    // archive carries the entry twice, with its content twice: our index
+    // resolves it as "the last one wins" and other tools extract it twice.
+    // Sorted as it is, finding it is one comparison.
     if out.windows(2).any(|p| p[0].entry.name == p[1].entry.name) {
-        tracing::warn!("archive.pack: dos fuentes dan el mismo nombre dentro del archivo");
+        tracing::warn!("archive.pack: two sources give the same name inside the archive");
         return Err(Error::Conflict {
             conflict: norte_proto::ConflictKind::Exists,
         });
     }
-    // **Y dos que PLIEGAN al mismo nombre tampoco** (#250). El caso de arriba
-    // es que los bytes coincidan; éste es que coincidan allí donde el archivo
-    // se vaya a extraer, que es lo que un archivo no puede saber: `café.txt`
-    // en NFD y en NFC son dos ficheros en ext4 y uno en APFS, `µ` y `μ` son
-    // dos aquí y uno en NTFS, y `straße` y `strasse` son dos en casi todas
-    // partes y una en un ext4 `+F`. Extraído allí, uno de los dos desaparece
-    // sin decir nada.
+    // **And two that FOLD to the same name, neither** (#250). The case above
+    // is that the bytes match; this one is that they match wherever the
+    // archive ends up being extracted, which is what an archive cannot know:
+    // `café.txt` in NFD and in NFC are two files on ext4 and one on APFS,
+    // `µ` and `μ` are two here and one on NTFS, and `straße` and `strasse`
+    // are two almost everywhere and one on an ext4 `+F`. Extracted there, one
+    // of the two disappears without a word.
     //
-    // Se pliega con el modo MÁS ANCHO a propósito: el destino de un archivo es
-    // por definición desconocido —se manda por ahí—, así que la pregunta no es
-    // «¿colisionan en esta máquina?» sino «¿colisionan en alguna?». El precio
-    // es rechazar una pareja que aquí es legítima; el de no hacerlo es un
-    // fichero perdido en silencio en la máquina de otro, y ésa es la dirección
-    // que ADR 0005 dice no tomar.
-    let mut claves: Vec<Vec<u8>> = out
+    // It folds with the WIDEST mode on purpose: an archive's destination is
+    // by definition unknown —it gets sent elsewhere—, so the question is not
+    // "do they collide on this machine?" but "do they collide on any
+    // machine?". The price is rejecting a pair that is legitimate here; the
+    // price of not doing it is a file silently lost on someone else's
+    // machine, and that is the direction ADR 0005 says not to take.
+    let mut keys: Vec<Vec<u8>> = out
         .iter()
         .map(|p| {
             norte_encoding::name_key(&p.entry.name, norte_encoding::FoldMode::Full).into_owned()
         })
         .collect();
-    claves.sort_unstable();
-    if claves.windows(2).any(|k| k[0] == k[1]) {
-        tracing::warn!("archive.pack: dos entradas serían el mismo nombre al extraerlas");
+    keys.sort_unstable();
+    if keys.windows(2).any(|k| k[0] == k[1]) {
+        tracing::warn!("archive.pack: two entries would be the same name when extracted");
         return Err(Error::Conflict {
             conflict: norte_proto::ConflictKind::Exists,
         });
@@ -394,70 +398,73 @@ async fn enumera(
     Ok(out)
 }
 
-/// `archive.pack`: fabrica el archivo.
+/// `archive.pack`: manufactures the archive.
 ///
-/// El destino se escribe por un [`norte_vfs::ByteSink`], así que la
-/// cancelación deja el destino LIMPIO —`abort` se lleva el staging— y no un
-/// fichero a medias que parezca un archivo. La entrada del journal se emite
-/// después del `commit`, que es cuando el nodo existe de verdad.
+/// The destination is written through a [`norte_vfs::ByteSink`], so
+/// cancellation leaves the destination CLEAN —`abort` takes the staging with
+/// it— and not a half-finished file that looks like an archive. The journal
+/// entry is emitted after the `commit`, which is when the node truly exists.
 pub(crate) async fn pack(
-    fuentes: Vec<(Arc<dyn Provider>, VPath)>,
-    destino: Destino,
-    que: Empaquetado,
+    sources: Vec<(Arc<dyn Provider>, VPath)>,
+    destination: Dest,
+    spec: Packed,
     observer: Arc<dyn MutationObserver>,
-    informe: Arc<std::sync::Mutex<methods::ArchivePackReportResult>>,
+    report: Arc<std::sync::Mutex<methods::ArchivePackReportResult>>,
     ctx: &TaskCtx,
 ) -> Result<(), Error> {
-    let Destino {
-        provider: provider_destino,
+    let Dest {
+        provider: provider_dest,
         dest,
-    } = destino;
-    let Empaquetado {
+    } = destination;
+    let Packed {
         base,
         format,
         level,
-    } = que;
-    if fuentes.is_empty() {
+    } = spec;
+    if sources.is_empty() {
         return Err(Error::InvalidPath);
     }
-    // El veredicto del journal, fijado antes del primer efecto (#205).
+    // The journal's verdict, fixed before the first effect (#205).
     let observer = crate::observer::pin_for_task(observer).await?;
-    // El destino NO se sobrescribe: fabricar un archivo encima de un fichero
-    // que ya está es pérdida silenciosa, y quien llama ya sabe preguntar.
-    if provider_destino.stat(&dest).await.is_ok() {
+    // The destination is NOT overwritten: manufacturing an archive on top of
+    // a file that already exists is silent data loss, and the caller already
+    // knows how to ask.
+    if provider_dest.stat(&dest).await.is_ok() {
         return Err(Error::Conflict {
             conflict: norte_proto::ConflictKind::Exists,
         });
     }
-    let piezas = enumera(fuentes, &base, ctx).await?;
-    // El informe se calcula sobre lo que se VA a guardar y ANTES de escribir un
-    // byte (#250): así existe aunque la Task se cancele a mitad, y lo que dice
-    // sigue siendo verdad del archivo a medias — las entradas que colisionan lo
-    // hacen estén todas o solo las primeras.
+    let pieces = walk_sources(sources, &base, ctx).await?;
+    // The report is computed over what is GOING to be stored and BEFORE
+    // writing a byte (#250): that way it exists even if the Task is cancelled
+    // halfway through, and what it says stays true of the half-finished
+    // archive — the colliding entries do so whether they are all there or
+    // only the first ones.
     {
-        let nombres: Vec<Vec<u8>> = piezas.iter().map(|p| p.entry.name.clone()).collect();
-        let calculado = informe_de_nombres(&nombres);
-        *informe
+        let names: Vec<Vec<u8>> = pieces.iter().map(|p| p.entry.name.clone()).collect();
+        let computed = name_report(&names);
+        *report
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = calculado;
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = computed;
     }
-    let total_bytes: u64 = piezas.iter().map(|p| p.entry.size).sum();
+    let total_bytes: u64 = pieces.iter().map(|p| p.entry.size).sum();
     ctx.progress.update(|p| {
-        p.entries_total = Some(piezas.len() as u64);
+        p.entries_total = Some(pieces.len() as u64);
         p.bytes_total = Some(total_bytes);
     });
 
     let mut w = ArchiveWriter::new(
-        formato(format),
-        u32::from(level.unwrap_or(NIVEL_POR_DEFECTO)),
+        pack_format(format),
+        u32::from(level.unwrap_or(DEFAULT_LEVEL)),
     );
-    let mut sink = provider_destino.write(&dest).await?;
-    let mut leidos: u64 = 0;
-    let mut hechas: u64 = 0;
+    let mut sink = provider_dest.write(&dest).await?;
+    let mut bytes_read: u64 = 0;
+    let mut done: u64 = 0;
 
-    // Un cierre para no repetir el «suelta el sink sin publicar» de cada
-    // camino de salida: sin esto, un `?` en medio dejaría el staging colgando.
-    macro_rules! abortando {
+    // A closure so the "release the sink without publishing" is not repeated
+    // for every exit path: without this, a `?` in the middle would leave the
+    // staging hanging.
+    macro_rules! abort_with {
         ($e:expr) => {{
             let err = $e;
             let _ = sink.abort().await;
@@ -465,158 +472,161 @@ pub(crate) async fn pack(
         }};
     }
 
-    for pieza in piezas {
-        // El escritor va y VUELVE: `una_pieza` lo mueve al pool bloqueante
-        // para comprimir (#250). En el camino de error no vuelve, y no hace
-        // falta — cualquier error aquí aborta el archivo entero.
-        w = match una_pieza(&pieza, w, &mut *sink, &mut leidos, ctx).await {
+    for piece in pieces {
+        // The writer goes and COMES BACK: `one_piece` moves it to the
+        // blocking pool to compress (#250). On the error path it does not
+        // come back, and it does not need to — any error here aborts the
+        // whole archive.
+        w = match one_piece(&piece, w, &mut *sink, &mut bytes_read, ctx).await {
             Ok(w) => w,
-            Err(e) => abortando!(e),
+            Err(e) => abort_with!(e),
         };
-        hechas = hechas.saturating_add(1);
-        ctx.progress.update(|p| p.entries_done = hechas);
+        done = done.saturating_add(1);
+        ctx.progress.update(|p| p.entries_done = done);
     }
     if let Err(e) = w.finish() {
-        abortando!(de_pack(e));
+        abort_with!(from_pack_error(e));
     }
-    let salida = w.take();
-    if !salida.is_empty()
-        && let Err(e) = sink.write(bytes::Bytes::from(salida)).await
+    let output = w.take();
+    if !output.is_empty()
+        && let Err(e) = sink.write(bytes::Bytes::from(output)).await
     {
-        abortando!(e);
+        abort_with!(e);
     }
     sink.commit().await?;
-    // Después del commit: antes, el journal apuntaría a un nodo que todavía no
-    // existe (regla 4), y la identidad sería la del staging.
-    let node = crate::ops::identidad_de(&*provider_destino, &dest, &observer).await;
+    // After the commit: before it, the journal would point at a node that
+    // does not exist yet (rule 4), and the identity would be the staging's.
+    let node = crate::ops::identity_of(&*provider_dest, &dest, &observer).await;
     observer
         .on_mutation(&Mutation::Created { path: &dest, node }, &ctx.actor)
         .await?;
     Ok(())
 }
 
-/// UNA entrada: se abre, se le pasan los bytes del origen a trozos, y lo que
-/// el escritor va produciendo se drena al sink según sale.
+/// ONE entry: it is opened, the source's bytes are fed to it in chunks, and
+/// whatever the writer produces along the way is drained to the sink as it
+/// comes out.
 ///
-/// Aparte del bucle de [`pack`] para que ninguna de las dos pase de cien
-/// líneas, y porque es la unidad que se lee entera de un vistazo: abrir,
-/// copiar, cerrar. El dueño del sink es quien llama — un error aquí ABORTA el
-/// archivo, no se salta la entrada.
+/// Split off from [`pack`]'s loop so that neither one goes past a hundred
+/// lines, and because it is the unit that reads whole in one glance: open,
+/// copy, close. The sink's owner is the caller — an error here ABORTS the
+/// archive, it does not skip the entry.
 ///
-/// Toma el escritor por VALOR y lo devuelve (#250): comprimir es CPU, no I/O
-/// bloqueante, pero un `deflate` de nivel 9 sobre un árbol grande retiene un
-/// hilo del runtime en ráfagas largas — y los hilos del runtime son los que
-/// atienden a todos los demás clientes del daemon. Cada trozo se comprime en
-/// el pool bloqueante, que es donde ese trabajo no le quita el sitio a nadie.
-/// En el camino de error el escritor no vuelve, y no hace falta: cualquier
-/// error aquí aborta el archivo entero.
-async fn una_pieza(
-    pieza: &Pieza,
+/// Takes the writer by VALUE and returns it (#250): compressing is CPU, not
+/// blocking I/O, but a level-9 `deflate` over a large tree holds a runtime
+/// thread for long bursts — and the runtime's threads are the ones serving
+/// every other client of the daemon. Each chunk is compressed on the
+/// blocking pool, which is where that work does not take anyone else's spot.
+/// On the error path the writer does not come back, and it does not need to:
+/// any error here aborts the whole archive.
+async fn one_piece(
+    piece: &Piece,
     mut w: ArchiveWriter,
     sink: &mut dyn norte_vfs::ByteSink,
-    leidos: &mut u64,
+    bytes_read: &mut u64,
     ctx: &TaskCtx,
 ) -> Result<ArchiveWriter, Error> {
     if ctx.cancel.is_cancelled() {
         return Err(Error::Cancelled);
     }
     ctx.progress
-        .update(|p| p.current = Some(pieza.path.clone()));
-    w.begin(&pieza.entry).map_err(de_pack)?;
-    if !pieza.entry.dir {
-        let mut stream = pieza.provider.read(&pieza.path, None).await?;
-        let mut escritos: u64 = 0;
+        .update(|p| p.current = Some(piece.path.clone()));
+    w.begin(&piece.entry).map_err(from_pack_error)?;
+    if !piece.entry.dir {
+        let mut stream = piece.provider.read(&piece.path, None).await?;
+        let mut written: u64 = 0;
         while let Some(chunk) = stream.next().await {
             if ctx.cancel.is_cancelled() {
                 return Err(Error::Cancelled);
             }
             let chunk = chunk?;
-            // El tamaño se apunta ANTES de mover el trozo al pool: el progreso
-            // cuenta los bytes LEÍDOS del origen, no los comprimidos.
+            // The size is recorded BEFORE moving the chunk to the pool: the
+            // progress counts bytes READ from the source, not the compressed
+            // ones.
             let n = chunk.len() as u64;
-            escritos = escritos.saturating_add(n);
-            // Comprimir y drenar, los dos en el pool: `take` sin `data` sería
-            // un viaje de ida y vuelta por nada.
-            let (devuelto, salida, res) = crate::blocking::spawn_blocking(move || {
+            written = written.saturating_add(n);
+            // Compress and drain, both on the pool: a `take` without `data`
+            // would be a round trip for nothing.
+            let (writer, output, res) = crate::blocking::spawn_blocking(move || {
                 let res = w.data(&chunk);
-                let salida = w.take();
-                (w, salida, res)
+                let output = w.take();
+                (w, output, res)
             })
             .await
             .map_err(|_| Error::Internal { panic: true })?;
-            w = devuelto;
-            res.map_err(de_pack)?;
-            *leidos = leidos.saturating_add(n);
-            let hechos = *leidos;
-            ctx.progress.update(|p| p.bytes_done = hechos);
-            if !salida.is_empty() {
-                sink.write(bytes::Bytes::from(salida)).await?;
+            w = writer;
+            res.map_err(from_pack_error)?;
+            *bytes_read = bytes_read.saturating_add(n);
+            let bytes_so_far = *bytes_read;
+            ctx.progress.update(|p| p.bytes_done = bytes_so_far);
+            if !output.is_empty() {
+                sink.write(bytes::Bytes::from(output)).await?;
             }
         }
-        // El origen cambió entre el `stat` y la lectura. En tar eso es una
-        // cabecera que miente sobre lo que viene detrás, así que el archivo
-        // entero deja de poderse leer más allá de esa entrada: se aborta en vez
-        // de publicar algo así.
-        if escritos != pieza.entry.size {
-            tracing::warn!("archive.pack: el origen cambió de tamaño mientras se leía");
+        // The source changed between the `stat` and the read. In tar that is
+        // a header lying about what comes after, so the whole archive
+        // becomes unreadable past that entry: it is aborted instead of
+        // publishing something like that.
+        if written != piece.entry.size {
+            tracing::warn!("archive.pack: the source changed size while being read");
             return Err(Error::Conflict {
                 conflict: norte_proto::ConflictKind::TypeMismatch,
             });
         }
     }
-    // El cierre de una entrada vacía el buffer del compresor, así que también
-    // es trabajo de CPU: al pool, como el resto.
-    let (w, salida, res) = crate::blocking::spawn_blocking(move || {
+    // Closing an entry flushes the compressor's buffer, so it is also CPU
+    // work: to the pool, like the rest.
+    let (w, output, res) = crate::blocking::spawn_blocking(move || {
         let res = w.end();
-        let salida = w.take();
-        (w, salida, res)
+        let output = w.take();
+        (w, output, res)
     })
     .await
     .map_err(|_| Error::Internal { panic: true })?;
-    res.map_err(de_pack)?;
-    if !salida.is_empty() {
-        sink.write(bytes::Bytes::from(salida)).await?;
+    res.map_err(from_pack_error)?;
+    if !output.is_empty() {
+        sink.write(bytes::Bytes::from(output)).await?;
     }
     Ok(w)
 }
 
-/// Un fallo del escritor, en la taxonomía del wire.
-fn de_pack(e: norte_vfs_archive::write::PackError) -> Error {
+/// A failure from the writer, in the wire's taxonomy.
+fn from_pack_error(e: norte_vfs_archive::write::PackError) -> Error {
     use norte_vfs_archive::write::PackError as P;
     match e {
-        // Un nombre que no cabe en el formato es una petición imposible, no un
-        // fallo de I/O.
-        P::Nombre => Error::InvalidPath,
-        // NO retryable: reintentar produce exactamente el mismo fallo. Un
-        // `Estado` es un bug de este código y un `Tamano` es un origen que se
-        // movió bajo los pies.
-        P::Tamano | P::Estado | P::Io => Error::Io { retryable: false },
+        // A name that does not fit the format is an impossible request, not
+        // an I/O failure.
+        P::Name => Error::InvalidPath,
+        // NOT retryable: retrying produces exactly the same failure. An
+        // `State` is a bug in this code and a `Size` is a source that
+        // moved under our feet.
+        P::Size | P::State | P::Io => Error::Io { retryable: false },
     }
 }
 
-/// `archive.test`: lee cada entrada hasta el final y dice qué se comprobó.
+/// `archive.test`: reads each entry to the end and says what was checked.
 ///
-/// La comprobación de verdad la hace el LECTOR: el de zip verifica el CRC-32
-/// cuando una entrada se lee entera, y el de `tar.gz` la cola del gzip. Este
-/// op recorre y recoge; duplicar aquí la verificación sería tener dos
-/// opiniones sobre lo mismo.
+/// The actual checking is done by the READER: the zip one verifies the
+/// CRC-32 when an entry is read whole, and the `tar.gz` one the gzip's tail.
+/// This op walks and collects; duplicating the verification here would mean
+/// having two opinions about the same thing.
 pub(crate) async fn test_archive(
     provider: Arc<dyn Provider>,
-    raiz: VPath,
+    root: VPath,
     checked: Vec<String>,
-    informe: Arc<std::sync::Mutex<methods::ArchiveTestResult>>,
+    report: Arc<std::sync::Mutex<methods::ArchiveTestResult>>,
     ctx: &TaskCtx,
 ) -> Result<(), Error> {
     {
-        let mut i = informe
+        let mut i = report
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         i.checked = checked;
     }
-    let mut pendientes = vec![raiz];
-    let mut entradas: u64 = 0;
+    let mut pending = vec![root];
+    let mut entries: u64 = 0;
     let mut bytes: u64 = 0;
-    while let Some(dir) = pendientes.pop() {
+    while let Some(dir) = pending.pop() {
         if ctx.cancel.is_cancelled() {
             return Err(Error::Cancelled);
         }
@@ -627,36 +637,36 @@ pub(crate) async fn test_archive(
                 return Err(Error::Cancelled);
             }
             match e.kind {
-                EntryKind::Dir => pendientes.push(e.path),
+                EntryKind::Dir => pending.push(e.path),
                 EntryKind::File => {
-                    entradas = entradas.saturating_add(1);
+                    entries = entries.saturating_add(1);
                     ctx.progress.update(|p| {
-                        p.entries_done = entradas;
+                        p.entries_done = entries;
                         p.current = Some(e.path.clone());
                     });
-                    if let Err(err) = lee_entera(&*provider, &e.path, &mut bytes, ctx).await {
+                    if let Err(err) = read_whole(&*provider, &e.path, &mut bytes, ctx).await {
                         if matches!(err, Error::Cancelled) {
                             return Err(Error::Cancelled);
                         }
-                        anota(&informe, &e.path, &err);
+                        record_failure(&report, &e.path, &err);
                     }
                     ctx.progress.update(|p| p.bytes_done = bytes);
                 }
                 EntryKind::Symlink | EntryKind::Other => {
-                    entradas = entradas.saturating_add(1);
+                    entries = entries.saturating_add(1);
                 }
             }
         }
     }
-    let mut i = informe
+    let mut i = report
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    i.entries = entradas;
+    i.entries = entries;
     Ok(())
 }
 
-/// Lee una entrada entera, que es lo que dispara la verificación del lector.
-async fn lee_entera(
+/// Reads an entry whole, which is what triggers the reader's verification.
+async fn read_whole(
     provider: &dyn Provider,
     path: &VPath,
     bytes: &mut u64,
@@ -672,15 +682,19 @@ async fn lee_entera(
     Ok(())
 }
 
-/// Apunta un fallo en el informe, con el tope puesto.
-fn anota(informe: &Arc<std::sync::Mutex<methods::ArchiveTestResult>>, path: &VPath, err: &Error) {
-    let razon = match err {
+/// Records a failure in the report, with the cap in place.
+fn record_failure(
+    report: &Arc<std::sync::Mutex<methods::ArchiveTestResult>>,
+    path: &VPath,
+    err: &Error,
+) {
+    let reason = match err {
         Error::Corrupt => "crc",
         Error::Unsupported => "unsupported",
         Error::NotFound => "truncated",
         _ => "io",
     };
-    let mut i = informe
+    let mut i = report
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     if i.failed.len() >= methods::ARCHIVE_TEST_MAX_FAILURES {
@@ -688,194 +702,197 @@ fn anota(informe: &Arc<std::sync::Mutex<methods::ArchiveTestResult>>, path: &VPa
         return;
     }
     i.failed.push(methods::ArchiveTestFailure {
-        // La ruta ENTERA y en forma wire: es lo único que conserva los bytes,
-        // y este informe es el único sitio donde se nombra la entrada que
-        // falló. El `name` con pérdidas va aparte, para enseñarlo.
+        // The WHOLE path, in wire form: it is the only thing that preserves
+        // the bytes, and this report is the only place that names the entry
+        // that failed. The lossy `name` goes separately, for display.
         path: path.to_wire(),
         name: path
             .file_name()
             .map(|s| String::from_utf8_lossy(s.as_bytes()).into_owned())
             .unwrap_or_default(),
-        reason: razon.to_owned(),
+        reason: reason.to_owned(),
     });
 }
 
-/// El nombre del trozo `n` de un split: `<nombre>.001`.
-fn nombre_trozo(base: &[u8], n: u64) -> Vec<u8> {
+/// The name of piece `n` of a split: `<name>.001`.
+fn piece_name(base: &[u8], n: u64) -> Vec<u8> {
     let mut v = base.to_vec();
     v.extend_from_slice(format!(".{n:03}").as_bytes());
     v
 }
 
-/// `file.split`: parte un fichero en trozos numerados.
+/// `file.split`: splits a file into numbered pieces.
 pub(crate) async fn split(
     src: Arc<dyn Provider>,
     path: VPath,
     part_bytes: u64,
-    provider_destino: Arc<dyn Provider>,
+    provider_dest: Arc<dyn Provider>,
     dest_dir: VPath,
     observer: Arc<dyn MutationObserver>,
     ctx: &TaskCtx,
 ) -> Result<(), Error> {
     let observer = crate::observer::pin_for_task(observer).await?;
-    let (nombre, total, trozos) = mide_el_reparto(&*src, &path, part_bytes).await?;
+    let (name, total, piece_count) = measures_the_distribution(&*src, &path, part_bytes).await?;
     ctx.progress.update(|p| {
         p.bytes_total = Some(total);
-        p.entries_total = Some(trozos);
+        p.entries_total = Some(piece_count);
     });
 
-    sitio_libre(&*provider_destino, &dest_dir, &nombre, trozos).await?;
+    check_slots_free(&*provider_dest, &dest_dir, &name, piece_count).await?;
 
-    // **Sin acumular.** La primera versión juntaba `part_bytes` en un `Vec` y
-    // luego lo drenaba: pico de dos veces el tamaño del trozo, y con un
-    // `part_bytes` que el wire no acota —`u64::MAX` es un valor legal— un
-    // cliente cualquiera se llevaba el daemon por delante con un OOM. Ahora se
-    // escribe según llega y el trozo se cierra cuando se llena, así que la
-    // memoria es la de UN chunk del provider. De paso, la cancelación se mira
-    // por chunk y no por trozo: con trozos de un giga, esperar al final del
-    // trozo es no cancelar.
+    // **No accumulating.** The first version gathered `part_bytes` into a
+    // `Vec` and then drained it: a peak of twice the piece size, and with a
+    // `part_bytes` the wire does not cap —`u64::MAX` is a legal value— any
+    // client could take the daemon down with an OOM. Now it writes as it
+    // arrives and the piece closes when it fills up, so memory is that of ONE
+    // chunk from the provider. Along the way, cancellation is checked per
+    // chunk and not per piece: with gigabyte pieces, waiting for the end of
+    // the piece is not cancelling.
     let mut stream = src.read(&path, None).await?;
-    let mut hechos: u64 = 0;
-    let mut escritos: u64 = 0;
+    let mut done: u64 = 0;
+    let mut written: u64 = 0;
     let mut sink: Option<Box<dyn norte_vfs::ByteSink>> = None;
-    let mut en_curso: u64 = 0;
-    let mut destino_actual: Option<VPath> = None;
-    // Los que ya están publicados, para poder retirarlos si esto se corta:
-    // medio conjunto de trozos es indistinguible de uno entero (ver
-    // [`retira_los_trozos`]).
-    let mut publicados: Vec<VPath> = Vec::new();
+    let mut current: u64 = 0;
+    let mut current_dest: Option<VPath> = None;
+    // The ones already published, so they can be retracted if this gets cut
+    // short: half a set of pieces is indistinguishable from a whole one (see
+    // [`remove_pieces`]).
+    let mut published: Vec<VPath> = Vec::new();
 
-    macro_rules! deshaciendo {
-        ($sink:expr, $publicados:expr, $e:expr) => {{
+    macro_rules! undo_with {
+        ($sink:expr, $published:expr, $e:expr) => {{
             if let Some(s) = $sink.take() {
                 let _ = s.abort().await;
             }
-            retira_los_trozos(&*provider_destino, &$publicados, &observer, ctx).await;
+            remove_pieces(&*provider_dest, &$published, &observer, ctx).await;
             return Err($e);
         }};
     }
 
     while let Some(chunk) = stream.next().await {
         if ctx.cancel.is_cancelled() {
-            deshaciendo!(sink, publicados, Error::Cancelled);
+            undo_with!(sink, published, Error::Cancelled);
         }
         let chunk = match chunk {
             Ok(c) => c,
-            Err(e) => deshaciendo!(sink, publicados, e),
+            Err(e) => undo_with!(sink, published, e),
         };
-        let mut resto = &chunk[..];
-        while !resto.is_empty() {
+        let mut rest = &chunk[..];
+        while !rest.is_empty() {
             if sink.is_none() {
-                if hechos >= methods::FILE_SPLIT_MAX_PARTS {
-                    // El tope, contra lo que se está ESCRIBIENDO y no contra
-                    // la estimación del `stat`: un fichero que crece mientras
-                    // se lee pasaba la estimación con 800 trozos y escribía
-                    // 1200, y `.1000` no lo vuelve a juntar nadie.
-                    deshaciendo!(
+                if done >= methods::FILE_SPLIT_MAX_PARTS {
+                    // The cap, against what is being WRITTEN and not against
+                    // the `stat`'s estimate: a file that grows while it is
+                    // being read used to pass the estimate with 800 pieces
+                    // and write 1200, and nobody joins a `.1000` back
+                    // together.
+                    undo_with!(
                         sink,
-                        publicados,
+                        published,
                         Error::LimitExceeded {
                             limit: "split-parts".to_owned(),
                         }
                     );
                 }
-                let destino = dest_dir.join(
-                    norte_proto::Segment::new(nombre_trozo(&nombre, hechos + 1))
+                let dest_path = dest_dir.join(
+                    norte_proto::Segment::new(piece_name(&name, done + 1))
                         .map_err(|_| Error::InvalidPath)?,
                 );
-                sink = Some(provider_destino.write(&destino).await?);
-                destino_actual = Some(destino);
-                en_curso = 0;
+                sink = Some(provider_dest.write(&dest_path).await?);
+                current_dest = Some(dest_path);
+                current = 0;
             }
-            let cabe = usize::try_from(part_bytes - en_curso).unwrap_or(usize::MAX);
-            let corte = cabe.min(resto.len());
-            let (ahora, luego) = resto.split_at(corte);
-            let fallo = match sink.as_mut() {
-                Some(s) => s.write(bytes::Bytes::copy_from_slice(ahora)).await.err(),
+            let fits = usize::try_from(part_bytes - current).unwrap_or(usize::MAX);
+            let cut = fits.min(rest.len());
+            let (head, tail) = rest.split_at(cut);
+            let failure = match sink.as_mut() {
+                Some(s) => s.write(bytes::Bytes::copy_from_slice(head)).await.err(),
                 None => None,
             };
-            if let Some(e) = fallo {
-                deshaciendo!(sink, publicados, e);
+            if let Some(e) = failure {
+                undo_with!(sink, published, e);
             }
-            en_curso += ahora.len() as u64;
-            escritos = escritos.saturating_add(ahora.len() as u64);
-            resto = luego;
-            if en_curso == part_bytes {
-                let cerrado = cierra_trozo(
-                    &*provider_destino,
+            current += head.len() as u64;
+            written = written.saturating_add(head.len() as u64);
+            rest = tail;
+            if current == part_bytes {
+                let closed = close_piece(
+                    &*provider_dest,
                     &mut sink,
-                    destino_actual.take(),
+                    current_dest.take(),
                     &observer,
-                    &mut hechos,
-                    escritos,
+                    &mut done,
+                    written,
                     ctx,
                 )
                 .await;
-                match cerrado {
-                    Ok(Some(p)) => publicados.push(p),
+                match closed {
+                    Ok(Some(p)) => published.push(p),
                     Ok(None) => {}
-                    Err(e) => deshaciendo!(sink, publicados, e),
+                    Err(e) => undo_with!(sink, published, e),
                 }
             }
         }
-        ctx.progress.update(|p| p.bytes_done = escritos);
+        ctx.progress.update(|p| p.bytes_done = written);
     }
-    // El último, que casi nunca está lleno. Si la división fue exacta no queda
-    // ninguno abierto, y por eso NO se escribe un trozo vacío al final.
-    let cerrado = cierra_trozo(
-        &*provider_destino,
+    // The last one, which is almost never full. If the division was exact,
+    // none is left open, and that is why an empty piece is NOT written at
+    // the end.
+    let closed = close_piece(
+        &*provider_dest,
         &mut sink,
-        destino_actual.take(),
+        current_dest.take(),
         &observer,
-        &mut hechos,
-        escritos,
+        &mut done,
+        written,
         ctx,
     )
     .await;
-    match cerrado {
+    match closed {
         Ok(_) => Ok(()),
-        Err(e) => deshaciendo!(sink, publicados, e),
+        Err(e) => undo_with!(sink, published, e),
     }
 }
 
-/// Retira los trozos ya publicados de un split que se cortó.
+/// Removes the pieces already published from a split that got cut short.
 ///
-/// Cancelar o fallar a mitad deja un conjunto que PARECE completo, y ésa es la
-/// trampa que este op existe para no tender: los trozos escritos son todos del
-/// tamaño pedido, no hay hueco, y juntar los tres primeros de diez da un
-/// fichero corto que pasa todos los guardas. Un árbol copiado a medias se ve a
-/// simple vista; medio conjunto de trozos, no.
+/// Cancelling or failing halfway leaves a set that LOOKS complete, and that
+/// is the trap this op exists not to lay: the pieces written are all of the
+/// requested size, there is no gap, and joining the first three of ten gives
+/// a short file that passes every guard. A tree copied halfway is visible at
+/// a glance; half a set of pieces is not.
 ///
-/// Cada retirada se anota: el journal cuenta lo que hay, no lo que hubo. Lo
-/// que no se pueda retirar se dice en el log y no se reintenta — este camino
-/// ya está saliendo por un error.
-async fn retira_los_trozos(
-    provider_destino: &dyn Provider,
-    publicados: &[VPath],
+/// Every removal is recorded: the journal counts what is there, not what
+/// there used to be. What cannot be removed is said in the log and not
+/// retried — this path is already leaving because of an error.
+async fn remove_pieces(
+    provider_dest: &dyn Provider,
+    published: &[VPath],
     observer: &Arc<dyn MutationObserver>,
     ctx: &TaskCtx,
 ) {
-    for p in publicados.iter().rev() {
-        match provider_destino.remove(p).await {
+    for p in published.iter().rev() {
+        match provider_dest.remove(p).await {
             Ok(()) => {
                 let _ = observer
                     .on_mutation(&Mutation::Removed(p), &ctx.actor)
                     .await;
             }
             Err(e) => {
-                tracing::warn!(error = %e, "file.split: un trozo a medias no se pudo retirar");
+                tracing::warn!(error = %e, "file.split: a half-finished piece could not be removed");
             }
         }
     }
 }
 
-/// El nombre base, el tamaño y CUÁNTOS trozos van a salir — o por qué no.
+/// The base name, the size and HOW MANY pieces are going to come out — or why
+/// not.
 ///
-/// Todo lo que se puede saber antes de escribir un byte, junto: el trozo no es
-/// ridículo, el origen es un fichero, y el conjunto cabe en la convención de
-/// tres dígitos. Descubrir lo último en el trozo 1000 dejaría un conjunto que
-/// nadie puede volver a juntar.
-pub(crate) async fn mide_el_reparto(
+/// Everything knowable before writing a byte, together: the piece is not
+/// ridiculous, the source is a file, and the set fits the three-digit
+/// convention. Finding out the last one at piece 1000 would leave a set
+/// nobody can join back together.
+pub(crate) async fn measures_the_distribution(
     src: &dyn Provider,
     path: &VPath,
     part_bytes: u64,
@@ -888,35 +905,34 @@ pub(crate) async fn mide_el_reparto(
         return Err(Error::InvalidPath);
     }
     let total = e.size.unwrap_or(0);
-    let trozos = total.div_ceil(part_bytes).max(1);
-    if trozos > methods::FILE_SPLIT_MAX_PARTS {
+    let piece_count = total.div_ceil(part_bytes).max(1);
+    if piece_count > methods::FILE_SPLIT_MAX_PARTS {
         return Err(Error::LimitExceeded {
             limit: "split-parts".to_owned(),
         });
     }
-    let nombre = path
+    let name = path
         .file_name()
         .map(|s| s.as_bytes().to_vec())
         .ok_or(Error::InvalidPath)?;
-    Ok((nombre, total, trozos))
+    Ok((name, total, piece_count))
 }
 
-/// Ningún trozo del conjunto puede existir ya.
+/// No piece of the set may already exist.
 ///
-/// Se comprueba ANTES de escribir el primero: descubrirlo en el cuarto deja
-/// tres trozos nuevos mezclados con los rancios de una tanda anterior, y ese
-/// conjunto se junta sin que nada chirríe.
-async fn sitio_libre(
-    provider_destino: &dyn Provider,
+/// Checked BEFORE writing the first one: finding out at the fourth leaves
+/// three new pieces mixed in with the stale ones from an earlier batch, and
+/// that set joins back together without anything creaking.
+async fn check_slots_free(
+    provider_dest: &dyn Provider,
     dest_dir: &VPath,
-    nombre: &[u8],
-    trozos: u64,
+    name: &[u8],
+    piece_count: u64,
 ) -> Result<(), Error> {
-    for i in 1..=trozos {
-        let p = dest_dir.join(
-            norte_proto::Segment::new(nombre_trozo(nombre, i)).map_err(|_| Error::InvalidPath)?,
-        );
-        if provider_destino.stat(&p).await.is_ok() {
+    for i in 1..=piece_count {
+        let p = dest_dir
+            .join(norte_proto::Segment::new(piece_name(name, i)).map_err(|_| Error::InvalidPath)?);
+        if provider_dest.stat(&p).await.is_ok() {
             return Err(Error::Conflict {
                 conflict: norte_proto::ConflictKind::Exists,
             });
@@ -925,53 +941,48 @@ async fn sitio_libre(
     Ok(())
 }
 
-/// Publica el trozo abierto —si lo hay— y lo anota en el journal.
+/// Publishes the open piece —if there is one— and records it in the journal.
 ///
-/// El `Created` va DESPUÉS del commit, que es cuando el nodo existe (regla 4).
-async fn cierra_trozo(
+/// The `Created` goes AFTER the commit, which is when the node exists (rule
+/// 4).
+async fn close_piece(
     provider: &dyn norte_vfs::Provider,
     sink: &mut Option<Box<dyn norte_vfs::ByteSink>>,
-    destino: Option<VPath>,
+    dest: Option<VPath>,
     observer: &Arc<dyn MutationObserver>,
-    hechos: &mut u64,
-    escritos: u64,
+    done: &mut u64,
+    written: u64,
     ctx: &TaskCtx,
 ) -> Result<Option<VPath>, Error> {
-    let (Some(s), Some(destino)) = (sink.take(), destino) else {
+    let (Some(s), Some(dest)) = (sink.take(), dest) else {
         return Ok(None);
     };
     s.commit().await?;
-    let node = crate::ops::identidad_de(provider, &destino, observer).await;
+    let node = crate::ops::identity_of(provider, &dest, observer).await;
     observer
-        .on_mutation(
-            &Mutation::Created {
-                path: &destino,
-                node,
-            },
-            &ctx.actor,
-        )
+        .on_mutation(&Mutation::Created { path: &dest, node }, &ctx.actor)
         .await?;
-    *hechos += 1;
-    let n = *hechos;
+    *done += 1;
+    let n = *done;
     ctx.progress.update(|p| {
         p.entries_done = n;
-        p.bytes_done = escritos;
-        p.current = Some(destino.clone());
+        p.bytes_done = written;
+        p.current = Some(dest.clone());
     });
-    Ok(Some(destino))
+    Ok(Some(dest))
 }
 
-/// ¿Hay algún trozo numerado POR ENCIMA de `hasta`?
+/// Is there any piece numbered ABOVE `through`?
 ///
-/// Es la comprobación del hueco, y se hace listando: derivar los nombres de
-/// uno en uno hasta 999 serían 999 `stat` contra un provider remoto, y parar
-/// antes es justo el bug. El nombre se compara en BYTES contra
-/// `<base>.NNN` — nada se decodifica (regla 1).
-async fn hay_trozos_por_encima(
+/// This is the gap check, and it is done by listing: deriving the names one
+/// by one up to 999 would be 999 `stat`s against a remote provider, and
+/// stopping earlier is exactly the bug. The name is compared in BYTES against
+/// `<base>.NNN` — nothing gets decoded (rule 1).
+async fn has_pieces_above(
     src: &dyn Provider,
     dir: &VPath,
     base: &[u8],
-    hasta: u64,
+    through: u64,
     ctx: &TaskCtx,
 ) -> Result<bool, Error> {
     let mut stream = src.list(dir).await?;
@@ -980,109 +991,111 @@ async fn hay_trozos_por_encima(
             return Err(Error::Cancelled);
         }
         let e = e?;
-        let Some(nombre) = e.path.file_name().map(|s| s.as_bytes().to_vec()) else {
+        let Some(name) = e.path.file_name().map(|s| s.as_bytes().to_vec()) else {
             continue;
         };
-        // `<base>.NNN` y nada más: `x.iso.001` cuenta, `x.iso.001.bak` no.
-        let Some(cola) = nombre
+        // `<base>.NNN` and nothing else: `x.iso.001` counts, `x.iso.001.bak`
+        // does not.
+        let Some(tail) = name
             .strip_prefix(base)
             .and_then(|c| c.strip_prefix(b"."))
             .filter(|c| c.len() == 3 && c.iter().all(u8::is_ascii_digit))
         else {
             continue;
         };
-        let n: u64 = std::str::from_utf8(cola)
+        let n: u64 = std::str::from_utf8(tail)
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(0);
-        if n > hasta {
-            tracing::warn!("file.combine: falta un trozo intermedio");
+        if n > through {
+            tracing::warn!("file.combine: an intermediate piece is missing");
             return Ok(true);
         }
     }
     Ok(false)
 }
 
-/// `file.combine`: junta los trozos de un split.
+/// `file.combine`: joins the pieces of a split back together.
 ///
-/// Los trozos se enumeran y se MIDEN antes de crear el destino: así un hueco
-/// —o un trozo intermedio más corto que el primero, que es un trozo perdido—
-/// se rechaza sin haber escrito nada. Un fichero mal unido es un fichero
-/// corrupto con buena pinta, y eso es peor que un error.
+/// The pieces are enumerated and MEASURED before creating the destination:
+/// that way a gap —or an intermediate piece shorter than the first, which is
+/// a lost piece— is rejected without having written anything. A badly joined
+/// file is a corrupt file that looks fine, and that is worse than an error.
 pub(crate) async fn combine(
     src: Arc<dyn Provider>,
     first: VPath,
-    provider_destino: Arc<dyn Provider>,
+    provider_dest: Arc<dyn Provider>,
     dest: VPath,
     observer: Arc<dyn MutationObserver>,
     ctx: &TaskCtx,
 ) -> Result<(), Error> {
     let observer = crate::observer::pin_for_task(observer).await?;
-    let nombre = first
+    let name = first
         .file_name()
         .map(|s| s.as_bytes().to_vec())
         .ok_or(Error::InvalidPath)?;
     // `x.iso.001` → base `x.iso`.
-    let base = nombre
+    let base = name
         .len()
         .checked_sub(4)
-        .filter(|n| nombre[*n] == b'.' && nombre[n + 1..].iter().all(u8::is_ascii_digit))
-        .map(|n| nombre[..n].to_vec())
+        .filter(|n| name[*n] == b'.' && name[n + 1..].iter().all(u8::is_ascii_digit))
+        .map(|n| name[..n].to_vec())
         .ok_or(Error::InvalidPath)?;
     let dir = first.parent().ok_or(Error::InvalidPath)?;
-    let trozos = enumera_trozos(&*src, &dir, &base, ctx).await?;
-    let total: u64 = trozos.iter().map(|(_, s)| *s).sum();
+    let pieces = list_pieces(&*src, &dir, &base, ctx).await?;
+    let total: u64 = pieces.iter().map(|(_, s)| *s).sum();
     ctx.progress.update(|p| {
         p.bytes_total = Some(total);
-        p.entries_total = Some(trozos.len() as u64);
+        p.entries_total = Some(pieces.len() as u64);
     });
-    if provider_destino.stat(&dest).await.is_ok() {
+    if provider_dest.stat(&dest).await.is_ok() {
         return Err(Error::Conflict {
             conflict: norte_proto::ConflictKind::Exists,
         });
     }
-    escribe_juntos(&*src, trozos, &*provider_destino, &dest, ctx).await?;
-    let node = crate::ops::identidad_de(&*provider_destino, &dest, &observer).await;
+    write_combined(&*src, pieces, &*provider_dest, &dest, ctx).await?;
+    let node = crate::ops::identity_of(&*provider_dest, &dest, &observer).await;
     observer
         .on_mutation(&Mutation::Created { path: &dest, node }, &ctx.actor)
         .await?;
     Ok(())
 }
 
-/// Los trozos del conjunto, en orden y con su tamaño — y todas las razones por
-/// las que un conjunto NO se une.
+/// The set's pieces, in order and with their size — and every reason a set
+/// does NOT join back together.
 ///
-/// Aparte de [`combine`] para que ninguna de las dos pase de cien líneas, y
-/// porque lo que hay aquí es una sola pregunta con tres formas de contestar
-/// que no: falta un trozo, sobra un trozo, o uno de en medio está a medias.
-async fn enumera_trozos(
+/// Split off from [`combine`] so that neither one goes past a hundred lines,
+/// and because what is here is a single question with three ways to answer
+/// no: a piece is missing, a piece is extra, or one in the middle is
+/// half-finished.
+async fn list_pieces(
     src: &dyn Provider,
     dir: &VPath,
     base: &[u8],
     ctx: &TaskCtx,
 ) -> Result<Vec<(VPath, u64)>, Error> {
-    let mut trozos: Vec<(VPath, u64)> = Vec::new();
+    let mut pieces: Vec<(VPath, u64)> = Vec::new();
     let mut n = 1_u64;
     loop {
-        let p = dir.join(
-            norte_proto::Segment::new(nombre_trozo(base, n)).map_err(|_| Error::InvalidPath)?,
-        );
+        let p = dir
+            .join(norte_proto::Segment::new(piece_name(base, n)).map_err(|_| Error::InvalidPath)?);
         match src.stat(&p).await {
             Ok(e) if e.kind == EntryKind::File => {
-                trozos.push((p, e.size.unwrap_or(0)));
+                pieces.push((p, e.size.unwrap_or(0)));
                 n += 1;
             }
             _ => break,
         }
-        // Pasado el tope se REHÚSA, no se corta. Cortar aquí unía los 999
-        // primeros de un conjunto de 1200 —de 7-Zip, por ejemplo, que numera
-        // hasta `.1000`— y publicaba un fichero corto que pasa todos los
-        // guardas: no hay hueco y todos los trozos recogidos miden lo mismo.
+        // Past the cap it is REFUSED, not cut short. Cutting here used to
+        // join the first 999 of a set of 1200 —from 7-Zip, for example,
+        // which numbers up to `.1000`— and publish a short file that passes
+        // every guard: there is no gap and every piece collected is the same
+        // size.
         if n > methods::FILE_SPLIT_MAX_PARTS {
-            let siguiente = dir.join(
-                norte_proto::Segment::new(nombre_trozo(base, n)).map_err(|_| Error::InvalidPath)?,
+            let next = dir.join(
+                norte_proto::Segment::new(piece_name(base, n)).map_err(|_| Error::InvalidPath)?,
             );
-            if src.stat(&siguiente).await.is_ok() {
+            if src.stat(&next).await.is_ok() {
                 return Err(Error::LimitExceeded {
                     limit: "split-parts".to_owned(),
                 });
@@ -1090,45 +1103,45 @@ async fn enumera_trozos(
             break;
         }
     }
-    if trozos.is_empty() {
+    if pieces.is_empty() {
         return Err(Error::NotFound);
     }
-    // **Un HUECO no se une a través, y encontrarlo pide MIRAR.** El paseo de
-    // arriba se para en el primer número que falta, así que un conjunto
-    // `.001 .003 .004` se veía como uno de un solo trozo y se unía: la task
-    // decía `Completed`, el journal anotaba un `Created`, y en disco quedaba
-    // el 20 % de una ISO que monta como imagen corrupta.
-    if hay_trozos_por_encima(src, dir, base, trozos.len() as u64, ctx).await? {
+    // **A GAP does not join across, and finding it takes LOOKING.** The walk
+    // above stops at the first missing number, so a set `.001 .003 .004`
+    // used to look like a single-piece one and would join: the task said
+    // `Completed`, the journal recorded a `Created`, and on disk was left
+    // 20% of an ISO that mounts as a corrupt image.
+    if has_pieces_above(src, dir, base, pieces.len() as u64, ctx).await? {
         return Err(Error::Conflict {
             conflict: norte_proto::ConflictKind::TypeMismatch,
         });
     }
-    // Todos menos el último miden lo mismo que el primero. Un intermedio más
-    // corto es un trozo que se copió a medias, y unir a través de él da un
-    // fichero que parece entero.
-    let primero = trozos[0].1;
-    if trozos[..trozos.len() - 1]
+    // All but the last measure the same as the first. A shorter intermediate
+    // one is a piece that was copied halfway, and joining across it gives a
+    // file that looks whole.
+    let first_size = pieces[0].1;
+    if pieces[..pieces.len() - 1]
         .iter()
-        .any(|(_, s)| *s != primero)
+        .any(|(_, s)| *s != first_size)
     {
         return Err(Error::Conflict {
             conflict: norte_proto::ConflictKind::TypeMismatch,
         });
     }
-    Ok(trozos)
+    Ok(pieces)
 }
 
-/// Escribe el destino a partir de los trozos, en orden.
-async fn escribe_juntos(
+/// Writes the destination from the pieces, in order.
+async fn write_combined(
     src: &dyn Provider,
-    trozos: Vec<(VPath, u64)>,
-    provider_destino: &dyn Provider,
+    pieces: Vec<(VPath, u64)>,
+    provider_dest: &dyn Provider,
     dest: &VPath,
     ctx: &TaskCtx,
 ) -> Result<(), Error> {
-    let mut sink = provider_destino.write(dest).await?;
-    let mut escritos: u64 = 0;
-    for (i, (p, _)) in trozos.iter().enumerate() {
+    let mut sink = provider_dest.write(dest).await?;
+    let mut written: u64 = 0;
+    for (i, (p, _)) in pieces.iter().enumerate() {
         if ctx.cancel.is_cancelled() {
             let _ = sink.abort().await;
             return Err(Error::Cancelled);
@@ -1142,8 +1155,8 @@ async fn escribe_juntos(
             }
         };
         while let Some(chunk) = stream.next().await {
-            // Por CHUNK: un trozo de 700 MB no puede ser un punto en el que
-            // cancelar no hace nada durante medio minuto.
+            // Per CHUNK: a 700 MB piece cannot be a point where cancelling
+            // does nothing for half a minute.
             if ctx.cancel.is_cancelled() {
                 let _ = sink.abort().await;
                 return Err(Error::Cancelled);
@@ -1155,12 +1168,12 @@ async fn escribe_juntos(
                     return Err(e);
                 }
             };
-            escritos = escritos.saturating_add(chunk.len() as u64);
+            written = written.saturating_add(chunk.len() as u64);
             if let Err(e) = sink.write(chunk).await {
                 let _ = sink.abort().await;
                 return Err(e);
             }
-            ctx.progress.update(|q| q.bytes_done = escritos);
+            ctx.progress.update(|q| q.bytes_done = written);
         }
         ctx.progress.update(|q| q.entries_done = i as u64 + 1);
     }
@@ -1173,211 +1186,212 @@ mod tests {
     use super::*;
 
     fn vp(w: &str) -> VPath {
-        VPath::parse(w).expect("wire de test")
+        VPath::parse(w).expect("test wire")
     }
 
-    /// El informe NO habla de colisiones por plegado, y no es un olvido: esas
-    /// **no se empaquetan** — las rechaza `enumera`, y hay un test del corpus
-    /// que lo fija (`dos_entradas_que_pliegan_al_mismo_nombre_no_se_empaquetan`,
-    /// en `tests/engine_pack.rs`). Un archivo que EXISTE no puede llevarlas
-    /// dentro, así que una lista para ellas jamás traería nada, y una lista que
-    /// nunca trae nada se lee como «no hay».
+    /// The report does NOT talk about folding collisions, and it is not an
+    /// oversight: those **are not packed** — `walk_sources` rejects them, and
+    /// there is a corpus test that pins it down
+    /// (`dos_entradas_que_pliegan_al_mismo_nombre_no_se_empaquetan`, in
+    /// `tests/engine_pack.rs`). An archive that EXISTS cannot carry them
+    /// inside, so a list for them would never bring anything, and a list that
+    /// never brings anything reads as "there is none".
     #[test]
-    fn lo_que_no_es_un_riesgo_no_se_reporta() {
-        let r = informe_de_nombres(&[
+    fn what_is_not_a_risk_is_not_reported() {
+        let r = name_report(&[
             b"a.txt".to_vec(),
             b"b.txt".to_vec(),
             b"src/main.rs".to_vec(),
-            // Estas dos ni llegarían aquí en un empaquetado de verdad, y aun
-            // así el informe calla: no es su pregunta.
+            // These two would not even get here in a real pack, and the
+            // report stays quiet about them anyway: it is not its question.
             b"Makefile".to_vec(),
             b"makefile".to_vec(),
         ]);
         assert!(r.risky.is_empty());
-        assert_eq!(
-            r.entries, 5,
-            "vacío es una AFIRMACIÓN: se miraron las cinco"
-        );
+        assert_eq!(r.entries, 5, "empty is a CLAIM: all five were looked at");
         assert!(!r.truncated);
     }
 
-    /// La forma wire del nombre guardado conserva los BYTES (regla 1), que es
-    /// lo único por lo que ese codec existe: `name` trae el `U+FFFD` de
-    /// pintarlo y `path` es el único del que se recupera el nombre.
+    /// The wire form of the stored name preserves the BYTES (rule 1), which
+    /// is the only reason that codec exists: `name` carries the `U+FFFD` from
+    /// displaying it and `path` is the only one the name is recovered from.
     #[test]
-    fn el_nombre_guardado_viaja_por_sus_bytes() {
-        let r = informe_de_nombres(&[b"malo\xff\\x.txt".to_vec()]);
+    fn the_stored_name_travels_by_its_bytes() {
+        let r = name_report(&[b"malo\xff\\x.txt".to_vec()]);
         assert_eq!(r.risky.len(), 1);
         assert_eq!(
             r.risky[0].path, "malo%FF%5Cx.txt",
-            "el byte que no es texto sale como %XX, y la barra invertida también"
+            "the byte that is not text comes out as %XX, and so does the backslash"
         );
         assert_eq!(
             r.risky[0].name, "malo\u{fffd}\\x.txt",
-            "y el de PINTAR es el de siempre, con su pérdida"
+            "and the DISPLAY one is the usual one, with its loss"
         );
-        // La barra separa componentes y se deja legible; el resto va escapado,
-        // así que sigue siendo inequívoca.
-        let hondo = informe_de_nombres(&[b"dir/CON".to_vec()]);
-        assert_eq!(hondo.risky[0].path, "dir/CON");
-        // Y el `%` se escapa: sin eso el codec no sería inyectivo y dos
-        // nombres distintos podrían viajar iguales.
-        let porciento = informe_de_nombres(&[b"100%\\x".to_vec()]);
-        assert_eq!(porciento.risky[0].path, "100%25%5Cx");
+        // The slash separates components and is left readable; the rest is
+        // escaped, so it stays unambiguous.
+        let deep = name_report(&[b"dir/CON".to_vec()]);
+        assert_eq!(deep.risky[0].path, "dir/CON");
+        // And `%` gets escaped: without that the codec would not be
+        // injective and two different names could travel identically.
+        let percent = name_report(&[b"100%\\x".to_vec()]);
+        assert_eq!(percent.risky[0].path, "100%25%5Cx");
     }
 
-    /// El informe DICE qué clases miró. Sin eso, uno limpio se leería como «el
-    /// archivo viaja intacto a cualquier parte», que es más de lo que se ha
-    /// comprobado: `<`, `>`, `"`, `|`, `?` y `*` también son ilegales en
-    /// Windows y aquí no se miran.
+    /// The report SAYS which classes it looked at. Without that, a clean one
+    /// would read as "the archive travels intact anywhere", which is more
+    /// than has been verified: `<`, `>`, `"`, `|`, `?` and `*` are also
+    /// illegal on Windows and are not looked at here.
     #[test]
-    fn el_informe_declara_lo_que_miro() {
-        let r = informe_de_nombres(&[b"limpio.txt".to_vec()]);
+    fn the_report_declares_what_it_checked() {
+        let r = name_report(&[b"limpio.txt".to_vec()]);
         assert_eq!(
             r.checked,
             vec!["separator", "stream", "reserved", "trailing"]
         );
         assert!(r.risky.is_empty());
-        let con_ilegal_no_mirado = informe_de_nombres(&[b"pre<post.txt".to_vec()]);
+        let with_unchecked_illegal = name_report(&[b"pre<post.txt".to_vec()]);
         assert!(
-            con_ilegal_no_mirado.risky.is_empty(),
-            "hoy no se mira, y por eso `checked` no lo nombra"
+            with_unchecked_illegal.risky.is_empty(),
+            "today it is not checked, and that is why `checked` does not name it"
         );
     }
 
-    /// Los nombres que significan otra cosa fuera, uno por clase.
+    /// The names that mean something else outside, one per class.
     #[test]
-    fn los_nombres_que_significan_otra_cosa_fuera() {
-        let r = informe_de_nombres(&[
+    fn names_that_mean_something_else_outside() {
+        let r = name_report(&[
             b"a\\b.txt".to_vec(),
             b"f:ads".to_vec(),
             b"CON".to_vec(),
-            b"nombre.".to_vec(),
-            b"otro ".to_vec(),
+            b"name.".to_vec(),
+            b"other ".to_vec(),
             b"normal.txt".to_vec(),
         ]);
-        let por_riesgo = |cual: &str| -> Vec<&str> {
+        let by_risk = |which: &str| -> Vec<&str> {
             r.risky
                 .iter()
-                .filter(|x| x.risk == cual)
+                .filter(|x| x.risk == which)
                 .map(|x| x.name.as_str())
                 .collect()
         };
-        assert_eq!(por_riesgo("separator"), vec!["a\\b.txt"]);
-        assert_eq!(por_riesgo("stream"), vec!["f:ads"]);
-        assert_eq!(por_riesgo("reserved"), vec!["CON"]);
-        assert_eq!(por_riesgo("trailing").len(), 2, "el punto y el espacio");
+        assert_eq!(by_risk("separator"), vec!["a\\b.txt"]);
+        assert_eq!(by_risk("stream"), vec!["f:ads"]);
+        assert_eq!(by_risk("reserved"), vec!["CON"]);
+        assert_eq!(by_risk("trailing").len(), 2, "the dot and the space");
         assert!(
             !r.risky.iter().any(|x| x.name == "normal.txt"),
-            "un nombre corriente no entra"
+            "an ordinary name does not go in"
         );
     }
 
-    /// Un nombre reservado lo es POR COMPONENTE y con extensión: `dir/CON.txt`
-    /// no se puede extraer en Windows igual que `CON`.
+    /// A reserved name is one PER COMPONENT and with the extension:
+    /// `dir/CON.txt` cannot be extracted on Windows any more than `CON` can.
     #[test]
-    fn lo_reservado_se_mira_por_componente_y_sin_extension() {
-        let r = informe_de_nombres(&[
+    fn reserved_is_checked_per_component_and_without_extension() {
+        let r = name_report(&[
             b"dir/con.txt".to_vec(),
             b"dir/COM1".to_vec(),
-            b"controlador.rs".to_vec(),
-            b"dir/NULO.txt".to_vec(),
+            b"driver.rs".to_vec(),
+            b"dir/NULLS.txt".to_vec(),
         ]);
-        let nombres: Vec<&str> = r
+        let names: Vec<&str> = r
             .risky
             .iter()
             .filter(|x| x.risk == "reserved")
             .map(|x| x.name.as_str())
             .collect();
         assert_eq!(
-            nombres,
+            names,
             vec!["dir/con.txt", "dir/COM1"],
-            "en el ORDEN en que se empaquetaron, que es como se encuentran"
+            "in the ORDER they were packed, which is how they are found"
         );
     }
 
-    /// Los topes no mienten sobre lo que dejaron fuera.
+    /// The caps do not lie about what they left out.
     #[test]
-    fn un_informe_recortado_lo_dice() {
-        let muchos: Vec<Vec<u8>> = (0..methods::ARCHIVE_PACK_REPORT_MAX + 5)
+    fn a_truncated_report_says_so() {
+        let many: Vec<Vec<u8>> = (0..methods::ARCHIVE_PACK_REPORT_MAX + 5)
             .map(|i| format!("d{i}/a\\b.txt").into_bytes())
             .collect();
-        let r = informe_de_nombres(&muchos);
+        let r = name_report(&many);
         assert_eq!(r.risky.len(), methods::ARCHIVE_PACK_REPORT_MAX);
-        assert!(r.truncated, "y lo DICE");
+        assert!(r.truncated, "and it SAYS so");
         assert_eq!(
             r.entries,
-            muchos.len() as u64,
-            "el recorte es de la lista, no de lo comprobado"
+            many.len() as u64,
+            "the truncation is of the list, not of what was checked"
         );
     }
 
-    /// El nombre guardado sale de la BASE, y una ruta que no cuelga de ella no
-    /// tiene nombre: inventarle uno es meter en el archivo algo que se
-    /// desempaqueta donde nadie espera.
+    /// The stored name comes from the BASE, and a path that does not hang off
+    /// it has no name: making one up means putting into the archive something
+    /// that unpacks where nobody expects it.
     #[test]
-    fn el_nombre_guardado_es_relativo_a_la_base() {
+    fn the_stored_name_is_relative_to_the_base() {
         let base = vp("file:///proj");
         assert_eq!(
-            nombre_relativo(&base, &vp("file:///proj/src/main.rs")),
+            relative_name(&base, &vp("file:///proj/src/main.rs")),
             Some(b"src/main.rs".to_vec())
         );
         assert_eq!(
-            nombre_relativo(&base, &vp("file:///proj/LEEME")),
+            relative_name(&base, &vp("file:///proj/LEEME")),
             Some(b"LEEME".to_vec())
         );
-        assert_eq!(nombre_relativo(&base, &vp("file:///otro/x")), None);
-        assert_eq!(nombre_relativo(&base, &base), None, "la base no es entrada");
+        assert_eq!(relative_name(&base, &vp("file:///other/x")), None);
         assert_eq!(
-            nombre_relativo(&base, &vp("mem:///proj/x")),
+            relative_name(&base, &base),
             None,
-            "ni de otro provider"
+            "the base is not an entry"
         );
-    }
-
-    /// El marcador `!` no puede ser el nombre de una entrada: el índice de
-    /// lectura omite ese componente, así que escribirlo produce algo que norte
-    /// no puede volver a nombrar.
-    #[test]
-    fn el_marcador_no_puede_ser_una_entrada() {
-        let base = vp("file:///proj");
-        let con_marcador = base.join(norte_proto::Segment::new(b"!".to_vec()).expect("seg"));
-        assert_eq!(nombre_relativo(&base, &con_marcador), None);
-    }
-
-    /// Lo que se comprueba depende del formato, y el informe lo dice: decir
-    /// «pasa» sobre un tar plano sería afirmar una integridad que el formato
-    /// no tiene con qué sostener.
-    #[test]
-    fn cada_formato_dice_que_comprueba() {
-        assert_eq!(que_se_comprueba("zip"), vec!["crc".to_owned()]);
-        assert_eq!(que_se_comprueba("tar+gz"), vec!["gzip_crc".to_owned()]);
-        assert_eq!(que_se_comprueba("tar"), vec!["sizes".to_owned()]);
-        assert_eq!(que_se_comprueba("rar"), vec!["sizes".to_owned()]);
-    }
-
-    /// El formato del contenedor sale de su nombre, con los alias que la gente
-    /// escribe: `.tgz` es `tar+gz`, y la caja da igual.
-    #[test]
-    fn el_formato_del_contenedor_sale_del_nombre() {
-        assert_eq!(formato_de_nombre(b"a.zip"), Some("zip"));
-        assert_eq!(formato_de_nombre(b"a.TGZ"), Some("tar+gz"));
-        assert_eq!(formato_de_nombre(b"a.tar.gz"), Some("tar+gz"));
-        assert_eq!(formato_de_nombre(b"a.tar"), Some("tar"));
         assert_eq!(
-            formato_de_nombre(b"a.rar"),
-            Some("rar"),
-            "leerlo sí se sabe"
+            relative_name(&base, &vp("mem:///proj/x")),
+            None,
+            "nor from another provider"
         );
-        assert_eq!(formato_de_nombre(b"leeme"), None);
     }
 
-    /// Los trozos se numeran a tres dígitos desde el 001, que es la convención
-    /// que tienen los usuarios de estas teclas.
+    /// The `!` marker cannot be an entry's name: the read index skips that
+    /// component, so writing it produces something norte cannot name again.
     #[test]
-    fn los_trozos_se_numeran_como_manda_la_convencion() {
-        assert_eq!(nombre_trozo(b"g.iso", 1), b"g.iso.001".to_vec());
-        assert_eq!(nombre_trozo(b"g.iso", 42), b"g.iso.042".to_vec());
-        assert_eq!(nombre_trozo(b"g.iso", 999), b"g.iso.999".to_vec());
+    fn the_marker_cannot_be_an_entry() {
+        let base = vp("file:///proj");
+        let with_marker = base.join(norte_proto::Segment::new(b"!".to_vec()).expect("seg"));
+        assert_eq!(relative_name(&base, &with_marker), None);
+    }
+
+    /// What is checked depends on the format, and the report says so: saying
+    /// "passes" about a plain tar would be claiming an integrity the format
+    /// has nothing to back it up with.
+    #[test]
+    fn each_format_says_what_it_checks() {
+        assert_eq!(that_is_checked("zip"), vec!["crc".to_owned()]);
+        assert_eq!(that_is_checked("tar+gz"), vec!["gzip_crc".to_owned()]);
+        assert_eq!(that_is_checked("tar"), vec!["sizes".to_owned()]);
+        assert_eq!(that_is_checked("rar"), vec!["sizes".to_owned()]);
+    }
+
+    /// The container's format comes from its name, with the aliases people
+    /// actually write: `.tgz` is `tar+gz`, and the case does not matter.
+    #[test]
+    fn the_container_format_comes_from_the_name() {
+        assert_eq!(name_format(b"a.zip"), Some("zip"));
+        assert_eq!(name_format(b"a.TGZ"), Some("tar+gz"));
+        assert_eq!(name_format(b"a.tar.gz"), Some("tar+gz"));
+        assert_eq!(name_format(b"a.tar"), Some("tar"));
+        assert_eq!(
+            name_format(b"a.rar"),
+            Some("rar"),
+            "reading it IS known how"
+        );
+        assert_eq!(name_format(b"leeme"), None);
+    }
+
+    /// Pieces are numbered with three digits starting from 001, which is the
+    /// convention the users of these keys have.
+    #[test]
+    fn pieces_are_numbered_by_convention() {
+        assert_eq!(piece_name(b"g.iso", 1), b"g.iso.001".to_vec());
+        assert_eq!(piece_name(b"g.iso", 42), b"g.iso.042".to_vec());
+        assert_eq!(piece_name(b"g.iso", 999), b"g.iso.999".to_vec());
     }
 }

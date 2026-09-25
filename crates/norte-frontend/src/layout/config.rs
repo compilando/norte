@@ -1,53 +1,53 @@
-//! Cargar una disposición de paneles de un fichero.
+//! Loading a pane layout from a file.
 //!
-//! El nombre de una disposición **es un nombre de fichero**, y por eso viaja
-//! como [`OsStr`] y no como `String` (#246): `--layout` y el picker acaban los
-//! dos en `<dir>/layouts/<nombre>.toml`, así que pasar el valor por
-//! `to_string_lossy` cambiaba el fichero que se abre — `$'\xff'` y `$'\xfe'`
-//! aterrizaban los dos en `layouts/\xEF\xBF\xBD.toml`, en silencio.
+//! A layout's name **is a file name**, and that is why it travels as
+//! [`OsStr`] and not as `String` (#246): `--layout` and the picker both end
+//! up at `<dir>/layouts/<name>.toml`, so passing the value through
+//! `to_string_lossy` changed which file opens — `$'\xff'` and `$'\xfe'` both
+//! landed on `layouts/\xEF\xBF\xBD.toml`, silently.
 //!
-//! Y el fichero se resuelve **byte a byte contra el directorio** (#245): en
-//! APFS o NTFS, `load(dir, "orthodox")` con un `Orthodox.toml` guardado abría
-//! el fichero del usuario mientras la fila decía «de fábrica» y la vista
-//! previa enseñaba el preset. Aquí se listan las entradas y se exige el nombre
-//! EXACTO, así que el resultado es el mismo en los tres sistemas.
+//! And the file is resolved **byte for byte against the directory** (#245):
+//! on APFS or NTFS, `load(dir, "orthodox")` with a saved `Orthodox.toml`
+//! opened the user's file while the row said "factory" and the preview
+//! showed the preset. Here the entries are listed and the EXACT name is
+//! required, so the result is the same on all three systems.
 
 use std::ffi::{OsStr, OsString};
 use std::path::Path;
 
 use super::{LayoutError, Node};
 
-/// El subdirectorio del directorio de configuración donde viven.
+/// The subdirectory of the config directory they live in.
 pub const LAYOUTS_DIR: &str = "layouts";
 
-/// La extensión, sin punto.
+/// The extension, without the dot.
 const EXT: &str = "toml";
 
-/// Nombres de dispositivo de Win32, que se resuelven ANTES de mirar el disco.
+/// Win32 device names, resolved BEFORE looking at the disk.
 ///
-/// Se rechazan en TODOS los sistemas, no solo en Windows: un `layouts/CON.toml`
-/// creado en Linux y sincronizado a un Windows abriría la consola desde una
-/// TUI que tiene el terminal en modo raw, y `NUL` daría una lectura vacía. Un
-/// nombre reservado no vale más de un lado que del otro, así que se rechaza
-/// donde se escribe y donde se lee.
-/// ¿Este nombre puede ser un fichero de `layouts/` y nada más?
+/// Rejected on ALL systems, not only Windows: a `layouts/CON.toml` created
+/// on Linux and synced to a Windows machine would open the console from a
+/// TUI that has the terminal in raw mode, and `NUL` would give an empty
+/// read. A reserved name is no more valid on one side than the other, so it
+/// is rejected where it is written and where it is read.
+/// Can this name be a `layouts/` file and nothing else?
 ///
-/// `Path::components().count() == 1` NO basta y esa era la comprobación
-/// anterior (#246): en Windows `Path::new("C:")` es exactamente un componente
-/// —un `Prefix`— y `Path::join` con un prefijo SUSTITUYE la base entera, así
-/// que el `format!` acababa leyendo `C:.toml` relativo al directorio actual de
-/// la unidad C. Aquí se mira el nombre, no su forma de ruta.
-/// Delega en [`norte_config::valid_profile_name`], que es la MISMA pregunta
-/// —«¿puede esto ser una entrada suelta de un directorio nuestro?»— y estaba
-/// contestada dos veces. La canónica vive en `norte-config` porque está
-/// debajo: los perfiles la necesitan para no dejar que un nombre apunte la
-/// capa de configuración a cualquier sitio del disco, y dos copias de una
-/// regla de seguridad divergen.
-fn nombre_usable(name: &OsStr) -> bool {
+/// `Path::components().count() == 1` is NOT enough and that was the
+/// previous check (#246): on Windows `Path::new("C:")` is exactly one
+/// component — a `Prefix` — and `Path::join` with a prefix REPLACES the
+/// whole base, so the `format!` ended up reading `C:.toml` relative to
+/// drive C's current directory. Here the name is looked at, not its path
+/// shape.
+/// Delegates to [`norte_config::valid_profile_name`], which is the SAME
+/// question — "can this be a loose entry of one of our directories?" — and
+/// was answered twice. The canonical one lives in `norte-config` because it
+/// is downstream: profiles need it so a name cannot point the config layer
+/// anywhere else on disk, and two copies of a security rule diverge.
+fn name_usable(name: &OsStr) -> bool {
     norte_config::valid_profile_name(name)
 }
 
-/// `<name>.toml`, sin pasar por `String`.
+/// `<name>.toml`, without going through `String`.
 fn con_extension(name: &OsStr) -> OsString {
     let mut f = name.to_os_string();
     f.push(".");
@@ -55,65 +55,65 @@ fn con_extension(name: &OsStr) -> OsString {
     f
 }
 
-/// Lee `<dir>/layouts/<name>.toml` y valida lo que trae.
+/// Reads `<dir>/layouts/<name>.toml` and validates what it carries.
 ///
-/// El formato es el MISMO que serializa [`to_toml`] y el mismo que lleva el
-/// blob de sesión de L2: uno solo para el fichero, la sesión y lo que escupa
-/// un futuro editor de layouts (ADR 0058).
+/// The format is the SAME one [`to_toml`] serializes and the same one L2's
+/// session blob carries: one for the file, the session, and whatever a
+/// future layout editor spits out (ADR 0058).
 ///
-/// El fichero se busca en el LISTADO del directorio y se exige que su nombre
-/// coincida byte a byte con el pedido: en un sistema que no distingue
-/// mayúsculas, dejar resolver al SO abría el fichero del usuario cuando se
-/// pedía el de fábrica (#245).
+/// The file is looked up in the directory's LISTING and its name is
+/// required to match byte for byte with what was asked: on a system that
+/// is not case-sensitive, letting the OS resolve it opened the user's file
+/// when the factory one was asked for (#245).
 ///
 /// # Errors
 ///
-/// [`LayoutError::BadName`] si el nombre no puede ser un fichero de
-/// `layouts/`, [`LayoutError::NotFound`] si no hay ninguno con ese nombre
-/// exacto, [`LayoutError::Parse`] si no es TOML válido o no describe un árbol,
-/// y lo que devuelva [`super::validate`] si el árbol es incoherente.
+/// [`LayoutError::BadName`] if the name cannot be a `layouts/` file,
+/// [`LayoutError::NotFound`] if there is none with that exact name,
+/// [`LayoutError::Parse`] if it is not valid TOML or does not describe a
+/// tree, and whatever [`super::validate`] returns if the tree is
+/// inconsistent.
 pub fn load(dir: &Path, name: &OsStr) -> Result<Node, LayoutError> {
-    if !nombre_usable(name) {
+    if !name_usable(name) {
         return Err(LayoutError::BadName(name.to_string_lossy().into_owned()));
     }
-    let carpeta = dir.join(LAYOUTS_DIR);
-    let buscado = con_extension(name);
-    let existe = std::fs::read_dir(&carpeta)
+    let folder = dir.join(LAYOUTS_DIR);
+    let sought = con_extension(name);
+    let exists = std::fs::read_dir(&folder)
         .ok()
         .into_iter()
         .flatten()
         .flatten()
-        .any(|e| e.file_name() == buscado);
-    let ruta = carpeta.join(&buscado);
-    if !existe {
-        return Err(LayoutError::NotFound(ruta.display().to_string()));
+        .any(|e| e.file_name() == sought);
+    let path = folder.join(&sought);
+    if !exists {
+        return Err(LayoutError::NotFound(path.display().to_string()));
     }
-    let texto = std::fs::read_to_string(&ruta)
-        .map_err(|_| LayoutError::NotFound(ruta.display().to_string()))?;
-    let arbol: Node = toml::from_str(&texto).map_err(|e| LayoutError::Parse(e.to_string()))?;
-    super::validate(&arbol)?;
-    Ok(arbol)
+    let text = std::fs::read_to_string(&path)
+        .map_err(|_| LayoutError::NotFound(path.display().to_string()))?;
+    let tree: Node = toml::from_str(&text).map_err(|e| LayoutError::Parse(e.to_string()))?;
+    super::validate(&tree)?;
+    Ok(tree)
 }
 
-/// Los nombres de los layouts que el usuario tiene en `<dir>/layouts/`,
-/// ordenados.
+/// The names of the layouts the user has in `<dir>/layouts/`, sorted.
 ///
-/// No valida ni parsea: el selector los ENSEÑA, y quien elija uno roto se
-/// entera al elegirlo con el error del cargador.
+/// Does not validate or parse: the picker SHOWS them, and whoever picks a
+/// broken one finds out when picking it, with the loader's error.
 ///
-/// Un directorio que no existe no es un error: es un usuario que no ha
-/// guardado ninguno.
+/// A directory that does not exist is not an error: it is a user who has
+/// not saved any.
 ///
-/// Devuelve [`OsString`] y no `String`: un nombre que no es UTF-8 es un
-/// fichero como cualquier otro y antes desaparecía del selector sin decir
-/// nada (#246 m2). La extensión se compara sin distinguir mayúsculas, porque
-/// `MIO.TOML` es el mismo fichero para el SO que lo guardó así.
+/// Returns [`OsString`] and not `String`: a name that is not UTF-8 is a
+/// file like any other and used to disappear from the picker with no word
+/// (#246 m2). The extension is compared case-insensitively, because
+/// `MIO.TOML` is the same file to the OS that saved it that way.
 #[must_use]
 pub fn list(dir: &Path) -> Vec<OsString> {
-    let Ok(entradas) = std::fs::read_dir(dir.join(LAYOUTS_DIR)) else {
+    let Ok(entries) = std::fs::read_dir(dir.join(LAYOUTS_DIR)) else {
         return Vec::new();
     };
-    let mut nombres: Vec<OsString> = entradas
+    let mut names: Vec<OsString> = entries
         .flatten()
         .filter(|e| {
             e.path()
@@ -121,73 +121,74 @@ pub fn list(dir: &Path) -> Vec<OsString> {
                 .is_some_and(|x| x.to_string_lossy().eq_ignore_ascii_case(EXT))
         })
         .filter_map(|e| e.path().file_stem().map(OsStr::to_os_string))
-        // Un nombre que `load` no aceptaría no se ofrece: la fila estaría ahí
-        // para fallar al pulsarla.
-        .filter(|n| nombre_usable(n))
+        // A name `load` would not accept is not offered: the row would be
+        // there just to fail when clicked.
+        .filter(|n| name_usable(n))
         .collect();
-    nombres.sort();
-    nombres
+    names.sort();
+    names
 }
 
-/// El árbol como TOML, para escribirlo.
+/// The tree as TOML, to write it out.
 ///
 /// # Errors
 ///
-/// [`LayoutError::Parse`] si el árbol no se puede serializar.
+/// [`LayoutError::Parse`] if the tree cannot be serialized.
 pub fn to_toml(tree: &Node) -> Result<String, LayoutError> {
     toml::to_string_pretty(tree).map_err(|e| LayoutError::Parse(e.to_string()))
 }
 
-/// Qué árbol vale para el nombre `name`, dado lo que dio el fichero del
-/// usuario.
+/// Which tree is valid for name `name`, given what the user's file
+/// returned.
 ///
-/// **Gana el fichero del usuario**, como en todas las demás capas de
-/// configuración, y un preset se recupera borrando el fichero. Un fichero que
-/// no está es lo NORMAL para un nombre de fábrica y no se avisa de nada; uno
-/// ROTO cae igualmente al preset —un layout que no parsea no puede dejar a
-/// norte sin pantalla— pero se avisa, y ese aviso es el `Some` de la tupla.
+/// **The user's file WINS**, as in every other configuration layer, and a
+/// preset is recovered by deleting the file. A file that is not there is
+/// NORMAL for a factory name and nothing is warned about; a BROKEN one
+/// falls back to the preset just the same — a layout that does not parse
+/// cannot leave norte with no screen — but it IS warned about, and that
+/// warning is the tuple's `Some`.
 ///
-/// Existe aquí, y no dentro de cada frontend, porque es una regla y las
-/// reglas duplicadas divergen: el TUI la tenía y la ventana no, así que
-/// `norte-gui --layout mio` no podía abrir un layout del usuario mientras
-/// `ntc --layout mio` sí — y la MISMA ventana lo ofrecía en su selector.
+/// Exists here, and not inside each frontend, because it is a rule and
+/// duplicated rules diverge: the TUI had it and the window did not, so
+/// `norte-gui --layout mine` could not open a user layout while `ntc
+/// --layout mine` could — and the SAME window offered it in its picker.
 ///
-/// La lectura del fichero la hace quien llama: cada frontend sabe en qué
-/// hilo puede hacer I/O (la regla 2), y esta función no hace ninguna.
+/// Reading the file is the caller's job: each frontend knows which thread
+/// can do I/O (rule 2), and this function does none.
 ///
 /// # Errors
 ///
-/// El error del fichero del usuario si tampoco hay preset con ese nombre, y
-/// [`LayoutError::NotFound`] si el nombre no es ni siquiera texto —un preset
-/// de fábrica se llama por su nombre ASCII—.
+/// The user file's own error if there is no preset with that name either,
+/// and [`LayoutError::NotFound`] if the name is not even text — a factory
+/// preset is called by its ASCII name.
 ///
 /// ```
 /// use norte_frontend::layout::{LayoutError, config::or_preset};
 /// use std::ffi::OsStr;
 ///
-/// // Sin fichero del usuario queda el preset, y sin aviso.
-/// let (arbol, aviso) =
+/// // With no user file the preset is left, and no warning.
+/// let (tree, notice) =
 ///     or_preset(OsStr::new("simple"), Err(LayoutError::NotFound(String::new())))
-///         .expect("`simple` es de fábrica");
-/// assert_eq!(arbol.slot_ids().len(), 3);
-/// assert!(aviso.is_none());
+///         .expect("`simple` is a factory one");
+/// assert_eq!(tree.slot_ids().len(), 3);
+/// assert!(notice.is_none());
 /// ```
 pub fn or_preset(
     name: &OsStr,
     loaded: Result<Node, LayoutError>,
 ) -> Result<(Node, Option<LayoutError>), LayoutError> {
-    let roto = match loaded {
+    let broken = match loaded {
         Ok(tree) => return Ok((tree, None)),
-        // Que no haya fichero es lo NORMAL para uno de fábrica: no se avisa.
+        // No file at all is NORMAL for a factory one: not warned about.
         Err(LayoutError::NotFound(_)) => None,
         Err(e) => Some(e),
     };
-    // Un preset de fábrica se llama por su nombre ASCII: un nombre que no es
-    // texto no puede ser uno de ellos.
-    // El nombre entra en un MENSAJE, así que se enmascara: un nombre de
-    // fichero puede llevar un ESC, y `valid_profile_name` no filtra
-    // controles. Los bytes que abren el fichero son los de `name`, intactos.
-    let fabrica = name.to_str().map_or_else(
+    // A factory preset is called by its ASCII name: a name that is not
+    // text cannot be one of them.
+    // The name goes into a MESSAGE, so it is masked: a file name can carry
+    // an ESC, and `valid_profile_name` does not filter controls. The bytes
+    // that open the file are `name`'s, untouched.
+    let factory = name.to_str().map_or_else(
         || {
             Err(LayoutError::NotFound(
                 norte_encoding::mask_terminal_hazards(&crate::display::display_os_name(name).0),
@@ -195,9 +196,9 @@ pub fn or_preset(
         },
         super::presets::tree,
     );
-    match fabrica {
-        Ok(tree) => Ok((tree, roto)),
-        Err(e) => Err(roto.unwrap_or(e)),
+    match factory {
+        Ok(tree) => Ok((tree, broken)),
+        Err(e) => Err(broken.unwrap_or(e)),
     }
 }
 
@@ -206,7 +207,7 @@ mod tests {
     use super::*;
     use crate::layout::{Dir, KindId, SlotId};
 
-    fn arbol() -> Node {
+    fn tree() -> Node {
         Node::split(
             Dir::Horizontal,
             vec![
@@ -216,69 +217,70 @@ mod tests {
         )
     }
 
-    fn escribe(dir: &Path, fichero: &OsStr, texto: &str) {
+    fn write(dir: &Path, file: &OsStr, text: &str) {
         let layouts = dir.join(LAYOUTS_DIR);
         std::fs::create_dir_all(&layouts).expect("mkdir");
-        std::fs::write(layouts.join(fichero), texto).expect("write");
+        std::fs::write(layouts.join(file), text).expect("write");
     }
 
     #[test]
-    fn un_layout_escrito_se_vuelve_a_leer() {
+    fn a_written_layout_is_read_back() {
         let dir = tempfile::tempdir().expect("tmp");
-        escribe(
+        write(
             dir.path(),
             OsStr::new("mio.toml"),
-            &to_toml(&arbol()).expect("toml"),
+            &to_toml(&tree()).expect("toml"),
         );
-        assert_eq!(load(dir.path(), OsStr::new("mio")).expect("carga"), arbol());
+        assert_eq!(load(dir.path(), OsStr::new("mio")).expect("loads"), tree());
     }
 
-    /// El fichero del usuario GANA al preset del mismo nombre.
+    /// The user's file WINS over a preset of the same name.
     #[test]
-    fn el_fichero_del_usuario_gana_al_preset() {
-        let (arbol_puesto, aviso) =
-            or_preset(OsStr::new("simple"), Ok(arbol())).expect("hay árbol");
-        assert_eq!(arbol_puesto, arbol(), "el del usuario, no el de fábrica");
-        assert!(aviso.is_none());
+    fn the_user_file_wins_over_the_preset() {
+        let (placed_tree, notice) =
+            or_preset(OsStr::new("simple"), Ok(tree())).expect("there is a tree");
+        assert_eq!(placed_tree, tree(), "the user's, not the factory one");
+        assert!(notice.is_none());
     }
 
-    /// Uno ROTO cae al preset Y avisa: sin pantalla no se deja a nadie, pero
-    /// tampoco se le oculta que su fichero no sirve.
+    /// A BROKEN one falls back to the preset AND warns: nobody is left with
+    /// no screen, but nobody is hidden the fact that their file is no good
+    /// either.
     #[test]
-    fn un_fichero_roto_cae_al_preset_avisando() {
-        let (arbol_puesto, aviso) = or_preset(
+    fn a_broken_file_falls_back_to_the_preset_with_a_warning() {
+        let (placed_tree, notice) = or_preset(
             OsStr::new("simple"),
-            Err(LayoutError::Parse("línea 3".to_owned())),
+            Err(LayoutError::Parse("line 3".to_owned())),
         )
-        .expect("queda el preset");
+        .expect("the preset is left");
         assert_eq!(
-            arbol_puesto,
+            placed_tree,
             crate::layout::presets::tree("simple").expect("preset")
         );
         assert!(
-            matches!(aviso, Some(LayoutError::Parse(_))),
-            "el motivo llega para pintarlo: {aviso:?}"
+            matches!(notice, Some(LayoutError::Parse(_))),
+            "the reason arrives to paint it: {notice:?}"
         );
     }
 
-    /// Y un nombre que no es de fábrica ni tiene fichero devuelve el error
-    /// del FICHERO, que es lo que el lector puede arreglar.
+    /// And a name that is neither a factory one nor has a file returns the
+    /// FILE's error, which is what the reader can fix.
     #[test]
-    fn sin_fichero_ni_preset_manda_el_error_del_fichero() {
+    fn with_neither_file_nor_preset_the_files_error_wins() {
         let e = or_preset(
             OsStr::new("mio"),
-            Err(LayoutError::Parse("línea 3".to_owned())),
+            Err(LayoutError::Parse("line 3".to_owned())),
         )
-        .expect_err("no hay de dónde sacarlo");
+        .expect_err("there is nowhere to get it from");
         assert!(matches!(e, LayoutError::Parse(_)), "{e:?}");
     }
 
     #[test]
-    fn listar_devuelve_los_toml_ordenados_y_sin_extension() {
+    fn listing_returns_the_tomls_sorted_and_without_extension() {
         let dir = tempfile::tempdir().expect("tmp");
-        assert!(list(dir.path()).is_empty(), "sin directorio, sin nombres");
+        assert!(list(dir.path()).is_empty(), "no directory, no names");
         for n in ["zeta.toml", "alfa.toml", "notas.txt"] {
-            escribe(dir.path(), OsStr::new(n), "");
+            write(dir.path(), OsStr::new(n), "");
         }
         assert_eq!(
             list(dir.path()),
@@ -286,39 +288,39 @@ mod tests {
         );
     }
 
-    /// `MIO.TOML` es el mismo fichero para el sistema que lo guardó así, y
-    /// `--layout MIO` lo cargaba: no aparecer en el selector era una fila que
-    /// faltaba, no una protección (#246 m2).
+    /// `MIO.TOML` is the same file to the system that saved it that way, and
+    /// `--layout MIO` loaded it: not appearing in the picker was a missing
+    /// row, not a protection (#246 m2).
     #[test]
-    fn la_extension_no_distingue_mayusculas() {
+    fn the_extension_is_case_insensitive() {
         let dir = tempfile::tempdir().expect("tmp");
-        escribe(dir.path(), OsStr::new("MIO.TOML"), "");
+        write(dir.path(), OsStr::new("MIO.TOML"), "");
         assert_eq!(list(dir.path()), vec![OsString::from("MIO")]);
     }
 
-    /// Un nombre con separadores NO construye una ruta: viene de la config
-    /// del usuario —de CUALQUIER capa, la del proyecto incluida— y `../algo`
-    /// saldría del directorio de layouts.
+    /// A name with separators does NOT build a path: it comes from the
+    /// user's config — from ANY layer, the project's included — and
+    /// `../something` would leave the layouts directory.
     #[test]
-    fn un_nombre_con_ruta_dentro_se_rechaza() {
+    fn a_name_with_a_path_inside_it_is_rejected() {
         let dir = tempfile::tempdir().expect("tmp");
-        for malo in ["../secreto", "", "sub/mio", "sub\\mio", ".", ".."] {
+        for bad in ["../secreto", "", "sub/mio", "sub\\mio", ".", ".."] {
             assert!(
                 matches!(
-                    load(dir.path(), OsStr::new(malo)),
+                    load(dir.path(), OsStr::new(bad)),
                     Err(LayoutError::BadName(_))
                 ),
-                "{malo:?} debería rechazarse"
+                "{bad:?} should be rejected"
             );
         }
     }
 
-    /// `Path::new("C:")` es UN componente en Windows —un `Prefix`— y `join`
-    /// con él sustituye la base entera: la comprobación de «un solo
-    /// componente» lo admitía y la lectura se iba al directorio actual de la
-    /// unidad C (#246 M2).
+    /// `Path::new("C:")` is ONE component on Windows — a `Prefix` — and
+    /// `join` with it replaces the whole base: the "single component" check
+    /// admitted it and the read went to drive C's current directory (#246
+    /// M2).
     #[test]
-    fn un_prefijo_de_unidad_no_es_un_nombre() {
+    fn a_drive_prefix_is_not_a_name() {
         let dir = tempfile::tempdir().expect("tmp");
         assert!(matches!(
             load(dir.path(), OsStr::new("C:")),
@@ -329,72 +331,71 @@ mod tests {
                 load(dir.path(), OsStr::new("notas:secreto")),
                 Err(LayoutError::BadName(_))
             ),
-            "un flujo alternativo de NTFS tampoco"
+            "an NTFS alternate stream either"
         );
     }
 
-    /// `--layout CON` leía `layouts\\CON.toml`, que Win32 resuelve a la
-    /// CONSOLA, desde una TUI con el terminal en modo raw (#246 M2). Se
-    /// rechaza en todos los sistemas: el fichero se sincroniza, el nombre
-    /// reservado viaja con él.
+    /// `--layout CON` read `layouts\\CON.toml`, which Win32 resolves to the
+    /// CONSOLE, from a TUI with the terminal in raw mode (#246 M2). Rejected
+    /// on every system: the file syncs, the reserved name travels with it.
     #[test]
-    fn los_nombres_de_dispositivo_de_windows_se_rechazan_en_todas_partes() {
+    fn windows_device_names_are_rejected_everywhere() {
         let dir = tempfile::tempdir().expect("tmp");
-        for malo in ["CON", "con", "NUL", "com1", "LPT9", "CON.toml"] {
+        for bad in ["CON", "con", "NUL", "com1", "LPT9", "CON.toml"] {
             assert!(
                 matches!(
-                    load(dir.path(), OsStr::new(malo)),
+                    load(dir.path(), OsStr::new(bad)),
                     Err(LayoutError::BadName(_))
                 ),
-                "{malo} debería rechazarse"
+                "{bad} should be rejected"
             );
         }
-        // Y no se ofrecen en el selector, que es de donde salen sin teclear.
-        escribe(dir.path(), OsStr::new("CON.toml"), "");
+        // And not offered in the picker, which is where they come from
+        // without typing them.
+        write(dir.path(), OsStr::new("CON.toml"), "");
         assert!(list(dir.path()).is_empty());
     }
 
-    /// Windows se come el punto y el espacio finales: el fichero que se abre
-    /// no sería el que se nombró.
+    /// Windows eats trailing dots and spaces: the file that opens would not
+    /// be the one named.
     #[test]
-    fn un_punto_o_un_espacio_al_final_no_es_un_nombre() {
+    fn a_trailing_dot_or_space_is_not_a_name() {
         let dir = tempfile::tempdir().expect("tmp");
-        for malo in ["mio.", "mio "] {
+        for bad in ["mio.", "mio "] {
             assert!(
                 matches!(
-                    load(dir.path(), OsStr::new(malo)),
+                    load(dir.path(), OsStr::new(bad)),
                     Err(LayoutError::BadName(_))
                 ),
-                "{malo:?} debería rechazarse"
+                "{bad:?} should be rejected"
             );
         }
     }
 
-    /// El nombre se resuelve contra el LISTADO, byte a byte. En APFS o NTFS
-    /// `load(dir, "orthodox")` con un `Orthodox.toml` guardado abría el
-    /// fichero del usuario mientras la fila decía «de fábrica» (#245); aquí
-    /// no hay fichero con ese nombre, y punto — la misma respuesta en los
-    /// tres sistemas.
+    /// The name is resolved against the LISTING, byte for byte. On APFS or
+    /// NTFS `load(dir, "orthodox")` with a saved `Orthodox.toml` opened the
+    /// user's file while the row said "factory" (#245); here there is no
+    /// file with that name, period — the same answer on all three systems.
     #[test]
-    fn un_nombre_que_solo_difiere_en_mayusculas_no_es_el_mismo_fichero() {
+    fn a_name_that_only_differs_in_case_is_not_the_same_file() {
         let dir = tempfile::tempdir().expect("tmp");
-        escribe(
+        write(
             dir.path(),
             OsStr::new("Orthodox.toml"),
-            &to_toml(&arbol()).expect("toml"),
+            &to_toml(&tree()).expect("toml"),
         );
         assert!(matches!(
             load(dir.path(), OsStr::new("orthodox")),
             Err(LayoutError::NotFound(_))
         ));
         assert_eq!(
-            load(dir.path(), OsStr::new("Orthodox")).expect("el suyo sí"),
-            arbol()
+            load(dir.path(), OsStr::new("Orthodox")).expect("theirs does load"),
+            tree()
         );
     }
 
     #[test]
-    fn un_layout_que_no_esta_lo_dice_por_su_nombre() {
+    fn a_missing_layout_is_reported_by_its_name() {
         let dir = tempfile::tempdir().expect("tmp");
         assert!(matches!(
             load(dir.path(), OsStr::new("nada")),
@@ -402,22 +403,22 @@ mod tests {
         ));
     }
 
-    /// Un árbol INCOHERENTE se rechaza al cargar, no al pintar: el sitio
-    /// donde un usuario puede hacer algo al respecto es el arranque.
+    /// An INCONSISTENT tree is rejected at load time, not at paint time: the
+    /// place where a user can do something about it is startup.
     #[test]
-    fn un_layout_incoherente_no_llega_a_pintarse() {
+    fn an_incoherent_layout_never_gets_painted() {
         let dir = tempfile::tempdir().expect("tmp");
-        let repetido = Node::split(
+        let repeated = Node::split(
             Dir::Horizontal,
             vec![
                 Node::slot(SlotId(1), KindId::browser()),
                 Node::slot(SlotId(1), KindId::browser()),
             ],
         );
-        escribe(
+        write(
             dir.path(),
             OsStr::new("roto.toml"),
-            &to_toml(&repetido).expect("toml"),
+            &to_toml(&repeated).expect("toml"),
         );
         assert!(matches!(
             load(dir.path(), OsStr::new("roto")),
@@ -425,22 +426,22 @@ mod tests {
         ));
     }
 
-    /// Sin ningún listado no hay disposición: se rechaza al cargar, que es
-    /// donde todavía queda la pantalla anterior (#242).
+    /// With no listing at all there is no layout: rejected at load time,
+    /// which is where the previous screen still remains (#242).
     #[test]
-    fn un_layout_sin_listado_no_llega_a_aplicarse() {
+    fn a_layout_without_a_listing_never_gets_applied() {
         let dir = tempfile::tempdir().expect("tmp");
-        let sin = Node::split(
+        let none = Node::split(
             Dir::Horizontal,
             vec![
                 Node::slot(SlotId(1), KindId::new("places")),
                 Node::slot(SlotId(4), KindId::new("status")),
             ],
         );
-        escribe(
+        write(
             dir.path(),
             OsStr::new("sin.toml"),
-            &to_toml(&sin).expect("toml"),
+            &to_toml(&none).expect("toml"),
         );
         assert!(matches!(
             load(dir.path(), OsStr::new("sin")),
@@ -448,56 +449,57 @@ mod tests {
         ));
     }
 
-    /// TODO el corpus hostil pasa por el cargador y NINGÚN nombre saca la
-    /// lectura de `<dir>/layouts/`: ni los separadores, ni `C:`, ni un
-    /// reservado de Win32, ni un nombre que no es texto. La comprobación
-    /// anterior era `components().count() == 1`, que admite `C:` (#246 M2).
+    /// The WHOLE hostile corpus goes through the loader and NO name gets
+    /// the read out of `<dir>/layouts/`: not the separators, not `C:`, not
+    /// a Win32 reserved one, not a name that is not text. The previous
+    /// check was `components().count() == 1`, which admits `C:` (#246 M2).
     ///
-    /// Se comprueba sobre el ERROR y sobre el efecto: lo que no se rechaza
-    /// tiene que dar `NotFound` de un fichero DENTRO del directorio —el
-    /// directorio no existe, así que ninguno se abre— y nunca `BadName` de
-    /// algo que sí valía.
+    /// Checked against the ERROR and the effect: what is not rejected has
+    /// to give `NotFound` for a file INSIDE the directory — the directory
+    /// does not exist, so none opens — and never `BadName` for something
+    /// that was valid.
     #[cfg(unix)]
     #[test]
-    fn ningun_nombre_del_corpus_sale_del_directorio_de_layouts() {
+    fn no_corpus_name_escapes_the_layouts_directory() {
         use std::os::unix::ffi::OsStrExt as _;
 
         let dir = tempfile::tempdir().expect("tmp");
-        let dentro = dir.path().join(LAYOUTS_DIR);
+        let inside = dir.path().join(LAYOUTS_DIR);
         for n in norte_testkit::corpus::hostile_names() {
             let name = OsStr::from_bytes(&n.bytes);
             match load(dir.path(), name) {
                 Err(LayoutError::BadName(_)) => {}
-                Err(LayoutError::NotFound(ruta)) => assert!(
-                    ruta.starts_with(&dentro.display().to_string()),
-                    "{} resolvió fuera: {ruta}",
+                Err(LayoutError::NotFound(path)) => assert!(
+                    path.starts_with(&inside.display().to_string()),
+                    "{} resolved outside: {path}",
                     n.id
                 ),
-                otro => panic!("{}: {otro:?}", n.id),
+                other => panic!("{}: {other:?}", n.id),
             }
         }
     }
 
-    /// Un nombre que no es UTF-8 es un fichero como cualquier otro: sale en
-    /// el listado y se carga por sus bytes. Antes desaparecía del selector, y
-    /// por `--layout` se convertía en `\u{FFFD}` —o sea, en OTRO fichero, o
-    /// en el mismo para dos bytes distintos (#246 M1).
+    /// A name that is not UTF-8 is a file like any other: it shows up in
+    /// the listing and loads by its bytes. It used to disappear from the
+    /// picker, and through `--layout` it turned into `\u{FFFD}` — i.e.
+    /// ANOTHER file, or the same one for two different byte sequences (#246
+    /// M1).
     #[cfg(unix)]
     #[test]
-    fn un_nombre_que_no_es_utf8_ni_se_pierde_ni_se_confunde() {
+    fn a_non_utf8_name_is_neither_lost_nor_confused() {
         use std::os::unix::ffi::OsStrExt as _;
 
         let dir = tempfile::tempdir().expect("tmp");
-        let crudo = OsStr::from_bytes(b"\xff");
-        escribe(
+        let raw = OsStr::from_bytes(b"\xff");
+        write(
             dir.path(),
             OsStr::from_bytes(b"\xff.toml"),
-            &to_toml(&arbol()).expect("toml"),
+            &to_toml(&tree()).expect("toml"),
         );
-        assert_eq!(list(dir.path()), vec![crudo.to_os_string()]);
-        assert_eq!(load(dir.path(), crudo).expect("carga"), arbol());
-        // El reemplazo del lossy es OTRO nombre, y si existiera se abriría en
-        // lugar del pedido.
+        assert_eq!(list(dir.path()), vec![raw.to_os_string()]);
+        assert_eq!(load(dir.path(), raw).expect("loads"), tree());
+        // The lossy replacement is ANOTHER name, and if it existed it would
+        // open instead of the one asked for.
         assert!(matches!(
             load(dir.path(), OsStr::from_bytes("\u{FFFD}".as_bytes())),
             Err(LayoutError::NotFound(_))

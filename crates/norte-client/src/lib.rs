@@ -1,20 +1,19 @@
-//! El SDK de cliente del daemon de norte.
+//! The norte daemon's client SDK.
 //!
-//! Lo que hace falta para hablar con un daemon —y NADA de lo que hace falta
-//! para ser uno—. Un frontend que solo habla por socket no tiene por qué
-//! arrastrar el engine, los providers, el índice ni el host de plugins, que
-//! es lo que pasaba cuando todo esto vivía dentro de `norte-core`
-//! (ADR 0066).
+//! What it takes to talk to a daemon — and NONE of what it takes to be one.
+//! A frontend that only talks over a socket has no reason to drag in the
+//! engine, the providers, the index or the plugin host, which is what used
+//! to happen when all of this lived inside `norte-core` (ADR 0066).
 //!
-//! Tres capas, de abajo arriba:
+//! Three layers, bottom up:
 //!
-//! - `transport` (privado): cómo se llega al daemon y cómo se le autentica.
-//!   Hoy, un socket UNIX con credenciales del peer.
-//! - [`rpc`]: el JSON-RPC enmarcado, que no sabe por dónde viaja.
-//! - `remote`: el backend tipado que los frontends usan de verdad.
+//! - `transport` (private): how the daemon is reached and how it is
+//!   authenticated. Today, a UNIX socket with the peer's credentials.
+//! - [`rpc`]: the framed JSON-RPC, which does not know what it travels over.
+//! - `remote`: the typed backend frontends actually use.
 //!
-//! La frontera de este crate es su lista de dependencias, y hay un test que
-//! la vigila: `tests/dependency_boundary.rs`.
+//! This crate's boundary is its dependency list, and a test watches it:
+//! `tests/dependency_boundary.rs`.
 #![forbid(unsafe_code)]
 
 pub mod remote;

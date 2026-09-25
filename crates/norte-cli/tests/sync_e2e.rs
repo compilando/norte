@@ -1,31 +1,31 @@
-//! `norte sync`: el plan se imprime ENTERO antes de que haya pregunta, y
-//! `--dry-run` es el plan sin el apply.
+//! `norte sync`: the plan is printed IN FULL before there is a question, and
+//! `--dry-run` is the plan without the apply.
 
 use assert_cmd::Command;
 
-/// El directorio de estado de ESTE proceso de test, y nunca el del que corre
-/// la suite (mismo criterio que `smoke.rs::config_dir_del_test`).
-fn config_dir_del_test() -> &'static std::path::Path {
+/// THIS test process's state directory, and never the one running the suite
+/// (same criterion as `smoke.rs::test_config_dir`).
+fn test_config_dir() -> &'static std::path::Path {
     static DIR: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
     DIR.get_or_init(|| {
-        tempfile::TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).expect("tempdir de estado")
+        tempfile::TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).expect("state tempdir")
     })
     .path()
 }
 
-/// `--dry-run` enseña lo que haría y NO toca el destino.
+/// `--dry-run` shows what it would do and does NOT touch the destination.
 #[test]
-fn dry_run_ensena_el_plan_y_no_escribe() {
+fn dry_run_shows_the_plan_and_does_not_write() {
     let dir = tempfile::tempdir().expect("tempdir");
     let src = dir.path().join("src");
     let dst = dir.path().join("dst");
     std::fs::create_dir_all(&src).expect("mkdir src");
     std::fs::create_dir_all(&dst).expect("mkdir dst");
-    std::fs::write(src.join("nuevo.txt"), b"contenido").expect("write");
+    std::fs::write(src.join("new.txt"), b"content").expect("write");
 
     let assert = Command::cargo_bin("norte")
         .expect("bin")
-        .env("NORTE_CONFIG_DIR", config_dir_del_test())
+        .env("NORTE_CONFIG_DIR", test_config_dir())
         .args([
             "sync",
             "--mode",
@@ -37,32 +37,29 @@ fn dry_run_ensena_el_plan_y_no_escribe() {
         .assert()
         .code(1);
 
-    let salida = String::from_utf8(assert.get_output().stdout.clone()).expect("utf8");
-    assert!(
-        salida.contains("nuevo.txt"),
-        "el plan nombra el fichero: {salida}"
-    );
+    let out = String::from_utf8(assert.get_output().stdout.clone()).expect("utf8");
+    assert!(out.contains("new.txt"), "the plan names the file: {out}");
 
     assert!(
-        !dst.join("nuevo.txt").exists(),
-        "--dry-run no escribe en el destino"
+        !dst.join("new.txt").exists(),
+        "--dry-run does not write to the destination"
     );
 }
 
-/// Nada que hacer: 0, y sin plan que enseñar.
+/// Nothing to do: 0, and no plan to show.
 #[test]
-fn sin_diferencias_sale_con_cero() {
+fn no_differences_exits_with_zero() {
     let dir = tempfile::tempdir().expect("tempdir");
     let src = dir.path().join("src");
     let dst = dir.path().join("dst");
     std::fs::create_dir_all(&src).expect("mkdir src");
     std::fs::create_dir_all(&dst).expect("mkdir dst");
-    std::fs::write(src.join("igual.txt"), b"x").expect("write src");
-    std::fs::write(dst.join("igual.txt"), b"x").expect("write dst");
+    std::fs::write(src.join("same.txt"), b"x").expect("write src");
+    std::fs::write(dst.join("same.txt"), b"x").expect("write dst");
 
     Command::cargo_bin("norte")
         .expect("bin")
-        .env("NORTE_CONFIG_DIR", config_dir_del_test())
+        .env("NORTE_CONFIG_DIR", test_config_dir())
         .args([
             "sync",
             "--mode",
@@ -75,19 +72,19 @@ fn sin_diferencias_sale_con_cero() {
         .code(0);
 }
 
-/// `--yes` aplica, y el destino queda con lo que el plan prometía.
+/// `--yes` applies, and the destination ends up with what the plan promised.
 #[test]
-fn con_yes_aplica_y_el_destino_recibe_el_fichero() {
+fn with_yes_it_applies_and_the_destination_gets_the_file() {
     let dir = tempfile::tempdir().expect("tempdir");
     let src = dir.path().join("src");
     let dst = dir.path().join("dst");
     std::fs::create_dir_all(&src).expect("mkdir src");
     std::fs::create_dir_all(&dst).expect("mkdir dst");
-    std::fs::write(src.join("nuevo.txt"), b"contenido").expect("write");
+    std::fs::write(src.join("new.txt"), b"content").expect("write");
 
     Command::cargo_bin("norte")
         .expect("bin")
-        .env("NORTE_CONFIG_DIR", config_dir_del_test())
+        .env("NORTE_CONFIG_DIR", test_config_dir())
         .args([
             "sync",
             "--mode",
@@ -100,31 +97,32 @@ fn con_yes_aplica_y_el_destino_recibe_el_fichero() {
         .code(1);
 
     assert_eq!(
-        std::fs::read(dst.join("nuevo.txt")).expect("el destino recibió el fichero"),
-        b"contenido"
+        std::fs::read(dst.join("new.txt")).expect("the destination received the file"),
+        b"content"
     );
 }
 
-/// Sin terminal NO hay pregunta que hacer, así que no se hace: se rehúsa
-/// ANTES, con el código de «no ocurrió» (2) y señalando `--yes`.
+/// Without a terminal there is NO question to ask, so none is asked: it
+/// refuses BEFORE, with the "nothing happened" code (2) and pointing at
+/// `--yes`.
 ///
-/// Los dos códigos que importan son los que NO puede devolver. `0` diría «los
-/// árboles ya están sincronizados» —que es lo que un `norte sync src dst &&
-/// echo ok` en un cron leería— habiendo escrito nada; y `1` diría «se
-/// resolvió». Una respuesta vacía, un EOF y un stdin cerrado son el mismo
-/// hecho: nadie consintió.
+/// The two codes that matter are the ones it CANNOT return. `0` would say
+/// "the trees are already in sync" — which is what a `norte sync src dst &&
+/// echo ok` in a cron job would read — having written nothing; and `1` would
+/// say "it was resolved". An empty answer, an EOF and a closed stdin are the
+/// same fact: nobody consented.
 #[test]
-fn sin_terminal_no_pregunta_y_no_aplica() {
+fn without_a_terminal_it_asks_nothing_and_applies_nothing() {
     let dir = tempfile::tempdir().expect("tempdir");
     let src = dir.path().join("src");
     let dst = dir.path().join("dst");
     std::fs::create_dir_all(&src).expect("mkdir src");
     std::fs::create_dir_all(&dst).expect("mkdir dst");
-    std::fs::write(src.join("nuevo.txt"), b"contenido").expect("write");
+    std::fs::write(src.join("new.txt"), b"content").expect("write");
 
     let assert = Command::cargo_bin("norte")
         .expect("bin")
-        .env("NORTE_CONFIG_DIR", config_dir_del_test())
+        .env("NORTE_CONFIG_DIR", test_config_dir())
         .args([
             "sync",
             "--mode",
@@ -139,34 +137,34 @@ fn sin_terminal_no_pregunta_y_no_aplica() {
     let err = String::from_utf8(assert.get_output().stderr.clone()).expect("utf8");
     assert!(
         err.contains("--yes"),
-        "el mensaje tiene que decir cuál es el remedio: {err}"
+        "the message has to say what the remedy is: {err}"
     );
     assert!(
-        !dst.join("nuevo.txt").exists(),
-        "sin consentimiento no se aplica nada"
+        !dst.join("new.txt").exists(),
+        "without consent nothing is applied"
     );
 }
 
-/// Un plan BLOQUEADO no es «nada que hacer».
+/// A BLOCKED plan is not "nothing to do".
 ///
-/// `src/x` es un DIRECTORIO y `dst/x` un FICHERO: el transductor bloquea
-/// (`TypeMismatchDir`) en vez de convertir un fichero en un árbol, y un plan
-/// bloqueado viene con `executable: false` y —por invariante del wire— SIN
-/// pasos. Leer esa lista vacía como «los árboles ya coinciden» y contestar 0
-/// es exactamente el fallo que el tercer código existe para no cometer.
+/// `src/x` is a DIRECTORY and `dst/x` a FILE: the transducer blocks
+/// (`TypeMismatchDir`) instead of turning a file into a tree, and a blocked
+/// plan comes with `executable: false` and — by wire invariant — WITHOUT
+/// steps. Reading that empty list as "the trees already match" and answering
+/// 0 is exactly the failure the third code exists to avoid.
 #[test]
-fn un_plan_bloqueado_no_dice_que_no_hay_nada_que_hacer() {
+fn a_blocked_plan_does_not_say_there_is_nothing_to_do() {
     let dir = tempfile::tempdir().expect("tempdir");
     let src = dir.path().join("src");
     let dst = dir.path().join("dst");
     std::fs::create_dir_all(src.join("x")).expect("mkdir src/x");
     std::fs::create_dir_all(&dst).expect("mkdir dst");
-    std::fs::write(src.join("x/dentro.txt"), b"a").expect("write");
-    std::fs::write(dst.join("x"), b"soy un fichero").expect("write");
+    std::fs::write(src.join("x/inside.txt"), b"a").expect("write");
+    std::fs::write(dst.join("x"), b"i am a file").expect("write");
 
     Command::cargo_bin("norte")
         .expect("bin")
-        .env("NORTE_CONFIG_DIR", config_dir_del_test())
+        .env("NORTE_CONFIG_DIR", test_config_dir())
         .args([
             "sync",
             "--mode",
@@ -179,33 +177,33 @@ fn un_plan_bloqueado_no_dice_que_no_hay_nada_que_hacer() {
         .code(2);
 
     assert_eq!(
-        std::fs::read(dst.join("x")).expect("el fichero sigue ahí"),
-        b"soy un fichero",
-        "un plan bloqueado no escribe"
+        std::fs::read(dst.join("x")).expect("the file is still there"),
+        b"i am a file",
+        "a blocked plan does not write"
     );
 }
 
-/// El CLI DESMONTA su spool al salir, por todos los caminos.
+/// The CLI UNMOUNTS its spool on exit, through every path.
 ///
-/// El daemon barre al arrancar y suelta cada conexión al cerrarla; el CLI no
-/// tiene ni lo uno ni lo otro, así que un `--dry-run` —que no aplica nada—
-/// dejaría en el directorio de estado un fichero que nombra los DOS árboles y
-/// que nadie recogería. Directorio de estado propio: aquí se MIRA el spool, y
-/// el compartido lo puede estar usando otro test.
+/// The daemon sweeps on startup and drops each connection when it closes it;
+/// the CLI has neither, so a `--dry-run` — which applies nothing — would
+/// leave in the state directory a file naming BOTH trees that nobody would
+/// pick up. Its own state directory: this is where the spool is LOOKED AT,
+/// and the shared one may be in use by another test.
 #[test]
-fn dry_run_no_deja_spool_detras() {
+fn dry_run_leaves_no_spool_behind() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let estado = dir.path().join("estado");
-    std::fs::create_dir_all(&estado).expect("mkdir estado");
+    let state = dir.path().join("state");
+    std::fs::create_dir_all(&state).expect("mkdir state");
     let src = dir.path().join("src");
     let dst = dir.path().join("dst");
     std::fs::create_dir_all(&src).expect("mkdir src");
     std::fs::create_dir_all(&dst).expect("mkdir dst");
-    std::fs::write(src.join("nuevo.txt"), b"contenido").expect("write");
+    std::fs::write(src.join("new.txt"), b"content").expect("write");
 
     Command::cargo_bin("norte")
         .expect("bin")
-        .env("NORTE_CONFIG_DIR", &estado)
+        .env("NORTE_CONFIG_DIR", &state)
         .args([
             "sync",
             "--mode",
@@ -217,7 +215,7 @@ fn dry_run_no_deja_spool_detras() {
         .assert()
         .code(1);
 
-    let quedan: Vec<String> = std::fs::read_dir(estado.join("sync-spools"))
+    let left: Vec<String> = std::fs::read_dir(state.join("sync-spools"))
         .map(|it| {
             it.flatten()
                 .map(|e| e.file_name().to_string_lossy().into_owned())
@@ -225,38 +223,38 @@ fn dry_run_no_deja_spool_detras() {
         })
         .unwrap_or_default();
     assert!(
-        quedan.is_empty(),
-        "el spool tiene que quedar vacío al salir: {quedan:?}"
+        left.is_empty(),
+        "the spool has to be empty on exit: {left:?}"
     );
 }
 
-/// Auditoría de encoding de la revisión de rama de C2, MAJOR-2: la fila del
-/// plan unía los campos EN BANDA, en la pantalla donde se teclea `y`.
+/// Encoding audit from the C2 branch review, MAJOR-2: the plan's row joined
+/// its fields IN-BAND, on the screen where `y` is typed.
 ///
-/// `→` y `  (…)` son imprimibles corrientes que `display_name_with` no
-/// enmascara, así que un nombre que los lleve dentro llega SIN el `!` de
-/// `rel_marcado` y finge una fila entera: `a → mem_b.txt` (corpus
-/// `arrow_join_spoof`) simula una pareja origen→destino que no existe. Aquí
-/// se comprueba lo que lo cierra — un campo por LÍNEA —, porque el salto de
-/// línea sí es un separador que un nombre no puede falsificar: `\n` es Cc y
-/// `is_terminal_hazard` lo enmascara a `U+FFFD`.
+/// `→` and `  (…)` are ordinary printables that `display_name_with` does not
+/// mask, so a name carrying them inside arrives WITHOUT `rel_marked`'s `!` and
+/// fakes a whole row: `a → mem_b.txt` (corpus `arrow_join_spoof`) simulates a
+/// source→destination pair that does not exist. What is checked here is what
+/// closes that — one field per LINE —, because a newline IS a separator a
+/// name cannot forge: `\n` is Cc and `is_terminal_hazard` masks it to
+/// `U+FFFD`.
 ///
-/// Este fichero no tenía NINGÚN test de nombre hostil, y esa ausencia es por
-/// lo que la CLI se quedó atrás cuando la GUI y la TUI se arreglaron.
+/// This file had NO hostile-name test at all, and that absence is why the
+/// CLI fell behind when the GUI and the TUI were fixed.
 #[test]
-fn un_nombre_con_flecha_no_finge_una_pareja_en_el_plan() {
+fn a_name_with_an_arrow_does_not_fake_a_pair_in_the_plan() {
     let dir = tempfile::tempdir().expect("tempdir");
     let src = dir.path().join("src");
     let dst = dir.path().join("dst");
     std::fs::create_dir_all(&src).expect("mkdir src");
     std::fs::create_dir_all(&dst).expect("mkdir dst");
-    // El nombre del corpus, tal cual: legal en ext4 y APFS.
-    let hostil = "a \u{2192} mem_b.txt";
-    std::fs::write(src.join(hostil), b"contenido").expect("write");
+    // The corpus's name, as is: legal on ext4 and APFS.
+    let hostile = "a \u{2192} mem_b.txt";
+    std::fs::write(src.join(hostile), b"content").expect("write");
 
     let assert = Command::cargo_bin("norte")
         .expect("bin")
-        .env("NORTE_CONFIG_DIR", config_dir_del_test())
+        .env("NORTE_CONFIG_DIR", test_config_dir())
         .args([
             "sync",
             "--mode",
@@ -268,67 +266,66 @@ fn un_nombre_con_flecha_no_finge_una_pareja_en_el_plan() {
         .assert()
         .code(1);
 
-    let salida = String::from_utf8(assert.get_output().stdout.clone()).expect("utf8");
-    let fila = salida
+    let out = String::from_utf8(assert.get_output().stdout.clone()).expect("utf8");
+    let row = out
         .lines()
         .find(|l| l.contains("mem_b.txt"))
-        .unwrap_or_else(|| panic!("el plan nombra el fichero: {salida}"));
+        .unwrap_or_else(|| panic!("the plan names the file: {out}"));
 
-    // El nombre entero está en UNA línea, con su flecha dentro: eso es el
-    // nombre, no una pareja. Lo que no puede haber es una SEGUNDA ortografía
-    // en esa misma línea, que es lo que el ` → ` en banda fabricaba.
-    assert!(fila.contains(hostil), "el nombre va entero: {fila:?}");
+    // The whole name is on ONE line, arrow included: that is the name, not a
+    // pair. What must not exist is a SECOND spelling on that same line, which
+    // is what the in-band ` → ` used to manufacture.
+    assert!(row.contains(hostile), "the name goes whole: {row:?}");
     assert_eq!(
-        fila.matches('\u{2192}').count(),
+        row.matches('\u{2192}').count(),
         1,
-        "una sola flecha, la del NOMBRE: {fila:?}"
+        "a single arrow, the NAME's: {row:?}"
     );
-    // Y la ortografía del destino, cuando la hay, va en su propia línea con
-    // su etiqueta — nunca pegada al nombre.
+    // And the destination's spelling, when there is one, goes on its own line
+    // with its own label — never glued to the name.
     assert!(
-        !fila.contains("  ("),
-        "el porqué tampoco se une en banda: {fila:?}"
+        !row.contains("  ("),
+        "the reason is not joined in-band either: {row:?}"
     );
 }
 
-// ---------- Ctrl+C durante `norte sync` (#180, #187) ----------
+// ---------- Ctrl+C during `norte sync` (#180, #187) ----------
 
-/// `kill(pid, SIGINT)` sin dependencias: mismo helper que
-/// `smoke.rs::unsafe_free_kill`, duplicado a propósito — cada fichero de test
-/// es su propio binario y no hay una crate de soporte compartida entre ellos
-/// (mismo criterio que la duplicación de `config_dir_del_test`).
+/// `kill(pid, SIGINT)` with no dependencies: the same helper as
+/// `smoke.rs::unsafe_free_kill`, duplicated on purpose — each test file is its
+/// own binary and there is no support crate shared between them (same
+/// criterion as the duplication of `test_config_dir`).
 #[cfg(unix)]
 fn unsafe_free_kill(pid: u32) {
     let status = std::process::Command::new("kill")
         .arg("-INT")
         .arg(pid.to_string())
         .status()
-        .expect("kill disponible");
-    assert!(status.success(), "kill -INT falló");
+        .expect("kill available");
+    assert!(status.success(), "kill -INT failed");
 }
 
-/// #180: un Ctrl+C DURANTE la planificación no puede dejar un `.part` de
-/// spool huérfano.
+/// #180: a Ctrl+C DURING planning must not leave an orphaned spool `.part`.
 ///
-/// Antes de la corrección, `sync_plan_show_apply` drenaba el stream de
-/// `sync.plan` en un `while let` sin manejador de Ctrl+C: el SIGINT mataba el
-/// proceso ENTERO por el comportamiento por defecto del SO, sin darle a
-/// `run_sync_plan` la ocasión de ver su `CancellationToken`, cerrar el spool
-/// y borrar el `.part` (`SpoolWriter::finish`/`Drop`). El TTL solo barre
-/// planes CERRADOS, así que ese fichero se quedaba para siempre.
+/// Before the fix, `sync_plan_show_apply` drained the `sync.plan` stream in a
+/// `while let` with no Ctrl+C handler: the SIGINT killed the WHOLE process via
+/// the OS's default behaviour, without giving `run_sync_plan` a chance to see
+/// its `CancellationToken`, close the spool and remove the `.part`
+/// (`SpoolWriter::finish`/`Drop`). The TTL only sweeps CLOSED plans, so that
+/// file stayed forever.
 ///
-/// Un árbol con muchas entradas (no bytes: lo que hace lenta la
-/// PLANIFICACIÓN es listar y comparar filas, no escribir contenido — eso es
-/// el apply) da tiempo a comprobar que el `.part` existe antes de señalar.
-/// Si la planificación termina antes de que se detecte —carrera legítima, la
-/// misma que tolera `cp_sigint_cancels_cleanly` en `smoke.rs`— la aserción de
-/// abajo sigue siendo cierta trivialmente: no queda nada en el spool.
+/// A tree with many entries (not bytes: what makes PLANNING slow is listing
+/// and comparing rows, not writing content — that is the apply) gives enough
+/// time to check that the `.part` exists before signalling. If planning ends
+/// before that is detected — a legitimate race, the same one
+/// `cp_sigint_cancels_cleanly` tolerates in `smoke.rs` — the assertion below
+/// still holds trivially: nothing is left in the spool.
 #[cfg(unix)]
 #[test]
-fn sigint_durante_planificacion_no_deja_part_detras() {
+fn sigint_during_planning_leaves_no_part_behind() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let estado = dir.path().join("estado");
-    std::fs::create_dir_all(&estado).expect("mkdir estado");
+    let state = dir.path().join("state");
+    std::fs::create_dir_all(&state).expect("mkdir state");
     let src = dir.path().join("src");
     let dst = dir.path().join("dst");
     std::fs::create_dir_all(&src).expect("mkdir src");
@@ -338,25 +335,25 @@ fn sigint_durante_planificacion_no_deja_part_detras() {
     }
 
     let bin = assert_cmd::cargo::cargo_bin("norte");
-    let spool_dir = estado.join("sync-spools");
+    let spool_dir = state.join("sync-spools");
 
-    // El manejador cooperativo se ARMA en un worker del hijo, y verlo escribir
-    // el `.part` no prueba que ese worker ya haya tenido turno: bajo carga
-    // —esta suite corre con un proceso por núcleo— el SIGINT puede llegar
-    // mientras sigue vigente el por defecto del SO, que mata el proceso en
-    // crudo y se salta el `Drop` que borra el `.part`.
+    // The cooperative handler is ARMED in a worker of the child, and seeing
+    // it write the `.part` does not prove that worker already had its turn:
+    // under load — this suite runs with one process per core — the SIGINT can
+    // arrive while the OS default is still in effect, which kills the process
+    // raw and skips the `Drop` that removes the `.part`.
     //
-    // El suelo de 50 ms que había aquí era una CONJETURA DE RELOJ, y bajo
-    // `just ci-fast` la pierde: rojo en la suite entera, verde en aislado.
-    // Esto lo hace causal — la muerte del proceso DICE cuál de los dos casos
-    // fue (código de salida = cooperativa, señal cruda = el manejador no
-    // estaba) — y solo reintenta el caso que no probaba nada. Tres intentos
-    // sin una sola muerte cooperativa no son ruido: son un manejador que no se
-    // arma, y entonces el test falla diciendo eso.
-    let mut crudas = 0;
-    for intento in 1..=3 {
+    // The 50 ms floor that used to be here was a CLOCK GUESS, and under `just
+    // ci-fast` it loses: red across the whole suite, green in isolation. This
+    // makes it causal instead — the process's death SAYS which of the two
+    // cases it was (exit code = cooperative, raw signal = the handler was not
+    // there yet) — and only retries the case that proved nothing. Three
+    // attempts without a single cooperative death is not noise: it is a
+    // handler that never arms, and then the test fails saying so.
+    let mut raw_deaths = 0;
+    for attempt in 1..=3 {
         let mut child = std::process::Command::new(&bin)
-            .env("NORTE_CONFIG_DIR", &estado)
+            .env("NORTE_CONFIG_DIR", &state)
             .env("NORTE_LANG", "en")
             .arg("sync")
             .arg("--mode")
@@ -369,8 +366,8 @@ fn sigint_durante_planificacion_no_deja_part_detras() {
             .spawn()
             .expect("spawn norte sync");
 
-        // Espera a que el `.part` exista: la planificación arrancó y el spool
-        // se creó, que es lo que esta prueba necesita que haya que limpiar.
+        // Waits for the `.part` to exist: planning started and the spool was
+        // created, which is what this test needs there to be to clean up.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
         let mut started = false;
         loop {
@@ -380,21 +377,21 @@ fn sigint_durante_planificacion_no_deja_part_detras() {
             if std::time::Instant::now() >= deadline {
                 break;
             }
-            let tiene_part = std::fs::read_dir(&spool_dir).is_ok_and(|it| {
+            let has_part = std::fs::read_dir(&spool_dir).is_ok_and(|it| {
                 it.flatten()
                     .any(|e| e.file_name().to_string_lossy().ends_with(".part"))
             });
-            if tiene_part {
+            if has_part {
                 started = true;
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
-        let vivo = child.try_wait().expect("try_wait").is_none();
+        let alive = child.try_wait().expect("try_wait").is_none();
         assert!(
             started,
-            "la planificación no llegó a escribir un `.part` en 15 s (intento {intento}; \
-             ¿sigue vivo el hijo? {vivo}; en el spool: {:?}): no había nada que cancelar",
+            "planning did not get to write a `.part` in 15 s (attempt {attempt}; \
+             is the child still alive? {alive}; in the spool: {:?}): there was nothing to cancel",
             std::fs::read_dir(&spool_dir).map(|it| it
                 .flatten()
                 .map(|e| e.file_name().to_string_lossy().into_owned())
@@ -403,11 +400,11 @@ fn sigint_durante_planificacion_no_deja_part_detras() {
         unsafe_free_kill(child.id());
         let status = child.wait().expect("wait");
 
-        // Muerte CRUDA: el SIGINT por defecto del SO se adelantó al manejador.
-        // El `Drop` no corrió porque no podía correr — no es lo que este test
-        // afirma, así que se limpia y se vuelve a intentar.
+        // RAW death: the OS default SIGINT beat the handler. The `Drop` did
+        // not run because it could not run — that is not what this test
+        // asserts, so it cleans up and retries.
         if status.code().is_none() {
-            crudas += 1;
+            raw_deaths += 1;
             for e in std::fs::read_dir(&spool_dir)
                 .into_iter()
                 .flatten()
@@ -418,7 +415,7 @@ fn sigint_durante_planificacion_no_deja_part_detras() {
             continue;
         }
 
-        let quedan: Vec<String> = std::fs::read_dir(&spool_dir)
+        let left: Vec<String> = std::fs::read_dir(&spool_dir)
             .map(|it| {
                 it.flatten()
                     .map(|e| e.file_name().to_string_lossy().into_owned())
@@ -426,35 +423,35 @@ fn sigint_durante_planificacion_no_deja_part_detras() {
             })
             .unwrap_or_default();
         assert!(
-            quedan.is_empty(),
-            "un Ctrl+C durante la planificación no puede dejar nada en el spool: {quedan:?} \
-             (intento {intento}, salió con {:?}, muertes crudas hasta aquí: {crudas})",
+            left.is_empty(),
+            "a Ctrl+C during planning must not leave anything in the spool: {left:?} \
+             (attempt {attempt}, exited with {:?}, raw deaths so far: {raw_deaths})",
             status.code()
         );
         return;
     }
     panic!(
-        "tres intentos y las tres veces murió por señal CRUDA ({crudas}): el manejador cooperativo no se arma"
+        "three attempts and all three died by RAW signal ({raw_deaths}): the cooperative handler never arms"
     );
 }
 
-/// #187: un `norte sync` CANCELADO llega a su informe, y el código de salida
-/// se queda en 2 — nunca el 0 de `run_task` (que en `sync.apply` sería
-/// mentira: la aplicación se cortó) ni un mensaje de «destino limpio», que es
-/// falso para un `Mirror` cortado a medias (lo aplicado hasta el corte se
-/// queda, journalizado, regla dura 4).
+/// #187: a CANCELLED `norte sync` reaches its report, and the exit code stays
+/// at 2 — never the 0 of `run_task` (which for `sync.apply` would be a lie:
+/// the application was cut short) nor a "clean destination" message, which is
+/// false for a `Mirror` cut halfway through (what was applied before the cut
+/// stays, journaled, hard rule 4).
 ///
-/// Un árbol grande en BYTES (y no solo en número de entradas) para que la
-/// fase de apply —que sí escribe— dure lo bastante como para señalarla
-/// después de que el plan ya se aprobó con `--yes`.
+/// A tree that is large in BYTES (not just entry count) so the apply
+/// phase — which does write — lasts long enough to be signalled after the
+/// plan has already been approved with `--yes`.
 #[cfg(unix)]
 #[test]
-fn sigint_durante_apply_pide_el_informe_y_no_dice_destino_limpio() {
+fn sigint_during_apply_asks_for_the_report_and_does_not_say_clean_destination() {
     use std::io::Write as _;
 
     let dir = tempfile::tempdir().expect("tempdir");
-    let estado = dir.path().join("estado");
-    std::fs::create_dir_all(&estado).expect("mkdir estado");
+    let state = dir.path().join("state");
+    std::fs::create_dir_all(&state).expect("mkdir state");
     let src = dir.path().join("src");
     let dst = dir.path().join("dst");
     std::fs::create_dir_all(&src).expect("mkdir src");
@@ -467,7 +464,7 @@ fn sigint_durante_apply_pide_el_informe_y_no_dice_destino_limpio() {
 
     let bin = assert_cmd::cargo::cargo_bin("norte");
     let mut child = std::process::Command::new(bin)
-        .env("NORTE_CONFIG_DIR", &estado)
+        .env("NORTE_CONFIG_DIR", &state)
         .env("NORTE_LANG", "en")
         .arg("sync")
         .arg("--mode")
@@ -480,38 +477,38 @@ fn sigint_durante_apply_pide_el_informe_y_no_dice_destino_limpio() {
         .spawn()
         .expect("spawn norte sync");
 
-    // #201: los dos pipes se DRENAN en hilos, desde ya. Sin esto el test se
-    // podía autoanular en silencio: un plan que no cabe en el buffer del pipe
-    // (64 KiB en Linux) bloquea al hijo ANTES de aplicar, `dst` no se llena
-    // nunca, no se manda ninguna señal y la corrida entera sale por el brazo
-    // de la carrera sin haber probado nada. La fixture de hoy cabe; subirla
-    // cruzaba ese umbral sin decir una palabra.
+    // #201: the two pipes are DRAINED on threads, right away. Without this the
+    // test could silently defeat itself: a plan that does not fit the pipe's
+    // buffer (64 KiB on Linux) blocks the child BEFORE applying, `dst` never
+    // fills, no signal is ever sent and the whole run exits through the race's
+    // arm without having proven anything. Today's fixture fits; raising it
+    // crossed that threshold without a word.
     //
-    // Su gemelo `sigint_tras_planificar_termina_el_proceso` depende justo de
-    // ese bloqueo para alcanzar SU ventana. El mismo mecanismo: aquí estorba,
-    // allí es el sujeto. Quien toque uno lea los dos.
-    let mut salida_hijo = child.stdout.take().expect("stdout piped");
-    let mut error_hijo = child.stderr.take().expect("stderr piped");
-    let drenador_out = std::thread::spawn(move || {
+    // Its twin `sigint_after_planning_ends_the_process` depends on exactly
+    // that block to reach ITS window. Same mechanism: here it gets in the
+    // way, there it is the subject. Whoever touches one should read both.
+    let mut child_out = child.stdout.take().expect("stdout piped");
+    let mut child_err = child.stderr.take().expect("stderr piped");
+    let out_drain = std::thread::spawn(move || {
         let mut buf = Vec::new();
-        let _ = std::io::Read::read_to_end(&mut salida_hijo, &mut buf);
+        let _ = std::io::Read::read_to_end(&mut child_out, &mut buf);
         buf
     });
-    let drenador_err = std::thread::spawn(move || {
+    let err_drain = std::thread::spawn(move || {
         let mut buf = Vec::new();
-        let _ = std::io::Read::read_to_end(&mut error_hijo, &mut buf);
+        let _ = std::io::Read::read_to_end(&mut child_err, &mut buf);
         buf
     });
 
-    // El apply ARRANCÓ en cuanto el destino recibe su primera entrada: la
-    // planificación no escribe nada ahí. El suelo es la misma cautela que
-    // `sigint_durante_planificacion_no_deja_part_detras`: ver ficheros en
-    // `dst` no prueba que `watch_ctrl_c` ya recibió su primer `poll` en el
-    // proceso hijo, así que bajo carga un `kill` demasiado pronto puede topar
-    // con el SIGINT por defecto del SO en vez de con el manejador cooperativo.
-    let arranque = std::time::Instant::now();
-    let suelo = std::time::Duration::from_millis(50);
-    let deadline = arranque + std::time::Duration::from_secs(15);
+    // The apply STARTED as soon as the destination receives its first entry:
+    // planning writes nothing there. The floor is the same caution as
+    // `sigint_during_planning_leaves_no_part_behind`: seeing files in `dst`
+    // does not prove `watch_ctrl_c` already got its first `poll` in the child
+    // process, so under load a `kill` sent too soon can hit the OS default
+    // SIGINT instead of the cooperative handler.
+    let start = std::time::Instant::now();
+    let floor = std::time::Duration::from_millis(50);
+    let deadline = start + std::time::Duration::from_secs(15);
     let mut started = false;
     loop {
         if child.try_wait().expect("try_wait").is_some() {
@@ -520,25 +517,25 @@ fn sigint_durante_apply_pide_el_informe_y_no_dice_destino_limpio() {
         if std::time::Instant::now() >= deadline {
             break;
         }
-        let tiene_algo = std::fs::read_dir(&dst).is_ok_and(|it| it.flatten().next().is_some());
-        if tiene_algo && arranque.elapsed() >= suelo {
+        let has_something = std::fs::read_dir(&dst).is_ok_and(|it| it.flatten().next().is_some());
+        if has_something && start.elapsed() >= floor {
             started = true;
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
-    // #201: que la señal se MANDÓ es la premisa del test, no una casualidad
-    // afortunada. Sin esto, cualquier corrida en la que el apply no arrancara
-    // pasaba sin ejercitar el arreglo.
+    // #201: that the signal WAS SENT is the test's premise, not a lucky
+    // coincidence. Without this, any run where the apply never started would
+    // pass without exercising the fix.
     assert!(
         started,
-        "el apply no llegó a escribir en {} en 15 s: la señal jamás se mandó y este test no probó nada",
+        "the apply never got to write to {} in 15 s: the signal was never sent and this test proved nothing",
         dst.display()
     );
     unsafe_free_kill(child.id());
     let status = child.wait().expect("wait");
-    let stdout = drenador_out.join().expect("drenador de stdout");
-    let stderr = drenador_err.join().expect("drenador de stderr");
+    let stdout = out_drain.join().expect("stdout drain");
+    let stderr = err_drain.join().expect("stderr drain");
 
     match status.code() {
         Some(2) => {
@@ -546,72 +543,72 @@ fn sigint_durante_apply_pide_el_informe_y_no_dice_destino_limpio() {
             let err = String::from_utf8_lossy(&stderr);
             assert!(
                 out.contains("applied:"),
-                "una aplicación cancelada TIENE informe: stdout={out}"
+                "a cancelled application DOES have a report: stdout={out}"
             );
             assert!(
                 !err.contains("destination clean"),
-                "lo aplicado hasta el corte NO es un destino limpio: stderr={err}"
+                "what was applied before the cut is NOT a clean destination: stderr={err}"
             );
         }
-        // Carrera legítima QUE TAMBIÉN SE COMPRUEBA: el apply terminó antes de
-        // que la señal llegara. Entonces terminó DEL TODO — un `0` con la
-        // mitad de los ficheros sería una aplicación que mintió sobre su
-        // desenlace, y este brazo era el sitio donde eso pasaba inadvertido.
+        // Legitimate race that IS ALSO CHECKED: the apply finished before the
+        // signal arrived. Then it finished COMPLETELY — a `0` with half the
+        // files would be an application lying about its outcome, and this arm
+        // was where that used to slip through unnoticed.
         Some(0) => {
-            let copiados = std::fs::read_dir(&dst).expect("leer dst").count();
+            let copied = std::fs::read_dir(&dst).expect("read dst").count();
             assert_eq!(
-                copiados, 400,
-                "salió 0 (completo) con {copiados} de 400 ficheros en el destino"
+                copied, 400,
+                "exited 0 (complete) with {copied} of 400 files in the destination"
             );
         }
         Some(1) => {
             let err = String::from_utf8_lossy(&stderr);
             assert!(
                 !err.contains("destination clean"),
-                "un fallo tampoco deja «destino limpio»: stderr={err}"
+                "a failure does not leave a \"clean destination\" either: stderr={err}"
             );
         }
-        other => panic!("código de salida inesperado tras SIGINT: {other:?}"),
+        other => panic!("unexpected exit code after SIGINT: {other:?}"),
     }
 }
 
-/// **BLOCKER de la revisión de rama de W2.** `Ctrl+C` DESPUÉS de planificar.
+/// **BLOCKER from the W2 branch review.** `Ctrl+C` AFTER planning.
 ///
-/// Registrar `ctrl_c()` en tokio es de PROCESO y permanente: la doc de tokio
-/// dice que soltar el `Signal` no restaura el comportamiento por defecto. Con
-/// un vigilante por fase, el `abort()` al acabar la planificación mataba al que
-/// escuchaba y dejaba el registro puesto — así que a partir de ahí la señal la
-/// consumía tokio, no la atendía nadie, y `Ctrl+C` no hacía NADA en toda la
-/// ventana que va desde el fin del plan hasta el principio del apply: imprimir
-/// el plan, los bloqueadores, el prompt `[y/N]` y la salida de `--dry-run`.
+/// Registering `ctrl_c()` in tokio is PROCESS-wide and permanent: tokio's docs
+/// say dropping the `Signal` does not restore the default behaviour. With one
+/// watcher per phase, the `abort()` at the end of planning killed the
+/// listener and left the registration in place — so from then on tokio
+/// consumed the signal, nobody handled it, and `Ctrl+C` did NOTHING for the
+/// whole window from the end of the plan to the start of the apply: printing
+/// the plan, the blockers, the `[y/N]` prompt and `--dry-run`'s output.
 ///
-/// Aquí se provoca la ventana con `--dry-run` sobre un árbol grande y un
-/// `stdout` que NADIE drena: el hijo se bloquea escribiendo el plan contra un
-/// pipe lleno, que es justo el estado «planificación terminada, nada vivo que
-/// cancelar». Antes del arreglo el proceso se quedaba ahí para siempre.
+/// The window is provoked here with `--dry-run` over a large tree and a
+/// `stdout` that NOBODY drains: the child blocks writing the plan against a
+/// full pipe, which is exactly the state "planning finished, nothing alive to
+/// cancel". Before the fix the process stayed there forever.
 ///
-/// El prompt de verdad no se puede probar sin PTY —esta CLI no pregunta sin
-/// terminal, y hay un test que lo fija— así que se prueba la MISMA ventana por
-/// el lado que sí es alcanzable. Los otros dos tests de señal no la ven: los
-/// dos pasan `--yes`.
+/// The real prompt cannot be tested without a PTY — this CLI does not ask
+/// without a terminal, and there is a test that pins that — so the SAME
+/// window is tested from the side that IS reachable. The other two signal
+/// tests do not see it: both pass `--yes`.
 #[test]
-fn sigint_tras_planificar_termina_el_proceso() {
+fn sigint_after_planning_ends_the_process() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let estado = dir.path().join("estado");
-    std::fs::create_dir_all(&estado).expect("mkdir estado");
+    let state = dir.path().join("state");
+    std::fs::create_dir_all(&state).expect("mkdir state");
     let src = dir.path().join("src");
     let dst = dir.path().join("dst");
     std::fs::create_dir_all(&src).expect("mkdir src");
     std::fs::create_dir_all(&dst).expect("mkdir dst");
-    // Bastantes ficheros para que el plan impreso NO quepa en el buffer del
-    // pipe (64 KiB en Linux): así el hijo se queda bloqueado escribiéndolo.
+    // Enough files that the printed plan does NOT fit the pipe's buffer
+    // (64 KiB on Linux): that way the child stays blocked writing it.
     for i in 0..20_000 {
         std::fs::write(src.join(format!("f{i:05}")), b"").expect("write");
     }
 
     let bin = assert_cmd::cargo::cargo_bin("norte");
     let mut child = std::process::Command::new(bin)
-        .env("NORTE_CONFIG_DIR", &estado)
+        .env("NORTE_CONFIG_DIR", &state)
         .env("NORTE_LANG", "en")
         .arg("sync")
         .arg("--mode")
@@ -619,30 +616,30 @@ fn sigint_tras_planificar_termina_el_proceso() {
         .arg("--dry-run")
         .arg(&src)
         .arg(&dst)
-        // Piped y NUNCA leído: el pipe se llena y el hijo se bloquea ahí.
+        // Piped and NEVER read: the pipe fills and the child blocks there.
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .spawn()
         .expect("spawn norte sync");
 
-    // Suelo antes de señalar, por lo mismo que los otros dos: el manejador
-    // vive en un worker distinto del que planifica. Aquí además hay que dejar
-    // que la planificación TERMINE y que el hijo se atasque escribiendo.
+    // Floor before signalling, for the same reason as the other two: the
+    // handler lives in a different worker than the one planning. Here it also
+    // has to let planning FINISH and the child get stuck writing.
     std::thread::sleep(std::time::Duration::from_millis(2500));
 
-    // El mismo helper que los otros dos: `kill -INT` por proceso, sin añadir
-    // `libc` como dependencia solo para un test (regla 8).
+    // The same helper as the other two: `kill -INT` by pid, without adding
+    // `libc` as a dependency just for one test (rule 8).
     unsafe_free_kill(child.id());
 
-    // Y TIENE que morir. Antes del arreglo se quedaba bloqueado para siempre:
-    // la señal la consumía tokio y no la escuchaba nadie.
+    // And it HAS to die. Before the fix it stayed blocked forever: tokio
+    // consumed the signal and nobody was listening.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
         match child.try_wait().expect("try_wait") {
             Some(status) => {
                 assert!(
                     !status.success(),
-                    "un sync interrumpido tras planificar no sale con éxito: {status:?}"
+                    "a sync interrupted after planning does not exit successfully: {status:?}"
                 );
                 return;
             }
@@ -651,7 +648,7 @@ fn sigint_tras_planificar_termina_el_proceso() {
             }
             None => {
                 let _ = child.kill();
-                panic!("Ctrl+C tras planificar no hizo nada: el proceso sigue vivo");
+                panic!("Ctrl+C after planning did nothing: the process is still alive");
             }
         }
     }

@@ -1,70 +1,69 @@
-//! Tests del runtime wasmtime que NO requieren un componente WASM real: que el
-//! motor se construye y que un artefacto basura falla con un error claro.
+//! Tests of the wasmtime runtime that do NOT require a real WASM
+//! component: that the engine builds and that a garbage artifact fails
+//! with a clear error.
 
 use norte_plugin_host::{Capabilities, PluginRuntime, RuntimeError};
 
 mod support;
 
 #[test]
-fn runtime_se_construye() {
+fn runtime_builds() {
     let _rt = PluginRuntime::new().expect("engine");
 }
 
 #[test]
-fn cargar_un_no_componente_falla_claro() {
+fn loading_a_non_component_fails_clearly() {
     let rt = PluginRuntime::new().expect("engine");
     let dir = tempfile::tempdir().unwrap();
     let fake = dir.path().join("no.wasm");
-    std::fs::write(&fake, b"esto no es un componente wasm").unwrap();
-    let fake = norte_plugin_host::WasmArtifact::trusting_current(fake).expect("lee");
+    std::fs::write(&fake, b"this is not a wasm component").unwrap();
+    let fake = norte_plugin_host::WasmArtifact::trusting_current(fake).expect("read");
     let err = rt
         .instantiate(&fake, Capabilities::default())
-        .expect_err("bytes basura");
-    assert!(matches!(err, RuntimeError::Component(_)), "fue {err:?}");
+        .expect_err("garbage bytes");
+    assert!(matches!(err, RuntimeError::Component(_)), "was {err:?}");
 }
 
 #[test]
-fn artefacto_demasiado_grande_se_rechaza_antes_de_compilar() {
-    // Un `.wasm` que supera el tope (issue #68) se rechaza sin llegar a
-    // `Component::from_file`. Se crea un fichero DISPERSO (`set_len`) para no
-    // escribir de verdad decenas de MiB: `metadata().len()` devuelve el tamaño
-    // lógico, que es lo que mira el cap.
+fn an_artifact_too_large_is_rejected_before_compiling() {
+    // A `.wasm` that exceeds the cap (issue #68) is rejected without ever
+    // reaching `Component::from_file`. A SPARSE file is created (`set_len`)
+    // so as not to actually write tens of MiB: `metadata().len()` returns
+    // the logical size, which is what the cap looks at.
     let rt = PluginRuntime::new().expect("engine");
     let dir = tempfile::tempdir().unwrap();
-    let fake = dir.path().join("gigante.wasm");
+    let fake = dir.path().join("giant.wasm");
     let f = std::fs::File::create(&fake).unwrap();
-    // 64 MiB + 1: justo por encima de MAX_ARTIFACT_BYTES.
+    // 64 MiB + 1: just above MAX_ARTIFACT_BYTES.
     f.set_len(64 * 1024 * 1024 + 1).unwrap();
     drop(f);
-    // La huella da igual: el tope se mira antes de leer nada.
+    // The fingerprint does not matter: the cap is checked before reading
+    // anything.
     let fake = norte_plugin_host::WasmArtifact::approved(fake, "0".repeat(64));
     let err = rt
         .instantiate(&fake, Capabilities::default())
-        .expect_err("artefacto sobredimensionado");
+        .expect_err("oversized artifact");
     assert!(
         matches!(err, RuntimeError::ArtifactTooLarge { .. }),
-        "fue {err:?}"
+        "was {err:?}"
     );
 }
 
 #[test]
-fn previewer_demo_renderiza_y_loguea() {
+fn previewer_demo_renders_and_logs() {
     let Some(wasm) = support::build_guest("previewer-demo") else {
         return;
     };
     let rt = norte_plugin_host::PluginRuntime::new().expect("engine");
     let mut inst = rt
         .instantiate(&wasm, norte_plugin_host::Capabilities::default())
-        .expect("instancia");
+        .expect("instance");
     let out = inst
-        .render_preview(
-            "text/plain",
-            b"linea uno\nlinea dos\nlinea tres\nlinea cuatro",
-        )
+        .render_preview("text/plain", b"line one\nline two\nline three\nline four")
         .expect("render");
-    assert!(out.contains("text/plain"), "cabecera: {out}");
-    assert!(out.contains("linea uno") && out.contains("linea tres"));
-    assert!(!out.contains("linea cuatro"), "solo 3 líneas");
+    assert!(out.contains("text/plain"), "header: {out}");
+    assert!(out.contains("line one") && out.contains("line three"));
+    assert!(!out.contains("line four"), "only 3 lines");
     assert!(
         inst.logs().iter().any(|l| l.contains("previewer-demo")),
         "host-log: {:?}",
@@ -72,216 +71,219 @@ fn previewer_demo_renderiza_y_loguea() {
     );
 }
 
-/// ADR 0141: el mismo plugin se compila UNA vez por runtime, y cada
-/// instancia sigue siendo nueva — lo que se reutiliza es el código, no el
-/// estado.
+/// ADR 0141: the same plugin is compiled ONCE per runtime, and every
+/// instance is still new — what is reused is the code, not the state.
 #[test]
-fn el_mismo_plugin_se_compila_una_vez_y_cada_instancia_es_nueva() {
+fn the_same_plugin_is_compiled_once_and_every_instance_is_new() {
     let Some(wasm) = support::build_guest("previewer-demo") else {
         return;
     };
     let rt = norte_plugin_host::PluginRuntime::new().expect("engine");
-    let mut primera = rt
+    let mut first = rt
         .instantiate(&wasm, norte_plugin_host::Capabilities::default())
-        .expect("instancia");
-    let _ = primera
-        .render_preview("text/plain", b"uno")
-        .expect("render");
-    let mut segunda = rt
+        .expect("instance");
+    let _ = first.render_preview("text/plain", b"one").expect("render");
+    let mut second = rt
         .instantiate(&wasm, norte_plugin_host::Capabilities::default())
-        .expect("instancia");
-    assert_eq!(rt.compiled_components(), 1, "compilado una sola vez");
+        .expect("instance");
+    assert_eq!(rt.compiled_components(), 1, "compiled only once");
     assert!(
-        segunda.logs().is_empty(),
-        "la segunda no hereda los registros de la primera: {:?}",
-        segunda.logs()
+        second.logs().is_empty(),
+        "the second does not inherit the first's logs: {:?}",
+        second.logs()
     );
-    let out = segunda
-        .render_preview("text/plain", b"dos")
-        .expect("render");
-    assert!(out.contains("dos"));
-    // Otros bytes, otra entrada: la clave es el CONTENIDO.
-    let copia = tempfile::tempdir().expect("tmp");
-    let otro = copia.path().join("otro.wasm");
+    let out = second.render_preview("text/plain", b"two").expect("render");
+    assert!(out.contains("two"));
+    // Different bytes, different entry: the key is the CONTENT.
+    let copy = tempfile::tempdir().expect("tmp");
+    let other = copy.path().join("other.wasm");
     let mut bytes = std::fs::read(&wasm).expect("wasm");
-    // Una sección personalizada al final sigue siendo un componente válido y
-    // cambia el resumen: id 0, nombre de un byte, sin contenido.
+    // A custom section at the end is still a valid component and changes
+    // the digest: id 0, one-byte name, no content.
     bytes.extend_from_slice(&[0, 2, 1, b'x']);
-    std::fs::write(&otro, &bytes).expect("escribe");
-    let aprobado = norte_plugin_host::WasmArtifact::trusting_current(&otro).expect("lee");
+    std::fs::write(&other, &bytes).expect("write");
+    let approved = norte_plugin_host::WasmArtifact::trusting_current(&other).expect("read");
     let _ = rt
-        .instantiate(&aprobado, norte_plugin_host::Capabilities::default())
-        .expect("instancia");
+        .instantiate(&approved, norte_plugin_host::Capabilities::default())
+        .expect("instance");
     assert_eq!(rt.compiled_components(), 2);
-    // ADR 0142: el fichero reescrito DESPUÉS de aprobarse no se carga con la
-    // aprobación de antes, aunque la ruta sea la misma y su versión vieja
-    // esté compilada en la caché.
+    // ADR 0142: the file rewritten AFTER being approved does not load with
+    // the earlier approval, even though the path is the same and its old
+    // version is compiled in the cache.
     bytes.extend_from_slice(&[0, 2, 1, b'y']);
-    std::fs::write(&otro, &bytes).expect("reescribe");
-    let Err(err) = rt.instantiate(&aprobado, norte_plugin_host::Capabilities::default()) else {
-        panic!("un binario cambiado tras aprobarse no se instancia")
+    std::fs::write(&other, &bytes).expect("rewrite");
+    let Err(err) = rt.instantiate(&approved, norte_plugin_host::Capabilities::default()) else {
+        panic!("a binary changed after approval must not instantiate")
     };
     assert!(
         matches!(err, norte_plugin_host::RuntimeError::DigestMismatch),
-        "fue {err:?}"
+        "was {err:?}"
     );
-    // Y aprobado de nuevo, la versión nueva SUSTITUYE a la vieja en la
-    // caché en vez de sumarse: la vieja ya no la va a pedir nadie.
-    let nuevo = norte_plugin_host::WasmArtifact::trusting_current(&otro).expect("lee");
+    // And approved again, the new version REPLACES the old one in the
+    // cache instead of adding to it: nobody is going to ask for the old
+    // one anymore.
+    let new = norte_plugin_host::WasmArtifact::trusting_current(&other).expect("read");
     let _ = rt
-        .instantiate(&nuevo, norte_plugin_host::Capabilities::default())
-        .expect("instancia");
-    assert_eq!(rt.compiled_components(), 2, "una versión por ruta");
+        .instantiate(&new, norte_plugin_host::Capabilities::default())
+        .expect("instance");
+    assert_eq!(rt.compiled_components(), 2, "one version per path");
 }
 
 #[test]
-fn command_demo_ejecuta_y_reporta_error_de_comando() {
+fn command_demo_runs_and_reports_a_command_error() {
     let Some(wasm) = support::build_guest("command-demo") else {
         return;
     };
     let rt = norte_plugin_host::PluginRuntime::new().expect("engine");
     let mut inst = rt
         .instantiate(&wasm, norte_plugin_host::Capabilities::default())
-        .expect("instancia");
+        .expect("instance");
     assert_eq!(inst.run_command("echo", "hola").expect("echo"), "hola");
     assert_eq!(inst.run_command("shout", "hola").expect("shout"), "HOLA");
-    let err = inst.run_command("nope", "").expect_err("desconocido");
+    let err = inst.run_command("nope", "").expect_err("unknown");
     assert!(
-        matches!(err, norte_plugin_host::RuntimeError::Guest(ref m) if m.contains("desconocido")),
-        "fue {err:?}"
+        matches!(err, norte_plugin_host::RuntimeError::Guest(ref m) if m.contains("unknown")),
+        "was {err:?}"
     );
 }
 
 #[test]
-fn guest_en_bucle_trapea_por_deadline_no_cuelga_el_host() {
+fn a_looping_guest_traps_on_deadline_without_hanging_the_host() {
     let Some(wasm) = support::build_guest("command-demo") else {
         return;
     };
-    // Deadline corto SOLO para el test (~1 s: 20 ticks × 50 ms) para no esperar
-    // los ~10 s del default de producción. El ticker corta el bucle → trap.
+    // Short deadline ONLY for the test (~1 s: 20 ticks × 50 ms) so as not
+    // to wait the ~10 s of the production default. The ticker cuts off
+    // the loop → trap.
     let rt = norte_plugin_host::PluginRuntime::with_epoch_deadline(20).expect("engine");
     let mut inst = rt
         .instantiate(&wasm, norte_plugin_host::Capabilities::default())
-        .expect("instancia");
+        .expect("instance");
     let err = inst
         .run_command("spin", "")
-        .expect_err("un guest en bucle debe cortarse, no colgar");
-    // `Deadline` y NO `Trap` (#211): el presupuesto venció, que no es lo mismo
-    // que el guest crashease — y contarlos igual convertía «tu máquina iba
-    // cargada» en «tu plugin está roto», la única lectura que seguro es falsa.
+        .expect_err("a looping guest must be cut off, not hang");
+    // `Deadline` and NOT `Trap` (#211): the budget expired, which is not
+    // the same as the guest crashing — and counting them the same turned
+    // "your machine was under load" into "your plugin is broken", the one
+    // reading that is guaranteed to be false.
     assert!(
         matches!(err, norte_plugin_host::RuntimeError::Deadline),
-        "fue {err:?}"
+        "was {err:?}"
     );
 }
 
-/// El presupuesto de época es POR LLAMADA, no por vida de la instancia (#211).
+/// The epoch budget is PER CALL, not per instance life (#211).
 ///
-/// `Store::set_epoch_deadline` fija un instante ABSOLUTO, así que armarlo una
-/// vez al crear el store le daba al plugin un presupuesto que se gastaba con
-/// el RELOJ aunque no corriera nada: una conexión FTP dejaba de funcionar a
-/// los diez segundos de tenerla abierta. Aquí se comprueba con un presupuesto
-/// corto y una espera MÁS LARGA que él entre dos llamadas rápidas: si el
-/// deadline fuera por vida, la segunda trapa.
+/// `Store::set_epoch_deadline` sets an ABSOLUTE instant, so arming it once
+/// when the store is created gave the plugin a budget that got spent by
+/// the CLOCK even if nothing ran: an FTP connection would stop working
+/// ten seconds after being opened. Here it is checked with a short budget
+/// and a wait LONGER than it between two quick calls: if the deadline
+/// were per-life, the second one traps.
 #[test]
-fn el_presupuesto_de_epoca_se_rearma_en_cada_llamada() {
+fn the_epoch_budget_is_rearmed_on_every_call() {
     let Some(wasm) = support::build_guest("command-demo") else {
         return;
     };
-    // ~250 ms de presupuesto (5 ticks × 50 ms) contra 600 ms de espera.
+    // ~250 ms of budget (5 ticks × 50 ms) against a 600 ms wait.
     let rt = norte_plugin_host::PluginRuntime::with_epoch_deadline(5).expect("engine");
     let mut inst = rt
         .instantiate(&wasm, norte_plugin_host::Capabilities::default())
-        .expect("instancia");
-    assert_eq!(inst.run_command("echo", "uno").expect("primera"), "uno");
-    // La espera es del HOST, no del guest: el guest no corre nada aquí, que es
-    // justo lo que un presupuesto de CPU no debería contar.
+        .expect("instance");
+    assert_eq!(inst.run_command("echo", "one").expect("first"), "one");
+    // The wait is on the HOST, not the guest: the guest runs nothing here,
+    // which is exactly what a CPU budget should not count.
     std::thread::sleep(std::time::Duration::from_millis(600));
     assert_eq!(
-        inst.run_command("echo", "dos")
-            .expect("segunda, tras la espera"),
-        "dos",
-        "el presupuesto se rearma por llamada"
+        inst.run_command("echo", "two")
+            .expect("second, after the wait"),
+        "two",
+        "the budget rearms per call"
     );
-    // Y sigue cortando lo que tiene que cortar: un bucle dentro de UNA llamada.
+    // And it still cuts off what it has to cut off: a loop within ONE
+    // call.
     let err = inst
         .run_command("spin", "")
-        .expect_err("un bucle sigue cortándose");
+        .expect_err("a loop still gets cut off");
     assert!(
         matches!(err, norte_plugin_host::RuntimeError::Deadline),
-        "fue {err:?}"
+        "was {err:?}"
     );
 }
 
 #[test]
-fn fs_read_scoped_gatea_la_puerta_en_el_host() {
+fn fs_read_scoped_gates_the_gate_on_the_host() {
     let Some(wasm) = support::build_guest("command-demo") else {
         return;
     };
     let rt = norte_plugin_host::PluginRuntime::new().expect("engine");
-    // SIN fs-read: la puerta se cierra en el host aunque el guest la llame.
-    let mut sin = rt
+    // WITHOUT fs-read: the gate closes on the host even if the guest calls
+    // it.
+    let mut without = rt
         .instantiate(&wasm, norte_plugin_host::Capabilities::default())
-        .expect("instancia");
-    sin.preload_scoped("demo", b"secreto".to_vec());
-    let err = sin.run_command("read", "").expect_err("sin capability");
+        .expect("instance");
+    without.preload_scoped("demo", b"secret".to_vec());
+    let err = without
+        .run_command("read", "")
+        .expect_err("without the capability");
     assert!(
         matches!(err, norte_plugin_host::RuntimeError::Guest(ref m) if m.contains("fs-read")),
-        "fue {err:?}"
+        "was {err:?}"
     );
-    // CON fs-read=scoped: la puerta se abre y devuelve el recurso sembrado.
-    let mut con = rt
+    // WITH fs-read=scoped: the gate opens and returns the seeded resource.
+    let mut with = rt
         .instantiate(
             &wasm,
             norte_plugin_host::Capabilities::scoped_read_for_test(),
         )
-        .expect("instancia");
-    con.preload_scoped("demo", b"contenido".to_vec());
-    assert_eq!(con.run_command("read", "").expect("read"), "contenido");
+        .expect("instance");
+    with.preload_scoped("demo", b"content".to_vec());
+    assert_eq!(with.run_command("read", "").expect("read"), "content");
 }
 
 #[test]
-fn host_config_entrega_settings_al_guest_real() {
-    // P2 Task 3: `set_settings` + el comando `config` del guest real
-    // (`host_config::get` bajo el capó) — end-to-end sin pasar por el
-    // catálogo/registro (eso lo cubre `plugins_config_e2e.rs` en norte-core).
+fn host_config_hands_settings_to_the_real_guest() {
+    // P2 Task 3: `set_settings` + the real guest's `config` command
+    // (`host_config::get` under the hood) — end-to-end without going
+    // through the catalog/registry (that is covered by
+    // `plugins_config_e2e.rs` in norte-core).
     let Some(wasm) = support::build_guest("command-demo") else {
         return;
     };
     let rt = norte_plugin_host::PluginRuntime::new().expect("engine");
 
-    // Sin `set_settings`: el mapa por defecto está vacío, `get` no encuentra
-    // nada (mismo comportamiento que un plugin sin `[config]`).
-    let mut sin = rt
+    // Without `set_settings`: the default map is empty, `get` finds
+    // nothing (same behavior as a plugin without `[config]`).
+    let mut without = rt
         .instantiate(&wasm, norte_plugin_host::Capabilities::default())
-        .expect("instancia");
-    let err = sin
+        .expect("instance");
+    let err = without
         .run_command("config", "greeting")
-        .expect_err("sin set_settings no hay nada que leer");
+        .expect_err("without set_settings there is nothing to read");
     assert!(
         matches!(err, norte_plugin_host::RuntimeError::Guest(ref m) if m.contains("greeting")),
-        "fue {err:?}"
+        "was {err:?}"
     );
 
-    // Con `set_settings`: el guest lee el valor instalado tal cual.
-    let mut con = rt
+    // With `set_settings`: the guest reads the installed value as-is.
+    let mut with = rt
         .instantiate(&wasm, norte_plugin_host::Capabilities::default())
-        .expect("instancia");
-    con.set_settings(std::collections::BTreeMap::from([(
+        .expect("instance");
+    with.set_settings(std::collections::BTreeMap::from([(
         "greeting".to_string(),
-        "hola mundo".to_string(),
+        "hello world".to_string(),
     )]));
     assert_eq!(
-        con.run_command("config", "greeting").expect("config"),
-        "hola mundo"
+        with.run_command("config", "greeting").expect("config"),
+        "hello world"
     );
-    // Una clave NO instalada sigue sin encontrarse, aunque el mapa no esté
-    // vacío (no es "todo o nada": es por-clave).
-    let err = con
-        .run_command("config", "no-declarada")
-        .expect_err("clave ausente del mapa instalado");
+    // A key NOT installed still is not found, even though the map is not
+    // empty (it's not "all or nothing": it's per-key).
+    let err = with
+        .run_command("config", "not-declared")
+        .expect_err("key absent from the installed map");
     assert!(
-        matches!(err, norte_plugin_host::RuntimeError::Guest(ref m) if m.contains("no-declarada")),
-        "fue {err:?}"
+        matches!(err, norte_plugin_host::RuntimeError::Guest(ref m) if m.contains("not-declared")),
+        "was {err:?}"
     );
 }

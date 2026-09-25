@@ -1,51 +1,53 @@
-//! Las secciones que solo se fusionan campo a campo, «gana la última capa»:
-//! `[log]`, `[daemon]` y `[archive]`, ya fusionadas.
+//! Sections merged only field by field, "the last layer wins": `[log]`,
+//! `[daemon]` and `[archive]`, already merged.
 //!
-//! Antes cada clave vivía en seis sitios: el schema, un campo suelto en
-//! [`CommonConfig`](crate::CommonConfig), su acumulador en `load`, su
-//! `merge_*_layer`, el literal que construye la config y la lista de claves
-//! que avisa cuando un perfil la pide. Esa lista ya había olvidado una:
-//! `[log] format` en un perfil se descartaba sin aviso. Aquí son cuatro, y
-//! las dos que se pueden olvidar —`merge` y `declara`— desestructuran la
-//! sección del schema SIN `..`: una clave nueva que ninguna de las dos mire
-//! no compila.
+//! Each key used to live in six places: the schema, a loose field in
+//! [`CommonConfig`](crate::CommonConfig), its accumulator in `load`, its
+//! `merge_*_layer`, the literal that builds the config, and the list of keys
+//! that warns when a profile requests it. That list had already forgotten
+//! one: `[log] format` in a profile was dropped with no warning. Here there
+//! are four, and the two that are easy to forget — `merge` and `declares`
+//! (TODO(translation): review — the doc kept the Spanish name because it is
+//! the method's real identifier, a pub item this task must not rename) —
+//! destructure the schema section WITHOUT `..`: a new key that neither one
+//! looks at does not compile.
 //!
-//! Qué capas pueden fijarlas NO se decide aquí. Las tres son de las que no
-//! son presentación (dónde escribe un proceso, a qué socket habla, qué
-//! programa lee un RAR), y el filtro que las deja fuera de la capa de
-//! proyecto está en `load`, por sección, en la llamada a `merge`.
+//! Which layers may set them is NOT decided here. All three are the
+//! non-presentation kind (where a process writes, which socket it talks to,
+//! what program reads a RAR), and the filter that keeps them out of the
+//! project layer is in `load`, per section, at the call to `merge`.
 
 use std::path::PathBuf;
 
 use crate::schema::{ArchiveSection, DaemonMode, DaemonSection, LogFormat, LogSection};
 
-/// `[log]` fusionada. Nunca desde la capa de proyecto: elegir dónde escribe
-/// un proceso no es presentación.
+/// `[log]`, merged. Never from the project layer: choosing where a process
+/// writes is not presentation.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LogSettings {
     /// `[log] dir`. `None` = `<state_dir>/logs`.
     pub dir: Option<PathBuf>,
-    /// `[log] retain`: cuántos ficheros rotados sobreviven. `None` = el
-    /// valor por defecto del appender.
+    /// `[log] retain`: how many rotated files survive. `None` = the
+    /// appender's default value.
     pub retain: Option<usize>,
-    /// `[log] format`: cómo se escribe el FICHERO (ADR 0127).
+    /// `[log] format`: how the FILE is written (ADR 0127).
     pub format: LogFormat,
 }
 
 impl LogSettings {
-    /// ¿Declara esta capa alguna clave de `[log]`? Es lo que decide si una
-    /// capa que no puede fijarla tiene que AVISAR de que se ignora.
+    /// Does this layer declare any `[log]` key? This is what decides whether
+    /// a layer that may not set it has to WARN that it is being ignored.
     #[must_use]
-    pub fn declara(capa: &LogSection) -> bool {
+    pub fn declares(layer: &LogSection) -> bool {
         let LogSection {
             dir,
             retain,
             format,
-        } = capa;
+        } = layer;
         dir.is_some() || retain.is_some() || format.is_some()
     }
 
-    /// Fusiona una capa: cada clave presente pisa a la anterior.
+    /// Merges a layer: each key present overrides the previous one.
     ///
     /// ```
     /// use norte_config::{LogFormat, LogSettings};
@@ -55,14 +57,14 @@ impl LogSettings {
     /// log.merge(LogSection { retain: Some(3), format: Some(LogFormat::Json), ..Default::default() });
     /// log.merge(LogSection { retain: Some(5), ..Default::default() });
     /// assert_eq!(log.retain, Some(5));
-    /// assert_eq!(log.format, LogFormat::Json, "una capa que no la dice no la borra");
+    /// assert_eq!(log.format, LogFormat::Json, "a layer that does not say it does not clear it");
     /// ```
-    pub fn merge(&mut self, capa: LogSection) {
+    pub fn merge(&mut self, layer: LogSection) {
         let LogSection {
             dir,
             retain,
             format,
-        } = capa;
+        } = layer;
         if dir.is_some() {
             self.dir = dir;
         }
@@ -75,27 +77,27 @@ impl LogSettings {
     }
 }
 
-/// `[daemon]` fusionada. Se lee al arrancar y no se recarga en caliente.
-/// Nunca desde la capa de proyecto (MAJOR-1 de la revisión): un repositorio
-/// ajeno no redirige el transporte.
+/// `[daemon]`, merged. Read at startup and never hot-reloaded. Never from the
+/// project layer (MAJOR-1 of the review): a foreign repository does not
+/// redirect the transport.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DaemonSettings {
-    /// `[daemon] mode`. `None` = embebido.
+    /// `[daemon] mode`. `None` = embedded.
     pub mode: Option<DaemonMode>,
-    /// `[daemon] socket`. `None` = el del sistema operativo.
+    /// `[daemon] socket`. `None` = the operating system's.
     pub socket: Option<PathBuf>,
 }
 
 impl DaemonSettings {
-    /// ¿Declara esta capa alguna clave de `[daemon]`? Ver
-    /// [`LogSettings::declara`].
+    /// Does this layer declare any `[daemon]` key? See
+    /// [`LogSettings::declares`].
     #[must_use]
-    pub fn declara(capa: &DaemonSection) -> bool {
-        let DaemonSection { mode, socket } = capa;
+    pub fn declares(layer: &DaemonSection) -> bool {
+        let DaemonSection { mode, socket } = layer;
         mode.is_some() || socket.is_some()
     }
 
-    /// Fusiona una capa: cada clave presente pisa a la anterior.
+    /// Merges a layer: each key present overrides the previous one.
     ///
     /// ```
     /// use norte_config::{DaemonMode, DaemonSettings};
@@ -106,8 +108,8 @@ impl DaemonSettings {
     /// assert_eq!(d.mode, Some(DaemonMode::Daemon));
     /// assert_eq!(d.socket, None);
     /// ```
-    pub fn merge(&mut self, capa: DaemonSection) {
-        let DaemonSection { mode, socket } = capa;
+    pub fn merge(&mut self, layer: DaemonSection) {
+        let DaemonSection { mode, socket } = layer;
         if mode.is_some() {
             self.mode = mode;
         }
@@ -117,40 +119,40 @@ impl DaemonSettings {
     }
 }
 
-/// `[archive]` fusionada: los límites anti-bomba locales y el programa que lee
-/// RAR. Nunca desde la capa de proyecto: `rar_delegate` nombra un ejecutable,
-/// y honrarlo desde el `.norte.toml` de un repositorio sería ejecutar código
-/// arbitrario al entrar en el directorio.
+/// `[archive]`, merged: the local anti-bomb limits and the program that reads
+/// RAR. Never from the project layer: `rar_delegate` names an executable, and
+/// honoring it from a repository's `.norte.toml` would be running arbitrary
+/// code on entering the directory.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ArchiveSettings {
-    /// `[archive] max_entries`. `None` = el tope compilado.
+    /// `[archive] max_entries`. `None` = the compiled-in cap.
     pub max_entries: Option<u64>,
-    /// `[archive] max_decompressed_bytes`. `None` = el tope compilado.
+    /// `[archive] max_decompressed_bytes`. `None` = the compiled-in cap.
     pub max_decompressed_bytes: Option<u64>,
-    /// `[archive] max_nesting` (#56). `None` = el tope compilado.
+    /// `[archive] max_nesting` (#56). `None` = the compiled-in cap.
     pub max_nesting: Option<usize>,
-    /// `[archive] rar_delegate` (ruta absoluta). `None` = sondear `PATH`.
+    /// `[archive] rar_delegate` (absolute path). `None` = probe `PATH`.
     pub rar_delegate: Option<String>,
 }
 
 impl ArchiveSettings {
-    /// ¿Declara esta capa alguna clave de `[archive]`? Ver
-    /// [`LogSettings::declara`].
+    /// Does this layer declare any `[archive]` key? See
+    /// [`LogSettings::declares`].
     #[must_use]
-    pub fn declara(capa: &ArchiveSection) -> bool {
+    pub fn declares(layer: &ArchiveSection) -> bool {
         let ArchiveSection {
             max_entries,
             max_decompressed_bytes,
             max_nesting,
             rar_delegate,
-        } = capa;
+        } = layer;
         max_entries.is_some()
             || max_decompressed_bytes.is_some()
             || max_nesting.is_some()
             || rar_delegate.is_some()
     }
 
-    /// Fusiona una capa: cada clave presente pisa a la anterior.
+    /// Merges a layer: each key present overrides the previous one.
     ///
     /// ```
     /// use norte_config::ArchiveSettings;
@@ -161,13 +163,13 @@ impl ArchiveSettings {
     /// a.merge(ArchiveSection { max_nesting: Some(2), ..Default::default() });
     /// assert_eq!((a.max_entries, a.max_nesting), (Some(10), Some(2)));
     /// ```
-    pub fn merge(&mut self, capa: ArchiveSection) {
+    pub fn merge(&mut self, layer: ArchiveSection) {
         let ArchiveSection {
             max_entries,
             max_decompressed_bytes,
             max_nesting,
             rar_delegate,
-        } = capa;
+        } = layer;
         if max_entries.is_some() {
             self.max_entries = max_entries;
         }

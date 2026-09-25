@@ -4,54 +4,54 @@
 
 use super::KeymapError;
 
-/// Código de tecla NEUTRO (espeja el set que acepta [`parse_chord`]; sin
-/// dependencia de crossterm ni gpui).
+/// NEUTRAL key code (mirrors the set [`parse_chord`] accepts; no dependency
+/// on crossterm or gpui).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum KeyCode {
-    /// Carácter imprimible (espacio = `Char(' ')`).
+    /// Printable character (space = `Char(' ')`).
     Char(char),
-    /// Tecla de función F1..=F12.
+    /// Function key F1..=F12.
     F(u8),
     /// Enter/Return.
     Enter,
-    /// Tabulador.
+    /// Tab.
     Tab,
     /// Escape.
     Esc,
     /// Backspace.
     Backspace,
-    /// Flecha arriba.
+    /// Up arrow.
     Up,
-    /// Flecha abajo.
+    /// Down arrow.
     Down,
-    /// Flecha izquierda.
+    /// Left arrow.
     Left,
-    /// Flecha derecha.
+    /// Right arrow.
     Right,
-    /// Inicio.
+    /// Home.
     Home,
-    /// Fin.
+    /// End.
     End,
-    /// Página arriba.
+    /// Page up.
     PageUp,
-    /// Página abajo.
+    /// Page down.
     PageDown,
     /// Insert.
     Insert,
-    /// Delete/Supr.
+    /// Delete.
     Delete,
 }
 
-/// Modificadores NEUTROS de una tecla.
+/// NEUTRAL modifiers of a key.
 ///
-/// (Cuatro bools INDEPENDIENTES, no los estados de una máquina: cualquier
-/// combinación es una pulsación real —`cmd+ctrl+alt+shift+f5` incluida— así
-/// que no hay enum en el que colapsarlos. Es el bitset que el teclado
-/// entrega; mismo criterio que `availability::Facts`.)
+/// (Four INDEPENDENT bools, not a state machine's states: any combination
+/// is a real keypress — `cmd+ctrl+alt+shift+f5` included — so there is no
+/// enum to collapse them into. It is the bitset the keyboard delivers; the
+/// same criterion as `availability::Facts`.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[expect(
     clippy::struct_excessive_bools,
-    reason = "modificadores independientes de un acorde; mismo criterio que `availability::Facts`"
+    reason = "independent modifiers of a chord; same criterion as `availability::Facts`"
 )]
 pub struct Mods {
     /// Ctrl.
@@ -94,7 +94,7 @@ impl ModKey {
     /// use norte_frontend::keymap::{ModKey, Mods};
     ///
     /// let m = ModKey::Cmd.apply(Mods { alt: true, ..Mods::default() });
-    /// assert!(m.cmd && m.alt, "solo AÑADE el bit de la política");
+    /// assert!(m.cmd && m.alt, "only ADDS the policy's bit");
     /// assert!(!m.ctrl);
     /// ```
     #[must_use]
@@ -149,8 +149,8 @@ pub fn mod_key() -> ModKey {
     *MOD_KEY.get_or_init(|| ModKey::Ctrl)
 }
 
-/// Una tecla con modificadores, en forma canónica. Los frontends la
-/// construyen con [`Chord::new`] desde su evento nativo.
+/// A key with modifiers, in canonical form. Frontends build it with
+/// [`Chord::new`] from their native event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Chord {
     mods: Mods,
@@ -158,9 +158,9 @@ pub struct Chord {
 }
 
 impl Chord {
-    /// Chord canónico. En una tecla `Char` el carácter YA codifica shift, así
-    /// que el modificador `shift` se descarta (paridad con el `from_event`
-    /// crossterm de la TUI); en el resto se conserva.
+    /// Canonical chord. On a `Char` key the character ALREADY encodes
+    /// shift, so the `shift` modifier is discarded (parity with the TUI's
+    /// crossterm `from_event`); it is kept for the rest.
     #[must_use]
     pub fn new(mods: Mods, code: KeyCode) -> Self {
         let mods = if matches!(code, KeyCode::Char(_)) {
@@ -189,7 +189,7 @@ impl Chord {
     /// assert_eq!(code, KeyCode::Char('5'));
     ///
     /// let (mods, code) = parse_chord("ctrl+5").unwrap().parts();
-    /// assert!(mods.ctrl, "un dígito con modificador jamás fue un contador");
+    /// assert!(mods.ctrl, "a digit with a modifier was never a count");
     /// assert_eq!(code, KeyCode::Char('5'));
     /// ```
     #[must_use]
@@ -330,7 +330,7 @@ pub fn paint_chord(raw: &str) -> String {
             // The letter's case carries Shift in the stored chord (see
             // `parse_chord`); a reader is told to press it. Only under a
             // modifier: a bare `Y` already reads as "the capital".
-            if j == tokens.len() - 1 && j > 0 && es_letra_mayuscula(token) {
+            if j == tokens.len() - 1 && j > 0 && is_uppercase_letter(token) {
                 out.push_str(&pretty_token("shift"));
                 out.push('+');
             }
@@ -340,18 +340,18 @@ pub fn paint_chord(raw: &str) -> String {
     out
 }
 
-/// La inversa de [`paint_chord`]: lo que un lector VE (`Alt+Shift+C`,
-/// `Ctrl+k`, `F5`, `Enter`) vuelve a la forma que [`parse_chord`] entiende
-/// (`alt+C`, `ctrl+k`, `f5`, `enter`). Existe para que un botón pintado con
-/// un chord sintetice EXACTAMENTE ese chord: un `to_lowercase` convertía
-/// `Alt+Shift+C` en `alt+shift+c`, que no es una atadura, y una `K` suelta
-/// en `k`, que es OTRA atadura (spec 2026-09-10, revisión M2).
+/// The inverse of [`paint_chord`]: what a reader SEES (`Alt+Shift+C`,
+/// `Ctrl+k`, `F5`, `Enter`) goes back to the form [`parse_chord`]
+/// understands (`alt+C`, `ctrl+k`, `f5`, `enter`). It exists so a button
+/// painted with a chord synthesizes EXACTLY that chord: a `to_lowercase`
+/// turned `Alt+Shift+C` into `alt+shift+c`, which is not a binding, and a
+/// bare `K` into `k`, which is ANOTHER binding (spec 2026-09-10, review M2).
 ///
-/// Solo deshace lo que `paint_chord` hizo: los modificadores vuelven a
-/// minúscula, `Shift+X` (una letra mayúscula bajo modificador) se pliega en
-/// `X`, y las teclas con nombre y las `F` vuelven a minúscula. Una letra
-/// sola conserva su caja, que es lo que la distingue. El enmascarado que
-/// `paint_chord` aplicó no se puede deshacer y no se intenta.
+/// It only undoes what `paint_chord` did: modifiers go back to lower case,
+/// `Shift+X` (an upper-case letter under a modifier) folds into `X`, and
+/// named keys and `F` keys go back to lower case. A lone letter keeps its
+/// case, which is what distinguishes it. The masking `paint_chord` applied
+/// cannot be undone and is not attempted.
 ///
 /// ```
 /// use norte_frontend::keymap::{paint_chord, unpaint_chord};
@@ -374,12 +374,12 @@ pub fn unpaint_chord(painted: &str) -> String {
         while j < n {
             let token = tokens[j];
             let last = j == n - 1;
-            // `Shift+X` justo antes de la letra mayúscula final, bajo otro
-            // modificador: se pliega en la letra.
-            if token_de_nombre(token) == Some("shift")
+            // `Shift+X` right before the final upper-case letter, under
+            // another modifier: it folds into the letter.
+            if canonical_of_name(token) == Some("shift")
                 && j > 0
                 && j + 1 == n - 1
-                && es_letra_mayuscula(tokens[j + 1])
+                && is_uppercase_letter(tokens[j + 1])
             {
                 out.push('+');
                 out.push_str(tokens[j + 1]);
@@ -388,14 +388,14 @@ pub fn unpaint_chord(painted: &str) -> String {
             if j > 0 {
                 out.push('+');
             }
-            // Un nombre de cualquiera de los dos idiomas vuelve a su forma
-            // canónica ANTES de mirar la caja: `↑` es un carácter suelto y se
-            // quedaría tal cual, y `AvPág` en minúscula no es `pgdn`.
-            if let Some(canonico) = token_de_nombre(token) {
-                out.push_str(canonico);
-            // La tecla final de UN carácter conserva su caja (`k` y `K` son
-            // dos ataduras); todo lo demás —modificadores, `F5`, `Enter`—
-            // vuelve a minúscula.
+            // A name in either language goes back to its canonical form
+            // BEFORE the case is looked at: `↑` is a lone character and
+            // would stay as is, and `AvPág` in lower case is not `pgdn`.
+            if let Some(canonical) = canonical_of_name(token) {
+                out.push_str(canonical);
+            // The final ONE-character key keeps its case (`k` and `K` are
+            // two different bindings); everything else — modifiers, `F5`,
+            // `Enter` — goes back to lower case.
             } else if last && token.chars().count() == 1 {
                 out.push_str(token);
             } else {
@@ -409,27 +409,27 @@ pub fn unpaint_chord(painted: &str) -> String {
 
 static CHORD_LANG: std::sync::OnceLock<norte_i18n::Lang> = std::sync::OnceLock::new();
 
-/// Fija en qué idioma se NOMBRAN las teclas ([`paint_chord`]). Una vez, al
-/// arrancar, igual que [`set_mod_key`]: el nombre de una tecla aparece en la
-/// barra, en la paleta, en la hoja de teclado y en la prosa de la ayuda, y
-/// dos de ellos con idiomas distintos se contradirían. Devuelve `false` si ya
-/// estaba fijado a otro; sin fijar, inglés.
+/// Fixes which language keys are NAMED in ([`paint_chord`]). Once, at
+/// startup, same as [`set_mod_key`]: a key's name appears in the bar, in
+/// the palette, on the keyboard sheet and in the help prose, and two of
+/// them in different languages would contradict each other. Returns
+/// `false` if it was already fixed to another one; unfixed, English.
 ///
-/// Solo cambia lo que se LEE. El keymap, [`parse_chord`] y todo lo guardado
-/// siguen en la forma canónica (`pgdn`, `backspace`), y [`unpaint_chord`]
-/// entiende los dos idiomas.
+/// Only changes what is READ. The keymap, [`parse_chord`] and everything
+/// stored stay in canonical form (`pgdn`, `backspace`), and
+/// [`unpaint_chord`] understands both languages.
 ///
-/// Mismo cuidado que [`set_mod_key`] en los tests: desde la edición 2024 los
-/// doctests de este crate van en UN binario y comparten este `OnceLock`, así
-/// que un doctest que fijara el español rompería, según el orden, los de
-/// [`paint_chord`] que esperan inglés. El pintado en español se prueba en un
-/// `#[test]`, que nextest corre en su propio proceso.
+/// Same care as [`set_mod_key`] in tests: since the 2024 edition this
+/// crate's doctests run in ONE binary and share this `OnceLock`, so a
+/// doctest that fixed Spanish would break, depending on order,
+/// [`paint_chord`]'s that expect English. Painting in Spanish is tested in
+/// a `#[test]`, which nextest runs in its own process.
 ///
 /// ```
 /// use norte_frontend::keymap::{paint_chord, set_chord_lang};
 /// use norte_i18n::Lang;
 ///
-/// // Sin fijar, inglés; y fijarlo al mismo valor no cambia nada.
+/// // Unfixed, English; and fixing it to the same value changes nothing.
 /// assert!(set_chord_lang(Lang::En));
 /// assert_eq!(paint_chord("pgdn"), "PgDn");
 /// ```
@@ -437,12 +437,13 @@ pub fn set_chord_lang(lang: norte_i18n::Lang) -> bool {
     *CHORD_LANG.get_or_init(|| lang) == lang
 }
 
-/// El nombre en español de un token con nombre; `None` si no se traduce.
+/// The Spanish name of a named token; `None` if it is not translated.
 ///
-/// Las flechas son símbolos y no palabras: son lo que lleva impreso un
-/// teclado español, y «Arriba y Abajo avanzan una fila» ocupa el doble sin
-/// decir más. `Ctrl`, `Alt`, `Tab` y `Esc` se quedan: son las serigrafías.
-fn nombre_es(token: &str) -> Option<&'static str> {
+/// Arrows are symbols and not words: they are what is printed on a Spanish
+/// keyboard, and "Arriba y Abajo avanzan una fila" takes twice the space
+/// without saying more. `Ctrl`, `Alt`, `Tab` and `Esc` stay: they are the
+/// keycaps.
+fn spanish_name(token: &str) -> Option<&'static str> {
     Some(match token {
         "shift" => "Mayús",
         "enter" => "Intro",
@@ -462,16 +463,16 @@ fn nombre_es(token: &str) -> Option<&'static str> {
     })
 }
 
-/// La forma canónica de un nombre PINTADO en cualquiera de los dos idiomas
-/// (`AvPág` → `pgdn`, `↑` → `up`); `None` si no es uno de ellos.
+/// The canonical form of a name PAINTED in either of the two languages
+/// (`AvPág` -> `pgdn`, `↑` -> `up`); `None` if it is none of them.
 ///
-/// Por contenido y no por procedencia, y eso tiene un límite asumido: una tecla
-/// atada al CARÁCTER `↑` (un `Char`, no la flecha) se pinta igual que la flecha
-/// en español, y la inversa la lee como la flecha. Ningún preset lo hace, y en
-/// pantalla las dos son indistinguibles de todos modos — la ambigüedad está en
-/// lo que se enseña, no en esta función.
-fn token_de_nombre(pintado: &str) -> Option<&'static str> {
-    const CANONICOS: &[&str] = &[
+/// By content and not by origin, and that has an accepted limit: a key
+/// bound to the CHARACTER `↑` (a `Char`, not the arrow) is painted the same
+/// as the arrow in Spanish, and the inverse reads it as the arrow. No
+/// preset does this, and on screen the two are indistinguishable anyway —
+/// the ambiguity is in what is shown, not in this function.
+fn canonical_of_name(painted: &str) -> Option<&'static str> {
+    const CANONICAL: &[&str] = &[
         "shift",
         "enter",
         "backspace",
@@ -487,14 +488,13 @@ fn token_de_nombre(pintado: &str) -> Option<&'static str> {
         "pgdn",
         "delete",
     ];
-    CANONICOS
-        .iter()
-        .copied()
-        .find(|t| nombre_es(t) == Some(pintado) || pretty_token_en(t).eq_ignore_ascii_case(pintado))
+    CANONICAL.iter().copied().find(|t| {
+        spanish_name(t) == Some(painted) || pretty_token_en(t).eq_ignore_ascii_case(painted)
+    })
 }
 
-/// Un token que es exactamente una letra ASCII mayúscula.
-fn es_letra_mayuscula(token: &str) -> bool {
+/// A token that is exactly one upper-case ASCII letter.
+fn is_uppercase_letter(token: &str) -> bool {
     let mut chars = token.chars();
     matches!((chars.next(), chars.next()), (Some(c), None) if c.is_ascii_uppercase())
 }
@@ -503,14 +503,14 @@ fn es_letra_mayuscula(token: &str) -> bool {
 /// whole table and for why nothing here can undo the masking that ran before.
 fn pretty_token(token: &str) -> String {
     if CHORD_LANG.get() == Some(&norte_i18n::Lang::Es)
-        && let Some(nombre) = nombre_es(token)
+        && let Some(name) = spanish_name(token)
     {
-        return nombre.to_owned();
+        return name.to_owned();
     }
     pretty_token_en(token)
 }
 
-/// [`pretty_token`] en inglés, que es también el idioma sin fijar.
+/// [`pretty_token`] in English, which is also the unfixed language.
 fn pretty_token_en(token: &str) -> String {
     let named = match token {
         "ctrl" => "Ctrl",
@@ -556,22 +556,22 @@ fn pretty_token_en(token: &str) -> String {
     named.to_owned()
 }
 
-/// Parsea `"ctrl+alt+x"`, `"f5"`, `"g"`, `"shift+f5"`, `"esc"`, `"plus"`…
-/// `+` es el separador de modificadores, así que `plus` es la ÚNICA forma de
-/// expresar esa tecla.
+/// Parses `"ctrl+alt+x"`, `"f5"`, `"g"`, `"shift+f5"`, `"esc"`, `"plus"`…
+/// `+` is the modifier separator, so `plus` is the ONLY way to express that
+/// key.
 ///
-/// # `mod+` y `cmd+`
+/// # `mod+` and `cmd+`
 ///
-/// `cmd` es literal (Cmd/Super/Meta), para un preset que quiere decir Cmd y
-/// nada más. `mod` es el ALIAS por-OS: se resuelve a lo que [`mod_key`] diga
-/// en ESTE proceso — Ctrl por defecto, Cmd si la política lo fijó — de modo
-/// que un preset sigue siendo UN fichero en macOS y en Linux/Windows. El
-/// alias cuenta como aquello en lo que se resuelve para el rechazo de
-/// modificador repetido: bajo la política Ctrl, `ctrl+mod+x` es la misma
-/// tecla dos veces y es [`KeymapError::BadChord`].
+/// `cmd` is literal (Cmd/Super/Meta), for a preset that wants to mean Cmd
+/// and nothing else. `mod` is the per-OS ALIAS: it resolves to whatever
+/// [`mod_key`] says in THIS process — Ctrl by default, Cmd if the policy
+/// fixed it — so a preset stays ONE file on macOS and on Linux/Windows. The
+/// alias counts as what it resolves to for the repeated-modifier
+/// rejection: under the Ctrl policy, `ctrl+mod+x` is the same key twice and
+/// is [`KeymapError::BadChord`].
 ///
 /// # Errors
-/// [`KeymapError::BadChord`] si el texto no describe una tecla.
+/// [`KeymapError::BadChord`] if the text does not describe a key.
 pub fn parse_chord(s: &str) -> Result<Chord, KeymapError> {
     let bad = || KeymapError::BadChord {
         chord: s.to_owned(),
@@ -583,13 +583,14 @@ pub fn parse_chord(s: &str) -> Result<Chord, KeymapError> {
         .copied()
         .filter(|k| !k.is_empty())
         .ok_or_else(bad)?;
-    // `cmd` y `mod` JUNTOS se rechazan SIEMPRE, mire quien mire (rust-reviewer
-    // MINOR-10). Bajo la política Cmd son la misma tecla dos veces y el
-    // rechazo de modificador repetido de abajo ya los mataría; bajo Ctrl no,
-    // y el resultado sería un chord que carga en Linux y revienta en macOS —
-    // la asimetría exacta que la decisión 8 del ADR 0043 dice evitar,
-    // descubierta por quien corre la plataforma donde está rota. Que un
-    // chord sea válido o no NO puede depender del sistema operativo.
+    // `cmd` and `mod` TOGETHER are ALWAYS rejected, whoever looks (rust-reviewer
+    // MINOR-10). Under the Cmd policy they are the same key twice and the
+    // repeated-modifier rejection below would already kill them; under
+    // Ctrl it would not, and the result would be a chord that loads on
+    // Linux and blows up on macOS — the exact asymmetry ADR 0043's
+    // decision 8 says to avoid, discovered by whoever runs the platform
+    // where it is broken. Whether a chord is valid CANNOT depend on the
+    // operating system.
     if mods_txt.contains(&"cmd") && mods_txt.contains(&"mod") {
         return Err(bad());
     }
@@ -609,9 +610,9 @@ pub fn parse_chord(s: &str) -> Result<Chord, KeymapError> {
             _ => return Err(bad()),
         };
         if *slot {
-            // Modificador repetido. El alias cuenta como AQUELLO en lo que se
-            // resuelve, así que `ctrl+mod+x` con la política Ctrl es la misma
-            // tecla dos veces y muere aquí — correcto.
+            // Repeated modifier. The alias counts as WHAT it resolves to,
+            // so `ctrl+mod+x` under the Ctrl policy is the same key twice
+            // and dies here — correct.
             return Err(bad());
         }
         *slot = true;
@@ -621,10 +622,10 @@ pub fn parse_chord(s: &str) -> Result<Chord, KeymapError> {
         "tab" => KeyCode::Tab,
         "esc" => KeyCode::Esc,
         "space" => KeyCode::Char(' '),
-        // `+` es el SEPARADOR de modificadores, así que un token "+" da key
-        // vacía y muere en BadChord: `plus` es la única forma de expresar la
-        // tecla (#103, mark.pattern-add). Aditivo: ningún keymap de usuario
-        // podía contener "+" como tecla, porque hoy no parsea.
+        // `+` is the modifier SEPARATOR, so a "+" token gives an empty key
+        // and dies in BadChord: `plus` is the only way to express that key
+        // (#103, mark.pattern-add). Additive: no user keymap could contain
+        // "+" as a key, because it does not parse today.
         "plus" => KeyCode::Char('+'),
         "backspace" => KeyCode::Backspace,
         "up" => KeyCode::Up,
@@ -658,8 +659,8 @@ pub fn parse_chord(s: &str) -> Result<Chord, KeymapError> {
             chord: s.to_owned(),
         });
     }
-    // OJO: NO usar Chord::new aquí (descartaría el shift antes del check de
-    // arriba); el check ya rechazó shift+Char, y para el resto shift se
-    // conserva. Construye el Chord directo:
+    // NOTE: do NOT use Chord::new here (it would discard shift before the
+    // check above); the check already rejected shift+Char, and for the
+    // rest shift is kept. Build the Chord directly:
     Ok(Chord { mods, code })
 }

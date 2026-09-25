@@ -1,10 +1,10 @@
-//! Puente sync→async: `Read + Seek` sobre `Provider::read(range)` del
-//! provider interior, para parsers de archivo que corren en `spawn_blocking`
-//! (regla 2 / ADR 0002: el hilo blocking puede bloquear en `block_on`; el
-//! runtime jamás).
+//! Sync→async bridge: `Read + Seek` over the inner provider's
+//! `Provider::read(range)`, for archive format parsers that run in
+//! `spawn_blocking` (rule 2 / ADR 0002: the blocking thread may block on
+//! `block_on`; the runtime never does).
 //!
-//! También [`spawn_blocking`]: la única puerta a ese hilo, porque conserva el
-//! span de quien llama (ADR 0127).
+//! Also [`spawn_blocking`]: the only door to that thread, because it
+//! preserves the caller's span (ADR 0127).
 
 use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
@@ -13,12 +13,13 @@ use futures::StreamExt;
 use norte_proto::{ByteRange, VPath};
 use norte_vfs::Provider;
 
-/// Como [`tokio::task::spawn_blocking`], pero el cierre corre dentro del span
-/// que estaba activo al llamar: lo que los parsers registran sigue colgando
-/// de su tarea (ADR 0127). `clippy.toml` del crate prohíbe la llamada directa.
+/// Like [`tokio::task::spawn_blocking`], but the closure runs inside the
+/// span that was active at call time: whatever the parsers log keeps
+/// hanging off their task (ADR 0127). The crate's `clippy.toml` forbids
+/// calling it directly.
 #[allow(
     clippy::disallowed_methods,
-    reason = "el único sitio que puede llamarla: aquí se le añade el span"
+    reason = "the only place allowed to call it: this is where the span gets added"
 )]
 pub(crate) fn spawn_blocking<F, R>(f: F) -> tokio::task::JoinHandle<R>
 where
@@ -29,30 +30,31 @@ where
     tokio::task::spawn_blocking(move || span.in_scope(f))
 }
 
-/// Tamaño de bloque de lectura: los parsers hacen ráfagas locales (headers,
-/// central directory) — un bloque amortiza los round-trips al interior.
+/// Read block size: parsers do local bursts (headers, central directory)
+/// — a block amortizes round-trips to the inner provider.
 const BLOCK: u64 = 256 * 1024;
 
-/// Lector sync posicionado sobre un archivo del provider interior, con caché
-/// del último bloque. SOLO para hilos de `spawn_blocking`.
+/// Sync reader positioned over a file of the inner provider, with a cache
+/// of the last block. ONLY for `spawn_blocking` threads.
 ///
-/// Nota de runtime: `Handle::block_on` no conduce los drivers de IO/tiempo
-/// de un runtime `current_thread` salvo que su hilo esté dentro de
-/// `Runtime::block_on`. En el daemon (multi-thread) es irrelevante; los
-/// providers interiores puros (Mem) tampoco los necesitan.
+/// Runtime note: `Handle::block_on` doesn't drive a `current_thread`
+/// runtime's IO/time drivers unless its thread is inside
+/// `Runtime::block_on`. Irrelevant in the daemon (multi-thread); pure
+/// inner providers (Mem) don't need them either.
 pub(crate) struct ProviderReader {
     handle: tokio::runtime::Handle,
     inner: Arc<dyn Provider>,
     path: VPath,
     len: u64,
     pos: u64,
-    /// (offset del bloque, bytes) — el último bloque leído.
+    /// (block offset, bytes) — the last block read.
     block: Option<(u64, Vec<u8>)>,
 }
 
 impl ProviderReader {
-    /// `len` viene del `stat` del contenedor que el caller ya hizo (y que
-    /// gobierna la invalidación del índice: misma generación, misma vista).
+    /// `len` comes from the container's `stat`, which the caller already
+    /// did (and which governs the index's invalidation: same generation,
+    /// same view).
     pub(crate) fn new(
         handle: tokio::runtime::Handle,
         inner: Arc<dyn Provider>,
@@ -92,8 +94,9 @@ impl ProviderReader {
 }
 
 impl Clone for ProviderReader {
-    /// Lector independiente sobre el MISMO contenedor: posición a 0 y caché
-    /// de bloque VACÍA (clonar no arrastra hasta 256 KiB de bloque).
+    /// An independent reader over the SAME container: position at 0 and
+    /// an EMPTY block cache (cloning doesn't drag along up to 256 KiB of
+    /// block).
     fn clone(&self) -> Self {
         Self {
             handle: self.handle.clone(),
@@ -119,12 +122,12 @@ impl Read for ProviderReader {
         if !hit {
             self.fetch_block(block_off)?;
         }
-        let (off, bytes) = self.block.as_ref().expect("bloque recién cargado");
+        let (off, bytes) = self.block.as_ref().expect("freshly loaded block");
         let start = usize::try_from(self.pos - off).map_err(std::io::Error::other)?;
         if start >= bytes.len() {
-            // El interior devolvió menos de lo esperado (contenedor mutado
-            // bajo nuestros pies): EOF limpio; la invalidación por
-            // generación hará el resto en la próxima operación.
+            // The inner provider returned less than expected (container
+            // mutated under our feet): clean EOF; generation-based
+            // invalidation will do the rest on the next operation.
             return Ok(0);
         }
         let n = buf.len().min(bytes.len() - start);
@@ -142,32 +145,32 @@ impl Seek for ProviderReader {
             SeekFrom::Current(d) => i128::from(self.pos) + i128::from(d),
         };
         let target =
-            u64::try_from(target).map_err(|_| std::io::Error::other("seek antes del byte 0"))?;
+            u64::try_from(target).map_err(|_| std::io::Error::other("seek before byte 0"))?;
         self.pos = target;
         Ok(self.pos)
     }
 }
 
-/// Recupera el [`norte_proto::Error`] del provider INTERIOR si este
-/// `io::Error` lo envuelve ([`ProviderReader::fetch_block`] lo mete en
-/// `io::Error::other`, y el `CountingReader` de `targz_format` hace lo
-/// mismo con `Cancelled`/`Corrupt` de la bomba): un corte de red a mitad de
-/// parseo es IO genuino del interior y DEBE propagarse verbatim — `Corrupt`
-/// queda reservado para el formato roto de verdad (#58).
+/// Recovers the INNER provider's [`norte_proto::Error`] if this
+/// `io::Error` wraps one ([`ProviderReader::fetch_block`] puts it inside
+/// `io::Error::other`, and `targz_format`'s `CountingReader` does the same
+/// with the bomb's `Cancelled`/`Corrupt`): a network drop mid-parse is
+/// genuine IO from the inner provider and MUST propagate verbatim —
+/// `Corrupt` stays reserved for a genuinely broken format (#58).
 ///
-/// FIX-3 (rust MINOR-2, #55 review): camina la cadena `source()` COMPLETA,
-/// no solo el `io::Error` más externo. Parsers como `tar`/`flate2` pueden
-/// reenvolver el error del reader interior dentro de su propio tipo (o
-/// dentro de un `io::Error` NUEVO que a su vez envuelve al original) antes
-/// de que llegue aquí — un downcast de un solo nivel se lo perdería y lo
-/// disfrazaría de `Corrupt`. En cada salto de la cadena se prueba (a) si el
-/// eslabón ES directamente un `norte_proto::Error`, y (b) si es un
-/// `io::Error` cuyo `get_ref()` lo envuelve.
+/// FIX-3 (rust MINOR-2, #55 review): walks the WHOLE `source()` chain, not
+/// just the outermost `io::Error`. Parsers like `tar`/`flate2` can
+/// re-wrap the inner reader's error inside their own type (or inside a
+/// NEW `io::Error` that in turn wraps the original) before it gets here —
+/// a single-level downcast would miss it and disguise it as `Corrupt`. At
+/// each hop of the chain it's checked (a) whether the link itself IS a
+/// `norte_proto::Error`, and (b) whether it's an `io::Error` whose
+/// `get_ref()` wraps one.
 pub(crate) fn inner_proto_error(e: &std::io::Error) -> Option<norte_proto::Error> {
     let mut current: Option<&(dyn std::error::Error + 'static)> = Some(e);
-    // Tope defensivo: ninguna cadena de error real de este crate anida más
-    // de un puñado de niveles; corta ante un ciclo patológico en vez de
-    // colgarse.
+    // Defensive ceiling: no real error chain in this crate nests more
+    // than a handful of levels; cuts off a pathological cycle instead of
+    // hanging.
     for _ in 0..16 {
         let err = current?;
         if let Some(proto_err) = err.downcast_ref::<norte_proto::Error>() {
@@ -203,12 +206,12 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-    async fn el_hilo_bloqueante_corre_dentro_del_span_de_quien_llama() {
+    async fn the_blocking_thread_runs_inside_the_callers_span() {
         let dispatch = tracing::Dispatch::new(tracing_subscriber::registry());
         let _guard = tracing::dispatcher::set_default(&dispatch);
         let span = tracing::info_span!("task", task_id = 7);
-        let fuera = span.id().expect("span con subscriber");
-        let dentro = {
+        let outside = span.id().expect("span with subscriber");
+        let inside = {
             let _e = span.enter();
             let d = dispatch.clone();
             spawn_blocking(move || {
@@ -216,13 +219,13 @@ mod tests {
             })
         }
         .await
-        .expect("el cierre vuelve");
-        assert_eq!(dentro, Some(fuera));
+        .expect("the closure returns");
+        assert_eq!(inside, Some(outside));
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn lee_con_seek_y_cruza_bloques() {
-        // > BLOCK para forzar dos bloques.
+    async fn reads_with_seek_and_crosses_blocks() {
+        // > BLOCK to force two blocks.
         let content: Vec<u8> = (0..300_000u32).map(|i| (i % 251) as u8).collect();
         let (mem, path) = seed(&content).await;
         let handle = tokio::runtime::Handle::current();
@@ -230,22 +233,22 @@ mod tests {
         let content2 = content.clone();
         spawn_blocking(move || {
             let mut r = ProviderReader::new(handle, mem, path, len);
-            // Lectura que CRUZA la frontera de bloque (256 KiB).
+            // A read that CROSSES the block boundary (256 KiB).
             r.seek(SeekFrom::Start(262_100)).expect("seek");
             let mut buf = [0u8; 100];
             r.read_exact(&mut buf).expect("read_exact");
             assert_eq!(&buf[..], &content2[262_100..262_200]);
-            // SeekFrom::End y lectura de cola.
+            // SeekFrom::End and reading the tail.
             r.seek(SeekFrom::End(-5)).expect("seek end");
-            let mut cola = Vec::new();
-            r.read_to_end(&mut cola).expect("cola");
-            assert_eq!(cola, &content2[content2.len() - 5..]);
+            let mut tail = Vec::new();
+            r.read_to_end(&mut tail).expect("tail");
+            assert_eq!(tail, &content2[content2.len() - 5..]);
             // Past-EOF: Ok(0).
             r.seek(SeekFrom::Start(len + 10)).expect("seek past");
             let mut b = [0u8; 4];
             assert_eq!(r.read(&mut b).expect("read past-EOF"), 0);
         })
         .await
-        .expect("hilo blocking");
+        .expect("blocking thread");
     }
 }

@@ -1,34 +1,36 @@
-//! [`ConfinedRoot`]: leer BAJO un directorio sin poder salirse de él, con
-//! presupuesto.
+//! [`ConfinedRoot`]: reading UNDER a directory without being able to escape
+//! it, with a budget.
 //!
-//! Existe para la capacidad `location` del plugin-host (ADR 0057): un guest
-//! aprobado recibe un token opaco, no una ruta, y lee lo que hay debajo del
-//! directorio que el panel está listando. Nada de esto puede vivir fuera de
-//! este crate — la regla dura 2 dice que solo aquí se toca `std::fs`, y la
-//! confinación es la del kernel ([`LocalRoot`], `openat2(RESOLVE_BENEATH)`,
-//! el mismo mecanismo que cerró #164), no una comprobación de cadenas.
+//! Exists for the plugin-host's `location` capability (ADR 0057): an
+//! approved guest gets an opaque token, not a path, and reads what's under
+//! the directory the pane is listing. None of this can live outside this
+//! crate — hard rule 2 says only here is `std::fs` touched, and confinement
+//! is the kernel's ([`LocalRoot`], `openat2(RESOLVE_BENEATH)`, the same
+//! mechanism that closed #164), not a string check.
 //!
-//! # Qué garantiza, exactamente
+//! # What it guarantees, exactly
 //!
-//! - **No se sale.** Un `..` INTERIOR es legítimo (`sub/../f`); uno que suba
-//!   por encima de la raíz es [`LocationError::Escapes`], y también lo es una
-//!   ruta absoluta — para `RESOLVE_BENEATH` una ruta absoluta ya empieza
-//!   fuera.
-//! - **El último componente no se sigue.** Se abre con `O_NOFOLLOW`: un
-//!   symlink final es un `Symlink` que se puede `stat`, jamás un fichero que
-//!   se lee sin saber a dónde apunta. Los componentes INTERMEDIOS los gobierna
-//!   [`LocalRoot`] con el criterio de #164 (se siguen si no salen).
-//! - **Se paga por llamada, y también cuando falla.** Si un error no gastara
-//!   presupuesto, sondear el árbol fallando a propósito sería gratis.
-//! - **No se entra en una raíz protegida que caiga DENTRO** (#238). Confinar
-//!   acota por arriba y no dice nada de lo que hay debajo: con la raíz en
-//!   `$XDG_CONFIG_HOME` —un directorio que un humano lista sin pensarlo— el
-//!   guest leía `norte/secrets.age`, `norte/journal.db` y
-//!   `norte/connections.toml`, y con la raíz en `/` leía el disco entero. El
-//!   veto es por `(dev, ino)` de cada directorio del camino, no por comparar
-//!   cadenas: un symlink que apunte a la raíz protegida da el mismo inodo.
+//! - **No escaping.** An INTERIOR `..` is legitimate (`sub/../f`); one that
+//!   climbs above the root is [`LocationError::Escapes`], and so is an
+//!   absolute path — to `RESOLVE_BENEATH` an absolute path already starts
+//!   outside.
+//! - **The last component isn't followed.** It's opened with `O_NOFOLLOW`:
+//!   a final symlink is a `Symlink` that can be `stat`-ed, never a file
+//!   read without knowing what it points at. INTERMEDIATE components are
+//!   governed by [`LocalRoot`] with #164's criterion (followed if they
+//!   don't escape).
+//! - **Paid for per call, and also when it fails.** If an error didn't
+//!   spend budget, probing the tree by failing on purpose would be free.
+//! - **A protected root falling INSIDE isn't entered** (#238). Confining
+//!   bounds from above and says nothing about what's below: with the root
+//!   at `$XDG_CONFIG_HOME` — a directory a human lists without a second
+//!   thought — the guest read `norte/secrets.age`, `norte/journal.db` and
+//!   `norte/connections.toml`, and with the root at `/` it read the whole
+//!   disk. The veto is by `(dev, ino)` of each directory along the path,
+//!   not by comparing strings: a symlink pointing at the protected root
+//!   gives the same inode.
 //!
-//! No hay `write` ni lo va a haber: la capacidad es de LECTURA.
+//! There's no `write` and there won't be: the capability is READ-ONLY.
 
 use std::ffi::CString;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
@@ -39,23 +41,23 @@ use norte_proto::Segment;
 
 use crate::confined::LocalRoot;
 
-/// Topes de una sesión de ubicación. Todos fail-closed.
+/// Ceilings of a location session. All fail-closed.
 #[derive(Debug, Clone, Copy)]
 pub struct Bounds {
-    /// Tope de bytes de UNA lectura. Superarlo es [`LocationError::TooLarge`],
-    /// nunca un fichero recortado en silencio.
+    /// Byte ceiling of ONE read. Exceeding it is [`LocationError::TooLarge`],
+    /// never a file silently truncated.
     pub max_read_bytes: u64,
-    /// Tope de llamadas de la sesión entera, fallidas incluidas.
+    /// Ceiling on the whole session's calls, failures included.
     pub max_calls: u32,
-    /// Tope de bytes ACUMULADOS que la sesión llega a entregar.
+    /// Ceiling on ACCUMULATED bytes the session ends up delivering.
     pub max_total_bytes: u64,
-    /// Tope de entradas que devuelve un `list`.
+    /// Ceiling on entries a `list` returns.
     pub max_list_entries: u32,
 }
 
 impl Default for Bounds {
-    /// Lo que le basta a un lector de estado de git y poco más: el índice de
-    /// un repositorio grande son unos pocos MB.
+    /// What's enough for a git-status reader and little more: a large
+    /// repository's index is a few MB.
     fn default() -> Self {
         Self {
             max_read_bytes: 16 * 1024 * 1024,
@@ -66,134 +68,135 @@ impl Default for Bounds {
     }
 }
 
-/// Qué es una entrada. Deliberadamente grueso: al guest le sobra con esto.
+/// What an entry is. Deliberately coarse: it's plenty for the guest.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LocationKind {
-    /// Fichero regular.
+    /// Regular file.
     File,
-    /// Directorio.
+    /// Directory.
     Dir,
-    /// Enlace simbólico (NO seguido).
+    /// Symbolic link (NOT followed).
     Symlink,
-    /// Cualquier otra cosa (fifo, socket, dispositivo).
+    /// Anything else (fifo, socket, device).
     Other,
 }
 
-/// Lo que `stat` devuelve: exactamente los campos que el índice de git guarda,
-/// porque comparar solo `mtime` es cómo se pierde un cambio hecho dentro del
-/// mismo segundo.
+/// What `stat` returns: exactly the fields git's index stores, because
+/// comparing only `mtime` is how a change made within the same second gets
+/// lost.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LocationMeta {
-    /// Qué clase de nodo es.
+    /// What kind of node it is.
     pub kind: LocationKind,
-    /// Tamaño en bytes.
+    /// Size in bytes.
     pub size: u64,
-    /// mtime, segundos.
+    /// mtime, seconds.
     pub mtime_sec: i64,
-    /// mtime, nanosegundos.
+    /// mtime, nanoseconds.
     pub mtime_nsec: u32,
-    /// ctime, segundos.
+    /// ctime, seconds.
     pub ctime_sec: i64,
-    /// ctime, nanosegundos.
+    /// ctime, nanoseconds.
     pub ctime_nsec: u32,
-    /// Número de inodo.
+    /// Inode number.
     pub ino: u64,
-    /// Dispositivo.
+    /// Device.
     pub dev: u64,
-    /// Modo (permisos + tipo), tal cual lo da el sistema.
+    /// Mode (permissions + type), exactly as the system gives it.
     pub mode: u32,
 }
 
-/// Una entrada de un `list`: nombre en BYTES crudos (regla dura 1).
+/// An entry from a `list`: name in RAW BYTES (hard rule 1).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocationDirent {
-    /// El nombre, sin decodificar.
+    /// The name, undecoded.
     pub name: Vec<u8>,
-    /// Qué es, si el `readdir` lo dijo; `Other` cuando no.
+    /// What it is, if `readdir` said so; `Other` when it didn't.
     pub kind: LocationKind,
 }
 
-/// Por qué una lectura confinada no se pudo servir.
+/// Why a confined read couldn't be served.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum LocationError {
-    /// La ruta relativa se sale de la raíz (o es absoluta, que para
-    /// `RESOLVE_BENEATH` es lo mismo).
+    /// The relative path escapes the root (or is absolute, which to
+    /// `RESOLVE_BENEATH` is the same thing).
     #[error("path escapes the confined root")]
     Escapes,
-    /// No existe.
+    /// Doesn't exist.
     #[error("not found")]
     NotFound,
-    /// Denegado: o el sistema operativo lo denegó, o el camino entra en una
-    /// raíz protegida (#238).
+    /// Denied: either the OS denied it, or the path enters a protected root
+    /// (#238).
     ///
-    /// **Las dos cosas dan el MISMO error**, y a propósito: al guest no se le
-    /// dice qué directorios existen y son intocables. Un error distinto sería
-    /// un oráculo de dónde vive el journal.
+    /// **Both cases give the SAME error**, on purpose: the guest isn't told
+    /// which directories exist and are untouchable. A distinct error would
+    /// be an oracle for where the journal lives.
     #[error("permission denied")]
     Denied,
-    /// El fichero pasa de `max_read_bytes`. No se recorta: se dice.
+    /// The file exceeds `max_read_bytes`. It isn't truncated: it's reported.
     #[error("entry is larger than the read bound")]
     TooLarge,
-    /// La sesión agotó su presupuesto de llamadas o de bytes.
+    /// The session ran out of call or byte budget.
     #[error("location budget exhausted")]
     Budget,
-    /// El tipo de nodo no admite esta operación (leer un directorio, listar un
-    /// fichero).
+    /// The node type doesn't support this operation (reading a directory,
+    /// listing a file).
     #[error("wrong node type for this operation")]
     TypeMismatch,
-    /// Cualquier otro fallo de I/O.
+    /// Any other I/O failure.
     #[error("i/o error")]
     Io,
 }
 
-/// Lo gastado por una sesión.
+/// What a session has spent.
 #[derive(Debug, Default)]
 struct Spent {
     calls: u32,
     bytes: u64,
 }
 
-/// Lectura acotada BAJO un directorio.
+/// Bounded reading UNDER a directory.
 #[derive(Debug)]
 pub struct ConfinedRoot {
     root: LocalRoot,
     bounds: Bounds,
     spent: Mutex<Spent>,
-    /// `(dev, ino)` de las raíces protegidas que caen dentro de esta raíz
-    /// (#238). Se resuelven UNA vez, al abrir: son directorios de este proceso
-    /// y no se mueven bajo nuestros pies mientras dura una llamada.
+    /// `(dev, ino)` of the protected roots that fall inside this root
+    /// (#238). Resolved ONCE, at open time: they're directories of this
+    /// process and don't move under our feet for the duration of a call.
     forbidden: Vec<(u64, u64)>,
 }
 
 impl ConfinedRoot {
-    /// Abre `dir` como raíz confinada.
+    /// Opens `dir` as a confined root.
     ///
-    /// BLOQUEANTE: va dentro de `spawn_blocking` (regla dura 2).
+    /// BLOCKING: goes inside `spawn_blocking` (hard rule 2).
     ///
     /// # Errors
     ///
-    /// [`LocationError::NotFound`] o [`LocationError::Denied`] si el
-    /// directorio no se puede abrir, y `Denied` también si `dir` **es** una de
-    /// las raíces protegidas.
+    /// [`LocationError::NotFound`] or [`LocationError::Denied`] if the
+    /// directory can't be opened, and `Denied` too if `dir` **is** one of
+    /// the protected roots.
     ///
-    /// `protected` son directorios que no se abren aunque caigan dentro de la
-    /// raíz (#238): confinar acota por arriba y no dice absolutamente nada de
-    /// lo que hay debajo, así que sin esto una raíz perfectamente inocente —el
-    /// directorio de configuración del usuario, que se lista sin pensarlo—
-    /// contenía el journal, los secretos y el fichero de conexiones. Una ruta
-    /// protegida que no exista o que no esté dentro no cuesta nada: se ignora.
+    /// `protected` are directories that don't get opened even if they fall
+    /// inside the root (#238): confining bounds from above and says
+    /// absolutely nothing about what's below, so without this a perfectly
+    /// innocent root — the user's config directory, listed without a
+    /// second thought — used to contain the journal, the secrets and the
+    /// connections file. A protected path that doesn't exist or isn't
+    /// inside costs nothing: it's ignored.
     ///
     /// ```
     /// # use norte_vfs_local::{Bounds, ConfinedRoot};
     /// let dir = tempfile::tempdir().unwrap();
-    /// std::fs::write(dir.path().join("f"), b"hola").unwrap();
-    /// std::fs::create_dir(dir.path().join("privado")).unwrap();
-    /// std::fs::write(dir.path().join("privado/x"), b"secreto").unwrap();
-    /// let vetado = dir.path().join("privado");
-    /// let root = ConfinedRoot::open(dir.path(), Bounds::default(), &[vetado]).unwrap();
-    /// assert_eq!(root.read(b"f").unwrap(), b"hola");
-    /// assert!(root.read(b"privado/x").is_err(), "la raíz protegida no se atraviesa");
+    /// std::fs::write(dir.path().join("f"), b"hi").unwrap();
+    /// std::fs::create_dir(dir.path().join("private")).unwrap();
+    /// std::fs::write(dir.path().join("private/x"), b"secret").unwrap();
+    /// let blocked = dir.path().join("private");
+    /// let root = ConfinedRoot::open(dir.path(), Bounds::default(), &[blocked]).unwrap();
+    /// assert_eq!(root.read(b"f").unwrap(), b"hi");
+    /// assert!(root.read(b"private/x").is_err(), "the protected root is not crossed");
     /// ```
     pub fn open(
         dir: &Path,
@@ -203,22 +206,23 @@ impl ConfinedRoot {
         Self::open_verified(dir, bounds, protected, None)
     }
 
-    /// Como [`Self::open`], exigiendo que lo que se abra sea el nodo que el
-    /// llamante YA miró (#241).
+    /// Like [`Self::open`], requiring that what's opened be the node the
+    /// caller ALREADY looked at (#241).
     ///
-    /// `expect` es el `(dev, ino)` que el llamante observó cuando decidió que
-    /// esta ruta era la raíz. Entre aquella mirada y este `open` hay una
-    /// ventana: la ruta se resuelve otra vez desde `/`, siguiendo enlaces y
-    /// sin confinar, así que renombrar un componente por medio cambiaba la
-    /// raíz por la que quisiera quien pudo renombrarlo. Con el nodo esperado,
-    /// una raíz que ha cambiado bajo los pies se rehúsa en vez de servirse.
+    /// `expect` is the `(dev, ino)` the caller observed when it decided
+    /// this path was the root. Between that look and this `open` there's a
+    /// window: the path is resolved again from `/`, following links and
+    /// unconfined, so renaming a component in between would change the
+    /// root to whatever whoever renamed it wanted. With the expected node,
+    /// a root that has changed under our feet is refused instead of
+    /// served.
     ///
-    /// `None` es «no lo miré antes», que es lo que hace [`Self::open`].
+    /// `None` is "I didn't look before", which is what [`Self::open`] does.
     ///
     /// # Errors
     ///
-    /// Lo que devuelva [`Self::open`], y [`LocationError::Denied`] si el nodo
-    /// abierto no es el esperado.
+    /// Whatever [`Self::open`] returns, and [`LocationError::Denied`] if
+    /// the opened node isn't the expected one.
     pub fn open_verified(
         dir: &Path,
         bounds: Bounds,
@@ -226,15 +230,15 @@ impl ConfinedRoot {
         expect: Option<(u64, u64)>,
     ) -> Result<Self, LocationError> {
         let root = LocalRoot::open(dir).map_err(|e| from_proto(&e))?;
-        if let Some(esperado) = expect {
-            let abierto = crate::confined::node_id_of(root.raw_fd()).map_err(|e| from_proto(&e))?;
-            if abierto != esperado {
+        if let Some(expected) = expect {
+            let opened = crate::confined::node_id_of(root.raw_fd()).map_err(|e| from_proto(&e))?;
+            if opened != expected {
                 return Err(LocationError::Denied);
             }
         }
-        // Se resuelven por `(dev, ino)` y no por prefijo de ruta: comparar
-        // cadenas lo rodea un symlink, y la raíz que se abre aquí puede haber
-        // llegado por uno.
+        // Resolved by `(dev, ino)` and not by path prefix: comparing
+        // strings is what a symlink goes around, and the root opened here
+        // may have arrived through one.
         let forbidden: Vec<(u64, u64)> = protected
             .iter()
             .filter_map(|p| {
@@ -242,10 +246,11 @@ impl ConfinedRoot {
                 crate::confined::node_id_of(fd.raw_fd()).ok()
             })
             .collect();
-        let yo = crate::confined::node_id_of(root.raw_fd()).map_err(|e| from_proto(&e))?;
-        if forbidden.contains(&yo) {
-            // La raíz MISMA está protegida. El acuñador ya lo comprueba por
-            // ruta, pero esa comprobación es de cadenas y ésta de inodos.
+        let own_id = crate::confined::node_id_of(root.raw_fd()).map_err(|e| from_proto(&e))?;
+        if forbidden.contains(&own_id) {
+            // The root ITSELF is protected. The caller already checks this
+            // by path, but that check is on strings and this one is on
+            // inodes.
             return Err(LocationError::Denied);
         }
         Ok(Self {
@@ -256,25 +261,26 @@ impl ConfinedRoot {
         })
     }
 
-    /// Rechaza un camino que ATRAVIESE o TERMINE en una raíz protegida (#238).
+    /// Rejects a path that CROSSES or ENDS at a protected root (#238).
     ///
-    /// Comprueba cada prefijo, no solo el destino: sin eso, `norte/sub/x`
-    /// pasaría por encima de un veto sobre `norte`. Es una resolución por
-    /// prefijo, o sea O(n²) en syscalls sobre la profundidad de la ruta — que
-    /// aquí es dos o tres componentes, y la alternativa (pasear componente a
-    /// componente por nuestra cuenta) es reimplementar lo que
-    /// `openat2(RESOLVE_BENEATH)` hace bien.
+    /// Checks every prefix, not just the destination: without that,
+    /// `norte/sub/x` would pass right over a veto on `norte`. It's a
+    /// per-prefix resolution, i.e. O(n²) in syscalls over the path's depth
+    /// — which here is two or three components, and the alternative
+    /// (walking component by component on our own) is reimplementing what
+    /// `openat2(RESOLVE_BENEATH)` already does well.
     ///
-    /// Sin raíces protegidas dentro no cuesta ni una syscall.
+    /// With no protected roots inside, it doesn't cost a single syscall.
     fn ensure_allowed(&self, comps: &[Segment]) -> Result<(), LocationError> {
         if self.forbidden.is_empty() {
             return Ok(());
         }
-        for hasta in 1..=comps.len() {
-            let Ok(fd) = self.root.resolve_dir(&comps[..hasta]) else {
-                // No resuelve como directorio: o no existe, o es un fichero.
-                // En ninguno de los dos casos es una raíz protegida por la que
-                // se pueda pasar, y el error de verdad lo dará el llamante.
+        for up_to in 1..=comps.len() {
+            let Ok(fd) = self.root.resolve_dir(&comps[..up_to]) else {
+                // Doesn't resolve as a directory: either it doesn't exist,
+                // or it's a file. In neither case is it a protected root
+                // one could pass through, and the real error will come
+                // from the caller.
                 break;
             };
             let id = crate::confined::node_id_of(fd.as_raw_fd()).map_err(|e| from_proto(&e))?;
@@ -285,12 +291,12 @@ impl ConfinedRoot {
         Ok(())
     }
 
-    /// Lee un fichero bajo la raíz, entero.
+    /// Reads a file under the root, whole.
     ///
     /// # Errors
     ///
-    /// Las de [`LocationError`]: `Escapes` si la ruta sale, `TooLarge` si pasa
-    /// de `max_read_bytes`, `Budget` si la sesión se acabó.
+    /// [`LocationError`]'s: `Escapes` if the path escapes, `TooLarge` if it
+    /// exceeds `max_read_bytes`, `Budget` if the session ran out.
     pub fn read(&self, rel: &[u8]) -> Result<Vec<u8>, LocationError> {
         self.charge_call()?;
         let (parent, name) = Self::split(rel)?;
@@ -305,42 +311,42 @@ impl ConfinedRoot {
             return Err(LocationError::TooLarge);
         }
         self.charge_bytes(meta.len())?;
-        // `take` y no `read_to_end` a pelo (#240): el tope y el cobro salían
-        // los dos de `st_size`, y `st_size` puede mentir —un fichero al que
-        // otro proceso le está añadiendo, o cualquier cosa en un FUSE que el
-        // usuario controla—. Sin el `take`, ese fichero entraba entero en la
-        // memoria del host y el presupuesto de la sesión contaba de menos.
-        let tope = self.bounds.max_read_bytes;
+        // `take` and not a bare `read_to_end` (#240): the cap and the
+        // charge both came from `st_size`, and `st_size` can lie — a file
+        // another process is appending to, or anything on a FUSE the user
+        // controls. Without the `take`, that file would land whole in the
+        // host's memory and the session's budget would undercount.
+        let cap = self.bounds.max_read_bytes;
         let mut buf = Vec::with_capacity(usize::try_from(meta.len()).unwrap_or(0));
-        let leidos = std::io::Read::read_to_end(&mut std::io::Read::take(file, tope), &mut buf)
+        let read_len = std::io::Read::read_to_end(&mut std::io::Read::take(file, cap), &mut buf)
             .map_err(|e| from_io(&e))?;
-        let leidos = u64::try_from(leidos).unwrap_or(u64::MAX);
-        if leidos > tope {
+        let read_len = u64::try_from(read_len).unwrap_or(u64::MAX);
+        if read_len > cap {
             return Err(LocationError::TooLarge);
         }
-        if leidos == tope && meta.len() < tope {
-            // Creció mientras se leía hasta pasarse del tope. Recortar en
-            // silencio sería entregar medio fichero como si fuera entero.
+        if read_len == cap && meta.len() < cap {
+            // Grew while being read past the cap. Silently truncating
+            // would deliver half a file as if it were whole.
             return Err(LocationError::TooLarge);
         }
-        // Lo que de verdad se entregó, si resultó ser más de lo que decía el
-        // `stat`. El cobro no puede quedarse corto.
-        self.charge_bytes(leidos.saturating_sub(meta.len()))?;
+        // What was really delivered, if it turned out to be more than the
+        // `stat` said. The charge can't come up short.
+        self.charge_bytes(read_len.saturating_sub(meta.len()))?;
         Ok(buf)
     }
 
-    /// Lee como mucho los primeros `max` bytes de un fichero bajo la raíz:
-    /// lo que una cabecera necesita (`norte:location@0.2.0`, demo D2).
+    /// Reads at most the first `max` bytes of a file under the root: what
+    /// a header needs (`norte:location@0.2.0`, demo D2).
     ///
-    /// Cobra SOLO lo que devuelve, y `max` se acota además por
-    /// `max_read_bytes`: un guest no puede pedir «los primeros 4 GiB». Un
-    /// fichero más corto que `max` llega entero, y eso no es un error —el
-    /// guest que necesite saber si se cortó tiene `stat`.
+    /// Charges ONLY for what it returns, and `max` is also capped by
+    /// `max_read_bytes`: a guest can't ask for "the first 4 GiB". A file
+    /// shorter than `max` arrives whole, and that isn't an error — a guest
+    /// that needs to know whether it was cut off has `stat`.
     ///
     /// # Errors
     ///
-    /// Las de [`LocationError`]: `Escapes` si la ruta sale, `TypeMismatch`
-    /// si no es un fichero regular, `Budget` si la sesión se acabó.
+    /// [`LocationError`]'s: `Escapes` if the path escapes, `TypeMismatch`
+    /// if it isn't a regular file, `Budget` if the session ran out.
     pub fn read_prefix(&self, rel: &[u8], max: u64) -> Result<Vec<u8>, LocationError> {
         self.charge_call()?;
         let (parent, name) = Self::split(rel)?;
@@ -351,30 +357,30 @@ impl ConfinedRoot {
         if !meta.is_file() {
             return Err(LocationError::TypeMismatch);
         }
-        let tope = max.min(self.bounds.max_read_bytes);
-        // Se cobra ANTES de leer, por lo que se va a leer como mucho: un
-        // sondeo que falla no puede ser gratis (#240), y `st_size` puede
-        // mentir, así que el tope y no el tamaño.
-        self.charge_bytes(tope.min(meta.len()))?;
-        let mut buf = Vec::with_capacity(usize::try_from(tope.min(meta.len())).unwrap_or(0));
-        let leidos = std::io::Read::read_to_end(&mut std::io::Read::take(file, tope), &mut buf)
+        let cap = max.min(self.bounds.max_read_bytes);
+        // Charged BEFORE reading, for what's about to be read at most: a
+        // probe that fails can't be free (#240), and `st_size` can lie, so
+        // the cap and not the size.
+        self.charge_bytes(cap.min(meta.len()))?;
+        let mut buf = Vec::with_capacity(usize::try_from(cap.min(meta.len())).unwrap_or(0));
+        let read_len = std::io::Read::read_to_end(&mut std::io::Read::take(file, cap), &mut buf)
             .map_err(|e| from_io(&e))?;
-        // Lo que de verdad se entregó por encima de lo cobrado (un fichero
-        // que creció bajo el `stat`): el cobro no puede quedarse corto.
-        let leidos = u64::try_from(leidos).unwrap_or(u64::MAX);
-        self.charge_bytes(leidos.saturating_sub(tope.min(meta.len())))?;
+        // What was really delivered above what was charged (a file that
+        // grew after the `stat`): the charge can't come up short.
+        let read_len = u64::try_from(read_len).unwrap_or(u64::MAX);
+        self.charge_bytes(read_len.saturating_sub(cap.min(meta.len())))?;
         Ok(buf)
     }
 
-    /// `lstat` de una entrada bajo la raíz: el símbolo NO se sigue.
+    /// `lstat` of an entry under the root: the symlink is NOT followed.
     ///
     /// # Errors
     ///
-    /// Las de [`LocationError`].
+    /// [`LocationError`]'s.
     ///
     /// # Panics
     ///
-    /// Nunca: el `CString` de `"."` es una constante sin NUL interior.
+    /// Never: the `CString` for `"."` is a constant with no interior NUL.
     pub fn stat(&self, rel: &[u8]) -> Result<LocationMeta, LocationError> {
         self.charge_call()?;
         let (parent, name) = Self::split(rel)?;
@@ -382,18 +388,19 @@ impl ConfinedRoot {
         let dir = self.dir_fd(&parent)?;
         match name {
             Some(name) => fstatat_nofollow(dir.as_raw_fd(), &name),
-            // La raíz misma: `fstatat` con nombre vacío y `AT_EMPTY_PATH`
-            // sería otra syscall más; el `.` de un dirfd ya es ella.
-            None => fstatat_nofollow(dir.as_raw_fd(), &CString::new(".").expect("`.` sin NUL")),
+            // The root itself: `fstatat` with an empty name and
+            // `AT_EMPTY_PATH` would be yet another syscall; a dirfd's `.`
+            // already is it.
+            None => fstatat_nofollow(dir.as_raw_fd(), &CString::new(".").expect("`.` has no NUL")),
         }
     }
 
-    /// Lista un directorio bajo la raíz. Nombres en bytes crudos, `.` y `..`
-    /// excluidos.
+    /// Lists a directory under the root. Names in raw bytes, `.` and `..`
+    /// excluded.
     ///
     /// # Errors
     ///
-    /// Las de [`LocationError`]; `TypeMismatch` si `rel` no es un directorio.
+    /// [`LocationError`]'s; `TypeMismatch` if `rel` isn't a directory.
     pub fn list(&self, rel: &[u8]) -> Result<Vec<LocationDirent>, LocationError> {
         self.charge_call()?;
         let comps = Self::components(rel)?;
@@ -402,11 +409,10 @@ impl ConfinedRoot {
         readdir_all(dir.as_raw_fd(), self.bounds.max_list_entries)
     }
 
-    /// Cobra una llamada. Se cobra ANTES de trabajar y también cuando el
-    /// trabajo va a fallar: un sondeo que falla a propósito no puede ser
-    /// gratis.
+    /// Charges for a call. Charged BEFORE doing the work and also when the
+    /// work is about to fail: a probe that fails on purpose can't be free.
     fn charge_call(&self) -> Result<(), LocationError> {
-        let mut spent = self.spent.lock().expect("spent lock sano");
+        let mut spent = self.spent.lock().expect("spent lock is healthy");
         if spent.calls >= self.bounds.max_calls {
             return Err(LocationError::Budget);
         }
@@ -415,7 +421,7 @@ impl ConfinedRoot {
     }
 
     fn charge_bytes(&self, n: u64) -> Result<(), LocationError> {
-        let mut spent = self.spent.lock().expect("spent lock sano");
+        let mut spent = self.spent.lock().expect("spent lock is healthy");
         let total = spent.bytes.saturating_add(n);
         if total > self.bounds.max_total_bytes {
             return Err(LocationError::Budget);
@@ -424,13 +430,14 @@ impl ConfinedRoot {
         Ok(())
     }
 
-    /// Trocea una ruta relativa en segmentos, resolviendo `.` y `..` de forma
-    /// LÉXICA.
+    /// Splits a relative path into segments, resolving `.` and `..`
+    /// LEXICALLY.
     ///
-    /// Léxica y no por el kernel a propósito: los dos veredictos coinciden en
-    /// lo único que se promete —no salir—, porque cada segmento resultante se
-    /// abre igualmente bajo [`LocalRoot`]. Lo que la versión léxica evita es
-    /// tener que mandarle al kernel una ruta que este módulo no ha mirado.
+    /// Lexically and not through the kernel, on purpose: the two verdicts
+    /// agree on the one thing that's promised — not escaping — because
+    /// each resulting segment is opened the same way, under [`LocalRoot`].
+    /// What the lexical version avoids is having to hand the kernel a path
+    /// this module hasn't looked at.
     fn components(rel: &[u8]) -> Result<Vec<Segment>, LocationError> {
         if rel.first() == Some(&b'/') {
             return Err(LocationError::Escapes);
@@ -450,8 +457,8 @@ impl ConfinedRoot {
         Ok(out)
     }
 
-    /// Los componentes del PADRE y el último nombre ya en `CString`. `None` =
-    /// la ruta es la raíz misma.
+    /// The PARENT's components and the last name already as a `CString`.
+    /// `None` = the path is the root itself.
     fn split(rel: &[u8]) -> Result<(Vec<Segment>, Option<CString>), LocationError> {
         let mut comps = Self::components(rel)?;
         let Some(last) = comps.pop() else {
@@ -466,24 +473,25 @@ impl ConfinedRoot {
     }
 }
 
-/// Abre un hijo para lectura SIN seguir un symlink final.
+/// Opens a child for reading WITHOUT following a final symlink.
 ///
-/// `O_NONBLOCK` y `O_NOCTTY` no son adorno (#240): la comprobación de tipo es
-/// POSTERIOR al open, y un `open(O_RDONLY)` sobre una FIFO sin escritor se
-/// queda bloqueado para siempre. Un tarball hostil puede traer una FIFO
-/// llamada `.git/index` —tar las lleva y norte las extrae—, y cada pintado de
-/// esa página se comía un hilo del pool bloqueante; la interrupción por época
-/// de wasmtime no salva de eso, porque solo dispara en instrucciones wasm.
-/// Sobre un fichero regular, `O_NONBLOCK` no cambia nada de la lectura.
+/// `O_NONBLOCK` and `O_NOCTTY` aren't decoration (#240): the type check
+/// comes AFTER the open, and an `open(O_RDONLY)` on a FIFO with no writer
+/// blocks forever. A hostile tarball can carry a FIFO named `.git/index`
+/// — tar can hold them and norte extracts them —, and every repaint of
+/// that page ate a thread from the blocking pool; wasmtime's epoch
+/// interruption doesn't save you from that, because it only fires on wasm
+/// instructions. On a regular file, `O_NONBLOCK` changes nothing about the
+/// read.
 fn openat_read(dir: RawFd, name: Option<&CString>) -> Result<std::fs::File, LocationError> {
     let Some(name) = name else {
-        // Leer la raíz es leer un directorio.
+        // Reading the root is reading a directory.
         return Err(LocationError::TypeMismatch);
     };
     #[allow(unsafe_code)]
-    // SAFETY: `dir` está vivo (lo sostiene el `OwnedFd` del llamante) y `name`
-    // es una CString NUL-terminada viva durante toda la llamada. El fd que
-    // devuelve el kernel no tiene dueño hasta el `from_raw_fd` de abajo.
+    // SAFETY: `dir` is alive (the caller's `OwnedFd` holds it) and `name`
+    // is a NUL-terminated CString alive for the whole call. The fd the
+    // kernel returns has no owner until the `from_raw_fd` below.
     let raw = unsafe {
         libc::openat(
             dir,
@@ -495,16 +503,16 @@ fn openat_read(dir: RawFd, name: Option<&CString>) -> Result<std::fs::File, Loca
         return Err(from_io(&std::io::Error::last_os_error()));
     }
     #[allow(unsafe_code)]
-    // SAFETY: `raw` es un fd recién abierto y sin dueño; `File` pasa a serlo.
+    // SAFETY: `raw` is a freshly opened, ownerless fd; `File` becomes its owner.
     Ok(unsafe { std::fs::File::from_raw_fd(raw) })
 }
 
-/// `fstatat` sin seguir el symlink final.
+/// `fstatat` without following the final symlink.
 fn fstatat_nofollow(dir: RawFd, name: &CString) -> Result<LocationMeta, LocationError> {
     let mut st: libc::stat = unsafe_zeroed_stat();
     #[allow(unsafe_code)]
-    // SAFETY: `dir` vive, `name` es NUL-terminada y viva, y `st` es una `stat`
-    // propia y alineada que el kernel rellena entera.
+    // SAFETY: `dir` is alive, `name` is NUL-terminated and alive, and `st`
+    // is an owned, aligned `stat` the kernel fills in entirely.
     let rc = unsafe { libc::fstatat(dir, name.as_ptr(), &raw mut st, libc::AT_SYMLINK_NOFOLLOW) };
     if rc < 0 {
         return Err(from_io(&std::io::Error::last_os_error()));
@@ -512,18 +520,18 @@ fn fstatat_nofollow(dir: RawFd, name: &CString) -> Result<LocationMeta, Location
     Ok(meta_from_stat(&st))
 }
 
-/// Una `libc::stat` a cero, que es lo que el kernel espera recibir.
+/// A zeroed `libc::stat`, which is what the kernel expects to receive.
 #[allow(unsafe_code)]
 fn unsafe_zeroed_stat() -> libc::stat {
-    // SAFETY: `libc::stat` es un POD de enteros: el patrón todo-ceros es un
-    // valor válido, y el kernel lo sobreescribe entero antes de que se lea.
+    // SAFETY: `libc::stat` is a POD of integers: the all-zeros pattern is a
+    // valid value, and the kernel overwrites it entirely before it's read.
     unsafe { std::mem::zeroed() }
 }
 
-// `useless_conversion` es cierto SOLO en este target: los tipos de
-// `libc::stat` cambian de anchura entre arquitecturas (`time_t` de 32 bits
-// sigue existiendo), y un `as` que trunca un inodo convierte dos ficheros
-// distintos en el mismo. La conversión se queda.
+// `useless_conversion` is true ONLY on this target: `libc::stat`'s types
+// change width across architectures (32-bit `time_t` still exists), and an
+// `as` that truncates an inode turns two distinct files into the same one.
+// The conversion stays.
 #[allow(clippy::useless_conversion)]
 fn meta_from_stat(st: &libc::stat) -> LocationMeta {
     let mode = st.st_mode;
@@ -546,14 +554,14 @@ fn meta_from_stat(st: &libc::stat) -> LocationMeta {
     }
 }
 
-/// `readdir` sobre un dirfd, acotado.
+/// `readdir` over a dirfd, bounded.
 fn readdir_all(dir: RawFd, max: u32) -> Result<Vec<LocationDirent>, LocationError> {
-    // `fdopendir` se queda con el fd (lo cierra `closedir`), así que se le da
-    // un duplicado ABIERTO PARA LEER: el de `LocalRoot` es `O_PATH`, que no
-    // sirve para recorrer.
+    // `fdopendir` takes ownership of the fd (`closedir` closes it), so it's
+    // given a duplicate OPENED FOR READING: `LocalRoot`'s is `O_PATH`,
+    // which doesn't work for iterating.
     #[allow(unsafe_code)]
-    // SAFETY: `dir` vive durante la llamada; `"."` es una constante
-    // NUL-terminada. El fd devuelto no tiene dueño hasta el `fdopendir`.
+    // SAFETY: `dir` is alive for the call; `"."` is a NUL-terminated
+    // constant. The returned fd has no owner until the `fdopendir`.
     let raw = unsafe {
         libc::openat(
             dir,
@@ -565,13 +573,13 @@ fn readdir_all(dir: RawFd, max: u32) -> Result<Vec<LocationDirent>, LocationErro
         return Err(from_io(&std::io::Error::last_os_error()));
     }
     #[allow(unsafe_code)]
-    // SAFETY: `raw` es un fd de directorio recién abierto y sin dueño;
-    // `fdopendir` pasa a ser su dueño y `closedir` lo cierra al final.
+    // SAFETY: `raw` is a freshly opened, ownerless directory fd;
+    // `fdopendir` becomes its owner and `closedir` closes it at the end.
     let dirp = unsafe { libc::fdopendir(raw) };
     if dirp.is_null() {
         let err = std::io::Error::last_os_error();
         #[allow(unsafe_code)]
-        // SAFETY: `fdopendir` falló, así que el fd sigue siendo nuestro.
+        // SAFETY: `fdopendir` failed, so the fd is still ours.
         unsafe {
             libc::close(raw)
         };
@@ -579,21 +587,22 @@ fn readdir_all(dir: RawFd, max: u32) -> Result<Vec<LocationDirent>, LocationErro
     }
     let mut out = Vec::new();
     loop {
-        // POSIX: `readdir` devuelve NULL al acabar Y al fallar, y la única
-        // forma de distinguirlas es poner errno a 0 antes. Sin esto, un errno
-        // viejo de cualquier llamada anterior se leería como un directorio
-        // roto — o al revés, un fallo real pasaría por fin de directorio.
+        // POSIX: `readdir` returns NULL both at the end and on failure,
+        // and the only way to tell them apart is setting errno to 0
+        // beforehand. Without this, a stale errno from any earlier call
+        // would be read as a broken directory — or the other way around,
+        // a real failure would pass as end-of-directory.
         clear_errno();
         #[allow(unsafe_code)]
-        // SAFETY: `dirp` es un DIR* vivo, propiedad de esta función hasta el
-        // `closedir` de abajo.
+        // SAFETY: `dirp` is a live DIR*, owned by this function until the
+        // `closedir` below.
         let entry = unsafe { libc::readdir(dirp) };
         if entry.is_null() {
             let err = std::io::Error::last_os_error();
             if err.raw_os_error().unwrap_or(0) != 0 {
                 #[allow(unsafe_code)]
-                // SAFETY: `dirp` sigue vivo y esta es su única liberación en
-                // este camino.
+                // SAFETY: `dirp` is still alive and this is its only
+                // release on this path.
                 unsafe {
                     libc::closedir(dirp)
                 };
@@ -602,8 +611,8 @@ fn readdir_all(dir: RawFd, max: u32) -> Result<Vec<LocationDirent>, LocationErro
             break;
         }
         #[allow(unsafe_code)]
-        // SAFETY: `entry` es un puntero válido a una `dirent` propiedad del
-        // DIR*, viva hasta el siguiente `readdir`, y solo se lee aquí.
+        // SAFETY: `entry` is a valid pointer to a `dirent` owned by the
+        // DIR*, alive until the next `readdir`, and only read here.
         let (name, d_type) = unsafe {
             let name = std::ffi::CStr::from_ptr((*entry).d_name.as_ptr())
                 .to_bytes()
@@ -622,19 +631,19 @@ fn readdir_all(dir: RawFd, max: u32) -> Result<Vec<LocationDirent>, LocationErro
         }
     }
     #[allow(unsafe_code)]
-    // SAFETY: `dirp` sigue vivo y esta es su única liberación.
+    // SAFETY: `dirp` is still alive and this is its only release.
     unsafe {
         libc::closedir(dirp)
     };
     Ok(out)
 }
 
-/// Pone `errno` a cero. Lo exige POSIX antes de un `readdir` cuyo NULL haya
-/// que interpretar.
+/// Sets `errno` to zero. POSIX requires it before a `readdir` whose NULL
+/// has to be interpreted.
 #[allow(unsafe_code)]
 fn clear_errno() {
-    // SAFETY: `errno` es thread-local y el puntero que devuelven estas dos
-    // funciones apunta a él; escribirle un 0 es la forma que define POSIX.
+    // SAFETY: `errno` is thread-local and the pointer these two functions
+    // return points at it; writing a 0 to it is the form POSIX defines.
     unsafe {
         #[cfg(target_os = "linux")]
         {
@@ -660,8 +669,8 @@ fn from_io(e: &std::io::Error) -> LocationError {
     match e.raw_os_error() {
         Some(libc::ENOENT) => LocationError::NotFound,
         Some(libc::EACCES | libc::EPERM) => LocationError::Denied,
-        // `ELOOP` = symlink que no se sigue; `EXDEV` = lo que devuelve
-        // `openat2(RESOLVE_BENEATH)` cuando la resolución se sale.
+        // `ELOOP` = a symlink that isn't followed; `EXDEV` = what
+        // `openat2(RESOLVE_BENEATH)` returns when the resolution escapes.
         Some(libc::ELOOP | libc::EXDEV) => LocationError::Escapes,
         Some(libc::EISDIR | libc::ENOTDIR) => LocationError::TypeMismatch,
         _ => LocationError::Io,
@@ -685,37 +694,37 @@ fn from_proto(e: &norte_proto::Error) -> LocationError {
 mod tests {
     use super::*;
 
-    /// #240: una FIFO no cuelga al lector.
+    /// #240: a FIFO doesn't hang the reader.
     ///
-    /// La comprobación de tipo es posterior al open, así que sin `O_NONBLOCK`
-    /// un `open(O_RDONLY)` sobre una FIFO sin escritor se queda ahí para
-    /// siempre — un hilo del pool bloqueante por página pintada, y la
-    /// interrupción por época de wasmtime no llega a enterarse.
+    /// The type check comes after the open, so without `O_NONBLOCK` an
+    /// `open(O_RDONLY)` on a FIFO with no writer stays there forever — one
+    /// thread of the blocking pool per painted page, and wasmtime's epoch
+    /// interruption never finds out.
     #[test]
-    fn una_fifo_no_bloquea_al_abrirla() {
+    fn a_fifo_does_not_block_on_open() {
         let dir = tempfile::tempdir().unwrap();
         let fifo = dir.path().join("index");
         let c = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes().to_vec()).unwrap();
         #[allow(unsafe_code)]
-        // SAFETY: `c` vive durante toda la llamada y es una ruta NUL-terminada
-        // dentro de un tempdir recién creado.
+        // SAFETY: `c` lives for the whole call and is a NUL-terminated path
+        // inside a freshly created tempdir.
         let rc = unsafe { libc::mkfifo(c.as_ptr(), 0o600) };
         assert_eq!(rc, 0, "mkfifo: {}", std::io::Error::last_os_error());
 
         let root = ConfinedRoot::open(dir.path(), Bounds::default(), &[]).unwrap();
-        // Sin `O_NONBLOCK` este assert no falla: no termina.
+        // Without `O_NONBLOCK` this assert doesn't fail: it never ends.
         assert_eq!(root.read(b"index"), Err(LocationError::TypeMismatch));
     }
 
-    /// `read_prefix` (norte:location 0.2.0): entrega y COBRA como mucho `max`
-    /// bytes. Una columna sobre cien vídeos cuesta cien cabeceras y no cien
-    /// vídeos, y el presupuesto de la sesión lo refleja.
+    /// `read_prefix` (norte:location 0.2.0): delivers and CHARGES at most
+    /// `max` bytes. A column over a hundred videos costs a hundred headers
+    /// and not a hundred videos, and the session's budget reflects it.
     #[test]
-    fn read_prefix_entrega_y_cobra_solo_la_cabecera() {
+    fn read_prefix_delivers_and_charges_only_the_header() {
         let dir = tempfile::tempdir().unwrap();
-        let contenido: Vec<u8> = (0..100u8).collect();
-        std::fs::write(dir.path().join("pista.mp3"), &contenido).unwrap();
-        std::fs::create_dir(dir.path().join("carpeta")).unwrap();
+        let content: Vec<u8> = (0..100u8).collect();
+        std::fs::write(dir.path().join("track.mp3"), &content).unwrap();
+        std::fs::create_dir(dir.path().join("folder")).unwrap();
 
         let bounds = Bounds {
             max_total_bytes: 60,
@@ -723,166 +732,174 @@ mod tests {
         };
         let root = ConfinedRoot::open(dir.path(), bounds, &[]).unwrap();
         assert_eq!(
-            root.read_prefix(b"pista.mp3", 50).unwrap(),
-            contenido[..50],
-            "los primeros 50"
+            root.read_prefix(b"track.mp3", 50).unwrap(),
+            content[..50],
+            "the first 50"
         );
-        // Un segundo prefijo de 50 no cabe en los 60 de la sesión: se cobró
-        // lo entregado, no lo que el fichero mide.
+        // A second 50-byte prefix doesn't fit in the session's 60: what
+        // was charged was what was delivered, not the file's size.
         assert_eq!(
-            root.read_prefix(b"pista.mp3", 50),
+            root.read_prefix(b"track.mp3", 50),
             Err(LocationError::Budget)
         );
 
         let root = ConfinedRoot::open(dir.path(), Bounds::default(), &[]).unwrap();
         assert_eq!(
-            root.read_prefix(b"pista.mp3", 1000).unwrap(),
-            contenido,
-            "más corto que `max`: entero, sin error"
+            root.read_prefix(b"track.mp3", 1000).unwrap(),
+            content,
+            "shorter than `max`: whole, no error"
         );
         assert_eq!(
-            root.read_prefix(b"carpeta", 10),
+            root.read_prefix(b"folder", 10),
             Err(LocationError::TypeMismatch)
         );
         assert_eq!(
-            root.read_prefix(b"../fuera", 10),
+            root.read_prefix(b"../outside", 10),
             Err(LocationError::Escapes)
         );
     }
 
-    /// #238: la raíz protegida que cae DENTRO no se atraviesa, ni a un nivel
-    /// ni a tres.
+    /// #238: a protected root falling INSIDE isn't crossed, not at one
+    /// level nor at three.
     ///
-    /// Es el caso real y no hace falta nada hostil para llegar a él: con el
-    /// panel en `$XDG_CONFIG_HOME` la raíz confinada era ese directorio, y
-    /// `norte/` —el journal, los secretos, las conexiones— estaba debajo.
+    /// It's the real case and nothing hostile is needed to reach it: with
+    /// the pane at `$XDG_CONFIG_HOME` the confined root was that
+    /// directory, and `norte/` — the journal, the secrets, the connections
+    /// — was underneath.
     #[test]
-    fn una_raiz_protegida_de_dentro_no_se_atraviesa() {
+    fn a_protected_root_from_inside_is_not_traversed() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(dir.path().join("norte/hondo")).unwrap();
-        std::fs::write(dir.path().join("norte/secretos.age"), b"nope").unwrap();
-        std::fs::write(dir.path().join("norte/hondo/x"), b"tampoco").unwrap();
-        std::fs::write(dir.path().join("libre.txt"), b"si").unwrap();
-        let vetada = dir.path().join("norte");
+        std::fs::create_dir_all(dir.path().join("norte/deep")).unwrap();
+        std::fs::write(dir.path().join("norte/secrets.age"), b"nope").unwrap();
+        std::fs::write(dir.path().join("norte/deep/x"), b"nope-either").unwrap();
+        std::fs::write(dir.path().join("free.txt"), b"yes").unwrap();
+        let blocked = dir.path().join("norte");
 
-        let root = ConfinedRoot::open(dir.path(), Bounds::default(), &[vetada]).unwrap();
-        assert_eq!(root.read(b"libre.txt").unwrap(), b"si", "lo demás se lee");
+        let root = ConfinedRoot::open(dir.path(), Bounds::default(), &[blocked]).unwrap();
         assert_eq!(
-            root.read(b"norte/secretos.age"),
-            Err(LocationError::Denied),
-            "un nivel"
+            root.read(b"free.txt").unwrap(),
+            b"yes",
+            "everything else reads fine"
         );
         assert_eq!(
-            root.read(b"norte/hondo/x"),
+            root.read(b"norte/secrets.age"),
             Err(LocationError::Denied),
-            "y tres: se comprueba CADA prefijo, no solo el destino"
+            "one level"
+        );
+        assert_eq!(
+            root.read(b"norte/deep/x"),
+            Err(LocationError::Denied),
+            "and three: EVERY prefix is checked, not just the destination"
         );
         assert_eq!(root.list(b"norte"), Err(LocationError::Denied));
         assert_eq!(root.stat(b"norte"), Err(LocationError::Denied));
         assert_eq!(
-            root.stat(b"norte/secretos.age"),
+            root.stat(b"norte/secrets.age"),
             Err(LocationError::Denied),
-            "ni se confirma que exista"
+            "not even confirming it exists"
         );
     }
 
-    /// Y el veto es por INODO, así que un symlink que apunte a la raíz
-    /// protegida da lo mismo: comparar cadenas es lo que un symlink rodea.
+    /// And the veto is by INODE, so a symlink pointing at the protected
+    /// root makes no difference: comparing strings is exactly what a
+    /// symlink goes around.
     #[test]
-    fn un_symlink_a_la_raiz_protegida_tampoco_entra() {
+    fn a_symlink_to_the_protected_root_does_not_get_in_either() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join("norte")).unwrap();
-        std::fs::write(dir.path().join("norte/secretos.age"), b"nope").unwrap();
-        std::os::unix::fs::symlink("norte", dir.path().join("atajo")).unwrap();
-        let vetada = dir.path().join("norte");
+        std::fs::write(dir.path().join("norte/secrets.age"), b"nope").unwrap();
+        std::os::unix::fs::symlink("norte", dir.path().join("shortcut")).unwrap();
+        let blocked = dir.path().join("norte");
 
-        let root = ConfinedRoot::open(dir.path(), Bounds::default(), &[vetada]).unwrap();
+        let root = ConfinedRoot::open(dir.path(), Bounds::default(), &[blocked]).unwrap();
         assert_eq!(
-            root.read(b"atajo/secretos.age"),
+            root.read(b"shortcut/secrets.age"),
             Err(LocationError::Denied),
-            "el atajo resuelve al mismo inodo"
+            "the shortcut resolves to the same inode"
         );
     }
 
-    /// La raíz MISMA protegida no se abre. El acuñador ya lo comprueba por
-    /// ruta; esto lo comprueba por inodo, que es lo que un symlink no engaña.
+    /// The protected root ITSELF can't be opened. The caller already
+    /// checks this by path; this checks it by inode, which is what a
+    /// symlink can't fake.
     #[test]
-    fn la_raiz_protegida_no_se_abre_como_raiz() {
+    fn the_protected_root_cannot_be_opened_as_a_root() {
         let dir = tempfile::tempdir().unwrap();
-        let ella = dir.path().to_path_buf();
+        let itself = dir.path().to_path_buf();
         assert_eq!(
-            ConfinedRoot::open(dir.path(), Bounds::default(), &[ella]).err(),
+            ConfinedRoot::open(dir.path(), Bounds::default(), &[itself]).err(),
             Some(LocationError::Denied)
         );
     }
 
-    /// Una raíz protegida que no existe o que está FUERA no cuesta nada y no
-    /// veta nada: el proceso declara las suyas una vez y muchas no aplican.
+    /// A protected root that doesn't exist or is OUTSIDE costs nothing and
+    /// vetoes nothing: the process declares its own once and many don't
+    /// apply.
     #[test]
-    fn una_protegida_ausente_o_de_fuera_no_estorba() {
-        let fuera = tempfile::tempdir().unwrap();
+    fn an_absent_or_outside_protected_path_does_not_get_in_the_way() {
+        let outside = tempfile::tempdir().unwrap();
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("f"), b"si").unwrap();
+        std::fs::write(dir.path().join("f"), b"yes").unwrap();
         let root = ConfinedRoot::open(
             dir.path(),
             Bounds::default(),
-            &[fuera.path().to_path_buf(), dir.path().join("no-existe")],
+            &[
+                outside.path().to_path_buf(),
+                dir.path().join("does-not-exist"),
+            ],
         )
         .unwrap();
-        assert_eq!(root.read(b"f").unwrap(), b"si");
+        assert_eq!(root.read(b"f").unwrap(), b"yes");
     }
 
     #[test]
-    fn un_dotdot_no_sale_de_la_raiz() {
+    fn a_dotdot_does_not_escape_the_root() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("dentro.txt"), b"si").unwrap();
+        std::fs::write(dir.path().join("inside.txt"), b"yes").unwrap();
         std::fs::create_dir(dir.path().join("sub")).unwrap();
         let root = ConfinedRoot::open(dir.path(), Bounds::default(), &[]).unwrap();
         assert!(
-            root.read(b"sub/../dentro.txt").is_ok(),
-            "un `..` INTERIOR es legítimo"
+            root.read(b"sub/../inside.txt").is_ok(),
+            "an INTERIOR `..` is legitimate"
         );
-        assert_eq!(root.read(b"../fuera.txt"), Err(LocationError::Escapes));
+        assert_eq!(root.read(b"../outside.txt"), Err(LocationError::Escapes));
     }
 
     #[test]
-    fn un_symlink_que_apunta_fuera_no_se_sigue() {
+    fn a_symlink_pointing_outside_is_not_followed() {
         let outside = tempfile::tempdir().unwrap();
-        std::fs::write(outside.path().join("secreto"), b"nope").unwrap();
+        std::fs::write(outside.path().join("secret"), b"nope").unwrap();
         let dir = tempfile::tempdir().unwrap();
-        std::os::unix::fs::symlink(outside.path().join("secreto"), dir.path().join("escape"))
+        std::os::unix::fs::symlink(outside.path().join("secret"), dir.path().join("escape"))
             .unwrap();
         let root = ConfinedRoot::open(dir.path(), Bounds::default(), &[]).unwrap();
-        assert!(
-            root.read(b"escape").is_err(),
-            "un symlink no es una puerta trasera"
-        );
-        // Verlo SÍ se puede: es una entrada del directorio como otra.
+        assert!(root.read(b"escape").is_err(), "a symlink is not a backdoor");
+        // Seeing it IS allowed: it's a directory entry like any other.
         assert_eq!(root.stat(b"escape").unwrap().kind, LocationKind::Symlink);
     }
 
     #[test]
-    fn un_symlink_intermedio_que_sale_lo_rechaza_la_raiz() {
+    fn an_intermediate_symlink_that_escapes_is_rejected_by_the_root() {
         let outside = tempfile::tempdir().unwrap();
         std::fs::create_dir(outside.path().join("d")).unwrap();
-        std::fs::write(outside.path().join("d/secreto"), b"nope").unwrap();
+        std::fs::write(outside.path().join("d/secret"), b"nope").unwrap();
         let dir = tempfile::tempdir().unwrap();
-        std::os::unix::fs::symlink(outside.path().join("d"), dir.path().join("puerta")).unwrap();
+        std::os::unix::fs::symlink(outside.path().join("d"), dir.path().join("door")).unwrap();
         let root = ConfinedRoot::open(dir.path(), Bounds::default(), &[]).unwrap();
-        assert!(root.read(b"puerta/secreto").is_err());
+        assert!(root.read(b"door/secret").is_err());
     }
 
     #[test]
-    fn una_ruta_absoluta_no_es_relativa() {
+    fn an_absolute_path_is_not_relative() {
         let dir = tempfile::tempdir().unwrap();
         let root = ConfinedRoot::open(dir.path(), Bounds::default(), &[]).unwrap();
         assert_eq!(root.read(b"/etc/passwd"), Err(LocationError::Escapes));
     }
 
     #[test]
-    fn cada_tope_corta_en_su_borde() {
+    fn each_cap_cuts_at_its_edge() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("grande.bin"), vec![0u8; 4096]).unwrap();
+        std::fs::write(dir.path().join("big.bin"), vec![0u8; 4096]).unwrap();
         let bounds = Bounds {
             max_read_bytes: 1024,
             max_calls: 2,
@@ -890,15 +907,15 @@ mod tests {
             max_list_entries: 8,
         };
         let root = ConfinedRoot::open(dir.path(), bounds, &[]).unwrap();
-        assert_eq!(root.read(b"grande.bin"), Err(LocationError::TooLarge));
-        // El presupuesto de LLAMADAS se consume aunque la lectura falle: si
-        // no, un guest sondea el árbol gratis fallando a propósito.
-        root.stat(b"grande.bin").ok();
-        assert_eq!(root.stat(b"grande.bin"), Err(LocationError::Budget));
+        assert_eq!(root.read(b"big.bin"), Err(LocationError::TooLarge));
+        // The CALL budget is spent even when the read fails: otherwise a
+        // guest probes the tree for free by failing on purpose.
+        root.stat(b"big.bin").ok();
+        assert_eq!(root.stat(b"big.bin"), Err(LocationError::Budget));
     }
 
     #[test]
-    fn el_presupuesto_de_bytes_corta_la_sesion() {
+    fn the_byte_budget_cuts_the_session() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("a"), vec![b'x'; 100]).unwrap();
         std::fs::write(dir.path().join("b"), vec![b'y'; 100]).unwrap();
@@ -912,7 +929,7 @@ mod tests {
     }
 
     #[test]
-    fn stat_trae_lo_que_git_guarda_en_su_indice() {
+    fn stat_brings_what_git_stores_in_its_index() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("f"), b"x").unwrap();
         let root = ConfinedRoot::open(dir.path(), Bounds::default(), &[]).unwrap();
@@ -921,20 +938,20 @@ mod tests {
         assert_eq!(m.kind, LocationKind::File);
         assert!(
             m.ino != 0 && m.dev != 0,
-            "git compara ino/dev, no solo mtime"
+            "git compares ino/dev, not just mtime"
         );
-        assert!(m.mtime_sec > 0, "y mtime con nanosegundos");
+        assert!(m.mtime_sec > 0, "and mtime with nanoseconds");
     }
 
     #[test]
-    fn list_da_los_nombres_en_bytes_crudos() {
+    fn list_gives_names_as_raw_bytes() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("a.txt"), b"").unwrap();
         std::fs::create_dir(dir.path().join("sub")).unwrap();
         {
             use std::os::unix::ffi::OsStrExt as _;
-            let raro = std::ffi::OsStr::from_bytes(b"no\xffutf8");
-            std::fs::write(dir.path().join(raro), b"").unwrap();
+            let weird = std::ffi::OsStr::from_bytes(b"no\xffutf8");
+            std::fs::write(dir.path().join(weird), b"").unwrap();
         }
         let root = ConfinedRoot::open(dir.path(), Bounds::default(), &[]).unwrap();
         let mut names: Vec<Vec<u8>> = root
@@ -949,11 +966,14 @@ mod tests {
             vec![b"a.txt".to_vec(), b"no\xffutf8".to_vec(), b"sub".to_vec()]
         );
         let sub = root.list(b"sub").unwrap();
-        assert!(sub.is_empty(), "un directorio vacío lista vacío, no falla");
+        assert!(
+            sub.is_empty(),
+            "an empty directory lists empty, not failing"
+        );
     }
 
     #[test]
-    fn listar_un_fichero_es_type_mismatch() {
+    fn listing_a_file_is_type_mismatch() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("f"), b"").unwrap();
         let root = ConfinedRoot::open(dir.path(), Bounds::default(), &[]).unwrap();
@@ -961,7 +981,7 @@ mod tests {
     }
 
     #[test]
-    fn leer_un_directorio_es_type_mismatch() {
+    fn reading_a_directory_is_type_mismatch() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join("d")).unwrap();
         let root = ConfinedRoot::open(dir.path(), Bounds::default(), &[]).unwrap();

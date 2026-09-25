@@ -1,16 +1,18 @@
-//! La sesión de UI que el daemon guarda (L2).
+//! The UI session the daemon stores (L2).
 //!
-//! Se llama `ui_session` y no `session` porque el módulo `sessions` ya existe y
-//! es otra cosa: las sesiones de AGENTE. Esta es la pantalla de un humano.
+//! It's called `ui_session` and not `session` because the `sessions` module
+//! already exists and is something else: AGENT sessions. This one is a
+//! human's screen.
 //!
-//! El core la almacena, la versiona y la devuelve; **no la lee**. Es la misma
-//! decisión de ADR 0058 —«una pantalla es un árbol que el core guarda y no
-//! interpreta»— llevada al proceso de al lado: los tipos del cuerpo viven en
-//! `norte-frontend`, que depende de `norte-proto` y no al revés.
+//! The core stores it, versions it, and returns it; **it does not read it**.
+//! Same decision as ADR 0058 —"a screen is a tree the core stores and does
+//! not interpret"— carried to the next-door process: the body's types live
+//! in `norte-frontend`, which depends on `norte-proto` and not the other
+//! way around.
 //!
-//! Lo único que este módulo hace valer son dos cosas, y las dos tratan de
-//! protegerse a sí mismo: la `revision` (un escritor rancio no pisa al
-//! vigente) y el tope de 1 MiB (un cliente con un bug no llena el disco).
+//! The only two things this module enforces both try to protect itself: the
+//! `revision` (a stale writer doesn't clobber the current one) and the
+//! 1 MiB cap (a buggy client doesn't fill the disk).
 
 pub mod disk;
 
@@ -18,43 +20,45 @@ use std::sync::Mutex;
 
 use norte_proto::methods::{SESSION_BODY_MAX, Session};
 
-/// Por qué se rehusó un `put`.
+/// Why a `put` was refused.
 #[derive(Debug, thiserror::Error)]
 pub enum PutError {
-    /// La revisión que traía el cliente no es la vigente.
-    #[error("revisión rancia; la vigente es {current}")]
+    /// The revision the client brought isn't the current one.
+    #[error("stale revision; the current one is {current}")]
     Conflict {
-        /// La revisión vigente, para que el cliente re-lea contra ella.
+        /// The current revision, so the client can re-read against it.
         current: u64,
     },
-    /// El cuerpo pasa de [`SESSION_BODY_MAX`].
-    #[error("el cuerpo ocupa {bytes} bytes y el tope es {SESSION_BODY_MAX}")]
+    /// The body exceeds [`SESSION_BODY_MAX`].
+    #[error("the body takes up {bytes} bytes and the cap is {SESSION_BODY_MAX}")]
     TooLarge {
-        /// Bytes serializados que traía.
+        /// Serialized bytes it brought.
         bytes: usize,
     },
-    /// La sesión está CERRADA: este proceso ya volcó por última vez.
-    #[error("la sesión ya está cerrada; no queda quien la escriba")]
+    /// The session is CLOSED: this process already did its last dump.
+    #[error("the session is already closed; there's nobody left to write it")]
     Sealed,
-    /// El cuerpo dice ser de un esquema que este core no sabe LEER (#247).
+    /// The body claims to be of a schema this core doesn't know how to READ
+    /// (#247).
     ///
-    /// Aceptarlo era el peor de los desenlaces: el core volcaba a disco un
-    /// documento que su propio guard de carga rechaza, así que a partir del
-    /// siguiente arranque `session.get` contestaba «del futuro», la sesión
-    /// dejaba de tener dueña y la persistencia moría en silencio hasta que
-    /// alguien borrara el fichero a mano. Un `ntc` más nuevo contra un `norte`
-    /// más viejo —los dos `SCHEMA_VERSION` viven en crates distintos— es todo
-    /// lo que hacía falta.
-    #[error("el cuerpo es de la versión {version} y este core sabe {known}")]
+    /// Accepting it was the worst possible outcome: the core would dump to
+    /// disk a document its own load guard rejects, so from the next
+    /// startup on `session.get` would answer "from the future", the
+    /// session would stop having an owner, and persistence would die
+    /// silently until someone deleted the file by hand. A newer `ntc`
+    /// against an older `norte` —the two `SCHEMA_VERSION`s live in
+    /// different crates— was all it took.
+    #[error("the body is of version {version} and this core knows {known}")]
     UnknownSchema {
-        /// La que traía el cliente.
+        /// The one the client brought.
         version: u32,
-        /// La más nueva que este core sabe leer.
+        /// The newest this core knows how to read.
         known: u32,
     },
 }
 
-/// La sesión viva del daemon: una por proceso, con su revisión y su dueña.
+/// The daemon's live session: one per process, with its revision and its
+/// owner.
 #[derive(Debug, Default)]
 pub struct SessionStore {
     inner: Mutex<Inner>,
@@ -63,16 +67,16 @@ pub struct SessionStore {
 #[derive(Debug, Default)]
 struct Inner {
     session: Session,
-    /// Conexión dueña, si alguna la reclamó.
+    /// Owning connection, if any claimed it.
     owner: Option<u64>,
-    /// Hay cambios sin volcar a disco.
+    /// There are changes not yet dumped to disk.
     dirty: bool,
-    /// Ya no se admite nada más: el proceso se está apagando.
+    /// Nothing more is accepted: the process is shutting down.
     sealed: bool,
 }
 
 impl SessionStore {
-    /// Un store que arranca con la sesión que venía de disco.
+    /// A store that starts with the session that came from disk.
     #[must_use]
     pub fn new(session: Session) -> Self {
         Self {
@@ -85,40 +89,42 @@ impl SessionStore {
         }
     }
 
-    /// La sesión vigente. Clonar es barato comparado con tener el lock
-    /// tomado mientras se serializa a un socket.
+    /// The current session. Cloning is cheap compared to holding the lock
+    /// while serializing to a socket.
     #[must_use]
     pub fn get(&self) -> Session {
         self.lock().session.clone()
     }
 
-    /// Reemplaza la sesión entera. Devuelve la revisión NUEVA.
+    /// Replaces the whole session. Returns the NEW revision.
     ///
     /// # Errors
     ///
-    /// [`PutError::TooLarge`] si el cuerpo pasa de [`SESSION_BODY_MAX`], y
-    /// [`PutError::Conflict`] si la revisión que trae el cliente no es la
-    /// vigente. En ambos casos lo almacenado se queda EXACTAMENTE como estaba:
-    /// truncar un documento cuyo esquema no se conoce es peor que rechazarlo.
+    /// [`PutError::TooLarge`] if the body exceeds [`SESSION_BODY_MAX`], and
+    /// [`PutError::Conflict`] if the revision the client brings isn't the
+    /// current one. In both cases what's stored stays EXACTLY as it was:
+    /// truncating a document whose schema is unknown is worse than
+    /// rejecting it.
     pub fn put(
         &self,
         version: u32,
         revision: u64,
         body: serde_json::Value,
     ) -> Result<u64, PutError> {
-        // El tope se mide en BYTES SERIALIZADOS, que es lo que ocupa en el
-        // wire y en disco. Un cuerpo que ni siquiera serializa no cabe en
-        // ningún sitio, así que cuenta como el peor caso posible.
+        // The cap is measured in SERIALIZED BYTES, which is what it takes
+        // up on the wire and on disk. A body that doesn't even serialize
+        // doesn't fit anywhere, so it counts as the worst possible case.
         let bytes = serde_json::to_vec(&body).map_or(usize::MAX, |v| v.len());
         if bytes > SESSION_BODY_MAX {
             return Err(PutError::TooLarge { bytes });
         }
         let mut g = self.lock();
-        // Bajo el MISMO lock que la mutación, y no contra un token atómico
-        // aparte: comprobar fuera y mutar dentro deja una ventana —un hilo
-        // desalojado justo en medio— por la que un `put` entra DESPUÉS del
-        // último volcado y se le contesta con una revisión que no va a llegar a
-        // ningún disco. Es la misma lección que `pin_for_task` en #205.
+        // Under the SAME lock as the mutation, and not against a separate
+        // atomic token: checking outside and mutating inside leaves a
+        // window —a thread preempted right in the middle— through which a
+        // `put` enters AFTER the last dump and gets answered with a
+        // revision that will never reach any disk. Same lesson as
+        // `pin_for_task` in #205.
         if g.sealed {
             return Err(PutError::Sealed);
         }
@@ -127,12 +133,13 @@ impl SessionStore {
                 current: g.session.revision,
             });
         }
-        // Un esquema que este core no sabe leer NO se escribe (#247). El
-        // guard vive aquí y no en el handler por lo mismo que el del tamaño:
-        // lo comprueba quien va a guardarlo, que es el único que sabe qué
-        // puede volver a leer. `0` es «el cliente no lo dijo» y también se
-        // rechaza: la sesión almacenada la lee `disk::load`, que decide por
-        // este número, y un cero acaba escrito junto a un cuerpo de verdad.
+        // A schema this core doesn't know how to read is NOT written
+        // (#247). The guard lives here and not in the handler for the same
+        // reason as the size one: it's checked by whoever is going to
+        // store it, which is the only one who knows what it can read back.
+        // `0` is "the client didn't say", and it's rejected too: the
+        // stored session is read by `disk::load`, which decides by this
+        // number, and a zero would end up written next to a real body.
         if version == 0 || version > crate::ui_session::disk::SCHEMA_VERSION {
             return Err(PutError::UnknownSchema {
                 version,
@@ -141,20 +148,21 @@ impl SessionStore {
         }
         g.session.version = version;
         g.session.body = body;
-        // `saturating_add`: la revisión ENTRA del fichero, y un fichero es algo
-        // que cualquier proceso del mismo uid puede dejar puesto. En el tope,
-        // seguir aceptando `put` y dejar de contar es lo peor que pasa; sumar
-        // sin más era un panic en debug —dentro del mutex, envenenándolo— y una
-        // vuelta a cero en release, que reabre justo la ventana de escritor
-        // rancio que la revisión existe para cerrar.
+        // `saturating_add`: the revision COMES IN from the file, and a file
+        // is something any process of the same uid can leave lying around.
+        // At the cap, still accepting `put` and no longer counting is the
+        // worst that happens; adding without care used to be a panic in
+        // debug —inside the mutex, poisoning it— and a wrap to zero in
+        // release, which reopens exactly the stale-writer window the
+        // revision exists to close.
         g.session.revision = g.session.revision.saturating_add(1);
         g.dirty = true;
         Ok(g.session.revision)
     }
 
-    /// La primera conexión que la reclama se la queda; las demás reciben
-    /// `false` y corren sueltas. Reclamar dos veces desde la misma conexión no
-    /// es un error.
+    /// The first connection to claim it keeps it; the rest get `false` and
+    /// run unowned. Claiming twice from the same connection isn't an
+    /// error.
     pub fn claim(&self, conn: u64) -> bool {
         let mut g = self.lock();
         match g.owner {
@@ -166,8 +174,9 @@ impl SessionStore {
         }
     }
 
-    /// Suelta la propiedad, si es de esta conexión. Soltar lo ajeno no hace
-    /// nada: una conexión no desaloja a otra por desconectarse.
+    /// Releases ownership, if it's this connection's. Releasing someone
+    /// else's does nothing: a connection doesn't evict another by
+    /// disconnecting.
     pub fn release(&self, conn: u64) {
         let mut g = self.lock();
         if g.owner == Some(conn) {
@@ -175,21 +184,22 @@ impl SessionStore {
         }
     }
 
-    /// Qué conexión manda, si alguna.
+    /// Which connection is in charge, if any.
     #[must_use]
     pub fn owner(&self) -> Option<u64> {
         self.lock().owner
     }
 
-    /// Hay cambios sin volcar.
+    /// There are undumped changes.
     #[must_use]
     pub fn dirty(&self) -> bool {
         self.lock().dirty
     }
 
-    /// Lo que consume el escritor a disco: devuelve la sesión UNA vez por
-    /// cambio y limpia la marca. Sin cambios, `None` — y el escritor no toca
-    /// el disco, que es lo que hace barato despertarse cada segundo.
+    /// What the disk writer consumes: returns the session ONCE per change
+    /// and clears the flag. With no changes, `None` — and the writer
+    /// doesn't touch the disk, which is what makes waking up every second
+    /// cheap.
     #[must_use]
     pub fn take_dirty(&self) -> Option<Session> {
         let mut g = self.lock();
@@ -200,57 +210,59 @@ impl SessionStore {
         Some(g.session.clone())
     }
 
-    /// Cierra la sesión: a partir de aquí ningún `put` entra.
+    /// Closes the session: from here on, no `put` gets in.
     ///
-    /// Lo llama el apagado JUSTO antes del último volcado. Lo que llegue
-    /// después recibe una negativa honesta en vez de un `Ok(revision)` sobre un
-    /// fichero que ya no va a escribir nadie —y cuyo lock está a punto de
-    /// soltarse—.
+    /// Called by shutdown RIGHT BEFORE the last dump. Whatever arrives
+    /// after gets an honest refusal instead of an `Ok(revision)` over a
+    /// file nobody is going to write anymore —and whose lock is about to be
+    /// released—.
     pub fn seal(&self) {
         self.lock().sealed = true;
     }
 
-    /// ¿Está cerrada?
+    /// Is it closed?
     #[must_use]
     pub fn sealed(&self) -> bool {
         self.lock().sealed
     }
 
-    /// Adopta el documento que hay EN DISCO al conseguir tarde el derecho a
-    /// escribir.
+    /// Adopts the document that's ON DISK upon belatedly getting write
+    /// rights.
     ///
-    /// Se lleva el cuerpo Y la revisión, no solo el número. Mientras este
-    /// proceso corría suelto, el que tenía el lock siguió guardando: su
-    /// documento es el vigente, y quedarse solo con su revisión significaba
-    /// contestarle al cliente su PROPIO cuerpo con el número del otro — y que
-    /// la primera escritura tras el relevo pisara, sin conflicto y sin aviso,
-    /// todo lo que el otro había guardado. Lo que el cliente quiera conservar
-    /// de ese documento lo decide él, que es el único que sabe leerlo.
+    /// It takes the body AND the revision, not just the number. While this
+    /// process ran unowned, whoever held the lock kept saving: their
+    /// document is the current one, and keeping only their revision would
+    /// mean answering the client with its OWN body under the other one's
+    /// number — and the first write after the handover would clobber,
+    /// with no conflict and no warning, everything the other had saved.
+    /// What the client wants to keep from that document is its call, since
+    /// it's the only one that knows how to read it.
     ///
-    /// Una revisión más baja no se adopta: el número no va hacia atrás.
+    /// A lower revision isn't adopted: the number doesn't go backward.
     pub fn adopt_from_disk(&self, session: Session) {
         let mut g = self.lock();
         if session.revision >= g.session.revision {
             g.session = session;
-            // Lo adoptado ya ESTÁ en disco: marcarlo sucio lo reescribiría
-            // igual, y el primer volcado del relevo sería una copia.
+            // What was adopted is ALREADY on disk: marking it dirty would
+            // just rewrite it identically, and the handover's first dump
+            // would be a copy.
             g.dirty = false;
         }
     }
 
-    /// Sube la revisión a la que ya hay EN DISCO, si es más alta.
+    /// Raises the revision to whatever is already ON DISK, if it's higher.
     ///
-    /// Es para un caso concreto: un proceso que arrancó sin el derecho a
-    /// escribir y lo consigue más tarde (la ventana que lo tenía se cerró).
-    /// Mientras estaba suelto, la otra siguió subiendo la revisión del fichero,
-    /// y volcar la nuestra tal cual la renumeraría HACIA ATRÁS — «la sube el
-    /// core en cada put aceptado» dejaría de ser verdad para quien lea el
-    /// fichero después.
+    /// This is for one specific case: a process that started with no write
+    /// rights and gets them later (the window that had them closed).
+    /// While it ran unowned, the other one kept raising the file's
+    /// revision, and dumping ours as-is would renumber it BACKWARD —"the
+    /// core raises it on every accepted put" would stop being true for
+    /// whoever reads the file afterward.
     ///
-    /// El cuerpo NO se toca: la pantalla que se guarda es la de esta ventana,
-    /// que es la que sigue viva. Lo que el cliente tiene que hacer con lo que
-    /// guardó la otra —conservarle los huecos que solo ella tenía— lo decide
-    /// el cliente, que es el único que sabe leer el cuerpo.
+    /// The body is NOT touched: the screen being saved is this window's,
+    /// which is the one still alive. What the client has to do with what
+    /// the other one saved —keeping the gaps only it had— is the client's
+    /// call, since it's the only one that knows how to read the body.
     pub fn adopt_revision(&self, revision: u64) {
         let mut g = self.lock();
         if revision > g.session.revision {
@@ -258,21 +270,22 @@ impl SessionStore {
         }
     }
 
-    /// Vuelve a marcar sucio lo que [`Self::take_dirty`] se llevó y no se pudo
-    /// escribir.
+    /// Marks dirty again whatever [`Self::take_dirty`] took and couldn't be
+    /// written.
     ///
-    /// Sin esto, un fallo de volcado —un disco lleno, un `EIO` de un momento—
-    /// no se reintenta jamás: la marca ya estaba limpia, así que el tick
-    /// siguiente no ve nada que hacer y la sesión se pierde hasta que el
-    /// humano vuelva a mover algo. El precio de reintentar es un `open` por
-    /// segundo mientras dure el fallo.
+    /// Without this, a dump failure —a full disk, a momentary `EIO`— is
+    /// never retried: the flag was already clean, so the next tick sees
+    /// nothing to do and the session is lost until the human moves
+    /// something again. The price of retrying is one `open` per second for
+    /// as long as the failure lasts.
     pub fn mark_dirty(&self) {
         self.lock().dirty = true;
     }
 
-    /// El lock, recuperado de un envenenamiento: un panic en otro hilo
-    /// mientras se clonaba una sesión no es razón para tirar el daemon, y el
-    /// invariante que protege es «un campo consistente con otro», no memoria.
+    /// The lock, recovered from poisoning: a panic on another thread while
+    /// cloning a session isn't a reason to bring down the daemon, and the
+    /// invariant it protects is "one field consistent with another", not
+    /// memory.
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
         self.inner
             .lock()
@@ -285,143 +298,148 @@ mod tests {
     use super::*;
 
     fn body(n: usize) -> serde_json::Value {
-        serde_json::json!({ "relleno": "x".repeat(n) })
+        serde_json::json!({ "filler": "x".repeat(n) })
     }
 
-    /// Una sesión nunca escrita es revisión 0 sin esquema: el cliente que
-    /// arranca contra un daemon limpio no distingue «no hay» de «falló».
+    /// A session never written is revision 0 with no schema: a client that
+    /// starts against a clean daemon can't tell "there is none" from "it
+    /// failed".
     #[test]
-    fn una_sesion_nueva_es_revision_cero() {
+    fn a_new_session_is_revision_zero() {
         let s = SessionStore::default();
         let g = s.get();
         assert_eq!(g.revision, 0);
-        assert_eq!(g.version, 0, "sin esquema hasta que alguien escriba uno");
+        assert_eq!(g.version, 0, "no schema until someone writes one");
     }
 
-    /// Un cuerpo de un esquema que este core no sabe LEER no se escribe
+    /// A body of a schema this core doesn't know how to READ isn't written
     /// (#247).
     ///
-    /// Aceptarlo era el peor desenlace posible: el core volcaba un documento
-    /// que su propio guard de carga rechaza, así que desde el arranque
-    /// siguiente la sesión quedaba «del futuro» para siempre, sin dueña y sin
-    /// persistencia, hasta que alguien borrase el fichero a mano. Un `ntc` más
-    /// nuevo contra un `norte` más viejo bastaba: los dos `SCHEMA_VERSION`
-    /// viven en crates distintos.
+    /// Accepting it was the worst possible outcome: the core would dump a
+    /// document its own load guard rejects, so from the next startup on the
+    /// session would stay "from the future" forever, with no owner and no
+    /// persistence, until someone deleted the file by hand. A newer `ntc`
+    /// against an older `norte` was enough: the two `SCHEMA_VERSION`s live
+    /// in different crates.
     #[test]
-    fn un_esquema_que_este_core_no_sabe_leer_no_se_escribe() {
+    fn a_schema_this_core_cannot_read_is_not_written() {
         let s = SessionStore::default();
         assert!(matches!(
             s.put(disk::SCHEMA_VERSION + 1, 0, body(1)),
             Err(PutError::UnknownSchema { .. })
         ));
-        assert_eq!(s.get().revision, 0, "y no cuenta como escritura");
-        assert!(s.take_dirty().is_none(), "ni deja nada que volcar");
-        // El cero es «el cliente no lo dijo», y la sesión almacenada se lee
-        // POR ese número: escribirlo junto a un cuerpo de verdad es dejar un
-        // fichero que no se sabe interpretar.
+        assert_eq!(s.get().revision, 0, "and it doesn't count as a write");
+        assert!(
+            s.take_dirty().is_none(),
+            "nor does it leave anything to dump"
+        );
+        // Zero is "the client didn't say", and the stored session is read
+        // BY that number: writing it next to a real body would leave a
+        // file nobody knows how to interpret.
         assert!(matches!(
             s.put(0, 0, body(1)),
             Err(PutError::UnknownSchema { .. })
         ));
-        // Y la versión que este core sabe leer sí entra.
+        // And the version this core knows how to read DOES get in.
         assert_eq!(s.put(disk::SCHEMA_VERSION, 0, body(1)).ok(), Some(1));
     }
 
-    /// Cada `put` aceptado sube la revisión, y la que devuelve es la que el
-    /// cliente tiene que traer la próxima vez.
+    /// Every accepted `put` raises the revision, and the one it returns is
+    /// what the client has to bring next time.
     #[test]
-    fn cada_put_sube_la_revision() {
+    fn every_put_raises_the_revision() {
         let s = SessionStore::default();
         assert!(s.claim(1));
-        assert_eq!(s.put(1, 0, body(1)).expect("primer put"), 1);
-        assert_eq!(s.put(1, 1, body(1)).expect("segundo put"), 2);
+        assert_eq!(s.put(1, 0, body(1)).expect("first put"), 1);
+        assert_eq!(s.put(1, 1, body(1)).expect("second put"), 2);
         assert_eq!(s.get().revision, 2);
     }
 
-    /// Una revisión rancia es `Conflict` CON la vigente: el cliente re-lee sin
-    /// tener que preguntar otra vez para saber contra qué.
+    /// A stale revision is `Conflict` WITH the current one: the client
+    /// re-reads without having to ask again what to check against.
     #[test]
-    fn una_revision_rancia_es_conflicto_y_no_escribe() {
+    fn a_stale_revision_is_a_conflict_and_does_not_write() {
         let s = SessionStore::default();
         assert!(s.claim(1));
-        s.put(1, 0, body(1)).expect("primer put");
-        let e = s.put(1, 0, body(2)).expect_err("rancia");
+        s.put(1, 0, body(1)).expect("first put");
+        let e = s.put(1, 0, body(2)).expect_err("stale");
         assert!(matches!(e, PutError::Conflict { current: 1 }), "{e:?}");
-        assert_eq!(s.get().body, body(1), "lo almacenado no se toca");
+        assert_eq!(s.get().body, body(1), "what's stored isn't touched");
     }
 
-    /// Por encima del tope: `TooLarge`, y lo almacenado SIGUE EN PIE.
+    /// Over the cap: `TooLarge`, and what's stored STAYS PUT.
     #[test]
-    fn por_encima_del_tope_no_se_trunca_se_rechaza() {
+    fn over_the_cap_is_rejected_not_truncated() {
         let s = SessionStore::default();
         assert!(s.claim(1));
-        s.put(1, 0, body(10)).expect("cabe");
+        s.put(1, 0, body(10)).expect("fits");
         let e = s
             .put(1, 1, body(SESSION_BODY_MAX + 1))
-            .expect_err("no cabe");
+            .expect_err("does not fit");
         assert!(matches!(e, PutError::TooLarge { .. }), "{e:?}");
-        assert_eq!(s.get().revision, 1, "la sesión almacenada se queda");
+        assert_eq!(s.get().revision, 1, "the stored session stays");
     }
 
-    /// El tope se mide sobre los BYTES serializados, no sobre el número de
-    /// claves ni la profundidad.
+    /// The cap is measured over serialized BYTES, not the number of keys
+    /// nor the depth.
     #[test]
-    fn el_tope_se_mide_en_bytes_serializados() {
+    fn the_cap_is_measured_in_serialized_bytes() {
         let s = SessionStore::default();
         assert!(s.claim(1));
-        let justo = serde_json::json!({ "x": "y".repeat(SESSION_BODY_MAX - 12) });
-        let bytes = serde_json::to_vec(&justo).expect("serializa").len();
+        let just_under = serde_json::json!({ "x": "y".repeat(SESSION_BODY_MAX - 12) });
+        let bytes = serde_json::to_vec(&just_under).expect("serializes").len();
         assert!(bytes <= SESSION_BODY_MAX, "{bytes}");
-        s.put(1, 0, justo).expect("justo por debajo entra");
+        s.put(1, 0, just_under).expect("just under fits");
     }
 
-    /// El tope es un `<=`, y eso se comprueba en el byte exacto: un cuerpo de
-    /// justo [`SESSION_BODY_MAX`] entra, y uno de un byte más no.
+    /// The cap is a `<=`, and it's checked at the exact byte: a body of
+    /// exactly [`SESSION_BODY_MAX`] fits, and one byte more doesn't.
     #[test]
-    fn el_tope_exacto_entra_y_uno_mas_no() {
+    fn the_exact_cap_fits_and_one_more_does_not() {
         let s = SessionStore::default();
         assert!(s.claim(1));
-        // `{"x":"…"}` son 8 bytes de sobre.
-        let justo = serde_json::json!({ "x": "y".repeat(SESSION_BODY_MAX - 8) });
+        // `{"x":"…"}` is 8 bytes of envelope.
+        let exact = serde_json::json!({ "x": "y".repeat(SESSION_BODY_MAX - 8) });
         assert_eq!(
-            serde_json::to_vec(&justo).expect("serializa").len(),
+            serde_json::to_vec(&exact).expect("serializes").len(),
             SESSION_BODY_MAX,
-            "la fixture tiene que medir el tope EXACTO"
+            "the fixture has to measure the EXACT cap"
         );
-        s.put(1, 0, justo).expect("el tope exacto entra");
-        let pasado = serde_json::json!({ "x": "y".repeat(SESSION_BODY_MAX - 7) });
-        let e = s.put(1, 1, pasado).expect_err("uno más no");
+        s.put(1, 0, exact).expect("the exact cap fits");
+        let over = serde_json::json!({ "x": "y".repeat(SESSION_BODY_MAX - 7) });
+        let e = s.put(1, 1, over).expect_err("one more does not");
         assert!(matches!(e, PutError::TooLarge { .. }), "{e:?}");
     }
 
-    /// **#233**: cerrada la sesión, un `put` ya no entra — y el cierre se
-    /// comprueba BAJO EL MISMO LOCK que la mutación.
+    /// **#233**: with the session closed, a `put` no longer gets in — and
+    /// closure is checked UNDER THE SAME LOCK as the mutation.
     ///
-    /// Contra un token atómico aparte quedaba la ventana entera: un hilo
-    /// desalojado entre «¿se está apagando?» y el lock del almacén escribía
-    /// DESPUÉS del último volcado, y se le contestaba con una revisión que no
-    /// iba a llegar a ningún disco.
+    /// Against a separate atomic token, the whole window was left open: a
+    /// thread preempted between "is it shutting down?" and the store's
+    /// lock would write AFTER the last dump, and get answered with a
+    /// revision that would never reach any disk.
     #[test]
-    fn cerrada_la_sesion_un_put_no_entra() {
+    fn once_the_session_is_closed_a_put_does_not_get_in() {
         let s = SessionStore::default();
         assert!(s.claim(1));
-        s.put(1, 0, body(1)).expect("antes del cierre entra");
+        s.put(1, 0, body(1)).expect("gets in before closing");
         assert!(!s.sealed());
         s.seal();
         assert!(s.sealed());
-        let e = s.put(1, 1, body(2)).expect_err("después no");
+        let e = s.put(1, 1, body(2)).expect_err("not after");
         assert!(matches!(e, PutError::Sealed), "{e:?}");
-        assert_eq!(s.get().body, body(1), "y lo almacenado se queda");
+        assert_eq!(s.get().body, body(1), "and what's stored stays");
     }
 
-    /// Al conseguir tarde el derecho a escribir se adopta el DOCUMENTO entero,
-    /// no solo su número.
+    /// Belatedly getting write rights adopts the WHOLE document, not just
+    /// its number.
     ///
-    /// Quedarse con la revisión y no con el cuerpo hacía que la primera
-    /// escritura tras el relevo encajara sin conflicto y pisara, sin un aviso,
-    /// todo lo que la otra ventana había guardado mientras esta corría suelta.
+    /// Keeping only the revision and not the body meant the first write
+    /// after the handover would fit with no conflict and clobber, with no
+    /// warning, everything the other window had saved while this one ran
+    /// unowned.
     #[test]
-    fn adoptar_lo_de_disco_se_lleva_el_cuerpo_y_no_solo_la_revision() {
+    fn adopting_from_disk_takes_the_body_and_not_just_the_revision() {
         let s = SessionStore::default();
         s.adopt_from_disk(Session {
             version: 1,
@@ -430,9 +448,10 @@ mod tests {
         });
         let g = s.get();
         assert_eq!(g.revision, 42);
-        assert_eq!(g.body, body(3), "el cuerpo de la otra ventana");
-        assert!(!s.dirty(), "lo adoptado ya está en disco");
-        // Y no va hacia atrás: un fichero más viejo no desmonta lo vigente.
+        assert_eq!(g.body, body(3), "the other window's body");
+        assert!(!s.dirty(), "what was adopted is already on disk");
+        // And it doesn't go backward: an older file doesn't dethrone the
+        // current one.
         s.adopt_from_disk(Session {
             version: 1,
             revision: 7,
@@ -441,96 +460,99 @@ mod tests {
         assert_eq!(s.get().revision, 42);
     }
 
-    /// Un volcado que falla vuelve a marcar sucio    /// Un volcado que falla vuelve a marcar sucio: sin esto la marca ya estaba
-    /// limpia y el tick siguiente no reintentaba NADA.
+    /// A failed dump is marked dirty again: without this the flag was
+    /// already clean and the next tick wouldn't retry ANYTHING.
     #[test]
-    fn un_volcado_fallido_se_vuelve_a_marcar() {
+    fn a_failed_dump_gets_marked_dirty_again() {
         let s = SessionStore::default();
         assert!(s.claim(1));
         s.put(1, 0, body(1)).expect("put");
-        let llevada = s.take_dirty().expect("hay que escribir");
+        let taken = s.take_dirty().expect("there's something to write");
         assert!(!s.dirty());
-        // Aquí el escritor falla (disco lleno, EIO…).
+        // Here the writer fails (full disk, EIO…).
         s.mark_dirty();
-        assert!(s.dirty(), "el siguiente tick lo reintenta");
-        assert_eq!(s.take_dirty().expect("otra vez").body, llevada.body);
+        assert!(s.dirty(), "the next tick retries it");
+        assert_eq!(s.take_dirty().expect("again").body, taken.body);
     }
 
-    /// Dos escritores a la vez sobre el mismo store: las revisiones salen
-    /// consecutivas y ninguna se pierde. El mutex es el que lo garantiza, y
-    /// esto es lo que lo fija.
+    /// Two writers at once on the same store: revisions come out
+    /// consecutive and none is lost. The mutex is what guarantees it, and
+    /// this is what pins it down.
     #[test]
-    fn dos_hilos_no_se_pisan_la_revision() {
+    fn two_threads_do_not_clobber_the_revision() {
         let s = std::sync::Arc::new(SessionStore::default());
         assert!(s.claim(1));
-        let hilos: Vec<_> = (0..4)
+        let threads: Vec<_> = (0..4)
             .map(|_| {
                 let s = std::sync::Arc::clone(&s);
                 std::thread::spawn(move || {
-                    let mut hechos = 0_u32;
+                    let mut done = 0_u32;
                     for _ in 0..50 {
                         let rev = s.get().revision;
                         if s.put(1, rev, body(1)).is_ok() {
-                            hechos += 1;
+                            done += 1;
                         }
                     }
-                    hechos
+                    done
                 })
             })
             .collect();
-        let aceptados: u32 = hilos.into_iter().map(|h| h.join().expect("hilo")).sum();
+        let accepted: u32 = threads.into_iter().map(|h| h.join().expect("thread")).sum();
         assert_eq!(
-            u64::from(aceptados),
+            u64::from(accepted),
             s.get().revision,
-            "una revisión por put aceptado, ni una de más"
+            "one revision per accepted put, not one more"
         );
     }
 
-    /// La dueña es la PRIMERA que la reclama; soltarla la libera para la
-    /// siguiente. Nunca dos escritores sobre un estado.
+    /// The owner is the FIRST one to claim it; releasing it frees it for
+    /// the next one. Never two writers over one state.
     #[test]
-    fn solo_la_duena_escribe() {
+    fn only_the_owner_writes() {
         let s = SessionStore::default();
-        assert!(s.claim(1), "la primera se la queda");
-        assert!(!s.claim(2), "la segunda corre suelta");
+        assert!(s.claim(1), "the first one keeps it");
+        assert!(!s.claim(2), "the second runs unowned");
         assert!(
             s.claim(1),
-            "reclamar dos veces desde la misma no es un error"
+            "claiming twice from the same one isn't an error"
         );
         assert_eq!(s.owner(), Some(1));
-        s.put(1, 0, body(1)).expect("la dueña escribe");
+        s.put(1, 0, body(1)).expect("the owner writes");
         s.release(1);
         assert_eq!(s.owner(), None);
-        assert!(s.claim(2), "al irse la dueña, la siguiente puede tomarla");
+        assert!(
+            s.claim(2),
+            "once the owner leaves, the next one can take it"
+        );
     }
 
-    /// Soltar una propiedad que no se tiene no se la quita a nadie.
+    /// Releasing an ownership you don't hold doesn't take it from anyone.
     #[test]
-    fn soltar_lo_ajeno_no_hace_nada() {
+    fn releasing_someone_elses_does_nothing() {
         let s = SessionStore::default();
         assert!(s.claim(1));
         s.release(2);
-        assert_eq!(s.owner(), Some(1), "la 2 no puede desalojar a la 1");
+        assert_eq!(s.owner(), Some(1), "2 cannot evict 1");
     }
 
-    /// `take_dirty` devuelve la sesión UNA vez por cambio, y nada si no ha
-    /// cambiado nada desde la última.
+    /// `take_dirty` returns the session ONCE per change, and nothing if
+    /// nothing has changed since the last one.
     #[test]
-    fn lo_sucio_se_consume_una_sola_vez() {
+    fn dirty_is_consumed_exactly_once() {
         let s = SessionStore::default();
         assert!(s.claim(1));
-        assert!(s.take_dirty().is_none(), "nada que escribir al arrancar");
+        assert!(s.take_dirty().is_none(), "nothing to write at startup");
         s.put(1, 0, body(1)).expect("put");
         assert!(s.dirty());
         assert!(s.take_dirty().is_some());
-        assert!(!s.dirty(), "consumida");
+        assert!(!s.dirty(), "consumed");
         assert!(s.take_dirty().is_none());
     }
 
-    /// La sesión que viene de disco arranca limpia: cargarla no es un cambio
-    /// que haya que volver a escribir.
+    /// A session that comes from disk starts clean: loading it isn't a
+    /// change that needs writing back.
     #[test]
-    fn la_sesion_cargada_de_disco_no_nace_sucia() {
+    fn a_session_loaded_from_disk_is_not_born_dirty() {
         let s = SessionStore::new(Session {
             version: 1,
             revision: 9,

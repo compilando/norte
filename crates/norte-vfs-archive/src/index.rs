@@ -1,85 +1,84 @@
-//! Índice en RAM de un archivo comprimido: árbol plano de entradas con
-//! validación estructural de nombres y límites anti-bomba (ADR 0018 C2/D2).
+//! In-RAM index of a compressed archive: a flat tree of entries with
+//! structural name validation and anti-bomb limits (ADR 0018 C2/D2).
 
 use std::collections::{BTreeSet, HashMap};
 
 use norte_proto::{Entry, EntryKind, Error, Segment, VPath};
 
-/// Límites de construcción del índice (ADR 0018 D2). Configurables desde
-/// #95.2 vía [`ArchiveProvider::with_limits`](crate::ArchiveProvider::with_limits)
-/// (el engine los compone desde `Engine::set_archive_limits`; los frontends
-/// desde la sección `[archive]` de `norte.toml`).
+/// Index-building limits (ADR 0018 D2). Configurable since #95.2 via
+/// [`ArchiveProvider::with_limits`](crate::ArchiveProvider::with_limits)
+/// (the engine composes them from `Engine::set_archive_limits`; frontends
+/// from `norte.toml`'s `[archive]` section).
 #[derive(Debug, Clone, Copy)]
 pub struct Limits {
-    /// Tope de entradas indexadas (las omitidas por hostiles no cuentan).
+    /// Ceiling on indexed entries (those omitted as hostile don't count).
     pub max_entries: usize,
-    /// Tope de bytes del nombre COMPLETO de una entrada. Nota anti-bomba
-    /// (#60/D2): el crate `tar` MATERIALIZA un GNU longname entero en RAM
-    /// ANTES de que este check lo vea — acotado por el tamaño del propio
-    /// contenedor (el longname son datos de una entrada), no por este tope.
+    /// Byte ceiling on an entry's FULL name. Anti-bomb note (#60/D2): the
+    /// `tar` crate MATERIALIZES a whole GNU longname in RAM BEFORE this
+    /// check ever sees it — bounded by the container's own size (the
+    /// longname is one entry's data), not by this ceiling.
     pub max_name_bytes: usize,
-    /// Tope de componentes de path de una entrada.
+    /// Ceiling on an entry's path components.
     pub max_depth: usize,
-    /// OBSOLETO desde #59: el central directory se parsea en STREAMING
-    /// (jamás se materializa ni se retiene — el locator zip es
-    /// autocontenido), así que ya no hay memoria de CD que gobernar. El
-    /// campo se conserva por compatibilidad de API y NO se consulta.
-    /// Histórico: era el tope del CD retenido en caché (#61).
+    /// OBSOLETE since #59: the central directory is parsed in STREAMING
+    /// fashion (never materialized nor retained — the zip locator is
+    /// self-contained), so there's no CD memory left to govern. The field
+    /// is kept for API compatibility and is NOT consulted. Historical: it
+    /// used to be the ceiling on the cached CD (#61).
     #[deprecated(
-        note = "obsoleto desde #59 (ADR 0030): el CD se parsea en streaming, nada se retiene — el campo no se consulta"
+        note = "obsolete since #59 (ADR 0030): the CD is parsed in streaming, nothing is retained — the field isn't consulted"
     )]
     pub max_cd_bytes: u64,
-    /// Presupuesto TOTAL de bytes DESCOMPRIMIDOS del PASE DE ÍNDICE de un
-    /// `tar+gz` (ADR 0028, #55): una gzip bomb es CPU infinita aunque la
-    /// memoria del pipeline sea streaming (el decoder nunca materializa el
-    /// contenido completo) — este tope corta el INDEXADO. Sin efecto en
+    /// TOTAL budget of DECOMPRESSED bytes for a `tar+gz`'s INDEX PASS (ADR
+    /// 0028, #55): a gzip bomb is infinite CPU even if the pipeline's
+    /// memory is streaming (the decoder never materializes the full
+    /// content) — this ceiling cuts INDEXING short. No effect on
     /// `Format::Tar`/`Format::Zip`.
     ///
-    /// El `read` de una entrada NO está acotado por el tamaño DECLARADO de
-    /// esa entrada (FIX de review #55: la afirmación anterior era FALSA):
-    /// `size` puede ser tan grande como este mismo presupuesto lo permita,
-    /// y el forward-decode arranca SIEMPRE desde el byte 0 del stream — el
-    /// coste real de un `read` es O(offset ABSOLUTO en el descomprimido),
-    /// documentado junto a `Locator::Gz`. La cota real es INDIRECTA: si el
-    /// `offset`/`size` de una entrada excediera este presupuesto, el PASE
-    /// DE ÍNDICE ya habría fallado al intentar saltar su cuerpo para
-    /// localizar la siguiente entrada (invariante: «entrada
-    /// sobre-presupuesto ⇒ el índice ENTERO falla») — un locator solo llega
-    /// a `read` si su posición YA fue verificada bajo este mismo tope
-    /// durante el indexado.
+    /// An entry's `read` is NOT bounded by that entry's DECLARED size (fix
+    /// from review #55: the earlier claim was FALSE): `size` can be as
+    /// large as this very budget allows, and forward-decode ALWAYS starts
+    /// from byte 0 of the stream — a `read`'s real cost is O(ABSOLUTE
+    /// offset in the decompressed stream), documented next to
+    /// `Locator::Gz`. The real bound is INDIRECT: if an entry's
+    /// `offset`/`size` exceeded this budget, the INDEX PASS would already
+    /// have failed trying to skip its body to locate the next entry
+    /// (invariant: "over-budget entry ⇒ the WHOLE index fails") — a
+    /// locator only ever reaches `read` if its position was ALREADY
+    /// verified under this same ceiling during indexing.
     ///
-    /// Superarlo se reporta como `Error::LimitExceeded`
-    /// (`LIMIT_DECOMPRESSED_BYTES`) desde #95.3 — límite local honesto, no
-    /// un veredicto de corrupción (`max_entries` ídem con `LIMIT_ENTRIES`;
-    /// `max_name_bytes`/`max_depth` OMITEN la entrada como hostil, cuentan
-    /// en `skipped` y no fallan el índice salvo por presupuesto de
-    /// omitidas).
+    /// Exceeding it is reported as `Error::LimitExceeded`
+    /// (`LIMIT_DECOMPRESSED_BYTES`) since #95.3 — an honest local limit,
+    /// not a corruption verdict (`max_entries` likewise with
+    /// `LIMIT_ENTRIES`; `max_name_bytes`/`max_depth` OMIT the entry as
+    /// hostile, count in `skipped` and don't fail the index except via the
+    /// omitted-entries budget).
     pub max_decompressed_bytes: u64,
-    /// Presupuesto de bytes DESCOMPRIMIDOS del SPOOL de un contenedor
-    /// `tar+gz` caliente (#95.1): a partir de la segunda lectura de un mismo
-    /// contenedor, el provider descomprime el stream ENTERO una vez a un
-    /// fichero temporal ANÓNIMO y las lecturas siguientes son seeks locales
-    /// O(1) en vez de forward-decode O(offset). Un contenedor cuyo
-    /// descomprimido supera este tope NO se spoolea (se recuerda como
-    /// no-spooleable hasta que cambie de generación) y sus lecturas siguen
-    /// pagando el forward-decode de siempre. `0` DESACTIVA el spool.
+    /// Budget of DECOMPRESSED bytes for a hot `tar+gz` container's SPOOL
+    /// (#95.1): from the second read of the same container onward, the
+    /// provider decompresses the WHOLE stream once into an ANONYMOUS
+    /// temporary file and subsequent reads are local O(1) seeks instead of
+    /// O(offset) forward-decode. A container whose decompressed size
+    /// exceeds this ceiling is NOT spooled (it's remembered as
+    /// non-spoolable until it changes generation) and its reads keep
+    /// paying the usual forward-decode. `0` DISABLES the spool.
     ///
-    /// Todavía NO expuesto en la sección `[archive]` de `norte.toml` (el
-    /// canal de config llega en una fase posterior); hoy solo es ajustable
-    /// por código vía
+    /// NOT YET exposed in `norte.toml`'s `[archive]` section (the config
+    /// channel arrives in a later phase); today it's only adjustable in
+    /// code via
     /// [`ArchiveProvider::with_limits`](crate::ArchiveProvider::with_limits).
     pub spool_max_bytes: u64,
-    /// Tope de CAPAS de archivo anidadas (#56, ADR 0018 A3): `1` = solo
-    /// `zip+file` plano, `2` = zip dentro de tar, etc. Lo aplica el ENGINE
-    /// antes de componer (el direccionamiento es sintácticamente ilimitado);
-    /// superarlo responde `Error::LimitExceeded` (`LIMIT_NESTING`). Cada
-    /// capa por encima de un `tar+gz` paga forward-decode por lectura — el
-    /// default es deliberadamente corto.
+    /// Ceiling on nested archive LAYERS (#56, ADR 0018 A3): `1` = only a
+    /// plain `zip+file`, `2` = zip inside tar, etc. The ENGINE applies it
+    /// before composing (addressing is syntactically unbounded); exceeding
+    /// it answers `Error::LimitExceeded` (`LIMIT_NESTING`). Every layer
+    /// above a `tar+gz` pays forward-decode per read — the default is
+    /// deliberately short.
     pub max_nesting: usize,
 }
 
 impl Default for Limits {
-    #[allow(deprecated)] // inicializa el campo obsoleto por compat de API
+    #[allow(deprecated)] // initializes the obsolete field for API compat
     fn default() -> Self {
         Self {
             max_entries: 500_000,
@@ -93,43 +92,43 @@ impl Default for Limits {
     }
 }
 
-/// Dónde viven los bytes de una entrada dentro del contenedor.
+/// Where an entry's bytes live inside the container.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Locator {
-    /// tar: los datos son CONTIGUOS y sin comprimir — `read` es un range
-    /// passthrough al provider interior.
+    /// tar: the data is CONTIGUOUS and uncompressed — `read` is a range
+    /// passthrough to the inner provider.
     Tar { offset: u64, size: u64 },
-    /// zip (#59): locator AUTOCONTENIDO — todo lo que `read` necesita sin
-    /// retener ningún objeto de archive ni re-parsear el CD: el LOCAL
-    /// header en `header_offset` resuelve el offset real de datos y la
-    /// descompresión (stored/deflate) corre en un hilo blocking.
+    /// zip (#59): a SELF-CONTAINED locator — everything `read` needs
+    /// without retaining any archive object nor re-parsing the CD: the
+    /// LOCAL header at `header_offset` resolves the real data offset and
+    /// decompression (stored/deflate) runs in a blocking thread.
     Zip {
-        /// Offset del LOCAL header en el contenedor.
+        /// The LOCAL header's offset in the container.
         header_offset: u64,
-        /// Método de compresión (0 stored / 8 deflate).
+        /// Compression method (0 stored / 8 deflate).
         method: u16,
-        /// CRC-32 declarado por el CD (verificado en lecturas completas).
+        /// CRC-32 the CD declares (verified on complete reads).
         crc32: u32,
-        /// Tamaño comprimido.
+        /// Compressed size.
         comp_size: u64,
-        /// Tamaño descomprimido.
+        /// Decompressed size.
         uncomp_size: u64,
     },
-    /// tar.gz/tgz (ADR 0028, #55): gz no es seekable — `read` es
-    /// FORWARD-DECODE desde un decoder fresco que descarta hasta `offset`.
-    /// `offset`/`size` son del stream DESCOMPRIMIDO, NO de bytes del
-    /// contenedor comprimido (a diferencia de `Tar`); no se validan contra
-    /// el tamaño del contenedor al indexar (ese tamaño es el COMPRIMIDO y
-    /// no acota nada del stream descomprimido) — el truncamiento se detecta
-    /// fail-loud en el propio `read` (EOF prematuro), jamás datos cortos en
-    /// silencio.
+    /// tar.gz/tgz (ADR 0028, #55): gz isn't seekable — `read` is
+    /// FORWARD-DECODE from a fresh decoder that discards up to `offset`.
+    /// `offset`/`size` are of the DECOMPRESSED stream, NOT of the
+    /// compressed container's bytes (unlike `Tar`); they aren't validated
+    /// against the container's size when indexing (that size is the
+    /// COMPRESSED one and bounds nothing about the decompressed stream) —
+    /// truncation is detected fail-loud in `read` itself (a premature
+    /// EOF), never silently short data.
     Gz { offset: u64, size: u64 },
 }
 
-/// Tripleta zip retenida para attrs (#108 bloque 2), INDEPENDIENTE del
-/// `Locator` (que solo existe para entradas legibles): method/crc/packed se
-/// conservan TAMBIÉN en cifradas o de método no soportado — justo donde
-/// `archive.method` más interesa. `None` en tar/tar.gz, dirs y symlinks.
+/// A zip triplet kept for attrs (#108 block 2), INDEPENDENT of the
+/// `Locator` (which only exists for readable entries): method/crc/packed
+/// are kept EVEN on encrypted or unsupported-method entries — precisely
+/// where `archive.method` matters most. `None` on tar/tar.gz, dirs and symlinks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ZipExtra {
     pub method: u16,
@@ -137,18 +136,18 @@ pub(crate) struct ZipExtra {
     pub comp_size: u64,
 }
 
-/// Un nodo del árbol virtual.
+/// A node of the virtual tree.
 #[derive(Debug, Clone)]
 pub(crate) struct Node {
     pub kind: EntryKind,
     pub size: Option<u64>,
     pub mtime_ms: Option<i64>,
-    /// `None` en dirs, symlinks y entradas listables-pero-no-legibles
-    /// (método de compresión no soportado, cifradas): `read` → `Unsupported`.
+    /// `None` on dirs, symlinks and listable-but-unreadable entries
+    /// (unsupported compression method, encrypted): `read` → `Unsupported`.
     pub locator: Option<Locator>,
-    /// Target crudo de un symlink de tar.
+    /// A tar symlink's raw target.
     pub link_target: Option<Vec<u8>>,
-    /// Metadatos zip por entrada para attrs (#108 bloque 2).
+    /// Per-entry zip metadata for attrs (#108 block 2).
     pub zip: Option<ZipExtra>,
 }
 
@@ -165,20 +164,20 @@ impl Node {
     }
 }
 
-/// Clave del árbol: los componentes del path interior, en bytes.
+/// Tree key: the inner path's components, in bytes.
 pub(crate) type InnerPath = Vec<Vec<u8>>;
 
-/// Índice completo de UN contenedor, ligado a una generación del exterior.
+/// The complete index of ONE container, tied to a generation of the outer one.
 pub(crate) struct ArchiveIndex {
     pub nodes: HashMap<InnerPath, Node>,
-    /// dir interior → nombres de sus hijos directos (orden por bytes:
-    /// determinista y O(log n) por inserción — un tar plano de 500k
-    /// entradas no puede costar O(n²), hallazgo B1 de fase 8d).
+    /// inner dir → names of its direct children (ordered by bytes:
+    /// deterministic and O(log n) per insertion — a plain tar with 500k
+    /// entries can't cost O(n²), phase 8d finding B1).
     pub children: HashMap<InnerPath, BTreeSet<Vec<u8>>>,
-    /// Entradas omitidas por nombre hostil/límites por-entrada (señal; el
-    /// detalle va por `tracing::warn!`).
+    /// Entries omitted for a hostile name/per-entry limits (a signal; the
+    /// detail goes through `tracing::warn!`).
     pub skipped: u64,
-    /// `(mtime_ms, size)` del contenedor al indexar — la invalidación.
+    /// The container's `(mtime_ms, size)` at index time — the invalidation key.
     pub generation: (Option<i64>, Option<u64>),
 }
 
@@ -192,45 +191,45 @@ impl ArchiveIndex {
         }
     }
 
-    /// Valida y trocea el nombre crudo de una entrada. `None` = hostil
-    /// (con el motivo ya avisado por `warn!`).
+    /// Validates and splits an entry's raw name. `None` = hostile (with
+    /// the reason already logged via `warn!`).
     fn split_name(&mut self, raw: &[u8], limits: &Limits) -> Option<(InnerPath, bool)> {
-        // debug! por entrada (un tar hostil trae MILLONES): el warn!
-        // agregado con el total lo emite build_index al final.
+        // debug! per entry (a hostile tar carries MILLIONS): the
+        // aggregated warn! with the total is emitted by build_index at the end.
         let mut hostile = |why: &str| {
-            tracing::debug!(name = ?String::from_utf8_lossy(raw), why, "entrada omitida");
+            tracing::debug!(name = ?String::from_utf8_lossy(raw), why, "entry omitted");
             self.skipped += 1;
             None
         };
         if raw.is_empty() {
-            return hostile("nombre vacío");
+            return hostile("empty name");
         }
         if raw.len() > limits.max_name_bytes {
-            return hostile("nombre demasiado largo");
+            return hostile("name too long");
         }
         if raw.first() == Some(&b'/') {
-            return hostile("path absoluto");
+            return hostile("absolute path");
         }
         let is_dir = raw.last() == Some(&b'/');
         let body = if is_dir { &raw[..raw.len() - 1] } else { raw };
         let mut parts: InnerPath = Vec::new();
         for comp in body.split(|&b| b == b'/') {
             if comp.is_empty() || comp == b"." || comp == b".." {
-                return hostile("componente `.`/`..`/vacío (traversal)");
+                return hostile("`.`/`..`/empty component (traversal)");
             }
             if comp == b"!" {
-                return hostile("componente `!` (marcador ADR 0018, indireccionable)");
+                return hostile("`!` component (ADR 0018 marker, unaddressable)");
             }
             if Segment::new(comp.to_vec()).is_err() {
-                return hostile("componente inválido como segmento VPath");
+                return hostile("component invalid as a VPath segment");
             }
             parts.push(comp.to_vec());
         }
         if parts.is_empty() {
-            return hostile("nombre sin componentes");
+            return hostile("name with no components");
         }
         if parts.len() > limits.max_depth {
-            return hostile("profundidad excesiva");
+            return hostile("excessive depth");
         }
         Some((parts, is_dir))
     }
@@ -239,10 +238,11 @@ impl ArchiveIndex {
         self.children.entry(parent).or_default().insert(name);
     }
 
-    /// Materializa los ancestros de `path` como dirs implícitos. Un File
-    /// preexistente en posición de ancestro ASCIENDE a dir (mismo criterio
-    /// "gana dir" que las colisiones directas: sin esto, `file a` seguido
-    /// de `a/hijo` dejaría el subárbol invisible — auditoría 8e, H4).
+    /// Materializes `path`'s ancestors as implicit dirs. A pre-existing
+    /// File at an ancestor position gets PROMOTED to a dir (same "dir
+    /// wins" criterion as direct collisions: without this, `file a`
+    /// followed by `a/child` would leave the subtree invisible — audit
+    /// 8e, H4).
     fn ensure_parents(&mut self, path: &[Vec<u8>]) {
         for depth in 0..path.len().saturating_sub(1) {
             let dir: InnerPath = path[..=depth].to_vec();
@@ -250,18 +250,18 @@ impl ArchiveIndex {
             if node.kind != EntryKind::Dir {
                 *node = Node::dir(node.mtime_ms);
                 self.skipped += 1;
-                tracing::debug!("file en posición de ancestro asciende a dir");
+                tracing::debug!("file at an ancestor position gets promoted to a dir");
             }
             self.add_child(path[..depth].to_vec(), path[depth].clone());
         }
     }
 
-    /// Inserta una entrada del contenedor. Nombres hostiles se omiten
-    /// (skip+warn, ADR 0018 C2); superar `max_entries` corta el indexado.
+    /// Inserts a container entry. Hostile names are omitted (skip+warn,
+    /// ADR 0018 C2); exceeding `max_entries` cuts indexing short.
     ///
-    /// Reglas de colisión: última gana (semántica zip); un dir gana a un
-    /// file en el mismo path (patrón de ataque conocido) y un dir jamás es
-    /// degradado a file.
+    /// Collision rules: last one wins (zip semantics); a dir wins over a
+    /// file at the same path (a known attack pattern) and a dir is never
+    /// demoted to a file.
     pub(crate) fn insert_entry(
         &mut self,
         raw_name: &[u8],
@@ -271,7 +271,7 @@ impl ArchiveIndex {
         let Some((path, trailing_slash)) = self.split_name(raw_name, limits) else {
             return Ok(());
         };
-        // `nombre/` manda sobre el kind declarado (zips reales lo hacen así).
+        // A trailing `/` overrides the declared kind (real zips do this).
         let node = if trailing_slash && node.kind != EntryKind::Dir {
             Node::dir(node.mtime_ms)
         } else {
@@ -280,11 +280,11 @@ impl ArchiveIndex {
         self.ensure_parents(&path);
         match self.nodes.get(&path) {
             Some(prev) if prev.kind == EntryKind::Dir && node.kind != EntryKind::Dir => {
-                // Un dir (explícito o implícito con hijos) jamás degrada a
-                // file: perderíamos el subárbol (patrón de ataque).
+                // A dir (explicit or implicit with children) is never
+                // demoted to a file: we'd lose the subtree (attack pattern).
                 tracing::debug!(
                     name = ?String::from_utf8_lossy(raw_name),
-                    "entrada file colisiona con dir: gana el dir"
+                    "file entry collides with a dir: the dir wins"
                 );
                 self.skipped += 1;
                 return Ok(());
@@ -292,7 +292,7 @@ impl ArchiveIndex {
             Some(_) => {
                 tracing::debug!(
                     name = ?String::from_utf8_lossy(raw_name),
-                    "entrada duplicada: última gana"
+                    "duplicate entry: the last one wins"
                 );
             }
             None => {}
@@ -300,16 +300,16 @@ impl ArchiveIndex {
         self.nodes.insert(path.clone(), node);
         let (parent, name) = (
             path[..path.len() - 1].to_vec(),
-            path.last().expect("path no vacío").clone(),
+            path.last().expect("non-empty path").clone(),
         );
         self.add_child(parent, name);
-        // Presupuesto DESPUÉS de insertar: los dirs implícitos también
-        // cuentan (una bomba de paths profundos no se cuela por ahí). El
-        // build entero se descarta al primer exceso.
+        // Budget checked AFTER inserting: implicit dirs count too (a
+        // deep-paths bomb can't sneak in that way). The whole build is
+        // discarded on the first excess.
         if self.nodes.len() > limits.max_entries {
-            tracing::warn!(max = limits.max_entries, "índice supera max_entries");
-            // #95.3: límite LOCAL, no corrupción — el contenedor puede ser
-            // perfectamente válido; norte rehúsa pagarlo.
+            tracing::warn!(max = limits.max_entries, "index exceeds max_entries");
+            // #95.3: a LOCAL limit, not corruption — the container may be
+            // perfectly valid; norte refuses to pay for it.
             return Err(Error::LimitExceeded {
                 limit: Error::LIMIT_ENTRIES.into(),
             });
@@ -317,7 +317,7 @@ impl ArchiveIndex {
         Ok(())
     }
 
-    /// El `Entry` wire de un nodo (o de la raíz sintética del contenedor).
+    /// A node's wire `Entry` (or the container's synthetic root).
     pub(crate) fn entry_for(
         &self,
         at: &VPath,
@@ -344,8 +344,8 @@ impl ArchiveIndex {
     }
 }
 
-/// Materializa los attrs zip pedidos (#108 bloque 2) desde la tripleta
-/// retenida en el índice: cero I/O en tiempo de consulta.
+/// Materializes the requested zip attrs (#108 block 2) from the triplet
+/// kept in the index: zero I/O at query time.
 fn zip_attrs(
     extra: Option<&ZipExtra>,
     req: &norte_vfs::AttrRequest,
@@ -376,8 +376,8 @@ fn zip_attrs(
     out
 }
 
-/// Nombre humano del método zip (APPNOTE §4.4.5); desconocido = "method-N",
-/// jamás falla. Es un id ASCII de vocabulario, no texto del archivo.
+/// Human name of the zip method (APPNOTE §4.4.5); unknown = "method-N",
+/// never fails. It's an ASCII vocabulary id, not text from the archive.
 fn zip_method_name(m: u16) -> String {
     match m {
         0 => "store".to_owned(),
@@ -416,7 +416,7 @@ mod tests {
     }
 
     #[test]
-    fn inserta_y_materializa_padres() {
+    fn inserts_and_materializes_parents() {
         let mut i = idx();
         i.insert_entry(b"a/b/c.txt", file_node(), &Limits::default())
             .expect("ok");
@@ -429,7 +429,7 @@ mod tests {
     }
 
     #[test]
-    fn omite_traversal_y_absolutos_y_marcador() {
+    fn omits_traversal_absolutes_and_the_marker() {
         let mut i = idx();
         let l = Limits::default();
         for hostile in [
@@ -448,13 +448,13 @@ mod tests {
             i.insert_entry(hostile, file_node(), &l)
                 .expect("skip, no err");
         }
-        assert!(i.nodes.is_empty(), "nada hostil entra al árbol");
+        assert!(i.nodes.is_empty(), "nothing hostile enters the tree");
         assert_eq!(i.skipped, 11);
     }
 
     #[test]
-    fn backslash_y_bytes_crudos_se_preservan() {
-        // `\` NO es separador (regla 1: bytes tal cual); cp437 crudo entra.
+    fn backslash_and_raw_bytes_are_preserved() {
+        // `\` is NOT a separator (rule 1: bytes as is); raw cp437 gets in.
         let mut i = idx();
         let l = Limits::default();
         i.insert_entry(b"dir\\file", file_node(), &l).expect("ok");
@@ -465,50 +465,50 @@ mod tests {
     }
 
     #[test]
-    fn duplicado_ultima_gana() {
+    fn duplicate_last_wins() {
         let mut i = idx();
         let l = Limits::default();
         i.insert_entry(b"x", file_node(), &l).expect("ok");
-        let mut segundo = file_node();
-        segundo.size = Some(99);
-        i.insert_entry(b"x", segundo, &l).expect("ok");
+        let mut second = file_node();
+        second.size = Some(99);
+        i.insert_entry(b"x", second, &l).expect("ok");
         assert_eq!(i.nodes[&key(&[b"x"])].size, Some(99));
-        assert_eq!(i.children[&key(&[])].len(), 1, "sin hijos duplicados");
+        assert_eq!(i.children[&key(&[])].len(), 1, "no duplicate children");
     }
 
     #[test]
-    fn dir_gana_a_file() {
+    fn dir_wins_over_file() {
         let mut i = idx();
         let l = Limits::default();
-        // file primero, dir después: el dir lo reemplaza.
+        // file first, dir after: the dir replaces it.
         i.insert_entry(b"a", file_node(), &l).expect("ok");
         i.insert_entry(b"a/", file_node(), &l).expect("ok");
         assert_eq!(i.nodes[&key(&[b"a"])].kind, EntryKind::Dir);
-        // dir primero (implícito por hijo), file después: gana el dir.
-        i.insert_entry(b"b/hijo", file_node(), &l).expect("ok");
+        // dir first (implicit via a child), file after: the dir wins.
+        i.insert_entry(b"b/child", file_node(), &l).expect("ok");
         i.insert_entry(b"b", file_node(), &l).expect("ok");
         assert_eq!(i.nodes[&key(&[b"b"])].kind, EntryKind::Dir);
-        assert!(i.nodes.contains_key(&key(&[b"b", b"hijo"])));
-        // FILE primero, hijo después (H4): el file ASCIENDE a dir y el
-        // subárbol es visible.
+        assert!(i.nodes.contains_key(&key(&[b"b", b"child"])));
+        // FILE first, child after (H4): the file gets PROMOTED to a dir
+        // and the subtree is visible.
         i.insert_entry(b"c", file_node(), &l).expect("ok");
-        i.insert_entry(b"c/hijo", file_node(), &l).expect("ok");
+        i.insert_entry(b"c/child", file_node(), &l).expect("ok");
         assert_eq!(i.nodes[&key(&[b"c"])].kind, EntryKind::Dir);
-        assert!(i.nodes.contains_key(&key(&[b"c", b"hijo"])));
-        assert!(i.children[&key(&[b"c"])].contains(b"hijo".as_slice()));
+        assert!(i.nodes.contains_key(&key(&[b"c", b"child"])));
+        assert!(i.children[&key(&[b"c"])].contains(b"child".as_slice()));
     }
 
     #[test]
-    fn max_entries_corta_con_io() {
+    fn max_entries_cuts_short_with_io() {
         let mut i = idx();
         let l = Limits {
             max_entries: 2,
             ..Limits::default()
         };
-        i.insert_entry(b"uno", file_node(), &l).expect("ok");
-        i.insert_entry(b"dos", file_node(), &l).expect("ok");
+        i.insert_entry(b"one", file_node(), &l).expect("ok");
+        i.insert_entry(b"two", file_node(), &l).expect("ok");
         assert_eq!(
-            i.insert_entry(b"tres", file_node(), &l).unwrap_err(),
+            i.insert_entry(b"three", file_node(), &l).unwrap_err(),
             Error::LimitExceeded {
                 limit: Error::LIMIT_ENTRIES.into()
             }
@@ -516,14 +516,14 @@ mod tests {
     }
 
     #[test]
-    fn limites_por_entrada_omiten() {
+    fn per_entry_limits_omit() {
         let mut i = idx();
         let l = Limits {
             max_name_bytes: 8,
             max_depth: 2,
             ..Limits::default()
         };
-        i.insert_entry(b"nombre-larguisimo", file_node(), &l)
+        i.insert_entry(b"very-long-name-here", file_node(), &l)
             .expect("skip");
         i.insert_entry(b"a/b/c", file_node(), &l).expect("skip");
         assert!(i.nodes.is_empty());

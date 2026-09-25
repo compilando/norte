@@ -1,51 +1,54 @@
-//! Inicialización de tracing para los binarios.
+//! Tracing setup for the binaries.
 //!
-//! Vive AQUÍ, y no en el core, porque hay dos familias de binarios que lo
-//! necesitan y solo una puede depender del motor: la ventana gráfica habla
-//! con el daemon por un socket y no puede arrastrar el engine, los providers
-//! y el host de plugins para escribir una línea de log (ADR 0066). Montarlo
-//! por duplicado fue la decisión anterior, y lo que costó una vez fue que la
-//! copia se dejó el endurecimiento: un log legible por cualquier cuenta local
-//! con las rutas por las que el usuario había navegado, durante seis commits
-//! (#255). Este crate ya era dueño de `state_dir()` y de las claves `[log]`,
-//! así que aquí el permiso se pone en UN sitio.
+//! Lives HERE, not in the core, because there are two families of binaries
+//! that need it and only one can depend on the engine: the graphical window
+//! talks to the daemon over a socket and cannot drag in the engine, the
+//! providers and the plugin host just to write a log line (ADR 0066).
+//! Setting it up twice was the earlier decision, and what it cost once was
+//! that the copy left out the hardening: a log readable by any local account,
+//! carrying the paths the user had browsed, for six commits (#255). This
+//! crate already owned `state_dir()` and the `[log]` keys, so here the
+//! permission is set in ONE place.
 //!
-//! Cap de SEGURIDAD (issue #43, regla 10): `suppaftp` loguea cada comando del
-//! canal de control a nivel TRACE del crate `log`, incluido `PASS <password>`.
-//! El bridge `tracing-log` (feature default de `tracing-subscriber`) lo
-//! materializaría con `RUST_LOG=trace`. [`init`](crate::logging::init) añade una directiva estática
-//! `suppaftp=info` AL FINAL del filtro, así que gana a cualquier `RUST_LOG`
-//! —incluido `suppaftp=trace` explícito— y la password nunca llega al sink.
+//! SECURITY cap (issue #43, rule 10): `suppaftp` logs every control-channel
+//! command at TRACE level of the `log` crate, including `PASS <password>`.
+//! The `tracing-log` bridge (a default feature of `tracing-subscriber`) would
+//! materialize it with `RUST_LOG=trace`. [`init`](crate::logging::init) adds a
+//! static `suppaftp=info` directive AT THE END of the filter, so it beats any
+//! `RUST_LOG` — including an explicit `suppaftp=trace` — and the password
+//! never reaches the sink.
 //!
-//! # Qué nivel usar (ADR 0127)
+//! # Which level to use (ADR 0127)
 //!
-//! | nivel | cuándo |
+//! | level | when |
 //! | --- | --- |
-//! | `error!` | falló algo que el usuario pidió y no se recupera |
-//! | `warn!` | algo se degradó y se siguió (inotify → sondeo) |
-//! | `info!` | ciclo de vida: arrancar, conectar, empezar y acabar una tarea |
-//! | `debug!` | decisiones: veredictos de política, resolución del keymap |
-//! | `trace!` | por entrada o por bloque; nunca encendido por defecto |
+//! | `error!` | something the user asked for failed and does not recover |
+//! | `warn!` | something degraded and continued (inotify → polling) |
+//! | `info!` | lifecycle: starting up, connecting, starting and finishing a task |
+//! | `debug!` | decisions: policy verdicts, keymap resolution |
+//! | `trace!` | per entry or per block; never on by default |
 //!
-//! No hay `fatal`. Un fallo fatal es un `error!` en el `main` de un binario
-//! seguido de la salida por `anyhow`: una biblioteca no termina el proceso.
+//! There is no `fatal`. A fatal failure is an `error!` in a binary's `main`
+//! followed by exiting via `anyhow`: a library does not terminate the
+//! process.
 //!
-//! # Dónde se abren los spans
+//! # Where the spans open
 //!
-//! No se inyecta ningún logger: `tracing` ya es la fachada, y los binarios la
-//! atan a un subscriber aquí. El núcleo abre spans en dos fronteras y nada
-//! más, y todo evento emitido dentro los hereda sin tocar su línea:
+//! No logger is injected: `tracing` is already the facade, and the binaries
+//! tie it to a subscriber here. The core opens spans at two boundaries and
+//! nowhere else, and every event emitted inside inherits them without
+//! touching its own line:
 //!
 //! ```text
-//! rpc{conn_id, req_id, method}       el daemon, alrededor de cada petición
-//! └─ task{task_id, kind, provider}   `Scheduler::submit`, viaja con el job
+//! rpc{conn_id, req_id, method}       the daemon, around each request
+//! └─ task{task_id, kind, provider}   `Scheduler::submit`, travels with the job
 //! ```
 //!
-//! Los campos de esos dos son identificadores, tipos, un scheme y nombres de
-//! método. **Nunca una ruta ni un parámetro.** Los spans del motor que
-//! quedan entre medias (`copy_anchored{from, to}`) sí llevan rutas, pero
-//! siempre por `span_path`, que redacta un `user:pass@`. Lo que elige el peer
-//! (método, id) entra acotado y escapado.
+//! The fields of those two are identifiers, types, a scheme and method
+//! names. **Never a path or a parameter.** The engine's spans in between
+//! (`copy_anchored{from, to}`) do carry paths, but always through
+//! `span_path`, which redacts a `user:pass@`. Whatever the peer chooses
+//! (method, id) enters bounded and escaped.
 
 use std::path::Path;
 
@@ -55,9 +58,9 @@ use tracing_subscriber::Layer;
 use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::prelude::*;
 
-/// Construye el `EnvFilter`: default INFO, respeta `RUST_LOG` (o `env` si se
-/// pasa, para tests), y SIEMPRE capa `suppaftp` a `info` como última directiva
-/// (regla 10, no configurable).
+/// Builds the `EnvFilter`: default INFO, honors `RUST_LOG` (or `env` if
+/// passed, for tests), and ALWAYS caps `suppaftp` to `info` as the last
+/// directive (rule 10, not configurable).
 fn filter_from(env: Option<&str>) -> EnvFilter {
     let base = match env {
         Some(s) => EnvFilter::builder()
@@ -67,31 +70,31 @@ fn filter_from(env: Option<&str>) -> EnvFilter {
             .with_default_directive(LevelFilter::INFO.into())
             .from_env_lossy(),
     };
-    // Última directiva de igual especificidad gana → cap duro.
-    base.add_directive("suppaftp=info".parse().expect("directiva estática válida"))
+    // Last directive of equal specificity wins → hard cap.
+    base.add_directive("suppaftp=info".parse().expect("valid static directive"))
 }
 
-/// Prefijo por defecto de los ficheros rotados. La rotación es DIARIA, así
-/// que el nombre real lleva la fecha detrás.
+/// Default prefix for the rotated files. Rotation is DAILY, so the real name
+/// carries the date after it.
 const LOG_PREFIX: &str = "norte.log";
 
-/// Crea el directorio del log CERRADO, y aprieta lo que ya haya dentro.
+/// Creates the log directory CLOSED, and tightens whatever is already inside.
 ///
-/// **0700, y no la umask.** Lo que este log guarda es lo mismo que guarda el
-/// journal —cada copia, cada borrado, cada host remoto— y en este árbol todo lo
-/// que es estado va cerrado: `journal.db` 0600 en un dir 0700, el spool igual,
-/// `lua-trust.toml` igual, `secrets.age` 0600, el socket del daemon 0600. Con
-/// la umask de serie esto salía 0755/0644, o sea legible por cualquier cuenta
-/// local.
+/// **0700, not the umask.** What this log holds is the same as what the
+/// journal holds — every copy, every delete, every remote host — and in this
+/// tree everything that is state is kept closed: `journal.db` 0600 in a 0700
+/// dir, the spool the same, `lua-trust.toml` the same, `secrets.age` 0600,
+/// the daemon socket 0600. With the default umask this came out 0755/0644,
+/// i.e. readable by any local account.
 ///
-/// **Y el modo se aplica a los padres que cree de paso, que es la mitad
-/// importante.** `init_to_file` es lo PRIMERO que toca `<state_dir>` en los dos
-/// frontends —antes del journal, antes de todo—, así que un `create_dir_all`
-/// sin modo creaba `<state_dir>` a 0755; el journal llega después con su
-/// `DirBuilder::mode(0o700)`, que sobre un directorio que YA existe no hace
-/// chmod ninguno. El 0755 se quedaba para siempre, enseñando el listado de
-/// `journal.db`, `lua-trust.toml` y el spool. En una instalación nueva, y sin
-/// que nada avisara.
+/// **And the mode is applied to the parents it creates along the way, which
+/// is the important half.** `init_to_file` is the FIRST thing to touch
+/// `<state_dir>` in both frontends — before the journal, before anything —
+/// so a `create_dir_all` with no mode created `<state_dir>` at 0755; the
+/// journal arrives later with its `DirBuilder::mode(0o700)`, which on a
+/// directory that ALREADY exists does no chmod at all. The 0755 stuck around
+/// forever, exposing the listing of `journal.db`, `lua-trust.toml` and the
+/// spool. On a fresh install, and with nothing warning about it.
 #[cfg(unix)]
 fn create_dir_locked(dir: &Path, prefix: &str) -> std::io::Result<()> {
     use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
@@ -99,46 +102,47 @@ fn create_dir_locked(dir: &Path, prefix: &str) -> std::io::Result<()> {
         .recursive(true)
         .mode(0o700)
         .create(dir)?;
-    // Un directorio preexistente NO lo toca el `create` de arriba (ése es el
-    // agujero que esto cierra), y el appender abre sus ficheros con la umask
-    // porque `tracing-appender` no deja elegir modo. Se aprieta lo que haya.
+    // A pre-existing directory is NOT touched by the `create` above (that is
+    // the hole this closes), and the appender opens its files with the
+    // umask because `tracing-appender` does not let you choose a mode.
+    // Whatever is there gets tightened.
     let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
-    for entrada in std::fs::read_dir(dir)?.flatten() {
-        if entrada
+    for entry in std::fs::read_dir(dir)?.flatten() {
+        if entry
             .file_name()
             .as_encoded_bytes()
             .starts_with(prefix.as_bytes())
         {
-            let _ =
-                std::fs::set_permissions(entrada.path(), std::fs::Permissions::from_mode(0o600));
+            let _ = std::fs::set_permissions(entry.path(), std::fs::Permissions::from_mode(0o600));
         }
     }
     Ok(())
 }
 
-/// En Windows los permisos son ACLs y `<state_dir>` cuelga de `%LOCALAPPDATA%`,
-/// que ya es del usuario. Sin equivalente que aplicar aquí.
+/// On Windows permissions are ACLs and `<state_dir>` hangs off
+/// `%LOCALAPPDATA%`, which already belongs to the user. Nothing equivalent to
+/// apply here.
 #[cfg(not(unix))]
 fn create_dir_locked(dir: &Path, _prefix: &str) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)
 }
 
-/// La capa de fichero, o `None` si el directorio no se pudo preparar.
+/// The file layer, or `None` if the directory could not be prepared.
 ///
-/// **Escribe SÍNCRONO, sin writer no bloqueante y por tanto sin guard**, y esa
-/// es una decisión y no un descuido. Un `WorkerGuard` vacía la cola al soltarlo,
-/// lo que significa que cualquier salida por `std::process::exit` —y hay
-/// varias: el Ctrl+C de la CLI, el `--pick` de la TUI, el `terminate:` de
-/// macOS— tira justo las últimas líneas, que son las del fallo que alguien
-/// está investigando. Estos binarios loguean a nivel INFO unas pocas líneas por
-/// sesión; el coste de escribir a pelo no se mide, y a cambio desaparece toda
-/// una clase de fallo.
+/// **Writes SYNCHRONOUSLY, with no non-blocking writer and therefore no
+/// guard**, and that is a decision, not an oversight. A `WorkerGuard` flushes
+/// the queue when dropped, which means any exit via `std::process::exit` —
+/// and there are several: the CLI's Ctrl+C, the TUI's `--pick`, macOS's
+/// `terminate:` — throws away exactly the last lines, which are the ones for
+/// the failure someone is investigating. These binaries log a handful of
+/// lines per session at INFO level; the cost of writing bare is not
+/// measured, and in exchange a whole class of failure disappears.
 ///
-/// `None` en vez de `Err`: un log es diagnóstico, y un diagnóstico que impide
-/// arrancar es peor que no tenerlo.
+/// `None` instead of `Err`: a log is diagnostic, and a diagnostic that
+/// prevents startup is worse than not having one.
 ///
-/// `format` decide cómo se escribe cada línea (ADR 0127): texto para una
-/// persona, o JSON con los campos y la cadena de spans para un programa.
+/// `format` decides how each line is written (ADR 0127): text for a person,
+/// or JSON with the fields and the span chain for a program.
 fn file_layer<S>(
     dir: &Path,
     retain: usize,
@@ -152,12 +156,12 @@ where
     let appender = tracing_appender::rolling::Builder::new()
         .rotation(tracing_appender::rolling::Rotation::DAILY)
         .filename_prefix(prefix)
-        // `max_log_files(0)` haría que la poda borrase el fichero que está a
-        // punto de escribir: uno es el mínimo que significa algo.
+        // `max_log_files(0)` would have the pruning delete the very file
+        // about to be written to: one is the minimum that means anything.
         .max_log_files(retain.max(1))
         .build(dir)
         .ok()?;
-    // Un fichero no es una terminal: los códigos de color lo ensucian.
+    // A file is not a terminal: color codes would clutter it.
     let layer = tracing_subscriber::fmt::layer()
         .with_ansi(false)
         .with_writer(appender);
@@ -165,29 +169,30 @@ where
         LogFormat::Text => layer.boxed(),
         LogFormat::Json => layer
             .json()
-            // `span`: el más interno; `spans`: la cadena entera, de fuera
-            // adentro. Con los dos, una línea dice en qué tarea pasó y qué
-            // petición la pidió sin buscar líneas anteriores.
+            // `span`: the innermost one; `spans`: the whole chain, outside
+            // in. With both, one line says which task it happened in and
+            // which request asked for it without hunting earlier lines.
             .with_current_span(true)
             .with_span_list(true)
             .boxed(),
     })
 }
 
-/// Cuántos ficheros rotados se conservan cuando la config no dice otra cosa.
-/// Una semana: suficiente para que un fallo de ayer siga estando, poco para que
-/// esto crezca sin que nadie lo mire.
+/// How many rotated files are kept when the config says nothing else. One
+/// week: enough that yesterday's failure is still there, little enough that
+/// this does not grow unwatched.
 const RETAIN_DEFAULT: usize = 7;
 
-/// Dónde va el log: `[log] dir`, o `<state_dir>/logs`.
+/// Where the log goes: `[log] dir`, or `<state_dir>/logs`.
 ///
-/// `None` = no hay directorio de estado (una CI pelada, un servicio sin `HOME`)
-/// y por tanto no hay fichero. El caller degrada.
+/// `None` = there is no state directory (a bare CI, a service with no
+/// `HOME`) and therefore no file. The caller degrades.
 ///
-/// Un `[log] dir` RELATIVO se rehúsa y cae al default: se resolvería contra el
-/// cwd, que en un gestor de ficheros es el directorio desde el que lo lanzaste
-/// —a menudo un repositorio—, y el log acabaría dentro del árbol de trabajo de
-/// cualquiera. Mismo criterio que ADR 0035 C1 aplica al directorio de config.
+/// A RELATIVE `[log] dir` is refused and falls back to the default: it would
+/// resolve against the cwd, which in a file manager is the directory you
+/// launched it from — often a repository — and the log would end up inside
+/// whoever's working tree. Same rule ADR 0035 C1 applies to the config
+/// directory.
 #[must_use]
 pub fn log_dir(configured: Option<&Path>) -> Option<std::path::PathBuf> {
     match configured {
@@ -195,7 +200,7 @@ pub fn log_dir(configured: Option<&Path>) -> Option<std::path::PathBuf> {
         Some(d) => {
             tracing::warn!(
                 dir = %d.display(),
-                "[log] dir es relativo y se ignora: el log iría a parar al cwd"
+                "[log] dir is relative and is ignored: the log would end up in the cwd"
             );
             crate::dirs::state_dir().map(|s| s.join("logs"))
         }
@@ -203,100 +208,104 @@ pub fn log_dir(configured: Option<&Path>) -> Option<std::path::PathBuf> {
     }
 }
 
-/// Lo que `[log]` dice, tal y como los binarios lo tienen a mano.
+/// What `[log]` says, the way the binaries have it at hand.
 ///
-/// Un struct y no dos parámetros sueltos porque los tres sitios que instalan
-/// logging tienen que pasar LO MISMO, y dos `Option` en fila son dos
-/// oportunidades de cruzarlos.
+/// A struct and not two loose parameters because the three places that
+/// install logging must pass THE SAME thing, and two `Option`s in a row are
+/// two chances to cross them.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct LogConfig<'a> {
     /// `[log] dir`. `None` = `<state_dir>/logs`.
     pub dir: Option<&'a Path>,
-    /// `[log] retain`. `None` = una semana de ficheros.
+    /// `[log] retain`. `None` = one week of files.
     pub retain: Option<usize>,
-    /// Prefijo del fichero rotado. `None` = `norte.log`.
+    /// Prefix of the rotated file. `None` = `norte.log`.
     ///
-    /// Existe porque dos procesos distintos NO deben rotar el mismo fichero:
-    /// la ventana gráfica y el daemon pueden estar vivos a la vez, y la
-    /// retención de uno podadaría los ficheros del otro.
+    /// Exists because two different processes must NOT rotate the same
+    /// file: the graphical window and the daemon can be alive at once, and
+    /// one's retention would prune the other's files.
     pub prefix: Option<&'a str>,
-    /// `[log] format`: cómo se escribe el FICHERO (ADR 0127). El stderr sigue
-    /// en texto sea cual sea, porque lo lee una persona en una terminal.
+    /// `[log] format`: how the FILE is written (ADR 0127). stderr stays in
+    /// text regardless, because a person reads it in a terminal.
     pub format: LogFormat,
 }
 
-/// Instala el subscriber global: stderr MÁS el fichero rotatorio, con el cap de
-/// seguridad. Para `norte-cli` y el daemon.
+/// Installs the global subscriber: stderr PLUS the rotating file, with the
+/// security cap. For `norte-cli` and the daemon.
 ///
-/// Idempotente y no-fatal: si ya hay un subscriber, no hace nada.
+/// Idempotent and non-fatal: if there is already a subscriber, it does
+/// nothing.
 pub fn init(cfg: LogConfig<'_>) {
     let _ = init_with(true, cfg, None);
 }
 
-/// Como [`init_to_file`], y además un anillo en memoria que el frontend puede
-/// pintar (`panel.log`).
+/// Like [`init_to_file`], plus an in-memory ring the frontend can paint
+/// (`panel.log`).
 ///
-/// `None` si ya había un subscriber instalado, porque entonces NADIE le
-/// escribe al anillo. Devolverlo igualmente —como hacía la primera versión—
-/// dejaba al panel enseñando «nada que enseñar con este filtro» para siempre,
-/// que es justo la confusión que el panel existe para no crear: «no ha pasado
-/// nada» tiene que distinguirse de «no está conectado», y con el `Option` la
-/// interfaz puede decir la segunda.
+/// `None` if a subscriber was already installed, because then NOBODY writes
+/// to the ring. Returning it anyway — as the first version did — left the
+/// panel showing "nothing to show with this filter" forever, which is
+/// exactly the confusion the panel exists to avoid: "nothing has happened"
+/// has to be distinguishable from "not connected", and with the `Option` the
+/// interface can say the latter.
 ///
-/// El nivel del anillo se sube luego en caliente con
-/// [`LogRing::raise_to`](crate::logring::LogRing::raise_to). Arranca en INFO:
-/// un nivel verboso se paga aunque nadie mire.
+/// The ring's level is raised later, live, with
+/// [`LogRing::raise_to`](crate::logring::LogRing::raise_to). It starts at
+/// INFO: a verbose level is paid for even when nobody is looking.
 #[must_use]
 pub fn init_to_file_with_ring(cfg: LogConfig<'_>, cap: usize) -> Option<crate::logring::LogRing> {
     let ring = crate::logring::LogRing::new(cap);
     init_with(false, cfg, Some(&ring)).then_some(ring)
 }
 
-/// Como [`init`] —stderr MÁS fichero—, y además el anillo en memoria. Para el
+/// Like [`init`] — stderr PLUS file — plus the in-memory ring. For the
 /// DAEMON (#328, ADR 0092).
 ///
-/// Existe porque el daemon necesita las dos cosas a la vez y ninguna de las
-/// otras dos se las da: [`init`] no monta anillo, y
-/// [`init_to_file_with_ring`] deja al proceso sin stderr. Quitarle el stderr
-/// a `norte daemon run` sería una regresión callada — quien lo arranca en una
-/// terminal para ver por qué no levanta dejaría de leer nada.
+/// Exists because the daemon needs both things at once and neither of the
+/// other two gives them: [`init`] sets up no ring, and
+/// [`init_to_file_with_ring`] leaves the process without stderr. Taking
+/// stderr away from `norte daemon run` would be a silent regression —
+/// whoever starts it in a terminal to see why it will not come up would stop
+/// reading anything.
 ///
-/// Solo el daemon lo llama: un `norte cp` no tiene a quién enseñarle un
-/// anillo, y pagaría dos mil líneas de memoria por nadie. El resto del CLI
-/// sigue con [`init`].
+/// Only the daemon calls it: a `norte cp` has nobody to show a ring to, and
+/// would pay for two thousand lines of memory for no one. The rest of the
+/// CLI stays on [`init`].
 ///
-/// `None` con el mismo criterio que [`init_to_file_with_ring`]: si ya había
-/// subscriber, nadie escribe en este anillo y devolverlo dejaría al lector
-/// creyendo que un registro vacío es que no ha pasado nada.
+/// `None` under the same rule as [`init_to_file_with_ring`]: if there was
+/// already a subscriber, nobody writes to this ring, and returning it would
+/// leave the reader believing an empty log means nothing happened.
 #[must_use]
 pub fn init_with_ring(cfg: LogConfig<'_>, cap: usize) -> Option<crate::logring::LogRing> {
     let ring = crate::logring::LogRing::new(cap);
     init_with(true, cfg, Some(&ring)).then_some(ring)
 }
 
-/// Como [`init`] pero SOLO al fichero. Para los frontends.
+/// Like [`init`] but ONLY to the file. For the frontends.
 ///
-/// La TUI no instalaba subscriber ninguno, y lo decía en un comentario: un
-/// `fmt` a stderr pelea con la pantalla alternativa, así que cada
-/// `tracing::warn!` que saliera de ahí se descartaba mudo. La GUI tampoco
-/// instalaba ninguno. Los dos frontends que un usuario ejecuta de verdad no
-/// producían un solo diagnóstico; esto es lo que lo arregla, y sin escribir un
-/// byte en una pantalla que están dibujando.
+/// The TUI installed no subscriber at all, and said so in a comment: an
+/// `fmt` to stderr fights with the alternate screen, so every
+/// `tracing::warn!` coming out of there was silently dropped. The GUI
+/// installed none either. The two frontends a user actually runs produced
+/// not a single diagnostic; this is what fixes it, without writing a byte to
+/// a screen they are drawing.
 pub fn init_to_file(cfg: LogConfig<'_>) {
     let _ = init_with(false, cfg, None);
 }
 
-/// El montaje común. `stderr` decide si va también la capa de terminal.
+/// The common setup. `stderr` decides whether the terminal layer goes in
+/// too.
 ///
-/// **Los filtros son POR CAPA y ya no uno global**, y ese cambio es lo que hace
-/// posible el panel de registro: con un `EnvFilter` sobre todo el registro, un
-/// nivel INFO significa que los `DEBUG` no se emiten, y entonces ningún panel
-/// puede enseñarlos después — filtrar en la ventana lo que nunca se registró es
-/// imposible. Con filtros por capa, el fichero y el stderr conservan
-/// exactamente el suyo (mismo [`filter_from`], mismo cap de `suppaftp`) y el
-/// anillo lleva el propio, que además se cambia en caliente.
-/// Devuelve si ESTE montaje fue el que se instaló: `false` significa que ya
-/// había un subscriber, y entonces nada de lo que se monta aquí recibe nada.
+/// **The filters are PER LAYER and no longer a single global one**, and that
+/// change is what makes the log panel possible: with one `EnvFilter` over
+/// the whole registry, an INFO level means `DEBUG`s are never emitted, and
+/// then no panel can show them afterwards — filtering, in the window, what
+/// was never logged is impossible. With per-layer filters, the file and
+/// stderr keep exactly their own (same [`filter_from`], same `suppaftp`
+/// cap) and the ring carries its own, which can also be changed live.
+/// Returns whether THIS setup is the one that got installed: `false` means
+/// there was already a subscriber, and then nothing set up here receives
+/// anything.
 fn init_with(stderr: bool, cfg: LogConfig<'_>, ring: Option<&crate::logring::LogRing>) -> bool {
     let file = match log_dir(cfg.dir) {
         Some(d) => file_layer(
@@ -313,11 +322,11 @@ fn init_with(stderr: bool, cfg: LogConfig<'_>, ring: Option<&crate::logring::Log
             .with_writer(std::io::stderr)
             .with_filter(filter_from(None))
     });
-    let anillo = ring.map(crate::logring::ring_layer);
+    let ring = ring.map(crate::logring::ring_layer);
     tracing_subscriber::registry()
         .with(file)
         .with(terminal)
-        .with(anillo)
+        .with(ring)
         .try_init()
         .is_ok()
 }
@@ -330,8 +339,9 @@ mod tests {
     use tracing_subscriber::Layer;
     use tracing_subscriber::layer::Context;
 
-    /// Capa que registra (target, nivel) de cada evento que la ATRAVIESA (ya
-    /// filtrado): lo que aquí llega es exactamente lo que el sink loguearía.
+    /// A layer that records (target, level) for every event that PASSES
+    /// THROUGH it (already filtered): what arrives here is exactly what the
+    /// sink would log.
     struct Collect(Arc<Mutex<Vec<(String, Level)>>>);
     impl<S: tracing::Subscriber> Layer<S> for Collect {
         fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
@@ -351,58 +361,58 @@ mod tests {
             .with(filter_from(Some("trace,suppaftp=trace")));
 
         tracing::subscriber::with_default(subscriber, || {
-            tracing::trace!(target: "suppaftp", "PASS hunter2"); // debe CAERSE
-            tracing::info!(target: "suppaftp", "conectado"); // pasa
-            tracing::trace!(target: "otro", "visible"); // pasa (no capado)
+            tracing::trace!(target: "suppaftp", "PASS hunter2"); // must be DROPPED
+            tracing::info!(target: "suppaftp", "connected"); // passes
+            tracing::trace!(target: "other", "visible"); // passes (not capped)
         });
 
         let seen = seen.lock().expect("lock");
-        // La password (evento TRACE de suppaftp) NUNCA atraviesa el filtro.
+        // The password (suppaftp's TRACE event) NEVER passes the filter.
         assert!(
             !seen.contains(&("suppaftp".to_string(), Level::TRACE)),
-            "suppaftp TRACE debe estar capado: {seen:?}"
+            "suppaftp TRACE must be capped: {seen:?}"
         );
-        // Pero info de suppaftp y trace de otros targets sí.
+        // But suppaftp's info and other targets' trace do.
         assert!(seen.contains(&("suppaftp".to_string(), Level::INFO)));
-        assert!(seen.contains(&("otro".to_string(), Level::TRACE)));
+        assert!(seen.contains(&("other".to_string(), Level::TRACE)));
     }
 
-    /// Los ficheros que hay en `dir`, con su contenido concatenado.
-    fn volcado(dir: &std::path::Path) -> (usize, String) {
-        let ficheros: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
-            .expect("listar")
-            .map(|e| e.expect("entrada").path())
+    /// The files in `dir`, with their content concatenated.
+    fn dump(dir: &std::path::Path) -> (usize, String) {
+        let files: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
+            .expect("list")
+            .map(|e| e.expect("entry").path())
             .collect();
-        let texto = ficheros
+        let text = files
             .iter()
             .map(|f| std::fs::read_to_string(f).unwrap_or_default())
             .collect();
-        (ficheros.len(), texto)
+        (files.len(), text)
     }
 
-    /// El appender escribe de verdad, en el directorio que se le da.
+    /// The appender really writes, into the directory it is given.
     #[test]
-    fn el_log_aterriza_en_un_fichero() {
+    fn the_log_lands_in_a_file() {
         let dir = tempfile::tempdir().expect("tmp");
         let layer = file_layer(dir.path(), 3, LOG_PREFIX, LogFormat::Text).expect("appender");
         let sub = tracing_subscriber::registry()
             .with(layer)
             .with(filter_from(None));
         tracing::subscriber::with_default(sub, || {
-            tracing::info!(target: "norte_core::prueba", "una linea");
+            tracing::info!(target: "norte_core::test", "one line");
         });
 
-        let (cuantos, texto) = volcado(dir.path());
-        assert_eq!(cuantos, 1, "un fichero de log");
-        assert!(texto.contains("una linea"), "el evento está: {texto}");
+        let (how_many, text) = dump(dir.path());
+        assert_eq!(how_many, 1, "one log file");
+        assert!(text.contains("one line"), "the event is there: {text}");
     }
 
-    /// `format = "json"`: una línea JSON por evento, con sus campos Y la
-    /// cadena de spans en que ocurrió (ADR 0127). Es lo que permite seguir
-    /// una tarea y la petición que la pidió con `jq`, sin expresiones
-    /// regulares sobre texto.
+    /// `format = "json"`: one JSON line per event, with its fields AND the
+    /// span chain it happened in (ADR 0127). This is what lets you follow a
+    /// task and the request that asked for it with `jq`, with no regular
+    /// expressions over text.
     #[test]
-    fn el_formato_json_lleva_los_campos_y_los_spans() {
+    fn json_format_carries_fields_and_spans() {
         let dir = tempfile::tempdir().expect("tmp");
         let layer = file_layer(dir.path(), 3, LOG_PREFIX, LogFormat::Json).expect("appender");
         let sub = tracing_subscriber::registry()
@@ -413,77 +423,78 @@ mod tests {
             let _r = rpc.enter();
             let task = tracing::info_span!("task", task_id = 7_u64);
             let _t = task.enter();
-            tracing::warn!(entradas = 2_u64, "una copia a medias");
+            tracing::warn!(entries = 2_u64, "a half-finished copy");
         });
 
-        let (_, texto) = volcado(dir.path());
-        let linea = texto.lines().next().expect("una línea");
-        let v: serde_json::Value = serde_json::from_str(linea).expect("la línea es JSON");
+        let (_, text) = dump(dir.path());
+        let line = text.lines().next().expect("one line");
+        let v: serde_json::Value = serde_json::from_str(line).expect("the line is JSON");
         assert_eq!(v["level"], "WARN");
-        assert_eq!(v["fields"]["message"], "una copia a medias");
-        assert_eq!(v["fields"]["entradas"], 2);
-        assert_eq!(v["span"]["name"], "task", "el span actual");
-        assert_eq!(v["spans"][0]["name"], "rpc", "de fuera adentro");
+        assert_eq!(v["fields"]["message"], "a half-finished copy");
+        assert_eq!(v["fields"]["entries"], 2);
+        assert_eq!(v["span"]["name"], "task", "the current span");
+        assert_eq!(v["spans"][0]["name"], "rpc", "outside in");
         assert_eq!(v["spans"][0]["method"], "fs.copy");
         assert_eq!(v["spans"][1]["task_id"], 7);
     }
 
-    /// Y el texto sigue siendo el de siempre: el JSON es opcional.
+    /// And text stays the same as always: JSON is optional.
     #[test]
-    fn el_formato_por_defecto_es_texto() {
+    fn default_format_is_text() {
         assert_eq!(LogFormat::default(), LogFormat::Text);
         let dir = tempfile::tempdir().expect("tmp");
         let layer = file_layer(dir.path(), 3, LOG_PREFIX, LogFormat::Text).expect("appender");
         let sub = tracing_subscriber::registry()
             .with(layer)
             .with(filter_from(None));
-        tracing::subscriber::with_default(sub, || tracing::info!("una linea"));
-        let (_, texto) = volcado(dir.path());
-        assert!(serde_json::from_str::<serde_json::Value>(texto.trim()).is_err());
-        assert!(texto.contains("una linea"));
+        tracing::subscriber::with_default(sub, || tracing::info!("one line"));
+        let (_, text) = dump(dir.path());
+        assert!(serde_json::from_str::<serde_json::Value>(text.trim()).is_err());
+        assert!(text.contains("one line"));
     }
 
-    /// **El cap de `suppaftp` cubre el FICHERO igual que cubre stderr.**
+    /// **The `suppaftp` cap covers the FILE just as it covers stderr.**
     ///
-    /// Se filtra en el registry, antes de cualquier capa, así que debería
-    /// seguirse de la arquitectura — y por eso mismo se comprueba: «debería
-    /// seguirse» no es una prueba, y lo que está en juego es una contraseña en
-    /// un fichero que PERSISTE, que es peor que una que pasó por una terminal
-    /// (regla dura 10).
+    /// It is filtered in the registry, before any layer, so it should follow
+    /// from the architecture — and that is exactly why it is checked:
+    /// "should follow" is not a test, and what is at stake is a password in a
+    /// file that PERSISTS, which is worse than one that passed through a
+    /// terminal (hard rule 10).
     ///
-    /// En los DOS formatos (ADR 0127): la capa JSON se construye aparte, y una
-    /// cota que dependiera de cómo se monta la capa se la saltaría callada.
+    /// In BOTH formats (ADR 0127): the JSON layer is built separately, and a
+    /// cap that depended on how the layer is set up would be silently
+    /// bypassed.
     #[test]
-    fn la_password_de_ftp_no_llega_al_fichero() {
-        for formato in [LogFormat::Text, LogFormat::Json] {
+    fn the_ftp_password_does_not_reach_the_file() {
+        for format in [LogFormat::Text, LogFormat::Json] {
             let dir = tempfile::tempdir().expect("tmp");
-            let layer = file_layer(dir.path(), 3, LOG_PREFIX, formato).expect("appender");
+            let layer = file_layer(dir.path(), 3, LOG_PREFIX, format).expect("appender");
             let sub = tracing_subscriber::registry()
                 .with(layer)
                 .with(filter_from(Some("trace,suppaftp=trace")));
             tracing::subscriber::with_default(sub, || {
                 tracing::trace!(target: "suppaftp", "PASS hunter2");
-                tracing::info!(target: "suppaftp", "conectado");
+                tracing::info!(target: "suppaftp", "connected");
             });
 
-            let (_, texto) = volcado(dir.path());
+            let (_, text) = dump(dir.path());
             assert!(
-                !texto.contains("hunter2"),
-                "la password llegó al fichero ({formato:?}): {texto}"
+                !text.contains("hunter2"),
+                "the password reached the file ({format:?}): {text}"
             );
-            assert!(texto.contains("conectado"), "y lo que sí pasa, pasa");
+            assert!(text.contains("connected"), "and what does pass, passes");
         }
     }
 
-    /// **El directorio del log es 0700, y los ficheros que caen dentro 0600.**
+    /// **The log directory is 0700, and the files that land inside it 0600.**
     ///
-    /// Lo que el log guarda es lo mismo que guarda el journal —cada copia, cada
-    /// borrado, cada host remoto al que te conectas— y el journal es 0600. Con
-    /// la umask por defecto esto salía 0755/0644, o sea legible por cualquier
-    /// cuenta local de la máquina.
+    /// What the log holds is the same as what the journal holds — every
+    /// copy, every delete, every remote host you connect to — and the
+    /// journal is 0600. With the default umask this came out 0755/0644,
+    /// i.e. readable by any local account on the machine.
     #[cfg(unix)]
     #[test]
-    fn el_log_no_lo_puede_leer_cualquiera() {
+    fn the_log_cannot_be_read_by_just_anyone() {
         use std::os::unix::fs::PermissionsExt as _;
 
         let tmp = tempfile::tempdir().expect("tmp");
@@ -493,63 +504,64 @@ mod tests {
             .with(layer)
             .with(filter_from(None));
         tracing::subscriber::with_default(sub, || {
-            tracing::info!(target: "norte_core::prueba", "una linea");
+            tracing::info!(target: "norte_core::test", "one line");
         });
 
-        let modo =
+        let mode =
             |p: &std::path::Path| std::fs::metadata(p).expect("stat").permissions().mode() & 0o777;
         assert_eq!(
-            modo(&dir),
+            mode(&dir),
             0o700,
-            "el directorio, solo para su dueño: es lo que hace inalcanzable lo de dentro"
+            "the directory, for its owner only: that is what makes what's inside unreachable"
         );
     }
 
-    /// Y el barrido aprieta lo que ya hubiera de días anteriores.
+    /// And the sweep tightens whatever was already there from previous days.
     ///
-    /// Hace falta porque `tracing-appender` abre sus ficheros él, con la umask
-    /// y sin dejar elegir modo: el de HOY sale 0644 y el de mañana también. Que
-    /// eso no importe depende del 0700 del directorio, así que el barrido es lo
-    /// que arregla el caso en el que el directorio fue laxo alguna vez —una
-    /// instalación anterior a este arreglo, por ejemplo— y quedaron ficheros
-    /// legibles dentro.
+    /// Needed because `tracing-appender` opens its own files, with the umask
+    /// and no way to choose a mode: today's comes out 0644 and so does
+    /// tomorrow's. That not mattering depends on the directory's 0700, so the
+    /// sweep is what fixes the case where the directory was lax at some
+    /// point — an install predating this fix, say — and readable files were
+    /// left inside.
     #[cfg(unix)]
     #[test]
-    fn el_barrido_cierra_los_ficheros_que_ya_estaban() {
+    fn the_sweep_closes_up_files_that_were_already_there() {
         use std::os::unix::fs::PermissionsExt as _;
 
         let tmp = tempfile::tempdir().expect("tmp");
         let dir = tmp.path().join("logs");
         std::fs::create_dir_all(&dir).expect("dir");
-        let viejo = dir.join("norte.log.2026-08-01");
-        std::fs::write(&viejo, b"de ayer").expect("fichero");
-        std::fs::set_permissions(&viejo, std::fs::Permissions::from_mode(0o644)).expect("chmod");
-        // Un fichero AJENO no se toca: este directorio es nuestro, pero el
-        // barrido solo se mete con lo que lleva nuestro prefijo.
-        let ajeno = dir.join("otra-cosa.txt");
-        std::fs::write(&ajeno, b"ajeno").expect("fichero");
-        std::fs::set_permissions(&ajeno, std::fs::Permissions::from_mode(0o644)).expect("chmod");
+        let old = dir.join("norte.log.2026-08-01");
+        std::fs::write(&old, b"from yesterday").expect("file");
+        std::fs::set_permissions(&old, std::fs::Permissions::from_mode(0o644)).expect("chmod");
+        // A file that is NOT ours is left alone: this directory is ours, but
+        // the sweep only touches what carries our prefix.
+        let foreign = dir.join("otra-cosa.txt");
+        std::fs::write(&foreign, b"foreign").expect("file");
+        std::fs::set_permissions(&foreign, std::fs::Permissions::from_mode(0o644)).expect("chmod");
 
-        create_dir_locked(&dir, LOG_PREFIX).expect("barrido");
+        create_dir_locked(&dir, LOG_PREFIX).expect("sweep");
 
-        let modo =
+        let mode =
             |p: &std::path::Path| std::fs::metadata(p).expect("stat").permissions().mode() & 0o777;
-        assert_eq!(modo(&viejo), 0o600, "el log de ayer, cerrado");
-        assert_eq!(modo(&ajeno), 0o644, "lo que no es un log, intacto");
+        assert_eq!(mode(&old), 0o600, "yesterday's log, closed");
+        assert_eq!(mode(&foreign), 0o644, "what is not a log, untouched");
     }
 
-    /// Y NO degrada el directorio de estado que lo contiene.
+    /// And it does NOT loosen the state directory that holds it.
     ///
-    /// Éste es el que de verdad muerde: `init_to_file` es lo PRIMERO que toca
-    /// `<state_dir>` en los dos frontends —antes del journal, antes de todo—,
-    /// así que un `create_dir_all` sin modo creaba `<state_dir>` a 0755. El
-    /// journal viene después con su `DirBuilder::mode(0o700)`, que sobre un
-    /// directorio que YA existe no hace chmod ninguno: el 0755 se quedaba para
-    /// siempre, enseñando el listado de `journal.db`, `lua-trust.toml` y el
-    /// spool a cualquier cuenta local. En una instalación nueva, y en silencio.
+    /// This is the one that really bites: `init_to_file` is the FIRST thing
+    /// to touch `<state_dir>` in both frontends — before the journal, before
+    /// anything — so a `create_dir_all` with no mode created `<state_dir>`
+    /// at 0755. The journal comes later with its `DirBuilder::mode(0o700)`,
+    /// which on a directory that ALREADY exists does no chmod at all: the
+    /// 0755 stuck around forever, exposing the listing of `journal.db`,
+    /// `lua-trust.toml` and the spool to any local account. On a fresh
+    /// install, and silently.
     #[cfg(unix)]
     #[test]
-    fn crear_el_log_no_afloja_el_directorio_de_estado() {
+    fn creating_the_log_does_not_loosen_the_state_directory() {
         use std::os::unix::fs::PermissionsExt as _;
 
         let tmp = tempfile::tempdir().expect("tmp");
@@ -562,25 +574,25 @@ mod tests {
         )
         .expect("appender");
 
-        let modo = std::fs::metadata(&state)
+        let mode = std::fs::metadata(&state)
             .expect("stat")
             .permissions()
             .mode()
             & 0o777;
-        assert_eq!(modo, 0o700, "el padre creado de paso, también cerrado");
+        assert_eq!(mode, 0o700, "the parent created along the way, also closed");
     }
 
-    /// Un directorio que no se puede crear NO tumba el programa: se degrada.
-    /// Un log es diagnóstico, y un diagnóstico que impide arrancar es peor que
-    /// no tenerlo.
+    /// A directory that cannot be created does NOT bring the program down:
+    /// it degrades. A log is diagnostic, and a diagnostic that prevents
+    /// startup is worse than not having one.
     #[test]
-    fn un_directorio_imposible_degrada_en_vez_de_fallar() {
+    fn an_impossible_directory_degrades_instead_of_failing() {
         let dir = tempfile::tempdir().expect("tmp");
-        // Un FICHERO donde debería ir el directorio: `create_dir_all` falla.
-        let ocupado = dir.path().join("ocupado");
-        std::fs::write(&ocupado, b"no soy un directorio").expect("fichero");
-        let capa =
-            file_layer::<tracing_subscriber::Registry>(&ocupado, 3, LOG_PREFIX, LogFormat::Text);
-        assert!(capa.is_none(), "no se puede crear ahí, así que no hay capa");
+        // A FILE where the directory should go: `create_dir_all` fails.
+        let occupied = dir.path().join("occupied");
+        std::fs::write(&occupied, b"I am not a directory").expect("file");
+        let layer =
+            file_layer::<tracing_subscriber::Registry>(&occupied, 3, LOG_PREFIX, LogFormat::Text);
+        assert!(layer.is_none(), "cannot create there, so there is no layer");
     }
 }

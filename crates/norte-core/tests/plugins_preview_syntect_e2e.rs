@@ -1,11 +1,12 @@
-//! E2E del previewer syntect (#29): compila el guest REAL
-//! `norte-plugin-host/examples-wasm/previewer-syntect` a `wasm32-wasip2`, lo
-//! siembra bajo consentimiento, lo resuelve para un mimetype de código y lo
-//! EJECUTA — verificando que devuelve la sintaxis resaltada como ANSI de 24
-//! bits (que el frontend sanea a color de pane, ver `norte-frontend::ansi`).
+//! E2E of the syntect previewer (#29): compiles the REAL guest
+//! `norte-plugin-host/examples-wasm/previewer-syntect` to `wasm32-wasip2`,
+//! seeds it under consent, resolves it for a code mimetype and RUNS it —
+//! verifying it returns the highlighted syntax as 24-bit ANSI (which the
+//! frontend sanitizes to pane color, see `norte-frontend::ansi`).
 //!
-//! SKIP si el target `wasm32-wasip2` no está instalado (igual que el E2E del
-//! previewer-demo): la suite queda verde en toolchains sin ese target.
+//! SKIP if the `wasm32-wasip2` target is not installed (same as the
+//! previewer-demo E2E): the suite stays green on toolchains without that
+//! target.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -13,33 +14,33 @@ use std::process::Command;
 use norte_core::PluginRegistry;
 use norte_plugin_host::PluginRuntime;
 
-/// El manifiesto REAL del plugin, leído de su directorio — no una copia.
+/// The plugin's REAL manifest, read from its directory — not a copy.
 ///
-/// Era un literal aquí, y eso hacía que este test probara lo que un manifiesto
-/// habría dicho en vez de lo que el plugin distribuye. Ahora `plugin.toml` es
-/// la fuente y el test lo lee: si el manifiesto que se instala deja de declarar
-/// `application/json` o pierde `fs-read`, este E2E se cae, que es justo lo que
-/// tiene que pasar.
+/// It used to be a literal here, and that made this test check what a
+/// manifest WOULD have said instead of what the plugin ships. Now
+/// `plugin.toml` is the source and the test reads it: if the installed
+/// manifest stops declaring `application/json` or loses `fs-read`, this E2E
+/// falls over, which is exactly what should happen.
 fn manifest() -> String {
     let p = guest_dir("previewer-syntect").join("plugin.toml");
-    std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("leyendo {}: {e}", p.display()))
+    std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("reading {}: {e}", p.display()))
 }
 
-/// Directorio del guest, desde el manifiesto de ESTE crate.
-fn guest_dir(nombre: &str) -> PathBuf {
+/// The guest's directory, from THIS crate's manifest.
+fn guest_dir(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../norte-plugin-host/examples-wasm")
-        .join(nombre)
+        .join(name)
 }
 
-/// JSON de prueba: syntect tiene un syntax `JSON`, así que el resaltado es
-/// determinista (claves/valores en colores distintos).
+/// Sample JSON: syntect has a `JSON` syntax, so the highlighting is
+/// deterministic (keys/values in different colors).
 const SAMPLE: &[u8] = b"{\n  \"name\": \"norte\",\n  \"count\": 42\n}\n";
 
 #[test]
-fn plugin_preview_syntect_e2e_wasm_real() {
+fn plugin_preview_syntect_e2e_real_wasm() {
     let Some(wasm) = build_guest("previewer-syntect") else {
-        eprintln!("SKIP: target wasm32-wasip2 no instalado; no hay .wasm que ejecutar");
+        eprintln!("SKIP: target wasm32-wasip2 not installed; no .wasm to run");
         return;
     };
 
@@ -52,10 +53,11 @@ fn plugin_preview_syntect_e2e_wasm_real() {
     let rt = PluginRuntime::new().expect("PluginRuntime::new");
     let mut reg = PluginRegistry::discover(cfg.path()).expect("discover");
 
-    // Fail-closed: sin aprobar no se elige aunque el .wasm esté y el mime case.
+    // Fail-closed: without approval it is not chosen even with the .wasm
+    // present and the mime matching.
     assert!(
         reg.resolve_previewer("application/json").is_none(),
-        "un previewer no consentido jamás se elige"
+        "an unconsented previewer is never chosen"
     );
 
     assert!(reg.set_approval_in_memory("org.norte.syntect", true));
@@ -63,38 +65,39 @@ fn plugin_preview_syntect_e2e_wasm_real() {
 
     let (id, _name, resolved_wasm, caps, _settings) = reg
         .resolve_previewer("application/json")
-        .expect("application/json casa el glob del previewer consentido");
+        .expect("application/json matches the consented previewer's glob");
     assert_eq!(id, "org.norte.syntect");
 
-    // EJECUTA el WASM real: el core pasaría el TEXTO ya decodificado (§6.2); el
-    // guest devuelve la sintaxis resaltada como ANSI de 24 bits.
+    // RUNS the real WASM: the core would pass the already-decoded TEXT
+    // (§6.2); the guest returns the highlighted syntax as 24-bit ANSI.
     let render = rt
         .instantiate(&resolved_wasm, caps)
-        .expect("instanciar el previewer")
+        .expect("instantiate the previewer")
         .render_preview("application/json", SAMPLE)
-        .expect("el previewer-syntect debe renderizar");
+        .expect("previewer-syntect must render");
 
-    // Color REAL: al menos una secuencia SGR de 24 bits (`ESC[38;2;r;g;bm`).
+    // REAL color: at least one 24-bit SGR sequence (`ESC[38;2;r;g;bm`).
     assert!(
         render.contains("\x1b[38;2;"),
-        "el render lleva color ANSI de 24 bits (syntect): {render:?}"
+        "the render carries 24-bit ANSI color (syntect): {render:?}"
     );
-    // El contenido sobrevive: la clave del JSON aparece en el texto resaltado.
+    // The content survives: the JSON key appears in the highlighted text.
     assert!(
         render.contains("name"),
-        "el render incluye el texto del contenido: {render:?}"
+        "the render includes the content's text: {render:?}"
     );
     assert!(
         render.contains("42"),
-        "el render incluye el valor numérico: {render:?}"
+        "the render includes the numeric value: {render:?}"
     );
 }
 
-/// Compila `examples-wasm/<name>/` a `wasm32-wasip2` (release). `None` (SKIP)
-/// si el target no está instalado; si está pero no compila, es fallo real.
+/// Compiles `examples-wasm/<name>/` to `wasm32-wasip2` (release). `None`
+/// (SKIP) if the target is not installed; if it is but it does not build, it
+/// is a real failure.
 fn build_guest(name: &str) -> Option<PathBuf> {
     if !target_installed("wasm32-wasip2") {
-        eprintln!("SKIP: target wasm32-wasip2 no instalado");
+        eprintln!("SKIP: target wasm32-wasip2 not installed");
         return None;
     }
     let guest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -114,13 +117,13 @@ fn build_guest(name: &str) -> Option<PathBuf> {
         ])
         .arg(&target_dir)
         .status()
-        .expect("no se pudo lanzar cargo para compilar el guest");
-    assert!(status.success(), "el guest {name} no compiló");
+        .expect("could not launch cargo to compile the guest");
+    assert!(status.success(), "the {name} guest did not build");
     let wasm = target_dir
         .join("wasm32-wasip2")
         .join("release")
         .join(format!("{}.wasm", name.replace('-', "_")));
-    assert!(wasm.exists(), "no se encontró {}", wasm.display());
+    assert!(wasm.exists(), "{} not found", wasm.display());
     Some(wasm)
 }
 

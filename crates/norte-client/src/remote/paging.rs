@@ -1,35 +1,36 @@
-//! El listado remoto, página a página.
+//! The remote listing, page by page.
 //!
-//! `fs.list` responde una página y un cursor; el stream que ve el llamante
-//! ([`super::RemoteBackend::list_stream`]) va pidiendo la siguiente a medida
-//! que se consume, para que un directorio de medio millón de entradas no
-//! viaje en un frame ni espere a estar entero para pintar la primera fila.
+//! `fs.list` answers with a page and a cursor; the stream the caller sees
+//! ([`super::RemoteBackend::list_stream`]) keeps asking for the next one as
+//! it is consumed, so a directory of half a million entries does not travel
+//! in a single frame nor wait to be whole before painting the first row.
 
 use norte_proto::methods::{FsListParams, FsListResult};
 use norte_proto::{Entry, Error, VPath, methods};
 
 use super::RemoteBackend;
 
-/// Entradas por página al listar un dir remoto (ADR 0017): acota el frame
-/// de respuesta y el tiempo de UNA llamada.
+/// Entries per page when listing a remote dir (ADR 0017): bounds the
+/// response frame and the time of ONE call.
 pub(super) const LIST_PAGE: u32 = 1000;
 
-/// Estado del `try_unfold` que pagina un listado remoto: el buffer de la
-/// página actual y el cursor de la siguiente.
+/// State of the `try_unfold` that paginates a remote listing: the current
+/// page's buffer and the next cursor.
 pub(super) struct PageState {
     pub(super) backend: RemoteBackend,
     pub(super) dir: VPath,
     pub(super) buffer: std::collections::VecDeque<Entry>,
     pub(super) cursor: Option<String>,
     pub(super) done: bool,
-    /// Ids de attrs del ARRANQUE (#108 bloque 2): el daemon ignora los de
-    /// una continuación (el stream retenido nació con ellos), pero se
-    /// re-mandan igual — si el cursor expira y el cliente reinicia, el
-    /// nuevo listado pide lo mismo.
+    /// Attr ids from the START (#108 block 2): the daemon ignores them on a
+    /// continuation (the retained stream was born with them), but they are
+    /// resent regardless — if the cursor expires and the client restarts,
+    /// the new listing asks for the same ones.
     pub(super) attrs: Vec<String>,
 }
 
-/// Un paso del stream paginado: sirve del buffer o pide la página siguiente.
+/// One step of the paginated stream: serves from the buffer or asks for the
+/// next page.
 pub(super) async fn page_step(mut st: PageState) -> Result<Option<(Entry, PageState)>, Error> {
     loop {
         if let Some(e) = st.buffer.pop_front() {
@@ -51,8 +52,9 @@ pub(super) async fn page_step(mut st: PageState) -> Result<Option<(Entry, PageSt
                 },
             )
             .await?;
-        // Un server roto que devuelve página vacía CON next_cursor haría
-        // un bucle infinito: se corta (precedente del guard de fs.read).
+        // A broken server returning an empty page WITH next_cursor would
+        // cause an infinite loop: it is cut off (precedent of fs.read's
+        // guard).
         if page.entries.is_empty() && page.next_cursor.is_some() {
             return Err(Error::Internal { panic: false });
         }

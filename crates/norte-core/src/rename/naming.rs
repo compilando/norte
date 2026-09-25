@@ -32,14 +32,14 @@ pub(crate) const TEMP_PREFIX: &[u8] = b".norte-rename-";
 /// under `-0` and `-1` swapped. One cycle — the common case, and the one
 /// `the_temporary_does_not_depend_on_the_order_of_the_pairs` pins — always
 /// lands on the same name.
-/// El byte con el que el plegado del directorio entra en los dos digests.
+/// The byte with which the directory's folding enters both digests.
 ///
-/// Los valores de `None` y `Simple` son los que tenía `u8::from(case_sensitive)`
-/// —1 y 0— **a propósito**: un plan calculado antes de que existiera el
-/// plegado completo tiene que seguir dando el mismo `plan_hash`, o el ejecutor
-/// rechazaría un plan que el humano acaba de aprobar con un binario anterior.
-/// `Full` estrena valor, que es lo correcto: un plan planificado sobre un `+F`
-/// NO es el mismo plan.
+/// The `None` and `Simple` values are the ones `u8::from(case_sensitive)`
+/// used to have —1 and 0— **on purpose**: a plan computed before full
+/// folding existed has to keep giving the same `plan_hash`, or the executor
+/// would reject a plan the human just approved with an earlier binary.
+/// `Full` gets a brand-new value, which is correct: a plan planned over a
+/// `+F` is NOT the same plan.
 fn fold_byte(caps: NameCaps) -> u8 {
     match caps.fold {
         FoldMode::Simple => 0,

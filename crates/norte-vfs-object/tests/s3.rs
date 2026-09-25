@@ -1,12 +1,13 @@
-//! Suite S3-ESPECÍFICA contra el servidor in-process s3s-fs (ADR 0016 J):
-//! lo que el harness fs del contrato no ejercita — multipart real,
-//! invisibilidad pre-commit por multipart, conditional write (If-None-Match)
-//! en la ventana de carrera, delimiter de `ListObjectsV2` y prefijos sin
-//! marker. Solo lo que el spike de 7b midió FIEL en s3s-fs; los markers de
-//! dir vacío, las keys largas Y TODO lo que toque dirs va al nightly (`MinIO`
-//! real): el `HeadObject` de s3s-fs sobre un path que es directorio en su fs
-//! devuelve 500 (S3 real: 404), lo que envenena el sondeo file→dir del
-//! provider. La semántica de dirs la cubre el contrato sobre services-fs.
+//! The S3-SPECIFIC suite against the in-process s3s-fs server (ADR 0016 J):
+//! what the contract's fs harness does not exercise — real multipart,
+//! pre-commit invisibility via multipart, conditional write
+//! (If-None-Match) in the race window, `ListObjectsV2`'s delimiter and
+//! marker-less prefixes. Only what the 7b spike measured as FAITHFUL on
+//! s3s-fs; empty-dir markers, long keys AND EVERYTHING that touches dirs
+//! goes to the nightly job (real `MinIO`): s3s-fs's `HeadObject` on a path
+//! that is a directory on its fs returns 500 (real S3: 404), which
+//! poisons the provider's file→dir probe. Dir semantics are covered by the
+//! contract over services-fs.
 #![cfg(target_os = "linux")]
 
 mod common;
@@ -17,9 +18,9 @@ use norte_proto::{Authority, Error, Segment, VPath};
 use norte_vfs::Provider;
 use norte_vfs_object::ObjectProvider;
 
-/// Provider + el Operator crudo (para SEMBRAR el bucket "desde fuera", como
-/// haría otra herramienta: s3s-fs pierde los markers de dir vacío, así que
-/// los padres se pueblan con objetos, no con mkdir).
+/// Provider + the raw Operator (to SEED the bucket "from outside", as
+/// another tool would: s3s-fs loses empty-dir markers, so parents are
+/// populated with objects, not with mkdir).
 async fn fresh() -> (ObjectProvider, norte_vfs_object::Operator) {
     let dir = tempfile::tempdir().expect("tempdir");
     let addr = common::start_s3s(dir.path()).await;
@@ -36,17 +37,17 @@ fn root() -> VPath {
 }
 
 fn child(base: &VPath, name: &[u8]) -> VPath {
-    base.join(Segment::new(name.to_vec()).expect("segmento"))
+    base.join(Segment::new(name.to_vec()).expect("segment"))
 }
 
 use common::{read_all, write_all};
 
-// ---------- copy_native (fase 7c) ----------
+// ---------- copy_native (phase 7c) ----------
 
-/// `copy_native` = `CopyObject` server-side: copia byte-exacta de un nombre
-/// hostil sin leer+reescribir.
+/// `copy_native` = server-side `CopyObject`: byte-exact copy of a hostile
+/// name without reading+rewriting.
 #[tokio::test]
-async fn copy_native_byte_exacto_nombre_hostil() {
+async fn copy_native_byte_exact_hostile_name() {
     let (p, _op) = fresh().await;
     let r = root();
     let src = child(&r, "ñ é+%20.bin".as_bytes());
@@ -54,22 +55,22 @@ async fn copy_native_byte_exacto_nombre_hostil() {
     let dst = child(&r, b"copia.bin");
     match p.copy_native(&src, &dst).await {
         Some(Ok(())) => {}
-        other => panic!("copy_native debía copiar, fue {other:?}"),
+        other => panic!("copy_native should have copied, was {other:?}"),
     }
     assert_eq!(
         read_all(&p, &dst).await.expect("read"),
         b"contenido-servidor"
     );
-    // el origen sigue intacto (copy, no move).
+    // the source stays intact (copy, not move).
     assert_eq!(
         read_all(&p, &src).await.expect("read"),
         b"contenido-servidor"
     );
 }
 
-/// Destino existente → `Conflict`, jamás sobrescritura silenciosa.
+/// Existing destination → `Conflict`, never a silent overwrite.
 #[tokio::test]
-async fn copy_native_destino_existente_es_conflict() {
+async fn copy_native_existing_destination_is_conflict() {
     let (p, _op) = fresh().await;
     let r = root();
     let src = child(&r, b"a.bin");
@@ -78,14 +79,16 @@ async fn copy_native_destino_existente_es_conflict() {
     write_all(&p, &dst, b"NO-pisar").await;
     match p.copy_native(&src, &dst).await {
         Some(Err(Error::Conflict { .. })) => {}
-        other => panic!("copy_native sobre existente debía dar Conflict, fue {other:?}"),
+        other => {
+            panic!("copy_native onto an existing one should have given Conflict, was {other:?}")
+        }
     }
     assert_eq!(read_all(&p, &dst).await.expect("read"), b"NO-pisar");
 }
 
-/// Origen ausente → `NotFound` (rama implementada, sin cobertura del contrato).
+/// Absent source → `NotFound` (implemented branch, no contract coverage).
 #[tokio::test]
-async fn copy_native_origen_ausente_es_not_found() {
+async fn copy_native_source_absent_es_not_found() {
     let (p, _op) = fresh().await;
     let r = root();
     let src = child(&r, b"no-existe.bin");
@@ -93,9 +96,9 @@ async fn copy_native_origen_ausente_es_not_found() {
     assert_eq!(p.copy_native(&src, &dst).await, Some(Err(Error::NotFound)));
 }
 
-/// Destino cuyo padre NO existe → `NotFound` (misma política que `write`).
+/// Destination whose parent does NOT exist → `NotFound` (same policy as `write`).
 #[tokio::test]
-async fn copy_native_padre_del_destino_ausente_es_not_found() {
+async fn copy_native_missing_destination_parent_is_not_found() {
     let (p, _op) = fresh().await;
     let r = root();
     let src = child(&r, b"origen.bin");
@@ -104,13 +107,13 @@ async fn copy_native_padre_del_destino_ausente_es_not_found() {
     assert_eq!(p.copy_native(&src, &dst).await, Some(Err(Error::NotFound)));
 }
 
-// (copy_native de un dir origen → TypeMismatch se prueba en hostile.rs sobre
-// services-fs: s3s-fs devuelve 500 al HEAD de un path-directorio, no 404.)
+// (copy_native of a directory source → TypeMismatch is tested in hostile.rs
+// over services-fs: s3s-fs returns 500 on a directory path's HEAD, not 404.)
 
-/// Multipart real: >8 MiB de chunk → `CreateMultipartUpload` + `UploadPart`
-/// + `CompleteMultipartUpload` por debajo; roundtrip byte-exacto.
+/// Real multipart: >8 MiB chunk → `CreateMultipartUpload` + `UploadPart` +
+/// `CompleteMultipartUpload` underneath; byte-exact roundtrip.
 #[tokio::test]
-async fn multipart_roundtrip_byte_exacto() {
+async fn multipart_roundtrip_byte_exact() {
     let (p, _op) = fresh().await;
     let f = child(&root(), b"grande.bin");
     let big: Vec<u8> = (0..12 * 1024 * 1024u32).map(|i| (i % 251) as u8).collect();
@@ -122,36 +125,36 @@ async fn multipart_roundtrip_byte_exacto() {
     assert_eq!(read_all(&p, &f).await.expect("read"), big);
 }
 
-/// La invisibilidad pre-commit en S3 la da el PROPIO multipart: partes ya
-/// subidas (>8 MiB escritos) y la key sigue sin existir; `abort` =
-/// `AbortMultipartUpload`, sin rastro.
+/// Pre-commit invisibility on S3 is given by the multipart ITSELF: parts
+/// already uploaded (>8 MiB written) and the key still does not exist;
+/// `abort` = `AbortMultipartUpload`, no trace.
 #[tokio::test]
-async fn multipart_invisible_hasta_commit_y_abort_sin_rastro() {
+async fn multipart_invisible_until_commit_and_abort_leaves_no_trace() {
     let (p, _op) = fresh().await;
     let f = child(&root(), b"invisible.bin");
     let mut sink = p.write(&f).await.expect("write");
     sink.write(Bytes::from(vec![7u8; 9 * 1024 * 1024]))
         .await
-        .expect("chunk que fuerza multipart");
+        .expect("chunk that forces multipart");
     assert_eq!(
         p.stat(&f).await.unwrap_err(),
         Error::NotFound,
-        "las partes subidas NO publican la key"
+        "uploaded parts do NOT publish the key"
     );
     sink.abort().await.expect("abort");
     assert_eq!(p.stat(&f).await.unwrap_err(), Error::NotFound);
 }
 
-/// La ventana de carrera del create-new: DOS sinks abiertos sobre la misma
-/// key (ambos pasaron el stat-check); el segundo commit pierde con Conflict —
-/// If-None-Match viaja en el commit (race-free en servidores honestos,
-/// mejor garantía que el TOCTOU de ftp).
+/// The create-new race window: TWO sinks opened over the same key (both
+/// passed the stat-check); the second commit loses with Conflict —
+/// If-None-Match travels in the commit (race-free on honest servers, a
+/// better guarantee than ftp's TOCTOU).
 #[tokio::test]
-async fn conditional_write_cierra_la_ventana_de_carrera() {
+async fn conditional_write_closes_the_race_window() {
     let (p, _op) = fresh().await;
     let f = child(&root(), b"conflicto.txt");
     let mut sink_a = p.write(&f).await.expect("write a");
-    let mut sink_b = p.write(&f).await.expect("write b (key aún no existe)");
+    let mut sink_b = p.write(&f).await.expect("write b (key does not exist yet)");
     sink_a.write(Bytes::from_static(b"gana")).await.expect("a");
     sink_b
         .write(Bytes::from_static(b"pierde"))
@@ -160,28 +163,28 @@ async fn conditional_write_cierra_la_ventana_de_carrera() {
     sink_a.commit().await.expect("commit a");
     match sink_b.commit().await {
         Err(Error::Conflict { .. }) => {}
-        other => panic!("esperaba Conflict del If-None-Match, fue {other:?}"),
+        other => panic!("expected Conflict from If-None-Match, was {other:?}"),
     }
     assert_eq!(read_all(&p, &f).await.expect("read"), b"gana");
 }
 
-/// Y el caso simple: write sobre key existente = Conflict AL ABRIR.
+/// And the simple case: write over an existing key = Conflict ON OPEN.
 #[tokio::test]
-async fn write_sobre_existente_conflict_al_abrir() {
+async fn write_over_existing_conflicts_on_open() {
     let (p, _op) = fresh().await;
     let f = child(&root(), b"ocupado.txt");
     write_all(&p, &f, b"1").await;
     match p.write(&f).await {
         Err(Error::Conflict { .. }) => {}
-        Err(e) => panic!("esperaba Conflict, fue {e:?}"),
-        Ok(_) => panic!("esperaba Conflict, el write abrió"),
+        Err(e) => panic!("expected Conflict, was {e:?}"),
+        Ok(_) => panic!("expected Conflict, the write opened"),
     }
 }
 
-/// Nombres que S3 permite y el harness fs también — byte-exactos por la API
-/// S3 real (espacios INTERIORES, unicode, punto final, `+`, `%20` literal).
+/// Names S3 allows and the fs harness too — byte-exact via the real S3 API
+/// (INTERIOR spaces, unicode, trailing dot, `+`, a literal `%20`).
 #[tokio::test]
-async fn nombres_s3_byte_exactos() {
+async fn names_s3_byte_exactos() {
     let (p, _op) = fresh().await;
     let r = root();
     for name in [
@@ -196,7 +199,7 @@ async fn nombres_s3_byte_exactos() {
         assert_eq!(
             read_all(&p, &f).await.expect("read"),
             name,
-            "roundtrip de {name:?}"
+            "roundtrip of {name:?}"
         );
     }
     let listed: Vec<Vec<u8>> = p
@@ -207,7 +210,7 @@ async fn nombres_s3_byte_exactos() {
         .await
         .expect("stream")
         .into_iter()
-        .map(|e| e.path.file_name().expect("nombre").as_bytes().to_vec())
+        .map(|e| e.path.file_name().expect("name").as_bytes().to_vec())
         .collect();
     for name in [
         "con espacio.txt",
@@ -218,15 +221,15 @@ async fn nombres_s3_byte_exactos() {
     ] {
         assert!(
             listed.contains(&name.as_bytes().to_vec()),
-            "{name:?} byte-exacto en el listado"
+            "{name:?} byte-exact in the listing"
         );
     }
 }
 
-/// pread: rango medio, cola, past-EOF (vacío) y len recortado, contra la
-/// semántica de rangos HTTP real.
+/// pread: mid range, tail, past-EOF (empty) and clamped len, against real
+/// HTTP range semantics.
 #[tokio::test]
-async fn read_range_semantica_pread() {
+async fn read_range_semantic_pread() {
     use norte_proto::ByteRange;
     let (p, _op) = fresh().await;
     let f = child(&root(), b"rango.bin");

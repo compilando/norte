@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
-# Humo de los artefactos de una build de la base, en contenedores limpios,
-# según `matrix.txt` (ADR 0112).
+# Smoke test of a baseline build's artifacts, in clean containers, according
+# to `matrix.txt` (ADR 0112).
 #
 #   scripts/baseline/smoke.sh DIR [artefacto]
 #   scripts/baseline/smoke.sh --one DIR REV ARTEFACTO IMAGEN
 #
-# Cada ejecución deja su log en DIR/smoke/ y, si pasa, una línea
-# `ok artefacto imagen` en DIR/SMOKE. Un fallo no para a los demás: al final
-# se sabe TODO lo que falla. NORTE_SMOKE_JOBS ejecuciones a la vez (4).
+# Each run leaves its log in DIR/smoke/ and, if it passes, an
+# `ok artefacto imagen` line in DIR/SMOKE. A failure does not stop the
+# others: at the end EVERYTHING that fails is known. NORTE_SMOKE_JOBS runs
+# at a time (4).
 set -euo pipefail
 RAIZ="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # shellcheck source=scripts/baseline/lib.sh
@@ -23,7 +24,7 @@ una() {
     tarball | installer) sub=dist ;;
     deb | rpm | appimage) sub=gui ;;
     *)
-      rojo "artefacto desconocido: $artifact"
+      rojo "unknown artifact: $artifact"
       return 2
       ;;
   esac
@@ -38,7 +39,7 @@ una() {
     echo "ok $artifact $image" >>"$dir/SMOKE"
     verde "ok     $artifact $(image_slug "$image")"
   else
-    rojo "FALLA  $artifact $(image_slug "$image") — $log"
+    rojo "FAIL   $artifact $(image_slug "$image") — $log"
     return 1
   fi
 }
@@ -49,15 +50,15 @@ if [ "${1:-}" = "--one" ]; then
   exit
 fi
 
-DIR="$(realpath "${1:?uso: smoke.sh DIR [artefacto]}")"
+DIR="$(realpath "${1:?usage: smoke.sh DIR [artefacto]}")"
 SOLO="${2:-}"
-[ -f "$DIR/MANIFEST" ] || { rojo "no hay $DIR/MANIFEST: ¿es una salida de build.sh?"; exit 1; }
+[ -f "$DIR/MANIFEST" ] || { rojo "no $DIR/MANIFEST: is this a build.sh output?"; exit 1; }
 REV="$(awk '$1 == "revision" { print $2 }' "$DIR/MANIFEST")"
 
 lineas="$(grep -vE '^[[:space:]]*(#|$)' "$MATRIX" | awk -v solo="$SOLO" 'solo == "" || $1 == solo')"
-[ -n "$lineas" ] || { rojo "ninguna línea de la matriz para «$SOLO»"; exit 1; }
+[ -n "$lineas" ] || { rojo "no matrix line for «$SOLO»"; exit 1; }
 [ -n "$SOLO" ] || : >"$DIR/SMOKE"
 
-# `xargs` sale 123 si alguna ejecución falló, y `set -e` lo propaga.
+# `xargs` exits 123 if any run failed, and `set -e` propagates it.
 printf '%s\n' "$lineas" |
   xargs -P "${NORTE_SMOKE_JOBS:-4}" -L 1 "$0" --one "$DIR" "$REV"

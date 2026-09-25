@@ -1,42 +1,45 @@
-//! Cómo un campo entra en un digest, para todo el que produzca un hash del
-//! protocolo (ADR 0051, #174).
+//! How a field enters a digest, for whoever produces a hash of the protocol
+//! (ADR 0051, #174).
 //!
-//! Dos primitivas y un codificador, y las tres existen para que no haya dos
-//! versiones de ellas:
+//! Two primitives and one encoder, and all three exist so there is never two
+//! versions of them:
 //!
-//! * [`feed`] antepone la LONGITUD, así que `"ab"+"c"` y `"a"+"bc"` no pueden
-//!   dar el mismo digest. Sin eso, dos campos adyacentes se leen como uno.
-//! * [`feed_opt`] antepone además un byte de PRESENCIA, así que «no hay campo»
-//!   y «campo vacío» tampoco colisionan — sin él los dos serían `len=0`.
-//! * [`hex_lower`] es la forma en la que un digest sale al wire. En minúscula
-//!   siempre: un segundo codificador es una segunda ocasión de escribir
-//!   mayúsculas, que es el detalle por el que dos escrituras del mismo hash
-//!   comparan distinto.
+//! * [`feed`] prepends the LENGTH, so `"ab"+"c"` and `"a"+"bc"` can never give
+//!   the same digest. Without that, two adjacent fields read as one.
+//! * [`feed_opt`] additionally prepends a PRESENCE byte, so "there is no
+//!   field" and "empty field" do not collide either — without it both would
+//!   be `len=0`.
+//! * [`hex_lower`] is the form a digest takes on the wire. Always lowercase:
+//!   a second encoder is a second chance to write uppercase, which is the
+//!   detail that makes two writes of the same hash compare unequal.
 //!
-//! # Por qué vive AQUÍ y no en `norte-core`
+//! # Why it lives HERE and not in `norte-core`
 //!
-//! `norte-core` tiene su propia copia y **no se mueve** (ADR 0051, opción B).
-//! No es descuido ni pendiente: esa copia es la cadena tamper-evident del
-//! journal (ADR 0023) y el ancla de la exportación de auditoría (ADR 0025), y
-//! cambiar un byte de su framing invalida `verify_chain` en TODOS los
-//! `journal.db` que ya están en disco. Eso es una migración, no un refactor.
+//! `norte-core` has its own copy and **it does not move** (ADR 0051, option
+//! B). That is not an oversight or a leftover: that copy is the journal's
+//! tamper-evident chain (ADR 0023) and the anchor of the audit export
+//! (ADR 0025), and changing one byte of its framing invalidates
+//! `verify_chain` on EVERY `journal.db` already on disk. That is a migration,
+//! not a refactor.
 //!
-//! Lo que sí se cerró es la posibilidad de que las dos DERIVEN en silencio:
-//! `norte-core` tiene un test que alimenta las dos implementaciones con las
-//! mismas entradas —incluido el corpus hostil— y compara los bytes. Un cambio
-//! aquí que se aparte de allí no compila un release: rompe ese test.
+//! What WAS closed off is the possibility of the two silently DRIFTING:
+//! `norte-core` has a test that feeds both implementations the same
+//! inputs — including the hostile corpus — and compares the bytes. A change
+//! here that drifts from there does not compile a release: it breaks that
+//! test.
 //!
-//! `norte-sync` no tiene copia: usa ésta. Su dependencia natural era hacia
-//! arriba (`norte-core` depende de `norte-sync`, no al revés), así que
-//! compartir por `norte-core` no era una opción, y el sitio que sí ve todo el
-//! que habla el protocolo es este crate — el mismo que ya tenía
-//! [`PlanHash::from_digest`](crate::methods::PlanHash::from_digest), que ahora
-//! llama a [`hex_lower`] en vez de llevar su propia copia del bucle.
+//! `norte-sync` has no copy: it uses this one. Its natural dependency was
+//! upward (`norte-core` depends on `norte-sync`, not the other way around),
+//! so sharing through `norte-core` was not an option, and the place that does
+//! see everything that speaks the protocol is this crate — the same one that
+//! already had
+//! [`PlanHash::from_digest`](crate::methods::PlanHash::from_digest), which now
+//! calls [`hex_lower`] instead of carrying its own copy of the loop.
 
 use sha2::{Digest, Sha256};
 
-/// Alimenta un campo con su LONGITUD delante (`u64` little-endian), de forma
-/// que dos campos adyacentes jamás se lean como uno solo.
+/// Feeds a field with its LENGTH in front (`u64` little-endian), so that two
+/// adjacent fields can never be read as a single one.
 ///
 /// ```
 /// use norte_proto::hashing::feed;
@@ -48,28 +51,28 @@ use sha2::{Digest, Sha256};
 /// let mut b = Sha256::new();
 /// feed(&mut b, b"a");
 /// feed(&mut b, b"bc");
-/// assert_ne!(a.finalize(), b.finalize(), "el prefijo de longitud los separa");
+/// assert_ne!(a.finalize(), b.finalize(), "the length prefix keeps them apart");
 /// ```
 pub fn feed(digest: &mut Sha256, bytes: &[u8]) {
     digest.update((bytes.len() as u64).to_le_bytes());
     digest.update(bytes);
 }
 
-/// Campo OPCIONAL, con byte de presencia (`0` = ausente, `1` = presente)
-/// delante del campo enmarcado.
+/// OPTIONAL field, with a presence byte (`0` = absent, `1` = present) in
+/// front of the framed field.
 ///
 /// ```
 /// use norte_proto::hashing::feed_opt;
 /// use sha2::{Digest, Sha256};
 ///
-/// let mut ausente = Sha256::new();
-/// feed_opt(&mut ausente, None);
-/// let mut vacio = Sha256::new();
-/// feed_opt(&mut vacio, Some(b""));
+/// let mut absent = Sha256::new();
+/// feed_opt(&mut absent, None);
+/// let mut empty = Sha256::new();
+/// feed_opt(&mut empty, Some(b""));
 /// assert_ne!(
-///     ausente.finalize(),
-///     vacio.finalize(),
-///     "«no hay campo» no es «campo vacío»"
+///     absent.finalize(),
+///     empty.finalize(),
+///     "\"no field\" is not \"empty field\""
 /// );
 /// ```
 pub fn feed_opt(digest: &mut Sha256, value: Option<&[u8]>) {
@@ -82,7 +85,7 @@ pub fn feed_opt(digest: &mut Sha256, value: Option<&[u8]>) {
     }
 }
 
-/// Hex MINÚSCULA: la forma en la que un digest sale al wire.
+/// LOWERCASE hex: the form a digest takes on the wire.
 ///
 /// ```
 /// use norte_proto::hashing::hex_lower;
@@ -110,13 +113,13 @@ mod tests {
         h.finalize().into()
     }
 
-    /// VECTOR CONGELADO, el gemelo del que `norte-core` tiene sobre su copia.
-    /// Los tests relativos (`assert_ne!` entre dos digests) pasarían igual si
-    /// el prefijo cambiase de `u64` a `u32` o de little a big-endian, y
-    /// cualquiera de esas dos cosas rompe el `plan_hash` de todo plan ya
-    /// emitido.
+    /// FROZEN VECTOR, the twin of the one `norte-core` has over its own copy.
+    /// The relative tests (`assert_ne!` between two digests) would still pass
+    /// even if the prefix changed from `u64` to `u32` or from little to
+    /// big-endian, and either of those two things breaks the `plan_hash` of
+    /// every plan already emitted.
     #[test]
-    fn el_framing_es_un_vector_congelado() {
+    fn the_framing_is_a_frozen_vector() {
         let d = digest(|h| {
             feed(h, b"ab");
             feed_opt(h, None);
@@ -128,13 +131,13 @@ mod tests {
         );
     }
 
-    /// Bytes que no son UTF-8 pasan tal cual: el framing es de BYTES (regla
-    /// dura 1), y un nombre hostil tiene que hashear igual aquí que en el
+    /// Bytes that are not UTF-8 pass through as is: the framing is of BYTES
+    /// (hard rule 1), and a hostile name has to hash the same here as in the
     /// journal.
     #[test]
-    fn los_bytes_no_utf8_no_se_tocan() {
-        let hostil = digest(|h| feed(h, b"caf\xff.txt"));
-        let otro = digest(|h| feed(h, b"caf\xfe.txt"));
-        assert_ne!(hostil, otro);
+    fn non_utf8_bytes_are_left_untouched() {
+        let hostile = digest(|h| feed(h, b"caf\xff.txt"));
+        let other = digest(|h| feed(h, b"caf\xfe.txt"));
+        assert_ne!(hostile, other);
     }
 }

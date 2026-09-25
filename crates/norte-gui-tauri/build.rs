@@ -1,5 +1,5 @@
-//! Genera el contexto de Tauri (config, capacidades, iconos) en tiempo de
-//! compilación. Es lo único que este crate ejecuta en `build.rs`.
+//! Generates the Tauri context (config, capabilities, icons) at build time.
+//! It is the only thing this crate runs in `build.rs`.
 
 fn main() {
     tauri_build::build();

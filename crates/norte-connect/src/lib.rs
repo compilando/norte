@@ -1,10 +1,10 @@
-//! Gestión de conexiones remotas y secretos (ADR 0015).
+//! Management of remote connections and secrets (ADR 0015).
 //!
-//! Lee `connections.toml` (solo referencias), resuelve secretos (env → keyring
-//! → fichero `age`) y establece el transporte: SSH con TOFU de host key
-//! ([`SshConnector`]) y FTP/FTPS con política TLS ([`FtpConnector`]). La
-//! sesión resultante se INYECTA al provider (ADR 0013/0014): los providers
-//! jamás ven un secreto, y los secretos jamás se loguean (regla 10).
+//! Reads `connections.toml` (references only), resolves secrets (env → keyring
+//! → `age` file) and sets up the transport: SSH with host key TOFU
+//! ([`SshConnector`]) and FTP/FTPS with a TLS policy ([`FtpConnector`]). The
+//! resulting session is INJECTED into the provider (ADR 0013/0014): providers
+//! never see a secret, and secrets are never logged (rule 10).
 #![forbid(unsafe_code)]
 
 mod error;
@@ -19,9 +19,9 @@ pub use error::{ConnectError, SecretOrigin};
 pub use ftp::{FtpConnectOutcome, FtpConnector};
 pub use known_hosts::KnownHostsStore;
 pub use s3::S3Connector;
-// Re-exports: los tipos que `SftpProvider::new`/`FtpProvider::new`/
-// `ObjectProvider::new` aceptan (inyección de sesión, ADR 0013/0014/0016); así
-// el core no necesita deps directas de russh-sftp/suppaftp/opendal.
+// Re-exports: the types that `SftpProvider::new`/`FtpProvider::new`/
+// `ObjectProvider::new` accept (session injection, ADR 0013/0014/0016); this
+// way the core does not need direct deps on russh-sftp/suppaftp/opendal.
 pub use opendal::Operator;
 pub use russh_sftp::client::SftpSession;
 pub use secret::{Secret, SecretResolver, env_key, journal_anchor_key};

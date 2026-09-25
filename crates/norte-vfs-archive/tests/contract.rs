@@ -1,6 +1,6 @@
-//! `readonly_provider_contract!` sobre tar Y zip (`TarSmith`/`ZipSmith` +
-//! `MemProvider`): la suite RO completa contra la lógica real del provider
-//! (split de vpath, índice, lectura) sin FS del host ni Docker.
+//! `readonly_provider_contract!` over tar AND zip (`TarSmith`/`ZipSmith` +
+//! `MemProvider`): the full RO suite against the provider's real logic
+//! (vpath split, index, read) with no host FS nor Docker.
 
 mod common;
 
@@ -8,43 +8,47 @@ use norte_proto::VPath;
 use norte_testkit::TarSmith;
 use norte_vfs_archive::ArchiveProvider;
 
-/// Nombres que el DIRECCIONAMIENTO de ADR 0018 no puede representar dentro de
-/// un archivo, y que por tanto no pueden entrar en un contrato que exige
-/// round-trip byte-exacto.
+/// Names ADR 0018's ADDRESSING can't represent inside an archive, and
+/// which therefore can't enter a contract that demands a byte-exact
+/// round trip.
 ///
-/// Hoy es uno: un componente igual a `!`, el marcador que separa el contenedor
-/// del interior. `ArchiveIndex` lo rechaza a propósito y con su razón escrita
-/// (`crates/norte-vfs-archive/src/index.rs`, «componente `!` (marcador ADR
-/// 0018, indireccionable)»), y `VPath::archive_split` corta por el primer
-/// segmento que lo iguale — de modo que una entrada así, admitida, sería
-/// direccionable como OTRA cosa. La elección de diseño es saltarla, o sea
-/// fallar cerrado, y `index::tests::omite_traversal_y_absolutos_y_marcador`
-/// la pinea — así que excluirla AQUÍ no la esconde: la frontera sigue teniendo
-/// un test que la afirma, y este comentario dice dónde.
+/// Today there's one: a component equal to `!`, the marker that
+/// separates the container from the inside. `ArchiveIndex` rejects it on
+/// purpose and with its reason written down
+/// (`crates/norte-vfs-archive/src/index.rs`, "`!` component (ADR 0018
+/// marker, unaddressable)"), and `VPath::archive_split` cuts at the first
+/// segment matching it — so an entry like that, if admitted, would be
+/// addressable as something ELSE. The design choice is to skip it, i.e.
+/// fail closed, and
+/// `index::tests::omits_traversal_absolutes_and_the_marker` pins it down
+/// — so excluding it HERE doesn't hide it: the boundary still has a test
+/// asserting it, and this comment says where.
 ///
-/// Lo destapó la fixture `archive_marker_literal` al entrar en el corpus
-/// (#169): el contrato alimenta el corpus ENTERO, así que una frontera del
-/// direccionamiento aparece aquí como un round-trip que falta. Excluirla por
-/// `id` y no por bytes deja dicho cuál es y por qué, en vez de esconderla.
-fn no_representables_en_archivo(id: &str) -> bool {
+/// The `archive_marker_literal` fixture uncovered this when it entered
+/// the corpus (#169): the contract feeds the WHOLE corpus, so an
+/// addressing boundary shows up here as a missing round trip. Excluding
+/// it by `id` and not by bytes leaves it said which one it is and why,
+/// instead of hiding it.
+fn not_representable_in_an_archive(id: &str) -> bool {
     id == "archive_marker_literal"
 }
 
-/// Nombres del corpus que caben en un header ustar (`TarSmith` no forja GNU
-/// longname): ≤ 100 bytes. Los largos los cubre la suite zip (fase 8e).
+/// Corpus names that fit in a ustar header (`TarSmith` doesn't forge a
+/// GNU longname): ≤ 100 bytes. The long ones are covered by the zip suite
+/// (phase 8e).
 fn hostile_names() -> Vec<Vec<u8>> {
     norte_testkit::corpus::hostile_names()
         .into_iter()
-        .filter(|n| !no_representables_en_archivo(&n.id))
+        .filter(|n| !not_representable_in_an_archive(&n.id))
         .map(|n| n.bytes)
         .filter(|b| {
-            // `hostile/` + nombre debe caber en los 100 bytes del header.
+            // `hostile/` + name has to fit in the header's 100 bytes.
             b.len() <= 100 - "hostile/".len()
         })
         .collect()
 }
 
-/// El árbol canónico que exige la macro RO, forjado como tar.
+/// The canonical tree the RO macro requires, forged as a tar.
 fn canonical_tar() -> Vec<u8> {
     let mut smith = TarSmith::new()
         .dir(b"docs")
@@ -61,9 +65,9 @@ fn canonical_tar() -> Vec<u8> {
 }
 
 fn fresh() -> ArchiveProvider {
-    // La macro evalúa `factory` dentro del test async de tokio; la siembra
-    // del Mem es async pura (sin IO/timers) — el executor de futures basta
-    // y no pisa el runtime de tokio.
+    // The macro evaluates `factory` inside tokio's async test; seeding
+    // the Mem is pure async (no IO/timers) — the futures executor is
+    // enough and doesn't step on tokio's runtime.
     futures::executor::block_on(async {
         let (provider, _) = common::tar_provider(&canonical_tar()).await;
         provider
@@ -83,7 +87,7 @@ norte_vfs::readonly_provider_contract! {
     hostile_names: hostile_names(),
 }
 
-// ---------- tar+gz (#55, ADR 0028): mismo árbol canónico, gzipeado ----------
+// ---------- tar+gz (#55, ADR 0028): same canonical tree, gzipped ----------
 
 fn fresh_targz() -> ArchiveProvider {
     futures::executor::block_on(async {
@@ -106,12 +110,12 @@ norte_vfs::readonly_provider_contract! {
     hostile_names: hostile_names(),
 }
 
-// ---------- zip: corpus hostil COMPLETO (sin el filtro de 100 bytes) ----------
+// ---------- zip: the FULL hostile corpus (without the 100-byte filter) ----------
 
 fn zip_hostile_names() -> Vec<Vec<u8>> {
     norte_testkit::corpus::hostile_names()
         .into_iter()
-        .filter(|n| !no_representables_en_archivo(&n.id))
+        .filter(|n| !not_representable_in_an_archive(&n.id))
         .map(|n| n.bytes)
         .collect()
 }

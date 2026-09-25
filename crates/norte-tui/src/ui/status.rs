@@ -1,5 +1,5 @@
-//! La barra de estado del pane con foco: sus segmentos de marcas y la línea que
-//! los junta.
+//! The focused pane's status bar: its mark segments and the line that joins
+//! them.
 
 use norte_theme::Role;
 use ratatui::Frame;
@@ -11,14 +11,14 @@ use super::text::cells;
 use crate::app::{App, Pane};
 use norte_i18n::{t, ta};
 
-/// El aviso de marcas podadas de la status bar (#103), con su sangrado. Lo
-/// marcado en sí ya no va aquí: es el elemento `marks` de la mitad derecha
-/// (ADR 0132); la PODA es un aviso y se queda en la izquierda.
+/// The status bar's pruned-marks notice (#103), with its indent. The
+/// marking itself no longer lives here: it is the `marks` element of the
+/// right half (ADR 0132); PRUNING is a notice and stays on the left.
 pub(crate) fn pruned_segment(pane: &Pane) -> String {
-    // La frase la REDACTA el crate compartido: la ventana pone la misma en
-    // su cabecera, y dos redacciones del mismo hecho es de donde salió media
-    // auditoría de paridad (ADR 0077). Aquí queda el espaciado, que sí es de
-    // esta barra.
+    // The sentence is DRAFTED by the shared crate: the window puts the same
+    // one in its header, and two draftings of the same fact is where half
+    // of the parity audit came from (ADR 0077). What is left here is the
+    // spacing, which does belong to this bar.
     let s = norte_frontend::notes::pruned_marks(pane.pruned_marks(), norte_i18n::active());
     if s.is_empty() { s } else { format!("  {s}") }
 }
@@ -31,21 +31,21 @@ pub(crate) fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
     );
 }
 
-/// Un elemento pulsable de la mitad derecha (ADR 0132): dónde cae y qué
-/// comando corre, por el mismo despacho que su atajo.
+/// A clickable item of the right half (ADR 0132): where it lands and what
+/// command runs, through the same dispatch as its shortcut.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StatusItemZone {
-    /// Fila.
+    /// Row.
     pub row: u16,
-    /// Primera columna, inclusive.
+    /// First column, inclusive.
     pub x0: u16,
-    /// Última columna, inclusive.
+    /// Last column, inclusive.
     pub x1: u16,
-    /// El comando, del catálogo.
+    /// The command, from the catalogue.
     pub command: &'static str,
 }
 
-/// Las zonas de los elementos que se pulsan, para el frame `area`.
+/// The zones of the clickable items, for frame `area`.
 #[must_use]
 pub fn status_item_zones(app: &App, area: Rect) -> Vec<StatusItemZone> {
     let Some(status) = status_rect(app, area) else {
@@ -63,7 +63,7 @@ pub fn status_item_zones(app: &App, area: Rect) -> Vec<StatusItemZone> {
         .collect()
 }
 
-/// Los hechos que la mitad derecha necesita, del pane con foco.
+/// The facts the right half needs, from the focused pane.
 fn status_input(app: &App) -> norte_frontend::statusbar::StatusInput {
     norte_frontend::statusbar::StatusInput::from_pane(
         app.focused().state(),
@@ -72,12 +72,12 @@ fn status_input(app: &App) -> norte_frontend::statusbar::StatusInput {
     )
 }
 
-/// Celdas entre dos elementos seguidos.
+/// Cells between two adjacent items.
 const SEP: usize = 2;
 
-/// El rectángulo de la barra de estado del frame `area`, o `None` con un
-/// overlay delante: entonces no es pulsable, por la misma regla que la
-/// barra de paneles (`panel_bar_visible`).
+/// The status bar's rectangle for frame `area`, or `None` with an overlay in
+/// front: then it is not clickable, by the same rule as the panel bar
+/// (`panel_bar_visible`).
 fn status_rect(app: &App, area: Rect) -> Option<Rect> {
     use super::geometry::{body_rect, chrome_body, resolved_frame, slot_rect};
     if crate::mouse::overlay_open(app) || app.menu.is_some() {
@@ -93,42 +93,44 @@ fn status_rect(app: &App, area: Rect) -> Option<Rect> {
     }))
 }
 
-/// Lo que compone la barra: el texto, y las columnas de lo que se pulsa.
+/// What composes the bar: the text, and the columns of what is clickable.
 struct Composed {
     text: String,
     session: Option<(u16, u16)>,
-    /// Los elementos pulsables de la derecha: columnas y comando.
+    /// The clickable items on the right: columns and command.
     items: Vec<(u16, u16, &'static str)>,
 }
 
-/// Dónde cae el indicador de sesión suelta en el frame, si se está pintando.
+/// Where the loose-session indicator lands in the frame, if it is being
+/// painted.
 ///
-/// Es la zona pulsable de la barra de estado: un clic encima abre la ayuda
-/// en la página que explica qué significa. Sale de la MISMA composición que
-/// pinta la línea (`compose`), así que solo existe cuando el indicador está
-/// de verdad en pantalla — con un mensaje, una espera o una búsqueda viva
-/// delante, la línea es otra y no hay nada que pulsar.
+/// This is the status bar's clickable zone: a click on it opens help at the
+/// page that explains what it means. It comes from the SAME composition
+/// that paints the line (`compose`), so it only exists when the indicator
+/// is really on screen — with a message, a wait or a live search in front,
+/// the line is a different one and there is nothing to click.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SessionZone {
-    /// Fila.
+    /// Row.
     pub row: u16,
-    /// Primera columna, inclusive.
+    /// First column, inclusive.
     pub x0: u16,
-    /// Última columna, inclusive.
+    /// Last column, inclusive.
     pub x1: u16,
 }
 
-/// La zona del indicador de sesión para el frame `area`, si se pinta.
+/// The session indicator's zone for frame `area`, if it is painted.
 ///
-/// El rectángulo de la barra sale del mismo reparto que `draw_body`, y por
-/// el mismo camino: un clic resuelto contra otra geometría caería en la
-/// celda de al lado.
+/// The bar's rectangle comes from the same layout as `draw_body`, and by the
+/// same path: a click resolved against different geometry would land on the
+/// cell next door.
 #[must_use]
 pub fn session_zone(app: &App, area: Rect) -> Option<SessionZone> {
-    // Con un overlay delante no hay zona (`status_rect`): el visor pinta su
-    // propio pie y no esta barra, y con la ayuda o un modal encima la barra
-    // no es pulsable. `handle_at` ya corta antes por `overlay_open`, pero
-    // eso es un orden de comprobaciones, no una garantía de esta función.
+    // With an overlay in front there is no zone (`status_rect`): the viewer
+    // paints its own footer and not this bar, and with help or a modal on
+    // top the bar is not clickable. `handle_at` already short-circuits
+    // earlier via `overlay_open`, but that is an order of checks, not a
+    // guarantee of this function.
     let status = status_rect(app, area)?;
     compose(app, status).session.map(|(x0, x1)| SessionZone {
         row: status.y,
@@ -137,34 +139,34 @@ pub fn session_zone(app: &App, area: Rect) -> Option<SessionZone> {
     })
 }
 
-/// La línea de estado, y las columnas de lo que se pulsa en ella.
+/// The status line, and the columns of what is clickable on it.
 ///
-/// Dos mitades (ADR 0132). La DERECHA son los elementos de
-/// `[ui] status_items` que caben en la mitad del ancho, descartados por
-/// prioridad (`statusbar::fit`); la IZQUIERDA es la cadena de siempre
-/// —espera, arrastre, mensaje, búsqueda, ruta con sus avisos— sobre el
-/// ancho que quede, y es la que cede: recortada, nunca empujada fuera.
+/// Two halves (ADR 0132). The RIGHT one is the `[ui] status_items` elements
+/// that fit in half the width, dropped by priority (`statusbar::fit`); the
+/// LEFT one is the usual string — wait, drag, message, search, path with its
+/// notices — over whatever width is left, and it is the one that yields:
+/// truncated, never pushed out.
 fn compose(app: &App, area: Rect) -> Composed {
-    // Los de los plugins primero, a la izquierda de la mitad derecha (ADR
-    // 0137); son los primeros en ceder, así que el orden no les da sitio.
-    let mut lista = norte_frontend::statusbar::plugin_items(
+    // The plugins' first, to the left of the right half (ADR 0137); they
+    // are the first to yield, so order gives them no room.
+    let mut list = norte_frontend::statusbar::plugin_items(
         app.focused().state(),
         &app.status_plugins,
         norte_i18n::active(),
     );
-    lista.extend(norte_frontend::statusbar::items(
+    list.extend(norte_frontend::statusbar::items(
         &status_input(app),
         app.chrome.status_items(),
         norte_i18n::active(),
     ));
-    let ancho = usize::from(area.width);
-    // Un aviso persistente (sesión suelta, journal) tiene que caber ENTERO
-    // en la izquierda: la derecha es información y cede antes que un aviso.
-    // Lo MÍNIMO que `compose_line` pinta con él es ` {aviso}{secuencia}`:
-    // el margen, el aviso entero y lo tecleado a medias, que tampoco se
-    // puede perder (ADR 0006). Y el presupuesto de la derecha descuenta sus
-    // propios dos márgenes, que `fit` no cuenta.
-    let reserva_aviso = app.persistent_banner().map_or(0, |w| {
+    let width = usize::from(area.width);
+    // A persistent notice (loose session, journal) has to fit WHOLE on the
+    // left: the right side is information and yields before a notice does.
+    // The MINIMUM `compose_line` paints with it is ` {notice}{sequence}`:
+    // the margin, the whole notice and whatever was typed halfway, which
+    // also cannot be lost (ADR 0006). And the right side's budget deducts
+    // its own two margins, which `fit` does not count.
+    let notice_reserve = app.persistent_banner().map_or(0, |w| {
         let seq = if app.pending.is_empty() {
             0
         } else {
@@ -172,39 +174,38 @@ fn compose(app: &App, area: Rect) -> Composed {
         };
         1 + cells(&w) + seq
     });
-    let presupuesto = (ancho / 2)
-        .min(ancho.saturating_sub(reserva_aviso))
+    let budget = (width / 2)
+        .min(width.saturating_sub(notice_reserve))
         .saturating_sub(2);
-    let elegidos = norte_frontend::statusbar::fit(&lista, presupuesto, SEP);
-    let derecha: Vec<&norte_frontend::statusbar::StatusItemView> = elegidos.iter().collect();
-    if derecha.is_empty() {
+    let chosen = norte_frontend::statusbar::fit(&list, budget, SEP);
+    let right: Vec<&norte_frontend::statusbar::StatusItemView> = chosen.iter().collect();
+    if right.is_empty() {
         return compose_line(app, area);
     }
-    // Un espacio delante del primero y uno detrás del último, como los
-    // márgenes de la izquierda.
-    let ancho_der =
-        derecha.iter().map(|v| v.cells()).sum::<usize>() + SEP * (derecha.len() - 1) + 2;
-    let ancho_izq = ancho.saturating_sub(ancho_der);
-    let izquierda = Rect {
-        width: u16::try_from(ancho_izq).unwrap_or(u16::MAX),
+    // A space in front of the first one and one behind the last, like the
+    // left side's margins.
+    let right_w = right.iter().map(|v| v.cells()).sum::<usize>() + SEP * (right.len() - 1) + 2;
+    let left_w = width.saturating_sub(right_w);
+    let left = Rect {
+        width: u16::try_from(left_w).unwrap_or(u16::MAX),
         ..area
     };
-    let mut c = compose_line(app, izquierda);
-    let texto = super::text::take_width(&c.text, ancho_izq);
-    let pad = ancho_izq.saturating_sub(cells(&texto));
-    let mut linea = format!("{texto}{} ", " ".repeat(pad));
-    let mut x = ancho_izq + 1;
-    for (n, v) in derecha.iter().enumerate() {
+    let mut c = compose_line(app, left);
+    let text = super::text::take_width(&c.text, left_w);
+    let pad = left_w.saturating_sub(cells(&text));
+    let mut line = format!("{text}{} ", " ".repeat(pad));
+    let mut x = left_w + 1;
+    for (n, v) in right.iter().enumerate() {
         if n > 0 {
-            linea.push_str(&" ".repeat(SEP));
+            line.push_str(&" ".repeat(SEP));
             x += SEP;
         }
-        linea.push_str(&v.text);
-        // La barra ligera (ADR 0146) va detrás del texto, separada por un
-        // espacio; `cells()` ya la cuenta en el reparto.
+        line.push_str(&v.text);
+        // The light bar (ADR 0146) goes behind the text, separated by a
+        // space; `cells()` already counts it in the layout.
         if v.bar {
-            linea.push(' ');
-            linea.push_str(&norte_frontend::task_strip::bar_glyphs(
+            line.push(' ');
+            line.push_str(&norte_frontend::task_strip::bar_glyphs(
                 v.progress.and_then(|p| p.percent),
                 app.now_ms(),
             ));
@@ -217,70 +218,73 @@ fn compose(app: &App, area: Rect) -> Composed {
         }
         x += w;
     }
-    linea.push(' ');
-    c.text = linea;
+    line.push(' ');
+    c.text = line;
     c
 }
 
-/// Una ruta de menos de tantas celdas no dice dónde estás: con un aviso
-/// persistente que la dejara más corta, el aviso se queda la línea entera,
-/// como hacía siempre.
-const RUTA_LEGIBLE: usize = 12;
+/// A path shorter than this many cells does not say where you are: with a
+/// persistent notice that shortened it further, the notice keeps the whole
+/// line, as it always did.
+const LEGIBLE_PATH: usize = 12;
 
-/// Las columnas del indicador de sesión cuando el aviso persistente acaba
-/// en la celda `fin` (exclusiva, relativa a la barra): el indicador cierra
-/// el aviso (`persistent_banner`), así que son sus últimas celdas. `None`
-/// si no hay indicador o no cabe ENTERO: media palabra no es un indicador.
-fn zona_de_sesion(app: &App, area: Rect, fin: usize) -> Option<(u16, u16)> {
+/// The session indicator's columns when the persistent notice ends at cell
+/// `end` (exclusive, relative to the bar): the indicator closes the notice
+/// (`persistent_banner`), so it is its last cells. `None` if there is no
+/// indicator or it does not fit WHOLE: half a word is not an indicator.
+fn session_zone_at(app: &App, area: Rect, end: usize) -> Option<(u16, u16)> {
     let badge = app.session_banner()?;
-    let ancho = cells(&badge);
+    let width = cells(&badge);
     let x0 = area
         .x
-        .saturating_add(u16::try_from(fin.saturating_sub(ancho)).unwrap_or(u16::MAX));
+        .saturating_add(u16::try_from(end.saturating_sub(width)).unwrap_or(u16::MAX));
     let x1 = area
         .x
-        .saturating_add(u16::try_from(fin.saturating_sub(1)).unwrap_or(u16::MAX));
+        .saturating_add(u16::try_from(end.saturating_sub(1)).unwrap_or(u16::MAX));
     (x1 < area.x.saturating_add(area.width)).then_some((x0, x1))
 }
 
-/// La línea de estado sin la insignia, y las columnas del indicador de
-/// sesión si va en ella.
+/// The status line without the badge, and the session indicator's columns
+/// if it is in it.
 fn compose_line(app: &App, area: Rect) -> Composed {
     let mut session = None;
     let pane = app.focused();
-    // La posición y lo marcado son elementos de la mitad derecha desde el
-    // ADR 0132 (`position`, `marks`); aquí quedan la ruta y los AVISOS.
+    // Position and marking have been right-half elements since ADR 0132
+    // (`position`, `marks`); what is left here are the path and the
+    // NOTICES.
     let pruned = pruned_segment(pane);
     let (dir_text, dir_hostile) =
         norte_frontend::path_display_with(pane.dir(), pane.name_encoding());
     let mark = if dir_hostile { HOSTILE_BADGE } else { "" };
-    // Sin chuleta de teclas: mentiría según el preset. La secuencia pendiente
-    // SÍ se pinta (ADR 0006), y desde K3a el panel which-key
-    // ([`draw_which_key`]) pinta encima de esta barra lo que puede SEGUIR a
-    // esa secuencia. Este segmento no desaparece con él: es la única línea que
-    // sobrevive a un panel recortado en un terminal bajo.
+    // No key cheat sheet: it would lie depending on the preset. The pending
+    // sequence IS painted (ADR 0006), and since K3a the which-key panel
+    // ([`draw_which_key`]) paints over this bar what can FOLLOW that
+    // sequence. This segment does not disappear with it: it is the only
+    // line that survives a panel truncated on a short terminal.
     let seq = if app.pending.is_empty() {
         String::new()
     } else {
         format!("  [{} …]", app.pending)
     };
-    // Un mensaje pendiente (error por categoría, resultado) desplaza al
-    // resto de la barra hasta la siguiente tecla (issue #20). Sin mensaje: un
-    // pane de búsqueda viva (liveSearch T6) pinta `search-status-*` (los hits
-    // = `entries.len()`); si no, el hook Lua de statusbar (M4, ya saneado por
-    // el host) sustituye la línea default del pane con foco.
-    // Un arrastre EN VUELO manda sobre todo lo demás mientras dure. Es lo
-    // único de esta línea que anuncia una MUTACIÓN a punto de proponerse, y
-    // el gesto pide la decisión (copiar o mover) ANTES de que el botón suba:
-    // sin este renglón el usuario suelta a ciegas. Dura lo que dura el botón
-    // pulsado y no consume nada — el mensaje que tape sigue ahí al soltar.
-    // Una espera EN CURSO manda sobre todo lo demás: mientras dura, cualquier
-    // otra cosa de esta línea —el mensaje de la operación anterior, el
-    // contador— describe un estado que ya no es el actual, y el lector la está
-    // mirando justo porque quiere saber si el programa sigue vivo. Se va sola
-    // al acabar la espera (`App::busy` lo limpia quien esperó), así que no
-    // consume ni tapa nada de forma permanente. Antes del umbral no entra
-    // aquí: `visible()` decide por todas las superficies.
+    // A pending message (error by category, result) displaces the rest of
+    // the bar until the next key (issue #20). With no message: a pane with
+    // a live search (liveSearch T6) paints `search-status-*` (hits =
+    // `entries.len()`); otherwise, the statusbar Lua hook (M4, already
+    // sanitized by the host) replaces the focused pane's default line.
+    // A drag IN FLIGHT overrides everything else while it lasts. It is the
+    // only thing on this line that announces a MUTATION about to be
+    // proposed, and the gesture needs the decision (copy or move) BEFORE
+    // the button comes up: without this row the user drops blind. It lasts
+    // as long as the button is held and consumes nothing — whatever
+    // message it covers is still there once released.
+    // A wait IN PROGRESS overrides everything else: while it lasts, anything
+    // else on this line — the previous operation's message, the counter —
+    // describes a state that is no longer current, and the reader is
+    // looking at it precisely because they want to know if the program is
+    // still alive. It leaves on its own once the wait ends (`App::busy` is
+    // cleared by whoever waited), so it does not consume or cover anything
+    // permanently. Before the threshold it does not enter here: `visible()`
+    // decides for every surface.
     let text = if let Some(busy) = app.busy.as_ref().filter(|b| b.visible()) {
         format!(
             " {} {}  {}",
@@ -294,10 +298,10 @@ fn compose_line(app: &App, area: Rect) -> Composed {
         format!(" {msg}")
     } else if pane.virtual_search {
         use crate::app::SearchState;
-        // `Failed` es PERSISTENTE (review MINOR-2): tras limpiarse
-        // `app.message`, el pane sigue pintando `search-status-failed` con la
-        // categoría del error (guardada en `search_error`) — un fallo jamás
-        // degrada a «done» en la siguiente tecla.
+        // `Failed` is PERSISTENT (review MINOR-2): after `app.message` is
+        // cleared, the pane keeps painting `search-status-failed` with the
+        // error's category (kept in `search_error`) — a failure never
+        // degrades to "done" on the next key.
         if pane.search_state == SearchState::Failed {
             format!(
                 " {}{seq}",
@@ -311,12 +315,13 @@ fn compose_line(app: &App, area: Rect) -> Composed {
                 SearchState::Running => "search-status-running",
                 SearchState::Truncated => "search-status-truncated",
                 SearchState::Cancelled => "search-status-cancelled",
-                // `Failed` ya se trató arriba; `Done` es el resto.
+                // `Failed` was already handled above; `Done` is the rest.
                 SearchState::Done | SearchState::Failed => "search-status-done",
             };
-            // #81: contexto del match de contenido del hit BAJO EL CURSOR
-            // (línea + preview — saneado en origen por el core; se pasa por
-            // detail_for_bar como cinturón, mismo criterio que los errores).
+            // #81: context for the content match of the hit UNDER THE
+            // CURSOR (line + preview — sanitized at the source by the core;
+            // passed through detail_for_bar as a belt, same criterion as
+            // errors).
             let hit = pane
                 .entries()
                 .get(pane.cursor())
@@ -336,78 +341,81 @@ fn compose_line(app: &App, area: Rect) -> Composed {
     } else if let Some(lua) = &app.lua_status {
         format!(" {lua}{seq}")
     } else {
-        // #44: sesión remota degradada a texto plano, y #177: sesión que muta
-        // sin quedar registrada en el journal. PERSISTENTES (como
-        // `search-status-failed`): sobreviven a las teclas — sin `message`, sin
-        // búsqueda viva y sin hook Lua siguen avisando en cada frame.
-        // H3d: la frase se COMPONE aquí desde el valor estructurado (una
-        // conexión: la nombra; varias: cuántas), en vez de guardarse ya escrita.
+        // #44: remote session degraded to plain text, and #177: a session
+        // that mutates without being recorded in the journal. PERSISTENT
+        // (like `search-status-failed`): they survive keystrokes — with no
+        // `message`, no live search and no Lua hook they keep warning every
+        // frame. H3d: the sentence is COMPOSED here from the structured
+        // value (one connection: names it; several: how many), instead of
+        // being stored already written.
         //
-        // Desde el 2026-09-11 el aviso NO sustituye la línea: va a la DERECHA
-        // de la ruta y el contador, que siguen ahí. Sustituirla dejaba sin
-        // «fichero x/x» a quien tenía una sesión suelta todo el día. Solo si
-        // cabe con una ruta legible; si no, el aviso solo, como antes.
+        // Since 2026-09-11 the notice does NOT replace the line: it goes to
+        // the RIGHT of the path and the counter, which stay put. Replacing
+        // it left whoever had a loose session all day without "file x/x."
+        // Only if it fits with a legible path; otherwise, the notice alone,
+        // as before.
         let warn = app.persistent_banner();
-        let reserva = warn.as_ref().map_or(0, |w| cells(w) + 2);
-        // #93: el contenedor omitió entradas de su índice — el listado que
-        // se ve NO es todo lo que el archivo contiene. Persistente mientras
-        // el pane esté dentro (paralelo del badge hostil, jamás silencioso).
-        let sangrado = |s: String| if s.is_empty() { s } else { format!("  {s}") };
+        let reserve = warn.as_ref().map_or(0, |w| cells(w) + 2);
+        // #93: the container skipped entries from its index — the listing
+        // shown is NOT everything the archive contains. Persistent while
+        // the pane stays inside it (parallel to the hostile badge, never
+        // silent).
+        let indented = |s: String| if s.is_empty() { s } else { format!("  {s}") };
         let lang = norte_i18n::active();
-        let omitidas = sangrado(norte_frontend::notes::skipped(pane.skipped(), lang));
-        // #57: modo de reinterpretación activo — PERSISTENTE mientras dure
-        // (los nombres pintados no son los bytes; el usuario debe saberlo
-        // en todo momento, no solo en el mensaje del toggle).
-        let nombres = sangrado(norte_frontend::notes::names_encoding(
+        let skipped = indented(norte_frontend::notes::skipped(pane.skipped(), lang));
+        // #57: active reinterpretation mode — PERSISTENT while it lasts
+        // (the painted names are not the bytes; the user must know it at
+        // all times, not just in the toggle's message).
+        let names = indented(norte_frontend::notes::names_encoding(
             pane.name_encoding(),
             lang,
         ));
-        // #107: ocultación activa con entradas apartadas — misma disciplina
-        // que `omitidas`: un listado que enseña menos de lo que hay jamás
-        // es silencioso. Se calla con 0 apartadas (dir sin dotfiles) y con
-        // la ocultación apagada. Va DETRÁS de `pruned` en la línea (#107
-        // review MINOR-3): ocultar con marcas produce ambos, y el aviso de
-        // poda es el que no puede recortarse primero.
-        let ocultas = sangrado(norte_frontend::notes::hidden(pane.hidden_count(), lang));
-        // Review MAJOR M3: los AVISOS (`omitidas` — listado incompleto,
-        // "jamás silencioso" — y `nombres` — el badge de reinterpretación,
-        // "el usuario debe saberlo en todo momento") van ANTES que el
-        // contador informativo de marcas. La línea no tiene presupuesto de
-        // ancho y ratatui recorta la cola: con `marked`/`pruned` primero (25+
-        // celdas fácil) un path largo a 80 columnas empujaba el badge de
-        // encoding fuera del recorte. Deuda real (#103): un presupuesto de
-        // ancho que elipsise `dir_text` para que NINGÚN campo posterior se
-        // recorte jamás, en vez de solo reordenar por prioridad.
-        // La RUTA cede, y ceden ella sola: todo lo demás de esta línea es un
-        // aviso o un contador, y recortar la cola —que es lo que hacía
-        // ratatui— se llevaba lo que decía cuántas entradas hay o que el
-        // listado está incompleto. Con una ruta larga, lo que se veía del
-        // `pos/total` era un dígito suelto.
+        // #107: active hiding with entries set aside — same discipline as
+        // `skipped`: a listing that shows less than there is is never
+        // silent. It stays quiet with 0 set aside (a dir with no dotfiles)
+        // and with hiding turned off. It goes AFTER `pruned` in the line
+        // (#107 review MINOR-3): hiding with marks produces both, and the
+        // pruning notice is the one that cannot be truncated first.
+        let hidden = indented(norte_frontend::notes::hidden(pane.hidden_count(), lang));
+        // Review MAJOR M3: the NOTICES (`skipped` — incomplete listing,
+        // "never silent" — and `names` — the reinterpretation badge, "the
+        // user must know it at all times") go BEFORE the informational
+        // marks counter. The line has no width budget and ratatui
+        // truncates the tail: with `marked`/`pruned` first (25+ cells,
+        // easily) a long path at 80 columns pushed the encoding badge out
+        // of the cut. Real debt (#103): a width budget that ellipsizes
+        // `dir_text` so that NO later field is ever truncated, instead of
+        // just reordering by priority.
+        // The PATH yields, and it alone yields: everything else on this
+        // line is a notice or a counter, and truncating the tail — which
+        // is what ratatui used to do — took away whatever said how many
+        // entries there are or that the listing is incomplete. With a long
+        // path, what was seen of `pos/total` was a lone digit.
         //
-        // `middle_ellipsis` recorta por el MEDIO: el principio de una ruta
-        // dice dónde estás y el final dice qué carpeta es, y perder cualquiera
-        // de los dos extremos es perder la mitad útil.
-        let tail = format!("{omitidas}{nombres}{pruned}{ocultas}{seq}");
-        let ancho = usize::from(area.width);
-        let room = ancho
+        // `middle_ellipsis` truncates through the MIDDLE: the start of a
+        // path says where you are and the end says which folder it is, and
+        // losing either end is losing half the useful information.
+        let tail = format!("{skipped}{names}{pruned}{hidden}{seq}");
+        let width = usize::from(area.width);
+        let room = width
             .saturating_sub(cells(&tail))
             .saturating_sub(cells(mark))
-            .saturating_sub(1) // el margen izquierdo
-            .saturating_sub(reserva);
+            .saturating_sub(1) // the left margin
+            .saturating_sub(reserve);
         match warn {
-            Some(warn) if reserva > 0 && room < RUTA_LEGIBLE => {
-                // El de la sesión cierra la línea (`persistent_banner`), así
-                // que sus columnas son las últimas del aviso: es lo que el
-                // ratón pulsa. Solo si cabe ENTERO: media palabra no es un
-                // indicador.
-                session = zona_de_sesion(app, area, 1 + cells(&warn));
+            Some(warn) if reserve > 0 && room < LEGIBLE_PATH => {
+                // The session one closes the line (`persistent_banner`), so
+                // its columns are the notice's last ones: it is what the
+                // mouse clicks. Only if it fits WHOLE: half a word is not
+                // an indicator.
+                session = session_zone_at(app, area, 1 + cells(&warn));
                 format!(" {warn}{seq}")
             }
             Some(warn) => {
                 let dir_text = norte_frontend::middle_ellipsis(&dir_text, room);
                 let base = format!(" {mark}{dir_text}{tail}");
-                let pad = ancho.saturating_sub(cells(&base) + cells(&warn) + 1);
-                session = zona_de_sesion(app, area, cells(&base) + pad + cells(&warn));
+                let pad = width.saturating_sub(cells(&base) + cells(&warn) + 1);
+                session = session_zone_at(app, area, cells(&base) + pad + cells(&warn));
                 format!("{base}{}{warn} ", " ".repeat(pad))
             }
             None => {
@@ -426,183 +434,190 @@ fn compose_line(app: &App, area: Rect) -> Composed {
 #[cfg(test)]
 mod tests {
     use super::draw_status;
-    use crate::app::testutil::app_dos_panes;
+    use crate::app::testutil::app_two_panes;
     use norte_frontend::busy::{Busy, BusyKind, THRESHOLD};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
-    fn barra(app: &crate::app::App) -> String {
-        let mut terminal = Terminal::new(TestBackend::new(70, 1)).expect("terminal de test");
+    fn bar(app: &crate::app::App) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(70, 1)).expect("test terminal");
         terminal
             .draw(|f| draw_status(f, f.area(), app))
             .expect("draw");
         terminal.backend().to_string()
     }
 
-    /// #323: mientras se espera, la barra dice QUÉ se espera y que Esc cancela,
-    /// y eso GANA al mensaje anterior.
+    /// #323: while waiting, the bar says WHAT is being waited for and that
+    /// Esc cancels, and that WINS over the previous message.
     ///
-    /// El orden es la mitad del arreglo. El mensaje de la operación de antes
-    /// describe un estado que ya no es el actual, y el lector está mirando esa
-    /// línea justo porque quiere saber si el programa sigue vivo: dejar el
-    /// texto viejo encima contesta a otra pregunta.
+    /// The order is half the fix. The previous operation's message
+    /// describes a state that is no longer current, and the reader is
+    /// looking at that line precisely because they want to know if the
+    /// program is still alive: leaving the old text on top answers a
+    /// different question.
     #[test]
-    fn la_espera_manda_sobre_el_mensaje_anterior() {
-        let mut app = app_dos_panes();
-        app.message = Some("copiado 1 fichero".to_string());
-        assert!(barra(&app).contains("copiado 1 fichero"));
+    fn waiting_overrides_the_previous_message() {
+        let mut app = app_two_panes();
+        app.message = Some("copied 1 file".to_string());
+        assert!(bar(&app).contains("copied 1 file"));
 
         let mut busy = Busy::new(BusyKind::Connecting, None, Some(0));
         busy.elapsed = THRESHOLD;
         let frame = busy.frame();
         app.busy = Some(busy);
-        let linea = barra(&app);
-        assert!(linea.contains(frame), "sin spinner: {linea}");
+        let line = bar(&app);
+        assert!(line.contains(frame), "no spinner: {line}");
         assert!(
-            !linea.contains("copiado 1 fichero"),
-            "el mensaje viejo tapa la espera: {linea}"
+            !line.contains("copied 1 file"),
+            "the old message covers the wait: {line}"
         );
     }
 
-    /// Los elementos (ADR 0132) van a la DERECHA, en el orden configurado,
-    /// y el que se pulsa dice dónde cae y qué corre. Se contrasta contra el
-    /// texto pintado.
+    /// The items (ADR 0132) go on the RIGHT, in the configured order, and
+    /// the one that is clicked says where it lands and what runs.
+    /// Contrasted against the painted text.
     #[test]
-    fn los_elementos_van_a_la_derecha_y_se_pulsan() {
-        let mut app = app_dos_panes();
+    fn the_items_go_right_and_are_clickable() {
+        let mut app = app_two_panes();
         app.notices_unread = 3;
         app.chrome.status_items =
-            Some(norte_config::StatusItems::parse(&["position", "notices"]).expect("válida"));
+            Some(norte_config::StatusItems::parse(&["position", "notices"]).expect("valid"));
         let area = ratatui::layout::Rect::new(0, 0, 70, 1);
         let c = super::compose(&app, area);
-        let linea = barra(&app);
+        let line = bar(&app);
         assert!(c.text.trim_end().ends_with("!3"), "{:?}", c.text);
-        assert!(c.text.contains('/'), "la posición: {:?}", c.text);
-        assert_eq!(super::cells(&c.text), 70, "la línea llena el ancho");
+        assert!(c.text.contains('/'), "the position: {:?}", c.text);
+        assert_eq!(super::cells(&c.text), 70, "the line fills the width");
         let (x0, x1, cmd) = c.items[0];
         assert_eq!(cmd, "layout.log");
-        let pintado: String = linea
+        let painted: String = line
             .chars()
             .skip(1 + usize::from(x0))
             .take(usize::from(x1 - x0) + 1)
             .collect();
-        assert_eq!(pintado, "!3", "{linea}");
+        assert_eq!(painted, "!3", "{line}");
 
-        // Sin elementos, la línea es la de siempre y no hay nada que pulsar.
+        // With no items, the line is the usual one and there is nothing to
+        // click.
         app.chrome.status_items = Some(norte_config::StatusItems::parse::<&str>(&[]).unwrap());
         assert!(super::compose(&app, area).items.is_empty());
     }
 
-    /// ADR 0137: el elemento de un plugin es el valor de su columna para la
-    /// entrada bajo el cursor, va a la izquierda de la mitad derecha y no se
-    /// pulsa.
+    /// ADR 0137: a plugin's item is its column's value for the entry under
+    /// the cursor, goes to the left of the right half and is not clickable.
     #[test]
-    fn el_elemento_de_un_plugin_dice_su_columna_y_no_se_pulsa() {
-        let mut app = app_dos_panes();
+    fn a_plugins_item_shows_its_column_and_is_not_clickable() {
+        let mut app = app_two_panes();
         app.chrome.status_items =
-            Some(norte_config::StatusItems::parse(&["position"]).expect("válida"));
+            Some(norte_config::StatusItems::parse(&["position"]).expect("valid"));
         app.status_plugins = vec![("git".to_owned(), "branch".to_owned())];
-        let bajo_el_cursor = app.focused().selected().expect("hay entradas").path.clone();
-        let mut valores = std::collections::HashMap::new();
-        valores.insert(bajo_el_cursor, "main".to_owned());
-        let mut columnas = std::collections::HashMap::new();
-        columnas.insert("plugin:git/branch".to_owned(), valores);
-        app.focused_mut().set_plugin_columns(columnas);
+        let under_cursor = app
+            .focused()
+            .selected()
+            .expect("there are entries")
+            .path
+            .clone();
+        let mut values = std::collections::HashMap::new();
+        values.insert(under_cursor, "main".to_owned());
+        let mut columns = std::collections::HashMap::new();
+        columns.insert("plugin:git/branch".to_owned(), values);
+        app.focused_mut().set_plugin_columns(columns);
         let area = ratatui::layout::Rect::new(0, 0, 70, 1);
         let c = super::compose(&app, area);
-        let rama = c.text.find("main").expect("la rama se pinta");
-        let posicion = c.text.rfind('/').expect("y la posición");
-        assert!(rama < posicion, "el del plugin va primero: {:?}", c.text);
+        let branch = c.text.find("main").expect("the branch is painted");
+        let position = c.text.rfind('/').expect("and the position");
+        assert!(branch < position, "the plugin's goes first: {:?}", c.text);
         assert!(
             c.items.is_empty(),
-            "ninguno de los dos se pulsa: {:?}",
+            "neither one is clickable: {:?}",
             c.items
         );
     }
 
-    /// Una ventana suelta lleva su indicador en la barra, y la barra sabe
-    /// en qué columnas lo pintó: es lo que el ratón pulsa para pedir la
-    /// explicación. Se contrasta contra el TEXTO pintado, no contra una
-    /// aritmética paralela.
+    /// A loose window carries its indicator in the bar, and the bar knows
+    /// which columns it painted it in: that is what the mouse clicks to ask
+    /// for the explanation. Contrasted against the PAINTED text, not
+    /// against parallel arithmetic.
     #[test]
-    fn el_indicador_de_sesion_dice_donde_cae() {
+    fn the_session_indicator_says_where_it_lands() {
         use super::compose;
         use crate::ui::text::cells;
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         let area = ratatui::layout::Rect::new(0, 0, 70, 1);
         assert!(
             compose(&app, area).session.is_none(),
-            "la dueña no tiene indicador"
+            "the owner has no indicator"
         );
 
         app.session.detached = true;
         let c = compose(&app, area);
-        let (linea, span) = (c.text, c.session);
-        let badge = app.session_banner().expect("hay indicador");
-        let (x0, x1) = span.expect("y la barra sabe dónde");
-        let byte = linea.find(&badge).expect("el indicador está en la línea");
+        let (line, span) = (c.text, c.session);
+        let badge = app.session_banner().expect("there is an indicator");
+        let (x0, x1) = span.expect("and the bar knows where");
+        let byte = line.find(&badge).expect("the indicator is in the line");
         assert_eq!(
             usize::from(x0),
-            cells(&linea[..byte]),
-            "empieza donde se pinta"
+            cells(&line[..byte]),
+            "starts where it is painted"
         );
         assert_eq!(
             usize::from(x1),
-            cells(&linea[..byte]) + cells(&badge) - 1,
-            "y acaba con su última celda"
+            cells(&line[..byte]) + cells(&badge) - 1,
+            "and ends at its last cell"
         );
-        assert!(barra(&app).contains(&badge), "y se ve: {}", barra(&app));
+        assert!(bar(&app).contains(&badge), "and it shows: {}", bar(&app));
 
-        // Con un mensaje delante la línea es otra y no hay nada que pulsar.
-        app.message = Some("copiado 1 fichero".to_string());
+        // With a message in front, the line is a different one and there
+        // is nothing to click.
+        app.message = Some("copied 1 file".to_string());
         assert!(compose(&app, area).session.is_none());
     }
 
-    /// Un aviso caduca a los `notice_seconds` tics (spec 2026-09-10): sale
-    /// de la barra, la insignia `!n` cuenta uno más a la derecha y es
-    /// pulsable; con `0` no caduca nunca; un mensaje NUEVO reinicia la
-    /// cuenta; y abrir el panel de registro pone la insignia a cero.
+    /// A notice expires after `notice_seconds` ticks (spec 2026-09-10): it
+    /// leaves the bar, the `!n` badge counts one more to the right and is
+    /// clickable; with `0` it never expires; a NEW message resets the
+    /// count; and opening the log panel zeroes the badge.
     #[test]
-    fn un_aviso_caduca_y_deja_una_insignia_pulsable() {
+    fn a_notice_expires_and_leaves_a_clickable_badge() {
         use super::compose;
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         let area = ratatui::layout::Rect::new(0, 0, 70, 1);
         app.chrome.notice_seconds = Some(2);
-        app.message = Some("copiado 1 fichero".to_string());
+        app.message = Some("copied 1 file".to_string());
         app.tick_notices();
-        assert!(app.message.is_some(), "un tic: sigue");
-        app.message = Some("otro".to_string());
+        assert!(app.message.is_some(), "one tick: still there");
+        app.message = Some("other".to_string());
         app.tick_notices();
-        assert!(app.message.is_some(), "un mensaje nuevo reinicia la cuenta");
+        assert!(app.message.is_some(), "a new message resets the count");
         app.tick_notices();
-        assert!(app.message.is_none(), "dos tics: caducó");
+        assert!(app.message.is_none(), "two ticks: expired");
         assert_eq!(app.notices_unread, 1);
         let c = compose(&app, area);
         assert!(
             c.text.ends_with("!1 "),
-            "la insignia a la derecha: {:?}",
+            "the badge on the right: {:?}",
             c.text
         );
-        let zona = |c: &super::Composed| {
+        let zone = |c: &super::Composed| {
             c.items
                 .iter()
                 .find(|(_, _, cmd)| *cmd == "layout.log")
                 .map(|(x0, x1, _)| (*x0, *x1))
         };
-        assert_eq!(zona(&c), Some((67, 68)), "pulsable");
-        assert!(barra(&app).contains("!1"));
+        assert_eq!(zone(&c), Some((67, 68)), "clickable");
+        assert!(bar(&app).contains("!1"));
 
-        // Desde el ADR 0132 la insignia es un ELEMENTO de la derecha, y un
-        // mensaje en la izquierda ya no la tapa: son mitades distintas.
-        app.message = Some("nuevo".to_string());
-        assert_eq!(zona(&compose(&app, area)), Some((67, 68)));
-        // Con `0`, nada caduca.
+        // Since ADR 0132 the badge is a right-side ELEMENT, and a message
+        // on the left no longer covers it: they are different halves.
+        app.message = Some("new".to_string());
+        assert_eq!(zone(&compose(&app, area)), Some((67, 68)));
+        // With `0`, nothing expires.
         app.chrome.notice_seconds = Some(0);
         for _ in 0..5 {
             app.tick_notices();
         }
         assert!(app.message.is_some());
-        // Abrir el registro deja la insignia a cero.
+        // Opening the log leaves the badge at zero.
         app.message = None;
         assert_eq!(app.notices_unread, 1);
         app.toggle_log();
@@ -610,131 +625,134 @@ mod tests {
         assert_eq!(app.notices_unread, 0);
     }
 
-    /// Con la sesión suelta la barra sigue diciendo la ruta y el `x/x`, y el
-    /// aviso va a la derecha (2026-09-11: sustituía la línea entera y quien
-    /// tenía la sesión suelta todo el día perdía el contador). En una barra
-    /// estrecha, el aviso solo, como antes.
+    /// With a loose session the bar still says the path and the `x/x`, and
+    /// the notice goes to the right (2026-09-11: it used to replace the
+    /// whole line and whoever had a loose session all day lost the
+    /// counter). On a narrow bar, the notice alone, as before.
     #[test]
-    fn el_aviso_persistente_no_tapa_la_ruta_ni_el_contador() {
+    fn the_persistent_notice_does_not_cover_the_path_or_the_counter() {
         use super::compose;
         use crate::ui::text::cells;
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.session.detached = true;
-        let badge = app.session_banner().expect("hay indicador");
+        let badge = app.session_banner().expect("there is an indicator");
         let area = ratatui::layout::Rect::new(0, 0, 70, 1);
         let c = compose(&app, area);
-        // El contador es ahora el elemento `position` de la derecha (ADR
-        // 0132), y el aviso cierra la mitad IZQUIERDA.
-        assert!(c.text.contains("1/"), "el contador sigue: {:?}", c.text);
-        assert!(c.text.contains(&badge), "el aviso está: {:?}", c.text);
-        let (x0, x1) = c.session.expect("pulsable");
-        let byte = c.text.find(&badge).expect("está");
+        // The counter is now the right side's `position` element (ADR
+        // 0132), and the notice closes the LEFT half.
+        assert!(
+            c.text.contains("1/"),
+            "the counter is still there: {:?}",
+            c.text
+        );
+        assert!(c.text.contains(&badge), "the notice is there: {:?}", c.text);
+        let (x0, x1) = c.session.expect("clickable");
+        let byte = c.text.find(&badge).expect("it is there");
         assert_eq!(
             usize::from(x0),
             cells(&c.text[..byte]),
-            "la zona empieza donde el indicador"
+            "the zone starts where the indicator does"
         );
         assert_eq!(usize::from(x1), cells(&c.text[..byte]) + cells(&badge) - 1);
-        // Sin sitio para una ruta legible: el aviso solo.
-        let corto =
-            ratatui::layout::Rect::new(0, 0, u16::try_from(cells(&badge) + 8).expect("cabe"), 1);
-        let c = compose(&app, corto);
+        // With no room for a legible path: the notice alone.
+        let narrow =
+            ratatui::layout::Rect::new(0, 0, u16::try_from(cells(&badge) + 8).expect("fits"), 1);
+        let c = compose(&app, narrow);
         assert!(c.text.contains(&badge), "{:?}", c.text);
-        assert!(c.session.is_some(), "los elementos ceden ante el aviso");
+        assert!(c.session.is_some(), "the items yield to the notice");
     }
 
-    /// REGRESIÓN (revisión de ADR 0132): con elementos que llenan JUSTO su
-    /// presupuesto, el margen de la mitad derecha se comía la última celda
-    /// del aviso. El aviso tiene que caber entero, con la secuencia
-    /// pendiente detrás si la hay.
+    /// REGRESSION (ADR 0132 review): with items that fill EXACTLY their
+    /// budget, the right half's margin ate the notice's last cell. The
+    /// notice has to fit whole, with the pending sequence behind it if
+    /// there is one.
     #[test]
-    fn los_elementos_no_recortan_un_aviso_persistente() {
+    fn the_items_do_not_truncate_a_persistent_notice() {
         use super::compose;
         use crate::ui::text::cells;
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.session.detached = true;
-        let badge = app.session_banner().expect("hay indicador");
-        for pendiente in ["", "g"] {
-            app.pending = pendiente.to_owned();
-            // `1/1` (3 celdas) cabe exacto en lo que deja el aviso.
+        let badge = app.session_banner().expect("there is an indicator");
+        for pending in ["", "g"] {
+            app.pending = pending.to_owned();
+            // `1/1` (3 cells) fits exactly in what the notice leaves.
             for extra in 3..12 {
-                let ancho = u16::try_from(cells(&badge) + extra).expect("cabe");
-                let c = compose(&app, ratatui::layout::Rect::new(0, 0, ancho, 1));
+                let width = u16::try_from(cells(&badge) + extra).expect("fits");
+                let c = compose(&app, ratatui::layout::Rect::new(0, 0, width, 1));
                 assert!(
                     c.text.contains(&badge),
-                    "ancho {ancho}, pendiente {pendiente:?}: {:?}",
+                    "width {width}, pending {pending:?}: {:?}",
                     c.text
                 );
-                assert!(c.session.is_some(), "pulsable a {ancho}");
+                assert!(c.session.is_some(), "clickable at {width}");
             }
         }
     }
 
-    /// En un terminal estrecho el indicador se recorta, y un indicador que no
-    /// cabe entero no es pulsable: media palabra no es un indicador.
+    /// On a narrow terminal the indicator is truncated, and an indicator
+    /// that does not fit whole is not clickable: half a word is not an
+    /// indicator.
     #[test]
-    fn el_indicador_recortado_no_es_pulsable() {
+    fn a_truncated_indicator_is_not_clickable() {
         use super::compose;
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.session.detached = true;
-        let badge = app.session_banner().expect("hay indicador");
-        let ancho = crate::ui::text::cells(&badge);
-        // Justo lo que ocupa con su margen: cabe.
-        let justo = ratatui::layout::Rect::new(0, 0, u16::try_from(ancho + 1).expect("cabe"), 1);
+        let badge = app.session_banner().expect("there is an indicator");
+        let width = crate::ui::text::cells(&badge);
+        // Exactly what it takes with its margin: it fits.
+        let exact = ratatui::layout::Rect::new(0, 0, u16::try_from(width + 1).expect("fits"), 1);
         assert!(
-            compose(&app, justo).session.is_some(),
-            "cabe entero y se puede pulsar"
+            compose(&app, exact).session.is_some(),
+            "fits whole and can be clicked"
         );
-        // Una celda menos: ya no.
-        let corto = ratatui::layout::Rect::new(0, 0, u16::try_from(ancho).expect("cabe"), 1);
+        // One cell less: not anymore.
+        let narrow = ratatui::layout::Rect::new(0, 0, u16::try_from(width).expect("fits"), 1);
         assert!(
-            compose(&app, corto).session.is_none(),
-            "recortado, sin zona"
+            compose(&app, narrow).session.is_none(),
+            "truncated, no zone"
         );
     }
 
-    /// Con un overlay delante no hay zona, aunque la ventana siga suelta: el
-    /// visor pinta su propio pie, y sobre la ayuda la barra no se pulsa.
+    /// With an overlay in front there is no zone, even if the window is
+    /// still loose: the viewer paints its own footer, and over help the bar
+    /// is not clickable.
     #[test]
-    fn con_un_overlay_delante_no_hay_zona() {
+    fn with_an_overlay_in_front_there_is_no_zone() {
         use super::session_zone;
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.session.detached = true;
         let area = ratatui::layout::Rect::new(0, 0, 80, 24);
-        assert!(session_zone(&app, area).is_some(), "sin overlay sí");
+        assert!(session_zone(&app, area).is_some(), "with no overlay, yes");
         app.help = Some(crate::app::HelpView::new(norte_i18n::Lang::Es, Vec::new()));
-        assert!(
-            session_zone(&app, area).is_none(),
-            "con la ayuda delante no"
-        );
+        assert!(session_zone(&app, area).is_none(), "with help in front, no");
     }
 
-    /// Por debajo del umbral la barra no cambia: un destello en cada `cd`
-    /// local es exactamente el ruido que hace que nadie mire el indicador.
+    /// Below the threshold the bar does not react: a flicker on every local
+    /// `cd` is exactly the noise that makes nobody look at the indicator.
     #[test]
-    fn antes_del_umbral_la_barra_no_se_entera() {
-        let mut app = app_dos_panes();
-        app.message = Some("copiado 1 fichero".to_string());
+    fn below_the_threshold_the_bar_does_not_notice() {
+        let mut app = app_two_panes();
+        app.message = Some("copied 1 file".to_string());
         let mut busy = Busy::new(BusyKind::Connecting, None, Some(0));
         busy.elapsed = THRESHOLD
             .checked_sub(std::time::Duration::from_millis(1))
-            .expect("el umbral es mayor que 1 ms");
+            .expect("the threshold is greater than 1 ms");
         let frame = busy.frame();
         app.busy = Some(busy);
-        let linea = barra(&app);
-        assert!(!linea.contains(frame), "spinner antes de tiempo: {linea}");
-        assert!(linea.contains("copiado 1 fichero"), "{linea}");
+        let line = bar(&app);
+        assert!(!line.contains(frame), "spinner ahead of time: {line}");
+        assert!(line.contains("copied 1 file"), "{line}");
     }
 
-    /// ADR 0146: con trabajo que ya dura, el item de tareas lleva su barra
-    /// detrás, y la zona pulsable la cubre entera: un clic en la barra abre
-    /// los procesos como un clic en el texto.
+    /// ADR 0146: with work already running, the tasks item carries its bar
+    /// behind it, and the clickable zone covers it whole: a click on the
+    /// bar opens processes just like a click on the text.
     #[test]
-    fn el_item_de_tareas_pinta_su_barra_y_se_pulsa_entero() {
+    fn the_tasks_item_paints_its_bar_and_is_clickable_whole() {
         use norte_proto::{TaskId, TaskKind, TaskProgress, TaskState};
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.chrome.status_items =
-            Some(norte_config::StatusItems::parse(&["tasks"]).expect("válida"));
+            Some(norte_config::StatusItems::parse(&["tasks"]).expect("valid"));
         let p = TaskProgress {
             task_id: TaskId::new(1),
             kind: TaskKind::Copy,
@@ -757,17 +775,17 @@ mod tests {
         app.render_now_ms = Some(norte_frontend::task_strip::UMBRAL_MS);
         let area = ratatui::layout::Rect::new(0, 0, 70, 1);
         let c = super::compose(&app, area);
-        assert_eq!(super::cells(&c.text), 70, "la línea llena el ancho");
-        let barra = norte_frontend::task_strip::bar_glyphs(Some(50), 0);
-        assert!(c.text.contains(&barra), "{:?}", c.text);
+        assert_eq!(super::cells(&c.text), 70, "the line fills the width");
+        let bar = norte_frontend::task_strip::bar_glyphs(Some(50), 0);
+        assert!(c.text.contains(&bar), "{:?}", c.text);
         let (x0, x1, cmd) = c.items[0];
         assert_eq!(cmd, "layout.processes");
-        let zona: String = c
+        let zone: String = c
             .text
             .chars()
             .skip(usize::from(x0))
             .take(usize::from(x1 - x0) + 1)
             .collect();
-        assert!(zona.starts_with('⟳') && zona.ends_with('▏'), "{zona:?}");
+        assert!(zone.starts_with('⟳') && zone.ends_with('▏'), "{zone:?}");
     }
 }

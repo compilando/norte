@@ -1,15 +1,15 @@
-// La disciplina de la secuencia, y el estado que el renderer tiene derecho a
-// guardar: una COPIA de lo último que el host dijo, para pintarla.
+// The sequence's discipline, and the state the renderer has a right to keep:
+// a COPY of the last thing the host said, so it can be painted.
 //
-// Las tres reglas son las de la decisión D7, y aquí no se negocia ninguna:
-// una versión que no se reconoce no se interpreta a medias, un parche sobre
-// otra base no se aplica, y un hueco en la secuencia se resuelve pidiendo una
-// foto — jamás adivinando lo que faltó.
+// The three rules are decision D7's, and none of them is negotiable here: a
+// version that is not recognized is not half-interpreted, a patch over
+// another base is not applied, and a gap in the sequence is resolved by
+// asking for a frame — never by guessing what was missing.
 
 import { BRIDGE_VERSION } from "./types";
 import type { BridgeEnvelope, UiUpdate, ViewSnapshot } from "./types";
 
-/** Qué pasó con un mensaje. */
+/** What happened to a message. */
 export type Outcome =
   | { kind: "applied" }
   | { kind: "ignored"; why: "old-sequence" | "other-instance" }
@@ -22,7 +22,7 @@ export class Session {
   private instance: string | null = null;
   private seq = -1;
 
-  /** La pantalla que hay que pintar, o `null` si todavía no hay ninguna. */
+  /** The screen that needs painting, or `null` if there is not one yet. */
   view(): ViewSnapshot | null {
     return this.snapshot;
   }
@@ -40,7 +40,7 @@ export class Session {
       return { kind: "incompatible", version: env.bridge_version };
     }
     if (this.instance !== null && env.instance_id !== this.instance) {
-      // Otra vida del host. No es un error y no muta nada.
+      // Another life of the host. Not an error, and it mutates nothing.
       return { kind: "ignored", why: "other-instance" };
     }
     if (env.sequence <= this.seq) {
@@ -48,8 +48,8 @@ export class Session {
     }
     const p = env.payload;
     if (p.update === "snapshot") {
-      // Una foto REEMPLAZA, así que cierra cualquier hueco: se acepta venga
-      // de donde venga en la secuencia.
+      // A frame REPLACES, so it closes any gap: accepted no matter where it
+      // falls in the sequence.
       const { update: _u, ...view } = p;
       this.snapshot = view;
       this.instance = env.instance_id;
@@ -64,14 +64,16 @@ export class Session {
       return { kind: "notice", notice: p };
     }
     if (p.base_sequence !== this.seq) {
-      // Un parche sobre otra base no se aplica «casi bien»: no se aplica.
+      // A patch over a different base does not apply "almost right": it
+      // does not apply.
       return { kind: "gap", expected: this.seq, got: p.base_sequence };
     }
     for (const c of p.changes) {
       if (!this.applyChange(c)) {
-        // Un cambio que este renderer no conoce NO se descarta avanzando la
-        // secuencia: eso deja una copia divergente de la pantalla que pasa
-        // todas las comprobaciones posteriores. Se pide una foto.
+        // A change this renderer does not recognize is NOT discarded by
+        // advancing the sequence: that would leave a diverged copy of the
+        // screen that passes every check that follows. A frame is requested
+        // instead.
         return { kind: "gap", expected: this.seq, got: env.sequence };
       }
     }
@@ -79,7 +81,7 @@ export class Session {
     return { kind: "applied" };
   }
 
-  /** `false` si el cambio no se reconoce: hay que pedir una foto. */
+  /** `false` if the change is not recognized: a frame has to be requested. */
   private applyChange(
     c: Extract<UiUpdate, { update: "patch" }>["changes"][number],
   ): boolean {
@@ -108,10 +110,10 @@ export class Session {
         slot.first_visible = c.first_visible;
         slot.rows = c.rows;
         slot.icon_column = c.icon_column;
-        // El TOTAL, que es la altura del desplazamiento. Sin esto el listado
-        // se quedaba con el de la primera página (100) durante todo el
-        // drenaje —también después, porque el último lote también es un
-        // parche—, y un directorio de cinco mil ficheros topaba ahí.
+        // The TOTAL, which is the scroll's height. Without this the listing
+        // kept the first page's (100) through the whole drain — afterwards
+        // too, because the last batch is also a patch — and a five-thousand
+        // file directory hit that ceiling.
         if (c.total_rows !== null) {
           slot.total_rows = c.total_rows;
         }
@@ -126,23 +128,24 @@ export class Session {
         if (slot === null) {
           return true;
         }
-        // La cabecera se movía solo con la foto entera, así que
-        // `pane.names-encoding` retranscribía las filas y dejaba el título
-        // con la lectura vieja.
+        // The header used to only move with the whole frame, so
+        // `pane.names-encoding` retranscribed the rows and left the title
+        // with the old reading.
         slot.path_display = c.path_display;
         slot.path_hostile = c.path_hostile;
         slot.skipped_note = c.skipped_note;
         slot.hidden_note = c.hidden_note;
-        // Las cuatro nuevas por el mismo camino: una cabecera que solo se
-        // moviera con la foto entera dejaria el aviso con la lectura vieja,
-        // que es el bug que este parche existe para no repetir.
+        // The four new ones by the same path: a header that only moved with
+        // the whole frame would leave the notice with the old reading, which
+        // is the bug this patch exists to not repeat.
         slot.names_note = c.names_note ?? "";
         slot.filling_note = c.filling_note ?? "";
         slot.pruned_note = c.pruned_note ?? "";
         slot.marked_note = c.marked_note ?? "";
         slot.footer = c.footer ?? "";
-        // Las migas y el indicador de espacio (puente 65) van con la
-        // cabecera: cambian cuando cambia el directorio, y por lo mismo.
+        // The breadcrumbs and the space indicator (bridge 65) travel with
+        // the header: they change when the directory changes, and for the
+        // same reason.
         slot.path_segments = c.path_segments ?? [];
         slot.used_ratio = c.used_ratio ?? null;
         slot.marks = c.marks;
@@ -161,8 +164,9 @@ export class Session {
         return true;
       }
       case "slot_progress": {
-        // Dos píxeles en el borde del panel al que está llegando algo
-        // (ADR 0148). Viaja aparte del listado porque el progreso va a 30 Hz.
+        // Two pixels on the border of the pane something is arriving into
+        // (ADR 0148). Travels apart from the listing because progress runs
+        // at 30 Hz.
         for (const slot of s.slots) {
           if (slot.kind === "browser" && slot.slot_id === c.slot_id) {
             slot.progress = c.progress;
@@ -172,16 +176,17 @@ export class Session {
       }
       case "tasks": {
         s.tasks = c.tasks;
-        // El cursor del panel de procesos viaja con el tablero: una task que
-        // caduca quita una fila y desplaza el resto, y sin esto el panel
-        // seguía resaltando la fila N mientras la tecla de cancelar actuaba
-        // sobre otra.
+        // The process panel's cursor travels with the dashboard: a task that
+        // expires removes a row and shifts the rest, and without this the
+        // panel kept highlighting row N while the cancel key acted on
+        // another one.
         //
-        // SIN tolerancia a que falte, y no por descuido: el campo siempre
-        // viaja —`Option<u64>` sin `skip_serializing_if` escribe `null`— y un
-        // host de otro puente ni llega aquí, porque la versión se compara
-        // arriba y no coincidir es pantalla fatal. `null` es «ninguna fila
-        // elegida», que es lo que dice un tablero vacío.
+        // WITH NO tolerance for it being missing, and not by accident: the
+        // field always travels — `Option<u64>` without `skip_serializing_if`
+        // writes `null` — and a host on another bridge does not even reach
+        // here, because the version is compared above and a mismatch is a
+        // fatal screen. `null` is "no row chosen", which is what an empty
+        // dashboard says.
         for (const slot of s.slots) {
           if (slot.kind === "processes") {
             slot.cursor = c.cursor;
@@ -281,9 +286,10 @@ export class Session {
         return true;
       case "layout": {
         s.layout = { cells: c.cells, placements: c.placements, tabs: c.tabs };
-        // El foco es de quien tenga el papel `active`, y lo dice el host.
-        const activo = c.placements.find((p) => p.role === "active");
-        s.focus = activo === undefined ? null : activo.slot_id;
+        // Focus belongs to whoever holds the `active` role, and the host
+        // says who that is.
+        const active = c.placements.find((p) => p.role === "active");
+        s.focus = active === undefined ? null : active.slot_id;
         return true;
       }
       default:

@@ -1,6 +1,6 @@
 [package]
 name = "norte-connect"
-description = "Gestión de conexiones remotas y secretos (connections.toml, keyring, age)"
+description = "Management of remote connections and secrets (connections.toml, keyring, age)"
 license = "AGPL-3.0-only"
 version.workspace = true
 edition.workspace = true
@@ -9,69 +9,71 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
-# Formato binario (no armor): el secrets.age no es de edición manual.
+# Binary format (no armor): secrets.age is not meant for manual editing.
 age.workspace = true
-# macOS/Windows: backends nativos, SIN dep C. El Secret Service de Linux
-# (sync-secret-service → libdbus C, exige libdbus-1-dev al construir) es opt-in
-# por la feature `linux-keyring` (abajo): así CI/headless compilan sin C y usan
-# env/age; un escritorio Linux con libdbus lo habilita.
+# macOS/Windows: native backends, NO C dep. Linux's Secret Service
+# (sync-secret-service → libdbus C, requires libdbus-1-dev to build) is
+# opt-in via the `linux-keyring` feature (below): so CI/headless build
+# without C and use env/age; a Linux desktop with libdbus enables it.
 keyring = { workspace = true, features = ["apple-native", "windows-native"] }
 norte-proto.workspace = true
-# Object storage del connect (fase 7d, ADR 0016 B): construye el `Operator`
-# de opendal (bucket/region/endpoint/credenciales) que `ObjectProvider::new`
-# recibe inyectado — mismo patrón que la SftpSession/FtpStream. El provider
-# jamás ve el secret-access-key.
+# connect's object storage (phase 7d, ADR 0016 B): builds opendal's
+# `Operator` (bucket/region/endpoint/credentials) that `ObjectProvider::new`
+# receives injected — same pattern as SftpSession/FtpStream. The provider
+# never sees the secret-access-key.
 opendal.workspace = true
-# Transporte SSH del connect (ADR 0015 A): russh vive AQUÍ (AGPL), no en el
-# provider (MIT/Apache, que recibe la sesión inyectada). Ya estaba en el
-# workspace (norte-vfs-sftp nightly); solo se promociona a dep normal.
+# connect's SSH transport (ADR 0015 A): russh lives HERE (AGPL), not in the
+# provider (MIT/Apache, which receives the injected session). Was already in
+# the workspace (norte-vfs-sftp nightly); just promoted to a normal dep.
 russh.workspace = true
-# El connect devuelve la `SftpSession` que `SftpProvider::new` acepta — es la
-# interfaz pública del provider, no un tipo de auth (frontera ADR 0015 A).
+# connect returns the `SftpSession` that `SftpProvider::new` accepts — it is
+# the provider's public interface, not an auth type (ADR 0015 A boundary).
 russh-sftp.workspace = true
-# Parsear la CA extra (`extra_root_ca`) en PEM para FTPS (módulo `pem`, en
-# la feature default `alloc`).
+# Parses the extra CA (`extra_root_ca`) in PEM for FTPS (the `pem` module, in
+# the default `alloc` feature).
 rustls-pki-types.workspace = true
 serde = { workspace = true, features = ["derive"] }
-# Transporte FTP/FTPS del connect (ADR 0015 A/F): la política TLS vive aquí;
-# el provider recibe el stream ya negociado. aws-lc-rs = misma pila que russh.
+# connect's FTP/FTPS transport (ADR 0015 A/F): the TLS policy lives here; the
+# provider receives the already-negotiated stream. aws-lc-rs = same stack as
+# russh.
 suppaftp = { workspace = true, features = ["tokio", "tokio-rustls-aws-lc-rs"] }
 thiserror.workspace = true
-# Solo spawn_blocking (feature rt); nada de tokio::sync.
+# spawn_blocking only (rt feature); no tokio::sync.
 tokio = { workspace = true, features = ["rt"] }
-# Construye el TlsConnector de FTPS (re-exporta rustls; versión de suppaftp).
+# Builds FTPS's TlsConnector (re-exports rustls; suppaftp's version).
 tokio-rustls.workspace = true
-# Raíces CA Mozilla para validar el cert del servidor FTPS.
+# Mozilla CA roots to validate the FTPS server's cert.
 webpki-roots.workspace = true
 toml.workspace = true
 tracing.workspace = true
 zeroize.workspace = true
 
-# Clave de anclaje del journal (M3-5, ADR 0025): 32 bytes del OS.
+# Journal anchor key (M3-5, ADR 0025): 32 OS bytes.
 getrandom.workspace = true
 
 [features]
-# Keyring de Linux (Secret Service) vía libdbus C: opt-in — exige
-# `libdbus-1-dev` + `pkg-config` al construir. Off por defecto (CI/headless
-# compilan sin C; Linux cae a env/age). macOS/Windows no lo necesitan.
+# Linux keyring (Secret Service) via libdbus C: opt-in — requires
+# `libdbus-1-dev` + `pkg-config` to build. Off by default (CI/headless build
+# without C; Linux falls back to env/age). macOS/Windows do not need it.
 linux-keyring = ["keyring/sync-secret-service", "keyring/crypto-rust"]
 
 [dev-dependencies]
-# Servidor SSH + agente in-process para los tests de connect (sin Docker).
+# In-process SSH server + agent for connect's tests (no Docker).
 futures.workspace = true
-# Servidor FTP/FTPS in-process (mismo arnés que norte-vfs-ftp).
+# In-process FTP/FTPS server (same harness as norte-vfs-ftp).
 libunftp.workspace = true
-# Claves ed25519 efímeras de test (host/client keys).
+# Ephemeral test ed25519 keys (host/client keys).
 rand.workspace = true
-# Certificado self-signed efímero del servidor FTPS de test.
+# Ephemeral self-signed certificate for the test FTPS server.
 rcgen.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "net", "rt", "rt-multi-thread", "time"] }
-# UnixListenerStream para servir el agente SSH in-process.
+# UnixListenerStream to serve the in-process SSH agent.
 tokio-stream = { workspace = true, features = ["net"] }
 unftp-sbe-fs.workspace = true
-# Servidor S3 in-process para el test del S3Connector (mismo patrón que
-# norte-vfs-object): valida el probe contra un servidor real sin Docker.
+# In-process S3 server for the S3Connector test (same pattern as
+# norte-vfs-object): validates the probe against a real server without
+# Docker.
 hyper-util.workspace = true
 s3s.workspace = true
 s3s-fs.workspace = true

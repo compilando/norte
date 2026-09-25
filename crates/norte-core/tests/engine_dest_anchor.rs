@@ -1,13 +1,14 @@
-//! El ancla del directorio destino (#295, ADR 0073) contra el filesystem REAL.
+//! The destination directory's anchor (#295, ADR 0073) against the REAL
+//! filesystem.
 //!
-//! Es la mitad que ADR 0072 dejaba abierta: un enlace **ya plantado** cuando el
-//! core mira por primera vez. Desde dentro del core, ese enlace y un
-//! `~/copias -> /mnt/disco/copias` legítimo son idénticos —los dos resuelven a
-//! otro sitio—, así que quien los distingue tiene que ser quien MIRÓ: el
-//! cliente que listó el directorio y retuvo su identidad.
+//! This is the half ADR 0072 left open: a link **already planted** by the time
+//! the core looks for the first time. From inside the core, that link and a
+//! legitimate `~/copies -> /mnt/disk/copies` are identical — both resolve to
+//! somewhere else — so whoever tells them apart has to be whoever LOOKED: the
+//! client that listed the directory and retained its identity.
 //!
-//! Va con `file://` por lo mismo que `engine_leaf_confined`: `MemProvider` no
-//! tiene enlaces que seguir ni identidad de nodo que comparar.
+//! This goes with `file://` for the same reason as `engine_leaf_confined`:
+//! `MemProvider` has no links to follow nor node identity to compare.
 #![cfg(unix)]
 
 use std::sync::Arc;
@@ -17,59 +18,59 @@ use norte_proto::{CollisionPolicy, DirAnchor, TaskState, VPath};
 use norte_vfs::Provider;
 
 fn vp(wire: &str) -> VPath {
-    VPath::parse(wire).expect("wire válido")
+    VPath::parse(wire).expect("valid wire")
 }
 
-struct Arbol {
+struct Tree {
     engine: Engine,
     dir: tempfile::TempDir,
 }
 
-/// Un origen (fichero y árbol), un destino `d/` con un `sub/` REAL dentro, y un
-/// `fuera/` hermano al que un atacante querría desviar la escritura.
-fn arbol() -> Arbol {
+/// A source (file and tree), a destination `d/` with a REAL `sub/` inside, and
+/// an `outside/` sibling that an attacker would want to divert the write to.
+fn tree() -> Tree {
     let dir = tempfile::tempdir().expect("tempdir");
-    std::fs::write(dir.path().join("origen.txt"), b"contenido").expect("origen");
-    std::fs::create_dir(dir.path().join("arbol")).expect("árbol origen");
-    std::fs::write(dir.path().join("arbol/hoja.txt"), b"hoja").expect("hoja");
-    std::fs::create_dir(dir.path().join("d")).expect("destino");
+    std::fs::write(dir.path().join("source.txt"), b"content").expect("source");
+    std::fs::create_dir(dir.path().join("tree")).expect("source tree");
+    std::fs::write(dir.path().join("tree/leaf.txt"), b"leaf").expect("leaf");
+    std::fs::create_dir(dir.path().join("d")).expect("destination");
     std::fs::create_dir(dir.path().join("d/sub")).expect("sub");
-    std::fs::create_dir(dir.path().join("fuera")).expect("fuera");
+    std::fs::create_dir(dir.path().join("outside")).expect("outside");
     let engine = Engine::new();
     engine.register_provider(
         Arc::new(norte_vfs_local::LocalProvider::rooted(dir.path())) as Arc<dyn Provider>
     );
-    Arbol { engine, dir }
+    Tree { engine, dir }
 }
 
-/// Lo que hace el cliente al LISTAR: retener la identidad de lo que mira.
-async fn ancla(a: &Arbol, dir: &str) -> DirAnchor {
+/// What the client does when LISTING: retain the identity of what it looks at.
+async fn anchor(a: &Tree, dir: &str) -> DirAnchor {
     a.engine
         .dir_anchor(&vp(dir))
         .await
-        .expect("preguntar")
-        .expect("el provider local sabe identificar nodos")
+        .expect("ask")
+        .expect("the local provider knows how to identify nodes")
 }
 
-/// La forma EXACTA del rechazo: un conflicto que dice «esto se sale de la raíz
-/// aprobada», no un error de E/S ni un `NotFound`. Los frontends pintan por
-/// categoría, así que la categoría es contrato.
+/// The EXACT shape of the rejection: a conflict that says "this escapes the
+/// approved root", not an I/O error nor a `NotFound`. Frontends paint by
+/// category, so the category is the contract.
 #[track_caller]
-fn rehusado(estado: &TaskState) {
+fn refused(state: &TaskState) {
     assert!(
         matches!(
-            estado,
+            state,
             TaskState::Failed {
                 error: norte_proto::Error::Conflict {
                     conflict: norte_proto::ConflictKind::EscapesRoot
                 }
             }
         ),
-        "tenía que rehusar por identidad del destino, fue {estado:?}"
+        "it had to refuse by destination identity, was {state:?}"
     );
 }
 
-async fn copia(a: &Arbol, from: &str, to: &str, anchor: Option<DirAnchor>) -> TaskState {
+async fn copy(a: &Tree, from: &str, to: &str, anchor: Option<DirAnchor>) -> TaskState {
     let handle = a
         .engine
         .copy_anchored(
@@ -83,236 +84,238 @@ async fn copia(a: &Arbol, from: &str, to: &str, anchor: Option<DirAnchor>) -> Ta
             anchor,
         )
         .await
-        .expect("encola");
+        .expect("enqueues");
     handle.join().await
 }
 
-/// **El caso del issue.** El humano listó `d/sub` —un directorio de verdad— y
-/// aprobó copiar ahí. Para cuando la copia corre, `d/sub` es un enlace a
-/// `fuera`. El core sigue sin poder distinguirlo de un enlace legítimo; el
-/// ancla sí, porque no habla de enlaces sino de NODOS.
+/// **The case from the issue.** The human listed `d/sub` — a real directory —
+/// and approved copying there. By the time the copy runs, `d/sub` is a link to
+/// `outside`. The core still cannot tell it apart from a legitimate link; the
+/// anchor can, because it does not speak of links but of NODES.
 #[tokio::test]
-async fn un_destino_sustituido_por_un_enlace_ya_no_recibe_la_copia() {
-    let a = arbol();
-    let visto = ancla(&a, "file:///d/sub").await;
+async fn a_destination_replaced_by_a_link_no_longer_receives_the_copy() {
+    let a = tree();
+    let seen = anchor(&a, "file:///d/sub").await;
 
-    std::fs::remove_dir(a.dir.path().join("d/sub")).expect("quitar el de verdad");
-    std::os::unix::fs::symlink(a.dir.path().join("fuera"), a.dir.path().join("d/sub"))
-        .expect("plantar el enlace");
+    std::fs::remove_dir(a.dir.path().join("d/sub")).expect("remove the real one");
+    std::os::unix::fs::symlink(a.dir.path().join("outside"), a.dir.path().join("d/sub"))
+        .expect("plant the link");
 
-    let estado = copia(
+    let state = copy(
         &a,
-        "file:///origen.txt",
-        "file:///d/sub/botin.txt",
-        Some(visto),
+        "file:///source.txt",
+        "file:///d/sub/loot.txt",
+        Some(seen),
     )
     .await;
 
-    rehusado(&estado);
+    refused(&state);
     assert!(
-        !a.dir.path().join("fuera/botin.txt").exists(),
-        "y NADA aterrizó al otro lado del enlace"
+        !a.dir.path().join("outside/loot.txt").exists(),
+        "and NOTHING landed on the other side of the link"
     );
 }
 
-/// Sin ancla, lo de 0.53: la copia se hace y aterriza donde el enlace apunta.
-/// Está aquí para que la diferencia sea del ANCLA y no de otra cosa que
-/// cambiara a la vez.
+/// Without an anchor, the 0.53 behavior: the copy happens and lands wherever
+/// the link points. This exists so the difference comes from the ANCHOR and
+/// not from something else that changed at the same time.
 #[tokio::test]
-async fn sin_ancla_el_mismo_enlace_sigue_desviando_la_copia() {
-    let a = arbol();
-    std::fs::remove_dir(a.dir.path().join("d/sub")).expect("quitar");
-    std::os::unix::fs::symlink(a.dir.path().join("fuera"), a.dir.path().join("d/sub"))
-        .expect("enlace");
+async fn without_an_anchor_the_same_link_still_diverts_the_copy() {
+    let a = tree();
+    std::fs::remove_dir(a.dir.path().join("d/sub")).expect("remove");
+    std::os::unix::fs::symlink(a.dir.path().join("outside"), a.dir.path().join("d/sub"))
+        .expect("link");
 
-    let estado = copia(&a, "file:///origen.txt", "file:///d/sub/botin.txt", None).await;
+    let state = copy(&a, "file:///source.txt", "file:///d/sub/loot.txt", None).await;
 
-    assert_eq!(estado, TaskState::Completed);
+    assert_eq!(state, TaskState::Completed);
     assert!(
-        a.dir.path().join("fuera/botin.txt").exists(),
-        "el residuo de ADR 0072, intacto cuando nadie manda ancla"
+        a.dir.path().join("outside/loot.txt").exists(),
+        "the ADR 0072 residue, intact when nobody sends an anchor"
     );
 }
 
-/// Y el ancla correcta no cuesta la operación: mismo nodo, la copia se hace.
+/// And the correct anchor does not cost the operation: same node, the copy
+/// happens.
 #[tokio::test]
-async fn el_ancla_del_directorio_de_verdad_deja_copiar() {
-    let a = arbol();
-    let visto = ancla(&a, "file:///d/sub").await;
+async fn the_real_directorys_anchor_lets_the_copy_through() {
+    let a = tree();
+    let seen = anchor(&a, "file:///d/sub").await;
 
-    let estado = copia(
+    let state = copy(
         &a,
-        "file:///origen.txt",
-        "file:///d/sub/copia.txt",
-        Some(visto),
+        "file:///source.txt",
+        "file:///d/sub/copy.txt",
+        Some(seen),
     )
     .await;
 
-    assert_eq!(estado, TaskState::Completed);
-    assert!(a.dir.path().join("d/sub/copia.txt").exists());
+    assert_eq!(state, TaskState::Completed);
+    assert!(a.dir.path().join("d/sub/copy.txt").exists());
 }
 
-/// **Un enlace LEGÍTIMO no se rompe**, que es la razón por la que ADR 0072 no
-/// pudo comparar identidades a secas: en macOS `/tmp`, `/var` y `/etc` son
-/// enlaces, y en un Linux con usrmerge lo son `/bin` y `/lib`.
+/// **A LEGITIMATE link does not break**, which is the reason ADR 0072 could
+/// not compare identities outright: on macOS `/tmp`, `/var` and `/etc` are
+/// links, and on a Linux with usrmerge so are `/bin` and `/lib`.
 ///
-/// El ancla se saca SIGUIENDO el enlace, así que listar `enlace/` y listar
-/// `d/sub/` dan la misma: el mismo destino por dos nombres no puede ser dos
-/// destinos.
+/// The anchor is taken by FOLLOWING the link, so listing `link/` and listing
+/// `d/sub/` give the same one: the same destination under two names cannot be
+/// two destinations.
 #[tokio::test]
-async fn un_enlace_legitimo_al_directorio_aprobado_pasa() {
-    let a = arbol();
-    std::os::unix::fs::symlink(a.dir.path().join("d/sub"), a.dir.path().join("enlace"))
-        .expect("enlace legítimo");
+async fn a_legitimate_link_to_the_approved_directory_passes() {
+    let a = tree();
+    std::os::unix::fs::symlink(a.dir.path().join("d/sub"), a.dir.path().join("link"))
+        .expect("legitimate link");
 
-    let por_el_enlace = ancla(&a, "file:///enlace").await;
+    let via_link = anchor(&a, "file:///link").await;
     assert_eq!(
-        por_el_enlace,
-        ancla(&a, "file:///d/sub").await,
-        "el mismo nodo por dos nombres da la misma ancla"
+        via_link,
+        anchor(&a, "file:///d/sub").await,
+        "the same node under two names gives the same anchor"
     );
 
-    let estado = copia(
+    let state = copy(
         &a,
-        "file:///origen.txt",
-        "file:///enlace/copia.txt",
-        Some(por_el_enlace),
+        "file:///source.txt",
+        "file:///link/copy.txt",
+        Some(via_link),
     )
     .await;
 
-    assert_eq!(estado, TaskState::Completed);
-    assert!(a.dir.path().join("d/sub/copia.txt").exists());
+    assert_eq!(state, TaskState::Completed);
+    assert!(a.dir.path().join("d/sub/copy.txt").exists());
 }
 
-/// Un ancla que nadie emitió no autoriza nada. Es la propiedad que hace que el
-/// secreto del proceso importe: sin él, quien conozca el formato la fabricaría.
+/// An anchor nobody issued authorizes nothing. This is the property that makes
+/// the process secret matter: without it, whoever knew the format could forge
+/// one.
 #[tokio::test]
-async fn un_ancla_inventada_no_autoriza() {
-    let a = arbol();
-    let estado = copia(
+async fn a_made_up_anchor_does_not_authorize() {
+    let a = tree();
+    let state = copy(
         &a,
-        "file:///origen.txt",
-        "file:///d/sub/copia.txt",
+        "file:///source.txt",
+        "file:///d/sub/copy.txt",
         Some(DirAnchor::new(
             "0123456789abcdef0123456789abcdef".to_owned(),
         )),
     )
     .await;
 
-    rehusado(&estado);
-    assert!(!a.dir.path().join("d/sub/copia.txt").exists());
+    refused(&state);
+    assert!(!a.dir.path().join("d/sub/copy.txt").exists());
 }
 
-/// Un ÁRBOL crea su destino, así que el ancla se comprueba sobre el padre y
-/// por ruta. Lo que se demuestra aquí es que también se comprueba: sin esto,
-/// copiar un directorio se quedaba sin la defensa que gana copiar un fichero.
+/// A TREE creates its destination, so the anchor is checked against the parent
+/// and by path. What this proves is that it IS checked too: without this,
+/// copying a directory would lose the defense that copying a file gains.
 #[tokio::test]
-async fn un_arbol_hacia_un_padre_sustituido_tampoco_se_copia() {
-    let a = arbol();
-    let visto = ancla(&a, "file:///d/sub").await;
+async fn a_tree_toward_a_replaced_parent_is_not_copied_either() {
+    let a = tree();
+    let seen = anchor(&a, "file:///d/sub").await;
 
-    std::fs::remove_dir(a.dir.path().join("d/sub")).expect("quitar");
-    std::os::unix::fs::symlink(a.dir.path().join("fuera"), a.dir.path().join("d/sub"))
-        .expect("enlace");
+    std::fs::remove_dir(a.dir.path().join("d/sub")).expect("remove");
+    std::os::unix::fs::symlink(a.dir.path().join("outside"), a.dir.path().join("d/sub"))
+        .expect("link");
 
-    let estado = copia(&a, "file:///arbol", "file:///d/sub/arbol", Some(visto)).await;
+    let state = copy(&a, "file:///tree", "file:///d/sub/tree", Some(seen)).await;
 
-    rehusado(&estado);
+    refused(&state);
     assert!(
-        !a.dir.path().join("fuera/arbol").exists(),
-        "ni siquiera se creó el directorio raíz del árbol"
+        !a.dir.path().join("outside/tree").exists(),
+        "not even the tree's root directory was created"
     );
 }
 
-/// Y mover por copia lo hereda: un `fs.move` que degrada a copy+delete escribe
-/// igual que una copia, y además borra el origen después.
+/// And moving by copy inherits it: an `fs.move` that degrades to copy+delete
+/// writes just like a copy, and also deletes the source afterward.
 #[tokio::test]
-async fn mover_a_un_destino_sustituido_ni_escribe_ni_borra_el_origen() {
-    let a = arbol();
-    let visto = ancla(&a, "file:///d/sub").await;
-    std::fs::remove_dir(a.dir.path().join("d/sub")).expect("quitar");
-    std::os::unix::fs::symlink(a.dir.path().join("fuera"), a.dir.path().join("d/sub"))
-        .expect("enlace");
+async fn moving_to_a_replaced_destination_neither_writes_nor_deletes_the_source() {
+    let a = tree();
+    let seen = anchor(&a, "file:///d/sub").await;
+    std::fs::remove_dir(a.dir.path().join("d/sub")).expect("remove");
+    std::os::unix::fs::symlink(a.dir.path().join("outside"), a.dir.path().join("d/sub"))
+        .expect("link");
 
-    // Cross-provider no hace falta: lo que se prueba es el camino anclado del
-    // move, y `move_anchored` lo lleva hasta `move_by_copy` igual.
+    // Cross-provider is not needed: what is being tested is the move's anchored
+    // path, and `move_anchored` carries it to `move_by_copy` the same way.
     let handle = a
         .engine
         .move_anchored(
-            &vp("file:///origen.txt"),
-            &vp("file:///d/sub/botin.txt"),
+            &vp("file:///source.txt"),
+            &vp("file:///d/sub/loot.txt"),
             TransferOptions {
                 on_collision: CollisionPolicy::Fail,
                 ..TransferOptions::default()
             },
             Actor::User,
-            Some(visto),
+            Some(seen),
         )
         .await
-        .expect("encola")
+        .expect("enqueues")
         .join()
         .await;
 
-    rehusado(&handle);
+    refused(&handle);
     assert!(
-        !a.dir.path().join("fuera/botin.txt").exists(),
-        "no escribió al otro lado"
+        !a.dir.path().join("outside/loot.txt").exists(),
+        "it did not write to the other side"
     );
     assert!(
-        a.dir.path().join("origen.txt").exists(),
-        "y no borró el origen: un move que no coloca no borra"
-    );
-}
-
-/// **Crear un fichero también va anclado** (#290), y es donde el ancla vale
-/// MÁS, no menos.
-///
-/// `fs.create` es el único método del wire cuyo éxito entrega una ruta a un
-/// programa de FUERA de norte: la ventana crea el fichero para abrirlo con el
-/// editor del escritorio. Con el enlace plantado entre el listado y la
-/// confirmación no se pierde un fichero vacío — se pierde la sesión de edición
-/// entera que el humano escribe después, en un directorio que él no estaba
-/// mirando.
-#[tokio::test]
-async fn crear_un_fichero_en_un_destino_sustituido_se_rehusa() {
-    let a = arbol();
-    let visto = ancla(&a, "file:///d/sub").await;
-
-    // El atacante cambia `d/sub` por un enlace a `fuera/`.
-    std::fs::remove_dir(a.dir.path().join("d/sub")).expect("quitar sub");
-    std::os::unix::fs::symlink(a.dir.path().join("fuera"), a.dir.path().join("d/sub"))
-        .expect("plantar el enlace");
-
-    let estado = a
-        .engine
-        .create_file_as(&vp("file:///d/sub/borrador.md"), Some(visto), Actor::User)
-        .await
-        .expect("encola")
-        .join()
-        .await;
-
-    rehusado(&estado);
-    assert!(
-        !a.dir.path().join("fuera/borrador.md").exists(),
-        "no creó nada al otro lado del enlace"
+        a.dir.path().join("source.txt").exists(),
+        "and it did not delete the source: a move that does not place does not delete"
     );
 }
 
-/// Y sin ancla se comporta como antes de #295: se crea donde diga la ruta.
+/// **Creating a file is also anchored** (#290), and it is where the anchor is
+/// worth MORE, not less.
 ///
-/// La comprobación es una MEJORA que quien lista puede pedir, no un requisito
-/// nuevo — un `norte` contra una ruta tecleada a mano sigue funcionando.
+/// `fs.create` is the only wire method whose success hands a path to a program
+/// OUTSIDE norte: the window creates the file to open it with the desktop's
+/// editor. With the link planted between the listing and the confirmation, it
+/// is not an empty file that gets lost — it is the whole editing session the
+/// human writes afterward, in a directory they were not looking at.
 #[tokio::test]
-async fn crear_sin_ancla_sigue_creando() {
-    let a = arbol();
-    let estado = a
+async fn creating_a_file_at_a_replaced_destination_is_refused() {
+    let a = tree();
+    let seen = anchor(&a, "file:///d/sub").await;
+
+    // The attacker swaps `d/sub` for a link to `outside/`.
+    std::fs::remove_dir(a.dir.path().join("d/sub")).expect("remove sub");
+    std::os::unix::fs::symlink(a.dir.path().join("outside"), a.dir.path().join("d/sub"))
+        .expect("plant the link");
+
+    let state = a
         .engine
-        .create_file_as(&vp("file:///d/sub/borrador.md"), None, Actor::User)
+        .create_file_as(&vp("file:///d/sub/draft.md"), Some(seen), Actor::User)
         .await
-        .expect("encola")
+        .expect("enqueues")
         .join()
         .await;
 
-    assert_eq!(estado, TaskState::Completed, "{estado:?}");
-    assert!(a.dir.path().join("d/sub/borrador.md").is_file());
+    refused(&state);
+    assert!(
+        !a.dir.path().join("outside/draft.md").exists(),
+        "it created nothing on the other side of the link"
+    );
+}
+
+/// And without an anchor it behaves as before #295: it is created wherever the
+/// path says.
+///
+/// The check is an IMPROVEMENT that whoever lists can ask for, not a new
+/// requirement — a `norte` against a hand-typed path keeps working.
+#[tokio::test]
+async fn creating_without_an_anchor_still_creates() {
+    let a = tree();
+    let state = a
+        .engine
+        .create_file_as(&vp("file:///d/sub/draft.md"), None, Actor::User)
+        .await
+        .expect("enqueues")
+        .join()
+        .await;
+
+    assert_eq!(state, TaskState::Completed, "{state:?}");
+    assert!(a.dir.path().join("d/sub/draft.md").is_file());
 }

@@ -1,6 +1,6 @@
-//! Fase 8f: resolución de schemes compuestos (ADR 0018) en el Engine — un
-//! `tar+mem`/`zip+mem` se sirve componiendo un `ArchiveProvider` sobre el
-//! provider del contenedor, sin registro previo.
+//! Phase 8f: resolving composite schemes (ADR 0018) in the Engine — a
+//! `tar+mem`/`zip+mem` is served by composing an `ArchiveProvider` over the
+//! container's provider, with no prior registration.
 
 use std::sync::Arc;
 
@@ -12,7 +12,7 @@ use norte_testkit::{MemProvider, TarSmith, ZipSmith};
 use norte_vfs::Provider;
 
 fn vp(wire: &str) -> VPath {
-    VPath::parse(wire).expect("wire válido de test")
+    VPath::parse(wire).expect("valid test wire")
 }
 
 async fn engine_with_container(name: &str, bytes: &[u8]) -> Engine {
@@ -21,7 +21,7 @@ async fn engine_with_container(name: &str, bytes: &[u8]) -> Engine {
     let mut sink = mem
         .write(&vp(&format!("mem:///{name}")))
         .await
-        .expect("write abre");
+        .expect("write opens");
     sink.write(Bytes::copy_from_slice(bytes))
         .await
         .expect("chunk");
@@ -31,14 +31,14 @@ async fn engine_with_container(name: &str, bytes: &[u8]) -> Engine {
 }
 
 #[tokio::test]
-async fn lista_y_lee_dentro_de_un_tar() {
-    let tar = TarSmith::new().file(b"docs/x.txt", b"dentro").build();
+async fn lists_and_reads_inside_a_tar() {
+    let tar = TarSmith::new().file(b"docs/x.txt", b"inside").build();
     let engine = engine_with_container("a.tar", &tar).await;
     let entries: Vec<_> = engine
         .list(&vp("tar+mem:///a.tar/!"))
         .await
-        .expect("list raíz interior")
-        .map(|e| e.expect("entrada ok"))
+        .expect("list inner root")
+        .map(|e| e.expect("entry ok"))
         .collect()
         .await;
     assert_eq!(entries.len(), 1);
@@ -46,27 +46,27 @@ async fn lista_y_lee_dentro_de_un_tar() {
     let e = engine
         .stat(&vp("tar+mem:///a.tar/!/docs/x.txt"))
         .await
-        .expect("stat interior");
+        .expect("inner stat");
     assert_eq!(e.size, Some(6));
 }
 
 #[tokio::test]
-async fn lee_dentro_de_un_zip() {
-    let zip = ZipSmith::new().file(b"hola.txt", b"desde el zip").build();
+async fn reads_inside_a_zip() {
+    let zip = ZipSmith::new().file(b"hello.txt", b"from the zip").build();
     let engine = engine_with_container("a.zip", &zip).await;
     let mut stream = engine
-        .read(&vp("zip+mem:///a.zip/!/hola.txt"), None)
+        .read(&vp("zip+mem:///a.zip/!/hello.txt"), None)
         .await
-        .expect("read interior");
+        .expect("inner read");
     let mut out = Vec::new();
     while let Some(chunk) = stream.next().await {
         out.extend_from_slice(&chunk.expect("chunk ok"));
     }
-    assert_eq!(out, b"desde el zip");
+    assert_eq!(out, b"from the zip");
 }
 
-/// Gzipea `bytes` en un único miembro gzip (mismo idioma que
-/// `norte-vfs-archive/tests/common::gzip`, no reexportado fuera del crate).
+/// Gzips `bytes` into a single gzip member (the same idiom as
+/// `norte-vfs-archive/tests/common::gzip`, not re-exported outside the crate).
 fn gzip(bytes: &[u8]) -> Vec<u8> {
     use std::io::Write as _;
     let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
@@ -74,21 +74,21 @@ fn gzip(bytes: &[u8]) -> Vec<u8> {
     enc.finish().expect("finish gz")
 }
 
-/// #55: `tar+gz` compuesto (`tar+gz+mem://…`) resuelve por el mismo camino
-/// del Engine que `tar`/`zip` — wiring del match de `provider_for` (ADR
-/// 0028). List + read byte-exacto a través del provider compuesto real.
+/// #55: a composite `tar+gz` (`tar+gz+mem://…`) resolves through the same
+/// Engine path as `tar`/`zip` — wiring of `provider_for`'s match (ADR 0028).
+/// List + read byte-exact through the real composite provider.
 #[tokio::test]
-async fn lista_y_lee_dentro_de_un_targz() {
+async fn lists_and_reads_inside_a_targz() {
     let tar = TarSmith::new()
-        .file(b"docs/x.txt", b"dentro del tgz")
+        .file(b"docs/x.txt", b"inside the tgz")
         .build();
     let tgz = gzip(&tar);
     let engine = engine_with_container("a.tar.gz", &tgz).await;
     let entries: Vec<_> = engine
         .list(&vp("tar+gz+mem:///a.tar.gz/!"))
         .await
-        .expect("list raíz interior")
-        .map(|e| e.expect("entrada ok"))
+        .expect("list inner root")
+        .map(|e| e.expect("entry ok"))
         .collect()
         .await;
     assert_eq!(entries.len(), 1);
@@ -96,77 +96,72 @@ async fn lista_y_lee_dentro_de_un_targz() {
     let mut stream = engine
         .read(&vp("tar+gz+mem:///a.tar.gz/!/docs/x.txt"), None)
         .await
-        .expect("read interior");
+        .expect("inner read");
     let mut out = Vec::new();
     while let Some(chunk) = stream.next().await {
         out.extend_from_slice(&chunk.expect("chunk ok"));
     }
-    assert_eq!(out, b"dentro del tgz");
+    assert_eq!(out, b"inside the tgz");
 }
 
 #[tokio::test]
-async fn el_arbol_virtual_declara_read_only() {
+async fn the_virtual_tree_declares_read_only() {
     let tar = TarSmith::new().file(b"x", b"1").build();
     let engine = engine_with_container("a.tar", &tar).await;
     let caps = engine
         .capabilities(&vp("tar+mem:///a.tar/!"))
         .await
-        .expect("capabilities del compuesto");
+        .expect("composite's capabilities");
     assert!(
         caps.flags.contains(norte_proto::CapabilityFlags::READ_ONLY),
-        "la UI y el copy engine vetan mutaciones sin round-trip (ADR 0018 E2)"
+        "the UI and the copy engine veto mutations without a round trip (ADR 0018 E2)"
     );
 }
 
-/// #56 (antes: v1 rechazaba con InvalidPath): zip DENTRO de tar navega y
-/// lee byte-exacto — el engine compone capa a capa (recursión de
-/// `provider_for`) y el interior comprimido del zip se sirve por rangos sobre
-/// la capa tar (componible, ADR 0018 A3).
+/// #56 (before: v1 rejected with InvalidPath): a zip INSIDE a tar navigates
+/// and reads byte-exact — the engine composes layer by layer (recursion of
+/// `provider_for`) and the zip's compressed interior is served by ranges over
+/// the tar layer (composable, ADR 0018 A3).
 #[tokio::test]
-async fn zip_dentro_de_tar_lista_y_lee() {
+async fn zip_inside_tar_lists_and_reads() {
     use norte_testkit::ZipSmith;
-    let zip = ZipSmith::new()
-        .file(b"uno.txt", b"contenido interior")
-        .build();
+    let zip = ZipSmith::new().file(b"one.txt", b"inner content").build();
     let tar = TarSmith::new().file(b"i.zip", &zip).build();
     let engine = engine_with_container("a.tar", &tar).await;
 
     let names: Vec<Vec<u8>> = engine
         .list(&vp("zip+tar+mem:///a.tar/!/i.zip/!"))
         .await
-        .expect("list anidado")
+        .expect("nested list")
         .map(|e| {
             e.expect("entry")
                 .path
                 .segments()
                 .last()
-                .expect("segmento")
+                .expect("segment")
                 .to_vec()
         })
         .collect()
         .await;
-    assert_eq!(names, vec![b"uno.txt".to_vec()]);
+    assert_eq!(names, vec![b"one.txt".to_vec()]);
 
     let mut stream = engine
-        .read(&vp("zip+tar+mem:///a.tar/!/i.zip/!/uno.txt"), None)
+        .read(&vp("zip+tar+mem:///a.tar/!/i.zip/!/one.txt"), None)
         .await
-        .expect("read anidado");
+        .expect("nested read");
     let mut got = Vec::new();
     while let Some(chunk) = stream.next().await {
         got.extend_from_slice(&chunk.expect("chunk"));
     }
-    assert_eq!(
-        got, b"contenido interior",
-        "byte-exacto a través de 2 capas"
-    );
+    assert_eq!(got, b"inner content", "byte-exact through 2 layers");
 }
 
-/// #56: el tope de capas (`max_nesting`) corta ANTES de componer — con el
-/// tope en 1, un path de dos capas responde `LimitExceeded("nesting")`.
+/// #56: the layer cap (`max_nesting`) cuts BEFORE composing — with the cap at
+/// 1, a two-layer path answers `LimitExceeded("nesting")`.
 #[tokio::test]
-async fn anidamiento_sobre_el_tope_es_limit_exceeded() {
+async fn nesting_over_the_cap_is_limit_exceeded() {
     use norte_testkit::ZipSmith;
-    let zip = ZipSmith::new().file(b"uno.txt", b"x").build();
+    let zip = ZipSmith::new().file(b"one.txt", b"x").build();
     let tar = TarSmith::new().file(b"i.zip", &zip).build();
     let engine = engine_with_container("a.tar", &tar).await;
     engine.set_archive_limits(norte_core::ArchiveLimits {
@@ -174,22 +169,22 @@ async fn anidamiento_sobre_el_tope_es_limit_exceeded() {
         ..norte_core::ArchiveLimits::default()
     });
     match engine
-        .stat(&vp("zip+tar+mem:///a.tar/!/i.zip/!/uno.txt"))
+        .stat(&vp("zip+tar+mem:///a.tar/!/i.zip/!/one.txt"))
         .await
     {
         Err(Error::LimitExceeded { limit }) if limit == "nesting" => {}
-        other => panic!("esperaba LimitExceeded(nesting), fue {other:?}"),
+        other => panic!("expected LimitExceeded(nesting), was {other:?}"),
     }
-    // La capa ÚNICA sigue funcionando bajo el mismo tope.
+    // The SINGLE layer still works under the same cap.
     engine
         .stat(&vp("tar+mem:///a.tar/!/i.zip"))
         .await
-        .expect("una capa dentro del tope");
+        .expect("one layer within the cap");
 }
 
 #[tokio::test]
-async fn compuesto_sin_marcador_es_invalid_path() {
-    let engine = engine_with_container("a.tar", b"da igual").await;
+async fn composite_without_a_marker_is_invalid_path() {
+    let engine = engine_with_container("a.tar", b"does not matter").await;
     assert_eq!(
         engine.stat(&vp("tar+mem:///a.tar")).await.unwrap_err(),
         Error::InvalidPath
@@ -197,7 +192,7 @@ async fn compuesto_sin_marcador_es_invalid_path() {
 }
 
 #[tokio::test]
-async fn contenedor_en_scheme_sin_provider_ni_conector() {
+async fn container_on_a_scheme_without_a_provider_or_connector() {
     let engine = Engine::new();
     assert_eq!(
         engine
@@ -205,19 +200,19 @@ async fn contenedor_en_scheme_sin_provider_ni_conector() {
             .await
             .unwrap_err(),
         Error::Unsupported,
-        "el interior necesita provider/conector: el error es el de siempre"
+        "the interior needs a provider/connector: it is the usual error"
     );
 }
 
 #[tokio::test]
-async fn dos_contenedores_comparten_provider_sin_mezclarse() {
-    // El ArchiveProvider se cachea por SCHEME (`tar+mem`), no por
-    // contenedor: cada path re-desmonta su exterior y el índice se clava
-    // por (wire, mtime, size). Dos tars distintos no pueden mezclarse.
+async fn two_containers_share_a_provider_without_mixing() {
+    // The ArchiveProvider is cached by SCHEME (`tar+mem`), not by container:
+    // every path re-mounts its exterior and the index is pinned by
+    // (wire, mtime, size). Two different tars cannot mix.
     let engine = Engine::new();
     let mem = Arc::new(MemProvider::new());
-    for (name, content) in [("a.tar", b"soy A".as_slice()), ("b.tar", b"soy B!")] {
-        let tar = TarSmith::new().file(b"quien.txt", content).build();
+    for (name, content) in [("a.tar", b"I am A".as_slice()), ("b.tar", b"I am B!")] {
+        let tar = TarSmith::new().file(b"who.txt", content).build();
         let mut sink = mem
             .write(&vp(&format!("mem:///{name}")))
             .await
@@ -228,9 +223,9 @@ async fn dos_contenedores_comparten_provider_sin_mezclarse() {
         sink.commit().await.expect("commit");
     }
     engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
-    for (name, content) in [("a.tar", b"soy A".as_slice()), ("b.tar", b"soy B!")] {
+    for (name, content) in [("a.tar", b"I am A".as_slice()), ("b.tar", b"I am B!")] {
         let mut stream = engine
-            .read(&vp(&format!("tar+mem:///{name}/!/quien.txt")), None)
+            .read(&vp(&format!("tar+mem:///{name}/!/who.txt")), None)
             .await
             .expect("read");
         let mut out = Vec::new();
@@ -242,32 +237,31 @@ async fn dos_contenedores_comparten_provider_sin_mezclarse() {
 }
 
 #[tokio::test]
-async fn copy_hacia_dentro_de_un_archivo_falla_unsupported() {
+async fn copy_into_an_archive_fails_unsupported() {
     let tar = TarSmith::new().file(b"x", b"1").build();
     let engine = engine_with_container("a.tar", &tar).await;
-    // Un origen local cualquiera (el propio contenedor sirve).
+    // Any local source (the container itself serves).
     let handle = engine
-        .copy(&vp("mem:///a.tar"), &vp("tar+mem:///a.tar/!/copia"))
+        .copy(&vp("mem:///a.tar"), &vp("tar+mem:///a.tar/!/copy"))
         .await
-        .expect("la task arranca; el fallo es del write del destino");
+        .expect("the task starts; the failure is the destination's write");
     match handle.join().await {
         norte_proto::TaskState::Failed { error, .. } => {
-            assert_eq!(error, Error::Unsupported, "READ_ONLY veta el write");
+            assert_eq!(error, Error::Unsupported, "READ_ONLY vetoes the write");
         }
-        other => panic!("esperaba Failed(Unsupported), fue {other:?}"),
+        other => panic!("expected Failed(Unsupported), was {other:?}"),
     }
 }
 
-/// #95.2: `Engine::set_archive_limits` gobierna los providers compuestos —
-/// con `max_entries` bajado, un tar de 3 entradas responde
-/// `LimitExceeded("entries")` en vez de listarse. Con los defaults, el
-/// mismo tar se lista sin drama.
+/// #95.2: `Engine::set_archive_limits` governs composite providers — with
+/// `max_entries` lowered, a 3-entry tar answers `LimitExceeded("entries")`
+/// instead of listing. With the defaults, the same tar lists without drama.
 #[tokio::test]
-async fn set_archive_limits_gobierna_la_composicion() {
+async fn set_archive_limits_governs_the_composition() {
     let tar = TarSmith::new()
-        .file(b"uno", b"1")
-        .file(b"dos", b"2")
-        .file(b"tres", b"3")
+        .file(b"one", b"1")
+        .file(b"two", b"2")
+        .file(b"three", b"3")
         .build();
     let engine = engine_with_container("a.tar", &tar).await;
     engine.set_archive_limits(norte_core::ArchiveLimits {
@@ -276,46 +270,46 @@ async fn set_archive_limits_gobierna_la_composicion() {
     });
     match engine.list(&vp("tar+mem:///a.tar/!")).await.map(|_| ()) {
         Err(Error::LimitExceeded { limit }) if limit == "entries" => {}
-        other => panic!("esperaba LimitExceeded(entries), fue {other:?}"),
+        other => panic!("expected LimitExceeded(entries), was {other:?}"),
     }
 
-    // Sin tocar límites: el mismo contenedor se lista entero.
+    // Without touching the limits: the same container lists in full.
     let engine = engine_with_container("a.tar", &tar).await;
     let n = engine
         .list(&vp("tar+mem:///a.tar/!"))
         .await
-        .expect("list con defaults")
+        .expect("list with defaults")
         .count()
         .await;
     assert_eq!(n, 3);
 }
 
-// ---------- rar (roadmap ítem 11): solo sobre un fichero LOCAL ----------
+// ---------- rar (roadmap item 11): only over a LOCAL file ----------
 
-/// El delegado necesita una ruta del sistema de ficheros. Traerse el `.rar`
-/// entero desde sftp/s3 sería una descarga que nadie pidió, así que la
-/// composición se niega ANTES de ocurrir, con `Unsupported`.
+/// The delegate needs a filesystem path. Fetching the whole `.rar` from
+/// sftp/s3 would be a download nobody asked for, so the composition is refused
+/// BEFORE it happens, with `Unsupported`.
 #[tokio::test]
-async fn rar_sobre_un_interior_remoto_se_niega_con_motivo() {
+async fn rar_over_a_remote_interior_is_refused_with_a_reason() {
     let engine = Engine::new();
     let p = vp("rar+sftp://host/a.rar/!/x.txt");
     assert!(matches!(engine.stat(&p).await, Err(Error::Unsupported)));
 }
 
-/// Un `.rar` DENTRO de otro archivo tampoco es un fichero local: no hay ruta
-/// que darle al delegado, y la capa exterior no se materializa a un temporal
-/// a espaldas de nadie.
+/// A `.rar` INSIDE another archive is not a local file either: there is no
+/// path to hand the delegate, and the outer layer is not materialized to a
+/// temp file behind anyone's back.
 #[tokio::test]
-async fn rar_anidado_en_otro_archivo_tampoco_es_local() {
+async fn nested_rar_in_another_archive_is_not_local_either() {
     let engine = Engine::new();
     let p = vp("rar+zip+file:///o.zip/!/a.rar/!/x.txt");
     assert!(matches!(engine.stat(&p).await, Err(Error::Unsupported)));
 }
 
-/// Un `rar+mem://` es la misma negativa: `mem` es un provider de tests, no un
-/// sistema de ficheros, y el arm de dispatch no mira quién está registrado.
+/// A `rar+mem://` is the same refusal: `mem` is a test provider, not a
+/// filesystem, and the dispatch arm does not look at who is registered.
 #[tokio::test]
-async fn rar_sobre_mem_se_niega_aunque_el_provider_este_registrado() {
+async fn rar_over_mem_is_refused_even_though_the_provider_is_registered() {
     let engine = engine_with_container("a.rar", b"Rar!\x1a\x07\x01\x00").await;
     assert!(matches!(
         engine.stat(&vp("rar+mem:///a.rar/!/x.txt")).await,
@@ -323,12 +317,12 @@ async fn rar_sobre_mem_se_niega_aunque_el_provider_este_registrado() {
     ));
 }
 
-/// Y sobre un fichero local SÍ compone: el engine lista lo que el delegado
-/// lee. Sin `7z` ni `unrar` en la máquina, el test se retira diciéndolo.
+/// And over a local file it DOES compose: the engine lists what the delegate
+/// reads. Without `7z` or `unrar` on the machine, the test bows out saying so.
 #[tokio::test]
-async fn rar_sobre_un_fichero_local_lista_de_verdad() {
+async fn rar_over_a_local_file_lists_for_real() {
     if norte_testkit::which_7z().is_none() {
-        eprintln!("sin 7z instalado: test retirado");
+        eprintln!("no 7z installed: test withdrawn");
         return;
     }
     let dir = tempfile::tempdir().expect("tempdir");
@@ -336,27 +330,27 @@ async fn rar_sobre_un_fichero_local_lista_de_verdad() {
     std::fs::write(
         &archive,
         norte_testkit::RarSmith::new()
-            .file(b"docs/hello.txt", b"hola norte\n")
+            .file(b"docs/hello.txt", b"hello norte\n")
             .build(),
     )
-    .expect("escribir");
+    .expect("write");
     let engine = Engine::new();
     engine.register_provider(
         Arc::new(norte_vfs_local::LocalProvider::rooted("/")) as Arc<dyn Provider>
     );
     let root = VPath::archive_compose(
         "rar",
-        &norte_vfs_local::vpath_from_native(&archive).expect("vpath del fichero"),
+        &norte_vfs_local::vpath_from_native(&archive).expect("file's vpath"),
         &[],
     )
     .expect("compose");
     let entries: Vec<_> = engine
         .list(&root)
         .await
-        .expect("list de la raíz del rar")
-        .map(|e| e.expect("entrada ok"))
+        .expect("list of the rar's root")
+        .map(|e| e.expect("entry ok"))
         .collect()
         .await;
-    assert_eq!(entries.len(), 1, "el directorio `docs`");
+    assert_eq!(entries.len(), 1, "the `docs` directory");
     assert_eq!(entries[0].path.file_name().unwrap().as_bytes(), b"docs");
 }

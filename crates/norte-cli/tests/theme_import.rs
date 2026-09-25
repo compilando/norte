@@ -1,6 +1,6 @@
-//! `norte theme import` de punta a punta: el binario lee un tema de VS Code
-//! con su cadena `include` y deja un TOML que el resolutor de los frontends
-//! encuentra por nombre.
+//! `norte theme import` end to end: the binary reads a VS Code theme with its
+//! `include` chain and leaves a TOML that the frontends' resolver finds by
+//! name.
 
 use std::path::{Path, PathBuf};
 
@@ -13,68 +13,69 @@ fn fixture(name: &str) -> PathBuf {
         .join(name)
 }
 
-/// El sujeto es el binario, nunca la configuración de quien corre la suite.
+/// The subject is the binary, never the configuration of whoever runs the
+/// suite.
 fn norte(config: &Path) -> Command {
-    let mut c = Command::cargo_bin("norte").expect("binario norte compilado");
+    let mut c = Command::cargo_bin("norte").expect("norte binary compiled");
     c.env("NORTE_CONFIG_DIR", config);
     c.env("NORTE_LANG", "en");
     c
 }
 
-/// Importar produce un TOML que PARSEA, resuelve todos los roles del núcleo
-/// y lleva los colores del hijo Y del padre: el viaje entero, no solo el
-/// parser.
+/// Importing produces a TOML that PARSES, resolves every core role and
+/// carries the colors of BOTH the child and the parent: the whole trip, not
+/// just the parser.
 #[test]
-fn importar_produce_un_tema_completo_y_resoluble() {
+fn importing_produces_a_complete_and_resolvable_theme() {
     let config = tempfile::tempdir().unwrap();
     let out = norte(config.path())
         .args(["theme", "import"])
         .arg(fixture("hijo.jsonc"))
-        .args(["--name", "noche"])
+        .args(["--name", "night"])
         .output()
         .unwrap();
     assert!(
         out.status.success(),
-        "import falló: {}",
+        "import failed: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    // El color que no es color se DICE, no se traga.
+    // The color that is not a color is REPORTED, not swallowed.
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("badge.background"), "{err}");
 
-    let escrito = std::fs::read_to_string(config.path().join("themes/noche.toml")).unwrap();
-    let t = Theme::from_toml(&escrito).expect("el TOML escrito parsea");
-    assert_eq!(t.name.as_deref(), Some("noche"));
+    let written = std::fs::read_to_string(config.path().join("themes/night.toml")).unwrap();
+    let t = Theme::from_toml(&written).expect("the written TOML parses");
+    assert_eq!(t.name.as_deref(), Some("night"));
     for &role in Role::CORE {
         let s = t.style(role);
         assert!(
             s.fg.is_some() || s.bg.is_some(),
-            "{role:?} sin color tras importar"
+            "{role:?} has no color after importing"
         );
     }
-    // Del hijo, que gana al padre en `editor.background`.
+    // From the child, which wins over the parent on `editor.background`.
     assert_eq!(t.style(Role::Background).bg.unwrap().to_hex(), "#101820");
     assert_eq!(t.style(Role::FocusBorder).fg.unwrap().to_hex(), "#ff8800");
-    // Del padre, que el hijo no define.
+    // From the parent, which the child does not define.
     assert_eq!(
         t.style(Role::PaneBackground).bg.unwrap().to_hex(),
         "#0a1018"
     );
-    // Con alfa: compuesto sobre el fondo, no el blanco opaco.
+    // With alpha: composited over the background, not opaque white.
     assert_ne!(
         t.style(Role::ScrollbarSlider).bg.unwrap().to_hex(),
         "#ffffff"
     );
 
-    // Y el resolutor de los frontends lo encuentra por NOMBRE.
-    let resuelto =
-        norte_frontend::theme::resolve_theme_in(Some("noche"), Some(config.path())).unwrap();
-    assert_eq!(resuelto.name.as_deref(), Some("noche"));
+    // And the frontends' resolver finds it by NAME.
+    let resolved =
+        norte_frontend::theme::resolve_theme_in(Some("night"), Some(config.path())).unwrap();
+    assert_eq!(resolved.name.as_deref(), Some("night"));
 }
 
-/// Sin `--name`, el nombre sale del `name` del JSON.
+/// Without `--name`, the name comes from the JSON's `name`.
 #[test]
-fn el_nombre_sale_del_json() {
+fn the_name_comes_from_the_json() {
     let config = tempfile::tempdir().unwrap();
     let out = norte(config.path())
         .args(["theme", "import"])
@@ -86,14 +87,14 @@ fn el_nombre_sale_del_json() {
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    assert!(config.path().join("themes/mi-tema-noche.toml").is_file());
+    assert!(config.path().join("themes/my-theme-night.toml").is_file());
 }
 
-/// Un nombre que ya es preset embebido se RECHAZA: el resolutor pone los
-/// presets primero, así que el fichero nunca se leería y escribirlo sería
-/// una operación que no hace nada sin decirlo.
+/// A name that is already an embedded preset gets REJECTED: the resolver puts
+/// the presets first, so the file would never be read and writing it would be
+/// an operation that does nothing without saying so.
 #[test]
-fn importar_con_el_nombre_de_un_preset_se_rechaza() {
+fn importing_with_a_presets_name_is_rejected() {
     let config = tempfile::tempdir().unwrap();
     let out = norte(config.path())
         .args(["theme", "import"])
@@ -101,71 +102,68 @@ fn importar_con_el_nombre_de_un_preset_se_rechaza() {
         .args(["--name", "nord"])
         .output()
         .unwrap();
-    assert!(
-        !out.status.success(),
-        "debería rechazar un nombre de preset"
-    );
+    assert!(!out.status.success(), "should reject a preset's name");
     assert!(!config.path().join("themes/nord.toml").exists());
 }
 
-/// Un nombre que el resolutor trataría como ruta tampoco se escribe.
+/// A name the resolver would treat as a path is not written either.
 #[test]
-fn un_nombre_que_es_ruta_se_rechaza() {
+fn a_name_that_is_a_path_is_rejected() {
     let config = tempfile::tempdir().unwrap();
     let out = norte(config.path())
         .args(["theme", "import"])
         .arg(fixture("hijo.jsonc"))
-        .args(["--name", "../fuera"])
+        .args(["--name", "../outside"])
         .output()
         .unwrap();
     assert!(!out.status.success());
-    assert!(!config.path().join("fuera.toml").exists());
+    assert!(!config.path().join("outside.toml").exists());
 }
 
-/// No se pisa un tema existente sin `--force`; con él, sí.
+/// An existing theme is not overwritten without `--force`; with it, it is.
 #[test]
-fn no_sobrescribe_sin_force() {
+fn does_not_overwrite_without_force() {
     let config = tempfile::tempdir().unwrap();
-    let temas = config.path().join("themes");
-    std::fs::create_dir_all(&temas).unwrap();
-    std::fs::write(temas.join("noche.toml"), "name = \"mío\"\n").unwrap();
+    let themes = config.path().join("themes");
+    std::fs::create_dir_all(&themes).unwrap();
+    std::fs::write(themes.join("night.toml"), "name = \"mine\"\n").unwrap();
 
-    let sin = norte(config.path())
+    let without = norte(config.path())
         .args(["theme", "import"])
         .arg(fixture("hijo.jsonc"))
-        .args(["--name", "noche"])
+        .args(["--name", "night"])
         .output()
         .unwrap();
-    assert!(!sin.status.success());
+    assert!(!without.status.success());
     assert_eq!(
-        std::fs::read_to_string(temas.join("noche.toml")).unwrap(),
-        "name = \"mío\"\n",
-        "el tema del usuario sigue intacto"
+        std::fs::read_to_string(themes.join("night.toml")).unwrap(),
+        "name = \"mine\"\n",
+        "the user's theme is still intact"
     );
 
-    let con = norte(config.path())
-        .args(["theme", "import", "--force", "--name", "noche"])
+    let with = norte(config.path())
+        .args(["theme", "import", "--force", "--name", "night"])
         .arg(fixture("hijo.jsonc"))
         .output()
         .unwrap();
     assert!(
-        con.status.success(),
+        with.status.success(),
         "{}",
-        String::from_utf8_lossy(&con.stderr)
+        String::from_utf8_lossy(&with.stderr)
     );
     assert!(
-        std::fs::read_to_string(temas.join("noche.toml"))
+        std::fs::read_to_string(themes.join("night.toml"))
             .unwrap()
-            .contains("name = \"noche\"")
+            .contains("name = \"night\"")
     );
 }
 
-/// Un tema que se incluye a sí mismo (a → b → a) es un ERROR, no un cuelgue.
+/// A theme that includes itself (a → b → a) is an ERROR, not a hang.
 #[test]
-fn un_ciclo_de_include_es_error() {
+fn an_include_cycle_is_an_error() {
     let config = tempfile::tempdir().unwrap();
     let out = norte(config.path())
-        .args(["theme", "import", "--name", "ciclo"])
+        .args(["theme", "import", "--name", "cycle"])
         .arg(fixture("ciclo-a.json"))
         .timeout(std::time::Duration::from_secs(30))
         .output()
@@ -173,21 +171,21 @@ fn un_ciclo_de_include_es_error() {
     assert!(!out.status.success());
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("loops back"), "{err}");
-    assert!(!config.path().join("themes/ciclo.toml").exists());
+    assert!(!config.path().join("themes/cycle.toml").exists());
 }
 
-/// `--use` deja el tema puesto en `[ui] theme` y respeta lo que ya había en
-/// `norte.toml`, comentarios incluidos.
+/// `--use` leaves the theme set in `[ui] theme` and respects what was already
+/// in `norte.toml`, comments included.
 #[test]
-fn use_escribe_ui_theme_sin_perder_comentarios() {
+fn use_writes_ui_theme_without_losing_comments() {
     let config = tempfile::tempdir().unwrap();
     std::fs::write(
         config.path().join("norte.toml"),
-        "# mi config\n[ui]\ntheme = \"nord\"\n",
+        "# my config\n[ui]\ntheme = \"nord\"\n",
     )
     .unwrap();
     let out = norte(config.path())
-        .args(["theme", "import", "--use", "--name", "noche"])
+        .args(["theme", "import", "--use", "--name", "night"])
         .arg(fixture("hijo.jsonc"))
         .output()
         .unwrap();
@@ -197,12 +195,12 @@ fn use_escribe_ui_theme_sin_perder_comentarios() {
         String::from_utf8_lossy(&out.stderr)
     );
     let toml = std::fs::read_to_string(config.path().join("norte.toml")).unwrap();
-    assert!(toml.contains("# mi config"), "{toml}");
-    assert!(toml.contains("theme = \"noche\""), "{toml}");
+    assert!(toml.contains("# my config"), "{toml}");
+    assert!(toml.contains("theme = \"night\""), "{toml}");
 }
 
-/// Una cadena de `n` includes en un directorio temporal: `t0` → `t1` → … → `tn`.
-fn cadena_de_includes(dir: &Path, n: usize) -> PathBuf {
+/// A chain of `n` includes in a temp directory: `t0` → `t1` → … → `tn`.
+fn chain_of_includes(dir: &Path, n: usize) -> PathBuf {
     for i in 0..=n {
         let include = if i < n {
             format!(r#""include": "t{}.json", "#, i + 1)
@@ -218,15 +216,15 @@ fn cadena_de_includes(dir: &Path, n: usize) -> PathBuf {
     dir.join("t0.json")
 }
 
-/// Ocho includes se siguen; nueve no: el tope corta una cadena patológica
-/// sin rechazar las de verdad (VS Code anida tres).
+/// Eight includes are followed; nine are not: the cap cuts a pathological
+/// chain without rejecting the real ones (VS Code nests three).
 #[test]
-fn el_tope_de_includes() {
-    let ocho = tempfile::tempdir().unwrap();
+fn the_includes_cap() {
+    let eight = tempfile::tempdir().unwrap();
     let config = tempfile::tempdir().unwrap();
     let out = norte(config.path())
-        .args(["theme", "import", "--name", "ocho"])
-        .arg(cadena_de_includes(ocho.path(), 8))
+        .args(["theme", "import", "--name", "eight"])
+        .arg(chain_of_includes(eight.path(), 8))
         .output()
         .unwrap();
     assert!(
@@ -235,43 +233,44 @@ fn el_tope_de_includes() {
         String::from_utf8_lossy(&out.stderr)
     );
 
-    let nueve = tempfile::tempdir().unwrap();
+    let nine = tempfile::tempdir().unwrap();
     let out = norte(config.path())
-        .args(["theme", "import", "--name", "nueve"])
-        .arg(cadena_de_includes(nueve.path(), 9))
+        .args(["theme", "import", "--name", "nine"])
+        .arg(chain_of_includes(nine.path(), 9))
         .output()
         .unwrap();
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("more than 8 includes"));
 }
 
-/// ¿Lleva `s` algo que una terminal interpretaría o que falsea lo que se lee?
-fn tiene_peligro(s: &str) -> bool {
-    // El salto de línea que cierra cada mensaje es del CLI, no del tema.
+/// Does `s` carry anything a terminal would interpret, or that misrepresents
+/// what is read?
+fn has_hazard(s: &str) -> bool {
+    // The newline that closes each message belongs to the CLI, not the theme.
     s.chars()
         .filter(|c| *c != '\n')
         .any(norte_encoding::is_terminal_hazard)
 }
 
-/// Las claves de `colors` las escribe quien publicó el tema, y las que no
-/// son color se NOMBRAN en stderr. Una clave con ESC+OSC reescribiría el
-/// título de la terminal de quien importa: sale enmascarada.
+/// The `colors` keys are written by whoever published the theme, and the ones
+/// that are not a color get NAMED on stderr. A key with ESC+OSC would rewrite
+/// the terminal title of whoever imports it: it comes out masked.
 #[test]
-fn una_clave_hostil_no_llega_cruda_a_la_terminal() {
+fn a_hostile_key_does_not_reach_the_terminal_raw() {
     let payload = norte_testkit::corpus::hostile_runs()
         .into_iter()
         .find(|r| r.id == "run_osc_title_injection")
-        .expect("fixture del corpus")
+        .expect("corpus fixture")
         .run;
     let dir = tempfile::tempdir().unwrap();
-    let tema = dir.path().join("hostil.json");
-    let json = serde_json::json!({ "type": "dark", "colors": { payload: "no es un color" } });
-    std::fs::write(&tema, json.to_string()).unwrap();
+    let theme = dir.path().join("hostile.json");
+    let json = serde_json::json!({ "type": "dark", "colors": { payload: "not a color" } });
+    std::fs::write(&theme, json.to_string()).unwrap();
 
     let config = tempfile::tempdir().unwrap();
     let out = norte(config.path())
-        .args(["theme", "import", "--name", "hostil"])
-        .arg(&tema)
+        .args(["theme", "import", "--name", "hostile"])
+        .arg(&theme)
         .output()
         .unwrap();
     assert!(
@@ -280,28 +279,29 @@ fn una_clave_hostil_no_llega_cruda_a_la_terminal() {
         String::from_utf8_lossy(&out.stderr)
     );
     let err = String::from_utf8_lossy(&out.stderr);
-    assert!(err.contains("app.quit"), "la clave se nombra: {err}");
-    assert!(!tiene_peligro(&err), "ESC/BEL crudos en stderr: {err:?}");
+    assert!(err.contains("app.quit"), "the key is named: {err}");
+    assert!(!has_hazard(&err), "raw ESC/BEL in stderr: {err:?}");
 }
 
-/// Un nombre de fichero con RIGHT-TO-LEFT OVERRIDE ni rompe la cabecera del
-/// TOML ni la falsea para quien la lea, ni sale crudo en los mensajes.
+/// A file name with a RIGHT-TO-LEFT OVERRIDE neither breaks the TOML header
+/// nor misrepresents it to whoever reads it, nor comes out raw in the
+/// messages.
 #[cfg(unix)]
 #[test]
-fn un_nombre_de_fichero_hostil_se_enmascara_en_cabecera_y_mensajes() {
+fn a_hostile_file_name_is_masked_in_header_and_messages() {
     use std::os::unix::ffi::OsStrExt as _;
-    let nombre = norte_testkit::corpus::hostile_names()
+    let name = norte_testkit::corpus::hostile_names()
         .into_iter()
         .find(|n| n.id == "rtl_override")
-        .expect("fixture del corpus");
+        .expect("corpus fixture");
     let dir = tempfile::tempdir().unwrap();
-    let tema = dir.path().join(std::ffi::OsStr::from_bytes(&nombre.bytes));
-    std::fs::copy(fixture("padre.json"), &tema).unwrap();
+    let theme = dir.path().join(std::ffi::OsStr::from_bytes(&name.bytes));
+    std::fs::copy(fixture("padre.json"), &theme).unwrap();
 
     let config = tempfile::tempdir().unwrap();
     let out = norte(config.path())
         .args(["theme", "import", "--name", "rlo"])
-        .arg(&tema)
+        .arg(&theme)
         .output()
         .unwrap();
     assert!(
@@ -309,29 +309,29 @@ fn un_nombre_de_fichero_hostil_se_enmascara_en_cabecera_y_mensajes() {
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    assert!(!tiene_peligro(&String::from_utf8_lossy(&out.stdout)));
-    let escrito = std::fs::read_to_string(config.path().join("themes/rlo.toml")).unwrap();
-    let cabecera: String = escrito.lines().take_while(|l| l.starts_with('#')).collect();
-    assert!(!tiene_peligro(&cabecera), "{cabecera:?}");
+    assert!(!has_hazard(&String::from_utf8_lossy(&out.stdout)));
+    let written = std::fs::read_to_string(config.path().join("themes/rlo.toml")).unwrap();
+    let header: String = written.lines().take_while(|l| l.starts_with('#')).collect();
+    assert!(!has_hazard(&header), "{header:?}");
 }
 
-/// Un tema guardado en UTF-16 con BOM —lo que exportan algunos editores de
-/// Windows— es un tema, no «no es un tema de VS Code».
+/// A theme saved as UTF-16 with a BOM — what some Windows editors export — is
+/// a theme, not "not a VS Code theme".
 #[test]
-fn un_tema_en_utf16_con_bom_se_importa() {
-    let texto = std::fs::read_to_string(fixture("padre.json")).unwrap();
+fn a_utf16_theme_with_a_bom_is_imported() {
+    let text = std::fs::read_to_string(fixture("padre.json")).unwrap();
     let mut bytes = vec![0xFF, 0xFE];
-    for unidad in texto.encode_utf16() {
-        bytes.extend_from_slice(&unidad.to_le_bytes());
+    for unit in text.encode_utf16() {
+        bytes.extend_from_slice(&unit.to_le_bytes());
     }
     let dir = tempfile::tempdir().unwrap();
-    let tema = dir.path().join("utf16.json");
-    std::fs::write(&tema, bytes).unwrap();
+    let theme = dir.path().join("utf16.json");
+    std::fs::write(&theme, bytes).unwrap();
 
     let config = tempfile::tempdir().unwrap();
     let out = norte(config.path())
         .args(["theme", "import", "--name", "u16"])
-        .arg(&tema)
+        .arg(&theme)
         .output()
         .unwrap();
     assert!(
@@ -348,22 +348,22 @@ fn un_tema_en_utf16_con_bom_se_importa() {
     );
 }
 
-/// Sin BOM, UTF-16 tiene NULs y no se puede distinguir de un binario: el
-/// error lo dice, en vez de afirmar que el fichero no es un tema.
+/// Without a BOM, UTF-16 has NULs and cannot be told apart from a binary: the
+/// error says so, instead of claiming the file is not a theme.
 #[test]
-fn utf16_sin_bom_da_un_error_que_nombra_el_encoding() {
+fn utf16_without_bom_gives_an_error_that_names_the_encoding() {
     let mut bytes = Vec::new();
-    for unidad in "{\"colors\":{}}".encode_utf16() {
-        bytes.extend_from_slice(&unidad.to_le_bytes());
+    for unit in "{\"colors\":{}}".encode_utf16() {
+        bytes.extend_from_slice(&unit.to_le_bytes());
     }
     let dir = tempfile::tempdir().unwrap();
-    let tema = dir.path().join("sin-bom.json");
-    std::fs::write(&tema, bytes).unwrap();
+    let theme = dir.path().join("no-bom.json");
+    std::fs::write(&theme, bytes).unwrap();
 
     let config = tempfile::tempdir().unwrap();
     let out = norte(config.path())
         .args(["theme", "import", "--name", "x"])
-        .arg(&tema)
+        .arg(&theme)
         .output()
         .unwrap();
     assert!(!out.status.success());

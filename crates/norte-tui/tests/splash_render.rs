@@ -1,14 +1,15 @@
-//! La pantalla de arranque, PINTADA.
+//! The splash screen, PAINTED.
 //!
-//! Existe porque no había nada: `src/splash.rs` prueba el modelo —que se pone,
-//! que se quita, qué filas lleva— y el pintor de `ui/overlays.rs` no aparecía
-//! en un solo assert. Convertir el splash en portada no puso nada en rojo, que
-//! es justo la señal de que lo pintado no lo comprobaba nadie.
+//! It exists because there was nothing: `src/splash.rs` tests the model
+//! —that it goes up, that it comes down, which rows it carries— and
+//! `ui/overlays.rs`'s painter did not show up in a single assert. Turning
+//! the splash into a cover put nothing in red, which is exactly the sign
+//! that nobody was checking what got painted.
 //!
-//! Lo que se fija aquí son las dos formas y la frontera entre ellas: `brief`
-//! —sin secciones— ocupa la pantalla y no dibuja el cromo de un diálogo;
-//! `home` —con filas numeradas— sigue siendo una caja, porque una lista que se
-//! lee y se pulsa necesita el marco que la delimita.
+//! What is pinned here are the two shapes and the boundary between them:
+//! `brief` —with no sections— fills the screen and does not draw a
+//! dialog's chrome; `home` —with numbered rows— is still a box, because a
+//! list that gets read and pressed needs the frame that bounds it.
 
 use norte_frontend::splash::{Daemon, SplashRow, SplashSection, SplashView};
 use norte_proto::VPath;
@@ -19,11 +20,11 @@ use ratatui::backend::TestBackend;
 
 fn vp(wire: &str) -> VPath {
     let _ = norte_i18n::force(norte_i18n::Lang::Es);
-    VPath::parse(wire).expect("wire válido")
+    VPath::parse(wire).expect("valid wire")
 }
 
-fn app_con_splash(sections: Vec<SplashSection>) -> App {
-    let dir = vp("mem:///casa");
+fn app_with_splash(sections: Vec<SplashSection>) -> App {
+    let dir = vp("mem:///home");
     let mut app = App::new(
         Pane::new(dir.clone(), Vec::new()),
         Pane::new(dir, Vec::new()),
@@ -38,73 +39,74 @@ fn app_con_splash(sections: Vec<SplashSection>) -> App {
     app
 }
 
-fn una_seccion() -> Vec<SplashSection> {
+fn one_section() -> Vec<SplashSection> {
     vec![SplashSection {
         title_key: "splash-popular",
         rows: vec![SplashRow {
-            label: "casa".to_owned(),
+            label: "home".to_owned(),
             detail: "12".to_owned(),
             command: "nav.goto".to_owned(),
-            arg: Some("mem:///casa".to_owned()),
+            arg: Some("mem:///home".to_owned()),
         }],
     }]
 }
 
-fn pantalla(app: &App, ancho: u16, alto: u16) -> String {
-    let mut terminal = Terminal::new(TestBackend::new(ancho, alto)).expect("backend");
+fn screen(app: &App, width: u16, height: u16) -> String {
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("backend");
     terminal.draw(|f| ui::draw(f, app)).expect("draw");
-    (0..alto)
-        .flat_map(|y| (0..ancho).map(move |x| (x, y)))
+    (0..height)
+        .flat_map(|y| (0..width).map(move |x| (x, y)))
         .map(|(x, y)| terminal.backend().buffer()[(x, y)].symbol().to_owned())
         .collect()
 }
 
-/// Sin secciones es PORTADA: el logo, y ningún cromo de diálogo.
+/// With no sections it is a COVER: the logo, and no dialog chrome.
 ///
-/// El título del diálogo es la señal, y no los caracteres de borde: en modo
-/// caja el splash se pinta ENCIMA del listado, que tiene los suyos, así que
-/// buscar bordes no distinguiría una forma de la otra.
+/// The dialog's title is the signal, not the border characters: in box
+/// mode the splash paints OVER the listing, which has its own borders, so
+/// looking for borders would not tell one shape from the other.
 #[test]
-fn sin_secciones_la_pantalla_de_arranque_es_una_portada() {
-    let app = app_con_splash(Vec::new());
-    let visto = pantalla(&app, 80, 24);
+fn with_no_sections_the_splash_screen_is_a_cover() {
+    let app = app_with_splash(Vec::new());
+    let seen = screen(&app, 80, 24);
 
-    assert!(visto.contains("N O R T E"), "el logo se pinta: {visto:?}");
+    assert!(seen.contains("N O R T E"), "the logo is painted: {seen:?}");
     assert!(
-        visto.contains("0.3.0-alpha.4"),
-        "y debajo dice qué build corre"
+        seen.contains("0.3.0-alpha.4"),
+        "and below it says which build is running"
     );
     assert!(
-        !visto.contains(&norte_i18n::t("splash-title")),
-        "una portada no lleva el título de algo que haya que cerrar"
+        !seen.contains(&norte_i18n::t("splash-title")),
+        "a cover does not carry the title of something that needs closing"
     );
 }
 
-/// Con filas numeradas sigue siendo una CAJA, con su título y su lista.
+/// With numbered rows it is still a BOX, with its title and its list.
 #[test]
-fn con_secciones_la_pantalla_de_arranque_sigue_siendo_una_caja() {
-    let app = app_con_splash(una_seccion());
-    let visto = pantalla(&app, 80, 24);
+fn with_sections_the_splash_screen_is_still_a_box() {
+    let app = app_with_splash(one_section());
+    let seen = screen(&app, 80, 24);
 
     assert!(
-        visto.contains(&norte_i18n::t("splash-title")),
-        "la caja se anuncia: {visto:?}"
+        seen.contains(&norte_i18n::t("splash-title")),
+        "the box announces itself: {seen:?}"
     );
-    assert!(visto.contains("casa"), "y enseña la fila");
-    assert!(visto.contains('1'), "con su número, que es lo que la abre");
+    assert!(seen.contains("home"), "and shows the row");
+    assert!(
+        seen.contains('1'),
+        "with its number, which is what opens it"
+    );
 }
 
-/// El logo cabe en una terminal estrecha sin partirse por la mitad.
+/// The logo fits in a narrow terminal without breaking in half.
 ///
-/// Ochenta columnas es lo ancho; en 40 el arte mide 35 y sigue entrando. Lo
-/// que este test protege es el día que alguien haga el logo más ancho sin
-/// mirar: se vería cortado, y eso en una portada es lo único que hay.
+/// Eighty columns is the width it was drawn at; at 40 the art measures 35
+/// and still fits. What this test protects is the day someone makes the
+/// logo wider without checking: it would show up cut off, and on a cover
+/// that is the only thing there is.
 #[test]
-fn el_logo_entra_en_una_terminal_estrecha() {
-    let app = app_con_splash(Vec::new());
-    let visto = pantalla(&app, 40, 20);
-    assert!(
-        visto.contains("N O R T E"),
-        "entra en 40 columnas: {visto:?}"
-    );
+fn the_logo_fits_in_a_narrow_terminal() {
+    let app = app_with_splash(Vec::new());
+    let seen = screen(&app, 40, 20);
+    assert!(seen.contains("N O R T E"), "fits in 40 columns: {seen:?}");
 }

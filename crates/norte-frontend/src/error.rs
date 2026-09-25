@@ -1,39 +1,39 @@
-//! Vocabulario de CATEGORÍAS de error del protocolo, compartido por los dos
-//! frontends (#158, revisión de la fase C1 — MAJOR-3).
+//! Vocabulary of protocol error CATEGORIES, shared by both frontends (#158,
+//! phase C1 review — MAJOR-3).
 //!
-//! Vivía en `norte-tui`, así que la GUI no podía alcanzarlo y acababa
-//! interpolando el `Display` INGLÉS del [`Error`] en frases por lo demás
-//! localizadas. Es el mismo argumento que movió aquí
-//! [`compare::CompareView`](crate::compare::CompareView): un error se dice
-//! igual en las dos superficies, o la que se quede atrás miente en el idioma
-//! del lector.
+//! It used to live in `norte-tui`, so the GUI could not reach it and ended up
+//! interpolating the ENGLISH `Display` of [`Error`] into otherwise localized
+//! sentences. It is the same argument that moved
+//! [`compare::CompareView`](crate::compare::CompareView) here: an error is
+//! said the same way on both surfaces, or whichever falls behind lies in the
+//! reader's own language.
 //!
-//! Dos razones para que sea una CATEGORÍA y no el `Display`:
+//! Two reasons for it to be a CATEGORY and not the `Display`:
 //!
-//! * el `Display` no está traducido, y Fluent no tiene ninguna oportunidad de
-//!   traducirlo;
-//! * varias variantes interpolan datos del PEER —`HostKeyUnknown` lleva host,
-//!   algoritmo y huella; `LimitExceeded` su límite—, y un host arbitrario en
-//!   una barra es un vector bidi/control. La clave estable los descarta por
-//!   patrón, así que no hay nada que sanear.
+//! * the `Display` is not translated, and Fluent has no chance to translate
+//!   it;
+//! * several variants interpolate PEER data — `HostKeyUnknown` carries a
+//!   host, algorithm and fingerprint; `LimitExceeded` its limit — and an
+//!   arbitrary host in a bar is a bidi/control vector. The stable key
+//!   discards them by pattern, so there is nothing to sanitize.
 
 use norte_i18n::{Lang, t_in};
 use norte_proto::Error;
 
-/// Clave Fluent ESTABLE de la CATEGORÍA de un [`Error`] del protocolo (spec
-/// §17.7, #20). Es la base de [`error_category`] y también el vocabulario que
-/// ven los scripts Lua (`nil, clave` — M4 Lua): el script compara contra
-/// claves estables, jamás contra texto localizado. Los campos con detalle
-/// (host, `rule`, retryable…) se DESCARTAN por patrón: `PolicyDenied` no
-/// expone la regla concreta (vocabulario cerrado); `HostKeyUnknown`/
-/// `Mismatch` no filtran el host (además un `Display` con host arbitrario
-/// sería un vector bidi/control en la barra). Una categoría futura
-/// (`Unknown`, cliente N-1) cae a `err-unknown`.
+/// The STABLE Fluent key for a protocol [`Error`]'s CATEGORY (spec §17.7,
+/// #20). It is the basis of [`error_category`] and also the vocabulary Lua
+/// scripts see (`nil, key` — M4 Lua): the script compares against stable
+/// keys, never against localized text. Fields carrying detail (host, `rule`,
+/// retryable…) are DISCARDED by pattern: `PolicyDenied` does not expose the
+/// concrete rule (closed vocabulary); `HostKeyUnknown`/`Mismatch` do not leak
+/// the host (also, a `Display` with an arbitrary host would be a bidi/control
+/// vector in the bar). A future category (`Unknown`, an N-1 client) falls
+/// back to `err-unknown`.
 ///
 /// ```
 /// use norte_frontend::error::error_key;
 /// assert_eq!(error_key(&norte_proto::Error::PermissionDenied), "err-permission-denied");
-/// // El detalle del peer se descarta: la clave es la MISMA para todo host.
+/// // The peer's detail is discarded: the key is the SAME for every host.
 /// assert_eq!(error_key(&norte_proto::Error::NotFound), "err-not-found");
 /// ```
 #[must_use]
@@ -47,10 +47,10 @@ pub fn error_key(e: &Error) -> &'static str {
             ConflictKind::CaseCollision => "err-conflict-case",
             ConflictKind::Normalization => "err-conflict-normalization",
             ConflictKind::TypeMismatch => "err-conflict-type",
-            // 0.84.0 (ADR 0151). Con la clave genérica el lector leería
-            // «conflicto» a secas, que es exactamente lo que este subtipo
-            // existe para no decir: lo que ha pasado es que su carpeta de
-            // destino ya no está, y de ahí se deduce qué hacer.
+            // 0.84.0 (ADR 0151). With the generic key the reader would read a
+            // plain "conflict", which is exactly what this subtype exists to
+            // avoid saying: what happened is that its destination directory
+            // is no longer there, and what to do follows from that.
             ConflictKind::DestinationGone => "err-conflict-destination-gone",
             _ => "err-conflict",
         },
@@ -65,58 +65,60 @@ pub fn error_key(e: &Error) -> &'static str {
         Error::Internal { .. } => "err-internal",
         Error::Loop => "err-loop",
         Error::Corrupt => "err-corrupt",
-        // #95.3: límite local ≠ corrupción. El sub-vocabulario (`entries`/
-        // `decompressed-bytes`) es diagnóstico, no UX: una sola clave.
+        // #95.3: a local limit ≠ corruption. The sub-vocabulary (`entries`/
+        // `decompressed-bytes`) is diagnostic, not UX: a single key.
         Error::LimitExceeded { .. } => "err-limit-exceeded",
         Error::HostKeyUnknown { .. } => "err-host-key-unknown",
-        // 0.63.0 (#325): la TUI lo intercepta y abre el diálogo, así que este
-        // texto solo lo ven los frontends que aún no preguntan (la CLI, y la
-        // ventana hasta #327). Tiene que decir qué hacer sin diálogo — poner
-        // la variable de entorno—, no «error desconocido».
+        // 0.63.0 (#325): the TUI intercepts it and opens the dialog, so this
+        // text is only seen by frontends that do not yet ask (the CLI, and
+        // the window until #327). It has to say what to do without a dialog —
+        // set the environment variable — not "unknown error".
         Error::SecretNeeded { .. } => "err-secret-needed",
         Error::HostKeyMismatch { .. } => "err-host-key-mismatch",
         Error::CursorExpired => "err-cursor-expired",
-        // 0.36.0 (batch rename): las dos son ACCIONABLES — caer en
-        // `err-unknown` sería lo contrario de lo que su rustdoc promete.
+        // 0.36.0 (batch rename): both are ACTIONABLE — falling back to
+        // `err-unknown` would be the opposite of what its rustdoc promises.
         Error::PlanStale => "err-plan-stale",
         Error::PlanNotExecutable => "err-plan-not-executable",
-        // 0.40.0 (sincronización): las TRES relaciones se pintan distinto y la
-        // primera no es un caso degenerado de las otras dos, así que el
-        // sub-vocabulario sí viaja —igual que el de `Conflict`—. Lo accionable
-        // es distinto en cada una: con `Same` hay que elegir otro directorio,
-        // con las otras dos hay que salir del árbol que contiene al otro. Sin
-        // este brazo la negativa caía en `err-unknown`, que es exactamente lo
-        // que la variante existe para no ser.
+        // 0.40.0 (sync): the THREE relations are painted differently and the
+        // first is not a degenerate case of the other two, so the
+        // sub-vocabulary does travel — same as `Conflict`'s. What is
+        // actionable differs in each: with `Same` another directory must be
+        // chosen, with the other two you must leave the tree that contains
+        // the other one. Without this arm the refusal fell into
+        // `err-unknown`, which is exactly what the variant exists not to be.
         Error::OverlappingRoots { relation } => match relation {
             RootOverlap::Same => "err-overlapping-roots-same",
             RootOverlap::SourceInsideDest => "err-overlapping-roots-source-inside",
             RootOverlap::DestInsideSource => "err-overlapping-roots-dest-inside",
             _ => "err-overlapping-roots",
         },
-        // 0.41.0 (#178): el journal de esta sesión no se puede abrir y la
-        // mutación se rehusó. Es de la familia accionable —hay UN fichero que
-        // arreglar o quitar— y caer en «error desconocido» dejaría al usuario
-        // ante una sesión que de pronto no muta y sin decirle por qué.
+        // 0.41.0 (#178): this session's journal cannot be opened and the
+        // mutation was refused. It is in the actionable family — there is ONE
+        // file to fix or remove — and falling into "unknown error" would
+        // leave the user facing a session that suddenly does not mutate,
+        // without saying why.
         Error::JournalUnavailable => "err-journal-unavailable",
         _ => "err-unknown",
     }
 }
 
-/// Texto LOCALIZADO de la categoría de un [`Error`] del protocolo en la
-/// lengua que se PIDE: la clave estable de [`error_key`] pasada por Fluent —
-/// jamás el `Display` inglés hardcodeado ni un string del OS.
+/// LOCALIZED text for a protocol [`Error`]'s category in the REQUESTED
+/// language: [`error_key`]'s stable key run through Fluent — never the
+/// hardcoded English `Display` nor an OS string.
 ///
-/// Existe por lo mismo que `t_in` frente a `t`: quien compone una frase con
-/// un `lang` explícito —[`compare::status_line`](crate::compare::status_line)
-/// lo recibe— no puede rellenar una de sus piezas con la lengua AMBIENTE, o
-/// devuelve media frase traducida (revisión de la fase C1, MINOR-6).
+/// It exists for the same reason `t_in` exists next to `t`: whoever composes
+/// a sentence with an explicit `lang` —
+/// [`compare::status_line`](crate::compare::status_line) receives one —
+/// cannot fill one of its pieces with the AMBIENT language, or it returns a
+/// half-translated sentence (phase C1 review, MINOR-6).
 ///
 /// ```
 /// use norte_frontend::error::error_category_in;
 /// use norte_i18n::Lang;
 /// let es = error_category_in(Lang::Es, &norte_proto::Error::NotFound);
 /// let en = error_category_in(Lang::En, &norte_proto::Error::NotFound);
-/// // La MISMA clave, dicha en dos idiomas: ninguno de los dos es la clave.
+/// // The SAME key, said in two languages: neither of them is the key.
 /// assert!(!es.starts_with("err-") && !en.starts_with("err-"));
 /// ```
 #[must_use]
@@ -124,8 +126,8 @@ pub fn error_category_in(lang: Lang, e: &Error) -> String {
     t_in(lang, error_key(e))
 }
 
-/// [`error_category_in`] en la lengua AMBIENTE. Envoltorio, para quien no
-/// tiene un `lang` que pasar.
+/// [`error_category_in`] in the AMBIENT language. A wrapper, for whoever has
+/// no `lang` to pass.
 #[must_use]
 pub fn error_category(e: &Error) -> String {
     error_category_in(norte_i18n::active(), e)

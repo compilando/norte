@@ -1,38 +1,38 @@
-//! La entrada de teclado, y por qué el renderer no la interpreta.
+//! Keyboard input, and why the renderer does not interpret it.
 //!
-//! Un renderer manda TECLAS —normalizadas, y poco más—; quién resuelve un
-//! contador, un prefijo a medias o qué comando es `ctrl+shift+f5` es Rust,
-//! con el mismo resolver, los mismos presets y el mismo catálogo que usa el
-//! TUI (ADR 0066, decisión D14). Si el renderer resolviera, habría dos
-//! keymaps y el día que divergieran nadie lo notaría hasta que un usuario lo
-//! contase.
+//! A renderer sends KEYS —normalized, and little else—; who resolves a
+//! count, a half-typed prefix or what command `ctrl+shift+f5` is, is Rust,
+//! with the same resolver, the same presets and the same catalogue the TUI
+//! uses (ADR 0066, decision D14). If the renderer resolved, there would be
+//! two keymaps and the day they diverged nobody would notice until a user
+//! reported it.
 //!
-//! # El adaptador es delgado a propósito
+//! # The adapter is thin on purpose
 //!
-//! Lo único que hay aquí es la traducción del vocabulario del renderer
-//! (`"ArrowDown"`, `"Escape"`, `meta`) al del proyecto (`down`, `esc`,
-//! `mod`). El mapeo de `mod` en macOS es entrada del adaptador, NO un keymap
-//! bifurcado: el chord que sale de aquí es el mismo tipo que el TUI empuja a
-//! su resolver.
+//! The only thing here is the translation of the renderer's vocabulary
+//! (`"ArrowDown"`, `"Escape"`, `meta`) to the project's (`down`, `esc`,
+//! `mod`). The `mod` mapping on macOS is adapter input, NOT a forked
+//! keymap: the chord that comes out of here is the same type the TUI pushes
+//! to its resolver.
 
 use norte_frontend::keymap::{Chord, KeymapError, parse_chord};
 use serde::{Deserialize, Serialize};
 
-/// Una tecla tal como la manda el renderer.
+/// A key exactly as the renderer sends it.
 ///
-/// Cuatro banderas y no un conjunto de modificadores: es la forma en la que
-/// un navegador —y cualquier toolkit— entrega el evento, y traducir en el
-/// borde es más barato que obligar a cada adaptador a construir un tipo
-/// nuestro. El chord que sale de aquí ya es el del keymap.
+/// Four flags and not a modifier set: it is the shape in which a browser
+/// —and any toolkit— delivers the event, and translating at the boundary is
+/// cheaper than forcing every adapter to build one of our own types. The
+/// chord that comes out of here is already the keymap's.
 #[expect(
     clippy::struct_excessive_bools,
-    reason = "la forma del evento de entrada, no un estado"
+    reason = "the shape of the input event, not state"
 )]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KeyInput {
-    /// Nombre LÓGICO de la tecla. Se aceptan los del navegador
-    /// (`"ArrowDown"`, `"Escape"`, `"F5"`, `"a"`) y los del proyecto
-    /// (`"down"`, `"esc"`).
+    /// LOGICAL name of the key. Both the browser's (`"ArrowDown"`,
+    /// `"Escape"`, `"F5"`, `"a"`) and the project's (`"down"`, `"esc"`) are
+    /// accepted.
     pub key: String,
     /// Control.
     #[serde(default)]
@@ -40,17 +40,17 @@ pub struct KeyInput {
     /// Alt / Option.
     #[serde(default)]
     pub alt: bool,
-    /// Mayúsculas.
+    /// Shift.
     #[serde(default)]
     pub shift: bool,
-    /// Command (macOS) o Super. Viaja como `mod`, que es lo que el keymap
-    /// entiende y lo que hace que un preset valga en las dos plataformas.
+    /// Command (macOS) or Super. Travels as `mod`, which is what the keymap
+    /// understands and what makes one preset work on both platforms.
     #[serde(default)]
     pub meta: bool,
 }
 
 impl KeyInput {
-    /// Traduce a un [`Chord`] del keymap compartido.
+    /// Translates to a shared keymap [`Chord`].
     ///
     /// ```
     /// use norte_ui_host::KeyInput;
@@ -64,58 +64,58 @@ impl KeyInput {
     /// };
     /// assert!(k.to_chord().is_ok());
     ///
-    /// // Una tecla que no se entiende se descarta; no se adivina.
-    /// let rara = KeyInput { key: "Compose".to_owned(), ..k };
-    /// assert!(rara.to_chord().is_err());
+    /// // A key that is not understood is discarded; it is not guessed.
+    /// let odd = KeyInput { key: "Compose".to_owned(), ..k };
+    /// assert!(odd.to_chord().is_err());
     /// ```
     ///
     /// # Errors
-    /// [`KeymapError::BadChord`] si el nombre de tecla no se reconoce: una
-    /// tecla que no se entiende se DESCARTA, jamás se adivina.
+    /// [`KeymapError::BadChord`] if the key name is not recognized: a key
+    /// that is not understood is DISCARDED, never guessed.
     pub fn to_chord(&self) -> Result<Chord, KeymapError> {
-        let nombre = nombre_canonico(&self.key).ok_or_else(|| KeymapError::BadChord {
+        let name = canonical_name(&self.key).ok_or_else(|| KeymapError::BadChord {
             chord: self.key.clone(),
         })?;
-        let mut texto = String::new();
-        // El ORDEN de los modificadores es el que el parser espera; el
-        // renderer no tiene por qué saberlo.
+        let mut text = String::new();
+        // The ORDER of the modifiers is the one the parser expects; the
+        // renderer has no reason to know it.
         if self.ctrl {
-            texto.push_str("ctrl+");
+            text.push_str("ctrl+");
         }
         if self.alt {
-            texto.push_str("alt+");
+            text.push_str("alt+");
         }
-        // `shift` se DESCARTA sobre un carácter suelto, y es la misma regla
-        // que la gramática de acordes tiene escrita: en un `Char` el shift ya
-        // está DENTRO del carácter —el navegador manda `A`, no `shift+a`— así
-        // que volver a nombrarlo es un acorde que `parse_chord` rechaza
+        // `shift` is DISCARDED on a lone character, and it is the same rule
+        // the chord grammar has written down: in a `Char` the shift is
+        // already INSIDE the character —the browser sends `A`, not
+        // `shift+a`— so naming it again is a chord `parse_chord` rejects
         // (`ShiftWithChar`).
         //
-        // Sin esto, ninguna mayúscula ni ningún `| > ~ ? : " _` llegaba a
-        // ninguna parte: el acorde no se construía y la tecla moría como
-        // `host-key-unmapped`. En el panel de terminal (#362) eso significaba
-        // que `ls | grep Foo` no se podía escribir; en el resto de la ventana,
-        // que un preset que ate `V` o `P` —como la regla del repositorio
-        // manda escribirlos— estaba muerto.
-        if self.shift && nombre.chars().count() != 1 {
-            texto.push_str("shift+");
+        // Without this, no uppercase letter and no `| > ~ ? : " _` ever got
+        // anywhere: the chord did not build and the key died as
+        // `host-key-unmapped`. In the terminal panel (#362) that meant
+        // `ls | grep Foo` could not be typed; in the rest of the window,
+        // that a preset binding `V` or `P` —as the repository's rule says
+        // to write them— was dead.
+        if self.shift && name.chars().count() != 1 {
+            text.push_str("shift+");
         }
         if self.meta {
-            texto.push_str("mod+");
+            text.push_str("mod+");
         }
-        texto.push_str(&nombre);
-        parse_chord(&texto)
+        text.push_str(&name);
+        parse_chord(&text)
     }
 }
 
-/// El nombre de tecla del proyecto para lo que mande el renderer.
+/// The project's key name for whatever the renderer sends.
 ///
-/// Acepta las dos ortografías —la del navegador y la nuestra— porque el
-/// adaptador de cada renderer no tiene por qué normalizar dos veces, y
-/// porque un renderer que ya manda `"down"` no debería ser el caso raro.
-fn nombre_canonico(key: &str) -> Option<String> {
-    let bajo = key.to_ascii_lowercase();
-    let canonico = match bajo.as_str() {
+/// It accepts both spellings —the browser's and ours— because each
+/// renderer's adapter has no reason to normalize twice, and because a
+/// renderer that already sends `"down"` should not be the odd case.
+fn canonical_name(key: &str) -> Option<String> {
+    let lower = key.to_ascii_lowercase();
+    let canonical = match lower.as_str() {
         "arrowdown" | "down" => "down",
         "arrowup" | "up" => "up",
         "arrowleft" | "left" => "left",
@@ -128,169 +128,171 @@ fn nombre_canonico(key: &str) -> Option<String> {
         "insert" | "ins" => "insert",
         "home" => "home",
         "end" => "end",
-        // `pgup`/`pgdn` y no `pageup`/`pagedown`: son los nombres que entiende
-        // `parse_chord`. Con los largos la tecla no se resolvía, y en esta
-        // ventana `AvPág`/`RePág` no llegaban nunca al keymap — no se notaba
-        // porque el renderer desplazaba el cuerpo por su cuenta, y en la
-        // lateral de la ayuda sencillamente no hacían nada.
+        // `pgup`/`pgdn` and not `pageup`/`pagedown`: those are the names
+        // `parse_chord` understands. With the long ones the key did not
+        // resolve, and in this window `PageUp`/`PageDown` never reached the
+        // keymap at all — it went unnoticed because the renderer scrolled
+        // the body on its own, and in the help sidebar they simply did
+        // nothing.
         "pageup" | "pgup" => "pgup",
         "pagedown" | "pgdn" => "pgdn",
         " " | "space" | "spacebar" => "space",
-        otro => {
-            // Teclas de función y caracteres sueltos. Un nombre largo que no
-            // esté en la tabla NO se interpreta como texto: sería la puerta
-            // por la que `"F13"` acaba siendo tres caracteres.
-            if let Some(n) = otro.strip_prefix('f')
+        other => {
+            // Function keys and lone characters. A long name that is not in
+            // the table is NOT interpreted as text: that would be the door
+            // through which `"F13"` ends up as three characters.
+            if let Some(n) = other.strip_prefix('f')
                 && !n.is_empty()
                 && n.chars().all(|c| c.is_ascii_digit())
             {
-                return Some(otro.to_owned());
+                return Some(other.to_owned());
             }
-            if otro.chars().count() == 1 {
-                // Con Mayús, la letra la manda el renderer ya en mayúscula
-                // (es lo que el usuario ve); el keymap la quiere tal cual.
+            if other.chars().count() == 1 {
+                // With Shift, the renderer already sends the letter
+                // uppercase (it is what the user sees); the keymap wants it
+                // as is.
                 return Some(key.to_owned());
             }
             return None;
         }
     };
-    Some(canonico.to_owned())
+    Some(canonical.to_owned())
 }
 
-/// El keymap efectivo de un preset de fábrica, con la lista de comandos que
-/// este host implementa.
+/// The effective keymap of a factory preset, with the list of commands this
+/// host implements.
 ///
-/// Lo mínimo para arrancar sin configuración —un test, un primer arranque—.
-/// Un host de verdad fusiona además las capas del usuario y le pasa el
-/// resultado en [`crate::UiHostOptions`]: leer configuración no es asunto de
-/// este crate.
+/// The minimum to start without configuration —a test, a first launch—. A
+/// real host also merges the user's layers and passes it the result in
+/// [`crate::UiHostOptions`]: reading configuration is not this crate's
+/// business.
 ///
 /// # Errors
-/// [`KeymapError`] si el preset no existe o no valida.
-pub fn keymap_de_preset(nombre: &str) -> Result<norte_frontend::keymap::Effective, KeymapError> {
-    keymap_de_preset_con(nombre, crate::commands::Efectos::Completo)
+/// [`KeymapError`] if the preset does not exist or does not validate.
+pub fn keymap_de_preset(name: &str) -> Result<norte_frontend::keymap::Effective, KeymapError> {
+    keymap_de_preset_con(name, crate::commands::Effects::Full)
 }
 
-/// El keymap del listado para un frontend con los efectos DICHOS.
+/// The listing's keymap for a frontend with the STATED effects.
 ///
-/// En solo lectura, los comandos que escriben no entran en la lista de
-/// conocidos, así que una tecla atada a `pane.delete` resuelve a
-/// [`norte_frontend::keymap::Availability::NotHere`] y se dice — que es lo
-/// que un usuario necesita leer, en vez de una tecla muda.
+/// In read-only mode, commands that write do not enter the list of known
+/// ones, so a key bound to `pane.delete` resolves to
+/// [`norte_frontend::keymap::Availability::NotHere`] and says so — which is
+/// what a user needs to read, instead of a dead key.
 ///
 /// # Errors
-/// [`KeymapError`] si el preset no existe o no valida.
+/// [`KeymapError`] if the preset does not exist or does not validate.
 pub fn keymap_de_preset_con(
-    nombre: &str,
-    efectos: crate::commands::Efectos,
+    name: &str,
+    effects: crate::commands::Effects,
 ) -> Result<norte_frontend::keymap::Effective, KeymapError> {
-    keymap_de_preset_con_capas(nombre, &[], efectos)
+    preset_keymap_with_layers(name, &[], effects)
 }
 
-/// El keymap del listado del preset MÁS las capas del usuario.
+/// The preset's listing keymap PLUS the user's layers.
 ///
-/// Ésta es la que usa un frontend de verdad. Las de arriba construyen sobre
-/// el preset de fábrica y nada más —lo mínimo para un test o un primer
-/// arranque—, y usarlas en un binario deja al usuario con los atajos de
-/// fábrica en silencio mientras el otro frontend sí honra su `keymap.toml`
-/// (#253).
+/// This is the one a real frontend uses. The ones above build on the
+/// factory preset alone —the minimum for a test or a first launch— and
+/// using them in a binary leaves the user with the silent factory shortcuts
+/// while the other frontend does honor its `keymap.toml` (#253).
 ///
 /// # Errors
-/// [`KeymapError`] si el preset no existe, o si una capa no valida.
-pub fn keymap_de_preset_con_capas(
-    nombre: &str,
-    capas: &[norte_frontend::keymap::KeymapFile],
-    efectos: crate::commands::Efectos,
+/// [`KeymapError`] if the preset does not exist, or if a layer does not
+/// validate.
+pub fn preset_keymap_with_layers(
+    name: &str,
+    layers: &[norte_frontend::keymap::KeymapFile],
+    effects: crate::commands::Effects,
 ) -> Result<norte_frontend::keymap::Effective, KeymapError> {
-    efectivo_con(
-        nombre,
+    effective_with(
+        name,
         norte_frontend::keymap::Screen::Browse,
-        capas,
-        efectos,
+        layers,
+        effects,
     )
 }
 
-/// El keymap efectivo de la pantalla del VISOR, del mismo preset.
+/// The effective keymap of the VIEWER screen, for the same preset.
 ///
-/// Es OTRA pantalla, no otra capa: con el visor abierto las teclas son suyas
-/// —`esc` cierra, `e` cambia el encoding— y mezclarlas con las del listado
-/// sería un contexto de entrada que no existe en ningún preset.
+/// It is ANOTHER screen, not another layer: with the viewer open the keys
+/// are its own —`esc` closes, `e` changes the encoding— and mixing them
+/// with the listing's would be an input context that exists in no preset.
 ///
 /// # Errors
-/// [`KeymapError`] si el preset no existe o no valida.
+/// [`KeymapError`] if the preset does not exist or does not validate.
 pub fn keymap_visor_de_preset(
-    nombre: &str,
+    name: &str,
 ) -> Result<norte_frontend::keymap::Effective, KeymapError> {
-    keymap_visor_de_preset_con_capas(nombre, &[])
+    preset_viewer_keymap_with_layers(name, &[])
 }
 
-/// El keymap del VISOR del preset más las capas del usuario (#253).
+/// The VIEWER keymap of the preset plus the user's layers (#253).
 ///
 /// # Errors
-/// [`KeymapError`] si el preset no existe, o si una capa no valida.
-pub fn keymap_visor_de_preset_con_capas(
-    nombre: &str,
-    capas: &[norte_frontend::keymap::KeymapFile],
+/// [`KeymapError`] if the preset does not exist, or if a layer does not
+/// validate.
+pub fn preset_viewer_keymap_with_layers(
+    name: &str,
+    layers: &[norte_frontend::keymap::KeymapFile],
 ) -> Result<norte_frontend::keymap::Effective, KeymapError> {
-    efectivo_con(
-        nombre,
+    effective_with(
+        name,
         norte_frontend::keymap::Screen::Viewer,
-        capas,
-        crate::commands::Efectos::Completo,
+        layers,
+        crate::commands::Effects::Full,
     )
 }
 
-/// El keymap efectivo de un DIÁLOGO, del mismo preset.
+/// The effective keymap of a DIALOG, for the same preset.
 ///
-/// Otra pantalla, como el visor: con una pregunta delante las teclas son
-/// suyas. Existe para que un preset que reata `dialog.confirm` cambie las dos
-/// superficies y no solo el TUI — que es la deriva que el catálogo
-/// compartido está para no tener (#287).
+/// Another screen, like the viewer: with a question in front the keys are
+/// its own. It exists so that a preset rebinding `dialog.confirm` changes
+/// both surfaces and not just the TUI — which is the drift the shared
+/// catalogue exists to avoid (#287).
 ///
 /// # Errors
-/// [`KeymapError`] si el preset no existe o no valida.
-pub fn keymap_dialogo_de_preset(
-    nombre: &str,
-) -> Result<norte_frontend::keymap::Effective, KeymapError> {
-    keymap_dialogo_de_preset_con_capas(nombre, &[])
+/// [`KeymapError`] if the preset does not exist or does not validate.
+pub fn preset_dialog_keymap(name: &str) -> Result<norte_frontend::keymap::Effective, KeymapError> {
+    keymap_dialog_preset_with_layers(name, &[])
 }
 
-/// El keymap de un DIÁLOGO del preset más las capas del usuario (#253).
+/// The keymap of a DIALOG for the preset plus the user's layers (#253).
 ///
 /// # Errors
-/// [`KeymapError`] si el preset no existe, o si una capa no valida.
-pub fn keymap_dialogo_de_preset_con_capas(
-    nombre: &str,
-    capas: &[norte_frontend::keymap::KeymapFile],
+/// [`KeymapError`] if the preset does not exist, or if a layer does not
+/// validate.
+pub fn keymap_dialog_preset_with_layers(
+    name: &str,
+    layers: &[norte_frontend::keymap::KeymapFile],
 ) -> Result<norte_frontend::keymap::Effective, KeymapError> {
-    let preset = preset_de(nombre)?;
+    let preset = preset_from(name)?;
     norte_frontend::keymap::Effective::build_for(
         &preset,
-        capas,
-        crate::commands::IMPLEMENTADOS_DIALOGO,
+        layers,
+        crate::commands::IMPLEMENTED_DIALOG,
         norte_frontend::keymap::Screen::Dialog,
     )
 }
 
-fn preset_de(nombre: &str) -> Result<norte_frontend::keymap::KeymapFile, KeymapError> {
-    let fuente = norte_frontend::keymap::presets::source(nombre).ok_or(KeymapError::BadChord {
-        chord: nombre.to_owned(),
+fn preset_from(name: &str) -> Result<norte_frontend::keymap::KeymapFile, KeymapError> {
+    let source = norte_frontend::keymap::presets::source(name).ok_or(KeymapError::BadChord {
+        chord: name.to_owned(),
     })?;
-    norte_frontend::keymap::parse_keymap(fuente)
+    norte_frontend::keymap::parse_keymap(source)
 }
 
-fn efectivo_con(
-    nombre: &str,
-    pantalla: norte_frontend::keymap::Screen,
-    capas: &[norte_frontend::keymap::KeymapFile],
-    efectos: crate::commands::Efectos,
+fn effective_with(
+    name: &str,
+    screen: norte_frontend::keymap::Screen,
+    layers: &[norte_frontend::keymap::KeymapFile],
+    effects: crate::commands::Effects,
 ) -> Result<norte_frontend::keymap::Effective, KeymapError> {
-    let preset = preset_de(nombre)?;
+    let preset = preset_from(name)?;
     norte_frontend::keymap::Effective::build_for(
         &preset,
-        capas,
-        &crate::commands::todos_con(efectos),
-        pantalla,
+        layers,
+        &crate::commands::all_with(effects),
+        screen,
     )
 }
 
@@ -299,46 +301,47 @@ mod tests {
     use super::*;
     use norte_frontend::keymap::{KeyCode, Mods};
 
-    /// Una capa del usuario cambia el keymap EFECTIVO de esta ventana (#253).
+    /// A user layer changes this window's EFFECTIVE keymap (#253).
     ///
-    /// Se construía siempre desde el preset de fábrica con `&[]` de capas, así
-    /// que un `keymap.toml` con rebinds se ignoraba en silencio aquí mientras
-    /// el terminal sí lo honraba. El test compara las dos construcciones: la
-    /// de fábrica NO tiene la atadura y la de la capa SÍ, que es lo único que
-    /// distingue «se leyó la capa» de «el preset ya lo traía».
+    /// It was always built from the factory preset with an empty `&[]` of
+    /// layers, so a `keymap.toml` with rebinds was silently ignored here
+    /// while the terminal did honor it. The test compares the two builds:
+    /// the factory one does NOT have the binding and the layered one DOES,
+    /// which is the only thing that tells apart "the layer was read" from
+    /// "the preset already had it".
     #[test]
-    fn una_capa_del_usuario_cambia_el_keymap_de_la_ventana() {
-        let capa = norte_frontend::keymap::parse_keymap(
+    fn a_user_layer_changes_the_window_keymap() {
+        let layer = norte_frontend::keymap::parse_keymap(
             "[pane]\nprepend_keymap = [{ on = [\"ctrl+alt+j\"], run = \"pane.refresh\" }]\n",
         )
-        .expect("la capa parsea");
-        let atado = |e: &norte_frontend::keymap::Effective| {
+        .expect("the layer parses");
+        let bound = |e: &norte_frontend::keymap::Effective| {
             e.bindings()
                 .into_iter()
                 .any(|(seq, cmd)| seq == "ctrl+alt+j" && cmd == "pane.refresh")
         };
 
-        let fabrica = keymap_de_preset("orthodox").expect("preset");
+        let factory = keymap_de_preset("orthodox").expect("preset");
         assert!(
-            !atado(&fabrica),
-            "el preset de fábrica no ata `ctrl+alt+j`, o el test no prueba nada"
+            !bound(&factory),
+            "the factory preset does not bind `ctrl+alt+j`, or the test proves nothing"
         );
 
-        let con_capa = keymap_de_preset_con_capas(
+        let with_layer = preset_keymap_with_layers(
             "orthodox",
-            std::slice::from_ref(&capa),
-            crate::commands::Efectos::Completo,
+            std::slice::from_ref(&layer),
+            crate::commands::Effects::Full,
         )
-        .expect("preset + capa");
+        .expect("preset + layer");
         assert!(
-            atado(&con_capa),
-            "la capa del usuario tiene que llegar al keymap efectivo: {:?}",
-            con_capa.bindings()
+            bound(&with_layer),
+            "the user's layer must reach the effective keymap: {:?}",
+            with_layer.bindings()
         );
     }
 
     #[test]
-    fn el_vocabulario_del_navegador_se_traduce() {
+    fn the_browser_vocabulary_is_translated() {
         let k = KeyInput {
             key: "ArrowDown".to_owned(),
             ctrl: false,
@@ -352,12 +355,12 @@ mod tests {
         );
     }
 
-    /// `PageUp`/`PageDown` del navegador son teclas del keymap. Se traducían a
-    /// `pageup`/`pagedown`, que `parse_chord` no entiende, así que en la
-    /// ventana no resolvían nunca.
+    /// The browser's `PageUp`/`PageDown` are keymap keys. They were
+    /// translated to `pageup`/`pagedown`, which `parse_chord` does not
+    /// understand, so in the window they never resolved.
     #[test]
-    fn las_teclas_de_pagina_se_resuelven() {
-        for (dom, esperada) in [("PageUp", KeyCode::PageUp), ("PageDown", KeyCode::PageDown)] {
+    fn page_keys_resolve() {
+        for (dom, expected) in [("PageUp", KeyCode::PageUp), ("PageDown", KeyCode::PageDown)] {
             let k = KeyInput {
                 key: dom.to_owned(),
                 ctrl: false,
@@ -367,14 +370,14 @@ mod tests {
             };
             assert_eq!(
                 k.to_chord().expect(dom),
-                Chord::new(Mods::default(), esperada),
+                Chord::new(Mods::default(), expected),
                 "{dom}"
             );
         }
     }
 
     #[test]
-    fn los_modificadores_van_en_el_orden_del_parser() {
+    fn modifiers_go_in_the_parsers_order() {
         let k = KeyInput {
             key: "F5".to_owned(),
             ctrl: true,
@@ -386,10 +389,10 @@ mod tests {
         assert_eq!(c, parse_chord("ctrl+shift+f5").expect("parse"));
     }
 
-    /// `meta` viaja como `mod`: es el adaptador quien conoce macOS, no el
-    /// keymap.
+    /// `meta` travels as `mod`: it is the adapter that knows about macOS,
+    /// not the keymap.
     #[test]
-    fn meta_viaja_como_mod() {
+    fn meta_travels_as_mod() {
         let k = KeyInput {
             key: "p".to_owned(),
             ctrl: false,
@@ -403,9 +406,9 @@ mod tests {
         );
     }
 
-    /// Una tecla que no se reconoce se descarta; no se adivina.
+    /// A key that is not recognized is discarded; it is not guessed.
     #[test]
-    fn una_tecla_desconocida_no_se_inventa() {
+    fn an_unknown_key_is_not_invented() {
         let k = KeyInput {
             key: "Compose".to_owned(),
             ctrl: false,

@@ -1,20 +1,20 @@
-//! El bucle de eventos del TUI y lo que puede tumbarlo.
+//! The TUI's event loop, and what can bring it down.
 //!
-//! Por ahora solo el error. El bucle (`run`, ~2.500 líneas) sigue en el root
-//! del binario `ntc` y viene en la ronda siguiente; el error va delante porque
-//! es lo que hace posible que venga: la regla 6 prohíbe `anyhow` en una
-//! biblioteca, y `run` devolvía `anyhow::Result<()>`.
+//! For now only the error. The loop (`run`, ~2,500 lines) is still in the
+//! `ntc` binary's root and comes in the next round; the error goes first
+//! because it is what makes that possible: rule 6 forbids `anyhow` in a
+//! library, and `run` returned `anyhow::Result<()>`.
 //!
-//! El muro resultó ser de CUATRO líneas —dos `terminal.size()`, un
-//! `terminal.draw()` y un `.context("evento de terminal")`—, así que dos
-//! variantes lo cubren. Las dos llevan un `std::io::Error` dentro; están
-//! separadas porque la información que aportaba aquel `.context` era CUÁL de las
-//! dos superficies falló, y un solo `Io(..)` la perdería: no se diagnostica igual
-//! una terminal que no se deja medir que un flujo de eventos que se corta.
+//! The wall turned out to be FOUR lines —two `terminal.size()`, one
+//! `terminal.draw()` and a `.context("terminal event")`— so two variants
+//! cover it. Both carry a `std::io::Error` inside; they are split because
+//! what that `.context` contributed was WHICH of the two surfaces failed,
+//! and a single `Io(..)` would lose it: a terminal that will not be measured
+//! is not diagnosed the same as an event stream that cuts off.
 //!
-//! Estos textos NO van por Fluent, y es deliberado: no son cadenas de interfaz
-//! sino el diagnóstico que `anyhow` imprime al morir el proceso, que es
-//! exactamente el uso que el `.context` anterior les daba.
+//! These texts do NOT go through Fluent, and that is deliberate: they are
+//! not interface strings but the diagnostic `anyhow` prints when the process
+//! dies, which is exactly the use the previous `.context` gave them.
 
 use crate::app::{App, CompareState, SearchState, detail_for_bar, error_category};
 use crate::config::{self, Layers};
@@ -50,55 +50,58 @@ use norte_core::backend::{Backend, ConnEvent};
 use norte_frontend::layout::BySlot;
 use norte_i18n::{t, ta};
 
-/// Lo que aborta el bucle de eventos.
+/// What aborts the event loop.
 #[derive(Debug, thiserror::Error)]
 pub enum RunError {
-    /// La terminal no se dejó medir (`size`) o pintar (`draw`).
-    #[error("la terminal no respondió: {0}")]
+    /// The terminal would not be measured (`size`) or painted (`draw`).
+    #[error("the terminal did not respond: {0}")]
     Terminal(#[source] std::io::Error),
-    /// El flujo de eventos de la terminal se rompió. Un flujo que se AGOTA no
-    /// es esto: cerrar la ventana sale por el mismo sitio que un `app.quit`,
-    /// para no perder la última foto de la sesión.
-    #[error("evento de terminal: {0}")]
+    /// The terminal's event stream broke. A stream that simply RUNS OUT is
+    /// not this: closing the window exits through the same place as an
+    /// `app.quit`, so as not to lose the session's last snapshot.
+    #[error("terminal event: {0}")]
     Event(#[source] std::io::Error),
 }
 
-/// La frase TRADUCIDA de «esta sesión no queda registrada» (#167/#177).
+/// The TRANSLATED sentence for "this session is not being recorded"
+/// (#167/#177).
 ///
-/// El texto de `NoJournal::text()` es para el log del operador y va en crudo;
-/// esto es interfaz, y la interfaz de este binario pasa por Fluent.
+/// `NoJournal::text()`'s text is for the operator's log and goes raw; this
+/// is interface, and this binary's interface goes through Fluent.
 ///
-/// Las dos ramas dicen cosas DISTINTAS desde #178: `Busy` es «esto pasó y no
-/// quedó anotado» y `Failed` es «esto no ha pasado». Compartir frase era el
-/// defecto.
+/// The two arms say DIFFERENT things since #178: `Busy` is "this happened
+/// and was not recorded" and `Failed` is "this has not happened". Sharing a
+/// sentence was the bug.
 fn journal_warning_i18n(why: &norte_core::embedded::NoJournal) -> String {
     use norte_core::embedded::NoJournal as N;
     match why {
         N::Busy => t("msg-journal-busy"),
-        // `detail_for_bar` y no el `Display` crudo: el motivo es el error de
-        // `sqlx`/`JournalError`, que trae párrafos enteros (los `Corrupt`) y
-        // texto derivado de rutas del entorno. La barra de estado tiene un
-        // saneador para exactamente esto y todo lo demás pasa por él.
-        N::Failed(motivo) => ta(
+        // `detail_for_bar` and not the raw `Display`: the reason is
+        // `sqlx`/`JournalError`'s error, which carries whole paragraphs (the
+        // `Corrupt` ones) and text derived from environment paths. The
+        // status bar has a sanitizer for exactly this, and everything else
+        // goes through it.
+        N::Failed(reason) => ta(
             "msg-journal-refused",
-            &[("motivo", &crate::app::detail_for_bar(motivo))],
+            &[("motivo", &crate::app::detail_for_bar(reason))],
         ),
-        // `#[non_exhaustive]`: un motivo nuevo no puede quedarse mudo — si
-        // alguna vez lo hay, que al menos salga el texto del core.
-        otro => otro.text(),
+        // `#[non_exhaustive]`: a new reason cannot stay silent — if one ever
+        // shows up, at least the core's text comes through.
+        other => other.text(),
     }
 }
 
-/// Corre un comando y asienta su desenlace: el `cd` que pueda traer
-/// ([`settle_cd`]) y la cosecha de la búsqueda viva —regla 3: un cd apaga el
-/// pane virtual y su Task tiene que morir con él, y no en la tecla siguiente.
+/// Runs a command and settles its outcome: the `cd` it may carry
+/// ([`settle_cd`]) and the live search's harvest —rule 3: a cd turns off the
+/// virtual pane and its Task has to die with it, not on the next key.
 ///
-/// Lo que NO hace, a propósito, es lanzar el comando externo que `pane.open`
-/// pudiera dejar resuelto: eso solo lo hacen los sitios que son ENTRADA del
-/// usuario sobre un listado, y se lee en cada uno ([`launch_pending_open`]).
-/// El resolver de teclas tampoco pasa por aquí: necesita leer `nav_stalled`
-/// ANTES de que el desenlace se consuma, y frena el contador con él.
-#[expect(clippy::too_many_arguments, reason = "wiring del bucle, no API")]
+/// What it does NOT do, on purpose, is launch the external command
+/// `pane.open` might have left resolved: only the sites that are the user's
+/// ENTRY over a listing do that, and it is read at each one
+/// ([`launch_pending_open`]). The key resolver does not go through here
+/// either: it needs to read `nav_stalled` BEFORE the outcome is consumed, and
+/// resets the counter with it.
+#[expect(clippy::too_many_arguments, reason = "loop wiring, not an API")]
 pub(crate) async fn run_command(
     app: &mut App,
     backend: &Backend,
@@ -138,14 +141,15 @@ pub(crate) async fn run_command(
     reap_search_run(app, search_run);
 }
 
-/// Lanza el comando externo que `pane.open` (#28) dejara resuelto. Vive en el
-/// run loop porque es quien tiene la terminal: abrir un opener la suspende.
-/// Lanza lo que el despacho dejó pedido, con la terminal que tiene la consola
-/// —que es quien la tiene desde que una espera larga necesitó repintarse.
+/// Launches the external command `pane.open` (#28) may have left resolved.
+/// Lives in the run loop because it is the one with the terminal: opening an
+/// opener suspends it. Launches whatever dispatch left requested, with the
+/// terminal the console holds —which has held it since a long wait needed
+/// repainting.
 ///
-/// Sin terminal (consola desligada) no se lanza nada Y SE DESCARTA lo
-/// pendiente: dejarlo puesto lo dispararía en el siguiente sitio que sí tenga
-/// terminal, mucho después de la tecla que lo pidió.
+/// With no terminal (a detached console) nothing gets launched AND WHATEVER
+/// IS PENDING IS DISCARDED: leaving it set would fire it at the next site
+/// that does have a terminal, long after the key that requested it.
 pub(crate) async fn launch_pending(
     app: &mut App,
     console: &mut crate::console::Console<'_>,
@@ -159,46 +163,48 @@ pub(crate) async fn launch_pending(
     }
 }
 
-/// El bucle de eventos: dibuja, espera, enruta la tecla y drena lo que las
-/// tareas de fondo hayan traído, hasta que `app.quit`.
+/// The event loop: draws, waits, routes the key and drains whatever the
+/// background tasks have brought, until `app.quit`.
 ///
-/// Nunca tuvo rustdoc, y hasta este commit no lo necesitaba: era una función
-/// privada del root de un binario. Al pasar a `pub` en una biblioteca,
-/// `missing_docs` lo exige, y merece la pena decir aquí las tres cosas que su
-/// cuerpo repite y ningún llamante puede adivinar.
+/// Never had rustdoc, and until this commit did not need it: it was a
+/// private function in a binary's root. On becoming `pub` in a library,
+/// `missing_docs` requires it, and it is worth stating here the three things
+/// its body repeats that no caller can guess.
 ///
-/// **No es dueña de la terminal, la tiene prestada.** `main` la crea y la
-/// restaura; aquí se ENCIENDE y se APAGA la captura de ratón en caliente
-/// (`[ui] mouse`) y se suelta alrededor de cada suspensión. Si esta función
-/// devuelve `Err`, la terminal sigue siendo responsabilidad de `main`, que
-/// restaura ANTES de propagar — un bucle roto no es un `--pick` cancelado.
+/// **It does not own the terminal, it borrows it.** `main` creates it and
+/// restores it; here mouse capture is SWITCHED ON and OFF hot (`[ui] mouse`)
+/// and released around every suspension. If this function returns `Err`, the
+/// terminal is still `main`'s responsibility, which restores it BEFORE
+/// propagating — a broken loop is not a cancelled `--pick`.
 ///
-/// **La salida limpia pasa por un solo sitio.** `app.quit` es el único camino,
-/// y por eso el EOF del terminal (te cierran la ventana) lo enciende en vez de
-/// hacer `return`: saliendo antes se perdía la última foto de la sesión.
+/// **Clean exit goes through a single place.** `app.quit` is the only path,
+/// and that is why the terminal's EOF (the window gets closed on you) turns
+/// it on instead of doing a `return`: exiting earlier used to lose the
+/// session's last snapshot.
 ///
-/// **Sus parámetros son estado que una recarga puede sustituir.** Los tres
-/// resolvers, `help_lines`, el modo del quick search y `confirm_quit` los toma
-/// por `&mut` porque [`crate::config_reload::reload_config`] los reemplaza en
-/// caliente, y los reemplaza TODOS o NINGUNO.
+/// **Its parameters are state a reload can replace.** The three resolvers,
+/// `help_lines`, the quick search's mode and `confirm_quit` are taken by
+/// `&mut` because [`crate::config_reload::reload_config`] replaces them hot,
+/// and replaces ALL of them or NONE.
 ///
 /// # Errors
 ///
-/// [`RunError`], que son las dos superficies de la terminal que pueden fallar
-/// de verdad: medirla o pintarla, y su flujo de eventos. Todo lo demás que sale
-/// mal —un listado que no se deja leer, una mutación rechazada, un plugin que
-/// no responde— es un mensaje en la barra, no un error del bucle: la regla es
-/// que el gestor de ficheros no se cae porque el sistema de ficheros diga no.
+/// [`RunError`], which are the two terminal surfaces that can really fail:
+/// measuring it or painting it, and its event stream. Everything else that
+/// goes wrong —a listing that will not be read, a rejected mutation, a
+/// plugin that does not respond— is a message in the bar, not an error from
+/// the loop: the rule is that the file manager does not crash because the
+/// filesystem says no.
 #[expect(
     clippy::too_many_arguments,
     clippy::too_many_lines,
-    reason = "wiring del bucle, no API"
+    reason = "loop wiring, not an API"
 )]
 pub async fn run(
     terminal: &mut tty::Tui,
-    // Captura de ratón: la crea `main` (dueño de la terminal) y la retira
-    // al salir; aquí se ENCIENDE y se APAGA en caliente (`[ui] mouse`) y se
-    // suelta alrededor de cada suspensión por opener externo.
+    // Mouse capture: created by `main` (the terminal's owner) and withdrawn
+    // on exit; here it is SWITCHED ON and OFF hot (`[ui] mouse`) and
+    // released around every suspension for an external opener.
     capture: &mut mouse::Capture,
     app: &mut App,
     backend: &Backend,
@@ -213,23 +219,23 @@ pub async fn run(
     // `[ui] lang` says `es` an English corpus inside a Spanish UI. Fixed for
     // the session: `force` is called once, so the hot reload keeps this value.
     lang: norte_i18n::Lang,
-    // `mut` desde los perfiles (ADR 0079): cambiar de perfil rehace las capas
-    // en caliente, así que esto ya no es constante durante la sesión.
+    // `mut` since the profiles feature (ADR 0079): switching profile rebuilds
+    // the layers hot, so this is no longer constant for the session.
     mut layers: Layers,
     cli_preset: Option<String>,
-    // Modo del quick search (`[ui] quick_search`): vive en el run loop como
-    // el preset CLI y se actualiza en el hot-reload de config.
+    // Quick search's mode (`[ui] quick_search`): lives in the run loop like
+    // the CLI preset and gets updated on config's hot reload.
     mut quick_mode: nav::Mode,
-    // `[ui] confirm_quit` (S2): mismo patrón que `quick_mode` — vive en el
-    // run loop, `applies_live` (solo afecta a `app.quit` NUEVOS, uno en
-    // curso ya decidió) y se actualiza en el hot-reload.
+    // `[ui] confirm_quit` (S2): same pattern as `quick_mode` — lives in the
+    // run loop, `applies_live` (only affects NEW `app.quit`s, one already in
+    // progress has already decided) and gets updated on hot reload.
     mut confirm_quit: config::ConfirmQuit,
-    // S3 (`app.settings`): la config COMPLETA vive aquí, no solo los campos
-    // sueltos de arriba — el overlay de ajustes necesita leer CUALQUIER
-    // entrada del catálogo (`crate::settings::build_rows`), no una lista
-    // fija. Se actualiza ENTERA en cada hot-reload OK (`reload_config`, al
-    // final, tras aplicar todo lo demás — mismo criterio que `quick_mode`/
-    // `confirm_quit`: solo si TODO aplicó).
+    // S3 (`app.settings`): the WHOLE config lives here, not just the loose
+    // fields above — the settings overlay needs to read ANY entry of the
+    // catalogue (`crate::settings::build_rows`), not a fixed list. Updated
+    // WHOLE on every OK hot reload (`reload_config`, at the end, after
+    // everything else applies — same criterion as `quick_mode`/
+    // `confirm_quit`: only if EVERYTHING applied).
     mut cfg: config::LoadedConfig,
     mut cfg_rx: tokio::sync::mpsc::Receiver<()>,
     mut foreign_tasks: Option<tokio::sync::mpsc::UnboundedReceiver<norte_core::backend::TaskRef>>,
@@ -251,80 +257,84 @@ pub async fn run(
     >,
 ) -> Result<(), RunError> {
     let mut events = EventStream::new();
-    // Alt solo abre el menú (`[ui] alt_menu`). Solo llega a ver un Alt
-    // suelto si el protocolo de kitty está pedido; sin él no le entra nada.
+    // Alt alone opens the menu (`[ui] alt_menu`). It only gets to see a bare
+    // Alt if the kitty protocol was requested; without it, nothing of the
+    // sort comes through.
     let mut alt_solo = crate::alt_menu::AltSolo::default();
-    // Tick del panel de tasks: copia snapshots del watch (jamás bloquea).
+    // Tasks panel tick: copies snapshots from the watch (never blocks).
     let mut tick = tokio::time::interval(std::time::Duration::from_millis(100));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    // L2: la sesión se escribe UNA vez por segundo, no por tecla. Su propio
-    // tick y no el de 100 ms porque son dos ritmos distintos: el panel de
-    // tareas mira un `watch` en memoria y esto acaba en un fichero.
+    // L2: the session is written ONCE per second, not per key. Its own tick
+    // and not the 100 ms one because they are two different rhythms: the
+    // tasks panel watches an in-memory `watch` and this ends up in a file.
     let mut session_tick = tokio::time::interval(std::time::Duration::from_secs(1));
     session_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut session_push = SessionPush::start(backend, app.session.revision);
-    // Debounce del hot-reload SIN bloquear el loop (revisión fase 6): cada
-    // evento de config empuja el deadline; el reload corre cuando vence.
+    // Hot-reload debounce WITHOUT blocking the loop (phase 6 review): every
+    // config event pushes the deadline; the reload runs when it expires.
     let mut reload_at: Option<tokio::time::Instant> = None;
-    // Listados paginados rellenándose en background (ADR 0017): un hueco POR
-    // PANE — los dos panes pueden estar paginando a la vez, y con un hueco
-    // global el cd de uno mataba el drenador del otro (ver [`Fill`]).
-    // Por dónde sigue el barrido de `work.fill` (ver el brazo del `select!`).
-    // Búsqueda viva en curso (liveSearch T6): a lo sumo una (el pane virtual
-    // es uno). Molde `Fill`: se drena en el select y se suelta al salir.
-    // Comparación de directorios en curso (`Shift+F2`): a lo sumo una — el
-    // panel de diferencias es uno. Mismo molde que `work.search`.
-    // Sincronización en curso (`Ctrl+Y`): a lo sumo una — el panel es uno, y
-    // aprobar un plan mientras otro se aplica sería aprobar a ciegas.
-    // Petición ai.rename_plan en vuelo (M4-IA): a lo sumo una — relanzar
-    // aborta la anterior. Se cosecha en el select y Esc (BROWSE) la cancela.
-    // Plan IA listo llegado con OTRO modal abierto: se RETIENE aquí (la cola
-    // de `App` es específica de aprobaciones) y se abre en cuanto no haya
-    // modal — jamás pisar (disciplina `open_next_pending`).
-    // Petición fs.rename_batch_plan en vuelo (§17): a lo sumo una, cosechada
-    // en el select como `work.ai_rename`.
-    // Búsqueda semántica en vuelo (M4-IA-2): mismo molde que `work.ai_rename`
-    // — a lo sumo una, relanzar aborta la anterior, Esc (BROWSE) cancela.
-    // Hits listos llegados con OTRO modal abierto: se RETIENEN aquí y se
-    // abren en cuanto no haya modal (disciplina `work.pending_ai_plan`).
-    // Scripting Lua (M4, ADR 0026): host por capas con trust TOFU. Como
-    // `work.fill`, el estado vive en el run loop. El run en vuelo (a lo sumo UNO:
-    // el estado Lua es uno) se pollea inline en el select — `CommandRun` es
-    // !Send y este future corre en block_on, jamás en spawn.
+    // Paginated listings filling in the background (ADR 0017): one slot PER
+    // PANE — both panes can be paginating at once, and with a global slot one
+    // pane's cd killed the other's drainer (see [`Fill`]).
+    // Where `work.fill`'s sweep continues (see the `select!`'s arm).
+    // Live search in progress (liveSearch T6): at most one (there is one
+    // virtual pane). `Fill` shape: drained in the select and released on
+    // exit.
+    // Directory comparison in progress (`Shift+F2`): at most one — there is
+    // one compare panel. Same shape as `work.search`.
+    // Sync in progress (`Ctrl+Y`): at most one — there is one panel, and
+    // approving a plan while another applies would be approving blind.
+    // In-flight `ai.rename_plan` request (M4-IA): at most one — relaunching
+    // aborts the previous one. Harvested in the select and Esc (BROWSE)
+    // cancels it.
+    // AI plan ready that arrived with ANOTHER modal open: RETAINED here
+    // (`App`'s queue is specific to approvals) and opened as soon as there
+    // is no modal — never overwrite (`open_next_pending`'s discipline).
+    // In-flight `fs.rename_batch_plan` request (§17): at most one, harvested
+    // in the select like `work.ai_rename`.
+    // In-flight semantic search (M4-IA-2): same shape as `work.ai_rename` —
+    // at most one, relaunching aborts the previous one, Esc (BROWSE) cancels.
+    // Hits ready that arrived with ANOTHER modal open: RETAINED here and
+    // opened as soon as there is no modal (`work.pending_ai_plan`'s
+    // discipline).
+    // Lua scripting (M4, ADR 0026): host layered with TOFU trust. Like
+    // `work.fill`, the state lives in the run loop. The in-flight run (at
+    // most ONE: there is one Lua state) is polled inline in the select —
+    // `CommandRun` is `!Send` and this future runs in `block_on`, never in
+    // `spawn`.
     let mut lua_host = load_lua(app, &layers).await;
-    // Sonda de stat on-focus (#52, listado lazy): a lo sumo una en vuelo,
-    // dedup por (pane, path) — dos panes sobre el MISMO dir deben hidratar
-    // cada uno la suya (no reintenta un stat fallido hasta cambiar
-    // selección).
-    // Sonda de stat de la fila SELECCIONADA del panel de diferencias (#157):
-    // mismo molde que `work.stat`, a lo sumo una en vuelo. El dedup vive en
-    // `App::compare_size_probed` y no en una variable local del run loop
-    // (a diferencia de `work.probed`) porque `App::compare_size_probe_targets`
-    // ya lo consulta para decidir qué falta por pedir.
-    // Fetch de decoraciones de plugin en vuelo (G3b, ADR 0037): a lo sumo
-    // uno, molde de `work.stat`/`work.fill`.
-    // L3: una lectura de preview en vuelo por hueco, superseded al moverse.
-    // #106 (watching): vigilancia de los dirs visibles — notify con
-    // fallback a sondeo (pitfall inotify). El conjunto vigilado se
-    // re-sincroniza en CADA vuelta (diff barato, no-op sin cambios).
-    // Regla 2, exención puntual (review MINOR-6): crear el watcher y los
-    // watch()/unwatch() de rewatch son syscalls cortas inline (mismo
-    // criterio documentado que el draw síncrono de ratatui más abajo);
-    // solo corren al arrancar o al CAMBIAR de dir.
-    // Todo lo que este bucle deja pedido y aún no ha cosechado (ver
-    // [`InFlight`]): rellenos, sondas y los trabajos de fondo.
+    // On-focus stat probe (#52, lazy listing): at most one in flight, dedup
+    // by (pane, path) — two panes over the SAME dir must each hydrate their
+    // own (does not retry a failed stat until the selection changes).
+    // Stat probe of the compare panel's SELECTED row (#157): same shape as
+    // `work.stat`, at most one in flight. The dedup lives in
+    // `App::compare_size_probed` and not in a run-loop local variable
+    // (unlike `work.probed`) because `App::compare_size_probe_targets`
+    // already queries it to decide what is still missing.
+    // In-flight plugin decoration fetch (G3b, ADR 0037): at most one, shape
+    // of `work.stat`/`work.fill`.
+    // L3: one in-flight preview read per slot, superseded on move.
+    // #106 (watching): watching the visible dirs — notify with a fallback
+    // to polling (the inotify pitfall). The watched set re-syncs on EVERY
+    // turn (cheap diff, a no-op with no changes).
+    // Rule 2, a one-off exemption (review MINOR-6): creating the watcher and
+    // rewatch's watch()/unwatch() are short inline syscalls (same documented
+    // criterion as ratatui's synchronous draw further below); they only run
+    // on startup or on CHANGING dir.
+    // Everything this loop has left pending and not yet harvested (see
+    // [`InFlight`]): fills, probes and the background jobs.
     let mut work = InFlight::default();
-    // Los listados INICIALES también se decoran (ADR 0105): `main` los
-    // construye sin pasar por `settle_cd`, y sin esto un `ntc` recién abierto
-    // no tenía ni un icono ni una insignia hasta el primer `cd`.
+    // The INITIAL listings also get decorated (ADR 0105): `main` builds them
+    // without going through `settle_cd`, and without this a freshly opened
+    // `ntc` had neither an icon nor a badge until the first `cd`.
     for pane in 0..app.panes.len() {
         request_decorations(app, backend, &mut work.decorate, pane);
     }
-    // Qué PANELES aportan los plugins (fase 3): una vez, al arrancar. Lo que
-    // trae es la declaración de qué huecos existen —no el contenido de
-    // ninguno—, y sin ella una disposición guardada que incluya un panel de
-    // plugin se abriría con el hueco sin declarar: ni se coloca, ni se enfoca,
-    // ni sale en la barra.
+    // Which PANELS the plugins contribute (phase 3): once, at startup. What
+    // it brings is the declaration of which slots exist —not any of their
+    // content— and without it a saved layout that includes a plugin panel
+    // would open with the slot undeclared: it neither gets placed, nor
+    // focused, nor shows up in the bar.
     work.panels = Some(crate::probes::spawn_panels(backend));
     let mut dir_watch = norte_frontend::watch::DirWatch::new();
     let mut dir_watch_alive = true;
@@ -333,10 +343,10 @@ pub async fn run(
         if dir_watch.take_degraded_notice() {
             app.message = Some(t("status-watch-degraded"));
         }
-        // El gestor cambió el gobierno o los ajustes de un plugin: lo que
-        // los plugins dijeron de cada listado se olvida y se vuelve a pedir.
-        // `set` sobre el hueco tira la tanda en vuelo, así que una respuesta
-        // de antes del cambio no aterriza.
+        // The manager changed governance or a plugin's settings: whatever
+        // the plugins said about each listing is forgotten and requested
+        // again. `set` on the slot drops the in-flight batch, so a response
+        // from before the change does not land.
         if std::mem::take(&mut app.redecorate) {
             for pane in &mut app.panes {
                 pane.set_decorations(std::collections::HashMap::new());
@@ -346,18 +356,18 @@ pub async fn run(
                 request_decorations(app, backend, &mut work.decorate, pane);
             }
         }
-        // El espacio libre del pie de cada panel (spec 2026-09-10): se pide
-        // cuando un listado aterriza o se refresca, y solo si el pie está
-        // encendido — con él apagado la tabla de montaje no le hace falta a
-        // nadie. Un fallo deja la cache como estaba: el pie calla el espacio
-        // antes que inventarlo.
+        // Each panel's footer free space (spec 2026-09-10): requested when a
+        // listing lands or refreshes, and only if the footer is on — with it
+        // off nobody needs the mount table. A failure leaves the cache as it
+        // was: the footer stays silent about the space rather than inventing
+        // it.
         //
-        // EN LÍNEA pero ACOTADO (revisión M5): `Backend` no es `Clone`, así
-        // que no se puede lanzar a una tarea como hace la ventana, y la
-        // enumeración hace un `statvfs` por montaje con 200 ms de plazo cada
-        // uno — un montaje de red colgado paraba el bucle entero. El tope de
-        // 250 ms es el precio máximo por listado; pasado, el pie se queda con
-        // la tabla anterior, que sigue teniendo el montaje correcto.
+        // INLINE but BOUNDED (M5 review): `Backend` is not `Clone`, so it
+        // cannot be launched into a task the way the window does, and the
+        // enumeration does one `statvfs` per mount with a 200 ms deadline
+        // each — a hung network mount used to stop the whole loop. The
+        // 250 ms cap is the maximum price per listing; past it, the footer
+        // keeps the previous table, which still has the right mount.
         if app.chrome.pane_footer()
             && std::mem::take(&mut app.volumes_stale)
             && let Ok(Ok(vols)) = tokio::time::timeout(
@@ -377,170 +387,171 @@ pub async fn run(
         )
         .await;
         turn::open_retained_modals(app, &mut work);
-        // Fase 9, las dos mitades del RELEVO, y aquí y no en el tic de un
-        // segundo: el lector acaba de pulsarlo, y esperar un tic a mandar la
-        // orden se nota. El escritor de sesión es del bucle, así que la
-        // fontanería del canal vive aquí — mismo reparto que el resto de los
-        // `pending_*`.
+        // Phase 9, the HANDOFF's two halves, and here and not on the
+        // one-second tick: the reader just pressed it, and waiting a tick to
+        // send the order is noticeable. The session writer belongs to the
+        // loop, so the channel's plumbing lives here — same split as the
+        // rest of the `pending_*` fields.
         if std::mem::take(&mut app.pending_handoff) {
             let _ = crate::session_push::request_handoff(app, &mut session_push);
         }
         crate::session_push::drain_notices(app, &mut session_push);
         if std::mem::take(&mut app.handoff_ready) {
-            // La pantalla está escrita y la sesión, soltada: se lanza la
-            // ventana con `--attach` y este proceso se va. `--attach` es lo
-            // que hace que las marcas vuelvan; sin él, la ventana abriría
-            // donde estabas pero sin lo que tenías señalado.
+            // The screen is written and the session, released: the window
+            // launches with `--attach` and this process leaves. `--attach`
+            // is what brings the marks back; without it, the window would
+            // open where you were but without what you had pointed at.
             //
-            // Y sólo se va si la ventana SIGUE VIVA pasado un momento. `spawn`
-            // correcto sólo dice que el proceso empezó: la ventana que no
-            // conocía `--attach` salía con código 2 y esta terminal ya se
-            // había ido, dejando al lector sin ninguna de las dos. Si muere,
-            // quedarse es lo correcto —la pantalla sigue en el core y este
-            // proceso sigue enseñándola— y se RECLAMA la sesión, que se había
-            // soltado para la ventana que no llegó.
-            let resultado = match crate::handoff::spawn_window(&crate::handoff::window_argv()) {
-                Ok(hijo) => crate::handoff::esperar_arranque(hijo, crate::handoff::GRACIA)
+            // And it only leaves if the window is STILL ALIVE after a
+            // moment. A successful `spawn` only says the process started:
+            // the window that did not know `--attach` used to exit with code
+            // 2 while this terminal was already gone, leaving the reader
+            // with neither. If it dies, staying is correct —the screen is
+            // still in the core and this process is still showing it— and
+            // the session is RECLAIMED, having been released for the window
+            // that never arrived.
+            let outcome = match crate::handoff::spawn_window(&crate::handoff::window_argv()) {
+                Ok(child) => crate::handoff::wait_startup(child, crate::handoff::GRACE)
                     .await
-                    .map_err(|codigo| codigo.map_or_else(|| "?".to_owned(), |c| c.to_string())),
+                    .map_err(|code| code.map_or_else(|| "?".to_owned(), |c| c.to_string())),
                 Err(e) => {
-                    tracing::warn!(error = %e, "el relevo no pudo lanzar la ventana");
+                    tracing::warn!(error = %e, "the handoff could not launch the window");
                     Err(e.to_string())
                 }
             };
-            match resultado {
+            match outcome {
                 Ok(()) => app.quit = true,
-                Err(motivo) => {
-                    app.message = Some(ta("msg-handoff-window-died", &[("reason", &motivo)]));
+                Err(reason) => {
+                    app.message = Some(ta("msg-handoff-window-died", &[("reason", &reason)]));
                     crate::session_push::reclaim_soon(&mut session_push);
                 }
             }
         }
         turn::prepare_frame(app, backend, terminal, lua_host.as_ref()).await?;
-        // Exención puntual de la regla 2: el draw escribe la terminal de
-        // control síncronamente (patrón async oficial de ratatui; acotado,
-        // runtime multi-thread).
+        // A one-off exemption from rule 2: the draw writes the control
+        // terminal synchronously (ratatui's official async pattern; bounded,
+        // multi-thread runtime).
         let painted_area = terminal
             .draw(|f| ui::draw(f, app))
             .map_err(RunError::Terminal)?
             .area;
-        // T4 (fase 5 WOW): los píxeles van DESPUÉS del frame y por fuera de
-        // ratatui — un APC no cabe en una celda, y ratatui pinta celdas
-        // (`draw_viewer` ya dejó el hueco vacío cuando hay imagen). El rect
-        // sale de `ui::rect_del_visor(app, painted_area)` — la MISMA función
-        // que usa `draw_viewer`, no una copia (dos cuentas del mismo hueco
-        // divergen en silencio) — y ya es el INTERIOR sin bordes (revisión,
-        // CRÍTICO 2).
+        // T4 (phase 5 WOW): the pixels go AFTER the frame and outside
+        // ratatui — an APC does not fit in a cell, and ratatui paints cells
+        // (`draw_viewer` already left the slot empty when there is an
+        // image). The rect comes from `ui::rect_del_visor(app, painted_area)`
+        // — the SAME function `draw_viewer` uses, not a copy (two counts of
+        // the same slot diverge silently) — and is already the INTERIOR with
+        // no borders (review, CRITICAL 2).
         //
-        // Cubre por sí solo dos de los cuatro momentos de borrado (cerrar el
-        // visor, moverlo a otro fichero): los dos cambian `app.viewer_imagen`
-        // ANTES de este punto en la misma vuelta del bucle, así que la
-        // comparación de abajo contra lo que de verdad hay en la terminal
-        // (`kitty_graphics::borrar_colocada`/`ya_colocada`, estado de
-        // PROCESO) ya lo resuelve sin código aparte. Los otros dos —ceder la
-        // terminal y salir— no tienen garantizado un frame siguiente que haga
-        // esta cuenta, y por eso llaman a `borrar_colocada` directamente
-        // (`suspend::suspend_terminal`, `tty::restore`).
+        // Covers two of the four erase moments on its own (closing the
+        // viewer, moving it to another file): both change `app.viewer_imagen`
+        // BEFORE this point in the same loop turn, so the comparison below
+        // against what is really on the terminal
+        // (`kitty_graphics::delete_placed`/`ya_placed`, PROCESS state)
+        // already resolves it with no extra code. The other two —handing
+        // over the terminal and quitting— have no guaranteed next frame to
+        // do this count, and that is why they call `delete_placed`
+        // directly (`suspend::suspend_terminal`, `tty::restore`).
         //
-        // Un fallo pintando NUNCA tumba la TUI (regla del pintado): se traga
-        // con un `tracing::debug!`.
+        // A painting failure NEVER brings the TUI down (the painting rule):
+        // it is swallowed with a `tracing::debug!`.
         {
             use std::io::Write as _;
-            // `ui::imagen_a_colocar` mira TODO lo que hace falta para
-            // decidir si se colocan píxeles este frame — la MISMA función
-            // que usa `panels::draw_viewer` para decidir si blanquea el
-            // hueco (revisión de rama, hallazgo 2: antes eran dos cuentas
-            // separadas que podían divergir, ver su rustdoc):
-            // - hay una imagen pedida, para el fichero que el visor enseña
-            //   AHORA (no la de un fichero anterior, colgada en la ventana
-            //   entre cambiar `app.viewer` y que `viewer_open` actualice
-            //   `app.viewer_imagen`);
-            // - no hay NADA pintado encima del visor este frame: los
-            //   píxeles de kitty van por delante del texto y sobreviven a
-            //   cualquier repintado de celdas, así que sin este guardia un
-            //   F1 o una paleta abiertos sobre el visor quedaban tapados
-            //   por la miniatura;
-            // - el rect no es vacío (revisión, ronda 2, rotura del CRÍTICO
-            //   2): un `rect` de ancho o alto cero (terminal muy bajo, el
-            //   cuerpo se queda sin sitio tras las barras) no se filtra —
-            //   y en kitty `c=0,r=0` significa «tamaño NATURAL de la
-            //   imagen», así que sin este guardia una miniatura se
-            //   colocaría a tamaño de píxeles sobre la pantalla entera.
+            // `ui::image_to_place` looks at EVERYTHING needed to decide
+            // whether pixels get placed this frame — the SAME function
+            // `panels::draw_viewer` uses to decide whether to blank the slot
+            // (branch review, finding 2: these used to be two separate
+            // counts that could diverge, see its rustdoc):
+            // - there is an image requested, for the file the viewer shows
+            //   RIGHT NOW (not one from a previous file, left hanging in the
+            //   window between changing `app.viewer` and `viewer_open`
+            //   updating `app.viewer_imagen`);
+            // - there is NOTHING painted over the viewer this frame: kitty's
+            //   pixels go in front of the text and survive any repaint of
+            //   cells, so without this guard an F1 or a palette open over
+            //   the viewer used to be covered by the thumbnail;
+            // - the rect is not empty (review, round 2, breakage of CRITICAL
+            //   2): a `rect` with zero width or height (a very short
+            //   terminal, the body left with no room after the bars) is not
+            //   filtered out — and in kitty `c=0,r=0` means the image's
+            //   NATURAL size, so without this guard a thumbnail would be
+            //   placed at pixel size over the whole screen.
             //
-            // Se calcula ANTES de tomar prestado `app.viewer_imagen` en modo
-            // mutable: mira el `App` entero, y un préstamo mutable de un
-            // campo suyo ya vivo se lo impediría.
-            let puesta = ui::imagen_a_colocar(app, painted_area);
-            match (&mut app.viewer_imagen, puesta) {
-                (Some(imagen), Some(puesta)) => {
-                    let rect = puesta.rect;
-                    // IMPORTANTE 4: sin este atajo, un visor QUIETO
-                    // retransmitía el PNG entero (hasta 1920 px de lado, en
-                    // base64) en cada frame — y el bucle gira aunque nadie
-                    // teclee, `session_tick` lo despierta una vez por
-                    // segundo. `puesta_en` es justo para esto: si el id ya
-                    // es el colocado Y el rect no cambió, no hay nada que
-                    // rehacer.
-                    let ya_puesta = crate::kitty_graphics::ya_colocada(imagen.id)
-                        && imagen.puesta_en == Some(puesta);
-                    if !ya_puesta {
+            // Computed BEFORE borrowing `app.viewer_imagen` mutably: it looks
+            // at the whole `App`, and an already-live mutable borrow of one
+            // of its fields would prevent that.
+            let placement = ui::image_to_place(app, painted_area);
+            match (&mut app.viewer_imagen, placement) {
+                (Some(image), Some(placement)) => {
+                    let rect = placement.rect;
+                    // IMPORTANT 4: without this shortcut, a STILL viewer used
+                    // to retransmit the whole PNG (up to 1920 px per side, in
+                    // base64) on every frame — and the loop turns even when
+                    // nobody types, `session_tick` wakes it once a second.
+                    // `placed_in` exists for exactly this: if the id is
+                    // already the placed one AND the rect did not change,
+                    // there is nothing to redo.
+                    let already_placed = crate::kitty_graphics::ya_placed(image.id)
+                        && image.placed_in == Some(placement);
+                    if !already_placed {
                         let out = terminal.backend_mut();
-                        crate::kitty_graphics::borrar_colocada(out);
-                        let esc = crate::kitty_graphics::escape_colocar(
-                            imagen.id,
-                            &imagen.bytes,
+                        crate::kitty_graphics::delete_placed(out);
+                        let esc = crate::kitty_graphics::escape_place(
+                            image.id,
+                            &image.bytes,
                             rect,
-                            puesta.recorte,
+                            placement.crop,
                         );
-                        // CRÍTICO 1: `a=T` coloca en la posición del CURSOR,
-                        // y tras `terminal.draw` el cursor queda donde acabó
-                        // la última tirada de celdas repintadas — arbitrario,
-                        // y cambia de frame a frame. El cursor se mueve al
-                        // rect ANTES del APC; `C=1` (en `escape_colocar`)
-                        // evita que colocar, a su vez, lo desplace (y
-                        // potencialmente scrollee la pantalla si cae en la
-                        // última fila).
-                        let escrito =
+                        // CRITICAL 1: `a=T` places at the CURSOR's position,
+                        // and after `terminal.draw` the cursor is left
+                        // wherever the last run of repainted cells ended —
+                        // arbitrary, and changes frame to frame. The cursor
+                        // is moved to the rect BEFORE the APC; `C=1` (in
+                        // `escape_place`) keeps placing from moving it in
+                        // turn (and potentially scrolling the screen if it
+                        // falls on the last row).
+                        let written =
                             crossterm::execute!(out, crossterm::cursor::MoveTo(rect.x, rect.y))
                                 .and_then(|()| out.write_all(esc.as_bytes()))
                                 .and_then(|()| out.flush());
-                        match escrito {
+                        match written {
                             Ok(()) => {
-                                crate::kitty_graphics::marcar_colocada(imagen.id);
-                                imagen.puesta_en = Some(puesta);
+                                crate::kitty_graphics::mark_placed(image.id);
+                                image.placed_in = Some(placement);
                             }
                             Err(e) => {
-                                // MENOR 7: un fallo a medio escribir el APC
-                                // deja el terminal esperando su cierre — todo
-                                // lo que se pinte después se leería como su
-                                // payload. El terminador se escribe SIEMPRE.
+                                // MINOR 7: a failure midway through writing
+                                // the APC leaves the terminal waiting for its
+                                // close — everything painted afterward would
+                                // read as its payload. The terminator is
+                                // ALWAYS written.
                                 let _ = out.write_all(b"\x1b\\");
                                 tracing::debug!(
                                     error = %e,
-                                    id = imagen.id,
-                                    "no se pudo colocar la imagen del visor"
+                                    id = image.id,
+                                    "could not place the viewer's image"
                                 );
                             }
                         }
                     }
                 }
-                _ => crate::kitty_graphics::borrar_colocada(terminal.backend_mut()),
+                _ => crate::kitty_graphics::delete_placed(terminal.backend_mut()),
             }
         }
         if app.quit {
-            // La última foto, y esperarla. El tick de un segundo se pierde lo
-            // que pasó dentro de ese segundo, y salir es cuando más duele:
-            // hasta aquí, cerrar norte justo después de un `cd` guardaba el
-            // directorio anterior.
+            // The last snapshot, and waiting for it. The one-second tick
+            // loses whatever happened within that second, and quitting is
+            // when it hurts most: until now, closing norte right after a
+            // `cd` used to save the previous directory.
             //
-            // Sin el gate del modal, a propósito: un modal abierto significa
-            // «no guardes lo que estoy decidiendo», y aquí ya no se está
-            // decidiendo nada — se está saliendo, y lo que hay que guardar es
-            // dónde se estaba.
-            // El subshell muere CON norte (#142), y lo hace por el `Drop` de
-            // `Subshell` y no aquí: el bucle también sale por `RunError`, y un
-            // cierre que solo cubriera esta rama dejaría un shell huérfano
-            // justo cuando la terminal se rompió.
+            // Without the modal's gate, on purpose: an open modal means
+            // "do not save what I am deciding", and here nothing is being
+            // decided any more — it is quitting, and what has to be saved is
+            // where things stood.
+            // The subshell dies WITH norte (#142), and it does so through
+            // `Subshell`'s `Drop` and not here: the loop also exits through
+            // `RunError`, and a close that only covered this branch would
+            // leave an orphaned shell right when the terminal broke.
             drain_notices(app, &mut session_push);
             let last = (!app.session.detached)
                 .then(|| capture_session(app, &mut session_push))
@@ -549,23 +560,24 @@ pub async fn run(
             return Ok(());
         }
         turn::after_frame(app, backend, &mut work, painted_area).await;
-        // La pantalla de arranque `brief` caduca con el reloj del PINTADO, el
-        // mismo que caduca los avisos: medirla con otro sería un plazo que los
-        // tests no pueden fijar. Va después del frame porque lo que promete es
-        // «se ve, y se quita sola», no «se quita antes de verse».
+        // The `brief` splash screen expires by the PAINT clock, the same one
+        // that expires notices: measuring it with another would be a
+        // deadline tests cannot fix. Comes after the frame because what it
+        // promises is "it is seen, and it removes itself", not "it is
+        // removed before being seen".
         crate::splash::tick(app);
-        // La fila que el lector eligió por su número: se navega aquí, donde
-        // está el backend. Hoy toda fila del splash lleva un directorio, así
-        // que esto es un `cd` normal —con su ritual de vuelta— y no una
-        // segunda puerta al despachador.
+        // The row the reader chose by its number: navigated here, where the
+        // backend is. Today every splash row carries a directory, so this is
+        // an ordinary `cd` —with its return ritual— and not a second door to
+        // the dispatcher.
         if let Some((_, Some(arg))) = app.pending_splash_row.take() {
             match norte_proto::VPath::parse(&arg) {
-                Ok(destino) => {
+                Ok(destination) => {
                     let outcome = cd(
                         app,
                         backend,
                         &mut Console::new(&mut events, terminal),
-                        destino,
+                        destination,
                     )
                     .await;
                     apply_cd(
@@ -577,41 +589,44 @@ pub async fn run(
                         outcome,
                     );
                 }
-                // Una fila con una ruta que no parsea no navega y lo dice: la
-                // escribió esta sesión, así que si pasa es un fallo nuestro.
+                // A row with a path that does not parse does not navigate
+                // and says so: this session wrote it, so if it happens it is
+                // our bug.
                 Err(_) => app.message = Some(t("err-invalid-path")),
             }
         }
-        // El panel de procesos que se abre y se cierra solo (`[ui]
-        // processes_panel = "auto"`, spec 2026-09-15): un panel que ocupa un
-        // tercio de la pantalla para decir «nada en marcha» no se gana el
-        // sitio, y buscar la tecla justo cuando empieza una copia tampoco.
+        // The processes panel that opens and closes on its own (`[ui]
+        // processes_panel = "auto"`, spec 2026-09-15): a panel taking up a
+        // third of the screen to say "nothing running" does not earn its
+        // place, and looking for its key right as a copy starts does not
+        // either.
         //
-        // Abre SIN llevarse el teclado —el lector está en su listado— y solo
-        // cierra lo que abrió él: un panel que abrió una persona se queda.
+        // Opens WITHOUT taking the keyboard —the reader is on their
+        // listing— and only closes what it opened itself: a panel a person
+        // opened stays.
         if app.chrome.processes_panel() == norte_config::load::ProcessesPanel::Auto {
-            // Solo TRABAJO que DURA abre el panel (ADR 0146): una búsqueda
-            // tiene su propia lista, y una copia que acaba en un segundo la
-            // cuenta la barra de estado sin quitarle un tercio al listado.
+            // Only work that LASTS opens the panel (ADR 0146): a search has
+            // its own list, and a copy that finishes in a second is counted
+            // by the status bar without taking a third of the listing away.
             //
-            // CIERRA como siempre, cuando no queda ninguna fila de trabajo:
-            // así se ve terminada la que tardó.
+            // CLOSES as always, when no work row is left: that is how the
+            // one that took a while is seen as finished.
             //
-            // La barra se reanota AQUÍ y no solo en el tic: esta vuelta puede
-            // venir de una tecla, y con la barra del tic anterior el panel se
-            // abriría por una ráfaga que ya acabó y se cerraría en el
-            // siguiente — el parpadeo que todo esto quiere evitar.
+            // The strip is re-noted HERE and not only on the tick: this turn
+            // may come from a key, and with the previous tick's strip the
+            // panel would open for a burst that already ended and close on
+            // the next one — the flicker all of this exists to avoid.
             app.note_strip();
-            let abre = app.strip.wants_panel(app.now_ms());
-            let hay_tareas = app
+            let opens = app.strip.wants_panel(app.now_ms());
+            let has_tasks = app
                 .board
                 .rows()
                 .iter()
                 .any(|r| norte_frontend::tasks::counts_as_work(r.last.kind));
-            if abre && app.processes_slot().is_none() {
+            if opens && app.processes_slot().is_none() {
                 app.open_processes(false);
                 app.processes_auto = true;
-            } else if !hay_tareas && app.processes_auto {
+            } else if !has_tasks && app.processes_auto {
                 app.close_processes();
                 app.processes_auto = false;
             }
@@ -619,46 +634,46 @@ pub async fn run(
         turn::spawn_probes(app, backend, &mut work);
         tokio::select! {
             _ = session_tick.tick() => {
-                // Un segundo más para el aviso de la barra (spec 2026-09-10).
+                // One more second for the bar's notice (spec 2026-09-10).
                 app.tick_notices();
                 push_session(app, &mut session_push);
-                // #179: soltar el journal cuando lleva un rato sin
-                // usarse. Este proceso lo tomaba en la primera mutación
-                // y no lo devolvía hasta salir, así que una copia a las
-                // 09:00 dejaba a `norte daemon run` y a `norte audit`
-                // sin poder abrirlo en todo el día. La ventana se
-                // reabre sola en la siguiente mutación, y la reapertura
-                // RELEE la cadena, que es lo que lo hace seguro.
+                // #179: release the journal once it has gone a while unused.
+                // This process used to take it on the first mutation and
+                // never return it until quitting, so a copy at 9am left
+                // `norte daemon run` and `norte audit` unable to open it for
+                // the whole day. The window reopens itself on the next
+                // mutation, and reopening RE-READS the chain, which is what
+                // makes it safe.
                 //
-                // En el CUERPO de la rama y no en su condición: el
-                // cierre NO es cancel-safe, y dropearlo a medias deja
-                // el pool agonizando en el worker de sqlx y al
-                // siguiente `resolve` chocando contra nuestro propio
-                // lock — un aviso de «sesión sin registro» que nos
-                // habríamos inventado nosotros.
+                // In the arm's BODY and not its condition: the close is NOT
+                // cancel-safe, and dropping it halfway leaves the pool dying
+                // in sqlx's worker and the next `resolve` colliding with our
+                // own lock — a "session not recording" warning we would have
+                // invented ourselves.
                 backend.release_journal_if_idle(JOURNAL_IDLE).await;
             }
             _ = tick.tick() => {
-                // Mutación terminada → refresh de panes; el ritual completo
-                // (drenador/sonda #52/búsqueda) vive en `after_panes_refresh`
-                // — ÚNICO para los tres disparadores del refresh (#117).
+                // Mutation finished → panes refresh; the complete ritual
+                // (drainer/probe #52/search) lives in `after_panes_refresh`
+                // — the SINGLE one for the refresh's three triggers (#117).
                 let refreshed = on_tick(app, backend, &mut Console::new(&mut events, terminal)).await;
                 after_panes_refresh(app, refreshed, &mut work.fill, &mut work.probed, &mut work.search);
             }
             ev = dir_watch.rx.recv(), if dir_watch_alive && watch_refresh_allowed(app) => {
-                // #106: cambio EXTERNO en un dir vigilado (debounced) —
-                // mismo camino que pane.refresh (Ctrl+R): refresh
-                // cancelable + ritual #118. GATEADO (review MAJOR-2): con
-                // un overlay/quick abierto, `refresh_panes` se comería las
-                // teclas del usuario y Esc cambiaría de significado — la
-                // precondición deja el evento ENCOLADO (canal de capacidad
-                // 1) y dispara al cerrarse el overlay.
+                // #106: an EXTERNAL change in a watched dir (debounced) —
+                // same path as pane.refresh (Ctrl+R): cancelable refresh +
+                // ritual #118. GATED (review MAJOR-2): with an overlay/quick
+                // search open, `refresh_panes` would swallow the user's keys
+                // and Esc would change meaning — the precondition leaves the
+                // event QUEUED (capacity-1 channel) and fires once the
+                // overlay closes.
                 if let Some(()) = ev {
-                    // El mapa de disco es una foto de hace un rato, y esto dice
-                    // que algo cambió — pero NO dice qué, así que lo único
-                    // honesto es volver a medir. Se enciende la bandera y la
-                    // drena `drain_pending` con el backend en la mano; medir
-                    // aquí dejaría el bucle esperando un árbol entero.
+                    // The disk map is a snapshot from a while ago, and this
+                    // says something changed — but does NOT say what, so the
+                    // only honest thing is to measure again. The flag is
+                    // switched on and `drain_pending` drains it with the
+                    // backend in hand; measuring here would leave the loop
+                    // waiting on a whole tree.
                     if app.disk_map_slot().is_some() {
                         app.disk_map_stale = true;
                     }
@@ -672,11 +687,11 @@ pub async fn run(
                         &mut work.search,
                     );
                 } else {
-                    // Inalcanzable con `dir_watch` vivo (retiene el emisor
-                    // crudo): si pasara, DESARMAR el brazo — un canal
-                    // cerrado devolvería None en bucle (spin al 100%,
+                    // Unreachable with `dir_watch` alive (it holds the raw
+                    // sender): if it happened, DISARM the arm — a closed
+                    // channel would return None in a loop (100% spin,
                     // review MINOR-1).
-                    tracing::warn!("dir watch pipeline murió; brazo desarmado");
+                    tracing::warn!("dir watch pipeline died; arm disarmed");
                     dir_watch_alive = false;
                 }
             }
@@ -686,7 +701,8 @@ pub async fn run(
                     None => std::future::pending().await,
                 }
             } => {
-                // Task de OTRO frontend de la misma sesión (fase 3): al panel.
+                // Task from ANOTHER frontend of the same session (phase 3):
+                // onto the panel.
                 app.board.push_foreign(&task);
             }
             Some(ev) = async {
@@ -697,14 +713,14 @@ pub async fn run(
             } => {
                 app.message = Some(match ev {
                     ConnEvent::Restored => t("msg-daemon-restored"),
-                    // Un relevo y una parada se ven igual en cuanto la
-                    // conexión cae: este aviso llega antes y es lo único que
-                    // los distingue.
+                    // A handoff and a stop look the same the moment the
+                    // connection drops: this notice arrives first and is the
+                    // only thing that tells them apart.
                     ConnEvent::GoingAway { reconnect: true } => t("msg-daemon-handover"),
                     ConnEvent::GoingAway { reconnect: false } => t("msg-daemon-stopping"),
-                    // `Lost` y el comodín juntos: `ConnEvent` es no
-                    // exhaustivo, y un evento de un SDK más nuevo se lee como
-                    // una pérdida, que es lo conservador.
+                    // `Lost` and the wildcard together: `ConnEvent` is
+                    // non-exhaustive, and an event from a newer SDK reads as
+                    // a loss, which is the conservative choice.
                     ConnEvent::Lost | _ => t("msg-daemon-lost"),
                 });
             }
@@ -714,8 +730,8 @@ pub async fn run(
                     None => std::future::pending().await,
                 }
             } => {
-                // Aprobación de policy pendiente (M3-3b T5): a la cola de
-                // diálogos (jamás pisa un modal abierto) y se abre si procede.
+                // Pending policy approval (M3-3b T5): onto the dialog queue
+                // (never overwrites an open modal) and opens if it should.
                 app.pending_approvals.push_back(req);
                 app.open_next_pending();
             }
@@ -725,11 +741,12 @@ pub async fn run(
                     None => std::future::pending().await,
                 }
             } => {
-                // #44: sesión remota degradó a texto plano — indicador
-                // PERSISTENTE en la status bar (no pisa `message` transitorio).
-                // H3d: se retiene el valor ESTRUCTURADO, no la frase — la barra
-                // la compone (`App::connection_banner`) y la ayuda puede
-                // preguntar por scheme cuál se degradó.
+                // #44: a remote session degraded to plaintext — a PERSISTENT
+                // indicator in the status bar (does not overwrite a
+                // transient `message`). H3d: the STRUCTURED value is kept,
+                // not the sentence — the bar composes it
+                // (`App::connection_banner`) and help can ask which scheme
+                // degraded.
                 app.note_degraded(d);
             }
             Some(f) = async {
@@ -738,11 +755,11 @@ pub async fn run(
                     None => std::future::pending().await,
                 }
             } => {
-                // #322: una conexión NO se abrió, y con el motivo. Llega
-                // DESPUÉS del error del listado que la disparó —el handler que
-                // lo espera bloquea este select mientras tanto—, así que pisa
-                // la categoría genérica con la frase concreta, que es el orden
-                // que se quiere.
+                // #322: a connection did NOT open, with the reason. Arrives
+                // AFTER the error from the listing that triggered it —the
+                // handler waiting for it blocks this select meanwhile— so it
+                // overwrites the generic category with the specific
+                // sentence, which is the order that is wanted.
                 app.note_connection_failed(&f);
             }
             Some(n) = async {
@@ -751,10 +768,10 @@ pub async fn run(
                     None => std::future::pending().await,
                 }
             } => {
-                // ADR 0100: la frase de un hook, atribuida al plugin, como
-                // mensaje transitorio de la barra — igual que un fallo de
-                // conexión. No es un indicador persistente: habla de una
-                // mutación que ya pasó.
+                // ADR 0100: a hook's sentence, attributed to the plugin, as a
+                // transient bar message — same as a connection failure. Not
+                // a persistent indicator: it speaks of a mutation that
+                // already happened.
                 app.note_plugin_notice(&n);
             }
             Some(state) = async {
@@ -763,18 +780,18 @@ pub async fn run(
                     None => std::future::pending().await,
                 }
             } => {
-                // #167/#177: esta sesión acaba de mutar sin quedar registrada.
-                // Uno por EPISODIO (el core no repite mientras el motivo no
-                // cambie), así que pisar `message` aquí no puede convertirse en
-                // un goteo. Y como `message` lo borra la siguiente tecla, el
-                // hecho se anota además en el indicador PERSISTENTE de la
-                // barra: esto no es un aviso que se pueda perder por pulsar una
-                // flecha.
+                // #167/#177: this session just mutated without getting
+                // recorded. One per EPISODE (the core does not repeat while
+                // the reason does not change), so overwriting `message` here
+                // cannot turn into a drip. And since `message` gets cleared
+                // by the next key, the fact is also noted in the bar's
+                // PERSISTENT indicator: this is not a notice that can be
+                // lost by pressing an arrow.
                 //
-                // #179: y la recuperación APAGA ese indicador. Sin esto, un
-                // ocupante de paso —otro `norte cp`, un daemon reiniciándose—
-                // dejaría a una sesión de tres horas enseñando «no se registra»
-                // sobre mutaciones que sí se registran.
+                // #179: and recovery TURNS OFF that indicator. Without this,
+                // a passing occupant —another `norte cp`, a daemon
+                // restarting— would leave a three-hour session showing "not
+                // recording" over mutations that ARE being recorded.
                 use norte_core::embedded::JournalStatus;
                 match state {
                     JournalStatus::Lost(why) => {
@@ -785,16 +802,17 @@ pub async fn run(
                         app.message = Some(t("msg-journal-recovered"));
                         app.note_journal_recovered();
                     }
-                    // #203: mismo hecho, otra explicación — y la barra lo dice
-                    // con otra frase, porque la de siempre sale también cuando
-                    // hay un daemon vivo y por eso ya no se mira.
+                    // #203: the same fact, a different explanation — and the
+                    // bar says it with a different sentence, because the
+                    // usual one also shows up when there is a live daemon
+                    // and so is no longer looked at.
                     JournalStatus::Squatted => {
                         app.message = Some(t("msg-journal-squatted"));
                         app.note_journal_squatted();
                     }
-                    // `#[non_exhaustive]`: una transición nueva no puede
-                    // cambiar el indicador a ciegas — se ignora hasta que
-                    // alguien la enseñe a propósito.
+                    // `#[non_exhaustive]`: a new transition cannot change the
+                    // indicator blindly — it is ignored until someone
+                    // deliberately teaches it.
                     _ => {}
                 }
             }
@@ -804,10 +822,10 @@ pub async fn run(
                     None => std::future::pending().await,
                 }
             } => {
-                // Sonda de stat del viewport (#52): el slot se limpia SIEMPRE
-                // (haya hidratado algo, fallara el stat o se cerrara el canal)
-                // — la dedup por `work.probed` evita reintentar hasta que un
-                // listado nuevo la vacíe.
+                // Viewport stat probe (#52): the slot is ALWAYS cleared
+                // (whether it hydrated something, the stat failed or the
+                // channel closed) — the dedup through `work.probed` avoids
+                // retrying until a new listing empties it.
                 work.stat = None;
                 for (pane, path, entry) in res.unwrap_or_default() {
                     app.panes[pane].hydrate(&path, entry.size, entry.mtime_ms);
@@ -819,13 +837,13 @@ pub async fn run(
                     None => std::future::pending().await,
                 }
             } => {
-                // El catálogo llegó: los paneles que declaran los plugins
-                // CONSENTIDOS pasan a ser kinds de verdad (fase 3). El hueco
-                // se limpia pase lo que pase — si falló, esta sesión se queda
-                // sin paneles de plugin, que es la pantalla de siempre.
+                // The catalogue arrived: the panels the CONSENTED plugins
+                // declare become real kinds (phase 3). The slot is cleared
+                // no matter what — if it failed, this session is left with
+                // no plugin panels, which is the usual screen.
                 work.panels = None;
-                if let Some(Ok(lista)) = res {
-                    app.kinds.insert_panels(&lista.plugins);
+                if let Some(Ok(list)) = res {
+                    app.kinds.insert_panels(&list.plugins);
                 }
             }
             res = async {
@@ -834,44 +852,45 @@ pub async fn run(
                     None => std::future::pending().await,
                 }
             } => {
-                // El marco de un panel de plugin (fase 3). El hueco se limpia
-                // SIEMPRE, y quien decide si la respuesta sigue valiendo es
-                // `aterrizar`, comparando la firma: mientras volaba, el cursor
-                // pudo moverse y ese marco describe otra pantalla.
-                // La sonda se TOMA, no se clona: el brazo se reconstruye en
-                // cada vuelta del `select!`, así que clonar la firma ahí era
-                // clonarla por poll y no por respuesta.
+                // A plugin panel's frame (phase 3). The slot is ALWAYS
+                // cleared, and `land` is the one that decides whether
+                // the response still counts, by comparing the signature:
+                // while it was in flight, the cursor may have moved and that
+                // frame describes a different screen.
+                // The probe is TAKEN, not cloned: the arm is rebuilt on every
+                // `select!` turn, so cloning the signature there was cloning
+                // it per poll rather than per response.
                 if let Some(pr) = work.panel_render.take() {
-                    crate::panelplugin::aterrizar(app, pr.slot, &pr.firma, res);
+                    crate::panelplugin::land(app, pr.slot, &pr.signature, res);
                 }
             }
-            (epoca, res) = async {
+            (epoch, res) = async {
                 match &mut work.log_tail {
-                    Some(pr) => (pr.epoca, (&mut pr.rx).await.ok()),
+                    Some(pr) => (pr.epoch, (&mut pr.rx).await.ok()),
                     None => std::future::pending().await,
                 }
             } => {
-                // El registro del daemon (#328): el hueco se limpia SIEMPRE,
-                // haya contestado, fallado o muerto la task — el freno de
-                // `log_next_at` es lo que evita el reintento en bucle, y un
-                // canal cerrado no puede dejar el sondeo apagado para siempre.
+                // The daemon's log (#328): the slot is ALWAYS cleared,
+                // whether the task answered, failed or died — `log_next_at`'s
+                // brake is what prevents a retry loop, and a closed channel
+                // cannot leave the probe switched off forever.
                 work.log_tail = None;
                 if let Some(res) = res {
-                    crate::logview::aterrizar_tail(app, epoca, res);
+                    crate::logview::land_tail(app, epoch, res);
                 }
             }
-            (epoca, res) = async {
+            (epoch, res) = async {
                 match &mut work.log_level {
-                    Some(pr) => (pr.epoca, (&mut pr.rx).await.ok()),
+                    Some(pr) => (pr.epoch, (&mut pr.rx).await.ok()),
                     None => std::future::pending().await,
                 }
             } => {
-                // El nivel que el daemon dejó puesto DE VERDAD, que puede no
-                // ser el que se pidió: su anillo es global a sus clientes y
-                // solo sube.
+                // The level the daemon REALLY left in place, which may not
+                // be the one requested: its ring is global to its clients
+                // and only ever goes up.
                 work.log_level = None;
                 if let Some(res) = res {
-                    crate::logview::aterrizar_nivel(app, epoca, res);
+                    crate::logview::land_level(app, epoch, res);
                 }
             }
             (generation, res) = async {
@@ -880,23 +899,25 @@ pub async fn run(
                     None => std::future::pending().await,
                 }
             } => {
-                // Sonda de la fila seleccionada del panel de diferencias
-                // (#157): el slot se limpia SIEMPRE, igual que la de arriba.
-                // Un canal cerrado (`res` es `None`) no marca nada sondeado:
-                // la próxima vez que la selección lo vuelva a pedir se
-                // reintenta, en vez de dejar la fila huérfana para siempre
-                // porque la task que la pedía murió a medio camino.
+                // Stat probe of the compare panel's selected row (#157): the
+                // slot is ALWAYS cleared, same as the one above. A closed
+                // channel (`res` is `None`) does not mark anything as
+                // probed: the next time the selection asks for it again it
+                // is retried, instead of leaving the row orphaned forever
+                // because the task that requested it died halfway.
                 work.compare_stat = None;
                 for (path, entry) in res.unwrap_or_default() {
-                    // La generación es la del PEDIDO, no la de ahora: si otra
-                    // comparación empezó mientras volaba, `hydrate` la tira.
+                    // The generation is the REQUEST's, not now's: if another
+                    // comparison started while it was in flight, `hydrate`
+                    // discards it.
                     app.hydrate_compare_size(generation, path, entry.and_then(|e| e.size));
                 }
             }
             (slot, res) = std::future::poll_fn(|cx| {
-                // Uno por HUECO, y tantos como huecos haya. `oneshot::Receiver`
-                // es `Unpin`, así que se sondea a mano; `select!` tiene aridad
-                // fija y aquí la aridad la pone el layout.
+                // One per SLOT, and as many as there are slots.
+                // `oneshot::Receiver` is `Unpin`, so it is polled by hand;
+                // `select!` has fixed arity and here the layout sets the
+                // arity.
                 for (id, f) in work.decorate.iter_mut() {
                     if let std::task::Poll::Ready(r) =
                         std::pin::Pin::new(&mut f.rx).poll(cx)
@@ -906,35 +927,34 @@ pub async fn run(
                 }
                 std::task::Poll::Pending
             }) => {
-                // Fetch de decoraciones (G3b): se limpia SIEMPRE. Una
-                // respuesta tardía cuyo `dir` ya no case el del pane (el
-                // usuario cd'eó de nuevo mientras estaba en vuelo) se
-                // DESCARTA — nunca pinta badges de un listado que ya no se
-                // ve (mismo criterio anti-stale que el drain-guard de
-                // `apply_fill_msg` para búsqueda virtual).
+                // Decoration fetch (G3b): ALWAYS cleared. A late response
+                // whose `dir` no longer matches the pane's (the user cd'd
+                // again while it was in flight) is DISCARDED — it never
+                // paints badges for a listing no longer on screen (same
+                // anti-stale criterion as `apply_fill_msg`'s drain guard for
+                // virtual search).
                 if let Some(f) = work.decorate.remove(slot)
                     && let Some((map, cols, headers)) = res
                 {
-                    // Los RÓTULOS no son del listado: dicen cómo se llama una
-                    // columna, y eso vale aunque esta respuesta llegue tarde
-                    // o para otro directorio. Van al modelo compartido, fuera
-                    // del guard anti-stale de las celdas.
+                    // LABELS are not part of the listing: they say what a
+                    // column is called, and that holds even if this response
+                    // arrives late or for another directory. They go to the
+                    // shared model, outside the cells' anti-stale guard.
                     app.columns.apply_plugin_headers(headers);
                     if let Some(p) = app.panes.browser_mut(f.slot)
                         && p.dir() == &f.dir
                     {
                         p.set_decorations(map);
-                        // #117-follow-up: los valores de columnas plugin:
-                        // viajan en el mismo fetch y comparten el guard
-                        // anti-stale.
+                        // #117-follow-up: plugin column values travel in the
+                        // same fetch and share the anti-stale guard.
                         p.set_plugin_columns(cols);
                     }
                 }
             }
             (slot, res) = std::future::poll_fn(|cx| {
-                // Lecturas del preview, una por hueco. Mismo sondeo a mano
-                // que las decoraciones y por el mismo motivo: la aridad la
-                // pone el layout, no `select!`.
+                // Preview reads, one per slot. Same hand-polling as the
+                // decorations and for the same reason: the layout sets the
+                // arity, not `select!`.
                 for (id, f) in work.preview.iter_mut() {
                     if let std::task::Poll::Ready(r) =
                         std::pin::Pin::new(&mut f.rx).poll(cx)
@@ -944,11 +964,12 @@ pub async fn run(
                 }
                 std::task::Poll::Pending
             }) => {
-                // La respuesta se aplica SOLO si el hueco sigue queriendo
-                // esa misma ruta: mientras volaba, el cursor pudo moverse.
-                // Y un error se PINTA, jamás se pregunta — el preview sigue
-                // al cursor, así que un diálogo por pulsación convertiría
-                // bajar por un directorio en una ráfaga de modales.
+                // The response is applied ONLY if the slot still wants that
+                // same path: while it was in flight, the cursor may have
+                // moved. And an error is PAINTED, never asked about — the
+                // preview follows the cursor, so a dialog per keystroke
+                // would turn walking down a directory into a burst of
+                // modals.
                 if let Some(f) = work.preview.remove(slot) {
                     match res {
                         Some(Ok(viewer)) => {
@@ -957,27 +978,28 @@ pub async fn run(
                             }
                         }
                         Some(Err(e)) => {
-                            let clave = error_category(&e);
-                            app.preview_failed(slot, &clave);
+                            let key = error_category(&e);
+                            app.preview_failed(slot, &key);
                         }
-                        // La task murió sin contestar: no se pinta un error
-                        // inventado, se deja lo que hubiera y el siguiente
-                        // movimiento del cursor lo vuelve a intentar.
+                        // The task died without answering: no invented error
+                        // is painted, whatever was there is left and the
+                        // next cursor movement tries again.
                         None => {}
                     }
                 }
             }
             (pane, msg) = std::future::poll_fn(|cx| {
-                // Un canal POR HUECO, no por posición, y tantos como huecos
-                // haya. `tokio::select!` tiene aridad fija, así que se sondean
-                // a mano: `poll_recv` registra el waker, o sea que esto es tan
-                // cancel-safe como `recv` y perder la carrera no pierde el
-                // lote del otro.
+                // One channel PER SLOT, not per position, and as many as
+                // there are slots. `tokio::select!` has fixed arity, so they
+                // are polled by hand: `poll_recv` registers the waker, so
+                // this is as cancel-safe as `recv` and losing the race does
+                // not lose the other one's batch.
                 //
-                // El barrido ARRANCA donde acabó el anterior. Sondear siempre
-                // desde el principio deja que un drenador rápido en el primer
-                // hueco no deje hablar nunca a los demás — con dos paneles
-                // `select!` lo evitaba solo, porque elige al azar.
+                // The sweep STARTS where the previous one ended. Always
+                // polling from the beginning would let a fast drainer on the
+                // first slot never let the others speak — with two panels
+                // `select!` avoided this on its own, because it picks at
+                // random.
                 let n = work.fill.len();
                 for k in 0..n {
                     let Some((id, f)) = work.fill.iter_mut().nth((work.fill_cursor + k) % n) else {
@@ -990,14 +1012,16 @@ pub async fn run(
                 }
                 std::task::Poll::Pending
             }) => {
-                // Lote del drenador del listado paginado (ADR 0017): al pane
-                // de SU hueco. `None` = canal cerrado (fin del drenado).
+                // Batch from the paginated listing's drainer (ADR 0017): to
+                // ITS slot's pane. `None` = closed channel (end of
+                // draining).
                 apply_fill_msg(app, &mut work.fill, pane, msg);
             }
             hits = async {
-                // Solo se drena mientras el run sigue vivo (`Running`): un
-                // canal cerrado devolvería `None` en bucle (spin) — al leer el
-                // `None` se pasa a terminal y este brazo queda pendiente.
+                // Only drained while the run is still alive (`Running`): a
+                // closed channel would return `None` in a loop (spin) — on
+                // reading the `None` it moves to terminal and this arm is
+                // left pending.
                 match &mut work.search {
                     Some(s) if s.state == SearchState::Running => s.rx.recv().await,
                     _ => std::future::pending().await,
@@ -1006,8 +1030,9 @@ pub async fn run(
                 drain_search(app, &mut work.search, hits);
             }
             batch = async {
-                // Igual que el brazo de hits: solo se drena con el run VIVO,
-                // porque un canal cerrado devolvería `None` en bucle (spin).
+                // Same as the hits arm: only drained with the run ALIVE,
+                // because a closed channel would return `None` in a loop
+                // (spin).
                 match &mut work.compare {
                     Some(c) if c.state == CompareState::Running => c.rx.recv().await,
                     _ => std::future::pending().await,
@@ -1015,24 +1040,26 @@ pub async fn run(
             } => {
                 drain_compare(app, &mut work.compare, batch);
             }
-            // UN solo brazo para las dos Tasks del diálogo: `select!` no deja
-            // tomar prestado `work.sync` dos veces, y son fases sucesivas del
-            // mismo run — nunca hay plan y aplicación a la vez.
+            // A SINGLE arm for the dialog's two Tasks: `select!` does not
+            // allow borrowing `work.sync` twice, and they are successive
+            // phases of the same run — there is never a plan and an
+            // application at the same time.
             tick = async {
                 let Some(s) = &mut work.sync else {
                     return std::future::pending().await;
                 };
                 if s.applying {
-                    // La aplicación no tiene canal: se espera a que su Task
-                    // cambie de estado. `changed()` con el emisor caído
-                    // devuelve `Err`, y eso también es un final — se sale y el
-                    // cosechado lee el snapshot que haya.
+                    // The application has no channel: it waits for its Task
+                    // to change state. `changed()` with the sender gone
+                    // returns `Err`, and that is also an ending — it exits
+                    // and the harvest reads whatever snapshot there is.
                     let alive = s.progress.changed().await.is_ok();
                     return SyncTick::Applied { alive };
                 }
                 match &mut s.rx {
-                    // Un canal ya cerrado devolvería `None` en bucle (spin):
-                    // `drain_sync_plan` pone `rx = None` al cerrarse.
+                    // An already-closed channel would return `None` in a
+                    // loop (spin): `drain_sync_plan` sets `rx = None` on
+                    // close.
                     Some(rx) => SyncTick::Plan(rx.recv().await),
                     None => std::future::pending().await,
                 }
@@ -1045,8 +1072,9 @@ pub async fn run(
                 }
             }
             res = async {
-                // ai.rename_plan en vuelo (M4-IA): cosecha sin bloquear —
-                // el brazo solo se arma con un run vivo (molde work.stat).
+                // In-flight ai.rename_plan (M4-IA): harvested without
+                // blocking — the arm only arms with a live run
+                // (work.stat's shape).
                 match &mut work.ai_rename {
                     Some(r) => (&mut r.handle).await,
                     None => std::future::pending().await,
@@ -1055,9 +1083,9 @@ pub async fn run(
                 harvest_ai_rename(app, backend, &mut work, res);
             }
             res = async {
-                // ai.organize_plan / plugin.organize_plan en vuelo (fase 8):
-                // el mismo molde, y una sola casilla porque las dos producen
-                // el mismo plan y el mismo modal.
+                // In-flight ai.organize_plan / plugin.organize_plan (phase
+                // 8): the same shape, and a single slot because both produce
+                // the same plan and the same modal.
                 match &mut work.organize {
                     Some(r) => (&mut r.handle).await,
                     None => std::future::pending().await,
@@ -1066,8 +1094,8 @@ pub async fn run(
                 crate::jobs::harvest_organize(app, &mut work, res);
             }
             res = async {
-                // fs.rename_batch_plan en vuelo (§17): cosecha sin bloquear,
-                // molde del brazo de `work.ai_rename`.
+                // In-flight fs.rename_batch_plan (§17): harvested without
+                // blocking, `work.ai_rename`'s arm's shape.
                 match &mut work.rename_batch {
                     Some(r) => (&mut r.handle).await,
                     None => std::future::pending().await,
@@ -1076,8 +1104,8 @@ pub async fn run(
                 harvest_rename_batch(app, &mut work, res);
             }
             res = async {
-                // index.search_semantic en vuelo (M4-IA-2): cosecha sin
-                // bloquear — molde del brazo de `work.ai_rename`.
+                // In-flight index.search_semantic (M4-IA-2): harvested
+                // without blocking — `work.ai_rename`'s arm's shape.
                 match &mut work.semantic {
                     Some(r) => (&mut r.handle).await,
                     None => std::future::pending().await,
@@ -1086,9 +1114,9 @@ pub async fn run(
                 harvest_semantic(app, &mut work, res);
             }
             res = async {
-                // La misma pregunta, para la SECCIÓN del «ir a» (fase 6):
-                // casilla propia porque lo que se hace con la respuesta es
-                // otra cosa, y porque las dos pueden estar vivas a la vez.
+                // The same question, for the "go to" SECTION (phase 6): its
+                // own slot because what is done with the response is a
+                // different thing, and because both can be alive at once.
                 match &mut work.goto_index {
                     Some(r) => (&mut r.handle).await,
                     None => std::future::pending().await,
@@ -1097,9 +1125,9 @@ pub async fn run(
                 crate::jobs::harvest_goto_index(app, &mut work, res);
             }
             res = async {
-                // El informe de un lote de sumas (#311): mismo molde. La espera
-                // del estado terminal vive DENTRO del spawn, así que aquí no
-                // hay más que cosechar.
+                // A checksum batch's report (#311): same shape. Waiting for
+                // the terminal state lives INSIDE the spawn, so there is
+                // nothing more to harvest here.
                 match &mut work.checksum {
                     Some(r) => (&mut r.handle).await,
                     None => std::future::pending().await,
@@ -1108,9 +1136,9 @@ pub async fn run(
                 harvest_checksum(app, &mut work, res);
             }
             res = async {
-                // El informe de un mapa de disco (fase 4): mismo molde que el
-                // de sumas. La espera del estado terminal vive DENTRO del
-                // spawn, así que aquí no hay más que cosechar.
+                // A disk map's report (phase 4): same shape as the checksum
+                // one. Waiting for the terminal state lives INSIDE the
+                // spawn, so there is nothing more to harvest here.
                 match &mut work.disk_map {
                     Some(r) => (&mut r.handle).await,
                     None => std::future::pending().await,
@@ -1124,15 +1152,15 @@ pub async fn run(
                     None => std::future::pending().await,
                 }
             } => {
-                // DROP INMEDIATO del CommandRun resuelto (contrato del
-                // driver): retenerlo mantendría `run_active` encendido y la
-                // statusbar Lua congelada.
+                // IMMEDIATE DROP of the resolved CommandRun (the driver's
+                // contract): keeping it would leave `run_active` on and the
+                // Lua status bar frozen.
                 work.lua = None;
                 match outcome {
                     RunOutcome::Ok { messages } => {
                         if !messages.is_empty() {
-                            // Unidos con « · » y por detail_for_bar (tope +
-                            // enmascarado): la barra es una línea.
+                            // Joined with " · " and through detail_for_bar
+                            // (cap + masked): the bar is one line.
                             app.message = Some(detail_for_bar(&messages.join(" · ")));
                         }
                     }
@@ -1145,9 +1173,9 @@ pub async fn run(
                     RunOutcome::Cancelled => app.message = Some(t("err-lua-cancelled")),
                     RunOutcome::TimedOut => app.message = Some(t("err-lua-timeout")),
                 }
-                // FIFO: arranca el siguiente encolado. En bucle: si uno ya
-                // no existe (hot-reload lo quitó → `err-lua-unknown`), el
-                // resto de la cola no se queda atascado.
+                // FIFO: starts the next queued one. In a loop: if one no
+                // longer exists (hot reload removed it → `err-lua-unknown`),
+                // the rest of the queue does not stay stuck.
                 if let Some(host) = lua_host.as_ref() {
                     while work.lua.is_none() {
                         let Some(next) = work.lua_queue.pop_front() else {
@@ -1158,7 +1186,7 @@ pub async fn run(
                 }
             }
             Some(()) = cfg_rx.recv() => {
-                // Ráfaga de guardados: empuja el deadline (ADR 0007).
+                // A burst of saves: pushes the deadline (ADR 0007).
                 reload_at =
                     Some(tokio::time::Instant::now() + std::time::Duration::from_millis(300));
             }
@@ -1170,9 +1198,9 @@ pub async fn run(
             } => {
                 reload_at = None;
                 while cfg_rx.try_recv().is_ok() {}
-                // #117: si el reload cambia los attrs configurados de un
-                // pane visible, hay que re-listar (los valores solo llegan
-                // pidiéndolos) — mismo camino que el confirm del picker.
+                // #117: if the reload changes a visible pane's configured
+                // attrs, it has to re-list (the values only arrive by
+                // requesting them) — same path as the picker's confirm.
                 let attrs_before = pane_attr_ids(app);
                 reload_config(
                     app,
@@ -1189,34 +1217,35 @@ pub async fn run(
                     &mut cfg,
                 )
                 .await;
-                // `[ui] mouse` en caliente: encenderla o apagarla sin
-                // reiniciar. `set` es idempotente, así que un reload que
-                // no tocó la clave (o que falló entero, dejando la config
-                // vigente) no manda nada a la terminal.
+                // `[ui] mouse` hot: switching it on or off without
+                // restarting. `set` is idempotent, so a reload that did not
+                // touch the key (or failed entirely, leaving the current
+                // config) sends nothing to the terminal.
                 //
-                // Exención puntual de la regla 2, la MISMA que el draw de
-                // arriba: son unos pocos bytes de escape a la terminal de
-                // control síncronos, acotados, y solo cuando la clave CAMBIA.
+                // A one-off exemption from rule 2, the SAME as the draw
+                // above: a few synchronous escape bytes to the control
+                // terminal, bounded, and only when the key CHANGES.
                 if let Err(e) =
                     capture.set(cfg.common.ui_mouse.unwrap_or(true), terminal.backend_mut())
                 {
-                    // Y se dice, como en el arranque: quien acaba de
-                    // encender el ratón desde el overlay de ajustes y se
-                    // encuentra con que hacer click no hace nada merece
-                    // saber por qué (antes esto solo iba al log).
-                    tracing::warn!(error = %e, "no se pudo cambiar la captura de ratón");
+                    // And it is reported, as at startup: whoever just turned
+                    // the mouse on from the settings overlay and finds that
+                    // clicking does nothing deserves to know why (before,
+                    // this only went to the log).
+                    tracing::warn!(error = %e, "could not change mouse capture");
                     app.message = Some(t("msg-mouse-capture-failed"));
                 }
-                // `[ui] alt_menu` en caliente, con la misma exención. NO se
-                // pregunta al terminal: se lee lo que contestó al arrancar
-                // (`alt_menu::consultar_soporte`), porque con el lector de
-                // eventos vivo la pregunta bloquea dos segundos y dice «no».
+                // `[ui] alt_menu` hot, with the same exemption. The terminal
+                // is NOT asked: what it answered at startup is read
+                // (`alt_menu::query_support`), because with the event
+                // reader alive the question blocks for two seconds and says
+                // "no".
                 if let Err(e) = crate::alt_menu::set(
                     cfg.common.ui_alt_menu.unwrap_or(false),
-                    crate::alt_menu::soportado,
+                    crate::alt_menu::supported,
                     terminal.backend_mut(),
                 ) {
-                    tracing::warn!(error = %e, "no se pudo cambiar el protocolo de teclado");
+                    tracing::warn!(error = %e, "could not change the keyboard protocol");
                 }
                 if pane_attr_ids(app) != attrs_before {
                     let refreshed =
@@ -1229,29 +1258,30 @@ pub async fn run(
                         &mut work.search,
                     );
                 }
-                // Hot-reload del scripting Lua (ADR 0026): host NUEVO entero
-                // (jamás estado a medias). Un `CommandRun` en vuelo retiene
-                // el estado VIEJO vía sus handles clonados (documentado en
-                // `lua::api`) y no se toca; statusbar/estado renacen. La
-                // cola también: sus nombres apuntaban al registro viejo
-                // (y si `load_lua` dio None, no quedaría quién drenarla).
+                // Lua scripting's hot reload (ADR 0026): a WHOLE NEW host
+                // (never a half-updated state). An in-flight `CommandRun`
+                // keeps the OLD state via its cloned handles (documented in
+                // `lua::api`) and is not touched; statusbar/state are reborn.
+                // The queue too: its names pointed at the old registry (and
+                // if `load_lua` gave None, there would be nobody left to
+                // drain it).
                 lua_host = load_lua(app, &layers).await;
                 work.lua_queue.clear();
             }
             maybe = events.next() => {
-                // EOF del terminal —te cierran la ventana—: se sale por
-                // el MISMO sitio que un `app.quit`, que es donde se
-                // guarda la última foto de la sesión. Saliendo aquí con
-                // un `return` se perdía.
+                // The terminal's EOF —the window gets closed on you—: exits
+                // through the SAME place as an `app.quit`, which is where the
+                // session's last snapshot is saved. Exiting here with a
+                // `return` used to lose it.
                 let Some(event) = maybe else { app.quit = true; continue; };
                 let event = event.map_err(RunError::Event)?;
-                // Ratón (`[ui] mouse`): solo llega si la captura está
-                // pedida — sin ella el emulador no reporta nada y este
-                // brazo no corre. La semántica del gesto (marcar, barrer,
-                // transferir) vive en `norte-frontend` (regla 7); aquí solo
-                // se resuelve la celda y se aplica.
+                // Mouse (`[ui] mouse`): only arrives if capture was
+                // requested — without it the emulator reports nothing and
+                // this arm never runs. The gesture's semantics (marking,
+                // sweeping, transferring) live in `norte-frontend` (rule 7);
+                // here only the cell is resolved and applied.
                 if let Event::Mouse(me) = event {
-                    alt_solo.soltar();
+                    alt_solo.release();
                     mouse::on_mouse(
                         app,
                         backend,
@@ -1267,10 +1297,10 @@ pub async fn run(
                         me,
                     )
                     .await;
-                    // Un clic en la barra de teclas dejó una tecla que
-                    // sintetizar (spec 2026-09-10): va por `on_key`, el
-                    // MISMO camino que la tecla de verdad, con los tres
-                    // resolvers. No hay segundo despacho que pueda divergir.
+                    // A click on the key bar left a key to synthesize (spec
+                    // 2026-09-10): goes through `on_key`, the SAME path as a
+                    // real key, with the three resolvers. There is no second
+                    // dispatch that could diverge.
                     if let Some(key) = app.pending_key.take() {
                         on_key(
                             app,
@@ -1293,33 +1323,34 @@ pub async fn run(
                         .await;
                     }
                 } else if let Event::Key(key) = event
-                    && crate::alt_menu::es_modificador(&key)
+                    && crate::alt_menu::es_modifier(&key)
                 {
-                    // Una modificadora sola no es una tecla para el keymap:
-                    // solo alimenta el gesto. Con el menú abierto lo pliega;
-                    // con otro overlay delante no hace nada, como F9 allí.
-                    if alt_solo.tecla(&key) && (app.menu.is_some() || !mouse::overlay_open(app)) {
-                        // Como F9 por `on_key`: una secuencia a medias (`g`…)
-                        // se abandona, o la siguiente tecla tras cerrar el
-                        // menú la completaría.
+                    // A modifier alone is not a key for the keymap: it only
+                    // feeds the gesture. With the menu open it folds it; with
+                    // another overlay in front it does nothing, like F9
+                    // there.
+                    if alt_solo.key(&key) && (app.menu.is_some() || !mouse::overlay_open(app)) {
+                        // Like F9 through `on_key`: a half-typed sequence
+                        // (`g`…) is abandoned, or the next key after closing
+                        // the menu would complete it.
                         resolver.reset();
                         app.toggle_menu();
                     }
                 } else if let Event::Key(key) = event
-                    // `Repeat` cuenta como pulsación: con el protocolo de
-                    // kitty pedido, una flecha mantenida llega así, y
-                    // filtrando solo `Press` avanzaría una fila. Sin él,
-                    // crossterm lo manda todo como `Press`.
+                    // `Repeat` counts as a press: with the kitty protocol
+                    // requested, a held arrow arrives this way, and filtering
+                    // only `Press` would advance one row. Without it,
+                    // crossterm sends everything as `Press`.
                     && key.kind != crossterm::event::KeyEventKind::Release
                 {
-                    alt_solo.tecla(&key);
+                    alt_solo.key(&key);
                     on_key(
                         app,
                         backend,
                         capture,
-                        // La consola CON terminal: este es el camino por el que
-                        // se llega a una navegación larga, y es el único que
-                        // necesita poder repintarse mientras espera.
+                        // The console WITH terminal: this is the path that
+                        // reaches a long navigation, and it is the only one
+                        // that needs to be able to repaint while it waits.
                         &mut Console::new(&mut events, terminal),
                         resolver,
                         viewer_resolver,
@@ -1343,17 +1374,17 @@ pub async fn run(
                 }
             }
         }
-        // Un cambio de perfil pedido por `profile.pick`/`next`/`prev`, una vez
-        // por vuelta y AQUÍ.
+        // A profile switch requested by `profile.pick`/`next`/`prev`, once
+        // per turn and HERE.
         //
-        // No al lado de cada `run_command` como `launch_pending_open`: aquél
-        // necesita la terminal, que `keys.rs` tiene; éste necesita las capas,
-        // los tres resolvers y la config entera, que solo están aquí. Cinco
-        // sitios pasándose doce parámetros para servir a tres comandos sería
-        // el cableado peor.
-        if let Some(nombre) = app.pending_profile.take() {
-            cambia_de_perfil(
-                &nombre,
+        // Not beside each `run_command` like `launch_pending_open`: that one
+        // needs the terminal, which `keys.rs` has; this one needs the
+        // layers, the three resolvers and the whole config, which are only
+        // here. Five sites passing around twelve parameters to serve three
+        // commands would be the worse wiring.
+        if let Some(name) = app.pending_profile.take() {
+            switches_profile(
+                &name,
                 app,
                 backend,
                 &mut Console::new(&mut events, terminal),
@@ -1370,36 +1401,38 @@ pub async fn run(
             )
             .await;
         }
-        // Las unidades del sidebar, una vez por vuelta y DESPUÉS del cambio de
-        // perfil, que monta una pantalla nueva y por tanto también las pide.
-        // Tres caminos —abrir el panel, desplegar su sección, montar una
-        // disposición que ya lo trae— y un solo sitio donde se sirven, que es
-        // lo que evita que falten justo por el que nadie recordó (ver
-        // `App::places_wants_drives`).
+        // The sidebar's drives, once per turn and AFTER the profile switch,
+        // which mounts a new screen and therefore also requests them. Three
+        // paths —opening the panel, unfolding its section, mounting a layout
+        // that already carries it— and a single site that serves them, which
+        // is what keeps them from being missing exactly where nobody
+        // remembered (see `App::places_wants_drives`).
         crate::screens::drain_places_drives(app, backend).await;
-        // Resize/Focus/etc: el draw del inicio del loop repinta solo.
+        // Resize/Focus/etc: the loop's opening draw repaints on its own.
     }
 }
 
-/// Cambia de perfil en caliente (ADR 0079, D8).
+/// Switches profile hot (ADR 0079, D8).
 ///
-/// El orden ES el diseño:
+/// The order IS the design:
 ///
-/// 1. Volcar el estado del perfil que se deja, ANTES de tocar nada. Si esto
-///    fuese después de recargar, lo que se guardaría bajo el nombre viejo
-///    sería el estado del perfil nuevo.
-/// 2. Rehacer las capas con el directorio del perfil y recargar. Esa recarga
-///    es `reload_config`, que ya era «todo o nada»: si falla, deja la config
-///    vigente y avisa, que es justo lo que D7 pide para un cambio (`Switch`).
-/// 3. Solo si aplicó: montar la disposición guardada del perfil nuevo, darlo
-///    por activo, y decir lo que no se pudo aplicar sin reiniciar.
+/// 1. Dump the state of the profile being left, BEFORE touching anything. If
+///    this happened after reloading, what got saved under the old name would
+///    be the new profile's state.
+/// 2. Rebuild the layers with the profile's directory and reload. That
+///    reload is `reload_config`, which was already "all or nothing": if it
+///    fails, it leaves the current config and warns, which is exactly what
+///    D7 asks for a switch (`Switch`).
+/// 3. Only if it applied: mount the new profile's saved layout, make it the
+///    active one, and say what could not be applied without restarting.
 ///
-/// Lo que NO hace falta hacer a mano: tema, keymap, columnas, favoritos y
-/// openers los aplica el paso 2, y la siembra de cada hueco sale de
-/// `apply_session`, que ya sabe leer la disposición bajo la clave del perfil.
-#[expect(clippy::too_many_arguments, reason = "wiring del bucle, no API")]
-async fn cambia_de_perfil(
-    nombre: &std::ffi::OsStr,
+/// What does NOT need doing by hand: step 2 applies theme, keymap, columns,
+/// favorites and openers, and each slot's seeding comes from
+/// `apply_session`, which already knows how to read the layout under the
+/// profile's key.
+#[expect(clippy::too_many_arguments, reason = "loop wiring, not an API")]
+async fn switches_profile(
+    name: &std::ffi::OsStr,
     app: &mut App,
     backend: &Backend,
     events: &mut crate::console::Console<'_>,
@@ -1414,27 +1447,27 @@ async fn cambia_de_perfil(
     confirm_quit: &mut config::ConfirmQuit,
     cfg: &mut config::LoadedConfig,
 ) {
-    // 1 — el estado del perfil que se DEJA, capturado antes de nada.
-    let saliente = app.session_body();
-    let antes = cfg.common.clone();
+    // 1 — the state of the profile being LEFT, captured before anything else.
+    let outgoing = app.session_body();
+    let before = cfg.common.clone();
 
-    // 2 — las capas nuevas. Un nombre que el resolutor no puede colgar deja
-    // las capas como estaban, y entonces la recarga no cambiaría nada: se
-    // rehúsa el cambio en vez de fingir que pasó algo.
-    let nuevas = norte_config::standard_layers_with_profile(Some(nombre));
-    if !nuevas
+    // 2 — the new layers. A name the resolver cannot hang leaves the layers
+    // as they were, and then the reload would change nothing: the switch is
+    // refused instead of pretending something happened.
+    let new_layers = norte_config::standard_layers_with_profile(Some(name));
+    if !new_layers
         .dirs
         .iter()
         .any(|(_, k)| *k == config::Layer::Profile)
     {
         app.message = Some(ta(
             "msg-profile-not-applied",
-            &[("profile", &nombre.to_string_lossy())],
+            &[("profile", &name.to_string_lossy())],
         ));
         return;
     }
-    let anteriores = std::mem::replace(layers, nuevas);
-    let aplicado = reload_config(
+    let previous = std::mem::replace(layers, new_layers);
+    let applied = reload_config(
         app,
         backend,
         resolver,
@@ -1449,70 +1482,72 @@ async fn cambia_de_perfil(
         cfg,
     )
     .await;
-    if !aplicado {
-        // `reload_config` ya dejó la config vigente y dijo por qué; aquí solo
-        // se devuelven las capas, que son lo único que este nivel había
-        // tocado. El lector se queda en el perfil que tenía, con el estado
-        // que tenía.
-        *layers = anteriores;
+    if !applied {
+        // `reload_config` already left the current config in place and said
+        // why; here only the layers are returned, which is the only thing
+        // this level had touched. The reader stays on the profile they had,
+        // with the state they had.
+        *layers = previous;
         return;
     }
 
-    // 3 — el perfil nuevo es el activo, y su pantalla se monta desde el mismo
-    // cuerpo: `apply_session` lee la disposición bajo la clave del perfil y
-    // guarda las de los demás.
-    app.active_profile = Some(nombre.to_os_string());
-    // El vector que devuelve se descarta a propósito, igual que hace
-    // `apply_session_value` en el arranque: quién necesita listado lo resuelve
-    // `refresh_panes` justo después, que es el camino que ya usa la recarga
-    // cuando los attrs de un pane cambian.
-    let _ = app.apply_session(&saliente);
-    // Y `[profile.start]`, que es lo que hace útil un perfil recién creado o
-    // uno que llega de otra máquina: dónde abre cada hueco la primera vez. Va
-    // DESPUÉS de la sesión porque la sesión gana — un perfil es un espacio de
-    // trabajo, no un marcador que te devuelve al principio cada vez.
+    // 3 — the new profile is the active one, and its screen is mounted from
+    // the same body: `apply_session` reads the layout under the profile's
+    // key and stores the others'.
+    app.active_profile = Some(name.to_os_string());
+    // The vector it returns is discarded on purpose, same as
+    // `apply_session_value` does at startup: whoever needs a listing is
+    // resolved by `refresh_panes` right after, which is the same path the
+    // reload already uses when a pane's attrs change.
+    let _ = app.apply_session(&outgoing);
+    // And `[profile.start]`, which is what makes a freshly created profile
+    // or one arriving from another machine useful: where each slot opens the
+    // first time. Comes AFTER the session because the session wins — a
+    // profile is a workspace, not a bookmark that returns you to the start
+    // every time.
     //
-    // El veto NO es `saliente`: ése es `session_body()`, la pantalla de AHORA,
-    // que nombra todos los huecos vivos y por tanto no dejaría sembrar nunca.
-    // Lo pone el propio método, con lo leído del disco y lo ya sembrado.
+    // The veto is NOT `outgoing`: that is `session_body()`, the screen RIGHT
+    // NOW, which names every live slot and therefore would never let
+    // anything be seeded. It is set by the method itself, with what was read
+    // from disk and what has already been seeded.
     let _ = app.seed_profile_start(&cfg.common.profile_start);
     let _ = crate::refresh::refresh_panes(app, backend, events).await;
-    let fuera = crate::app::profile::no_aplicable_en_caliente(&antes, &cfg.common);
-    // Lo que el FICHERO del perfil trae y no se entiende gana a los otros dos
-    // mensajes: «no se pudo aplicar en caliente» describe un límite de este
-    // proceso, y esto describe líneas que no van a hacer nada nunca. Callarlas
-    // es lo que convertía `[profile.start]` en una trampa.
-    for aviso in &cfg.common.profile_warnings {
-        tracing::warn!(motivo = %aviso, "línea del perfil ignorada");
+    let outside = crate::app::profile::not_hot_reloadable(&before, &cfg.common);
+    // What the profile FILE carries and is not understood outranks the other
+    // two messages: "could not apply hot" describes a limit of this process,
+    // and this describes lines that are never going to do anything. Staying
+    // silent about them is what turned `[profile.start]` into a trap.
+    for warning in &cfg.common.profile_warnings {
+        tracing::warn!(reason = %warning, "profile line ignored");
     }
     app.message = Some(if !cfg.common.profile_warnings.is_empty() {
         ta(
             "msg-profile-config-ignored",
             &[
-                ("profile", &nombre.to_string_lossy()),
+                ("profile", &name.to_string_lossy()),
                 ("n", &cfg.common.profile_warnings.len().to_string()),
             ],
         )
-    } else if fuera.is_empty() {
+    } else if outside.is_empty() {
         ta(
             "msg-profile-switched",
-            &[("profile", &nombre.to_string_lossy())],
+            &[("profile", &name.to_string_lossy())],
         )
     } else {
         ta(
             "msg-profile-switched-partial",
             &[
-                ("profile", &nombre.to_string_lossy()),
-                ("keys", &fuera.join(", ")),
+                ("profile", &name.to_string_lossy()),
+                ("keys", &outside.join(", ")),
             ],
         )
     });
 }
 
-/// Dirs NATIVOS vigilables de los panes (#106): solo `file://` (un dir
-/// sftp/S3/archive no tiene inotify — su refresh sigue siendo Ctrl+R) y
-/// solo panes reales (el virtual de búsqueda no muestra un dir). Puro:
-/// `vpath_to_native` no toca el FS.
+/// The panes' watchable NATIVE dirs (#106): only `file://` (an sftp/S3/archive
+/// dir has no inotify — its refresh is still Ctrl+R) and only real panes (the
+/// virtual search one shows no dir). Pure: `vpath_to_native` does not touch
+/// the FS.
 #[must_use]
 pub fn watch_targets(app: &App) -> [Option<std::path::PathBuf>; 2] {
     std::array::from_fn(|i| {

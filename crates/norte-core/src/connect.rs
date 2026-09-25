@@ -1,13 +1,13 @@
-//! Connection manager del core (fase 6e, ADR 0015 A/G): resuelve un
-//! `scheme://authority` remoto a un [`Provider`] vivo — busca la conexión en
-//! `connections.toml` (o construye una ad-hoc desde la URL), resuelve el
-//! secreto (env → keyring → `secrets.age`) y establece el transporte con
-//! `norte-connect`, inyectando la sesión al provider (los providers JAMÁS
-//! ven un secreto, reglas 7/10).
+//! Core connection manager (phase 6e, ADR 0015 A/G): resolves a remote
+//! `scheme://authority` to a live [`Provider`] — looks up the connection in
+//! `connections.toml` (or builds an ad-hoc one from the URL), resolves the
+//! secret (env → keyring → `secrets.age`) and establishes the transport with
+//! `norte-connect`, injecting the session into the provider (providers NEVER
+//! see a secret, rules 7/10).
 //!
-//! El [`Engine`](crate::Engine) consulta este subsistema vía el trait
-//! [`RemoteConnector`] (inyectable: los tests del engine usan uno falso) y
-//! cachea el provider resultante por `scheme://authority`.
+//! The [`Engine`](crate::Engine) consults this subsystem via the
+//! [`RemoteConnector`] trait (injectable: the engine's tests use a fake one)
+//! and caches the resulting provider by `scheme://authority`.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -27,42 +27,44 @@ use norte_plugin_host::PluginRuntime;
 use crate::plugin_provider::{PluginProvider, map_runtime_error};
 use crate::plugins::{PluginRegistry, ResolvedProvider};
 
-/// Establece providers remotos bajo demanda. El Engine lo consulta cuando un
-/// `VPath` remoto no tiene provider cacheado; la implementación real es
+/// Establishes remote providers on demand. The Engine consults it when a
+/// remote `VPath` has no cached provider; the real implementation is
 /// [`ConnectionManager`].
 #[async_trait]
 pub trait RemoteConnector: Send + Sync {
-    /// Conecta y construye el provider para `scheme://authority`, junto a los
-    /// avisos de seguridad emitidos al establecerlo (#44: degradación TLS).
+    /// Connects and builds the provider for `scheme://authority`, along with
+    /// the security warnings emitted while establishing it (#44: TLS
+    /// degradation).
     ///
     /// # Errors
-    /// [`DialError`], que lleva la categoría de siempre —
-    /// [`Error::HostKeyUnknown`]/[`Error::HostKeyMismatch`] (flujo TOFU, ADR
-    /// 0015 D) o aquella a la que degrade el fallo — y, si se puede contar, el
-    /// porqué (#322). Un `Error` se convierte solo con `.into()`: eso es «no
-    /// sé explicarlo», que era el comportamiento único antes.
+    /// [`DialError`], which carries the usual category —
+    /// [`Error::HostKeyUnknown`]/[`Error::HostKeyMismatch`] (TOFU flow, ADR
+    /// 0015 D) or whichever the failure degrades to — and, if it can be told,
+    /// the why (#322). An `Error` converts with just `.into()`: that is "I
+    /// can't explain it," which was the only behavior before.
     async fn connect(&self, scheme: &str, authority: &str) -> Result<Connected, DialError>;
 
-    /// La forma CANÓNICA de `authority` para esta conexión (#47, dedup): la
-    /// authority con el usuario/puerto EFECTIVOS que usaría el connect —
-    /// `sftp://host` que hereda `oscar@` de `connections.toml` canonicaliza a
-    /// `oscar@host`, y un puerto default explícito se normaliza fuera. El
-    /// Engine cachea la sesión bajo la clave canónica (+ alias la pedida):
-    /// dos formas de la misma identidad = UNA sesión.
+    /// The CANONICAL form of `authority` for this connection (#47, dedup):
+    /// the authority with the EFFECTIVE user/port that connect would use —
+    /// `sftp://host` that inherits `oscar@` from `connections.toml`
+    /// canonicalizes to `oscar@host`, and an explicit default port gets
+    /// normalized away. The Engine caches the session under the canonical
+    /// key (+ aliases the requested one): two forms of the same identity =
+    /// ONE session.
     ///
-    /// Resolución LOCAL y barata (sin red). `None` (default) = sin opinión:
-    /// el Engine cachea bajo la authority pedida tal cual.
+    /// LOCAL and cheap resolution (no network). `None` (default) = no
+    /// opinion: the Engine caches under the requested authority as is.
     async fn canonical_authority(&self, scheme: &str, authority: &str) -> Option<String> {
         let _ = (scheme, authority);
         None
     }
 
-    /// Registra la host key de `host:port` tras la confirmación EXPLÍCITA del
-    /// usuario (método `connection.trust_host_key`); re-verifica el
-    /// fingerprint contra la clave real (anti-TOCTOU, en `norte-connect`).
+    /// Records the host key of `host:port` after the user's EXPLICIT
+    /// confirmation (`connection.trust_host_key` method); re-verifies the
+    /// fingerprint against the real key (anti-TOCTOU, in `norte-connect`).
     ///
     /// # Errors
-    /// [`Error::HostKeyMismatch`] si el host ya no presenta esa clave.
+    /// [`Error::HostKeyMismatch`] if the host no longer presents that key.
     async fn trust_host_key(
         &self,
         host: &str,
@@ -70,31 +72,35 @@ pub trait RemoteConnector: Send + Sync {
         fingerprint: &str,
     ) -> Result<(), Error>;
 
-    /// Guarda para ESTA sesión el secreto que un humano acaba de teclear
+    /// Stores, for THIS session, the secret a human just typed
     /// (`connection.provide_secret`, #325).
     ///
-    /// El gemelo de [`Self::trust_host_key`], y por el mismo motivo: hay
-    /// decisiones que solo puede tomar quien está delante, y el core necesita
-    /// una puerta por la que reciban la respuesta. En memoria y nada más.
+    /// The twin of [`Self::trust_host_key`], and for the same reason: some
+    /// decisions only the person in front of the screen can make, and the
+    /// core needs a door through which the answer comes in. In memory, and
+    /// nothing more.
     ///
     /// # Errors
-    /// Implementación dependiente; el conector por defecto no falla.
+    /// Implementation-dependent; the default connector never fails.
     async fn provide_secret(&self, conn: &str, secret: &str) -> Result<(), Error>;
 }
 
-/// Causa de una degradación de seguridad al conectar (#44). Vocabulario CERRADO:
-/// su `wire()` es el `reason` de [`norte_proto::methods::ConnectionDegraded`].
+/// Cause of a security degradation while connecting (#44). CLOSED
+/// vocabulary: its `wire()` is the `reason` of
+/// [`norte_proto::methods::ConnectionDegraded`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConnectionWarningReason {
-    /// FTP `tls="allow"`: el servidor rechazó `AUTH TLS` → sesión en claro.
+    /// FTP `tls="allow"`: the server rejected `AUTH TLS` → session in the
+    /// clear.
     TlsAuthRejected,
-    /// FTP-por-plugin (ADR 0033): la sesión es SIEMPRE en claro — FTPS es deuda
-    /// (aws-lc-rs no compila a wasm). Credenciales y datos sin cifrar.
+    /// FTP-via-plugin (ADR 0033): the session is ALWAYS in the clear — FTPS
+    /// is debt (aws-lc-rs does not compile to wasm). Credentials and data
+    /// unencrypted.
     FtpPlaintext,
 }
 
 impl ConnectionWarningReason {
-    /// El string de wire (cerrado y contractual; ver `ConnectionDegraded.reason`).
+    /// The wire string (closed and contractual; see `ConnectionDegraded.reason`).
     #[must_use]
     pub fn wire(self) -> &'static str {
         match self {
@@ -104,47 +110,48 @@ impl ConnectionWarningReason {
     }
 }
 
-/// Causa de que una conexión NO se estableciera (#322). Vocabulario CERRADO:
-/// su [`Self::wire`] es el `reason` de [`norte_proto::methods::ConnectionFailed`].
+/// Cause of a connection NOT being established (#322). CLOSED vocabulary:
+/// its [`Self::wire`] is the `reason` of
+/// [`norte_proto::methods::ConnectionFailed`].
 ///
-/// Un enum y no un `&'static str` suelto, igual que
-/// [`ConnectionWarningReason`]: con la cadena a pelo, renombrar un valor aquí
-/// no ponía nada rojo —los goldens congelaban una copia distinta— y el efecto
-/// era que todos los fallos pasaban a pintarse como «motivo desconocido», en
-/// silencio y para siempre.
+/// An enum and not a bare `&'static str`, same as [`ConnectionWarningReason`]:
+/// with the raw string, renaming a value here turned nothing red — the
+/// goldens froze a different copy — and the effect was that every failure
+/// ended up painted as "unknown reason," silently and forever.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ConnectionFailureReason {
-    /// No hay secreto en ninguna de las fuentes configuradas.
+    /// There is no secret in any of the configured sources.
     SecretMissing,
-    /// Lo hay, y está VACÍO — que no es lo mismo (#320).
+    /// There is one, and it is EMPTY — which is not the same thing (#320).
     SecretEmpty,
-    /// Lo hay y no es texto válido.
+    /// There is one and it is not valid text.
     SecretNotUtf8,
-    /// El almacén de secretos no se pudo leer.
+    /// The secret store could not be read.
     SecretStore,
-    /// El servidor rechazó las credenciales.
+    /// The server rejected the credentials.
     AuthRejected,
-    /// Falta el usuario.
+    /// The user is missing.
     NoUser,
-    /// El agente SSH no pudo autenticar.
+    /// The SSH agent could not authenticate.
     Agent,
-    /// La clave RSA tiene un módulo por debajo del mínimo (#370).
+    /// The RSA key has a modulus below the minimum (#370).
     ///
-    /// Lleva razón propia y no calla como el resto de los fallos de clave
-    /// porque es el único de ellos que el lector puede ACCIONAR sin mirar un
-    /// log: no es «no pude», es «esta clave es demasiado corta, pide otra». Sin
-    /// la frase se lee como «permiso denegado», que le haría buscar en el sitio
-    /// equivocado — la contraseña, el usuario, el servidor.
+    /// It carries its own reason and does not stay silent like the rest of
+    /// the key failures because it is the only one of them the reader can
+    /// ACT ON without looking at a log: it is not "I couldn't," it is "this
+    /// key is too short, ask for another one." Without the phrase it reads
+    /// as "permission denied," which would send them looking in the wrong
+    /// place — the password, the user, the server.
     RsaTooSmall,
 }
 
 impl ConnectionFailureReason {
-    /// El string de wire (cerrado y contractual; ver `ConnectionFailed.reason`).
+    /// The wire string (closed and contractual; see `ConnectionFailed.reason`).
     ///
-    /// Todo lo que devuelva esta función está en
-    /// [`norte_proto::methods::CONNECTION_FAILURE_REASONS`], y lo contrario
-    /// también: lo prueba `el_vocabulario_de_fallos_es_el_del_proto`.
+    /// Everything this function returns is in
+    /// [`norte_proto::methods::CONNECTION_FAILURE_REASONS`], and the reverse
+    /// too: proven by `el_vocabulario_de_fallos_es_el_del_proto`.
     #[must_use]
     pub fn wire(self) -> &'static str {
         match self {
@@ -159,14 +166,15 @@ impl ConnectionFailureReason {
         }
     }
 
-    /// Todas las variantes, para las pruebas exhaustivas del vocabulario.
+    /// All the variants, for the vocabulary's exhaustive tests.
     ///
-    /// Una constante y no un `strum`: son siete y la dependencia no se paga
-    /// sola. Si alguien añade una octava y no la mete aquí, el `match` de
-    /// [`Self::wire`] sí le obliga a decidir su cadena, y esta lista solo
-    /// deja de cubrirla — por eso la prueba compara EN LOS DOS SENTIDOS contra
-    /// el proto, que es donde el hueco se vería.
-    pub const TODAS: &'static [Self] = &[
+    /// A constant and not a `strum`: there are seven of them and the
+    /// dependency does not pay for itself. If someone adds an eighth and
+    /// does not put it here, the `match` in [`Self::wire`] does force them
+    /// to decide its string, and this list simply stops covering it — which
+    /// is why the test compares BOTH WAYS against the proto, which is where
+    /// the gap would show.
+    pub const ALL: &'static [Self] = &[
         Self::SecretMissing,
         Self::SecretEmpty,
         Self::SecretNotUtf8,
@@ -178,123 +186,128 @@ impl ConnectionFailureReason {
     ];
 }
 
-/// Un aviso de seguridad producido al establecer una sesión remota (#44). El
-/// `host` va SIN userinfo (regla 10) por construcción — es el `Endpoint.host`.
+/// A security warning produced while establishing a remote session (#44).
+/// The `host` goes WITHOUT userinfo (rule 10) by construction — it is the
+/// `Endpoint.host`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnectionWarning {
-    /// Scheme de la sesión (p. ej. `"ftp"`).
+    /// Scheme of the session (e.g. `"ftp"`).
     pub scheme: String,
-    /// Host, sin userinfo.
+    /// Host, without userinfo.
     pub host: String,
-    /// Causa.
+    /// Cause.
     pub reason: ConnectionWarningReason,
 }
 
-/// La sesión establecida + los avisos de seguridad emitidos al establecerla.
+/// The established session + the security warnings emitted while
+/// establishing it.
 pub struct Connected {
-    /// El provider vivo.
+    /// The live provider.
     pub provider: Arc<dyn Provider>,
-    /// Avisos (p. ej. degradación TLS); vacío en el caso normal.
+    /// Warnings (e.g. TLS degradation); empty in the normal case.
     pub warnings: Vec<ConnectionWarning>,
 }
 
-/// Por qué NO se pudo establecer una sesión, en lo que se puede contar (#322).
+/// Why a session could NOT be established, in what can be told (#322).
 ///
-/// Simétrico de [`ConnectionWarning`]: el éxito lleva sus avisos, y el fallo
-/// lleva su explicación. Antes no la llevaba, y el resultado era que el
-/// frontend recibía una CATEGORÍA —`PermissionDenied`— indistinguible de una
-/// clave equivocada, mientras la frase exacta moría en el log del daemon.
+/// Symmetric to [`ConnectionWarning`]: success carries its warnings, and
+/// failure carries its explanation. Before, it did not carry one, and the
+/// result was that the frontend received a CATEGORY — `PermissionDenied` —
+/// indistinguishable from a wrong key, while the exact phrase died in the
+/// daemon's log.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnectionFailure {
-    /// Nombre de `connections.toml`, si se abría una con nombre.
+    /// Name from `connections.toml`, if a named one was being opened.
     pub conn: Option<String>,
-    /// Scheme al que se intentaba conectar.
+    /// Scheme it was trying to connect to.
     pub scheme: String,
-    /// Host, sin userinfo (regla 10).
+    /// Host, without userinfo (rule 10).
     pub host: String,
-    /// Causa, vocabulario CERRADO (ver `methods::ConnectionFailed::reason`).
+    /// Cause, CLOSED vocabulary (see `methods::ConnectionFailed::reason`).
     pub reason: ConnectionFailureReason,
-    /// Frase humana, si la variante puede exponerla — ver
-    /// `ConnectError::detalle_publico`. `None` no es un fallo sin explicación:
-    /// es una explicación que no puede salir.
+    /// Human phrase, if the variant can expose it — see
+    /// `ConnectError::detail_publico`. `None` is not a failure without an
+    /// explanation: it is an explanation that cannot go out.
     pub detail: Option<String>,
 }
 
-/// Observa los avisos de conexión (#44): el daemon lo implementa para difundir
-/// `connection.degraded`; la CLI embebida para imprimir por stderr. Inyectado en
-/// el [`Engine`](crate::Engine) con `set_connection_observer`.
+/// Observes connection warnings (#44): the daemon implements it to broadcast
+/// `connection.degraded`; the embedded CLI, to print to stderr. Injected into
+/// the [`Engine`](crate::Engine) with `set_connection_observer`.
 pub trait ConnectionObserver: Send + Sync {
-    /// Un aviso ocurrió al establecer una sesión. Best-effort, no bloqueante.
+    /// A warning occurred while establishing a session. Best-effort,
+    /// non-blocking.
     fn on_connection_warning(&self, warning: &ConnectionWarning);
 
-    /// Una sesión NO se pudo establecer (#322). Best-effort, no bloqueante.
+    /// A session could NOT be established (#322). Best-effort, non-blocking.
     ///
-    /// Con `default` vacío a propósito: los observadores que solo querían los
-    /// avisos siguen compilando, y quien quiera enseñar el porqué lo
-    /// implementa. Añadirlo sin default habría roto a los implementadores de
-    /// test por una notificación que no les interesa.
+    /// With an empty `default` on purpose: observers that only wanted the
+    /// warnings keep compiling, and whoever wants to show the why implements
+    /// it. Adding it without a default would have broken test implementers
+    /// over a notification they don't care about.
     fn on_connection_failure(&self, _failure: &ConnectionFailure) {}
 }
 
-/// La causa publicable de un fallo, SIN el destino.
+/// The publishable cause of a failure, WITHOUT the destination.
 ///
-/// Se separa del destino porque se conocen en sitios distintos: la causa la
-/// sabe quien atrapó el `ConnectError`; el scheme y el host, quien pidió la
-/// conexión. Juntarlas antes obligaría a arrastrar el destino por todo el
-/// camino de error solo para volver a nombrarlo.
+/// It is kept apart from the destination because they are known in
+/// different places: the cause is known by whoever caught the
+/// `ConnectError`; the scheme and the host, by whoever requested the
+/// connection. Joining them earlier would force dragging the destination
+/// through the whole error path just to name it again.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Causa {
-    /// Nombre de `connections.toml`, si lo había.
+pub struct Cause {
+    /// Name from `connections.toml`, if there was one.
     pub conn: Option<String>,
-    /// Vocabulario CERRADO (ver `methods::ConnectionFailed::reason`).
+    /// CLOSED vocabulary (see `methods::ConnectionFailed::reason`).
     pub reason: ConnectionFailureReason,
-    /// La frase, si la variante puede exponerla (regla 10).
+    /// The phrase, if the variant can expose it (rule 10).
     pub detail: Option<String>,
 }
 
-/// Un fallo de conexión con lo que se le puede contar a quien mira.
+/// A connection failure with what can be told to whoever is looking.
 ///
-/// El error viaja como siempre; la explicación va al lado. Existe porque el
-/// `RemoteConnector` devolvía solo la categoría, y ahí es donde se perdía el
-/// diagnóstico (#322).
+/// The error travels as always; the explanation goes alongside it. It
+/// exists because `RemoteConnector` used to return only the category, and
+/// that is where the diagnosis was being lost (#322).
 #[derive(Debug, Clone)]
 pub struct DialError {
-    /// La categoría que acaba en el wire como error de la operación.
+    /// The category that ends up on the wire as the operation's error.
     pub error: Error,
-    /// Lo publicable del porqué. `None` = este connector no lo sabe explicar,
-    /// o la variante no puede exponer su texto.
+    /// What's publishable of the why. `None` = this connector does not know
+    /// how to explain it, or the variant cannot expose its text.
     ///
-    /// En un `Box` porque este tipo viaja en el `Err` de cada `connect`, y el
-    /// camino normal es el que NO lleva causa: engordar todos los `Result` del
-    /// pool con dos `String` que casi siempre están vacías es pagar el caso
-    /// raro en el caso común.
-    pub causa: Option<Box<Causa>>,
+    /// In a `Box` because this type travels in the `Err` of every `connect`,
+    /// and the normal path is the one that does NOT carry a cause: fattening
+    /// every `Result` in the pool with two `String`s that are almost always
+    /// empty would be paying for the rare case in the common one.
+    pub cause: Option<Box<Cause>>,
 }
 
 impl From<Error> for DialError {
-    /// Un fallo sin explicación publicable: exactamente el comportamiento
-    /// anterior a #322. Es lo que hace que un connector que no la aporte —los
-    /// dobles de test— no tenga que cambiar.
+    /// A failure without a publishable explanation: exactly the behavior
+    /// before #322. It's what lets a connector that doesn't provide one —
+    /// the test doubles — not have to change.
     fn from(error: Error) -> Self {
-        Self { error, causa: None }
+        Self { error, cause: None }
     }
 }
 
-// Clave de anclaje del journal (M3-5, ADR 0025): vive en norte-connect (el
-// dominio de secretos/keyring, regla 10); el CLI la usa vía este re-export.
+// Journal anchor key (M3-5, ADR 0025): lives in norte-connect (the
+// secrets/keyring domain, rule 10); the CLI uses it via this re-export.
 pub use norte_connect::journal_anchor_key;
 
 // The user config dir — relocated to norte-config (ADR 0035); re-exported
 // so the historic `norte_core::connect::config_dir()` path keeps working.
 pub use norte_config::config_dir;
 
-/// La URL de la conexión NOMBRADA `name` en `<dir>/connections.toml` (para
-/// `norte connect <nombre>`: el frontend traduce el nombre a URL y el
-/// establecimiento va por el camino normal del engine).
+/// The URL of the connection NAMED `name` in `<dir>/connections.toml` (for
+/// `norte connect <name>`: the frontend translates the name to a URL and the
+/// establishment goes through the engine's normal path).
 ///
 /// # Errors
-/// [`Error::NotFound`] si el nombre no existe; [`Error::InvalidPath`] si el
-/// fichero no parsea.
+/// [`Error::NotFound`] if the name does not exist; [`Error::InvalidPath`] if
+/// the file does not parse.
 pub async fn named_url(dir: &std::path::Path, name: &str) -> Result<String, Error> {
     let dir = dir.to_path_buf();
     let file = crate::blocking::spawn_blocking(move || ConnectionsFile::load(&dir))
@@ -307,31 +320,31 @@ pub async fn named_url(dir: &std::path::Path, name: &str) -> Result<String, Erro
         .ok_or(Error::NotFound)
 }
 
-/// Las conexiones NOMBRADAS de `<dir>/connections.toml`, en orden alfabético
-/// (#140): `(nombre, url)`.
+/// The NAMED connections from `<dir>/connections.toml`, in alphabetical
+/// order (#140): `(name, url)`.
 ///
-/// La URL, y jamás un secreto: `ConnectionSpec` referencia sus credenciales
-/// (ADR 0015) y esta lista es para pintar un selector.
+/// The URL, and never a secret: `ConnectionSpec` references its credentials
+/// (ADR 0015) and this list is for painting a selector.
 ///
-/// Un fichero que no está es una lista VACÍA y no un error: no tener
-/// conexiones configuradas es lo normal el primer día. Uno cuya SINTAXIS no
-/// parsea sí lo es — decir «no tienes ninguna» cuando lo que pasa es que su
-/// fichero tiene una coma de más sería mentir sobre lo que el usuario
-/// escribió.
+/// A file that is not there is an EMPTY list and not an error: not having
+/// any connections configured is normal on day one. One whose SYNTAX does
+/// not parse is one — saying "you have none" when what's actually happening
+/// is that its file has one comma too many would be lying about what the
+/// user wrote.
 ///
-/// **Una entrada inservible no se lleva por delante a las demás** (#365).
-/// Sale aparte, en el segundo miembro, con su nombre y el motivo. Antes
-/// fallaba la llamada entera, y eso le costaba al lector la lista de TODAS sus
-/// conexiones por una sola que norte no supo leer, con un error que no nombraba
-/// ninguna y no apuntaba a nada arreglable.
+/// **An unusable entry does not take the rest down with it** (#365). It
+/// comes out separately, in the second member, with its name and the
+/// reason. Before, the whole call failed, and that cost the reader the list
+/// of ALL their connections over a single one norte couldn't read, with an
+/// error that didn't name any and didn't point to anything fixable.
 ///
 /// # Errors
-/// [`Error::InvalidPath`] si el fichero existe y su TOML no parsea.
+/// [`Error::InvalidPath`] if the file exists and its TOML does not parse.
 pub async fn named_connections(
     dir: &std::path::Path,
 ) -> Result<(Vec<(String, String)>, Vec<(String, String)>), Error> {
     let dir = dir.to_path_buf();
-    let (file, malas) =
+    let (file, bad) =
         crate::blocking::spawn_blocking(move || ConnectionsFile::load_tolerante(&dir))
             .await
             .map_err(|_| Error::Internal { panic: true })?
@@ -339,13 +352,13 @@ pub async fn named_connections(
     Ok((
         file.connections
             .into_iter()
-            .map(|(nombre, spec)| (nombre, spec.url))
+            .map(|(name, spec)| (name, spec.url))
             .collect(),
-        malas,
+        bad,
     ))
 }
 
-/// La implementación real de [`RemoteConnector`] sobre `norte-connect`.
+/// The real implementation of [`RemoteConnector`] over `norte-connect`.
 pub struct ConnectionManager {
     config_dir: PathBuf,
     secrets: SecretResolver,
@@ -354,12 +367,14 @@ pub struct ConnectionManager {
 }
 
 impl ConnectionManager {
-    /// Manager anclado en `config_dir` (ver [`config_dir()`] para el default).
+    /// Manager anchored at `config_dir` (see [`config_dir()`] for the
+    /// default).
     ///
-    /// FTP ya no lleva un conector aquí: `ftp://` va por el provider-plugin
-    /// ([`crate::ftp_plugin`], ADR 0033), que establece la conexión dentro del
-    /// guest WASM. El [`norte_connect::FtpConnector`] (TLS host-side) queda
-    /// reservado para un futuro FTPS terminado en el host (deuda).
+    /// FTP no longer carries a connector here: `ftp://` goes through the
+    /// provider-plugin ([`crate::ftp_plugin`], ADR 0033), which establishes
+    /// the connection inside the WASM guest. [`norte_connect::FtpConnector`]
+    /// (host-side TLS) stays reserved for a future host-terminated FTPS
+    /// (debt).
     #[must_use]
     pub fn new(config_dir: impl Into<PathBuf>) -> Self {
         let dir: PathBuf = config_dir.into();
@@ -371,12 +386,13 @@ impl ConnectionManager {
         }
     }
 
-    /// Conecta la conexión NOMBRADA `name` de `connections.toml` (UX de
-    /// `norte connect <nombre>`). Devuelve el par (scheme, authority) bajo el
-    /// que el Engine la cachearía, junto al provider.
+    /// Connects the connection NAMED `name` from `connections.toml` (UX of
+    /// `norte connect <name>`). Returns the (scheme, authority) pair under
+    /// which the Engine would cache it, along with the provider.
     ///
     /// # Errors
-    /// `Error::NotFound` si el nombre no existe; los de la conexión.
+    /// `Error::NotFound` if the name does not exist; the connection's own
+    /// errors.
     pub async fn connect_named(&self, name: &str) -> Result<(String, String, Connected), Error> {
         let file = self.load_connections().await?;
         let spec = file.connections.get(name).ok_or(Error::NotFound)?.clone();
@@ -389,7 +405,7 @@ impl ConnectionManager {
         Ok((ep.scheme, authority, connected))
     }
 
-    /// Carga `connections.toml` (I/O síncrona → `spawn_blocking`, regla 2).
+    /// Loads `connections.toml` (synchronous I/O → `spawn_blocking`, rule 2).
     async fn load_connections(&self) -> Result<ConnectionsFile, Error> {
         let dir = self.config_dir.clone();
         crate::blocking::spawn_blocking(move || ConnectionsFile::load(&dir))
@@ -398,127 +414,130 @@ impl ConnectionManager {
             .map_err(log_and_map)
     }
 
-    /// Establece el transporte para `spec` y construye el provider. `name` es
-    /// el nombre de la conexión en `connections.toml` (ad-hoc = None; el
-    /// secreto se busca entonces bajo el host).
+    /// Establishes the transport for `spec` and builds the provider. `name`
+    /// is the connection's name in `connections.toml` (ad-hoc = `None`; the
+    /// secret is then looked up under the host).
     ///
-    /// # Una contraseña mal tecleada no se queda para siempre (#325)
+    /// # A mistyped password does not stay forever (#325)
     ///
-    /// Si el secreto salió del escalón de SESIÓN —lo tecleó un humano hace un
-    /// momento— y el servidor lo rechaza, se OLVIDA y el fallo se convierte de
-    /// nuevo en `SecretNeeded`, o sea en el diálogo. Sin esto, un dedo torcido
-    /// dejaba la conexión muerta hasta parar el daemon: el escalón de sesión va
-    /// delante de los otros tres, así que el valor malo tapaba también la
-    /// variable de entorno con la que se intentaría arreglar, y como el core
-    /// solo pregunta cuando no encuentra NADA, el diálogo no volvía a salir.
+    /// If the secret came from the SESSION tier — a human just typed it a
+    /// moment ago — and the server rejects it, it is FORGOTTEN and the
+    /// failure turns back into `SecretNeeded`, i.e., into the dialog.
+    /// Without this, a mistyped finger left the connection dead until the
+    /// daemon was stopped: the session tier goes ahead of the other three,
+    /// so the bad value also shadowed the environment variable one would try
+    /// to fix it with, and since the core only asks when it finds NOTHING,
+    /// the dialog never came back up.
     ///
-    /// Solo el de sesión. Un secreto del entorno, del keyring o del `age` lo
-    /// puso alguien a propósito en un sitio que se puede editar: borrárselo
-    /// por un rechazo del servidor sería decidir por él que estaba mal.
+    /// Only the session one. A secret from the environment, the keyring or
+    /// `age` was put there on purpose by someone, in a place that can be
+    /// edited: erasing it over a server rejection would be deciding for them
+    /// that it was wrong.
     async fn establish(
         &self,
         spec: &ConnectionSpec,
         name: Option<&str>,
     ) -> Result<Connected, DialError> {
-        // El origen sale por parámetro, y `establish_inner` es una función
-        // aparte, por un motivo que costó una prueba con una cuenta de verdad
-        // descubrir: los brazos de scheme usan `?`, así que un fallo del
-        // transporte RETORNA de la función entera. Un bloque «después del
-        // match» dentro de `establish_inner` no se ejecutaba nunca en el único
-        // caso que le importa — el del fallo.
-        let mut origen = None;
-        let resultado = self.establish_inner(spec, name, &mut origen).await;
-        if matches!(&resultado, Err(d) if d.error == Error::PermissionDenied)
-            && origen == Some(norte_connect::SecretOrigin::Session)
+        // The origin comes out via parameter, and `establish_inner` is a
+        // separate function, for a reason that took a test with a real
+        // account to discover: the scheme arms use `?`, so a transport
+        // failure RETURNS from the whole function. A block "after the
+        // match" inside `establish_inner` never ran in the one case that
+        // matters — the failure one.
+        let mut origin = None;
+        let result = self.establish_inner(spec, name, &mut origin).await;
+        if matches!(&result, Err(d) if d.error == Error::PermissionDenied)
+            && origin == Some(norte_connect::SecretOrigin::Session)
         {
             let conn_name = match spec.endpoint() {
                 Ok(ep) => name.map_or(ep.host, ToString::to_string),
-                Err(_) => return resultado,
+                Err(_) => return result,
             };
             self.secrets.forget_session(&conn_name);
             tracing::info!(
                 conn = %conn_name,
-                "el servidor rechazó el secreto tecleado: se olvida y se vuelve a preguntar"
+                "server rejected the typed secret: forgetting it and asking again"
             );
             return Err(secret_needed(&conn_name, spec).into());
         }
-        resultado
+        result
     }
 
-    /// El cuerpo de [`Self::establish`]. `origen` sale por parámetro porque es
-    /// lo único que su envoltorio necesita saber del camino recorrido.
+    /// The body of [`Self::establish`]. `origin` comes out via parameter
+    /// because it's the only thing its wrapper needs to know about the path
+    /// taken.
     async fn establish_inner(
         &self,
         spec: &ConnectionSpec,
         name: Option<&str>,
-        origen: &mut Option<norte_connect::SecretOrigin>,
+        origin: &mut Option<norte_connect::SecretOrigin>,
     ) -> Result<Connected, DialError> {
         let ep = spec.endpoint().map_err(|e| log_and_dial(e, name))?;
         let mut warnings: Vec<ConnectionWarning> = Vec::new();
-        // El secreto solo se resuelve si el método de auth lo puede usar
-        // (password/access-key siempre; key para la passphrase). Agent no
-        // lleva secreto (en s3, agent = cadena ambiente de opendal).
-        // El nombre bajo el que se guarda y se busca el secreto. Para una
-        // conexión con entrada es SU clave de `connections.toml`, única por
-        // construcción; el `unwrap_or(&ep.host)` es para las ad-hoc, que hoy
-        // NO pueden llegar aquí con secreto —`resolve_spec` las fija a
-        // `auth = "agent"`, y ese brazo no consulta el resolutor—. Si alguna
-        // vez una ad-hoc lleva otro método de auth, este nombre deja de ser
-        // único y dos hosts distintos podrían compartir entrada: entonces hace
-        // falta una clave que incluya el scheme y el puerto.
+        // The secret is only resolved if the auth method can use it
+        // (password/access-key always; key for the passphrase). Agent
+        // carries no secret (in s3, agent = opendal's environment chain).
+        // The name under which the secret is stored and looked up. For a
+        // connection with an entry it is ITS `connections.toml` key, unique
+        // by construction; the `unwrap_or(&ep.host)` is for ad-hoc ones,
+        // which today CANNOT reach here with a secret — `resolve_spec` sets
+        // them to `auth = "agent"`, and that arm does not consult the
+        // resolver. If an ad-hoc ever carries another auth method, this name
+        // stops being unique and two different hosts could share an entry:
+        // then a key that includes the scheme and the port is needed.
         let conn_name = name.unwrap_or(&ep.host);
         let secret: Option<Secret> = match spec.auth {
             AuthMethod::Agent => None,
             AuthMethod::Password | AuthMethod::AccessKey => {
-                // Un `prompt` PREGUNTA también cuando lo que hay es la cadena
-                // vacía. El vacío sigue siendo un fallo de configuración —#320,
-                // y `norte doctor` lo dice— pero devolverlo aquí dejaría al
-                // usuario ante un «permiso denegado» opaco teniendo la persona
-                // delante y un diálogo listo para preguntarle. Se avisa y se
-                // pregunta.
-                let hallado = match self.secrets.resolve_with_origin(conn_name, &spec.url).await {
+                // A `prompt` ASKS also when what's there is the empty
+                // string. Empty is still a configuration failure — #320,
+                // and `norte doctor` says so — but returning it here would
+                // leave the user facing an opaque "permission denied" while
+                // the person is right there and a dialog is ready to ask
+                // them. It warns, and it asks.
+                let found = match self.secrets.resolve_with_origin(conn_name, &spec.url).await {
                     Ok(v) => v,
                     Err(e @ norte_connect::ConnectError::SecretEmpty { .. })
                         if spec.secret == norte_connect::SecretSource::Prompt =>
                     {
-                        tracing::warn!(conn = %conn_name, error = %e, "secreto vacío: se preguntará");
+                        tracing::warn!(conn = %conn_name, error = %e, "empty secret: will ask");
                         None
                     }
                     Err(e) => return Err(log_and_dial(e, name)),
                 };
-                // #325: si no está en ninguna parte y la conexión dice que hay
-                // que preguntarlo, esto sube por el cable como una PREGUNTA y
-                // el frontend abre su diálogo. El core no puede preguntar por
-                // su cuenta: su resolver no tiene interfaz de usuario.
-                if hallado.is_none() && spec.secret == norte_connect::SecretSource::Prompt {
+                // #325: if it's nowhere and the connection says it must be
+                // asked, this goes up the wire as a QUESTION and the
+                // frontend opens its dialog. The core cannot ask on its own:
+                // its resolver has no user interface.
+                if found.is_none() && spec.secret == norte_connect::SecretSource::Prompt {
                     return Err(secret_needed(conn_name, spec).into());
                 }
-                hallado.map(|(s, origin)| {
-                    *origen = Some(origin);
+                found.map(|(s, found_origin)| {
+                    *origin = Some(found_origin);
                     s
                 })
             }
-            // `key`: el secreto es la PASSPHRASE de la clave, y ahí vacío y
-            // ausente son lo mismo — una clave sin cifrar no lleva passphrase, y
-            // `load_secret_key` trata `Some("")` igual que `None`. Detrás no hay
-            // ninguna credencial ambiente que pueda suplantar a otra, que es lo
-            // único que hacía peligroso el vacío en #320, así que el rechazo del
-            // resolver se deshace AQUÍ: aplicarlo también a `key` convertiría un
-            // `NORTE_SECRET_*=""` exportado a lo bruto (un `$(cat …)` que no
-            // encontró fichero) en una clave que deja de funcionar, sin ganar
-            // nada a cambio.
+            // `key`: the secret is the key's PASSPHRASE, and there empty and
+            // absent are the same thing — an unencrypted key carries no
+            // passphrase, and `load_secret_key` treats `Some("")` the same
+            // as `None`. Behind it there is no environment credential that
+            // could impersonate another, which is the only thing that made
+            // empty dangerous in #320, so the resolver's rejection is undone
+            // RIGHT HERE: applying it to `key` too would turn a bluntly
+            // exported `NORTE_SECRET_*=""` (a `$(cat …)` that found no file)
+            // into a key that stops working, for no gain.
             AuthMethod::Key => match self.secrets.resolve(conn_name, &spec.url).await {
                 Ok(s) => s,
                 Err(norte_connect::ConnectError::SecretEmpty { .. }) => None,
                 Err(e) => return Err(log_and_dial(e, name)),
             },
         };
-        // Un provider plugin sirve el scheme que declara. Se pregunta al
-        // catálogo ANTES de los brazos del core para todo scheme que no sea
-        // del core: `ftp` incluido, porque su guest embebido es un fallback y
-        // un plugin instalado lo sustituye. Los del core no se consultan —el
-        // manifiesto ya rechaza reclamarlos, y no consultarlos es la segunda
-        // puerta.
+        // A provider plugin serves the scheme it declares. The catalogue is
+        // asked BEFORE the core's arms, for every scheme that isn't the
+        // core's own: `ftp` included, because its embedded guest is a
+        // fallback and an installed plugin replaces it. The core's own are
+        // not consulted — the manifest already refuses to let them be
+        // claimed, and not consulting them is the second gate.
         if let Some(via_plugin) = self.via_plugin(&ep, spec, secret.as_ref(), name).await {
             return via_plugin.map(|provider| Connected {
                 provider: Arc::new(provider),
@@ -532,7 +551,7 @@ impl ConnectionManager {
                     .connect(spec, secret.as_ref())
                     .await
                     .map_err(|e| log_and_dial(e, name))?;
-                // Base "/": los segmentos del VPath son absolutos del server.
+                // Base "/": the VPath's segments are absolute on the server.
                 Ok(Connected {
                     provider: Arc::new(
                         SftpProvider::new(session, "/").with_logical_trash(spec.logical_trash),
@@ -541,14 +560,15 @@ impl ConnectionManager {
                 })
             }
             "ftp" => {
-                // FTP-por-plugin (ADR 0033): el guest WASM establece la conexión
-                // sobre `wasi:sockets` gateado. El host resuelve DNS (con filtro
-                // anti-SSRF), concede `net` a la IP y llama a `configure`. Sin
-                // TLS (FTPS = deuda): SIEMPRE en claro → se avisa al usuario.
+                // FTP-via-plugin (ADR 0033): the WASM guest establishes the
+                // connection over gated `wasi:sockets`. The host resolves
+                // DNS (with an anti-SSRF filter), grants `net` to the IP and
+                // calls `configure`. No TLS (FTPS = debt): ALWAYS in the
+                // clear → the user is warned.
                 let user = ep.user.clone().unwrap_or_else(|| "anonymous".to_string());
                 let password = match (spec.auth, secret.as_ref()) {
                     (AuthMethod::Password, Some(s)) => s.expose().to_string(),
-                    // Convención guest: login anónimo.
+                    // Guest convention: anonymous login.
                     (AuthMethod::Agent, _) => "anonymous".to_string(),
                     (AuthMethod::Password, None) => {
                         return Err(log_and_dial(
@@ -558,7 +578,7 @@ impl ConnectionManager {
                             name,
                         ));
                     }
-                    // key/access-key no existen en FTP.
+                    // key/access-key do not exist in FTP.
                     (AuthMethod::Key | AuthMethod::AccessKey, _) => {
                         return Err(Error::Unsupported.into());
                     }
@@ -576,8 +596,9 @@ impl ConnectionManager {
                 })
             }
             "s3" => {
-                // El S3Connector construye y SONDEA el Operator (fail-fast); el
-                // provider lo recibe inyectado, sin ver el secret-access-key.
+                // `S3Connector` builds and PROBES the Operator (fail-fast);
+                // the provider receives it injected, without ever seeing
+                // the secret-access-key.
                 let op = self
                     .s3
                     .connect(spec, secret.as_ref())
@@ -594,9 +615,9 @@ impl ConnectionManager {
         }
     }
 
-    /// `Some` si un provider plugin consentido sirve el scheme de `ep`, con
-    /// el resultado de conectarlo; `None` si el scheme es del core o ningún
-    /// plugin lo declara, y entonces contestan los brazos del core.
+    /// `Some` if a consented provider plugin serves `ep`'s scheme, with the
+    /// result of connecting it; `None` if the scheme belongs to the core or
+    /// no plugin declares it, in which case the core's arms answer instead.
     async fn via_plugin(
         &self,
         ep: &norte_connect::Endpoint,
@@ -614,13 +635,15 @@ impl ConnectionManager {
         )
     }
 
-    /// El provider plugin APROBADO y ACTIVADO que declara `scheme`, o `None`.
+    /// The APPROVED and ACTIVE provider plugin that declares `scheme`, or
+    /// `None`.
     ///
-    /// Redescubre el catálogo en cada conexión: es lo que ya hace el `Backend`
-    /// embebido para cada llamada de plugin, y una conexión se establece una
-    /// vez y se cachea en el Engine, así que el coste no se repite por op. Un
-    /// catálogo que no se puede leer se trata como vacío, con aviso: un
-    /// directorio `plugins/` roto no debe dejar sin FTP a nadie.
+    /// Rediscovers the catalogue on every connection: it's what the
+    /// embedded `Backend` already does for every plugin call, and a
+    /// connection is established once and cached in the Engine, so the cost
+    /// is not repeated per op. A catalogue that cannot be read is treated
+    /// as empty, with a warning: a broken `plugins/` directory must not
+    /// leave anyone without FTP.
     async fn resolve_plugin_provider(&self, scheme: &str) -> Option<ResolvedProvider> {
         let dir = self.config_dir.clone();
         let scheme = scheme.to_owned();
@@ -628,7 +651,7 @@ impl ConnectionManager {
             crate::blocking::spawn_blocking(move || match PluginRegistry::discover(&dir) {
                 Ok(reg) => reg.resolve_provider(&scheme),
                 Err(e) => {
-                    tracing::warn!(error = %e, "el catálogo de plugins no se pudo leer");
+                    tracing::warn!(error = %e, "the plugin catalogue could not be read");
                     None
                 }
             })
@@ -636,28 +659,29 @@ impl ConnectionManager {
         match discovered {
             Ok(r) => r,
             Err(e) => {
-                tracing::warn!(error = %e, "el descubrimiento del catálogo abortó");
+                tracing::warn!(error = %e, "catalogue discovery aborted");
                 None
             }
         }
     }
 
-    /// Instancia el guest de un provider plugin bajo las capabilities de SU
-    /// manifiesto y lo configura con el endpoint y las credenciales de la
-    /// conexión.
+    /// Instantiates a provider plugin's guest under the capabilities of ITS
+    /// OWN manifest and configures it with the connection's endpoint and
+    /// credentials.
     ///
-    /// **Red.** El guest no tiene DNS. Si el manifiesto declara `net`, el host
-    /// resuelve el endpoint —con el mismo filtro anti-SSRF que el FTP
-    /// embebido— y añade `ip:puerto` a la allow-list declarada: el humano
-    /// aprobó «red» y la conexión es suya, pero un puerto, no la máquina.
-    /// El puerto es el de la URL o el `default-port` de la contribución;
-    /// sin ninguno de los dos no se sabe a qué conceder y se rehúsa. Sin
-    /// `net` en el manifiesto no hay red, y el endpoint cruza tal cual (un
-    /// provider en memoria lo ignora).
+    /// **Network.** The guest has no DNS. If the manifest declares `net`,
+    /// the host resolves the endpoint — with the same anti-SSRF filter as
+    /// the embedded FTP — and adds `ip:port` to the declared allow-list: the
+    /// human approved "network," and the connection is theirs, but a port,
+    /// not the machine. The port is the URL's or the contribution's
+    /// `default-port`; without either, there's nothing to know what to
+    /// grant, and it is refused. Without `net` in the manifest there is no
+    /// network, and the endpoint crosses as is (an in-memory provider
+    /// ignores it).
     ///
-    /// **Binario.** Se leen los bytes de `plugin.wasm`, se hashean y se
-    /// comparan con el digest que el catálogo ancló: lo que corre es lo que
-    /// el humano aprobó, no lo que haya en esa ruta ahora.
+    /// **Binary.** The bytes of `plugin.wasm` are read, hashed and compared
+    /// against the digest the catalogue anchored: what runs is what the
+    /// human approved, not whatever is at that path now.
     async fn connect_plugin_provider(
         &self,
         resolved: ResolvedProvider,
@@ -685,8 +709,8 @@ impl ConnectionManager {
                 ));
             }
             (AuthMethod::Agent, _) => String::new(),
-            // Una clave o un access-key no tienen forma en la interfaz WIT
-            // del provider: solo cruza `user` + `password`.
+            // A key or an access-key have no shape in the provider's WIT
+            // interface: only `user` + `password` cross.
             (AuthMethod::Key | AuthMethod::AccessKey, _) => {
                 return Err(Error::Unsupported.into());
             }
@@ -697,7 +721,7 @@ impl ConnectionManager {
             let Some(port) = port else {
                 tracing::warn!(
                     plugin = %id, scheme = %ep.scheme,
-                    "sin puerto en la URL ni default-port en el manifiesto: no se concede red"
+                    "no port in the URL nor default-port in the manifest: network not granted"
                 );
                 return Err(Error::Unsupported.into());
             };
@@ -710,17 +734,17 @@ impl ConnectionManager {
         } else {
             format!("{}{port_suffix}", ep.host)
         };
-        tracing::info!(plugin = %id, scheme = %ep.scheme, "provider por plugin");
+        tracing::info!(plugin = %id, scheme = %ep.scheme, "provider via plugin");
 
-        // Leer, hashear e instanciar (compila cranelift): todo bloqueante
-        // (regla 2). El runtime lee con la cota del artefacto y compara el
-        // digest aprobado ANTES de compilar (ADR 0142).
+        // Read, hash and instantiate (compiles cranelift): all blocking
+        // (rule 2). The runtime reads with the artifact's cap and compares
+        // the approved digest BEFORE compiling (ADR 0142).
         let scheme = ep.scheme.clone();
         let provider = crate::blocking::spawn_blocking(move || {
             let runtime = PluginRuntime::new().map_err(|e| map_runtime_error(&e))?;
             PluginProvider::new(runtime, &wasm, caps, scheme).map_err(|e| {
                 if matches!(e, norte_plugin_host::RuntimeError::DigestMismatch) {
-                    tracing::warn!(plugin = %id, "el plugin.wasm no es el que se aprobó");
+                    tracing::warn!(plugin = %id, "plugin.wasm is not the one that was approved");
                 }
                 map_runtime_error(&e)
             })
@@ -742,9 +766,10 @@ impl ConnectionManager {
 
 #[async_trait]
 impl RemoteConnector for ConnectionManager {
-    // skip_all: la authority CRUDA no entra al span — un `user:pass@host`
-    // que el VPath haya aceptado se rechaza al parsear la conexión, pero el
-    // span se abriría ANTES (regla 10). Se loguea redactado tras el parse.
+    // skip_all: the RAW authority does not enter the span — a
+    // `user:pass@host` that the VPath accepted gets rejected when parsing
+    // the connection, but the span would open BEFORE that (rule 10). It's
+    // logged redacted after the parse.
     #[tracing::instrument(level = "info", skip_all)]
     async fn connect(&self, scheme: &str, authority: &str) -> Result<Connected, DialError> {
         let url = format!("{scheme}://{authority}");
@@ -753,13 +778,13 @@ impl RemoteConnector for ConnectionManager {
             resolve_spec(&file, &url).map_err(|e| DialError::from(log_and_map(e)))?;
         if let Ok(ep) = spec.endpoint() {
             tracing::info!(scheme = %ep.scheme, host = %ep.host, port = ?ep.port,
-                conexion = name.as_deref().unwrap_or("(ad-hoc)"), "conectando");
+                conn = name.as_deref().unwrap_or("(ad-hoc)"), "connecting");
         }
         self.establish(&spec, name.as_deref()).await
     }
 
-    // skip_all por la misma razón que `connect`: la authority cruda puede
-    // llevar userinfo que el parse rechazará después (regla 10).
+    // skip_all for the same reason as `connect`: the raw authority may
+    // carry userinfo that the parse will reject afterward (rule 10).
     #[tracing::instrument(level = "debug", skip_all)]
     async fn canonical_authority(&self, scheme: &str, authority: &str) -> Option<String> {
         let url = format!("{scheme}://{authority}");
@@ -780,26 +805,27 @@ impl RemoteConnector for ConnectionManager {
             .map_err(log_and_map)
     }
 
-    // `skip_all` y no `skip(self)`: el segundo parámetro es una CONTRASEÑA.
-    // Con `skip(self)`, `tracing` la formatearía en el span —a nivel info, al
-    // fichero y al panel de registro— y la regla 10 se habría roto por la
-    // línea más fácil de escribir del parche. El nombre de la conexión se
-    // registra a mano, que es lo único que aquí se puede decir.
+    // `skip_all` and not `skip(self)`: the second parameter is a PASSWORD.
+    // With `skip(self)`, `tracing` would format it into the span — at info
+    // level, to the file and to the log panel — and rule 10 would have been
+    // broken by the easiest line of the patch to write. The connection's
+    // name is logged by hand, which is the only thing that can be said
+    // here.
     #[tracing::instrument(level = "info", skip_all, fields(conn = %conn))]
     async fn provide_secret(&self, conn: &str, secret: &str) -> Result<(), Error> {
         self.secrets
             .remember_for_session(conn, norte_connect::Secret::new(secret.to_string()));
-        tracing::info!("secreto de conexión recibido del frontend (solo en memoria)");
+        tracing::info!("connection secret received from the frontend (in memory only)");
         Ok(())
     }
 }
 
-/// Resuelve la conexión para una URL remota: la ENTRADA de `connections.toml`
-/// cuyo endpoint coincide (scheme + host + puerto efectivo + usuario si la
-/// URL lo trae), o una spec ad-hoc desde la URL (auth = `agent`: SSH agent en
-/// sftp, anónimo en ftp; `tls` default = require). Prioridad: el usuario de
-/// la URL gana; a igualdad, la primera entrada por orden alfabético (el
-/// `BTreeMap` de `ConnectionsFile` lo garantiza determinista).
+/// Resolves the connection for a remote URL: the `connections.toml` ENTRY
+/// whose endpoint matches (scheme + host + effective port + user, if the URL
+/// carries one), or an ad-hoc spec built from the URL (`auth = agent`: SSH
+/// agent on sftp, anonymous on ftp; `tls` default = require). Priority: the
+/// URL's user wins; on a tie, the first entry in alphabetical order
+/// (`ConnectionsFile`'s `BTreeMap` guarantees this deterministically).
 fn resolve_spec(
     file: &ConnectionsFile,
     url: &str,
@@ -814,19 +840,19 @@ fn resolve_spec(
         access_key_id: None,
         addressing: None,
         logical_trash: false,
-        // Ad-hoc = `auth = "agent"`: `allow_rsa` no aplicaría, y RSA por agente
-        // sigue fuera de la ADR 0150.
+        // Ad-hoc = `auth = "agent"`: `allow_rsa` would not apply, and RSA
+        // over agent remains outside ADR 0150.
         allow_rsa: false,
-        // Una conexión AD-HOC —navegar a una URL que no está en el fichero— no
-        // pregunta: no hay entrada que declare `secret = "prompt"`, y
-        // preguntarle una contraseña a alguien por teclear una URL sería
-        // enseñarle a teclear contraseñas en cualquier diálogo que aparezca.
+        // An AD-HOC connection — browsing to a URL that isn't in the file —
+        // does not ask: there is no entry declaring `secret = "prompt"`,
+        // and asking someone for a password over typing a URL would be
+        // teaching them to type passwords into any dialog that shows up.
         secret: norte_connect::SecretSource::Stored,
     };
     let target = ad_hoc.endpoint()?;
     for (name, spec) in &file.connections {
         let Ok(ep) = spec.endpoint() else {
-            continue; // una entrada rota no bloquea el resto
+            continue; // a broken entry doesn't block the rest
         };
         if ep.scheme != target.scheme || ep.host != target.host {
             continue;
@@ -834,20 +860,21 @@ fn resolve_spec(
         if effective_port(&ep) != effective_port(&target) {
             continue;
         }
-        // Usuario: si la URL lo trae, debe coincidir; si no, vale el de la
-        // entrada (o ninguno).
+        // User: if the URL carries one, it must match; if not, the entry's
+        // is fine (or none).
         if let Some(u) = &target.user
             && ep.user.as_ref() != Some(u)
         {
             continue;
         }
         let mut spec = spec.clone();
-        // La URL de la petición manda (lleva el usuario/puerto efectivos que
-        // pidió el frontend), pero si no trae usuario y la entrada sí, el de
-        // la entrada completa la spec. INVARIANTE: scheme/host/puerto de la
-        // petición == los de la entrada (comparados arriba) — el secreto de
-        // la entrada jamás viaja a otro host. Si un caller futuro pasa URLs
-        // no derivadas de un VPath ya parseado, revalidar aquí.
+        // The request's URL rules (it carries the effective user/port the
+        // frontend asked for), but if it carries no user and the entry
+        // does, the entry's completes the spec. INVARIANT: the request's
+        // scheme/host/port == the entry's (compared above) — the entry's
+        // secret never travels to another host. If some future caller
+        // passes URLs not derived from an already-parsed VPath, revalidate
+        // here.
         if target.user.is_some() || ep.user.is_none() {
             spec.url = url.to_string();
         }
@@ -856,10 +883,10 @@ fn resolve_spec(
     Ok((None, ad_hoc))
 }
 
-/// Puerto default del scheme — constante de matching (nunca viaja): s3 no
-/// lleva puerto en la authority (443 nominal); sftp=22, ftp=21. Un scheme de
-/// plugin no tiene default que el core conozca: `None`, y entonces solo un
-/// puerto explícito casa con un puerto explícito.
+/// Scheme's default port — a matching constant (never travels on the
+/// wire): s3 carries no port in the authority (443 nominal); sftp=22,
+/// ftp=21. A plugin scheme has no default the core knows: `None`, and then
+/// only an explicit port matches an explicit port.
 fn default_port(scheme: &str) -> Option<u16> {
     match scheme {
         "sftp" => Some(22),
@@ -873,9 +900,9 @@ fn effective_port(ep: &norte_connect::Endpoint) -> Option<u16> {
     ep.port.or_else(|| default_port(&ep.scheme))
 }
 
-/// La forma canónica de dedup (#47): la authority del endpoint RESUELTO
-/// (usuario efectivo incluido) con el puerto default normalizado fuera —
-/// `sftp://h:22` y `sftp://h` canonicalizan igual.
+/// The canonical form for dedup (#47): the RESOLVED endpoint's authority
+/// (effective user included) with the default port normalized away —
+/// `sftp://h:22` and `sftp://h` canonicalize the same.
 fn canonical_authority_of(ep: &norte_connect::Endpoint) -> String {
     let mut canon = ep.clone();
     if canon.port.is_some() && canon.port == default_port(&canon.scheme) {
@@ -884,22 +911,23 @@ fn canonical_authority_of(ep: &norte_connect::Endpoint) -> String {
     authority_of(&canon)
 }
 
-/// La canónica de `url` contra un `connections.toml` ya cargado (separado de
-/// [`ConnectionManager::canonical_authority`] para testear puro).
+/// The canonical form of `url` against an already-loaded `connections.toml`
+/// (kept apart from [`ConnectionManager::canonical_authority`] to test
+/// purely).
 fn canonical_from_file(file: &ConnectionsFile, url: &str) -> Option<String> {
     let (_name, spec) = resolve_spec(file, url).ok()?;
     Some(canonical_authority_of(&spec.endpoint().ok()?))
 }
 
-/// La authority canónica de un endpoint (con el puerto solo si es explícito):
-/// clave de caché del Engine.
+/// The canonical authority of an endpoint (with the port only if explicit):
+/// the Engine's cache key.
 fn authority_of(ep: &norte_connect::Endpoint) -> String {
     let mut s = String::new();
     if let Some(u) = &ep.user {
         s.push_str(u);
         s.push('@');
     }
-    // IPv6 vuelve a llevar corchetes en la forma authority.
+    // IPv6 gets its brackets back in the authority form.
     if ep.host.contains(':') {
         s.push('[');
         s.push_str(&ep.host);
@@ -914,34 +942,35 @@ fn authority_of(ep: &norte_connect::Endpoint) -> String {
     s
 }
 
-/// Degrada un `ConnectError` a la taxonomía del wire dejando el DETALLE en el
-/// log del core (el wire lleva la categoría; el Display de `ConnectError` no
-/// contiene secretos por construcción).
+/// Degrades a `ConnectError` to the wire's taxonomy, leaving the DETAIL in
+/// the core's log (the wire carries the category; `ConnectError`'s `Display`
+/// contains no secrets by construction).
 ///
-/// Se conserva para los sitios que NO saben a qué conexión pertenece el fallo
-/// —resolver la URL, listar el fichero—: ahí no hay a quién avisar, y contar
-/// «falló una conexión» sin decir cuál sería ruido.
+/// Kept for the places that do NOT know which connection the failure
+/// belongs to — resolving the URL, listing the file: there is no one to
+/// warn there, and reporting "a connection failed" without saying which one
+/// would be noise.
 fn log_and_map(e: norte_connect::ConnectError) -> Error {
-    tracing::warn!(error = %e, "fallo de conexión remota");
+    tracing::warn!(error = %e, "remote connection failure");
     Error::from(e)
 }
 
-/// El vocabulario CERRADO de `connection.failed`, por variante (#322).
+/// The CLOSED vocabulary of `connection.failed`, per variant (#322).
 ///
-/// `None` = esta variante no se cuenta. No es lo mismo que «no tiene razón»:
-/// es que su explicación no aporta nada a quien mira (un TOFU ya viaja tipado,
-/// con su huella) o que no puede salir (regla 10, ver
-/// `ConnectError::detalle_publico`).
+/// `None` = this variant is not counted. That is not the same as "it has no
+/// reason": it's that its explanation adds nothing for whoever is looking (a
+/// TOFU already travels typed, with its fingerprint) or that it cannot go
+/// out (rule 10, see `ConnectError::detail_publico`).
 ///
-/// Exhaustivo a propósito: una variante nueva no compila hasta que alguien
-/// decida si el humano se entera de ella.
+/// Exhaustive on purpose: a new variant does not compile until someone
+/// decides whether the human gets to know about it.
 #[expect(
     clippy::match_same_arms,
-    reason = "dos brazos dan `None` por motivos distintos, y el comentario de \
-              cada uno es lo que hay que releer al añadir una variante; \
-              fundirlos borra la decisión"
+    reason = "two arms give `None` for different reasons, and each one's \
+              comment is what needs re-reading when adding a variant; \
+              merging them erases the decision"
 )]
-fn razon_de(e: &norte_connect::ConnectError) -> Option<ConnectionFailureReason> {
+fn reason_for(e: &norte_connect::ConnectError) -> Option<ConnectionFailureReason> {
     use ConnectionFailureReason as R;
     use norte_connect::ConnectError as C;
     match e {
@@ -952,15 +981,17 @@ fn razon_de(e: &norte_connect::ConnectError) -> Option<ConnectionFailureReason> 
         C::AuthFailed { .. } => Some(R::AuthRejected),
         C::MissingUser => Some(R::NoUser),
         C::Agent(_) => Some(R::Agent),
-        // Dos motivos distintos para el mismo `None`, y por eso NO se juntan
-        // los brazos: el TOFU viaja como error TIPADO con host, puerto,
-        // algoritmo y huella —contarlo otra vez como frase sería peor, no
-        // mejor—, mientras que el resto o no puede enseñar su texto (regla 10)
-        // o no dice nada accionable. Fundirlos borra la razón de cada uno, que
-        // es justo lo que hay que releer al añadir una variante.
+        // Two different reasons for the same `None`, and that's why the
+        // arms are NOT merged: the TOFU travels as a TYPED error with host,
+        // port, algorithm and fingerprint — telling it again as a phrase
+        // would be worse, not better — while the rest either cannot show
+        // their text (rule 10) or say nothing actionable. Merging them
+        // erases each one's reason, which is exactly what needs re-reading
+        // when adding a variant.
         C::HostKeyUnknown { .. } | C::HostKeyMismatch { .. } => None,
-        // Sí la cuenta, al revés que sus vecinas: «tu clave es demasiado
-        // corta» es accionable y «permiso denegado» manda a buscar donde no es.
+        // This one IS counted, unlike its neighbors: "your key is too
+        // short" is actionable and "permission denied" sends you looking in
+        // the wrong place.
         C::RsaTooSmall { .. } => Some(R::RsaTooSmall),
         C::Config(_)
         | C::InvalidUrl(_)
@@ -976,42 +1007,45 @@ fn razon_de(e: &norte_connect::ConnectError) -> Option<ConnectionFailureReason> 
     }
 }
 
-/// Como [`log_and_map`], pero conservando la causa para poder CONTARLA (#322).
+/// Like [`log_and_map`], but keeping the cause so it CAN be told (#322).
 ///
-/// Es el punto exacto donde el diagnóstico se perdía: aquí se escribía el
-/// `warn!` con la frase exacta y se devolvía solo la categoría.
+/// This is the exact point where the diagnosis used to be lost: here the
+/// `warn!` was written with the exact phrase, and only the category was
+/// returned.
 fn log_and_dial(e: norte_connect::ConnectError, name: Option<&str>) -> DialError {
-    tracing::warn!(error = %e, "fallo de conexión remota");
-    let causa = razon_de(&e).map(|reason| {
-        Box::new(Causa {
+    tracing::warn!(error = %e, "remote connection failure");
+    let cause = reason_for(&e).map(|reason| {
+        Box::new(Cause {
             conn: name.map(ToOwned::to_owned),
             reason,
-            detail: e.detalle_publico(),
+            detail: e.detail_publico(),
         })
     });
     DialError {
         error: Error::from(e),
-        causa,
+        cause,
     }
 }
 
-/// La PREGUNTA de #325, con a quién se le va a dar la contraseña.
+/// The QUESTION from #325, with who the password is going to be given to.
 ///
-/// No pasa por [`log_and_map`] a propósito: eso registra un `warn!` de «fallo
-/// de conexión remota», y esto no es un fallo — es la conexión funcionando
-/// como su dueño la configuró. Un `warn!` por cada navegación a una conexión
-/// `prompt` llenaría el fichero de log de avisos falsos y, desde #324,
-/// encendería el aviso del botón de registro en la barra de paneles.
+/// It deliberately does not go through [`log_and_map`]: that logs a
+/// `warn!` of "remote connection failure," and this is not a failure — it's
+/// the connection working exactly as its owner configured it. A `warn!` for
+/// every navigation to a `prompt` connection would fill the log file with
+/// false warnings and, since #324, would light up the log-button warning in
+/// the pane bar.
 ///
-/// El destino sale de [`norte_connect::ConnectionSpec::destination_display`],
-/// que enseña el `endpoint =` explícito además de la URL —en `s3` el «host»
-/// de la URL es el BUCKET, y quien recibe la credencial firmada es el
-/// endpoint— y quita el userinfo de las dos mitades (regla 10). Si la URL no
-/// parsea se cae al nombre a secas: quedarse sin preguntar por no poder pintar
-/// el destino sería peor.
+/// The destination comes from
+/// [`norte_connect::ConnectionSpec::destination_display`], which shows the
+/// explicit `endpoint =` besides the URL — in s3 the URL's "host" is the
+/// BUCKET, and whoever receives the signed credential is the endpoint —
+/// and strips the userinfo from both halves (rule 10). If the URL doesn't
+/// parse, it falls back to the bare name: staying silent for being unable
+/// to paint the destination would be worse.
 fn secret_needed(conn: &str, spec: &ConnectionSpec) -> Error {
     let endpoint = spec.destination_display().unwrap_or_default();
-    tracing::info!(conn = %conn, endpoint = %endpoint, "falta el secreto: se preguntará");
+    tracing::info!(conn = %conn, endpoint = %endpoint, "secret missing: will ask");
     Error::SecretNeeded {
         conn: conn.to_string(),
         endpoint,
@@ -1022,9 +1056,10 @@ fn secret_needed(conn: &str, spec: &ConnectionSpec) -> Error {
 mod tests {
     use super::*;
 
-    /// Pin del vocabulario CERRADO de `ConnectionWarningReason::wire()` (va al
-    /// `ConnectionDegraded.reason` del wire; protocol-guardian). Cambiar un
-    /// string aquí es un cambio de contrato: este test lo obliga a ser deliberado.
+    /// Pin of `ConnectionWarningReason::wire()`'s CLOSED vocabulary (goes to
+    /// the wire's `ConnectionDegraded.reason`; protocol-guardian). Changing
+    /// a string here is a contract change: this test forces it to be
+    /// deliberate.
     #[test]
     fn connection_warning_wire_vocabulary_is_pinned() {
         assert_eq!(
@@ -1038,36 +1073,38 @@ mod tests {
     }
 
     fn file(toml: &str) -> ConnectionsFile {
-        toml::from_str(toml).expect("toml válido")
+        toml::from_str(toml).expect("valid toml")
     }
 
-    /// #325: sin secreto en ninguna parte y con `secret = "prompt"`,
-    /// `establish` devuelve `SecretNeeded` ANTES de tocar la red — es una
-    /// pregunta, no un fallo de conexión. Con el default (`stored`) sigue su
-    /// camino y muere en el transporte, que es el comportamiento de siempre.
+    /// #325: with no secret anywhere and `secret = "prompt"`, `establish`
+    /// returns `SecretNeeded` BEFORE touching the network — it's a
+    /// question, not a connection failure. With the default (`stored`) it
+    /// follows its path and dies in the transport, which is the usual
+    /// behavior.
     #[tokio::test]
-    async fn prompt_sin_secreto_es_secret_needed_antes_de_conectar() {
+    async fn prompt_without_secret_is_secret_needed_before_connecting() {
         let dir = tempfile::tempdir().expect("tmp");
         let mgr = ConnectionManager::new(dir.path());
-        // Puerto 1 en loopback: si el brazo de `prompt` NO cortocircuitara,
-        // este test fallaría por un error de transporte en vez de por el
-        // veredicto — que es justo la distinción que se está fijando.
+        // Port 1 on loopback: if the `prompt` arm did NOT short-circuit,
+        // this test would fail with a transport error instead of the
+        // verdict — which is exactly the distinction being pinned down
+        // here.
         let mut spec = min_spec("sftp://nadie@127.0.0.1:1/");
         spec.auth = AuthMethod::Password;
         spec.secret = norte_connect::SecretSource::Prompt;
 
-        // `Connected` no es `Debug` (lleva providers), así que el desenlace se
-        // saca a mano en vez de con `expect_err`.
+        // `Connected` is not `Debug` (it carries providers), so the outcome
+        // is pulled out by hand instead of with `expect_err`.
         let Err(err) = mgr
             .establish(&spec, Some("pregunta"))
             .await
             .map_err(|d| d.error)
         else {
-            panic!("no hay secreto en ninguna parte: debía preguntar");
+            panic!("there is no secret anywhere: it should have asked");
         };
         assert!(
             matches!(&err, Error::SecretNeeded { conn, .. } if conn == "pregunta"),
-            "la pregunta llega ENTERA por el wire, con el nombre de la conexión: {err:?}"
+            "the question arrives WHOLE over the wire, with the connection's name: {err:?}"
         );
 
         let Error::SecretNeeded { endpoint, .. } = &err else {
@@ -1075,15 +1112,16 @@ mod tests {
         };
         assert_eq!(
             endpoint, "sftp://127.0.0.1:1",
-            "y CON el destino: un diálogo de contraseña que no dice a quién se \
-             la va a dar no es contestable"
+            "and WITH the destination: a password dialog that doesn't say who \
+             it's going to be given to is not answerable"
         );
 
-        // Y en s3 el destino son las DOS mitades: el «host» de la URL es el
-        // bucket, y quien recibe la credencial firmada es el `endpoint =` —
-        // que es justo la pieza que un `connections.toml` ajeno puede apuntar
-        // a otro sitio. Enseñar solo el bucket contaría la mitad que no
-        // importa. (Salió probando la conexión de verdad, no de un test.)
+        // And in s3 the destination is BOTH halves: the URL's "host" is the
+        // bucket, and whoever receives the signed credential is the
+        // `endpoint =` — which is exactly the piece a foreign
+        // `connections.toml` can point elsewhere. Showing only the bucket
+        // would tell the half that doesn't matter. (This came out of
+        // testing the real connection, not from a test.)
         let mut s3 = min_spec("s3://mi.bucket");
         s3.auth = AuthMethod::AccessKey;
         s3.secret = norte_connect::SecretSource::Prompt;
@@ -1094,86 +1132,88 @@ mod tests {
             .await
             .map_err(|d| d.error)
         else {
-            panic!("s3 sin secreto debía preguntar");
+            panic!("s3 with no secret should have asked");
         };
         assert_eq!(endpoint, "s3://mi.bucket @ https://s3.eu-west-1.example");
 
-        // Y una vez contestado, el mismo `establish` deja de preguntar: el
-        // escalón 0 del resolutor lo tiene.
+        // And once answered, the same `establish` stops asking: tier 0 of
+        // the resolver has it.
         mgr.secrets
             .remember_for_session("pregunta", norte_connect::Secret::new("tecleado".into()));
-        let Err(otro) = mgr
+        let Err(other) = mgr
             .establish(&spec, Some("pregunta"))
             .await
             .map_err(|d| d.error)
         else {
-            panic!("el transporte no existe: no puede haber conectado");
+            panic!("the transport doesn't exist: it cannot have connected");
         };
         assert!(
-            !matches!(otro, Error::SecretNeeded { .. }),
-            "ya no pregunta: {otro:?}"
+            !matches!(other, Error::SecretNeeded { .. }),
+            "no longer asks: {other:?}"
         );
     }
 
-    /// #325 (los tres revisores): una contraseña MAL TECLEADA no puede quedarse
-    /// para siempre. El escalón de sesión va delante de los otros tres, así que
-    /// un valor equivocado no solo falla — tapa la variable de entorno con la
-    /// que se intentaría arreglar, y como el core solo pregunta cuando no
-    /// encuentra NADA, el diálogo no volvía a salir. Y el resolutor vive en el
-    /// daemon: ni cerrar la interfaz lo limpiaba.
+    /// #325 (all three reviewers): a MISTYPED password cannot stay forever.
+    /// The session tier goes ahead of the other three, so a wrong value
+    /// doesn't just fail — it shadows the environment variable one would
+    /// try to fix it with, and since the core only asks when it finds
+    /// NOTHING, the dialog never came back up. And the resolver lives in
+    /// the daemon: not even closing the interface cleaned it up.
     ///
-    /// Aquí se comprueba con `access-key`, donde el secreto de sesión ES la
-    /// credencial: opendal responde `PermissionDenied` porque el bucket no
-    /// existe en ninguna parte, que es exactamente la forma que tiene un
-    /// servidor de decir «esa credencial no vale».
+    /// Here it's checked with `access-key`, where the session secret IS the
+    /// credential: opendal responds `PermissionDenied` because the bucket
+    /// doesn't exist anywhere, which is exactly the shape a server's way of
+    /// saying "that credential is no good" takes.
     ///
-    /// (Mutación de control: quitar el bloque de `forget_session` de
-    /// `establish` deja el `PermissionDenied` y las dos aserciones se caen.)
+    /// (Control mutation: removing the `forget_session` block from
+    /// `establish` leaves the `PermissionDenied`, and both assertions
+    /// fall.)
     #[tokio::test]
-    async fn un_secreto_de_sesion_rechazado_se_olvida_y_vuelve_a_preguntar() {
+    async fn a_rejected_session_secret_is_forgotten_and_asked_again() {
         let dir = tempfile::tempdir().expect("tmp");
         let mgr = ConnectionManager::new(dir.path());
-        // Un servidor local que dice 403 a todo: es un RECHAZO DE CREDENCIAL
-        // de verdad, sin salir de la máquina. Un puerto cerrado no vale — da
-        // un error de transporte, que es justo el caso que este test NO mide,
-        // y con él el test pasaba también con el fallo puesto.
-        let puerto = servidor_que_deniega().await;
+        // A local server that says 403 to everything: it's a real
+        // CREDENTIAL REJECTION, without leaving the machine. A closed port
+        // doesn't work — it gives a transport error, which is exactly the
+        // case this test does NOT measure, and with it the test also
+        // passed with the bug in place.
+        let port = server_that_denies().await;
         let mut spec = min_spec("s3://bucket-de-prueba");
         spec.auth = AuthMethod::AccessKey;
         spec.secret = norte_connect::SecretSource::Prompt;
         spec.access_key_id = Some("AKIAEXAMPLE".into());
-        spec.endpoint = Some(format!("http://127.0.0.1:{puerto}"));
+        spec.endpoint = Some(format!("http://127.0.0.1:{port}"));
         spec.region = Some("us-east-1".into());
         spec.addressing = Some(norte_connect::AddressingStyle::Path);
 
         mgr.secrets
             .remember_for_session("cuenta", norte_connect::Secret::new("mal-tecleada".into()));
-        let Err(primero) = mgr
+        let Err(first) = mgr
             .establish(&spec, Some("cuenta"))
             .await
             .map_err(|d| d.error)
         else {
-            panic!("el servidor deniega: no puede haber conectado");
+            panic!("the server denies: it cannot have connected");
         };
         assert!(
-            matches!(primero, Error::SecretNeeded { .. }),
-            "el rechazo vuelve a ser la PREGUNTA, no un «permiso denegado» \
-             del que no se sale: {primero:?}"
+            matches!(first, Error::SecretNeeded { .. }),
+            "the rejection turns back into the QUESTION, not a \"permission \
+             denied\" with no way out: {first:?}"
         );
         assert!(
             !mgr.secrets.forget_session("cuenta"),
-            "y el valor malo ya no está: `establish` lo olvidó"
+            "and the bad value is no longer there: `establish` forgot it"
         );
     }
 
-    /// Un puerto local que responde `403` a lo que sea y cierra. Devuelve el
-    /// puerto; la tarea muere con el runtime del test.
-    async fn servidor_que_deniega() -> u16 {
+    /// A local port that responds `403` to whatever and closes. Returns the
+    /// port; the task dies with the test's runtime.
+    async fn server_that_denies() -> u16 {
         use tokio::io::AsyncWriteExt as _;
         let l = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind");
-        let puerto = l.local_addr().expect("addr").port();
+        let port = l.local_addr().expect("addr").port();
         tokio::spawn(async move {
             while let Ok((mut s, _)) = l.accept().await {
                 let _ = s
@@ -1182,17 +1222,18 @@ mod tests {
                 let _ = s.shutdown().await;
             }
         });
-        puerto
+        port
     }
 
-    /// El reverso, y el bug que este test destapó mientras se escribía: la
-    /// condición no puede ser «hubo `PermissionDenied` y hay algo en la
-    /// sesión». Un `auth = "key"` con la ruta de la clave mal puesta también
-    /// sale `PermissionDenied`, y ese secreto NO es el que falló — borrarlo
-    /// sacaría un diálogo de contraseña por un fichero que falta, y de paso
-    /// tiraría una credencial que sí valía.
+    /// The reverse, and the bug this test uncovered while it was being
+    /// written: the condition cannot be "there was a `PermissionDenied` and
+    /// there is something in the session." An `auth = "key"` with the
+    /// key's path set wrong also comes out as `PermissionDenied`, and that
+    /// secret is NOT the one that failed — erasing it would pop a password
+    /// dialog over a missing file, and, in passing, would throw away a
+    /// credential that was actually valid.
     #[tokio::test]
-    async fn un_fallo_ajeno_al_secreto_de_sesion_no_lo_borra() {
+    async fn a_failure_unrelated_to_the_session_secret_does_not_erase_it() {
         let dir = tempfile::tempdir().expect("tmp");
         let mgr = ConnectionManager::new(dir.path());
         let mut spec = min_spec("sftp://127.0.0.1:1/");
@@ -1206,15 +1247,15 @@ mod tests {
             .await
             .map_err(|d| d.error)
         else {
-            panic!("la clave no existe: no puede haber conectado");
+            panic!("the key doesn't exist: it cannot have connected");
         };
         assert!(
             !matches!(e, Error::SecretNeeded { .. }),
-            "un fallo de clave no es una pregunta de contraseña: {e:?}"
+            "a key failure is not a password question: {e:?}"
         );
         assert!(
             mgr.secrets.forget_session("cuenta"),
-            "y el secreto de sesión sigue donde estaba"
+            "and the session secret is still where it was"
         );
     }
 
@@ -1230,44 +1271,44 @@ mod tests {
     "#;
 
     #[test]
-    fn matchea_por_host_puerto_y_usuario() {
+    fn matches_by_host_port_and_user() {
         let f = file(CONNS);
         let (name, spec) = resolve_spec(&f, "sftp://oscar@work.example:2222").unwrap();
         assert_eq!(name.as_deref(), Some("trabajo"));
         assert_eq!(spec.auth, AuthMethod::Key);
 
-        // Usuario distinto en la URL → NO matchea la entrada (ad-hoc).
+        // Different user in the URL → does NOT match the entry (ad-hoc).
         let (name, spec) = resolve_spec(&f, "sftp://otro@work.example:2222").unwrap();
         assert_eq!(name, None);
         assert_eq!(spec.auth, AuthMethod::Agent);
 
-        // Puerto distinto → ad-hoc.
+        // Different port → ad-hoc.
         let (name, _) = resolve_spec(&f, "sftp://oscar@work.example:22").unwrap();
         assert_eq!(name, None);
     }
 
     #[test]
-    fn url_sin_usuario_hereda_el_de_la_entrada() {
+    fn url_without_user_inherits_the_entrys() {
         let f = file(CONNS);
         let (name, spec) = resolve_spec(&f, "sftp://work.example:2222").unwrap();
         assert_eq!(name.as_deref(), Some("trabajo"));
-        // La spec conserva la URL de la ENTRADA (con oscar@) para que la
-        // conexión use ese usuario.
+        // The spec keeps the ENTRY's URL (with oscar@) so the connection
+        // uses that user.
         assert_eq!(spec.url, "sftp://oscar@work.example:2222");
     }
 
     #[test]
-    fn puerto_default_del_scheme_matchea() {
+    fn scheme_default_port_matches() {
         let f = file(CONNS);
-        // La entrada backup no lleva puerto (21 implícito): una URL con :21
-        // explícito matchea igual.
+        // The backup entry carries no port (21 implicit): a URL with an
+        // explicit :21 matches all the same.
         let (name, spec) = resolve_spec(&f, "ftp://backup.example:21").unwrap();
         assert_eq!(name.as_deref(), Some("backup"));
         assert_eq!(spec.auth, AuthMethod::Password);
     }
 
     #[test]
-    fn matchea_conexion_s3_por_bucket() {
+    fn matches_s3_connection_by_bucket() {
         let f = file(
             r#"
             [connections.almacen]
@@ -1282,17 +1323,17 @@ mod tests {
         assert_eq!(name.as_deref(), Some("almacen"));
         assert_eq!(spec.auth, AuthMethod::AccessKey);
         assert_eq!(spec.endpoint.as_deref(), Some("https://minio.interno:9000"));
-        // Otro bucket → ad-hoc (sin credenciales de config).
+        // A different bucket → ad-hoc (no config credentials).
         let (name, spec) = resolve_spec(&f, "s3://otro-bucket").unwrap();
         assert_eq!(name, None);
         assert_eq!(spec.auth, AuthMethod::Agent);
     }
 
-    /// Dos entradas para el MISMO host:puerto con usuarios distintos y una
-    /// URL sin usuario: gana la primera por orden alfabético del NOMBRE de
-    /// la entrada (`BTreeMap`) — comportamiento fijado y determinista.
+    /// Two entries for the SAME host:port with different users and a URL
+    /// without a user: the first wins by alphabetical order of the entry's
+    /// NAME (`BTreeMap`) — fixed, deterministic behavior.
     #[test]
-    fn ambiguedad_de_usuario_resuelve_determinista() {
+    fn user_ambiguity_resolves_deterministically() {
         let f = file(
             r#"
             [connections.bbb]
@@ -1310,9 +1351,10 @@ mod tests {
         assert_eq!(spec.url, "sftp://oscar@h.example");
     }
 
-    /// Una entrada con URL rota NO bloquea la resolución del resto.
+    /// An entry with a broken URL does NOT block the resolution of the
+    /// rest.
     #[test]
-    fn entrada_rota_se_salta() {
+    fn a_broken_entry_is_skipped() {
         let f = file(
             r#"
             [connections.aaa]
@@ -1328,7 +1370,7 @@ mod tests {
     }
 
     #[test]
-    fn sin_match_es_ad_hoc_con_agent() {
+    fn no_match_is_ad_hoc_with_agent() {
         let f = file(CONNS);
         let (name, spec) = resolve_spec(&f, "sftp://nadie@otro.example").unwrap();
         assert_eq!(name, None);
@@ -1336,7 +1378,7 @@ mod tests {
         assert_eq!(spec.tls, norte_connect::TlsMode::Require);
     }
 
-    /// spec mínima (auth agent, sin campos s3) para probar el parseo de URL.
+    /// Minimal spec (auth agent, no s3 fields) to test URL parsing.
     fn min_spec(url: &str) -> ConnectionSpec {
         ConnectionSpec {
             url: url.into(),
@@ -1353,10 +1395,10 @@ mod tests {
         }
     }
 
-    /// #47: la canónica hereda el usuario de la entrada y normaliza fuera el
-    /// puerto default — dos formas de la misma identidad, una clave.
+    /// #47: the canonical form inherits the entry's user and normalizes the
+    /// default port away — two forms of the same identity, one key.
     #[test]
-    fn canonica_hereda_usuario_y_normaliza_puerto() {
+    fn canonical_inherits_user_and_normalizes_port() {
         let f = file(CONNS);
         assert_eq!(
             canonical_from_file(&f, "sftp://work.example:2222").as_deref(),
@@ -1366,17 +1408,17 @@ mod tests {
             canonical_from_file(&f, "sftp://oscar@work.example:2222").as_deref(),
             Some("oscar@work.example:2222"),
         );
-        // Puerto default explícito se cae de la canónica.
+        // Explicit default port drops out of the canonical form.
         assert_eq!(
             canonical_from_file(&f, "ftp://backup.example:21").as_deref(),
             Some("backup.example"),
         );
-        // Ad-hoc sin entrada: canónica = la propia forma normalizada.
+        // Ad-hoc with no entry: canonical = its own normalized form.
         assert_eq!(
             canonical_from_file(&f, "sftp://nadie@otro.example:22").as_deref(),
             Some("nadie@otro.example"),
         );
-        // s3: la authority es el bucket, sin puerto.
+        // s3: the authority is the bucket, with no port.
         assert_eq!(
             canonical_from_file(&f, "s3://mi-bucket").as_deref(),
             Some("mi-bucket"),
@@ -1384,20 +1426,20 @@ mod tests {
     }
 
     #[test]
-    fn authority_canonica() {
+    fn authority_is_canonical() {
         let spec = min_spec("sftp://u@[::1]:2222");
         assert_eq!(authority_of(&spec.endpoint().unwrap()), "u@[::1]:2222");
         let spec = min_spec("ftp://host");
         assert_eq!(authority_of(&spec.endpoint().unwrap()), "host");
-        // s3://bucket: authority = bucket, sin puerto.
+        // s3://bucket: authority = bucket, no port.
         let spec = min_spec("s3://mi-bucket");
         assert_eq!(authority_of(&spec.endpoint().unwrap()), "mi-bucket");
     }
 
-    /// La lista que alimenta el selector (#140, y desde #264 también el de la
-    /// ventana por `connection.list`): pares `(nombre, url)`, alfabéticos.
+    /// The list that feeds the selector (#140, and since #264 also the
+    /// window's, via `connection.list`): `(name, url)` pairs, alphabetical.
     #[tokio::test]
-    async fn named_connections_lista_alfabetico_y_sin_secretos() {
+    async fn named_connections_lists_alphabetically_and_without_secrets() {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(
             dir.path().join("connections.toml"),
@@ -1411,47 +1453,47 @@ url = "s3://mi-bucket"
         )
         .expect("escribir");
 
-        let (cs, malas) = named_connections(dir.path()).await.expect("lista");
-        assert!(malas.is_empty(), "todas parsean");
+        let (cs, bad) = named_connections(dir.path()).await.expect("lista");
+        assert!(bad.is_empty(), "all parse");
         assert_eq!(
             cs.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
             vec!["archivo", "trabajo"],
-            "alfabético: el orden del fichero no decide el del selector"
+            "alphabetical: the file's order doesn't decide the selector's"
         );
-        // Lo que viaja es la URL tal cual, y las credenciales se REFERENCIAN
-        // (ADR 0015): no hay nada que resolver ni que filtrar aquí.
+        // What travels is the URL as is, and credentials are REFERENCED
+        // (ADR 0015): there's nothing to resolve or filter here.
         assert_eq!(cs[1].1, "sftp://oscar@servidor.example/datos");
     }
 
-    /// Un fichero que NO ESTÁ es una lista vacía —no tener conexiones es lo
-    /// normal el primer día—, pero uno que no PARSEA es un error: decir «no
-    /// tienes ninguna» cuando hay una coma de más miente sobre lo que el
-    /// usuario escribió.
+    /// A file that is NOT THERE is an empty list — not having connections
+    /// is normal on day one — but one that does NOT PARSE is an error:
+    /// saying "you have none" when there's one comma too many lies about
+    /// what the user wrote.
     #[tokio::test]
-    async fn sin_fichero_es_vacio_y_un_fichero_roto_es_error() {
+    async fn no_file_is_empty_and_a_broken_file_is_an_error() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let (cs, malas) = named_connections(dir.path())
+        let (cs, bad) = named_connections(dir.path())
             .await
-            .expect("sin fichero no es error");
-        assert!(cs.is_empty() && malas.is_empty());
+            .expect("no file is not an error");
+        assert!(cs.is_empty() && bad.is_empty());
 
         std::fs::write(dir.path().join("connections.toml"), "esto no es toml [[[")
             .expect("escribir");
         assert!(
             named_connections(dir.path()).await.is_err(),
-            "un fichero roto se DICE"
+            "a broken file gets TOLD"
         );
     }
 
-    /// **Una entrada inservible no se lleva por delante a las demás** (#365).
+    /// **An unusable entry does not take the rest down with it** (#365).
     ///
-    /// El fallo que lo destapó: el `connections.toml` de una máquina tenía una
-    /// entrada que norte no sabía leer y `connection.list` contestaba
-    /// `InvalidPath` a secas. El lector perdía la lista de TODAS sus
-    /// conexiones por una sola, con un error que no nombraba ninguna y no
-    /// apuntaba a nada que pudiera arreglar.
+    /// The bug that uncovered it: a machine's `connections.toml` had an
+    /// entry norte couldn't read, and `connection.list` answered a bare
+    /// `InvalidPath`. The reader lost the list of ALL their connections
+    /// over a single one, with an error that named none of them and
+    /// pointed to nothing fixable.
     #[tokio::test]
-    async fn una_entrada_que_no_se_entiende_no_esconde_a_las_demas() {
+    async fn an_entry_that_cant_be_understood_does_not_hide_the_rest() {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(
             dir.path().join("connections.toml"),
@@ -1466,25 +1508,30 @@ password = "esto no va aquí"
         )
         .expect("escribir");
 
-        let (cs, malas) = named_connections(dir.path()).await.expect("lista");
+        let (cs, bad) = named_connections(dir.path()).await.expect("lista");
         assert_eq!(
             cs.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
             vec!["buena"],
-            "la que sirve se lista"
+            "the one that works gets listed"
         );
-        assert_eq!(malas.len(), 1, "y la que no, sale aparte: {malas:?}");
-        assert_eq!(malas[0].0, "rota", "nombrada, o el aviso no sirve de nada");
+        assert_eq!(
+            bad.len(),
+            1,
+            "and the one that doesn't, comes out separately: {bad:?}"
+        );
+        assert_eq!(bad[0].0, "rota", "named, or the warning is useless");
         assert!(
-            malas[0].1.contains("password"),
-            "y con el motivo, que es lo accionable: {}",
-            malas[0].1
+            bad[0].1.contains("password"),
+            "and with the reason, which is the actionable part: {}",
+            bad[0].1
         );
     }
 
     #[test]
-    fn config_dir_respeta_override() {
-        // Sin tocar env global (unsafe en edition 2024): solo el camino puro.
-        // El override por NORTE_CONFIG_DIR se cubre en el E2E de la CLI.
+    fn config_dir_respects_override() {
+        // Without touching the global env (unsafe in edition 2024): only
+        // the pure path. The `NORTE_CONFIG_DIR` override is covered in the
+        // CLI's E2E.
         let d = config_dir();
         assert!(d.ends_with("norte") || d.as_os_str().len() > 1);
     }

@@ -1,75 +1,78 @@
-//! El `plan_hash`: la huella de lo que un humano aprueba cuando aprueba un
-//! plan.
+//! The `plan_hash`: the fingerprint of what a human approves when they
+//! approve a plan.
 //!
-//! Un [`PlanHasher`] se siembra con la INTENCIÓN del plan —las dos raíces, el
-//! modo, `on_unknown` y las opciones de comparación— y luego traga los
-//! elementos del flujo UNO a UNO, en orden. No guarda ninguno: su estado es un
-//! `Sha256` y un contador, así que planificar medio millón de pasos cuesta lo
-//! mismo en memoria que planificar tres (regla dura 3: una Task no se puede
-//! permitir juntar el plan entero solo para hashearlo).
+//! A [`PlanHasher`] is seeded with the plan's INTENT — both roots, the mode,
+//! `on_unknown` and the comparison options — and then swallows the flow's
+//! elements ONE by ONE, in order. It keeps none of them: its state is a
+//! `Sha256` and a counter, so planning half a million steps costs the same in
+//! memory as planning three (hard rule 3: a Task cannot afford to assemble
+//! the whole plan just to hash it).
 //!
-//! # Qué entra y qué no
-//! Entran las CONCLUSIONES: qué se va a hacer, sobre qué ruta del origen, sobre
-//! qué ruta del destino, con qué tamaño, con qué criterio y confianza, con qué
-//! reversa y con qué motivo — y cada bloqueo. NO entra el `id` del paso, que es
-//! presentación: un filtro que renumere el panel no puede invalidar una
-//! aprobación.
+//! # What goes in and what does not
+//! The CONCLUSIONS go in: what is going to be done, over which source path,
+//! over which destination path, with what size, with what criterion and
+//! confidence, with what reversal and what reason — and every blocker. The
+//! step's `id` does NOT go in, since it is presentation: a filter that
+//! renumbers the panel must not be able to invalidate an approval.
 //!
-//! # Cómo se alimenta (y por qué no basta con concatenar)
-//! Cada campo va con su LONGITUD delante y cada opcional con un byte de
-//! presencia, igual que la cadena del journal (ADR 0023) y que el `plan_hash`
-//! del lote de renames. Sin el prefijo, `"ab" + "c"` y `"a" + "bc"` producen el
-//! mismo digest y dos planes que escriben en rutas DISTINTAS comparan iguales;
-//! sin el byte de presencia, «no hay `dest_rel`» y «hay un `dest_rel` que es la
-//! raíz» tampoco se distinguen — y un `Skip` puede llevar legítimamente un `rel`
-//! raíz, que es exactamente la secuencia de cero bytes.
+//! # How it is fed (and why concatenating is not enough)
+//! Every field goes with its LENGTH in front and every optional with a
+//! presence byte, just like the journal's chain (ADR 0023) and the rename
+//! batch's `plan_hash`. Without the prefix, `"ab" + "c"` and `"a" + "bc"`
+//! produce the same digest and two plans that write to DIFFERENT paths
+//! compare equal; without the presence byte, "there is no `dest_rel`" and
+//! "there is a `dest_rel` that is the root" are not distinguished either —
+//! and a `Skip` can legitimately carry a root `rel`, which is exactly the
+//! zero-byte sequence.
 //!
-//! Cada elemento va además con una ETIQUETA de clase, para que un `Skip` y un
-//! bloqueo en la misma `rel` no colisionen.
+//! Every element also carries a class TAG, so a `Skip` and a blocker at the
+//! same `rel` do not collide.
 //!
-//! De los enums se alimenta el NOMBRE serde, jamás el discriminante:
-//! `TypeMismatchDir` se insertó ANTES de `Unknown` cuando ya había código
-//! escrito, y la siguiente variante también se insertará por en medio. Un
-//! digest sobre el discriminante habría convertido esa inserción en una
-//! aprobación que autoriza otro plan.
+//! Enums feed their serde NAME, never their discriminant:
+//! `TypeMismatchDir` was inserted BEFORE `Unknown` when code already existed,
+//! and the next variant will also be inserted in the middle. A digest over
+//! the discriminant would have turned that insertion into an approval that
+//! authorizes another plan.
 //!
-//! # Se alimenta del flujo que el humano VE, no de otro
-//! Normativo: al hasher se le dan EXACTAMENTE los elementos que acaban en el
-//! plan que se enseña y que se resume en
-//! [`SyncPlanDone`](norte_proto::methods::SyncPlanDone) — o sea, después de
-//! aplicar el `include` de la petición, que filtra la SALIDA del transductor
-//! (ver [`plan`](crate::plan())). Hashear el flujo sin filtrar y enseñar el
-//! filtrado acuña un testigo para un plan que nadie aprobó, y es la única forma
-//! de cablearlo mal que ni el tipo ni los tests pueden atrapar. Por eso el
-//! `include` no se siembra: los elementos que quedan YA llevan su efecto, y
-//! sembrarlo además invitaría a creer que da igual con qué flujo se alimente.
-//! Lo mismo vale para [`SyncCounts`](norte_proto::methods::SyncCounts).
+//! # It feeds from the flow the human SEES, not another one
+//! Normative: the hasher is given EXACTLY the elements that end up in the
+//! plan that is shown and summarized in
+//! [`SyncPlanDone`](norte_proto::methods::SyncPlanDone) — i.e., after
+//! applying the request's `include`, which filters the transducer's OUTPUT
+//! (see [`plan`](crate::plan())). Hashing the unfiltered flow and showing the
+//! filtered one mints a token for a plan nobody approved, and it is the only
+//! way to wire it wrong that neither the type nor the tests can catch. That
+//! is why `include` is not seeded: the elements that remain ALREADY carry its
+//! effect, and seeding it too would invite the belief that it does not matter
+//! which flow feeds it. The same holds for
+//! [`SyncCounts`](norte_proto::methods::SyncCounts).
 //!
-//! # Lo que este hash NO puede hacer solo
-//! Un plan cuyo destino es de solo lectura produce EXACTAMENTE un elemento —su
-//! bloqueo— sea cual sea el árbol, así que todos ellos hashean igual. Es
-//! correcto (esos planes no tienen conclusiones que distinguir) y tiene una
-//! consecuencia que quien ejecute debe conocer: **`sync.apply` decide por
+//! # What this hash CANNOT do alone
+//! A plan whose destination is read-only produces EXACTLY one element — its
+//! blocker — whatever the tree is, so all of them hash alike. That is correct
+//! (those plans have no conclusions to distinguish) and has a consequence
+//! whoever executes must know: **`sync.apply` decides by
 //! [`SyncPlanDone::executable`](norte_proto::methods::SyncPlanDone::executable),
-//! no por que un hash case**. Un hash que case dice «este es el plan que se te
-//! enseñó», nunca «este plan se puede ejecutar».
+//! not by a hash matching**. A matching hash says "this is the plan you were
+//! shown", never "this plan can be executed".
 //!
-//! Hay una segunda igualdad legítima, y por el mismo motivo: el `rel` de un paso
-//! se mide contra la raíz del lado del que HABLA, y el paso no lleva un campo que
-//! diga cuál (ver [`SyncStep::rel`]). Un `Skip` por un listado ilegible del
-//! ORIGEN y otro por uno del DESTINO, en el mismo nombre, salen byte a byte
-//! iguales y hashean igual. Las dos formas afectadas —ese `Skip` y un bloqueo de
-//! solape alcanzado desde un lado o desde el otro— no ESCRIBEN nada, así que
-//! ningún par de planes que escriba distinto puede compartir huella; lo que se
-//! pierde es una distinción de lectura, no de efecto.
+//! There is a second legitimate equality, and for the same reason: a step's
+//! `rel` is measured against the root of the side it SPEAKS about, and the
+//! step carries no field saying which one (see [`SyncStep::rel`]). A `Skip`
+//! for an unreadable listing on the SOURCE and another for one on the
+//! DESTINATION, under the same name, come out byte-for-byte equal and hash
+//! alike. The two affected shapes — that `Skip` and an overlap blocker
+//! reached from one side or the other — write NOTHING, so no pair of plans
+//! that write differently can share a fingerprint; what is lost is a reading
+//! distinction, not an effect one.
 //!
-//! # No es un formato persistido
-//! El hash identifica un plan RETENIDO en el spool, con el TTL de
-//! [`SYNC_PLAN_TTL_MS`](norte_proto::methods::SYNC_PLAN_TTL_MS), y lo produce y
-//! lo consume el mismo binario dentro de esa ventana. No hay journals viejos
-//! que se invaliden si este framing cambia, al revés que en ADR 0023 — pero
-//! cambiarlo sí invalida los planes en vuelo, así que se cambia en un despliegue
-//! y no a la ligera.
+//! # It is not a persisted format
+//! The hash identifies a plan RETAINED in the spool, with
+//! [`SYNC_PLAN_TTL_MS`](norte_proto::methods::SYNC_PLAN_TTL_MS)'s TTL, and the
+//! same binary produces and consumes it within that window. There are no old
+//! journals that get invalidated if this framing changes, unlike ADR 0023 —
+//! but changing it does invalidate in-flight plans, so it is changed with a
+//! deployment and not lightly.
 
 use std::borrow::Cow;
 use std::fmt;
@@ -84,27 +87,26 @@ use sha2::{Digest, Sha256};
 
 use crate::{PlanItem, SyncOptions};
 
-/// Etiqueta de un paso dentro del digest.
+/// Tag of a step within the digest.
 const TAG_STEP: u8 = b'S';
-/// Etiqueta de un bloqueo. Distinta de [`TAG_STEP`] para que un
-/// [`SyncStepKind::Skip`] y un bloqueo sobre la MISMA `rel` no puedan producir
-/// la misma secuencia de bytes.
+/// Tag of a blocker. Different from [`TAG_STEP`] so a [`SyncStepKind::Skip`]
+/// and a blocker over the SAME `rel` cannot produce the same byte sequence.
 const TAG_BLOCKER: u8 = b'B';
-/// Etiqueta del cierre, delante del número de elementos.
+/// Tag of the closing, in front of the element count.
 ///
-/// Sin ella el final se distinguiría de un elemento más solo porque el primer
-/// byte del prefijo de longitud del contador (`0x08`) no coincide con ninguna
-/// de las otras dos etiquetas — cierto hoy y por accidente.
+/// Without it the end would be told apart from one more element only because
+/// the counter's length prefix's first byte (`0x08`) does not match either of
+/// the other two tags — true today and by accident.
 const TAG_END: u8 = b'E';
-// Las tres etiquetas tienen que ser distintas o el flujo deja de ser
-// descodificable de una sola manera, que es lo único que impide una colisión.
+// The three tags have to be distinct or the flow stops being decodable in a
+// single way, which is the only thing that prevents a collision.
 const _: () = assert!(TAG_END != TAG_STEP && TAG_END != TAG_BLOCKER);
 const _: () = assert!(TAG_STEP != TAG_BLOCKER);
 
-/// El acumulador del `plan_hash`, en STREAMING.
+/// The `plan_hash` accumulator, in STREAMING fashion.
 ///
-/// Se construye con la intención del plan, se le da cada elemento en el orden
-/// en que el flujo lo produjo y se cierra con [`PlanHasher::finish`].
+/// Built with the plan's intent, fed each element in the order the flow
+/// produced it, and closed with [`PlanHasher::finish`].
 ///
 /// ```
 /// use norte_proto::VPath;
@@ -122,45 +124,46 @@ const _: () = assert!(TAG_STEP != TAG_BLOCKER);
 ///     dest_writable: true,
 /// };
 /// let compare = SyncCompareOptions::default();
-/// // Un plan VACÍO tiene hash: es el plan «no hay nada que hacer».
-/// let vacio = PlanHasher::new(&opts, &compare).finish();
-/// assert_eq!(vacio.as_str().len(), norte_proto::methods::PLAN_HASH_LEN);
+/// // An EMPTY plan has a hash: it is the "nothing to do" plan.
+/// let empty = PlanHasher::new(&opts, &compare).finish();
+/// assert_eq!(empty.as_str().len(), norte_proto::methods::PLAN_HASH_LEN);
 ///
-/// // Y la misma intención con OTRO modo no lo comparte.
-/// let otro = SyncOptions { mode: SyncMode::Mirror, ..opts };
-/// assert_ne!(PlanHasher::new(&otro, &compare).finish(), vacio);
+/// // And the same intent with ANOTHER mode does not share it.
+/// let other = SyncOptions { mode: SyncMode::Mirror, ..opts };
+/// assert_ne!(PlanHasher::new(&other, &compare).finish(), empty);
 /// ```
 #[derive(Debug, Clone)]
 pub struct PlanHasher {
-    /// El digest, ya sembrado con la intención.
+    /// The digest, already seeded with the intent.
     digest: Sha256,
-    /// Cuántos elementos entraron. Se alimenta al CERRAR: un hasher en
-    /// streaming no conoce el total al empezar, que es justo lo que lo hace
-    /// O(1) en memoria.
+    /// How many elements went in. Fed on CLOSING: a streaming hasher does not
+    /// know the total when it starts, which is exactly what makes it O(1) in
+    /// memory.
     items: u64,
 }
 
 impl PlanHasher {
-    /// Siembra el digest con la intención del plan: lo que decide QUÉ plan se
-    /// pidió, antes de que llegue un solo elemento.
+    /// Seeds the digest with the plan's intent: what decides WHICH plan was
+    /// requested, before a single element arrives.
     ///
-    /// Va todo, incluido lo que además se refleja en los pasos (la papelera del
-    /// destino se ve en cada reversa, el lado del origen en cada `rel`): sembrar
-    /// de más no puede crear una colisión, y sembrar de menos deja dos
-    /// peticiones distintas compartiendo huella cuando el árbol calla —dos
-    /// árboles vacíos producen cero pasos bajo CUALQUIER opción—.
+    /// Everything goes in, including what is also reflected in the steps (the
+    /// destination's trash shows in every reversal, the source side in every
+    /// `rel`): over-seeding cannot create a collision, and under-seeding
+    /// leaves two different requests sharing a fingerprint when the tree
+    /// stays silent — two empty trees produce zero steps under ANY option.
     ///
-    /// Las opciones de comparación van APARTE porque no viven en
-    /// [`SyncOptions`]: el transductor no las necesita (no compara, transduce),
-    /// y quien planifica —`sync.plan`— tiene las dos delante. Un plan hecho con
-    /// `hash` encendido no es el mismo que uno hecho solo con tamaño, aunque los
-    /// pasos salgan iguales: se aprobó otra cosa.
+    /// The comparison options go SEPARATELY because they do not live in
+    /// [`SyncOptions`]: the transducer does not need them (it does not
+    /// compare, it transduces), and whoever plans — `sync.plan` — has both in
+    /// front of them. A plan made with `hash` on is not the same as one made
+    /// looking only at size, even if the steps come out identical: something
+    /// else was approved.
     #[must_use]
     pub fn new(opts: &SyncOptions, compare: &SyncCompareOptions) -> Self {
-        // Se DESESTRUCTURAN a propósito: un campo nuevo en cualquiera de los
-        // tres tipos rompe la compilación aquí en vez de quedarse fuera del
-        // digest en silencio, que es la clase de omisión que nadie ve hasta que
-        // dos planes distintos comparten hash.
+        // DESTRUCTURED on purpose: a new field on any of the three types
+        // breaks compilation here instead of silently staying out of the
+        // digest, which is the kind of omission nobody sees until two
+        // different plans share a hash.
         let SyncOptions {
             source_root,
             dest_root,
@@ -181,14 +184,14 @@ impl PlanHasher {
         let CompareCriteria { size, mtime, hash } = criteria;
 
         let mut digest = Sha256::new();
-        // Separación de dominio: este digest no es el del lote de renames ni el
-        // de la cadena del journal, y no debe poder confundirse con ninguno.
+        // Domain separation: this digest is neither the rename batch's nor
+        // the journal chain's, and must not be confusable with either.
         feed(&mut digest, b"norte-sync-plan-v1");
-        // Las raíces por PIEZAS —scheme, authority, segmentos en bytes— y no
-        // por su forma wire: percent-decodificar y volver a codificar es
-        // lossless, pero hacer que el digest dependa de que el códec siga siendo
-        // canónico es una dependencia que este crate no necesita contraer
-        // (regla dura 1: se comparan bytes).
+        // The roots by PIECES — scheme, authority, segments in bytes — and
+        // not by their wire form: percent-decoding and re-encoding is
+        // lossless, but making the digest depend on the codec staying
+        // canonical is a dependency this crate does not need to take on
+        // (hard rule 1: bytes are compared).
         feed_root(&mut digest, source_root);
         feed_root(&mut digest, dest_root);
         feed_name(&mut digest, &mode_name(*mode));
@@ -207,29 +210,30 @@ impl PlanHasher {
         Self { digest, items: 0 }
     }
 
-    /// Traga un elemento del flujo, sea lo que sea. Es lo que consume quien
-    /// acumula el plan: el flujo produce [`PlanItem`], no dos secuencias.
+    /// Swallows one element of the flow, whatever it is. This is what
+    /// whoever accumulates the plan consumes: the flow produces [`PlanItem`],
+    /// not two sequences.
     pub fn item(&mut self, item: &PlanItem) {
         match item {
-            // El testigo del destino se queda FUERA del digest, y a propósito:
-            // es de dónde salió la conclusión, no la conclusión. Dos planes con
-            // los mismos pasos sobre un destino cuya fecha se movió sin que
-            // ningún veredicto cambiara son el mismo plan y merecen la misma
-            // aprobación; lo que revalida el testigo lo revalida el ejecutor,
-            // paso a paso, y no una huella del plan entero.
+            // The destination witness stays OUT of the digest, on purpose: it
+            // is where the conclusion came FROM, not the conclusion. Two
+            // plans with the same steps over a destination whose date moved
+            // without any verdict changing are the same plan and deserve the
+            // same approval; what revalidates the witness is the executor,
+            // step by step, not a whole-plan fingerprint.
             PlanItem::Step { step, dest: _ } => self.step(step),
             PlanItem::Blocker(blocker) => self.blocker(blocker),
         }
     }
 
-    /// Traga UN paso.
+    /// Swallows ONE step.
     ///
-    /// `id` NO entra: es presentación, no conclusión. El panel se ancla a él y
-    /// un filtro puede renumerarlo, y una aprobación que se invalidase por
-    /// ordenar una lista no estaría protegiendo nada.
+    /// `id` does NOT go in: it is presentation, not conclusion. The panel
+    /// anchors to it and a filter can renumber it, and an approval that got
+    /// invalidated by sorting a list would not be protecting anything.
     pub fn step(&mut self, step: &SyncStep) {
-        // Desestructurado por el mismo motivo que en `new`: un campo nuevo en
-        // `SyncStep` tiene que romper la compilación, no salirse del digest.
+        // Destructured for the same reason as in `new`: a new field on
+        // `SyncStep` has to break compilation, not fall out of the digest.
         let SyncStep {
             id: _,
             kind,
@@ -244,10 +248,11 @@ impl PlanHasher {
         self.digest.update([TAG_STEP]);
         feed_name(&mut self.digest, &step_kind_name(*kind));
         feed_rel(&mut self.digest, rel);
-        // `dest_rel` es lo único que distingue «sobrescribo el fichero que hay»
-        // de «creo un segundo al lado» (issue #152), y el hash es el testigo con
-        // el que se autoriza escribir: tiene que entrar, y con su byte de
-        // presencia, porque un `rel` raíz también son cero bytes.
+        // `dest_rel` is the only thing that distinguishes "I overwrite the
+        // file that is there" from "I create a second one alongside" (issue
+        // #152), and the hash is the token writing is authorized with: it
+        // has to go in, with its presence byte, because a root `rel` is also
+        // zero bytes.
         feed_opt_rel(&mut self.digest, dest_rel.as_ref());
         feed_opt_u64(&mut self.digest, *size);
         feed_name(&mut self.digest, &criterion_name(*criterion));
@@ -257,20 +262,20 @@ impl PlanHasher {
         self.items = self.items.saturating_add(1);
     }
 
-    /// Traga UN bloqueo.
+    /// Swallows ONE blocker.
     ///
-    /// Los bloqueos entran TODOS, y eso es lo que distingue este acumulador de
-    /// la lista que viaja en
+    /// EVERY blocker goes in, and that is what distinguishes this accumulator
+    /// from the list that travels in
     /// [`SyncPlanDone::blockers`](norte_proto::methods::SyncPlanDone::blockers):
-    /// aquella está recortada a
+    /// that one is trimmed to
     /// [`SYNC_MAX_BLOCKERS_REPORTED`](norte_proto::methods::SYNC_MAX_BLOCKERS_REPORTED)
-    /// y el número de bloqueos NO está acotado —el de
-    /// [`SyncBlockerKind::TypeMismatchDir`] crece con el árbol—. Hashear la
-    /// lista recortada haría que dos planes que difieren solo a partir del
-    /// bloqueo 257 compartieran huella.
+    /// and the number of blockers is NOT bounded —
+    /// [`SyncBlockerKind::TypeMismatchDir`]'s grows with the tree. Hashing the
+    /// trimmed list would make two plans that differ only from blocker 257
+    /// onward share a fingerprint.
     ///
-    /// Aprobar un plan bloqueado y aprobar uno limpio son actos distintos
-    /// aunque los pasos coincidan, así que un bloqueo cambia el hash.
+    /// Approving a blocked plan and approving a clean one are different acts
+    /// even when the steps match, so a blocker changes the hash.
     pub fn blocker(&mut self, blocker: &SyncBlocker) {
         let SyncBlocker { rel, kind, side } = blocker;
         self.digest.update([TAG_BLOCKER]);
@@ -280,88 +285,91 @@ impl PlanHasher {
         self.items = self.items.saturating_add(1);
     }
 
-    /// Cierra el plan y devuelve su [`PlanHash`]: sha256 en hex MINÚSCULA.
+    /// Closes the plan and returns its [`PlanHash`]: sha256 in LOWERCASE hex.
     ///
-    /// El número de elementos se alimenta aquí, al final, precedido de su
-    /// etiqueta de cierre, porque un hasher en streaming no lo sabe antes (el
-    /// del lote de renames lo pone delante porque recibe un `slice`). No hace
-    /// falta para que el digest sea inyectivo —cada elemento va etiquetado y con
-    /// longitudes— pero ata también el TAMAÑO del plan, que es lo primero que
-    /// lee quien aprueba.
+    /// The element count is fed here, at the end, preceded by its closing
+    /// tag, because a streaming hasher does not know it beforehand (the
+    /// rename batch's puts it in front because it receives a `slice`). It is
+    /// not needed for the digest to be injective — every element is tagged
+    /// and length-prefixed — but it also ties down the plan's SIZE, which is
+    /// the first thing whoever approves reads.
     ///
-    /// **Se llama cuando el flujo ha terminado en `None`, jamás sobre uno
-    /// cortado.** Un plan cancelado a mitad produce un digest indistinguible del
-    /// de un plan más corto que sí terminó, y ese digest no debe existir: quien
-    /// planifica emite [`SyncPlanDone`](norte_proto::methods::SyncPlanDone) solo
-    /// cuando el flujo se agotó sin error, y sin esa notificación no hay hash
-    /// que nadie pueda aprobar.
+    /// **Called when the flow has ended in `None`, never over a cut one.** A
+    /// plan cancelled midway produces a digest indistinguishable from that of
+    /// a shorter plan that did finish, and that digest must not exist:
+    /// whoever plans emits
+    /// [`SyncPlanDone`](norte_proto::methods::SyncPlanDone) only when the flow
+    /// ran out without error, and without that notification there is no hash
+    /// anyone can approve.
     #[must_use]
     pub fn finish(self) -> PlanHash {
         let mut digest = self.digest;
         digest.update([TAG_END]);
         feed_u64(&mut digest, self.items);
         let bytes: [u8; 32] = digest.finalize().into();
-        // El hex lo pone el TIPO (`PlanHash::from_digest`) y no un codificador de
-        // este crate: una segunda copia es una segunda ocasión de escribir
-        // mayúsculas, que es el detalle que hace que dos escrituras del mismo
-        // hash comparen distinto. De paso desaparece el `expect` (regla dura 6).
+        // The hex is produced by the TYPE (`PlanHash::from_digest`) and not
+        // an encoder of this crate: a second copy is a second chance to
+        // write uppercase, which is the detail that makes two writes of the
+        // same hash compare unequal. It also removes the `expect` (hard rule
+        // 6).
         PlanHash::from_digest(&bytes)
     }
 }
 
-/// Alimenta un campo con su LONGITUD delante: `"ab" + "c"` y `"a" + "bc"` no
-/// pueden producir el mismo digest.
+/// Feeds a field with its LENGTH in front: `"ab" + "c"` and `"a" + "bc"`
+/// cannot produce the same digest.
 ///
-/// # #174: ya no es una copia — es [`norte_proto::hashing::feed`]
-/// Este crate tenía la suya, byte a byte igual a la de `norte_core::hashing`,
-/// porque compartir hacia arriba no era posible (`norte-core` → `norte-sync`,
-/// no al revés) y el sitio compartido natural relicenciaba código AGPL. ADR
-/// 0051 eligió casa: `norte-proto`, que este crate ya usa y que ve todo el
-/// que habla el protocolo. La copia de `norte-core` se queda donde está —es
-/// la cadena tamper-evident del journal (ADR 0023) y el ancla de la auditoría
-/// (ADR 0025), y su framing no puede cambiar ni un byte sin invalidar todo
-/// `journal.db` escrito—, pero ya no puede derivar en silencio: un test suyo
-/// la compara con ésta.
+/// # #174: no longer a copy — it is [`norte_proto::hashing::feed`]
+/// This crate had its own, byte-for-byte identical to `norte_core::hashing`'s,
+/// because sharing upward was not possible (`norte-core` → `norte-sync`, not
+/// the other way around) and the natural shared place would have relicensed
+/// AGPL code. ADR 0051 chose a home: `norte-proto`, which this crate already
+/// uses and which sees everything that speaks the protocol. `norte-core`'s
+/// copy stays where it is — it is the journal's tamper-evident chain
+/// (ADR 0023) and the audit anchor (ADR 0025), and its framing cannot change
+/// a single byte without invalidating every `journal.db` already written —
+/// but it can no longer drift silently: a test of its own compares it against
+/// this one.
 use norte_proto::hashing::feed;
 
-/// Un texto, por sus bytes.
+/// A piece of text, by its bytes.
 fn feed_str(digest: &mut Sha256, text: &str) {
     feed(digest, text.as_bytes());
 }
 
-/// El nombre serde de un token de un enum.
+/// An enum token's serde name.
 fn feed_name(digest: &mut Sha256, name: &str) {
     feed_str(digest, name);
 }
 
-/// Un booleano, como un byte con su longitud.
+/// A boolean, as a byte with its length.
 fn feed_flag(digest: &mut Sha256, flag: bool) {
     feed(digest, &[u8::from(flag)]);
 }
 
-/// Un entero, en little-endian.
+/// An integer, little-endian.
 fn feed_u64(digest: &mut Sha256, value: u64) {
     feed(digest, &value.to_le_bytes());
 }
 
-/// Un entero OPCIONAL, con byte de presencia.
+/// An OPTIONAL integer, with a presence byte.
 fn feed_opt_u64(digest: &mut Sha256, value: Option<u64>) {
     norte_proto::hashing::feed_opt(digest, value.map(u64::to_le_bytes).as_ref().map(|b| &b[..]));
 }
 
-/// Un nombre de token OPCIONAL, con byte de presencia.
+/// An OPTIONAL token name, with a presence byte.
 fn feed_opt_name(digest: &mut Sha256, name: Option<&Cow<'_, str>>) {
     norte_proto::hashing::feed_opt(digest, name.map(|n| n.as_bytes()));
 }
 
-/// Una raíz: scheme, authority (con su byte de presencia — `file://` no tiene y
-/// `file://x/` sí) y luego sus segmentos, igual que una ruta relativa.
+/// A root: scheme, authority (with its presence byte — `file://` has none and
+/// `file://x/` does) and then its segments, same as a relative path.
 ///
-/// La authority va BYTE A BYTE, sin plegar: para `mem://` y para un id de
-/// conexión de object storage es un testigo opaco, y plegarla juntaría dos
-/// conexiones distintas. Es la misma comparación que hace `rel_under`, y tiene
-/// que serlo: dos raíces que el transductor considera distintas no pueden
-/// hashear igual.
+/// The authority goes BYTE FOR BYTE, without folding: for `mem://` and for an
+/// object storage connection id it is an opaque token, and folding it would
+/// merge two different connections. It is the same comparison `rel_under`
+/// makes, and it has to be: two roots the transducer considers different
+/// cannot hash alike.
 fn feed_root(digest: &mut Sha256, root: &VPath) {
     feed_str(digest, root.scheme());
     norte_proto::hashing::feed_opt(digest, root.authority().map(str::as_bytes));
@@ -372,11 +380,11 @@ fn feed_root(digest: &mut Sha256, root: &VPath) {
     }
 }
 
-/// Una ruta relativa: cuántos segmentos, y luego cada uno por sus BYTES
-/// (regla dura 1 — jamás la forma percent-encoded, jamás una cadena plegada).
+/// A relative path: how many segments, then each one by its BYTES (hard rule
+/// 1 — never the percent-encoded form, never a folded string).
 ///
-/// El número de segmentos delante y la longitud de cada uno es lo que impide
-/// que `a/bc` y `ab/c` colisionen.
+/// The segment count in front and each one's length is what keeps `a/bc` and
+/// `ab/c` from colliding.
 fn feed_rel(digest: &mut Sha256, rel: &RelPath) {
     feed_u64(digest, rel.segments().len() as u64);
     for segment in rel.segments() {
@@ -384,10 +392,10 @@ fn feed_rel(digest: &mut Sha256, rel: &RelPath) {
     }
 }
 
-/// Una ruta relativa OPCIONAL, con byte de presencia: la raíz son cero
-/// segmentos, o sea cero bytes, así que sin él «ausente» y «presente y vacía»
-/// serían el mismo digest — y un `Skip` puede llevar legítimamente un `rel`
-/// raíz.
+/// An OPTIONAL relative path, with a presence byte: the root is zero
+/// segments, i.e. zero bytes, so without it "absent" and "present and empty"
+/// would be the same digest — and a `Skip` can legitimately carry a root
+/// `rel`.
 fn feed_opt_rel(digest: &mut Sha256, rel: Option<&RelPath>) {
     match rel {
         None => digest.update([0u8]),
@@ -398,24 +406,24 @@ fn feed_opt_rel(digest: &mut Sha256, rel: Option<&RelPath>) {
     }
 }
 
-/// El nombre de un token que este binario NO conoce: su nombre de `Debug`, con
-/// un prefijo que ningún nombre serde puede tener (todos son `snake_case`).
+/// The name of a token this binary does NOT know: its `Debug` name, with a
+/// prefix no serde name can have (they are all `snake_case`).
 ///
-/// Solo lo alcanzan los tokens de un `norte-proto` futuro que este crate no
-/// haya aprendido, y sigue siendo un NOMBRE: dos variantes nuevas distintas no
-/// colisionan entre ellas ni con ninguna conocida.
+/// Only tokens from a future `norte-proto` this crate has not learned reach
+/// it, and it is still a NAME: two different new variants do not collide with
+/// each other nor with any known one.
 ///
-/// Es el punto donde la garantía de desestructurar los STRUCTS no alcanza: un
-/// enum de otro crate es `#[non_exhaustive]`, así que el comodín es obligatorio
-/// y una variante nueva pasa por aquí en vez de romper la compilación. Es
-/// seguro —sigue siendo inyectivo— pero quien añada una variante a `norte-proto`
-/// debería añadirle también su brazo aquí, para que el digest hable su nombre
-/// de wire y no el de Rust.
+/// This is the point where the guarantee of destructuring STRUCTS falls
+/// short: an enum from another crate is `#[non_exhaustive]`, so the wildcard
+/// is mandatory and a new variant passes through here instead of breaking
+/// compilation. It is safe — still injective — but whoever adds a variant to
+/// `norte-proto` should also add its arm here, so the digest speaks its wire
+/// name and not its Rust one.
 fn unknown_name<T: fmt::Debug>(token: &T) -> Cow<'static, str> {
     Cow::Owned(format!("?{token:?}"))
 }
 
-/// El nombre serde de [`SyncStepKind`].
+/// [`SyncStepKind`]'s serde name.
 fn step_kind_name(kind: SyncStepKind) -> Cow<'static, str> {
     match kind {
         SyncStepKind::CreateDir => Cow::Borrowed("create_dir"),
@@ -428,7 +436,7 @@ fn step_kind_name(kind: SyncStepKind) -> Cow<'static, str> {
     }
 }
 
-/// El nombre serde de [`StepReversal`].
+/// [`StepReversal`]'s serde name.
 fn reversal_name(reversal: StepReversal) -> Cow<'static, str> {
     match reversal {
         StepReversal::Delete => Cow::Borrowed("delete"),
@@ -439,7 +447,7 @@ fn reversal_name(reversal: StepReversal) -> Cow<'static, str> {
     }
 }
 
-/// El nombre serde de [`SyncReason`].
+/// [`SyncReason`]'s serde name.
 fn reason_name(reason: SyncReason) -> Cow<'static, str> {
     match reason {
         SyncReason::AmbiguousSource => Cow::Borrowed("ambiguous_source"),
@@ -451,7 +459,7 @@ fn reason_name(reason: SyncReason) -> Cow<'static, str> {
     }
 }
 
-/// El nombre serde de [`CompareCriterion`].
+/// [`CompareCriterion`]'s serde name.
 fn criterion_name(criterion: CompareCriterion) -> Cow<'static, str> {
     match criterion {
         CompareCriterion::Presence => Cow::Borrowed("presence"),
@@ -465,9 +473,9 @@ fn criterion_name(criterion: CompareCriterion) -> Cow<'static, str> {
     }
 }
 
-/// El nombre serde de [`CompareConfidence`]. Ojo: `unknown` es un valor REAL
-/// del vocabulario y `unrecognised` es el fallback de decode — dos hechos
-/// distintos, y por eso dos nombres distintos.
+/// [`CompareConfidence`]'s serde name. Careful: `unknown` is a REAL value of
+/// the vocabulary and `unrecognised` is the decode fallback — two different
+/// facts, and that is why two different names.
 fn confidence_name(confidence: CompareConfidence) -> Cow<'static, str> {
     match confidence {
         CompareConfidence::Certain => Cow::Borrowed("certain"),
@@ -478,7 +486,7 @@ fn confidence_name(confidence: CompareConfidence) -> Cow<'static, str> {
     }
 }
 
-/// El nombre serde de [`SyncBlockerKind`].
+/// [`SyncBlockerKind`]'s serde name.
 fn blocker_kind_name(kind: SyncBlockerKind) -> Cow<'static, str> {
     match kind {
         SyncBlockerKind::AmbiguousDest => Cow::Borrowed("ambiguous_dest"),
@@ -491,7 +499,7 @@ fn blocker_kind_name(kind: SyncBlockerKind) -> Cow<'static, str> {
     }
 }
 
-/// El nombre serde de [`Side`].
+/// [`Side`]'s serde name.
 fn side_name(side: Side) -> Cow<'static, str> {
     match side {
         Side::Left => Cow::Borrowed("left"),
@@ -500,7 +508,7 @@ fn side_name(side: Side) -> Cow<'static, str> {
     }
 }
 
-/// El nombre serde de [`SyncMode`].
+/// [`SyncMode`]'s serde name.
 fn mode_name(mode: SyncMode) -> Cow<'static, str> {
     match mode {
         SyncMode::Update => Cow::Borrowed("update"),
@@ -509,7 +517,7 @@ fn mode_name(mode: SyncMode) -> Cow<'static, str> {
     }
 }
 
-/// El nombre serde de [`OnUnknown`].
+/// [`OnUnknown`]'s serde name.
 fn on_unknown_name(on_unknown: OnUnknown) -> Cow<'static, str> {
     match on_unknown {
         OnUnknown::Copy => Cow::Borrowed("copy"),
@@ -518,7 +526,7 @@ fn on_unknown_name(on_unknown: OnUnknown) -> Cow<'static, str> {
     }
 }
 
-/// El nombre serde de [`DescendSide`].
+/// [`DescendSide`]'s serde name.
 fn descend_side_name(side: DescendSide) -> Cow<'static, str> {
     match side {
         DescendSide::Left => Cow::Borrowed("left"),
@@ -570,8 +578,8 @@ mod tests {
         RelPath::parse_wire(wire).expect("rel")
     }
 
-    /// Una `rel` desde los BYTES de sus segmentos: NFC y NFD son las dos UTF-8
-    /// válido, así que la forma wire no las distingue a ojo.
+    /// A `rel` from its segments' BYTES: NFC and NFD are both valid UTF-8, so
+    /// the wire form does not tell them apart by eye.
     fn rel_of(segments: &[&[u8]]) -> RelPath {
         RelPath::new(
             segments
@@ -623,8 +631,8 @@ mod tests {
 
     #[test]
     fn the_hash_covers_the_conclusions_and_not_the_ids() {
-        // `id` es presentación: dos planes que hacen lo mismo hashean igual
-        // aunque un filtro haya renumerado el panel.
+        // `id` is presentation: two plans that do the same thing hash alike
+        // even if a filter renumbered the panel.
         let mut a = hasher(&opts_update());
         let mut b = hasher(&opts_update());
         a.step(&step_with_id(1));
@@ -667,8 +675,8 @@ mod tests {
 
     #[test]
     fn a_blocker_is_in_the_hash() {
-        // Aprobar un plan bloqueado y aprobar uno limpio son actos distintos
-        // aunque los pasos coincidan.
+        // Approving a blocked plan and approving a clean one are different
+        // acts even when the steps match.
         let mut a = hasher(&opts_update());
         a.step(&copy_step("a", 1));
         let mut b = hasher(&opts_update());
@@ -688,8 +696,8 @@ mod tests {
         );
     }
 
-    /// La etiqueta de clase: un `Skip` y un bloqueo en la MISMA ruta no son el
-    /// mismo plan, aunque casi todo lo demás que llevan sea lo mismo.
+    /// The class tag: a `Skip` and a blocker at the SAME path are not the
+    /// same plan, even though almost everything else they carry is the same.
     #[test]
     fn a_skip_and_a_blocker_at_the_same_rel_do_not_collide() {
         let mut a = hasher(&opts_update());
@@ -699,8 +707,8 @@ mod tests {
         assert_ne!(a.finish(), b.finish());
     }
 
-    /// Sin prefijo de longitud, `a/bc` y `ab/c` son los mismos bytes pegados
-    /// —y son dos ficheros DISTINTOS del árbol de alguien—.
+    /// Without a length prefix, `a/bc` and `ab/c` are the same bytes glued
+    /// together — and they are two DIFFERENT files of someone's tree.
     #[test]
     fn two_paths_that_concatenate_alike_do_not_collide() {
         let mut a = hasher(&opts_update());
@@ -710,8 +718,8 @@ mod tests {
         assert_ne!(a.finish(), b.finish());
     }
 
-    /// Lo mismo entre dos CAMPOS pegados: `rel` + `dest_rel` de un paso no se
-    /// pueden leer como otro reparto de los mismos bytes.
+    /// The same between two glued FIELDS: a step's `rel` + `dest_rel` cannot
+    /// be read as another split of the same bytes.
     #[test]
     fn a_rel_and_a_dest_rel_cannot_be_read_as_one_another() {
         let mut a = hasher(&opts_update());
@@ -725,10 +733,10 @@ mod tests {
         assert_ne!(a.finish(), b.finish());
     }
 
-    /// El byte de presencia de `dest_rel`: un `Skip` puede llevar un `rel`
-    /// RAÍZ, que codifica a cero bytes, así que «ausente» y «presente y vacía»
-    /// tienen que separarse aunque un paso bien formado no produzca la
-    /// ambigüedad.
+    /// `dest_rel`'s presence byte: a `Skip` can carry a ROOT `rel`, which
+    /// encodes to zero bytes, so "absent" and "present and empty" have to be
+    /// kept apart even though a well-formed step does not produce the
+    /// ambiguity.
     #[test]
     fn an_absent_dest_rel_and_an_empty_one_are_not_the_same_plan() {
         let mut a = hasher(&opts_update());
@@ -740,25 +748,25 @@ mod tests {
         assert_ne!(a.finish(), b.finish());
     }
 
-    /// `dest_rel` decide sobre qué fichero se escribe (#152), así que dos
-    /// planes que solo difieren en él NO se pueden aprobar con el mismo
-    /// testigo.
+    /// `dest_rel` decides which file is written to (#152), so two plans that
+    /// only differ in it CANNOT be approved with the same token.
     #[test]
     fn the_destination_spelling_is_part_of_the_hash() {
         let mut a = hasher(&opts_update());
         let mut nfc = copy_step("x", 1);
-        // `café` en NFC…
+        // `café` in NFC…
         nfc.dest_rel = Some(rel_of(&["caf\u{e9}".as_bytes()]));
         a.step(&nfc);
         let mut b = hasher(&opts_update());
         let mut nfd = copy_step("x", 1);
-        // …y en NFD: los mismos caracteres, otros BYTES, otro fichero en ext4.
+        // …and in NFD: the same characters, different BYTES, a different
+        // file on ext4.
         nfd.dest_rel = Some(rel_of(&["cafe\u{301}".as_bytes()]));
         b.step(&nfd);
         assert_ne!(a.finish(), b.finish());
     }
 
-    /// Un nombre que no es UTF-8 entra por sus bytes y distingue.
+    /// A name that is not UTF-8 goes in by its bytes and distinguishes.
     #[test]
     fn a_non_utf8_name_is_hashed_by_its_bytes() {
         let mut a = hasher(&opts_update());
@@ -772,7 +780,7 @@ mod tests {
         assert_ne!(a.finish(), b.finish());
     }
 
-    /// Cada campo del paso es una conclusión y ninguno se queda fuera.
+    /// Every field of the step is a conclusion and none is left out.
     #[test]
     fn every_field_of_a_step_moves_the_hash() {
         let base = copy_step("a.txt", 10);
@@ -822,11 +830,15 @@ mod tests {
         for variant in variants {
             let mut h = hasher(&opts_update());
             h.step(&variant);
-            assert_ne!(h.finish(), baseline, "no entró en el digest: {variant:?}");
+            assert_ne!(
+                h.finish(),
+                baseline,
+                "did not enter the digest: {variant:?}"
+            );
         }
     }
 
-    /// Y cada campo del bloqueo.
+    /// And every field of the blocker.
     #[test]
     fn every_field_of_a_blocker_moves_the_hash() {
         let base = blocker(SyncBlockerKind::AmbiguousDest, "sub/x");
@@ -856,12 +868,16 @@ mod tests {
         for variant in variants {
             let mut h = hasher(&opts_update());
             h.blocker(&variant);
-            assert_ne!(h.finish(), baseline, "no entró en el digest: {variant:?}");
+            assert_ne!(
+                h.finish(),
+                baseline,
+                "did not enter the digest: {variant:?}"
+            );
         }
     }
 
-    /// La INTENCIÓN se siembra entera: dos peticiones distintas no comparten
-    /// huella ni cuando el árbol no produce un solo paso.
+    /// The INTENT is seeded whole: two different requests do not share a
+    /// fingerprint even when the tree produces not a single step.
     #[test]
     fn every_part_of_the_intention_seeds_the_hash() {
         let base = opts_update();
@@ -904,14 +920,14 @@ mod tests {
             assert_ne!(
                 hasher(&variant).finish(),
                 baseline,
-                "no sembró el digest: {variant:?}"
+                "did not seed the digest: {variant:?}"
             );
         }
     }
 
-    /// Y las opciones de la comparación que hay debajo: un plan hecho leyendo
-    /// 40 GB de contenido no es el mismo que uno hecho mirando tamaños, aunque
-    /// los pasos salgan iguales.
+    /// And the comparison options underneath: a plan made by reading 40 GB of
+    /// content is not the same as one made by looking at sizes, even if the
+    /// steps come out identical.
     #[test]
     fn the_compare_options_seed_the_hash() {
         let opts = opts_update();
@@ -959,10 +975,10 @@ mod tests {
             assert_ne!(
                 PlanHasher::new(&opts, &variant).finish(),
                 baseline,
-                "no sembró el digest: {variant:?}"
+                "did not seed the digest: {variant:?}"
             );
         }
-        // Y los dos lados de `descend_orphans` no son el mismo plan.
+        // And the two sides of `descend_orphans` are not the same plan.
         assert_ne!(
             PlanHasher::new(
                 &opts,
@@ -983,7 +999,8 @@ mod tests {
         );
     }
 
-    /// `max_depth` ausente no es `max_depth: 0` (que es «solo la raíz»).
+    /// An absent `max_depth` is not `max_depth: 0` (which means "only the
+    /// root").
     #[test]
     fn an_absent_max_depth_is_not_a_zero_one() {
         let opts = opts_update();
@@ -1000,13 +1017,14 @@ mod tests {
         );
     }
 
-    /// `item` es lo que consume quien acumula el flujo, y tiene que dar
-    /// exactamente lo mismo que llamar a mano.
-    /// El testigo del destino NO entra en el digest, y hay que fijarlo: si
-    /// alguien lo alimenta algún día, el writer hashearía una cosa y
-    /// `Spool::open` —que rehace el digest desde los PASOS y no ve el testigo—
-    /// otra, y todo plan con una sobrescritura fallaría su propia verificación y
-    /// saldría como `PlanStale`. En silencio, y solo en producción.
+    /// `item` is what whoever accumulates the flow consumes, and it has to
+    /// give exactly the same as calling by hand.
+    /// The destination witness does NOT go into the digest, and it has to be
+    /// pinned: if someone ever feeds it, the writer would hash one thing and
+    /// `Spool::open` — which rebuilds the digest from the STEPS and never
+    /// sees the witness — another, and every plan with an overwrite would
+    /// fail its own verification and come out as `PlanStale`. Silently, and
+    /// only in production.
     #[test]
     fn the_destination_witness_is_not_part_of_the_digest() {
         use norte_proto::EntryKind;
@@ -1014,13 +1032,13 @@ mod tests {
         use crate::DestWitness;
 
         let step = copy_step("a", 1);
-        let mut sin = hasher(&opts_update());
-        sin.item(&PlanItem::Step {
+        let mut without = hasher(&opts_update());
+        without.item(&PlanItem::Step {
             step: step.clone(),
             dest: None,
         });
-        let mut con = hasher(&opts_update());
-        con.item(&PlanItem::Step {
+        let mut with = hasher(&opts_update());
+        with.item(&PlanItem::Step {
             step: step.clone(),
             dest: Some(DestWitness {
                 kind: EntryKind::File,
@@ -1029,8 +1047,8 @@ mod tests {
                 entries: None,
             }),
         });
-        let mut otro = hasher(&opts_update());
-        otro.item(&PlanItem::Step {
+        let mut other = hasher(&opts_update());
+        other.item(&PlanItem::Step {
             step,
             dest: Some(DestWitness {
                 kind: EntryKind::Dir,
@@ -1039,9 +1057,9 @@ mod tests {
                 entries: None,
             }),
         });
-        let (sin, con, otro) = (sin.finish(), con.finish(), otro.finish());
-        assert_eq!(sin, con, "poner un testigo no cambia el plan");
-        assert_eq!(con, otro, "ni cambiarlo por otro");
+        let (without, with, other) = (without.finish(), with.finish(), other.finish());
+        assert_eq!(without, with, "setting a witness does not change the plan");
+        assert_eq!(with, other, "nor does swapping it for another");
     }
 
     #[test]
@@ -1060,8 +1078,8 @@ mod tests {
         assert_eq!(a.finish(), b.finish());
     }
 
-    /// Un plan con más elementos no puede hashear como uno con menos, ni
-    /// siquiera cuando el primero es prefijo del segundo.
+    /// A plan with more elements cannot hash like one with fewer, not even
+    /// when the first is a prefix of the second.
     #[test]
     fn a_prefix_of_a_plan_is_not_that_plan() {
         let mut a = hasher(&opts_update());
@@ -1072,10 +1090,10 @@ mod tests {
         assert_ne!(a.finish(), b.finish());
     }
 
-    /// **La consecuencia que Task 8 y Task 10 tienen que conocer.** Un destino
-    /// de solo lectura produce UN elemento sea cual sea el árbol, así que todos
-    /// esos planes hashean igual: el hash dice «este es el plan que se te
-    /// enseñó», y quien ejecuta decide por `executable`.
+    /// **The consequence Task 8 and Task 10 have to know.** A read-only
+    /// destination produces ONE element whatever the tree is, so all those
+    /// plans hash alike: the hash says "this is the plan you were shown", and
+    /// whoever executes decides by `executable`.
     #[test]
     fn every_read_only_plan_hashes_alike_so_apply_must_gate_on_executable() {
         let opts = SyncOptions {
@@ -1094,12 +1112,12 @@ mod tests {
         assert_eq!(
             a.finish(),
             b.finish(),
-            "dos árboles distintos, el mismo único elemento"
+            "two different trees, the same single element"
         );
     }
 
-    /// El framing con longitud, comprobado sobre el mecanismo y no solo sobre
-    /// sus usuarios: sin él, dos repartos de los mismos bytes colisionan.
+    /// The length prefix, checked on the mechanism itself and not only on its
+    /// users: without it, two splits of the same bytes collide.
     #[test]
     fn the_length_prefix_is_what_separates_two_adjacent_fields() {
         let mut ab_c = Sha256::new();
@@ -1113,22 +1131,22 @@ mod tests {
         assert_ne!(
             PlanHash::from_digest(&ab_c),
             PlanHash::from_digest(&a_bc),
-            "sin prefijo de longitud, estos dos son el mismo digest"
+            "without a length prefix, these two are the same digest"
         );
     }
 
-    /// **VECTOR CONGELADO del framing.** Los otros veintitantos tests son
-    /// RELATIVOS (`assert_ne!` entre dos digests), así que pasarían igual si el
-    /// prefijo de longitud cambiase de `u64` a `u32`, si el byte de presencia
-    /// intercambiase 0 y 1, o si dos campos cambiasen de orden — y cualquiera de
-    /// esas tres invalida en silencio todos los planes en vuelo.
+    /// **FROZEN VECTOR of the framing.** The other twenty-odd tests are
+    /// RELATIVE (`assert_ne!` between two digests), so they would still pass
+    /// if the length prefix changed from `u64` to `u32`, if the presence byte
+    /// swapped 0 and 1, or if two fields changed order — and any of those
+    /// three silently invalidates every in-flight plan.
     ///
-    /// A diferencia del vector de `norte_core::hashing`, este SÍ se puede
-    /// actualizar: no hay nada en disco que dependa de él (el spool vive
-    /// `SYNC_PLAN_TTL_MS` y lo escribe y lo lee el mismo binario). Lo que no se
-    /// puede es actualizarlo para que un diff que no sabes explicar se ponga
-    /// verde. Si has añadido un campo al digest a propósito, cambia la
-    /// constante y dilo en el commit; si no, has roto el framing.
+    /// Unlike `norte_core::hashing`'s vector, this one CAN be updated: there
+    /// is nothing on disk depending on it (the spool lives `SYNC_PLAN_TTL_MS`
+    /// and the same binary writes and reads it). What cannot be done is
+    /// updating it so a diff you cannot explain turns green. If you added a
+    /// field to the digest on purpose, change the constant and say so in the
+    /// commit; if not, you broke the framing.
     #[test]
     fn the_framing_is_frozen() {
         let mut h = hasher(&opts_update());
@@ -1136,14 +1154,14 @@ mod tests {
         h.blocker(&blocker(SyncBlockerKind::AmbiguousDest, "sub/x"));
         assert_eq!(
             h.finish().as_str(),
-            // Cambió al sembrar `dest_trash_restorable` (tarea 11b del plan de
-            // sincronización): un campo NUEVO en la intención, a propósito.
+            // Changed when `dest_trash_restorable` was seeded (task 11b of
+            // the sync plan): a NEW field in the intent, on purpose.
             "78f235a59de1d47760539a7b4f79bb35c3cda5e88e6ff230cc89afda9f52e289",
         );
     }
 
-    /// Un token que este binario no conoce sigue siendo un NOMBRE, y dos
-    /// desconocidos distintos no colapsan en uno.
+    /// A token this binary does not know is still a NAME, and two different
+    /// unknowns do not collapse into one.
     #[test]
     fn an_unknown_token_hashes_as_a_name_and_not_as_a_hole() {
         assert_eq!(step_kind_name(SyncStepKind::Copy), "copy");
@@ -1152,7 +1170,8 @@ mod tests {
             unknown_name(&SyncStepKind::CreateDir),
             unknown_name(&SyncStepKind::Copy)
         );
-        // Y jamás se confunde con un nombre serde, que es siempre snake_case.
+        // And it is never confused with a serde name, which is always
+        // snake_case.
         assert!(unknown_name(&SyncStepKind::Copy).starts_with('?'));
     }
 }

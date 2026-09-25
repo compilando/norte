@@ -1,83 +1,84 @@
-//! Subsistema IA del core (spec §9, ADR 0031, parte A2): config `[ai]`, el
-//! gate opt-in/local-only/denied-paths que se aplica ANTES de que ningún
-//! contenido salga del proceso, y el plan de rename REVISABLE (construcción
-//! del prompt + validación de la respuesta). Aplicar un plan es N
-//! `fs.move` ordinarios (journal + undo + policy) — nada nuevo que gobernar.
+//! Core AI subsystem (spec §9, ADR 0031, part A2): the `[ai]` config, the
+//! opt-in/local-only/denied-paths gate applied BEFORE any content leaves the
+//! process, and the REVIEWABLE rename plan (prompt construction + response
+//! validation). Applying a plan is N ordinary `fs.move`s (journal + undo +
+//! policy) — nothing new to govern.
 //!
-//! Los proveedores viven en `norte-ai`; aquí solo se orquestan bajo el gate.
+//! The providers live in `norte-ai`; here they are only orchestrated under
+//! the gate.
 
 use norte_ai::{AiError, ChatMessage, ChatRequest, JsonContract};
 use norte_proto::{Segment, VPath};
 use serde::Deserialize;
 
-/// Config del subsistema IA, mezclada en capas Sistema+Usuario de
-/// `norte.toml` (ADR 0035; la capa de proyecto se ignora fail-closed, mismo
-/// criterio que `[archive]`/policy). Todo OFF por defecto (spec §9: IA
-/// opt-in).
+/// Config for the AI subsystem, merged in System+User layers from
+/// `norte.toml` (ADR 0035; the Project layer is ignored fail-closed, the
+/// same criterion as `[archive]`/policy). Everything OFF by default (spec
+/// §9: AI is opt-in).
 #[derive(Debug, Clone, Default)]
 pub struct AiConfig {
-    /// IA habilitada. `false` (default) = el gate rechaza toda operación.
+    /// AI enabled. `false` (default) = the gate rejects every operation.
     pub enabled: bool,
-    /// Modo solo-local: rechaza proveedores remotos (spec §9). El gate lo
-    /// aplica como barrera DURA, no como cortesía del proveedor.
+    /// Local-only mode: rejects remote providers (spec §9). The gate
+    /// enforces it as a HARD barrier, not as a courtesy from the provider.
     pub local_only: bool,
-    /// Prefijos cuyo contenido/nombres JAMÁS salen a un proveedor. Se
-    /// comparan segment-aware (`is_under`), no por prefijo de string.
+    /// Prefixes whose content/names NEVER leave to a provider. Compared
+    /// segment-aware (`is_under`), not by string prefix.
     pub denied_prefixes: Vec<VPath>,
-    /// Nombre del proveedor a usar para el rename IA (de `providers`).
+    /// Provider name to use for AI rename (from `providers`).
     pub rename_provider: Option<String>,
-    /// Nombre del proveedor para embeddings (`index.embed` /
-    /// `index.search_semantic`), de `providers`. Mismo contrato que
-    /// `rename_provider`; ausente = sin embeddings.
+    /// Provider name for embeddings (`index.embed` /
+    /// `index.search_semantic`), from `providers`. Same contract as
+    /// `rename_provider`; absent = no embeddings.
     pub embed_provider: Option<String>,
-    /// Proveedores declarados (`[ai.providers.<nombre>]`).
+    /// Declared providers (`[ai.providers.<name>]`).
     pub providers: Vec<AiProviderConfig>,
 }
 
-/// Un proveedor declarado en `[ai.providers.<nombre>]`.
+/// A provider declared in `[ai.providers.<name>]`.
 #[derive(Debug, Clone)]
 pub struct AiProviderConfig {
-    /// Nombre lógico (clave de la tabla).
+    /// Logical name (the table's key).
     pub name: String,
-    /// Tipo: `anthropic` | `ollama` | `openai-compat`.
+    /// Type: `anthropic` | `ollama` | `openai-compat`.
     pub kind: String,
-    /// Id del modelo tal cual lo espera el proveedor.
+    /// Model id exactly as the provider expects it.
     pub model: String,
-    /// URL base (obligatoria en `openai-compat`; default en los otros).
+    /// Base URL (required in `openai-compat`; defaulted in the others).
     pub base_url: Option<String>,
 }
 
-/// Error al cargar/validar `[ai]`.
+/// Error loading/validating `[ai]`.
 ///
-/// Desde la migración a `norte-config` (ADR 0035) el parseo/merge de
-/// `[ai]` vive en `norte-config::load`; sus errores llegan envueltos en
-/// [`AiConfigError::Io`] (TOML roto, un `denied_prefix` inválido, tipos
-/// incorrectos — todos son `norte_config::ConfigError` en origen). `Toml` y
-/// `BadPrefix` ya no se construyen desde este crate, pero se conservan: son
-/// parte del contrato público (`#[non_exhaustive]`, quitarlas sería un
-/// cambio de semver visible) y `BadPrefix` sigue documentando ese modo de
-/// fallo para quien matchee el enum.
+/// Since the migration to `norte-config` (ADR 0035), parsing/merging
+/// `[ai]` lives in `norte-config::load`; its errors arrive wrapped in
+/// [`AiConfigError::Io`] (broken TOML, an invalid `denied_prefix`, wrong
+/// types — all of these are `norte_config::ConfigError` at the source).
+/// `Toml` and `BadPrefix` are no longer constructed from this crate, but
+/// are kept: they are part of the public contract (`#[non_exhaustive]`,
+/// removing them would be a visible semver change) and `BadPrefix` still
+/// documents that failure mode for whoever matches the enum.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum AiConfigError {
-    /// TOML inválido o tipos incorrectos.
+    /// Invalid TOML or wrong types.
     #[error("invalid [ai] config: {0}")]
     Toml(#[from] toml::de::Error),
-    /// Un `denied_prefix` no parsea como `VPath`.
+    /// A `denied_prefix` does not parse as a `VPath`.
     #[error("invalid denied_prefix `{0}`")]
     BadPrefix(String),
-    /// Error de lectura del fichero, o de `norte-config` (TOML roto,
-    /// `denied_prefix` inválido, tipos incorrectos) desde que el parseo se
-    /// delegó (ADR 0035) — no solo `NotFound`; el mensaje es genérico
-    /// porque este variant también carga fallos de parseo, no solo de I/O.
+    /// File read error, or from `norte-config` (broken TOML, invalid
+    /// `denied_prefix`, wrong types) since parsing was delegated (ADR
+    /// 0035) — not just `NotFound`; the message is generic because this
+    /// variant also carries parse failures, not only I/O.
     #[error("config error: {0}")]
     Io(#[from] std::io::Error),
 }
 
 impl AiConfig {
-    /// El [`AiProviderConfig`] para el rename (el `rename_provider`
-    /// nombrado, o el único si hay exactamente uno). `None` si no se puede
-    /// determinar.
+    /// The [`AiProviderConfig`] for rename (the named `rename_provider`,
+    /// or the only one if there is exactly one). `None` if it cannot be
+    /// determined.
     #[must_use]
     pub fn rename_provider_config(&self) -> Option<&AiProviderConfig> {
         match &self.rename_provider {
@@ -87,8 +88,8 @@ impl AiConfig {
         }
     }
 
-    /// Proveedor de embeddings: el nombrado en `embed_provider`, o el único
-    /// configurado si solo hay uno, o `None` (misma regla que
+    /// Embeddings provider: the one named in `embed_provider`, or the only
+    /// one configured if there is only one, or `None` (same rule as
     /// [`Self::rename_provider_config`]).
     #[must_use]
     pub fn embed_provider_config(&self) -> Option<&AiProviderConfig> {
@@ -151,13 +152,13 @@ impl AiConfig {
     }
 }
 
-/// Instancia el proveedor de `cfg` con el `secret` ya resuelto (env → keyring
-/// → age; los proveedores JAMÁS leen el secreto, regla 10). `openai-compat`
-/// exige `base_url`; los demás la tienen por default.
+/// Instantiates the provider from `cfg` with `secret` already resolved (env
+/// → keyring → age; providers NEVER read the secret, rule 10).
+/// `openai-compat` requires `base_url`; the others default it.
 ///
 /// # Errors
-/// [`AiConfigError::BadPrefix`] se reusa como error genérico de config aquí
-/// no aplica; devuelve un `String` de diagnóstico en su lugar.
+/// [`AiConfigError::BadPrefix`] reused as a generic config error does not
+/// apply here; returns a diagnostic `String` instead.
 pub fn build_provider(
     cfg: &AiProviderConfig,
     secret: Option<norte_connect::Secret>,
@@ -177,69 +178,70 @@ pub fn build_provider(
             let base = cfg
                 .base_url
                 .clone()
-                .ok_or_else(|| "openai-compat requiere base_url".to_owned())?;
+                .ok_or_else(|| "openai-compat requires base_url".to_owned())?;
             Arc::new(norte_ai::openai_compat::OpenAiCompatProvider::new(
                 base,
                 cfg.model.clone(),
                 secret,
             ))
         }
-        other => return Err(format!("tipo de proveedor de IA desconocido: {other}")),
+        other => return Err(format!("unknown AI provider type: {other}")),
     };
     Ok(p)
 }
 
-/// Resuelve el secreto del proveedor (`ai:<nombre>` vía env → keyring → age,
-/// en `config_dir`; el proveedor jamás lo lee, regla 10) y lo instancia.
-/// Atajo para los frontends: no tocan `norte-connect` directamente.
+/// Resolves the provider's secret (`ai:<name>` via env → keyring → age, in
+/// `config_dir`; the provider never reads it, rule 10) and instantiates it.
+/// Shortcut for frontends: they don't touch `norte-connect` directly.
 ///
 /// # Errors
-/// Un `String` de diagnóstico si el proveedor no se puede construir (tipo
-/// desconocido, `base_url` ausente en openai-compat).
+/// A diagnostic `String` if the provider cannot be built (unknown type,
+/// missing `base_url` in openai-compat).
 pub async fn resolve_and_build(
     cfg: &AiProviderConfig,
     config_dir: std::path::PathBuf,
 ) -> Result<norte_ai::SharedAiProvider, String> {
     let key = format!("ai:{}", cfg.name);
-    // Un FALLO al resolver el secreto no es «no hay secreto» (#122, INFO de la
-    // revisión de seguridad de IA-2). Tragárselo construía un proveedor SIN
-    // credencial y la petición salía igual: contra un endpoint que no exige
-    // autenticación —un proxy interno, un `openai-compat` mal configurado— eso
-    // manda los nombres del directorio del lector a un sitio al que nadie
-    // autorizó a hablar. Y contra uno que sí la exige, el error que el lector
-    // ve es un 401 del proveedor en vez del keyring bloqueado que lo causó.
+    // A FAILURE resolving the secret is not "there is no secret" (#122, INFO
+    // from the AI-2 security review). Swallowing it built a provider WITHOUT
+    // a credential and the request went out anyway: against an endpoint that
+    // does not require authentication — an internal proxy, a misconfigured
+    // `openai-compat` — that sends the reader's directory names to a place
+    // nobody authorized talking to. And against one that does require it,
+    // the error the reader sees is a 401 from the provider instead of the
+    // blocked keyring that caused it.
     //
-    // `Ok(None)` sí es «no hay secreto», y eso es legítimo: ollama y cualquier
-    // modelo local no piden ninguno.
+    // `Ok(None)` IS "there is no secret", and that is legitimate: ollama and
+    // any local model ask for none.
     let secret = norte_connect::SecretResolver::new(config_dir)
         .resolve(&key, &key)
         .await
-        .map_err(|e| format!("no se pudo resolver el secreto de «{}»: {e}", cfg.name))?;
+        .map_err(|e| format!("could not resolve the secret for «{}»: {e}", cfg.name))?;
     build_provider(cfg, secret)
 }
 
-/// Instala el proveedor de embeddings de `config` en `engine` (M4-IA-2):
+/// Installs `config`'s embeddings provider onto `engine` (M4-IA-2):
 /// `embed_provider_config()` → [`resolve_and_build`] →
-/// [`crate::Engine::set_ai_embed_provider`]. Fuente ÚNICA del wiring que
-/// comparten daemon-run, la CLI embebida y la TUI embebida — antes vivía
-/// triplicado y divergiría al primer cambio.
+/// [`crate::Engine::set_ai_embed_provider`]. SINGLE source of the wiring
+/// shared by daemon-run, the embedded CLI and the embedded TUI — it used to
+/// live tripled and would diverge at the first change.
 ///
-/// Devuelve un aviso IMPRIMIBLE (el caller decide el canal — eprintln en
-/// CLI/TUI; el core no escribe a stderr) cuando el proveedor no se pudo
-/// instalar: construcción fallida, o `embed_provider` nombra un proveedor
-/// inexistente en `[ai.providers]` (distinto de "sin configurar", que es
-/// silencio — los embeddings son opt-in). `None` = instalado o no
-/// configurado.
+/// Returns a PRINTABLE notice (the caller decides the channel — eprintln in
+/// CLI/TUI; the core does not write to stderr) when the provider could not
+/// be installed: build failed, or `embed_provider` names a provider that
+/// does not exist in `[ai.providers]` (different from "not configured",
+/// which is silence — embeddings are opt-in). `None` = installed or not
+/// configured.
 //
-// Instrumentada (#122, convención del repo para funciones efectivas del core):
-// instala estado global del engine y toca el keyring, y sin traza el arranque
-// no dice por qué la búsqueda semántica no responde. El nombre del proveedor
-// es configuración del usuario, no bytes suyos, así que va en el span; el
-// secreto JAMÁS (regla 10).
+// Instrumented (#122, the repo's convention for effectful core functions):
+// installs global engine state and touches the keyring, and without a trace
+// startup does not say why semantic search is not responding. The provider
+// name is the user's configuration, not their bytes, so it goes in the
+// span; the secret NEVER (rule 10).
 //
-// `config_dir` es de donde se resuelve el secreto: el MISMO que usa quien
-// equipa, y no el global, para que un engine apuntado a otro directorio (un
-// test) no llegue al keyring del usuario.
+// `config_dir` is where the secret is resolved from: the SAME one whoever
+// is equipping uses, not the global one, so that an engine pointed at
+// another directory (a test) does not reach the user's keyring.
 #[tracing::instrument(skip_all, fields(provider))]
 pub async fn install_embed_provider(
     engine: &crate::Engine,
@@ -250,19 +252,19 @@ pub async fn install_embed_provider(
         tracing::Span::current().record("provider", pcfg.name.as_str());
         match resolve_and_build(&pcfg, config_dir).await {
             Ok(p) => {
-                tracing::info!("proveedor de embeddings instalado");
+                tracing::info!("embeddings provider installed");
                 engine.set_ai_embed_provider(p);
                 None
             }
             Err(e) => Some(format!(
-                "aviso: proveedor de embeddings no disponible ({e}); \
-                 index.embed/search_semantic darán Unsupported"
+                "warning: embeddings provider unavailable ({e}); \
+                 index.embed/search_semantic will return Unsupported"
             )),
         }
     } else if config.embed_provider.is_some() {
         Some(
-            "aviso: embed_provider nombra un proveedor que no existe en \
-             [ai.providers]; index.embed/search_semantic darán Unsupported"
+            "warning: embed_provider names a provider that does not exist in \
+             [ai.providers]; index.embed/search_semantic will return Unsupported"
                 .to_owned(),
         )
     } else {
@@ -270,50 +272,51 @@ pub async fn install_embed_provider(
     }
 }
 
-/// Operación de IA gateada.
+/// Gated AI operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AiOp {
-    /// Sugerencia de renombrado por lote.
+    /// Batch rename suggestion.
     Rename,
-    /// `index.embed` / `index.search_semantic` — prefijos de contenido o la
-    /// query salen hacia el proveedor.
+    /// `index.embed` / `index.search_semantic` — content prefixes or the
+    /// query go out to the provider.
     Embed,
 }
 
-/// Motivo por el que el gate rechazó una operación de IA.
+/// Reason the gate rejected an AI operation.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum AiDenied {
-    /// La IA está deshabilitada (`[ai] enabled = false`).
+    /// AI is disabled (`[ai] enabled = false`).
     #[error("AI is disabled")]
     Disabled,
-    /// Modo local-only y el proveedor es remoto.
+    /// Local-only mode and the provider is remote.
     #[error("local-only mode: remote provider refused")]
     LocalOnly,
-    /// Alguna ruta cae bajo un `denied_prefix`.
+    /// A path falls under a `denied_prefix`.
     #[error("path under a denied prefix")]
     DeniedPath,
 }
 
-/// El gate opt-in de IA (spec §9): se consulta ANTES de que ningún nombre o
-/// contenido llegue a un proveedor. Deshabilitado, local-only sobre remoto, o
-/// una ruta bajo un prefijo denegado = rechazo DURO.
+/// The AI opt-in gate (spec §9): consulted BEFORE any name or content
+/// reaches a provider. Disabled, local-only over remote, or a path under a
+/// denied prefix = HARD rejection.
 pub struct AiGate<'a> {
     config: &'a AiConfig,
 }
 
 impl<'a> AiGate<'a> {
-    /// Gate sobre `config`.
+    /// Gate over `config`.
     #[must_use]
     pub fn new(config: &'a AiConfig) -> Self {
         Self { config }
     }
 
-    /// Comprueba la operación. `provider_is_local` = si el proveedor elegido
-    /// corre localmente ([`norte_ai::AiProvider::is_local`]).
+    /// Checks the operation. `provider_is_local` = whether the chosen
+    /// provider runs locally ([`norte_ai::AiProvider::is_local`]).
     ///
     /// # Errors
-    /// [`AiDenied`] con el motivo; el caller lo mapea a la taxonomía del wire.
+    /// [`AiDenied`] with the reason; the caller maps it to the wire
+    /// taxonomy.
     pub fn check(
         &self,
         _op: AiOp,
@@ -340,34 +343,35 @@ impl<'a> AiGate<'a> {
     }
 }
 
-/// Una entrada del plan de rename: renombra `from` (nombre que existe en el
-/// dir) a `to` (segmento válido nuevo). Ambos son nombres BASE, no rutas.
+/// One entry of the rename plan: renames `from` (a name that exists in the
+/// dir) to `to` (a valid new segment). Both are BASE names, not paths.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RenameEntry {
-    /// Nombre existente a renombrar.
+    /// Existing name to rename.
     pub from: Segment,
-    /// Nombre destino.
+    /// Destination name.
     pub to: Segment,
 }
 
-/// El plan de rename REVISABLE (spec §9): el producto de la IA. Aplicarlo es
-/// N `fs.move` gobernados; construirlo/validarlo jamás muta nada.
+/// The REVIEWABLE rename plan (spec §9): the AI's product. Applying it is N
+/// governed `fs.move`s; building/validating it never mutates anything.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct RenamePlan {
-    /// Entradas del plan (solo las que cambian de nombre).
+    /// Plan entries (only the ones that change name).
     pub entries: Vec<RenameEntry>,
 }
 
-/// Core → proto: el plan solo contiene nombres UTF-8 (invariante del engine:
-/// hostiles rechazados fail-loud pre-proveedor).
+/// Core → proto: the plan only contains UTF-8 names (engine invariant:
+/// hostile names are rejected fail-loud pre-provider).
 ///
-/// La conversión NO es lossy, y por eso se hace con `from_utf8` y no con
-/// `from_utf8_lossy` (#275). El invariante que lo garantiza vive dos
-/// funciones más allá —`build_rename_prompt` rehúsa el directorio entero si
-/// algún nombre no es representable— y un `lossy` aquí lo daba por hecho en
-/// silencio: el día que ese invariante se mueva, esto colaría un U+FFFD en un
-/// nombre de fichero en vez de decirlo. Una entrada que no sea UTF-8 se
-/// SALTA, que es lo mismo que hace el validador con lo que no entiende.
+/// The conversion is NOT lossy, and that is why it uses `from_utf8` and not
+/// `from_utf8_lossy` (#275). The invariant that guarantees it lives two
+/// functions further down — `build_rename_prompt` refuses the whole
+/// directory if any name is not representable — and a `lossy` here took it
+/// for granted silently: the day that invariant moves, this would let a
+/// U+FFFD slip into a file name instead of saying so. An entry that is not
+/// UTF-8 is SKIPPED, which is the same thing the validator does with what
+/// it does not understand.
 pub(crate) fn ai_plan_to_proto(plan: RenamePlan) -> norte_proto::methods::AiRenamePlanResult {
     norte_proto::methods::AiRenamePlanResult {
         refused: None,
@@ -383,29 +387,30 @@ pub(crate) fn ai_plan_to_proto(plan: RenamePlan) -> norte_proto::methods::AiRena
     }
 }
 
-/// Construye la petición de chat del rename: envía SOLO los nombres base
-/// (bytes crudos → display lossy-marcado; un nombre hostil con U+FFFD se
-/// rechaza fail-loud, jamás se manda) + la instrucción. Pide JSON estricto.
+/// Builds the rename chat request: sends ONLY the base names (raw bytes →
+/// lossy-marked display; a hostile name with U+FFFD is rejected fail-loud,
+/// never sent) + the instruction. Asks for strict JSON.
 ///
 /// # Errors
-/// [`AiError::Protocol`] si algún nombre no es representable sin pérdida
-/// (contiene U+FFFD tras la conversión lossy — no se filtra un nombre
-/// corrupto a un proveedor).
+/// [`AiError::Protocol`] if any name is not losslessly representable
+/// (contains U+FFFD after the lossy conversion — a corrupt name is not
+/// leaked to a provider).
 pub fn build_rename_prompt(names: &[Segment], instruction: &str) -> Result<ChatRequest, AiError> {
     let mut lines = Vec::with_capacity(names.len());
     for n in names {
         let display = String::from_utf8_lossy(n.as_bytes());
         if display.contains('\u{FFFD}') {
             return Err(AiError::Protocol(
-                "nombre no-UTF8 no representable; rename IA no lo envía".into(),
+                "non-UTF8 name not representable; AI rename does not send it".into(),
             ));
         }
         lines.push(display.into_owned());
     }
-    // El prompt sigue DESCRIBIENDO la forma, y no sobra: es lo único que
-    // tiene el proveedor que no atiende el contrato (Ollama, un servidor
-    // compatible que ignore `response_format`, un modelo Anthropic viejo). El
-    // contrato de abajo se lo ahorra a quien sí lo atiende.
+    // The prompt still DESCRIBES the shape, and it is not redundant: it is
+    // the only thing a provider that does not honor the contract has
+    // (Ollama, a compatible server that ignores `response_format`, an old
+    // Anthropic model). The contract below spares it for whoever does honor
+    // it.
     let system = "You rename files. Reply with STRICT JSON only: an object \
          {\"renames\": [{\"from\": <existing name>, \"to\": <new name>}]}. \
          Include ONLY files that should be renamed. `from` must exactly match \
@@ -420,24 +425,25 @@ pub fn build_rename_prompt(names: &[Segment], instruction: &str) -> Result<ChatR
         system: Some(system),
         messages: vec![ChatMessage::user(user)],
         max_tokens: Some(4096),
-        json_schema: Some(contrato_de_rename()),
+        json_schema: Some(rename_contract()),
     })
 }
 
-/// El contrato de salida del plan de renombrado.
+/// The output contract of the rename plan.
 ///
-/// Raíz OBJETO y no array: los mecanismos nativos de salida estructurada
-/// esperan un objeto arriba, y envolver la lista en `renames` cuesta un campo
-/// y evita descubrirlo con un 400 en producción.
+/// OBJECT root and not an array: native structured-output mechanisms
+/// expect an object at the top, and wrapping the list in `renames` costs
+/// one field and avoids discovering it with a 400 in production.
 ///
-/// Sin `minLength`, `maxLength` ni `pattern`: la salida estructurada de
-/// Anthropic no admite restricciones de cadena, y ponerlas haría que el
-/// schema se rechazara entero. Las reglas de verdad —que `from` exista, que
-/// `to` sea un basename sin traversal, que no haya destinos duplicados ni
-/// colisiones— **no caben en un JSON Schema** y no es ahí donde tienen que
-/// vivir: las aplica [`validate_rename_reply`] contra el directorio REAL,
-/// atienda el proveedor el contrato o no.
-fn contrato_de_rename() -> JsonContract {
+/// No `minLength`, `maxLength` or `pattern`: Anthropic's structured output
+/// does not support string constraints, and adding them would get the
+/// whole schema rejected. The rules that actually matter — that `from`
+/// exists, that `to` is a basename with no traversal, that there are no
+/// duplicate destinations or collisions — **do not fit in a JSON Schema**
+/// and that is not where they belong: [`validate_rename_reply`] applies
+/// them against the REAL directory, whether the provider honors the
+/// contract or not.
+fn rename_contract() -> JsonContract {
     JsonContract::new(
         "norte_rename_plan",
         serde_json::json!({
@@ -468,60 +474,63 @@ struct RawRenameEntry {
     to: String,
 }
 
-/// El sobre que devuelve un proveedor que SÍ atendió el contrato.
+/// The envelope a provider that DID honor the contract returns.
 ///
-/// `deny_unknown_fields` porque el contrato dice `additionalProperties:
-/// false`: el parser tiene que exigir lo mismo que el schema, o la pareja
-/// miente. Sin él, un `{"renames": [], "cambios": [...las de verdad...]}`
-/// —un modelo que se inventa la clave, un endpoint comprometido— salía como
-/// un plan VACÍO y en silencio: «no hay nada que renombrar» en vez de «esto
-/// no es la respuesta que pedí».
+/// `deny_unknown_fields` because the contract says `additionalProperties:
+/// false`: the parser has to demand the same thing the schema does, or the
+/// pair is lying. Without it, a `{"renames": [], "changes": [...the real
+/// ones...]}` — a model that makes up the key, a compromised endpoint —
+/// would come out as an EMPTY plan and silently: "there is nothing to
+/// rename" instead of "this is not the response I asked for".
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawRenamePlan {
     renames: Vec<RawRenameEntry>,
 }
 
-/// Las DOS formas en las que puede llegar el plan.
+/// The TWO shapes in which the plan can arrive.
 ///
-/// El objeto `{"renames": [...]}` es lo que devuelve quien atiende el
-/// contrato de salida tipada. El array pelado es lo que devuelve quien no lo
-/// atiende y sólo tiene el prompt — Ollama, un servidor compatible que ignore
-/// `response_format`, un modelo Anthropic sin salida estructurada. Aceptar
-/// las dos es lo que permite que el contrato sea una MEJORA y no una ruptura:
-/// nada deja de funcionar por no soportarlo.
+/// The object `{"renames": [...]}` is what a provider that honors the typed
+/// output contract returns. The bare array is what a provider that does not
+/// honor it — and only has the prompt — returns: Ollama, a compatible
+/// server that ignores `response_format`, an Anthropic model without
+/// structured output. Accepting both is what lets the contract be an
+/// IMPROVEMENT and not a break: nothing stops working for not supporting
+/// it.
 ///
-/// Lo que NO cambia según la forma es la validación: las dos caen en las
-/// mismas reglas contra el directorio real.
-/// Se decide por la PRIMERA llave, no probando y cayendo: un sobre con una
-/// entrada mala tiene que dar el error del sobre. Con el `if let Ok` de
-/// antes, `{"renames":[{"from":"a"}]}` fallaba en la rama del objeto, caía a
-/// la del array y salía «invalid type: map, expected a sequence» — el motivo
-/// de verdad, que era el campo `to` ausente, se descartaba por el camino.
-fn parsear_plan(texto: &str) -> Result<Vec<RawRenameEntry>, AiError> {
-    let error = |e: serde_json::Error| AiError::Protocol(format!("respuesta no es JSON: {e}"));
-    if texto.starts_with('{') {
-        return serde_json::from_str::<RawRenamePlan>(texto)
+/// What does NOT change depending on the shape is validation: both fall
+/// into the same rules against the real directory.
+/// It is decided by the FIRST brace, not by trying one and falling back:
+/// an envelope with one bad entry has to give the envelope's error. With
+/// the previous `if let Ok`, `{"renames":[{"from":"a"}]}` failed in the
+/// object branch, fell to the array branch and came out as "invalid type:
+/// map, expected a sequence" — the real reason, which was the missing `to`
+/// field, got discarded along the way.
+fn parse_plan(text: &str) -> Result<Vec<RawRenameEntry>, AiError> {
+    let error = |e: serde_json::Error| AiError::Protocol(format!("response is not JSON: {e}"));
+    if text.starts_with('{') {
+        return serde_json::from_str::<RawRenamePlan>(text)
             .map(|s| s.renames)
             .map_err(error);
     }
-    serde_json::from_str::<Vec<RawRenameEntry>>(texto).map_err(error)
+    serde_json::from_str::<Vec<RawRenameEntry>>(text).map_err(error)
 }
 
-/// Valida la respuesta del modelo contra el dir real (spec §9: el plan es el
-/// producto, jamás un apply parcial). `inputs` = nombres existentes;
-/// `existing` = los mismos (para detectar colisiones con nombres no
-/// renombrados). Reglas: cada `from` ∈ inputs; cada `to` es un [`Segment`]
-/// válido (sin `/`, `..`, NUL, `!`); sin destinos duplicados; un `to` no
-/// colisiona con un nombre existente SALVO que ese nombre se renombre en el
-/// mismo plan (swaps consistentes permitidos). Cualquier salida hostil o
-/// malformada = error tipado.
+/// Validates the model's response against the real dir (spec §9: the plan
+/// is the product, never a partial apply). `inputs` = existing names;
+/// `existing` = the same (to detect collisions with names that are not
+/// renamed). Rules: every `from` ∈ inputs; every `to` is a valid
+/// [`Segment`] (no `/`, `..`, NUL, `!`); no duplicate destinations; a `to`
+/// does not collide with an existing name UNLESS that name is renamed in
+/// the same plan (consistent swaps allowed). Any hostile or malformed
+/// output = typed error.
 ///
 /// # Errors
-/// [`AiError::Protocol`] si el JSON no parsea o viola una regla de validación.
+/// [`AiError::Protocol`] if the JSON does not parse or violates a
+/// validation rule.
 pub fn validate_rename_reply(reply: &str, inputs: &[Segment]) -> Result<RenamePlan, AiError> {
     let trimmed = reply.trim();
-    let raw = parsear_plan(trimmed)?;
+    let raw = parse_plan(trimmed)?;
 
     let input_set: std::collections::HashSet<&[u8]> =
         inputs.iter().map(Segment::as_bytes).collect();
@@ -532,43 +541,44 @@ pub fn validate_rename_reply(reply: &str, inputs: &[Segment]) -> Result<RenamePl
 
     for r in raw {
         let from = Segment::new(r.from.clone().into_bytes())
-            .map_err(|_| AiError::Protocol(format!("`from` inválido: {:?}", r.from)))?;
+            .map_err(|_| AiError::Protocol(format!("invalid `from`: {:?}", r.from)))?;
         if !input_set.contains(from.as_bytes()) {
             return Err(AiError::Protocol(format!(
-                "`from` no existe en el dir: {:?}",
+                "`from` does not exist in the dir: {:?}",
                 r.from
             )));
         }
         if from.as_bytes() == b"!" {
             return Err(AiError::Protocol(
-                "`from` marcador de archivo prohibido".into(),
+                "`from` file-as-directory marker forbidden".into(),
             ));
         }
-        // `to`: Segment rechaza `/`, `..`, `.`, NUL, vacío. `!` (marcador de
-        // archivo-como-directorio, ADR 0018) y `\` se rechazan aparte: el
-        // backslash es separador en Windows → traversal (`..\evil`), y el
-        // camino IA es superficie nueva por la que llegan bytes hostiles
-        // (security MINOR del review #M4).
+        // `to`: Segment rejects `/`, `..`, `.`, NUL, empty. `!` (file-as-
+        // directory marker, ADR 0018) and `\` are rejected separately: the
+        // backslash is a separator on Windows → traversal (`..\evil`), and
+        // the AI path is new surface through which hostile bytes arrive
+        // (security MINOR from the #M4 review).
         let to = Segment::new(r.to.clone().into_bytes())
-            .map_err(|_| AiError::Protocol(format!("`to` inválido: {:?}", r.to)))?;
+            .map_err(|_| AiError::Protocol(format!("invalid `to`: {:?}", r.to)))?;
         if to.as_bytes() == b"!" || to.as_bytes().contains(&b'\\') {
-            return Err(AiError::Protocol(format!("`to` prohibido: {:?}", r.to)));
+            return Err(AiError::Protocol(format!("`to` forbidden: {:?}", r.to)));
         }
         if !froms.insert(from.as_bytes().to_vec()) {
-            return Err(AiError::Protocol(format!("`from` duplicado: {:?}", r.from)));
+            return Err(AiError::Protocol(format!("duplicate `from`: {:?}", r.from)));
         }
         if !tos.insert(to.as_bytes().to_vec()) {
-            return Err(AiError::Protocol(format!("`to` duplicado: {:?}", r.to)));
+            return Err(AiError::Protocol(format!("duplicate `to`: {:?}", r.to)));
         }
         entries.push(RenameEntry { from, to });
     }
 
-    // Colisión con un nombre EXISTENTE que NO se renombra: un `to` que ya
-    // existe en el dir solo vale si ese nombre está en `froms` (se mueve).
+    // Collision with an EXISTING name that is NOT renamed: a `to` that
+    // already exists in the dir is only valid if that name is in `froms`
+    // (it is being moved).
     for e in &entries {
         if input_set.contains(e.to.as_bytes()) && !froms.contains(e.to.as_bytes()) {
             return Err(AiError::Protocol(format!(
-                "`to` colisiona con un archivo existente que no se renombra: {:?}",
+                "`to` collides with an existing file that is not renamed: {:?}",
                 String::from_utf8_lossy(e.to.as_bytes())
             )));
         }
@@ -577,21 +587,22 @@ pub fn validate_rename_reply(reply: &str, inputs: &[Segment]) -> Result<RenamePl
     Ok(RenamePlan { entries })
 }
 
-/// Un plan de ORGANIZAR tal y como sale del proveedor (fase 8).
+/// An ORGANIZE plan exactly as it comes out of the provider (phase 8).
 ///
-/// Lleva los destinos como TEXTO y no como segmentos, a propósito: quien
-/// valida la ruta relativa es [`norte_proto::methods::validar_proposed_rel`],
-/// y tiene que ser la misma función que aplica el core al ejecutar. Dos
-/// validaciones para la misma regla divergen, y la que se relaja siempre es
-/// la que no borra ficheros.
+/// Carries the destinations as TEXT and not as segments, on purpose: the
+/// one who validates the relative path is
+/// [`norte_proto::methods::validar_proposed_rel`], and it has to be the
+/// same function the core applies when executing. Two validations for the
+/// same rule diverge, and the one that relaxes is always the one that does
+/// not delete files.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct OrganizePlanReply {
-    /// Los movimientos propuestos.
+    /// The proposed moves.
     pub moves: Vec<norte_proto::methods::OrganizeMove>,
 }
 
-/// El contrato de salida tipada de un plan de organizar.
-fn contrato_de_organize() -> JsonContract {
+/// The typed output contract for an organize plan.
+fn organize_contract() -> JsonContract {
     JsonContract::new(
         "norte_organize_plan",
         serde_json::json!({
@@ -622,23 +633,23 @@ struct RawOrganizeMove {
     proposed_rel: String,
 }
 
-/// El prompt de organizar.
+/// The organize prompt.
 ///
-/// Dice la forma además de mandar el contrato, por lo mismo que el de
-/// renombrar: es lo único que tiene un proveedor que no atienda
-/// `response_format`.
+/// States the shape in addition to sending the contract, for the same
+/// reason as the rename one: it is the only thing a provider that does not
+/// honor `response_format` has.
 ///
 /// # Errors
-/// [`AiError::Protocol`] si algún nombre no es representable en UTF-8: un
-/// nombre así no puede formar parte de un plan que viaja por el wire, y se
-/// aparta ANTES de que salga de la máquina.
+/// [`AiError::Protocol`] if any name is not representable in UTF-8: such a
+/// name cannot be part of a plan that travels over the wire, and it is set
+/// aside BEFORE it leaves the machine.
 pub fn build_organize_prompt(names: &[Segment], instruction: &str) -> Result<ChatRequest, AiError> {
     let mut lines = Vec::with_capacity(names.len());
     for n in names {
         let display = String::from_utf8_lossy(n.as_bytes());
         if display.contains('\u{FFFD}') {
             return Err(AiError::Protocol(
-                "nombre no-UTF8 no representable; organizar por IA no lo envía".into(),
+                "non-UTF8 name not representable; AI organize does not send it".into(),
             ));
         }
         lines.push(display.into_owned());
@@ -659,81 +670,79 @@ pub fn build_organize_prompt(names: &[Segment], instruction: &str) -> Result<Cha
         system: Some(system),
         messages: vec![ChatMessage::user(user)],
         max_tokens: Some(4096),
-        json_schema: Some(contrato_de_organize()),
+        json_schema: Some(organize_contract()),
     })
 }
 
-/// Valida la respuesta de un plan de organizar contra los nombres que se
-/// mandaron.
+/// Validates an organize plan's response against the names that were sent.
 ///
-/// Lo que comprueba, y por qué cada cosa:
+/// What it checks, and why each thing:
 ///
-/// - **`current` existe entre los nombres enviados.** Un plan sobre un
-///   fichero que nadie mencionó es un plan sobre otro directorio.
-/// - **`proposed_rel` pasa [`norte_proto::methods::validar_proposed_rel`]**,
-///   que es la misma puerta que el core aplica al ejecutar: ni absoluto, ni
-///   `..`, ni vacío, ni más hondo que el tope. Un modelo comprometido —o
-///   simplemente uno malo— no puede escribir fuera del directorio.
-/// - **Ni `!` ni `\` en ningún segmento.** El backslash es separador en
-///   Windows, así que `..\fuera` es traversal en cuanto el plan cruza de
-///   sistema; `!` es el marcador de archivo-como-directorio (ADR 0018).
-/// - **Sin orígenes ni destinos repetidos**: un plan que se contradice no se
-///   puede cumplir entero, y aplicarlo a medias es lo que esto existe para
-///   impedir.
+/// - **`current` exists among the sent names.** A plan about a file nobody
+///   mentioned is a plan about another directory.
+/// - **`proposed_rel` passes
+///   [`norte_proto::methods::validar_proposed_rel`]**, which is the same
+///   gate the core applies when executing. Not absolute, no `..`, not
+///   empty, not deeper than the cap. A compromised model — or simply a bad
+///   one — cannot write outside the directory.
+/// - **Neither `!` nor `\` in any segment.** The backslash is a separator on
+///   Windows, so `..\outside` is traversal as soon as the plan crosses
+///   systems; `!` is the file-as-directory marker (ADR 0018).
+/// - **No repeated sources or destinations**: a plan that contradicts
+///   itself cannot be carried out in full, and applying it halfway is
+///   exactly what this exists to prevent.
 ///
 /// # Errors
-/// [`AiError::Protocol`] con lo que falló, para el log del operador.
+/// [`AiError::Protocol`] with what failed, for the operator's log.
 pub fn validate_organize_reply(
     reply: &str,
     inputs: &[Segment],
 ) -> Result<OrganizePlanReply, AiError> {
     let trimmed = reply.trim();
-    let raw: Vec<RawOrganizeMove> = parsear_organize(trimmed)?;
+    let raw: Vec<RawOrganizeMove> = parse_organize(trimmed)?;
 
     let input_set: std::collections::HashSet<&[u8]> =
         inputs.iter().map(Segment::as_bytes).collect();
     let mut moves = Vec::with_capacity(raw.len());
-    let mut origenes: std::collections::HashSet<Vec<u8>> = std::collections::HashSet::new();
-    let mut destinos: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut sources: std::collections::HashSet<Vec<u8>> = std::collections::HashSet::new();
+    let mut destinations: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     for r in raw {
         let current = Segment::new(r.current.clone().into_bytes())
-            .map_err(|_| AiError::Protocol(format!("`current` inválido: {:?}", r.current)))?;
+            .map_err(|_| AiError::Protocol(format!("invalid `current`: {:?}", r.current)))?;
         if !input_set.contains(current.as_bytes()) {
             return Err(AiError::Protocol(format!(
-                "`current` no existe en el dir: {:?}",
+                "`current` does not exist in the dir: {:?}",
                 r.current
             )));
         }
         if current.as_bytes() == b"!" {
-            return Err(AiError::Protocol(
-                "`current` marcador de archivo prohibido".into(),
-            ));
+            return Err(AiError::Protocol("`current` file marker forbidden".into()));
         }
-        // LA puerta: la misma que el core aplica al ejecutar.
+        // THE gate: the same one the core applies when executing.
         let segs = norte_proto::methods::validar_proposed_rel(&r.proposed_rel).map_err(|e| {
             AiError::Protocol(format!(
-                "`proposed_rel` inválido ({e}): {:?}",
+                "invalid `proposed_rel` ({e}): {:?}",
                 r.proposed_rel
             ))
         })?;
         for s in &segs {
             if s.as_bytes() == b"!" || s.as_bytes().contains(&b'\\') {
                 return Err(AiError::Protocol(format!(
-                    "`proposed_rel` prohibido: {:?}",
+                    "`proposed_rel` forbidden: {:?}",
                     r.proposed_rel
                 )));
             }
         }
-        if !origenes.insert(current.as_bytes().to_vec()) {
+        if !sources.insert(current.as_bytes().to_vec()) {
             return Err(AiError::Protocol(format!(
-                "`current` duplicado: {:?}",
+                "duplicate `current`: {:?}",
                 r.current
             )));
         }
-        if !destinos.insert(r.proposed_rel.clone()) {
+        if !destinations.insert(r.proposed_rel.clone()) {
             return Err(AiError::Protocol(format!(
-                "`proposed_rel` duplicado: {:?}",
+                "duplicate `proposed_rel`: {:?}",
                 r.proposed_rel
             )));
         }
@@ -745,19 +754,19 @@ pub fn validate_organize_reply(
     Ok(OrganizePlanReply { moves })
 }
 
-/// Saca el array de movimientos de la respuesta, con la misma tolerancia que
-/// el de renombrado: el objeto con su clave, o el array pelado que devuelve
-/// un proveedor que ignora el contrato.
-fn parsear_organize(s: &str) -> Result<Vec<RawOrganizeMove>, AiError> {
+/// Pulls the moves array out of the response, with the same tolerance as
+/// the rename one: the object with its key, or the bare array a provider
+/// that ignores the contract returns.
+fn parse_organize(s: &str) -> Result<Vec<RawOrganizeMove>, AiError> {
     #[derive(Deserialize)]
-    struct Envoltura {
+    struct Envelope {
         moves: Vec<RawOrganizeMove>,
     }
-    if let Ok(e) = serde_json::from_str::<Envoltura>(s) {
+    if let Ok(e) = serde_json::from_str::<Envelope>(s) {
         return Ok(e.moves);
     }
     serde_json::from_str::<Vec<RawOrganizeMove>>(s)
-        .map_err(|e| AiError::Protocol(format!("respuesta no es un plan de organizar: {e}")))
+        .map_err(|e| AiError::Protocol(format!("response is not an organize plan: {e}")))
 }
 
 #[cfg(test)]
@@ -765,7 +774,7 @@ mod tests {
     use super::*;
 
     fn seg(b: &[u8]) -> Segment {
-        Segment::new(b.to_vec()).expect("segmento de test")
+        Segment::new(b.to_vec()).expect("test segment")
     }
 
     /// Loads `[ai]` from a single-file User layer (test injection, mirrors
@@ -784,63 +793,63 @@ mod tests {
     /// just the last one read: System enables IA and declares provider `x`
     /// with an old model; User overrides only the model, by name.
     #[test]
-    fn dos_capas_se_mezclan_por_nombre_de_proveedor() {
-        let sistema = tempfile::tempdir().unwrap();
+    fn two_layers_merge_by_provider_name() {
+        let system = tempfile::tempdir().unwrap();
         std::fs::write(
-            sistema.path().join("norte.toml"),
-            "[ai]\nenabled = true\n[ai.providers.x]\nkind = \"ollama\"\nmodel = \"viejo\"\n",
+            system.path().join("norte.toml"),
+            "[ai]\nenabled = true\n[ai.providers.x]\nkind = \"ollama\"\nmodel = \"old\"\n",
         )
         .unwrap();
-        let usuario = tempfile::tempdir().unwrap();
+        let user = tempfile::tempdir().unwrap();
         std::fs::write(
-            usuario.path().join("norte.toml"),
-            "[ai.providers.x]\nkind = \"ollama\"\nmodel = \"nuevo\"\n",
+            user.path().join("norte.toml"),
+            "[ai.providers.x]\nkind = \"ollama\"\nmodel = \"new\"\n",
         )
         .unwrap();
         let layers = norte_config::Layers {
             dirs: vec![
-                (sistema.path().to_path_buf(), norte_config::Layer::System),
-                (usuario.path().to_path_buf(), norte_config::Layer::User),
+                (system.path().to_path_buf(), norte_config::Layer::System),
+                (user.path().to_path_buf(), norte_config::Layer::User),
             ],
         };
-        let cfg = AiConfig::load_from(&layers).expect("carga");
+        let cfg = AiConfig::load_from(&layers).expect("load");
         assert!(cfg.enabled);
         let x = cfg
             .providers
             .iter()
             .find(|p| p.name == "x")
-            .expect("proveedor x presente");
-        assert_eq!(x.model, "nuevo");
+            .expect("provider x present");
+        assert_eq!(x.model, "new");
     }
 
     #[test]
-    fn config_default_deshabilitado() {
+    fn config_default_disabled() {
         let c = AiConfig::default();
         assert!(!c.enabled && !c.local_only && c.denied_prefixes.is_empty());
-        assert!(!load_from_toml("").expect("vacío").enabled);
+        assert!(!load_from_toml("").expect("empty").enabled);
     }
 
     #[test]
-    fn config_parsea_seccion_completa() {
+    fn config_parses_full_section() {
         let c = load_from_toml(
             "[ai]\nenabled = true\nlocal_only = true\n\
              denied_prefixes = [\"file:///secret\", \"file:///home/o/.ssh\"]\n\
              rename_provider = \"local\"\n",
         )
-        .expect("parsea");
+        .expect("parses");
         assert!(c.enabled && c.local_only);
         assert_eq!(c.denied_prefixes.len(), 2);
         assert_eq!(c.rename_provider.as_deref(), Some("local"));
     }
 
     #[test]
-    fn config_prefijo_invalido_es_error() {
-        // norte-config valida `denied_prefixes` en su propio loader: la
-        // variante ahora es un `AiConfigError::Io`-envuelto `ConfigError`,
-        // no `AiConfigError::BadPrefix` (ese variant queda documentado pero
-        // sin construir desde aquí — ver su rustdoc).
-        assert!(load_from_toml("[ai]\ndenied_prefixes = [\"no-es-url\"]\n").is_err());
-        assert!(load_from_toml("[ai]\nenabled = \"si\"\n").is_err());
+    fn config_invalid_prefix_is_error() {
+        // norte-config validates `denied_prefixes` in its own loader: the
+        // variant now is an `AiConfigError::Io`-wrapped `ConfigError`,
+        // not `AiConfigError::BadPrefix` (that variant remains documented
+        // but is not constructed from here — see its rustdoc).
+        assert!(load_from_toml("[ai]\ndenied_prefixes = [\"not-a-url\"]\n").is_err());
+        assert!(load_from_toml("[ai]\nenabled = \"yes\"\n").is_err());
     }
 
     #[test]
@@ -848,20 +857,20 @@ mod tests {
         let mut cfg = AiConfig::default();
         assert!(cfg.embed_provider_config().is_none());
         cfg.providers.push(AiProviderConfig {
-            name: "solo".into(),
+            name: "only".into(),
             kind: "ollama".into(),
             model: "nomic-embed-text".into(),
             base_url: None,
         });
-        // un único proveedor sin nombre explícito ⇒ ese
-        assert_eq!(cfg.embed_provider_config().unwrap().name, "solo");
+        // a single provider with no explicit name ⇒ that one
+        assert_eq!(cfg.embed_provider_config().unwrap().name, "only");
         cfg.providers.push(AiProviderConfig {
             name: "b".into(),
             kind: "ollama".into(),
             model: "x".into(),
             base_url: None,
         });
-        // dos y sin nombre ⇒ None (ambiguo)
+        // two and no name ⇒ None (ambiguous)
         assert!(cfg.embed_provider_config().is_none());
         cfg.embed_provider = Some("b".into());
         assert_eq!(cfg.embed_provider_config().unwrap().name, "b");
@@ -872,7 +881,7 @@ mod tests {
     }
 
     #[test]
-    fn gate_deshabilitado_rechaza() {
+    fn gate_disabled_rejects() {
         let c = AiConfig::default();
         let g = AiGate::new(&c);
         assert_eq!(
@@ -882,7 +891,7 @@ mod tests {
     }
 
     #[test]
-    fn gate_local_only_rechaza_remoto_permite_local() {
+    fn gate_local_only_rejects_remote_allows_local() {
         let c = AiConfig {
             enabled: true,
             local_only: true,
@@ -904,20 +913,20 @@ mod tests {
             ..Default::default()
         };
         let g = AiGate::new(&c);
-        // Bajo el prefijo: rechazo.
+        // Under the prefix: rejected.
         assert_eq!(
             g.check(AiOp::Rename, true, &[&vp("file:///home/o/secret/k")]),
             Err(AiDenied::DeniedPath)
         );
-        // Hermano con prefijo de string común PERO no bajo el segmento: OK.
+        // Sibling with a common string prefix BUT not under the segment: OK.
         assert!(
-            g.check(AiOp::Rename, true, &[&vp("file:///home/o/secretos/x")])
+            g.check(AiOp::Rename, true, &[&vp("file:///home/o/secrets/x")])
                 .is_ok()
         );
     }
 
     #[test]
-    fn prompt_rechaza_nombre_no_utf8() {
+    fn prompt_rejects_non_utf8_name() {
         let names = [seg(b"ok.txt"), seg(b"caf\xe9\xff")];
         assert!(matches!(
             build_rename_prompt(&names, "lower"),
@@ -926,7 +935,7 @@ mod tests {
     }
 
     #[test]
-    fn prompt_incluye_instruccion_y_nombres() {
+    fn prompt_includes_instruction_and_names() {
         let req =
             build_rename_prompt(&[seg(b"A.TXT"), seg(b"B.TXT")], "lowercase").expect("prompt");
         assert!(req.system.is_some());
@@ -935,7 +944,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_plan_valido() {
+    fn validate_plan_valid() {
         let inputs = [seg(b"A.TXT"), seg(b"B.TXT")];
         let plan = validate_rename_reply(
             r#"[{"from":"A.TXT","to":"a.txt"},{"from":"B.TXT","to":"b.txt"}]"#,
@@ -946,65 +955,66 @@ mod tests {
         assert_eq!(plan.entries[0].to.as_bytes(), b"a.txt");
     }
 
-    /// **El plan llega en las DOS formas, y la validación es la misma.**
+    /// **The plan arrives in TWO shapes, and validation is the same.**
     ///
-    /// El objeto lo devuelve quien atendió el contrato de salida tipada; el
-    /// array pelado, quien sólo tenía el prompt. Que las dos valgan es lo que
-    /// hace que el contrato sea una mejora y no una ruptura para Ollama o
-    /// para un modelo Anthropic sin salida estructurada.
+    /// The object is returned by whoever honored the typed output contract;
+    /// the bare array, by whoever only had the prompt. That both are valid
+    /// is what makes the contract an improvement and not a break for Ollama
+    /// or for an Anthropic model without structured output.
     #[test]
-    fn el_sobre_y_el_array_pelado_dan_el_mismo_plan() {
+    fn the_envelope_and_the_bare_array_give_the_same_plan() {
         let inputs = [seg(b"A.TXT"), seg(b"B.TXT")];
-        let del_contrato = validate_rename_reply(
+        let from_contract = validate_rename_reply(
             r#"{"renames":[{"from":"A.TXT","to":"a.txt"},{"from":"B.TXT","to":"b.txt"}]}"#,
             &inputs,
         )
-        .expect("plan del contrato");
-        let del_prompt = validate_rename_reply(
+        .expect("plan from contract");
+        let from_prompt = validate_rename_reply(
             r#"[{"from":"A.TXT","to":"a.txt"},{"from":"B.TXT","to":"b.txt"}]"#,
             &inputs,
         )
-        .expect("plan del prompt");
-        assert_eq!(del_contrato.entries.len(), 2);
-        assert_eq!(del_contrato.entries.len(), del_prompt.entries.len());
-        for (a, b) in del_contrato.entries.iter().zip(&del_prompt.entries) {
+        .expect("plan from prompt");
+        assert_eq!(from_contract.entries.len(), 2);
+        assert_eq!(from_contract.entries.len(), from_prompt.entries.len());
+        for (a, b) in from_contract.entries.iter().zip(&from_prompt.entries) {
             assert_eq!(a.from.as_bytes(), b.from.as_bytes());
             assert_eq!(a.to.as_bytes(), b.to.as_bytes());
         }
     }
 
-    /// **Un sobre con el contrato NO relaja ni una regla.**
+    /// **A hostile envelope with the contract does not relax a single
+    /// rule.**
     ///
-    /// Es la mitad de seguridad de todo esto: la salida estructurada reduce
-    /// los errores de formato y no dice nada sobre el CONTENIDO. Un `to` con
-    /// traversal es JSON perfectamente válido contra el schema — el schema no
-    /// puede expresar «sin `..`» — así que quien lo rechaza sigue siendo la
-    /// validación local, atendiera el proveedor el contrato o no.
+    /// This is half the security of all of this: structured output reduces
+    /// format errors and says nothing about CONTENT. A `to` with traversal
+    /// is perfectly valid JSON against the schema — the schema cannot
+    /// express "no `..`" — so what rejects it is still local validation,
+    /// whether the provider honored the contract or not.
     #[test]
-    fn un_sobre_hostil_se_rechaza_igual() {
+    fn a_hostile_envelope_is_rejected_the_same() {
         let inputs = [seg(b"A")];
-        for cuerpo in [
-            r#"{"renames":[{"from":"A","to":"../fuera"}]}"#,
+        for body in [
+            r#"{"renames":[{"from":"A","to":"../outside"}]}"#,
             r#"{"renames":[{"from":"A","to":"a/b"}]}"#,
             r#"{"renames":[{"from":"A","to":"..\\evil"}]}"#,
             r#"{"renames":[{"from":"A","to":"!"}]}"#,
             r#"{"renames":[{"from":"Z","to":"z"}]}"#,
         ] {
             assert!(
-                validate_rename_reply(cuerpo, &inputs).is_err(),
-                "coló: {cuerpo}"
+                validate_rename_reply(body, &inputs).is_err(),
+                "slipped through: {body}"
             );
         }
     }
 
-    /// El plan pide el contrato, y el contrato es el que los mecanismos
-    /// nativos aceptan: raíz objeto, `additionalProperties: false`, y sin las
-    /// restricciones de cadena que la salida estructurada de Anthropic
-    /// rechaza (`minLength`, `maxLength`, `pattern`).
+    /// The plan asks for the contract, and the contract is what native
+    /// mechanisms accept: object root, `additionalProperties: false`, and
+    /// without the string constraints Anthropic's structured output
+    /// rejects (`minLength`, `maxLength`, `pattern`).
     #[test]
-    fn el_prompt_lleva_un_contrato_que_los_proveedores_aceptan() {
+    fn the_prompt_carries_a_contract_the_providers_accept() {
         let req = build_rename_prompt(&[seg(b"a.txt")], "lower").expect("prompt");
-        let c = req.json_schema.expect("el plan pide salida tipada");
+        let c = req.json_schema.expect("the plan asks for typed output");
         assert_eq!(c.name, "norte_rename_plan");
         assert_eq!(c.schema["type"], "object");
         assert_eq!(c.schema["additionalProperties"], false);
@@ -1012,35 +1022,35 @@ mod tests {
             c.schema["properties"]["renames"]["items"]["additionalProperties"],
             false
         );
-        let texto = c.schema.to_string();
-        for prohibido in ["minLength", "maxLength", "pattern", "minimum", "maximum"] {
+        let text = c.schema.to_string();
+        for forbidden in ["minLength", "maxLength", "pattern", "minimum", "maximum"] {
             assert!(
-                !texto.contains(prohibido),
-                "`{prohibido}` hace que el schema se rechace entero"
+                !text.contains(forbidden),
+                "`{forbidden}` gets the whole schema rejected"
             );
         }
     }
 
     #[test]
-    fn validate_from_inexistente_es_error() {
+    fn validate_nonexistent_from_is_error() {
         let inputs = [seg(b"A.TXT")];
         assert!(validate_rename_reply(r#"[{"from":"Z.TXT","to":"z"}]"#, &inputs).is_err());
     }
 
     #[test]
-    fn validate_to_con_traversal_es_error() {
+    fn validate_to_with_traversal_is_error() {
         let inputs = [seg(b"A")];
         assert!(validate_rename_reply(r#"[{"from":"A","to":"../x"}]"#, &inputs).is_err());
         assert!(validate_rename_reply(r#"[{"from":"A","to":"a/b"}]"#, &inputs).is_err());
         assert!(validate_rename_reply(r#"[{"from":"A","to":".."}]"#, &inputs).is_err());
         assert!(validate_rename_reply(r#"[{"from":"A","to":"!"}]"#, &inputs).is_err());
-        // security MINOR #M4: backslash = traversal en Windows.
+        // security MINOR #M4: backslash = traversal on Windows.
         assert!(validate_rename_reply(r#"[{"from":"A","to":"..\\evil"}]"#, &inputs).is_err());
         assert!(validate_rename_reply(r#"[{"from":"A","to":"a\\b"}]"#, &inputs).is_err());
     }
 
     #[test]
-    fn validate_destino_duplicado_es_error() {
+    fn validate_duplicate_destination_is_error() {
         let inputs = [seg(b"A"), seg(b"B")];
         assert!(
             validate_rename_reply(r#"[{"from":"A","to":"x"},{"from":"B","to":"x"}]"#, &inputs)
@@ -1049,51 +1059,51 @@ mod tests {
     }
 
     #[test]
-    fn validate_swap_consistente_ok() {
-        // a→b, b→a: cada `to` colisiona con un existente PERO ambos se mueven.
+    fn validate_consistent_swap_ok() {
+        // a→b, b→a: each `to` collides with an existing one BUT both are moved.
         let inputs = [seg(b"a"), seg(b"b")];
         let plan =
             validate_rename_reply(r#"[{"from":"a","to":"b"},{"from":"b","to":"a"}]"#, &inputs)
-                .expect("swap válido");
+                .expect("valid swap");
         assert_eq!(plan.entries.len(), 2);
     }
 
     #[test]
-    fn validate_colision_con_no_renombrado_es_error() {
-        // A→B pero B existe y NO se renombra: colisión.
+    fn validate_collision_with_not_renamed_is_error() {
+        // A→B but B exists and is NOT renamed: collision.
         let inputs = [seg(b"A"), seg(b"B")];
         assert!(validate_rename_reply(r#"[{"from":"A","to":"B"}]"#, &inputs).is_err());
     }
 
     #[test]
-    fn validate_json_roto_es_protocol() {
+    fn validate_broken_json_is_protocol() {
         let inputs = [seg(b"A")];
         assert!(matches!(
-            validate_rename_reply("no soy json", &inputs),
+            validate_rename_reply("i am not json", &inputs),
             Err(AiError::Protocol(_))
         ));
     }
 
-    /// **Un destino que se sale del directorio se rechaza**, venga como
-    /// venga: es la propiedad de seguridad de la fase 8, y el proveedor está
-    /// al otro lado de una red.
+    /// **A destination that leaves the directory is rejected**, no matter
+    /// how it arrives: it is phase 8's security property, and the provider
+    /// is on the other side of a network.
     #[test]
-    fn organizar_rechaza_todo_lo_que_se_sale_del_directorio() {
+    fn organize_rejects_everything_that_leaves_the_directory() {
         let inputs = [seg(b"a.txt")];
-        for malo in [
-            "../fuera.txt",
-            "x/../../fuera.txt",
+        for bad in [
+            "../outside.txt",
+            "x/../../outside.txt",
             "/etc/passwd",
             "",
             "x//y.txt",
             "x/",
             "./x.txt",
-            "..\\fuera.txt",
+            "..\\outside.txt",
             "x/..\\y.txt",
             "!/x.txt",
         ] {
             let reply = serde_json::json!({
-                "moves": [{"current": "a.txt", "proposed_rel": malo}]
+                "moves": [{"current": "a.txt", "proposed_rel": bad}]
             })
             .to_string();
             assert!(
@@ -1101,18 +1111,18 @@ mod tests {
                     validate_organize_reply(&reply, &inputs),
                     Err(AiError::Protocol(_))
                 ),
-                "«{malo}» tenía que rechazarse"
+                "«{bad}» had to be rejected"
             );
         }
     }
 
-    /// Un `current` que no estaba entre los nombres enviados es un plan sobre
-    /// otro directorio.
+    /// A `current` that was not among the sent names is a plan about
+    /// another directory.
     #[test]
-    fn organizar_rechaza_un_origen_que_no_se_mando() {
+    fn organize_rejects_a_source_that_was_not_sent() {
         let inputs = [seg(b"a.txt")];
         let reply = serde_json::json!({
-            "moves": [{"current": "otro.txt", "proposed_rel": "x/otro.txt"}]
+            "moves": [{"current": "other.txt", "proposed_rel": "x/other.txt"}]
         })
         .to_string();
         assert!(matches!(
@@ -1121,12 +1131,13 @@ mod tests {
         ));
     }
 
-    /// Y un plan que se contradice —dos veces el mismo origen, o dos veces el
-    /// mismo destino— tampoco pasa: no se puede cumplir entero.
+    /// And a plan that contradicts itself — twice the same source, or
+    /// twice the same destination — does not pass either: it cannot be
+    /// carried out in full.
     #[test]
-    fn organizar_rechaza_un_plan_que_se_contradice() {
+    fn organize_rejects_a_plan_that_contradicts_itself() {
         let inputs = [seg(b"a.txt"), seg(b"b.txt")];
-        let mismo_origen = serde_json::json!({
+        let same_source = serde_json::json!({
             "moves": [
                 {"current": "a.txt", "proposed_rel": "x/1.txt"},
                 {"current": "a.txt", "proposed_rel": "x/2.txt"}
@@ -1134,10 +1145,10 @@ mod tests {
         })
         .to_string();
         assert!(matches!(
-            validate_organize_reply(&mismo_origen, &inputs),
+            validate_organize_reply(&same_source, &inputs),
             Err(AiError::Protocol(_))
         ));
-        let mismo_destino = serde_json::json!({
+        let same_destination = serde_json::json!({
             "moves": [
                 {"current": "a.txt", "proposed_rel": "x/1.txt"},
                 {"current": "b.txt", "proposed_rel": "x/1.txt"}
@@ -1145,46 +1156,46 @@ mod tests {
         })
         .to_string();
         assert!(matches!(
-            validate_organize_reply(&mismo_destino, &inputs),
+            validate_organize_reply(&same_destination, &inputs),
             Err(AiError::Protocol(_))
         ));
     }
 
-    /// Un plan bueno pasa, con subdirectorios y todo — que es el punto de la
-    /// fase.
+    /// A good plan passes, with subdirectories and all — which is the
+    /// point of the phase.
     #[test]
-    fn organizar_acepta_un_plan_con_subdirectorios() {
-        let inputs = [seg(b"factura.pdf"), seg(b"nota.txt")];
+    fn organize_accepts_a_plan_with_subdirectories() {
+        let inputs = [seg(b"invoice.pdf"), seg(b"note.txt")];
         let reply = serde_json::json!({
             "moves": [
-                {"current": "factura.pdf", "proposed_rel": "facturas/2026/marzo.pdf"},
-                {"current": "nota.txt", "proposed_rel": "notas/nota.txt"}
+                {"current": "invoice.pdf", "proposed_rel": "invoices/2026/march.pdf"},
+                {"current": "note.txt", "proposed_rel": "notes/note.txt"}
             ]
         })
         .to_string();
-        let plan = validate_organize_reply(&reply, &inputs).expect("plan válido");
+        let plan = validate_organize_reply(&reply, &inputs).expect("valid plan");
         assert_eq!(plan.moves.len(), 2);
-        assert_eq!(plan.moves[0].proposed_rel, "facturas/2026/marzo.pdf");
+        assert_eq!(plan.moves[0].proposed_rel, "invoices/2026/march.pdf");
     }
 
-    /// El array pelado también, como en el plan de renombrar: un proveedor
-    /// que ignore el contrato sigue siendo útil.
+    /// The bare array too, as in the rename plan: a provider that ignores
+    /// the contract is still useful.
     #[test]
-    fn organizar_acepta_el_array_pelado() {
+    fn organize_accepts_the_bare_array() {
         let inputs = [seg(b"a.txt")];
         let reply = r#"[{"current": "a.txt", "proposed_rel": "x/a.txt"}]"#;
-        let plan = validate_organize_reply(reply, &inputs).expect("plan válido");
+        let plan = validate_organize_reply(reply, &inputs).expect("valid plan");
         assert_eq!(plan.moves.len(), 1);
     }
 
-    /// Un nombre que no es UTF-8 no sale de la máquina: el prompt se niega a
-    /// construirse, en vez de mandar un reemplazo que el proveedor no puede
-    /// devolver bien.
+    /// A name that is not UTF-8 does not leave the machine: the prompt
+    /// refuses to build, instead of sending a replacement the provider
+    /// cannot return correctly.
     #[test]
-    fn organizar_no_manda_un_nombre_que_no_es_texto() {
+    fn organize_does_not_send_a_name_that_is_not_text() {
         let inputs = [seg(b"caf\xff")];
         assert!(matches!(
-            build_organize_prompt(&inputs, "ordena"),
+            build_organize_prompt(&inputs, "organize"),
             Err(AiError::Protocol(_))
         ));
     }

@@ -1,10 +1,10 @@
-//! `norte-index`: índice `SQLite` FTS5 de nombres/metadata (spec §9, ADR 0034).
+//! `norte-index`: `SQLite` FTS5 name/metadata index (spec §9, ADR 0034).
 //!
-//! Los path/nombre son la AUTORIDAD en su forma `VPath::to_wire()` (percent-
-//! encoded, ASCII, lossless — recupera los bytes exactos vía `VPath::parse`,
-//! regla 1); una vista UTF-8 lossy (`display_lossy`/`from_utf8_lossy`) alimenta
-//! FTS5 para el matching. Índice de solo-lectura tras `build`; single-writer
-//! (dueño = daemon), como el journal (ADR 0020).
+//! The path/name are the AUTHORITY in their `VPath::to_wire()` form
+//! (percent-encoded, ASCII, lossless — recovers the exact bytes via
+//! `VPath::parse`, rule 1); a lossy UTF-8 view (`display_lossy`/
+//! `from_utf8_lossy`) feeds FTS5 for matching. Read-only index after
+//! `build`; single-writer (owner = daemon), like the journal (ADR 0020).
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -18,104 +18,105 @@ use sqlx::sqlite::{
 };
 use tokio_util::sync::CancellationToken;
 
-/// Error del índice.
+/// Index error.
 #[derive(Debug, thiserror::Error)]
 pub enum IndexError {
-    /// Fallo de `SQLite` (abrir, migrar, consultar).
+    /// `SQLite` failure (open, migrate, query).
     #[error("sqlite: {0}")]
     Sqlite(#[from] sqlx::Error),
-    /// Fallo de I/O al pre-crear el fichero del índice con permisos 0600.
+    /// I/O failure while pre-creating the index file with 0600 permissions.
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
-    /// Se intentó guardar un embedding de dimensión 0 (#122).
+    /// An attempt was made to save a dimension-0 embedding (#122).
     ///
-    /// No es un error de almacenamiento sino de quien lo trae: una fila
-    /// `dim = 0` no puede puntuar contra nada —`cosine` la rechaza— así que
-    /// vive en la base ocupando sitio y haciendo que el fichero parezca
-    /// embebido cuando no lo está, y el siguiente `index.embed` no lo
-    /// reintenta porque el hash coincide. Se rechaza en la escritura, que es
-    /// el único sitio donde queda constancia de que el proveedor mintió.
-    #[error("embedding vacío: el proveedor devolvió un vector de dimensión 0")]
+    /// This is not a storage error but the fault of whoever brought it: a
+    /// `dim = 0` row cannot score against anything —`cosine` rejects it— so
+    /// it lives in the database taking up space and making the file look
+    /// embedded when it is not, and the next `index.embed` does not retry it
+    /// because the hash matches. It is rejected on write, which is the only
+    /// place where a record is kept that the provider lied.
+    #[error("empty embedding: the provider returned a dimension-0 vector")]
     EmptyVector,
 }
 
 impl IndexError {
-    /// `true` si es TRANSITORIO (lock ocupado: `SQLITE_BUSY`/`SQLITE_LOCKED`) —
-    /// el caller puede reintentar. La corrupción/otros no son retryables. Sirve
-    /// para que el engine mapee a `Error::Io { retryable }` con fidelidad (rust
+    /// `true` if it is TRANSIENT (lock busy: `SQLITE_BUSY`/`SQLITE_LOCKED`) —
+    /// the caller can retry. Corruption/other errors are not retryable.
+    /// Lets the engine map it to `Error::Io { retryable }` faithfully (rust
     /// review MAJOR).
     #[must_use]
     pub fn is_retryable(&self) -> bool {
         let Self::Sqlite(e) = self else {
-            return false; // Io (pre-create) no es transitorio de lock.
+            return false; // Io (pre-create) is not a lock transient.
         };
         e.as_database_error()
             .and_then(sqlx::error::DatabaseError::code)
-            // Códigos primarios SQLITE_BUSY=5, SQLITE_LOCKED=6.
+            // Primary codes SQLITE_BUSY=5, SQLITE_LOCKED=6.
             .is_some_and(|c| c == "5" || c == "6")
     }
 }
 
-/// Una entrada a indexar (proyección de `norte_vfs::Entry`). `path` completo bajo
-/// el root, en bytes crudos vía `VPath` (regla 1).
+/// An entry to index (projection of `norte_vfs::Entry`). `path` full under
+/// the root, in raw bytes via `VPath` (rule 1).
 #[derive(Debug, Clone)]
 pub struct IndexEntry {
-    /// Path completo bajo el root.
+    /// Full path under the root.
     pub path: VPath,
-    /// Tipo de entrada.
+    /// Entry type.
     pub kind: EntryKind,
-    /// Tamaño (`None` para dirs).
+    /// Size (`None` for dirs).
     pub size: Option<u64>,
-    /// mtime en ms desde epoch (`None` si desconocido).
+    /// mtime in ms since epoch (`None` if unknown).
     pub mtime_ms: Option<i64>,
 }
 
-/// Resumen de un [`Index::build`].
+/// Summary of an [`Index::build`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BuildReport {
-    /// Entradas insertadas o actualizadas.
+    /// Entries inserted or updated.
     pub indexed: u64,
-    /// Filas barridas (paths que ya no existen); 0 si se canceló.
+    /// Rows swept (paths that no longer exist); 0 if cancelled.
     pub removed: u64,
 }
 
-/// Un resultado de [`Index::query`]: el path (bytes exactos reconstruidos) +
+/// A result of [`Index::query`]: the path (exact bytes reconstructed) +
 /// metadata.
 #[derive(Debug, Clone)]
 pub struct IndexHit {
-    /// Path completo (bytes exactos, vía `VPath`).
+    /// Full path (exact bytes, via `VPath`).
     pub path: VPath,
-    /// Tipo.
+    /// Type.
     pub kind: EntryKind,
-    /// Tamaño (`None` para dirs).
+    /// Size (`None` for dirs).
     pub size: Option<u64>,
-    /// mtime ms (`None` si desconocido).
+    /// mtime ms (`None` if unknown).
     pub mtime_ms: Option<i64>,
 }
 
-/// El índice: una conexión `SQLite` (WAL) con `files` + `files_fts`.
+/// The index: a `SQLite` connection (WAL) with `files` + `files_fts`.
 #[derive(Debug, Clone)]
 pub struct Index {
     pool: SqlitePool,
 }
 
 impl Index {
-    /// Abre/crea el índice en `path` (WAL, schema idempotente).
+    /// Opens/creates the index at `path` (WAL, idempotent schema).
     ///
     /// # Errors
-    /// [`IndexError::Sqlite`] si no se puede abrir o migrar.
+    /// [`IndexError::Sqlite`] if it cannot be opened or migrated.
     pub async fn open(path: &Path) -> Result<Self, IndexError> {
-        // Pre-crea el fichero 0600 ANTES de conectar (security review MEDIUM): el
-        // índice guarda NOMBRES/PATHS del usuario (sensibles). Sin esto SQLite lo
-        // crearía con el umask (típicamente 0644). Mismo patrón que el journal;
-        // los sidecars -wal/-shm heredan. Sin lock EXCLUSIVO a propósito: el WAL
-        // da lectura concurrente y el `SQLITE_BUSY` de una escritura simultánea se
-        // reporta retryable (ver `is_retryable`) — así el CLI embebido puede leer
-        // aunque el daemon posea el fichero.
+        // Pre-creates the file 0600 BEFORE connecting (security review
+        // MEDIUM): the index stores the user's NAMES/PATHS (sensitive).
+        // Without this SQLite would create it with the umask (typically
+        // 0644). Same pattern as the journal; the -wal/-shm sidecars
+        // inherit it. No EXCLUSIVE lock on purpose: WAL gives concurrent
+        // reads and the `SQLITE_BUSY` from a simultaneous write is reported
+        // retryable (see `is_retryable`) — this way the embedded CLI can
+        // read even while the daemon owns the file.
         #[cfg(unix)]
         {
-            // tokio::fs::{DirBuilder,OpenOptions} exponen `.mode()` inherente en
-            // unix (sin los traits ext de std).
+            // tokio::fs::{DirBuilder,OpenOptions} expose `.mode()` inherently
+            // on unix (without std's ext traits).
             if let Some(parent) = path.parent() {
                 let mut builder = tokio::fs::DirBuilder::new();
                 builder.recursive(true).mode(0o700);
@@ -134,10 +135,11 @@ impl Index {
             .create_if_missing(true)
             .journal_mode(SqliteJournalMode::Wal)
             .synchronous(SqliteSynchronous::Normal)
-            // PIN, no cambio: sqlx 0.8 ya emite `PRAGMA foreign_keys = ON` por
-            // defecto, pero el CASCADE de `embeddings` DEPENDE de ello (SQLite
-            // solo lo aplica por conexión), así que se fija explícito por si el
-            // default de la dependencia cambia.
+            // PIN, not a change: sqlx 0.8 already emits
+            // `PRAGMA foreign_keys = ON` by default, but `embeddings`'s
+            // CASCADE DEPENDS on it (SQLite only applies it per connection),
+            // so it is set explicitly in case the dependency's default
+            // changes.
             .foreign_keys(true);
         let pool = SqlitePoolOptions::new().connect_with(opts).await?;
         let idx = Self { pool };
@@ -145,17 +147,19 @@ impl Index {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            // Cinturón si el fichero preexistía con otros permisos.
+            // Belt-and-suspenders in case the file pre-existed with other
+            // permissions.
             let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
         }
         Ok(idx)
     }
 
-    /// Índice en memoria (tests). Pool de UNA conexión: cada conexión `SQLite`
-    /// `:memory:` tendría su propia BD, así que se comparte una sola.
+    /// In-memory index (tests). Pool of ONE connection: each `:memory:`
+    /// `SQLite` connection would have its own DB, so a single one is
+    /// shared.
     ///
     /// # Errors
-    /// [`IndexError::Sqlite`] si la migración falla.
+    /// [`IndexError::Sqlite`] if the migration fails.
     pub async fn open_memory() -> Result<Self, IndexError> {
         let opts = SqliteConnectOptions::new()
             .in_memory(true)
@@ -170,8 +174,8 @@ impl Index {
     }
 
     async fn migrate(&self) -> Result<(), IndexError> {
-        // Tabla de autoridad: `path` = VPath::to_wire() (lossless, recuperable);
-        // las columnas *_display (lossy UTF-8) alimentan FTS5.
+        // Authority table: `path` = VPath::to_wire() (lossless, recoverable);
+        // the *_display columns (lossy UTF-8) feed FTS5.
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS files (
                  id INTEGER PRIMARY KEY,
@@ -211,11 +215,12 @@ impl Index {
         )
         .execute(&self.pool)
         .await?;
-        // Embeddings semánticos (M4-IA-2, ADR 0031 A3). Aditivo: un DB viejo gana
-        // la tabla en el siguiente open. Invalidación por (text_hash, model): un
-        // vector de otro modelo cuenta como ausente. El borrado de `files` (sweep
-        // del build) arrastra el embedding vía ON DELETE CASCADE — requiere
-        // foreign_keys(true) en la conexión (se activa en open/open_memory).
+        // Semantic embeddings (M4-IA-2, ADR 0031 A3). Additive: an old DB
+        // gains the table on the next open. Invalidation by
+        // (text_hash, model): a vector from another model counts as absent.
+        // Deleting from `files` (build's sweep) drags its embedding along
+        // via ON DELETE CASCADE — requires foreign_keys(true) on the
+        // connection (enabled in open/open_memory).
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS embeddings (
                  file_id   INTEGER PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE,
@@ -230,10 +235,11 @@ impl Index {
         Ok(())
     }
 
-    /// (Re)indexa `root` con `entries`: upsert por `(root_id, path)`, luego barre
-    /// las filas de ese root NO vistas en este build. Cancelable: si el token se
-    /// dispara, se saltan tanto el resto de entradas como el BARRIDO — las filas
-    /// ya insertadas persisten (superset coherente, jamás una poda equivocada).
+    /// (Re)indexes `root` with `entries`: upsert by `(root_id, path)`, then
+    /// sweeps that root's rows NOT seen in this build. Cancelable: if the
+    /// token fires, both the rest of the entries and the SWEEP are skipped —
+    /// the rows already inserted persist (a coherent superset, never a wrong
+    /// prune).
     ///
     /// # Errors
     /// [`IndexError::Sqlite`].
@@ -253,7 +259,8 @@ impl Index {
         let build_id = prev + 1;
         let mut indexed = 0u64;
         let mut cancelled = false;
-        // Commit por lotes: acota el WAL y deja persistido lo hecho si se cancela.
+        // Commit in batches: bounds the WAL and persists what was done if
+        // cancelled.
         let mut tx = self.pool.begin().await?;
         let mut in_batch = 0u32;
         for e in entries {
@@ -268,11 +275,12 @@ impl Index {
                 .map(|s| String::from_utf8_lossy(s.as_bytes()).into_owned())
                 .unwrap_or_default();
             let path_display = e.path.display_lossy();
-            // Las columnas *_display son FUNCIÓN de `path` (la clave del
-            // conflicto), así que NO cambian para una fila dada → el UPDATE solo
-            // toca kind/size/mtime y NO hay trigger AFTER UPDATE. INVARIANTE
-            // (rust review MINOR): jamás añadir `name_display`/`path_display` a
-            // este DO UPDATE sin un trigger AFTER UPDATE, o la FTS se desincroniza.
+            // The *_display columns are a FUNCTION of `path` (the conflict
+            // key), so they do NOT change for a given row → the UPDATE only
+            // touches kind/size/mtime and there is NO AFTER UPDATE trigger.
+            // INVARIANT (rust review MINOR): never add `name_display`/
+            // `path_display` to this DO UPDATE without an AFTER UPDATE
+            // trigger, or the FTS goes out of sync.
             sqlx::query(
                 "INSERT INTO files
                      (root_id, path, name_display, path_display, kind, size, mtime_ms, last_seen_build)
@@ -313,10 +321,10 @@ impl Index {
         Ok(BuildReport { indexed, removed })
     }
 
-    /// Busca en el índice de `root` por `text` (FTS5 MATCH, prefijo-AND de los
-    /// términos), rankeado por bm25, hasta `limit` hits. El `text` del usuario se
-    /// SANEA a una query FTS5 válida (no se pasa crudo — evita errores de sintaxis
-    /// por `*`/`"`/`:`). Query vacía tras sanear → sin hits.
+    /// Searches `root`'s index for `text` (FTS5 MATCH, prefix-AND of the
+    /// terms), ranked by bm25, up to `limit` hits. The user's `text` is
+    /// SANITIZED into a valid FTS5 query (not passed raw — avoids syntax
+    /// errors from `*`/`"`/`:`). An empty query after sanitizing → no hits.
     ///
     /// # Errors
     /// [`IndexError::Sqlite`].
@@ -344,20 +352,21 @@ impl Index {
         let mut hits = Vec::with_capacity(rows.len());
         for r in rows {
             let path_wire: String = r.get("path");
-            // Reconstruye el VPath desde la forma wire (lossless). Un valor
-            // corrupto (imposible: lo escribió `build`) se salta, no panica.
+            // Reconstructs the VPath from the wire form (lossless). A
+            // corrupt value (impossible: `build` wrote it) is skipped, no
+            // panic.
             let Ok(path) = VPath::parse(&path_wire) else {
                 continue;
             };
             hits.push(IndexHit {
                 path,
                 kind: kind_from_i64(r.get::<i64, _>("kind")),
-                // Un `size` negativo es una fila IMPOSIBLE (nada lo escribe
-                // así), y por eso importa que las dos lecturas la traten
-                // igual: hasta #122, `query` la devolvía como `Some(0)` —un
-                // fichero vacío, que es una afirmación— y `files_for_embed`
-                // como `None` —«no se sabe», que es la verdad—. Ahora las dos
-                // dicen `None`.
+                // A negative `size` is an IMPOSSIBLE row (nothing writes it
+                // that way), and that is why it matters that both reads
+                // treat it the same: until #122, `query` returned it as
+                // `Some(0)` —an empty file, which is an assertion— and
+                // `files_for_embed` as `None` —"unknown", which is the
+                // truth—. Now both say `None`.
                 size: r
                     .get::<Option<i64>, _>("size")
                     .and_then(|v| u64::try_from(v).ok()),
@@ -367,9 +376,9 @@ impl Index {
         Ok(hits)
     }
 
-    /// Filas de `files` con `kind = file` bajo `root`: el UNIVERSO de
-    /// `index.embed` (los dirs/symlinks/other no se embeben). Vacío ⇒ sin
-    /// build previo de ese root.
+    /// `files` rows with `kind = file` under `root`: the UNIVERSE of
+    /// `index.embed` (dirs/symlinks/other are not embedded). Empty ⇒ no
+    /// prior build of that root.
     ///
     /// # Errors
     /// [`IndexError::Sqlite`].
@@ -383,20 +392,20 @@ impl Index {
         Ok(rows
             .into_iter()
             .filter_map(|r| {
-                // Un path corrupto (imposible: lo escribió `build`) se salta
-                // — pero JAMÁS en silencio (encoding audit M4-IA-2 S3): un
-                // salto mudo aquí deja un fichero sin embedding y sin rastro
-                // de por qué, y el scheduler lo reintentaría en cada pasada.
-                // Se registra el rowid y la LONGITUD en bytes del TEXT
-                // guardado; nunca el path (bytes de usuario, spec §6 — un
-                // nombre hostil no se vuelca crudo a un log).
+                // A corrupt path (impossible: `build` wrote it) is skipped
+                // — but NEVER silently (encoding audit M4-IA-2 S3): a mute
+                // skip here leaves a file without an embedding and without
+                // a trace of why, and the scheduler would retry it on every
+                // pass. The rowid and the byte LENGTH of the stored TEXT are
+                // logged; never the path (user bytes, spec §6 — a hostile
+                // name is not dumped raw to a log).
                 let file_id: i64 = r.get("id");
                 let raw: String = r.get("path");
                 let Ok(path) = VPath::parse(&raw) else {
                     tracing::warn!(
                         file_id,
                         path_len = raw.len(),
-                        "fila de `files` con path ilegible: se salta para embedding"
+                        "`files` row with unreadable path: skipped for embedding"
                     );
                     return None;
                 };
@@ -411,49 +420,52 @@ impl Index {
             .collect())
     }
 
-    /// ¿Hay ALGO que embeber bajo `root`? (#122)
+    /// Is there ANYTHING to embed under `root`? (#122)
     ///
-    /// Es la pregunta que hace el pre-check de `index.embed`, y la única que
-    /// hace: quería saber si el universo está vacío, y para eso materializaba
-    /// la lista ENTERA de candidatos —con su `VPath::parse` por fila— para
-    /// mirarle el `is_empty()` y tirarla. En un árbol grande eso es el barrido
-    /// completo dos veces por embed, una de ellas para nada.
+    /// This is the question `index.embed`'s pre-check asks, and the only
+    /// one it asks: it wanted to know if the universe is empty, and for
+    /// that it materialized the ENTIRE list of candidates —with its
+    /// `VPath::parse` per row— just to look at its `is_empty()` and throw it
+    /// away. On a large tree that is the full sweep done twice per embed,
+    /// one of them for nothing.
     ///
-    /// Mismo predicado que [`Self::files_for_embed`], a propósito: si los dos
-    /// divergieran, el pre-check diría «hay trabajo» sobre una lista que sale
-    /// vacía y la Task fallaría al arrancar, que es justo lo que el pre-check
-    /// existe para evitar. Una fila con el path corrupto sí cuenta aquí y no
-    /// allí, y esa asimetría es la buena: deja a la Task sin trabajo, no sin
-    /// universo, y `files_for_embed` ya registra por qué se la saltó.
+    /// The same predicate as [`Self::files_for_embed`], on purpose: if the
+    /// two diverged, the pre-check would say "there is work" over a list
+    /// that comes out empty and the Task would fail on start, which is
+    /// exactly what the pre-check exists to avoid. A row with a corrupt path
+    /// DOES count here and not there, and that asymmetry is the good one:
+    /// it leaves the Task without work, not without a universe, and
+    /// `files_for_embed` already logs why it was skipped.
     ///
     /// # Errors
     /// [`IndexError::Sqlite`].
     pub async fn has_files_for_embed(&self, root: &VPath) -> Result<bool, IndexError> {
         let rid = root_id(root);
-        let hay: i64 = sqlx::query_scalar(
+        let there_is: i64 = sqlx::query_scalar(
             "SELECT EXISTS(SELECT 1 FROM files WHERE root_id = ?1 AND kind = ?2)",
         )
         .bind(rid)
         .bind(kind_to_i64(EntryKind::File))
         .fetch_one(&self.pool)
         .await?;
-        Ok(hay != 0)
+        Ok(there_is != 0)
     }
 
-    /// Borra los embeddings de los ficheros de `root` cuyo `file_id` esté en
-    /// `file_ids`, y dice CUÁNTOS borró (#122).
+    /// Deletes the embeddings of `root`'s files whose `file_id` is in
+    /// `file_ids`, and says HOW MANY it deleted (#122).
     ///
-    /// Existe para que una denegación pueda aplicarse hacia ATRÁS. El filtro
-    /// de `denied_prefixes` decide qué se lee, o sea que protege lo que
-    /// todavía no se ha embebido; un fichero que se embebió ANTES de que el
-    /// usuario lo denegara deja su vector guardado para siempre, y un vector
-    /// es invertible a una aproximación del texto. Sin esto, la única forma de
-    /// honrar una denegación nueva era borrar `index.db` entero.
+    /// Exists so that a denial can be applied BACKWARDS. The
+    /// `denied_prefixes` filter decides what gets read, i.e. it protects
+    /// what has not been embedded yet; a file that was embedded BEFORE the
+    /// user denied it keeps its vector saved forever, and a vector is
+    /// invertible to an approximation of the text. Without this, the only
+    /// way to honor a new denial was to delete the whole `index.db`.
     ///
-    /// Toma `file_ids` y no rutas a propósito: quién cae bajo un prefijo lo
-    /// decide `norte-core` con su `policy::is_under` —que sabe de plegado y de
-    /// fronteras de segmento—, y reimplementar aquí una comparación de rutas
-    /// en SQL sería una segunda respuesta a la misma pregunta.
+    /// Takes `file_ids` and not paths on purpose: who falls under a prefix
+    /// is decided by `norte-core` with its `policy::is_under` —which knows
+    /// about folding and segment boundaries—, and reimplementing a path
+    /// comparison here in SQL would be a second answer to the same
+    /// question.
     ///
     /// # Errors
     /// [`IndexError::Sqlite`].
@@ -461,28 +473,28 @@ impl Index {
         if file_ids.is_empty() {
             return Ok(0);
         }
-        // De uno en uno y no con un `IN (...)` construido a mano: `sqlx` no
-        // liga listas, y componer el SQL con los ids sería concatenar valores
-        // dentro de una sentencia. Son unidades o decenas, y esto corre una
-        // vez por task de embed.
-        let mut borrados = 0u64;
+        // One at a time and not with a hand-built `IN (...)`: `sqlx` does
+        // not bind lists, and composing the SQL with the ids would mean
+        // concatenating values inside a statement. These are units or tens,
+        // and this runs once per embed task.
+        let mut removed = 0u64;
         for id in file_ids {
             let r = sqlx::query("DELETE FROM embeddings WHERE file_id = ?1")
                 .bind(id)
                 .execute(&self.pool)
                 .await?;
-            borrados += r.rows_affected();
+            removed += r.rows_affected();
         }
-        Ok(borrados)
+        Ok(removed)
     }
 
-    /// Los `file_id` y rutas de TODOS los ficheros de `root` que tienen
-    /// embedding guardado, sea del modelo que sea (#122).
+    /// The `file_id`s and paths of ALL of `root`'s files that have a saved
+    /// embedding, whatever the model (#122).
     ///
-    /// «Sea del modelo que sea» es deliberado: lo que se purga es un dato del
-    /// usuario, y un vector de un modelo viejo lo sigue siendo. Filtrar por
-    /// modelo dejaría atrás justo las filas rancias que nadie vuelve a mirar y
-    /// que nada recoge.
+    /// "Whatever the model" is deliberate: what is being purged is user
+    /// data, and a vector from an old model still is. Filtering by model
+    /// would leave behind exactly the stale rows that nobody looks at again
+    /// and that nothing collects.
     ///
     /// # Errors
     /// [`IndexError::Sqlite`].
@@ -501,15 +513,16 @@ impl Index {
             .filter_map(|r| {
                 let file_id: i64 = r.get("file_id");
                 let raw: String = r.get("path");
-                // Un path ilegible no se puede comparar contra un prefijo
-                // denegado, así que NO se puede afirmar que esté permitido. Se
-                // deja fuera de la purga y se DICE: un salto mudo aquí es un
-                // vector que sobrevive a una denegación sin que nada lo cuente.
+                // An unreadable path cannot be compared against a denied
+                // prefix, so it cannot be asserted that it is allowed. It is
+                // left out of the purge and it is SAID: a mute skip here is
+                // a vector that survives a denial without anything counting
+                // it.
                 let Ok(path) = VPath::parse(&raw) else {
                     tracing::warn!(
                         file_id,
                         path_len = raw.len(),
-                        "embedding con path ilegible: no se puede decidir si está denegado"
+                        "embedding with unreadable path: cannot decide whether it is denied"
                     );
                     return None;
                 };
@@ -518,13 +531,13 @@ impl Index {
             .collect())
     }
 
-    /// `text_hash` por `file_id` de los embeddings de `root` calculados con
-    /// `model`. Un embedding de un modelo DISTINTO no aparece (stale = ausente):
-    /// el caller lo tratará como pendiente de re-embeber. Una fila con BLOB
-    /// incoherente (`length(vec) != dim * 4`) TAMPOCO aparece: como
-    /// [`Self::embeddings_for_root`] la salta en búsqueda, reportar su hash la
-    /// dejaría "al día" para el scheduler pero invisible — ausente aquí ⇒ se
-    /// re-embebe y se repara sola.
+    /// `text_hash` per `file_id` of `root`'s embeddings computed with
+    /// `model`. An embedding from a DIFFERENT model does not appear (stale =
+    /// absent): the caller will treat it as pending re-embedding. A row with
+    /// an inconsistent BLOB (`length(vec) != dim * 4`) does NOT appear
+    /// either: like [`Self::embeddings_for_root`] skips it in search,
+    /// reporting its hash would leave it "up to date" for the scheduler but
+    /// invisible — absent here ⇒ it gets re-embedded and repairs itself.
     ///
     /// # Errors
     /// [`IndexError::Sqlite`].
@@ -550,12 +563,12 @@ impl Index {
             .collect())
     }
 
-    /// Inserta o reemplaza el embedding de `file_id` (un vector por fichero:
-    /// re-embeber con otro modelo o hash SUSTITUYE al anterior).
+    /// Inserts or replaces `file_id`'s embedding (one vector per file:
+    /// re-embedding with another model or hash REPLACES the previous one).
     ///
     /// # Errors
-    /// [`IndexError::Sqlite`] (p. ej. `file_id` inexistente viola la FK);
-    /// [`IndexError::EmptyVector`] si `vec` está vacío.
+    /// [`IndexError::Sqlite`] (e.g. a nonexistent `file_id` violates the
+    /// FK); [`IndexError::EmptyVector`] if `vec` is empty.
     pub async fn upsert_embedding(
         &self,
         file_id: i64,
@@ -583,9 +596,9 @@ impl Index {
         Ok(())
     }
 
-    /// Los embeddings de `model` como `(path, vector)`: de un `root` concreto, o
-    /// de TODOS los roots si `root` es `None`. Las filas con BLOB corrupto o
-    /// `dim` incoherente se SALTAN (jamás rompen la búsqueda).
+    /// `model`'s embeddings as `(path, vector)`: from a specific `root`, or
+    /// from ALL roots if `root` is `None`. Rows with a corrupt BLOB or an
+    /// inconsistent `dim` are SKIPPED (they never break the search).
     ///
     /// # Errors
     /// [`IndexError::Sqlite`].
@@ -619,41 +632,42 @@ impl Index {
         Ok(rows
             .into_iter()
             .filter_map(|r| {
-                // Path ilegible ⇒ se salta, pero con RASTRO (encoding audit
-                // M4-IA-2 S3): sin el warn, un embedding húerfano desaparece
-                // de toda búsqueda semántica sin que nada lo diga. Se
-                // registra el `file_id` y la longitud del TEXT, jamás los
-                // bytes del path (spec §6: no se vuelcan crudos a un log).
+                // Unreadable path ⇒ skipped, but with a TRACE (encoding
+                // audit M4-IA-2 S3): without the warn, an orphaned
+                // embedding disappears from every semantic search without
+                // anything saying so. The `file_id` and the TEXT's length
+                // are logged, never the path's bytes (spec §6: not dumped
+                // raw to a log).
                 let file_id: i64 = r.get("file_id");
                 let raw: String = r.get("path");
                 let Ok(path) = VPath::parse(&raw) else {
                     tracing::warn!(
                         file_id,
                         path_len = raw.len(),
-                        "embedding con path ilegible: se salta en la búsqueda"
+                        "embedding with unreadable path: skipped in search"
                     );
                     return None;
                 };
                 let v = decode_vec(&r.get::<Vec<u8>, _>("vec"))?;
-                // Coherencia dim⟷blob: una fila corrupta se salta, no panica.
+                // dim⟷blob consistency: a corrupt row is skipped, no panic.
                 (i64::try_from(v.len()) == Ok(r.get::<i64, _>("dim"))).then_some((path, v))
             })
             .collect())
     }
 }
 
-/// Fila de `files` candidata a embedding (`kind = file`).
+/// A `files` row that is a candidate for embedding (`kind = file`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EmbedCandidate {
-    /// Rowid de `files` (clave del embedding).
+    /// `files`'s rowid (the embedding's key).
     pub file_id: i64,
-    /// Path completo (bytes exactos, wire encoding).
+    /// Full path (exact bytes, wire encoding).
     pub path: VPath,
-    /// Tamaño si el build lo conocía.
+    /// Size if the build knew it.
     pub size: Option<u64>,
 }
 
-/// Codifica un vector como BLOB f32 little-endian (`dim * 4` bytes).
+/// Encodes a vector as a little-endian f32 BLOB (`dim * 4` bytes).
 #[must_use]
 pub fn encode_vec(v: &[f32]) -> Vec<u8> {
     let mut out = Vec::with_capacity(v.len() * 4);
@@ -663,7 +677,7 @@ pub fn encode_vec(v: &[f32]) -> Vec<u8> {
     out
 }
 
-/// Decodifica un BLOB f32-LE. `None` si la longitud no es múltiplo de 4.
+/// Decodes an f32-LE BLOB. `None` if the length is not a multiple of 4.
 #[must_use]
 pub fn decode_vec(blob: &[u8]) -> Option<Vec<f32>> {
     if !blob.len().is_multiple_of(4) {
@@ -676,13 +690,14 @@ pub fn decode_vec(blob: &[u8]) -> Option<Vec<f32>> {
     )
 }
 
-/// Id estable del root desde su forma canónica (`scheme://authority` + base).
-/// FNV-1a de 64 bits sobre `to_wire()`; estable entre procesos Y entre
-/// endianness (bytes little-endian, no `to_ne_bytes` — así una `.db` copiada a
-/// otra máquina conserva el id, encoding review). Solo es una clave de SCOPING
-/// (`WHERE root_id = ?`), jamás autoridad: una colisión (64 bits, ínfima)
-/// mezclaría a lo sumo dos roots, sin corromper bytes. Deuda (root table
-/// interna) en ADR 0034 si el confused-deputy importa.
+/// Stable id of the root from its canonical form (`scheme://authority` +
+/// base). 64-bit FNV-1a over `to_wire()`; stable across processes AND
+/// across endianness (little-endian bytes, not `to_ne_bytes` — this way a
+/// `.db` copied to another machine keeps its id, encoding review). It is
+/// only a SCOPING key (`WHERE root_id = ?`), never an authority: a
+/// collision (64 bits, minuscule) would mix at most two roots, without
+/// corrupting bytes. Debt (internal root table) in ADR 0034 if the
+/// confused-deputy matters.
 fn root_id(root: &VPath) -> i64 {
     let s = root.to_wire();
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
@@ -693,7 +708,7 @@ fn root_id(root: &VPath) -> i64 {
     i64::from_le_bytes(h.to_le_bytes())
 }
 
-/// Discriminante estable de `EntryKind` para la columna `kind`.
+/// Stable discriminant of `EntryKind` for the `kind` column.
 fn kind_to_i64(k: EntryKind) -> i64 {
     match k {
         EntryKind::File => 0,
@@ -712,10 +727,10 @@ fn kind_from_i64(v: i64) -> EntryKind {
     }
 }
 
-/// Convierte el texto libre del usuario en una query FTS5 SEGURA: separa por
-/// whitespace, deja solo caracteres seguros de cada token, y emite cada token no
-/// vacío como prefijo citado (`"tok"*`), unidos por espacio (AND). `None` si no
-/// queda ningún token (query vacía).
+/// Converts the user's free text into a SAFE FTS5 query: splits on
+/// whitespace, keeps only safe characters from each token, and emits every
+/// non-empty token as a quoted prefix (`"tok"*`), joined by a space (AND).
+/// `None` if no token remains (empty query).
 fn sanitize_fts_query(text: &str) -> Option<String> {
     let mut parts = Vec::new();
     for tok in text.split_whitespace() {
@@ -777,7 +792,7 @@ mod tests {
             .unwrap();
         assert_eq!(r.indexed, 2);
         assert_eq!(r.removed, 0);
-        // Reindex: alpha se queda, beta desaparece, gamma nuevo → 1 removed.
+        // Reindex: alpha stays, beta disappears, gamma is new → 1 removed.
         let r2 = idx
             .build(
                 &root,
@@ -786,7 +801,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(r2.removed, 1, "beta barrido");
+        assert_eq!(r2.removed, 1, "beta swept");
         let n: i64 = sqlx::query_scalar("SELECT count(*) FROM files")
             .fetch_one(&idx.pool)
             .await
@@ -798,24 +813,24 @@ mod tests {
     async fn query_matches_and_non_utf8_roundtrips_byte_exact() {
         let idx = Index::open_memory().await.unwrap();
         let root = root();
-        let hostile = b"informe-a\xff\xfe.txt"; // no-UTF8
+        let hostile = b"report-a\xff\xfe.txt"; // non-UTF8
         let tok = CancellationToken::new();
         idx.build(
             &root,
-            vec![entry(&root, b"informe-anual.txt"), entry(&root, hostile)],
+            vec![entry(&root, b"annual-report.txt"), entry(&root, hostile)],
             &tok,
         )
         .await
         .unwrap();
-        let hits = idx.query(&root, "informe", 10).await.unwrap();
-        assert_eq!(hits.len(), 2, "prefijo 'informe' casa ambos");
+        let hits = idx.query(&root, "report", 10).await.unwrap();
+        assert_eq!(hits.len(), 2, "the 'report' prefix matches both");
         let got: Vec<Vec<u8>> = hits
             .iter()
             .map(|h| h.path.file_name().unwrap().as_bytes().to_vec())
             .collect();
         assert!(
             got.iter().any(|n| n.as_slice() == hostile),
-            "el nombre no-UTF8 vuelve BYTE-EXACTO desde la autoridad"
+            "the non-UTF8 name comes back BYTE-EXACT from the authority"
         );
     }
 
@@ -823,7 +838,7 @@ mod tests {
     async fn build_cancel_persists_partial_superset_and_skips_sweep() {
         let idx = Index::open_memory().await.unwrap();
         let root = root();
-        // Primer build: a, b.
+        // First build: a, b.
         let tok = CancellationToken::new();
         idx.build(
             &root,
@@ -832,10 +847,11 @@ mod tests {
         )
         .await
         .unwrap();
-        // Segundo build que INSERTA c y luego se cancela ANTES de d: el token se
-        // dispara al tirar del 2º item (i==1), así c ya se procesó pero el sweep
-        // se salta. Resultado = SUPERSET (a, b viejos + c nuevo), removed=0. Esto
-        // prueba el camino "coherente superset", no solo el skip-sweep (rust MINOR).
+        // Second build that INSERTS c and then cancels BEFORE d: the token
+        // fires when pulling the 2nd item (i==1), so c was already
+        // processed but the sweep is skipped. Result = SUPERSET (old a, b +
+        // new c), removed=0. This tests the "coherent superset" path, not
+        // just the skip-sweep (rust MINOR).
         let cancelled = CancellationToken::new();
         let c2 = cancelled.clone();
         let items = vec![entry(&root, b"c.txt"), entry(&root, b"d.txt")]
@@ -848,20 +864,23 @@ mod tests {
                 e
             });
         let r = idx.build(&root, items, &cancelled).await.unwrap();
-        assert_eq!(r.removed, 0, "cancelado NO barre (b/d no se podan)");
+        assert_eq!(
+            r.removed, 0,
+            "cancelled does NOT sweep (b/d are not pruned)"
+        );
         let names: Vec<String> = sqlx::query_scalar("SELECT path FROM files ORDER BY path")
             .fetch_all(&idx.pool)
             .await
             .unwrap();
-        // a, b (viejos) + c (parcial nuevo); d nunca se insertó.
-        assert_eq!(names.len(), 3, "superset a+b+c, fue {names:?}");
+        // a, b (old) + c (new partial); d was never inserted.
+        assert_eq!(names.len(), 3, "superset a+b+c, was {names:?}");
         assert!(
             names.iter().any(|p| p.ends_with("c.txt")),
-            "c parcial persistió"
+            "partial c persisted"
         );
         assert!(
             names.iter().all(|p| !p.ends_with("d.txt")),
-            "d no se insertó"
+            "d was not inserted"
         );
     }
 
@@ -892,7 +911,7 @@ mod tests {
         assert_eq!(hashes.get(&id).map(Vec::as_slice), Some(&b"hash-a"[..]));
         let vecs = idx.embeddings_for_root(Some(&root), "m1").await.unwrap();
         assert_eq!(vecs, vec![(cands[0].path.clone(), vec![1.0, 0.0])]);
-        // Re-embed del mismo fichero: el upsert reemplaza vector y hash.
+        // Re-embed of the same file: the upsert replaces the vector and hash.
         idx.upsert_embedding(id, "m1", &[0.0, 1.0], b"hash-b")
             .await
             .unwrap();
@@ -912,7 +931,7 @@ mod tests {
         idx.upsert_embedding(id, "old-model", &[1.0], b"h")
             .await
             .unwrap();
-        // Modelo distinto ⇒ el embedding viejo cuenta como AUSENTE.
+        // Different model ⇒ the old embedding counts as ABSENT.
         assert!(
             idx.embedding_hashes(&root, "new-model")
                 .await
@@ -925,7 +944,7 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
-        // Sin filtro de root: aparece el del modelo viejo.
+        // Without a root filter: the old model's shows up.
         assert_eq!(
             idx.embeddings_for_root(None, "old-model")
                 .await
@@ -945,8 +964,9 @@ mod tests {
             .unwrap();
         let id = idx.files_for_embed(&root).await.unwrap()[0].file_id;
         idx.upsert_embedding(id, "m", &[1.0], b"h").await.unwrap();
-        // Rebuild sin el fichero: el sweep borra la fila de `files` y el
-        // ON DELETE CASCADE arrastra su embedding (pin de foreign_keys=ON).
+        // Rebuild without the file: the sweep deletes the `files` row and
+        // the ON DELETE CASCADE drags its embedding along (pin of
+        // foreign_keys=ON).
         idx.build(&root, std::iter::empty::<IndexEntry>(), &tok)
             .await
             .unwrap();
@@ -976,9 +996,10 @@ mod tests {
         idx.upsert_embedding(id, "m", &[1.0, 0.0], b"h")
             .await
             .unwrap();
-        // Corrompe el BLOB a mano (length != dim * 4): la fila debe leerse como
-        // AUSENTE en embedding_hashes — si devolviera el hash, el scheduler la
-        // creería al día y jamás se repararía (review MAJOR-1).
+        // Corrupts the BLOB by hand (length != dim * 4): the row must read
+        // as ABSENT in embedding_hashes — if it returned the hash, the
+        // scheduler would believe it up to date and it would never be
+        // repaired (review MAJOR-1).
         sqlx::query("UPDATE embeddings SET vec = X'00' WHERE file_id = ?")
             .bind(id)
             .execute(&idx.pool)
@@ -997,9 +1018,9 @@ mod tests {
             .unwrap();
         let id = idx.files_for_embed(&root).await.unwrap()[0].file_id;
         idx.upsert_embedding(id, "m", &[1.0], b"h").await.unwrap();
-        // Rebuild con el fichero AÚN presente: el upsert de `build` debe
-        // conservar el rowid (ON CONFLICT DO UPDATE, jamás INSERT OR REPLACE)
-        // o el CASCADE barrería TODOS los embeddings en cada rebuild.
+        // Rebuild with the file STILL present: `build`'s upsert must keep
+        // the rowid (ON CONFLICT DO UPDATE, never INSERT OR REPLACE) or the
+        // CASCADE would sweep ALL embeddings on every rebuild.
         idx.build(&root, vec![entry(&root, b"a.txt")], &tok)
             .await
             .unwrap();
@@ -1009,7 +1030,7 @@ mod tests {
                 .unwrap()
                 .len(),
             1,
-            "el rebuild preserva el embedding (rowid estable)"
+            "the rebuild preserves the embedding (stable rowid)"
         );
     }
 
@@ -1017,7 +1038,7 @@ mod tests {
     async fn embedding_hostile_path_roundtrips_byte_exact() {
         let idx = Index::open_memory().await.unwrap();
         let root = root();
-        let hostile = b"informe-a\xff\xfe.txt"; // no-UTF8
+        let hostile = b"report-a\xff\xfe.txt"; // non-UTF8
         let tok = CancellationToken::new();
         idx.build(&root, vec![entry(&root, hostile)], &tok)
             .await
@@ -1031,14 +1052,15 @@ mod tests {
         assert_eq!(
             vecs[0].0.file_name().unwrap().as_bytes(),
             hostile,
-            "el nombre no-UTF8 vuelve BYTE-EXACTO por la ruta de embeddings"
+            "the non-UTF8 name comes back BYTE-EXACT through the embeddings path"
         );
     }
 
     #[tokio::test]
     async fn upsert_embedding_nonexistent_file_id_errors() {
         let idx = Index::open_memory().await.unwrap();
-        // FK: un file_id que no existe en `files` se RECHAZA, no se inserta.
+        // FK: a file_id that does not exist in `files` is REJECTED, not
+        // inserted.
         assert!(idx.upsert_embedding(999, "m", &[1.0], b"h").await.is_err());
     }
 
@@ -1059,16 +1081,16 @@ mod tests {
         assert_eq!(idx.files_for_embed(&root).await.unwrap().len(), 1);
     }
 
-    /// **Un vector guardado se puede OLVIDAR** (#122): sin esto, la única
-    /// forma de honrar una denegación nueva era borrar `index.db` entero.
+    /// **A saved vector can be FORGOTTEN** (#122): without this, the only
+    /// way to honor a new denial was to delete `index.db` entirely.
     #[tokio::test]
-    async fn un_embedding_se_puede_olvidar() {
+    async fn an_embedding_can_be_forgotten() {
         let idx = Index::open_memory().await.unwrap();
         let root = root();
         let tok = CancellationToken::new();
         idx.build(
             &root,
-            vec![entry(&root, b"publico.txt"), entry(&root, b"secreto.txt")],
+            vec![entry(&root, b"public.txt"), entry(&root, b"secret.txt")],
             &tok,
         )
         .await
@@ -1080,20 +1102,20 @@ mod tests {
         }
         assert_eq!(idx.embedded_files(&root).await.unwrap().len(), 2);
 
-        let secreto = idx
+        let secret = idx
             .embedded_files(&root)
             .await
             .unwrap()
             .into_iter()
-            .find(|(_, p)| p.display_lossy().ends_with("secreto.txt"))
-            .expect("está");
-        assert_eq!(idx.forget_embeddings(&[secreto.0]).await.unwrap(), 1);
+            .find(|(_, p)| p.display_lossy().ends_with("secret.txt"))
+            .expect("is there");
+        assert_eq!(idx.forget_embeddings(&[secret.0]).await.unwrap(), 1);
 
-        let quedan = idx.embedded_files(&root).await.unwrap();
-        assert_eq!(quedan.len(), 1, "solo se fue el denegado");
-        assert!(quedan[0].1.display_lossy().ends_with("publico.txt"));
-        // Y desaparece de la BÚSQUEDA, que es lo que de verdad importa: un
-        // vector que sigue puntuando es el texto del fichero contestando.
+        let remaining = idx.embedded_files(&root).await.unwrap();
+        assert_eq!(remaining.len(), 1, "only the denied one is gone");
+        assert!(remaining[0].1.display_lossy().ends_with("public.txt"));
+        // And it disappears from the SEARCH, which is what really matters: a
+        // vector that still scores is the file's text answering.
         assert_eq!(
             idx.embeddings_for_root(Some(&root), "m")
                 .await
@@ -1103,10 +1125,10 @@ mod tests {
         );
     }
 
-    /// Olvidar una lista vacía no borra nada. Es el caso de cada task de embed
-    /// sin nada denegado, o sea el común.
+    /// Forgetting an empty list deletes nothing. This is the case for every
+    /// embed task with nothing denied, i.e. the common one.
     #[tokio::test]
-    async fn olvidar_nada_no_borra_nada() {
+    async fn forgetting_nothing_deletes_nothing() {
         let idx = Index::open_memory().await.unwrap();
         let root = root();
         let tok = CancellationToken::new();
@@ -1121,11 +1143,12 @@ mod tests {
         assert_eq!(idx.embedded_files(&root).await.unwrap().len(), 1);
     }
 
-    /// **`embedded_files` no filtra por modelo, y es deliberado**: un vector de
-    /// un modelo viejo sigue siendo un dato del usuario. Filtrar dejaría atrás
-    /// justo las filas rancias que nadie vuelve a mirar y que nada recoge.
+    /// **`embedded_files` does not filter by model, and it is deliberate**:
+    /// a vector from an old model is still user data. Filtering would leave
+    /// behind exactly the stale rows that nobody looks at again and that
+    /// nothing collects.
     #[tokio::test]
-    async fn un_vector_de_otro_modelo_tambien_se_ve_para_purgar() {
+    async fn a_vector_from_another_model_is_also_visible_for_purging() {
         let idx = Index::open_memory().await.unwrap();
         let root = root();
         let tok = CancellationToken::new();
@@ -1133,21 +1156,21 @@ mod tests {
             .await
             .unwrap();
         let c = idx.files_for_embed(&root).await.unwrap();
-        idx.upsert_embedding(c[0].file_id, "modelo-viejo", &[1.0], b"h")
+        idx.upsert_embedding(c[0].file_id, "old-model", &[1.0], b"h")
             .await
             .unwrap();
 
         assert!(
-            idx.embeddings_for_root(Some(&root), "modelo-nuevo")
+            idx.embeddings_for_root(Some(&root), "new-model")
                 .await
                 .unwrap()
                 .is_empty(),
-            "la búsqueda con el modelo nuevo ya no lo ve…"
+            "the search with the new model no longer sees it…"
         );
         assert_eq!(
             idx.embedded_files(&root).await.unwrap().len(),
             1,
-            "…pero la purga sí, que es el punto"
+            "…but the purge does, which is the point"
         );
     }
 }

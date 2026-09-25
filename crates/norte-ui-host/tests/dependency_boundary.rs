@@ -1,27 +1,27 @@
-//! La frontera del host, comprobada contra el grafo REAL de cargo.
+//! The host's boundary, checked against cargo's REAL graph.
 //!
-//! Dos cosas que este crate no puede alcanzar, por motivos distintos
+//! Two things this crate must never reach, for different reasons
 //! (ADR 0066):
 //!
-//! - **Ningún toolkit de pintado.** Si el host conociera a uno, dejaría de
-//!   ser el host de los demás — y la decisión D2 dice que el renderer es un
-//!   adaptador, no una capa de la arquitectura.
-//! - **El core.** El host habla por el SDK; arrastrar el engine, los
-//!   providers o el scheduler sería reabrir justo la puerta que la fase 1
-//!   cerró.
+//! - **No painting toolkit.** If the host knew one, it would stop being
+//!   everyone else's host — decision D2 says the renderer is an adapter,
+//!   not a layer of the architecture.
+//! - **The core.** The host talks through the SDK; dragging in the engine,
+//!   the providers or the scheduler would reopen exactly the door phase 1
+//!   closed.
 //!
-//! Las dependencias de DESARROLLO no cuentan: un test puede usar lo que le
-//! haga falta sin que viaje en el binario de nadie.
+//! DEV dependencies do not count: a test can use whatever it needs without
+//! it travelling in anyone's binary.
 
 use std::collections::{HashMap, HashSet};
 
-/// Lo que jamás debe alcanzar a `norte-ui-host` en tiempo de ejecución.
+/// What must never reach `norte-ui-host` at runtime.
 ///
-/// `norte-vfs-local` SÍ está desde #254: las conversiones de ruta nativa se
-/// mudaron a `norte-vfs` —el crate del trait, que no toca disco— así que ya
-/// no queda ninguna razón para que el único crate con `unsafe`, `openat2` y
-/// `ConfinedRoot` aparezca por aquí.
-const PROHIBIDAS: &[&str] = &[
+/// `norte-vfs-local` HAS been here since #254: native path conversions moved
+/// to `norte-vfs` — the trait crate, which never touches disk — so there is
+/// no longer any reason for the one crate with `unsafe`, `openat2` and
+/// `ConfinedRoot` to show up here.
+const FORBIDDEN: &[&str] = &[
     "norte-core",
     "norte-vfs-local",
     "norte-vfs-sftp",
@@ -43,24 +43,24 @@ const PROHIBIDAS: &[&str] = &[
 ];
 
 #[test]
-fn el_host_no_conoce_toolkit_ni_core() {
-    let salida = std::process::Command::new(env!("CARGO"))
+fn the_host_knows_no_toolkit_and_no_core() {
+    let output = std::process::Command::new(env!("CARGO"))
         .args(["metadata", "--format-version", "1", "--all-features"])
         .output()
         .expect("cargo metadata");
     assert!(
-        salida.status.success(),
-        "cargo metadata falló: {}",
-        String::from_utf8_lossy(&salida.stderr)
+        output.status.success(),
+        "cargo metadata failed: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
-    let meta: serde_json::Value = serde_json::from_slice(&salida.stdout).expect("metadata es json");
-    let nodos = meta["resolve"]["nodes"].as_array().expect("nodes");
+    let meta: serde_json::Value = serde_json::from_slice(&output.stdout).expect("metadata is json");
+    let nodes = meta["resolve"]["nodes"].as_array().expect("nodes");
 
-    // id → (nombre, deps que NO son de desarrollo)
-    let mut grafo: HashMap<&str, (String, Vec<&str>)> = HashMap::new();
-    for n in nodos {
+    // id → (name, deps that are NOT dev-only)
+    let mut graph: HashMap<&str, (String, Vec<&str>)> = HashMap::new();
+    for n in nodes {
         let id = n["id"].as_str().expect("id");
-        let nombre = nombre_de(id, &meta);
+        let name = name_of(id, &meta);
         let mut deps = Vec::new();
         for d in n["deps"].as_array().expect("deps") {
             let normal = d["dep_kinds"]
@@ -70,40 +70,40 @@ fn el_host_no_conoce_toolkit_ni_core() {
                 deps.push(d["pkg"].as_str().expect("pkg"));
             }
         }
-        grafo.insert(id, (nombre, deps));
+        graph.insert(id, (name, deps));
     }
 
-    let raiz = grafo
+    let root = graph
         .iter()
-        .find(|(_, (nombre, _))| nombre == "norte-ui-host")
+        .find(|(_, (name, _))| name == "norte-ui-host")
         .map(|(id, _)| *id)
-        .expect("norte-ui-host está en el grafo");
+        .expect("norte-ui-host is in the graph");
 
-    let mut vistos: HashSet<&str> = HashSet::new();
-    let mut pila = vec![raiz];
-    let mut culpables: Vec<String> = Vec::new();
-    while let Some(id) = pila.pop() {
-        if !vistos.insert(id) {
+    let mut visited: HashSet<&str> = HashSet::new();
+    let mut stack = vec![root];
+    let mut offenders: Vec<String> = Vec::new();
+    while let Some(id) = stack.pop() {
+        if !visited.insert(id) {
             continue;
         }
-        let Some((nombre, deps)) = grafo.get(id) else {
+        let Some((name, deps)) = graph.get(id) else {
             continue;
         };
-        if id != raiz && PROHIBIDAS.contains(&nombre.as_str()) {
-            culpables.push(nombre.clone());
+        if id != root && FORBIDDEN.contains(&name.as_str()) {
+            offenders.push(name.clone());
         }
-        pila.extend(deps.iter().copied());
+        stack.extend(deps.iter().copied());
     }
-    culpables.sort();
-    culpables.dedup();
+    offenders.sort();
+    offenders.dedup();
     assert!(
-        culpables.is_empty(),
-        "el host alcanza lo que no debe: {culpables:?}"
+        offenders.is_empty(),
+        "the host reaches what it must not: {offenders:?}"
     );
 }
 
-/// El nombre del paquete de un id del resolvedor, leído de `packages`.
-fn nombre_de(id: &str, meta: &serde_json::Value) -> String {
+/// The package name for a resolver id, read from `packages`.
+fn name_of(id: &str, meta: &serde_json::Value) -> String {
     meta["packages"]
         .as_array()
         .expect("packages")

@@ -1,16 +1,16 @@
-//! E2E de `plugin.decorate`/`plugin.column_values` (G3b, ADR 0037 decisión
-//! 2) de punta a punta A TRAVÉS DE `Backend::Remote` (daemon UDS real),
-//! contra los guests REALES `examples-wasm/decorator-demo` y
-//! `examples-wasm/columns-demo` (`norte-plugin-host`).
+//! End-to-end E2E of `plugin.decorate`/`plugin.column_values` (G3b, ADR 0037
+//! decision 2) THROUGH `Backend::Remote` (a real UDS daemon), against the
+//! REAL guests `examples-wasm/decorator-demo` and `examples-wasm/columns-demo`
+//! (`norte-plugin-host`).
 //!
-//! Mismo arnés que la sección `styled` de `plugins_preview_e2e.rs`: solo
-//! unix (el daemon UDS es `#[cfg(unix)]`, ADR 0011); `Backend::Embedded` NO
-//! se ejercita aquí a propósito (resuelve el directorio de plugins SIEMPRE
-//! vía `norte_core::connect::config_dir()`, global del proceso — ver el
-//! rustdoc de esa suite para el razonamiento completo).
+//! Same harness as the `styled` section of `plugins_preview_e2e.rs`: unix
+//! only (the UDS daemon is `#[cfg(unix)]`, ADR 0011); `Backend::Embedded` is
+//! deliberately NOT exercised here (it ALWAYS resolves the plugins directory
+//! via `norte_core::connect::config_dir()`, a process global — see that
+//! suite's rustdoc for the full reasoning).
 //!
-//! Si el target `wasm32-wasip2` no está instalado, SKIP (no hay artefacto
-//! que ejecutar).
+//! If the `wasm32-wasip2` target is not installed, SKIP (there is no artifact
+//! to run).
 #![cfg(unix)]
 
 use std::path::PathBuf;
@@ -26,9 +26,8 @@ use norte_proto::methods::ClientInfo;
 use norte_testkit::MemProvider;
 use norte_vfs::Provider;
 
-/// Manifiesto `decorator` del plugin sembrado (mismo comportamiento que el
-/// e2e WIT de `norte-plugin-host`: badge `"M"` si el nombre contiene
-/// `"mod"`).
+/// The seeded plugin's `decorator` manifest (same behavior as
+/// `norte-plugin-host`'s WIT e2e: badge `"M"` if the name contains `"mod"`).
 const DECORATOR_MANIFEST: &str = r#"
 [plugin]
 id = "org.norte.decor"
@@ -40,7 +39,7 @@ category = "decorator"
 [[contributions.decorator]]
 "#;
 
-/// Manifiesto `columns` del plugin sembrado: declara `name-len`.
+/// The seeded plugin's `columns` manifest: declares `name-len`.
 const COLUMNS_MANIFEST: &str = r#"
 [plugin]
 id = "org.norte.cols"
@@ -55,22 +54,22 @@ header = "Name Len"
 "#;
 
 fn vp(wire: &str) -> VPath {
-    VPath::parse(wire).expect("wire válido de test")
+    VPath::parse(wire).expect("valid test wire")
 }
 
 async fn write_file(mem: &MemProvider, wire: &str, content: &[u8]) {
-    let mut sink = mem.write(&vp(wire)).await.expect("write abre");
+    let mut sink = mem.write(&vp(wire)).await.expect("write opens");
     sink.write(Bytes::copy_from_slice(content))
         .await
-        .expect("chunk entra");
-    sink.commit().await.expect("commit publica");
+        .expect("chunk goes in");
+    sink.commit().await.expect("commit publishes");
 }
 
-/// Compila `examples-wasm/<name>/` a `wasm32-wasip2` (release). Réplica del
-/// helper de `plugins_preview_e2e.rs` (no accesible entre árboles de tests).
+/// Compiles `examples-wasm/<name>/` to `wasm32-wasip2` (release). A replica of
+/// the helper in `plugins_preview_e2e.rs` (not reachable across test trees).
 fn build_guest(name: &str) -> Option<PathBuf> {
     if !target_installed("wasm32-wasip2") {
-        eprintln!("SKIP: target wasm32-wasip2 no instalado");
+        eprintln!("SKIP: target wasm32-wasip2 not installed");
         return None;
     }
     let guest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -90,16 +89,16 @@ fn build_guest(name: &str) -> Option<PathBuf> {
         ])
         .arg(&target_dir)
         .status()
-        .expect("no se pudo lanzar cargo para compilar el guest");
+        .expect("could not launch cargo to compile the guest");
     assert!(
         status.success(),
-        "el guest {name} no compiló (target wasm32-wasip2 presente)"
+        "the {name} guest did not build (wasm32-wasip2 target present)"
     );
     let wasm = target_dir
         .join("wasm32-wasip2")
         .join("release")
         .join(format!("{}.wasm", name.replace('-', "_")));
-    assert!(wasm.exists(), "no se encontró {}", wasm.display());
+    assert!(wasm.exists(), "{} not found", wasm.display());
     Some(wasm)
 }
 
@@ -119,15 +118,15 @@ fn target_installed(target: &str) -> bool {
 #[tokio::test]
 #[expect(
     clippy::too_many_lines,
-    reason = "e2e de punta a punta: setup+wire+assert, sin trocear"
+    reason = "end-to-end e2e: setup+wire+assert, not split up"
 )]
-async fn plugin_decorate_y_column_values_e2e_wasm_real_a_traves_del_backend() {
+async fn plugin_decorate_and_column_values_e2e_real_wasm_through_the_backend() {
     let Some(decor_wasm) = build_guest("decorator-demo") else {
-        eprintln!("SKIP: target wasm32-wasip2 no instalado");
+        eprintln!("SKIP: target wasm32-wasip2 not installed");
         return;
     };
     let Some(cols_wasm) = build_guest("columns-demo") else {
-        eprintln!("SKIP: target wasm32-wasip2 no instalado");
+        eprintln!("SKIP: target wasm32-wasip2 not installed");
         return;
     };
 
@@ -183,76 +182,76 @@ async fn plugin_decorate_y_column_values_e2e_wasm_real_a_traves_del_backend() {
         vp("mem:///my_mod_2.rs"),
     ];
 
-    // SIN aprobar todavía: fail-closed — ni decoraciones ni columna.
+    // NOT approved yet: fail-closed — neither decorations nor column.
     let none_yet = backend
         .plugin_decorate(&paths, &[])
         .await
-        .expect("plugin.decorate no es error sin aprobar");
+        .expect("plugin.decorate is not an error without approval");
     assert!(
         none_yet.is_empty(),
-        "sin aprobar, ningún decorator consentido: []"
+        "unapproved, no consented decorator: []"
     );
     let none_col_yet = backend
         .plugin_column_values("org.norte.cols", "name-len", &paths)
         .await
-        .expect("plugin.column_values no es error sin aprobar");
+        .expect("plugin.column_values is not an error without approval");
     assert_eq!(
         none_col_yet,
         vec![None, None, None],
-        "sin aprobar, celdas vacías 1:1 con paths"
+        "unapproved, empty cells 1:1 with paths"
     );
 
     backend
         .plugins_set_approval("org.norte.decor", true, None)
         .await
-        .expect("aprobar decorator por el wire");
+        .expect("approve the decorator over the wire");
     backend
         .plugins_set_enabled("org.norte.decor", true)
         .await
-        .expect("activar decorator por el wire");
+        .expect("enable the decorator over the wire");
     backend
         .plugins_set_approval("org.norte.cols", true, None)
         .await
-        .expect("aprobar columns por el wire");
+        .expect("approve columns over the wire");
     backend
         .plugins_set_enabled("org.norte.cols", true)
         .await
-        .expect("activar columns por el wire");
+        .expect("enable columns over the wire");
 
     // --- plugin.decorate ---
     let plugins = backend
         .plugin_decorate(&paths, &[])
         .await
-        .expect("plugin.decorate no es error");
+        .expect("plugin.decorate is not an error");
     assert_eq!(
         plugins.len(),
         1,
-        "un único decorator consentido: {plugins:?}"
+        "a single consented decorator: {plugins:?}"
     );
     let pd = &plugins[0];
     assert_eq!(pd.plugin_id, "org.norte.decor");
-    assert_eq!(pd.decorations.len(), 3, "positional 1:1 con paths");
+    assert_eq!(pd.decorations.len(), 3, "positional 1:1 with paths");
     assert_eq!(
         pd.decorations[0].badge.as_deref(),
         Some("M"),
-        "\"module.rs\" contiene \"mod\": badge"
+        "\"module.rs\" contains \"mod\": badge"
     );
     assert_eq!(pd.decorations[0].role.as_deref(), Some("warning"));
     assert_eq!(
         pd.decorations[1].badge, None,
-        "\"README.md\" no contiene \"mod\": sin badge"
+        "\"README.md\" does not contain \"mod\": no badge"
     );
     assert_eq!(
         pd.decorations[2].badge.as_deref(),
         Some("M"),
-        "\"my_mod_2.rs\" contiene \"mod\": badge"
+        "\"my_mod_2.rs\" contains \"mod\": badge"
     );
 
     // --- plugin.column_values ---
     let values = backend
         .plugin_column_values("org.norte.cols", "name-len", &paths)
         .await
-        .expect("plugin.column_values no es error");
+        .expect("plugin.column_values is not an error");
     assert_eq!(
         values,
         vec![
@@ -260,21 +259,22 @@ async fn plugin_decorate_y_column_values_e2e_wasm_real_a_traves_del_backend() {
             Some("README.md".len().to_string()),
             Some("my_mod_2.rs".len().to_string()),
         ],
-        "largo del basename por entrada, posicional 1:1"
+        "basename length per entry, positional 1:1"
     );
 
-    // Un id de columna no declarado por ningún plugin: celdas vacías, no error.
+    // A column id no plugin declares: empty cells, not an error.
     let unknown_col = backend
-        .plugin_column_values("org.norte.cols", "no-declarada", &paths)
+        .plugin_column_values("org.norte.cols", "not-declared", &paths)
         .await
-        .expect("plugin.column_values no es error para un id desconocido");
+        .expect("plugin.column_values is not an error for an unknown id");
     assert_eq!(unknown_col, vec![None, None, None]);
 
-    // Un lote vacío no debe llamar al wire (ver rustdoc de `Backend::
-    // plugin_decorate`/`plugin_column_values`): el resultado es vacío igual.
+    // An empty batch must not call the wire (see the rustdoc of
+    // `Backend::plugin_decorate`/`plugin_column_values`): the result is empty
+    // all the same.
     let empty = backend
         .plugin_decorate(&[], &[])
         .await
-        .expect("lote vacío no es error");
+        .expect("an empty batch is not an error");
     assert!(empty.is_empty());
 }

@@ -1,6 +1,6 @@
 [package]
 name = "norte-frontend"
-description = "Lógica de presentación PURA compartida por los frontends (TUI/GUI): saneado de nombres hostiles y orden de listado. Sin dependencias de UI."
+description = "PURE presentation logic shared by the frontends (TUI/GUI): hostile-name sanitizing and listing order. No UI dependencies."
 license = "MIT OR Apache-2.0"
 version.workspace = true
 edition.workspace = true
@@ -17,15 +17,15 @@ unicode-normalization.workspace = true
 serde = { workspace = true, features = ["derive"] }
 schemars = { workspace = true, features = ["derive"], optional = true }
 thiserror.workspace = true
-# `secret::TypedSecret` (#327): el buffer de una contraseña a medio teclear se
-# pisa con ceros al soltarlo. Ya estaba en el grafo por norte-tui; lo que hace
-# este movimiento es que la ventana NO herede una segunda copia sin la
-# garantía. Es un tipo de seguridad, y de esos no puede haber dos.
+# `secret::TypedSecret` (#327): a half-typed password's buffer is overwritten
+# with zeros when dropped. It was already in the graph via norte-tui; what
+# this move does is keep the window from inheriting a second copy without the
+# guarantee. It is a security type, and there cannot be two of those.
 zeroize.workspace = true
-# `Params` (`layout::tree`): la bolsa OPACA de un hueco. Es `serde_json::Map`
-# porque el blob de sesión de L2 viaja por JSON-RPC y el fichero de layout usa
-# el MISMO formato (ADR 0058 D4) — un solo modelo de valor para los dos. Ya
-# está en el grafo vía norte-proto: no entra nada nuevo a compilar.
+# `Params` (`layout::tree`): a pane's OPAQUE bag. It is `serde_json::Map`
+# because L2's session blob travels over JSON-RPC and the layout file uses
+# the SAME format (ADR 0058 D4) — a single value model for both. Already in
+# the graph via norte-proto: nothing new enters the build.
 serde_json.workspace = true
 toml.workspace = true
 # `SettingsState`/`PendingWrite` (S4 hoist, `settings.rs`): `toml_edit::Value`
@@ -33,33 +33,33 @@ toml.workspace = true
 # it directly so BOTH frontends write the exact same wire shape without a
 # round-trip through a generic string.
 toml_edit.workspace = true
-# Settings registry (S2, `settings.rs`): cada `SettingDef` resuelve un par de
-# claves Fluent (`setting-<id>-name`/`-desc`) — el mismo crate que YA usan
-# ambos frontends para localizar el resto de la UI, aquí en su capa
-# compartida en vez de duplicado. In-workspace, sin coste de build nuevo
-# fuera de compilar un crate que ya se compilaba de todas formas.
+# Settings registry (S2, `settings.rs`): every `SettingDef` resolves a pair of
+# Fluent keys (`setting-<id>-name`/`-desc`) — the same crate BOTH frontends
+# already use to localize the rest of the UI, here in their shared layer
+# instead of duplicated. In-workspace, no new build cost beyond compiling a
+# crate that was already being compiled anyway.
 norte-i18n.workspace = true
-# La hora LOCAL de `TimeFormat::Smart` (spec 2026-09-10): ver la
-# justificación en el `Cargo.toml` del workspace.
+# The LOCAL time of `TimeFormat::Smart` (spec 2026-09-10): see the
+# justification in the workspace's `Cargo.toml`.
 jiff.workspace = true
 # H3b: the help corpus and its model. The dependency runs frontend → help and
 # never the other way (`norte_help::resolve`'s rustdoc says why): a
 # `norte-help` that knew about a frontend could only ever serve one of the
 # three. Already in the graph as a workspace crate — nothing new enters.
 norte-help.workspace = true
-# Glob de nombre para marcar por patrón (#103): la MISMA lib que usa
-# norte-core en fs.search, así que el patrón que el usuario aprende en la
-# búsqueda vale aquí. Ya está en el grafo (workspace dep), no entra nada nuevo.
+# Name glob for marking by pattern (#103): the SAME lib norte-core uses in
+# fs.search, so the pattern the user learns in search also works here.
+# Already in the graph (workspace dep), nothing new enters.
 globset.workspace = true
-# Motor Unicode para el patrón de marcado (#110): el regex byte-mode de
-# globset se recompila char-wise (`?` = un carácter, no un byte). Ya está
-# en el grafo (workspace dep de norte-core), no entra nada nuevo.
+# Unicode engine for the marking pattern (#110): globset's byte-mode regex
+# gets recompiled char-wise (`?` = one character, not one byte). Already
+# in the graph (norte-core's workspace dep), nothing new enters.
 regex.workspace = true
-# Ancho de CELDA para la elipsis media (`middle_ellipsis`, hoisted del TUI por
-# el audit M4-IA-2 H1): CJK/emoji ocupan 2 columnas y presupuestar por chars
-# desborda el ancho → el frontend re-trunca por la derecha comiéndose la cola
-# (#79). Herramienta estándar (la usa la propia ratatui, misma versión ya en el
-# árbol vía norte-tui), MIT/Apache, mantenida — no entra nada nuevo al grafo.
+# CELL width for the middle ellipsis (`middle_ellipsis`, hoisted from the TUI
+# by audit M4-IA-2 H1): CJK/emoji take up 2 columns and budgeting by chars
+# overflows the width → the frontend re-truncates from the right, eating the
+# tail (#79). Standard tool (used by ratatui itself, same version already in
+# the tree via norte-tui), MIT/Apache, maintained — nothing new enters the graph.
 unicode-width = "0.2"
 # Shell integration (`shell.rs`, S2 `--pick`): `vpath_to_native` is the ONE
 # function that turns a `file://` VPath into the bytes a shell-side tool can
@@ -69,16 +69,16 @@ unicode-width = "0.2"
 # inside — into every frontend for a string conversion. It now lives in
 # `norte-vfs`, which is the trait crate and touches no disk (#254).
 norte-vfs.workspace = true
-# OSC 52 (#286): la única forma de copiar al portapapeles desde un terminal
-# por SSH es mandarle al EMULADOR la secuencia con el texto en base64. Ya es
-# dependencia del workspace (proto, client, mcp): no entra nada nuevo.
+# OSC 52 (#286): the only way to copy to the clipboard from a terminal over
+# SSH is to send the EMULATOR the sequence with the text in base64. Already a
+# workspace dependency (proto, client, mcp): nothing new enters.
 base64.workspace = true
-# Vigilancia de los dirs visibles (#106), compartida por los dos frontends: la
-# TUI la estrenó y la GUI la necesita igual, y duplicarla sería duplicar también
-# el pitfall de inotify que ya está resuelto una vez aquí. `notify` ya es
-# dependencia del workspace (la usa `norte-config` para recargar la config) y
-# `tokio` ya estaba en el grafo de este crate por `norte-vfs-local`: las dos son
-# una ARISTA nueva, no código nuevo que entre al árbol (regla 8).
+# Watching the visible dirs (#106), shared by both frontends: the TUI
+# pioneered it and the GUI needs it just the same, and duplicating it would
+# also duplicate the inotify pitfall already solved once here. `notify` is
+# already a workspace dependency (`norte-config` uses it to reload config)
+# and `tokio` was already in this crate's graph via `norte-vfs-local`: both
+# are a new EDGE, not new code entering the tree (rule 8).
 notify.workspace = true
 tokio = { workspace = true, features = ["fs", "macros", "rt", "sync", "time"] }
 
@@ -89,8 +89,8 @@ tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
 
 [features]
-# Generación de los JSON Schema publicados (golden test de docs/schema);
-# fuera del binario final (ADR 0007) — mismo patrón que norte-tui.
+# Generates the published JSON Schemas (docs/schema golden test); out of the
+# final binary (ADR 0007) — same pattern as norte-tui.
 schema = ["dep:schemars"]
 
 [lints]

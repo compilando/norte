@@ -1,53 +1,53 @@
-//! Las aprobaciones de policy que llegan del daemon.
+//! The policy approvals that arrive from the daemon.
 //!
-//! Parte de `controller`: son métodos de `Estado`, movidos aquí sin
-//! tocarlos (ADR 0086). El único escritor sigue siendo el actor.
+//! Part of `controller`: these are methods of `State`, moved here without
+//! touching them (ADR 0086). The only writer is still the actor.
 
-// Estos módulos son el mismo `impl Estado` partido en trozos, así que usan
-// los mismos imports que el padre. Enumerarlos aquí sería una lista de
-// cuarenta líneas por fichero, en 32 ficheros, que se desincroniza en cuanto
-// el padre importa algo — `super::*` la sigue sola.
+// These modules are the same `impl State` split into pieces, so they use
+// the same imports as the parent. Listing them here would be a forty-line
+// list per file, across 32 files, that goes out of sync the moment the
+// parent imports something — `super::*` keeps it in sync on its own.
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
-impl Estado {
-    /// Pide el catálogo de atributos de esta localización, si hace falta.
+impl State {
+    /// Requests this location's attribute catalogue, if needed.
     ///
-    /// Solo si hay columnas `attr:` configuradas y aún no se tiene el de su
-    /// esquema: preguntar por un catálogo que nadie va a leer es un viaje de
-    /// más en cada `cd`.
-    pub(super) fn pedir_catalogo(
+    /// Only if there are `attr:` columns configured and its scheme's
+    /// catalogue is not already held: asking for a catalogue nobody is going
+    /// to read is one more trip on every `cd`.
+    pub(super) fn request_catalog(
         &self,
         dir: &VPath,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) {
         if self.attrs_de(dir).is_empty() || self.catalogos.contains_key(dir.scheme()) {
             return;
         }
         let backend = Arc::clone(backend);
-        let buzon = buzon.clone();
+        let mailbox = mailbox.clone();
         let dir = dir.clone();
         let scheme = dir.scheme().to_owned();
         tokio::spawn(async move {
-            // Un catálogo que no llega no rompe nada: las celdas se pintan
-            // opacas, que es exactamente lo que se sabe de ellas.
-            if let Ok(catalogo) = backend.attr_catalog(dir).await {
-                let _ = buzon
-                    .send(Mensaje::Catalogo(Box::new((scheme, catalogo))))
+            // A catalogue that does not arrive breaks nothing: the cells are
+            // painted opaque, which is exactly what is known about them.
+            if let Ok(catalog) = backend.attr_catalog(dir).await {
+                let _ = mailbox
+                    .send(Message::Catalog(Box::new((scheme, catalog))))
                     .await;
             }
         });
     }
 
-    /// Qué se está pidiendo, en una línea (#314).
+    /// What is being requested, in one line (#314).
     ///
-    /// Para todas las ops menos una es el nombre de la op: aprobar «copiar
-    /// estas doce» ES la decisión. Un `set-mode` no, porque dos con las mismas
-    /// rutas y modos distintos significan cosas opuestas, así que el modo va
-    /// AQUÍ, con el sujeto — entre líneas de rutas, una ruta puede suplantar
-    /// cualquier otra línea, y esta es la mitad de la decisión.
-    pub(super) fn sujeto_de_aprobacion(
+    /// For every op but one it is the op's name: approving "copy these
+    /// twelve" IS the decision. A `set-mode` is not, because two with the
+    /// same paths and different modes mean opposite things, so the mode goes
+    /// HERE, with the subject — between path lines, a path can impersonate
+    /// any other line, and this is half the decision.
+    pub(super) fn approval_subject(
         &self,
         req: &norte_proto::methods::PolicyApprovalRequired,
     ) -> String {
@@ -62,13 +62,13 @@ impl Estado {
             ),
             None => req.op.clone(),
         };
-        // #315: y el ALCANCE. Un recursivo sobre una raíz llega con
-        // `paths_total = 1`, así que sin esto la pregunta decía «set-mode
-        // sobre 1 ruta» y lo aprobado era el árbol entero.
+        // #315: and the SCOPE. A recursive one over a root arrives with
+        // `paths_total = 1`, so without this the question said "set-mode over
+        // 1 path" and what was approved was the whole tree.
         if !req.detail.recursive {
             return base;
         }
-        let cola = match req.detail.dir_mode {
+        let tail = match req.detail.dir_mode {
             Some(dir) => norte_i18n::ta_in(
                 self.lang,
                 "modal-approval-recursive-dirs",
@@ -76,30 +76,34 @@ impl Estado {
             ),
             None => norte_i18n::t_in(self.lang, "modal-approval-recursive"),
         };
-        format!("{base} {cola}")
+        format!("{base} {tail}")
     }
 
-    /// Abre el diálogo de una op de agente que espera decisión.
+    /// Opens the dialog for an agent op waiting on a decision.
     ///
-    /// Las rutas vienen REDACTADAS del servidor y son solo display: jamás se
-    /// reparsean a una operación —la op real va ligada al `approval_id`—, y
-    /// se pintan con el saneado canónico porque las controla quien pidió la
-    /// operación.
-    /// Las dos respuestas de una aprobación de agente.
+    /// The paths arrive REDACTED from the server and are display only: they
+    /// are never reparsed into an operation — the real op is tied to the
+    /// `approval_id` —, and they are painted with canonical sanitizing
+    /// because they are controlled by whoever requested the operation.
+    // TODO(translation): review — this paragraph describes
+    /// `open_approval` below, but it is attached, with no blank line in
+    /// between, to the doc comment for `approve_or_deny` right after it; it
+    /// looks like a stale fragment left by an earlier edit.
+    /// An agent approval's two answers.
     ///
-    /// Fuera del constructor porque el constructor ya no cabía, y aparte
-    /// porque estas dos etiquetas no son las de un diálogo normal: `approve`
-    /// y `deny` se llaman distinto de `confirm`/`cancel` a propósito — en una
-    /// superficie de seguridad, «confirmar» y «aprobar» no deberían poder
-    /// confundirse en un renderer.
-    fn aprobar_o_denegar() -> Vec<DialogChoice> {
+    /// Outside the constructor because the constructor no longer had room,
+    /// and separate because these two labels are not a normal dialog's:
+    /// `approve` and `deny` are named differently from `confirm`/`cancel` on
+    /// purpose — on a security surface, "confirm" and "approve" should not be
+    /// able to get confused in a renderer.
+    fn approve_or_deny() -> Vec<DialogChoice> {
         vec![
             DialogChoice {
                 id: "approve".to_owned(),
                 label_key: "dialog-approve".to_owned(),
-                // Aprobar una mutación de un agente ES destructivo: el
-                // renderer la pinta como tal, y Enter no la dispara sola
-                // porque no hay respuesta por defecto.
+                // Approving an agent's mutation IS destructive: the renderer
+                // paints it as such, and Enter does not trigger it alone
+                // because there is no default answer.
                 destructive: true,
             },
             DialogChoice {
@@ -110,110 +114,115 @@ impl Estado {
         ]
     }
 
-    pub(super) fn abrir_aprobacion(
+    pub(super) fn open_approval(
         &mut self,
         req: &norte_proto::methods::PolicyApprovalRequired,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        // La MISMA aprobación puede llegar dos veces: el SDK resincroniza
-        // `policy.pending` en cada reconexión, y lo que sigue vivo vuelve por
-        // el canal. Dos diálogos son dos respuestas, y la segunda cae sobre
-        // un id que el daemon ya cerró.
-        if self.dialogos.iter().any(|d| {
+        // The SAME approval can arrive twice: the SDK resyncs
+        // `policy.pending` on every reconnection, and whatever is still alive
+        // comes back through the channel. Two dialogs are two answers, and
+        // the second one lands on an id the daemon already closed.
+        if self.dialogs.iter().any(|d| {
             matches!(
-                d.al_confirmar,
-                Some(Pendiente::Decidir { approval_id, .. }) if approval_id == req.approval_id
+                d.on_confirm,
+                Some(Pending::Decide { approval_id, .. }) if approval_id == req.approval_id
             )
         }) {
             return Vec::new();
         }
-        // Se APUNTA la sesión que pidió, aunque el diálogo no llegue a
-        // abrirse por lo que sea: es lo ÚNICO que nombra a un agente en todo
-        // el protocolo, y sin ese apunte no hay forma de ofrecer deshacer lo
-        // que hizo salvo tecleando su id a mano (#276).
-        let mut fuera = Vec::new();
-        if let Some(sesion) = req.session.as_deref() {
-            self.agencia.sesiones.vista(sesion, &req.op);
-            // Y se REPINTA si el panel está abierto. La lista cambia SIN
-            // gesto —esta petición la reordena— y un renderer al que no se
-            // le dice se queda pintando el orden de antes: la fila que el
-            // lector ve resaltada deja de ser la que el host tiene elegida, y
-            // `u` deshace el trabajo de otra sesión.
-            if self.agencia.panel {
-                fuera.push(self.parche(vec![ViewChange::Agents {
-                    agents: self.vista_agentes(),
+        // The session that requested it is NOTED, even if the dialog never
+        // ends up opening for whatever reason: it is the ONLY thing that
+        // names an agent in the whole protocol, and without that note there
+        // is no way to offer undoing what it did other than typing its id by
+        // hand (#276).
+        let mut agents_notice = Vec::new();
+        if let Some(session) = req.session.as_deref() {
+            self.agency.sessions.vista(session, &req.op);
+            // And it is REPAINTED if the panel is open. The list changes with
+            // NO gesture — this request reorders it — and a renderer that is
+            // not told keeps painting the previous order: the row the reader
+            // sees highlighted stops being the one the host has selected, and
+            // `u` undoes another session's work.
+            if self.agency.panel {
+                agents_notice.push(self.parche(vec![ViewChange::Agents {
+                    agents: self.vista_agents(),
                 }]));
             }
         }
-        // Estas rutas vienen del daemon como TEXTO ya redactado, no como
-        // `VPath`, así que el enmascarado es el de cadenas y la marca se
-        // calcula comparando: si enmascarar cambió algo, lo que se lee no es
-        // lo que hay, y quien aprueba tiene que verlo.
-        let linea = |texto: &str| {
-            let enmascarado = norte_encoding::mask_terminal_hazards(texto);
-            // DOS motivos para marcar, y el segundo es el que faltaba: estas
-            // rutas llegan REDACTADAS del daemon, que ya pasó los bytes por
-            // `display_lossy` —controles, overrides bidi y bytes inválidos ya
-            // son U+FFFD—, así que comparar contra el original no detecta
-            // nada de eso y la marca no saltaba justo en la clase más
-            // peligrosa. Encima era inconsistente: un `zwsp` sí la encendía,
-            // porque el lossy del daemon no lo toca.
+        // These paths arrive from the daemon as already-redacted TEXT, not as
+        // `VPath`, so the masking is the string kind and the flag is
+        // computed by comparing: if masking changed something, what is read
+        // is not what is there, and whoever approves has to see it.
+        let line = |text: &str| {
+            let masked = norte_encoding::mask_terminal_hazards(text);
+            // TWO reasons to flag, and the second is the one that was
+            // missing: these paths arrive REDACTED from the daemon, which
+            // already ran the bytes through `display_lossy` — controls, bidi
+            // overrides and invalid bytes are already U+FFFD — so comparing
+            // against the original detects none of that, and the flag did
+            // not fire exactly on the most dangerous class. On top of that it
+            // was inconsistent: a `zwsp` DID turn it on, because the
+            // daemon's lossy pass does not touch it.
             //
-            // El carácter de sustitución ES la señal de que lo que se lee no
-            // es lo que hay. No se puede recuperar qué había —por eso el
-            // daemon manda texto y no `VPath`— pero sí decir que no es fiel.
-            // La REGLA vive en el crate compartido desde que el resumen de
-            // recorte la necesita también: el terminal contestaba lo mismo con
-            // otra función, que es cómo dos superficies acaban marcando cosas
-            // distintas sobre las mismas rutas.
-            let hostil = norte_frontend::redacted_hostile(texto);
+            // The replacement character IS the signal that what is read is
+            // not what is there. What was there cannot be recovered — that
+            // is why the daemon sends text and not a `VPath` — but it can
+            // still say it is not faithful. The RULE lives in the shared
+            // crate ever since the clamp summary needed it too: the terminal
+            // used to answer the same question with a different function,
+            // which is how two surfaces end up flagging different things
+            // over the same paths.
+            let hostile = norte_frontend::redacted_hostile(text);
             crate::dto::DialogLine {
-                text: clamp_display(enmascarado),
-                hostile: hostil,
+                text: clamp_display(masked),
+                hostile,
             }
         };
-        // El cuerpo son SOLO las rutas: el renderer las numera por posición,
-        // que es una etiqueta que ningún nombre de fichero puede escribir. Lo
-        // demás —qué se pide, quién lo pide, cuándo caduca— va en campos
-        // propios, por el mismo motivo que el destino de una transferencia:
-        // entre líneas de rutas, una ruta suplanta a cualquier otra línea.
-        let cuerpo: Vec<crate::dto::DialogLine> = req
+        // The body is ONLY the paths: the renderer numbers them by position,
+        // which is a label no file name can write. Everything else — what is
+        // being asked, who asks it, when it expires — goes in its own
+        // fields, for the same reason as a transfer's destination: between
+        // path lines, a path impersonates any other line.
+        let body: Vec<crate::dto::DialogLine> = req
             .paths
             .iter()
-            .take(Self::MAX_LINEAS_DIALOGO)
-            .map(|p| linea(p))
+            .take(Self::MAX_LINES_DIALOG)
+            .map(|p| line(p))
             .collect();
-        let sujeto = linea(&self.sujeto_de_aprobacion(req));
-        // Quién pide es lo PRIMERO que hace falta para decidir, y se
-        // descartaba: el título dice «aprobación de agente» y sin esto no se
-        // sabe de qué agente.
-        let quien = req.session.as_deref().map(linea);
-        // Si la lista viene RECORTADA hay que decirlo: aprobar creyendo que
-        // son tres rutas cuando son mil es aprobar otra cosa (0.36.0). Y son
-        // DOS recortes: el del daemon (`paths_total`) y el nuestro. El
-        // recuento honesto es el mayor de los dos.
+        let subject = line(&self.approval_subject(req));
+        // Who is asking is the FIRST thing needed to decide, and it used to
+        // be dropped: the title says "agent approval" and without this there
+        // is no way to know which agent.
+        let asker = req.session.as_deref().map(line);
+        // If the list arrives TRUNCATED it has to be said: approving
+        // believing there are three paths when there are a thousand is
+        // approving something else (0.36.0). And there are TWO truncations:
+        // the daemon's (`paths_total`) and our own. The honest count is the
+        // larger of the two.
         //
-        // La frase va en `overflow_note` y no como una línea más del cuerpo,
-        // por el mismo motivo que el destino de una transferencia tiene campo
-        // propio: entre líneas de rutas, una ruta la puede suplantar. Antes
-        // era una línea Y encima citaba `modal-approval-truncated`, una clave
-        // Fluent que no existe en ningún idioma — o sea que un lote recortado
-        // pintaba el identificador crudo.
+        // The phrase goes in `overflow_note` and not as one more body line,
+        // for the same reason a transfer's destination has its own field:
+        // between path lines, a path can impersonate it. It used to be a
+        // line, and on top of that it quoted `modal-approval-truncated`, a
+        // Fluent key that does not exist in any language — so a truncated
+        // batch painted the raw identifier.
         let total = std::cmp::max(req.paths_total, req.paths.len() as u64);
-        let mostrados = req.paths.len().min(Self::MAX_LINEAS_DIALOGO);
-        let nota = self.nota_de_recorte(mostrados, usize::try_from(total).unwrap_or(usize::MAX));
-        // Cuánto le queda, DICHO y en su propio campo. Una decisión con fecha
-        // de caducidad que no la enseña se lee como una que espera para
-        // siempre, y quien vuelve al rato pulsa aprobar sobre algo que el
-        // daemon ya denegó.
+        let shown = req.paths.len().min(Self::MAX_LINES_DIALOG);
+        let note = self.truncation_note(shown, usize::try_from(total).unwrap_or(usize::MAX));
+        // How much time is left, SAID and in its own field. A decision with
+        // an expiry that does not show it reads as one that waits forever,
+        // and whoever comes back later presses approve on something the
+        // daemon already denied.
         //
-        // Con `ttl_ms == 0` —DESCONOCIDO: una pendiente reconstruida por el
-        // resync de `policy.pending` no transporta el TTL restante— se dice
-        // que no se sabe, en vez de callar: callar deja el diálogo delante
-        // invitando a aprobar sobre un id que el daemon puede haber reapado
-        // hace rato. Y sin línea de plazo, un fichero llamado «caduca en
-        // 3600 s» sería la única que lo pareciera.
-        let plazo = Some(if req.ttl_ms > 0 {
+        // With `ttl_ms == 0` — UNKNOWN: a pending item rebuilt by
+        // `policy.pending`'s resync does not carry the remaining TTL — it
+        // says it is not known, instead of staying quiet: staying quiet
+        // leaves the dialog in front inviting approval on an id the daemon
+        // may have reaped a while ago. And without a deadline line, a file
+        // named "expires in 3600 s" would be the only one that looked like
+        // one.
+        let deadline = Some(if req.ttl_ms > 0 {
             clamp_display(norte_i18n::ta_in(
                 self.lang,
                 "modal-approval-ttl",
@@ -222,92 +231,93 @@ impl Estado {
         } else {
             clamp_display(norte_i18n::t_in(self.lang, "modal-approval-ttl-unknown"))
         });
-        // Y CUÁNDO vence, para que el renderer cuente en vez de repetir una
-        // frase congelada (#279). Solo con un TTL conocido: contar hacia atrás
-        // desde un plazo inventado sería peor que no contar.
-        let vence_en = (req.ttl_ms > 0)
-            .then(|| i64::try_from(req.ttl_ms).ok().map(|ms| ahora_ms() + ms))
+        // And WHEN it expires, so the renderer counts instead of repeating a
+        // frozen phrase (#279). Only with a known TTL: counting down from a
+        // made-up deadline would be worse than not counting.
+        let expires_at = (req.ttl_ms > 0)
+            .then(|| i64::try_from(req.ttl_ms).ok().map(|ms| now_ms() + ms))
             .flatten();
-        let id = ModalId(self.siguiente_modal);
-        self.siguiente_modal += 1;
-        let vista = DialogView {
+        let id = ModalId(self.next_modal);
+        self.next_modal += 1;
+        let view = DialogView {
             id,
             title_key: "modal-approval-title".to_owned(),
             destination: None,
-            subject: Some(sujeto),
-            asker: quien,
-            deadline: plazo,
-            deadline_at_ms: vence_en,
-            body: cuerpo,
-            overflow_note: nota,
-            // Y si algo de lo RECORTADO se pintaría alterado. El terminal lo
-            // decía en su resumen desde siempre y esta ventana no, sobre las
-            // mismas rutas: la respuesta es ahora la misma función.
-            overflow_hostile: norte_frontend::overflow_hostile_redacted(&req.paths, mostrados),
-            choices: Self::aprobar_o_denegar(),
+            subject: Some(subject),
+            asker,
+            deadline,
+            deadline_at_ms: expires_at,
+            body,
+            overflow_note: note,
+            // And whether anything TRUNCATED would paint altered. The
+            // terminal has always said so in its summary and this window did
+            // not, over the same paths: the answer is now the same function.
+            overflow_hostile: norte_frontend::overflow_hostile_redacted(&req.paths, shown),
+            choices: Self::approve_or_deny(),
             input: None,
             input_hostile: false,
             input_secret: false,
             fields: Vec::new(),
             dest_check: crate::dto::DestCheckView::NotAsked,
         };
-        let caidos = self.apilar_dialogo(Dialogo {
+        let dropped = self.stack_dialog(Dialog {
             id,
-            vista: vista.clone(),
-            tecleado: Tecleado::Texto(String::new()),
-            // Se abre SOLA: la trae una op de un agente, no una tecla.
-            reconocido: false,
-            al_confirmar: Some(Pendiente::Decidir {
+            vista: view.clone(),
+            typed: Typed::Text(String::new()),
+            // It opens ON ITS OWN: an agent's op brings it, not a key.
+            recognized: false,
+            on_confirm: Some(Pending::Decide {
                 approval_id: req.approval_id,
                 session: req.session.clone(),
             }),
         });
-        // Y se programa su caducidad. El daemon deja de aceptar el id cuando
-        // el TTL se acaba: un diálogo que siguiera delante invitaría a
-        // aprobar en el vacío, y quien lo hiciera se quedaría creyendo que
-        // autorizó lo que en realidad quedó denegado por silencio.
+        // And its expiry is scheduled. The daemon stops accepting the id once
+        // the TTL runs out: a dialog that stayed in front would invite
+        // approving into the void, and whoever did would be left believing
+        // they authorized what actually ended up denied by silence.
         if req.ttl_ms > 0 {
-            let buzon = buzon.clone();
+            let mailbox = mailbox.clone();
             let approval_id = req.approval_id;
-            let plazo = std::time::Duration::from_millis(req.ttl_ms);
+            let ttl = std::time::Duration::from_millis(req.ttl_ms);
             tokio::spawn(async move {
-                tokio::time::sleep(plazo).await;
-                let _ = buzon.send(Mensaje::AprobacionCaducada(approval_id)).await;
+                tokio::time::sleep(ttl).await;
+                let _ = mailbox.send(Message::ApprovalExpired(approval_id)).await;
             });
         }
-        let cambio = ViewChange::Dialogs {
-            dialogs: self.vistas_de_dialogos(),
+        let change = ViewChange::Dialogs {
+            dialogs: self.dialog_views(),
         };
-        let mut salidas = vec![self.parche(vec![cambio])];
-        salidas.extend(caidos);
-        salidas
+        let mut outgoing = vec![self.parche(vec![change])];
+        outgoing.extend(dropped);
+        outgoing
     }
 
-    /// El TTL de una aprobación se acabó: su diálogo se cierra y se dice.
+    /// An approval's TTL ran out: its dialog closes and it is said.
     ///
-    /// No se manda `policy.decide`: el daemon ya la resolvió por su cuenta
-    /// —un TTL vencido es una denegación—, y contestar sobre un id cerrado
-    /// solo produce un error que no significa nada para quien lo lee.
-    pub(super) fn caduca_aprobacion(&mut self, approval_id: u64) -> Vec<BridgeEnvelope<UiUpdate>> {
-        let antes = self.dialogos.len();
-        self.dialogos.retain(|d| {
+    /// `policy.decide` is not sent: the daemon already resolved it on its
+    /// own — an expired TTL is a denial —, and answering about a closed id
+    /// only produces an error that means nothing to whoever reads it.
+    pub(super) fn expires_approval(&mut self, approval_id: u64) -> Vec<BridgeEnvelope<UiUpdate>> {
+        let before = self.dialogs.len();
+        self.dialogs.retain(|d| {
             !matches!(
-                d.al_confirmar,
-                Some(Pendiente::Decidir { approval_id: id, .. }) if id == approval_id
+                d.on_confirm,
+                Some(Pending::Decide { approval_id: id, .. }) if id == approval_id
             )
         });
-        if self.dialogos.len() == antes {
-            // Ya se había contestado: la caducidad llega y no hay nada que
-            // cerrar. No es un error, y no se dice nada.
+        if self.dialogs.len() == before {
+            // It had already been answered: the expiry arrives and there is
+            // nothing to close. It is not an error, and nothing is said.
             return Vec::new();
         }
-        let cambio = ViewChange::Dialogs {
-            dialogs: self.vistas_de_dialogos(),
+        let change = ViewChange::Dialogs {
+            dialogs: self.dialog_views(),
         };
-        let mut salidas = vec![self.parche(vec![cambio])];
-        // NOMBRA la que caducó (#279). Con dos apiladas, «la aprobación
-        // caducó» no dice cuál se cerró sola ni cuál sigue esperando.
-        salidas.extend(self.decir_con("msg-approval-expired", &[("id", &approval_id.to_string())]));
-        salidas
+        let mut outgoing = vec![self.parche(vec![change])];
+        // NAMES the one that expired (#279). With two stacked, "the approval
+        // expired" does not say which one closed on its own nor which is
+        // still waiting.
+        outgoing.extend(self.say_with("msg-approval-expired", &[("id", &approval_id.to_string())]));
+        outgoing
     }
 }

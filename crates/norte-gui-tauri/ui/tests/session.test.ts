@@ -1,5 +1,5 @@
-// La disciplina de la secuencia (decisión D7), que es lo que separa a un
-// renderer que se recupera de uno que pinta un estado inventado.
+// The sequence discipline (decision D7), which is what separates a renderer
+// that recovers from one that paints a made-up state.
 
 import { beforeEach, describe, expect, it } from "vitest";
 
@@ -27,13 +27,13 @@ describe("Session", () => {
     s.receive(env(0, snapshotPayload()));
   });
 
-  // El total es la ALTURA del desplazamiento (`total * alto_de_celda`) y el
-  // `aria-rowcount`. El drenaje paginado solo manda parches de filas —también
-  // el último lote—, así que si el parche no lo trae, el listado se queda con
-  // el de la primera página y un directorio grande topa ahí.
-  it("un parche de filas pone al día el TOTAL, no solo las filas", () => {
-    const antes = s.view()?.slots.find((x) => x.kind === "browser");
-    expect(antes?.kind).toBe("browser");
+  // The total is the scroll HEIGHT (`total * row_height`) and the
+  // `aria-rowcount`. Paginated draining only ships row patches — including
+  // the last batch — so if the patch doesn't carry it, the listing keeps the
+  // first page's total, and a big directory runs into that.
+  it("a row patch updates the TOTAL, not just the rows", () => {
+    const before = s.view()?.slots.find((x) => x.kind === "browser");
+    expect(before?.kind).toBe("browser");
     const out = s.receive(
       env(1, {
         update: "patch",
@@ -52,18 +52,18 @@ describe("Session", () => {
       }),
     );
     expect(out.kind).toBe("applied");
-    const despues = s.view()?.slots.find((x) => x.kind === "browser");
-    expect(despues?.kind === "browser" ? despues.total_rows : null).toBe(5000);
+    const after = s.view()?.slots.find((x) => x.kind === "browser");
+    expect(after?.kind === "browser" ? after.total_rows : null).toBe(5000);
   });
 
-  // Una task caduca a los diez segundos y su fila se va: eso desplaza el
-  // resto. El cursor del panel de procesos viajaba solo en la foto entera, así
-  // que el renderer se quedaba resaltando la fila N —ya otra tarea, o
-  // ninguna— mientras la tecla de cancelar actuaba sobre la que el host tiene
-  // acotada. Resaltar una y parar otra es la avería, no el retraso.
-  it("un parche de tablero mueve también el cursor del panel de procesos", () => {
-    const antes = s.view()?.slots.find((x) => x.kind === "processes");
-    expect(antes?.kind, "el corpus trae un panel de procesos").toBe("processes");
+  // A task expires after ten seconds and its row disappears: that shifts the
+  // rest. The processes panel's cursor used to travel only in the full
+  // snapshot, so the renderer kept highlighting row N — by then another task,
+  // or none — while the cancel key acted on the one the host has bounded.
+  // Highlighting one and stopping another is the breakage, not the lag.
+  it("a board patch also moves the processes panel cursor", () => {
+    const before = s.view()?.slots.find((x) => x.kind === "processes");
+    expect(before?.kind, "the corpus carries a processes panel").toBe("processes");
     const out = s.receive(
       env(1, {
         update: "patch",
@@ -72,14 +72,14 @@ describe("Session", () => {
       }),
     );
     expect(out.kind).toBe("applied");
-    const despues = s.view()?.slots.find((x) => x.kind === "processes");
-    expect(despues?.kind === "processes" ? despues.cursor : null).toBe(1);
+    const after = s.view()?.slots.find((x) => x.kind === "processes");
+    expect(after?.kind === "processes" ? after.cursor : null).toBe(1);
   });
 
-  // El tablero se queda vacío: `null`, no «lo de antes». Un resalte sobre la
-  // nada señala una fila que no está, y la tecla de cancelar promete algo que
-  // no puede cumplir.
-  it("un tablero vacío apaga el resalte del panel de procesos", () => {
+  // The board goes empty: `null`, not "whatever was there before". A
+  // highlight over nothing points at a row that isn't there, and the cancel
+  // key promises something it can't deliver.
+  it("an empty board turns off the processes panel highlight", () => {
     s.receive(
       env(1, {
         update: "patch",
@@ -95,14 +95,14 @@ describe("Session", () => {
       }),
     );
     expect(out.kind).toBe("applied");
-    const despues = s.view()?.slots.find((x) => x.kind === "processes");
-    expect(despues?.kind === "processes" ? despues.cursor : 99).toBeNull();
+    const after = s.view()?.slots.find((x) => x.kind === "processes");
+    expect(after?.kind === "processes" ? after.cursor : 99).toBeNull();
   });
 
-  // `pane.names-encoding` retranscribe los nombres, y la ruta del propio
-  // directorio es un nombre más. Viajando solo en la foto, las filas se
-  // repintaban y el título se quedaba con la lectura vieja.
-  it("un parche de cabecera repinta la ruta y lo que falta del listado", () => {
+  // `pane.names-encoding` re-transcribes the names, and the directory's own
+  // path is one more name. Traveling only in the snapshot, the rows got
+  // repainted and the title kept the old reading.
+  it("a header patch repaints the path and what's missing from the listing", () => {
     const out = s.receive(
       env(1, {
         update: "patch",
@@ -126,12 +126,12 @@ describe("Session", () => {
     expect(slot?.kind === "browser" ? slot.path_display : null).toBe("⟨mem⟩/casa/café");
     expect(slot?.kind === "browser" ? slot.hidden_note : null).toBe("3 ocultas");
     expect(slot?.kind === "browser" ? slot.marks : null).toBe(4);
-    // La regla viaja con la cabecera: marcar sin moverse la tiene que
-    // repintar, o se queda enseñando las marcas de antes.
+    // The rule travels with the header: marking without moving has to
+    // repaint it, or it's left showing the old marks.
     expect(slot?.kind === "browser" ? slot.mark_ruler : null).toEqual([0, 1, 9]);
   });
 
-  it("aplica un parche sobre su base", () => {
+  it("applies a patch on top of its base", () => {
     const out = s.receive(
       env(1, {
         update: "patch",
@@ -143,28 +143,28 @@ describe("Session", () => {
     expect(s.sequence()).toBe(1);
   });
 
-  it("un hueco en la secuencia NO se rellena a ojo: se pide una foto", () => {
+  it("a gap in the sequence is NOT filled by guessing: a snapshot is requested", () => {
     const out = s.receive(env(5, { update: "patch", base_sequence: 4, changes: [] }));
     expect(out).toEqual({ kind: "gap", expected: 1, got: 5 });
   });
 
-  it("un parche sobre OTRA base no se aplica", () => {
+  it("a patch on ANOTHER base is not applied", () => {
     const out = s.receive(env(1, { update: "patch", base_sequence: 99, changes: [] }));
     expect(out.kind).toBe("gap");
   });
 
-  it("una secuencia ya vista se ignora, no se reaplica", () => {
+  it("an already-seen sequence is ignored, not reapplied", () => {
     const out = s.receive(env(0, snapshotPayload()));
     expect(out).toEqual({ kind: "ignored", why: "old-sequence" });
   });
 
-  it("un mensaje de otra instancia del host no muta nada", () => {
-    const out = s.receive(env(1, snapshotPayload(), "otra-vida"));
+  it("a message from another host instance mutates nothing", () => {
+    const out = s.receive(env(1, snapshotPayload(), "another-life"));
     expect(out).toEqual({ kind: "ignored", why: "other-instance" });
     expect(s.instanceId()).toBe("host-1");
   });
 
-  it("una versión que no se conoce NO se interpreta a medias", () => {
+  it("an unrecognized version is NOT half-interpreted", () => {
     const out = s.receive({
       bridge_version: BRIDGE_VERSION + 7,
       instance_id: "host-1",
@@ -174,7 +174,7 @@ describe("Session", () => {
     expect(out).toEqual({ kind: "incompatible", version: BRIDGE_VERSION + 7 });
   });
 
-  it("una foto cierra el hueco venga en la secuencia que venga", () => {
+  it("a snapshot closes the gap whatever sequence it arrives on", () => {
     expect(
       s.receive(env(9, { update: "patch", base_sequence: 8, changes: [] })).kind,
     ).toBe("gap");
@@ -183,7 +183,7 @@ describe("Session", () => {
     expect(s.sequence()).toBe(12);
   });
 
-  it("un cambio de disposición mueve el foco al hueco con el papel activo", () => {
+  it("a layout change moves focus to the slot with the active role", () => {
     s.receive(
       env(1, {
         update: "patch",
@@ -221,9 +221,9 @@ describe("Session", () => {
     expect(view.focus).toBe(2);
   });
 
-  it("un cursor de otra generación no se aplica: la fila ya no es esa", () => {
-    const antes = (s.view() as ViewSnapshot).slots[0];
-    expect(antes?.kind).toBe("browser");
+  it("a cursor from another generation is not applied: that row isn't it anymore", () => {
+    const before = (s.view() as ViewSnapshot).slots[0];
+    expect(before?.kind).toBe("browser");
     s.receive(
       env(1, {
         update: "patch",
@@ -231,15 +231,15 @@ describe("Session", () => {
         changes: [{ change: "cursor", slot_id: 1, generation: 999, cursor: 0 }],
       }),
     );
-    const despues = (s.view() as ViewSnapshot).slots[0];
-    if (despues?.kind === "browser" && antes?.kind === "browser") {
-      expect(despues.cursor).toBe(antes.cursor);
+    const after = (s.view() as ViewSnapshot).slots[0];
+    if (after?.kind === "browser" && before?.kind === "browser") {
+      expect(after.cursor).toBe(before.cursor);
     }
   });
 });
 
-describe("un cambio que no se conoce", () => {
-  it("NO avanza la secuencia: pide una foto", () => {
+describe("an unrecognized change", () => {
+  it("does NOT advance the sequence: it requests a snapshot", () => {
     const s = new Session();
     s.receive({
       bridge_version: BRIDGE_VERSION,
@@ -254,7 +254,7 @@ describe("un cambio que no se conoce", () => {
       payload: {
         update: "patch",
         base_sequence: 0,
-        // Un `ViewChange` de un host más nuevo.
+        // A `ViewChange` from a newer host.
         changes: [{ change: "algo_que_no_existe" }],
       } as unknown as UiUpdate,
     });

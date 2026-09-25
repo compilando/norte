@@ -1,12 +1,12 @@
-//! Filas del overlay de ajustes (`app.settings`, S3): re-export fino.
+//! Rows of the settings overlay (`app.settings`, S3): a thin re-export.
 //!
-//! [`Row`]/[`build_rows`] (junto con el editor `app::Settings` que las
-//! consume) vivían aquí, pero no tenían NINGÚN acoplo a la TUI (ni
-//! ratatui/crossterm ni I/O) — solo `norte_frontend::settings::catalog`/
-//! `current_value` + Fluent. S4 (GUI settings view) los hoisteó a
-//! `norte_frontend::settings` para que ambos frontends compartan la MISMA
-//! construcción de filas en vez de duplicarla (CLAUDE.md regla 7); este
-//! módulo queda como alias de compatibilidad de fuente (`norte_tui::
-//! settings::{Row, build_rows}` sigue resolviendo igual para el resto del
-//! crate y los tests de integración).
+//! [`Row`]/[`build_rows`] (together with the `app::Settings` editor that
+//! consumes them) used to live here, but had NO coupling to the TUI (neither
+//! ratatui/crossterm nor I/O) — only `norte_frontend::settings::catalog`/
+//! `current_value` + Fluent. S4 (GUI settings view) hoisted them to
+//! `norte_frontend::settings` so both frontends share the SAME row
+//! construction instead of duplicating it (CLAUDE.md rule 7); this module
+//! stays as a source-compatibility alias (`norte_tui::
+//! settings::{Row, build_rows}` still resolves the same for the rest of the
+//! crate and the integration tests).
 pub use norte_frontend::settings::{Row, build_rows};

@@ -1,19 +1,19 @@
-//! Armar la foto y las vistas que la componen.
+//! Assembling the snapshot and the views that make it up.
 //!
-//! Parte de `controller`: son métodos de `Estado`, movidos aquí sin
-//! tocarlos (ADR 0086). El único escritor sigue siendo el actor.
+//! Part of `controller`: these are methods of `State`, moved here without
+//! touching them (ADR 0086). The only writer is still the actor.
 
-// Estos módulos son el mismo `impl Estado` partido en trozos, así que usan
-// los mismos imports que el padre. Enumerarlos aquí sería una lista de
-// cuarenta líneas por fichero, en 32 ficheros, que se desincroniza en cuanto
-// el padre importa algo — `super::*` la sigue sola.
+// These modules are the same `impl State` split into pieces, so they use
+// the same imports as the parent. Listing them here would be a forty-line
+// list per file, across 32 files, that goes out of sync the moment the
+// parent imports something — `super::*` keeps it in sync on its own.
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
-/// Un fragmento del modelo compartido, en la forma del puente: el rol por su
-/// nombre kebab (ya validado contra el tema), el color como `#rrggbb`, el
-/// texto acotado. El enmascarado se hizo a la entrada
-/// (`Viewer::with_plugin_preview_styled`), una sola vez.
+/// A fragment of the shared model, in the bridge's shape: the role by its
+/// kebab name (already validated against the theme), the color as
+/// `#rrggbb`, the clamped text. The masking was done on the way in
+/// (`Viewer::with_plugin_preview_styled`), once.
 pub(super) fn span_view(s: &norte_frontend::ansi::StyledSpan) -> crate::dto::SpanView {
     crate::dto::SpanView {
         text: clamp_display(s.text.clone()),
@@ -23,36 +23,38 @@ pub(super) fn span_view(s: &norte_frontend::ansi::StyledSpan) -> crate::dto::Spa
     }
 }
 
-impl Estado {
-    /// Proyecta un snapshot del daemon a lo que el renderer pinta.
+impl State {
+    /// Projects a daemon snapshot into what the renderer paints.
     pub(super) fn vista_de(p: &norte_proto::TaskProgress) -> TaskView {
-        // Por la regla COMPARTIDA, que cae a las entradas cuando no hay
-        // bytes totales: esto solo miraba bytes, así que un borrado —que no
-        // cuenta bytes— cruzaba el puente sin porcentaje de principio a fin.
-        let porcentaje = norte_frontend::tasks::progress_pct(p);
+        // By the SHARED rule, which falls back to entries when there are no
+        // total bytes: this used to only look at bytes, so a delete — which
+        // does not count bytes — crossed the bridge with no percentage from
+        // start to finish.
+        let percent = norte_frontend::tasks::progress_pct(p);
         TaskView {
             task_id: p.task_id.get(),
-            kind: clase_de_task(p.kind).to_owned(),
+            kind: task_class(p.kind).to_owned(),
             state: match p.state {
                 norte_proto::TaskState::Completed => TaskStateView::Done,
                 norte_proto::TaskState::Cancelled => TaskStateView::Cancelled,
                 norte_proto::TaskState::Failed { .. } => TaskStateView::Failed,
                 norte_proto::TaskState::Running => TaskStateView::Running,
                 norte_proto::TaskState::Paused => TaskStateView::Paused,
-                // Un estado que este host todavía no conoce se pinta como
-                // encolado: es lo único que no miente sobre algo que sigue
-                // vivo (`TaskState` es no exhaustivo por contrato del wire).
+                // A state this host does not know yet is painted as queued:
+                // it is the only thing that does not lie about something
+                // still alive (`TaskState` is non-exhaustive by the wire's
+                // contract).
                 _ => TaskStateView::Queued,
             },
-            percent: porcentaje,
-            // Vacíos aquí a propósito: el ritmo es de la TASK VIVA, que guarda
-            // las fotos anteriores, y esta función solo ve una. Los rellena
-            // `progreso`, que es quien tiene las dos.
+            percent,
+            // Empty here on purpose: the rate belongs to the LIVE task, which
+            // keeps the previous snapshots, and this function only sees one.
+            // `progress` fills them in, since it has both.
             rate: String::new(),
             eta: String::new(),
             detail: p.current.as_ref().map(|path| {
-                let (texto, _hostil) = norte_frontend::path_display(path);
-                clamp_display(texto)
+                let (text, _hostile) = norte_frontend::path_display(path);
+                clamp_display(text)
             }),
             detail_hostile: p
                 .current
@@ -62,190 +64,191 @@ impl Estado {
         }
     }
 
-    /// La pantalla entera: TODOS los huecos que el reparto pinta, cada uno
-    /// proyectado según lo que es.
+    /// The whole screen: EVERY slot the layout paints, each projected
+    /// according to what it is.
     ///
-    /// Los ocultos no viajan. Un kind que este host todavía no proyecta sí
-    /// viaja, en gris y con su nombre: preservar lo que no se entiende es la
-    /// regla de la sesión (ADR 0059), y hacerlo desaparecer sería peor que
-    /// enseñarlo apagado.
+    /// Hidden ones do not travel. A kind this host does not yet project does
+    /// travel, in gray and with its name: preserving what is not understood
+    /// is the session's rule (ADR 0059), and making it disappear would be
+    /// worse than showing it dimmed.
     pub(super) fn snapshot(&self) -> ViewSnapshot {
         let mut slots = Vec::new();
-        for (slot, _) in &self.reparto.placements {
+        for (slot, _) in &self.split.placements {
             let SlotId(id) = *slot;
-            if let Some(hueco) = self.huecos.get(&id) {
-                slots.push(SlotView::Browser(Box::new(self.browser(id, hueco))));
+            if let Some(slot_state) = self.slots.get(&id) {
+                slots.push(SlotView::Browser(Box::new(self.browser(id, slot_state))));
                 continue;
             }
-            let kind = kind_de(&self.arbol, *slot);
+            let kind = kind_de(&self.tree, *slot);
             match kind.as_ref().map(norte_frontend::layout::KindId::as_str) {
                 Some("metadata") => {
-                    slots.push(SlotView::Metadata(Box::new(self.hoja_de_atributos(*slot))));
+                    slots.push(SlotView::Metadata(Box::new(self.attributes_sheet(*slot))));
                 }
-                Some("places") => slots.push(SlotView::Places(Box::new(self.barra_de_sitios(id)))),
+                Some("places") => slots.push(SlotView::Places(Box::new(self.places_bar(id)))),
                 Some(super::preview::KIND) => {
                     slots.push(SlotView::Preview(Box::new(self.vista_de_preview(id))));
                 }
-                Some("tree") => slots.push(SlotView::Tree(Box::new(self.arbol_de_ramas(id)))),
+                Some("tree") => slots.push(SlotView::Tree(Box::new(self.branch_tree(id)))),
                 Some(super::logpanel::KIND) => {
-                    slots.push(SlotView::Log(Box::new(self.panel_de_registro(id))));
+                    slots.push(SlotView::Log(Box::new(self.log_panel(id))));
                 }
                 Some(super::diskmap::KIND) => {
-                    slots.push(SlotView::DiskMap(Box::new(self.vista_de_mapa(id))));
+                    slots.push(SlotView::DiskMap(Box::new(self.map_view(id))));
                 }
                 Some(super::timeline::KIND) => {
-                    slots.push(SlotView::Timeline(Box::new(self.vista_de_linea(id))));
+                    slots.push(SlotView::Timeline(Box::new(self.timeline_view(id))));
                 }
                 Some(super::termpanel::KIND) => {
                     slots.push(SlotView::Terminal(Box::new(self.panel_de_terminal(id))));
                 }
                 Some("processes") => slots.push(SlotView::Processes {
                     slot_id: id,
-                    // Índice sobre las filas PINTADAS, que es lo que el
-                    // renderer resalta. Sobre el mapa entero, con el tablero
-                    // recortado, señalaba a otra.
-                    cursor: self.cursor_del_tablero(),
+                    // Index over the PAINTED rows, which is what the renderer
+                    // highlights. Over the whole map, with the board
+                    // clamped, it pointed at a different one.
+                    cursor: self.board_cursor(),
                 }),
-                // Un panel APORTADO por un plugin (fase 3), por PREFIJO: su
-                // kind es `plugin:<id>:<kind>` y no se conoce al compilar, así
-                // que no puede ser un brazo con su nombre como sus vecinos.
-                // Y bien formado: `plugin:git` —con prefijo y sin la segunda
-                // mitad— lo puede escribir una disposición a mano, y como
-                // panel saldría sin título y sin líneas, o sea una caja muda.
-                // Cayendo al brazo de abajo sale como lo que es: un kind que
-                // este host no sabe pintar, con su nombre.
+                // A panel CONTRIBUTED by a plugin (phase 3), by PREFIX: its
+                // kind is `plugin:<id>:<kind>` and is not known at compile
+                // time, so it cannot be an arm with its name like its
+                // neighbors. And well-formed: `plugin:git` — with the prefix
+                // and no second half — can be written by hand into a layout,
+                // and as a panel it would come out with no title and no
+                // lines, i.e. a mute box. Falling to the arm below, it comes
+                // out as what it is: a kind this host does not know how to
+                // paint, with its name.
                 Some(k) if k.starts_with("plugin:") && k.splitn(3, ':').count() == 3 => {
                     slots.push(SlotView::Panel(Box::new(self.vista_de_panel(id))));
                 }
                 _ => {
-                    let nombre =
-                        kind.map_or_else(|| "unknown".to_owned(), |k| k.as_str().to_owned());
-                    // El kind sale de un fichero de disposición y `KindId` no
-                    // valida nada: es texto que puede traer controles, y acaba en
-                    // el DOM y en un `aria-label`.
-                    let (pintable, hostil) = norte_frontend::display_name(nombre.as_bytes());
+                    let name = kind.map_or_else(|| "unknown".to_owned(), |k| k.as_str().to_owned());
+                    // The kind comes from a layout file and `KindId` validates
+                    // nothing: it is text that can carry control characters,
+                    // and ends up in the DOM and in an `aria-label`.
+                    let (displayable, hostile) = norte_frontend::display_name(name.as_bytes());
                     slots.push(SlotView::Unsupported {
                         slot_id: id,
-                        kind_name: clamp_display(pintable),
-                        kind_name_hostile: hostil,
+                        kind_name: clamp_display(displayable),
+                        kind_name_hostile: hostile,
                     });
                 }
             }
         }
         ViewSnapshot {
-            compare: self.vista_comparacion(),
-            sync: self.vista_sincronizacion(),
-            connection: self.conexion.clone(),
-            layout: self.disposicion(),
+            compare: self.vista_comparison(),
+            sync: self.vista_sync(),
+            connection: self.connection.clone(),
+            layout: self.layout(),
             slots,
-            focus: Some(self.enfocado()),
+            focus: Some(self.focused()),
             status: self.status.clone(),
-            // Una foto REEMPLAZA lo que el renderer tenga, así que va
-            // entera: un resync que se dejara fuera el diálogo abierto
-            // dejaría al usuario mirando una pantalla sin la pregunta que
-            // está esperando respuesta, con la operación destructiva todavía
-            // viva. Lo mismo con el tablero.
-            dialogs: self.vistas_de_dialogos(),
+            // A snapshot REPLACES whatever the renderer has, so it goes
+            // whole: a resync that left out the open dialog would leave the
+            // user looking at a screen with no question waiting for an
+            // answer, with the destructive operation still alive. Same with
+            // the board.
+            dialogs: self.dialog_views(),
             tasks: self.vistas_de_tasks(),
             menu: self.vista_menu(),
-            panel_bar: self.vista_barra_de_paneles(),
-            status_items: self.vista_elementos_de_estado(),
-            layout_buttons: self.vista_botones_de_disposicion(),
-            // El pijama (spec 2026-09-20). Va en la vista ENTERA y no en un
-            // parche: es configuración, y la recarga en caliente reconstruye
-            // la vista.
+            panel_bar: self.view_pane_bar(),
+            status_items: self.status_items_view(),
+            layout_buttons: self.view_layout_buttons(),
+            // The stripes (spec 2026-09-20). They go in the WHOLE view and
+            // not in a patch: it is configuration, and a live reload rebuilds
+            // the view.
             row_stripes: self.config.common.ui_chrome.row_stripes(),
-            profiles: self.vista_perfiles(),
-            palette: self.vista_paleta(),
+            profiles: self.vista_profiles(),
+            palette: self.vista_palette(),
             goto: self.vista_ir_a(),
-            wizard: self.vista_asistente(),
+            wizard: self.vista_wizard(),
             splash: self.vista_splash(),
             whichkey: self.vista_whichkey(),
-            help: self.vista_ayuda(),
-            settings: self.vista_ajustes(),
-            extensions: self.vista_extensiones(),
-            agents: self.vista_agentes(),
-            plugin_output: self.escritorio.salida.clone(),
-            program_output: self.escritorio.programa.clone(),
-            theme: self.vista_tema(),
-            search: self.vista_busqueda(),
-            layouts: self.vista_disposiciones(),
-            columns: self.vista_columnas(),
+            help: self.vista_help(),
+            settings: self.vista_settings(),
+            extensions: self.vista_extensions(),
+            agents: self.vista_agents(),
+            plugin_output: self.desktop.output.clone(),
+            program_output: self.desktop.program.clone(),
+            theme: self.vista_theme(),
+            search: self.vista_search(),
+            layouts: self.vista_layouts(),
+            columns: self.vista_columns(),
             picker: self.vista_selector(),
             viewer: self.vista_visor(),
             ai_rename: self.vista_ia(),
-            organize: self.vista_organizar(),
+            organize: self.vista_organize(),
             locale: self.locale.clone(),
         }
     }
 
-    /// Cuántas líneas se le mandan al visor y cuánto avanza una página.
+    /// How many lines are sent to the viewer and how far a page advances.
     ///
-    /// Lo dice el renderer (`SetViewerRows`); mientras no lo haya dicho, se
-    /// estima con las celdas de la ventana menos el cromo. Es UN número para
-    /// las dos cosas a propósito: cuando la estimación y lo que se pinta no
-    /// coinciden, una página salta en silencio las líneas recortadas.
+    /// The renderer says so (`SetViewerRows`); until it has, it is estimated
+    /// from the window's cells minus the chrome. It is ONE number for both
+    /// things on purpose: when the estimate and what is painted disagree, a
+    /// page silently skips the clamped lines.
     pub(super) fn alto_del_visor(&self) -> usize {
-        self.visor_filas
+        self.visor_rows
             .unwrap_or_else(|| usize::from(self.viewport.1.saturating_sub(2)))
             .max(1)
     }
 
-    /// Las filas de la paleta: TODO lo que este host implementa.
+    /// The palette's rows: EVERYTHING this host implements.
     ///
-    /// La descripción sale del catálogo Fluent compartido y el atajo del
-    /// keymap efectivo, igual que en el TUI: una paleta construida de una
-    /// lista a mano enseña atajos que el preset del usuario no tiene.
-    pub(super) fn filas_de_paleta(&self) -> Vec<norte_frontend::palette::Row> {
+    /// The description comes from the shared Fluent catalogue and the
+    /// shortcut from the effective keymap, same as in the TUI: a palette
+    /// built from a hand-written list shows shortcuts the user's preset does
+    /// not have.
+    pub(super) fn palette_rows(&self) -> Vec<norte_frontend::palette::Row> {
         use norte_frontend::palette::first_chord;
-        // Con los EFECTOS de esta ventana, no con todos: la paleta era la
-        // única puerta que no pasaba por el keymap efectivo, así que una
-        // ventana de solo lectura ofrecía copiar, mover y borrar. La guarda
-        // de `aplicar_efecto` los rechazaba, pero ofrecer lo que se va a
-        // rehusar es prometer algo que no se va a hacer.
-        crate::commands::todos_con(self.efectos)
+        // With THIS window's effects, not with all of them: the palette used
+        // to be the only door that did not go through the effective keymap,
+        // so a read-only window offered copy, move and delete. `aplicar_
+        // efecto`'s guard rejected them, but offering what is going to be
+        // refused is promising something that is not going to happen.
+        crate::commands::all_with(self.effects)
             .into_iter()
             .map(|cmd| norte_frontend::palette::Row {
                 key: cmd.to_owned(),
                 text: cmd.to_owned(),
                 desc: norte_i18n::t_in(self.lang, &format!("help-cmd-{}", cmd.replace('.', "-"))),
-                chord: first_chord(cmd, &self.efectivo)
-                    .or_else(|| first_chord(cmd, self.resolver_visor_efectivo()))
+                chord: first_chord(cmd, &self.effective)
+                    .or_else(|| first_chord(cmd, self.resolver_visor_effective()))
                     .unwrap_or_else(|| "—".to_owned()),
-                // Un comando propio es vocabulario de este proyecto.
+                // A command of our own is this project's vocabulary.
                 hostile: false,
             })
             .collect()
     }
 
-    /// El efectivo del visor, para buscar el atajo de un comando suyo.
-    pub(super) fn resolver_visor_efectivo(&self) -> &Effective {
-        &self.efectivo_visor
+    /// The viewer's effective keymap, to look up one of its commands' key.
+    pub(super) fn resolver_visor_effective(&self) -> &Effective {
+        &self.effective_visor
     }
 
-    /// Un click sobre una fila del selector de perfiles: la elige y la activa.
+    /// A click on a row of the profile selector: selects it and activates it.
     ///
-    /// La GENERACIÓN no es decorativa: la lista se llena desde una tarea de
-    /// fondo, así que un índice de la pantalla anterior nombra otro perfil
-    /// (ADR 0068). Una generación vieja se rechaza en vez de recortarse.
-    pub(super) fn activar_perfil_de_fila(
+    /// The GENERATION is not decorative: the list fills in from a background
+    /// task, so an index from the previous screen names a different profile
+    /// (ADR 0068). An old generation is rejected instead of clamped.
+    pub(super) fn activate_profile_from_row(
         &mut self,
         row: u32,
         generation: u64,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        if generation != self.gen_perfiles {
-            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        if generation != self.gen_profiles {
+            return (Self::stale(StaleAction::Generation), Vec::new());
         }
-        let Some(p) = self.selector_perfil.as_mut() else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        let Some(p) = self.selector_profile.as_mut() else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
         let i = row as usize;
-        let Some(fila) = p.rows().get(i) else {
-            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        let Some(row) = p.rows().get(i) else {
+            return (Self::stale(StaleAction::Generation), Vec::new());
         };
-        if fila.problem.is_some() {
+        if row.problem.is_some() {
             return (
                 ActionAck::Unavailable {
                     reason_key: "host-profile-broken".to_owned(),
@@ -253,27 +256,27 @@ impl Estado {
                 Vec::new(),
             );
         }
-        let nombre = fila.name.clone();
-        let envios = self.elegir_perfil(&nombre, backend, buzon);
-        (self.aplicada(), envios)
+        let name = row.name.clone();
+        let outgoing = self.choose_profile(&name, backend, mailbox);
+        (self.applied(), outgoing)
     }
 
-    /// La proyección del selector de perfiles.
-    pub(super) fn vista_perfiles(&self) -> Option<crate::dto::ProfilePickerView> {
+    /// The profile selector's projection.
+    pub(super) fn vista_profiles(&self) -> Option<crate::dto::ProfilePickerView> {
         use norte_frontend::profile_picker::NameClash;
-        let p = self.selector_perfil.as_ref()?;
+        let p = self.selector_profile.as_ref()?;
         Some(crate::dto::ProfilePickerView {
             rows: p
                 .rows()
                 .iter()
                 .map(|r| {
-                    // El nombre son BYTES de un directorio: se enmascara, y se
-                    // dice que se enmascaró (#266).
-                    let (pintable, hostil) =
+                    // The name is a directory's BYTES: it is masked, and it
+                    // is said that it was masked (#266).
+                    let (displayable, hostile) =
                         norte_frontend::display_os_name(std::path::Path::new(&r.name).as_os_str());
                     crate::dto::ProfileRowView {
-                        name: clamp_display(pintable),
-                        name_hostile: hostil,
+                        name: clamp_display(displayable),
+                        name_hostile: hostile,
                         title: r.title.clone().map(clamp_display),
                         active: r.active,
                         clash: match r.clash {
@@ -289,49 +292,49 @@ impl Estado {
                             }
                         },
                         no_state: !r.carries_state,
-                        // El diagnóstico sale de un fichero del usuario: va
-                        // acotado y enmascarado como todo lo demás (#73).
+                        // The diagnostic comes from a user file: it is
+                        // clamped and masked like everything else (#73).
                         problem: r.problem.clone().map(clamp_display).unwrap_or_default(),
                     }
                 })
                 .collect(),
             cursor: p.cursor() as u64,
-            generation: self.gen_perfiles,
+            generation: self.gen_profiles,
         })
     }
 
-    /// La proyección de la barra de menús.
+    /// The menu bar's projection.
     ///
-    /// Los títulos van SIEMPRE —la barra sigue ahí con el desplegable
-    /// cerrado— y las entradas solo cuando hay uno abierto: un menú de doce
-    /// entradas por cada uno de los siete, en cada parche, es media pantalla
-    /// de JSON para pintar una fila de títulos.
+    /// Titles ALWAYS go — the bar is still there with the dropdown closed —
+    /// and the entries only when one is open: a menu of twelve entries for
+    /// each of the seven, on every patch, is half a screen of JSON to paint
+    /// one row of titles.
     pub(super) fn vista_menu(&self) -> crate::dto::MenuView {
         use norte_frontend::menu::MENUS;
-        let ejecutables = crate::commands::todos_con(self.efectos);
+        let runnable = crate::commands::all_with(self.effects);
         let items = self.menu.as_ref().map_or_else(Vec::new, |m| {
             MENUS.get(m.menu()).map_or_else(Vec::new, |menu| {
                 menu.items()
                     .enumerate()
                     .map(|(i, id)| crate::dto::MenuItemView {
-                        // La etiqueta CORTA y propia (`menu-item-*`), no la
-                        // frase de `help-cmd-*`: esa es una descripción, y con
-                        // ella el desplegable tapa los dos paneles. Mismo
-                        // criterio que el TUI, que lo aprendió pintando.
+                        // The SHORT, own label (`menu-item-*`), not the
+                        // `help-cmd-*` phrase: that one is a description, and
+                        // with it the dropdown covers both panels. Same
+                        // criterion as the TUI, which learned it by painting.
                         label: clamp_display(norte_i18n::t_in(
                             self.lang,
                             &format!("menu-item-{}", id.replace('.', "-")),
                         )),
                         chord: clamp_display(
-                            norte_frontend::palette::first_chord(id, &self.efectivo)
+                            norte_frontend::palette::first_chord(id, &self.effective)
                                 .or_else(|| {
-                                    norte_frontend::palette::first_chord(id, &self.efectivo_visor)
+                                    norte_frontend::palette::first_chord(id, &self.effective_visor)
                                 })
                                 .unwrap_or_default(),
                         ),
-                        enabled: ejecutables.contains(&id),
-                        section: menu.section_at(i).map(|titulo| {
-                            titulo.map_or_else(String::new, |k| {
+                        enabled: runnable.contains(&id),
+                        section: menu.section_at(i).map(|title| {
+                            title.map_or_else(String::new, |k| {
                                 clamp_display(norte_i18n::t_in(self.lang, k))
                             })
                         }),
@@ -341,8 +344,8 @@ impl Estado {
             })
         });
         crate::dto::MenuView {
-            // Por defecto ENCENDIDA, igual que el TUI: quien no ha dicho nada
-            // no ha pedido esconderla.
+            // ON by default, same as the TUI: whoever has said nothing has
+            // not asked to hide it.
             bar: self.config.common.ui_menu_bar.unwrap_or(true),
             titles: MENUS
                 .iter()
@@ -354,27 +357,27 @@ impl Estado {
         }
     }
 
-    /// La proyección de la barra de paneles (#324).
+    /// The panel bar's projection (#324).
     ///
-    /// Lo que la TUI hace en `panel_buttons`, con lo que este host sabe: qué
-    /// se COLOCÓ (del reparto, no del árbol — un hueco detrás de una pestaña
-    /// o descartado por falta de sitio no está abierto, #329/#331), quién
-    /// tiene el teclado, y qué tiene algo que contar sin estar a la vista.
-    /// El QUÉ y el ORDEN son de `norte_frontend::panelbar`, compartidos.
-    pub(super) fn vista_barra_de_paneles(&self) -> crate::dto::PanelBarView {
-        let botones = self.botones_de_paneles();
+    /// What the TUI does in `panel_buttons`, with what this host knows: what
+    /// got PLACED (from the layout, not the tree — a slot behind a tab or
+    /// dropped for lack of room is not open, #329/#331), who has the
+    /// keyboard, and what has something to report without being in view. The
+    /// WHAT and the ORDER belong to `norte_frontend::panelbar`, shared.
+    pub(super) fn view_pane_bar(&self) -> crate::dto::PanelBarView {
+        let buttons = self.pane_buttons();
         crate::dto::PanelBarView {
-            // Por defecto ENCENDIDA, igual que la de menús y que la TUI.
+            // ON by default, same as the menu bar's and the TUI's.
             bar: self.config.common.ui_panel_bar.unwrap_or(true),
             names: self.config.common.ui_chrome.panel_bar_style().shows_names(),
-            // `auto` = columna: la ventana va corta de alto, no de ancho.
+            // `auto` = column: the window is short on height, not width.
             vertical: self
                 .config
                 .common
                 .ui_chrome
                 .panel_bar_position()
                 .vertical(true),
-            buttons: botones
+            buttons: buttons
                 .iter()
                 .map(|b| {
                     let (kind, _) = norte_frontend::display_name(b.kind.as_bytes());
@@ -385,7 +388,7 @@ impl Estado {
                         kind,
                         letter: b.letter.to_string(),
                         chord: clamp_display(
-                            norte_frontend::palette::first_chord(&b.command, &self.efectivo)
+                            norte_frontend::palette::first_chord(&b.command, &self.effective)
                                 .unwrap_or_else(|| "—".to_owned()),
                         ),
                         state: match b.state {
@@ -407,36 +410,36 @@ impl Estado {
         }
     }
 
-    /// Los elementos de la barra de estado, SIN recortar por ancho: lo que
-    /// un clic resuelve. Del mismo código que la TUI (ADR 0132).
-    pub(super) fn elementos_de_estado(&self) -> Vec<norte_frontend::statusbar::StatusItemView> {
+    /// The status bar's items, UNCLAMPED by width: what a click resolves.
+    /// From the same code as the TUI (ADR 0132).
+    pub(super) fn state_items(&self) -> Vec<norte_frontend::statusbar::StatusItemView> {
         let input = norte_frontend::statusbar::StatusInput::from_pane(
-            &self.hueco().pane,
-            self.tira.view(self.reloj_tira()),
+            &self.slot().pane,
+            self.strip.view(self.clock_strip()),
             self.status.notices_unread,
         );
-        // Los de los plugins primero (ADR 0137), como en la TUI: a la
-        // izquierda de la mitad derecha, y los primeros en ceder.
-        let mut lista = norte_frontend::statusbar::plugin_items(
-            &self.hueco().pane,
+        // The plugins' first (ADR 0137), like in the TUI: to the left of the
+        // right half, and the first to give way.
+        let mut list = norte_frontend::statusbar::plugin_items(
+            &self.slot().pane,
             &self.config.common.ui_status_plugins,
             self.lang,
         );
-        lista.extend(norte_frontend::statusbar::items(
+        list.extend(norte_frontend::statusbar::items(
             &input,
             self.config.common.ui_chrome.status_items(),
             self.lang,
         ));
-        lista
+        list
     }
 
-    /// La proyección de la mitad derecha de la barra de estado (ADR 0132):
-    /// lo que cabe en la mitad del ancho declarado, descartado por
-    /// prioridad con el mismo `fit` que la TUI.
-    pub(super) fn vista_elementos_de_estado(&self) -> Vec<crate::dto::StatusItemView> {
-        let lista = self.elementos_de_estado();
-        let ancho = usize::from(self.viewport.0);
-        norte_frontend::statusbar::fit(&lista, ancho / 2, 2)
+    /// The status bar's right half's projection (ADR 0132): what fits in half
+    /// the declared width, dropped by priority with the same `fit` as the
+    /// TUI's.
+    pub(super) fn status_items_view(&self) -> Vec<crate::dto::StatusItemView> {
+        let list = self.state_items();
+        let width = usize::from(self.viewport.0);
+        norte_frontend::statusbar::fit(&list, width / 2, 2)
             .into_iter()
             .map(|v| {
                 use norte_frontend::task_strip::StripPhase;
@@ -462,113 +465,114 @@ impl Estado {
             .collect()
     }
 
-    /// Los botones de disposición (ADR 0133), con el nombre de su entrada
-    /// del menú y el atajo del keymap VIVO. Van en la foto: el keymap
-    /// cambia con un perfil o una recarga, y las dos mandan foto.
-    pub(super) fn vista_botones_de_disposicion(&self) -> Vec<crate::dto::ChromeButtonView> {
+    /// The layout buttons (ADR 0133), with their menu entry's name and the
+    /// LIVE keymap's shortcut. They go in the snapshot: the keymap changes
+    /// with a profile or a reload, and both send a snapshot.
+    pub(super) fn view_layout_buttons(&self) -> Vec<crate::dto::ChromeButtonView> {
         norte_frontend::layoutbar::BUTTONS
             .iter()
             .map(|b| crate::dto::ChromeButtonView {
                 id: b.id.to_owned(),
                 label: clamp_display(norte_frontend::layoutbar::label(b, self.lang)),
                 chord: clamp_display(
-                    norte_frontend::palette::first_chord(b.command, &self.efectivo)
+                    norte_frontend::palette::first_chord(b.command, &self.effective)
                         .unwrap_or_else(|| "—".to_owned()),
                 ),
             })
             .collect()
     }
 
-    /// Los botones de la barra, con su comando: lo que un click resuelve.
-    pub(super) fn botones_de_paneles(&self) -> Vec<norte_frontend::panelbar::PanelButton> {
-        // En ORDEN DE PANTALLA, que es el de los botones: de arriba abajo y,
-        // a igual altura, de izquierda a derecha. El reparto los da en el
-        // orden en que recorre el árbol, que casi siempre coincide y no lo
-        // garantiza — y «casi siempre» no vale para una fila que se aprende
-        // con el dedo.
-        let mut placements: Vec<_> = self.reparto.placements.iter().collect();
+    /// The bar's buttons, with their command: what a click resolves.
+    pub(super) fn pane_buttons(&self) -> Vec<norte_frontend::panelbar::PanelButton> {
+        // In SCREEN ORDER, which is the buttons' order: top to bottom and, at
+        // the same height, left to right. The layout gives them in the order
+        // it walks the tree, which almost always matches and does not
+        // guarantee it — and "almost always" is no good for a row learned by
+        // finger memory.
+        let mut placements: Vec<_> = self.split.placements.iter().collect();
         placements.sort_by_key(|(_, r)| (r.y, r.x));
-        let colocados: Vec<String> = placements
+        let placed: Vec<String> = placements
             .iter()
-            .filter_map(|(id, _)| kind_de(&self.arbol, *id))
+            .filter_map(|(id, _)| kind_de(&self.tree, *id))
             .map(|k| k.as_str().to_owned())
             .collect();
-        let abiertos: Vec<&str> = colocados.iter().map(String::as_str).collect();
-        // Un listado con el teclado no es «un panel enfocado»: la barra dice
-        // a qué PANEL van las teclas, y a los listados van por defecto.
-        let del_foco = kind_de(&self.arbol, SlotId(self.enfocado())).map(|k| k.as_str().to_owned());
-        let focused = del_foco.as_deref().filter(|k| *k != "browser");
-        // Novedad: el registro con avisos sin ver, y procesos con tareas en
-        // el tablero. Con el panel A LA VISTA ya lo estás viendo: la marca
-        // sobra. Mismo criterio que la TUI, y por eso se pregunta a los
-        // colocados y no al árbol.
-        let mut novedad: Vec<(&str, u32)> = Vec::new();
-        if !abiertos.contains(&"processes") {
-            novedad.push((
+        let open_kinds: Vec<&str> = placed.iter().map(String::as_str).collect();
+        // A listing with the keyboard is not "a focused panel": the bar says
+        // which PANEL the keys go to, and listings get them by default.
+        let focused_kind =
+            kind_de(&self.tree, SlotId(self.focused())).map(|k| k.as_str().to_owned());
+        let focused = focused_kind.as_deref().filter(|k| *k != "browser");
+        // News: the log with unseen warnings, and processes with tasks on the
+        // board. With the panel IN VIEW you are already seeing it: the mark
+        // is redundant. Same criterion as the TUI's, and that is why it asks
+        // the placed ones and not the tree.
+        let mut attention_list: Vec<(&str, u32)> = Vec::new();
+        if !open_kinds.contains(&"processes") {
+            attention_list.push((
                 "processes",
-                norte_frontend::panelbar::cifra(self.filas_de_tablero()),
+                norte_frontend::panelbar::figure(self.board_rows()),
             ));
         }
-        if !abiertos.contains(&super::logpanel::KIND)
-            && let Some(r) = self.log_ring.as_ref()
+        if !open_kinds.contains(&super::logpanel::KIND)
+            && let Some(ring) = self.log_ring.as_ref()
         {
-            novedad.push((
+            attention_list.push((
                 super::logpanel::KIND,
-                norte_frontend::panelbar::cifra(
-                    r.count_at_or_above(norte_config::logline::LogLevel::Warn),
+                norte_frontend::panelbar::figure(
+                    ring.count_at_or_above(norte_config::logline::LogLevel::Warn),
                 ),
             ));
         }
         norte_frontend::panelbar::buttons_in(
             &self.kinds,
             norte_frontend::panelbar::PanelBarInput {
-                open: &abiertos,
+                open: &open_kinds,
                 focused,
-                attention: &novedad,
+                attention: &attention_list,
             },
             self.lang,
         )
     }
 
-    /// La proyección de la paleta.
-    pub(super) fn vista_paleta(&self) -> Option<crate::dto::PaletteView> {
-        let p = self.paleta.as_ref()?;
-        let filas = p.rows();
-        let visibles = p.visible();
-        let sin_consulta = p.query_display().is_empty();
+    /// The palette's projection.
+    pub(super) fn vista_palette(&self) -> Option<crate::dto::PaletteView> {
+        let p = self.palette.as_ref()?;
+        let rows = p.rows();
+        let visible = p.visible();
+        let no_query = p.query_display().is_empty();
         Some(crate::dto::PaletteView {
             query: clamp_display(p.query_display()),
-            rows: visibles
+            rows: visible
                 .iter()
-                // Un tope, como cualquier otra lista que cruza: con la
-                // consulta vacía TODAS las filas son visibles, y las de
-                // plugin las pone un tercero.
+                // A cap, like any other list that crosses: with an empty
+                // query EVERY row is visible, and the plugin ones are put
+                // there by a third party.
                 .take(crate::bridge::MAX_ROWS_PER_BATCH)
-                .filter_map(|i| filas.get(*i).map(|r| (*i, r)))
+                .filter_map(|i| rows.get(*i).map(|r| (*i, r)))
                 .map(|(i, r)| crate::dto::PaletteRowView {
-                    // Reciente solo mientras va arriba por serlo: con
-                    // consulta el orden es el de lo que casa.
-                    recent: sin_consulta && p.is_recent(i),
+                    // Recent only while it is up top for being one: with a
+                    // query the order is by what matches.
+                    recent: no_query && p.is_recent(i),
                     text: clamp_display(r.text.clone()),
                     desc: clamp_display(r.desc.clone()),
                     chord: clamp_display(r.chord.clone()),
-                    // Lo que se pinta DIFIERE de lo que el manifiesto dice.
-                    // Una fila de plugin es texto de tercero en la pantalla
-                    // donde se elige qué código correr: sin esto se pintaba
-                    // enmascarada y sin decirlo.
+                    // What is painted DIFFERS from what the manifest says. A
+                    // plugin row is a third party's text on the screen where
+                    // it is chosen what code to run: without this it painted
+                    // masked and without saying so.
                     hostile: r.hostile,
-                    // Los comandos propios los implementa este host —salen de
-                    // su propia lista— y los de PLUGIN los resuelve el
-                    // daemon, que exige aprobada + encendida por su cuenta.
+                    // This host implements its OWN commands — they come from
+                    // its own list — and the PLUGIN ones are resolved by the
+                    // daemon, which requires approved + enabled on its own.
                     enabled: true,
                 })
                 .collect(),
-            cursor: (!visibles.is_empty()).then_some(p.cursor() as u64),
-            total: filas.len() as u64,
+            cursor: (!visible.is_empty()).then_some(p.cursor() as u64),
+            total: rows.len() as u64,
         })
     }
 
-    /// La proyección del panel de continuaciones.
+    /// The continuations panel's projection.
     pub(super) fn vista_whichkey(&self) -> Option<crate::dto::WhichKeyView> {
         let panel = self.whichkey.as_ref()?;
         Some(crate::dto::WhichKeyView {
@@ -587,41 +591,42 @@ impl Estado {
         })
     }
 
-    /// La proyección del visor, con la ventana de líneas que cabe.
+    /// The viewer's projection, with the window of lines that fits.
     ///
-    /// El alto sale del viewport en CELDAS —la misma rejilla que reparte la
-    /// pantalla—, menos el cromo: el visor ocupa la ventana entera.
+    /// The height comes from the viewport in CELLS — the same grid that
+    /// splits the screen — minus the chrome: the viewer occupies the whole
+    /// window.
     pub(super) fn vista_visor(&self) -> Option<crate::dto::ViewerView> {
         let v = self.visor.as_ref()?;
         Some(self.vista_de_visor(v, self.alto_del_visor(), true))
     }
 
-    /// La proyección de UN visor: el de pantalla completa o el de un hueco
-    /// de preview (#291), que son el mismo modelo con otro vínculo.
+    /// A SINGLE viewer's projection: the full-screen one or a preview slot's
+    /// (#291), which are the same model with a different link.
     ///
-    /// `con_imagen`: si una imagen aceptada se anuncia para que el renderer
-    /// pida sus bytes. Solo el visor grande los sirve (`BytesDeImagen` es
-    /// «la imagen del visor abierto»); en un hueco, una foto la pinta el
-    /// previewer de imágenes con sus medios bloques, o se ve en crudo.
+    /// `con_imagen`: whether an accepted image is announced so the renderer
+    /// requests its bytes. Only the big viewer serves them
+    /// (`BytesDeImagen` is "the open viewer's image"); in a slot, a photo is
+    /// painted by the image previewer with its half-blocks, or seen raw.
     pub(super) fn vista_de_visor(
         &self,
         v: &norte_frontend::viewer::Viewer,
-        alto: usize,
+        height: usize,
         con_imagen: bool,
     ) -> crate::dto::ViewerView {
-        let imagen = if con_imagen {
+        let image = if con_imagen {
             Self::imagen_de(v)
         } else {
             Ok(None)
         };
-        // El TUI pinta la ruta del visor con el encoding del panel ENFOCADO
-        // (`ui::panels`), y por lo mismo: es el fichero que se abrió desde
-        // ahí.
-        let (path, hostil) =
-            norte_frontend::path_display_with(&v.path, self.hueco().pane.name_encoding());
+        // The TUI paints the viewer's path with the FOCUSED panel's encoding
+        // (`ui::panels`), and for the same reason: it is the file that was
+        // opened from there.
+        let (path, hostile) =
+            norte_frontend::path_display_with(&v.path, self.slot().pane.name_encoding());
         crate::dto::ViewerView {
             path_display: clamp_display(path),
-            path_hostile: hostil,
+            path_hostile: hostile,
             encoding: v.encoding_name().to_owned(),
             eol: match v.eol() {
                 norte_encoding::Eol::Lf => "lf",
@@ -639,23 +644,23 @@ impl Estado {
             first_line: v.scroll as u64,
             total_cols: v.max_cols() as u64,
             first_col: v.hscroll() as u64,
-            lines: v.rows(alto).into_iter().map(clamp_display).collect(),
-            // El nombre ya viene enmascarado del modelo compartido; se acota
-            // aquí como todo lo que cruza.
-            // Una MINIATURA de plugin (ADR 0107) manda sobre las dos cosas:
-            // es la imagen que se anuncia, y el «via …» dice de quién es.
-            // Solo en el visor grande (`con_imagen`), que es el único que
-            // sirve bytes.
-            preview_by: match (con_imagen, self.miniatura.as_ref()) {
+            lines: v.rows(height).into_iter().map(clamp_display).collect(),
+            // The name already arrives masked from the shared model; it is
+            // clamped here like everything that crosses.
+            // A plugin THUMBNAIL (ADR 0107) rules over both things: it is the
+            // image that is announced, and the "via …" says whose it is.
+            // Only in the big viewer (`con_imagen`), which is the only one
+            // that serves bytes.
+            preview_by: match (con_imagen, self.thumbnail.as_ref()) {
                 (true, Some((_, plugin))) => clamp_display(norte_i18n::ta_in(
                     self.lang,
                     "viewer-plugin-preview",
                     &[("plugin", plugin)],
                 )),
                 _ => v.preview_plugin().map_or_else(String::new, |n| {
-                    // La MISMA clave que el TUI: el indicador «via …» no
-                    // puede decirse de dos maneras según quién pinte. El
-                    // nombre ya viene enmascarado del modelo compartido.
+                    // The SAME key as the TUI's: the "via …" indicator cannot
+                    // be said two different ways depending on who paints it.
+                    // The name already arrives masked from the shared model.
                     clamp_display(norte_i18n::ta_in(
                         self.lang,
                         "viewer-plugin-preview",
@@ -664,62 +669,63 @@ impl Estado {
                 }),
             },
             preview_lossy: v.preview_lossy(),
-            image: match (con_imagen, self.miniatura.as_ref()) {
-                (true, Some((vista, _))) => Some(vista.clone()),
-                _ => imagen.clone().ok().flatten(),
+            image: match (con_imagen, self.thumbnail.as_ref()) {
+                (true, Some((view, _))) => Some(view.clone()),
+                _ => image.clone().ok().flatten(),
             },
-            image_refused: match &imagen {
-                // Con miniatura, el motivo por el que el visor no pinta la
-                // suya deja de importar: hay imagen.
-                Err(clave) if !(con_imagen && self.miniatura.is_some()) => {
-                    clamp_display(norte_i18n::t_in(self.lang, clave))
+            image_refused: match &image {
+                // With a thumbnail, the reason the viewer does not paint its
+                // own stops mattering: there is an image.
+                Err(key) if !(con_imagen && self.thumbnail.is_some()) => {
+                    clamp_display(norte_i18n::t_in(self.lang, key))
                 }
                 _ => String::new(),
             },
-            // El zoom (puente 80). Es estado del visor, igual que el
-            // hexadecimal o el encoding forzado, así que sale de él.
+            // The zoom (bridge 80). It is the viewer's own state, same as
+            // hex or forced encoding, so it comes from it.
             image_zoom: v.zoom_pct(),
-            // Los fragmentos con estilo de la MISMA ventana de filas que
-            // `lines` (mismo `alto`, mismo `scroll`): una entrada por fila.
-            // El texto ya llegó enmascarado del modelo compartido; se acota
-            // aquí como todo lo que cruza.
+            // The styled fragments from the SAME row window as `lines` (same
+            // `height`, same `scroll`): one entry per row. The text already
+            // arrived masked from the shared model; it is clamped here like
+            // everything that crosses.
             styled: v
-                .plugin_styled_rows(alto)
-                .map(|filas| {
-                    filas
-                        .iter()
-                        .map(|linea| linea.iter().map(span_view).collect())
+                .plugin_styled_rows(height)
+                .map(|rows| {
+                    rows.iter()
+                        .map(|line| line.iter().map(span_view).collect())
                         .collect()
                 })
                 .unwrap_or_default(),
         }
     }
 
-    /// Si lo que hay en el visor es una imagen PINTABLE, y si no, por qué no.
+    /// Whether what is in the viewer is a PAINTABLE image, and if not, why
+    /// not.
     ///
-    /// `Ok(None)` = no es una imagen. `Ok(Some(_))` = lo es y se acepta.
-    /// `Err(clave)` = lo es y se RECHAZA, con la clave que lo explica.
+    /// `Ok(None)` = it is not an image. `Ok(Some(_))` = it is one and it is
+    /// accepted. `Err(key)` = it is one and it is REJECTED, with the key that
+    /// explains it.
     ///
-    /// Los tres topes del ADR 0069, y los tres son negativas y no recortes:
+    /// ADR 0069's three caps, and all three are refusals and not truncations:
     ///
-    /// - El **formato** sale de los bytes mágicos, nunca de la extensión: una
-    ///   extensión es una afirmación de quien nombró el fichero.
-    /// - Las **dimensiones declaradas** se comparan con el presupuesto ANTES
-    ///   de que nadie decodifique. Un PNG de 64 KB puede declarar 60000×60000
-    ///   y costar gigabytes; leerle la cabecera es la única defensa barata.
-    ///   Una cabecera que no se entiende también se rechaza: «no sé» tratado
-    ///   como «adelante» es la puerta que esto existe para cerrar.
-    /// - Los **bytes** los acota quien los sirve, y un fichero que no cabe no
-    ///   se pinta A MEDIAS: media imagen decodificada es una imagen de otra
-    ///   cosa.
+    /// - The **format** comes from the magic bytes, never the extension: an
+    ///   extension is a claim made by whoever named the file.
+    /// - The **declared dimensions** are compared against the budget BEFORE
+    ///   anyone decodes. A 64 KB PNG can declare 60000×60000 and cost
+    ///   gigabytes; reading its header is the only cheap defense. A header
+    ///   that is not understood is also rejected: "I don't know" treated as
+    ///   "go ahead" is the door this exists to close.
+    /// - The **bytes** are capped by whoever serves them, and a file that
+    ///   does not fit is not painted HALFWAY: half a decoded image is an
+    ///   image of something else.
     pub(super) fn imagen_de(
         v: &norte_frontend::viewer::Viewer,
     ) -> Result<Option<crate::dto::ImageView>, &'static str> {
         let Some(fmt) = v.image_kind() else {
             return Ok(None);
         };
-        // La cabecera SIEMPRE cabe en lo que el visor ya leyó, así que
-        // rechazar aquí no cuesta un viaje.
+        // The header ALWAYS fits in what the viewer already read, so
+        // rejecting here costs no trip.
         let bytes = v.image_bytes().unwrap_or_default();
         let Some((w, h)) = norte_frontend::viewer::image_dimensions(bytes) else {
             return Err("viewer-image-unreadable");

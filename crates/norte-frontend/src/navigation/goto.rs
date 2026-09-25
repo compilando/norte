@@ -1,222 +1,227 @@
-//! «Ir a cualquier sitio» (fase 6 del programa WOW): una sola pantalla que
-//! junta lo que hasta ahora estaba en cinco — la paleta de comandos, la
-//! historia, los populares, los favoritos y las conexiones — y le añade lo
-//! que no tenía sitio: una ruta TECLEADA y, cuando llega, lo que el índice
-//! semántico encontró.
+//! "Go to anywhere" (phase 6 of the WOW program): a single screen that
+//! brings together what used to live in five — the command palette,
+//! history, popular places, favorites and connections — and adds what had
+//! no home: a TYPED path and, once it arrives, what the semantic index
+//! found.
 //!
-//! Lo que este módulo aporta y lo que deja fuera, a propósito:
+//! What this module contributes and what it leaves out, on purpose:
 //!
-//! - Aporta el MODELO: qué es una fila, en qué sección va, en qué orden van
-//!   las secciones, cómo se filtra y por dónde anda el cursor. Todo puro y
-//!   con tests.
-//! - No aporta los DATOS. Cada fuente los trae, porque cada una sabe cosas
-//!   que este módulo no puede saber: de dónde vienen los bytes de un nombre
-//!   y con qué codificación se pintan, si el texto es del proyecto o de un
-//!   tercero, y si hace falta enmascararlo. Una fila llega con su texto ya
-//!   pintable y su bandera [`GotoRow::hostile`] ya puesta — el mismo
-//!   criterio que [`crate::palette::Row`], y por la misma razón: enmascarar
-//!   al pintar es enmascarar en cada frame y olvidarlo en uno.
+//! - Contributes the MODEL: what a row is, which section it falls in, what
+//!   order the sections go in, how it is filtered and where the cursor
+//!   sits. All pure, and tested.
+//! - Does not contribute the DATA. Each source brings its own, because each
+//!   one knows things this module cannot: where a name's bytes come from
+//!   and what encoding paints them, whether the text belongs to the
+//!   project or to a third party, and whether it needs masking. A row
+//!   arrives with its text already paintable and its [`GotoRow::hostile`]
+//!   flag already set — the same criterion as [`crate::palette::Row`], and
+//!   for the same reason: masking while painting is masking on every frame
+//!   and forgetting it on one.
 //!
-//! Una fuente nueva es implementar [`GotoSource`] y meterla en la lista. No
-//! hay ningún sitio más que tocar: el filtrado, las cabeceras, el orden y el
-//! cursor son de aquí.
+//! A new source is implementing [`GotoSource`] and putting it in the list.
+//! There is nowhere else to touch: filtering, headers, order and the cursor
+//! all live here.
 
 use crate::palette_state::is_subsequence;
 
-/// Una sección del «ir a»: un id estable y la clave Fluent de su título.
+/// A "go to" section: a stable id and its title's Fluent key.
 ///
-/// El id NO se pinta: es lo que empareja una fila con su cabecera y lo que
-/// fija el orden. El título sí, y sale de Fluent como todo lo demás.
+/// The id is NOT painted: it is what pairs a row with its header and what
+/// fixes the order. The title is, and comes from Fluent like everything
+/// else.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GotoSection {
-    /// Id estable de la sección.
+    /// The section's stable id.
     pub id: &'static str,
-    /// Clave Fluent del título que se pinta encima de sus filas.
+    /// Fluent key of the title painted above its rows.
     pub title_key: &'static str,
 }
 
-/// La ruta que el lector acaba de teclear. Va la PRIMERA porque es lo que
-/// acaba de escribir: ninguna lista tiene prioridad sobre eso.
-pub const SECCION_RUTA: GotoSection = GotoSection {
+/// The path the reader just typed. Goes FIRST because it is what they just
+/// wrote: no list outranks that.
+pub const SECTION_PATH: GotoSection = GotoSection {
     id: "path",
     title_key: "goto-section-path",
 };
 
-/// Dónde ha estado este panel.
-pub const SECCION_HISTORIA: GotoSection = GotoSection {
+/// Where this panel has been.
+pub const SECTION_HISTORY: GotoSection = GotoSection {
     id: "history",
     title_key: "goto-section-history",
 };
 
-/// Dónde vuelve más veces.
-pub const SECCION_POPULARES: GotoSection = GotoSection {
+/// Where it comes back to most.
+pub const SECTION_POPULAR: GotoSection = GotoSection {
     id: "popular",
     title_key: "goto-section-popular",
 };
 
-/// Los sitios que guardó a mano.
-pub const SECCION_FAVORITOS: GotoSection = GotoSection {
+/// The places saved by hand.
+pub const SECTION_FAVORITES: GotoSection = GotoSection {
     id: "favorites",
     title_key: "goto-section-favorites",
 };
 
-/// Las conexiones remotas configuradas.
-pub const SECCION_CONEXIONES: GotoSection = GotoSection {
+/// The configured remote connections.
+pub const SECTION_CONNECTIONS: GotoSection = GotoSection {
     id: "connections",
     title_key: "goto-section-connections",
 };
 
-/// Los comandos del catálogo — la paleta de siempre, aquí como una sección
-/// más.
-pub const SECCION_COMANDOS: GotoSection = GotoSection {
+/// The catalogue's commands — the usual palette, here as one more section.
+pub const SECTION_COMMANDS: GotoSection = GotoSection {
     id: "commands",
     title_key: "goto-section-commands",
 };
 
-/// Lo que encontró el índice semántico. Llega TARDE (es una pregunta al
-/// core, no una lista en memoria) y por eso va la última: una sección que
-/// aparece a media escritura no debe empujar hacia abajo lo que el lector
-/// ya estaba mirando.
-pub const SECCION_INDICE: GotoSection = GotoSection {
+/// What the semantic index found. Arrives LATE (it is a question to the
+/// core, not a list in memory) and that is why it goes last: a section
+/// that appears mid-typing must not push down what the reader was already
+/// looking at.
+pub const SECTION_INDEX: GotoSection = GotoSection {
     id: "index",
     title_key: "goto-section-index",
 };
 
-/// El ORDEN en que se pintan las secciones, y el único sitio donde vive.
+/// The ORDER the sections are painted in, and the only place it lives.
 ///
-/// Fijo y no configurable: es el orden en que un lector busca —lo que acaba
-/// de teclear, por dónde ha pasado, lo que guardó, lo que puede hacer— y
-/// una lista que se reordena sola es una lista donde no se puede aprender
-/// dónde está nada.
+/// Fixed and not configurable: it is the order a reader searches in — what
+/// they just typed, where they have been, what they saved, what they can
+/// do — and a list that reorders itself is a list where nothing can be
+/// learned about where anything is.
 pub const ORDEN: &[GotoSection] = &[
-    SECCION_RUTA,
-    SECCION_HISTORIA,
-    SECCION_POPULARES,
-    SECCION_FAVORITOS,
-    SECCION_CONEXIONES,
-    SECCION_COMANDOS,
-    SECCION_INDICE,
+    SECTION_PATH,
+    SECTION_HISTORY,
+    SECTION_POPULAR,
+    SECTION_FAVORITES,
+    SECTION_CONNECTIONS,
+    SECTION_COMMANDS,
+    SECTION_INDEX,
 ];
 
-/// Una fila del «ir a».
+/// A "go to" row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GotoRow {
-    /// Id de la sección a la que pertenece (uno de los de [`ORDEN`]).
+    /// Id of the section it belongs to (one of the ones in [`ORDEN`]).
     pub section: &'static str,
-    /// Clave de DESPACHO, nunca pintada — el llamante la consume al
-    /// confirmar. Mismo contrato que [`crate::palette::Row::key`]: para una
-    /// ruta lleva el wire del `VPath`, para un comando su nombre.
+    /// DISPATCH key, never painted — the caller consumes it on confirm.
+    /// Same contract as [`crate::palette::Row::key`]: for a path it carries
+    /// the `VPath`'s wire, for a command its name.
     pub key: String,
-    /// Lo que se pinta, YA pintable (enmascarado si hacía falta).
+    /// What gets painted, ALREADY paintable (masked if it needed to be).
     pub text: String,
-    /// La segunda línea, o vacío.
+    /// The second line, or empty.
     pub desc: String,
-    /// `text` se pinta distinto de lo que dicen los bytes de origen.
+    /// `text` is painted differently from what the source bytes say.
     ///
-    /// Viaja con la fila y no se recalcula al pintar: una cadena
-    /// enmascarada que viaja sin su bandera se lee como fiel, y esta es una
-    /// pantalla donde se elige a dónde ir.
+    /// Travels with the row and is not recomputed on paint: a masked
+    /// string that travels without its flag reads as faithful, and this is
+    /// a screen where where-to-go is chosen.
     pub hostile: bool,
 }
 
-/// Una fuente de filas del «ir a».
+/// A source of "go to" rows.
 ///
-/// El contrato es corto a propósito: dar las filas que aporta para una
-/// consulta. Lo demás —filtrar por subsecuencia, poner la cabecera, ordenar
-/// las secciones, mover el cursor— es del modelo, para que una fuente nueva
-/// no tenga que acertar con ninguna de esas cuatro cosas.
+/// The contract is short on purpose: give the rows it contributes for a
+/// query. Everything else — filtering by subsequence, putting up the
+/// header, ordering the sections, moving the cursor — belongs to the
+/// model, so a new source does not have to get any of those four things
+/// right.
 ///
-/// `query` llega por si la fuente sabe filtrar MEJOR que la subsecuencia
-/// genérica (el índice semántico pregunta al core con ella, y la ruta
-/// tecleada ES la consulta). Una fuente que no tenga nada especial que
-/// hacer puede devolverlo todo: [`Goto::refrescar`] filtra después, y así
-/// el filtrado es uno solo para todas.
+/// `query` is passed in case the source knows how to filter BETTER than the
+/// generic subsequence (the semantic index asks the core with it, and the
+/// typed path IS the query). A source with nothing special to do can
+/// return everything: [`Goto::refresh`] filters afterward, so filtering
+/// is a single thing for all of them.
 pub trait GotoSource {
-    /// La sección en la que caen sus filas.
+    /// The section its rows fall into.
     fn section(&self) -> GotoSection;
-    /// Las filas que aporta para `query`.
+    /// The rows it contributes for `query`.
     fn rows(&self, query: &str) -> Vec<GotoRow>;
-    /// Si sus filas YA vienen filtradas y el modelo no debe volver a
-    /// pasarles la subsecuencia.
+    /// Whether its rows ALREADY come filtered and the model should not run
+    /// the subsequence over them again.
     ///
-    /// `false` por defecto, que es lo que quiere una lista en memoria. Lo
-    /// pone a `true` el índice semántico: preguntó al core con la consulta
-    /// entera y sus resultados casan por SIGNIFICADO, no por letras — un
-    /// filtro de subsecuencia encima tiraría justo lo que lo hace útil.
-    fn ya_filtrada(&self) -> bool {
+    /// `false` by default, which is what an in-memory list wants. The
+    /// semantic index sets it to `true`: it asked the core with the whole
+    /// query and its results match by MEANING, not by letters — a
+    /// subsequence filter on top would throw away exactly what makes it
+    /// useful.
+    fn ya_filtered(&self) -> bool {
         false
     }
 
-    /// Si esta fuente sólo aporta filas cuando hay algo escrito.
+    /// Whether this source only contributes rows when something has been
+    /// typed.
     ///
-    /// `false` por defecto. Lo pone a `true` la sección de COMANDOS: con la
-    /// consulta vacía son cientos de filas que sepultan las cuatro listas de
-    /// destinos, y quien abre «ir a» sin escribir nada está preguntando a
-    /// dónde puede ir, no qué verbos existen. En cuanto teclea algo vuelven,
-    /// y el catálogo entero sigue estando en la paleta, que es su pantalla.
-    fn solo_con_consulta(&self) -> bool {
+    /// `false` by default. The COMMANDS section sets it to `true`: with an
+    /// empty query that is hundreds of rows burying the four destination
+    /// lists, and whoever opens "go to" without typing anything is asking
+    /// where they can go, not what verbs exist. As soon as they type
+    /// something they come back, and the whole catalogue still lives in
+    /// the palette, which is its own screen.
+    fn only_with_query(&self) -> bool {
         false
     }
 }
 
-/// Tope de filas POR SECCIÓN.
+/// Cap on rows PER SECTION.
 ///
-/// Una sección más larga que esto no se lee: se hojea, y para hojear están
-/// las pantallas propias de cada lista, que además dejan borrar entradas.
-/// El tope vive aquí, en el modelo, y no en cada fuente, porque si viviera
-/// en cada fuente la siguiente se olvidaría de ponérselo.
-pub const TOPE_POR_SECCION: usize = 12;
+/// A section longer than this is not read: it is skimmed, and each list
+/// has its own screen for skimming, which also lets entries be deleted.
+/// The cap lives here, in the model, and not in each source, because if it
+/// lived in each source the next one would forget to add it.
+pub const CAP_PER_SECTION: usize = 12;
 
-/// Una fuente con las filas ya hechas: una foto de una lista que el
-/// frontend ya tenía en memoria (historia, favoritos, comandos…).
+/// A source with the rows already made: a snapshot of a list the frontend
+/// already had in memory (history, favorites, commands…).
 ///
-/// La foto se toma al abrir, como hace la paleta con sus filas, y por lo
-/// mismo: lo que se ve mientras la pantalla está abierta no debe cambiar
-/// bajo el cursor.
+/// The snapshot is taken on opening, as the palette does with its rows,
+/// and for the same reason: what is visible while the screen is open must
+/// not change under the cursor.
 pub struct FixedSource {
     section: GotoSection,
     rows: Vec<GotoRow>,
-    ya_filtrada: bool,
-    solo_con_consulta: bool,
+    ya_filtered: bool,
+    only_with_query: bool,
 }
 
 impl FixedSource {
-    /// Una fuente de filas fijas en `section`.
+    /// A source of fixed rows in `section`.
     #[must_use]
     pub fn new(section: GotoSection, rows: Vec<GotoRow>) -> Self {
         Self {
             section,
             rows,
-            ya_filtrada: false,
-            solo_con_consulta: false,
+            ya_filtered: false,
+            only_with_query: false,
         }
     }
 
-    /// Como [`Self::new`], pero declarando que las filas YA vienen
-    /// filtradas por quien las trajo (ver [`GotoSource::ya_filtrada`]).
+    /// Like [`Self::new`], but declaring that the rows ALREADY come
+    /// filtered by whoever brought them (see [`GotoSource::ya_filtered`]).
     #[must_use]
-    pub fn ya_filtrada(section: GotoSection, rows: Vec<GotoRow>) -> Self {
+    pub fn ya_filtered(section: GotoSection, rows: Vec<GotoRow>) -> Self {
         Self {
             section,
             rows,
-            ya_filtrada: false,
-            solo_con_consulta: false,
+            ya_filtered: false,
+            only_with_query: false,
         }
-        .con_ya_filtrada()
+        .with_already_filtered()
     }
 
-    /// Declara que esta fuente sólo aporta con algo escrito (ver
-    /// [`GotoSource::solo_con_consulta`]).
+    /// Declares that this source only contributes with something typed
+    /// (see [`GotoSource::only_with_query`]).
     #[must_use]
-    pub fn solo_con_consulta(mut self) -> Self {
-        self.solo_con_consulta = true;
+    pub fn only_with_query(mut self) -> Self {
+        self.only_with_query = true;
         self
     }
 
-    /// Marca sus filas como ya filtradas.
+    /// Marks its rows as already filtered.
     #[must_use]
-    fn con_ya_filtrada(mut self) -> Self {
-        self.ya_filtrada = true;
+    fn with_already_filtered(mut self) -> Self {
+        self.ya_filtered = true;
         self
     }
 }
@@ -228,72 +233,74 @@ impl GotoSource for FixedSource {
     fn rows(&self, _query: &str) -> Vec<GotoRow> {
         self.rows.clone()
     }
-    fn ya_filtrada(&self) -> bool {
-        self.ya_filtrada
+    fn ya_filtered(&self) -> bool {
+        self.ya_filtered
     }
-    fn solo_con_consulta(&self) -> bool {
-        self.solo_con_consulta
+    fn only_with_query(&self) -> bool {
+        self.only_with_query
     }
 }
 
-/// La fuente de la RUTA TECLEADA: mira la consulta y, si parece una ruta,
-/// ofrece ir ahí.
+/// The TYPED PATH source: looks at the query and, if it looks like a path,
+/// offers to go there.
 ///
-/// Es la única fuente que no tiene lista detrás — su fila ES lo que el
-/// lector acaba de escribir— y por eso vive aquí y no en un frontend: la
-/// decisión de qué cuenta como ruta ([`parece_ruta`]) es una sola para los
-/// dos.
-pub struct RutaSource {
+/// It is the only source with no list behind it — its row IS what the
+/// reader just wrote — and that is why it lives here and not in a
+/// frontend: the decision of what counts as a path ([`looks_path`]) is a
+/// single one for both.
+pub struct PathSource {
     desc: String,
 }
 
-impl RutaSource {
-    /// La fuente, con la línea de detalle que acompaña a la fila (ya
-    /// traducida por el llamante: este módulo no elige idioma).
+impl PathSource {
+    /// The source, with the detail line that goes with the row (already
+    /// translated by the caller: this module does not choose a language).
     #[must_use]
     pub fn new(desc: impl Into<String>) -> Self {
         Self { desc: desc.into() }
     }
 }
 
-impl GotoSource for RutaSource {
+impl GotoSource for PathSource {
     fn section(&self) -> GotoSection {
-        SECCION_RUTA
+        SECTION_PATH
     }
     fn rows(&self, query: &str) -> Vec<GotoRow> {
-        parece_ruta(query).map_or_else(Vec::new, |ruta| {
+        looks_path(query).map_or_else(Vec::new, |path| {
             vec![GotoRow {
-                section: SECCION_RUTA.id,
-                key: format!("{K_RUTA}{ruta}"),
-                // Lo tecleado se pinta TAL CUAL. Es del propio lector, así
-                // que no hay nada que enmascarar; y cambiárselo mientras lo
-                // escribe es la peor forma de decirle que se equivocó.
-                text: ruta.to_owned(),
+                section: SECTION_PATH.id,
+                key: format!("{K_PATH}{path}"),
+                // What was typed is painted AS IS. It belongs to the
+                // reader themself, so there is nothing to mask; and
+                // changing it while they write is the worst way to tell
+                // them they made a mistake.
+                text: path.to_owned(),
                 desc: self.desc.clone(),
                 hostile: false,
             }]
         })
     }
-    /// La fila de la ruta no pasa por el filtro: ES la consulta, y
-    /// preguntarle a lo tecleado si se parece a sí mismo no puede decir
-    /// nada útil. Se recorta al construirla (`parece_ruta` hace `trim`), y
-    /// ese recorte bastaría para que el filtro genérico la tirara.
-    fn ya_filtrada(&self) -> bool {
+    /// The path row does not go through the filter: it IS the query, and
+    /// asking what was typed whether it resembles itself cannot say
+    /// anything useful. It is already trimmed when built (`looks_path`
+    /// does `trim`), and that trim alone would be enough for the generic
+    /// filter to throw it out.
+    fn ya_filtered(&self) -> bool {
         true
     }
 }
 
-/// Una línea de lo que se pinta: una cabecera de sección, o una fila.
+/// A painted line: a section header, or a row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GotoLine {
-    /// Cabecera de sección — nunca recibe el cursor.
+    /// Section header — never receives the cursor.
     Header(GotoSection),
-    /// Una fila, con su índice dentro de [`Goto::rows`].
+    /// A row, with its index within [`Goto::rows`].
     Row(usize),
 }
 
-/// El estado del «ir a»: las fuentes, la consulta, lo que se ve y dónde
-/// está el cursor.
+/// The "go to" state: the sources, the query, what is visible and where
+/// the cursor is.
 pub struct Goto {
     sources: Vec<Box<dyn GotoSource + Send>>,
     query: String,
@@ -302,14 +309,14 @@ pub struct Goto {
     cursor: usize,
 }
 
-/// A mano porque [`GotoSource`] es un trait objeto y no puede derivar
-/// `Debug`. De las fuentes se imprime cuántas hay, que es lo único que un
-/// `Debug` podría decir de ellas sin obligar a toda fuente futura a
-/// implementar `Debug` para nada.
+/// By hand because [`GotoSource`] is a trait object and cannot derive
+/// `Debug`. Of the sources, only their count is printed, which is the only
+/// thing a `Debug` could say about them without forcing every future
+/// source to implement `Debug` for nothing.
 impl std::fmt::Debug for Goto {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Goto")
-            .field("fuentes", &self.sources.len())
+            .field("sources", &self.sources.len())
             .field("query", &self.query)
             .field("rows", &self.rows)
             .field("lines", &self.lines)
@@ -319,7 +326,7 @@ impl std::fmt::Debug for Goto {
 }
 
 impl Goto {
-    /// Un «ir a» sobre estas fuentes, con la consulta vacía.
+    /// A "go to" over these sources, with an empty query.
     #[must_use]
     pub fn new(sources: Vec<Box<dyn GotoSource + Send>>) -> Self {
         let mut goto = Self {
@@ -329,82 +336,75 @@ impl Goto {
             lines: Vec::new(),
             cursor: 0,
         };
-        goto.refrescar();
+        goto.refresh();
         goto
     }
 
-    /// Vuelve a preguntar a todas las fuentes y rehace lo que se ve.
+    /// Asks every source again and rebuilds what is visible.
     ///
-    /// El cursor se queda en la PRIMERA fila: la consulta cambió, así que
-    /// lo que había bajo el cursor probablemente ya no está, y dejarlo
-    /// donde estaba es cómo un Enter acaba yendo a un sitio que el lector
-    /// no llegó a leer.
-    pub fn refrescar(&mut self) {
+    /// The cursor stays on the FIRST row: the query changed, so what was
+    /// under the cursor is probably gone, and leaving it where it was is
+    /// how an Enter ends up going somewhere the reader never got to read.
+    pub fn refresh(&mut self) {
         let q = self.query.to_lowercase();
         self.rows.clear();
         self.lines.clear();
-        for seccion in ORDEN {
-            let mut de_esta: Vec<GotoRow> = Vec::new();
-            for fuente in &self.sources {
-                if fuente.section().id != seccion.id {
+        for section in ORDEN {
+            let mut from_this: Vec<GotoRow> = Vec::new();
+            for source in &self.sources {
+                if source.section().id != section.id {
                     continue;
                 }
-                if fuente.solo_con_consulta() && q.is_empty() {
+                if source.only_with_query() && q.is_empty() {
                     continue;
                 }
-                let crudas = fuente.rows(&self.query);
-                if fuente.ya_filtrada() || q.is_empty() {
-                    de_esta.extend(crudas);
+                let raw = source.rows(&self.query);
+                if source.ya_filtered() || q.is_empty() {
+                    from_this.extend(raw);
                 } else {
-                    de_esta.extend(
-                        crudas
-                            .into_iter()
+                    from_this.extend(
+                        raw.into_iter()
                             .filter(|r| is_subsequence(&q, &r.text.to_lowercase())),
                     );
                 }
             }
-            if de_esta.is_empty() {
+            if from_this.is_empty() {
                 continue;
             }
-            de_esta.truncate(TOPE_POR_SECCION);
-            self.lines.push(GotoLine::Header(*seccion));
-            for fila in de_esta {
+            from_this.truncate(CAP_PER_SECTION);
+            self.lines.push(GotoLine::Header(*section));
+            for row in from_this {
                 self.lines.push(GotoLine::Row(self.rows.len()));
-                self.rows.push(fila);
+                self.rows.push(row);
             }
         }
-        self.cursor = self.primera_fila().unwrap_or(0);
+        self.cursor = self.first_row().unwrap_or(0);
     }
 
-    /// Sustituye las filas de una sección por otras, y repinta.
+    /// Replaces a section's rows with others, and repaints.
     ///
-    /// Es la puerta de las fuentes ASÍNCRONAS: el índice semántico
-    /// pregunta al core, tarda, y cuando contesta su sección aparece sin
-    /// tocar las demás. Reemplaza en vez de añadir porque una respuesta
-    /// vieja no debe convivir con la nueva — son respuestas a consultas
-    /// distintas, y juntas no describen ninguna de las dos.
+    /// This is the door for ASYNCHRONOUS sources: the semantic index asks
+    /// the core, takes a while, and when it answers its section appears
+    /// without touching the others. It replaces instead of adding because
+    /// an old answer must not live alongside the new one — they are
+    /// answers to different queries, and together they describe neither.
     ///
-    /// El cursor se queda DONDE ESTÁ si la línea bajo él sigue siendo una
-    /// fila. Que una respuesta tardía mueva el cursor es cómo un Enter
-    /// acaba en un sitio que el lector no eligió: escribió, leyó, fue a
-    /// confirmar, y entre medias llegó el índice.
-    pub fn reemplazar_seccion(
-        &mut self,
-        section: GotoSection,
-        rows: Vec<GotoRow>,
-        ya_filtrada: bool,
-    ) {
+    /// The cursor stays WHERE IT IS if the line beneath it is still a row.
+    /// Letting a late answer move the cursor is how an Enter ends up
+    /// somewhere the reader did not choose: they typed, read, went to
+    /// confirm, and the index arrived in between.
+    pub fn replace_section(&mut self, section: GotoSection, rows: Vec<GotoRow>, ya_filtered: bool) {
         self.sources.retain(|s| s.section().id != section.id);
-        self.sources.push(if ya_filtrada {
-            Box::new(FixedSource::ya_filtrada(section, rows))
+        self.sources.push(if ya_filtered {
+            Box::new(FixedSource::ya_filtered(section, rows))
         } else {
             Box::new(FixedSource::new(section, rows))
         });
-        let antes = self.selected().cloned();
-        self.refrescar();
-        if let Some(antes) = antes
+        let before = self.selected().cloned();
+        self.refresh();
+        if let Some(before) = before
             && let Some(i) = self.lines.iter().position(|l| match l {
-                GotoLine::Row(i) => self.rows.get(*i) == Some(&antes),
+                GotoLine::Row(i) => self.rows.get(*i) == Some(&before),
                 GotoLine::Header(_) => false,
             })
         {
@@ -412,32 +412,32 @@ impl Goto {
         }
     }
 
-    /// El índice de la primera línea que es una fila, si hay alguna.
-    fn primera_fila(&self) -> Option<usize> {
+    /// The index of the first line that is a row, if there is one.
+    fn first_row(&self) -> Option<usize> {
         self.lines
             .iter()
             .position(|l| matches!(l, GotoLine::Row(_)))
     }
 
-    /// Teclea un carácter en la consulta.
+    /// Types a character into the query.
     pub fn push_char(&mut self, c: char) {
         self.query.push(c);
-        self.refrescar();
+        self.refresh();
     }
 
-    /// Borra el último carácter de la consulta.
+    /// Deletes the query's last character.
     pub fn backspace(&mut self) {
         self.query.pop();
-        self.refrescar();
+        self.refresh();
     }
 
-    /// La consulta tal cual.
+    /// The query as is.
     #[must_use]
     pub fn query(&self) -> &str {
         &self.query
     }
 
-    /// Sube a la fila anterior, saltándose las cabeceras. Se para arriba.
+    /// Moves up to the previous row, skipping headers. Stops at the top.
     pub fn up(&mut self) {
         let mut i = self.cursor;
         while i > 0 {
@@ -449,7 +449,7 @@ impl Goto {
         }
     }
 
-    /// Baja a la fila siguiente, saltándose las cabeceras. Se para abajo.
+    /// Moves down to the next row, skipping headers. Stops at the bottom.
     pub fn down(&mut self) {
         let mut i = self.cursor;
         while i + 1 < self.lines.len() {
@@ -461,25 +461,25 @@ impl Goto {
         }
     }
 
-    /// Lo que se pinta, en orden.
+    /// What is painted, in order.
     #[must_use]
     pub fn lines(&self) -> &[GotoLine] {
         &self.lines
     }
 
-    /// Las filas, indexadas por [`GotoLine::Row`].
+    /// The rows, indexed by [`GotoLine::Row`].
     #[must_use]
     pub fn rows(&self) -> &[GotoRow] {
         &self.rows
     }
 
-    /// En qué línea está el cursor.
+    /// Which line the cursor is on.
     #[must_use]
     pub fn cursor(&self) -> usize {
         self.cursor
     }
 
-    /// La fila bajo el cursor, si el cursor está sobre una.
+    /// The row under the cursor, if the cursor is on one.
     #[must_use]
     pub fn selected(&self) -> Option<&GotoRow> {
         match self.lines.get(self.cursor) {
@@ -488,32 +488,35 @@ impl Goto {
         }
     }
 
-    /// Cuántas filas se ven ahora mismo (sin contar cabeceras).
+    /// How many rows are visible right now (headers not counted).
     #[must_use]
     pub fn len(&self) -> usize {
         self.rows.len()
     }
 
-    /// Si no se ve ninguna fila.
+    /// Whether no row is visible.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.rows.is_empty()
     }
 }
 
-/// Si lo TECLEADO parece una ruta a la que ir, y no un texto que buscar.
+/// Whether what was TYPED looks like a path to go to, and not text to
+/// search for.
 ///
-/// Tres formas, y ninguna de ellas puede confundirse con una consulta: una
-/// ruta absoluta (`/etc`), la de casa (`~` o `~/…`) y una URL con esquema
-/// (`sftp://host/…`). Lo demás —`etc`, `documentos`— es una consulta, y una
-/// ruta relativa no entra a propósito: «a dónde» no puede depender de en qué
-/// panel estabas, o la misma tecla lleva a dos sitios distintos.
+/// Three shapes, and none of them can be confused with a query: an
+/// absolute path (`/etc`), home's (`~` or `~/…`) and a URL with a scheme
+/// (`sftp://host/…`). Everything else — `etc`, `documents` — is a query,
+/// and a relative path is deliberately excluded: "where to" cannot depend
+/// on which panel you were in, or the same key would lead to two different
+/// places.
 ///
-/// Devuelve el texto TAL CUAL se tecleó. Resolver `~` y validar el esquema
-/// es del llamante, que es quien tiene el `VPath` y sabe si ese backend
-/// existe: aquí sólo se decide si ofrecer la fila.
+/// Returns the text AS TYPED. Expanding `~` and validating the scheme
+/// belong to the caller, which is the one holding the `VPath` and knowing
+/// whether that backend exists: here it is only decided whether to offer
+/// the row.
 #[must_use]
-pub fn parece_ruta(query: &str) -> Option<&str> {
+pub fn looks_path(query: &str) -> Option<&str> {
     let q = query.trim();
     if q.is_empty() {
         return None;
@@ -521,70 +524,71 @@ pub fn parece_ruta(query: &str) -> Option<&str> {
     if q.starts_with('/') || q == "~" || q.starts_with("~/") {
         return Some(q);
     }
-    // Un esquema con `://` y algo detrás. `q.find` y no `split_once` para no
-    // aceptar `://x`, que no nombra ningún backend.
+    // A scheme with `://` and something after it. `q.find` and not
+    // `split_once` so as not to accept `://x`, which names no backend.
     let idx = q.find("://")?;
     (idx > 0 && q.len() > idx + 3).then_some(q)
 }
 
 // ---------------------------------------------------------------------------
-// Lo que antes decidía cada frontend por su cuenta (#357): cómo se construye
-// cada clase de fila, qué clave de despacho lleva y qué significa confirmarla.
-// La TUI lo tenía en `norte-tui/src/goto.rs`, y la ventana lo necesitaba igual;
-// dos copias de «a dónde lleva este Enter» son dos respuestas.
+// What each frontend used to decide on its own (#357): how each kind of row
+// is built, what dispatch key it carries and what confirming it means. The
+// TUI had it in `norte-tui/src/goto.rs`, and the window needed it just the
+// same; two copies of "where does this Enter lead" are two answers.
 // ---------------------------------------------------------------------------
 
-/// Prefijo de despacho de una fila que lleva a un `VPath` ya conocido.
+/// Dispatch prefix of a row that leads to an already-known `VPath`.
 pub const K_IR: &str = "go:";
-/// Prefijo de una fila que lleva a un comando del catálogo.
+/// Prefix of a row that leads to a catalogue command.
 pub const K_CMD: &str = "cmd:";
-/// Prefijo de la fila de la RUTA TECLEADA, que aún hay que resolver. Lo pone
-/// [`RutaSource`].
-pub const K_RUTA: &str = "path:";
+/// Prefix of the TYPED PATH row, which still needs resolving. Set by
+/// [`PathSource`].
+pub const K_PATH: &str = "path:";
 
-/// Cuántas filas se traen de cada lista larga ANTES de filtrar.
+/// How many rows are pulled from each long list BEFORE filtering.
 ///
-/// No es el tope de lo que se ve —ése es [`TOPE_POR_SECCION`], y lo aplica el
-/// modelo a todas las secciones por igual— sino cuántas entradas de una lista
-/// de cientos se le ofrecen al filtro. Más holgado que el de pintado a
-/// propósito: filtrar sobre cuarenta encuentra cosas que filtrar sobre doce
-/// no, y las que sobren las recorta el modelo después.
-pub const TRAIDAS_POR_LISTA: usize = 40;
+/// Not the visible cap — that is [`CAP_PER_SECTION`], and the model
+/// applies it to every section alike — but how many entries from a list of
+/// hundreds are offered to the filter. Looser than the paint one on
+/// purpose: filtering over forty finds things filtering over twelve would
+/// not, and the model trims the leftovers afterward.
+pub const BROUGHT_BY_LIST: usize = 40;
 
-/// A partir de cuántos caracteres se le pregunta al índice.
+/// From how many characters onward the index gets asked.
 ///
-/// Con menos, la respuesta no puede ser buena —una o dos letras no son una
-/// consulta semántica— y cada pregunta es una llamada a un proveedor que
-/// cuesta tiempo y puede costar dinero.
-pub const MINIMO_PARA_EL_INDICE: usize = 3;
+/// With fewer, the answer cannot be good — one or two letters are not a
+/// semantic query — and every question is a call to a provider that costs
+/// time and can cost money.
+pub const MINIMUM_FOR_THE_INDEX: usize = 3;
 
-/// Cuántos resultados se le piden al índice.
-pub const TOPE_DEL_INDICE: u32 = 8;
+/// How many results are requested from the index.
+pub const INDEX_CAP: u32 = 8;
 
-/// Una fila hacia un directorio conocido.
+/// A row toward a known directory.
 ///
-/// `enc` es la reinterpretación de nombres del panel con el foco, y sólo se le
-/// pasa a las rutas que son DE ese panel —su historia—. A las demás
-/// (populares, favoritos, conexiones, índice) se les pasa `None`: son de toda
-/// la sesión, y aplicarles el encoding de un panel a rutas de otro inventa
-/// mojibake. Es la misma regla que ya escribió `popular_rows` en su sitio.
+/// `enc` is the focused panel's name reinterpretation, and is only passed
+/// to paths that are OF that panel — its history. The rest (popular,
+/// favorites, connections, index) get `None`: they belong to the whole
+/// session, and applying one panel's encoding to another's paths invents
+/// mojibake. It is the same rule `popular_rows` already wrote where it
+/// lives.
 #[must_use]
-pub fn fila_ruta(
+pub fn row_path(
     section: &'static str,
-    nombre: Option<&str>,
+    name: Option<&str>,
     path: &norte_proto::VPath,
     enc: Option<norte_encoding::NameEncoding>,
 ) -> GotoRow {
-    let (texto, hostil) = crate::path_display_with(path, enc);
-    // El nombre que puso el lector (un favorito, una conexión) va DELANTE y la
-    // ruta detrás: se busca por el nombre que uno mismo eligió, y la ruta es
-    // lo que confirma que es la que se cree.
-    let (text, desc, hostile) = match nombre {
+    let (content, hostile_name) = crate::path_display_with(path, enc);
+    // The name the reader gave it (a favorite, a connection) goes IN FRONT
+    // and the path behind: it is searched for by the name one chose
+    // oneself, and the path confirms it is the one believed to be.
+    let (text, desc, hostile) = match name {
         Some(n) => {
             let (nt, nh) = crate::display_name(n.as_bytes());
-            (nt, texto, nh || hostil)
+            (nt, content, nh || hostile_name)
         }
-        None => (texto, String::new(), hostil),
+        None => (content, String::new(), hostile_name),
     };
     GotoRow {
         section,
@@ -595,38 +599,39 @@ pub fn fila_ruta(
     }
 }
 
-/// La fila de una conexión configurada: su nombre y su URL CRUDA de
-/// `connections.toml`, que puede no parsear.
+/// The row for a configured connection: its name and its RAW URL from
+/// `connections.toml`, which may not parse.
 ///
-/// Se ofrece igual y se dice al confirmar —lo mismo que hace el selector de
-/// `pane.connect`, con el mismo mensaje— en vez de desaparecer: «mi conexión
-/// no sale en ir a» es peor que un error al pulsar Enter, porque no tiene ni
-/// dónde mirar. Un FAVORITO que no parsea, en cambio, no se ofrece: la lista
-/// de sitios ya lo enseña con su error.
+/// It is offered anyway and said on confirm — the same thing
+/// `pane.connect`'s picker does, with the same message — instead of
+/// disappearing: "my connection doesn't show up in go to" is worse than an
+/// error on pressing Enter, because it gives nowhere to look. A FAVORITE
+/// that does not parse, on the other hand, is not offered: the places list
+/// already shows it with its error.
 #[must_use]
-pub fn fila_conexion(nombre: &str, url: &str) -> GotoRow {
-    let (texto, hostil) = norte_proto::VPath::parse(url).map_or_else(
+pub fn row_connection(name: &str, url: &str) -> GotoRow {
+    let (content, hostile_name) = norte_proto::VPath::parse(url).map_or_else(
         |_| (norte_encoding::mask_terminal_hazards(url), true),
         |p| crate::path_display_with(&p, None),
     );
-    let (nt, nh) = crate::display_name(nombre.as_bytes());
+    let (nt, nh) = crate::display_name(name.as_bytes());
     GotoRow {
-        section: SECCION_CONEXIONES.id,
+        section: SECTION_CONNECTIONS.id,
         key: format!("{K_IR}{url}"),
         text: nt,
-        desc: texto,
-        hostile: nh || hostil,
+        desc: content,
+        hostile: nh || hostile_name,
     }
 }
 
-/// Las filas de COMANDOS, a partir de las de la paleta: los MISMOS que la
-/// paleta ofrece en ese contexto, porque dos listas de comandos calculadas por
-/// separado divergen.
+/// The COMMAND rows, built from the palette's: the SAME ones the palette
+/// offers in that context, because two command lists computed separately
+/// diverge.
 #[must_use]
-pub fn filas_de_comandos(rows: Vec<crate::palette::Row>) -> Vec<GotoRow> {
+pub fn command_rows(rows: Vec<crate::palette::Row>) -> Vec<GotoRow> {
     rows.into_iter()
         .map(|r| GotoRow {
-            section: SECCION_COMANDOS.id,
+            section: SECTION_COMMANDS.id,
             key: format!("{K_CMD}{}", r.key),
             text: r.text,
             desc: r.desc,
@@ -635,139 +640,140 @@ pub fn filas_de_comandos(rows: Vec<crate::palette::Row>) -> Vec<GotoRow> {
         .collect()
 }
 
-/// Las filas de una tanda de resultados del índice semántico.
+/// The rows for a batch of results from the semantic index.
 ///
-/// Son RUTAS de ficheros que el core encontró, así que su nombre son bytes de
-/// disco y se pintan por el mismo camino enmascarado que las demás. Sin
-/// reinterpretación, como los populares: lo que devuelve el índice puede estar
-/// en cualquier sitio, no en el panel con el foco.
+/// They are file PATHS the core found, so their name is disk bytes and is
+/// painted through the same masked path as the others. No
+/// reinterpretation, like the popular ones: what the index returns can be
+/// anywhere, not in the focused panel.
 #[must_use]
-pub fn filas_del_indice(hits: &[norte_proto::methods::SemanticHit]) -> Vec<GotoRow> {
+pub fn index_rows(hits: &[norte_proto::methods::SemanticHit]) -> Vec<GotoRow> {
     hits.iter()
-        .map(|h| fila_ruta(SECCION_INDICE.id, None, &h.path, None))
+        .map(|h| row_path(SECTION_INDEX.id, None, &h.path, None))
         .collect()
 }
 
-/// Lo que significa confirmar una fila.
+/// What confirming a row means.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Accion {
-    /// Navegar el panel con el foco a este directorio.
+pub enum Action {
+    /// Navigate the focused panel to this directory.
     Ir(norte_proto::VPath),
-    /// Correr este comando del catálogo, como si se hubiera pulsado su tecla.
-    Comando(String),
-    /// La fila no lleva a ningún sitio que se pueda resolver — una ruta
-    /// tecleada que no parsea, sobre todo. Trae la clave del mensaje.
-    Nada(&'static str),
+    /// Run this catalogue command, as if its key had been pressed.
+    Command(String),
+    /// The row leads nowhere resolvable — a typed path that does not
+    /// parse, above all. Carries the message's key.
+    Nothing(&'static str),
 }
 
-/// Qué hacer con la fila que el lector acaba de confirmar.
+/// What to do with the row the reader just confirmed.
 ///
-/// La `key` NUNCA se pinta y aquí es donde se lee: el prefijo dice de qué
-/// clase es la fila, y cada clase se resuelve por su camino. Una ruta TECLEADA
-/// es la única que puede no resolver, porque es lo único que no salió de una
-/// lista que ya existía.
+/// The `key` is NEVER painted and this is where it is read: the prefix
+/// says which class the row is, and each class resolves along its own
+/// path. A TYPED path is the only one that can fail to resolve, because it
+/// is the only one that did not come out of a list that already existed.
 ///
 /// ```
-/// use norte_frontend::goto::{Accion, accion};
-/// assert_eq!(accion("cmd:app.quit"), Accion::Comando("app.quit".to_owned()));
-/// assert!(matches!(accion("go:file:///tmp"), Accion::Ir(_)));
-/// assert!(matches!(accion("otra cosa"), Accion::Nada(_)));
+/// use norte_frontend::goto::{Action, action};
+/// assert_eq!(action("cmd:app.quit"), Action::Command("app.quit".to_owned()));
+/// assert!(matches!(action("go:file:///tmp"), Action::Ir(_)));
+/// assert!(matches!(action("other cosa"), Action::Nothing(_)));
 /// ```
 #[must_use]
-pub fn accion(key: &str) -> Accion {
+pub fn action(key: &str) -> Action {
     if let Some(cmd) = key.strip_prefix(K_CMD) {
-        return Accion::Comando(cmd.to_owned());
+        return Action::Command(cmd.to_owned());
     }
     if let Some(wire) = key.strip_prefix(K_IR) {
         return norte_proto::VPath::parse(wire)
-            .map_or(Accion::Nada("msg-goto-bad-path"), Accion::Ir);
+            .map_or(Action::Nothing("msg-goto-bad-path"), Action::Ir);
     }
-    if let Some(texto) = key.strip_prefix(K_RUTA) {
-        return resolver_tecleada(texto);
+    if let Some(content) = key.strip_prefix(K_PATH) {
+        return resolver_typed(content);
     }
-    Accion::Nada("msg-goto-bad-path")
+    Action::Nothing("msg-goto-bad-path")
 }
 
-/// Resuelve la ruta que el lector tecleó.
+/// Resolves the path the reader typed.
 ///
-/// `~` se expande contra el HOME de este proceso, no contra el directorio del
-/// panel: «la casa» es una sola, y hacerla depender de dónde estabas sería que
-/// la misma tecla lleve a dos sitios. Una ruta absoluta se toma como local, y
-/// una con esquema se parsea tal cual — si el backend no existe lo dice el
-/// core, que es mejor que navegar a algo que no es lo que se escribió.
-fn resolver_tecleada(texto: &str) -> Accion {
-    let expandido = if texto == "~" || texto.starts_with("~/") {
+/// `~` expands against THIS PROCESS's HOME, not the panel's directory:
+/// "home" is one single place, and making it depend on where you were
+/// would mean the same key leads to two places. An absolute path is taken
+/// as local, and one with a scheme is parsed as is — if the backend does
+/// not exist, the core says so, which beats navigating to something other
+/// than what was typed.
+fn resolver_typed(content: &str) -> Action {
+    let expanded = if content == "~" || content.starts_with("~/") {
         let Some(home) = std::env::var_os("HOME") else {
-            return Accion::Nada("msg-goto-no-home");
+            return Action::Nothing("msg-goto-no-home");
         };
         let mut p = std::path::PathBuf::from(home);
-        if let Some(resto) = texto.strip_prefix("~/") {
-            p.push(resto);
+        if let Some(rest) = content.strip_prefix("~/") {
+            p.push(rest);
         }
         p
-    } else if texto.starts_with('/') {
-        std::path::PathBuf::from(texto)
+    } else if content.starts_with('/') {
+        std::path::PathBuf::from(content)
     } else {
-        // Con esquema: el wire ya es un wire.
-        return norte_proto::VPath::parse(texto)
-            .map_or(Accion::Nada("msg-goto-bad-path"), Accion::Ir);
+        // With a scheme: the wire is already a wire.
+        return norte_proto::VPath::parse(content)
+            .map_or(Action::Nothing("msg-goto-bad-path"), Action::Ir);
     };
-    norte_vfs::native::vpath_from_native(&expandido)
-        .map_or(Accion::Nada("msg-goto-bad-path"), Accion::Ir)
+    norte_vfs::native::vpath_from_native(&expanded)
+        .map_or(Action::Nothing("msg-goto-bad-path"), Action::Ir)
 }
 
 #[cfg(test)]
-mod despacho_tests {
-    use super::{Accion, K_CMD, K_IR, K_RUTA, accion};
+mod dispatch_tests {
+    use super::{Action, K_CMD, K_IR, K_PATH, action};
     use norte_proto::VPath;
 
-    /// Cada prefijo de `key` va por su camino, y ninguno se confunde con
-    /// otro: la `key` no se pinta nunca, así que esto es lo único que decide
-    /// a dónde lleva un Enter.
+    /// Each `key` prefix goes its own way, and none is confused with
+    /// another: the `key` is never painted, so this is the only thing that
+    /// decides where an Enter leads.
     #[test]
-    fn cada_prefijo_resuelve_a_lo_suyo() {
+    fn every_prefix_resolves_to_its_own() {
         assert_eq!(
-            accion(&format!("{K_CMD}app.quit")),
-            Accion::Comando("app.quit".to_owned())
+            action(&format!("{K_CMD}app.quit")),
+            Action::Command("app.quit".to_owned())
         );
         assert_eq!(
-            accion(&format!("{K_IR}file:///tmp")),
-            Accion::Ir(VPath::parse("file:///tmp").expect("wire"))
+            action(&format!("{K_IR}file:///tmp")),
+            Action::Ir(VPath::parse("file:///tmp").expect("wire"))
         );
         assert_eq!(
-            accion(&format!("{K_RUTA}/tmp")),
-            Accion::Ir(VPath::parse("file:///tmp").expect("wire"))
+            action(&format!("{K_PATH}/tmp")),
+            Action::Ir(VPath::parse("file:///tmp").expect("wire"))
         );
     }
 
-    /// Una ruta con esquema tecleada se parsea tal cual; una que NO parsea se
-    /// dice, en vez de navegar a cualquier otra cosa. Un esquema desconocido
-    /// SÍ parsea: quien dice que no hay quien lo sirva es el core.
+    /// A typed path with a scheme parses as is; one that does NOT parse is
+    /// said, instead of navigating to anything else. An unknown scheme
+    /// DOES parse: it is the core that says nobody can serve it.
     #[test]
-    fn una_ruta_tecleada_que_no_parsea_se_dice() {
+    fn a_typed_path_that_does_not_parse_is_reported() {
         assert!(
-            matches!(accion(&format!("{K_RUTA}sftp://h//x")), Accion::Nada(_)),
-            "un segmento vacío no es una ruta"
+            matches!(action(&format!("{K_PATH}sftp://h//x")), Action::Nothing(_)),
+            "an empty segment is not a path"
         );
-        assert!(matches!(accion("otra cosa"), Accion::Nada(_)));
+        assert!(matches!(action("otra cosa"), Action::Nothing(_)));
         assert!(matches!(
-            accion(&format!("{K_RUTA}noexiste://h/x")),
-            Accion::Ir(_)
+            action(&format!("{K_PATH}noexiste://h/x")),
+            Action::Ir(_)
         ));
     }
 
-    /// `~` se expande contra el HOME del proceso, no contra el panel: la casa
-    /// es una sola.
+    /// `~` expands against the process's HOME, not the panel: home is a
+    /// single place.
     #[test]
-    fn la_casa_no_depende_del_panel() {
-        let Accion::Ir(p) = accion(&format!("{K_RUTA}~")) else {
-            panic!("`~` tiene que resolver mientras haya HOME");
+    fn home_does_not_depend_on_the_pane() {
+        let Action::Ir(p) = action(&format!("{K_PATH}~")) else {
+            panic!("`~` has to resolve as long as there is a HOME");
         };
-        let home = std::env::var("HOME").expect("HOME en el entorno de test");
+        let home = std::env::var("HOME").expect("HOME in the test environment");
         assert_eq!(
             p,
             norte_vfs::native::vpath_from_native(std::path::Path::new(&home))
-                .expect("el HOME es una ruta")
+                .expect("HOME is a path")
         );
     }
 }
@@ -775,27 +781,27 @@ mod despacho_tests {
 #[cfg(test)]
 mod tests {
     use super::{
-        Goto, GotoLine, GotoRow, GotoSection, GotoSource, SECCION_COMANDOS, SECCION_HISTORIA,
-        SECCION_INDICE, TOPE_POR_SECCION, parece_ruta,
+        CAP_PER_SECTION, Goto, GotoLine, GotoRow, GotoSection, GotoSource, SECTION_COMMANDS,
+        SECTION_HISTORY, SECTION_INDEX, looks_path,
     };
 
-    /// Una fuente de mentira con filas fijas.
-    struct Fija {
-        seccion: GotoSection,
-        textos: Vec<&'static str>,
-        ya_filtrada: bool,
-        solo_con_consulta: bool,
+    /// A fake source with fixed rows.
+    struct Fixed {
+        section: GotoSection,
+        texts: Vec<&'static str>,
+        ya_filtered: bool,
+        only_with_query: bool,
     }
 
-    impl GotoSource for Fija {
+    impl GotoSource for Fixed {
         fn section(&self) -> GotoSection {
-            self.seccion
+            self.section
         }
         fn rows(&self, _query: &str) -> Vec<GotoRow> {
-            self.textos
+            self.texts
                 .iter()
                 .map(|t| GotoRow {
-                    section: self.seccion.id,
+                    section: self.section.id,
                     key: (*t).to_owned(),
                     text: (*t).to_owned(),
                     desc: String::new(),
@@ -803,32 +809,32 @@ mod tests {
                 })
                 .collect()
         }
-        fn ya_filtrada(&self) -> bool {
-            self.ya_filtrada
+        fn ya_filtered(&self) -> bool {
+            self.ya_filtered
         }
-        fn solo_con_consulta(&self) -> bool {
-            self.solo_con_consulta
+        fn only_with_query(&self) -> bool {
+            self.only_with_query
         }
     }
 
-    fn fuente(seccion: GotoSection, textos: &[&'static str]) -> Box<dyn GotoSource + Send> {
-        Box::new(Fija {
-            seccion,
-            textos: textos.to_vec(),
-            ya_filtrada: false,
-            solo_con_consulta: false,
+    fn source(section: GotoSection, texts: &[&'static str]) -> Box<dyn GotoSource + Send> {
+        Box::new(Fixed {
+            section,
+            texts: texts.to_vec(),
+            ya_filtered: false,
+            only_with_query: false,
         })
     }
 
-    /// Las secciones salen en el orden de `ORDEN`, no en el orden en que se
-    /// registraron las fuentes: lo que se aprende es dónde está cada cosa.
+    /// Sections come out in [`ORDEN`]'s order, not the order the sources
+    /// were registered in: what is learned is where each thing is.
     #[test]
-    fn las_secciones_salen_en_el_orden_fijo() {
+    fn sections_come_out_in_fixed_order() {
         let goto = Goto::new(vec![
-            fuente(SECCION_COMANDOS, &["app.quit"]),
-            fuente(SECCION_HISTORIA, &["/etc"]),
+            source(SECTION_COMMANDS, &["app.quit"]),
+            source(SECTION_HISTORY, &["/etc"]),
         ]);
-        let cabeceras: Vec<&str> = goto
+        let headers: Vec<&str> = goto
             .lines()
             .iter()
             .filter_map(|l| match l {
@@ -836,21 +842,21 @@ mod tests {
                 GotoLine::Row(_) => None,
             })
             .collect();
-        assert_eq!(cabeceras, vec!["history", "commands"]);
+        assert_eq!(headers, vec!["history", "commands"]);
     }
 
-    /// Una sección sin filas no pinta cabecera: una cabecera vacía dice que
-    /// hay algo donde no hay nada.
+    /// A section with no rows paints no header: an empty header says
+    /// there is something where there is nothing.
     #[test]
-    fn una_seccion_vacia_no_pinta_cabecera() {
+    fn an_empty_section_paints_no_header() {
         let mut goto = Goto::new(vec![
-            fuente(SECCION_COMANDOS, &["app.quit"]),
-            fuente(SECCION_HISTORIA, &["/etc"]),
+            source(SECTION_COMMANDS, &["app.quit"]),
+            source(SECTION_HISTORY, &["/etc"]),
         ]);
         for c in "quit".chars() {
             goto.push_char(c);
         }
-        let cabeceras: Vec<&str> = goto
+        let headers: Vec<&str> = goto
             .lines()
             .iter()
             .filter_map(|l| match l {
@@ -858,23 +864,23 @@ mod tests {
                 GotoLine::Row(_) => None,
             })
             .collect();
-        assert_eq!(cabeceras, vec!["commands"], "/etc no casa con «quit»");
+        assert_eq!(headers, vec!["commands"], "/etc does not match \"quit\"");
     }
 
-    /// El cursor nunca se posa en una cabecera, ni bajando ni subiendo.
+    /// The cursor never lands on a header, whether going down or up.
     #[test]
-    fn el_cursor_salta_las_cabeceras() {
+    fn the_cursor_skips_the_headers() {
         let mut goto = Goto::new(vec![
-            fuente(SECCION_HISTORIA, &["/etc", "/var"]),
-            fuente(SECCION_COMANDOS, &["app.quit"]),
+            source(SECTION_HISTORY, &["/etc", "/var"]),
+            source(SECTION_COMMANDS, &["app.quit"]),
         ]);
-        let mut vistos = Vec::new();
+        let mut seen = Vec::new();
         for _ in 0..5 {
-            vistos.push(goto.selected().map(|r| r.text.clone()));
+            seen.push(goto.selected().map(|r| r.text.clone()));
             goto.down();
         }
         assert_eq!(
-            vistos,
+            seen,
             vec![
                 Some("/etc".to_owned()),
                 Some("/var".to_owned()),
@@ -882,7 +888,7 @@ mod tests {
                 Some("app.quit".to_owned()),
                 Some("app.quit".to_owned()),
             ],
-            "baja fila a fila y se para en la última, sin caer en la cabecera"
+            "goes down row by row and stops at the last one, without falling into the header"
         );
         for _ in 0..5 {
             goto.up();
@@ -890,52 +896,52 @@ mod tests {
         assert_eq!(goto.selected().map(|r| r.text.as_str()), Some("/etc"));
     }
 
-    /// Una fuente que ya filtró —el índice semántico— no vuelve a pasar por
-    /// la subsecuencia: sus resultados casan por significado, y las letras
-    /// de la consulta pueden no estar en el nombre.
+    /// A source that already filtered — the semantic index — does not go
+    /// through the subsequence again: its results match by meaning, and
+    /// the query's letters may not be in the name.
     #[test]
-    fn una_fuente_ya_filtrada_no_se_vuelve_a_filtrar() {
-        let indice = Box::new(Fija {
-            seccion: SECCION_INDICE,
-            textos: vec!["la factura del gas"],
-            ya_filtrada: true,
-            solo_con_consulta: false,
+    fn an_already_filtered_source_is_not_filtered_again() {
+        let index = Box::new(Fixed {
+            section: SECTION_INDEX,
+            texts: vec!["la factura del gas"],
+            ya_filtered: true,
+            only_with_query: false,
         });
-        let mut goto = Goto::new(vec![indice, fuente(SECCION_HISTORIA, &["/etc"])]);
+        let mut goto = Goto::new(vec![index, source(SECTION_HISTORY, &["/etc"])]);
         for c in "recibo".chars() {
             goto.push_char(c);
         }
-        assert_eq!(goto.len(), 1, "sobrevive la del índice, no la de historia");
+        assert_eq!(goto.len(), 1, "the index's survives, history's does not");
         assert_eq!(
             goto.rows().first().map(|r| r.text.as_str()),
             Some("la factura del gas")
         );
     }
 
-    /// Escribir mueve el cursor a la primera fila de lo que AHORA se ve.
-    /// Dejarlo donde estaba es cómo un Enter va a un sitio que nadie leyó.
+    /// Typing moves the cursor to the first row of what is NOW visible.
+    /// Leaving it where it was is how an Enter goes somewhere nobody read.
     #[test]
-    fn escribir_devuelve_el_cursor_arriba() {
-        let mut goto = Goto::new(vec![fuente(SECCION_HISTORIA, &["/etc", "/var"])]);
+    fn typing_returns_the_cursor_up() {
+        let mut goto = Goto::new(vec![source(SECTION_HISTORY, &["/etc", "/var"])]);
         goto.down();
         assert_eq!(goto.selected().map(|r| r.text.as_str()), Some("/var"));
         goto.push_char('e');
         assert_eq!(goto.selected().map(|r| r.text.as_str()), Some("/etc"));
     }
 
-    /// Una respuesta tardía del índice no mueve el cursor de debajo del
-    /// dedo: el lector escribió, leyó y fue a confirmar, y entre medias
-    /// llegó una sección nueva.
+    /// A late answer from the index does not move the cursor out from
+    /// under the reader's finger: they typed, read and went to confirm,
+    /// and a new section arrived in between.
     #[test]
-    fn una_seccion_que_llega_tarde_no_mueve_el_cursor() {
-        let mut goto = Goto::new(vec![fuente(SECCION_HISTORIA, &["/etc", "/var"])]);
+    fn a_section_that_arrives_late_does_not_move_the_cursor() {
+        let mut goto = Goto::new(vec![source(SECTION_HISTORY, &["/etc", "/var"])]);
         goto.down();
         assert_eq!(goto.selected().map(|r| r.text.as_str()), Some("/var"));
 
-        goto.reemplazar_seccion(
-            SECCION_INDICE,
+        goto.replace_section(
+            SECTION_INDEX,
             vec![GotoRow {
-                section: SECCION_INDICE.id,
+                section: SECTION_INDEX.id,
                 key: "x".to_owned(),
                 text: "lo que encontró el índice".to_owned(),
                 desc: String::new(),
@@ -947,84 +953,84 @@ mod tests {
         assert_eq!(
             goto.selected().map(|r| r.text.as_str()),
             Some("/var"),
-            "el cursor sigue en lo que el lector estaba mirando"
+            "the cursor stays on what the reader was looking at"
         );
-        assert_eq!(goto.len(), 3, "y la sección nueva está");
+        assert_eq!(goto.len(), 3, "and the new section is there");
     }
 
-    /// Y una respuesta nueva SUSTITUYE a la anterior: dos respuestas a
-    /// consultas distintas juntas no describen ninguna de las dos.
+    /// And a new answer REPLACES the previous one: two answers to
+    /// different queries together describe neither.
     #[test]
-    fn una_seccion_asincrona_se_sustituye_no_se_acumula() {
-        let mut goto = Goto::new(vec![fuente(SECCION_HISTORIA, &["/etc"])]);
-        for texto in ["primera", "segunda"] {
-            goto.reemplazar_seccion(
-                SECCION_INDICE,
+    fn an_async_section_replaces_it_does_not_accumulate() {
+        let mut goto = Goto::new(vec![source(SECTION_HISTORY, &["/etc"])]);
+        for text in ["primera", "segunda"] {
+            goto.replace_section(
+                SECTION_INDEX,
                 vec![GotoRow {
-                    section: SECCION_INDICE.id,
-                    key: texto.to_owned(),
-                    text: texto.to_owned(),
+                    section: SECTION_INDEX.id,
+                    key: text.to_owned(),
+                    text: text.to_owned(),
                     desc: String::new(),
                     hostile: false,
                 }],
                 true,
             );
         }
-        let del_indice: Vec<&str> = goto
+        let from_index: Vec<&str> = goto
             .rows()
             .iter()
-            .filter(|r| r.section == SECCION_INDICE.id)
+            .filter(|r| r.section == SECTION_INDEX.id)
             .map(|r| r.text.as_str())
             .collect();
-        assert_eq!(del_indice, vec!["segunda"]);
+        assert_eq!(from_index, vec!["segunda"]);
     }
 
-    /// Sin nada escrito, la sección de comandos no sale: quien abre «ir a»
-    /// y no teclea está preguntando A DÓNDE puede ir, y cientos de verbos
-    /// sepultan las listas de destinos que tiene encima. Con una letra,
-    /// vuelven.
+    /// With nothing typed, the commands section does not show up: whoever
+    /// opens "go to" and does not type is asking WHERE they can go, and
+    /// hundreds of verbs would bury the destination lists above them. With
+    /// one letter, they come back.
     #[test]
-    fn los_comandos_no_salen_hasta_que_se_escribe() {
-        let comandos = Box::new(Fija {
-            seccion: SECCION_COMANDOS,
-            textos: vec!["app.quit"],
-            ya_filtrada: false,
-            solo_con_consulta: true,
+    fn commands_do_not_show_until_typed() {
+        let commands = Box::new(Fixed {
+            section: SECTION_COMMANDS,
+            texts: vec!["app.quit"],
+            ya_filtered: false,
+            only_with_query: true,
         });
-        let mut goto = Goto::new(vec![comandos, fuente(SECCION_HISTORIA, &["/etc"])]);
-        assert_eq!(goto.len(), 1, "sólo la historia");
+        let mut goto = Goto::new(vec![commands, source(SECTION_HISTORY, &["/etc"])]);
+        assert_eq!(goto.len(), 1, "only history");
 
         goto.push_char('q');
 
         assert_eq!(
             goto.rows().first().map(|r| r.text.as_str()),
             Some("app.quit"),
-            "con algo escrito, el comando vuelve"
+            "with something typed, the command comes back"
         );
     }
 
-    /// Ninguna sección pasa de [`TOPE_POR_SECCION`] filas: una lista más
-    /// larga no se lee, y para hojearlas enteras están sus pantallas.
+    /// No section goes past [`CAP_PER_SECTION`] rows: a longer list is
+    /// not read, and its own screens exist for skimming it whole.
     #[test]
-    fn ninguna_seccion_pasa_del_tope() {
-        let muchas: Vec<&'static str> = vec!["/x"; TOPE_POR_SECCION * 3];
-        let goto = Goto::new(vec![fuente(SECCION_HISTORIA, &muchas)]);
-        assert_eq!(goto.len(), TOPE_POR_SECCION);
+    fn no_section_exceeds_the_cap() {
+        let many: Vec<&'static str> = vec!["/x"; CAP_PER_SECTION * 3];
+        let goto = Goto::new(vec![source(SECTION_HISTORY, &many)]);
+        assert_eq!(goto.len(), CAP_PER_SECTION);
     }
 
-    /// Las tres formas que SON una ruta, y las que no.
+    /// The three shapes that ARE a path, and the ones that are not.
     #[test]
-    fn que_cuenta_como_ruta_tecleada() {
-        assert_eq!(parece_ruta("/etc"), Some("/etc"));
-        assert_eq!(parece_ruta("~"), Some("~"));
-        assert_eq!(parece_ruta("~/notas"), Some("~/notas"));
-        assert_eq!(parece_ruta("sftp://host/tmp"), Some("sftp://host/tmp"));
-        assert_eq!(parece_ruta("  /etc  "), Some("/etc"), "se recorta");
+    fn what_counts_as_a_typed_path() {
+        assert_eq!(looks_path("/etc"), Some("/etc"));
+        assert_eq!(looks_path("~"), Some("~"));
+        assert_eq!(looks_path("~/notas"), Some("~/notas"));
+        assert_eq!(looks_path("sftp://host/tmp"), Some("sftp://host/tmp"));
+        assert_eq!(looks_path("  /etc  "), Some("/etc"), "gets trimmed");
 
-        assert_eq!(parece_ruta(""), None);
-        assert_eq!(parece_ruta("etc"), None, "relativa: no se sabe desde dónde");
-        assert_eq!(parece_ruta("~notas"), None, "no es la casa de nadie");
-        assert_eq!(parece_ruta("://x"), None, "sin esquema no hay backend");
-        assert_eq!(parece_ruta("sftp://"), None, "sin destino no hay a dónde");
+        assert_eq!(looks_path(""), None);
+        assert_eq!(looks_path("etc"), None, "relative: not known from where");
+        assert_eq!(looks_path("~notas"), None, "nobody's home");
+        assert_eq!(looks_path("://x"), None, "no scheme, no backend");
+        assert_eq!(looks_path("sftp://"), None, "no destination, nowhere to go");
     }
 }

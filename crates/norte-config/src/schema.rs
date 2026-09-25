@@ -112,13 +112,13 @@ pub struct ArchiveSection {
     /// Decompression budget in bytes for indexing a `tar.gz` (default 64 GiB).
     #[serde(default)]
     pub max_decompressed_bytes: Option<u64>,
-    /// `[archive] max_nesting` (#56): tope de capas de archivo anidadas.
+    /// `[archive] max_nesting` (#56): cap on nested archive layers.
     pub max_nesting: Option<usize>,
-    /// `[archive] rar_delegate` (roadmap ítem 11): ruta ABSOLUTA del programa
-    /// externo que lee RAR (`7z`, `7zz` o `unrar`). Ausente = se sondea
-    /// `PATH`. **Nunca se honra desde la capa Project**: una clave que nombra
-    /// un ejecutable, leída de un `.norte.toml` dentro de un repositorio,
-    /// sería ejecución de código arbitrario al entrar en el directorio.
+    /// `[archive] rar_delegate` (roadmap item 11): ABSOLUTE path of the
+    /// external program that reads RAR (`7z`, `7zz` or `unrar`). Absent =
+    /// probe `PATH`. **Never honoured from the Project layer**: a key that
+    /// names an executable, read from a `.norte.toml` inside a repository,
+    /// would be arbitrary code execution on entering the directory.
     pub rar_delegate: Option<String>,
 }
 
@@ -266,12 +266,12 @@ pub struct UiSection {
     /// initial state.
     #[serde(default)]
     pub show_hidden: Option<bool>,
-    /// Qué disposición de paneles arranca. Ausente = `orthodox`, la de
-    /// siempre: dos paneles al 50 %, la franja de tareas y la barra de estado.
+    /// Which panel layout starts up. Absent = `orthodox`, the usual one: two
+    /// panes at 50%, the task strip and the status bar.
     ///
-    /// Cualquier otro nombre se busca en `layouts/<nombre>.toml` dentro del
-    /// directorio de configuración. Un layout que no carga NO deja a norte sin
-    /// pantalla: se avisa y se arranca con `orthodox`.
+    /// Any other name is looked up in `layouts/<name>.toml` inside the
+    /// configuration directory. A layout that fails to load does NOT leave
+    /// norte with no screen: it warns and starts with `orthodox`.
     #[serde(default)]
     pub layout: Option<String>,
     /// Whether the TUI captures the mouse (click, wheel, drag). Absent =
@@ -617,7 +617,7 @@ pub struct ColumnSpecSection {
 /// The `width` of a spec entry. NOTE: this enum is `untagged`, and serde
 /// ignores `deny_unknown_fields` inside untagged struct-syntax variants —
 /// an unknown key next to `fixed`/`min` is silently ignored, never an
-/// error (pinned by `width_fixed_con_campo_extra_comportamiento_serde` in
+/// error (pinned by `width_fixed_with_extra_field_is_serdes_behavior` in
 /// `load.rs`). The vocabularies and ranges themselves ARE validated at
 /// load.
 #[derive(Debug, Clone, Deserialize)]
@@ -704,32 +704,32 @@ pub struct AiProviderEntry {
     pub base_url: Option<String>,
 }
 
-/// Error de carga de config. Siempre con el ARCHIVO en el diagnóstico.
+/// Config load error. Always with the FILE in the diagnostic.
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
-    /// No se pudo leer un archivo que existe.
-    #[error("no se pudo leer {}: {source}", path.display())]
+    /// Could not read a file that exists.
+    #[error("could not read {}: {source}", path.display())]
     Io {
-        /// El archivo.
+        /// The file.
         path: PathBuf,
-        /// La causa.
+        /// The cause.
         source: std::io::Error,
     },
-    /// TOML inválido o con claves desconocidas.
+    /// Invalid TOML or unknown keys.
     #[error("{}: {message}", path.display())]
     Toml {
-        /// El archivo.
+        /// The file.
         path: PathBuf,
-        /// Diagnóstico del parser (incluye campo y posición).
+        /// Parser diagnostic (includes field and position).
         message: String,
     },
 }
 
-/// Diagnóstico COMPACTO de un error de `toml`: posición + mensaje semántico.
-/// El `Display` multilínea del crate cita ENTERA la línea del fichero —
-/// contenido potencialmente hostil/kilométrico que además desplazaría lo
-/// accionable («unknown field …», que va al final) fuera del tope de la
-/// barra (#73).
+/// COMPACT diagnostic for a `toml` error: position + semantic message. The
+/// crate's multiline `Display` quotes the file's line WHOLE — potentially
+/// hostile/mile-long content that would also push the actionable part
+/// ("unknown field …", which comes last) off the top of the status bar
+/// (#73).
 ///
 /// Wired into [`crate::load::load`]'s error path.
 pub(crate) fn toml_diag(raw: &str, e: &toml::de::Error) -> String {
@@ -742,8 +742,8 @@ pub(crate) fn toml_diag(raw: &str, e: &toml::de::Error) -> String {
     }
 }
 
-/// Lee un archivo si existe; `None` si no está (una capa ausente no es
-/// error), `Err` si existe pero no se puede leer.
+/// Reads a file if it exists; `None` if it is not there (an absent layer is
+/// not an error), `Err` if it exists but cannot be read.
 #[doc(hidden)]
 pub fn read_optional(path: &std::path::Path) -> Result<Option<String>, ConfigError> {
     match std::fs::read_to_string(path) {
@@ -763,7 +763,7 @@ mod tests {
     /// The latent bug this task fixes: the strict struct must accept `[ai]`
     /// (ADR 0031 documents it in norte.toml; the old TUI struct rejected it).
     #[test]
-    fn norte_toml_estricto_acepta_seccion_ai() {
+    fn strict_norte_toml_accepts_ai_section() {
         let doc = r#"
 [ui]
 theme = "nord"
@@ -778,13 +778,13 @@ rename_provider = "local"
 kind = "ollama"
 model = "llama3"
 "#;
-        let parsed: NorteToml = toml::from_str(doc).expect("[ai] es sección canónica");
+        let parsed: NorteToml = toml::from_str(doc).expect("[ai] is a canonical section");
         assert_eq!(parsed.ai.enabled, Some(true));
         assert_eq!(parsed.ai.local_only, Some(true));
         assert_eq!(parsed.ai.denied_prefixes, vec!["file:///secret".to_owned()]);
         assert_eq!(parsed.ai.rename_provider, Some("local".to_owned()));
         assert_eq!(parsed.ai.providers.len(), 1);
-        let provider = parsed.ai.providers.get("local").expect("declarado");
+        let provider = parsed.ai.providers.get("local").expect("declared");
         assert_eq!(provider.kind, "ollama");
         assert_eq!(provider.model, "llama3");
     }
@@ -792,13 +792,13 @@ model = "llama3"
     /// `deny_unknown_fields` pinned on the NEW `[ai]` struct too: a typo in
     /// its top-level fields is a hard error, not silently ignored.
     #[test]
-    fn ai_section_campo_desconocido_es_error() {
+    fn ai_section_unknown_field_is_error() {
         assert!(toml::from_str::<NorteToml>("[ai]\nenabld = true\n").is_err());
     }
 
     /// `deny_unknown_fields` pinned on `[ai.providers.<name>]` too.
     #[test]
-    fn ai_provider_entry_campo_desconocido_es_error() {
+    fn ai_provider_entry_unknown_field_is_error() {
         let doc = r#"
 [ai.providers.x]
 kind = "ollama"
@@ -810,7 +810,7 @@ modle = "typo"
 
     /// Strictness is uniform: a typo anywhere is a hard error.
     #[test]
-    fn campo_desconocido_sigue_siendo_error() {
+    fn unknown_field_is_still_an_error() {
         assert!(toml::from_str::<NorteToml>("[ui]\ntheem = \"nord\"\n").is_err());
     }
 }
@@ -819,25 +819,26 @@ modle = "typo"
 mod toml_diag_tests {
     use super::*;
 
-    /// #73: el diagnóstico compacto conserva posición + mensaje semántico y
-    /// NO cita la línea del fichero — un TOML hostil puede meter valores
-    /// kilométricos/bidi que desplazarían lo accionable fuera del tope de la
-    /// barra (hallazgo MEDIA-1 del encoding-auditor).
+    /// #73: the compact diagnostic keeps position + semantic message and
+    /// does NOT quote the file's line — a hostile TOML can smuggle in
+    /// mile-long/bidi values that would push the actionable part off the top
+    /// of the status bar (encoding-auditor finding MEDIA-1).
     #[test]
-    fn toml_diag_compacto_sin_citar_el_contenido() {
-        let hostil = format!("v = \"{}\u{202E}\"\nbad", "x".repeat(300));
-        let e = toml::from_str::<NorteToml>(&hostil).expect_err("no parsea");
-        let d = toml_diag(&hostil, &e);
-        assert!(!d.contains("xxx"), "no cita el contenido: {d}");
-        assert!(!d.contains('\u{202E}'), "sin bidi: {d}");
-        assert!(d.len() < 200, "compacto ({} bytes): {d}", d.len());
-        assert!(d.contains("line "), "la posición sobrevive: {d}");
+    fn toml_diag_is_compact_and_does_not_quote_the_content() {
+        let hostile = format!("v = \"{}\u{202E}\"\nbad", "x".repeat(300));
+        let e = toml::from_str::<NorteToml>(&hostile).expect_err("does not parse");
+        let d = toml_diag(&hostile, &e);
+        assert!(!d.contains("xxx"), "does not quote the content: {d}");
+        assert!(!d.contains('\u{202E}'), "no bidi: {d}");
+        assert!(d.len() < 200, "compact ({} bytes): {d}", d.len());
+        assert!(d.contains("line "), "the position survives: {d}");
     }
 
-    /// El span puede faltar (errores semánticos sin posición): mensaje solo.
+    /// The span can be missing (semantic errors with no position): message
+    /// only.
     #[test]
-    fn toml_diag_sin_span_no_panica() {
-        let e = toml::from_str::<NorteToml>("keymap = 3").expect_err("no valida");
+    fn toml_diag_with_no_span_does_not_panic() {
+        let e = toml::from_str::<NorteToml>("keymap = 3").expect_err("does not validate");
         let _ = toml_diag("keymap = 3", &e);
     }
 }

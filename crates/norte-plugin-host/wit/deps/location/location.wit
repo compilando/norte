@@ -1,33 +1,35 @@
-// `norte:location` es la capacidad de LEER BAJO el directorio que el host está
-// listando, sin que el guest sepa cuál es. El host acuña un `token` opaco por
-// petición; el guest lo devuelve en cada llamada y jamás recibe una ruta.
+// `norte:location` is the capability to READ UNDER the directory the host is
+// listing, without the guest knowing which one it is. The host mints an
+// opaque `token` per request; the guest returns it on every call and never
+// receives a path.
 //
-// Por qué un paquete propio y no una interfaz más de `norte:plugin` (ADR 0041
-// decisión 4): la versión del paquete viaja dentro del nombre de CADA interfaz,
-// así que un cambio aquí no puede permitirse invalidar a los previewers de
-// terceros. Empieza en 0.1.0 y sube por su cuenta.
+// Why its own package and not one more interface of `norte:plugin` (ADR 0041
+// decision 4): a package's version travels inside the name of EVERY interface,
+// so a change here cannot be allowed to invalidate third-party previewers.
+// It starts at 0.1.0 and bumps on its own.
 //
-// 0.1.0 → 0.2.0 (2026-09-03, demo D2 / ADR 0094): `read-prefix`. `read` lee
-// el fichero ENTERO y lo cobra entero contra el presupuesto de la página; una
-// columna que solo necesita la cabecera de un mp3 o de un png agotaba los
-// 64 MiB de la sesión en una docena de filas, y un vídeo nunca daba celda.
-// Primer bump del WIT desde que ADR 0094 dijo qué pasa cuando hay uno: los
-// guests compilados contra 0.1.0 (git-status) se listan como desfasados hasta
-// recompilar. `norte:plugin` NO sube: ninguna interfaz suya cambia de nombre,
-// solo el import del world `norte-columns`, y eso no toca a los previewers.
+// 0.1.0 → 0.2.0 (2026-09-03, demo D2 / ADR 0094): `read-prefix`. `read` reads
+// the WHOLE file and charges it whole against the page's budget; a
+// column that only needs an mp3's or a png's header would exhaust the
+// session's 64 MiB in a dozen rows, and a video never got a cell.
+// First WIT bump since ADR 0094 said what happens when there is one: guests
+// compiled against 0.1.0 (git-status) are listed as mismatched until
+// recompiled. `norte:plugin` does NOT bump: none of its interfaces changes
+// name, only the `norte-columns` world's import does, and that does not touch
+// previewers.
 package norte:location@0.2.0;
 
-/// Lectura ACOTADA bajo una ubicación que el host abrió y confinó
-/// (`openat2(RESOLVE_BENEATH)` en `norte-vfs-local`). Todo lo que aquí falla
-/// devuelve un `string` legible: el guest no distingue causas del sistema
-/// operativo, y no tiene por qué.
+/// BOUNDED read under a location the host opened and confined
+/// (`openat2(RESOLVE_BENEATH)` in `norte-vfs-local`). Everything that fails
+/// here returns a readable `string`: the guest does not distinguish
+/// operating-system causes, and has no reason to.
 interface location {
-    /// Qué es una entrada. Grueso a propósito.
+    /// What an entry is. Coarse on purpose.
     enum entry-kind { file, dir, symlink, other }
 
-    /// Lo que `stat` devuelve: exactamente los campos que el índice de git
-    /// guarda. Comparar solo `mtime` es cómo se pierde un cambio hecho dentro
-    /// del mismo segundo, así que van también `ctime`, `ino` y `dev`.
+    /// What `stat` returns: exactly the fields git's index keeps. Comparing
+    /// only `mtime` is how a change made within the same second gets lost, so
+    /// `ctime`, `ino` and `dev` come along too.
     record meta {
         kind: entry-kind,
         size: u64,
@@ -40,31 +42,33 @@ interface location {
         mode: u32,
     }
 
-    /// Una entrada de un listado. `name` va en BYTES: la regla dura 1 no deja
-    /// de aplicar porque la ruta cruce una ABI.
+    /// An entry of a listing. `name` goes in BYTES: hard rule 1 does not stop
+    /// applying just because the path crosses an ABI.
     record dirent {
         name: list<u8>,
         kind: entry-kind,
     }
 
-    /// Lee un fichero bajo la ubicación. `rel` es relativo y en bytes; un `..`
-    /// que se salga, una ruta absoluta o un symlink final son un error, no un
-    /// contenido.
+    /// Reads a file under the location. `rel` is relative and in bytes; a `..`
+    /// that escapes, an absolute path or a final symlink are an error, not
+    /// content.
     read: func(token: string, rel: list<u8>) -> result<list<u8>, string>;
 
-    /// Como `read`, pero como mucho los primeros `max` bytes: lo que una
-    /// cabecera necesita. El host lee y COBRA solo lo que devuelve, así que
-    /// una columna sobre cien vídeos cuesta cien cabeceras y no cien vídeos.
-    /// Un fichero más corto que `max` llega entero; el guest no distingue
-    /// «cabía» de «se cortó» salvo por `stat`, y no tiene por qué.
+    /// Like `read`, but at most the first `max` bytes: what a header
+    /// needs. The host reads and CHARGES only what it returns, so
+    /// a column over a hundred videos costs a hundred headers and not a
+    /// hundred videos. A file shorter than `max` arrives whole; the guest
+    /// cannot tell "it fit" from "it got cut" except via `stat`, and has no
+    /// reason to.
     read-prefix: func(token: string, rel: list<u8>, max: u64) -> result<list<u8>, string>;
 
-    /// `lstat` de una entrada bajo la ubicación (el symlink NO se sigue).
+    /// `lstat` of an entry under the location (the symlink is NOT followed).
     stat: func(token: string, rel: list<u8>) -> result<meta, string>;
 
-    /// Lista un directorio bajo la ubicación. `.` y `..` no salen.
+    /// Lists a directory under the location. `.` and `..` do not come out.
     ///
-    /// Se llama `list-dir` y no `list` porque `list` es palabra reservada de
-    /// WIT (es el constructor de tipo `list<T>`), y el parser corta ahí.
+    /// It is called `list-dir` and not `list` because `list` is a reserved
+    /// word in WIT (it is the `list<T>` type constructor), and the parser
+    /// stops there.
     list-dir: func(token: string, rel: list<u8>) -> result<list<dirent>, string>;
 }

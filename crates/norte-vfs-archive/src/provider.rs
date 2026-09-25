@@ -1,4 +1,4 @@
-//! [`ArchiveProvider`]: el `Provider` read-only de archivos comprimidos.
+//! [`ArchiveProvider`]: the read-only `Provider` for compressed archives.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -15,16 +15,16 @@ use norte_vfs::{ByteSink, ByteStream, EntryStream, Provider};
 use crate::blocking::ProviderReader;
 use crate::index::{ArchiveIndex, InnerPath, Limits, Locator};
 
-/// Formato de contenedor soportado (whitelist `ARCHIVE_FORMATS` de proto).
+/// Supported container format (proto's `ARCHIVE_FORMATS` whitelist).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Format {
-    /// tar plano (ustar/GNU/pax). Lectura passthrough (datos contiguos).
+    /// Plain tar (ustar/GNU/pax). Passthrough read (contiguous data).
     Tar,
-    /// zip stored+deflate. Lectura descomprimiendo en hilo blocking.
+    /// zip stored+deflate. Read by decompressing in a blocking thread.
     Zip,
-    /// tar.gz/tgz (ADR 0028, #55): capa gz OPACA sobre tar — índice
-    /// secuencial (`entries()`, sin `Seek`) y lectura forward-decode
-    /// (descarta hasta el offset con un decoder fresco por lectura).
+    /// tar.gz/tgz (ADR 0028, #55): OPAQUE gz layer over tar — sequential
+    /// index (`entries()`, no `Seek`) and forward-decode read (discards up
+    /// to the offset with a fresh decoder per read).
     TarGz,
 }
 
@@ -38,86 +38,85 @@ impl Format {
     }
 }
 
-/// El índice cacheado de UN contenedor. Desde #59 es SOLO el índice (el
-/// locator zip es autocontenido: no se retiene ningún objeto de archive);
-/// el struct conserva el nombre para minimizar churn.
+/// ONE container's cached index. Since #59 it's ONLY the index (the zip
+/// locator is self-contained: no archive object is retained); the struct
+/// keeps its name to minimize churn.
 #[derive(Clone)]
 struct CachedContainer {
     index: Arc<ArchiveIndex>,
 }
 
-/// Caché LRU mínima de índices: clave = wire canónico del exterior. Cap fijo
-/// (ADR 0018): RAII — al morir el provider muere todo.
+/// A minimal LRU index cache: key = the outer's canonical wire. Fixed cap
+/// (ADR 0018): RAII — when the provider dies, everything dies with it.
 struct IndexCache {
     map: HashMap<String, CachedContainer>,
-    /// Orden de uso (el último es el más reciente).
+    /// Usage order (the last one is the most recent).
     order: Vec<String>,
 }
 
 const CACHE_CAP: usize = 8;
 
-/// Techo de lecturas forward-decode de `tar+gz` CONCURRENTES por provider
-/// (FIX-2, security MAJOR, #55 review). El descarte hasta `offset` en
-/// `read_entry_gz` puede pinnear un hilo de `spawn_blocking` durante
-/// MINUTOS (hasta `Limits::max_decompressed_bytes` de inflate real) — N
-/// lecturas profundas concurrentes son N hilos bloqueados simultáneamente
-/// sobre el pool de `spawn_blocking` de tokio, que es COMPARTIDO por TODO
-/// el runtime del daemon (journal, otros providers, tareas de fondo…), no
-/// exclusivo de este provider: sin tope, un cliente que dispara muchas
-/// lecturas profundas de un `tar+gz` grande hambrea el pool blocking entero
-/// (`DoS`). El [`tokio::sync::Semaphore`] pone un tope duro: las lecturas
-/// EXCEDENTES se ENCOLAN (esperan su turno), nunca se rechazan.
+/// Ceiling on CONCURRENT `tar+gz` forward-decode reads per provider
+/// (FIX-2, security MAJOR, #55 review). The discard up to `offset` in
+/// `read_entry_gz` can pin a `spawn_blocking` thread for MINUTES (up to
+/// `Limits::max_decompressed_bytes` of real inflate) — N concurrent deep
+/// reads are N threads simultaneously blocked on tokio's `spawn_blocking`
+/// pool, which is SHARED by the daemon's WHOLE runtime (the journal, other
+/// providers, background tasks…), not exclusive to this provider: without
+/// a ceiling, a client firing many deep reads of a large `tar+gz` starves
+/// the entire blocking pool (`DoS`). The [`tokio::sync::Semaphore`] sets a
+/// hard ceiling: EXCESS reads get QUEUED (wait their turn), never rejected.
 const GZ_READ_CONCURRENCY: usize = 4;
 
-/// `(mtime_ms, size)` del contenedor exterior: la moneda de invalidación de
-/// caché/spool en todo este módulo.
+/// The outer container's `(mtime_ms, size)`: the invalidation currency
+/// throughout this module's cache/spool.
 type Generation = (Option<i64>, Option<u64>);
 
-/// Umbral de calor del spool (#95.1): en la lectura gz N.º
-/// `SPOOL_HEAT_THRESHOLD` de un mismo contenedor (misma generación) se
-/// construye el spool descomprimido.
+/// Spool heat threshold (#95.1): on the
+/// [`SPOOL_HEAT_THRESHOLD`]-th gz read of the same container (same
+/// generation) the decompressed spool gets built.
 const SPOOL_HEAT_THRESHOLD: u32 = 2;
 
-/// Tope de entradas del mapa de calor. Es solo una heurística: al llenarse
-/// se expulsa una entrada arbitraria.
+/// Ceiling on the heat map's entries. It's just a heuristic: when full, an
+/// arbitrary entry gets evicted.
 const SPOOL_HEAT_CAP: usize = 32;
 
-/// Centinela en el mapa de calor: contenedor NO spooleable (su descomprimido
-/// supera `Limits::spool_max_bytes`) — no se reintenta el build hasta que
-/// cambie de generación. `saturating_add` lo deja clavado aquí.
+/// Sentinel in the heat map: a NON-spoolable container (its decompressed
+/// size exceeds `Limits::spool_max_bytes`) — the build isn't retried until
+/// it changes generation. `saturating_add` pins it here.
 const SPOOL_UNSPOOLABLE: u32 = u32::MAX;
 
-/// El spool de UN contenedor `tar+gz` caliente (#95.1): su stream gz entero
-/// DESCOMPRIMIDO en un fichero temporal, para que las lecturas repetidas
-/// sean seeks locales O(1) en vez de forward-decode O(offset).
+/// ONE hot `tar+gz` container's spool (#95.1): its whole gz stream
+/// DECOMPRESSED into a temporary file, so repeated reads are local O(1)
+/// seeks instead of O(offset) forward-decode.
 struct Spool {
-    /// Wire canónico del contenedor exterior (misma clave que `IndexCache`).
+    /// The outer container's canonical wire (same key as `IndexCache`).
     key: String,
-    /// Generación del contenedor al spoolar — la invalidación.
+    /// The container's generation when spooled — the invalidation key.
     generation: Generation,
-    /// Fichero de [`tempfile::tempfile()`]: ANÓNIMO — nace ya unlinked, el
-    /// SO recupera el espacio al morir el último descriptor y JAMÁS tiene
-    /// pathname (cero superficie de ataque por nombre de staging). Va bajo
-    /// `Mutex` porque el cursor del fd es COMPARTIDO (un `try_clone` es un
-    /// dup: mismo offset) — cada chunk re-seekea a posición ABSOLUTA bajo
-    /// el lock, así dos lecturas concurrentes del spool no se pisan.
+    /// A [`tempfile::tempfile()`] file: ANONYMOUS — born already unlinked,
+    /// the OS reclaims the space when the last descriptor dies and it NEVER
+    /// has a pathname (zero attack surface via a staging name). Behind a
+    /// `Mutex` because the fd's cursor is SHARED (a `try_clone` is a dup:
+    /// same offset) — every chunk re-seeks to an ABSOLUTE position under
+    /// the lock, so two concurrent reads of the spool don't step on each other.
     file: Arc<Mutex<std::fs::File>>,
-    /// Bytes descomprimidos totales del spool.
+    /// The spool's total decompressed bytes.
     len: u64,
 }
 
-/// Estado compartido del spool (#95.1). Vive en un `Arc` porque los hilos
-/// `spawn_blocking` que construyen/instalan el spool necesitan `'static`.
+/// The spool's shared state (#95.1). Lives in an `Arc` because the
+/// `spawn_blocking` threads that build/install the spool need `'static`.
 struct SpoolState {
-    /// Slot ÚNICO por provider (v1): el último contenedor caliente gana —
-    /// otro contenedor que se caliente REEMPLAZA al anterior.
+    /// A SINGLE slot per provider (v1): the last hot container wins —
+    /// another container that heats up REPLACES the previous one.
     slot: tokio::sync::Mutex<Option<Spool>>,
-    /// Calor por contenedor: nº de lecturas gz de la generación vista. La
-    /// generación nueva resetea el contador (y des-marca un no-spooleable);
-    /// las entradas de generaciones viejas se podan así, oportunistamente.
+    /// Heat per container: number of gz reads of the generation seen. A
+    /// new generation resets the counter (and un-marks a non-spoolable
+    /// one); old generations' entries get pruned this way, opportunistically.
     heat: Mutex<HashMap<String, (Generation, u32)>>,
-    /// Build en curso (clave del contenedor). Los competidores NO esperan:
-    /// caen a forward-decode — solo un hilo paga el build.
+    /// Build in progress (the container's key). Competitors do NOT wait:
+    /// they fall to forward-decode — only one thread pays for the build.
     building: Mutex<Option<String>>,
 }
 
@@ -130,9 +129,9 @@ impl SpoolState {
         }
     }
 
-    /// Suma una lectura al calor de `key` y devuelve el contador resultante.
+    /// Adds a read to `key`'s heat and returns the resulting count.
     fn bump_heat(&self, key: &str, generation: Generation) -> u32 {
-        let mut heat = self.heat.lock().expect("heat lock sano");
+        let mut heat = self.heat.lock().expect("heat lock is healthy");
         if heat.len() >= SPOOL_HEAT_CAP
             && !heat.contains_key(key)
             && let Some(victim) = heat.keys().next().cloned()
@@ -147,19 +146,19 @@ impl SpoolState {
         e.1
     }
 
-    /// Negative-cache: el descomprimido de `key` supera el presupuesto —
-    /// no reintentar el build mientras dure esta generación.
+    /// Negative-cache: `key`'s decompressed size exceeds the budget —
+    /// don't retry the build for as long as this generation lasts.
     fn mark_unspoolable(&self, key: &str, generation: Generation) {
         self.heat
             .lock()
-            .expect("heat lock sano")
+            .expect("heat lock is healthy")
             .insert(key.to_owned(), (generation, SPOOL_UNSPOOLABLE));
     }
 
-    /// Reclama el flag de build para `key`. `None` = otro build en curso
-    /// (el caller cae a forward-decode, jamás espera).
+    /// Claims the build flag for `key`. `None` = another build is in
+    /// progress (the caller falls to forward-decode, never waits).
     fn try_claim_build(self: &Arc<Self>, key: &str) -> Option<SpoolBuildClaim> {
-        let mut building = self.building.lock().expect("building lock sano");
+        let mut building = self.building.lock().expect("building lock is healthy");
         if building.is_some() {
             return None;
         }
@@ -170,11 +169,11 @@ impl SpoolState {
     }
 }
 
-/// RAII del flag de build (#95.1): lo limpia en drop pase lo que pase —
-/// éxito, abort, panic del hilo, o closure de `spawn_blocking` descartada
-/// sin ejecutar (shutdown del runtime). Solo puede existir UNO a la vez
-/// (transición `None → Some` bajo el lock), así que limpiar sin comparar
-/// es correcto.
+/// RAII for the build flag (#95.1): clears it on drop no matter what —
+/// success, abort, a thread panic, or a `spawn_blocking` closure dropped
+/// without running (runtime shutdown). Only ONE can exist at a time (the
+/// `None → Some` transition happens under the lock), so clearing without
+/// comparing is correct.
 struct SpoolBuildClaim {
     state: Arc<SpoolState>,
 }
@@ -187,7 +186,11 @@ impl SpoolBuildClaim {
 
 impl Drop for SpoolBuildClaim {
     fn drop(&mut self) {
-        *self.state.building.lock().expect("building lock sano") = None;
+        *self
+            .state
+            .building
+            .lock()
+            .expect("building lock is healthy") = None;
     }
 }
 
@@ -210,8 +213,8 @@ impl IndexCache {
         generation: (Option<i64>, Option<u64>),
     ) -> Option<CachedContainer> {
         let hit = self.map.get(key)?;
-        // mtime desconocido = SIEMPRE stale (ADR 0018): sin validador no
-        // hay caché que valga.
+        // Unknown mtime = ALWAYS stale (ADR 0018): with no validator no
+        // cache is worth anything.
         if hit.index.generation != generation || generation.0.is_none() {
             self.map.remove(key);
             self.order.retain(|k| k != key);
@@ -235,46 +238,45 @@ impl IndexCache {
     }
 }
 
-/// Provider read-only que sirve el contenido de archivos comprimidos que
-/// viven en OTRO provider (composición, ADR 0018 B2). Un instance sirve UN
-/// scheme compuesto (`tar+file`, `tar+sftp`…) sobre UN provider interior.
-/// Caveat de anidamiento (#56): la generación del caché de una capa ANIDADA
-/// es el (mtime, size) de la entrada DENTRO del archivo exterior — reemplazar
-/// el contenedor exterior con entradas de metadatos idénticos puede servir un
-/// índice interior rancio hasta la evicción; el CRC de lecturas completas
-/// (#59) y los short-reads fail-loud son el cinturón.
+/// A read-only provider serving the content of compressed archives that
+/// live on ANOTHER provider (composition, ADR 0018 B2). One instance
+/// serves ONE composite scheme (`tar+file`, `tar+sftp`…) over ONE inner
+/// provider. Nesting caveat (#56): a NESTED layer's cache generation is
+/// the (mtime, size) of the entry INSIDE the outer archive — replacing the
+/// outer container with entries of identical metadata can serve a stale
+/// inner index until eviction; complete-read CRCs (#59) and fail-loud
+/// short-reads are the belt.
 pub struct ArchiveProvider {
     scheme: String,
     format: Format,
     inner: Arc<dyn Provider>,
     limits: Limits,
     cache: Mutex<IndexCache>,
-    /// Single-flight de construcción de índice (#61): un builder por clave;
-    /// los concurrentes esperan el lock y releen la caché. El map se poda
-    /// cuando el último interesado suelta su Arc.
+    /// Single-flight for index construction (#61): one builder per key;
+    /// concurrent ones wait on the lock and re-read the cache. The map is
+    /// pruned when the last interested party drops its Arc.
     building: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
-    /// Tope de concurrencia de las lecturas con DESCARTE descomprimido:
-    /// el forward-decode `tar+gz` (FIX-2, #55 review) y, desde #59, los
-    /// deflate RANGED de zip (skip>0 — deflate no tiene seek). Ver
-    /// [`GZ_READ_CONCURRENCY`]. `Tar` y las lecturas sin descarte no pasan
-    /// por aquí.
+    /// Concurrency ceiling for reads with a decompressed DISCARD: `tar+gz`
+    /// forward-decode (FIX-2, #55 review) and, since #59, zip's RANGED
+    /// deflate (skip>0 — deflate has no seek). See [`GZ_READ_CONCURRENCY`].
+    /// `Tar` and discard-free reads don't go through here.
     gz_read_permits: Arc<tokio::sync::Semaphore>,
-    /// Spool de tar.gz calientes (#95.1): slot único + calor + flag de
-    /// build. En `Arc` para los hilos blocking (ver [`SpoolState`]).
+    /// Spool for hot tar.gz files (#95.1): single slot + heat + build flag.
+    /// In an `Arc` for the blocking threads (see [`SpoolState`]).
     spool: Arc<SpoolState>,
 }
 
-/// Envuelve un stream passthrough con un contador ENTREGADO-vs-PROMETIDO
-/// (#97): el índice prometió `expected` bytes — si el stream interior
-/// termina antes (contenedor truncado/mutado bajo nuestros pies, semántica
-/// pread sin error) o entrega de más (provider interior mentiroso), el
-/// consumidor recibe `Error::Corrupt`, jamás datos cortos o de sobra en
-/// silencio. Un `Err` del interior se propaga verbatim y corta el stream.
-/// `container` = display YA REDACTADO del contenedor (para las trazas).
+/// Wraps a passthrough stream with a DELIVERED-vs-PROMISED counter (#97):
+/// the index promised `expected` bytes — if the inner stream ends early
+/// (a container truncated/mutated under our feet, pread semantics with no
+/// error) or delivers extra (a lying inner provider), the consumer gets
+/// `Error::Corrupt`, never silently short or extra data. An `Err` from the
+/// inner side propagates verbatim and cuts the stream short. `container` =
+/// the container's ALREADY-REDACTED display (for traces).
 fn expect_exact(inner: ByteStream, expected: u64, container: String) -> ByteStream {
-    // Estado: el stream interior va en Option — en los estados terminales se
-    // SUELTA al instante (m1 del review: un interior remoto puede pinnear
-    // buffers/slot de conexión hasta que el caller dropee el wrapper).
+    // State: the inner stream lives in an Option — in terminal states it's
+    // DROPPED immediately (review m1: a remote inner side could pin
+    // buffers/a connection slot until the caller drops the wrapper).
     futures::stream::unfold(
         (Some(inner), 0u64, container),
         move |(stream, got, container)| async move {
@@ -287,7 +289,7 @@ fn expect_exact(inner: ByteStream, expected: u64, container: String) -> ByteStre
                             got,
                             expected,
                             %container,
-                            "tar passthrough entrega bytes DE MÁS"
+                            "tar passthrough delivers EXTRA bytes"
                         );
                         return Some((Err(Error::Corrupt), (None, got, container)));
                     }
@@ -300,7 +302,7 @@ fn expect_exact(inner: ByteStream, expected: u64, container: String) -> ByteStre
                             got,
                             expected,
                             %container,
-                            "tar passthrough corto: contenedor truncado/mutado bajo el read"
+                            "tar passthrough short: container truncated/mutated under the read"
                         );
                         return Some((Err(Error::Corrupt), (None, got, container)));
                     }
@@ -309,28 +311,28 @@ fn expect_exact(inner: ByteStream, expected: u64, container: String) -> ByteStre
             }
         },
     )
-    // M1 del review: Unfold PANICA si se pollea tras Ready(None) — fused,
-    // como el resto de ByteStreams de este crate (poll_fn/iter/empty).
+    // Review M1: Unfold PANICS if polled after Ready(None) — fused, like
+    // the rest of this crate's ByteStreams (poll_fn/iter/empty).
     .fuse()
     .boxed()
 }
 
 impl ArchiveProvider {
-    /// Provider con los límites por defecto. `scheme` es el compuesto
-    /// completo (`tar+file`); debe empezar por el token del formato.
+    /// A provider with the default limits. `scheme` is the full composite
+    /// one (`tar+file`); it must start with the format's token.
     ///
     /// # Panics
-    /// Si `scheme` no empieza por `<formato>+` — error de wiring, no de
-    /// datos (el core compone el scheme desde el mismo token).
+    /// If `scheme` doesn't start with `<format>+` — a wiring error, not a
+    /// data one (the core composes the scheme from this same token).
     #[must_use]
     pub fn new(inner: Arc<dyn Provider>, format: Format, scheme: impl Into<String>) -> Self {
         Self::with_limits(inner, format, scheme, Limits::default())
     }
 
-    /// Como [`Self::new`] con límites propios (tests de bomba; config futura).
+    /// Like [`Self::new`] with custom limits (bomb tests; future config).
     ///
     /// # Panics
-    /// Ver [`Self::new`].
+    /// See [`Self::new`].
     #[must_use]
     pub fn with_limits(
         inner: Arc<dyn Provider>,
@@ -341,7 +343,7 @@ impl ArchiveProvider {
         let scheme = scheme.into();
         assert!(
             scheme.starts_with(&format!("{}+", format.token())),
-            "scheme compuesto `{scheme}` no corresponde al formato {format:?}"
+            "composite scheme `{scheme}` doesn't match format {format:?}"
         );
         Self {
             scheme,
@@ -355,7 +357,7 @@ impl ArchiveProvider {
         }
     }
 
-    /// Valida el path contra este provider y lo desmonta (ADR 0018).
+    /// Validates the path against this provider and splits it apart (ADR 0018).
     fn split(&self, p: &VPath) -> Result<ArchiveRef, Error> {
         if p.scheme() != self.scheme {
             return Err(Error::InvalidPath);
@@ -366,7 +368,7 @@ impl ArchiveProvider {
         }
     }
 
-    /// stat del contenedor en el interior: debe ser un archivo.
+    /// Stats the container on the inner side: it must be a file.
     async fn outer_stat(&self, aref: &ArchiveRef) -> Result<Entry, Error> {
         let e = self.inner.stat(&aref.outer).await?;
         if e.kind != EntryKind::File {
@@ -377,67 +379,68 @@ impl ArchiveProvider {
         Ok(e)
     }
 
-    /// El índice del contenedor, de caché o reconstruido (`spawn_blocking`).
+    /// The container's index, from cache or rebuilt (`spawn_blocking`).
     async fn index_for(&self, aref: &ArchiveRef) -> Result<CachedContainer, Error> {
         let outer = self.outer_stat(aref).await?;
         let generation = (outer.mtime_ms, outer.size);
         let key = aref.outer.to_wire();
         {
-            let mut cache = self.cache.lock().expect("cache lock sano");
+            let mut cache = self.cache.lock().expect("cache lock is healthy");
             if let Some(hit) = cache.get(&key, generation) {
                 return Ok(hit);
             }
         }
-        // MINOR-4 (#61): sin mtime nada es cacheable — `get()` lo tiraría
-        // siempre por stale (regla de `IndexCache::get`). El single-flight
-        // solo aporta cuando el trabajo coalescido se REUTILIZA; aquí no hay
-        // reutilización posible, así que pasar por el lock solo serializaría
-        // N builds detrás de uno sin beneficio. Camino directo, en paralelo,
-        // como pre-B2.
+        // MINOR-4 (#61): with no mtime nothing is cacheable — `get()`
+        // would always throw it away as stale (`IndexCache::get`'s rule).
+        // Single-flight only pays off when the coalesced work gets
+        // REUSED; here there's no possible reuse, so going through the
+        // lock would only serialize N builds behind one with no benefit.
+        // Direct path, in parallel, like pre-B2.
         if generation.0.is_none() {
             let container_len = outer.size.unwrap_or(0);
             return self.build_blocking(aref, generation, container_len).await;
         }
 
-        // RAII (MAJOR-1, #61): `slot` se declara ANTES que `_build_guard` a
-        // propósito — Rust suelta las locales en orden inverso de
-        // declaración, así que en cualquier salida (return, `?`, panic,
-        // CANCELACIÓN del future) el guard libera el mutex primero y el
-        // slot se poda del map (o queda para el siguiente interesado)
-        // después, sin la carrera de dos finalistas viéndose mutuamente el
-        // Arc que tenía el `prune_building` manual.
+        // RAII (MAJOR-1, #61): `slot` is declared BEFORE `_build_guard` on
+        // purpose — Rust drops locals in reverse declaration order, so on
+        // any exit (return, `?`, panic, future CANCELLATION) the guard
+        // releases the mutex first and the slot gets pruned from the map
+        // (or is left for the next interested party) afterward, without
+        // the race of two finalists watching each other's Arc that the
+        // manual `prune_building` had.
         let slot = BuildingSlot::new(self, &key);
         let _build_guard = slot.shared().lock_owned().await;
-        // MINOR-3 (#61): re-stat BAJO el lock. El stat de arriba solo sirve
-        // al fast path (caché caliente); un waiter puede haber esperado el
-        // lock tanto tiempo que su generación quedó vieja — usar la vieja
-        // aquí pisaría (o fallaría en pisar) una entrada fresca que el
-        // builder anterior ya puso con la generación ACTUAL.
+        // MINOR-3 (#61): re-stat UNDER the lock. The stat above only
+        // serves the fast path (a hot cache); a waiter may have waited on
+        // the lock long enough that its generation went stale — using the
+        // old one here would overwrite (or fail to overwrite) a fresh
+        // entry the previous builder already put in with the CURRENT
+        // generation.
         let outer = self.outer_stat(aref).await?;
         let generation = (outer.mtime_ms, outer.size);
-        // Double-check: otro caller pudo construir mientras esperábamos.
+        // Double-check: another caller may have built while we waited.
         {
-            let mut cache = self.cache.lock().expect("cache lock sano");
+            let mut cache = self.cache.lock().expect("cache lock is healthy");
             if let Some(hit) = cache.get(&key, generation) {
                 return Ok(hit);
             }
         }
         let container_len = outer.size.unwrap_or(0);
         let container = self.build_blocking(aref, generation, container_len).await?;
-        // Sin mtime no hay validador: get() lo daría siempre por stale —
-        // no gastes un slot LRU en un índice inrecuperable.
+        // With no mtime there's no validator: get() would always call it
+        // stale — don't spend an LRU slot on an unrecoverable index.
         if generation.0.is_some() {
             self.cache
                 .lock()
-                .expect("cache lock sano")
+                .expect("cache lock is healthy")
                 .put(&key, container.clone());
         }
         Ok(container)
     }
 
-    /// Construye el índice en un hilo `spawn_blocking`. Sin caché ni
-    /// single-flight propios: lo comparten el camino con lock de
-    /// `index_for` y el atajo MINOR-4 de generación desconocida.
+    /// Builds the index on a `spawn_blocking` thread. No cache nor
+    /// single-flight of its own: shared by `index_for`'s locked path and
+    /// MINOR-4's unknown-generation shortcut.
     async fn build_blocking(
         &self,
         aref: &ArchiveRef,
@@ -452,8 +455,9 @@ impl ArchiveProvider {
         );
         let limits = self.limits;
         let format = self.format;
-        // Regla 3: si este future muere (caller cancela), el guard arma el
-        // flag y el hilo blocking corta en la siguiente entrada del loop.
+        // Rule 3: if this future dies (the caller cancels), the guard
+        // arms the flag and the blocking thread cuts short at the loop's
+        // next entry.
         let cancel = Arc::new(AtomicBool::new(false));
         let mut guard = CancelOnDrop::new(Arc::clone(&cancel));
         let joined = crate::blocking::spawn_blocking(move || match format {
@@ -464,9 +468,10 @@ impl ArchiveProvider {
                 crate::zip_format::build_index(reader, container_len, generation, &limits, &cancel)
             }
             Format::TarGz => {
-                // Sin `container_len` como cota del locator (ADR 0028): ese
-                // tamaño es el COMPRIMIDO y no acota nada del stream
-                // descomprimido — el truncamiento se detecta en el read.
+                // No `container_len` as the locator's bound (ADR 0028):
+                // that size is the COMPRESSED one and bounds nothing
+                // about the decompressed stream — truncation is detected
+                // in the read.
                 crate::targz_format::build_index_gz(reader, generation, &limits, &cancel)
             }
         })
@@ -477,7 +482,7 @@ impl ArchiveProvider {
                 if e.is_panic() {
                     Error::Internal { panic: true }
                 } else {
-                    // Runtime en shutdown: cancelación, no bug (spec §17.7).
+                    // Runtime shutting down: cancellation, not a bug (spec §17.7).
                     Error::Cancelled
                 }
             })
@@ -491,11 +496,12 @@ impl ArchiveProvider {
         aref.inner.iter().map(|s| s.as_bytes().to_vec()).collect()
     }
 
-    /// Lectura zip (#59): descompresión en hilo blocking → canal acotado →
-    /// stream; lector FRESCO por lectura, locator autocontenido — sin
-    /// archive retenido ni re-parse del CD. Drop del stream = el send falla
-    /// (fase de entrega) o el chequeo de canal cerrado corta el DESCARTE
-    /// (rust MAJOR-1 del review #59) = el hilo termina (regla 3).
+    /// zip read (#59): decompression in a blocking thread → bounded
+    /// channel → stream; a FRESH reader per read, a self-contained locator
+    /// — no retained archive nor CD re-parse. Dropping the stream = the
+    /// send fails (delivery phase) or the closed-channel check cuts the
+    /// DISCARD short (rust MAJOR-1 from review #59) = the thread ends
+    /// (rule 3).
     async fn read_zip(
         &self,
         aref: &ArchiveRef,
@@ -505,10 +511,10 @@ impl ArchiveProvider {
         let inner = Arc::clone(&self.inner);
         let outer_path = aref.outer.clone();
         let outer_len = plan.container_len;
-        // rust MAJOR-1 (#59 review): un deflate RANGED descarta O(skip)
-        // descomprimiendo en el hilo blocking (deflate no tiene seek) —
-        // misma inanición del pool que el forward-decode gz (#55 FIX-2):
-        // comparte su semáforo. stored y lecturas sin descarte no lo pagan.
+        // rust MAJOR-1 (#59 review): a RANGED deflate discards O(skip) by
+        // decompressing in the blocking thread (deflate has no seek) —
+        // the same pool starvation as gz forward-decode (#55 FIX-2): it
+        // shares its semaphore. stored and discard-free reads don't pay it.
         let permit = if plan.method == 8 && plan.skip > 0 {
             Some(
                 Arc::clone(&self.gz_read_permits)
@@ -520,33 +526,34 @@ impl ArchiveProvider {
             None
         };
         let (tx, mut rx) = tokio::sync::mpsc::channel(4);
-        // El JoinHandle se suelta a propósito: la vida del hilo la gobierna
-        // el canal, no el caller — el huérfano tras un drop está acotado por
-        // el canal (4 chunks) en la fase de entrega Y por el chequeo de
-        // canal cerrado en la fase de descarte.
+        // The JoinHandle is dropped on purpose: the thread's lifetime is
+        // governed by the channel, not the caller — the orphan left after
+        // a drop is bounded by the channel (4 chunks) during delivery AND
+        // by the closed-channel check during discard.
         drop(crate::blocking::spawn_blocking(move || {
-            let _permit = permit; // se libera cuando el hilo termina
+            let _permit = permit; // released when the thread ends
             let reader = ProviderReader::new(handle, inner, outer_path, outer_len);
             crate::zip_format::read_entry(reader, &plan, &tx);
         }));
         Ok(futures::stream::poll_fn(move |cx| rx.poll_recv(cx)).boxed())
     }
 
-    /// Lectura tar.gz (#95.1). Tres caminos:
+    /// tar.gz read (#95.1). Three paths:
     ///
-    /// 1. **Spool hit** (contenedor caliente, misma generación): sirve el
-    ///    tramo con seeks locales del tempfile — sin descompresión, SIN
-    ///    semáforo (no pinnea nada).
-    /// 2. **Lectura que cruza el umbral de calor**: construye el spool
-    ///    DENTRO del mismo hilo blocking (bajo el permit gz que la lectura
-    ///    ya paga) y sirve el tramo desde él. Los competidores durante el
-    ///    build caen al camino 3, jamás esperan.
-    /// 3. **Forward-decode** (frío, presupuesto 0, sin mtime, no-spooleable
-    ///    o build ajeno en curso): el camino de siempre — descarta hasta el
-    ///    offset con un decoder fresco (ADR 0028), bajo el semáforo FIX-2.
+    /// 1. **Spool hit** (a hot container, same generation): serves the
+    ///    span with local seeks of the tempfile — no decompression, NO
+    ///    semaphore (pins nothing).
+    /// 2. **A read crossing the heat threshold**: builds the spool INSIDE
+    ///    the same blocking thread (under the gz permit the read is
+    ///    already paying for) and serves the span from it. Competitors
+    ///    during the build fall to path 3, they never wait.
+    /// 3. **Forward-decode** (cold, zero budget, no mtime, non-spoolable
+    ///    or someone else's build in progress): the usual path — discards
+    ///    up to the offset with a fresh decoder (ADR 0028), under the
+    ///    FIX-2 semaphore.
     ///
-    /// Drop del stream = el send falla / `is_closed` corta = el hilo
-    /// termina (regla 3), en los tres caminos.
+    /// Dropping the stream = the send fails / `is_closed` cuts it short =
+    /// the thread ends (rule 3), on all three paths.
     async fn read_gz(
         &self,
         aref: &ArchiveRef,
@@ -557,11 +564,11 @@ impl ArchiveProvider {
     ) -> Result<norte_vfs::ByteStream, Error> {
         let key = aref.outer.to_wire();
         let generation = cached.index.generation;
-        // Posición ABSOLUTA del tramo en el stream descomprimido.
+        // ABSOLUTE position of the span in the decompressed stream.
         let start = offset + req_off;
 
-        // Camino 1: spool vigente. mtime desconocido = JAMÁS spool (sin
-        // validador no hay caché que valga — mismo criterio que IndexCache).
+        // Path 1: a current spool. Unknown mtime = NEVER spool (with no
+        // validator no cache is worth anything — same criterion as IndexCache).
         if generation.0.is_some() {
             let mut slot = self.spool.slot.lock().await;
             if let Some(s) = slot.as_ref()
@@ -577,18 +584,18 @@ impl ArchiveProvider {
                     }));
                     return Ok(futures::stream::poll_fn(move |cx| rx.poll_recv(cx)).boxed());
                 }
-                // Mismo contenedor, generación vieja: ya no sirve a nadie —
-                // suéltalo ya (libera el disco) y que el calor arranque de
-                // cero para la generación nueva.
+                // Same container, old generation: it no longer serves
+                // anyone — drop it right away (frees the disk) and let
+                // the heat start fresh for the new generation.
                 tracing::debug!(
                     container = %aref.outer.display_lossy(),
-                    "spool descartado: el contenedor cambió de generación"
+                    "spool discarded: the container changed generation"
                 );
                 *slot = None;
             }
         }
 
-        // Calor + decisión de build (camino 2 vs 3).
+        // Heat + build decision (path 2 vs 3).
         let claim = if generation.0.is_some() && self.limits.spool_max_bytes > 0 {
             let n = self.spool.bump_heat(&key, generation);
             if n >= SPOOL_HEAT_THRESHOLD && n != SPOOL_UNSPOOLABLE {
@@ -600,19 +607,19 @@ impl ArchiveProvider {
             None
         };
 
-        // FIX-2 (security MAJOR, #55 review): descarte/descompresión pueden
-        // pinnear el hilo blocking minutos — acota la concurrencia agregada
-        // con el semáforo (ver `GZ_READ_CONCURRENCY`). Las lecturas
-        // EXCEDENTES se ENCOLAN aquí (await), nunca se rechazan. El build
-        // del spool corre bajo el MISMO permit de la lectura que lo dispara.
+        // FIX-2 (security MAJOR, #55 review): discard/decompression can
+        // pin the blocking thread for minutes — bound the aggregate
+        // concurrency with the semaphore (see [`GZ_READ_CONCURRENCY`]).
+        // EXCESS reads get QUEUED here (await), never rejected. The
+        // spool's build runs under the SAME permit as the read that triggers it.
         let permit = Arc::clone(&self.gz_read_permits)
             .acquire_owned()
             .await
             .map_err(|_| {
-                // El semáforo nunca se `close()`a en la vida de este
-                // provider (no hay ningún caller que lo cierre) —
-                // inalcanzable en la práctica; fail-safe explícito en vez
-                // de un `expect` que podría panicar si algo cambia.
+                // The semaphore is never `close()`d during this
+                // provider's lifetime (no caller closes it) — unreachable
+                // in practice; an explicit fail-safe instead of an
+                // `expect` that could panic if something changes.
                 Error::Cancelled
             })?;
         let reader = ProviderReader::new(
@@ -633,12 +640,12 @@ impl ArchiveProvider {
                 container: aref.outer.display_lossy(),
             };
             drop(crate::blocking::spawn_blocking(move || {
-                let _permit = permit; // se libera cuando el hilo termina
+                let _permit = permit; // released when the thread ends
                 build_spool_and_serve(job, reader, &tx);
             }));
         } else {
             drop(crate::blocking::spawn_blocking(move || {
-                let _permit = permit; // se libera cuando el hilo termina
+                let _permit = permit; // released when the thread ends
                 crate::targz_format::read_entry_gz(reader, start, req_len, &tx);
             }));
         }
@@ -646,29 +653,29 @@ impl ArchiveProvider {
     }
 }
 
-/// Parámetros del build+serve del spool (#95.1), de una pieza para el hilo
-/// blocking.
+/// Parameters for the spool's build+serve (#95.1), bundled for the
+/// blocking thread.
 struct SpoolBuildJob {
     claim: SpoolBuildClaim,
     key: String,
     generation: Generation,
     budget: u64,
-    /// Posición absoluta del tramo pedido en el stream descomprimido.
+    /// Absolute position of the requested span in the decompressed stream.
     start: u64,
-    /// Longitud del tramo pedido.
+    /// Length of the requested span.
     len: u64,
-    /// Display YA redactado del contenedor (solo trazas).
+    /// The container's ALREADY-redacted display (traces only).
     container: String,
 }
 
-/// Construye el spool (forward-decode COMPLETO del contenedor al tempfile
-/// anónimo) y, si sale bien, lo instala como slot único del provider y
-/// sirve el tramo pedido desde él. Cualquier abort degrada con honestidad:
-/// receptor muerto = nada que servir; sobre-presupuesto = negative-cache +
-/// forward-decode; fallo de build = forward-decode (si el contenedor está
-/// roto de verdad, la relectura fallará con el error correcto por el camino
-/// de siempre). El flag de build lo suelta el drop de `job.claim` en TODOS
-/// los caminos (RAII).
+/// Builds the spool (a COMPLETE forward-decode of the container into the
+/// anonymous tempfile) and, if it succeeds, installs it as the provider's
+/// single slot and serves the requested span from it. Any abort degrades
+/// honestly: a dead receiver = nothing to serve; over-budget =
+/// negative-cache + forward-decode; a build failure = forward-decode (if
+/// the container is really broken, the re-read will fail with the correct
+/// error via the usual path). The build flag is released by `job.claim`'s
+/// drop on EVERY path (RAII).
 fn build_spool_and_serve(
     job: SpoolBuildJob,
     reader: ProviderReader,
@@ -678,18 +685,18 @@ fn build_spool_and_serve(
     let mut file = match tempfile::tempfile() {
         Ok(f) => f,
         Err(e) => {
-            // Sin tempfile no hay spool; la lectura sigue por forward-decode.
+            // No tempfile means no spool; the read continues via forward-decode.
             tracing::warn!(
                 error = %e,
                 container = %job.container,
-                "sin tempfile para el spool tar.gz; forward-decode"
+                "no tempfile for the tar.gz spool; forward-decode"
             );
             drop(job.claim);
             return read_entry_gz(reader, job.start, job.len, tx);
         }
     };
-    // Reader FRESCO para el build (`Clone` resetea posición y caché de
-    // bloque); el original queda para el fallback si el build aborta.
+    // A FRESH reader for the build (`Clone` resets the position and block
+    // cache); the original is kept for the fallback if the build aborts.
     let probe = || tx.is_closed();
     match spool_gz(reader.clone(), job.budget, &probe, &mut file) {
         Ok(len) => {
@@ -700,23 +707,23 @@ fn build_spool_and_serve(
                 file: Arc::clone(&file),
                 len,
             };
-            // blocking_lock: estamos en un hilo de `spawn_blocking`, jamás
-            // dentro del runtime async (donde panicaría).
+            // blocking_lock: we're on a `spawn_blocking` thread, never
+            // inside the async runtime (where it would panic).
             *job.claim.state().slot.blocking_lock() = Some(spool);
             tracing::debug!(
                 bytes = len,
                 container = %job.container,
-                "spool tar.gz construido e instalado"
+                "tar.gz spool built and installed"
             );
             drop(job.claim);
             serve_from_spool(&file, len, job.start, job.len, tx);
         }
         Err(SpoolAbort::Cancelled) => {
-            // Receptor muerto: descarta el parcial sin ruido (regla 3). El
-            // drop del claim libera el flag; el drop del tempfile, el disco.
+            // Dead receiver: discards the partial without noise (rule 3).
+            // The claim's drop releases the flag; the tempfile's drop, the disk.
             tracing::debug!(
                 container = %job.container,
-                "build del spool tar.gz cancelado (receptor muerto)"
+                "tar.gz spool build cancelled (receiver dead)"
             );
         }
         Err(SpoolAbort::OverBudget) => {
@@ -724,7 +731,7 @@ fn build_spool_and_serve(
             tracing::warn!(
                 budget = job.budget,
                 container = %job.container,
-                "descomprimido supera spool_max_bytes: contenedor no spooleable"
+                "decompressed size exceeds spool_max_bytes: container not spoolable"
             );
             drop(job.claim);
             read_entry_gz(reader, job.start, job.len, tx);
@@ -733,7 +740,7 @@ fn build_spool_and_serve(
             tracing::warn!(
                 error = %e,
                 container = %job.container,
-                "build del spool tar.gz falló; forward-decode"
+                "tar.gz spool build failed; forward-decode"
             );
             drop(job.claim);
             read_entry_gz(reader, job.start, job.len, tx);
@@ -741,13 +748,13 @@ fn build_spool_and_serve(
     }
 }
 
-/// Sirve `[start, start+len)` del fichero de spool en chunks de 64 KiB por
-/// el canal acotado. Cada chunk re-seekea a posición ABSOLUTA bajo el lock
-/// del fichero (el cursor del fd es compartido — ver [`Spool::file`]).
-/// Short read = `Corrupt` fail-loud: el índice prometió bytes que el spool
-/// no tiene (contenedor y spool no cuadran) — jamás datos cortos en
-/// silencio. El caller ya recortó el tramo contra el tamaño de la ENTRADA
-/// (semántica pread), igual que en `read_entry_gz`.
+/// Serves `[start, start+len)` of the spool file in 64 KiB chunks over the
+/// bounded channel. Every chunk re-seeks to an ABSOLUTE position under the
+/// file's lock (the fd's cursor is shared — see [`Spool::file`]). A short
+/// read = fail-loud `Corrupt`: the index promised bytes the spool doesn't
+/// have (the container and the spool don't match) — never silently short
+/// data. The caller already trimmed the span against the ENTRY's size
+/// (pread semantics), same as in `read_entry_gz`.
 fn serve_from_spool(
     file: &Mutex<std::fs::File>,
     spool_len: u64,
@@ -757,11 +764,11 @@ fn serve_from_spool(
 ) {
     use std::io::{Read as _, Seek as _, SeekFrom};
     let send_err = |e: Error| {
-        // Mejor esfuerzo: si el receptor murió, no hay a quién contárselo.
+        // Best effort: if the receiver died, there's nobody to tell.
         let _ = tx.blocking_send(Err(e));
     };
     if start.checked_add(len).is_none_or(|end| end > spool_len) {
-        tracing::warn!(start, len, spool_len, "tramo pedido fuera del spool");
+        tracing::warn!(start, len, spool_len, "requested span outside the spool");
         return send_err(Error::Corrupt);
     }
     let mut buf = vec![0u8; 64 * 1024];
@@ -769,19 +776,19 @@ fn serve_from_spool(
     let mut remaining = len;
     while remaining > 0 {
         if tx.is_closed() {
-            tracing::debug!("lectura de spool cancelada (receptor muerto)");
+            tracing::debug!("spool read cancelled (receiver dead)");
             return;
         }
         let want = buf
             .len()
             .min(usize::try_from(remaining).unwrap_or(buf.len()));
         let got = {
-            let mut f = file.lock().expect("spool file lock sano");
+            let mut f = file.lock().expect("spool file lock is healthy");
             f.seek(SeekFrom::Start(pos))
                 .and_then(|_| f.read(&mut buf[..want]))
         };
         match got {
-            // EOF antes de servir el tramo prometido: short read del spool.
+            // EOF before serving the promised span: a short read of the spool.
             Ok(0) => return send_err(Error::Corrupt),
             Ok(n) => {
                 pos += n as u64;
@@ -790,24 +797,24 @@ fn serve_from_spool(
                     .blocking_send(Ok(bytes::Bytes::copy_from_slice(&buf[..n])))
                     .is_err()
                 {
-                    tracing::debug!("lectura de spool cancelada (receptor muerto)");
+                    tracing::debug!("spool read cancelled (receiver dead)");
                     return;
                 }
             }
             Err(e) => {
-                tracing::warn!(error = %e, "IO del fichero de spool");
+                tracing::warn!(error = %e, "IO on the spool file");
                 return send_err(Error::Io { retryable: true });
             }
         }
     }
 }
 
-/// Guard RAII del single-flight (MAJOR-1, #61): registra (o reutiliza) el
-/// lock de la clave al crearse y, al morir (éxito, error o CANCELACIÓN en
-/// cualquier `await` — el drop de Rust corre igual), suelta su Arc y borra
-/// la entrada del map si queda como único dueño. Sin poda manual por
-/// call-site y sin la carrera de dos finalistas que se veían mutuamente el
-/// Arc (ambos contaban 3 y nadie borraba).
+/// Single-flight's RAII guard (MAJOR-1, #61): registers (or reuses) the
+/// key's lock when created and, when it dies (success, error, or
+/// CANCELLATION at any `await` — Rust's drop runs just the same), drops
+/// its Arc and removes the map entry if it's left as the sole owner. No
+/// manual pruning per call site and no race between two finalists each
+/// seeing the other's Arc (both counted 3 and nobody deleted it).
 struct BuildingSlot<'a> {
     provider: &'a ArchiveProvider,
     key: String,
@@ -817,7 +824,7 @@ struct BuildingSlot<'a> {
 impl<'a> BuildingSlot<'a> {
     fn new(provider: &'a ArchiveProvider, key: &str) -> Self {
         let lock = {
-            let mut building = provider.building.lock().expect("building lock sano");
+            let mut building = provider.building.lock().expect("building lock is healthy");
             Arc::clone(
                 building
                     .entry(key.to_owned())
@@ -831,17 +838,21 @@ impl<'a> BuildingSlot<'a> {
         }
     }
 
-    /// Arc del lock para `lock_owned` (el guard retiene su PROPIO Arc y se
-    /// suelta antes que el slot — orden de declaración en `index_for`).
+    /// The lock's Arc for `lock_owned` (the guard keeps ITS OWN Arc and is
+    /// dropped before the slot — declaration order in `index_for`).
     fn shared(&self) -> Arc<tokio::sync::Mutex<()>> {
-        Arc::clone(self.lock.as_ref().expect("slot vivo hasta el drop"))
+        Arc::clone(self.lock.as_ref().expect("slot alive until the drop"))
     }
 }
 
 impl Drop for BuildingSlot<'_> {
     fn drop(&mut self) {
-        let mut building = self.provider.building.lock().expect("building lock sano");
-        drop(self.lock.take()); // suelta NUESTRO Arc antes de contar
+        let mut building = self
+            .provider
+            .building
+            .lock()
+            .expect("building lock is healthy");
+        drop(self.lock.take()); // drops OUR Arc before counting
         if let Some(l) = building.get(&self.key)
             && Arc::strong_count(l) == 1
         {
@@ -850,8 +861,8 @@ impl Drop for BuildingSlot<'_> {
     }
 }
 
-/// Arma un `AtomicBool` si el dueño muere sin desarmarlo: la señal de
-/// cancelación hacia el hilo blocking del indexado (regla 3).
+/// Arms an `AtomicBool` if its owner dies without disarming it: the
+/// cancellation signal to the indexing blocking thread (rule 3).
 struct CancelOnDrop {
     flag: Arc<AtomicBool>,
     armed: bool,
@@ -875,9 +886,9 @@ impl Drop for CancelOnDrop {
     }
 }
 
-/// Catálogo de attrs del formato zip (#108 bloque 2): todo sale del CD ya
-/// indexado — cero I/O por consulta.
-fn catalogo_zip() -> &'static [norte_proto::AttrInfo] {
+/// The zip format's attrs catalogue (#108 block 2): everything comes from
+/// the already-indexed CD — zero I/O per query.
+fn zip_catalog() -> &'static [norte_proto::AttrInfo] {
     use norte_proto::{AttrHint, AttrInfo, AttrType};
     static CAT: std::sync::LazyLock<Vec<AttrInfo>> = std::sync::LazyLock::new(|| {
         vec![
@@ -931,29 +942,29 @@ impl Provider for ArchiveProvider {
             .entry_for(p, &Self::inner_key(&aref), &opt.attrs)
     }
 
-    /// Catálogo por FORMATO (#108 bloque 2): zip retiene method/crc/packed
-    /// en su CD; tar/tar.gz no tienen method ni CRC por entrada (y el packed
-    /// por entrada de un stream gz sólido no significa nada) → vacío.
+    /// Catalogue PER FORMAT (#108 block 2): zip keeps method/crc/packed in
+    /// its CD; tar/tar.gz have no per-entry method nor CRC (and a solid
+    /// gz stream's per-entry packed size means nothing) → empty.
     fn attrs(&self) -> &[norte_proto::AttrInfo] {
         match self.format {
-            Format::Zip => catalogo_zip(),
+            Format::Zip => zip_catalog(),
             Format::Tar | Format::TarGz => &[],
         }
     }
 
-    /// Listado de un dir del árbol virtual.
+    /// Listing of a dir of the virtual tree.
     ///
-    /// CONTRATO (ADR 0018 C2): las entradas del contenedor cuyo nombre no
-    /// mapea a segmentos `VPath` válidos (`..`, `.`, vacío, NUL, absoluto,
-    /// componente `!`) NO aparecen — se omiten al indexar con
-    /// `tracing::warn!` y cuentan en el `skipped` del índice. Duplicados:
-    /// última gana; conflicto file-vs-dir: gana dir (un file en posición de
-    /// ancestro asciende a dir).
+    /// CONTRACT (ADR 0018 C2): container entries whose name doesn't map to
+    /// valid `VPath` segments (`..`, `.`, empty, NUL, absolute, a `!`
+    /// component) do NOT appear — they're omitted at index time with
+    /// `tracing::warn!` and count in the index's `skipped`. Duplicates:
+    /// the last one wins; a file-vs-dir conflict: the dir wins (a file at
+    /// an ancestor position gets promoted to a dir).
     ///
-    /// Desde #59 el CD de zip se parsea con parser PROPIO: nombres crudos
-    /// distintos que decodifican igual NO colapsan (H1 cerrado) y el extra
-    /// Info-ZIP 0x7075 se ignora por diseño — jamás sustituye el nombre ni
-    /// mata el archivo (H3 cerrado).
+    /// Since #59 zip's CD is parsed with OUR OWN parser: distinct raw
+    /// names that decode the same do NOT collapse (H1 closed) and the
+    /// Info-ZIP 0x7075 extra is ignored by design — it never substitutes
+    /// the name nor kills the archive (H3 closed).
     async fn list(&self, p: &VPath) -> Result<EntryStream, Error> {
         self.list_with(p, &norte_vfs::ListOptions::default()).await
     }
@@ -981,7 +992,7 @@ impl Provider for ArchiveProvider {
         let mut entries = Vec::new();
         for name in index.children.get(&key).into_iter().flatten() {
             let seg = norte_proto::Segment::new(name.clone())
-                .expect("el índice solo contiene segmentos válidos");
+                .expect("the index only contains valid segments");
             let child_path = p.join(seg);
             let mut child_key = key.clone();
             child_key.push(name.clone());
@@ -990,10 +1001,10 @@ impl Provider for ArchiveProvider {
         Ok(futures::stream::iter(entries).boxed())
     }
 
-    /// Total de omitidas del índice del CONTENEDOR de `p` (#93): las que
-    /// cuenta el `skipped` del índice interno (nombres hostiles/límites
-    /// por-entrada, contrato de [`Self::list`]). Reutiliza el índice
-    /// cacheado — tras un `list` es una consulta barata.
+    /// Total omitted from `p`'s CONTAINER's index (#93): the ones the
+    /// internal index's `skipped` counts (hostile names/per-entry limits,
+    /// [`Self::list`]'s contract). Reuses the cached index — after a
+    /// `list` it's a cheap query.
     async fn list_skipped(&self, p: &VPath) -> Result<Option<u64>, Error> {
         let aref = self.split(p)?;
         let cached = self.index_for(&aref).await?;
@@ -1017,29 +1028,29 @@ impl Provider for ArchiveProvider {
             });
         }
         let Some(locator) = &node.locator else {
-            // Listable pero no legible (método no soportado, cifrado…).
+            // Listable but unreadable (unsupported method, encrypted…).
             return Err(Error::Unsupported);
         };
-        // El range pedido se recorta al tramo de la ENTRADA (semántica pread).
+        // The requested range is trimmed to the ENTRY's span (pread semantics).
         let entry_size = node.size.unwrap_or(0);
         let req_off = range.map_or(0, |r| r.offset);
         if req_off >= entry_size {
             return Ok(futures::stream::empty().boxed());
         }
-        let disponible = entry_size - req_off;
+        let available = entry_size - req_off;
         let req_len = range
             .and_then(|r| r.len)
-            .map_or(disponible, |l| l.min(disponible));
+            .map_or(available, |l| l.min(available));
         if req_len == 0 {
             return Ok(futures::stream::empty().boxed());
         }
         match *locator {
             Locator::Tar { offset, .. } => {
-                // Passthrough: datos contiguos sin comprimir. Con contador
-                // entregado-vs-prometido (#97): un contenedor truncado/mutado
-                // BAJO el read termina corto con semántica pread y sin error
-                // — la clase exacta de silencio que zip (#95.4) y targz
-                // (FIX-1 #55) ya fail-loudean.
+                // Passthrough: contiguous, uncompressed data. With a
+                // delivered-vs-promised counter (#97): a container
+                // truncated/mutated UNDER the read ends short with pread
+                // semantics and no error — the exact kind of silence zip
+                // (#95.4) and targz (FIX-1 #55) already make fail-loud.
                 let inner = self
                     .inner
                     .read(
@@ -1067,8 +1078,8 @@ impl Provider for ArchiveProvider {
                         crc32,
                         comp_size,
                         uncomp_size,
-                        // El tamaño de la MISMA generación que el índice:
-                        // vista coherente aunque el contenedor cambie.
+                        // The size from the SAME generation as the index:
+                        // a coherent view even if the container changes.
                         container_len: cached.index.generation.1.unwrap_or(0),
                         skip: req_off,
                         take: req_len,
@@ -1102,7 +1113,7 @@ impl Provider for ArchiveProvider {
         }
     }
 
-    // ---------- mutaciones: READ_ONLY (ADR 0018 E2) ----------
+    // ---------- mutations: READ_ONLY (ADR 0018 E2) ----------
 
     async fn write(&self, _p: &VPath) -> Result<Box<dyn ByteSink>, Error> {
         Err(Error::Unsupported)
@@ -1123,8 +1134,8 @@ impl Provider for ArchiveProvider {
 
 #[cfg(test)]
 mod tests {
-    //! Inline (no `tests/`): necesita acceso al campo privado `building`
-    //! para verificar que el RAII de MAJOR-1 (#61) no deja huérfanos.
+    //! Inline (not `tests/`): needs access to the private `building` field
+    //! to verify MAJOR-1's RAII (#61) leaves no orphans.
     use std::time::Duration;
 
     use bytes::Bytes;
@@ -1151,21 +1162,21 @@ mod tests {
         (provider, root, mem)
     }
 
-    /// MINOR-6 (#61): el primer builder se cancela (abort de su task)
-    /// mientras un segundo caller ya está encolado detrás del mismo lock de
-    /// `building` — el `BuildingSlot` RAII debe soltar el lock en el drop
-    /// de la cancelación (sin poda manual de por medio) para que el
-    /// esperador tome la posta y complete su PROPIO build limpiamente, y
-    /// `building` debe quedar vacío al final (sin huérfanos, MAJOR-1).
+    /// MINOR-6 (#61): the first builder gets cancelled (its task aborted)
+    /// while a second caller is already queued behind the same `building`
+    /// lock — the RAII `BuildingSlot` must release the lock on the
+    /// cancellation's drop (with no manual pruning involved) so the waiter
+    /// picks up the baton and completes its OWN build cleanly, and
+    /// `building` must be empty at the end (no orphans, MAJOR-1).
     #[tokio::test(flavor = "multi_thread")]
-    async fn builder_cancelado_no_deja_huerfano_y_el_esperador_completa() {
-        let bytes = ZipSmith::new().file(b"a.txt", b"hola").build();
+    async fn a_cancelled_builder_leaves_no_orphan_and_the_waiter_completes() {
+        let bytes = ZipSmith::new().file(b"a.txt", b"hi").build();
         let (provider, root, mem) = seed_zip(&bytes).await;
-        // Cada operación del Mem (incluido el `stat` del contenedor y cada
-        // bloque leído) tarda; da margen de sobra para abortar al primero
-        // mientras sigue dentro del build (regla: sin sleeps a ciegas, solo
-        // se usa para dar tiempo real al hilo bloqueante entre nuestro poll
-        // y el abort).
+        // Every Mem operation (including the container's `stat` and every
+        // block read) takes a while; gives plenty of margin to abort the
+        // first one while it's still inside the build (rule: no blind
+        // sleeps, this is only used to give the blocking thread real time
+        // between our poll and the abort).
         mem.faults()
             .set_latency_per_op(Some(Duration::from_millis(40)));
 
@@ -1175,14 +1186,14 @@ mod tests {
             let _ = p1.list(&root1).await;
         });
 
-        // Espera (sin sleep a ciegas: poll cooperativo) a que el primer
-        // builder haya REGISTRADO su slot — confirma que está dentro del
-        // camino con lock antes de abortarlo.
+        // Waits (no blind sleep: cooperative polling) for the first
+        // builder to have REGISTERED its slot — confirms it's inside the
+        // locked path before aborting it.
         loop {
             if !provider
                 .building
                 .lock()
-                .expect("building lock sano")
+                .expect("building lock is healthy")
                 .is_empty()
             {
                 break;
@@ -1194,25 +1205,25 @@ mod tests {
         let root2 = root.clone();
         let second = tokio::spawn(async move { p2.list(&root2).await });
 
-        // Deja que el segundo llegue a encolarse detrás del mismo lock
-        // antes de cortar al primero a mitad de build.
+        // Lets the second one get queued behind the same lock before
+        // cutting the first one short mid-build.
         tokio::time::sleep(Duration::from_millis(5)).await;
         first.abort();
-        let _ = first.await; // drena el abort: el drop de su stack ya corrió
+        let _ = first.await; // drains the abort: its stack's drop already ran
 
-        let result = second.await.expect("join del esperador");
+        let result = second.await.expect("join on the waiter");
         match result {
             Ok(mut stream) => {
                 let entries: Vec<_> = stream.by_ref().collect().await;
                 assert!(
                     entries.iter().all(Result::is_ok),
-                    "el esperador lista el contenido completo tras la \
-                     cancelación del primero"
+                    "the waiter lists the whole content after the first \
+                     one's cancellation"
                 );
             }
             Err(e) => panic!(
-                "el esperador debe completar su propio build limpiamente \
-                 tras la cancelación del primero, falló con {e:?}"
+                "the waiter must complete its own build cleanly after the \
+                 first one's cancellation, failed with {e:?}"
             ),
         }
 
@@ -1220,25 +1231,25 @@ mod tests {
             provider
                 .building
                 .lock()
-                .expect("building lock sano")
+                .expect("building lock is healthy")
                 .is_empty(),
-            "sin huérfanos en `building` tras cancelar el primer builder \
-             (MAJOR-1: RAII sin poda manual)"
+            "no orphans in `building` after cancelling the first builder \
+             (MAJOR-1: RAII with no manual pruning)"
         );
     }
 
-    /// MAJOR-1 (#61), reproducción directa del leak: si TODOS los
-    /// interesados de una clave se cancelan (nadie sobrevive para hacer la
-    /// poda "de éxito"), el `prune_building` manual del pre-fix nunca corre
-    /// para esa entrada — huérfano permanente. El RAII no depende de que
-    /// alguien "gane": cada `BuildingSlot` se poda en SU PROPIO drop,
-    /// pase lo que pase. Verificado contra el código pre-fix (ver informe):
-    /// con la poda manual esto deja `building` con 1 entrada; con el RAII,
-    /// vacío siempre.
+    /// MAJOR-1 (#61), direct reproduction of the leak: if ALL interested
+    /// parties for a key get cancelled (nobody survives to do the
+    /// "success" pruning), the pre-fix manual `prune_building` never runs
+    /// for that entry — a permanent orphan. RAII doesn't depend on anyone
+    /// "winning": each `BuildingSlot` gets pruned on ITS OWN drop, no
+    /// matter what. Verified against the pre-fix code (see the report):
+    /// with manual pruning this leaves `building` with 1 entry; with
+    /// RAII, always empty.
     #[tokio::test(flavor = "multi_thread")]
-    async fn todos_los_interesados_cancelados_no_deja_huerfano() {
+    async fn all_interested_parties_cancelled_leaves_no_orphan() {
         for _ in 0..20 {
-            let bytes = ZipSmith::new().file(b"a.txt", b"hola").build();
+            let bytes = ZipSmith::new().file(b"a.txt", b"hi").build();
             let (provider, root, mem) = seed_zip(&bytes).await;
             mem.faults()
                 .set_latency_per_op(Some(Duration::from_millis(10)));
@@ -1248,13 +1259,13 @@ mod tests {
             let first = tokio::spawn(async move {
                 let _ = p1.list(&root1).await;
             });
-            // Espera cooperativa (sin sleep a ciegas) a que el builder
-            // registre su slot antes de sumarle esperadores detrás.
+            // Cooperative wait (no blind sleep) for the builder to
+            // register its slot before adding waiters behind it.
             loop {
                 if !provider
                     .building
                     .lock()
-                    .expect("building lock sano")
+                    .expect("building lock is healthy")
                     .is_empty()
                 {
                     break;
@@ -1268,9 +1279,9 @@ mod tests {
                 let r = root.clone();
                 waiters.push(tokio::spawn(async move { p.list(&r).await }));
             }
-            // Deja que los 8 se encolen detrás del mismo lock antes de
-            // cortar a TODOS a mitad de vuelo (el escenario "cliente se
-            // desconectó" bajo carga — sin superviviente que pode al final).
+            // Lets the 8 queue up behind the same lock before cutting ALL
+            // of them short mid-flight (the "client disconnected" scenario
+            // under load — with no survivor left to prune at the end).
             tokio::time::sleep(Duration::from_millis(2)).await;
             first.abort();
             let _ = first.await;
@@ -1285,10 +1296,10 @@ mod tests {
                 provider
                     .building
                     .lock()
-                    .expect("building lock sano")
+                    .expect("building lock is healthy")
                     .is_empty(),
-                "huérfano en `building` cuando TODOS los interesados se \
-                 cancelan (MAJOR-1)"
+                "orphan in `building` when ALL interested parties get \
+                 cancelled (MAJOR-1)"
             );
         }
     }

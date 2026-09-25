@@ -1,6 +1,6 @@
-//! Matriz test-first de la fase 2 de M2: daemon UDS de verdad (socket en
-//! tempdir) — handshake, dispatch, broadcast, cancelación, shutdown,
-//! seguridad del socket. Todo contra `MemProvider` (spec §12).
+//! Test-first matrix for M2's phase 2: a real UDS daemon (socket in a
+//! tempdir) — handshake, dispatch, broadcast, cancellation, shutdown, socket
+//! security. All against `MemProvider` (spec §12).
 #![cfg(unix)]
 
 use std::path::PathBuf;
@@ -27,68 +27,70 @@ use norte_testkit::MemProvider;
 use norte_vfs::Provider;
 
 fn vp(wire: &str) -> VPath {
-    VPath::parse(wire).expect("wire válido de test")
+    VPath::parse(wire).expect("valid test wire")
 }
 
-/// Cuánto se le da a una condición del daemon antes de darla por rota.
+/// How long a daemon condition gets before it is given up as broken.
 ///
-/// **Aquí sondear está BIEN, y es la diferencia con `norte-ui-host`.** Allí el
-/// actor vive en el proceso del test y se puede esperar a que el ejecutor se
-/// quede ocioso; aquí hay un daemon de verdad al otro lado de un socket de
-/// verdad, y no hay forma de saber que ha terminado de pensar salvo
-/// preguntándole. Lo que NO vale es dormir un plazo fijo y afirmar: eso es una
-/// apuesta sobre cuánto tarda una máquina cargada.
+/// **Polling here is FINE, and that is the difference with `norte-ui-host`.**
+/// There, the actor lives in the test's own process and one can wait for the
+/// executor to go idle; here there is a real daemon on the other side of a
+/// real socket, and there is no way to know it has finished thinking except
+/// by asking it. What does NOT hold is sleeping a fixed span and asserting:
+/// that is a bet on how long a loaded machine takes.
 ///
-/// El plazo es presupuesto de FALLO, no de espera: en verde no se consume.
-const PLAZO: Duration = Duration::from_secs(10);
+/// The span is a FAILURE budget, not a wait: on green it is not consumed.
+const DEADLINE: Duration = Duration::from_secs(10);
 
-/// Sondea `cond` hasta que sea cierta, y falla NOMBRANDO lo que esperaba.
+/// Polls `cond` until it is true, and fails NAMING what it expected.
 ///
-/// El respiro entre sondeos existe para no quemar CPU contra un socket; no es
-/// lo que sostiene la prueba —eso lo hace la condición— y por eso el test no
-/// se vuelve más frágil si la máquina va lenta: solo da más vueltas.
-macro_rules! hasta {
-    ($que_esperaba:expr, $cond:expr) => {{
-        let limite = tokio::time::Instant::now() + PLAZO;
+/// The pause between polls exists so as not to burn CPU against a socket; it
+/// is not what makes the test valid — the condition does that — and that is
+/// why the test does not get more fragile if the machine runs slow: it just
+/// loops more times.
+macro_rules! until {
+    ($what_was_expected:expr, $cond:expr) => {{
+        let deadline = tokio::time::Instant::now() + DEADLINE;
         loop {
             if $cond {
                 break;
             }
             assert!(
-                tokio::time::Instant::now() < limite,
-                "nunca ocurrió: {}",
-                $que_esperaba
+                tokio::time::Instant::now() < deadline,
+                "never happened: {}",
+                $what_was_expected
             );
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     }};
 }
 
-/// El id de petición que la task de fondo deja en su hueco, cuando llega.
+/// The request id the background task leaves in its slot, once it arrives.
 ///
-/// Seis tests lo esperaban con un `loop` SIN plazo: si el id no llegaba, el
-/// test se colgaba en vez de fallar — y un test colgado no dice qué esperaba.
-/// Es el mismo defecto que un `sleep` a ciegas, con otra cara.
-async fn esperar_id(slot: &Arc<std::sync::Mutex<Option<u64>>>) -> u64 {
-    let limite = tokio::time::Instant::now() + PLAZO;
+/// Six tests used to wait for it with a `loop` with NO deadline: if the id
+/// never arrived, the test hung instead of failing — and a hung test does
+/// not say what it expected. It is the same defect as a blind `sleep`, wearing
+/// a different face.
+async fn wait_for_id(slot: &Arc<std::sync::Mutex<Option<u64>>>) -> u64 {
+    let deadline = tokio::time::Instant::now() + DEADLINE;
     loop {
         if let Some(id) = *slot.lock().expect("id lock") {
             return id;
         }
         assert!(
-            tokio::time::Instant::now() < limite,
-            "la petición de fondo nunca publicó su id"
+            tokio::time::Instant::now() < deadline,
+            "the background request never published its id"
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
 }
 
 async fn write_file(mem: &MemProvider, wire: &str, content: &[u8]) {
-    let mut sink = mem.write(&vp(wire)).await.expect("write abre");
+    let mut sink = mem.write(&vp(wire)).await.expect("write opens");
     sink.write(Bytes::copy_from_slice(content))
         .await
-        .expect("chunk entra");
-    sink.commit().await.expect("commit publica");
+        .expect("chunk goes in");
+    sink.commit().await.expect("commit publishes");
 }
 
 fn client_info() -> ClientInfo {
@@ -98,25 +100,26 @@ fn client_info() -> ClientInfo {
     }
 }
 
-/// Daemon vivo sobre un socket en tempdir. Devuelve también el `JoinHandle`
-/// de `run()` para poder esperar el apagado.
+/// A live daemon over a socket in a tempdir. Also returns `run()`'s
+/// `JoinHandle` so shutdown can be awaited.
 struct TestDaemon {
     socket: PathBuf,
     run: tokio::task::JoinHandle<Result<(), DaemonError>>,
-    /// El tempdir del daemon, que es a la vez su raíz de config: de aquí sale
-    /// el `connections.toml` que sirve `connection.list` (#365). Se guarda
-    /// para que viva tanto como el daemon Y para poder escribir dentro.
+    /// The daemon's tempdir, which is also its config root: this is where the
+    /// `connections.toml` that serves `connection.list` comes from (#365).
+    /// Kept alive so it lives as long as the daemon AND so tests can write
+    /// inside it.
     dir: tempfile::TempDir,
     mem: Arc<MemProvider>,
 }
 
 impl TestDaemon {
-    /// La raíz de config de ESTE daemon: un tempdir, jamás el `~/.config`
-    /// de quien corra la suite (#365).
+    /// THIS daemon's config root: a tempdir, never whoever runs the suite's
+    /// real `~/.config` (#365).
     ///
-    /// Es donde un test puede poner un `connections.toml` y contar con que el
-    /// daemon lea ése. Antes no existía, `connection.list` leía la config real
-    /// y el color de la suite dependía de la máquina.
+    /// This is where a test can drop a `connections.toml` and count on the
+    /// daemon reading that one. It did not used to exist; `connection.list`
+    /// read the real config and the suite's color depended on the machine.
     fn config_dir(&self) -> &std::path::Path {
         self.dir.path()
     }
@@ -140,8 +143,8 @@ async fn spawn_daemon_mem(
     let engine = Arc::new(Engine::new());
     let mem = Arc::new(mem);
     engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
-    // EL spool de `sync.plan`, uno por daemon y bajo su propio tempdir (ADR
-    // 0049). Sin él `sync.plan` responde `Unsupported`.
+    // THE `sync.plan` spool, one per daemon and under its own tempdir (ADR
+    // 0049). Without it `sync.plan` answers `Unsupported`.
     engine.set_spool(norte_core::sync::Spool::new(dir.path()));
     let daemon = Daemon::bind(
         engine,
@@ -172,11 +175,12 @@ async fn connected_client(d: &TestDaemon) -> Client {
     c
 }
 
-/// Daemon con `ScopedPolicy` instalada: registro de scopes VACÍO al arrancar
-/// (concedible por el wire, `policy.grant_scope`) + una regla `allow` (dentro
-/// de scope se permite). Un `User` pasa (no se sandboxea); un `Agent` sin scope
-/// se deniega por frontera antes de mirar reglas. El registro se COMPARTE entre
-/// el `ScopedPolicy` del engine y el `Shared` del daemon (M3-3b).
+/// A daemon with `ScopedPolicy` installed: an EMPTY scope registry at
+/// startup (grantable over the wire, `policy.grant_scope`) + an `allow` rule
+/// (within scope is permitted). A `User` passes (not sandboxed); an `Agent`
+/// with no scope is denied at the border before rules are even looked at.
+/// The registry is SHARED between the engine's `ScopedPolicy` and the
+/// daemon's `Shared` (M3-3b).
 async fn spawn_daemon_policy() -> TestDaemon {
     let dir = tempfile::tempdir().expect("tempdir");
     let socket = dir.path().join("d.sock");
@@ -209,17 +213,18 @@ async fn spawn_daemon_policy() -> TestDaemon {
     }
 }
 
-/// Daemon con `ScopedPolicy` y regla `ask` (M3-3b Task 4): dentro de scope, el
-/// gate suspende la mutación en el router de aprobaciones — el MISMO `Arc` que
-/// recibe `policy.decide` por el wire. TTL de aprobación configurable (los
-/// tests de timeout usan uno corto).
+/// A daemon with `ScopedPolicy` and an `ask` rule (M3-3b Task 4): within
+/// scope, the gate suspends the mutation in the approval router — the SAME
+/// `Arc` that receives `policy.decide` over the wire. Configurable approval
+/// TTL (the timeout tests use a short one).
 async fn spawn_daemon_ask(approval_ttl: Duration) -> TestDaemon {
     let dir = tempfile::tempdir().expect("tempdir");
     let socket = dir.path().join("d.sock");
     let scopes = ScopeRegistry::new();
     let cfg = PolicyConfig::parse("[[rule]]\naction=\"ask\"").expect("policy cfg");
     let policy = ScopedPolicy::new(scopes.clone(), cfg);
-    // Orden del plan (riesgo 1): el resolver nace ANTES que engine y daemon.
+    // Construction order (plan risk 1): the resolver is born BEFORE the
+    // engine and the daemon.
     let approvals = Arc::new(DaemonApprovalResolver::new(approval_ttl));
     let engine = Arc::new(Engine::new().with_policy(Arc::new(policy), Arc::clone(&approvals) as _));
     let mem = Arc::new(MemProvider::new());
@@ -247,8 +252,8 @@ async fn spawn_daemon_ask(approval_ttl: Duration) -> TestDaemon {
     }
 }
 
-/// Abre una conexión que declara `agent_session`: el servidor la liga a un
-/// `Actor::Agent` y sandboxea sus mutaciones (M3-3b).
+/// Opens a connection that declares `agent_session`: the server binds it to
+/// an `Actor::Agent` and sandboxes its mutations (M3-3b).
 async fn connected_agent(d: &TestDaemon, session: &str) -> Client {
     let c = Client::connect(&d.socket).await.expect("connect");
     let _init: methods::InitializeResult = c
@@ -262,32 +267,32 @@ async fn connected_agent(d: &TestDaemon, session: &str) -> Client {
             },
         )
         .await
-        .expect("initialize agente");
+        .expect("initialize agent");
     c
 }
 
 // ---------- handshake ----------
 
-// Un solo binario de test, muchos ficheros (ola W10): el antiguo `daemon.rs`
-// de 9.000 líneas, agrupado por la familia de métodos que cada test ejercita.
-// Los helpers son `pub(super)` y viajan entre ficheros por los `use x::*`.
+// One test binary, many files (wave W10): the old 9,000-line `daemon.rs`,
+// grouped by the method family each test exercises. The helpers are
+// `pub(super)` and travel between files via `use x::*`.
 
-mod busqueda;
 mod compare_sync;
 mod fs_ops;
 mod index_ai;
-mod listado;
+mod listing;
 mod plugins;
 mod policy;
 mod rename;
-mod sesion;
+mod search;
+mod session;
 mod tasks;
 
 use compare_sync::*;
 use fs_ops::*;
-use listado::*;
+use listing::*;
 use plugins::*;
 use policy::*;
 use rename::*;
-use sesion::*;
+use session::*;
 use tasks::*;

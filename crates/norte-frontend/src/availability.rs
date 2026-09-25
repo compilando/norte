@@ -32,7 +32,7 @@
 //!   here" from one row must not meet a row where it meant "not yet". The
 //!   frontends have all of these facts in hand and could fill them cheaply;
 //!   the reason they do not is this paragraph, not the cost. Pinned by
-//!   `la_tabla_no_modela_impedimentos_de_estado`.
+//!   `the_table_does_not_model_state_impediments`.
 //!
 //! One veto is knowable, in scope, and DEFERRED: `pane.open` (the TUI's F4)
 //! refuses anything the openers cannot resolve to a native path, and
@@ -122,20 +122,23 @@ pub struct Facts {
     /// (`sync.apply` needs the journal to open a batch), so this is the field
     /// that says so before the reader presses the key.
     pub journalled: bool,
-    /// Este proceso habla con el DAEMON, y no con su core embebido (fase 9).
+    /// Whether this process talks to the DAEMON, and not to its embedded
+    /// core (phase 9).
     ///
-    /// Lo lee `app.handoff`, y es otra pregunta que `journalled`: aquélla dice
-    /// si las mutaciones se apuntan, ésta si hay un daemon con quien compartir
-    /// la sesión. Un relevo sin daemon no es que se vea mal: es que no hay a
-    /// quién soltarle la pantalla, así que el otro frontend abriría en blanco
-    /// — y eso hay que DECIRLO antes de la tecla, no después.
+    /// Read by `app.handoff`, and it is a different question from
+    /// `journalled`: that one says whether mutations get recorded, this one
+    /// whether there is a daemon to share the session with. A handoff with
+    /// no daemon does not just look bad: there is nobody to hand the screen
+    /// to, so the other frontend would open blank — and that has to be SAID
+    /// before the key, not after.
     pub daemon: bool,
-    /// Hay un escritorio al que pedirle una ventana.
+    /// Whether there is a desktop to ask for a window.
     ///
-    /// `false` por SSH, que es el caso que importa: ahí el relevo no tiene a
-    /// dónde ir, y ofrecerlo sería ofrecer una ventana que nadie va a ver. Lo
-    /// decide el llamante porque la respuesta es del entorno del proceso
-    /// (`DISPLAY`, `WAYLAND_DISPLAY`) y no de nada que esta tabla pueda mirar.
+    /// `false` over SSH, which is the case that matters: there the handoff
+    /// has nowhere to go, and offering it would be offering a window nobody
+    /// is going to see. Decided by the caller because the answer belongs to
+    /// the process's environment (`DISPLAY`, `WAYLAND_DISPLAY`) and not to
+    /// anything this table can look at.
     pub windowed: bool,
 }
 
@@ -202,7 +205,7 @@ pub fn scheme_is_read_only(scheme: &str) -> bool {
 ///
 /// The two-step answer both frontends need, in ONE place. Each had written it
 /// out — `norte_tui::app::App::pane_read_only` and the GUI host's
-/// `solo_lectura` — which is the shape ADR 0077 exists to stop: two spellings
+/// `solo_read` — which is the shape ADR 0077 exists to stop: two spellings
 /// of one decision, drifting quietly. `enter_target` moved here for the same
 /// reason and in the same change.
 ///
@@ -219,10 +222,10 @@ pub fn scheme_is_read_only(scheme: &str) -> bool {
 /// let ro = Capabilities { flags: CapabilityFlags::READ_ONLY, max_path: None };
 /// let rw = Capabilities { flags: CapabilityFlags::CASE_SENSITIVE, max_path: None };
 ///
-/// // El flag manda, en los dos sentidos.
+/// // The flag governs, in both directions.
 /// assert!(read_only(Some(ro), "sftp"));
 /// assert!(!read_only(Some(rw), "sftp"));
-/// // Sin respuesta todavía, contesta el esquema.
+/// // No answer yet, the scheme answers.
 /// assert!(read_only(None, "zip+file"));
 /// assert!(!read_only(None, "sftp"));
 /// ```
@@ -234,12 +237,12 @@ pub fn read_only(caps: Option<norte_proto::Capabilities>, scheme: &str) -> bool 
     )
 }
 
-/// Deshabilitado por `reason`.
+/// Disabled for `reason`.
 fn no(reason: Reason) -> Availability {
     Availability::Unavailable { reason }
 }
 
-/// `Available` si `ok`, si no deshabilitado por `reason`.
+/// `Available` if `ok`, otherwise disabled for `reason`.
 fn gated(ok: bool, reason: Reason) -> Availability {
     if ok {
         Availability::Available
@@ -248,10 +251,10 @@ fn gated(ok: bool, reason: Reason) -> Availability {
     }
 }
 
-/// El PRIMER motivo cuya condición se cumple, o `Available` si ninguna. El
-/// orden de la lista es el de importancia: con dos impedimentos a la vez se
-/// explica el que el usuario tendría que resolver primero (soltar marcas no
-/// hace escribible un zip).
+/// The FIRST reason whose condition holds, or `Available` if none does. The
+/// list's order is the order of importance: with two impediments at once,
+/// the one the user would have to resolve first is explained (dropping
+/// marks does not make a zip writable).
 fn first_failure(checks: &[(bool, Reason)]) -> Availability {
     match checks.iter().find(|(hit, _)| *hit) {
         Some((_, reason)) => no(*reason),
@@ -272,7 +275,7 @@ fn first_failure(checks: &[(bool, Reason)]) -> Availability {
 /// use norte_frontend::availability::{Facts, verdict};
 /// use norte_help::Reason;
 ///
-/// let en_un_zip = Facts {
+/// let in_a_zip = Facts {
 ///     enterable: false,
 ///     viewable: true,
 ///     rename_single: true,
@@ -283,102 +286,108 @@ fn first_failure(checks: &[(bool, Reason)]) -> Availability {
 ///     daemon: true,
 ///     windowed: true,
 /// };
-/// // Se lee DESDE el zip: copiar vale.
-/// assert!(verdict("pane.copy", &en_un_zip).is_available());
-/// // Se escribe DENTRO del zip: borrar no.
+/// // Reading FROM the zip: copying is fine.
+/// assert!(verdict("pane.copy", &in_a_zip).is_available());
+/// // Writing INSIDE the zip: deleting is not.
 /// assert_eq!(
-///     verdict("pane.delete", &en_un_zip).reason(),
+///     verdict("pane.delete", &in_a_zip).reason(),
 ///     Some(Reason::ReadOnlyBackend)
 /// );
-/// // Un comando que la tabla no conoce se ofrece.
-/// assert!(verdict("app.quit", &en_un_zip).is_available());
+/// // A command the table does not know is offered.
+/// assert!(verdict("app.quit", &in_a_zip).is_available());
 /// ```
 #[must_use]
 pub fn verdict(command: &str, facts: &Facts) -> Availability {
     match command {
-        // Entrar: el llamador dice qué es entrable, y los dos frontends lo
-        // preguntan al mismo sitio ([`crate::nav::enter_target`]) — un
-        // directorio, un enlace y un contenedor, que es al que compone el
-        // scheme. La tabla no vuelve a mirar el recuento: el frontend que
-        // exige UNA sola entrada ya lo dobló en el hecho.
+        // Entering: the caller says what is enterable, and both frontends
+        // ask the same place ([`crate::nav::enter_target`]) — a directory,
+        // a symlink, and a container, which is what the scheme composes
+        // onto. The table does not look at the count again: the frontend
+        // that requires a SINGLE entry already folded that into the fact.
         "nav.enter" => gated(facts.enterable, Reason::WrongTarget),
         "pane.view" => gated(facts.viewable, Reason::WrongTarget),
-        // Copiar LEE del origen (un zip vale) y ESCRIBE en el destino.
+        // Copying READS from the source (a zip is fine) and WRITES to the
+        // destination.
         "pane.copy" => gated(!facts.dest_read_only, Reason::ReadOnlyBackend),
-        // Mover escribe en los DOS: borra en el origen.
+        // Moving writes to BOTH: it deletes at the source.
         "pane.move" => gated(
             !facts.dest_read_only && !facts.source_read_only,
             Reason::ReadOnlyBackend,
         ),
-        // Renombrar de verdad (`pane.rename`, shift+F6): UNA entrada. CUÁL y
-        // si con varias marcas cuenta como una lo dice el llamador
-        // (`rename_single`), porque los dos frontends apuntan distinto — la
-        // GUI se niega con selección múltiple, la TUI renombra la del cursor
-        // ignorando las marcas.
+        // The real rename (`pane.rename`, shift+F6): ONE entry. WHICH one,
+        // and whether several marks count as one, is said by the caller
+        // (`rename_single`), because the two frontends target differently
+        // — the GUI refuses on a multiple selection, the TUI renames the
+        // one under the cursor and ignores the marks.
         //
-        // El ORDEN de estos dos checks es la decisión, no un detalle: dentro
-        // de un zip con tres marcas, «es de solo lectura» es lo que el
-        // usuario tendría que resolver primero (soltar las marcas no hace
-        // escribible un zip), así que gana el backend.
+        // The ORDER of these two checks is the decision, not a detail:
+        // inside a zip with three marks, "it is read-only" is what the user
+        // would have to resolve first (dropping the marks does not make a
+        // zip writable), so the backend wins.
         "pane.rename" => first_failure(&[
             (facts.source_read_only, Reason::ReadOnlyBackend),
             (!facts.rename_single, Reason::WrongTarget),
         ]),
-        // Los dos escriben en el ORIGEN y sólo el origen los veta. El rename
-        // de IA además actúa sobre la CARPETA entera, no sobre el objetivo
-        // señalado, así que a diferencia de `pane.rename` el recuento no le
-        // afecta (por eso no comparte arm con él).
+        // Both write to the SOURCE and only the source vetoes them. AI
+        // rename additionally acts on the WHOLE folder, not on the marked
+        // target, so unlike `pane.rename` the count does not affect it
+        // (which is why it does not share an arm with it).
         //
-        // `pane.delete-permanent` (shift+F8) es del vocabulario de la TUI y no
-        // del menú de la GUI, pero se veta con el MISMO criterio: borrar
-        // saltándose la papelera sigue siendo escribir en el origen. Sin este
-        // brazo la página de copiado atenuaba F8 y dejaba shift+F8 encendido
-        // dentro de un zip — dos filas contiguas contándose lo contrario.
+        // `pane.delete-permanent` (shift+F8) belongs to the TUI's
+        // vocabulary and not to the GUI's menu, but it is vetoed by the
+        // SAME criterion: deleting past the trash is still writing to the
+        // source. Without this arm the copy page dimmed F8 and left
+        // shift+F8 lit inside a zip — two adjacent rows saying the opposite
+        // of each other.
         //
-        // `pane.mkdir` (F7) crea DENTRO del pane con foco, que es el origen:
-        // mismo veto y por la misma razón. Sin brazo caía en el fail-OPEN y el
-        // lector llegaba a teclear el nombre en el modal antes de que el
-        // despacho fallara.
-        // Organizar (fase 8) CREA carpetas y mueve ficheros dentro del pane
-        // con foco: mismo veto que renombrar, y por la misma razón.
+        // `pane.mkdir` (F7) creates INSIDE the focused pane, which is the
+        // source: same veto and for the same reason. Without an arm it fell
+        // into the fail-OPEN and the reader got as far as typing the name
+        // into the modal before the dispatch failed.
+        // Organize (phase 8) CREATES folders and moves files inside the
+        // focused pane: same veto as rename, and for the same reason.
         "pane.ai-rename"
         | "pane.organize"
         | "pane.delete"
         | "pane.delete-permanent"
         | "pane.mkdir" => gated(!facts.source_read_only, Reason::ReadOnlyBackend),
-        // Sincronizar (spec 2 del ítem 1): escribe en el DESTINO —como copiar—
-        // y además borra y sobrescribe allí, así que el core exige journal
-        // (`sync.apply` abre un lote deshacible; regla dura 4) y se niega sin
-        // él. El orden es la decisión, igual que en `pane.rename`: sin daemon
-        // no hay nada que el lector pueda arreglar quedándose donde está, y
-        // «este destino no escribe» es un consejo para una sesión que sí podría
-        // sincronizar. Sin este brazo caía en el fail-OPEN y la hoja de
-        // referencia ofrecía la tecla que el engine embebido rechaza.
+        // Synchronizing (spec 2, item 1): writes to the DESTINATION —like
+        // copying— and also deletes and overwrites there, so the core
+        // requires a journal (`sync.apply` opens an undoable batch; hard
+        // rule 4) and refuses without one. The order is the decision, same
+        // as in `pane.rename`: with no daemon there is nothing the reader
+        // can fix by staying where they are, and "this destination does not
+        // write" is advice for a session that could actually synchronize.
+        // Without this arm it fell into the fail-OPEN and the reference
+        // sheet offered the key the embedded engine rejects.
         "pane.sync-dirs" => first_failure(&[
             (!facts.journalled, Reason::NeedsDaemon),
             (facts.dest_read_only, Reason::ReadOnlyBackend),
         ]),
-        // El RELEVO entre frontends (fase 9). Dos impedimentos distintos, y
-        // el orden dice cuál se enseña: sin daemon no hay a quién soltarle la
-        // pantalla —el otro frontend abriría en blanco—, y sin escritorio no
-        // hay dónde ponerla. Los dos se arreglan de formas distintas (arrancar
-        // contra el daemon; sentarse en la máquina), así que se distinguen en
-        // vez de decir «no disponible».
+        // The HANDOFF between frontends (phase 9). Two different
+        // impediments, and the order says which one is shown: with no
+        // daemon there is nobody to hand the screen to —the other frontend
+        // would open blank—, and with no desktop there is nowhere to put
+        // it. The two are fixed in different ways (start against the
+        // daemon; sit at the machine), so they are told apart instead of
+        // saying "unavailable".
         //
-        // Sin este brazo caía en el fail-OPEN, y la paleta ofrecía por SSH un
-        // comando que suelta la sesión y lanza una ventana que nadie ve —el
-        // peor de los dos fallos, porque deja la pantalla sin dueño.
+        // Without this arm it fell into the fail-OPEN, and the palette
+        // offered over SSH a command that drops the session and launches a
+        // window nobody sees —the worse of the two failures, because it
+        // leaves the screen ownerless.
         "app.handoff" => first_failure(&[
             (!facts.daemon, Reason::NeedsDaemon),
             (!facts.windowed, Reason::NeedsDesktop),
         ]),
-        // Aquí caen dos cosas distintas, y conviene no confundirlas al leer:
-        // los comandos que NO tienen impedimento posible (`pane.copy-path` no
-        // toca el backend — vale hasta dentro de un zip; `app.quit` tampoco) y
-        // los que esta tabla no conoce, que se ofrecen por el fail-OPEN de la
-        // rustdoc de arriba. No llevan arm propio porque el veredicto sería
-        // idéntico y clippy no admite el arm redundante; el test
-        // `una_conexion_degradada_no_veta_por_si_sola` fija el de
+        // Two different things land here, and they should not be confused
+        // when reading: commands that have NO possible impediment
+        // (`pane.copy-path` never touches the backend — it is fine even
+        // inside a zip; neither does `app.quit`) and ones this table does
+        // not know, which are offered by the fail-OPEN documented above.
+        // They carry no arm of their own because the verdict would be
+        // identical and clippy does not allow the redundant arm; the test
+        // `a_degraded_connection_does_not_veto_on_its_own` pins the one for
         // `pane.copy-path`.
         _ => Availability::Available,
     }
@@ -466,11 +475,11 @@ pub fn plugin_of_command(command: &str) -> Option<&str> {
 ///     daemon: true,
 ///     windowed: true,
 /// };
-/// let activos: BTreeSet<String> = ["acme.ftp".to_owned()].into_iter().collect();
+/// let active: BTreeSet<String> = ["acme.ftp".to_owned()].into_iter().collect();
 ///
-/// assert!(verdict_with_plugins("plugin:acme.ftp:sync", &facts, &activos).is_available());
+/// assert!(verdict_with_plugins("plugin:acme.ftp:sync", &facts, &active).is_available());
 /// assert_eq!(
-///     verdict_with_plugins("plugin:otro:sync", &facts, &activos).reason(),
+///     verdict_with_plugins("plugin:other:sync", &facts, &active).reason(),
 ///     Some(Reason::PluginInactive)
 /// );
 /// // A built-in command never looks at the set.
@@ -509,7 +518,7 @@ mod tests {
     }
 
     #[test]
-    fn copiar_hacia_un_destino_de_solo_lectura_esta_vetado() {
+    fn copying_to_a_read_only_destination_is_vetoed() {
         let f = Facts {
             dest_read_only: true,
             ..one_file()
@@ -518,19 +527,20 @@ mod tests {
             verdict("pane.copy", &f).reason(),
             Some(Reason::ReadOnlyBackend)
         );
-        // Y al revés: leer DESDE un origen de solo lectura es el caso que la
-        // función existe para permitir — copiar de un .zip a un bucket.
-        let desde_zip = Facts {
+        // And the other way around: reading FROM a read-only source is
+        // exactly the case the function exists to allow — copying from a
+        // .zip to a bucket.
+        let from_zip = Facts {
             source_read_only: true,
             ..one_file()
         };
-        assert!(verdict("pane.copy", &desde_zip).is_available());
+        assert!(verdict("pane.copy", &from_zip).is_available());
     }
 
     #[test]
-    fn renombrar_reporta_el_primer_fallo_no_el_ultimo() {
-        // El orden es la decisión: con un lote de 3 ficheros dentro de un
-        // zip, «es de solo lectura» explica más que «hay más de uno».
+    fn rename_reports_the_first_failure_not_the_last() {
+        // The order is the decision: with a batch of 3 files inside a zip,
+        // "it is read-only" explains more than "there is more than one".
         let f = Facts {
             rename_single: false,
             source_read_only: true,
@@ -542,38 +552,38 @@ mod tests {
         );
     }
 
-    /// La MISMA divergencia que `enterable`, sobre renombrar: la GUI se niega
-    /// con selección múltiple, la TUI renombra la del cursor e ignora las
-    /// marcas. Con un `single` genérico decidiendo este brazo, la ayuda de la
-    /// TUI atenuaba shift+F6 en cuanto hubiese dos marcas — una fila apagada
-    /// para algo que la app hace sin pestañear, que es justo el fallo que H3d
-    /// existe para no cometer.
+    /// The SAME divergence as `enterable`, over rename: the GUI refuses on a
+    /// multiple selection, the TUI renames the one under the cursor and
+    /// ignores the marks. With a generic `single` deciding this arm, the
+    /// TUI's help dimmed shift+F6 as soon as there were two marks — a dimmed
+    /// row for something the app does without blinking, which is exactly
+    /// the mistake H3d exists to not make.
     #[test]
-    fn renombrar_lo_decide_el_llamador_no_el_recuento() {
-        let tui_con_marcas = Facts {
+    fn rename_is_decided_by_the_caller_not_the_count() {
+        let tui_with_marks = Facts {
             rename_single: true,
             ..one_file()
         };
         assert!(
-            verdict("pane.rename", &tui_con_marcas).is_available(),
-            "la TUI renombra la del cursor: no se atenúa"
+            verdict("pane.rename", &tui_with_marks).is_available(),
+            "the TUI renames the one under the cursor: it is not dimmed"
         );
-        let gui_con_marcas = Facts {
+        let gui_with_marks = Facts {
             rename_single: false,
             ..one_file()
         };
         assert_eq!(
-            verdict("pane.rename", &gui_con_marcas).reason(),
+            verdict("pane.rename", &gui_with_marks).reason(),
             Some(Reason::WrongTarget),
-            "la GUI se niega con selección múltiple"
+            "the GUI refuses on a multiple selection"
         );
     }
 
     #[test]
-    fn entrar_lo_decide_el_llamador_no_el_tipo_de_entrada() {
-        // La divergencia REAL entre frontends: en la TUI un .zip se ENTRA
-        // (se compone el scheme), en la GUI no. Por eso el hecho es
-        // «entrable», no «es un directorio».
+    fn entering_is_decided_by_the_caller_not_the_entry_kind() {
+        // The REAL divergence between frontends: in the TUI a .zip is
+        // ENTERED (the scheme is composed), in the GUI it is not. That is
+        // why the fact is "enterable", not "is a directory".
         let zip = Facts {
             enterable: true,
             ..one_file()
@@ -586,63 +596,64 @@ mod tests {
     }
 
     #[test]
-    fn un_comando_que_la_tabla_no_conoce_esta_disponible() {
-        // Fail-OPEN a propósito, y es lo contrario de lo que suele pedirse:
-        // la tabla no puede saber de cada comando del vocabulario, y atenuar
-        // por defecto convertiría cada comando nuevo en un comando que la
-        // ayuda declara roto. Ofrecerlo y que falle honestamente es mejor
-        // que negarlo por ignorancia.
+    fn a_command_the_table_does_not_know_is_available() {
+        // Fail-OPEN on purpose, and it is the opposite of what is usually
+        // asked for: the table cannot know every command in the vocabulary,
+        // and dimming by default would turn every new command into one the
+        // help declares broken. Offering it and having it fail honestly is
+        // better than denying it out of ignorance.
         assert!(verdict("app.quit", &one_file()).is_available());
         assert!(verdict("no.such.command", &one_file()).is_available());
     }
 
-    /// El RELEVO (fase 9) dice CUÁL de las dos cosas falta, y en ese orden.
+    /// The HANDOFF (phase 9) says WHICH of the two things is missing, and in
+    /// that order.
     ///
-    /// Sin este brazo caía en el fail-OPEN, y la paleta ofrecía por SSH un
-    /// comando que suelta la pantalla y lanza una ventana que nadie ve. Los
-    /// dos motivos se distinguen porque se arreglan de formas distintas:
-    /// arrancar contra el daemon, o sentarse en la máquina.
+    /// Without this arm it fell into the fail-OPEN, and the palette offered
+    /// over SSH a command that drops the screen and launches a window
+    /// nobody sees. The two reasons are told apart because they are fixed
+    /// in different ways: start against the daemon, or sit at the machine.
     #[test]
-    fn el_relevo_dice_si_falta_el_daemon_o_el_escritorio() {
-        let completo = Facts {
+    fn the_handoff_says_whether_the_daemon_or_the_desktop_is_missing() {
+        let complete = Facts {
             daemon: true,
             windowed: true,
             ..one_file()
         };
-        assert!(verdict("app.handoff", &completo).is_available());
+        assert!(verdict("app.handoff", &complete).is_available());
 
-        let sin_daemon = Facts {
+        let no_daemon = Facts {
             daemon: false,
-            ..completo
+            ..complete
         };
         assert_eq!(
-            verdict("app.handoff", &sin_daemon),
+            verdict("app.handoff", &no_daemon),
             Availability::Unavailable {
                 reason: Reason::NeedsDaemon
             }
         );
 
-        let sin_escritorio = Facts {
+        let no_desktop = Facts {
             windowed: false,
-            ..completo
+            ..complete
         };
         assert_eq!(
-            verdict("app.handoff", &sin_escritorio),
+            verdict("app.handoff", &no_desktop),
             Availability::Unavailable {
                 reason: Reason::NeedsDesktop
             }
         );
 
-        // Faltando las dos, manda el daemon: es lo primero que hay que
-        // arreglar, y decir «necesitas un escritorio» a quien además no tiene
-        // daemon le hace arreglar lo que no era.
-        let sin_nada = Facts {
+        // With both missing, the daemon governs: it is the first thing to
+        // fix, and telling someone who also has no daemon "you need a
+        // desktop" makes them fix the wrong thing.
+        let neither = Facts {
             daemon: false,
             windowed: false,
-            ..completo
+            ..complete
         };
         assert_eq!(
-            verdict("app.handoff", &sin_nada),
+            verdict("app.handoff", &neither),
             Availability::Unavailable {
                 reason: Reason::NeedsDaemon
             }
@@ -650,9 +661,9 @@ mod tests {
     }
 
     #[test]
-    fn cada_razon_tiene_clave_fluent_y_ninguna_se_solapa() {
+    fn every_reason_has_a_fluent_key_and_none_overlap() {
         use std::collections::BTreeSet;
-        let mut vistas = BTreeSet::new();
+        let mut seen = BTreeSet::new();
         for r in [
             Reason::ReadOnlyBackend,
             Reason::NeedsDesktop,
@@ -664,18 +675,17 @@ mod tests {
             Reason::NeedsDaemon,
         ] {
             let k = reason_key(r);
-            assert!(!k.is_empty(), "{r:?} sin clave");
-            assert!(vistas.insert(k), "clave repetida: {k}");
+            assert!(!k.is_empty(), "{r:?} has no key");
+            assert!(seen.insert(k), "repeated key: {k}");
         }
     }
 
-    /// Toda clave que [`reason_key`] nombra existe en los DOS locales — el
-    /// test de paridad de `norte-i18n` cubre el catálogo entero, esto cubre
-    /// que estas claves son claves REALES y no un typo que llegaría a la UI
-    /// como su propio id.
+    /// Every key [`reason_key`] names exists in BOTH locales — `norte-i18n`'s
+    /// parity test covers the whole catalogue, this covers that these keys
+    /// are REAL keys and not a typo that would reach the UI as its own id.
     #[test]
-    fn las_claves_de_los_motivos_existen_en_ambos_locales() {
-        for clave in [
+    fn reason_keys_exist_in_both_locales() {
+        for key in [
             "reason-read-only",
             "reason-unsupported",
             "reason-plugin-inactive",
@@ -687,209 +697,219 @@ mod tests {
         ] {
             for lang in [norte_i18n::Lang::Es, norte_i18n::Lang::En] {
                 assert_ne!(
-                    norte_i18n::t_in(lang, clave),
-                    clave,
-                    "falta {clave} en {lang:?}"
+                    norte_i18n::t_in(lang, key),
+                    key,
+                    "missing {key} in {lang:?}"
                 );
             }
         }
     }
 
-    /// Borrar sin papelera se veta como borrar: dentro de un zip las DOS
-    /// filas de la página de copiado (F8 y shift+F8) tienen que decir lo
-    /// mismo — la que quedase encendida prometería la más destructiva.
+    /// Deleting without the trash is vetoed like deleting: inside a zip
+    /// BOTH rows of the copy page (F8 and shift+F8) have to say the same
+    /// thing — whichever stayed lit would promise the more destructive one.
     #[test]
-    fn borrar_permanente_se_veta_como_borrar() {
-        let dentro_de_un_zip = Facts {
+    fn permanent_delete_is_vetoed_like_delete() {
+        let inside_a_zip = Facts {
             source_read_only: true,
             ..one_file()
         };
         for cmd in ["pane.delete", "pane.delete-permanent"] {
             assert_eq!(
-                verdict(cmd, &dentro_de_un_zip).reason(),
+                verdict(cmd, &inside_a_zip).reason(),
                 Some(Reason::ReadOnlyBackend),
-                "{cmd} ofrecido dentro de un backend de solo lectura"
+                "{cmd} offered inside a read-only backend"
             );
         }
     }
 
-    /// MAJOR-3(a): crear un directorio ESCRIBE en el pane con foco, así que se
-    /// veta con el mismo criterio que borrar. Sin brazo caía en el fail-OPEN y
-    /// dentro de un zip la ayuda ofrecía F7: el lector teclea un nombre en el
-    /// modal, lo confirma y el despacho falla. Es el MISMO argumento que la
-    /// propia fase usó para añadir `pane.delete-permanent` — dos filas
-    /// contiguas contándose lo contrario.
+    /// MAJOR-3(a): creating a directory WRITES to the focused pane, so it
+    /// is vetoed by the same criterion as deleting. Without an arm it fell
+    /// into the fail-OPEN and inside a zip the help offered F7: the reader
+    /// types a name into the modal, confirms it and the dispatch fails. It
+    /// is the SAME argument the phase itself used to add
+    /// `pane.delete-permanent` — two adjacent rows saying the opposite of
+    /// each other.
     #[test]
-    fn crear_directorio_se_veta_como_escribir() {
-        let dentro_de_un_zip = Facts {
+    fn creating_a_directory_is_vetoed_like_writing() {
+        let inside_a_zip = Facts {
             source_read_only: true,
             ..one_file()
         };
         assert_eq!(
-            verdict("pane.mkdir", &dentro_de_un_zip).reason(),
+            verdict("pane.mkdir", &inside_a_zip).reason(),
             Some(Reason::ReadOnlyBackend),
         );
         assert!(
             verdict("pane.mkdir", &one_file()).is_available(),
-            "fuera de un backend de solo lectura se ofrece"
+            "outside a read-only backend it is offered"
         );
     }
 
-    /// MAJOR-3(b): la tabla modela impedimentos de BACKEND y de OBJETIVO, y
-    /// jamás de ESTADO. Estos cuatro son no-ops CONOCIDOS en estados comunes
-    /// —nada corriendo, en la raíz, sin rastro— y aun así se ofrecen: un
-    /// rastro que está vacío AHORA no es la misma clase de hecho que un
-    /// backend que no sabe escribir, y el lector que ve una fila apagada
-    /// aprende «esto no se puede aquí», no «esto no tiene nada que hacer
-    /// todavía». La decisión está escrita en la rustdoc del módulo; este test
-    /// es dónde se cambia si algún día se decide lo contrario.
+    /// MAJOR-3(b): the table models BACKEND and TARGET impediments, and
+    /// never STATE ones. These four are KNOWN no-ops in common states
+    /// —nothing running, at the root, no trail— and are still offered: a
+    /// trail that is empty RIGHT NOW is not the same kind of fact as a
+    /// backend that cannot write, and the reader who sees a dimmed row
+    /// learns "this cannot be done here", not "this has nothing to do yet".
+    /// The decision is written in the module's rustdoc; this test is where
+    /// it gets changed if it is ever decided otherwise.
     #[test]
-    fn la_tabla_no_modela_impedimentos_de_estado() {
+    fn the_table_does_not_model_state_impediments() {
         for cmd in ["task.cancel", "nav.parent", "nav.back", "nav.forward"] {
             assert!(
                 verdict(cmd, &one_file()).is_available(),
-                "{cmd} atenuado por un impedimento de ESTADO"
+                "{cmd} dimmed by a STATE impediment"
             );
         }
     }
 
-    /// Sincronizar sin journal se APAGA, y con un motivo sobre el que se puede
-    /// actuar: arranca norte contra el daemon. No es un impedimento de estado
-    /// —no cambia con la siguiente tecla— sino de backend, que es la clase que
-    /// esta tabla sí modela. El engine embebido de la TUI no tiene journal ni
-    /// spool y `sync.apply` se niega en cerrado (regla dura 4), así que sin
-    /// este brazo la hoja de referencia ofrecía una tecla muerta — que es
-    /// exactamente lo que #159 acaba de costar una vez.
+    /// Syncing with no journal is TURNED OFF, with a reason that can be
+    /// acted on: start norte against the daemon. It is not a state
+    /// impediment —it does not change with the next key— but a backend one,
+    /// which is the class this table does model. The TUI's embedded engine
+    /// has no journal or spool and `sync.apply` refuses closed (hard rule
+    /// 4), so without this arm the reference sheet offered a dead key —
+    /// which is exactly what #159 just cost once.
     #[test]
-    fn sincronizar_sin_journal_manda_al_daemon() {
-        let embebida = Facts {
+    fn syncing_with_no_journal_sends_to_the_daemon() {
+        let embedded = Facts {
             journalled: false,
             ..one_file()
         };
         assert_eq!(
-            verdict("pane.sync-dirs", &embebida).reason(),
+            verdict("pane.sync-dirs", &embedded).reason(),
             Some(Reason::NeedsDaemon)
         );
         assert!(
             verdict("pane.sync-dirs", &one_file()).is_available(),
-            "con journal se ofrece"
+            "with a journal it is offered"
         );
-        // Y comparar NO se apaga por lo mismo: leer los dos árboles no muta
-        // nada, así que no necesita journal. Dos comandos vecinos que dicen
-        // cosas distintas porque son cosas distintas.
-        assert!(verdict("pane.compare-dirs", &embebida).is_available());
+        // And comparing does NOT turn off for the same reason: reading the
+        // two trees mutates nothing, so it needs no journal. Two
+        // neighboring commands that say different things because they are
+        // different things.
+        assert!(verdict("pane.compare-dirs", &embedded).is_available());
     }
 
-    /// Con daemon pero contra un destino que no escribe, el motivo es el del
-    /// destino. El ORDEN importa: sin daemon no hay nada que el lector arregle
-    /// quedándose donde está, así que ese gana aunque los dos se cumplan.
+    /// With a daemon but against a destination that does not write, the
+    /// reason is the destination's. The ORDER matters: with no daemon there
+    /// is nothing the reader can fix by staying where they are, so that one
+    /// wins even when both hold.
     #[test]
-    fn sincronizar_reporta_el_primer_fallo_no_el_ultimo() {
-        let hacia_un_zip = Facts {
+    fn syncing_reports_the_first_failure_not_the_last() {
+        let towards_a_zip = Facts {
             dest_read_only: true,
             ..one_file()
         };
         assert_eq!(
-            verdict("pane.sync-dirs", &hacia_un_zip).reason(),
+            verdict("pane.sync-dirs", &towards_a_zip).reason(),
             Some(Reason::ReadOnlyBackend)
         );
-        let ninguna_de_las_dos = Facts {
+        let neither_one = Facts {
             dest_read_only: true,
             journalled: false,
             ..one_file()
         };
         assert_eq!(
-            verdict("pane.sync-dirs", &ninguna_de_las_dos).reason(),
+            verdict("pane.sync-dirs", &neither_one).reason(),
             Some(Reason::NeedsDaemon)
         );
     }
 
-    fn activos(ids: &[&str]) -> std::collections::BTreeSet<String> {
+    fn active_set(ids: &[&str]) -> std::collections::BTreeSet<String> {
         ids.iter().map(|s| (*s).to_owned()).collect()
     }
 
     #[test]
-    fn el_comando_de_un_plugin_apagado_se_atenua() {
+    fn a_disabled_plugins_command_is_dimmed() {
         let v = verdict_with_plugins(
             "plugin:acme.ftp:sync",
             &one_file(),
-            &activos(&["otro.plugin"]),
+            &active_set(&["otro.plugin"]),
         );
         assert_eq!(v.reason(), Some(Reason::PluginInactive));
     }
 
     #[test]
-    fn el_comando_de_un_plugin_activo_se_ofrece() {
-        let v = verdict_with_plugins("plugin:acme.ftp:sync", &one_file(), &activos(&["acme.ftp"]));
+    fn an_active_plugins_command_is_offered() {
+        let v = verdict_with_plugins(
+            "plugin:acme.ftp:sync",
+            &one_file(),
+            &active_set(&["acme.ftp"]),
+        );
         assert!(v.is_available());
     }
 
     #[test]
-    fn un_comando_del_binario_no_mira_los_plugins() {
-        let v = verdict_with_plugins("pane.copy", &one_file(), &activos(&[]));
-        assert!(v.is_available(), "el prefijo `plugin:` es lo que decide");
+    fn a_built_in_commands_does_not_look_at_plugins() {
+        let v = verdict_with_plugins("pane.copy", &one_file(), &active_set(&[]));
+        assert!(v.is_available(), "the `plugin:` prefix is what decides");
     }
 
     #[test]
-    fn una_clave_de_plugin_malformada_no_se_ofrece() {
-        // `plugin:` sin id ni comando no identifica nada: fail-closed, porque
-        // el único despacho posible sería contra un plugin que no existe.
-        let v = verdict_with_plugins("plugin:", &one_file(), &activos(&["acme.ftp"]));
+    fn a_malformed_plugin_key_is_not_offered() {
+        // `plugin:` with neither id nor command identifies nothing:
+        // fail-closed, because the only possible dispatch would be against
+        // a plugin that does not exist.
+        let v = verdict_with_plugins("plugin:", &one_file(), &active_set(&["acme.ftp"]));
         assert_eq!(v.reason(), Some(Reason::PluginInactive));
     }
 
-    /// La frontera la marca el PRIMER `:` tras `plugin:`, y eso no es un
-    /// detalle: `plugin_id` es DNS inverso validado por el core (nunca lleva
-    /// `:`), mientras que `command_id` sale del manifiesto SIN validación de
-    /// charset y puede llevar los que quiera. Partir por el último, o partir
-    /// más de una vez, atribuiría `plugin:acme.ftp:do:it` a un plugin que no
-    /// existe y atenuaría una fila que sí se puede ejecutar.
+    /// The boundary is marked by the FIRST `:` after `plugin:`, and that is
+    /// not a detail: `plugin_id` is reverse-DNS validated by the core
+    /// (never carries a `:`), while `command_id` comes out of the manifest
+    /// with NO charset validation and can carry as many as it likes.
+    /// Splitting on the last one, or splitting more than once, would
+    /// attribute `plugin:acme.ftp:do:it` to a plugin that does not exist
+    /// and would dim a row that can actually run.
     #[test]
-    fn el_id_del_comando_puede_llevar_dos_puntos() {
+    fn the_commands_id_can_carry_colons() {
         assert_eq!(
             plugin_of_command("plugin:acme.ftp:do:it"),
             Some("acme.ftp"),
-            "la frontera es el primer `:`, no el último"
+            "the boundary is the first `:`, not the last"
         );
         assert!(
             verdict_with_plugins(
                 "plugin:acme.ftp:do:it",
                 &one_file(),
-                &activos(&["acme.ftp"])
+                &active_set(&["acme.ftp"])
             )
             .is_available()
         );
     }
 
-    /// Toda forma que no nombra un plugin Y un comando es `None`, y el
-    /// veredicto de todas ellas es el mismo: apagada. La lista es el contrato
-    /// —lo que la tabla considera «roto» frente a «desconocido»— y por eso se
-    /// enumera aquí y no se deduce de la implementación.
+    /// Every form that does not name a plugin AND a command is `None`, and
+    /// the verdict for all of them is the same: off. The list is the
+    /// contract —what the table considers "broken" versus "unknown"— and
+    /// that is why it is enumerated here and not deduced from the
+    /// implementation.
     #[test]
-    fn las_claves_que_no_nombran_plugin_y_comando_son_none() {
-        for clave in [
+    fn keys_that_name_no_plugin_and_command_are_none() {
+        for key in [
             "plugin:",
             "plugin::",
             "plugin:acme.ftp",
             "plugin:acme.ftp:",
             "plugin::sync",
         ] {
-            assert_eq!(plugin_of_command(clave), None, "{clave} identificó algo");
+            assert_eq!(plugin_of_command(key), None, "{key} identified something");
             assert_eq!(
-                verdict_with_plugins(clave, &one_file(), &activos(&["acme.ftp", ""])).reason(),
+                verdict_with_plugins(key, &one_file(), &active_set(&["acme.ftp", ""])).reason(),
                 Some(Reason::PluginInactive),
-                "{clave} ofrecida"
+                "{key} offered"
             );
         }
-        // Y lo que no lleva el prefijo no es asunto suyo.
+        // And what does not carry the prefix is none of its business.
         assert_eq!(plugin_of_command("pane.copy"), None);
         assert_eq!(plugin_of_command("plugins:acme.ftp:sync"), None);
     }
 
-    /// El criterio SINTÁCTICO: un scheme compuesto de archivo es de solo
-    /// lectura por construcción; uno de provider, no.
+    /// The SYNTACTIC criterion: an archive-composed scheme is read-only by
+    /// construction; a provider one is not.
     #[test]
-    fn el_scheme_de_archivo_es_de_solo_lectura() {
+    fn the_archive_scheme_is_read_only() {
         assert!(scheme_is_read_only("zip+file"));
         assert!(scheme_is_read_only("tar+file"));
         assert!(scheme_is_read_only("tar+gz+file"));
@@ -899,14 +919,14 @@ mod tests {
         assert!(!scheme_is_read_only("mem"));
     }
 
-    /// Una conexión degradada NO veta nada, y eso está fijado a propósito:
-    /// `connection.degraded` significa «sesión sin cifrar», no «sesión
-    /// inservible». Atenuar copiar/mover/borrar por ello le diría a todo
-    /// usuario de FTP que la app se niega a hacer lo que va a hacer. Si algún
-    /// día el motivo del wire pasa a significar «no se puede actuar», este
-    /// test es el sitio donde la decisión se cambia a la vista.
+    /// A degraded connection does NOT veto anything, and that is pinned on
+    /// purpose: `connection.degraded` means "unencrypted session", not
+    /// "unusable session". Dimming copy/move/delete for it would tell every
+    /// FTP user that the app refuses to do what it is about to do. If the
+    /// wire reason ever comes to mean "cannot act", this test is where the
+    /// decision gets changed, in plain sight.
     #[test]
-    fn una_conexion_degradada_no_veta_por_si_sola() {
+    fn a_degraded_connection_does_not_veto_on_its_own() {
         let f = Facts {
             degraded: true,
             ..one_file()
@@ -920,7 +940,7 @@ mod tests {
         ] {
             assert!(
                 verdict(cmd, &f).is_available(),
-                "{cmd} atenuado por una sesión en claro"
+                "{cmd} dimmed by a plaintext session"
             );
         }
     }

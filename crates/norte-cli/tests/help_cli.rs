@@ -4,7 +4,7 @@
 use assert_cmd::Command;
 
 fn norte() -> Command {
-    let mut c = Command::cargo_bin("norte").expect("binario norte compilado");
+    let mut c = Command::cargo_bin("norte").expect("norte binary compiled");
     // The page names the reader's OWN keys, so an inherited `~/.config/norte`
     // would make every assertion here depend on whoever runs it.
     c.env("NORTE_CONFIG_DIR", "/nonexistent-norte-config");
@@ -13,7 +13,7 @@ fn norte() -> Command {
 }
 
 #[test]
-fn help_sin_argumentos_imprime_el_indice() {
+fn help_without_arguments_prints_the_index() {
     let out = norte().arg("help").output().unwrap();
     assert!(
         out.status.success(),
@@ -26,7 +26,7 @@ fn help_sin_argumentos_imprime_el_indice() {
 }
 
 #[test]
-fn una_pagina_por_id_se_imprime_entera() {
+fn a_page_by_id_prints_whole() {
     let out = norte().args(["help", "copying"]).output().unwrap();
     assert!(out.status.success());
     let text = String::from_utf8(out.stdout).expect("UTF-8");
@@ -38,7 +38,7 @@ fn una_pagina_por_id_se_imprime_entera() {
 }
 
 #[test]
-fn una_pagina_desconocida_falla_con_una_linea_util() {
+fn an_unknown_page_fails_with_a_useful_line() {
     let out = norte().args(["help", "no-such-topic"]).output().unwrap();
     assert_eq!(out.status.code(), Some(1));
     assert!(out.stdout.is_empty(), "an error does not print a page");
@@ -49,7 +49,7 @@ fn una_pagina_desconocida_falla_con_una_linea_util() {
 /// The id is echoed back into a terminal, so it is masked and capped on the
 /// way — an error line is exactly where a pasted string with an ESC ends up.
 #[test]
-fn un_id_hostil_no_se_devuelve_en_crudo() {
+fn a_hostile_id_is_not_echoed_back_raw() {
     let hostile = format!("\u{1b}[31m\u{202e}{}", "x".repeat(200));
     let out = norte().args(["help", &hostile]).output().unwrap();
     assert_eq!(out.status.code(), Some(1));
@@ -60,7 +60,7 @@ fn un_id_hostil_no_se_devuelve_en_crudo() {
 }
 
 #[test]
-fn list_enumera_las_paginas_y_search_dice_por_que() {
+fn list_enumerates_the_pages_and_search_says_why() {
     let out = norte().args(["help", "--list"]).output().unwrap();
     assert!(out.status.success());
     let text = String::from_utf8(out.stdout).expect("UTF-8");
@@ -75,7 +75,7 @@ fn list_enumera_las_paginas_y_search_dice_por_que() {
 }
 
 #[test]
-fn una_busqueda_sin_resultados_sale_1_y_calla() {
+fn a_search_with_no_results_exits_1_and_stays_quiet() {
     let out = norte()
         .args(["help", "--search", "zzzzz-no-such-word"])
         .output()
@@ -86,7 +86,7 @@ fn una_busqueda_sin_resultados_sale_1_y_calla() {
 }
 
 #[test]
-fn keys_nombra_las_teclas_del_preset() {
+fn keys_names_the_presets_keys() {
     let out = norte().args(["help", "keys"]).output().unwrap();
     assert!(out.status.success());
     let text = String::from_utf8(out.stdout).expect("UTF-8");
@@ -99,7 +99,7 @@ fn keys_nombra_las_teclas_del_preset() {
 
 /// The page is localized from the same corpus as the apps.
 #[test]
-fn el_idioma_sale_del_entorno() {
+fn the_language_comes_from_the_environment() {
     let out = norte()
         .env("NORTE_LANG", "es")
         .args(["help", "copying"])
@@ -113,7 +113,7 @@ fn el_idioma_sale_del_entorno() {
 
 #[cfg(unix)]
 #[test]
-fn cerrar_la_tuberia_no_produce_un_panic() {
+fn closing_the_pipe_does_not_produce_a_panic() {
     use std::io::Read as _;
     use std::process::{Command as Proc, Stdio};
 
@@ -138,17 +138,17 @@ fn cerrar_la_tuberia_no_produce_un_panic() {
 }
 
 #[test]
-fn el_json_no_diverge_del_golden() {
+fn the_json_does_not_diverge_from_the_golden() {
     let out = norte().args(["help", "--json"]).output().unwrap();
     assert!(
         out.status.success(),
         "stderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let got: serde_json::Value = serde_json::from_slice(&out.stdout).expect("JSON válido");
+    let got: serde_json::Value = serde_json::from_slice(&out.stdout).expect("valid JSON");
     let pretty = format!(
         "{}\n",
-        serde_json::to_string_pretty(&got).expect("re-serializa")
+        serde_json::to_string_pretty(&got).expect("re-serialize")
     );
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/goldens/help-en.json");
     if std::env::var_os("NORTE_UPDATE_GOLDEN").is_some() {
@@ -157,7 +157,7 @@ fn el_json_no_diverge_del_golden() {
         return;
     }
     let want = std::fs::read_to_string(&path)
-        .expect("golden — regenéralo con NORTE_UPDATE_GOLDEN=1")
+        .expect("golden — regenerate it with NORTE_UPDATE_GOLDEN=1")
         // A Windows checkout rewrites text files to CRLF; `.gitattributes`
         // pins json to LF and this is the belt.
         .replace("\r\n", "\n");
@@ -168,13 +168,13 @@ fn el_json_no_diverge_del_golden() {
 }
 
 #[test]
-fn una_pagina_sola_en_json_lleva_sus_filas_resueltas() {
+fn a_single_page_in_json_carries_its_resolved_rows() {
     let out = norte()
         .args(["help", "copying", "--json"])
         .output()
         .unwrap();
     assert!(out.status.success());
-    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("JSON válido");
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("valid JSON");
     assert_eq!(v["version"], 2);
     let topics = v["topics"].as_array().expect("topics");
     assert_eq!(topics.len(), 1);
@@ -194,10 +194,10 @@ fn una_pagina_sola_en_json_lleva_sus_filas_resueltas() {
 /// and the prose listed nothing but working keys — which is the reading the
 /// version bump exists to invalidate.
 #[test]
-fn la_pagina_de_teclas_en_json_lleva_filas_con_su_disponibilidad() {
+fn the_keys_page_in_json_carries_rows_with_their_availability() {
     let out = norte().args(["help", "keys", "--json"]).output().unwrap();
     assert!(out.status.success());
-    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("JSON válido");
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("valid JSON");
     assert_eq!(
         v["version"], 2,
         "the shape's meaning changed, not just a field"
@@ -227,7 +227,7 @@ fn la_pagina_de_teclas_en_json_lleva_filas_con_su_disponibilidad() {
         .args(["help", "copying", "--json"])
         .output()
         .unwrap();
-    let c: serde_json::Value = serde_json::from_slice(&copying.stdout).expect("JSON válido");
+    let c: serde_json::Value = serde_json::from_slice(&copying.stdout).expect("valid JSON");
     assert!(
         c["topics"][0].get("keys").is_none(),
         "only the keyboard page has keys"
@@ -235,7 +235,7 @@ fn la_pagina_de_teclas_en_json_lleva_filas_con_su_disponibilidad() {
 }
 
 #[test]
-fn una_pagina_desconocida_en_json_sigue_siendo_un_error() {
+fn an_unknown_page_in_json_is_still_an_error() {
     let out = norte()
         .args(["help", "no-such-topic", "--json"])
         .output()

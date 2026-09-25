@@ -1,64 +1,67 @@
-//! Modelo PURO del picker de columnas (#108 bloque 7a): estado y
-//! transiciones sin IO ni render — la TUI lo envuelve en un overlay y la
-//! GUI (7c) en un panel, misma máquina. Regla 7: la lógica vive aquí.
+//! PURE model of the columns picker (#108 block 7a): state and transitions
+//! with no IO and no render — the TUI wraps it in an overlay and the GUI (7c)
+//! in a panel, same machine. Rule 7: the logic lives here.
 
 use crate::columns::{Builtin, ColumnId, ColumnsSettings, sort_column};
 use crate::sort::SortSpec;
 
-/// Una fila del picker: el id en forma Display (lo que se persiste),
-/// su builtin si lo es (etiqueta Fluent + ordenable), y si está activa.
+/// One row of the picker: the id in Display form (what gets persisted), its
+/// builtin if it is one (Fluent label + sortable), and whether it is active.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PickerRow {
-    /// Id tal cual viaja a la config (`"size"`, `"attr:posix.mode"`…).
+    /// Id as it travels to the config (`"size"`, `"attr:posix.mode"`…).
     pub id: String,
-    /// `Some` para los builtin (etiqueta localizada, sort); `None` para
-    /// attr/plugin (etiqueta en [`Self::label`], #117) y para los ids que
-    /// no parsean — se enseñan y preservan.
+    /// `Some` for builtins (localized label, sort); `None` for attr/plugin
+    /// (label in [`Self::label`], #117) and for ids that do not parse — they
+    /// are shown and preserved.
     pub builtin: Option<Builtin>,
-    /// Activa = aparece en la lista persistida.
+    /// Active = appears in the persisted list.
     pub enabled: bool,
-    /// Formato VIGENTE de la fila (#108 7b): vocabulario ASCII cerrado
-    /// (`"iec"`…); `Some` para Size/Mtime y para attrs con hint Size/
-    /// Timestamp/Mode (#117) — el resto no admite formato.
+    /// The row's CURRENT format (#108 7b): closed ASCII vocabulary
+    /// (`"iec"`…); `Some` for Size/Mtime and for attrs with hint Size/
+    /// Timestamp/Mode (#117) — everything else admits no format.
     pub format: Option<String>,
-    /// BLOQUEADA (m2 revisión 7b): un spec DEL SCHEME fija el formato — el
-    /// picker solo escribe el spec GLOBAL, que el override seguiría
-    /// enmascarando (toast mentiroso + fuga a otros schemes). La fila
-    /// enseña su formato pero el ciclo es no-op y `finish` jamás la emite.
+    /// LOCKED (m2 review 7b): a spec FROM THE SCHEME fixes the format — the
+    /// picker only writes the GLOBAL spec, which the override would keep
+    /// masking (a lying toast + leaking into other schemes). The row still
+    /// shows its format but the cycle is a no-op and `finish` never emits
+    /// it.
     pub format_locked: bool,
-    /// Etiqueta de display para filas NO builtin (#117): la de
-    /// [`crate::columns::header_label`] al abrir (localizada / label del
-    /// catálogo YA enmascarado / id saneado). `None` en builtins (Fluent
-    /// en vivo) y en ids que no parsean (los frontends caen al id crudo,
-    /// que ellos enmascaran).
+    /// Display label for NON-builtin rows (#117): [`crate::columns::header_label`]'s
+    /// answer at open time (localized / already-masked catalogue label /
+    /// sanitized id). `None` for builtins (live Fluent) and for ids that do
+    /// not parse (frontends fall back to the raw id, which they mask
+    /// themselves).
     pub label: Option<String>,
-    /// Hint del catálogo al abrir (attrs): decide la tabla del ciclo de
-    /// formato. `Opaque` = sin ciclo.
+    /// The catalogue's hint at open time (attrs): decides the format cycle's
+    /// table. `Opaque` = no cycle.
     pub hint: norte_proto::attrs::AttrHint,
-    /// El formato al ABRIR: [`ColumnsPicker::finish`] solo emite los
-    /// CAMBIADOS. Privado: nace igual que `format` y no se toca después.
+    /// The format at OPEN time: [`ColumnsPicker::finish`] only emits the
+    /// CHANGED ones. Private: born equal to `format` and never touched
+    /// afterwards.
     opened_format: Option<String>,
 }
 
-/// Resultado de confirmar el picker.
+/// The result of confirming the picker.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Picked {
-    /// Ids habilitados, en orden de pintado.
+    /// Enabled ids, in paint order.
     pub ids: Vec<String>,
-    /// El orden elegido.
+    /// The chosen sort order.
     pub sort: SortSpec,
-    /// `Some(scheme)` si el save va al override del scheme; `None` = default.
+    /// `Some(scheme)` if the save goes to the scheme's override; `None` =
+    /// default.
     pub scheme_target: Option<String>,
-    /// Formatos CAMBIADOS respecto a la apertura (#108 7b), como
-    /// `(id, formato)`: solo lo tocado viaja al disco — un spec por
-    /// columna, reemplazo por id (`persist_column_format`).
+    /// Formats CHANGED relative to opening (#108 7b), as `(id, format)`:
+    /// only what was touched travels to disk — one spec per column,
+    /// replacement by id (`persist_column_format`).
     pub formats: Vec<(String, String)>,
 }
 
-/// Construye una fila sembrando `format`/`opened_format` del estilo
-/// RESUELTO del scheme (`style_for` ya pliega spec global ← scheme, vía la
-/// tabla única [`crate::columns::format_name`], m3) — un único sitio para
-/// el invariante «nacen iguales» — y el candado de scheme (m2).
+/// Builds a row, seeding `format`/`opened_format` from the scheme's RESOLVED
+/// style (`style_for` already folds global spec ← scheme, through the single
+/// table [`crate::columns::format_name`], m3) — one single place for the
+/// "born equal" invariant — and the scheme lock (m2).
 fn make_row(
     id: String,
     builtin: Option<Builtin>,
@@ -67,9 +70,9 @@ fn make_row(
     scheme: &str,
     catalog: Option<&norte_proto::AttrCatalog>,
 ) -> PickerRow {
-    // #117: un solo parse por fila — attr y plugin dejan de ser opacos: el
-    // estilo resuelto trae su hint (tabla del ciclo) y `header_label` su
-    // etiqueta (ya enmascarada). Los ids que NO parsean siguen opacos.
+    // #117: a single parse per row — attr and plugin stop being opaque: the
+    // resolved style carries its hint (the cycle's table) and `header_label`
+    // its label (already masked). Ids that do NOT parse stay opaque.
     let parsed = id.parse::<ColumnId>().ok();
     let (hint, format, format_locked, label) = match &parsed {
         Some(cid) => {
@@ -95,10 +98,11 @@ fn make_row(
     }
 }
 
-/// Estado del picker. `open` parte del set EFECTIVO del pane (override del
-/// scheme > default) y cierra la lista con el resto del catálogo builtin
-/// deshabilitado. `name` va primero y es inmutable (ni toggle ni desplazable
-/// de la cabeza: la primera columna ES el nombre por contrato del render).
+/// The picker's state. `open` starts from the pane's EFFECTIVE set (scheme
+/// override > default) and closes the list with the rest of the builtin
+/// catalogue disabled. `name` comes first and is immutable (it can neither be
+/// toggled nor moved off the head: the first column IS the name by the
+/// render's contract).
 #[derive(Debug, Clone)]
 pub struct ColumnsPicker {
     rows: Vec<PickerRow>,
@@ -108,21 +112,21 @@ pub struct ColumnsPicker {
     scheme_override: bool,
 }
 
-/// El id de la columna de permisos, como se escribe en `[ui.columns]`.
-const PERMISOS_ID: &str = "attr:posix.mode";
+/// The id of the permissions column, as written in `[ui.columns]`.
+const PERMISSIONS_ID: &str = "attr:posix.mode";
 
 impl ColumnsPicker {
-    /// Construye el picker para el pane en `scheme` con su orden actual,
-    /// sin catálogo de provider ([`Self::open_with_catalog`] con `None`).
+    /// Builds the picker for the pane on `scheme` with its current order,
+    /// with no provider catalogue ([`Self::open_with_catalog`] with `None`).
     #[must_use]
     pub fn open(settings: &ColumnsSettings, scheme: &str, current_sort: SortSpec) -> Self {
         Self::open_with_catalog(settings, scheme, current_sort, None, &[])
     }
 
-    /// Construye el picker con el catálogo de attrs del provider (#117):
-    /// los attrs ANUNCIADOS y no configurados se ofrecen deshabilitados al
-    /// final — el picker OFRECE, no impone — y las filas attr ganan hint
-    /// (ciclo de formato) y etiqueta del catálogo.
+    /// Builds the picker with the provider's attr catalogue (#117): attrs
+    /// ANNOUNCED and not configured are offered disabled at the end — the
+    /// picker OFFERS, it does not impose — and attr rows gain a hint (format
+    /// cycle) and a label from the catalogue.
     #[must_use]
     pub fn open_with_catalog(
         settings: &ColumnsSettings,
@@ -138,10 +142,10 @@ impl ColumnsPicker {
                 Ok(ColumnId::Builtin(b)) => Some(b),
                 _ => None,
             };
-            // Dedup SOLO de builtins (mismo criterio que layout_items_for).
-            // Los duplicados OPACOS se PRESERVAN a propósito: son intención
-            // de config del usuario y el picker jamás la limpia (doctor la
-            // reporta) — no "arreglar" este if para deduplicarlos.
+            // Dedup ONLY of builtins (same criterion as layout_items_for).
+            // OPAQUE duplicates are PRESERVED on purpose: they are the
+            // user's own config intent and the picker never cleans it up
+            // (`doctor` reports it) — do not "fix" this `if` to dedup them.
             if builtin.is_some() && rows.iter().any(|r| r.builtin == builtin) {
                 continue;
             }
@@ -154,7 +158,7 @@ impl ColumnsPicker {
                 catalog,
             ));
         }
-        // name primero e inmutable (contrato del render).
+        // name first and immutable (the render's contract).
         if let Some(pos) = rows.iter().position(|r| r.builtin == Some(Builtin::Name)) {
             let name = rows.remove(pos);
             rows.insert(0, name);
@@ -171,20 +175,20 @@ impl ColumnsPicker {
                 ),
             );
         }
-        // La columna de PERMISOS que pone el propio listado (spec
-        // 2026-09-20), como fila ENCENDIDA.
+        // The PERMISSIONS column the listing itself supplies (spec
+        // 2026-09-20), as an ENABLED row.
         //
-        // `raw_ids_for` no la trae —no hay catálogo donde él mira—, y sin
-        // esto el picker decía que está apagada mientras el listado la
-        // pintaba, y confirmar sin tocar nada la borraba para siempre:
-        // escribir la lista explícita hace que el set por defecto no vuelva a
-        // correr nunca. Un diálogo que borra lo que enseñaba encendido es
-        // peor que uno que no ofrece la columna.
-        if crate::columns::pone_los_permisos(settings, scheme, catalog)
-            && !rows.iter().any(|r| r.id == PERMISOS_ID)
+        // `raw_ids_for` does not bring it —there is no catalogue where it
+        // looks— and without this the picker said it was off while the
+        // listing was painting it, and confirming without touching anything
+        // erased it forever: writing the explicit list means the default set
+        // never runs again. A dialog that erases what it showed as on is
+        // worse than one that does not offer the column.
+        if crate::columns::sets_permission_column(settings, scheme, catalog)
+            && !rows.iter().any(|r| r.id == PERMISSIONS_ID)
         {
             rows.push(make_row(
-                PERMISOS_ID.to_owned(),
+                PERMISSIONS_ID.to_owned(),
                 None,
                 true,
                 settings,
@@ -192,7 +196,7 @@ impl ColumnsPicker {
                 catalog,
             ));
         }
-        // Catálogo restante, deshabilitado, en orden canónico.
+        // Remaining catalogue, disabled, in canonical order.
         for b in [Builtin::Size, Builtin::Mtime, Builtin::Kind] {
             if !rows.iter().any(|r| r.builtin == Some(b)) {
                 rows.push(make_row(
@@ -205,8 +209,9 @@ impl ColumnsPicker {
                 ));
             }
         }
-        // Catálogo de PROVIDER (#117): attrs anunciados y no configurados,
-        // deshabilitados, tras los builtins — el picker OFRECE, no impone.
+        // PROVIDER catalogue (#117): attrs announced and not configured,
+        // disabled, after the builtins — the picker OFFERS, it does not
+        // impose.
         if let Some(cat) = catalog {
             for info in cat {
                 let id = format!("attr:{}", info.id);
@@ -215,18 +220,18 @@ impl ColumnsPicker {
                 }
             }
         }
-        // Columnas DECLARADAS por plugins (#120), mismo criterio que los attrs:
-        // las no configuradas se ofrecen deshabilitadas al final.
+        // Columns DECLARED by plugins (#120), same criterion as the attrs:
+        // the unconfigured ones are offered disabled at the end.
         //
-        // Solo de plugins aprobados Y activados: ofrecer la columna de uno que
-        // el humano no ha consentido sería invitarle a configurar algo que el
-        // host se va a negar a servir, y la fila resultante pintaría en blanco
-        // sin decir por qué.
+        // Only from approved AND enabled plugins: offering the column of one
+        // the human has not consented to would be inviting them to configure
+        // something the host is going to refuse to serve, and the resulting
+        // row would paint blank with no explanation.
         //
-        // El id que se ofrece lleva el plugin dentro (`plugin:{p}/{c}`) — es
-        // la forma que `[ui.columns]` guarda y la que desde 0.35.0 identifica
-        // sin ambigüedad qué plugin sirve la columna cuando dos declaran el
-        // mismo id bare.
+        // The offered id carries the plugin inside (`plugin:{p}/{c}`) — it
+        // is the form `[ui.columns]` stores and, since 0.35.0, the one that
+        // unambiguously identifies which plugin serves the column when two
+        // declare the same bare id.
         for p in plugins {
             if !p.approved || !p.enabled {
                 continue;
@@ -247,47 +252,47 @@ impl ColumnsPicker {
         }
     }
 
-    /// Filas en orden de pintado.
+    /// Rows in paint order.
     #[must_use]
     pub fn rows(&self) -> &[PickerRow] {
         &self.rows
     }
 
-    /// Fila bajo el cursor.
+    /// The row under the cursor.
     #[must_use]
     pub fn cursor(&self) -> usize {
         self.cursor
     }
 
-    /// El orden en curso (se aplica al confirmar, no antes).
+    /// The sort order in progress (applied on confirm, not before).
     #[must_use]
     pub fn sort(&self) -> SortSpec {
         self.sort.clone()
     }
 
-    /// Scheme del pane que abrió el picker.
+    /// The scheme of the pane that opened the picker.
     #[must_use]
     pub fn scheme(&self) -> &str {
         &self.scheme
     }
 
-    /// ¿El save irá al override del scheme?
+    /// Will the save go to the scheme's override?
     #[must_use]
     pub fn scheme_override(&self) -> bool {
         self.scheme_override
     }
 
-    /// Cursor arriba (saturante).
+    /// Cursor up (saturating).
     pub fn up(&mut self) {
         self.cursor = self.cursor.saturating_sub(1);
     }
 
-    /// Cursor abajo (saturante).
+    /// Cursor down (saturating).
     pub fn down(&mut self) {
         self.cursor = (self.cursor + 1).min(self.rows.len().saturating_sub(1));
     }
 
-    /// Activa/desactiva la fila bajo el cursor. `name` es inmutable.
+    /// Toggles the row under the cursor. `name` is immutable.
     pub fn toggle(&mut self) {
         if self.cursor == 0 {
             return;
@@ -297,8 +302,8 @@ impl ColumnsPicker {
         }
     }
 
-    /// Sube la fila bajo el cursor un puesto (jamás por encima de `name`);
-    /// el cursor la sigue.
+    /// Moves the row under the cursor up one spot (never above `name`); the
+    /// cursor follows it.
     pub fn move_up(&mut self) {
         if self.cursor > 1 {
             self.rows.swap(self.cursor, self.cursor - 1);
@@ -306,7 +311,7 @@ impl ColumnsPicker {
         }
     }
 
-    /// Baja la fila bajo el cursor un puesto; el cursor la sigue.
+    /// Moves the row under the cursor down one spot; the cursor follows it.
     pub fn move_down(&mut self) {
         if self.cursor >= 1 && self.cursor + 1 < self.rows.len() {
             self.rows.swap(self.cursor, self.cursor + 1);
@@ -314,8 +319,8 @@ impl ColumnsPicker {
         }
     }
 
-    /// Ordena por la columna bajo el cursor con la semántica del click de
-    /// cabecera ([`SortSpec::after_click`]); no-op en filas no ordenables.
+    /// Sorts by the column under the cursor with the header click's
+    /// semantics ([`SortSpec::after_click`]); a no-op on non-sortable rows.
     pub fn sort_current(&mut self) {
         if let Some(sc) = self
             .rows
@@ -327,12 +332,12 @@ impl ColumnsPicker {
         }
     }
 
-    /// Cicla el formato de la fila bajo el cursor por su vocabulario
-    /// cerrado (#108 7b, tabla única [`crate::columns::next_format_id`]):
-    /// size `iec→si→exact→iec`, mtime `relative→iso→relative`, attrs por
-    /// la tabla de su hint (#117: Mode `rwx→octal→rwx`…); no-op en
-    /// name/kind/opacas (sin formato) y en filas BLOQUEADAS por un spec de
-    /// scheme (m2 — ver [`PickerRow::format_locked`]).
+    /// Cycles the row under the cursor's format through its closed
+    /// vocabulary (#108 7b, single table [`crate::columns::next_format_id`]):
+    /// size `iec→si→exact→iec`, mtime `relative→iso→relative`, attrs
+    /// through their hint's table (#117: Mode `rwx→octal→rwx`…); a no-op on
+    /// name/kind/opaque rows (no format) and on rows LOCKED by a scheme spec
+    /// (m2 — see [`PickerRow::format_locked`]).
     pub fn cycle_format(&mut self) {
         let Some(r) = self.rows.get_mut(self.cursor) else {
             return;
@@ -351,14 +356,14 @@ impl ColumnsPicker {
         }
     }
 
-    /// Formato vigente de la fila bajo el cursor (`None` = no admite
-    /// formato: name/kind/opacas).
+    /// The row under the cursor's current format (`None` = admits no format:
+    /// name/kind/opaque).
     #[must_use]
     pub fn format_of_cursor(&self) -> Option<String> {
         self.rows.get(self.cursor).and_then(|r| r.format.clone())
     }
 
-    /// El resultado a aplicar/persistir al confirmar.
+    /// The result to apply/persist on confirm.
     #[must_use]
     pub fn finish(&self) -> Picked {
         Picked {
@@ -370,8 +375,8 @@ impl ColumnsPicker {
                 .collect(),
             sort: self.sort.clone(),
             scheme_target: self.scheme_override.then(|| self.scheme.clone()),
-            // Las bloqueadas jamás se emiten (m2): el ciclo ya es no-op en
-            // ellas — el filtro extra es defensa en profundidad.
+            // Locked ones are never emitted (m2): the cycle is already a
+            // no-op on them — the extra filter is defense in depth.
             formats: self
                 .rows
                 .iter()
@@ -388,13 +393,13 @@ mod tests {
     use crate::columns::{Builtin, ColumnsSettings};
     use crate::sort::{SortColumn, SortDir, SortSpec};
 
-    fn settings_vacios() -> ColumnsSettings {
+    fn empty_settings() -> ColumnsSettings {
         ColumnsSettings::resolve(&norte_config::ColumnsConfig::default())
     }
 
-    /// Un catálogo como el del provider local: anuncia el modo POSIX con su
+    /// A catalogue like the local provider's: announces POSIX mode with its
     /// hint.
-    fn catalogo_con_modo() -> norte_proto::AttrCatalog {
+    fn catalog_with_mode() -> norte_proto::AttrCatalog {
         use norte_proto::attrs::{AttrHint, AttrInfo, AttrType};
         norte_proto::AttrCatalog::new(vec![AttrInfo {
             id: "posix.mode".into(),
@@ -404,25 +409,25 @@ mod tests {
         }])
     }
 
-    /// Abrir el selector y confirmarlo SIN tocar nada no cambia el listado
-    /// (spec 2026-09-20).
+    /// Opening the picker and confirming it WITHOUT touching anything does
+    /// not change the listing (spec 2026-09-20).
     ///
-    /// Es el fallo que encontró la revisión, y es de los caros: la columna
-    /// de permisos la pone el listado, no la configuración, así que el
-    /// selector no la veía y la enseñaba apagada. Confirmar escribe la lista
-    /// explícita de lo encendido, y a partir de ahí el set por defecto no
-    /// vuelve a correr NUNCA. O sea que entrar a encender «tipo» borraba los
-    /// permisos para siempre y sin decir nada.
+    /// This is the bug the review found, and it is one of the costly ones:
+    /// the permissions column is supplied by the listing, not the config, so
+    /// the picker could not see it and showed it as off. Confirming writes
+    /// the explicit list of what is on, and from then on the default set
+    /// NEVER runs again. So entering to turn on "kind" erased the
+    /// permissions forever and without saying anything.
     #[test]
-    fn confirmar_sin_tocar_nada_no_borra_los_permisos() {
-        let s = settings_vacios();
-        let cat = catalogo_con_modo();
+    fn confirming_without_touching_anything_does_not_erase_the_permissions() {
+        let s = empty_settings();
+        let cat = catalog_with_mode();
         let p = ColumnsPicker::open_with_catalog(&s, "file", SortSpec::default(), Some(&cat), &[]);
         assert!(
             p.rows()
                 .iter()
                 .any(|r| r.id == "attr:posix.mode" && r.enabled),
-            "el selector la enseña ENCENDIDA, que es como está: {:?}",
+            "the picker shows it ON, which is how it is: {:?}",
             p.rows()
                 .iter()
                 .map(|r| (&r.id, r.enabled))
@@ -430,44 +435,44 @@ mod tests {
         );
         assert!(
             p.finish().ids.iter().any(|id| id == "attr:posix.mode"),
-            "y confirmar la conserva"
+            "and confirming keeps it"
         );
     }
 
-    /// Donde el provider NO tiene permisos POSIX, el selector la ofrece
-    /// apagada, como cualquier otro atributo que no esté puesto.
+    /// Where the provider does NOT have POSIX permissions, the picker offers
+    /// it off, like any other attribute that is not set.
     #[test]
-    fn sin_catalogo_no_se_enciende_sola() {
-        let s = settings_vacios();
+    fn with_no_catalogue_it_does_not_turn_on_by_itself() {
+        let s = empty_settings();
         let p = ColumnsPicker::open_with_catalog(&s, "file", SortSpec::default(), None, &[]);
         assert!(
             !p.finish().ids.iter().any(|id| id == "attr:posix.mode"),
-            "no la pinta el listado, así que el selector tampoco la da por puesta"
+            "the listing does not paint it, so the picker does not assume it is set either"
         );
     }
 
     #[test]
-    fn cycle_format_rota_el_vocabulario_de_la_columna() {
-        let mut p = ColumnsPicker::open(&settings_vacios(), "file", SortSpec::default());
-        p.down(); // size (formato default iec)
+    fn cycle_format_cycles_the_columns_vocabulary() {
+        let mut p = ColumnsPicker::open(&empty_settings(), "file", SortSpec::default());
+        p.down(); // size (default format iec)
         p.cycle_format();
         assert_eq!(p.format_of_cursor().as_deref(), Some("si"));
         p.cycle_format();
         assert_eq!(p.format_of_cursor().as_deref(), Some("exact"));
         p.cycle_format();
-        assert_eq!(p.format_of_cursor().as_deref(), Some("iec")); // vuelta completa
-        // name/kind/opacos: no-op.
+        assert_eq!(p.format_of_cursor().as_deref(), Some("iec")); // full circle
+        // name/kind/opaque: no-op.
         p.up();
         p.cycle_format();
         assert_eq!(p.format_of_cursor(), None);
     }
 
-    /// m2 revisión 7b: un spec DEL SCHEME con formato BLOQUEA el ciclo —
-    /// el global que escribiríamos quedaría enmascarado por el override
-    /// (toast mentiroso) y fugaría a otros schemes. La fila sigue
-    /// enseñando el formato vigente.
+    /// m2 review 7b: a spec FROM THE SCHEME with a format LOCKS the cycle —
+    /// the global spec we would write would end up masked by the override (a
+    /// lying toast) and leak into other schemes. The row keeps showing the
+    /// current format.
     #[test]
-    fn formato_fijado_por_scheme_bloquea_el_ciclo() {
+    fn a_format_fixed_by_the_scheme_locks_the_cycle() {
         let cfg = norte_config::ColumnsConfig {
             schemes: [(
                 "sftp".to_owned(),
@@ -492,49 +497,50 @@ mod tests {
         assert_eq!(
             p.format_of_cursor().as_deref(),
             Some("exact"),
-            "la fila enseña el formato resuelto del scheme"
+            "the row shows the scheme's resolved format"
         );
-        assert!(p.rows()[p.cursor()].format_locked, "candado de scheme");
+        assert!(p.rows()[p.cursor()].format_locked, "scheme lock");
         p.cycle_format();
         assert_eq!(
             p.format_of_cursor().as_deref(),
             Some("exact"),
-            "bloqueada: el ciclo es no-op"
+            "locked: the cycle is a no-op"
         );
         assert!(
             p.finish().formats.is_empty(),
-            "jamás se emite una bloqueada"
+            "a locked one is never emitted"
         );
-        // El MISMO builtin en otro scheme sigue libre (el candado es del
-        // scheme, no global).
-        let mut libre = ColumnsPicker::open(&s, "file", SortSpec::default());
-        libre.down();
-        assert!(!libre.rows()[libre.cursor()].format_locked);
-        libre.cycle_format();
-        assert_eq!(libre.format_of_cursor().as_deref(), Some("si"));
+        // The SAME builtin on another scheme is still free (the lock is per
+        // scheme, not global).
+        let mut free = ColumnsPicker::open(&s, "file", SortSpec::default());
+        free.down();
+        assert!(!free.rows()[free.cursor()].format_locked);
+        free.cycle_format();
+        assert_eq!(free.format_of_cursor().as_deref(), Some("si"));
     }
 
     #[test]
-    fn finish_lleva_solo_los_formatos_cambiados() {
-        let mut p = ColumnsPicker::open(&settings_vacios(), "file", SortSpec::default());
+    fn finish_carries_only_the_changed_formats() {
+        let mut p = ColumnsPicker::open(&empty_settings(), "file", SortSpec::default());
         p.down();
         p.cycle_format(); // size → si
         let picked = p.finish();
         assert_eq!(picked.formats, vec![("size".to_owned(), "si".to_owned())]);
-        // sin cambios → vacío
-        let p2 = ColumnsPicker::open(&settings_vacios(), "file", SortSpec::default());
+        // no changes → empty
+        let p2 = ColumnsPicker::open(&empty_settings(), "file", SortSpec::default());
         assert!(p2.finish().formats.is_empty());
-        // Ciclar y VOLVER al valor de apertura también es "sin cambios":
-        // el diff es contra opened_format, no un flag de "tocado".
+        // Cycling and RETURNING to the opening value is also "no changes":
+        // the diff is against opened_format, not a "touched" flag.
         p.cycle_format(); // si → exact
-        p.cycle_format(); // exact → iec (valor de apertura)
+        p.cycle_format(); // exact → iec (opening value)
         assert!(p.finish().formats.is_empty());
     }
 
-    /// El seed parte del estilo RESUELTO del scheme, no del default: con un
-    /// spec `format = "si"` en config, el primer ciclo va si→exact.
+    /// The seed comes from the scheme's RESOLVED style, not the default:
+    /// with a `format = "si"` spec in config, the first cycle goes
+    /// si→exact.
     #[test]
-    fn open_siembra_el_formato_del_estilo_resuelto() {
+    fn open_seeds_the_format_from_the_resolved_style() {
         let cfg = norte_config::ColumnsConfig {
             specs: [(
                 "size".to_owned(),
@@ -552,7 +558,7 @@ mod tests {
         assert_eq!(p.format_of_cursor().as_deref(), Some("si"));
         p.cycle_format();
         assert_eq!(p.format_of_cursor().as_deref(), Some("exact"));
-        // Y finish emite el cambio RELATIVO a la apertura (si→exact).
+        // And finish emits the change RELATIVE to the opening (si→exact).
         assert_eq!(
             p.finish().formats,
             vec![("size".to_owned(), "exact".to_owned())]
@@ -560,13 +566,13 @@ mod tests {
     }
 
     #[test]
-    fn abre_con_el_set_efectivo_y_el_catalogo_restante() {
-        let p = ColumnsPicker::open(&settings_vacios(), "file", SortSpec::default());
-        // Default efectivo: name+size+mtime habilitadas; kind presente deshabilitada.
-        let estados: Vec<(Option<Builtin>, bool)> =
+    fn it_opens_with_the_effective_set_and_the_remaining_catalogue() {
+        let p = ColumnsPicker::open(&empty_settings(), "file", SortSpec::default());
+        // Effective default: name+size+mtime enabled; kind present disabled.
+        let states: Vec<(Option<Builtin>, bool)> =
             p.rows().iter().map(|r| (r.builtin, r.enabled)).collect();
         assert_eq!(
-            estados,
+            states,
             vec![
                 (Some(Builtin::Name), true),
                 (Some(Builtin::Size), true),
@@ -574,96 +580,103 @@ mod tests {
                 (Some(Builtin::Kind), false),
             ]
         );
-        assert!(!p.scheme_override(), "sin config no hay override de scheme");
+        assert!(
+            !p.scheme_override(),
+            "with no config there is no scheme override"
+        );
     }
 
     #[test]
-    fn toggle_apaga_y_enciende_pero_name_es_inmutable() {
-        let mut p = ColumnsPicker::open(&settings_vacios(), "file", SortSpec::default());
+    fn toggle_turns_off_and_on_but_name_is_immutable() {
+        let mut p = ColumnsPicker::open(&empty_settings(), "file", SortSpec::default());
         p.toggle(); // cursor 0 = name
-        assert!(p.rows()[0].enabled, "name jamás se apaga");
+        assert!(p.rows()[0].enabled, "name never turns off");
         p.down();
         p.toggle();
-        assert!(!p.rows()[1].enabled, "size se apaga");
+        assert!(!p.rows()[1].enabled, "size turns off");
         p.toggle();
         assert!(p.rows()[1].enabled);
     }
 
     #[test]
-    fn mover_reordena_pero_jamas_por_encima_de_name() {
-        let mut p = ColumnsPicker::open(&settings_vacios(), "file", SortSpec::default());
+    fn moving_reorders_but_never_above_name() {
+        let mut p = ColumnsPicker::open(&empty_settings(), "file", SortSpec::default());
         p.down(); // size
         p.down(); // mtime
         p.move_up(); // mtime <-> size
-        let orden: Vec<Option<Builtin>> = p.rows().iter().map(|r| r.builtin).collect();
-        assert_eq!(orden[1], Some(Builtin::Mtime));
-        assert_eq!(orden[2], Some(Builtin::Size));
-        assert_eq!(p.cursor(), 1, "el cursor sigue a la fila movida");
-        p.move_up(); // ya toca name: no-op
+        let order: Vec<Option<Builtin>> = p.rows().iter().map(|r| r.builtin).collect();
+        assert_eq!(order[1], Some(Builtin::Mtime));
+        assert_eq!(order[2], Some(Builtin::Size));
+        assert_eq!(p.cursor(), 1, "the cursor follows the moved row");
+        p.move_up(); // already touching name: no-op
         assert_eq!(p.rows()[0].builtin, Some(Builtin::Name));
         assert_eq!(p.cursor(), 1);
     }
 
     #[test]
-    fn sort_current_aplica_after_click_sobre_la_fila() {
-        let mut p = ColumnsPicker::open(&settings_vacios(), "file", SortSpec::default());
+    fn sort_current_applies_after_click_to_the_row() {
+        let mut p = ColumnsPicker::open(&empty_settings(), "file", SortSpec::default());
         p.down(); // size
         p.sort_current();
         assert_eq!(p.sort().column, SortColumn::Size);
         assert_eq!(p.sort().dir, SortDir::Asc);
-        p.sort_current(); // segunda vez invierte
+        p.sort_current(); // second time reverses it
         assert_eq!(p.sort().dir, SortDir::Desc);
     }
 
     #[test]
-    fn sort_current_en_fila_no_ordenable_es_noop() {
-        let mut p = ColumnsPicker::open(&settings_vacios(), "file", SortSpec::default());
+    fn sort_current_on_a_non_sortable_row_is_a_noop() {
+        let mut p = ColumnsPicker::open(&empty_settings(), "file", SortSpec::default());
         for _ in 0..3 {
             p.down(); // kind
         }
-        let antes = p.sort();
+        let before = p.sort();
         p.sort_current();
-        assert_eq!(p.sort(), antes, "kind no es ordenable");
+        assert_eq!(p.sort(), before, "kind is not sortable");
     }
 
     #[test]
-    fn finish_emite_solo_las_habilitadas_en_orden() {
-        let mut p = ColumnsPicker::open(&settings_vacios(), "file", SortSpec::default());
+    fn finish_emits_only_the_enabled_ones_in_order() {
+        let mut p = ColumnsPicker::open(&empty_settings(), "file", SortSpec::default());
         p.down();
-        p.toggle(); // size fuera
+        p.toggle(); // size out
         let picked = p.finish();
         assert_eq!(picked.ids, vec!["name".to_owned(), "mtime".to_owned()]);
-        assert_eq!(picked.scheme_target, None, "sin override → default");
+        assert_eq!(picked.scheme_target, None, "no override → default");
     }
 
     #[test]
-    fn ids_opacos_se_preservan_y_viajan_enteros() {
+    fn opaque_ids_are_preserved_and_travel_whole() {
         let cfg = norte_config::ColumnsConfig {
             default_columns: Some(vec![
                 "name".into(),
                 "attr:posix.mode".into(),
                 "size".into(),
-                "no parsea!".into(),
+                "does not parse!".into(),
             ]),
             ..Default::default()
         };
         let s = ColumnsSettings::resolve(&cfg);
         let mut p = ColumnsPicker::open(&s, "file", SortSpec::default());
-        // Los opacos están, habilitados, en su posición; el catálogo restante
-        // (mtime, kind) cierra la lista deshabilitado.
+        // The opaque ones are there, enabled, in their position; the
+        // remaining catalogue (mtime, kind) closes the list disabled.
         let ids: Vec<&str> = p.rows().iter().map(|r| r.id.as_str()).collect();
-        assert_eq!(ids[..4], ["name", "attr:posix.mode", "size", "no parsea!"]);
+        assert_eq!(
+            ids[..4],
+            ["name", "attr:posix.mode", "size", "does not parse!"]
+        );
         let picked = p.finish();
         assert!(picked.ids.contains(&"attr:posix.mode".to_owned()));
-        assert!(picked.ids.contains(&"no parsea!".to_owned()));
-        // Y son toggleables: apagar el attr lo saca del resultado.
+        assert!(picked.ids.contains(&"does not parse!".to_owned()));
+        // And they are toggleable: turning off the attr removes it from the
+        // result.
         p.down();
         p.toggle();
         assert!(!p.finish().ids.contains(&"attr:posix.mode".to_owned()));
     }
 
     #[test]
-    fn open_with_catalog_ofrece_attrs_no_configurados() {
+    fn open_with_catalog_offers_unconfigured_attrs() {
         use norte_proto::attrs::{AttrHint, AttrInfo, AttrType};
         let cat = norte_proto::AttrCatalog::new(vec![
             AttrInfo {
@@ -686,8 +699,8 @@ mod tests {
         let st = ColumnsSettings::resolve(&cfg);
         let mut p =
             ColumnsPicker::open_with_catalog(&st, "file", SortSpec::default(), Some(&cat), &[]);
-        // El configurado sigue habilitado; el anunciado no-configurado aparece
-        // deshabilitado al final, UNA sola vez.
+        // The configured one stays enabled; the announced-but-unconfigured
+        // one appears disabled at the end, exactly ONCE.
         let uid: Vec<_> = p
             .rows()
             .iter()
@@ -702,21 +715,22 @@ mod tests {
                 .count(),
             1
         );
-        // La fila attr con hint Mode cicla formato: rwx → octal.
-        let modo = p
+        // The attr row with hint Mode cycles format: rwx → octal.
+        let mode = p
             .rows()
             .iter()
             .position(|r| r.id == "attr:posix.mode")
             .unwrap();
-        assert_eq!(p.rows()[modo].format.as_deref(), Some("rwx"));
-        while p.cursor() != modo {
+        assert_eq!(p.rows()[mode].format.as_deref(), Some("rwx"));
+        while p.cursor() != mode {
             p.down();
         }
         p.cycle_format();
         assert_eq!(p.format_of_cursor().as_deref(), Some("octal"));
         p.cycle_format();
-        assert_eq!(p.format_of_cursor().as_deref(), Some("rwx"), "vuelta");
-        // Y la anunciada Identity no admite formato (sin tabla para su hint).
+        assert_eq!(p.format_of_cursor().as_deref(), Some("rwx"), "full circle");
+        // And the announced Identity one admits no format (no table for its
+        // hint).
         while p.cursor() + 1 < p.rows().len() {
             p.down();
         }
@@ -726,18 +740,18 @@ mod tests {
     }
 
     #[test]
-    fn open_sin_catalogo_conserva_la_conducta_historica() {
+    fn open_with_no_catalogue_keeps_the_historical_behaviour() {
         let st = ColumnsSettings::resolve(&norte_config::ColumnsConfig::default());
         let a = ColumnsPicker::open(&st, "file", SortSpec::default());
         let b = ColumnsPicker::open_with_catalog(&st, "file", SortSpec::default(), None, &[]);
         assert_eq!(a.rows(), b.rows());
     }
 
-    /// #117 review tarea 4 (a): una fila OFRECIDA del catálogo (nace
-    /// deshabilitada) se puede encender y su id viaja en `finish().ids` —
-    /// ofrecer sin poder elegir sería un picker de mentira.
+    /// #117 review task 4 (a): a row OFFERED from the catalogue (born
+    /// disabled) can be turned on and its id travels in `finish().ids` —
+    /// offering without being able to choose would be a fake picker.
     #[test]
-    fn fila_ofrecida_del_catalogo_se_enciende_y_viaja_en_finish() {
+    fn an_offered_catalogue_row_turns_on_and_travels_in_finish() {
         use norte_proto::attrs::{AttrHint, AttrInfo, AttrType};
         let cat = norte_proto::AttrCatalog::new(vec![AttrInfo {
             id: "posix.uid".into(),
@@ -757,15 +771,15 @@ mod tests {
         assert!(p.finish().ids.contains(&"attr:posix.uid".to_owned()));
     }
 
-    /// #117 review tarea 4 (b): un label HOSTIL del catálogo llega YA
-    /// enmascarado a `PickerRow.label` (`header_label` es el choke point; el
-    /// re-enmascarado de los frontends es cinturón, no la defensa).
+    /// #117 review task 4 (b): a HOSTILE label from the catalogue arrives
+    /// ALREADY masked at `PickerRow.label` (`header_label` is the choke
+    /// point; the frontends re-masking it is a belt, not the defense).
     #[test]
-    fn label_hostil_del_catalogo_llega_enmascarado() {
+    fn a_hostile_catalogue_label_arrives_masked() {
         use norte_proto::attrs::{AttrHint, AttrInfo, AttrType};
         let cat = norte_proto::AttrCatalog::new(vec![AttrInfo {
-            // `mem.` no es namespace de primera parte: sin clave Fluent, el
-            // label del catálogo es el que se enseña.
+            // `mem.` is not a first-party namespace: with no Fluent key, the
+            // catalogue's label is what gets shown.
             id: "mem.owner".into(),
             label: "Owner\u{202e}evil".into(),
             ty: AttrType::Bytes,
@@ -773,21 +787,24 @@ mod tests {
         }]);
         let st = ColumnsSettings::resolve(&norte_config::ColumnsConfig::default());
         let p = ColumnsPicker::open_with_catalog(&st, "file", SortSpec::default(), Some(&cat), &[]);
-        let fila = p
+        let row = p
             .rows()
             .iter()
             .find(|r| r.id == "attr:mem.owner")
-            .expect("fila ofrecida");
-        let label = fila.label.as_deref().expect("label del catálogo");
+            .expect("offered row");
+        let label = row.label.as_deref().expect("catalogue label");
         assert!(
             !label.chars().any(norte_encoding::is_terminal_hazard),
-            "hazard crudo en label: {label:?}"
+            "raw hazard in label: {label:?}"
         );
-        assert!(label.contains("Owner"), "conserva lo inocuo: {label:?}");
+        assert!(
+            label.contains("Owner"),
+            "keeps the harmless part: {label:?}"
+        );
     }
 
     #[test]
-    fn scheme_con_override_apunta_al_scheme() {
+    fn a_scheme_with_an_override_points_at_the_scheme() {
         let cfg = norte_config::ColumnsConfig {
             schemes: [(
                 "sftp".to_owned(),
@@ -804,13 +821,13 @@ mod tests {
         let p = ColumnsPicker::open(&s, "sftp", SortSpec::default());
         assert!(p.scheme_override());
         assert_eq!(p.finish().scheme_target.as_deref(), Some("sftp"));
-        let habilitadas: Vec<&str> = p
+        let enabled: Vec<&str> = p
             .rows()
             .iter()
             .filter(|r| r.enabled)
             .map(|r| r.id.as_str())
             .collect();
-        assert_eq!(habilitadas, ["name", "mtime"]);
+        assert_eq!(enabled, ["name", "mtime"]);
     }
 }
 
@@ -848,29 +865,30 @@ mod plugin_offer_tests {
         }
     }
 
-    /// Una columna declarada por un plugin consentido se OFRECE (#120). Antes
-    /// solo se llegaba a ella editando `[ui.columns]` a mano, que es tanto
-    /// como no ofrecerla.
+    /// A column declared by a consented plugin gets OFFERED (#120). Before
+    /// this, the only way to reach it was hand-editing `[ui.columns]`, which
+    /// is as good as not offering it.
     #[test]
-    fn se_ofrece_la_columna_de_un_plugin_consentido() {
+    fn a_consented_plugins_column_is_offered() {
         let st = ColumnsSettings::resolve(&norte_config::ColumnsConfig::default());
         let plugins = [plugin("org.norte.git", &["status"], true, true)];
         let p = ColumnsPicker::open_with_catalog(&st, "file", SortSpec::default(), None, &plugins);
-        let fila = p
+        let row = p
             .rows()
             .iter()
             .find(|r| r.id == "plugin:org.norte.git/status")
-            .expect("la columna declarada debe ofrecerse");
+            .expect("the declared column must be offered");
         assert!(
-            !fila.enabled,
-            "se OFRECE deshabilitada: el picker ofrece, no impone"
+            !row.enabled,
+            "it is OFFERED disabled: the picker offers, it does not impose"
         );
     }
 
-    /// Un plugin sin consentir no se ofrece: configurarlo daría una columna
-    /// que el host se niega a servir y que pintaría en blanco sin decir por qué.
+    /// An unconsented plugin is not offered: configuring it would give a
+    /// column the host refuses to serve, which would paint blank with no
+    /// explanation.
     #[test]
-    fn no_se_ofrece_lo_que_el_humano_no_ha_consentido() {
+    fn what_the_human_has_not_consented_to_is_not_offered() {
         let st = ColumnsSettings::resolve(&norte_config::ColumnsConfig::default());
         for (approved, enabled) in [(false, true), (true, false), (false, false)] {
             let plugins = [plugin("org.norte.git", &["status"], approved, enabled)];
@@ -878,16 +896,17 @@ mod plugin_offer_tests {
                 ColumnsPicker::open_with_catalog(&st, "file", SortSpec::default(), None, &plugins);
             assert!(
                 !p.rows().iter().any(|r| r.id.starts_with("plugin:")),
-                "approved={approved} enabled={enabled} no debe ofrecerse"
+                "approved={approved} enabled={enabled} must not be offered"
             );
         }
     }
 
-    /// Dos plugins pueden declarar el MISMO id bare, y las dos filas tienen que
-    /// existir por separado: el id que se ofrece lleva el plugin dentro, que es
-    /// justo lo que desde 0.35.0 el wire sabe distinguir (#120).
+    /// Two plugins can declare the SAME bare id, and the two rows have to
+    /// exist separately: the offered id carries the plugin inside, which is
+    /// exactly what the wire has been able to tell apart since 0.35.0
+    /// (#120).
     #[test]
-    fn dos_plugins_con_el_mismo_id_bare_dan_dos_filas() {
+    fn two_plugins_with_the_same_bare_id_give_two_rows() {
         let st = ColumnsSettings::resolve(&norte_config::ColumnsConfig::default());
         let plugins = [
             plugin("org.a.tool", &["status"], true, true),
@@ -897,8 +916,8 @@ mod plugin_offer_tests {
         for id in ["plugin:org.a.tool/status", "plugin:org.b.tool/status"] {
             assert!(
                 p.rows().iter().any(|r| r.id == id),
-                "falta la fila `{id}`: colapsarlas escondería una columna que el \
-                 usuario sí puede configurar"
+                "row `{id}` is missing: collapsing them would hide a column the \
+                 user can actually configure"
             );
         }
     }

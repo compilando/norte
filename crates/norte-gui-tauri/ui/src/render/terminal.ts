@@ -1,103 +1,101 @@
-// Pintor de `Screen` para el panel de terminal (#362, puente 95): función con
-// `this: Screen`, enganchada como propiedad en `render.ts`. El estado sigue en
-// la clase.
+// `Screen` painter for the terminal panel (#362, bridge 95): a function with
+// `this: Screen`, hooked in as a property in `render.ts`. State stays in the
+// class.
 
 import type { Screen } from "../render";
 import type { TerminalColorView, TerminalSlotView, TerminalSpanView } from "../types";
-import { nota } from "./dom";
+import { note } from "./dom";
 import type { SlotDom } from "./dom";
 
 /**
- * El panel de terminal: la rejilla que el host ya emuló.
+ * The terminal panel: the grid the host already emulated.
  *
- * Lo que llega son FILAS YA PINTADAS, no los bytes del pty. La emulación la
- * hace `norte-term` del lado del host —el mismo crate que usa la terminal—,
- * así que los dos frontends enseñan lo mismo por construcción y no porque
- * alguien compare dos emuladores.
+ * What arrives is ROWS ALREADY PAINTED, not the pty's bytes. The emulation is
+ * done by `norte-term` on the host's side — the same crate the terminal uses
+ * — so both frontends show the same thing by construction and not because
+ * someone compared two emulators.
  *
- * **Esto es contenido AJENO.** No lleva ni un rol del tema, y no debe: lo que
- * un programa pinta dentro es suyo, y teñirlo con el tema sería mentir sobre
- * lo que ese programa dijo. Lo nuestro es el marco, que lo pone el hueco.
+ * **This is FOREIGN content.** It carries no theme role, and must not: what a
+ * program paints inside is its own, and tinting it with the theme would lie
+ * about what that program said. Ours is the frame, set by the slot.
  *
- * Tampoco hay que sanear nada aquí, y no es un descuido: lo que sale de la
- * rejilla no puede llevar un byte de control, porque el parser se come los
- * escapes y tira los C0 que no mueven el cursor. Se pinta con
- * `textContent`, así que tampoco hay HTML que pueda colarse.
+ * Nothing needs sanitizing here either, and that is not an oversight: what
+ * comes out of the grid cannot carry a control byte, because the parser eats
+ * the escapes and drops the C0s that do not move the cursor. It is painted
+ * with `textContent`, so there is no HTML that could slip in either.
  */
 export function paintTerminal(this: Screen, dom: SlotDom, slot: TerminalSlotView): void {
   dom.root.setAttribute("aria-label", this.t("panelbar-terminal"));
   dom.scroller.className = "terminal";
   dom.title.replaceChildren(document.createTextNode(this.t("panelbar-terminal")));
   if (slot.no_shell) {
-    // Un panel en blanco y un panel sin shell se ven igual y no son lo mismo.
-    dom.scroller.replaceChildren(nota(this.t("terminal-none")));
+    // A blank panel and a panel with no shell look the same and are not the
+    // same thing.
+    dom.scroller.replaceChildren(note(this.t("terminal-none")));
     return;
   }
-  const filas = slot.rows.map((fila, y) => pintaFila(fila, y, slot.cursor));
-  dom.scroller.replaceChildren(...filas);
+  const rows = slot.rows.map((row, y) => paintRow(row, y, slot.cursor));
+  dom.scroller.replaceChildren(...rows);
 }
 
-/** Una fila: sus fragmentos, más el cursor si cae en ella. */
-function pintaFila(
-  fila: TerminalSpanView[],
+/** A row: its fragments, plus the cursor if it falls on it. */
+function paintRow(
+  row: TerminalSpanView[],
   y: number,
   cursor: [number, number] | null,
 ): HTMLElement {
-  const linea = document.createElement("div");
-  linea.className = "terminal-row";
-  // El cursor se pinta partiendo el fragmento donde cae, y no con una capa
-  // encima: una capa posicionada por columnas supone que todas las celdas
-  // miden lo mismo, y con un carácter ancho deja de ser verdad.
+  const line = document.createElement("div");
+  line.className = "terminal-row";
+  // The cursor is painted by splitting the fragment it falls on, not with a
+  // layer on top: a layer positioned by columns assumes every cell is the
+  // same width, and that stops being true with a wide character.
   const col = cursor !== null && cursor[0] === y ? cursor[1] : null;
   let x = 0;
-  for (const span of fila) {
-    // `Array.from` y no `split("")`: partir por unidades UTF-16 rompe un
-    // emoji por la mitad y deja dos mitades que no son caracteres.
+  for (const span of row) {
+    // `Array.from` and not `split("")`: splitting by UTF-16 units breaks an
+    // emoji in half and leaves two halves that are not characters.
     const chars = Array.from(span.text);
     if (col === null || col < x || col >= x + chars.length) {
-      linea.append(pintaSpan(span, span.text, false));
+      line.append(paintSpan(span, span.text, false));
       x += chars.length;
       continue;
     }
-    const corte = col - x;
-    if (corte > 0) {
-      linea.append(pintaSpan(span, chars.slice(0, corte).join(""), false));
+    const cut = col - x;
+    if (cut > 0) {
+      line.append(paintSpan(span, chars.slice(0, cut).join(""), false));
     }
-    linea.append(pintaSpan(span, chars[corte] ?? " ", true));
-    if (corte + 1 < chars.length) {
-      linea.append(pintaSpan(span, chars.slice(corte + 1).join(""), false));
+    line.append(paintSpan(span, chars[cut] ?? " ", true));
+    if (cut + 1 < chars.length) {
+      line.append(paintSpan(span, chars.slice(cut + 1).join(""), false));
     }
     x += chars.length;
   }
-  // El cursor detrás del último fragmento —o en una fila vacía— sigue siendo
-  // un sitio donde va: sin esto no se ve en un prompt recién pintado.
+  // The cursor past the last fragment — or on an empty row — is still a
+  // place it can be: without this it does not show on a freshly painted
+  // prompt.
   if (col !== null && col >= x) {
-    const hueco = document.createElement("span");
-    hueco.className = "terminal-cursor";
-    hueco.textContent = " ";
-    linea.append(hueco);
+    const gap = document.createElement("span");
+    gap.className = "terminal-cursor";
+    gap.textContent = " ";
+    line.append(gap);
   }
-  return linea;
+  return line;
 }
 
-function pintaSpan(
-  span: TerminalSpanView,
-  texto: string,
-  esCursor: boolean,
-): HTMLElement {
+function paintSpan(span: TerminalSpanView, text: string, isCursor: boolean): HTMLElement {
   const el = document.createElement("span");
-  // `textContent` y nunca `innerHTML`: esto lo escribió otro programa.
-  el.textContent = texto;
-  if (esCursor) {
+  // `textContent` and never `innerHTML`: this was written by another program.
+  el.textContent = text;
+  if (isCursor) {
     el.classList.add("terminal-cursor");
   }
-  // `reverse` se resuelve AQUÍ, intercambiando los dos colores: el host lo
-  // manda como bandera justamente para no perder cuál era cuál.
+  // `reverse` is resolved HERE, by swapping the two colors: the host sends it
+  // as a flag precisely so as not to lose which one was which.
   //
-  // Y el intercambio tiene que valer también cuando uno de los dos NO está.
-  // Un `ls` que invierte para marcar algo no manda colores: manda `SGR 7` a
-  // secas, y lo que espera es el papel al revés. Sin los dos colores por
-  // defecto explícitos, eso se quedaba en nada visible.
+  // And the swap has to work even when one of the two is NOT there. An `ls`
+  // that reverses to mark something does not send colors: it sends plain
+  // `SGR 7`, and what it expects is the paper flipped. Without both defaults
+  // made explicit, that used to end up invisible.
   const fg = span.reverse ? span.bg : span.fg;
   const bg = span.reverse ? span.fg : span.bg;
   if (fg !== undefined) {
@@ -121,15 +119,15 @@ function pintaSpan(
 }
 
 /**
- * El color de un fragmento, como CSS.
+ * A fragment's color, as CSS.
  *
- * Un índice sale como `var(--term-N)`: la paleta la define el TEMA, que es
- * quien tiene que decidir qué azul es el «color 4». Por eso el host lo manda
- * sin resolver — si lo hubiera resuelto él, esta línea no existiría y el panel
- * no obedecería al tema.
+ * An index comes out as `var(--term-N)`: the palette is defined by the
+ * THEME, which is the one that has to decide what blue "color 4" is. That is
+ * why the host sends it unresolved — if it had resolved it, this line would
+ * not exist and the panel would not obey the theme.
  *
- * Un `#rrggbb` lo eligió el programa y va tal cual: ahí no hay nada que
- * decidir.
+ * A `#rrggbb` was chosen by the program and travels as-is: there is nothing
+ * to decide there.
  */
 function css(color: TerminalColorView): string {
   return color.kind === "indexed" ? `var(--term-${color.index})` : color.hex;

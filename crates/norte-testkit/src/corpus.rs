@@ -1,29 +1,28 @@
-//! Corpus canónico de fixtures hostiles (spec §6.1/§12): al menos 48 nombres
-//! de archivo + 11 contenidos detectables + 3 solo-forzables. TODO crate que
-//! toque paths o texto testea contra ESTE corpus — las fixtures nuevas entran
-//! aquí (regla de CLAUDE.md: test-first en bugs de encoding).
+//! Canonical corpus of hostile fixtures (spec §6.1/§12): at least 48
+//! filenames + 11 detectable contents + 3 forced-only. EVERY crate that
+//! touches paths or text tests against THIS corpus — new fixtures go in
+//! here (CLAUDE.md rule: test-first on encoding bugs).
 //!
-//! Las cuentas son SUELOS (`>=`), no el número exacto (#169): antes se
-//! aserraba `== N` en dos sitios de este crate —la prueba de
-//! `tests/corpus.rs` y el doctest de [`hostile_names`]— que se ponían rojos
-//! en momentos DISTINTOS. `nextest` no corre doctests, así que añadir una
-//! fixture dejaba el segundo en rojo sin que `just t` lo viera; le pasó a
-//! `cause_join_spoof` (#161, fase C2), que no se supo hasta un `just ci`
-//! completo, dos rondas después. Un suelo no necesita tocarse al crecer el
-//! corpus —eso es justo lo que hace barata una fixture nueva— y sigue
-//! cazando el caso que la aserción existe para cazar: que alguien borre el
-//! corpus.
+//! The counts are FLOORS (`>=`), not the exact number (#169): it used to be
+//! asserted `== N` in two places in this crate —the `tests/corpus.rs` test
+//! and [`hostile_names`]'s doctest— which went red at DIFFERENT times.
+//! `nextest` does not run doctests, so adding a fixture left the second one
+//! red without `just t` ever seeing it; it happened to `cause_join_spoof`
+//! (#161, phase C2), which was not known until a full `just ci`, two rounds
+//! later. A floor does not need touching as the corpus grows —which is
+//! exactly what makes a new fixture cheap— and it still catches the case
+//! the assertion exists to catch: someone deleting the corpus.
 
 use serde::Deserialize;
 
-/// Un nombre de archivo hostil del corpus.
+/// A hostile filename from the corpus.
 #[derive(Debug, Clone)]
 pub struct HostileName {
-    /// Identificador estable (para nombres de test y mensajes).
+    /// Stable identifier (for test names and messages).
     pub id: String,
-    /// Los bytes crudos del nombre, tal como los daría el OS.
+    /// The name's raw bytes, exactly as the OS would give them.
     pub bytes: Vec<u8>,
-    /// Por qué es hostil (documentación viva).
+    /// Why it is hostile (living documentation).
     pub why: String,
 }
 
@@ -34,24 +33,25 @@ struct RawName {
     why: String,
 }
 
-/// Los nombres hostiles canónicos: al menos 48 (#169 — el suelo no sube solo
-/// porque el corpus crezca).
+/// The canonical hostile names: at least 48 (#169 — the floor does not rise
+/// on its own just because the corpus grows).
 ///
 /// ```
 /// let names = norte_testkit::corpus::hostile_names();
 /// assert!(names.len() >= 48, "{}", names.len());
-/// // Todos son segmentos VPath válidos (sin NUL ni `/`).
+/// // All are valid VPath segments (no NUL, no `/`).
 /// for n in &names {
 ///     assert!(norte_proto::Segment::new(n.bytes.clone()).is_ok(), "{}", n.id);
 /// }
 /// ```
 ///
 /// # Panics
-/// Nunca con el corpus commiteado: la fixture embebida se valida en tests.
+/// Never with the committed corpus: the embedded fixture is validated in
+/// tests.
 #[must_use]
 pub fn hostile_names() -> Vec<HostileName> {
     let raw: Vec<RawName> =
-        serde_json::from_str(include_str!("corpus/names.json")).expect("names.json válido");
+        serde_json::from_str(include_str!("corpus/names.json")).expect("valid names.json");
     raw.into_iter()
         .map(|r| HostileName {
             bytes: hex_decode(&r.hex),
@@ -61,158 +61,159 @@ pub fn hostile_names() -> Vec<HostileName> {
         .collect()
 }
 
-/// Por qué dos nombres del corpus son la MISMA ortografía para efectos de
-/// emparejamiento (`norte-compare::key`), aunque sus bytes difieran.
+/// Why two corpus names are the SAME spelling for matching purposes
+/// (`norte-compare::key`), even though their bytes differ.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TwinKind {
-    /// Misma forma Unicode NFC vs NFD del mismo texto — pareja incluso
-    /// comparando byte a byte con mayúsculas/minúsculas sensibles.
+    /// Same text in Unicode NFC vs NFD form — they match even comparing
+    /// byte-for-byte with case sensitivity.
     Normalization,
-    /// Mismo texto salvo un pliegue de mayúsculas SIMPLE (`char -> char`,
-    /// `CaseFolding.txt`), no `to_lowercase()`.
+    /// Same text except for a SIMPLE case fold (`char -> char`,
+    /// `CaseFolding.txt`), not `to_lowercase()`.
     CaseFold,
-    /// Pliegue COMPLETO (`char -> chars`, puede alargar el nombre): solo
-    /// empareja en filesystems que casefoldean full (ext4/f2fs `+F`), no en
-    /// los que pliegan simple (APFS, NTFS) — hueco aceptado, ver #145.
+    /// FULL fold (`char -> chars`, can lengthen the name): only matches on
+    /// filesystems that full-casefold (ext4/f2fs `+F`), not on ones that
+    /// simple-fold (APFS, NTFS) — accepted gap, see #145.
     CaseFoldFull,
-    /// Emparejan por una descomposición SINGLETON de NFC, y **no son el mismo
-    /// texto**: U+212A KELVIN SIGN contra la `K` ASCII (#152).
+    /// Match through a SINGLETON decomposition of NFC, and **are not the
+    /// same text**: U+212A KELVIN SIGN against the ASCII `K` (#152).
     ///
-    /// Es el único `TwinKind` cuyo par NO es un fichero visto de dos maneras,
-    /// sino DOS ficheros que la clave junta. Existe para poder escribir tests
-    /// que distingan el emparejamiento que se quiere del que hay que marcar.
+    /// It is the only `TwinKind` whose pair is NOT one file seen two ways,
+    /// but TWO files the key joins together. It exists so tests can tell
+    /// apart the matching that is wanted from the one that must be flagged.
     NormalizationSingleton,
 }
 
-/// Un par de nombres del corpus que son la misma ortografía.
+/// A pair of corpus names that are the same spelling.
 #[derive(Debug, Clone, Copy)]
 pub struct SpellingTwin {
-    /// El `id` del lado izquierdo en [`hostile_names`].
+    /// The left side's `id` in [`hostile_names`].
     pub left: &'static str,
-    /// El `id` del lado derecho.
+    /// The right side's `id`.
     pub right: &'static str,
-    /// Por qué emparejan.
+    /// Why they match.
     pub kind: TwinKind,
 }
 
-/// Los pares NFC/NFD y de pliegue de mayúsculas del corpus, por `id` — sin
-/// bytes hardcodeados de nuevo.
+/// The corpus's NFC/NFD and case-fold pairs, by `id` — without hardcoding
+/// bytes again.
 ///
-/// `norte-compare::key` es lo que estos pares prueban, y sus propios tests
-/// escribían `"café".as_bytes()` / `b"cafe\xcc\x81"` a mano en vez de leerlos
-/// de aquí (#169) — exactamente el mismo hardcodeo que un test exhaustivo de
-/// `dest_rel` habría repetido una tercera vez. Los IDs referenciados YA
-/// estaban en el corpus (#129 y auditorías de C2–C5); esta función es un
-/// ÍNDICE sobre ellos, no fixtures nuevas.
+/// `norte-compare::key` is what these pairs test, and its own tests used to
+/// write `"café".as_bytes()` / `b"cafe\xcc\x81"` by hand instead of reading
+/// them from here (#169) — exactly the same hardcoding an exhaustive
+/// `dest_rel` test would have repeated a third time. The referenced IDs were
+/// ALREADY in the corpus (#129 and the C2–C5 audits); this function is an
+/// INDEX over them, not new fixtures.
 ///
 /// # Panics
-/// Nunca con el corpus commiteado: cada `id` referenciado se valida en
+/// Never with the committed corpus: every referenced `id` is validated in
 /// tests.
 #[must_use]
 pub fn spelling_twins() -> Vec<SpellingTwin> {
     vec![
-        // é NFC / é NFD (e + combining acute): la pareja de normalización
-        // base, sin ningún pliegue de por medio.
+        // é NFC / é NFD (e + combining acute): the base normalization pair,
+        // with no fold in between.
         SpellingTwin {
             left: "nfc_e_acute",
             right: "nfd_e_acute",
             kind: TwinKind::Normalization,
         },
-        // La misma pareja, pero CON EXTENSIÓN. Existe aparte porque lo que
-        // fija es distinto: las dos se clasifican igual —la normalización no
-        // toca los bytes ASCII de `.png`— y aun así son dos ficheros que
-        // coexisten en ext4. El día que alguien «arregle» una búsqueda de
-        // hermanas casando nombres normalizados, abrirá el que llegue primero.
+        // The same pair, but WITH AN EXTENSION. It exists separately because
+        // what it pins is different: both classify the same —normalization
+        // does not touch `.png`'s ASCII bytes— and yet they are two files
+        // that coexist on ext4. The day someone "fixes" a sibling search by
+        // matching normalized names, it will open whichever comes first.
         SpellingTwin {
             left: "image_ext_nfc",
             right: "image_ext_nfd",
             kind: TwinKind::Normalization,
         },
-        // ΟΔΟΣ / οδοσ: `str::to_lowercase` aplica Final_Sigma y da ς, que NO
-        // es el pliegue simple.
+        // ΟΔΟΣ / οδοσ: `str::to_lowercase` applies Final_Sigma and gives ς,
+        // which is NOT the simple fold.
         SpellingTwin {
             left: "greek_uppercase_final_sigma",
             right: "greek_medial_sigma_twin",
             kind: TwinKind::CaseFold,
         },
         // µ (U+00B5 MICRO SIGN) / μ (U+03BC GREEK SMALL LETTER MU): Unicode
-        // ya llama minúscula al signo micro, así que `to_lowercase` no lo
-        // mueve — solo el pliegue lo hace.
+        // already calls the micro sign lowercase, so `to_lowercase` does not
+        // move it — only the fold does.
         SpellingTwin {
             left: "micro_sign_mu",
             right: "greek_mu_twin",
             kind: TwinKind::CaseFold,
         },
-        // Orthodox / orthodox: el pliegue de toda la vida, en ASCII puro. Los
-        // otros ocho pares son exotica no-ASCII, así que una ruta que solo se
-        // rompe con mayúsculas corrientes —un nombre de disposición
-        // comparado byte a byte y recompuesto en un fichero (#245)— no tenía
-        // ninguna fixture que la pillara.
+        // Orthodox / orthodox: the age-old fold, in plain ASCII. The other
+        // eight pairs are non-ASCII exotica, so a path that only breaks on
+        // ordinary uppercase —a layout name compared byte-for-byte and
+        // recomposed into a file (#245)— had no fixture to catch it.
         SpellingTwin {
             left: "ascii_case_twin_upper",
             right: "ascii_case_twin_lower",
             kind: TwinKind::CaseFold,
         },
-        // ﬅ / ﬆ: la única ligadura con pliegue simple.
+        // ﬅ / ﬆ: the only ligature with a simple fold.
         SpellingTwin {
             left: "ligature_long_st",
             right: "ligature_st",
             kind: TwinKind::CaseFold,
         },
-        // J+◌̌ (descompuesto) / ǰ (precompuesto): plegar RECOMPONE, así que
-        // el pliegue y la normalización van los dos a la vez.
+        // J+◌̌ (decomposed) / ǰ (precomposed): folding RECOMPOSES, so the
+        // fold and the normalization happen together.
         SpellingTwin {
             left: "nfd_uppercase_composed_only_lowercase",
             right: "precomposed_lowercase_j_caron",
             kind: TwinKind::CaseFold,
         },
-        // straße.txt / strasse.txt: ß solo tiene pliegue COMPLETO (a "ss"),
-        // que expande — empareja en ext4 `+F` y no en APFS/NTFS (#145).
+        // straße.txt / strasse.txt: ß only has a FULL fold (to "ss"), which
+        // expands — matches on ext4 `+F` and not on APFS/NTFS (#145).
         SpellingTwin {
             left: "ext4_full_fold_es_zett",
             right: "ext4_full_fold_ss",
             kind: TwinKind::CaseFoldFull,
         },
-        // ﬁle.txt / file.txt: la MISMA forma que el par de la ß, en la familia
-        // que la ß no alcanza. Hasta #214 la tabla de expansiones solo estaba
-        // ejercitada por `ß`, así que borrarle todas las demás filas no habría
-        // puesto un test rojo.
+        // ﬁle.txt / file.txt: the SAME shape as the ß pair, in the family the
+        // ß does not reach. Until #214 the expansion table was only
+        // exercised by `ß`, so deleting every other row would not have made
+        // a test go red.
         SpellingTwin {
             left: "full_fold_fi_ligature",
             right: "full_fold_fi_plain",
             kind: TwinKind::CaseFoldFull,
         },
-        // ﬔ.txt / մե.txt: una fila que a la tabla le FALTABA (#214), y no
-        // ASCII en ninguno de los dos lados — que es lo que caza una tabla de
-        // expansiones escrita como si por el otro lado solo saliera ASCII.
+        // ﬔ.txt / մե.txt: a row the table was MISSING (#214), and not ASCII
+        // on either side — which is what catches an expansion table written
+        // as if only ASCII ever came out the other side.
         SpellingTwin {
             left: "full_fold_armenian_ligature",
             right: "full_fold_armenian_plain",
             kind: TwinKind::CaseFoldFull,
         },
-        // nom­bre.txt / nombre.txt: el pliegue completo no solo EXPANDE, también
-        // DESCARTA (#214). Un guion suave es un Default_Ignorable, y el kernel
-        // genera sus tablas en la variante `nfdicf` — la `i` es «ignore default
-        // ignorables»—, así que en `+F` los dos son un fichero. Es el único par
-        // del corpus que el lector no puede distinguir mirándolo.
+        // nom­bre.txt / nombre.txt: the full fold does not only EXPAND, it
+        // also DROPS (#214). A soft hyphen is a Default_Ignorable, and the
+        // kernel generates its tables in the `nfdicf` variant — the `i` is
+        // "ignore default ignorables"—, so under `+F` the two are one file.
+        // It is the only pair in the corpus the reader cannot tell apart by
+        // looking at it.
         SpellingTwin {
             left: "full_fold_soft_hyphen",
             right: "full_fold_soft_hyphen_plain",
             kind: TwinKind::CaseFoldFull,
         },
-        // U+212A KELVIN SIGN / K: el par que NO es la misma ortografía y
-        // empareja igual, porque NFC tiene descomposiciones singleton (#152).
-        // Los otros cinco pares de esta lista son un fichero escrito de dos
-        // maneras; este son dos ficheros, y coexisten en ext4 sin problema.
+        // U+212A KELVIN SIGN / K: the pair that is NOT the same spelling and
+        // matches anyway, because NFC has singleton decompositions (#152).
+        // The other five pairs in this list are one file written two ways;
+        // this one is two files, and they coexist fine on ext4.
         SpellingTwin {
             left: "singleton_kelvin_sign",
             right: "ascii_capital_k",
             kind: TwinKind::NormalizationSingleton,
         },
-        // El mismo par con una cola cruda: la clave normaliza el prefijo válido
-        // de un nombre que no es texto entero (#154), así que estos dos también
-        // emparejan — y un detector de singletons que pidiera UTF-8 en TODO el
-        // nombre los daría por el mismo texto, que es el falso negativo caro.
+        // The same pair with a raw tail: the key normalizes the valid prefix
+        // of a name that is not whole text (#154), so these two also match —
+        // and a singleton detector that demanded UTF-8 over the WHOLE name
+        // would call them the same text, which is the expensive false
+        // negative.
         SpellingTwin {
             left: "singleton_kelvin_sign_invalid_tail",
             right: "ascii_capital_k_invalid_tail",
@@ -221,23 +222,23 @@ pub fn spelling_twins() -> Vec<SpellingTwin> {
     ]
 }
 
-/// Un contenido de archivo en un encoding no-UTF8.
+/// A file content in a non-UTF8 encoding.
 #[derive(Debug, Clone)]
 pub struct ContentFixture {
-    /// Identificador estable.
+    /// Stable identifier.
     pub id: &'static str,
-    /// Etiqueta WHATWG del encoding (la que entendería `encoding_rs`).
+    /// WHATWG label of the encoding (the one `encoding_rs` would understand).
     pub encoding: &'static str,
-    /// Los bytes crudos del archivo.
+    /// The file's raw bytes.
     pub bytes: Vec<u8>,
-    /// El texto que un decoder correcto debe producir.
+    /// The text a correct decoder must produce.
     pub decoded: &'static str,
 }
 
-/// Los 11 contenidos canónicos DETECTABLES. Texto base: `"año 2026\n"` (ñ fuera de ASCII),
-/// `"テスト\n"` para Shift-JIS, o `"it’s\n"` para la zona divergente
-/// 0x80–0x9F de windows-1252. Generados en código: deterministas,
-/// autodocumentados, sin binarios opacos en el repo.
+/// The 11 canonical DETECTABLE contents. Base text: `"año 2026\n"` (ñ outside
+/// ASCII), `"テスト\n"` for Shift-JIS, or `"it’s\n"` for windows-1252's
+/// divergent 0x80–0x9F zone. Generated in code: deterministic,
+/// self-documenting, no opaque binaries in the repo.
 #[must_use]
 pub fn content_fixtures() -> Vec<ContentFixture> {
     const TEXT: &str = "año 2026\n";
@@ -266,17 +267,17 @@ pub fn content_fixtures() -> Vec<ContentFixture> {
             decoded: TEXT,
         },
         ContentFixture {
-            // 0x95 0x32 0x82 0x36 = U+20000 (4 bytes, zona exclusiva de
-            // GB18030): caza decoders que se queden en GBK "clásico".
+            // 0x95 0x32 0x82 0x36 = U+20000 (4 bytes, GB18030-exclusive
+            // zone): catches decoders that stay stuck on "classic" GBK.
             id: "gb18030",
             encoding: "gb18030",
             bytes: b"\x95\x32\x82\x36 2026\n".to_vec(),
             decoded: "\u{20000} 2026\n",
         },
         ContentFixture {
-            // Cirílico PURO: KOI8-R y KOI8-U coinciden en letras (difieren
-            // en box-drawing) — chardetng puede decir KOI8-U y el decode
-            // sigue siendo exacto.
+            // PURE Cyrillic: KOI8-R and KOI8-U agree on the letters (they
+            // differ in box-drawing) — chardetng may say KOI8-U and the
+            // decode is still exact.
             id: "koi8_r",
             encoding: "koi8-r",
             bytes: b"\xf0\xd2\xc9\xd7\xc5\xd4 2026\n".to_vec(),
@@ -301,9 +302,9 @@ pub fn content_fixtures() -> Vec<ContentFixture> {
             decoded: TEXT,
         },
         ContentFixture {
-            // 0x92 = ’ en windows-1252 pero control U+0092 en ISO-8859-1
-            // estricto: caza decoders que confundan ambos (la ñ = 0xF1 no
-            // distingue, es idéntica en los dos).
+            // 0x92 = ’ in windows-1252 but control U+0092 in strict
+            // ISO-8859-1: catches decoders that mix up the two (ñ = 0xF1
+            // does not distinguish, it is identical in both).
             id: "windows_1252_curly",
             encoding: "windows-1252",
             bytes: b"it\x92s\n".to_vec(),
@@ -311,7 +312,7 @@ pub fn content_fixtures() -> Vec<ContentFixture> {
         },
         ContentFixture {
             id: "shift_jis",
-            // テスト en Shift-JIS + newline.
+            // テスト in Shift-JIS + newline.
             encoding: "shift_jis",
             bytes: vec![0x83, 0x65, 0x83, 0x58, 0x83, 0x67, 0x0A],
             decoded: "テスト\n",
@@ -327,25 +328,26 @@ pub fn content_fixtures() -> Vec<ContentFixture> {
             decoded: TEXT,
         },
         ContentFixture {
-            // Falso positivo de la aguja LEGACY de 1 byte: "ñ" en
-            // windows-1252/ISO-8859-15 = 0xF1, que en UTF-8 aparece como byte
-            // LÍDER de una secuencia de 4 bytes. `F1 84 80 81` = U+44001: el
-            // modo literal a-ciegas casa 0xF1 POR AZAR; la búsqueda
-            // ENCODING-AWARE (aguja = 0xC3 0xB1) NO. Canoniza el límite que
-            // hasta ahora solo vivía inline en engine_search.rs.
+            // False positive of the 1-byte LEGACY needle: "ñ" in
+            // windows-1252/ISO-8859-15 = 0xF1, which in UTF-8 appears as the
+            // LEAD byte of a 4-byte sequence. `F1 84 80 81` = U+44001: blind
+            // literal mode matches 0xF1 BY CHANCE; the ENCODING-AWARE search
+            // (needle = 0xC3 0xB1) does NOT. Canonicalizes the boundary that
+            // until now only lived inline in engine_search.rs.
             id: "cjk_utf8_lead_f1",
             encoding: "utf-8",
             bytes: CJK_UTF8_LEAD_F1.as_bytes().to_vec(),
             decoded: CJK_UTF8_LEAD_F1,
         },
         ContentFixture {
-            // Inyección por el PREVIEW de fs.search: la aguja + RLO (202E) +
-            // isolate (2066) SIN cerrar + ESC+OSC (`\x1b]0;pwn\x07`, cambia el
-            // título del terminal) + un C0 crudo (SOH). Un consumidor que
-            // pinte el preview directo ejecutaría el ANSI y vería el orden
-            // visual falsificado. El productor DEBE sanearlo en origen
-            // (mask_terminal_hazards): ningún char de is_terminal_hazard
-            // sobrevive. UTF-8 válido y sin NUL → detectable como texto.
+            // Injection through fs.search's PREVIEW: the needle + RLO
+            // (202E) + an UNCLOSED isolate (2066) + ESC+OSC
+            // (`\x1b]0;pwn\x07`, changes the terminal's title) + a raw C0
+            // (SOH). A consumer that paints the preview directly would
+            // execute the ANSI and see the forged visual order. The
+            // producer MUST sanitize it at the source
+            // (mask_terminal_hazards): no char from is_terminal_hazard
+            // survives. Valid UTF-8 and no NUL → detectable as text.
             id: "preview_bidi_ctrl_injection",
             encoding: "utf-8",
             bytes: PREVIEW_BIDI_CTRL_INJECTION.as_bytes().to_vec(),
@@ -354,23 +356,24 @@ pub fn content_fixtures() -> Vec<ContentFixture> {
     ]
 }
 
-/// Contenidos que un decoder CORRECTO produce CON PÉRDIDA (`had_errors`): se
-/// detectan como texto (con la certeza de un BOM) pero llevan un byte
-/// inválido para ese encoding, así que el decode canónico inserta `U+FFFD`.
+/// Contents a CORRECT decoder produces WITH LOSS (`had_errors`): detected as
+/// text (with a BOM's certainty) but carrying a byte invalid for that
+/// encoding, so the canonical decode inserts `U+FFFD`.
 ///
-/// Separados de [`content_fixtures`] a propósito — el contrato de ese corpus es
-/// «detectar como texto y decodificar EXACTO y sin pérdida», y sus tests lo
-/// afirman en bucle. Estos son la aguja de la señal `lossy` de la preview de
-/// plugin (#101) y de cualquier consumidor del honesto «esto vino de un decode
-/// fallido, no del fichero». `decoded` es lo que produce el decoder correcto:
-/// ya lleva el `U+FFFD`.
+/// Kept apart from [`content_fixtures`] on purpose — that corpus's contract
+/// is "detect as text and decode EXACT and lossless", and its tests assert
+/// that in a loop. These are the needle for the plugin preview's `lossy`
+/// signal (#101) and for any consumer of the honest "this came from a
+/// failed decode, not from the file". `decoded` is what the correct decoder
+/// produces: it already carries the `U+FFFD`.
 #[must_use]
 pub fn lossy_content_fixtures() -> Vec<ContentFixture> {
     vec![ContentFixture {
-        // BOM UTF-8 (EF BB BF) → detección de UTF-8 con CERTEZA (no
-        // estadística: sin el BOM, chardetng elegiría windows-1252 donde 0xFF
-        // es `ÿ` y el decode saldría limpio). El `0xFF` interior NUNCA es
-        // válido en UTF-8 → `U+FFFD` con had_errors.
+        // UTF-8 BOM (EF BB BF) → UTF-8 detection with CERTAINTY (not
+        // statistical: without the BOM, chardetng would pick windows-1252
+        // where 0xFF is `ÿ` and the decode would come out clean). The
+        // interior `0xFF` is NEVER valid in UTF-8 → `U+FFFD` with
+        // had_errors.
         id: "utf8_bom_invalid",
         encoding: "utf-8",
         bytes: {
@@ -382,47 +385,46 @@ pub fn lossy_content_fixtures() -> Vec<ContentFixture> {
     }]
 }
 
-/// Línea con `0xF1` como byte líder de un char de 4 bytes (`U+44001`): la
-/// aguja latina corta `ñ` (0xF1 en legacy) casa por azar en modo a-ciegas.
+/// A line with `0xF1` as the lead byte of a 4-byte char (`U+44001`): the
+/// short Latin needle `ñ` (0xF1 in legacy) matches by chance in blind mode.
 pub(crate) const CJK_UTF8_LEAD_F1: &str = "汉字 \u{44001} texto\n";
 
-/// Línea hostil para el preview de `fs.search`: aguja `aguja` + RLO + isolate
-/// sin cerrar + ESC+OSC + C0 crudo. Ningún char de terminal-hazard debe
-/// sobrevivir al saneo en origen.
+/// Hostile line for `fs.search`'s preview: needle `needle` + RLO + an
+/// unclosed isolate + ESC+OSC + a raw C0. No terminal-hazard char must
+/// survive sanitizing at the source.
 pub(crate) const PREVIEW_BIDI_CTRL_INJECTION: &str =
     "aguja \u{202E}reovni\u{2066} \u{1B}]0;pwn\u{07}\u{01}fin\n";
 
-/// Un chord hostil del corpus (encoding audit H1): un token de UN solo
-/// codepoint, elegido de [`norte_encoding::is_terminal_hazard`], que
-/// `norte_frontend::keymap::parse_chord` acepta sin más como
-/// `KeyCode::Char` — CUALQUIER codepoint suelto parsea, el motor de keymap
-/// no filtra hazards (esa no es su responsabilidad; ver el comentario en
-/// `parse_chord`). Un `./.norte/keymap.toml` (capa de PROYECTO, sin trust)
-/// puede ligar uno de estos a un comando soportado; `Chord`'s `Display`
-/// lo escribe CRUDO a propósito (logs/debug quieren el chord real), así
-/// que todo consumidor que pinte el chord FORMATEADO (ayuda generada,
-/// palette) debe enmascararlo — este corpus ejercita esa obligación
-/// render-side.
+/// A hostile chord from the corpus (encoding audit H1): a token of ONE
+/// single codepoint, chosen from [`norte_encoding::is_terminal_hazard`],
+/// that `norte_frontend::keymap::parse_chord` accepts outright as a
+/// `KeyCode::Char` — ANY loose codepoint parses, the keymap engine does not
+/// filter hazards (that is not its job; see the comment in `parse_chord`).
+/// A `./.norte/keymap.toml` (PROJECT layer, no trust) can bind one of these
+/// to a supported command; `Chord`'s `Display` writes it RAW on purpose
+/// (logs/debug want the real chord), so every consumer that paints the
+/// FORMATTED chord (generated help, palette) must mask it — this corpus
+/// exercises that render-side obligation.
 #[derive(Debug, Clone)]
 pub struct HostileChord {
-    /// Identificador estable (para nombres de test y mensajes).
+    /// Stable identifier (for test names and messages).
     pub id: &'static str,
-    /// El token, tal como iría en `on = [...]` de un keymap.toml (un solo
-    /// codepoint).
+    /// The token, exactly as it would go in a keymap.toml's `on = [...]`
+    /// (a single codepoint).
     pub token: char,
-    /// Por qué es hostil (documentación viva).
+    /// Why it is hostile (living documentation).
     pub why: &'static str,
 }
 
-/// Los 4 chords hostiles canónicos: un solo codepoint cada uno (dos o más
-/// codepoints ya los rechaza `parse_chord`, ver
-/// `parse_chord_rechaza_tokens_multi_codepoint_sin_partir` en
-/// `norte-frontend`), cada uno un hazard de terminal distinto.
+/// The 4 canonical hostile chords: a single codepoint each (two or more
+/// codepoints are already rejected by `parse_chord`, see
+/// `parse_chord_rejects_multi_codepoint_tokens_without_splitting` in
+/// `norte-frontend`), each a different terminal hazard.
 ///
 /// ```
 /// let chords = norte_testkit::corpus::hostile_chords();
 /// assert_eq!(chords.len(), 4);
-/// // Todos son hazards de terminal detectados por la fuente única.
+/// // All are terminal hazards detected through the single source.
 /// for c in &chords {
 ///     assert!(norte_encoding::is_terminal_hazard(c.token), "{}", c.id);
 /// }
@@ -433,27 +435,28 @@ pub fn hostile_chords() -> Vec<HostileChord> {
         HostileChord {
             id: "rlo",
             token: '\u{202E}',
-            why: "RIGHT-TO-LEFT OVERRIDE: reordena visualmente TODO lo que \
-                  sigue en la línea — en un footer `[chord] etiqueta` puede \
-                  hacer que cancel/confirm se vean intercambiados",
+            why: "RIGHT-TO-LEFT OVERRIDE: visually reorders EVERYTHING that \
+                  follows on the line — in a footer `[chord] label` it can \
+                  make cancel/confirm look swapped",
         },
         HostileChord {
             id: "zwsp",
             token: '\u{200B}',
-            why: "ZERO WIDTH SPACE: invisible, dos chords bindeados a \
-                  comandos distintos pueden pintarse indistinguibles",
+            why: "ZERO WIDTH SPACE: invisible, two chords bound to \
+                  different commands can render indistinguishably",
         },
         HostileChord {
             id: "lrm",
             token: '\u{200E}',
-            why: "LEFT-TO-RIGHT MARK: override bidi invisible, altera el \
-                  orden visual de texto RTL vecino sin dejar marca visible",
+            why: "LEFT-TO-RIGHT MARK: an invisible bidi override, alters \
+                  the visual order of neighboring RTL text without leaving \
+                  a visible mark",
         },
         HostileChord {
             id: "bel",
             token: '\u{0007}',
-            why: "BEL (control C0): un terminal sin sanear lo EJECUTA \
-                  (campana/pitido) en vez de pintarlo como texto",
+            why: "BEL (C0 control): an unsanitized terminal EXECUTES it \
+                  (bell/beep) instead of painting it as text",
         },
     ]
 }
@@ -470,26 +473,25 @@ pub fn hostile_chords() -> Vec<HostileChord> {
 /// that prints attacker-controlled bytes, so it is the one that must mask.
 #[derive(Debug, Clone)]
 pub struct HostileRun {
-    /// Identificador estable (para nombres de test y mensajes).
+    /// Stable identifier (for test names and messages).
     pub id: &'static str,
-    /// El nombre de comando, tal como iría en `run = "..."` de un
-    /// keymap.toml — todos expresables con `\uXXXX` en una cadena TOML
-    /// básica, que es como llegarían de verdad.
+    /// The command name, exactly as it would go in a keymap.toml's
+    /// `run = "..."` — all expressible with `\uXXXX` in a basic TOML
+    /// string, which is how they would really arrive.
     pub run: &'static str,
-    /// Por qué es hostil (documentación viva).
+    /// Why it is hostile (living documentation).
     pub why: &'static str,
 }
 
-/// Los 4 `run` hostiles canónicos. NINGUNO está en el catálogo compartido
-/// (la búsqueda es igualdad de bytes), así que los cuatro son
-/// `KeymapError::UnknownCommand` — la clasificación es correcta y lo que
-/// miente es el RENDER. Por eso este corpus ejercita el enmascarado, no la
-/// búsqueda.
+/// The 4 canonical hostile `run`s. NONE is in the shared catalogue (the
+/// lookup is byte equality), so all four are `KeymapError::UnknownCommand` —
+/// the classification is correct and what lies is the RENDER. That is why
+/// this corpus exercises masking, not lookup.
 ///
 /// ```
 /// let runs = norte_testkit::corpus::hostile_runs();
 /// assert_eq!(runs.len(), 4);
-/// // Cada uno lleva al menos un hazard de terminal, por la fuente única.
+/// // Each one carries at least one terminal hazard, through the single source.
 /// for r in &runs {
 ///     assert!(
 ///         r.run.chars().any(norte_encoding::is_terminal_hazard),
@@ -504,31 +506,33 @@ pub fn hostile_runs() -> Vec<HostileRun> {
         HostileRun {
             id: "run_rlo_catalogue_twin",
             run: "app.\u{202E}tiuq",
-            why: "RIGHT-TO-LEFT OVERRIDE: se PINTA como `app.quit`. El aviso \
-                  de `norte doctor` nombra un comando que el usuario no \
-                  puede distinguir del legítimo, así que «corrige» el que no \
-                  es. Prueba que el arreglo es enmascarar, no buscar mejor",
+            why: "RIGHT-TO-LEFT OVERRIDE: it is PAINTED as `app.quit`. \
+                  `norte doctor`'s warning names a command the user cannot \
+                  tell apart from the legitimate one, so they \"fix\" the \
+                  wrong one. Proves the fix is masking, not a better lookup",
         },
         HostileRun {
             id: "run_zwsp_catalogue_twin",
             run: "app.qu\u{200B}it",
-            why: "ZERO WIDTH SPACE: invisible. El nombre impreso es idéntico \
-                  al real y distinto en bytes, así que el diagnóstico es \
-                  literalmente inaccionable",
+            why: "ZERO WIDTH SPACE: invisible. The printed name is \
+                  identical to the real one and different in bytes, so the \
+                  diagnostic is literally unactionable",
         },
         HostileRun {
             id: "run_osc_title_injection",
             run: "app.quit\u{001B}]0;pwned\u{0007}",
-            why: "ESC + OSC 0 + BEL: un terminal sin sanear EJECUTA la \
-                  secuencia y le cambia el título. La mitad C0 es la que \
-                  `escape_debug` sí caza — por eso no basta con `{:?}`",
+            why: "ESC + OSC 0 + BEL: an unsanitized terminal EXECUTES the \
+                  sequence and changes its title. The C0 half is the one \
+                  `escape_debug` DOES catch — which is why `{:?}` alone is \
+                  not enough",
         },
         HostileRun {
             id: "run_lo_invisible",
             run: "pane.copy\u{3164}",
-            why: "HANGUL FILLER: hazard de norte (#125) que `escape_debug` \
-                  NO escapa, porque es Lo y no Cf. Este es el que demuestra \
-                  que la protección accidental del camino `{:?}` no alcanza",
+            why: "HANGUL FILLER: a norte hazard (#125) that `escape_debug` \
+                  does NOT escape, because it is Lo and not Cf. This is the \
+                  one that shows the `{:?}` path's accidental protection \
+                  does not reach far enough",
         },
     ]
 }
@@ -597,16 +601,16 @@ pub struct GridLine {
 ///     assert!(l.text.chars().count() >= 20, "{}", l.id);
 /// }
 /// // And the reference row is plain ASCII: it is what the others align to.
-/// let regla = lines.iter().find(|l| l.id == "ascii_ruler").unwrap();
-/// assert!(regla.text.is_ascii());
+/// let ruler = lines.iter().find(|l| l.id == "ascii_ruler").unwrap();
+/// assert!(ruler.text.is_ascii());
 /// ```
 #[must_use]
 pub fn viewer_grid_lines() -> Vec<GridLine> {
     vec![
         GridLine {
             id: "ascii_ruler",
-            // `0123456789` veinte veces: la columna N lleva el dígito N % 10,
-            // así que un desplazamiento se lee a ojo en el fallo de un test.
+            // `0123456789` repeated twenty times: column N carries digit
+            // N % 10, so a shift reads by eye in a test's failure output.
             text: "0123456789".repeat(20),
             why: "the reference row. Plain ASCII, one cell per character, so \
                   it is what every other line's columns must line up with \
@@ -908,15 +912,15 @@ pub struct HostileTopicId {
 ///
 /// // The clamp twins differ, and only AFTER the byte where a 4096-byte
 /// // ceiling would have cut them.
-/// let par = ids.iter().find(|i| i.id == "id_clamp_twins").unwrap();
-/// let gemelo = par.twin.as_ref().expect("a collision needs two ids");
-/// assert_ne!(&par.text, gemelo);
-/// assert_eq!(&par.text[..4093], &gemelo[..4093]);
+/// let pair = ids.iter().find(|i| i.id == "id_clamp_twins").unwrap();
+/// let twin = pair.twin.as_ref().expect("a collision needs two ids");
+/// assert_ne!(&pair.text, twin);
+/// assert_eq!(&pair.text[..4093], &twin[..4093]);
 ///
 /// // The invisible twin is BLANK by the parser's definition, which is what
 /// // `is_blank_id` exists for: a page named with it has no name at all.
-/// let hueco = ids.iter().find(|i| i.id == "id_hangul_filler").unwrap();
-/// assert!(hueco.text.ends_with('\u{3164}'));
+/// let blank = ids.iter().find(|i| i.id == "id_hangul_filler").unwrap();
+/// assert!(blank.text.ends_with('\u{3164}'));
 /// ```
 #[must_use]
 pub fn hostile_topic_ids() -> Vec<HostileTopicId> {
@@ -1026,24 +1030,24 @@ pub fn hostile_help_docs() -> Vec<HostileHelpDoc> {
     w1252.extend_from_slice(b"tulo\"\n+++\ncuerpo\n");
 
     let utf16le = {
-        let texto = "+++\nid = \"org.acme.demo\"\ntitle = \"Página\"\n+++\ncuerpo\n";
+        let text = "+++\nid = \"org.acme.demo\"\ntitle = \"Página\"\n+++\ncuerpo\n";
         let mut out = vec![0xFF, 0xFE];
-        for u in texto.encode_utf16() {
+        for u in text.encode_utf16() {
             out.extend_from_slice(&u.to_le_bytes());
         }
         out
     };
 
-    let diecisiete = {
-        // `plugin:<id>:<cmd>`: la ayuda de un tercero solo puede referirse a
-        // SUS comandos, así que sin el prefijo la lista se cae entera y el
-        // tope de cabecera no se llega a rozar.
-        let lista: Vec<String> = (0..17)
+    let seventeen = {
+        // `plugin:<id>:<cmd>`: a third party's help can only refer to ITS
+        // OWN commands, so without the prefix the whole list falls out and
+        // the header cap never even gets grazed.
+        let list: Vec<String> = (0..17)
             .map(|i| format!("\"plugin:org.acme.demo:c{i}\""))
             .collect();
         format!(
             "+++\nid = \"org.acme.demo\"\ntitle = \"Muchos\"\ncommands = [{}]\n+++\ncuerpo\n",
-            lista.join(", ")
+            list.join(", ")
         )
         .into_bytes()
     };
@@ -1105,7 +1109,7 @@ pub fn hostile_help_docs() -> Vec<HostileHelpDoc> {
         },
         HostileHelpDoc {
             id: "doc_17_commands",
-            bytes: diecisiete,
+            bytes: seventeen,
             publisher: None,
             why: "one command over `MAX_HEADER_COMMANDS` (16). The cap is a \
                   memory bound as much as a display one — the front matter is \
@@ -1117,19 +1121,19 @@ pub fn hostile_help_docs() -> Vec<HostileHelpDoc> {
 }
 
 fn hex_decode(s: &str) -> Vec<u8> {
-    assert!(s.len().is_multiple_of(2), "hex de longitud par: {s}");
+    assert!(s.len().is_multiple_of(2), "even-length hex: {s}");
     (0..s.len())
         .step_by(2)
-        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).expect("dígitos hex"))
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).expect("hex digits"))
         .collect()
 }
 
-/// Contenidos que la detección NO puede resolver (spec §6: recuperables
-/// SOLO con «recargar como…» forzado): UTF-16 sin BOM (cae a binario por
-/// la heurística NUL — contrato deliberado) y un BOM espurio que es DATO.
+/// Contents detection CANNOT resolve (spec §6: recoverable ONLY with a
+/// forced "reload as…"): UTF-16 without a BOM (falls to binary through the
+/// NUL heuristic — a deliberate contract) and a spurious BOM that is DATA.
 ///
-/// El contrato: `detect` no da su encoding, pero `decode_forced` con la
-/// etiqueta debe ser EXACTO y sin pérdidas.
+/// The contract: `detect` gives no encoding, but `decode_forced` with the
+/// label must be EXACT and lossless.
 #[must_use]
 pub fn content_fixtures_forced() -> Vec<ContentFixture> {
     const TEXT: &str = "año 2026\n";
@@ -1159,9 +1163,9 @@ pub fn content_fixtures_forced() -> Vec<ContentFixture> {
             decoded: TEXT,
         },
         ContentFixture {
-            // FE FF como DATOS windows-1252 (þÿ): un decode que sniffe el
-            // BOM por encima del encoding FORZADO viola "siempre
-            // corregible a mano" (spec §6.2).
+            // FE FF as windows-1252 DATA (þÿ): a decode that sniffs the
+            // BOM over the FORCED encoding violates "always fixable by
+            // hand" (spec §6.2).
             id: "w1252_fake_bom",
             encoding: "windows-1252",
             bytes: b"\xFE\xFF Fahr.\n".to_vec(),
@@ -1211,18 +1215,18 @@ pub struct PosixMode {
 /// ```
 /// let modes = norte_testkit::corpus::posix_modes();
 /// // A mode with no type bits is NOT a regular file.
-/// let sin_clase = modes.iter().find(|m| m.id == "no_type_bits").unwrap();
-/// assert!(sin_clase.rwx.starts_with('?'));
-/// assert_eq!(sin_clase.twin, Some(0o100_644), "y su gemelo sí lo es");
+/// let classless = modes.iter().find(|m| m.id == "no_type_bits").unwrap();
+/// assert!(classless.rwx.starts_with('?'));
+/// assert_eq!(classless.twin, Some(0o100_644), "and its twin is one");
 /// // Two modes whose first seven cells are identical: cut there, they lie.
-/// let par = modes.iter().find(|m| m.id == "truncation_twins").unwrap();
-/// assert!(par.twin.is_some());
+/// let pair = modes.iter().find(|m| m.id == "truncation_twins").unwrap();
+/// assert!(pair.twin.is_some());
 /// ```
 #[must_use]
 #[expect(
     clippy::too_many_lines,
-    reason = "es una TABLA: quince modos con su porqué escrito al lado. \
-              Partirla en dos mitades solo esconde media lista"
+    reason = "it is a TABLE: fifteen modes with their reason written beside \
+              them. Splitting it in two halves would only hide half the list"
 )]
 pub fn posix_modes() -> Vec<PosixMode> {
     vec![

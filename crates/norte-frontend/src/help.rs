@@ -143,14 +143,15 @@ pub struct HelpState {
     focus: Focus,
     actions: Vec<Action>,
     action_cursor: usize,
-    /// El foco ACABA de llegar al cuerpo y el cursor de acciones todavía no se
-    /// ha movido (#ayuda): mientras esté puesto, quien pinta debe traer el
-    /// cursor a lo que YA se está leyendo en vez de llevarse la vista hasta
-    /// donde esté el cursor.
+    /// Focus has JUST arrived at the body and the action cursor has not
+    /// moved yet (#help): while it is set, whoever paints must bring the
+    /// cursor to what is ALREADY being read instead of dragging the view to
+    /// wherever the cursor is.
     ///
-    /// Sin esto, pasar al cuerpo te teletransportaba a la primera línea
-    /// ejecutable — que en una página larga está detrás de toda la prosa—, así
-    /// que `Tab` no parecía cambiar de columna: parecía saltar al final.
+    /// Without this, moving to the body would teleport you to the first
+    /// executable line — which on a long page sits behind all the prose —
+    /// so `Tab` did not look like it changed column: it looked like it
+    /// jumped to the end.
     action_follows_view: bool,
     body_scroll: usize,
     /// Plugin nodes, in catalogue order, minus the ones dropped by
@@ -678,16 +679,16 @@ impl HelpState {
     /// Paging the body moves the SCROLL and not the action cursor: a page is
     /// a movement over prose, and most of a topic is prose with no action on
     /// it at all.
-    /// **Quién llama a esto, por superficie** (#267): el TUI, en las dos
-    /// mitades, porque pinta en una rejilla y no tiene scroll que delegar.
-    /// La ventana gráfica SOLO en la lateral: el cuerpo de una página cruza
-    /// su puente entero y lo desplaza el DOM, así que mover aquí
-    /// `body_scroll` crearía una segunda verdad sobre por dónde va la ayuda
-    /// y solo una de las dos se pintaría. Un tercer renderer sin scroll
-    /// nativo usa las dos mitades, como el TUI.
+    /// **Who calls this, by surface** (#267): the TUI, on both halves,
+    /// because it paints on a grid and has no scroll to delegate to. The
+    /// graphical window ONLY on the sidebar: a page's body crosses its
+    /// whole bridge and the DOM scrolls it, so moving `body_scroll` here
+    /// would create a second truth about where the help is, and only one
+    /// of the two would get painted. A third renderer with no native scroll
+    /// uses both halves, like the TUI.
     pub fn page_up(&mut self, n: usize) {
-        // Paginar es leer, no elegir: la vista manda y el cursor se queda
-        // donde el lector lo deje al volver a moverlo.
+        // Paging is reading, not choosing: the view governs and the cursor
+        // stays wherever the reader leaves it once they move it again.
         self.action_follows_view = true;
         match self.focus {
             Focus::Topics => self.move_sidebar(false, n),
@@ -792,25 +793,26 @@ impl HelpState {
         self.focus = match self.focus {
             Focus::Body => Focus::Topics,
             Focus::Topics => {
-                // El cursor va a donde está el lector, no al revés.
+                // The cursor goes to where the reader is, not the other way
+                // around.
                 self.action_follows_view = true;
                 Focus::Body
             }
         };
     }
 
-    /// ¿Tiene que traerse el cursor de acciones a la vista actual, en vez de
-    /// llevarse la vista al cursor? Ver [`Self::action_follows_view`] en la
-    /// struct: lo arma [`Self::toggle_focus`] y lo desarma el primer
-    /// movimiento del lector.
+    /// Does the action cursor have to be brought to the current view,
+    /// instead of dragging the view to the cursor? See
+    /// [`Self::action_follows_view`] in the struct: [`Self::toggle_focus`]
+    /// arms it and the reader's first move disarms it.
     #[must_use]
     pub fn action_follows_view(&self) -> bool {
         self.action_follows_view
     }
 
-    /// Pone el cursor de acciones en `i` SIN que la vista lo persiga: es lo
-    /// que hace quien pinta cuando el foco acaba de llegar al cuerpo y ya sabe
-    /// qué acciones caen dentro de la ventana.
+    /// Puts the action cursor at `i` WITHOUT the view chasing it: this is
+    /// what the painter does once focus has just arrived at the body and it
+    /// already knows which actions fall inside the window.
     pub fn settle_action_cursor(&mut self, i: usize) {
         self.clamp_action(i);
         self.action_follows_view = false;
@@ -881,20 +883,19 @@ impl HelpState {
     /// contents the author wrote, and silently regrouping it would reorder
     /// the reading path.
     fn rebuild_rows(&mut self) {
-        let needle = plegar(&self.filter);
-        // Dos niveles (ver `matches`): el texto de las páginas solo cuenta
-        // cuando ninguna se llama así ni documenta un comando que lo sea.
-        let por_texto =
-            !needle.is_empty() && !topics(self.lang).iter().any(|t| matches(t, &needle));
+        let needle = fold_for_search(&self.filter);
+        // Two tiers (see `matches`): a page's text only counts when none of
+        // them is named that or documents a command that is.
+        let by_text = !needle.is_empty() && !topics(self.lang).iter().any(|t| matches(t, &needle));
         let mut rows: Vec<SidebarRow> = Vec::new();
         let mut group: Option<&str> = None;
         for topic in topics(self.lang) {
-            let dentro = if por_texto {
+            let matched = if by_text {
                 matches_text(topic, &needle)
             } else {
                 matches(topic, &needle)
             };
-            if !dentro {
+            if !matched {
                 continue;
             }
             let tag = topic.tags.first().map_or("", String::as_str);
@@ -920,8 +921,8 @@ impl HelpState {
         // the row SAYS (`tecl…` against `Teclado`) finds the row they are
         // looking straight at — before, only the literal `keys` reached it.
         if needle.is_empty()
-            || plegar(KEYS_ID).contains(&needle)
-            || plegar(&self.keys_label).contains(&needle)
+            || fold_for_search(KEYS_ID).contains(&needle)
+            || fold_for_search(&self.keys_label).contains(&needle)
         {
             rows.push(SidebarRow::Group {
                 tag: KEYS_TAG.to_owned(),
@@ -945,8 +946,8 @@ impl HelpState {
             .iter()
             .filter(|n| {
                 needle.is_empty()
-                    || plegar(&n.id).contains(&needle)
-                    || plegar(&n.title).contains(&needle)
+                    || fold_for_search(&n.id).contains(&needle)
+                    || fold_for_search(&n.title).contains(&needle)
             })
             .collect();
         if !hits.is_empty() {
@@ -1077,9 +1078,9 @@ impl HelpState {
                 .iter()
                 .cloned()
                 .map(Action::Run)
-                // `links()`: el `see_also` y DESPUÉS los `[[enlaces]]` de la
-                // prosa, que antes se pintaban como enlace y no se podían
-                // seguir ni con Enter ni con un clic.
+                // `links()`: the `see_also` and AFTER it the prose's own
+                // `[[links]]`, which used to be painted as a link and could
+                // not be followed with either Enter or a click.
                 .chain(topic.links().into_iter().map(Action::Open))
                 .collect()
         });
@@ -1108,9 +1109,9 @@ impl HelpState {
 ///
 /// # Diacritics
 ///
-/// Matched with [`plegar`], not with the filename [`crate::nav::fold`]:
-/// `raton` finds «ratón». The two had to split. That one is shared with the
-/// filename path
+/// Matched with [`fold_for_search`], not with the filename
+/// [`crate::nav::fold`]: `raton` finds «ratón». The two had to split. That
+/// one is shared with the filename path
 /// (quick search, `nav`), where a name is BYTES and `café` and `cafe` are two
 /// different files that must stay two rows; the help is prose, where they are
 /// the same word typed in a hurry.
@@ -1118,14 +1119,14 @@ fn matches(topic: &Topic, needle: &str) -> bool {
     if needle.is_empty() {
         return true;
     }
-    plegar(topic.id.as_str()).contains(needle)
-        || plegar(&topic.title).contains(needle)
+    fold_for_search(topic.id.as_str()).contains(needle)
+        || fold_for_search(&topic.title).contains(needle)
         || topic.commands.iter().any(|c| command_matches(c, needle))
 }
 
 /// The second tier of [`matches`]: the needle appears in the page's prose.
 fn matches_text(topic: &Topic, needle: &str) -> bool {
-    plegar(&texto_de(topic)).contains(needle)
+    fold_for_search(&prose_of(topic)).contains(needle)
 }
 
 /// Folds help text for SEARCHING: canonical decomposition, combining marks
@@ -1133,7 +1134,7 @@ fn matches_text(topic: &Topic, needle: &str) -> bool {
 ///
 /// Help only — see [`matches`] for why the filename [`crate::nav::fold`] must
 /// not do this.
-fn plegar(s: &str) -> String {
+fn fold_for_search(s: &str) -> String {
     use unicode_normalization::UnicodeNormalization as _;
     s.nfd()
         .filter(|c| !unicode_normalization::char::is_combining_mark(*c))
@@ -1144,7 +1145,7 @@ fn plegar(s: &str) -> String {
 /// The searchable text of a page: the prose of every block, one line each.
 /// Command marks and links are left out — a command is matched by its id
 /// ([`command_matches`]) and a link names ANOTHER page.
-fn texto_de(topic: &Topic) -> String {
+fn prose_of(topic: &Topic) -> String {
     use norte_help::{Block, Span};
     fn spans(out: &mut String, ss: &[Span]) {
         for s in ss {
@@ -1167,8 +1168,8 @@ fn texto_de(topic: &Topic) -> String {
             Block::Paragraph(ss) | Block::Callout { spans: ss, .. } => spans(&mut out, ss),
             Block::Bullets(items) => items.iter().for_each(|ss| spans(&mut out, ss)),
             Block::Table { header, rows } => {
-                for celda in header.iter().chain(rows.iter().flatten()) {
-                    out.push_str(celda);
+                for cell in header.iter().chain(rows.iter().flatten()) {
+                    out.push_str(cell);
                     out.push(' ');
                 }
                 out.push('\n');
@@ -1193,7 +1194,7 @@ fn texto_de(topic: &Topic) -> String {
 /// because dragging between panes IS a copy and that page is where it is
 /// explained.
 fn command_matches(command: &str, needle: &str) -> bool {
-    let folded = plegar(command);
+    let folded = fold_for_search(command);
     folded.starts_with(needle) || folded.split('.').any(|segment| segment.starts_with(needle))
 }
 
@@ -1212,84 +1213,87 @@ mod tests {
         HelpState::new(Lang::En, KEYS_LABEL.to_owned())
     }
 
-    /// Un CLIC en una fila de la barra lateral aterriza donde aterrizaría la
-    /// flecha: enseña la página y NO empuja un paso al rastro (`Backspace`
-    /// desde ahí sigue cerrando, no deshaciendo el clic).
+    /// A CLICK on a sidebar row lands where the arrow would have landed: it
+    /// shows the page and does NOT push a step onto the trail (`Backspace`
+    /// from there still closes, it does not undo the click).
     #[test]
-    fn un_clic_en_la_lateral_aterriza_como_la_flecha() {
+    fn a_click_on_the_sidebar_lands_like_the_arrow() {
         let mut s = state();
-        let fila = s
+        let row = s
             .rows()
             .iter()
             .position(|r| matches!(r, SidebarRow::Topic { id, .. } if id.as_str() == "copying"))
-            .expect("`copying` está en la lateral");
-        s.click_row(fila);
-        assert_eq!(s.cursor(), fila);
+            .expect("`copying` is on the sidebar");
+        s.click_row(row);
+        assert_eq!(s.cursor(), row);
         assert_eq!(s.current().as_str(), "copying");
         assert_eq!(s.focus(), Focus::Topics);
         assert!(
             !s.back(),
-            "aterrizar no es navegar: no hay paso que deshacer"
+            "landing is not navigating: there is no step to undo"
         );
     }
 
-    /// Un clic sobre una CABECERA de grupo no hace nada: no es una página, y
-    /// mover ahí el cursor dejaría la lateral en una fila que las flechas se
-    /// saltan.
+    /// A click on a group HEADER does nothing: it is not a page, and moving
+    /// the cursor there would leave the sidebar on a row the arrows skip.
     #[test]
-    fn un_clic_en_una_cabecera_de_grupo_no_hace_nada() {
+    fn a_click_on_a_group_header_does_nothing() {
         let mut s = state();
-        let antes = (s.cursor(), s.current().clone());
-        let grupo = s
+        let before = (s.cursor(), s.current().clone());
+        let group = s
             .rows()
             .iter()
             .position(|r| matches!(r, SidebarRow::Group { .. }))
-            .expect("hay cabeceras de grupo");
-        s.click_row(grupo);
-        assert_eq!((s.cursor(), s.current().clone()), antes);
-        // Y un índice fuera de rango tampoco: el pintor puede ir un frame por
-        // detrás del modelo.
+            .expect("there are group headers");
+        s.click_row(group);
+        assert_eq!((s.cursor(), s.current().clone()), before);
+        // And an out-of-range index does not either: the painter can be one
+        // frame behind the model.
         s.click_row(usize::MAX);
-        assert_eq!((s.cursor(), s.current().clone()), antes);
+        assert_eq!((s.cursor(), s.current().clone()), before);
     }
 
-    /// Un clic sobre una fila ejecutable mueve el cursor de acciones y pasa el
-    /// foco al cuerpo — ejecutarla la decide el frontend, que es quien tiene
-    /// el veredicto congelado.
+    /// A click on a runnable row moves the action cursor and hands focus to
+    /// the body — whether to run it is decided by the frontend, which is
+    /// the one holding the frozen verdict.
     #[test]
-    fn un_clic_en_una_fila_ejecutable_mueve_el_cursor_de_acciones() {
+    fn a_click_on_a_runnable_row_moves_the_action_cursor() {
         let mut s = state();
         s.open(&TopicId::new("copying"));
-        assert!(s.actions().len() > 1, "`copying` tiene filas ejecutables");
+        assert!(s.actions().len() > 1, "`copying` has runnable rows");
         s.click_action(1);
         assert_eq!(s.action_cursor(), 1);
         assert_eq!(s.focus(), Focus::Body);
-        let antes = s.action_cursor();
+        let before = s.action_cursor();
         s.click_action(s.actions().len());
-        assert_eq!(s.action_cursor(), antes, "fuera de rango es no-op");
+        assert_eq!(s.action_cursor(), before, "out of range is a no-op");
     }
 
-    /// Arrastrar la barra lleva el cuerpo a un punto ABSOLUTO, a diferencia de
-    /// la rueda, que es relativa: un arrastre dice «enséñame ESTA parte» y una
-    /// muesca dice «un poco más allá».
+    /// Dragging the scrollbar takes the body to an ABSOLUTE point, unlike
+    /// the wheel, which is relative: a drag says "show me THIS part" and a
+    /// notch says "a bit further".
     #[test]
-    fn arrastrar_la_barra_va_a_una_linea_absoluta() {
+    fn dragging_the_scrollbar_goes_to_an_absolute_line() {
         let mut s = state();
         s.scroll_body_to(40);
         assert_eq!(s.body_scroll(), 40);
         s.scroll_body_to(0);
-        assert_eq!(s.body_scroll(), 0, "y vuelve al principio sin restar");
-        // El tope de abajo lo sigue poniendo el pintor, que es quien sabe
-        // cuántas líneas tiene la página maquetada.
+        assert_eq!(
+            s.body_scroll(),
+            0,
+            "and goes back to the start with no subtraction"
+        );
+        // The bottom cap is still set by the painter, which is the one that
+        // knows how many lines the laid-out page has.
         s.scroll_body_to(9999);
         s.clamp_scroll(12);
         assert!(s.body_scroll() < 12);
     }
 
-    /// La rueda mueve el cuerpo tenga el foco donde tenga: se desplaza lo que
-    /// está bajo el puntero, la misma regla que los panes.
+    /// The wheel moves the body no matter where focus is: it scrolls
+    /// whatever is under the pointer, the same rule the panes follow.
     #[test]
-    fn la_rueda_desplaza_el_cuerpo_con_el_foco_en_la_lateral() {
+    fn the_wheel_scrolls_the_body_with_focus_on_the_sidebar() {
         let mut s = state();
         assert_eq!(s.focus(), Focus::Topics);
         s.scroll_body(3);
@@ -1297,7 +1301,7 @@ mod tests {
         s.scroll_body(-1);
         assert_eq!(s.body_scroll(), 2);
         s.scroll_body(-99);
-        assert_eq!(s.body_scroll(), 0, "satura en cero");
+        assert_eq!(s.body_scroll(), 0, "saturates at zero");
     }
 
     /// FIX 2: the keyboard page has to be findable by the name it is PAINTED
@@ -1445,20 +1449,21 @@ mod tests {
     /// close the overlay, never walk back to an index they never asked for.
     #[test]
     fn opening_as_root_leaves_nothing_for_back_to_walk() {
-        // Con historial ya apilado (`following_a_link_pushes_history_and_back_
-        // pops_it` pina esa mitad): llegar como raíz lo BORRA, así que el
-        // `back()` que habría vuelto a `copying` ahora no tiene nada.
+        // With history already stacked (`following_a_link_pushes_history_and_back_
+        // pops_it` pins that half): arriving as root ERASES it, so the
+        // `back()` that would have returned to `copying` now has nothing.
         let mut s = state();
         s.open(&TopicId::new("copying"));
         s.open_as_root(&TopicId::new("archives"));
-        assert_eq!(s.current().as_str(), "archives", "el cuerpo sí cambia");
+        assert_eq!(s.current().as_str(), "archives", "the body does change");
         assert!(
             !s.back(),
-            "llegar como raíz significa que «atrás» solo puede ser salir"
+            "arriving as root means \"back\" can only be closing"
         );
 
-        // Y la raíz que coincide con lo ya abierto tampoco apila: `show`
-        // ignora el id actual, y el clear no depende de que haya cambiado.
+        // And a root that matches what is already open does not stack
+        // either: `show` ignores the current id, and the clear does not
+        // depend on it having changed.
         let mut s = state();
         s.open_as_root(&TopicId::new("index"));
         assert!(!s.back());
@@ -1528,17 +1533,17 @@ mod tests {
         // corpus decides it: this used to hard-code `copying` and went red
         // the day a page documented a command with a `z` in it, which made
         // `z` a matching prefix. The invariant never involved that word.
-        let mut ultimo_vivo = s.current().clone();
+        let mut last_vivo = s.current().clone();
         for c in "zzzz".chars() {
             if !s.rows().is_empty() {
-                ultimo_vivo = s.current().clone();
+                last_vivo = s.current().clone();
             }
             s.push_char(c);
         }
         assert!(s.rows().is_empty(), "nothing matched");
         assert_eq!(
             s.current(),
-            &ultimo_vivo,
+            &last_vivo,
             "the body keeps showing what the reader was reading"
         );
     }
@@ -1728,9 +1733,9 @@ mod tests {
         assert_eq!(s.action(), None);
     }
 
-    fn filtra(s: &mut HelpState, texto: &str) -> Vec<String> {
+    fn filter_titles(s: &mut HelpState, text: &str) -> Vec<String> {
         s.start_filter();
-        for c in texto.chars() {
+        for c in text.chars() {
             s.push_char(c);
         }
         s.rows()
@@ -1742,58 +1747,58 @@ mod tests {
             .collect()
     }
 
-    /// Sin tildes encuentra lo que tiene tildes: «raton» es «ratón» para
-    /// cualquiera que teclee deprisa. Antes 3 de los títulos en español no
-    /// salían sin el acento exacto.
+    /// With no accents it finds what has accents: «raton» is «ratón» for
+    /// anyone typing in a hurry. Before this, 3 of the Spanish titles did
+    /// not turn up without the exact accent.
     #[test]
-    fn el_filtro_de_la_ayuda_no_distingue_acentos() {
+    fn the_help_filter_does_not_distinguish_accents() {
         let mut s = HelpState::new(Lang::Es, "Teclado".to_owned());
-        assert!(filtra(&mut s, "raton").contains(&"mouse".to_owned()));
+        assert!(filter_titles(&mut s, "raton").contains(&"mouse".to_owned()));
         let mut s = HelpState::new(Lang::Es, "Teclado".to_owned());
         assert!(
-            filtra(&mut s, "RATÓN").contains(&"mouse".to_owned()),
-            "ni mayúsculas"
+            filter_titles(&mut s, "RATÓN").contains(&"mouse".to_owned()),
+            "nor case"
         );
     }
 
-    /// El filtro busca también en el TEXTO de las páginas: una palabra que
-    /// solo sale en la prosa encuentra la página que la explica.
+    /// The filter also searches the TEXT of the pages: a word that only
+    /// appears in the prose finds the page that explains it.
     #[test]
-    fn el_filtro_busca_en_el_texto_de_las_paginas() {
+    fn the_filter_searches_the_text_of_the_pages() {
         let mut s = HelpState::new(Lang::Es, "Teclado".to_owned());
-        let hallados = filtra(&mut s, "bucket");
+        let found = filter_titles(&mut s, "bucket");
         assert!(
-            hallados.contains(&"index".to_owned()),
-            "«bucket» solo está en la prosa del índice (y de remoto): {hallados:?}"
+            found.contains(&"index".to_owned()),
+            "«bucket» is only in the index's prose (and remote's): {found:?}"
         );
         let mut s = HelpState::new(Lang::Es, "Teclado".to_owned());
         assert!(
-            filtra(&mut s, "zzzqqq").is_empty(),
-            "y lo que no está, no sale"
+            filter_titles(&mut s, "zzzqqq").is_empty(),
+            "and what is not there does not turn up"
         );
     }
 
-    /// Los `[[enlaces]]` de la prosa son acciones: se pintaban como enlace y
-    /// no se podían seguir ni con Intro ni con un clic. El orden es el de
-    /// `Topic::links()`, que es el que pintan los dos frontends.
+    /// The prose's own `[[links]]` are actions: they used to be painted as
+    /// a link and could not be followed with either Enter or a click. The
+    /// order is `Topic::links()`'s, which is what both frontends paint.
     #[test]
     fn the_links_in_the_prose_are_actions_too() {
-        let mut algun_extra = false;
+        let mut some_extra = false;
         for t in norte_help::topics(Lang::En) {
             let mut s = state();
             s.open(&t.id);
-            let esperadas: Vec<Action> = t
+            let expected: Vec<Action> = t
                 .commands
                 .iter()
                 .cloned()
                 .map(Action::Run)
                 .chain(t.links().into_iter().map(Action::Open))
                 .collect();
-            assert_eq!(s.actions(), esperadas.as_slice(), "{}", t.id);
-            algun_extra |= t.links().len() > t.see_also.len();
+            assert_eq!(s.actions(), expected.as_slice(), "{}", t.id);
+            some_extra |= t.links().len() > t.see_also.len();
         }
         assert!(
-            algun_extra,
+            some_extra,
             "some page links in its prose to something see_also does not name"
         );
     }
@@ -1877,7 +1882,7 @@ mod tests {
         assert!(s.action_follows_view());
     }
 
-    fn nodo(id: &str) -> PluginNode {
+    fn node(id: &str) -> PluginNode {
         PluginNode {
             id: id.to_owned(),
             title: format!("Título de {id}"),
@@ -1887,23 +1892,23 @@ mod tests {
     }
 
     #[test]
-    fn los_plugins_con_ayuda_ponen_una_fila_en_la_barra() {
+    fn plugins_with_help_get_a_row_on_the_sidebar() {
         let mut help = HelpState::new(Lang::En, "Keyboard".to_owned());
-        help.set_plugins(vec![nodo("acme.ftp")]);
+        help.set_plugins(vec![node("acme.ftp")]);
         assert!(
             help.rows().iter().any(|r| matches!(
                 r,
                 SidebarRow::Topic { id, .. } if id.as_str() == "acme.ftp"
             )),
-            "el nodo del plugin está en la barra: {:?}",
+            "the plugin's node is on the sidebar: {:?}",
             help.rows()
         );
     }
 
     #[test]
-    fn un_plugin_sin_ayuda_no_pone_fila() {
+    fn a_plugin_with_no_help_gets_no_row() {
         let mut help = HelpState::new(Lang::En, "Keyboard".to_owned());
-        let mut n = nodo("acme.ftp");
+        let mut n = node("acme.ftp");
         n.has_help = false;
         help.set_plugins(vec![n]);
         assert!(
@@ -1911,106 +1916,112 @@ mod tests {
                 r,
                 SidebarRow::Topic { id, .. } if id.as_str() == "acme.ftp"
             )),
-            "sin página no hay nodo que abrir"
+            "with no page there is no node to open"
         );
     }
 
-    /// Fail-closed: el corpus gana. La colisión NO puede nacer hoy de un
-    /// plugin descubierto localmente — `is_valid_plugin_id` exige DNS inverso
-    /// (dos segmentos separados por punto) y todo id del corpus es un solo
-    /// segmento, así que un manifiesto con `id = "copying"` ni siquiera carga.
-    /// La guarda existe porque ESTE modelo recibe ids que vinieron del WIRE y
-    /// el espacio de ids lo posee otro crate, que a este no le promete nada:
-    /// un `PluginNode` es un struct plano que cualquiera —este test el
-    /// primero— puede construir. Sin la guarda, un plugin publicado como
-    /// `copying` se comería la página de copiar y todos los `[[copying]]` del
-    /// corpus aterrizarían en prosa de terceros.
+    /// Fail-closed: the corpus wins. The collision cannot arise TODAY from a
+    /// locally-discovered plugin — `is_valid_plugin_id` requires reverse-DNS
+    /// (two dot-separated segments) and every corpus id is a single segment,
+    /// so a manifest with `id = "copying"` does not even load. The guard
+    /// exists because THIS model receives ids that came from the WIRE and
+    /// the id space is owned by another crate, which promises this one
+    /// nothing: a `PluginNode` is a plain struct anyone —this test first—
+    /// can construct. Without the guard, a plugin published as `copying`
+    /// would eat the copy page and every `[[copying]]` in the corpus would
+    /// land in third-party prose.
     #[test]
-    fn un_plugin_no_tapa_una_pagina_del_corpus() {
+    fn a_plugin_does_not_cover_a_corpus_page() {
         let mut help = HelpState::new(Lang::En, "Keyboard".to_owned());
-        help.set_plugins(vec![nodo("copying")]);
+        help.set_plugins(vec![node("copying")]);
         help.open(&TopicId::new("copying"));
-        let abierto = help.current_topic().expect("hay página");
-        assert_eq!(abierto.origin, norte_help::Origin::BuiltIn);
+        let opened = help.current_topic().expect("there is a page");
+        assert_eq!(opened.origin, norte_help::Origin::BuiltIn);
     }
 
     #[test]
-    fn la_pagina_de_un_plugin_se_abre_cuando_llega_del_wire() {
+    fn a_plugins_page_opens_once_it_arrives_from_the_wire() {
         let mut help = HelpState::new(Lang::En, "Keyboard".to_owned());
-        help.set_plugins(vec![nodo("acme.ftp")]);
+        help.set_plugins(vec![node("acme.ftp")]);
         help.open(&TopicId::new("acme.ftp"));
-        assert_eq!(help.plugin_needs_fetch(), Some("acme.ftp"), "aún no llegó");
-        assert!(help.current_topic().is_none(), "no se inventa cuerpo");
+        assert_eq!(
+            help.plugin_needs_fetch(),
+            Some("acme.ftp"),
+            "has not arrived yet"
+        );
+        assert!(help.current_topic().is_none(), "no body is invented");
 
-        // `id` es OBLIGATORIO en el header (`FrontMatter::id` no tiene
-        // `#[serde(default)]`): sin él el TOML no deserializa, `parse_untrusted`
-        // degrada a «no hay header» —nunca a un error— y se perderían a la vez
-        // el título y los comandos, que es justo lo que este test mira. El id
-        // declarado da igual: el que manda es el que asigna el host.
+        // `id` is REQUIRED in the header (`FrontMatter::id` has no
+        // `#[serde(default)]`): without it the TOML fails to deserialize,
+        // `parse_untrusted` degrades to "no header" —never to an error— and
+        // both the title and the commands would be lost at once, which is
+        // exactly what this test looks at. The declared id does not
+        // matter: the one that governs is the one the host assigns.
         let parsed = norte_help::parse_untrusted(
             b"+++\nid = \"acme.ftp\"\ntitle = \"FTP\"\n\
-              commands = [\"plugin:acme.ftp:sync\"]\n+++\ncuerpo",
+              commands = [\"plugin:acme.ftp:sync\"]\n+++\nbody",
             "acme.ftp",
             None,
         );
         help.install_plugin_topic(parsed.topic);
-        assert_eq!(help.plugin_needs_fetch(), None, "ya está instalada");
-        assert_eq!(help.current_topic().expect("hay página").title, "FTP");
+        assert_eq!(help.plugin_needs_fetch(), None, "already installed");
+        assert_eq!(help.current_topic().expect("there is a page").title, "FTP");
         assert_eq!(
             help.actions().first(),
             Some(&Action::Run("plugin:acme.ftp:sync".to_owned())),
-            "sus comandos son filas ejecutables"
+            "its commands are runnable rows"
         );
     }
 
     #[test]
-    fn cambiar_de_plugins_olvida_las_paginas_que_ya_no_estan() {
+    fn switching_plugins_forgets_the_pages_that_are_gone() {
         let mut help = HelpState::new(Lang::En, "Keyboard".to_owned());
-        help.set_plugins(vec![nodo("acme.ftp")]);
-        let parsed = norte_help::parse_untrusted(b"cuerpo", "acme.ftp", None);
+        help.set_plugins(vec![node("acme.ftp")]);
+        let parsed = norte_help::parse_untrusted(b"body", "acme.ftp", None);
         help.install_plugin_topic(parsed.topic);
-        help.set_plugins(vec![nodo("otro.plugin")]);
+        help.set_plugins(vec![node("otro.plugin")]);
         help.open(&TopicId::new("acme.ftp"));
         assert_ne!(
             help.current().as_str(),
             "acme.ftp",
-            "un plugin que ya no está en el catálogo no se abre"
+            "a plugin no longer in the catalogue does not open"
         );
     }
 
-    /// Dos nodos con el mismo id dan UNA fila, la primera. `Catalog::load_dir`
-    /// rechaza el id repetido fail-closed, así que un catálogo descubierto en
-    /// local no puede producirlo — pero estos nodos se construyen desde
-    /// `plugin.list`, que cruza el wire, y este modelo no da por hecho que el
-    /// par aplicara lo que aplica nuestro host. Dos filas que abren la misma
-    /// página es un daño pequeño; lo que sobra es la suposición.
+    /// Two nodes with the same id give ONE row, the first. `Catalog::load_dir`
+    /// rejects a repeated id fail-closed, so a locally-discovered catalogue
+    /// cannot produce one — but these nodes are built from `plugin.list`,
+    /// which crosses the wire, and this model does not assume the peer
+    /// enforced what our host enforces. Two rows opening the same page is a
+    /// small harm; what is out of place is the assumption.
     #[test]
-    fn dos_nodos_con_el_mismo_id_dan_una_sola_fila() {
+    fn two_nodes_with_the_same_id_give_a_single_row() {
         let mut help = HelpState::new(Lang::En, "Keyboard".to_owned());
-        let mut impostor = nodo("acme.ftp");
-        impostor.title = "El impostor".to_owned();
-        help.set_plugins(vec![nodo("acme.ftp"), impostor]);
-        let filas: Vec<&SidebarRow> = help
+        let mut impostor = node("acme.ftp");
+        impostor.title = "The impostor".to_owned();
+        help.set_plugins(vec![node("acme.ftp"), impostor]);
+        let rows: Vec<&SidebarRow> = help
             .rows()
             .iter()
             .filter(|r| matches!(r, SidebarRow::Topic { id, .. } if id.as_str() == "acme.ftp"))
             .collect();
-        assert_eq!(filas.len(), 1, "una sola fila: {:?}", help.rows());
+        assert_eq!(rows.len(), 1, "a single row: {:?}", help.rows());
         assert!(
-            matches!(filas[0], SidebarRow::Topic { title, .. } if title == "Título de acme.ftp"),
-            "y gana la PRIMERA, que es la que el gestor y la paleta ya muestran: {:?}",
-            filas[0]
+            matches!(rows[0], SidebarRow::Topic { title, .. } if title == "Título de acme.ftp"),
+            "and the FIRST one wins, the one the extension manager and the \
+             palette already show: {:?}",
+            rows[0]
         );
     }
 
-    /// Una página que llega tarde, para un plugin que ya no está en el
-    /// catálogo, no lo resucita: el catálogo es la verdad sobre qué existe, y
-    /// una respuesta en vuelo no puede reabrir una puerta que se cerró.
+    /// A page arriving late, for a plugin no longer in the catalogue, does
+    /// not revive it: the catalogue is the truth about what exists, and an
+    /// in-flight response cannot reopen a door that closed.
     #[test]
-    fn una_pagina_de_un_plugin_que_no_es_nodo_se_ignora() {
+    fn a_page_for_a_plugin_that_is_not_a_node_is_ignored() {
         let mut help = HelpState::new(Lang::En, "Keyboard".to_owned());
-        help.set_plugins(vec![nodo("otro.plugin")]);
-        let parsed = norte_help::parse_untrusted(b"cuerpo", "acme.ftp", None);
+        help.set_plugins(vec![node("otro.plugin")]);
+        let parsed = norte_help::parse_untrusted(b"body", "acme.ftp", None);
         help.install_plugin_topic(parsed.topic);
         help.open(&TopicId::new("acme.ftp"));
         assert_ne!(help.current().as_str(), "acme.ftp");
@@ -2019,60 +2030,60 @@ mod tests {
                 r,
                 SidebarRow::Topic { id, .. } if id.as_str() == "acme.ftp"
             )),
-            "y tampoco aparece en la barra"
+            "nor does it show up on the sidebar"
         );
     }
 
-    /// La fila de un plugin se filtra como cualquier otra: por id o por
-    /// título. Si no, el filtro dejaría la lista del corpus vacía y las
-    /// extensiones colgando debajo, que es exactamente lo que el lector NO
-    /// buscaba.
+    /// A plugin's row is filtered like any other: by id or by title.
+    /// Otherwise the filter would leave the corpus list empty with the
+    /// extensions dangling below it, which is exactly what the reader was
+    /// NOT looking for.
     #[test]
-    fn el_filtro_alcanza_y_descarta_las_filas_de_plugin() {
+    fn the_filter_reaches_and_drops_plugin_rows() {
         let mut help = HelpState::new(Lang::En, "Keyboard".to_owned());
-        help.set_plugins(vec![nodo("acme.ftp")]);
+        help.set_plugins(vec![node("acme.ftp")]);
         help.start_filter();
         for c in "acme".chars() {
             help.push_char(c);
         }
         assert!(
             shown(&help).iter().any(|id| id == "acme.ftp"),
-            "el id alcanza la fila: {:?}",
+            "the id reaches the row: {:?}",
             shown(&help)
         );
 
         let mut help = HelpState::new(Lang::En, "Keyboard".to_owned());
-        help.set_plugins(vec![nodo("acme.ftp")]);
+        help.set_plugins(vec![node("acme.ftp")]);
         help.start_filter();
         for c in "título".chars() {
             help.push_char(c);
         }
         assert!(
             shown(&help).iter().any(|id| id == "acme.ftp"),
-            "y el título también: {:?}",
+            "and so does the title: {:?}",
             shown(&help)
         );
 
         let mut help = HelpState::new(Lang::En, "Keyboard".to_owned());
-        help.set_plugins(vec![nodo("acme.ftp")]);
+        help.set_plugins(vec![node("acme.ftp")]);
         help.start_filter();
         for c in "zzzz".chars() {
             help.push_char(c);
         }
         assert!(
             help.rows().is_empty(),
-            "y lo que no casa se va, cabecera incluida: {:?}",
+            "and what does not match is gone, header included: {:?}",
             help.rows()
         );
     }
 
-    /// Un nodo inactivo (no aprobado, o deshabilitado) SIGUE teniendo página:
-    /// un humano lee la documentación de un plugin justo para decidir si lo
-    /// habilita. Lo que su estado decide es si sus filas son ejecutables.
+    /// An inactive node (not approved, or disabled) STILL has a page: a
+    /// human reads a plugin's documentation precisely to decide whether to
+    /// enable it. What its state decides is whether its rows are runnable.
     #[test]
-    fn un_plugin_inactivo_conserva_su_pagina() {
+    fn an_inactive_plugin_keeps_its_page() {
         let mut help = HelpState::new(Lang::En, "Keyboard".to_owned());
-        let mut n = nodo("acme.ftp");
+        let mut n = node("acme.ftp");
         n.active = false;
         help.set_plugins(vec![n]);
         assert!(help.rows().iter().any(|r| matches!(
@@ -2080,9 +2091,9 @@ mod tests {
             SidebarRow::Topic { id, .. } if id.as_str() == "acme.ftp"
         )));
         help.open(&TopicId::new("acme.ftp"));
-        assert!(!help.current_plugin_active(), "pero no está activo");
+        assert!(!help.current_plugin_active(), "but it is not active");
 
-        // Una página del corpus no tiene plugin que pueda estar inactivo.
+        // A corpus page has no plugin that could be inactive.
         help.open(&TopicId::new("copying"));
         assert!(help.current_plugin_active());
     }

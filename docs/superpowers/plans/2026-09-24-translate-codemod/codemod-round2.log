@@ -1,0 +1,46 @@
+SHADOW	crates/norte-frontend/src/layout/tree.rs	agrupar	group
+SHADOW	crates/norte-tui/src/goto.rs	fuentes	sources
+SHADOW	crates/norte-tui/src/ui/pane.rs	fijos	fixed
+SHADOW	crates/norte-tui/src/jobs/ai.rs	publicado	published
+SHADOW	crates/norte-ui-host/tests/backend_fake/mod.rs	encoladas	queued
+SHADOW	crates/norte-ui-host/tests/backend_fake/mod.rs	decoraciones	decorations
+TWO-TO-ONE	crates/norte-ui-host/tests/backend_fake/mod.rs	creados	created
+TWO-TO-ONE	crates/norte-ui-host/tests/backend_fake/mod.rs	creado	created
+SHADOW	crates/norte-ui-host/tests/controller/base.rs	creados	created
+SHADOW	crates/norte-ui-host/tests/controller/base.rs	ajenas	foreign
+SHADOW	crates/norte-ui-host/tests/controller/panels.rs	sondeos	probes
+SHADOW	crates/norte-ui-host/tests/controller/sync.rs	generacion	generation
+SHADOW	crates/norte-ui-host/tests/controller/log.rs	ajenas	foreign
+SHADOW	crates/norte-ui-host/tests/controller/reviews.rs	creados	created
+TWO-TO-ONE	crates/norte-ui-host/src/controller/tasks.rs	encoladas	queued
+TWO-TO-ONE	crates/norte-ui-host/src/controller/tasks.rs	encolada	queued
+SHADOW	crates/norte-ui-host/src/controller/termpanel.rs	cursiva	italic
+SHADOW	crates/norte-ui-host/src/controller/termpanel.rs	negrita	bold
+SHADOW	crates/norte-ui-host/src/controller/sums.rs	publicado	published
+SHADOW	crates/norte-ui-host/src/controller/mod.rs	enfocada	focused
+TWO-TO-ONE	crates/norte-ui-host/src/controller/mod.rs	soltados	released
+TWO-TO-ONE	crates/norte-ui-host/src/controller/mod.rs	soltada	released
+SHADOW	crates/norte-ui-host/src/controller/patches.rs	generacion	generation
+TWO-TO-ONE	crates/norte-ui-host/src/controller/effects.rs	nativos	native
+TWO-TO-ONE	crates/norte-ui-host/src/controller/effects.rs	nativo	native
+SHADOW	crates/norte-ui-host/src/controller/session.rs	soltada	released
+SHADOW	crates/norte-ui-host/src/controller/extensions.rs	truncado	truncated
+SHADOW	crates/norte-vfs-local/src/confined.rs	estable	stable
+MOVE	crates/norte-gui-tauri/src/nativo.rs	crates/norte-gui-tauri/src/native.rs
+
+# excluded
+EXCLUDED	CertificateDer	CertificateRight	stop list: English/tech meaning (serde::ser, rustls Der, MS-DOS time)
+EXCLUDED	DOS_DATE	TWO_DATE	stop list: English/tech meaning (serde::ser, rustls Der, MS-DOS time)
+EXCLUDED	DOS_TIME	TWO_TIME	stop list: English/tech meaning (serde::ser, rustls Der, MS-DOS time)
+EXCLUDED	EPOCH_DOS	EPOCH_TWO	stop list: English/tech meaning (serde::ser, rustls Der, MS-DOS time)
+EXCLUDED	dos_date	two_date	stop list: English/tech meaning (serde::ser, rustls Der, MS-DOS time)
+EXCLUDED	dos_dates_pinned	two_dates_pinned	stop list: English/tech meaning (serde::ser, rustls Der, MS-DOS time)
+EXCLUDED	dos_datetime	two_datetime	stop list: English/tech meaning (serde::ser, rustls Der, MS-DOS time)
+EXCLUDED	dos_pair_to_ms	two_pair_to_ms	stop list: English/tech meaning (serde::ser, rustls Der, MS-DOS time)
+EXCLUDED	dos_time	two_time	stop list: English/tech meaning (serde::ser, rustls Der, MS-DOS time)
+EXCLUDED	parse_dos	parse_two	stop list: English/tech meaning (serde::ser, rustls Der, MS-DOS time)
+EXCLUDED	ser	be	stop list: English/tech meaning (serde::ser, rustls Der, MS-DOS time)
+EXCLUDED	serde_ser_is_wire	serde_be_is_wire	stop list: English/tech meaning (serde::ser, rustls Der, MS-DOS time)
+
+# unmapped
+

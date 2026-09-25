@@ -1,48 +1,48 @@
-//! [`Role`]: los papeles SEMÁNTICOS que un tema estiliza (ADR 0020 D2). El
-//! frontend pide un rol, nunca un color suelto. Cada rol trae un
-//! [`fallback`](Role::fallback) monocromo que reproduce el aspecto de M1, de
-//! modo que SIN tema (o con uno parcial) la UI sigue siendo coherente.
+//! [`Role`]: the SEMANTIC roles a theme styles (ADR 0020 D2). The
+//! frontend asks for a role, never for a loose color. Each role carries a
+//! monochrome [`fallback`](Role::fallback) that reproduces the M1 look, so
+//! that WITHOUT a theme (or with a partial one) the UI stays coherent.
 
 use serde::{Deserialize, Serialize};
 
 use crate::style::Style;
 
-/// Papel semántico de la UI. Añadir una variante es no-breaking: un tema que no
-/// la cubre hereda su [`fallback`](Role::fallback).
+/// Semantic UI role. Adding a variant is non-breaking: a theme that does not
+/// cover it inherits its [`fallback`](Role::fallback).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 #[non_exhaustive]
 pub enum Role {
-    /// Fondo BASE de toda la pantalla. Un tema claro fija aquí su `bg` claro;
-    /// el frontend lo pinta primero y el resto de estilos (solo `fg`) lo
-    /// conservan. Sin definir = fondo del terminal (comportamiento de M1).
+    /// BASE background of the whole screen. A light theme sets its light `bg` here;
+    /// the frontend paints it first and the rest of the styles (`fg` only)
+    /// keep it. Unset = the terminal's background (M1 behavior).
     Background,
-    /// Texto normal / entrada de fichero por defecto.
+    /// Normal text / default file entry.
     Regular,
-    /// Fila seleccionada en un panel.
+    /// Selected row in a pane.
     Selection,
-    /// Borde del panel con foco: dice a cuál de los paneles van las teclas
-    /// de navegación. No es [`Role::FocusBorder`], que es el anillo de un
-    /// CONTROL dentro de un diálogo; los nombres se parecen y significan
-    /// cosas distintas.
+    /// Border of the focused pane: says which of the panes the navigation
+    /// keys go to. It is not [`Role::FocusBorder`], which is the ring of a
+    /// CONTROL inside a dialog; the names look alike and mean
+    /// different things.
     BorderFocus,
-    /// Borde del panel sin foco.
+    /// Border of the unfocused pane.
     BorderUnfocused,
-    /// Borde de un modal/diálogo.
+    /// Border of a modal/dialog.
     ModalBorder,
-    /// Barra de estado.
+    /// Status bar.
     StatusBar,
-    /// Título de panel/modal.
+    /// Pane/modal title.
     Title,
-    /// Marca de nombre hostil (bytes no imprimibles, control…).
+    /// Hostile-name badge (non-printable bytes, control…).
     HostileBadge,
-    /// Mensaje de error.
+    /// Error message.
     Error,
-    /// Mensaje de aviso (p. ej. borrado permanente).
+    /// Warning message (e.g. permanent delete).
     Warning,
-    /// Mensaje informativo.
+    /// Informational message.
     Info,
-    /// Coincidencia de búsqueda resaltada.
+    /// Highlighted search match.
     Match,
     /// Pane interior background (GUI chrome; the TUI may adopt it later).
     PaneBackground,
@@ -57,116 +57,117 @@ pub enum Role {
     /// background. Style it with `bg` only (no `fg`) so both readings stay
     /// legible.
     Mark,
-    /// Fila del cursor en un panel SIN foco (spec 2026-09-10). Existe
-    /// porque `Selection` pasó a pintarse con el color de acento, y dos
-    /// cursores igual de vivos no dicen cuál recibe las teclas: el del panel
-    /// sin foco se queda en el gris de antes, presente pero apagado.
+    /// Cursor row in an UNFOCUSED pane (spec 2026-09-10). It exists
+    /// because `Selection` started being painted with the accent color, and two
+    /// equally vivid cursors do not say which one gets the keys: the one in the
+    /// unfocused pane stays in the old gray, present but subdued.
     SelectionUnfocused,
-    /// Un botón de diálogo (`[ Enter  Confirm ]`): cada modal pinta su línea
-    /// de teclas con este rol cuando `[ui] dialog_buttons` está encendido.
+    /// A dialog button (`[ Enter  Confirm ]`): each modal paints its line
+    /// of keys with this role when `[ui] dialog_buttons` is on.
     Button,
 
-    // --- Cromo de la ventana (spec 2026-09-11, F2) ---------------------
+    // --- Window chrome (spec 2026-09-11, F2) ----------------------------
     //
-    // Los diez que siguen nombran SUPERFICIES, no significados: son lo que
-    // hace que una ventana se parezca a un editor concreto en vez de a un
-    // formulario. Comparten tres rasgos que los separan de los de arriba:
+    // The ten that follow name SURFACES, not meanings: they are what
+    // makes a window look like a specific editor instead of a
+    // form. They share three traits that set them apart from the ones above:
     //
-    // 1. NO están en [`Role::CORE`], así que un preset no tiene que
-    //    definirlos (ver el rustdoc de esa constante).
-    // 2. Su [`Role::fallback`] no lleva color. El valor sensato NO se puede
-    //    escribir aquí: depende de la paleta del tema, y la hoja de estilos
-    //    de la ventana lo deriva con `var(--hover, var(--panel-focus-bg))`.
-    // 3. No son [`Role::REQUESTABLE`]: un plugin no puede pedirlos para una
-    //    insignia, porque el color del deslizador de la barra de
-    //    desplazamiento no significa nada pegado a un nombre de fichero.
+    // 1. They are NOT in [`Role::CORE`], so a preset does not have to
+    //    define them (see that constant's rustdoc).
+    // 2. Their [`Role::fallback`] carries no color. The sensible value CANNOT
+    //    be written here: it depends on the theme's palette, and the window's
+    //    stylesheet derives it with `var(--hover, var(--panel-focus-bg))`.
+    // 3. They are not [`Role::REQUESTABLE`]: a plugin cannot ask for them for a
+    //    badge, because the color of the scrollbar slider means nothing
+    //    stuck to a file name.
     //
-    /// Fila bajo el PUNTERO, en un panel o en una lista. Distinta del cursor
-    /// (`Selection`): el ratón está encima, las teclas no van ahí. Pierde
-    /// contra el cursor y contra una fila marcada.
+    /// Row under the POINTER, in a pane or in a list. Distinct from the cursor
+    /// (`Selection`): the mouse is over it, the keys do not go there. It loses
+    /// against the cursor and against a marked row.
     Hover,
-    /// Fondo de un campo de texto (diálogos, paleta, ajustes).
+    /// Background of a text field (dialogs, palette, settings).
     InputBackground,
-    /// Borde de un campo de texto. Es el filete del control, no el del panel
-    /// (`BorderUnfocused`) ni el anillo de foco (`FocusBorder`).
+    /// Border of a text field. It is the control's outline, not the pane's
+    /// (`BorderUnfocused`) nor the focus ring (`FocusBorder`).
     InputBorder,
-    /// Fondo de un WIDGET flotante: la paleta de comandos, un desplegable,
-    /// el menú, el `which-key`. Se apoya sobre el fondo base y por eso
-    /// normalmente es un poco más claro que `PaneBackground`.
+    /// Background of a floating WIDGET: the command palette, a dropdown,
+    /// the menu, the `which-key`. It sits on top of the base background and so
+    /// is usually slightly lighter than `PaneBackground`.
     WidgetBackground,
-    /// El color de la SOMBRA de esos widgets. Existe porque un negro cosido
-    /// al CSS es una sombra que en un tema claro se ve como suciedad.
+    /// The SHADOW color of those widgets. It exists because a black hardcoded
+    /// in the CSS is a shadow that looks like dirt on a light theme.
     WidgetShadow,
-    /// Una INSIGNIA con fondo: un contador, una etiqueta.
+    /// A BADGE with a background: a counter, a label.
     ///
-    /// Sirve a DOS consumidores, igual que [`Role::Mark`], y la pareja
-    /// `fg`/`bg` se lee distinta en cada uno: la ventana lo usa como el
-    /// contador de un panel lateral, y el panel de registro como el chip que
-    /// marca una línea del daemon. Defínelo con `bg` Y `fg`: un chip sin
-    /// primer plano hereda el color de la línea que marca, que es
-    /// justamente lo que el chip tiene que distinguir.
+    /// It serves TWO consumers, just like [`Role::Mark`], and the
+    /// `fg`/`bg` pair reads differently in each: the window uses it as a
+    /// side panel's counter, and the log panel as the chip that
+    /// marks a daemon line. Define it with `bg` AND `fg`: a chip without a
+    /// foreground inherits the color of the line it marks, which is
+    /// exactly what the chip has to distinguish.
     Badge,
-    /// El DESLIZADOR de la barra de desplazamiento (el canal va
-    /// transparente). Solo la ventana: un terminal no pinta barra.
+    /// The scrollbar SLIDER (the track is
+    /// transparent). Window only: a terminal paints no scrollbar.
     ScrollbarSlider,
-    /// El filete que separa dos SUPERFICIES del cromo — la barra de teclas
-    /// del listado, la de paneles de la de menús, el panel lateral del
-    /// central.
+    /// The line separating two chrome SURFACES — the listing's key bar,
+    /// the pane bar from the menu bar, the side panel from the
+    /// central one.
     ///
-    /// Es lo que permite el aspecto «por elevación» de los editores
-    /// modernos: un tema que lo pone casi igual a su fondo deja de tener
-    /// filetes sin que la hoja de estilos sepa nada de ese tema. No es el
-    /// borde de un panel con o sin foco — esos son [`Role::BorderFocus`] y
-    /// [`Role::BorderUnfocused`], y significan dónde van las teclas.
+    /// It is what enables the "elevation" look of modern
+    /// editors: a theme that sets it almost equal to its background stops having
+    /// lines without the stylesheet knowing anything about that theme. It is not
+    /// the border of a focused or unfocused pane — those are [`Role::BorderFocus`] and
+    /// [`Role::BorderUnfocused`], and they mean where the keys go.
     Separator,
-    /// El anillo de foco de un CONTROL: un campo, un botón, una casilla.
+    /// The focus ring of a CONTROL: a field, a button, a checkbox.
     ///
-    /// No confundir con [`Role::BorderFocus`], que es el borde del PANEL que
-    /// tiene el foco. Los nombres se parecen peligrosamente y dicen cosas
-    /// distintas: este marca qué control recibe lo que teclees dentro de un
-    /// diálogo; aquel, cuál de los dos paneles recibe las teclas de
-    /// navegación.
+    /// Not to be confused with [`Role::BorderFocus`], which is the border of the PANE that
+    /// has focus. The names are dangerously alike and say different
+    /// things: this one marks which control receives what you type inside a
+    /// dialog; that one, which of the two panes receives the navigation
+    /// keys.
     FocusBorder,
-    /// Texto ATENUADO pero legible: migas de pan, un tamaño, una columna
-    /// secundaria, la descripción de un ajuste. Es un color propio y no un
-    /// `dim` sobre `Regular` porque `dim` en un terminal es un atributo que
-    /// muchos emuladores ignoran.
+    /// DIMMED but legible text: breadcrumbs, a size, a secondary
+    /// column, a setting's description. It is a color of its own and not a
+    /// `dim` over `Regular` because `dim` in a terminal is an attribute that
+    /// many emulators ignore.
     Muted,
-    /// El fondo de las filas IMPARES de un listado cuando el «pijama» está
-    /// encendido (`[ui] row_stripes`). Es la banda, no la fila: la fila par
-    /// se queda con el fondo del panel, y por eso este rol se define con `bg`
-    /// y nunca con `fg` — el color del nombre lo sigue decidiendo
-    /// `[files.ext]`, que es lo que hace legible un listado.
+    /// The background of ODD rows of a listing when "striped rows" is
+    /// on (`[ui] row_stripes`). It is the stripe, not the row: the even row
+    /// keeps the pane's background, and that is why this role is defined with `bg`
+    /// and never with `fg` — the name's color is still decided by
+    /// `[files.ext]`, which is what makes a listing legible.
     ///
-    /// Pierde contra todo lo que SIGNIFICA algo: el cursor
-    /// ([`Role::Selection`]), la marca ([`Role::Mark`]) y el puntero
-    /// ([`Role::Hover`]) se pintan encima. Una banda que tapara al cursor
-    /// convertiría una ayuda de lectura en una mentira sobre dónde van las
-    /// teclas.
+    /// It loses against everything that MEANS something: the cursor
+    /// ([`Role::Selection`]), the mark ([`Role::Mark`]) and the pointer
+    /// ([`Role::Hover`]) are painted on top. A stripe that covered the cursor
+    /// would turn a reading aid into a lie about where the
+    /// keys go.
     ///
-    /// «La marca» se lee distinto en cada frontend, igual que el propio
-    /// [`Role::Mark`]: la ventana pinta la fila marcada entera y tapa la
-    /// banda; el terminal solo estila el `*` del canalón, así que ahí lo que
-    /// gana a la banda es esa celda y no la fila.
+    /// "The mark" reads differently in each frontend, just like
+    /// [`Role::Mark`] itself: the window paints the whole marked row and covers the
+    /// stripe; the terminal only styles the gutter's `*`, so there what
+    /// beats the stripe is that cell and not the row.
     ///
-    /// Comparte con el cromo los tres rasgos de más arriba —fuera de
-    /// [`Role::CORE`], fuera de [`Role::REQUESTABLE`], `fallback` sin color—
-    /// y por los mismos motivos, con uno propio: un pijama con un color
-    /// inventado es peor que no tener pijama, porque el listado es la
-    /// superficie que más se mira.
+    /// It shares with the chrome the three traits above —outside
+    /// [`Role::CORE`], outside [`Role::REQUESTABLE`], `fallback` without color—
+    /// and for the same reasons, plus one of its own: striped rows with an
+    /// invented color is worse than no striping, because the listing is the
+    /// most looked-at surface.
     Stripe,
 }
 
 impl Role {
-    /// Los roles que un preset está OBLIGADO a colorear: los dieciocho que
-    /// existían antes del cromo de la ventana (spec 2026-09-11, F2).
+    /// The roles a preset is REQUIRED to color: the eighteen that
+    /// existed before the window chrome (spec 2026-09-11, F2).
     ///
-    /// Es lo que itera la completitud de los presets, y no [`Self::ALL`], por
-    /// una razón concreta: los diez roles de CROMO se derivan en la hoja de
-    /// estilos de la ventana de colores que el tema ya tiene, así que
-    /// exigírselos a cada preset serían ochenta valores inventados — y el
-    /// monocromo de [`Self::fallback`] es un mal defecto para ellos (un
-    /// `hover` sin color no es un hover prudente, es uno invisible).
+    /// It is what preset completeness iterates, and not [`Self::ALL`], for
+    /// a concrete reason: the ten CHROME roles are derived in the window's
+    /// stylesheet from colors the theme already has, so
+    /// requiring them from every preset would mean eighty invented values — and the
+    /// monochrome [`Self::fallback`] is a bad default for them (a
+    /// colorless `hover` is not a cautious hover, it is an invisible one).
+    // TODO(translation): review — "eighty" assumes eight presets; there are ten.
     pub const CORE: &'static [Role] = &[
         Role::Background,
         Role::Regular,
@@ -188,30 +189,30 @@ impl Role {
         Role::Button,
     ];
 
-    /// Los roles que un PLUGIN puede nombrar en un span o en una decoración
-    /// (ADR 0037, y la enmienda de la spec 2026-09-11).
+    /// The roles a PLUGIN can name in a span or a decoration
+    /// (ADR 0037, and the amendment in spec 2026-09-11).
     ///
-    /// El criterio es uno solo: **un plugin describe CONTENIDO**, así que
-    /// puede nombrar lo que un trozo de contenido SIGNIFICA —que es un
-    /// error, un aviso, un título, una coincidencia— y no puede nombrar
-    /// nada de lo que la ventana usa para decir en qué ESTADO está. Quedan
-    /// fuera, por tanto, dos familias:
+    /// There is a single criterion: **a plugin describes CONTENT**, so it
+    /// can name what a piece of content MEANS —that it is an
+    /// error, a warning, a title, a match— and it cannot name
+    /// anything the window uses to say what STATE it is in. Two
+    /// families are therefore left out:
     ///
-    /// - El **cromo** (`hover`, `scrollbar-slider`, `widget-*`, `input-*`,
-    ///   `separator`, `focus-border`, `widget-shadow`): una insignia pintada
-    ///   con el color del deslizador de la barra de desplazamiento no
-    ///   significa nada.
-    /// - El **estado** (`selection`, `selection-unfocused`, `status-bar`,
+    /// - The **chrome** (`hover`, `scrollbar-slider`, `widget-*`, `input-*`,
+    ///   `separator`, `focus-border`, `widget-shadow`): a badge painted
+    ///   with the scrollbar slider's color does not
+    ///   mean anything.
+    /// - The **state** (`selection`, `selection-unfocused`, `status-bar`,
     ///   `mark`, `background`, `pane-*`, `border-*`, `modal-border`,
-    ///   `button`): dónde está el cursor, qué hay marcado y cuál es el panel
-    ///   con foco son cosas que el plugin no sabe y que, pintadas por él,
-    ///   mentirían.
+    ///   `button`): where the cursor is, what is marked and which is the focused
+    ///   pane are things the plugin does not know and that, painted by it,
+    ///   would lie.
     ///
-    /// Esto ESTRECHA el vocabulario que ADR 0037 dejaba abierto a todo
-    /// [`Self::ALL`]. Un nombre no pedible degrada a `None` por
-    /// [`Self::from_kebab_requestable`] — la misma degradación que ya tenía
-    /// un nombre desconocido, y por el mismo motivo: un guest más nuevo no
-    /// puede romper el render de un norte más viejo.
+    /// This NARROWS the vocabulary that ADR 0037 left open to all of
+    /// [`Self::ALL`]. A non-requestable name degrades to `None` through
+    /// [`Self::from_kebab_requestable`] — the same degradation an
+    /// unknown name already had, and for the same reason: a newer guest
+    /// cannot break the rendering of an older norte.
     pub const REQUESTABLE: &'static [Role] = &[
         Role::Regular,
         Role::Title,
@@ -224,8 +225,8 @@ impl Role {
         Role::Muted,
     ];
 
-    /// Todos los roles, para iterar (p. ej. comprobar que los nombres kebab
-    /// hacen ida y vuelta). Es [`Self::CORE`] más los diez de cromo.
+    /// All roles, for iterating (e.g. checking that kebab names
+    /// round-trip). It is [`Self::CORE`] plus the ten chrome ones.
     pub const ALL: &'static [Role] = &[
         Role::Background,
         Role::Regular,
@@ -245,7 +246,7 @@ impl Role {
         Role::Mark,
         Role::SelectionUnfocused,
         Role::Button,
-        // Cromo de la ventana (spec 2026-09-11, F2).
+        // Window chrome (spec 2026-09-11, F2).
         Role::Hover,
         Role::InputBackground,
         Role::InputBorder,
@@ -256,42 +257,42 @@ impl Role {
         Role::Separator,
         Role::FocusBorder,
         Role::Muted,
-        // El pijama del listado (spec 2026-09-20).
+        // The listing's striped rows (spec 2026-09-20).
         Role::Stripe,
     ];
 
-    /// Estilo por defecto MONOCROMO del rol: reproduce el aspecto de M1
-    /// (`BOLD`/`REVERSED`/`DIM` donde hoy los hay) sin color. Es lo que se usa
-    /// cuando el tema no define el rol, de modo que un usuario sin tema ve
-    /// exactamente la UI de siempre.
+    /// The role's MONOCHROME default style: reproduces the M1 look
+    /// (`BOLD`/`REVERSED`/`DIM` where they are today) without color. It is what is used
+    /// when the theme does not define the role, so that a user without a theme sees
+    /// exactly the usual UI.
     #[must_use]
     pub const fn fallback(self) -> Style {
         match self {
             Role::Selection | Role::StatusBar | Role::Button => Style::new().reverse(),
-            // El cursor sin foco: visible sin color, pero no el mismo que el
-            // que recibe las teclas.
+            // The unfocused cursor: visible without color, but not the same as the
+            // one receiving the keys.
             Role::SelectionUnfocused => Style::new().reverse().dim(),
             Role::BorderFocus | Role::ModalBorder | Role::HostileBadge | Role::Title => {
                 Style::new().bold()
             }
-            // BorderUnfocused/Mark: Mark, distinto de Selection (reverse) pero
-            // visible sin color, comparte el atenuado del borde sin foco —
-            // "presente pero no activo".
+            // BorderUnfocused/Mark: Mark, distinct from Selection (reverse) but
+            // visible without color, shares the dimming of the unfocused border —
+            // "present but not active".
             Role::BorderUnfocused | Role::Mark => Style::new().dim(),
-            // Background/Regular/Error/Warning/Info/Match: sin color por defecto
-            // (la UI de M1 no los distinguía; Background sin fijar = fondo del
-            // terminal). Un tema con color los diferencia.
-            // PaneBackground/PaneFocusBackground: chrome nuevo de la GUI, sin
-            // equivalente en la TUI de M1; mismo tratamiento que Background
-            // (sin color = fondo heredado del backend).
+            // Background/Regular/Error/Warning/Info/Match: no color by default
+            // (the M1 UI did not distinguish them; unset Background = the
+            // terminal's background). A colored theme tells them apart.
+            // PaneBackground/PaneFocusBackground: new GUI chrome, with no
+            // equivalent in the M1 TUI; same treatment as Background
+            // (no color = background inherited from the backend).
             //
-            // Los diez de CROMO tampoco llevan color, y por un motivo
-            // distinto que merece decirse: su defecto sensato NO SE PUEDE
-            // ESCRIBIR AQUÍ. Un `hover` correcto es «el fondo del panel con
-            // foco de ESTE tema», y un literal no puede seguir a ocho
-            // paletas. La derivación vive en la hoja de estilos de la
-            // ventana (`var(--hover, var(--panel-focus-bg))`), que es el
-            // único sitio donde los dos colores están a la vez.
+            // The ten CHROME ones carry no color either, and for a different
+            // reason worth stating: their sensible default CANNOT BE
+            // WRITTEN HERE. A correct `hover` is "the focused pane's
+            // background of THIS theme", and a literal cannot follow eight
+            // palettes. The derivation lives in the window's
+            // stylesheet (`var(--hover, var(--panel-focus-bg))`), which is the
+            // only place where both colors are present at once.
             Role::Background
             | Role::Regular
             | Role::Error
@@ -310,27 +311,27 @@ impl Role {
             | Role::Separator
             | Role::FocusBorder
             | Role::Muted
-            // El pijama sin color es el listado de siempre: la banda solo
-            // existe si un tema la pinta. Un `dim` alterno sería peor que
-            // nada — atenúa el NOMBRE, que es lo que se viene a leer.
+            // Colorless striped rows are the usual listing: the stripe only
+            // exists if a theme paints it. An alternating `dim` would be worse than
+            // nothing — it dims the NAME, which is what one comes to read.
             | Role::Stripe => Style::new(),
         }
     }
 
-    /// Parsea un nombre en kebab-case (el MISMO que produce/consume la
-    /// serialización serde de este tipo, `#[serde(rename_all =
-    /// "kebab-case")]`) al [`Role`] correspondiente. `None` si `s` no es un
-    /// nombre reconocido del conjunto CERRADO (ADR 0037, decisión 3 y su
-    /// enmienda de límite de responsabilidad): la validación de un `role`
-    /// que llega en datos de un plugin (`SpanWire::role`/`DecorationWire::
-    /// role`, `norte-proto`) vive en el FRONTEND que posee el tema
-    /// (`norte-core` no depende de `norte-theme`), y este es el punto de
-    /// entrada único — reutiliza el derive serde existente como fuente de
-    /// verdad del nombre en vez de duplicar una tabla de match que podría
-    /// desincronizarse de `#[serde(rename_all = "kebab-case")]`. Un nombre
-    /// desconocido (de un plugin más nuevo, o de un fork con roles propios)
-    /// degrada a `None` — nunca un error — para que un guest de un futuro
-    /// norte (o de otro fork) no rompa el render de uno más viejo.
+    /// Parses a kebab-case name (the SAME one this type's serde
+    /// serialization produces/consumes, `#[serde(rename_all =
+    /// "kebab-case")]`) into the corresponding [`Role`]. `None` if `s` is not a
+    /// recognized name from the CLOSED set (ADR 0037, decision 3 and its
+    /// responsibility-boundary amendment): validation of a `role`
+    /// arriving in plugin data (`SpanWire::role`/`DecorationWire::
+    /// role`, `norte-proto`) lives in the FRONTEND that owns the theme
+    /// (`norte-core` does not depend on `norte-theme`), and this is the single
+    /// entry point — it reuses the existing serde derive as the source of
+    /// truth for the name instead of duplicating a match table that could
+    /// drift from `#[serde(rename_all = "kebab-case")]`. An unknown
+    /// name (from a newer plugin, or from a fork with its own roles)
+    /// degrades to `None` — never an error — so that a guest from a future
+    /// norte (or another fork) does not break the rendering of an older one.
     ///
     /// ```
     /// use norte_theme::Role;
@@ -344,19 +345,19 @@ impl Role {
         serde_json::from_value(serde_json::Value::String(s.to_owned())).ok()
     }
 
-    /// [`Self::from_kebab`] acotado a [`Self::REQUESTABLE`]: el punto de
-    /// entrada ÚNICO de un nombre de rol que viene de un plugin.
+    /// [`Self::from_kebab`] restricted to [`Self::REQUESTABLE`]: the SINGLE
+    /// entry point for a role name coming from a plugin.
     ///
-    /// Existe para que la restricción viva donde vive la lista, y no
-    /// repetida en cada frontend que valida un dato de un guest.
+    /// It exists so that the restriction lives where the list lives, and is not
+    /// repeated in every frontend that validates a guest's data.
     ///
     /// ```
     /// use norte_theme::Role;
-    /// // Un significado: pasa.
+    /// // A meaning: passes.
     /// assert_eq!(Role::from_kebab_requestable("error"), Some(Role::Error));
-    /// // Cromo de la ventana: degrada, no es un error.
+    /// // Window chrome: degrades, it is not an error.
     /// assert_eq!(Role::from_kebab_requestable("scrollbar-slider"), None);
-    /// // Y sigue existiendo para quien pregunte sin filtro.
+    /// // And it still exists for whoever asks without the filter.
     /// assert!(Role::from_kebab("scrollbar-slider").is_some());
     /// ```
     #[must_use]
@@ -364,11 +365,11 @@ impl Role {
         Self::from_kebab(s).filter(|r| Self::REQUESTABLE.contains(r))
     }
 
-    /// El nombre kebab de un rol: el inverso exacto de [`Self::from_kebab`].
+    /// The kebab name of a role: the exact inverse of [`Self::from_kebab`].
     ///
-    /// Hace falta para los frontends que no comparten memoria con el host —el
-    /// renderer gráfico recibe una CADENA, no un enum— y para que un rol que
-    /// cruza y vuelve sea el mismo rol.
+    /// Needed by frontends that do not share memory with the host —the
+    /// graphical renderer receives a STRING, not an enum— and so that a role that
+    /// crosses over and back is the same role.
     ///
     /// ```
     /// use norte_theme::Role;
@@ -376,10 +377,10 @@ impl Role {
     /// assert_eq!(Role::from_kebab(Role::PaneBackground.as_kebab()), Some(Role::PaneBackground));
     /// ```
     ///
-    /// El `match` es exhaustivo y sin comodín, así que un rol nuevo deja de
-    /// compilar aquí; y `as_kebab_es_el_nombre_de_serde` comprueba, rol a rol
-    /// sobre [`Self::ALL`], que dice lo mismo que la serialización — que es
-    /// lo que impide que las dos tablas se separen.
+    /// The `match` is exhaustive with no wildcard, so a new role stops
+    /// compiling here; and `as_kebab_is_the_serde_name` checks, role by role
+    /// over [`Self::ALL`], that it says the same as the serialization — which is
+    /// what keeps the two tables from drifting apart.
     #[must_use]
     pub const fn as_kebab(self) -> &'static str {
         match self {
@@ -420,96 +421,99 @@ impl Role {
 mod tests {
     use super::Role;
 
-    /// `as_kebab` dice lo MISMO que serde, rol a rol.
+    /// `as_kebab` says the SAME as serde, role by role.
     ///
-    /// Sin esto son dos tablas que se separan en el primer rol nuevo: el
-    /// `match` deja de compilar, sí, pero nada obliga a que el nombre que se
-    /// escriba allí sea el que sale por el cable.
+    /// Without this they are two tables that drift apart on the first new role: the
+    /// `match` stops compiling, yes, but nothing forces the name written
+    /// there to be the one that goes over the wire.
     #[test]
-    fn as_kebab_es_el_nombre_de_serde() {
+    fn as_kebab_is_the_serde_name() {
         for &role in Role::ALL {
-            let por_serde = serde_json::to_value(role).expect("serializa");
+            let via_serde = serde_json::to_value(role).expect("serializes");
             assert_eq!(
-                por_serde.as_str(),
+                via_serde.as_str(),
                 Some(role.as_kebab()),
-                "{role:?} se llama distinto según quién pregunte"
+                "{role:?} has a different name depending on who asks"
             );
             assert_eq!(Role::from_kebab(role.as_kebab()), Some(role));
         }
     }
 
     #[test]
-    fn from_kebab_todos_los_roles_hacen_roundtrip() {
-        // Fuente única: si `Role::ALL` gana una variante y su nombre kebab
-        // cambia de forma, este test la ejercita SIN necesidad de listar los
-        // nombres a mano (evita la duplicación que el rustdoc de
-        // `from_kebab` explícitamente quiere evitar).
+    fn from_kebab_every_role_round_trips() {
+        // Single source: if `Role::ALL` gains a variant and its kebab name
+        // changes shape, this test exercises it WITHOUT listing the
+        // names by hand (avoids the duplication that `from_kebab`'s rustdoc
+        // explicitly wants to avoid).
         for &role in Role::ALL {
             let kebab = serde_json::to_value(role)
-                .expect("Role serializa")
+                .expect("Role serializes")
                 .as_str()
-                .expect("Role serializa a string")
+                .expect("Role serializes to a string")
                 .to_owned();
             assert_eq!(
                 Role::from_kebab(&kebab),
                 Some(role),
-                "roundtrip kebab de {role:?}"
+                "kebab roundtrip of {role:?}"
             );
         }
     }
 
     #[test]
-    fn from_kebab_desconocido_es_none() {
-        // Nombres que un plugin ajeno al tema podría mandar (ADR 0037): no
-        // deben panicar ni colar como Role válido.
+    fn from_kebab_unknown_is_none() {
+        // Names a plugin unaware of the theme could send (ADR 0037): they must
+        // not panic nor sneak through as a valid Role.
         assert_eq!(Role::from_kebab("number"), None);
         assert_eq!(Role::from_kebab("keyword"), None);
-        assert_eq!(Role::from_kebab("HostileBadge"), None); // no es kebab-case
+        assert_eq!(Role::from_kebab("HostileBadge"), None); // not kebab-case
     }
 
-    /// `CORE` es un SUBCONJUNTO de `ALL`, y `ALL` no pierde a nadie.
+    /// `CORE` is a SUBSET of `ALL`, and `ALL` loses nobody.
     ///
-    /// Los dos conjuntos existen porque miden cosas distintas: `ALL` es el
-    /// vocabulario entero, `CORE` es lo que un preset está OBLIGADO a
-    /// colorear. Sin esta comprobación, un rol nuevo puede caer fuera de los
-    /// dos y no existir para nadie.
+    /// The two sets exist because they measure different things: `ALL` is the
+    /// whole vocabulary, `CORE` is what a preset is REQUIRED to
+    /// color. Without this check, a new role can fall outside both
+    /// and exist for nobody.
     #[test]
-    fn core_es_subconjunto_de_all_y_all_los_tiene_a_todos() {
+    fn core_is_a_subset_of_all_and_all_has_everyone() {
         for &r in Role::CORE {
-            assert!(Role::ALL.contains(&r), "{r:?} está en CORE y no en ALL");
+            assert!(Role::ALL.contains(&r), "{r:?} is in CORE and not in ALL");
         }
-        assert_eq!(Role::CORE.len(), 18, "CORE son los dieciocho de siempre");
+        assert_eq!(Role::CORE.len(), 18, "CORE is the usual eighteen");
         assert_eq!(
             Role::ALL.len(),
             29,
-            "ALL son esos más los diez de cromo y el pijama"
+            "ALL is those plus the ten chrome ones and the stripe"
         );
     }
 
-    /// Lo PEDIBLE por un plugin es un subconjunto de lo que existe, y deja
-    /// fuera tanto el cromo como las superficies de ESTADO de la ventana
+    /// What a plugin can REQUEST is a subset of what exists, and leaves
+    /// out both the chrome and the window's STATE surfaces
     /// (ADR 0037 + spec 2026-09-11, F2).
     #[test]
-    fn lo_pedible_deja_fuera_el_cromo_y_el_estado() {
+    fn requestable_leaves_out_chrome_and_state() {
         for &r in Role::REQUESTABLE {
-            assert!(Role::ALL.contains(&r), "{r:?} es pedible y no existe");
+            assert!(
+                Role::ALL.contains(&r),
+                "{r:?} is requestable and does not exist"
+            );
         }
-        // Cromo: el color del deslizador no significa nada en una insignia.
+        // Chrome: the slider's color means nothing on a badge.
         for r in [
             Role::ScrollbarSlider,
             Role::WidgetShadow,
             Role::InputBorder,
             Role::Separator,
             Role::Hover,
-            // El pijama es una ayuda de LECTURA del listado: depende de en
-            // qué fila cae la entrada, que es justo lo que un plugin no sabe.
+            // Striped rows are a READING aid for the listing: it depends on which
+            // row the entry falls on, which is exactly what a plugin does not know.
             Role::Stripe,
         ] {
-            assert!(!Role::REQUESTABLE.contains(&r), "{r:?} es cromo");
+            assert!(!Role::REQUESTABLE.contains(&r), "{r:?} is chrome");
         }
-        // Estado de la ventana: dónde está el cursor, qué hay marcado, cuál
-        // es el panel con foco. Un plugin describe CONTENIDO, y no sabe nada
-        // de eso.
+        // Window state: where the cursor is, what is marked, which
+        // is the focused pane. A plugin describes CONTENT, and knows nothing
+        // about that.
         for r in [
             Role::Selection,
             Role::SelectionUnfocused,
@@ -520,10 +524,10 @@ mod tests {
         ] {
             assert!(
                 !Role::REQUESTABLE.contains(&r),
-                "{r:?} es estado, no significado"
+                "{r:?} is state, not meaning"
             );
         }
-        // Y las señales que un plugin SÍ necesita para decir algo.
+        // And the signals a plugin DOES need to say something.
         for r in [
             Role::Error,
             Role::Warning,
@@ -537,23 +541,23 @@ mod tests {
         ] {
             assert!(
                 Role::REQUESTABLE.contains(&r),
-                "{r:?} tiene que ser pedible"
+                "{r:?} has to be requestable"
             );
         }
     }
 
-    /// El punto de entrada de un nombre que viene de un plugin: un rol no
-    /// pedible degrada a `None`, igual que un nombre desconocido. No es un
-    /// error — un guest de un norte más nuevo no puede romper el render de
-    /// uno más viejo (ADR 0037).
+    /// The entry point for a name coming from a plugin: a non-requestable
+    /// role degrades to `None`, just like an unknown name. It is not an
+    /// error — a guest from a newer norte cannot break the rendering of
+    /// an older one (ADR 0037).
     #[test]
-    fn from_kebab_requestable_degrada_lo_no_pedible_a_none() {
+    fn from_kebab_requestable_degrades_the_non_requestable_to_none() {
         assert_eq!(Role::from_kebab_requestable("warning"), Some(Role::Warning));
         assert_eq!(Role::from_kebab_requestable("muted"), Some(Role::Muted));
         assert_eq!(Role::from_kebab_requestable("scrollbar-slider"), None);
         assert_eq!(Role::from_kebab_requestable("selection"), None);
-        assert_eq!(Role::from_kebab_requestable("no-existe"), None);
-        // Y siguen siendo roles de verdad para quien pregunte sin filtro.
+        assert_eq!(Role::from_kebab_requestable("does-not-exist"), None);
+        // And they are still real roles for whoever asks without the filter.
         assert_eq!(
             Role::from_kebab("scrollbar-slider"),
             Some(Role::ScrollbarSlider)
@@ -561,13 +565,14 @@ mod tests {
         assert_eq!(Role::from_kebab("selection"), Some(Role::Selection));
     }
 
-    /// Los diez roles de cromo NO están en CORE: se DERIVAN en la hoja de
-    /// estilos de la ventana a partir de colores que el tema ya tiene (spec
-    /// 2026-09-11, F2), y por eso un preset no tiene que definirlos. Exigirlos
-    /// serían ochenta valores inventados repartidos por los ocho presets que
-    /// ya existen.
+    /// The ten chrome roles are NOT in CORE: they are DERIVED in the window's
+    /// stylesheet from colors the theme already has (spec
+    /// 2026-09-11, F2), and that is why a preset does not have to define them. Requiring them
+    /// would mean eighty invented values spread across the eight presets that
+    /// already exist.
+    // TODO(translation): review — there are ten presets now, not eight.
     #[test]
-    fn los_roles_de_cromo_quedan_fuera_de_core() {
+    fn chrome_roles_stay_out_of_core() {
         for r in [
             Role::Hover,
             Role::InputBackground,
@@ -582,9 +587,9 @@ mod tests {
         ] {
             assert!(
                 !Role::CORE.contains(&r),
-                "{r:?} no debería exigírsele a cada preset"
+                "{r:?} should not be required of every preset"
             );
-            assert!(Role::ALL.contains(&r), "{r:?} tiene que existir");
+            assert!(Role::ALL.contains(&r), "{r:?} has to exist");
         }
     }
 }

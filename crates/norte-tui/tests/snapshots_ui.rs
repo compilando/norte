@@ -1,6 +1,6 @@
-//! Snapshots del render (fase 10, insta): la forma EXACTA de cada pantalla
-//! queda congelada — cualquier cambio visual es un diff consciente
-//! (`cargo insta review`). Determinista: idioma fijo, datos fijos.
+//! Render snapshots (phase 10, insta): the EXACT shape of each screen is
+//! frozen — any visual change is a conscious diff (`cargo insta review`).
+//! Deterministic: fixed language, fixed data.
 
 use norte_core::TransferOptions;
 use norte_proto::{Entry, EntryKind, Segment, VPath};
@@ -13,7 +13,7 @@ use ratatui::backend::TestBackend;
 
 fn vp(wire: &str) -> VPath {
     let _ = norte_i18n::force(norte_i18n::Lang::Es);
-    VPath::parse(wire).expect("wire válido")
+    VPath::parse(wire).expect("valid wire")
 }
 
 fn entry(dir: &VPath, name: &[u8], kind: EntryKind, size: Option<u64>) -> Entry {
@@ -32,41 +32,39 @@ fn render(app: &App) -> String {
     terminal.backend().to_string()
 }
 
-/// Como [`render`] pero a 80×24 (MAJOR-1 item d, H1 close): el gestor de
-/// extensiones y el selector de tema necesitan más filas visibles que la
-/// pantalla de 16 usada en el resto del archivo para pintar su lista
-/// completa sin recorte vertical.
+/// Like [`render`] but at 80×24 (MAJOR-1 item d, H1 close): the extension
+/// manager and the theme picker need more visible rows than the 16-row
+/// screen used in the rest of the file, to paint their full list without
+/// vertical clipping.
 fn render_80x24(app: &App) -> String {
-    render_en(app, 80, 24)
+    render_at(app, 80, 24)
 }
 
-/// El mismo pintado a un tamaño DADO: lo que degrada con el ancho (el índice
-/// de secciones de los ajustes, por ejemplo) no se puede comprobar a uno
-/// solo.
-fn render_en(app: &App, ancho: u16, alto: u16) -> String {
-    let mut terminal = Terminal::new(TestBackend::new(ancho, alto)).expect("terminal");
+/// The same paint at a GIVEN size: whatever degrades with width (the
+/// settings section index, for example) cannot be checked at just one.
+fn render_at(app: &App, width: u16, height: u16) -> String {
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
     terminal.draw(|f| ui::draw(f, app)).expect("draw");
     terminal.backend().to_string()
 }
 
-/// H1 T3 (#24): los hints de los overlays ya NO son estáticos — se
-/// precomputan del efectivo `dialog` vigente (`main.rs`, `DialogHints::
-/// build`). Los tests de render construyen `App` directamente (sin pasar
-/// por `main`), así que replican el MISMO cómputo con el preset `orthodox`
-/// real: el snapshot congela lo que el usuario vería de verdad, no una
-/// cadena vacía.
+/// H1 T3 (#24): overlay hints are no longer static — they are precomputed
+/// from the effective `dialog` in force (`main.rs`, `DialogHints::build`).
+/// The render tests build `App` directly (without going through `main`), so
+/// they replicate the SAME computation with the real `orthodox` preset: the
+/// snapshot freezes what the user would really see, not an empty string.
 fn default_dialog_hints() -> norte_tui::hints::DialogHints {
     use norte_tui::keymap::{COMMANDS, DIALOG_COMMANDS, Effective, Screen, presets};
     let (_, preset) = presets()
         .into_iter()
         .find(|(n, _)| *n == "orthodox")
-        .expect("preset orthodox");
+        .expect("orthodox preset");
     let known: Vec<&str> = COMMANDS
         .iter()
         .copied()
         .chain(DIALOG_COMMANDS.iter().copied())
         .collect();
-    let eff = Effective::build_for(&preset, &[], &known, Screen::Dialog).expect("dialog efectivo");
+    let eff = Effective::build_for(&preset, &[], &known, Screen::Dialog).expect("effective dialog");
     norte_tui::hints::DialogHints::build(&eff)
 }
 
@@ -98,22 +96,24 @@ fn app_base() -> App {
     app
 }
 
-/// #210: en la barra de estado la RUTA cede, y el contador `pos/total` no.
+/// #210: in the status bar, the PATH yields, and the `pos/total` counter does
+/// not.
 ///
-/// Con una ruta larga, ratatui recortaba la cola: lo que quedaba a la vista
-/// era un dígito suelto del total, que se lee como cualquier otra cosa. Ahora
-/// la ruta se elipsa por el medio —el principio dice dónde estás y el final
-/// qué carpeta es— y todo lo que viene detrás sobrevive entero.
-/// #149: el aviso de espacio se pinta DEBAJO del destino y ENCIMA de las
-/// teclas — lo último que se lee antes de decidir.
+/// With a long path, ratatui used to clip the tail: what stayed visible was a
+/// stray digit of the total, which reads like anything else. Now the path is
+/// ellipsized in the middle — the start says where you are and the end which
+/// directory it is — and everything that follows survives whole.
+/// #149: the space warning is painted BELOW the destination and ABOVE the
+/// keys — the last thing read before deciding.
 ///
-/// Y solo cuando lo hay: que quepa, que el destino no sepa decir cuánto le
-/// queda o que no se sepa cuánto se va a mover se callan las tres, porque un
-/// «sí cabe» en cada copia enseña a no leer la línea.
+/// And only when there is one: that it fits, that the destination cannot say
+/// how much room is left, or that how much is about to move is unknown, all
+/// three stay silent, because a "yes it fits" on every copy teaches you not
+/// to read the line.
 #[test]
-fn el_modal_de_transferencia_pinta_el_aviso_de_espacio() {
+fn the_transfer_modal_paints_the_space_warning() {
     let dir = vp("file:///casa");
-    let pintar = |space: Option<String>| {
+    let paint = |space: Option<String>| {
         let mut app = App::new(
             Pane::new(dir.clone(), Vec::new()),
             Pane::new(dir.clone(), Vec::new()),
@@ -136,34 +136,37 @@ fn el_modal_de_transferencia_pinta_el_aviso_de_espacio() {
         Some(1_100_000_000),
         norte_i18n::active(),
     )
-    .expect("no cabe: hay aviso");
-    let con = pintar(Some(notice.clone()));
+    .expect("does not fit: there is a warning");
+    let con = paint(Some(notice.clone()));
     let lines: Vec<&str> = con.lines().collect();
-    let row = |aguja: &str| {
+    let row = |needle: &str| {
         lines
             .iter()
-            .position(|l| l.contains(aguja))
-            .unwrap_or_else(|| panic!("falta {aguja:?} en:\n{con}"))
+            .position(|l| l.contains(needle))
+            .unwrap_or_else(|| panic!("missing {needle:?} in:\n{con}"))
     };
     let dest = row("medios");
-    let avisada = row(notice.split_whitespace().next().expect("primera palabra"));
-    assert!(avisada > dest, "el aviso va debajo del destino:\n{con}");
+    let warned = row(notice.split_whitespace().next().expect("first word"));
+    assert!(
+        warned > dest,
+        "the warning goes below the destination:\n{con}"
+    );
 
-    // Sin aviso, ni rastro de él.
-    let sin = pintar(None);
+    // Without a warning, no trace of it.
+    let sin = paint(None);
     assert!(
         !sin.contains(&notice),
-        "cuando cabe no se dice nada:\n{sin}"
+        "when it fits, nothing is said:\n{sin}"
     );
 }
 
-/// #164: y debajo del de espacio, el de confinamiento — misma clase de línea
-/// (un hecho del destino, antes de decir que sí) y mismo contrato: solo cuando
-/// lo hay, y sin bloquear nada.
+/// #164: and below the space one, the confinement one — same class of line
+/// (a fact about the destination, before saying yes) and the same contract:
+/// only when there is one, and without blocking anything.
 #[test]
-fn el_modal_de_transferencia_pinta_el_aviso_de_confinamiento() {
+fn the_transfer_modal_paints_the_confinement_warning() {
     let dir = vp("file:///casa");
-    let pintar = |space: Option<String>, confine: Option<String>| {
+    let paint = |space: Option<String>, confine: Option<String>| {
         let mut app = App::new(
             Pane::new(dir.clone(), Vec::new()),
             Pane::new(dir.clone(), Vec::new()),
@@ -181,59 +184,59 @@ fn el_modal_de_transferencia_pinta_el_aviso_de_confinamiento() {
         terminal.backend().to_string()
     };
 
-    let sin_confinar = norte_frontend::confine::warning(
+    let unconfined = norte_frontend::confine::warning(
         norte_proto::Capabilities {
             flags: norte_proto::CapabilityFlags::empty(),
             max_path: None,
         },
         norte_i18n::active(),
     )
-    .expect("un destino que no confina lo dice");
-    let espacio = norte_frontend::space::warning(
+    .expect("a destination that does not confine says so");
+    let space_msg = norte_frontend::space::warning(
         Some(4_200_000_000),
         Some(1_100_000_000),
         norte_i18n::active(),
     )
-    .expect("no cabe: hay aviso");
+    .expect("does not fit: there is a warning");
 
-    let con = pintar(Some(espacio.clone()), Some(sin_confinar.clone()));
+    let con = paint(Some(space_msg.clone()), Some(unconfined.clone()));
     let lines: Vec<&str> = con.lines().collect();
-    let row = |aguja: &str| {
+    let row = |needle: &str| {
         lines
             .iter()
-            .position(|l| l.contains(aguja))
-            .unwrap_or_else(|| panic!("falta {aguja:?} en:\n{con}"))
+            .position(|l| l.contains(needle))
+            .unwrap_or_else(|| panic!("missing {needle:?} in:\n{con}"))
     };
     let dest = row("medios");
-    let del_espacio = row(espacio.split_whitespace().next().expect("palabra"));
-    // El modal envuelve, así que se busca una palabra que la línea no comparta
-    // con ninguna otra en vez de la frase entera.
-    let del_confinamiento = row("symlink");
-    assert!(del_espacio > dest, "espacio bajo el destino:\n{con}");
+    let space_row = row(space_msg.split_whitespace().next().expect("word"));
+    // The modal wraps, so we look for a word the line does not share with any
+    // other instead of the whole phrase.
+    let confine_row = row("symlink");
+    assert!(space_row > dest, "space below the destination:\n{con}");
     assert!(
-        del_confinamiento > del_espacio,
-        "y el confinamiento debajo del espacio:\n{con}"
+        confine_row > space_row,
+        "and confinement below space:\n{con}"
     );
 
-    // Un destino que sí confina no dice nada, que es el caso normal.
-    let sin = pintar(None, None);
+    // A destination that does confine says nothing, which is the normal case.
+    let sin = paint(None, None);
     assert!(
         !sin.contains("symlink"),
-        "quien confina no se anuncia:\n{sin}"
+        "one that confines does not announce itself:\n{sin}"
     );
 }
 
-/// #343, la otra mitad: copiar UN fichero PIDE las dos comprobaciones.
+/// #343, the other half: copying ONE file REQUIRES both checks.
 ///
-/// Pintarlas no sirve si nadie las arma. El reparto por número de ítems dejaba
-/// `pending_dest_check` sin poner en el camino de un solo fichero, así que el
-/// bucle no tenía a quién preguntar y las dos líneas nunca se llenaban.
+/// Painting them is useless if nobody builds them. The split by item count
+/// left `pending_dest_check` unset on the path of a single file, so the loop
+/// had nobody to ask and the two lines were never filled in.
 #[test]
-fn copiar_un_solo_fichero_pide_la_comprobacion_del_destino() {
+fn copying_a_single_file_requests_the_destination_check() {
     let dir = vp("file:///casa");
-    let entrada = entry(&dir, b"a.bin", EntryKind::File, Some(4_200_000_000));
+    let the_entry = entry(&dir, b"a.bin", EntryKind::File, Some(4_200_000_000));
     let mut app = App::new(
-        Pane::new(dir.clone(), vec![entrada]),
+        Pane::new(dir.clone(), vec![the_entry]),
         Pane::new(vp("file:///medios"), Vec::new()),
     );
     app.panes[0].set_cursor(0);
@@ -243,32 +246,31 @@ fn copiar_un_solo_fichero_pide_la_comprobacion_del_destino() {
     let check = app
         .pending_dest_check
         .as_ref()
-        .expect("un fichero suelto también pregunta por su destino");
+        .expect("a single file also asks about its destination");
     assert_eq!(check.to, vp("file:///medios"));
     assert_eq!(
         check.total,
         Some(4_200_000_000),
-        "y con el tamaño de ESE fichero, para poder decir si cabe"
+        "and with the size of THAT file, to be able to say whether it fits"
     );
     assert!(matches!(app.modal, Some(Modal::TransferName { .. })));
 }
 
-/// #343: copiar UN SOLO fichero avisa igual que copiar varios.
+/// #343: copying a SINGLE file warns the same as copying several.
 ///
-/// El terminal repartía por número de ítems: con varios abría
-/// `ConfirmTransfer` y armaba la comprobación del destino, y con uno solo
-/// abría el diálogo de NOMBRE y no armaba nada. Así que copiar un fichero
-/// suelto no decía ni «no cabe» ni «este destino no sujeta sus escrituras»,
-/// mientras la ventana sí lo decía.
+/// The terminal used to split by item count: with several it opened
+/// `ConfirmTransfer` and built the destination check, and with just one it
+/// opened the NAME dialog and built nothing. So copying a single file said
+/// neither "does not fit" nor "this destination does not hold its writes",
+/// while the window did say so.
 ///
-/// La del confinamiento es la que más molesta que falte: su ausencia
-/// SIGNIFICA que el destino sujeta sus escrituras, así que callarla afirma
-/// algo que nadie ha comprobado. Y desde #219 eso alcanza también a una hoja
-/// suelta.
+/// The confinement one is the one whose absence is most troubling: its
+/// absence MEANS the destination holds its writes, so silencing it asserts
+/// something nobody checked. And since #219 that also covers a single leaf.
 #[test]
-fn el_modal_de_nombre_pinta_los_avisos_del_destino() {
+fn the_name_modal_paints_the_destination_warnings() {
     let dir = vp("file:///casa");
-    let pintar = |space: Option<String>, confine: Option<String>| {
+    let paint = |space: Option<String>, confine: Option<String>| {
         let mut app = App::new(
             Pane::new(dir.clone(), Vec::new()),
             Pane::new(dir.clone(), Vec::new()),
@@ -292,40 +294,40 @@ fn el_modal_de_nombre_pinta_los_avisos_del_destino() {
         terminal.backend().to_string()
     };
 
-    let sin_confinar = norte_frontend::confine::warning(
+    let unconfined = norte_frontend::confine::warning(
         norte_proto::Capabilities {
             flags: norte_proto::CapabilityFlags::empty(),
             max_path: None,
         },
         norte_i18n::active(),
     )
-    .expect("un destino que no confina lo dice");
-    let espacio = norte_frontend::space::warning(
+    .expect("a destination that does not confine says so");
+    let space_msg = norte_frontend::space::warning(
         Some(4_200_000_000),
         Some(1_100_000_000),
         norte_i18n::active(),
     )
-    .expect("no cabe: hay aviso");
+    .expect("does not fit: there is a warning");
 
-    let con = pintar(Some(espacio.clone()), Some(sin_confinar));
+    let con = paint(Some(space_msg.clone()), Some(unconfined));
     assert!(
-        con.contains(espacio.split_whitespace().next().expect("palabra")),
-        "el aviso de espacio sale con un solo fichero:\n{con}"
+        con.contains(space_msg.split_whitespace().next().expect("word")),
+        "the space warning shows up with a single file:\n{con}"
     );
     assert!(
         con.contains("symlink"),
-        "y el de confinamiento también:\n{con}"
+        "and so does the confinement one:\n{con}"
     );
 
-    let sin = pintar(None, None);
+    let sin = paint(None, None);
     assert!(
         !sin.contains("symlink"),
-        "y cuando no hay nada que decir, no se dice:\n{sin}"
+        "and when there is nothing to say, nothing is said:\n{sin}"
     );
 }
 
 #[test]
-fn la_barra_de_estado_recorta_la_ruta_y_no_el_contador() {
+fn the_status_bar_clips_the_path_and_not_the_counter() {
     let hondo = vp(&format!(
         "file:///{}",
         ["carpeta-con-nombre-larguisimo"; 6].join("/")
@@ -356,36 +358,39 @@ fn la_barra_de_estado_recorta_la_ruta_y_no_el_contador() {
         .to_string()
         .lines()
         .last()
-        .expect("barra de estado")
+        .expect("status bar")
         .to_owned();
 
     assert!(
         bar.contains("8/42"),
-        "el contador entero, que es lo que dice cuánto hay: {bar:?}"
+        "the whole counter, which is what says how many there are: {bar:?}"
     );
-    assert!(bar.contains('…'), "y la ruta cede por el medio: {bar:?}");
+    assert!(
+        bar.contains('…'),
+        "and the path yields in the middle: {bar:?}"
+    );
 }
 
 #[test]
-fn snapshot_navegacion() {
+fn snapshot_navigation() {
     insta::assert_snapshot!(render(&app_base()));
 }
 
-/// G3b (ADR 0037): badge de decorator de plugin, TRAS el hueco del badge de
-/// nombre hostil — `docs` lleva un badge con ROL reconocido (color del
-/// tema); `src` lleva un badge HOSTIL (control embebido, más largo que el
-/// tope de 8 chars) que debe llegar ya ENMASCARADO y TRUNCADO (nunca el
-/// control crudo, nunca más de 8 chars); `notas.txt` no lleva decoración —
-/// su fila se ve exactamente igual que antes de G3b (sin span extra).
+/// G3b (ADR 0037): plugin decorator badge, AFTER the hostile-name badge slot
+/// — `docs` carries a badge with a recognized ROLE (theme color); `src`
+/// carries a HOSTILE badge (embedded control, longer than the 8-char cap)
+/// that must arrive already MASKED and TRUNCATED (never the raw control,
+/// never more than 8 chars); `notes.txt` carries no decoration — its row
+/// looks exactly as it did before G3b (no extra span).
 #[test]
-fn snapshot_decoracion_de_plugin_badge_hostil_enmascarado() {
+fn snapshot_plugin_decoration_masked_hostile_badge() {
     let mut app = app_base();
     let pane = app.focused_mut();
     let by_name = |entries: &[Entry], name: &[u8]| -> VPath {
         entries
             .iter()
             .find(|e| e.path.file_name().is_some_and(|n| n.as_bytes() == name))
-            .expect("entrada del fixture")
+            .expect("fixture entry")
             .path
             .clone()
     };
@@ -409,19 +414,19 @@ fn snapshot_decoracion_de_plugin_badge_hostil_enmascarado() {
     insta::assert_snapshot!(render(&app));
 }
 
-/// ADR 0105: la columna de ICONOS, a la izquierda del nombre. `src` lleva
-/// icono; `docs` lleva icono Y una insignia —los dos huecos en una fila—;
-/// `notas.txt` no lleva icono, y aun así lleva el HUECO, para que su nombre
-/// siga alineado con los demás. La cabecera «Nombre» se corre lo mismo.
+/// ADR 0105: the ICON column, to the left of the name. `src` carries an
+/// icon; `docs` carries an icon AND a badge — both slots in one row —;
+/// `notes.txt` carries no icon, and still carries the SLOT, so its name
+/// stays aligned with the rest. The "Name" header shifts the same amount.
 #[test]
-fn snapshot_columna_de_iconos_a_la_izquierda_del_nombre() {
+fn snapshot_icon_column_to_the_left_of_the_name() {
     let mut app = app_base();
     let pane = app.focused_mut();
     let by_name = |entries: &[Entry], name: &[u8]| -> VPath {
         entries
             .iter()
             .find(|e| e.path.file_name().is_some_and(|n| n.as_bytes() == name))
-            .expect("entrada del fixture")
+            .expect("fixture entry")
             .path
             .clone()
     };
@@ -444,11 +449,11 @@ fn snapshot_columna_de_iconos_a_la_izquierda_del_nombre() {
     insta::assert_snapshot!(render(&app));
 }
 
-/// Quick search en modo filtro (spec 2026-07-18): el pane izquierdo lista
-/// SOLO los matches, con la línea de input `/{query} n/m` al pie y el
-/// cursor sobre la selección filtrada; el derecho sigue intacto.
+/// Quick search in filter mode (spec 2026-07-18): the left pane lists ONLY
+/// the matches, with the input line `/{query} n/m` at the foot and the
+/// cursor on the filtered selection; the right one stays intact.
 #[test]
-fn snapshot_quick_search_filtro() {
+fn snapshot_quick_search_filter() {
     let mut app = app_base();
     let pane = app.focused_mut();
     pane.quick_start(norte_tui::nav::Mode::Filter);
@@ -456,37 +461,37 @@ fn snapshot_quick_search_filtro() {
     insta::assert_snapshot!(render(&app));
 }
 
-/// Diálogo de búsqueda viva (`Alt+F7`, liveSearch T6): campo de nombre con
-/// texto (cursor `_`), toggles regex/case y la raíz del walk. El `cwd` lleva
-/// un override bidi: sale ENMASCARADO y con el badge (jamás bidi crudo en el
-/// borde, spec §6) — verifica el saneado del modal.
+/// Live-search dialog (`Alt+F7`, liveSearch T6): name field with text
+/// (cursor `_`), regex/case toggles and the walk root. The `cwd` carries a
+/// bidi override: it comes out MASKED and with the badge (never raw bidi at
+/// the edge, spec §6) — checks the modal's sanitizing.
 #[test]
 fn snapshot_search_dialog() {
     let mut app = app_base();
-    // Fija el cwd hostil del pane con foco reconstruyéndolo (mismo listado y
-    // cursor que `app_base`): el `Pane` ya no expone `dir` como campo — su
-    // estado puro vive en `norte_frontend::PaneState` (#82).
+    // Sets the pane-with-focus's hostile cwd by rebuilding it (same listing
+    // and cursor as `app_base`): `Pane` no longer exposes `dir` as a field —
+    // its pure state lives in `norte_frontend::PaneState` (#82).
     let entries = app.panes[0].entries().to_vec();
     app.panes[0] = Pane::new(vp("file:///casa/evil%E2%80%AEdir"), entries);
     app.panes[0].move_down(1);
     app.open_search_dialog();
-    let dialog = app.search_dialog.as_mut().expect("diálogo abierto");
+    let dialog = app.search_dialog.as_mut().expect("dialog open");
     for c in "*.rs".chars() {
         dialog.push_char(c);
     }
     insta::assert_snapshot!(render(&app));
 }
 
-/// Pane virtual de búsqueda viva (`Alt+F7`, liveSearch T6): el pane con foco
-/// lista los HITS que van llegando (nombre plano, `VPath` completo bajo el
-/// capó) y la barra pinta `search-status-running` («buscando…»); el otro pane
-/// sigue normal.
+/// Live-search virtual pane (`Alt+F7`, liveSearch T6): the pane with focus
+/// lists the HITS as they arrive (plain name, full `VPath` under the hood)
+/// and the bar paints `search-status-running` ("searching…"); the other pane
+/// stays normal.
 #[test]
 fn snapshot_search_pane_virtual() {
     let mut app = app_base();
-    let raiz = vp("file:///casa");
+    let root = vp("file:///casa");
     let pane = app.focused_mut();
-    pane.begin_search(raiz.clone());
+    pane.begin_search(root.clone());
     pane.extend_listing(vec![
         entry(
             &vp("file:///casa/src"),
@@ -504,10 +509,10 @@ fn snapshot_search_pane_virtual() {
     insta::assert_snapshot!(render(&app));
 }
 
-/// Popup de historial (spec 2026-07-18, `Alt+↓`): dirs del pane con foco,
-/// más reciente primero, con el cursor arriba.
+/// History popup (spec 2026-07-18, `Alt+↓`): dirs of the pane with focus,
+/// most recent first, with the cursor at the top.
 #[test]
-fn snapshot_popup_historial() {
+fn snapshot_popup_history() {
     let mut app = app_base();
     app.history[0].push(vp("file:///casa/docs"));
     app.history[0].push(vp("file:///proyectos"));
@@ -515,9 +520,9 @@ fn snapshot_popup_historial() {
     insta::assert_snapshot!(render(&app));
 }
 
-/// Popup de hotlist (`Ctrl+D`): entrada válida con `name — path`, entrada
-/// INVÁLIDA con su aviso (degradación por entrada, no revienta), y el
-/// footer de teclas `[enter]/[a]/[d]/[esc]`.
+/// Hotlist popup (`Ctrl+D`): a valid entry with `name — path`, an INVALID
+/// entry with its warning (per-entry degradation, no crash), and the key
+/// footer `[enter]/[a]/[d]/[esc]`.
 #[test]
 fn snapshot_popup_hotlist() {
     let mut app = app_base();
@@ -535,10 +540,10 @@ fn snapshot_popup_hotlist() {
     insta::assert_snapshot!(render(&app));
 }
 
-/// MAJOR-1 item (d), H1 close: a 80 columnas, el hint GENERADO del selector
-/// de tema (`app.theme`, F9) ya no se corta a mitad de palabra — el box
-/// ahora crece con su footer (ver `ui::draw_theme_picker`). Se pin-ea Y se
-/// verifica en directo que ninguna etiqueta quedó partida.
+/// MAJOR-1 item (d), H1 close: at 80 columns, the theme picker's GENERATED
+/// hint (`app.theme`, F9) no longer cuts off mid-word — the box now grows
+/// with its footer (see `ui::draw_theme_picker`). It is pinned AND checked
+/// live that no label ended up split.
 #[test]
 fn snapshot_theme_picker_80x24() {
     let mut app = app_base();
@@ -548,23 +553,23 @@ fn snapshot_theme_picker_80x24() {
     let hint = &app.dialog_hints.picker;
     assert!(
         !hint.is_empty(),
-        "el preset orthodox liga confirm/cancel al picker"
+        "the orthodox preset binds confirm/cancel to the picker"
     );
     assert!(
         text.contains(hint.as_str()),
-        "el hint generado debe caber ENTERO, sin cortes: hint={hint:?}\n{text}"
+        "the generated hint must fit WHOLE, with no cuts: hint={hint:?}\n{text}"
     );
 }
 
-/// #108 7a: el picker de columnas a 80×24 — checkbox por fila, flecha del
-/// sort en la columna vigente, y una fila de id OPACO hostil (config del
-/// usuario con RLO incrustado) pintada ENMASCARADA, jamás cruda (#73).
-/// Mismas garantías ruidosas que `snapshot_theme_picker_80x24`: el hint
-/// generado presente y entero (sin truncado silencioso del footer).
+/// #108 7a: the columns picker at 80×24 — checkbox per row, sort arrow on
+/// the current column, and a row with an OPAQUE hostile id (user config with
+/// an embedded RLO) painted MASKED, never raw (#73). Same noisy guarantees
+/// as `snapshot_theme_picker_80x24`: the generated hint present and whole
+/// (no silent footer truncation).
 #[test]
 fn snapshot_columns_picker_80x24() {
     let mut app = app_base();
-    // Config hostil ANTES de abrir: el picker parte del set resuelto.
+    // Hostile config BEFORE opening: the picker starts from the resolved set.
     let cfg = norte_config::ColumnsConfig {
         default_columns: Some(vec![
             "name".into(),
@@ -580,57 +585,54 @@ fn snapshot_columns_picker_80x24() {
     let hint = &app.dialog_hints.columns;
     assert!(
         !hint.is_empty(),
-        "el preset orthodox liga toggle/sort/confirm/cancel al picker"
+        "the orthodox preset binds toggle/sort/confirm/cancel to the picker"
     );
     assert!(
         text.contains(hint.as_str()),
-        "el hint generado debe caber ENTERO, sin cortes: hint={hint:?}\n{text}"
+        "the generated hint must fit WHOLE, with no cuts: hint={hint:?}\n{text}"
     );
     assert!(
         !text.contains('\u{202E}'),
-        "el RLO de la config jamás llega crudo al terminal:\n{text}"
+        "the config's RLO never reaches the terminal raw:\n{text}"
     );
     insta::assert_snapshot!(text);
 }
 
-/// Fase A: el selector de disposiciones a 80×24. Las cinco de fábrica con su
-/// procedencia, la vista previa DIBUJADA del reparto del árbol —no de un
-/// dibujo guardado— y la nota de que elegir disposición no toca las teclas,
-/// que aparece porque `orthodox` es también el nombre de un preset de keymap.
+/// Phase A: the layout picker at 80×24. The five factory ones with their
+/// provenance, the DRAWN preview of the tree's split — not a saved drawing —
+/// and the note that choosing a layout does not touch the keys, which shows
+/// up because `orthodox` is also the name of a keymap preset.
 ///
-/// El estado de este picker ya tenía tests; lo PINTADO no, y por eso pudo
-/// abrirse un diálogo invisible que se quedaba el teclado. Este snapshot es
-/// la puerta que faltaba.
+/// This picker's state already had tests; what got PAINTED did not, and
+/// that is how an invisible dialog that held onto the keyboard could open.
+/// This snapshot is the door that was missing.
 #[test]
 fn snapshot_layout_picker_80x24() {
     let mut app = app_base();
     app.open_layout_picker(Vec::new());
     let text = render_80x24(&app);
     let hint = &app.dialog_hints.picker;
-    assert!(
-        !hint.is_empty(),
-        "el preset orthodox liga confirmar/cancelar"
-    );
+    assert!(!hint.is_empty(), "the orthodox preset binds confirm/cancel");
     assert!(
         text.contains("orthodox") && text.contains("full"),
-        "las cinco de fábrica se ofrecen:\n{text}"
+        "the five factory ones are offered:\n{text}"
     );
     assert!(
         text.contains(&norte_i18n::t("layout-picker-keymap-note")),
-        "la nota del keymap cabe entera bajo la fila que la merece:\n{text}"
+        "the keymap note fits whole under the row that deserves it:\n{text}"
     );
     insta::assert_snapshot!(text);
 }
 
-/// #117 encoding-audit L1: un id de config KILOMÉTRICO que no parsea se
-/// enseña en el picker CAPADO a `HEADER_MAX_CHARS` (paridad GUI) — sin el
-/// cap el overlay entero se ensancharía hasta el frame por un solo id.
+/// #117 encoding-audit L1: a MILE-LONG config id that fails to parse is
+/// shown in the picker CAPPED at `HEADER_MAX_CHARS` (GUI parity) — without
+/// the cap the whole overlay would widen up to the frame for a single id.
 #[test]
-fn picker_capa_un_id_opaco_kilometrico() {
+fn picker_caps_a_mile_long_opaque_id() {
     let mut app = app_base();
-    let kilometrico = "x".repeat(60); // no parsea: ni builtin ni attr:/plugin:
+    let mile_long = "x".repeat(60); // does not parse: neither builtin nor attr:/plugin:
     let cfg = norte_config::ColumnsConfig {
-        default_columns: Some(vec!["name".into(), kilometrico.clone()]),
+        default_columns: Some(vec!["name".into(), mile_long.clone()]),
         ..Default::default()
     };
     app.columns = norte_frontend::columns::ColumnsSettings::resolve(&cfg);
@@ -639,22 +641,22 @@ fn picker_capa_un_id_opaco_kilometrico() {
     let cap = norte_frontend::columns::HEADER_MAX_CHARS;
     assert!(
         text.contains(&"x".repeat(cap)),
-        "la fila capada debe verse:\n{text}"
+        "the capped row must show:\n{text}"
     );
     assert!(
         !text.contains(&"x".repeat(cap + 1)),
-        "jamás más de {cap} chars del id opaco:\n{text}"
+        "never more than {cap} chars of the opaque id:\n{text}"
     );
 }
 
-/// #108 7b: `[[ui.columns.spec]]` vivo en el pane — `size` con formato SI
-/// («1.5 kB», no «1.5 KiB»), cabecera custom `Peso` (sustituye a «Tamaño»)
-/// y ancho fijo 9; `kind` alineado a la IZQUIERDA (contenido tras el
-/// separador, relleno a la derecha — el default derecho queda pineado por
-/// `snapshot_navegacion`). La cabecera hostil no se re-pina aquí: el choke
-/// point es `ColumnsSettings::resolve` (unit test en norte-frontend).
+/// #108 7b: `[[ui.columns.spec]]` live in the pane — `size` with SI format
+/// ("1.5 kB", not "1.5 KiB"), custom header `Peso` (replaces "Tamaño") and
+/// fixed width 9; `kind` aligned LEFT (content after the separator, padding
+/// to the right — the right default stays pinned by `snapshot_navigation`).
+/// The hostile header is not re-pinned here: the choke point is
+/// `ColumnsSettings::resolve` (unit test in norte-frontend).
 #[test]
-fn snapshot_columns_spec_size_si_header_custom_kind_izquierda() {
+fn snapshot_columns_spec_size_si_header_custom_kind_left() {
     let left = vp("file:///casa");
     let right = vp("file:///otro");
     let mut entries = vec![
@@ -671,9 +673,9 @@ fn snapshot_columns_spec_size_si_header_custom_kind_izquierda() {
         ),
     );
     app.dialog_hints = default_dialog_hints();
-    // `kind` no está en el set por defecto: lista explícita — con el width
-    // fijo 9 del spec de size, 10+9+10+9 = 38 celdas casan EXACTAS en el
-    // interior del pane y `kind` no se descarta.
+    // `kind` is not in the default set: explicit list — with the size
+    // spec's fixed width of 9, 10+9+10+9 = 38 cells match EXACTLY inside the
+    // pane and `kind` is not dropped.
     let mut cfg = norte_config::ColumnsConfig {
         default_columns: Some(vec![
             "name".into(),
@@ -701,18 +703,17 @@ fn snapshot_columns_spec_size_si_header_custom_kind_izquierda() {
     );
     app.columns = norte_frontend::columns::ColumnsSettings::resolve(&cfg);
     let text = render(&app);
-    assert!(text.contains("Peso"), "cabecera custom del spec:\n{text}");
+    assert!(text.contains("Peso"), "the spec's custom header:\n{text}");
     assert!(
         text.contains("1.5 kB") && !text.contains("KiB"),
-        "size en SI, no IEC:\n{text}"
+        "size in SI, not IEC:\n{text}"
     );
     insta::assert_snapshot!(text);
 }
 
-/// MAJOR-1 item (d): igual que el selector de tema, para el gestor de
-/// extensiones (`app.extensions`, M4-P3) — su hint tras (a)+(b) (labels
-/// cortas + sin flechas) más el sizing por footer de (c) deben caber
-/// enteros a 80 columnas.
+/// MAJOR-1 item (d): same as the theme picker, for the extension manager
+/// (`app.extensions`, M4-P3) — its hint after (a)+(b) (short labels + no
+/// arrows) plus (c)'s footer sizing must fit whole at 80 columns.
 #[test]
 fn snapshot_extensions_80x24() {
     let mut app = app_base();
@@ -735,7 +736,7 @@ fn snapshot_extensions_80x24() {
         }],
         errors: Vec::new(),
         cursor: 0,
-        foco: norte_tui::app::ExtFoco::Lista,
+        focus: norte_tui::app::ExtFocus::List,
         config: None,
     });
     let text = render_80x24(&app);
@@ -743,26 +744,26 @@ fn snapshot_extensions_80x24() {
     let hint = &app.dialog_hints.extensions;
     assert!(
         !hint.is_empty(),
-        "el preset orthodox liga approve/toggle-enabled/cancel a extensiones"
+        "the orthodox preset binds approve/toggle-enabled/cancel to extensions"
     );
     assert!(
         text.contains(hint.as_str()),
-        "el hint generado debe caber ENTERO, sin cortes: hint={hint:?}\n{text}"
+        "the generated hint must fit WHOLE, with no cuts: hint={hint:?}\n{text}"
     );
 }
 
-/// P1: la description de un plugin (manifest `[plugin]`, cap 280 chars) es
-/// texto de TERCEROS — una segunda línea bajo la fila del plugin, pero
-/// hostil (override RTL, corpus `rtl_override`) NUNCA se pinta cruda. Mismo
-/// criterio de enmascarado que `render_enmascara_nombre_hostil`
-/// (`extensions.rs`), a nivel de snapshot completo.
+/// P1: a plugin's description (manifest `[plugin]`, 280-char cap) is
+/// THIRD-PARTY text — a second line under the plugin's row, but hostile
+/// (RTL override, `rtl_override` corpus) NEVER paints raw. Same masking
+/// criterion as `render_enmascara_nombre_hostil` (`extensions.rs`), at the
+/// level of a whole snapshot.
 #[test]
-fn snapshot_extensions_description_hostil_80x24() {
+fn snapshot_extensions_description_hostile_80x24() {
     let hostile = norte_testkit::corpus::hostile_names()
         .into_iter()
         .find(|n| n.id == "rtl_override")
-        .expect("fixture del corpus");
-    let descripcion = String::from_utf8_lossy(&hostile.bytes).into_owned();
+        .expect("corpus fixture");
+    let description = String::from_utf8_lossy(&hostile.bytes).into_owned();
     let mut app = app_base();
     app.extensions = Some(norte_tui::app::ExtensionManager {
         plugins: vec![norte_proto::methods::PluginInfo {
@@ -774,7 +775,7 @@ fn snapshot_extensions_description_hostil_80x24() {
             capabilities: vec!["fs-read".into()],
             approved: true,
             enabled: true,
-            description: Some(descripcion),
+            description: Some(description),
             commands: Vec::new(),
             columns: Vec::new(),
             panels: Vec::new(),
@@ -783,36 +784,35 @@ fn snapshot_extensions_description_hostil_80x24() {
         }],
         errors: Vec::new(),
         cursor: 0,
-        foco: norte_tui::app::ExtFoco::Lista,
+        focus: norte_tui::app::ExtFocus::List,
         config: None,
     });
     let text = render_80x24(&app);
-    // El check es sobre el CARÁCTER inyectado, no "ningún hazard en toda la
-    // pantalla" — `to_string()` del backend une líneas con `\n`, que
-    // `is_terminal_hazard` (correctamente) también marca como control: un
-    // check ciego sobre TODO el render daría un falso positivo por el
-    // formato del propio buffer, no por texto hostil filtrado.
+    // The check is on the INJECTED CHARACTER, not "no hazard anywhere on the
+    // screen" — the backend's `to_string()` joins lines with `\n`, which
+    // `is_terminal_hazard` (correctly) also flags as control: a blind check
+    // over the WHOLE render would give a false positive from the buffer's
+    // own formatting, not from filtered hostile text.
     assert!(
         !text.contains('\u{202E}'),
-        "el override RTL de la description se pintó crudo: {text}"
+        "the description's RTL override painted raw: {text}"
     );
     assert!(
         text.contains('\u{FFFD}'),
-        "la description hostil debe enmascararse a U+FFFD: {text}"
+        "the hostile description must be masked to U+FFFD: {text}"
     );
     insta::assert_snapshot!(text);
 }
 
-/// G3c: el panel de `[config]` de un plugin (drill-down del gestor de
-/// extensiones) — dos claves (`bool` seleccionada, `enum` con una
-/// description HOSTIL) se pintan sin bytes crudos, la seleccionada
-/// resaltada.
+/// G3c: a plugin's `[config]` panel (drill-down from the extension manager)
+/// — two keys (`bool` selected, `enum` with a HOSTILE description) paint
+/// with no raw bytes, the selected one highlighted.
 #[test]
-/// ADR 0104, nivelación con la ventana: el gestor a dos columnas, y los
-/// ajustes de la extensión ELEGIDA dentro de su ficha, con el cursor en la
-/// clave y la descripción de la clave debajo. Los comandos que aporta, al
-/// pie de la ficha.
-fn snapshot_extensions_ficha_con_ajustes_80x24() {
+/// ADR 0104, parity with the window: the manager in two columns, and the
+/// CHOSEN extension's settings inside its card, with the cursor on the key
+/// and the key's description below. The commands it contributes, at the
+/// foot of the card.
+fn snapshot_extensions_card_with_settings_80x24() {
     use norte_frontend::plugin_config::{PluginConfigState, sanitize_config_keys};
     let mut app = app_base();
     let wire_keys = vec![norte_proto::methods::PluginConfigKeyWire {
@@ -848,7 +848,7 @@ fn snapshot_extensions_ficha_con_ajustes_80x24() {
         }],
         errors: Vec::new(),
         cursor: 0,
-        foco: norte_tui::app::ExtFoco::Lista,
+        focus: norte_tui::app::ExtFocus::List,
         config: Some(norte_tui::app::PluginConfigPanel {
             plugin_id: "org.norte.file-icons".into(),
             plugin_name: "File icons".into(),
@@ -864,8 +864,8 @@ fn snapshot_plugin_config_panel_80x24() {
     let hostile = norte_testkit::corpus::hostile_names()
         .into_iter()
         .find(|n| n.id == "rtl_override")
-        .expect("fixture del corpus");
-    let desc_hostil = String::from_utf8_lossy(&hostile.bytes).into_owned();
+        .expect("corpus fixture");
+    let desc_hostile = String::from_utf8_lossy(&hostile.bytes).into_owned();
     let mut app = app_base();
     let wire_keys = vec![
         norte_proto::methods::PluginConfigKeyWire {
@@ -885,7 +885,7 @@ fn snapshot_plugin_config_panel_80x24() {
             min: None,
             max: None,
             values: vec!["fast".into(), "thorough".into()],
-            description: Some(desc_hostil),
+            description: Some(desc_hostile),
             value: "fast".into(),
         },
     ];
@@ -893,7 +893,7 @@ fn snapshot_plugin_config_panel_80x24() {
         plugins: Vec::new(),
         errors: Vec::new(),
         cursor: 0,
-        foco: norte_tui::app::ExtFoco::Lista,
+        focus: norte_tui::app::ExtFocus::List,
         config: Some(norte_tui::app::PluginConfigPanel {
             plugin_id: "org.norte.demo".into(),
             plugin_name: "Demo".into(),
@@ -903,38 +903,37 @@ fn snapshot_plugin_config_panel_80x24() {
     let text = render_80x24(&app);
     assert!(
         !text.contains('\u{202E}'),
-        "el override RTL de la description se pintó crudo: {text}"
+        "the description's RTL override painted raw: {text}"
     );
     assert!(
         text.contains('\u{FFFD}'),
-        "la description hostil debe enmascararse a U+FFFD: {text}"
+        "the hostile description must be masked to U+FFFD: {text}"
     );
     assert!(text.contains("verbose: true"));
     insta::assert_snapshot!(text);
 }
 
-/// BAJA-3: los items largos del popup de navegación van con elipsis MEDIA
-/// (cabeza + cola, como los modales de rutas), no truncado derecho: dos
-/// entradas de historial con un prefijo común más ancho que el popup deben
-/// rendir displays DISTINTOS — la cola (el nombre, lo que identifica la
-/// ruta ante un humano) sobrevive.
+/// LOW-3: long items in the navigation popup use MID ellipsis (head + tail,
+/// like the path modals), not right truncation: two history entries with a
+/// common prefix wider than the popup must render DIFFERENT displays — the
+/// tail (the name, what identifies the path to a human) survives.
 #[test]
-fn popup_items_largos_con_elipsis_media_siguen_distinguibles() {
+fn popup_long_items_with_mid_ellipsis_stay_distinguishable() {
     let mut app = app_base();
-    let prefijo = "x".repeat(70); // > 62 celdas interiores del popup
-    app.history[0].push(vp(&format!("file:///{prefijo}/uno.txt")));
-    app.history[0].push(vp(&format!("file:///{prefijo}/dos.txt")));
+    let prefix = "x".repeat(70); // > 62 cells inside the popup
+    app.history[0].push(vp(&format!("file:///{prefix}/uno.txt")));
+    app.history[0].push(vp(&format!("file:///{prefix}/dos.txt")));
     app.open_nav_popup(norte_tui::app::NavPopupKind::History);
     let text = render(&app);
     assert!(
         text.contains("uno.txt") && text.contains("dos.txt"),
-        "las colas distintas sobreviven al recorte (elipsis media): {text}"
+        "the distinct tails survive the clip (mid ellipsis): {text}"
     );
-    assert!(text.contains('…'), "el recorte se marca: {text}");
+    assert!(text.contains('…'), "the clip is marked: {text}");
 }
 
 #[test]
-fn snapshot_modal_colision() {
+fn snapshot_modal_collision() {
     let mut app = app_base();
     app.modal = Some(Modal::Collision {
         retry: RetrySpec {
@@ -948,11 +947,10 @@ fn snapshot_modal_colision() {
     insta::assert_snapshot!(render(&app));
 }
 
-/// MINOR-1 (H1 close): `modal_width` medía en `chars`, no en celdas de
-/// terminal — un cuerpo con CJK (2 celdas por char) desbordaba la caja. Un
-/// nombre japonés en el `to` del modal de copia pin-ea el fit correcto: la
-/// caja debe caber en el frame de 80 columnas sin que ratatui recorte el
-/// borde ni el path.
+/// MINOR-1 (H1 close): `modal_width` measured in `chars`, not terminal
+/// cells — a body with CJK (2 cells per char) overflowed the box. A Japanese
+/// name in the copy modal's `to` pins the correct fit: the box must fit in
+/// the 80-column frame without ratatui clipping the border or the path.
 #[test]
 fn snapshot_modal_confirm_transfer_cjk() {
     let mut app = app_base();
@@ -966,13 +964,13 @@ fn snapshot_modal_confirm_transfer_cjk() {
     insta::assert_snapshot!(render(&app));
 }
 
-/// **El modal de nombre editable, pintado.** No tenía ni una foto: se podía
-/// reordenar entero, romper el relleno del campo o dejar la caja corta con el
-/// gate en verde.
+/// **The editable name modal, painted.** It did not have a single picture:
+/// it could be reordered entirely, break the field's padding, or leave the
+/// box short with the gate green.
 ///
-/// Tres cosas se leen aquí y en ningún test de unidad: que la etiqueta va
-/// ENCIMA del campo, que el fondo del campo llega al borde de la caja, y que
-/// el cuerpo cabe en el alto declarado.
+/// Three things are checked here and in no unit test: that the label goes
+/// ABOVE the field, that the field's background reaches the box's edge, and
+/// that the body fits in the declared height.
 #[test]
 fn snapshot_modal_transfer_name() {
     let mut app = app_base();
@@ -992,18 +990,18 @@ fn snapshot_modal_transfer_name() {
     insta::assert_snapshot!(render(&app));
 }
 
-/// Y con un nombre CJK más ancho que la caja: el recorte se DICE, el cursor
-/// sobrevive, y el relleno del campo no desborda con celdas dobles.
+/// And with a CJK name wider than the box: the clip is STATED, the cursor
+/// survives, and the field's padding does not overflow with double cells.
 #[test]
-fn snapshot_modal_transfer_name_cjk_largo() {
+fn snapshot_modal_transfer_name_cjk_long() {
     let mut app = app_base();
-    let largo = "日本語のファイル名".repeat(6);
+    let long = "日本語のファイル名".repeat(6);
     app.modal = Some(Modal::TransferName {
         kind: TransferKind::Move,
         from: vp("file:///casa/x.txt"),
         to_dir: vp("file:///otro"),
-        name: largo.clone(),
-        original: largo.into_bytes(),
+        name: long.clone(),
+        original: long.into_bytes(),
         touched: true,
         from_marks: false,
         enc: None,
@@ -1014,13 +1012,13 @@ fn snapshot_modal_transfer_name_cjk_largo() {
     insta::assert_snapshot!(render(&app));
 }
 
-/// Los botones de un modal (spec 2026-09-10, `[ui] dialog_buttons`): la
-/// línea de teclas generada se pinta como ` Enter confirm ` ` Esc cancel `
-/// con el rol `button` (monocromo: invertido), cada botón es una zona, y un
-/// clic en uno deja la tecla sintetizada para `on_key`. Apagado, la línea
-/// vuelve a ser la pista de texto y no hay zonas.
+/// A modal's buttons (spec 2026-09-10, `[ui] dialog_buttons`): the generated
+/// key line paints as ` Enter confirm ` ` Esc cancel ` with the `button`
+/// role (monochrome: inverted), each button is a zone, and a click on one
+/// leaves the synthesized key for `on_key`. Off, the line goes back to being
+/// the text hint and there are no zones.
 #[test]
-fn los_botones_de_un_modal_se_pintan_y_un_clic_es_su_tecla() {
+fn a_modals_buttons_paint_and_a_click_is_their_key() {
     let mut app = app_base();
     app.dialog_hints = default_dialog_hints();
     app.dialog_hints.buttons = true;
@@ -1029,47 +1027,50 @@ fn los_botones_de_un_modal_se_pintan_y_un_clic_es_su_tecla() {
         permanent: false,
     });
     let area = ratatui::layout::Rect::new(0, 0, 80, 16);
-    let zonas = ui::modal_zones(&app, area);
+    let zones = ui::modal_zones(&app, area);
     assert!(
-        zonas.iter().any(|z| z.chord == "Enter") && zonas.iter().any(|z| z.chord == "Esc"),
-        "un botón por verbo: {zonas:?}"
+        zones.iter().any(|z| z.chord == "Enter") && zones.iter().any(|z| z.chord == "Esc"),
+        "one button per verb: {zones:?}"
     );
-    let enter = zonas.iter().find(|z| z.chord == "Enter").expect("Enter");
+    let enter = zones.iter().find(|z| z.chord == "Enter").expect("Enter");
     let mut terminal = Terminal::new(TestBackend::new(80, 16)).expect("terminal");
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
     let buf = terminal.backend().buffer();
-    let fila: String = (enter.x0..=enter.x1)
+    let row: String = (enter.x0..=enter.x1)
         .map(|x| buf[(x, enter.row)].symbol().to_string())
         .collect();
-    assert!(fila.contains("Enter"), "el botón pinta su chord: {fila:?}");
-    let boton = app.theme.role(norte_theme::Role::Button);
-    let celda = buf[(enter.x0, enter.row)].style();
     assert!(
-        celda.bg == boton.bg && celda.add_modifier.contains(boton.add_modifier),
-        "el botón lleva el rol `button`: {celda:?} vs {boton:?}"
+        row.contains("Enter"),
+        "the button paints its chord: {row:?}"
     );
-    let pista = render(&app);
+    let button = app.theme.role(norte_theme::Role::Button);
+    let cell = buf[(enter.x0, enter.row)].style();
     assert!(
-        !pista.contains("[Enter]"),
-        "con botones, no hay corchetes: {pista}"
+        cell.bg == button.bg && cell.add_modifier.contains(button.add_modifier),
+        "the button carries the `button` role: {cell:?} vs {button:?}"
+    );
+    let hint = render(&app);
+    assert!(
+        !hint.contains("[Enter]"),
+        "with buttons, no brackets: {hint}"
     );
 
     norte_tui::mouse::after_frame(
         &mut app,
         None,
         norte_tui::mouse::FrameZones {
-            modal: zonas.clone(),
+            modal: zones.clone(),
             ..Default::default()
         },
     );
-    let clic = crossterm::event::MouseEvent {
+    let click = crossterm::event::MouseEvent {
         kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
         column: enter.x0 + 1,
         row: enter.row,
         modifiers: crossterm::event::KeyModifiers::NONE,
     };
     assert_eq!(
-        norte_tui::mouse::handle(&mut app, clic),
+        norte_tui::mouse::handle(&mut app, click),
         norte_tui::mouse::After::SynthKey
     );
     assert_eq!(
@@ -1078,51 +1079,48 @@ fn los_botones_de_un_modal_se_pintan_y_un_clic_es_su_tecla() {
     );
 
     app.dialog_hints.buttons = false;
-    assert!(ui::modal_zones(&app, area).is_empty(), "apagado, sin zonas");
-    assert!(
-        render(&app).contains("[Enter]"),
-        "apagado, la pista de texto"
-    );
+    assert!(ui::modal_zones(&app, area).is_empty(), "off, no zones");
+    assert!(render(&app).contains("[Enter]"), "off, the text hint");
 }
 
 #[test]
-fn snapshot_modal_papelera_y_permanente() {
+fn snapshot_modal_trash_and_permanent() {
     let mut app = app_base();
     app.modal = Some(Modal::ConfirmDelete {
         items: vec![vp("file:///casa/notas.txt")],
         permanent: false,
     });
-    let papelera = render(&app);
+    let trash = render(&app);
     app.modal = Some(Modal::ConfirmDelete {
         items: vec![vp("file:///casa/notas.txt")],
         permanent: true,
     });
-    let permanente = render(&app);
-    insta::assert_snapshot!(format!("{papelera}\n===\n{permanente}"));
+    let permanent = render(&app);
+    insta::assert_snapshot!(format!("{trash}\n===\n{permanent}"));
 }
 
-/// H3c: mientras una página de ayuda ABIERTA DESDE el modal lo tapa, la ayuda
-/// se queda las teclas (`HelpView::over_modal`) y los verbos del modal son
-/// INERTES. Un pie que siguiera ofreciéndolos mentiría — `y` y `n` no harían
-/// nada — así que dice lo que es verdad: cierra la ayuda para responder.
+/// H3c: while a help page OPENED FROM the modal covers it, help keeps the
+/// keys (`HelpView::over_modal`) and the modal's verbs are INERT. A footer
+/// that kept offering them would lie — `y` and `n` would do nothing — so it
+/// says what is true: close help to answer.
 ///
-/// Lo que NO cambia: la caja y la pregunta siguen visibles, encima de la ayuda
-/// (el modal se pinta el último). Esconder la pregunta es el defecto que H1
-/// arregló pintándolo así, y esto no lo deshace.
+/// What does NOT change: the box and the question stay visible, above help
+/// (the modal paints last). Hiding the question is the defect H1 fixed by
+/// painting it this way, and this does not undo that.
 ///
-/// Las aserciones van contra el hint GENERADO del modal (`DialogHints`) y no
-/// contra etiquetas sueltas: `[Enter] confirmar` sale también en el pie de la
-/// PROPIA ayuda, donde sí está vivo, así que buscar la etiqueta a secas en el
-/// frame confundiría dos pies distintos.
+/// The assertions run against the modal's GENERATED hint (`DialogHints`) and
+/// not against loose labels: `[Enter] confirm` also shows up in help's OWN
+/// footer, where it is indeed live, so searching for the bare label in the
+/// frame would confuse two different footers.
 #[test]
-fn el_pie_del_modal_no_ofrece_verbos_inertes_bajo_la_ayuda() {
-    // Idioma fijo ANTES del primer `t()`: el catálogo se resuelve una vez, y
-    // `vp` (que es quien lo fuerza en el resto del archivo) todavía no ha
-    // corrido aquí.
+fn the_modals_footer_does_not_offer_inert_verbs_under_help() {
+    // Fixed language BEFORE the first `t()`: the catalogue is resolved once,
+    // and `vp` (which is what forces it in the rest of the file) has not run
+    // here yet.
     let _ = norte_i18n::force(norte_i18n::Lang::Es);
     let label = |cmd: &str| norte_i18n::t(&norte_tui::keymap::dialog_hint_id(cmd));
     let notice = norte_i18n::t("modal-hint-help-open");
-    let verbos = default_dialog_hints().approval;
+    let verbs = default_dialog_hints().approval;
 
     let mut app = app_base();
     app.modal = Some(Modal::ApproveAgentOp {
@@ -1141,58 +1139,58 @@ fn el_pie_del_modal_no_ofrece_verbos_inertes_bajo_la_ayuda() {
 
     assert!(
         tapado.contains(&notice),
-        "el pie tiene que decir por qué las teclas del modal no responden:\n{tapado}"
+        "the footer has to say why the modal's keys do not respond:\n{tapado}"
     );
     assert!(
-        !tapado.contains(&verbos),
-        "el pie sigue ofreciendo los verbos inertes ({verbos:?}):\n{tapado}"
+        !tapado.contains(&verbs),
+        "the footer still offers the inert verbs ({verbs:?}):\n{tapado}"
     );
-    // Y ni sueltas: `aprobar`/`denegar` solo puede pintarlas este modal (el pie
-    // de la ayuda lista los suyos, que sí responden).
+    // Not even loose ones: `approve`/`deny` can only be painted by this
+    // modal (help's footer lists its own, which do respond).
     for cmd in ["dialog.approve", "dialog.deny"] {
         assert!(
             !tapado.contains(&label(cmd)),
-            "{cmd} está inerte y el pie lo sigue ofreciendo:\n{tapado}"
+            "{cmd} is inert and the footer still offers it:\n{tapado}"
         );
     }
-    // Y la pregunta NO se esconde: el título y la ruta que se aprueba siguen
-    // ahí, encima de la página (el modal se pinta el último, H1).
+    // And the question is NOT hidden: the title and the path being approved
+    // stay right there, above the page (the modal paints last, H1).
     assert!(
         tapado.contains(&norte_i18n::t("modal-approval-title")),
-        "la pregunta tiene que seguir a la vista:\n{tapado}"
+        "the question has to stay visible:\n{tapado}"
     );
     assert!(
         tapado.contains("mem:///a"),
-        "…y la ruta con ella:\n{tapado}"
+        "…and the path with it:\n{tapado}"
     );
 
-    // Cerrada la ayuda, el modal recupera sus verbos: la tecla vuelve a hacer
-    // lo que el pie dice.
+    // Once help is closed, the modal gets its verbs back: the key does again
+    // what the footer says.
     app.help = None;
     let visible = render(&app);
     assert!(
         !visible.contains(&notice),
-        "sin ayuda por encima no hay nada que cerrar:\n{visible}"
+        "with no help on top there is nothing to close:\n{visible}"
     );
     assert!(
-        visible.contains(&verbos),
-        "los verbos vuelven al pie en cuanto la ayuda se cierra:\n{visible}"
+        visible.contains(&verbs),
+        "the verbs return to the footer as soon as help closes:\n{visible}"
     );
 }
 
-/// El mismo pie honesto en TODOS los modales con hint generado, no solo en la
-/// aprobación: la mentira es idéntica en una confirmación de borrado, en una
-/// colisión y en una host key sin confiar.
+/// The same honest footer in EVERY modal with a generated hint, not just in
+/// approval: the lie is identical in a delete confirmation, in a collision,
+/// and in an untrusted host key.
 ///
-/// El par de aserciones por modal es lo que le da fuerza: con la ayuda cerrada
-/// su hint generado se pinta ENTERO (si no, la mitad de abajo no probaría nada),
-/// y con la ayuda encima no queda ni rastro de él.
+/// The pair of assertions per modal is what gives it strength: with help
+/// closed its generated hint paints WHOLE (otherwise the bottom half would
+/// prove nothing), and with help on top not a trace of it remains.
 #[test]
-fn ningun_modal_con_hint_generado_ofrece_verbos_bajo_la_ayuda() {
+fn no_modal_with_a_generated_hint_offers_verbs_under_help() {
     let _ = norte_i18n::force(norte_i18n::Lang::Es);
     let notice = norte_i18n::t("modal-hint-help-open");
     let hints = default_dialog_hints();
-    let modales = [
+    let modals = [
         (
             Modal::ConfirmDelete {
                 items: vec![vp("file:///casa/notas.txt")],
@@ -1236,89 +1234,89 @@ fn ningun_modal_con_hint_generado_ofrece_verbos_bajo_la_ayuda() {
             hints.trust_host.clone(),
         ),
     ];
-    for (modal, verbos) in modales {
+    for (modal, verbs) in modals {
         let mut app = app_base();
         app.modal = Some(modal);
 
-        // Sin ayuda: el pie generado se pinta entero.
+        // Without help: the generated footer paints whole.
         let solo = render(&app);
         assert!(
-            solo.contains(&verbos),
-            "este modal no pinta su hint entero, así que la otra mitad del test \
-             no probaría nada ({verbos:?}):\n{solo}"
+            solo.contains(&verbs),
+            "this modal does not paint its hint whole, so the other half of \
+             the test would prove nothing ({verbs:?}):\n{solo}"
         );
 
-        // Con la ayuda encima: ni un verbo, y el aviso en su lugar.
+        // With help on top: not one verb, and the notice in its place.
         open_help_over_modal(&mut app);
         let tapado = render(&app);
         assert!(
             tapado.contains(&notice),
-            "este modal no dice por qué sus teclas no responden:\n{tapado}"
+            "this modal does not say why its keys do not respond:\n{tapado}"
         );
         assert!(
-            !tapado.contains(&verbos),
-            "este modal sigue ofreciendo verbos inertes ({verbos:?}):\n{tapado}"
+            !tapado.contains(&verbs),
+            "this modal still offers inert verbs ({verbs:?}):\n{tapado}"
         );
     }
 }
 
-/// TOFU Lua (M4, ADR 0026): la forma exacta del modal de confianza del
-/// `./.norte/init.lua` queda congelada — path saneado + sha256 abreviado +
-/// aviso de que corre con los permisos del usuario.
+/// TOFU Lua (M4, ADR 0026): the exact shape of the trust modal for
+/// `./.norte/init.lua` is frozen — sanitized path + abbreviated sha256 +
+/// notice that it runs with the user's permissions.
 #[test]
 fn snapshot_modal_trust_lua_init() {
     let mut app = app_base();
     app.modal = Some(Modal::TrustLuaInit {
         path: "repo/.norte/init.lua".into(),
-        // 32 hex (128 bits) como produce main.rs — el modal debe caberlo.
+        // 32 hex (128 bits) as main.rs produces it — the modal must fit it.
         hash_abbrev: "ab12cd34ef56ab78ab12cd34ef56ab78".into(),
     });
     insta::assert_snapshot!(render(&app));
 }
 
-/// **El mensaje que se ENVUELVE cabe entero en su caja.**
+/// **The message that WRAPS fits whole in its box.**
 ///
-/// Es el único modal cuyo alto no se deriva del cuerpo: su cuerpo es una
-/// línea que `ratatui` parte en varias, y contar esas filas exige su regla de
-/// envoltura (`Paragraph::line_count` la sabe, pero es una feature inestable).
-/// Así que ese alto es un número escrito a mano — y un número a mano se queda
-/// corto en silencio en cuanto el mensaje crece: una traducción más larga, una
-/// ruta más honda. Esto es lo que lo pone rojo.
+/// It is the only modal whose height is not derived from the body: its body
+/// is a single line that `ratatui` splits into several, and counting those
+/// rows requires its wrapping rule (`Paragraph::line_count` knows it, but it
+/// is an unstable feature). So that height is a hand-written number — and a
+/// hand-written number silently falls short as soon as the message grows: a
+/// longer translation, a deeper path. This is what turns it red.
 ///
-/// Se comprueba sobre el TEXTO pintado y no sobre el modelo: lo que importa es
-/// que la última palabra del aviso llegue a la pantalla, y eso solo lo dice el
-/// buffer.
+/// Checked against the PAINTED text and not against the model: what matters
+/// is that the warning's last word reaches the screen, and only the buffer
+/// says that.
 #[test]
-fn el_mensaje_que_se_envuelve_cabe_en_su_caja() {
+fn the_message_that_wraps_fits_in_its_box() {
     let mut app = app_base();
     app.modal = Some(Modal::TrustLuaInit {
         path: "repo/.norte/init.lua".into(),
         hash_abbrev: "ab12cd34ef56ab78ab12cd34ef56ab78".into(),
     });
-    let pintado = render(&app);
-    // El cuerpo lleva las TECLAS dentro, al final: son lo último que se lee
-    // antes de conceder permisos de ejecución, así que son lo primero que se
-    // pierde si el alto se queda corto — y `ratatui` recorta por abajo sin
-    // decirlo.
-    let cuerpo = norte_i18n::ta(
+    let painted = render(&app);
+    // The body carries the KEYS inside, at the end: they are the last thing
+    // read before granting execution permissions, so they are the first
+    // thing lost if the height falls short — and `ratatui` clips at the
+    // bottom without saying so.
+    let body = norte_i18n::ta(
         "modal-lua-trust-body",
         &[("path", "repo/.norte/init.lua"), ("hash", "x")],
     );
-    let ultima = cuerpo
+    let ultima = body
         .split_whitespace()
         .last()
-        .expect("el cuerpo no está vacío");
+        .expect("the body is not empty");
     assert!(
-        pintado.contains(ultima),
-        "el final del aviso no llegó a la pantalla ({ultima:?}): {pintado}"
+        painted.contains(ultima),
+        "the end of the warning did not reach the screen ({ultima:?}): {painted}"
     );
 }
 
-/// TOFU (#45): el modal muestra el fingerprint para comparar, y un host
-/// HOSTIL (bidi override) del servidor remoto se ENMASCARA — jamás pinta el
-/// byte crudo que podría spoofear la barra. No es snapshot: asserts directos.
+/// TOFU (#45): the modal shows the fingerprint for comparison, and a HOSTILE
+/// host (bidi override) from the remote server gets MASKED — it never paints
+/// the raw byte that could spoof the bar. Not a snapshot: direct asserts.
 #[test]
-fn modal_trust_host_muestra_fingerprint_y_enmascara_host_hostil() {
+fn modal_trust_host_shows_fingerprint_and_masks_hostile_host() {
     let mut app = app_base();
     app.modal = Some(Modal::TrustHostKey {
         host: "evil\u{202E}host".into(),
@@ -1332,28 +1330,28 @@ fn modal_trust_host_muestra_fingerprint_y_enmascara_host_hostil() {
     let text = render(&app);
     assert!(
         text.contains("SHA256:abc123XYZ"),
-        "el fingerprint se muestra para comparar: {text}"
+        "the fingerprint is shown for comparison: {text}"
     );
     assert!(
         !text.contains('\u{202E}'),
-        "el override bidi del host NO llega al render: {text:?}"
+        "the host's bidi override does NOT reach the render: {text:?}"
     );
     assert!(
         text.contains("ssh-ed25519"),
-        "el algoritmo se muestra: {text}"
+        "the algorithm is shown: {text}"
     );
     assert!(
         text.contains('!'),
-        "el host hostil lleva el badge que AVISA al usuario: {text}"
+        "the hostile host carries the badge that WARNS the user: {text}"
     );
 }
 
-/// El fingerprint hostil (el server intenta ocultar chars) se enmascara Y
-/// lleva badge: el usuario ve que la huella fue manipulada, no la aprueba a
-/// ciegas. Y un SHA256 canónico (50 chars) cabe entero SIN elipsis: lo
-/// mostrado == lo que se confía.
+/// A hostile fingerprint (the server tries to hide chars) gets masked AND
+/// carries a badge: the user sees the fingerprint was tampered with, not
+/// approve it blindly. And a canonical SHA256 (50 chars) fits whole WITHOUT
+/// ellipsis: what is shown == what is trusted.
 #[test]
-fn modal_trust_host_fingerprint_hostil_y_sha256_completo() {
+fn modal_trust_host_hostile_fingerprint_and_full_sha256() {
     let mut app = app_base();
     app.modal = Some(Modal::TrustHostKey {
         host: "h".into(),
@@ -1367,11 +1365,11 @@ fn modal_trust_host_fingerprint_hostil_y_sha256_completo() {
     let text = render(&app);
     assert!(
         !text.contains('\u{202E}'),
-        "el bidi del fingerprint NO llega al render: {text:?}"
+        "the fingerprint's bidi does NOT reach the render: {text:?}"
     );
-    assert!(text.contains('!'), "fingerprint manipulado → badge: {text}");
+    assert!(text.contains('!'), "tampered fingerprint → badge: {text}");
 
-    // Un SHA256 real (7 + 43 = 50 chars) cabe entero, sin truncar.
+    // A real SHA256 (7 + 43 = 50 chars) fits whole, without truncation.
     app.modal = Some(Modal::TrustHostKey {
         host: "h".into(),
         port: None,
@@ -1384,66 +1382,66 @@ fn modal_trust_host_fingerprint_hostil_y_sha256_completo() {
     let text = render(&app);
     assert!(
         text.contains("SHA256:oXf6dQ7pC3vN2mK9tR1sB4jW8yZ0aL5eH6gU3iO7wA"),
-        "el SHA256 canónico se muestra COMPLETO (sin elipsis): {text}"
+        "the canonical SHA256 is shown IN FULL (no ellipsis): {text}"
     );
-    assert!(!text.contains('…'), "no se trunca: {text}");
+    assert!(!text.contains('…'), "it is not truncated: {text}");
 }
 
-/// **El visor DICE que hay más, arriba y a la derecha.**
+/// **The viewer SAYS there is more, above and to the right.**
 ///
-/// Antes solo lo decía la cuenta `1/4813` de la barra de estado, y a lo ancho
-/// no lo decía nada: el visor no envuelve, así que un fichero recortado por la
-/// derecha se leía como un fichero corto. Las dos barras se pintan sobre los
-/// bordes del marco, y ninguna cuando cabe todo — una barra llena de lado a
-/// lado no informa de nada.
+/// Before, only the status bar's `1/4813` count said so, and widthwise
+/// nothing said it: the viewer does not wrap, so a file clipped on the right
+/// read like a short file. Both bars paint over the frame's edges, and
+/// neither when everything fits — a bar full from edge to edge informs of
+/// nothing.
 #[test]
-fn el_visor_pinta_las_barras_solo_cuando_hay_mas() {
+fn the_viewer_paints_the_bars_only_when_there_is_more() {
     let mut app = app_base();
 
-    // Un fichero de una línea corta: cabe entero, así que ni una barra.
+    // A short one-line file: fits whole, so not even one bar.
     app.viewer = Some(Viewer::new(
         vp("file:///casa/corto.txt"),
         b"hola\n".to_vec(),
         false,
     ));
-    let cabe = render(&app);
-    assert!(
-        !cabe.contains('█'),
-        "cabe todo: ninguna barra que arrastrar\n{cabe}"
-    );
+    let fits = render(&app);
+    assert!(!fits.contains('█'), "it all fits: no bar to drag\n{fits}");
 
-    // Alto: cuarenta líneas en una pantalla de dieciséis.
+    // Tall: forty lines on a sixteen-row screen.
     let alto: Vec<u8> = (0..40)
         .flat_map(|i| format!("linea {i}\n").into_bytes())
         .collect();
     app.viewer = Some(Viewer::new(vp("file:///casa/alto.txt"), alto, false));
-    assert!(render(&app).contains('█'), "hay más ABAJO y se ve");
-
-    // Ancho: una línea de doscientas columnas en una pantalla de ochenta.
-    let ancho = || format!("{}\n", "x".repeat(200)).into_bytes();
-    let v = Viewer::new(vp("file:///casa/ancho.txt"), ancho(), false);
-    assert_eq!(v.max_cols(), 200);
-    app.viewer = Some(v);
-    let pintado = render(&app);
     assert!(
-        pintado.contains('█'),
-        "hay más a la DERECHA y se ve\n{pintado}"
+        render(&app).contains('█'),
+        "there is more BELOW and it shows"
     );
 
-    // Y el pulgar se MUEVE con el desplazamiento: una barra quieta dice «hay
-    // más» y no dice dónde estás.
-    let mut v = Viewer::new(vp("file:///casa/ancho.txt"), ancho(), false);
+    // Wide: a two-hundred-column line on an eighty-column screen.
+    let width = || format!("{}\n", "x".repeat(200)).into_bytes();
+    let v = Viewer::new(vp("file:///casa/ancho.txt"), width(), false);
+    assert_eq!(v.max_cols(), 200);
+    app.viewer = Some(v);
+    let painted = render(&app);
+    assert!(
+        painted.contains('█'),
+        "there is more to the RIGHT and it shows\n{painted}"
+    );
+
+    // And the thumb MOVES with the scroll: a still bar says "there is more"
+    // and does not say where you are.
+    let mut v = Viewer::new(vp("file:///casa/ancho.txt"), width(), false);
     v.scroll_right(150);
     app.viewer = Some(v);
     assert_ne!(
-        pintado,
+        painted,
         render(&app),
-        "el pulgar de la horizontal sigue al desplazamiento"
+        "the horizontal thumb follows the scroll"
     );
 }
 
 #[test]
-fn snapshot_viewer_texto_y_hex() {
+fn snapshot_viewer_text_and_hex() {
     let mut app = app_base();
     app.viewer = Some(Viewer::new(
         vp("file:///casa/notas.txt"),
@@ -1458,24 +1456,25 @@ fn snapshot_viewer_texto_y_hex() {
     );
     v.scroll_down(0);
     app.viewer = Some(v);
-    // Hallazgo 3 (revisión de rama, fase 5): `panels::draw_viewer` lee
-    // `App::viewer_modo` (fijado al ABRIR), no un recálculo en vivo — este
-    // test construye `App` a mano, así que fija el modo que `open_viewer`
-    // habría dejado bajo el `chrome` por defecto: `Auto` sin sonda de
-    // terminal (no hay tty en un test) es `Modo::Bloques`.
-    app.viewer_modo = norte_tui::viewer_open::Modo::Bloques;
+    // Finding 3 (branch review, phase 5): `panels::draw_viewer` reads
+    // `App::viewer_modo` (set on OPEN), not a live recalculation — this test
+    // builds `App` by hand, so it sets the mode that `open_viewer` would have
+    // left under the default `chrome`: `Auto` with no terminal probe (there
+    // is no tty in a test) is `Modo::Blocks`.
+    app.viewer_modo = norte_tui::viewer_open::Modo::Blocks;
     let hex = render(&app);
     insta::assert_snapshot!(format!("{text}\n===\n{hex}"));
 }
 
-/// Abre el overlay de ayuda (H3b) tal cual lo hace el binario: el cheatsheet
-/// sintético de la entrada `keys` y el resolver de chords salen de los MISMOS
-/// builders (`norte_tui::help::build` y `TuiChords::new`, no una copia del
-/// formato) sobre el preset orthodox real, y AMBOS en el idioma del resto de
-/// la UI (`vp` fuerza ES arriba). El resolver también, no solo el corpus: es
-/// quien pone la etiqueta de cada fila ejecutable (`ChordResolver::label`), y
-/// el default de `App` resuelve el idioma del ENTORNO — con él, un lector
-/// español leería prosa española con las filas etiquetadas en inglés.
+/// Opens the help overlay (H3b) exactly as the binary does: the synthetic
+/// cheatsheet for the `keys` entry and the chord resolver come from the SAME
+/// builders (`norte_tui::help::build` and `TuiChords::new`, not a copy of the
+/// format) over the real orthodox preset, and BOTH in the language of the
+/// rest of the UI (`vp` forces ES above). The resolver too, not just the
+/// corpus: it is what puts the label on each executable row
+/// (`ChordResolver::label`), and `App`'s default resolves the ENVIRONMENT's
+/// language — with that, a Spanish reader would read Spanish prose with the
+/// rows labeled in English.
 fn open_help(app: &mut App) {
     let presets = norte_tui::keymap::presets();
     let (_, preset) = presets.iter().find(|(n, _)| *n == "orthodox").unwrap();
@@ -1483,8 +1482,8 @@ fn open_help(app: &mut App) {
         norte_tui::keymap::Effective::build_for(preset, &[], norte_tui::keymap::COMMANDS, screen)
             .unwrap()
     };
-    // #113: la sección de diálogos sale del efectivo `dialog`, cuyo
-    // vocabulario une COMMANDS y DIALOG_COMMANDS (como `build_keymaps`).
+    // #113: the dialogs section comes from the effective `dialog`, whose
+    // vocabulary merges COMMANDS and DIALOG_COMMANDS (like `build_keymaps`).
     let dialog_known: Vec<&str> = norte_tui::keymap::COMMANDS
         .iter()
         .copied()
@@ -1506,35 +1505,35 @@ fn open_help(app: &mut App) {
         &dialog,
         norte_i18n::Lang::Es,
     ));
-    // H3d: y los hechos del contexto se congelan igual que en el binario
-    // (`open_contextual_help`), así que estos snapshots registran lo que un
-    // lector ve DESDE `app_base` — con `file:///casa` escribible, nada
-    // atenuado por el backend, y las filas de `nav.enter`/`pane.view` decididas
-    // por lo que hay bajo el cursor.
+    // H3d: and the context facts freeze the same as in the binary
+    // (`open_contextual_help`), so these snapshots record what a reader sees
+    // FROM `app_base` — with `file:///home` writable, nothing dimmed by the
+    // backend, and the `nav.enter`/`pane.view` rows decided by what is under
+    // the cursor.
     app.freeze_help_facts();
     app.help = Some(norte_tui::app::HelpView::new(norte_i18n::Lang::Es, lines));
     refresh_help(app);
 }
 
-/// La misma ayuda, pero abierta ENCIMA de un modal (H3c, `over_modal`): la que
-/// se queda las teclas, con lo que los verbos del modal quedan inertes hasta
-/// que se cierre.
+/// The same help, but opened ON TOP of a modal (H3c, `over_modal`): the one
+/// that keeps the keys, which leaves the modal's verbs inert until it
+/// closes.
 fn open_help_over_modal(app: &mut App) {
     open_help(app);
-    app.help.as_mut().expect("la ayuda se abrió").over_modal = true;
+    app.help.as_mut().expect("help opened").over_modal = true;
     refresh_help(app);
 }
 
-/// H3b: el overlay se maqueta para el frame sobre el que va a pintarse (lo
-/// hace el run loop en cada vuelta), y la geometría sale de la MISMA función
-/// que usa el pintor. 80×16 es el frame de [`render`].
+/// H3b: the overlay is laid out for the frame it is about to be painted on
+/// (the run loop does this every turn), and the geometry comes from the SAME
+/// function the painter uses. 80×16 is [`render`]'s frame.
 fn refresh_help(app: &mut App) {
     refresh_help_en(app, 80, 16);
 }
 
-/// [`refresh_help`] sobre un frame de `w`×`h`: la geometría del overlay ya no
-/// depende solo del frame — la lateral se dimensiona a los títulos del corpus
-/// del idioma abierto — así que el idioma sale del propio modelo, como en el
+/// [`refresh_help`] over a `w`×`h` frame: the overlay's geometry no longer
+/// depends only on the frame — the sidebar is sized to the open language's
+/// corpus titles — so the language comes from the model itself, as in the
 /// run loop.
 fn refresh_help_en(app: &mut App, w: u16, h: u16) {
     let Some(lang) = app.help.as_ref().map(|v| v.state.lang()) else {
@@ -1544,8 +1543,8 @@ fn refresh_help_en(app: &mut App, w: u16, h: u16) {
     app.refresh_help(width, height);
 }
 
-/// Como [`render`], pero devuelve el BUFFER: el volcado de texto no lleva
-/// estilos, así que un resalte solo se puede pinchar celda a celda.
+/// Like [`render`], but returns the BUFFER: the text dump carries no styles,
+/// so a highlight can only be checked cell by cell.
 fn render_buffer(app: &App) -> ratatui::buffer::Buffer {
     let mut terminal = Terminal::new(TestBackend::new(80, 16)).expect("terminal");
     terminal.draw(|f| ui::draw(f, app)).expect("draw");
@@ -1553,37 +1552,41 @@ fn render_buffer(app: &App) -> ratatui::buffer::Buffer {
 }
 
 #[test]
-fn snapshot_ayuda() {
+fn snapshot_help() {
     let mut app = app_base();
     open_help(&mut app);
-    // Arriba: el índice del corpus, donde abre el overlay.
-    let arriba = render(&app);
-    // Abajo: la página de teclado sintética — el cheatsheet de siempre,
-    // ahora una entrada más de la lateral.
+    // Top: the corpus index, where the overlay opens.
+    let up = render(&app);
+    // Bottom: the synthetic keyboard page — the usual cheatsheet, now one
+    // more sidebar entry.
     app.help
         .as_mut()
         .unwrap()
         .state
         .open(&norte_help::TopicId::new(norte_frontend::help::KEYS_ID));
     refresh_help(&mut app);
-    insta::assert_snapshot!(format!("{arriba}\n===\n{}", render(&app)));
+    insta::assert_snapshot!(format!("{up}\n===\n{}", render(&app)));
 }
 
-/// H3b, pie ADAPTATIVO: el pie de la ayuda ofrece sus CINCO verbos imprimibles
-/// y deja que el ancho decida cuántos se pintan (`ui::fit_hint_groups` tira
-/// grupos ENTEROS por la cola y marca la pérdida con `…`).
+/// H3b, ADAPTIVE footer: help's footer offers its FIVE printable verbs and
+/// lets the width decide how many get painted (`ui::fit_hint_groups` drops
+/// WHOLE groups from the tail and marks the loss with `…`).
 ///
-/// Antes excluía `[enter]`/`[esc]` SIEMPRE, para honrar un frame de 80: en un
-/// terminal de 113 columnas el pie se quedaba medio vacío con las dos teclas
-/// universales escondidas sin motivo. La exclusión fija cede ahora al mecanismo
-/// que ya existía.
+/// It used to ALWAYS exclude `[enter]`/`[esc]`, to honor an 80-wide frame: on
+/// a 113-column terminal the footer stayed half empty with the two universal
+/// keys hidden for no reason. The fixed exclusion now yields to the
+/// mechanism that already existed.
 ///
-/// Lo que se pincha es el invariante, no un ancho concreto: a 113 caben los
-/// cinco (y sin `…`, porque no se perdió nada); a 80 sobreviven los del
-/// principio del ranking — los que el lector NO puede adivinar — y el `…` dice
-/// que hubo recorte. En ningún ancho aparece medio grupo.
+/// What is checked is the invariant, not a specific width: at 113 all five
+/// fit (and with no `…`, because nothing was lost); at 80 the ones at the
+/// top of the ranking survive — the ones the reader CANNOT guess — and the
+/// `…` says there was clipping. At no width does half a group appear.
+///
+/// Note: the verb labels asserted below (`down`, `up`, …) are the real
+/// Spanish Fluent catalogue text — `vp` forces `Lang::Es` for this file, so
+/// this checks actual rendered UI output, not test prose.
 #[test]
-fn el_pie_de_la_ayuda_se_adapta_al_ancho() {
+fn the_help_footer_adapts_to_the_width() {
     let pie_a = |w: u16, h: u16| {
         let mut app = app_base();
         open_help(&mut app);
@@ -1595,12 +1598,12 @@ fn el_pie_de_la_ayuda_se_adapta_al_ancho() {
             .to_string()
             .lines()
             .nth(help_footer_row(w, h))
-            .expect("el pie cae dentro del frame")
+            .expect("the footer falls inside the frame")
             .to_owned()
     };
 
     let width = pie_a(124, 16);
-    for verbo in [
+    for verb in [
         "índice ↔ texto",
         "bajar",
         "subir",
@@ -1610,121 +1613,123 @@ fn el_pie_de_la_ayuda_se_adapta_al_ancho() {
         "cancelar",
     ] {
         assert!(
-            width.contains(verbo),
-            "en un frame ancho caben los siete grupos, y `{verbo}` falta: {width:?}"
+            width.contains(verb),
+            "a wide frame fits all seven groups, and `{verb}` is missing: {width:?}"
         );
     }
     assert!(
         !width.contains('…'),
-        "…y sin marca de pérdida, porque no se perdió nada: {width:?}"
+        "…and no loss marker, because nothing was lost: {width:?}"
     );
 
-    let estrecho = pie_a(80, 16);
-    // Los que sobreviven son la CABEZA del ranking: cómo se pasa al texto y
-    // cómo se baja por él, que es lo que nadie adivina en una pantalla que no
-    // se parece a ninguna otra del programa.
-    for verbo in ["índice ↔ texto", "bajar"] {
+    let narrow = pie_a(80, 16);
+    // The ones that survive are the TOP of the ranking: how you switch to
+    // the text and how you scroll down it, which is what nobody guesses on a
+    // screen unlike any other in the program.
+    for verb in ["índice ↔ texto", "bajar"] {
         assert!(
-            estrecho.contains(verbo),
-            "a 80 columnas sobreviven los verbos que el lector no puede \
-             adivinar, y `{verbo}` falta: {estrecho:?}"
+            narrow.contains(verb),
+            "at 80 columns the verbs the reader cannot guess survive, and \
+             `{verb}` is missing: {narrow:?}"
         );
     }
     assert!(
-        estrecho.contains('…'),
-        "y el recorte se MARCA — un pie recortado en silencio miente: {estrecho:?}"
+        narrow.contains('…'),
+        "and the clip is MARKED — a silently clipped footer lies: {narrow:?}"
     );
-    // Grupo entero o nada: ningún corchete queda huérfano.
-    for pie in [&width, &estrecho] {
+    // Whole group or nothing: no bracket is left orphaned.
+    for pie in [&width, &narrow] {
         assert_eq!(
             pie.matches('[').count(),
             pie.matches(']').count(),
-            "medio grupo `[chord] etiqueta` en el pie: {pie:?}"
+            "half a `[chord] label` group in the footer: {pie:?}"
         );
     }
 }
 
-/// Fila del frame en la que cae el PIE del overlay de ayuda, para un frame de
+/// The frame row where the help overlay's FOOTER falls, for a frame of
 /// `w`×`h`.
 ///
-/// Calca la aritmética de `ui::help_layout`, que es privada: la caja va
-/// centrada con dos filas de margen vertical, su borde se come una fila, y el
-/// pie es la ÚLTIMA fila interior — justo debajo del cuerpo, cuya altura sí
-/// publica `ui::help_body_size`. Hace falta para que la aserción de que el
-/// filtro se pinta apunte al pie y no al frame entero: ver
-/// [`snapshot_ayuda_filtro_hostil`].
+/// Traces `ui::help_layout`'s arithmetic, which is private: the box is
+/// centered with two rows of vertical margin, its border eats one row, and
+/// the footer is the LAST interior row — right below the body, whose height
+/// `ui::help_body_size` does publish. Needed so the assertion that the
+/// filter paints points at the footer and not the whole frame: see
+/// [`snapshot_help_hostile_filter`].
 ///
-/// El corte VERTICAL no cambió al dimensionar la lateral por contenido: el
-/// idioma que pide ahora `help_body_size` decide el reparto de ANCHO y nada
-/// más, así que aquí sirve cualquiera.
+/// The VERTICAL cut did not change when sizing the sidebar by content: the
+/// language that `help_body_size` now asks for decides only the WIDTH split
+/// and nothing else, so any one will do here.
 fn help_footer_row(w: u16, h: u16) -> usize {
-    let alto_caja = h.saturating_sub(2).max(6).min(h);
-    let arriba = (h - alto_caja) / 2;
-    let (_, alto_cuerpo) =
+    let box_height = h.saturating_sub(2).max(6).min(h);
+    let top = (h - box_height) / 2;
+    let (_, body_height) =
         ui::help_body_size(ratatui::layout::Rect::new(0, 0, w, h), norte_i18n::Lang::Es);
-    usize::from(arriba + 1) + alto_cuerpo
+    usize::from(top + 1) + body_height
 }
 
-/// H3b, lección H1 sobre una superficie PINTADA nueva: el filtro de la ayuda
-/// empareja los bytes CRUDOS a propósito (`filter_raw` — un needle con un
-/// override bidi tiene que encontrar el tema que el lector ve en pantalla), y
-/// lo único que puede pintarse es `filter_display`. El pie del overlay es el
-/// eco de ese texto tecleado: un `U+202E` que llegue ahí reordena visualmente
-/// la línea entera.
+/// H3b, H1's lesson over a new PAINTED surface: help's filter matches the
+/// RAW bytes on purpose (`filter_raw` — a needle with a bidi override has to
+/// find the topic the reader sees on screen), and the only thing that can be
+/// painted is `filter_display`. The overlay's footer is the echo of that
+/// typed text: a `U+202E` that reaches it visually reorders the entire line.
 ///
-/// El pie NO es la única entrada libre del draw, y decirlo era falso (review
-/// MEDIA): la lateral pinta títulos del corpus y el cuerpo pinta encabezados,
-/// celdas de tabla y bloques de código, todos SIN enmascarar y a propósito
-/// —son texto del binario— pero sin más red que la puerta de charset del
-/// corpus (`no_shipped_topic_carries_a_terminal_hazard`, en `norte-help`) y el
-/// catálogo Fluent. Lo que sí es cierto del pie es que es la única entrada
-/// TECLEADA, y por eso es la única que se enmascara en el pintor.
+/// The footer is NOT the draw's only free-form input, and saying so was
+/// false (MEDIUM review): the sidebar paints corpus titles and the body
+/// paints headings, table cells and code blocks, all UNMASKED on purpose —
+/// they are the binary's own text — but with no net beyond the corpus's
+/// charset gate (`no_shipped_topic_carries_a_terminal_hazard`, in
+/// `norte-help`) and the Fluent catalogue. What IS true of the footer is
+/// that it is the only TYPED input, and that is why it is the only one
+/// masked in the painter.
 ///
-/// El needle arranca con el token del fixture canónico `rlo`
-/// (`norte_testkit::corpus::hostile_chords`) — llega por paste tan fácil como
-/// a mano — y con él delante ningún tema casa: la lateral queda vacía y el
-/// cuerpo sigue enseñando lo que se estaba leyendo, que es justo el contrato
-/// del modelo. Lo que se pincha aquí es el FRAME, no el modelo (que tiene su
-/// propio test en `norte_frontend::help`): un snapshot a secas registraría el
-/// hazard tan contento.
+/// The needle starts with the canonical `rlo` fixture's token
+/// (`norte_testkit::corpus::hostile_chords`) — it arrives by paste as easily
+/// as by hand — and with it in front no topic matches: the sidebar stays
+/// empty and the body keeps showing what was being read, which is exactly
+/// the model's contract. What is checked here is the FRAME, not the model
+/// (which has its own test in `norte_frontend::help`): a plain snapshot
+/// would happily record the hazard.
 ///
-/// El barrido es POR LÍNEA y no sobre el `to_string()` entero: el backend une
-/// las filas con `\n`, que `is_terminal_hazard` marca (correctamente) como
-/// control — un check ciego sobre todo el buffer daría un falso positivo por
-/// el formato del propio volcado. Ver el mismo comentario en
-/// `snapshot_extensions_description_hostil_80x24`.
+/// The sweep is PER LINE and not over the whole `to_string()`: the backend
+/// joins rows with `\n`, which `is_terminal_hazard` (correctly) also flags
+/// as control — a blind check over the whole buffer would give a false
+/// positive from the dump's own formatting. See the same comment in
+/// `snapshot_extensions_description_hostile_80x24`.
 ///
-/// La aserción anti-vacuidad va acotada al PIE, no al frame (review MEDIA):
-/// `app_base` siembra una entrada `\xE9.dat` que se pinta con su propio
-/// `U+FFFD` en el pane de detrás, así que un `text.contains('\u{FFFD}')`
-/// sobre todo el frame pasaría aunque el pie no pintase absolutamente nada.
-/// Hoy el overlay tapa esa fila a 80×16 y da igual; la maquetación cambió en
-/// esta misma fase, así que «hoy da igual» no es un sitio donde apoyarse.
-/// H3e: la página de un plugin HOSTIL, compuesta — lateral y cuerpo a la vez.
+/// The anti-emptiness assertion is scoped to the FOOTER, not the frame
+/// (MEDIUM review): `app_base` seeds a `\xE9.dat` entry that paints with its
+/// own `U+FFFD` in the pane behind it, so a `text.contains('\u{FFFD}')` over
+/// the whole frame would pass even if the footer painted absolutely
+/// nothing. Today the overlay covers that row at 80×16 and it makes no
+/// difference; the layout changed in this very phase, so "makes no
+/// difference today" is not something to lean on.
+/// H3e: a HOSTILE plugin's page, composed — sidebar and body at once.
 ///
-/// Los tests unitarios de `help_render` pinchan las CADENAS (que el título se
-/// enmascara, que la insignia aparece); esto pincha la MAQUETA, que es donde
-/// vivía el fallo que la revisión de seguridad encontró: la insignia se
-/// apagaba sola cuando el plugin no declaraba publicador, y la página quedaba
-/// con la forma exacta —título, regla, cuerpo— de una del manual. Un snapshot
-/// registra esa forma; un test de cadenas, no.
+/// `help_render`'s unit tests check the STRINGS (that the title gets
+/// masked, that the badge appears); this checks the LAYOUT, which is where
+/// the bug the security review found lived: the badge turned itself off
+/// when the plugin declared no publisher, and the page ended up with the
+/// exact shape — title, rule, body — of one from the manual. A snapshot
+/// records that shape; a string test does not.
 ///
-/// El plugin es lo peor que se puede mandar por el wire y sigue siendo legal:
-/// `name` con override RTL (corpus `rtl_override`), `publisher` VACÍO — el
-/// manifiesto exige el campo pero no que tenga contenido — y una página que se
-/// hace pasar por la documentación de la app.
+/// The plugin is the worst thing that can be sent over the wire and still be
+/// legal: `name` with an RTL override (`rtl_override` corpus), an EMPTY
+/// `publisher` — the manifest requires the field but not that it have
+/// content — and a page that passes itself off as the app's own
+/// documentation.
 #[test]
-fn snapshot_ayuda_pagina_de_plugin_hostil() {
+fn snapshot_help_hostile_plugin_page() {
     let hostile = norte_testkit::corpus::hostile_names()
         .into_iter()
         .find(|n| n.id == "rtl_override")
-        .expect("fixture del corpus");
-    let nombre = String::from_utf8_lossy(&hostile.bytes).into_owned();
+        .expect("corpus fixture");
+    let entry_name = String::from_utf8_lossy(&hostile.bytes).into_owned();
     let mut app = app_base();
     open_help(&mut app);
     let plugin = norte_proto::methods::PluginInfo {
         id: "org.evil.demo".into(),
-        name: nombre,
+        name: entry_name,
         publisher: String::new(),
         version: "1.0.0".into(),
         category: "command".into(),
@@ -1743,10 +1748,11 @@ fn snapshot_ayuda_pagina_de_plugin_hostil() {
         manifest_digest: None,
     };
     app.freeze_help_plugins(std::slice::from_ref(&plugin));
-    let view = app.help.as_mut().expect("overlay abierto");
+    let view = app.help.as_mut().expect("overlay open");
     view.state.open(&norte_help::TopicId::new("org.evil.demo"));
-    // La página que un plugin firmaría para que la lea quien va a aprobarlo, y
-    // que `main::extensions_help` pone a una tecla del gestor de extensiones.
+    // The page a plugin would sign for whoever is about to approve it to
+    // read, and that `main::extensions_help` puts a keypress away from the
+    // extension manager.
     let parsed = norte_help::parse_untrusted(
         "+++\nid = \"org.evil.demo\"\ntitle = \"Aprobar extensiones\"\n\
          commands = [\"plugin:org.evil.demo:run\"]\n+++\n\
@@ -1758,103 +1764,105 @@ fn snapshot_ayuda_pagina_de_plugin_hostil() {
     view.state.install_plugin_topic(parsed.topic);
     refresh_help(&mut app);
     let text = render(&app);
-    // Mismo barrido POR LÍNEA que `snapshot_ayuda_filtro_hostil`, y por la
-    // misma razón (los `\n` del volcado son controles).
-    for (n, linea) in text.lines().enumerate() {
+    // Same PER-LINE sweep as `snapshot_help_hostile_filter`, and for the same
+    // reason (the dump's `\n`s are controls).
+    for (n, line) in text.lines().enumerate() {
         assert!(
-            !linea.chars().any(norte_encoding::is_terminal_hazard),
-            "la página de plugin pintó un hazard de terminal (fila {n}): \
-             {linea:?}\n{text}"
+            !line.chars().any(norte_encoding::is_terminal_hazard),
+            "the plugin page painted a terminal hazard (row {n}): \
+             {line:?}\n{text}"
         );
     }
-    // Lo que el snapshot NO puede afirmar por sí solo: que la página se
-    // DECLARA de un tercero incluso sin publicador que nombrar.
+    // What the snapshot CANNOT assert by itself: that the page DECLARES
+    // itself third-party even with no publisher to name.
     assert!(
         text.contains(&norte_i18n::t_in(
             norte_i18n::Lang::Es,
             "help-plugin-origin"
         )),
-        "sin marca de procedencia la página se lee como del manual:\n{text}"
+        "with no provenance mark the page reads like it is from the manual:\n{text}"
     );
     insta::assert_snapshot!(text);
 }
 
 #[test]
-fn snapshot_ayuda_filtro_hostil() {
+fn snapshot_help_hostile_filter() {
     let rlo = norte_testkit::corpus::hostile_chords()
         .into_iter()
         .find(|c| c.id == "rlo")
-        .expect("fixture del corpus");
+        .expect("corpus fixture");
     let mut app = app_base();
     open_help(&mut app);
-    let view = app.help.as_mut().expect("overlay abierto");
+    let view = app.help.as_mut().expect("overlay open");
     view.state.start_filter();
     for c in std::iter::once(rlo.token).chain("copiar".chars()) {
         view.state.push_char(c);
     }
     refresh_help(&mut app);
     let text = render(&app);
-    for (n, linea) in text.lines().enumerate() {
+    for (n, line) in text.lines().enumerate() {
         assert!(
-            !linea.chars().any(norte_encoding::is_terminal_hazard),
-            "el pie del overlay de ayuda pintó un hazard de terminal \
-             (fila {n}, fixture {}): {linea:?}\n{text}",
+            !line.chars().any(norte_encoding::is_terminal_hazard),
+            "the help overlay's footer painted a terminal hazard \
+             (row {n}, fixture {}): {line:?}\n{text}",
             rlo.id
         );
     }
     let footer = text
         .lines()
         .nth(help_footer_row(80, 16))
-        .expect("el pie cae dentro del frame");
+        .expect("the footer falls inside the frame");
     assert!(
         footer.contains('\u{FFFD}'),
-        "y el filtro SÍ se pinta, enmascarado a U+FFFD — sin esto el test \
-         pasaría igual con un pie que no pintase nada:\n{footer:?}\n{text}"
+        "and the filter DOES paint, masked to U+FFFD — without this the test \
+         would pass just the same with a footer that painted nothing:\n{footer:?}\n{text}"
     );
     assert!(
         footer.contains("copiar"),
-        "el resto del needle llega al pie tal cual: el enmascarado es del \
-         hazard, no del texto:\n{footer:?}"
+        "the rest of the needle reaches the footer as is: the masking is of \
+         the hazard, not of the text:\n{footer:?}"
     );
     insta::assert_snapshot!(text);
 }
 
-/// La compañera del test de arriba, por el otro camino: un título HOSTIL que
-/// llega a la LATERAL.
+/// The companion of the test above, the other way around: a HOSTILE title
+/// that reaches the SIDEBAR.
 ///
-/// El de arriba solo ejercita el pie, y encima con un needle que no casa con
-/// nada: la lateral sale vacía y ninguna cadena hostil recorre jamás el camino
-/// del título. Este lo recorre, y con la fixture canónica del caso LEGÍTIMO —
-/// `bidi_isolate_url` de `norte_testkit::corpus::hostile_titles`, que es
-/// `U+2066`…`U+2069` alrededor de un `sftp://`, la forma CORRECTA de meter un
-/// tramo LTR en prosa RTL y a la vez cuatro hazards de terminal seguidos.
+/// The one above only exercises the footer, and on top of that with a needle
+/// that matches nothing: the sidebar comes out empty and no hostile string
+/// ever travels the title's path. This one travels it, with the canonical
+/// fixture for the LEGITIMATE case — `bidi_isolate_url` from
+/// `norte_testkit::corpus::hostile_titles`, which is `U+2066`…`U+2069`
+/// around an `sftp://`, the CORRECT way to put an LTR stretch in RTL prose
+/// and at the same time four terminal hazards in a row.
 ///
-/// El punto de entrada es real: la etiqueta de la entrada sintética `keys` la
-/// resuelve el frontend (`t("help-topic-keys")`) y viaja al modelo como título
-/// de fila, exactamente igual que un título del corpus o —H3f en adelante— el
-/// de un manifiesto de plugin.
+/// The entry point is real: the synthetic `keys` entry's label is resolved
+/// by the frontend (`t("help-topic-keys")`) and travels to the model as a
+/// row title, exactly like a corpus title or — H3f onward — a plugin
+/// manifest's.
 ///
-/// Lo que se afirma es lo que de verdad pasa, no lo que uno querría: el pintor
-/// de la lateral NO enmascara, así que el título sale VERBATIM (hasta el
-/// recorte por la derecha) y los aislantes bidi llegan al terminal. No es un
-/// bug del pintor —el texto es de confianza por construcción— pero sí es la
-/// razón por la que la puerta de charset del corpus es LOAD-BEARING y no un
-/// cinturón de más: quítala y esto es una inyección a un `.md` de distancia.
+/// What is asserted is what really happens, not what one would want: the
+/// sidebar's painter does NOT mask, so the title comes out VERBATIM (up to
+/// the right-hand clip) and the bidi isolates reach the terminal. It is not
+/// a bug in the painter — the text is trusted by construction — but it IS
+/// the reason the corpus's charset gate is LOAD-BEARING and not an extra
+/// belt: remove it and this is an injection one `.md` away.
 #[test]
-fn ayuda_un_titulo_hostil_llega_crudo_a_la_lateral() {
+fn a_hostile_help_title_reaches_the_sidebar_raw() {
     let bidi = norte_testkit::corpus::hostile_titles()
         .into_iter()
         .find(|t| t.id == "bidi_isolate_url")
-        .expect("fixture del corpus");
+        .expect("corpus fixture");
     let mut app = app_base();
     open_help(&mut app);
-    // Mismo constructor que usa `HelpView::new`; lo único que cambia es la
-    // etiqueta, que aquí es la fixture en vez del catálogo Fluent.
-    let view = app.help.as_mut().expect("overlay abierto");
+    // Same constructor `HelpView::new` uses; the only thing that changes is
+    // the label, which here is the fixture instead of the Fluent catalogue.
+    let view = app.help.as_mut().expect("overlay open");
     view.state = norte_frontend::help::HelpState::new(norte_i18n::Lang::Es, bidi.text.to_owned());
-    // La entrada sintética es la ÚLTIMA de la lateral y a 80×16 no cabe: se
-    // filtra por su id para dejarla sola, que es además el camino por el que
-    // el modelo empareja un título (`filter_raw` contra los bytes crudos).
+    // The synthetic entry is the LAST one in the sidebar and does not fit at
+    // 80×16: it is filtered by its id to leave it alone, which is also the
+    // path by which the model matches a title (`filter_raw` against the raw
+    // bytes).
     view.state.start_filter();
     for c in norte_frontend::help::KEYS_ID.chars() {
         view.state.push_char(c);
@@ -1867,234 +1875,234 @@ fn ayuda_un_titulo_hostil_llega_crudo_a_la_lateral() {
         .find(|l| l.contains('\u{2066}'))
         .unwrap_or_else(|| {
             panic!(
-                "el título de la fila sintética `keys` no llegó a la lateral: \
-                 el camino que este test existe para recorrer no se recorrió\n{text}"
+                "the synthetic `keys` row's title did not reach the sidebar: \
+                 the path this test exists to exercise was not exercised\n{text}"
             )
         });
-    // Verbatim hasta el recorte: el prefijo del título, aislante incluido,
-    // sale tal cual. `right_ellipsis` corta por la DERECHA, así que la cabeza
-    // sobrevive entera.
+    // Verbatim up to the clip: the title's prefix, isolate included, comes
+    // out as is. `right_ellipsis` cuts on the RIGHT, so the head survives
+    // whole.
     let head: String = bidi.text.chars().take(10).collect();
     assert!(
         row.contains(&head),
-        "la lateral pinta el título VERBATIM (recortado por la derecha): \
-         {row:?} debería empezar por {head:?}"
+        "the sidebar paints the title VERBATIM (clipped on the right): \
+         {row:?} should start with {head:?}"
     );
     assert!(
         row.chars().any(norte_encoding::is_terminal_hazard),
-        "…y sin enmascarar: si esto se pone rojo es que alguien añadió un \
-         filtro en el pintor de la lateral, lo cual está BIEN — actualiza este \
-         test y la nota de `draw_help` a la vez: {row:?}"
+        "…and unmasked: if this turns red it means someone added a filter to \
+         the sidebar's painter, which is FINE — update this test and \
+         `draw_help`'s note at the same time: {row:?}"
     );
 }
 
-/// Como [`render`] pero sobre un frame de `w`×`h`, maquetando la ayuda para
-/// ESE frame: la geometría del overlay depende de las dos dimensiones y el
-/// pre-render tiene que medir lo mismo que el pintor.
-fn render_ayuda(app: &mut App, w: u16, h: u16) -> String {
+/// Like [`render`] but over a `w`×`h` frame, laying out help for THAT frame:
+/// the overlay's geometry depends on both dimensions and the pre-render has
+/// to measure the same thing the painter does.
+fn render_help(app: &mut App, w: u16, h: u16) -> String {
     refresh_help_en(app, w, h);
     let mut terminal = Terminal::new(TestBackend::new(w, h)).expect("terminal");
     terminal.draw(|f| ui::draw(f, app)).expect("draw");
     terminal.backend().to_string()
 }
 
-/// La lateral se dimensiona a SU CONTENIDO, entre dos topes.
+/// The sidebar sizes itself to ITS CONTENT, between two caps.
 ///
-/// Antes era una constante de 24 celdas y a 113 columnas recortaba cinco de
-/// las nueve filas del corpus español — con 90 celdas de prosa al lado, que es
-/// más ancho del que se lee de un vistazo. Ahora pide lo que miden sus filas
-/// (sangría incluida, en CELDAS) y se queda entre el suelo de siempre y un
-/// tercio largo del frame.
+/// It used to be a constant 24 cells and at 113 columns it clipped five of
+/// the nine rows of the Spanish corpus — with 90 cells of prose next to it,
+/// which is wider than reads at a glance. Now it asks for what its rows
+/// measure (indent included, in CELLS) and stays between the historical
+/// floor and a long third of the frame.
 ///
-/// Los dos extremos que se fijan aquí son los dos que pueden romperse por
-/// separado: que el contenido MANDE (un corpus con títulos más largos ensancha
-/// la lateral) y que el tope AGUANTE (en un frame estrecho no se la come).
+/// The two extremes fixed here are the two that can break separately: that
+/// content RULES (a corpus with longer titles widens the sidebar) and that
+/// the cap HOLDS (on a narrow frame it does not eat everything).
 #[test]
-fn la_lateral_de_la_ayuda_se_dimensiona_a_sus_titulos() {
+fn the_help_sidebar_sizes_to_its_titles() {
     use norte_i18n::Lang;
     use ratatui::layout::Rect;
     use unicode_width::UnicodeWidthStr;
 
-    // Lo que miden las filas del corpus: la sangría de dos celdas más el
-    // título más ancho, o la cabecera de grupo más ancha si ganase.
-    let ancho_pedido = |lang| {
+    // What the corpus rows measure: the two-cell indent plus the widest
+    // title, or the widest group header if it were to win.
+    let width_requested = |lang| {
         norte_help::topics(lang)
             .iter()
             .map(|t| 2 + t.title.width())
             .max()
-            .expect("el corpus trae temas")
+            .expect("the corpus carries topics")
     };
-    let es = ancho_pedido(Lang::Es);
-    let en = ancho_pedido(Lang::En);
+    let es = width_requested(Lang::Es);
+    let en = width_requested(Lang::En);
     assert_ne!(
         es, en,
-        "los dos corpus miden lo mismo ({es}); con títulos igual de anchos, \
-         una lateral de ancho CONSTANTE pasaría lo de abajo y este test no \
-         distinguiría «manda el contenido» de «siempre lo mismo». Cámbiale el \
-         título a un tema o compara contra otro par."
+        "both corpora measure the same ({es}); with equally wide titles, a \
+         CONSTANT-width sidebar would pass what follows and this test would \
+         not tell 'content rules' apart from 'always the same'. Change a \
+         topic's title or compare against a different pair."
     );
 
-    // Frame ANCHO: manda el contenido, y dos corpus distintos dan dos anchos
-    // distintos. Una constante pasaría lo de abajo y fallaría aquí.
+    // WIDE frame: content rules, and two different corpora give two
+    // different widths. A constant would pass what follows and fail here.
     let width = Rect::new(0, 0, 160, 40);
     assert_eq!(
         usize::from(ui::help_sidebar_width(width, Lang::Es)),
         es,
-        "con sitio de sobra la lateral pide exactamente lo que mide su fila \
-         más ancha"
+        "with room to spare the sidebar asks for exactly what its widest row \
+         measures"
     );
     assert_eq!(usize::from(ui::help_sidebar_width(width, Lang::En)), en);
 
-    // Frame ESTRECHO: el tope del 35 % del frame gana, y el suelo histórico
-    // de 24 celdas se respeta — ni una lateral que se come la prosa ni una
-    // más angosta que la de antes.
+    // NARROW frame: the 35% frame cap wins, and the historical 24-cell floor
+    // is respected — neither a sidebar that eats the prose nor one narrower
+    // than it used to be.
     for w in [80u16, 100, 113] {
         let lateral = ui::help_sidebar_width(Rect::new(0, 0, w, 40), Lang::Es);
         assert!(
             lateral >= 24,
-            "a {w} columnas la lateral encogió por debajo del ancho que tenía \
-             fijo ({lateral})"
+            "at {w} columns the sidebar shrank below its old fixed width \
+             ({lateral})"
         );
         assert!(
             u32::from(lateral) * 100 <= u32::from(w) * 35,
-            "a {w} columnas la lateral se pasa del 35 % del frame ({lateral})"
+            "at {w} columns the sidebar goes past 35% of the frame ({lateral})"
         );
     }
-    // …y el tope es lo que MUERDE a 80 columnas: la lateral pedía 39.
+    // …and the cap is what BITES at 80 columns: the sidebar asked for 39.
     assert_eq!(
         ui::help_sidebar_width(Rect::new(0, 0, 80, 40), Lang::Es),
         28
     );
 
-    // Y el cuerpo tiene medida tipográfica: la prosa no crece con el terminal
-    // más allá de lo que se lee de un vistazo. Dos celdas menos que la medida:
-    // la última columna del cuerpo es su barra de scroll, y la anterior el
-    // margen que separa la prosa de ella.
+    // And the body has a typographic measure: the prose does not grow with
+    // the terminal beyond what reads at a glance. Two cells less than the
+    // measure: the body's last column is its scroll bar, and the one before
+    // it the margin separating the prose from it.
     let (body, _) = ui::help_body_size(Rect::new(0, 0, 200, 40), Lang::Es);
-    assert_eq!(body, 70, "la prosa se corta en su medida, no en el borde");
+    assert_eq!(
+        body, 70,
+        "the prose is cut at its own measure, not at the edge"
+    );
 }
 
-/// …y con sitio, NINGÚN título sale recortado.
+/// …and with room, NO title comes out clipped.
 ///
-/// La comprobación de arriba es aritmética; ésta es sobre el frame pintado, que
-/// es donde se ve si la sangría, el canalón o la elipsis se comieron una celda
-/// de más.
+/// The check above is arithmetic; this one is over the painted frame, which
+/// is where you see whether the indent, the gutter or the ellipsis ate one
+/// cell too many.
 ///
-/// Se mira SOLO la columna de la lateral. Antes buscaba el título en cualquier
-/// línea del frame, y pasaba por accidente: a 120 columnas la lateral ya
-/// recortaba el título más largo («Lo que la pantalla enseña alrededor del
-/// listado», 49 celdas con la sangría, contra un techo del 35 % = 42), pero el
-/// CUERPO de la página índice lo pintaba entero en su lista de enlaces. Añadir
-/// un tema (spec 2026-09-15) empujó esa línea fuera de las 36 filas y destapó el
-/// recorte. Con sitio de verdad es 140 columnas: 35 % = 49.
+/// ONLY the sidebar column is checked. It used to search for the title in
+/// any line of the frame, and passed by accident: at 120 columns the sidebar
+/// was already clipping the longest title ("Lo que la pantalla enseña
+/// alrededor del listado", 49 cells with the indent, against a 35% ceiling
+/// of 42), but the BODY of the index page painted it whole in its link
+/// list. Adding a topic (spec 2026-09-15) pushed that line past the 36 rows
+/// and exposed the clip. Genuine room is 140 columns: 35% = 49.
 #[test]
-fn con_sitio_ningun_titulo_de_la_ayuda_sale_recortado() {
+fn with_room_no_help_title_comes_out_clipped() {
     let mut app = app_base();
     open_help(&mut app);
-    let text = render_ayuda(&mut app, 140, 40);
+    let text = render_help(&mut app, 140, 40);
     let lateral = usize::from(ui::help_sidebar_width(
         ratatui::layout::Rect::new(0, 0, 140, 40),
         norte_help::Lang::Es,
     ));
-    // Lo que precede a la lateral en cada línea: el borde del frame, el de la
-    // caja y, si el volcado entrecomilla la línea, la comilla.
-    let columna = |l: &str| l.chars().take(lateral + 4).collect::<String>();
-    for tema in norte_help::topics(norte_i18n::Lang::Es) {
+    // What precedes the sidebar on each line: the frame's border, the box's
+    // border and, if the dump quotes the line, the quote mark.
+    let column = |l: &str| l.chars().take(lateral + 4).collect::<String>();
+    for theme in norte_help::topics(norte_i18n::Lang::Es) {
         assert!(
-            text.lines().any(|l| columna(l).contains(&tema.title)),
-            "el título {:?} no aparece entero en la lateral:\n{text}",
-            tema.title
+            text.lines().any(|l| column(l).contains(&theme.title)),
+            "title {:?} does not appear whole in the sidebar:\n{text}",
+            theme.title
         );
     }
     assert!(
         !text
             .lines()
             .any(|l| l.contains("…") && l.contains("  SFTP")),
-        "…y sin elipsis en la fila más larga:\n{text}"
+        "…and no ellipsis on the longest row:\n{text}"
     );
 }
 
-/// El pie dice DÓNDE está el lector, en porcentaje LEÍDO hasta el pie de la
-/// ventana (`17 %`, como `less`), y se calla cuando la página cabe entera. Un
-/// `11/663` en líneas no le decía a nadie cuánto quedaba.
+/// The footer says WHERE the reader is, in percent READ down to the
+/// window's foot (`17 %`, like `less`), and stays silent when the page fits
+/// whole. An `11/663` in lines told nobody how much was left.
 ///
-/// No es adorno: las filas ejecutables de un tema se pintan DETRÁS de toda su
-/// prosa, así que en una página larga no entran en el primer render y sin el
-/// indicador nada dice que estén ahí.
+/// It is not decoration: a topic's executable rows paint BEHIND all of its
+/// prose, so on a long page they do not make it into the first render, and
+/// without the indicator nothing says they are there.
 #[test]
-fn el_pie_de_la_ayuda_situa_al_lector_solo_cuando_hace_falta() {
+fn the_help_footer_places_the_reader_only_when_needed() {
     let mut app = app_base();
     open_help(&mut app);
 
-    // 80×16: el índice no cabe ni de lejos en las 12 filas del cuerpo.
-    let text = render_ayuda(&mut app, 80, 16);
-    let view = app.help.as_ref().expect("overlay abierto");
+    // 80×16: the index does not come close to fitting in the body's 12 rows.
+    let text = render_help(&mut app, 80, 16);
+    let view = app.help.as_ref().expect("overlay open");
     let total = view.body().0.len();
     let (_, height) =
         ui::help_body_size(ratatui::layout::Rect::new(0, 0, 80, 16), view.state.lang());
     assert!(
         total > height,
-        "el índice no cabe en {height} filas ({total})"
+        "the index does not fit in {height} rows ({total})"
     );
     let footer = text
         .lines()
         .nth(help_footer_row(80, 16))
-        .expect("el pie cae dentro del frame");
-    // Pegado al borde derecho de la caja: el volcado del backend entrecomilla
-    // cada fila, así que el ancla es el `│` de la caja y no el fin de línea.
+        .expect("the footer falls inside the frame");
+    // Stuck to the box's right edge: the backend's dump quotes each row, so
+    // the anchor is the box's `│` and not the line's end.
     let pct = |scroll: usize| (scroll + height).min(total) * 100 / total;
     assert!(
         footer.contains(&format!("{} % │", pct(0))),
-        "el pie sitúa al lector en la primera pantalla, a la DERECHA: {footer:?}"
+        "the footer places the reader on the first screen, on the RIGHT: {footer:?}"
     );
 
-    // Y sigue al scroll. El foco entra en el cuerpo para que `page_down`
-    // desplace (con el foco en la lateral mueve el cursor de temas), lo que de
-    // paso hace que `refresh` REVELE la acción con foco: da igual cuánto se
-    // mueva el cuerpo — lo que se fija es que el pie dice la línea que de
-    // verdad está arriba, no que se movieran cinco.
+    // And it follows the scroll. Focus enters the body so `page_down` scrolls
+    // it (with focus on the sidebar it moves the topic cursor), which along
+    // the way makes `refresh` REVEAL the focused action: it does not matter
+    // how much the body moved — what is checked is that the footer says the
+    // line that is really at the top, not that five moved.
     app.help.as_mut().expect("overlay").state.toggle_focus();
     app.help.as_mut().expect("overlay").state.page_down(5);
-    let text = render_ayuda(&mut app, 80, 16);
+    let text = render_help(&mut app, 80, 16);
     let scroll = app.help.as_ref().expect("overlay").state.body_scroll();
-    assert!(scroll > 0, "el cuerpo se desplazó");
+    assert!(scroll > 0, "the body scrolled");
     let footer = text
         .lines()
         .nth(help_footer_row(80, 16))
-        .expect("el pie cae dentro del frame");
+        .expect("the footer falls inside the frame");
     assert!(
         footer.contains(&format!("{} % │", pct(scroll))),
-        "el indicador va con el scroll ({scroll}): {footer:?}"
+        "the indicator follows the scroll ({scroll}): {footer:?}"
     );
 
-    // Frame de sobra: la página entra entera y el indicador SOBRA — un `1/9`
-    // sobre nueve líneas visibles no informa de nada. El alto va holgado a
-    // propósito: el índice CRECE con cada página que H3h escribe, y un frame
-    // ajustado convertiría "escribir una página" en "arreglar este test".
-    // (Y los enlaces de la prosa, que desde el puente 75 son filas que se
-    // siguen: el índice enlaza a todas las páginas.)
-    let text = render_ayuda(&mut app, 120, 110);
-    let view = app.help.as_ref().expect("overlay abierto");
+    // Frame with room to spare: the page fits whole and the indicator is
+    // SUPERFLUOUS — a `1/9` over nine visible lines informs of nothing. The
+    // height is generous on purpose: the index GROWS with every page H3h
+    // writes, and a tight frame would turn "write a page" into "fix this
+    // test". (And the prose's links, which since bridge 75 are rows you can
+    // follow: the index links to every page.)
+    let text = render_help(&mut app, 120, 110);
+    let view = app.help.as_ref().expect("overlay open");
     let total = view.body().0.len();
     let (_, height) = ui::help_body_size(
         ratatui::layout::Rect::new(0, 0, 120, 110),
         view.state.lang(),
     );
-    assert!(
-        total <= height,
-        "la página cabe en {height} filas ({total})"
-    );
+    assert!(total <= height, "the page fits in {height} rows ({total})");
     let footer = text
         .lines()
         .nth(help_footer_row(120, 110))
-        .expect("el pie cae dentro del frame");
+        .expect("the footer falls inside the frame");
     assert!(
         !footer.contains(" % "),
-        "con la página entera a la vista el pie no dice nada: {footer:?}"
+        "with the whole page in view the footer says nothing: {footer:?}"
     );
 }
 
-/// Texto de cada fila del buffer, una entrada por fila del frame.
+/// Text of each buffer row, one entry per frame row.
 fn row_texts(buf: &ratatui::buffer::Buffer) -> Vec<String> {
     (buf.area.top()..buf.area.bottom())
         .map(|y| {
@@ -2105,7 +2113,7 @@ fn row_texts(buf: &ratatui::buffer::Buffer) -> Vec<String> {
         .collect()
 }
 
-/// Estilos de cada fila del buffer, celda a celda.
+/// Styles of each buffer row, cell by cell.
 fn all_row_styles(buf: &ratatui::buffer::Buffer) -> Vec<Vec<ratatui::style::Style>> {
     (buf.area.top()..buf.area.bottom())
         .map(|y| {
@@ -2116,51 +2124,55 @@ fn all_row_styles(buf: &ratatui::buffer::Buffer) -> Vec<Vec<ratatui::style::Styl
         .collect()
 }
 
-/// H3b: el cuerpo CON EL FOCO. `copying` trae cinco comandos y tres enlaces,
-/// y sus filas se pintan al FINAL de la página, detrás de toda la prosa: mover
-/// el foco al cuerpo y dar un paso obliga a que la fila activa esté a la vez
-/// RESALTADA y VISIBLE. Eso es lo que pincha este test, y la razón de que
-/// `HelpView::refresh` llame a `reveal` — sin él el resalte viviría fuera de la
-/// ventana y el lector movería un cursor que no ve.
+/// H3b: the body WITH FOCUS. `copying` carries five commands and three
+/// links, and its rows paint at the END of the page, behind all the prose:
+/// moving focus to the body and taking a step requires the active row to be
+/// both HIGHLIGHTED and VISIBLE at once. That is what this test checks, and
+/// the reason `HelpView::refresh` calls `reveal` — without it the highlight
+/// would live outside the window and the reader would move a cursor they
+/// cannot see.
 ///
-/// El snapshot congela el recorte (qué líneas quedaron dentro); el resalte NO
-/// puede salir de él —el volcado del backend es texto pelado, sin estilos— así
-/// que va aparte, celda a celda.
+/// The snapshot freezes the clip (which lines stayed inside); the highlight
+/// CANNOT come out of it — the backend's dump is bare text, with no styles —
+/// so it is checked separately, cell by cell.
 ///
-/// La aserción es POSITIVA, y esa es la mitad que faltaba (review MAJOR).
-/// Toda la maquinaria del foco descansa en un invariante que cruza dos
-/// crates: la acción *i* de `HelpState::actions` se pinta en la línea
-/// `Rendered::action_lines[i]`. Las dos mitades están fijadas por separado
-/// (`help_render.rs` barre el mapa sobre todo el corpus, el modelo tiene sus
-/// propios tests), pero el sitio donde se ENCUENTRAN es este, y aquí solo se
-/// comparaban DOS filas por desigualdad: desplaza el mapa una posición y se
-/// resalta `f5` mientras el modelo dice `f6` — los vectores siguen siendo
-/// distintos, el test sigue pasando, y el usuario ve bajo el cursor una fila
-/// que dice `pane.copy` mientras `Enter` despacha `pane.move`. Una etiqueta
-/// mentirosa sobre una superficie que MUTA ficheros.
+/// The assertion is POSITIVE, and that is the half that was missing (MAJOR
+/// review). All of focus's machinery rests on an invariant that crosses two
+/// crates: action *i* of `HelpState::actions` paints on line
+/// `Rendered::action_lines[i]`. The two halves are pinned separately
+/// (`help_render.rs` sweeps the map over the whole corpus, the model has its
+/// own tests), but the place where they MEET is this one, and here only TWO
+/// rows were compared by inequality: shift the map by one position and `f5`
+/// gets highlighted while the model says `f6` — the vectors stay different,
+/// the test still passes, and the user sees a row under the cursor that says
+/// `pane.copy` while `Enter` dispatches `pane.move`. A lying label over a
+/// surface that MUTATES files.
 ///
-/// Se localiza la fila resaltada sin nombrarla: se pinta el MISMO frame con y
-/// sin foco en el cuerpo y se diferencian los estilos fila a fila. La única
-/// que cambia es la que lleva el resalte, y de ella se afirma que su TEXTO
-/// nombra el comando que el modelo dice tener enfocado — con el chord y la
-/// etiqueta que da el propio resolver, no una copia del formato. Comparar
-/// contra el estilo concreto del tema ataría el test a la paleta.
-/// H3d de punta a punta, sobre el FRAME: con los dos panes dentro de un zip
-/// (`READ_ONLY` por construcción del scheme, ADR 0018), las filas de la página
-/// de copiado que ESCRIBEN salen con su razón al lado, no solo atenuadas.
+/// The highlighted row is located without naming it: the SAME frame is
+/// painted with and without focus in the body and the styles are diffed row
+/// by row. The only one that changes is the one carrying the highlight, and
+/// of it we assert that its TEXT names the command the model says has focus
+/// — with the chord and the label the resolver itself gives, not a copy of
+/// the format. Comparing against the theme's specific style would tie the
+/// test to the palette.
+/// H3d end to end, over the FRAME: with both panes inside a zip
+/// (`READ_ONLY` by the scheme's construction, ADR 0018), the copying page's
+/// rows that WRITE come out with their reason next to them, not just dimmed.
 ///
-/// Es lo único que ata la cadena completa —`freeze_help_facts` → la tabla
-/// compartida → `row_line`— a lo que se ve: los tres tramos tienen su test
-/// unitario, y ninguno se rompería si el congelado dejara de llamarse al abrir.
+/// It is the only thing that ties the whole chain — `freeze_help_facts` →
+/// the shared table → `row_line` — to what is seen: all three legs have
+/// their own unit test, and none would break if the freeze stopped being
+/// called on open.
 ///
-/// Se recorre el cuerpo con el foco (como `snapshot_ayuda_cuerpo_con_foco`)
-/// porque las filas ejecutables van TRAS la prosa: sin desplazar, la razón
-/// existe y no está en el frame. El frame es de 100×30 — un terminal real, no
-/// uno holgado a medida — y la razón sale ENTERA porque `row_line` la presupuesta
-/// antes que la etiqueta: quien cede es el nombre del comando, que ya está en la
-/// prosa de arriba y en la columna del chord.
+/// The body is walked with focus (like `snapshot_help_body_with_focus`)
+/// because the executable rows go AFTER the prose: without scrolling, the
+/// reason exists and is not in the frame. The frame is 100×30 — a real
+/// terminal, not one generously sized to fit — and the reason comes out
+/// WHOLE because `row_line` budgets for it before the label: what yields is
+/// the command's name, which is already in the prose above and in the
+/// chord's column.
 #[test]
-fn la_ayuda_dentro_de_un_zip_pinta_la_razon_del_veto() {
+fn help_inside_a_zip_paints_the_veto_reason() {
     let inside = vp("zip+file:///a.zip/!");
     let mut app = App::new(
         Pane::new(
@@ -2171,13 +2183,13 @@ fn la_ayuda_dentro_de_un_zip_pinta_la_razon_del_veto() {
     );
     app.dialog_hints = default_dialog_hints();
     open_help(&mut app);
-    let view = app.help.as_mut().expect("overlay abierto");
+    let view = app.help.as_mut().expect("overlay open");
     view.state.open(&norte_help::TopicId::new("copying"));
     view.state.toggle_focus();
-    // Y se MUEVE por las filas ejecutables: desde que `Tab` respeta dónde está
-    // el lector (deja la vista quieta y trae el cursor a ella), llegar a las
-    // filas de comando es lo que hace quien las quiere ver — un movimiento del
-    // cursor, no un efecto secundario de cambiar de columna.
+    // And it MOVES through the executable rows: since `Tab` respects where
+    // the reader is (leaves the view still and brings the cursor to it),
+    // reaching the command rows is what whoever wants to see them does — a
+    // cursor movement, not a side effect of switching columns.
     view.state.up();
     refresh_help_en(&mut app, 100, 30);
 
@@ -2186,156 +2198,158 @@ fn la_ayuda_dentro_de_un_zip_pinta_la_razon_del_veto() {
     let text = terminal.backend().to_string();
     let buffer = terminal.backend().buffer().clone();
 
-    let razon = norte_i18n::t_in(norte_i18n::Lang::Es, "reason-read-only");
+    let reason = norte_i18n::t_in(norte_i18n::Lang::Es, "reason-read-only");
     assert!(
-        text.contains(&razon),
-        "la fila vetada tiene que decir POR QUÉ ({razon}):\n{text}"
+        text.contains(&reason),
+        "the vetoed row has to say WHY ({reason}):\n{text}"
     );
 
-    // Y la OTRA mitad de la función: la fila está ATENUADA. Decir la razón
-    // sobre una fila que se sigue pintando como pulsable es media feature, y
-    // es la mitad que el ojo lee primero — el volcado de texto no lleva
-    // estilos, así que esto va celda a celda.
+    // And the OTHER half of the function: the row is DIMMED. Saying the
+    // reason on a row that still paints as clickable is half a feature, and
+    // is the half the eye reads first — the text dump carries no styles, so
+    // this is checked cell by cell.
     //
-    // Se comprueban los DOS tramos que `row_line` decide por separado: el
-    // chord (`Mark` si se puede pulsar, `Info` si no — una fila apagada no
-    // puede vestir de tecla) y el texto. Solo el color de FRENTE: el fondo se
-    // lo pone el bloque del overlay y no dice nada de la disponibilidad.
+    // The TWO stretches `row_line` decides separately are checked: the
+    // chord (`Mark` if clickable, `Info` if not — a dimmed row cannot dress
+    // as a key) and the text. Only the FOREGROUND color: the background is
+    // set by the overlay's block and says nothing about availability.
     let rows = row_texts(&buffer);
     let styles = all_row_styles(&buffer);
     let y = rows
         .iter()
-        .position(|f| f.contains(&razon))
-        .expect("la fila con la razón cae dentro del frame");
-    let fg_de = |x: usize| styles[y][x].fg.expect("cada celda pintada tiene frente");
-    let en = |aguja: &str| -> usize {
-        let byte = rows[y].find(aguja).expect("el trozo está en la fila");
+        .position(|f| f.contains(&reason))
+        .expect("the row with the reason falls inside the frame");
+    let fg_de = |x: usize| {
+        styles[y][x]
+            .fg
+            .expect("every painted cell has a foreground")
+    };
+    let en = |needle: &str| -> usize {
+        let byte = rows[y].find(needle).expect("the chunk is in the row");
         rows[y][..byte].chars().count()
     };
-    let atenuado = app.theme.role(norte_theme::Role::Info).fg;
+    let dimmed = app.theme.role(norte_theme::Role::Info).fg;
     let normal = app.theme.role(norte_theme::Role::Regular).fg;
-    let tecla = app.theme.role(norte_theme::Role::Mark).fg;
+    let key = app.theme.role(norte_theme::Role::Mark).fg;
     assert!(
-        atenuado != normal && atenuado != tecla,
-        "el tema tiene que distinguir los tres roles o esto no prueba nada"
+        dimmed != normal && dimmed != key,
+        "the theme has to distinguish the three roles or this proves nothing"
     );
 
-    let x_razon = en(&razon);
-    for x in x_razon..x_razon + razon.chars().count() {
+    let x_reason = en(&reason);
+    for x in x_reason..x_reason + reason.chars().count() {
         assert_eq!(
             Some(fg_de(x)),
-            atenuado,
-            "la fila dice la razón pero se pinta como si se pudiera pulsar: {:?}",
+            dimmed,
+            "the row says the reason but paints as if it were clickable: {:?}",
             rows[y]
         );
     }
     let x_chord = en("F5");
     assert_eq!(
         Some(fg_de(x_chord)),
-        atenuado,
-        "el chord de una fila vetada no puede seguir vestido de tecla: {:?}",
+        dimmed,
+        "a vetoed row's chord cannot stay dressed as a key: {:?}",
         rows[y]
     );
-    assert_ne!(Some(fg_de(x_chord)), tecla);
+    assert_ne!(Some(fg_de(x_chord)), key);
 }
 
 #[test]
-fn snapshot_ayuda_cuerpo_con_foco() {
+fn snapshot_help_body_with_focus() {
     use norte_help::ChordResolver;
 
     let mut app = app_base();
     open_help(&mut app);
-    let view = app.help.as_mut().expect("overlay abierto");
+    let view = app.help.as_mut().expect("overlay open");
     view.state.open(&norte_help::TopicId::new("copying"));
     view.state.toggle_focus();
     assert_eq!(
         view.state.focus(),
         norte_frontend::help::Focus::Body,
-        "el tema tiene filas ejecutables, así que el foco SÍ entra"
+        "the topic has executable rows, so focus DOES enter"
     );
-    // Un paso: la SEGUNDA fila, para que esto no pueda pasar con un pintor que
-    // resalte siempre la primera.
+    // One step: the SECOND row, so this cannot pass with a painter that
+    // always highlights the first.
     view.state.down();
-    let Some(norte_frontend::help::Action::Run(comando)) = view.state.action().cloned() else {
-        panic!("la fila con foco es una fila ejecutable");
+    let Some(norte_frontend::help::Action::Run(command)) = view.state.action().cloned() else {
+        panic!("the focused row is an executable row");
     };
-    assert_eq!(
-        comando, "pane.move",
-        "la fila con foco es la de `pane.move`"
-    );
+    assert_eq!(command, "pane.move", "the focused row is `pane.move`'s");
     refresh_help(&mut app);
 
     let scroll = app.help.as_ref().unwrap().state.body_scroll();
     assert!(
         scroll > 0,
-        "las filas van tras la prosa: revelarlas OBLIGA a desplazar el cuerpo \
-         (scroll={scroll})"
+        "the rows go after the prose: revealing them FORCES the body to \
+         scroll (scroll={scroll})"
     );
-    let con_foco = render_buffer(&app);
+    let with_focus = render_buffer(&app);
     let text = render(&app);
 
-    // Y el resalte es DEL FOCO, no de la fila: devuelto el foco a la lateral,
-    // el cursor del cuerpo sigue existiendo pero ya no es el que mueven las
-    // flechas, y ninguna fila queda marcada. El mismo gesto sirve de PATRÓN
-    // para localizar la fila resaltada: entre los dos frames no cambia nada
-    // más (el `reveal` ya no mueve el scroll, que este test acaba de fijar).
+    // And the highlight belongs to FOCUS, not to the row: with focus
+    // returned to the sidebar, the body's cursor still exists but is no
+    // longer the one the arrows move, and no row stays marked. The same
+    // gesture serves as the PATTERN for locating the highlighted row:
+    // nothing else changes between the two frames (`reveal` no longer moves
+    // the scroll, which this test just pinned).
     app.help.as_mut().unwrap().state.toggle_focus();
     refresh_help(&mut app);
-    let sin_foco = render_buffer(&app);
+    let unfocused = render_buffer(&app);
 
-    let estilos_con = all_row_styles(&con_foco);
-    let estilos_sin = all_row_styles(&sin_foco);
-    let distintas: Vec<usize> = (0..estilos_con.len())
+    let estilos_con = all_row_styles(&with_focus);
+    let estilos_sin = all_row_styles(&unfocused);
+    let different: Vec<usize> = (0..estilos_con.len())
         .filter(|&y| estilos_con[y] != estilos_sin[y])
         .collect();
     assert_eq!(
-        distintas.len(),
+        different.len(),
         1,
-        "exactamente UNA fila del frame cambia al quitar el foco del cuerpo; \
-         cambiaron {distintas:?}"
+        "exactly ONE row of the frame changes when focus leaves the body; \
+         {different:?} changed"
     );
 
-    // Y esa fila es la del comando que el MODELO dice tener enfocado. El
-    // chord y la etiqueta salen del resolver que usa el pintor, así que esto
-    // no puede pasar con una copia del formato de fila que se haya quedado
-    // atrás.
+    // And that row is the one for the command the MODEL says has focus. The
+    // chord and the label come from the resolver the painter uses, so this
+    // cannot pass with a copy of the row format that has fallen behind.
     let resolver = std::sync::Arc::clone(&app.help_chords);
     let chord = resolver
-        .chord(&comando)
-        .unwrap_or_else(|| panic!("{comando} tiene chord en el preset orthodox"));
-    // La etiqueta puede salir RECORTADA («mover la selección al otro …»): la
-    // columna de teclas mide lo que mide la más ancha del tema, y desde que
-    // `alt+A` se pinta `Alt+Shift+A` a la etiqueta le quedan menos columnas
-    // en un terminal de 80. Lo que identifica la fila es su arranque.
-    let arranque = |texto: &str| texto.chars().take(16).collect::<String>();
-    let label = arranque(&resolver.label(&comando));
-    let row = &row_texts(&con_foco)[distintas[0]];
+        .chord(&command)
+        .unwrap_or_else(|| panic!("{command} has a chord in the orthodox preset"));
+    // The label may come out CLIPPED ("move the selection to the other …"):
+    // the key column measures whatever the theme's widest one measures, and
+    // since `alt+A` paints as `Alt+Shift+A` the label has fewer columns left
+    // on an 80-wide terminal. What identifies the row is how it starts.
+    let startup = |content: &str| content.chars().take(16).collect::<String>();
+    let label = startup(&resolver.label(&command));
+    let row = &row_texts(&with_focus)[different[0]];
     assert!(
         row.contains(&chord) && row.contains(&label),
-        "la fila resaltada tiene que ser la de `{comando}` ({chord} / \
-         {label}…), no otra: {row:?}"
+        "the highlighted row has to be `{command}`'s ({chord} / \
+         {label}…), not another one: {row:?}"
     );
-    // …y NO la de su vecina. Un mapa desplazado una posición resaltaría
-    // `pane.copy` mientras `Enter` despacha `pane.move`.
-    let vecino = "pane.copy";
-    let chord_vecino = resolver
-        .chord(vecino)
-        .unwrap_or_else(|| panic!("{vecino} tiene chord en el preset orthodox"));
+    // …and NOT its neighbor's. A map shifted by one position would highlight
+    // `pane.copy` while `Enter` dispatches `pane.move`.
+    let neighbor = "pane.copy";
+    let chord_neighbor = resolver
+        .chord(neighbor)
+        .unwrap_or_else(|| panic!("{neighbor} has a chord in the orthodox preset"));
     assert!(
-        !row.contains(&arranque(&resolver.label(vecino))) && !row.contains(&chord_vecino),
-        "la fila resaltada es la de la acción VECINA: el mapa acción→línea \
-         está desplazado: {row:?}"
+        !row.contains(&startup(&resolver.label(neighbor))) && !row.contains(&chord_neighbor),
+        "the highlighted row is the NEIGHBORING action's: the action→line \
+         map is shifted: {row:?}"
     );
 
     insta::assert_snapshot!(text);
 }
 
-/// Command palette (`Ctrl+P`/vim `:`, H1 T4): filtrada a "principio" deja
-/// DOS filas visibles (`cursor.top`/`viewer.top` — ambas "ir al principio"
-/// en ES) con su chord real del preset orthodox — el MISMO builder que usa
-/// el binario (`norte_tui::palette::build_rows`), no una copia del formato.
+/// Command palette (`Ctrl+P`/vim `:`, H1 T4): filtered to "principio"
+/// leaves TWO rows visible (`cursor.top`/`viewer.top` — both "go to the
+/// start" in ES) with their real chord from the orthodox preset — the SAME
+/// builder the binary uses (`norte_tui::palette::build_rows`), not a copy of
+/// the format.
 #[test]
-fn snapshot_palette_abierta() {
+fn snapshot_palette_open() {
     let mut app = app_base();
     let presets = norte_tui::keymap::presets();
     let (_, preset) = presets.iter().find(|(n, _)| *n == "orthodox").unwrap();
@@ -2355,17 +2369,17 @@ fn snapshot_palette_abierta() {
     insta::assert_snapshot!(render(&app));
 }
 
-/// P1: una fila de comando de plugin (`palette::plugin_rows`) filtrada a
-/// SOLO ella — con un título hostil (override RTL, corpus `rtl_override`),
-/// para pinchar que ni el título ni el prefijo `[extension]` se pintan
-/// crudos, y que la fila queda distinguible de un built-in.
+/// P1: a plugin command row (`palette::plugin_rows`) filtered down to JUST
+/// it — with a hostile title (RTL override, `rtl_override` corpus), to check
+/// that neither the title nor the `[extension]` prefix paint raw, and that
+/// the row stays distinguishable from a built-in.
 #[test]
-fn snapshot_palette_fila_de_plugin_hostil() {
+fn snapshot_palette_hostile_plugin_row() {
     let hostile = norte_testkit::corpus::hostile_names()
         .into_iter()
         .find(|n| n.id == "rtl_override")
-        .expect("fixture del corpus");
-    let titulo = String::from_utf8_lossy(&hostile.bytes).into_owned();
+        .expect("corpus fixture");
+    let title = String::from_utf8_lossy(&hostile.bytes).into_owned();
     let mut app = app_base();
     let plugin = norte_proto::methods::PluginInfo {
         id: "org.evil.demo".into(),
@@ -2379,7 +2393,7 @@ fn snapshot_palette_fila_de_plugin_hostil() {
         description: None,
         commands: vec![norte_proto::methods::PluginCommandInfo {
             id: "run".into(),
-            title: titulo,
+            title,
             kind: norte_proto::methods::PluginCommandKind::Command,
         }],
         columns: Vec::new(),
@@ -2387,225 +2401,233 @@ fn snapshot_palette_fila_de_plugin_hostil() {
         has_help: false,
         manifest_digest: None,
     };
-    // Sin query: `plugin_rows` sobre UN plugin con UN comando ya deja una
-    // sola fila — "filtrada a solo ella" por construcción, no por texto
-    // tecleado (el título hostil no tiene por qué contener nada buscable).
+    // No query: `plugin_rows` over ONE plugin with ONE command already
+    // leaves a single row — "filtered down to just it" by construction, not
+    // by typed text (the hostile title has no reason to contain anything
+    // searchable).
     let rows = norte_tui::palette::plugin_rows(std::slice::from_ref(&plugin));
     let palette = norte_tui::app::Palette::new(rows);
     app.palette = Some(palette);
     let text = render(&app);
-    // Ver comentario equivalente en `snapshot_extensions_description_hostil_80x24`:
-    // el check es sobre el CARÁCTER inyectado, no sobre "ningún control en
-    // toda la pantalla" (los saltos de línea de `to_string()` también son
-    // controles, falso positivo si se escanea el buffer entero).
+    // See the equivalent comment in
+    // `snapshot_extensions_description_hostile_80x24`: the check is on the
+    // INJECTED CHARACTER, not on "no control anywhere on the screen"
+    // (`to_string()`'s line breaks are also controls, a false positive if
+    // the whole buffer is scanned).
     assert!(
         !text.contains('\u{202E}'),
-        "el override RTL del título se pintó crudo: {text}"
+        "the title's RTL override painted raw: {text}"
     );
     assert!(
         text.contains('\u{FFFD}'),
-        "el título hostil debe enmascararse a U+FFFD: {text}"
+        "the hostile title must be masked to U+FFFD: {text}"
     );
     insta::assert_snapshot!(text);
 }
 
-fn cfg_vacia() -> norte_tui::config::LoadedConfig {
-    norte_tui::config::load(&norte_config::Layers { dirs: vec![] }).expect("config vacía carga")
+fn empty_cfg() -> norte_tui::config::LoadedConfig {
+    norte_tui::config::load(&norte_config::Layers { dirs: vec![] }).expect("empty config loads")
 }
 
-/// Overlay de ajustes (S3), abierto sobre la config VACÍA (valores default
-/// de S2) — el MISMO builder que usa el binario
-/// (`norte_tui::settings::build_rows`), no una copia a mano. A 80×24: el
-/// catálogo completo (9 filas generales + la informativa de Plugins, más
-/// dos cabeceras de sección) no cabe en las 16 filas del resto del archivo.
+/// Settings overlay (S3), opened over the EMPTY config (S2's default
+/// values) — the SAME builder the binary uses
+/// (`norte_tui::settings::build_rows`), not a hand-written copy. At 80×24:
+/// the full catalogue (9 general rows + the Plugins informational one, plus
+/// two section headers) does not fit in the 16 rows of the rest of the
+/// file.
 #[test]
-fn snapshot_settings_abierta() {
+fn snapshot_settings_open() {
     let mut app = app_base();
     let settings =
-        norte_tui::app::Settings::new(norte_tui::settings::build_rows(&cfg_vacia(), &[]));
+        norte_tui::app::Settings::new(norte_tui::settings::build_rows(&empty_cfg(), &[]));
     app.settings = Some(settings);
     insta::assert_snapshot!(render_80x24(&app));
 }
 
-/// La lista de ajustes SIGUE al cursor cuando no cabe.
+/// The settings list FOLLOWS the cursor when it does not fit.
 ///
-/// Se pintaba siempre desde arriba porque «ajustes cabe en una pantalla» — lo
-/// decía el editor de atajos, y fue verdad con nueve ajustes. Con ~30 dejó de
-/// serlo: bajar pasado el borde sacaba el cursor de la caja y la lista no se
-/// movía. Se vio en una terminal de verdad, no aquí: el snapshot de arriba se
-/// hace con el cursor en la primera fila, que es justo donde no falla.
+/// It used to always paint from the top because "settings fits on one
+/// screen" — that is what the shortcuts editor said, and it was true with
+/// nine settings. With ~30 it stopped being true: scrolling past the edge
+/// took the cursor out of the box and the list did not move. It was seen on
+/// a real terminal, not here: the snapshot above is made with the cursor on
+/// the first row, which is exactly where it does not fail.
 ///
-/// Pasa por `before_frame`, como el bucle: es quien concilia la ventana, y un
-/// test que pintara sin él comprobaría una pantalla que nadie ve.
+/// It goes through `before_frame`, like the loop: that is what reconciles
+/// the window, and a test that painted without it would be checking a
+/// screen nobody sees.
 #[test]
-fn la_lista_de_ajustes_sigue_al_cursor() {
+fn the_settings_list_follows_the_cursor() {
     let mut app = app_base();
     let mut settings =
-        norte_tui::app::Settings::new(norte_tui::settings::build_rows(&cfg_vacia(), &[]));
+        norte_tui::app::Settings::new(norte_tui::settings::build_rows(&empty_cfg(), &[]));
     let ultima = settings.visible().len() - 1;
     settings.set_cursor(ultima);
-    let nombre = settings.rows()[settings.visible()[ultima]].name.clone();
+    let entry_name = settings.rows()[settings.visible()[ultima]].name.clone();
     app.settings = Some(settings);
     ui::before_frame(&mut app, ratatui::layout::Rect::new(0, 0, 80, 24));
-    let pantalla = render_80x24(&app);
+    let screen = render_80x24(&app);
     assert!(
-        pantalla.lines().any(|l| l.contains(&format!("> {nombre}"))),
-        "la fila del cursor («{nombre}») tiene que verse, con su marca:\n{pantalla}"
+        screen
+            .lines()
+            .any(|l| l.contains(&format!("> {entry_name}"))),
+        "the cursor's row (\"{entry_name}\") has to be visible, with its mark:\n{screen}"
     );
-    // Y la ventana se ha movido: la primera fila ya no cabe.
+    // And the window has moved: the first row no longer fits.
     assert!(
-        !pantalla.contains("Theme                        default")
-            && !pantalla.contains("Tema                         default"),
-        "con el cursor al final, la primera fila sale por arriba:\n{pantalla}"
+        !screen.contains("Theme                        default")
+            && !screen.contains("Tema                         default"),
+        "with the cursor at the end, the first row scrolls off the top:\n{screen}"
     );
 }
 
-/// Y la cabecera de la sección VUELVE al subir.
+/// And the section header COMES BACK when scrolling up.
 ///
-/// Lo que Oscar vio: «si bajo hasta abajo y subo, General no vuelve a subir».
-/// La ventana se ancla al cursor en LÍNEAS, y la primera fila vive en la
-/// línea 1 porque la 0 es la cabecera: subiendo del todo el offset se queda
-/// en 1 y la cabecera no reaparece nunca. La regla que lo arregla es más
-/// general que este caso —si el cursor está en la PRIMERA fila de su sección,
-/// la cabecera de esa sección entra en la ventana con él— y esto la fija por
-/// su síntoma.
+/// What Oscar saw: "if I scroll all the way down and back up, General does
+/// not come back up." The window anchors to the cursor in LINES, and the
+/// first row lives on line 1 because line 0 is the header: scrolling all
+/// the way up leaves the offset at 1 and the header never reappears. The
+/// rule that fixes it is more general than this one case — if the cursor is
+/// on the FIRST row of its section, that section's header enters the window
+/// with it — and this pins it by its symptom.
 ///
-/// «General» ya no existe: las 33 entradas se repartieron en siete
-/// secciones. La regla del ancla sí, y sigue siendo la que vale para las
-/// cabeceras que SCROLLEAN — la clavada de arriba es otra pieza.
+/// "General" no longer exists: the 33 entries were split into seven
+/// sections. The anchor rule still holds, and is still the one that governs
+/// headers that SCROLL — the one pinned at the top is a different piece.
 #[test]
-fn la_cabecera_de_la_seccion_vuelve_al_subir() {
+fn the_section_header_comes_back_on_scroll_up() {
     let mut app = app_base();
     let mut settings =
-        norte_tui::app::Settings::new(norte_tui::settings::build_rows(&cfg_vacia(), &[]));
+        norte_tui::app::Settings::new(norte_tui::settings::build_rows(&empty_cfg(), &[]));
     let ultima = settings.visible().len() - 1;
     settings.set_cursor(ultima);
     app.settings = Some(settings);
     let area = ratatui::layout::Rect::new(0, 0, 80, 24);
-    // Bajar del todo mueve la ventana...
+    // Scrolling all the way down moves the window...
     ui::before_frame(&mut app, area);
-    // ...y volver arriba tiene que devolverla ENTERA, cabecera incluida.
-    app.settings.as_mut().expect("ajustes").set_cursor(0);
+    // ...and going back up has to return it WHOLE, header included.
+    app.settings.as_mut().expect("settings").set_cursor(0);
     ui::before_frame(&mut app, area);
-    let pantalla = render_80x24(&app);
-    let primera = norte_i18n::t("settings-section-appearance");
+    let screen = render_80x24(&app);
+    let first = norte_i18n::t("settings-section-appearance");
     assert!(
-        pantalla.contains(&primera),
-        "al volver arriba se tiene que ver de qué sección es la fila:\n{pantalla}"
+        screen.contains(&first),
+        "going back to the top has to show which section the row belongs to:\n{screen}"
     );
 }
 
-/// La cabecera de la sección del cursor va CLAVADA arriba: se ve estés donde
-/// estés dentro de ella, y cambia al cruzar a la siguiente.
+/// The cursor's section header stays PINNED at the top: it shows wherever
+/// you are inside it, and changes when you cross into the next one.
 ///
-/// Es la pieza que hace imposible el bug que Oscar vio («General no vuelve a
-/// subir»): el rótulo que dice dónde estás deja de depender del scroll.
+/// It is the piece that makes the bug Oscar saw ("General does not come
+/// back up") impossible: the label that says where you are stops depending
+/// on scroll.
 #[test]
-fn la_cabecera_clavada_sigue_a_la_seccion_del_cursor() {
+fn the_pinned_header_follows_the_cursors_section() {
     let mut app = app_base();
     app.settings = Some(norte_tui::app::Settings::new(
-        norte_tui::settings::build_rows(&cfg_vacia(), &[]),
+        norte_tui::settings::build_rows(&empty_cfg(), &[]),
     ));
     let area = ratatui::layout::Rect::new(0, 0, 80, 24);
     ui::before_frame(&mut app, area);
-    let arriba = render_80x24(&app);
-    let primera = norte_i18n::t("settings-section-appearance");
+    let up = render_80x24(&app);
+    let first = norte_i18n::t("settings-section-appearance");
     assert!(
-        arriba.contains(&primera),
-        "arriba manda la primera sección («{primera}»):\n{arriba}"
+        up.contains(&first),
+        "at the top the first section (\"{first}\") governs:\n{up}"
     );
 
-    // Hasta la última fila: la clavada tiene que ser OTRA.
-    let ultima = app.settings.as_ref().expect("ajustes").visible().len() - 1;
-    app.settings.as_mut().expect("ajustes").set_cursor(ultima);
+    // All the way to the last row: the pinned one has to be a DIFFERENT one.
+    let ultima = app.settings.as_ref().expect("settings").visible().len() - 1;
+    app.settings.as_mut().expect("settings").set_cursor(ultima);
     ui::before_frame(&mut app, area);
-    let abajo = render_80x24(&app);
-    let ultima_seccion = norte_i18n::t("settings-section-plugins");
+    let down = render_80x24(&app);
+    let ultima_section = norte_i18n::t("settings-section-plugins");
     assert!(
-        abajo.contains(&ultima_seccion),
-        "al final manda la suya («{ultima_seccion}»):\n{abajo}"
+        down.contains(&ultima_section),
+        "at the end its own section (\"{ultima_section}\") governs:\n{down}"
     );
 }
 
-/// Con sitio, el índice está; sin sitio, se va. La misma degradación que
-/// hacen las columnas de un panel: una columna que no cabe no se encoge
-/// hasta ser ilegible, se va.
+/// With room, the index is there; without it, it goes away. The same
+/// degradation a pane's columns do: a column that does not fit does not
+/// shrink until illegible, it goes away.
 #[test]
-fn el_indice_de_secciones_desaparece_en_una_terminal_estrecha() {
+fn the_section_index_disappears_on_a_narrow_terminal() {
     let mut app = app_base();
     app.settings = Some(norte_tui::app::Settings::new(
-        norte_tui::settings::build_rows(&cfg_vacia(), &[]),
+        norte_tui::settings::build_rows(&empty_cfg(), &[]),
     ));
-    let abrir_con = norte_i18n::t("settings-section-open-with");
+    let open_with = norte_i18n::t("settings-section-open-with");
 
-    let ancha = ratatui::layout::Rect::new(0, 0, 110, 24);
-    ui::before_frame(&mut app, ancha);
-    let pantalla = render_en(&app, 110, 24);
+    let wide = ratatui::layout::Rect::new(0, 0, 110, 24);
+    ui::before_frame(&mut app, wide);
+    let screen = render_at(&app, 110, 24);
     assert!(
-        pantalla.contains(&abrir_con),
-        "el índice lista las secciones a las que el cursor no ha ido:\n{pantalla}"
+        screen.contains(&open_with),
+        "the index lists the sections the cursor has not visited:\n{screen}"
     );
 
-    let estrecha = ratatui::layout::Rect::new(0, 0, 50, 24);
-    ui::before_frame(&mut app, estrecha);
-    let pantalla = render_en(&app, 50, 24);
+    let is_narrow = ratatui::layout::Rect::new(0, 0, 50, 24);
+    ui::before_frame(&mut app, is_narrow);
+    let screen = render_at(&app, 50, 24);
     assert!(
-        !pantalla.contains(&abrir_con),
-        "a 50 columnas no cabe el índice y manda la lista:\n{pantalla}"
+        !screen.contains(&open_with),
+        "at 50 columns the index does not fit and the list rules:\n{screen}"
     );
 }
 
-/// `tab` cambia de lado, y los DOS cursores se ven siempre: el que no tiene
-/// el teclado, apagado. La misma regla que las dos mitades de la ayuda — dos
-/// cursores vivos, o ninguno, es lo que hace que no sepas dónde estás.
+/// `tab` switches sides, and BOTH cursors are always visible: the one that
+/// does not have the keyboard, dimmed. The same rule as help's two halves —
+/// two live cursors, or none, is what makes you lose track of where you are.
 #[test]
-fn tab_cambia_de_lado_y_las_flechas_recorren_secciones() {
+fn tab_switches_sides_and_the_arrows_walk_sections() {
     let mut app = app_base();
     app.settings = Some(norte_tui::app::Settings::new(
-        norte_tui::settings::build_rows(&cfg_vacia(), &[]),
+        norte_tui::settings::build_rows(&empty_cfg(), &[]),
     ));
-    let s = app.settings.as_mut().expect("ajustes");
+    let s = app.settings.as_mut().expect("settings");
     assert_eq!(s.focus(), norte_frontend::settings::Focus::List);
 
     s.toggle_focus();
     assert_eq!(s.focus(), norte_frontend::settings::Focus::Index);
-    // En el índice, bajar cambia de SECCIÓN y la lista sigue.
+    // In the index, scrolling down changes SECTION and the list follows.
     s.down();
-    let seccion = s.rows()[s.visible()[s.cursor()]].section;
-    assert_eq!(seccion, norte_frontend::settings::Section::Panes);
+    let section = s.rows()[s.visible()[s.cursor()]].section;
+    assert_eq!(section, norte_frontend::settings::Section::Panes);
 
-    // Y la pantalla lo enseña: la cabecera clavada es la de la sección nueva.
+    // And the screen shows it: the pinned header is the new section's.
     ui::before_frame(&mut app, ratatui::layout::Rect::new(0, 0, 100, 24));
-    let pantalla = render_en(&app, 100, 24);
+    let screen = render_at(&app, 100, 24);
     assert!(
-        pantalla.contains(&norte_i18n::t("settings-section-panes")),
-        "la pantalla sigue al índice:\n{pantalla}"
+        screen.contains(&norte_i18n::t("settings-section-panes")),
+        "the screen follows the index:\n{screen}"
     );
 }
 
-/// La cuenta del filtro. Sin la segunda cifra, «no hay nada» y «lo tapé con
-/// una letra» se leen igual.
+/// The filter count. Without the second figure, "there is nothing" and "I
+/// covered it with one letter" read the same.
 #[test]
-fn el_pie_dice_cuantos_ajustes_se_ven_de_cuantos() {
+fn the_footer_says_how_many_settings_show_out_of_how_many() {
     let mut app = app_base();
     let settings =
-        norte_tui::app::Settings::new(norte_tui::settings::build_rows(&cfg_vacia(), &[]));
+        norte_tui::app::Settings::new(norte_tui::settings::build_rows(&empty_cfg(), &[]));
     let total = settings.total();
     app.settings = Some(settings);
     ui::before_frame(&mut app, ratatui::layout::Rect::new(0, 0, 80, 24));
-    let pantalla = render_80x24(&app);
+    let screen = render_80x24(&app);
     assert!(
-        pantalla.contains(&total.to_string()),
-        "el total ({total}) se dice siempre:\n{pantalla}"
+        screen.contains(&total.to_string()),
+        "the total ({total}) is always stated:\n{screen}"
     );
 }
 
-/// La captura del 2026-09-18: dos paneles de ~50 columnas con Tipo, Tamaño
-/// y Fecha dejaban 16 celdas al nombre y cada captura de pantalla salía
-/// como `Ca….png`. El nombre se lee ahora entero: cede la clase, que ya
-/// dice la fila, y la fecha pasa a corta.
+/// The 2026-09-18 capture: two ~50-column panes with Type, Size and Date
+/// left 16 cells for the name and every screenshot came out as
+/// `Ca….png`. The name now reads whole: the class yields, since the row
+/// already states it, and the date switches to short.
 #[test]
-fn los_nombres_largos_se_leen_enteros() {
+fn long_names_read_whole() {
     let dir = vp("file:///capturas");
     let entries = (0..5)
         .map(|i| {
@@ -2629,75 +2651,72 @@ fn los_nombres_largos_se_leen_enteros() {
     });
     let mut terminal = Terminal::new(TestBackend::new(100, 16)).expect("terminal");
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
-    let pantalla = terminal.backend().to_string();
-    // Solo el panel IZQUIERDO: el derecho está vacío, no tiene nombres que
-    // leer y por eso conserva todas sus columnas.
-    let izquierdo: String = pantalla
+    let screen = terminal.backend().to_string();
+    // Only the LEFT pane: the right one is empty, has no names to read, and
+    // so keeps all of its columns.
+    let left: String = screen
         .lines()
         .map(|l| l.chars().take(51).collect::<String>() + "\n")
         .collect();
     assert!(
-        izquierdo.contains("Captura de pantalla 2024.png"),
-        "el nombre entero, sin elipsis:\n{pantalla}"
+        left.contains("Captura de pantalla 2024.png"),
+        "the whole name, no ellipsis:\n{screen}"
     );
     assert!(
-        !izquierdo.contains("Tipo"),
-        "la clase es lo primero que cede:\n{pantalla}"
+        !left.contains("Tipo"),
+        "the class is the first thing to yield:\n{screen}"
     );
-    assert!(
-        izquierdo.contains("Tamaño"),
-        "el tamaño se queda:\n{pantalla}"
-    );
+    assert!(left.contains("Tamaño"), "the size stays:\n{screen}");
 }
 
-/// Los menús van en secciones (ADR 0125): Operar pinta sus rótulos, y la
-/// fila de «Borrar» —debajo de dos rayas— ejecuta Borrar, no la orden que
-/// caería en esa fila si las rayas no contaran.
+/// Menus go in sections (ADR 0125): Operate paints its labels, and the
+/// "Delete" row — below two rules — runs Delete, not the command that would
+/// fall on that row if the rules did not count.
 #[test]
-fn el_menu_pinta_secciones_y_el_clic_sigue_a_la_orden() {
+fn the_menu_paints_sections_and_the_click_follows_the_command() {
     let mut app = app_base();
-    let operar = norte_frontend::menu::MENUS
+    let operate = norte_frontend::menu::MENUS
         .iter()
         .position(|m| m.title == "menu-operate")
         .expect("Operar");
     let mut m = norte_frontend::menu::MenuState::new();
-    m.open(operar);
+    m.open(operate);
     app.menu = Some(m);
     let area = ratatui::layout::Rect::new(0, 0, 80, 32);
     let mut terminal = Terminal::new(TestBackend::new(80, 32)).expect("terminal");
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
-    let pantalla = terminal.backend().to_string();
+    let screen = terminal.backend().to_string();
     assert!(
-        pantalla.contains("├─ Archivos comprimidos"),
-        "el rótulo de la sección:\n{pantalla}"
+        screen.contains("├─ Archivos comprimidos"),
+        "the section's label:\n{screen}"
     );
-    let fila = pantalla
+    let row = screen
         .lines()
         .position(|l| l.contains("Borrar ") && !l.contains("permanente"))
-        .expect("la fila de Borrar");
-    let borrar = norte_frontend::menu::MENUS[operar]
+        .expect("the Delete row");
+    let delete = norte_frontend::menu::MENUS[operate]
         .items()
         .position(|id| id == "pane.delete")
-        .expect("Borrar en Operar");
-    let zona = ui::menu_zones(&app, area)
+        .expect("Delete in Operate");
+    let zone = ui::menu_zones(&app, area)
         .into_iter()
-        .find(|z| usize::from(z.row) == fila)
-        .expect("la fila de Borrar es pulsable");
-    assert_eq!(zona.hit, ui::MenuHit::Item(borrar));
+        .find(|z| usize::from(z.row) == row)
+        .expect("the Delete row is clickable");
+    assert_eq!(zone.hit, ui::MenuHit::Item(delete));
 }
 
-/// Revisión S, M3: con el overlay de ajustes Y un modal AMBOS abiertos (el
-/// enrutado de teclas ya trata al modal como AUTORITATIVO en este caso,
-/// `modal_preempts_settings`), el modal debe pintarse ENCIMA — antes se
-/// pintaba antes que `draw_settings` en `ui::draw`, así que el overlay lo
-/// tapaba visualmente aunque las teclas seguían yendo al modal. Pin: el
-/// título del modal ("papelera") es visible en el snapshot, no enterrado
-/// bajo la lista de ajustes.
+/// S review, M3: with the settings overlay AND a modal BOTH open (key
+/// routing already treats the modal as AUTHORITATIVE in this case,
+/// `modal_preempts_settings`), the modal must paint ON TOP — it used to
+/// paint before `draw_settings` in `ui::draw`, so the overlay covered it
+/// visually even though the keys still went to the modal. Pin: the modal's
+/// title ("trash") is visible in the snapshot, not buried under the
+/// settings list.
 #[test]
-fn snapshot_modal_pinta_encima_del_overlay_de_ajustes() {
+fn snapshot_modal_paints_over_the_settings_overlay() {
     let mut app = app_base();
     let settings =
-        norte_tui::app::Settings::new(norte_tui::settings::build_rows(&cfg_vacia(), &[]));
+        norte_tui::app::Settings::new(norte_tui::settings::build_rows(&empty_cfg(), &[]));
     app.settings = Some(settings);
     app.modal = Some(Modal::ConfirmDelete {
         items: vec![vp("file:///casa/notas.txt")],
@@ -2706,10 +2725,10 @@ fn snapshot_modal_pinta_encima_del_overlay_de_ajustes() {
     insta::assert_snapshot!(render_80x24(&app));
 }
 
-/// Mismo caso que arriba, con la PALETTE en vez del overlay de ajustes
-/// (`modal_preempts_palette`) — la otra mitad de la clase H1 MINOR-4.
+/// Same case as above, with the PALETTE instead of the settings overlay
+/// (`modal_preempts_palette`) — the other half of H1 MINOR-4's class.
 #[test]
-fn snapshot_modal_pinta_encima_de_la_palette() {
+fn snapshot_modal_paints_over_the_palette() {
     let mut app = app_base();
     let presets = norte_tui::keymap::presets();
     let (_, preset) = presets.iter().find(|(n, _)| *n == "orthodox").unwrap();
@@ -2729,16 +2748,17 @@ fn snapshot_modal_pinta_encima_de_la_palette() {
     insta::assert_snapshot!(render(&app));
 }
 
-/// Filtrada + EDITANDO (S3): filtra a la fila `Text` `ui.font` (el espacio
-/// final la aísla de `ui.font-size`, ver `app::settings_tests`), `activate`
-/// abre el buffer de edición y se teclea un valor — pincha que la lista
-/// filtrada, la descripción y el footer de edición (`settings-edit-hint`)
-/// se pintan juntos sin pisarse.
+/// Filtered + EDITING (S3): filters down to the `Text` `ui.font` row (the
+/// trailing space isolates it from `ui.font-size`, see
+/// `app::settings_tests`), `activate` opens the edit buffer and a value is
+/// typed — checks that the filtered list, the description and the edit
+/// footer (`settings-edit-hint`) paint together without stepping on each
+/// other.
 #[test]
-fn snapshot_settings_filtrada_y_editando_texto() {
+fn snapshot_settings_filtered_and_editing_text() {
     let mut app = app_base();
     let mut settings =
-        norte_tui::app::Settings::new(norte_tui::settings::build_rows(&cfg_vacia(), &[]));
+        norte_tui::app::Settings::new(norte_tui::settings::build_rows(&empty_cfg(), &[]));
     for c in "ui.font ".chars() {
         settings.push_char(c);
     }
@@ -2750,37 +2770,37 @@ fn snapshot_settings_filtrada_y_editando_texto() {
     insta::assert_snapshot!(render_80x24(&app));
 }
 
-/// El panel de diferencias (`Shift+F2`, 2026-08-11-directory-comparison.md).
+/// The differences pane (`Shift+F2`, 2026-08-11-directory-comparison.md).
 ///
-/// La suite del modelo vive en `norte-frontend` y no pinta nada; lo que este
-/// snapshot congela es la COMPOSICIÓN, que es lo único que se rompe en
-/// silencio: que las dos caras quepan, que las dos marcas queden entre ellas,
-/// que un nombre no-UTF8 salga enmascarado y BADGEADO en las dos, y que el pie
-/// diga el estado, el lado activo y las cinco cuentas.
+/// The model's suite lives in `norte-frontend` and paints nothing; what this
+/// snapshot freezes is the COMPOSITION, which is the only thing that breaks
+/// silently: that both sides fit, that both marks stay between them, that a
+/// non-UTF8 name comes out masked and BADGED on both, and that the footer
+/// states the status, the active side and the five counts.
 ///
-/// Hay una fila de cada categoría a propósito, incluida la pareja que solo
-/// difiere en la CONFIANZA (`= !` frente a `= ~`): esa distinción es el motivo
-/// de existir de todo el ítem, y un render que la perdiera seguiría siendo
-/// verde en todas las demás aserciones.
-/// Una fila de comparación de test: los dos lados salen de las dos raíces del
-/// snapshot, y `reason` se rellena solo donde el wire lo exige
+/// There is a row for every category on purpose, including the pair that
+/// differs only in CONFIDENCE (`= !` vs `= ~`): that distinction is the
+/// whole item's reason to exist, and a render that lost it would still be
+/// green on every other assertion.
+/// A test comparison row: both sides come from the snapshot's two roots, and
+/// `reason` is filled in only where the wire requires it
 /// (`CompareRow::reason_is_consistent`).
-fn fila_compare(
+fn row_compare(
     id: u64,
-    nombre: &[u8],
+    entry_name: &[u8],
     verdict: norte_proto::methods::CompareVerdict,
     criterion: norte_proto::methods::CompareCriterion,
     confidence: norte_proto::methods::CompareConfidence,
-    izquierda: bool,
-    derecha: bool,
+    left_side: bool,
+    right_side: bool,
 ) -> norte_proto::methods::CompareRow {
     use norte_proto::methods::{CompareReason, CompareRow, CompareVerdict};
     let left = vp("file:///casa");
     let right = vp("file:///otro");
     CompareRow {
         id,
-        left: izquierda.then(|| entry(&left, nombre, EntryKind::File, Some(1024))),
-        right: derecha.then(|| entry(&right, nombre, EntryKind::File, Some(2048))),
+        left: left_side.then(|| entry(&left, entry_name, EntryKind::File, Some(1024))),
+        right: right_side.then(|| entry(&right, entry_name, EntryKind::File, Some(2048))),
         verdict,
         criterion,
         confidence,
@@ -2798,11 +2818,11 @@ fn snapshot_compare_pane() {
 
     let left = vp("file:///casa");
     let right = vp("file:///otro");
-    let row = fila_compare;
+    let row = row_compare;
 
     let mut view = norte_tui::app::CompareView::new(left, right, 0, None, None);
     view.pane.extend(vec![
-        // Probado por el hash, y solo sugerido por la fecha: DOS respuestas.
+        // Proven by the hash, and only suggested by the date: TWO answers.
         row(
             1,
             b"probado.bin",
@@ -2821,7 +2841,7 @@ fn snapshot_compare_pane() {
             true,
             true,
         ),
-        // Un provider que no puede decirlo (un .zip): respuesta, no fallo.
+        // A provider that cannot tell (a .zip): an answer, not a failure.
         row(
             3,
             b"en-archivo.txt",
@@ -2867,7 +2887,7 @@ fn snapshot_compare_pane() {
             true,
             true,
         ),
-        // C6, hallazgo 7: un `Error` puede no traer NINGÚN lado.
+        // C6, finding 7: an `Error` may carry NEITHER side.
         row(
             8,
             b"ilegible",
@@ -2886,7 +2906,7 @@ fn snapshot_compare_pane() {
     insta::assert_snapshot!(render_80x24(&app));
 }
 
-/// Un paso de plan de test.
+/// A test sync-plan step.
 fn paso_sync(
     id: u64,
     kind: norte_proto::methods::SyncStepKind,
@@ -2906,18 +2926,15 @@ fn paso_sync(
         criterion: CompareCriterion::Size,
         confidence: CompareConfidence::Certain,
         reversal: Some(reversal),
-        // `shape_is_consistent`: un paso IRREVERSIBLE debe decir por qué, y
-        // aquí el porqué es siempre el mismo — el destino no puede devolverlo.
+        // `shape_is_consistent`: an IRREVERSIBLE step must say why, and here
+        // the why is always the same — the destination cannot give it back.
         reason: (reversal == StepReversal::Irreversible).then_some(SyncReason::NoTrashOnTarget),
     };
-    assert!(
-        step.shape_is_consistent(),
-        "paso de test mal formado: {step:?}"
-    );
+    assert!(step.shape_is_consistent(), "malformed test step: {step:?}");
     step
 }
 
-fn cierre_sync(
+fn close_sync(
     counts: norte_proto::methods::SyncCounts,
     dest_trash: norte_proto::methods::DestTrash,
 ) -> norte_proto::methods::SyncPlanDone {
@@ -2932,18 +2949,19 @@ fn cierre_sync(
     }
 }
 
-/// El panel de sincronización de un `Update` contra un destino cuya papelera
-/// SÍ dice dónde entierra las cosas: el caso normal en Linux, y el único que
-/// una máquina de desarrollo puede producir de verdad (`os_root` declara
-/// `trash_restorable` siempre).
+/// The sync pane of an `Update` against a destination whose trash DOES say
+/// where it buries things: the normal case on Linux, and the only one a
+/// development machine can really produce (`os_root` always declares
+/// `trash_restorable`).
 ///
-/// Lo que este snapshot congela es la COMPOSICIÓN a 80 columnas: que el título
-/// quepa con las dos raíces y la flecha del SENTIDO, que el resumen no se coma
-/// la lista, que las tres marcas de cada paso queden separadas y que la línea
-/// de teclas no se corte a media palabra — que es exactamente el fallo que la
-/// línea del panel de diferencias tenía al añadirle estas teclas.
+/// What this snapshot freezes is the COMPOSITION at 80 columns: that the
+/// title fits with both roots and the DIRECTION arrow, that the summary does
+/// not eat into the list, that each step's three marks stay separated, and
+/// that the key line does not cut off mid-word — which is exactly the
+/// failure the differences pane's line had when these keys were added to
+/// it.
 #[test]
-fn snapshot_sync_pane_update_con_papelera() {
+fn snapshot_sync_pane_update_with_trash() {
     use norte_proto::methods::{DestTrash, StepReversal, SyncCounts, SyncMode, SyncStepKind};
 
     let mut view = norte_tui::app::SyncView::new(
@@ -2996,7 +3014,7 @@ fn snapshot_sync_pane_update_con_papelera() {
         unknown_kind: 0,
     };
     view.state =
-        norte_frontend::sync::SyncState::ready(steps, cierre_sync(counts, DestTrash::Restorable));
+        norte_frontend::sync::SyncState::ready(steps, close_sync(counts, DestTrash::Restorable));
     view.run = norte_tui::app::SyncRunState::Done;
 
     let mut app = app_base();
@@ -3004,17 +3022,17 @@ fn snapshot_sync_pane_update_con_papelera() {
     insta::assert_snapshot!(render_80x24(&app));
 }
 
-/// Y el caso que esta máquina NO puede producir: un `Mirror` que borra un árbol
-/// contra un destino SIN papelera, con la segunda pregunta abierta.
+/// And the case this machine CANNOT produce: a `Mirror` that deletes a tree
+/// against a destination WITHOUT trash, with the second question open.
 ///
-/// `norte-vfs-local` declara `TRASH` siempre y, con la raíz en `/`, contesta
-/// `trash_restorable` siempre — así que `Opaque` y `Absent` son alcanzables en
-/// macOS y en Windows, y aquí solo por construcción. Este snapshot es lo que
-/// hace que la frase se lea, y lo que impide que un cambio en el resumen deje
-/// «no se puede deshacer nada» fuera de pantalla en el único caso donde no
-/// leerlo cuesta datos.
+/// `norte-vfs-local` always declares `TRASH` and, with the root at `/`,
+/// always answers `trash_restorable` — so `Opaque` and `Absent` are only
+/// reachable on macOS and on Windows, and here only by construction. This
+/// snapshot is what makes the sentence get read, and what stops a change to
+/// the summary from leaving "nothing can be undone" off screen in the one
+/// case where not reading it costs data.
 #[test]
-fn snapshot_sync_pane_mirror_sin_papelera() {
+fn snapshot_sync_pane_mirror_without_trash() {
     use norte_proto::methods::{DestTrash, StepReversal, SyncCounts, SyncMode, SyncStepKind};
 
     let mut view = norte_tui::app::SyncView::new(
@@ -3067,7 +3085,7 @@ fn snapshot_sync_pane_mirror_sin_papelera() {
         unknown_kind: 0,
     };
     view.state =
-        norte_frontend::sync::SyncState::ready(steps, cierre_sync(counts, DestTrash::Absent));
+        norte_frontend::sync::SyncState::ready(steps, close_sync(counts, DestTrash::Absent));
     view.run = norte_tui::app::SyncRunState::Done;
     view.confirming = view
         .state
@@ -3076,7 +3094,7 @@ fn snapshot_sync_pane_mirror_sin_papelera() {
         .confirmation(norte_i18n::active());
     assert!(
         view.confirming.is_some(),
-        "un mirror que borra dos árboles sin papelera TIENE que preguntar dos veces"
+        "a mirror that deletes two trees with no trash HAS to ask twice"
     );
 
     let mut app = app_base();

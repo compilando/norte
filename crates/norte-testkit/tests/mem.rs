@@ -1,6 +1,6 @@
-//! Tests de `MemProvider`: semántica del contrato (colisiones, caja, rename
-//! de subárboles, abort sin rastro) y de la inyección de fallos (byte exacto,
-//! desconexión, latencia determinista con reloj pausado).
+//! `MemProvider` tests: contract semantics (collisions, case, subtree
+//! rename, trace-free abort) and fault injection (exact byte, disconnection,
+//! deterministic latency with a paused clock).
 
 use bytes::Bytes;
 use futures::StreamExt;
@@ -9,15 +9,15 @@ use norte_testkit::MemProvider;
 use norte_vfs::Provider;
 
 fn vp(wire: &str) -> VPath {
-    VPath::parse(wire).expect("wire válido de test")
+    VPath::parse(wire).expect("valid test wire")
 }
 
 async fn write_file(mem: &MemProvider, wire: &str, content: &[u8]) {
-    let mut sink = mem.write(&vp(wire)).await.expect("write abre");
+    let mut sink = mem.write(&vp(wire)).await.expect("write opens");
     sink.write(Bytes::copy_from_slice(content))
         .await
-        .expect("chunk entra");
-    sink.commit().await.expect("commit publica");
+        .expect("chunk goes in");
+    sink.commit().await.expect("commit publishes");
 }
 
 async fn read_all(mem: &MemProvider, wire: &str) -> Result<Vec<u8>, Error> {
@@ -29,7 +29,7 @@ async fn read_all(mem: &MemProvider, wire: &str) -> Result<Vec<u8>, Error> {
     Ok(out)
 }
 
-// ---------- roundtrip y visibilidad ----------
+// ---------- roundtrip and visibility ----------
 
 #[tokio::test]
 async fn write_commit_read_roundtrip() {
@@ -46,7 +46,7 @@ async fn nothing_visible_before_commit() {
     let mem = MemProvider::new();
     let mut sink = mem.write(&vp("mem:///f")).await.unwrap();
     sink.write(Bytes::from_static(b"data")).await.unwrap();
-    // Sin commit: el path final no existe.
+    // No commit: the final path does not exist.
     assert_eq!(
         mem.stat(&vp("mem:///f")).await.unwrap_err(),
         Error::NotFound
@@ -66,7 +66,7 @@ async fn abort_leaves_no_trace() {
         Error::NotFound
     );
     let mut list = mem.list(&vp("mem:///")).await.unwrap();
-    assert!(list.next().await.is_none(), "raíz vacía tras abort");
+    assert!(list.next().await.is_none(), "empty root after abort");
 }
 
 #[tokio::test]
@@ -74,24 +74,24 @@ async fn hostile_names_roundtrip_byte_exact() {
     let mem = MemProvider::new();
     let root = MemProvider::root();
     for name in norte_testkit::corpus::hostile_names() {
-        let seg = norte_proto::Segment::new(name.bytes.clone()).expect("segmento válido");
+        let seg = norte_proto::Segment::new(name.bytes.clone()).expect("valid segment");
         let path = root.join(seg);
-        let mut sink = mem.write(&path).await.expect("write abre");
+        let mut sink = mem.write(&path).await.expect("write opens");
         sink.write(Bytes::from_static(b"x")).await.unwrap();
         sink.commit().await.unwrap();
         let e = mem.stat(&path).await.unwrap_or_else(|err| {
-            panic!("[{}] stat tras commit: {err:?}", name.id);
+            panic!("[{}] stat after commit: {err:?}", name.id);
         });
         assert_eq!(
             e.path.file_name().unwrap().as_bytes(),
             name.bytes.as_slice(),
-            "[{}] bytes intactos",
+            "[{}] intact bytes",
             name.id
         );
     }
 }
 
-// ---------- colisiones y caja ----------
+// ---------- collisions and case ----------
 
 #[tokio::test]
 async fn write_collision_is_conflict() {
@@ -111,13 +111,13 @@ async fn case_insensitive_collision_detected() {
     let mem =
         MemProvider::with_flags(CapabilityFlags::RENAME_ATOMIC | CapabilityFlags::CASE_PRESERVING);
     write_file(&mem, "mem:///File", b"1").await;
-    // En FS case-insensitive, "file" colisiona con "File".
+    // On a case-insensitive FS, "file" collides with "File".
     match mem.write(&vp("mem:///file")).await {
         Err(Error::Conflict { conflict }) => assert_eq!(conflict, ConflictKind::CaseCollision),
-        Err(e) => panic!("esperaba CaseCollision, fue {e:?}"),
-        Ok(_) => panic!("esperaba CaseCollision, el write abrió"),
+        Err(e) => panic!("expected CaseCollision, was {e:?}"),
+        Ok(_) => panic!("expected CaseCollision, the write opened"),
     }
-    // Y resuelve al mismo nodo al leer.
+    // And it resolves to the same node when read.
     assert_eq!(read_all(&mem, "mem:///file").await.unwrap(), b"1");
 }
 
@@ -134,15 +134,15 @@ async fn case_sensitive_no_collision() {
 async fn case_change_rename_allowed_when_insensitive() {
     let mem = MemProvider::with_flags(CapabilityFlags::CASE_PRESERVING);
     write_file(&mem, "mem:///readme", b"x").await;
-    // a → A sobre el mismo nodo: rename de caja, permitido.
+    // a → A over the same node: a case rename, allowed.
     mem.rename(&vp("mem:///readme"), &vp("mem:///README"))
         .await
-        .expect("cambio de caja permitido");
+        .expect("case change allowed");
     let e = mem.stat(&vp("mem:///README")).await.unwrap();
     assert_eq!(e.path.file_name().unwrap().as_bytes(), b"README");
 }
 
-// ---------- estructura ----------
+// ---------- structure ----------
 
 #[tokio::test]
 async fn mkdir_requires_parent() {
@@ -214,7 +214,7 @@ async fn logical_clock_makes_mtimes_deterministic() {
             mem.stat(&vp("mem:///b")).await.unwrap().mtime_ms,
         )
     };
-    assert_eq!(run().await, run().await, "dos ejecuciones idénticas");
+    assert_eq!(run().await, run().await, "two identical runs");
 }
 
 // ---------- copy_native ----------
@@ -237,12 +237,12 @@ async fn copy_native_copies_when_declared() {
     write_file(&mem, "mem:///a", b"contenido").await;
     mem.copy_native(&vp("mem:///a"), &vp("mem:///b"))
         .await
-        .expect("SERVER_COPY declarado")
-        .expect("copia ok");
+        .expect("SERVER_COPY declared")
+        .expect("copy ok");
     assert_eq!(read_all(&mem, "mem:///b").await.unwrap(), b"contenido");
 }
 
-// ---------- inyección de fallos ----------
+// ---------- fault injection ----------
 
 #[tokio::test]
 async fn fail_read_at_exact_byte() {
@@ -263,7 +263,7 @@ async fn fail_read_at_exact_byte() {
             }
         }
     }
-    assert!(got.len() < 3000 + 1, "jamás entrega más de N bytes");
+    assert!(got.len() < 3000 + 1, "never delivers more than N bytes");
     assert_eq!(err, Some(Error::Io { retryable: false }));
 }
 
@@ -274,7 +274,7 @@ async fn fail_write_at_exact_byte() {
     let mut sink = mem.write(&vp("mem:///out")).await.unwrap();
     let err = sink.write(Bytes::from(vec![0u8; 200])).await.unwrap_err();
     assert_eq!(err, Error::Io { retryable: false });
-    // Tras el fallo, abort limpia y no queda rastro.
+    // After the failure, abort cleans up and leaves no trace.
     sink.abort().await.unwrap();
     assert_eq!(
         mem.stat(&vp("mem:///out")).await.unwrap_err(),
@@ -293,7 +293,7 @@ async fn disconnect_after_n_ops() {
         mem.stat(&vp("mem:///f")).await.unwrap_err(),
         Error::ProviderUnavailable { retryable: true }
     );
-    // Y se queda desconectado.
+    // And it stays disconnected.
     assert!(mem.list(&vp("mem:///")).await.is_err());
     mem.faults().clear();
     assert!(mem.stat(&vp("mem:///f")).await.is_ok());
@@ -305,37 +305,37 @@ async fn latency_uses_tokio_clock() {
     mem.faults()
         .set_latency_per_op(Some(std::time::Duration::from_millis(500)));
     let before = tokio::time::Instant::now();
-    // Con reloj pausado, tokio avanza el tiempo virtual automáticamente.
+    // With a paused clock, tokio advances virtual time automatically.
     let _ = mem.stat(&vp("mem:///nope")).await;
     assert!(before.elapsed() >= std::time::Duration::from_millis(500));
 }
 
-// ---------- coherencia de caja (hallazgos del encoding-auditor, fase 6) ----------
+// ---------- case coherence (encoding-auditor findings, phase 6) ----------
 
 #[tokio::test]
 async fn list_resolves_case_insensitively() {
     let mem = MemProvider::with_flags(CapabilityFlags::CASE_PRESERVING);
     mem.mkdir(&vp("mem:///Dir")).await.unwrap();
     write_file(&mem, "mem:///Dir/f", b"x").await;
-    // list con otra caja debe ver lo mismo que stat.
+    // list with different case must see the same thing as stat.
     let n = mem
         .list(&vp("mem:///dir"))
         .await
-        .expect("resuelve como stat")
+        .expect("resolves like stat")
         .count()
         .await;
-    assert_eq!(n, 1, "list resuelve la caja igual que stat");
+    assert_eq!(n, 1, "list resolves case the same way stat does");
 }
 
 #[tokio::test]
 async fn mixed_case_write_lands_under_real_parent() {
     let mem = MemProvider::with_flags(CapabilityFlags::CASE_PRESERVING);
     mem.mkdir(&vp("mem:///Dir")).await.unwrap();
-    // Escribir vía caja distinta: el hijo cuelga del dir REAL, jamás huérfano.
+    // Write via different case: the child hangs off the REAL dir, never an orphan.
     write_file(&mem, "mem:///dir/g", b"x").await;
     let n = mem.list(&vp("mem:///Dir")).await.unwrap().count().await;
-    assert_eq!(n, 1, "el hijo es visible bajo el dir real");
-    // Y el dir ya no está vacío: remove debe negarse.
+    assert_eq!(n, 1, "the child is visible under the real dir");
+    // And the dir is no longer empty: remove must be refused.
     assert!(mem.remove(&vp("mem:///Dir")).await.is_err());
 }
 
@@ -346,7 +346,7 @@ async fn commit_after_parent_removed_fails() {
     let mut sink = mem.write(&vp("mem:///d/f")).await.unwrap();
     sink.write(Bytes::from_static(b"x")).await.unwrap();
     mem.remove(&vp("mem:///d")).await.unwrap();
-    // El padre desapareció entre write() y commit(): jamás huérfanos.
+    // The parent disappeared between write() and commit(): never orphans.
     assert_eq!(sink.commit().await.unwrap_err(), Error::NotFound);
 }
 
@@ -359,9 +359,9 @@ async fn rename_into_own_subtree_refused() {
             .await
             .unwrap_err(),
         Error::InvalidPath,
-        "mover un dir dentro de sí mismo es EINVAL"
+        "moving a dir inside itself is EINVAL"
     );
-    // El árbol queda intacto.
+    // The tree stays intact.
     assert!(mem.stat(&vp("mem:///a")).await.is_ok());
 }
 
@@ -370,7 +370,11 @@ async fn entry_paths_preserve_authority() {
     let mem = MemProvider::new();
     write_file(&mem, "mem://conn1/f", b"x").await;
     let e = mem.stat(&vp("mem://conn1/f")).await.unwrap();
-    assert_eq!(e.path.authority(), Some("conn1"), "stat preserva authority");
+    assert_eq!(
+        e.path.authority(),
+        Some("conn1"),
+        "stat preserves authority"
+    );
     let listed: Vec<_> = mem
         .list(&vp("mem://conn1/"))
         .await
@@ -378,7 +382,7 @@ async fn entry_paths_preserve_authority() {
         .map(|e| e.unwrap().path.authority().map(str::to_owned))
         .collect()
         .await;
-    assert_eq!(listed, vec![Some("conn1".to_owned())], "list también");
+    assert_eq!(listed, vec![Some("conn1".to_owned())], "list too");
 }
 
 #[tokio::test]
@@ -386,19 +390,19 @@ async fn commit_detects_late_case_collision() {
     let mem = MemProvider::with_flags(CapabilityFlags::CASE_PRESERVING);
     let mut sink = mem.write(&vp("mem:///file")).await.unwrap();
     sink.write(Bytes::from_static(b"1")).await.unwrap();
-    // Aparece "File" entre write() y commit(): colisión de caja, no Exists.
+    // "File" appears between write() and commit(): a case collision, not Exists.
     write_file(&mem, "mem:///File", b"2").await;
     match sink.commit().await {
         Err(Error::Conflict { conflict }) => assert_eq!(conflict, ConflictKind::CaseCollision),
-        Err(e) => panic!("esperaba CaseCollision, fue {e:?}"),
-        Ok(()) => panic!("esperaba CaseCollision, el commit publicó"),
+        Err(e) => panic!("expected CaseCollision, was {e:?}"),
+        Ok(()) => panic!("expected CaseCollision, the commit published"),
     }
 }
 
-// ---------- eje de normalización NFC/NFD (issue #7) ----------
+// ---------- NFC/NFD normalization axis (issue #7) ----------
 
-/// Simulación APFS: lookup insensible a la normalización, bytes preservados.
-/// La colisión solo-por-normalización se etiqueta `Normalization` (#8).
+/// APFS simulation: normalization-insensitive lookup, bytes preserved. The
+/// normalization-only collision is labeled `Normalization` (#8).
 #[tokio::test]
 async fn normalization_insensitive_collides_with_label() {
     use norte_testkit::Normalization;
@@ -411,25 +415,25 @@ async fn normalization_insensitive_collides_with_label() {
     sink.write(bytes::Bytes::from_static(b"x")).await.unwrap();
     sink.commit().await.unwrap();
 
-    // El lookup NFD resuelve al archivo NFC (insensible, preservando bytes).
-    let e = mem.stat(&nfd).await.expect("lookup normalizado resuelve");
+    // The NFD lookup resolves to the NFC file (insensitive, byte-preserving).
+    let e = mem.stat(&nfd).await.expect("normalized lookup resolves");
     assert_eq!(
         e.path.file_name().unwrap().as_bytes(),
         &[0xC3, 0xA9],
-        "los bytes ALMACENADOS (NFC) se preservan"
+        "the STORED (NFC) bytes are preserved"
     );
 
-    // Escribir la variante NFD colisiona con la etiqueta correcta.
+    // Writing the NFD variant collides with the correct label.
     match mem.write(&nfd).await {
         Err(Error::Conflict {
             conflict: ConflictKind::Normalization,
         }) => {}
-        Err(other) => panic!("esperaba Conflict::Normalization, fue {other:?}"),
-        Ok(_) => panic!("esperaba Conflict::Normalization, fue Ok(sink)"),
+        Err(other) => panic!("expected Conflict::Normalization, was {other:?}"),
+        Ok(_) => panic!("expected Conflict::Normalization, was Ok(sink)"),
     }
 }
 
-/// Default (byte-exact, como ext4): NFC y NFD son archivos DISTINTOS.
+/// Default (byte-exact, like ext4): NFC and NFD are DIFFERENT files.
 #[tokio::test]
 async fn normalization_byte_exact_keeps_both() {
     let mem = MemProvider::new();
@@ -445,8 +449,8 @@ async fn normalization_byte_exact_keeps_both() {
     assert!(mem.stat(&nfd).await.is_ok());
 }
 
-/// Indisponibilidad TRANSITORIA (issue de reintentos, ADR 0005): las
-/// próximas n ops fallan retryable y el provider se recupera solo.
+/// TRANSIENT unavailability (retries issue, ADR 0005): the next n ops fail
+/// retryable and the provider recovers on its own.
 #[tokio::test]
 async fn unavailable_for_next_recovers() {
     let mem = MemProvider::new();
@@ -455,18 +459,18 @@ async fn unavailable_for_next_recovers() {
     for _ in 0..2 {
         match mem.stat(&root).await {
             Err(Error::ProviderUnavailable { retryable: true }) => {}
-            other => panic!("esperaba ProviderUnavailable retryable, fue {other:?}"),
+            other => panic!("expected ProviderUnavailable retryable, was {other:?}"),
         }
     }
-    assert!(mem.stat(&root).await.is_ok(), "tras n ops, recupera");
+    assert!(mem.stat(&root).await.is_ok(), "after n ops, recovers");
 }
 
-// ---------- identidad de nodo (issue #16) ----------
+// ---------- node identity (issue #16) ----------
 
-/// `without_node_ids()` simula un backend SIN identidad estable (object
-/// storage, ftp): `node_id` = `Ok(None)` siempre, aun existiendo el nodo.
+/// `without_node_ids()` simulates a backend WITHOUT stable identity (object
+/// storage, ftp): `node_id` = `Ok(None)` always, even if the node exists.
 #[tokio::test]
-async fn without_node_ids_devuelve_none() {
+async fn without_node_ids_returns_none() {
     use norte_vfs::FollowLinks;
     let mem = MemProvider::new().without_node_ids();
     write_file(&mem, "mem:///f", b"x").await;
@@ -476,11 +480,11 @@ async fn without_node_ids_devuelve_none() {
     );
 }
 
-/// La identidad distingue nodos aunque los PATHS se plieguen: en un Mem
-/// case-insensitive, `a` y `A` resuelven al MISMO nodo → mismo id. Es lo
-/// que el guard del engine no podía saber con heurísticas (issue #16).
+/// Identity tells nodes apart even when PATHS fold: on a case-insensitive
+/// Mem, `a` and `A` resolve to the SAME node → same id. It is what the
+/// engine's guard could not know via heuristics (issue #16).
 #[tokio::test]
-async fn node_id_es_el_mismo_para_variantes_de_caja_plegadas() {
+async fn node_id_is_the_same_for_folded_case_variants() {
     use norte_vfs::FollowLinks;
     let mem =
         MemProvider::with_flags(CapabilityFlags::RENAME_ATOMIC | CapabilityFlags::CASE_PRESERVING);
@@ -489,21 +493,21 @@ async fn node_id_es_el_mismo_para_variantes_de_caja_plegadas() {
         .node_id(&vp("mem:///Mismo"), FollowLinks::No)
         .await
         .unwrap()
-        .expect("Mem tiene identidad");
+        .expect("Mem has identity");
     let b = mem
         .node_id(&vp("mem:///mismo"), FollowLinks::No)
         .await
         .unwrap()
-        .expect("Mem tiene identidad");
-    assert_eq!(a, b, "mismo nodo bajo cualquier caja que el FS pliegue");
+        .expect("Mem has identity");
+    assert_eq!(a, b, "same node under any case the FS folds");
 }
 
-// ---------- kind de symlink (issue #18) ----------
+// ---------- symlink kind (issue #18) ----------
 
-/// `SymlinkKind::Unknown`: el provider resuelve el target en SU árbol.
-/// Target dir → Dir; target archivo → File; roto → File (documentado).
+/// `SymlinkKind::Unknown`: the provider resolves the target in ITS tree.
+/// Dir target → Dir; file target → File; broken → File (documented).
 #[tokio::test]
-async fn symlink_unknown_resuelve_el_kind_del_target() {
+async fn symlink_unknown_resolves_the_target_kind() {
     use norte_vfs::SymlinkKind;
     let mem = MemProvider::new();
     mem.mkdir(&vp("mem:///d")).await.unwrap();
@@ -530,9 +534,9 @@ async fn symlink_unknown_resuelve_el_kind_del_target() {
     assert_eq!(
         mem.symlink_kind_of(&vp("mem:///lroto")),
         Some(SymlinkKind::File),
-        "roto degrada a File, jamás error"
+        "broken degrades to File, never an error"
     );
-    // Kind explícito: se respeta tal cual, sin resolver nada.
+    // Explicit kind: honored as-is, nothing resolved.
     mem.symlink(&vp("mem:///lex"), b"nada", SymlinkKind::Dir)
         .await
         .unwrap();
@@ -542,46 +546,46 @@ async fn symlink_unknown_resuelve_el_kind_del_target() {
     );
 }
 
-// ---------- mutación ambigua (issue #17) ----------
+// ---------- ambiguous mutation (issue #17) ----------
 
-/// El fallo POST-efecto: la mutación se aplica Y devuelve
-/// `ProviderUnavailable` retryable — el "timeout tras commit" de un remoto.
-/// Es la fixture del retry con desambiguación del engine.
+/// The POST-effect failure: the mutation applies AND returns
+/// `ProviderUnavailable` retryable — a remote's "timeout after commit". It
+/// is the fixture for the engine's disambiguating retry.
 #[tokio::test]
-async fn ambiguous_mutation_aplica_el_efecto_y_falla_transitorio() {
+async fn ambiguous_mutation_applies_the_effect_and_fails_transiently() {
     let mem = MemProvider::new();
     mem.faults().ambiguous_mutations(1);
     match mem.mkdir(&vp("mem:///d")).await {
         Err(Error::ProviderUnavailable { retryable: true }) => {}
-        other => panic!("esperaba ProviderUnavailable retryable, fue {other:?}"),
+        other => panic!("expected ProviderUnavailable retryable, was {other:?}"),
     }
-    // El efecto SÍ se aplicó (esa es la ambigüedad).
+    // The effect WAS applied (that is the ambiguity).
     let e = mem.stat(&vp("mem:///d")).await.unwrap();
     assert_eq!(e.kind, EntryKind::Dir);
-    // Consumido: la siguiente mutación es normal.
+    // Consumed: the next mutation is normal.
     mem.mkdir(&vp("mem:///d2")).await.unwrap();
 }
 
-/// El fallo ambiguo cubre las 4 mutaciones puntuales del trait
-/// (mkdir/remove/rename/symlink); las lecturas NO lo consumen.
+/// The ambiguous failure covers the trait's 4 point mutations
+/// (mkdir/remove/rename/symlink); reads do NOT consume it.
 #[tokio::test]
-async fn ambiguous_mutation_cubre_las_cuatro_mutaciones() {
+async fn ambiguous_mutation_covers_the_four_mutations() {
     use norte_vfs::SymlinkKind;
     let mem = MemProvider::new();
     write_file(&mem, "mem:///a", b"x").await;
 
-    // Una lectura de por medio no consume el fallo armado.
+    // A read in between does not consume the armed fault.
     mem.faults().ambiguous_mutations(1);
     mem.stat(&vp("mem:///a")).await.unwrap();
     assert!(mem.rename(&vp("mem:///a"), &vp("mem:///b")).await.is_err());
-    assert!(mem.stat(&vp("mem:///b")).await.is_ok(), "rename aplicado");
+    assert!(mem.stat(&vp("mem:///b")).await.is_ok(), "rename applied");
 
     mem.faults().ambiguous_mutations(1);
     assert!(mem.remove(&vp("mem:///b")).await.is_err());
     assert_eq!(
         mem.stat(&vp("mem:///b")).await.unwrap_err(),
         Error::NotFound,
-        "remove aplicado"
+        "remove applied"
     );
 
     mem.faults().ambiguous_mutations(1);
@@ -593,10 +597,10 @@ async fn ambiguous_mutation_cubre_las_cuatro_mutaciones() {
     assert_eq!(mem.read_link(&vp("mem:///l")).await.unwrap(), b"t");
 }
 
-/// Cadena link→link con follow: `NotFound`, coherente con `read()` (la
-/// resolución mínima de Mem no sigue cadenas — límite documentado).
+/// A link→link chain with follow: `NotFound`, consistent with `read()`
+/// (Mem's minimal resolution does not follow chains — documented limit).
 #[tokio::test]
-async fn node_id_follow_sobre_cadena_es_notfound() {
+async fn node_id_follow_on_a_string_is_notfound() {
     use norte_vfs::{FollowLinks, SymlinkKind};
     let mem = MemProvider::new();
     write_file(&mem, "mem:///f", b"x").await;
@@ -612,7 +616,7 @@ async fn node_id_follow_sobre_cadena_es_notfound() {
             .unwrap_err(),
         Error::NotFound
     );
-    // Un nivel sí resuelve.
+    // One level does resolve.
     assert!(
         mem.node_id(&vp("mem:///l1"), FollowLinks::Yes)
             .await
@@ -621,30 +625,30 @@ async fn node_id_follow_sobre_cadena_es_notfound() {
     );
 }
 
-/// La travesía de symlinks compone con el eje de normalización: dir
-/// almacenado en NFD, lookup en NFC a través de un link intermedio.
+/// Symlink traversal composes with the normalization axis: a dir stored in
+/// NFD, looked up in NFC through an intermediate link.
 #[tokio::test]
-async fn travesia_compone_con_normalizacion_insensible() {
+async fn traversal_composes_with_insensitive_normalization() {
     use norte_testkit::Normalization;
     let mem = MemProvider::new().with_normalization(Normalization::Insensitive);
-    // Dir con nombre NFD (e + combinante).
+    // Dir with an NFD name (e + combining mark).
     mem.mkdir(&vp("mem:///e%CC%81")).await.unwrap();
     write_file(&mem, "mem:///e%CC%81/f", b"x").await;
-    // Link apuntando al dir por su forma NFC (é precompuesto).
+    // Link pointing at the dir by its NFC form (precomposed é).
     mem.symlink(&vp("mem:///ln"), &[0xC3, 0xA9], norte_vfs::SymlinkKind::Dir)
         .await
         .unwrap();
-    // Lectura A TRAVÉS del link (target NFC → dirent NFD).
+    // Read THROUGH the link (NFC target → NFD dirent).
     assert_eq!(read_all(&mem, "mem:///ln/f").await.unwrap(), b"x");
     let e = mem.stat(&vp("mem:///ln/f")).await.unwrap();
     assert_eq!(e.kind, EntryKind::File);
 }
 
-/// `SymlinkKind::Unknown` con targets hostiles: absoluto y `..` degradan
-/// a File (resolución mínima → Unsupported); un target no-UTF8 que
-/// apunta a un dir de nombre no-UTF8 resuelve Dir.
+/// `SymlinkKind::Unknown` with hostile targets: absolute and `..` degrade
+/// to File (minimal resolution → Unsupported); a non-UTF8 target pointing
+/// at a dir with a non-UTF8 name resolves Dir.
 #[tokio::test]
-async fn symlink_unknown_con_targets_hostiles() {
+async fn symlink_unknown_with_hostile_targets() {
     use norte_vfs::SymlinkKind;
     let mem = MemProvider::new();
     mem.symlink(&vp("mem:///labs"), b"/etc", SymlinkKind::Unknown)
@@ -673,9 +677,9 @@ async fn symlink_unknown_con_targets_hostiles() {
 }
 
 #[tokio::test]
-async fn faults_cuenta_las_llamadas_a_read() {
-    // Observabilidad #61: el contador de reads permite a los tests de caché
-    // asertar "N ops concurrentes = los reads de UN solo build".
+async fn faults_counts_the_calls_to_read() {
+    // Observability #61: the read counter lets cache tests assert "N
+    // concurrent ops = a SINGLE build's reads".
     let mem = MemProvider::new();
     write_file(&mem, "mem:///f", b"data").await;
     let faults = mem.faults();
@@ -685,10 +689,10 @@ async fn faults_cuenta_las_llamadas_a_read() {
     assert_eq!(faults.read_calls(), 2);
 }
 
-// ---------- attrs sintéticos (#108 bloque 2) ----------
+// ---------- synthetic attrs (#108 block 2) ----------
 
 #[tokio::test]
-async fn synthetic_attrs_hostiles_y_deterministas() {
+async fn synthetic_attrs_hostile_and_deterministic() {
     use norte_vfs::{AttrRequest, ListOptions};
     let mem = MemProvider::new().with_synthetic_attrs();
     write_file(&mem, "mem:///f.txt", b"x").await;
@@ -701,16 +705,16 @@ async fn synthetic_attrs_hostiles_y_deterministas() {
         .stat_with(&vp("mem:///f.txt"), &opt)
         .await
         .expect("stat_with");
-    // Dueño no-UTF-8: BYTES crudos, jamás String (regla 1).
+    // Non-UTF-8 owner: raw BYTES, never a String (rule 1).
     assert_eq!(
         e.attrs.get("mem.owner"),
         Some(&norte_proto::AttrValue::Bytes(
             b"due\xf1o-\xff\xfe".to_vec()
         ))
     );
-    // Texto hostil: RTL override + ZWJ, dentro del tope.
+    // Hostile text: RTL override + ZWJ, within the cap.
     let Some(norte_proto::AttrValue::Text(note)) = e.attrs.get("mem.note") else {
-        panic!("mem.note debe ser Text");
+        panic!("mem.note must be Text");
     };
     assert!(note.contains('\u{202e}') && note.contains('\u{200d}'));
     assert_eq!(
@@ -722,7 +726,7 @@ async fn synthetic_attrs_hostiles_y_deterministas() {
         Some(norte_proto::AttrValue::TimeMs(_))
     ));
 
-    // Petición parcial: SOLO lo pedido.
+    // Partial request: ONLY what was asked for.
     let solo = ListOptions {
         attrs: AttrRequest::sanitized(["mem.mode".to_owned()]),
     };
@@ -732,7 +736,7 @@ async fn synthetic_attrs_hostiles_y_deterministas() {
         .expect("stat_with");
     assert_eq!(e.attrs.len(), 1);
 
-    // Sin pedir → sin attrs, también en list.
+    // No request → no attrs, in list too.
     assert!(
         mem.stat(&vp("mem:///f.txt"))
             .await
@@ -742,20 +746,20 @@ async fn synthetic_attrs_hostiles_y_deterministas() {
     );
     let mut s = mem.list(&vp("mem:///")).await.expect("list");
     while let Some(e) = s.next().await {
-        assert!(e.expect("entrada").attrs.is_empty());
+        assert!(e.expect("entry").attrs.is_empty());
     }
 }
 
-// ---------- capabilities por ubicación (ADR 0054) ----------
+// ---------- per-location capabilities (ADR 0054) ----------
 
 #[tokio::test]
 async fn capabilities_at_defaults_to_the_declaration() {
     let mem = MemProvider::new();
     let root = MemProvider::root();
     assert_eq!(
-        mem.capabilities_at(&root).await.expect("responde"),
+        mem.capabilities_at(&root).await.expect("responds"),
         mem.capabilities(),
-        "sin guion, la ubicación responde lo que declara el backend"
+        "unscripted, the location answers what the backend declares"
     );
 }
 
@@ -772,20 +776,20 @@ async fn a_scripted_location_overrides_the_declaration() {
         },
     );
 
-    let at = mem.capabilities_at(&usb).await.expect("responde");
+    let at = mem.capabilities_at(&usb).await.expect("responds");
     assert!(at.flags.contains(CapabilityFlags::FULL_FOLD));
     assert!(
         !mem.capabilities()
             .flags
             .contains(CapabilityFlags::FULL_FOLD),
-        "y el backend sigue declarando lo suyo"
+        "and the backend still declares its own"
     );
 
-    // Una ubicación sin guion propio no hereda el del vecino.
+    // A location without its own script does not inherit its neighbor's.
     assert_eq!(
         mem.capabilities_at(&MemProvider::root())
             .await
-            .expect("responde"),
+            .expect("responds"),
         mem.capabilities()
     );
 }

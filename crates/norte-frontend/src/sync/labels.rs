@@ -1,8 +1,9 @@
-//! Las etiquetas: de un valor del plan al texto que lee un humano.
+//! The labels: from a plan value to the text a human reads.
 //!
-//! Todo lo que aquí se devuelve sale de Fluent, y por eso vive junto y no
-//! repartido por las superficies: dos frontends traduciendo el mismo veredicto
-//! por su cuenta es como uno de los dos acaba enseñando el id crudo.
+//! Everything returned here comes out of Fluent, and that is why it lives
+//! together instead of spread across the surfaces: two frontends translating
+//! the same verdict on their own is how one of the two ends up showing the
+//! raw id.
 
 use norte_i18n::{Lang, t_in, ta_in};
 use norte_proto::methods::{
@@ -147,18 +148,19 @@ pub fn blocker_label(kind: SyncBlockerKind, lang: Lang) -> String {
     t_in(lang, &format!("sync-blocker-{id}"))
 }
 
-/// El calificador de un [`RelAnchor`], o `None` cuando la ruta cuelga del
-/// ORIGEN y no hace falta decir nada.
+/// The qualifier for a [`RelAnchor`], or `None` when the path hangs from the
+/// SOURCE and there is nothing to say.
 ///
-/// Vive aquí y no en cada painter por lo mismo que [`failure_cause_label`]:
-/// la revisión de rama de C2 lo encontró transcrito a mano en tres sitios
-/// —`norte-tui/src/ui.rs` y dos veces en `norte-gui/src/sync_view.rs`— y a la
-/// CLI se le había olvidado, que es la forma en que esta clase de duplicado
-/// se nota tarde (rust MAJOR-3, encoding MAJOR-1).
+/// Lives here and not in each painter for the same reason as
+/// [`failure_cause_label`]: C2's branch review found it hand-transcribed in
+/// three places —`norte-tui/src/ui.rs` and twice in
+/// `norte-gui/src/sync_view.rs`— and the CLI had been forgotten, which is how
+/// this class of duplicate gets noticed late (rust MAJOR-3, encoding
+/// MAJOR-1).
 ///
-/// `None` para [`RelAnchor::Source`] a propósito: un calificador vacío
-/// pintado igualmente mete un espacio en banda, y esta pantalla ya tiene un
-/// problema con los separadores que un nombre puede llevar dentro.
+/// `None` for [`RelAnchor::Source`] on purpose: an empty qualifier painted
+/// anyway sneaks a stray space into the row, and this screen already has a
+/// problem with the separators a name can carry inside it.
 ///
 /// ```
 /// use norte_frontend::sync::{RelAnchor, anchor_label};
@@ -198,11 +200,12 @@ pub fn dest_twin_label(twin: bool, lang: Lang) -> Option<String> {
     twin.then(|| t_in(lang, "sync-dest-twin"))
 }
 
-/// El nombre de un [`SyncMode`], que la cabecera pinta.
+/// The name of a [`SyncMode`], which the header paints.
 ///
-/// El `_` NO cae a «update»: un modo que este build no sabe nombrar tiene que
-/// decirlo, porque la diferencia entre los dos que sí conoce es si BORRA.
-/// Estaba escrito dos veces en esta rama, una por frontend (rust MAJOR-3).
+/// The `_` does NOT fall back to "update": a mode this build cannot name has
+/// to say so, because the difference between the two it does know is whether
+/// it DELETES. It was written twice in this branch, once per frontend (rust
+/// MAJOR-3).
 ///
 /// ```
 /// use norte_frontend::sync::mode_label;
@@ -273,7 +276,7 @@ pub fn failure_cause_label(cause: SyncFailureCause, lang: Lang) -> String {
 /// assert_ne!(
 ///     trash_label(DestTrash::Opaque, Lang::En),
 ///     trash_label(DestTrash::Absent, Lang::En),
-///     "una papelera del sistema y ninguna papelera no son la misma frase"
+///     "a system trash and no trash are not the same sentence"
 /// );
 /// ```
 #[must_use]

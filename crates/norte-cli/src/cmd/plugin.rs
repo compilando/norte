@@ -8,10 +8,10 @@ use norte_core::backend::Backend;
 
 use crate::PluginCmd;
 
-/// `norte plugin run <id> <command> [arg]`: ejecuta un comando de un plugin YA
-/// aprobado+activado por el humano y escribe su salida a STDOUT. Va por el
-/// `Backend` elegido con los flags globales (`--daemon`/`--socket`), como el
-/// resto de operaciones (regla 7).
+/// `norte plugin run <id> <command> [arg]`: runs a command of a plugin
+/// ALREADY approved+enabled by the human and writes its output to
+/// STDOUT. Goes through the `Backend` chosen by the global flags
+/// (`--daemon`/`--socket`), like the rest of the operations (rule 7).
 pub(crate) async fn plugin_cmd(
     backend: &Backend,
     cmd: PluginCmd,
@@ -33,23 +33,25 @@ pub(crate) async fn plugin_cmd(
                 }
             }
         }
-        // Copia local, SIN daemon: instalar es mover ficheros al directorio de
-        // config, y hacerlo depender de un daemon vivo sería pedirle al usuario
-        // que arranque el programa para poder instalarle algo.
+        // Local copy, WITHOUT a daemon: installing is moving files into
+        // the config directory, and making that depend on a live daemon
+        // would be asking the user to start the program in order to
+        // install something for it.
         PluginCmd::Install { path, force } => {
             let dir = norte_core::connect::config_dir();
-            // Copiar un directorio es I/O bloqueante (regla 2), como el
-            // borrado de `uninstall` que va al lado.
-            let informe = tokio::task::spawn_blocking(move || {
+            // Copying a directory is blocking I/O (hard rule 2), like
+            // `uninstall`'s deletion right below.
+            let report = tokio::task::spawn_blocking(move || {
                 norte_core::plugins::install(&dir, &path, force)
             })
             .await
-            .context("instalando")?;
-            match informe {
+            .context("installing")?;
+            match report {
                 Ok(rep) => {
-                    // El nombre viene del manifiesto de un tercero: se pinta
-                    // saneado, como en el gestor. Texto por Fluent (#319).
-                    let (nombre, _) = norte_frontend::display_name(rep.name.as_bytes());
+                    // The name comes from a third party's manifest: it is
+                    // painted sanitized, as in the manager. Text via
+                    // Fluent (#319).
+                    let (name, _) = norte_frontend::display_name(rep.name.as_bytes());
                     let key = if rep.replaced {
                         "cli-plugin-replaced"
                     } else {
@@ -57,7 +59,7 @@ pub(crate) async fn plugin_cmd(
                     };
                     println!(
                         "{}",
-                        norte_i18n::ta(key, &[("id", &rep.id), ("name", &nombre)])
+                        norte_i18n::ta(key, &[("id", &rep.id), ("name", &name)])
                     );
                     if rep.replaced {
                         println!("{}", norte_i18n::t("cli-plugin-replaced-consent"));
@@ -72,25 +74,27 @@ pub(crate) async fn plugin_cmd(
             }
         }
         PluginCmd::Uninstall { id } => plugin_uninstall(backend, socket, &id).await,
-        // `plugin.list`, el mismo catálogo que pinta el gestor: id, categoría,
-        // los DOS hechos (aprobado, activado) y las capabilities que aprobar
-        // concedería. El nombre viene de un tercero: saneado, como en el
-        // gestor. Los rotos se cuentan, no se listan — `norte doctor` los
-        // explica uno a uno.
+        // `plugin.list`, the same catalog the manager paints: id,
+        // category, the TWO facts (approved, enabled) and the
+        // capabilities approving it would grant. The name comes from a
+        // third party: sanitized, as in the manager. Broken ones are
+        // counted, not listed — `norte doctor` explains them one by one.
         PluginCmd::List => plugin_list(backend).await,
     }
 }
 
-/// `norte plugin uninstall` (ADR 0113). Con `--daemon`, POR el daemon
-/// (`plugin.uninstall`): borra en SU directorio de configuración y lo olvida
-/// en memoria. Sin `--daemon`, en el disco de este proceso, como `install`.
+/// `norte plugin uninstall` (ADR 0113). With `--daemon`, THROUGH the
+/// daemon (`plugin.uninstall`): deletes in ITS OWN config directory and
+/// forgets it in memory. Without `--daemon`, on this process's disk, like
+/// `install`.
 ///
-/// Por el daemon solo si se pide. El socket por defecto sale del usuario, no
-/// de `NORTE_CONFIG_DIR`, y nada en `initialize` dice qué directorio sirve
-/// el daemon: un CLI con otro directorio que desinstalase por el que escucha
-/// borraría la extensión —y retiraría su aprobación— en el directorio de ESE
-/// daemon. Sin `--daemon`, si hay uno aceptando, se avisa de que la seguirá
-/// listando hasta reiniciarse.
+/// Through the daemon only if asked. The default socket comes from the
+/// user, not from `NORTE_CONFIG_DIR`, and nothing in `initialize` says
+/// which directory the daemon serves: a CLI with a different directory
+/// uninstalling through the one it listens on would delete the
+/// extension — and withdraw its approval — in THAT daemon's directory.
+/// Without `--daemon`, if one is accepting connections, a warning says it
+/// will keep listing it until restarted.
 async fn plugin_uninstall(
     backend: &Backend,
     socket: Option<PathBuf>,
@@ -98,28 +102,29 @@ async fn plugin_uninstall(
 ) -> anyhow::Result<ExitCode> {
     use norte_core::plugins::UninstallError as U;
     if !norte_core::is_valid_plugin_id(id) {
-        return Ok(uninstall_fallido(&U::InvalidId));
+        return Ok(uninstall_failed(&U::InvalidId));
     }
     match backend {
         #[cfg(unix)]
         Backend::Remote(r) => {
-            // «¿Está?» contra el catálogo DEL DAEMON, que es el directorio que
-            // se borra. Y aquí y no por su respuesta: rehúsa con un
-            // `INVALID_PARAMS` sin taxonomía, que llega como un `Internal`.
-            let lista = backend
+            // "Is it there?" against the DAEMON'S catalog, which is the
+            // directory being deleted from. And here, not from its
+            // response: it refuses with an untaxonomized `INVALID_PARAMS`,
+            // which arrives as an `Internal`.
+            let list = backend
                 .plugins_list()
                 .await
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
-            let esta = lista.plugins.iter().any(|p| p.id == id)
-                || lista
+            let is_there = list.plugins.iter().any(|p| p.id == id)
+                || list
                     .errors
                     .iter()
                     .any(|e| e.dir_bytes.as_deref().unwrap_or(e.dir.as_bytes()) == id.as_bytes());
-            if !esta {
-                return Ok(uninstall_fallido(&U::NotInstalled(id.to_owned())));
+            if !is_there {
+                return Ok(uninstall_failed(&U::NotInstalled(id.to_owned())));
             }
             match r.plugins_uninstall(id).await {
-                Ok(res) => Ok(uninstall_hecho(id, res.was_approved)),
+                Ok(res) => Ok(uninstall_done(id, res.was_approved)),
                 Err(e) => {
                     eprintln!(
                         "{}",
@@ -132,31 +137,34 @@ async fn plugin_uninstall(
         Backend::Embedded(_) => {
             let dir = norte_core::connect::config_dir();
             let owned = id.to_owned();
-            let informe =
+            let report =
                 tokio::task::spawn_blocking(move || norte_core::plugins::uninstall(&dir, &owned))
                     .await
-                    .context("desinstalando")?;
-            // El aviso también cuando NO estaba: la forma más probable de
-            // llegar a `NotInstalled` es justo el caso de ADR 0113 —un CLI
-            // con otro `NORTE_CONFIG_DIR` que el daemon—, y ahí «no está
-            // instalada» a secas no dice que existe `--daemon`.
-            let code = match informe {
-                Ok(rep) => uninstall_hecho(&rep.id, rep.was_approved),
-                Err(e) => uninstall_fallido(&e),
+                    .context("uninstalling")?;
+            // The warning also fires when it was NOT installed: the most
+            // likely way to reach `NotInstalled` is exactly ADR 0113's
+            // case — a CLI with a different `NORTE_CONFIG_DIR` than the
+            // daemon's — and plain "it is not installed" there does not
+            // say `--daemon` exists.
+            let code = match report {
+                Ok(rep) => uninstall_done(&rep.id, rep.was_approved),
+                Err(e) => uninstall_failed(&e),
             };
-            avisar_si_hay_daemon(socket).await;
+            warn_if_daemon_present(socket).await;
             Ok(code)
         }
     }
 }
 
-/// Avisa, sin arrancarlo, si un daemon ACEPTA en `socket`: seguirá listando
-/// lo que se acaba de borrar por detrás hasta reiniciarse.
+/// Warns, without starting it, if a daemon ACCEPTS connections on
+/// `socket`: it will keep listing what was just deleted behind its back
+/// until restarted.
 #[cfg(unix)]
-async fn avisar_si_hay_daemon(socket: Option<PathBuf>) {
-    /// Lo que se espera a un daemon que acepta y no contesta: es un aviso, y
-    /// no puede colgar un comando que antes no tocaba el socket.
-    const PLAZO: std::time::Duration = std::time::Duration::from_secs(2);
+async fn warn_if_daemon_present(socket: Option<PathBuf>) {
+    /// How long to wait for a daemon that accepts but does not answer: it
+    /// is a warning, and it must not hang a command that previously never
+    /// touched the socket.
+    const DEADLINE: std::time::Duration = std::time::Duration::from_secs(2);
     let socket = match socket {
         Some(s) => s,
         None => {
@@ -168,7 +176,7 @@ async fn avisar_si_hay_daemon(socket: Option<PathBuf>) {
             }
         }
     };
-    let conectar = norte_core::backend::remote::RemoteBackend::connect(
+    let connect = norte_core::backend::remote::RemoteBackend::connect(
         socket,
         None,
         norte_proto::methods::ClientInfo {
@@ -176,17 +184,17 @@ async fn avisar_si_hay_daemon(socket: Option<PathBuf>) {
             version: env!("CARGO_PKG_VERSION").into(),
         },
     );
-    if matches!(tokio::time::timeout(PLAZO, conectar).await, Ok(Ok(_))) {
+    if matches!(tokio::time::timeout(DEADLINE, connect).await, Ok(Ok(_))) {
         eprintln!("{}", norte_i18n::t("cli-plugin-uninstall-daemon-stale"));
     }
 }
 
-/// Sin daemon por socket unix no hay registro que se quede viejo.
+/// Without a unix-socket daemon there is no registry left stale.
 #[cfg(not(unix))]
-async fn avisar_si_hay_daemon(_socket: Option<PathBuf>) {}
+async fn warn_if_daemon_present(_socket: Option<PathBuf>) {}
 
-/// Lo que `plugin uninstall` dice cuando borró.
-fn uninstall_hecho(id: &str, was_approved: bool) -> ExitCode {
+/// What `plugin uninstall` says when it deleted.
+fn uninstall_done(id: &str, was_approved: bool) -> ExitCode {
     println!(
         "{}",
         norte_i18n::ta("cli-plugin-uninstalled", &[("id", id)])
@@ -197,9 +205,9 @@ fn uninstall_hecho(id: &str, was_approved: bool) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// Lo que `plugin uninstall` dice cuando no pudo. Texto al usuario por
-/// Fluent (#319); el `Display` del error se queda para los logs.
-fn uninstall_fallido(e: &norte_core::plugins::UninstallError) -> ExitCode {
+/// What `plugin uninstall` says when it could not. User-facing text via
+/// Fluent (#319); the error's `Display` stays for the logs.
+fn uninstall_failed(e: &norte_core::plugins::UninstallError) -> ExitCode {
     use norte_core::plugins::UninstallError as U;
     let msg = match e {
         U::InvalidId => norte_i18n::t("cli-plugin-uninstall-invalid-id"),
@@ -210,21 +218,21 @@ fn uninstall_fallido(e: &norte_core::plugins::UninstallError) -> ExitCode {
     ExitCode::FAILURE
 }
 
-/// `norte plugin list`: una fila por plugin instalado, tabulada.
+/// `norte plugin list`: one row per installed plugin, tabulated.
 async fn plugin_list(backend: &Backend) -> anyhow::Result<ExitCode> {
-    let listado = backend.plugins_list().await?;
-    if listado.plugins.is_empty() && listado.errors.is_empty() {
+    let list = backend.plugins_list().await?;
+    if list.plugins.is_empty() && list.errors.is_empty() {
         println!("{}", norte_i18n::t("cli-plugin-list-empty"));
         return Ok(ExitCode::SUCCESS);
     }
-    for p in &listado.plugins {
-        let (nombre, _) = norte_frontend::display_name(p.name.as_bytes());
-        let aprobado = norte_i18n::t(if p.approved {
+    for p in &list.plugins {
+        let (name, _) = norte_frontend::display_name(p.name.as_bytes());
+        let approved = norte_i18n::t(if p.approved {
             "cli-plugin-state-approved"
         } else {
             "cli-plugin-state-unapproved"
         });
-        let activado = norte_i18n::t(if p.enabled {
+        let enabled = norte_i18n::t(if p.enabled {
             "cli-plugin-state-enabled"
         } else {
             "cli-plugin-state-disabled"
@@ -235,12 +243,12 @@ async fn plugin_list(backend: &Backend) -> anyhow::Result<ExitCode> {
             p.capabilities.join(",")
         };
         println!(
-            "{}\t{}\t{aprobado}\t{activado}\t{caps}\t{nombre}",
+            "{}\t{}\t{approved}\t{enabled}\t{caps}\t{name}",
             p.id, p.category
         );
     }
-    if !listado.errors.is_empty() {
-        let n = listado.errors.len().to_string();
+    if !list.errors.is_empty() {
+        let n = list.errors.len().to_string();
         eprintln!(
             "{}",
             norte_i18n::ta("cli-plugin-list-broken", &[("count", &n)])

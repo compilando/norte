@@ -1,106 +1,108 @@
-//! La pregunta al índice semántico que alimenta la sección del mismo
-//! nombre en «ir a cualquier sitio» (fase 6).
+//! The query to the semantic index that feeds the section of the same name
+//! in "go to anywhere" (phase 6).
 //!
-//! Va spawneada y no en línea por lo de siempre: detrás del índice hay un
-//! modelo de embeddings, y a veces un proveedor remoto. Pedirla dentro de
-//! la tecla dejaría la pantalla clavada entre letra y letra.
+//! It is spawned rather than inline for the usual reason: behind the index
+//! there is an embeddings model, and sometimes a remote provider. Asking for
+//! it inside the key handler would freeze the screen between one keystroke
+//! and the next.
 //!
-//! Es la HERMANA de [`crate::jobs::ai::harvest_semantic`] y no la misma: la
-//! búsqueda de `ai.search` abre un MODAL con sus resultados, y ésta rellena
-//! una sección de una pantalla que sigue abierta. Comparten el cinturón de
-//! ingestión (`validate_semantic_hits`), que es lo que de verdad importaba
-//! compartir.
+//! It is the SIBLING of [`crate::jobs::ai::harvest_semantic`], not the same
+//! thing: the `ai.search` search opens a MODAL with its results, while this
+//! one fills a section of a screen that stays open. They share the ingestion
+//! belt (`validate_semantic_hits`), which is what actually mattered to
+//! share.
 
 use norte_core::backend::Backend;
-use norte_frontend::goto::SECCION_INDICE;
+use norte_frontend::goto::SECTION_INDEX;
 use norte_proto::Error;
 
 use crate::app::App;
-use crate::goto::MINIMO_PARA_EL_INDICE;
+use crate::goto::MINIMUM_FOR_THE_INDEX;
 use crate::jobs::{GotoIndexRun, InFlight};
 
-/// Cuántos resultados se piden: el mismo número en los dos frontends.
-const TOPE: u32 = norte_frontend::goto::TOPE_DEL_INDICE;
+/// How many results are requested: the same number in both frontends.
+const CAP: u32 = norte_frontend::goto::INDEX_CAP;
 
-/// Pregunta al índice por lo que hay escrito ahora mismo, si vale la pena.
+/// Queries the index with whatever is typed right now, if it's worth it.
 ///
-/// Relanzar ABORTA la petición anterior, que es el mismo contrato de
-/// cancelación del resto de peticiones largas: escribir deprisa no deja
-/// tres preguntas vivas, y la respuesta a una consulta que ya no está
-/// escrita no le sirve a nadie.
+/// Relaunching ABORTS the previous request, the same cancellation contract
+/// as the rest of the long requests: typing fast doesn't leave three
+/// requests alive, and the answer to a query that is no longer typed is of
+/// no use to anyone.
 ///
-/// Por debajo de [`MINIMO_PARA_EL_INDICE`] no se pregunta Y se VACÍA la
-/// sección: dejar ahí lo que contestó a una consulta más larga es enseñar
-/// una respuesta a una pregunta que ya no se hizo.
-pub fn pedir_al_indice(app: &mut App, backend: &Backend, work: &mut InFlight) {
+/// Below [`MINIMUM_FOR_THE_INDEX`] no query is made AND the section is
+/// CLEARED: leaving there what answered a longer query would be showing an
+/// answer to a question that is no longer being asked.
+pub fn ask_the_index(app: &mut App, backend: &Backend, work: &mut InFlight) {
     let Some(goto) = &mut app.goto else {
-        olvidar(work);
+        forget(work);
         return;
     };
     let q = goto.query().to_owned();
-    // Una RUTA tecleada tampoco: no es una consulta semántica, y mandarla a un
-    // proveedor de embeddings —quizá remoto— es mandarle el nombre de un
-    // directorio del lector.
-    if q.chars().count() < MINIMO_PARA_EL_INDICE || norte_frontend::goto::parece_ruta(&q).is_some()
-    {
-        olvidar(work);
-        goto.reemplazar_seccion(SECCION_INDICE, Vec::new(), true);
+    // A typed PATH doesn't count either: it's not a semantic query, and
+    // sending it to an embeddings provider — maybe remote — is sending it
+    // the name of a directory of the reader's.
+    if q.chars().count() < MINIMUM_FOR_THE_INDEX || norte_frontend::goto::looks_path(&q).is_some() {
+        forget(work);
+        goto.replace_section(SECTION_INDEX, Vec::new(), true);
         return;
     }
     let b = backend.clone();
-    let consulta = q.clone();
-    // Sin raíz: contra TODO lo indexado, como la búsqueda semántica de
-    // `ai.search`. «Ir a cualquier sitio» es literalmente eso, y acotarlo al
-    // panel con el foco haría que la misma consulta diera cosas distintas
-    // según dónde estuvieras.
-    let handle = tokio::spawn(async move { b.index_search_semantic(None, &consulta, TOPE).await });
-    if let Some(vieja) = work.goto_index.replace(GotoIndexRun { handle, query: q }) {
-        vieja.handle.abort();
+    let query = q.clone();
+    // No root: against EVERYTHING indexed, like the `ai.search` semantic
+    // search. "Go to anywhere" is literally that, and restricting it to the
+    // focused pane would make the same query give different things
+    // depending on where you were.
+    let handle = tokio::spawn(async move { b.index_search_semantic(None, &query, CAP).await });
+    if let Some(old) = work.goto_index.replace(GotoIndexRun { handle, query: q }) {
+        old.handle.abort();
     }
 }
 
-/// Abandona la petición en vuelo, si la hay.
+/// Abandons the in-flight request, if there is one.
 ///
-/// Se llama al cerrar la pantalla y al confirmar una fila: lo que venga
-/// detrás manda, y una respuesta tardía ya no tiene dónde caer.
-pub fn olvidar(work: &mut InFlight) {
-    if let Some(vieja) = work.goto_index.take() {
-        vieja.handle.abort();
+/// Called when closing the screen and when confirming a row: whatever comes
+/// after wins, and a late answer no longer has anywhere to land.
+pub fn forget(work: &mut InFlight) {
+    if let Some(old) = work.goto_index.take() {
+        old.handle.abort();
     }
 }
 
-/// Mete la respuesta del índice en su sección.
+/// Puts the index's answer into its section.
 ///
-/// Tres cosas que NO hace, y cada una es un fallo que se ha visto en este
-/// repositorio:
+/// Three things it does NOT do, and each is a failure that has been seen in
+/// this repository:
 ///
-/// - No abre nada ni escribe en la barra. Es una sección de una pantalla
-///   que el lector está mirando; un mensaje por cada respuesta taparía lo
-///   que está leyendo, y un índice apagado no es un error que anunciar
-///   —`Unsupported` es la respuesta normal de quien no lo tiene—.
-/// - No se fía del tamaño de la respuesta: pasa por el MISMO
-///   `validate_semantic_hits` que la búsqueda de `ai.search`, porque un
-///   daemon hostil puede contestar lo que quiera y el tope contractual es
-///   del cliente.
-/// - No toca nada si la pantalla ya se cerró, ni si lo escrito cambió
-///   mientras el índice pensaba: la respuesta es a OTRA consulta, y ponerla
-///   sería enseñar resultados de algo que el lector ya no tiene escrito.
+/// - It doesn't open anything or write to the status bar. It's a section of
+///   a screen the reader is looking at; a message for every answer would
+///   cover up what they're reading, and a disabled index isn't an error to
+///   announce — `Unsupported` is the normal answer from whoever doesn't have
+///   one.
+/// - It doesn't trust the size of the answer: it goes through the SAME
+///   `validate_semantic_hits` as the `ai.search` search, because a hostile
+///   daemon can answer whatever it wants and the contractual cap belongs to
+///   the client.
+/// - It doesn't touch anything if the screen already closed, nor if what was
+///   typed changed while the index was thinking: the answer is to ANOTHER
+///   query, and setting it would be showing results for something the
+///   reader no longer has typed.
 pub fn harvest_goto_index(
     app: &mut App,
     work: &mut InFlight,
     res: Result<Result<Vec<norte_proto::methods::SemanticHit>, Error>, tokio::task::JoinError>,
 ) {
-    let pedida = work.goto_index.take().map(|r| r.query);
+    let requested = work.goto_index.take().map(|r| r.query);
     let Ok(Ok(hits)) = res else {
         return;
     };
-    let Some(pedida) = pedida else { return };
+    let Some(requested) = requested else { return };
     let Some(goto) = &app.goto else { return };
-    if goto.query() != pedida {
+    if goto.query() != requested {
         return;
     }
     let Some(hits) = norte_frontend::validate_semantic_hits(hits) else {
         return;
     };
-    crate::goto::poner_indice(app, &hits);
+    crate::goto::set_index(app, &hits);
 }

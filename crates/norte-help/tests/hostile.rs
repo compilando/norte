@@ -843,21 +843,21 @@ fn a_dispatch_key_of_combining_marks_is_accepted_knowingly() {
 }
 
 // ---------------------------------------------------------------------------
-// Las dos familias del corpus que la ayuda de tercero convirtió en superficie
-// viva (#263). Antes cada uno de estos casos era un literal DENTRO de este
-// crate, así que ni el host ni el renderer podían alcanzarlos.
+// The corpus's two families that third-party help turned into a live
+// surface (#263). Before, each of these cases was a literal INSIDE this
+// crate, so neither the host nor the renderer could reach them.
 // ---------------------------------------------------------------------------
 
-/// Cada `help.md` hostil del corpus cumple el contrato que su `why` nombra.
+/// Every hostile `help.md` in the corpus meets the contract its `why` names.
 ///
-/// Un solo test para las seis porque lo que se afirma es lo mismo: la puerta
-/// de lo no confiable no revienta, no devuelve un modelo vacío, y lo que
-/// cuenta de cada una es distinto — el título decodificado, la insignia, el
-/// recorte de la lista de comandos.
+/// A single test for all six because what is asserted is the same: the
+/// untrusted gate does not blow up, does not return an empty model, and what
+/// counts for each one differs — the decoded title, the badge, the command
+/// list's truncation.
 #[test]
-fn cada_documento_hostil_del_corpus_cruza_la_puerta_no_confiable() {
+fn every_hostile_document_in_the_corpus_crosses_the_untrusted_gate() {
     let docs = norte_testkit::corpus::hostile_help_docs();
-    assert!(docs.len() >= 6, "el corpus canónico no encoge");
+    assert!(docs.len() >= 6, "the canonical corpus does not shrink");
     for d in &docs {
         let parsed = parse_untrusted(
             &d.bytes,
@@ -866,75 +866,77 @@ fn cada_documento_hostil_del_corpus_cruza_la_puerta_no_confiable() {
         );
         assert_no_hazard(&parsed.topic, d.id);
         match d.id {
-            // La decodificación DETECTADA llega al título: leído como UTF-8 el
-            // 0xED sería un U+FFFD en mitad del nombre.
+            // The DETECTED decoding reaches the title: read as UTF-8 the
+            // 0xED would be a U+FFFD in the middle of the name.
             "doc_windows1252_title" => {
                 assert_eq!(parsed.topic.title, "Título", "[{}]", d.id);
             }
-            // Y el BOM es lo único entre una página legible y un «binario».
+            // And the BOM is the only thing between a readable page and a
+            // "binary".
             "doc_utf16le_bom" => {
                 assert_eq!(parsed.topic.title, "Página", "[{}]", d.id);
             }
-            // Un título de tres rellenos hangul no es vacío ni es espacio: si
-            // se aceptara, la fila no tendría nombre que nadie pueda decir.
+            // A title of three hangul fillers is neither empty nor
+            // whitespace: if accepted, the row would have no name anyone
+            // could say.
             "doc_title_all_invisibles" => {
                 assert_eq!(
                     parsed.topic.title, "org.acme.demo",
-                    "[{}] un título invisible cae al id del host",
+                    "[{}] an invisible title falls back to the host's id",
                     d.id
                 );
             }
-            // El publicador es quien FIRMA la página: su override bidi no
-            // puede llegar crudo a la insignia (lo cubre `assert_no_hazard`,
-            // que recorre la proyección entera incluido el origen).
+            // The publisher is who SIGNS the page: its bidi override cannot
+            // reach the badge raw (covered by `assert_no_hazard`, which
+            // walks the entire projection including the origin).
             "doc_publisher_bidi" => {
                 assert_eq!(parsed.topic.title, "Demo", "[{}]", d.id);
             }
-            // Una valla sin cerrar es un borde de `Limits`, no un error.
+            // An unclosed fence is a `Limits` edge case, not an error.
             "doc_unterminated_fence" => {
                 assert!(!parsed.topic.blocks.is_empty(), "[{}]", d.id);
             }
-            // Uno por encima del tope de cabecera: se CORTA a 16, y el corte
-            // se DICE — cada entrada que se queda es una fila ejecutable en
-            // el mismo camino de despacho que la paleta.
+            // One over the header cap: it is CUT to 16, and the cut is
+            // DECLARED — every entry that remains is a row executable
+            // through the same dispatch path as the palette.
             "doc_17_commands" => {
                 assert_eq!(parsed.topic.commands.len(), 16, "[{}]", d.id);
-                assert!(parsed.truncated, "[{}] un corte que no se dice", d.id);
+                assert!(parsed.truncated, "[{}] a cut that is not declared", d.id);
             }
-            otro => panic!("fixture sin contrato afirmado: {otro}"),
+            other => panic!("fixture with no asserted contract: {other}"),
         }
     }
 }
 
-/// Un id es una CLAVE, y las claves no se pliegan (#263).
+/// An id is a KEY, and keys do not fold (#263).
 ///
-/// Lo que se afirma es que las cuatro parejas siguen siendo parejas: un
-/// recorte, un `trim` o un paso NFC que las convierta en una sola es la
-/// regresión que la familia existe para cazar.
+/// What is asserted is that the four pairs remain pairs: a trim, a `trim`
+/// call, or an NFC pass that turns them into one is the regression this
+/// family exists to catch.
 #[test]
-fn los_ids_hostiles_del_corpus_siguen_siendo_distintos() {
+fn the_corpus_hostile_ids_remain_distinct() {
     let ids = norte_testkit::corpus::hostile_topic_ids();
-    assert!(ids.len() >= 4, "el corpus canónico no encoge");
+    assert!(ids.len() >= 4, "the canonical corpus does not shrink");
     for i in &ids {
-        let uno = TopicId::new(i.text.clone());
-        assert_eq!(uno.as_str(), i.text, "[{}] un id conserva sus bytes", i.id);
-        let Some(gemelo) = &i.twin else { continue };
+        let one = TopicId::new(i.text.clone());
+        assert_eq!(one.as_str(), i.text, "[{}] an id keeps its bytes", i.id);
+        let Some(twin) = &i.twin else { continue };
         assert_ne!(
-            uno,
-            TopicId::new(gemelo.clone()),
-            "[{}] dos ids distintos colisionaron",
+            one,
+            TopicId::new(twin.clone()),
+            "[{}] two distinct ids collided",
             i.id
         );
     }
-    // Y el relleno hangul es BLANCO para el parser aunque `trim` lo conserve:
-    // ésa es la diferencia que `is_blank_id` existe para nombrar.
-    let hueco = ids
+    // And the hangul filler is BLANK to the parser even though `trim` keeps
+    // it: that is the difference `is_blank_id` exists to name.
+    let gap = ids
         .iter()
         .find(|i| i.id == "id_hangul_filler")
-        .expect("la fixture está");
+        .expect("the fixture is there");
     assert!(norte_help::is_blank_id("\u{3164}"));
     assert!(
-        !norte_help::is_blank_id(&hueco.text),
-        "un id con prefijo real no es blanco: lo blanco es el sufijo"
+        !norte_help::is_blank_id(&gap.text),
+        "an id with a real prefix is not blank: the blank part is the suffix"
     );
 }

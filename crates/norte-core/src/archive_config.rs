@@ -101,29 +101,29 @@ pub fn load_rar_delegate() -> std::io::Result<Option<std::path::PathBuf>> {
     load_rar_delegate_from(&norte_config::standard_layers_no_project())
 }
 
-/// Aplica a `engine` los límites anti-bomba y el programa que lee RAR de
+/// Applies to `engine` the anti-bomb limits and the RAR-reading program from
 /// `[archive]` ([`load_archive_limits`], [`load_rar_delegate`]).
 ///
-/// Devuelve el error y es quien llama el que decide qué significa: el daemon
-/// ([`crate::daemon::componer()`]) aborta el arranque, mismo criterio que
-/// `policy.toml`; la CLI embebida avisa y sigue con los límites por defecto.
-/// Se lee el `norte.toml` ENTERO, así que cualquier sección rota lo hace
-/// fallar, no solo `[archive]`.
+/// Returns the error and leaves it to the caller to decide what it means:
+/// the daemon ([`crate::daemon::compose()`]) aborts startup, same criterion
+/// as `policy.toml`; the embedded CLI warns and continues with the default
+/// limits. The WHOLE `norte.toml` is read, so any broken section makes it
+/// fail, not just `[archive]`.
 ///
 /// # Errors
-/// Los de leer o validar `norte.toml`.
-pub async fn aplicar(engine: &crate::Engine) -> std::io::Result<()> {
-    let limites = crate::blocking::spawn_blocking(load_archive_limits)
+/// Those of reading or validating `norte.toml`.
+pub async fn apply(engine: &crate::Engine) -> std::io::Result<()> {
+    let limits = crate::blocking::spawn_blocking(load_archive_limits)
         .await
         .map_err(std::io::Error::other)??;
-    if let Some(limites) = limites {
-        engine.set_archive_limits(limites);
+    if let Some(limits) = limits {
+        engine.set_archive_limits(limits);
     }
-    // Ítem 11 del roadmap: qué programa lee los RAR. `None` = sondear PATH.
-    let delegado = crate::blocking::spawn_blocking(load_rar_delegate)
+    // Roadmap item 11: which program reads RARs. `None` = probe PATH.
+    let delegate = crate::blocking::spawn_blocking(load_rar_delegate)
         .await
         .map_err(std::io::Error::other)??;
-    engine.set_rar_delegate(delegado);
+    engine.set_rar_delegate(delegate);
     Ok(())
 }
 
@@ -132,26 +132,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sin_overrides_en_ninguna_capa_es_none() {
+    fn no_overrides_in_any_layer_is_none() {
         let dir = tempfile::tempdir().unwrap();
-        // Sección conocida (`deny_unknown_fields` rechaza secciones
-        // desconocidas también, no solo campos) sin nada de `[archive]`.
+        // Known section (`deny_unknown_fields` also rejects unknown
+        // sections, not just fields) with nothing from `[archive]`.
         std::fs::write(dir.path().join("norte.toml"), "[ui]\nlang = \"en\"\n").unwrap();
         let layers = norte_config::Layers {
             dirs: vec![(dir.path().to_path_buf(), norte_config::Layer::User)],
         };
-        assert!(load_archive_limits_from(&layers).expect("carga").is_none());
+        assert!(load_archive_limits_from(&layers).expect("load").is_none());
 
-        let vacio = norte_config::Layers { dirs: vec![] };
+        let empty = norte_config::Layers { dirs: vec![] };
         assert!(
-            load_archive_limits_from(&vacio)
-                .expect("sin capas")
+            load_archive_limits_from(&empty)
+                .expect("no layers")
                 .is_none()
         );
     }
 
     #[test]
-    fn overrides_se_aplican_sobre_defaults() {
+    fn overrides_apply_over_defaults() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("norte.toml"),
@@ -162,13 +162,13 @@ mod tests {
             dirs: vec![(dir.path().to_path_buf(), norte_config::Layer::User)],
         };
         let l = load_archive_limits_from(&layers)
-            .expect("parsea")
-            .expect("hay overrides");
+            .expect("parses")
+            .expect("has overrides");
         assert_eq!(l.max_entries, 100);
         assert_eq!(
             l.max_decompressed_bytes,
             Limits::default().max_decompressed_bytes,
-            "el campo ausente conserva el default"
+            "the absent field keeps the default"
         );
 
         let dir2 = tempfile::tempdir().unwrap();
@@ -181,26 +181,26 @@ mod tests {
             dirs: vec![(dir2.path().to_path_buf(), norte_config::Layer::User)],
         };
         let l = load_archive_limits_from(&layers2)
-            .expect("parsea")
-            .expect("hay overrides");
+            .expect("parses")
+            .expect("has overrides");
         assert_eq!(l.max_decompressed_bytes, 1024);
     }
 
     /// C1 exit criterion: a system-layer `[archive]` binds the daemon path
     /// exactly like it binds the TUI (spec gap 3).
     #[test]
-    fn capa_sistema_tambien_aplica() {
-        let sistema = tempfile::tempdir().unwrap();
+    fn system_layer_also_applies() {
+        let system = tempfile::tempdir().unwrap();
         std::fs::write(
-            sistema.path().join("norte.toml"),
+            system.path().join("norte.toml"),
             "[archive]\nmax_entries = 7\n",
         )
         .unwrap();
         let layers = norte_config::Layers {
-            dirs: vec![(sistema.path().to_path_buf(), norte_config::Layer::System)],
+            dirs: vec![(system.path().to_path_buf(), norte_config::Layer::System)],
         };
         let l = load_archive_limits_from(&layers)
-            .expect("carga")
+            .expect("load")
             .expect("overrides");
         assert_eq!(l.max_entries, 7);
     }
@@ -208,7 +208,7 @@ mod tests {
     /// Uniform strictness (ADR 0035 decision 4): a `[ui]` typo now fails
     /// the daemon load too — no more silent divergence from the TUI.
     #[test]
-    fn typo_en_otra_seccion_es_error_tambien_para_el_daemon() {
+    fn typo_in_another_section_is_also_an_error_for_the_daemon() {
         let user = tempfile::tempdir().unwrap();
         std::fs::write(user.path().join("norte.toml"), "[ui]\ntheem = \"nord\"\n").unwrap();
         let layers = norte_config::Layers {
@@ -220,7 +220,7 @@ mod tests {
     /// Boundary pin: broken TOML syntax in a layer is a hard error, not a
     /// silent `None` (fail-loud carries over from the pre-migration parser).
     #[test]
-    fn toml_roto_es_error_fail_loud() {
+    fn broken_toml_is_a_fail_loud_error() {
         let user = tempfile::tempdir().unwrap();
         std::fs::write(user.path().join("norte.toml"), "[archive\n").unwrap();
         let layers = norte_config::Layers {
@@ -232,11 +232,11 @@ mod tests {
     /// Boundary pin: a field with the wrong TOML type is a hard error, not a
     /// silently-ignored override.
     #[test]
-    fn tipo_malo_es_error_fail_loud() {
+    fn wrong_type_is_a_fail_loud_error() {
         let user = tempfile::tempdir().unwrap();
         std::fs::write(
             user.path().join("norte.toml"),
-            "[archive]\nmax_entries = \"muchas\"\n",
+            "[archive]\nmax_entries = \"many\"\n",
         )
         .unwrap();
         let layers = norte_config::Layers {
@@ -248,13 +248,13 @@ mod tests {
     /// Boundary pin: an empty `[archive]` section (present, no fields) is
     /// still `Ok(None)` — presence of the section alone is not an override.
     #[test]
-    fn seccion_archive_vacia_es_none() {
+    fn empty_archive_section_is_none() {
         let user = tempfile::tempdir().unwrap();
         std::fs::write(user.path().join("norte.toml"), "[archive]\n").unwrap();
         let layers = norte_config::Layers {
             dirs: vec![(user.path().to_path_buf(), norte_config::Layer::User)],
         };
-        assert!(load_archive_limits_from(&layers).expect("carga").is_none());
+        assert!(load_archive_limits_from(&layers).expect("load").is_none());
     }
 
     /// C1 review, item 2: a broken/hostile `./.norte/norte.toml` (Project
@@ -269,17 +269,17 @@ mod tests {
     /// whose exclusion of `Layer::Project` is pinned at the `norte-config`
     /// level by `standard_layers_no_project_excluye_proyecto`.
     #[test]
-    fn norte_toml_de_proyecto_roto_no_aborta_el_daemon() {
+    fn broken_project_norte_toml_does_not_abort_the_daemon() {
         let user = tempfile::tempdir().unwrap();
         std::fs::write(
             user.path().join("norte.toml"),
             "[archive]\nmax_entries = 5\n",
         )
         .unwrap();
-        let proyecto = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
         // Broken TOML — the kind of thing a hostile or merely careless
         // project checkout could ship.
-        std::fs::write(proyecto.path().join("norte.toml"), "[archive\n").unwrap();
+        std::fs::write(project.path().join("norte.toml"), "[archive\n").unwrap();
 
         // Explicit layers INCLUDING the broken project entry. Since #260 a
         // broken PROJECT layer is skipped rather than fatal — a `.norte.toml`
@@ -291,17 +291,17 @@ mod tests {
         let with_project = norte_config::Layers {
             dirs: vec![
                 (user.path().to_path_buf(), norte_config::Layer::User),
-                (proyecto.path().to_path_buf(), norte_config::Layer::Project),
+                (project.path().to_path_buf(), norte_config::Layer::Project),
             ],
         };
         let limits = load_archive_limits_from(&with_project)
             .expect("a broken PROJECT layer is skipped, not fatal");
         assert_eq!(
-            limits.expect("hay límites").max_entries,
+            limits.expect("has limits").max_entries,
             5,
             "the user's layer still applies"
         );
-        let cfg = norte_config::load(&with_project).expect("carga");
+        let cfg = norte_config::load(&with_project).expect("load");
         assert_eq!(
             cfg.project_warnings.len(),
             1,
@@ -324,29 +324,29 @@ mod tests {
     /// are respected per-field, an absent field keeps the compiled default,
     /// and `max_entries` saturates upward rather than wrapping.
     #[test]
-    fn limits_from_overrides_respeta_overrides_y_defaults() {
+    fn limits_from_overrides_respects_overrides_and_defaults() {
         assert!(limits_from_overrides(None, None, None).is_none());
 
-        let l = limits_from_overrides(Some(100), None, None).expect("override presente");
+        let l = limits_from_overrides(Some(100), None, None).expect("override present");
         assert_eq!(l.max_entries, 100);
         assert_eq!(
             l.max_decompressed_bytes,
             Limits::default().max_decompressed_bytes,
-            "campo ausente conserva el default"
+            "absent field keeps the default"
         );
         assert_eq!(
             l.max_nesting,
             Limits::default().max_nesting,
-            "campo ausente conserva el default"
+            "absent field keeps the default"
         );
 
-        let l = limits_from_overrides(None, Some(1024), Some(3)).expect("overrides presentes");
+        let l = limits_from_overrides(None, Some(1024), Some(3)).expect("overrides present");
         assert_eq!(l.max_decompressed_bytes, 1024);
         assert_eq!(l.max_nesting, 3);
         assert_eq!(
             l.max_entries,
             Limits::default().max_entries,
-            "campo ausente conserva el default"
+            "absent field keeps the default"
         );
     }
 
@@ -355,12 +355,12 @@ mod tests {
     /// small number — it saturates to `usize::MAX`, loud (a `tracing::warn`)
     /// rather than a silently-shrunk anti-bomb limit.
     #[test]
-    fn limits_from_overrides_max_entries_satura_no_envuelve() {
+    fn limits_from_overrides_max_entries_saturates_not_wraps() {
         // On 64-bit `usize::try_from(u64)` never fails, so this pins the
         // in-range identity path instead — the saturation branch itself is
         // only reachable on 32-bit, documented in the rustdoc.
-        let l = limits_from_overrides(Some(u64::from(u32::MAX)), None, None)
-            .expect("override presente");
+        let l =
+            limits_from_overrides(Some(u64::from(u32::MAX)), None, None).expect("override present");
         assert_eq!(l.max_entries, u32::MAX as usize);
     }
 }

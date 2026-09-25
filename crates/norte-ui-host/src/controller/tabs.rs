@@ -1,129 +1,130 @@
-//! Pestañas y partición de huecos.
+//! Tabs and splitting slots.
 //!
-//! Parte de `controller`: son métodos de `Estado`, movidos aquí sin
-//! tocarlos (ADR 0086). El único escritor sigue siendo el actor.
+//! Part of `controller`: these are methods of `State`, moved here without
+//! touching them (ADR 0086). The only writer is still the actor.
 
-// Estos módulos son el mismo `impl Estado` partido en trozos, así que usan
-// los mismos imports que el padre. Enumerarlos aquí sería una lista de
-// cuarenta líneas por fichero, en 32 ficheros, que se desincroniza en cuanto
-// el padre importa algo — `super::*` la sigue sola.
+// These modules are the same `impl State` split into pieces, so they use
+// the same imports as the parent. Listing them here would be a forty-line
+// list per file, across 32 files, that goes out of sync the moment the
+// parent imports something — `super::*` keeps it in sync on its own.
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
-impl Estado {
-    /// Los tres efectos que tocan la DISPOSICIÓN, juntos.
+impl State {
+    /// The three effects that touch the LAYOUT, together.
     ///
-    /// Agrupados aquí y no en `aplicar_efecto` porque ese método es un
-    /// reparto y crece por familias: tres brazos que hacen lo mismo —cambiar
-    /// la forma de la pantalla— son un brazo con tres casos.
-    pub(super) fn efecto_de_disposicion(
+    /// Grouped here and not in `apply_effect` because that method is a
+    /// dispatch and grows by families: three arms that do the same thing —
+    /// changing the screen's shape — are one arm with three cases.
+    pub(super) fn layout_effect(
         &mut self,
-        efecto: Efecto,
+        effect: Effect,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        match efecto {
-            Efecto::Tamano(delta) => self.redimensionar(delta, backend, buzon),
-            Efecto::Igualar => self.igualar(backend, buzon),
-            Efecto::Girar => self.girar(backend, buzon),
-            Efecto::Partir { vertical } => self.partir(vertical, backend, buzon),
-            Efecto::CerrarHueco => self.cerrar_hueco(backend, buzon),
-            Efecto::AlternarHueco { kind } => self.alternar_hueco(kind, backend, buzon),
-            Efecto::PestanaNueva => self.pestana_nueva(backend, buzon),
-            Efecto::CerrarPestana => self.cerrar_pestana(backend, buzon),
-            Efecto::CiclarPestana { atras } => self.ciclar_pestana(atras, backend, buzon),
-            Efecto::MoverPestana { derecha } => self.mover_pestana(derecha, backend, buzon),
-            Efecto::IrAPestana { n } => self.ir_a_pestana(n, backend, buzon),
-            _ => self.abrir_disposiciones(),
+        match effect {
+            Effect::Size(delta) => self.resize(delta, backend, mailbox),
+            Effect::Equalize => self.equalize(backend, mailbox),
+            Effect::Rotate => self.rotate(backend, mailbox),
+            Effect::Split { vertical } => self.split(vertical, backend, mailbox),
+            Effect::CloseSlot => self.close_slot(backend, mailbox),
+            Effect::ToggleSlot { kind } => self.toggle_slot(kind, backend, mailbox),
+            Effect::TabNew => self.tab_new(backend, mailbox),
+            Effect::CloseTab => self.close_tab(backend, mailbox),
+            Effect::CycleTab { back } => self.cycle_tab(back, backend, mailbox),
+            Effect::MoverTab { right } => self.mover_tab(right, backend, mailbox),
+            Effect::IrAPestana { n } => self.go_to_tab(n, backend, mailbox),
+            _ => self.open_layouts(),
         }
     }
 
-    /// Abre otra PESTAÑA junto al hueco enfocado.
+    /// Opens another TAB next to the focused slot.
     ///
-    /// El listado nuevo arranca en el mismo directorio y se queda el foco,
-    /// por lo mismo que al partir. `add_tab` envuelve el hueco en un grupo si
-    /// todavía no lo estaba: no hay que decidirlo aquí.
-    pub(super) fn pestana_nueva(
+    /// The new listing starts in the same directory and keeps the focus, for
+    /// the same reason as splitting. `add_tab` wraps the slot in a group if it
+    /// was not one yet: there is nothing to decide here.
+    pub(super) fn tab_new(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         use norte_frontend::layout::KindId;
-        let id = self.nuevo_slot();
-        let nuevo = self.arbol.add_tab(
-            SlotId(self.enfocado()),
+        let id = self.new_slot();
+        let updated = self.tree.add_tab(
+            SlotId(self.focused()),
             &Node::slot(SlotId(id), KindId::browser()),
         );
-        self.aplicar_disposicion_con(nuevo, Some(SlotId(id)), backend, buzon)
+        self.apply_layout_with(updated, Some(SlotId(id)), backend, mailbox)
     }
 
-    /// Cierra la pestaña enfocada.
+    /// Closes the focused tab.
     ///
-    /// Sin grupo no hace nada y lo DICE: cerrar el hueco entero es otro
-    /// comando, y hacerlo aquí «porque no había pestañas» sería cerrar lo que
-    /// nadie pidió cerrar.
-    pub(super) fn cerrar_pestana(
+    /// Without a group it does nothing and SAYS so: closing the whole slot is
+    /// a different command, and doing it here "because there were no tabs"
+    /// would be closing what nobody asked to close.
+    pub(super) fn close_tab(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(nuevo) = self.arbol.close_tab(SlotId(self.enfocado())) else {
+        let Some(updated) = self.tree.close_tab(SlotId(self.focused())) else {
             return (
                 ActionAck::Unavailable {
                     reason_key: "host-no-tabs".to_owned(),
                 },
-                self.decir("host-no-tabs"),
+                self.say("host-no-tabs"),
             );
         };
-        self.aplicar_disposicion(nuevo, backend, buzon)
+        self.apply_layout(updated, backend, mailbox)
     }
 
-    /// Pasa a la pestaña siguiente —o anterior—, CICLANDO.
-    pub(super) fn ciclar_pestana(
+    /// Moves to the next — or previous — tab, WRAPPING around.
+    pub(super) fn cycle_tab(
         &mut self,
-        atras: bool,
+        back: bool,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let foco = SlotId(self.enfocado());
-        let Some((tabs, activo)) = self.arbol.tabs_of(foco) else {
+        let focus = SlotId(self.focused());
+        let Some((tabs, active)) = self.tree.tabs_of(focus) else {
             return (
                 ActionAck::Unavailable {
                     reason_key: "host-no-tabs".to_owned(),
                 },
-                self.decir("host-no-tabs"),
+                self.say("host-no-tabs"),
             );
         };
         if tabs.is_empty() {
-            return (self.aplicada(), Vec::new());
+            return (self.applied(), Vec::new());
         }
         let n = isize::try_from(tabs.len()).unwrap_or(1);
-        let i = isize::try_from(activo).unwrap_or(0);
-        let delta = if atras { -1 } else { 1 };
-        let destino = usize::try_from((i + delta).rem_euclid(n)).unwrap_or(0);
-        self.activar_pestana(foco, destino, &tabs, backend, buzon)
+        let i = isize::try_from(active).unwrap_or(0);
+        let delta = if back { -1 } else { 1 };
+        let target = usize::try_from((i + delta).rem_euclid(n)).unwrap_or(0);
+        self.activate_tab(focus, target, &tabs, backend, mailbox)
     }
 
-    /// Va a la pestaña `n` (base 1).
-    pub(super) fn ir_a_pestana(
+    /// Goes to tab `n` (1-based).
+    pub(super) fn go_to_tab(
         &mut self,
         n: usize,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let foco = SlotId(self.enfocado());
-        let Some((tabs, _)) = self.arbol.tabs_of(foco) else {
+        let focus = SlotId(self.focused());
+        let Some((tabs, _)) = self.tree.tabs_of(focus) else {
             return (
                 ActionAck::Unavailable {
                     reason_key: "host-no-tabs".to_owned(),
                 },
-                self.decir("host-no-tabs"),
+                self.say("host-no-tabs"),
             );
         };
         let i = n.saturating_sub(1);
         if i >= tabs.len() {
-            // Pedir la séptima cuando hay tres no va a la última: no es lo
-            // que se pidió, y adivinar aquí es cambiar de pestaña sola.
+            // Asking for the seventh when there are three does not go to the
+            // last one: that is not what was asked, and guessing here is
+            // changing tabs on its own.
             return (
                 ActionAck::Unavailable {
                     reason_key: "host-no-such-tab".to_owned(),
@@ -131,79 +132,79 @@ impl Estado {
                 Vec::new(),
             );
         }
-        self.activar_pestana(foco, i, &tabs, backend, buzon)
+        self.activate_tab(focus, i, &tabs, backend, mailbox)
     }
 
-    /// Pone delante la pestaña `destino` del grupo de `foco`.
+    /// Brings tab `target` of `focus`'s group to the front.
     ///
-    /// Y le da el FOCO: la pestaña que está delante es con la que se trabaja,
-    /// y dejarlo en la que se acaba de esconder deja las teclas apuntando a
-    /// un listado que no se ve.
-    pub(super) fn activar_pestana(
+    /// And gives it FOCUS: the tab in front is the one being worked on, and
+    /// leaving it on the one that was just hidden leaves the keys pointing at
+    /// a listing that is not visible.
+    pub(super) fn activate_tab(
         &mut self,
-        foco: SlotId,
-        destino: usize,
+        focus: SlotId,
+        target: usize,
         tabs: &[SlotId],
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let nuevo = self.arbol.set_active_for(foco, destino);
-        let activo = tabs.get(destino).copied();
-        self.aplicar_disposicion_con(nuevo, activo, backend, buzon)
+        let updated = self.tree.set_active_for(focus, target);
+        let active = tabs.get(target).copied();
+        self.apply_layout_with(updated, active, backend, mailbox)
     }
 
-    /// Mueve la pestaña enfocada dentro de su grupo.
+    /// Moves the focused tab within its group.
     ///
-    /// NO da la vuelta: una pestaña que salta del final al principio por una
-    /// pulsación de más es justo lo que nadie quería (la regla es del modelo
-    /// compartido, y aquí solo se usa).
-    pub(super) fn mover_pestana(
+    /// It does NOT wrap around: a tab that jumps from the end to the
+    /// beginning from one press too many is exactly what nobody wanted (the
+    /// rule belongs to the shared model, and here it is only used).
+    pub(super) fn mover_tab(
         &mut self,
-        derecha: bool,
+        right: bool,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let foco = SlotId(self.enfocado());
-        if self.arbol.tabs_of(foco).is_none() {
+        let focus = SlotId(self.focused());
+        if self.tree.tabs_of(focus).is_none() {
             return (
                 ActionAck::Unavailable {
                     reason_key: "host-no-tabs".to_owned(),
                 },
-                self.decir("host-no-tabs"),
+                self.say("host-no-tabs"),
             );
         }
-        let nuevo = self.arbol.move_tab(foco, if derecha { 1 } else { -1 });
-        self.aplicar_disposicion_con(nuevo, Some(foco), backend, buzon)
+        let updated = self.tree.move_tab(focus, if right { 1 } else { -1 });
+        self.apply_layout_with(updated, Some(focus), backend, mailbox)
     }
 
-    /// Un clic en una pestaña: la pone delante.
+    /// A click on a tab: brings it to the front.
     ///
-    /// El hueco viene del propio grupo, así que un clic contra un árbol que
-    /// ya cambió no acierta por casualidad: si ese id ya no está en un grupo,
-    /// se rehúsa.
-    pub(super) fn elegir_pestana(
+    /// The slot comes from the group itself, so a click against a tree that
+    /// already changed does not hit by accident: if that id is no longer in a
+    /// group, it is refused.
+    pub(super) fn choose_tab(
         &mut self,
         slot_id: u32,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let quien = SlotId(slot_id);
-        let Some((tabs, _)) = self.arbol.tabs_of(quien) else {
-            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        let clicked = SlotId(slot_id);
+        let Some((tabs, _)) = self.tree.tabs_of(clicked) else {
+            return (Self::stale(StaleAction::Generation), Vec::new());
         };
-        let Some(i) = tabs.iter().position(|t| *t == quien) else {
-            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        let Some(i) = tabs.iter().position(|t| *t == clicked) else {
+            return (Self::stale(StaleAction::Generation), Vec::new());
         };
-        self.activar_pestana(quien, i, &tabs, backend, buzon)
+        self.activate_tab(clicked, i, &tabs, backend, mailbox)
     }
 
-    /// El id de hueco más alto del árbol, más uno.
+    /// The tree's highest slot id, plus one.
     ///
-    /// Del ÁRBOL y no de `huecos`: los auxiliares —sitios, tablero, hoja de
-    /// atributos— no están en ese mapa, y reusar el id de uno abierto sería
-    /// meter dos cosas en el mismo hueco.
-    pub(super) fn nuevo_slot(&self) -> u32 {
-        self.arbol
+    /// From the TREE and not from `slots`: the auxiliary ones — places,
+    /// board, attribute sheet — are not in that map, and reusing an open
+    /// one's id would put two things in the same slot.
+    pub(super) fn new_slot(&self) -> u32 {
+        self.tree
             .slot_ids()
             .into_iter()
             .map(|SlotId(id)| id)
@@ -212,16 +213,16 @@ impl Estado {
             .saturating_add(1)
     }
 
-    /// Parte el hueco enfocado y pone otro LISTADO al lado.
+    /// Splits the focused slot and puts another LISTING next to it.
     ///
-    /// El nuevo arranca en el directorio del que se parte, que es lo menos
-    /// sorprendente: pedir sitio para trabajar no es irse a otra parte. Y el
-    /// foco va al recién nacido, por lo mismo.
-    pub(super) fn partir(
+    /// The new one starts in the directory it was split from, which is the
+    /// least surprising thing: asking for room to work is not going somewhere
+    /// else. And focus goes to the newborn, for the same reason.
+    pub(super) fn split(
         &mut self,
         vertical: bool,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         use norte_frontend::layout::{Dir, KindId};
         let dir = if vertical {
@@ -229,189 +230,195 @@ impl Estado {
         } else {
             Dir::Horizontal
         };
-        // Que quepan DOS, y con la misma cuenta que decide el colapso del
-        // reparto: partir un hueco que ya no da para dos crea un panel que el
-        // propio reparto esconde en el mismo frame —el `Split` se degrada a
-        // pestañas— con el árbol guardándolo igualmente. La TUI se niega por
-        // este mismo sitio (ADR 0077: una decisión duplicada entre frontends
-        // diverge en silencio).
-        let sitio = self
-            .reparto
+        // Room for TWO, with the same math that decides the layout's
+        // collapse: splitting a slot that no longer fits two creates a panel
+        // the layout itself hides in the same frame — the `Split` degrades to
+        // tabs — with the tree saving it just the same. The TUI refuses at
+        // this same spot (ADR 0077: a decision duplicated between frontends
+        // diverges silently).
+        let room = self
+            .split
             .placements
             .iter()
-            .find(|(s, _)| s.0 == self.enfocado())
+            .find(|(s, _)| s.0 == self.focused())
             .is_none_or(|(_, re)| {
                 norte_frontend::layout::has_room_to_split(*re, dir, &KindId::browser(), &self.kinds)
             });
-        if !sitio {
+        if !room {
             return (
                 ActionAck::Unavailable {
                     reason_key: "msg-layout-split-no-room".to_owned(),
                 },
-                self.decir("msg-layout-split-no-room"),
+                self.say("msg-layout-split-no-room"),
             );
         }
-        let id = self.nuevo_slot();
-        let nuevo = self.arbol.split_slot(
-            SlotId(self.enfocado()),
+        let id = self.new_slot();
+        let updated = self.tree.split_slot(
+            SlotId(self.focused()),
             dir,
             &Node::slot(SlotId(id), KindId::browser()),
         );
-        // El foco al recién nacido, y DENTRO de la misma aplicación: partir
-        // es pedir sitio para trabajar en él. En dos pasos serían dos fotos,
-        // y la primera enseñaría el foco donde ya no está.
-        self.aplicar_disposicion_con(nuevo, Some(SlotId(id)), backend, buzon)
+        // Focus to the newborn, and WITHIN the same call: splitting is
+        // asking for room to work in it. In two steps it would be two
+        // snapshots, and the first one would show focus where it no longer
+        // is.
+        self.apply_layout_with(updated, Some(SlotId(id)), backend, mailbox)
     }
 
-    /// Cierra el hueco enfocado.
+    /// Closes the focused slot.
     ///
-    /// Salvo si con eso la pantalla se queda sin LISTADO: una pantalla sin un
-    /// listado usable no es una pantalla —es un cuelgue con bordes—, y esa es
-    /// la misma regla que el reparto compartido ya aplica por su cuenta
-    /// (#229). Aquí se dice, en vez de dejar una tecla que no hace nada.
-    pub(super) fn cerrar_hueco(
+    /// Unless that leaves the screen with no LISTING: a screen without a
+    /// usable listing is not a screen — it is a freeze with borders — and
+    /// that is the same rule the shared layout already applies on its own
+    /// (#229). Here it is said, instead of leaving a key that does nothing.
+    pub(super) fn close_slot(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(nuevo) = self.arbol.close_slot(SlotId(self.enfocado())) else {
+        let Some(updated) = self.tree.close_slot(SlotId(self.focused())) else {
             return (
                 ActionAck::Unavailable {
                     reason_key: "msg-layout-last-panel".to_owned(),
                 },
-                self.decir("msg-layout-last-panel"),
+                self.say("msg-layout-last-panel"),
             );
         };
-        let quedan = nuevo
+        let remaining = updated
             .slot_ids()
             .into_iter()
-            .any(|s| es_listado(&nuevo, s, &self.kinds));
-        if !quedan {
+            .any(|s| es_listing(&updated, s, &self.kinds));
+        if !remaining {
             return (
                 ActionAck::Unavailable {
                     reason_key: "msg-layout-last-panel".to_owned(),
                 },
-                self.decir("msg-layout-last-panel"),
+                self.say("msg-layout-last-panel"),
             );
         }
-        // Cerrar un panel es fácil de hacer sin querer y difícil de deshacer
-        // si no se sabe con qué: el que lo hace se queda mirando media
-        // pantalla. Se DICE, y con el atajo de verdad del preset puesto —no
-        // uno cableado—, igual que el resto del cromo (ADR 0106).
-        let aviso = norte_frontend::notes::slot_closed(
-            norte_frontend::palette::first_chord("layout.split-h", &self.efectivo).as_deref(),
+        // Closing a panel is easy to do by accident and hard to undo if you
+        // do not know how: whoever does it is left staring at half a screen.
+        // It is SAID, with the preset's real shortcut in it — not a hardcoded
+        // one — same as the rest of the chrome (ADR 0106).
+        let notice = norte_frontend::notes::slot_closed(
+            norte_frontend::palette::first_chord("layout.split-h", &self.effective).as_deref(),
             self.lang,
         );
-        self.status.message = Some(clamp_display(aviso));
-        self.aplicar_disposicion(nuevo, backend, buzon)
+        self.status.message = Some(clamp_display(notice));
+        self.apply_layout(updated, backend, mailbox)
     }
 
-    /// Abre —o cierra— el hueco auxiliar de este kind.
+    /// Opens — or closes — this kind's auxiliary slot.
     ///
-    /// Los tres que esta ventana sabe PINTAR. Uno que solo se pintaría en
-    /// gris no se abre: `layout.preview` sigue sin construirse por eso, y lo
-    /// dice el catálogo, no un hueco vacío.
+    /// The three this window knows how to PAINT. One that would only paint
+    /// gray does not open: `layout.preview` is still not built for that
+    /// reason, and the catalogue says so, not an empty slot.
     ///
-    /// Los bordes y los tamaños son los MISMOS que el TUI usa, y no por
-    /// simetría: son anchos medidos —dieciséis celdas es el mínimo del kind
-    /// de sitios, ocho filas son las seis del tablero más el marco, treinta
-    /// es la etiqueta más larga de la hoja con su valor al lado.
-    pub(super) fn alternar_hueco(
+    /// The borders and sizes are the SAME the TUI uses, and not for symmetry:
+    /// they are measured widths — sixteen cells is the places kind's minimum,
+    /// eight rows are the board's six plus the frame, thirty is the sheet's
+    /// longest label plus its value next to it.
+    pub(super) fn toggle_slot(
         &mut self,
         kind: &'static str,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        if let Some(id) = self.hueco_de_kind(kind) {
-            // Escondido detrás de otra pestaña de su grupo (fase F): pulsarlo
-            // lo PONE DELANTE, no lo cierra — para el lector, un panel que no
-            // ve está cerrado, y cerrarlo sería la única de las acciones que
-            // no se puede deshacer mirando. Es la regla de la TUI (#329).
+        if let Some(id) = self.slot_of_kind(kind) {
+            // Hidden behind another tab of its group (phase F): pressing it
+            // BRINGS IT TO THE FRONT, it does not close it — for the reader, a
+            // panel they cannot see is closed, and closing it would be the
+            // one action that cannot be undone just by looking. It is the
+            // TUI's rule (#329).
             //
-            // Del ÁRBOL y no del reparto: un grupo que no cupo no se colocó,
-            // y con el reparto la pestaña de delante se «revelaba» a sí misma
-            // sin cambiar nada — el botón ya no la cerraba nunca.
-            let detras = self
-                .arbol
+            // From the TREE and not from the layout: a group that did not fit
+            // was not placed, and with the layout the tab in front would
+            // "reveal" itself without changing anything — the button would
+            // never close it again.
+            let behind = self
+                .tree
                 .tabs_of(id)
                 .is_some_and(|(t, a)| t.get(a) != Some(&id));
-            if detras {
-                return self.elegir_pestana(id.0, backend, buzon);
+            if behind {
+                return self.choose_tab(id.0, backend, mailbox);
             }
-            return self.cerrar_hueco_de_kind(kind, backend, buzon);
+            return self.close_slot_of_kind(kind, backend, mailbox);
         }
-        self.abrir_hueco_de_kind(kind, backend, buzon)
+        self.open_slot_of_kind(kind, backend, mailbox)
     }
 
-    /// El hueco de ese kind, si el árbol lo tiene.
-    pub(super) fn hueco_de_kind(&self, kind: &str) -> Option<SlotId> {
-        self.arbol
+    /// The slot of that kind, if the tree has one.
+    pub(super) fn slot_of_kind(&self, kind: &str) -> Option<SlotId> {
+        self.tree
             .slot_ids()
             .into_iter()
-            .find(|s| kind_de(&self.arbol, *s).is_some_and(|k| k.as_str() == kind))
+            .find(|s| kind_de(&self.tree, *s).is_some_and(|k| k.as_str() == kind))
     }
 
-    /// Cierra el hueco de ese kind, si está abierto.
+    /// Closes the slot of that kind, if it is open.
     ///
-    /// La MITAD de [`Self::alternar_hueco`], separada porque el panel de
-    /// procesos se cierra SOLO cuando se vacía el tablero (ADR 0115), y
-    /// reutilizar el interruptor lo reabriría.
-    pub(super) fn cerrar_hueco_de_kind(
+    /// HALF of [`Self::toggle_slot`], split off because the process panel
+    /// closes ONLY when the board empties (ADR 0115), and reusing the toggle
+    /// would reopen it.
+    pub(super) fn close_slot_of_kind(
         &mut self,
         kind: &str,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(id) = self.hueco_de_kind(kind) else {
-            return (self.aplicada(), Vec::new());
+        let Some(id) = self.slot_of_kind(kind) else {
+            return (self.applied(), Vec::new());
         };
-        let Some(nuevo) = self.arbol.close_slot(id) else {
-            return (self.aplicada(), Vec::new());
+        let Some(updated) = self.tree.close_slot(id) else {
+            return (self.applied(), Vec::new());
         };
-        // Cerrar el registro BAJA lo que el proceso captura (#326): el nivel
-        // del anillo se sube en caliente para poder enseñar más, y solo sube.
-        // Sin esto, una sola pulsación de «traza» dejaba el proceso guardando
-        // TRACE en memoria el resto de la sesión —incluida la cota de
-        // `suppaftp`, que es lo único que impide que ahí dentro aparezca una
-        // contraseña de FTP— con la interfaz diciendo «info» y sin ningún panel
-        // donde verlo. Es lo que ya hace la TUI al cerrar el suyo.
-        // Cerrar el panel de terminal MATA su shell (#362), y es lo único que
-        // lo mata: la tecla que lo abre no cierra, justamente para que acabar
-        // con un proceso del lector sea algo que se pide por su nombre. El
-        // `Drop` del shell se encarga; aquí se suelta y se para su tic.
+        // Closing the log LOWERS what the process captures (#326): the
+        // ring's level is raised live so it can show more, and it only ever
+        // goes up. Without this, a single press of "trace" left the process
+        // keeping TRACE in memory for the rest of the session — including
+        // `suppaftp`'s log level, which is the only thing stopping an FTP
+        // password from showing up in there — with the interface saying
+        // "info" and no panel left to see it in. It is what the TUI already
+        // does on closing its own.
+        // Closing the terminal panel KILLS its shell (#362), and it is the
+        // only thing that kills it: the key that opens it does not close it,
+        // precisely so that ending a process of the reader's is something
+        // asked for by name. The shell's `Drop` handles it; here it is
+        // released and its tick is stopped.
         if kind == super::termpanel::KIND {
-            self.soltar_terminal();
+            self.release_terminal();
         }
         if kind == super::logpanel::KIND {
-            if let Some(anillo) = &self.log_ring {
-                anillo.set_level(self.log_panel.level());
+            if let Some(ring) = &self.log_ring {
+                ring.set_level(self.log_panel.level());
             }
-            // Y el sondeo se apaga: la época sube, así que el temporizador en
-            // vuelo se deja morir sin rearmarse.
-            self.log_epoca += 1;
+            // And the polling turns off: the epoch bumps, so the timer in
+            // flight is left to die without rearming.
+            self.log_epoch += 1;
         }
-        self.aplicar_disposicion(nuevo, backend, buzon)
+        self.apply_layout(updated, backend, mailbox)
     }
 
-    /// Abre el hueco de ese kind, o lo deja como está si ya existe.
+    /// Opens the slot of that kind, or leaves it as is if it already exists.
     ///
-    /// La otra mitad: la apertura automática del panel de procesos abre SIN
-    /// alternar, o cerraría el panel al empezar la segunda tarea.
-    pub(super) fn abrir_hueco_de_kind(
+    /// The other half: the process panel's automatic opening opens WITHOUT
+    /// toggling, or it would close the panel when the second task starts.
+    pub(super) fn open_slot_of_kind(
         &mut self,
         kind: &'static str,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         use norte_frontend::layout::{Bindings, Edge, Follow, KindId, Size};
-        if self.hueco_de_kind(kind).is_some() {
-            return (self.aplicada(), Vec::new());
+        if self.slot_of_kind(kind).is_some() {
+            return (self.applied(), Vec::new());
         }
-        let id = SlotId(self.nuevo_slot());
-        let hoja = match kind {
-            // La hoja de atributos SIGUE al rol activo: describe lo que el
-            // cursor señala, y sin la atadura describiría el hueco donde
-            // nació para siempre. El visor acoplado (#291), por lo mismo.
+        let id = SlotId(self.new_slot());
+        let leaf = match kind {
+            // The attribute sheet FOLLOWS the active role: it describes what
+            // the cursor points at, and without the binding it would describe
+            // the slot it was born in forever. The docked viewer (#291), for
+            // the same reason.
             "metadata" | super::preview::KIND => Node::slot_bound(
                 id,
                 KindId::new(kind),
@@ -421,55 +428,58 @@ impl Estado {
             ),
             _ => Node::slot(id, KindId::new(kind)),
         };
-        let (borde, tamano) = match kind {
+        let (edge, size) = match kind {
             "places" => (Edge::Left, Size::Fixed(16)),
             "processes" => (Edge::Bottom, Size::Fixed(8)),
-            // El registro abajo, y más alto que el tablero: sus líneas son
-            // largas y ocho filas de las que dos son cromo no dejan leer una
-            // traza. Es el mismo sitio que le da la TUI.
+            // The log at the bottom, and taller than the board: its lines are
+            // long, and eight rows of which two are chrome do not leave room
+            // to read a trace. It is the same spot the TUI gives it.
             "log" => (Edge::Bottom, Size::Fixed(12)),
-            // El árbol a la izquierda y con el ancho de la barra de sitios: es
-            // el mismo gesto —una columna de navegación al lado del listado— y
-            // dos anchos distintos para lo mismo se notan.
+            // The tree on the left and with the places bar's width: it is the
+            // same gesture — a navigation column next to the listing — and
+            // two different widths for the same thing stand out.
             "tree" => (Edge::Left, Size::Fixed(24)),
-            // El visor a la derecha y a PARTES IGUALES con el listado, como
-            // lo coloca la TUI: treinta celdas no dejan leer una línea.
+            // The viewer on the right and at an EQUAL SPLIT with the listing,
+            // as the TUI places it: thirty cells do not leave room to read a
+            // line.
             super::preview::KIND => (Edge::Right, Size::Weight(1)),
             _ => (Edge::Right, Size::Fixed(30)),
         };
-        // Agrupado (fase F): un panel que llega a un borde con otro panel se
-        // une a él como pestaña, como en VS Code.
-        let nuevo = self
-            .arbol
-            .dock_grouped(SlotId(self.enfocado()), borde, tamano, &hoja);
-        let salida = self.aplicar_disposicion(nuevo, backend, buzon);
+        // Grouped (phase F): a panel that reaches an edge with another panel
+        // joins it as a tab, like VS Code.
+        let updated = self
+            .tree
+            .dock_grouped(SlotId(self.focused()), edge, size, &leaf);
+        let outgoing = self.apply_layout(updated, backend, mailbox);
         if kind == "tree" {
-            // ANCLAR es solo aquí: es la única vez que se elige de dónde
-            // cuelga el árbol. Mientras el listado navega, el panel lo SIGUE
-            // revelando la rama (`seguir_ramas`), que conserva lo abierto;
-            // re-anclarlo cerraría el árbol entero cada vez que el lector
-            // entra en una carpeta.
-            self.sembrar_ramas();
-            self.pedir_ramas(backend, buzon);
+            // ANCHORING happens only here: it is the only time where the tree
+            // hangs from is chosen. While the listing navigates, the panel
+            // FOLLOWS it by revealing the branch (`follow_branches`), which
+            // preserves what is open; re-anchoring it would close the whole
+            // tree every time the reader enters a folder.
+            self.seed_branches();
+            self.request_branches(backend, mailbox);
         }
         if kind == super::logpanel::KIND {
-            // Y el registro empieza a sondearse: el panel promete que SIGUE lo
-            // que llega, y esta ventana solo repinta cuando alguien hace algo.
-            // Sin esto, decía «pegado al final» sobre una lista congelada.
-            self.log_epoca += 1;
-            self.log_visto = self
+            // And the log starts polling: the panel promises it FOLLOWS what
+            // arrives, and this window only repaints when someone does
+            // something. Without this, it said "stuck to the end" over a
+            // frozen list.
+            self.log_epoch += 1;
+            self.log_seen = self
                 .log_ring
                 .as_ref()
                 .map_or(0, norte_config::logring::LogRing::pushed);
-            // Y la mitad remota empieza de cero (#328): esta apertura pide
-            // «lo que haya» y no arrastra ni el cursor ni las líneas de la
-            // anterior. Reabrir el panel enseña el registro de AHORA; la
-            // historia vieja ya se leyó, y ponerla por delante de la nueva
-            // sería empezar la lista donde nadie está mirando.
-            self.log_remoto.reiniciar();
-            self.sondear_registro(buzon);
-            self.pedir_registro_remoto(backend, buzon);
+            // And the remote half starts from scratch (#328): this opening
+            // requests "whatever there is" and does not drag along either the
+            // cursor or the previous opening's lines. Reopening the panel
+            // shows the CURRENT log; the old history has already been read,
+            // and putting it ahead of the new one would be starting the list
+            // where nobody is looking.
+            self.log_remote.restart();
+            self.probe_log(mailbox);
+            self.request_log_remote(backend, mailbox);
         }
-        salida
+        outgoing
     }
 }

@@ -1,99 +1,104 @@
-//! La línea de tiempo del journal, en la ventana (fase 7, #359).
+//! The journal's timeline, in the window (phase 7, #359).
 //!
-//! El MODELO —qué es una fila, que un lote es una, qué `seq` manda el corte y
-//! cuánto se va a llevar— es el compartido (`norte_frontend::timeline`), el
-//! mismo que usa la TUI. Lo de aquí es el cableado: pedir las páginas, andar
-//! por las filas y preguntar antes de deshacer.
+//! The MODEL — what a row is, that a batch is one, which `seq` the cut sends,
+//! and how much it is going to take — is the shared one
+//! (`norte_frontend::timeline`), the same one the TUI uses. What is here is
+//! the wiring: requesting the pages, walking the rows, and asking before
+//! undoing.
 //!
-//! El molde es el del mapa de disco: un estado por hueco, una petición viva
-//! con su testigo, y una respuesta que llega con otro testigo se tira.
+//! The mold is the disk map's: one state per slot, one live request with its
+//! token, and a response that arrives with a different token is discarded.
 
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
-/// El kind que ocupa un hueco de línea de tiempo.
+/// The kind that occupies a timeline slot.
 pub(super) const KIND: &str = "timeline";
 
-/// Cuántas filas se piden por página: las mismas que la TUI. Muy por debajo
-/// del tope del protocolo, porque esto es una pantalla que se lee y lo que
-/// no quepa se pide al llegar abajo.
-const POR_PAGINA: u32 = 50;
+/// How many rows are requested per page: the same as the TUI's. Well below
+/// the protocol's cap, because this is a screen that is read and whatever
+/// does not fit is requested on reaching the bottom.
+const PER_PAGE: u32 = 50;
 
-/// Lo que un hueco de línea de tiempo tiene y lo que está pidiendo.
+/// What a timeline slot has, and what it is requesting.
 #[derive(Default)]
-pub(super) struct EstadoLinea {
-    /// Las filas y el cursor. El estado COMPARTIDO.
-    modelo: norte_frontend::timeline::Timeline,
-    /// La petición en vuelo: su testigo y desde dónde se pidió.
-    en_vuelo: Option<(RequestToken, Option<i64>)>,
-    /// Ya se pidió la primera página (contestara lo que contestara). Sin esto
-    /// un journal que no se deja leer se repide tras cada mensaje del actor.
-    pedida: bool,
-    /// Por qué no hay historial que enseñar, ya traducido. Solo lo pone la
-    /// PRIMERA página: sin ella no hay nada que pintar y el motivo va en su
-    /// lugar.
-    motivo: Option<String>,
-    /// El fallo de una página POSTERIOR, ya traducido. Va al pie —las filas
-    /// que sí llegaron siguen ahí, así que el hueco de «vacío» no se pinta— y
-    /// no para la paginación para siempre: se reintenta al volver a bajar.
-    error_pagina: Option<String>,
-    /// El cursor se ha movido desde ese fallo: se puede volver a pedir.
-    reintentar: bool,
-    /// El daemon dejó de avanzar —una página vacía, o un cursor que no
-    /// retrocede—. Se trata como el final: uno honesto nunca lo hace, y uno
-    /// que lo hiciera provocaría una petición tras cada mensaje del actor.
-    agotada: bool,
-    /// Tras una recarga, a qué fila volver: su `seq`. Sin esto, cada Task que
-    /// terminara devolvería el cursor arriba mientras alguien lo mira.
-    volver_a: Option<i64>,
+pub(super) struct StateLine {
+    /// The rows and the cursor. The SHARED state.
+    model: norte_frontend::timeline::Timeline,
+    /// The request in flight: its token and where it was requested from.
+    in_flight: Option<(RequestToken, Option<i64>)>,
+    /// The first page has already been requested (whatever it answered).
+    /// Without this, a journal that cannot be read would be retried after
+    /// every actor message.
+    requested: bool,
+    /// Why there is no history to show, already translated. Only the FIRST
+    /// page sets it: without it there is nothing to paint and the reason goes
+    /// in its place.
+    reason: Option<String>,
+    /// The failure of a LATER page, already translated. It goes in the
+    /// footer — the rows that did arrive are still there, so the "empty" slot
+    /// is not painted — and it does not stop pagination forever: it is
+    /// retried on scrolling down again.
+    page_error: Option<String>,
+    /// The cursor has moved since that failure: it can be requested again.
+    retry: bool,
+    /// The daemon stopped advancing — an empty page, or a cursor that does
+    /// not go back. Treated as the end: an honest one never does this, and
+    /// one that did would trigger a request after every actor message.
+    exhausted: bool,
+    /// After a reload, which row to return to: its `seq`. Without this, every
+    /// Task that finished would send the cursor back to the top while someone
+    /// is looking at it.
+    return_to: Option<i64>,
 }
 
-impl Estado {
-    /// Pide lo que les falte a las líneas de tiempo colocadas: la primera
-    /// página cuando aparece su hueco, y la siguiente cuando el cursor llega a
-    /// la última fila cargada.
+impl State {
+    /// Requests whatever the placed timelines are missing: the first page
+    /// when their slot appears, and the next one when the cursor reaches the
+    /// last loaded row.
     ///
-    /// Se llama tras CADA mensaje del actor, así que lo primero es salir
-    /// barato: sin ningún hueco de línea de tiempo no hay nada que recorrer.
+    /// Called after EVERY actor message, so the first thing is to bail out
+    /// cheaply: with no timeline slot at all there is nothing to walk.
     ///
-    /// Un hueco nuevo empieza de cero, y por eso cerrar y volver a abrir el
-    /// panel RELEE el historial: entre medias ha podido pasar cualquier cosa
-    /// —lo normal es hacer cosas con el panel cerrado—, y uno que enseña el de
-    /// hace un rato es peor que uno vacío.
-    pub(super) fn sondear_lineas(
+    /// A new slot starts from scratch, and that is why closing and reopening
+    /// the panel REREADS the history: anything could have happened in
+    /// between — it is normal to do things with the panel closed — and one
+    /// that shows what was there a while ago is worse than an empty one.
+    pub(super) fn probe_lines(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) {
-        let huecos: Vec<u32> = self
-            .reparto
+        let slots: Vec<u32> = self
+            .split
             .placements
             .iter()
-            .filter(|(slot, _)| kind_de(&self.arbol, *slot).is_some_and(|k| k.as_str() == KIND))
+            .filter(|(slot, _)| kind_de(&self.tree, *slot).is_some_and(|k| k.as_str() == KIND))
             .map(|(SlotId(id), _)| *id)
             .collect();
-        if huecos.is_empty() && self.lineas.is_empty() {
+        if slots.is_empty() && self.lines.is_empty() {
             return;
         }
-        // Un `SlotId` se reutiliza: sin podar, un hueco nuevo heredaría el
-        // historial de otro.
-        self.lineas.retain(|id, _| huecos.contains(id));
-        for id in huecos {
-            let est = self.lineas.entry(id).or_default();
-            if est.en_vuelo.is_some() || est.motivo.is_some() {
+        // A `SlotId` gets reused: without pruning, a new slot would inherit
+        // another one's history.
+        self.lines.retain(|id, _| slots.contains(id));
+        for id in slots {
+            let state = self.lines.entry(id).or_default();
+            if state.in_flight.is_some() || state.reason.is_some() {
                 continue;
             }
-            let desde = if est.pedida {
-                // Llegar abajo pide la siguiente página, y es el único momento
-                // en que se pide más: cargar el journal entero al abrir traería
-                // meses de historial para enseñar diez filas.
-                let abajo = !est.modelo.is_empty() && est.modelo.cursor() + 1 >= est.modelo.len();
-                // Y no más allá de lo que el puente deja cruzar: una fila
-                // cargada que no se manda es un cursor sobre algo invisible.
-                let cabe = est.modelo.len() < crate::bridge::MAX_ROWS_PER_BATCH;
-                let puede = est.error_pagina.is_none() || est.reintentar;
-                match est.modelo.next_before_seq() {
-                    Some(s) if abajo && cabe && puede && !est.agotada => Some(s),
+            let from = if state.requested {
+                // Reaching the bottom requests the next page, and it is the
+                // only moment more is requested: loading the whole journal on
+                // opening would bring months of history to show ten rows.
+                let bottom =
+                    !state.model.is_empty() && state.model.cursor() + 1 >= state.model.len();
+                // And no further than what the bridge lets cross: a loaded
+                // row that is not sent is a cursor over something invisible.
+                let fits = state.model.len() < crate::bridge::MAX_ROWS_PER_BATCH;
+                let allowed = state.page_error.is_none() || state.retry;
+                match state.model.next_before_seq() {
+                    Some(s) if bottom && fits && allowed && !state.exhausted => Some(s),
                     _ => continue,
                 }
             } else {
@@ -101,218 +106,220 @@ impl Estado {
             };
             self.token += 1;
             let token = RequestToken(self.token);
-            if let Some(e) = self.lineas.get_mut(&id) {
-                e.en_vuelo = Some((token, desde));
+            if let Some(e) = self.lines.get_mut(&id) {
+                e.in_flight = Some((token, from));
             }
             let backend = Arc::clone(backend);
-            let buzon = buzon.clone();
+            let mailbox = mailbox.clone();
             tokio::spawn(async move {
                 let res = match tokio::time::timeout(
-                    PLAZO_PLUGINS,
-                    backend.journal_list(desde, POR_PAGINA),
+                    DEADLINE_PLUGINS,
+                    backend.journal_list(from, PER_PAGE),
                 )
                 .await
                 {
                     Ok(r) => r,
                     Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
                 };
-                let _ = buzon
-                    .send(Mensaje::Fondo(Box::new(Fondo::PaginaDeLinea(
-                        id, token, desde, res,
+                let _ = mailbox
+                    .send(Message::Background(Box::new(Background::TimelinePage(
+                        id, token, from, res,
                     ))))
                     .await;
             });
         }
     }
 
-    /// Aterriza una página: se usa si el testigo es el de la última petición
-    /// de ESE hueco, y se tira si no.
-    pub(super) fn aterrizar_pagina(
+    /// Lands a page: it is used if the token is that of THAT slot's last
+    /// request, and discarded otherwise.
+    pub(super) fn land_page(
         &mut self,
         slot: u32,
         token: RequestToken,
-        desde: Option<i64>,
+        from: Option<i64>,
         res: Result<norte_proto::methods::JournalListResult, Error>,
     ) -> Option<BridgeEnvelope<UiUpdate>> {
         let lang = self.lang;
-        let est = self.lineas.get_mut(&slot)?;
-        if est.en_vuelo.map(|(t, _)| t) != Some(token) {
+        let state = self.lines.get_mut(&slot)?;
+        if state.in_flight.map(|(t, _)| t) != Some(token) {
             return None;
         }
-        est.en_vuelo = None;
-        est.pedida = true;
-        match (res, desde) {
-            (Ok(pagina), None) => {
-                est.modelo =
-                    norte_frontend::timeline::Timeline::new(&pagina.rows, pagina.next_before_seq);
-                // Una recarga vuelve a la fila que tenía el cursor, si sigue.
-                if let Some(seq) = est.volver_a.take()
-                    && let Some(i) = est.modelo.rows().iter().position(|r| r.seq == seq)
+        state.in_flight = None;
+        state.requested = true;
+        match (res, from) {
+            (Ok(page), None) => {
+                state.model =
+                    norte_frontend::timeline::Timeline::new(&page.rows, page.next_before_seq);
+                // A reload returns to the row the cursor had, if it is still
+                // there.
+                if let Some(seq) = state.return_to.take()
+                    && let Some(i) = state.model.rows().iter().position(|r| r.seq == seq)
                 {
-                    est.modelo.set_cursor(i);
+                    state.model.set_cursor(i);
                 }
             }
-            (Ok(pagina), Some(d)) => {
-                if pagina.rows.is_empty() || pagina.next_before_seq.is_some_and(|n| n >= d) {
-                    est.agotada = true;
+            (Ok(page), Some(d)) => {
+                if page.rows.is_empty() || page.next_before_seq.is_some_and(|n| n >= d) {
+                    state.exhausted = true;
                 }
-                est.modelo.extend(&pagina.rows, pagina.next_before_seq);
-                est.error_pagina = None;
+                state.model.extend(&page.rows, page.next_before_seq);
+                state.page_error = None;
             }
-            // Un daemon sin journal, o que no conoce el método: aquí no hay
-            // historial que enseñar, y se DICE.
+            // A daemon with no journal, or one that does not know the method:
+            // here there is no history to show, and it is SAID.
             (Err(Error::Unsupported), None) => {
-                est.motivo = Some(norte_i18n::t_in(lang, "timeline-unavailable"));
+                state.reason = Some(norte_i18n::t_in(lang, "timeline-unavailable"));
             }
             (Err(e), None) => {
-                est.motivo = Some(clamp_display(norte_frontend::error::error_category_in(
+                state.reason = Some(clamp_display(norte_frontend::error::error_category_in(
                     lang, &e,
                 )));
             }
             (Err(e), Some(_)) => {
-                est.error_pagina = Some(clamp_display(norte_frontend::error::error_category_in(
+                state.page_error = Some(clamp_display(norte_frontend::error::error_category_in(
                     lang, &e,
                 )));
-                est.reintentar = false;
+                state.retry = false;
             }
         }
         let snap = self.snapshot();
-        Some(self.sobre(UiUpdate::Snapshot(Box::new(snap))))
+        Some(self.over(UiUpdate::Snapshot(Box::new(snap))))
     }
 
-    /// Vuelve a pedir la primera página de las líneas abiertas, conservando la
-    /// fila del cursor.
+    /// Requests the first page again for the open timelines, keeping the
+    /// cursor's row.
     ///
-    /// Se llama cuando termina una Task: con el panel ABIERTO —que es lo
-    /// normal en un hueco lateral— lo que se acaba de hacer, o de deshacer,
-    /// tiene que aparecer. El techo (`upto_seq`) ya impide que un undo pase de
-    /// lo contado; esto es para que lo contado sea lo de ahora.
-    pub(super) fn recargar_lineas(&mut self) {
-        for est in self.lineas.values_mut() {
-            if !est.pedida || est.en_vuelo.is_some() {
+    /// Called when a Task finishes: with the panel OPEN — which is normal for
+    /// a side slot — whatever was just done, or undone, has to show up. The
+    /// ceiling (`upto_seq`) already keeps an undo from going past what was
+    /// counted; this is for what was counted to be what is current.
+    pub(super) fn reload_lines(&mut self) {
+        for state in self.lines.values_mut() {
+            if !state.requested || state.in_flight.is_some() {
                 continue;
             }
-            est.volver_a = est.modelo.selected().map(|r| r.seq);
-            est.pedida = false;
-            est.agotada = false;
-            est.error_pagina = None;
-            est.motivo = None;
+            state.return_to = state.model.selected().map(|r| r.seq);
+            state.requested = false;
+            state.exhausted = false;
+            state.page_error = None;
+            state.reason = None;
         }
     }
 
-    /// El hueco de línea de tiempo con el foco, si lo tiene uno.
-    fn linea_enfocada(&self) -> Option<u32> {
+    /// The timeline slot with focus, if one has it.
+    fn line_focused(&self) -> Option<u32> {
         let SlotId(id) = self.roles.get(RoleId::Active)?;
-        kind_de(&self.arbol, SlotId(id))
+        kind_de(&self.tree, SlotId(id))
             .is_some_and(|k| k.as_str() == KIND)
             .then_some(id)
     }
 
-    /// Si la línea de tiempo tiene el foco (y por tanto `Enter` es suyo).
-    pub(super) fn linea_tiene_el_foco(&self) -> bool {
-        self.linea_enfocada().is_some()
+    /// Whether the timeline has focus (and therefore `Enter` belongs to it).
+    pub(super) fn the_line_has_focus(&self) -> bool {
+        self.line_focused().is_some()
     }
 
-    /// El movimiento, con la línea de tiempo enfocada. Solo los TRES efectos
-    /// de movimiento son suyos; lo demás —el tabulador con el que se sale,
-    /// sobre todo— sigue su camino.
-    pub(super) fn efecto_en_linea(
+    /// Movement, with the timeline focused. Only the THREE movement effects
+    /// are its own; everything else — the tab key that exits it, above all —
+    /// goes its own way.
+    pub(super) fn timeline_effect(
         &mut self,
-        efecto: Efecto,
+        effect: Effect,
     ) -> Option<(ActionAck, Vec<BridgeEnvelope<UiUpdate>>)> {
         if !matches!(
-            efecto,
-            Efecto::Cursor(_) | Efecto::Pagina(_) | Efecto::Extremo { .. }
+            effect,
+            Effect::Cursor(_) | Effect::Page(_) | Effect::End { .. }
         ) {
             return None;
         }
-        let id = self.linea_enfocada()?;
-        let est = self.lineas.get_mut(&id)?;
-        // Hasta la última fila que CRUZA el puente: más allá, el cursor
-        // señalaría una fila que el renderer no tiene.
-        let filas = est.modelo.len().min(crate::bridge::MAX_ROWS_PER_BATCH);
-        // Moverse es lo que autoriza a volver a pedir una página que falló.
-        est.reintentar = true;
-        if filas == 0 {
-            return Some((self.aplicada(), Vec::new()));
+        let id = self.line_focused()?;
+        let state = self.lines.get_mut(&id)?;
+        // Up to the last row that CROSSES the bridge: beyond that, the cursor
+        // would point at a row the renderer does not have.
+        let rows = state.model.len().min(crate::bridge::MAX_ROWS_PER_BATCH);
+        // Moving is what authorizes requesting a failed page again.
+        state.retry = true;
+        if rows == 0 {
+            return Some((self.applied(), Vec::new()));
         }
-        let total = i64::try_from(filas).unwrap_or(i64::MAX);
-        let actual = i64::try_from(est.modelo.cursor()).unwrap_or(0);
-        let destino = match efecto {
-            Efecto::Cursor(n) => actual.saturating_add(n.clamp(-total, total)),
-            // Una página son diez filas, como la lista de la TUI cuando no
-            // sabe cuánto mide: saltar más de lo que hay no significa nada.
-            Efecto::Pagina(n) => actual.saturating_add(n.clamp(-total, total).saturating_mul(10)),
-            Efecto::Extremo { al_final: false } => 0,
-            Efecto::Extremo { al_final: true } => total - 1,
+        let total = i64::try_from(rows).unwrap_or(i64::MAX);
+        let current = i64::try_from(state.model.cursor()).unwrap_or(0);
+        let target = match effect {
+            Effect::Cursor(n) => current.saturating_add(n.clamp(-total, total)),
+            // A page is ten rows, like the TUI's list when it does not know
+            // how tall it is: jumping further than there is means nothing.
+            Effect::Page(n) => current.saturating_add(n.clamp(-total, total).saturating_mul(10)),
+            Effect::End { al_final: false } => 0,
+            Effect::End { al_final: true } => total - 1,
             _ => return None,
         };
-        est.modelo
-            .set_cursor(usize::try_from(destino.max(0)).unwrap_or(0));
+        state
+            .model
+            .set_cursor(usize::try_from(target.max(0)).unwrap_or(0));
         let snap = self.snapshot();
         Some((
-            self.aplicada(),
-            vec![self.sobre(UiUpdate::Snapshot(Box::new(snap)))],
+            self.applied(),
+            vec![self.over(UiUpdate::Snapshot(Box::new(snap)))],
         ))
     }
 
-    /// `Enter` en la línea de tiempo: pregunta antes de deshacer hasta la fila
-    /// del cursor, con el RECUENTO.
+    /// `Enter` on the timeline: asks before undoing up to the cursor's row,
+    /// with the COUNT.
     ///
-    /// Un corte que no se lleva nada NO abre un diálogo: preguntar «¿seguro?»
-    /// por algo que no va a pasar enseña a decir que sí sin leer.
-    pub(super) fn preguntar_deshacer_hasta(
-        &mut self,
-    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(id) = self.linea_enfocada() else {
-            return (self.aplicada(), Vec::new());
+    /// A cut that takes nothing back does NOT open a dialog: asking "are you
+    /// sure?" about something that is not going to happen teaches saying yes
+    /// without reading.
+    pub(super) fn ask_undo_until(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(id) = self.line_focused() else {
+            return (self.applied(), Vec::new());
         };
-        let Some(est) = self.lineas.get(&id) else {
-            return (self.aplicada(), Vec::new());
+        let Some(state) = self.lines.get(&id) else {
+            return (self.applied(), Vec::new());
         };
-        let (Some(seq), resumen) = (est.modelo.corte(), est.modelo.resumen()) else {
-            return (self.aplicada(), Vec::new());
+        let (Some(seq), summary) = (state.model.cutoff(), state.model.summary()) else {
+            return (self.applied(), Vec::new());
         };
-        // El techo se congela AHORA, con el recuento que se va a enseñar: el
-        // undo no pasa de lo que esta pregunta contó.
-        let techo = est.modelo.techo();
-        if resumen.no_hace_nada() {
-            return (self.aplicada(), self.decir("timeline-undo-nothing"));
+        // The ceiling freezes NOW, with the count that is about to be shown:
+        // the undo does not go past what this question counted.
+        let ceiling = state.model.techo();
+        if summary.no_does_nothing() {
+            return (self.applied(), self.say("timeline-undo-nothing"));
         }
-        if self.efectos == crate::commands::Efectos::SoloLectura {
-            return Self::no_muta();
+        if self.effects == crate::commands::Effects::SoloRead {
+            return Self::no_mutates();
         }
-        let linea = |texto: String| crate::dto::DialogLine {
-            text: clamp_display(texto),
+        let line = |text: String| crate::dto::DialogLine {
+            text: clamp_display(text),
             hostile: false,
         };
-        // Los tres números en líneas distintas porque significan cosas
-        // distintas y no se suman. Lo que se salta y lo ajeno sólo si lo hay.
+        // The three numbers on separate lines because they mean different
+        // things and are not added together. What is skipped and what is
+        // foreign only if there is any.
         let mut body = vec![
-            linea(norte_i18n::t_in(self.lang, "timeline-undo-body")),
-            linea(norte_i18n::ta_in(
+            line(norte_i18n::t_in(self.lang, "timeline-undo-body")),
+            line(norte_i18n::ta_in(
                 self.lang,
                 "timeline-undo-count",
-                &[("n", &resumen.a_deshacer.to_string())],
+                &[("n", &summary.to_undo.to_string())],
             )),
         ];
-        if resumen.irreversibles > 0 {
-            body.push(linea(norte_i18n::ta_in(
+        if summary.irreversible > 0 {
+            body.push(line(norte_i18n::ta_in(
                 self.lang,
                 "timeline-undo-skipped",
-                &[("n", &resumen.irreversibles.to_string())],
+                &[("n", &summary.irreversible.to_string())],
             )));
         }
-        if resumen.ajenas > 0 {
-            body.push(linea(norte_i18n::ta_in(
+        if summary.foreign > 0 {
+            body.push(line(norte_i18n::ta_in(
                 self.lang,
                 "timeline-undo-foreign",
-                &[("n", &resumen.ajenas.to_string())],
+                &[("n", &summary.foreign.to_string())],
             )));
         }
-        let modal = ModalId(self.siguiente_modal);
-        self.siguiente_modal += 1;
-        let vista = DialogView {
+        let modal = ModalId(self.next_modal);
+        self.next_modal += 1;
+        let view = DialogView {
             id: modal,
             title_key: "timeline-undo-title".to_owned(),
             destination: None,
@@ -327,8 +334,8 @@ impl Estado {
                 DialogChoice {
                     id: "confirm".to_owned(),
                     label_key: "dialog-confirm".to_owned(),
-                    // Deshacer ESCRIBE: mueve ficheros de vuelta y borra lo
-                    // que se creó.
+                    // Undo WRITES: it moves files back and deletes what was
+                    // created.
                     destructive: true,
                 },
                 DialogChoice {
@@ -343,109 +350,112 @@ impl Estado {
             fields: Vec::new(),
             dest_check: crate::dto::DestCheckView::NotAsked,
         };
-        self.dialogos.push(Dialogo {
+        self.dialogs.push(Dialog {
             id: modal,
-            vista,
-            tecleado: Tecleado::Texto(String::new()),
-            reconocido: true,
-            al_confirmar: Some(Pendiente::DeshacerHasta { seq, techo }),
+            vista: view,
+            typed: Typed::Text(String::new()),
+            recognized: true,
+            on_confirm: Some(Pending::UndoUntil {
+                seq,
+                techo: ceiling,
+            }),
         });
-        let cambio = ViewChange::Dialogs {
-            dialogs: self.vistas_de_dialogos(),
+        let change = ViewChange::Dialogs {
+            dialogs: self.dialog_views(),
         };
-        (self.aplicada(), vec![self.parche(vec![cambio])])
+        (self.applied(), vec![self.parche(vec![change])])
     }
 
-    /// El humano leyó el recuento y dijo que sí: corre como Task de undo, con
-    /// el progreso y la cancelación de siempre. Lo que pasó lo cuenta su
-    /// informe, que esta ventana ya enseña (`informe_de_undo`).
-    pub(super) fn deshacer_hasta(
+    /// The human read the count and said yes: it runs as an undo Task, with
+    /// the usual progress and cancellation. What happened is told by its
+    /// report, which this window already shows (`undo_report`).
+    pub(super) fn undo_until(
         &mut self,
         seq: i64,
         techo: Option<i64>,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        // Sin alcance conocido, como el de una sesión: se relista lo que está
-        // en pantalla.
-        let visibles = self.dirs_visibles();
+        // With no known scope, like a session's: what is on screen is
+        // relisted.
+        let visible = self.dirs_visible();
         let backend = Arc::clone(backend);
-        let buzon = buzon.clone();
+        let mailbox = mailbox.clone();
         tokio::spawn(async move {
             match backend.undo_after(seq, techo).await {
                 Ok(task) => {
-                    let _ = buzon
-                        .send(Mensaje::TaskNueva(Box::new((task, visibles, None))))
+                    let _ = mailbox
+                        .send(Message::TaskNew(Box::new((task, visible, None))))
                         .await;
                 }
                 Err(e) => {
-                    let _ = buzon.send(Mensaje::TaskFallida(Box::new(e))).await;
+                    let _ = mailbox.send(Message::TaskFailed(Box::new(e))).await;
                 }
             }
         });
-        self.decir("msg-timeline-undo-running")
+        self.say("msg-timeline-undo-running")
     }
 
-    /// La proyección de una línea de tiempo.
-    pub(super) fn vista_de_linea(&self, id: u32) -> crate::dto::TimelineSlotView {
-        let est = self.lineas.get(&id);
-        let rows: Vec<crate::dto::TimelineRowView> = est
+    /// A timeline's projection.
+    pub(super) fn timeline_view(&self, id: u32) -> crate::dto::TimelineSlotView {
+        let state = self.lines.get(&id);
+        let rows: Vec<crate::dto::TimelineRowView> = state
             .map(|e| {
-                e.modelo
+                e.model
                     .rows()
                     .iter()
                     .take(crate::bridge::MAX_ROWS_PER_BATCH)
                     .map(|f| {
-                        let mut cola = Vec::new();
+                        let mut tail = Vec::new();
                         if f.members > 1 {
-                            cola.push(norte_i18n::ta_in(
+                            tail.push(norte_i18n::ta_in(
                                 self.lang,
                                 "timeline-batch",
                                 &[("n", &f.members.to_string())],
                             ));
                         }
                         if !f.reversible {
-                            cola.push(norte_i18n::t_in(self.lang, "timeline-irreversible"));
+                            tail.push(norte_i18n::t_in(self.lang, "timeline-irreversible"));
                         }
                         crate::dto::TimelineRowView {
-                            time: norte_frontend::format::hora_utc(f.ts_ms),
+                            time: norte_frontend::format::time_utc(f.ts_ms),
                             actor: clamp_display(f.actor_kind.clone()),
                             op: clamp_display(f.op.clone()),
                             path: clamp_display(norte_frontend::timeline::path_label(&f.path)),
                             hostile: f.hostile,
-                            tail: cola.join(" · "),
+                            tail: tail.join(" · "),
                         }
                     })
                     .collect()
             })
             .unwrap_or_default();
-        let empty = match est {
-            Some(e) if e.motivo.is_some() => e.motivo.clone().unwrap_or_default(),
-            // «Todavía no se ha hecho nada» sólo cuando SE HA MIRADO.
-            Some(e) if e.modelo.cargada() => norte_i18n::t_in(self.lang, "timeline-empty"),
+        let empty = match state {
+            Some(e) if e.reason.is_some() => e.reason.clone().unwrap_or_default(),
+            // "Nothing has been done yet" only when it HAS BEEN CHECKED.
+            Some(e) if e.model.loaded() => norte_i18n::t_in(self.lang, "timeline-empty"),
             _ => norte_i18n::t_in(self.lang, "timeline-loading"),
         };
-        let solo_lectura = self.efectos == crate::commands::Efectos::SoloLectura;
-        let footer = est
-            .filter(|e| !e.modelo.is_empty())
+        let read_only = self.effects == crate::commands::Effects::SoloRead;
+        let footer = state
+            .filter(|e| !e.model.is_empty())
             .map(|e| {
-                let c = e.modelo.resumen();
-                // Una página que no llegó se dice aquí: las filas que sí
-                // llegaron ocupan el hueco, así que el motivo no tiene otro
-                // sitio donde verse.
-                if let Some(error) = &e.error_pagina {
+                let summary = e.model.summary();
+                // A page that did not arrive is said here: the rows that did
+                // arrive occupy the slot, so the reason has nowhere else to
+                // be seen.
+                if let Some(error) = &e.page_error {
                     error.clone()
-                } else if solo_lectura {
-                    // Un pie que promete deshacer en una ventana que no lo va
-                    // a hacer enseña a no fiarse del pie.
+                } else if read_only {
+                    // A footer that promises to undo in a window that is not
+                    // going to do it teaches you not to trust the footer.
                     norte_i18n::t_in(self.lang, "host-read-only")
-                } else if c.no_hace_nada() {
+                } else if summary.no_does_nothing() {
                     norte_i18n::t_in(self.lang, "timeline-undo-nothing")
                 } else {
                     norte_i18n::ta_in(
                         self.lang,
                         "timeline-undo-count",
-                        &[("n", &c.a_deshacer.to_string())],
+                        &[("n", &summary.to_undo.to_string())],
                     )
                 }
             })
@@ -453,9 +463,9 @@ impl Estado {
         crate::dto::TimelineSlotView {
             slot_id: id,
             title: norte_i18n::t_in(self.lang, "timeline-title"),
-            cursor: est
-                .filter(|e| !e.modelo.is_empty())
-                .map(|e| e.modelo.cursor() as u64),
+            cursor: state
+                .filter(|e| !e.model.is_empty())
+                .map(|e| e.model.cursor() as u64),
             rows,
             empty,
             footer,

@@ -1,6 +1,6 @@
-//! El provider de punta a punta: con el delegado instalado donde hace falta,
-//! y con el índice fijado donde la política no necesita un `.rar` que la
-//! contenga.
+//! The provider end-to-end: with the delegate installed where needed, and
+//! with the index pinned where policy does not need a `.rar` that genuinely
+//! contains it.
 
 use futures::StreamExt;
 use norte_proto::{ByteRange, Error, Scheme, Segment, VPath};
@@ -8,7 +8,7 @@ use norte_testkit::RarSmith;
 use norte_vfs::Provider;
 use norte_vfs_rar::{ArchiveIndex, Delegate, RarLimits, RarProvider, RawEntry};
 
-/// El `VPath` `rar+file://…/!/…` de un archivo del host.
+/// A host archive's `VPath` `rar+file://…/!/…`.
 fn rar_root(archive: &std::path::Path) -> VPath {
     use std::os::unix::ffi::OsStrExt;
     let mut outer = VPath::root(Scheme::new("file").unwrap(), None);
@@ -27,7 +27,7 @@ async fn names(p: &RarProvider, at: &VPath) -> Vec<Vec<u8>> {
         .await
         .expect("list")
         .map(|e| {
-            e.expect("entrada")
+            e.expect("entry")
                 .path
                 .file_name()
                 .unwrap()
@@ -53,8 +53,8 @@ fn write_rar(path: &std::path::Path, bytes: Vec<u8>) {
     std::fs::write(path, bytes).unwrap();
 }
 
-/// El provider del `.rar` en `path`, o `None` si esta máquina no trae ningún
-/// delegado (y entonces el test se retira diciéndolo).
+/// The provider for the `.rar` at `path`, or `None` if this machine brings
+/// no delegate at all (in which case the test bows out saying so).
 fn provider(path: &std::path::Path) -> Option<RarProvider> {
     let delegate = Delegate::discover().ok()?;
     Some(RarProvider::new(
@@ -65,18 +65,18 @@ fn provider(path: &std::path::Path) -> Option<RarProvider> {
 }
 
 #[tokio::test]
-async fn listar_y_leer_contra_un_delegado_real() {
+async fn listing_and_reading_against_a_real_delegate() {
     let dir = tempfile::tempdir().unwrap();
     let archive = dir.path().join("t.rar");
     write_rar(
         &archive,
         RarSmith::new()
-            .file(b"docs/hello.txt", b"hola norte\n")
+            .file(b"docs/hello.txt", b"hello norte\n")
             .file(b"cp437-\xa4\xa5.txt", b"bytes\n")
             .build(),
     );
     let Some(p) = provider(&archive) else {
-        eprintln!("sin delegado instalado: test retirado");
+        eprintln!("no delegate installed: test withdrawn");
         return;
     };
     let root = rar_root(&archive);
@@ -85,73 +85,73 @@ async fn listar_y_leer_contra_un_delegado_real() {
     assert_eq!(top, vec![b"cp437-\xa4\xa5.txt".to_vec(), b"docs".to_vec()]);
 
     let leaf = child(&child(&root, b"docs"), b"hello.txt");
-    assert_eq!(read_all(&p, &leaf, None).await, b"hola norte\n");
+    assert_eq!(read_all(&p, &leaf, None).await, b"hello norte\n");
     let stat = p.stat(&leaf).await.expect("stat");
-    assert_eq!(stat.size, Some(11));
+    assert_eq!(stat.size, Some(12));
     assert_eq!(p.list_skipped(&root).await.unwrap(), Some(0));
 }
 
 #[tokio::test]
-async fn un_rango_devuelve_el_tramo_y_no_espera_al_resto() {
+async fn a_range_returns_the_slice_and_does_not_wait_for_the_rest() {
     let dir = tempfile::tempdir().unwrap();
     let archive = dir.path().join("t.rar");
     write_rar(
         &archive,
-        RarSmith::new().file(b"hello.txt", b"hola norte\n").build(),
+        RarSmith::new().file(b"hello.txt", b"hello norte\n").build(),
     );
     let Some(p) = provider(&archive) else {
-        eprintln!("sin delegado instalado: test retirado");
+        eprintln!("no delegate installed: test withdrawn");
         return;
     };
     let leaf = child(&rar_root(&archive), b"hello.txt");
     let range = Some(ByteRange {
-        offset: 5,
+        offset: 6,
         len: Some(5),
     });
-    // `hola norte\n`: el byte 5 es la `n`, no el espacio.
+    // `hello norte\n`: byte 6 is the `n`, not the space.
     assert_eq!(read_all(&p, &leaf, range).await, b"norte");
-    let hasta_el_final = Some(ByteRange {
-        offset: 5,
+    let to_the_end = Some(ByteRange {
+        offset: 6,
         len: None,
     });
-    assert_eq!(read_all(&p, &leaf, hasta_el_final).await, b"norte\n");
+    assert_eq!(read_all(&p, &leaf, to_the_end).await, b"norte\n");
 }
 
-/// MEDIDO: los dos delegados tratan el nombre como patrón. Con el gemelo
-/// dentro, pedir la entrada `star?name.txt` sacaría DOS ficheros pegados y
-/// el flujo parecería sano — así que se rehúsa.
+/// MEASURED: both delegates treat the name as a pattern. With the twin
+/// present, asking for the `star?name.txt` entry would pull out TWO files
+/// stuck together and the stream would look healthy — so it is refused.
 #[tokio::test]
-async fn un_nombre_que_es_glob_de_otro_no_se_lee_pero_si_se_lista() {
+async fn a_name_that_is_another_ones_glob_is_not_read_but_is_listed() {
     let dir = tempfile::tempdir().unwrap();
     let archive = dir.path().join("t.rar");
     write_rar(
         &archive,
         RarSmith::new()
-            .file(b"star?name.txt", b"patron\n")
-            .file(b"starXname.txt", b"gemelo\n")
+            .file(b"star?name.txt", b"pattern\n")
+            .file(b"starXname.txt", b"twin\n")
             .build(),
     );
     let Some(p) = provider(&archive) else {
-        eprintln!("sin delegado instalado: test retirado");
+        eprintln!("no delegate installed: test withdrawn");
         return;
     };
     let root = rar_root(&archive);
-    assert_eq!(names(&p, &root).await.len(), 2, "las dos se LISTAN");
-    let ambigua = child(&root, b"star?name.txt");
+    assert_eq!(names(&p, &root).await.len(), 2, "both are LISTED");
+    let ambiguous = child(&root, b"star?name.txt");
     assert!(
-        matches!(p.read(&ambigua, None).await, Err(Error::Unsupported)),
-        "la ambigua se rehúsa"
+        matches!(p.read(&ambiguous, None).await, Err(Error::Unsupported)),
+        "the ambiguous one is refused"
     );
     let literal = child(&root, b"starXname.txt");
-    assert_eq!(read_all(&p, &literal, None).await, b"gemelo\n");
+    assert_eq!(read_all(&p, &literal, None).await, b"twin\n");
 }
 
-/// El flag viene del parser: no hace falta un `.rar` cifrado de verdad para
-/// fijar la política.
+/// The flag comes from the parser: no genuinely encrypted `.rar` is needed
+/// to pin the policy.
 #[tokio::test]
-async fn una_entrada_cifrada_se_lista_y_se_niega_a_leerse() {
+async fn an_encrypted_entry_is_listed_and_refuses_to_be_read() {
     let index = ArchiveIndex::from_raw(vec![RawEntry {
-        name: b"secreto.txt".to_vec(),
+        name: b"secret.txt".to_vec(),
         size: 10,
         is_dir: false,
         mtime: None,
@@ -159,26 +159,23 @@ async fn una_entrada_cifrada_se_lista_y_se_niega_a_leerse() {
         solid: false,
     }]);
     let p = RarProvider::with_index_for_test(index);
-    let leaf = child(
-        &rar_root(std::path::Path::new("/tmp/t.rar")),
-        b"secreto.txt",
-    );
-    assert!(p.stat(&leaf).await.is_ok(), "cifrada pero VISIBLE");
+    let leaf = child(&rar_root(std::path::Path::new("/tmp/t.rar")), b"secret.txt");
+    assert!(p.stat(&leaf).await.is_ok(), "encrypted but VISIBLE");
     assert!(
         matches!(p.read(&leaf, None).await, Err(Error::Unsupported)),
-        "leerla es lo que no se puede, y se dice"
+        "reading it is what cannot happen, and it says so"
     );
 }
 
-/// Misma invalidación que `norte-vfs-archive`: `(mtime, size)`. Un índice
-/// rancio enseña ficheros que ya no están.
+/// Same invalidation as `norte-vfs-archive`: `(mtime, size)`. A stale index
+/// would show files that are no longer there.
 #[tokio::test]
-async fn tocar_el_archivo_invalida_el_indice_cacheado() {
+async fn touching_the_archive_invalidates_the_cached_index() {
     let dir = tempfile::tempdir().unwrap();
     let archive = dir.path().join("t.rar");
-    write_rar(&archive, RarSmith::new().file(b"uno.txt", b"1\n").build());
+    write_rar(&archive, RarSmith::new().file(b"one.txt", b"1\n").build());
     let Some(p) = provider(&archive) else {
-        eprintln!("sin delegado instalado: test retirado");
+        eprintln!("no delegate installed: test withdrawn");
         return;
     };
     let root = rar_root(&archive);
@@ -186,30 +183,30 @@ async fn tocar_el_archivo_invalida_el_indice_cacheado() {
     write_rar(
         &archive,
         RarSmith::new()
-            .file(b"uno.txt", b"1\n")
-            .file(b"dos.txt", b"2\n")
+            .file(b"one.txt", b"1\n")
+            .file(b"two.txt", b"2\n")
             .build(),
     );
     assert_eq!(
         names(&p, &root).await.len(),
         2,
-        "el índice se reconstruyó al cambiar el archivo"
+        "the index was rebuilt when the archive changed"
     );
 }
 
 #[tokio::test]
-async fn toda_mutacion_responde_unsupported() {
+async fn every_mutation_answers_unsupported() {
     let p = RarProvider::with_index_for_test(ArchiveIndex::from_raw(vec![]));
     let root = rar_root(std::path::Path::new("/tmp/t.rar"));
-    let hijo = child(&root, b"x");
+    let leaf = child(&root, b"x");
     assert!(matches!(
-        p.write(&hijo).await.err(),
+        p.write(&leaf).await.err(),
         Some(Error::Unsupported)
     ));
-    assert!(matches!(p.mkdir(&hijo).await, Err(Error::Unsupported)));
-    assert!(matches!(p.remove(&hijo).await, Err(Error::Unsupported)));
+    assert!(matches!(p.mkdir(&leaf).await, Err(Error::Unsupported)));
+    assert!(matches!(p.remove(&leaf).await, Err(Error::Unsupported)));
     assert!(matches!(
-        p.rename(&hijo, &root).await,
+        p.rename(&leaf, &root).await,
         Err(Error::Unsupported)
     ));
     assert!(
@@ -219,11 +216,11 @@ async fn toda_mutacion_responde_unsupported() {
     );
 }
 
-/// Un `.rar` que no existe no es un listado vacío: es `NotFound`.
+/// A `.rar` that does not exist is not an empty listing: it is `NotFound`.
 #[tokio::test]
-async fn un_archivo_ausente_es_not_found() {
+async fn a_missing_archive_is_not_found() {
     let dir = tempfile::tempdir().unwrap();
-    let archive = dir.path().join("no-existe.rar");
+    let archive = dir.path().join("does-not-exist.rar");
     let Some(p) = provider(&archive) else {
         return;
     };

@@ -1,215 +1,217 @@
-//! El plan de ORGANIZAR y su revisión (fase 8 del programa WOW).
+//! The ORGANIZE plan and its review (phase 8 of the WOW programme).
 //!
-//! Parte de `controller`: son métodos de `Estado`, con la misma disciplina
-//! que el plan de renombrar de al lado (ADR 0086). El único escritor sigue
-//! siendo el actor.
+//! Part of `controller`: these are methods of `State`, with the same
+//! discipline as the rename plan next door (ADR 0086). The only writer is
+//! still the actor.
 //!
-//! **Qué cambia respecto a su gemelo, y por qué.** Renombrar se revisa como
-//! una lista de parejas porque eso es lo que es; organizar cambia la FORMA
-//! del directorio, así que lo que se revisa es un ÁRBOL — el mismo que pinta
-//! el terminal, calculado por [`norte_frontend::organize::tree_lines`]. Y no
-//! hay veredicto que esperar: el token del plan viaja CON el plan, de manera
-//! que esta pantalla nace aprobable en vez de abrir en `Pending`.
+//! **What changes compared to its twin, and why.** Rename is reviewed as a
+//! list of pairs because that is what it is; organize changes the directory's
+//! SHAPE, so what is reviewed is a TREE — the same one the terminal paints,
+//! computed by [`norte_frontend::organize::tree_lines`]. And there is no
+//! verdict to wait for: the plan's token travels WITH the plan, so this
+//! screen is born approvable instead of opening in `Pending`.
 
-// Mismos imports que el padre, por lo mismo que el resto de los trozos.
+// Same imports as the parent, for the same reason as the rest of the pieces.
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
-/// El plan de ORGANIZAR en revisión (fase 8).
+/// The ORGANIZE plan under review (phase 8).
 ///
-/// El gemelo de [`super::ai::RevisionIa`] sin su campo más caro: no hay veredicto que
-/// esperar, porque el token del plan vino CON el plan. Lo demás es idéntico,
-/// y a propósito — es la misma clase de pantalla y la misma defensa.
-pub(super) struct RevisionOrganizar {
-    /// El directorio sobre el que se planeó.
+/// The twin of [`super::ai::RevisionIa`] without its most expensive field:
+/// there is no verdict to wait for, because the plan's token came WITH the
+/// plan. Everything else is identical, and on purpose — it is the same class
+/// of screen and the same defense.
+pub(super) struct RevisionOrganize {
+    /// The directory it was planned over.
     dir: VPath,
-    /// Los movimientos, tal cual los propuso el productor. Es lo que se manda
-    /// a ejecutar, y lo que el `plan_hash` ata.
+    /// The moves, exactly as the producer proposed them. This is what is sent
+    /// to execute, and what `plan_hash` binds.
     moves: Vec<norte_proto::methods::OrganizeMove>,
-    /// El árbol ya calculado, que es lo que se revisa.
-    lineas: Vec<norte_frontend::organize::TreeLine>,
-    /// El token que hay que devolver para aplicarlo.
+    /// The already computed tree, which is what is reviewed.
+    lines: Vec<norte_frontend::organize::TreeLine>,
+    /// The token that has to be returned to apply it.
     plan_hash: norte_proto::methods::PlanHash,
-    /// Primera línea visible: la revisión es de todo el árbol, por scroll.
-    primera: usize,
-    /// Hasta dónde ha LLEGADO el lector. Aprobar lo exige.
-    visto_hasta: usize,
-    /// Ya se ha enseñado al menos una vez, así que la siguiente tecla es una
-    /// respuesta y no una tecla que iba a otro sitio.
-    reconocida: bool,
-    /// La época que la pidió.
-    epoca: u64,
+    /// First visible line: the review is of the whole tree, by scrolling.
+    first: usize,
+    /// How far the reader has GOTTEN TO. Approving requires it.
+    seen_until: usize,
+    /// It has already been shown at least once, so the next key is an answer
+    /// and not a key meant for somewhere else.
+    acknowledged: bool,
+    /// The epoch that requested it.
+    epoch: u64,
 }
 
-impl Estado {
-    /// Pide un plan de organizar sobre el directorio del hueco con foco.
+impl State {
+    /// Requests an organize plan over the focused slot's directory.
     ///
-    /// `organizer` elige el productor: `None` es el modelo, `Some((plugin,
-    /// organizer))` es una extensión del kind `organizer`. Los dos terminan
-    /// en la MISMA revisión, porque lo que hace segura la operación no es de
-    /// dónde salieron los nombres.
+    /// `organizer` chooses the producer: `None` is the model, `Some((plugin,
+    /// organizer))` is an extension of kind `organizer`. Both end up at the
+    /// SAME review, because what makes the operation safe is not where the
+    /// names came from.
     ///
-    /// **Sin prompt de instrucción**, a diferencia de renombrar: lo que se
-    /// pide es «mira este directorio y propón una forma», y una caja de texto
-    /// vacía delante sugeriría que hay algo que teclear.
-    pub(super) fn pedir_plan_de_organizar(
+    /// **No instruction prompt**, unlike rename: what is being asked is "look
+    /// at this directory and propose a shape", and an empty text box in front
+    /// would suggest there is something to type.
+    pub(super) fn request_organize_plan(
         &mut self,
         organizer: Option<(String, String)>,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        // Organizar MUTA (crea carpetas y mueve), así que la cerradura de
-        // solo lectura se echa al PEDIR, no solo al aprobar: enseñar un plan
-        // que no se va a poder aplicar es prometer trabajo.
-        if self.efectos == crate::commands::Efectos::SoloLectura {
-            return Self::no_muta();
+        // Organize MUTATES (creates folders and moves), so the read-only lock
+        // is checked on REQUESTING, not only on approving: showing a plan that
+        // cannot be applied is promising work.
+        if self.effects == crate::commands::Effects::SoloRead {
+            return Self::no_mutates();
         }
-        self.epoca_organizar += 1;
-        let epoca = self.epoca_organizar;
-        let dir = self.hueco().pane.dir().clone();
-        // Los nombres del directorio al PEDIR: el árbol necesita saber qué
-        // carpeta ya existía, y para cuando el productor conteste el lector
-        // puede estar en otro sitio. Sólo los que son TEXTO — el árbol los
-        // compara contra segmentos de un `proposed_rel`, que viaja UTF-8.
-        let existentes = self.hueco().pane.existing_names();
-        // Un plugin NO lista el directorio (regla 9), así que los nombres se
-        // los tiene que dar quien llama: con la lista vacía, un organizer
-        // contesta —correctamente— que no mueve nada. El modelo es el caso
-        // contrario: el engine lista por él, y ahí vacío SÍ significa «todo»,
-        // sin tope que respetar.
-        let operando = self.hueco().pane.organizable_names();
-        if organizer.is_some() && operando.len() > norte_proto::methods::AI_RENAME_NAMES_MAX {
+        self.epoch_organize += 1;
+        let epoch = self.epoch_organize;
+        let dir = self.slot().pane.dir().clone();
+        // The directory's names, at REQUEST time: the tree needs to know
+        // which folder already existed, and by the time the producer answers
+        // the reader may be somewhere else. Only the ones that are TEXT — the
+        // tree compares them against segments of a `proposed_rel`, which
+        // travels UTF-8.
+        let existing = self.slot().pane.existing_names();
+        // A plugin does NOT list the directory (rule 9), so the names have to
+        // be given to it by the caller: with an empty list, an organizer
+        // answers — correctly — that it moves nothing. The model is the
+        // opposite case: the engine lists for it, and there, empty DOES mean
+        // "everything", with no cap to respect.
+        let operable = self.slot().pane.organizable_names();
+        if organizer.is_some() && operable.len() > norte_proto::methods::AI_RENAME_NAMES_MAX {
             self.status.message = Some(clamp_display(norte_i18n::t_in(
                 self.lang,
                 "msg-organize-too-many",
             )));
-            let cambio = ViewChange::Status(self.status.clone());
-            return (self.aplicada(), vec![self.parche(vec![cambio])]);
+            let change = ViewChange::Status(self.status.clone());
+            return (self.applied(), vec![self.parche(vec![change])]);
         }
-        self.organizar_en_vuelo = Some((epoca, dir.clone(), existentes));
-        let b = Arc::clone(backend);
-        let buz = buzon.clone();
+        self.organize_in_flight = Some((epoch, dir.clone(), existing));
+        let backend2 = Arc::clone(backend);
+        let mailbox2 = mailbox.clone();
         tokio::spawn(async move {
-            let peticion = match organizer {
-                Some((plugin, org)) => b.plugin_organize_plan(plugin, org, dir, operando),
-                None => b.ai_organize_plan(dir, String::new(), Vec::new()),
+            let request = match organizer {
+                Some((plugin, org)) => backend2.plugin_organize_plan(plugin, org, dir, operable),
+                None => backend2.ai_organize_plan(dir, String::new(), Vec::new()),
             };
-            let res = (tokio::time::timeout(PLAZO_IA, peticion).await)
+            let res = (tokio::time::timeout(DEADLINE_IA, request).await)
                 .unwrap_or(Err(Error::ProviderUnavailable { retryable: true }));
-            let _ = buz
-                .send(Mensaje::Fondo(Box::new(Fondo::PlanOrganizar(
-                    epoca,
+            let _ = mailbox2
+                .send(Message::Background(Box::new(Background::PlanOrganize(
+                    epoch,
                     Box::new(res),
                 ))))
                 .await;
         });
-        // Y se DICE que se está pidiendo: sin esto el gesto no produce nada
-        // visible y el lector lo repite, que es lo que destapa la carrera de
-        // dos peticiones.
+        // And it is SAID that it is being requested: without this the gesture
+        // produces nothing visible and the reader repeats it, which is what
+        // exposes the race between two requests.
         self.status.message = Some(clamp_display(norte_i18n::t_in(
             self.lang,
             "msg-organize-running",
         )));
-        let cambio = ViewChange::Status(self.status.clone());
-        (self.aplicada(), vec![self.parche(vec![cambio])])
+        let change = ViewChange::Status(self.status.clone());
+        (self.applied(), vec![self.parche(vec![change])])
     }
 
-    /// Lo que contestó el productor, revisado antes de enseñarlo.
+    /// What the producer answered, checked before showing it.
     ///
-    /// Los cinturones son de INGESTIÓN y rechazan EN BLOQUE: un plan más
-    /// grande de lo que un directorio puede tener delata a un daemon hostil
-    /// inflando la respuesta, y un plan sin token no se puede aprobar —
-    /// abrirlo prometería un botón que no puede hacer nada.
-    pub(super) fn aplicar_plan_de_organizar(
+    /// The belts are for INGESTION and reject IN BULK: a plan bigger than
+    /// what a directory can hold gives away a hostile daemon inflating the
+    /// response, and a plan without a token cannot be approved — opening it
+    /// would promise a button that can do nothing.
+    pub(super) fn apply_organize_plan(
         &mut self,
-        epoca: u64,
+        epoch: u64,
         res: Result<norte_proto::methods::AiOrganizePlanResult, Error>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        // La petición en vuelo tiene que ser ESTA. `take_if` y no
-        // `take().filter(...)`: vaciar el hueco antes de mirar deja que una
-        // respuesta vieja se lleve por delante la petición viva.
-        let Some((_, dir, existentes)) = self.organizar_en_vuelo.take_if(|(e, _, _)| *e == epoca)
+        // The request in flight has to be THIS one. `take_if` and not
+        // `take().filter(...)`: emptying the slot before checking would let an
+        // old response take the live request down with it.
+        let Some((_, dir, existing)) = self.organize_in_flight.take_if(|(e, _, _)| *e == epoch)
         else {
             return Vec::new();
         };
         let plan = match res {
             Ok(p) => p,
             Err(e) => {
-                return self.decir_de_organizar(epoca, norte_frontend::error::error_key(&e));
+                return self.say_from_organize(epoch, norte_frontend::error::error_key(&e));
             }
         };
-        // El productor dijo POR QUÉ no propone (#332). La frase viene ya
-        // enmascarada y acotada por el daemon: aquí se enseña, no se
-        // interpreta.
+        // The producer said WHY it does not propose (#332). The phrase
+        // arrives already masked and clamped by the daemon: here it is shown,
+        // not interpreted.
         if let Some(why) = plan.refused {
             self.status.message = Some(clamp_display(norte_i18n::ta_in(
                 self.lang,
                 "msg-rename-plan-refused",
                 &[("why", &why)],
             )));
-            let mut cambios = vec![ViewChange::Status(self.status.clone())];
+            let mut changes = vec![ViewChange::Status(self.status.clone())];
             if self
-                .revision_organizar
-                .take_if(|r| r.epoca == epoca)
+                .revision_organize
+                .take_if(|r| r.epoch == epoch)
                 .is_some()
             {
-                cambios.push(ViewChange::Organize { organize: None });
+                changes.push(ViewChange::Organize { organize: None });
             }
-            return vec![self.parche(cambios)];
+            return vec![self.parche(changes)];
         }
         if plan.moves.is_empty() {
-            return self.decir_de_organizar(epoca, "msg-organize-empty");
+            return self.say_from_organize(epoch, "msg-organize-empty");
         }
         if plan.moves.len() > norte_frontend::MAX_AI_PLAN_ENTRIES {
-            return self.decir_de_organizar(epoca, "msg-organize-invalid-plan");
+            return self.say_from_organize(epoch, "msg-organize-invalid-plan");
         }
         let Some(plan_hash) = plan.plan_hash else {
-            return self.decir_de_organizar(epoca, "msg-organize-invalid-plan");
+            return self.say_from_organize(epoch, "msg-organize-invalid-plan");
         };
-        let lineas = norte_frontend::organize::tree_lines(&plan.moves, &existentes);
-        self.revision_organizar = Some(RevisionOrganizar {
+        let lines = norte_frontend::organize::tree_lines(&plan.moves, &existing);
+        self.revision_organize = Some(RevisionOrganize {
             dir,
             moves: plan.moves,
-            lineas,
+            lines,
             plan_hash,
-            primera: 0,
-            visto_hasta: norte_frontend::organize::ORGANIZE_LINE_LIMIT,
-            reconocida: false,
-            epoca,
+            first: 0,
+            seen_until: norte_frontend::organize::ORGANIZE_LINE_LIMIT,
+            acknowledged: false,
+            epoch,
         });
         self.status.message = None;
-        let cambios = vec![
+        let changes = vec![
             ViewChange::Organize {
-                organize: self.vista_organizar(),
+                organize: self.vista_organize(),
             },
             ViewChange::Status(self.status.clone()),
         ];
-        vec![self.parche(cambios)]
+        vec![self.parche(changes)]
     }
 
-    /// La proyección de la revisión, o `None` si no hay ninguna.
+    /// The review's projection, or `None` if there is none.
     ///
-    /// Los nombres los propone un tercero sobre nombres que escribió
-    /// cualquiera: van por el saneado canónico y cada línea dice si lo
-    /// pintado difiere de lo real.
-    pub(super) fn vista_organizar(&self) -> Option<crate::dto::OrganizeView> {
+    /// The names are proposed by a third party over names anyone could have
+    /// typed: they go through canonical sanitizing, and each line says
+    /// whether what is painted differs from the real thing.
+    pub(super) fn vista_organize(&self) -> Option<crate::dto::OrganizeView> {
         use norte_frontend::organize::{ORGANIZE_LINE_LIMIT, TreeKind};
 
-        let r = self.revision_organizar.as_ref()?;
-        let linea = |texto: &str| {
-            let (pintable, hostil) = norte_frontend::display_name(texto.as_bytes());
+        let r = self.revision_organize.as_ref()?;
+        let line = |text: &str| {
+            let (displayable, hostile) = norte_frontend::display_name(text.as_bytes());
             crate::dto::DialogLine {
-                text: clamp_display(pintable),
-                hostile: hostil,
+                text: clamp_display(displayable),
+                hostile,
             }
         };
-        let total = r.lineas.len();
-        let ultima = (r.primera + ORGANIZE_LINE_LIMIT).min(total);
-        let ventana = r.lineas[r.primera..ultima]
+        let total = r.lines.len();
+        let last = (r.first + ORGANIZE_LINE_LIMIT).min(total);
+        let window = r.lines[r.first..last]
             .iter()
             .map(|l| crate::dto::OrganizeLineView {
                 depth: u32::try_from(l.depth).unwrap_or(u32::MAX),
-                text: linea(&l.text),
+                text: line(&l.text),
                 kind: match l.kind {
                     TreeKind::NewDir => crate::dto::OrganizeLineKind::NewDir,
                     TreeKind::ExistingDir => crate::dto::OrganizeLineKind::ExistingDir,
@@ -217,36 +219,33 @@ impl Estado {
                 },
             })
             .collect();
-        // Lo ESCONDIDO no se cuela limpio: si una línea fuera de la ventana
-        // se pinta distinta de sus bytes, el indicador lo dice. Sin esto la
-        // marca sólo existiría para lo que se ve, y basta con poner la línea
-        // alterada en la posición doce.
-        let hidden_hostile = r.lineas.iter().enumerate().any(|(i, l)| {
-            (i < r.primera || i >= ultima) && norte_frontend::display_name(l.text.as_bytes()).1
+        // What is HIDDEN does not sneak through clean: if a line outside the
+        // window paints differently from its bytes, the indicator says so.
+        // Without this the flag would only exist for what is visible, and it
+        // takes just putting the altered line at position twelve.
+        let hidden_hostile = r.lines.iter().enumerate().any(|(i, l)| {
+            (i < r.first || i >= last) && norte_frontend::display_name(l.text.as_bytes()).1
         });
-        let (carpetas, ficheros) = norte_frontend::organize::resumen(&r.lineas);
+        let (folders, files) = norte_frontend::organize::summary(&r.lines);
         Some(crate::dto::OrganizeView {
             dir: {
-                let (pintable, hostil) = norte_frontend::path_display(&r.dir);
+                let (displayable, hostile) = norte_frontend::path_display(&r.dir);
                 crate::dto::DialogLine {
-                    text: clamp_display(pintable),
-                    hostile: hostil,
+                    text: clamp_display(displayable),
+                    hostile,
                 }
             },
-            lines: ventana,
-            first_visible: r.primera as u64,
+            lines: window,
+            first_visible: r.first as u64,
             total: total as u64,
-            // Traducido AQUÍ y no en el renderer, por lo mismo que la nota
-            // del plan de renombrar: el catálogo que cruza el puente lleva
-            // las cadenas ya formateadas y sin argumentos.
+            // Translated HERE and not in the renderer, for the same reason as
+            // the rename plan's note: the catalogue that crosses the bridge
+            // carries the strings already formatted and with no arguments.
             more_note: if total > ORGANIZE_LINE_LIMIT {
                 clamp_display(norte_i18n::ta_in(
                     self.lang,
                     "modal-ai-rename-more",
-                    &[
-                        ("shown", &ultima.to_string()),
-                        ("total", &total.to_string()),
-                    ],
+                    &[("shown", &last.to_string()), ("total", &total.to_string())],
                 ))
             } else {
                 String::new()
@@ -256,25 +255,25 @@ impl Estado {
                 self.lang,
                 "modal-organize-summary",
                 &[
-                    ("dirs", &carpetas.to_string()),
-                    ("files", &ficheros.to_string()),
+                    ("dirs", &folders.to_string()),
+                    ("files", &files.to_string()),
                 ],
             )),
-            seen_all: r.visto_hasta >= total,
+            seen_all: r.seen_until >= total,
         })
     }
 
-    /// Las teclas de la revisión: recorrer, descartar y aprobar.
+    /// The review's keys: walking, discarding, and approving.
     ///
-    /// Misma disciplina que la revisión de renombrar, y por las mismas dos
-    /// razones: un acorde con modificador iba a otro sitio, y la PRIMERA
-    /// tecla sólo reconoce la pantalla — ésta se abre sola, decenas de
-    /// segundos después del gesto que la pidió, y se queda el teclado.
-    pub(super) fn tecla_en_revision_organizar(
+    /// Same discipline as the rename review, and for the same two reasons: a
+    /// chord with a modifier was meant elsewhere, and the FIRST key only
+    /// acknowledges the screen — this one opens on its own, tens of seconds
+    /// after the gesture that requested it, and it keeps the keyboard.
+    pub(super) fn key_in_organize_review(
         &mut self,
         k: &crate::keys::KeyInput,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         if k.ctrl || k.alt || k.meta {
             return (
@@ -284,66 +283,63 @@ impl Estado {
                 Vec::new(),
             );
         }
-        let reconocida = self
-            .revision_organizar
+        let acknowledged = self
+            .revision_organize
             .as_ref()
-            .is_some_and(|r| r.reconocida);
-        if !reconocida && k.key != "Escape" && k.key != "esc" {
-            if let Some(r) = self.revision_organizar.as_mut() {
-                r.reconocida = true;
+            .is_some_and(|r| r.acknowledged);
+        if !acknowledged && k.key != "Escape" && k.key != "esc" {
+            if let Some(r) = self.revision_organize.as_mut() {
+                r.acknowledged = true;
             }
             self.status.message = Some(clamp_display(norte_i18n::t_in(
                 self.lang,
                 "host-plan-acknowledge",
             )));
-            let cambios = vec![
+            let changes = vec![
                 ViewChange::Organize {
-                    organize: self.vista_organizar(),
+                    organize: self.vista_organize(),
                 },
                 ViewChange::Status(self.status.clone()),
             ];
-            return (self.aplicada(), vec![self.parche(cambios)]);
+            return (self.applied(), vec![self.parche(changes)]);
         }
-        let total = self
-            .revision_organizar
-            .as_ref()
-            .map_or(0, |r| r.lineas.len());
-        let ventana = norte_frontend::organize::ORGANIZE_LINE_LIMIT;
-        let tope = total.saturating_sub(ventana);
-        let pagina = i64::try_from(ventana).unwrap_or(1);
-        let mover = |r: &mut RevisionOrganizar, delta: i64| {
-            let destino = i64::try_from(r.primera).unwrap_or(0).saturating_add(delta);
-            r.primera = usize::try_from(destino.max(0)).unwrap_or(0).min(tope);
-            // Marca de agua ALTA: volver arriba no des-lee lo ya leído.
-            r.visto_hasta = r.visto_hasta.max((r.primera + ventana).min(total));
+        let total = self.revision_organize.as_ref().map_or(0, |r| r.lines.len());
+        let window = norte_frontend::organize::ORGANIZE_LINE_LIMIT;
+        let cap = total.saturating_sub(window);
+        let page = i64::try_from(window).unwrap_or(1);
+        let move_by = |r: &mut RevisionOrganize, delta: i64| {
+            let target = i64::try_from(r.first).unwrap_or(0).saturating_add(delta);
+            r.first = usize::try_from(target.max(0)).unwrap_or(0).min(cap);
+            // HIGH watermark: going back up does not un-read what was read.
+            r.seen_until = r.seen_until.max((r.first + window).min(total));
         };
         match k.key.as_str() {
             "ArrowDown" | "j" => {
-                if let Some(r) = self.revision_organizar.as_mut() {
-                    mover(r, 1);
+                if let Some(r) = self.revision_organize.as_mut() {
+                    move_by(r, 1);
                 }
             }
             "ArrowUp" | "k" => {
-                if let Some(r) = self.revision_organizar.as_mut() {
-                    mover(r, -1);
+                if let Some(r) = self.revision_organize.as_mut() {
+                    move_by(r, -1);
                 }
             }
             "PageDown" => {
-                if let Some(r) = self.revision_organizar.as_mut() {
-                    mover(r, pagina);
+                if let Some(r) = self.revision_organize.as_mut() {
+                    move_by(r, page);
                 }
             }
             "PageUp" => {
-                if let Some(r) = self.revision_organizar.as_mut() {
-                    mover(r, -pagina);
+                if let Some(r) = self.revision_organize.as_mut() {
+                    move_by(r, -page);
                 }
             }
-            "Escape" | "n" | "N" => return self.cerrar_revision_organizar(),
-            // `Enter` NO aprueba, por lo mismo que en la revisión de
-            // renombrar: esta pantalla se abre sola, y `Enter` es la tecla
-            // con la que se estaba recorriendo el árbol mientras el productor
-            // pensaba.
-            "y" | "Y" => return self.aprobar_revision_organizar(backend, buzon),
+            "Escape" | "n" | "N" => return self.close_revision_organize(),
+            // `Enter` does NOT approve, for the same reason as the rename
+            // review: this screen opens on its own, and `Enter` is the key
+            // that was being used to walk the tree while the producer was
+            // thinking.
+            "y" | "Y" => return self.approve_revision_organize(backend, mailbox),
             _ => {
                 return (
                     ActionAck::Unavailable {
@@ -353,98 +349,93 @@ impl Estado {
                 );
             }
         }
-        let cambio = ViewChange::Organize {
-            organize: self.vista_organizar(),
+        let change = ViewChange::Organize {
+            organize: self.vista_organize(),
         };
-        (self.aplicada(), vec![self.parche(vec![cambio])])
+        (self.applied(), vec![self.parche(vec![change])])
     }
 
-    /// Recorre el árbol con un gesto del ratón (la rueda, o un botón).
+    /// Walks the tree with a mouse gesture (the wheel, or a button).
     ///
-    /// Existe aparte de las teclas por la misma razón que el botón de
-    /// decidir: aprobar exige haber llegado al final, y sin una forma de
-    /// recorrer con el ratón esa exigencia convertía la pantalla en una que
-    /// un lector sin teclado no podía aprobar nunca. Mueve la MISMA marca de
-    /// agua que las teclas — leer con la rueda es leer.
-    pub(super) fn recorrer_organizar(
+    /// It exists apart from the keys for the same reason as the decide
+    /// button: approving requires having reached the end, and without a way
+    /// to walk with the mouse that requirement turned the screen into one a
+    /// keyboardless reader could never approve. It moves the SAME watermark
+    /// as the keys — reading with the wheel is reading.
+    pub(super) fn walk_organize(
         &mut self,
         down: bool,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let total = self
-            .revision_organizar
-            .as_ref()
-            .map_or(0, |r| r.lineas.len());
-        let ventana = norte_frontend::organize::ORGANIZE_LINE_LIMIT;
-        let tope = total.saturating_sub(ventana);
-        let Some(r) = self.revision_organizar.as_mut() else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        let total = self.revision_organize.as_ref().map_or(0, |r| r.lines.len());
+        let window = norte_frontend::organize::ORGANIZE_LINE_LIMIT;
+        let cap = total.saturating_sub(window);
+        let Some(r) = self.revision_organize.as_mut() else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
-        r.primera = if down {
-            (r.primera + 1).min(tope)
+        r.first = if down {
+            (r.first + 1).min(cap)
         } else {
-            r.primera.saturating_sub(1)
+            r.first.saturating_sub(1)
         };
-        r.visto_hasta = r.visto_hasta.max((r.primera + ventana).min(total));
-        let cambio = ViewChange::Organize {
-            organize: self.vista_organizar(),
+        r.seen_until = r.seen_until.max((r.first + window).min(total));
+        let change = ViewChange::Organize {
+            organize: self.vista_organize(),
         };
-        (self.aplicada(), vec![self.parche(vec![cambio])])
+        (self.applied(), vec![self.parche(vec![change])])
     }
 
-    /// Contesta a la revisión con un gesto DIRIGIDO a ella (un botón), que no
-    /// necesita el reconocimiento que sí necesita una tecla.
-    pub(super) fn decidir_revision_organizar(
+    /// Answers the review with a gesture AIMED at it (a button), which does
+    /// not need the acknowledgment a key does.
+    pub(super) fn decide_revision_organize(
         &mut self,
         approve: bool,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        if self.revision_organizar.is_none() {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        if self.revision_organize.is_none() {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         }
-        if let Some(r) = self.revision_organizar.as_mut() {
-            r.reconocida = true;
+        if let Some(r) = self.revision_organize.as_mut() {
+            r.acknowledged = true;
         }
         if approve {
-            self.aprobar_revision_organizar(backend, buzon)
+            self.approve_revision_organize(backend, mailbox)
         } else {
-            self.cerrar_revision_organizar()
+            self.close_revision_organize()
         }
     }
 
-    /// Descarta el plan sin aplicar nada.
-    pub(super) fn cerrar_revision_organizar(
-        &mut self,
-    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        // Ni se sube la época ni se toca `organizar_en_vuelo`, por lo mismo
-        // que en la revisión de renombrar: lo que haya ahí es una petición
-        // POSTERIOR, y soltarla aquí la mataría en silencio.
-        self.revision_organizar = None;
-        let cambio = ViewChange::Organize { organize: None };
-        (self.aplicada(), vec![self.parche(vec![cambio])])
+    /// Discards the plan without applying anything.
+    pub(super) fn close_revision_organize(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        // Neither the epoch is bumped nor `organize_in_flight` touched, for
+        // the same reason as in the rename review: whatever is there is a
+        // LATER request, and releasing it here would kill it silently.
+        self.revision_organize = None;
+        let change = ViewChange::Organize { organize: None };
+        (self.applied(), vec![self.parche(vec![change])])
     }
 
-    /// Aprueba el plan: UNA Task para el lote entero, un solo deshacer.
+    /// Approves the plan: ONE Task for the whole batch, a single undo.
     ///
-    /// Con el `plan_hash` que vino CON el plan, así que lo que se ejecuta es
-    /// exactamente lo que se enseñó — si el directorio cambió por debajo, el
-    /// core contesta `PlanStale` y no mueve nada.
-    pub(super) fn aprobar_revision_organizar(
+    /// With the `plan_hash` that came WITH the plan, so what runs is exactly
+    /// what was shown — if the directory changed underneath, the core answers
+    /// `PlanStale` and moves nothing.
+    pub(super) fn approve_revision_organize(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(r) = self.revision_organizar.as_ref() else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        let Some(r) = self.revision_organize.as_ref() else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
-        // La segunda cerradura, también aquí: aprobar ejecuta N movimientos y
-        // crea carpetas.
-        if self.efectos == crate::commands::Efectos::SoloLectura {
-            return Self::no_muta();
+        // The second lock, here too: approving runs N moves and creates
+        // folders.
+        if self.effects == crate::commands::Effects::SoloRead {
+            return Self::no_mutates();
         }
-        if r.visto_hasta < r.lineas.len() {
-            // Y se dice CUÁL de las cosas falta: «no lo has leído entero» se
-            // arregla de una forma y «no se puede» de otra.
+        if r.seen_until < r.lines.len() {
+            // And it says WHICH thing is missing: "you haven't read it all"
+            // is fixed one way and "cannot be done" another.
             return (
                 ActionAck::Unavailable {
                     reason_key: "host-plan-unseen".to_owned(),
@@ -453,33 +444,33 @@ impl Estado {
             );
         }
         let (dir, moves, hash) = (r.dir.clone(), r.moves.clone(), r.plan_hash.clone());
-        let afectados = vec![dir.clone()];
+        let affected = vec![dir.clone()];
         let backend2 = Arc::clone(backend);
-        let buzon2 = buzon.clone();
+        let mailbox2 = mailbox.clone();
         tokio::spawn(async move {
-            let mensaje = match backend2.organize(dir, moves, hash).await {
-                Ok(task) => Mensaje::TaskNueva(Box::new((task, afectados, None))),
-                Err(e) => Mensaje::TaskFallida(Box::new(e)),
+            let message = match backend2.organize(dir, moves, hash).await {
+                Ok(task) => Message::TaskNew(Box::new((task, affected, None))),
+                Err(e) => Message::TaskFailed(Box::new(e)),
             };
-            let _ = buzon2.send(mensaje).await;
+            let _ = mailbox2.send(message).await;
         });
-        self.cerrar_revision_organizar()
+        self.close_revision_organize()
     }
 
-    /// Lo dice en la barra y no abre nada. Cierra la revisión de ESTA época
-    /// si la había: un plan que no se pudo pedir no deja media pantalla
-    /// abierta, y cerrar la que hubiera tiraría un plan bueno porque otra
-    /// petición posterior falló.
-    fn decir_de_organizar(&mut self, epoca: u64, clave: &str) -> Vec<BridgeEnvelope<UiUpdate>> {
-        self.status.message = Some(clamp_display(norte_i18n::t_in(self.lang, clave)));
-        let mut cambios = vec![ViewChange::Status(self.status.clone())];
+    /// Says it on the status bar and opens nothing. Closes THIS epoch's
+    /// review if there was one: a plan that could not be requested does not
+    /// leave half a screen open, and closing whatever was there would throw
+    /// away a good plan because a later request failed.
+    fn say_from_organize(&mut self, epoch: u64, key: &str) -> Vec<BridgeEnvelope<UiUpdate>> {
+        self.status.message = Some(clamp_display(norte_i18n::t_in(self.lang, key)));
+        let mut changes = vec![ViewChange::Status(self.status.clone())];
         if self
-            .revision_organizar
-            .take_if(|r| r.epoca == epoca)
+            .revision_organize
+            .take_if(|r| r.epoch == epoch)
             .is_some()
         {
-            cambios.push(ViewChange::Organize { organize: None });
+            changes.push(ViewChange::Organize { organize: None });
         }
-        vec![self.parche(cambios)]
+        vec![self.parche(changes)]
     }
 }

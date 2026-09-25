@@ -1,20 +1,20 @@
-//! El catálogo de extensiones, su ficha y su gobierno.
+//! The extensions catalog, its detail card and its governance.
 //!
-//! Parte de `controller`: son métodos de `Estado`, movidos aquí sin
-//! tocarlos (ADR 0086). El único escritor sigue siendo el actor.
+//! Part of `controller`: these are `State` methods, moved here without
+//! touching them (ADR 0086). The only writer is still the actor.
 
-// Estos módulos son el mismo `impl Estado` partido en trozos, así que usan
-// los mismos imports que el padre. Enumerarlos aquí sería una lista de
-// cuarenta líneas por fichero, en 32 ficheros, que se desincroniza en cuanto
-// el padre importa algo — `super::*` la sigue sola.
+// These modules are the same `impl State` split into pieces, so they use
+// the same imports as the parent. Enumerating them here would be a
+// forty-line list per file, in 32 files, that goes stale the moment the
+// parent imports something — `super::*` tracks it on its own.
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
-impl Estado {
-    /// Los directorios que hay AHORA en pantalla, sin repetir.
-    pub(super) fn dirs_visibles(&self) -> Vec<VPath> {
+impl State {
+    /// The directories on screen RIGHT NOW, without repeats.
+    pub(super) fn dirs_visible(&self) -> Vec<VPath> {
         let mut v: Vec<VPath> = Vec::new();
-        for h in self.huecos.values() {
+        for h in self.slots.values() {
             let dir = h.pane.dir();
             if !v.contains(dir) {
                 v.push(dir.clone());
@@ -23,569 +23,583 @@ impl Estado {
         v
     }
 
-    pub(super) fn abrir_extensiones(
+    pub(super) fn open_extensions(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        self.extensiones = Some(crate::extensions::Extensiones::abrir());
-        self.gen_extensiones += 1;
-        self.pedir_catalogo_de_extensiones(backend, buzon);
-        let cambio = ViewChange::Extensions {
-            extensions: self.vista_extensiones(),
+        self.extensions = Some(crate::extensions::Extensions::open());
+        self.gen_extensions += 1;
+        self.request_extensions_catalog(backend, mailbox);
+        let change = ViewChange::Extensions {
+            extensions: self.vista_extensions(),
         };
-        (self.aplicada(), vec![self.parche(vec![cambio])])
+        (self.applied(), vec![self.parche(vec![change])])
     }
 
-    /// Reparte una respuesta de fondo a la superficie que la pidió.
+    /// Dispatches a background answer to the surface that requested it.
     ///
-    /// UN sitio para las cinco: todas comprueban lo mismo —que su superficie
-    /// siga abierta— y todas contestan lo mismo: los parches que haya que
-    /// mandar, o ninguno.
+    /// ONE spot for all of them: they all check the same thing — that their
+    /// surface is still open — and they all answer the same thing: whatever
+    /// patches need to be sent, or none.
     ///
-    /// El `match` es una LISTA: cada brazo delega en su método, así que crece
-    /// una línea por respuesta nueva y ninguna de ellas tiene lógica aquí.
-    /// Por eso lleva el `expect` en vez de partirse en dos mitades sin nombre.
-    #[expect(clippy::too_many_lines, reason = "un match que solo reparte")]
-    pub(super) fn aplicar_de_fondo(
+    /// The `match` is a LIST: every arm delegates to its own method, so it
+    /// grows one line per new answer and none of them carries logic here.
+    /// That is why it has the `expect` instead of splitting into two nameless
+    /// halves.
+    #[expect(clippy::too_many_lines, reason = "a match that only dispatches")]
+    pub(super) fn apply_in_background(
         &mut self,
-        f: Fondo,
+        f: Background,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         match f {
-            Fondo::Perfiles(perfiles, vecino) => self.con_los_perfiles(perfiles, vecino, buzon),
-            Fondo::PerfilCargado(nombre, res) => self.aplicar_perfil(&nombre, *res, backend, buzon),
-            Fondo::AjusteEscrito(hecho) => self.ajuste_escrito(*hecho, backend, buzon),
-            Fondo::AjusteRestablecido(hecho) => self.ajuste_restablecido(*hecho, backend, buzon),
-            Fondo::PlanIa(epoca, res) => self.aplicar_plan_ia(epoca, *res, backend, buzon),
-            // Fase 8: el árbol de organizar no necesita un segundo viaje, así
-            // que no lleva ni `backend` ni `buzon`.
-            Fondo::PlanOrganizar(epoca, res) => self.aplicar_plan_de_organizar(epoca, *res),
-            // #311: las dos mitades de comprobar unas sumas — el fichero que
-            // se lee antes de lanzar nada, y el informe que llega después.
-            Fondo::FicheroDeSumas(sums, bytes) => {
-                self.fichero_de_sumas(&sums, *bytes, backend, buzon)
+            Background::Profiles(profiles, neighbor) => {
+                self.with_the_profiles(profiles, neighbor, mailbox)
             }
-            Fondo::InformeDeSumas(task, estado, informe) => {
-                self.informe_de_sumas(task, &estado, *informe)
+            Background::ProfileLoaded(name, res) => {
+                self.apply_profile(&name, *res, backend, mailbox)
             }
-            Fondo::PlanDeLote(epoca, res) => self.aplicar_plan_de_lote(epoca, *res),
-            Fondo::PluginsDeAyuda(res) => self.aplicar_catalogo_de_plugins(res, backend, buzon),
-            // Los paneles que aportan los plugins consentidos pasan a ser
-            // kinds de verdad (fase 3). Sin superficie de la que depender: un
-            // panel de plugin tiene que poder colocarse aunque nadie haya
-            // abierto la ayuda ni el gestor. El filtro de aprobado/activado
-            // vive en `insert_panels`, compartido con el terminal.
+            Background::SettingWritten(done) => self.setting_written(*done, backend, mailbox),
+            Background::SettingRestored(done) => self.setting_restored(*done, backend, mailbox),
+            Background::PlanIa(epoch, res) => self.apply_plan_ia(epoch, *res, backend, mailbox),
+            // Phase 8: the organize tree needs no second trip, so it carries
+            // neither `backend` nor `mailbox`.
+            Background::PlanOrganize(epoch, res) => self.apply_organize_plan(epoch, *res),
+            // #311: the two halves of checking checksums — the file read
+            // before launching anything, and the report that arrives
+            // afterward.
+            Background::ChecksumsFile(sums, bytes) => {
+                self.checksums_file(&sums, *bytes, backend, mailbox)
+            }
+            Background::ChecksumsReport(task, state, report) => {
+                self.checksums_report(task, &state, *report)
+            }
+            Background::BatchPlan(epoch, res) => self.apply_batch_plan(epoch, *res),
+            Background::HelpPlugins(res) => self.apply_plugins_catalog(res, backend, mailbox),
+            // The panes contributed by consented plugins become real kinds
+            // (phase 3). With no surface to depend on: a plugin pane has to
+            // be placeable even if nobody has opened help or the manager. The
+            // approved/enabled filter lives in `insert_panels`, shared with
+            // the terminal.
             //
-            // Un fallo deja la sesión sin paneles de plugin, que es la
-            // pantalla de siempre: lo cosmético se degrada.
-            Fondo::PanelesDePlugin(res) => match res {
-                Ok(lista) => {
-                    self.kinds.insert_panels(&lista.plugins);
-                    // Declarar un kind NO repinta por su cuenta: el reparto se
-                    // rehace aquí —los mínimos del panel recién declarado
-                    // cambian dónde cabe— y el parche vacío lleva la barra,
-                    // que `parche` añade sola. Sin esto, la pantalla seguía
-                    // repartida como si el kind no existiera hasta el
-                    // siguiente cambio ajeno.
-                    self.rehacer_reparto();
+            // A failure leaves the session with no plugin panes, which is
+            // the usual screen: the cosmetic part degrades.
+            Background::PluginPanes(res) => match res {
+                Ok(list) => {
+                    self.kinds.insert_panels(&list.plugins);
+                    // Declaring a kind does NOT repaint on its own: the
+                    // layout is rebuilt here — the newly declared pane's
+                    // minimums change what fits — and the empty patch
+                    // carries the status bar, which `parche` adds on its
+                    // own. Without this, the screen stayed laid out as if
+                    // the kind did not exist until the next unrelated
+                    // change.
+                    self.redo_split();
                     vec![self.parche(Vec::new())]
                 }
                 Err(_) => Vec::new(),
             },
-            Fondo::PaginaDePlugin(id, res) => self
-                .aplicar_pagina_de_plugin(&id, res.as_ref().ok())
+            Background::PluginPage(id, res) => self
+                .apply_plugin_page(&id, res.as_ref().ok())
                 .into_iter()
                 .collect(),
-            Fondo::Catalogo(apertura, peticion, res) => {
-                // El catálogo del gestor redeclara los paneles (fase 3): es el
-                // mismo dato, y es el momento en que un plugin acaba de ser
-                // aprobado, activado o desinstalado. Sin esto, quitarle el
-                // consentimiento a un plugin dejaba su kind declarado —y su
-                // hueco tomando foco— hasta el siguiente arranque.
-                if let Ok(lista) = &res {
-                    self.kinds.insert_panels(&lista.plugins);
-                    self.rehacer_reparto();
+            Background::Catalog(opening, request, res) => {
+                // The manager's catalog redeclares the panes (phase 3): it
+                // is the same data, and it is the moment a plugin has just
+                // been approved, enabled or uninstalled. Without this,
+                // revoking a plugin's consent left its kind declared — and
+                // its slot taking focus — until the next startup.
+                if let Ok(list) = &res {
+                    self.kinds.insert_panels(&list.plugins);
+                    self.redo_split();
                 }
-                self.aplicar_catalogo_de_extensiones(apertura, peticion, res, backend, buzon)
+                self.apply_extensions_catalog(opening, request, res, backend, mailbox)
             }
-            Fondo::FichaDePlugin(id, res) => self
-                .aplicar_ficha(&id, res.as_ref().ok())
+            Background::PluginTab(id, res) => self
+                .apply_detail(&id, res.as_ref().ok())
                 .into_iter()
                 .collect(),
-            Fondo::AvisosDeDestino(id, avisos) => self.avisos_de_destino(id, avisos),
-            Fondo::UndoDeSesion(task_id, sesion) => {
-                self.agencia.undos.insert(task_id, sesion);
+            Background::DestinationNotices(id, notices) => self.destination_notices(id, notices),
+            Background::SessionUndo(task_id, session) => {
+                self.agency.undos.insert(task_id, session);
                 Vec::new()
             }
-            Fondo::PluginsDePaleta(apertura, res) => self.aplicar_filas_de_plugin(apertura, res),
-            Fondo::Gobernada(apertura, res) => {
-                self.aplicar_gobierno(apertura, &res, backend, buzon)
+            Background::PalettePlugins(opening, res) => self.apply_plugin_rows(opening, res),
+            Background::Governed(opening, res) => {
+                self.apply_governance(opening, &res, backend, mailbox)
             }
-            Fondo::ConfigEscrita(apertura, id, res) => {
-                self.aplicar_escritura(apertura, &id, res, backend, buzon)
+            Background::ConfigWritten(opening, id, res) => {
+                self.apply_write(opening, &id, res, backend, mailbox)
             }
-            Fondo::SalidaDeComando(apertura, datos) => self.aplicar_salida(apertura, *datos),
-            Fondo::Volumenes(apertura, res) => {
-                self.aplicar_volumenes(apertura, res).into_iter().collect()
+            Background::CommandOutput(opening, data) => self.apply_output(opening, *data),
+            Background::Volumes(opening, res) => {
+                self.apply_volumes(opening, res).into_iter().collect()
             }
-            Fondo::Conexiones(apertura, res) => {
-                self.aplicar_conexiones(apertura, res).into_iter().collect()
+            Background::Connections(opening, res) => {
+                self.apply_connections(opening, res).into_iter().collect()
             }
-            Fondo::PaginaDeLinea(slot, token, desde, res) => self
-                .aterrizar_pagina(slot, token, desde, res)
+            Background::TimelinePage(slot, token, start, res) => self
+                .land_page(slot, token, start, res)
                 .into_iter()
                 .collect(),
-            Fondo::ConexionesDeIrA(apertura, res) => {
-                self.conexiones_de_ir_a(apertura, res).into_iter().collect()
+            Background::GoToConnections(opening, res) => {
+                self.goto_connections(opening, res).into_iter().collect()
             }
-            Fondo::IndiceDeIrA(apertura, consulta, res) => self
-                .indice_de_ir_a(apertura, &consulta, res)
+            Background::GoToIndex(opening, query, res) => {
+                self.goto_index(opening, &query, res).into_iter().collect()
+            }
+            Background::Disconnected(slot, res, dest) => {
+                self.apply_disconnection(slot, res, &dest, backend, mailbox)
+            }
+            Background::PlacesVolumes(res) => self.apply_places(res).into_iter().collect(),
+            Background::FooterVolumes(res) => self.apply_footer_volumes(res).into_iter().collect(),
+            Background::TreeBranches(dir, children) => self
+                .apply_branches(dir, children, backend, mailbox)
                 .into_iter()
                 .collect(),
-            Fondo::Desconectada(slot, res, destino) => {
-                self.aplicar_desconexion(slot, res, &destino, backend, buzon)
+            Background::Results(epoch, batch) => {
+                self.apply_results(epoch, &batch).into_iter().collect()
             }
-            Fondo::SitiosVolumenes(res) => self.aplicar_sitios(res).into_iter().collect(),
-            Fondo::VolumenesDePie(res) => self.aplicar_volumenes_de_pie(res).into_iter().collect(),
-            Fondo::RamasDeArbol(dir, hijos) => self
-                .aplicar_ramas(dir, hijos, backend, buzon)
-                .into_iter()
-                .collect(),
-            Fondo::Resultados(epoca, lote) => {
-                self.aplicar_resultados(epoca, &lote).into_iter().collect()
-            }
-            Fondo::Semanticos(epoca, hits) => self.aplicar_semanticos(epoca, hits),
-            Fondo::ComparacionViva(epoca, id) => {
-                if let Some(c) = self.comparacion.as_mut()
-                    && c.epoca == epoca
+            Background::Semantic(epoch, hits) => self.apply_semantic(epoch, hits),
+            Background::ComparisonViva(epoch, id) => {
+                if let Some(c) = self.comparison.as_mut()
+                    && c.epoch == epoch
                 {
                     c.task = id;
                 }
                 Vec::new()
             }
-            Fondo::FilasComparadas(epoca, lote) => self.aplicar_filas_comparadas(epoca, *lote),
-            Fondo::PlanDeSyncVivo(epoca, id) => self.abrir_panel_de_sync(epoca, id),
-            Fondo::SyncAplicando(epoca, id) => self.sync_aplicando(epoca, id, backend, buzon),
-            Fondo::SyncNoAplicado(epoca, seguro) => {
-                let mut fuera = Vec::new();
-                if let Some(s) = self.sincronizacion.as_mut().filter(|s| s.epoca == epoca) {
-                    if seguro {
+            Background::RowsCompared(epoch, batch) => self.apply_rows_compared(epoch, *batch),
+            Background::PlanDeSyncVivo(epoch, id) => self.open_sync_panel(epoch, id),
+            Background::SyncApplying(epoch, id) => self.sync_applying(epoch, id, backend, mailbox),
+            Background::SyncNoApplied(epoch, safe) => {
+                let mut outside = Vec::new();
+                if let Some(s) = self.sync.as_mut().filter(|s| s.epoch == epoch) {
+                    if safe {
                         s.vista.on_apply_abandoned();
                     } else {
-                        // Ambiguo: el pestillo se QUEDA echado. La pantalla no
-                        // puede decir «no se aplicó» de algo que quizá se está
-                        // aplicando, ni ofrecer repetirlo.
-                        fuera.extend(self.decir("msg-sync-apply-unknown"));
+                        // Ambiguous: the latch STAYS thrown. The screen
+                        // cannot say "did not apply" about something that
+                        // might still be applying, nor offer to retry it.
+                        outside.extend(self.say("msg-sync-apply-unknown"));
                     }
                 }
-                // Con su parche: `on_apply_abandoned` cambia lo que la
-                // pantalla ofrece, y sin repintar, la `a` que acaba de
-                // devolverse parece muerta.
-                fuera.push(self.parche(vec![ViewChange::Sync {
-                    sync: self.vista_sincronizacion(),
+                // With its patch: `on_apply_abandoned` changes what the
+                // screen offers, and without repainting, the `a` that just
+                // came back looks dead.
+                outside.push(self.parche(vec![ViewChange::Sync {
+                    sync: self.vista_sync(),
                 }]));
-                fuera
+                outside
             }
-            Fondo::InformeDeSync(epoca, estado, informe) => {
-                self.informe_de_sync(epoca, &estado, *informe)
+            Background::SyncReport(epoch, state, report) => {
+                self.sync_report(epoch, &state, *report)
             }
-            Fondo::PlanDeSyncFallido(epoca) => {
-                if self.sync_pedida.as_ref().is_some_and(|p| p.epoca == epoca) {
-                    self.sync_pedida = None;
+            Background::FailedSyncPlan(epoch) => {
+                if self
+                    .sync_requested
+                    .as_ref()
+                    .is_some_and(|p| p.epoch == epoch)
+                {
+                    self.sync_requested = None;
                 }
                 Vec::new()
             }
-            Fondo::EventoDeSync(epoca, ev) => self.aplicar_evento_de_sync(epoca, *ev),
-            Fondo::Adornos(datos) => self
-                .aplicar_adornos(*datos, backend, buzon)
+            Background::SyncEvent(epoch, ev) => self.apply_sync_event(epoch, *ev),
+            Background::Adornos(data) => self
+                .apply_adornos(*data, backend, mailbox)
                 .into_iter()
                 .collect(),
-            Fondo::Imagen(token, leido) => self.aplicar_imagen(token, leido).into_iter().collect(),
-            Fondo::Estilo(token, preview) => {
-                self.aplicar_estilo(token, preview).into_iter().collect()
+            Background::Imagen(token, read) => self.apply_imagen(token, read).into_iter().collect(),
+            Background::Style(token, preview) => {
+                self.apply_style(token, preview).into_iter().collect()
             }
-            Fondo::Miniatura(token, thumb) => {
-                self.aplicar_miniatura(token, thumb).into_iter().collect()
+            Background::Thumbnail(token, thumb) => {
+                self.apply_thumbnail(token, thumb).into_iter().collect()
             }
-            Fondo::BusquedaViva(epoca, id) => {
-                if let Some(b) = self.busqueda.as_mut()
-                    && b.epoca == epoca
+            Background::SearchViva(epoch, id) => {
+                if let Some(b) = self.search.as_mut()
+                    && b.epoch == epoch
                 {
                     b.task = id;
                 }
                 Vec::new()
             }
-            Fondo::BusquedaRota(epoca, e) => self.busqueda_rota(epoca, &e),
+            Background::SearchBroken(epoch, e) => self.search_broken(epoch, &e),
         }
     }
 
-    /// Pide el catálogo para declarar qué PANELES aportan los plugins.
+    /// Requests the catalog to declare which PANES the plugins contribute.
     ///
-    /// Al arrancar y una sola vez: lo que trae es qué huecos existen, no el
-    /// contenido de ninguno. Por su propio camino —y no por el de la ayuda o
-    /// el del gestor— porque aquellos salen pronto si su superficie está
-    /// cerrada, y un panel de plugin tiene que poder colocarse sin que nadie
-    /// haya abierto ninguna de las dos (fase 3).
+    /// On startup and only once: what it brings is which slots exist, not
+    /// any of their contents. Through its own path — and not help's or the
+    /// manager's — because those exit early if their surface is closed, and
+    /// a plugin pane has to be placeable without either of the two having
+    /// been opened (phase 3).
     ///
-    /// También en SOLO LECTURA, y es a propósito. La regla de la paleta
-    /// —«ofrecer lo que se va a rehusar es prometer algo que no se hará»— no
-    /// aplica aquí: esto no ofrece nada, es una LECTURA que trae la
-    /// declaración de qué huecos existen, y sin ella una disposición guardada
-    /// con un panel de plugin deja un hueco de kind desconocido, que se
-    /// coloca con mínimo `(1, 1)`, no se enfoca, no se pinta y no se puede ni
-    /// nombrar: una caja en blanco que roba sitio y que el lector no puede
-    /// identificar. Lo que sí se gatea por efectos es la INTERACCIÓN del
-    /// panel —sus zonas pulsables y sus comandos—, donde la promesa se hace.
+    /// Also in READ-ONLY, and it is deliberate. The palette's rule — "offer
+    /// what is going to be refused is promising something that will not
+    /// happen" — does not apply here: this offers nothing, it is a READ that
+    /// brings the declaration of which slots exist, and without it a saved
+    /// layout with a plugin pane leaves a slot of unknown kind, which is
+    /// placed with a `(1, 1)` minimum, does not take focus, does not paint
+    /// and cannot even be named: a blank box stealing space that the reader
+    /// cannot identify. What IS gated by effects is the pane's INTERACTION —
+    /// its clickable zones and its commands — where the promise is made.
     ///
-    /// Y sin gate también porque el terminal pregunta siempre: una ventana y
-    /// una TUI en solo lectura tienen que enseñar la misma pantalla.
+    /// And with no gate also because the terminal always asks: a window and
+    /// a TUI in read-only have to show the same screen.
     ///
-    /// Fail-soft: si la RPC falla o vence, esta sesión se queda sin paneles
-    /// de plugin, que es la pantalla de siempre.
-    /// Sin `self` a propósito: desde que no hay puerta de efectos, no depende
-    /// de nada del estado.
-    pub(super) fn pedir_paneles(backend: &Arc<dyn HostBackend>, buzon: &mpsc::Sender<Mensaje>) {
+    /// Fail-soft: if the RPC fails or times out, this session is left with
+    /// no plugin panes, which is the usual screen.
+    /// With no `self` on purpose: since there is no effects gate, it depends
+    /// on nothing from the state.
+    pub(super) fn request_panels(backend: &Arc<dyn HostBackend>, mailbox: &mpsc::Sender<Message>) {
         let backend = Arc::clone(backend);
-        let buzon = buzon.clone();
+        let mailbox = mailbox.clone();
         tokio::spawn(async move {
-            let res = match tokio::time::timeout(PLAZO_PLUGINS, backend.plugin_list()).await {
+            let res = match tokio::time::timeout(DEADLINE_PLUGINS, backend.plugin_list()).await {
                 Ok(r) => r,
                 Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
             };
-            let _ = buzon
-                .send(Mensaje::Fondo(Box::new(Fondo::PanelesDePlugin(res))))
+            let _ = mailbox
+                .send(Message::Background(Box::new(Background::PluginPanes(res))))
                 .await;
         });
     }
 
-    /// El catálogo llegó al gestor.
+    /// The catalog arrived at the manager.
     ///
-    /// Un fallo también se aplica: deja de estar «cargando» y la lista queda
-    /// vacía, que con el aviso apagado significa «no hay ninguna». Quedarse
-    /// cargando para siempre sería la única respuesta peor.
-    pub(super) fn aplicar_catalogo_de_extensiones(
+    /// A failure is also applied: it stops being "loading" and the list ends
+    /// up empty, which with the warning off means "there are none". Staying
+    /// "loading" forever would be the only worse answer.
+    pub(super) fn apply_extensions_catalog(
         &mut self,
-        apertura: u64,
-        peticion: u64,
+        opening: u64,
+        request: u64,
         res: Result<norte_proto::methods::PluginListResult, Error>,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        // De ESTA apertura. «Sigue abierta» no es «es la misma».
-        if apertura != self.gen_extensiones {
+        // From THIS opening. "Still open" is not "is the same one".
+        if opening != self.gen_extensions {
             return Vec::new();
         }
-        // Y la más NUEVA de las que haya en vuelo: un catálogo viejo que
-        // aterriza después del nuevo deja la columna «aprobada» diciendo lo
-        // de antes, sobre un cambio que ya se hizo.
-        if peticion <= self.catalogo_aplicado {
+        // And the NEWEST of whichever are in flight: an old catalog that
+        // lands after the new one leaves the "approved" column saying the
+        // old thing, about a change that has already happened.
+        if request <= self.catalog_applied {
             return Vec::new();
         }
-        self.catalogo_aplicado = peticion;
-        let Some(e) = self.extensiones.as_mut() else {
+        self.catalog_applied = request;
+        let Some(e) = self.extensions.as_mut() else {
             return Vec::new();
         };
-        // Un fallo se aplica igual: deja de estar «cargando» con la lista
-        // vacía, que ya sabe decirse. Quedarse cargando para siempre es la
-        // única respuesta peor.
-        e.set_catalogo(&res.unwrap_or(norte_proto::methods::PluginListResult {
+        // A failure applies the same way: it stops being "loading" with an
+        // empty list, which already knows how to say itself. Staying
+        // "loading" forever is the only worse answer.
+        e.set_catalog(&res.unwrap_or(norte_proto::methods::PluginListResult {
             plugins: Vec::new(),
             errors: Vec::new(),
         }));
-        let _ = (backend, buzon);
-        let cambio = ViewChange::Extensions {
-            extensions: self.vista_extensiones(),
+        let _ = (backend, mailbox);
+        let change = ViewChange::Extensions {
+            extensions: self.vista_extensions(),
         };
-        vec![self.parche(vec![cambio])]
+        vec![self.parche(vec![change])]
     }
 
-    /// Pide la ficha de la extensión elegida.
-    pub(super) fn pedir_ficha(
+    /// Requests the chosen extension's detail card.
+    pub(super) fn request_detail(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(e) = self.extensiones.as_mut() else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        let Some(e) = self.extensions.as_mut() else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
-        let Some(id) = e.reclamar_ficha() else {
-            return (self.aplicada(), Vec::new());
+        let Some(id) = e.claim_detail() else {
+            return (self.applied(), Vec::new());
         };
         let backend = Arc::clone(backend);
-        let buzon = buzon.clone();
+        let mailbox = mailbox.clone();
         tokio::spawn(async move {
-            let res = match tokio::time::timeout(PLAZO_PLUGINS, backend.plugin_config(id.clone()))
-                .await
-            {
-                Ok(r) => r,
-                Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
-            };
-            let _ = buzon
-                .send(Mensaje::Fondo(Box::new(Fondo::FichaDePlugin(id, res))))
+            let res =
+                match tokio::time::timeout(DEADLINE_PLUGINS, backend.plugin_config(id.clone()))
+                    .await
+                {
+                    Ok(r) => r,
+                    Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
+                };
+            let _ = mailbox
+                .send(Message::Background(Box::new(Background::PluginTab(
+                    id, res,
+                ))))
                 .await;
         });
-        (self.aplicada(), Vec::new())
+        (self.applied(), Vec::new())
     }
 
-    /// La ficha llegó.
-    pub(super) fn aplicar_ficha(
+    /// The detail card arrived.
+    pub(super) fn apply_detail(
         &mut self,
         id: &str,
         res: Option<&norte_proto::methods::PluginGetConfigResult>,
     ) -> Option<BridgeEnvelope<UiUpdate>> {
         let lang = self.lang;
-        let e = self.extensiones.as_mut()?;
+        let e = self.extensions.as_mut()?;
         match res {
-            Some(r) => e.set_ficha(id, r, lang),
-            // Un fallo también se APLICA: solo salir dejaba `pedida` puesta,
-            // así que `reclamar_ficha` devolvía `None` para siempre y esa
-            // fila no se podía volver a abrir —`enter` no hacía nada y no
-            // decía nada— salvo moviendo el cursor a otra y volviendo. Es el
-            // mismo criterio que este fichero ya aplica dos veces al
-            // catálogo: quedarse cargando para siempre es la única respuesta
-            // peor que un error.
-            None => e.cerrar_ficha(),
+            Some(r) => e.set_detail(id, r, lang),
+            // A failure is also APPLIED: just returning left `requested` set,
+            // so `claim_detail` returned `None` forever and that row could
+            // never be reopened — `enter` did nothing and said nothing —
+            // short of moving the cursor to another and back. It is the
+            // same criterion this file already applies twice to the
+            // catalog: staying "loading" forever is the only answer worse
+            // than an error.
+            None => e.close_detail(),
         }
-        let cambio = ViewChange::Extensions {
-            extensions: self.vista_extensiones(),
+        let change = ViewChange::Extensions {
+            extensions: self.vista_extensions(),
         };
-        Some(self.parche(vec![cambio]))
+        Some(self.parche(vec![change]))
     }
 
-    /// La proyección del gestor.
-    pub(super) fn vista_extensiones(&self) -> Option<crate::dto::ExtensionsView> {
-        Some(self.extensiones.as_ref()?.vista())
+    /// The manager's projection.
+    pub(super) fn vista_extensions(&self) -> Option<crate::dto::ExtensionsView> {
+        Some(self.extensions.as_ref()?.vista())
     }
 
-    /// Las teclas mientras el gestor está abierto.
-    pub(super) fn tecla_en_extensiones(
+    /// The keys while the manager is open.
+    pub(super) fn key_in_extensions(
         &mut self,
         k: &crate::keys::KeyInput,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        /// Cuántas filas mueve una página.
-        const PAGINA: i64 = 10;
-        let Some(e) = self.extensiones.as_mut() else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        /// How many rows a page moves.
+        const PAGE: i64 = 10;
+        let Some(e) = self.extensions.as_mut() else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
-        // TRES REGÍMENES, y el orden importa. Mientras se TECLEA un valor,
-        // las letras son letras: resolver `a` como «aprobar» ahí convierte
-        // escribir la palabra «casa» en dos concesiones de capabilities.
-        if e.editando() {
-            return self.tecla_editando_config(k, backend, buzon);
+        // THREE REGIMES, and the order matters. While a value is being
+        // TYPED, letters are letters: resolving `a` as "approve" there would
+        // turn typing the word "cat" into two capability grants.
+        if e.editing() {
+            return self.key_editing_config(k, backend, mailbox);
         }
-        // `Home`/`End` se quedan fijas: el catálogo compartido no tiene verbo
-        // para «al principio» dentro de un diálogo.
-        let verbo = match k.key.as_str() {
+        // `Home`/`End` stay fixed: the shared catalog has no verb for "to
+        // the start" inside a dialog.
+        let verb = match k.key.as_str() {
             "Home" | "home" | "End" | "end" => None,
-            _ => self.verbo_de_dialogo(k),
+            _ => self.dialog_verb(k),
         };
-        let Some(e) = self.extensiones.as_mut() else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        let Some(e) = self.extensions.as_mut() else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
-        match (verbo.as_deref(), k.key.as_str()) {
+        match (verb.as_deref(), k.key.as_str()) {
             (Some("dialog.cancel"), _) => {
-                // El primer `esc` cierra la FICHA, no el gestor: dejar la
-                // lista por cerrar un detalle pierde dónde estaba el lector.
-                if e.tiene_ficha() {
-                    e.cerrar_ficha();
+                // The first `esc` closes the DETAIL CARD, not the manager:
+                // leaving the list for closing a detail loses where the
+                // reader was.
+                if e.has_detail() {
+                    e.close_detail();
                 } else {
-                    self.extensiones = None;
+                    self.extensions = None;
                 }
             }
-            // Con la ficha abierta, las flechas recorren SUS claves: mover el
-            // catálogo por debajo tiraría la ficha que se está leyendo.
+            // With the detail card open, the arrows scroll THROUGH ITS keys:
+            // moving the catalog underneath would drop the card being read.
             (Some("dialog.down"), _) => {
-                if !e.mover_en_ficha(1) {
+                if !e.move_in_card(1) {
                     e.mover(1);
                 }
             }
             (Some("dialog.up"), _) => {
-                if !e.mover_en_ficha(-1) {
+                if !e.move_in_card(-1) {
                     e.mover(-1);
                 }
             }
-            // Las de página y los extremos, por la misma puerta que las
-            // flechas: con la ficha abierta recorren SUS claves, y solo
-            // cuando no hay nada que andar caen al catálogo.
+            // The page and the extremes, through the same door as the
+            // arrows: with the card open they scroll THROUGH ITS keys, and
+            // only when there is nothing left to walk do they fall back to
+            // the catalog.
             (Some("dialog.page-down"), _) => {
-                if !e.mover_en_ficha(PAGINA) {
-                    e.mover(PAGINA);
+                if !e.move_in_card(PAGE) {
+                    e.mover(PAGE);
                 }
             }
             (Some("dialog.page-up"), _) => {
-                if !e.mover_en_ficha(-PAGINA) {
-                    e.mover(-PAGINA);
+                if !e.move_in_card(-PAGE) {
+                    e.mover(-PAGE);
                 }
             }
             (_, "Home" | "home") => {
-                if !e.mover_en_ficha(i64::MIN / 2) {
+                if !e.move_in_card(i64::MIN / 2) {
                     e.mover(i64::MIN / 2);
                 }
             }
             (_, "End" | "end") => {
-                if !e.mover_en_ficha(i64::MAX / 2) {
+                if !e.move_in_card(i64::MAX / 2) {
                     e.mover(i64::MAX / 2);
                 }
             }
             (Some("dialog.confirm"), _) => {
-                // Una rota no tiene ajustes que abrir: se dice, en vez de una
-                // tecla que no hace nada.
-                if e.rota_elegida().is_some() {
+                // A broken one has no settings to open: it is reported,
+                // instead of a key that does nothing.
+                if e.broken_chosen().is_some() {
                     return (
                         ActionAck::Unavailable {
                             reason_key: "ext-broken-only-uninstall".to_owned(),
                         },
-                        self.decir("ext-broken-only-uninstall"),
+                        self.say("ext-broken-only-uninstall"),
                     );
                 }
-                if e.tiene_ficha() {
-                    return self.activar_clave(backend, buzon);
+                if e.has_detail() {
+                    return self.activate_key(backend, mailbox);
                 }
-                return self.pedir_ficha(backend, buzon);
+                return self.request_detail(backend, mailbox);
             }
-            // Aprobar es `dialog.add` —conceder— y encender/apagar es
-            // `dialog.toggle-enabled`: los dos verbos del catálogo que
-            // significan justo eso, en vez de dos letras que solo esta
-            // ventana conocía.
+            // Approving is `dialog.add` — granting — and enabling/disabling
+            // is `dialog.toggle-enabled`: the two catalog verbs that mean
+            // exactly that, instead of two letters only this window knew.
             (Some("dialog.add"), _) => {
-                return self.gobernar_elegida(Cambio::Aprobacion, backend, buzon);
+                return self.govern_chosen(Change::Approval, backend, mailbox);
             }
             (Some("dialog.toggle-enabled"), _) => {
-                return self.gobernar_elegida(Cambio::Encendido, backend, buzon);
+                return self.govern_chosen(Change::On, backend, mailbox);
             }
-            // Desinstalar es `dialog.remove`, el verbo que en la lista de
-            // favoritos quita una entrada: aquí quita la extensión entera, y
-            // por eso pregunta antes.
+            // Uninstalling is `dialog.remove`, the verb that removes an
+            // entry in the favorites list: here it removes the whole
+            // extension, which is why it asks first.
             (Some("dialog.remove"), _) => {
-                return self.gobernar_elegida(Cambio::Desinstalacion, backend, buzon);
+                return self.govern_chosen(Change::Uninstallation, backend, mailbox);
             }
-            _ => return (self.aplicada(), Vec::new()),
+            _ => return (self.applied(), Vec::new()),
         }
-        let cambio = ViewChange::Extensions {
-            extensions: self.vista_extensiones(),
+        let change = ViewChange::Extensions {
+            extensions: self.vista_extensions(),
         };
-        (self.aplicada(), vec![self.parche(vec![cambio])])
+        (self.applied(), vec![self.parche(vec![change])])
     }
 
-    /// Las teclas mientras se TECLEA el valor de una clave.
+    /// The keys while a key's value is being TYPED.
     ///
-    /// Régimen FIJO, como el de cualquier campo de este host: aquí una letra
-    /// es una letra. `Enter` confirma —y entonces se escribe—, `Escape`
-    /// cancela sin escribir, y el resto de teclas no significan nada.
-    pub(super) fn tecla_editando_config(
+    /// FIXED regime, like any other field on this host: here a letter is a
+    /// letter. `Enter` confirms — and then it is written — `Escape` cancels
+    /// without writing, and every other key means nothing.
+    pub(super) fn key_editing_config(
         &mut self,
         k: &crate::keys::KeyInput,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(e) = self.extensiones.as_mut() else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        let Some(e) = self.extensions.as_mut() else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
         match k.key.as_str() {
-            "Escape" | "esc" => e.cancelar_edicion(),
-            "Backspace" | "backspace" => e.borrar(),
-            "Enter" | "enter" => return self.confirmar_config(backend, buzon),
-            otra => {
-                // Una tecla imprimible es su carácter; cualquier otra —y
-                // cualquier combinación con modificador— no es texto.
-                let mut cs = otra.chars();
+            "Escape" | "esc" => e.cancel_edit(),
+            "Backspace" | "backspace" => e.delete(),
+            "Enter" | "enter" => return self.confirm_config(backend, mailbox),
+            other => {
+                // A printable key is its character; any other one — and any
+                // combination with a modifier — is not text.
+                let mut cs = other.chars();
                 match (cs.next(), cs.next()) {
-                    (Some(c), None) if !k.ctrl && !k.alt && !k.meta => e.escribir(c),
-                    _ => return (self.aplicada(), Vec::new()),
+                    (Some(c), None) if !k.ctrl && !k.alt && !k.meta => e.write(c),
+                    _ => return (self.applied(), Vec::new()),
                 }
             }
         }
-        let cambio = ViewChange::Extensions {
-            extensions: self.vista_extensiones(),
+        let change = ViewChange::Extensions {
+            extensions: self.vista_extensions(),
         };
-        (self.aplicada(), vec![self.parche(vec![cambio])])
+        (self.applied(), vec![self.parche(vec![change])])
     }
 
-    /// `Enter` sobre una clave: cicla, o abre el buffer para teclearla.
-    pub(super) fn activar_clave(
+    /// `Enter` over a key: cycles, or opens the buffer to type it.
+    pub(super) fn activate_key(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        if self.efectos == crate::commands::Efectos::SoloLectura {
-            return Self::no_muta();
+        if self.effects == crate::commands::Effects::SoloRead {
+            return Self::no_mutates();
         }
-        let Some(e) = self.extensiones.as_mut() else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        let Some(e) = self.extensions.as_mut() else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
-        let escritura = e.activar_clave();
-        let cambio = ViewChange::Extensions {
-            extensions: self.vista_extensiones(),
+        let write = e.activate_key();
+        let change = ViewChange::Extensions {
+            extensions: self.vista_extensions(),
         };
-        let mut fuera = vec![self.parche(vec![cambio])];
-        // Un `bool` o un `enum` YA cambiaron de valor en el modelo: lo que
-        // queda es contárselo al daemon. Un `string`/`int` solo abrió el
-        // buffer y todavía no hay nada que escribir.
-        if let Some((id, escritura)) = escritura {
-            fuera.extend(Self::escribir_config(
-                self.gen_extensiones,
+        let mut outside = vec![self.parche(vec![change])];
+        // A `bool` or an `enum` ALREADY changed value in the model: what is
+        // left is telling the daemon. A `string`/`int` only opened the
+        // buffer and there is nothing to write yet.
+        if let Some((id, write)) = write {
+            outside.extend(Self::write_config(
+                self.gen_extensions,
                 &id,
-                escritura,
+                write,
                 backend,
-                buzon,
+                mailbox,
             ));
         }
-        (self.aplicada(), fuera)
+        (self.applied(), outside)
     }
 
-    /// `Enter` con el buffer abierto: valida y escribe, o dice por qué no.
-    pub(super) fn confirmar_config(
+    /// `Enter` with the buffer open: validates and writes, or says why not.
+    pub(super) fn confirm_config(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        // El buffer solo lo abre `activar_clave`, que ya comprueba esto, así
-        // que hoy es inalcanzable — igual que `rechaza_por_solo_lectura`, que
-        // existe de todas formas. Una puerta que escribe se comprueba en la
-        // puerta.
-        if self.efectos == crate::commands::Efectos::SoloLectura {
-            return Self::no_muta();
+        // The buffer is only opened by `activate_key`, which already checks
+        // this, so today it is unreachable — same as
+        // `rejects_for_read_only`, which exists anyway. A door that
+        // writes is checked at the door.
+        if self.effects == crate::commands::Effects::SoloRead {
+            return Self::no_mutates();
         }
-        let Some(e) = self.extensiones.as_mut() else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        let Some(e) = self.extensions.as_mut() else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
-        let Some(resultado) = e.confirmar_edicion() else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        let Some(result) = e.confirm_edit() else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
-        match resultado {
-            Ok((id, escritura)) => {
-                let cambio = ViewChange::Extensions {
-                    extensions: self.vista_extensiones(),
+        match result {
+            Ok((id, write)) => {
+                let change = ViewChange::Extensions {
+                    extensions: self.vista_extensions(),
                 };
-                let mut fuera = vec![self.parche(vec![cambio])];
-                fuera.extend(Self::escribir_config(
-                    self.gen_extensiones,
+                let mut outside = vec![self.parche(vec![change])];
+                outside.extend(Self::write_config(
+                    self.gen_extensions,
                     &id,
-                    escritura,
+                    write,
                     backend,
-                    buzon,
+                    mailbox,
                 ));
-                (self.aplicada(), fuera)
+                (self.applied(), outside)
             }
-            // La validación de ESTE lado no es la que permite —el daemon
-            // vuelve a validar contra el esquema— pero decirlo aquí ahorra un
-            // viaje y, sobre todo, dice CUÁL era la cota.
+            // This side's validation is not the one that authorizes — the
+            // daemon validates again against the schema — but reporting it
+            // here saves a trip and, above all, says WHAT the bound was.
             Err(norte_frontend::settings::SettingsEditError::NotAnInt) => (
                 ActionAck::Unavailable {
                     reason_key: "host-not-an-int".to_owned(),
                 },
-                self.decir("host-not-an-int"),
+                self.say("host-not-an-int"),
             ),
             Err(norte_frontend::settings::SettingsEditError::OutOfRange { min, max }) => {
-                // El aviso lleva las cotas; el ACUSE no puede: nadie
-                // sustituye variables en esa clave, así que un `{ $min }` en
-                // el acuse se registra literalmente. Dos claves, y la que
-                // lleva números es la que sí se traduce con ellos.
-                let fuera = self.decir_con(
+                // The warning carries the bounds; the ACK cannot: nobody
+                // substitutes variables into that key, so a `{ $min }` in
+                // the ack gets logged literally. Two keys, and the one
+                // carrying numbers is the one translated with them.
+                let outside = self.say_with(
                     "host-out-of-range",
                     &[("min", &min.to_string()), ("max", &max.to_string())],
                 );
@@ -593,38 +607,39 @@ impl Estado {
                     ActionAck::Unavailable {
                         reason_key: "host-value-rejected".to_owned(),
                     },
-                    fuera,
+                    outside,
                 )
             }
-            // Un campo de plugin no tiene vocabulario cerrado hoy (solo el
-            // editor de los ajustes de norte devuelve esto); se dice como
-            // cualquier valor rechazado.
+            // A plugin field has no closed vocabulary today (only norte's
+            // settings editor returns this); it is reported like any
+            // rejected value.
             Err(norte_frontend::settings::SettingsEditError::Invalid { .. }) => (
                 ActionAck::Unavailable {
                     reason_key: "host-value-rejected".to_owned(),
                 },
-                self.decir("host-value-rejected"),
+                self.say("host-value-rejected"),
             ),
         }
     }
 
-    /// Manda UNA clave al daemon.
+    /// Sends ONE key to the daemon.
     ///
-    /// El valor ya está puesto en el modelo (optimismo): lo que corrige un
-    /// fallo es REPEDIR la ficha, no adivinar qué había antes.
-    pub(super) fn escribir_config(
-        apertura: u64,
+    /// The value is already set in the model (optimism): what fixes a
+    /// failure is RE-REQUESTING the card, not guessing what there was
+    /// before.
+    pub(super) fn write_config(
+        opening: u64,
         id: &str,
-        escritura: norte_frontend::plugin_config::PendingConfigWrite,
+        write: norte_frontend::plugin_config::PendingConfigWrite,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         let backend2 = Arc::clone(backend);
-        let buzon2 = buzon.clone();
-        let (id2, key, value) = (id.to_owned(), escritura.key, escritura.value);
+        let buzon2 = mailbox.clone();
+        let (id2, key, value) = (id.to_owned(), write.key, write.value);
         tokio::spawn(async move {
             let res = match tokio::time::timeout(
-                PLAZO_PLUGINS,
+                DEADLINE_PLUGINS,
                 backend2.plugin_set_config(id2.clone(), key, value),
             )
             .await
@@ -633,80 +648,79 @@ impl Estado {
                 Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
             };
             let _ = buzon2
-                .send(Mensaje::Fondo(Box::new(Fondo::ConfigEscrita(
-                    apertura, id2, res,
+                .send(Message::Background(Box::new(Background::ConfigWritten(
+                    opening, id2, res,
                 ))))
                 .await;
         });
         Vec::new()
     }
 
-    /// La escritura contestó.
-    pub(super) fn aplicar_escritura(
+    /// The write answered.
+    pub(super) fn apply_write(
         &mut self,
-        apertura: u64,
+        opening: u64,
         id: &str,
         res: Result<(), Error>,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         let Err(e) = res else {
-            // Un ajuste que cambió puede cambiar lo que un decorador pinta
-            // —el estilo de los iconos, sin ir más lejos—: los listados se
-            // vuelven a pedir.
-            return self.readornar_todo(backend, buzon);
+            // A setting that changed can change what a decorator paints —
+            // the icons' style, for one — listings are requested again.
+            return self.redecorate_all(backend, mailbox);
         };
-        let mut fuera = self.decir(norte_frontend::error::error_key(&e));
-        if apertura != self.gen_extensiones {
-            return fuera;
+        let mut outside = self.say(norte_frontend::error::error_key(&e));
+        if opening != self.gen_extensions {
+            return outside;
         }
-        // Y se REPIDE la ficha: el valor optimista de la pantalla es ahora
-        // mismo una mentira sobre lo que el plugin tiene configurado, y
-        // adivinar el anterior es inventarse un tercer estado.
+        // And the card is RE-REQUESTED: the screen's optimistic value is
+        // right now a lie about what the plugin has configured, and
+        // guessing the previous one is inventing a third state.
         //
-        // Salvo si se está TECLEANDO: repedirla tira el `PluginConfigState`
-        // entero, y con él lo que el lector lleva escrito de otra clave. Un
-        // valor viejo en pantalla es malo; comerse lo que alguien acaba de
-        // teclear, peor — y la corrección llega igual en cuanto cierre el
-        // campo.
-        if let Some(ext) = self.extensiones.as_mut()
-            && ext.es_ficha_de(id)
-            && !ext.editando()
+        // Unless it is being TYPED into: re-requesting it drops the whole
+        // `PluginConfigState`, and with it whatever the reader has typed for
+        // another key. A stale value on screen is bad; eating what someone
+        // just typed, worse — and the correction arrives just the same as
+        // soon as the field closes.
+        if let Some(ext) = self.extensions.as_mut()
+            && ext.is_tab_of(id)
+            && !ext.editing()
         {
-            ext.cerrar_ficha();
-            // El cierre viaja SIEMPRE en su parche: `pedir_ficha` no manda
-            // ninguno por su camino bueno, así que sin esto el renderer
-            // seguía pintando una ficha que el host ya no tiene —y las
-            // flechas, que ya no la encuentran, movían el catálogo por
-            // debajo—.
-            let cambio = ViewChange::Extensions {
-                extensions: self.vista_extensiones(),
+            ext.close_detail();
+            // The close ALWAYS travels in its own patch: `request_detail` sends
+            // none along its happy path, so without this the renderer kept
+            // painting a card the host no longer has — and the arrows,
+            // unable to find it anymore, moved the catalog underneath it.
+            let change = ViewChange::Extensions {
+                extensions: self.vista_extensions(),
             };
-            fuera.push(self.parche(vec![cambio]));
-            let (_, partes) = self.pedir_ficha(backend, buzon);
-            fuera.extend(partes);
+            outside.push(self.parche(vec![change]));
+            let (_, parts) = self.request_detail(backend, mailbox);
+            outside.extend(parts);
         }
-        fuera
+        outside
     }
 
-    /// `a`/`e` sobre la extensión elegida.
-    pub(super) fn gobernar_elegida(
+    /// `a`/`e` over the chosen extension.
+    pub(super) fn govern_chosen(
         &mut self,
-        cambio: Cambio,
+        change: Change,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        if self.efectos == crate::commands::Efectos::SoloLectura {
-            return Self::no_muta();
+        if self.effects == crate::commands::Effects::SoloRead {
+            return Self::no_mutates();
         }
-        let Some(e) = self.extensiones.as_ref() else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        let Some(e) = self.extensions.as_ref() else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
-        let Some(fila) = e.fila_elegida() else {
-            // Una que NO cargó: no hay capabilities que leer ni nada que
-            // encender, y lo único que se le puede pedir es que se quite —si
-            // su directorio se llama como un id, que es lo que se borra—.
-            let Some(rota) = e.rota_elegida() else {
+        let Some(the_row) = e.row_chosen() else {
+            // One that did NOT load: there are no capabilities to read and
+            // nothing to turn on, and all it can be asked is to be removed —
+            // if its directory is named like an id, which is what gets
+            // deleted.
+            let Some(broken) = e.broken_chosen() else {
                 return (
                     ActionAck::Unavailable {
                         reason_key: "host-no-extension".to_owned(),
@@ -714,135 +728,133 @@ impl Estado {
                     Vec::new(),
                 );
             };
-            let clave = match (cambio, rota.id.clone()) {
-                (Cambio::Desinstalacion, Some(id)) => {
-                    return self.preguntar_por_desinstalacion(&id);
+            let key = match (change, broken.id.clone()) {
+                (Change::Uninstallation, Some(id)) => {
+                    return self.ask_for_uninstall(&id);
                 }
-                (Cambio::Desinstalacion, None) => "ext-broken-not-id",
+                (Change::Uninstallation, None) => "ext-broken-not-id",
                 _ => "ext-broken-only-uninstall",
             };
             return (
                 ActionAck::Unavailable {
-                    reason_key: clave.to_owned(),
+                    reason_key: key.to_owned(),
                 },
-                self.decir(clave),
+                self.say(key),
             );
         };
-        let (id, aprobada, encendida) = (fila.id.clone(), fila.approved, fila.enabled);
-        match cambio {
-            // Conceder PREGUNTA; retirar, no.
-            Cambio::Aprobacion if !aprobada => self.preguntar_por_aprobacion(&id),
-            Cambio::Aprobacion => {
-                let fuera = self.gobernar(&id, Gobierno::Aprobar(false, None), backend, buzon);
-                (self.aplicada(), fuera)
+        let (id, approved, on) = (the_row.id.clone(), the_row.approved, the_row.enabled);
+        match change {
+            // Granting ASKS; revoking does not.
+            Change::Approval if !approved => self.ask_for_approval(&id),
+            Change::Approval => {
+                let outside = self.govern(&id, Governance::Approve(false, None), backend, mailbox);
+                (self.applied(), outside)
             }
-            // ENCENDER un plugin sin aprobar no es una decisión que esta
-            // pantalla pueda tomar por su cuenta: sin capabilities aprobadas
-            // el core no lo va a cargar, y decir «encendido» sobre algo que
-            // no corre es la pantalla que miente. APAGARLO sí, siempre: va en
-            // la dirección segura, y negarlo dejaba sin poder apagar a una
-            // extensión encendida a la que se le acababan de revocar las
-            // capabilities —o sea, prohibía justo lo que hay que poder hacer.
-            Cambio::Encendido if !aprobada && !encendida => (
+            // TURNING ON a plugin with no approval is not a decision this
+            // screen can make on its own: with no approved capabilities the
+            // core is not going to load it, and saying "on" about something
+            // that is not running is the screen lying. TURNING IT OFF, yes,
+            // always: it goes in the safe direction, and denying it would
+            // leave no way to turn off an enabled extension that just had
+            // its capabilities revoked — i.e. it would forbid exactly what
+            // must be possible.
+            Change::On if !approved && !on => (
                 ActionAck::Unavailable {
                     reason_key: "host-extension-not-approved".to_owned(),
                 },
-                self.decir("host-extension-not-approved"),
+                self.say("host-extension-not-approved"),
             ),
-            Cambio::Encendido => {
-                let fuera = self.gobernar(&id, Gobierno::Encender(!encendida), backend, buzon);
-                (self.aplicada(), fuera)
+            Change::On => {
+                let outside = self.govern(&id, Governance::TurnOn(!on), backend, mailbox);
+                (self.applied(), outside)
             }
-            // Desinstalar SIEMPRE pregunta: borra ficheros y no tiene vuelta.
-            Cambio::Desinstalacion => self.preguntar_por_desinstalacion(&id),
+            // Uninstalling ALWAYS asks: it deletes files and there is no
+            // going back.
+            Change::Uninstallation => self.ask_for_uninstall(&id),
         }
     }
 
-    /// Lo que un BOTÓN hace sobre una fila (puente 61): señalarla y gobernar
-    /// la señalada, por el mismo camino que la tecla. Que sea el mismo camino
-    /// es el punto: las preguntas —conceder enumera, desinstalar avisa— se
-    /// hacen una vez, aquí, y ningún botón las esquiva.
-    pub(super) fn gobernar_por_raton(
+    /// What a BUTTON does over a row (bridge 61): point at it and govern the
+    /// pointed-at one, through the same path as the key. That it is the same
+    /// path is the point: the questions — granting enumerates, uninstalling
+    /// warns — are asked once, here, and no button dodges them.
+    pub(super) fn govern_by_mouse(
         &mut self,
         row: u32,
         id: &str,
-        cambio: Cambio,
+        change: Change,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        // Con un diálogo delante, no: el gestor es modal para el teclado
-        // (`input.rs` corta antes de llegar aquí) y tiene que serlo para el
-        // ratón, o un clic detrás de la pregunta de consentimiento revocaría
-        // sin preguntar, o apilaría una segunda pregunta sobre la primera.
-        if !self.dialogos.is_empty() {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        // With a dialog in front, no: the manager is modal for the keyboard
+        // (`input.rs` cuts it off before reaching here) and it has to be for
+        // the mouse too, or a click behind the consent question would revoke
+        // without asking, or stack a second question on the first.
+        if !self.dialogs.is_empty() {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         }
-        // Antes de mover nada: una ventana de solo lectura no repinta un
-        // cursor movido por una acción que va a rehusar.
-        if self.efectos == crate::commands::Efectos::SoloLectura {
-            return Self::no_muta();
+        // Before moving anything: a read-only window does not repaint a
+        // cursor moved by an action that is about to be refused.
+        if self.effects == crate::commands::Effects::SoloRead {
+            return Self::no_mutates();
         }
-        let Some(e) = self.extensiones.as_mut() else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        let Some(e) = self.extensions.as_mut() else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
-        let Some(movio) = Self::fila_de_extension(e, row, id) else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        let Some(moved) = Self::extension_row(e, row, id) else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
-        let (ack, mut fuera) = self.gobernar_elegida(cambio, backend, buzon);
-        if movio {
-            // El cursor se movió con el clic, y eso se pinta aunque lo que
-            // sigue sea una pregunta: la fila resaltada es la que el diálogo
-            // describe.
-            let cambio = ViewChange::Extensions {
-                extensions: self.vista_extensiones(),
+        let (ack, mut outside) = self.govern_chosen(change, backend, mailbox);
+        if moved {
+            // The cursor moved with the click, and that is painted even if
+            // what follows is a question: the highlighted row is the one
+            // the dialog describes.
+            let change = ViewChange::Extensions {
+                extensions: self.vista_extensions(),
             };
-            fuera.push(self.parche(vec![cambio]));
+            outside.push(self.parche(vec![change]));
         }
-        (ack, fuera)
+        (ack, outside)
     }
 
-    /// Señala la fila que un clic nombra, si sigue siendo la que el
-    /// renderer vio. `None` si ya no está o ya no es esa: el catálogo se
-    /// repide de fondo y una fila borrada por encima corre las de debajo.
-    /// `Some(movio)` dice si el cursor cambió de sitio.
-    fn fila_de_extension(
-        e: &mut crate::extensions::Extensiones,
-        row: u32,
-        id: &str,
-    ) -> Option<bool> {
-        if e.id_de_fila(row as usize)? != id {
+    /// Points at the row a click names, if it is still the one the renderer
+    /// saw. `None` if it is no longer there or no longer that one: the
+    /// catalog is re-requested in the background and a row deleted above
+    /// shifts the ones below. `Some(moved)` says whether the cursor changed
+    /// place.
+    fn extension_row(e: &mut crate::extensions::Extensions, row: u32, id: &str) -> Option<bool> {
+        if e.row_id(row as usize)? != id {
             return None;
         }
-        // Por la FILA, no por `elegida()`: esa solo mira las cargadas y
-        // devuelve `None` para una rota, así que un clic sobre una rota ya
-        // señalada decía haber movido el cursor y empujaba un parche entero
-        // que no cambiaba nada.
-        let movio = e.cursor() != row as usize;
-        e.senalar(row as usize);
-        Some(movio)
+        // By ROW, not by `chosen()`: that only looks at the loaded ones and
+        // returns `None` for a broken one, so a click on an already-pointed-
+        // -at broken one used to claim the cursor had moved and push a
+        // whole patch that changed nothing.
+        let moved = e.cursor() != row as usize;
+        e.point_at(row as usize);
+        Some(moved)
     }
 
-    /// Abre la pregunta de desinstalar, con el nombre y el id dentro.
+    /// Opens the uninstall question, with the name and the id inside.
     ///
-    /// El cuerpo dice lo que se pierde: los ficheros de la extensión Y su
-    /// consentimiento —uno instalado después bajo el mismo id nace sin él—,
-    /// porque «¿desinstalar?» a secas se lee como «¿apagar del todo?», y no
-    /// es eso.
-    pub(super) fn preguntar_por_desinstalacion(
+    /// The body says what is lost: the extension's files AND its consent —
+    /// one installed later under the same id is born without it — because a
+    /// plain "uninstall?" reads as "turn it fully off?", and that is not it.
+    pub(super) fn ask_for_uninstall(
         &mut self,
         id: &str,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        // Una que no cargó no tiene nombre de manifiesto: se enseña su
-        // directorio, que ya viene saneado y con su bandera.
-        let Some(nombre) = self.extensiones.as_ref().and_then(|e| {
-            e.concesion(id)
-                .map(|c| c.nombre)
-                .or_else(|| e.rota(id).map(|r| (r.dir.clone(), r.hostile)))
+        // One that did not load has no manifest name: its directory is
+        // shown, which already comes sanitized and with its flag.
+        let Some(name) = self.extensions.as_ref().and_then(|e| {
+            e.grant(id)
+                .map(|c| c.name)
+                .or_else(|| e.broken(id).map(|r| (r.dir.clone(), r.hostile)))
         }) else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
-        let modal = ModalId(self.siguiente_modal);
-        self.siguiente_modal += 1;
+        let modal = ModalId(self.next_modal);
+        self.next_modal += 1;
         let vista = DialogView {
             id: modal,
             title_key: "modal-extension-uninstall-title".to_owned(),
@@ -856,8 +868,8 @@ impl Estado {
             deadline_at_ms: None,
             body: vec![
                 crate::dto::DialogLine {
-                    text: nombre.0,
-                    hostile: nombre.1,
+                    text: name.0,
+                    hostile: name.1,
                 },
                 crate::dto::DialogLine {
                     text: norte_i18n::t_in(self.lang, "modal-extension-uninstall-note"),
@@ -866,9 +878,9 @@ impl Estado {
             ],
             overflow_note: String::new(),
             overflow_hostile: false,
-            // `confirm`, como el borrado de ficheros: es la respuesta
-            // afirmativa de un diálogo normal, y la ETIQUETA es la que dice
-            // qué se confirma. `approve` queda para conceder capabilities.
+            // `confirm`, like deleting files: it is a normal dialog's
+            // affirmative answer, and the LABEL is what says what is being
+            // confirmed. `approve` is reserved for granting capabilities.
             choices: vec![
                 DialogChoice {
                     id: "confirm".to_owned(),
@@ -887,138 +899,136 @@ impl Estado {
             fields: Vec::new(),
             dest_check: crate::dto::DestCheckView::NotAsked,
         };
-        self.dialogos.push(Dialogo {
+        self.dialogs.push(Dialog {
             id: modal,
             vista: vista.clone(),
-            tecleado: Tecleado::Texto(String::new()),
-            reconocido: true,
-            al_confirmar: Some(Pendiente::DesinstalarExtension { id: id.to_owned() }),
+            typed: Typed::Text(String::new()),
+            recognized: true,
+            on_confirm: Some(Pending::UninstallExtension { id: id.to_owned() }),
         });
-        let cambio = ViewChange::Dialogs {
-            dialogs: self.vistas_de_dialogos(),
+        let change = ViewChange::Dialogs {
+            dialogs: self.dialog_views(),
         };
-        (self.aplicada(), vec![self.parche(vec![cambio])])
+        (self.applied(), vec![self.parche(vec![change])])
     }
 
-    /// La ayuda de la extensión de esa fila (puente 61): lo que `app.help`
-    /// hace sobre la fila elegida en el terminal, y por el mismo molde — el
-    /// gestor se cierra y la ayuda se abre con esa página como RAÍZ, con el
-    /// catálogo que el gestor ya tenía para que la lateral no espere al
-    /// daemon. Sin página se dice y no se abre nada: una ayuda que se abre en
-    /// el índice cuando se pidió la de UNA extensión es la ventana
-    /// contestando otra pregunta.
-    pub(super) fn ayuda_de_extension(
+    /// That row's extension's help (bridge 61): what `app.help` does over
+    /// the chosen row in the terminal, and cast in the same mold — the
+    /// manager closes and help opens with that page as ROOT, with the
+    /// catalog the manager already had so the side panel does not wait on
+    /// the daemon. With no page it is reported and nothing opens: help
+    /// opening at the index when it was asked for ONE extension's is the
+    /// window answering a different question.
+    pub(super) fn extension_help(
         &mut self,
         row: u32,
         id: &str,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        // Modal para el ratón como para el teclado: abrir la ayuda cerraría
-        // el gestor bajo una pregunta pendiente, y el sí de esa pregunta se
-        // encontraría sin catálogo con el que comparar lo que concede.
-        if !self.dialogos.is_empty() {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        // Modal for the mouse just as for the keyboard: opening help would
+        // close the manager under a pending question, and that question's
+        // yes would find no catalog to compare what it grants against.
+        if !self.dialogs.is_empty() {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         }
-        let Some(e) = self.extensiones.as_mut() else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        let Some(e) = self.extensions.as_mut() else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
-        if Self::fila_de_extension(e, row, id).is_none() {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        if Self::extension_row(e, row, id).is_none() {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         }
-        let Some(fila) = e.fila_elegida() else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        let Some(the_row) = e.row_chosen() else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
-        if !fila.has_help {
+        if !the_row.has_help {
             return (
                 ActionAck::Unavailable {
                     reason_key: "msg-extensions-no-help".to_owned(),
                 },
-                self.decir("msg-extensions-no-help"),
+                self.say("msg-extensions-no-help"),
             );
         }
-        let catalogo = e.catalogo().to_vec();
-        let mut ayuda = crate::help::Ayuda::abrir(
+        let catalog = e.catalog().to_vec();
+        let mut help = crate::help::Help::open(
             self.lang,
-            self.contexto_de_ayuda(),
-            &self.efectivo,
-            &self.efectivo_visor,
-            self.hechos(),
+            self.help_context(),
+            &self.effective,
+            &self.effective_visor,
+            self.facts(),
         );
-        ayuda.set_plugins(&catalogo);
-        let pagina = norte_help::TopicId::new(id);
-        ayuda.estado.open_as_root(&pagina);
-        if ayuda.estado.current() != &pagina {
-            // El modelo compartido no abre lo que no tiene, y lo hace en
-            // silencio: un id que no llegó a ser nodo dejaría al lector en la
-            // página del contexto, que no es lo que pidió. Se dice, y el
-            // gestor se queda.
+        help.set_plugins(&catalog);
+        let page = norte_help::TopicId::new(id);
+        help.state.open_as_root(&page);
+        if help.state.current() != &page {
+            // The shared model does not open what it does not have, and it
+            // does so silently: an id that never became a node would leave
+            // the reader on the context page, which is not what they asked
+            // for. It is reported, and the manager stays.
             return (
                 ActionAck::Unavailable {
                     reason_key: "msg-extensions-no-help".to_owned(),
                 },
-                self.decir("msg-extensions-no-help"),
+                self.say("msg-extensions-no-help"),
             );
         }
-        self.extensiones = None;
-        self.ayuda = Some(ayuda);
-        let mut fuera = vec![self.parche(vec![ViewChange::Extensions { extensions: None }])];
-        fuera.extend(self.parche_de_ayuda(backend, buzon));
-        (self.aplicada(), fuera)
+        self.extensions = None;
+        self.help = Some(help);
+        let mut outside = vec![self.parche(vec![ViewChange::Extensions { extensions: None }])];
+        outside.extend(self.help_patch(backend, mailbox));
+        (self.applied(), outside)
     }
 
-    /// Abre la pregunta de conceder capabilities, con las capabilities
-    /// dentro.
-    pub(super) fn preguntar_por_aprobacion(
+    /// Opens the question to grant capabilities, with the capabilities
+    /// inside.
+    pub(super) fn ask_for_approval(
         &mut self,
         id: &str,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(concesion) = self.extensiones.as_ref().and_then(|e| e.concesion(id)) else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        let Some(grant) = self.extensions.as_ref().and_then(|e| e.grant(id)) else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
-        let (nombre, capabilities, ancla) =
-            (concesion.nombre, concesion.capabilities, concesion.digest);
-        // Una capability por LÍNEA, y el nombre de la extensión aparte: son
-        // los operandos de la decisión, y meterlos en la frase es lo que
-        // deja a un nombre de tercero imitando el texto de la ventana. Cada
-        // una con SU bandera: la que se pinta distinta de lo que dice es
-        // justo la que un manifiesto hostil escribe para colarse.
-        // Y NINGUNA se recorta. El tope de líneas de un diálogo existe para
-        // una lista de rutas de la que sobra ver una parte; aquí la lista ES
-        // la concesión, y enseñar dieciséis de cuarenta mientras el sí
-        // concede las cuarenta es exactamente el hueco por el que se cuela la
-        // capability que nadie leyó. Si son tantas que no caben, no se
-        // pregunta: se rehúsa.
-        if capabilities.len() > MAX_CAPABILIDADES {
-            let fuera = self.decir("host-extension-too-many-caps");
+        let (name, capabilities, anchor) = (grant.name, grant.capabilities, grant.digest);
+        // One capability per LINE, and the extension's name apart: they are
+        // the decision's operands, and folding them into a sentence is what
+        // lets a third party's name impersonate the window's text. Each with
+        // ITS OWN flag: the one that paints differently from what it says is
+        // exactly the one a hostile manifest writes to sneak through.
+        // And NONE is trimmed. A dialog's line cap exists for a list of
+        // paths where seeing part of it is enough; here the list IS the
+        // grant, and showing sixteen of forty while the yes grants all forty
+        // is exactly the gap the capability nobody read sneaks through. If
+        // there are too many to fit, it is not asked about: it is refused.
+        if capabilities.len() > MAX_CAPABILITIES {
+            let outside = self.say("host-extension-too-many-caps");
             return (
                 ActionAck::Unavailable {
                     reason_key: "host-extension-too-many-caps".to_owned(),
                 },
-                fuera,
+                outside,
             );
         }
-        let mut cuerpo = vec![crate::dto::DialogLine {
-            text: nombre.0,
-            hostile: nombre.1,
+        let mut body = vec![crate::dto::DialogLine {
+            text: name.0,
+            hostile: name.1,
         }];
-        cuerpo.extend(
+        body.extend(
             capabilities
                 .iter()
                 .cloned()
                 .map(|(text, hostile)| crate::dto::DialogLine { text, hostile }),
         );
-        let nota = String::new();
-        let modal = ModalId(self.siguiente_modal);
-        self.siguiente_modal += 1;
+        let note = String::new();
+        let modal = ModalId(self.next_modal);
+        self.next_modal += 1;
         let vista = DialogView {
             id: modal,
             title_key: "modal-extension-approve-title".to_owned(),
             destination: None,
-            // El id reverse-DNS, que es lo ÚNICO que el core valida: dos
-            // extensiones pueden llamarse igual, y el nombre que el diálogo
-            // enseña lo escribe el manifiesto. Sin esto, la pantalla donde se
-            // conceden permisos no dice a quién.
+            // The reverse-DNS id, which is the ONLY thing the core
+            // validates: two extensions can share a name, and the name the
+            // dialog shows is written by the manifest. Without this, the
+            // screen where permissions are granted does not say to whom.
             subject: Some(crate::dto::DialogLine {
                 text: clamp_display(id.to_owned()),
                 hostile: false,
@@ -1026,19 +1036,18 @@ impl Estado {
             asker: None,
             deadline: None,
             deadline_at_ms: None,
-            body: cuerpo,
-            overflow_note: nota,
-            // Este diálogo no recorta nada: su cuerpo son las líneas que le
-            // dan hechas, no una lista de rutas que se acote.
+            body,
+            overflow_note: note,
+            // This dialog trims nothing: its body is the lines it is given
+            // ready-made, not a list of paths to be capped.
             overflow_hostile: false,
             choices: vec![
                 DialogChoice {
                     id: "approve".to_owned(),
                     label_key: "dialog-approve".to_owned(),
-                    // Conceder permisos no borra nada, pero tampoco es la
-                    // respuesta inocua de un diálogo cualquiera: se marca
-                    // para que el renderer no la pinte como el «Aceptar» de
-                    // un aviso.
+                    // Granting permissions deletes nothing, but it is not a
+                    // plain dialog's harmless answer either: it is flagged
+                    // so the renderer does not paint it like a notice's "OK".
                     destructive: true,
                 },
                 DialogChoice {
@@ -1053,289 +1062,294 @@ impl Estado {
             fields: Vec::new(),
             dest_check: crate::dto::DestCheckView::NotAsked,
         };
-        self.dialogos.push(Dialogo {
+        self.dialogs.push(Dialog {
             id: modal,
             vista: vista.clone(),
-            tecleado: Tecleado::Texto(String::new()),
-            reconocido: true,
-            al_confirmar: Some(Pendiente::AprobarExtension {
+            typed: Typed::Text(String::new()),
+            recognized: true,
+            on_confirm: Some(Pending::ApproveExtension {
                 id: id.to_owned(),
                 capabilities: capabilities.into_iter().map(|(t, _)| t).collect(),
-                digest: ancla,
+                digest: anchor,
             }),
         });
-        let cambio = ViewChange::Dialogs {
-            dialogs: self.vistas_de_dialogos(),
+        let change = ViewChange::Dialogs {
+            dialogs: self.dialog_views(),
         };
-        (self.aplicada(), vec![self.parche(vec![cambio])])
+        (self.applied(), vec![self.parche(vec![change])])
     }
 
-    /// Concede las capabilities LEÍDAS, o vuelve a preguntar si han cambiado.
+    /// Grants the capabilities READ, or asks again if they have changed.
     ///
-    /// El diálogo se queda las TECLAS, no los mensajes de fondo: un catálogo
-    /// que aterrice entre la pregunta y el sí puede traer otras capabilities
-    /// para esa extensión, y entonces el sí concedería algo que nadie leyó.
-    pub(super) fn conceder(
+    /// The dialog keeps hold of KEYS, not of background messages: a catalog
+    /// landing between the question and the yes can bring different
+    /// capabilities for that extension, and then the yes would grant
+    /// something nobody read.
+    pub(super) fn grant(
         &mut self,
         id: &str,
-        leidas: &[String],
-        ancla_leida: Option<String>,
+        read: &[String],
+        anchor_read: Option<String>,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (Option<&'static str>, Vec<BridgeEnvelope<UiUpdate>>) {
-        let ahora = self
-            .extensiones
-            .as_ref()
-            .and_then(|e| e.concesion(id))
-            .map(|c| {
-                c.capabilities
-                    .into_iter()
-                    .map(|(t, _)| t)
-                    .collect::<Vec<_>>()
-            });
-        if ahora.as_deref() == Some(leidas) {
-            // El ancla que viaja es la de LA PREGUNTA, jamás la del catálogo
-            // de ahora (#282): releerla aquí certificaría al core «esto es lo
-            // que el humano leyó» sobre lo que el humano no leyó, que es
-            // exactamente el agujero que el campo cierra. Y la comparación de
-            // capabilities de arriba no lo tapa: `category` y `contributions`
-            // entran en el ancla y no en la lista pintada.
+        let now = self.extensions.as_ref().and_then(|e| e.grant(id)).map(|c| {
+            c.capabilities
+                .into_iter()
+                .map(|(t, _)| t)
+                .collect::<Vec<_>>()
+        });
+        if now.as_deref() == Some(read) {
+            // The anchor that travels is THE QUESTION's, never the current
+            // catalog's (#282): re-reading it here would certify to the core
+            // "this is what the human read" about what the human did not
+            // read, which is exactly the gap the field closes. And the
+            // capability comparison above does not cover it: `category` and
+            // `contributions` go into the anchor and not into the painted
+            // list.
             return (
                 None,
-                self.gobernar(id, Gobierno::Aprobar(true, ancla_leida), backend, buzon),
+                self.govern(id, Governance::Approve(true, anchor_read), backend, mailbox),
             );
         }
-        let mut fuera = self.decir("host-extension-changed");
-        let (_, partes) = self.preguntar_por_aprobacion(id);
-        fuera.extend(partes);
-        (Some("host-extension-changed"), fuera)
+        let mut outside = self.say("host-extension-changed");
+        let (_, parts) = self.ask_for_approval(id);
+        outside.extend(parts);
+        (Some("host-extension-changed"), outside)
     }
 
-    /// Manda el cambio al daemon. La verdad la dirá el catálogo repedido.
-    pub(super) fn gobernar(
+    /// Sends the change to the daemon. The truth will come from the
+    /// re-requested catalog.
+    pub(super) fn govern(
         &mut self,
         id: &str,
-        que: Gobierno,
+        change: Governance,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        let apertura = self.gen_extensiones;
+        let opening = self.gen_extensions;
         let backend2 = Arc::clone(backend);
-        let buzon2 = buzon.clone();
+        let buzon2 = mailbox.clone();
         let id2 = id.to_owned();
         tokio::spawn(async move {
-            let llamada = match que {
-                Gobierno::Aprobar(v, digest) => backend2.plugin_set_approval(id2, v, digest),
-                Gobierno::Encender(v) => backend2.plugin_set_enabled(id2, v),
-                // Si tenía consentimiento no cambia lo que sigue: el catálogo
-                // se repide igual, y la pregunta ya lo dijo antes del sí.
-                Gobierno::Desinstalar => {
+            let call = match change {
+                Governance::Approve(v, digest) => backend2.plugin_set_approval(id2, v, digest),
+                Governance::TurnOn(v) => backend2.plugin_set_enabled(id2, v),
+                // Whether it had consent does not change what follows: the
+                // catalog is re-requested regardless, and the question
+                // already said so before the yes.
+                Governance::Uninstall => {
                     Box::pin(async move { backend2.plugin_uninstall(id2).await.map(|_| ()) })
                 }
             };
-            let res = match tokio::time::timeout(PLAZO_PLUGINS, llamada).await {
+            let res = match tokio::time::timeout(DEADLINE_PLUGINS, call).await {
                 Ok(r) => r,
                 Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
             };
             let _ = buzon2
-                .send(Mensaje::Fondo(Box::new(Fondo::Gobernada(apertura, res))))
+                .send(Message::Background(Box::new(Background::Governed(
+                    opening, res,
+                ))))
                 .await;
         });
         Vec::new()
     }
 
-    /// El cambio de gobierno contestó.
+    /// The governance change answered.
     ///
-    /// Con un OK NO se toca el `bool` local: se REPIDE el catálogo. Un
-    /// optimismo que el daemon no confirmó es, en esta pantalla, una
-    /// afirmación sobre quién puede leer tus ficheros.
-    pub(super) fn aplicar_gobierno(
+    /// With an OK the local `bool` is NOT touched: the catalog is
+    /// RE-REQUESTED. An optimism the daemon did not confirm is, on this
+    /// screen, an assertion about who can read your files.
+    pub(super) fn apply_governance(
         &mut self,
-        apertura: u64,
+        opening: u64,
         res: &Result<(), Error>,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        if apertura != self.gen_extensiones {
+        if opening != self.gen_extensions {
             return Vec::new();
         }
-        // El desenlace se DICE aunque el gestor ya esté cerrado: una
-        // concesión que falló y nadie contó es la ventana callándose sobre
-        // quién puede leer tus ficheros.
-        let mut fuera = match res {
-            Ok(()) => self.decir("host-extension-updated"),
-            Err(e) => self.decir(norte_frontend::error::error_key(e)),
+        // The outcome IS STATED even if the manager is already closed: a
+        // grant that failed and that nobody was told about is the window
+        // keeping quiet about who can read your files.
+        let mut outside = match res {
+            Ok(()) => self.say("host-extension-updated"),
+            Err(e) => self.say(norte_frontend::error::error_key(e)),
         };
-        // Y el catálogo se repide EN LOS DOS CASOS. El fallo incluye el plazo
-        // de ESTE lado, que no es «no pasó» sino «no se sabe»: el daemon pudo
-        // conceder las capabilities y tardar en contestar, y entonces dejar
-        // la fila diciendo «sin aprobar» es la misma mentira que el optimismo
-        // local, en pesimista. Lo único que resuelve un desconocido es ir a
-        // preguntar.
-        if self.extensiones.is_some() {
-            self.repedir_catalogo(backend, buzon);
+        // And the catalog is re-requested IN BOTH CASES. The failure
+        // includes THIS side's timeout, which is not "it didn't happen" but
+        // "it isn't known": the daemon might have granted the capabilities
+        // and been slow to answer, and then leaving the row saying
+        // "unapproved" is the same lie as local optimism, in pessimistic
+        // form. The only thing that resolves an unknown is going to ask.
+        if self.extensions.is_some() {
+            self.rerequest_catalog(backend, mailbox);
         }
-        // Y los LISTADOS, por lo mismo: lo que un decorador o una columna de
-        // plugin dijeron de cada fila lo dijo con el catálogo de antes.
-        fuera.extend(self.readornar_todo(backend, buzon));
-        fuera
+        // And the LISTINGS, for the same reason: whatever a decorator or a
+        // plugin column said about each row said it with the old catalog.
+        outside.extend(self.redecorate_all(backend, mailbox));
+        outside
     }
 
-    /// Olvida lo que los plugins dijeron de CADA listado abierto y lo vuelve
-    /// a pedir: es lo que sigue a cualquier cambio de gobierno o de ajustes
-    /// de un plugin. Apagar el decorador de iconos dejaba los iconos en las
-    /// filas hasta el siguiente `cd`, y el lector concluía que apagar no
-    /// apaga.
+    /// Forgets what the plugins said about EVERY open listing and requests
+    /// it again: it is what follows any change of governance or of a
+    /// plugin's settings. Turning off the icon decorator left the icons on
+    /// rows until the next `cd`, and the reader concluded that turning off
+    /// does not turn off.
     ///
-    /// Una tanda en vuelo no se espera: la generación de adornos sube, y
-    /// cuando aterrice se tira y se repide. El parche de filas va YA, con las
-    /// filas desnudas, para que la pantalla no siga enseñando lo que el
-    /// gestor acaba de decir que no está.
-    pub(super) fn readornar_todo(
+    /// A batch in flight is not awaited: the decoration generation goes up,
+    /// and when it lands it is dropped and re-requested. The row patch goes
+    /// out RIGHT AWAY, with bare rows, so the screen does not keep showing
+    /// what the manager just said is not there.
+    pub(super) fn redecorate_all(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        let slots: Vec<u32> = self.huecos.keys().copied().collect();
-        let mut fuera = Vec::new();
+        let slots: Vec<u32> = self.slots.keys().copied().collect();
+        let mut outside = Vec::new();
         for slot in slots {
-            if let Some(hueco) = self.huecos.get_mut(&slot) {
-                hueco.olvidar_adornos();
-                hueco.pane.set_decorations(std::collections::HashMap::new());
-                hueco
+            if let Some(target_slot) = self.slots.get_mut(&slot) {
+                target_slot.forget_adornos();
+                target_slot
+                    .pane
+                    .set_decorations(std::collections::HashMap::new());
+                target_slot
                     .pane
                     .set_plugin_columns(std::collections::HashMap::new());
             }
-            self.adornar(slot, backend, buzon);
-            fuera.push(self.parche_filas_de(slot));
+            self.adornar(slot, backend, mailbox);
+            outside.push(self.patch_rows_of(slot));
         }
-        fuera
+        outside
     }
 
-    /// Vuelve a pedir el catálogo para la apertura VIVA.
-    pub(super) fn repedir_catalogo(
+    /// Requests the catalog again for the LIVE opening.
+    pub(super) fn rerequest_catalog(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) {
-        self.pedir_catalogo_de_extensiones(backend, buzon);
+        self.request_extensions_catalog(backend, mailbox);
     }
 
-    /// Pide el catálogo para el gestor, numerando la PETICIÓN.
+    /// Requests the catalog for the manager, numbering the REQUEST.
     ///
-    /// Dos números y no uno: la APERTURA dice si el gestor sigue siendo el
-    /// mismo, y la PETICIÓN cuál de varias en vuelo es la más nueva. Dos
-    /// gobiernos seguidos piden dos catálogos dentro de la misma apertura, y
-    /// pueden contestar en cualquier orden — sin el segundo número, el viejo
-    /// pisaba al nuevo y la columna «aprobada» se quedaba atrás para siempre.
-    pub(super) fn pedir_catalogo_de_extensiones(
+    /// Two numbers and not one: the OPENING says whether the manager is
+    /// still the same one, and the REQUEST which of several in flight is the
+    /// newest. Two governance changes in a row request two catalogs within
+    /// the same opening, and they can answer in any order — without the
+    /// second number, the old one used to overwrite the new one and the
+    /// "approved" column stayed behind forever.
+    pub(super) fn request_extensions_catalog(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) {
-        let apertura = self.gen_extensiones;
-        self.gen_catalogo += 1;
-        let peticion = self.gen_catalogo;
+        let opening = self.gen_extensions;
+        self.gen_catalog += 1;
+        let request = self.gen_catalog;
         let backend = Arc::clone(backend);
-        let buzon = buzon.clone();
+        let mailbox = mailbox.clone();
         tokio::spawn(async move {
-            let res = match tokio::time::timeout(PLAZO_PLUGINS, backend.plugin_list()).await {
+            let res = match tokio::time::timeout(DEADLINE_PLUGINS, backend.plugin_list()).await {
                 Ok(r) => r,
                 Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
             };
-            let _ = buzon
-                .send(Mensaje::Fondo(Box::new(Fondo::Catalogo(
-                    apertura, peticion, res,
+            let _ = mailbox
+                .send(Message::Background(Box::new(Background::Catalog(
+                    opening, request, res,
                 ))))
                 .await;
         });
     }
 
-    /// La salida de un comando llegó.
+    /// A command's output arrived.
     ///
-    /// Solo la del ÚLTIMO que se lanzó: dos comandos en vuelo y el lento
-    /// aterrizando después pintaría la salida de uno bajo el título del
-    /// otro, que en un panel que dice quién imprimió qué es mentir.
-    pub(super) fn aplicar_salida(
+    /// Only the LAST one launched's: two commands in flight with the slow
+    /// one landing later would paint one's output under the other's title,
+    /// which on a pane that says who printed what is lying.
+    pub(super) fn apply_output(
         &mut self,
-        apertura: u64,
-        datos: SalidaPedida,
+        opening: u64,
+        data: OutputRequested,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        let SalidaPedida {
+        let OutputRequested {
             id,
             plugin,
-            comando,
+            command,
             res,
-        } = datos;
-        if apertura != self.gen_salida {
+        } = data;
+        if opening != self.gen_output {
             return Vec::new();
         }
         match res {
-            Ok(texto) => {
-                // Texto de TERCERO: se ACOTA primero —enmascarar un megabyte
-                // para quedarse con cuatro mil caracteres es hacer el trabajo
-                // entero por nada—, se parte en líneas, y cada una se
-                // enmascara por su cuenta. Que se haya cortado se DICE: el
-                // receptor no puede deducirlo, porque lo que le llega ya
-                // viene corto.
-                let recortado: String = texto.chars().take(MAX_SALIDA).collect();
-                let mut truncado = texto.chars().nth(MAX_SALIDA).is_some();
-                let mut lineas = Vec::new();
-                let mut hostil = false;
-                for linea in recortado.lines().take(MAX_SALIDA_LINEAS) {
-                    let (pintable, marcada) = norte_frontend::display_name(linea.as_bytes());
-                    hostil |= marcada;
-                    lineas.push(clamp_display(pintable));
+            Ok(text) => {
+                // THIRD-PARTY text: it is CLAMPED first — masking a
+                // megabyte only to keep four thousand characters is doing
+                // the whole job for nothing — it is split into lines, and
+                // each one is masked on its own. That it was cut is STATED:
+                // the receiver cannot infer it, because what arrives is
+                // already short.
+                let cropped: String = text.chars().take(MAX_OUTPUT).collect();
+                let mut truncado = text.chars().nth(MAX_OUTPUT).is_some();
+                let mut lines = Vec::new();
+                let mut hostile = false;
+                for line in cropped.lines().take(MAX_OUTPUT_LINES) {
+                    let (paintable, marked) = norte_frontend::display_name(line.as_bytes());
+                    hostile |= marked;
+                    lines.push(clamp_display(paintable));
                 }
-                truncado |= recortado.lines().nth(MAX_SALIDA_LINEAS).is_some();
-                self.escritorio.salida = Some(crate::dto::ExtensionOutputView {
+                truncado |= cropped.lines().nth(MAX_OUTPUT_LINES).is_some();
+                self.desktop.output = Some(crate::dto::ExtensionOutputView {
                     plugin: crate::dto::MaskedTextView {
                         text: plugin.0,
                         hostile: plugin.1,
                     },
                     plugin_id: id,
                     command: crate::dto::MaskedTextView {
-                        text: comando.0,
-                        hostile: comando.1,
+                        text: command.0,
+                        hostile: command.1,
                     },
-                    lines: lineas,
-                    text_hostile: hostil,
+                    lines,
+                    text_hostile: hostile,
                     truncated: truncado,
                 });
-                let cambio = ViewChange::PluginOutput {
-                    output: self.escritorio.salida.clone(),
+                let change = ViewChange::PluginOutput {
+                    output: self.desktop.output.clone(),
                 };
-                vec![self.parche(vec![cambio])]
+                vec![self.parche(vec![change])]
             }
-            Err(e) => self.decir(norte_frontend::error::error_key(&e)),
+            Err(e) => self.say(norte_frontend::error::error_key(&e)),
         }
     }
 
-    /// Cierra el panel de salida.
-    pub(super) fn cerrar_salida(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        self.escritorio.salida = None;
+    /// Closes the output panel.
+    pub(super) fn close_output(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        self.desktop.output = None;
         (
-            self.aplicada(),
+            self.applied(),
             vec![self.parche(vec![ViewChange::PluginOutput { output: None }])],
         )
     }
 
-    /// Un click en una fila del gestor: la elige.
-    pub(super) fn elegir_extension(
+    /// A click on a row of the manager: selects it.
+    pub(super) fn choose_extension(
         &mut self,
         row: u32,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(e) = self.extensiones.as_mut() else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        let Some(e) = self.extensions.as_mut() else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
-        e.senalar(row as usize);
-        let (_, mut envios) = self.pedir_ficha(backend, buzon);
-        let cambio = ViewChange::Extensions {
-            extensions: self.vista_extensiones(),
+        e.point_at(row as usize);
+        let (_, mut sends) = self.request_detail(backend, mailbox);
+        let change = ViewChange::Extensions {
+            extensions: self.vista_extensions(),
         };
-        envios.push(self.parche(vec![cambio]));
-        (self.aplicada(), envios)
+        sends.push(self.parche(vec![change]));
+        (self.applied(), sends)
     }
 }

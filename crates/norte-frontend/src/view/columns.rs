@@ -18,16 +18,16 @@ use norte_proto::VPath;
 /// width.
 pub const COLUMN_VALUE_MAX_CHARS: usize = 32;
 
-/// Cap de columnas `plugin:` PEDIBLES por lista pintada (#117-follow-up) —
-/// espejo del [`norte_proto::ATTRS_MAX_REQUEST`] de los attrs, pero local
-/// del frontend: cada columna de plugin cuesta UNA RPC
-/// `plugin.column_values` por listado, así que el cap acota trabajo, no
-/// wire. Pintado == pedido; el excedente es diagnóstico
-/// (`plugins_over_cap`, doctor lo nombra), jamás una columna en blanco.
+/// Cap on `plugin:` columns REQUESTABLE per painted listing (#117-follow-up)
+/// — mirror of attrs' [`norte_proto::ATTRS_MAX_REQUEST`], but local to the
+/// frontend: every plugin column costs ONE `plugin.column_values` RPC per
+/// listing, so the cap bounds work, not wire. Painted == requested; the
+/// overflow is diagnostic (`plugins_over_cap`, the doctor names it), never a
+/// blank column.
 ///
-/// Es el tope de las PINTADAS. Lo que un listado pide en total
-/// ([`plugin_requests`]) suma los elementos de la barra de estado (ADR
-/// 0137), hasta `STATUS_PLUGINS_MAX` más: doce llamadas como mucho.
+/// It is the cap on the PAINTED ones. What a listing requests in total
+/// ([`plugin_requests`]) adds the status bar's elements (ADR 0137), up to
+/// `STATUS_PLUGINS_MAX` more: twelve calls at most.
 pub const PLUGIN_COLUMNS_MAX_REQUEST: usize = 8;
 
 /// Masks a column HEADER ([`norte_proto::methods::PluginColumnInfo::header`],
@@ -47,11 +47,12 @@ pub fn sanitize_cell(value: Option<&str>) -> Option<String> {
     value.and_then(|v| {
         let masked = crate::display_name(v.as_bytes()).0;
         let mut truncated: String = masked.chars().take(COLUMN_VALUE_MAX_CHARS).collect();
-        // El corte se MARCA. Sin la marca, un valor recortado y uno completo
-        // se pintan idénticos, y quien lee la hoja de atributos —que existe
-        // justo para ver el valor entero— no puede saber cuál está mirando.
-        // Es la regla de `truncation_twins` del corpus: lo que se debe es que
-        // el corte se vea, no que quepa.
+        // The cut is MARKED. Without the mark, a truncated value and a
+        // complete one paint identically, and whoever reads the attributes
+        // sheet —which exists precisely to see the whole value— cannot know
+        // which one they are looking at. This is the corpus's
+        // `truncation_twins` rule: what is owed is that the cut be visible,
+        // not that it fit.
         if masked.chars().nth(COLUMN_VALUE_MAX_CHARS).is_some() {
             truncated.push('…');
         }
@@ -79,10 +80,10 @@ pub fn sanitize_column_values(
         .collect()
 }
 
-/// Id Display de una columna `plugin:` (#117-follow-up, audit F5): pasa
-/// por el `Display` REAL de [`ColumnId`] — jamás un `format!` ad-hoc que
-/// pueda derivar del parser (un drift = celdas permanentemente en blanco
-/// sin diagnóstico, la clave del side-map dejaría de casar).
+/// A `plugin:` column's Display id (#117-follow-up, audit F5): goes through
+/// [`ColumnId`]'s REAL `Display` — never an ad-hoc `format!` that could
+/// drift from the parser (a drift = permanently blank cells with no
+/// diagnostic, the side-map's key would stop matching).
 #[must_use]
 pub fn plugin_display_id(plugin: &str, column: &str) -> String {
     ColumnId::Plugin {
@@ -92,15 +93,15 @@ pub fn plugin_display_id(plugin: &str, column: &str) -> String {
     .to_string()
 }
 
-/// Las columnas de plugin que un listado de `scheme` tiene que PEDIR: las
-/// que se pintan como columna más las que la barra de estado enseña
-/// (`[ui] status_plugins`, ADR 0137), sin repetir, y en ese orden.
+/// The plugin columns a `scheme` listing has to REQUEST: the ones painted as
+/// a column plus the ones the status bar shows (`[ui] status_plugins`, ADR
+/// 0137), without repeats, and in that order.
 ///
-/// Una sola lista para los dos frontends: el elemento de estado es el valor
-/// de la columna para la entrada bajo el cursor, así que tiene que llegar
-/// por el MISMO viaje que las celdas —y con la misma validación de
-/// consentimiento, [`validated_plugin_requests`]—. Con una lista por
-/// frontend, uno pediría la columna y el otro enseñaría un elemento vacío.
+/// One single list for both frontends: the status element is the column's
+/// value for the entry under the cursor, so it has to arrive on the SAME
+/// trip as the cells —and with the same consent validation,
+/// [`validated_plugin_requests`]—. With one list per frontend, one would
+/// request the column and the other would show an empty element.
 #[must_use]
 pub fn plugin_requests(
     settings: &ColumnsSettings,
@@ -116,17 +117,17 @@ pub fn plugin_requests(
     out
 }
 
-/// Filtra los pares (plugin, columna) CONFIGURADOS contra el catálogo vivo
-/// (#117-follow-up, review MAJOR-1: única definición para ambos frontends —
-/// la validación de PERTENENCIA es lo que impide que un id configurado
-/// pinte la columna de un plugin que jamás la declaró): sobrevive un par
-/// solo si su plugin está aprobado + habilitado Y declara ESA columna.
-/// Además DEDUPLICA por id bare de columna (review MAJOR-2): el wire
-/// `plugin.column_values` resuelve first-match por id bare entre plugins —
-/// dos pares consentidos con la misma columna servirían los MISMOS valores
-/// bajo dos cabeceras distintas (datos mal atribuidos); se conserva el
-/// primero y el resto queda en blanco (ausencia visible, jamás atribución
-/// falsa; desambiguación real = issue #120).
+/// Filters the CONFIGURED (plugin, column) pairs against the live catalog
+/// (#117-follow-up, review MAJOR-1: a single definition for both frontends —
+/// the MEMBERSHIP validation is what stops a configured id from painting the
+/// column of a plugin that never declared it): a pair survives only if its
+/// plugin is approved + enabled AND declares THAT column. It also DEDUPES by
+/// bare column id (review MAJOR-2): the `plugin.column_values` wire resolves
+/// first-match by bare id across plugins — two consented pairs with the same
+/// column would serve the SAME values under two different headers
+/// (misattributed data); the first is kept and the rest are left blank
+/// (visible absence, never false attribution; real disambiguation = issue
+/// #120).
 #[must_use]
 pub fn validated_plugin_requests(
     requested: &[(String, String)],
@@ -137,10 +138,10 @@ pub fn validated_plugin_requests(
         let declared = plugins.iter().any(|p| {
             p.approved && p.enabled && p.id == *plugin && p.columns.iter().any(|c| c.id == *column)
         });
-        // Dedup por la PAREJA, no por el id bare (#120). Dos plugins
-        // consentidos pueden declarar `status` los dos, y desde 0.35.0 el wire
-        // sabe distinguirlos: deduplicar por columna a secas tiraría en
-        // silencio la segunda que el usuario configuró a propósito.
+        // Dedup by the PAIR, not by the bare id (#120). Two consented
+        // plugins can both declare `status`, and since 0.35.0 the wire
+        // knows how to tell them apart: deduplicating by column alone would
+        // silently drop the second one the user configured on purpose.
         if declared && !out.iter().any(|(p, c)| p == plugin && c == column) {
             out.push((plugin.clone(), column.clone()));
         }
@@ -182,21 +183,22 @@ mod validated_plugin_requests_tests {
         }
     }
 
-    /// Pertenencia: solo sobrevive el par cuyo plugin (aprobado+habilitado)
-    /// declara ESA columna — ni columnas ajenas ni plugins sin consentir.
+    /// Membership: only the pair whose plugin (approved+enabled) declares
+    /// THAT column survives — neither foreign columns nor unconsented
+    /// plugins.
     #[test]
-    fn filtra_por_pertenencia_y_consentimiento() {
+    fn filters_by_membership_and_consent() {
         let plugins = vec![
             plugin("git", &["branch"], true, true),
-            plugin("otro", &["status"], false, true),
-            plugin("apagado", &["x"], true, false),
+            plugin("other", &["status"], false, true),
+            plugin("off", &["x"], true, false),
         ];
         let requested = vec![
             ("git".to_owned(), "branch".to_owned()),
-            ("git".to_owned(), "status".to_owned()), // git NO declara status
-            ("otro".to_owned(), "status".to_owned()), // sin aprobar
-            ("apagado".to_owned(), "x".to_owned()),  // deshabilitado
-            ("fantasma".to_owned(), "y".to_owned()), // no existe
+            ("git".to_owned(), "status".to_owned()), // git does NOT declare status
+            ("other".to_owned(), "status".to_owned()), // not approved
+            ("off".to_owned(), "x".to_owned()),      // disabled
+            ("ghost".to_owned(), "y".to_owned()),    // does not exist
         ];
         assert_eq!(
             validated_plugin_requests(&requested, &plugins),
@@ -204,17 +206,17 @@ mod validated_plugin_requests_tests {
         );
     }
 
-    /// Dos plugins consentidos con el MISMO id bare de columna: AMBOS se
-    /// sirven (#120 cerrada).
+    /// Two consented plugins with the SAME bare column id: BOTH are served
+    /// (#120 closed).
     ///
-    /// Hasta 0.35.0 el wire llevaba solo el id bare y el host resolvía a la
-    /// primera que casara, así que servir los dos habría pintado los valores
-    /// de uno bajo la cabecera del otro; se conservaba el primero y el segundo
-    /// quedaba en blanco — ausencia visible antes que atribución falsa. Ahora
-    /// la petición nombra al plugin, el host sirve ESE o ninguno, y quedarse
-    /// con uno solo tiraría en silencio una columna que el usuario configuró.
+    /// Up to 0.35.0 the wire only carried the bare id and the host resolved
+    /// to the first match, so serving both would have painted one's values
+    /// under the other's header; the first was kept and the second was left
+    /// blank — visible absence rather than false attribution. Now the
+    /// request names the plugin, the host serves THAT one or none, and
+    /// keeping only one would silently drop a column the user configured.
     #[test]
-    fn colision_de_id_bare_sirve_a_los_dos_plugins() {
+    fn bare_id_collision_serves_both_plugins() {
         let plugins = vec![
             plugin("a", &["branch"], true, true),
             plugin("b", &["branch"], true, true),
@@ -226,14 +228,15 @@ mod validated_plugin_requests_tests {
         assert_eq!(
             validated_plugin_requests(&requested, &plugins),
             requested,
-            "cada par va con su plugin: el wire ya sabe distinguirlos (#120)"
+            "each pair goes with its plugin: the wire already tells them apart (#120)"
         );
     }
 
-    /// Lo que sigue deduplicándose es la pareja REPETIDA: configurar dos veces
-    /// `plugin:a/branch` es una columna, no dos peticiones al mismo guest.
+    /// What is still deduplicated is the REPEATED pair: configuring
+    /// `plugin:a/branch` twice is one column, not two requests to the same
+    /// guest.
     #[test]
-    fn la_pareja_repetida_se_deduplica() {
+    fn the_repeated_pair_is_deduplicated() {
         let plugins = vec![plugin("a", &["branch"], true, true)];
         let requested = vec![
             ("a".to_owned(), "branch".to_owned()),
@@ -255,50 +258,50 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_header_enmascara_hostil() {
-        let hostil = norte_testkit::corpus::hostile_names()
+    fn sanitize_header_masks_hostile() {
+        let hostile = norte_testkit::corpus::hostile_names()
             .into_iter()
             .find(|n| n.id == "rtl_override")
-            .expect("fixture del corpus");
-        let header = String::from_utf8_lossy(&hostil.bytes).into_owned();
+            .expect("corpus fixture");
+        let header = String::from_utf8_lossy(&hostile.bytes).into_owned();
         let out = sanitize_header(&header);
         assert!(!out.chars().any(norte_encoding::is_terminal_hazard));
     }
 
     #[test]
-    fn sanitize_cell_none_pasa_a_none() {
+    fn sanitize_cell_none_becomes_none() {
         assert_eq!(sanitize_cell(None), None);
     }
 
-    /// Trunca tras enmascarar, y MARCA el corte.
+    /// Truncates after masking, and MARKS the cut.
     ///
-    /// La marca no es cosmética: la hoja de atributos existe para ver el
-    /// valor entero, y sin ella un valor recortado y uno completo se pintan
-    /// idénticos.
+    /// The mark is not cosmetic: the attributes sheet exists to see the
+    /// whole value, and without it a truncated value and a complete one
+    /// paint identically.
     #[test]
-    fn sanitize_cell_trunca_tras_enmascarar_y_marca_el_corte() {
-        let largo = "a".repeat(1000);
-        let out = sanitize_cell(Some(&largo)).unwrap();
-        assert!(out.ends_with('…'), "el corte se ve: {out}");
+    fn sanitize_cell_truncates_after_masking_and_marks_the_cut() {
+        let long = "a".repeat(1000);
+        let out = sanitize_cell(Some(&long)).unwrap();
+        assert!(out.ends_with('…'), "the cut is visible: {out}");
         assert_eq!(
             out.chars().count(),
             COLUMN_VALUE_MAX_CHARS + 1,
-            "los caracteres del tope más la marca"
+            "the cap's characters plus the mark"
         );
 
-        // Uno que cabe JUSTO no se marca: no hay nada cortado que decir.
-        let justo = "a".repeat(COLUMN_VALUE_MAX_CHARS);
-        let out = sanitize_cell(Some(&justo)).unwrap();
-        assert_eq!(out, justo);
+        // One that fits EXACTLY is not marked: there is nothing cut to say.
+        let exact = "a".repeat(COLUMN_VALUE_MAX_CHARS);
+        let out = sanitize_cell(Some(&exact)).unwrap();
+        assert_eq!(out, exact);
     }
 
     #[test]
-    fn sanitize_cell_vacio_tras_enmascarar_es_none() {
+    fn sanitize_cell_empty_after_masking_is_none() {
         assert_eq!(sanitize_cell(Some("")), None);
     }
 
     #[test]
-    fn sanitize_column_values_posicional_con_none_intercalado() {
+    fn sanitize_column_values_positional_with_none_interleaved() {
         let paths = vec![vp("mem:///a.rs"), vp("mem:///b.rs"), vp("mem:///c.rs")];
         let values = vec![Some("modified".to_owned()), None, Some(String::new())];
         let map = sanitize_column_values(&paths, &values);
@@ -309,12 +312,12 @@ mod tests {
         assert!(!map.contains_key(&vp("mem:///b.rs")));
         assert!(
             !map.contains_key(&vp("mem:///c.rs")),
-            "cadena vacía tras enmascarar no entra en el mapa"
+            "an empty string after masking does not enter the map"
         );
     }
 
     #[test]
-    fn sanitize_column_values_longitudes_distintas_no_panica() {
+    fn sanitize_column_values_different_lengths_does_not_panic() {
         let paths = vec![vp("mem:///a.rs"), vp("mem:///b.rs")];
         let values = vec![Some("x".to_owned())];
         let map = sanitize_column_values(&paths, &values);
@@ -323,50 +326,51 @@ mod tests {
 }
 
 // ---------------------------------------------------------------------------
-// #108 bloque 3.2: el MODELO de columnas compartido (spec 2026-07-24, L1).
-// Tipos + layout + formatters; catálogo/config/picker llegan en los bloques
-// 4/6/7. Todo puro: los frontends solo pintan (regla 7).
+// #108 block 3.2: the shared columns MODEL (spec 2026-07-24, L1). Types +
+// layout + formatters; catalog/config/picker arrive in blocks 4/6/7. All
+// pure: the frontends only paint (rule 7).
 // ---------------------------------------------------------------------------
 
-/// Columna built-in, derivada de la `Entry` tal cual existe.
+/// A built-in column, derived from the `Entry` as it stands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Builtin {
-    /// El nombre (último segmento). Nunca se descarta en el layout.
+    /// The name (last segment). Never dropped in the layout.
     Name,
     /// `Entry.size`.
     Size,
     /// `Entry.mtime_ms`.
     Mtime,
-    /// `Entry.kind`, como texto localizado.
+    /// `Entry.kind`, as localized text.
     Kind,
 }
 
-/// Identidad de una columna (#108): built-in, atributo de provider
-/// (`attr:posix.mode`, bloque 2) o columna de plugin
-/// (`plugin:git-status/branch`, ADR 0037). Forma string ESTABLE de config
-/// vía `FromStr`/`Display` (round-trip pineado).
+/// A column's identity (#108): built-in, provider attribute
+/// (`attr:posix.mode`, block 2) or plugin column
+/// (`plugin:git-status/branch`, ADR 0037). A STABLE config string form via
+/// `FromStr`/`Display` (pinned round-trip).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ColumnId {
     /// Built-in (`"name"`, `"size"`, `"mtime"`, `"kind"`).
     Builtin(Builtin),
-    /// Atributo de provider por id namespaced (`"attr:<id>"`).
+    /// A provider attribute by namespaced id (`"attr:<id>"`).
     Attr(String),
-    /// Columna de plugin (`"plugin:<plugin>/<column>"`).
+    /// A plugin column (`"plugin:<plugin>/<column>"`).
     Plugin {
-        /// Id reverse-DNS del plugin.
+        /// The plugin's reverse-DNS id.
         plugin: String,
-        /// Id de la columna dentro del plugin.
+        /// The column's id within the plugin.
         column: String,
     },
 }
 
-/// Un id de columna que no parsea (#108): valor de DIAGNÓSTICO — jamás un
-/// panic y jamás un drop silencioso (doctor lo reporta, bloque 4).
+/// A column id that fails to parse (#108): a DIAGNOSTIC value — never a
+/// panic and never a silent drop (the doctor reports it, block 4).
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("column id inválido: {reason}")]
+#[error("invalid column id: {reason}")]
 pub struct ColumnIdError {
-    /// Por qué no parsea (texto NEUTRO: no interpola el input del usuario —
-    /// el diagnóstico completo con la fuente lo arma doctor).
+    /// Why it fails to parse (NEUTRAL text: it does not interpolate the
+    /// user's input — the doctor assembles the full diagnostic with the
+    /// source).
     pub reason: &'static str,
 }
 
@@ -384,7 +388,7 @@ impl std::str::FromStr for ColumnId {
         if let Some(attr) = s.strip_prefix("attr:") {
             if attr.is_empty() {
                 return Err(ColumnIdError {
-                    reason: "attr: sin id",
+                    reason: "attr: with no id",
                 });
             }
             return Ok(Self::Attr(attr.to_owned()));
@@ -392,12 +396,12 @@ impl std::str::FromStr for ColumnId {
         if let Some(rest) = s.strip_prefix("plugin:") {
             let Some((plugin, column)) = rest.split_once('/') else {
                 return Err(ColumnIdError {
-                    reason: "plugin: sin '/' entre plugin y columna",
+                    reason: "plugin: with no '/' between plugin and column",
                 });
             };
             if plugin.is_empty() || column.is_empty() {
                 return Err(ColumnIdError {
-                    reason: "plugin: id o columna vacíos",
+                    reason: "plugin: empty id or column",
                 });
             }
             return Ok(Self::Plugin {
@@ -406,7 +410,7 @@ impl std::str::FromStr for ColumnId {
             });
         }
         Err(ColumnIdError {
-            reason: "ni built-in ni attr:/plugin:",
+            reason: "neither built-in nor attr:/plugin:",
         })
     }
 }
@@ -424,131 +428,130 @@ impl std::fmt::Display for ColumnId {
     }
 }
 
-/// Política de ancho de una columna (celdas de terminal).
+/// A column's width policy (terminal cells).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WidthPolicy {
-    /// Ancho fijo.
+    /// Fixed width.
     Fixed(u16),
-    /// El de la celda más ancha de la página actual, con techo
-    /// [`AUTO_CEILING`].
+    /// The current page's widest cell, capped at [`AUTO_CEILING`].
     Auto,
-    /// Reparte el espacio sobrante por peso, nunca por debajo de `min`.
+    /// Splits the leftover space by weight, never below `min`.
     Flex {
-        /// Suelo en celdas.
+        /// Floor in cells.
         min: u16,
-        /// Peso relativo del reparto.
+        /// The split's relative weight.
         weight: u16,
     },
 }
 
-/// Techo de una columna `Auto` (anti-DoS de render: una celda kilométrica
-/// hostil no roba el pane).
+/// An `Auto` column's cap (render anti-DoS: a hostile mile-long cell does
+/// not steal the pane).
 pub const AUTO_CEILING: u16 = 32;
 
-/// Suelo del NOMBRE: nunca se descarta y nunca baja de aquí.
+/// The NAME's floor: never dropped and never goes below this.
 pub const NAME_MIN: u16 = 10;
 
-/// Alineación de una celda.
+/// A cell's alignment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Align {
-    /// Izquierda (texto).
+    /// Left (text).
     Left,
-    /// Derecha (números).
+    /// Right (numbers).
     Right,
 }
 
-/// Cómo se trunca una celda que no cabe.
+/// How a cell that does not fit is truncated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Truncate {
-    /// Cola fuera.
+    /// Tail cut off.
     End,
-    /// Elipsis central (paths/nombres).
+    /// Middle ellipsis (paths/names).
     Middle,
 }
 
-/// Formato de tamaño.
+/// Size format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SizeFormat {
-    /// Dígitos crudos, sin separadores — libre de locale, estable en
-    /// snapshots.
+    /// Raw digits, no separators — locale-free, stable in snapshots.
     Exact,
-    /// Binario (`KiB`/`MiB`), vía [`crate::human_bytes`].
+    /// Binary (`KiB`/`MiB`), via [`crate::human_bytes`].
     Iec,
     /// Decimal (`kB`/`MB`).
     Si,
-    /// Corto, binario y sin espacio (`80K`, `1.3M`, `512B`): nunca más de
-    /// cinco celdas. No es un formato de configuración: es el que pone
-    /// [`fitted_columns`] cuando el nombre necesita el sitio.
+    /// Short, binary and with no space (`80K`, `1.3M`, `512B`): never more
+    /// than five cells. Not a configuration format: it is the one
+    /// [`fitted_columns`] sets when the name needs the room.
     Short,
 }
 
-/// Formato de tiempo.
+/// Time format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TimeFormat {
-    /// «hace 2h», por Fluent (`col-time-*`). Necesita el `now` del caller.
+    /// "2h ago", via Fluent (`col-time-*`). Needs the caller's `now`.
     Relative,
-    /// RFC 3339 UTC al minuto (`2026-07-31T09:41Z`) — libre de locale.
+    /// RFC 3339 UTC to the minute (`2026-07-31T09:41Z`) — locale-free.
     Iso,
-    /// Hora LOCAL con la precisión que la distancia pide (spec 2026-09-10):
-    /// `14:02` si es de hoy, `09-10 14:02` si es de este año, `2025-09-10`
-    /// si es anterior. Numérico a propósito: cabe en 11 celdas en cualquier
-    /// idioma y se compara a ojo. Necesita el `now` del caller Y la zona
-    /// ([`format_mtime_tz`] para fijarla; [`format_mtime_in`] usa la del
-    /// sistema).
+    /// LOCAL time with the precision the distance calls for (spec
+    /// 2026-09-10): `14:02` if today, `09-10 14:02` if this year,
+    /// `2025-09-10` if earlier. Numeric on purpose: fits in 11 cells in any
+    /// language and compares at a glance. Needs the caller's `now` AND the
+    /// zone ([`format_mtime_tz`] to fix it; [`format_mtime_in`] uses the
+    /// system's).
     Smart,
-    /// Lo de [`Self::Smart`] en cinco celdas: `14:02` si es de hoy, `09-10`
-    /// si es de este año, `2025` si es anterior. Como [`SizeFormat::Short`],
-    /// lo pone [`fitted_columns`], no la configuración.
+    /// [`Self::Smart`]'s in five cells: `14:02` if today, `09-10` if this
+    /// year, `2025` if earlier. Like [`SizeFormat::Short`], it is set by
+    /// [`fitted_columns`], not configuration.
     Short,
 }
 
-/// Formato de un word de modo POSIX (#117).
+/// A POSIX mode word's format (#117).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModeFormat {
-    /// `-rw-r--r--` (tipo + rwx, setuid/sticky incluidos).
+    /// `-rw-r--r--` (type + rwx, setuid/sticky included).
     Rwx,
     /// Octal (`644`).
     Octal,
 }
 
-/// Entrada del [`layout`]: política + medida de la página (para `Auto`) +
-/// si es la columna del NOMBRE (jamás se descarta).
+/// A [`layout`] entry: policy + the page's measurement (for `Auto`) +
+/// whether it is the NAME column (never dropped).
 #[derive(Debug, Clone, Copy)]
 pub struct LayoutItem {
-    /// Política de ancho.
+    /// Width policy.
     pub policy: WidthPolicy,
-    /// Celdas de la celda más ancha medida en la página (solo `Auto` la lee).
+    /// Cells of the widest cell measured on the page (only `Auto` reads it).
     pub measured: u16,
-    /// ¿Es la columna del nombre?
+    /// Is it the name column?
     pub is_name: bool,
 }
 
-/// Reparte `available` celdas entre las columnas (#108 L1, puro y
-/// compartido por ambos frontends). `None` = columna DESCARTADA (no cupo).
-/// Reglas, todas pineadas:
-/// 1. `Fixed` toma su ancho; `Auto` la medida con techo [`AUTO_CEILING`];
-///    `Flex` parte de su `min` y el sobrante se reparte por peso.
-/// 2. Si el total no cabe, se descartan columnas desde la MÁS A LA DERECHA
-///    de MENOR peso (las `Fixed`/`Auto` cuentan como peso 0) hasta caber.
-/// 3. El NOMBRE jamás se descarta y jamás baja de [`NAME_MIN`] (si ni eso
-///    cabe, se lleva `available.max(1)` — con `available == 0` devuelve 1:
-///    un nombre de ancho cero es impintable).
-/// 4. Suma de anchos devueltos ≤ `available` SALVO la excepción del suelo
-///    del nombre de la regla 3; cada ancho devuelto ≥ 1.
+/// Splits `available` cells among the columns (#108 L1, pure and shared by
+/// both frontends). `None` = column DROPPED (did not fit). Rules, all
+/// pinned:
+/// 1. `Fixed` takes its width; `Auto` the measurement capped at
+///    [`AUTO_CEILING`]; `Flex` starts from its `min` and the leftover is
+///    split by weight.
+/// 2. If the total does not fit, columns are dropped from the RIGHTMOST one
+///    of LOWEST weight (`Fixed`/`Auto` count as weight 0) until it fits.
+/// 3. The NAME is never dropped and never goes below [`NAME_MIN`] (if even
+///    that does not fit, it gets `available.max(1)` — with `available == 0`
+///    it returns 1: a zero-width name cannot be painted).
+/// 4. The sum of returned widths is ≤ `available` EXCEPT for rule 3's name
+///    floor exception; every returned width is ≥ 1.
 #[must_use]
 pub fn layout(available: u16, items: &[LayoutItem]) -> Vec<Option<u16>> {
     debug_assert!(
         items.iter().filter(|it| it.is_name).count() <= 1,
-        "a lo sumo UNA columna de nombre (review m2)"
+        "at most ONE name column (review m2)"
     );
     let mut alive: Vec<bool> = items.iter().map(|_| true).collect();
     loop {
-        // Base de cada columna viva.
+        // Each alive column's base.
         let base: Vec<u16> = items
             .iter()
             .map(|it| {
-                // El suelo del nombre aplica bajo CUALQUIER política
-                // (review m2): el contrato de la regla 3 no es Flex-only.
+                // The name's floor applies under ANY policy (review m2):
+                // rule 3's contract is not Flex-only.
                 let floor = if it.is_name { NAME_MIN } else { 1 };
                 match it.policy {
                     WidthPolicy::Fixed(w) => w.max(floor),
@@ -564,9 +567,9 @@ pub fn layout(available: u16, items: &[LayoutItem]) -> Vec<Option<u16>> {
             .map(|(w, _)| u32::from(*w))
             .sum();
         if total <= u32::from(available) {
-            // Cabe: reparte el sobrante entre las Flex vivas por peso.
-            let sobrante = u32::from(available) - total;
-            let peso_total: u64 = items
+            // Fits: split the leftover among the alive Flex ones by weight.
+            let leftover = u32::from(available) - total;
+            let total_weight: u64 = items
                 .iter()
                 .zip(&alive)
                 .filter(|(_, a)| **a)
@@ -576,24 +579,24 @@ pub fn layout(available: u16, items: &[LayoutItem]) -> Vec<Option<u16>> {
                 })
                 .sum();
             let mut out = Vec::with_capacity(items.len());
-            let mut repartido = 0u64;
-            let mut flex_vistos = 0u64;
+            let mut allotted = 0u64;
+            let mut weight_seen = 0u64;
             for (i, it) in items.iter().enumerate() {
                 if !alive[i] {
                     out.push(None);
                     continue;
                 }
                 let extra = match it.policy {
-                    WidthPolicy::Flex { weight, .. } if peso_total > 0 => {
-                        flex_vistos += u64::from(weight);
-                        // Reparto acumulativo sin restos perdidos. En u64
-                        // (review M1): sobrante(≤65535) × pesos acumulados
-                        // (sin tope: config/plugins) desbordaba u32 con
-                        // pesos grandes — panic en debug, anchos basura en
-                        // release.
-                        let hasta = u64::from(sobrante) * flex_vistos / peso_total;
-                        let e = hasta - repartido;
-                        repartido = hasta;
+                    WidthPolicy::Flex { weight, .. } if total_weight > 0 => {
+                        weight_seen += u64::from(weight);
+                        // Cumulative split with no lost remainder. In u64
+                        // (review M1): leftover(≤65535) × accumulated
+                        // weights (no cap: config/plugins) overflowed u32
+                        // with large weights — a panic in debug, garbage
+                        // widths in release.
+                        let up_to = u64::from(leftover) * weight_seen / total_weight;
+                        let e = up_to - allotted;
+                        allotted = up_to;
                         e
                     }
                     _ => 0,
@@ -603,24 +606,24 @@ pub fn layout(available: u16, items: &[LayoutItem]) -> Vec<Option<u16>> {
             }
             return out;
         }
-        // No cabe: descarta la más a la derecha de menor peso (jamás el
-        // nombre). Si solo queda el nombre, dale todo lo disponible.
-        let victima = items
+        // Does not fit: drop the rightmost one of lowest weight (never the
+        // name). If only the name is left, give it all the available space.
+        let victim = items
             .iter()
             .enumerate()
             .filter(|(i, it)| alive[*i] && !it.is_name)
             .min_by_key(|(i, it)| {
-                let peso = match it.policy {
+                let weight = match it.policy {
                     WidthPolicy::Flex { weight, .. } => weight,
                     _ => 0,
                 };
-                (peso, std::cmp::Reverse(*i))
+                (weight, std::cmp::Reverse(*i))
             })
             .map(|(i, _)| i);
-        match victima {
+        match victim {
             Some(i) => alive[i] = false,
             None => {
-                // Solo el nombre (o nada) vive: todo para él.
+                // Only the name (or nothing) is alive: everything for it.
                 return items
                     .iter()
                     .enumerate()
@@ -631,8 +634,8 @@ pub fn layout(available: u16, items: &[LayoutItem]) -> Vec<Option<u16>> {
     }
 }
 
-/// Tamaño según formato (#108). `Exact` son dígitos crudos; `Iec` reusa
-/// [`crate::human_bytes`]; `Si` decimal con una cifra.
+/// Size by format (#108). `Exact` is raw digits; `Iec` reuses
+/// [`crate::human_bytes`]; `Si` decimal with one digit.
 #[must_use]
 pub fn format_size(n: u64, fmt: SizeFormat) -> String {
     match fmt {
@@ -643,7 +646,7 @@ pub fn format_size(n: u64, fmt: SizeFormat) -> String {
             if n < 1000 {
                 return format!("{n} B");
             }
-            #[expect(clippy::cast_precision_loss, reason = "magnitudes lejos de 2^53")]
+            #[expect(clippy::cast_precision_loss, reason = "magnitudes far from 2^53")]
             let mut value = n as f64 / 1000.0;
             let mut unit = 0usize;
             while (value * 10.0).round() >= 10000.0 && unit + 1 < UNITS.len() {
@@ -656,15 +659,15 @@ pub fn format_size(n: u64, fmt: SizeFormat) -> String {
     }
 }
 
-/// [`SizeFormat::Short`]: `512B`, `9.5K`, `80K`, `1.3M`. Una cifra decimal
-/// solo por debajo de 10, que es donde cambia la lectura; el redondeo que
-/// llega a 1000 sube de unidad, así que jamás pasa de cinco celdas.
+/// [`SizeFormat::Short`]: `512B`, `9.5K`, `80K`, `1.3M`. One decimal digit
+/// only below 10, which is where the reading changes; rounding that reaches
+/// 1000 bumps the unit, so it never goes past five cells.
 fn short_size(n: u64) -> String {
     const UNITS: [char; 6] = ['K', 'M', 'G', 'T', 'P', 'E'];
     if n < 1024 {
         return format!("{n}B");
     }
-    #[expect(clippy::cast_precision_loss, reason = "magnitudes lejos de 2^53")]
+    #[expect(clippy::cast_precision_loss, reason = "magnitudes far from 2^53")]
     let mut value = n as f64 / 1024.0;
     let mut unit = 0usize;
     while value.round() >= 1000.0 && unit + 1 < UNITS.len() {
@@ -678,22 +681,23 @@ fn short_size(n: u64) -> String {
     }
 }
 
-/// Tiempo según formato (#108). `now_ms` lo aporta el caller (fn pura —
-/// testeable y estable en snapshots); negativos pre-1970 válidos.
+/// Time by format (#108). `now_ms` is supplied by the caller (a pure fn —
+/// testable and stable in snapshots); negative pre-1970 values are valid.
 ///
-/// En la lengua AMBIENTE. Envoltorio de [`format_mtime_in`] para quien no
-/// tiene un `lang` que pasar; **una ventana siempre lo tiene**, y llamar a
-/// ésta desde ella pintaba cada celda de fecha del listado en el idioma del
-/// PROCESO, bajo una cabecera en el del host.
+/// In the AMBIENT language. A wrapper over [`format_mtime_in`] for whoever
+/// has no `lang` to pass; **a window always has one**, and calling this one
+/// from it painted every date cell in the listing in the PROCESS's
+/// language, under a header in the host's.
 #[must_use]
 pub fn format_mtime(mtime_ms: i64, fmt: TimeFormat, now_ms: i64) -> String {
     format_mtime_in(mtime_ms, fmt, now_ms, norte_i18n::active())
 }
 
-/// [`format_mtime`] en un idioma DADO.
+/// [`format_mtime`] in a GIVEN language.
 ///
-/// La rama relativa es la que traduce, y no se puede esquivar con
-/// configuración: la ventana ignora `time-format`, así que está siempre viva.
+/// The relative branch is the one that translates, and it cannot be dodged
+/// with configuration: the window ignores `time-format`, so it is always
+/// live.
 #[must_use]
 pub fn format_mtime_in(
     mtime_ms: i64,
@@ -704,9 +708,9 @@ pub fn format_mtime_in(
     format_mtime_tz(mtime_ms, fmt, now_ms, lang, &jiff::tz::TimeZone::system())
 }
 
-/// [`format_mtime_in`] con la ZONA dada — la que [`TimeFormat::Smart`]
-/// necesita para saber qué es «hoy». Los frontends pasan la del sistema;
-/// los tests, una fija, para que una foto no dependa de la máquina.
+/// [`format_mtime_in`] with the given ZONE — the one [`TimeFormat::Smart`]
+/// needs to know what "today" is. The frontends pass the system's; tests,
+/// a fixed one, so a snapshot does not depend on the machine.
 #[must_use]
 pub fn format_mtime_tz(
     mtime_ms: i64,
@@ -738,10 +742,10 @@ pub fn format_mtime_tz(
     }
 }
 
-/// [`TimeFormat::Smart`]: hora local con la precisión que la distancia pide.
-/// Un instante fuera del rango de `jiff` (±9999 años: mtime basura de un
-/// provider hostil) cae al ISO UTC, que sabe pintar cualquier `i64` —
-/// jamás un panic ni una celda vacía.
+/// [`TimeFormat::Smart`]: local time with the precision the distance calls
+/// for. An instant outside `jiff`'s range (±9999 years: garbage mtime from
+/// a hostile provider) falls back to ISO UTC, which knows how to paint any
+/// `i64` — never a panic nor an empty cell.
 fn smart_local(mtime_ms: i64, now_ms: i64, tz: &jiff::tz::TimeZone) -> String {
     let (Ok(ts), Ok(now)) = (
         jiff::Timestamp::from_millisecond(mtime_ms),
@@ -766,23 +770,23 @@ fn smart_local(mtime_ms: i64, now_ms: i64, tz: &jiff::tz::TimeZone) -> String {
     }
 }
 
-/// [`TimeFormat::Short`]: la parte de [`smart_local`] que distingue a esa
-/// distancia, y nada más. Fuera del rango de `jiff`, el año del ISO.
+/// [`TimeFormat::Short`]: the part of [`smart_local`] that distinguishes
+/// that distance, and nothing more. Outside `jiff`'s range, the ISO's year.
 fn short_local(mtime_ms: i64, now_ms: i64, tz: &jiff::tz::TimeZone) -> String {
     let (Ok(ts), Ok(now)) = (
         jiff::Timestamp::from_millisecond(mtime_ms),
         jiff::Timestamp::from_millisecond(now_ms),
     ) else {
-        // El AÑO del ISO, con su signo: `iso_utc_minutes` pone el signo
-        // fuera del ancho, y cortar a cuatro caracteres dejaba `-000` para
-        // cualquier año negativo.
+        // The ISO's YEAR, with its sign: `iso_utc_minutes` puts the sign
+        // outside the width, and cutting to four characters left `-000`
+        // for any negative year.
         let iso = iso_utc_minutes(mtime_ms);
-        let fin = iso
+        let end = iso
             .char_indices()
             .skip(1)
             .find(|(_, c)| *c == '-')
             .map_or(iso.len(), |(i, _)| i);
-        return iso[..fin].to_owned();
+        return iso[..end].to_owned();
     };
     let z = ts.to_zoned(tz.clone());
     let n = now.to_zoned(tz.clone());
@@ -795,9 +799,9 @@ fn short_local(mtime_ms: i64, now_ms: i64, tz: &jiff::tz::TimeZone) -> String {
     }
 }
 
-/// RFC 3339 UTC al minuto, sin dependencia de calendario externa: algoritmo
-/// de días civiles (Howard Hinnant) sobre el epoch. Pineado contra fechas
-/// conocidas, negativos incluidos.
+/// RFC 3339 UTC to the minute, with no external calendar dependency: a
+/// civil-days algorithm (Howard Hinnant) over the epoch. Pinned against
+/// known dates, negatives included.
 fn iso_utc_minutes(ms: i64) -> String {
     let secs = ms.div_euclid(1000);
     let days = secs.div_euclid(86_400);
@@ -817,9 +821,9 @@ fn iso_utc_minutes(ms: i64) -> String {
         month_shift - 9
     };
     let year = if month <= 2 { year_base + 1 } else { year_base };
-    // Años negativos (mtime basura de un archivo corrupto): forma ISO 8601
-    // expandida `-0005-…` — `{:04}` a secas contaría el signo dentro del
-    // ancho (review m4).
+    // Negative years (garbage mtime from a corrupt file): expanded ISO 8601
+    // form `-0005-…` — plain `{:04}` would count the sign inside the width
+    // (review m4).
     if year < 0 {
         format!(
             "-{:04}-{month:02}-{day:02}T{hour:02}:{min:02}Z",
@@ -830,43 +834,43 @@ fn iso_utc_minutes(ms: i64) -> String {
     }
 }
 
-/// Modo POSIX en octal (`0644`) — para el bloque 2 (attrs); vive aquí para
-/// que los formatters nazcan juntos y testeados.
+/// A POSIX mode in octal (`0644`) — for block 2 (attrs); it lives here so
+/// the formatters are born together and tested.
 #[must_use]
 pub fn format_mode_octal(mode: u32) -> String {
     format!("{:04o}", mode & 0o7777)
 }
 
-/// Modo POSIX estilo `ls` (`-rw-r--r--`).
+/// A POSIX mode, `ls`-style (`-rw-r--r--`).
 ///
-/// La primera letra es la CLASE del nodo, con las siete que define `S_IFMT`
-/// y una octava que no la define: `?`.
+/// The first letter is the node's CLASS, with the seven `S_IFMT` defines
+/// and an eighth it does not define: `?`.
 ///
-/// El `?` es el hallazgo de la auditoría de codificación, y es el que
-/// importa. Un modo cuyos bits de tipo son cero —lo que manda un servidor
-/// SFTP que solo reporta los permisos, y lo que emite `MemProvider`— no es
-/// un fichero regular: es un modo que no dice de qué clase es. Pintarlo `-`
-/// enseñaba un directorio como fichero en la misma fila en la que el icono y
-/// la `/` decían que era un directorio, y de dos superficies que se
-/// contradicen la que mentía era ésta. `?` es una pregunta sobre la que el
-/// lector puede actuar; `-` era una respuesta equivocada.
+/// The `?` is the encoding audit's finding, and it is the one that matters.
+/// A mode whose type bits are zero —what an SFTP server that only reports
+/// permissions sends, and what `MemProvider` emits— is not a regular file:
+/// it is a mode that does not say which class it is. Painting it `-` showed
+/// a directory as a file on the same row where the icon and the `/` said it
+/// was a directory, and of two surfaces that contradict each other, this
+/// one was the one lying. `?` is a question the reader can act on; `-` was
+/// a wrong answer.
 ///
 /// ```
 /// use norte_frontend::columns::format_mode_rwx;
 /// assert_eq!(format_mode_rwx(0o100_644), "-rw-r--r--");
 /// assert_eq!(format_mode_rwx(0o040_755), "drwxr-xr-x");
 /// assert_eq!(format_mode_rwx(0o010_644), "prw-r--r--", "fifo");
-/// assert_eq!(format_mode_rwx(0o020_666), "crw-rw-rw-", "dispositivo de caracteres");
-/// assert_eq!(format_mode_rwx(0o060_660), "brw-rw----", "dispositivo de bloques");
+/// assert_eq!(format_mode_rwx(0o020_666), "crw-rw-rw-", "character device");
+/// assert_eq!(format_mode_rwx(0o060_660), "brw-rw----", "block device");
 /// assert_eq!(format_mode_rwx(0o140_755), "srwxr-xr-x", "socket");
-/// // Sin bits de clase: NO es un fichero regular, es un modo que no lo dice.
+/// // With no class bits: it is NOT a regular file, it's a mode that doesn't say.
 /// assert_eq!(format_mode_rwx(0o644), "?rw-r--r--");
-/// // Y siempre diez celdas, sea cual sea la entrada.
+/// // And always ten cells, whatever the input.
 /// assert_eq!(format_mode_rwx(u32::MAX).chars().count(), 10);
 /// ```
 #[must_use]
 pub fn format_mode_rwx(mode: u32) -> String {
-    let tipo = match mode & 0o170_000 {
+    let kind = match mode & 0o170_000 {
         0o140_000 => 's',
         0o120_000 => 'l',
         0o100_000 => '-',
@@ -877,9 +881,9 @@ pub fn format_mode_rwx(mode: u32) -> String {
         _ => '?',
     };
     let mut out = String::with_capacity(10);
-    out.push(tipo);
-    // (shift, bit especial, letra con x, letra sin x): setuid/setgid/sticky
-    // como `ls` de verdad (review m5) — un setuid jamás se pinta ordinario.
+    out.push(kind);
+    // (shift, special bit, letter with x, letter without x): setuid/setgid/
+    // sticky like real `ls` (review m5) — a setuid is never painted ordinary.
     for (shift, special, low, up) in [
         (6u32, 0o4000u32, 's', 'S'),
         (3, 0o2000, 's', 'S'),
@@ -905,10 +909,11 @@ mod settings_tests {
     use crate::sort::{SortColumn, SortDir};
 
     #[test]
-    fn column_widths_conjunto_default_a_80_celdas() {
+    fn column_widths_defaults_the_set_to_80_cells() {
         let s = ColumnsSettings::default();
-        // Sin catálogo no hay columna de permisos: la pone el listado, y el
-        // listado no la enseña hasta saber que el backend la contesta.
+        // With no catalog there is no permissions column: the listing sets
+        // it, and the listing does not show it until it knows the backend
+        // answers it.
         let w = column_widths(&s, "file", 80, None);
         let cols: Vec<ColumnId> = w.iter().map(|(id, _)| id.clone()).collect();
         assert_eq!(
@@ -919,12 +924,12 @@ mod settings_tests {
                 ColumnId::Builtin(Builtin::Mtime),
             ]
         );
-        // El nombre absorbe el resto: suma == disponible.
+        // The name absorbs the rest: sum == available.
         assert_eq!(w.iter().map(|(_, x)| *x).sum::<u16>(), 80);
     }
 
     #[test]
-    fn column_widths_estrecho_solo_nombre() {
+    fn column_widths_narrow_only_name() {
         let s = ColumnsSettings::default();
         let w = column_widths(&s, "file", 12, None);
         assert_eq!(
@@ -934,7 +939,7 @@ mod settings_tests {
     }
 
     #[test]
-    fn sort_column_mapea_builtins_ordenables() {
+    fn sort_column_maps_sortable_builtins() {
         use crate::sort::SortColumn;
         assert_eq!(sort_column(Builtin::Name), Some(SortColumn::Name));
         assert_eq!(sort_column(Builtin::Size), Some(SortColumn::Size));
@@ -942,10 +947,10 @@ mod settings_tests {
         assert_eq!(sort_column(Builtin::Kind), None);
     }
 
-    /// ADR 0144: un `attr:` ordena por su id; un `plugin:` sigue sin
-    /// ordenar (sus valores llegan después del listado).
+    /// ADR 0144: an `attr:` sorts by its id; a `plugin:` still does not sort
+    /// (its values arrive after the listing).
     #[test]
-    fn sort_column_id_ordena_atributos_y_no_plugins() {
+    fn sort_column_id_sorts_attributes_and_not_plugins() {
         use crate::sort::SortColumn;
         let attr: ColumnId = "attr:posix.uid".parse().expect("id");
         assert_eq!(
@@ -957,7 +962,7 @@ mod settings_tests {
     }
 
     #[test]
-    fn resolve_parsea_diagnostica_y_resuelve_por_scheme() {
+    fn resolve_parses_diagnoses_and_resolves_by_scheme() {
         let cfg = norte_config::ColumnsConfig {
             default_columns: Some(vec![
                 "size".into(),
@@ -985,46 +990,47 @@ mod settings_tests {
         assert_eq!(
             st.invalid,
             vec!["rota!!".to_owned()],
-            "diagnóstico, no drop mudo"
+            "diagnostic, not a silent drop"
         );
-        // #117 y follow-up: attr: y plugin: se pintan ambos — el único
-        // diagnóstico de cap presente aquí debe estar vacío.
+        // #117 and follow-up: attr: and plugin: are both painted — the only
+        // cap diagnostic present here must be empty.
         assert!(st.plugins_over_cap.is_empty(), "{:?}", st.plugins_over_cap);
 
-        // Default: size + attr → name ANTEPUESTO (jamás sin nombre).
+        // Default: size + attr → name PREPENDED (never without a name).
         let items = st.layout_items_for("file");
         let cols: Vec<String> = items.iter().map(|(id, _)| id.to_string()).collect();
         assert_eq!(cols, vec!["name", "size", "attr:posix.mode"]);
 
-        // Scheme: reemplaza la lista entera.
+        // Scheme: replaces the whole list.
         let items = st.layout_items_for("sftp");
         let cols: Vec<String> = items.iter().map(|(id, _)| id.to_string()).collect();
         assert_eq!(cols, vec!["name", "kind"]);
 
-        // Sort: global mtime/desc; sftp hereda el global (sin override).
+        // Sort: global mtime/desc; sftp inherits the global (no override).
         let s = st.sort_for("file");
         assert_eq!((s.column, s.dir), (SortColumn::Mtime, SortDir::Desc));
         let s = st.sort_for("sftp");
         assert_eq!((s.column, s.dir), (SortColumn::Mtime, SortDir::Desc));
     }
 
-    /// Las DOS tablas de anchos dicen lo mismo: la de serie
-    /// (`default_layout_items`) y la que usa `[ui.columns]` configurado
-    /// (`builtin_layout_item`). Se separaron una vez —12 y 10 para la fecha—
-    /// y la columna configurada salía cortada («09-10 20:», 2026-09-11).
+    /// The TWO width tables say the same thing: the stock one
+    /// (`default_layout_items`) and the one used by configured
+    /// `[ui.columns]` (`builtin_layout_item`). They diverged once —12 and
+    /// 10 for the date— and the configured column came out truncated
+    /// ("09-10 20:", 2026-09-11).
     #[test]
-    fn las_dos_tablas_de_anchos_coinciden() {
+    fn the_two_width_tables_agree() {
         for (b, item) in default_layout_items() {
             assert_eq!(
                 builtin_layout_item(b).policy,
                 item.policy,
-                "{b:?}: `builtin_layout_item` difiere de `default_layout_items`"
+                "{b:?}: `builtin_layout_item` differs from `default_layout_items`"
             );
         }
     }
 
     #[test]
-    fn layout_items_normaliza_name_al_frente() {
+    fn layout_items_normalizes_name_to_the_front() {
         let cfg = norte_config::ColumnsConfig {
             default_columns: Some(vec!["size".into(), "name".into()]),
             ..Default::default()
@@ -1036,13 +1042,13 @@ mod settings_tests {
     }
 
     #[test]
-    fn sin_config_todo_es_default() {
+    fn with_no_config_everything_is_default() {
         let st = ColumnsSettings::resolve(&norte_config::ColumnsConfig::default());
         assert_eq!(st.sort_for("file"), crate::sort::SortSpec::default());
         let items = st.layout_items_for("file");
-        assert_eq!(items.len(), 4, "name+size+mtime+permisos");
-        // Y en un scheme sin permisos POSIX, las tres de siempre: la cuarta
-        // no se pone donde el backend no la puede contestar.
+        assert_eq!(items.len(), 4, "name+size+mtime+permissions");
+        // And on a scheme with no POSIX permissions, the usual three: the
+        // fourth is not placed where the backend cannot answer it.
         assert_eq!(st.layout_items_for("s3").len(), 3, "name+size+mtime");
         assert!(st.invalid.is_empty() && st.plugins_over_cap.is_empty());
     }
@@ -1054,7 +1060,7 @@ mod model_tests {
     use std::str::FromStr as _;
 
     #[test]
-    fn column_id_round_trip_y_errores() {
+    fn column_id_round_trip_and_errors() {
         for s in [
             "name",
             "size",
@@ -1075,7 +1081,7 @@ mod model_tests {
             "plugin:/col",
             "plugin:p/",
         ] {
-            assert!(ColumnId::from_str(bad).is_err(), "{bad:?} debe fallar");
+            assert!(ColumnId::from_str(bad).is_err(), "{bad:?} must fail");
         }
     }
 
@@ -1088,8 +1094,8 @@ mod model_tests {
     }
 
     #[test]
-    fn layout_reparte_y_descarta_por_la_derecha() {
-        // name flex + size fija 9 + mtime fija 12, en 80 celdas.
+    fn layout_splits_and_drops_from_the_right() {
+        // name flex + size fixed 9 + mtime fixed 12, in 80 cells.
         let items = [
             it(WidthPolicy::Flex { min: 10, weight: 1 }, 0, true),
             it(WidthPolicy::Fixed(9), 0, false),
@@ -1098,22 +1104,22 @@ mod model_tests {
         let w = layout(80, &items);
         assert_eq!(w[1], Some(9));
         assert_eq!(w[2], Some(12));
-        assert_eq!(w[0], Some(80 - 9 - 12), "el nombre absorbe el sobrante");
+        assert_eq!(w[0], Some(80 - 9 - 12), "the name absorbs the leftover");
 
-        // En 25 celdas no caben las tres: cae la de la DERECHA (peso 0).
+        // In 25 cells the three do not fit: the RIGHTMOST one (weight 0) drops.
         let w = layout(25, &items);
-        assert_eq!(w[2], None, "la más a la derecha de menor peso cae");
+        assert_eq!(w[2], None, "the rightmost one of lowest weight drops");
         assert_eq!(w[1], Some(9));
         assert_eq!(w[0], Some(16));
 
-        // En 12 celdas solo vive el nombre, con todo.
+        // In 12 cells only the name survives, with everything.
         let w = layout(12, &items);
         assert_eq!(w, vec![Some(12), None, None]);
     }
 
-    /// Barrido: suma ≤ available, nombre jamás descartado, anchos ≥ 1.
+    /// Sweep: sum ≤ available, name never dropped, widths ≥ 1.
     #[test]
-    fn layout_invariantes_en_barrido() {
+    fn layout_invariants_under_sweep() {
         let policies = [
             WidthPolicy::Fixed(7),
             WidthPolicy::Auto,
@@ -1128,12 +1134,12 @@ mod model_tests {
                         it(p2, 3, false),
                     ];
                     let w = layout(avail, &items);
-                    assert!(w[0].is_some(), "nombre vivo: avail={avail} {p1:?} {p2:?}");
-                    let suma: u32 = w.iter().flatten().map(|x| u32::from(*x)).sum();
-                    // La única excepción documentada: el suelo del nombre
-                    // puede exceder un available minúsculo (regla 3).
+                    assert!(w[0].is_some(), "name alive: avail={avail} {p1:?} {p2:?}");
+                    let sum: u32 = w.iter().flatten().map(|x| u32::from(*x)).sum();
+                    // The one documented exception: the name's floor can
+                    // exceed a tiny available (rule 3).
                     if avail >= NAME_MIN {
-                        assert!(suma <= u32::from(avail.max(1)), "suma {suma} > {avail}");
+                        assert!(sum <= u32::from(avail.max(1)), "sum {sum} > {avail}");
                     }
                     assert!(w.iter().flatten().all(|x| *x >= 1));
                 }
@@ -1142,7 +1148,7 @@ mod model_tests {
     }
 
     #[test]
-    fn format_size_fronteras() {
+    fn format_size_boundaries() {
         assert_eq!(format_size(0, SizeFormat::Exact), "0");
         assert_eq!(
             format_size(u64::MAX, SizeFormat::Exact),
@@ -1154,78 +1160,78 @@ mod model_tests {
         assert_eq!(
             format_size(999_950, SizeFormat::Si),
             "1.0 MB",
-            "promoción redondeada"
+            "rounded promotion"
         );
         assert_eq!(format_size(u64::MAX, SizeFormat::Si), "18.4 EB");
     }
 
     #[test]
-    fn iso_utc_fechas_conocidas() {
+    fn iso_utc_known_dates() {
         assert_eq!(iso_utc_minutes(0), "1970-01-01T00:00Z");
         assert_eq!(iso_utc_minutes(1_720_000_000_000), "2024-07-03T09:46Z");
-        // Pre-1970 (negativo): 1969-12-31 23:59.
+        // Pre-1970 (negative): 1969-12-31 23:59.
         assert_eq!(iso_utc_minutes(-60_000), "1969-12-31T23:59Z");
-        // Bisiesto.
+        // Leap year.
         assert_eq!(iso_utc_minutes(951_782_400_000), "2000-02-29T00:00Z");
     }
 
     #[test]
-    fn modos_posix() {
+    fn posix_modes() {
         assert_eq!(format_mode_octal(0o100_644), "0644");
         assert_eq!(format_mode_rwx(0o100_644), "-rw-r--r--");
         assert_eq!(format_mode_rwx(0o040_755), "drwxr-xr-x");
         assert_eq!(format_mode_rwx(0o120_777), "lrwxrwxrwx");
-        // Review m5: setuid/setgid/sticky como ls — jamás ordinarios.
+        // Review m5: setuid/setgid/sticky like ls — never ordinary.
         assert_eq!(format_mode_rwx(0o104_755), "-rwsr-xr-x");
         assert_eq!(format_mode_rwx(0o102_745), "-rwxr-Sr-x");
         assert_eq!(format_mode_rwx(0o041_775), "drwxrwxr-t");
         assert_eq!(format_mode_rwx(0o041_774), "drwxrwxr-T");
     }
 
-    /// El corpus canónico de modos, contra el formateador (spec 2026-09-20).
+    /// The canonical mode corpus, against the formatter (spec 2026-09-20).
     ///
-    /// Vive en `norte-testkit` y no aquí porque la columna dejó de ser
-    /// opcional: el mismo corpus lo tienen que poder gastar los tests del
-    /// provider local y los de la ventana, y una tabla copiada en tres
-    /// sitios se separa en el primer modo nuevo.
+    /// It lives in `norte-testkit` and not here because the column stopped
+    /// being optional: the same corpus has to be usable by the local
+    /// provider's tests and the window's, and a table copied in three
+    /// places drifts apart at the first new mode.
     #[test]
-    fn el_corpus_de_modos_se_pinta_entero() {
+    fn the_mode_corpus_paints_whole() {
         for m in norte_testkit::corpus::posix_modes() {
-            let pintado = format_mode_rwx(u32::try_from(m.mode).expect("cabe en u32"));
-            assert_eq!(pintado, m.rwx, "{}: {}", m.id, m.why);
-            assert_eq!(pintado.chars().count(), 10, "{} no mide diez", m.id);
+            let painted = format_mode_rwx(u32::try_from(m.mode).expect("fits in u32"));
+            assert_eq!(painted, m.rwx, "{}: {}", m.id, m.why);
+            assert_eq!(painted.chars().count(), 10, "{} is not ten wide", m.id);
         }
     }
 
-    /// El gemelo de `no_type_bits` SÍ es un fichero regular, y los dos se
-    /// tienen que poder distinguir. Era el fallo: los dos pintaban `-`.
+    /// `no_type_bits`'s twin IS a regular file, and the two must be
+    /// distinguishable. That was the bug: both painted `-`.
     #[test]
-    fn un_modo_sin_clase_no_se_confunde_con_un_fichero() {
+    fn a_mode_with_no_class_is_not_confused_with_a_file() {
         let corpus = norte_testkit::corpus::posix_modes();
         let sin = corpus
             .iter()
             .find(|m| m.id == "no_type_bits")
-            .expect("el corpus lo trae");
-        let gemelo = sin.twin.expect("la colisión necesita dos");
-        let a = format_mode_rwx(u32::try_from(sin.mode).expect("cabe"));
-        let b = format_mode_rwx(u32::try_from(gemelo).expect("cabe"));
-        assert_ne!(a, b, "un directorio por SFTP se leía como fichero regular");
-        assert!(a.starts_with('?'), "la clase que falta se PREGUNTA: {a}");
-        assert!(b.starts_with('-'), "la que está se afirma: {b}");
+            .expect("the corpus brings it");
+        let twin = sin.twin.expect("the collision needs two");
+        let a = format_mode_rwx(u32::try_from(sin.mode).expect("fits"));
+        let b = format_mode_rwx(u32::try_from(twin).expect("fits"));
+        assert_ne!(a, b, "a directory over SFTP read as a regular file");
+        assert!(a.starts_with('?'), "the missing class is a QUESTION: {a}");
+        assert!(b.starts_with('-'), "the one that is there is asserted: {b}");
     }
 
-    /// Review m3: available=0 → el nombre recibe 1 (impintable a 0), la
-    /// excepción documentada de la regla 3/4. Y m1: pesos enormes no
-    /// desbordan (u64).
+    /// Review m3: available=0 → the name gets 1 (unpaintable at 0), the
+    /// documented exception to rule 3/4. And m1: huge weights do not
+    /// overflow (u64).
     #[test]
-    fn layout_bordes_cero_y_pesos_enormes() {
+    fn layout_zero_and_huge_weight_edges() {
         let items = [
             it(WidthPolicy::Flex { min: 10, weight: 1 }, 0, true),
             it(WidthPolicy::Fixed(9), 0, false),
         ];
         assert_eq!(layout(0, &items), vec![Some(1), None]);
 
-        let gordos = [
+        let huge = [
             it(
                 WidthPolicy::Flex {
                     min: 10,
@@ -1251,27 +1257,27 @@ mod model_tests {
                 false,
             ),
         ];
-        let w = layout(u16::MAX, &gordos);
-        let suma: u32 = w.iter().flatten().map(|x| u32::from(*x)).sum();
+        let w = layout(u16::MAX, &huge);
+        let sum: u32 = w.iter().flatten().map(|x| u32::from(*x)).sum();
         assert!(
-            u16::try_from(suma).is_ok(),
-            "sin overflow del reparto: {w:?}"
+            u16::try_from(sum).is_ok(),
+            "no overflow from the split: {w:?}"
         );
     }
 
-    /// Review m4: año negativo en forma ISO expandida, ancho 4 + signo.
+    /// Review m4: negative year in expanded ISO form, width 4 + sign.
     #[test]
-    fn iso_utc_anio_negativo() {
-        // ~ -63_113_904_000_000 ms ≈ año -31 (aprox); pinea el FORMATO.
+    fn iso_utc_negative_year() {
+        // ~ -63_113_904_000_000 ms ≈ year -31 (approx); pins the FORMAT.
         let s = iso_utc_minutes(-63_200_000_000_000);
         assert!(s.starts_with('-'), "{s}");
         let year_part = &s[1..5];
         assert!(year_part.chars().all(|c| c.is_ascii_digit()), "{s}");
     }
 
-    /// `Relative` por Fluent, `now` inyectado: puro y estable.
+    /// `Relative` via Fluent, injected `now`: pure and stable.
     #[test]
-    fn format_mtime_relative_e_iso() {
+    fn format_mtime_relative_and_iso() {
         let _ = norte_i18n::force(norte_i18n::Lang::En);
         let now = 1_720_000_000_000i64;
         assert_eq!(format_mtime(now - 30_000, TimeFormat::Relative, now), "now");
@@ -1283,48 +1289,48 @@ mod model_tests {
             format_mtime(now - 3 * 3_600_000, TimeFormat::Relative, now),
             "3h ago"
         );
-        // Futuro (reloj torcido): saturación a «now», jamás un panic.
+        // Future (skewed clock): saturates to "now", never a panic.
         assert_eq!(format_mtime(now + 10_000, TimeFormat::Relative, now), "now");
         assert_eq!(format_mtime(now, TimeFormat::Iso, now), "2024-07-03T09:46Z");
     }
 
-    /// `Smart` (spec 2026-09-10): tres precisiones según la distancia, en la
-    /// zona DADA — aquí UTC+2, para que «hoy» se decida en local y no en UTC
-    /// (a las 23:30 UTC del 2 de julio son las 01:30 del 3 en Madrid).
+    /// `Smart` (spec 2026-09-10): three precisions depending on distance, in
+    /// the GIVEN zone — here UTC+2, so "today" is decided in local time and
+    /// not UTC (at 23:30 UTC on July 2nd it is 01:30 on the 3rd in Madrid).
     #[test]
-    fn smart_es_hora_local_con_tres_precisiones() {
+    fn smart_is_local_time_with_three_precisions() {
         let tz = jiff::tz::TimeZone::fixed(jiff::tz::offset(2));
         let en = norte_i18n::Lang::En;
         let now = 1_720_000_000_000; // 2024-07-03T09:46:40Z → 11:46 local
         let f = |ms| format_mtime_tz(ms, TimeFormat::Smart, now, en, &tz);
-        assert_eq!(f(now), "11:46", "hoy: solo la hora, local");
-        // 23:30Z del 2 de julio = 01:30 del 3 en local: SIGUE siendo hoy.
+        assert_eq!(f(now), "11:46", "today: only the time, local");
+        // 23:30Z on July 2nd = 01:30 on the 3rd locally: STILL today.
         assert_eq!(f(1_719_963_000_000), "01:30");
-        // 21:30Z del 2 de julio = 23:30 del 2: ayer → mes-día y hora.
+        // 21:30Z on July 2nd = 23:30 on the 2nd: yesterday → month-day and time.
         assert_eq!(f(1_719_955_800_000), "07-02 23:30");
-        // Otro año: solo la fecha.
+        // A different year: only the date.
         assert_eq!(f(951_782_400_000), "2000-02-29");
         assert!(f(now).len() <= 11 && f(1_719_955_800_000).len() <= 11);
-        // Fuera del rango de jiff: cae al ISO UTC, que sabe pintar todo.
+        // Outside jiff's range: falls back to ISO UTC, which paints anything.
         assert!(f(i64::MIN).ends_with('Z'));
         assert!(f(i64::MAX).ends_with('Z'));
     }
 
-    /// #117 encoding-audit L3: tiempos EXTREMOS (mtime basura de un
-    /// provider hostil) — jamás un panic, siempre una cadena con forma.
+    /// #117 encoding-audit L3: EXTREME times (garbage mtime from a hostile
+    /// provider) — never a panic, always a well-shaped string.
     #[test]
-    fn tiempos_extremos_sin_panic_y_con_forma() {
+    fn extreme_times_with_no_panic_and_a_shape() {
         let _ = norte_i18n::force(norte_i18n::Lang::En);
-        // ISO en ambos extremos del rango: forma RFC-3339 (año expandido
-        // en el negativo), nunca vacío.
+        // ISO at both ends of the range: RFC-3339 form (expanded year on
+        // the negative side), never empty.
         let min = iso_utc_minutes(i64::MIN);
         assert!(min.starts_with('-') && min.ends_with('Z'), "{min}");
         let max = iso_utc_minutes(i64::MAX);
         assert!(max.ends_with('Z') && max.contains('T'), "{max}");
-        // Relative con delta saturante en ambos sentidos: pasado remoto =
-        // años; futuro remoto (delta negativo) = «now».
-        let pasado = format_mtime(i64::MIN, TimeFormat::Relative, i64::MAX);
-        assert!(pasado.contains('y'), "{pasado}");
+        // Relative with a saturating delta in both directions: remote past =
+        // years; remote future (negative delta) = "now".
+        let past = format_mtime(i64::MIN, TimeFormat::Relative, i64::MAX);
+        assert!(past.contains('y'), "{past}");
         assert_eq!(
             format_mtime(i64::MAX, TimeFormat::Relative, i64::MIN),
             "now"
@@ -1332,10 +1338,10 @@ mod model_tests {
     }
 }
 
-/// El set de columnas POR DEFECTO (#108 L4): `name`, `size`, `mtime` con
-/// los formatos por hint del spec (size → iec/derecha, mtime → relative).
-/// El bloque 4 (config `[ui.columns]`) lo sustituirá por el del usuario;
-/// hasta entonces ambos frontends pintan esto.
+/// The DEFAULT column set (#108 L4): `name`, `size`, `mtime` with the
+/// formats from the spec's hint (size → iec/right, mtime → relative).
+/// Block 4 (config `[ui.columns]`) will replace it with the user's; until
+/// then both frontends paint this.
 #[must_use]
 pub fn default_layout_items() -> Vec<(Builtin, LayoutItem)> {
     vec![
@@ -1347,12 +1353,12 @@ pub fn default_layout_items() -> Vec<(Builtin, LayoutItem)> {
                 is_name: true,
             },
         ),
-        // Los anchos de las columnas no-nombre INCLUYEN su separador (1
-        // celda a la izquierda): el layout presupuesta el ancho TOTAL de la
-        // fila — sin esto, la última columna desbordaba el pane y el
-        // terminal la recortaba. 11 = «1023.9 GiB» (10) + separador;
-        // 12 = «09-10 14:02» (11, el `Smart` de este año) + separador —
-        // «hace 364d» (9) cabe de sobra.
+        // Non-name columns' widths INCLUDE their separator (1 cell to the
+        // left): the layout budgets the row's TOTAL width — without this,
+        // the last column overflowed the pane and the terminal truncated
+        // it. 11 = "1023.9 GiB" (10) + separator; 12 = "09-10 14:02" (11,
+        // this year's `Smart`) + separator — "364d ago" (9) fits with room
+        // to spare.
         (
             Builtin::Size,
             LayoutItem {
@@ -1372,51 +1378,53 @@ pub fn default_layout_items() -> Vec<(Builtin, LayoutItem)> {
     ]
 }
 
-/// El atributo que lleva el modo POSIX de una entrada, y que la columna de
-/// PERMISOS pinta como `drwxr-xr-x` (spec 2026-09-20).
+/// The attribute that carries an entry's POSIX mode, and that the
+/// PERMISSIONS column paints as `drwxr-xr-x` (spec 2026-09-20).
 ///
-/// Es el mismo id que anuncian `norte-vfs-local` y `norte-vfs-sftp` en su
-/// catálogo de atributos; aquí está escrito una vez para que la columna por
-/// defecto y su peldaño de la escalera nombren lo MISMO.
+/// It is the same id `norte-vfs-local` and `norte-vfs-sftp` announce in
+/// their attribute catalog; it is written here once so the default column
+/// and its ladder rung name the SAME thing.
 pub const POSIX_MODE_ATTR: &str = "posix.mode";
 
-/// Los schemes cuyo listado enseña la columna de permisos SIN que nadie la
-/// pida (spec 2026-09-20): los dos que tienen permisos POSIX de verdad.
+/// The schemes whose listing shows the permissions column WITHOUT anyone
+/// asking for it (spec 2026-09-20): the two that have real POSIX
+/// permissions.
 ///
-/// La lista es corta y explícita a propósito. Lo alternativo —enseñarla
-/// siempre y dejarla vacía donde el backend no contesta— gasta ancho del
-/// nombre en un bucket de objetos o dentro de un `.zip` para no decir nada,
-/// que es justo lo que ADR 0124 vino a arreglar.
-const SCHEMES_CON_PERMISOS: &[&str] = &["file", "sftp"];
+/// The list is short and explicit on purpose. The alternative —always
+/// showing it and leaving it empty where the backend does not answer—
+/// spends the name's width on an object bucket or inside a `.zip` to say
+/// nothing, which is exactly what ADR 0124 came to fix.
+const SCHEMES_WITH_PERMISSIONS: &[&str] = &["file", "sftp"];
 
-/// Tope de una cabecera custom (#108 7b), en caracteres TRAS enmascarar.
+/// A custom header's cap (#108 7b), in characters AFTER masking.
 pub const HEADER_MAX_CHARS: usize = 24;
 
-/// Estilo RESUELTO de una columna (#108 7b): lo que el spec fija más los
-/// defaults del builtin. El `header` llega YA saneado y capado a
-/// [`HEADER_MAX_CHARS`] — el único choke point es
-/// [`ColumnsSettings::resolve`], nunca el render (que va por frame).
+/// A column's RESOLVED style (#108 7b): what the spec fixes plus the
+/// builtin's defaults. `header` arrives ALREADY sanitized and capped at
+/// [`HEADER_MAX_CHARS`] — the only choke point is
+/// [`ColumnsSettings::resolve`], never the render (which runs per frame).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ColumnStyle {
-    /// Formato de tamaño (solo lo lee `Size`).
+    /// Size format (only `Size` reads it).
     pub size_format: SizeFormat,
-    /// Formato de tiempo (solo lo lee `Mtime`).
+    /// Time format (only `Mtime` reads it).
     pub time_format: TimeFormat,
-    /// Formato de modo (solo lo leen celdas attr con hint `Mode`).
+    /// Mode format (only attr cells with hint `Mode` read it).
     pub mode_format: ModeFormat,
-    /// Hint del catálogo para columnas attr (`Opaque` si no hay catálogo
-    /// o la columna es builtin — los builtin no lo leen).
+    /// Catalog hint for attr columns (`Opaque` if there is no catalog or
+    /// the column is builtin — builtins do not read it).
     pub hint: norte_proto::attrs::AttrHint,
-    /// Alineación efectiva.
+    /// Effective alignment.
     pub align: Align,
-    /// Cabecera propia (saneada, ≤ [`HEADER_MAX_CHARS`]); `None` = la
-    /// etiqueta Fluent de siempre.
+    /// Custom header (sanitized, ≤ [`HEADER_MAX_CHARS`]); `None` = the
+    /// usual Fluent label.
     pub header: Option<String>,
 }
 
 impl ColumnStyle {
-    /// El mismo estilo en formato corto, si `compact` (lo que dice
-    /// [`Fitted::compact`]). Toca los dos formatos: cada columna lee el suyo.
+    /// The same style in short format, if `compact` (what
+    /// [`Fitted::compact`] says). Touches both formats: each column reads
+    /// its own.
     #[must_use]
     pub fn compacted(mut self, compact: bool) -> Self {
         if compact {
@@ -1426,9 +1434,9 @@ impl ColumnStyle {
         self
     }
 
-    /// Los defaults del builtin sin spec: iec/relative, nombre a la
-    /// izquierda y el resto a la derecha — la convención que ya pintaban
-    /// ambos frontends.
+    /// The builtin's defaults with no spec: iec/relative, name on the left
+    /// and the rest on the right — the convention both frontends already
+    /// painted.
     #[must_use]
     pub fn default_for(b: Builtin) -> Self {
         Self {
@@ -1445,9 +1453,9 @@ impl ColumnStyle {
         }
     }
 
-    /// Defaults de CUALQUIER columna (#117): builtin = `default_for`;
-    /// attr = alineación y hint del catálogo (`Opaque`/izquierda sin él,
-    /// Size/Timestamp/Mode a la derecha); plugin = texto a la izquierda.
+    /// Defaults for ANY column (#117): builtin = `default_for`; attr =
+    /// alignment and hint from the catalog (`Opaque`/left with none,
+    /// Size/Timestamp/Mode on the right); plugin = text on the left.
     #[must_use]
     pub fn default_for_id(id: &ColumnId, catalog: Option<&norte_proto::AttrCatalog>) -> Self {
         use norte_proto::attrs::AttrHint;
@@ -1463,8 +1471,9 @@ impl ColumnStyle {
                         _ => Align::Left,
                     },
                     hint,
-                    // `default_for(Kind)` solo aporta los campos no-align
-                    // (iec/relative/rwx, header None); su align se pisa.
+                    // `default_for(Kind)` only contributes the non-align
+                    // fields (iec/relative/rwx, header None); its align is
+                    // overridden.
                     ..Self::default_for(Builtin::Kind)
                 }
             }
@@ -1476,27 +1485,26 @@ impl ColumnStyle {
     }
 }
 
-/// Tabla ÚNICA str ↔ enum del vocabulario de formatos de `Size` (#108 7b
-/// m3), en el ORDEN del ciclo del picker. La consumen `format_fits`,
-/// `next_format`, `format_name` y `style_for` — antes eran CUATRO copias
-/// (config aparte); el bloque 2 (attrs) extiende tablas, no matches
-/// dispersos. Las cadenas deben ser subconjunto del vocabulario global que
-/// acepta la config (`norte-config/src/load.rs`, parse del spec) — pineado
-/// por test.
+/// The SINGLE str ↔ enum table for `Size`'s format vocabulary (#108 7b m3),
+/// in the picker's cycle ORDER. Consumed by `format_fits`, `next_format`,
+/// `format_name` and `style_for` — there used to be FOUR copies (config
+/// aside); block 2 (attrs) extends tables, not scattered matches. The
+/// strings must be a subset of the global vocabulary config accepts
+/// (`norte-config/src/load.rs`, the spec's parse) — pinned by a test.
 const SIZE_FORMATS: &[(&str, SizeFormat)] = &[
     ("iec", SizeFormat::Iec),
     ("si", SizeFormat::Si),
     ("exact", SizeFormat::Exact),
 ];
 
-/// Tabla str ↔ enum de `Mtime` — mismas reglas que [`SIZE_FORMATS`].
+/// str ↔ `Mtime` enum table — same rules as [`SIZE_FORMATS`].
 const TIME_FORMATS: &[(&str, TimeFormat)] = &[
     ("relative", TimeFormat::Relative),
     ("iso", TimeFormat::Iso),
     ("smart", TimeFormat::Smart),
 ];
 
-/// [`TimeFormat`] de un `[ui] date_format` (spec 2026-09-10).
+/// [`TimeFormat`] of a `[ui] date_format` (spec 2026-09-10).
 #[must_use]
 pub fn time_format_of(f: norte_config::DateFormat) -> TimeFormat {
     match f {
@@ -1506,17 +1514,17 @@ pub fn time_format_of(f: norte_config::DateFormat) -> TimeFormat {
     }
 }
 
-/// Tabla str ↔ enum de columnas con hint `Mode` — mismas reglas que
-/// [`SIZE_FORMATS`]. Las cadenas entran al vocabulario global de config
-/// en la tarea 4 de #117.
+/// str ↔ enum table for columns with the `Mode` hint — same rules as
+/// [`SIZE_FORMATS`]. The strings enter the global config vocabulary in
+/// task 4 of #117.
 const MODE_FORMATS: &[(&str, ModeFormat)] =
     &[("rwx", ModeFormat::Rwx), ("octal", ModeFormat::Octal)];
 
-/// ¿Casa `fmt` (vocabulario global YA validado en config) con la columna?
-/// SOLO builtins: `Name`/`Kind` no admiten formato alguno. Los formatos de
-/// attrs NO pasan por aquí a propósito (#117): despachan por el hint del
-/// catálogo al plegar (`style_for_id`) y una palabra que no casa conserva
-/// el default — no extender esta función para attrs.
+/// Does `fmt` (a global vocabulary ALREADY validated in config) match the
+/// column? ONLY builtins: `Name`/`Kind` admit no format at all. Attr formats
+/// deliberately do NOT go through here (#117): they dispatch by the
+/// catalog's hint when folding (`style_for_id`) and a word that does not
+/// match keeps the default — do not extend this function for attrs.
 fn format_fits(b: Builtin, fmt: &str) -> bool {
     match b {
         Builtin::Size => SIZE_FORMATS.iter().any(|(s, _)| *s == fmt),
@@ -1525,9 +1533,9 @@ fn format_fits(b: Builtin, fmt: &str) -> bool {
     }
 }
 
-/// El siguiente formato del ciclo del picker (#108 7b): rota la tabla del
-/// builtin; `None` = la columna no admite formato (name/kind) o `current`
-/// no está en la tabla.
+/// The picker cycle's next format (#108 7b): rotates the builtin's table;
+/// `None` = the column admits no format (name/kind) or `current` is not in
+/// the table.
 #[must_use]
 pub fn next_format(b: Builtin, current: &str) -> Option<&'static str> {
     fn advance<T>(tab: &'static [(&'static str, T)], cur: &str) -> Option<&'static str> {
@@ -1541,9 +1549,9 @@ pub fn next_format(b: Builtin, current: &str) -> Option<&'static str> {
     }
 }
 
-/// El siguiente formato del ciclo del picker para CUALQUIER columna
-/// (#117): builtin por su tabla; attr por la tabla de su hint (Size/
-/// Timestamp/Mode); el resto no admite formato.
+/// The picker cycle's next format for ANY column (#117): builtin by its
+/// table; attr by its hint's table (Size/Timestamp/Mode); the rest admit no
+/// format.
 #[must_use]
 pub fn next_format_id(
     id: &ColumnId,
@@ -1567,9 +1575,9 @@ pub fn next_format_id(
     }
 }
 
-/// El nombre-str del formato vigente para cualquier columna (#117) — seed
-/// del picker, dirección enum → str, por el hint DEL PROPIO estilo en
-/// attrs (`style.hint`: un solo origen, sin param que pueda desincronizar).
+/// The str-name of the current format for any column (#117) — the picker's
+/// seed, enum → str direction, by the style's OWN hint in attrs
+/// (`style.hint`: a single source, no param that could get out of sync).
 #[must_use]
 pub fn format_name_id(id: &ColumnId, style: &ColumnStyle) -> Option<&'static str> {
     use norte_proto::attrs::AttrHint;
@@ -1594,8 +1602,8 @@ pub fn format_name_id(id: &ColumnId, style: &ColumnStyle) -> Option<&'static str
     }
 }
 
-/// El nombre-str del formato vigente de un estilo (seed del picker): la
-/// misma tabla, en dirección enum → str.
+/// The str-name of a style's current format (the picker's seed): the same
+/// table, in the enum → str direction.
 #[must_use]
 pub fn format_name(b: Builtin, style: &ColumnStyle) -> Option<&'static str> {
     match b {
@@ -1611,81 +1619,85 @@ pub fn format_name(b: Builtin, style: &ColumnStyle) -> Option<&'static str> {
     }
 }
 
-/// Config de columnas RESUELTA (#108 bloque 4): ids parseados, sort
-/// mapeado, overrides por scheme. Los ids que no parsean van a
-/// [`ColumnsSettings::invalid`] — se saltan al pintar y los reporta
-/// `norte doctor` (jamás un drop silencioso ni un error de arranque).
-/// Los `attr:` (#117) y los `plugin:` (follow-up) se pintan ambos por el
-/// funnel generalizado, cada familia con su cap pintado == pedido.
+/// RESOLVED columns config (#108 block 4): parsed ids, mapped sort,
+/// per-scheme overrides. Ids that fail to parse go to
+/// [`ColumnsSettings::invalid`] — they are skipped when painting and
+/// `norte doctor` reports them (never a silent drop nor a startup error).
+/// Both `attr:` (#117) and `plugin:` (follow-up) are painted through the
+/// generalized funnel, each family with its own painted == requested cap.
 #[derive(Debug, Clone, Default)]
 pub struct ColumnsSettings {
     default_set: Option<Vec<ColumnId>>,
     default_sort: crate::sort::SortSpec,
-    /// `[ui] date_format` (spec 2026-09-10): el formato de las columnas de
-    /// tiempo cuando ningún spec lo fija. `None` = el de siempre (`relative`),
-    /// que es lo que un `ColumnsSettings` de test o de `doctor` quiere: la
-    /// hora local de `smart` depende de la máquina, y una foto no puede.
-    /// Los frontends la reciben por [`Self::with_date_format`].
+    /// `[ui] date_format` (spec 2026-09-10): the format for time columns
+    /// when no spec sets it. `None` = the usual one (`relative`), which is
+    /// what a test or `doctor` `ColumnsSettings` wants: `smart`'s local time
+    /// depends on the machine, and a snapshot cannot. The frontends receive
+    /// it via [`Self::with_date_format`].
     default_time: Option<TimeFormat>,
     schemes:
         std::collections::BTreeMap<String, (Option<Vec<ColumnId>>, Option<crate::sort::SortSpec>)>,
-    /// La lista `default` CRUDA tal cual vino de config (#108 7a): el picker
-    /// preserva y re-persiste los ids que no parsean o no tienen renderer —
-    /// paralela a `default_set`, [`Self::apply_picked`] las mantiene en paso.
+    /// The RAW `default` list exactly as it came from config (#108 7a): the
+    /// picker preserves and re-persists ids that fail to parse or have no
+    /// renderer — parallel to `default_set`, [`Self::apply_picked`] keeps
+    /// them in step.
     raw_default: Option<Vec<String>>,
-    /// Listas crudas por scheme; solo hay entrada si el scheme configuró
-    /// `columns` (un override solo-sort no lista aquí). Paralela a `schemes`.
+    /// Raw lists per scheme; there is an entry only if the scheme
+    /// configured `columns` (a sort-only override does not list here).
+    /// Parallel to `schemes`.
     raw_schemes: std::collections::BTreeMap<String, Vec<String>>,
-    /// Specs globales retenidos al resolver (#108 7b), YA saneados: header
-    /// enmascarado y capado a [`HEADER_MAX_CHARS`], formatos que no casan
-    /// con su columna retirados (y diagnosticados en [`Self::bad_specs`]).
-    /// Único choke point — [`Self::style_for`] solo pliega campos.
+    /// Global specs kept at resolve time (#108 7b), ALREADY sanitized:
+    /// header masked and capped at [`HEADER_MAX_CHARS`], formats that do
+    /// not match their column removed (and diagnosed in
+    /// [`Self::bad_specs`]). The single choke point — [`Self::style_for`]
+    /// only folds fields.
     specs_global: std::collections::BTreeMap<String, norte_config::ColumnSpec>,
-    /// Specs por scheme, mismos saneos; al plegar GANAN sobre los globales
-    /// campo a campo.
+    /// Per-scheme specs, same sanitizing; when folded they WIN over the
+    /// global ones field by field.
     specs_schemes: std::collections::BTreeMap<
         String,
         std::collections::BTreeMap<String, norte_config::ColumnSpec>,
     >,
-    /// El rótulo que su MANIFIESTO le puso a cada columna de plugin, por id
-    /// de columna (`plugin:acme.git/status`), ya saneado. No sale de la
-    /// configuración sino del catálogo vivo de plugins, así que lo instala
-    /// el frontend cuando lo recibe ([`Self::apply_plugin_headers`]); sin
-    /// él la cabecera enseñaría el id, que es lo que el lector menos
-    /// reconoce.
+    /// The label its MANIFEST gave each plugin column, by column id
+    /// (`plugin:acme.git/status`), already sanitized. It does not come from
+    /// configuration but from the live plugin catalog, so the frontend
+    /// installs it when it receives it ([`Self::apply_plugin_headers`]);
+    /// without it the header would show the id, which is what the reader
+    /// recognises least.
     plugin_headers: std::collections::BTreeMap<String, String>,
-    /// Ids configurados que NO parsean (diagnóstico para doctor).
+    /// Configured ids that do NOT parse (diagnostic for the doctor).
     pub invalid: Vec<String>,
-    /// Ids `plugin:` configurados MÁS ALLÁ del cap de petición
-    /// ([`PLUGIN_COLUMNS_MAX_REQUEST`]) en alguna lista: el funnel no los
-    /// pinta y el pane no los pide (pintado == pedido); doctor los nombra
-    /// (`columns-plugins-over-cap`).
+    /// Configured `plugin:` ids BEYOND the request cap
+    /// ([`PLUGIN_COLUMNS_MAX_REQUEST`]) in some list: the funnel does not
+    /// paint them and the pane does not request them (painted == requested);
+    /// the doctor names them (`columns-plugins-over-cap`).
     pub plugins_over_cap: Vec<String>,
-    /// Ids `attr:` configurados MÁS ALLÁ del cap de petición
-    /// ([`norte_proto::ATTRS_MAX_REQUEST`]) en alguna lista (#117 review):
-    /// el funnel no los pinta y el pane no los pide — pintado == pedido,
-    /// jamás una columna permanentemente en blanco; doctor los nombra
-    /// (`columns-attrs-over-cap`).
+    /// Configured `attr:` ids BEYOND the request cap
+    /// ([`norte_proto::ATTRS_MAX_REQUEST`]) in some list (#117 review): the
+    /// funnel does not paint them and the pane does not request them —
+    /// painted == requested, never a permanently blank column; the doctor
+    /// names them (`columns-attrs-over-cap`).
     pub attrs_over_cap: Vec<String>,
-    /// Ids `attr:` que parsean como columna pero cuyo id attr NO es legal
-    /// en el wire (#117 encoding-audit M1,
-    /// [`norte_proto::attrs::is_valid_attr_id`]: minúsculas con namespace —
-    /// `attr:Posix.Mode` parsea y aun así el daemon lo rechazaría con
-    /// -32602 tumbando el `fs.list` ENTERO). El funnel los salta y el pane
-    /// no los pide (pintado == pedido, jamás una columna en blanco ni un
-    /// listado muerto); la forma cruda se preserva para picker/persist y
-    /// doctor los nombra (`columns-attr-id-not-wire-safe`).
+    /// `attr:` ids that parse as a column but whose attr id is NOT legal on
+    /// the wire (#117 encoding-audit M1,
+    /// [`norte_proto::attrs::is_valid_attr_id`]: lowercase with a namespace
+    /// — `attr:Posix.Mode` parses and the daemon would still reject it with
+    /// -32602, bringing down the WHOLE `fs.list`). The funnel skips them and
+    /// the pane does not request them (painted == requested, never a blank
+    /// column nor a dead listing); the raw form is preserved for
+    /// picker/persist and the doctor names them
+    /// (`columns-attr-id-not-wire-safe`).
     pub attrs_not_wire_safe: Vec<String>,
-    /// Specs `[[ui.columns.spec]]` con id imposible o con un formato que no
-    /// casa con su columna (#108 7b): se aplica el default y doctor lo
-    /// reporta (`columns-bad-spec`) — jamás un drop mudo ni un fallo de
-    /// arranque.
+    /// `[[ui.columns.spec]]` specs with an impossible id or a format that
+    /// does not match their column (#108 7b): the default is applied and
+    /// the doctor reports it (`columns-bad-spec`) — never a silent drop nor
+    /// a startup failure.
     pub bad_specs: Vec<String>,
 }
 
 impl ColumnsSettings {
-    /// Resuelve la config cruda (#108). Nunca falla: lo inválido se
-    /// acumula como diagnóstico.
+    /// Resolves the raw config (#108). Never fails: what is invalid
+    /// accumulates as diagnostics.
     #[must_use]
     pub fn resolve(cfg: &norte_config::ColumnsConfig) -> Self {
         let mut out = Self {
@@ -1710,8 +1722,8 @@ impl ColumnsSettings {
                 out.collect_diagnostics(ids);
             }
         }
-        // #108 7b: retén los specs SANEADOS aquí (choke point único) —
-        // `style_for` va por frame y no debe volver a sanear ni diagnosticar.
+        // #108 7b: keep the SANITIZED specs here (single choke point) —
+        // `style_for` runs per frame and must not sanitize or diagnose again.
         out.specs_global = out.sanitize_specs(&cfg.specs);
         for (scheme, sc) in &cfg.schemes {
             if !sc.specs.is_empty() {
@@ -1722,15 +1734,15 @@ impl ColumnsSettings {
         out
     }
 
-    /// Saneo de un mapa de specs al resolver (#108 7b): id imposible →
-    /// [`Self::bad_specs`] y fuera; formato que no casa con su builtin →
-    /// [`Self::bad_specs`] y campo retirado (se aplicará el default);
-    /// header enmascarado ([`sanitize_header`]) y capado a
-    /// [`HEADER_MAX_CHARS`] (vacío tras enmascarar = `None`, cae a Fluent).
-    /// Los ids `attr:`/`plugin:` se retienen tal cual (#117): sus formatos
-    /// pasan sin validar aquí — al plegar (`style_for_id`) solo casan las
-    /// palabras de [`MODE_FORMATS`]/[`SIZE_FORMATS`]/[`TIME_FORMATS`], una
-    /// desconocida conserva el default.
+    /// Sanitizes a specs map at resolve time (#108 7b): impossible id →
+    /// [`Self::bad_specs`] and dropped; a format that does not match its
+    /// builtin → [`Self::bad_specs`] and the field removed (the default
+    /// will be applied); header masked ([`sanitize_header`]) and capped at
+    /// [`HEADER_MAX_CHARS`] (empty after masking = `None`, falls back to
+    /// Fluent). `attr:`/`plugin:` ids are kept as-is (#117): their formats
+    /// pass unvalidated here — when folding (`style_for_id`) only
+    /// [`MODE_FORMATS`]/[`SIZE_FORMATS`]/[`TIME_FORMATS`]'s words match, an
+    /// unknown one keeps the default.
     fn sanitize_specs(
         &mut self,
         specs: &std::collections::BTreeMap<String, norte_config::ColumnSpec>,
@@ -1741,14 +1753,14 @@ impl ColumnsSettings {
             match raw.parse::<ColumnId>() {
                 Err(_) => {
                     self.push_bad_spec(raw);
-                    continue; // id imposible: el spec entero es diagnóstico
+                    continue; // impossible id: the whole spec is diagnostic
                 }
                 Ok(ColumnId::Builtin(b)) => {
                     if let Some(fmt) = spec.format.as_deref()
                         && !format_fits(b, fmt)
                     {
                         self.push_bad_spec(raw);
-                        spec.format = None; // default, jamás el spec roto
+                        spec.format = None; // default, never the broken spec
                     }
                 }
                 Ok(ColumnId::Attr(_) | ColumnId::Plugin { .. }) => {}
@@ -1762,19 +1774,20 @@ impl ColumnsSettings {
         out
     }
 
-    /// Añade un diagnóstico de spec, deduplicado por id (una entrada por id
-    /// ofensor, venga del mapa global o de un scheme).
+    /// Adds a spec diagnostic, deduplicated by id (one entry per offending
+    /// id, whether it comes from the global map or a scheme).
     fn push_bad_spec(&mut self, raw: &str) {
         if !self.bad_specs.iter().any(|b| b == raw) {
             self.bad_specs.push(raw.to_owned());
         }
     }
 
-    /// El estilo efectivo de CUALQUIER columna en `scheme` (#117):
-    /// defaults ← spec global ← spec del scheme, campo a campo. El formato
-    /// str se pliega por la tabla que lo contenga (size/time/mode) — en
-    /// builtins resolve ya validó el encaje; en attrs el hint decide qué
-    /// campo se LEE al pintar, así que plegar los tres es inocuo.
+    /// The effective style of ANY column in `scheme` (#117): defaults ←
+    /// global spec ← the scheme's spec, field by field. The str format is
+    /// folded by whichever table contains it (size/time/mode) — in
+    /// builtins, resolve already validated the match; in attrs, the hint
+    /// decides which field is READ when painting, so folding all three is
+    /// harmless.
     #[must_use]
     pub fn style_for_id(
         &self,
@@ -1787,9 +1800,9 @@ impl ColumnsSettings {
         if let Some(t) = self.default_time {
             style.time_format = t;
         }
-        // El rótulo del manifiesto, DEBAJO de los specs: `[ui.columns]
-        // header` sigue mandando, y el id solo aparece cuando no hay ni lo
-        // uno ni lo otro.
+        // The manifest's label, BELOW the specs: `[ui.columns] header`
+        // still rules, and the id only shows up when there is neither one
+        // nor the other.
         if matches!(id, ColumnId::Plugin { .. }) {
             style
                 .header
@@ -1820,59 +1833,61 @@ impl ColumnsSettings {
         style
     }
 
-    /// Fija el formato de tiempo por defecto desde `[ui] date_format`
-    /// (spec 2026-09-10). Un spec de columna sigue ganando.
+    /// Sets the default time format from `[ui] date_format` (spec
+    /// 2026-09-10). A column spec still wins.
     #[must_use]
     pub fn with_date_format(mut self, f: norte_config::DateFormat) -> Self {
         self.default_time = Some(time_format_of(f));
         self
     }
 
-    /// [`Self::style_for_id`] para un builtin — la firma histórica (7b).
+    /// [`Self::style_for_id`] for a builtin — the historical signature (7b).
     #[must_use]
     pub fn style_for(&self, scheme: &str, builtin: Builtin) -> ColumnStyle {
         self.style_for_id(scheme, &ColumnId::Builtin(builtin), None)
     }
 
-    /// Aplica EN MEMORIA un formato elegido en el picker (#108 7b):
-    /// actualiza (o crea) la entrada retenida de `specs_global` para `id` —
-    /// el mismo lockstep sesión↔disco que [`Self::apply_picked`] frente a
-    /// `persist_column_format`, para que `style_for` lo vea al instante sin
-    /// esperar al hot-reload. `format` llega del vocabulario cerrado del
-    /// picker (ya encaja con su columna): sin re-saneo. Un spec del MISMO id
-    /// a nivel de scheme sigue ganando (persistencia por scheme = diferido).
+    /// Applies IN MEMORY a format chosen in the picker (#108 7b): updates
+    /// (or creates) the retained `specs_global` entry for `id` — the same
+    /// session↔disk lockstep as [`Self::apply_picked`] against
+    /// `persist_column_format`, so `style_for` sees it instantly without
+    /// waiting for the hot-reload. `format` arrives from the picker's closed
+    /// vocabulary (already matches its column): no re-sanitizing. A spec of
+    /// the SAME id at the scheme level still wins (per-scheme persistence =
+    /// deferred).
     pub fn apply_format(&mut self, id: &str, format: &str) {
         self.specs_global.entry(id.to_owned()).or_default().format = Some(format.to_owned());
     }
 
-    /// Instala los rótulos que los MANIFIESTOS dan a las columnas de plugin
-    /// (spec 2026-09-11): `{ "plugin:acme.git/status": "Estado" }`, ya
-    /// saneados por quien los recibe del catálogo. Los dos frontends llaman
-    /// aquí con lo que su sonda de columnas ya pide, y así la cabecera se
-    /// llama igual en los dos — `[ui.columns] header` sigue por encima.
+    /// Installs the labels MANIFESTS give plugin columns (spec 2026-09-11):
+    /// `{ "plugin:acme.git/status": "Status" }`, already sanitized by
+    /// whoever received them from the catalog. Both frontends call here with
+    /// what their column probe already requests, so the header is named the
+    /// same in both — `[ui.columns] header` still ranks above it.
     ///
-    /// Solo AÑADE: un catálogo que llega sin una columna no borra su rótulo,
-    /// porque el catálogo se pide por tandas y una tanda no es la verdad
-    /// entera.
+    /// Only ADDS: a catalog that arrives without a column does not erase its
+    /// label, because the catalog is requested in batches and a batch is
+    /// not the whole truth.
     pub fn apply_plugin_headers(
         &mut self,
         headers: impl IntoIterator<Item = (String, String)>,
     ) -> bool {
-        let mut cambio = false;
-        for (id, rotulo) in headers {
-            if self.plugin_headers.get(&id) != Some(&rotulo) {
-                self.plugin_headers.insert(id, rotulo);
-                cambio = true;
+        let mut changed = false;
+        for (id, label) in headers {
+            if self.plugin_headers.get(&id) != Some(&label) {
+                self.plugin_headers.insert(id, label);
+                changed = true;
             }
         }
-        cambio
+        changed
     }
 
-    /// Aplica EN MEMORIA un ancho fijo (spec 2026-09-11, V2: arrastrar el
-    /// borde de una cabecera): la pareja de `persist_column_width`, con el
-    /// mismo lockstep sesión↔disco que [`Self::apply_format`]. `cells` se
-    /// acota aquí a `[1, 64]`, el rango que el loader acepta: un ancho fuera
-    /// de él escrito a disco dejaría el `norte.toml` entero sin cargar.
+    /// Applies IN MEMORY a fixed width (spec 2026-09-11, V2: dragging a
+    /// header's edge): the counterpart of `persist_column_width`, with the
+    /// same session↔disk lockstep as [`Self::apply_format`]. `cells` is
+    /// clamped here to `[1, 64]`, the range the loader accepts: a width
+    /// outside it written to disk would leave the WHOLE `norte.toml`
+    /// unable to load.
     pub fn apply_width(&mut self, id: &str, cells: u16) -> u16 {
         let cells = cells.clamp(1, 64);
         self.specs_global.entry(id.to_owned()).or_default().width =
@@ -1880,18 +1895,18 @@ impl ColumnsSettings {
         cells
     }
 
-    /// ¿Fija un spec DEL SCHEME el formato de `builtin`? (#108 7b m2). Con
-    /// un override así, ciclar en el picker escribiría el spec GLOBAL que
-    /// el del scheme seguiría enmascarando — sesión y disco «consistentes»
-    /// pero invisibles (toast mentiroso) y con fuga a otros schemes: el
-    /// picker BLOQUEA esas filas. El formato retenido ya está validado
-    /// contra su columna en [`Self::resolve`].
+    /// Does a spec AT THE SCHEME level fix `builtin`'s format? (#108 7b m2).
+    /// With such an override, cycling in the picker would write the GLOBAL
+    /// spec that the scheme's own would keep masking — session and disk
+    /// "consistent" but invisible (a lying toast) and leaking into other
+    /// schemes: the picker BLOCKS those rows. The retained format is
+    /// already validated against its column in [`Self::resolve`].
     #[must_use]
     pub fn format_pinned_by_scheme(&self, scheme: &str, builtin: Builtin) -> bool {
         self.format_pinned_by_scheme_id(scheme, &ColumnId::Builtin(builtin))
     }
 
-    /// [`Self::format_pinned_by_scheme`] para cualquier id (#117).
+    /// [`Self::format_pinned_by_scheme`] for any id (#117).
     #[must_use]
     pub fn format_pinned_by_scheme_id(&self, scheme: &str, id: &ColumnId) -> bool {
         let key = id.to_string();
@@ -1901,21 +1916,21 @@ impl ColumnsSettings {
             .is_some_and(|sp| sp.format.is_some())
     }
 
-    /// ¿Tiene `id` un `width` en algún spec (global o del scheme)? Es lo que
-    /// escribe arrastrar un borde, así que es «el usuario lo tocó», y
-    /// [`fitted_columns`] no lo mueve.
+    /// Does `id` have a `width` in some spec (global or the scheme's)? It
+    /// is what dragging an edge writes, so it means "the user touched it",
+    /// and [`fitted_columns`] does not move it.
     #[must_use]
     pub fn width_pinned(&self, scheme: &str, id: &ColumnId) -> bool {
         self.spec_field(scheme, id, |s| s.width.is_some())
     }
 
-    /// La lista de columnas que alguien ESCRIBIÓ para `scheme`, si la hay:
-    /// la del scheme si la tiene, y si no la global.
+    /// The list of columns someone WROTE for `scheme`, if any: the
+    /// scheme's if it has one, and otherwise the global one.
     ///
-    /// Fuente única de una pregunta que se hacía en dos sitios con la misma
-    /// expresión copiada (`layout_items_for` y el predicado de abajo). Dos
-    /// copias que hoy coinciden son una invariante sostenida por un
-    /// pegado, y la primera que se toque las separa.
+    /// A single source for a question that used to be asked in two places
+    /// with the same copied expression (`layout_items_for` and the
+    /// predicate below). Two copies that agree today are an invariant held
+    /// up by a paste, and the first one touched pulls them apart.
     fn configured_ids(&self, scheme: &str) -> Option<&Vec<ColumnId>> {
         self.schemes
             .get(scheme)
@@ -1923,20 +1938,19 @@ impl ColumnsSettings {
             .or(self.default_set.as_ref())
     }
 
-    /// ¿Pinta este scheme una lista de columnas que ESCRIBIÓ alguien, en vez
-    /// del set por defecto? (spec 2026-09-20)
+    /// Does this scheme paint a column list someone WROTE, instead of the
+    /// default set? (spec 2026-09-20)
     ///
-    /// Lo preguntan la escalera de [`fitted_columns`] —la columna de
-    /// permisos cede sitio cuando la puso norte y no cuando la puso el
-    /// usuario— y el selector de columnas, que necesita saber si enseñarla
-    /// encendida.
+    /// Asked by [`fitted_columns`]'s ladder —the permissions column yields
+    /// room when norte set it and not when the user did— and by the column
+    /// selector, which needs to know whether to show it turned on.
     #[must_use]
     pub fn has_user_columns(&self, scheme: &str) -> bool {
         self.configured_ids(scheme).is_some()
     }
 
-    /// ¿Tiene `id` un `format` en algún spec (global o del scheme)? Quien
-    /// eligió un formato no quiere que se lo cambien por el corto.
+    /// Does `id` have a `format` in some spec (global or the scheme's)?
+    /// Whoever chose a format does not want it swapped for the short one.
     #[must_use]
     pub fn format_pinned(&self, scheme: &str, id: &ColumnId) -> bool {
         self.spec_field(scheme, id, |s| s.format.is_some())
@@ -1946,21 +1960,21 @@ impl ColumnsSettings {
         &self,
         scheme: &str,
         id: &ColumnId,
-        campo: impl Fn(&norte_config::ColumnSpec) -> bool,
+        field: impl Fn(&norte_config::ColumnSpec) -> bool,
     ) -> bool {
         let key = id.to_string();
         let global = self.specs_global.get(&key);
         let scoped = self.specs_schemes.get(scheme).and_then(|m| m.get(&key));
-        [global, scoped].into_iter().flatten().any(campo)
+        [global, scoped].into_iter().flatten().any(field)
     }
 
     fn collect_diagnostics(&mut self, ids: &[String]) {
-        // #117 review: el cap de attrs pedibles es POR LISTA pintada
-        // (default o scheme), con el mismo dedup que `layout_items_for` —
-        // un dup no consume hueco. Para un `attr:` la forma cruda y la
-        // Display coinciden, así que el dedup por raw basta.
-        let mut attrs_vistos: Vec<&String> = Vec::new();
-        let mut plugins_vistos: Vec<&String> = Vec::new();
+        // #117 review: the cap on requestable attrs is PER PAINTED LIST
+        // (default or scheme), with the same dedup as `layout_items_for` —
+        // a dup does not consume a slot. For an `attr:` the raw form and
+        // the Display match, so deduping by raw is enough.
+        let mut attrs_seen: Vec<&String> = Vec::new();
+        let mut plugins_seen: Vec<&String> = Vec::new();
         for raw in ids {
             match raw.parse::<ColumnId>() {
                 Err(_) => {
@@ -1968,12 +1982,12 @@ impl ColumnsSettings {
                         self.invalid.push(raw.clone());
                     }
                 }
-                // #117-follow-up: los `plugin:` YA se pintan — el único
-                // diagnóstico que les queda es el cap (espejo de los attrs).
+                // #117-follow-up: `plugin:` ones are ALREADY painted — the
+                // only diagnostic left for them is the cap (mirroring attrs).
                 Ok(ColumnId::Plugin { .. }) => {
-                    if !plugins_vistos.contains(&raw) {
-                        plugins_vistos.push(raw);
-                        if plugins_vistos.len() > PLUGIN_COLUMNS_MAX_REQUEST
+                    if !plugins_seen.contains(&raw) {
+                        plugins_seen.push(raw);
+                        if plugins_seen.len() > PLUGIN_COLUMNS_MAX_REQUEST
                             && !self.plugins_over_cap.contains(raw)
                         {
                             self.plugins_over_cap.push(raw.clone());
@@ -1981,17 +1995,18 @@ impl ColumnsSettings {
                     }
                 }
                 Ok(ColumnId::Attr(a)) => {
-                    // #117 encoding-audit M1: un id que parsea como columna
-                    // pero no es legal en el wire jamás se pinta ni se pide
-                    // (`layout_items_for` lo salta) — no consume hueco del
-                    // cap, igual que no consume columna.
+                    // #117 encoding-audit M1: an id that parses as a column
+                    // but is not legal on the wire is never painted or
+                    // requested (`layout_items_for` skips it) — it does not
+                    // consume a cap slot, same as it does not consume a
+                    // column.
                     if !norte_proto::attrs::is_valid_attr_id(&a) {
                         if !self.attrs_not_wire_safe.contains(raw) {
                             self.attrs_not_wire_safe.push(raw.clone());
                         }
-                    } else if !attrs_vistos.contains(&raw) {
-                        attrs_vistos.push(raw);
-                        if attrs_vistos.len() > norte_proto::ATTRS_MAX_REQUEST
+                    } else if !attrs_seen.contains(&raw) {
+                        attrs_seen.push(raw);
+                        if attrs_seen.len() > norte_proto::ATTRS_MAX_REQUEST
                             && !self.attrs_over_cap.contains(raw)
                         {
                             self.attrs_over_cap.push(raw.clone());
@@ -2003,8 +2018,8 @@ impl ColumnsSettings {
         }
     }
 
-    /// El orden para un pane en `scheme` (#108): el del scheme, o el
-    /// global, o el histórico.
+    /// The order for a pane in `scheme` (#108): the scheme's, or the
+    /// global one, or the historical one.
     #[must_use]
     pub fn sort_for(&self, scheme: &str) -> crate::sort::SortSpec {
         self.schemes
@@ -2013,15 +2028,14 @@ impl ColumnsSettings {
             .unwrap_or_else(|| self.default_sort.clone())
     }
 
-    /// Los items de layout para un pane en `scheme`, en orden de pintado
-    /// (#117 y follow-up: builtins, attrs Y `plugin:` — cada familia con su
-    /// cap pintado == pedido). Dedup por id; el nombre jamás
-    /// desaparece ni deja de ir primero. El `width` de un
-    /// `[[ui.columns.spec]]` (global ← scheme) SUSTITUYE la política del
-    /// item — sobre cualquier columna, también attrs. Un width sobre `name`
-    /// se aplica pero conserva `is_name: true`: las reglas de suelo del
-    /// nombre de [`layout`] (regla 3, [`NAME_MIN`], jamás descartado)
-    /// siguen ganando.
+    /// The layout items for a pane in `scheme`, in paint order (#117 and
+    /// follow-up: builtins, attrs AND `plugin:` — each family with its own
+    /// painted == requested cap). Dedup by id; the name never disappears
+    /// nor stops going first. A `[[ui.columns.spec]]`'s `width` (global ←
+    /// scheme) REPLACES the item's policy — on any column, attrs included.
+    /// A width over `name` is applied but keeps `is_name: true`: the name's
+    /// floor rules in [`layout`] (rule 3, [`NAME_MIN`], never dropped)
+    /// still win.
     #[must_use]
     pub fn layout_items_for(&self, scheme: &str) -> Vec<(ColumnId, LayoutItem)> {
         let ids = self.configured_ids(scheme);
@@ -2031,11 +2045,11 @@ impl ColumnsSettings {
                     .into_iter()
                     .map(|(b, it)| (ColumnId::Builtin(b), it))
                     .collect();
-                // La columna de PERMISOS, donde hay permisos (spec
-                // 2026-09-20). Va solo en el set por defecto: en cuanto
-                // alguien escribe sus columnas manda su lista, y si no la
-                // nombró es que no la quiere.
-                if SCHEMES_CON_PERMISOS.contains(&scheme) {
+                // The PERMISSIONS column, where there are permissions (spec
+                // 2026-09-20). It only goes in the default set: as soon as
+                // someone writes their own columns, their list rules, and
+                // if they did not name it, they do not want it.
+                if SCHEMES_WITH_PERMISSIONS.contains(&scheme) {
                     v.push((
                         ColumnId::Attr(POSIX_MODE_ATTR.to_owned()),
                         attr_layout_item(),
@@ -2048,9 +2062,10 @@ impl ColumnsSettings {
                 for id in ids {
                     match id {
                         _ if out.iter().any(|(x, _)| x == id) => {}
-                        // #117-follow-up: mismo trato que los attrs — item
-                        // por defecto (width override por spec gratis) y cap
-                        // pintado == pedido (cada columna es una RPC).
+                        // #117-follow-up: same treatment as attrs — a
+                        // default item (width override by spec for free)
+                        // and painted == requested cap (each column is one
+                        // RPC).
                         ColumnId::Plugin { .. } => {
                             let plugins = out
                                 .iter()
@@ -2061,14 +2076,14 @@ impl ColumnsSettings {
                             }
                         }
                         ColumnId::Builtin(b) => out.push((id.clone(), builtin_layout_item(*b))),
-                        // #117 review: a lo sumo ATTRS_MAX_REQUEST attrs —
-                        // pintado == pedido (`attr_ids_for`); el resto es
-                        // diagnóstico (`attrs_over_cap`, doctor lo nombra),
-                        // jamás una columna permanentemente en blanco.
-                        // Encoding-audit M1: solo ids LEGALES del wire — un
-                        // `attr:Posix.Mode` pedido a un daemon sería -32602
-                        // y tumbaría el listado entero; se salta aquí
-                        // (diagnóstico `attrs_not_wire_safe`).
+                        // #117 review: at most ATTRS_MAX_REQUEST attrs —
+                        // painted == requested (`attr_ids_for`); the rest is
+                        // diagnostic (`attrs_over_cap`, the doctor names
+                        // it), never a permanently blank column.
+                        // Encoding-audit M1: only WIRE-LEGAL ids — an
+                        // `attr:Posix.Mode` requested from a daemon would be
+                        // -32602 and would bring down the whole listing; it
+                        // is skipped here (diagnostic `attrs_not_wire_safe`).
                         ColumnId::Attr(a) => {
                             if norte_proto::attrs::is_valid_attr_id(a) {
                                 let attrs = out
@@ -2098,9 +2113,9 @@ impl ColumnsSettings {
         out
     }
 
-    /// Pliega el `width` de los specs (global ← scheme, `Some` gana) sobre
-    /// la política de cada item (#108 7b). `is_name` no se toca: los suelos
-    /// del nombre en [`layout`] mandan.
+    /// Folds the specs' `width` (global ← scheme, `Some` wins) onto each
+    /// item's policy (#108 7b). `is_name` is not touched: the name's floors
+    /// in [`layout`] rule.
     fn apply_width_overrides(&self, scheme: &str, items: &mut [(ColumnId, LayoutItem)]) {
         for (id, item) in items.iter_mut() {
             let key = id.to_string();
@@ -2122,11 +2137,11 @@ impl ColumnsSettings {
         }
     }
 
-    /// Los ids attr CONFIGURADOS y renderizables de `scheme` (#117): lo
-    /// que el pane pide en `fs.list`. Dedup del funnel; el cap a
-    /// [`norte_proto::ATTRS_MAX_REQUEST`] ya lo aplica `layout_items_for`
-    /// (pintado == pedido) — el `take` de aquí es cinturón (el daemon
-    /// rechazaría más).
+    /// `scheme`'s CONFIGURED and renderable attr ids (#117): what the pane
+    /// requests in `fs.list`. The funnel's dedup; the cap at
+    /// [`norte_proto::ATTRS_MAX_REQUEST`] is already applied by
+    /// `layout_items_for` (painted == requested) — the `take` here is a
+    /// belt (the daemon would reject more).
     #[must_use]
     pub fn attr_ids_for(&self, scheme: &str) -> Vec<String> {
         self.layout_items_for(scheme)
@@ -2139,10 +2154,11 @@ impl ColumnsSettings {
             .collect()
     }
 
-    /// Huella ORDENADA de [`Self::attr_ids_for`] (#117, review tarea 3):
-    /// decide si un cambio de columnas exige re-listar. Ordenada porque un
-    /// mero reorden de columnas no cambia QUÉ valores hay que pedir — ambos
-    /// frontends comparan huellas antes/después con esta única definición.
+    /// SORTED fingerprint of [`Self::attr_ids_for`] (#117, review task 3):
+    /// decides whether a column change requires re-listing. Sorted because a
+    /// mere column reorder does not change WHAT values need requesting —
+    /// both frontends compare before/after fingerprints with this single
+    /// definition.
     #[must_use]
     pub fn attr_fingerprint(&self, scheme: &str) -> Vec<String> {
         let mut ids = self.attr_ids_for(scheme);
@@ -2150,12 +2166,12 @@ impl ColumnsSettings {
         ids
     }
 
-    /// Las columnas `plugin:` CONFIGURADAS y pintables de `scheme`
-    /// (#117-follow-up), como pares `(plugin, columna)` en orden de
-    /// pintado — lo que el frontend pide vía `plugin.column_values` (el
-    /// id del wire es la COLUMNA bare; el plugin valida pertenencia
-    /// contra el catálogo `plugin.list`). Cap ya aplicado por
-    /// `layout_items_for` (pintado == pedido).
+    /// `scheme`'s CONFIGURED and paintable `plugin:` columns
+    /// (#117-follow-up), as `(plugin, column)` pairs in paint order — what
+    /// the frontend requests via `plugin.column_values` (the wire id is
+    /// the bare COLUMN; the plugin validates membership against the
+    /// `plugin.list` catalog). Cap already applied by `layout_items_for`
+    /// (painted == requested).
     #[must_use]
     pub fn plugin_ids_for(&self, scheme: &str) -> Vec<(String, String)> {
         self.layout_items_for(scheme)
@@ -2168,9 +2184,9 @@ impl ColumnsSettings {
             .collect()
     }
 
-    /// Huella ORDENADA de [`Self::plugin_ids_for`] — espejo de
-    /// [`Self::attr_fingerprint`]: decide si un cambio de columnas exige
-    /// re-pedir valores de plugin (un reorden no).
+    /// SORTED fingerprint of [`Self::plugin_ids_for`] — mirror of
+    /// [`Self::attr_fingerprint`]: decides whether a column change requires
+    /// re-requesting plugin values (a reorder does not).
     #[must_use]
     pub fn plugin_fingerprint(&self, scheme: &str) -> Vec<(String, String)> {
         let mut ids = self.plugin_ids_for(scheme);
@@ -2178,12 +2194,12 @@ impl ColumnsSettings {
         ids
     }
 
-    /// Huella COMBINADA attr+plugin de un pane (#117-follow-up, review
-    /// MAJOR-1): la ÚNICA definición de «¿cambió lo que este pane pide?»
-    /// para ambos frontends — attr ids más los display ids `plugin:` en
-    /// forma ordenada. Si divergiera por frontend, uno dejaría de
-    /// re-listar ante un cambio solo-de-plugins y la columna nueva
-    /// quedaría permanentemente en blanco.
+    /// A pane's COMBINED attr+plugin fingerprint (#117-follow-up, review
+    /// MAJOR-1): the ONE definition of "did what this pane requests
+    /// change?" for both frontends — attr ids plus `plugin:` display ids in
+    /// sorted form. If it diverged per frontend, one would stop re-listing
+    /// on a plugins-only change and the new column would stay permanently
+    /// blank.
     #[must_use]
     pub fn pane_fingerprint(&self, scheme: &str) -> Vec<String> {
         let mut ids = self.attr_fingerprint(scheme);
@@ -2195,11 +2211,11 @@ impl ColumnsSettings {
         ids
     }
 
-    /// La lista de ids CONFIGURADA efectiva para `scheme` en forma Display,
-    /// override del scheme > default > set built-in (#108 7a). Preserva los
-    /// ids sin renderer y los que no parsean: el picker los enseña y los
-    /// re-persiste ENTEROS — limpiar la config del usuario no es su trabajo
-    /// (doctor los reporta).
+    /// `scheme`'s effective CONFIGURED id list in Display form, scheme
+    /// override > default > built-in set (#108 7a). Preserves ids with no
+    /// renderer and ones that fail to parse: the picker shows them and
+    /// re-persists them WHOLE — cleaning up the user's config is not its
+    /// job (the doctor reports them).
     #[must_use]
     pub fn raw_ids_for(&self, scheme: &str) -> Vec<String> {
         if let Some(ids) = self.raw_schemes.get(scheme) {
@@ -2214,32 +2230,33 @@ impl ColumnsSettings {
             .collect()
     }
 
-    /// ¿Tiene `scheme` una entrada propia en la config (columns o sort)?
-    /// Decide el TARGET del picker: con entrada, el save escribe el scheme;
-    /// sin ella, el default (#108 7a — una regla, dicha en el título).
+    /// Does `scheme` have its own entry in config (columns or sort)?
+    /// Decides the picker's TARGET: with an entry, saving writes the
+    /// scheme; without it, the default (#108 7a — one rule, said in its
+    /// name).
     #[must_use]
     pub fn has_scheme_entry(&self, scheme: &str) -> bool {
         self.schemes.contains_key(scheme)
     }
 
-    /// Aplica el resultado del picker EN MEMORIA (#108 7a): mismas semánticas
-    /// que el write-back a disco (`persist_columns`) para que la sesión y el
-    /// fichero no diverjan mientras llega el hot-reload. Mantiene en paso las
-    /// listas crudas y las parseadas.
+    /// Applies the picker's result IN MEMORY (#108 7a): the same semantics
+    /// as the write-back to disk (`persist_columns`) so the session and the
+    /// file do not diverge while the hot-reload arrives. Keeps the raw and
+    /// parsed lists in step.
     pub fn apply_picked(
         &mut self,
         target: Option<&str>,
         ids: &[String],
         sort: crate::sort::SortSpec,
     ) {
-        // M3 revisión 7a: los diagnósticos de doctor (`invalid`/
-        // `unrenderable`) NO se recalculan aquí — `collect_diagnostics` solo
-        // AÑADE, jamás retira entradas rancias, así que llamarla mentiría;
-        // el re-resolve del hot-reload es quien los refresca honestos.
-        // #108 7b: los mapas de specs retenidos (`specs_global`/
-        // `specs_schemes`) son independientes de la LISTA de columnas — un
-        // spec estiliza su id «allí donde aparezca», así que elegir columnas
-        // en el picker no los toca y no hay nada que mantener en paso aquí.
+        // M3 review 7a: the doctor's diagnostics (`invalid`/`unrenderable`)
+        // are NOT recomputed here — `collect_diagnostics` only ADDS, never
+        // removes stale entries, so calling it here would lie; the
+        // hot-reload's re-resolve is what refreshes them honestly.
+        // #108 7b: the retained specs maps (`specs_global`/`specs_schemes`)
+        // are independent of the column LIST — a spec styles its id
+        // "wherever it appears", so choosing columns in the picker does not
+        // touch them and there is nothing to keep in step here.
         let parsed = parse_ids(ids);
         if let Some(s) = target {
             self.raw_schemes.insert(s.to_owned(), ids.to_vec());
@@ -2253,8 +2270,8 @@ impl ColumnsSettings {
     }
 }
 
-/// Item de layout por defecto de cada builtin (#108): mismos anchos que
-/// [`default_layout_items`] — separador INCLUIDO en las no-nombre.
+/// Each builtin's default layout item (#108): the same widths as
+/// [`default_layout_items`] — separator INCLUDED in the non-name ones.
 #[must_use]
 pub fn builtin_layout_item(b: Builtin) -> LayoutItem {
     match b {
@@ -2268,17 +2285,18 @@ pub fn builtin_layout_item(b: Builtin) -> LayoutItem {
             measured: 0,
             is_name: false,
         },
-        // 12 = «09-10 14:02» (11, el `smart` de este año) + separador. El
-        // MISMO número que `default_layout_items`: con `[ui.columns]`
-        // configurado se pasaba por aquí, y aquí seguía en 10 —la fecha
-        // salía «09-10 20:» (2026-09-11). Hay test que ata las dos tablas.
+        // 12 = "09-10 14:02" (11, this year's `smart`) + separator. The
+        // SAME number as `default_layout_items`: with `[ui.columns]`
+        // configured, execution went through here, and here it was still
+        // 10 —the date came out "09-10 20:" (2026-09-11). There is a test
+        // that ties the two tables together.
         Builtin::Mtime => LayoutItem {
             policy: WidthPolicy::Fixed(12),
             measured: 0,
             is_name: false,
         },
-        // «dir»/«file»/«symlink»/«other» localizados; 9 = «symlink»(7)+sep
-        // con margen.
+        // Localized "dir"/"file"/"symlink"/"other"; 9 = "symlink"(7)+sep
+        // with margin.
         Builtin::Kind => LayoutItem {
             policy: WidthPolicy::Fixed(9),
             measured: 0,
@@ -2287,9 +2305,9 @@ pub fn builtin_layout_item(b: Builtin) -> LayoutItem {
     }
 }
 
-/// Item de layout por defecto de una columna attr (#117): `Fixed(12)`
-/// (separador incluido) — el ancho fino se ajusta con el width override
-/// del spec, que llega gratis por `apply_width_overrides`.
+/// An attr column's default layout item (#117): `Fixed(12)` (separator
+/// included) — the fine width is adjusted with the spec's width override,
+/// which arrives for free via `apply_width_overrides`.
 #[must_use]
 pub fn attr_layout_item() -> LayoutItem {
     LayoutItem {
@@ -2299,10 +2317,10 @@ pub fn attr_layout_item() -> LayoutItem {
     }
 }
 
-/// Item de layout por defecto de una columna `plugin:` (#117-follow-up):
-/// mismo `Fixed(12)` que los attrs — los valores están capados a
-/// [`COLUMN_VALUE_MAX_CHARS`] en el ingest y el ancho fino se ajusta con
-/// el width override del spec.
+/// A `plugin:` column's default layout item (#117-follow-up): the same
+/// `Fixed(12)` as attrs — the values are capped at
+/// [`COLUMN_VALUE_MAX_CHARS`] at ingest and the fine width is adjusted with
+/// the spec's width override.
 #[must_use]
 pub fn plugin_layout_item() -> LayoutItem {
     LayoutItem {
@@ -2334,74 +2352,73 @@ fn map_sort(s: Option<&norte_config::SortChoice>) -> crate::sort::SortSpec {
     }
 }
 
-/// ¿Pone este listado la columna de permisos por su cuenta?
+/// Does this listing set the permissions column on its own?
 ///
-/// Tres condiciones, y las tres son necesarias:
+/// Three conditions, and all three are necessary:
 ///
-/// 1. nadie escribió sus propias columnas para este scheme — si lo hizo,
-///    manda su lista, y si no la nombró es que no la quiere;
-/// 2. el scheme es de los que tienen permisos POSIX;
-/// 3. el provider CONTESTÓ y dice que tiene `posix.mode`, con el hint que
-///    dice que es un modo. `None` —aún no ha contestado— es que no.
+/// 1. nobody wrote their own columns for this scheme — if they did, their
+///    list rules, and if they did not name it, they do not want it;
+/// 2. the scheme is one of those with POSIX permissions;
+/// 3. the provider ANSWERED and says it has `posix.mode`, with the hint
+///    that says it is a mode. `None` —it has not answered yet— means no.
 ///
-/// La tercera exige el hint y no solo el id porque el id es un nombre que
-/// cualquier provider puede usar para lo que quiera: sin comprobarlo, norte
-/// pondría su cabecera traducida «Modo» encima de una cadena ajena que nadie
-/// pidió ver. La cabecera es de norte, así que el valor tiene que serlo
-/// también.
+/// The third requires the hint and not just the id because the id is a
+/// name any provider can use for whatever it wants: without checking it,
+/// norte would put its translated "Mode" header over a foreign string
+/// nobody asked to see. The header is norte's, so the value has to be too.
 ///
-/// Es pública porque la respuesta la necesitan DOS superficies y tiene que
-/// ser la misma: el listado, que la pinta, y el selector de columnas, que
-/// tiene que enseñarla encendida — decir que está apagada mientras se pinta
-/// convierte confirmar el diálogo en borrarla sin avisar.
+/// It is public because TWO surfaces need the answer and it has to be the
+/// same for both: the listing, which paints it, and the column selector,
+/// which has to show it turned on — saying it is off while it is painted
+/// turns confirming the dialog into erasing it without warning.
 #[must_use]
-pub fn pone_los_permisos(
+pub fn sets_permission_column(
     settings: &ColumnsSettings,
     scheme: &str,
     catalog: Option<&norte_proto::AttrCatalog>,
 ) -> bool {
     !settings.has_user_columns(scheme)
-        && SCHEMES_CON_PERMISOS.contains(&scheme)
+        && SCHEMES_WITH_PERMISSIONS.contains(&scheme)
         && catalog.is_some_and(|c| {
             c.iter()
                 .any(|a| a.id == POSIX_MODE_ATTR && a.hint == norte_proto::AttrHint::Mode)
         })
 }
 
-/// Las columnas que este listado va a PINTAR: las configuradas, menos la de
-/// permisos que puso norte si el backend no la puede contestar.
+/// The columns this listing is going to PAINT: the configured ones, minus
+/// the permissions one norte set if the backend cannot answer it.
 ///
-/// Un único sitio donde se decide, porque lo preguntan dos funciones y la
-/// respuesta tiene que ser la misma en las dos (spec 2026-09-20).
-fn items_pintables(
+/// A single place where this is decided, because two functions ask it and
+/// the answer has to be the same in both (spec 2026-09-20).
+fn paintable_items(
     settings: &ColumnsSettings,
     scheme: &str,
     catalog: Option<&norte_proto::AttrCatalog>,
 ) -> Vec<(ColumnId, LayoutItem)> {
     let mut set = settings.layout_items_for(scheme);
-    // Una columna que pidió el usuario se queda aunque salga vacía: es su
-    // elección, y borrársela sería contestarle que no.
-    if !settings.has_user_columns(scheme) && !pone_los_permisos(settings, scheme, catalog) {
+    // A column the user requested stays even if it comes out empty: it is
+    // their choice, and erasing it would be answering them with a no.
+    if !settings.has_user_columns(scheme) && !sets_permission_column(settings, scheme, catalog) {
         set.retain(|(id, _)| !matches!(id, ColumnId::Attr(a) if a == POSIX_MODE_ATTR));
     }
     set
 }
 
-/// Anchos de las columnas (#108) para un ancho interior en CELDAS:
-/// `(id, ancho)` de las columnas VIVAS de `settings` para `scheme`,
-/// en orden de pintado — una columna sin sitio no aparece. Compartido
-/// TUI/GUI: ambos frontends pintan el MISMO conjunto del mismo [`layout`].
+/// Column widths (#108) for an inner width in CELLS: `(id, width)` of
+/// `settings`'s ALIVE columns for `scheme`, in paint order — a column with
+/// no room does not appear. Shared TUI/GUI: both frontends paint the SAME
+/// set from the SAME [`layout`].
 #[must_use]
 pub fn column_widths(
     settings: &ColumnsSettings,
     scheme: &str,
     inner_width: u16,
-    // Lo mismo que en [`fitted_columns`], y por la misma razón: dos
-    // respuestas distintas a «¿qué columnas hay?» dejarían el borde que
-    // arrastra el ratón agarrando la columna de al lado.
+    // Same as in [`fitted_columns`], and for the same reason: two different
+    // answers to "what columns are there?" would leave the edge the mouse
+    // drags gripping the neighbouring column.
     catalog: Option<&norte_proto::AttrCatalog>,
 ) -> Vec<(ColumnId, u16)> {
-    let set = items_pintables(settings, scheme, catalog);
+    let set = paintable_items(settings, scheme, catalog);
     let items: Vec<_> = set.iter().map(|(_, it)| *it).collect();
     let placed = layout(inner_width, &items);
     set.into_iter()
@@ -2410,161 +2427,162 @@ pub fn column_widths(
         .collect()
 }
 
-/// Ancho de una columna compacta, separador incluido: `1023B`, `1.3M`,
-/// `22:19` y `09-16` caben en cinco celdas.
+/// A compact column's width, separator included: `1023B`, `1.3M`, `22:19`
+/// and `09-16` fit in five cells.
 pub const COMPACT_WIDTH: u16 = 6;
 
-/// Una columna tal como se pinta tras [`fitted_columns`].
+/// A column as painted after [`fitted_columns`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Fitted {
-    /// Qué columna.
+    /// Which column.
     pub id: ColumnId,
-    /// Su ancho en celdas, separador incluido.
+    /// Its width in cells, separator included.
     pub width: u16,
-    /// Va en formato corto ([`SizeFormat::Short`] / [`TimeFormat::Short`]):
-    /// quien pinta lo aplica al estilo con [`ColumnStyle::compacted`].
+    /// Goes in short format ([`SizeFormat::Short`] / [`TimeFormat::Short`]):
+    /// whoever paints applies it to the style with [`ColumnStyle::compacted`].
     pub compact: bool,
 }
 
-/// Un peldaño de la escalera de [`fitted_columns`].
+/// A rung of [`fitted_columns`]'s ladder.
 #[derive(Debug, Clone, Copy)]
-enum Peldano {
-    Ocultar,
-    Compactar,
+enum Rung {
+    Hide,
+    Compact,
 }
 
-/// A qué columna apunta un peldaño. Existe porque desde la spec 2026-09-20
-/// la escalera tiene un peldaño que NO es un builtin: la columna de permisos
-/// que el listado pone por su cuenta.
+/// Which column a rung points at. It exists because since spec 2026-09-20
+/// the ladder has a rung that is NOT a builtin: the permissions column the
+/// listing sets on its own.
 #[derive(Debug, Clone, Copy)]
-enum Cede {
+enum Yields {
     Builtin(Builtin),
-    /// Un atributo, nombrado por su id. Solo el que el propio listado añade
-    /// por defecto: uno que el usuario pidió sigue exento (ADR 0124).
-    PorDefecto(&'static str),
+    /// An attribute, named by its id. Only the one the listing itself adds
+    /// by default: one the user requested stays exempt (ADR 0124).
+    ByDefault(&'static str),
 }
 
-impl Cede {
+impl Yields {
     fn id(self) -> ColumnId {
         match self {
             Self::Builtin(b) => ColumnId::Builtin(b),
-            Self::PorDefecto(a) => ColumnId::Attr(a.to_owned()),
+            Self::ByDefault(a) => ColumnId::Attr(a.to_owned()),
         }
     }
 }
 
-/// El orden en que las columnas ceden sitio al nombre. Primero lo que ya se
-/// dice de otra forma —la clase la cuentan el icono, el color y la `/`—,
-/// luego lo que se puede decir más corto, y solo al final lo que se pierde.
+/// The order in which columns yield room to the name. First what is already
+/// said another way —the class is told by the icon, the color and the
+/// `/`—, then what can be said shorter, and only at the end what is lost.
 ///
-/// Los permisos van los PRIMEROS de todos, y no por ser menos útiles: son la
-/// columna que el listado pone sin que nadie la pida, así que es la primera
-/// que tiene que irse cuando el sitio no da. ADR 0124 exime a las columnas
-/// `attr:` de la escalera «porque las pidió alguien a propósito»; ésta no la
-/// pidió nadie, y por eso la excepción no la alcanza (ver
-/// [`ColumnsSettings::pone_sus_columnas`]).
-const ESCALERA: [(Cede, Peldano); 6] = [
-    (Cede::PorDefecto(POSIX_MODE_ATTR), Peldano::Ocultar),
-    (Cede::Builtin(Builtin::Kind), Peldano::Ocultar),
-    (Cede::Builtin(Builtin::Mtime), Peldano::Compactar),
-    (Cede::Builtin(Builtin::Size), Peldano::Compactar),
-    (Cede::Builtin(Builtin::Mtime), Peldano::Ocultar),
-    (Cede::Builtin(Builtin::Size), Peldano::Ocultar),
+/// Permissions go FIRST of all, and not for being less useful: it is the
+/// column the listing sets with nobody asking for it, so it is the first
+/// that has to go when there is no room. ADR 0124 exempts `attr:` columns
+/// from the ladder "because someone requested them on purpose"; nobody
+/// requested this one, and that is why the exemption does not reach it (see
+/// [`ColumnsSettings::has_user_columns`]).
+const LADDER: [(Yields, Rung); 6] = [
+    (Yields::ByDefault(POSIX_MODE_ATTR), Rung::Hide),
+    (Yields::Builtin(Builtin::Kind), Rung::Hide),
+    (Yields::Builtin(Builtin::Mtime), Rung::Compact),
+    (Yields::Builtin(Builtin::Size), Rung::Compact),
+    (Yields::Builtin(Builtin::Mtime), Rung::Hide),
+    (Yields::Builtin(Builtin::Size), Rung::Hide),
 ];
 
-/// Anchos que dan prioridad a LEER el nombre.
+/// Widths that give priority to READING the name.
 ///
-/// [`column_widths`] reparte sin mirar lo que hay en el directorio: el nombre
-/// se queda con lo que sobra y, en un panel estrecho, eso es `Cap….png`.
-/// Aquí el nombre tiene un objetivo, `name_wanted` (lo que quien pinta midió
-/// del listado, ver [`name_width_p80`]), acotado a 3/5 del ancho para que
-/// un nombre larguísimo no se coma todas las demás. Mientras no llega, las
-/// demás columnas ceden un peldaño cada vez —ocultar la clase, fecha corta,
-/// tamaño corto, ocultar la fecha, ocultar el tamaño— y se para en cuanto
-/// llega: un panel ancho no pierde nada.
+/// [`column_widths`] splits without looking at what is in the directory:
+/// the name keeps whatever is left over and, in a narrow pane, that is
+/// `Cap….png`. Here the name has a target, `name_wanted` (what the painter
+/// measured from the listing, see [`name_width_p80`]), capped at 3/5 of the
+/// width so an extremely long name does not eat all the others. Until it
+/// arrives, the other columns yield one rung at a time —hide the class,
+/// short date, short size, hide the date, hide the size— and it stops as
+/// soon as it arrives: a wide pane loses nothing.
 ///
-/// Solo cede lo que el usuario no ha tocado: una columna con `width` en su
-/// spec no se compacta ni se oculta, una con `format` no se compacta, y un
-/// nombre con ancho fijo desactiva la escalera entera. Las columnas `attr:`
-/// y `plugin:` no están en la escalera: las pidió alguien a propósito.
+/// It only yields what the user has not touched: a column with `width` in
+/// its spec neither compacts nor hides, one with `format` does not compact,
+/// and a name with a fixed width disables the whole ladder. `attr:` and
+/// `plugin:` columns are not on the ladder: someone requested them on
+/// purpose.
 #[must_use]
 pub fn fitted_columns(
     settings: &ColumnsSettings,
     scheme: &str,
     inner_width: u16,
     name_wanted: u16,
-    // El catálogo de atributos del provider conectado, si ya se sabe (spec
-    // 2026-09-20). Solo decide una cosa: si se pinta la columna de permisos
-    // que pone el propio listado.
+    // The connected provider's attribute catalog, if already known (spec
+    // 2026-09-20). It only decides one thing: whether the listing's own
+    // permissions column is painted.
     //
-    // `None` —todavía no contestó— es NO. La columna la puso norte, así que
-    // norte es quien tiene que no enseñarla vacía: una cabecera «Modo» sobre
-    // doce celdas en blanco es exactamente el ancho de nombre que ADR 0124
-    // vino a recuperar. Aparecer un fotograma tarde es barato; estar ahí sin
-    // poder decir nada, no.
+    // `None` —it has not answered yet— means NO. norte set the column, so
+    // norte is the one that must not show it empty: a "Mode" header over
+    // twelve blank cells is exactly the name width ADR 0124 came to
+    // reclaim. Appearing one frame late is cheap; being there unable to say
+    // anything is not.
     //
-    // Y no es hipotético: `file` en Windows no anuncia `posix.mode`, y ese
-    // listado no lo anunciará nunca.
+    // And it is not hypothetical: `file` on Windows does not announce
+    // `posix.mode`, and that listing never will.
     catalog: Option<&norte_proto::AttrCatalog>,
 ) -> Vec<Fitted> {
-    let nombre = ColumnId::Builtin(Builtin::Name);
-    let techo = u16::try_from(u32::from(inner_width) * 3 / 5).unwrap_or(u16::MAX);
-    let objetivo = name_wanted.min(techo).max(NAME_MIN);
-    let libre = !settings.width_pinned(scheme, &nombre);
-    let mut set = items_pintables(settings, scheme, catalog);
-    let mut vivas = vec![true; set.len()];
-    let mut cortas = vec![false; set.len()];
-    let mut escalera = ESCALERA.iter();
+    let name = ColumnId::Builtin(Builtin::Name);
+    let ceiling = u16::try_from(u32::from(inner_width) * 3 / 5).unwrap_or(u16::MAX);
+    let target = name_wanted.min(ceiling).max(NAME_MIN);
+    let free = !settings.width_pinned(scheme, &name);
+    let mut set = paintable_items(settings, scheme, catalog);
+    let mut alive = vec![true; set.len()];
+    let mut short = vec![false; set.len()];
+    let mut ladder = LADDER.iter();
     loop {
         let items: Vec<LayoutItem> = set
             .iter()
-            .zip(&vivas)
+            .zip(&alive)
             .filter(|(_, v)| **v)
             .map(|((_, it), _)| *it)
             .collect();
-        let mut anchos = layout(inner_width, &items).into_iter();
+        let mut widths = layout(inner_width, &items).into_iter();
         let out: Vec<Fitted> = set
             .iter()
             .enumerate()
-            .filter(|(i, _)| vivas[*i])
+            .filter(|(i, _)| alive[*i])
             .filter_map(|(i, (id, _))| {
-                anchos.next().flatten().map(|width| Fitted {
+                widths.next().flatten().map(|width| Fitted {
                     id: id.clone(),
                     width,
-                    compact: cortas[i],
+                    compact: short[i],
                 })
             })
             .collect();
-        let tiene = out.iter().find(|f| f.id == nombre).map_or(0, |f| f.width);
-        if !libre || tiene >= objetivo {
+        let has = out.iter().find(|f| f.id == name).map_or(0, |f| f.width);
+        if !free || has >= target {
             return out;
         }
-        // El siguiente peldaño que se PUEDE dar; sin ninguno, esto es lo
-        // mejor que cabe.
+        // The next rung that CAN be given; with none left, this is the
+        // best that fits.
         loop {
-            let Some(&(cede, peldano)) = escalera.next() else {
+            let Some(&(yields, rung)) = ladder.next() else {
                 return out;
             };
-            // Un peldaño que apunta a una columna por defecto no se da si
-            // este listado pinta las columnas que alguien escribió: allí esa
-            // columna la pidió una persona, y ADR 0124 la deja quieta.
-            if matches!(cede, Cede::PorDefecto(_)) && settings.has_user_columns(scheme) {
+            // A rung that points at a default column is not given if this
+            // listing paints the columns someone wrote: there, a person
+            // requested that column, and ADR 0124 leaves it alone.
+            if matches!(yields, Yields::ByDefault(_)) && settings.has_user_columns(scheme) {
                 continue;
             }
-            let id = cede.id();
+            let id = yields.id();
             let Some(i) = set.iter().position(|(c, _)| *c == id) else {
                 continue;
             };
-            if !vivas[i] || settings.width_pinned(scheme, &id) {
+            if !alive[i] || settings.width_pinned(scheme, &id) {
                 continue;
             }
-            match peldano {
-                Peldano::Ocultar => vivas[i] = false,
-                Peldano::Compactar => {
-                    if cortas[i] || settings.format_pinned(scheme, &id) {
+            match rung {
+                Rung::Hide => alive[i] = false,
+                Rung::Compact => {
+                    if short[i] || settings.format_pinned(scheme, &id) {
                         continue;
                     }
-                    cortas[i] = true;
+                    short[i] = true;
                     set[i].1.policy = WidthPolicy::Fixed(COMPACT_WIDTH);
                 }
             }
@@ -2573,30 +2591,30 @@ pub fn fitted_columns(
     }
 }
 
-/// El ancho que cubre al 80% de los nombres, a partir de un histograma de
-/// anchos (`counts[w]` = cuántos nombres miden `w` celdas; el último cubo
-/// cuenta también a los más anchos). El 80% y no el máximo: un solo nombre
-/// kilométrico no debe dejar al resto del listado sin fecha.
+/// The width that covers 80% of the names, from a width histogram
+/// (`counts[w]` = how many names measure `w` cells; the last bucket also
+/// counts the wider ones). The 80% and not the max: a single mile-long name
+/// must not leave the rest of the listing with no date.
 #[must_use]
 pub fn name_width_p80(counts: &[u32]) -> u16 {
     let total: u64 = counts.iter().map(|c| u64::from(*c)).sum();
     if total == 0 {
         return 0;
     }
-    let meta = (total * 4).div_ceil(5);
-    let mut acumulado = 0u64;
+    let goal = (total * 4).div_ceil(5);
+    let mut accumulated = 0u64;
     for (w, c) in counts.iter().enumerate() {
-        acumulado += u64::from(*c);
-        if acumulado >= meta {
+        accumulated += u64::from(*c);
+        if accumulated >= goal {
             return u16::try_from(w).unwrap_or(u16::MAX);
         }
     }
     u16::try_from(counts.len().saturating_sub(1)).unwrap_or(u16::MAX)
 }
 
-/// La columna de orden que corresponde a un builtin, si es ordenable.
-/// `Kind` no lo es (no hay `SortColumn::Kind`): su cabecera no lleva
-/// flecha ni es clicable.
+/// The sort column that corresponds to a builtin, if it is sortable.
+/// `Kind` is not (there is no `SortColumn::Kind`): its header carries no
+/// arrow and is not clickable.
 #[must_use]
 pub fn sort_column(b: Builtin) -> Option<crate::sort::SortColumn> {
     use crate::sort::SortColumn;
@@ -2608,29 +2626,30 @@ pub fn sort_column(b: Builtin) -> Option<crate::sort::SortColumn> {
     }
 }
 
-/// [`sort_column`] para cualquier id: los builtin ordenables y los `attr:`
-/// (ADR 0144); los `plugin:` no.
+/// [`sort_column`] for any id: sortable builtins and `attr:` ones (ADR
+/// 0144); `plugin:` ones not.
 #[must_use]
 pub fn sort_column_id(id: &ColumnId) -> Option<crate::sort::SortColumn> {
     match id {
         ColumnId::Builtin(b) => sort_column(*b),
-        // Un atributo se ordena por su VALOR (ADR 0144): permisos, UID y GID
-        // son números, y ordenar por ellos agrupa lo que se pinta igual.
+        // An attribute sorts by its VALUE (ADR 0144): permissions, UID and
+        // GID are numbers, and sorting by them groups what paints the same.
         ColumnId::Attr(id) => Some(crate::sort::SortColumn::Attr(id.clone())),
-        // Un plugin no: sus valores no viven en la `Entry` sino en el mapa
-        // lateral del panel, y ordenar por algo que llega después del listado
-        // reordenaría las filas debajo del cursor mientras se lee.
+        // A plugin does not: its values do not live in the `Entry` but in
+        // the pane's side map, and sorting by something that arrives after
+        // the listing would reorder the rows under the cursor while it is
+        // being read.
         ColumnId::Plugin { .. } => None,
     }
 }
 
-/// Texto de la celda de una columna no-nombre (#108 L5, #117 sobre
-/// [`ColumnId`]) con un [`ColumnStyle`] resuelto (7b): `None` = ausencia
-/// (un dir sin size, un attr que el provider no mandó) — se pinta blanco,
-/// jamás un `0` fabricado. `now_ms` lo inyecta el caller (estabilidad de
-/// snapshots y pureza). Los `plugin:` devuelven `None` AQUÍ a propósito:
-/// sus valores no viven en la `Entry` sino en el side-map del pane
-/// (`PaneState::plugin_cell`) — el render los resuelve por ese camino.
+/// A non-name column's cell text (#108 L5, #117 over [`ColumnId`]) with a
+/// resolved [`ColumnStyle`] (7b): `None` = absence (a dir with no size, an
+/// attr the provider did not send) — painted blank, never a manufactured
+/// `0`. `now_ms` is injected by the caller (snapshot stability and
+/// purity). `plugin:` ones return `None` HERE on purpose: their values do
+/// not live in the `Entry` but in the pane's side-map
+/// (`PaneState::plugin_cell`) — the render resolves them through that path.
 #[must_use]
 pub fn styled_cell(
     entry: &norte_proto::Entry,
@@ -2641,11 +2660,12 @@ pub fn styled_cell(
     styled_cell_in(entry, col, now_ms, style, norte_i18n::active())
 }
 
-/// [`styled_cell`] en un idioma DADO.
+/// [`styled_cell`] in a GIVEN language.
 ///
-/// Tres de sus celdas traducen —la clase, un booleano y la fecha relativa— y
-/// las tres salían en el idioma del PROCESO cuando quien pintaba era la
-/// ventana: media pantalla en cada idioma es peor que ninguna traducción.
+/// Three of its cells translate —the class, a boolean and the relative
+/// date— and all three came out in the PROCESS's language when the window
+/// was the one painting: half a screen in each language is worse than no
+/// translation.
 #[must_use]
 pub fn styled_cell_in(
     entry: &norte_proto::Entry,
@@ -2656,7 +2676,7 @@ pub fn styled_cell_in(
 ) -> Option<String> {
     match col {
         ColumnId::Builtin(b) => match b {
-            Builtin::Name => None, // el nombre lo pinta el frontend
+            Builtin::Name => None, // the frontend paints the name
             Builtin::Kind => Some(norte_i18n::t_in(
                 lang,
                 match entry.kind {
@@ -2679,8 +2699,9 @@ pub fn styled_cell_in(
     }
 }
 
-/// [`styled_cell`] con los defaults del builtin (iec/relative) — la firma
-/// histórica pre-7b, conducta idéntica (pineada por los tests existentes).
+/// [`styled_cell`] with the builtin's defaults (iec/relative) — the
+/// historical pre-7b signature, identical behaviour (pinned by the
+/// existing tests).
 #[must_use]
 pub fn builtin_cell(entry: &norte_proto::Entry, col: Builtin, now_ms: i64) -> Option<String> {
     styled_cell(
@@ -2691,11 +2712,11 @@ pub fn builtin_cell(entry: &norte_proto::Entry, col: Builtin, now_ms: i64) -> Op
     )
 }
 
-/// Celda de un valor attr (#117): el TAG del valor decide (ADR 0039 §1 —
-/// jamás coaccionado al tipo declarado); el hint del estilo refina los
-/// numéricos. Text/Bytes son de TERCEROS: enmascarados y capados por
-/// [`sanitize_cell`]; Bytes pasa antes por el lossy MARCADO de
-/// [`crate::display_name`] (regla 1: los bytes originales no se tocan).
+/// An attr value's cell (#117): the value's TAG decides (ADR 0039 §1 —
+/// never coerced to the declared type); the style's hint refines the
+/// numeric ones. Text/Bytes are THIRD-PARTY: masked and capped by
+/// [`sanitize_cell`]; Bytes first goes through [`crate::display_name`]'s
+/// MARKED lossy conversion (rule 1: the original bytes are not touched).
 fn attr_cell(
     v: &norte_proto::AttrValue,
     style: &ColumnStyle,
@@ -2718,25 +2739,24 @@ fn attr_cell(
             _ => i.to_string(),
         }),
         AttrValue::TimeMs(ms) => Some(format_mtime(*ms, style.time_format, now_ms)),
-        // Presente-pero-impintable (enmascara a vacío) = «?» visible: el
-        // blanco queda RESERVADO para AUSENTE (#117 review).
+        // Present-but-unpaintable (masks to empty) = a visible "?": blank
+        // stays RESERVED for ABSENT (#117 review).
         AttrValue::Text(s) => sanitize_cell(Some(s)).or_else(|| Some("?".to_owned())),
         AttrValue::Bytes(b) => {
-            let (shown, _hostil) = crate::display_name(b);
+            let (shown, _hostile) = crate::display_name(b);
             sanitize_cell(Some(&shown)).or_else(|| Some("?".to_owned()))
         }
         AttrValue::Bool(b) => Some(norte_i18n::t_in(
             lang,
             if *b { "col-cell-yes" } else { "col-cell-no" },
         )),
-        // Una celda mala cuesta una celda: visible, jamás blanco (blanco =
-        // AUSENTE).
+        // A bad cell costs a cell: visible, never blank (blank = ABSENT).
         AttrValue::Unknown => Some("?".to_owned()),
     }
 }
 
-/// Modo POSIX según formato. Un valor que no cabe en u32 no es un modo:
-/// decimal crudo, jamás un panic ni un truncado silencioso.
+/// A POSIX mode by format. A value that does not fit in u32 is not a mode:
+/// raw decimal, never a panic nor a silent truncation.
 fn format_mode(n: u64, fmt: ModeFormat) -> String {
     match u32::try_from(n) {
         Ok(m) => match fmt {
@@ -2747,11 +2767,11 @@ fn format_mode(n: u64, fmt: ModeFormat) -> String {
     }
 }
 
-/// Etiqueta de cabecera de CUALQUIER columna (#117), compartida TUI/GUI:
-/// el `header` custom del spec gana (YA saneado al resolver); builtin →
-/// Fluent; attr → Fluent por id de primera parte (`col-attr-posix-mode`),
-/// si no el label del catálogo ENMASCARADO, si no el id saneado. `t()`
-/// devuelve la clave cuando falta: se detecta comparando.
+/// Any column's header label (#117), shared TUI/GUI: the spec's custom
+/// `header` wins (ALREADY sanitized at resolve time); builtin → Fluent;
+/// attr → Fluent by first-party id (`col-attr-posix-mode`), otherwise the
+/// catalog's MASKED label, otherwise the sanitized id. `t()` returns the
+/// key when it is missing: detected by comparing.
 #[must_use]
 pub fn header_label(
     id: &ColumnId,
@@ -2761,16 +2781,16 @@ pub fn header_label(
     header_label_in(id, style, catalog, norte_i18n::active())
 }
 
-/// La cabecera de una columna en un idioma CONCRETO.
+/// A column's header in a SPECIFIC language.
 ///
-/// Existe porque quien guarda el idioma en un campo —el host de la ventana,
-/// que lo recibe al arrancar— no puede usar el global: [`norte_i18n::t`] lee
-/// la negociación del proceso, así que la mitad fija de la hoja de atributos
-/// salía en el idioma pedido y las cabeceras de los atributos en el del
-/// sistema, en la misma pantalla.
+/// It exists because whoever keeps the language in a field —the window's
+/// host, which receives it at start-up— cannot use the global one:
+/// [`norte_i18n::t`] reads the process's negotiation, so the attributes
+/// sheet's fixed half came out in the requested language and the
+/// attributes' headers in the system's, on the same screen.
 ///
-/// [`header_label`] es esto con el idioma global, que es lo que quiere un
-/// terminal: ahí los dos coinciden siempre.
+/// [`header_label`] is this with the global language, which is what a
+/// terminal wants: there the two always agree.
 #[must_use]
 pub fn header_label_in(
     id: &ColumnId,
@@ -2792,10 +2812,10 @@ pub fn header_label_in(
             },
         ),
         ColumnId::Attr(aid) => {
-            // #117 review: la clave Fluent solo se deriva para namespaces
-            // de PRIMERA parte — un id de provider como `posix-mode`
-            // aplanaría al MISMO `col-attr-posix-mode` y robaría la
-            // traducción de `posix.mode`.
+            // #117 review: the Fluent key is only derived for FIRST-party
+            // namespaces — a provider id like `posix-mode` would flatten to
+            // the SAME `col-attr-posix-mode` and steal `posix.mode`'s
+            // translation.
             const FIRST_PARTY: &[&str] = &["posix.", "win.", "s3.", "archive."];
             if FIRST_PARTY.iter().any(|ns| aid.starts_with(ns)) {
                 let key = format!("col-attr-{}", aid.replace(['.', '_'], "-"));
@@ -2829,14 +2849,14 @@ pub fn header_label_in(
 mod style_tests {
     use super::*;
 
-    /// El rótulo del MANIFIESTO de una columna de plugin se usa en la
-    /// cabecera; `[ui.columns] header` sigue ganándole, y sin ninguno de los
-    /// dos queda el id, que es lo que se enseñaba siempre.
+    /// A plugin column's MANIFEST label is used in the header;
+    /// `[ui.columns] header` still wins over it, and with neither of the
+    /// two, the id remains, which is what always used to show.
     #[test]
-    fn el_rotulo_del_manifiesto_nombra_una_columna_de_plugin() {
-        let id: ColumnId = "plugin:acme.git/status".parse().expect("id de plugin");
+    fn the_manifests_label_names_a_plugin_column() {
+        let id: ColumnId = "plugin:acme.git/status".parse().expect("plugin id");
         let mut s = ColumnsSettings::resolve(&norte_config::ColumnsConfig::default());
-        let rotulo = |s: &ColumnsSettings| {
+        let label = |s: &ColumnsSettings| {
             header_label_in(
                 &id,
                 &s.style_for_id("file", &id, None),
@@ -2844,18 +2864,18 @@ mod style_tests {
                 norte_i18n::Lang::Es,
             )
         };
-        assert_eq!(rotulo(&s), "acme.git/status", "sin catálogo, el id");
+        assert_eq!(label(&s), "acme.git/status", "with no catalog, the id");
 
         assert!(
-            s.apply_plugin_headers([("plugin:acme.git/status".to_owned(), "Estado".to_owned())])
+            s.apply_plugin_headers([("plugin:acme.git/status".to_owned(), "Status".to_owned())])
         );
-        assert_eq!(rotulo(&s), "Estado");
+        assert_eq!(label(&s), "Status");
         assert!(
-            !s.apply_plugin_headers([("plugin:acme.git/status".to_owned(), "Estado".to_owned())]),
-            "el mismo rótulo otra vez no es un cambio"
+            !s.apply_plugin_headers([("plugin:acme.git/status".to_owned(), "Status".to_owned())]),
+            "the same label again is not a change"
         );
 
-        // El del usuario manda sobre el del manifiesto.
+        // The user's wins over the manifest's.
         let mut cfg = norte_config::ColumnsConfig::default();
         cfg.specs.insert(
             "plugin:acme.git/status".to_owned(),
@@ -2864,19 +2884,20 @@ mod style_tests {
                 ..Default::default()
             },
         );
-        let mut con_spec = ColumnsSettings::resolve(&cfg);
-        con_spec.apply_plugin_headers([("plugin:acme.git/status".to_owned(), "Estado".to_owned())]);
-        assert_eq!(rotulo(&con_spec), "Git");
+        let mut with_spec = ColumnsSettings::resolve(&cfg);
+        with_spec
+            .apply_plugin_headers([("plugin:acme.git/status".to_owned(), "Status".to_owned())]);
+        assert_eq!(label(&with_spec), "Git");
     }
 
     #[test]
-    fn style_for_aplica_spec_global_y_scheme_gana() {
+    fn style_for_applies_the_global_spec_and_the_scheme_wins() {
         let mut cfg = norte_config::ColumnsConfig::default();
         cfg.specs.insert(
             "size".into(),
             norte_config::ColumnSpec {
                 format: Some("si".into()),
-                header: Some("Peso".into()),
+                header: Some("Weight".into()),
                 width: Some(norte_config::WidthChoice::Fixed(9)),
                 ..Default::default()
             },
@@ -2899,12 +2920,12 @@ mod style_tests {
             s.style_for("sftp", Builtin::Size).size_format,
             SizeFormat::Exact
         );
-        // header del global sobrevive en el scheme (last-wins POR CAMPO).
+        // The global's header survives on the scheme (last-wins PER FIELD).
         assert_eq!(
             s.style_for("sftp", Builtin::Size).header.as_deref(),
-            Some("Peso")
+            Some("Weight")
         );
-        // width override llega al layout.
+        // The width override reaches the layout.
         let items = s.layout_items_for("file");
         let size = items
             .iter()
@@ -2914,12 +2935,12 @@ mod style_tests {
     }
 
     #[test]
-    fn spec_formato_que_no_casa_es_diagnostico_no_aplicado() {
+    fn a_format_that_does_not_match_is_diagnostic_not_applied() {
         let mut cfg = norte_config::ColumnsConfig::default();
         cfg.specs.insert(
             "mtime".into(),
             norte_config::ColumnSpec {
-                format: Some("iec".into()), // iec en un timestamp: no casa
+                format: Some("iec".into()), // iec on a timestamp: no match
                 ..Default::default()
             },
         );
@@ -2932,7 +2953,7 @@ mod style_tests {
     }
 
     #[test]
-    fn spec_id_que_no_parsea_es_diagnostico() {
+    fn a_spec_id_that_fails_to_parse_is_diagnostic() {
         let mut cfg = norte_config::ColumnsConfig::default();
         cfg.specs.insert(
             "rota!!".into(),
@@ -2946,7 +2967,7 @@ mod style_tests {
     }
 
     #[test]
-    fn spec_header_hostil_se_sanea_y_capa_al_resolver() {
+    fn a_hostile_spec_header_is_sanitized_and_capped_at_resolve() {
         let mut cfg = norte_config::ColumnsConfig::default();
         cfg.specs.insert(
             "size".into(),
@@ -2962,7 +2983,7 @@ mod style_tests {
     }
 
     #[test]
-    fn builtin_cell_honra_el_formato() {
+    fn builtin_cell_honours_the_format() {
         let e = norte_proto::Entry {
             attrs: std::collections::BTreeMap::new(),
             path: norte_proto::VPath::parse("mem:///a.bin").unwrap(),
@@ -2978,7 +2999,7 @@ mod style_tests {
             styled_cell(&e, &ColumnId::Builtin(Builtin::Size), 0, &styled).as_deref(),
             Some("2048")
         );
-        // El wrapper por defecto no cambia de conducta (Iec).
+        // The default wrapper does not change behaviour (Iec).
         assert_eq!(
             builtin_cell(&e, Builtin::Size, 0).as_deref(),
             Some("2.0 KiB")
@@ -2986,23 +3007,23 @@ mod style_tests {
     }
 
     #[test]
-    fn default_for_alineaciones() {
+    fn default_for_alignments() {
         assert_eq!(ColumnStyle::default_for(Builtin::Name).align, Align::Left);
         assert_eq!(ColumnStyle::default_for(Builtin::Size).align, Align::Right);
         assert_eq!(ColumnStyle::default_for(Builtin::Mtime).align, Align::Right);
         assert_eq!(ColumnStyle::default_for(Builtin::Kind).align, Align::Right);
     }
 
-    /// #108 7b: `apply_format` actualiza el spec retenido y `style_for` lo
-    /// ve al instante (lockstep sesión↔disco del picker); una entrada
-    /// existente conserva sus otros campos (header).
+    /// #108 7b: `apply_format` updates the retained spec and `style_for`
+    /// sees it instantly (the picker's session↔disk lockstep); an existing
+    /// entry keeps its other fields (header).
     #[test]
-    fn apply_format_actualiza_el_estilo_en_sesion() {
+    fn apply_format_updates_the_style_in_session() {
         let cfg = norte_config::ColumnsConfig {
             specs: [(
                 "size".to_owned(),
                 norte_config::ColumnSpec {
-                    header: Some("Peso".to_owned()),
+                    header: Some("Weight".to_owned()),
                     ..Default::default()
                 },
             )]
@@ -3015,14 +3036,14 @@ mod style_tests {
             SizeFormat::Iec
         );
         s.apply_format("size", "si");
-        let estilo = s.style_for("file", Builtin::Size);
-        assert_eq!(estilo.size_format, SizeFormat::Si, "visible al instante");
+        let style = s.style_for("file", Builtin::Size);
+        assert_eq!(style.size_format, SizeFormat::Si, "visible instantly");
         assert_eq!(
-            estilo.header.as_deref(),
-            Some("Peso"),
-            "los otros campos del spec sobreviven"
+            style.header.as_deref(),
+            Some("Weight"),
+            "the spec's other fields survive"
         );
-        // Sin entrada previa: se crea.
+        // With no prior entry: it is created.
         s.apply_format("mtime", "iso");
         assert_eq!(
             s.style_for("file", Builtin::Mtime).time_format,
@@ -3030,10 +3051,10 @@ mod style_tests {
         );
     }
 
-    /// V2 (spec 2026-09-11): `apply_width` fija la política en sesión, se
-    /// acota al rango del loader, y conserva los otros campos del spec.
+    /// V2 (spec 2026-09-11): `apply_width` fixes the policy in session, is
+    /// capped to the loader's range, and keeps the spec's other fields.
     #[test]
-    fn apply_width_fija_la_politica_en_sesion_y_acota() {
+    fn apply_width_fixes_the_policy_in_session_and_caps_it() {
         let cfg = norte_config::ColumnsConfig {
             specs: [(
                 "size".to_owned(),
@@ -3046,48 +3067,47 @@ mod style_tests {
             ..Default::default()
         };
         let mut s = ColumnsSettings::resolve(&cfg);
-        let politica = |s: &ColumnsSettings| {
+        let policy = |s: &ColumnsSettings| {
             s.layout_items_for("file")
                 .into_iter()
                 .find(|(id, _)| *id == ColumnId::Builtin(Builtin::Size))
                 .map(|(_, item)| item.policy)
         };
-        assert_ne!(politica(&s), Some(WidthPolicy::Fixed(12)));
+        assert_ne!(policy(&s), Some(WidthPolicy::Fixed(12)));
         assert_eq!(s.apply_width("size", 12), 12);
-        assert_eq!(politica(&s), Some(WidthPolicy::Fixed(12)));
+        assert_eq!(policy(&s), Some(WidthPolicy::Fixed(12)));
         assert_eq!(
             s.style_for("file", Builtin::Size).size_format,
             SizeFormat::Si,
-            "el formato del spec sobrevive"
+            "the spec's format survives"
         );
-        assert_eq!(s.apply_width("size", 0), 1, "suelo del loader");
-        assert_eq!(s.apply_width("size", 900), 64, "techo del loader");
-        assert_eq!(politica(&s), Some(WidthPolicy::Fixed(64)));
+        assert_eq!(s.apply_width("size", 0), 1, "the loader's floor");
+        assert_eq!(s.apply_width("size", 900), 64, "the loader's ceiling");
+        assert_eq!(policy(&s), Some(WidthPolicy::Fixed(64)));
     }
 
-    /// m3 revisión 7b: las cadenas de las tablas del frontend son
-    /// SUBCONJUNTO del vocabulario global que acepta la config
-    /// (`norte-config/src/load.rs`, `parse del spec`: `"exact" | "iec" |
-    /// "si" | "relative" | "iso" | "octal" | "rwx"` — hardcodeado aquí
-    /// porque config no puede depender del frontend para compartir la
-    /// const). Un nombre nuevo en la tabla sin su lado config sería un
-    /// spec imposible de escribir.
+    /// m3 review 7b: the frontend's tables' strings are a SUBSET of the
+    /// global vocabulary config accepts (`norte-config/src/load.rs`, the
+    /// spec's parse: `"exact" | "iec" | "si" | "relative" | "iso" | "octal"
+    /// | "rwx"` — hardcoded here because config cannot depend on the
+    /// frontend to share the const). A new name in the table with no
+    /// config-side counterpart would be a spec impossible to write.
     #[test]
-    fn la_tabla_de_formatos_es_subconjunto_del_vocabulario_de_config() {
+    fn the_format_table_is_a_subset_of_configs_vocabulary() {
         let config_vocab = [
             "exact", "iec", "si", "relative", "iso", "smart", "octal", "rwx",
         ];
         for (s, _) in SIZE_FORMATS {
-            assert!(config_vocab.contains(s), "{s} no está en config");
+            assert!(config_vocab.contains(s), "{s} is not in config");
         }
         for (s, _) in TIME_FORMATS {
-            assert!(config_vocab.contains(s), "{s} no está en config");
+            assert!(config_vocab.contains(s), "{s} is not in config");
         }
         for (s, _) in MODE_FORMATS {
-            assert!(config_vocab.contains(s), "{s} no está en config");
+            assert!(config_vocab.contains(s), "{s} is not in config");
         }
-        // Y la dirección enum→str cubre TODO valor de los enums (un enum
-        // nuevo sin fila en la tabla rompería el seed del picker).
+        // And the enum→str direction covers EVERY enum value (a new enum
+        // with no row in the table would break the picker's seed).
         for f in [SizeFormat::Exact, SizeFormat::Iec, SizeFormat::Si] {
             let style = ColumnStyle {
                 size_format: f,
@@ -3102,8 +3122,8 @@ mod style_tests {
             };
             assert!(format_name(Builtin::Mtime, &style).is_some(), "{f:?}");
         }
-        // #117: la dirección enum→str de Mode va por el hint DEL estilo
-        // (attrs).
+        // #117: Mode's enum→str direction goes through the style's OWN
+        // hint (attrs).
         let mode_id = ColumnId::Attr("posix.mode".into());
         for f in [ModeFormat::Rwx, ModeFormat::Octal] {
             let style = ColumnStyle {
@@ -3115,20 +3135,20 @@ mod style_tests {
         }
     }
 
-    /// #117 review tarea 4: las TRES tablas de formato son DISJUNTAS entre
-    /// sí. El pliegue de `style_for_id` busca la palabra en size→time→mode
-    /// y asigna al primer campo que case: una palabra repetida en dos
-    /// tablas escribiría el campo equivocado en silencio.
+    /// #117 review task 4: the THREE format tables are DISJOINT from each
+    /// other. `style_for_id`'s fold looks up the word in size→time→mode and
+    /// assigns to the first field that matches: a word repeated in two
+    /// tables would silently write the wrong field.
     #[test]
-    fn las_tablas_de_formatos_no_comparten_palabras() {
-        let todas: Vec<&str> = SIZE_FORMATS
+    fn the_format_tables_share_no_words() {
+        let all: Vec<&str> = SIZE_FORMATS
             .iter()
             .map(|(s, _)| *s)
             .chain(TIME_FORMATS.iter().map(|(s, _)| *s))
             .chain(MODE_FORMATS.iter().map(|(s, _)| *s))
             .collect();
-        let unicas: std::collections::BTreeSet<&str> = todas.iter().copied().collect();
-        assert_eq!(unicas.len(), todas.len(), "palabra duplicada: {todas:?}");
+        let unique: std::collections::BTreeSet<&str> = all.iter().copied().collect();
+        assert_eq!(unique.len(), all.len(), "duplicate word: {all:?}");
     }
 }
 
@@ -3169,12 +3189,12 @@ mod attr_funnel_tests {
     }
 
     #[test]
-    fn layout_items_for_incluye_attrs_y_deduplica() {
+    fn layout_items_for_includes_attrs_and_dedupes() {
         let cfg = norte_config::ColumnsConfig {
             default_columns: Some(vec![
                 "name".into(),
                 "attr:mem.mode".into(),
-                "attr:mem.mode".into(), // dup: una sola columna
+                "attr:mem.mode".into(), // dup: a single column
                 "size".into(),
             ]),
             ..Default::default()
@@ -3183,41 +3203,43 @@ mod attr_funnel_tests {
         let items = st.layout_items_for("file");
         let ids: Vec<String> = items.iter().map(|(id, _)| id.to_string()).collect();
         assert_eq!(ids, vec!["name", "attr:mem.mode", "size"]);
-        // attr default: Fixed(12), no-nombre.
+        // attr default: Fixed(12), not the name.
         let attr = &items[1].1;
         assert_eq!(attr.policy, WidthPolicy::Fixed(12));
         assert!(!attr.is_name);
     }
 
     #[test]
-    fn attr_ids_for_devuelve_los_configurados_del_scheme() {
+    fn attr_ids_for_returns_the_schemes_configured_ones() {
         let cfg = norte_config::ColumnsConfig {
             default_columns: Some(vec!["name".into(), "attr:mem.mode".into()]),
             ..Default::default()
         };
         let st = ColumnsSettings::resolve(&cfg);
         assert_eq!(st.attr_ids_for("file"), vec!["mem.mode".to_owned()]);
-        // Sin configurar, el único attr que se pide es el modo POSIX, y solo
-        // donde hay permisos (spec 2026-09-20): la columna la pone el propio
-        // listado, así que el listado también paga su hueco del `fs.list`.
+        // With nothing configured, the only attr requested is the POSIX
+        // mode, and only where there are permissions (spec 2026-09-20): the
+        // listing itself sets the column, so the listing also pays for its
+        // `fs.list` slot.
         let st2 = ColumnsSettings::resolve(&norte_config::ColumnsConfig::default());
         assert_eq!(st2.attr_ids_for("file"), vec![POSIX_MODE_ATTR.to_owned()]);
         assert_eq!(st2.attr_ids_for("sftp"), vec![POSIX_MODE_ATTR.to_owned()]);
-        // Y donde no los hay no se pide nada: una columna que el backend no
-        // sabe contestar es ancho del nombre gastado en un hueco en blanco.
+        // And where there are none, nothing is requested: a column the
+        // backend cannot answer is name width spent on a blank slot.
         assert!(st2.attr_ids_for("s3").is_empty());
         assert!(st2.attr_ids_for("zip").is_empty());
     }
 
-    /// La columna de permisos que pone norte CEDE sitio al nombre, y la que
-    /// pide el usuario no (spec 2026-09-20, enmienda de ADR 0124).
+    /// The permissions column norte sets YIELDS room to the name, and the
+    /// one the user requested does not (spec 2026-09-20, ADR 0124 amendment).
     ///
-    /// Es la diferencia entera entre las dos: la escalera existe para que un
-    /// panel estrecho siga dejando leer el nombre, y una columna que nadie
-    /// pidió no puede ser la que lo impida. Una pedida a mano sí, porque
-    /// quitarla sería desobedecer.
-    /// Un catálogo que SÍ anuncia el modo POSIX, como el del provider local.
-    fn catalogo_con_modo() -> norte_proto::AttrCatalog {
+    /// This is the whole difference between the two: the ladder exists so a
+    /// narrow pane still lets the name be read, and a column nobody
+    /// requested cannot be what stops that. One requested by hand can,
+    /// because removing it would be disobeying.
+    /// A catalog that DOES announce the POSIX mode, like the local
+    /// provider's.
+    fn catalog_with_mode() -> norte_proto::AttrCatalog {
         use norte_proto::attrs::{AttrHint, AttrInfo, AttrType};
         norte_proto::AttrCatalog::new(vec![AttrInfo {
             id: POSIX_MODE_ATTR.into(),
@@ -3228,19 +3250,19 @@ mod attr_funnel_tests {
     }
 
     #[test]
-    fn los_permisos_por_defecto_ceden_y_los_pedidos_no() {
-        let modo = ColumnId::Attr(POSIX_MODE_ATTR.to_owned());
-        let cat = catalogo_con_modo();
-        // Por defecto: en un panel ancho está, y en uno estrecho se va.
+    fn default_permissions_yield_and_requested_ones_do_not() {
+        let mode = ColumnId::Attr(POSIX_MODE_ATTR.to_owned());
+        let cat = catalog_with_mode();
+        // By default: present in a wide pane, and gone in a narrow one.
         let st = ColumnsSettings::resolve(&norte_config::ColumnsConfig::default());
-        let ancho = fitted_columns(&st, "file", 100, 30, Some(&cat));
-        assert!(ancho.iter().any(|f| f.id == modo), "cabe: se enseña");
-        let estrecho = fitted_columns(&st, "file", 40, 30, Some(&cat));
+        let wide = fitted_columns(&st, "file", 100, 30, Some(&cat));
+        assert!(wide.iter().any(|f| f.id == mode), "it fits: shown");
+        let narrow = fitted_columns(&st, "file", 40, 30, Some(&cat));
         assert!(
-            !estrecho.iter().any(|f| f.id == modo),
-            "no cabe: la primera que cede es la que nadie pidió"
+            !narrow.iter().any(|f| f.id == mode),
+            "does not fit: the first to yield is the one nobody requested"
         );
-        // Pedida a mano: se queda, aunque apriete.
+        // Requested by hand: it stays, even under pressure.
         let cfg = norte_config::ColumnsConfig {
             default_columns: Some(vec![
                 "name".into(),
@@ -3250,47 +3272,47 @@ mod attr_funnel_tests {
             ]),
             ..Default::default()
         };
-        let suyo = ColumnsSettings::resolve(&cfg);
-        let estrecho = fitted_columns(&suyo, "file", 40, 30, Some(&cat));
+        let theirs = ColumnsSettings::resolve(&cfg);
+        let narrow = fitted_columns(&theirs, "file", 40, 30, Some(&cat));
         assert!(
-            estrecho.iter().any(|f| f.id == modo),
-            "la pidió alguien a propósito (ADR 0124)"
+            narrow.iter().any(|f| f.id == mode),
+            "someone requested it on purpose (ADR 0124)"
         );
     }
 
-    /// Un backend que no anuncia permisos no gasta ancho del nombre en una
-    /// columna «Modo» en blanco — ni siquiera mientras no ha contestado.
+    /// A backend that does not announce permissions does not spend name
+    /// width on a blank "Mode" column — not even while it has not answered.
     ///
-    /// Es la mitad honesta del automatismo: poner la columna por el scheme es
-    /// una apuesta, y `file` en Windows la pierde siempre.
+    /// It is the honest half of the automatism: setting the column by
+    /// scheme is a bet, and `file` on Windows always loses it.
     #[test]
-    fn sin_catalogo_o_sin_modo_no_se_pone_la_columna() {
-        let modo = ColumnId::Attr(POSIX_MODE_ATTR.to_owned());
+    fn with_no_catalog_or_no_mode_the_column_is_not_set() {
+        let mode = ColumnId::Attr(POSIX_MODE_ATTR.to_owned());
         let st = ColumnsSettings::resolve(&norte_config::ColumnsConfig::default());
-        // Todavía no contestó.
+        // Has not answered yet.
         let f = fitted_columns(&st, "file", 100, 30, None);
-        assert!(!f.iter().any(|x| x.id == modo));
-        // Contestó, y no tiene permisos POSIX.
-        let vacio = norte_proto::AttrCatalog::new(vec![]);
-        let f = fitted_columns(&st, "file", 100, 30, Some(&vacio));
-        assert!(!f.iter().any(|x| x.id == modo));
-        // Pero si la pidió el usuario, se queda: vacía es SU respuesta.
+        assert!(!f.iter().any(|x| x.id == mode));
+        // Answered, and has no POSIX permissions.
+        let empty = norte_proto::AttrCatalog::new(vec![]);
+        let f = fitted_columns(&st, "file", 100, 30, Some(&empty));
+        assert!(!f.iter().any(|x| x.id == mode));
+        // But if the user requested it, it stays: empty is THEIR answer.
         let cfg = norte_config::ColumnsConfig {
             default_columns: Some(vec!["name".into(), format!("attr:{POSIX_MODE_ATTR}")]),
             ..Default::default()
         };
-        let suyo = ColumnsSettings::resolve(&cfg);
-        let f = fitted_columns(&suyo, "file", 100, 30, Some(&vacio));
-        assert!(f.iter().any(|x| x.id == modo));
+        let theirs = ColumnsSettings::resolve(&cfg);
+        let f = fitted_columns(&theirs, "file", 100, 30, Some(&empty));
+        assert!(f.iter().any(|x| x.id == mode));
     }
 
-    /// #117 encoding-audit M1: un `attr:` que parsea pero no es un id
-    /// LEGAL del wire (`is_valid_attr_id` — aquí una typo de caja) ni se
-    /// pinta ni se pide: pedido a un daemon sería -32602 y tumbaría el
-    /// `fs.list` entero. Va al diagnóstico y la forma cruda se preserva
-    /// para el picker.
+    /// #117 encoding-audit M1: an `attr:` that parses but is not a
+    /// wire-LEGAL id (`is_valid_attr_id` — here a casing typo) is neither
+    /// painted nor requested: requested from a daemon it would be -32602
+    /// and would bring down the whole `fs.list`. It goes to the diagnostic
+    /// and the raw form is preserved for the picker.
     #[test]
-    fn attr_id_no_wire_safe_ni_se_pinta_ni_se_pide() {
+    fn a_non_wire_safe_attr_id_is_neither_painted_nor_requested() {
         let cfg = norte_config::ColumnsConfig {
             default_columns: Some(vec![
                 "name".into(),
@@ -3301,17 +3323,17 @@ mod attr_funnel_tests {
         };
         let st = ColumnsSettings::resolve(&cfg);
         assert_eq!(st.attr_ids_for("file"), vec!["mem.mode".to_owned()]);
-        let pintadas: Vec<String> = st
+        let painted: Vec<String> = st
             .layout_items_for("file")
             .iter()
             .map(|(id, _)| id.to_string())
             .collect();
         assert!(
-            !pintadas.contains(&"attr:Posix.Mode".to_owned()),
-            "{pintadas:?}"
+            !painted.contains(&"attr:Posix.Mode".to_owned()),
+            "{painted:?}"
         );
         assert_eq!(st.attrs_not_wire_safe, vec!["attr:Posix.Mode".to_owned()]);
-        // No es `invalid` (parsea) y la forma cruda sigue para el picker.
+        // Not `invalid` (it parses) and the raw form stays for the picker.
         assert!(st.invalid.is_empty());
         assert!(
             st.raw_ids_for("file")
@@ -3319,30 +3341,32 @@ mod attr_funnel_tests {
         );
     }
 
-    /// #117 encoding-audit M1, corpus completo: un nombre hostil del corpus
-    /// canónico configurado como `attr:<hostil>` jamás llega a `attr_ids_for`
-    /// (el pane no lo pide) y siempre queda diagnosticado.
+    /// #117 encoding-audit M1, full corpus: a hostile name from the
+    /// canonical corpus configured as `attr:<hostile>` never reaches
+    /// `attr_ids_for` (the pane does not request it) and is always left
+    /// diagnosed.
     ///
-    /// **La regla la pone `is_valid_attr_id`, no la lista de fixtures.** El
-    /// corpus dejó de ser hostil-en-todos-sus-bytes cuando #129 metió
-    /// GEMELAS de plegado: `strasse.txt` entra por lo que significa AL LADO de
-    /// `straße.txt`, y por sí solo es un nombre ASCII corriente y un id de attr
-    /// perfectamente legal. Aceptarlo es lo correcto, así que el bucle mide
-    /// contra el validador del wire en vez de suponer que ningún nombre del
-    /// corpus pasa — que era cierto por accidente y dejó de serlo.
+    /// **The rule is set by `is_valid_attr_id`, not the fixture list.** The
+    /// corpus stopped being hostile-in-every-byte when #129 added folding
+    /// TWINS: `strasse.txt` enters for what it means ALONGSIDE
+    /// `straße.txt`, and by itself it is an ordinary ASCII name and a
+    /// perfectly legal attr id. Accepting it is correct, so the loop
+    /// measures against the wire's validator instead of assuming no corpus
+    /// name passes — which used to be true by accident and stopped being
+    /// so.
     #[test]
-    fn corpus_hostil_como_attr_id_jamas_llega_al_wire() {
-        let mut rechazados = 0;
+    fn a_hostile_attr_id_from_the_corpus_never_reaches_the_wire() {
+        let mut rejected = 0;
         for fixture in norte_testkit::corpus::hostile_names() {
-            // Solo los UTF-8: un id de columna es String de config.
+            // Only the UTF-8 ones: a column id is a config String.
             let Ok(name) = String::from_utf8(fixture.bytes.clone()) else {
                 continue;
             };
             if norte_proto::attrs::is_valid_attr_id(&name) {
-                // Gemela benigna (#129): el funnel la acepta, y debe.
+                // A benign twin (#129): the funnel accepts it, and should.
                 continue;
             }
-            rechazados += 1;
+            rejected += 1;
             let id = format!("attr:{name}");
             let cfg = norte_config::ColumnsConfig {
                 default_columns: Some(vec!["name".into(), id.clone()]),
@@ -3351,28 +3375,29 @@ mod attr_funnel_tests {
             let st = ColumnsSettings::resolve(&cfg);
             assert!(
                 st.attr_ids_for("file").is_empty(),
-                "{} llegaría al wire",
+                "{} would reach the wire",
                 fixture.id
             );
             assert!(
                 st.attrs_not_wire_safe.contains(&id),
-                "{} sin diagnóstico",
+                "{} with no diagnostic",
                 fixture.id
             );
         }
-        // Y el bucle tiene que haber medido algo: un `continue` que se tragara
-        // el corpus entero dejaría el test verde sin probar nada.
+        // And the loop has to have measured something: a `continue` that
+        // swallowed the whole corpus would leave the test green while
+        // proving nothing.
         assert!(
-            rechazados >= 20,
-            "solo {rechazados} nombres del corpus llegaron al funnel"
+            rejected >= 20,
+            "only {rejected} corpus names reached the funnel"
         );
     }
 
-    /// Pin del invariante de `attr_fingerprint` (#117 review tarea 3): la
-    /// huella va ORDENADA — reordenar columnas produce la MISMA huella (no
-    /// re-lista), quitar/añadir un attr la cambia.
+    /// Pin of `attr_fingerprint`'s invariant (#117 review task 3): the
+    /// fingerprint is SORTED — reordering columns produces the SAME
+    /// fingerprint (no re-list), removing/adding an attr changes it.
     #[test]
-    fn attr_fingerprint_es_orden_estable() {
+    fn attr_fingerprint_has_a_stable_order() {
         let cfg = norte_config::ColumnsConfig {
             default_columns: Some(vec![
                 "name".into(),
@@ -3382,9 +3407,12 @@ mod attr_funnel_tests {
             ..Default::default()
         };
         let st = ColumnsSettings::resolve(&cfg);
-        let huella = st.attr_fingerprint("file");
-        assert_eq!(huella, vec!["mem.mode".to_owned(), "mem.owner".to_owned()]);
-        let reordenada = norte_config::ColumnsConfig {
+        let fingerprint = st.attr_fingerprint("file");
+        assert_eq!(
+            fingerprint,
+            vec!["mem.mode".to_owned(), "mem.owner".to_owned()]
+        );
+        let reordered = norte_config::ColumnsConfig {
             default_columns: Some(vec![
                 "attr:mem.mode".into(),
                 "name".into(),
@@ -3393,17 +3421,17 @@ mod attr_funnel_tests {
             ..Default::default()
         };
         assert_eq!(
-            ColumnsSettings::resolve(&reordenada).attr_fingerprint("file"),
-            huella,
-            "reorden = misma huella"
+            ColumnsSettings::resolve(&reordered).attr_fingerprint("file"),
+            fingerprint,
+            "reorder = same fingerprint"
         );
     }
 
-    /// #117-follow-up: los `plugin:` ya tienen renderer — entran al layout
-    /// como los attrs (item por defecto, width override por spec) y dejan
-    /// de ser diagnóstico. El campo `unrenderable` murió con ellos.
+    /// #117-follow-up: `plugin:` ones now have a renderer — they enter the
+    /// layout like attrs (default item, width override by spec) and stop
+    /// being diagnostic. The `unrenderable` field died with them.
     #[test]
-    fn plugin_entra_al_layout_como_columna() {
+    fn a_plugin_enters_the_layout_as_a_column() {
         let cfg = norte_config::ColumnsConfig {
             default_columns: Some(vec![
                 "name".into(),
@@ -3419,16 +3447,16 @@ mod attr_funnel_tests {
                 id,
                 ColumnId::Plugin { plugin, column } if plugin == "git" && column == "branch"
             )),
-            "plugin:git/branch pintable: {items:?}"
+            "plugin:git/branch is paintable: {items:?}"
         );
-        // Petición: qué columnas de plugin pedir para el scheme, en forma
-        // (plugin, columna) — espejo de `attr_ids_for`.
+        // Request: which plugin columns to request for the scheme, as
+        // (plugin, column) pairs — mirror of `attr_ids_for`.
         assert_eq!(
             st.plugin_ids_for("file"),
             vec![("git".to_owned(), "branch".to_owned())]
         );
-        // Huella orden-insensible, espejo de `attr_fingerprint`.
-        let reordenada = norte_config::ColumnsConfig {
+        // Order-insensitive fingerprint, mirror of `attr_fingerprint`.
+        let reordered = norte_config::ColumnsConfig {
             default_columns: Some(vec![
                 "plugin:git/branch".into(),
                 "name".into(),
@@ -3437,18 +3465,18 @@ mod attr_funnel_tests {
             ..Default::default()
         };
         assert_eq!(
-            ColumnsSettings::resolve(&reordenada).plugin_fingerprint("file"),
+            ColumnsSettings::resolve(&reordered).plugin_fingerprint("file"),
             st.plugin_fingerprint("file"),
-            "reorden = misma huella"
+            "reorder = same fingerprint"
         );
     }
 
-    /// #117-follow-up: cap de columnas de plugin por lista pintada
-    /// ([`PLUGIN_COLUMNS_MAX_REQUEST`]) — pintado == pedido (cada columna
-    /// es una RPC `plugin.column_values`); el resto es diagnóstico, jamás
-    /// una columna permanentemente en blanco.
+    /// #117-follow-up: cap on plugin columns per painted list
+    /// ([`PLUGIN_COLUMNS_MAX_REQUEST`]) — painted == requested (each column
+    /// is one `plugin.column_values` RPC); the rest is diagnostic, never a
+    /// permanently blank column.
     #[test]
-    fn plugin_over_cap_diagnosticado_y_no_pintado() {
+    fn plugin_over_cap_is_diagnosed_and_not_painted() {
         let mut ids = vec!["name".to_owned()];
         for i in 0..=PLUGIN_COLUMNS_MAX_REQUEST {
             ids.push(format!("plugin:p/c{i}"));
@@ -3458,22 +3486,22 @@ mod attr_funnel_tests {
             ..Default::default()
         };
         let st = ColumnsSettings::resolve(&cfg);
-        let pintadas = st
+        let painted = st
             .layout_items_for("file")
             .iter()
             .filter(|(id, _)| matches!(id, ColumnId::Plugin { .. }))
             .count();
-        assert_eq!(pintadas, PLUGIN_COLUMNS_MAX_REQUEST);
+        assert_eq!(painted, PLUGIN_COLUMNS_MAX_REQUEST);
         assert_eq!(st.plugin_ids_for("file").len(), PLUGIN_COLUMNS_MAX_REQUEST);
         assert_eq!(
             st.plugins_over_cap,
             vec![format!("plugin:p/c{PLUGIN_COLUMNS_MAX_REQUEST}")],
-            "el excedente se nombra, no se silencia"
+            "the overflow is named, not silenced"
         );
     }
 
     #[test]
-    fn styled_cell_attr_por_tag_del_valor_con_hint() {
+    fn styled_cell_attr_by_the_values_tag_with_a_hint() {
         let cat = catalog();
         let cfg = norte_config::ColumnsConfig {
             default_columns: Some(vec!["name".into(), "attr:mem.mode".into()]),
@@ -3489,19 +3517,19 @@ mod attr_funnel_tests {
             styled_cell(&e, &id, 0, &style).as_deref(),
             Some("-rw-r--r--")
         );
-        // Ausente → None (blanco), jamás un valor fabricado.
-        let vacio = entry_with(&[]);
-        assert_eq!(styled_cell(&vacio, &id, 0, &style), None);
-        // Unknown → "?" (una celda mala cuesta una celda).
-        let raro = entry_with(&[("mem.mode", AttrValue::Unknown)]);
-        assert_eq!(styled_cell(&raro, &id, 0, &style).as_deref(), Some("?"));
+        // Absent → None (blank), never a manufactured value.
+        let empty = entry_with(&[]);
+        assert_eq!(styled_cell(&empty, &id, 0, &style), None);
+        // Unknown → "?" (a bad cell costs a cell).
+        let odd = entry_with(&[("mem.mode", AttrValue::Unknown)]);
+        assert_eq!(styled_cell(&odd, &id, 0, &style).as_deref(), Some("?"));
     }
 
-    /// #117 encoding-audit L3: un `Uint` que no cabe en i64 bajo hint
-    /// Timestamp cae a decimal crudo — jamás un panic ni un tiempo
-    /// fabricado por truncado.
+    /// #117 encoding-audit L3: a `Uint` that does not fit in i64 under hint
+    /// Timestamp falls back to raw decimal — never a panic nor a time
+    /// manufactured by truncation.
     #[test]
-    fn uint_desbordado_bajo_hint_timestamp_cae_a_decimal() {
+    fn an_overflowed_uint_under_timestamp_hint_falls_back_to_decimal() {
         let id = ColumnId::Attr("mem.stamp".into());
         let style = ColumnStyle {
             hint: AttrHint::Timestamp,
@@ -3515,52 +3543,52 @@ mod attr_funnel_tests {
     }
 
     #[test]
-    fn attr_text_y_bytes_hostiles_se_enmascaran() {
+    fn hostile_attr_text_and_bytes_are_masked() {
         let id = ColumnId::Attr("mem.note".into());
         let style = ColumnStyle::default_for_id(&id, None);
         let e = entry_with(&[(
             "mem.note",
             AttrValue::Text("\u{202e}atón\u{202c} a\u{200d}b".into()),
         )]);
-        let cell = styled_cell(&e, &id, 0, &style).expect("celda");
+        let cell = styled_cell(&e, &id, 0, &style).expect("cell");
         assert!(
             !cell.chars().any(norte_encoding::is_terminal_hazard),
             "{cell:?}"
         );
         let id2 = ColumnId::Attr("mem.owner".into());
         let e2 = entry_with(&[("mem.owner", AttrValue::Bytes(b"due\xf1o-\xff\xfe".to_vec()))]);
-        let cell2 = styled_cell(&e2, &id2, 0, &style).expect("celda");
+        let cell2 = styled_cell(&e2, &id2, 0, &style).expect("cell");
         assert!(
             !cell2.chars().any(norte_encoding::is_terminal_hazard),
             "{cell2:?}"
         );
-        assert!(cell2.contains('\u{FFFD}'), "lossy marcado: {cell2:?}");
-        // Presente-pero-impintable (enmascara/trunca a vacío) → «?» — el
-        // blanco queda reservado para AUSENTE. Un valor todo-hostil NO
-        // enmascara a vacío (cada hazard pasa a U+FFFD visible): el caso
-        // vacío real es la cadena vacía presente.
-        let vacio = entry_with(&[("mem.note", AttrValue::Text(String::new()))]);
-        assert_eq!(styled_cell(&vacio, &id, 0, &style).as_deref(), Some("?"));
-        let vacio2 = entry_with(&[("mem.owner", AttrValue::Bytes(Vec::new()))]);
-        assert_eq!(styled_cell(&vacio2, &id2, 0, &style).as_deref(), Some("?"));
-        let hostil = entry_with(&[("mem.note", AttrValue::Text("\u{202e}\u{200b}".into()))]);
+        assert!(cell2.contains('\u{FFFD}'), "marked lossy: {cell2:?}");
+        // Present-but-unpaintable (masks/truncates to empty) → "?" — blank
+        // stays reserved for ABSENT. An all-hostile value does NOT mask to
+        // empty (each hazard turns into a visible U+FFFD): the real empty
+        // case is the present empty string.
+        let empty = entry_with(&[("mem.note", AttrValue::Text(String::new()))]);
+        assert_eq!(styled_cell(&empty, &id, 0, &style).as_deref(), Some("?"));
+        let empty2 = entry_with(&[("mem.owner", AttrValue::Bytes(Vec::new()))]);
+        assert_eq!(styled_cell(&empty2, &id2, 0, &style).as_deref(), Some("?"));
+        let hostile = entry_with(&[("mem.note", AttrValue::Text("\u{202e}\u{200b}".into()))]);
         assert_eq!(
-            styled_cell(&hostil, &id, 0, &style).as_deref(),
+            styled_cell(&hostile, &id, 0, &style).as_deref(),
             Some("\u{FFFD}\u{FFFD}"),
-            "todo-hostil = enmascarado VISIBLE, no vacío"
+            "all-hostile = VISIBLE masked, not empty"
         );
     }
 
     #[test]
-    fn header_label_fluent_catalogo_o_id_enmascarado() {
+    fn header_label_fluent_catalog_or_masked_id() {
         let cat = catalog();
-        // Primera-parte: clave Fluent (existe col-attr-posix-mode).
+        // First-party: Fluent key (col-attr-posix-mode exists).
         let id = ColumnId::Attr("posix.mode".into());
         let style = ColumnStyle::default_for_id(&id, None);
         let h = header_label(&id, &style, None);
-        assert_ne!(h, "col-attr-posix-mode", "clave Fluent debe existir");
+        assert_ne!(h, "col-attr-posix-mode", "the Fluent key must exist");
         assert!(!h.starts_with("col-attr-"), "{h:?}");
-        // Desconocido con catálogo: label del provider ENMASCARADO.
+        // Unknown with a catalog: the provider's MASKED label.
         let id2 = ColumnId::Attr("mem.owner".into());
         let h2 = header_label(
             &id2,
@@ -3571,84 +3599,84 @@ mod attr_funnel_tests {
             !h2.chars().any(norte_encoding::is_terminal_hazard),
             "{h2:?}"
         );
-        // Desconocido sin catálogo: el id (charset seguro tras sanitize).
+        // Unknown with no catalog: the id (safe charset after sanitize).
         let id3 = ColumnId::Attr("mem.stamp".into());
         let h3 = header_label(&id3, &ColumnStyle::default_for_id(&id3, None), None);
         assert_eq!(h3, "mem.stamp");
-        // El header custom del spec GANA siempre.
+        // The spec's custom header ALWAYS wins.
         let mut st = ColumnStyle::default_for_id(&id3, None);
         st.header = Some("Custom".into());
         assert_eq!(header_label(&id3, &st, None), "Custom");
     }
 
-    /// Audit F2 (#117-follow-up): un id `plugin:` HOSTIL de una config de
-    /// capa de proyecto (RLO/ZWSP parsean — `from_str` acepta cualquier
-    /// segmento no vacío) jamás llega crudo a la cabecera: el brazo Plugin
-    /// de `header_label` enmascara — y ni TUI ni GUI re-enmascaran después
-    /// (confían en este choke point; una regresión aquí desaparecería la
-    /// línea de cabeceras entera en ratatui).
+    /// Audit F2 (#117-follow-up): a HOSTILE `plugin:` id from a
+    /// project-layer config (RLO/ZWSP parse — `from_str` accepts any
+    /// non-empty segment) never reaches the header raw: `header_label`'s
+    /// Plugin arm masks it — and neither TUI nor GUI re-mask afterward
+    /// (they trust this choke point; a regression here would make the
+    /// whole header row in ratatui disappear).
     #[test]
-    fn header_label_plugin_enmascara_id_hostil() {
-        let id: ColumnId = "plugin:e\u{202E}vil/c\u{200B}ol".parse().expect("parsea");
+    fn header_label_plugin_masks_a_hostile_id() {
+        let id: ColumnId = "plugin:e\u{202E}vil/c\u{200B}ol".parse().expect("parses");
         let h = header_label(&id, &ColumnStyle::default_for_id(&id, None), None);
         assert!(
             !h.chars().any(norte_encoding::is_terminal_hazard),
-            "hazard crudo en la cabecera: {h:?}"
+            "raw hazard in the header: {h:?}"
         );
-        assert!(h.contains('\u{FFFD}'), "enmascarado visible: {h:?}");
-        assert!(h.contains("vil/c"), "el resto del id sobrevive: {h:?}");
+        assert!(h.contains('\u{FFFD}'), "visible masked: {h:?}");
+        assert!(h.contains("vil/c"), "the rest of the id survives: {h:?}");
     }
 
     #[test]
-    fn attr_cell_todos_los_tags() {
-        let opaco = ColumnStyle::default_for_id(&ColumnId::Attr("x.y".into()), None);
+    fn attr_cell_all_the_tags() {
+        let opaque = ColumnStyle::default_for_id(&ColumnId::Attr("x.y".into()), None);
         let e = |v: AttrValue| entry_with(&[("x.y", v)]);
         let id = ColumnId::Attr("x.y".into());
         assert_eq!(
-            styled_cell(&e(AttrValue::Uint(42)), &id, 0, &opaco).as_deref(),
+            styled_cell(&e(AttrValue::Uint(42)), &id, 0, &opaque).as_deref(),
             Some("42")
         );
         assert_eq!(
-            styled_cell(&e(AttrValue::Int(-5)), &id, 0, &opaco).as_deref(),
+            styled_cell(&e(AttrValue::Int(-5)), &id, 0, &opaque).as_deref(),
             Some("-5")
         );
         assert_eq!(
-            styled_cell(&e(AttrValue::Bool(true)), &id, 0, &opaco),
+            styled_cell(&e(AttrValue::Bool(true)), &id, 0, &opaque),
             Some(norte_i18n::t("col-cell-yes"))
         );
-        // TimeMs siempre formatea como tiempo, con o sin hint.
-        let t = styled_cell(&e(AttrValue::TimeMs(0)), &id, 60_000, &opaco).expect("celda");
+        // TimeMs always formats as time, with or without a hint.
+        let t = styled_cell(&e(AttrValue::TimeMs(0)), &id, 60_000, &opaque).expect("cell");
         assert!(!t.is_empty());
     }
 
-    /// #117 review: el formato `octal` del hint Mode y el fallback decimal
-    /// de un word que no cabe en u32 (no es un modo — jamás un panic).
+    /// #117 review: the Mode hint's `octal` format and the decimal fallback
+    /// for a word that does not fit in u32 (not a mode — never a panic).
     #[test]
-    fn modo_octal_y_desbordado_a_decimal() {
+    fn octal_mode_and_overflow_to_decimal() {
         let id = ColumnId::Attr("x.m".into());
         let mut style = ColumnStyle::default_for_id(&id, None);
         style.hint = AttrHint::Mode;
         style.mode_format = ModeFormat::Octal;
         let e = entry_with(&[("x.m", AttrValue::Uint(0o100_644))]);
         assert_eq!(styled_cell(&e, &id, 0, &style).as_deref(), Some("0644"));
-        let gordo = u64::from(u32::MAX) + 1;
-        let esperado = gordo.to_string();
+        let big = u64::from(u32::MAX) + 1;
+        let expected = big.to_string();
         for fmt in [ModeFormat::Rwx, ModeFormat::Octal] {
             style.mode_format = fmt;
-            let e2 = entry_with(&[("x.m", AttrValue::Uint(gordo))]);
+            let e2 = entry_with(&[("x.m", AttrValue::Uint(big))]);
             assert_eq!(
                 styled_cell(&e2, &id, 0, &style).as_deref(),
-                Some(esperado.as_str()),
+                Some(expected.as_str()),
                 "{fmt:?}"
             );
         }
     }
 
-    /// #117 review: attrs por encima de [`norte_proto::ATTRS_MAX_REQUEST`]
-    /// ni se pintan ni se piden (pintado == pedido — sin columnas
-    /// permanentemente en blanco) y quedan diagnosticados.
+    /// #117 review: attrs above [`norte_proto::ATTRS_MAX_REQUEST`] are
+    /// neither painted nor requested (painted == requested — no permanently
+    /// blank columns) and are left diagnosed.
     #[test]
-    fn attrs_sobre_el_cap_pintado_igual_a_pedido() {
+    fn attrs_over_the_cap_painted_equals_requested() {
         let mut ids: Vec<String> = vec!["name".into()];
         ids.extend((0..17).map(|i| format!("attr:mem.a{i:02}")));
         let cfg = norte_config::ColumnsConfig {
@@ -3674,7 +3702,7 @@ mod attr_funnel_tests {
 mod fit_tests {
     use super::*;
 
-    fn con_clase() -> ColumnsSettings {
+    fn with_kind() -> ColumnsSettings {
         ColumnsSettings::resolve(&norte_config::ColumnsConfig {
             default_columns: Some(
                 ["name", "size", "mtime", "kind"]
@@ -3685,7 +3713,7 @@ mod fit_tests {
         })
     }
 
-    fn con_spec(id: &str, spec: norte_config::ColumnSpec) -> ColumnsSettings {
+    fn with_spec(id: &str, spec: norte_config::ColumnSpec) -> ColumnsSettings {
         let mut cfg = norte_config::ColumnsConfig {
             default_columns: Some(
                 ["name", "size", "mtime", "kind"]
@@ -3698,50 +3726,50 @@ mod fit_tests {
         ColumnsSettings::resolve(&cfg)
     }
 
-    fn resumen(f: &[Fitted]) -> Vec<String> {
+    fn summary(f: &[Fitted]) -> Vec<String> {
         f.iter()
             .map(|c| format!("{}{}", c.id, if c.compact { "~" } else { "" }))
             .collect()
     }
 
-    fn nombre(f: &[Fitted]) -> u16 {
+    fn name_width(f: &[Fitted]) -> u16 {
         f.iter()
             .find(|c| c.id == ColumnId::Builtin(Builtin::Name))
             .map_or(0, |c| c.width)
     }
 
-    /// La captura que motivó esto: un panel de 46 celdas con clase, tamaño
-    /// y fecha dejaba 14 al nombre. Con nombres de ~20, cede la clase —que
-    /// ya dicen el icono y la `/`— y nada más.
+    /// The screenshot that motivated this: a 46-cell pane with class, size
+    /// and date left the name with 14. With names of ~20, the class yields
+    /// —already said by the icon and the `/`— and nothing else.
     #[test]
-    fn la_clase_cede_primero_y_basta() {
-        let f = fitted_columns(&con_clase(), "file", 46, 20, None);
-        assert_eq!(resumen(&f), ["name", "size", "mtime"]);
-        assert!(nombre(&f) >= 20, "{f:?}");
+    fn the_class_yields_first_and_that_is_enough() {
+        let f = fitted_columns(&with_kind(), "file", 46, 20, None);
+        assert_eq!(summary(&f), ["name", "size", "mtime"]);
+        assert!(name_width(&f) >= 20, "{f:?}");
     }
 
-    /// Nombres largos (capturas de pantalla): tras la clase se compacta la
-    /// fecha, y se para en cuanto el nombre llega a su objetivo acotado.
+    /// Long names (screenshots): after the class, the date compacts, and it
+    /// stops as soon as the name reaches its capped target.
     #[test]
-    fn nombres_largos_compactan_la_fecha() {
-        let f = fitted_columns(&con_clase(), "file", 46, 40, None);
-        assert_eq!(resumen(&f), ["name", "size", "mtime~"]);
-        // Objetivo acotado a 3/5 de 46 = 27.
-        assert!(nombre(&f) >= 27, "{f:?}");
+    fn long_names_compact_the_date() {
+        let f = fitted_columns(&with_kind(), "file", 46, 40, None);
+        assert_eq!(summary(&f), ["name", "size", "mtime~"]);
+        // Target capped at 3/5 of 46 = 27.
+        assert!(name_width(&f) >= 27, "{f:?}");
     }
 
-    /// Un panel ancho no pierde nada: la escalera solo se sube si hace falta.
+    /// A wide pane loses nothing: the ladder is only climbed when needed.
     #[test]
-    fn ancho_de_sobra_no_toca_nada() {
-        let f = fitted_columns(&con_clase(), "file", 120, 30, None);
-        assert_eq!(resumen(&f), ["name", "size", "mtime", "kind"]);
+    fn plenty_of_width_touches_nothing() {
+        let f = fitted_columns(&with_kind(), "file", 120, 30, None);
+        assert_eq!(summary(&f), ["name", "size", "mtime", "kind"]);
     }
 
-    /// Una columna con ancho fijado por el usuario no se oculta ni se
-    /// compacta; la escalera salta al peldaño siguiente.
+    /// A column with a width the user fixed neither hides nor compacts; the
+    /// ladder skips to the next rung.
     #[test]
-    fn lo_que_el_usuario_fijo_no_cede() {
-        let s = con_spec(
+    fn what_the_user_fixed_does_not_yield() {
+        let s = with_spec(
             "kind",
             norte_config::ColumnSpec {
                 width: Some(norte_config::WidthChoice::Fixed(9)),
@@ -3749,13 +3777,13 @@ mod fit_tests {
             },
         );
         let f = fitted_columns(&s, "file", 46, 20, None);
-        assert_eq!(resumen(&f), ["name", "size", "mtime~", "kind"]);
+        assert_eq!(summary(&f), ["name", "size", "mtime~", "kind"]);
     }
 
-    /// Un formato elegido tampoco se cambia por el corto.
+    /// A chosen format is not swapped for the short one either.
     #[test]
-    fn un_formato_elegido_no_se_compacta() {
-        let s = con_spec(
+    fn a_chosen_format_does_not_compact() {
+        let s = with_spec(
             "mtime",
             norte_config::ColumnSpec {
                 format: Some("iso".to_owned()),
@@ -3763,14 +3791,14 @@ mod fit_tests {
             },
         );
         let f = fitted_columns(&s, "file", 46, 40, None);
-        assert_eq!(resumen(&f), ["name", "size~", "mtime"]);
+        assert_eq!(summary(&f), ["name", "size~", "mtime"]);
     }
 
-    /// Con el nombre de ancho fijo no hay escalera: es exactamente el
-    /// reparto de siempre.
+    /// With a fixed-width name there is no ladder: it is exactly the usual
+    /// split.
     #[test]
-    fn nombre_fijo_desactiva_la_escalera() {
-        let s = con_spec(
+    fn a_fixed_name_disables_the_ladder() {
+        let s = with_spec(
             "name",
             norte_config::ColumnSpec {
                 width: Some(norte_config::WidthChoice::Fixed(12)),
@@ -3778,7 +3806,7 @@ mod fit_tests {
             },
         );
         let f = fitted_columns(&s, "file", 46, 40, None);
-        let antes: Vec<_> = column_widths(&s, "file", 46, None)
+        let before: Vec<_> = column_widths(&s, "file", 46, None)
             .into_iter()
             .map(|(id, width)| Fitted {
                 id,
@@ -3786,11 +3814,11 @@ mod fit_tests {
                 compact: false,
             })
             .collect();
-        assert_eq!(f, antes);
+        assert_eq!(f, before);
     }
 
     #[test]
-    fn el_p80_ignora_la_cola_larga() {
+    fn p80_ignores_the_long_tail() {
         let mut counts = [0u32; 65];
         counts[8] = 8;
         counts[64] = 2;
@@ -3799,8 +3827,8 @@ mod fit_tests {
     }
 
     #[test]
-    fn tamanos_cortos_caben_en_cinco() {
-        for (n, esperado) in [
+    fn short_sizes_fit_in_five() {
+        for (n, expected) in [
             (0, "0B"),
             (1023, "1023B"),
             (1024, "1.0K"),
@@ -3811,28 +3839,21 @@ mod fit_tests {
             (u64::MAX, "16E"),
         ] {
             let s = format_size(n, SizeFormat::Short);
-            assert_eq!(s, esperado, "{n}");
+            assert_eq!(s, expected, "{n}");
             assert!(s.chars().count() <= 5, "{s}");
         }
     }
 
     #[test]
-    fn fechas_cortas_caben_en_cinco() {
+    fn short_dates_fit_in_five() {
         let tz = jiff::tz::TimeZone::UTC;
-        let ahora = 1_789_000_000_000; // 2026-09-10 00:26 UTC
+        let now = 1_789_000_000_000; // 2026-09-10 00:26 UTC
         let lang = norte_i18n::Lang::Es;
-        let hoy = format_mtime_tz(ahora - 60_000, TimeFormat::Short, ahora, lang, &tz);
-        let este_ano =
-            format_mtime_tz(ahora - 40 * 86_400_000, TimeFormat::Short, ahora, lang, &tz);
-        let antes = format_mtime_tz(
-            ahora - 400 * 86_400_000,
-            TimeFormat::Short,
-            ahora,
-            lang,
-            &tz,
-        );
-        assert_eq!(hoy, "00:25");
-        assert_eq!(este_ano, "08-01");
-        assert_eq!(antes, "2025");
+        let today = format_mtime_tz(now - 60_000, TimeFormat::Short, now, lang, &tz);
+        let this_year = format_mtime_tz(now - 40 * 86_400_000, TimeFormat::Short, now, lang, &tz);
+        let earlier = format_mtime_tz(now - 400 * 86_400_000, TimeFormat::Short, now, lang, &tz);
+        assert_eq!(today, "00:25");
+        assert_eq!(this_year, "08-01");
+        assert_eq!(earlier, "2025");
     }
 }

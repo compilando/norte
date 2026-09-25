@@ -1,26 +1,28 @@
-//! Sincronización de directorios: el plan retenido y su ejecución (spec
+//! Directory synchronization: the retained plan and its execution (spec
 //! `docs/superpowers/specs/2026-08-11-directory-sync-design.md`, ADR 0049).
 //!
-//! El PLANIFICADOR no vive aquí: es `norte-sync`, un transductor puro sobre las
-//! filas de `norte-compare` que no toca un provider. Lo que vive aquí es todo
-//! lo que necesita un daemon para que ese plan se pueda **aprobar** y
-//! **ejecutar**:
+//! The PLANNER doesn't live here: it's `norte-sync`, a pure transducer over
+//! `norte-compare`'s rows that never touches a provider. What lives here is
+//! everything a daemon needs so that plan can be **approved** and
+//! **executed**:
 //!
-//! - [`spool`] — el plan aprobado, retenido en un fichero atado a la conexión
-//!   que lo produjo. Es lo que hace que `sync.apply` no lleve más que un hash y
-//!   que lo que se ejecuta sea, por la FORMA del wire, lo que un humano vio.
-//! - `run_sync_plan` (privado) — la Task de `sync.plan`: mete el flujo de
-//!   `norte_compare::compare` por el transductor, TEE cada elemento al spool y
-//!   al lote que viaja al cliente, y cierra con un [`SyncPlanDone`].
+//! - [`spool`] — the approved plan, retained in a file bound to the
+//!   connection that produced it. It's what makes `sync.apply` carry
+//!   nothing more than a hash, and what runs be, by the wire's SHAPE, what
+//!   a human saw.
+//! - `run_sync_plan` (private) — the `sync.plan` Task: feeds
+//!   `norte_compare::compare`'s stream through the transducer, TEEs each
+//!   element to the spool and to the batch traveling to the client, and
+//!   closes with a [`SyncPlanDone`].
 //!
-//! - `exec` (privado) — el EJECUTOR: revalida antes de destruir, escribe, y
-//!   registra cada efecto en UNA unidad deshacible del journal. Es lo que
-//!   convierte un plan aprobado en cambios en el árbol de destino.
+//! - `exec` (private) — the EXECUTOR: revalidates before destroying,
+//!   writes, and records each effect in ONE undoable journal unit. It's
+//!   what turns an approved plan into changes on the destination tree.
 //!
-//! **Regla dura 4 NO aplica a `sync.plan`**: planificar no escribe un byte en
-//! ninguno de los dos árboles y no tiene undo posible. Lo que escribe es
-//! `sync.apply`, que sí es un lote del journal. Está dicho aquí para que una
-//! revisión posterior no pida una entrada que no significaría nada.
+//! **Hard rule 4 does NOT apply to `sync.plan`**: planning doesn't write a
+//! byte to either tree and has no possible undo. What writes is
+//! `sync.apply`, which IS a journal batch. Stated here so a later review
+//! doesn't ask for an entry that would mean nothing.
 
 pub(crate) mod exec;
 pub mod spool;
@@ -46,74 +48,76 @@ pub use spool::{
     SpoolStep, SpoolSummary, SpoolWriter, SweepReport,
 };
 
-/// Flush por tiempo del lote de pasos: el mismo intervalo (y el mismo motivo)
-/// que el de `fs.compare` y `fs.search` — el diálogo gotea en vivo aunque el
-/// lote no se llene.
+/// Time-based flush for the step batch: the same interval (and the same
+/// reason) as `fs.compare`'s and `fs.search`'s — the dialog drips live even
+/// if the batch doesn't fill up.
 const FLUSH_INTERVAL: Duration = Duration::from_millis(100);
 
-/// Lo que un `sync.plan` va emitiendo.
+/// What a `sync.plan` keeps emitting.
 ///
-/// Lo define el SDK ([`norte_client::SyncPlanEvent`], ADR 0066) y se
-/// re-exporta aquí. Sus dos variantes SON tipos del wire, y el plan embebido
-/// y el remoto emiten exactamente lo mismo: dos definiciones serían dos
-/// sitios donde añadir una variante.
+/// Defined by the SDK ([`norte_client::SyncPlanEvent`], ADR 0066) and
+/// re-exported here. Its two variants ARE wire types, and the embedded and
+/// remote plans emit exactly the same thing: two definitions would be two
+/// places to add a variant.
 pub use norte_client::SyncPlanEvent;
 
-/// Filtro de [`SyncPlanParams::include`](norte_proto::methods::SyncPlanParams::include).
+/// Filter for [`SyncPlanParams::include`](norte_proto::methods::SyncPlanParams::include).
 ///
-/// # Filtra la SALIDA del transductor, jamás su entrada
-/// Filtrar las FILAS reabre #152: la ortografía que el destino le da a una
-/// carpeta viaja en la fila de la carpeta, que es `Same` y no produce paso
-/// alguno, así que un plan que solo viera las filas seleccionadas compondría
-/// rutas de destino con la ortografía del ORIGEN. Está enunciado como norma en
-/// el rustdoc de `norte_sync::plan` y aquí es donde se cumple: el transductor ve
-/// el árbol entero y esto recorta lo que sale.
+/// # Filters the transducer's OUTPUT, never its input
+/// Filtering the ROWS reopens #152: the spelling the destination gives a
+/// folder travels in the folder's row, which is `Same` and produces no
+/// step at all, so a plan that only saw the selected rows would compose
+/// destination paths with the SOURCE's spelling. This is stated as a rule
+/// in `norte_sync::plan`'s rustdoc, and here is where it's honored: the
+/// transducer sees the whole tree and this trims what comes out.
 ///
-/// # Un ancestro seleccionado arrastra su subárbol
-/// Seleccionar una carpeta en el panel de diferencias significa sincronizarla,
-/// y un huérfano descendido produce un `CreateDir` más un paso por descendiente:
-/// con igualdad exacta la carpeta se crearía vacía. Así que la pertenencia es
-/// por PREFIJO de segmentos, nunca por prefijo de cadena (`café` no puede
-/// arrastrar a `cafétière`) — la comparación se hace sobre la forma wire, que
-/// separa segmentos por `/` y percent-encodea todo lo demás, así que un `/`
-/// dentro de ella solo puede ser un separador.
+/// # A selected ancestor drags its subtree along
+/// Selecting a folder in the diff panel means syncing it, and a descended
+/// orphan produces a `CreateDir` plus one step per descendant: with exact
+/// equality the folder would be created empty. So membership is by segment
+/// PREFIX, never by string prefix (`café` cannot drag `cafétière` along)
+/// — the comparison is done on the wire form, which separates segments by
+/// `/` and percent-encodes everything else, so a `/` inside one can only be
+/// a separator.
 ///
-/// # Los BLOQUEOS no se filtran
-/// Un bloqueo no es un paso: dice por qué el plan no se puede ejecutar, y los
-/// hay cuyo alcance es el árbol entero (`DestReadOnly` cuelga de la raíz, que
-/// ninguna selección nombra). Recortarlos por la selección convertiría un
-/// destino de solo lectura en un plan ejecutable, así que pasan todos y
-/// `executable` sigue hablando de la comparación completa.
-/// # Un `CreateDir` que un paso elegido necesita se queda
-/// El arrastre es de arriba abajo, y el plan lo necesita también al revés. Un
-/// huérbano del origen produce, en pre-orden, un `CreateDir nueva` y después un
-/// `Copy nueva/a.txt`; el panel deja seleccionar la FILA del fichero. Con solo
-/// el arrastre descendente el `CreateDir` se cae y queda un plan `executable`
-/// cuya única copia va a un directorio que no existe — y encima rompe la regla
-/// que `SyncStepsBatch::steps` publica («un `CreateDir` precede a toda copia
-/// dentro de él»). Así que un `CreateDir` cuya `rel` sea ancestro ESTRICTO de
-/// algo seleccionado se queda. Solo esa clase: un `DeleteTree` en un ancestro
-/// borraría justo el subárbol que se pidió sincronizar.
+/// # BLOCKERS are not filtered
+/// A blocker isn't a step: it says why the plan can't be executed, and some
+/// have the whole tree as their scope (`DestReadOnly` hangs off the root,
+/// which no selection names). Trimming them by selection would turn a
+/// read-only destination into an executable plan, so all of them pass
+/// through and `executable` keeps talking about the full comparison.
+/// # A `CreateDir` a chosen step needs stays
+/// The drag is top-down, and the plan needs it the other way too. A source
+/// orphan produces, in pre-order, a `CreateDir new` and then a `Copy
+/// new/a.txt`; the panel lets the file's ROW be selected. With only the
+/// downward drag, the `CreateDir` would fall out and leave an `executable`
+/// plan whose only copy goes to a directory that doesn't exist — and on top
+/// of that it breaks the rule `SyncStepsBatch::steps` publishes ("a
+/// `CreateDir` precedes every copy inside it"). So a `CreateDir` whose
+/// `rel` is a STRICT ancestor of something selected stays. Only that class:
+/// a `DeleteTree` on an ancestor would take down exactly the subtree that
+/// was asked to be synced.
 #[derive(Debug, Clone)]
 struct IncludeFilter {
-    /// La raíz venía en la lista: todo entra y no hay nada que mirar.
+    /// The root was in the list: everything gets in and there's nothing to
+    /// look at.
     everything: bool,
-    /// Las rutas pedidas en forma wire (lossless: percent-encoding sobre los
-    /// bytes crudos, sin `to_str` y sin plegar nada — regla dura 1).
+    /// The requested paths in wire form (lossless: percent-encoding over
+    /// the raw bytes, no `to_str` and no folding anything — hard rule 1).
     wire: HashSet<String>,
-    /// Los ancestros ESTRICTOS de lo pedido, para los `CreateDir`.
+    /// The STRICT ancestors of what was requested, for the `CreateDir`s.
     ancestors: HashSet<String>,
 }
 
 impl IncludeFilter {
-    /// Construye el filtro. Una lista VACÍA no es «todo»: es una selección de
-    /// cero rutas, y produce un plan sin pasos. Quien no quiera filtrar manda
-    /// el campo ausente.
+    /// Builds the filter. An EMPTY list isn't "everything": it's a
+    /// selection of zero paths, and produces a plan with no steps. Whoever
+    /// doesn't want to filter sends the field absent.
     fn new(list: &[RelPath]) -> Self {
         let wire: HashSet<String> = list.iter().map(RelPath::to_wire).collect();
-        // El cierre de ancestros es ≤ (rutas × profundidad), o sea acotado por
-        // `SYNC_MAX_INCLUDE`: se paga una vez y deja `covers` en una consulta de
-        // hash por paso.
+        // The ancestor closure is ≤ (paths × depth), i.e. bounded by
+        // `SYNC_MAX_INCLUDE`: paid once and leaves `covers` at one hash
+        // lookup per step.
         let mut ancestors = HashSet::new();
         for path in &wire {
             for (i, _) in path.match_indices('/') {
@@ -127,7 +131,7 @@ impl IncludeFilter {
         }
     }
 
-    /// ¿Cae `rel` en la selección, por sí misma o por un ancestro?
+    /// Does `rel` fall within the selection, by itself or via an ancestor?
     fn covers(&self, rel: &RelPath) -> bool {
         if self.everything {
             return true;
@@ -136,26 +140,26 @@ impl IncludeFilter {
         if self.wire.contains(&wire) {
             return true;
         }
-        // Cada `/` de la forma wire cierra exactamente un ancestro, y no hay
-        // otro sitio donde pueda aparecer.
+        // Every `/` in the wire form closes exactly one ancestor, and there's
+        // nowhere else it can appear.
         wire.match_indices('/')
             .any(|(i, _)| self.wire.contains(&wire[..i]))
     }
 
-    /// ¿Es `rel` un ancestro estricto de algo seleccionado? (Ver la nota del
-    /// tipo: solo decide sobre un `CreateDir`.)
+    /// Is `rel` a strict ancestor of something selected? (See the type's
+    /// note: it only decides about a `CreateDir`.)
     fn is_needed_ancestor(&self, rel: &RelPath) -> bool {
         self.ancestors.contains(&rel.to_wire())
     }
 
-    /// ¿Sobrevive este paso a la selección?
+    /// Does this step survive the selection?
     fn keeps(&self, step: &SyncStep) -> bool {
         self.covers(&step.rel)
             || (step.kind == SyncStepKind::CreateDir && self.is_needed_ancestor(&step.rel))
     }
 }
 
-/// Lote de pasos en construcción.
+/// Step batch under construction.
 struct Batch {
     task_id: TaskId,
     steps: Vec<SyncStep>,
@@ -177,7 +181,7 @@ impl Batch {
         self.steps.len()
     }
 
-    /// Extrae el lote acumulado, dejando el buffer vacío.
+    /// Extracts the accumulated batch, leaving the buffer empty.
     fn take(&mut self) -> SyncStepsBatch {
         SyncStepsBatch {
             task_id: self.task_id,
@@ -186,19 +190,20 @@ impl Batch {
     }
 }
 
-/// Desenlace de un [`flush`] (calca el de `compare.rs`).
+/// Outcome of a [`flush`] (mirrors `compare.rs`'s).
 enum FlushOutcome {
-    /// Enviado (o nada que enviar): sigue el plan. Lleva CUÁNTOS pasos
-    /// salieron, que es lo que cuenta el progreso.
+    /// Sent (or nothing to send): the plan continues. Carries HOW MANY
+    /// steps went out, which is what progress counts.
     Continue(u64),
-    /// El receptor murió (el dueño se fue): termina limpio.
+    /// The receiver died (the owner left): ends cleanly.
     ReceiverGone,
-    /// Cancelado mientras el `send` estaba bloqueado por backpressure.
+    /// Cancelled while `send` was blocked on backpressure.
     Cancelled,
 }
 
-/// Envía el lote pendiente (si lo hay). Un `send` bloqueado por backpressure NO
-/// ignora la cancelación: se hace `select` contra el token (regla dura 3).
+/// Sends the pending batch (if any). A `send` blocked on backpressure does
+/// NOT ignore cancellation: it's raced with a `select` against the token
+/// (hard rule 3).
 async fn flush(
     tx: &mpsc::Sender<SyncPlanEvent>,
     batch: &mut Batch,
@@ -219,73 +224,78 @@ async fn flush(
     }
 }
 
-/// Todo lo que la Task de `sync.plan` necesita y no puede derivar.
+/// Everything the `sync.plan` Task needs and cannot derive.
 ///
-/// Es una struct y no siete argumentos porque siete argumentos son siete sitios
-/// donde equivocarse de orden entre dos `Arc<dyn Provider>` que el compilador no
-/// distingue.
+/// It's a struct and not seven arguments because seven arguments are seven
+/// places to get the order wrong between two `Arc<dyn Provider>`s the
+/// compiler can't tell apart.
 pub(crate) struct SyncPlanJob {
-    /// Provider de la raíz de ORIGEN.
+    /// SOURCE root's provider.
     pub source: Arc<dyn Provider>,
-    /// Provider de la raíz de DESTINO. Puede ser el mismo objeto.
+    /// DESTINATION root's provider. Can be the same object.
     pub dest: Arc<dyn Provider>,
-    /// Las dos raíces, el modo, `on_unknown` y las capacidades del destino.
+    /// The two roots, the mode, `on_unknown` and the destination's
+    /// capabilities.
     pub opts: SyncOptions,
-    /// Con qué se compara. Va al hash y a la cabecera del spool: un plan hecho
-    /// con `hash` encendido no es el mismo que uno hecho solo con tamaños.
+    /// What it's compared with. Goes into the hash and the spool's header:
+    /// a plan made with `hash` on isn't the same as one made with sizes
+    /// only.
     pub compare: SyncCompareOptions,
-    /// La selección del llamante, ya validada contra
+    /// The caller's selection, already validated against
     /// [`SYNC_MAX_INCLUDE`](norte_proto::methods::SYNC_MAX_INCLUDE).
     pub include: Option<Vec<RelPath>>,
-    /// EL spool del daemon (clonado, jamás construido por segunda vez).
+    /// THE daemon's spool (cloned, never built a second time).
     pub spool: Spool,
-    /// La conexión dueña del plan. Es la mitad de la llave con la que después
-    /// se podrá abrir.
+    /// The connection that owns the plan. It's half the key that will let
+    /// it be opened later.
     pub conn_id: u64,
 }
 
-/// Cuerpo de la Task de `sync.plan`: compara, transduce, retiene y emite.
+/// Body of the `sync.plan` Task: compares, transduces, retains and emits.
 ///
-/// El flujo es `norte_compare::compare` → `norte_sync::plan` → (spool, lote).
-/// Cada elemento que sobrevive al `include` se empuja al
-/// [`SpoolWriter`](spool::SpoolWriter) **y** al lote en la misma iteración: el
-/// writer hashea, cuenta y escribe en la misma llamada, así que no hay forma de
-/// retener una secuencia y enseñar otra (el `plan_hash` resume EXACTAMENTE lo
-/// que el humano ve).
+/// The flow is `norte_compare::compare` → `norte_sync::plan` → (spool,
+/// batch). Every element surviving `include` is pushed to the
+/// [`SpoolWriter`](spool::SpoolWriter) **and** to the batch in the same
+/// iteration: the writer hashes, counts and writes in the same call, so
+/// there's no way to retain one sequence and show another (the `plan_hash`
+/// summarizes EXACTLY what the human sees).
 ///
-/// - **`descend_orphans` lo fija el llamante al lado del ORIGEN** (lo hace
-///   [`Engine::sync_plan_as`](crate::Engine::sync_plan_as)), no el cliente: quien
-///   aprueba necesita cuántos ficheros y cuántos bytes, y el ejecutor un paso por
-///   fichero. Un huérfano del DESTINO es un `DeleteTree` entero y descenderlo
-///   compra listados que no cambian un solo paso.
-/// - **Cancelación** (regla dura 3): el token es el MISMO para el walk y para el
-///   transductor —lo exige el rustdoc de `norte_sync::plan`—, y el `flush` lo
-///   vuelve a mirar mientras espera sitio en el canal. Un plan cancelado se
-///   cierra con [`PlanOutcome::Interrupted`], que borra el `.part`: **no deja
-///   nada aprobable**.
-/// - **Solo el brazo `None` del flujo cierra con [`PlanOutcome::Ended`]**. El
-///   digest parcial de un plan cortado por la mitad es indistinguible del de uno
-///   completo más corto, así que cerrarlo produciría un `plan_hash` válido para
-///   un plan que dice sincronizar un árbol que se recorrió un tercio.
-/// - **Un lote que no se entrega también interrumpe.** Si el dueño se fue, el
-///   plan que retuviéramos sería uno que nadie llegó a ver entero; y soltar el
-///   canal es además lo que para el walk.
-/// - **Progreso**: `entries_done` cuenta PASOS emitidos y se incrementa al
-///   confirmarse el `flush`, jamás al acumular en el lote — es la señal con la
-///   que un cliente detecta un `sync.steps` perdido, y contar pasos que se
-///   quedaron en un lote descartado le haría denunciar una pérdida que no hubo.
-///   Con precisión: «confirmado» es que el lote ENTRÓ en el canal de la Task,
-///   no que el frame llegara al cliente. Los dos números solo se separan cuando
-///   la bomba del daemon no puede entregar, y ese camino termina el plan sin
-///   `sync.plan_done`, así que nadie puede aprobar sobre una cuenta de más.
-///   `bytes_done` se queda a cero: planificar no escribe. `current` tampoco se
-///   toca (llevaría un `VPath` a un broadcast que ven todos los humanos
-///   conectados, y el gate de esta Task es por RAÍZ).
+/// - **`descend_orphans` is set by the caller on the SOURCE side** (done by
+///   [`Engine::sync_plan_as`](crate::Engine::sync_plan_as)), not the
+///   client: whoever approves needs how many files and how many bytes, and
+///   the executor needs one step per file. A DESTINATION orphan is one
+///   whole `DeleteTree`, and descending it buys listings that change not a
+///   single step.
+/// - **Cancellation** (hard rule 3): the token is the SAME for the walk and
+///   for the transducer —`norte_sync::plan`'s rustdoc requires it—, and
+///   `flush` checks it again while waiting for room in the channel. A
+///   cancelled plan closes with [`PlanOutcome::Interrupted`], which deletes
+///   the `.part`: **it leaves nothing approvable**.
+/// - **Only the stream's `None` arm closes with [`PlanOutcome::Ended`]**.
+///   The partial digest of a plan cut in half is indistinguishable from a
+///   shorter complete one's, so closing it would produce a valid
+///   `plan_hash` for a plan that claims to sync a tree that was only a
+///   third walked.
+/// - **A batch that doesn't get delivered also interrupts.** If the owner
+///   left, the plan we'd retain would be one nobody ever saw whole; and
+///   dropping the channel is also what stops the walk.
+/// - **Progress**: `entries_done` counts STEPS emitted and is incremented
+///   when the `flush` is confirmed, never when accumulated into the batch
+///   — it's the signal a client uses to detect a lost `sync.steps`, and
+///   counting steps that stayed in a discarded batch would make it report
+///   a loss that never happened. To be precise: "confirmed" means the
+///   batch ENTERED the Task's channel, not that the frame reached the
+///   client. The two numbers only diverge when the daemon's pump can't
+///   deliver, and that path ends the plan with no `sync.plan_done`, so
+///   nobody can approve over an inflated count. `bytes_done` stays at
+///   zero: planning doesn't write. `current` isn't touched either (it
+///   would carry a `VPath` to a broadcast every connected human sees, and
+///   this Task's gate is per ROOT).
 ///
-/// `Sides` + el flujo de `norte_compare::compare`, en una función aparte para
-/// que [`run_sync_plan`] quepa en el límite de líneas del gate (#153,
-/// ADR 0051) — ver el rustdoc de `crate::compare::probed_sides` para por qué
-/// `Sides` se calcula AQUÍ y no dentro del motor de comparación.
+/// `Sides` + `norte_compare::compare`'s stream, in a separate function so
+/// [`run_sync_plan`] fits under the gate's line limit (#153, ADR 0051) —
+/// see `crate::compare::probed_sides`'s rustdoc for why `Sides` is computed
+/// HERE and not inside the comparison engine.
 async fn compared_rows<'a>(
     source: &'a dyn Provider,
     source_root: &'a norte_proto::VPath,
@@ -308,20 +318,19 @@ async fn compared_rows<'a>(
     )
 }
 
-/// Tope de entradas que se cuentan del primer nivel de un `DeleteTree` (#176).
+/// Cap on entries counted from a `DeleteTree`'s first level (#176).
 ///
-/// Por encima, el testigo se queda SIN recuento: contar un directorio de un
-/// millón de entradas al planificar cuesta el listado entero, y el recuento
-/// existe para ser barato. Un testigo sin recuento no relaja nada — la
-/// revalidación solo compara lo que las dos fotos traen, igual que con el
-/// tamaño y la fecha.
-const CONTEO_MAX: u64 = 4096;
+/// Above it, the witness is left WITHOUT a count: counting a million-entry
+/// directory while planning costs the whole listing, and the count exists
+/// to be cheap. A witness with no count relaxes nothing — revalidation only
+/// compares what the two snapshots carry, same as with size and date.
+const COUNT_MAX: u64 = 4096;
 
-/// Completa el testigo de un `DeleteTree` con el recuento de su primer nivel.
+/// Completes a `DeleteTree`'s witness with its first level's count.
 ///
-/// Cualquier otra clase de paso vuelve tal cual: solo el borrado de un árbol
-/// revalida un DIRECTORIO, y solo ahí el recuento dice algo.
-async fn contar_si_borra_arbol(
+/// Any other kind of step comes back unchanged: only deleting a tree
+/// revalidates a DIRECTORY, and only there does the count say anything.
+async fn count_if_deletes_tree(
     item: PlanItem,
     dest: &dyn Provider,
     dest_root: &norte_proto::VPath,
@@ -329,17 +338,24 @@ async fn contar_si_borra_arbol(
 ) -> PlanItem {
     use futures::StreamExt as _;
 
-    let PlanItem::Step { step, dest: foto } = item else {
+    let PlanItem::Step {
+        step,
+        dest: snapshot,
+    } = item
+    else {
         return item;
     };
-    let (Some(foto), SyncStepKind::DeleteTree) = (foto, step.kind) else {
-        return PlanItem::Step { step, dest: foto };
+    let (Some(snapshot), SyncStepKind::DeleteTree) = (snapshot, step.kind) else {
+        return PlanItem::Step {
+            step,
+            dest: snapshot,
+        };
     };
     let mut path = dest_root.clone();
-    for segmento in step.dest_rel.as_ref().unwrap_or(&step.rel).segments() {
-        path = path.join(segmento.clone());
+    for segment in step.dest_rel.as_ref().unwrap_or(&step.rel).segments() {
+        path = path.join(segment.clone());
     }
-    let contadas = match dest.list(&path).await {
+    let counted = match dest.list(&path).await {
         Ok(mut stream) => {
             let mut n = 0_u64;
             loop {
@@ -349,12 +365,12 @@ async fn contar_si_borra_arbol(
                 match stream.next().await {
                     Some(Ok(_)) => {
                         n += 1;
-                        if n > CONTEO_MAX {
-                            break None; // demasiadas: contar deja de ser barato
+                        if n > COUNT_MAX {
+                            break None; // too many: counting stops being cheap
                         }
                     }
-                    // Una entrada ilegible deja el recuento SIN respuesta: un
-                    // número que se saltó algo es peor que ningún número.
+                    // An unreadable entry leaves the count with NO answer: a
+                    // number that skipped something is worse than no number.
                     Some(Err(_)) => break None,
                     None => break Some(n),
                 }
@@ -364,52 +380,60 @@ async fn contar_si_borra_arbol(
     };
     PlanItem::Step {
         step,
-        dest: Some(foto.with_entries(contadas)),
+        dest: Some(snapshot.with_entries(counted)),
     }
 }
 
-/// Convierte en BLOQUEO un paso cuyo nombre de destino ese provider no puede
-/// tener (#163).
+/// Turns into a BLOCKER a step whose destination name that provider cannot
+/// have (#163).
 ///
-/// Solo mira los pasos que CREAN un nombre allí: un borrado nombra algo que ya
-/// existe, así que su legalidad está demostrada por su existencia.
+/// Only looks at steps that CREATE a name there: a delete names something
+/// that already exists, so its legality is proven by its existence.
 ///
-/// Bloquea en vez de saltar por lo mismo que `TypeMismatchDir`: quien pidió un
-/// espejo pidió que el destino quedara como el origen, y un nombre que no
-/// puede existir allí es una divergencia estructural que ningún informe
-/// posterior arregla.
-fn bloquear_si_el_nombre_no_cabe(item: PlanItem, dest: &dyn Provider) -> PlanItem {
+/// Blocks instead of skipping for the same reason as `TypeMismatchDir`:
+/// whoever asked for a mirror asked for the destination to end up like the
+/// source, and a name that cannot exist there is a structural divergence no
+/// later report fixes.
+fn block_if_the_name_does_not_fit(item: PlanItem, dest: &dyn Provider) -> PlanItem {
     use norte_proto::methods::{SyncBlocker, SyncBlockerKind};
 
-    let PlanItem::Step { step, dest: foto } = item else {
+    let PlanItem::Step {
+        step,
+        dest: snapshot,
+    } = item
+    else {
         return item;
     };
-    let crea = matches!(
+    let creates = matches!(
         step.kind,
         SyncStepKind::Copy | SyncStepKind::Overwrite | SyncStepKind::CreateDir
     );
     let rel = step.dest_rel.as_ref().unwrap_or(&step.rel);
-    if !crea
+    if !creates
         || rel
             .segments()
             .iter()
             .all(|s| dest.name_is_legal(s.as_bytes()))
     {
-        return PlanItem::Step { step, dest: foto };
+        return PlanItem::Step {
+            step,
+            dest: snapshot,
+        };
     }
     PlanItem::Blocker(SyncBlocker {
         rel: rel.clone(),
         kind: SyncBlockerKind::IllegalDestName,
-        // El lado es SIEMPRE el destino: es su sistema de ficheros el que
-        // rehúsa el nombre, no el origen el que lo escribió mal.
+        // The side is ALWAYS the destination: it's its filesystem refusing
+        // the name, not the source that wrote it wrong.
         side: Some(norte_proto::methods::Side::Right),
     })
 }
 
 /// # Errors
-/// [`Error::Cancelled`] si se canceló o si el dueño dejó de recibir;
-/// [`Error::Io`] si el spool no se pudo escribir; [`Error::Internal`] si el
-/// transductor terminó de una forma que este cableado no puede producir.
+/// [`Error::Cancelled`] if it was cancelled or the owner stopped
+/// receiving; [`Error::Io`] if the spool couldn't be written;
+/// [`Error::Internal`] if the transducer ended in a way this wiring cannot
+/// produce.
 #[tracing::instrument(skip_all, fields(conn_id = job.conn_id))]
 pub(crate) async fn run_sync_plan(
     job: SyncPlanJob,
@@ -427,10 +451,10 @@ pub(crate) async fn run_sync_plan(
     } = job;
     let task_id = ctx.progress.snapshot().task_id;
     let include = include.as_deref().map(IncludeFilter::new);
-    // De la MISMA pareja de booleanos con la que el transductor decide el
-    // `reversal` de cada paso, traducida por el tipo del wire: si el resumen la
-    // derivara por su cuenta, el plan y su diálogo podrían decir cosas distintas
-    // del mismo destino.
+    // From the SAME pair of booleans the transducer uses to decide each
+    // step's `reversal`, translated by the wire's type: if the summary
+    // derived it on its own, the plan and its dialog could say different
+    // things about the same destination.
     let dest_trash = DestTrash::of(opts.dest_has_trash, opts.dest_trash_restorable);
 
     let mut writer = spool
@@ -440,37 +464,38 @@ pub(crate) async fn run_sync_plan(
     let mut batch = Batch::new(task_id);
     let mut last_flush = Instant::now();
 
-    // El flujo se construye AQUÍ DENTRO: `compare` toma prestados los DOS
-    // providers, así que el préstamo tiene que nacer dentro del `async` que lo
-    // consume.
+    // The stream is built RIGHT HERE: `compare` borrows BOTH providers, so
+    // the borrow has to be born inside the `async` that consumes it.
     let rows = compared_rows(
         source.as_ref(),
         &opts.source_root,
         dest.as_ref(),
         &opts.dest_root,
         compare_options(&compare, &opts),
-        // Lo mismo que en `fs.compare` (#209): un plan de sincronización LEE
-        // los dos árboles igual que una comparación, así que un agente no
-        // puede inventariar por aquí el directorio de estado del daemon.
+        // Same as in `fs.compare` (#209): a sync plan READS both trees just
+        // like a comparison, so an agent cannot inventory the daemon's
+        // state directory through here.
         crate::policy::walk_exclusions(&ctx.actor),
         ctx.cancel.clone(),
     )
     .await;
-    // Fijado en la pila: el flujo del transductor no es `Unpin` (su `Unfold`
-    // guarda el `async` que lo produce), y aquí se sondea desde un bucle.
+    // Pinned on the stack: the transducer's stream is not `Unpin` (its
+    // `Unfold` holds the `async` that produces it), and it's polled here
+    // from a loop.
     let mut items = std::pin::pin!(norte_sync::plan(rows, opts.clone(), ctx.cancel.clone()));
 
-    // `Ok(())` = el flujo llegó a `None`. Cualquier otra cosa interrumpe, y la
-    // interrupción NO puede salir por la misma puerta que el final (ver la nota
-    // del tipo `PlanOutcome`).
+    // `Ok(())` = the stream reached `None`. Anything else interrupts, and
+    // the interruption CANNOT go out the same door as the ending (see the
+    // note on the `PlanOutcome` type).
     let ended: Result<(), Error> = loop {
-        // El tick de tiempo va en un `select!` y no colgado de la llegada de un
-        // paso, que es lo que hace `fs.compare`. Allí no importa —toda pareja es
-        // una fila—; aquí el transductor no emite NADA por una fila `Same`, así
-        // que un plan que produce tres pasos y después recorre doscientos mil
-        // ficheros idénticos dejaría esos tres en el buffer durante todo el
-        // walk. El flujo es `FusedStream` justamente para poder ir en un
-        // `select!` (nota de la tarea 3).
+        // The time tick goes in a `select!` and not hanging off a step's
+        // arrival, which is what `fs.compare` does. There it doesn't
+        // matter —every pair is a row—; here the transducer emits NOTHING
+        // for a `Same` row, so a plan that produces three steps and then
+        // walks two hundred thousand identical files would leave those
+        // three in the buffer for the whole walk. The stream is
+        // `FusedStream` precisely so it can go in a `select!` (task 3's
+        // note).
         let next = tokio::select! {
             biased;
             item = items.next() => item,
@@ -493,22 +518,22 @@ pub(crate) async fn run_sync_plan(
         let item = match item {
             Ok(item) => item,
             Err(SyncError::Cancelled) => break Err(Error::Cancelled),
-            // `SyncError` es `#[non_exhaustive]` y las otras variantes son
-            // fallos de CABLEADO (un modo que este binario no planifica, un
-            // origen que no nombra lado, una fila fuera de su raíz). Este
-            // llamante construye las opciones él mismo, así que ninguna es
-            // alcanzable desde el wire; decir `Cancelled` por ellas mentiría
-            // sobre lo que pasó.
-            // Se loguea la CLASE, no el `Display`: `OutsideRoot` y
-            // `RootIsNotAStep` formatean rutas, y las rutas que llegan por esa
-            // vía son exactamente las que eligió un provider que devuelve filas
-            // fuera de la raíz que se le pidió listar — o sea, atacante. El
-            // resto de este módulo redacta, y `read_gate` fija el criterio:
-            // jamás el path en la traza.
+            // `SyncError` is `#[non_exhaustive]` and the other variants are
+            // WIRING failures (a mode this binary doesn't plan, a source
+            // that names no side, a row outside its root). This caller
+            // builds the options itself, so none of them is reachable from
+            // the wire; saying `Cancelled` for them would lie about what
+            // happened.
+            // The CLASS is logged, not the `Display`: `OutsideRoot` and
+            // `RootIsNotAStep` format paths, and the paths arriving that
+            // way are exactly the ones a provider chose to return outside
+            // the root it was asked to list — i.e., an attacker. The rest
+            // of this module redacts, and `read_gate` sets the criterion:
+            // never the path in the trace.
             Err(other) => {
                 tracing::error!(
                     class = sync_error_class(&other),
-                    "sync.plan: final inesperado del transductor"
+                    "sync.plan: unexpected end from the transducer"
                 );
                 break Err(Error::Internal { panic: false });
             }
@@ -518,27 +543,27 @@ pub(crate) async fn run_sync_plan(
         {
             continue;
         }
-        // El testigo de un `DeleteTree` se completa con el RECUENTO de su
-        // primer nivel (#176). Va aquí y no en el transductor porque el
-        // transductor es puro y no tiene provider — y va al PLANIFICAR y no al
-        // aplicar porque lo que se compara es «lo que había cuando el humano
-        // decidió» contra «lo que hay ahora».
+        // A `DeleteTree`'s witness is completed with its first level's
+        // COUNT (#176). This goes here and not in the transducer because
+        // the transducer is pure and has no provider — and it goes at
+        // PLANNING and not at applying because what's compared is "what
+        // there was when the human decided" against "what's there now".
         //
-        // Es un listado por paso destructivo, y es el paso con más radio de
-        // acción de todos: el `stat` de un directorio solo se mueve cuando
-        // cambian sus hijos DIRECTOS, así que sin esto un subárbol que ganó
-        // cien ficheros entre aprobar y aplicar revalidaba limpio y se borraba
-        // entero.
-        let item = contar_si_borra_arbol(item, dest.as_ref(), &opts.dest_root, &ctx.cancel).await;
-        // Y un nombre que el DESTINO no puede tener bloquea el plan en vez de
-        // descubrirse al ejecutar (#163). Lo decide el provider del destino,
-        // que es quien conoce sus reglas; aquí solo se pregunta, y preguntar
-        // no cuesta I/O.
-        let item = bloquear_si_el_nombre_no_cabe(item, dest.as_ref());
-        // Hashea, cuenta y escribe en la MISMA llamada: el lote de abajo se
-        // lleva exactamente lo mismo.
+        // It's one listing per destructive step, and it's the step with
+        // the largest blast radius of all: a directory's `stat` only
+        // changes when its DIRECT children change, so without this a
+        // subtree that gained a hundred files between approving and
+        // applying would revalidate clean and get deleted whole.
+        let item = count_if_deletes_tree(item, dest.as_ref(), &opts.dest_root, &ctx.cancel).await;
+        // And a name the DESTINATION cannot have blocks the plan instead of
+        // being discovered at execution time (#163). Decided by the
+        // destination's provider, which is the one that knows its rules;
+        // here it's only asked, and asking costs no I/O.
+        let item = block_if_the_name_does_not_fit(item, dest.as_ref());
+        // Hashes, counts and writes in the SAME call: the batch below
+        // carries exactly the same thing.
         if let Err(e) = writer.push(&item).await {
-            tracing::error!(error = %e, "sync.plan: el spool no admitió un elemento");
+            tracing::error!(error = %e, "sync.plan: the spool did not accept an element");
             break Err(spool_error(&e));
         }
         if let PlanItem::Step { step, .. } = item {
@@ -549,9 +574,9 @@ pub(crate) async fn run_sync_plan(
                         ctx.progress.update(|p| p.entries_done += steps);
                         last_flush = Instant::now();
                     }
-                    // El dueño se fue: retener un plan que nadie vio entero es
-                    // exactamente lo que el diálogo de aprobación existe para
-                    // impedir. Y soltar el canal es lo que para el walk.
+                    // The owner left: retaining a plan nobody saw whole is
+                    // exactly what the approval dialog exists to prevent.
+                    // And dropping the channel is what stops the walk.
                     FlushOutcome::ReceiverGone | FlushOutcome::Cancelled => {
                         break Err(Error::Cancelled);
                     }
@@ -560,7 +585,7 @@ pub(crate) async fn run_sync_plan(
         }
     };
     if let Err(e) = ended {
-        // NO `Ended`: borra el `.part` y no hay plan que aplicar.
+        // NOT `Ended`: deletes the `.part` and there's no plan to apply.
         let _ = writer.finish(PlanOutcome::Interrupted).await;
         return Err(e);
     }
@@ -572,38 +597,41 @@ pub(crate) async fn run_sync_plan(
     close_plan(writer, &spool, closing, &mut batch, &tx, ctx).await
 }
 
-/// Lo que identifica al plan que se cierra, y lo único de él que
-/// [`close_plan`] no puede leer del resumen del spool.
+/// What identifies the plan being closed, and the only part of it
+/// [`close_plan`] cannot read off the spool's summary.
 #[derive(Debug, Clone, Copy)]
 struct Closing {
-    /// La conexión dueña (media llave del plan retenido).
+    /// The owning connection (half the key of the retained plan).
     conn_id: u64,
-    /// La Task que lo produjo.
+    /// The Task that produced it.
     task_id: TaskId,
-    /// Qué papelera tiene el destino, o sea qué podría devolver el undo si este
-    /// plan se llega a aplicar. Sale de las opciones y no del resumen porque el
-    /// spool no lo cuenta: no es un contador, es una propiedad del destino.
+    /// What trash the destination has, i.e. what undo could return if this
+    /// plan gets applied. Comes from the options and not the summary
+    /// because the spool doesn't count it: it isn't a counter, it's a
+    /// property of the destination.
     dest_trash: DestTrash,
 }
 
-/// Cierra un plan que llegó al final de su flujo: último lote, terminador del
-/// spool y `sync.plan_done`.
+/// Closes a plan that reached the end of its stream: last batch, the
+/// spool's terminator and `sync.plan_done`.
 ///
-/// Es lo que decide si el plan queda RETENIDO, así que las tres formas de que no
-/// deba quedarlo están juntas aquí:
+/// This is what decides whether the plan stays RETAINED, so the three ways
+/// it should not are together here:
 ///
-/// 1. **El último lote no se entrega.** Un plan que nadie vio entero no se
-///    aprueba, que es lo que el diálogo existe para impedir.
-/// 2. **El canal está cerrado.** `flush` devuelve `Continue(0)` sin tocarlo
-///    cuando el lote está vacío, así que un plan sobre dos árboles idénticos
-///    —cero pasos— jamás se enteraría por esa vía.
-/// 3. **`finish` dice que no.** Lo autoritativo: la conexión se desmontó
-///    mientras el plan se cerraba, o alguien está aplicando un plan idéntico.
+/// 1. **The last batch doesn't get delivered.** A plan nobody saw whole
+///    isn't approved, which is what the dialog exists to prevent.
+/// 2. **The channel is closed.** `flush` returns `Continue(0)` without
+///    touching it when the batch is empty, so a plan over two identical
+///    trees —zero steps— would never find out through that path.
+/// 3. **`finish` says no.** The authoritative one: the connection was torn
+///    down while the plan was closing, or someone is applying an identical
+///    plan.
 ///
-/// Y una cuarta, ya con el plan retenido: si el aviso no llega, se retira. El
-/// plan tiene que estar cerrado ANTES de mandarlo —al revés dejaría al cliente
-/// con un hash que todavía no se puede abrir—, así que la única forma de no
-/// dejar un plan que nadie va a aplicar ni a recoger es deshacerlo.
+/// And a fourth, with the plan already retained: if the notice doesn't
+/// arrive, it's withdrawn. The plan has to be closed BEFORE it's sent —the
+/// other way around would leave the client with a hash that can't be
+/// opened yet—, so the only way to avoid leaving a plan nobody will apply
+/// or collect is to undo it.
 async fn close_plan(
     writer: SpoolWriter,
     spool: &Spool,
@@ -633,9 +661,10 @@ async fn close_plan(
         Err(SpoolError::Interrupted) => return Err(Error::Cancelled),
         Err(e) => return Err(spool_error(&e)),
     };
-    // Se CONSTRUYE desde el resumen, no se recalcula: `executable` y los
-    // contadores se derivan en un solo sitio ([`SpoolWriter::finish`]), y quien
-    // los derive por su cuenta tarde o temprano los derivará distinto.
+    // BUILT from the summary, not recomputed: `executable` and the
+    // counters are derived in one place ([`SpoolWriter::finish`]), and
+    // whoever derives them on their own will sooner or later derive them
+    // differently.
     let plan_hash = summary.plan_hash.clone();
     let done = SyncPlanDone {
         task_id,
@@ -646,14 +675,14 @@ async fn close_plan(
         executable: summary.executable,
         dest_trash,
     };
-    // El dueño podría recalcular el digest por su cuenta —`PlanHasher` no lleva
-    // clave y recibió todos los lotes—, así que «nadie sabe el hash» no es la
-    // razón por la que esto es seguro: la razón es que el plan deja de estar
-    // retenido, y que `sync.apply` sigue exigiendo scope de escritura.
+    // The owner could recompute the digest on their own —`PlanHasher`
+    // carries no key and received every batch—, so "nobody knows the hash"
+    // isn't why this is safe: the reason is that the plan stops being
+    // retained, and that `sync.apply` still requires write scope.
     if tx.send(SyncPlanEvent::Done(done)).await.is_err() {
         tracing::debug!(
             conn = conn_id,
-            "sync.plan_done sin dueño: se retira el plan"
+            "sync.plan_done with no owner: withdrawing the plan"
         );
         let _ = spool.remove(conn_id, &plan_hash).await;
         return Err(Error::Cancelled);
@@ -661,13 +690,14 @@ async fn close_plan(
     Ok(())
 }
 
-/// La CLASE de un fallo del transductor, para la traza.
+/// The CLASS of a transducer failure, for the trace.
 ///
-/// Existe para no formatear el error: `OutsideRoot` y `RootIsNotAStep` llevan
-/// rutas en su `Display`, y las rutas que llegan por ahí son las que eligió un
-/// provider que devuelve filas fuera de la raíz que se le pidió listar. Un
-/// vocabulario cerrado dice lo mismo para diagnosticar y no escribe en el log de
-/// un operador algo que no controla (regla 10, mismo criterio que `read_gate`).
+/// Exists so the error isn't formatted: `OutsideRoot` and `RootIsNotAStep`
+/// carry paths in their `Display`, and the paths arriving that way are the
+/// ones a provider chose to return outside the root it was asked to list.
+/// A closed vocabulary says the same thing for diagnosis and doesn't write
+/// into an operator's log something outside their control (rule 10, same
+/// criterion as `read_gate`).
 fn sync_error_class(e: &SyncError) -> &'static str {
     match e {
         SyncError::Cancelled => "cancelled",
@@ -676,16 +706,16 @@ fn sync_error_class(e: &SyncError) -> &'static str {
         SyncError::RootIsNotAStep { .. } => "root-is-not-a-step",
         SyncError::ModeNotPlanned(_) => "mode-not-planned",
         SyncError::Compare(_) => "compare",
-        // `SyncError` es `#[non_exhaustive]`.
+        // `SyncError` is `#[non_exhaustive]`.
         _ => "unknown",
     }
 }
 
-/// Traduce el fallo del spool a la taxonomía del wire.
+/// Translates the spool's failure to the wire's taxonomy.
 ///
-/// Solo [`SpoolError::Io`] es un fallo de I/O de verdad; lo demás, en el camino
-/// de ESCRITURA, solo puede ser un writer ya cerrado o un registro por encima
-/// del tope — un fallo de este core, no del disco.
+/// Only [`SpoolError::Io`] is a real I/O failure; the rest, on the WRITE
+/// path, can only be an already-closed writer or a record over the cap — a
+/// failure of this core, not of the disk.
 fn spool_error(e: &SpoolError) -> Error {
     match e {
         SpoolError::Io(_) => Error::Io { retryable: false },
@@ -693,11 +723,11 @@ fn spool_error(e: &SpoolError) -> Error {
     }
 }
 
-/// Las opciones del MOTOR de comparación a partir de las del wire.
+/// The comparison ENGINE's options from the wire's.
 ///
-/// `follow_symlinks` y `descend_orphans` no son del llamante en `sync.plan`
-/// (rechazados aguas arriba con `-32602`): aquí se fijan, y `descend_orphans` al
-/// lado del ORIGEN.
+/// `follow_symlinks` and `descend_orphans` don't belong to the caller in
+/// `sync.plan` (rejected upstream with `-32602`): they're set here, and
+/// `descend_orphans` on the SOURCE side.
 fn compare_options(wire: &SyncCompareOptions, opts: &SyncOptions) -> norte_compare::CompareOptions {
     norte_compare::CompareOptions {
         criteria: wire.criteria,
@@ -718,7 +748,7 @@ mod tests {
         RelPath::parse_wire(wire).expect("rel")
     }
 
-    /// Un paso mínimo: solo `kind` y `rel` importan para el filtro.
+    /// A minimal step: only `kind` and `rel` matter for the filter.
     fn step(kind: norte_proto::methods::SyncStepKind, wire: &str) -> super::SyncStep {
         super::SyncStep {
             id: 1,
@@ -733,27 +763,27 @@ mod tests {
         }
     }
 
-    /// #163: un nombre que el DESTINO no puede tener bloquea el plan, en vez
-    /// de descubrirse al ejecutar.
+    /// #163: a name the DESTINATION cannot have blocks the plan, instead of
+    /// being discovered at execution time.
     ///
-    /// Lo decide el provider del destino —quien conoce sus reglas—, y aquí se
-    /// prueba el CABLEADO con uno que rehúsa a propósito: las reglas de Win32
-    /// de verdad las pone `norte-vfs-local` y no se pueden ejecutar en esta
-    /// máquina, pero que un «no» suyo se convierta en bloqueo sí.
+    /// Decided by the destination's provider —which knows its rules—, and
+    /// here the WIRING is tested with one that refuses on purpose: the real
+    /// Win32 rules are set by `norte-vfs-local` and can't be run on this
+    /// machine, but a "no" from it turning into a block can.
     #[test]
-    fn un_nombre_que_el_destino_no_admite_bloquea_el_plan() {
+    fn a_name_the_destination_rejects_blocks_the_plan() {
         use norte_proto::Error;
         use norte_proto::methods::{SyncBlockerKind, SyncStepKind};
         use norte_vfs::Provider;
 
-        /// Un destino a la manera de Windows: no admite dos puntos.
-        struct SinDosPuntos;
+        /// A Windows-style destination: no colons allowed.
+        struct NoColons;
 
         #[async_trait::async_trait]
-        impl Provider for SinDosPuntos {
+        impl Provider for NoColons {
             #[expect(
                 clippy::unnecessary_literal_bound,
-                reason = "la firma del trait es `-> &str`"
+                reason = "the trait's signature is `-> &str`"
             )]
             fn scheme(&self) -> &str {
                 "mem"
@@ -801,85 +831,85 @@ mod tests {
             }
         }
 
-        let copia = |wire: &str| super::PlanItem::Step {
+        let copy = |wire: &str| super::PlanItem::Step {
             step: step(SyncStepKind::Copy, wire),
             dest: None,
         };
 
-        // Legal: sale como paso, intacto.
+        // Legal: comes out as a step, untouched.
         assert!(matches!(
-            super::bloquear_si_el_nombre_no_cabe(copia("informe.txt"), &SinDosPuntos),
+            super::block_if_the_name_does_not_fit(copy("report.txt"), &NoColons),
             super::PlanItem::Step { .. }
         ));
 
-        // Ilegal ahí: bloqueo, con el lado del DESTINO.
-        let bloqueo = super::bloquear_si_el_nombre_no_cabe(copia("f%3Aads"), &SinDosPuntos);
-        let super::PlanItem::Blocker(b) = bloqueo else {
-            panic!("un nombre que el destino no admite tiene que bloquear")
+        // Illegal there: a block, with the DESTINATION side.
+        let blocked = super::block_if_the_name_does_not_fit(copy("f%3Aads"), &NoColons);
+        let super::PlanItem::Blocker(b) = blocked else {
+            panic!("a name the destination rejects has to block")
         };
         assert_eq!(b.kind, SyncBlockerKind::IllegalDestName);
         assert_eq!(b.side, Some(norte_proto::methods::Side::Right));
         assert_eq!(b.rel, rel("f%3Aads"));
 
-        // Y un BORRADO no se mira: nombra algo que ya existe allí, así que su
-        // legalidad la demuestra su existencia.
-        let borrado = super::PlanItem::Step {
+        // And a DELETE isn't checked: it names something that already
+        // exists there, so its legality is proven by its existence.
+        let deleted = super::PlanItem::Step {
             step: step(SyncStepKind::DeleteTree, "f%3Aads"),
             dest: None,
         };
         assert!(matches!(
-            super::bloquear_si_el_nombre_no_cabe(borrado, &SinDosPuntos),
+            super::block_if_the_name_does_not_fit(deleted, &NoColons),
             super::PlanItem::Step { .. }
         ));
     }
 
     #[test]
-    fn una_seleccion_arrastra_su_subarbol_y_no_a_su_vecino() {
+    fn a_selection_drags_its_subtree_and_not_its_neighbor() {
         let f = IncludeFilter::new(&[rel("caf%C3%A9")]);
-        assert!(f.covers(&rel("caf%C3%A9")), "la propia carpeta");
-        assert!(f.covers(&rel("caf%C3%A9/x.txt")), "lo de dentro");
-        // Por prefijo de CADENA, `cafétière` colgaría de `café` (regla dura 1).
+        assert!(f.covers(&rel("caf%C3%A9")), "the folder itself");
+        assert!(f.covers(&rel("caf%C3%A9/x.txt")), "what's inside");
+        // By STRING prefix, `cafétière` would hang off `café` (hard rule 1).
         assert!(!f.covers(&rel("caf%C3%A9ti%C3%A8re")));
-        assert!(!f.covers(&rel("otra")));
+        assert!(!f.covers(&rel("other")));
     }
 
     #[test]
-    fn la_raiz_en_la_lista_lo_incluye_todo_y_la_lista_vacia_nada() {
-        let todo = IncludeFilter::new(&[RelPath::default()]);
-        assert!(todo.covers(&rel("a/b/c")));
-        let nada = IncludeFilter::new(&[]);
-        assert!(!nada.covers(&rel("a")));
-        assert!(!nada.covers(&RelPath::default()));
+    fn the_root_in_the_list_includes_everything_and_an_empty_list_nothing() {
+        let everything = IncludeFilter::new(&[RelPath::default()]);
+        assert!(everything.covers(&rel("a/b/c")));
+        let nothing = IncludeFilter::new(&[]);
+        assert!(!nothing.covers(&rel("a")));
+        assert!(!nothing.covers(&RelPath::default()));
     }
 
     #[test]
-    fn la_pertenencia_es_por_bytes_sin_plegar_ni_normalizar() {
-        // NFC en la lista, NFD en el paso: dos nombres distintos.
+    fn membership_is_by_bytes_with_no_folding_or_normalizing() {
+        // NFC in the list, NFD in the step: two different names.
         let f = IncludeFilter::new(&[rel("caf%C3%A9")]);
         assert!(!f.covers(&rel("cafe%CC%81")));
-        // Y la caja tampoco se pliega.
+        // And case doesn't fold either.
         let g = IncludeFilter::new(&[rel("README")]);
         assert!(!g.covers(&rel("readme")));
     }
 
     #[test]
-    fn seleccionar_un_fichero_conserva_el_createdir_que_necesita() {
-        // El panel deja elegir la FILA del fichero; sin su `CreateDir` el plan
-        // copiaría dentro de un directorio que no existe.
-        let f = IncludeFilter::new(&[rel("nueva/a.txt")]);
-        assert!(f.keeps(&step(SyncStepKind::CreateDir, "nueva")));
-        assert!(f.keeps(&step(SyncStepKind::Copy, "nueva/a.txt")));
-        // Pero SOLO esa clase: un borrado del ancestro se llevaría por delante
-        // justo lo que se pidió sincronizar.
-        assert!(!f.keeps(&step(SyncStepKind::DeleteTree, "nueva")));
-        // Y el ancestro tiene que ser ancestro de ALGO elegido.
-        assert!(!f.keeps(&step(SyncStepKind::CreateDir, "otra")));
+    fn selecting_a_file_keeps_the_createdir_it_needs() {
+        // The panel lets the file's ROW be chosen; without its `CreateDir`
+        // the plan would copy into a directory that doesn't exist.
+        let f = IncludeFilter::new(&[rel("new/a.txt")]);
+        assert!(f.keeps(&step(SyncStepKind::CreateDir, "new")));
+        assert!(f.keeps(&step(SyncStepKind::Copy, "new/a.txt")));
+        // But ONLY that class: deleting the ancestor would take down
+        // exactly what was asked to be synced.
+        assert!(!f.keeps(&step(SyncStepKind::DeleteTree, "new")));
+        // And the ancestor has to be an ancestor of SOMETHING chosen.
+        assert!(!f.keeps(&step(SyncStepKind::CreateDir, "other")));
     }
 
     #[test]
-    fn un_nombre_que_no_es_utf8_entra_por_su_forma_wire() {
-        let f = IncludeFilter::new(&[rel("informe%FF%FE.dat")]);
-        assert!(f.covers(&rel("informe%FF%FE.dat")));
-        assert!(!f.covers(&rel("informe%FE%FF.dat")));
+    fn a_non_utf8_name_gets_in_by_its_wire_form() {
+        let f = IncludeFilter::new(&[rel("report%FF%FE.dat")]);
+        assert!(f.covers(&rel("report%FF%FE.dat")));
+        assert!(!f.covers(&rel("report%FE%FF.dat")));
     }
 }

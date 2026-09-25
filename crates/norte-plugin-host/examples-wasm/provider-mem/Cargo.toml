@@ -1,7 +1,7 @@
-# Guest WASM (#30 stage 2): un provider-mem READ-ONLY sobre un árbol en memoria
-# — dogfood de la interfaz WIT `provider` (ADR 0032). Prueba la proyección
-# async→sync (list paginado, read por rango) SIN red. NO es miembro del
-# workspace. Manifiesto AUTÓNOMO: empty `[workspace]`.
+# WASM guest (#30 stage 2): a READ-ONLY provider-mem over an in-memory tree
+# — dogfooding the WIT `provider` interface (ADR 0032). Tests the async→sync
+# projection (paginated list, ranged read) WITHOUT network. NOT a workspace
+# member. STANDALONE manifest: empty `[workspace]`.
 [workspace]
 
 [package]

@@ -1,6 +1,6 @@
 [package]
 name = "norte-vfs-local"
-description = "Provider VFS del filesystem local (unix/windows/macos)"
+description = "VFS provider for the local filesystem (unix/windows/macos)"
 license = "MIT OR Apache-2.0"
 version.workspace = true
 edition.workspace = true
@@ -14,10 +14,10 @@ bytes.workspace = true
 futures.workspace = true
 norte-proto.workspace = true
 norte-vfs.workspace = true
-# Nombre ESTABLE del `.norte-partial` de resume (ADR 0012): SHA-256 truncado
-# a 128 bits — estable entre versiones de Rust (a diferencia de DefaultHasher)
-# y sin colisión accidental/adversarial (hallazgo H1/H3 del encoding-auditor).
-# También servirá para verify=Hash/ETags en la fase 7 (object storage).
+# STABLE name of the resume `.norte-partial` (ADR 0012): SHA-256 truncated
+# to 128 bits — stable across Rust versions (unlike DefaultHasher) and
+# without accidental/adversarial collision (encoding-auditor finding H1/H3).
+# Will also serve for verify=Hash/ETags in phase 7 (object storage).
 sha2.workspace = true
 unicode-normalization.workspace = true
 tokio = { workspace = true, features = ["rt", "sync"] }
@@ -27,7 +27,7 @@ trash.workspace = true
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
 
-# Errores tipados de la capacidad `location` (regla 6: librerías con thiserror).
+# Typed errors for the `location` capability (rule 6: libraries use thiserror).
 thiserror.workspace = true
 
 [target.'cfg(windows)'.dependencies]
@@ -50,9 +50,9 @@ proptest.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
 
-# El benchmark que la ADR 0002 aplazó (#12): mide el suelo del sistema contra
-# el camino del provider, que es lo que decide si `tokio-uring` tiene algo que
-# ganar aquí.
+# The benchmark ADR 0002 deferred (#12): measures the system's floor against
+# the provider's path, which is what decides whether `tokio-uring` has
+# anything to gain here.
 [[bench]]
 name = "local_io"
 harness = false

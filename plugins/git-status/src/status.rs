@@ -1,13 +1,13 @@
-//! De un índice y un `stat` a una celda de columna.
+//! From an index and a `stat` to a column cell.
 //!
-//! El orden importa y es el de git: comparar `stat` primero —eso contesta la
-//! inmensa mayoría de los casos sin abrir nada—, y solo cuando la comparación
-//! es ambigua (el caso «racy»: el fichero tiene el MISMO mtime que el índice,
-//! así que pudo cambiar dentro del mismo segundo) leer el contenido y comparar
-//! el id de objeto.
+//! The order matters and it is git's: compare `stat` first —that answers
+//! the vast majority of cases without opening anything—, and only when the
+//! comparison is ambiguous (the "racy" case: the file has the SAME mtime as
+//! the index, so it could have changed within the same second) read the
+//! content and compare the object id.
 //!
-//! Vocabulario de celda: vacío = limpio, `M` modificado, `D` borrado,
-//! `?` no rastreado, `!` ignorado.
+//! Cell vocabulary: empty = clean, `M` modified, `D` deleted, `?`
+//! untracked, `!` ignored.
 
 extern crate alloc;
 
@@ -17,73 +17,74 @@ use alloc::vec::Vec;
 use crate::ignore::Ignores;
 use crate::index::GitIndex;
 
-/// Metadatos de una entrada tal y como los da el host.
+/// An entry's metadata as the host gives it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Meta {
-    /// `true` si es un directorio.
+    /// `true` if it is a directory.
     pub is_dir: bool,
-    /// Tamaño en bytes.
+    /// Size in bytes.
     pub size: u64,
-    /// mtime en segundos.
+    /// mtime in seconds.
     pub mtime_sec: i64,
-    /// mtime en nanosegundos.
+    /// mtime in nanoseconds.
     pub mtime_nsec: u32,
 }
 
-/// Lo que el guest sabe pedirle a la ubicación. Un trait para que la lógica se
-/// pruebe en el host sin un runtime wasm por medio: lo que se prueba es la
-/// decisión, no la ABI.
+/// What the guest knows how to ask the location. A trait so the logic is
+/// tested on the host without a wasm runtime in between: what is tested is
+/// the decision, not the ABI.
 pub trait Location {
-    /// Bytes de un fichero bajo la raíz.
+    /// Bytes of a file under the root.
     ///
     /// # Errors
-    /// Cualquier cadena que el host devuelva.
+    /// Any string the host returns.
     fn read(&self, rel: &[u8]) -> Result<Vec<u8>, String>;
 
-    /// Metadatos de una entrada bajo la raíz.
+    /// An entry's metadata under the root.
     ///
     /// # Errors
-    /// Cualquier cadena que el host devuelva.
+    /// Any string the host returns.
     fn stat(&self, rel: &[u8]) -> Result<Meta, String>;
 }
 
-/// El estado de UNA entrada visible.
+/// The state of ONE visible entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum State {
-    /// Rastreada y sin cambios.
+    /// Tracked and unchanged.
     Clean,
-    /// Rastreada y distinta de lo que dice el índice.
+    /// Tracked and different from what the index says.
     Modified,
-    /// Rastreada y ya no está en el disco.
+    /// Tracked and no longer on disk.
     Deleted,
-    /// No rastreada.
+    /// Untracked.
     Untracked,
-    /// No rastreada y tapada por un `.gitignore`.
+    /// Untracked and covered by a `.gitignore`.
     Ignored,
 }
 
-/// Con qué se pinta cada estado (`[config] glyphs`, spec 2026-09-11 V4).
+/// What each state is painted with (`[config] glyphs`, spec 2026-09-11 V4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Glyphs {
-    /// Las letras de `git status --short`: `M`, `D`, `?`, `!`.
+    /// `git status --short`'s letters: `M`, `D`, `?`, `!`.
     #[default]
     Letters,
-    /// Símbolos de una celda: `●` modificado, `✖` borrado, `+` nuevo, `·`
-    /// ignorado. Se leen de un vistazo y no se confunden con un nombre.
+    /// One-cell symbols: `●` modified, `✖` deleted, `+` new, `·` ignored.
+    /// Read at a glance and not mistaken for a name.
     Symbols,
 }
 
-/// Cómo se pinta la columna: los glifos y si los ignorados se marcan.
+/// How the column is painted: the glyphs and whether ignored files are marked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Style {
     pub glyphs: Glyphs,
-    /// `false` = un fichero ignorado se pinta como limpio. Con `.gitignore`
-    /// grandes la marca se repite en media pantalla y deja de decir nada.
+    /// `false` = an ignored file paints as clean. With large `.gitignore`
+    /// files the mark repeats across half the screen and stops saying
+    /// anything.
     pub hide_ignored: bool,
 }
 
 impl Style {
-    /// Desde los dos valores de `[config]` tal como los da el host.
+    /// From the two `[config]` values as the host gives them.
     #[must_use]
     pub fn parse(glyphs: Option<&str>, ignored: Option<&str>) -> Self {
         Self {
@@ -97,14 +98,14 @@ impl Style {
 }
 
 impl State {
-    /// La celda que ve el usuario, con las letras de siempre. `Clean` no
-    /// pinta nada: una columna llena de marcas iguales no dice nada.
+    /// The cell the user sees, with the usual letters. `Clean` paints
+    /// nothing: a column full of identical marks says nothing.
     #[must_use]
     pub fn cell(self) -> Option<String> {
         self.cell_with(Style::default())
     }
 
-    /// La celda que ve el usuario, con el estilo configurado.
+    /// The cell the user sees, with the configured style.
     #[must_use]
     pub fn cell_with(self, style: Style) -> Option<String> {
         let glyph = match (self, style.glyphs) {
@@ -122,9 +123,9 @@ impl State {
         Some(glyph.to_string())
     }
 
-    /// Cuál de dos estados manda al agregar un directorio. Lo más fuerte gana:
-    /// un directorio con algo modificado dentro está modificado, y da igual
-    /// cuántos ficheros limpios lo acompañen.
+    /// Which of two states rules when aggregating a directory. The
+    /// strongest wins: a directory with something modified inside is
+    /// modified, no matter how many clean files come with it.
     fn rank(self) -> u8 {
         match self {
             Self::Clean => 0,
@@ -144,10 +145,10 @@ impl State {
     }
 }
 
-/// El estado de cada entrada visible de un directorio.
+/// The state of every visible entry in a directory.
 ///
-/// `prefix` es el camino del directorio visible relativo a la raíz del
-/// repositorio (vacío = la raíz), y `names` son los nombres de la página.
+/// `prefix` is the visible directory's path relative to the repository's
+/// root (empty = the root), and `names` are the page's names.
 pub fn status_for(
     index: &GitIndex,
     ignores: &Ignores,
@@ -167,7 +168,7 @@ pub fn status_for(
     )
 }
 
-/// [`status_for`] con el estilo configurado (`[config] glyphs`/`ignored`).
+/// [`status_for`] with the configured style (`[config] glyphs`/`ignored`).
 pub fn status_for_with(
     index: &GitIndex,
     ignores: &Ignores,
@@ -191,18 +192,29 @@ mod style_tests {
     use super::*;
 
     #[test]
-    fn el_estilo_cambia_el_glifo_y_puede_callar_los_ignorados() {
+    fn the_style_changes_the_glyph_and_can_silence_ignored_files() {
         assert_eq!(State::Modified.cell(), Some("M".to_string()));
-        let simbolos = Style::parse(Some("symbols"), Some("true"));
-        assert_eq!(State::Modified.cell_with(simbolos), Some("●".to_string()));
-        assert_eq!(State::Deleted.cell_with(simbolos), Some("✖".to_string()));
-        assert_eq!(State::Untracked.cell_with(simbolos), Some("+".to_string()));
-        assert_eq!(State::Ignored.cell_with(simbolos), Some("·".to_string()));
-        assert_eq!(State::Clean.cell_with(simbolos), None, "limpio no pinta");
-        let sin_ignorados = Style::parse(Some("letters"), Some("false"));
-        assert_eq!(State::Ignored.cell_with(sin_ignorados), None);
-        assert_eq!(State::Untracked.cell_with(sin_ignorados), Some("?".to_string()));
-        assert_eq!(Style::parse(None, None), Style::default(), "sin config, lo de siempre");
+        let symbols = Style::parse(Some("symbols"), Some("true"));
+        assert_eq!(State::Modified.cell_with(symbols), Some("●".to_string()));
+        assert_eq!(State::Deleted.cell_with(symbols), Some("✖".to_string()));
+        assert_eq!(State::Untracked.cell_with(symbols), Some("+".to_string()));
+        assert_eq!(State::Ignored.cell_with(symbols), Some("·".to_string()));
+        assert_eq!(
+            State::Clean.cell_with(symbols),
+            None,
+            "clean paints nothing"
+        );
+        let without_ignored = Style::parse(Some("letters"), Some("false"));
+        assert_eq!(State::Ignored.cell_with(without_ignored), None);
+        assert_eq!(
+            State::Untracked.cell_with(without_ignored),
+            Some("?".to_string())
+        );
+        assert_eq!(
+            Style::parse(None, None),
+            Style::default(),
+            "no config, the usual"
+        );
     }
 }
 
@@ -216,7 +228,7 @@ fn join(prefix: &[u8], name: &[u8]) -> Vec<u8> {
     out
 }
 
-/// El estado de UNA ruta relativa a la raíz del repositorio.
+/// The state of ONE path relative to the repository's root.
 fn state_of(
     index: &GitIndex,
     ignores: &Ignores,
@@ -233,26 +245,26 @@ fn state_of(
     }
     let is_dir = meta.is_some_and(|m| m.is_dir);
     if is_dir {
-        // Un directorio agrega lo más fuerte que haya debajo. El índice está
-        // ORDENADO, así que las entradas rastreadas bajo el prefijo son un
-        // tramo contiguo y no hay que recorrerlo entero.
+        // A directory aggregates the strongest state underneath. The index
+        // is SORTED, so the tracked entries under the prefix are a
+        // contiguous span and there is no need to walk it whole.
         let mut dir_prefix = rel.to_vec();
         dir_prefix.push(b'/');
-        let mut peor = State::Clean;
-        let mut rastreado = false;
+        let mut worst = State::Clean;
+        let mut tracked = false;
         for entry in index.under_prefix(&dir_prefix) {
-            rastreado = true;
-            let hijo = match loc.stat(&entry.path) {
+            tracked = true;
+            let child = match loc.stat(&entry.path) {
                 Ok(meta) => compare(entry, &meta, loc, &entry.path, index_mtime_sec),
                 Err(_) => State::Deleted,
             };
-            peor = peor.strongest(hijo);
-            if peor == State::Modified {
-                break; // ya no hay nada más fuerte que encontrar
+            worst = worst.strongest(child);
+            if worst == State::Modified {
+                break; // nothing stronger left to find
             }
         }
-        if rastreado {
-            return peor;
+        if tracked {
+            return worst;
         }
     }
     if ignores.is_ignored(rel, is_dir) {
@@ -262,8 +274,8 @@ fn state_of(
     }
 }
 
-/// Compara una entrada del índice con el `stat` de ahora, y solo si eso no
-/// decide, lee el fichero.
+/// Compares an index entry with the current `stat`, and only reads the file
+/// if that does not decide it.
 fn compare(
     entry: &crate::index::IndexEntry,
     meta: &Meta,
@@ -271,49 +283,50 @@ fn compare(
     rel: &[u8],
     index_mtime_sec: i64,
 ) -> State {
-    // Un SUBMÓDULO no es un fichero (#225). Su entrada del índice es un
-    // «gitlink» —modo `0o160000`— cuya ruta es el directorio, así que la
-    // búsqueda exacta la encuentra y la comparación de abajo veía un
-    // directorio donde el índice decía fichero: daba `D`, o sea por borrado un
-    // submódulo perfectamente sano.
+    // A SUBMODULE is not a file (#225). Its index entry is a "gitlink" —mode
+    // `0o160000`— whose path is the directory, so the exact lookup finds it
+    // and the comparison below used to see a directory where the index said
+    // file: it gave `D`, i.e. reporting a perfectly healthy submodule as
+    // deleted.
     //
-    // Lo que se contesta es NADA, y es deliberado: saber si tiene cambios
-    // exige abrir el repositorio de dentro —otro `.git`, otro índice, otro
-    // árbol de objetos—, que es la misma frontera que deja fuera el estado
-    // «staged». Callar es honesto; poner una marca sería afirmar algo que no
-    // se ha mirado.
+    // What is answered is NOTHING, and it is deliberate: knowing whether it
+    // has changes requires opening the repository inside it —another
+    // `.git`, another index, another object tree—, which is the same
+    // boundary that leaves out the "staged" state. Staying silent is
+    // honest; putting a mark would be asserting something that has not been
+    // looked at.
     if entry.mode & 0o170_000 == 0o160_000 {
         return State::Clean;
     }
     if meta.is_dir {
-        // Era un fichero rastreado y ahora hay un directorio: para git eso es
-        // el fichero borrado.
+        // It was a tracked file and now there is a directory: for git that
+        // is the file deleted.
         return State::Deleted;
     }
     if u64::from(entry.size) != meta.size {
         return State::Modified;
     }
-    let mtime_igual =
+    let mtime_equal =
         i64::from(entry.mtime_sec) == meta.mtime_sec && entry.mtime_nsec == meta.mtime_nsec;
-    if !mtime_igual {
-        // Mismo tamaño, otro mtime: puede ser un `touch` sin cambios, así que
-        // decide el contenido y no la marca de tiempo.
+    if !mtime_equal {
+        // Same size, different mtime: it could be a `touch` with no
+        // changes, so the content decides, not the timestamp.
         return by_content(entry, loc, rel);
     }
-    // El `stat` casa. Aun así puede mentir: si la entrada se guardó en el
-    // MISMO segundo en que se escribió el índice —el caso «racy git»—, un
-    // cambio posterior dentro de ese segundo es indistinguible. git resuelve
-    // esto exactamente así, comparando contra el mtime del PROPIO índice, y
-    // por eso `read` existe en la interfaz.
+    // The `stat` matches. It can still lie: if the entry was saved in the
+    // SAME second the index was written —the "racy git" case—, a later
+    // change within that second is indistinguishable. git resolves this
+    // exactly this way, comparing against the index's OWN mtime, and that
+    // is why `read` exists in the interface.
     if i64::from(entry.mtime_sec) >= index_mtime_sec {
         return by_content(entry, loc, rel);
     }
     State::Clean
 }
 
-/// El desempate por contenido: el id de objeto que git le daría al fichero.
-/// Si no se puede leer —presupuesto agotado, permisos— la respuesta es limpio,
-/// nunca una marca inventada.
+/// The content tiebreaker: the object id git would give the file. If it
+/// cannot be read —budget exhausted, permissions— the answer is clean,
+/// never a made-up mark.
 fn by_content(entry: &crate::index::IndexEntry, loc: &dyn Location, rel: &[u8]) -> State {
     let Ok(bytes) = loc.read(rel) else {
         return State::Clean;
@@ -322,8 +335,8 @@ fn by_content(entry: &crate::index::IndexEntry, loc: &dyn Location, rel: &[u8]) 
         return State::Modified;
     }
     if entry.oid == [0u8; 20] {
-        // El índice no trajo id (una forja de test): con el tamaño igual, no
-        // hay nada más que comparar.
+        // The index carried no id (a test forge): with the size equal,
+        // there is nothing else to compare.
         return State::Clean;
     }
     if crate::sha1::blob_oid(&bytes) == entry.oid {
@@ -339,8 +352,8 @@ mod tests {
     use alloc::collections::BTreeMap;
     use core::cell::RefCell;
 
-    /// Una ubicación de mentira que CUENTA las lecturas: el test de que el
-    /// `stat` basta es un test sobre cuántas veces se abrió un fichero.
+    /// A fake location that COUNTS reads: the test that `stat` is enough is
+    /// a test about how many times a file was opened.
     #[derive(Default)]
     struct FakeLocation {
         files: BTreeMap<Vec<u8>, (Vec<u8>, Meta)>,
@@ -380,21 +393,21 @@ mod tests {
             self.files
                 .get(rel)
                 .map(|(c, _)| c.clone())
-                .ok_or_else(|| "no existe".to_string())
+                .ok_or_else(|| "does not exist".to_string())
         }
 
         fn stat(&self, rel: &[u8]) -> Result<Meta, String> {
             self.files
                 .get(rel)
                 .map(|(_, m)| *m)
-                .ok_or_else(|| "no existe".to_string())
+                .ok_or_else(|| "does not exist".to_string())
         }
     }
 
-    /// El índice se escribió DESPUÉS que las entradas: nada es racy.
-    const INDICE_NUEVO: i64 = 100;
-    /// El índice se escribió a la vez que la entrada: el caso racy.
-    const INDICE_VIEJO: i64 = 0;
+    /// The index was written AFTER the entries: nothing is racy.
+    const NEW_INDEX: i64 = 100;
+    /// The index was written at the same time as the entry: the racy case.
+    const OLD_INDEX: i64 = 0;
 
     fn meta(size: u64, mtime_sec: i64, mtime_nsec: u32) -> Meta {
         Meta {
@@ -405,81 +418,82 @@ mod tests {
         }
     }
 
-    /// Un índice con las entradas dadas: `(ruta, tamaño, mtime, oid)`.
-    fn index_con(entradas: &[(&[u8], u32, u32, [u8; 20])]) -> GitIndex {
-        GitIndex::parse(&crate::index::tests_support::forja(entradas)).expect("índice forjado")
+    /// An index with the given entries: `(path, size, mtime, oid)`.
+    fn index_with(entries: &[(&[u8], u32, u32, [u8; 20])]) -> GitIndex {
+        GitIndex::parse(&crate::index::tests_support::forja(entries)).expect("forged index")
     }
 
     #[test]
-    fn stat_igual_al_indice_es_limpio_y_no_lee_el_fichero() {
-        let idx = index_con(&[(b"a.txt", 4, 11, [0u8; 20])]);
-        let fs = FakeLocation::default().with(b"a.txt", b"hola", meta(4, 11, 0));
+    fn stat_equal_to_the_index_is_clean_and_does_not_read_the_file() {
+        let idx = index_with(&[(b"a.txt", 4, 11, [0u8; 20])]);
+        let fs = FakeLocation::default().with(b"a.txt", b"text", meta(4, 11, 0));
         let cells = status_for(
             &idx,
             &Ignores::default(),
             &fs,
             b"",
             &[b"a.txt".to_vec()],
-            INDICE_NUEVO,
+            NEW_INDEX,
         );
-        assert_eq!(cells, vec![None], "celda vacía = limpio");
-        assert_eq!(fs.reads(), 0, "el stat basta: no se lee el contenido");
+        assert_eq!(cells, vec![None], "empty cell = clean");
+        assert_eq!(fs.reads(), 0, "stat is enough: content is not read");
     }
 
     #[test]
-    fn mtime_igual_pero_tamano_distinto_es_modificado() {
-        let idx = index_con(&[(b"a.txt", 4, 11, [0u8; 20])]);
-        let fs = FakeLocation::default().with(b"a.txt", b"holaaa", meta(6, 11, 0));
+    fn same_mtime_but_different_size_is_modified() {
+        let idx = index_with(&[(b"a.txt", 4, 11, [0u8; 20])]);
+        let fs = FakeLocation::default().with(b"a.txt", b"growth", meta(6, 11, 0));
         let cells = status_for(
             &idx,
             &Ignores::default(),
             &fs,
             b"",
             &[b"a.txt".to_vec()],
-            INDICE_NUEVO,
+            NEW_INDEX,
         );
         assert_eq!(cells, vec![Some("M".to_string())]);
-        assert_eq!(fs.reads(), 0, "el tamaño ya lo decidió");
+        assert_eq!(fs.reads(), 0, "the size already decided it");
     }
 
-    /// El caso racy: mismo mtime, mismo tamaño y el índice sin nanosegundos.
-    /// El `stat` NO decide, así que se lee y se compara el id de objeto —
-    /// exactamente lo que hace git, y por eso `read` existe en la interfaz.
+    /// The racy case: same mtime, same size and the index with no
+    /// nanoseconds. The `stat` does NOT decide, so the object id is read
+    /// and compared — exactly what git does, and that is why `read` exists
+    /// in the interface.
     #[test]
-    fn el_caso_racy_lee_y_compara_el_oid() {
-        let oid = crate::sha1::blob_oid(b"hola");
-        let idx = index_con(&[(b"a.txt", 4, 11, oid)]);
-        let fs = FakeLocation::default().with(b"a.txt", b"otro", meta(4, 11, 0));
-        // El índice se escribió en el mismo segundo: el stat casa y aun así
-        // no decide nada.
+    fn the_racy_case_reads_and_compares_the_oid() {
+        let oid = crate::sha1::blob_oid(b"read");
+        let idx = index_with(&[(b"a.txt", 4, 11, oid)]);
+        let fs = FakeLocation::default().with(b"a.txt", b"seen", meta(4, 11, 0));
+        // The index was written in the same second: the stat matches and
+        // still decides nothing.
         let cells = status_for(
             &idx,
             &Ignores::default(),
             &fs,
             b"",
             &[b"a.txt".to_vec()],
-            INDICE_VIEJO,
+            OLD_INDEX,
         );
         assert_eq!(cells, vec![Some("M".to_string())]);
         assert_eq!(fs.reads(), 1);
 
-        let limpio = FakeLocation::default().with(b"a.txt", b"hola", meta(4, 11, 0));
+        let clean = FakeLocation::default().with(b"a.txt", b"read", meta(4, 11, 0));
         assert_eq!(
             status_for(
                 &idx,
                 &Ignores::default(),
-                &limpio,
+                &clean,
                 b"",
                 &[b"a.txt".to_vec()],
-                INDICE_VIEJO
+                OLD_INDEX
             ),
             vec![None]
         );
     }
 
     #[test]
-    fn una_entrada_rastreada_que_ya_no_esta_es_borrada() {
-        let idx = index_con(&[(b"a.txt", 4, 11, [0u8; 20])]);
+    fn a_tracked_entry_that_is_no_longer_there_is_deleted() {
+        let idx = index_with(&[(b"a.txt", 4, 11, [0u8; 20])]);
         let fs = FakeLocation::default();
         assert_eq!(
             status_for(
@@ -488,32 +502,28 @@ mod tests {
                 &fs,
                 b"",
                 &[b"a.txt".to_vec()],
-                INDICE_NUEVO
+                NEW_INDEX
             ),
             vec![Some("D".to_string())]
         );
     }
 
     #[test]
-    fn lo_no_rastreado_es_interrogante_y_lo_ignorado_es_cierre_de_admiracion() {
-        let idx = index_con(&[(b"seguido.txt", 1, 11, [0u8; 20])]);
+    fn the_untracked_is_a_question_mark_and_the_ignored_is_an_exclamation_mark() {
+        let idx = index_with(&[(b"tracked.txt", 1, 11, [0u8; 20])]);
         let mut ign = Ignores::default();
         ign.add_file(b"", b"target/\n*.tmp\n");
         let fs = FakeLocation::default()
             .with_dir(b"target")
-            .with(b"nuevo.rs", b"", meta(0, 1, 1))
-            .with(b"basura.tmp", b"", meta(0, 1, 1));
+            .with(b"new.rs", b"", meta(0, 1, 1))
+            .with(b"junk.tmp", b"", meta(0, 1, 1));
         let cells = status_for(
             &idx,
             &ign,
             &fs,
             b"",
-            &[
-                b"target".to_vec(),
-                b"nuevo.rs".to_vec(),
-                b"basura.tmp".to_vec(),
-            ],
-            INDICE_NUEVO,
+            &[b"target".to_vec(), b"new.rs".to_vec(), b"junk.tmp".to_vec()],
+            NEW_INDEX,
         );
         assert_eq!(
             cells,
@@ -525,19 +535,20 @@ mod tests {
         );
     }
 
-    /// **Un submódulo no está borrado** (#225).
+    /// **A submodule is not deleted** (#225).
     ///
-    /// Su entrada del índice es un «gitlink» (modo `0o160000`) cuya ruta es el
-    /// DIRECTORIO, así que `index.get` la encuentra y `compare` veía un
-    /// directorio donde el índice decía fichero: `D`. O sea, la columna daba
-    /// por borrado un submódulo perfectamente sano, que es una falsa alarma
-    /// sobre lo que más asusta.
+    /// Its index entry is a "gitlink" (mode `0o160000`) whose path is the
+    /// DIRECTORY, so `index.get` finds it and `compare` used to see a
+    /// directory where the index said file: `D`. I.e., the column reported
+    /// a perfectly healthy submodule as deleted, which is a false alarm
+    /// about the thing that scares people most.
     ///
-    /// Lo que dice ahora es NADA: sin abrir el repositorio de dentro no se
-    /// puede saber si tiene cambios, y callar es lo honesto. Decir «limpio»
-    /// con una marca sería afirmarlo.
+    /// What it says now is NOTHING: without opening the repository inside
+    /// it, there is no way to know whether it has changes, and staying
+    /// silent is the honest thing. Saying "clean" with a mark would be
+    /// asserting it.
     #[test]
-    fn un_submodulo_no_sale_como_borrado() {
+    fn a_submodule_does_not_come_out_as_deleted() {
         let idx = GitIndex::parse(&crate::index::tests_support::forja_con_modo(&[(
             b"vendor/lib",
             0,
@@ -545,7 +556,7 @@ mod tests {
             [0u8; 20],
             0o160_000,
         )]))
-        .expect("índice forjado");
+        .expect("forged index");
         let fs = FakeLocation::default().with_dir(b"vendor/lib");
         assert_eq!(
             status_for(
@@ -554,23 +565,23 @@ mod tests {
                 &fs,
                 b"vendor",
                 &[b"lib".to_vec()],
-                INDICE_NUEVO
+                NEW_INDEX
             ),
             vec![None],
-            "un submódulo sano no es ni «borrado» ni «sin rastrear»"
+            "a healthy submodule is neither \"deleted\" nor \"untracked\""
         );
     }
 
     #[test]
-    fn un_directorio_agrega_lo_mas_fuerte_que_hay_debajo() {
-        let idx = index_con(&[
+    fn a_directory_aggregates_the_strongest_state_underneath() {
+        let idx = index_with(&[
             (b"src/deep/x.rs", 4, 11, [0u8; 20]),
-            (b"src/limpio.rs", 4, 11, [0u8; 20]),
+            (b"src/clean.rs", 4, 11, [0u8; 20]),
         ]);
         let fs = FakeLocation::default()
             .with_dir(b"src")
-            .with(b"src/deep/x.rs", b"otro", meta(9, 11, 0))
-            .with(b"src/limpio.rs", b"hola", meta(4, 11, 0));
+            .with(b"src/deep/x.rs", b"other", meta(9, 11, 0))
+            .with(b"src/clean.rs", b"text", meta(4, 11, 0));
         assert_eq!(
             status_for(
                 &idx,
@@ -578,19 +589,19 @@ mod tests {
                 &fs,
                 b"",
                 &[b"src".to_vec()],
-                INDICE_NUEVO
+                NEW_INDEX
             ),
             vec![Some("M".to_string())]
         );
     }
 
     #[test]
-    fn un_directorio_con_todo_limpio_no_pinta_nada() {
-        let idx = index_con(&[(b"src/a.rs", 4, 11, [0u8; 20])]);
+    fn a_directory_with_everything_clean_paints_nothing() {
+        let idx = index_with(&[(b"src/a.rs", 4, 11, [0u8; 20])]);
         let fs =
             FakeLocation::default()
                 .with_dir(b"src")
-                .with(b"src/a.rs", b"hola", meta(4, 11, 0));
+                .with(b"src/a.rs", b"text", meta(4, 11, 0));
         assert_eq!(
             status_for(
                 &idx,
@@ -598,18 +609,18 @@ mod tests {
                 &fs,
                 b"",
                 &[b"src".to_vec()],
-                INDICE_NUEVO
+                NEW_INDEX
             ),
             vec![None]
         );
     }
 
-    /// El prefijo es lo que hace que esto funcione fuera de la raíz: la raíz
-    /// abierta es el repositorio, y el panel puede estar tres niveles dentro.
+    /// The prefix is what makes this work outside the root: the opened root
+    /// is the repository, and the panel can be three levels in.
     #[test]
-    fn el_prefijo_situa_la_pagina_dentro_del_repositorio() {
-        let idx = index_con(&[(b"src/deep/x.rs", 4, 11, [0u8; 20])]);
-        let fs = FakeLocation::default().with(b"src/deep/x.rs", b"OTRO", meta(9, 11, 0));
+    fn the_prefix_places_the_page_inside_the_repository() {
+        let idx = index_with(&[(b"src/deep/x.rs", 4, 11, [0u8; 20])]);
+        let fs = FakeLocation::default().with(b"src/deep/x.rs", b"OTHER", meta(9, 11, 0));
         assert_eq!(
             status_for(
                 &idx,
@@ -617,14 +628,14 @@ mod tests {
                 &fs,
                 b"src/deep",
                 &[b"x.rs".to_vec()],
-                INDICE_NUEVO
+                NEW_INDEX
             ),
             vec![Some("M".to_string())]
         );
     }
 
     #[test]
-    fn sin_indice_todas_las_celdas_son_no_rastreadas() {
+    fn without_an_index_every_cell_is_untracked() {
         let idx = GitIndex::default();
         let fs = FakeLocation::default().with(b"a", b"", meta(0, 1, 1));
         assert_eq!(
@@ -634,7 +645,7 @@ mod tests {
                 &fs,
                 b"",
                 &[b"a".to_vec()],
-                INDICE_NUEVO
+                NEW_INDEX
             ),
             vec![Some("?".to_string())]
         );

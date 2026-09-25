@@ -1,8 +1,8 @@
-//! Resolución de secretos (ADR 0015 C): `NORTE_SECRET_<CONN>` (env) → keyring
-//! del OS → fichero `secrets.age` cifrado. El secreto se envuelve en
-//! [`Secret`] (se borra de memoria al soltarse, spec §265) y JAMÁS se loguea
-//! ni se imprime (regla 10). Los intermedios en claro (mapa descifrado,
-//! passphrase) se mantienen zeroizados de punta a punta.
+//! Secret resolution (ADR 0015 C): `NORTE_SECRET_<CONN>` (env) → OS keyring →
+//! encrypted `secrets.age` file. The secret is wrapped in [`Secret`] (wiped
+//! from memory when dropped, spec §265) and is NEVER logged or printed
+//! (rule 10). The plaintext intermediates (decrypted map, passphrase) are
+//! kept zeroized end to end.
 
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
@@ -13,27 +13,27 @@ use zeroize::{Zeroize, Zeroizing};
 
 use crate::error::{ConnectError, SecretOrigin};
 
-/// Servicio bajo el que se guardan los secretos en el keyring del OS.
+/// Service under which secrets are stored in the OS keyring.
 const KEYRING_SERVICE: &str = "norte";
-/// Fichero de secretos cifrados dentro del dir de config.
+/// Encrypted secrets file inside the config dir.
 const SECRETS_FILE: &str = "secrets.age";
-/// Fichero opcional con la passphrase del `secrets.age` (debe ser 0600).
+/// Optional file with the `secrets.age` passphrase (must be 0600).
 const SECRETS_KEY_FILE: &str = "secrets.key";
 
-/// Un secreto (contraseña/passphrase) que se borra de memoria al soltarse y
-/// NUNCA se imprime. Su contenido solo sale por [`Secret::expose`].
+/// A secret (password/passphrase) that is wiped from memory when dropped and
+/// NEVER printed. Its content only comes out through [`Secret::expose`].
 #[derive(Clone)]
 pub struct Secret(Zeroizing<String>);
 
 impl Secret {
-    /// Envuelve un secreto.
+    /// Wraps a secret.
     #[must_use]
     pub fn new(value: String) -> Self {
         Self(Zeroizing::new(value))
     }
 
-    /// El contenido en claro. Úsalo lo más tarde y brevemente posible; jamás
-    /// lo loguees (regla 10).
+    /// The plaintext content. Use it as late and as briefly as possible;
+    /// never log it (rule 10).
     #[must_use]
     pub fn expose(&self) -> &str {
         &self.0
@@ -42,13 +42,13 @@ impl Secret {
 
 impl std::fmt::Debug for Secret {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Nunca el contenido (regla 10).
+        // Never the content (rule 10).
         f.write_str("Secret(***)")
     }
 }
 
-/// Mapa conn→secreto descifrado del `secrets.age`. Zeroiza TODOS sus valores
-/// al soltarse (spec §265): el plaintext no queda residual en el heap.
+/// conn→decrypted-secret map from `secrets.age`. Zeroizes ALL its values when
+/// dropped (spec §265): the plaintext leaves no residue on the heap.
 #[derive(Default)]
 struct SecretMap(BTreeMap<String, String>);
 
@@ -60,26 +60,26 @@ impl Drop for SecretMap {
     }
 }
 
-/// Resuelve el secreto de una conexión por el orden env → keyring → `age` →
-/// lo que el humano tecleó en ESTA sesión.
+/// Resolves a connection's secret in the order env → keyring → `age` → what
+/// the human typed in THIS session.
 #[derive(Debug, Clone)]
 pub struct SecretResolver {
     config_dir: PathBuf,
-    /// Lo que un humano contestó, por conexión, para esta sesión (#325).
+    /// What a human answered, per connection, for this session (#325).
     ///
-    /// En memoria y JAMÁS en disco: muere con el proceso. Va delante de los
-    /// tres escalones de fichero porque si ya se preguntó una vez, volver a
-    /// preguntar en cada navegación sería inaceptable — y detrás de nada,
-    /// porque lo que el humano acaba de teclear es más reciente que cualquier
-    /// cosa que hubiera guardada.
+    /// In memory and NEVER on disk: it dies with the process. It goes ahead
+    /// of the three file-based rungs because if it was already asked once,
+    /// asking again on every navigation would be unacceptable — and behind
+    /// nothing, because what the human just typed is more recent than
+    /// anything already stored.
     ///
-    /// `Mutex` y no `RwLock`: se toca una vez por conexión, no está en ningún
-    /// camino caliente.
+    /// `Mutex` and not `RwLock`: touched once per connection, not on any hot
+    /// path.
     session: Arc<Mutex<BTreeMap<String, Secret>>>,
 }
 
 impl SecretResolver {
-    /// Resolver anclado en el dir de config (donde vive `secrets.age`).
+    /// Resolver anchored at the config dir (where `secrets.age` lives).
     #[must_use]
     pub fn new(config_dir: impl Into<PathBuf>) -> Self {
         Self {
@@ -88,59 +88,62 @@ impl SecretResolver {
         }
     }
 
-    /// Guarda para ESTA sesión lo que un humano acaba de teclear (#325).
+    /// Stores for THIS session what a human just typed (#325).
     ///
-    /// En memoria y nada más: no hay camino de escritura a disco desde aquí, a
-    /// propósito. Guardar un secreto de verdad es una decisión aparte —y hoy,
-    /// en Linux, ni siquiera hay dónde: el keyring es una feature opt-in que
-    /// nadie enciende y `secrets.age` no tiene camino de escritura desde la
-    /// interfaz.
+    /// In memory and nothing more: there is no write-to-disk path from here,
+    /// on purpose. Saving a secret for real is a separate decision —and
+    /// today, on Linux, there is not even anywhere to do it: the keyring is
+    /// an opt-in feature nobody turns on and `secrets.age` has no write path
+    /// from the interface.
     pub fn remember_for_session(&self, conn: &str, secret: Secret) {
         let mut s = self.session.lock().unwrap_or_else(PoisonError::into_inner);
         s.insert(conn.to_string(), secret);
     }
 
-    /// Olvida lo recordado para `conn`, si había algo. Devuelve si lo había.
+    /// Forgets what was remembered for `conn`, if there was anything. Returns
+    /// whether there was.
     ///
-    /// **Sin esto, una contraseña mal tecleada es permanente.** El escalón de
-    /// sesión va DELANTE de los otros tres, así que un valor equivocado no solo
-    /// falla: tapa la variable de entorno con la que el usuario intentaría
-    /// arreglarlo, e impide que vuelva a salir el diálogo (el core solo
-    /// pregunta cuando no encuentra NADA). Y como el resolutor vive en el
-    /// daemon, ni cerrar la interfaz lo limpia. Quien vea al servidor rechazar
-    /// una credencial de sesión tiene que llamar aquí.
+    /// **Without this, a mistyped password is permanent.** The session rung
+    /// goes AHEAD of the other three, so a wrong value not only fails: it
+    /// covers up the environment variable the user would try to fix it with,
+    /// and it stops the dialog from ever coming back (the core only asks
+    /// when it finds NOTHING). And since the resolver lives in the daemon,
+    /// not even closing the interface clears it. Whoever sees the server
+    /// reject a session credential has to call this.
     pub fn forget_session(&self, conn: &str) -> bool {
         let mut s = self.session.lock().unwrap_or_else(PoisonError::into_inner);
         s.remove(conn).is_some()
     }
 
-    /// Lo que se recordó en esta sesión para `conn`, si algo.
+    /// What was remembered in this session for `conn`, if anything.
     fn remembered_this_session(&self, conn: &str) -> Option<Secret> {
         let s = self.session.lock().unwrap_or_else(PoisonError::into_inner);
         s.get(conn).cloned()
     }
 
-    /// Resuelve el secreto de la conexión `conn` (con `keyring_account`
-    /// típicamente la URL). `None` = no hay secreto (p. ej. auth por agente).
+    /// Resolves connection `conn`'s secret (with `keyring_account` typically
+    /// the URL). `None` = there is no secret (e.g. agent auth).
     ///
-    /// Orden (ADR 0015 C): `NORTE_SECRET_<CONN>` → keyring del OS →
-    /// `secrets.age`. El primero que acierte gana.
+    /// Order (ADR 0015 C): `NORTE_SECRET_<CONN>` → OS keyring →
+    /// `secrets.age`. The first one that hits wins.
     ///
-    /// Un escalón que acierta con la cadena VACÍA no se pasa como secreto y
-    /// TAMPOCO se cae al siguiente (#320): es un fallo de configuración
-    /// (`NORTE_SECRET_X=""`), y buscar en el siguiente escalón lo taparía igual
-    /// que lo tapaba pasarlo — que es lo que se hacía antes de #320.
+    /// A rung that hits the EMPTY string is not passed along as a secret and
+    /// does NOT fall through to the next one either (#320): it is a
+    /// configuration failure (`NORTE_SECRET_X=""`), and looking in the next
+    /// rung would cover it up the same way passing it along used to — which
+    /// is what happened before #320.
     ///
-    /// El vacío que llega aquí desde `auth = "key"` NO es un fallo (ahí el
-    /// secreto es la passphrase de una clave que puede no estar cifrada); lo
-    /// filtra `establish` en el core, que es quien sabe el método de auth.
+    /// The empty value that arrives here from `auth = "key"` is NOT a
+    /// failure (there the secret is the passphrase of a key that may not be
+    /// encrypted); `establish` filters that out in the core, which is the
+    /// one that knows the auth method.
     ///
     /// # Errors
-    /// [`ConnectError::SecretEmpty`] si el secreto resuelto es la cadena
-    /// vacía; [`ConnectError::SecretNotUtf8`] si la env var existe con bytes
-    /// que no decodifican; o si el `secrets.age` existe pero no se puede
-    /// descifrar/parsear. El keyring no disponible (headless) NO es error (se
-    /// cae al siguiente).
+    /// [`ConnectError::SecretEmpty`] if the resolved secret is the empty
+    /// string; [`ConnectError::SecretNotUtf8`] if the env var exists with
+    /// bytes that do not decode; or if `secrets.age` exists but cannot be
+    /// decrypted/parsed. The keyring being unavailable (headless) is NOT an
+    /// error (it falls through to the next one).
     pub async fn resolve(
         &self,
         conn: &str,
@@ -152,49 +155,51 @@ impl SecretResolver {
             .map(|(s, _)| s))
     }
 
-    /// Como [`Self::resolve`], pero dice de QUÉ escalón salió el secreto.
+    /// Like [`Self::resolve`], but also says WHICH rung the secret came
+    /// from.
     ///
-    /// El origen no es diagnóstico: es lo que permite DESHACER una respuesta
-    /// equivocada (#325). Un secreto de [`SecretOrigin::Session`] lo tecleó un
-    /// humano hace un momento y puede estar mal; los otros tres los puso
-    /// alguien deliberadamente en un sitio que se puede editar. Solo el
-    /// primero se olvida solo cuando el servidor lo rechaza — ver
-    /// [`Self::forget_session`].
+    /// The origin is not diagnostic: it is what allows UNDOING a wrong
+    /// answer (#325). A secret from [`SecretOrigin::Session`] was typed by a
+    /// human a moment ago and could be wrong; the other three were
+    /// deliberately put by someone in a place that can be edited. Only the
+    /// first one gets forgotten automatically when the server rejects it —
+    /// see [`Self::forget_session`].
     ///
     /// # Errors
-    /// Las mismas que [`Self::resolve`].
+    /// Same as [`Self::resolve`].
     #[tracing::instrument(level = "debug", skip_all, fields(conn = %conn))]
     pub async fn resolve_with_origin(
         &self,
         conn: &str,
         keyring_account: &str,
     ) -> Result<Option<(Secret, SecretOrigin)>, ConnectError> {
-        // 0. Lo que el humano tecleó en esta sesión (#325). Delante de todo:
-        //    si ya contestó una vez, no se le vuelve a preguntar por navegar.
+        // 0. What the human typed in this session (#325). Ahead of
+        //    everything: if they already answered once, they are not asked
+        //    again just from navigating.
         if let Some(s) = self.remembered_this_session(conn) {
             return non_empty(s, conn, SecretOrigin::Session)
                 .map(|s| Some((s, SecretOrigin::Session)));
         }
-        // 1. Env var (override explícito para CI/corporativo).
+        // 1. Env var (explicit override for CI/corporate).
         if let Some(s) = env_secret(conn)? {
             return non_empty(s, conn, SecretOrigin::Env).map(|s| Some((s, SecretOrigin::Env)));
         }
-        // 2. Keyring del OS (bloqueante → spawn_blocking). No disponible
-        //    (headless) = se cae al fichero, no es error.
+        // 2. OS keyring (blocking → spawn_blocking). Unavailable (headless) =
+        //    falls through to the file, not an error.
         let account = keyring_account.to_string();
         let from_keyring = tokio::task::spawn_blocking(move || keyring_lookup(&account))
             .await
-            .map_err(|_| ConnectError::SecretStore("error interno del resolver"))?;
+            .map_err(|_| ConnectError::SecretStore("internal resolver error"))?;
         if let Some(s) = from_keyring {
             return non_empty(s, conn, SecretOrigin::Keyring)
                 .map(|s| Some((s, SecretOrigin::Keyring)));
         }
-        // 3. Fichero `secrets.age` cifrado (headless persistente).
+        // 3. Encrypted `secrets.age` file (persistent headless).
         let dir = self.config_dir.clone();
         let conn_owned = conn.to_string();
         let from_age = tokio::task::spawn_blocking(move || age_lookup(&dir, &conn_owned))
             .await
-            .map_err(|_| ConnectError::SecretStore("error interno del resolver"))??;
+            .map_err(|_| ConnectError::SecretStore("internal resolver error"))??;
         if let Some(s) = from_age {
             return non_empty(s, conn, SecretOrigin::AgeFile)
                 .map(|s| Some((s, SecretOrigin::AgeFile)));
@@ -202,18 +207,19 @@ impl SecretResolver {
         Ok(None)
     }
 
-    /// Guarda `secret` para `conn` en el `secrets.age` (read-modify-write
-    /// cifrado). Para la UX de fase 6 (`norte connect --save`).
+    /// Saves `secret` for `conn` in `secrets.age` (encrypted
+    /// read-modify-write). For the phase-6 UX (`norte connect --save`).
     ///
-    /// Un secreto vacío se rechaza AQUÍ además de en [`Self::resolve`]: sin
-    /// esta guarda, un prompt contestado en blanco escribiría una entrada que
-    /// envenena la conexión para siempre —el fichero está cifrado y no se edita
-    /// a mano— y el fallo aparecería en cada conexión posterior, lejos del
-    /// error. El sitio donde se comete la equivocación es el que debe pararla.
+    /// An empty secret is rejected HERE in addition to in [`Self::resolve`]:
+    /// without this guard, a prompt answered blank would write an entry that
+    /// poisons the connection forever —the file is encrypted and is not
+    /// edited by hand— and the failure would show up on every later
+    /// connection, far from the mistake. The place where the mistake is made
+    /// is the one that must stop it.
     ///
     /// # Errors
-    /// [`ConnectError::SecretEmpty`] si `secret` es la cadena vacía; si no hay
-    /// passphrase del store; o si falla el cifrado/escritura.
+    /// [`ConnectError::SecretEmpty`] if `secret` is the empty string; if
+    /// there is no store passphrase; or if encryption/writing fails.
     #[tracing::instrument(level = "debug", skip_all, fields(conn = %conn))]
     pub async fn store_in_age(&self, conn: &str, secret: &Secret) -> Result<(), ConnectError> {
         if secret.expose().is_empty() {
@@ -224,22 +230,22 @@ impl SecretResolver {
         }
         let dir = self.config_dir.clone();
         let conn = conn.to_string();
-        // El valor se mantiene zeroizado también en el camino de escritura.
+        // The value stays zeroized on the write path too.
         let value = Zeroizing::new(secret.expose().to_string());
         tokio::task::spawn_blocking(move || age_store(&dir, &conn, value.as_str()))
             .await
-            .map_err(|_| ConnectError::SecretStore("error interno del resolver"))?
+            .map_err(|_| ConnectError::SecretStore("internal resolver error"))?
     }
 }
 
-/// El nombre de la env var que resuelve el secreto de la conexión `conn`.
+/// The name of the env var that resolves connection `conn`'s secret.
 ///
-/// Convención: `NORTE_SECRET_<CONN>`, con `<CONN>` = `conn` en MAYÚSCULAS y
-/// cada byte no-alfanumérico sustituido por `_` (así un nombre de conexión
-/// con `-`/`.`/espacios sigue siendo una env var válida en cualquier shell
-/// POSIX). Pública para que `norte doctor` (H2) pueda nombrar la variable que
-/// falta sin duplicar la regla — el propio [`SecretResolver::resolve`] la usa
-/// como primer escalón de resolución (`env_secret`).
+/// Convention: `NORTE_SECRET_<CONN>`, with `<CONN>` = `conn` in UPPERCASE and
+/// every non-alphanumeric byte replaced by `_` (so a connection name with
+/// `-`/`.`/spaces is still a valid env var in any POSIX shell). Public so
+/// `norte doctor` (H2) can name the missing variable without duplicating the
+/// rule — [`SecretResolver::resolve`] itself uses it as the first resolution
+/// rung (`env_secret`).
 ///
 /// ```
 /// assert_eq!(norte_connect::env_key("mi-server.1"), "NORTE_SECRET_MI_SERVER_1");
@@ -259,14 +265,15 @@ pub fn env_key(conn: &str) -> String {
     format!("NORTE_SECRET_{tail}")
 }
 
-/// El secreto de la env var, si existe.
+/// The env var's secret, if it exists.
 ///
-/// `var_os` y no `var`: con `var(..).ok()` unos bytes que no decodifican eran
-/// indistinguibles de «la variable no está», la resolución seguía al keyring y
-/// `norte doctor` —que lee con `var_os`— la daba por presente. Dos lectores con
-/// políticas distintas sobre los mismos bytes es la mentira de #320 otra vez
-/// (revisión rust MAJOR-4). Un secreto viaja como `String`, así que no hay nada
-/// que preservar: se dice y se para.
+/// `var_os` and not `var`: with `var(..).ok()` bytes that do not decode were
+/// indistinguishable from "the variable is not there", resolution fell
+/// through to the keyring and `norte doctor` —which reads with `var_os`—
+/// reported it as present. Two readers with different policies on the same
+/// bytes is #320's lie all over again (rust review MAJOR-4). A secret
+/// travels as a `String`, so there is nothing to preserve: it is said and it
+/// stops.
 fn env_secret(conn: &str) -> Result<Option<Secret>, ConnectError> {
     match std::env::var_os(env_key(conn)) {
         None => Ok(None),
@@ -280,19 +287,20 @@ fn env_secret(conn: &str) -> Result<Option<Secret>, ConnectError> {
     }
 }
 
-/// Deja pasar `secret`, o falla si es la cadena VACÍA (#320).
+/// Lets `secret` through, or fails if it is the EMPTY string (#320).
 ///
-/// Un secreto vacío no es un secreto: opendal descarta un `secret_access_key`
-/// vacío en silencio (`if !v.is_empty()`), con lo que la conexión degrada a la
-/// cadena de credenciales del entorno sin decirlo. `origin` nombra el escalón
-/// donde apareció el hueco — es lo único que le dice al usuario dónde mirar.
+/// An empty secret is not a secret: opendal silently discards an empty
+/// `secret_access_key` (`if !v.is_empty()`), so the connection degrades to
+/// the environment's credential chain without saying so. `origin` names the
+/// rung where the gap showed up — it is the only thing that tells the user
+/// where to look.
 ///
-/// Solo se rechaza el vacío ESTRICTO: un secreto de espacios sí viaja al
-/// servidor y muere con un rechazo de credenciales accionable, así que
-/// recortarlo antes de comparar solo añadiría falsos positivos.
+/// Only the STRICT empty string is rejected: a secret made of spaces DOES
+/// travel to the server and dies with an actionable credential rejection, so
+/// trimming it before comparing would only add false positives.
 ///
-/// Toma y devuelve un [`Secret`] (no un `String`) a propósito: el plaintext no
-/// vuelve a existir fuera del envoltorio que lo zeroiza al soltarse.
+/// Takes and returns a [`Secret`] (not a `String`) on purpose: the plaintext
+/// never exists again outside the wrapper that zeroizes it when dropped.
 fn non_empty(secret: Secret, conn: &str, origin: SecretOrigin) -> Result<Secret, ConnectError> {
     if secret.expose().is_empty() {
         return Err(ConnectError::SecretEmpty {
@@ -303,30 +311,31 @@ fn non_empty(secret: Secret, conn: &str, origin: SecretOrigin) -> Result<Secret,
     Ok(secret)
 }
 
-/// Busca `account` en el keyring del OS. Cualquier fallo (incluido "no hay
-/// backend", típico en headless/CI) se trata como "no encontrado": es
-/// best-effort, los fallbacks env/age son los fiables.
+/// Looks up `account` in the OS keyring. Any failure (including "no
+/// backend", typical in headless/CI) is treated as "not found": it is
+/// best-effort, the env/age fallbacks are the reliable ones.
 fn keyring_lookup(account: &str) -> Option<Secret> {
     let entry = keyring::Entry::new(KEYRING_SERVICE, account).ok()?;
     match entry.get_password() {
         Ok(p) => Some(Secret::new(p)),
         Err(e) => {
-            // El error de get_password no contiene el password.
-            tracing::debug!(error = %e, "keyring no disponible o sin entrada; se prueba el fichero");
+            // get_password's error does not contain the password.
+            tracing::debug!(error = %e, "keyring unavailable or no entry; trying the file");
             None
         }
     }
 }
 
-/// Passphrase del `secrets.age`: `NORTE_SECRETS_KEY` (env) o `<dir>/secrets.key`.
-/// El contenido se mantiene zeroizado; en Unix se avisa si el fichero es
-/// legible por grupo/otros (la passphrase quedaría expuesta).
+/// `secrets.age`'s passphrase: `NORTE_SECRETS_KEY` (env) or
+/// `<dir>/secrets.key`. The content is kept zeroized; on Unix a warning is
+/// issued if the file is readable by group/others (the passphrase would be
+/// exposed).
 fn age_passphrase(dir: &Path) -> Option<Zeroizing<String>> {
     if let Ok(p) = std::env::var("NORTE_SECRETS_KEY") {
         return Some(Zeroizing::new(p));
     }
     let path = dir.join(SECRETS_KEY_FILE);
-    // Lee el fichero COMPLETO a un buffer zeroizado (sin String residual).
+    // Reads the WHOLE file into a zeroized buffer (no residual String).
     let raw = Zeroizing::new(std::fs::read_to_string(&path).ok()?);
     #[cfg(unix)]
     {
@@ -335,7 +344,7 @@ fn age_passphrase(dir: &Path) -> Option<Zeroizing<String>> {
             && md.permissions().mode() & 0o077 != 0
         {
             tracing::warn!(
-                "secrets.key es legible por grupo/otros: usa permisos 0600 (la passphrase queda expuesta)"
+                "secrets.key is readable by group/others: use 0600 permissions (the passphrase is exposed)"
             );
         }
     }
@@ -344,7 +353,7 @@ fn age_passphrase(dir: &Path) -> Option<Zeroizing<String>> {
     ))
 }
 
-/// Descifra `secrets.age` y devuelve el secreto de `conn` (si está).
+/// Decrypts `secrets.age` and returns `conn`'s secret (if present).
 fn age_lookup(dir: &Path, conn: &str) -> Result<Option<Secret>, ConnectError> {
     let path = dir.join(SECRETS_FILE);
     let ciphertext = match std::fs::read(&path) {
@@ -353,11 +362,11 @@ fn age_lookup(dir: &Path, conn: &str) -> Result<Option<Secret>, ConnectError> {
         Err(e) => return Err(ConnectError::Io(e)),
     };
     let map = age_decrypt(dir, &ciphertext)?;
-    // La copia entra a `Secret` (zeroiza); `map` zeroiza el resto al soltarse.
+    // The copy enters `Secret` (zeroizes); `map` zeroizes the rest when dropped.
     Ok(map.0.get(conn).map(|v| Secret::new(v.clone())))
 }
 
-/// Añade/actualiza `conn`→`value` en el `secrets.age` (read-modify-write).
+/// Adds/updates `conn`→`value` in `secrets.age` (read-modify-write).
 fn age_store(dir: &Path, conn: &str, value: &str) -> Result<(), ConnectError> {
     let path = dir.join(SECRETS_FILE);
     let mut map = match std::fs::read(&path) {
@@ -367,15 +376,16 @@ fn age_store(dir: &Path, conn: &str, value: &str) -> Result<(), ConnectError> {
     };
     map.0.insert(conn.to_string(), value.to_string());
     let plaintext = Zeroizing::new(
-        toml::to_string(&map.0).map_err(|_| ConnectError::SecretStore("serializar"))?,
+        toml::to_string(&map.0).map_err(|_| ConnectError::SecretStore("serialize"))?,
     );
     let ciphertext = age_encrypt(dir, plaintext.as_bytes())?;
     write_secret_file(&path, &ciphertext)?;
     Ok(())
 }
 
-/// Escribe `data` en `path` de forma ATÓMICA (tmp + rename) y con permisos
-/// 0600 en Unix (el `secrets.age` no debe ser world-readable — ADR 0015 C/6).
+/// Writes `data` to `path` ATOMICALLY (tmp + rename) and with 0600
+/// permissions on Unix (`secrets.age` must not be world-readable — ADR
+/// 0015 C/6).
 fn write_secret_file(path: &Path, data: &[u8]) -> std::io::Result<()> {
     let tmp = path.with_extension("age.tmp");
     let mut opts = std::fs::OpenOptions::new();
@@ -393,46 +403,47 @@ fn write_secret_file(path: &Path, data: &[u8]) -> std::io::Result<()> {
     std::fs::rename(&tmp, path)
 }
 
-/// Mapa conn→secreto descifrado de un `secrets.age`. Los valores se zeroizan
-/// al soltar el [`SecretMap`].
+/// conn→decrypted-secret map of a `secrets.age`. Values are zeroized when
+/// the [`SecretMap`] is dropped.
 fn age_decrypt(dir: &Path, ciphertext: &[u8]) -> Result<SecretMap, ConnectError> {
     let passphrase =
-        age_passphrase(dir).ok_or(ConnectError::SecretStore("sin passphrase para secrets.age"))?;
+        age_passphrase(dir).ok_or(ConnectError::SecretStore("no passphrase for secrets.age"))?;
     let decryptor = age::Decryptor::new(ciphertext)
-        .map_err(|_| ConnectError::SecretStore("secrets.age ilegible"))?;
+        .map_err(|_| ConnectError::SecretStore("secrets.age unreadable"))?;
     let identity =
         age::scrypt::Identity::new(age::secrecy::SecretString::from(passphrase.to_string()));
     let mut reader = decryptor
         .decrypt(std::iter::once(&identity as &dyn age::Identity))
-        .map_err(|_| ConnectError::SecretStore("passphrase incorrecta"))?;
+        .map_err(|_| ConnectError::SecretStore("wrong passphrase"))?;
     let mut plaintext = Zeroizing::new(String::new());
     reader
         .read_to_string(&mut plaintext)
-        .map_err(|_| ConnectError::SecretStore("descifrado"))?;
-    // NUNCA interpolar el error de toml: llevaría el plaintext (los secretos)
-    // al mensaje y de ahí a los logs (regla 10). Mensaje estático.
+        .map_err(|_| ConnectError::SecretStore("decryption"))?;
+    // NEVER interpolate toml's error: it would carry the plaintext (the
+    // secrets) into the message and from there into the logs (rule 10).
+    // Static message.
     let map: BTreeMap<String, String> =
-        toml::from_str(&plaintext).map_err(|_| ConnectError::SecretStore("TOML inválido"))?;
+        toml::from_str(&plaintext).map_err(|_| ConnectError::SecretStore("invalid TOML"))?;
     Ok(SecretMap(map))
 }
 
-/// Cifra `plaintext` con la passphrase del store.
+/// Encrypts `plaintext` with the store's passphrase.
 fn age_encrypt(dir: &Path, plaintext: &[u8]) -> Result<Vec<u8>, ConnectError> {
     let passphrase =
-        age_passphrase(dir).ok_or(ConnectError::SecretStore("sin passphrase para secrets.age"))?;
+        age_passphrase(dir).ok_or(ConnectError::SecretStore("no passphrase for secrets.age"))?;
     let encryptor = age::Encryptor::with_user_passphrase(age::secrecy::SecretString::from(
         passphrase.to_string(),
     ));
     let mut out = Vec::new();
     let mut writer = encryptor
         .wrap_output(&mut out)
-        .map_err(|_| ConnectError::SecretStore("cifrado"))?;
+        .map_err(|_| ConnectError::SecretStore("encryption"))?;
     writer
         .write_all(plaintext)
-        .map_err(|_| ConnectError::SecretStore("cifrado"))?;
+        .map_err(|_| ConnectError::SecretStore("encryption"))?;
     writer
         .finish()
-        .map_err(|_| ConnectError::SecretStore("cifrado"))?;
+        .map_err(|_| ConnectError::SecretStore("encryption"))?;
     Ok(out)
 }
 
@@ -441,53 +452,54 @@ mod tests {
     use super::*;
 
     #[test]
-    fn env_key_sanitiza() {
+    fn env_key_sanitizes() {
         assert_eq!(env_key("trabajo"), "NORTE_SECRET_TRABAJO");
         assert_eq!(env_key("mi-server.1"), "NORTE_SECRET_MI_SERVER_1");
     }
 
-    /// #325: lo recordado en la sesión gana a TODO, la env var incluida. Va
-    /// delante porque es lo más reciente —el humano acaba de teclearlo— y
-    /// porque si no, una variable puesta a un valor caducado dejaría el
-    /// diálogo sin efecto: se preguntaría en cada navegación y la respuesta no
-    /// se usaría nunca.
+    /// #325: what was remembered in the session beats EVERYTHING, the env var
+    /// included. It goes first because it is the most recent —the human just
+    /// typed it— and because otherwise, a variable stuck at a stale value
+    /// would leave the dialog with no effect: it would be asked on every
+    /// navigation and the answer would never be used.
     #[tokio::test]
-    async fn lo_recordado_en_la_sesion_gana_a_la_env_var() {
+    async fn what_is_remembered_in_the_session_wins_over_the_env_var() {
         let dir = tempfile::tempdir().expect("tmp");
         let r = SecretResolver::new(dir.path());
 
-        // Sin nada recordado y sin ninguna fuente: no hay secreto.
+        // Nothing remembered and no source: no secret.
         assert!(
             r.resolve("sesion-test", "sftp://h")
                 .await
                 .expect("resolve")
                 .is_none(),
-            "sin fuentes no hay secreto"
+            "no sources means no secret"
         );
 
-        r.remember_for_session("sesion-test", Secret::new("tecleado".into()));
+        r.remember_for_session("sesion-test", Secret::new("typed".into()));
         let s = r
             .resolve("sesion-test", "sftp://h")
             .await
             .expect("resolve")
-            .expect("el de la sesión");
-        assert_eq!(s.expose(), "tecleado");
+            .expect("the session one");
+        assert_eq!(s.expose(), "typed");
     }
 
-    /// #325 + #320: recordar la cadena VACÍA no la pasa como secreto ni se
-    /// cae al escalón siguiente. El diálogo no la produce (Enter con el campo
-    /// vacío no entrega nada), pero el resolutor es público y no puede
-    /// confiar en eso: un vacío que pasara reproduciría exactamente el
-    /// arrastre de credenciales del ambiente que #320 cerró.
+    /// #325 + #320: remembering the EMPTY string does not pass it along as a
+    /// secret, nor does it fall through to the next rung. The dialog does
+    /// not produce it (Enter with the field empty delivers nothing), but the
+    /// resolver is public and cannot rely on that: an empty value getting
+    /// through would reproduce exactly the ambient-credential leak that #320
+    /// closed.
     #[tokio::test]
-    async fn recordar_vacio_es_error_y_no_pasa_como_secreto() {
+    async fn remembering_empty_is_an_error_and_does_not_pass_as_a_secret() {
         let dir = tempfile::tempdir().expect("tmp");
         let r = SecretResolver::new(dir.path());
         r.remember_for_session("vacio-test", Secret::new(String::new()));
         let err = r
             .resolve("vacio-test", "sftp://h")
             .await
-            .expect_err("un vacío recordado es error");
+            .expect_err("a remembered empty value is an error");
         assert!(
             matches!(
                 err,
@@ -496,42 +508,44 @@ mod tests {
                     ..
                 }
             ),
-            "y dice de qué escalón vino: {err:?}"
+            "and it says which rung it came from: {err:?}"
         );
     }
 
     #[test]
-    fn secret_debug_no_filtra() {
+    fn secret_debug_no_filters() {
         let s = Secret::new("hunter2".into());
         assert_eq!(format!("{s:?}"), "Secret(***)");
         assert!(!format!("{s:?}").contains("hunter2"));
         assert_eq!(s.expose(), "hunter2");
     }
 
-    /// Round-trip del store `age`: guardar y resolver con la passphrase del
-    /// fichero `secrets.key` (sin tocar env global, que es unsafe en 2024).
+    /// Round-trip of the `age` store: save and resolve with the passphrase
+    /// from the `secrets.key` file (without touching the global env, which
+    /// is unsafe in 2024).
     #[tokio::test]
     async fn age_store_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
-        write_key_file(dir.path(), "passphrase-de-test");
+        write_key_file(dir.path(), "test-passphrase");
         let r = SecretResolver::new(dir.path());
-        // Nombre único → ni el keyring ni una env var lo interceptan.
+        // Unique name → neither the keyring nor an env var intercept it.
         let conn = "conn-age-roundtrip-xyz";
         assert!(r.resolve(conn, "sftp://x@y:22").await.unwrap().is_none());
         r.store_in_age(conn, &Secret::new("s3cr3t".into()))
             .await
             .unwrap();
         let got = r.resolve(conn, "sftp://x@y:22").await.unwrap();
-        assert_eq!(got.expect("presente").expose(), "s3cr3t");
-        // El fichero en disco está CIFRADO (no contiene el secreto en claro).
+        assert_eq!(got.expect("present").expose(), "s3cr3t");
+        // The file on disk is ENCRYPTED (does not contain the secret in the
+        // clear).
         let raw = std::fs::read(dir.path().join(SECRETS_FILE)).unwrap();
         assert!(
             !raw.windows(6).any(|w| w == b"s3cr3t"),
-            "secreto en claro en disco"
+            "plaintext secret on disk"
         );
     }
 
-    /// El `secrets.age` se escribe 0600 (no world-readable).
+    /// `secrets.age` is written 0600 (not world-readable).
     #[cfg(unix)]
     #[tokio::test]
     async fn secrets_age_es_0600() {
@@ -545,10 +559,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn age_sin_passphrase_es_error_si_existe_el_fichero() {
+    async fn age_without_passphrase_is_an_error_if_the_file_exists() {
         let dir = tempfile::tempdir().unwrap();
-        // Fichero presente pero sin passphrase (ni env ni secrets.key).
-        std::fs::write(dir.path().join(SECRETS_FILE), b"cualquier cosa").unwrap();
+        // File present but no passphrase (neither env nor secrets.key).
+        std::fs::write(dir.path().join(SECRETS_FILE), b"whatever").unwrap();
         let r = SecretResolver::new(dir.path());
         assert!(
             r.resolve("conn-sin-pass-xyz", "sftp://x@y:22")
@@ -557,82 +571,89 @@ mod tests {
         );
     }
 
-    /// #320: un secreto que se resuelve a la cadena VACÍA es un ERROR, no un
-    /// secreto. Sin esto el vacío llega intacto a `s3.rs`, opendal lo DESCARTA
-    /// (`secret_access_key`: `if !v.is_empty()`), el `StaticCredentialProvider`
-    /// no se registra y la conexión acaba autenticando con la cadena ambiente
-    /// (perfil, SSO, IMDS) — una identidad que nadie pidió, en silencio.
+    /// #320: a secret that resolves to the EMPTY string is an ERROR, not a
+    /// secret. Without this the empty value reaches `s3.rs` intact, opendal
+    /// DISCARDS it (`secret_access_key`: `if !v.is_empty()`), the
+    /// `StaticCredentialProvider` does not get registered and the connection
+    /// ends up authenticating with the ambient chain (profile, SSO, IMDS) —
+    /// an identity nobody asked for, silently.
     ///
-    /// Se siembra por el store `age` porque es el único escalón que un test
-    /// puede plantar sin tocar el entorno global (unsafe en la edición 2024),
-    /// y por `age_store` y no por `store_in_age` porque el camino público
-    /// también rechaza el vacío: el fixture entra por debajo, a propósito.
+    /// Seeded through the `age` store because it is the only rung a test can
+    /// plant without touching the global environment (unsafe in the 2024
+    /// edition), and through `age_store` rather than `store_in_age` because
+    /// the public path also rejects the empty value: the fixture goes in
+    /// underneath, on purpose.
     #[tokio::test]
-    async fn secreto_vacio_es_error_y_no_pasa_como_secreto() {
+    async fn an_empty_secret_is_an_error_and_does_not_pass_as_a_secret() {
         let dir = tempfile::tempdir().unwrap();
-        write_key_file(dir.path(), "passphrase-de-test");
+        write_key_file(dir.path(), "test-passphrase");
         let r = SecretResolver::new(dir.path());
         let conn = "conn-vacia-xyz";
-        age_store(dir.path(), conn, "").expect("sembrar el fixture");
+        age_store(dir.path(), conn, "").expect("seed the fixture");
         let e = r
             .resolve(conn, "s3://un-bucket")
             .await
-            .expect_err("un secreto vacío no puede resolverse como válido");
+            .expect_err("an empty secret cannot resolve as valid");
         assert!(
             matches!(
                 &e,
                 ConnectError::SecretEmpty { conn: c, origin: SecretOrigin::AgeFile } if c == conn
             ),
-            "error inesperado (nombre u origen): {e:?}"
+            "unexpected error (name or origin): {e:?}"
         );
     }
 
-    /// El camino de ESCRITURA rechaza lo mismo que el de lectura: sin esto se
-    /// puede persistir en un fichero cifrado —no editable a mano— una entrada
-    /// que hace fallar la conexión para siempre, y el error aparecería lejos
-    /// del sitio donde se cometió la equivocación.
+    /// The WRITE path rejects the same thing the read path does: without
+    /// this you could persist, into an encrypted file —not editable by
+    /// hand—, an entry that makes the connection fail forever, and the error
+    /// would show up far from where the mistake was made.
     #[tokio::test]
-    async fn store_in_age_rechaza_el_vacio() {
+    async fn store_in_age_rejects_the_empty_one() {
         let dir = tempfile::tempdir().unwrap();
-        write_key_file(dir.path(), "passphrase-de-test");
+        write_key_file(dir.path(), "test-passphrase");
         let r = SecretResolver::new(dir.path());
         let e = r
             .store_in_age("c", &Secret::new(String::new()))
             .await
-            .expect_err("guardar un secreto vacío no puede tener éxito");
+            .expect_err("saving an empty secret cannot succeed");
         assert!(matches!(e, ConnectError::SecretEmpty { .. }), "{e:?}");
         assert!(
             !dir.path().join(SECRETS_FILE).exists(),
-            "el rechazo no debe dejar fichero escrito"
+            "the rejection must not leave a written file"
         );
     }
 
-    /// El error del vacío nombra el ORIGEN (env/keyring/age): es lo único que
-    /// dice DÓNDE está el hueco. Y un secreto de solo espacios NO se rechaza:
-    /// ese sí llega al servidor y muere con un 403 accionable, así que
-    /// tratarlo como vacío solo añadiría un falso positivo.
+    /// The empty-value error names the ORIGIN (env/keyring/age): it is the
+    /// only thing that says WHERE the gap is. And a secret made only of
+    /// spaces is NOT rejected: that one does reach the server and dies with
+    /// an actionable 403, so treating it as empty would only add a false
+    /// positive.
     #[test]
-    fn secreto_vacio_nombra_el_origen_y_los_espacios_pasan() {
-        for (origin, esperado) in [
-            (SecretOrigin::Env, "variable de entorno"),
+    fn an_empty_secret_names_the_source_and_spaces_pass() {
+        for (origin, expected) in [
+            (SecretOrigin::Env, "environment variable"),
             (SecretOrigin::Keyring, "keyring"),
             (SecretOrigin::AgeFile, "secrets.age"),
         ] {
             let e = non_empty(Secret::new(String::new()), "demo", origin)
-                .expect_err("cadena vacía = error");
+                .expect_err("empty string = error");
             let msg = e.to_string();
-            assert!(msg.contains("demo"), "sin el nombre de la conexión: {msg}");
-            assert!(msg.contains(esperado), "origen {origin:?} mal dicho: {msg}");
+            assert!(msg.contains("demo"), "missing the connection's name: {msg}");
+            assert!(
+                msg.contains(expected),
+                "origin {origin:?} said wrong: {msg}"
+            );
         }
         assert_eq!(
             non_empty(Secret::new(" ".into()), "demo", SecretOrigin::Env)
-                .expect("los espacios no son vacío")
+                .expect("spaces are not empty")
                 .expose(),
             " "
         );
     }
 
-    /// Escribe `secrets.key` con 0600 en Unix (evita el warn de permisos).
+    /// Writes `secrets.key` with 0600 on Unix (avoids the permissions
+    /// warning).
     fn write_key_file(dir: &Path, pass: &str) {
         let path = dir.join(SECRETS_KEY_FILE);
         std::fs::write(&path, pass).unwrap();
@@ -644,51 +665,51 @@ mod tests {
     }
 }
 
-/// Entrada del keyring para la clave de anclaje del journal (M3-5, ADR 0025).
+/// Keyring entry for the journal's anchor key (M3-5, ADR 0025).
 const ANCHOR_KEY_ACCOUNT: &str = "journal-anchor";
 
-/// Clave HMAC de las anclas del journal: la lee del keyring y, si no existe,
-/// genera 32 bytes del OS y los guarda (get-or-create, hex). A DIFERENCIA de
-/// los secretos de conexión, aquí el keyring NO es best-effort: sin él no hay
-/// anclas (la clave jamás toca disco plano — regla 10). Override por env
-/// `NORTE_ANCHOR_KEY` (64 chars hex) para headless/CI, mismo orden
-/// env → keyring que los secretos de conexión — **OJO**: en modo env la
-/// garantía frente a same-uid es CERO (el atacante del threat model lee
-/// `/proc/<pid>/environ`, y pasarla inline la deja en el historial del
-/// shell); úsala solo donde el keyring no exista y el entorno esté
-/// controlado. Carrera get-or-create: dos primeros anclajes CONCURRENTES
-/// pueden generar claves distintas (last-writer gana y el otro queda
-/// `BadMac`); tras `set_password` se RE-LEE y se devuelve lo persistido,
-/// que la acota a la ventana del propio keyring. Los mensajes de error
-/// son ESTÁTICOS (mismo criterio que [`crate::ConnectError::SecretStore`]);
-/// el detalle va por `tracing::debug` (el error del keyring no contiene la
-/// clave).
+/// HMAC key for the journal's anchors: reads it from the keyring and, if it
+/// does not exist, generates 32 bytes from the OS and saves them
+/// (get-or-create, hex). UNLIKE connection secrets, here the keyring is NOT
+/// best-effort: without it there are no anchors (the key never touches plain
+/// disk — rule 10). Overridable with env `NORTE_ANCHOR_KEY` (64 hex chars)
+/// for headless/CI, same env → keyring order as connection secrets —
+/// **WATCH OUT**: in env mode the guarantee against same-uid is ZERO (the
+/// threat model's attacker reads `/proc/<pid>/environ`, and passing it
+/// inline leaves it in the shell's history); use it only where the keyring
+/// does not exist and the environment is controlled. Get-or-create race: the
+/// first two CONCURRENT anchorings can generate different keys
+/// (last-writer wins and the other ends up `BadMac`); after `set_password`
+/// it RE-READS and returns what was persisted, which bounds it to the
+/// keyring's own window. The error messages are STATIC (same criterion as
+/// [`crate::ConnectError::SecretStore`]); the detail goes through
+/// `tracing::debug` (the keyring's error does not contain the key).
 ///
 /// # Errors
-/// Keyring no disponible/sin backend, entrada ilegible, o entropía del OS.
+/// Keyring unavailable/no backend, unreadable entry, or OS entropy.
 pub fn journal_anchor_key() -> Result<[u8; 32], crate::ConnectError> {
     use crate::ConnectError::SecretStore;
-    // Env primero (mismo orden que los secretos de conexión, ADR 0015 C):
-    // imprescindible en headless/CI donde el keyring no tiene backend
-    // (`linux-keyring` es feature opt-in). 64 chars hex.
+    // Env first (same order as connection secrets, ADR 0015 C): essential in
+    // headless/CI where the keyring has no backend (`linux-keyring` is an
+    // opt-in feature). 64 hex chars.
     if let Ok(hexed) = std::env::var("NORTE_ANCHOR_KEY") {
         let hexed = zeroize::Zeroizing::new(hexed);
         return decode_anchor_key(&hexed)
-            .ok_or(SecretStore("NORTE_ANCHOR_KEY inválida (64 chars hex)"));
+            .ok_or(SecretStore("NORTE_ANCHOR_KEY invalid (64 hex chars)"));
     }
     let entry = keyring::Entry::new(KEYRING_SERVICE, ANCHOR_KEY_ACCOUNT).map_err(|e| {
-        tracing::debug!(error = %e, "keyring: no se pudo abrir la entrada de anclaje");
-        SecretStore("keyring no disponible para la clave de anclaje")
+        tracing::debug!(error = %e, "keyring: could not open the anchor entry");
+        SecretStore("keyring unavailable for the anchor key")
     })?;
     match entry.get_password() {
         Ok(hexed) => {
-            decode_anchor_key(&hexed).ok_or(SecretStore("clave de anclaje corrupta en el keyring"))
+            decode_anchor_key(&hexed).ok_or(SecretStore("anchor key corrupted in the keyring"))
         }
         Err(keyring::Error::NoEntry) => {
             let mut key = zeroize::Zeroizing::new([0u8; 32]);
             getrandom::fill(key.as_mut()).map_err(|e| {
-                tracing::debug!(error = %e, "getrandom falló");
-                SecretStore("sin entropía del OS para la clave de anclaje")
+                tracing::debug!(error = %e, "getrandom failed");
+                SecretStore("no OS entropy for the anchor key")
             })?;
             let hexed = zeroize::Zeroizing::new(key.iter().fold(String::new(), |mut acc, b| {
                 use std::fmt::Write as _;
@@ -696,28 +717,25 @@ pub fn journal_anchor_key() -> Result<[u8; 32], crate::ConnectError> {
                 acc
             }));
             entry.set_password(&hexed).map_err(|e| {
-                tracing::debug!(error = %e, "keyring: no se pudo guardar la clave de anclaje");
-                SecretStore("keyring no disponible para guardar la clave de anclaje")
+                tracing::debug!(error = %e, "keyring: could not save the anchor key");
+                SecretStore("keyring unavailable to save the anchor key")
             })?;
-            // RE-LEE: si otro proceso ganó la carrera get-or-create, se
-            // devuelve la clave PERSISTIDA, no la local perdedora.
+            // RE-READ: if another process won the get-or-create race, return
+            // the PERSISTED key, not the local loser.
             let persisted = zeroize::Zeroizing::new(entry.get_password().map_err(|e| {
-                tracing::debug!(error = %e, "keyring: re-lectura tras guardar falló");
-                SecretStore("keyring no disponible para la clave de anclaje")
+                tracing::debug!(error = %e, "keyring: re-read after saving failed");
+                SecretStore("keyring unavailable for the anchor key")
             })?);
-            decode_anchor_key(&persisted)
-                .ok_or(SecretStore("clave de anclaje corrupta en el keyring"))
+            decode_anchor_key(&persisted).ok_or(SecretStore("anchor key corrupted in the keyring"))
         }
         Err(e) => {
-            tracing::debug!(error = %e, "keyring: no se pudo leer la clave de anclaje");
-            Err(SecretStore(
-                "keyring no disponible para la clave de anclaje",
-            ))
+            tracing::debug!(error = %e, "keyring: could not read the anchor key");
+            Err(SecretStore("keyring unavailable for the anchor key"))
         }
     }
 }
 
-/// Decodifica la clave hex de 64 chars; `None` si no mide o no es hex.
+/// Decodes the 64-char hex key; `None` if the length or hex is wrong.
 fn decode_anchor_key(hexed: &str) -> Option<[u8; 32]> {
     let bytes = hexed.as_bytes();
     if bytes.len() != 64 {
@@ -737,7 +755,7 @@ mod anchor_key_tests {
     use super::decode_anchor_key;
 
     #[test]
-    fn decode_round_trip_y_rechazos() {
+    fn decode_round_trip_and_rejections() {
         let key = [0xABu8; 32];
         let hexed: String = key.iter().fold(String::new(), |mut acc, b| {
             use std::fmt::Write as _;
@@ -745,7 +763,7 @@ mod anchor_key_tests {
             acc
         });
         assert_eq!(decode_anchor_key(&hexed), Some(key));
-        assert_eq!(decode_anchor_key("corto"), None);
+        assert_eq!(decode_anchor_key("short"), None);
         assert_eq!(decode_anchor_key(&"zz".repeat(32)), None);
     }
 }

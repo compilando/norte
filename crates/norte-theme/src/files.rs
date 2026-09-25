@@ -1,6 +1,6 @@
-//! Colores por TIPO de archivo (estilo `LS_COLORS`, ADR 0020 D2): por `kind`
-//! (dir/symlink/exec…) y por EXTENSIÓN. La resolución es extensión > kind >
-//! rol `regular`.
+//! Colors by file TYPE (`LS_COLORS` style, ADR 0020 D2): by `kind`
+//! (dir/symlink/exec…) and by EXTENSION. Resolution is extension > kind >
+//! `regular` role.
 
 use std::collections::HashMap;
 
@@ -8,33 +8,33 @@ use serde::Deserialize;
 
 use crate::style::Style;
 
-/// Tipo de nodo del filesystem, para colorear la entrada.
+/// Filesystem node type, used to color the entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 #[non_exhaustive]
 pub enum FileKind {
-    /// Directorio.
+    /// Directory.
     Dir,
     /// Symlink.
     Symlink,
-    /// Fichero regular ejecutable.
+    /// Executable regular file.
     Executable,
     /// FIFO / named pipe.
     Fifo,
     /// Socket.
     Socket,
-    /// Dispositivo de bloque.
+    /// Block device.
     BlockDevice,
-    /// Dispositivo de carácter.
+    /// Character device.
     CharDevice,
-    /// Fichero regular (sin distinción especial).
+    /// Regular file (no special distinction).
     Regular,
 }
 
 impl FileKind {
-    /// Las clases que un tema puede colorear en `[files.kind]`, en el orden
-    /// en que se escriben. `Regular` no está: un fichero regular es el rol
-    /// `regular`, no una clase.
+    /// The classes a theme can color in `[files.kind]`, in the order they
+    /// are written. `Regular` is absent: a regular file is the `regular`
+    /// role, not a class.
     pub const ALL: &'static [FileKind] = &[
         FileKind::Dir,
         FileKind::Symlink,
@@ -45,7 +45,7 @@ impl FileKind {
         FileKind::CharDevice,
     ];
 
-    /// La clave kebab con la que se escribe en `[files.kind]`.
+    /// The kebab key it is written with in `[files.kind]`.
     ///
     /// ```
     /// use norte_theme::FileKind;
@@ -66,26 +66,26 @@ impl FileKind {
     }
 }
 
-/// Estilos por tipo de archivo. `[files.kind]` colorea por clase; `[files.ext]`
-/// por extensión (más específico, gana).
+/// Styles by file type. `[files.kind]` colors by class; `[files.ext]`
+/// by extension (more specific, it wins).
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct FileColors {
-    /// Por clase de nodo.
+    /// By node class.
     pub kind: HashMap<FileKind, Style>,
-    /// Por extensión, en minúsculas ASCII (la búsqueda también minuscula).
+    /// By extension, in ASCII lowercase (the lookup lowercases too).
     pub ext: HashMap<String, Style>,
 }
 
 impl FileColors {
-    /// El [`Style`] para una entrada `name` (bytes, regla 1) de tipo `kind`, o
-    /// `None` si el tema no la colorea (el caller cae al rol `regular`).
-    /// Prioridad: extensión > kind.
+    /// The [`Style`] for an entry `name` (bytes, rule 1) of type `kind`, or
+    /// `None` if the theme does not color it (the caller falls back to the `regular` role).
+    /// Priority: extension > kind.
     #[must_use]
     pub fn style_for(&self, name: &[u8], kind: FileKind) -> Option<Style> {
         if let Some(ext) = extension_of(name) {
-            // Minúsculas ASCII para casar de forma amable; un byte no-UTF8 en
-            // la extensión simplemente no casa ninguna clave (cae a kind).
+            // ASCII lowercase for lenient matching; a non-UTF8 byte in the
+            // extension simply matches no key (falls back to kind).
             if let Ok(ext_str) = std::str::from_utf8(ext) {
                 let key = ext_str.to_ascii_lowercase();
                 if let Some(s) = self.ext.get(&key) {
@@ -97,12 +97,12 @@ impl FileColors {
     }
 }
 
-/// La extensión de `name` = bytes tras el ÚLTIMO `.`, si lo hay y no es un
-/// fichero oculto sin extensión (`.bashrc` no tiene extensión `bashrc`).
+/// The extension of `name` = bytes after the LAST `.`, if there is one and it
+/// is not a hidden file without extension (`.bashrc` has no `bashrc` extension).
 #[must_use]
 pub fn extension_of(name: &[u8]) -> Option<&[u8]> {
     let dot = name.iter().rposition(|&b| b == b'.')?;
-    // `.` en la posición 0 (oculto) o final (sin ext) no cuentan.
+    // A `.` at position 0 (hidden) or at the end (no ext) does not count.
     if dot == 0 || dot + 1 == name.len() {
         return None;
     }

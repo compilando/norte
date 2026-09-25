@@ -1,6 +1,6 @@
-//! Servidor del daemon (ADR 0011): UDS + `SO_PEERCRED`, dispatch de
-//! `initialize`/`fs.*`/`task.*`/`daemon.shutdown`, broadcast de
-//! `task.progress` y shutdown por inactividad o petición.
+//! Daemon server (ADR 0011): UDS + `SO_PEERCRED`, dispatch of
+//! `initialize`/`fs.*`/`task.*`/`daemon.shutdown`, broadcast of
+//! `task.progress` and shutdown on idleness or request.
 
 use std::collections::HashMap;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -28,165 +28,170 @@ use crate::journal::Actor;
 use crate::policy::{OpSet, Scope, ScopeRegistry};
 use crate::scheduler::TaskHandle;
 
-/// Intervalo mínimo entre notificaciones de progreso de UNA task (≤30 Hz).
+/// Minimum interval between progress notifications of ONE task (≤30 Hz).
 const PROGRESS_MIN_INTERVAL: Duration = Duration::from_millis(33);
-/// Cada cuánto evalúa el server la condición de inactividad.
+/// How often the server evaluates the idleness condition.
 const IDLE_POLL: Duration = Duration::from_millis(250);
-/// Cuánto espera el apagado a que las conexiones terminen de escribir lo que
-/// ya tenían encolado (la respuesta al propio `daemon.shutdown`, el
-/// `daemon.going_away`). Un cliente que no lee no retiene el apagado más.
+/// How long shutdown waits for connections to finish writing what they
+/// already had queued (the response to `daemon.shutdown` itself, the
+/// `daemon.going_away`). A client that does not read no longer holds up
+/// shutdown.
 const CONNECTION_DRAIN: Duration = Duration::from_secs(2);
-/// Frames pendientes de escribir por conexión. Un cliente que no drena su
-/// lado del socket llega aquí y se le CORTA: jamás memoria sin límite por
-/// un peer lento u hostil (hallazgo M1 del security-reviewer).
+/// Frames pending to be written per connection. A client that does not drain
+/// its side of the socket hits this and gets CUT OFF: never unbounded memory
+/// for a slow or hostile peer (security-reviewer finding M1).
 const OUTBOX_FRAMES: usize = 1024;
-/// Errores de parse consecutivos tolerados antes de cortar la conexión
-/// (un peer que solo emite basura no merece respuestas infinitas).
+/// Consecutive parse errors tolerated before cutting the connection (a peer
+/// that only emits garbage does not deserve infinite responses).
 const MAX_PARSE_ERRORS: u32 = 16;
-/// Conexiones simultáneas por daemon (mismo uid; anti-agotamiento).
+/// Simultaneous connections per daemon (same uid; anti-exhaustion).
 const MAX_CONNECTIONS: usize = 256;
-/// Tasks vivas simultáneas encoladas vía el daemon.
+/// Simultaneous live tasks queued via the daemon.
 const MAX_LIVE_TASKS: usize = 512;
-/// Sub-tope de tasks vivas de AGENTES — todas las sesiones juntas (#70): un
-/// agente glotón no agota el cupo global; el humano conserva SIEMPRE
-/// headroom (`MAX_LIVE_TASKS - MAX_LIVE_TASKS_AGENTS`). Por CLASE, no por
-/// sesión: aislar agente-de-agente es la deuda m4 (policy.rs).
+/// Sub-cap of live AGENT tasks — all sessions together (#70): a greedy agent
+/// does not exhaust the global quota; the human ALWAYS keeps headroom
+/// (`MAX_LIVE_TASKS - MAX_LIVE_TASKS_AGENTS`). By CLASS, not by session:
+/// isolating agent-from-agent is m4 debt (policy.rs).
 const MAX_LIVE_TASKS_AGENTS: usize = 384;
-/// Planes de sincronización RETENIDOS a la vez por UNA conexión (ADR 0049).
+/// Sync plans RETAINED at once by ONE connection (ADR 0049).
 ///
-/// No es un tope de concurrencia —de eso ya se encarga [`MAX_LIVE_TASKS`]—, sino
-/// de acumulación: un plan aprobado sobrevive a su Task durante
-/// `SYNC_PLAN_TTL_MS`, y es un fichero con el listado relativo de dos árboles
-/// enteros. Sin tope, planificar en bucle variando `include` (cada selección da
-/// otro digest, o sea otro fichero) llena el directorio de estado, que es el
-/// mismo en el que vive `journal.db`; quedarse sin disco ahí no es una molestia,
-/// es la regla 4 dejando de ser satisfacible.
+/// Not a concurrency cap — [`MAX_LIVE_TASKS`] already handles that — but an
+/// accumulation one: an approved plan outlives its Task for
+/// `SYNC_PLAN_TTL_MS`, and is a file with the relative listing of two whole
+/// trees. Without a cap, planning in a loop while varying `include` (each
+/// selection gives a different digest, i.e. a different file) fills up the
+/// state directory, the same one `journal.db` lives in; running out of disk
+/// there is not a nuisance, it is rule 4 ceasing to be satisfiable.
 ///
-/// Generoso a propósito: un frontend tiene un plan por panel y a lo sumo una
-/// comparación previa que todavía mira.
+/// Generous on purpose: a frontend has one plan per pane and at most one
+/// previous comparison it is still looking at.
 const MAX_RETAINED_SYNC_PLANS: usize = 16;
-/// Frames parseados EN COLA entre el reader y el dispatch de una conexión
-/// (#64). Pequeño a propósito: el dispatch es serial y los clientes son
-/// request/response — el valor del inbox es que el READER siga vivo durante
-/// un dispatch suspendido (Ask) para observar la muerte del peer.
+/// Parsed frames QUEUED between the reader and a connection's dispatch (#64).
+/// Small on purpose: dispatch is serial and clients are request/response —
+/// the inbox's value is keeping the READER alive during a suspended dispatch
+/// (Ask) so it can observe the peer's death.
 const INBOX_FRAMES: usize = 16;
-/// Tope de frames DIFERIDOS durante un dispatch en vuelo (#72): frames que
-/// llegan mientras una request se procesa (típicamente un Ask suspendido) y no
-/// son su `rpc.cancel` se bufferizan hasta este tope. Alcanzado, el brazo de
-/// lectura del inner-select se deshabilita y el reader vuelve a hacer
-/// backpressure sobre el socket (como antes de #72): la memoria total queda
-/// acotada a `INBOX_FRAMES + MAX_DEFERRED_FRAMES` en vez de crecer sin límite
-/// mientras el peer hace pipeline durante su propio Ask (MAJOR del
-/// security-reviewer). Un cliente request/response normal jamás lo roza (0-1
-/// diferidos); solo un peer semi-hostil bajo un Ask no-aprobado lo alcanza.
+/// Cap of DEFERRED frames during an in-flight dispatch (#72): frames that
+/// arrive while a request is being processed (typically a suspended Ask) and
+/// are not its `rpc.cancel` are buffered up to this cap. Once reached, the
+/// inner-select's read arm is disabled and the reader goes back to applying
+/// backpressure on the socket (as before #72): total memory stays bounded at
+/// `INBOX_FRAMES + MAX_DEFERRED_FRAMES` instead of growing without limit
+/// while the peer pipelines during its own Ask (security-reviewer MAJOR). A
+/// normal request/response client never comes close (0-1 deferred); only a
+/// semi-hostile peer under an unapproved Ask reaches it.
 const MAX_DEFERRED_FRAMES: usize = 16;
-/// Snapshots TERMINALES retenidos para el resync de `task.list` (un
-/// frontend que reconecta ve el desenlace de lo que se perdió).
+/// TERMINAL snapshots retained for `task.list` resync (a frontend that
+/// reconnects sees the outcome of what it missed).
 const RECENT_TERMINAL: usize = 64;
-/// Sub-tope de slots de `recent` para terminales de AGENTES (#70): una
-/// ráfaga de tasks triviales de agente expulsa las suyas más viejas, jamás
-/// los desenlaces del humano (que conserva ≥ `RECENT_TERMINAL -
-/// RECENT_TERMINAL_AGENTS` slots).
+/// Sub-cap of `recent` slots for AGENT terminals (#70): a burst of trivial
+/// agent tasks evicts its own oldest entries first, never the human's
+/// outcomes (which keeps ≥ `RECENT_TERMINAL - RECENT_TERMINAL_AGENTS`
+/// slots).
 const RECENT_TERMINAL_AGENTS: usize = 32;
-/// Listados paginados VIVOS retenidos por conexión (ADR 0017): cada uno es un
-/// `EntryStream` perezoso sin drenar. Al abrir el (N+1), se expulsa el más
-/// viejo (LRU). Un TUI navega 1-2 a la vez; el tope acota el coste (incluido
-/// un hilo blocking parkeado del productor local por listado no drenado).
+/// LIVE paginated listings retained per connection (ADR 0017): each one is a
+/// lazy, undrained `EntryStream`. Opening the (N+1)th evicts the oldest
+/// (LRU). A TUI browses 1-2 at a time; the cap bounds the cost (including a
+/// parked blocking thread from the local producer per undrained listing).
 const MAX_OPEN_LISTINGS: usize = 8;
-/// Tope GLOBAL de listados retenidos en todo el daemon (M1 del rust-reviewer):
-/// 256 conexiones × 8 = 2048 productores de `vfs-local` podrían quedar
-/// parkeados en `blocking_send` > el pool blocking por defecto (512). Con este
-/// tope (bien por debajo del pool), al superarlo un listado NUEVO se drena
-/// ENTERO en línea (libera el hilo al instante) en vez de retenerse: bajo
-/// presión del MISMO uid, la paginación degrada a listado-completo, jamás a
-/// agotar el pool. Coste de una llamada lenta, nunca corrupción ni truncado.
+/// GLOBAL cap of listings retained across the whole daemon (rust-reviewer
+/// M1): 256 connections × 8 = 2048 `vfs-local` producers could end up
+/// parked in `blocking_send` > the default blocking pool (512). With this
+/// cap (well below the pool), exceeding it makes a NEW listing drain
+/// ENTIRELY inline (frees the thread instantly) instead of being retained:
+/// under pressure from the SAME uid, pagination degrades to full-listing,
+/// never to exhausting the pool. The cost is one slow call, never
+/// corruption or truncation.
 ///
-/// INVARIANTE de tuning (#53 M1): este tope debe quedar ≤ la mitad del pool
-/// blocking del runtime (default de tokio: 512) — cada listing retenido de
-/// vfs-local puede parkear UN hilo del pool en `blocking_send`, y el resto
-/// del daemon (sqlx, plugins, fs local) necesita su margen. Si algún día se
-/// sube, o el binario fija `max_blocking_threads`, revisar juntos.
+/// Tuning INVARIANT (#53 M1): this cap must stay ≤ half the runtime's
+/// blocking pool (tokio default: 512) — each listing retained from
+/// vfs-local can park ONE pool thread in `blocking_send`, and the rest of
+/// the daemon (sqlx, plugins, local fs) needs its own margin. If this is
+/// ever raised, or the binary sets `max_blocking_threads`, review both
+/// together.
 const GLOBAL_MAX_LISTINGS: usize = 256;
-/// Peticiones de scope PENDIENTES retenidas en TODO el daemon (M3-3b): tope
-/// GLOBAL. Debajo, cada conexión tiene su propio sub-cap
-/// [`MAX_PENDING_SCOPE_PER_CONN`] para que una sola sesión no agote el canal
-/// de las demás (patrón de los listings: por-conexión + global).
+/// PENDING scope requests retained across the WHOLE daemon (M3-3b): GLOBAL
+/// cap. Below it, each connection has its own sub-cap
+/// [`MAX_PENDING_SCOPE_PER_CONN`] so that a single session cannot exhaust
+/// the others' channel (same pattern as the listings: per-connection +
+/// global).
 const MAX_PENDING_SCOPE: usize = 256;
-/// Peticiones de scope pendientes por CONEXIÓN: acota lo que una sola sesión
-/// puede retener del tope global. Se limpian al morir la conexión.
+/// Pending scope requests per CONNECTION: bounds what a single session can
+/// hold of the global cap. Cleared when the connection dies.
 const MAX_PENDING_SCOPE_PER_CONN: usize = 16;
-/// Tope del TTL de un scope concedido (24 h): una petición con `ttl_ms`
-/// enorme no concede acceso cuasi-perpetuo por accidente.
+/// Cap on the TTL of a granted scope (24h): a request with a huge `ttl_ms`
+/// does not grant near-perpetual access by accident.
 const MAX_SCOPE_TTL_MS: u64 = 24 * 60 * 60 * 1000;
-/// Cada cuánto barre el server los listados retenidos expirados de una
-/// conexión VIVA-pero-muda (además del barrido perezoso en cada `fs.list`).
+/// How often the server sweeps a LIVE-but-silent connection's expired
+/// retained listings (in addition to the lazy sweep on every `fs.list`).
 const LISTING_SWEEP: Duration = Duration::from_secs(30);
-/// Líneas de registro que `log.tail` entrega COMO MUCHO en una vuelta (#328,
-/// ADR 0092).
+/// Log lines `log.tail` delivers AT MOST in one round (#328, ADR 0092).
 ///
-/// Mil, o sea la mitad del anillo por defecto
-/// ([`norte_config::logring::RING_DEFAULT`]). El recorte es del servidor —el
-/// `max` del cliente es una petición, igual que en `fs.list`— y no pierde
-/// nada: lo que no cabe sigue estando después de `next`, y la vuelta
-/// siguiente lo recoge.
+/// A thousand, i.e. half the default ring
+/// ([`norte_config::logring::RING_DEFAULT`]). The trimming is the server's —
+/// the client's `max` is a request, same as in `fs.list` — and nothing is
+/// lost: what does not fit is still there after `next`, and the next round
+/// picks it up.
 ///
-/// La mitad y no el anillo entero porque el caso normal es un panel abierto
-/// sondeando cada ~300 ms, que trae unidades de líneas; el número solo lo toca
-/// quien se pone al día tras un rato sin mirar, y a ése le vale con dar dos
-/// vueltas. Enteras, las dos mil líneas son un frame de megas —cada una lleva
-/// dos `String` y el mensaje llega hasta 2 KiB— construido en el reactor.
+/// Half and not the whole ring because the normal case is an open pane
+/// polling every ~300ms, which brings in units of lines; the number is only
+/// ever touched by someone catching up after a while without looking, and
+/// that person is fine with two rounds. Whole, the two thousand lines are a
+/// megabyte-sized frame — each carries two `String`s and the message runs up
+/// to 2 KiB — built on the reactor.
 ///
-/// **No se publica en el protocolo a propósito** (ADR 0092): el cliente
-/// dimensiona con `capacity`, que es la cota superior de lo que puede llegar,
-/// e itera sobre `next` hasta que la respuesta viene vacía. Congelar este
-/// número en el wire sería prometer para siempre uno elegido antes de la
-/// primera respuesta real.
+/// **Deliberately not published in the protocol** (ADR 0092): the client
+/// sizes with `capacity`, which is the upper bound of what can arrive, and
+/// iterates over `next` until the response comes back empty. Freezing this
+/// number on the wire would promise forever a number chosen before the
+/// first real response.
 const LOG_TAIL_MAX_LINES: usize = 1000;
-/// Tope del prompt de `ai.rename_plan` (security review M4-IA): los tokens de
-/// ENTRADA son el coste del proveedor; el frame de 16 MiB no es un límite.
+/// Cap on the `ai.rename_plan` prompt (security review M4-IA): INPUT tokens
+/// are the provider's cost; the 16 MiB frame is not a limit.
 const MAX_AI_INSTRUCTION_BYTES: usize = 4 * 1024;
-/// Tope de la query de `index.search_semantic` (mismo cinturón que la
-/// instrucción de `ai.rename_plan`).
+/// Cap on the `index.search_semantic` query (same belt as the
+/// `ai.rename_plan` instruction).
 const MAX_AI_QUERY_BYTES: usize = MAX_AI_INSTRUCTION_BYTES;
 
-/// Configuración del daemon.
+/// Daemon configuration.
 #[derive(Debug, Clone)]
 pub struct DaemonConfig {
-    /// Path del socket; `None` = [`super::default_socket_path`].
+    /// Socket path; `None` = [`super::default_socket_path`].
     pub socket_path: Option<PathBuf>,
-    /// Apagado tras este tiempo sin clientes NI tasks. `None` = nunca.
+    /// Shutdown after this much time with NO clients AND no tasks. `None` =
+    /// never.
     pub idle_timeout: Option<Duration>,
-    /// TTL de un listado paginado retenido sin continuar (ADR 0017): pasado
-    /// este tiempo se descarta aunque la conexión siga viva. Configurable para
-    /// testear la expiración sin esperas largas.
+    /// TTL of a paginated listing retained without a `next` (ADR 0017): past
+    /// this time it is discarded even if the connection is still alive.
+    /// Configurable to test expiry without long waits.
     pub listing_ttl: Duration,
-    /// **La raíz de config de ESTE daemon**, no solo la de los plugins.
-    /// `None` = [`crate::connect::config_dir`] real (la capa de usuario);
-    /// `Some(dir)` = ese directorio — para tests, SIEMPRE un tempdir, jamás el
-    /// `~/.config` real.
+    /// **The config root of THIS daemon**, not only the plugins' one.
+    /// `None` = the real [`crate::connect::config_dir`] (the user's layer);
+    /// `Some(dir)` = that directory — for tests, ALWAYS a tempdir, never the
+    /// real `~/.config`.
     ///
-    /// De ella cuelgan el catálogo de plugins (`<dir>/plugins/<id>/plugin.toml`
-    /// y `<dir>/plugins-state.toml`, M4-P3) y el `connections.toml` que sirve
-    /// `connection.list` (#365).
+    /// The plugin catalogue hangs off it (`<dir>/plugins/<id>/plugin.toml`
+    /// and `<dir>/plugins-state.toml`, M4-P3), and so does the
+    /// `connections.toml` that serves `connection.list` (#365).
     ///
-    /// **El nombre se quedó corto y es histórico**: nació con los plugins y
-    /// hoy manda sobre más. Se dice aquí en vez de renombrarlo porque el
-    /// renombrado toca una veintena de literales en los tests de cuatro
-    /// crates, y un nombre corto documentado engaña menos que un nombre exacto
-    /// conseguido con un diff que nadie va a leer entero.
+    /// **The name fell short and is historical**: it was born with the
+    /// plugins and today governs more than that. It stays as is instead of
+    /// being renamed because the rename touches some twenty literals across
+    /// four crates' tests, and a short, documented name misleads less than
+    /// an exact one bought with a diff nobody is going to read in full.
     ///
-    /// Que `connections.toml` cuelgue de aquí es lo que hace HERMÉTICA la
-    /// suite del daemon (#365). Antes, `connection.list` leía el
-    /// `~/.config/norte` de quien corriera los tests: bastaba que esa máquina
-    /// tuviera una conexión que norte no supiera leer para ponerlos rojos, y
-    /// el color del test dejaba de ser sobre el código. Es la misma clase de
-    /// problema que un test que toma un lock en el `HOME` de verdad.
+    /// `connections.toml` hanging off this is what makes the daemon suite
+    /// HERMETIC (#365). Before, `connection.list` read whoever ran the tests'
+    /// `~/.config/norte`: it was enough for that machine to have a connection
+    /// norte could not read for the tests to turn red, and the test's color
+    /// stopped being about the code. It's the same class of problem as a
+    /// test that takes a lock in the real `HOME`.
     pub plugins_dir: Option<PathBuf>,
-    /// Dónde vive la sesión de UI (L2): `<state_dir>/session.json` y su lock.
-    /// `None` = **no se persiste nada** — ni se toma el lock ni se arranca el
-    /// escritor—, que es lo que quiere un test y lo que jamás debe pasarle al
-    /// `state_dir` real por descuido. El binario pasa
-    /// [`norte_config::dirs::state_dir`] explícitamente.
+    /// Where the UI session lives (L2): `<state_dir>/session.json` and its
+    /// lock. `None` = **nothing is persisted** — neither the lock is taken
+    /// nor the writer started — which is what a test wants and what must
+    /// never happen to the real `state_dir` by accident. The binary passes
+    /// [`norte_config::dirs::state_dir`] explicitly.
     pub state_dir: Option<PathBuf>,
 }
 
@@ -202,138 +207,147 @@ impl Default for DaemonConfig {
     }
 }
 
-/// Estado compartido entre conexiones.
+/// State shared between connections.
 struct Shared {
     engine: Arc<Engine>,
-    /// Tasks vivas encoladas POR el daemon (para `task.cancel` y graceful),
-    /// etiquetadas con el actor que las encoló: el gate de `task.list`/
-    /// `task.cancel` para conexiones de agente decide con el dueño (#66).
+    /// Live tasks queued BY the daemon (for `task.cancel` and graceful
+    /// shutdown), tagged with the actor that queued them: the
+    /// `task.list`/`task.cancel` gate for agent connections decides by owner
+    /// (#66).
     tasks: Mutex<HashMap<u64, RegisteredTask>>,
-    /// Salidas de notificación de cada cliente YA inicializado, por id de
-    /// conexión (la conexión retira la SUYA al morir — sin esto el writer
-    /// task jamás terminaría: el broadcast retendría su sender). Bounded:
-    /// un suscriptor que no drena pierde la suscripción, jamás acumula.
+    /// Notification outlets for each ALREADY initialized client, by
+    /// connection id (the connection removes ITS OWN on death — without this
+    /// the writer task would never finish: the broadcast would keep holding
+    /// its sender). Bounded: a subscriber that does not drain loses the
+    /// subscription, never accumulates.
     subscribers: Mutex<HashMap<u64, Subscriber>>,
-    /// Desenlaces recientes (snapshots terminales) para `task.list`, con el
-    /// actor dueño: el resync de un agente tampoco ve terminales ajenos (#66).
+    /// Recent outcomes (terminal snapshots) for `task.list`, with the owning
+    /// actor: an agent's resync does not see other actors' terminals either
+    /// (#66).
     recent: Mutex<std::collections::VecDeque<(norte_proto::TaskProgress, Actor)>>,
-    /// Contador de ids de conexión.
+    /// Connection id counter.
     next_conn: AtomicUsize,
-    /// Conexiones autenticadas vivas.
+    /// Live authenticated connections.
     connections: AtomicUsize,
-    /// Apagado global (graceful: primero deja de aceptar).
+    /// Global shutdown (graceful: stops accepting first).
     shutdown: CancellationToken,
-    /// `true` = el shutdown pedido quiere cancelar las tasks primero.
+    /// `true` = the requested shutdown wants to cancel the tasks first.
     hard_shutdown: CancellationToken,
-    /// uid del daemon (derivado del propio socket): el ÚNICO peer admitido.
+    /// The daemon's uid (derived from the socket itself): the ONLY admitted
+    /// peer.
     uid: u32,
-    /// La raíz de config de este daemon, de [`DaemonConfig::plugins_dir`].
-    /// `None` = la config real del usuario. De aquí sale el `connections.toml`
-    /// que sirve `connection.list` (#365).
+    /// This daemon's config root, from [`DaemonConfig::plugins_dir`]. `None`
+    /// = the user's real config. This is where the `connections.toml` that
+    /// serves `connection.list` comes from (#365).
     connections_dir: Option<PathBuf>,
-    /// TTL de un listado paginado retenido (ADR 0017); de [`DaemonConfig`].
+    /// TTL of a retained paginated listing (ADR 0017); from [`DaemonConfig`].
     listing_ttl: Duration,
-    /// Listados paginados retenidos en TODO el daemon (M1): tope global
-    /// [`GLOBAL_MAX_LISTINGS`] para proteger el pool blocking.
+    /// Paginated listings retained across the WHOLE daemon (M1): global cap
+    /// [`GLOBAL_MAX_LISTINGS`] to protect the blocking pool.
     open_listings: Arc<AtomicUsize>,
-    /// Registro de scopes concedidos por sesión de agente (M3-3b). Es la MISMA
-    /// instancia (`Arc`-backed) que el `ScopedPolicy` del engine consulta en el
-    /// gate: conceder aquí abre la frontera allí. Vacío si no hay policy.
+    /// Registry of scopes granted per agent session (M3-3b). It is the SAME
+    /// instance (`Arc`-backed) the engine's `ScopedPolicy` consults in the
+    /// gate: granting here opens the border there. Empty if there is no
+    /// policy.
     scopes: ScopeRegistry,
-    /// Peticiones de scope pendientes de concesión humana, por `request_id`.
-    /// Acotado a [`MAX_PENDING_SCOPE`].
+    /// Scope requests pending human grant, by `request_id`. Capped at
+    /// [`MAX_PENDING_SCOPE`].
     pending_scope: Mutex<HashMap<u64, PendingScope>>,
-    /// Contador de `request_id` de scope (monótono).
+    /// Monotonic scope `request_id` counter.
     next_scope_req: AtomicU64,
-    /// Router de aprobaciones `Ask` (M3-3b Task 4): el MISMO objeto (`Arc`)
-    /// que el engine usa como `ApprovalResolver` — `policy.decide` aquí
-    /// despierta al gate suspendido allí. Con [`Daemon::bind`]/
-    /// [`Daemon::bind_with_scopes`] es un router huérfano (el engine no lo
-    /// conoce): `policy.pending` responde vacío y `policy.decide` no encuentra
-    /// ids — inofensivo.
+    /// `Ask` approval router (M3-3b Task 4): the SAME object (`Arc`) the
+    /// engine uses as `ApprovalResolver` — a `policy.decide` here wakes up
+    /// the suspended gate there. With [`Daemon::bind`]/
+    /// [`Daemon::bind_with_scopes`] it is an orphaned router (the engine does
+    /// not know it): `policy.pending` answers empty and `policy.decide` finds
+    /// no ids — harmless.
     approvals: Arc<DaemonApprovalResolver>,
-    /// Registro de plugins descubiertos + estado aprobado/activado (M4-P3).
-    /// El descubrimiento es I/O síncrono hecho UNA vez en el bind (dentro del
-    /// `spawn_blocking`, regla 2); las mutaciones (`plugin.set_approval`/
-    /// `set_enabled`) re-leen y persisten `plugins-state.toml` bajo el lock. El
-    /// `Mutex` std basta: el dispatch es serial y las secciones son cortas.
+    /// Registry of discovered plugins + approved/enabled state (M4-P3).
+    /// Discovery is synchronous I/O done ONCE at bind time (inside the
+    /// `spawn_blocking`, rule 2); mutations (`plugin.set_approval`/
+    /// `set_enabled`) re-read and persist `plugins-state.toml` under the
+    /// lock. The std `Mutex` is enough: dispatch is serial and the sections
+    /// are short.
     plugins: Mutex<crate::plugins::PluginRegistry>,
-    /// Serializa cada ESCRITURA de `plugins-state.toml` con la foto de la
-    /// que sale (ADR 0104). El `Mutex` de arriba no cruza un `.await`, y
-    /// `persist_state` fusiona la foto sobre el fichero: dos gobiernos en
-    /// vuelo desde dos conexiones humanas —ventana y terminal— podían
-    /// escribir en orden inverso al de sus fotos, y con `uninstall` en medio
-    /// eso resucitaba en disco un consentimiento, anclado a un manifiesto ya
-    /// borrado, que uno instalado después con el mismo id heredaría. Se toma
-    /// ANTES de mutar la memoria y se suelta DESPUÉS de persistir.
+    /// Serializes each WRITE of `plugins-state.toml` with the snapshot it
+    /// comes from (ADR 0104). The `Mutex` above does not cross an `.await`,
+    /// and `persist_state` merges the snapshot onto the file: two governance
+    /// changes in flight from two human connections — window and terminal —
+    /// could write in the reverse order of their snapshots, and with an
+    /// `uninstall` in between that resurrected on disk a consent, anchored
+    /// to an already-deleted manifest, that one installed later with the
+    /// same id would inherit. Taken BEFORE mutating memory and released
+    /// AFTER persisting.
     plugins_state_io: tokio::sync::Mutex<()>,
-    /// Conexiones que son DUEÑAS de al menos un feed dirigido vivo
-    /// (`compare.rows`, `search.hits`, `sync.steps`), con cuántos (#155). Una
-    /// conexión de esta lista NO se expulsa del mapa de suscriptores porque su
-    /// outbox se llene: pierde el FRAME, jamás la suscripción — ver
+    /// Connections that OWN at least one live directed feed (`compare.rows`,
+    /// `search.hits`, `sync.steps`), with how many (#155). A connection on
+    /// this list is NOT evicted from the subscriber map because its outbox
+    /// fills up: it loses the FRAME, never the subscription — see
     /// [`Shared::broadcast_where`].
     directed_feeds: Mutex<HashMap<u64, u32>>,
-    /// La sesión de UI del daemon (L2): UN documento, con su revisión y su
-    /// conexión dueña. `Arc` porque el volcado a disco la mira desde otra
-    /// task. El core la guarda y no la lee (ADR 0058).
+    /// The daemon's UI session (L2): ONE document, with its revision and its
+    /// owning connection. `Arc` because the disk flush watches it from
+    /// another task. The core stores it and does not read it (ADR 0058).
     ui_session: Arc<crate::ui_session::SessionStore>,
-    /// Si lo que se escriba en esa sesión va a LLEGAR al disco: hay
-    /// `state_dir`, este core tiene el lock, y el fichero que había no es de
-    /// una versión más nueva.
+    /// Whether what gets written into that session will REACH disk: there is
+    /// a `state_dir`, this core holds the lock, and the file that was there
+    /// is not from a newer version.
     ///
-    /// Es lo que `session.get` contesta como `owner`, y no solo «te la
-    /// quedaste»: para el cliente las dos cosas son la misma pregunta —«¿mis
-    /// escrituras se guardan?»— y contestar que sí cuando no hay escritor es
-    /// prometer una pantalla que se pierde entera y en silencio.
+    /// This is what `session.get` answers as `owner`, not just "you kept
+    /// it": to the client the two things are the same question — "are my
+    /// writes being saved?" — and answering yes when there is no writer
+    /// promises a screen that is lost entirely and silently.
     ///
-    /// **Atómico y no un `bool`, y eso es #237.** Se calculaba UNA vez en el
-    /// bind, así que un daemon que arrancaba mientras otro core tenía el lock
-    /// contestaba `owner: false` el resto de su vida — también horas después
-    /// de que el otro se hubiera ido y el fichero llevara libre desde
-    /// entonces. Lo vuelve a intentar [`session_writer`], que es quien tiene
-    /// dónde correr, y lo enciende desde ahí. `Arc` por lo mismo que
-    /// `session_flush`: el escritor NO retiene el `Shared`, que lo mantendría
-    /// vivo.
+    /// **Atomic and not a `bool`, and that is #237.** It used to be computed
+    /// ONCE at bind time, so a daemon that started while another core held
+    /// the lock answered `owner: false` for the rest of its life — also
+    /// hours after the other one had gone and the file had been free ever
+    /// since. [`session_writer`] retries it, since it is the one with
+    /// somewhere to run, and turns it on from there. `Arc` for the same
+    /// reason as `session_flush`: the writer does NOT hold onto `Shared`,
+    /// which would keep it alive.
     session_persists: Arc<AtomicBool>,
-    /// Despierta al escritor de la sesión fuera de su tick: la última
-    /// conexión que se va no debería dejar un segundo de pantalla sin volcar.
-    /// `Arc` porque el escritor NO retiene el `Shared` (lo mantendría vivo).
+    /// Wakes up the session writer outside its tick: the last connection to
+    /// leave should not leave a second of screen unflushed. `Arc` because the
+    /// writer does NOT hold onto `Shared` (which would keep it alive).
     session_flush: Arc<tokio::sync::Notify>,
-    /// Runtime WASM compartido para ejecutar comandos de plugin (M4-P4). Se
-    /// construye UNA vez en el bind (arranca un hilo "ticker" de época) y se
-    /// reutiliza entre `plugin.run_command`. `Arc` porque `PluginRuntime` es
-    /// `Send+Sync` pero NO `Clone` (posee el `JoinHandle` del ticker): el
-    /// handler clona el `Arc` y ejecuta la instanciación+ejecución (pesada,
-    /// síncrona) en un `spawn_blocking`, jamás en el reactor con un lock tomado
-    /// (regla 2).
+    /// Shared WASM runtime for running plugin commands (M4-P4). Built ONCE
+    /// at bind time (starts an epoch "ticker" thread) and reused across
+    /// `plugin.run_command` calls. `Arc` because `PluginRuntime` is
+    /// `Send+Sync` but NOT `Clone` (it owns the ticker's `JoinHandle`): the
+    /// handler clones the `Arc` and runs the (heavy, synchronous)
+    /// instantiation+execution in a `spawn_blocking`, never on the reactor
+    /// with a lock held (rule 2).
     plugin_runtime: Arc<norte_plugin_host::PluginRuntime>,
-    /// Instancias de columnas VIVAS entre páginas (#224). Cuelga de aquí por
-    /// lo mismo que el runtime: es estado de proceso, y la instancia que sirvió
-    /// la página 1 es la que tiene el índice del proyecto ya parseado cuando
-    /// llega la 2. El backend embebido tiene el suyo, y es el MISMO tipo — uno
-    /// con pool y otro sin él sería la asimetría de #165/#201/#181 otra vez.
+    /// Column instances LIVE across pages (#224). It hangs off here for the
+    /// same reason as the runtime: it is process state, and the instance
+    /// that served page 1 is the one that already has the project's index
+    /// parsed when page 2 arrives. The embedded backend has its own, and it
+    /// is the SAME type — one with a pool and another without it would be
+    /// the #165/#201/#181 asymmetry all over again.
     column_pool: Arc<crate::plugins::ColumnPool>,
-    /// El anillo de registro de ESTE proceso, si alguien montó uno (#328,
-    /// ADR 0092). Es lo que sirven `log.tail` y `log.level`.
+    /// THIS process's log ring, if anyone mounted one (#328, ADR 0092). It is
+    /// what `log.tail` and `log.level` serve.
     ///
-    /// No está en [`DaemonConfig`] porque no es configuración: es el objeto
-    /// VIVO en el que escribe la capa de `tracing`, y de eso solo sabe quien
-    /// instaló el subscriber — el binario, con [`Daemon::with_log_ring`],
-    /// entre el bind y el `run`. El mismo reparto que `scopes` y `approvals`,
-    /// que también llegan por fuera de la config por ser objetos compartidos
-    /// y no valores.
+    /// Not in [`DaemonConfig`] because it is not configuration: it is the
+    /// LIVE object the `tracing` layer writes into, and only whoever
+    /// installed the subscriber knows about that — the binary, with
+    /// [`Daemon::with_log_ring`], between the bind and the `run`. The same
+    /// arrangement as `scopes` and `approvals`, which also arrive from
+    /// outside the config for being shared objects rather than values.
     ///
-    /// Vacío es el daemon SIN registro que enseñar: el montaje no se hizo, o
-    /// falló porque ya había un subscriber. Entonces los dos métodos contestan
-    /// [`norte_proto::Error::Unsupported`] y jamás una lista vacía — un
-    /// registro vacío y un registro ausente no pueden leerse igual, que es
-    /// justo la confusión que #326 empezó a arreglar.
+    /// Empty is the daemon with NO log to show: the mount was not done, or
+    /// failed because there already was a subscriber. Then both methods
+    /// answer [`norte_proto::Error::Unsupported`] and never an empty list —
+    /// an empty log and an absent log cannot be read the same way, which is
+    /// exactly the confusion #326 started to fix.
     log_ring: std::sync::OnceLock<norte_config::logring::LogRing>,
 }
 
-/// Una petición de scope registrada por un agente, a la espera de que un
-/// humano la conceda con `policy.grant_scope`. Guarda lo pedido verbatim; la
-/// sesión ya quedó validada contra el actor de la conexión al registrarla.
+/// A scope request registered by an agent, waiting for a human to grant it
+/// with `policy.grant_scope`. Stores what was asked verbatim; the session
+/// was already validated against the connection's actor when it was
+/// registered.
 struct PendingScope {
     session: String,
     roots: Vec<norte_proto::VPath>,
@@ -341,32 +355,32 @@ struct PendingScope {
     ttl_ms: u64,
 }
 
-/// Una salida de broadcast: el sender de la outbox y el ACTOR de la conexión
-/// (M3-3b Task 4, security MAJOR-1): las notifs `policy.*` cruzan sesiones
-/// (rutas y ops de otras) y solo van a humanos — el mismo criterio que el
-/// gate de `policy.pending`. El `task.progress` se enruta por dueño (#66):
-/// humanos siempre, un agente solo el de sus propias tasks.
+/// A broadcast outlet: the outbox's sender and the connection's ACTOR
+/// (M3-3b Task 4, security MAJOR-1): `policy.*` notifications cross sessions
+/// (other sessions' paths and ops) and only go to humans — the same
+/// criterion as the `policy.pending` gate. `task.progress` is routed by
+/// owner (#66): always to humans, an agent only gets its own tasks'.
 struct Subscriber {
     tx: mpsc::Sender<Arc<[u8]>>,
-    /// Actor de la conexión (fijado server-side por SU `initialize`): decide
-    /// qué broadcasts recibe — `policy.*` solo humanos; el `task.progress` de
-    /// una task ajena jamás llega a un agente (#66, mismo leak que
-    /// `task.list`: `current` lleva paths de otros actores).
+    /// The connection's actor (fixed server-side by ITS `initialize`):
+    /// decides which broadcasts it receives — `policy.*` only humans;
+    /// another actor's `task.progress` never reaches an agent (#66, the same
+    /// leak as `task.list`: `current` carries other actors' paths).
     actor: Actor,
 }
 
-/// Una task viva registrada en el daemon: el handle + QUIÉN la encoló. El
-/// dueño gobierna visibilidad (`task.list`, broadcast de progreso) y
-/// cancelabilidad (`task.cancel`) frente a conexiones de agente (#66).
+/// A live task registered in the daemon: the handle + WHO queued it. The
+/// owner governs visibility (`task.list`, progress broadcast) and
+/// cancellability (`task.cancel`) against agent connections (#66).
 struct RegisteredTask {
     handle: TaskHandle,
     owner: Actor,
 }
 
-/// El derecho de una conexión a no ser expulsada mientras su feed dirigido
-/// vive (#155). Se cuenta, no se marca: una conexión puede tener a la vez una
-/// búsqueda y una comparación, y la primera en terminar no puede quitarle el
-/// derecho a la otra.
+/// A connection's right not to be evicted while its directed feed is alive
+/// (#155). It is counted, not flagged: a connection can have a search and a
+/// comparison at the same time, and the first one to finish must not take
+/// away the other's right.
 struct DirectedFeed {
     shared: Arc<Shared>,
     conn_id: u64,
@@ -378,7 +392,7 @@ impl Drop for DirectedFeed {
             .shared
             .directed_feeds
             .lock()
-            .expect("directed feeds lock sano");
+            .expect("directed feeds lock is sound");
         if let Some(n) = feeds.get_mut(&self.conn_id) {
             *n -= 1;
             if *n == 0 {
@@ -388,11 +402,11 @@ impl Drop for DirectedFeed {
     }
 }
 
-/// Empuja un terminal al anillo `recent` respetando los topes por clase
-/// (#70): un terminal de agente expulsa antes al MÁS VIEJO de su clase si
-/// los agentes ya ocupan [`RECENT_TERMINAL_AGENTS`] slots; el tope global
-/// [`RECENT_TERMINAL`] solo puede comerse entradas del humano cuando es el
-/// propio humano quien desborda (los agentes nunca pasan de su sub-tope).
+/// Pushes a terminal onto the `recent` ring while respecting the per-class
+/// caps (#70): an agent terminal first evicts the OLDEST of its own class if
+/// agents already occupy [`RECENT_TERMINAL_AGENTS`] slots; the global cap
+/// [`RECENT_TERMINAL`] can only eat into the human's entries when it is the
+/// human itself overflowing (agents never go past their sub-cap).
 fn push_recent(
     recent: &mut std::collections::VecDeque<(norte_proto::TaskProgress, Actor)>,
     snapshot: norte_proto::TaskProgress,
@@ -415,18 +429,18 @@ fn push_recent(
     }
 }
 
-/// EL criterio de visibilidad/alcance sobre tasks (#66), único para
-/// `task.list`, `task.cancel` y el broadcast de progreso: un humano observa
-/// todo; cualquier otro actor, solo lo suyo (igualdad de actor — dos
-/// conexiones de la misma sesión de agente comparten vista, coherente con
-/// `ScopeRegistry`). Un futuro dueño `Plugin` queda fail-closed: solo lo ve
-/// el humano.
+/// THE visibility/scope criterion over tasks (#66), the single one for
+/// `task.list`, `task.cancel` and the progress broadcast: a human observes
+/// everything; any other actor, only its own (actor equality — two
+/// connections of the same agent session share a view, consistent with
+/// `ScopeRegistry`). A future `Plugin` owner is fail-closed: only the human
+/// sees it.
 fn may_observe(viewer: &Actor, owner: &Actor) -> bool {
     matches!(viewer, Actor::User) || viewer == owner
 }
 
-/// A dónde van los avisos de los hooks (ADR 0100): a las conexiones humanas,
-/// por `plugin.notice`. `Weak` por lo mismo que el observer de conexión.
+/// Where hook notices go (ADR 0100): to human connections, via
+/// `plugin.notice`. `Weak` for the same reason as the connection observer.
 struct DaemonHookSink {
     shared: Weak<Shared>,
 }
@@ -436,8 +450,8 @@ impl crate::hooks::HookNoticeSink for DaemonHookSink {
         let Some(shared) = self.shared.upgrade() else {
             return;
         };
-        // Si la serialización fallara (no puede: struct plano), mejor NO
-        // emitir que emitir una notif con shape corrupto.
+        // If serialization failed (it cannot: a flat struct), better NOT to
+        // emit than to emit a notif with a corrupt shape.
         let Ok(params) = serde_json::to_value(&n) else {
             return;
         };
@@ -451,19 +465,19 @@ impl crate::hooks::HookNoticeSink for DaemonHookSink {
         }
     }
 
-    /// Muerto el daemon, muerto el despachador.
+    /// Daemon dead, dispatcher dead.
     fn is_closed(&self) -> bool {
         self.shared.strong_count() == 0
     }
 }
 
-/// Observer de avisos de conexión del daemon (#44): codifica cada aviso como
-/// `connection.degraded` y lo difunde SOLO a humanos (como `policy.*`). `Weak`
-/// rompe el ciclo Shared→engine→observer→Shared.
+/// The daemon's connection-warning observer (#44): encodes each warning as
+/// `connection.degraded` and broadcasts it ONLY to humans (like `policy.*`).
+/// `Weak` breaks the Shared→engine→observer→Shared cycle.
 struct DaemonConnectionObserver {
     shared: std::sync::Weak<Shared>,
-    /// El observer que ya estuviera en la ranura del engine, si lo había.
-    /// La ranura es de UNO: quien instala reenvía, no pisa.
+    /// The observer that was already in the engine's slot, if any. The slot
+    /// holds ONE: whoever installs forwards, does not overwrite.
     previo: Option<Arc<dyn crate::connect::ConnectionObserver>>,
 }
 
@@ -478,8 +492,8 @@ impl crate::connect::ConnectionObserver for DaemonConnectionObserver {
             reason: w.reason.wire().to_owned(),
             detail: None,
         };
-        // Si la serialización fallara (no puede: struct plano), mejor NO emitir
-        // que emitir una notif con shape corrupto.
+        // If serialization failed (it cannot: a flat struct), better NOT to
+        // emit than to emit a notif with a corrupt shape.
         let Ok(params) = serde_json::to_value(&notif) else {
             return;
         };
@@ -489,8 +503,8 @@ impl crate::connect::ConnectionObserver for DaemonConnectionObserver {
             params: Some(params),
         };
         if let Ok(frame) = encode_frame(&n) {
-            // Solo humanos: la sesión degradada es info de seguridad para el
-            // usuario, no para el agente (mismo criterio que policy.*).
+            // Humans only: a degraded session is security info for the user,
+            // not for the agent (same criterion as policy.*).
             shared.broadcast_humans(&Arc::from(frame.into_boxed_slice()));
         }
         if let Some(p) = &self.previo {
@@ -498,11 +512,11 @@ impl crate::connect::ConnectionObserver for DaemonConnectionObserver {
         }
     }
 
-    /// #322: por qué NO se pudo conectar, para quien está mirando.
+    /// #322: why the connection could NOT be made, for whoever is watching.
     ///
-    /// Mismo camino y mismo criterio que el aviso de degradación: solo a
-    /// humanos. Una conexión de agente no lee frases — decide por categoría, y
-    /// la categoría ya le llega en el error de su operación.
+    /// Same path and same criterion as the degradation warning: humans only.
+    /// An agent connection does not read sentences — it decides by category,
+    /// and the category already reaches it in its operation's error.
     fn on_connection_failure(&self, f: &crate::connect::ConnectionFailure) {
         let Some(shared) = self.shared.upgrade() else {
             return;
@@ -534,55 +548,56 @@ impl crate::connect::ConnectionObserver for DaemonConnectionObserver {
 impl Shared {
     fn idle(&self) -> bool {
         self.connections.load(Ordering::SeqCst) == 0
-            && self.tasks.lock().expect("tasks lock sano").is_empty()
+            && self.tasks.lock().expect("tasks lock is sound").is_empty()
     }
 
-    /// Difunde a TODAS las conexiones. Hoy solo `daemon.going_away`: que este
-    /// daemon se vaya le pasa igual a un agente que a un humano, y los dos
-    /// tienen que decidir lo mismo (volver o no).
+    /// Broadcasts to ALL connections. Today only `daemon.going_away`: this
+    /// daemon leaving affects an agent the same as a human, and both have to
+    /// decide the same thing (come back or not).
     fn broadcast_all(&self, frame: &Arc<[u8]>) {
         self.broadcast_where(frame, |_| true);
     }
 
-    /// Difunde SOLO a conexiones humanas (no-agente): notifs `policy.*`.
+    /// Broadcasts ONLY to human (non-agent) connections: `policy.*` notifs.
     fn broadcast_humans(&self, frame: &Arc<[u8]>) {
         self.broadcast_where(frame, |s| matches!(s.actor, Actor::User));
     }
 
-    /// Difunde el progreso de UNA task: humanos siempre; una conexión de
-    /// agente solo si la task es SUYA (mismo actor). Mismo criterio que el
-    /// filtro de `task.list` (#66).
+    /// Broadcasts ONE task's progress: always to humans; an agent connection
+    /// only if the task is ITS OWN (same actor). Same criterion as the
+    /// `task.list` filter (#66).
     fn broadcast_task_progress(&self, frame: &Arc<[u8]>, owner: &Actor) {
         self.broadcast_where(frame, |s| may_observe(&s.actor, owner));
     }
 
-    /// Envía un frame a UNA conexión concreta (los hits de una `fs.search` son
-    /// del que la lanzó — jamás broadcast, security T4). No-op si la conexión
-    /// murió o ya no está suscrita.
+    /// Sends a frame to ONE specific connection (the hits of an `fs.search`
+    /// belong to whoever launched it — never broadcast, security T4). No-op
+    /// if the connection died or is no longer subscribed.
     ///
-    /// Una outbox LLENA pierde el frame y NO la suscripción (#155): la
-    /// expulsión era irreversible —la entrada solo se inserta en
-    /// `initialize`— y se llevaba por delante el `task.progress` terminal, que
-    /// es justo la señal con la que el cliente detecta que le faltan filas. El
-    /// backlog sigue acotado por el canal, que es quien lo acotaba de verdad;
-    /// lo que se pierde son frames, y eso el contrato ya sabe decirlo. Una
-    /// outbox CERRADA sí retira la entrada: ahí no hay nadie a quien proteger.
+    /// A FULL outbox loses the frame and NOT the subscription (#155): the
+    /// eviction used to be irreversible — the entry is only inserted in
+    /// `initialize` — and took down with it the terminal `task.progress`,
+    /// which is exactly the signal the client uses to detect it is missing
+    /// rows. The backlog is still bounded by the channel, which is what
+    /// really bounded it; what gets lost is frames, and the contract already
+    /// knows how to say that. A CLOSED outbox does remove the entry: there
+    /// is nobody there to protect.
     ///
-    /// Devuelve `false` si el frame NO se entregó. Sirve para que una bomba de
-    /// feed dirigido deje de producir: seguir comparando dos árboles durante
-    /// una hora para un dueño que no lee es trabajo tirado y un permiso del
-    /// scheduler retenido.
+    /// Returns `false` if the frame was NOT delivered. Used so a directed
+    /// feed's producer stops: continuing to compare two trees for an hour for
+    /// an owner who is not reading is wasted work and a scheduler permit held
+    /// onto for nothing.
     fn send_to_conn(&self, conn_id: u64, frame: &Arc<[u8]>) -> bool {
         send_to_conn_impl(&self.subscribers, conn_id, frame)
     }
 
-    /// Marca `conn_id` como dueño de un feed dirigido vivo hasta que el guard
-    /// se dropee (#155).
+    /// Marks `conn_id` as the owner of a live directed feed until the guard
+    /// is dropped (#155).
     fn feed_guard(self: &Arc<Self>, conn_id: u64) -> DirectedFeed {
         *self
             .directed_feeds
             .lock()
-            .expect("directed feeds lock sano")
+            .expect("directed feeds lock is sound")
             .entry(conn_id)
             .or_insert(0) += 1;
         DirectedFeed {
@@ -592,14 +607,14 @@ impl Shared {
     }
 
     fn broadcast_where(&self, frame: &Arc<[u8]>, wants: impl Fn(&Subscriber) -> bool) {
-        // Quién NO se expulsa por una outbox llena (#155): el dueño de un feed
-        // dirigido vivo. Se lee ANTES de tomar el lock de suscriptores — anidar
-        // los dos por cada frame de broadcast es un orden de bloqueo que no
-        // hace falta inventar.
+        // Who is NOT evicted for a full outbox (#155): the owner of a live
+        // directed feed. Read BEFORE taking the subscribers lock — nesting
+        // the two on every broadcast frame is a locking order there is no
+        // need to invent.
         let feeds: Vec<u64> = self
             .directed_feeds
             .lock()
-            .expect("directed feeds lock sano")
+            .expect("directed feeds lock is sound")
             .keys()
             .copied()
             .collect();
@@ -607,24 +622,23 @@ impl Shared {
     }
 }
 
-/// Núcleo testeable de [`Shared::broadcast_where`]: manda `frame` a cada
-/// suscriptor que `wants` acepte y RETIRA al que tenga el receptor muerto.
+/// Testable core of [`Shared::broadcast_where`]: sends `frame` to every
+/// subscriber that `wants` accepts and REMOVES the ones whose receiver died.
 ///
-/// Una outbox LLENA expulsa —el backlog de un cliente lento jamás crece sin
-/// límite (M1)— SALVO que la conexión esté en `feeds`, es decir sea dueña de
-/// un feed dirigido vivo (#155): a ésa la expulsión le quitaría también el
-/// `task.progress` terminal de su propia task, que es la señal con la que
-/// comprueba si le llegaron todas las filas. Pierde el frame y sigue
-/// suscrita.
+/// A FULL outbox evicts — a slow client's backlog never grows without limit
+/// (M1) — UNLESS the connection is in `feeds`, i.e. it owns a live directed
+/// feed (#155): for that one, eviction would also take away its own task's
+/// terminal `task.progress`, which is the signal it uses to check whether all
+/// its rows arrived. It loses the frame and stays subscribed.
 fn broadcast_impl(
     subs: &Mutex<HashMap<u64, Subscriber>>,
     feeds: &[u64],
     frame: &Arc<[u8]>,
     wants: impl Fn(&Subscriber) -> bool,
 ) {
-    let mut subs = subs.lock().expect("subscribers lock sano");
+    let mut subs = subs.lock().expect("subscribers lock is sound");
     subs.retain(|conn, s| {
-        // Un suscriptor excluido de ESTA notif conserva su suscripción.
+        // A subscriber excluded from THIS notif keeps its subscription.
         if !wants(s) {
             return true;
         }
@@ -634,11 +648,11 @@ fn broadcast_impl(
                 if feeds.contains(conn) {
                     tracing::warn!(
                         conn,
-                        "dueño de un feed dirigido sin drenar: se pierde el frame, no la suscripción"
+                        "owner of an undrained directed feed: the frame is lost, not the subscription"
                     );
                     return true;
                 }
-                tracing::warn!(conn, "suscriptor sin drenar: expulsado del broadcast");
+                tracing::warn!(conn, "undrained subscriber: evicted from the broadcast");
                 false
             }
             Err(mpsc::error::TrySendError::Closed(_)) => false,
@@ -646,17 +660,18 @@ fn broadcast_impl(
     });
 }
 
-/// Núcleo testeable de [`Shared::send_to_conn`]: envía `frame` a la conexión
-/// `conn_id` de `subs` (si existe) y RETIRA la entrada solo si su receptor
-/// MURIÓ. Una outbox llena pierde el frame y conserva la suscripción (#155).
+/// Testable core of [`Shared::send_to_conn`]: sends `frame` to connection
+/// `conn_id` in `subs` (if it exists) and REMOVES the entry only if its
+/// receiver DIED. A full outbox loses the frame and keeps the subscription
+/// (#155).
 ///
-/// `true` = entregado.
+/// `true` = delivered.
 fn send_to_conn_impl(
     subs: &Mutex<HashMap<u64, Subscriber>>,
     conn_id: u64,
     frame: &Arc<[u8]>,
 ) -> bool {
-    let mut subs = subs.lock().expect("subscribers lock sano");
+    let mut subs = subs.lock().expect("subscribers lock is sound");
     let (delivered, remove) = match subs.get(&conn_id) {
         None => return false,
         Some(s) => match s.tx.try_send(Arc::clone(frame)) {
@@ -664,7 +679,7 @@ fn send_to_conn_impl(
             Err(mpsc::error::TrySendError::Full(_)) => {
                 tracing::warn!(
                     conn = conn_id,
-                    "dueño de un feed dirigido sin drenar: se pierde el frame, no la suscripción"
+                    "owner of an undrained directed feed: the frame is lost, not the subscription"
                 );
                 (false, false)
             }
@@ -677,48 +692,49 @@ fn send_to_conn_impl(
     delivered
 }
 
-/// El daemon enlazado a su socket, listo para [`Daemon::run`].
+/// The daemon bound to its socket, ready for [`Daemon::run`].
 ///
-/// El `Debug` es deliberadamente somero (path del socket): el estado
-/// interno no es API.
+/// `Debug` is deliberately shallow (the socket path): internal state is not
+/// API.
 pub struct Daemon {
     listener: UnixListener,
     socket_path: PathBuf,
     shared: Arc<Shared>,
     idle_timeout: Option<Duration>,
-    /// El escritor de la sesión, si hay dónde escribirla.
+    /// The session writer, if there is anywhere to write it.
     ///
-    /// **El derecho a escribir —el lock— vive DENTRO de la task** desde #237:
-    /// es ella quien lo toma tarde si al arrancar lo tenía otro core, así que
-    /// tenerlo aquí sería tenerlo en dos sitios. Se espera a que termine en el
-    /// apagado ordenado, y al terminar suelta el lock: el sucesor de un relevo
-    /// tiene que encontrar el fichero ya escrito y el lock ya libre. Si el
-    /// daemon se va por cualquier otro camino, su `Drop` la aborta (ver
-    /// [`SessionWriter`]).
+    /// **The right to write — the lock — lives INSIDE the task** since #237:
+    /// it is the task that takes it late if another core held it at startup,
+    /// so keeping it here too would mean keeping it in two places. It is
+    /// awaited to finish during an orderly shutdown, and on finishing it
+    /// releases the lock: a handoff's successor has to find the file already
+    /// written and the lock already free. If the daemon leaves by any other
+    /// path, its `Drop` aborts it (see [`SessionWriter`]).
     session_writer: Option<SessionWriter>,
 }
 
-/// El escritor de la sesión, que se PARA si su daemon muere sin apagarse.
+/// The session writer, which STOPS if its daemon dies without shutting down.
 ///
-/// **El `abort` no cancela un `spawn_blocking` en vuelo.** Si cae justo
-/// mientras `flush_session` espera su escritura, esa escritura termina, pero
-/// el estado del escritor —y con él el lock— se dropea ya: la escritura puede
-/// aterrizar después de que un sucesor haya tomado el lock. Es anterior a #237
-/// y esa versión lo tenía peor (soltaba el `session_lock` ANTES de abortar);
-/// no se alcanza desde el binario, que siempre espera a `run()` hasta el
-/// final, solo desde un `Daemon` dropeado en un test o en un empotrador.
+/// **`abort` does not cancel an in-flight `spawn_blocking`.** If it falls
+/// right while `flush_session` is waiting on its write, that write finishes,
+/// but the writer's state — and with it the lock — is already dropped: the
+/// write can land after a successor has taken the lock. This predates #237
+/// and that version had it worse (it released `session_lock` BEFORE
+/// aborting); it is not reached from the binary, which always waits for
+/// `run()` to the end, only from a `Daemon` dropped in a test or in an
+/// embedder.
 ///
-/// Dropear un `JoinHandle` de tokio DESLIGA la task, no la para. Sin este
-/// envoltorio, un daemon que se va por un camino que no es el apagado ordenado
-/// —un `accept` que falla, un bind que se dropea, un test que abandona— suelta
-/// su `session_lock` y deja la task viva: un proceso escribiendo el fichero
-/// SIN el derecho a escribirlo, que es exactamente el segundo escritor que
-/// todo esto existe para que no haya.
+/// Dropping a tokio `JoinHandle` DETACHES the task, it does not stop it.
+/// Without this wrapper, a daemon that leaves by a path other than orderly
+/// shutdown — a failing `accept`, a dropped bind, an abandoning test —
+/// releases its `session_lock` and leaves the task alive: a process writing
+/// the file WITHOUT the right to write it, which is exactly the second
+/// writer all of this exists to prevent.
 struct SessionWriter(Option<tokio::task::JoinHandle<()>>);
 
 impl SessionWriter {
-    /// El handle, para ESPERARLO en el apagado ordenado. Lo que queda ya no
-    /// aborta nada.
+    /// The handle, to AWAIT during orderly shutdown. What remains no longer
+    /// aborts anything.
     fn take(&mut self) -> Option<tokio::task::JoinHandle<()>> {
         self.0.take()
     }
@@ -741,27 +757,27 @@ impl std::fmt::Debug for Daemon {
 }
 
 impl Daemon {
-    /// Crea (o verifica) el directorio del socket, enlaza y autentica el
-    /// entorno: dueño/modo del dir, jamás root, jamás dos daemons.
+    /// Creates (or verifies) the socket directory, binds and authenticates
+    /// the environment: dir owner/mode, never root, never two daemons.
     ///
     /// # Errors
-    /// [`DaemonError`]: dir inseguro, root, socket ocupado por un daemon
-    /// vivo, o I/O.
+    /// [`DaemonError`]: unsafe dir, root, socket occupied by a live daemon,
+    /// or I/O.
     #[tracing::instrument(skip(engine, cfg))]
     pub async fn bind(engine: Arc<Engine>, cfg: DaemonConfig) -> Result<Self, DaemonError> {
         Self::bind_with_scopes(engine, ScopeRegistry::new(), cfg).await
     }
 
-    /// Como [`Self::bind`] pero comparte `scopes` con el `ScopedPolicy` del
-    /// engine (M3-3b): el llamante construye
-    /// `engine.with_policy(ScopedPolicy::new(scopes.clone(), cfg), …)` y pasa
-    /// el MISMO registro aquí para que `policy.grant_scope` abra la frontera
-    /// que el gate del engine consulta. Sin policy, pásale un registro vacío
-    /// (o usa [`Self::bind`]).
+    /// Like [`Self::bind`] but shares `scopes` with the engine's
+    /// `ScopedPolicy` (M3-3b): the caller builds
+    /// `engine.with_policy(ScopedPolicy::new(scopes.clone(), cfg), …)` and
+    /// passes the SAME registry here so that `policy.grant_scope` opens the
+    /// border the engine's gate consults. Without policy, pass it an empty
+    /// registry (or use [`Self::bind`]).
     ///
     /// # Errors
-    /// [`DaemonError`]: dir inseguro, root, socket ocupado por un daemon vivo,
-    /// o I/O.
+    /// [`DaemonError`]: unsafe dir, root, socket occupied by a live daemon,
+    /// or I/O.
     #[tracing::instrument(skip(engine, scopes, cfg))]
     pub async fn bind_with_scopes(
         engine: Arc<Engine>,
@@ -777,34 +793,35 @@ impl Daemon {
         .await
     }
 
-    /// Como [`Self::bind_with_scopes`] pero además comparte el router de
-    /// aprobaciones `Ask` (M3-3b Task 4). Orden de construcción: el llamante
-    /// crea `approvals` PRIMERO, construye el engine con
+    /// Like [`Self::bind_with_scopes`] but also shares the `Ask` approval
+    /// router (M3-3b Task 4). Construction order: the caller creates
+    /// `approvals` FIRST, builds the engine with
     /// `with_policy(ScopedPolicy::new(scopes.clone(), cfg), approvals.clone())`
-    /// y pasa el MISMO `Arc` aquí; este bind le instala la salida hacia los
-    /// suscriptores (broadcast de `policy.approval_required`) y enruta
-    /// `policy.decide`/`policy.pending` hacia él.
+    /// and passes the SAME `Arc` here; this bind installs its outlet toward
+    /// the subscribers (broadcast of `policy.approval_required`) and routes
+    /// `policy.decide`/`policy.pending` to it.
     ///
     /// # Errors
-    /// [`DaemonError`]: dir inseguro, root, socket ocupado por un daemon vivo,
-    /// o I/O.
+    /// [`DaemonError`]: unsafe dir, root, socket occupied by a live daemon,
+    /// or I/O.
     ///
     /// # Policy
-    /// Un engine sobre el que nadie llamó a
-    /// [`Engine::with_policy`](crate::Engine::with_policy) gatea con `AllowAll`:
-    /// este bind lo AVISA por `warn!` y sigue (#166). No se rechaza porque
-    /// «permisivo a propósito» es una configuración legítima; lo que no puede
-    /// ser es indistinguible de un olvido.
-    // Secuencia de arranque estrictamente lineal (socket → plugins → sesión
-    // → `Shared` → routers), un paso por bloque — mismo criterio que
-    // `dispatch`/`dispatch_fs_task` en este mismo fichero: trocearla en
-    // sub-funciones no reduciría la complejidad real del bind, solo la
-    // escondería detrás de una indirección y de más parámetros cruzando la
-    // frontera. Cruzó las 100 líneas cuando 0.65.0 montó el anillo de
-    // registro (`log_ring`) en `Shared` (#328, ADR 0092).
+    /// An engine on which nobody called
+    /// [`Engine::with_policy`](crate::Engine::with_policy) gates with
+    /// `AllowAll`: this bind WARNS about it via `warn!` and continues (#166).
+    /// It is not rejected because "permissive on purpose" is a legitimate
+    /// configuration; what it must not be is indistinguishable from an
+    /// oversight.
+    // Strictly linear startup sequence (socket → plugins → session → `Shared`
+    // → routers), one step per block — same criterion as
+    // `dispatch`/`dispatch_fs_task` in this same file: splitting it into
+    // sub-functions would not reduce the bind's real complexity, only hide it
+    // behind indirection and more parameters crossing the boundary. It
+    // crossed 100 lines when 0.65.0 mounted the log ring (`log_ring`) into
+    // `Shared` (#328, ADR 0092).
     #[expect(
         clippy::too_many_lines,
-        reason = "arranque del daemon: monta cada pieza de `Shared` una vez y en orden"
+        reason = "daemon startup: mounts each piece of `Shared` once, in order"
     )]
     #[tracing::instrument(skip(engine, scopes, approvals, cfg))]
     pub async fn bind_with_policy(
@@ -813,24 +830,25 @@ impl Daemon {
         approvals: Arc<DaemonApprovalResolver>,
         cfg: DaemonConfig,
     ) -> Result<Self, DaemonError> {
-        // #166: el gate del engine es `AllowAll` mientras nadie instale una
-        // policy, y un daemon sobre ese engine no gatea NADA — ni siquiera a un
-        // agente. Ningún binario nuestro llega aquí así (`daemon run` instala
-        // `ScopedPolicy`), pero un embebedor o un harness sí puede, y el hueco
-        // no tiene hoy ni una línea de log. `sync.apply` es lo que cambia las
-        // consecuencias: una llamada, un hash, y un `Mirror` reescribe y borra.
+        // #166: the engine's gate is `AllowAll` while nobody installs a
+        // policy, and a daemon over that engine gates NOTHING — not even an
+        // agent. None of our binaries reaches here that way (`daemon run`
+        // installs `ScopedPolicy`), but an embedder or a harness can, and the
+        // gap does not have a single log line today. `sync.apply` is what
+        // changes the consequences: one call, one hash, and a `Mirror`
+        // rewrites and deletes.
         if !engine.has_explicit_policy() {
             tracing::warn!(
-                "daemon montado sobre un engine SIN policy: toda operación de \
-                 todo actor pasa (AllowAll por omisión). Instala una policy con \
-                 Engine::with_policy antes de bind (#166)."
+                "daemon mounted on an engine WITHOUT policy: every operation from \
+                 every actor passes (AllowAll by default). Install a policy with \
+                 Engine::with_policy before bind (#166)."
             );
         }
-        // La resolución del path por defecto puede tocar el FS (sonda de uid
-        // del fallback /tmp) y el descubrimiento del catálogo de plugins lee el
-        // dir de config: TODO I/O síncrono dentro del spawn_blocking (regla 2).
-        // La raíz de plugins también la necesita el despachador de hooks (ADR
-        // 0100), que redescubre el registro por tanda desde este mismo sitio.
+        // Resolving the default path can touch the FS (uid probe of the
+        // /tmp fallback), and discovering the plugin catalogue reads the
+        // config dir: ALL synchronous I/O inside the spawn_blocking (rule 2).
+        // The plugin root is also needed by the hook dispatcher (ADR 0100),
+        // which rediscovers the registry per batch from this same place.
         let plugins_root = cfg
             .plugins_dir
             .clone()
@@ -850,40 +868,44 @@ impl Daemon {
                 DaemonError,
             > {
                 let (listener, uid, socket_path) = bind_socket(requested)?;
-                // Catálogo de plugins + runtime WASM compartido (M4-P3/P4):
-                // I/O/CPU síncrono dentro del spawn_blocking (regla 2).
+                // Plugin catalogue + shared WASM runtime (M4-P3/P4):
+                // synchronous I/O/CPU inside the spawn_blocking (rule 2).
                 let (plugins, plugin_runtime) = discover_plugins(plugins_dir)?;
                 Ok((listener, uid, socket_path, plugins, plugin_runtime))
             }
             })
             .await
-            // Un panic del closure NO es un problema del dir: categoría honesta.
+            // A panic from the closure is NOT a problem with the dir: an
+            // honest category.
             .map_err(|e| DaemonError::Io(std::io::Error::other(e)))??;
         listener.set_nonblocking(true)?;
         let listener = UnixListener::from_std(listener)?;
 
-        // La sesión de UI (L2): el lock y la carga son I/O síncrono, así que
-        // van a un pool blocking (regla 2). Sin `state_dir` no se persiste
-        // nada, que es lo que quiere un test; con él, quien no consigue el
-        // lock arranca CON la pantalla y sin escritor —clona y corre suelto—.
-        let (session_lock, sesion, escribible) = open_session(cfg.state_dir.clone()).await?;
-        // Persistir es las TRES cosas a la vez: hay dónde, se tiene el
-        // derecho, y lo que hay en disco no es de un binario más nuevo. Lo que
-        // se calcula aquí es el ARRANQUE, no la vida entera (#237): al que le
-        // falta solo el lock lo vuelve a intentar el escritor.
-        // `Release`/`Acquire` y no `Relaxed`: el escritor ADOPTA el documento
-        // (bajo el mutex del almacén) y solo después enciende esta bandera, y
-        // el handler de `session.get` lee la bandera y solo después el
-        // documento. Con `Relaxed` nada ata esos dos pares, así que un cliente
-        // podía recibir `owner: true` con la revisión de ANTES de la adopción,
-        // escribir contra ella y llevarse un `Conflict` que no tenía por qué
-        // existir. Se corrige gratis: en x86 son las mismas instrucciones.
+        // The UI session (L2): the lock and the load are synchronous I/O, so
+        // they go to a blocking pool (rule 2). Without `state_dir` nothing is
+        // persisted, which is what a test wants; with it, whoever fails to
+        // get the lock starts WITH the screen and without a writer — clones
+        // it and runs detached.
+        let (session_lock, session, writable) = open_session(cfg.state_dir.clone()).await?;
+        // Persisting is THREE things at once: there is somewhere to, the
+        // right is held, and what is on disk is not from a newer binary.
+        // What is computed here is the STARTUP, not the whole lifetime
+        // (#237): whoever is only missing the lock gets it retried by the
+        // writer.
+        // `Release`/`Acquire` and not `Relaxed`: the writer ADOPTS the
+        // document (under the store's mutex) and only afterward turns on
+        // this flag, and the `session.get` handler reads the flag and only
+        // afterward the document. With `Relaxed` nothing ties those two
+        // pairs together, so a client could receive `owner: true` with the
+        // revision from BEFORE the adoption, write against it and get a
+        // `Conflict` that had no reason to exist. Fixed for free: on x86
+        // these are the same instructions.
         let session_persists = Arc::new(AtomicBool::new(
-            session_lock.is_some() && cfg.state_dir.is_some() && escribible,
+            session_lock.is_some() && cfg.state_dir.is_some() && writable,
         ));
         let session_flush = Arc::new(tokio::sync::Notify::new());
 
-        tracing::info!(socket = %socket_path.display(), uid, "daemon enlazado");
+        tracing::info!(socket = %socket_path.display(), uid, "daemon bound");
         let shared = Arc::new(Shared {
             engine,
             tasks: Mutex::new(HashMap::new()),
@@ -907,18 +929,19 @@ impl Daemon {
             column_pool: Arc::new(crate::plugins::ColumnPool::default()),
             log_ring: std::sync::OnceLock::new(),
             directed_feeds: Mutex::new(HashMap::new()),
-            ui_session: Arc::new(crate::ui_session::SessionStore::new(sesion)),
+            ui_session: Arc::new(crate::ui_session::SessionStore::new(session)),
             session_persists: Arc::clone(&session_persists),
             session_flush: Arc::clone(&session_flush),
         });
-        // La salida del router de aprobaciones hacia los suscriptores. `Weak`
-        // rompe el ciclo Shared → approvals → closure → Shared: muerto el
-        // daemon, un Ask tardío no difunde a nadie (y vencerá por TTL).
+        // The approval router's outlet toward the subscribers. `Weak` breaks
+        // the Shared → approvals → closure → Shared cycle: with the daemon
+        // dead, a late Ask does not broadcast to anyone (and will expire by
+        // TTL).
         let weak = Arc::downgrade(&shared);
         approvals.set_broadcaster(Box::new(move |notif| {
             let Some(shared) = weak.upgrade() else { return };
-            // Si la serialización fallara (no puede: struct plano), mejor NO
-            // emitir que emitir una notif con shape corrupto.
+            // If serialization failed (it cannot: a flat struct), better NOT
+            // to emit than to emit a notif with a corrupt shape.
             let Ok(params) = serde_json::to_value(&notif) else {
                 return;
             };
@@ -928,32 +951,33 @@ impl Daemon {
                 params: Some(params),
             };
             if let Ok(frame) = encode_frame(&n) {
-                // SOLO humanos (security MAJOR-1): la notif cruza sesiones —
-                // mismo criterio que el gate User-only de `policy.pending`.
+                // Humans ONLY (security MAJOR-1): the notif crosses sessions
+                // — same criterion as `policy.pending`'s User-only gate.
                 shared.broadcast_humans(&Arc::from(frame.into_boxed_slice()));
             }
         }));
-        // #44: avisos de conexión (degradación TLS) → `connection.degraded` SOLO
-        // a humanos, y #322: los fallos → `connection.failed`. `Weak` rompe el
-        // ciclo Shared → engine → observer → Shared.
+        // #44: connection warnings (TLS degradation) → `connection.degraded`
+        // ONLY to humans, and #322: failures → `connection.failed`. `Weak`
+        // breaks the Shared → engine → observer → Shared cycle.
         //
-        // ENCADENA en vez de pisar, aunque hoy el engine que llega aquí venga
-        // recién construido: la ranura es de uno, y un instalador que la
-        // sobrescriba deja al anterior mudo EN SILENCIO. Ese es el fallo que
-        // el encadenado existe para que no vuelva a ser posible.
+        // CHAINS instead of overwriting, even though the engine that arrives
+        // here today comes freshly built: the slot holds one, and an
+        // installer that overwrites it leaves the previous one SILENTLY mute.
+        // That is the failure chaining exists to make impossible again.
         shared.engine.chain_connection_observer(|previo| {
             Arc::new(DaemonConnectionObserver {
                 shared: Arc::downgrade(&shared),
                 previo,
             })
         });
-        // ADR 0100: los hooks. El despachador vive lo que el daemon; sus avisos
-        // —una frase de un plugin, o «apagué sus hooks»— van SOLO a humanos por
-        // `plugin.notice`, con el mismo `Weak` que rompe el ciclo arriba. La
-        // fuente de los eventos es el journal del engine, así que una mutación
-        // de un agente por MCP dispara igual que una del humano.
-        // Termina con el apagado del daemon (regla 3): la misma señal que
-        // para todo lo demás.
+        // ADR 0100: the hooks. The dispatcher lives as long as the daemon;
+        // its notices — a plugin's sentence, or "I turned off its hooks" —
+        // go ONLY to humans via `plugin.notice`, with the same `Weak` that
+        // breaks the cycle above. The event source is the engine's journal,
+        // so a mutation from an agent over MCP fires the same as one from
+        // the human.
+        // Ends with the daemon's shutdown (rule 3): the same signal that
+        // stops everything else.
         let (hooks_tx, _hooks_task) = crate::hooks::spawn_dispatcher(
             plugins_root,
             Arc::clone(&shared.plugin_runtime),
@@ -964,20 +988,21 @@ impl Daemon {
             Some(crate::hooks::SidecarWriter {
                 engine: Arc::downgrade(&shared.engine),
                 scopes: Some(shared.scopes.clone()),
-                // Las reglas las aplica el gate del engine; aquí no hacen falta.
+                // The rules are applied by the engine's gate; not needed
+                // here.
                 policy: None,
             }),
         );
         if shared.engine.claim_hooks_slot() {
             shared.engine.enable_hooks(hooks_tx).await;
         }
-        // El escritor existe siempre que haya DÓNDE escribir, y es él quien
-        // decide si de verdad escribe: arranca con el lock si el bind lo
-        // consiguió, y sin él lo vuelve a intentar (#237). Lo que sigue
-        // valiendo es el gate: un core suelto —o uno que encontró una sesión
-        // de un binario más nuevo— tiene la pantalla y NO la escribe. Sin eso,
-        // «no se lee» acababa siendo «se pisa un segundo después», que es
-        // justo lo contrario de lo que promete.
+        // The writer exists whenever there is SOMEWHERE to write, and it is
+        // the one that decides whether it really writes: it starts with the
+        // lock if the bind got it, and without it, it retries (#237). What
+        // still holds is the gate: a detached core — or one that found a
+        // session from a newer binary — has the screen and does NOT write
+        // it. Without that, "not read" ended up being "overwritten a second
+        // later", which is exactly the opposite of what it promises.
         let session_writer = cfg.state_dir.map(|dir| {
             SessionWriter(Some(crate::blocking::spawn(session_writer(
                 Arc::clone(&shared.ui_session),
@@ -985,7 +1010,7 @@ impl Daemon {
                 session_flush,
                 shared.shutdown.clone(),
                 session_persists,
-                EstadoEscritura::inicial(session_lock, escribible),
+                WriteState::initial(session_lock, writable),
             ))))
         });
         Ok(Self {
@@ -997,73 +1022,76 @@ impl Daemon {
         })
     }
 
-    /// Monta el anillo de registro que este daemon servirá por `log.tail`
-    /// (#328, ADR 0092).
+    /// Mounts the log ring this daemon will serve via `log.tail` (#328, ADR
+    /// 0092).
     ///
-    /// Se llama entre el bind y [`Self::run`], y lo llama quien instaló el
-    /// subscriber: el anillo tiene que ser EL MISMO en el que escribe la capa
-    /// de `tracing`, y eso solo lo sabe el binario que montó el registro
-    /// (`norte_config::logging::init_with_ring`). Por eso no viaja en
-    /// [`DaemonConfig`], que son valores, sino aquí, con `scopes` y
-    /// `approvals`, que son objetos compartidos.
+    /// Called between the bind and [`Self::run`], by whoever installed the
+    /// subscriber: the ring has to be THE SAME one the `tracing` layer writes
+    /// into, and only the binary that mounted the log
+    /// (`norte_config::logging::init_with_ring`) knows that. That is why it
+    /// does not travel in [`DaemonConfig`], which holds values, but here,
+    /// with `scopes` and `approvals`, which are shared objects.
     ///
-    /// Un daemon al que no se le monte ninguno contesta
-    /// [`norte_proto::Error::Unsupported`] a `log.tail` y a `log.level`, y
-    /// nunca una lista vacía: el frontend degrada a su anillo local DICIENDO
-    /// por qué.
+    /// A daemon that gets none mounted answers
+    /// [`norte_proto::Error::Unsupported`] to `log.tail` and `log.level`, and
+    /// never an empty list: the frontend degrades to its local ring WHILE
+    /// SAYING why.
     ///
-    /// Una segunda llamada no cambia el anillo ya montado — hay uno por
-    /// proceso, y cambiarlo en caliente dejaría al cliente con un cursor que
-    /// cuenta líneas de otro sitio.
+    /// A second call does not change the already-mounted ring — there is one
+    /// per process, and changing it live would leave the client with a
+    /// cursor counting lines from somewhere else.
     #[must_use]
     pub fn with_log_ring(self, ring: norte_config::logring::LogRing) -> Self {
         let _ = self.shared.log_ring.set(ring);
         self
     }
 
-    /// Dónde quedó el socket (para clientes y logs).
+    /// Where the socket ended up (for clients and logs).
     #[must_use]
     pub fn socket_path(&self) -> &Path {
         &self.socket_path
     }
 
-    /// Token que apaga el daemon desde fuera (SIGTERM del binario).
+    /// Token that shuts the daemon down from outside (the binary's SIGTERM).
     #[must_use]
     pub fn shutdown_token(&self) -> CancellationToken {
         self.shared.shutdown.clone()
     }
 
-    /// Sirve hasta el shutdown (petición, token externo o inactividad).
-    /// Al salir, el socket se ha retirado del FS y las tasks han terminado
-    /// (graceful) o han sido canceladas (hard).
+    /// Serves until shutdown (request, external token or idleness). On exit,
+    /// the socket has been removed from the FS and the tasks have finished
+    /// (graceful) or been cancelled (hard).
     ///
     /// # Errors
-    /// Solo I/O irrecuperable del listener.
+    /// Only unrecoverable listener I/O.
     ///
     /// # Panics
-    /// Nunca: los locks internos no se envenenan (nadie panica con ellos).
+    /// Never: the internal locks do not get poisoned (nobody panics while
+    /// holding them).
     #[tracing::instrument(skip(self), fields(socket = %self.socket_path.display()))]
     pub async fn run(mut self) -> Result<(), DaemonError> {
         let shared = Arc::clone(&self.shared);
         let mut idle_since = tokio::time::Instant::now();
-        // Un `accept` que falla NO sale por `?`: saliendo por ahí se saltaría
-        // el apagado ordenado de abajo, y lo que queda detrás es un escritor
-        // de sesión SUELTO —el `JoinHandle` se dropea sin abortar, o sea que
-        // la task sigue— escribiendo el fichero con el lock ya soltado. El
-        // error se guarda y se devuelve DESPUÉS de apagar.
-        let mut fallo: Option<std::io::Error> = None;
+        // A failing `accept` does NOT exit via `?`: exiting that way would
+        // skip the orderly shutdown below, and what is left behind is a
+        // DETACHED session writer — the `JoinHandle` is dropped without
+        // aborting, i.e. the task keeps going — writing the file with the
+        // lock already released. The error is stored and returned AFTER
+        // shutting down.
+        let mut failure: Option<std::io::Error> = None;
         loop {
             tokio::select! {
                 accepted = self.listener.accept() => {
                     let (stream, _addr) = match accepted {
                         Ok(v) => v,
-                        Err(e) => { fallo = Some(e); break }
+                        Err(e) => { failure = Some(e); break }
                     };
-                    // El keepalive de inactividad NO cuenta conexiones sin
-                    // autenticar (la resetea serve tras la auth); el cap
-                    // anti-agotamiento corta aquí, antes de gastar nada.
+                    // The idleness keepalive does NOT count unauthenticated
+                    // connections (serve resets it after auth); the
+                    // anti-exhaustion cap cuts here, before spending
+                    // anything.
                     if shared.connections.load(Ordering::SeqCst) >= MAX_CONNECTIONS {
-                        tracing::warn!("límite de conexiones alcanzado; rechazada");
+                        tracing::warn!("connection limit reached; rejected");
                         drop(stream);
                     } else {
                         spawn_connection(stream, Arc::clone(&shared));
@@ -1076,122 +1104,127 @@ impl Daemon {
                     } else if let Some(t) = self.idle_timeout
                         && idle_since.elapsed() >= t
                     {
-                        tracing::info!("shutdown por inactividad");
+                        tracing::info!("shutdown due to idleness");
                         break;
                     }
                 }
             }
         }
 
-        // La sesión de UI se vuelca y el lock se suelta AQUÍ, antes de retirar
-        // la ruta del socket — que es lo que le da permiso al sucesor de un
-        // relevo para arrancar. Al revés, el sucesor encontraría el lock
-        // todavía tomado y correría suelto: un relevo dejaría al daemon nuevo
-        // sin poder guardar nada, que es justo lo contrario de lo que un
-        // relevo promete. El token se cancela también aquí porque el camino de
-        // inactividad sale del bucle sin pasar por `daemon.shutdown`.
-        // CERRAR la sesión antes del último volcado, no después: entre el
-        // volcado y el cierre de las conexiones cabe un `put`, y sellar bajo el
-        // mismo lock que la mutación es lo único que impide contestarle
-        // `Ok(revision)` sobre un fichero que ya no va a escribir nadie.
+        // The UI session is flushed and the lock released HERE, before
+        // removing the socket path — which is what grants a handoff's
+        // successor permission to start. The other way around, the successor
+        // would find the lock still held and run detached: a handoff would
+        // leave the new daemon unable to save anything, exactly the opposite
+        // of what a handoff promises. The token is also cancelled here
+        // because the idleness path leaves the loop without going through
+        // `daemon.shutdown`.
+        // CLOSE the session before the final flush, not after: between the
+        // flush and closing the connections a `put` fits, and sealing under
+        // the same lock as the mutation is the only thing that prevents
+        // answering `Ok(revision)` over a file nobody is going to write
+        // anymore.
         //
-        // Y el sello va antes del `cancel`, no después (revisión de #237): el
-        // `cancel` ARMA la rama de apagado del escritor, que hace su volcado
-        // final y termina — en un runtime multihilo eso puede ocurrir antes de
-        // que se ejecute la línea siguiente, y un `put` que caiga en esa
-        // ventana recibe `Ok(revision)` por un cuerpo que ya no escribe nadie.
-        // Que es exactamente lo que el párrafo de arriba dice que no pasa.
+        // And the seal goes before the `cancel`, not after (revised after
+        // #237): `cancel` ARMS the writer's shutdown branch, which does its
+        // final flush and finishes — on a multithreaded runtime that can
+        // happen before the next line executes, and a `put` landing in that
+        // window would receive `Ok(revision)` for a body nobody writes
+        // anymore. Which is exactly what the paragraph above says does not
+        // happen.
         shared.ui_session.seal();
         shared.shutdown.cancel();
-        // Esperar al escritor es esperar al último volcado Y a que suelte el
-        // lock: los dos viven dentro de la task desde #237.
+        // Waiting for the writer means waiting for the final flush AND for it
+        // to release the lock: both live inside the task since #237.
         if let Some(mut writer) = self.session_writer.take()
             && let Some(handle) = writer.take()
         {
             let _ = handle.await;
         }
 
-        // Fase de apagado: nada de clientes nuevos (el listener muere con
-        // el drop); hard = cancelar tasks; graceful = esperarlas — y si el
-        // hard llega DURANTE la espera (segunda señal), se cancelan ya.
+        // Shutdown phase: no new clients (the listener dies with the drop);
+        // hard = cancel tasks; graceful = wait for them — and if hard arrives
+        // DURING the wait (second signal), they get cancelled right away.
         drop(self.listener);
-        // **La ruta se retira AQUÍ, antes de drenar, y el orden importa desde
-        // que existe el relevo (roadmap ítem 10).**
+        // **The path is removed HERE, before draining, and the order has
+        // mattered since handoff exists (roadmap item 10).**
         //
-        // Con el listener muerto y el fichero todavía en su sitio, un cliente
-        // que reconecte recibe `ECONNREFUSED` y —solo tras un relevo, porque
-        // solo entonces tiene permiso— arranca el reemplazo. El reemplazo ve
-        // una ruta rancia, la borra, y enlaza la suya. Cuando este daemon
-        // terminara de drenar, su `remove_file` borraría el socket DEL
-        // REEMPLAZO: se quedaría escuchando en un inodo sin nombre, y como el
-        // permiso de arranque es de un solo uso, nadie lo volvería a levantar.
+        // With the listener dead and the file still in place, a client that
+        // reconnects gets `ECONNREFUSED`, and — only after a handoff, because
+        // only then does it have permission — the replacement starts up. The
+        // replacement sees a stale path, deletes it, and binds its own. If
+        // this daemon finished draining first, its `remove_file` would delete
+        // the REPLACEMENT's socket: it would end up listening on a nameless
+        // inode, and since the startup permission is single-use, nobody would
+        // ever bring it back up.
         //
-        // Borrando antes, la ventana pasa de «lo que dure el drenaje» a
-        // microsegundos, y lo que este daemon borra es siempre suyo. Nadie
-        // pierde nada: con el listener ya muerto, la ruta solo servía para dar
-        // `ECONNREFUSED` en vez de `NotFound`.
+        // Deleting earlier shrinks the window from "however long draining
+        // takes" to microseconds, and what this daemon deletes is always its
+        // own. Nobody loses anything: with the listener already dead, the
+        // path only served to give `ECONNREFUSED` instead of `NotFound`.
         let socket_path = self.socket_path.clone();
-        let socket_para_borrar = socket_path.clone();
-        // Regla 2: ni un unlink síncrono en el runtime.
+        let socket_for_delete = socket_path.clone();
+        // Rule 2: not a single synchronous unlink on the runtime.
         let _ =
-            crate::blocking::spawn_blocking(move || std::fs::remove_file(socket_para_borrar)).await;
+            crate::blocking::spawn_blocking(move || std::fs::remove_file(socket_for_delete)).await;
         let mut hard_done = false;
         loop {
             if shared.hard_shutdown.is_cancelled() && !hard_done {
                 hard_done = true;
-                for task in shared.tasks.lock().expect("tasks lock sano").values() {
+                for task in shared.tasks.lock().expect("tasks lock is sound").values() {
                     task.handle.cancel();
                 }
             }
-            if shared.tasks.lock().expect("tasks lock sano").is_empty() {
+            if shared.tasks.lock().expect("tasks lock is sound").is_empty() {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        // Y las CONEXIONES, antes de volver: quien llama a `run()` suele ser un
-        // `main` que retorna en cuanto esto vuelve, y soltar el runtime mata
-        // toda task viva — incluida la que está escribiendo la respuesta a
-        // este mismo `daemon.shutdown`. `norte daemon stop` fallaba así, de vez
-        // en cuando, con «conexión cerrada con la request en vuelo» sobre un
-        // daemon que sí se había parado. Cada conexión sale sola al ver el
-        // `shutdown`; esto solo espera a que termine de escribir. Con plazo:
-        // un cliente que no lee puede tener el socket lleno, y no retiene el
-        // apagado.
-        let plazo = tokio::time::Instant::now() + CONNECTION_DRAIN;
+        // And the CONNECTIONS, before returning: whoever calls `run()` is
+        // usually a `main` that returns as soon as this returns, and dropping
+        // the runtime kills every live task — including the one writing the
+        // response to this very `daemon.shutdown`. `norte daemon stop` used
+        // to fail this way, now and then, with "connection closed with the
+        // request in flight" on a daemon that had in fact stopped. Each
+        // connection exits on its own upon seeing the `shutdown`; this only
+        // waits for it to finish writing. With a deadline: a client that does
+        // not read can have a full socket, and it no longer holds up
+        // shutdown.
+        let deadline = tokio::time::Instant::now() + CONNECTION_DRAIN;
         while shared.connections.load(Ordering::SeqCst) > 0 {
-            if tokio::time::Instant::now() >= plazo {
+            if tokio::time::Instant::now() >= deadline {
                 tracing::warn!(
-                    abiertas = shared.connections.load(Ordering::SeqCst),
-                    "apagado sin esperar a conexiones que no terminan de escribir"
+                    open = shared.connections.load(Ordering::SeqCst),
+                    "shutdown without waiting for connections that never finish writing"
                 );
                 break;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         let _ = socket_path;
-        tracing::info!("daemon apagado");
-        match fallo {
+        tracing::info!("daemon shut down");
+        match failure {
             Some(e) => Err(DaemonError::Io(e)),
             None => Ok(()),
         }
     }
 
-    /// Token que CANCELA las tasks vivas además de apagar (segunda señal
-    /// del binario, o `stop --hard`).
+    /// Token that CANCELS live tasks in addition to shutting down (the
+    /// binary's second signal, or `stop --hard`).
     #[must_use]
     pub fn hard_shutdown_token(&self) -> CancellationToken {
         self.shared.hard_shutdown.clone()
     }
 }
 
-/// Toma el lock de la sesión de UI y la carga (L2).
+/// Takes the UI session's lock and loads it (L2).
 ///
-/// Sin `state_dir` no se persiste nada: ni lock ni fichero. Con él, el lock
-/// decide quién ESCRIBE —quien no lo consigue arranca igual, con la misma
-/// pantalla, y no la escribe nunca— y la carga nunca falla: sus desenlaces
-/// malos dan una sesión vacía y un aviso.
+/// Without `state_dir` nothing is persisted: no lock, no file. With it, the
+/// lock decides who WRITES — whoever fails to get it starts up the same, with
+/// the same screen, and never writes it — and the load never fails: its bad
+/// outcomes give an empty session and a notice.
 ///
-/// Todo el I/O va a un pool blocking (regla 2).
+/// All the I/O goes to a blocking pool (rule 2).
 async fn open_session(
     state_dir: Option<PathBuf>,
 ) -> Result<
@@ -1206,11 +1239,11 @@ async fn open_session(
         return Ok((None, norte_proto::methods::Session::default(), false));
     };
     crate::blocking::spawn_blocking(move || {
-        // Un lock que no se puede ni intentar (permisos, disco lleno) NO
-        // impide arrancar: deja al core suelto, que es la degradación que ya
-        // existe para el segundo core.
+        // A lock that cannot even be attempted (permissions, full disk) does
+        // NOT prevent startup: it leaves the core detached, the same
+        // degradation that already exists for the second core.
         let lock = crate::ui_session::disk::lock(&dir).unwrap_or_else(|e| {
-            tracing::warn!(error = %e, "no se pudo tomar el lock de la sesión de UI");
+            tracing::warn!(error = %e, "could not take the UI session lock");
             None
         });
         let r = crate::ui_session::disk::load_or_default(&dir);
@@ -1220,33 +1253,33 @@ async fn open_session(
     .map_err(|e| DaemonError::Io(std::io::Error::other(e)))
 }
 
-/// El único escritor de la sesión de UI: coalesce los cambios y los vuelca.
+/// The single writer of the UI session: coalesces changes and flushes them.
 ///
-/// Un tick por segundo, y en cada uno **solo si hay algo sucio**. Coalescer es
-/// el punto entero: el cursor se mueve en cada flecha y esto es un fichero, no
-/// una base de datos. `session_flush` lo adelanta cuando se va la última
-/// conexión, y el token lo termina — con un último volcado, que es el del
-/// relevo y la razón de ser de todo esto.
+/// One tick per second, and each one **only if something is dirty**.
+/// Coalescing is the whole point: the cursor moves on every arrow key and
+/// this is a file, not a database. `session_flush` moves it forward when the
+/// last connection leaves, and the token ends it — with a final flush, which
+/// is what handoff needs and the whole reason this exists.
 ///
-/// Un fallo de escritura es un `warn!`, la marca de sucio VUELVE a ponerse y
-/// el siguiente tick reintenta: perder una sesión es una tarde mala, y tumbar
-/// el daemon por ella es peor. (Reintentar de verdad es lo que hace
-/// `mark_dirty`; sin él la marca ya estaba limpia y el aviso era todo lo que
-/// pasaba.)
+/// A write failure is a `warn!`, the dirty flag is set AGAIN and the next
+/// tick retries: losing a session is a bad afternoon, and taking down the
+/// daemon over it is worse. (`mark_dirty` is what makes a real retry happen;
+/// without it the flag was already clean and the warning was all that
+/// happened.)
 async fn session_writer(
     store: Arc<crate::ui_session::SessionStore>,
     dir: PathBuf,
     flush: Arc<tokio::sync::Notify>,
     stop: CancellationToken,
     persiste: Arc<AtomicBool>,
-    inicial: EstadoEscritura,
+    initial: WriteState,
 ) {
-    let mut estado = inicial;
-    if matches!(estado, EstadoEscritura::Rendida) {
-        // El bind tenía el lock y el fichero era de un binario más nuevo: se
-        // soltó al construir el estado y no se vuelve a intentar. La task
-        // TERMINA aquí en vez de girar un temporizador por segundo durante
-        // toda la vida del daemon para no hacer nada con él.
+    let mut state = initial;
+    if matches!(state, WriteState::Surrendered) {
+        // The bind held the lock and the file was from a newer binary: it
+        // was released while building the state and is not retried. The task
+        // ENDS here instead of spinning a once-a-second timer for the whole
+        // life of the daemon to do nothing with it.
         persiste.store(false, Ordering::Release);
         return;
     }
@@ -1255,234 +1288,238 @@ async fn session_writer(
     loop {
         tokio::select! {
             _ = tick.tick() => {
-                // El reintento va en el TICK y solo aquí: es el único de los
-                // tres despertares que ocurre pase lo que pase. Con el apagado
-                // ya pedido no se intenta: tomar el lock justo entonces cuesta
-                // una adquisición y un volcado en el peor momento —un relevo,
-                // donde el sucesor está sondeando ese mismo lock— y `select!`
-                // puede elegir esta rama con el token ya cancelado.
+                // The retry goes on the TICK and only there: it is the only
+                // one of the three wake-ups that happens no matter what. With
+                // shutdown already requested it is not attempted: taking the
+                // lock right then costs an acquisition and a flush at the
+                // worst possible moment — a handoff, where the successor is
+                // polling that very lock — and `select!` can pick this branch
+                // with the token already cancelled.
                 if !stop.is_cancelled() {
-                    estado = estado.reintenta(&dir, &store, &persiste).await;
+                    state = state.retry(&dir, &store, &persiste).await;
                 }
-                if estado.escribe() {
+                if state.writes() {
                     flush_session(&store, &dir).await;
                 }
             }
             () = flush.notified() => {
-                if estado.escribe() {
+                if state.writes() {
                     flush_session(&store, &dir).await;
                 }
             }
             () = stop.cancelled() => {
-                // El último, y por eso el que importa: aquí es donde la
-                // pantalla sobrevive a un relevo.
-                if estado.escribe() {
+                // The last one, and so the one that matters: this is where
+                // the screen survives a handoff.
+                if state.writes() {
                     flush_session(&store, &dir).await;
                 }
                 break;
             }
         }
     }
-    // Explícito: el lock se suelta al terminar la task, y el apagado ordenado
-    // la ESPERA justo por esto — el sucesor del relevo tiene que encontrar el
-    // fichero escrito y el lock libre.
-    drop(estado);
+    // Explicit: the lock is released when the task ends, and orderly shutdown
+    // WAITS for it exactly for this — the handoff's successor has to find the
+    // file written and the lock free.
+    drop(state);
 }
 
-/// El derecho a escribir la sesión, visto por el escritor (#237).
+/// The right to write the session, as seen by the writer (#237).
 ///
-/// Tres estados y no un `Option<SessionLock>`, porque «todavía no lo tengo» y
-/// «no lo voy a tener nunca» son decisiones distintas: la primera se reintenta
-/// cada tick y la segunda no se reintenta jamás.
-enum EstadoEscritura {
-    /// Con el lock: esta instancia es la que escribe. El lock no se LEE nunca
-    /// —vale por su `Drop`, que es soltarlo—, de ahí el nombre.
-    Duena {
-        /// El derecho, vivo mientras dure el estado.
+/// Three states and not an `Option<SessionLock>`, because "I don't have it
+/// yet" and "I'm never going to have it" are different decisions: the first
+/// is retried every tick and the second is never retried.
+enum WriteState {
+    /// With the lock: this instance is the one that writes. The lock is
+    /// never READ — it is worth having for its `Drop`, which releases it,
+    /// hence the name.
+    Owned {
+        /// The right, alive for as long as the state lasts.
         _lock: crate::ui_session::disk::SessionLock,
     },
-    /// Sin el lock, y volviéndolo a intentar. `avisado` para que el aviso
-    /// salga una vez y no una por segundo; `ticks` cuenta los intentos para
-    /// espaciarlos ([`EstadoEscritura::toca_intentar`]).
-    Suelta { avisado: bool, ticks: u32 },
-    /// En disco hay una sesión de un binario MÁS NUEVO. No se pisa y no se
-    /// reintenta en toda la vida del proceso.
+    /// Without the lock, and retrying it. `warned` so the warning goes out
+    /// once and not once a second; `ticks` counts the attempts to space them
+    /// out ([`WriteState::should_retry`]).
+    Detached { warned: bool, ticks: u32 },
+    /// On disk there is a session from a NEWER binary. It is not overwritten
+    /// and not retried for the rest of the process's life.
     ///
-    /// **Y eso no es gratis**: si el fichero del futuro se borra o lo
-    /// reemplaza después uno legible —una vuelta atrás de versión, un `rm` a
-    /// mano—, este daemon sigue contestando `owner: false` y cada ventana suya
-    /// sigue diciendo «no se está guardando» hasta que se reinicie. Se acepta
-    /// porque es lo mismo que hace el `rendido` del brazo embebido, y porque
-    /// un binario más nuevo en marcha es la situación normal de ese estado.
-    Rendida,
+    /// **And that is not free**: if the future file is deleted or later
+    /// replaced by a readable one — a version rollback, a manual `rm` — this
+    /// daemon keeps answering `owner: false` and every one of its windows
+    /// keeps saying "not being saved" until it restarts. Accepted because it
+    /// is the same thing the embedded arm's `surrendered` state does, and
+    /// because a newer binary running is that state's normal situation.
+    Surrendered,
 }
 
-impl EstadoEscritura {
-    /// El estado con el que arranca el escritor, a partir de lo que consiguió
-    /// el bind.
+impl WriteState {
+    /// The state the writer starts with, from what the bind managed to get.
     ///
-    /// Con el lock tomado pero un fichero del futuro se suelta AQUÍ: retenerlo
-    /// dejaría el fichero de rehén de un core que no puede escribirlo, que es
-    /// lo que hacía el daemon antes de #237.
-    fn inicial(lock: Option<crate::ui_session::disk::SessionLock>, escribible: bool) -> Self {
-        match (lock, escribible) {
-            (Some(lock), true) => Self::Duena { _lock: lock },
+    /// With the lock taken but a file from the future, it is released HERE:
+    /// keeping it would leave the file hostage to a core that cannot write
+    /// it, which is what the daemon used to do before #237.
+    fn initial(lock: Option<crate::ui_session::disk::SessionLock>, writable: bool) -> Self {
+        match (lock, writable) {
+            (Some(lock), true) => Self::Owned { _lock: lock },
             (Some(lock), false) => {
                 drop(lock);
-                Self::Rendida
+                Self::Surrendered
             }
-            (None, _) => Self::Suelta {
-                avisado: false,
+            (None, _) => Self::Detached {
+                warned: false,
                 ticks: 0,
             },
         }
     }
 
-    /// ¿Escribe este proceso?
-    fn escribe(&self) -> bool {
-        matches!(self, Self::Duena { .. })
+    /// Does this process write?
+    fn writes(&self) -> bool {
+        matches!(self, Self::Owned { .. })
     }
 
-    /// Cuántos ticks se intenta el lock uno por segundo antes de espaciar.
+    /// How many ticks the lock is tried once a second before spacing out.
     ///
-    /// El caso que importa es un RELEVO: el daemon viejo se va segundos
-    /// después de que arranque el nuevo, y ahí un segundo de latencia es la
-    /// diferencia entre guardar la pantalla y perderla. Pasado ese minuto, lo
-    /// que hay es un core ajeno que puede durar horas, y seguir sondeando cada
-    /// segundo es un `mkdir`+`open`+`flock` por segundo para siempre.
-    const RAFAGA: u32 = 60;
-    /// Cadencia después de la ráfaga: la misma que el brazo embebido.
-    const ESPACIADO: u32 = 30;
+    /// The case that matters is a HANDOFF: the old daemon leaves seconds
+    /// after the new one starts, and there a second of latency is the
+    /// difference between saving the screen and losing it. Past that minute,
+    /// what is there is someone else's core that can last for hours, and
+    /// still polling every second is one `mkdir`+`open`+`flock` per second
+    /// forever.
+    const BURST: u32 = 60;
+    /// Cadence after the burst: the same as the embedded arm.
+    const SPACING: u32 = 30;
 
-    /// ¿Toca intentarlo en este tick?
-    fn toca_intentar(ticks: u32) -> bool {
-        ticks < Self::RAFAGA || ticks.is_multiple_of(Self::ESPACIADO)
+    /// Is this tick due for an attempt?
+    fn should_retry(ticks: u32) -> bool {
+        ticks < Self::BURST || ticks.is_multiple_of(Self::SPACING)
     }
 
-    /// Vuelve a intentar el lock si aún no se tiene (#237).
+    /// Retries the lock if it is not held yet (#237).
     ///
-    /// Cada segundo durante el primer minuto y cada treinta después
-    /// ([`Self::toca_intentar`]). El aviso sale una sola vez.
+    /// Every second during the first minute and every thirty afterward
+    /// ([`Self::should_retry`]). The warning goes out only once.
     ///
-    /// **El fichero se lee SOLO con el lock ya en la mano.** Leerlo antes de
-    /// saber si se consiguió —que es lo que hacía la primera versión— es un
-    /// `read` y un parseo de hasta un mega por segundo cuyo resultado se tira,
-    /// y peor: `load_or_default` AVISA de un fichero corrupto o del futuro, así
-    /// que un daemon permanentemente suelto escribía ese `warn!` una vez por
-    /// segundo para siempre, enterrando todo lo demás del log. El brazo
-    /// embebido nunca lo hizo así.
+    /// **The file is read ONLY once the lock is already in hand.** Reading it
+    /// before knowing whether it was obtained — which is what the first
+    /// version did — is a `read` and a parse of up to a meg per second whose
+    /// result is thrown away, and worse: `load_or_default` WARNS about a
+    /// corrupt or future file, so a permanently detached daemon used to write
+    /// that `warn!` once a second forever, burying everything else in the
+    /// log. The embedded arm never did it that way.
     ///
-    /// Al conseguirlo tarde se re-lee el fichero, exactamente como el brazo
-    /// embebido: si lo escribió un binario más nuevo se suelta el lock recién
-    /// tomado y se abandona; si lo escribió otro core de esta versión, su
-    /// documento es el vigente y se adopta ENTERO —cuerpo incluido—, o esta
-    /// instancia contestaría su propia pantalla con el número del otro y lo
-    /// que el otro guardó desaparecería sin que nada lo notara.
-    async fn reintenta(
+    /// On getting it late, the file is re-read, exactly like the embedded
+    /// arm: if a newer binary wrote it, the just-taken lock is released and
+    /// abandoned; if another core of this version wrote it, its document is
+    /// the current one and is adopted WHOLE — body included — or this
+    /// instance would answer its own screen with the other one's number and
+    /// what the other saved would disappear without anything noticing.
+    async fn retry(
         self,
         dir: &Path,
         store: &Arc<crate::ui_session::SessionStore>,
         persiste: &Arc<AtomicBool>,
     ) -> Self {
-        let Self::Suelta { avisado, ticks } = self else {
+        let Self::Detached { warned, ticks } = self else {
             return self;
         };
-        let siguiente = ticks.saturating_add(1);
-        if !Self::toca_intentar(ticks) {
-            return Self::Suelta {
-                avisado,
-                ticks: siguiente,
+        let next = ticks.saturating_add(1);
+        if !Self::should_retry(ticks) {
+            return Self::Detached {
+                warned,
+                ticks: next,
             };
         }
         let d = dir.to_path_buf();
-        // Regla 2: el lock y la lectura son I/O de disco.
-        let intento = crate::blocking::spawn_blocking(move || {
+        // Rule 2: the lock and the read are disk I/O.
+        let attempt = crate::blocking::spawn_blocking(move || {
             let Some(lock) = crate::ui_session::disk::lock(&d)? else {
                 return Ok::<_, std::io::Error>(None);
             };
-            // Con el lock puesto, y no antes.
-            let recuperada = crate::ui_session::disk::load_or_default(&d);
-            Ok(Some((lock, recuperada)))
+            // With the lock in place, and not before.
+            let recovered = crate::ui_session::disk::load_or_default(&d);
+            Ok(Some((lock, recovered)))
         })
         .await;
-        let tomado = match intento {
+        let taken = match attempt {
             Ok(Ok(v)) => v,
             Ok(Err(e)) => {
-                if !avisado {
-                    tracing::warn!(error = %e, "no se pudo tomar el lock de la sesión de UI");
+                if !warned {
+                    tracing::warn!(error = %e, "could not take the UI session lock");
                 }
-                return Self::Suelta {
-                    avisado: true,
-                    ticks: siguiente,
+                return Self::Detached {
+                    warned: true,
+                    ticks: next,
                 };
             }
             Err(e) => {
-                if !avisado {
-                    tracing::warn!(error = %e, "el intento de lock de la sesión de UI se cayó");
+                if !warned {
+                    tracing::warn!(error = %e, "the UI session lock attempt crashed");
                 }
-                return Self::Suelta {
-                    avisado: true,
-                    ticks: siguiente,
+                return Self::Detached {
+                    warned: true,
+                    ticks: next,
                 };
             }
         };
-        let Some((lock, recuperada)) = tomado else {
-            return Self::Suelta {
-                avisado,
-                ticks: siguiente,
+        let Some((lock, recovered)) = taken else {
+            return Self::Detached {
+                warned,
+                ticks: next,
             };
         };
-        if !recuperada.writable {
+        if !recovered.writable {
             drop(lock);
             persiste.store(false, Ordering::Release);
-            tracing::warn!("la sesión de UI en disco es de un binario más nuevo: no se escribe");
-            return Self::Rendida;
+            tracing::warn!("the UI session on disk is from a newer binary: not writing it");
+            return Self::Surrendered;
         }
-        store.adopt_from_disk(recuperada.session);
+        store.adopt_from_disk(recovered.session);
         persiste.store(true, Ordering::Release);
-        tracing::info!("la sesión de UI quedó libre: este daemon vuelve a guardarla");
-        Self::Duena { _lock: lock }
+        tracing::info!("the UI session became free: this daemon is saving it again");
+        Self::Owned { _lock: lock }
     }
 }
 
-/// Vuelca la sesión si hay algo que volcar. Nada sucio = ni un `open`, que es
-/// lo que hace barato despertarse cada segundo.
+/// Flushes the session if there is anything to flush. Nothing dirty = not
+/// even an `open`, which is what makes it cheap to wake up every second.
 async fn flush_session(store: &Arc<crate::ui_session::SessionStore>, dir: &Path) {
     let Some(session) = store.take_dirty() else {
         return;
     };
     let dir = dir.to_path_buf();
-    // Regla 2: la escritura es I/O de disco y va a un pool blocking.
-    let escrito =
+    // Rule 2: the write is disk I/O and goes to a blocking pool.
+    let written =
         crate::blocking::spawn_blocking(move || crate::ui_session::disk::write(&dir, &session))
             .await;
-    match escrito {
+    match written {
         Ok(Ok(())) => {}
-        // Lo sucio se lo llevó `take_dirty`, así que un fallo SIN volver a
-        // marcarlo no se reintenta nunca: el tick siguiente no vería nada que
-        // hacer y la pantalla se perdería por un `ENOSPC` de un segundo.
+        // `take_dirty` already took the dirty flag away, so a failure
+        // WITHOUT marking it again is never retried: the next tick would see
+        // nothing to do and the screen would be lost to a one-second
+        // `ENOSPC`.
         Ok(Err(e)) => {
-            tracing::warn!(error = %e, "no se pudo escribir la sesión de UI; se reintenta");
+            tracing::warn!(error = %e, "could not write the UI session; retrying");
             store.mark_dirty();
         }
         Err(e) => {
-            tracing::warn!(error = %e, "el volcado de la sesión de UI se cayó; se reintenta");
+            tracing::warn!(error = %e, "the UI session flush crashed; retrying");
             store.mark_dirty();
         }
     }
 }
 
-/// Descubre el catálogo de plugins y construye el runtime WASM compartido
-/// (M4-P3/P4). TODO I/O/CPU síncrono: el caller lo invoca dentro del
-/// `spawn_blocking` del bind (regla 2).
+/// Discovers the plugin catalogue and builds the shared WASM runtime
+/// (M4-P3/P4). ALL synchronous I/O/CPU: the caller invokes it inside the
+/// bind's `spawn_blocking` (rule 2).
 ///
-/// Un `plugins-state.toml` corrupto NO impide arrancar el daemon (dejaría al
-/// usuario sin ninguna otra operación por un fichero de estado roto): se degrada
-/// FAIL-CLOSED a un registro VACÍO (nada aprobado ni activado) con aviso, y el
-/// usuario puede re-aprobar. La corrupción NUNCA "abre" un plugin que no estaba
-/// consentido. Un catálogo ausente ya es "vacío" sin error. En cambio, un fallo
-/// al crear el runtime SÍ aborta el bind: sin runtime no se ejecuta ningún
-/// plugin (fail-closed).
+/// A corrupt `plugins-state.toml` does NOT prevent the daemon from starting
+/// (it would leave the user without any other operation over a broken state
+/// file): it degrades FAIL-CLOSED to an EMPTY registry (nothing approved or
+/// enabled) with a warning, and the user can re-approve. Corruption NEVER
+/// "opens up" a plugin that was not consented to. An absent catalogue is
+/// already "empty" with no error. A failure creating the runtime, on the
+/// other hand, DOES abort the bind: without a runtime, no plugin runs
+/// (fail-closed).
 fn discover_plugins(
     plugins_dir: Option<PathBuf>,
 ) -> Result<
@@ -1494,23 +1531,23 @@ fn discover_plugins(
 > {
     let plugins_root = plugins_dir.unwrap_or_else(crate::connect::config_dir);
     let plugins = crate::plugins::PluginRegistry::discover(&plugins_root).unwrap_or_else(|e| {
-        tracing::warn!(error = %e, "plugins-state corrupto: se arranca con catálogo vacío");
+        tracing::warn!(error = %e, "corrupt plugins-state: starting with an empty catalogue");
         crate::plugins::PluginRegistry::empty(&plugins_root)
     });
     let runtime = norte_plugin_host::PluginRuntime::new()
         .map(Arc::new)
         .map_err(|e| {
             DaemonError::Io(std::io::Error::other(format!(
-                "no se pudo crear el runtime de plugins: {e}"
+                "could not create the plugin runtime: {e}"
             )))
         })?;
     Ok((plugins, runtime))
 }
 
-/// Prepara el dir, enlaza el socket UDS y lo endurece (0600, no-root),
-/// re-verificando la identidad del dir tras el bind (#34.2). `requested`
-/// `None` = fallback por defecto (con mensaje accionable sobre `/tmp`,
-/// #34.1). Síncrono: se llama dentro del `spawn_blocking` del bind (regla 2).
+/// Prepares the dir, binds the UDS socket and hardens it (0600, no-root),
+/// re-verifying the dir's identity after the bind (#34.2). `requested` `None`
+/// = default fallback (with an actionable message about `/tmp`, #34.1).
+/// Synchronous: called inside the bind's `spawn_blocking` (rule 2).
 fn bind_socket(
     requested: Option<PathBuf>,
 ) -> Result<(std::os::unix::net::UnixListener, u32, PathBuf), DaemonError> {
@@ -1519,11 +1556,11 @@ fn bind_socket(
     let dir = socket_path
         .parent()
         .ok_or(DaemonError::InsecureDir {
-            reason: "el socket necesita un directorio padre",
+            reason: "the socket needs a parent directory",
         })?
         .to_path_buf();
-    // #34.1: sobre el fallback /tmp, un dir inseguro (squat) sale con mensaje
-    // ACCIONABLE en vez del InsecureDir opaco.
+    // #34.1: over the /tmp fallback, an unsafe dir (squat) exits with an
+    // ACTIONABLE message instead of the opaque InsecureDir.
     let dir_id = prepare_socket_dir(&dir).map_err(|e| match e {
         DaemonError::InsecureDir { reason } if is_default_tmp_fallback(&socket_path, defaulted) => {
             DaemonError::UnusableDefaultDir {
@@ -1533,8 +1570,8 @@ fn bind_socket(
         }
         other => other,
     })?;
-    // ¿Hay un daemon VIVO? Un connect lo delata; un socket huérfano (crash
-    // previo) da ECONNREFUSED y se retira.
+    // Is there a LIVE daemon? A connect gives it away; an orphaned socket
+    // (previous crash) gives ECONNREFUSED and is removed.
     match std::os::unix::net::UnixStream::connect(&socket_path) {
         Ok(_) => return Err(DaemonError::AlreadyRunning),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -1551,43 +1588,44 @@ fn bind_socket(
         }
         Err(e) => return Err(e.into()),
     };
-    // #34.2 (TOCTOU): detecta el swap COMÚN (rm+recreate cambia el inode) del
-    // dir entre prepare y bind; si cambió, el socket recién creado vive en un
-    // dir ajeno — se retira y se aborta. NO es barrera total (reuso de inodo,
-    // swap posterior): la integridad del canal la garantiza el peer-cred
-    // bilateral, ver `DirIdentity`. La ventana bind→este check no es
-    // explotable (el accept-loop no arranca hasta que este helper retorna Ok).
+    // #34.2 (TOCTOU): detects the COMMON swap (rm+recreate changes the inode)
+    // of the dir between prepare and bind; if it changed, the freshly created
+    // socket lives in someone else's dir — it is removed and aborted. NOT a
+    // total barrier (inode reuse, later swap): the channel's integrity is
+    // guaranteed by the bilateral peer-cred, see `DirIdentity`. The
+    // bind→this-check window is not exploitable (the accept loop does not
+    // start until this helper returns Ok).
     if let Err(e) = dir_id.verify_unchanged(&dir) {
         let _ = std::fs::remove_file(&socket_path);
         return Err(e);
     }
-    // Nuestro euid = el dueño del socket que ACABAMOS de crear (sin unsafe,
-    // regla 5). Solo el mismo uid podrá hablar.
+    // Our euid = the owner of the socket we JUST created (no unsafe, rule 5).
+    // Only the same uid will be able to speak.
     let md = std::fs::metadata(&socket_path)?;
     let uid = md.uid();
     if uid == 0 {
         let _ = std::fs::remove_file(&socket_path);
         return Err(DaemonError::Root);
     }
-    // El socket mismo tampoco regala nada: 0600.
+    // The socket itself does not give anything away either: 0600.
     std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600))?;
     Ok((listener, uid, socket_path))
 }
 
-/// Identidad de un directorio: `(dev, ino)`. Capturada al validar el dir del
-/// socket y re-verificada tras el bind — un REEMPLAZO común del dir bajo el
-/// mismo path durante la ventana prepare→bind (TOCTOU sin sticky bit en
-/// /tmp, #34.2) cambia el inode y se detecta.
+/// A directory's identity: `(dev, ino)`. Captured when validating the
+/// socket's dir and re-verified after the bind — a common REPLACEMENT of the
+/// dir under the same path during the prepare→bind window (TOCTOU with no
+/// sticky bit on /tmp, #34.2) changes the inode and is detected.
 ///
-/// ALCANCE (defensa en profundidad, no barrera total): (a) el chequeo por
-/// PATH es intrínsecamente racy — cada `of` re-statea; (b) el reuso de inodo
-/// (ext4/tmpfs reciclan un ino liberado al instante) puede dar `(dev, ino)`
-/// idénticos tras un rm+recreate; (c) es one-shot: no cubre un swap
-/// POSTERIOR durante la vida del socket. La garantía REAL contra un daemon
-/// impostor en un dir squatteado es el peer-cred BILATERAL (server:
-/// `peer_allowed`; cliente: `Client::authenticated` rechaza un socket cuyo
-/// dueño no es su uid). El cierre total exigiría anclar a fd (openat/
-/// fstatat), que en std pide `unsafe`/dep — fuera de alcance (regla 5).
+/// SCOPE (defense in depth, not a total barrier): (a) checking by PATH is
+/// intrinsically racy — every `of` re-stats; (b) inode reuse (ext4/tmpfs
+/// recycle a freed ino instantly) can give an identical `(dev, ino)` after an
+/// rm+recreate; (c) it is one-shot: it does not cover a LATER swap during the
+/// socket's life. The REAL guarantee against an impostor daemon in a
+/// squatted dir is the BILATERAL peer-cred (server: `peer_allowed`; client:
+/// `Client::authenticated` rejects a socket whose owner is not its uid).
+/// Full closure would require anchoring to an fd (openat/fstatat), which in
+/// std requires `unsafe`/a dep — out of scope (rule 5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct DirIdentity {
     dev: u64,
@@ -1595,7 +1633,8 @@ struct DirIdentity {
 }
 
 impl DirIdentity {
-    /// Identidad del dir en `path` SIN seguir symlinks del último componente.
+    /// Identity of the dir at `path` WITHOUT following the last component's
+    /// symlinks.
     fn of(path: &Path) -> Result<Self, DaemonError> {
         let md = std::fs::symlink_metadata(path)?;
         Ok(Self {
@@ -1604,25 +1643,25 @@ impl DirIdentity {
         })
     }
 
-    /// `Ok` si `path` sigue siendo el MISMO objeto de FS (dev+ino) que esta
-    /// identidad; `InsecureDir` si fue reemplazado (o desapareció).
+    /// `Ok` if `path` is still the SAME FS object (dev+ino) as this identity;
+    /// `InsecureDir` if it was replaced (or disappeared).
     fn verify_unchanged(self, path: &Path) -> Result<(), DaemonError> {
         let now = Self::of(path).map_err(|_| DaemonError::InsecureDir {
-            reason: "el dir del socket desapareció durante el bind",
+            reason: "the socket's dir disappeared during the bind",
         })?;
         if now == self {
             Ok(())
         } else {
             Err(DaemonError::InsecureDir {
-                reason: "el dir del socket fue reemplazado durante el bind",
+                reason: "the socket's dir was replaced during the bind",
             })
         }
     }
 }
 
-/// Verifica (creándolo si falta) que el dir del socket es NUESTRO y 0700:
-/// jamás symlink, jamás de otro uid, jamás accesible a otros. Devuelve la
-/// [`DirIdentity`] validada para re-comprobar tras el bind (#34.2).
+/// Verifies (creating it if missing) that the socket's dir is OURS and 0700:
+/// never a symlink, never another uid's, never accessible to others. Returns
+/// the validated [`DirIdentity`] to re-check after the bind (#34.2).
 fn prepare_socket_dir(dir: &Path) -> Result<DirIdentity, DaemonError> {
     match std::fs::create_dir_all(dir) {
         Ok(()) => {}
@@ -1632,31 +1671,32 @@ fn prepare_socket_dir(dir: &Path) -> Result<DirIdentity, DaemonError> {
     let md = std::fs::symlink_metadata(dir)?;
     if md.file_type().is_symlink() {
         return Err(DaemonError::InsecureDir {
-            reason: "el dir del socket es un symlink",
+            reason: "the socket's dir is a symlink",
         });
     }
     if !md.is_dir() {
         return Err(DaemonError::InsecureDir {
-            reason: "el path del socket no es un directorio",
+            reason: "the socket's path is not a directory",
         });
     }
-    // Endurecer modo ANTES de comparar: si el dir es nuestro, esto lo deja
-    // 0700; si es de otro, fallará o lo delatará el check de dueño.
+    // Harden the mode BEFORE comparing: if the dir is ours, this leaves it at
+    // 0700; if it is someone else's, it will fail or the owner check will
+    // give it away.
     if md.permissions().mode() & 0o077 != 0 {
         std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).map_err(|_| {
             DaemonError::InsecureDir {
-                reason: "no se pudo endurecer el modo a 0700",
+                reason: "could not harden the mode to 0700",
             }
         })?;
     }
     let md = std::fs::symlink_metadata(dir)?;
     if md.permissions().mode() & 0o077 != 0 {
         return Err(DaemonError::InsecureDir {
-            reason: "el dir del socket es accesible a otros usuarios",
+            reason: "the socket's dir is accessible to other users",
         });
     }
-    // Dueño: comparado contra el euid REAL más adelante (el del socket
-    // creado); aquí basta rechazar dirs que no podamos poseer.
+    // Owner: compared against the REAL euid further on (the created
+    // socket's); here it is enough to reject dirs we cannot own.
     let probe = dir.join(format!(".norte-owner-probe-{}", std::process::id()));
     let owned = std::fs::OpenOptions::new()
         .write(true)
@@ -1667,7 +1707,7 @@ fn prepare_socket_dir(dir: &Path) -> Result<DirIdentity, DaemonError> {
     let _ = std::fs::remove_file(&probe);
     if !owned {
         return Err(DaemonError::InsecureDir {
-            reason: "el dir del socket pertenece a otro usuario",
+            reason: "the socket's dir belongs to another user",
         });
     }
     Ok(DirIdentity {
@@ -1676,10 +1716,11 @@ fn prepare_socket_dir(dir: &Path) -> Result<DirIdentity, DaemonError> {
     })
 }
 
-/// `true` si `path` es el fallback por defecto en `/tmp/norte-<uid>/…` (solo
-/// cuando el path se tomó por defecto (`defaulted=true`), sin `--socket`).
-/// El fallback es squat-eable (#34.1): un mensaje accionable pide fijar
-/// `XDG_RUNTIME_DIR` o pasar `--socket`, en vez del `InsecureDir` opaco.
+/// `true` if `path` is the default fallback under `/tmp/norte-<uid>/…` (only
+/// when the path was taken by default (`defaulted=true`), with no
+/// `--socket`). The fallback is squattable (#34.1): an actionable message
+/// asks to set `XDG_RUNTIME_DIR` or pass `--socket`, instead of the opaque
+/// `InsecureDir`.
 fn is_default_tmp_fallback(path: &Path, defaulted: bool) -> bool {
     defaulted
         && path.parent().is_some_and(|dir| {
@@ -1690,12 +1731,13 @@ fn is_default_tmp_fallback(path: &Path, defaulted: bool) -> bool {
         })
 }
 
-/// ¿Es un id de sesión de agente admisible? Charset cerrado `[A-Za-z0-9._-]`,
-/// 1..=64: el id viaja a journal, tracing y modales de aprobación de TODOS
-/// los frontends — un charset cerrado en la frontera vale más que confiar en
-/// que cada consumidor enmascare (que además deben, defensa en profundidad).
-/// `.`/`..` se rechazan por adelantado (MINOR-4 security M3-4): si algún día
-/// una sesión deriva un fichero (export de audit M3-5), jamás será traversal.
+/// Is this an admissible agent session id? Closed charset
+/// `[A-Za-z0-9._-]`, 1..=64: the id travels to the journal, tracing and
+/// approval modals of ALL frontends — a closed charset at the boundary is
+/// worth more than trusting every consumer to mask it (which they must do
+/// too, defense in depth). `.`/`..` are rejected up front (security M3-4
+/// MINOR-4): if a session ever derives a file (M3-5 audit export), it will
+/// never be traversal.
 fn valid_agent_session(s: &str) -> bool {
     (1..=64).contains(&s.len())
         && s != "."
@@ -1704,68 +1746,71 @@ fn valid_agent_session(s: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
 }
 
-/// ¿Se admite a este peer? Solo el MISMO uid (spec §17.6). Root NO entra:
-/// un daemon de usuario no es superficie para procesos privilegiados.
+/// Is this peer admitted? Only the SAME uid (spec §17.6). Root does NOT get
+/// in: a user daemon is not a surface for privileged processes.
 fn peer_allowed(peer_uid: u32, daemon_uid: u32) -> bool {
     peer_uid == daemon_uid
 }
 
 fn spawn_connection(stream: UnixStream, shared: Arc<Shared>) {
-    // RAÍZ: cada `rpc` de esta conexión es raíz (ADR 0127). Heredando, colgarían
-    // todos de `run`, el span de la vida entera del daemon.
-    crate::blocking::spawn_raiz(async move {
-        // Auth ANTES de leer un solo byte (ADR 0011).
+    // ROOT: each `rpc` of this connection is a root (ADR 0127). Inheriting,
+    // they would all hang off `run`, the span of the daemon's whole life.
+    crate::blocking::spawn_root(async move {
+        // Auth BEFORE reading a single byte (ADR 0011).
         let peer = match stream.peer_cred() {
             Ok(cred) => cred,
             Err(e) => {
-                tracing::warn!(error = %e, "peer_cred falló; conexión rechazada");
+                tracing::warn!(error = %e, "peer_cred failed; connection rejected");
                 return;
             }
         };
         if !peer_allowed(peer.uid(), shared.uid) {
-            tracing::warn!(peer_uid = peer.uid(), "conexión de otro uid rechazada");
+            tracing::warn!(
+                peer_uid = peer.uid(),
+                "connection from another uid rejected"
+            );
             return;
         }
         shared.connections.fetch_add(1, Ordering::SeqCst);
         if let Err(e) = serve_connection(stream, &shared).await {
-            tracing::debug!(error = %e, "conexión terminada con error");
+            tracing::debug!(error = %e, "connection ended with an error");
         }
-        // Con la última conexión fuera no hay nadie a quien servir, y lo que
-        // acaba de dejar puesto no debería esperar al siguiente tick.
+        // With the last connection gone there is nobody left to serve, and
+        // what it just left set should not wait for the next tick.
         if shared.connections.fetch_sub(1, Ordering::SeqCst) == 1 {
             shared.session_flush.notify_one();
         }
     });
 }
 
-/// Un listado paginado VIVO retenido por el daemon entre páginas (ADR 0017):
-/// el `EntryStream` perezoso sin drenar, la ruta que lo abrió (para validar
-/// que un `cursor` corresponde a ESTE listado) y cuándo se usó por última vez
-/// (TTL/LRU). Soltar la struct = soltar el stream = cancelación cooperativa
-/// hasta el productor del provider (regla 3).
+/// A LIVE paginated listing retained by the daemon between pages (ADR 0017):
+/// the lazy, undrained `EntryStream`, the path that opened it (to validate
+/// that a `cursor` matches THIS listing) and when it was last used
+/// (TTL/LRU). Dropping the struct = dropping the stream = cooperative
+/// cancellation down to the provider's producer (rule 3).
 struct OpenListing {
     path: norte_proto::VPath,
     stream: norte_vfs::EntryStream,
     last_used: std::time::Instant,
-    /// Omitidas del índice del contenedor (#93), capturado al ABRIR el
-    /// listado: cada página lo repite (el cliente puede engancharse en
-    /// cualquiera; el total es por-contenedor, no por página).
+    /// Skipped from the container's index (#93), captured when OPENING the
+    /// listing: every page repeats it (the client can latch onto any of
+    /// them; the total is per-container, not per-page).
     skipped: Option<u64>,
-    /// El ancla del directorio listado (#295), capturada al ABRIR por el mismo
-    /// motivo que `skipped`: una página no es un directorio distinto, y el
-    /// cliente puede engancharse en cualquiera.
+    /// The anchor of the listed directory (#295), captured on OPEN for the
+    /// same reason as `skipped`: a page is not a different directory, and
+    /// the client can latch onto any of them.
     dir_anchor: Option<norte_proto::DirAnchor>,
-    /// Petición de attrs RESUELTA al abrir el listado (#108 bloque 2): el
-    /// stream nació con ella, así que las continuaciones la reusan para el
-    /// cinturón de emisión (los `attrs` de una continuación se ignoran).
+    /// Attrs request RESOLVED when opening the listing (#108 block 2): the
+    /// stream was born with it, so continuations reuse it for the emission
+    /// belt (a continuation's `attrs` are ignored).
     attrs: norte_vfs::AttrRequest,
-    /// Decrementa el contador GLOBAL al soltarse el listado (remove/evict/
-    /// sweep/muerte de la conexión): contabilidad RAII, sin decrementos
-    /// dispersos (M1 del rust-reviewer).
+    /// Decrements the GLOBAL counter when the listing is released
+    /// (remove/evict/sweep/connection death): RAII accounting, no scattered
+    /// decrements (rust-reviewer M1).
     _guard: ListingGuard,
 }
 
-/// Guard RAII del contador global de listados retenidos.
+/// RAII guard of the global counter of retained listings.
 struct ListingGuard {
     global: Arc<AtomicUsize>,
 }
@@ -1776,25 +1821,26 @@ impl Drop for ListingGuard {
     }
 }
 
-/// Estado POR-CONEXIÓN: el `initialized` del handshake más los listados
-/// paginados retenidos. Local de [`serve_connection`] — se dropea en TODOS los
-/// caminos de salida, así que los streams mueren con la conexión. El dispatch
-/// es serial (se awaitea inline), sin concurrencia: basta `&mut`.
+/// PER-CONNECTION state: the handshake's `initialized` plus the retained
+/// paginated listings. Local to [`serve_connection`] — dropped on ALL exit
+/// paths, so the streams die with the connection. Dispatch is serial
+/// (awaited inline), with no concurrency: `&mut` is enough.
 struct ConnState {
     initialized: bool,
-    /// Actor bajo el que se journaliza y se evalúa la policy TODA mutación de
-    /// esta conexión (M3-3b). `User` por defecto (frontend humano, sin
-    /// sandbox); pasa a `Agent { session }` si el `initialize` trae
-    /// `agent_session`. Lo fija SOLO el servidor en el handshake: un cliente
-    /// jamás puede declararse `User` por otra vía.
+    /// The actor under which EVERY mutation of this connection is journaled
+    /// and policy-evaluated (M3-3b). `User` by default (human frontend, no
+    /// sandbox); becomes `Agent { session }` if the `initialize` carries
+    /// `agent_session`. Set ONLY by the server at the handshake: a client can
+    /// never declare itself `User` any other way.
     actor: crate::journal::Actor,
     listings: HashMap<u64, OpenListing>,
     next_listing_id: u64,
-    /// `request_id`s de scope que ESTA conexión dejó pendientes (M3-3b): al
-    /// morir la conexión se retiran del mapa global de `Shared` — una petición
-    /// sin conceder no sobrevive a su peticionario (sin esto, un agente que
-    /// pide y se va clava un slot para siempre). Acotado a
-    /// [`MAX_PENDING_SCOPE_PER_CONN`]: una sesión no monopoliza el canal global.
+    /// Scope `request_id`s THIS connection left pending (M3-3b): when the
+    /// connection dies they are removed from `Shared`'s global map — an
+    /// ungranted request does not outlive its requester (without this, an
+    /// agent that asks and leaves pins a slot forever). Capped at
+    /// [`MAX_PENDING_SCOPE_PER_CONN`]: one session does not monopolize the
+    /// global channel.
     pending_scope_ids: Vec<u64>,
 }
 
@@ -1809,15 +1855,15 @@ impl ConnState {
         }
     }
 
-    /// Descarta los listados sin continuar en más de `ttl` (barrido perezoso).
+    /// Discards listings not continued for more than `ttl` (lazy sweep).
     fn sweep_expired(&mut self, ttl: Duration) {
         let now = std::time::Instant::now();
         self.listings
             .retain(|_, l| now.duration_since(l.last_used) < ttl);
     }
 
-    /// Expulsa el listado menos-recientemente-usado (LRU) si el mapa está en
-    /// el tope: abrir el (N+1) no debe crecer sin límite.
+    /// Evicts the least-recently-used (LRU) listing if the map is at the cap:
+    /// opening the (N+1)th must not grow without limit.
     fn evict_if_full(&mut self) {
         if self.listings.len() < MAX_OPEN_LISTINGS {
             return;
@@ -1828,16 +1874,16 @@ impl ConnState {
     }
 }
 
-/// Resultado de drenar una página de un `EntryStream`.
+/// Result of draining one page of an `EntryStream`.
 enum Drained {
-    /// El stream tiene MÁS: se retiene para la página siguiente.
+    /// The stream has MORE: retained for the next page.
     More,
-    /// El stream se agotó: no hay `next_cursor`.
+    /// The stream ran out: no `next_cursor`.
     Done,
 }
 
-/// Drena hasta `cap` entradas (o todas si `cap` es `None`) a `out`. Un `Err`
-/// del stream se propaga (el listado se descarta arriba).
+/// Drains up to `cap` entries (or all if `cap` is `None`) into `out`. An
+/// `Err` from the stream propagates (the listing is discarded above).
 async fn drain_page(
     stream: &mut norte_vfs::EntryStream,
     cap: Option<usize>,
@@ -1856,10 +1902,11 @@ async fn drain_page(
     }
 }
 
-/// Valida la petición de attrs del wire (#108 bloque 2, ADR 0039 §4): id
-/// malformado o más de `ATTRS_MAX_REQUEST` (el deserializador materializa
-/// 16+1 como testigo) = `-32602`. Pedir un id VÁLIDO pero desconocido NO es
-/// error (viene ausente — un cliente con catálogo rancio degrada).
+/// Validates the wire's attrs request (#108 block 2, ADR 0039 §4): a
+/// malformed id or more than `ATTRS_MAX_REQUEST` (the deserializer
+/// materializes 16+1 as a witness) = `-32602`. Asking for a VALID but unknown
+/// id is NOT an error (it comes back absent — a client with a stale
+/// catalogue degrades).
 fn validate_attr_request(ids: &[String]) -> Result<(), RpcError> {
     if ids.len() > norte_proto::ATTRS_MAX_REQUEST {
         return Err(RpcError::protocol(
@@ -1871,8 +1918,8 @@ fn validate_attr_request(ids: &[String]) -> Result<(), RpcError> {
         ));
     }
     if let Some(bad) = ids.iter().find(|id| !norte_proto::is_valid_attr_id(id)) {
-        // `escape_debug`: el id inválido es entrada hostil — jamás crudo en
-        // un mensaje de error (controles, RTL, invisibles).
+        // `escape_debug`: the invalid id is hostile input — never raw in an
+        // error message (controls, RTL, invisibles).
         return Err(RpcError::protocol(
             codes::INVALID_PARAMS,
             format!("attrs: malformed id \"{}\"", bad.escape_debug()),
@@ -1881,15 +1928,15 @@ fn validate_attr_request(ids: &[String]) -> Result<(), RpcError> {
     Ok(())
 }
 
-/// Valida `p.attrs` y lo cruza con el catálogo del provider de `path`:
-/// devuelve la petición que de verdad viaja al provider. Un id válido pero
-/// NO anunciado se cae aquí — el daemon solo reenvía ids que el provider
-/// anuncia, jamás inventa celdas (ADR 0039 §1).
+/// Validates `p.attrs` and crosses it with `path`'s provider catalogue:
+/// returns the request that really travels to the provider. A valid id that
+/// is NOT advertised falls out here — the daemon only forwards ids the
+/// provider advertises, never invents cells (ADR 0039 §1).
 ///
-/// Dos resoluciones de provider (catálogo aquí, `list_with`/`stat_with` en
-/// el handler): si la conexión se remapea entre ambas, la petición filtrada
-/// puede no casar con el catálogo nuevo — degrada a AUSENCIA, que es
-/// contrato-legal. No "arreglar" con un lookup único bajo lock.
+/// Two provider resolutions (catalogue here, `list_with`/`stat_with` in the
+/// handler): if the connection gets remapped between the two, the filtered
+/// request may not match the new catalogue — it degrades to ABSENCE, which
+/// is contract-legal. Do not "fix" this with a single lookup under a lock.
 async fn resolve_attr_request(
     ids: &[String],
     path: &norte_proto::VPath,
@@ -1911,17 +1958,16 @@ async fn resolve_attr_request(
     ))
 }
 
-/// Cinturón de emisión (ADR 0039 §5): delega en el belt compartido de
-/// `AttrRequest` — mismo filtro que aplica el backend embebido, así ninguna
-/// ruta (wire o in-process) emite ids no pedidos, valores sobre tope o
-/// `Unknown`.
+/// Emission belt (ADR 0039 §5): delegates to `AttrRequest`'s shared belt —
+/// the same filter the embedded backend applies, so no path (wire or
+/// in-process) emits unrequested ids, over-cap values, or `Unknown`.
 fn enforce_attr_caps(entry: &mut norte_proto::Entry, allowed: &norte_vfs::AttrRequest) {
     allowed.retain_conforming(entry);
 }
 
-/// El handler de `fs.stat` (#108 bloque 2): valida la petición de attrs, la
-/// cruza con lo anunciado, materializa y aplica el cinturón de emisión. El
-/// `read_gate` (#80) lo aplica el arm del dispatch.
+/// The `fs.stat` handler (#108 block 2): validates the attrs request,
+/// crosses it with what is advertised, materializes and applies the
+/// emission belt. The `read_gate` (#80) is applied by the dispatch's arm.
 async fn handle_fs_stat(
     p: methods::FsStatParams,
     shared: &Arc<Shared>,
@@ -1941,26 +1987,28 @@ async fn handle_fs_stat(
     to_value(&methods::FsStatResult { entry })
 }
 
-/// El handler de `fs.list` con paginación por cursor (ADR 0017). Cláusula ADR
-/// 0004: sin `cursor` NI `limit` drena el listado COMPLETO con `next_cursor:
-/// null` (un cliente 0.7 recibe exactamente lo de antes).
+/// The `fs.list` handler with cursor pagination (ADR 0017). ADR 0004 clause:
+/// with no `cursor` AND no `limit`, drains the WHOLE listing with
+/// `next_cursor: null` (a 0.7 client receives exactly what it used to).
 ///
-/// Attrs (#108 bloque 2): la petición se valida y resuelve AL ABRIR; una
-/// continuación por cursor IGNORA `p.attrs` (el stream retenido nació con
-/// sus opciones — re-mandarlos no cambia nada, la validación sí corre).
-#[tracing::instrument(level = "debug", skip_all, fields(path = %p.path.display_lossy(), paginado = p.cursor.is_some()))]
+/// Attrs (#108 block 2): the request is validated and resolved ON OPEN; a
+/// cursor continuation IGNORES `p.attrs` (the retained stream was born with
+/// its options — resending them changes nothing, though the validation does
+/// run).
+#[tracing::instrument(level = "debug", skip_all, fields(path = %p.path.display_lossy(), paged = p.cursor.is_some()))]
 async fn handle_fs_list(
     p: methods::FsListParams,
     conn: &mut ConnState,
     shared: &Arc<Shared>,
 ) -> Result<serde_json::Value, RpcError> {
-    // El gate de lectura (#80) lo aplica el ARM del dispatch, fuera de este
-    // span instrumentado (no filtra el path a la traza en una denegación).
+    // The read gate (#80) is applied by the dispatch's ARM, outside this
+    // instrumented span (it does not leak the path into the trace on a
+    // denial).
 
-    // Barrido perezoso antes de tocar el mapa (además del periódico).
+    // Lazy sweep before touching the map (in addition to the periodic one).
     conn.sweep_expired(shared.listing_ttl);
 
-    // `limit == 0` sería una página vacía en bucle: error de params.
+    // `limit == 0` would be an empty page in a loop: a params error.
     if p.limit == Some(0) {
         return Err(RpcError::protocol(
             codes::INVALID_PARAMS,
@@ -1971,16 +2019,16 @@ async fn handle_fs_list(
     let now = std::time::Instant::now();
     let mut entries = Vec::new();
 
-    // La validación de attrs corre SIEMPRE (también con cursor: un id
-    // malformado es -32602 aunque la continuación no lo use).
+    // Attrs validation ALWAYS runs (even with a cursor: a malformed id is
+    // -32602 even if the continuation does not use it).
     validate_attr_request(&p.attrs)?;
 
-    // Continuación: el cursor es el id opaco de un listado retenido.
+    // Continuation: the cursor is the opaque id of a retained listing.
     if let Some(cur) = &p.cursor {
         return continue_listing(cur, &p.path, cap, now, conn, entries).await;
     }
 
-    // Listado NUEVO (sin cursor): solo ids anunciados viajan al provider.
+    // NEW listing (no cursor): only advertised ids travel to the provider.
     let request = resolve_attr_request(&p.attrs, &p.path, shared).await?;
     let opt = norte_vfs::ListOptions {
         attrs: request.clone(),
@@ -1990,26 +2038,27 @@ async fn handle_fs_list(
         .list_with(&p.path, &opt)
         .await
         .map_err(RpcError::from)?;
-    // Omitidas del contenedor (#93), capturado UNA vez al abrir (el índice
-    // archive ya está caliente tras el `list`). Un error aquí NO tumba un
-    // listado que ya abrió: degrada a `None` (= desconocido, lo de antes) —
-    // pero con traza (el punto de #93 es no callar listados incompletos).
+    // Skipped from the container (#93), captured ONCE on open (the archive
+    // index is already warm after the `list`). An error here does NOT bring
+    // down a listing that already opened: it degrades to `None` (= unknown,
+    // as before) — but WITH a trace (the point of #93 is not to silence
+    // incomplete listings).
     let skipped = shared
         .engine
         .list_skipped(&p.path)
         .await
         .unwrap_or_else(|e| {
-            tracing::warn!(error = %e, "list_skipped falló; omitidas = desconocido");
+            tracing::warn!(error = %e, "list_skipped failed; skipped = unknown");
             None
         });
-    // El ancla del directorio (#295), también UNA vez al abrir. Un fallo aquí
-    // NO tumba el listado: degrada a `None`, que es lo que dice un provider
-    // que no sabe dar identidad, y entonces el cliente no manda ancla y la
-    // escritura se comporta como en 0.53. Ir al revés —negarse a listar
-    // porque no se puede anclar— dejaría sin listar un bucket entero por una
-    // comprobación que ese destino no puede dar.
+    // The directory's anchor (#295), also captured ONCE on open. A failure
+    // here does NOT bring down the listing: it degrades to `None`, which is
+    // what a provider that cannot give identity says, and then the client
+    // sends no anchor and the write behaves as in 0.53. Going the other way
+    // — refusing to list because it cannot be anchored — would leave a whole
+    // bucket unlisted over a check that destination cannot give.
     let dir_anchor = shared.engine.dir_anchor(&p.path).await.unwrap_or_else(|e| {
-        tracing::debug!(error = %e, "no se pudo anclar el directorio listado (#295)");
+        tracing::debug!(error = %e, "could not anchor the listed directory (#295)");
         None
     });
     match drain_page(&mut stream, cap, &mut entries).await {
@@ -2025,10 +2074,10 @@ async fn handle_fs_list(
             })
         }
         Ok(Drained::More) => {
-            // Presión GLOBAL (M1): por encima del tope no se retiene — se drena
-            // el resto EN LÍNEA y se devuelve completo (libera el hilo blocking
-            // del productor al instante). Degrada a listado-completo, nunca
-            // agota el pool ni trunca.
+            // GLOBAL pressure (M1): above the cap, nothing is retained — the
+            // rest is drained INLINE and returned complete (frees the
+            // producer's blocking thread instantly). Degrades to a
+            // full-listing, never exhausts the pool nor truncates.
             if shared.open_listings.load(Ordering::SeqCst) >= GLOBAL_MAX_LISTINGS {
                 match drain_page(&mut stream, None, &mut entries).await {
                     Ok(_) => {
@@ -2077,10 +2126,10 @@ async fn handle_fs_list(
     }
 }
 
-/// Continuación de un listado retenido (el brazo con `cursor` de
-/// [`handle_fs_list`], separado por tamaño): valida cursor↔path, drena la
-/// página y decide retener (More) o cerrar (Done/error). El `skipped` del
-/// open del listado se repite en cada página (#93).
+/// Continuation of a retained listing (the `cursor` arm of
+/// [`handle_fs_list`], split out by size): validates cursor↔path, drains the
+/// page and decides whether to retain (More) or close (Done/error). The
+/// listing's open-time `skipped` is repeated on every page (#93).
 async fn continue_listing(
     cursor: &str,
     path: &norte_proto::VPath,
@@ -2089,7 +2138,7 @@ async fn continue_listing(
     conn: &mut ConnState,
     mut entries: Vec<norte_proto::Entry>,
 ) -> Result<serde_json::Value, RpcError> {
-    // Cursor no-numérico o desconocido = expirado (el cliente reinicia).
+    // Non-numeric or unknown cursor = expired (the client restarts).
     let id: u64 = cursor.parse().map_err(|_| cursor_expired())?;
     let (drained, skipped, dir_anchor) = {
         let listing = conn.listings.get_mut(&id).ok_or_else(cursor_expired)?;
@@ -2100,12 +2149,13 @@ async fn continue_listing(
             ));
         }
         let skipped = listing.skipped;
-        // El ancla del ABRIR, repetida en cada página (#295): volver a
-        // preguntarla aquí contestaría por el directorio de AHORA, que es
-        // justo lo que el ancla existe para no confundir con el de entonces.
+        // The anchor from OPEN, repeated on every page (#295): asking it
+        // again here would answer for the directory as it is NOW, which is
+        // exactly what the anchor exists to avoid confusing with the one from
+        // back then.
         let dir_anchor = listing.dir_anchor.clone();
         let drained = drain_page(&mut listing.stream, cap, &mut entries).await;
-        // Cinturón de emisión con la petición del ABRIR (#108 bloque 2).
+        // Emission belt with the OPEN-time request (#108 block 2).
         let allowed = listing.attrs.clone();
         for e in &mut entries {
             enforce_attr_caps(e, &allowed);
@@ -2114,7 +2164,7 @@ async fn continue_listing(
     };
     match drained {
         Ok(Drained::More) => {
-            // Se conserva bajo el MISMO id (el cliente reusa el cursor).
+            // Kept under the SAME id (the client reuses the cursor).
             if let Some(l) = conn.listings.get_mut(&id) {
                 l.last_used = now;
             }
@@ -2141,9 +2191,9 @@ async fn continue_listing(
     }
 }
 
-/// `RpcError` para un cursor de paginación inválido/expirado (ADR 0017): lleva
-/// la taxonomía [`Error::CursorExpired`](norte_proto::Error::CursorExpired) en
-/// `data`, así el cliente la distingue y reinicia el listado.
+/// `RpcError` for an invalid/expired pagination cursor (ADR 0017): carries the
+/// [`Error::CursorExpired`](norte_proto::Error::CursorExpired) taxonomy in
+/// `data`, so the client distinguishes it and restarts the listing.
 fn cursor_expired() -> RpcError {
     RpcError::from(norte_proto::Error::CursorExpired)
 }
@@ -2151,9 +2201,9 @@ fn cursor_expired() -> RpcError {
 async fn serve_connection(stream: UnixStream, shared: &Arc<Shared>) -> std::io::Result<()> {
     let (reader, mut writer) = stream.into_split();
 
-    // Toda escritura (respuestas Y broadcast) sale por un único canal
-    // BOUNDED: jamás dos frames entrelazados y jamás memoria sin límite
-    // por un cliente que no lee (M1 del security-reviewer).
+    // Every write (responses AND broadcasts) goes out through a single
+    // BOUNDED channel: never two interleaved frames and never unbounded
+    // memory for a client that does not read (security-reviewer M1).
     let (tx, mut rx) = mpsc::channel::<Arc<[u8]>>(OUTBOX_FRAMES);
     let writer_task = crate::blocking::spawn(async move {
         while let Some(frame) = rx.recv().await {
@@ -2165,12 +2215,12 @@ async fn serve_connection(stream: UnixStream, shared: &Arc<Shared>) -> std::io::
     });
 
     let conn_id = shared.next_conn.fetch_add(1, Ordering::SeqCst) as u64;
-    // #64: la LECTURA vive en su propia task alimentando un inbox acotado —
-    // durante un dispatch SUSPENDIDO (el Ask de policy) el socket se sigue
-    // leyendo, y un EOF/reset del peer cancela `peer_gone`: el dispatch en
-    // vuelo se dropea y sus guards RAII limpian (la pendiente de aprobación
-    // deja de ser zombi hasta el TTL). El dispatch sigue SERIAL (orden de
-    // frames = orden de ejecución); solo cambia QUIÉN lee.
+    // #64: READING lives in its own task feeding a bounded inbox — during a
+    // SUSPENDED dispatch (a policy Ask) the socket keeps being read, and an
+    // EOF/reset from the peer cancels `peer_gone`: the in-flight dispatch is
+    // dropped and its RAII guards clean up (the pending approval stops being
+    // a zombie until the TTL). Dispatch stays SERIAL (frame order = execution
+    // order); only WHO reads changes.
     let peer_gone = CancellationToken::new();
     let (inbox_tx, mut inbox_rx) = mpsc::channel::<serde_json::Value>(INBOX_FRAMES);
     let reader_task = crate::blocking::spawn(read_frames(
@@ -2182,24 +2232,24 @@ async fn serve_connection(stream: UnixStream, shared: &Arc<Shared>) -> std::io::
     ));
 
     let mut conn = ConnState::new();
-    // #72: tokens de cancelación de las requests cancelables en vuelo.
+    // #72: cancellation tokens of cancellable in-flight requests.
     let inflight_cancel: InflightCancel = Arc::default();
-    // Reap de listados paginados expirados en una conexión viva-pero-muda
-    // (además del barrido perezoso en cada fs.list). OJO: entre dispatches —
-    // un dispatch suspendido sigue reteniendo el tick (mitigado por el
-    // barrido perezoso del siguiente fs.list, nota MINOR-3 de M3-3b).
+    // Reaping expired paginated listings on a live-but-silent connection (in
+    // addition to the lazy sweep on every fs.list). NOTE: between dispatches
+    // — a suspended dispatch keeps holding up the tick (mitigated by the next
+    // fs.list's lazy sweep, M3-3b's MINOR-3 note).
     let mut sweep = tokio::time::interval(LISTING_SWEEP);
     sweep.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    // #72: frames leídos del inbox DURANTE un dispatch en vuelo que NO son un
-    // rpc.cancel de la request en vuelo se bufferizan aquí y se procesan tras
-    // el desenlace — el dispatch sigue SERIAL (orden de frames = orden de
-    // ejecución). Un agente MCP no pipelinea, así que en la práctica el único
-    // frame durante un Ask es el cancel o el EOF.
+    // #72: frames read from the inbox WHILE a dispatch is in flight that are
+    // NOT an `rpc.cancel` of the in-flight request are buffered here and
+    // processed AFTER the outcome — dispatch stays SERIAL (frame order =
+    // execution order). An MCP agent does not pipeline, so in practice the
+    // only frame during an Ask is the cancel or the EOF.
     let mut pending_frames: std::collections::VecDeque<serde_json::Value> =
         std::collections::VecDeque::new();
     let result: std::io::Result<()> = loop {
-        // Siguiente frame: primero el búfer local, luego el inbox (con
-        // shutdown/sweep atendidos SOLO entre dispatches, como antes de #72).
+        // Next frame: first the local buffer, then the inbox (with
+        // shutdown/sweep handled ONLY between dispatches, as before #72).
         let value = if let Some(v) = pending_frames.pop_front() {
             v
         } else {
@@ -2215,46 +2265,48 @@ async fn serve_connection(stream: UnixStream, shared: &Arc<Shared>) -> std::io::
                 }
             }
         };
-        // Despacha vigilando el inbox en paralelo (#72 + #64).
+        // Dispatches while watching the inbox in parallel (#72 + #64).
         let dispatch = handle_value(value, conn_id, &tx, &mut conn, shared, &inflight_cancel);
         tokio::pin!(dispatch);
         let peer_died = loop {
             tokio::select! {
                 biased;
-                // Un dispatch que completa, completa (incluida la respuesta
-                // Cancelled del withdrawal): gana a la muerte del peer.
+                // A dispatch that completes, completes (including the
+                // Cancelled response of a withdrawal): it wins over the
+                // peer's death.
                 () = &mut dispatch => break false,
-                // Un dispatch SUSPENDIDO muere con su peticionario (#64).
+                // A SUSPENDED dispatch dies with its requester (#64).
                 () = peer_gone.cancelled() => break true,
-                // Frames que llegan mientras este dispatch sigue en vuelo —
-                // SOLO mientras el búfer de diferidos no esté al tope: en el
-                // tope este brazo se deshabilita y el reader vuelve a hacer
-                // backpressure sobre el socket (cota anti memoria sin límite,
-                // MAJOR del security-reviewer #72). Un cancel que quedara detrás
-                // de un flood no se lee (el Ask vencerá por TTL) — aceptable:
-                // el pipelining bajo un Ask no-aprobado es el caso semi-hostil.
+                // Frames arriving while this dispatch is still in flight —
+                // ONLY while the deferred buffer is not at the cap: at the
+                // cap this arm is disabled and the reader goes back to
+                // applying backpressure on the socket (anti-unbounded-memory
+                // cap, security-reviewer MAJOR #72). A cancel left behind a
+                // flood does not get read (the Ask will expire by TTL) —
+                // acceptable: pipelining under an unapproved Ask is the
+                // semi-hostile case.
                 msg = inbox_rx.recv(), if pending_frames.len() < MAX_DEFERRED_FRAMES => match msg {
-                    // El reader terminó (EOF/shutdown): DROPEA el dispatch en
-                    // vuelo (sus guards limpian) y cierra por el camino común.
-                    // En la práctica `peer_gone` (biased, arriba) gana antes;
-                    // este brazo es defensivo — jamás esperar a un dispatch
-                    // suspendido aquí (colgaría hasta el TTL).
+                    // The reader finished (EOF/shutdown): DROPS the in-flight
+                    // dispatch (its guards clean up) and closes via the
+                    // common path. In practice `peer_gone` (biased, above)
+                    // wins first; this arm is defensive — never wait for a
+                    // suspended dispatch here (it would hang until the TTL).
                     None => break true,
                     Some(frame) => {
                         if let Some(id) = rpc_cancel_id(&frame) {
-                            // rpc.cancel: dispara el token de esa request si
-                            // está en vuelo. NO rompe la conexión (a diferencia
-                            // de peer_gone). Id desconocido/ya resuelto = no-op.
+                            // rpc.cancel: fires that request's token if it is
+                            // in flight. Does NOT break the connection (unlike
+                            // peer_gone). Unknown/already-resolved id = no-op.
                             if let Some(tok) = inflight_cancel
                                 .lock()
-                                .expect("inflight_cancel lock sano")
+                                .expect("inflight_cancel lock is sound")
                                 .get(&id)
                             {
                                 tok.cancel();
                             }
                         } else {
-                            // Cualquier otro frame: se procesa TRAS el
-                            // desenlace (dispatch serial).
+                            // Any other frame: processed AFTER the outcome
+                            // (serial dispatch).
                             pending_frames.push_back(frame);
                         }
                     }
@@ -2266,49 +2318,50 @@ async fn serve_connection(stream: UnixStream, shared: &Arc<Shared>) -> std::io::
         }
     };
 
-    // Limpieza común de TODOS los caminos de salida. Retirar NUESTRA
-    // suscripción antes de esperar al writer: es el otro dueño del sender —
-    // sin esto, deadlock (el writer drena hasta que TODOS mueren).
+    // Common cleanup for ALL exit paths. Remove OUR subscription before
+    // waiting for the writer: it is the sender's other owner — without this,
+    // deadlock (the writer drains until EVERYONE dies).
     shared
         .subscribers
         .lock()
-        .expect("subscribers lock sano")
+        .expect("subscribers lock is sound")
         .remove(&conn_id);
-    // Las peticiones de scope que ESTA conexión dejó pendientes mueren con
-    // ella: una petición sin conceder no debe sobrevivir a su peticionario
-    // (anti-fuga del canal global, M3-3b). `remove` de un id ya concedido es
-    // un no-op benigno.
+    // The scope requests THIS connection left pending die with it: an
+    // ungranted request must not outlive its requester (anti-leak of the
+    // global channel, M3-3b). `remove` of an id already granted is a benign
+    // no-op.
     if !conn.pending_scope_ids.is_empty() {
         let mut pending = shared
             .pending_scope
             .lock()
-            .expect("pending_scope lock sano");
+            .expect("pending_scope lock is sound");
         for id in &conn.pending_scope_ids {
             pending.remove(id);
         }
     }
-    // La dueña de la sesión de UI la SUELTA al irse: sin esto, un cliente que
-    // muere deja la pantalla de rehén y el siguiente terminal corre suelto
-    // para siempre. Soltar lo ajeno es un no-op (no desaloja a nadie).
+    // The owner of the UI session RELEASES it on leaving: without this, a
+    // client that dies leaves the screen hostage and the next terminal runs
+    // detached forever. Releasing someone else's is a no-op (evicts nobody).
     shared.ui_session.release(conn_id);
     drop_sync_plans(shared, conn_id).await;
     drop(tx);
-    // Cerrar el inbox termina al reader si aún vive (su `send` falla).
+    // Closing the inbox ends the reader if it is still alive (its `send`
+    // fails).
     drop(inbox_rx);
     let _ = writer_task.await;
-    // El error de LECTURA (p. ej. ECONNRESET) se propaga como antes.
+    // A READ error (e.g. ECONNRESET) propagates as before.
     match reader_task.await {
         Ok(read_result) => result.and(read_result),
         Err(_) => result,
     }
 }
 
-/// Loop de LECTURA de una conexión (#64): decodifica frames y los encola al
-/// dispatch. Vive aunque el dispatch esté suspendido; a CUALQUIER salida
-/// (EOF, reset, framing hostil, shutdown) el `DropGuard` cancela `peer_gone`
-/// y el dispatch en vuelo se aborta. Nota: un peer que hiciera half-close
-/// (shutdown del lado de escritura esperando aún la respuesta) se trata como
-/// muerto — ningún cliente de norte lo hace.
+/// A connection's READ loop (#64): decodes frames and queues them for
+/// dispatch. Stays alive even while the dispatch is suspended; on ANY exit
+/// (EOF, reset, hostile framing, shutdown) the `DropGuard` cancels
+/// `peer_gone` and the in-flight dispatch is aborted. Note: a peer doing a
+/// half-close (shutdown of the write side while still awaiting the response)
+/// is treated as dead — no norte client does this.
 async fn read_frames(
     mut reader: tokio::net::unix::OwnedReadHalf,
     tx: mpsc::Sender<Arc<[u8]>>,
@@ -2337,8 +2390,8 @@ async fn read_frames(
             return Ok(());
         }
         while let Some(frame) = decoder.next_frame() {
-            // JSON roto = -32700; JSON válido que no es envelope = -32600
-            // (M2 del protocol-guardian).
+            // Broken JSON = -32700; valid JSON that is not an envelope =
+            // -32600 (protocol-guardian M2).
             let value: serde_json::Value = match serde_json::from_slice(&frame) {
                 Ok(v) => v,
                 Err(e) => {
@@ -2355,29 +2408,30 @@ async fn read_frames(
                 }
             };
             parse_errors = 0;
-            // Backpressure: con el inbox lleno el reader espera aquí (mismo
-            // throttling que el dispatch inline daba); la detección de EOF
-            // durante un Ask exige que el peer no tenga >INBOX_FRAMES frames
-            // en vuelo — los clientes de norte son request/response.
+            // Backpressure: with a full inbox the reader waits here (the same
+            // throttling inline dispatch used to give); detecting EOF during
+            // an Ask requires the peer to have no more than INBOX_FRAMES
+            // frames in flight — norte's clients are request/response.
             if inbox.send(value).await.is_err() {
-                // El dispatch murió (shutdown): nada que encolar.
+                // The dispatch died (shutdown): nothing to queue.
                 return Ok(());
             }
         }
     }
 }
 
-/// Tokens de cancelación de las requests en vuelo cancelables (#72), por id
-/// JSON-RPC. Vive FUERA de `ConnState` (que `handle_value` toma `&mut`): el
-/// inner loop de `serve_connection` lo consulta EN PARALELO a un dispatch en
-/// vuelo para disparar el token de un `rpc.cancel`. `Arc<Mutex<…>>` porque hay
-/// dos dueños concurrentes: el loop (dispara) y `handle_value` (registra/retira).
+/// Cancellation tokens of cancellable in-flight requests (#72), by JSON-RPC
+/// id. Lives OUTSIDE `ConnState` (which `handle_value` takes as `&mut`): the
+/// inner loop of `serve_connection` consults it IN PARALLEL to an in-flight
+/// dispatch to fire an `rpc.cancel`'s token. `Arc<Mutex<…>>` because there
+/// are two concurrent owners: the loop (fires) and `handle_value`
+/// (registers/removes).
 type InflightCancel = Arc<Mutex<HashMap<RequestId, CancellationToken>>>;
 
-/// Guard RAII del token en vuelo (#72): retira el id del mapa a CUALQUIER
-/// salida del dispatch (respuesta normal, withdrawal por cancel, shutdown, o
-/// drop por muerte del peer) — jamás un token huérfano que un `rpc.cancel`
-/// tardío dispararía sobre una request ya resuelta.
+/// RAII guard of the in-flight token (#72): removes the id from the map on
+/// ANY dispatch exit (normal response, cancel withdrawal, shutdown, or drop
+/// from the peer's death) — never an orphaned token that a late `rpc.cancel`
+/// would fire onto an already-resolved request.
 struct InflightCancelGuard {
     map: InflightCancel,
     id: RequestId,
@@ -2387,18 +2441,18 @@ impl Drop for InflightCancelGuard {
     fn drop(&mut self) {
         self.map
             .lock()
-            .expect("inflight_cancel lock sano")
+            .expect("inflight_cancel lock is sound")
             .remove(&self.id);
     }
 }
 
-/// Extrae el `id` de un frame `rpc.cancel` ya parseado (#72), o `None` si el
-/// frame no es un `rpc.cancel` bien formado. Se aplica a los frames leídos del
-/// inbox DURANTE un dispatch en vuelo — clasificación estructural sobre el
-/// `Value`, sin deserializar el envelope entero. `rpc.cancel` está especificado
-/// SOLO como notificación (sin id de envelope); un frame en forma de Request con
-/// ese método se consumiría aquí igualmente (benigno: nunca se responde), pero
-/// ningún cliente lo emite así.
+/// Extracts the `id` of an already-parsed `rpc.cancel` frame (#72), or `None`
+/// if the frame is not a well-formed `rpc.cancel`. Applied to frames read
+/// from the inbox WHILE a dispatch is in flight — structural classification
+/// over the `Value`, without deserializing the whole envelope. `rpc.cancel`
+/// is specified ONLY as a notification (no envelope id); a Request-shaped
+/// frame with that method would still be consumed here (benign: never
+/// answered), but no client emits it that way.
 fn rpc_cancel_id(value: &serde_json::Value) -> Option<RequestId> {
     if value.get("method").and_then(serde_json::Value::as_str) != Some(methods::RPC_CANCEL) {
         return None;
@@ -2407,9 +2461,9 @@ fn rpc_cancel_id(value: &serde_json::Value) -> Option<RequestId> {
     serde_json::from_value::<RequestId>(id.clone()).ok()
 }
 
-/// Maneja UN mensaje JSON ya parseado de la conexión. La clasificación es
-/// estructural para que un id de tipo ilegal NUNCA muera en silencio como
-/// notification (M3 del guardian).
+/// Handles ONE already-parsed JSON message from the connection.
+/// Classification is structural so that an illegally-typed id NEVER dies
+/// silently as a notification (guardian M3).
 async fn handle_value(
     value: serde_json::Value,
     conn_id: u64,
@@ -2436,12 +2490,13 @@ async fn handle_value(
             };
             let id = req.id.clone();
             let was_initialized = conn.initialized;
-            // #72: fs.copy/move/delete pueden suspenderse en un Ask de policy.
-            // Se registra un token por su id para que un `rpc.cancel` (leído
-            // por el loop de serve_connection en paralelo) retire el Ask
-            // dropeando este dispatch — el gate muere PRE-efecto (su
-            // PendingGuard limpia policy.pending) y JAMÁS aprueba (fail-closed
-            // por construcción: dropear un future no puede devolver Approved).
+            // #72: fs.copy/move/delete can be suspended in a policy Ask. A
+            // token is registered by its id so that an `rpc.cancel` (read by
+            // serve_connection's loop in parallel) withdraws the Ask by
+            // dropping this dispatch — the gate dies PRE-effect (its
+            // PendingGuard cleans up policy.pending) and NEVER approves
+            // (fail-closed by construction: dropping a future cannot return
+            // Approved).
             let cancelable = matches!(
                 req.method.as_str(),
                 methods::FS_COPY
@@ -2449,47 +2504,49 @@ async fn handle_value(
                     | methods::FS_DELETE
                     | methods::FS_MKDIR
                     | methods::FS_CREATE
-                    // #314: gatea el lote ENTERO antes de tocar nada, así que
-                    // puede quedarse suspendido en un Ask igual que un mkdir.
+                    // #314: gates the WHOLE batch before touching anything, so
+                    // it can be left suspended in an Ask just like a mkdir.
                     | methods::FS_SET_MODE
                     | methods::AI_RENAME_PLAN
                     | methods::INDEX_SEARCH_SEMANTIC
-                    // 0.36.0: `fs.rename_batch` gatea el lote ENTERO antes de
-                    // reservar nada, así que puede quedarse suspendido en un Ask
-                    // exactamente igual que un fs.move; y `fs.rename_batch_plan`
-                    // lista y planifica un directorio dentro del despacho, como
-                    // `ai.rename_plan`. Retirar cualquiera de los dos es seguro
-                    // por construcción: el gate muere PRE-efecto, y entre el
-                    // submit del engine y el register no hay ningún `.await`
+                    // 0.36.0: `fs.rename_batch` gates the WHOLE batch before
+                    // reserving anything, so it can be left suspended in an
+                    // Ask exactly like an fs.move; and `fs.rename_batch_plan`
+                    // lists and plans a directory inside the dispatch, like
+                    // `ai.rename_plan`. Withdrawing either is safe by
+                    // construction: the gate dies PRE-effect, and there is no
+                    // `.await` between the engine's submit and the register
                     // (#64).
                     //
-                    // Retirar es retirar la RESPUESTA, no el trabajo: el
-                    // planificador ya corre en `spawn_blocking` y dropear su
-                    // `JoinHandle` no lo para — termina solo, acotado por
-                    // `RENAME_BATCH_MAX_LISTING` y por el tope de parejas. El
-                    // cliente deja de esperar; la CPU ya gastada no vuelve.
+                    // Withdrawing withdraws the RESPONSE, not the work: the
+                    // planner already runs in `spawn_blocking` and dropping
+                    // its `JoinHandle` does not stop it — it finishes on its
+                    // own, bounded by `RENAME_BATCH_MAX_LISTING` and the pair
+                    // cap. The client stops waiting; the CPU already spent
+                    // does not come back.
                     | methods::FS_RENAME_BATCH
                     | methods::FS_RENAME_BATCH_PLAN
-                    // 0.40.0: `sync.apply` gatea las DOS raíces del plan antes
-                    // de escribir un byte, así que se suspende en un `ask`
-                    // igual que un fs.copy — y su espera es la más cara de
-                    // todas, porque el cliente no tiene nada que hacer mientras
-                    // tanto. Retirarlo es seguro: el gate muere PRE-efecto, y el
-                    // derecho a aplicar el plan —que `Spool::open` ya se
-                    // cobró— lo devuelve el `Drop` de `ApplyClaim` en el
-                    // engine, que existe exactamente para este camino.
+                    // 0.40.0: `sync.apply` gates BOTH roots of the plan before
+                    // writing a single byte, so it suspends in an `ask` just
+                    // like an fs.copy — and its wait is the most expensive of
+                    // all, because the client has nothing to do in the
+                    // meantime. Withdrawing it is safe: the gate dies
+                    // PRE-effect, and the right to apply the plan — which
+                    // `Spool::open` already charged for — is returned by
+                    // `ApplyClaim`'s `Drop` in the engine, which exists
+                    // exactly for this path.
                     | methods::SYNC_APPLY
-                    // #248: las LECTURAS puras, y por otra razón. Aquí no hay
-                    // efecto que dejar a medias —una lectura no escribe nada,
-                    // así que dropear su dispatch no puede dejar rastro—; lo
-                    // que se libera es la CONEXIÓN. `serve_connection` despacha
-                    // en serie, así que un `fs.list` que el cliente abandonó
-                    // (el presupuesto de cinco segundos del arranque, #235)
-                    // seguía corriendo contra un provider colgado y TODAS las
-                    // peticiones siguientes esperaban detrás de él, muriendo
-                    // una a una en su `CALL_TIMEOUT` de 30 s. El cliente ya
-                    // manda el `rpc.cancel` (guard de `call_timed_guarded`);
-                    // sin este brazo no lo escuchaba nadie.
+                    // #248: pure READS, for a different reason. Here there is
+                    // no effect to leave half-done — a read writes nothing, so
+                    // dropping its dispatch cannot leave a trace — what gets
+                    // freed is the CONNECTION. `serve_connection` dispatches
+                    // serially, so an `fs.list` the client had abandoned (the
+                    // startup's five-second budget, #235) kept running
+                    // against a hung provider and EVERY following request
+                    // waited behind it, dying one by one at its 30s
+                    // `CALL_TIMEOUT`. The client already sends the
+                    // `rpc.cancel` (`call_timed_guarded`'s guard); without
+                    // this arm nobody was listening for it.
                     | methods::FS_LIST
                     | methods::FS_STAT
                     | methods::FS_READ
@@ -2499,7 +2556,7 @@ async fn handle_value(
                 let cancel = CancellationToken::new();
                 inflight_cancel
                     .lock()
-                    .expect("inflight_cancel lock sano")
+                    .expect("inflight_cancel lock is sound")
                     .insert(id.clone(), cancel.clone());
                 let _cancel_guard = InflightCancelGuard {
                     map: Arc::clone(inflight_cancel),
@@ -2507,20 +2564,22 @@ async fn handle_value(
                 };
                 tokio::select! {
                     biased;
-                    // Una op que COMPLETA (aprobada, o rechazada por policy)
-                    // gana a un cancel simultáneo: no se retira lo ya resuelto.
+                    // An op that COMPLETES (approved, or rejected by policy)
+                    // wins over a simultaneous cancel: what is already
+                    // resolved is not withdrawn.
                     r = dispatch(req, conn_id, conn, shared) => r,
                     () = shared.shutdown.cancelled() => Err(RpcError::protocol(
                         codes::INTERNAL_ERROR,
                         "daemon shutting down",
                     )),
-                    // El agente retiró la request suspendida en el Ask: estado
-                    // limpio garantizado (gate pre-efecto), sin filtrar policy.
+                    // The agent withdrew the request suspended in the Ask:
+                    // clean state guaranteed (pre-effect gate), no policy
+                    // leak.
                     () = cancel.cancelled() => Err(RpcError::from(norte_proto::Error::Cancelled)),
                 }
             } else {
-                // El dispatch respeta el shutdown (regla 3): un fs.list
-                // gigante no retiene el apagado.
+                // Dispatch respects shutdown (rule 3): a giant fs.list does
+                // not hold up shutdown.
                 tokio::select! {
                     r = dispatch(req, conn_id, conn, shared) => r,
                     () = shared.shutdown.cancelled() => Err(RpcError::protocol(
@@ -2529,27 +2588,27 @@ async fn handle_value(
                     )),
                 }
             };
-            // La suscripción al broadcast nace CON el handshake (nota del
-            // security-reviewer): antes de initialize nadie recibe el
-            // progreso de otros.
+            // The broadcast subscription is born WITH the handshake
+            // (security-reviewer note): before initialize nobody receives
+            // anyone else's progress.
             if !was_initialized && conn.initialized {
                 shared
                     .subscribers
                     .lock()
-                    .expect("subscribers lock sano")
+                    .expect("subscribers lock is sound")
                     .insert(
                         conn_id,
                         Subscriber {
                             tx: tx.clone(),
-                            // El actor quedó fijado server-side por ESTE initialize.
+                            // The actor was fixed server-side by THIS initialize.
                             actor: conn.actor.clone(),
                         },
                     );
             }
             send(tx, &Response::from_outcome(id, response));
         }
-        // Notificaciones del cliente (ninguna definida aún; JSON-RPC
-        // prohíbe responderlas) y responses espurias: se ignoran.
+        // Client notifications (none defined yet; JSON-RPC forbids answering
+        // them) and spurious responses: ignored.
         MessageKind::Notification | MessageKind::Response => {}
         MessageKind::Invalid => {
             let resp = Response::err(
@@ -2561,16 +2620,16 @@ async fn handle_value(
     }
 }
 
-/// Se lleva los PLANES de sincronización que dejó retenidos una conexión que se
-/// cierra (ADR 0049, tercera de las cuatro muertes del spool).
+/// Takes away the sync PLANS a closing connection left retained (ADR 0049,
+/// third of the spool's four deaths).
 ///
-/// Un plan aprobable pertenece a la conexión que lo produjo, así que sin ella no
-/// lo puede aplicar nadie; y lo que quedaría en disco es un listado relativo de
-/// dos árboles enteros bajo el directorio de estado.
+/// An approvable plan belongs to the connection that produced it, so without
+/// it nobody can apply it; and what would remain on disk is a relative
+/// listing of two whole trees under the state directory.
 ///
-/// El DERECHO a aplicarlo se olvida en memoria aunque el borrado falle, así que
-/// un fallo aquí deja basura en disco y no un plan vivo: se registra y no rompe
-/// el cierre de la conexión.
+/// The RIGHT to apply it is forgotten in memory even if the deletion fails,
+/// so a failure here leaves garbage on disk and not a live plan: it is
+/// logged and does not break closing the connection.
 async fn drop_sync_plans(shared: &Arc<Shared>, conn_id: u64) {
     let Some(spool) = shared.engine.spool() else {
         return;
@@ -2580,22 +2639,22 @@ async fn drop_sync_plans(shared: &Arc<Shared>, conn_id: u64) {
         Ok(report) => tracing::warn!(
             conn = conn_id,
             failed = report.failed,
-            "planes de sync que no se dejaron borrar al cerrar la conexión"
+            "sync plans that could not be deleted on connection close"
         ),
-        Err(e) => tracing::warn!(conn = conn_id, error = %e, "barrido de planes de sync"),
+        Err(e) => tracing::warn!(conn = conn_id, error = %e, "sync plan sweep"),
     }
 }
 
-/// Encola un frame en la outbox de la conexión. `try_send`: si el cliente
-/// no drena (outbox llena), el frame se pierde y la conexión morirá en su
-/// siguiente lectura — jamás acumulación sin límite.
+/// Queues a frame on the connection's outbox. `try_send`: if the client does
+/// not drain (full outbox), the frame is lost and the connection will die on
+/// its next read — never unbounded accumulation.
 fn send<T: serde::Serialize>(tx: &mpsc::Sender<Arc<[u8]>>, msg: &T) {
     if let Ok(frame) = encode_frame(msg) {
         let _ = tx.try_send(Arc::from(frame.into_boxed_slice()));
     }
 }
 
-/// Azúcar: construye la Response de un dispatch.
+/// Sugar: builds a dispatch's Response.
 trait FromOutcome {
     fn from_outcome(id: RequestId, out: Result<serde_json::Value, RpcError>) -> Response;
 }
@@ -2621,29 +2680,29 @@ fn to_value<T: serde::Serialize>(v: &T) -> Result<serde_json::Value, RpcError> {
         .map_err(|e| RpcError::protocol(codes::INTERNAL_ERROR, format!("serialization: {e}")))
 }
 
-// La tabla de dispatch crece un brazo por método nuevo (G3b añadió dos): es
-// una lista plana, no lógica anidada — trocearla en sub-funciones por
-// bloque de métodos no reduciría la complejidad real, solo la escondería
-// detrás de una indirección. Mismo criterio que otros dispatchers grandes
-// del árbol (ver `dispatch_fs_task`).
+// The dispatch table grows one arm per new method (G3b added two): it is a
+// flat list, not nested logic — splitting it into sub-functions by block of
+// methods would not reduce its real complexity, only hide it behind
+// indirection. Same criterion as other large dispatchers in the tree (see
+// `dispatch_fs_task`).
 #[expect(
     clippy::too_many_lines,
-    reason = "tabla plana método→handler; ver `dispatch_fs_task`"
+    reason = "flat method→handler table; see `dispatch_fs_task`"
 )]
-// ADR 0127: todo lo que se registre al servir una petición —y toda tarea que
-// abra, porque `Scheduler::submit` cuelga su `task` de aquí— lleva la conexión,
-// el `id` JSON-RPC que el cliente ya conoce y el método. Nunca los params: ahí
-// van rutas. El método y el id los elige el PEER, así que pasan por
-// `campo_del_peer`: acotados y escapados, para que un `\n` no fabrique una
-// línea en el log de texto ni un id de 16 MiB se repita en cada línea de sus
-// tareas.
+// ADR 0127: everything registered while serving a request — and every task it
+// opens, because `Scheduler::submit` hangs its `task` off here — carries the
+// connection, the JSON-RPC `id` the client already knows, and the method.
+// Never the params: routes go there. The method and the id are chosen by the
+// PEER, so they go through `peer_field`: bounded and escaped, so a `\n`
+// cannot fabricate a line in the text log nor a 16 MiB id repeat on every
+// line of its tasks.
 #[tracing::instrument(
     name = "rpc",
     skip_all,
     fields(
         conn_id = conn_id,
-        method = %campo_del_peer(&req.method),
-        req_id = %id_para_el_log(&req.id),
+        method = %peer_field(&req.method),
+        req_id = %id_for_log(&req.id),
     )
 )]
 async fn dispatch(
@@ -2660,8 +2719,8 @@ async fn dispatch(
     }
     match req.method.as_str() {
         methods::INITIALIZE => {
-            // Repetirlo es un error de protocolo (como LSP): renegociar a
-            // mitad de sesión no significa nada.
+            // Repeating it is a protocol error (like LSP): renegotiating
+            // mid-session means nothing.
             if conn.initialized {
                 return Err(RpcError::protocol(
                     codes::INVALID_REQUEST,
@@ -2670,8 +2729,8 @@ async fn dispatch(
             }
             let p: methods::InitializeParams = parse_params(req.params)?;
             if !methods::version_compatible(methods::PROTOCOL_VERSION, &p.protocol_version) {
-                // Código PROPIO (B1 del protocol-guardian): la señal de
-                // upgrade se distingue por código, jamás por message.
+                // OUR OWN code (protocol-guardian B1): the upgrade signal is
+                // distinguished by code, never by message.
                 return Err(RpcError::protocol(
                     codes::VERSION_MISMATCH,
                     format!(
@@ -2687,12 +2746,13 @@ async fn dispatch(
                     "only supported encoding: json",
                 ));
             }
-            // El servidor liga el actor a la conexión (deuda M3 de 3a): una
-            // conexión con `agent_session` ES una sesión de agente y se
-            // sandboxea; sin él es `User` (humano). No es declarable al revés.
-            // El id se VALIDA fail-closed (encoding-auditor H1 de M3-3b): va a
-            // journal, logs y UIs de aprobación — jamás un vector de inyección
-            // de controles/bidi elegido por el agente.
+            // The server binds the actor to the connection (M3 debt from
+            // 3a): a connection with `agent_session` IS an agent session and
+            // gets sandboxed; without it, it is `User` (human). It cannot be
+            // declared the other way around. The id is VALIDATED fail-closed
+            // (encoding-auditor H1 from M3-3b): it goes to the journal, logs
+            // and approval UIs — never an injection vector of
+            // controls/bidi chosen by the agent.
             if let Some(session) = p.agent_session {
                 if !valid_agent_session(&session) {
                     return Err(RpcError::protocol(
@@ -2718,22 +2778,24 @@ async fn dispatch(
             let p: methods::SessionPutParams = parse_params(req.params)?;
             handle_session_put(&conn.actor, conn_id, p, shared)
         }
-        // Sin params, como `session.get`: quién suelta lo dice la CONEXIÓN, y
-        // un id que viajara sería un id que puede mandar cualquiera.
+        // No params, like `session.get`: who releases is said by the
+        // CONNECTION, and an id that traveled would be an id anyone could
+        // send.
         methods::SESSION_RELEASE => handle_session_release(&conn.actor, conn_id, shared),
-        // fs.list vive AQUÍ (no en dispatch_fs_task): necesita el ConnState
-        // para retener el stream paginado entre páginas (ADR 0017).
+        // fs.list lives HERE (not in dispatch_fs_task): it needs ConnState to
+        // retain the paginated stream between pages (ADR 0017).
         methods::FS_LIST => {
             let p: methods::FsListParams = parse_params(req.params)?;
-            // Gate de lectura (#80) AQUÍ, FUERA del span instrumentado de
-            // `handle_fs_list` (que lleva `path` en sus fields): una denegación
-            // no debe filtrar el path a la traza. Basta el ARRANQUE — la
-            // continuación por cursor es del MISMO path ya validado.
+            // Read gate (#80) HERE, OUTSIDE `handle_fs_list`'s instrumented
+            // span (which carries `path` in its fields): a denial must not
+            // leak the path into the trace. The START is enough — a cursor
+            // continuation is for the SAME already-validated path.
             read_gate(&conn.actor, &p.path, shared)?;
             handle_fs_list(p, conn, shared).await
         }
-        // policy.* con round-trip humano (M3-3b): request/grant de scope. Viven
-        // AQUÍ porque atan la operación al ACTOR de la conexión (server-side).
+        // policy.* with a human round-trip (M3-3b): scope request/grant. They
+        // live HERE because they tie the operation to the connection's ACTOR
+        // (server-side).
         methods::POLICY_REQUEST_SCOPE => {
             let p: methods::RequestScopeParams = parse_params(req.params)?;
             handle_request_scope(conn, p, shared)
@@ -2747,9 +2809,9 @@ async fn dispatch(
             handle_policy_decide(&conn.actor, &p, shared)
         }
         methods::POLICY_PENDING => {
-            // Sin params definidos: null/ausencia se aceptan (ADR 0004) y
-            // cualquier objeto se IGNORA deliberadamente — añadir params en
-            // una versión futura (filtros) no debe romper servers viejos.
+            // No params defined: null/absence are accepted (ADR 0004) and any
+            // object is deliberately IGNORED — adding params in a future
+            // version (filters) must not break old servers.
             handle_policy_pending(&conn.actor, shared)
         }
         methods::POLICY_UNDO_SESSION => {
@@ -2760,13 +2822,13 @@ async fn dispatch(
             let p: methods::PolicyUndoReportParams = parse_params(req.params)?;
             handle_policy_undo_report(&conn.actor, &p, shared)
         }
-        // La línea de tiempo (fase 7). Los dos son SOLO-User, y el gate va
-        // ANTES del parseo, como en `log.tail` y `host.volumes` y por el
-        // mismo motivo: si primero se parsea, un agente distingue «vedado»
-        // (params buenos) de «params malos» probando formas, y eso convierte
-        // la negativa en un oráculo sobre el propio protocolo. El handler
-        // vuelve a comprobarlo por su cuenta — es la puerta, no un adorno, y
-        // los tests lo llaman directamente.
+        // The timeline (phase 7). Both are User-ONLY, and the gate goes
+        // BEFORE parsing, as in `log.tail` and `host.volumes` and for the
+        // same reason: if parsing happens first, an agent can distinguish
+        // "forbidden" (good params) from "bad params" by probing shapes, and
+        // that turns the denial into an oracle about the protocol itself.
+        // The handler re-checks it on its own — it is the gate, not
+        // decoration, and the tests call it directly.
         methods::JOURNAL_LIST => {
             if !matches!(conn.actor, Actor::User) {
                 return Err(RpcError::from(norte_proto::Error::PolicyDenied {
@@ -2785,17 +2847,18 @@ async fn dispatch(
             let p: methods::JournalUndoAfterParams = parse_params(req.params)?;
             handle_journal_undo_after(&conn.actor, &p, shared).await
         }
-        // host.volumes (0.37.0, #131): enumeración de los volúmenes del HOST,
-        // SOLO para una conexión User (diseño §C de
-        // `2026-08-10-volumes-design.md`) — la tabla de montaje nombra los
-        // discos, servidores y medios extraíbles del humano, y un agente bajo
-        // scope no lo necesita para nada. El gate va ANTES del parseo (mismo
-        // criterio que `index.embed`/`index.search_semantic`/`ai.rename_plan`,
-        // MAJOR de la review V2): un agente ve `PolicyDenied` sea cual sea la
-        // validez de sus params, y jamás un `INVALID_PARAMS` que le dejara
-        // distinguir "vedado" de "params malos" fuzzeando el único campo.
-        // Sin params definidos más allá del bool con default: null/ausente se
-        // acepta (ADR 0004), mismo patrón que `task.list`/`plugin.list`.
+        // host.volumes (0.37.0, #131): enumerating the HOST's volumes, ONLY
+        // for a User connection (design §C of
+        // `2026-08-10-volumes-design.md`) — the mount table names the human's
+        // disks, servers and removable media, and an agent under scope has no
+        // use for it at all. The gate goes BEFORE parsing (same criterion as
+        // `index.embed`/`index.search_semantic`/`ai.rename_plan`, review V2's
+        // MAJOR): an agent sees `PolicyDenied` regardless of its params'
+        // validity, and never an `INVALID_PARAMS` that would let it
+        // distinguish "forbidden" from "bad params" by fuzzing the one
+        // field. No params defined beyond the bool with a default:
+        // null/absent is accepted (ADR 0004), same pattern as
+        // `task.list`/`plugin.list`.
         methods::HOST_VOLUMES => {
             if !matches!(conn.actor, Actor::User) {
                 return Err(RpcError::from(norte_proto::Error::PolicyDenied {
@@ -2809,14 +2872,16 @@ async fn dispatch(
             )?;
             handle_host_volumes(p).await
         }
-        // `connection.list` (0.56.0, #264): los nombres de `connections.toml`,
-        // para que un frontend ofrezca un selector sin leer ese fichero él
-        // mismo — leerlo le costaría la pila de red entera.
+        // `connection.list` (0.56.0, #264): the names from
+        // `connections.toml`, so a frontend can offer a selector without
+        // reading that file itself — reading it would cost the whole
+        // network stack.
         //
-        // El gate va ANTES del parseo, mismo criterio que `host.volumes` y por
-        // el mismo motivo: la lista nombra los servidores del humano, y un
-        // agente no distingue «vedado» de «params malos» fuzzeando nada. Sin
-        // params definidos: null o ausente se acepta (ADR 0004).
+        // The gate goes BEFORE parsing, same criterion as `host.volumes` and
+        // for the same reason: the list names the human's servers, and an
+        // agent cannot distinguish "forbidden" from "bad params" by fuzzing
+        // anything. No params defined: null or absent is accepted (ADR
+        // 0004).
         methods::CONNECTION_LIST => {
             if !matches!(conn.actor, Actor::User) {
                 return Err(RpcError::from(norte_proto::Error::PolicyDenied {
@@ -2825,18 +2890,18 @@ async fn dispatch(
             }
             handle_connection_list(shared).await
         }
-        // `log.tail` / `log.level` (0.65.0, #328, ADR 0092): el registro de
-        // ESTE proceso, que un frontend en otro no puede ver de ninguna otra
-        // forma — la ventana arranca su propio daemon (#300), así que su
-        // anillo tiene las líneas del puente y no las del provider que falló.
+        // `log.tail` / `log.level` (0.65.0, #328, ADR 0092): THIS process's
+        // log, which a frontend on another one has no other way to see — the
+        // window starts its own daemon (#300), so its ring has the bridge's
+        // lines and not those of the provider that failed.
         //
-        // El gate va ANTES del parseo, mismo criterio que `connection.list` y
-        // `host.volumes` y por el mismo motivo doble: el anillo lleva rutas,
-        // nombres de conexión y actividad de OTRAS sesiones —un oráculo de
-        // existencia fuera del recinto de un agente, la misma fuga que
-        // `read_gate_all` documenta para `plugin.decorate`— y un agente no
-        // puede distinguir «vedado» de «params malos» fuzzeando la forma de su
-        // propia petición.
+        // The gate goes BEFORE parsing, same criterion as `connection.list`
+        // and `host.volumes` and for the same twofold reason: the ring
+        // carries paths, connection names and activity from OTHER
+        // sessions — an existence oracle outside an agent's confinement, the
+        // same leak `read_gate_all` documents for `plugin.decorate` — and an
+        // agent cannot distinguish "forbidden" from "bad params" by fuzzing
+        // the shape of its own request.
         methods::LOG_TAIL => {
             if !matches!(conn.actor, Actor::User) {
                 return Err(RpcError::from(norte_proto::Error::PolicyDenied {
@@ -2846,9 +2911,10 @@ async fn dispatch(
             let p: methods::LogTailParams = parse_params(req.params)?;
             handle_log_tail(&p, shared)
         }
-        // Subir el nivel es más de lo mismo: un agente subiría la verbosidad
-        // de un trabajo del que no es parte. Y quien lo aplica es el daemon
-        // —`LogRing::raise_to`, con su lista blanca—, jamás el cliente.
+        // Raising the level is more of the same: an agent would raise the
+        // verbosity of a job it is not part of. And what applies it is the
+        // daemon — `LogRing::raise_to`, with its allowlist — never the
+        // client.
         methods::LOG_LEVEL => {
             if !matches!(conn.actor, Actor::User) {
                 return Err(RpcError::from(norte_proto::Error::PolicyDenied {
@@ -2858,8 +2924,9 @@ async fn dispatch(
             let p: methods::LogLevelParams = parse_params(req.params)?;
             handle_log_level(&p, shared)
         }
-        // plugin.* (M4-P3): listar el catálogo (cualquier conexión) y aprobar/
-        // activar (SOLO humanos — es consentir capabilities, acto de seguridad).
+        // plugin.* (M4-P3): listing the catalogue (any connection) and
+        // approving/enabling (humans ONLY — it is consenting to
+        // capabilities, a security act).
         methods::PLUGIN_LIST => handle_plugin_list(req.params, shared),
         methods::PLUGIN_SET_APPROVAL => {
             let p: methods::PluginSetApprovalParams = parse_params(req.params)?;
@@ -2873,49 +2940,49 @@ async fn dispatch(
             let p: methods::PluginUninstallParams = parse_params(req.params)?;
             handle_plugin_uninstall(&conn.actor, &p, shared).await
         }
-        // plugin.run_command (M4-P4): ABIERTO (ejecutar no consiente nada).
+        // plugin.run_command (M4-P4): OPEN (running consents to nothing).
         methods::PLUGIN_RUN_COMMAND => handle_plugin_run_command(req.params, shared).await,
-        // plugin.preview (M4-P5): ABIERTO (previsualizar no consiente nada).
+        // plugin.preview (M4-P5): OPEN (previewing consents to nothing).
         methods::PLUGIN_PREVIEW => handle_plugin_preview(req.params, &conn.actor, shared).await,
-        // plugin.preview_styled (G3a, ADR 0037): gemelo con estilo, mismo
-        // criterio de apertura que su gemelo plano.
+        // plugin.preview_styled (G3a, ADR 0037): styled twin, same openness
+        // criterion as its plain twin.
         methods::PLUGIN_PREVIEW_STYLED => {
             handle_plugin_preview_styled(req.params, &conn.actor, shared).await
         }
-        // plugin.thumbnail (ADR 0107): ABIERTO, con el mismo gate de lectura
-        // que sus gemelos — una miniatura LEE el fichero.
+        // plugin.thumbnail (ADR 0107): OPEN, with the same read gate as its
+        // twins — a thumbnail READS the file.
         methods::PLUGIN_THUMBNAIL => handle_plugin_thumbnail(req.params, &conn.actor, shared).await,
-        // plugin.panel_render (0.74.0, fase 3): ABIERTO como sus gemelos. El
-        // gate de lectura va sobre el DIRECTORIO que el panel acompaña: lo
-        // que el guest lea de verdad pasa además por `norte:location`, con su
-        // prefijo consentido y su presupuesto.
+        // plugin.panel_render (0.74.0, phase 3): OPEN like its twins. The
+        // read gate goes over the DIRECTORY the panel accompanies: what the
+        // guest actually reads also goes through `norte:location`, with its
+        // consented prefix and its budget.
         methods::PLUGIN_PANEL_RENDER => {
             handle_plugin_panel_render(req.params, &conn.actor, shared).await
         }
-        // plugin.decorate / plugin.column_values (G3b, ADR 0037): ABIERTOS
-        // como el resto de `plugin.preview*`, con el mismo gate de lectura
-        // (#80) extendido al lote entero (`read_gate_all`).
+        // plugin.decorate / plugin.column_values (G3b, ADR 0037): OPEN like
+        // the rest of `plugin.preview*`, with the same read gate (#80)
+        // extended to the whole batch (`read_gate_all`).
         methods::PLUGIN_DECORATE => handle_plugin_decorate(req.params, &conn.actor, shared).await,
         methods::PLUGIN_COLUMN_VALUES => {
             handle_plugin_column_values(req.params, &conn.actor, shared).await
         }
-        // plugin.rename_plan (C3, ADR 0095): un plan, no una mutación —
-        // abierto con el gate de lectura sobre `dir`, como `column_values`.
+        // plugin.rename_plan (C3, ADR 0095): a plan, not a mutation — open
+        // with the read gate over `dir`, like `column_values`.
         methods::PLUGIN_RENAME_PLAN => {
             handle_plugin_rename_plan(req.params, &conn.actor, shared).await
         }
-        // El mismo reparto para el organizer (fase 8): abierto como su
-        // hermano —proponer no muta nada— y con el gate de lectura del
-        // directorio dentro del handler.
+        // The same arrangement for the organizer (phase 8): open like its
+        // sibling — proposing mutates nothing — with the directory's read
+        // gate inside the handler.
         methods::PLUGIN_ORGANIZE_PLAN => {
             handle_plugin_organize_plan(req.params, &conn.actor, shared).await
         }
-        // plugin.get_config (G3c): ABIERTO, mismo criterio que plugin.list.
-        // plugin.set_config (G3c): SOLO humanos, mismo criterio que
-        // plugin.set_approval/set_enabled — ajustes de plugin son datos de
-        // usuario, un agente no los edita por su cuenta.
+        // plugin.get_config (G3c): OPEN, same criterion as plugin.list.
+        // plugin.set_config (G3c): humans ONLY, same criterion as
+        // plugin.set_approval/set_enabled — plugin settings are user data, an
+        // agent does not edit them on its own.
         methods::PLUGIN_GET_CONFIG => handle_plugin_get_config(req.params, shared).await,
-        // plugin.help (H3e): ABIERTO, mismo criterio que plugin.list.
+        // plugin.help (H3e): OPEN, same criterion as plugin.list.
         methods::PLUGIN_HELP => handle_plugin_help(req.params, shared).await,
         methods::PLUGIN_SET_CONFIG => {
             let p: methods::PluginSetConfigParams = parse_params(req.params)?;
@@ -2925,9 +2992,9 @@ async fn dispatch(
     }
 }
 
-/// `daemon.shutdown` — apagar el daemon es acto humano (#66): sin este gate,
-/// el hard-shutdown cancela TODAS las tasks (bypass del gate de `task.cancel`)
-/// y tumba la sesión del humano.
+/// `daemon.shutdown` — shutting the daemon down is a human act (#66): without
+/// this gate, the hard shutdown cancels EVERY task (bypassing
+/// `task.cancel`'s gate) and takes down the human's session.
 fn handle_daemon_shutdown(
     actor: &Actor,
     params: Option<serde_json::Value>,
@@ -2939,50 +3006,51 @@ fn handle_daemon_shutdown(
             "only a human (non-agent) connection may shut down the daemon",
         ));
     }
-    // El emisor canónico escribe `params: null` (ADR 0004) y este método es
-    // todo-opcionales: null y ausencia = defaults (M1 del protocol-guardian;
-    // el golden request_null_params lo pinnea).
+    // The canonical emitter writes `params: null` (ADR 0004) and this method
+    // is all-optional: null and absence = defaults (protocol-guardian M1; the
+    // request_null_params golden pins it).
     let p: methods::DaemonShutdownParams = parse_params(
         params
             .filter(|v| !v.is_null())
             .or_else(|| Some(serde_json::json!({}))),
     )?;
-    // Un RELEVO con tasks vivas se rehúsa AQUÍ, que es el único momento en el
-    // que queda alguien a quien contestar: la respuesta de este método sale en
-    // el acto, así que una negativa decidida después de esperar no tendría
-    // destinatario — y para entonces el listener ya habría dejado de aceptar,
-    // con lo que «rehusar» significaría volver a aceptar.
+    // A HANDOVER with live tasks is refused HERE, the only moment there is
+    // still someone to answer: this method's response goes out immediately,
+    // so a refusal decided after waiting would have no recipient — and by
+    // then the listener would have already stopped accepting, so "refusing"
+    // would mean accepting again.
     //
-    // Esperar y NO cancelar es lo que separa este eje de `graceful`: una copia
-    // muerta a mitad de árbol es justo el estropicio que el journal tiene luego
-    // que limpiar. Quien de verdad quiera cancelarlas ya tiene `graceful:
-    // false`, y no se abre una segunda puerta a la misma habitación.
-    // Contar y APAGAR bajo el mismo lock: entre soltarlo y cancelar, otra
-    // conexión puede registrar una task, y entonces el relevo empezaría
-    // igualmente con una copia viva — que es exactamente lo que se está
-    // rehusando. El lock es de `std` y todo lo que hay dentro es síncrono.
-    let vivas = shared.tasks.lock().expect("tasks lock sano");
-    if p.mode == methods::ShutdownMode::Handover && !vivas.is_empty() {
-        let cuantas = vivas.len();
+    // Waiting and NOT cancelling is what sets this axis apart from
+    // `graceful`: a copy dying mid-tree is exactly the mess the journal then
+    // has to clean up. Whoever genuinely wants to cancel them already has
+    // `graceful: false`, and a second door is not opened onto the same room.
+    // Count and SHUT DOWN under the same lock: between releasing it and
+    // cancelling, another connection could register a task, and then the
+    // handover would start with a live task anyway — exactly what is being
+    // refused. The lock is `std`'s and everything inside is synchronous.
+    let live = shared.tasks.lock().expect("tasks lock is sound");
+    if p.mode == methods::ShutdownMode::Handover && !live.is_empty() {
+        let how_many = live.len();
         return Err(RpcError::protocol(
             codes::INVALID_REQUEST,
             format!(
-                "a handover needs an idle daemon: {cuantas} task(s) still running. \
+                "a handover needs an idle daemon: {how_many} task(s) still running. \
                  Wait for them; a handover never cancels a task, not even with \
                  graceful:false — use a plain stop for that"
             ),
         ));
     }
-    // El aviso va ANTES de dejar de aceptar, o no llega a nadie: `shutdown`
-    // corta el bucle de accept y las conexiones se van detrás.
+    // The notice goes BEFORE stopping accepting, or it reaches nobody:
+    // `shutdown` cuts the accept loop and the connections go right after.
     //
-    // A TODAS las conexiones, no solo a las humanas: la sesión de un agente
-    // muere con este daemon igual que la de un humano, y necesita saber si
-    // volver. Es información sobre el TRANSPORTE, no sobre gobierno.
-    let aviso = methods::DaemonGoingAway {
+    // To ALL connections, not only the human ones: an agent's session dies
+    // with this daemon just like a human's, and it needs to know whether to
+    // come back. This is information about the TRANSPORT, not about
+    // governance.
+    let notice = methods::DaemonGoingAway {
         reconnect: p.mode == methods::ShutdownMode::Handover,
     };
-    if let Ok(params) = serde_json::to_value(aviso) {
+    if let Ok(params) = serde_json::to_value(notice) {
         let n = Notification {
             jsonrpc: norte_proto::wire::JsonRpcVersion,
             method: methods::DAEMON_GOING_AWAY.into(),
@@ -2996,23 +3064,25 @@ fn handle_daemon_shutdown(
         shared.hard_shutdown.cancel();
     }
     shared.shutdown.cancel();
-    drop(vivas);
+    drop(live);
     to_value(&methods::DaemonShutdownResult {})
 }
 
-/// `policy.request_scope` (M3-3b): un AGENTE pide un scope para SÍ mismo. La
-/// petición queda pendiente; no concede nada hasta que un humano la conceda
-/// con `policy.grant_scope`. Devuelve el `request_id`. La pendiente se retira
-/// del mapa global al morir la conexión que la creó (no sobrevive a su dueño).
+/// `policy.request_scope` (M3-3b): an AGENT asks for a scope for ITSELF. The
+/// request stays pending; it grants nothing until a human grants it with
+/// `policy.grant_scope`. Returns the `request_id`. The pending entry is
+/// removed from the global map when the connection that created it dies (it
+/// does not outlive its owner).
 #[tracing::instrument(skip_all, fields(ops = ?p.ops, ttl_ms = p.ttl_ms))]
 fn handle_request_scope(
     conn: &mut ConnState,
     p: methods::RequestScopeParams,
     shared: &Arc<Shared>,
 ) -> Result<serde_json::Value, RpcError> {
-    // Solo un agente pide scope, y SOLO para su propia sesión: la identidad la
-    // fija la conexión (T2), jamás el cuerpo del mensaje. Un `User` no necesita
-    // scope (no se sandboxea), así que pedirlo es un error de protocolo.
+    // Only an agent requests scope, and ONLY for its own session: the
+    // identity is fixed by the connection (T2), never by the message body. A
+    // `User` does not need scope (it is not sandboxed), so requesting it is a
+    // protocol error.
     let Actor::Agent { session } = &conn.actor else {
         return Err(RpcError::protocol(
             codes::INVALID_REQUEST,
@@ -3025,8 +3095,9 @@ fn handle_request_scope(
             "session must match the connection's agent session",
         ));
     }
-    // Sub-cap por conexión: una sola sesión no agota el canal global de las
-    // demás (una pendiente sin conceder ocupa slot hasta grant o desconexión).
+    // Per-connection sub-cap: a single session does not exhaust the others'
+    // global channel (an ungranted pending entry occupies a slot until grant
+    // or disconnection).
     if conn.pending_scope_ids.len() >= MAX_PENDING_SCOPE_PER_CONN {
         return Err(RpcError::protocol(
             codes::OVERLOADED,
@@ -3037,7 +3108,7 @@ fn handle_request_scope(
     let mut pending = shared
         .pending_scope
         .lock()
-        .expect("pending_scope lock sano");
+        .expect("pending_scope lock is sound");
     if pending.len() >= MAX_PENDING_SCOPE {
         return Err(RpcError::protocol(
             codes::OVERLOADED,
@@ -3059,16 +3130,17 @@ fn handle_request_scope(
     to_value(&methods::RequestScopeResult { request_id })
 }
 
-/// `policy.grant_scope` (M3-3b): un humano concede una petición pendiente.
+/// `policy.grant_scope` (M3-3b): a human grants a pending request.
 ///
-/// "Humano" = cualquier conexión que NO declaró `agent_session` (actor `User`).
-/// Bajo el threat model UDS same-uid (§14) esto no es una barrera fuerte: un
-/// proceso del mismo uid puede abrir una 2ª conexión sin `agent_session` y
-/// autoconcederse scope — pero esa conexión `User` YA puede ejecutar las
-/// mutaciones directamente (`User` = allow-all), así que el grant no otorga
-/// poder extra. La policy es un guardarraíl para agentes que COOPERAN (vía
-/// norte-mcp, M3-4), no un sandbox. Materializa el `Scope` con su TTL y abre la
-/// frontera que el gate del engine consulta (mismo `ScopeRegistry`).
+/// "Human" = any connection that did NOT declare `agent_session` (actor
+/// `User`). Under the UDS same-uid threat model (§14) this is not a strong
+/// barrier: a process of the same uid can open a 2nd connection without
+/// `agent_session` and self-grant scope — but that `User` connection can
+/// ALREADY run the mutations directly (`User` = allow-all), so the grant does
+/// not give it extra power. The policy is a guardrail for agents that
+/// COOPERATE (via norte-mcp, M3-4), not a sandbox. Materializes the `Scope`
+/// with its TTL and opens the border the engine's gate consults (the same
+/// `ScopeRegistry`).
 #[tracing::instrument(skip_all, fields(request_id = p.request_id))]
 fn handle_grant_scope(
     actor: &Actor,
@@ -3081,11 +3153,11 @@ fn handle_grant_scope(
             "only a human (non-agent) connection may grant a scope",
         ));
     }
-    // Consume la petición (una concesión por id; re-conceder es INVALID_PARAMS).
+    // Consumes the request (one grant per id; re-granting is INVALID_PARAMS).
     let req = shared
         .pending_scope
         .lock()
-        .expect("pending_scope lock sano")
+        .expect("pending_scope lock is sound")
         .remove(&p.request_id);
     let Some(req) = req else {
         return Err(RpcError::protocol(
@@ -3098,24 +3170,24 @@ fn handle_grant_scope(
         ops: OpSet::from_names(&req.ops),
         expires_at: Some(scope_deadline(req.ttl_ms)),
     };
-    // Efecto de seguridad (futuro material de auditoría M3-5): traza el grant
-    // con la sesión y las ops, jamás las rutas crudas (regla 10).
-    tracing::info!(session = %req.session, ops = ?req.ops, "scope concedido a la sesión de agente");
+    // Security effect (future M3-5 audit material): traces the grant with the
+    // session and the ops, never the raw paths (rule 10).
+    tracing::info!(session = %req.session, ops = ?req.ops, "scope granted to the agent session");
     shared.scopes.grant(&req.session, scope);
     to_value(&methods::GrantScopeResult {})
 }
 
-/// `session.get` (L2, 0.48.0) — la pantalla que el cliente dejó, y si ESTA
-/// conexión es la que puede escribirla.
+/// `session.get` (L2, 0.48.0) — the screen the client left, and whether THIS
+/// connection is the one that can write it.
 ///
-/// Reclamar la propiedad es parte de LEER, y no un método aparte: quien
-/// arranca lee, y quien lee es el candidato natural a escribir. La primera
-/// conexión humana se la queda; las siguientes reciben la misma copia y corren
-/// sueltas —abrir un segundo terminal da lo que el lector esperaba, y nunca
-/// hay dos escritores sobre un estado—.
+/// Claiming ownership is part of READING, not a separate method: whoever
+/// starts up reads, and whoever reads is the natural candidate to write. The
+/// first human connection keeps it; the following ones receive the same copy
+/// and run detached — opening a second terminal gives what the reader
+/// expected, and there are never two writers over one state.
 ///
-/// SOLO humanos, mismo criterio que `daemon.shutdown` y `policy.pending`: una
-/// sesión de agente no tiene pantalla que guardar.
+/// Humans ONLY, same criterion as `daemon.shutdown` and `policy.pending`: an
+/// agent session has no screen to save.
 fn handle_session_get(
     actor: &Actor,
     conn_id: u64,
@@ -3127,12 +3199,12 @@ fn handle_session_get(
             "only a human (non-agent) connection has a UI session",
         ));
     }
-    // Dueña Y con dónde escribir: un daemon sin `state_dir`, sin el lock, o
-    // que encontró en disco una sesión de un binario más nuevo, acepta `put`
-    // en memoria y no persiste nada. Decir `owner: true` ahí sería mandar al
-    // cliente a escribir cada segundo una pantalla que se pierde al salir, sin
-    // un solo aviso — y el brazo embebido ya contestaba lo correcto, así que
-    // era además la MISMA pregunta con dos respuestas.
+    // Owner AND has somewhere to write: a daemon with no `state_dir`, no
+    // lock, or that found on disk a session from a newer binary, accepts a
+    // `put` in memory and persists nothing. Saying `owner: true` there would
+    // send the client to write a screen every second that is lost on exit,
+    // with not a single warning — and the embedded arm already answered
+    // correctly, so it was also the SAME question with two answers.
     let owner = shared.ui_session.claim(conn_id) && shared.session_persists.load(Ordering::Acquire);
     to_value(&methods::SessionGetResult {
         session: shared.ui_session.get(),
@@ -3140,22 +3212,24 @@ fn handle_session_get(
     })
 }
 
-/// `session.release` (0.78.0, fase 9) — la conexión dueña renuncia a la
-/// sesión de UI sin desconectarse.
+/// `session.release` (0.78.0, phase 9) — the owning connection gives up the
+/// UI session without disconnecting.
 ///
-/// Es lo que hace posible el relevo entre frontends: volcar la pantalla,
-/// soltarla, y que el otro la reclame en su `session.get`. Hasta 0.78 soltar
-/// solo pasaba al DESCONECTAR, así que el que se iba tenía que morirse antes
-/// de que el que llegaba pudiera reclamar — y si el que llegaba no arrancaba,
-/// la pantalla se iba con el muerto.
+/// This is what makes handoff between frontends possible: flush the screen,
+/// release it, and have the other one claim it in its `session.get`. Until
+/// 0.78, releasing only happened on DISCONNECT, so the one leaving had to die
+/// before the one arriving could claim it — and if the one arriving never
+/// started, the screen went down with the dead one.
 ///
-/// **Soltar lo ajeno no hace nada y se DICE.** `released: false` es «no eras
-/// tú», y quien releva lo necesita: sin esa distinción lanzaría el otro
-/// frontend a reclamar una sesión que sigue teniendo dueño, y la ventana
-/// abriría vacía sin que nadie pudiera explicar por qué.
+/// **Releasing someone else's does nothing, and it SAYS SO.** `released:
+/// false` is "it wasn't you", and whoever is handing off needs that: without
+/// the distinction it would send the other frontend off to claim a session
+/// that still has an owner, and the window would open empty with nobody able
+/// to explain why.
 ///
-/// El cuerpo NO se toca: lo que se suelta es la propiedad. El documento sigue
-/// donde estaba con su revisión, que es justo lo que el otro va a leer.
+/// The body is NOT touched: what is released is ownership. The document
+/// stays where it was with its revision, which is exactly what the other one
+/// is going to read.
 fn handle_session_release(
     actor: &Actor,
     conn_id: u64,
@@ -3167,97 +3241,99 @@ fn handle_session_release(
             "only a human (non-agent) connection has a UI session",
         ));
     }
-    let era_dueña = shared.ui_session.owner() == Some(conn_id);
-    if era_dueña {
+    let was_owner = shared.ui_session.owner() == Some(conn_id);
+    if was_owner {
         shared.ui_session.release(conn_id);
     }
     to_value(&methods::SessionReleaseResult {
-        released: era_dueña,
+        released: was_owner,
     })
 }
 
-/// `session.put` (L2, 0.48.0) — reemplaza la sesión entera.
+/// `session.put` (L2, 0.48.0) — replaces the whole session.
 ///
-/// Cuatro negativas, y cada una dice algo distinto al cliente:
-/// [`norte_proto::Error::Cancelled`] si el daemon se está apagando (no hay a
-/// dónde escribir ya; contra el sucesor del relevo la misma escritura vale),
-/// [`norte_proto::Error::PermissionDenied`] si no es la dueña (releer no
-/// arregla nada: esta conexión no escribe nunca),
-/// [`norte_proto::Error::Conflict`] con
-/// [`norte_proto::ConflictKind::StaleRevision`] si trae una revisión pasada
-/// (releer SÍ lo arregla) y [`norte_proto::Error::LimitExceeded`] con
-/// [`norte_proto::Error::LIMIT_SESSION_BODY`] si el cuerpo pasa del tope
-/// (releer no; tirar historial y reintentar, sí). En los tres casos lo
-/// almacenado se queda exactamente como estaba.
-/// Por qué un `session.put` no llega a la sesión.
+/// Four denials, and each says something different to the client:
+/// [`norte_proto::Error::Cancelled`] if the daemon is shutting down (there is
+/// nowhere left to write; against the handoff's successor the same write is
+/// valid), [`norte_proto::Error::PermissionDenied`] if it is not the owner
+/// (re-reading fixes nothing: this connection never writes),
+/// [`norte_proto::Error::Conflict`] with
+/// [`norte_proto::ConflictKind::StaleRevision`] if it carries a past revision
+/// (re-reading DOES fix it) and [`norte_proto::Error::LimitExceeded`] with
+/// [`norte_proto::Error::LIMIT_SESSION_BODY`] if the body is over the cap
+/// (re-reading does not; dropping history and retrying does). In all three
+/// cases what is stored stays exactly as it was.
+/// Why a `session.put` does not reach the session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SessionPutVeto {
-    /// Una sesión de agente no tiene pantalla que guardar.
-    NoEsHumano,
-    /// Otra conexión es la dueña.
-    NoEsLaDuena,
-    /// Este CORE no escribe: sin `state_dir`, sin el lock, o con una sesión de
-    /// un binario más nuevo en disco.
-    SinEscritor,
+    /// An agent session has no screen to save.
+    NotHuman,
+    /// Another connection is the owner.
+    NotTheOwner,
+    /// This CORE does not write: no `state_dir`, no lock, or with a session
+    /// from a newer binary on disk.
+    NoWriter,
 }
 
 impl From<SessionPutVeto> for RpcError {
     fn from(v: SessionPutVeto) -> Self {
         match v {
-            SessionPutVeto::NoEsHumano => Self::protocol(
+            SessionPutVeto::NotHuman => Self::protocol(
                 codes::INVALID_REQUEST,
                 "only a human (non-agent) connection has a UI session",
             ),
-            // La MISMA taxonomía que «no eres la dueña», y a propósito: al
-            // cliente le da igual cuál de las dos cosas le falta, y las dos se
-            // arreglan igual —volver a preguntar—. La distinción vive en el
-            // log, no en el wire.
-            SessionPutVeto::NoEsLaDuena | SessionPutVeto::SinEscritor => {
+            // The SAME taxonomy as "you're not the owner", on purpose: the
+            // client does not care which of the two it is missing, and both
+            // are fixed the same way — ask again. The distinction lives in
+            // the log, not the wire.
+            SessionPutVeto::NotTheOwner | SessionPutVeto::NoWriter => {
                 Self::from(norte_proto::Error::PermissionDenied)
             }
         }
     }
 }
 
-/// Quién puede escribir la sesión, en el orden en que se pregunta.
+/// Who may write the session, in the order it is asked.
 ///
-/// Pura y aparte del handler porque las dos condiciones interesantes son
-/// CARRERAS —el apagado y el relevo de dueña— y una carrera no se prueba
-/// provocándola: se prueba decidiendo sobre los mismos cuatro datos. Es lo que
-/// se hizo con el gate de SIGINT del CLI (#212).
+/// Pure and kept apart from the handler because the two interesting
+/// conditions are RACES — shutdown and owner handoff — and a race is not
+/// tested by triggering it: it is tested by deciding over the same four
+/// pieces of data. Same thing done with the CLI's SIGINT gate (#212).
 ///
-/// El orden no es cosmético. Humano primero, porque un agente no debería ni
-/// enterarse de si hay dueña. Y la propiedad antes de la revisión y del tope,
-/// porque a quien no manda las otras dos respuestas le darían consejos falsos
-/// («re-lee», «recorta») sobre una escritura que jamás se va a aceptar.
+/// The order is not cosmetic. Human first, because an agent should not even
+/// find out whether there is an owner. And ownership before the revision and
+/// the cap, because giving the other two answers to whoever is not in charge
+/// would give false advice ("re-read", "trim") about a write that is never
+/// going to be accepted.
 ///
-/// El apagado NO está aquí (#233): comprobarlo contra el token, fuera del lock
-/// que protege la mutación, dejaba la ventana que pretendía cerrar. Lo cierra
-/// [`crate::ui_session::SessionStore::seal`], bajo el mismo lock que el `put`.
+/// Shutdown is NOT here (#233): checking it against the token, outside the
+/// lock protecting the mutation, left open the window it meant to close.
+/// [`crate::ui_session::SessionStore::seal`] closes it, under the same lock
+/// as the `put`.
 ///
-/// **`persiste` es el tercero, y lo añadió la revisión de #237.** El brazo
-/// embebido ya rehusaba el `put` de un proceso suelto —«no escribe NI en
-/// memoria»—; el daemon lo aceptaba y contestaba una revisión nueva, y eso
-/// dejó de ser inocuo en cuanto su escritor pudo tomar el lock TARDE: un
-/// cuerpo aceptado mientras estaba suelto, con la revisión ya por delante de
-/// la del disco, sobrevivía a `adopt_from_disk` (que declina cuando la local
-/// va por delante, dejando la marca de sucio puesta) y se publicaba encima de
-/// la pantalla del otro core en el mismo tick. Y como la revisión solo sube,
-/// nada podía detectarlo después.
+/// **`persiste` is the third one, added by #237's review.** The embedded arm
+/// already refused a `put` from a detached process — "it doesn't write, not
+/// even in memory" —; the daemon used to accept it and answer a new
+/// revision, and that stopped being harmless the moment its writer could take
+/// the lock LATE: a body accepted while detached, with its revision already
+/// ahead of disk's, survived `adopt_from_disk` (which backs off when the
+/// local one is ahead, leaving the dirty flag set) and got published over the
+/// other core's screen in the same tick. And since the revision only goes up,
+/// nothing could detect it afterward.
 fn session_put_veto(
-    es_humano: bool,
-    duena: Option<u64>,
+    is_human: bool,
+    owner: Option<u64>,
     conn_id: u64,
-    persiste: bool,
+    persists: bool,
 ) -> Option<SessionPutVeto> {
-    if !es_humano {
-        return Some(SessionPutVeto::NoEsHumano);
+    if !is_human {
+        return Some(SessionPutVeto::NotHuman);
     }
-    if duena != Some(conn_id) {
-        return Some(SessionPutVeto::NoEsLaDuena);
+    if owner != Some(conn_id) {
+        return Some(SessionPutVeto::NotTheOwner);
     }
-    if !persiste {
-        return Some(SessionPutVeto::SinEscritor);
+    if !persists {
+        return Some(SessionPutVeto::NoWriter);
     }
     None
 }
@@ -3279,46 +3355,46 @@ fn handle_session_put(
     match shared.ui_session.put(p.version, p.revision, p.body) {
         Ok(revision) => to_value(&methods::SessionPutResult { revision }),
         Err(crate::ui_session::PutError::Conflict { current }) => {
-            // Con TAXONOMÍA en `data` (#182): sin ella el cliente lee
-            // «internal error» y no sabe que releer lo arregla. La revisión
-            // vigente NO viaja en el error — se pide con `session.get`, que es
-            // el mismo viaje que hay que hacer de todas formas para saber
-            // contra qué cuerpo se estaba escribiendo.
-            tracing::debug!(current, "session.put con revisión rancia");
+            // With a TAXONOMY in `data` (#182): without it the client reads
+            // "internal error" and does not know that re-reading fixes it.
+            // The current revision does NOT travel in the error — it is
+            // fetched with `session.get`, the same trip it has to make
+            // anyway to know what body it was writing against.
+            tracing::debug!(current, "session.put with a stale revision");
             Err(RpcError::from(norte_proto::Error::Conflict {
                 conflict: norte_proto::ConflictKind::StaleRevision,
             }))
         }
-        // La sesión ya se cerró: el cliente sí mandaba y su escritura llegó
-        // tarde, así que `Cancelled` — contra el sucesor de un relevo, la misma
-        // escritura vale.
+        // The session already closed: the client was in fact sending and its
+        // write arrived late, so `Cancelled` — against a handoff's successor,
+        // the same write is valid.
         Err(crate::ui_session::PutError::Sealed) => {
-            tracing::debug!("session.put tras el cierre de la sesión");
+            tracing::debug!("session.put after the session's closing");
             Err(RpcError::from(norte_proto::Error::Cancelled))
         }
         Err(crate::ui_session::PutError::TooLarge { bytes }) => {
-            tracing::warn!(bytes, "session.put por encima del tope");
+            tracing::warn!(bytes, "session.put over the cap");
             Err(RpcError::from(norte_proto::Error::LimitExceeded {
                 limit: norte_proto::Error::LIMIT_SESSION_BODY.to_owned(),
             }))
         }
-        // `Unsupported` y no `InvalidPath`: lo que falta no es un parámetro
-        // bien formado, es un core capaz de leer ese esquema — «tu daemon es
-        // más viejo», que es exactamente lo que ese error dice en el resto del
-        // wire (#247).
+        // `Unsupported` and not `InvalidPath`: what is missing is not a
+        // well-formed parameter, it is a core able to read that schema —
+        // "your daemon is older", exactly what that error says across the
+        // rest of the wire (#247).
         Err(crate::ui_session::PutError::UnknownSchema { version, known }) => {
-            tracing::warn!(version, known, "session.put de un esquema desconocido");
+            tracing::warn!(version, known, "session.put of an unknown schema");
             Err(RpcError::from(norte_proto::Error::Unsupported))
         }
     }
 }
 
-/// `policy.decide` (M3-3b Task 4): un humano aprueba/deniega una pendiente.
+/// `policy.decide` (M3-3b Task 4): a human approves/denies a pending entry.
 ///
-/// Solo una conexión NO-agente decide (mismo criterio y mismo threat model que
-/// [`handle_grant_scope`]): un agente jamás aprueba su propia op — la
-/// suspensión del `Ask` sería teatro. Una decisión consume el id; repetirlo (o
-/// un id vencido/desconocido) es `INVALID_PARAMS`.
+/// Only a NON-agent connection decides (same criterion and same threat model
+/// as [`handle_grant_scope`]): an agent never approves its own op — the
+/// `Ask`'s suspension would be theater. A decision consumes the id;
+/// repeating it (or an expired/unknown id) is `INVALID_PARAMS`.
 #[tracing::instrument(skip_all, fields(approval_id = p.approval_id, approve = p.approve))]
 fn handle_policy_decide(
     actor: &Actor,
@@ -3331,30 +3407,31 @@ fn handle_policy_decide(
             "only a human (non-agent) connection may decide an approval",
         ));
     }
-    // Los tres modos de fallo viajan DISTINTOS (#279): «tu clic no llegó»,
-    // «llegaste tarde» y «esa aprobación no es de este daemon» piden respuestas
-    // distintas de quien mira la pantalla, y antes se colapsaban en un
-    // `INVALID_PARAMS` con el motivo dentro de un `message` en inglés que
-    // ningún frontend puede clasificar.
+    // The three failure modes travel DIFFERENTLY (#279): "your click didn't
+    // get through", "you were too late" and "that approval does not belong
+    // to this daemon" call for different answers to whoever is looking at
+    // the screen, and used to be collapsed into an `INVALID_PARAMS` with the
+    // reason inside an English `message` no frontend can classify.
     use crate::daemon::approvals::Decision;
     let reason = match shared.approvals.decide(p.approval_id, p.approve) {
-        Decision::Aplicada => {
-            // Efecto de seguridad (material de auditoría M3-5): quién decidió qué.
-            tracing::info!("aprobación de policy decidida por el humano");
+        Decision::Applied => {
+            // Security effect (M3-5 audit material): who decided what.
+            tracing::info!("policy approval decided by the human");
             return to_value(&methods::PolicyDecideResult {});
         }
-        Decision::Vencida => "expired",
-        Decision::YaDecidida => "already-decided",
-        Decision::Desconocida => "unknown",
+        Decision::Expired => "expired",
+        Decision::YaDecided => "already-decided",
+        Decision::Unknown => "unknown",
     };
     Err(RpcError::from(norte_proto::Error::ApprovalGone {
         reason: reason.to_owned(),
     }))
 }
 
-/// `policy.pending` (M3-3b Task 4): resync de aprobaciones pendientes para un
-/// frontend que conecta DESPUÉS del broadcast. Solo humanos: la lista cruza
-/// sesiones (rutas de otras) y un agente no decide, así que tampoco lista.
+/// `policy.pending` (M3-3b Task 4): resync of pending approvals for a
+/// frontend that connects AFTER the broadcast. Humans only: the list crosses
+/// sessions (other sessions' paths) and an agent does not decide, so it does
+/// not list either.
 fn handle_policy_pending(
     actor: &Actor,
     shared: &Arc<Shared>,
@@ -3370,15 +3447,15 @@ fn handle_policy_pending(
     })
 }
 
-/// `policy.undo_session` (M3-4): un HUMANO deshace la sesión completa de un
-/// agente. Target = `Agent{session}` (selecciona las entradas del journal),
-/// ejecutor = `User` (pasa el gate y firma las compensaciones): el undo no
-/// depende de que el scope del agente siga vivo. Solo conexiones User — un
-/// agente no deshace a otros (su propia sesión, como tool = deuda ADR 0024).
+/// `policy.undo_session` (M3-4): a HUMAN undoes an agent's whole session.
+/// Target = `Agent{session}` (selects the journal entries), executor = `User`
+/// (passes the gate and signs the compensations): the undo does not depend
+/// on the agent's scope still being alive. User connections only — an agent
+/// does not undo others (its own session, as a tool = ADR 0024 debt).
 ///
-/// El span NO registra la session cruda del wire (MINOR-2 del security):
-/// hasta pasar `valid_agent_session` puede llevar `\n`/ANSI y fabricar líneas
-/// de log falsas — justo en material de auditoría M3-5. Se loguea VALIDADA.
+/// The span does NOT log the raw wire session (security MINOR-2): before
+/// passing `valid_agent_session` it can carry `\n`/ANSI and fabricate fake
+/// log lines — right in M3-5 audit material. It is logged VALIDATED.
 #[tracing::instrument(skip_all)]
 async fn handle_policy_undo_session(
     actor: &Actor,
@@ -3403,24 +3480,25 @@ async fn handle_policy_undo_session(
         .undo_session_for(&target, Actor::User)
         .await
         .map_err(RpcError::from)?;
-    // Efecto de seguridad (material de auditoría M3-5): quién deshizo a quién.
-    // La session ya pasó la validación de charset — segura de loguear.
+    // Security effect (M3-5 audit material): who undid whom. The session
+    // already passed the charset validation — safe to log.
     if let Actor::Agent { session } = &target {
-        tracing::info!(session = %session, "undo de sesión de agente pedido por el humano");
+        tracing::info!(session = %session, "agent session undo requested by the human");
     }
-    // El dueño de la task de undo es el EJECUTOR humano (solo User llega aquí).
-    // El informe para `policy.undo_report` (#71) ya lo retuvo el engine al
-    // lanzar la Task. OJO honestidad: si esto contesta OVERLOADED, la Task YA
-    // corre desde el submit y la cancelación es cooperativa — pueden aterrizar
-    // reverts reales, y el cliente no recibe el id con el que pedir su informe
-    // (el journal sí registra las compensaciones). Por eso el informe se
-    // SUELTA en ese caso: un id que nadie recibió no tiene a quién servirse.
+    // The undo task's owner is the human EXECUTOR (only User reaches here).
+    // The report for `policy.undo_report` (#71) was already retained by the
+    // engine when it launched the Task. Honesty NOTE: if this answers
+    // OVERLOADED, the Task ALREADY runs since the submit and the cancellation
+    // is cooperative — real reverts can land, and the client does not
+    // receive the id to ask for its report with (the journal does record the
+    // compensations). That is why the report is RELEASED in that case: an id
+    // nobody received has nobody to serve it to.
     let task_id = register_task_undo(shared, handle)?;
     to_value(&methods::PolicyUndoSessionResult { task_id })
 }
 
-/// [`register_task_id`] para una Task de undo, que además suelta su informe
-/// retenido si el registro falla (OVERLOADED): ese id no llega a nadie.
+/// [`register_task_id`] for an undo Task, which also releases its retained
+/// report if registration fails (OVERLOADED): that id reaches nobody.
 fn register_task_undo(shared: &Arc<Shared>, handle: TaskHandle) -> Result<TaskId, RpcError> {
     let id = handle.id();
     register_task_id(shared, handle, Actor::User).inspect_err(|_| {
@@ -3428,18 +3506,18 @@ fn register_task_undo(shared: &Arc<Shared>, handle: TaskHandle) -> Result<TaskId
     })
 }
 
-/// `journal.list` (0.76.0, fase 7): una página de la línea de tiempo.
+/// `journal.list` (0.76.0, phase 7): a page of the timeline.
 ///
-/// SOLO-User, y el gate va ANTES del parseo por el mismo motivo que en
-/// `host.volumes` y `log.tail`: un agente ve `PolicyDenied` sea cual sea la
-/// forma de sus params, y no puede distinguir «vedado» de «params malos»
-/// fuzzeando los campos. Lo que hay detrás es más sensible que el registro:
-/// el journal nombra TODO lo que se ha tocado en esta máquina, incluido lo
-/// que está fuera del recinto del agente y lo que hicieron otras sesiones.
+/// User-ONLY, and the gate goes BEFORE parsing for the same reason as in
+/// `host.volumes` and `log.tail`: an agent sees `PolicyDenied` regardless of
+/// its params' shape, and cannot distinguish "forbidden" from "bad params"
+/// by fuzzing the fields. What is behind it is more sensitive than the log:
+/// the journal names EVERYTHING touched on this machine, including what is
+/// outside the agent's confinement and what other sessions did.
 ///
-/// El `limit` se acota aquí, como `fs.list` con su página: pedir de más no
-/// es un error y no pierde nada, porque lo que no quepa sigue estando detrás
-/// del cursor.
+/// The `limit` is capped here, like `fs.list` with its page: asking for more
+/// is not an error and loses nothing, because what does not fit is still
+/// there behind the cursor.
 async fn handle_journal_list(
     actor: &Actor,
     p: &methods::JournalListParams,
@@ -3456,20 +3534,20 @@ async fn handle_journal_list(
         .journal_page(p.before_seq, limit, p.actor_kind.as_deref())
         .await
         .map_err(RpcError::from)?;
-    // El cursor sale del ÚLTIMO `seq` servido y sólo si la página iba llena:
-    // con una página a medias no queda nada más viejo, y ofrecer cursor ahí
-    // haría que un cliente pidiera otra vuelta para recibir cero filas en
-    // bucle. Si va llena, el siguiente pide «anterior a éste», que es
-    // exactamente el contrato de `before_seq` (estricto).
+    // The cursor comes from the LAST `seq` served, and only if the page was
+    // full: with a half-full page there is nothing older left, and offering
+    // a cursor there would make a client ask for another round only to get
+    // zero rows in a loop. If it is full, the next one asks for "before this
+    // one", exactly `before_seq`'s (strict) contract.
     to_value(&crate::journal::page_to_wire(&entries, limit))
 }
 
-/// `journal.undo_after` (0.76.0, fase 7): deshace lo del HUMANO posterior a
-/// un `seq`.
+/// `journal.undo_after` (0.76.0, phase 7): undoes the HUMAN's work after a
+/// `seq`.
 ///
-/// SOLO-User, como el `policy.undo_session` con el que comparte informe: esto
-/// revierte trabajo, y hasta dónde llega lo decide quien lo hizo. Una sesión
-/// de agente que pudiera pedirlo borraría la huella de lo suyo.
+/// User-ONLY, like the `policy.undo_session` it shares a report with: this
+/// reverts work, and how far it goes is decided by whoever did it. An agent
+/// session that could request it would erase the trace of its own.
 async fn handle_journal_undo_after(
     actor: &Actor,
     p: &methods::JournalUndoAfterParams,
@@ -3486,34 +3564,35 @@ async fn handle_journal_undo_after(
         .await
         .map_err(RpcError::from)?;
     let task_id = register_task_undo(shared, handle)?;
-    // Material de auditoría, como el undo de una sesión de agente: hasta
-    // dónde, quién y con qué Task. Sin el `task_id` la línea no se puede
-    // cruzar ni con el informe ni con las compensaciones que aparecen
-    // después en el propio journal.
+    // Audit material, like an agent session's undo: how far, who, and with
+    // which Task. Without the `task_id` the line cannot be cross-referenced
+    // with the report nor with the compensations that appear later in the
+    // journal itself.
     //
-    // Va DESPUÉS del registro a propósito: `register_task_id` todavía puede
-    // contestar OVERLOADED, y entonces no hay Task que nombrar. La honestidad
-    // que `handle_policy_undo_session` documenta en su sitio vale aquí igual
-    // —la Task ya corre desde el submit, así que puede haber reversas reales
-    // cuyo informe se pierda—; lo que esto evita es apuntar un id que no
-    // llegó a existir.
+    // Goes AFTER the registration on purpose: `register_task_id` can still
+    // answer OVERLOADED, and then there is no Task to name. The honesty
+    // `handle_policy_undo_session` documents in its own spot applies here
+    // too — the Task already runs since the submit, so real reverts can
+    // happen whose report gets lost; what this avoids is pointing at an id
+    // that never came to exist.
     tracing::info!(
         after_seq = p.seq,
-        // El techo decide también qué se deshizo (0.80.0): sin él en la línea,
-        // cruzarla con el informe no explica por qué se quedó algo fuera.
+        // The ceiling also decides what got undone (0.80.0): without it in
+        // the line, cross-referencing it with the report does not explain
+        // why something was left out.
         upto_seq = ?p.upto_seq,
         task_id = task_id.get(),
-        "undo hasta un punto pedido por el humano"
+        "undo up to a point requested by the human"
     );
-    // El informe lo retuvo el engine, en el MISMO anillo que el de
-    // `policy.undo_session`: es el mismo undo y se lee por el mismo
-    // `policy.undo_report`.
+    // The report was retained by the engine, in the SAME ring as
+    // `policy.undo_session`'s: it is the same undo and is read through the
+    // same `policy.undo_report`.
     to_value(&methods::PolicyUndoSessionResult { task_id })
 }
 
-/// `policy.undo_report` (#71): el informe de una Task de undo — SOLO-User,
-/// como el `policy.undo_session` que lo genera (lleva `seq` del journal y
-/// motivo de bloqueo). Snapshot: definitivo con la Task terminal.
+/// `policy.undo_report` (#71): an undo Task's report — User-ONLY, like the
+/// `policy.undo_session` that generates it (carries a journal `seq` and a
+/// block reason). Snapshot: final once the Task is terminal.
 fn handle_policy_undo_report(
     actor: &Actor,
     p: &methods::PolicyUndoReportParams,
@@ -3525,15 +3604,15 @@ fn handle_policy_undo_report(
             "only a human (non-agent) connection may read an undo report",
         ));
     }
-    // `NotFound` de la taxonomía (0.79.0), el MISMO que su gemelo
-    // `fs.rename_batch_report` y que el brazo embebido, para las dos
-    // situaciones —nunca fue un undo, desalojado del anillo—. Antes era
-    // `INVALID_PARAMS` pelado, que el cliente leía como `Internal`.
+    // `NotFound` from the taxonomy (0.79.0), the SAME one as its twin
+    // `fs.rename_batch_report` and as the embedded arm, for both situations
+    // — it was never an undo, or it was evicted from the ring. It used to be
+    // a bare `INVALID_PARAMS`, which the client read as `Internal`.
     //
-    // El dueño guardado no se mira: a diferencia del gemelo, aquí solo llega
-    // el humano (la barrera de arriba), y todo undo lo ejecuta el humano, así
-    // que un `may_observe` no podría negar nada — sería código muerto que
-    // parece una comprobación.
+    // The stored owner is not looked at: unlike its twin, only the human
+    // reaches here (the barrier above), and every undo is executed by the
+    // human, so a `may_observe` could not deny anything — it would be dead
+    // code that looks like a check.
     let (_owner, snapshot) = shared
         .engine
         .undo_report(p.task_id)
@@ -3541,13 +3620,13 @@ fn handle_policy_undo_report(
     to_value(&crate::undo::report_to_proto(snapshot))
 }
 
-/// `host.volumes` (0.37.0, #131): enumeración de los volúmenes del HOST. El
-/// gate de actor (SOLO `User` — diseño §C de `2026-08-10-volumes-design.md`)
-/// vive en el brazo de `dispatch` que llama a esta función, ANTES del
-/// parseo de params (ver el comentario de ese brazo): esta función solo
-/// corre para una conexión ya autorizada, así que no vuelve a comprobar el
-/// actor. No hay `Provider`/engine que consultar —
-/// [`crate::volumes::enumerate`] es una función libre del HOST (diseño §A).
+/// `host.volumes` (0.37.0, #131): enumeration of the HOST's volumes. The
+/// actor gate (`User` ONLY — design §C of `2026-08-10-volumes-design.md`)
+/// lives in the `dispatch` arm that calls this function, BEFORE parsing the
+/// params (see that arm's comment): this function only ever runs for an
+/// already-authorized connection, so it does not re-check the actor. There
+/// is no `Provider`/engine to consult — [`crate::volumes::enumerate`] is a
+/// free HOST function (design §A).
 async fn handle_host_volumes(p: methods::HostVolumesParams) -> Result<serde_json::Value, RpcError> {
     let volumes = crate::volumes::enumerate(p.include_pseudo)
         .await
@@ -3560,73 +3639,74 @@ async fn handle_host_volumes(p: methods::HostVolumesParams) -> Result<serde_json
     })
 }
 
-/// `connection.list` (0.56.0, #264): las conexiones nombradas del daemon.
+/// `connection.list` (0.56.0, #264): the daemon's named connections.
 ///
-/// Lee el `connections.toml` del DAEMON, que es lo que hace útil el método: el
-/// frontend no lo tiene y no debería tenerlo. Un fichero que no está es una
-/// lista vacía —no tener conexiones es lo normal el primer día—, y uno cuya
-/// SINTAXIS no parsea es un error, porque decir «no tienes ninguna» cuando hay
-/// una coma de más sería mentir sobre lo que el usuario escribió.
+/// Reads the DAEMON's `connections.toml`, which is what makes the method
+/// useful: the frontend does not have it and should not. A missing file is
+/// an empty list — having no connections is normal on day one — and one
+/// whose SYNTAX does not parse is an error, because saying "you have none"
+/// when there is an extra comma would lie about what the user wrote.
 ///
-/// Una ENTRADA que no se entiende ya no tira la llamada (#365): sale en
-/// `unusable` con su motivo y las demás se listan. Antes, una sola entrada mala
-/// costaba la lista entera con un error que no nombraba ninguna conexión.
+/// An ENTRY that cannot be understood no longer aborts the call (#365): it
+/// comes out in `unusable` with its reason, and the rest get listed. Before,
+/// a single bad entry cost the whole list, with an error that named no
+/// connection.
 ///
-/// Jamás un secreto: lo que sale es el par `(nombre, url)` tal como está
-/// escrito, y las credenciales se REFERENCIAN (ADR 0015).
+/// Never a secret: what comes out is the `(name, url)` pair as written, and
+/// credentials are REFERENCED (ADR 0015).
 async fn handle_connection_list(shared: &Arc<Shared>) -> Result<serde_json::Value, RpcError> {
     let dir = shared
         .connections_dir
         .clone()
         .unwrap_or_else(crate::connect::config_dir);
-    let (conexiones, inservibles) = crate::connect::named_connections(&dir)
+    let (connections, unusable) = crate::connect::named_connections(&dir)
         .await
         .map_err(RpcError::from)?;
     to_value(&methods::ConnectionListResult {
-        connections: conexiones
+        connections: connections
             .into_iter()
             .map(|(name, url)| methods::ConnectionEntry { name, url })
             .collect(),
-        unusable: inservibles
+        unusable: unusable
             .into_iter()
             .map(|(name, reason)| methods::ConnectionProblem { name, reason })
             .collect(),
     })
 }
 
-/// `log.tail` (0.65.0, #328, ADR 0092): lo que el anillo de registro de ESTE
-/// proceso tiene después de un cursor.
+/// `log.tail` (0.65.0, #328, ADR 0092): what THIS process's log ring has
+/// after a cursor.
 ///
-/// El gate de actor (SOLO `User`) vive en el brazo de `dispatch` que llama
-/// aquí, ANTES del parseo de params: a esta función solo llega una conexión ya
-/// autorizada, así que no vuelve a comprobar el actor.
+/// The actor gate (`User` ONLY) lives in the `dispatch` arm that calls here,
+/// BEFORE parsing the params: only an already-authorized connection reaches
+/// this function, so it does not re-check the actor.
 ///
-/// Tres decisiones del ADR se aplican en estas pocas líneas:
+/// Three of the ADR's decisions are applied in these few lines:
 ///
-/// - **Sin anillo, `Unsupported`.** Nunca una lista vacía: un registro que no
-///   existe y uno que no tiene nada que contar se leen igual en pantalla, y el
-///   panel necesita poder decir «este daemon no lo sirve» para degradar al
-///   suyo DICIENDO por qué.
-/// - **`cursor: null` no es `0`.** Un cero afirma haber visto la línea número
-///   cero, así que contra un anillo que ya dio la vuelta contestaría un `lost`
-///   enorme y falso — nadie perdió lo que nunca esperó. El anillo empieza por
-///   la más vieja que conserva en los dos casos; lo que cambia es que sin
-///   cursor no se afirma ningún hueco.
-/// - **`max` se acota aquí** a [`LOG_TAIL_MAX_LINES`], como `fs.list` con
-///   `FS_LIST_MAX_PAGE`: pedir de más no es un error y no pierde nada, porque
-///   lo que no cabe sigue estando después de `next`. Pedir CERO sí lo es
-///   (`INVALID_PARAMS`, mismo criterio que `FsListParams::limit`): un panel
-///   sondeando con `max: 0` recibiría una lista vacía cada vuelta con el
-///   cursor parado, y eso en pantalla se lee como «no está pasando nada» en
-///   vez de como el error de programación que es.
+/// - **No ring, `Unsupported`.** Never an empty list: a log that does not
+///   exist and one with nothing to report read the same on screen, and the
+///   panel needs to be able to say "this daemon does not serve it" so it can
+///   degrade to its own WHILE SAYING why.
+/// - **`cursor: null` is not `0`.** A zero asserts having seen line number
+///   zero, so against a ring that already wrapped around it would answer a
+///   huge, false `lost` — nobody lost what they never expected. The ring
+///   starts from the oldest it retains in both cases; what changes is that
+///   with no cursor, no gap is asserted.
+/// - **`max` is capped here** at [`LOG_TAIL_MAX_LINES`], like `fs.list` with
+///   `FS_LIST_MAX_PAGE`: asking for more is not an error and loses nothing,
+///   because what does not fit is still there after `next`. Asking for ZERO
+///   is an error (`INVALID_PARAMS`, same criterion as `FsListParams::limit`):
+///   a panel polling with `max: 0` would receive an empty list every round
+///   with the cursor stuck, and on screen that reads as "nothing is
+///   happening" instead of the programming error it is.
 #[tracing::instrument(skip(shared))]
 fn handle_log_tail(
     p: &methods::LogTailParams,
     shared: &Arc<Shared>,
 ) -> Result<serde_json::Value, RpcError> {
-    // El anillo PRIMERO: a un daemon que no sirve registro, la respuesta
-    // honesta es «no lo tengo», también cuando los params vienen mal — lo que
-    // el cliente tiene que hacer después es lo mismo en los dos casos.
+    // The ring FIRST: to a daemon that does not serve a log, the honest
+    // answer is "I don't have one", also when the params are bad — what the
+    // client has to do next is the same in both cases.
     let Some(ring) = shared.log_ring.get() else {
         return Err(RpcError::from(norte_proto::Error::Unsupported));
     };
@@ -3639,10 +3719,10 @@ fn handle_log_tail(
     let max = usize::try_from(p.max)
         .unwrap_or(usize::MAX)
         .min(LOG_TAIL_MAX_LINES);
-    // Sin cursor se pide desde el principio de lo que el anillo CONSERVA, que
-    // es lo que `since(0, …)` entrega; lo que no vale de ese cero es su
-    // `lost`, que contaría como perdido todo lo que ya se había caído antes de
-    // que este lector existiera.
+    // With no cursor, it is asked from the start of what the ring RETAINS,
+    // which is what `since(0, …)` delivers; what does not hold from that
+    // zero is its `lost`, which would count as lost everything that had
+    // already fallen off before this reader existed.
     let tail = ring.since(p.cursor.unwrap_or(0), max);
     to_value(&methods::LogTailResult {
         lines: tail
@@ -3657,44 +3737,45 @@ fn handle_log_tail(
             .collect(),
         next: tail.next,
         lost: if p.cursor.is_some() { tail.lost } else { 0 },
-        // El nivel viaja CON las líneas a las que se aplica: es global al
-        // daemon y otro cliente pudo subirlo hace un segundo, así que en un
-        // método aparte nacería rancio.
+        // The level travels WITH the lines it applies to: it is global to the
+        // daemon and another client could have raised it a second ago, so in
+        // a separate method it would be born stale.
         level: ring.level().wire().to_owned(),
         capacity: u32::try_from(ring.capacity()).unwrap_or(u32::MAX),
     })
 }
 
-/// `log.level` (0.65.0, #328, ADR 0092): sube el nivel del anillo de ESTE
-/// proceso y contesta el que quedó.
+/// `log.level` (0.65.0, #328, ADR 0092): raises THIS process's ring level and
+/// answers with the one that resulted.
 ///
-/// **La cota de seguridad no se toca aquí, y ése es el diseño entero.** Quien
-/// decide qué se guarda es [`norte_config::logring::LogRing::raise_to`], con
-/// su lista blanca: solo los targets de norte suben de INFO, y `suppaftp`
-/// —que emite `PASS <contraseña>` en TRACE (#43, regla 10)— se queda abajo
-/// pida quien pida lo que pida. El cliente PIDE un nivel; no lo calcula, no lo
-/// aplica y no conoce la lista. Una segunda copia de esa defensa al otro lado
-/// del cable se separaría de ésta en cuanto una de las dos cambiara.
+/// **The security cap is not touched here, and that is the whole design.**
+/// Who decides what is kept is
+/// [`norte_config::logring::LogRing::raise_to`], with its allowlist: only
+/// norte's own targets go above INFO, and `suppaftp` — which emits `PASS
+/// <password>` at TRACE (#43, rule 10) — stays down no matter who asks for
+/// what. The client ASKS for a level; it does not compute it, does not apply
+/// it and does not know the list. A second copy of that defense on the other
+/// side of the wire would drift from this one the moment either one changed.
 ///
-/// Como el anillo no baja, el nivel que se contesta puede ser MÁS verboso que
-/// el pedido, y eso no es un fallo: es por lo que el result lleva el nivel en
-/// vez de un `bool`.
+/// Since the ring never lowers, the level answered back can be MORE verbose
+/// than what was asked, and that is not a bug: it is why the result carries
+/// the level instead of a `bool`.
 ///
-/// **Las dos negativas de este método son distintas y se contestan
-/// distinto**: sin anillo es `Unsupported` («este daemon no sirve registro»,
-/// y el panel degrada al suyo diciéndolo), y un nivel fuera del vocabulario es
-/// `INVALID_PARAMS` («lo que mandaste no es un nivel»), mismo criterio que el
-/// `max: 0` de [`handle_log_tail`]. Colapsarlas en una dejaría a un cliente
-/// sin poder distinguir un daemon sin registro de una errata suya, que es la
-/// misma confusión vacío-contra-ausente que el resto de este cambio evita.
+/// **This method's two denials are different and answered differently**: no
+/// ring is `Unsupported` ("this daemon does not serve a log", and the panel
+/// degrades to its own while saying so), and a level outside the vocabulary
+/// is `INVALID_PARAMS` ("what you sent is not a level"), same criterion as
+/// [`handle_log_tail`]'s `max: 0`. Collapsing them into one would leave a
+/// client unable to distinguish a daemon with no log from its own typo,
+/// which is the same empty-vs-absent confusion the rest of this change
+/// avoids.
 ///
-/// El gate de actor vive en el brazo de `dispatch`, igual que en
-/// [`handle_log_tail`].
+/// The actor gate lives in the `dispatch` arm, same as in [`handle_log_tail`].
 ///
-/// El span no lleva el `level` que vino del cable hasta DESPUÉS de validarlo:
-/// es una `String` de longitud arbitraria elegida por el cliente, y
-/// formatearla antes del rechazo sería registrar lo que un peer quiera por el
-/// simple hecho de haberlo mandado.
+/// The span does not carry the `level` that came off the wire until AFTER
+/// validating it: it is an arbitrary-length `String` chosen by the client,
+/// and formatting it before the rejection would mean logging whatever a peer
+/// wants for the simple fact of having sent it.
 #[tracing::instrument(skip(shared, p), fields(level = tracing::field::Empty))]
 fn handle_log_level(
     p: &methods::LogLevelParams,
@@ -3703,29 +3784,29 @@ fn handle_log_level(
     let Some(ring) = shared.log_ring.get() else {
         return Err(RpcError::from(norte_proto::Error::Unsupported));
     };
-    // Un nivel que no está en el vocabulario NO se degrada a uno por defecto:
-    // aceptar lo que no se entiende y poner otra cosa dejaría al lector
-    // creyendo que pidió algo que nadie hizo.
-    let Some(nivel) = norte_config::logline::LogLevel::from_wire(&p.level) else {
+    // A level outside the vocabulary is NOT degraded to a default one:
+    // accepting what is not understood and setting something else would
+    // leave the reader believing it asked for something nobody did.
+    let Some(level) = norte_config::logline::LogLevel::from_wire(&p.level) else {
         return Err(RpcError::protocol(
             codes::INVALID_PARAMS,
             "log.level: `level` must be one of error|warn|info|debug|trace",
         ));
     };
-    // Ya validado: aquí `nivel` es uno de los cinco, y lo que se registra es
-    // la cadena canónica de ese enum, no la que mandó el peer.
-    tracing::Span::current().record("level", nivel.wire());
-    ring.raise_to(nivel);
+    // Already validated: here `level` is one of the five, and what gets
+    // logged is that enum's canonical string, not whatever the peer sent.
+    tracing::Span::current().record("level", level.wire());
+    ring.raise_to(level);
     to_value(&methods::LogLevelResult {
         level: ring.level().wire().to_owned(),
     })
 }
 
-/// `plugin.list` (M4-P3): el catálogo descubierto + su estado, para CUALQUIER
-/// conexión (listar no consiente nada). Sin params definidos (objeto vacío
-/// reservado): null/ausencia se aceptan como defaults (ADR 0004), igual que
-/// `daemon.shutdown`; un objeto cualquiera se ignora — extensión futura no
-/// rompe clientes viejos.
+/// `plugin.list` (M4-P3): the discovered catalogue + its state, for ANY
+/// connection (listing consents to nothing). No params defined (reserved
+/// empty object): null/absence are accepted as defaults (ADR 0004), same as
+/// `daemon.shutdown`; any object is ignored — a future extension does not
+/// break old clients.
 fn handle_plugin_list(
     params: Option<serde_json::Value>,
     shared: &Arc<Shared>,
@@ -3735,19 +3816,21 @@ fn handle_plugin_list(
             .filter(|v| !v.is_null())
             .or_else(|| Some(serde_json::json!({}))),
     )?;
-    let list = shared.plugins.lock().expect("plugins lock sano").list();
+    let list = shared.plugins.lock().expect("plugins lock is sound").list();
     to_value(&list)
 }
 
-/// `plugin.set_approval` (M4-P3): un HUMANO aprueba (o revoca) las capabilities
-/// declaradas por un plugin. Aprobar es un acto de SEGURIDAD (consentir que un
-/// plugin ejerza sus capabilities), así que SOLO una conexión no-agente lo hace
-/// — el mismo criterio que `policy.grant_scope`/`policy.decide`: un agente jamás
-/// consiente por el humano. Un id desconocido es `INVALID_PARAMS` (no se ensucia
-/// el estado con plugins fantasma); un fallo de persistencia, `INTERNAL_ERROR`.
-// `skip_all` SIN `id = %p.id`: el id viene crudo del wire y NO debe ir al log
-// antes de validarse contra el catálogo (inyección de log / spoofing). Se loguea
-// (info) SOLO tras confirmar que es un plugin conocido.
+/// `plugin.set_approval` (M4-P3): a HUMAN approves (or revokes) the
+/// capabilities a plugin declared. Approving is a SECURITY act (consenting
+/// to a plugin exercising its capabilities), so ONLY a non-agent connection
+/// does it — the same criterion as `policy.grant_scope`/`policy.decide`: an
+/// agent never consents on the human's behalf. An unknown id is
+/// `INVALID_PARAMS` (state is not dirtied with phantom plugins); a
+/// persistence failure, `INTERNAL_ERROR`.
+// `skip_all` WITHOUT `id = %p.id`: the id comes raw off the wire and must
+// NOT go to the log before being validated against the catalogue (log
+// injection / spoofing). It is logged (info) ONLY after confirming it is a
+// known plugin.
 #[tracing::instrument(skip_all, fields(approved = p.approved))]
 async fn handle_plugin_set_approval(
     actor: &Actor,
@@ -3760,49 +3843,50 @@ async fn handle_plugin_set_approval(
             "only a human (non-agent) connection may approve a plugin",
         ));
     }
-    // Muta EN MEMORIA bajo el lock y captura el snapshot + el dir; el lock se
-    // libera al cerrar el bloque, ANTES de cualquier `.await` (regla 2: nada de
-    // I/O bloqueante en el reactor, ni sostener un std::Mutex a través de await).
-    // Y la foto va al disco en exclusiva con las de sus hermanos (ADR 0104,
-    // `Shared::plugins_state_io`): se toma antes de mutar y se suelta al
-    // salir, ya persistido.
-    let _escritura = shared.plugins_state_io.lock().await;
-    let (applied, rancio, snapshot, dir) = {
-        let mut reg = shared.plugins.lock().expect("plugins lock sano");
-        // Lo que se CONCEDE tiene que ser lo que el humano LEYÓ (#282). Este
-        // daemon descubre el catálogo una vez al arrancar, así que hoy la
-        // ventana está cerrada por accidente; la comprobación la hace real, y
-        // el `Backend` embebido —que redescubre en cada llamada— la necesita
-        // de verdad.
+    // Mutates IN MEMORY under the lock and captures the snapshot + the dir;
+    // the lock is released when the block closes, BEFORE any `.await` (rule
+    // 2: no blocking I/O on the reactor, nor holding a std::Mutex across an
+    // await). And the snapshot goes to disk exclusively with its siblings'
+    // (ADR 0104, `Shared::plugins_state_io`): taken before mutating and
+    // released on exit, already persisted.
+    let _write = shared.plugins_state_io.lock().await;
+    let (applied, stale, snapshot, dir) = {
+        let mut reg = shared.plugins.lock().expect("plugins lock is sound");
+        // What gets GRANTED has to be what the human READ (#282). This
+        // daemon discovers the catalogue once at startup, so today the
+        // window is closed by accident; the check makes it real, and the
+        // embedded `Backend` — which rediscovers on every call — genuinely
+        // needs it.
         //
-        // Solo al APROBAR: revocar no concede nada, y rehusar una revocación
-        // por un ancla rancia dejaría vivo el permiso que alguien quita.
+        // Only when APPROVING: revoking grants nothing, and refusing a
+        // revocation over a stale anchor would keep alive the permission
+        // someone is taking away.
         //
-        // Un id DESCONOCIDO no es un ancla rancia: `manifest_digest` devuelve
-        // `None` para los dos casos, y contestar «el manifiesto cambió» a
-        // quien nombró un plugin que no existe es un diagnóstico equivocado
-        // sobre el error más común de un cliente mal escrito. Se pregunta
-        // primero si se conoce.
-        let conocido = reg.manifest_digest(&p.id).is_some();
-        let rancio = p.approved
-            && conocido
+        // An UNKNOWN id is not a stale anchor: `manifest_digest` returns
+        // `None` for both cases, and answering "the manifest changed" to
+        // whoever named a plugin that does not exist is the wrong diagnosis
+        // for a badly-written client's most common mistake. It is asked
+        // first whether it is known at all.
+        let known = reg.manifest_digest(&p.id).is_some();
+        let stale = p.approved
+            && known
             && p.expected_digest
                 .as_ref()
-                .is_some_and(|esperado| reg.manifest_digest(&p.id).as_ref() != Some(esperado));
-        let applied = !rancio && reg.set_approval_in_memory(&p.id, p.approved);
+                .is_some_and(|expected| reg.manifest_digest(&p.id).as_ref() != Some(expected));
+        let applied = !stale && reg.set_approval_in_memory(&p.id, p.approved);
         (
             applied,
-            rancio,
+            stale,
             reg.state_snapshot(),
             reg.config_dir().to_path_buf(),
         )
     };
-    if rancio {
-        // NO `INVALID_PARAMS`: ése es el código de «ese plugin no existe» tres
-        // líneas más abajo, y un cliente que reciba los dos iguales no puede
-        // distinguir «vuelve a leerlo y aprueba» de «ese id no está». Es la
-        // misma forma que `session.put` con una revisión rancia, y usa la
-        // misma variante: `ConflictKind::StaleRevision`.
+    if stale {
+        // NOT `INVALID_PARAMS`: that is the code for "that plugin does not
+        // exist" three lines below, and a client receiving the same for
+        // both cannot distinguish "re-read it and approve" from "that id
+        // isn't there". It is the same shape as `session.put` with a stale
+        // revision, and uses the same variant: `ConflictKind::StaleRevision`.
         return Err(RpcError::from(norte_proto::Error::Conflict {
             conflict: norte_proto::ConflictKind::StaleRevision,
         }));
@@ -3817,17 +3901,18 @@ async fn handle_plugin_set_approval(
         .await
         .map_err(|_| RpcError::protocol(codes::INTERNAL_ERROR, "persist task panicked"))?
         .map_err(|e| RpcError::protocol(codes::INTERNAL_ERROR, format!("persist: {e}")))?;
-    // Efecto de seguridad (material de auditoría M4): plugin YA validado como
-    // conocido, así que su id es seguro para el log.
-    tracing::info!(id = %p.id, "plugin (des)aprobado por el humano");
+    // Security effect (M4 audit material): plugin ALREADY validated as
+    // known, so its id is safe for the log.
+    tracing::info!(id = %p.id, "plugin (dis)approved by the human");
     to_value(&methods::PluginSetApprovalResult {})
 }
 
-/// `plugin.set_enabled` (M4-P3): un HUMANO activa/desactiva un plugin ya
-/// aprobado. Misma barrera y misma semántica de retorno que
-/// [`handle_plugin_set_approval`] (id desconocido = `INVALID_PARAMS`).
-// `skip_all` sin `id = %p.id`: idéntico razonamiento que
-// [`handle_plugin_set_approval`] — el id crudo del wire no va al log sin validar.
+/// `plugin.set_enabled` (M4-P3): a HUMAN enables/disables an already-approved
+/// plugin. Same barrier and same return semantics as
+/// [`handle_plugin_set_approval`] (unknown id = `INVALID_PARAMS`).
+// `skip_all` without `id = %p.id`: identical reasoning to
+// [`handle_plugin_set_approval`] — the raw wire id does not go to the log
+// without validation.
 #[tracing::instrument(skip_all, fields(enabled = p.enabled))]
 async fn handle_plugin_set_enabled(
     actor: &Actor,
@@ -3840,11 +3925,11 @@ async fn handle_plugin_set_enabled(
             "only a human (non-agent) connection may enable a plugin",
         ));
     }
-    // Mismo patrón regla-2 que set_approval: muta bajo el lock, persiste fuera,
-    // y la escritura en exclusiva (`Shared::plugins_state_io`).
-    let _escritura = shared.plugins_state_io.lock().await;
+    // Same rule-2 pattern as set_approval: mutate under the lock, persist
+    // outside it, and the write exclusively (`Shared::plugins_state_io`).
+    let _write = shared.plugins_state_io.lock().await;
     let (applied, snapshot, dir) = {
-        let mut reg = shared.plugins.lock().expect("plugins lock sano");
+        let mut reg = shared.plugins.lock().expect("plugins lock is sound");
         let applied = reg.set_enabled_in_memory(&p.id, p.enabled);
         (
             applied,
@@ -3862,28 +3947,30 @@ async fn handle_plugin_set_enabled(
         .await
         .map_err(|_| RpcError::protocol(codes::INTERNAL_ERROR, "persist task panicked"))?
         .map_err(|e| RpcError::protocol(codes::INTERNAL_ERROR, format!("persist: {e}")))?;
-    tracing::info!(id = %p.id, "plugin (des)activado por el humano");
+    tracing::info!(id = %p.id, "plugin (dis)enabled by the human");
     to_value(&methods::PluginSetEnabledResult {})
 }
 
-/// `plugin.uninstall` (0.71.0, ADR 0104): un HUMANO desinstala un plugin.
-/// Misma barrera que [`handle_plugin_set_approval`]: retirar un
-/// consentimiento es tan del humano como darlo, y borrar ficheros de su
-/// configuración, más.
+/// `plugin.uninstall` (0.71.0, ADR 0104): a HUMAN uninstalls a plugin. Same
+/// barrier as [`handle_plugin_set_approval`]: withdrawing a consent is as
+/// much the human's as giving it, and deleting files from their
+/// configuration even more so.
 ///
-/// El trabajo lo hace [`crate::plugins::uninstall`], el mismo que la CLI:
-/// valida el id ANTES de convertirlo en ruta, borra `plugins/<id>/` y deja
-/// la entrada de estado apagada y sin aprobar. Lo que la CLI no podía hacer
-/// es lo que sigue: olvidarlo también en el registro EN MEMORIA, que hasta
-/// aquí seguía listando —y decorando con— lo borrado hasta reiniciar.
+/// The work is done by [`crate::plugins::uninstall`], the same one the CLI
+/// uses: it validates the id BEFORE turning it into a path, deletes
+/// `plugins/<id>/` and leaves the state entry disabled and unapproved. What
+/// the CLI could not do is what follows: forgetting it also in the IN-MEMORY
+/// registry, which until now kept listing — and decorating with — what was
+/// deleted until a restart.
 ///
-/// Un id que no es un id, o que no está instalado, es `INVALID_PARAMS`,
-/// como el id desconocido de sus hermanos; un fallo de I/O es
-/// `INTERNAL_ERROR`. El borrado va en `spawn_blocking` (regla 2) y SIN el
-/// lock del registro: el lock se toma después, solo para olvidar.
-// `skip_all` sin `id = %p.id`: el id crudo del wire no va al log sin validar
-// — idéntico razonamiento que [`handle_plugin_set_approval`]. Se loguea
-// (info) SOLO tras el borrado, cuando `uninstall` ya lo validó como id.
+/// An id that is not an id, or that is not installed, is `INVALID_PARAMS`,
+/// like its siblings' unknown id; an I/O failure is `INTERNAL_ERROR`. The
+/// deletion runs in `spawn_blocking` (rule 2) and WITHOUT the registry's
+/// lock: the lock is taken afterward, only to forget.
+// `skip_all` without `id = %p.id`: the raw wire id does not go to the log
+// without validation — identical reasoning to
+// [`handle_plugin_set_approval`]. Logged (info) ONLY after the deletion, once
+// `uninstall` has already validated it as an id.
 #[tracing::instrument(skip_all)]
 async fn handle_plugin_uninstall(
     actor: &Actor,
@@ -3896,23 +3983,23 @@ async fn handle_plugin_uninstall(
             "only a human (non-agent) connection may uninstall a plugin",
         ));
     }
-    // La escritura del estado, en exclusiva con las de sus hermanos: ver
-    // `Shared::plugins_state_io`. Se toma antes del borrado y se suelta tras
-    // olvidar en memoria, así que ningún `set_*` en vuelo puede persistir
-    // una foto en la que este plugin sigue aprobado ENCIMA de lo que
-    // `uninstall` acaba de escribir.
-    let _escritura = shared.plugins_state_io.lock().await;
-    // `expect`: nadie panica bajo el lock del registro —solo se mutan mapas y
-    // vectores—, así que no puede quedar envenenado. Vale para los catorce
-    // usos de este fichero.
+    // The state write, exclusive with its siblings': see
+    // `Shared::plugins_state_io`. Taken before the deletion and released
+    // after forgetting in memory, so no in-flight `set_*` can persist a
+    // snapshot where this plugin is still approved ON TOP of what
+    // `uninstall` just wrote.
+    let _write = shared.plugins_state_io.lock().await;
+    // `expect`: nobody panics under the registry's lock — only maps and
+    // vectors get mutated — so it cannot end up poisoned. Holds for the
+    // fourteen uses in this file.
     let dir = shared
         .plugins
         .lock()
-        .expect("plugins lock sano")
+        .expect("plugins lock is sound")
         .config_dir()
         .to_path_buf();
     let id = p.id.clone();
-    let informe = crate::blocking::spawn_blocking(move || crate::plugins::uninstall(&dir, &id))
+    let report = crate::blocking::spawn_blocking(move || crate::plugins::uninstall(&dir, &id))
         .await
         .map_err(|_| RpcError::protocol(codes::INTERNAL_ERROR, "uninstall task panicked"))?
         .map_err(|e| {
@@ -3922,11 +4009,11 @@ async fn handle_plugin_uninstall(
                 U::NotInstalled(_) => {
                     RpcError::protocol(codes::INVALID_PARAMS, "plugin is not installed")
                 }
-                // Sin el texto del error de I/O en la RESPUESTA: cita la ruta
-                // bajo el home del usuario, y esto también lo lee un cliente.
-                // Al registro sí: `log.tail` es solo de humanos.
+                // No I/O error text in the RESPONSE: it quotes a path under
+                // the user's home, and a client reads this too. To the log,
+                // yes: `log.tail` is humans-only.
                 U::Io(io) => {
-                    tracing::warn!(error = %io, "uninstall: fallo de I/O");
+                    tracing::warn!(error = %io, "uninstall: I/O failure");
                     RpcError::protocol(codes::INTERNAL_ERROR, "uninstall: io error")
                 }
             }
@@ -3934,123 +4021,130 @@ async fn handle_plugin_uninstall(
     shared
         .plugins
         .lock()
-        .expect("plugins lock sano")
-        .forget_in_memory(&informe.id);
+        .expect("plugins lock is sound")
+        .forget_in_memory(&report.id);
     tracing::info!(
-        id = %informe.id,
-        was_approved = informe.was_approved,
-        "plugin desinstalado por el humano"
+        id = %report.id,
+        was_approved = report.was_approved,
+        "plugin uninstalled by the human"
     );
     to_value(&methods::PluginUninstallResult {
-        was_approved: informe.was_approved,
+        was_approved: report.was_approved,
     })
 }
 
-/// `plugin.run_command` (M4-P4): ejecuta un comando de un plugin YA aprobado y
-/// activado. ABIERTO a cualquier conexión (no consiente nada: el humano ya
-/// aprobó+activó, y el sandbox WASI vacío contiene al guest).
+/// `plugin.run_command` (M4-P4): runs a command of an ALREADY approved and
+/// enabled plugin. OPEN to any connection (consents to nothing: the human
+/// already approved+enabled, and the empty WASI sandbox contains the guest).
 ///
-/// Regla 2 (crítica): la EJECUCIÓN (`instantiate` compila el componente WASM +
-/// `run_command`) es síncrona y pesada. Se separa en dos:
-/// 1. RESOLVER (barato) bajo el lock del registry: valida el consentimiento y
-///    resuelve `.wasm` + capabilities. El `MutexGuard` se suelta al cerrar el
-///    bloque, ANTES del `.await`.
-/// 2. EJECUTAR (pesado) FUERA del lock, en un `spawn_blocking`, con un clon del
-///    `Arc<PluginRuntime>` compartido.
+/// Rule 2 (critical): EXECUTION (`instantiate` compiles the WASM component +
+/// `run_command`) is synchronous and heavy. Split into two:
+/// 1. RESOLVE (cheap) under the registry's lock: validates consent and
+///    resolves `.wasm` + capabilities. The `MutexGuard` is released when the
+///    block closes, BEFORE the `.await`.
+/// 2. RUN (heavy) OUTSIDE the lock, in a `spawn_blocking`, with a clone of the
+///    shared `Arc<PluginRuntime>`.
 ///
-/// Redacción hacia el cliente (security-reviewer M4-P4): un fallo de runtime
-/// (`PluginRunError::Runtime`) puede llevar la ruta del `.wasm` o detalles
-/// internos de wasmtime; JAMÁS se devuelve su `Display` crudo al cliente —
-/// se responde un `INTERNAL_ERROR` genérico y el detalle va SOLO al log local.
-// `skip_all` sin `id`: el id viene crudo del wire; no va al log salvo tras
-// resolver (mismo criterio que set_approval/set_enabled).
+/// Redaction toward the client (security-reviewer M4-P4): a runtime failure
+/// (`PluginRunError::Runtime`) can carry the `.wasm` path or internal
+/// wasmtime details; its raw `Display` is NEVER returned to the client — a
+/// generic `INTERNAL_ERROR` is answered and the detail goes ONLY to the local
+/// log.
+// `skip_all` without `id`: the id comes raw off the wire; it does not go to
+// the log except after resolving (same criterion as set_approval/set_enabled).
 #[tracing::instrument(skip_all)]
 async fn handle_plugin_run_command(
     params: Option<serde_json::Value>,
     shared: &Arc<Shared>,
 ) -> Result<serde_json::Value, RpcError> {
     let p: methods::PluginRunCommandParams = parse_params(params)?;
-    // 1) Resolver bajo el lock (barato). El guard NO cruza el `.await`.
+    // 1) Resolve under the lock (cheap). The guard does NOT cross the `.await`.
     let resolved = {
-        let reg = shared.plugins.lock().expect("plugins lock sano");
+        let reg = shared.plugins.lock().expect("plugins lock is sound");
         reg.resolve_runnable(&p.id)
     };
     let (wasm, caps, settings) = resolved.map_err(|e| run_error_to_rpc(&e))?;
 
-    // 2) Ejecutar fuera del lock, en spawn_blocking (regla 2). El runtime es
-    // `Send+Sync` pero no `Clone`: se clona el `Arc`.
+    // 2) Run outside the lock, in spawn_blocking (rule 2). The runtime is
+    // `Send+Sync` but not `Clone`: the `Arc` is cloned.
     let runtime = Arc::clone(&shared.plugin_runtime);
     let command = p.command.clone();
     let arg = p.arg.clone();
     let output = crate::blocking::spawn_blocking(move || {
         let mut inst = runtime.instantiate(&wasm, caps)?;
-        // P2 Task 4a: entrega `[config]` YA resuelto (Task 2) al guest, mismo
-        // criterio que `PluginRegistry::run_command` (uso embebido).
+        // P2 Task 4a: delivers `[config]` ALREADY resolved (Task 2) to the
+        // guest, same criterion as `PluginRegistry::run_command` (embedded
+        // use).
         inst.set_settings(settings);
         inst.run_command(&command, &arg)
     })
     .await
     .map_err(|_| RpcError::protocol(codes::INTERNAL_ERROR, "plugin task panicked"))?
     .map_err(|e| {
-        // Redacción: el detalle (posible ruta del .wasm / interno de wasmtime)
-        // va SOLO al log local; al cliente, un mensaje genérico.
-        tracing::warn!(id = %p.id, error = %e, "el runtime del plugin falló");
+        // Redaction: the detail (possible .wasm path / wasmtime internals)
+        // goes ONLY to the local log; to the client, a generic message.
+        tracing::warn!(id = %p.id, error = %e, "the plugin runtime failed");
         RpcError::protocol(codes::INTERNAL_ERROR, "plugin runtime failed")
     })?;
     to_value(&methods::PluginRunCommandResult { output })
 }
 
-/// Mapea el veredicto de consentimiento de [`crate::plugins::resolve_runnable`]
-/// (nunca `Runtime`, que se maneja aparte con redacción) a un `RpcError`. Los
-/// mensajes de estos variantes NO revelan rutas (llevan el id, no el path;
-/// coherente con la redacción de `list()`), así que son seguros de propagar.
+/// Maps the consent verdict from [`crate::plugins::resolve_runnable`] (never
+/// `Runtime`, which is handled separately with redaction) to an `RpcError`.
+/// These variants' messages do NOT reveal paths (they carry the id, not the
+/// path; consistent with `list()`'s redaction), so they are safe to
+/// propagate.
 fn run_error_to_rpc(e: &crate::plugins::PluginRunError) -> RpcError {
     use crate::plugins::PluginRunError as E;
     match e {
-        // Id inexistente o sin binario: error de PARÁMETRO (el cliente pidió
-        // algo que no existe/no es ejecutable).
+        // Nonexistent id or no binary: PARAMETER error (the client asked for
+        // something that does not exist/is not runnable).
         E::Unknown(_) | E::NotRunnable(_) | E::NoBinary(_) => {
             RpcError::protocol(codes::INVALID_PARAMS, e.to_string())
         }
-        // Sin aprobar / desactivado: la petición no es válida en este estado
-        // (el humano no ha consentido). INVALID_REQUEST con mensaje claro.
+        // Not approved / disabled: the request is not valid in this state
+        // (the human has not consented). INVALID_REQUEST with a clear
+        // message.
         E::NotApproved(_) | E::Disabled(_) => {
             RpcError::protocol(codes::INVALID_REQUEST, e.to_string())
         }
-        // No debería llegar aquí (resolve_runnable no ejecuta), pero por si el
-        // tipo evoluciona: redactado, jamás el Display crudo.
+        // Should not reach here (resolve_runnable does not execute), but in
+        // case the type evolves: redacted, never the raw Display.
         E::Runtime(_) => RpcError::protocol(codes::INTERNAL_ERROR, "plugin runtime failed"),
     }
 }
 
-/// `plugin.preview` (M4-P5): renderiza el archivo `p.path` con el PRIMER
-/// previewer consentido cuyo mimetype (adivinado por extensión) case, o devuelve
-/// `preview: None` si ninguno aplica. ABIERTO como `run_command` (previsualizar
-/// no consiente nada). Tres fases, separadas para NO cruzar el `MutexGuard` por
-/// un `.await` (regla 2):
+/// `plugin.preview` (M4-P5): renders file `p.path` with the FIRST consented
+/// previewer whose mimetype (guessed by extension) matches, or returns
+/// `preview: None` if none applies. OPEN like `run_command` (previewing
+/// consents to nothing). Three phases, separated so as NOT to cross the
+/// `MutexGuard` over an `.await` (rule 2):
 ///
-/// 1. RESOLVER (barato) bajo el lock del registry: adivina el mimetype y elige
-///    el previewer. El guard se suelta al cerrar el bloque, ANTES de todo await.
-///    Ninguno → `preview: None` (NO error: el frontend cae a la vista cruda).
-/// 2. LEER los bytes del archivo ACOTADOS a [`PREVIEW_MAX_BYTES`](crate::plugins::PREVIEW_MAX_BYTES)
-///    vía el engine (async, fuera del lock). Un archivo ilegible (`NotFound`…)
-///    es un error HONESTO que se propaga — no un preview vacío.
-/// 3. EJECUTAR (pesado, compila WASM) FUERA del lock, en un `spawn_blocking`,
-///    con un clon del `Arc<PluginRuntime>` compartido.
+/// 1. RESOLVE (cheap) under the registry's lock: guesses the mimetype and
+///    picks the previewer. The guard is released when the block closes,
+///    BEFORE any await. None → `preview: None` (NOT an error: the frontend
+///    falls back to the raw view).
+/// 2. READ the file's bytes CAPPED at [`PREVIEW_MAX_BYTES`](crate::plugins::PREVIEW_MAX_BYTES)
+///    via the engine (async, outside the lock). An unreadable file
+///    (`NotFound`…) is an HONEST error that propagates — not an empty
+///    preview.
+/// 3. RUN (heavy, compiles WASM) OUTSIDE the lock, in a `spawn_blocking`,
+///    with a clone of the shared `Arc<PluginRuntime>`.
 ///
-/// Redacción hacia el cliente (security-reviewer M4-P4/P5): un fallo de runtime
-/// puede llevar la ruta del `.wasm` o detalles de wasmtime; JAMÁS se devuelve su
-/// `Display` crudo — `INTERNAL_ERROR` genérico + el detalle SOLO al log local.
+/// Redaction toward the client (security-reviewer M4-P4/P5): a runtime
+/// failure can carry the `.wasm` path or wasmtime details; its raw `Display`
+/// is NEVER returned — a generic `INTERNAL_ERROR` + the detail ONLY to the
+/// local log.
 ///
-/// ABIERTO (no solo-User) A SABIENDAS y ACOPLADO a `fs.read`: este handler lee
-/// el archivo con la autoridad del daemon, igual que `fs.read`, que HOY es
-/// abierto para agentes. Como el preview devuelve una transformación con
-/// pérdida del primer MiB, es lectura estrictamente INFERIOR a la de `fs.read`
-/// crudo (sin escalada; security-reviewer M4-P5). INVARIANTE (cumplida en #80):
-/// `plugin.preview` gatea con el MISMO [`read_gate`] que `fs.read` — un agente
-/// solo previsualiza bajo su scope; si no, sería el bypass de lectura.
-// `skip_all`: `p.path` va a los campos redactados de las capas inferiores, no al
-// span de este handler (mismo criterio que run_command).
+/// OPEN (not User-only) KNOWINGLY and COUPLED to `fs.read`: this handler
+/// reads the file with the daemon's authority, just like `fs.read`, which is
+/// TODAY open to agents. Since the preview returns a lossy transformation of
+/// the first MiB, it is strictly WEAKER a read than raw `fs.read` (no
+/// escalation; security-reviewer M4-P5). INVARIANT (met in #80):
+/// `plugin.preview` gates with the SAME [`read_gate`] as `fs.read` — an agent
+/// only previews under its scope; otherwise it would be a read bypass.
+// `skip_all`: `p.path` goes into the redacted fields of the lower layers, not
+// this handler's span (same criterion as run_command).
 #[tracing::instrument(skip_all)]
 async fn handle_plugin_preview(
     params: Option<serde_json::Value>,
@@ -4058,26 +4152,27 @@ async fn handle_plugin_preview(
     shared: &Arc<Shared>,
 ) -> Result<serde_json::Value, RpcError> {
     let p: methods::PluginPreviewParams = parse_params(params)?;
-    // Gate de lectura (#80): preview LEE el archivo con la autoridad del daemon;
-    // sin este gate un agente sin scope exfiltraría contenido esquivando fs.read.
+    // Read gate (#80): preview READS the file with the daemon's authority;
+    // without this gate a scopeless agent would exfiltrate content by
+    // sidestepping fs.read.
     read_gate(actor, &p.path, shared)?;
-    // El mimetype es `&'static str` (heurística por extensión, no lee bytes).
+    // The mimetype is `&'static str` (extension heuristic, does not read bytes).
     let mime = crate::plugins::guess_mimetype(&p.path);
-    // 1) Resolver bajo el lock (barato). El guard NO cruza el `.await`.
+    // 1) Resolve under the lock (cheap). The guard does NOT cross the `.await`.
     let resolved = {
-        let reg = shared.plugins.lock().expect("plugins lock sano");
+        let reg = shared.plugins.lock().expect("plugins lock is sound");
         reg.resolve_previewer(mime)
     };
     let Some((id, name, wasm, caps, settings)) = resolved else {
-        // Ningún previewer consentido casa el mimetype: NO es error. El
-        // frontend cae a la vista cruda. Los bytes ni se leen.
+        // No consented previewer matches the mimetype: NOT an error. The
+        // frontend falls back to the raw view. The bytes are not even read.
         return to_value(&methods::PluginPreviewResult { preview: None });
     };
 
-    // 2) Leer los bytes ACOTADOS vía el engine (async, fuera del lock). Un
-    // archivo ilegible (NotFound, permisos…) es un error honesto que se propaga,
-    // no un preview silenciosamente vacío. El `len` acota en el provider; se
-    // trunca por si algún provider entrega de más.
+    // 2) Read the CAPPED bytes via the engine (async, outside the lock). An
+    // unreadable file (NotFound, permissions…) is an honest error that
+    // propagates, not a silently empty preview. `len` caps it at the
+    // provider; truncated in case some provider delivers more.
     let range = norte_proto::ByteRange {
         offset: 0,
         len: Some(crate::plugins::PREVIEW_MAX_BYTES),
@@ -4098,29 +4193,30 @@ async fn handle_plugin_preview(
     let cap = usize::try_from(crate::plugins::PREVIEW_MAX_BYTES).unwrap_or(usize::MAX);
     bytes.truncate(cap.min(bytes.len()));
 
-    // 2.5) §6.2 (#29): decodifica a TEXTO como el camino EMBEBIDO
-    // (`Backend::plugin_preview`) — el guest jamás debe asumir UTF-8 sobre
-    // bytes crudos. `lossy` (#101) marca cuándo la decodificación produjo `�`.
-    // (Paridad de comportamiento embebido↔daemon, regla 7 — antes este handler
-    // pasaba los bytes crudos al guest.)
+    // 2.5) §6.2 (#29): decodes to TEXT like the EMBEDDED path
+    // (`Backend::plugin_preview`) — the guest must never assume UTF-8 over
+    // raw bytes. `lossy` (#101) flags when decoding produced `�`. (Embedded↔
+    // daemon behavior parity, rule 7 — this handler used to pass the raw
+    // bytes to the guest.)
     let (content, lossy) = crate::plugins::decode_for_preview(bytes);
 
-    // 3) Ejecutar fuera del lock, en spawn_blocking (regla 2). El runtime es
-    // `Send+Sync` pero no `Clone`: se clona el `Arc`. `mime` es `&'static` → se
-    // mueve tal cual al closure.
+    // 3) Run outside the lock, in spawn_blocking (rule 2). The runtime is
+    // `Send+Sync` but not `Clone`: the `Arc` is cloned. `mime` is `&'static`
+    // → moved as-is into the closure.
     let runtime = Arc::clone(&shared.plugin_runtime);
     let output = crate::blocking::spawn_blocking(move || {
         let mut inst = runtime.instantiate(&wasm, caps)?;
-        // P2 Task 4a: entrega `[config]` YA resuelto (Task 2) al previewer,
-        // igual que `handle_plugin_run_command` ya hace para comandos.
+        // P2 Task 4a: delivers `[config]` ALREADY resolved (Task 2) to the
+        // previewer, just as `handle_plugin_run_command` already does for
+        // commands.
         inst.set_settings(settings);
         inst.render_preview(mime, &content)
     })
     .await
     .map_err(|_| RpcError::protocol(codes::INTERNAL_ERROR, "preview task panicked"))?
     .map_err(|e| {
-        // Redacción: el detalle (posible ruta del .wasm / interno de wasmtime)
-        // va SOLO al log local; al cliente, un mensaje genérico.
+        // Redaction: the detail (possible .wasm path / wasmtime internals)
+        // goes ONLY to the local log; to the client, a generic message.
         tracing::warn!(plugin = %id, error = %e, "preview runtime failed");
         RpcError::protocol(codes::INTERNAL_ERROR, "preview runtime failed")
     })?;
@@ -4134,32 +4230,31 @@ async fn handle_plugin_preview(
     })
 }
 
-/// `plugin.preview_styled` (G3a, ADR 0037): gemelo CON ESTILO de
-/// [`handle_plugin_preview`]. Mismos tres pasos y el mismo gate de lectura
-/// (#80) — ABIERTO como su gemelo plano, previsualizar no consiente nada.
+/// `plugin.preview_styled` (G3a, ADR 0037): STYLED twin of
+/// [`handle_plugin_preview`]. Same three steps and the same read gate (#80) —
+/// OPEN like its plain twin, previewing consents to nothing.
 ///
-/// Difiere del gemelo plano en el paso 3 (ejecución) y en su redacción de
-/// fallos: un fallo del RUNTIME en `render-styled` (trap, error de lógica
-/// del guest, o los topes de la tabla ADR 0037 excedidos vía
-/// `RuntimeError::StyledPreviewTooLarge`) responde `preview: None`, NUNCA
-/// `INTERNAL_ERROR` — el preview con estilo es un ENRIQUECIMIENTO sobre el
-/// plano (ADR 0037: "un cliente re-valida y cae a `plugin.preview` si se
-/// violan [los topes]"; aquí el SERVER ya se adelanta con el mismo criterio
-/// para no obligar a un cliente a distinguir "no hay preview" de "el
-/// preview falló" cuando el resultado observable —caer al plano— es
-/// idéntico). El detalle del fallo va SOLO al log local (igual redacción
-/// que el gemelo plano).
+/// Differs from the plain twin in step 3 (execution) and in its failure
+/// redaction: a RUNTIME failure in `render-styled` (trap, guest logic error,
+/// or the ADR 0037 table's caps exceeded via
+/// `RuntimeError::StyledPreviewTooLarge`) answers `preview: None`, NEVER
+/// `INTERNAL_ERROR` — the styled preview is an ENRICHMENT over the plain one
+/// (ADR 0037: "a client re-validates and falls back to `plugin.preview` if
+/// [the caps] are violated"; here the SERVER already gets ahead with the
+/// same criterion so as not to force a client to distinguish "there is no
+/// preview" from "the preview failed" when the observable outcome — falling
+/// back to plain — is identical). The failure's detail goes ONLY to the
+/// local log (same redaction as the plain twin).
 ///
-/// `role` de cada [`methods::SpanWire`] viaja SIN VALIDAR: `norte-core`
-/// (headless) no depende de `norte-theme` — ver el rustdoc de
-/// [`crate::plugins::to_wire_lines`] y de `Backend::plugin_preview_styled`
-/// para el razonamiento completo de esa frontera.
-/// `plugin.thumbnail` (ADR 0107): el mismo camino que `plugin.preview` —gate
-/// de lectura, resolver bajo el lock, leer ACOTADO fuera de él, correr el
-/// guest en `spawn_blocking`— y una diferencia: un guest que falla NO es un
-/// error del método. Una miniatura es cosmética: «no hay» es la respuesta
-/// honesta, y el visor se queda con lo que tenía. Solo el fichero ilegible
-/// se propaga.
+/// Each [`methods::SpanWire`]'s `role` travels UNVALIDATED: `norte-core`
+/// (headless) does not depend on `norte-theme` — see the rustdoc of
+/// [`crate::plugins::to_wire_lines`] and of `Backend::plugin_preview_styled`
+/// for the full reasoning behind that boundary.
+/// `plugin.thumbnail` (ADR 0107): the same path as `plugin.preview` — read
+/// gate, resolve under the lock, read CAPPED outside it, run the guest in
+/// `spawn_blocking` — and one difference: a failing guest is NOT a method
+/// error. A thumbnail is cosmetic: "there isn't one" is the honest answer,
+/// and the viewer keeps what it had. Only an unreadable file propagates.
 #[tracing::instrument(skip_all)]
 async fn handle_plugin_thumbnail(
     params: Option<serde_json::Value>,
@@ -4170,7 +4265,7 @@ async fn handle_plugin_thumbnail(
     read_gate(actor, &p.path, shared)?;
     let mime = crate::plugins::guess_mimetype(&p.path);
     let resolved = {
-        let reg = shared.plugins.lock().expect("plugins lock sano");
+        let reg = shared.plugins.lock().expect("plugins lock is sound");
         reg.resolve_thumbnailer(mime)
     };
     let Some((id, name, wasm, caps, settings)) = resolved else {
@@ -4225,17 +4320,18 @@ async fn handle_plugin_thumbnail(
     })
 }
 
-/// `plugin.panel_render` (0.74.0, fase 3): el marco que un plugin `panel`
-/// pinta en un hueco del reparto.
+/// `plugin.panel_render` (0.74.0, phase 3): the frame a `panel` plugin paints
+/// into a layout slot.
 ///
-/// Mismo trato que sus gemelos cosméticos: ABIERTO, con gate de lectura sobre
-/// el directorio que el panel acompaña, y SIN MARCO ante cualquier tropiezo
-/// —sin plugin, sin consentimiento, guest roto, atrapado o tardón—, que en el
-/// wire es `{}` y no `null` (el resultado va con `flatten`). Un panel que no
-/// contesta deja el hueco con el último marco que tuviera; no tumba nada.
+/// Same treatment as its cosmetic twins: OPEN, with a read gate over the
+/// directory the panel accompanies, and NO FRAME on any stumble — no plugin,
+/// no consent, broken/trapped/slow guest — which on the wire is `{}` and not
+/// `null` (the result goes with `flatten`). A panel that does not answer
+/// leaves the slot with whatever frame it last had; nothing goes down.
 ///
-/// Lo que el guest LEE de verdad no pasa por aquí: pasa por `norte:location`,
-/// con su prefijo consentido, su presupuesto de llamadas y su auditoría.
+/// What the guest actually READS does not go through here: it goes through
+/// `norte:location`, with its consented prefix, its call budget and its
+/// audit.
 #[tracing::instrument(skip_all)]
 async fn handle_plugin_panel_render(
     params: Option<serde_json::Value>,
@@ -4245,69 +4341,70 @@ async fn handle_plugin_panel_render(
     let p: methods::PluginPanelRenderParams = parse_params(params)?;
     read_gate(actor, &p.dir, shared)?;
     let resolved = {
-        let reg = shared.plugins.lock().expect("plugins lock sano");
+        let reg = shared.plugins.lock().expect("plugins lock is sound");
         reg.resolve_panel(&p.plugin_id, &p.kind)
     };
-    // El tuple entero, sin abrir: lo que hace con él —acuñar la ubicación,
-    // instanciar, pintar— es la MISMA función que usa el backend embebido, y
-    // abrirlo aquí sería empezar a decidir por separado (ADR 0077).
-    let Some(resuelto) = resolved else {
+    // The whole tuple, unopened: what is done with it — minting the
+    // location, instantiating, painting — is the SAME function the embedded
+    // backend uses, and opening it here would mean starting to decide
+    // separately (ADR 0077).
+    let Some(resolved) = resolved else {
         return to_value(&methods::PluginPanelRenderResult { frame: None });
     };
-    let id_para_log = resuelto.0.clone();
+    let log_id = resolved.0.clone();
 
-    // El estado que el guest se guardó la última vez. El wire ya lo trae
-    // decodificado y ACOTADO (`PANEL_MAX_STATE_BYTES` al deserializar): un
-    // estado que no cabe invalida el mensaje entero en vez de llegar hasta
-    // aquí, que es lo que impide que un cliente cualquiera haga que el daemon
-    // decodifique y copie megas al guest.
+    // The state the guest saved last time. The wire already brings it
+    // decoded and CAPPED (`PANEL_MAX_STATE_BYTES` at deserialization): a
+    // state that does not fit invalidates the whole message before it gets
+    // here, which is what stops any client from making the daemon decode and
+    // copy megabytes to the guest.
     let state = p.state.clone().unwrap_or_default();
-    let contexto = norte_plugin_host::panel_iface::PanelContext {
+    let context = norte_plugin_host::panel_iface::PanelContext {
         cols: p.cols,
         rows: p.rows,
         lang: p.lang.clone(),
         cursor_name: p.cursor_name.clone(),
     };
-    let evento = crate::plugins::panel_event_to_host(&p.event);
+    let event = crate::plugins::panel_event_to_host(&p.event);
 
     let runtime = Arc::clone(&shared.plugin_runtime);
     let kind = p.kind.clone();
-    // La raíz de la ubicación es `p.dir` MISMO, no su padre. Columnas sube un
-    // nivel porque lo que le llega son ficheros y necesita el directorio que
-    // los contiene; aquí el parámetro ya ES el directorio, y subir daría al
-    // guest un nivel por encima de lo que el lector está mirando — que es
-    // exactamente el fallo que el gate de columnas documenta (#239).
+    // The location's root is `p.dir` ITSELF, not its parent. Columns goes up
+    // one level because what reaches it are files and it needs the directory
+    // containing them; here the parameter already IS the directory, and
+    // going up would give the guest a level above what the reader is
+    // looking at — exactly the failure the columns gate documents (#239).
     //
-    // Y solo el HUMANO sube a buscar la raíz del proyecto (`.git`): un agente
-    // está acotado a su scope, y trepar por encima es lo que el gate de
-    // lectura impide.
+    // And only the HUMAN climbs to look for the project root (`.git`): an
+    // agent is bounded to its scope, and climbing above it is what the read
+    // gate prevents.
     let dir = p.dir.clone();
     let climb = matches!(actor, Actor::User);
     let outcome = crate::blocking::spawn_blocking(move || {
         crate::plugins::render_panel_blocking(
             &runtime,
-            resuelto,
+            resolved,
             &crate::plugins::PanelCall {
                 dir: &dir,
                 climb,
                 kind: &kind,
-                contexto: &contexto,
+                context: &context,
                 state: &state,
-                evento: &evento,
+                event: &event,
             },
         )
     })
     .await
     .map_err(|_| RpcError::protocol(codes::INTERNAL_ERROR, "panel task panicked"))?;
-    let (id, marco) = match outcome {
+    let (id, frame) = match outcome {
         Ok(f) => f,
         Err(e) => {
-            tracing::warn!(plugin = %id_para_log, error = %e, "panel runtime failed");
+            tracing::warn!(plugin = %log_id, error = %e, "panel runtime failed");
             return to_value(&methods::PluginPanelRenderResult { frame: None });
         }
     };
     to_value(&methods::PluginPanelRenderResult {
-        frame: Some(crate::plugins::panel_frame_to_wire(id, marco)),
+        frame: Some(crate::plugins::panel_frame_to_wire(id, frame)),
     })
 }
 
@@ -4321,7 +4418,7 @@ async fn handle_plugin_preview_styled(
     read_gate(actor, &p.path, shared)?;
     let mime = crate::plugins::guess_mimetype(&p.path);
     let resolved = {
-        let reg = shared.plugins.lock().expect("plugins lock sano");
+        let reg = shared.plugins.lock().expect("plugins lock is sound");
         reg.resolve_previewer(mime)
     };
     let Some((id, name, wasm, caps, settings)) = resolved else {
@@ -4348,8 +4445,8 @@ async fn handle_plugin_preview_styled(
     let cap = usize::try_from(crate::plugins::PREVIEW_MAX_BYTES).unwrap_or(usize::MAX);
     bytes.truncate(cap.min(bytes.len()));
 
-    // §6.2 (#29): decodifica a TEXTO (paridad con el embebido, regla 7);
-    // `lossy` (#101) al frontend para el aviso.
+    // §6.2 (#29): decodes to TEXT (parity with the embedded one, rule 7);
+    // `lossy` (#101) to the frontend for the notice.
     let (content, lossy) = crate::plugins::decode_for_preview(bytes);
 
     let runtime = Arc::clone(&shared.plugin_runtime);
@@ -4371,7 +4468,7 @@ async fn handle_plugin_preview_styled(
             tracing::warn!(
                 plugin = %id,
                 error = %e,
-                "render-styled falló: preview:None (cae a plugin.preview)"
+                "render-styled failed: preview:None (falls back to plugin.preview)"
             );
             return to_value(&methods::PluginPreviewStyledResult { preview: None });
         }
@@ -4386,15 +4483,15 @@ async fn handle_plugin_preview_styled(
     })
 }
 
-/// Gate de LECTURA para agentes sobre un LOTE de rutas (G3b): mismo
-/// criterio que [`read_gate`] aplicado a CADA elemento de `paths`,
-/// cortando en la PRIMERA denegación (fail-fast, no acumula parcial). Un
-/// `Actor::User` sigue sin sandboxear (una sola comprobación barata
-/// bastaría, pero recorrer todas mantiene el código simétrico y no cambia
-/// el resultado); un `Actor::Agent` decora/valora columnas SOLO sobre
-/// entradas que ya podía listar bajo su scope — sin este gate, un agente
-/// fuera de scope podría usar `plugin.decorate`/`plugin.column_values`
-/// como un oráculo de existencia/nombre de rutas ajenas a su sandbox.
+/// READ gate for agents over a BATCH of paths (G3b): same criterion as
+/// [`read_gate`] applied to EACH element of `paths`, cutting at the FIRST
+/// denial (fail-fast, does not accumulate partially). An `Actor::User`
+/// remains unsandboxed (a single cheap check would be enough, but walking
+/// all of them keeps the code symmetric and does not change the result); an
+/// `Actor::Agent` decorates/values columns ONLY over entries it could
+/// already list under its scope — without this gate, an out-of-scope agent
+/// could use `plugin.decorate`/`plugin.column_values` as an
+/// existence/name oracle for paths outside its sandbox.
 fn read_gate_all(
     actor: &Actor,
     paths: &[norte_proto::VPath],
@@ -4406,16 +4503,16 @@ fn read_gate_all(
     Ok(())
 }
 
-/// `plugin.rename_plan` (C3, ADR 0095): el plan que PROPONE el renamer
-/// `renamer_id` del plugin `plugin_id` para `names` en `dir`. Devuelve el
-/// MISMO tipo que `ai.rename_plan`: los frontends lo revisan y lo ejecutan
-/// por `fs.rename_batch_plan` / `fs.rename_batch`, donde están la
-/// comprobación, la política y el journal. Esto no muta nada.
+/// `plugin.rename_plan` (C3, ADR 0095): the plan the `plugin_id` plugin's
+/// `renamer_id` renamer PROPOSES for `names` in `dir`. Returns the SAME type
+/// as `ai.rename_plan`: frontends review it and execute it via
+/// `fs.rename_batch_plan` / `fs.rename_batch`, where the checking, the
+/// policy and the journal live. This mutates nothing.
 ///
-/// Gate de LECTURA sobre `dir` (#80): un agente sin scope no le pasa a un
-/// plugin un directorio que no puede leer, ni recibe un plan que le cuente
-/// qué hay dentro. Sin permiso de ubicación —imposible aquí, porque el
-/// gate ya cerró— el plugin correría sin token.
+/// READ gate over `dir` (#80): a scopeless agent does not hand a plugin a
+/// directory it cannot read, nor receive a plan that tells it what is
+/// inside. Without location permission — impossible here, because the gate
+/// already closed it off — the plugin would run without a token.
 #[tracing::instrument(skip_all)]
 async fn handle_plugin_rename_plan(
     params: Option<serde_json::Value>,
@@ -4424,16 +4521,17 @@ async fn handle_plugin_rename_plan(
 ) -> Result<serde_json::Value, RpcError> {
     let p: methods::PluginRenamePlanParams = parse_params(params)?;
     read_gate(actor, &p.dir, shared)?;
-    // El MISMO tope que `ai.rename_plan`: `names` llega de fuera, y el cap
-    // del guest (`MAX_RENAME_PROPOSALS`) acota lo que SALE, no lo que entra.
+    // The SAME cap as `ai.rename_plan`: `names` comes from outside, and the
+    // guest's cap (`MAX_RENAME_PROPOSALS`) bounds what comes OUT, not what
+    // goes in.
     if p.names.len() > methods::AI_RENAME_NAMES_MAX {
         return Err(RpcError::protocol(
             codes::INVALID_PARAMS,
-            format!("names supera {}", methods::AI_RENAME_NAMES_MAX),
+            format!("names exceeds {}", methods::AI_RENAME_NAMES_MAX),
         ));
     }
     let resolved = {
-        let reg = shared.plugins.lock().expect("plugins lock sano");
+        let reg = shared.plugins.lock().expect("plugins lock is sound");
         reg.resolve_renamer(&p.plugin_id, &p.renamer_id)
     };
     let Some(resolved) = resolved else {
@@ -4442,25 +4540,26 @@ async fn handle_plugin_rename_plan(
     let runtime = Arc::clone(&shared.plugin_runtime);
     let climb = matches!(actor, Actor::User);
     let (plugin_id, renamer_id, dir, names) = (p.plugin_id, p.renamer_id, p.dir, p.names);
-    let salida = crate::blocking::spawn_blocking(move || {
+    let output = crate::blocking::spawn_blocking(move || {
         crate::plugins::run_rename_plan(&runtime, resolved, &renamer_id, Some(&dir), climb, &names)
     })
     .await
     .map_err(|_| RpcError::protocol(codes::INTERNAL_ERROR, "rename plan task panicked"))?;
-    match salida {
+    match output {
         crate::plugins::RenamePlanOutcome::Plan(entries) => {
             to_value(&methods::AiRenamePlanResult {
                 entries,
                 refused: None,
             })
         }
-        // Rehusar no es un error (#332): plan vacío con motivo. La frase es
-        // de un tercero: enmascarada y acotada ANTES de cruzar el wire.
-        crate::plugins::RenamePlanOutcome::Refused(frase) => {
-            tracing::info!(plugin = %plugin_id, motivo = %frase, "renamer: rehusó");
+        // Refusing is not an error (#332): an empty plan with a reason. The
+        // phrase belongs to a third party: masked and capped BEFORE crossing
+        // the wire.
+        crate::plugins::RenamePlanOutcome::Refused(phrase) => {
+            tracing::info!(plugin = %plugin_id, motivo = %phrase, "renamer: refused");
             to_value(&methods::AiRenamePlanResult {
                 entries: Vec::new(),
-                refused: Some(crate::plugins::guest_reason(&frase)),
+                refused: Some(crate::plugins::guest_reason(&phrase)),
             })
         }
         crate::plugins::RenamePlanOutcome::Failed => {
@@ -4469,8 +4568,8 @@ async fn handle_plugin_rename_plan(
     }
 }
 
-/// `plugin.organize_plan` (0.77.0, fase 8): el plan de un plugin del kind
-/// `organizer`. Mismas puertas que el del renamer, y una respuesta más.
+/// `plugin.organize_plan` (0.77.0, phase 8): the plan of an `organizer`-kind
+/// plugin. Same gates as the renamer's, plus one more response.
 async fn handle_plugin_organize_plan(
     params: Option<serde_json::Value>,
     actor: &Actor,
@@ -4481,11 +4580,11 @@ async fn handle_plugin_organize_plan(
     if p.names.len() > methods::AI_RENAME_NAMES_MAX {
         return Err(RpcError::protocol(
             codes::INVALID_PARAMS,
-            format!("names supera {}", methods::AI_RENAME_NAMES_MAX),
+            format!("names exceeds {}", methods::AI_RENAME_NAMES_MAX),
         ));
     }
     let resolved = {
-        let reg = shared.plugins.lock().expect("plugins lock sano");
+        let reg = shared.plugins.lock().expect("plugins lock is sound");
         reg.resolve_organizer(&p.plugin_id, &p.organizer_id)
     };
     let Some(resolved) = resolved else {
@@ -4494,10 +4593,10 @@ async fn handle_plugin_organize_plan(
     let runtime = Arc::clone(&shared.plugin_runtime);
     let climb = matches!(actor, Actor::User);
     let (plugin_id, organizer_id, dir, names) = (p.plugin_id, p.organizer_id, p.dir, p.names);
-    // El plan se ata a ESTE directorio, y el spawn se lleva el suyo: el token
-    // tiene que salir del mismo dir que se le pasó al plugin.
-    let del_plan = dir.clone();
-    let salida = crate::blocking::spawn_blocking(move || {
+    // The plan is tied to THIS directory, and the spawn takes its own: the
+    // token has to come from the same dir passed to the plugin.
+    let plan_dir = dir.clone();
+    let output = crate::blocking::spawn_blocking(move || {
         crate::plugins::run_organize_plan(
             &runtime,
             resolved,
@@ -4509,15 +4608,15 @@ async fn handle_plugin_organize_plan(
     })
     .await
     .map_err(|_| RpcError::protocol(codes::INTERNAL_ERROR, "organize plan task panicked"))?;
-    match salida {
+    match output {
         crate::plugins::OrganizePlanOutcome::Plan(moves) => {
-            // El token viaja CON el plan, igual que en `ai.organize_plan`: el
-            // plan de un plugin y el de un modelo se aprueban por el mismo
-            // camino, y eso incluye cómo se canjean.
+            // The token travels WITH the plan, same as in `ai.organize_plan`:
+            // a plugin's plan and a model's are approved through the same
+            // path, and that includes how they get redeemed.
             let plan_hash = if moves.is_empty() {
                 None
             } else {
-                Some(crate::organize::plan_hash(&del_plan, &moves).map_err(RpcError::from)?)
+                Some(crate::organize::plan_hash(&plan_dir, &moves).map_err(RpcError::from)?)
             };
             to_value(&methods::AiOrganizePlanResult {
                 moves,
@@ -4525,17 +4624,17 @@ async fn handle_plugin_organize_plan(
                 plan_hash,
             })
         }
-        crate::plugins::OrganizePlanOutcome::Refused(frase) => {
-            tracing::info!(plugin = %plugin_id, motivo = %frase, "organizer: rehusó");
+        crate::plugins::OrganizePlanOutcome::Refused(phrase) => {
+            tracing::info!(plugin = %plugin_id, motivo = %phrase, "organizer: refused");
             to_value(&methods::AiOrganizePlanResult {
                 moves: Vec::new(),
-                refused: Some(crate::plugins::guest_reason(&frase)),
+                refused: Some(crate::plugins::guest_reason(&phrase)),
                 plan_hash: None,
             })
         }
-        // Proponer una escritura fuera del directorio no es un fallo de E/S y
-        // no se cuenta como uno: es `InvalidPath`, que es exactamente lo que
-        // pasó, y el operador tiene el id del plugin en la traza.
+        // Proposing a write outside the directory is not an I/O failure and
+        // is not counted as one: it is `InvalidPath`, exactly what happened,
+        // and the operator has the plugin's id in the trace.
         crate::plugins::OrganizePlanOutcome::Escapes => {
             Err(RpcError::from(norte_proto::Error::InvalidPath))
         }
@@ -4545,34 +4644,37 @@ async fn handle_plugin_organize_plan(
     }
 }
 
-/// La ubicación que se le acuña a un plugin de columnas: el directorio padre
-/// de la página, **si el actor podría leerlo él mismo** (#239).
+/// The location minted for a columns plugin: the page's parent directory,
+/// **if the actor could read it itself** (#239).
 ///
-/// Función aparte y con el permiso como predicado por lo mismo que
-/// `send_to_conn_impl`: la decisión se prueba sin levantar un `Shared`, y lo
-/// que hay que fijar es que el padre pasa por una puerta —antes no pasaba por
-/// ninguna, y el comentario del handler afirmaba lo contrario.
-fn location_permitida(
-    primero: Option<&norte_proto::VPath>,
-    permitido: impl Fn(&norte_proto::VPath) -> bool,
+/// A separate function with the permission as a predicate, for the same
+/// reason as `send_to_conn_impl`: the decision is testable without standing
+/// up a `Shared`, and what needs pinning down is that the parent goes
+/// through a gate — it used to go through none, and the handler's comment
+/// claimed the opposite.
+fn permitted_location(
+    first: Option<&norte_proto::VPath>,
+    allowed: impl Fn(&norte_proto::VPath) -> bool,
 ) -> Option<norte_proto::VPath> {
-    let padre = primero.and_then(norte_proto::VPath::parent)?;
-    permitido(&padre).then_some(padre)
+    let parent = first.and_then(norte_proto::VPath::parent)?;
+    allowed(&parent).then_some(parent)
 }
 
-/// `plugin.decorate` (G3b, ADR 0037 decisión 2): la SUPERPOSICIÓN de TODOS
-/// los plugins `decorator` APROBADOS y ACTIVADOS sobre `params.paths`
-/// (batched, POSICIONAL 1:1 — ver el rustdoc de
-/// [`norte_proto::methods::PluginDecorateResult`]). ABIERTO como sus
-/// gemelos `plugin.preview*` (decorar no consiente nada) pero con el MISMO
-/// gate de lectura (#80) que ellos, extendido a TODO el lote
-/// ([`read_gate_all`]): sin él, un agente exfiltraría existencia/nombres de
-/// rutas fuera de su scope pidiendo decoraciones sobre ellas.
+/// `plugin.decorate` (G3b, ADR 0037 decision 2): the OVERLAY of ALL APPROVED
+/// and ENABLED `decorator` plugins over `params.paths` (batched,
+/// POSITIONAL 1:1 — see the rustdoc of
+/// [`norte_proto::methods::PluginDecorateResult`]). OPEN like its
+/// `plugin.preview*` twins (decorating consents to nothing) but with the
+/// SAME read gate (#80) as them, extended to the WHOLE batch
+/// ([`read_gate_all`]): without it, an agent would exfiltrate the
+/// existence/names of paths outside its scope by asking for decorations
+/// over them.
 ///
-/// Fail-closed POR PLUGIN (nunca por lote): un plugin que no instancia,
-/// trapea, o rompe el contrato posicional se OMITE del resultado con aviso
-/// en el log local — el resto de la página se pinta igual. `params.paths`
-/// vacío responde `{plugins: []}` sin resolver el catálogo.
+/// Fail-closed PER PLUGIN (never per batch): a plugin that fails to
+/// instantiate, traps, or breaks the positional contract is OMITTED from the
+/// result with a warning in the local log — the rest of the page still gets
+/// painted. Empty `params.paths` answers `{plugins: []}` without resolving
+/// the catalogue.
 #[tracing::instrument(skip_all)]
 async fn handle_plugin_decorate(
     params: Option<serde_json::Value>,
@@ -4586,8 +4688,8 @@ async fn handle_plugin_decorate(
             plugins: Vec::new(),
         });
     }
-    // Corto o vacío es un cliente 0.71 y vale; MÁS largo es un cliente roto,
-    // y truncarlo en silencio escondería el error para siempre.
+    // Short or empty is a 0.71 client and is fine; LONGER is a broken client,
+    // and silently truncating it would hide the error forever.
     if p.kinds.len() > p.paths.len() {
         return Err(RpcError::protocol(
             codes::INVALID_PARAMS,
@@ -4597,7 +4699,7 @@ async fn handle_plugin_decorate(
     let expected_len = p.paths.len();
     let entries = crate::plugins::paths_to_entries(&p.paths, &p.kinds);
     let resolved = {
-        let reg = shared.plugins.lock().expect("plugins lock sano");
+        let reg = shared.plugins.lock().expect("plugins lock is sound");
         reg.resolve_decorators()
     };
     let runtime = Arc::clone(&shared.plugin_runtime);
@@ -4605,19 +4707,19 @@ async fn handle_plugin_decorate(
         let mut out = Vec::new();
         for ((id, _name, wasm, caps, settings), slot) in resolved {
             let Ok(mut inst) = runtime.instantiate_decorator(&wasm, caps) else {
-                tracing::warn!(plugin = %id, "decorator: fallo al instanciar, se omite del lote");
+                tracing::warn!(plugin = %id, "decorator: failed to instantiate, omitted from the batch");
                 continue;
             };
             inst.set_settings(settings);
             let Ok(raw) = inst.decorate(&entries) else {
-                tracing::warn!(plugin = %id, "decorator: fallo al ejecutar decorate, se omite del lote");
+                tracing::warn!(plugin = %id, "decorator: failed to run decorate, omitted from the batch");
                 continue;
             };
             let Some(decorations) = crate::plugins::decorations_to_wire_checked(raw, expected_len)
             else {
                 tracing::warn!(
                     plugin = %id,
-                    "decorator: longitud no casa el contrato posicional, se omite del lote"
+                    "decorator: length does not match the positional contract, omitted from the batch"
                 );
                 continue;
             };
@@ -4634,15 +4736,15 @@ async fn handle_plugin_decorate(
     to_value(&methods::PluginDecorateResult { plugins })
 }
 
-/// `plugin.column_values` (G3b, ADR 0037 decisión 2): valores de la columna
-/// `params.column_id` para `params.paths`, del ÚNICO plugin `columns` que
-/// la declara ([`crate::PluginRegistry::resolve_columns`], primero-que-casa
-/// — a diferencia de `plugin.decorate`). Mismo gate de lectura por lote y
-/// mismo contrato de entradas (basenames) que `handle_plugin_decorate`.
+/// `plugin.column_values` (G3b, ADR 0037 decision 2): values for the
+/// `params.column_id` column for `params.paths`, from the SINGLE `columns`
+/// plugin that declares it ([`crate::PluginRegistry::resolve_columns`],
+/// first-to-match — unlike `plugin.decorate`). Same per-batch read gate and
+/// same entry contract (basenames) as `handle_plugin_decorate`.
 ///
-/// Fail-closed: si el plugin no instancia, trapea, o rompe el contrato
-/// posicional, el resultado es un vector de `None` del tamaño de
-/// `params.paths` (celda vacía para toda la página) en vez de un error.
+/// Fail-closed: if the plugin fails to instantiate, traps, or breaks the
+/// positional contract, the result is a vector of `None` the size of
+/// `params.paths` (an empty cell for the whole page) instead of an error.
 #[tracing::instrument(skip_all)]
 async fn handle_plugin_column_values(
     params: Option<serde_json::Value>,
@@ -4657,9 +4759,9 @@ async fn handle_plugin_column_values(
     let expected_len = p.paths.len();
     let entries = crate::plugins::paths_to_basenames(&p.paths);
     let resolved = {
-        let reg = shared.plugins.lock().expect("plugins lock sano");
-        // `plugin_id` presente = ESE plugin o ninguno (#120). Ausente = cliente
-        // 0.34: se conserva el primero-que-case de antes.
+        let reg = shared.plugins.lock().expect("plugins lock is sound");
+        // `plugin_id` present = THAT plugin or none (#120). Absent = a 0.34
+        // client: the old first-to-match is kept.
         reg.resolve_columns_of(p.plugin_id.as_deref(), &p.column_id)
     };
     let Some(resolved) = resolved else {
@@ -4669,29 +4771,31 @@ async fn handle_plugin_column_values(
     };
     let runtime = Arc::clone(&shared.plugin_runtime);
     let column_id = p.column_id;
-    // La UBICACIÓN es el directorio padre de la página (ADR 0057), y **pasa su
-    // propio gate de lectura** (#239).
+    // The LOCATION is the page's parent directory (ADR 0057), and **it goes
+    // through its own read gate** (#239).
     //
-    // El comentario que había aquí decía que el padre venía gatado «de arriba»
-    // porque los paths lo estaban. No es verdad: `read_gate_all` mira los
-    // PATHS, y el padre de un path en scope puede estar fuera. Y una raíz de
-    // scope está en su propio scope —hay un test que lo fija—, así que un
-    // agente con scope sobre `file:///home/u/work` pedía columnas SOBRE esa
-    // raíz y el plugin recibía una raíz confinada sobre `file:///home/u`: el
-    // home entero, un nivel por encima de su sandbox, y sin necesidad de la
-    // subida al marcador (que ya iba desactivada para agentes). Con un scope
-    // que apunta a un fichero suelto, el directorio que lo contiene.
+    // The comment that used to be here said the parent came gated "from
+    // above" because the paths were. Not true: `read_gate_all` looks at the
+    // PATHS, and a path's parent within scope can be outside it. And a scope
+    // root is within its own scope — a test pins this down — so an agent
+    // with scope over `file:///home/u/work` would ask for columns OVER that
+    // root and the plugin would receive a root confined to
+    // `file:///home/u`: the whole home, one level above its sandbox, with no
+    // need for the climb to a marker (which was already disabled for
+    // agents). With a scope pointing at a bare file, the directory
+    // containing it.
     //
-    // Sin permiso NO se acuña: el plugin corre sin ubicación y su columna sale
-    // en blanco. Es una degradación honesta — negar la llamada entera
-    // convertiría la columna en un oráculo de qué directorios existen fuera
-    // del scope, que es justo la fuga que este gate cierra.
-    let location = location_permitida(p.paths.first(), |padre| {
-        let permitido = read_gate(actor, padre, shared).is_ok();
-        if !permitido {
-            tracing::debug!("ubicación fuera de scope: el plugin corre sin ella");
+    // Without permission it is NOT minted: the plugin runs with no location
+    // and its column comes out blank. This is an honest degradation — denying
+    // the whole call would turn the column into an oracle of which
+    // directories exist outside the scope, exactly the leak this gate
+    // closes.
+    let location = permitted_location(p.paths.first(), |parent| {
+        let allowed = read_gate(actor, parent, shared).is_ok();
+        if !allowed {
+            tracing::debug!("location outside scope: the plugin runs without it");
         }
-        permitido
+        allowed
     });
     let climb = matches!(actor, Actor::User);
     let pool = Arc::clone(&shared.column_pool);
@@ -4701,9 +4805,9 @@ async fn handle_plugin_column_values(
             resolved,
             &column_id,
             location.as_ref(),
-            // Solo el humano sube a buscar la raíz del proyecto: un agente o
-            // un plugin están acotados a su scope, y subir por encima de él es
-            // exactamente lo que el gate de lectura impide.
+            // Only the human climbs to look for the project root: an agent
+            // or a plugin are bounded to their scope, and climbing above it
+            // is exactly what the read gate prevents.
             climb,
             &entries,
             expected_len,
@@ -4714,13 +4818,13 @@ async fn handle_plugin_column_values(
     to_value(&methods::PluginColumnValuesResult { values })
 }
 
-/// `plugin.get_config` (0.28.0, G3c, ADR 0037): esquema `[config]` + valor
-/// EFECTIVO de `id`, uno por clave. ABIERTO a cualquier conexión (leer un
-/// esquema/valor no consiente nada, mismo criterio que `plugin.preview*`/
-/// `plugin.decorate`). `id` desconocido responde `keys: []` (mismo criterio
-/// indulgente que `plugin.list` con un catálogo vacío — nunca un error).
-/// Barato: solo lee bajo el lock, sin `spawn_blocking` (a diferencia de
-/// `plugin.decorate`/`column_values`, que instancian WASM).
+/// `plugin.get_config` (0.28.0, G3c, ADR 0037): `[config]` schema + EFFECTIVE
+/// value of `id`, one per key. OPEN to any connection (reading a
+/// schema/value consents to nothing, same criterion as `plugin.preview*`/
+/// `plugin.decorate`). An unknown `id` answers `keys: []` (same lenient
+/// criterion as `plugin.list` with an empty catalogue — never an error).
+/// Cheap: only reads under the lock, no `spawn_blocking` (unlike
+/// `plugin.decorate`/`column_values`, which instantiate WASM).
 #[tracing::instrument(skip_all)]
 async fn handle_plugin_get_config(
     params: Option<serde_json::Value>,
@@ -4728,7 +4832,7 @@ async fn handle_plugin_get_config(
 ) -> Result<serde_json::Value, RpcError> {
     let p: methods::PluginGetConfigParams = parse_params(params)?;
     let keys = {
-        let reg = shared.plugins.lock().expect("plugins lock sano");
+        let reg = shared.plugins.lock().expect("plugins lock is sound");
         reg.config_keys(&p.id).unwrap_or_default()
     };
     let keys = keys
@@ -4738,36 +4842,38 @@ async fn handle_plugin_get_config(
     to_value(&methods::PluginGetConfigResult { keys })
 }
 
-/// `plugin.help` (H3e, 0.34.0): la página de ayuda de un plugin, para CUALQUIER
-/// conexión — mismo criterio que `plugin.list`/`plugin.get_config`: leer
-/// documentación no consiente nada.
+/// `plugin.help` (H3e, 0.34.0): a plugin's help page, for ANY connection —
+/// same criterion as `plugin.list`/`plugin.get_config`: reading documentation
+/// consents to nothing.
 ///
-/// El `id` es una CLAVE contra el catálogo, jamás un componente de ruta
-/// (`PluginRegistry` lo resuelve contra los plugins descubiertos), así que un
-/// id con `../` falla el lookup en vez de salir del directorio. Un id
-/// desconocido es `INVALID_PARAMS`, mismo trato que `plugin.set_approval` da a
-/// un plugin fantasma.
+/// The `id` is a KEY against the catalogue, never a path component
+/// (`PluginRegistry` resolves it against discovered plugins), so an id with
+/// `../` fails the lookup instead of leaving the directory. An unknown id is
+/// `INVALID_PARAMS`, the same treatment `plugin.set_approval` gives a phantom
+/// plugin.
 ///
-/// Ni un solo syscall bajo el lock: aquí hay un fichero de hasta
-/// [`methods::PLUGIN_HELP_MAX_BYTES`] que puede vivir en un montaje lento u
-/// hostil, y tanto la guarda de escape (tres syscalls) como la lectura dentro
-/// del handler async sosteniendo el `std::Mutex` del registro violarían la regla
-/// 2 y encolarían a todas las demás conexiones detrás. Por eso el lock solo
-/// resuelve el id contra el catálogo —memoria pura— y devuelve un
-/// `HelpJob` OPACO; verificar y leer ocurre en `spawn_blocking`, con el lock ya
-/// soltado. El trabajo es opaco a propósito: este handler nunca llega a tener
-/// una ruta que pudiera re-derivar del id del wire.
-// `skip_all` SIN el id: viene crudo del wire y no debe llegar al log antes de
-// validarse contra el catálogo (mismo criterio que `handle_plugin_set_approval`).
+/// Not a single syscall under the lock: here there is a file of up to
+/// [`methods::PLUGIN_HELP_MAX_BYTES`] that can live on a slow or hostile
+/// mount, and both the escape guard (three syscalls) and reading inside the
+/// async handler while holding the registry's `std::Mutex` would violate
+/// rule 2 and queue up every other connection behind it. That is why the
+/// lock only resolves the id against the catalogue — pure memory — and
+/// returns an OPAQUE `HelpJob`; verifying and reading happen in
+/// `spawn_blocking`, with the lock already released. The job is opaque on
+/// purpose: this handler never gets to hold a path that could be re-derived
+/// from the wire id.
+// `skip_all` WITHOUT the id: it comes raw off the wire and must not reach the
+// log before being validated against the catalogue (same criterion as
+// `handle_plugin_set_approval`).
 #[tracing::instrument(skip_all)]
 async fn handle_plugin_help(
     params: Option<serde_json::Value>,
     shared: &Arc<Shared>,
 ) -> Result<serde_json::Value, RpcError> {
     let p: methods::PluginHelpParams = parse_params(params)?;
-    // El lock se libera al cerrar el bloque, ANTES de cualquier `.await`.
+    // The lock is released when the block closes, BEFORE any `.await`.
     let job = {
-        let reg = shared.plugins.lock().expect("plugins lock sano");
+        let reg = shared.plugins.lock().expect("plugins lock is sound");
         reg.help_job(&p.id)
     };
     let Some(job) = job else {
@@ -4776,26 +4882,25 @@ async fn handle_plugin_help(
             "unknown plugin id",
         ));
     };
-    // `HelpJob::read` es también quien TOPA la lectura (`max_bytes + 1`): un
-    // `help.md` disperso de 100 GiB no puede convertir esta llamada en una
-    // reserva de 100 GiB. Ver su rustdoc.
+    // `HelpJob::read` is also what CAPS the read (`max_bytes + 1`): a sparse
+    // 100 GiB `help.md` cannot turn this call into a 100 GiB allocation. See
+    // its rustdoc.
     let page = crate::blocking::spawn_blocking(move || job.read())
         .await
         .map_err(|_| RpcError::protocol(codes::INTERNAL_ERROR, "plugin help task panicked"))?;
     to_value(&page)
 }
 
-/// `plugin.set_config` (0.28.0, G3c, ADR 0037): persiste UN valor de
-/// `[config]`, validado contra el ESQUEMA del manifiesto (la MISMA
-/// validación que `config.toml`, vía `PluginRegistry::set_config`). Ajustes
-/// de plugin son DATOS DE USUARIO, no un acto de consentimiento de
-/// capabilities — pero SIGUE siendo humano-only (mismo criterio que
-/// [`handle_plugin_set_approval`]/[`handle_plugin_set_enabled`]: un agente
-/// no reconfigura un plugin por su cuenta). Un id/clave desconocidos o un
-/// valor inválido son `INVALID_PARAMS`; NADA se persiste en ese caso
-/// (`PluginRegistry::set_config` valida ANTES de escribir).
-// `skip_all` sin `id`/`key`: crudos del wire, no validados aún (mismo
-// criterio que set_approval/set_enabled — solo se loguean tras confirmar).
+/// `plugin.set_config` (0.28.0, G3c, ADR 0037): persists ONE `[config]`
+/// value, validated against the manifest's SCHEMA (the SAME validation as
+/// `config.toml`, via `PluginRegistry::set_config`). Plugin settings are USER
+/// DATA, not a capabilities-consent act — but it REMAINS human-only (same
+/// criterion as [`handle_plugin_set_approval`]/[`handle_plugin_set_enabled`]:
+/// an agent does not reconfigure a plugin on its own). An unknown id/key or
+/// an invalid value are `INVALID_PARAMS`; NOTHING is persisted in that case
+/// (`PluginRegistry::set_config` validates BEFORE writing).
+// `skip_all` without `id`/`key`: raw off the wire, not yet validated (same
+// criterion as set_approval/set_enabled — only logged after confirming).
 #[tracing::instrument(skip_all)]
 async fn handle_plugin_set_config(
     actor: &Actor,
@@ -4811,50 +4916,50 @@ async fn handle_plugin_set_config(
     let id = p.id.clone();
     let key = p.key.clone();
     let value = p.value.clone();
-    // El lock se sostiene DURANTE la escritura (a diferencia de
-    // set_approval/set_enabled, que lo sueltan antes de persistir):
-    // deliberado — serializa el read-modify-write de `config.toml` para
-    // ESTE plugin frente a un `set_config` concurrente sobre otra clave del
-    // mismo plugin, que si no podría perder una escritura (dos
-    // lecturas-modificaciones-escrituras de `config.toml` entrelazadas).
-    // Sigue corriendo en `spawn_blocking` (regla 2: la escritura + el
-    // re-`resolve_settings` son I/O síncrona), así que el reactor async
-    // nunca bloquea — solo un hilo de la pool bloqueante sostiene el lock.
+    // The lock is held DURING the write (unlike set_approval/set_enabled,
+    // which release it before persisting): deliberate — it serializes
+    // `config.toml`'s read-modify-write for THIS plugin against a concurrent
+    // `set_config` on another key of the same plugin, which without it could
+    // lose a write (two interleaved read-modify-writes of `config.toml`).
+    // Still runs in `spawn_blocking` (rule 2: the write + the
+    // re-`resolve_settings` are synchronous I/O), so the async reactor never
+    // blocks — only a thread from the blocking pool holds the lock.
     let shared = Arc::clone(shared);
     crate::blocking::spawn_blocking(move || {
-        let mut reg = shared.plugins.lock().expect("plugins lock sano");
+        let mut reg = shared.plugins.lock().expect("plugins lock is sound");
         reg.set_config(&id, &key, &value)
     })
     .await
     .map_err(|_| RpcError::protocol(codes::INTERNAL_ERROR, "set_config task panicked"))?
     .map_err(|e| RpcError::protocol(codes::INVALID_PARAMS, e.to_string()))?;
-    tracing::info!(id = %p.id, key = %p.key, "ajuste de plugin cambiado por el humano");
+    tracing::info!(id = %p.id, key = %p.key, "plugin setting changed by the human");
     to_value(&methods::PluginSetConfigResult {})
 }
 
-/// Instante de expiración de un scope a partir de su `ttl_ms`: clamp a
-/// `[1, MAX_SCOPE_TTL_MS]` (ni 0 = ya-expirado inútil, ni cuasi-perpetuo) y
-/// suma saturante (jamás panica por overflow del reloj).
+/// Expiration instant of a scope from its `ttl_ms`: clamped to
+/// `[1, MAX_SCOPE_TTL_MS]` (neither 0 = a useless already-expired one, nor
+/// near-perpetual) and saturating addition (never panics on clock overflow).
 fn scope_deadline(ttl_ms: u64) -> Instant {
     let ms = ttl_ms.clamp(1, MAX_SCOPE_TTL_MS);
     let now = Instant::now();
     now.checked_add(Duration::from_millis(ms)).unwrap_or(now)
 }
 
-/// Gate de LECTURA para agentes (cierra #80). Fuente ÚNICA del criterio que
-/// hoy consultan `fs.list`/`fs.read`/`fs.stat`/`fs.capabilities` y `fs.search`:
-/// un `Actor::Agent` solo lee bajo un scope VIVO de su sesión
-/// ([`ScopeRegistry::covers_read`], membresía de raíz independiente de op —
-/// leer es estrictamente menos que cualquier mutación); un `User` (humano) no
-/// se sandboxea; CUALQUIER otro actor (`Plugin` hoy, o variantes futuras) se
-/// deniega SIN excepción (default-deny para lo que aún no sabemos gobernar; de
-/// ahí el `allow` del lint —nombrar `Plugin` dejaría pasar sin gate una
-/// variante futura—). El veredicto es `PolicyDenied` con la categoría gruesa
-/// del vocabulario cerrado ([`DenyReason::rule_id`]), jamás la regla concreta
-/// ni el `path` (sin fuga en el error ni en la traza de auditoría M3-5).
+/// READ gate for agents (closes #80). SOLE source of the criterion
+/// `fs.list`/`fs.read`/`fs.stat`/`fs.capabilities` and `fs.search` all
+/// consult today: an `Actor::Agent` only reads under a LIVE scope of its
+/// session ([`ScopeRegistry::covers_read`], root membership independent of
+/// op — reading is strictly less than any mutation); a `User` (human) is not
+/// sandboxed; ANY other actor (`Plugin` today, or future variants) is denied
+/// WITHOUT exception (default-deny for what we do not yet know how to
+/// govern; hence the lint's `allow` — naming `Plugin` would let a future
+/// variant through ungated). The verdict is `PolicyDenied` with the coarse
+/// category from the closed vocabulary ([`DenyReason::rule_id`]), never the
+/// specific rule nor the `path` (no leak in the error nor in the M3-5 audit
+/// trace).
 ///
-/// Simétrico con el gate de MUTACIONES de M3 (`Engine::gate`): la IA es un
-/// ciudadano, no un dueño (spec §1.5).
+/// Symmetric with M3's MUTATION gate (`Engine::gate`): the AI is a citizen,
+/// not an owner (spec §1.5).
 fn read_gate(
     actor: &Actor,
     path: &norte_proto::VPath,
@@ -4863,7 +4968,7 @@ fn read_gate(
     use crate::policy::{DenyReason, ScopeVerdict};
     #[expect(
         clippy::match_wildcard_for_single_variants,
-        reason = "las variantes agrupadas se leen mejor que enumeradas"
+        reason = "the grouped variants read better than enumerated"
     )]
     let denied: Option<DenyReason> = match actor {
         Actor::User => None,
@@ -4877,11 +4982,11 @@ fn read_gate(
         _ => Some(DenyReason::OutOfScope),
     };
     if let Some(reason) = denied {
-        // Trazable (auditoría M3-5), como el gate de mutaciones. Solo la
-        // categoría gruesa y el actor: jamás el path denegado.
+        // Traceable (M3-5 audit), like the mutation gate. Only the coarse
+        // category and the actor: never the denied path.
         tracing::warn!(
             rule = reason.rule_id(),
-            "lectura sin scope: denegada (default-deny)"
+            "read with no scope: denied (default-deny)"
         );
         return Err(RpcError::from(norte_proto::Error::PolicyDenied {
             rule: reason.rule_id().to_owned(),
@@ -4890,18 +4995,19 @@ fn read_gate(
     Ok(())
 }
 
-/// Gate de CONTENIDO para agentes (`fs.compare` con el rung de hash, C6):
-/// [`read_gate`] más la exigencia de que el scope conceda una op que maneje
-/// BYTES ([`ScopeRegistry::covers_content`](crate::policy::ScopeRegistry::covers_content)).
+/// CONTENT gate for agents (`fs.compare` with the hash rung, C6):
+/// [`read_gate`] plus the requirement that the scope grant an op that
+/// handles BYTES ([`ScopeRegistry::covers_content`](crate::policy::ScopeRegistry::covers_content)).
 ///
-/// Se aplica ADEMÁS del gate de lectura, jamás en su lugar: la lectura decide
-/// si el actor puede mirar el subtree, esta decide si puede hacer que UNA
-/// llamada lea los dos árboles ENTEROS. Un `User` (humano) no se sandboxea y
-/// cualquier actor que no sea `User`/`Agent` se deniega, igual que allí.
+/// Applied IN ADDITION to the read gate, never instead of it: reading
+/// decides whether the actor can look at the subtree, this one decides
+/// whether it can make ONE call read both trees WHOLE. A `User` (human) is
+/// not sandboxed and any actor other than `User`/`Agent` is denied, same as
+/// there.
 ///
-/// El veredicto es el mismo `PolicyDenied` con la categoría gruesa: quien
-/// pide de más no se entera de qué puerta le faltaba, solo de que le falta
-/// scope (sin fuga en el error ni en la traza).
+/// The verdict is the same `PolicyDenied` with the coarse category: whoever
+/// asks for too much does not find out which gate it was missing, only that
+/// it lacks scope (no leak in the error nor the trace).
 fn content_gate(
     actor: &Actor,
     path: &norte_proto::VPath,
@@ -4910,7 +5016,7 @@ fn content_gate(
     use crate::policy::{DenyReason, ScopeVerdict};
     #[expect(
         clippy::match_wildcard_for_single_variants,
-        reason = "las variantes agrupadas se leen mejor que enumeradas"
+        reason = "the grouped variants read better than enumerated"
     )]
     let denied: Option<DenyReason> = match actor {
         Actor::User => None,
@@ -4926,7 +5032,7 @@ fn content_gate(
     if let Some(reason) = denied {
         tracing::warn!(
             rule = reason.rule_id(),
-            "lectura de CONTENIDO sin scope: denegada (default-deny)"
+            "CONTENT read with no scope: denied (default-deny)"
         );
         return Err(RpcError::from(norte_proto::Error::PolicyDenied {
             rule: reason.rule_id().to_owned(),
@@ -4935,16 +5041,16 @@ fn content_gate(
     Ok(())
 }
 
-/// `connection.close` (0.49.0, #140): suelta la sesión remota de una ruta.
+/// `connection.close` (0.49.0, #140): releases a path's remote session.
 ///
-/// Gate de LECTURA sobre la ruta, que es el mismo criterio que para mirarla:
-/// cerrar una conexión no destruye datos —la siguiente operación reconecta—
-/// pero sí interrumpe a quien la estuviera usando, y quien no puede ni leer ahí
-/// no tiene por qué poder hacer eso.
+/// READ gate over the path, the same criterion as for looking at it: closing
+/// a connection destroys no data — the next operation reconnects — but it
+/// does interrupt whoever was using it, and whoever cannot even read there
+/// has no reason to be able to do that.
 ///
-/// SOLO humanos: desconectar es una decisión de quien está delante. Un agente
-/// que pudiera cerrar la sesión de su humano tendría una palanca de denegación
-/// de servicio gratis, sin que le sirva para nada de lo suyo.
+/// Humans ONLY: disconnecting is a decision for whoever is in front of the
+/// screen. An agent that could close its human's session would have a free
+/// denial-of-service lever, with no use for any of its own work.
 #[tracing::instrument(skip_all, fields(actor = ?actor))]
 fn handle_connection_close(
     actor: &Actor,
@@ -4963,13 +5069,14 @@ fn handle_connection_close(
     to_value(&methods::ConnectionCloseResult { closed })
 }
 
-/// `fs.dir_size` (0.49.0, #139): cuánto ocupa lo que se pida, como Task.
+/// `fs.dir_size` (0.49.0, #139): how much what is asked for takes up, as a
+/// Task.
 ///
-/// Gate de LECTURA sobre CADA raíz, y antes de validar nada más: un actor sin
-/// derechos sobre lo que pide no llega a saber si su petición era además
-/// incorrecta. Recorrer un árbol revela su FORMA —cuántas cosas hay y cómo se
-/// llaman los directorios por los que se baja—, que es exactamente lo que un
-/// listado revela y por eso es el mismo gate.
+/// READ gate over EACH root, before validating anything else: an actor with
+/// no rights over what it asks for never finds out whether its request was
+/// also malformed. Walking a tree reveals its SHAPE — how many things there
+/// are and what the directories along the way are called — which is exactly
+/// what a listing reveals, hence the same gate.
 #[tracing::instrument(skip_all, fields(actor = ?actor))]
 async fn handle_fs_dir_size(
     params: Option<serde_json::Value>,
@@ -4991,33 +5098,33 @@ async fn handle_fs_dir_size(
         .dir_size_as(p, actor.clone())
         .await
         .map_err(RpcError::from)?;
-    // INVARIANTE (#64): CERO `.await` entre el submit del engine (dentro de
-    // `dir_size_as`) y este register — la Task jamás corre FUERA de
+    // INVARIANT (#64): ZERO `.await` between the engine's submit (inside
+    // `dir_size_as`) and this register — the Task never runs OUTSIDE
     // `shared.tasks`.
     let task_id = register_task_id(shared, handle, actor.clone())?;
     to_value(&methods::FsTaskResult { task_id })
 }
 
-/// `fs.checksum` (0.59.0, #311): el digest del contenido de un lote, como Task.
+/// `fs.checksum` (0.59.0, #311): the digest of a batch's content, as a Task.
 ///
-/// Gate de LECTURA **y de CONTENIDO** sobre CADA ruta (ADR 0080).
+/// READ **and CONTENT** gate over EACH path (ADR 0080).
 ///
-/// El de lectura por lo mismo que en `fs.dir_size`. El de contenido porque
-/// esto no lee la forma del árbol sino los BYTES de cada fichero, y un digest
-/// es una huella de ellos: `fs.checksum` subsume —y supera— el oráculo que
-/// `fs.compare` con el peldaño de hash ya gatea por la puerta estrecha. Aquel
-/// contesta «¿son iguales?» y obliga a COLOCAR el candidato; este devuelve el
-/// sha256, que se compara luego contra un diccionario sin colocar nada. Sin
-/// esto, a un agente al que se le deniega `fs.compare` con `criteria.hash` le
-/// bastaba con llamar aquí.
+/// The read one for the same reason as in `fs.dir_size`. The content one
+/// because this does not read the tree's shape but each file's BYTES, and a
+/// digest is a fingerprint of them: `fs.checksum` subsumes — and exceeds —
+/// the oracle that `fs.compare` with the hash rung already gates through the
+/// narrow door. That one answers "are they equal?" and forces PLACING the
+/// candidate; this one returns the sha256, which is then compared against a
+/// dictionary without placing anything. Without this, an agent denied
+/// `fs.compare` with `criteria.hash` would only have to call here instead.
 ///
-/// `policy.rs` lo dice como regla: se prefiere la puerta estrecha en lo NUEVO,
-/// porque aflojarla después es aditivo y apretarla no lo es.
+/// `policy.rs` states it as a rule: the narrow door is preferred for what is
+/// NEW, because loosening it later is additive and tightening it is not.
 ///
-/// El TOPE se comprueba ANTES que los gates, y no filtra nada: es una
-/// constante pública y el emisor sabe cuántas rutas mandó. Al revés sí costaba
-/// — un lote de un millón de rutas tomaba el mutex del registro de scopes una
-/// vez por ruta antes de que nadie mirase el tope.
+/// The CAP is checked BEFORE the gates, and it leaks nothing: it is a public
+/// constant and the sender knows how many paths it sent. The other way
+/// around it did cost something — a batch of a million paths used to take
+/// the scope registry's mutex once per path before anyone looked at the cap.
 #[tracing::instrument(skip_all, fields(actor = ?actor))]
 async fn handle_fs_checksum(
     params: Option<serde_json::Value>,
@@ -5031,10 +5138,11 @@ async fn handle_fs_checksum(
             "fs.checksum: paths must not be empty",
         ));
     }
-    // `InvalidPath` y no un `-32602` pelado: ese no lleva categoría en `data`,
-    // así que el Backend remoto lo entregaría como `Internal` mientras el
-    // embebido dice `InvalidPath` — dos respuestas distintas al mismo suceso
-    // según por dónde se entre. Es la lección de `check_pairs_cap`.
+    // `InvalidPath` and not a bare `-32602`: that one carries no category in
+    // `data`, so the remote Backend would deliver it as `Internal` while the
+    // embedded one says `InvalidPath` — two different answers to the same
+    // event depending on which door it came through. This is `check_pairs_cap`'s
+    // lesson.
     if p.paths.len() > methods::FS_CHECKSUM_MAX_PATHS {
         return Err(RpcError::from(norte_proto::Error::InvalidPath));
     }
@@ -5047,18 +5155,18 @@ async fn handle_fs_checksum(
         .checksum_as(p, actor.clone())
         .await
         .map_err(RpcError::from)?;
-    // INVARIANTE (#64): CERO `.await` entre el submit del engine y este
-    // register — la Task jamás corre FUERA de `shared.tasks`.
+    // INVARIANT (#64): ZERO `.await` between the engine's submit and this
+    // register — the Task never runs OUTSIDE `shared.tasks`.
     let task_id = register_task_id(shared, handle, actor.clone())?;
     to_value(&methods::FsTaskResult { task_id })
 }
 
-/// `fs.checksum_report` (0.59.0, #311): los digests que calculó esa Task.
+/// `fs.checksum_report` (0.59.0, #311): the digests that Task computed.
 ///
-/// Misma visibilidad que el informe de un lote de renames, y por lo mismo: una
-/// sola respuesta —`NotFound`— para las tres situaciones (desalojado, nunca
-/// fue un lote de sumas, es de otro actor), porque separar la tercera
-/// confirmaría que la task de otro existió.
+/// Same visibility as a rename batch's report, and for the same reason: a
+/// single answer — `NotFound` — for all three situations (evicted, never was
+/// a checksum batch, belongs to another actor), because separating the third
+/// would confirm that someone else's task existed.
 #[tracing::instrument(skip_all, fields(actor = ?actor))]
 fn handle_fs_checksum_report(
     actor: &Actor,
@@ -5073,24 +5181,25 @@ fn handle_fs_checksum_report(
     if !may_observe(actor, &owner) {
         tracing::warn!(
             actor = ?actor,
-            "informe de sumas de otro actor: denegado (respuesta = id desconocido)"
+            "checksum report of another actor: denied (response = unknown id)"
         );
         return Err(unknown());
     }
     to_value(&report)
 }
 
-/// `fs.dir_usage` (0.75.0, fase 4): de qué está hecho un directorio, como Task.
+/// `fs.dir_usage` (0.75.0, phase 4): what a directory is made of, as a Task.
 ///
-/// Gate de LECTURA sobre la raíz, por lo mismo que en `fs.dir_size`: sin él, un
-/// agente fuera de scope enumeraría un árbol ajeno a través de los errores de
-/// esta llamada.
+/// READ gate over the root, for the same reason as in `fs.dir_size`: without
+/// it, an out-of-scope agent would enumerate someone else's tree through this
+/// call's errors.
 ///
-/// **Sin gate de CONTENIDO**, y esa es la diferencia con `fs.checksum`: aquello
-/// lee los BYTES de cada fichero y devuelve una huella de ellos; esto solo mide
-/// la FORMA del árbol —nombres y tamaños, lo mismo que ya devuelve un listado—
-/// y no abre un solo fichero. Pedir la puerta estrecha aquí sería cerrarle el
-/// mapa a quien ya puede listar el directorio entero.
+/// **No CONTENT gate**, and that is the difference with `fs.checksum`: that
+/// one reads each file's BYTES and returns a fingerprint of them; this one
+/// only measures the tree's SHAPE — names and sizes, the same thing a
+/// listing already returns — and does not open a single file. Demanding the
+/// narrow door here would close the map off to whoever can already list the
+/// whole directory.
 #[tracing::instrument(skip_all, fields(actor = ?actor))]
 async fn handle_fs_dir_usage(
     params: Option<serde_json::Value>,
@@ -5104,19 +5213,19 @@ async fn handle_fs_dir_usage(
         .dir_usage_as(p, actor.clone())
         .await
         .map_err(RpcError::from)?;
-    // INVARIANTE (#64): CERO `.await` entre el submit del engine (dentro de
-    // `dir_usage_as`) y este register — la Task jamás corre FUERA de
+    // INVARIANT (#64): ZERO `.await` between the engine's submit (inside
+    // `dir_usage_as`) and this register — the Task never runs OUTSIDE
     // `shared.tasks`.
     let task_id = register_task_id(shared, handle, actor.clone())?;
     to_value(&methods::FsTaskResult { task_id })
 }
 
-/// `fs.dir_usage_report` (0.75.0, fase 4): el mapa que midió esa Task.
+/// `fs.dir_usage_report` (0.75.0, phase 4): the map that Task measured.
 ///
-/// Misma visibilidad que el informe de sumas, y por lo mismo: una sola
-/// respuesta —`NotFound`— para las tres situaciones (desalojado, nunca fue un
-/// mapa, es de otro actor), porque separar la tercera confirmaría que la task
-/// de otro existió.
+/// Same visibility as the checksum report, and for the same reason: a single
+/// answer — `NotFound` — for all three situations (evicted, never was a map,
+/// belongs to another actor), because separating the third would confirm
+/// someone else's task existed.
 #[tracing::instrument(skip_all, fields(actor = ?actor))]
 fn handle_fs_dir_usage_report(
     actor: &Actor,
@@ -5131,19 +5240,19 @@ fn handle_fs_dir_usage_report(
     if !may_observe(actor, &owner) {
         tracing::warn!(
             actor = ?actor,
-            "mapa de disco de otro actor: denegado (respuesta = id desconocido)"
+            "disk map of another actor: denied (response = unknown id)"
         );
         return Err(unknown());
     }
     to_value(&report)
 }
 
-/// `archive.pack` (0.50.0, #132): fabrica un archivo como Task.
+/// `archive.pack` (0.50.0, #132): builds an archive, as a Task.
 ///
-/// El gate de MUTACIÓN lo hace el engine (misma op que una copia: se leen las
-/// fuentes y se escribe el destino). Aquí va el de LECTURA sobre las fuentes,
-/// por lo mismo que en `fs.dir_size`: sin él, un agente fuera de scope
-/// enumeraría un árbol ajeno a través de los errores de esta llamada.
+/// The engine does the MUTATION gate (same op as a copy: the sources are read
+/// and the destination is written). Here goes the READ one over the sources,
+/// for the same reason as in `fs.dir_size`: without it, an out-of-scope agent
+/// would enumerate someone else's tree through this call's errors.
 #[tracing::instrument(skip_all, fields(actor = ?actor))]
 async fn handle_archive_pack(
     params: Option<serde_json::Value>,
@@ -5165,17 +5274,17 @@ async fn handle_archive_pack(
         .pack_as(p, actor.clone())
         .await
         .map_err(RpcError::from)?;
-    // INVARIANTE (#64): CERO `.await` entre el submit y este register.
+    // INVARIANT (#64): ZERO `.await` between the submit and this register.
     let task_id = register_task_id(shared, handle, actor.clone())?;
     to_value(&methods::FsTaskResult { task_id })
 }
 
-/// `archive.pack_report` (0.58.0, #250): qué guardó ese empaquetado que no
-/// sobrevive a salir de aquí.
+/// `archive.pack_report` (0.58.0, #250): what that packing saved that does
+/// not survive leaving here.
 ///
-/// Gemelo exacto de `archive.test_report`, visibilidad incluida: solo lo ve
-/// quien lanzó la Task, y un id de otro actor se contesta igual que uno que no
-/// existe.
+/// Exact twin of `archive.test_report`, visibility included: only whoever
+/// launched the Task sees it, and another actor's id is answered the same as
+/// one that does not exist.
 #[tracing::instrument(skip_all, fields(actor = ?actor))]
 fn handle_archive_pack_report(
     params: Option<serde_json::Value>,
@@ -5184,22 +5293,22 @@ fn handle_archive_pack_report(
 ) -> Result<serde_json::Value, RpcError> {
     let p: methods::ArchivePackReportParams = parse_params(params)?;
     let unknown = || RpcError::from(norte_proto::Error::NotFound);
-    let (owner, informe) = shared
+    let (owner, report) = shared
         .engine
         .archive_pack_report(p.task_id)
         .ok_or_else(unknown)?;
     if !may_observe(actor, &owner) {
-        tracing::warn!(actor = ?actor, "archive.pack_report de otro actor");
+        tracing::warn!(actor = ?actor, "archive.pack_report of another actor");
         return Err(unknown());
     }
-    to_value(&informe)
+    to_value(&report)
 }
 
-/// `archive.test` (0.50.0, #132): comprueba un archivo como Task.
+/// `archive.test` (0.50.0, #132): verifies an archive, as a Task.
 ///
-/// No muta, así que solo gate de LECTURA. El informe se recoge después con
-/// [`methods::ARCHIVE_TEST_REPORT`], igual que el de un lote de renames: una
-/// Task no devuelve valor, y «qué entrada está corrupta» no cabe en un
+/// Mutates nothing, so only a READ gate. The report is collected afterward
+/// with [`methods::ARCHIVE_TEST_REPORT`], same as a rename batch's: a Task
+/// returns no value, and "which entry is corrupt" does not fit in a
 /// `Failed`.
 #[tracing::instrument(skip_all, fields(actor = ?actor))]
 async fn handle_archive_test(
@@ -5209,7 +5318,7 @@ async fn handle_archive_test(
 ) -> Result<serde_json::Value, RpcError> {
     let p: methods::ArchiveTestParams = parse_params(params)?;
     read_gate(actor, &p.path, shared)?;
-    let (handle, _informe) = shared
+    let (handle, _report) = shared
         .engine
         .test_archive_as(p, actor.clone())
         .await
@@ -5218,11 +5327,13 @@ async fn handle_archive_test(
     to_value(&methods::FsTaskResult { task_id })
 }
 
-/// `archive.test_report` (0.50.0, #132): el informe de un test ya lanzado.
+/// `archive.test_report` (0.50.0, #132): the report of a test already
+/// launched.
 ///
-/// Gemelo exacto de `fs.rename_batch_report`, VISIBILIDAD incluida: solo lo ve
-/// quien lanzó la Task, y un id de otro actor se contesta igual que uno que no
-/// existe — decir «existe pero no es tuyo» ya sería contar algo.
+/// Exact twin of `fs.rename_batch_report`, VISIBILITY included: only whoever
+/// launched the Task sees it, and another actor's id is answered the same as
+/// one that does not exist — saying "it exists but isn't yours" would
+/// already be telling something.
 #[tracing::instrument(skip_all, fields(actor = ?actor))]
 fn handle_archive_test_report(
     params: Option<serde_json::Value>,
@@ -5230,24 +5341,24 @@ fn handle_archive_test_report(
     shared: &Arc<Shared>,
 ) -> Result<serde_json::Value, RpcError> {
     let p: methods::ArchiveTestReportParams = parse_params(params)?;
-    // Una sola respuesta para las tres situaciones —desalojado del anillo,
-    // nunca fue un test, es de otro actor—, y la tercera es la razón:
-    // separarla confirmaría que la task de otro existió.
+    // A single answer for all three situations — evicted from the ring,
+    // never was a test, belongs to another actor — and the third is the
+    // reason: separating it would confirm someone else's task existed.
     let unknown = || RpcError::from(norte_proto::Error::NotFound);
-    let (owner, informe) = shared
+    let (owner, report) = shared
         .engine
         .archive_test_report(p.task_id)
         .ok_or_else(unknown)?;
     if !may_observe(actor, &owner) {
-        // Material de auditoría, como en sus gemelos: preguntar por informes
-        // ajenos deja rastro aunque la respuesta no diga nada.
-        tracing::warn!(actor = ?actor, "archive.test_report de otro actor");
+        // Audit material, like its twins: asking about other actors' reports
+        // leaves a trace even if the answer says nothing.
+        tracing::warn!(actor = ?actor, "archive.test_report of another actor");
         return Err(unknown());
     }
-    to_value(&informe)
+    to_value(&report)
 }
 
-/// `file.split` (0.50.0, #132): parte un fichero como Task.
+/// `file.split` (0.50.0, #132): splits a file, as a Task.
 #[tracing::instrument(skip_all, fields(actor = ?actor))]
 async fn handle_file_split(
     params: Option<serde_json::Value>,
@@ -5265,7 +5376,7 @@ async fn handle_file_split(
     to_value(&methods::FsTaskResult { task_id })
 }
 
-/// `file.combine` (0.50.0, #132): junta los trozos como Task.
+/// `file.combine` (0.50.0, #132): joins the chunks back, as a Task.
 #[tracing::instrument(skip_all, fields(actor = ?actor))]
 async fn handle_file_combine(
     params: Option<serde_json::Value>,
@@ -5274,9 +5385,9 @@ async fn handle_file_combine(
 ) -> Result<serde_json::Value, RpcError> {
     let p: methods::FileCombineParams = parse_params(params)?;
     read_gate(actor, &p.first, shared)?;
-    // Y el DIRECTORIO, porque los demás trozos se derivan por convención y no
-    // los nombra la petición: un scope sobre el fichero `.001` a secas no
-    // cubre a sus hermanos.
+    // And the DIRECTORY, because the other chunks are derived by convention
+    // and the request does not name them: a scope over the bare `.001` file
+    // does not cover its siblings.
     if let Some(dir) = p.first.parent() {
         read_gate(actor, &dir, shared)?;
     }
@@ -5289,34 +5400,36 @@ async fn handle_file_combine(
     to_value(&methods::FsTaskResult { task_id })
 }
 
-/// `fs.compare` (0.39.0, ADR 0048): compara dos árboles como Task cancelable.
-/// Las FILAS llegan por `compare.rows` SOLO a la conexión `conn_id` que la
-/// lanzó (envío dirigido, jamás broadcast — mismo criterio que `search.hits`).
+/// `fs.compare` (0.39.0, ADR 0048): compares two trees as a cancellable Task.
+/// ROWS arrive via `compare.rows` ONLY to the `conn_id` connection that
+/// launched it (directed send, never broadcast — same criterion as
+/// `search.hits`).
 ///
-/// NO muta nada: sin journal, sin undo, no se escribe un byte. **Regla dura 4
-/// no aplica** — dicho aquí para que una revisión posterior no pida una
-/// entrada de journal que no significaría nada.
+/// Mutates NOTHING: no journal, no undo, not a byte is written. **Hard rule 4
+/// does not apply** — stated here so a later review does not ask for a
+/// journal entry that would mean nothing.
 ///
-/// GATE. Comparar LEE dos árboles enteros, así que hay dos puertas:
-/// - [`read_gate`] sobre **AMBAS** raíces (#80). Una sola no basta: el árbol
-///   que no está bajo scope se listaría igual, y sus nombres viajarían en las
-///   filas.
-/// - [`content_gate`] sobre ambas **cuando `criteria.hash` está encendido**:
-///   ese rung pasa cada byte de cada fichero emparejado por un sha256, que es
-///   más de lo que revela un listado (ver la tensión anotada en
+/// GATE. Comparing READS two whole trees, so there are two doors:
+/// - [`read_gate`] over **BOTH** roots (#80). One alone is not enough: the
+///   tree not under scope would get listed all the same, and its names would
+///   travel in the rows.
+/// - [`content_gate`] over both **when `criteria.hash` is on**: that rung
+///   passes every byte of every paired file through a sha256, which is more
+///   than what a listing reveals (see the tension noted in
 ///   `covers_content`).
 ///
-/// `INVALID_PARAMS` SIN crear Task, con la misma forma que los criterios
-/// inválidos de `fs.search`:
-/// - Dos raíces IGUALES: comparar algo contra sí mismo durante una hora no es
-///   una petición, es una errata de quien llama.
-/// - `follow_symlinks: true`: el motor acepta el campo y lo IGNORA, y servir
-///   en silencio un recorrido distinto del pedido es peor que no ofrecerlo.
+/// `INVALID_PARAMS` WITHOUT creating a Task, in the same shape as
+/// `fs.search`'s invalid criteria:
+/// - Two EQUAL roots: comparing something against itself for an hour is not
+///   a request, it is the caller's typo.
+/// - `follow_symlinks: true`: the engine accepts the field and IGNORES it,
+///   and silently serving a different walk than the one requested is worse
+///   than not offering it.
 ///
-/// (Ambos son `-32602` pelado, así que un `Backend` remoto los entrega como
-/// `Internal` mientras el embebido dice `InvalidPath`/`Unsupported`. Es la
-/// misma asimetría que ya tienen los criterios de `fs.search`, y el contrato
-/// publicado en `methods::FS_COMPARE` es el código, no la taxonomía.)
+/// (Both are a bare `-32602`, so a remote `Backend` delivers them as
+/// `Internal` while the embedded one says `InvalidPath`/`Unsupported`. Same
+/// asymmetry `fs.search`'s criteria already have, and the contract published
+/// in `methods::FS_COMPARE` is the code, not the taxonomy.)
 #[tracing::instrument(skip_all, fields(actor = ?actor))]
 async fn handle_fs_compare(
     params: Option<serde_json::Value>,
@@ -5326,8 +5439,8 @@ async fn handle_fs_compare(
 ) -> Result<serde_json::Value, RpcError> {
     let p: methods::FsCompareParams = parse_params(params)?;
 
-    // Gate ANTES de validar params: un actor sin derechos sobre las raíces no
-    // llega a saber si su petición era además incorrecta.
+    // Gate BEFORE validating params: an actor with no rights over the roots
+    // never finds out whether its request was also malformed.
     read_gate(actor, &p.left, shared)?;
     read_gate(actor, &p.right, shared)?;
     if p.criteria.hash {
@@ -5347,43 +5460,44 @@ async fn handle_fs_compare(
             "fs.compare: follow_symlinks is not supported (link targets are compared as bytes)",
         ));
     }
-    // `descend_orphans` NO se valida aquí: es un `DescendSide`, que no tiene
-    // `serde(other)`, así que un `"lft"` muere en `parse_params` de arriba
-    // (`-32602`) y `Side::Unknown` ni siquiera es representable. Un `if` en
-    // este handler habría dejado fuera el brazo EMBEBIDO, que llama al engine
-    // sin pasar por aquí.
+    // `descend_orphans` is NOT validated here: it is a `DescendSide`, which
+    // has no `serde(other)`, so an `"lft"` dies in `parse_params` above
+    // (`-32602`) and `Side::Unknown` is not even representable. An `if` in
+    // this handler would have left out the EMBEDDED arm, which calls the
+    // engine without going through here.
 
     let (handle, mut rx) = shared
         .engine
         .compare_as(p, actor.clone())
         .await
         .map_err(RpcError::from)?;
-    // INVARIANTE (#64): CERO `.await` entre el submit del engine (dentro de
-    // `compare_as`) y este register — la Task jamás corre FUERA de
-    // `shared.tasks` (con task.list/cancel y contando contra los topes). Quien
-    // añada un await aquí rompe esa garantía.
+    // INVARIANT (#64): ZERO `.await` between the engine's submit (inside
+    // `compare_as`) and this register — the Task never runs OUTSIDE
+    // `shared.tasks` (with task.list/cancel and counting against the caps).
+    // Whoever adds an await here breaks that guarantee.
     let task_id = register_task_id(shared, handle, actor.clone())?;
 
-    // Bomba de FILAS: drena el canal del walk y enruta cada lote como
-    // `compare.rows` SOLO al dueño. Muere sola cuando el walk cierra `tx`
-    // (terminal, cancel o receptor —el propio dueño— desaparecido).
+    // ROW pump: drains the walk's channel and routes each batch as
+    // `compare.rows` ONLY to the owner. Dies on its own when the walk closes
+    // `tx` (terminal, cancel, or the receiver — the owner itself — gone).
     //
-    // Y al revés: en cuanto un lote NO se entrega —el dueño se fue, o no
-    // drenaba su outbox y el daemon lo expulsó— la bomba PARA. Al soltar `rx`,
-    // el walk ve `ReceiverGone` y termina. Sin esto, una comparación de tres
-    // horas seguiría leyendo dos árboles (y hasheándolos) para nadie,
-    // reteniendo su permiso del scheduler frente al resto del trabajo de ese
-    // scheme. `fs.compare` es el caso que lo pide: a diferencia de
-    // `fs.search`, no tiene `max_hits` que lo acote.
+    // And the other way around: as soon as a batch is NOT delivered — the
+    // owner left, or was not draining its outbox and the daemon evicted it —
+    // the pump STOPS. Dropping `rx`, the walk sees `ReceiverGone` and ends.
+    // Without this, a three-hour comparison would keep reading two trees
+    // (and hashing them) for nobody, holding its scheduler permit against the
+    // rest of that scheme's work. `fs.compare` is the case that calls for
+    // it: unlike `fs.search`, it has no `max_hits` to bound it.
     //
-    // Y lo que ya NO pasa (#155): pararla no le cuesta la suscripción, así que
-    // el `task.progress` terminal —la única señal con la que puede saber que le
-    // faltan filas— le sigue llegando.
+    // And what no longer happens (#155): stopping it does not cost it the
+    // subscription, so the terminal `task.progress` — the only signal it has
+    // to know it is missing rows — still reaches it.
     let shared_pump = Arc::clone(shared);
-    // #155: mientras esta bomba viva, su dueño no se expulsa del mapa de
-    // suscriptores por una outbox llena — perdería el `task.progress` terminal
-    // con el que compara filas recibidas contra `entries_done`, que es la
-    // única forma que tiene de saber que la comparación le llegó entera.
+    // #155: while this pump is alive, its owner is not evicted from the
+    // subscribers map for a full outbox — it would lose the terminal
+    // `task.progress` it uses to compare received rows against
+    // `entries_done`, the only way it has to know the comparison reached it
+    // whole.
     let feed = shared_pump.feed_guard(conn_id);
     crate::blocking::spawn(async move {
         let _feed = feed;
@@ -5397,7 +5511,10 @@ async fn handle_fs_compare(
                 continue;
             };
             if !shared_pump.send_to_conn(conn_id, &Arc::from(frame.into_boxed_slice())) {
-                tracing::debug!(conn = conn_id, "compare.rows sin dueño: se para el walk");
+                tracing::debug!(
+                    conn = conn_id,
+                    "compare.rows with no owner: stopping the walk"
+                );
                 break;
             }
         }
@@ -5406,36 +5523,34 @@ async fn handle_fs_compare(
     to_value(&methods::FsTaskResult { task_id })
 }
 
-/// `sync.plan` (0.40.0, ADR 0049): planifica una sincronización de UN sentido
-/// (`source` → `dest`) como Task cancelable. Los PASOS llegan por `sync.steps`
-/// SOLO a la conexión `conn_id` que la lanzó, y el plan lo CIERRA un
-/// `sync.plan_done` por el mismo camino.
+/// `sync.plan` (0.40.0, ADR 0049): plans a ONE-way sync (`source` → `dest`)
+/// as a cancellable Task. STEPS arrive via `sync.steps` ONLY to the `conn_id`
+/// connection that launched it, and the plan is CLOSED by a `sync.plan_done`
+/// through the same path.
 ///
-/// NO muta: por debajo es `fs.compare` con una decisión por fila. Lo que sí hace
-/// es RETENER el plan en un spool atado a esta conexión, que es lo que permite
-/// que `sync.apply` no lleve más que un hash.
+/// Mutates NOTHING: underneath it is `fs.compare` with a decision per row.
+/// What it does do is RETAIN the plan in a spool tied to this connection,
+/// which is what lets `sync.apply` carry nothing more than a hash.
 ///
-/// GATE. Planificar LEE dos árboles enteros, así que son las mismas dos puertas
-/// que [`handle_fs_compare`], y por los mismos motivos:
-/// - [`read_gate`] sobre **AMBAS** raíces (#80).
-/// - [`content_gate`] sobre ambas **cuando `compare.criteria.hash` está
-///   encendido**.
+/// GATE. Planning READS two whole trees, so it is the same two doors as
+/// [`handle_fs_compare`], and for the same reasons:
+/// - [`read_gate`] over **BOTH** roots (#80).
+/// - [`content_gate`] over both **when `compare.criteria.hash` is on**.
 ///
-/// Y van **antes** de validar los params: un actor sin derechos sobre las raíces
-/// no llega a saber si su petición era además incorrecta.
+/// And they go **before** validating the params: an actor with no rights
+/// over the roots never finds out whether its request was also malformed.
 ///
-/// `INVALID_PARAMS` SIN crear Task, con la misma forma que en `fs.compare`, para
-/// los dos campos de `compare` que en `sync.plan` **no son del llamante**
-/// (`follow_symlinks` y `descend_orphans` — el planificador fija el segundo al
-/// lado del ORIGEN) y para un `include` por encima de
-/// [`methods::SYNC_MAX_INCLUDE`], que se rehúsa en vez de recortarse. El engine
-/// los rechaza también, con su propia taxonomía, porque el brazo EMBEBIDO no
-/// pasa por aquí.
+/// `INVALID_PARAMS` WITHOUT creating a Task, in the same shape as
+/// `fs.compare`, for the two `compare` fields that in `sync.plan` **are not
+/// the caller's** (`follow_symlinks` and `descend_orphans` — the planner
+/// fixes the latter to the SOURCE side) and for an `include` above
+/// [`methods::SYNC_MAX_INCLUDE`], which is refused instead of trimmed. The
+/// engine also rejects them, with its own taxonomy, because the EMBEDDED arm
+/// does not go through here.
 ///
-/// Las raíces solapadas NO se comprueban aquí: son
-/// [`Error::OverlappingRoots`](norte_proto::Error::OverlappingRoots), una
-/// categoría del wire, y el engine la produce en un solo sitio para los dos
-/// caminos.
+/// Overlapping roots are NOT checked here: they are
+/// [`Error::OverlappingRoots`](norte_proto::Error::OverlappingRoots), a wire
+/// category, and the engine produces it in one single place for both paths.
 #[tracing::instrument(skip_all, fields(actor = ?actor))]
 async fn handle_sync_plan(
     params: Option<serde_json::Value>,
@@ -5445,7 +5560,7 @@ async fn handle_sync_plan(
 ) -> Result<serde_json::Value, RpcError> {
     let p: methods::SyncPlanParams = parse_params(params)?;
 
-    // Gate ANTES de validar params (ver la nota del doc).
+    // Gate BEFORE validating params (see the doc's note).
     read_gate(actor, &p.source, shared)?;
     read_gate(actor, &p.dest, shared)?;
     if p.compare.criteria.hash {
@@ -5465,7 +5580,7 @@ async fn handle_sync_plan(
             "sync.plan: compare.descend_orphans is set by the planner, not by the caller",
         ));
     }
-    // La constante es el contrato: el tope se nombra, jamás se escribe.
+    // The constant is the contract: the cap is named, never written out.
     let max_include = methods::SYNC_MAX_INCLUDE;
     if p.include
         .as_ref()
@@ -5477,22 +5592,24 @@ async fn handle_sync_plan(
         ));
     }
 
-    // Tope de planes RETENIDOS por conexión. Un plan aprobado es un fichero con
-    // el listado relativo de dos árboles, y mientras su conexión viva la única
-    // cosa que lo recoge es el TTL. Sin este tope, un cliente que planifique en
-    // bucle variando `include` —cada selección da otro digest, o sea otro
-    // fichero— llena el directorio de estado, que es donde vive `journal.db`.
-    // `OVERLOADED` y no `-32602`: la petición es válida, el momento no (mismo
-    // criterio y mismo código que el tope de Tasks vivas).
+    // Cap of plans RETAINED per connection. An approved plan is a file with
+    // two trees' relative listing, and while its connection is alive the
+    // only thing that reclaims it is the TTL. Without this cap, a client
+    // planning in a loop while varying `include` — each selection gives a
+    // different digest, i.e. a different file — fills up the state
+    // directory, which is where `journal.db` lives. `OVERLOADED` and not
+    // `-32602`: the request is valid, the moment is not (same criterion and
+    // same code as the live-tasks cap).
     if let Some(spool) = shared.engine.spool()
         && spool.retained_for(conn_id) >= MAX_RETAINED_SYNC_PLANS
     {
-        // Con TAXONOMÍA en `data` y no solo con la frase (#182): un rechazo
-        // sin taxonomía llega al cliente como `Internal { panic: false }` —
-        // «internal error»— porque `to_taxonomy` no tiene otra cosa que
-        // devolver, y a un agente eso le dice «vuelve a intentarlo», que es lo
-        // que llenaba este mismo tope. `LimitExceeded` dice lo que pasa: el
-        // plan es válido, lo que se acabó es el presupuesto.
+        // With a TAXONOMY in `data` and not just the phrase (#182): a
+        // rejection with no taxonomy reaches the client as `Internal {
+        // panic: false }` — "internal error" — because `to_taxonomy` has
+        // nothing else to return, and to an agent that says "try again",
+        // which is what filled this very cap in the first place.
+        // `LimitExceeded` says what happened: the plan is valid, what ran
+        // out is the budget.
         return Err(RpcError::from(norte_proto::Error::LimitExceeded {
             limit: norte_proto::Error::LIMIT_RETAINED_SYNC_PLANS.to_owned(),
         }));
@@ -5503,27 +5620,29 @@ async fn handle_sync_plan(
         .sync_plan_as(p, conn_id, actor.clone())
         .await
         .map_err(RpcError::from)?;
-    // INVARIANTE (#64): CERO `.await` entre el submit del engine (dentro de
-    // `sync_plan_as`) y este register — la Task jamás corre FUERA de
-    // `shared.tasks`. Quien añada un await aquí rompe esa garantía.
+    // INVARIANT (#64): ZERO `.await` between the engine's submit (inside
+    // `sync_plan_as`) and this register — the Task never runs OUTSIDE
+    // `shared.tasks`. Whoever adds an await here breaks that guarantee.
     let task_id = register_task_id(shared, handle, actor.clone())?;
 
-    // Bomba de PASOS: drena el canal del plan y enruta cada evento SOLO al
-    // dueño. Un único canal trae los lotes y el cierre, así que el orden
-    // «`sync.steps`* y después un `sync.plan_done`» no depende de esta bomba:
-    // es la cola.
+    // STEPS pump: drains the plan's channel and routes each event ONLY to
+    // the owner. A single channel carries the batches and the close, so the
+    // order "`sync.steps`* then a `sync.plan_done`" does not depend on this
+    // pump: it is the queue.
     //
-    // En cuanto un evento NO se entrega —el dueño se fue, o no drenaba su
-    // outbox y el daemon lo expulsó— la bomba PARA. Al soltar `rx`, la Task ve
-    // que su receptor desapareció, cierra el spool como INTERRUMPIDO (no deja
-    // plan aprobable) y termina. Sin esto, un plan de tres horas seguiría
-    // recorriendo dos árboles para nadie, reteniendo su permiso del scheduler.
+    // As soon as an event is NOT delivered — the owner left, or was not
+    // draining its outbox and the daemon evicted it — the pump STOPS.
+    // Dropping `rx`, the Task sees its receiver disappeared, closes the
+    // spool as INTERRUPTED (leaves no approvable plan) and ends. Without
+    // this, a three-hour plan would keep walking two trees for nobody,
+    // holding onto its scheduler permit.
     //
-    // Lo que ya NO pasa (#155): el dueño de este feed no se expulsa del mapa de
-    // suscriptores mientras dure, así que conserva su `task.progress` terminal.
-    // Aquí el fallo era el menos grave de los tres —un cliente sin
-    // `sync.plan_done` no tiene `plan_hash` y no puede aplicar nada— pero es el
-    // mismo mecanismo, y arreglarlo en dos de tres bombas es dejarlo a medias.
+    // What no longer happens (#155): this feed's owner is not evicted from
+    // the subscribers map while it lasts, so it keeps its terminal
+    // `task.progress`. Here the failure used to be the least serious of the
+    // three — a client with no `sync.plan_done` has no `plan_hash` and
+    // cannot apply anything — but it is the same mechanism, and fixing it in
+    // two of three pumps would leave it half-done.
     let shared_pump = Arc::clone(shared);
     let feed = shared_pump.feed_guard(conn_id);
     crate::blocking::spawn(async move {
@@ -5537,13 +5656,13 @@ async fn handle_sync_plan(
                     (methods::SYNC_PLAN_DONE, serde_json::to_value(&done))
                 }
             };
-            // A diferencia de la bomba de `fs.compare`, un fallo de
-            // serialización NO manda la notificación con `params: null`: aquí un
-            // lote perdido alimenta una aprobación, y un frame que ningún
-            // cliente puede parsear es peor que ninguno. Es inalcanzable con
-            // estos tipos (structs planos), y por eso mismo sale barato.
+            // Unlike `fs.compare`'s pump, a serialization failure does NOT
+            // send the notification with `params: null`: here a lost batch
+            // feeds an approval, and a frame no client can parse is worse
+            // than none. It is unreachable with these types (flat structs),
+            // and that is precisely why it is cheap to have here.
             let Ok(params) = params else {
-                tracing::error!(method, "no se pudo serializar un evento de sync.plan");
+                tracing::error!(method, "could not serialize a sync.plan event");
                 break;
             };
             let notif = Notification {
@@ -5555,12 +5674,17 @@ async fn handle_sync_plan(
                 break;
             };
             if !shared_pump.send_to_conn(conn_id, &Arc::from(frame.into_boxed_slice())) {
-                tracing::debug!(conn = conn_id, method, "sync sin dueño: se para el plan");
-                // Y se van sus planes retenidos. Este es el único observador de
-                // la entrega, y llega DESPUÉS del desmontaje de la conexión: un
-                // plan que cerró entre el barrido del desmontaje y este punto
-                // quedaría retenido para siempre — el `sync.plan_done` cabe en
-                // el buffer del canal, así que la Task lo da por entregado.
+                tracing::debug!(
+                    conn = conn_id,
+                    method,
+                    "sync with no owner: stopping the plan"
+                );
+                // And its retained plans go too. This is the only observer of
+                // delivery, and it arrives AFTER the connection's teardown: a
+                // plan that closed between the teardown's sweep and this
+                // point would stay retained forever — the `sync.plan_done`
+                // fits in the channel's buffer, so the Task counts it as
+                // delivered.
                 drop_sync_plans(&shared_pump, conn_id).await;
                 break;
             }
@@ -5570,30 +5694,32 @@ async fn handle_sync_plan(
     to_value(&methods::FsTaskResult { task_id })
 }
 
-/// `sync.apply` (0.40.0, ADR 0049): ejecuta un plan RETENIDO como Task
-/// cancelable. El único parámetro es el `plan_hash`, así que por la FORMA de la
-/// petición no se puede ejecutar nada que no sea lo que un humano aprobó.
+/// `sync.apply` (0.40.0, ADR 0049): runs a RETAINED plan as a cancellable
+/// Task. The only parameter is `plan_hash`, so by the SHAPE of the request
+/// nothing can be run except what a human approved.
 ///
-/// # Por qué aquí NO hay gate
-/// No porque no haga falta, sino porque este handler no sabe sobre qué pedirlo:
-/// las dos raíces viven en el SPOOL y `sync.apply` no las lleva. El gate corre
-/// dentro de [`Engine::sync_apply_as`], sobre las rutas leídas del fichero y en
-/// el momento de aplicar — que es además lo correcto, porque entre planificar y
-/// aplicar pasan hasta `SYNC_PLAN_TTL_MS` y un scope caduca dentro de esa
-/// ventana. Un `read_gate` aquí sobre algo que no son las raíces sería teatro.
+/// # Why there is NO gate here
+/// Not because it is not needed, but because this handler does not know what
+/// to ask it about: the two roots live in the SPOOL and `sync.apply` does not
+/// carry them. The gate runs inside [`Engine::sync_apply_as`], over the paths
+/// read from the file and at the moment of applying — which is also the
+/// correct thing to do, because up to `SYNC_PLAN_TTL_MS` passes between
+/// planning and applying, and a scope can expire within that window. A
+/// `read_gate` here over something that is not the roots would be theater.
 ///
-/// # Los rechazos son del engine, y esto no los duplica
-/// `Unsupported` (sin spool o sin journal), `PlanStale` (el hash no nombra un
-/// plan vivo de ESTA conexión — no existe, caducó, está manipulado, es de otra
-/// conexión o ya se está aplicando), `PlanNotExecutable` (el plan traía
-/// bloqueos) y `PolicyDenied` salen todos de `sync_apply_as`, porque el brazo
-/// EMBEBIDO del `Backend` llama al engine sin pasar por aquí. Este handler los
-/// entrega con su taxonomía intacta.
+/// # The rejections belong to the engine, and this does not duplicate them
+/// `Unsupported` (no spool or no journal), `PlanStale` (the hash does not
+/// name a live plan of THIS connection — it does not exist, expired, was
+/// tampered with, belongs to another connection, or is already being
+/// applied), `PlanNotExecutable` (the plan carried blocks) and `PolicyDenied`
+/// all come from `sync_apply_as`, because the `Backend`'s EMBEDDED arm calls
+/// the engine without going through here. This handler delivers them with
+/// their taxonomy intact.
 ///
-/// Un `plan_hash` MALFORMADO no llega hasta el engine: `PlanHash` lo rechaza al
-/// deserializar, o sea `-32602`. Y eso importa — «esto no es un hash» y «el
-/// mundo se movió» son hechos distintos, y contestar el segundo a quien mandó el
-/// primero le miente sobre el estado del mundo.
+/// A MALFORMED `plan_hash` never reaches the engine: `PlanHash` rejects it at
+/// deserialization, i.e. `-32602`. And that matters — "this is not a hash"
+/// and "the world moved" are different facts, and answering the second to
+/// whoever sent the first lies to it about the state of the world.
 #[tracing::instrument(skip_all, fields(actor = ?actor))]
 async fn handle_sync_apply(
     params: Option<serde_json::Value>,
@@ -5602,19 +5728,19 @@ async fn handle_sync_apply(
     shared: &Arc<Shared>,
 ) -> Result<serde_json::Value, RpcError> {
     let p: methods::SyncApplyParams = parse_params(params)?;
-    // El tope de Tasks vivas se mira ANTES de abrir el plan, y no solo en
-    // `register_task_id`. Abrirlo se lleva el DERECHO a aplicarlo (es de un solo
-    // uso) y el cuerpo de la Task lo GASTA en cualquier estado terminal, así que
-    // un `OVERLOADED` de después destruye el plan aprobado: el cliente se queda
-    // sin `task_id`, cada reintento de ese hash contesta `PlanStale` y la única
-    // salida es volver a recorrer los dos árboles enteros. Ningún otro método
-    // tiene un parámetro tan caro de reconstruir.
+    // The live-tasks cap is checked BEFORE opening the plan, not only in
+    // `register_task_id`. Opening it takes away the RIGHT to apply it (it is
+    // single-use) and the Task's body SPENDS it on any terminal state, so a
+    // later `OVERLOADED` destroys the approved plan: the client is left with
+    // no `task_id`, every retry of that hash answers `PlanStale` and the only
+    // way out is walking both whole trees again. No other method has a
+    // parameter this expensive to rebuild.
     //
-    // Es TOCTOU —dos `sync.apply` simultáneos pueden pasar los dos y el segundo
-    // morir en `register_task_id`— y aun así vale: mueve el caso normal de
-    // «plan destruido» a «plan intacto, vuelve a intentarlo», que es lo que el
-    // mensaje del error dice. Mismo criterio que el pre-chequeo del tope de
-    // planes retenidos de `handle_sync_plan`.
+    // It is TOCTOU — two simultaneous `sync.apply` can both pass and the
+    // second die in `register_task_id` — and it is still worth it: it moves
+    // the normal case from "plan destroyed" to "plan intact, try again",
+    // which is what the error's message says. Same criterion as
+    // `handle_sync_plan`'s retained-plans cap pre-check.
     if let Some(err) = tasks_at_capacity(shared, actor) {
         return Err(err);
     }
@@ -5623,76 +5749,77 @@ async fn handle_sync_apply(
         .sync_apply_as(&p.plan_hash, conn_id, actor.clone())
         .await
         .map_err(RpcError::from)?;
-    // El informe NO se retiene aquí: vive en el anillo del engine
-    // (`Engine::sync_report`), que es de donde lo sirve `sync.report` — un solo
-    // anillo para el socket y para el `Backend` embebido, igual que el de
-    // `fs.rename_batch_report`.
+    // The report is NOT retained here: it lives in the engine's ring
+    // (`Engine::sync_report`), which is what `sync.report` serves it from —
+    // a single ring for the socket and for the embedded `Backend`, same as
+    // `fs.rename_batch_report`'s.
     //
-    // INVARIANTE (#64): CERO `.await` entre el submit del engine (dentro de
-    // `sync_apply_as`) y este register — la Task jamás corre FUERA de
+    // INVARIANT (#64): ZERO `.await` between the engine's submit (inside
+    // `sync_apply_as`) and this register — the Task never runs OUTSIDE
     // `shared.tasks`.
     let task_id = register_task_id(shared, handle, actor.clone())?;
     to_value(&methods::FsTaskResult { task_id })
 }
 
-/// `sync.report` (0.40.0, ADR 0049): qué hizo la aplicación de un plan —
-/// cuántos pasos se ejecutaron, cuántos fallaron y con qué causa, y bajo qué
-/// lote del journal quedó todo.
+/// `sync.report` (0.40.0, ADR 0049): what applying a plan did — how many
+/// steps ran, how many failed and why, and under which journal batch it all
+/// ended up.
 ///
-/// Gemelo de [`handle_rename_batch_report`], incluida su comprobación de
-/// dueño: lo ve quien podría ver la Task ([`may_observe`]) — su dueño, o
-/// cualquier conexión humana. Para el resto la respuesta es la MISMA que la de
-/// un id desconocido, porque el informe lleva rutas relativas de dos árboles
-/// ajenos y distinguir «no es tuya» de «no existe» ya sería filtrar que
-/// existió.
+/// Twin of [`handle_rename_batch_report`], owner check included: seen by
+/// whoever could see the Task ([`may_observe`]) — its owner, or any human
+/// connection. For everyone else the answer is the SAME as an unknown id,
+/// because the report carries relative paths of two trees it has no
+/// business seeing, and distinguishing "not yours" from "does not exist"
+/// would already leak that it existed.
 ///
-/// Un id DESALOJADO del anillo ([`SYNC_REPORTS_MAX`](crate::SYNC_REPORTS_MAX))
-/// contesta lo mismo que uno que nunca fue una aplicación, con la misma
-/// renuncia que su gemelo documenta.
+/// An id EVICTED from the ring ([`SYNC_REPORTS_MAX`](crate::SYNC_REPORTS_MAX))
+/// answers the same as one that was never an application, with the same
+/// trade-off its twin documents.
 fn handle_sync_report(
     actor: &Actor,
     p: &methods::SyncReportParams,
     shared: &Arc<Shared>,
 ) -> Result<serde_json::Value, RpcError> {
-    // `NotFound` de la taxonomía, una sola respuesta para las TRES situaciones
-    // —desalojado del anillo, nunca fue una aplicación, es de otro actor— y la
-    // tercera es la razón: separarla confirmaría que la task de otro existió.
+    // `NotFound` from the taxonomy, a single answer for all THREE situations
+    // — evicted from the ring, never was an application, belongs to another
+    // actor — and the third is the reason: separating it would confirm
+    // someone else's task existed.
     let unknown = || RpcError::from(norte_proto::Error::NotFound);
     let (owner, report) = shared.engine.sync_report(p.task_id).ok_or_else(unknown)?;
     if !may_observe(actor, &owner) {
-        // Material de auditoría (M3-5), igual que la rama denegada de
-        // `task.cancel`: el que pregunta por informes ajenos deja rastro aunque
-        // su respuesta no le diga nada. Ni el id ni el dueño.
+        // Audit material (M3-5), same as `task.cancel`'s denied branch:
+        // whoever asks about other actors' reports leaves a trace even if the
+        // answer tells it nothing. Neither the id nor the owner.
         tracing::warn!(
             actor = ?actor,
-            "informe de sync de otro actor: denegado (respuesta = id desconocido)"
+            "sync report of another actor: denied (response = unknown id)"
         );
         return Err(unknown());
     }
     to_value(&report)
 }
 
-/// `fs.search` (0.18.0, live search): búsqueda recursiva de nombre/contenido
-/// bajo `root` como Task cancelable. Los HITS llegan por `search.hits` SOLO a
-/// la conexión `conn_id` que la lanzó (envío dirigido, jamás broadcast — son
-/// suyos).
+/// `fs.search` (0.18.0, live search): recursive name/content search under
+/// `root` as a cancellable Task. HITS arrive via `search.hits` ONLY to the
+/// `conn_id` connection that launched it (directed send, never broadcast —
+/// they are its own).
 ///
-/// GATE DE LECTURA PARA AGENTES (security, liveSearch T4): `fs.search`
-/// amplifica la lectura — una sola llamada sobre `/` exfiltraría previews de
-/// TODO el árbol. Por eso un `Actor::Agent` solo busca si `root` cae bajo un
-/// scope VIVO de su sesión ([`ScopeRegistry::covers_read`]); fuera de él es
-/// `PolicyDenied` con la categoría gruesa del vocabulario cerrado
-/// ([`DenyReason::rule_id`]), jamás la regla concreta. Un `User` (humano) no se
-/// sandboxea: simetría con `fs.list`/`fs.read`, que HOY siguen abiertos para
-/// agentes — deuda #80 (M3 solo gateó mutaciones; search es el primer read
-/// acotado).
+/// READ GATE FOR AGENTS (security, liveSearch T4): `fs.search` amplifies
+/// reading — a single call over `/` would exfiltrate previews of the WHOLE
+/// tree. That is why an `Actor::Agent` only searches if `root` falls under a
+/// LIVE scope of its session ([`ScopeRegistry::covers_read`]); outside it,
+/// it is `PolicyDenied` with the coarse category from the closed vocabulary
+/// ([`DenyReason::rule_id`]), never the specific rule. A `User` (human) is
+/// not sandboxed: symmetric with `fs.list`/`fs.read`, which TODAY remain
+/// open to agents — #80 debt (M3 only gated mutations; search is the first
+/// bounded read).
 ///
-/// Criterios inválidos (glob/regex que no compilan, cero criterios, ejes
-/// excluyentes) → `INVALID_PARAMS` SIN crear Task, con el diagnóstico del
-/// compilador (es el propio input del requester, no una fuga). Muerte del peer
-/// a mitad: la Task ya está registrada y se gobierna por `task.cancel` como una
-/// copia (#64 acota la ventana del dispatch dropeado); la bomba de hits muere
-/// sola cuando el walker cierra el canal.
+/// Invalid criteria (glob/regex that fails to compile, zero criteria,
+/// mutually exclusive axes) → `INVALID_PARAMS` WITHOUT creating a Task, with
+/// the compiler's diagnostic (it is the requester's own input, not a leak).
+/// Peer death mid-way: the Task is already registered and is governed by
+/// `task.cancel` like a copy (#64 bounds the dropped-dispatch window); the
+/// hits pump dies on its own when the walker closes the channel.
 #[tracing::instrument(skip_all, fields(actor = ?actor))]
 async fn handle_fs_search(
     params: Option<serde_json::Value>,
@@ -5702,14 +5829,15 @@ async fn handle_fs_search(
 ) -> Result<serde_json::Value, RpcError> {
     let p: methods::FsSearchParams = parse_params(params)?;
 
-    // Gate de lectura (default-deny para agentes fuera de scope): el mismo
-    // [`read_gate`] que `fs.list`/`fs.read`/`fs.stat`/`fs.capabilities` (#80).
+    // Read gate (default-deny for out-of-scope agents): the same
+    // [`read_gate`] as `fs.list`/`fs.read`/`fs.stat`/`fs.capabilities` (#80).
     read_gate(actor, &p.root, shared)?;
 
-    // Validación de criterios ANTES de la Task: compila los matchers para
-    // recuperar el diagnóstico saneado y responder INVALID_PARAMS sin crear
-    // Task (`search_as` los recompila —barato— y devolvería un error opaco). El
-    // detalle es el mensaje del compilador de glob/regex: input del requester.
+    // Criteria validation BEFORE the Task: compiles the matchers to recover
+    // the sanitized diagnostic and answer INVALID_PARAMS without creating a
+    // Task (`search_as` recompiles them — cheap — and would return an opaque
+    // error). The detail is the glob/regex compiler's message: the
+    // requester's own input.
     if let Err(e) = crate::search::SearchMatchers::compile(&p) {
         return Err(RpcError::protocol(
             codes::INVALID_PARAMS,
@@ -5722,18 +5850,18 @@ async fn handle_fs_search(
         .search_as(p, actor.clone())
         .await
         .map_err(RpcError::from)?;
-    // INVARIANTE (#64): CERO `.await` entre el submit del engine (dentro de
-    // `search_as`) y este register — la Task jamás corre FUERA de `shared.tasks`
-    // (con task.list/cancel y contando contra los topes). Quien añada un await
-    // aquí rompe esa garantía.
+    // INVARIANT (#64): ZERO `.await` between the engine's submit (inside
+    // `search_as`) and this register — the Task never runs OUTSIDE
+    // `shared.tasks` (with task.list/cancel and counting against the caps).
+    // Whoever adds an await here breaks that guarantee.
     let task_id = register_task_id(shared, handle, actor.clone())?;
 
-    // Bomba de HITS: drena el canal del walker y enruta cada lote como
-    // `search.hits` SOLO al dueño. Muere sola cuando el walker cierra `tx`
-    // (terminal, cancel o receptor —el propio dueño— desaparecido).
+    // HITS pump: drains the walker's channel and routes each batch as
+    // `search.hits` ONLY to the owner. Dies on its own when the walker closes
+    // `tx` (terminal, cancel, or the receiver — the owner itself — gone).
     let shared_pump = Arc::clone(shared);
-    // #155: igual que `compare.rows` — el dueño de un feed dirigido vivo
-    // pierde frames, jamás la suscripción.
+    // #155: same as `compare.rows` — the owner of a live directed feed loses
+    // frames, never the subscription.
     let feed = shared_pump.feed_guard(conn_id);
 
     crate::blocking::spawn(async move {
@@ -5745,11 +5873,11 @@ async fn handle_fs_search(
                 params: serde_json::to_value(&hits).ok(),
             };
             if let Ok(frame) = encode_frame(&notif) {
-                // El desenlace se ignora A PROPÓSITO: la bomba de `fs.compare`
-                // sí para cuando el dueño desaparece, pero cambiar eso aquí
-                // cambiaría el comportamiento de una búsqueda viva, que no es
-                // lo que este cambio venía a tocar. `fs.search` además se
-                // acota con `max_hits`.
+                // The outcome is ignored ON PURPOSE: `fs.compare`'s pump does
+                // stop when the owner disappears, but changing that here
+                // would change a live search's behavior, which is not what
+                // this change came to touch. `fs.search` is also bounded by
+                // `max_hits`.
                 let _delivered =
                     shared_pump.send_to_conn(conn_id, &Arc::from(frame.into_boxed_slice()));
             }
@@ -5759,86 +5887,86 @@ async fn handle_fs_search(
     to_value(&methods::FsTaskResult { task_id })
 }
 
-/// El tope de parejas de un lote de renames (0.36.0), aplicado EN LA FRONTERA.
+/// The pair cap of a rename batch (0.36.0), applied AT THE BOUNDARY.
 ///
-/// La constante es el contrato ([`methods::FS_RENAME_BATCH_MAX_PAIRS`]) y el
-/// daemon es donde se impone: aquí es donde llega input de un peer que puede
-/// ser un agente. RECHAZA, no recorta —recortar ejecutaría un plan distinto del
-/// pedido, y para el plan devolvería veredictos de un lote que nadie mandó—, y
-/// rechaza ANTES de tocar el engine, que planifica en tiempo lineal sobre las
-/// parejas Y sobre el listado. El engine vuelve a comprobarlo por su cuenta
-/// (es API pública embebida); esta comprobación es la de la frontera, no un
-/// duplicado ocioso.
+/// The constant is the contract ([`methods::FS_RENAME_BATCH_MAX_PAIRS`]) and
+/// the daemon is where it is enforced: this is where input from a peer that
+/// could be an agent arrives. It REJECTS, does not trim — trimming would run
+/// a plan different from the one requested, and for that plan it would
+/// return verdicts for a batch nobody sent — and it rejects BEFORE touching
+/// the engine, which plans in linear time over the pairs AND over the
+/// listing. The engine re-checks it on its own (it is public embedded API);
+/// this check is the boundary's, not an idle duplicate.
 ///
-/// El veredicto es [`Error::InvalidPath`] de la TAXONOMÍA, el mismo que
-/// devuelve `plan_for` cuando la comprobación gemela del engine se dispara. Un
-/// `-32602` pelado no lleva categoría en `data`, así que el `Backend` remoto lo
-/// entregaría como `Internal` mientras el embebido dice `InvalidPath`: dos
-/// respuestas distintas al mismo suceso según por dónde se entre.
+/// The verdict is [`Error::InvalidPath`] from the TAXONOMY, the same one
+/// `plan_for` returns when the engine's twin check fires. A bare `-32602`
+/// carries no category in `data`, so the remote `Backend` would deliver it as
+/// `Internal` while the embedded one says `InvalidPath`: two different
+/// answers to the same event depending on which door it came through.
 fn check_pairs_cap(
     pairs: &[methods::RenamePair],
 ) -> Result<Vec<crate::rename::PairBytes>, RpcError> {
     let max = methods::FS_RENAME_BATCH_MAX_PAIRS;
     if pairs.len() > max {
-        tracing::debug!(
-            pairs = pairs.len(),
-            max,
-            "lote de renames por encima del tope"
-        );
+        tracing::debug!(pairs = pairs.len(), max, "rename batch above the cap");
         return Err(RpcError::from(norte_proto::Error::InvalidPath));
     }
     Ok(crate::rename::pairs_from_wire(pairs))
 }
 
-/// `fs.rename_batch_report` (0.36.0): el informe de un lote ya lanzado.
+/// `fs.rename_batch_report` (0.36.0): the report of an already-launched
+/// batch.
 ///
-/// Lo ve quien podría ver la Task ([`may_observe`]): su dueño, o cualquier
-/// conexión humana. Para el resto la respuesta es la MISMA que la de un id
-/// desconocido — el informe lleva rutas del directorio de otro actor, y
-/// distinguir «no es tuya» de «no existe» ya sería filtrar que existió (mismo
-/// criterio que `task.cancel`).
+/// Seen by whoever could see the Task ([`may_observe`]): its owner, or any
+/// human connection. For everyone else the answer is the SAME as an unknown
+/// id — the report carries paths from another actor's directory, and
+/// distinguishing "not yours" from "does not exist" would already leak that
+/// it existed (same criterion as `task.cancel`).
 ///
-/// Un id DESALOJADO del anillo contesta lo mismo que uno que nunca fue un lote,
-/// y eso sí es una renuncia: existe el precedente de
-/// [`Error::CursorExpired`](norte_proto::Error::CursorExpired) (ADR 0017) para
-/// «tu asa envejeció fuera de un anillo acotado del server». No se acuña
-/// categoría porque hoy ningún cliente reintentaría distinto —el informe de una
-/// task terminal se pide una vez, justo después— y porque separar las dos cosas
-/// solo tiene sentido si además se separa de la tercera, que es justo la que no
-/// puede separarse. Aditiva el día que un cliente enseñe el caso (ADR 0042 §8).
+/// An id EVICTED from the ring answers the same as one that was never a
+/// batch, and that IS a trade-off: there is precedent in
+/// [`Error::CursorExpired`](norte_proto::Error::CursorExpired) (ADR 0017)
+/// for "your handle aged out of a bounded server ring". No category is
+/// minted because today no client would retry differently — a terminal
+/// task's report is asked for once, right after — and because separating the
+/// two things only makes sense if the third is also separated, which is
+/// exactly the one that cannot be. Additive the day a client demonstrates
+/// the case (ADR 0042 §8).
 fn handle_rename_batch_report(
     actor: &Actor,
     p: &methods::FsRenameBatchReportParams,
     shared: &Arc<Shared>,
 ) -> Result<serde_json::Value, RpcError> {
-    // `NotFound` de la taxonomía, que es exactamente lo que contesta el brazo
-    // embebido del `Backend` para el mismo caso. Una sola respuesta para las
-    // TRES situaciones —desalojado del anillo, nunca fue un lote, es de otro
-    // actor— y la tercera es la razón: separarla confirmaría que la task de
-    // otro existió.
+    // `NotFound` from the taxonomy, exactly what the `Backend`'s embedded arm
+    // answers for the same case. A single answer for all THREE situations —
+    // evicted from the ring, never was a batch, belongs to another actor —
+    // and the third is the reason: separating it would confirm someone
+    // else's task existed.
     let unknown = || RpcError::from(norte_proto::Error::NotFound);
     let (owner, report) = shared
         .engine
         .rename_batch_report(p.task_id)
         .ok_or_else(unknown)?;
     if !may_observe(actor, &owner) {
-        // Material de auditoría (M3-5), igual que la rama denegada de
-        // `task.cancel`: el que pregunta por informes ajenos deja rastro
-        // aunque su respuesta no le diga nada. Ni el id ni el dueño: la
-        // traza cuenta que hubo sondeo, no qué había al otro lado.
+        // Audit material (M3-5), same as `task.cancel`'s denied branch:
+        // whoever asks about other actors' reports leaves a trace even if
+        // the answer tells it nothing. Neither the id nor the owner: the
+        // trace counts that a probe happened, not what was on the other
+        // side.
         tracing::warn!(
             actor = ?actor,
-            "informe de lote de otro actor: denegado (respuesta = id desconocido)"
+            "rename batch report of another actor: denied (response = unknown id)"
         );
         return Err(unknown());
     }
     to_value(&crate::rename::report_to_proto(&report))
 }
 
-/// Métodos que solo un HUMANO puede pedir: un agente recibe `PolicyDenied`
-/// con la regla `not-approved`, igual que si su scope no alcanzara. Los tres
-/// que lo usan (`ai.rename_plan`, `index.embed`, `index.search_semantic`)
-/// gastan modelo o construyen índice: no es un permiso de ruta, es de quién.
+/// Methods only a HUMAN may request: an agent receives `PolicyDenied` with
+/// the `not-approved` rule, same as if its scope did not reach. The three
+/// that use it (`ai.rename_plan`, `index.embed`, `index.search_semantic`)
+/// spend model or build an index: it is not a path permission, it is a who
+/// permission.
 fn human_only(actor: &Actor) -> Result<(), RpcError> {
     if matches!(actor, Actor::User) {
         Ok(())
@@ -5849,14 +5977,14 @@ fn human_only(actor: &Actor) -> Result<(), RpcError> {
     }
 }
 
-/// Las familias `fs.*`/`task.*` del dispatch (separadas por tamaño). El
-/// `actor` viene de la conexión (M3-3b): las mutaciones se journalizan y
-/// evalúan bajo él.
-// Lista plana de brazos, un método por brazo — mismo criterio que `dispatch`:
-// trocearla no reduciría la complejidad real, solo la escondería.
+/// The `fs.*`/`task.*` families of the dispatch (split out by size). `actor`
+/// comes from the connection (M3-3b): mutations are journaled and evaluated
+/// under it.
+// Flat list of arms, one method per arm — same criterion as `dispatch`:
+// splitting it would not reduce the real complexity, only hide it.
 #[expect(
     clippy::too_many_lines,
-    reason = "trocearla no reduciría la complejidad real, solo la escondería"
+    reason = "splitting it would not reduce the real complexity, only hide it"
 )]
 async fn dispatch_fs_task(
     req: Request,
@@ -5865,47 +5993,50 @@ async fn dispatch_fs_task(
     shared: &Arc<Shared>,
 ) -> Result<serde_json::Value, RpcError> {
     match req.method.as_str() {
-        // fs.search (0.18.0): los HITS son del que la lanzó → necesita conn_id
-        // para el envío dirigido (jamás broadcast).
+        // fs.search (0.18.0): HITS belong to whoever launched it → needs
+        // conn_id for the directed send (never broadcast).
         methods::FS_SEARCH => handle_fs_search(req.params, conn_id, &actor, shared).await,
-        // fs.compare (0.39.0): las FILAS son del que la lanzó → conn_id, igual
-        // que `fs.search` (envío dirigido, jamás broadcast).
+        // fs.compare (0.39.0): ROWS belong to whoever launched it → conn_id,
+        // same as `fs.search` (directed send, never broadcast).
         methods::FS_COMPARE => handle_fs_compare(req.params, conn_id, &actor, shared).await,
-        // fs.dir_size (0.49.0, #139): sin conn_id — no enruta nada, el total
-        // viaja en el progreso que ya escucha todo el mundo.
+        // fs.dir_size (0.49.0, #139): no conn_id — routes nothing, the total
+        // travels in the progress everybody already listens to.
         methods::FS_DIR_SIZE => handle_fs_dir_size(req.params, &actor, shared).await,
-        // fs.checksum (0.59.0, #311): el digest del contenido, como Task, y su
-        // informe — los digests no caben en el desenlace de una Task.
+        // fs.checksum (0.59.0, #311): the content's digest, as a Task, and
+        // its report — digests do not fit in a Task's outcome.
         methods::FS_CHECKSUM => handle_fs_checksum(req.params, &actor, shared).await,
         methods::FS_CHECKSUM_REPORT => {
             let p: methods::FsChecksumReportParams = parse_params(req.params)?;
             handle_fs_checksum_report(&actor, &p, shared)
         }
-        // fs.dir_usage (0.75.0, fase 4): sin conn_id — no enruta nada; el mapa
-        // se recoge con su informe, que no cabe en el progreso.
+        // fs.dir_usage (0.75.0, phase 4): no conn_id — routes nothing; the
+        // map is collected with its report, which does not fit in progress.
         methods::FS_DIR_USAGE => handle_fs_dir_usage(req.params, &actor, shared).await,
         methods::FS_DIR_USAGE_REPORT => {
             let p: methods::FsDirUsageReportParams = parse_params(req.params)?;
             handle_fs_dir_usage_report(&actor, &p, shared)
         }
-        // 0.50.0 (#132): escribir archivos. Ninguno escribe DENTRO de un
-        // contenedor — el provider de archivos sigue `READ_ONLY` (ADR 0018).
+        // 0.50.0 (#132): writing archives. None of them write INSIDE a
+        // container — the archive provider stays `READ_ONLY` (ADR 0018).
         methods::ARCHIVE_PACK => handle_archive_pack(req.params, &actor, shared).await,
         methods::ARCHIVE_TEST => handle_archive_test(req.params, &actor, shared).await,
         methods::ARCHIVE_TEST_REPORT => handle_archive_test_report(req.params, &actor, shared),
         methods::ARCHIVE_PACK_REPORT => handle_archive_pack_report(req.params, &actor, shared),
         methods::FILE_SPLIT => handle_file_split(req.params, &actor, shared).await,
         methods::FILE_COMBINE => handle_file_combine(req.params, &actor, shared).await,
-        // connection.close (0.49.0, #140): humano, con gate de lectura.
+        // connection.close (0.49.0, #140): human, with a read gate.
         methods::CONNECTION_CLOSE => handle_connection_close(&actor, req.params, shared),
-        // sync.plan (0.40.0): los PASOS son del que lo lanzó, y el plan queda
-        // RETENIDO a nombre de esta conexión → conn_id por partida doble.
+        // sync.plan (0.40.0): the STEPS belong to whoever launched it, and
+        // the plan is RETAINED in this connection's name → conn_id twice
+        // over.
         methods::SYNC_PLAN => handle_sync_plan(req.params, conn_id, &actor, shared).await,
-        // sync.apply (0.40.0): el plan RETENIDO se abre por `(conn_id, hash)`,
-        // así que el conn_id no es para enrutar nada — es la mitad de la llave.
+        // sync.apply (0.40.0): the RETAINED plan is opened by `(conn_id,
+        // hash)`, so conn_id is not for routing anything — it is half the
+        // key.
         methods::SYNC_APPLY => handle_sync_apply(req.params, conn_id, &actor, shared).await,
-        // sync.report (0.40.0): lo que un `Failed` no puede contar — qué pasos
-        // se quedaron sin aplicar y bajo qué lote está lo que sí.
+        // sync.report (0.40.0): what a `Failed` cannot tell — which steps
+        // were left unapplied and under which batch the ones that succeeded
+        // ended up.
         methods::SYNC_REPORT => {
             let p: methods::SyncReportParams = parse_params(req.params)?;
             handle_sync_report(&actor, &p, shared)
@@ -5915,7 +6046,7 @@ async fn dispatch_fs_task(
             read_gate(&actor, &p.path, shared)?; // #80
             handle_fs_stat(p, shared).await
         }
-        // index.query (0.25.0, M4): lectura directa del índice.
+        // index.query (0.25.0, M4): direct index read.
         methods::INDEX_QUERY => {
             let p: methods::IndexQueryParams = parse_params(req.params)?;
             read_gate(&actor, &p.root, shared)?; // #80
@@ -5935,37 +6066,39 @@ async fn dispatch_fs_task(
                 .collect();
             to_value(&methods::IndexQueryResult { hits })
         }
-        // ai.rename_plan (0.32.0, M4-IA, ADR 0031): plan de rename revisable.
-        // Respuesta DIRECTA; cancelable (#72) — la llamada al proveedor tarda.
+        // ai.rename_plan (0.32.0, M4-IA, ADR 0031): reviewable rename plan.
+        // DIRECT response; cancellable (#72) — the provider call takes a
+        // while.
         methods::AI_RENAME_PLAN => {
-            // IA solo para el humano (M4-IA security): un agente con scope de
-            // lectura NO puede quemar cuota del proveedor ni empujar basenames
-            // + instrucción fuera de la máquina sin rastro (el path de lectura
-            // no journaliza). El MCP tampoco expone ai.* como tool. Categoría
-            // del vocabulario CERRADO de [`crate::policy::DenyReason`].
+            // AI only for the human (M4-IA security): an agent with a read
+            // scope must NOT be able to burn the provider's quota nor push
+            // basenames + instruction off the machine with no trace (the read
+            // path does not journal). MCP does not expose ai.* as a tool
+            // either. Category from the CLOSED vocabulary of
+            // [`crate::policy::DenyReason`].
             //
-            // **El gate va ANTES del parseo** (#122), como en `index.embed` y
-            // por el mismo motivo: estando después, un agente distinguía
-            // «params malos» de «instrucción demasiado larga» de «dentro o
-            // fuera de mi scope» ANTES de que se le denegara — o sea que la
-            // respuesta dependía de cosas que él controla, y eso convierte un
-            // método vedado en un oráculo sobre el árbol del humano.
+            // **The gate goes BEFORE parsing** (#122), like in `index.embed`
+            // and for the same reason: coming after, an agent could
+            // distinguish "bad params" from "instruction too long" from
+            // "inside or outside my scope" BEFORE being denied — i.e. the
+            // answer depended on things it controls, and that turns a
+            // forbidden method into an oracle about the human's tree.
             human_only(&actor)?;
             let p: methods::AiRenamePlanParams = parse_params(req.params)?;
             if p.instruction.len() > MAX_AI_INSTRUCTION_BYTES {
                 return Err(RpcError::protocol(
                     codes::INVALID_PARAMS,
-                    format!("instruction supera {MAX_AI_INSTRUCTION_BYTES} bytes"),
+                    format!("instruction exceeds {MAX_AI_INSTRUCTION_BYTES} bytes"),
                 ));
             }
-            // El subconjunto tiene el MISMO tope que un lote de rutas (#121):
-            // `names` es una lista que llega de fuera, y una sin tope es un
-            // frame de 16 MiB de nombres cortos que el engine recorre por cada
-            // entrada del listado.
+            // The subset has the SAME cap as a path batch (#121): `names` is
+            // a list that arrives from outside, and one with no cap is a 16
+            // MiB frame of short names the engine walks for every listing
+            // entry.
             if p.names.len() > methods::AI_RENAME_NAMES_MAX {
                 return Err(RpcError::protocol(
                     codes::INVALID_PARAMS,
-                    format!("names supera {}", methods::AI_RENAME_NAMES_MAX),
+                    format!("names exceeds {}", methods::AI_RENAME_NAMES_MAX),
                 ));
             }
             read_gate(&actor, &p.dir, shared)?; // #80
@@ -5974,28 +6107,29 @@ async fn dispatch_fs_task(
                 .ai_rename_plan_for(&p.dir, &p.instruction, &p.names)
                 .await
                 .map_err(RpcError::from)?;
-            // Mapeo core→proto compartido con `Backend::Embedded`
-            // (`ai_plan_to_proto`): lossy-identidad por invariante del engine.
+            // core→proto mapping shared with `Backend::Embedded`
+            // (`ai_plan_to_proto`): lossy-identity by the engine's invariant.
             to_value(&crate::ai::ai_plan_to_proto(plan))
         }
-        // `ai.organize_plan` (0.77.0, fase 8): el gemelo del de arriba, con
-        // las MISMAS puertas y en el mismo orden — humano primero, luego el
-        // parseo, los dos topes, y el gate de lectura del directorio. Que sea
-        // «como el otro» no basta: cada una de esas cuatro está por un motivo
-        // distinto, y saltarse la primera convierte el método en un oráculo.
+        // `ai.organize_plan` (0.77.0, phase 8): the twin of the one above,
+        // with the SAME gates in the same order — human first, then parsing,
+        // the two caps, and the directory's read gate. Being "like the
+        // other one" is not enough: each of those four exists for a
+        // different reason, and skipping the first turns the method into an
+        // oracle.
         methods::AI_ORGANIZE_PLAN => {
             human_only(&actor)?;
             let p: methods::AiOrganizePlanParams = parse_params(req.params)?;
             if p.instruction.len() > MAX_AI_INSTRUCTION_BYTES {
                 return Err(RpcError::protocol(
                     codes::INVALID_PARAMS,
-                    format!("instruction supera {MAX_AI_INSTRUCTION_BYTES} bytes"),
+                    format!("instruction exceeds {MAX_AI_INSTRUCTION_BYTES} bytes"),
                 ));
             }
             if p.names.len() > methods::AI_RENAME_NAMES_MAX {
                 return Err(RpcError::protocol(
                     codes::INVALID_PARAMS,
-                    format!("names supera {}", methods::AI_RENAME_NAMES_MAX),
+                    format!("names exceeds {}", methods::AI_RENAME_NAMES_MAX),
                 ));
             }
             read_gate(&actor, &p.dir, shared)?;
@@ -6015,9 +6149,9 @@ async fn dispatch_fs_task(
                 plan_hash,
             })
         }
-        // `fs.organize` (0.77.0, fase 8): aplicar el plan. MUTA, así que va
-        // por el actor de la conexión y lo gatea el engine —un solo gate para
-        // todas las rutas que toca, carpetas incluidas—. Devuelve Task.
+        // `fs.organize` (0.77.0, phase 8): applying the plan. MUTATES, so it
+        // goes by the connection's actor and the engine gates it — a single
+        // gate for every path it touches, folders included. Returns a Task.
         methods::FS_ORGANIZE => {
             let p: methods::FsOrganizeParams = parse_params(req.params)?;
             let handle = shared
@@ -6028,15 +6162,15 @@ async fn dispatch_fs_task(
             let task_id = register_task_id(shared, handle, actor.clone())?;
             to_value(&methods::FsTaskResult { task_id })
         }
-        // index.build (0.25.0, M4): Task. El resultado (indexed/removed) NO se
-        // reenvía por wire aún (task completa = hecho); un fetch de report es
-        // deuda análoga a `policy.undo_report`.
+        // index.build (0.25.0, M4): a Task. The result (indexed/removed) is
+        // NOT resent over the wire yet (task complete = done); fetching a
+        // report is debt analogous to `policy.undo_report`.
         methods::INDEX_BUILD => {
             let p: methods::IndexBuildParams = parse_params(req.params)?;
-            // Gate de LECTURA (#80): el build camina el subárbol y sus paths
-            // salen por `task.progress.current` al owner — un agente fuera de
-            // scope enumeraría un árbol arbitrario. Se gatea igual que fs.search /
-            // index.query (security/rust BLOCKER de la review M4).
+            // READ gate (#80): the build walks the subtree and its paths go
+            // out via `task.progress.current` to the owner — an out-of-scope
+            // agent would enumerate an arbitrary tree. Gated the same as
+            // fs.search / index.query (M4 review's security/rust BLOCKER).
             read_gate(&actor, &p.root, shared)?;
             let (handle, _report) = shared
                 .engine
@@ -6046,17 +6180,18 @@ async fn dispatch_fs_task(
             let task_id = register_task_id(shared, handle, actor.clone())?;
             to_value(&methods::FsTaskResult { task_id })
         }
-        // index.embed (0.33.0, M4-IA-2): Task de embeddings del root ya
-        // indexado. SOLO humano, fail-closed como ai.rename_plan: los
-        // prefijos de CONTENIDO salen del proceso hacia el proveedor y el
-        // path de lectura no journaliza — un agente no quema cuota ni
-        // exfiltra contenido sin rastro. Categoría del vocabulario CERRADO
-        // de [`crate::policy::DenyReason`].
+        // index.embed (0.33.0, M4-IA-2): embeddings Task for an already
+        // indexed root. HUMAN ONLY, fail-closed like ai.rename_plan: CONTENT
+        // prefixes leave the process toward the provider and the read path
+        // does not journal — an agent must not burn quota nor exfiltrate
+        // content with no trace. Category from the CLOSED vocabulary of
+        // [`crate::policy::DenyReason`].
         methods::INDEX_EMBED => {
-            // El gate de actor va ANTES del parseo A PROPÓSITO (security
-            // audit M4-IA-2): un agente recibe `PolicyDenied` sea cual sea
-            // la validez de sus params, y jamás distingue "params malos" de
-            // "vedado" — la respuesta no depende de nada que él controle.
+            // The actor gate goes BEFORE parsing ON PURPOSE (M4-IA-2 security
+            // audit): an agent receives `PolicyDenied` regardless of its
+            // params' validity, and never distinguishes "bad params" from
+            // "forbidden" — the answer does not depend on anything it
+            // controls.
             human_only(&actor)?;
             let p: methods::IndexEmbedParams = parse_params(req.params)?;
             read_gate(&actor, &p.root, shared)?; // #80
@@ -6065,24 +6200,24 @@ async fn dispatch_fs_task(
                 .index_embed_as(p.root, actor.clone())
                 .await
                 .map_err(RpcError::from)?;
-            // INVARIANTE (#64): CERO `.await` entre el submit del engine
-            // (dentro de `index_embed_as`) y este register.
+            // INVARIANT (#64): ZERO `.await` between the engine's submit
+            // (inside `index_embed_as`) and this register.
             let task_id = register_task_id(shared, handle, actor.clone())?;
             to_value(&methods::FsTaskResult { task_id })
         }
-        // index.search_semantic (0.33.0, M4-IA-2): respuesta DIRECTA,
-        // cancelable con rpc.cancel (#72) — el embed de la query tarda lo
-        // que tarde el proveedor. SOLO humano (la query SALE hacia el
-        // proveedor), mismo criterio que index.embed / ai.rename_plan.
+        // index.search_semantic (0.33.0, M4-IA-2): DIRECT response,
+        // cancellable with rpc.cancel (#72) — embedding the query takes as
+        // long as the provider takes. HUMAN ONLY (the query LEAVES toward
+        // the provider), same criterion as index.embed / ai.rename_plan.
         methods::INDEX_SEARCH_SEMANTIC => {
-            // Igual que `index.embed`: gate de actor ANTES del parseo (security
-            // audit M4-IA-2), para que un agente vea siempre `PolicyDenied`.
+            // Same as `index.embed`: actor gate BEFORE parsing (M4-IA-2
+            // security audit), so an agent always sees `PolicyDenied`.
             human_only(&actor)?;
             let p: methods::IndexSearchSemanticParams = parse_params(req.params)?;
             if p.query.len() > MAX_AI_QUERY_BYTES {
                 return Err(RpcError::protocol(
                     codes::INVALID_PARAMS,
-                    format!("query supera {MAX_AI_QUERY_BYTES} bytes"),
+                    format!("query exceeds {MAX_AI_QUERY_BYTES} bytes"),
                 ));
             }
             if let Some(root) = &p.root {
@@ -6106,8 +6241,9 @@ async fn dispatch_fs_task(
                 symlinks: p.symlinks,
                 resume: p.resume,
                 verify: p.verify,
-                // A la cola si el cliente lo pidió (ADR 0149); un cliente
-                // N-1 no manda el campo y va en paralelo, como siempre.
+                // Queued if the client asked for it (ADR 0149); an N-1
+                // client does not send the field and runs in parallel, as
+                // always.
                 queued: p.queued,
             };
             let handle = shared
@@ -6115,11 +6251,11 @@ async fn dispatch_fs_task(
                 .copy_anchored(&p.from, &p.to, opts, actor.clone(), p.dest_anchor)
                 .await
                 .map_err(RpcError::from)?;
-            // INVARIANTE (#64): CERO `.await` entre el submit del engine y
-            // este register — un dispatch dropeado por la muerte del peer
-            // jamás deja una Task corriendo FUERA de `shared.tasks` (sin
-            // task.list/cancel, sin contar contra MAX_LIVE_TASKS). Quien
-            // añada un await aquí rompe esa garantía.
+            // INVARIANT (#64): ZERO `.await` between the engine's submit and
+            // this register — a dispatch dropped by the peer's death never
+            // leaves a Task running OUTSIDE `shared.tasks` (with no
+            // task.list/cancel, not counting against MAX_LIVE_TASKS).
+            // Whoever adds an await here breaks that guarantee.
             register_task(shared, handle, actor)
         }
         methods::FS_MOVE => {
@@ -6129,8 +6265,9 @@ async fn dispatch_fs_task(
                 symlinks: p.symlinks,
                 resume: p.resume,
                 verify: p.verify,
-                // A la cola si el cliente lo pidió (ADR 0149); un cliente
-                // N-1 no manda el campo y va en paralelo, como siempre.
+                // Queued if the client asked for it (ADR 0149); an N-1
+                // client does not send the field and runs in parallel, as
+                // always.
                 queued: p.queued,
             };
             let handle = shared
@@ -6149,13 +6286,13 @@ async fn dispatch_fs_task(
                 .map_err(RpcError::from)?;
             register_task(shared, handle, actor)
         }
-        // fs.rename_batch_plan (0.36.0, ADR 0042): el plan REVISABLE de un lote
-        // de renames. Respuesta DIRECTA: ni Task, ni journal, ni mutación —
-        // pero SÍ una lectura de directorio, y por eso pasa por el `read_gate`
-        // como `fs.list`/`fs.stat` (#80). Sus veredictos `External`,
-        // `AbsentSource` y `AmbiguousSource` dicen qué nombres existen y cuáles
-        // no: sin gate esto es un oráculo de nombres —y de gemelos NFC/NFD, que
-        // `fs.list` ni siquiera expone— para un agente sin scope.
+        // fs.rename_batch_plan (0.36.0, ADR 0042): the REVIEWABLE plan of a
+        // rename batch. DIRECT response: no Task, no journal, no mutation —
+        // but it DOES read a directory, so it goes through `read_gate` like
+        // `fs.list`/`fs.stat` (#80). Its `External`, `AbsentSource` and
+        // `AmbiguousSource` verdicts say which names exist and which do not:
+        // without a gate this is a name oracle — and of NFC/NFD twins, which
+        // `fs.list` does not even expose — for a scopeless agent.
         methods::FS_RENAME_BATCH_PLAN => {
             let p: methods::FsRenameBatchPlanParams = parse_params(req.params)?;
             read_gate(&actor, &p.dir, shared)?; // #80
@@ -6167,20 +6304,22 @@ async fn dispatch_fs_task(
                 .map_err(RpcError::from)?;
             to_value(&crate::rename::plan_to_proto(&plan).map_err(RpcError::from)?)
         }
-        // fs.rename_batch (0.36.0, ADR 0042): UNA Task, UN lote del journal,
-        // rollback si algo falla. El engine RE-PLANIFICA y compara el hash: lo
-        // que cruza el wire es intención (`pairs`), jamás un orden.
+        // fs.rename_batch (0.36.0, ADR 0042): ONE Task, ONE journal batch,
+        // rollback if anything fails. The engine RE-PLANS and compares the
+        // hash: what crosses the wire is intent (`pairs`), never an
+        // ordering.
         methods::FS_RENAME_BATCH => {
             let p: methods::FsRenameBatchParams = parse_params(req.params)?;
-            // #80, y aquí NO es una precaución de más. Ejecutar EMPIEZA por
-            // planificar: `rename_batch_as` lista el directorio y compara el
-            // hash ANTES de llegar a su gate de mutación, así que sin este
-            // gate este método es el mismo oráculo que su gemelo — y uno mejor,
-            // porque el `plan_hash` es determinista y calculable offline: un
-            // agente sin scope manda el hash de la hipótesis «existe X» y
-            // distingue `PolicyDenied` (existía) de `PlanStale` (no existía),
-            // un bit exacto por petición. Que el efecto esté gateado más
-            // adentro no salva a la LECTURA que hay antes.
+            // #80, and here it is NOT an extra precaution. Executing BEGINS
+            // by planning: `rename_batch_as` lists the directory and
+            // compares the hash BEFORE reaching its mutation gate, so
+            // without this gate this method is the same oracle as its
+            // twin — and a better one, because `plan_hash` is deterministic
+            // and computable offline: a scopeless agent sends the hash of
+            // the hypothesis "X exists" and distinguishes `PolicyDenied` (it
+            // existed) from `PlanStale` (it did not), an exact bit per
+            // request. Having the effect gated further in does not save the
+            // READ that happens before it.
             read_gate(&actor, &p.dir, shared)?;
             let pairs = check_pairs_cap(&p.pairs)?;
             let (handle, _report) = shared
@@ -6188,22 +6327,22 @@ async fn dispatch_fs_task(
                 .rename_batch_as(&p.dir, &pairs, &p.plan_hash, actor.clone())
                 .await
                 .map_err(RpcError::from)?;
-            // El informe NO se retiene aquí: vive en el anillo del engine
-            // (`Engine::rename_batch_report`), que es de donde lo sirve
-            // `fs.rename_batch_report` — un solo anillo para el socket y para
-            // el `Backend` embebido.
+            // The report is NOT retained here: it lives in the engine's ring
+            // (`Engine::rename_batch_report`), which is what
+            // `fs.rename_batch_report` serves it from — a single ring for
+            // the socket and for the embedded `Backend`.
             //
-            // INVARIANTE (#64): CERO `.await` entre el submit del engine y este
-            // register, igual que fs.copy/fs.move.
+            // INVARIANT (#64): ZERO `.await` between the engine's submit and
+            // this register, same as fs.copy/fs.move.
             register_task(shared, handle, actor)
         }
-        // fs.rename_batch_report (0.36.0): lo que un `Failed` no puede contar —
-        // qué paso se quedó aplicado y con qué nombre.
+        // fs.rename_batch_report (0.36.0): what a `Failed` cannot tell —
+        // which step was left applied and under what name.
         methods::FS_RENAME_BATCH_REPORT => {
             let p: methods::FsRenameBatchReportParams = parse_params(req.params)?;
             handle_rename_batch_report(&actor, &p, shared)
         }
-        // fs.mkdir (0.31.0, #104): Task, mismo molde que delete.
+        // fs.mkdir (0.31.0, #104): a Task, same mold as delete.
         methods::FS_MKDIR => {
             let p: methods::FsMkdirParams = parse_params(req.params)?;
             let handle = shared
@@ -6222,18 +6361,18 @@ async fn dispatch_fs_task(
                 .map_err(RpcError::from)?;
             register_task(shared, handle, actor)
         }
-        // #314: cambiar permisos. El gate de POLÍTICA lo hace el engine sobre
-        // la lista entera y antes del primer efecto (`PolicyOp::SetMode`);
-        // aquí va el de LECTURA por ruta, por lo mismo que en `fs.dir_size` —
-        // sin él, un actor fuera de scope enumeraría un árbol ajeno a través
-        // de los errores de esta llamada.
+        // #314: changing permissions. The engine does the POLICY gate over
+        // the whole list and before the first effect (`PolicyOp::SetMode`);
+        // here goes the per-path READ one, for the same reason as in
+        // `fs.dir_size` — without it, an out-of-scope actor would enumerate
+        // someone else's tree through this call's errors.
         methods::FS_SET_MODE => {
             let p: methods::FsSetModeParams = parse_params(req.params)?;
-            // El TOPE antes del bucle de gates, como en `fs.checksum`: es una
-            // constante pública y el emisor sabe cuántas rutas mandó, así que
-            // comprobarlo primero no filtra nada. Al revés sí costaba — un
-            // lote de un millón de rutas tomaba el mutex del registro de
-            // scopes una vez por ruta antes de que nadie mirase el tope.
+            // The CAP before the gate loop, like in `fs.checksum`: it is a
+            // public constant and the sender knows how many paths it sent, so
+            // checking it first leaks nothing. The other way around did cost
+            // something — a batch of a million paths used to take the scope
+            // registry's mutex once per path before anyone looked at the cap.
             if p.paths.len() > methods::FS_SET_MODE_MAX_PATHS {
                 return Err(RpcError::from(norte_proto::Error::InvalidPath));
             }
@@ -6251,9 +6390,9 @@ async fn dispatch_fs_task(
     }
 }
 
-/// El resto del dispatch: `task.*` y los métodos de solo-lectura de 0.5.0.
-/// El `actor` viene de la conexión: gobierna la visibilidad de `task.list`,
-/// el alcance de `task.cancel` y quién puede bendecir host keys (#66).
+/// The rest of the dispatch: `task.*` and 0.5.0's read-only methods. `actor`
+/// comes from the connection: it governs `task.list`'s visibility,
+/// `task.cancel`'s scope and who may bless host keys (#66).
 async fn dispatch_task_family(
     req: Request,
     actor: crate::journal::Actor,
@@ -6266,16 +6405,17 @@ async fn dispatch_task_family(
                     .filter(|v| !v.is_null())
                     .or_else(|| Some(serde_json::json!({}))),
             )?;
-            // Resync de un frontend que (re)conecta: tasks VIVAS + los
-            // desenlaces recientes (por si su terminal se emitió mientras
-            // estaba fuera); lo posterior llega por task.progress.
+            // Resync of a frontend that (re)connects: LIVE tasks + recent
+            // outcomes (in case its terminal was emitted while it was away);
+            // what follows arrives via task.progress.
             //
-            // Visibilidad por actor (#66): un humano lo ve TODO; un agente
-            // SOLO sus tasks — `current` lleva paths de otros actores.
+            // Visibility by actor (#66): a human sees EVERYTHING; an agent
+            // sees ONLY its own tasks — `current` carries other actors'
+            // paths.
             let mut tasks: Vec<norte_proto::TaskProgress> = shared
                 .recent
                 .lock()
-                .expect("recent lock sano")
+                .expect("recent lock is sound")
                 .iter()
                 .filter(|(_, owner)| may_observe(&actor, owner))
                 .map(|(p, _)| p.clone())
@@ -6284,7 +6424,7 @@ async fn dispatch_task_family(
                 shared
                     .tasks
                     .lock()
-                    .expect("tasks lock sano")
+                    .expect("tasks lock is sound")
                     .values()
                     .filter(|t| may_observe(&actor, &t.owner))
                     .map(|t| t.handle.progress().borrow().clone()),
@@ -6298,15 +6438,15 @@ async fn dispatch_task_family(
         }
         methods::FS_CAPABILITIES => {
             let p: methods::FsCapabilitiesParams = parse_params(req.params)?;
-            read_gate(&actor, &p.path, shared)?; // #80: revela existencia/tipo
+            read_gate(&actor, &p.path, shared)?; // #80: reveals existence/type
             let capabilities = shared
                 .engine
                 .capabilities(&p.path)
                 .await
                 .map_err(RpcError::from)?;
-            // Catálogo del provider (#108 bloque 2), SIEMPRE saneado:
-            // `Engine::attr_catalog` pasa por `AttrCatalog::new` — único
-            // camino al wire (ADR 0039 §4).
+            // Provider catalogue (#108 block 2), ALWAYS sanitized:
+            // `Engine::attr_catalog` goes through `AttrCatalog::new` — the
+            // only path to the wire (ADR 0039 §4).
             let attrs = shared
                 .engine
                 .attr_catalog(&p.path)
@@ -6319,25 +6459,25 @@ async fn dispatch_task_family(
         }
         methods::TASK_CANCEL => {
             let p: methods::TaskCancelParams = parse_params(req.params)?;
-            // Cancelar algo terminal o desconocido NO es error (contrato
-            // del método): la respuesta solo confirma la recepción.
+            // Cancelling something terminal or unknown is NOT an error (the
+            // method's contract): the response only confirms receipt.
             if let Some(task) = shared
                 .tasks
                 .lock()
-                .expect("tasks lock sano")
+                .expect("tasks lock is sound")
                 .get(&p.task_id.get())
             {
-                // Gate de actor (#66): un agente solo cancela lo SUYO. Una
-                // task ajena se trata como desconocida — mismo ack, sin
-                // filtrar existencia. El intento sí se traza (material de
-                // auditoría M3-5), como el grant de scope.
+                // Actor gate (#66): an agent only cancels its OWN. Another
+                // actor's task is treated as unknown — same ack, no leaking
+                // existence. The attempt IS traced (M3-5 audit material),
+                // like a scope grant.
                 if may_observe(&actor, &task.owner) {
                     task.handle.cancel();
                 } else {
                     tracing::warn!(
                         task_id = p.task_id.get(),
                         actor = ?actor,
-                        "task.cancel sobre task ajena: ignorado por el gate de actor"
+                        "task.cancel on another actor's task: ignored by the actor gate"
                     );
                 }
             }
@@ -6345,17 +6485,17 @@ async fn dispatch_task_family(
         }
         methods::TASK_PAUSE => {
             let p: methods::TaskPauseParams = parse_params(req.params)?;
-            pausar_task(&p, true, &actor, shared);
+            pause_task(&p, true, &actor, shared);
             to_value(&methods::TaskPauseResult {})
         }
         methods::TASK_MOVE => {
             let p: methods::TaskMoveParams = parse_params(req.params)?;
-            mover_task_en_cola(&p, &actor, shared);
+            move_task_in_queue(&p, &actor, shared);
             to_value(&methods::TaskMoveResult {})
         }
         methods::TASK_RESUME => {
             let p: methods::TaskPauseParams = parse_params(req.params)?;
-            pausar_task(&p, false, &actor, shared);
+            pause_task(&p, false, &actor, shared);
             to_value(&methods::TaskPauseResult {})
         }
         methods::CONNECTION_TRUST_HOST_KEY => dispatch_trust_host_key(req, &actor, shared).await,
@@ -6367,36 +6507,37 @@ async fn dispatch_task_family(
     }
 }
 
-/// `task.move` (ADR 0149): reordena lo que aún no empezó. Mismo contrato que
-/// pausar — sobre una ajena, una que ya corre o una desconocida el ack es el
-/// mismo y no pasa nada.
-fn mover_task_en_cola(
+/// `task.move` (ADR 0149): reorders what has not started yet. Same contract
+/// as pausing — over another actor's task, one already running, or an
+/// unknown one, the ack is the same and nothing happens.
+fn move_task_in_queue(
     p: &methods::TaskMoveParams,
     actor: &crate::journal::Actor,
     shared: &Arc<Shared>,
 ) {
-    let suya = shared
+    let is_own = shared
         .tasks
         .lock()
-        .expect("tasks lock sano")
+        .expect("tasks lock is sound")
         .get(&p.task_id.get())
         .is_some_and(|t| may_observe(actor, &t.owner));
-    if suya {
-        // El ack no dice si se movió: no se filtra en qué estado estaba.
+    if is_own {
+        // The ack does not say whether it moved: no leaking what state it
+        // was in.
         let _ = shared.engine.mover_en_cola(p.task_id, p.up);
     }
 }
 
-/// `task.pause` / `task.resume` (ADR 0147). Mismo contrato que `task.cancel`:
-/// terminal o desconocida no es error, y una ajena se trata como desconocida
-/// — mismo ack, sin filtrar existencia; el intento sí se traza.
-fn pausar_task(
+/// `task.pause` / `task.resume` (ADR 0147). Same contract as `task.cancel`:
+/// terminal or unknown is not an error, and another actor's is treated as
+/// unknown — same ack, no leaking existence; the attempt IS traced.
+fn pause_task(
     p: &methods::TaskPauseParams,
-    pausar: bool,
+    pause: bool,
     actor: &crate::journal::Actor,
     shared: &Arc<Shared>,
 ) {
-    let tasks = shared.tasks.lock().expect("tasks lock sano");
+    let tasks = shared.tasks.lock().expect("tasks lock is sound");
     let Some(task) = tasks.get(&p.task_id.get()) else {
         return;
     };
@@ -6404,31 +6545,30 @@ fn pausar_task(
         tracing::warn!(
             task_id = p.task_id.get(),
             actor = ?actor,
-            pausar,
-            "task.pause/resume sobre task ajena: ignorado por el gate de actor"
+            pause,
+            "task.pause/resume on another actor's task: ignored by the actor gate"
         );
         return;
     }
-    let puerta = task.handle.pause_gate();
-    if pausar {
-        puerta.pause();
+    let gate = task.handle.pause_gate();
+    if pause {
+        gate.pause();
     } else {
-        puerta.resume();
+        gate.resume();
     }
 }
 
-/// `connection.trust_host_key` (#45): una de las dos puertas por las que el
-/// core le pregunta algo a un HUMANO. Fuera del `match` de
-/// `dispatch_task_family`, que se pasaba del tope de líneas al llegar su
-/// gemela.
+/// `connection.trust_host_key` (#45): one of the two doors through which the
+/// core asks a HUMAN something. Kept out of `dispatch_task_family`'s
+/// `match`, which was going over the line cap once its twin arrived.
 async fn dispatch_trust_host_key(
     req: Request,
     actor: &crate::journal::Actor,
     shared: &Arc<Shared>,
 ) -> Result<serde_json::Value, RpcError> {
-    // Aceptar un fingerprint bajo TOFU es una decisión de confianza HUMANA,
-    // como `grant_scope`/`decide`/`undo_session` (#66): un agente jamás
-    // bendice la identidad de un host.
+    // Accepting a fingerprint under TOFU is a HUMAN trust decision, like
+    // `grant_scope`/`decide`/`undo_session` (#66): an agent never blesses a
+    // host's identity.
     if !matches!(actor, Actor::User) {
         return Err(RpcError::protocol(
             codes::INVALID_REQUEST,
@@ -6436,10 +6576,10 @@ async fn dispatch_trust_host_key(
         ));
     }
     let p: methods::ConnectionTrustHostKeyParams = parse_params(req.params)?;
-    // El engine delega en el conector, que RE-VERIFICA el fingerprint contra
-    // la clave que el host presenta ahora (anti-TOCTOU, ADR 0015 D) antes de
-    // registrar nada. `algo` es informativo: la identidad que se confirma es
-    // el fingerprint.
+    // The engine delegates to the connector, which RE-VERIFIES the
+    // fingerprint against the key the host presents now (anti-TOCTOU, ADR
+    // 0015 D) before registering anything. `algo` is informational: the
+    // identity being confirmed is the fingerprint.
     shared
         .engine
         .trust_host_key(&p.host, p.port, &p.fingerprint)
@@ -6448,16 +6588,16 @@ async fn dispatch_trust_host_key(
     to_value(&methods::ConnectionTrustHostKeyResult { trusted: true })
 }
 
-/// `connection.provide_secret` (#325): la otra puerta. El secreto que un
-/// humano acaba de teclear tras un [`norte_proto::Error::SecretNeeded`].
+/// `connection.provide_secret` (#325): the other door. The secret a human
+/// just typed after a [`norte_proto::Error::SecretNeeded`].
 async fn dispatch_provide_secret(
     req: Request,
     actor: &crate::journal::Actor,
     shared: &Arc<Shared>,
 ) -> Result<serde_json::Value, RpcError> {
-    // Teclear una contraseña es un acto HUMANO, por la misma razón que su
-    // gemela y una más: un agente que pudiera inyectar credenciales de sesión
-    // elegiría con qué identidad actúa el usuario en el host remoto.
+    // Typing a password is a HUMAN act, for the same reason as its twin and
+    // one more: an agent that could inject session credentials would be
+    // choosing which identity the user acts under on the remote host.
     if !matches!(actor, Actor::User) {
         return Err(RpcError::protocol(
             codes::INVALID_REQUEST,
@@ -6465,20 +6605,20 @@ async fn dispatch_provide_secret(
         ));
     }
     let p: methods::ConnectionProvideSecretParams = parse_params(req.params)?;
-    // Un secreto vacío es una petición MAL FORMADA, y se dice como tal: el
-    // engine también lo rechaza (defensa en profundidad, y es donde vive la
-    // política), pero desde ahí solo puede salir `PermissionDenied`, que a un
-    // cliente con un bug le diría que sus credenciales no valen en vez de que
-    // su petición no vale.
+    // An empty secret is a MALFORMED request, and it is said as such: the
+    // engine also rejects it (defense in depth, and it is where the policy
+    // lives), but from there the only thing that can come out is
+    // `PermissionDenied`, which would tell a client with a bug that its
+    // credentials are invalid instead of that its request is invalid.
     if p.secret.is_empty() {
         return Err(RpcError::protocol(
             codes::INVALID_PARAMS,
             "connection secret must not be empty",
         ));
     }
-    // Nada de esto se loguea: `p` tiene un `Debug` que redacta, el span de
-    // `dispatch` es `skip_all` y el engine instrumenta con `skip_all` también
-    // (regla 10).
+    // None of this is logged: `p` has a `Debug` that redacts, `dispatch`'s
+    // span is `skip_all` and the engine also instruments with `skip_all`
+    // (rule 10).
     shared
         .engine
         .provide_secret(&p.conn, &p.secret)
@@ -6487,9 +6627,9 @@ async fn dispatch_provide_secret(
     to_value(&methods::ConnectionProvideSecretResult { stored: true })
 }
 
-/// `fs.read` (0.5.0): UN tramo en base64, con tope por llamada. Se lee
-/// UN byte de más para saber si el archivo sigue (`eof` honesto sin un
-/// stat extra ni confiar en el tamaño, que puede cambiar bajo los pies).
+/// `fs.read` (0.5.0): ONE chunk in base64, with a per-call cap. ONE extra
+/// byte is read to know whether the file continues (honest `eof` with no
+/// extra stat and no trusting the size, which can change under one's feet).
 async fn dispatch_fs_read(
     p: methods::FsReadParams,
     shared: &Arc<Shared>,
@@ -6527,8 +6667,8 @@ async fn dispatch_fs_read(
     })
 }
 
-/// Registra la task y arranca su bomba de progreso; devuelve el resultado de
-/// wire estándar `FsTaskResult`. Ver [`register_task_id`].
+/// Registers the task and starts its progress pump; returns the standard
+/// wire result `FsTaskResult`. See [`register_task_id`].
 fn register_task(
     shared: &Arc<Shared>,
     handle: TaskHandle,
@@ -6538,17 +6678,19 @@ fn register_task(
     to_value(&methods::FsTaskResult { task_id })
 }
 
-/// Registra la task y arranca su bomba de progreso: cada snapshot (≤30 Hz)
-/// sale como `task.progress` a los humanos y al dueño (#66); el estado
-/// terminal jamás se pierde por el rate-limit (se difunde con el mismo
-/// enrutado por dueño) y desregistra la task. Devuelve el `TaskId` (los
-/// El mismo tope que aplica [`register_task_id`], consultado ANTES de crear la
-/// Task. `Some(err)` = no cabe.
+/// Registers the task and starts its progress pump: each snapshot (≤30 Hz)
+/// goes out as `task.progress` to humans and to the owner (#66); the
+/// terminal state is never lost to the rate-limit (it is broadcast with the
+/// same owner-based routing) and deregisters the task. Returns the `TaskId`
+/// (the
+/// The same cap [`register_task_id`] applies, checked BEFORE creating the
+/// Task. `Some(err)` = does not fit.
 ///
-/// Existe para el único método cuyo rechazo TARDÍO no es recuperable
-/// (`sync.apply`: rechazar después de abrir el plan lo destruye). Es una
-/// aproximación —entre esto y el registro puede colarse otra Task— y por eso NO
-/// sustituye al tope de `register_task_id`, que sigue siendo la autoridad.
+/// Exists for the only method whose LATE rejection is not recoverable
+/// (`sync.apply`: rejecting after opening the plan destroys it). It is an
+/// approximation — another Task can slip in between this and the register —
+/// and that is why it does NOT replace `register_task_id`'s cap, which
+/// remains the authority.
 fn tasks_at_capacity(shared: &Arc<Shared>, owner: &Actor) -> Option<RpcError> {
     let tasks = shared.tasks.lock().expect("tasks lock sano");
     if tasks.len() >= MAX_LIVE_TASKS {
@@ -6572,7 +6714,7 @@ fn tasks_at_capacity(shared: &Arc<Shared>, owner: &Actor) -> Option<RpcError> {
     None
 }
 
-/// métodos con result propio lo envuelven ellos, M3-4).
+/// methods with their own result wrap it themselves, M3-4).
 fn register_task_id(
     shared: &Arc<Shared>,
     handle: TaskHandle,
@@ -6581,10 +6723,10 @@ fn register_task_id(
     let task_id: TaskId = handle.id();
     let mut progress = handle.progress();
     {
-        let mut tasks = shared.tasks.lock().expect("tasks lock sano");
-        // Tope anti-agotamiento (M3 del security-reviewer). La task YA
-        // está encolada en el scheduler: se cancela cooperativamente antes
-        // de rechazar — jamás una task fantasma sin registrar.
+        let mut tasks = shared.tasks.lock().expect("tasks lock is sound");
+        // Anti-exhaustion cap (security-reviewer M3). The task is ALREADY
+        // queued in the scheduler: it is cancelled cooperatively before
+        // rejecting — never an unregistered phantom task.
         if tasks.len() >= MAX_LIVE_TASKS {
             handle.cancel();
             return Err(RpcError::protocol(
@@ -6592,8 +6734,8 @@ fn register_task_id(
                 format!("too many live tasks (max {MAX_LIVE_TASKS}); retry later"),
             ));
         }
-        // Sub-tope por clase (#70): las tasks de agentes (todas las sesiones)
-        // no agotan el cupo global — el humano conserva su headroom.
+        // Per-class sub-cap (#70): agent tasks (all sessions) do not exhaust
+        // the global quota — the human keeps its headroom.
         if !matches!(owner, Actor::User)
             && tasks
                 .values()
@@ -6621,12 +6763,12 @@ fn register_task_id(
         loop {
             let snapshot = progress.borrow_and_update().clone();
             let terminal = snapshot.state.is_terminal();
-            // Un terminal se recuerda en `recent` ANTES de difundirlo: así
-            // un task.list concurrente (o una suscripción que nace tras el
-            // broadcast) lo ve por uno de los dos caminos, jamás por
-            // ninguno (M1 del rust-reviewer).
+            // A terminal is remembered in `recent` BEFORE it is broadcast:
+            // that way a concurrent task.list (or a subscription born after
+            // the broadcast) sees it through one of the two paths, never
+            // through neither (rust-reviewer M1).
             if terminal {
-                let mut recent = shared_pump.recent.lock().expect("recent lock sano");
+                let mut recent = shared_pump.recent.lock().expect("recent lock is sound");
                 push_recent(&mut recent, snapshot.clone(), &owner);
             }
             let notif = Notification {
@@ -6640,13 +6782,13 @@ fn register_task_id(
             if terminal {
                 break;
             }
-            // Coalescido: como mucho un frame cada PROGRESS_MIN_INTERVAL.
+            // Coalesced: at most one frame every PROGRESS_MIN_INTERVAL.
             tokio::time::sleep(PROGRESS_MIN_INTERVAL).await;
             if progress.changed().await.is_err() {
-                // El scheduler soltó el emisor: difunde el último estado.
+                // The scheduler dropped the sender: broadcast the last state.
                 let last = progress.borrow().clone();
                 if last.state.is_terminal() {
-                    let mut recent = shared_pump.recent.lock().expect("recent lock sano");
+                    let mut recent = shared_pump.recent.lock().expect("recent lock is sound");
                     push_recent(&mut recent, last.clone(), &owner);
                 }
                 let notif = Notification {
@@ -6661,88 +6803,84 @@ fn register_task_id(
                 break;
             }
         }
-        // El desenlace ya está en `recent` (arriba, antes del broadcast).
-        // Solo queda sacar la task del mapa de vivas.
+        // The outcome is already in `recent` (above, before the broadcast).
+        // All that is left is to remove the task from the live map.
         shared_pump
             .tasks
             .lock()
-            .expect("tasks lock sano")
+            .expect("tasks lock is sound")
             .remove(&task_id.get());
     });
 
     Ok(task_id)
 }
 
-/// Hasta dónde se copia al log un texto que eligió el peer.
-const CAMPO_DEL_PEER_MAX: usize = 64;
+/// How much of a peer-chosen text gets copied to the log.
+const PEER_FIELD_MAX: usize = 64;
 
-/// Un texto que eligió el peer, apto para un campo de span: los caracteres de
-/// control escapados (`\n` sale como `\\n`, así que no parte la línea del log
-/// de texto) y cortado a [`CAMPO_DEL_PEER_MAX`] caracteres, con `…` si se
-/// cortó. Un método conocido es ASCII corto y sale igual.
-fn campo_del_peer(s: &str) -> String {
+/// A peer-chosen text, fit for a span field: control characters escaped
+/// (`\n` comes out as `\\n`, so it does not split the text log's line) and
+/// cut to [`PEER_FIELD_MAX`] characters, with `…` if it was cut. A known
+/// method is short ASCII and comes out unchanged.
+fn peer_field(s: &str) -> String {
     let mut out: String = s
         .chars()
-        .take(CAMPO_DEL_PEER_MAX)
+        .take(PEER_FIELD_MAX)
         .flat_map(char::escape_debug)
         .collect();
-    if s.chars().nth(CAMPO_DEL_PEER_MAX).is_some() {
+    if s.chars().nth(PEER_FIELD_MAX).is_some() {
         out.push('…');
     }
     out
 }
 
-/// El `id` JSON-RPC para el log: el número tal cual, y una cadena por
-/// [`campo_del_peer`].
-fn id_para_el_log(id: &norte_proto::wire::RequestId) -> String {
+/// The JSON-RPC `id` for the log: the number as-is, and a string via
+/// [`peer_field`].
+fn id_for_log(id: &norte_proto::wire::RequestId) -> String {
     match id {
         norte_proto::wire::RequestId::Num(n) => n.to_string(),
-        norte_proto::wire::RequestId::Str(s) => campo_del_peer(s),
+        norte_proto::wire::RequestId::Str(s) => peer_field(s),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    /// Un id o un método con salto de línea no parte la línea del log, y uno
-    /// enorme no se copia entero (ADR 0127).
+    /// An id or a method with a newline does not split the log line, and a
+    /// huge one is not copied whole (ADR 0127).
     #[test]
-    fn lo_que_elige_el_peer_llega_al_log_acotado_y_escapado() {
-        use super::{CAMPO_DEL_PEER_MAX, campo_del_peer, id_para_el_log};
+    fn what_the_peer_chooses_reaches_the_log_bounded_and_escaped() {
+        use super::{PEER_FIELD_MAX, id_for_log, peer_field};
         use norte_proto::wire::RequestId;
 
-        assert_eq!(campo_del_peer("fs.copy"), "fs.copy");
-        let forjado = campo_del_peer("1\n2026-09-19T00:00:00Z  INFO policy allow");
-        assert!(!forjado.contains('\n'), "{forjado}");
-        assert!(forjado.starts_with("1\\n"), "{forjado}");
-        let largo = campo_del_peer(&"x".repeat(10_000));
-        assert_eq!(
-            largo.chars().count(),
-            CAMPO_DEL_PEER_MAX + 1,
-            "cortado, con `…`"
-        );
-        assert!(largo.ends_with('…'));
-        assert_eq!(id_para_el_log(&RequestId::Num(7)), "7");
-        assert_eq!(id_para_el_log(&RequestId::Str("a\rb".to_owned())), "a\\rb");
+        assert_eq!(peer_field("fs.copy"), "fs.copy");
+        let forged = peer_field("1\n2026-09-19T00:00:00Z  INFO policy allow");
+        assert!(!forged.contains('\n'), "{forged}");
+        assert!(forged.starts_with("1\\n"), "{forged}");
+        let long = peer_field(&"x".repeat(10_000));
+        assert_eq!(long.chars().count(), PEER_FIELD_MAX + 1, "cut, with `…`");
+        assert!(long.ends_with('…'));
+        assert_eq!(id_for_log(&RequestId::Num(7)), "7");
+        assert_eq!(id_for_log(&RequestId::Str("a\rb".to_owned())), "a\\rb");
     }
 
     use std::os::unix::fs::PermissionsExt;
 
     use super::{DirIdentity, is_default_tmp_fallback, peer_allowed, prepare_socket_dir};
 
-    /// #239: la ubicación que se le da a un plugin PASA su propia puerta.
+    /// #239: the location given to a plugin GOES THROUGH its own gate.
     ///
-    /// Se creía gatada porque los `paths` lo estaban, y no es lo mismo: una
-    /// raíz de scope está en su propio scope —`covers_read` lo fija con todas
-    /// las letras—, así que pedir columnas SOBRE la raíz entregaba al plugin
-    /// una raíz confinada un nivel POR ENCIMA del sandbox del agente. Con un
-    /// scope que apunta a un fichero, el directorio que lo contiene.
+    /// It was believed gated because the `paths` were, and that is not the
+    /// same thing: a scope root is within its own scope — `covers_read` fixes
+    /// this in no uncertain terms — so asking for columns OVER the root used
+    /// to hand the plugin a root confined one level ABOVE the agent's
+    /// sandbox. With a scope pointing at a file, the directory containing it.
     #[test]
-    fn la_ubicacion_de_un_plugin_pasa_el_gate_de_lectura() {
-        use super::location_permitida;
+    fn a_plugins_location_passes_the_read_gate() {
+        use super::permitted_location;
         use crate::policy::{Scope, ScopeRegistry, ScopeVerdict};
         use norte_proto::VPath;
 
-        let vp = |w: &str| VPath::parse(w).expect("wire de test");
+        let vp = |w: &str| VPath::parse(w).expect("test wire");
         let reg = ScopeRegistry::new();
         reg.grant(
             "s1",
@@ -6751,74 +6889,74 @@ mod tests {
                 crate::policy::OpSet::of(&["copy"]),
             ),
         );
-        let ahora = std::time::Instant::now();
-        let permitido = |p: &VPath| reg.covers_read("s1", p, ahora) == ScopeVerdict::Within;
+        let now = std::time::Instant::now();
+        let allowed = |p: &VPath| reg.covers_read("s1", p, now) == ScopeVerdict::Within;
 
-        // Dentro del scope: la ubicación es el padre, y se acuña.
+        // Inside the scope: the location is the parent, and it gets minted.
         assert_eq!(
-            location_permitida(Some(&vp("mem:///home/u/work/sub/f")), permitido),
+            permitted_location(Some(&vp("mem:///home/u/work/sub/f")), allowed),
             Some(vp("mem:///home/u/work/sub")),
         );
-        // LA RAÍZ del scope: su padre es el home entero, fuera del sandbox.
-        // Sin ubicación, y el plugin corre sin ella.
+        // The scope's ROOT: its parent is the whole home, outside the
+        // sandbox. No location, and the plugin runs without it.
         assert_eq!(
-            location_permitida(Some(&vp("mem:///home/u/work")), permitido),
+            permitted_location(Some(&vp("mem:///home/u/work")), allowed),
             None,
-            "el padre de la raíz del scope está FUERA del scope"
+            "the scope root's parent is OUTSIDE the scope"
         );
-        // Un humano no se sandboxea: el predicado dice que sí a todo.
+        // A human is not sandboxed: the predicate says yes to everything.
         assert_eq!(
-            location_permitida(Some(&vp("mem:///home/u/work")), |_| true),
+            permitted_location(Some(&vp("mem:///home/u/work")), |_| true),
             Some(vp("mem:///home/u")),
         );
-        // Sin paths no hay ubicación que acuñar.
-        assert_eq!(location_permitida(None, |_| true), None);
+        // With no paths there is no location to mint.
+        assert_eq!(permitted_location(None, |_| true), None);
     }
 
-    /// El veto de `session.put`: quién puede escribir, y en qué orden se
-    /// pregunta.
+    /// `session.put`'s veto: who may write, and in what order it is asked.
     ///
-    /// El apagado NO está aquí y esa es la mitad interesante: comprobarlo con
-    /// un token, fuera del lock que protege la mutación, dejaba abierta la
-    /// ventana que pretendía cerrar. Lo cierra `SessionStore::seal`, y su test
-    /// vive con el almacén.
+    /// Shutdown is NOT here and that is the interesting half: checking it
+    /// with a token, outside the lock protecting the mutation, left open the
+    /// window it meant to close. `SessionStore::seal` closes it, and its test
+    /// lives with the store.
     #[test]
-    fn solo_la_duena_humana_escribe_la_sesion() {
+    fn only_the_human_owner_writes_the_session() {
         use super::{SessionPutVeto, session_put_veto};
 
         assert_eq!(session_put_veto(true, Some(7), 7, true), None);
-        // Un agente no llega ni a preguntar por lo demás: no debería enterarse
-        // ni de si hay dueña.
+        // An agent does not even get to ask about the rest: it should not
+        // find out whether there is an owner either.
         assert_eq!(
             session_put_veto(false, Some(7), 7, true),
-            Some(SessionPutVeto::NoEsHumano)
+            Some(SessionPutVeto::NotHuman)
         );
         assert_eq!(
             session_put_veto(true, Some(1), 7, true),
-            Some(SessionPutVeto::NoEsLaDuena)
+            Some(SessionPutVeto::NotTheOwner)
         );
         assert_eq!(
             session_put_veto(true, None, 7, true),
-            Some(SessionPutVeto::NoEsLaDuena),
-            "sin dueña tampoco escribe quien no la reclamó"
+            Some(SessionPutVeto::NotTheOwner),
+            "with no owner, whoever did not claim it does not write either"
         );
-        // Revisión de #237: la dueña de un core que NO persiste tampoco
-        // escribe. Aceptarlo en memoria dejó de ser inocuo cuando el escritor
-        // pudo tomar el lock tarde — el cuerpo aceptado suelto sobrevivía a la
-        // adopción y se publicaba encima de la pantalla del otro core.
+        // #237's review: the owner of a core that does NOT persist does not
+        // write either. Accepting it in memory stopped being harmless once
+        // the writer could take the lock late — the detached, accepted body
+        // survived adoption and got published over the other core's screen.
         assert_eq!(
             session_put_veto(true, Some(7), 7, false),
-            Some(SessionPutVeto::SinEscritor),
-            "sin escritor, la propiedad del almacén no basta"
+            Some(SessionPutVeto::NoWriter),
+            "with no writer, owning the store is not enough"
         );
     }
 
-    /// `send_to_conn` es envío DIRIGIDO (los hits de una búsqueda son del que la
-    /// lanzó): solo la conexión destino recibe; una conexión desconocida es
-    /// no-op; una conexión cuyo receptor murió se retira del mapa (mismo criterio
-    /// de expulsión que el broadcast — no acumula backlog).
+    /// `send_to_conn` is a DIRECTED send (a search's hits belong to whoever
+    /// launched it): only the destination connection receives it; an unknown
+    /// connection is a no-op; a connection whose receiver died is removed
+    /// from the map (same eviction criterion as the broadcast — no backlog
+    /// accumulation).
     #[test]
-    fn send_to_conn_solo_al_destino_y_retira_los_muertos() {
+    fn send_to_conn_only_reaches_the_destination_and_evicts_the_dead() {
         use std::collections::HashMap;
         use std::sync::{Arc, Mutex};
 
@@ -6846,32 +6984,35 @@ mod tests {
         );
         let frame: Arc<[u8]> = Arc::from(vec![1u8, 2, 3].into_boxed_slice());
 
-        // Solo la conexión 1 recibe.
+        // Only connection 1 receives.
         send_to_conn_impl(&subs, 1, &frame);
-        assert!(rx1.try_recv().is_ok(), "el destino recibe");
-        assert!(rx2.try_recv().is_err(), "el otro NO recibe");
+        assert!(rx1.try_recv().is_ok(), "the destination receives");
+        assert!(rx2.try_recv().is_err(), "the other one does NOT receive");
 
-        // Conexión desconocida: no-op sin panic, sin tocar el mapa.
+        // Unknown connection: no-op, no panic, does not touch the map.
         send_to_conn_impl(&subs, 99, &frame);
         assert_eq!(subs.lock().expect("lock").len(), 2);
 
-        // Receptor muerto: la conexión se retira del mapa.
+        // Dead receiver: the connection is removed from the map.
         drop(rx1);
         send_to_conn_impl(&subs, 1, &frame);
         assert!(
             !subs.lock().expect("lock").contains_key(&1),
-            "la conexión con receptor cerrado se retira"
+            "the connection with a closed receiver is removed"
         );
-        assert!(subs.lock().expect("lock").contains_key(&2), "la viva sigue");
+        assert!(
+            subs.lock().expect("lock").contains_key(&2),
+            "the live one stays"
+        );
     }
 
-    /// #155: una outbox LLENA cuesta el frame y NO la suscripción. La
-    /// expulsión era irreversible —la entrada solo se inserta en
-    /// `initialize`— y se llevaba con ella el `task.progress` terminal, que es
-    /// justo lo que el contrato de `compare.rows` manda comparar contra las
-    /// filas recibidas para saber si llegaron todas.
+    /// #155: a FULL outbox costs the frame and NOT the subscription. Eviction
+    /// used to be irreversible — the entry is only inserted in `initialize`
+    /// — and took down with it the terminal `task.progress`, which is
+    /// exactly what `compare.rows`'s contract says to compare against
+    /// received rows to know whether they all arrived.
     #[test]
-    fn una_outbox_llena_cuesta_el_frame_no_la_suscripcion() {
+    fn a_full_outbox_costs_the_frame_not_the_subscription() {
         use std::collections::HashMap;
         use std::sync::{Arc, Mutex};
 
@@ -6891,22 +7032,22 @@ mod tests {
         );
         let frame: Arc<[u8]> = Arc::from(vec![1u8].into_boxed_slice());
 
-        assert!(send_to_conn_impl(&subs, 1, &frame), "el primero cabe");
+        assert!(send_to_conn_impl(&subs, 1, &frame), "the first one fits");
         assert!(
             !send_to_conn_impl(&subs, 1, &frame),
-            "el segundo no cabe: no entregado"
+            "the second does not fit: not delivered"
         );
         assert!(
             subs.lock().expect("lock").contains_key(&1),
-            "y sigue suscrita: sin esto pierde también su terminal"
+            "and still subscribed: without this it also loses its terminal"
         );
     }
 
-    /// El broadcast SÍ sigue expulsando al que no drena —el backlog de un
-    /// cliente lento no puede crecer sin límite (M1)—, salvo al dueño de un
-    /// feed dirigido vivo (#155).
+    /// The broadcast DOES keep evicting whoever does not drain — a slow
+    /// client's backlog cannot grow without limit (M1) — except the owner of
+    /// a live directed feed (#155).
     #[test]
-    fn el_broadcast_expulsa_al_que_no_drena_pero_no_al_dueno_de_un_feed() {
+    fn the_broadcast_evicts_who_does_not_drain_but_not_a_feeds_owner() {
         use std::collections::HashMap;
         use std::sync::{Arc, Mutex};
 
@@ -6916,12 +7057,12 @@ mod tests {
         use crate::journal::Actor;
 
         let subs = Mutex::new(HashMap::new());
-        // Los receptores se retienen vivos: cerrarlos sería el OTRO caso
-        // (outbox muerta), y aquí lo que se prueba es la LLENA.
-        let mut vivos = Vec::new();
+        // The receivers are kept alive: closing them would be the OTHER case
+        // (dead outbox), and here what is being tested is the FULL one.
+        let mut alive = Vec::new();
         for conn in [1u64, 2u64] {
             let (tx, rx) = mpsc::channel::<Arc<[u8]>>(1);
-            vivos.push(rx);
+            alive.push(rx);
             subs.lock().expect("lock").insert(
                 conn,
                 Subscriber {
@@ -6932,77 +7073,79 @@ mod tests {
         }
         let frame: Arc<[u8]> = Arc::from(vec![1u8].into_boxed_slice());
 
-        // El primer frame cabe en las dos.
+        // The first frame fits in both.
         broadcast_impl(&subs, &[], &frame, |_| true);
         assert_eq!(subs.lock().expect("lock").len(), 2);
 
-        // El segundo no cabe en ninguna, pero la 2 es dueña de un feed vivo.
+        // The second does not fit in either, but 2 owns a live feed.
         broadcast_impl(&subs, &[2], &frame, |_| true);
         let subs = subs.lock().expect("lock");
         assert!(
             !subs.contains_key(&1),
-            "el que no drena y no tiene feed, fuera"
+            "the one that does not drain and has no feed, out"
         );
         assert!(
             subs.contains_key(&2),
-            "el dueño de un feed dirigido vivo conserva la suscripción"
+            "the owner of a live directed feed keeps the subscription"
         );
-        drop(vivos);
+        drop(alive);
     }
 
-    /// La política de admisión es EXACTAMENTE mismo-uid: ni root entra.
+    /// The admission policy is EXACTLY same-uid: not even root gets in.
     #[test]
-    fn peer_allowed_solo_mismo_uid() {
+    fn peer_allowed_only_the_same_uid() {
         assert!(peer_allowed(1000, 1000));
         assert!(!peer_allowed(1001, 1000));
-        assert!(!peer_allowed(0, 1000), "root NO es el usuario del daemon");
+        assert!(!peer_allowed(0, 1000), "root is NOT the daemon's user");
     }
 
-    /// #34.2 (TOCTOU): la identidad del dir se captura y un REEMPLAZO del dir
-    /// entre prepare y bind (mismo path, otro inode) se detecta.
+    /// #34.2 (TOCTOU): the dir's identity is captured and a REPLACEMENT of
+    /// the dir between prepare and bind (same path, different inode) is
+    /// detected.
     #[test]
-    fn dir_identity_detecta_reemplazo_del_dir() {
+    fn dir_identity_detects_a_dir_replacement() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let sub = tmp.path().join("sock-dir");
         std::fs::create_dir(&sub).expect("mkdir");
-        let id = prepare_socket_dir(&sub).expect("dir válido");
-        // Sin cambios: la identidad casa.
+        let id = prepare_socket_dir(&sub).expect("valid dir");
+        // No changes: the identity matches.
         assert!(id.verify_unchanged(&sub).is_ok());
-        // Reemplazo (rm + recreate) = nuevo inode → detectado.
+        // Replacement (rm + recreate) = new inode → detected.
         std::fs::remove_dir(&sub).expect("rmdir");
         std::fs::create_dir(&sub).expect("recreate");
         std::fs::set_permissions(&sub, std::fs::Permissions::from_mode(0o700)).expect("chmod");
         assert!(
             id.verify_unchanged(&sub).is_err(),
-            "un dir reemplazado bajo el mismo path NO debe pasar"
+            "a dir replaced under the same path must NOT pass"
         );
     }
 
-    /// La captura de identidad es estable entre llamadas al MISMO dir.
+    /// Identity capture is stable across calls to the SAME dir.
     #[test]
-    fn dir_identity_estable_para_el_mismo_dir() {
+    fn dir_identity_is_stable_for_the_same_dir() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let a = DirIdentity::of(tmp.path()).expect("stat a");
         let b = DirIdentity::of(tmp.path()).expect("stat b");
         assert_eq!(a, b);
     }
 
-    /// #34.1 (squat /tmp): solo el fallback `/tmp/norte-<uid>/…` (XDG vacío)
-    /// merece el mensaje accionable; un `XDG_RUNTIME_DIR` real o un `--socket`
-    /// explícito, no.
+    /// #34.1 (/tmp squat): only the `/tmp/norte-<uid>/…` fallback (empty XDG)
+    /// deserves the actionable message; a real `XDG_RUNTIME_DIR` or an
+    /// explicit `--socket`, no.
     #[test]
-    fn detecta_solo_el_fallback_de_tmp() {
+    fn detects_only_the_tmp_fallback() {
         use std::path::Path;
         assert!(is_default_tmp_fallback(
             Path::new("/tmp/norte-1000/daemon.sock"),
             true
         ));
-        // No es fallback si el path NO vino por defecto (--socket explícito).
+        // Not a fallback if the path did NOT come by default (explicit
+        // --socket).
         assert!(!is_default_tmp_fallback(
             Path::new("/tmp/norte-1000/daemon.sock"),
             false
         ));
-        // Ni un XDG real que resultara vivir bajo /run.
+        // Nor a real XDG that happened to live under /run.
         assert!(!is_default_tmp_fallback(
             Path::new("/run/user/1000/norte/daemon.sock"),
             true

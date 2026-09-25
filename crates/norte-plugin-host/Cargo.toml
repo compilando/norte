@@ -1,6 +1,6 @@
 [package]
 name = "norte-plugin-host"
-description = "Host de plugins WASM: manifiesto, capabilities y catálogo (el runtime wasmtime llega en M4-P2)"
+description = "WASM plugin host: manifest, capabilities and catalog (the wasmtime runtime arrives in M4-P2)"
 license = "AGPL-3.0-only"
 version.workspace = true
 edition.workspace = true
@@ -9,53 +9,56 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
-# El alfabeto de un id de plugin vive junto al tipo del wire que lo transporta
-# (`norte_proto::methods::is_valid_plugin_id`): la pregunta la hacen este crate
-# al parsear un manifiesto y CUALQUIERA que reciba un `PluginInfo`, y dos
-# implementaciones acabarían divergiendo. `norte-proto` es la base del
-# workspace y no depende de nada nuestro, así que no hay inversión de capas.
+# A plugin id's alphabet lives alongside the wire type that carries it
+# (`norte_proto::methods::is_valid_plugin_id`): the question is asked by this
+# crate while parsing a manifest and by ANYONE who receives a `PluginInfo`,
+# and two implementations would end up diverging. `norte-proto` is the base
+# of the workspace and depends on nothing of ours, so there is no layer
+# inversion.
 norte-proto.workspace = true
 serde = { workspace = true, features = ["derive"] }
 thiserror.workspace = true
 toml.workspace = true
-# Escritor de settings PERSISTIDAS del usuario (S2, `persist_plugin_setting`
-# junto a `config_values.rs`): igual que `norte-config::persist_set`, hace
-# falta preservar comentarios/formato al reescribir `config.toml` — `toml`
-# (arriba) solo DESERIALIZA, no tiene edición comment-preserving. Ya es dep
-# de workspace (`norte-config` la usa con el mismo fin) — cero coste nuevo de
-# build, solo activa la feature para este crate.
+# Writer for the user's PERSISTED settings (S2, `persist_plugin_setting`
+# alongside `config_values.rs`): like `norte-config::persist_set`, comments
+# and formatting need to be preserved when rewriting `config.toml` — `toml`
+# (above) only DESERIALIZES, it has no comment-preserving edit. Already a
+# workspace dep (`norte-config` uses it for the same purpose) — zero new
+# build cost, it just activates the feature for this crate.
 toml_edit.workspace = true
-# Digest de las capabilities aprobadas (issue #69, defensa confused-deputy): un
-# sha256 de la forma canónica del bloque `[capabilities]` que se guarda JUNTO a
-# la aprobación; si el manifiesto cambia en disco tras aprobar, el digest deja de
-# casar y el host re-pide consentimiento. Misma dep de hashing que el journal.
+# Digest of the approved capabilities (issue #69, confused-deputy defense): a
+# sha256 of the `[capabilities]` block's canonical form, stored ALONGSIDE the
+# approval; if the manifest changes on disk after approving, the digest stops
+# matching and the host re-requests consent. Same hashing dep as the journal.
 sha2.workspace = true
-# Runtime WASM de plugins (M4-P2, ADR 0022 D1): wasmtime es la dep GRANDE y
-# estructural de esta fase — ejecuta los componentes WASM del modelo de M4-P1.
-# default-features=false + runtime/component-model/cranelift/std: solo el motor
-# de ejecución, el component-model (WIT), el compilador cranelift y el std;
-# fuera quedan wat/wasm parsing, gc, etc. wasmtime-wasi 46 comparte release
-# train con wasmtime 46 (el major va sincronizado): preview2 (p2) por defecto.
-# anyhow lo exige la API de wasmtime (sus Result son anyhow::Error).
+# WASM plugin runtime (M4-P2, ADR 0022 D1): wasmtime is the BIG, structural
+# dep of this phase — it runs the WASM components of M4-P1's model.
+# default-features=false + runtime/component-model/cranelift/std: only the
+# execution engine, the component model (WIT), the cranelift compiler and
+# std; wat/wasm parsing, gc, etc. are left out. wasmtime-wasi 46 shares a
+# release train with wasmtime 46 (the major is kept in sync): preview2 (p2)
+# by default. anyhow is required by wasmtime's API (its Results are
+# anyhow::Error).
 wasmtime = { version = "46", default-features = false, features = ["runtime", "component-model", "cranelift", "std"] }
 wasmtime-wasi = "46"
-# Lee los imports de un componente SIN compilarlo (ADR 0094): el catálogo
-# anota contra qué `norte:*@versión` se compiló cada guest y lista como roto
-# —con las dos versiones— el que no case, en vez de dejar que wasmtime muera
-# nombrando un import. Ya viene con wasmtime; aquí solo se enlaza directo.
+# Reads a component's imports WITHOUT compiling it (ADR 0094): the catalog
+# notes which `norte:*@version` each guest was compiled against and lists as
+# broken — with both versions — the one that does not match, instead of
+# letting wasmtime die naming an import. Already comes with wasmtime; here it
+# is just linked directly.
 wasmparser.workspace = true
 anyhow.workspace = true
-# Re-codifica en el host la miniatura que devuelve un guest (ADR 0107,
-# decisión 3): lo que llega a los decodificadores nativos de la webview es
-# siempre un raster hecho AQUÍ, en Rust seguro y con límites, nunca los bytes
-# del guest. Solo los tres decodificadores que se aceptan; `default-features
-# = false` deja fuera el resto de formatos y `rayon`.
+# Re-encodes on the host the thumbnail a guest returns (ADR 0107, decision
+# 3): what reaches the webview's native decoders is always a raster made
+# HERE, in safe Rust and with limits, never the guest's bytes. Only the
+# three decoders that are accepted; `default-features = false` leaves out
+# the rest of the formats and `rayon`.
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 
 [dev-dependencies]
 tempfile.workspace = true
-# Servidor FTP in-process para el E2E del stack de red (#30 stage 3b): mismo
-# harness que norte-vfs-ftp, sin Docker. Solo dev.
+# In-process FTP server for the network stack's E2E (#30 stage 3b): same
+# harness as norte-vfs-ftp, no Docker. Dev only.
 libunftp.workspace = true
 unftp-sbe-fs.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread"] }

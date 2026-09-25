@@ -1,10 +1,10 @@
-//! Persistir y restaurar la sesión de UI (#230, #235, #236).
+//! Persisting and restoring the UI session (#230, #235, #236).
 //!
-//! Vivía en el root del binario `ntc`, que es un crate DISTINTO de esta lib:
-//! nada de esto se podía importar desde `tests/`, así que sus tests tenían que
-//! ser un `#[cfg(test)] mod` dentro de `main.rs`. Movido tal cual —mismas
-//! firmas, mismo orden, mismos comentarios— sin más cambio que el `pub` de lo
-//! que el bucle de eventos llama.
+//! It used to live in the root of the `ntc` binary, which is a crate
+//! DIFFERENT from this lib: none of this could be imported from `tests/`,
+//! so its tests had to be a `#[cfg(test)] mod` inside `main.rs`. Moved as
+//! is —same signatures, same order, same comments— with no change beyond
+//! the `pub` on what the event loop calls.
 
 use std::sync::Arc;
 
@@ -15,115 +15,116 @@ use norte_proto::{Error, VPath};
 use crate::app::App;
 use crate::listing::initial_pane;
 
-/// Trae la sesión guardada y la pone en pantalla (L2).
+/// Fetches the saved session and puts it on screen (L2).
 ///
-/// Tres cosas y en este orden: se pregunta quién es la dueña, se aplica el
-/// cuerpo, y se listan los huecos que la sesión colocó —hasta que llega el
-/// listado, el cursor guardado no tiene dónde ponerse—.
+/// Three things and in this order: who owns it is asked, the body is
+/// applied, and the slots the session placed are listed —until the listing
+/// arrives, the saved cursor has nowhere to land—.
 ///
-/// Nada de esto puede impedir arrancar. Un core que no sabe de sesiones, una
-/// sesión ilegible o un directorio que ya no existe dejan lo que había: la
-/// disposición de la configuración, que es lo que se tenía antes de que esto
-/// existiera.
+/// None of this can prevent startup. A core that knows nothing of sessions,
+/// an unreadable session or a directory that no longer exists leave what
+/// there was: the configuration's layout, which is what there was before
+/// this existed.
 ///
-/// `start` es el DIR de la línea de órdenes cuando lo hubo: gana a la sesión
-/// en el panel activo ([`App::pin_start_dir`]), y se lista con los demás.
+/// `start` is the command line's DIR when there was one: it wins over the
+/// session in the active pane ([`App::pin_start_dir`]), and is listed with
+/// the rest.
 pub async fn restore_session(
     app: &mut App,
     backend: &Backend,
     start: Option<&VPath>,
     profile_start: &std::collections::BTreeMap<u32, VPath>,
 ) {
-    // La siembra de `[profile.start]` va en TODOS los caminos, incluidos los
-    // que no tienen sesión que aplicar: una instalación nueva —o un perfil
-    // copiado de otra máquina— es justo el caso para el que la clave existe, y
-    // dejándola detrás de estos `return` no se sembraba nunca (ADR 0098).
-    let sembrar = |app: &mut App| {
+    // Seeding `[profile.start]` goes on EVERY path, including the ones with
+    // no session to apply: a fresh install —or a profile copied from
+    // another machine— is exactly the case the key exists for, and leaving
+    // it behind these `return`s meant it was never seeded (ADR 0098).
+    let seed = |app: &mut App| {
         let _ = app.seed_profile_start(profile_start);
     };
-    let (sesion, dueña) = match backend.session_get().await {
+    let (session, owned) = match backend.session_get().await {
         Ok(v) => v,
         Err(e) => {
-            tracing::debug!(error = %e, "sin sesión guardada");
-            sembrar(app);
+            tracing::debug!(error = %e, "no saved session");
+            seed(app);
             if let Some(dir) = start {
                 app.pin_start_dir(dir.clone());
             }
             return;
         }
     };
-    // Suelta o dueña es un ESTADO, y lo pinta el indicador persistente de la
-    // barra (`App::session_banner`) mientras dure: no un mensaje de
-    // arranque que hable de «otra ventana» a quien acaba de abrir la
-    // primera. El indicador es discreto, y la ayuda dice qué significa.
-    app.session.detached = !dueña;
-    app.session.revision = sesion.revision;
-    // Revisión 0 es «nadie la ha escrito todavía»: no hay nada que aplicar y
-    // tampoco nada roto que contar.
-    if sesion.revision == 0 {
-        sembrar(app);
+    // Detached or owned is a STATE, and the bar's persistent indicator
+    // paints it (`App::session_banner`) for as long as it lasts: not a
+    // startup message talking about "another window" to whoever just
+    // opened the first one. The indicator is discreet, and help says what
+    // it means.
+    app.session.detached = !owned;
+    app.session.revision = session.revision;
+    // Revision 0 is "nobody has written it yet": there is nothing to apply
+    // and nothing broken to report either.
+    if session.revision == 0 {
+        seed(app);
         if let Some(dir) = start {
             app.pin_start_dir(dir.clone());
         }
         restore_slots(app, backend, RESTORE_BUDGET).await;
         return;
     }
-    // La versión del SOBRE, que es la que el protocolo documenta (#247): el
-    // cuerpo llevaba una copia sin documentar y era la única que se leía, así
-    // que un cliente ajeno que hiciera lo que dice el contrato tenía su cuerpo
-    // interpretado como si fuera de la versión 0.
-    app.apply_session_value(sesion.version, &sesion.body);
-    // El orden ES la precedencia: la sesión, después lo que el perfil dice de
-    // los huecos que ella no conoce, y encima de todo el directorio que un
-    // humano acaba de teclear.
-    sembrar(app);
+    // The ENVELOPE's version, which is the one the protocol documents
+    // (#247): the body carried an undocumented copy and it was the only one
+    // read, so a third-party client that did what the contract says had its
+    // body interpreted as if it were version 0.
+    app.apply_session_value(session.version, &session.body);
+    // The order IS the precedence: the session, then what the profile says
+    // about slots it does not know about, and on top of everything the
+    // directory a human just typed.
+    seed(app);
     if let Some(dir) = start {
         app.pin_start_dir(dir.clone());
     }
     restore_slots(app, backend, RESTORE_BUDGET).await;
 }
 
-/// Cuánto puede llevar el journal sin usarse antes de que esta sesión lo
-/// suelte (#179).
+/// How long the journal can go unused before this session releases it
+/// (#179).
 ///
-/// Treinta segundos: bastante como para que una ráfaga de copias no pague un
-/// cierre y una reapertura entre dos, y poco como para que un `ntc` abierto
-/// toda la tarde no bloquee a `norte daemon run` ni a `norte audit` más allá
-/// del rato en que de verdad estuvo escribiendo.
+/// Thirty seconds: enough that a burst of copies does not pay for a close
+/// and a reopen in between, and little enough that an `ntc` left open all
+/// afternoon does not block `norte daemon run` or `norte audit` beyond the
+/// stretch it was truly writing.
 pub const JOURNAL_IDLE: std::time::Duration = std::time::Duration::from_secs(30);
 
-/// Lo que el arranque dedica ENTERO a listar los huecos de la sesión (#235).
+/// What startup dedicates WHOLE to listing the session's slots (#235).
 ///
-/// Cinco segundos para TODOS los huecos, no cinco por hueco: lo que se acota
-/// es cuánto puede tardar la ventana en aparecer, y eso no depende de cuántos
-/// huecos tenga la disposición.
+/// Five seconds for ALL the slots, not five per slot: what is capped is how
+/// long the window can take to appear, and that does not depend on how many
+/// slots the layout has.
 const RESTORE_BUDGET: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// Rellena los huecos de la sesión con un listado real, dentro de `presupuesto`
-/// (#235).
+/// Fills the session's slots with a real listing, within `budget` (#235).
 ///
-/// Esto corre ANTES de que exista el bucle de eventos: no hay `Ctrl+C`
-/// cableado todavía, así que un hueco sobre un SFTP muerto colgaba el arranque
-/// entero y la única salida era otra terminal. La regla 3 es sobre esto mismo,
-/// en un camino anterior a la maquinaria de tasks.
+/// This runs BEFORE the event loop exists: there is no `Ctrl+C` wired up
+/// yet, so a slot pointing at a dead SFTP used to hang the whole startup and
+/// the only way out was another terminal. Rule 3 is about this exact thing,
+/// on a path earlier than the task machinery.
 ///
-/// **Los listados van EN PARALELO bajo un plazo común**, y eso es lo que hace
-/// que el presupuesto sea del arranque y no de cada hueco. En serie, un solo
-/// panel aparcado en un host caído se comía los cinco segundos enteros y los
-/// otros tres —locales, de milisegundos— se quedaban sin listar por haber
-/// llegado tarde a un reparto que nunca fue suyo: la forma corriente del bug
-/// (un remoto muerto entre locales) dejaba media pantalla en blanco en cada
-/// arranque mientras durase la avería.
+/// **The listings run IN PARALLEL under a shared deadline**, and that is
+/// what makes the budget startup's and not each slot's. In series, a single
+/// panel parked on a downed host ate up the entire five seconds and the
+/// other three —local, milliseconds long— were left unlisted for having
+/// arrived late to a share that was never theirs: the common shape of the
+/// bug (one dead remote among locals) left half the screen blank on every
+/// startup for as long as the outage lasted.
 ///
-/// Lo que no se pudo listar se queda sobre su ruta y **marcado**
-/// ([`Pane::unlisted`]): una pantalla con listados vacíos y sin explicación
-/// afirma que esos directorios están vacíos, que es justo lo que no se sabe.
-/// La marca dura hasta que alguien liste de verdad, porque el estado dura
-/// hasta entonces.
-async fn restore_slots(app: &mut App, backend: &Backend, presupuesto: std::time::Duration) {
-    let deadline = tokio::time::Instant::now() + presupuesto;
-    // Se recogen primero las peticiones: el `&mut App` de la aplicación no
-    // puede vivir dentro de los futures.
+/// What could not be listed stays on its path and **marked**
+/// ([`Pane::unlisted`]): a screen with empty listings and no explanation
+/// asserts those directories are empty, which is exactly what is not known.
+/// The mark lasts until someone truly lists it, because the state lasts
+/// until then.
+async fn restore_slots(app: &mut App, backend: &Backend, budget: std::time::Duration) {
+    let deadline = tokio::time::Instant::now() + budget;
+    // The requests are collected first: the application's `&mut App` cannot
+    // live inside the futures.
     let requests: Vec<(norte_frontend::layout::SlotId, VPath, Vec<String>)> = app
         .layout
         .slot_ids()
@@ -143,54 +144,56 @@ async fn restore_slots(app: &mut App, backend: &Backend, presupuesto: std::time:
     }))
     .await;
 
-    for (id, listado) in listed {
-        let Ok(listado) = listado else {
-            tracing::warn!("un hueco de la sesión no listó dentro del presupuesto");
+    for (id, listing) in listed {
+        let Ok(listing) = listing else {
+            tracing::warn!("a session slot did not list within the budget");
             if let Some(p) = app.panes.browser_mut(id) {
                 p.unlisted = true;
             }
             continue;
         };
-        match listado {
+        match listing {
             Ok(pane) => {
-                // El orden y los ocultos son de la SESIÓN, no del listado
-                // nuevo: se conservan al reemplazar el pane.
+                // Order and hidden-files are the SESSION's, not the new
+                // listing's: kept when replacing the pane.
                 let (sort, hidden) = app
                     .panes
                     .browser(id)
                     .map_or((None, None), |p| (Some(p.sort()), Some(p.show_hidden())));
-                // Por la puerta de adopción, que estampa lo de la config (la
-                // fila `..`) y repone lo de la sesión (orden y ocultos) en un
-                // orden solo. Insertándolo a pelo, la fila se caía en cada
-                // arranque con sesión guardada.
+                // Through the adoption door, which stamps the config's (the
+                // `..` row) and restores the session's (sort and hidden) in
+                // one single order. Inserted raw, the row fell off on every
+                // startup with a saved session.
                 app.adoptar_pane(id, pane, sort, hidden);
                 app.restore_cursor(id);
             }
-            // Un directorio que ya no está NO deja el arranque a medias: el
-            // pane se queda vacío en esa ruta y el lector navega desde ahí,
-            // que es lo mismo que pasa si lo borran contigo dentro.
+            // A directory that is no longer there does NOT leave startup
+            // half-done: the pane stays empty at that path and the reader
+            // navigates from there, which is the same thing that happens if
+            // it is deleted with you inside it.
             //
-            // Pero se MARCA, y esto se corrigió: la marca no era por «no dio
-            // tiempo», es por «esto no es el contenido del directorio». Un
-            // listado que falló y un directorio vacío se pintaban idénticos, y
-            // el caso corriente no es un directorio borrado — es una conexión
-            // remota que al reabrir pide su contraseña. El lector veía un
-            // panel vacío sobre `s3://…` y nada más: ni el motivo, ni que
-            // hubiera algo que hacer.
+            // But it is MARKED, and this was fixed: the mark was not for
+            // "there wasn't time", it is for "this is not the directory's
+            // content". A listing that failed and an empty directory were
+            // painted identically, and the common case is not a deleted
+            // directory — it is a remote connection that asks for its
+            // password on reopening. The reader saw an empty panel over
+            // `s3://…` and nothing else: not the reason, not that there was
+            // something to do.
             //
-            // No se pregunta aquí. Restaurar una sesión no es pedir
-            // conectarse, y una contraseña pedida antes de que la pantalla
-            // exista, por algo que nadie acaba de hacer, es la forma que el
-            // ADR 0015 llama phishing. La pregunta la abre el primer gesto
-            // sobre ese panel — `pane.refresh` o navegar.
+            // It is not asked here. Restoring a session is not requesting a
+            // connection, and a password asked for before the screen even
+            // exists, for something nobody just did, is the shape ADR 0015
+            // calls phishing. The question is opened by the first gesture
+            // over that panel — `pane.refresh` or navigating.
             Err(e) => {
-                tracing::warn!(error = %e, "un hueco de la sesión no se pudo listar");
+                tracing::warn!(error = %e, "a session slot could not be listed");
                 if let Some(p) = app.panes.browser_mut(id) {
                     p.unlisted = true;
                 }
                 if let Error::SecretNeeded { conn, .. } = &e {
-                    // Y se DICE cuál, porque con dos paneles remotos «hace
-                    // falta una contraseña» no es contestable.
+                    // And it SAYS which one, because with two remote panels
+                    // "a password is needed" cannot be answered.
                     app.message = Some(ta(
                         "msg-session-secret-needed",
                         &[("conn", &norte_frontend::display_name(conn.as_bytes()).0)],
@@ -201,213 +204,223 @@ async fn restore_slots(app: &mut App, backend: &Backend, presupuesto: std::time:
     }
 }
 
-/// Cada cuántos ticks una ventana SUELTA vuelve a preguntar si ya puede
-/// escribir (#234).
+/// How many ticks apart a DETACHED window asks again whether it can write
+/// now (#234).
 ///
-/// Treinta segundos. No hay notificación que avise —no la hay a propósito: el
-/// único que puede escribir es el que cambió algo, así que un
-/// `session.changed` no tendría destinatario correcto— y sin volver a
-/// preguntar, la ventana que sobrevive a la dueña no guarda nada nunca más y
-/// su pantalla muere con ella. Preguntar cada segundo sería un viaje por
-/// segundo para siempre a cambio de enterarse antes de algo que pasa una vez.
+/// Thirty seconds. There is no notification to warn it —deliberately none:
+/// the only one that can write is the one that changed something, so a
+/// `session.changed` would have no correct recipient— and without asking
+/// again, a window that outlives the owner never saves anything again and
+/// its screen dies with it. Asking every second would be one round trip a
+/// second forever in exchange for finding out sooner about something that
+/// happens once.
 const OWNER_RETRY_TICKS: u32 = 30;
 
-/// Lo que dura la espera por el último volcado al salir.
+/// How long the wait for the last dump lasts on exit.
 ///
-/// Salir no se cuelga por una sesión: si el core no contesta, se pierde la
-/// última foto y ya.
+/// Exiting does not hang over a session: if the core does not answer, the
+/// last snapshot is lost and that is that.
 const SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
 
-/// Lo que la pantalla le manda al escritor de la sesión.
+/// What the screen sends the session writer.
 enum SessionOrder {
-    /// Escribe esto.
+    /// Write this.
     ///
-    /// `Arc` porque el cuerpo lleva el árbol y el estado de cada hueco: la
-    /// pantalla lo comparte con el escritor en vez de copiarle hasta 1 MiB una
-    /// vez por segundo, y de paso la variante no engorda el enum
-    /// (`clippy::large_enum_variant`).
+    /// `Arc` because the body carries the tree and every slot's state: the
+    /// screen shares it with the writer instead of copying up to 1 MiB to
+    /// it once a second, and incidentally the variant does not bloat the
+    /// enum (`clippy::large_enum_variant`).
     Write(Arc<norte_frontend::session::SessionBody>),
-    /// ¿Ya puedo escribir? La hace una ventana suelta cada [`OWNER_RETRY_TICKS`]
-    /// ticks.
+    /// Can I write yet? A detached window does this every
+    /// [`OWNER_RETRY_TICKS`] ticks.
     Ask,
-    /// RELEVO (fase 9): escribe este cuerpo —que lleva las marcas— y después
-    /// SUELTA la sesión, para que el otro frontend pueda reclamarla.
+    /// HANDOFF (phase 9): writes this body —which carries the marks— and
+    /// then RELEASES the session, so the other frontend can claim it.
     ///
-    /// Las dos cosas van en una sola orden y en este orden a propósito: soltar
-    /// antes de escribir dejaría al otro leyendo la pantalla de hace un
-    /// segundo, y escribir sin soltar lo dejaría sin poder escribir la suya.
-    /// El escritor contesta con [`SessionNotice::HandedOff`], que es lo que
-    /// decide si se lanza al otro o si esto se queda como estaba.
+    /// Both things go in a single order and in this order on purpose:
+    /// releasing before writing would leave the other one reading the
+    /// screen from a second ago, and writing without releasing would leave
+    /// it unable to write its own. The writer answers with
+    /// [`SessionNotice::HandedOff`], which is what decides whether it
+    /// launches into the other one or this stays as it was.
     Handoff(Arc<norte_frontend::session::SessionBody>),
 }
 
-/// Lo que el escritor le cuenta a la pantalla.
+/// What the writer tells the screen.
 enum SessionNotice {
-    /// No cabía; se ha tirado el historial. Se dice UNA vez.
+    /// It did not fit; history has been dropped. Stated ONCE.
     TooLarge,
-    /// El cuerpo no llegó porque otra ventana escribió antes.
+    /// The body did not go through because another window wrote first.
     ///
-    /// `orphans` son los huecos que ELLA guardaba y esta pantalla no tenía:
-    /// vuelven aquí en vez de tirarse, porque el único camino que llega a este
-    /// aviso es un relevo de propiedad, o sea justo cuando lo guardado NO es
-    /// nuestro (#231).
+    /// `orphans` are the slots IT had saved that this screen did not have:
+    /// they come back here instead of being dropped, because the only path
+    /// that reaches this notice is an ownership handoff, i.e. exactly when
+    /// what is saved is NOT ours (#231).
     Retry {
-        /// Los huecos ajenos que había que conservar.
+        /// The other window's slots that had to be kept.
         orphans: std::collections::BTreeMap<u32, norte_frontend::session::SlotState>,
     },
-    /// Esta ventana ya es la dueña: puede volver a escribir desde la revisión
-    /// que viene.
+    /// This window is now the owner: it can write again starting from the
+    /// next revision.
     Owner {
-        /// La revisión vigente en el momento de tomarla.
+        /// The revision in effect at the moment of taking it.
         revision: u64,
-        /// Los huecos que guardaba quien la tenía y esta pantalla no conoce.
+        /// The slots the previous owner had saved that this screen does not
+        /// know about.
         ///
-        /// Un relevo NO pasa por `Conflict` —la revisión que se adopta es
-        /// justo la vigente, así que la siguiente escritura encaja— y ese era
-        /// el agujero: la ventana que tomaba el relevo pisaba en su primer tick
-        /// todo lo que la otra hubiera guardado mientras ésta corría suelta.
+        /// A handoff does NOT go through `Conflict` —the revision adopted is
+        /// exactly the current one, so the next write fits— and that was the
+        /// gap: the window taking over the handoff overwrote, on its first
+        /// tick, everything the other one had saved while this one ran
+        /// detached.
         orphans: std::collections::BTreeMap<u32, norte_frontend::session::SlotState>,
     },
-    /// Esta ventana ha DEJADO de ser la dueña: otra la tiene, o el daemon que
-    /// la atendía se fue y la conexión nueva no reclamó nada.
+    /// This window has STOPPED being the owner: another one has it, or the
+    /// daemon serving it left and the new connection claimed nothing.
     ///
-    /// Sin este aviso, el escritor se apagaba solo y nadie volvía a preguntar:
-    /// tras un relevo de daemon la ventana dejaba de guardar para el resto de
-    /// su vida, creyéndose la dueña y sin decir una palabra.
+    /// Without this notice, the writer used to shut itself down and nobody
+    /// asked again: after a daemon handoff the window stopped saving for the
+    /// rest of its life, believing itself the owner and without saying a
+    /// word.
     Released,
-    /// El RELEVO (fase 9) terminó: la pantalla está escrita y se ha soltado —o
-    /// no se ha podido—.
+    /// The HANDOFF (phase 9) finished: the screen is written and has been
+    /// released —or it could not be—.
     ///
-    /// **`false` NO se ignora**: significa que la sesión sigue teniendo dueño,
-    /// y lanzar al otro frontend entonces abriría una ventana en blanco sobre
-    /// una pantalla que nadie soltó. Con `false` el relevo no ocurre y se
-    /// dice; el proceso se queda donde estaba, que es lo peor que puede pasar
-    /// y no es malo.
+    /// **`false` is NOT ignored**: it means the session still has an owner,
+    /// and launching the other frontend then would open a blank window over
+    /// a screen nobody released. With `false` the handoff does not happen
+    /// and says so; the process stays where it was, which is the worst that
+    /// can happen and is not bad.
     HandedOff {
-        /// Esta conexión era la dueña y ha dejado de serlo.
+        /// This connection was the owner and has stopped being it.
         released: bool,
     },
 }
 
-/// El lado de la PANTALLA del escritor de sesión (L2).
+/// The SCREEN side of the session writer (L2).
 ///
-/// Lo que era una función `async` dentro del `select!` es ahora un canal, y el
-/// motivo es medible: el volcado acaba en un `fsync` (brazo embebido) o en un
-/// viaje por el socket (daemon), y mientras eso estaba en vuelo el bucle de
-/// eventos no procesaba una tecla. Una vez por segundo, y justo mientras
-/// navegas, que es cuando el cuerpo cambia. Ahora el bucle solo hace
-/// `try_send` y `try_recv`: **esta struct no tiene ni un `await`, y por eso el
-/// arreglo no se puede deshacer sin que se note** (#230).
+/// What used to be an `async` function inside the `select!` is now a
+/// channel, and the reason is measurable: the dump ends in an `fsync`
+/// (embedded arm) or a trip over the socket (daemon), and while that was in
+/// flight the event loop did not process a key. Once a second, and right
+/// while you navigate, which is when the body changes. Now the loop only
+/// does `try_send` and `try_recv`: **this struct does not have a single
+/// `await`, and that is why the fix cannot be undone without it showing**
+/// (#230).
 pub struct SessionPush {
-    /// Qué se manda, qué no se repite y cuándo se vuelve a pedir la
-    /// propiedad. Vive en `norte-frontend` (#236): es política de sesión, no
-    /// del bucle de eventos de la TUI, y el siguiente frontend la hereda en
-    /// vez de reinventarla.
+    /// What is sent, what is not repeated and when ownership is asked for
+    /// again. Lives in `norte-frontend` (#236): it is session policy, not
+    /// the TUI's event loop's, and the next frontend inherits it instead of
+    /// reinventing it.
     policy: norte_frontend::session::PushPolicy,
-    /// Hacia el escritor. Capacidad 1: si está ocupado, este tick se salta, que
-    /// es coalescing y no pérdida —el cuerpo siguiente lleva lo mismo y más—.
-    ordenes: tokio::sync::mpsc::Sender<SessionOrder>,
-    /// Desde el escritor.
-    avisos: tokio::sync::mpsc::Receiver<SessionNotice>,
-    /// El escritor, para esperarlo al salir.
+    /// Toward the writer. Capacity 1: if it is busy, this tick is skipped,
+    /// which is coalescing and not loss —the next body carries the same and
+    /// more—.
+    commands: tokio::sync::mpsc::Sender<SessionOrder>,
+    /// From the writer.
+    notices: tokio::sync::mpsc::Receiver<SessionNotice>,
+    /// The writer, to await it on exit.
     task: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl SessionPush {
-    /// El lado de la pantalla SIN escritor, para probar lo que decide el bucle
-    /// sin un core al otro lado.
+    /// The screen side WITHOUT a writer, to test what the loop decides with
+    /// no core on the other side.
     ///
-    /// Devuelve los dos extremos que se queda el escritor de verdad, así que un
-    /// test puede leer lo que se manda y fingir lo que se contesta.
+    /// Returns the two ends the real writer keeps, so a test can read what
+    /// is sent and fake what is answered.
     #[cfg(test)]
     fn for_test() -> (
         Self,
         tokio::sync::mpsc::Receiver<SessionOrder>,
         tokio::sync::mpsc::Sender<SessionNotice>,
     ) {
-        let (ordenes_tx, ordenes_rx) = tokio::sync::mpsc::channel(1);
-        let (avisos_tx, avisos_rx) = tokio::sync::mpsc::channel(4);
+        let (commands_tx, commands_rx) = tokio::sync::mpsc::channel(1);
+        let (notices_tx, notices_rx) = tokio::sync::mpsc::channel(4);
         (
             Self {
                 policy: norte_frontend::session::PushPolicy::new(OWNER_RETRY_TICKS),
-                ordenes: ordenes_tx,
-                avisos: avisos_rx,
+                commands: commands_tx,
+                notices: notices_rx,
                 task: None,
             },
-            ordenes_rx,
-            avisos_tx,
+            commands_rx,
+            notices_tx,
         )
     }
 
-    /// Arranca el escritor de la sesión de este run.
+    /// Starts this run's session writer.
     pub fn start(backend: &Backend, revision: u64) -> Self {
-        let (ordenes_tx, ordenes_rx) = tokio::sync::mpsc::channel(1);
-        let (avisos_tx, avisos_rx) = tokio::sync::mpsc::channel(4);
+        let (commands_tx, commands_rx) = tokio::sync::mpsc::channel(1);
+        let (notices_tx, notices_rx) = tokio::sync::mpsc::channel(4);
         let b = backend.clone();
-        let task = tokio::spawn(write_session(b, revision, ordenes_rx, avisos_tx));
+        let task = tokio::spawn(write_session(b, revision, commands_rx, notices_tx));
         Self {
             policy: norte_frontend::session::PushPolicy::new(OWNER_RETRY_TICKS),
-            ordenes: ordenes_tx,
-            avisos: avisos_rx,
+            commands: commands_tx,
+            notices: notices_rx,
             task: Some(task),
         }
     }
 
-    /// Manda la última foto, suelta el canal y espera al escritor.
+    /// Sends the last snapshot, releases the channel and awaits the writer.
     ///
-    /// La foto va con `send` y un plazo, no con `try_send`: al salir no hay un
-    /// «tick siguiente» que lo reintente, así que con el escritor ocupado —un
-    /// `fsync` lento, un daemon parado— un `try_send` habría tirado justo la
-    /// escritura que este camino existe para no perder.
+    /// The snapshot goes with `send` and a deadline, not with `try_send`: on
+    /// exit there is no "next tick" to retry it, so with the writer busy —a
+    /// slow `fsync`, a stalled daemon— a `try_send` would have dropped
+    /// exactly the write this path exists to not lose.
     pub async fn close(&mut self, last: Option<Arc<norte_frontend::session::SessionBody>>) {
         if let Some(body) = last {
-            let _ =
-                tokio::time::timeout(SHUTDOWN_GRACE, self.ordenes.send(SessionOrder::Write(body)))
-                    .await;
+            let _ = tokio::time::timeout(
+                SHUTDOWN_GRACE,
+                self.commands.send(SessionOrder::Write(body)),
+            )
+            .await;
         }
         let (empty, _) = tokio::sync::mpsc::channel(1);
-        // Soltar el emisor es lo que termina el bucle del escritor.
-        self.ordenes = empty;
+        // Releasing the sender is what ends the writer's loop.
+        self.commands = empty;
         if let Some(task) = self.task.take() {
             let _ = tokio::time::timeout(SHUTDOWN_GRACE, task).await;
         }
     }
 }
 
-/// El escritor de la sesión: el ÚNICO que habla con el core de esto.
+/// The session writer: the ONLY one that talks to the core about this.
 ///
-/// Tiene la revisión, el recorte y la parada porque es quien ve las respuestas.
-/// Las dos negativas se contestan distinto y por eso están aquí y no en el
-/// `Backend`: un conflicto se arregla releyendo —otra ventana escribió— y un
-/// exceso de tamaño se arregla tirando historial, que es lo que más ocupa y lo
-/// que menos duele perder.
+/// It holds the revision, the trim and the pause because it is the one that
+/// sees the responses. The two negatives are answered differently, and
+/// that is why they are here and not in the `Backend`: a conflict is fixed
+/// by rereading —another window wrote— and an oversize is fixed by
+/// dropping history, which takes up the most space and hurts the least to
+/// lose.
 async fn write_session(
     backend: Backend,
     mut revision: u64,
-    mut ordenes: tokio::sync::mpsc::Receiver<SessionOrder>,
-    avisos: tokio::sync::mpsc::Sender<SessionNotice>,
+    mut commands: tokio::sync::mpsc::Receiver<SessionOrder>,
+    notices: tokio::sync::mpsc::Sender<SessionNotice>,
 ) {
     use norte_frontend::session::{SCHEMA_VERSION, SessionBody};
 
-    // Ya se supo que no cabe: a partir de aquí se escribe SIN historial.
-    // Recortar solo la copia de un tick era no recortar nada — el tick
-    // siguiente volvía a capturar el historial entero y lo que salía era un
-    // `put` rehusado y un aviso POR SEGUNDO.
+    // Already known it does not fit: from here on it writes WITHOUT
+    // history. Trimming just one tick's copy was trimming nothing — the
+    // next tick captured the whole history again and what came out was a
+    // refused `put` and a notice ONCE A SECOND.
     let mut truncating = false;
-    // No cupo ni sin historial: se deja de escribir en este run.
+    // Did not fit even without history: this run stops writing.
     let mut stopped = false;
-    // Lo último que se mandó a escribir, para saber qué de un documento ajeno
-    // no teníamos.
+    // The last thing sent to write, to know what of a foreign document we
+    // did not have.
     let mut last: Option<SessionBody> = None;
-    // Fase 9: la orden actual es un RELEVO, así que tras escribirla hay que
-    // soltar la sesión. Se recuerda aquí y no se hace en el brazo del `match`
-    // porque escribir es lo que sigue, y soltar antes dejaría al otro
-    // frontend leyendo la pantalla de hace un segundo.
-    while let Some(order) = ordenes.recv().await {
-        let relevando = matches!(order, SessionOrder::Handoff(_));
+    // Phase 9: the current order is a HANDOFF, so after writing it the
+    // session has to be released. Remembered here and not done in the
+    // `match` arm because writing comes next, and releasing before that
+    // would leave the other frontend reading the screen from a second ago.
+    while let Some(order) = commands.recv().await {
+        let handing_off = matches!(order, SessionOrder::Handoff(_));
         let mut body = match order {
             SessionOrder::Ask => {
-                if let Some(rev) = preguntar_si_ya_es_mia(&backend, last.as_ref(), &avisos).await {
+                if let Some(rev) = ask_si_ya_es_mia(&backend, last.as_ref(), &notices).await {
                     revision = rev;
                     stopped = false;
                 }
@@ -416,11 +429,12 @@ async fn write_session(
             SessionOrder::Write(body) | SessionOrder::Handoff(body) => (*body).clone(),
         };
         if stopped {
-            // Con la escritura parada no hay pantalla que entregar, y soltar
-            // igualmente dejaría la sesión sin dueño con un cuerpo viejo
-            // dentro. Se contesta que no se pudo, que es la verdad.
-            if relevando {
-                let _ = avisos
+            // With writing stopped there is no screen to deliver, and
+            // releasing anyway would leave the session with no owner and an
+            // old body inside. It answers that it could not, which is the
+            // truth.
+            if handing_off {
+                let _ = notices
                     .send(SessionNotice::HandedOff { released: false })
                     .await;
             }
@@ -429,11 +443,11 @@ async fn write_session(
         if truncating {
             body.degrade_for_size();
         }
-        // Fase 9: si esto es un relevo, sólo se suelta la sesión cuando la
-        // pantalla ESTÁ escrita. Soltarla tras un `put` que falló dejaría al
-        // otro frontend reclamando un cuerpo viejo, que es peor que no
-        // relevar.
-        let mut escrito = false;
+        // Phase 9: if this is a handoff, the session is only released once
+        // the screen IS written. Releasing it after a `put` that failed
+        // would leave the other frontend claiming an old body, which is
+        // worse than not handing off.
+        let mut written = false;
         match backend
             .session_put(SCHEMA_VERSION, revision, body.to_value())
             .await
@@ -441,145 +455,149 @@ async fn write_session(
             Ok(rev) => {
                 revision = rev;
                 last = Some(body);
-                escrito = true;
+                written = true;
             }
-            // Otra ventana escribió entre nuestro último `get` y este `put`.
-            // Se re-lee para saber contra qué, y lo que ella guardaba y esta
-            // pantalla no tiene se conserva por DOS vías: se mete en el cuerpo
-            // que se reintenta ahora mismo —si esto es el último volcado, no
-            // hay un «luego»— y se le devuelve a la pantalla, que es quien
-            // tiene que llevarlo en los siguientes (#231).
+            // Another window wrote between our last `get` and this `put`.
+            // It rereads to know against what, and what it had saved that
+            // this screen does not have is kept via TWO paths: it goes into
+            // the body being retried right now —if this is the last dump,
+            // there is no "later"— and it is handed back to the screen,
+            // which is the one that has to carry it in the next ones
+            // (#231).
             Err(Error::Conflict { .. }) => {
                 let mut orphans = std::collections::BTreeMap::new();
-                if let Ok((sesion, _)) = backend.session_get().await {
-                    revision = sesion.revision;
-                    if let Ok(remote) = SessionBody::from_value(sesion.version, &sesion.body) {
+                if let Ok((session, _)) = backend.session_get().await {
+                    revision = session.revision;
+                    if let Ok(remote) = SessionBody::from_value(session.version, &session.body) {
                         orphans = foreign_orphans(&body, &remote);
-                        for (id, estado) in &orphans {
-                            body.slots.insert(*id, estado.clone());
+                        for (id, state) in &orphans {
+                            body.slots.insert(*id, state.clone());
                         }
                     }
-                    // Un reintento INMEDIATO y uno solo: con la revisión de
-                    // verdad delante, no reintentarlo aquí dejaba la última
-                    // foto de una salida en el aire.
+                    // ONE IMMEDIATE retry and only one: with the real
+                    // revision in hand, not retrying here would leave an
+                    // exit's last snapshot hanging.
                     if let Ok(rev) = backend
                         .session_put(SCHEMA_VERSION, revision, body.to_value())
                         .await
                     {
                         revision = rev;
                         last = Some(body);
-                        escrito = true;
+                        written = true;
                     }
                 }
-                let _ = avisos.send(SessionNotice::Retry { orphans }).await;
+                let _ = notices.send(SessionNotice::Retry { orphans }).await;
             }
             Err(Error::LimitExceeded { .. }) => {
                 if truncating {
-                    // Ni sin historial cabe: reintentarlo cada segundo sería un
-                    // error por segundo.
+                    // Does not fit even without history: retrying every
+                    // second would be an error a second.
                     stopped = true;
                 } else {
                     truncating = true;
-                    // La decisión de QUÉ se tira es compartida (#316): la
-                    // ventana degrada con la misma, y antes no degradaba.
+                    // The decision of WHAT gets dropped is shared (#316):
+                    // the window degrades with the same one, and before it
+                    // did not degrade.
                     body.degrade_for_size();
-                    let _ = avisos.send(SessionNotice::TooLarge).await;
+                    let _ = notices.send(SessionNotice::TooLarge).await;
                     match backend
                         .session_put(SCHEMA_VERSION, revision, body.to_value())
                         .await
                     {
                         Ok(rev) => {
                             revision = rev;
-                            escrito = true;
+                            written = true;
                         }
                         Err(_) => stopped = true,
                     }
                 }
             }
-            // Esta ventana ya no escribe: perdió la propiedad, o el daemon se
-            // está apagando (o se fue y la conexión nueva no reclamó nada).
-            // Se para Y SE DICE: sin el aviso nadie volvía a preguntar nunca
-            // —`Ask` solo sale de una ventana que se sabe suelta— y la
-            // pantalla se perdía en silencio tras cualquier relevo de daemon.
+            // This window no longer writes: it lost ownership, or the
+            // daemon is shutting down (or left and the new connection
+            // claimed nothing). It stops AND SAYS SO: without the notice
+            // nobody ever asked again —`Ask` only comes from a window that
+            // knows it is detached— and the screen was silently lost after
+            // any daemon handoff.
             Err(Error::PermissionDenied | Error::Cancelled) => {
                 stopped = true;
-                let _ = avisos.send(SessionNotice::Released).await;
+                let _ = notices.send(SessionNotice::Released).await;
             }
-            // Cualquier otro fallo —transporte caído, un `Io`, un plazo— NO da
-            // el cuerpo por escrito: la pantalla lo dio por mandado al meterlo
-            // en el canal, así que sin esto se perdía hasta que el lector
-            // volviera a mover algo.
+            // Any other failure —transport down, an `Io`, a timeout— does
+            // NOT count the body as written: the screen considered it sent
+            // once it put it into the channel, so without this it was lost
+            // until the reader moved something again.
             Err(e) => {
-                tracing::debug!(error = %e, "la sesión no se pudo escribir");
-                let _ = avisos
+                tracing::debug!(error = %e, "session could not be written");
+                let _ = notices
                     .send(SessionNotice::Retry {
                         orphans: std::collections::BTreeMap::new(),
                     })
                     .await;
             }
         }
-        // Y el relevo, DESPUÉS de escribir.
-        if relevando {
-            stopped |= soltar_para_relevo(&backend, escrito, &avisos).await;
+        // And the handoff, AFTER writing.
+        if handing_off {
+            stopped |= release_for_handoff(&backend, written, &notices).await;
         }
     }
 }
 
-/// `SessionOrder::Ask`: ¿ya es de esta ventana? Devuelve la revisión vigente
-/// si lo es, y avisa a la pantalla.
+/// `SessionOrder::Ask`: is it this window's yet? Returns the current
+/// revision if it is, and notifies the screen.
 ///
-/// El documento que había viaja de vuelta con el aviso: lo que guardó quien
-/// tenía la sesión y esta pantalla no conoce se perdería en el primer volcado
-/// del relevo, y ese hueco era el historial de un panel al que su dueña iba a
-/// volver (#231).
-async fn preguntar_si_ya_es_mia(
+/// The document that was there travels back with the notice: what the
+/// previous session owner saved that this screen does not know about would
+/// be lost on the handoff's first dump, and that gap was a panel's history
+/// its owner was going to come back to (#231).
+async fn ask_si_ya_es_mia(
     backend: &Backend,
     last: Option<&norte_frontend::session::SessionBody>,
-    avisos: &tokio::sync::mpsc::Sender<SessionNotice>,
+    notices: &tokio::sync::mpsc::Sender<SessionNotice>,
 ) -> Option<u64> {
     use norte_frontend::session::SessionBody;
 
-    let (sesion, duena) = backend.session_get().await.ok()?;
-    if !duena {
+    let (session, owned) = backend.session_get().await.ok()?;
+    if !owned {
         return None;
     }
-    let revision = sesion.revision;
-    let orphans = SessionBody::from_value(sesion.version, &sesion.body)
+    let revision = session.revision;
+    let orphans = SessionBody::from_value(session.version, &session.body)
         .map(|remote| foreign_orphans(last.unwrap_or(&SessionBody::default()), &remote))
         .unwrap_or_default();
-    let _ = avisos
+    let _ = notices
         .send(SessionNotice::Owner { revision, orphans })
         .await;
     Some(revision)
 }
 
-/// La segunda mitad de un relevo: soltar la sesión y contarlo. Devuelve si
-/// hay que dejar de escribir.
+/// The second half of a handoff: release the session and report it.
+/// Returns whether writing must stop.
 ///
-/// Va DESPUÉS de escribir porque la pantalla tiene que estar donde el otro
-/// frontend la va a leer antes de dejarle el sitio. Y sólo se suelta si el
-/// `put` entró: soltarla tras un fallo dejaría al otro reclamando un cuerpo
-/// viejo, que es peor que no relevar. Un `release` que conteste `false` —no
-/// éramos los dueños— deja el relevo sin hacer, y quien lo pidió se entera:
-/// lanzar la otra mitad entonces abriría una ventana en blanco.
-async fn soltar_para_relevo(
+/// Comes AFTER writing because the screen has to be where the other
+/// frontend is going to read it before ceding the spot. And it is only
+/// released if the `put` went through: releasing after a failure would
+/// leave the other one claiming an old body, which is worse than not
+/// handing off. A `release` answering `false` —we were not the owner—
+/// leaves the handoff undone, and whoever asked for it finds out: launching
+/// the other half then would open a blank window.
+async fn release_for_handoff(
     backend: &Backend,
-    escrito: bool,
-    avisos: &tokio::sync::mpsc::Sender<SessionNotice>,
+    written: bool,
+    notices: &tokio::sync::mpsc::Sender<SessionNotice>,
 ) -> bool {
-    let released = escrito && backend.session_release().await.unwrap_or(false);
-    let _ = avisos.send(SessionNotice::HandedOff { released }).await;
-    // Ya no somos dueños: dejar de escribir es lo honesto, y la pantalla se
-    // pone suelta al recibir el aviso.
+    let released = written && backend.session_release().await.unwrap_or(false);
+    let _ = notices.send(SessionNotice::HandedOff { released }).await;
+    // We are no longer the owner: stopping writing is the honest thing, and
+    // the screen goes detached on receiving the notice.
     released
 }
 
-/// Los huecos que `remote` guarda y `local` no tiene.
+/// The slots `remote` has saved that `local` does not have.
 ///
-/// Es lo que hay que conservar de un cuerpo ajeno: nuestros huecos son los
-/// buenos —esta pantalla es la que acaba de moverse— pero los que solo están
-/// en el suyo no los conoce nadie más, y tirarlos es tirar el historial de un
-/// panel al que su dueña iba a volver.
+/// This is what has to be kept from a foreign body: our slots are the good
+/// ones —this screen is the one that just moved— but the ones that only
+/// exist in its own are known to nobody else, and dropping them is dropping
+/// the history of a panel its owner was going to come back to.
 fn foreign_orphans(
     local: &norte_frontend::session::SessionBody,
     remote: &norte_frontend::session::SessionBody,
@@ -592,25 +610,25 @@ fn foreign_orphans(
         .collect()
 }
 
-/// Manda la sesión a escribir si ha cambiado, y atiende lo que el escritor
-/// tenga que decir (L2).
+/// Sends the session to be written if it has changed, and handles whatever
+/// the writer has to say (L2).
 ///
-/// Se llama una vez por segundo. Coalescer es el punto: el cursor se mueve en
-/// cada flecha, y esto acaba en un fichero.
+/// Called once a second. Coalescing is the point: the cursor moves on every
+/// arrow key, and this ends up in a file.
 ///
-/// **No es `async`, y eso es el arreglo de #230.** Todo lo que puede tardar
-/// —el `put`, el `fsync`, el viaje por el socket— vive en
-/// `write_session` (privada); aquí solo se captura, se compara y se empuja por un
-/// canal. Volver a poner un `await` en esta función es volver a trabar el
-/// bucle de eventos una vez por segundo.
+/// **It is not `async`, and that is #230's fix.** Everything that can take
+/// a while —the `put`, the `fsync`, the trip over the socket— lives in
+/// `write_session` (private); here it only captures, compares and pushes
+/// through a channel. Putting an `await` back into this function is going
+/// back to blocking the event loop once a second.
 pub fn push_session(app: &mut App, st: &mut SessionPush) {
     drain_notices(app, st);
-    // La decisión —suelta, tapada por un modal, o toca capturar— es de la
-    // política; la fontanería del canal es de aquí.
+    // The decision —detached, covered by a modal, or time to capture— is
+    // the policy's; the channel plumbing is here.
     match st.policy.tick(app.session.detached, app.modal.is_some()) {
         norte_frontend::session::PushStep::Skip => return,
         norte_frontend::session::PushStep::Ask => {
-            let _ = st.ordenes.try_send(SessionOrder::Ask);
+            let _ = st.commands.try_send(SessionOrder::Ask);
             return;
         }
         norte_frontend::session::PushStep::Capture => {}
@@ -618,77 +636,78 @@ pub fn push_session(app: &mut App, st: &mut SessionPush) {
     let Some(body) = capture_session(app, st) else {
         return;
     };
-    // `try_send` y no `send`: con el escritor ocupado, este tick se salta y el
-    // siguiente manda un cuerpo más nuevo. Y `last` solo se actualiza si de
-    // verdad se mandó, o un cuerpo saltado se daría por escrito.
-    match st.ordenes.try_send(SessionOrder::Write(Arc::clone(&body))) {
+    // `try_send` and not `send`: with the writer busy, this tick is skipped
+    // and the next one sends a newer body. And `last` is only updated if it
+    // was truly sent, or a skipped body would be counted as written.
+    match st.commands.try_send(SessionOrder::Write(Arc::clone(&body))) {
         Ok(()) => st.policy.sent(body),
         Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {}
-        // El escritor se murió (un panic dentro de la task). Sin esto la
-        // pantalla reintentaba contra un canal cerrado el resto del run sin
-        // decir una palabra.
+        // The writer died (a panic inside the task). Without this the
+        // screen kept retrying against a closed channel for the rest of the
+        // run without saying a word.
         Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-            tracing::warn!("el escritor de la sesión no está: esta ventana deja de guardar");
+            tracing::warn!("the session writer is gone: this window stops saving");
             app.session.detached = true;
         }
     }
 }
 
-/// Pide el RELEVO (fase 9): vuelca la pantalla CON las marcas y suelta la
-/// sesión.
+/// Requests the HANDOFF (phase 9): dumps the screen WITH the marks and
+/// releases the session.
 ///
-/// Devuelve `false` si el escritor no pudo ni recibir la orden, que es el
-/// único fallo que se ve desde aquí: el resto llega por el aviso
-/// `HandedOff`, porque escribir y soltar son dos viajes al core y el bucle de
-/// eventos no espera ninguno (#230).
+/// Returns `false` if the writer could not even receive the order, which
+/// is the only failure visible from here: the rest arrives through the
+/// `HandedOff` notice, because writing and releasing are two trips to the
+/// core and the event loop does not wait for either (#230).
 ///
-/// `send` bloqueante NO: este es el bucle de eventos. Con el escritor ocupado
-/// se dice que no en vez de congelar la pantalla, y el lector vuelve a
-/// pulsarlo — que es lo correcto para un gesto que el humano acaba de pedir y
-/// puede repetir.
+/// NO blocking `send`: this is the event loop. With the writer busy it says
+/// no instead of freezing the screen, and the reader presses it again —
+/// which is correct for a gesture the human just requested and can repeat.
 pub fn request_handoff(app: &mut App, st: &mut SessionPush) -> bool {
     let body = Arc::new(app.session_body_for_handoff());
-    if st.ordenes.try_send(SessionOrder::Handoff(body)).is_err() {
+    if st.commands.try_send(SessionOrder::Handoff(body)).is_err() {
         app.message = Some(t("msg-handoff-failed"));
         return false;
     }
     true
 }
 
-/// Vuelve a pedir la sesión en el tic siguiente (fase 9): el relevo la soltó
-/// para una ventana que no llegó a vivir.
+/// Asks for the session again on the next tick (phase 9): the handoff
+/// released it for a window that never got to live.
 ///
-/// Por el camino de siempre —`Ask`, que el escritor ya sabe contestar— y no
-/// con un `session.get` aquí: este es el bucle de eventos (#230), y la
-/// propiedad la gestiona el escritor. Si otro frontend la reclamó mientras
-/// tanto, `Ask` contesta que no y esta terminal sigue suelta, que es la
-/// verdad.
+/// Through the usual path —`Ask`, which the writer already knows how to
+/// answer— and not with a `session.get` here: this is the event loop
+/// (#230), and ownership is managed by the writer. If another frontend
+/// claimed it in the meantime, `Ask` answers no and this terminal stays
+/// detached, which is the truth.
 pub fn reclaim_soon(st: &mut SessionPush) {
     st.policy.ask_soon();
 }
 
-/// Lo que el escritor contó desde la última vuelta.
+/// What the writer has reported since the last round.
 pub fn drain_notices(app: &mut App, st: &mut SessionPush) {
-    while let Ok(notice) = st.avisos.try_recv() {
+    while let Ok(notice) = st.notices.try_recv() {
         match notice {
             SessionNotice::TooLarge => app.message = Some(t("msg-session-too-large")),
             SessionNotice::Retry { orphans } => {
                 app.adopt_session_orphans(orphans);
-                // Lo mandado no llegó: que la comparación no lo dé por escrito.
+                // What was sent did not go through: the comparison must not
+                // count it as written.
                 st.policy.resend();
             }
-            // Ni tomar la sesión ni soltarla se anuncian: el indicador de la
-            // barra aparece y desaparece solo, y un mensaje por cada relevo
-            // de daemon era ruido sobre un hecho que ya se ve.
+            // Neither taking the session nor releasing it is announced: the
+            // bar appears and disappears on its own, and a message for
+            // every daemon handoff was noise over a fact that is already
+            // visible.
             SessionNotice::Owner { revision, orphans } => {
                 app.session.detached = false;
                 app.session.revision = revision;
                 app.adopt_session_orphans(orphans);
             }
-            // Fase 9: el relevo terminó. Con `released` la pantalla ya es de
-            // otro y este proceso se va; sin él, no ha pasado nada y se DICE
-            // — quedarse callado dejaría al lector esperando una ventana que
-            // no va a abrir.
+            // Phase 9: the handoff finished. With `released` the screen now
+            // belongs to another process and this one leaves; without it,
+            // nothing happened and it SAYS SO — staying quiet would leave
+            // the reader waiting for a window that is not going to open.
             SessionNotice::HandedOff { released } => {
                 if released {
                     app.session.detached = true;
@@ -699,20 +718,20 @@ pub fn drain_notices(app: &mut App, st: &mut SessionPush) {
             }
             SessionNotice::Released => {
                 app.session.detached = true;
-                // Se vuelve a preguntar en el tick siguiente y no dentro de
-                // treinta segundos: esto suele ser un relevo de daemon, y la
-                // sesión ya está libre.
+                // It asks again on the next tick and not within thirty
+                // seconds: this is usually a daemon handoff, and the
+                // session is already free.
                 st.policy.ask_soon();
             }
         }
     }
 }
 
-/// La pantalla de AHORA, si ha cambiado desde lo último que se mandó.
+/// The screen as it is NOW, if it has changed since the last thing sent.
 ///
-/// `Arc` y no un `Box` clonado: el cuerpo puede llegar a 1 MiB y esto corre en
-/// el bucle de eventos una vez por segundo. Compartirlo con el escritor no
-/// cuesta nada; copiarlo sí.
+/// `Arc` and not a cloned `Box`: the body can reach 1 MiB and this runs in
+/// the event loop once a second. Sharing it with the writer costs nothing;
+/// copying it does.
 pub fn capture_session(
     app: &mut App,
     st: &mut SessionPush,
@@ -720,11 +739,11 @@ pub fn capture_session(
     let now = now_ms();
     let mut body = app.session_body();
     let alive = app.layout.slot_ids();
-    // La política recorta, compara y sella. Lo que queda aquí es lo único que
-    // ella no puede hacer: llevar el mismo sello al estado de la pantalla,
-    // porque capturar no puede TOCAR —dos capturas seguidas de la misma
-    // pantalla tienen que dar el mismo documento, o el coalescing de un
-    // segundo no coalesce nada.
+    // The policy trims, compares and seals. What is left here is the one
+    // thing it cannot do: carrying the same seal over to the screen's
+    // state, because capturing must not MUTATE —two captures in a row of
+    // the same screen have to give the same document, or a second's
+    // coalescing does not coalesce anything.
     let sealed = st.policy.prepare(&mut body, &alive, now)?;
     for id in sealed {
         app.touch_session_slot(id, now);
@@ -732,8 +751,8 @@ pub fn capture_session(
     Some(Arc::new(body))
 }
 
-/// Ahora, en milisegundos desde el epoch. Cero si el reloj del sistema está
-/// antes de 1970, que solo hace que la barrida por edad no barra nada.
+/// Now, in milliseconds since the epoch. Zero if the system clock is before
+/// 1970, which only makes the age-based sweep sweep nothing.
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -745,13 +764,13 @@ mod session_push_tests {
     use crate::app::Pane;
 
     fn app() -> App {
-        let d = VPath::parse("file:///x").expect("wire de test");
+        let d = VPath::parse("file:///x").expect("test wire");
         App::new(Pane::new(d.clone(), Vec::new()), Pane::new(d, Vec::new()))
     }
 
     fn slot(path: &str) -> norte_frontend::session::SlotState {
         norte_frontend::session::SlotState {
-            path: VPath::parse(path).expect("wire de test"),
+            path: VPath::parse(path).expect("test wire"),
             cursor: 0,
             back: Vec::new(),
             forward: Vec::new(),
@@ -764,15 +783,15 @@ mod session_push_tests {
         }
     }
 
-    /// #235: restaurar la sesión listaba TODOS los huecos en serie, sin plazo
-    /// y ANTES de que existiera el bucle de eventos — así que un hueco sobre
-    /// un SFTP muerto colgaba el arranque con `Ctrl+C` todavía sin cablear, y
-    /// la única salida era otra terminal.
+    /// #235: restoring the session used to list ALL the slots in series,
+    /// with no deadline and BEFORE the event loop existed — so a slot
+    /// pointing at a dead SFTP hung startup with `Ctrl+C` still not wired
+    /// up, and the only way out was another terminal.
     ///
-    /// Reloj de tokio pausado: la latencia del provider y el plazo son el
-    /// mismo reloj virtual, así que esto es determinista y no duerme.
+    /// Paused tokio clock: the provider's latency and the deadline are the
+    /// same virtual clock, so this is deterministic and does not sleep.
     #[tokio::test(start_paused = true)]
-    async fn restaurar_la_sesion_no_puede_colgar_el_arranque() {
+    async fn restoring_the_session_cannot_hang_startup() {
         use norte_core::backend::Backend;
         use std::sync::Arc;
         use std::time::Duration;
@@ -784,18 +803,18 @@ mod session_push_tests {
         engine.register_provider(Arc::new(mem));
         let backend = Backend::Embedded(Arc::new(engine));
 
-        let d = VPath::parse("mem:///").expect("wire de test");
+        let d = VPath::parse("mem:///").expect("test wire");
         let mut app = App::new(Pane::new(d.clone(), Vec::new()), Pane::new(d, Vec::new()));
-        // El conjunto esperado se calcula como lo calcula el código, no a
-        // mano: si la disposición de fábrica gana un browser, esto sigue
-        // diciendo la verdad en vez de fallar por una cadena.
+        // The expected set is computed the way the code computes it, not
+        // by hand: if the factory layout gains a browser, this keeps
+        // telling the truth instead of failing over a hardcoded count.
         let browsers: Vec<_> = app
             .layout
             .slot_ids()
             .into_iter()
             .filter(|id| app.panes.browser(*id).is_some())
             .collect();
-        assert!(browsers.len() >= 2, "la de fábrica tiene al menos dos");
+        assert!(browsers.len() >= 2, "the factory one has at least two");
 
         let budget = Duration::from_millis(50);
         let t0 = tokio::time::Instant::now();
@@ -803,40 +822,44 @@ mod session_push_tests {
 
         assert!(
             t0.elapsed() < Duration::from_secs(1),
-            "el arranque se acota al presupuesto, no a la latencia del provider: {:?}",
+            "startup is capped by the budget, not the provider's latency: {:?}",
             t0.elapsed()
         );
-        // Y el plazo es COMÚN: en serie, el primer hueco se lo comía entero y
-        // los demás ni se intentaban. Todos tienen que quedar marcados.
+        // And the deadline is SHARED: in series, the first slot ate up all
+        // of it and the rest were not even tried. All of them have to end
+        // up marked.
         for id in browsers {
             assert!(
                 app.panes.browser(id).is_some_and(|p| p.unlisted),
-                "el hueco {id:?} se queda marcado, no fingiendo un dir vacío"
+                "slot {id:?} stays marked, not faking an empty dir"
             );
         }
     }
 
-    /// Un hueco que falla al restaurar NO finge un directorio vacío, y si lo
-    /// que falta es una contraseña lo DICE nombrando la conexión.
+    /// A slot that fails to restore does NOT fake an empty directory, and
+    /// if what is missing is a password it SAYS SO by naming the
+    /// connection.
     ///
-    /// Es el caso corriente al reabrir norte: el daemon anterior se apagó por
-    /// inactividad y se llevó el secreto de sesión —vive solo en su memoria,
-    /// ADR 0015—, así que el panel guardado sobre `s3://…` vuelve con
-    /// `SecretNeeded`. Antes: un `warn!` al fichero y un panel vacío,
-    /// indistinguible de un cubo sin objetos. Ni el motivo ni nada que hacer.
+    /// This is the common case on reopening norte: the previous daemon shut
+    /// down from inactivity and took the session secret with it —it lives
+    /// only in its memory, ADR 0015—, so the panel saved over `s3://…`
+    /// comes back with `SecretNeeded`. Before: a `warn!` to the file and an
+    /// empty panel, indistinguishable from a bucket with no objects.
+    /// Neither the reason nor anything to do.
     ///
-    /// No se PREGUNTA aquí, y es deliberado: restaurar una sesión no es pedir
-    /// conectarse. La pregunta la abre el primer gesto sobre ese panel.
+    /// It is NOT ASKED here, and it is deliberate: restoring a session is
+    /// not requesting a connection. The question is opened by the first
+    /// gesture over that panel.
     #[tokio::test]
-    async fn un_hueco_que_pide_secreto_al_restaurar_lo_dice_y_no_finge_vacio() {
+    async fn a_slot_that_asks_for_a_secret_on_restore_says_so_and_does_not_fake_empty() {
         use norte_core::backend::Backend;
         use std::sync::Arc;
 
-        /// Provider que solo sabe pedir la contraseña de `rosetta`.
-        struct PideSecreto;
+        /// Provider that only knows how to ask for `rosetta`'s password.
+        struct AsksSecret;
 
         #[async_trait::async_trait]
-        impl norte_vfs::Provider for PideSecreto {
+        impl norte_vfs::Provider for AsksSecret {
             fn scheme(&self) -> &'static str {
                 "mem"
             }
@@ -880,9 +903,9 @@ mod session_push_tests {
         }
 
         let engine = norte_core::Engine::new();
-        engine.register_provider(Arc::new(PideSecreto));
+        engine.register_provider(Arc::new(AsksSecret));
         let backend = Backend::Embedded(Arc::new(engine));
-        let d = VPath::parse("mem:///").expect("wire de test");
+        let d = VPath::parse("mem:///").expect("test wire");
         let mut app = App::new(Pane::new(d.clone(), Vec::new()), Pane::new(d, Vec::new()));
 
         super::restore_slots(&mut app, &backend, std::time::Duration::from_secs(5)).await;
@@ -896,234 +919,249 @@ mod session_push_tests {
         for id in ids {
             assert!(
                 app.panes.browser(id).is_some_and(|p| p.unlisted),
-                "el hueco {id:?} finge un directorio vacío: un listado que \
-                 falló y un cubo sin objetos se leían igual"
+                "slot {id:?} fakes an empty directory: a listing that \
+                 failed and a bucket with no objects read the same"
             );
         }
-        let msg = app.message.clone().expect("se dice qué falta");
+        let msg = app.message.clone().expect("says what is missing");
         assert!(
             msg.contains("rosetta"),
-            "y CUÁL conexión: con dos paneles remotos, «hace falta una \
-             contraseña» no es contestable. Decía: {msg}"
+            "and WHICH connection: with two remote panels, \"a password is \
+             needed\" cannot be answered. It said: {msg}"
         );
-        // Y NO se abrió ningún diálogo: restaurar no es pedir conectarse.
+        // And NO dialog was opened: restoring is not requesting a
+        // connection.
         assert!(
             app.modal.is_none(),
-            "el arranque no pregunta solo; lo hace el primer gesto"
+            "startup does not ask on its own; the first gesture does"
         );
     }
 
-    /// Y la marca se APAGA en cuanto alguien lista de verdad: es un estado,
-    /// no un aviso, así que ni la borra una tecla ni sobrevive al listado.
+    /// And the mark TURNS OFF as soon as someone truly lists: it is a
+    /// state, not a notice, so a key does not clear it and it does not
+    /// survive the listing.
     #[test]
-    fn la_marca_de_sin_listar_se_va_con_el_primer_listado() {
-        let d = VPath::parse("mem:///").expect("wire de test");
+    fn the_unlisted_mark_goes_away_with_the_first_listing() {
+        let d = VPath::parse("mem:///").expect("test wire");
         let mut p = Pane::new(d.clone(), Vec::new());
         p.unlisted = true;
         p.set_listing(d, Vec::new());
-        assert!(!p.unlisted, "un listado real la apaga");
+        assert!(!p.unlisted, "a real listing turns it off");
     }
 
-    /// **#230, y es un test de FORMA**: `push_session` se llama desde un `#[test]`
-    /// corriente, sin runtime y sin `await`. Si alguien le devuelve el `async`,
-    /// esto no compila — que es exactamente la garantía que se quería, porque el
-    /// coste de aquel `await` era una tecla perdida por segundo mientras se
-    /// navegaba, y eso no lo enseña ningún assert.
+    /// **#230, and this is a SHAPE test**: `push_session` is called from an
+    /// ordinary `#[test]`, with no runtime and no `await`. If someone gives
+    /// it back its `async`, this stops compiling — which is exactly the
+    /// guarantee that was wanted, because the cost of that `await` was one
+    /// lost key per second while navigating, and no assert shows that.
     #[test]
-    fn mandar_la_sesion_no_bloquea_el_bucle() {
+    fn sending_the_session_does_not_block_the_loop() {
         let mut app = app();
-        let (mut st, mut ordenes, _avisos) = SessionPush::for_test();
+        let (mut st, mut commands, _notices) = SessionPush::for_test();
         push_session(&mut app, &mut st);
         assert!(
-            matches!(ordenes.try_recv(), Ok(SessionOrder::Write(_))),
-            "la primera vuelta manda la pantalla"
+            matches!(commands.try_recv(), Ok(SessionOrder::Write(_))),
+            "the first round sends the screen"
         );
-        // Y no se manda lo mismo dos veces: coalescer es el punto de todo esto.
+        // And the same thing is not sent twice: coalescing is the whole
+        // point of this.
         push_session(&mut app, &mut st);
-        assert!(ordenes.try_recv().is_err(), "nada ha cambiado");
+        assert!(commands.try_recv().is_err(), "nothing has changed");
     }
 
-    /// Una ventana SUELTA no escribe, pero vuelve a preguntar (#234): la dueña
-    /// pudo cerrarse, y no hay notificación que lo cuente.
+    /// A DETACHED window does not write, but it asks again (#234): the
+    /// owner may have closed, and there is no notification to report it.
     #[test]
-    fn una_ventana_suelta_no_escribe_y_vuelve_a_preguntar() {
+    fn a_detached_window_does_not_write_and_asks_again() {
         let mut app = app();
         app.session.detached = true;
-        let (mut st, mut ordenes, _avisos) = SessionPush::for_test();
+        let (mut st, mut commands, _notices) = SessionPush::for_test();
         for _ in 0..OWNER_RETRY_TICKS - 1 {
             push_session(&mut app, &mut st);
-            assert!(ordenes.try_recv().is_err(), "suelta no escribe ni pregunta");
+            assert!(
+                commands.try_recv().is_err(),
+                "detached neither writes nor asks"
+            );
         }
         push_session(&mut app, &mut st);
         assert!(
-            matches!(ordenes.try_recv(), Ok(SessionOrder::Ask)),
-            "a los {OWNER_RETRY_TICKS} ticks pregunta"
+            matches!(commands.try_recv(), Ok(SessionOrder::Ask)),
+            "at {OWNER_RETRY_TICKS} ticks it asks"
         );
     }
 
-    /// Soltar la sesión y volver a tomarla NO escriben en la barra de
-    /// mensajes: son un estado, lo pinta el indicador persistente, y un
-    /// mensaje por relevo era ruido sobre algo que ya se ve.
+    /// Releasing the session and taking it back do NOT write to the
+    /// message bar: they are a state, the persistent indicator paints it,
+    /// and a message per handoff was noise over something already visible.
     #[test]
-    fn soltar_y_tomar_la_sesion_no_dejan_mensaje() {
+    fn dropping_and_taking_the_session_leave_no_message() {
         let mut app = app();
-        let (mut st, _ordenes, avisos) = SessionPush::for_test();
-        avisos.try_send(SessionNotice::Released).expect("cabe");
+        let (mut st, _commands, notices) = SessionPush::for_test();
+        notices.try_send(SessionNotice::Released).expect("fits");
         push_session(&mut app, &mut st);
-        assert!(app.session.detached, "suelta");
-        assert!(app.message.is_none(), "sin mensaje: {:?}", app.message);
+        assert!(app.session.detached, "detached");
+        assert!(app.message.is_none(), "no message: {:?}", app.message);
         assert!(
             app.session_banner().is_some(),
-            "lo dice el indicador persistente"
+            "the persistent indicator says so"
         );
 
-        avisos
+        notices
             .try_send(SessionNotice::Owner {
                 revision: 3,
                 orphans: std::collections::BTreeMap::new(),
             })
-            .expect("cabe");
+            .expect("fits");
         push_session(&mut app, &mut st);
-        assert!(!app.session.detached, "dueña otra vez");
-        assert!(app.message.is_none(), "y tampoco: {:?}", app.message);
-        assert!(app.session_banner().is_none(), "el indicador se fue solo");
+        assert!(!app.session.detached, "owner again");
+        assert!(app.message.is_none(), "and neither here: {:?}", app.message);
+        assert!(
+            app.session_banner().is_none(),
+            "the indicator left on its own"
+        );
     }
 
-    /// Y cuando el escritor dice que ya es la dueña, esta ventana vuelve a
-    /// escribir desde la revisión que le den.
+    /// And when the writer says it is already the owner, this window
+    /// starts writing again from whatever revision it is given.
     #[test]
-    fn al_tomar_la_propiedad_se_vuelve_a_escribir() {
+    fn taking_ownership_writes_again() {
         let mut app = app();
         app.session.detached = true;
-        let (mut st, mut ordenes, avisos) = SessionPush::for_test();
-        avisos
+        let (mut st, mut commands, notices) = SessionPush::for_test();
+        notices
             .try_send(SessionNotice::Owner {
                 revision: 9,
                 orphans: std::collections::BTreeMap::new(),
             })
-            .expect("cabe");
+            .expect("fits");
         push_session(&mut app, &mut st);
         assert!(!app.session.detached);
         assert_eq!(app.session.revision, 9);
         assert!(
-            matches!(ordenes.try_recv(), Ok(SessionOrder::Write(_))),
-            "y ya escribe"
+            matches!(commands.try_recv(), Ok(SessionOrder::Write(_))),
+            "and it writes now"
         );
     }
 
-    /// Un cuerpo que no llegó NO se da por escrito: sin esto, el conflicto de
-    /// una sola vuelta dejaba la pantalla sin guardar hasta que el lector
-    /// volviera a mover algo.
+    /// A body that did not arrive is NOT counted as written: without this,
+    /// a single round's conflict left the screen unsaved until the reader
+    /// moved something again.
     #[test]
-    fn lo_que_no_llego_se_vuelve_a_mandar() {
+    fn what_did_not_arrive_is_sent_again() {
         let mut app = app();
-        let (mut st, mut ordenes, avisos) = SessionPush::for_test();
+        let (mut st, mut commands, notices) = SessionPush::for_test();
         push_session(&mut app, &mut st);
-        assert!(ordenes.try_recv().is_ok());
-        avisos
+        assert!(commands.try_recv().is_ok());
+        notices
             .try_send(SessionNotice::Retry {
                 orphans: std::collections::BTreeMap::new(),
             })
-            .expect("cabe");
+            .expect("fits");
         push_session(&mut app, &mut st);
         assert!(
-            matches!(ordenes.try_recv(), Ok(SessionOrder::Write(_))),
-            "se vuelve a mandar aunque la pantalla no haya cambiado"
+            matches!(commands.try_recv(), Ok(SessionOrder::Write(_))),
+            "it is sent again even though the screen has not changed"
         );
     }
 
-    /// **La última foto al salir ESPERA su turno.**
+    /// **The last snapshot on exit WAITS its turn.**
     ///
-    /// El canal tiene capacidad 1 y en la salida no hay un tick siguiente, así
-    /// que mandarla con `try_send` la tiraba justo cuando el escritor estaba
-    /// ocupado —un `fsync` lento, un daemon parado—, que es el caso para el que
-    /// se añadió.
+    /// The channel has capacity 1 and on exit there is no next tick, so
+    /// sending it with `try_send` dropped it right when the writer was busy
+    /// —a slow `fsync`, a stalled daemon—, which is the case it was added
+    /// for.
     #[tokio::test]
-    async fn la_ultima_foto_al_salir_espera_su_turno() {
+    async fn the_last_snapshot_on_exit_waits_its_turn() {
         let mut app = app();
-        let (mut st, mut ordenes, _avisos) = SessionPush::for_test();
-        // El escritor está ocupado: el canal ya lleva una orden sin consumir.
-        st.ordenes.try_send(SessionOrder::Ask).expect("cabe una");
-        let last = capture_session(&mut app, &mut st).expect("hay pantalla que guardar");
+        let (mut st, mut commands, _notices) = SessionPush::for_test();
+        // The writer is busy: the channel already carries an unconsumed
+        // order.
+        st.commands.try_send(SessionOrder::Ask).expect("fits one");
+        let last = capture_session(&mut app, &mut st).expect("there is a screen to save");
         let received = tokio::spawn(async move {
             let mut v = Vec::new();
-            while let Some(o) = ordenes.recv().await {
+            while let Some(o) = commands.recv().await {
                 v.push(o);
             }
             v
         });
         st.close(Some(last)).await;
         let v = received.await.expect("join");
-        assert_eq!(v.len(), 2, "la que ocupaba el canal y la última foto");
+        assert_eq!(
+            v.len(),
+            2,
+            "the one occupying the channel and the last snapshot"
+        );
         assert!(matches!(v[1], SessionOrder::Write(_)));
     }
 
-    /// Perder la propiedad a media vida se ve en el indicador de la barra, y
-    /// se vuelve a preguntar en el tick siguiente.
+    /// Losing ownership mid-life shows in the bar's indicator, and it asks
+    /// again on the next tick.
     ///
-    /// Es lo que pasa tras un relevo de daemon: la conexión nueva no ha
-    /// reclamado nada, el `put` sale `PermissionDenied` y el escritor se apaga.
-    /// Sin el estado, la ventana se creía la dueña y no volvía a guardar en el
-    /// resto de su vida — ni lo enseñaba.
+    /// This is what happens after a daemon handoff: the new connection has
+    /// claimed nothing, the `put` comes back `PermissionDenied` and the
+    /// writer shuts down.
+    /// Without the state, the window believed itself the owner and never
+    /// saved again for the rest of its life — nor did it show it.
     #[test]
-    fn perder_la_propiedad_se_dice_y_se_vuelve_a_preguntar() {
+    fn losing_ownership_is_reported_and_asked_again() {
         let mut app = app();
-        let (mut st, mut ordenes, avisos) = SessionPush::for_test();
-        avisos.try_send(SessionNotice::Released).expect("cabe");
+        let (mut st, mut commands, notices) = SessionPush::for_test();
+        notices.try_send(SessionNotice::Released).expect("fits");
         push_session(&mut app, &mut st);
-        assert!(app.session.detached, "esta ventana ya no manda");
-        assert!(app.session_banner().is_some(), "y el indicador lo enseña");
-        // Y en el tick siguiente pregunta, sin esperar los treinta segundos.
+        assert!(app.session.detached, "this window no longer rules");
+        assert!(app.session_banner().is_some(), "and the indicator shows it");
+        // And on the next tick it asks, without waiting the thirty seconds.
         push_session(&mut app, &mut st);
-        assert!(matches!(ordenes.try_recv(), Ok(SessionOrder::Ask)));
+        assert!(matches!(commands.try_recv(), Ok(SessionOrder::Ask)));
     }
 
-    /// **El relevo conserva lo que guardaba quien se fue.**
+    /// **The handoff keeps what the one who left had saved.**
     ///
-    /// Un relevo no pasa por `Conflict` —se adopta justo la revisión vigente,
-    /// así que la siguiente escritura encaja—, y ese era el agujero: la ventana
-    /// que tomaba la sesión pisaba en su primer volcado todo lo que la otra
-    /// hubiera guardado mientras ésta corría suelta.
+    /// A handoff does not go through `Conflict` —exactly the current
+    /// revision is adopted, so the next write fits—, and that was the gap:
+    /// the window taking over the session overwrote, on its first dump,
+    /// everything the other one had saved while this one ran detached.
     #[test]
-    fn al_tomar_el_relevo_no_se_pisa_lo_que_guardaba_la_otra() {
+    fn taking_the_handoff_does_not_overwrite_what_the_other_saved() {
         let mut app = app();
         app.session.detached = true;
-        let (mut st, _ordenes, avisos) = SessionPush::for_test();
+        let (mut st, _commands, notices) = SessionPush::for_test();
         let mut orphans = std::collections::BTreeMap::new();
         orphans.insert(77, slot("file:///lo-suyo"));
-        avisos
+        notices
             .try_send(SessionNotice::Owner {
                 revision: 5,
                 orphans,
             })
-            .expect("cabe");
+            .expect("fits");
         push_session(&mut app, &mut st);
         assert!(!app.session.detached);
         assert_eq!(app.session.revision, 5);
         assert_eq!(
             app.session_body().slots[&77].path,
             VPath::parse("file:///lo-suyo").expect("wire"),
-            "lo de la otra ventana sigue ahí y se vuelve a escribir"
+            "the other window's is still there and gets written again"
         );
     }
 
-    /// Un escritor muerto no deja a la pantalla hablando sola: se deja de
-    /// guardar y el indicador de la barra lo enseña.
+    /// A dead writer does not leave the screen talking to itself: saving
+    /// stops and the bar's indicator shows it.
     #[test]
-    fn si_el_escritor_se_muere_la_pantalla_se_entera() {
+    fn if_the_writer_dies_the_screen_finds_out() {
         let mut app = app();
-        let (mut st, ordenes, _avisos) = SessionPush::for_test();
-        drop(ordenes);
+        let (mut st, commands, _notices) = SessionPush::for_test();
+        drop(commands);
         push_session(&mut app, &mut st);
         assert!(app.session.detached);
         assert!(app.session_banner().is_some());
     }
 
-    /// **#231**: de un cuerpo ajeno se conserva lo que solo estaba en él.    /// **#231**: de un cuerpo ajeno se conserva lo que solo estaba en él. Los
-    /// huecos que el layout VIVO tiene son nuestros —esta pantalla es la que
-    /// acaba de moverse—; los demás vuelven al rincón de huérfanos.
+    /// **#231**: from a foreign body, what only existed in it is kept. The
+    /// slots the LIVE layout has are ours —this screen is the one that just
+    /// moved—; the rest go back to the orphans corner.
     #[test]
-    fn de_un_conflicto_se_conservan_los_huecos_ajenos() {
+    fn from_a_conflict_the_other_slots_are_kept() {
         let mut local = norte_frontend::session::SessionBody::default();
         local.slots.insert(1, slot("file:///mio"));
         let mut remote = norte_frontend::session::SessionBody::default();
@@ -1131,7 +1169,7 @@ mod session_push_tests {
         remote.slots.insert(42, slot("file:///solo-suyo"));
 
         let foreign = foreign_orphans(&local, &remote);
-        assert_eq!(foreign.len(), 1, "solo lo que no teníamos");
+        assert_eq!(foreign.len(), 1, "only what we did not have");
         assert!(foreign.contains_key(&42));
 
         let mut app = app();
@@ -1143,12 +1181,12 @@ mod session_push_tests {
         assert_eq!(
             body.slots[&42].path,
             VPath::parse("file:///solo-suyo").expect("wire"),
-            "el huérfano ajeno se conserva y se vuelve a escribir"
+            "the foreign orphan is kept and gets written again"
         );
         assert_eq!(
             body.slots[&alive].path,
             VPath::parse("file:///x").expect("wire"),
-            "y un hueco VIVO no lo pisa la sesión de otra ventana"
+            "and a LIVE slot is not overwritten by another window's session"
         );
     }
 }

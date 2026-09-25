@@ -1,26 +1,27 @@
-// El contrato con el host, en TypeScript.
+// The contract with the host, in TypeScript.
 //
-// Es una TRANSCRIPCIÓN de `crates/norte-ui-host/src/{bridge,dto,action}.rs`, y
-// no una segunda definición: quien manda es Rust. Lo que impide que se separen
-// en silencio es `tests/contract.test.ts`, que lee el MISMO corpus golden que
-// clava el lado Rust (`crates/norte-ui-host/tests/golden/*.json`).
+// It is a TRANSCRIPTION of `crates/norte-ui-host/src/{bridge,dto,action}.rs`,
+// not a second definition: Rust is the one in charge. What keeps them from
+// silently drifting apart is `tests/contract.test.ts`, which reads the SAME
+// golden corpus that pins the Rust side
+// (`crates/norte-ui-host/tests/golden/*.json`).
 //
-// Aquí no hay lógica. Ni un comparador, ni un formateador, ni una regla de
-// disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
+// There is no logic here. No comparator, no formatter, no availability rule:
+// that lives in Rust (ADR 0066, decision D14).
 
-/** La versión del contrato que este renderer sabe leer. */
+/** The contract version this renderer knows how to read. */
 export const BRIDGE_VERSION = 95;
 
-/** Dónde se suelta un panel arrastrado sobre otro (ADR 0138): a un lado, o
- *  en el centro para unirse a él como pestaña. */
+/** Where a dragged pane is dropped over another (ADR 0138): on a side, or in
+ *  the center to join it as a tab. */
 export type DropZone = "left" | "right" | "top" | "bottom" | "center";
 
-/** Lo que la barra de título propia le pide a su ventana (ADR 0136); el
- *  mismo vocabulario cerrado que `commands::WindowVerb` en Rust. */
+/** What the window's own title bar asks of its window (ADR 0136); the same
+ *  closed vocabulary as `commands::WindowVerb` in Rust. */
 export type WindowVerb = "minimize" | "toggle_maximize" | "close" | "drag";
 
-/** En cuántos tramos parte la regla de marcas un listado; el mismo número
- *  que `norte_ui_host::dto::MARK_RULER_SPANS`. */
+/** How many spans the mark ruler splits a listing into; the same number as
+ *  `norte_ui_host::dto::MARK_RULER_SPANS`. */
 export const MARK_RULER_SPANS = 256;
 
 export type RowKey = number;
@@ -53,33 +54,36 @@ export interface SlotPlacement {
 export interface LayoutView {
   cells: [number, number];
   placements: SlotPlacement[];
-  /** Los grupos de PESTAÑAS que hay en pantalla. Aparte de los placements
-   *  porque una pestaña inactiva no se coloca —no se pinta su contenido— y
-   *  aun así hay que enseñar que está: una ventana con tres pestañas que solo
-   *  muestra la de delante esconde trabajo abierto. */
+  /** The TAB groups on screen. Separate from the placements because an
+   *  inactive tab is not placed — its content is not painted — and it still
+   *  has to be shown that it is there: a window with three tabs that only
+   *  shows the front one hides open work. */
   tabs: TabGroupView[];
-  /** Si la marca de DESTINO dice algo con los listados que hay a la vista.
-   *  Que el rol exista y que se pinte son dos preguntas: `role` es el modelo
-   *  y esto es la pintura, calculada en Rust para no repetir el umbral. */
+  /** Whether the TARGET mark says anything about the listings in view.
+   *  Whether the role exists and whether it gets painted are two questions:
+   *  `role` is the model and this is the paint, computed in Rust so as not
+   *  to repeat the threshold. */
   mark_target?: boolean;
 }
 
 export interface TabGroupView {
-  /** El hueco COLOCADO al que pertenece el grupo: el de la pestaña activa. */
+  /** The PLACED slot the group belongs to: the active tab's. */
   slot_id: number;
   tabs: TabView[];
-  /** Cuál está delante, como índice en `tabs`. */
+  /** Which one is in front, as an index into `tabs`. */
   active: number;
-  /** Grupo de PANELES de un mismo borde (ADR 0134, puente 88): sin `+` ni
-   *  `×`, que abren y cierran listados. Opcional: host anterior = listados. */
+  /** A group of PANELS on the same edge (ADR 0134, bridge 88): with no `+`
+   *  nor `×`, which open and close listings. Optional: an earlier host means
+   *  listings. */
   panels?: boolean;
 }
 
 export interface TabView {
-  /** El hueco de dentro. Es lo que vuelve al elegirla con el ratón. */
+  /** The slot inside. It is what comes back when it is chosen with the
+   *  mouse. */
   slot_id: number;
-  /** Su rótulo, ya enmascarado: un directorio hostil dentro de una pestaña es
-   *  tan hostil como dentro de un listado. */
+  /** Its label, already masked: a hostile directory inside a tab is as
+   *  hostile as inside a listing. */
   title: string;
   title_hostile: boolean;
 }
@@ -91,7 +95,7 @@ export interface CellView {
   text: string | null;
 }
 
-/** La pantalla de arranque (puente 69): la pinta el host, no el webview. */
+/** The splash screen (bridge 69): painted by the host, not the webview. */
 export interface SplashView {
   art: string[];
   version: string;
@@ -100,12 +104,12 @@ export interface SplashView {
   hint: string;
   sections: SplashSectionView[];
   /**
-   * Lo que le queda puesta, en milisegundos, o `null` si se queda hasta que
-   * alguien la quite.
+   * How much longer it stays up, in milliseconds, or `null` if it stays
+   * until someone dismisses it.
    *
-   * El plazo lo decide el host y lo CUMPLE este renderer: aquí es donde hay
-   * temporizadores. Viene como duración y no como instante porque los dos
-   * relojes son de procesos distintos.
+   * The deadline is decided by the host and MET by this renderer: this is
+   * where the timers are. It arrives as a duration and not as an instant
+   * because the two clocks belong to different processes.
    */
   close_after_ms?: number | null;
 }
@@ -116,7 +120,7 @@ export interface SplashSectionView {
 }
 
 export interface SplashRowView {
-  /** El número que la abre, o 0 si la fila no tiene tecla. */
+  /** The number that opens it, or 0 if the row has no key. */
   number: number;
   label: string;
   detail: string;
@@ -126,62 +130,61 @@ export interface RowView {
   key: RowKey;
   display_name: string;
   hostile: boolean;
-  /** Por dónde va la tarea que trabaja sobre esta fila, 0–100 (puente 69). */
+  /** How far along the task working on this row is, 0–100 (bridge 69). */
   progress?: number | null;
   kind: RowKind;
   selected: boolean;
   marked: boolean;
   cells: CellView[];
-  /** La insignia que un plugin puso, ya enmascarada. Vacía = ninguna. */
+  /** The badge a plugin put there, already masked. Empty = none. */
   badge: string;
-  /** La insignia se pinta DISTINTO de lo que es: la escribe un plugin. */
+  /** The badge paints DIFFERENT from what it is: a plugin writes it. */
   badge_hostile: boolean;
   /**
-   * El rol del tema con el que pintarla (`warning`, `error`…). Vacío =
-   * ninguno. Es un vocabulario CERRADO: un plugin no elige su propio color.
+   * The theme role to paint it with (`warning`, `error`…). Empty = none. It
+   * is a CLOSED vocabulary: a plugin does not choose its own color.
    */
   badge_role: string;
   /**
-   * El ICONO de la fila (puente 62): lo que un decorador de hueco `icon`
-   * puso, ya enmascarado. Vacío = ninguno. Va a la IZQUIERDA del nombre, en
-   * una columna que se abre en todas las filas del hueco en cuanto una lo
-   * tiene.
+   * The row's ICON (bridge 62): what a slot's `icon` decorator put there,
+   * already masked. Empty = none. Goes to the LEFT of the name, in a column
+   * that opens across every row of the slot as soon as one of them has one.
    */
   icon: string;
-  /** El icono se pinta distinto de lo que es: lo escribe un plugin. */
+  /** The icon paints different from what it is: a plugin writes it. */
   icon_hostile: boolean;
   /**
-   * El color `#rrggbb` con que el TEMA pinta el nombre de esta entrada, por
-   * `[files.ext]` (gana) o `[files.kind]` (puente 66). Vacío = el tema no
-   * dice nada de ella y vale el color normal del listado.
+   * The `#rrggbb` color the THEME paints this entry's name with, via
+   * `[files.ext]` (wins) or `[files.kind]` (bridge 66). Empty = the theme
+   * says nothing about it and the listing's normal color applies.
    *
-   * Viaja RESUELTO, al revés que `badge_role`: las extensiones son un
-   * conjunto ABIERTO —un tema colorea las que quiera— así que no hay clases
-   * que este renderer pudiera conocer de antemano.
+   * Travels RESOLVED, unlike `badge_role`: extensions are an OPEN set — a
+   * theme colors whichever ones it wants — so there are no classes this
+   * renderer could know in advance.
    */
   name_color: string;
-  /** El nombre va en negrita (un directorio, un ejecutable). */
+  /** The name is bold (a directory, an executable). */
   name_bold: boolean;
-  /** Atenuado: así pintan los presets retro los archivos comprimidos. */
+  /** Dimmed: how the retro presets paint compressed archives. */
   name_dim: boolean;
-  /** Cursiva. */
+  /** Italic. */
   name_italic: boolean;
-  /** Subrayado. */
+  /** Underlined. */
   name_underline: boolean;
 }
 
 export type SlotState =
   | { state: "ready" }
-  /** Con A DÓNDE va: el cuerpo sigue enseñando el listado ANTERIOR hasta que
-   *  llegue el nuevo —a propósito, para que un fallo deje al lector donde
-   *  estaba—, y sin decir a dónde va esa mezcla no se puede leer. Vacío = un
-   *  refresco, que no va a ninguna parte. */
+  /** With WHERE it is going: the body keeps showing the PREVIOUS listing
+   *  until the new one arrives — on purpose, so a failure leaves the reader
+   *  where they were — and without saying where that mix is going it cannot
+   *  be read. Empty = a refresh, which goes nowhere. */
   | {
       state: "loading";
-      /** La clave Fluent del VERBO, del vocabulario cerrado que la ventana
-       *  comparte con el terminal: `busy-connecting`, `busy-listing`,
-       *  `busy-opening`. «Conectando» y «cargando» no son lo mismo, y el caso
-       *  que destapó #323 era el primero. */
+      /** The VERB's Fluent key, from the closed vocabulary the window shares
+       *  with the terminal: `busy-connecting`, `busy-listing`,
+       *  `busy-opening`. "Connecting" and "loading" are not the same, and
+       *  the case that uncovered #323 was the first one. */
       verb_key?: string;
       target_display?: string;
       target_hostile?: boolean;
@@ -199,11 +202,11 @@ export interface ColumnHeader {
   label: string;
   sort: "asc" | "desc" | null;
   sortable: boolean;
-  /** Ancho FIJO en celdas (puente 64), o `null` si la columna se pinta a lo
-   *  que mida. Arrastrar el borde de la cabecera lo cambia. */
+  /** FIXED width in cells (bridge 64), or `null` if the column paints
+   *  whatever size it measures. Dragging the header's border changes it. */
   width: number | null;
-  /** `left` o `right`: la alineación configurada, con efecto solo bajo un
-   *  ancho fijo. */
+  /** `left` or `right`: the configured alignment, with effect only under a
+   *  fixed width. */
   align: string;
 }
 
@@ -212,8 +215,8 @@ export interface BrowserSlotView {
   slot_id: number;
   generation: number;
   /**
-   * Lo que está llegando A ESTE directorio, 0–100 (ADR 0148, puente 94): la
-   * línea fina del borde. Ausente = nada que pintar.
+   * What is arriving INTO this directory, 0–100 (ADR 0148, bridge 94): the
+   * thin line on the border. Absent = nothing to paint.
    */
   progress?: number | null;
   path_display: string;
@@ -222,50 +225,50 @@ export interface BrowserSlotView {
   first_visible: number;
   rows: RowView[];
   /**
-   * La columna de iconos está abierta en este listado (puente 62): alguna
-   * entrada —visible o no— tiene icono, así que todas las filas llevan la
-   * celda. Lo decide el host desde el listado entero, no esta ventana desde
-   * las filas que ve.
+   * The icon column is open in this listing (bridge 62): some entry —
+   * visible or not — has an icon, so every row carries the cell. Decided by
+   * the host from the whole listing, not by this window from the rows it
+   * can see.
    */
   icon_column: boolean;
   cursor: RowKey | null;
   marks: number;
   /**
-   * La regla de marcas (puente 89, ADR 0135): qué tramos del listado —de
-   * `MARK_RULER_SPANS` iguales— llevan alguna marca. Vacío o ausente = sin
-   * marcas.
+   * The mark ruler (bridge 89, ADR 0135): which spans of the listing — out
+   * of `MARK_RULER_SPANS` equal ones — carry a mark. Empty or absent = no
+   * marks.
    */
   mark_ruler?: number[];
   /**
-   * Lo que el provider se SALTÓ, ya dicho en el idioma del lector. Vacío =
-   * ninguna, o el provider no lleva la cuenta.
+   * What the provider SKIPPED, already said in the reader's language. Empty
+   * = none, or the provider does not keep count.
    */
   skipped_note: string;
   /**
-   * Cuántas entradas aparta la ocultación, ya dicho. Vacío = ninguna. Va
-   * en la cabecera y es PERMANENTE: un listado que enseña menos de lo que
-   * hay no puede quedarse mudo en cuanto el lector cambie de tecla.
+   * How many entries hiding sets aside, already said. Empty = none. Goes in
+   * the header and is PERMANENT: a listing that shows less than there is
+   * cannot go silent the moment the reader presses another key.
    */
   hidden_note: string;
-  /** Los nombres se REINTERPRETAN con otra codificacion (#57). Vacio = no.
-   *  Permanente mientras dure: lo que se pinta no son los bytes que hay en el
-   *  disco, y eso hay que poder saberlo al decidir copiar o borrar algo. */
+  /** Names are being REINTERPRETED with another encoding (#57). Empty = no.
+   *  Permanent while it lasts: what is painted is not the bytes on disk, and
+   *  that has to be knowable when deciding to copy or delete something. */
   names_note?: string;
-  /** El listado se esta RELLENANDO todavia, y cuantas van. Vacio = entero. */
+  /** The listing is STILL FILLING, and how many so far. Empty = complete. */
   filling_note?: string;
-  /** Marcas que el ultimo refresco descarto porque su entrada ya no esta. */
+  /** Marks the last refresh dropped because their entry is no longer there. */
   pruned_note?: string;
-  /** Cuantas hay marcadas y cuanto pesan, ya dicho. Vacio = sin marcas. */
+  /** How many are marked and how much they weigh, already said. Empty = no marks. */
   marked_note?: string;
-  /** El pie del listado (cuentas, marcado, espacio libre), ya redactado.
-   *  Vacio o ausente = `[ui] pane_footer` apagado. Puente 63. */
+  /** The listing's footer (counts, marked, free space), already worded.
+   *  Empty or absent = `[ui] pane_footer` is off. Bridge 63. */
   footer?: string;
-  /** Las migas de la ruta (puente 65): la raíz y un tramo por directorio,
-   *  ya enmascarados. Pulsar el tramo `i` navega a esa profundidad. Vacío o
-   *  ausente = la ruta va entera en `path_display`. */
+  /** The path's breadcrumbs (bridge 65): the root and one segment per
+   *  directory, already masked. Clicking segment `i` navigates to that
+   *  depth. Empty or absent = the whole path travels in `path_display`. */
   path_segments?: string[];
-  /** Cuánto del volumen está ocupado, 0..1 (puente 65); `null` o ausente =
-   *  no se sabe, y entonces el pie no lleva indicador. */
+  /** How much of the volume is used, 0..1 (bridge 65); `null` or absent =
+   *  unknown, and then the footer carries no indicator. */
   used_ratio?: number | null;
   columns: ColumnHeader[];
   state: SlotState;
@@ -290,23 +293,23 @@ export interface MetadataSlotView {
   slot_id: number;
   fields: MetadataFieldView[];
   note: string;
-  /** La ruta del listado al que esta hoja SIGUE. Va en el título. */
+  /** The path of the listing this sheet FOLLOWS. Goes in the title. */
   follows_display: string;
-  /** Esa ruta difiere de los bytes reales. */
+  /** That path differs from the real bytes. */
   follows_hostile: boolean;
 }
 
 /**
- * El visor ACOPLADO (#291, puente 51): el fichero bajo el cursor del listado
- * al que este hueco sigue, leído solo, como en la TUI.
+ * The DOCKED viewer (#291, bridge 51): the file under the cursor of the
+ * listing this slot follows, read-only, as in the TUI.
  */
 export interface PreviewSlotView {
   kind: "preview";
   slot_id: number;
-  /** El visor con lo leído, o `null` si no hay fichero que enseñar. */
+  /** The viewer with what was read, or `null` if there is no file to show. */
   viewer: ViewerView | null;
-  /** Por qué no hay fichero, YA DICHO: un directorio, nada bajo el cursor,
-   *  un error de lectura. Vacío cuando hay visor. */
+  /** Why there is no file, ALREADY SAID: a directory, nothing under the
+   *  cursor, a read error. Empty when there is a viewer. */
   note: string;
 }
 
@@ -317,48 +320,50 @@ export interface ProcessesSlotView {
 }
 
 export interface LogLineView {
-  /** `HH:MM:SS`, en UTC — este árbol no lleva base de datos de husos. */
+  /** `HH:MM:SS`, in UTC — this tree carries no time zone database. */
   time: string;
-  /** Vocabulario CERRADO: error, warn, info, debug, trace. Se colorea por él.
-   *  Es una IDENTIDAD: se compara, no se pinta. */
+  /** CLOSED vocabulary: error, warn, info, debug, trace. Colored by it. It
+   *  is an IDENTITY: compared, not painted. */
   level: string;
-  /** Ese nivel tal y como se PINTA (`TRACE`), que es lo que pinta el terminal.
-   *  Sin traducir a propósito: es lo que se escribe en `RUST_LOG` y lo que se
-   *  busca con la vista. Los BOTONES de nivel sí van traducidos — son un
-   *  mando, no un dato. */
+  /** That level exactly as it is PAINTED (`TRACE`), which is what the
+   *  terminal paints. Deliberately not translated: it is what gets written
+   *  in `RUST_LOG` and what gets scanned for by eye. The level BUTTONS are
+   *  translated — they are a control, not a datum. */
   level_label?: string;
   target: string;
   message: string;
-  /** Lo pintado difiere de lo que hay, en el módulo o en el mensaje. */
+  /** What is painted differs from what is there, in the module or the
+   *  message. */
   hostile: boolean;
-  /** De qué PROCESO salió: `window` o `daemon` (#328). En una lista mezclada
-   *  es la mitad de la información: «el provider falló» y «la ventana no pudo
-   *  pintarlo» se leen igual sin saber quién lo escribió. */
+  /** Which PROCESS it came from: `window` or `daemon` (#328). In a merged
+   *  list it is half the information: "the provider failed" and "the window
+   *  could not paint it" read the same without knowing who wrote it. */
   source: string;
 }
 
-/** Una zona pulsable de un panel de plugin, en celdas DENTRO del marco.
+/** A plugin panel's clickable zone, in cells INSIDE the frame.
  *
- *  Sin su comando: el renderer manda la CELDA (`panel_click`) y el host
- *  resuelve qué zona era y qué comando le toca. Un comando que viajara por el
- *  cable sería un comando que puede mandar cualquiera que hable con el
- *  renderer. */
+ *  Without its command: the renderer sends the CELL (`panel_click`) and the
+ *  host resolves which zone it was and which command applies. A command that
+ *  traveled over the wire would be a command anyone talking to the renderer
+ *  could send. */
 export interface HitView {
   row: number;
   col: number;
   width: number;
 }
 
-/** El panel que pinta un PLUGIN (fase 3).
+/** The panel a PLUGIN paints (phase 3).
  *
- *  El guest no dibuja: DESCRIBE. El borde, el título y el foco los pone la
- *  ventana, que es lo que impide que un plugin se haga pasar por otro panel.
- *  `lines` vacío = todavía no hay marco (la primera petición en vuelo, o el
- *  plugin falló): se pinta el borde con su título y nada dentro. */
+ *  The guest does not draw: it DESCRIBES. The window sets the border, the
+ *  title and the focus, which is what keeps a plugin from passing itself off
+ *  as another panel. `lines` empty = there is no frame yet (the first
+ *  request in flight, or the plugin failed): the border is painted with its
+ *  title and nothing inside. */
 export interface PanelSlotView {
   kind: "panel";
   slot_id: number;
-  /** El `<kind>` que declaró el plugin, sin el prefijo. */
+  /** The `<kind>` the plugin declared, without the prefix. */
   title: string;
   lines: SpanView[][];
   hits: HitView[];
@@ -367,85 +372,90 @@ export interface PanelSlotView {
 export interface DiskMapSlotView {
   kind: "disk_map";
   slot_id: number;
-  /** El directorio que se describe, enmascarado y acotado. */
+  /** The directory being described, masked and bounded. */
   title: string;
   title_hostile: boolean;
-  /** El treemap ya repartido por el host: el renderer no calcula nada. */
+  /** The treemap already laid out by the host: the renderer computes
+   *  nothing. */
   lines: SpanView[][];
-  /** Un rectángulo por zona. Sin destino: el host resuelve la celda. */
+  /** One rectangle per zone. No target: the host resolves the cell. */
   hits: HitView[];
-  /** La medida sigue en marcha; un mapa a medias tiene que decirlo. */
+  /** The measurement is still running; a half-finished map has to say so. */
   measuring: boolean;
 }
 
-/** Una fila de la línea de tiempo (puente 78), ya pintable. */
+/** A timeline row (bridge 78), already paintable. */
 export interface TimelineRowView {
   time: string;
-  /** `user`, `agent`, … — solo para el COLOR del punto. */
+  /** `user`, `agent`, … — only for the dot's COLOR. */
   actor: string;
   op: string;
   path: string;
   hostile: boolean;
-  /** Lote y «sin vuelta», ya traducidos; vacío si nada. */
+  /** Batch and "no undo", already translated; empty if neither. */
   tail: string;
 }
 
-/** La línea de tiempo del journal (#359, puente 78). */
+/** The journal's timeline (#359, bridge 78). */
 export interface TimelineSlotView {
   kind: "timeline";
   slot_id: number;
   title: string;
   rows: TimelineRowView[];
   cursor: number | null;
-  /** Qué decir sin filas: vacío si se miró, cargando si no, o el motivo. */
+  /** What to say with no rows: empty if checked, loading if not, or the
+   *  reason. */
   empty: string;
-  /** Lo que se llevaría un `Enter` aquí; vacío sin filas. */
+  /** What an `Enter` here would do; empty with no rows. */
   footer: string;
 }
 
 export interface LogSlotView {
   kind: "log";
   slot_id: number;
-  /** Solo la VENTANA visible, nunca el anillo entero. */
+  /** Only the visible WINDOW, never the whole ring. */
   lines: LogLineView[];
-  /** Identidad: el renderer marca con ella qué botón está puesto. */
+  /** Identity: the renderer marks with it which button is set. */
   level: string;
-  /** Ese mismo nivel tal y como se pinta (`TRACE`). */
+  /** That same level exactly as it paints (`TRACE`). */
   level_label?: string;
   filter: string;
-  /** Pegado al final y siguiendo lo que llega. */
+  /** Stuck to the end and following what arrives. */
   following: boolean;
   total: number;
   first_visible: number;
-  /** Líneas perdidas, YA DICHAS y con el número dentro: un renderer no traduce
-   *  ni sustituye números. Vacío = ninguna. Un registro con un agujero
-   *  silencioso miente sobre lo que pasó. Con las dos fuentes a la vista son
-   *  DOS cuentas nombradas y no una suma: la de la ventana cuenta desde que
-   *  arrancó el proceso, la del daemon lo que esta apertura se perdió. */
+  /** Lines dropped, ALREADY SAID and with the number inside: a renderer does
+   *  not translate nor substitute numbers. Empty = none. A log with a
+   *  silent hole lies about what happened. With both sources in view these
+   *  are TWO named counts and not a sum: the window's counts since the
+   *  process started, the daemon's what this opening lost. */
   dropped_note: string;
-  /** Qué anillo está CAPTURANDO más de lo que se enseña, ya traducido. Vacío =
-   *  ninguno. Bajar lo que se ve no deja de capturar, así que el panel puede
-   *  decir «info» mientras se guarda TRACE — y quien mira tiene derecho a
-   *  saberlo antes de hacer una captura de pantalla. Aquí sale también el
-   *  nivel del DAEMON, nombrándolo: el suyo es global a sus clientes y nunca
-   *  baja, así que no puede ir en `level`, que es el que filtra la lista. */
+  /** Which ring is CAPTURING more than what is shown, already translated.
+   *  Empty = none. Lowering what is shown does not stop capturing, so the
+   *  panel can say "info" while TRACE is being saved — and whoever is
+   *  looking has a right to know before taking a screenshot. This also
+   *  carries the DAEMON's level, naming it: its own is global to its
+   *  clients and never lowers, so it cannot go in `level`, which is what
+   *  filters the list. */
   capturing: string;
   /**
-   * De qué PROCESO son estas líneas, ya traducido. La ventana arranca su
-   * propio daemon, así que hasta #328 aquí NO estaba lo del daemon —los
-   * providers, el journal, la política—; callarlo haría que el panel pareciera
-   * roto.
+   * Which PROCESS these lines belong to, already translated. The window
+   * starts its own daemon, so until #328 the daemon's own lines — the
+   * providers, the journal, the policy — were NOT here; staying quiet about
+   * it would make the panel look broken.
    */
   source: string;
-  /** La fuente EFECTIVA, en vocabulario cerrado: `window`, `daemon` o `both`.
-   *  Efectiva y no la preferencia: sin un segundo anillo al otro lado, `both`
-   *  se enseña como `window`, porque eso es lo que se está mirando. */
+  /** The EFFECTIVE source, in closed vocabulary: `window`, `daemon` or
+   *  `both`. Effective and not the preference: with no second ring on the
+   *  other side, `both` shows as `window`, because that is what is actually
+   *  being looked at. */
   source_mode: string;
-  /** Hay de verdad una segunda fuente que ofrecer. `false` = el selector NO se
-   *  pinta: un mando entre tres vistas de un mismo anillo promete algo que no
-   *  existe. */
+  /** There really is a second source to offer. `false` = the selector is
+   *  NOT painted: a control between three views of the same ring promises
+   *  something that does not exist. */
   sources_available: boolean;
-  /** Lo que hay que decir sobre la fuente, ya traducido. Vacío = nada. */
+  /** What needs to be said about the source, already translated. Empty =
+   *  nothing. */
   source_note: string;
 }
 
@@ -453,16 +463,17 @@ export type PlaceRowView =
   | { row: "header"; label: string; folded: boolean }
   | {
       row: "drive";
-      /** El nombre CORTO (puente 87): la etiqueta o el último tramo. */
+      /** The SHORT name (bridge 87): the label or the last segment. */
       label: string;
       hostile: boolean;
-      /** La frase entera del espacio, para el título. */
+      /** The whole space sentence, for the title. */
       detail: string;
-      /** El libre corto (`159G`, `?`). Opcional: host anterior al 87. */
+      /** The short free space (`159G`, `?`). Optional: a host older than
+       *  87. */
       free?: string;
-      /** El montaje entero, para el título. */
+      /** The whole mount point, for the title. */
       mount?: string;
-      /** `fixed` | `removable` | `network` | `unknown`: elige el icono. */
+      /** `fixed` | `removable` | `network` | `unknown`: chooses the icon. */
       kind?: string;
     }
   | {
@@ -479,24 +490,25 @@ export interface PlacesSlotView {
   rows: PlaceRowView[];
   cursor: number;
   /**
-   * Sube cada vez que cambia el conjunto de filas. Va de vuelta en el click:
-   * los volúmenes llegan de una tarea de fondo y se insertan EN MEDIO, así
-   * que un índice sin generación puede nombrar la fila de al lado.
+   * Goes up every time the set of rows changes. Travels back on the click:
+   * volumes arrive from a background task and get inserted IN THE MIDDLE,
+   * so an index with no generation could name the row next door.
    */
   generation: number;
 }
 
 export interface TreeRowView {
-  /** El nombre del directorio. La raíz lleva su ruta entera. */
+  /** The directory's name. The root carries its whole path. */
   label: string;
   hostile: boolean;
-  /** Niveles por debajo de la raíz. La raíz es 0. */
+  /** Levels below the root. The root is 0. */
   depth: number;
   expanded: boolean;
   /**
-   * Tiene hijos que enseñar. `null` = todavía no se ha mirado, y son tres
-   * cosas distintas para quien lee: rama que se abre, hoja, y sin leer.
-   * Pintar «hoja» a algo que no se ha leído es una respuesta inventada.
+   * Has children to show. `null` = not looked at yet, and these are three
+   * different things for the reader: a branch that opens, a leaf, and
+   * unread. Painting "leaf" for something that has not been read is a
+   * made-up answer.
    */
   children: boolean | null;
 }
@@ -507,9 +519,10 @@ export interface TreeSlotView {
   rows: TreeRowView[];
   cursor: number;
   /**
-   * Sube cada vez que cambia el conjunto de ramas. Va de vuelta en el click,
-   * por lo mismo que en la barra de sitios: desplegar una rama pide su
-   * listado, y ese listado inserta filas EN MEDIO cuando llega.
+   * Goes up every time the set of branches changes. Travels back on the
+   * click, for the same reason as the places sidebar: unfolding a branch
+   * asks for its listing, and that listing inserts rows IN THE MIDDLE when
+   * it arrives.
    */
   generation: number;
 }
@@ -528,16 +541,16 @@ export type SlotView =
   | TerminalSlotView
   | UnsupportedSlotView;
 
-/** Un color tal como lo DIJO el shell, sin resolver (puente 95).
+/** A color exactly as the shell SAID it, unresolved (bridge 95).
  *
- *  `indexed` sigue siendo un índice a propósito: qué azul es el «color 4» lo
- *  decide la paleta de quien pinta, no el host. Resolverlo allí le habría
- *  quitado al tema del lector la decisión, y no habría forma de arreglarlo
- *  desde el tema. */
+ *  `indexed` stays an index on purpose: which blue "color 4" is is decided
+ *  by the painter's palette, not the host. Resolving it there would have
+ *  taken the decision away from the reader's theme, with no way to fix it
+ *  from the theme. */
 export type TerminalColorView =
   { kind: "indexed"; index: number } | { kind: "rgb"; hex: string };
 
-/** Un fragmento de fila del terminal: texto con lo que el shell pidió. */
+/** A terminal row fragment: text with whatever the shell asked for. */
 export interface TerminalSpanView {
   text: string;
   fg?: TerminalColorView;
@@ -546,25 +559,27 @@ export interface TerminalSpanView {
   dim?: boolean;
   italic?: boolean;
   underline?: boolean;
-  /** Se invierte AL PINTAR: resolverlo antes perdería cuál color era cuál. */
+  /** Reversed WHEN PAINTED: resolving it earlier would lose which color was
+   *  which. */
   reverse?: boolean;
   strike?: boolean;
 }
 
-/** El panel de terminal (#362, puente 95): lo que el shell tiene pintado.
+/** The terminal panel (#362, bridge 95): what the shell has painted.
  *
- *  Es contenido AJENO, y por eso no lleva ni un rol del tema: lo que un
- *  programa pinta dentro es suyo. Lo nuestro es el marco. */
+ *  It is FOREIGN content, and that is why it carries no theme role at all:
+ *  what a program paints inside is its own. Ours is the frame. */
 export interface TerminalSlotView {
   kind: "terminal";
   slot_id: number;
-  /** SIEMPRE todas las de la rejilla: un terminal no se desplaza como una
-   *  lista, se repinta. */
+  /** ALWAYS the whole grid: a terminal does not scroll like a list, it
+   *  repaints. */
   rows: TerminalSpanView[][];
-  /** Fila y columna, desde cero. Null = no se pinta, y da igual si es porque
-   *  el shell lo escondió o porque el teclado no está aquí. */
+  /** Row and column, from zero. Null = not painted, and it does not matter
+   *  whether that is because the shell hid it or because the keyboard is
+   *  not here. */
   cursor: [number, number] | null;
-  /** No hay shell: se fue, o no se pudo arrancar. El hueco se queda. */
+  /** There is no shell: it left, or it could not start. The slot stays. */
   no_shell?: boolean;
 }
 
@@ -576,30 +591,32 @@ export interface PendingView {
 export interface StatusView {
   message: string | null;
   banners: BannerView[];
-  /** Avisos caducados sin leer (puente 63): una insignia mientras haya
-   *  alguno; pulsarla abre el registro. Opcional: un host anterior no lo
-   *  manda. */
+  /** Expired, unread notices (bridge 63): a badge while there is at least
+   *  one; clicking it opens the log. Optional: an earlier host does not
+   *  send it. */
   notices_unread?: number;
   pending: PendingView | null;
 }
 
-/** Un aviso persistente: la frase por un lado y la conexión por otro. */
+/** A persistent notice: the sentence on one side and the connection on the
+ *  other. */
 export interface BannerView {
   text: string;
   subject: BannerSubjectView | null;
 }
 
-/** De qué conexión habla un aviso. Cada parte en su campo: montar
- *  `scheme://host` dentro de la frase deja que un host se lea como userinfo
- *  de otro. */
+/** Which connection a notice is about. Each part in its own field: mounting
+ *  `scheme://host` inside the sentence lets a host read as another one's
+ *  userinfo. */
 export interface BannerSubjectView {
   scheme: string;
   host: string;
-  /** Por qué está degradada, ya traducido por el host. Un motivo que el host
-   *  no conoce dice «motivo desconocido» y no hereda la frase del que sí. */
+  /** Why it is degraded, already translated by the host. A reason the host
+   *  does not know says "unknown reason" and does not inherit the sentence
+   *  of one it does know. */
   reason: string;
-  /** El detalle del wire, ya enmascarado y acotado por el host. Solo viene
-   *  con un motivo desconocido. */
+  /** The wire's detail, already masked and bounded by the host. Only comes
+   *  with an unknown reason. */
   detail?: string;
   hostile: boolean;
 }
@@ -610,45 +627,48 @@ export interface DialogChoice {
   destructive: boolean;
 }
 
-/** Un campo de un diálogo-FORMULARIO (puente 91).
+/** A field of a FORM-dialog (bridge 91).
  *
- *  El renderer pinta lo que diga `kind` y no decide nada más: la etiqueta es
- *  una clave Fluent, el valor viene ya enmascarado y acotado, y qué valores
- *  tiene un ciclo lo resuelve Rust antes de mandarlo. */
+ *  The renderer paints whatever `kind` says and decides nothing else: the
+ *  label is a Fluent key, the value arrives already masked and bounded, and
+ *  what values a cycle has is resolved by Rust before sending it. */
 export interface DialogFieldView {
-  /** Id estable: es lo que vuelve en `dialog_field`, y no el índice — un
-   *  campo insertado en medio renumeraría a los de debajo. */
+  /** Stable id: it is what comes back in `dialog_field`, not the index — a
+   *  field inserted in the middle would renumber the ones below it. */
   id: string;
   label_key: string;
-  /** Ya enmascarado y acotado; vacío en los que no son de texto. */
+  /** Already masked and bounded; empty on the ones that are not text. */
   value: string;
-  /** Lo pintado DIFIERE de lo real. Se marca, jamás se esconde. */
+  /** What is painted DIFFERS from the real thing. It is marked, never
+   *  hidden. */
   hostile: boolean;
   kind: DialogFieldKind;
 }
 
-/** Qué clase de control es un campo de formulario. */
+/** What kind of control a form field is. */
 export type DialogFieldKind =
   | { kind: "text" }
   | { kind: "toggle"; on: boolean }
   | { kind: "cycle"; value_key: string };
 
-/** Qué se le hizo a un campo. Un interruptor y un ciclo no llevan valor: el
- *  renderer dice que se tocaron y a qué estado van lo decide Rust — mandar el
- *  destino dejaría que dos pulsaciones rápidas se pisaran. */
+/** What was done to a field. A toggle and a cycle carry no value: the
+ *  renderer says they were touched and Rust decides which state they go to
+ *  — sending the destination would let two quick presses step on each
+ *  other. */
 export type DialogFieldValue =
   { set: "text"; text: string } | { set: "toggled" } | { set: "cycled" };
 
-/** Qué se sabe del DESTINO de una transferencia mientras se pregunta.
+/** What is known about a transfer's DESTINATION while the question is being
+ *  asked.
  *
- *  Tres estados y no una lista de avisos porque el silencio tiene que
- *  significar UNA cosa: la ausencia de la línea de #164 significa «este
- *  destino sujeta sus escrituras», así que «todavía no lo sé» no se puede
- *  pintar igual que «lo pregunté y está limpio». */
+ *  Three states and not a list of warnings because silence has to mean ONE
+ *  thing: the absence of line #164 means "this destination confines its
+ *  writes", so "I don't know yet" cannot be painted the same as "I asked and
+ *  it is clean". */
 export type DestCheck =
   { state: "not_asked" } | { state: "checking" } | { state: "done"; warnings: string[] };
 
-/** Una línea del cuerpo de un diálogo: lo que se pinta, y si difiere de lo real. */
+/** A dialog body line: what is painted, and whether it differs from the real thing. */
 export interface DialogLine {
   text: string;
   hostile: boolean;
@@ -657,112 +677,121 @@ export interface DialogLine {
 export interface DialogView {
   id: ModalId;
   title_key: string;
-  /** A dónde va la operación. Campo propio: un nombre de directorio puede
-   *  contener una flecha, así que etiquetar con un separador dentro del texto
-   *  deja que una ruta simule otra. */
+  /** Where the operation is going. Its own field: a directory name can
+   *  contain an arrow, so labeling with a separator inside the text lets a
+   *  path impersonate another one. */
   destination: DialogLine | null;
-  /** QUÉ se pregunta (la op de un agente). Fuera del cuerpo, por lo mismo
-   *  que el destino. */
+  /** WHAT is being asked (an agent's op). Outside the body, for the same
+   *  reason as the destination. */
   subject: DialogLine | null;
-  /** QUIÉN pregunta, si no es quien está delante. */
+  /** WHO is asking, when it is not whoever is sitting there. */
   asker: DialogLine | null;
-  /** Cuándo deja de aceptarse la respuesta, ya traducido. */
+  /** When the answer stops being accepted, already translated. */
   deadline: string | null;
-  /** Cuándo vence, en epoch-ms, para poder contar de verdad. Ausente = no hay
-   *  plazo o no se conoce, y entonces la frase se pinta tal cual. */
+  /** When it expires, in epoch-ms, so it can be counted for real. Absent =
+   *  there is no deadline or it is unknown, and then the sentence paints
+   *  as-is. */
   deadline_at_ms?: number;
-  /** Cuando son rutas, se numeran POR POSICIÓN: la etiqueta es estructural y
-   *  ningún nombre de fichero puede escribirla. */
+  /** When they are paths, they are numbered BY POSITION: the label is
+   *  structural and no file name can write it. */
   body: DialogLine[];
-  /** El cuerpo enseña menos de lo que la operación toca, ya traducido. */
+  /** The body shows less than the operation touches, already translated. */
   overflow_note: string;
-  /** Alguna de las que NO se enseñan se pintaría alterada. Ausente = `false`,
-   *  que es no marcar: un badge de más sobre un recorte enseña a ignorarlo. */
+  /** One of the ones NOT shown would paint altered. Absent = `false`, which
+   *  means no mark: an extra badge on a truncated list teaches people to
+   *  ignore it. */
   overflow_hostile?: boolean;
-  /** En qué punto está la comprobación del DESTINO. Ausente en un puente
-   *  anterior, y entonces es `not_asked`. */
+  /** What point the DESTINATION's check is at. Absent on an earlier bridge,
+   *  and then it is `not_asked`. */
   dest_check?: DestCheck;
   choices: DialogChoice[];
   input: string | null;
   input_hostile: boolean;
-  /** Los CAMPOS, cuando el diálogo es un formulario (puente 91). Ausente o
-   *  vacío = el diálogo de siempre, con un `input` a lo sumo. */
+  /** The FIELDS, when the dialog is a form (bridge 91). Absent or empty =
+   *  the usual dialog, with at most one `input`. */
   fields?: DialogFieldView[];
-  /** El campo es una CONTRASEÑA (#327). Lo que llega en `input` son PUNTOS,
-   *  uno por carácter, jamás el texto: el host guarda lo tecleado aparte, en
-   *  un buffer que se pisa con ceros al soltarlo. El renderer pinta el campo
-   *  como `password` y NUNCA lo resiembra con `input` — hacerlo convertiría
-   *  la contraseña del usuario en una fila de puntos literales. */
+  /** The field is a PASSWORD (#327). What arrives in `input` is DOTS, one
+   *  per character, never the text: the host keeps what was typed
+   *  separately, in a buffer that gets overwritten with zeros when it is
+   *  released. The renderer paints the field as `password` and NEVER
+   *  re-seeds it with `input` — doing so would turn the user's password
+   *  into a row of literal dots. */
   input_secret: boolean;
 }
 
-/** Una pareja del plan: de qué nombre a qué nombre. */
+/** A pair from the plan: from which name to which name. */
 export interface AiRenamePairView {
   from: DialogLine;
   to: DialogLine;
 }
 
-/** El plan de renombrado que un modelo propuso, en revisión. */
+/** The rename plan a model proposed, under review. */
 /**
- * El plan de ORGANIZAR en revisión (puente 72).
+ * The ORGANIZE plan under review (bridge 72).
  *
- * El gemelo de `AiRenameView` con dos diferencias: el cuerpo es un ÁRBOL —lo
- * que cambia es la forma del directorio— y no hay veredicto que esperar,
- * porque el token del plan viajó con él.
+ * `AiRenameView`'s twin with two differences: the body is a TREE — what
+ * changes is the directory's shape — and there is no verdict to wait for,
+ * because the plan's token traveled with it.
  */
 export interface OrganizeView {
   dir: DialogLine;
-  /** La ventana que viaja, NO el árbol entero. */
+  /** The window that travels, NOT the whole tree. */
   lines: OrganizeLineView[];
   first_visible: number;
   total: number;
-  /** Cuánto se ve de cuánto hay, ya traducido. Vacío = se ve todo. */
+  /** How much is visible out of how much there is, already translated.
+   *  Empty = everything is visible. */
   more_note: string;
-  /** Fuera de la ventana hay un nombre que se pinta distinto de lo que es. */
+  /** Outside the window there is a name that paints different from what it
+   *  is. */
   hidden_hostile: boolean;
-  /** «Crea N carpetas y mueve M ficheros», ya traducido. Va ANTES del árbol. */
+  /** "Creates N folders and moves M files", already translated. Goes
+   *  BEFORE the tree. */
   summary: string;
-  /** El lector ha recorrido el árbol entero. Aprobar lo exige. */
+  /** The reader has gone through the whole tree. Approving requires it. */
   seen_all: boolean;
 }
 
-/** Una línea del árbol de organizar (puente 72). */
+/** A line of the organize tree (bridge 72). */
 export interface OrganizeLineView {
-  /** Cuánto se sangra: 0 es hijo directo del directorio del plan. */
+  /** How much it is indented: 0 is a direct child of the plan's directory. */
   depth: number;
-  /** El nombre, ya saneado, con su marca si difiere de lo real. */
+  /** The name, already sanitized, with its mark if it differs from the real
+   *  thing. */
   text: DialogLine;
   kind: OrganizeLineKind;
 }
 
 /**
- * Qué es una línea del árbol.
+ * What a tree line is.
  *
- * Llega como DATO y no resuelto a un color: el renderer decide cómo se ve una
- * carpeta que se va a crear, y un tema monocromo necesita poder marcarla de
- * otra forma.
+ * Arrives as DATA and not resolved to a color: the renderer decides how a
+ * folder about to be created looks, and a monochrome theme needs to be able
+ * to mark it another way.
  */
 export type OrganizeLineKind = "new_dir" | "existing_dir" | "moved";
 
 export interface AiRenameView {
   dir: DialogLine;
-  /** La ventana que viaja, NO el plan entero. */
+  /** The window that travels, NOT the whole plan. */
   pairs: AiRenamePairView[];
   first_visible: number;
   total: number;
-  /** Cuánto se ve de cuánto hay, ya traducido. Vacío = se ve todo. */
+  /** How much is visible out of how much there is, already translated.
+   *  Empty = everything is visible. */
   more_note: string;
-  /** Fuera de la ventana hay un nombre que se pinta distinto de lo que es. */
+  /** Outside the window there is a name that paints different from what it
+   *  is. */
   hidden_hostile: boolean;
-  /** El veredicto del core, ya traducido. */
+  /** The core's verdict, already translated. */
   status: string;
-  /** Maquinaria y colisiones, cada línea con su marca. */
+  /** Machinery and collisions, each line with its mark. */
   detail: DialogLine[];
-  /** Aprobar puede hacer algo. Lo dice el core. */
+  /** Approving can do something. The core says so. */
   confirmable: boolean;
-  /** Cuántos renombrados hará DE VERDAD, ya dicho y traducido. */
+  /** How many it will REALLY rename, already stated and translated. */
   real_steps_note: string;
-  /** El lector ha recorrido el plan entero. Aprobar lo exige. */
+  /** The reader has gone through the whole plan. Approving requires it. */
   seen_all: boolean;
 }
 
@@ -774,9 +803,9 @@ export interface TaskView {
   kind: string;
   state: TaskStateView;
   percent: number | null;
-  /** El ritmo ya escrito por el host (`1.2 MiB/s`); vacío si no se sabe. */
+  /** The rate, already written by the host (`1.2 MiB/s`); empty if unknown. */
   rate: string;
-  /** Lo que queda, ya escrito (`1m 20s`); vacío si no se sabe. */
+  /** What is left, already written (`1m 20s`); empty if unknown. */
   eta: string;
   detail: string | null;
   detail_hostile: boolean;
@@ -795,65 +824,67 @@ export interface ViewerView {
   total_rows: number;
   first_line: number;
   /**
-   * Cuánto hay A LO ANCHO, en celdas, y por dónde va (puente 59). El visor no
-   * envuelve, así que sin estos dos un HTML minificado se pinta recortado y no
-   * hay con qué dibujar la barra horizontal. `total_cols` es 0 en hexadecimal,
-   * que tiene ancho fijo y no se desplaza.
+   * How much there is WIDTH-WISE, in cells, and how far along (bridge 59).
+   * The viewer does not wrap, so without these two a minified HTML paints
+   * truncated with nothing to draw the horizontal bar with. `total_cols` is
+   * 0 in hexadecimal, which has a fixed width and does not scroll.
    */
   total_cols: number;
   first_col: number;
-  lines: string[]; /** «via ‹plugin›», ya traducido. Vacío = lo enseña norte, no un plugin. */
+  lines: string[]; /** "via ‹plugin›", already translated. Empty = norte shows it, not a plugin. */
   preview_by: string;
-  /** La decodificación que se le dio al previewer fue con PÉRDIDA. */
+  /** The decoding given to the previewer was LOSSY. */
   preview_lossy: boolean;
   /**
-   * Es una imagen PINTABLE y así de grande dice ser. `null` = no lo es, o es
-   * una que el host se niega a pintar (y entonces lo dice en
-   * `image_refused`). Los bytes NO vienen aquí: se piden aparte.
+   * It is a PAINTABLE image and claims to be this big. `null` = it is not,
+   * or it is one the host refuses to paint (and then it is said in
+   * `image_refused`). The bytes do NOT come here: they are requested
+   * separately.
    */
   image: ImageView | null;
-  /** Por qué NO se pinta una imagen reconocida, ya traducido. */
+  /** Why a recognized image is NOT painted, already translated. */
   image_refused: string;
   /**
-   * El zoom de la imagen, en PORCENTAJE de lo que ocuparía ajustada
-   * (puente 80). `100` = ajustada, que es como se abre.
+   * The image's zoom, as a PERCENTAGE of what it would take up fitted
+   * (bridge 80). `100` = fitted, which is how it opens.
    */
   image_zoom: number;
   /**
-   * Las líneas visibles CON ESTILO cuando lo que se enseña lo produjo un
-   * previewer (puente 49): una entrada por fila de `lines`. Vacío en la
-   * vista cruda, y entonces se pinta `lines`.
+   * The visible lines WITH STYLE when what is shown was produced by a
+   * previewer (bridge 49): one entry per `lines` row. Empty in the raw
+   * view, and then `lines` is painted.
    */
   styled: SpanView[][];
 }
 
 /**
- * Un fragmento de una línea de preview con estilo. `role` GANA sobre `fg`
- * cuando vienen los dos: el tema del lector manda sobre el color fijo de un
- * plugin. El rol ya viene validado por el host.
+ * A styled preview line's fragment. `role` WINS over `fg` when both come:
+ * the reader's theme rules over a plugin's fixed color. The role already
+ * arrives validated by the host.
  */
 export interface SpanView {
   text: string;
   role: string | null;
   fg: string | null;
-  /** El FONDO, `#rrggbb` (puente 50): medios bloques de un previewer de imagen. */
+  /** The BACKGROUND, `#rrggbb` (bridge 50): half-blocks from an image
+   *  previewer. */
   bg: string | null;
 }
 
 /**
- * Una imagen reconocida y aceptada. El tamaño es el que DECLARA su cabecera:
- * nadie la ha decodificado todavía, y eso es el punto — el declarado es lo
- * que el host comparó con su presupuesto (ADR 0069).
+ * A recognized and accepted image. The size is what its header DECLARES:
+ * nobody has decoded it yet, and that is the point — the declared one is
+ * what the host compared against its budget (ADR 0069).
  */
 export interface ImageView {
-  /** Reconocido por bytes MÁGICOS, jamás por la extensión. */
+  /** Recognized by MAGIC bytes, never by the extension. */
   format: string;
   width: number;
   height: number;
 }
 
-/** El asistente de primer arranque (puente 63): un paso, sus filas y el
- *  cursor, todo ya traducido. Un click en una fila la elige y la confirma. */
+/** The first-run wizard (bridge 63): a step, its rows and the cursor, all
+ *  already translated. A click on a row chooses it and confirms it. */
 export interface WizardView {
   title: string;
   question: string;
@@ -867,12 +898,12 @@ export interface PaletteRowView {
   desc: string;
   chord: string;
   enabled: boolean;
-  /** Lo pintado DIFIERE de lo que declara quien aporta la fila. Solo puede
-   *  ser cierto en una fila de PLUGIN, y esta es la pantalla donde se elige
-   *  qué código de tercero correr. */
+  /** What is painted DIFFERS from what the row's source declares. Can only
+   *  be true for a PLUGIN row, and this is the screen where you choose what
+   *  third-party code to run. */
   hostile: boolean;
-  /** Va arriba por ser de los últimos lanzados (solo con la consulta
-   *  vacía). Opcional: un host anterior al puente 63 no lo manda. */
+  /** Goes up top for being among the last launched (only with an empty
+   *  query). Optional: a host older than bridge 63 does not send it. */
   recent?: boolean;
 }
 
@@ -883,13 +914,13 @@ export interface PaletteView {
   total: number;
 }
 
-/** Una línea de «ir a» (puente 77): cabecera de sección o fila. */
+/** A "go to" line (bridge 77): a section header or a row. */
 export type GotoLineView =
   | { line: "header"; title: string }
   | { line: "row"; text: string; desc: string; hostile: boolean };
 
-/** «Ir a cualquier sitio» (#357, puente 77). El índice del cursor es en
- *  `lines`, y nunca cae en una cabecera. */
+/** "Go to anywhere" (#357, bridge 77). The cursor's index is into `lines`,
+ *  and never lands on a header. */
 export interface GotoView {
   query: string;
   lines: GotoLineView[];
@@ -902,11 +933,12 @@ export interface ProfileRowView {
   name_hostile: boolean;
   title: string | null;
   active: boolean;
-  /** Qué OTRA cosa se llama igual, ya traducido. Vacío = solo es un perfil. */
+  /** What ELSE is named the same, already translated. Empty = it is just a
+   *  profile. */
   clash: string;
-  /** No puede guardar dónde dejaste cada panel (nombre no UTF-8). */
+  /** Cannot save where you left each pane (non-UTF-8 name). */
   no_state: boolean;
-  /** Por qué no se puede cargar. Vacío = se puede. */
+  /** Why it cannot load. Empty = it can. */
   problem: string;
 }
 
@@ -919,92 +951,93 @@ export interface ProfilePickerView {
 export interface MenuItemView {
   label: string;
   chord: string;
-  /** Esta ventana puede ejecutarla. Una apagada SIGUE saliendo: el menú es
-   *  donde se ve qué existe. */
+  /** This window can run it. A disabled one STILL shows: the menu is where
+   *  what exists gets seen. */
   enabled: boolean;
-  /** Si con esta entrada EMPIEZA una sección (puente 74): `null` sigue en la
-   *  de la anterior, `""` es una raya sin rótulo, otro texto es el rótulo. */
+  /** Whether this entry STARTS a section (bridge 74): `null` stays in the
+   *  previous one's, `""` is a rule with no label, other text is the
+   *  label. */
   section: string | null;
-  /** `normal`, `destructive` o `ai`. */
+  /** `normal`, `destructive` or `ai`. */
   role: string;
 }
 
 export interface MenuView {
-  /** `[ui] menu_bar`: si la barra se pinta. Apagada, el menú sigue
-   *  abriéndose por su tecla. */
+  /** `[ui] menu_bar`: whether the bar is painted. Off, the menu still opens
+   *  from its key. */
   bar: boolean;
   titles: string[];
-  /** Cuál está desplegado, si alguno. */
+  /** Which one is dropped down, if any. */
   open: number | null;
-  /** Las entradas del desplegado; vacías si no hay ninguno. */
+  /** The dropdown's entries; empty if there is none. */
   items: MenuItemView[];
   cursor: number;
 }
 
-/** Cómo está el panel de un botón de la barra (puente 51). */
+/** How a panel bar button's panel stands (bridge 51). */
 export type PanelButtonState = "closed" | "open" | "focused";
 
-/** Un botón de la barra de paneles. */
+/** A panel bar button. */
 export interface PanelButtonView {
-  /** El kind que abre, ya enmascarado: acaba en un atributo del DOM. */
+  /** The kind it opens, already masked: ends up in a DOM attribute. */
   kind: string;
-  /** El nombre corto, en el idioma de la sesión. */
+  /** The short name, in the session's language. */
   label: string;
-  /** La letra que la TUI pinta; aquí acompaña a la etiqueta. */
+  /** The letter the TUI paints; here it accompanies the label. */
   letter: string;
-  /** El atajo que hace lo mismo, o `—`. */
+  /** The shortcut that does the same thing, or `—`. */
   chord: string;
   state: PanelButtonState;
-  /** Tiene algo que contar sin estar a la vista. */
+  /** Has something to report without being in view. */
   attention: boolean;
-  /** Cuántas cosas (puente 84): la cifra de la insignia. Opcional: un host
-   *  anterior no la manda, y entonces la marca va sin cifra. */
+  /** How many things (bridge 84): the badge's figure. Optional: an earlier
+   *  host does not send it, and then the mark shows with no figure. */
   count?: number;
 }
 
-/** Un botón del cromo que corre una orden (ADR 0133): los de disposición. */
+/** A chrome button that runs a command (ADR 0133): the layout ones. */
 export interface ChromeButtonView {
-  /** El id estable: vuelve con el clic y elige el icono. */
+  /** The stable id: comes back with the click and chooses the icon. */
   id: string;
-  /** Su nombre corto, el de su entrada del menú. */
+  /** Its short name, its menu entry's. */
   label: string;
-  /** El atajo, o `—`. */
+  /** The shortcut, or `—`. */
   chord: string;
 }
 
-/** Un elemento de la mitad derecha de la barra de estado (ADR 0132). */
+/** An element of the status bar's right half (ADR 0132). */
 export interface StatusItemView {
-  /** El id estable: vuelve con el clic. */
+  /** The stable id: comes back with the click. */
   id: string;
   text: string;
   tooltip: string;
-  /** Si pulsarlo hace algo. */
+  /** Whether clicking it does anything. */
   clickable: boolean;
   /**
-   * La barra de progreso ligera, DETRÁS del texto (ADR 0146, puente 92).
-   * Solo en el item `tasks` con trabajo en marcha.
+   * The thin progress bar, BEHIND the text (ADR 0146, bridge 92). Only on
+   * the `tasks` item with work in progress.
    */
   progress?: StatusProgressView;
 }
 
-/** La barra del item `tasks` (ADR 0146). */
+/** The `tasks` item's bar (ADR 0146). */
 export interface StatusProgressView {
-  /** 0–100 del total; `null` = no se sabe, y la barra se anima. */
+  /** 0–100 of the total; `null` = unknown, and the bar animates. */
   percent: number | null;
   phase: "running" | "paused" | "done" | "failed";
 }
 
-/** La barra de paneles (#324, puente 51): qué paneles hay y cómo están. */
+/** The panel bar (#324, bridge 51): what panels there are and how they stand. */
 export interface PanelBarView {
-  /** `[ui] panel_bar`: si la barra se pinta. */
+  /** `[ui] panel_bar`: whether the bar is painted. */
   bar: boolean;
-  /** `[ui] panel_bar_style = "names"`: nombre con la letra marcada, o solo
-   *  la letra. Opcional: un host anterior al puente 63 no lo manda. */
+  /** `[ui] panel_bar_style = "names"`: name with the letter marked, or just
+   *  the letter. Optional: a host older than bridge 63 does not send it. */
   names?: boolean;
-  /** `[ui] panel_bar_position` ya resuelta por el host (puente 84): `true`
-   *  = barra de actividad en el borde izquierdo; ausente = fila arriba. */
+  /** `[ui] panel_bar_position` already resolved by the host (bridge 84):
+   *  `true` = activity bar on the left edge; absent = row on top. */
   vertical?: boolean;
-  /** Un click vuelve como el ÍNDICE aquí, nunca como un comando. */
+  /** A click comes back as the INDEX here, never as a command. */
   buttons: PanelButtonView[];
 }
 
@@ -1070,11 +1103,11 @@ export interface HelpView {
   filter: string;
   filtering: boolean;
   can_back: boolean;
-  /** La última petición de desplazar el cuerpo (puente 76). */
+  /** The last request to scroll the body (bridge 76). */
   scroll: HelpScrollView | null;
 }
 
-/** Hacia dónde desplazar el cuerpo de la ayuda. */
+/** Where to scroll help's body toward. */
 export type HelpScrollTo =
   | "line_up"
   | "line_down"
@@ -1085,7 +1118,7 @@ export type HelpScrollTo =
   | "section_prev"
   | "section_next";
 
-/** Una petición de desplazar, numerada para aplicarla una sola vez. */
+/** A scroll request, numbered so it is applied only once. */
 export interface HelpScrollView {
   to: HelpScrollTo;
   seq: number;
@@ -1095,21 +1128,21 @@ export interface SettingRowView {
   id: string;
   name: string;
   desc: string;
-  /** Ya enmascarado: sale del `norte.toml` que escribe el usuario. */
+  /** Already masked: comes from the `norte.toml` the user writes. */
   value: string;
-  /** El valor se pinta DISTINTO de lo que es. */
+  /** The value paints DIFFERENT from what it is. */
   hostile: boolean;
   restart_required: boolean;
-  /** Su valor DE FÁBRICA: lo que un campo vacío enseña como marcador. */
+  /** Its FACTORY value: what an empty field shows as a placeholder. */
   default: string;
-  /** Qué control pide esta fila. `none` = no se edita desde aquí. */
+  /** What control this row calls for. `none` = not edited from here. */
   control: "toggle" | "choice" | "number" | "text" | "args" | "none";
-  /** Los valores admitidos si es `choice`; vacío si no. Ya resueltos. */
+  /** The accepted values if it is `choice`; empty if not. Already resolved. */
   choices: string[];
-  /** Topes de un `number`, los dos incluidos. */
+  /** A `number`'s bounds, both inclusive. */
   min: number | null;
   max: number | null;
-  /** No es el valor de fábrica: el punto de «esto lo has tocado tú». */
+  /** It is not the factory value: the point of "you touched this". */
   modified: boolean;
 }
 
@@ -1121,25 +1154,26 @@ export interface PathRowView {
 }
 
 export type SettingsSectionView =
-  /** `key` es la clave ESTABLE: empareja la sección con su fila del índice. */
+  /** `key` is the STABLE key: pairs the section with its index row. */
   | { section: "settings"; key: string; title: string; rows: SettingRowView[] }
   | { section: "paths"; title: string; rows: PathRowView[] };
 
-/** Una sección en el índice de la izquierda. */
+/** A section in the left-hand index. */
 export interface SectionIndexView {
-  /** Su clave ESTABLE: es lo que vuelve en `settings_jump_section`. */
+  /** Its STABLE key: what comes back in `settings_jump_section`. */
   key: string;
   title: string;
-  /** Cuántas de sus filas se ven con el filtro puesto. Cero = apagada. */
+  /** How many of its rows are visible with the filter set. Zero = dimmed. */
   visible: number;
 }
 
 export interface SettingsView {
-  /** Solo las secciones con filas que enseñar. */
+  /** Only the sections with rows to show. */
   sections: SettingsSectionView[];
-  /** TODAS las que esta superficie tiene, tape o no el filtro sus filas. */
+  /** ALL the ones this surface has, whether or not the filter hides its
+   *  rows. */
   index: SectionIndexView[];
-  /** Qué mitad tiene el teclado: la otra pinta su cursor apagado. */
+  /** Which half has the keyboard: the other one paints its cursor dimmed. */
   focus: "index" | "list";
   cursor: number;
   query: string;
@@ -1166,32 +1200,35 @@ export interface ExtensionErrorView {
   dir: string;
   hostile: boolean;
   reason: string;
-  /** El motivo se pinta distinto de lo que es: puede citar el manifiesto. */
+  /** The reason paints different from what it is: it can quote the
+   *  manifest. */
   reason_hostile: boolean;
-  /** Con qué id se desinstala; `null` si el directorio no se llama como uno. */
+  /** Which id it gets uninstalled with; `null` if the directory is not
+   *  named like one. */
   id: string | null;
 }
 
 export interface ExtensionConfigRowView {
   key: string;
   kind: string;
-  /** Ya enmascarado: lo escribe el plugin. */
+  /** Already masked: written by the plugin. */
   value: string;
-  /** Ya enmascarado: lo escribe el plugin. */
+  /** Already masked: written by the plugin. */
   default: string;
   description: string;
-  /** Ya enmascarado: los valores de un `enum` los escribe el plugin. */
+  /** Already masked: an `enum`'s values are written by the plugin. */
   domain: string;
-  /** Alguno de los tres se pinta DISTINTO de lo que es. */
+  /** One of the three paints DIFFERENT from what it is. */
   hostile: boolean;
-  /** Este build sabe editar este `kind`. Un tipo de un peer más nuevo es de
-   *  solo lectura: ofrecer `Enter` sobre lo que no va a cambiar hace creer
-   *  que la escritura falló. */
+  /** This build knows how to edit this `kind`. A newer peer's type is
+   *  read-only: offering `Enter` on something that will not change makes it
+   *  seem like the write failed. */
   editable: boolean;
 }
 
 export interface ExtensionCommandView {
-  /** Clave de despacho. NUNCA se pinta: el manifiesto no le valida charset. */
+  /** Dispatch key. NEVER painted: the manifest does not validate its
+   *  charset. */
   id: string;
   title: string;
   hostile: boolean;
@@ -1200,32 +1237,34 @@ export interface ExtensionCommandView {
 export interface ExtensionDetailView {
   id: string;
   config: ExtensionConfigRowView[];
-  /** Los comandos que aporta, en orden de manifiesto. */
+  /** The commands it contributes, in manifest order. */
   commands: ExtensionCommandView[];
-  /** Qué clave está elegida. */
+  /** Which key is chosen. */
   cursor: number;
-  /** Lo que se está tecleando, YA enmascarado. `null` = no se edita nada. */
+  /** What is being typed, ALREADY masked. `null` = nothing is being edited. */
   editing: string | null;
-  /** El buffer se pinta distinto de lo que se va a escribir. */
+  /** The buffer paints different from what is about to be written. */
   editing_hostile: boolean;
 }
 
-/** Una cadena de tercero con su bandera AL LADO: una bandera suelta acaba
- *  describiendo a la cadena vecina. */
+/** A third party's string with its flag ALONGSIDE it: a loose flag ends up
+ *  describing the neighboring string. */
 export interface MaskedTextView {
   text: string;
   hostile: boolean;
 }
 
 export interface AgentRowView {
-  /** Su id, ya enmascarado: es una clave OPACA del daemon y puede llevar
-   *  cualquier byte. Lo que viaja de vuelta es el crudo, no esto. */
+  /** Its id, already masked: it is an OPAQUE daemon key and can carry any
+   *  byte. What travels back is the raw one, not this. */
   session: string;
   session_hostile: boolean;
-  /** Cuántas pidió y cuántas se le aprobaron desde aquí, ya en una frase
-   *  traducida: el catálogo que cruza no sustituye variables. */
+  /** How many it asked for and how many were granted from here, already in
+   *  a translated sentence: the catalogue that crosses does not substitute
+   *  variables. */
   counts: string;
-  /** Ya tiene un deshacer en marcha: se dice, y otro `u` se rehúsa. */
+  /** Already has an undo in progress: it is said, and another `u` is
+   *  refused. */
   undoing: boolean;
   last_op: string;
   last_op_hostile: boolean;
@@ -1234,56 +1273,58 @@ export interface AgentRowView {
 export interface AgentsView {
   rows: AgentRowView[];
   cursor: number;
-  /** Cuántas veces ha cambiado esta lista. Vuelve con el clic: la lista se
-   *  reordena SOLA —una petición de permiso sube a su sesión al primer
-   *  puesto— y un clic contra la de antes elige otra fila. */
+  /** How many times this list has changed. Comes back with the click: the
+   *  list reorders ON ITS OWN — a permission request bumps its session to
+   *  the top — and a click against the old one chooses a different row. */
   generation: number;
-  /** Cuántas sesiones se han olvidado por el tope. Se pinta cuando no es
-   *  cero: una lista recortada que se presenta como completa es lo que
-   *  convierte «inundar la lista» en «esa sesión no existe». */
+  /** How many sessions have been forgotten to the cap. Painted when it is
+   *  not zero: a trimmed list presented as complete is what turns "flood
+   *  the list" into "that session does not exist". */
   forgotten: number;
-  /** Qué ES esta lista: lo visto por esta ventana, no el censo del sistema.
-   *  Sin decirlo, una lista vacía se lee como «ningún agente ha tocado
-   *  nada», que es una afirmación que esta ventana no puede hacer. */
+  /** What this list IS: what this window has seen, not the system's census.
+   *  Without saying so, an empty list reads as "no agent has touched
+   *  anything", a claim this window cannot make. */
   note: string;
-  /** Qué decir cuando no hay filas, ya traducido: no es siempre lo mismo —
-   *  una ventana sin efectos ni siquiera escucha las peticiones. */
+  /** What to say when there are no rows, already translated: it is not
+   *  always the same thing — a window with no effects does not even listen
+   *  for requests. */
   empty: string;
 }
 
 export interface ExtensionOutputView {
-  /** De qué extensión: su nombre, ya enmascarado, con su bandera. */
+  /** Which extension: its name, already masked, with its flag. */
   plugin: MaskedTextView;
-  /** Su id reverse-DNS, que el core SÍ valida: el nombre no identifica. */
+  /** Its reverse-DNS id, which the core DOES validate: the name does not
+   *  identify. */
   plugin_id: string;
-  /** Qué comando. `text` vacío si no se conocía su título. */
+  /** Which command. `text` empty if its title was unknown. */
   command: MaskedTextView;
-  /** Lo que imprimió, LÍNEA A LÍNEA, cada una enmascarada y acotada: un
-   *  salto de línea es un control C0, así que enmascarar la salida entera
-   *  marcaba como hostil cualquier salida de más de una línea. */
+  /** What it printed, LINE BY LINE, each one masked and bounded: a newline
+   *  is a C0 control, so masking the whole output marked any output over
+   *  one line as hostile. */
   lines: string[];
-  /** Alguna línea se pinta distinta de lo que el plugin imprimió. */
+  /** Some line paints different from what the plugin printed. */
   text_hostile: boolean;
-  /** No cabía entera y se cortó. Viaja porque el receptor no puede
-   *  deducirlo: el texto le llega ya corto. */
+  /** Did not fit whole and was cut off. Travels because the receiver
+   *  cannot deduce it: the text arrives already short. */
   truncated: boolean;
 }
 
-/** La salida de un programa que quien hospeda corrió esperándolo (#312). */
+/** The output of a program the host ran and waited on (#312). */
 export interface ProgramOutputView {
-  /** Clave Fluent del título: qué se hizo. */
+  /** The title's Fluent key: what was done. */
   title_key: string;
-  /** El programa y sus argumentos, ya enmascarados. */
+  /** The program and its arguments, already masked. */
   command: MaskedTextView;
-  /** stdout y stderr, LÍNEA A LÍNEA, cada una enmascarada y acotada. */
+  /** stdout and stderr, LINE BY LINE, each one masked and bounded. */
   lines: string[];
   text_hostile: boolean;
   truncated: boolean;
-  /** No arrancó, o se pasó del plazo. NO es «salió distinto de cero». */
+  /** Did not start, or ran past the deadline. NOT "exited nonzero". */
   failed: boolean;
 }
 
-/** Qué cambia `extension_govern` (puente 61): los tres verbos del gestor. */
+/** What `extension_govern` changes (bridge 61): the manager's three verbs. */
 export type ExtensionChange = "approval" | "enabled" | "uninstall";
 
 export interface ExtensionsView {
@@ -1303,14 +1344,14 @@ export interface ThemeView {
   name: string;
   roles: ThemeRoleView[];
   unsupported_effects: ThemeEffectView[];
-  /** Entre qué temas se puede elegir. */
+  /** Which themes can be chosen from. */
   choices: string[];
-  /** Cuál está señalado. Moverse previsualiza en vivo. */
+  /** Which one is pointed to. Moving through it previews live. */
   cursor: number;
 }
 
-/** Un efecto declarado que este renderer no pinta. La clave sale del fichero
- *  de tema, así que va enmascarada y con su bandera. */
+/** A declared effect this renderer does not paint. The key comes from the
+ *  theme file, so it travels masked and with its flag. */
 export interface ThemeEffectView {
   key: string;
   hostile: boolean;
@@ -1327,7 +1368,7 @@ export interface PickerView {
   rows: PickerRowView[];
   cursor: number | null;
   empty: string;
-  /** Ver `PlacesSlotView.generation`: se abre vacío y se llena después. */
+  /** See `PlacesSlotView.generation`: opens empty and fills afterward. */
   generation: number;
 }
 
@@ -1340,12 +1381,13 @@ export interface LayoutRowView {
 }
 
 /**
- * El selector de COLUMNAS. Su título lleva ya el ALCANCE dentro —un esquema
- * o todos— y su nota dice que lo elegido vale para esta ventana y no se
- * guarda.
+ * The COLUMNS picker. Its title already carries the SCOPE inside — one
+ * scheme or all — and its note says the choice applies to this window and
+ * is not saved.
  */
 export interface ColumnsPickerView {
-  /** El pie con las teclas, ya pintado desde el keymap por el host. */
+  /** The footer with the keys, already painted from the keymap by the
+   *  host. */
   hint: string;
   title: string;
   rows: ColumnsPickerRowView[];
@@ -1354,18 +1396,18 @@ export interface ColumnsPickerView {
 }
 
 export interface ColumnsPickerRowView {
-  /** Su id de configuración. Identidad: entera o vacía. */
+  /** Its configuration id. Identity: whole or empty. */
   id: string;
-  /** Cómo se llama, ya traducido y saneado. */
+  /** What it is called, already translated and sanitized. */
   label: string;
-  /** La etiqueta se pinta DISTINTA de lo que es. */
+  /** The label paints DIFFERENT from what it is. */
   hostile: boolean;
   enabled: boolean;
-  /** Formato vigente, vocabulario ASCII cerrado. Vacío = no admite. */
+  /** Current format, closed ASCII vocabulary. Empty = not applicable. */
   format: string;
-  /** Lo fija un ajuste del esquema: aquí no se cicla. */
+  /** Fixed by a scheme setting: not cycled here. */
   format_locked: boolean;
-  /** Ni se apaga ni se mueve. Es el NOMBRE. */
+  /** Neither turns off nor moves. It is the NAME. */
   fixed: boolean;
 }
 
@@ -1374,9 +1416,9 @@ export interface LayoutPickerView {
   rows: LayoutRowView[];
   cursor: number;
   preview: string[];
-  /** Por qué la elegida no tiene vista previa. CITA el fichero del usuario. */
+  /** Why the chosen one has no preview. QUOTES the user's file. */
   problem: string;
-  /** El diagnóstico pintado difiere de lo que el fichero contiene. */
+  /** The painted diagnosis differs from what the file contains. */
   problem_hostile: boolean;
 }
 
@@ -1386,47 +1428,48 @@ export interface SearchRowView {
   parent: string;
   parent_hostile: boolean;
   is_dir: boolean;
-  /** Cuánto se parece a lo que se preguntó, en `[-1, 1]`. `null` en una
-   *  búsqueda por nombre: ahí no hay grados. */
+  /** How much it resembles what was asked, in `[-1, 1]`. `null` in a search
+   *  by name: there are no degrees there. */
   score: number | null;
 }
 
-/** El panel de diferencias: dos árboles comparados, fila a fila.
+/** The diff panel: two trees compared, row by row.
  *
- *  Ventana y no lista entera: el motor emite una fila por nombre emparejado
- *  de TODO el árbol y nada lo acota, así que viaja lo que se ve. */
-/** El panel de sincronización: el PLAN, antes de que nada se escriba.
+ *  A window and not the whole list: the engine emits one row per matched
+ *  name across the WHOLE tree and nothing bounds it, so what travels is what
+ *  is visible. */
+/** The sync panel: the PLAN, before anything gets written.
  *
- *  Ventana como el de diferencias: un plan de medio millón de pasos no cruza
- *  entero, y los pasos se nombran por su `id`. */
+ *  A window like the diff one: a plan of half a million steps does not
+ *  cross whole, and the steps are named by their `id`. */
 export interface SyncView {
   source: DialogLine;
   dest: DialogLine;
-  /** `update` o `mirror`. Un espejo BORRA en el destino y una actualización
-   *  no: se pinta antes de aprobar. */
+  /** `update` or `mirror`. A mirror DELETES on the destination and an
+   *  update does not: painted before approving. */
   mode: string;
   steps: SyncStepView[];
   first_visible: number;
   total: number;
-  /** El RESUMEN del plan: irreversibles, bytes, lo ilegible, y si la lista
-   *  esconde pasos. Es lo que se lee antes de aprobar. */
+  /** The plan's SUMMARY: irreversibles, bytes, the unreadable, and whether
+   *  the list hides steps. It is what gets read before approving. */
   summary: string[];
-  /** Lo que IMPIDE sincronizar, con su ruta. */
+  /** What BLOCKS syncing, with its path. */
   blockers: SyncBlockerView[];
-  /** Cuántos hay de verdad: el wire recorta la lista. */
+  /** How many there really are: the wire truncates the list. */
   blockers_total: number;
   status: string;
   hint: string;
-  /** La SEGUNDA pregunta, cuando el plan borra o deja algo sin vuelta atrás.
-   *  Solo `y` la contesta que sí. */
+  /** The SECOND question, when the plan deletes or leaves something with no
+   *  way back. Only `y` answers yes. */
   confirming: string | null;
-  /** Los pasos que fallaron al aplicar. El recuento va en el estado. */
+  /** The steps that failed to apply. The count is in the status. */
   failures: SyncFailureView[];
-  /** Lo decide el modelo compartido: ofrecer aprobar lo que va a rechazar es
-   *  la pantalla rota que esto evita. */
+  /** Decided by the shared model: offering to approve what is going to be
+   *  rejected is the broken screen this prevents. */
   can_approve: boolean;
   running: boolean;
-  /** Ya se le pidió parar. El segundo `Escape` cierra el panel. */
+  /** Already asked to stop. The second `Escape` closes the panel. */
   cancel_requested: boolean;
 }
 
@@ -1434,18 +1477,18 @@ export interface SyncFailureView {
   cause: string;
   path: string;
   path_hostile: boolean;
-  /** `source`, `dest` o `either`. HAY que pintarlo: callar un `either` en un
-   *  panel donde una ruta sin calificar significa «del origen» es afirmar el
-   *  origen. */
+  /** `source`, `dest` or `either`. It HAS to be painted: staying quiet
+   *  about an `either` in a panel where an unqualified path means "from the
+   *  source" is asserting the source. */
   anchor: string;
-  /** El ancla YA DICHA, en el idioma de la sesión. Vacía cuando es el origen,
-   *  que es lo que una ruta sin calificar significa aquí. */
+  /** The anchor ALREADY SAID, in the session's language. Empty when it is
+   *  the source, which is what an unqualified path means here. */
   anchor_label: string;
 }
 
 export interface SyncBlockerView {
   label: string;
-  /** Dónde. La raíz se dice «todo el árbol», no vacío. */
+  /** Where. The root is said as "the whole tree", not empty. */
   path: string;
   path_hostile: boolean;
 }
@@ -1454,18 +1497,19 @@ export interface SyncStepView {
   id: number;
   kind: string;
   reason: string;
-  /** Si el deshacer lo devuelve. Nunca sale de `reversal` a secas. */
+  /** Whether undo restores it. Never comes out of `reversal` plain. */
   undo: string;
   anchor: string;
-  /** Como en el fallo: el ancla ya dicha, vacía cuando es el origen. */
+  /** As in the failure: the anchor already said, empty when it is the
+   *  source. */
   anchor_label: string;
   path: string;
   path_hostile: boolean;
-  /** La ortografía del DESTINO cuando sus bytes difieren: la escritura cae
-   *  sobre ESTA. */
+  /** The DESTINATION's spelling when its bytes differ: the write lands on
+   *  THIS one. */
   dest_path: string | null;
   dest_path_hostile: boolean;
-  /** Las dos ortografías se rinden igual y hay que decirlo. */
+  /** Both spellings render the same and it has to be said. */
   twins: boolean;
 }
 
@@ -1477,8 +1521,7 @@ export interface CompareView {
   rows: CompareRowView[];
   first_visible: number;
   total: number;
-  /** La fila elegida, POR SU ID: un filtro esconde filas, jamás las
-   *  renumera. */
+  /** The chosen row, BY ITS ID: a filter hides rows, never renumbers them. */
   selected: number | null;
   filters: CompareFilterView[];
   status: string;
@@ -1501,24 +1544,24 @@ export interface CompareRowView {
   reason: string | null;
   left: CompareFaceView | null;
   right: CompareFaceView | null;
-  /** Por qué la fila enseña dos ortografías. Frase, no insignia pegada al
-   *  nombre: lo que se pega a un nombre lo puede falsificar un nombre. */
+  /** Why the row shows two spellings. A sentence, not a badge glued to the
+   *  name: what gets glued to a name can be forged by a name. */
   paired_under: string | null;
 }
 
 export interface CompareFaceView {
   name: string;
   hostile: boolean;
-  /** Vacío cuando el provider no lo sabe: «no lo sé» y «cero bytes» son dos
-   *  respuestas distintas. */
+  /** Empty when the provider does not know it: "I don't know" and "zero
+   *  bytes" are two different answers. */
   size: string;
   mtime: string;
   is_dir: boolean;
 }
 
 export interface SearchView {
-  /** Se preguntó por SIGNIFICADO contra el índice, no por nombre contra el
-   *  árbol: el alcance es el índice entero y no `root`. */
+  /** Asked by MEANING against the index, not by name against the tree: the
+   *  scope is the whole index and not `root`. */
   semantic: boolean;
   query: string;
   root: string;
@@ -1539,24 +1582,24 @@ export interface ViewSnapshot {
   tasks: TaskView[];
   menu: MenuView;
   panel_bar: PanelBarView;
-  /** La mitad derecha de la barra de estado (ADR 0132, puente 85).
-   *  Opcional: un host anterior no la manda. */
+  /** The status bar's right half (ADR 0132, bridge 85). Optional: an
+   *  earlier host does not send it. */
   status_items?: StatusItemView[];
-  /** Los botones de disposición (ADR 0133, puente 86). Opcional: un host
-   *  anterior no los manda. */
+  /** The layout buttons (ADR 0133, bridge 86). Optional: an earlier host
+   *  does not send them. */
   layout_buttons?: ChromeButtonView[];
-  /** `[ui] row_stripes` (puente 80): el «pijama» del listado. Opcional: un
-   *  host anterior no lo manda, y entonces no hay banda. */
+  /** `[ui] row_stripes` (bridge 80): the listing's stripes. Optional: an
+   *  earlier host does not send it, and then there is no band. */
   row_stripes?: boolean;
   profiles: ProfilePickerView | null;
   palette: PaletteView | null;
-  /** «Ir a cualquier sitio» (puente 77), si está abierto. Opcional: un host
-   *  anterior no lo manda. */
+  /** "Go to anywhere" (bridge 77), if it is open. Optional: an earlier host
+   *  does not send it. */
   goto?: GotoView | null;
-  /** El asistente de primer arranque (puente 63), si está abierto. Opcional:
-   *  un host anterior no lo manda. */
+  /** The first-run wizard (bridge 63), if it is open. Optional: an earlier
+   *  host does not send it. */
   wizard?: WizardView | null;
-  /** La pantalla de arranque (puente 69, ADR 0115), si está puesta. */
+  /** The splash screen (bridge 69, ADR 0115), if it is up. */
   splash?: SplashView | null;
   whichkey: WhichKeyView | null;
   help: HelpView | null;
@@ -1586,11 +1629,11 @@ export type ViewChange =
       generation: number;
       first_visible: number;
       rows: RowView[];
-      /** La columna de iconos, CON las filas: es así como aterrizan los iconos. */
+      /** The icon column, WITH the rows: that is how icons land. */
       icon_column: boolean;
       /**
-       * Cuántas filas tiene el listado ENTERO. Es la altura del
-       * desplazamiento, y el drenaje paginado solo manda parches de filas.
+       * How many rows the WHOLE listing has. It is the scroll's height, and
+       * paginated draining only sends row patches.
        */
       total_rows: number | null;
     }
@@ -1613,10 +1656,10 @@ export type ViewChange =
     }
   | { change: "slot_state"; slot_id: number; state: SlotState }
   | ({ change: "status" } & StatusView)
-  /** El tablero, y con él qué fila del panel de procesos está elegida: una
-   *  task que caduca quita una fila y desplaza el resto. `null` = ninguna,
-   *  que es lo que dice un tablero vacío. Nunca falta: este puente no tolera
-   *  versiones distintas, las rechaza. */
+  /** The dashboard, and with it which process-panel row is chosen: a task
+   *  that expires removes a row and shifts the rest. `null` = none, which
+   *  is what an empty dashboard says. Never missing: this bridge tolerates
+   *  no version mismatches, it rejects them. */
   | { change: "slot_progress"; slot_id: number; progress: number | null }
   | { change: "tasks"; tasks: TaskView[]; cursor: number | null }
   | { change: "dialogs"; dialogs: DialogView[] }
@@ -1664,7 +1707,7 @@ export type UiUpdate =
   | ({ update: "patch" } & ViewPatch)
   | ({ update: "notice" } & UiNotice);
 
-/** Una tecla ya normalizada. Quién la resuelve es Rust. */
+/** An already normalized key. Rust is the one that resolves it. */
 export interface KeyInput {
   key: string;
   ctrl: boolean;
@@ -1696,17 +1739,17 @@ export type UiAction =
       action: "dialog";
       id: ModalId;
       choice: string;
-      /** La contraseña tecleada, SOLO en un diálogo con `input_secret`
-       *  (#327). Va con la respuesta y no con cada pulsación: por
-       *  `dialog_input` cruzarían `h`, `hu`, `hun`… y cada prefijo se queda
-       *  en un trozo de heap que nadie pisa. Así cruza UNA vez, en el
-       *  instante en que el lector decide entregarla. */
+      /** The typed password, ONLY on a dialog with `input_secret` (#327).
+       *  Travels with the answer and not with every keystroke: over
+       *  `dialog_input`, `h`, `hu`, `hun`… would cross and each prefix would
+       *  stay in a piece of heap nobody wipes. This way it crosses ONCE, the
+       *  instant the reader decides to hand it over. */
       secret?: string;
     }
   | { action: "dialog_input"; id: ModalId; text: string }
-  /** Toca un campo de un diálogo-FORMULARIO (puente 91). Aparte de
-   *  `dialog_input` porque tiene que decir CUÁL de sus campos se tocó, y
-   *  porque por aquí no viaja jamás una contraseña. */
+  /** Touches a FORM-dialog field (bridge 91). Separate from `dialog_input`
+   *  because it has to say WHICH of its fields was touched, and because a
+   *  password never travels through here. */
   | {
       action: "dialog_field";
       id: ModalId;
@@ -1719,16 +1762,16 @@ export type UiAction =
   | { action: "log_scroll"; delta: number }
   | { action: "preview_scroll"; slot_id: number; delta: number }
   /**
-   * Se pulsó una CELDA de un panel de plugin (fase 3). Viaja la celda y no un
-   * comando: el host tiene el marco y resuelve qué zona era y qué comando le
-   * toca, con el mismo filtro que el terminal. Un comando que cruzara el cable
-   * lo podría mandar cualquiera que hable con el renderer.
+   * A CELL of a plugin panel was clicked (phase 3). The cell travels, not a
+   * command: the host has the frame and resolves which zone it was and
+   * which command applies, with the same filter as the terminal. A command
+   * that crossed the wire could be sent by anyone talking to the renderer.
    */
   | { action: "panel_click"; slot_id: number; row: number; col: number }
   /**
-   * La RUEDA sobre el visor a pantalla completa (puente 59). Los dos ejes en
-   * una acción porque un solo gesto los produce: la rueda a secas baja, con
-   * `shift` va de lado.
+   * The WHEEL over the full-screen viewer (bridge 59). Both axes in one
+   * action because a single gesture produces them: the plain wheel scrolls
+   * down, with `shift` it goes sideways.
    */
   | { action: "viewer_scroll"; lines: number; cols: number }
   | { action: "log_follow" }
@@ -1741,10 +1784,10 @@ export type UiAction =
   | { action: "compare_set_visible_range"; first: number; count: number }
   | { action: "set_viewport"; width: number; height: number }
   /**
-   * El esquema que pide el escritorio (`prefers-color-scheme`). Las variables
-   * CSS de la variante las enchufa este lado; esto es para que el HOST
-   * resuelva contra la misma variante el color de las entradas, que desde el
-   * puente 66 va cocido en la fila.
+   * The scheme the desktop asks for (`prefers-color-scheme`). The
+   * variant's CSS variables are plugged in on this side; this is so the
+   * HOST resolves entries' colors against the same variant, since bridge 66
+   * it travels baked into the row.
    */
   | { action: "set_color_scheme"; dark: boolean }
   | ({ action: "key" } & KeyInput)
@@ -1753,27 +1796,27 @@ export type UiAction =
   | { action: "help_select_topic"; row: number }
   | { action: "help_activate"; index: number }
   | { action: "settings_select_row"; row: number }
-  /** El doble clic sobre una fila de los ajustes: lo que hace `enter` (puente 60). */
+  /** A double click on a settings row: what `enter` does (bridge 60). */
   | { action: "settings_activate"; row: number }
-  /** El texto ENTERO del buscador: las teclas imprimibles no llegan al host. */
+  /** The search box's WHOLE text: printable keys do not reach the host. */
   | { action: "settings_query"; text: string }
-  /** Por la clave ESTABLE de la sección, no por su rótulo traducido. */
+  /** By the section's STABLE key, not its translated label. */
   | { action: "settings_jump_section"; section: string }
   | { action: "settings_reset"; row: number }
-  /** Pone un valor concreto: lo que manda un interruptor o un desplegable. */
+  /** Sets a specific value: what a toggle or a dropdown sends. */
   | { action: "settings_set"; id: string; value: string }
   | { action: "extension_select_row"; row: number }
   /**
-   * Un BOTÓN del gestor sobre una fila (puente 61): la señala y hace lo que
-   * el verbo del teclado haría sobre ella, preguntas incluidas. `approval`
-   * concede o revoca según cómo esté; `enabled` enciende o apaga;
-   * `uninstall` borra sus ficheros y retira su consentimiento, tras preguntar.
-   * Viaja con el `id` que la fila tenía: el catálogo se repide de fondo y
-   * una fila borrada por encima corre las de debajo; el host rehúsa si ya
-   * no casa.
+   * A manager BUTTON on a row (bridge 61): points to it and does what the
+   * keyboard verb would do to it, questions included. `approval` grants or
+   * revokes depending on how it stands; `enabled` turns it on or off;
+   * `uninstall` deletes its files and withdraws its consent, after asking.
+   * Travels with the `id` the row had: the catalogue reshuffles in the
+   * background and a row deleted above shifts the ones below; the host
+   * refuses if it no longer matches.
    */
   | { action: "extension_govern"; row: number; id: string; change: ExtensionChange }
-  /** La página de ayuda de la extensión de esa fila (puente 61). */
+  /** That row's extension's help page (bridge 61). */
   | { action: "extension_help"; row: number; id: string }
   | { action: "agent_select_row"; row: number; generation: number }
   | { action: "select_tab"; slot_id: number }
@@ -1786,15 +1829,15 @@ export type UiAction =
   | { action: "ai_rename_decide"; approve: boolean }
   | { action: "organize_decide"; approve: boolean }
   | { action: "organize_scroll"; down: boolean }
-  /** La terminal de un relevo no se abrió (puente 73). La manda quien
-   *  hospeda, no este renderer; está aquí para que el tipo cubra el puente
-   *  entero. */
+  /** A handoff's terminal did not open (bridge 73). Sent by whoever hosts
+   *  it, not this renderer; it is here so the type covers the whole
+   *  bridge. */
   | { action: "handoff_failed"; no_terminal: boolean }
   | { action: "menu_open"; menu: number }
   | { action: "menu_point_row"; row: number }
   | { action: "menu_activate_row"; row: number }
   | { action: "menu_close" }
-  /** Alt pulsado y soltado solo: pliega o abre el menú (puente 68). */
+  /** Alt pressed and released alone: folds or opens the menu (bridge 68). */
   | { action: "menu_toggle" }
   | { action: "wizard_open" }
   | { action: "wizard_activate_row"; row: number }
@@ -1817,52 +1860,53 @@ export type ActionAck =
   | { status: "stale"; reason: StaleReason }
   | { status: "unavailable"; reason_key: string };
 
-/** Lo que el host proyecta UNA vez al arrancar: textos y colores, ya resueltos. */
+/** What the host projects ONCE on startup: strings and colors, already resolved. */
 export interface HostCatalog {
   bridge_version: number;
   instance_id: string;
   locale: string;
-  /** Clave Fluent -> texto ya traducido EN RUST. */
+  /** Fluent key -> text already translated IN RUST. */
   strings: Record<string, string>;
-  /** Rol del tema -> variables CSS ya resueltas en Rust. */
+  /** Theme role -> CSS variables already resolved in Rust. */
   theme: Record<string, string>;
-  /** Pasada de medición de la tarea 3.6 (`NORTE_GUI_MEASURE=1`). */
+  /** Task 3.6's measurement pass (`NORTE_GUI_MEASURE=1`). */
   measure: boolean;
-  /** Cuánto se espera antes de ENSEÑAR que se está esperando, en ms. Viaja en
-   *  vez de estar escrito en el CSS porque es una decisión compartida con el
-   *  terminal (`norte_frontend::busy::THRESHOLD`), y un número repetido en
-   *  una hoja de estilos es el tercer sitio donde cambiarlo. */
+  /** How long to wait before SHOWING that it is waiting, in ms. Travels
+   *  instead of being written in the CSS because it is a decision shared
+   *  with the terminal (`norte_frontend::busy::THRESHOLD`), and a number
+   *  repeated in a stylesheet is the third place to change it. */
   busy_threshold_ms?: number;
-  /** `[ui] font`, `mono_font`, `font_size` y `reduce_motion`. */
+  /** `[ui] font`, `mono_font`, `font_size` and `reduce_motion`. */
   appearance?: Appearance;
-  /** No hay `norte.toml` de usuario todavía (puente 63): el renderer abre el
-   *  asistente de primer arranque al pintar la primera foto. */
+  /** There is no user `norte.toml` yet (bridge 63): the renderer opens the
+   *  first-run wizard when it paints the first frame. */
   first_run?: boolean;
-  /** Esta ventana arranca sin pantalla de inicio (puente 69, ADR 0115):
-   *  `--no-splash` o `NORTE_NO_SPLASH`. Lo decide el arranque, que es quien
-   *  ve la línea de órdenes y el entorno; aquí solo se calla el aviso. */
+  /** This window starts with no splash screen (bridge 69, ADR 0115):
+   *  `--no-splash` or `NORTE_NO_SPLASH`. Decided by startup, which is the
+   *  one that sees the command line and the environment; here the notice is
+   *  only silenced. */
   no_splash?: boolean;
-  /** `[ui] theme_light` / `theme_dark` ya resueltos a variables (spec
-   *  2026-09-11, V6): el renderer aplica el que casa con
-   *  `prefers-color-scheme`, y `theme` cuando no hay variante para ese
-   *  lado. Ausente o `null` = solo `theme`. */
+  /** `[ui] theme_light` / `theme_dark` already resolved to variables (spec
+   *  2026-09-11, V6): the renderer applies the one that matches
+   *  `prefers-color-scheme`, and `theme` when there is no variant for that
+   *  side. Absent or `null` = `theme` only. */
   theme_light?: Record<string, string> | null;
   theme_dark?: Record<string, string> | null;
 }
 
-/** Lo que esta ventana pinta y no es color. Cada campo `null` = no lo dice la
- *  configuración, y entonces manda lo que ya hay (la hoja de estilos, o el
- *  escritorio en el caso del movimiento). */
+/** What this window paints that is not color. Each `null` field = the
+ *  configuration does not say, and then whatever is already there rules
+ *  (the stylesheet, or the desktop in the case of motion). */
 export interface Appearance {
   font: string | null;
   mono_font: string | null;
-  /** En px, ya validado a [8, 32] en Rust. Mueve TAMBIÉN la rejilla: esta
-   *  ventana se reparte en celdas, así que un tamaño que solo cambiara la
-   *  letra la dejaría desbordando su fila. */
+  /** In px, already validated to [8, 32] in Rust. ALSO moves the grid: this
+   *  window is laid out in cells, so a size that only changed the glyph
+   *  would leave it overflowing its row. */
   font_size: number | null;
   reduce_motion: boolean | null;
-  /** `[ui] titlebar = "custom"` (ADR 0136): la ventana no lleva la barra
-   *  del escritorio y la de menús hace de barra de título. Ausente = la
-   *  nativa. */
+  /** `[ui] titlebar = "custom"` (ADR 0136): the window does not carry the
+   *  desktop's bar and the menu one acts as the title bar. Absent = the
+   *  native one. */
   custom_titlebar?: boolean;
 }

@@ -1,21 +1,22 @@
-//! Los cinco selectores de lista con cursor: tema, conexiones, disposición y
-//! columnas, más el `[ui].theme` que el primero aplica.
+//! The five cursor-list pickers: theme, connections, layout and columns,
+//! plus the `[ui].theme` that the first one applies.
 //!
-//! Los cuatro son la misma cosa con distinto contenido —una lista con cursor
-//! que resuelve la tecla contra el contexto `dialog` del keymap y la filtra
-//! por el ALLOWLIST de su overlay— y los cuatro vivían en el root del binario
-//! `ntc`, un crate DISTINTO de esta lib.
+//! The four are the same thing with different content — a cursor list that
+//! resolves the key against the keymap's `dialog` context and filters it by
+//! its overlay's ALLOWLIST — and all four used to live in the `ntc` binary's
+//! root, a crate DISTINCT from this lib.
 //!
-//! Parecía haber un ciclo con [`crate::screens::settings`] —el picker de
-//! columnas «persiste como `persist_setting`» y el overlay de ajustes «abre el
-//! de tema»— y no lo hay: las dos referencias son menciones en comentarios, no
-//! llamadas. Un ciclo entre módulos del MISMO crate sería legal en Rust de
-//! todas formas, así que los dos ficheros salieron en un solo commit.
+//! There seemed to be a cycle with [`crate::screens::settings`] — the columns
+//! picker "persists as `persist_setting`" and the settings overlay "opens the
+//! theme one" — and there is not: the two references are mentions in
+//! comments, not calls. A cycle between modules of the SAME crate would be
+//! legal in Rust anyway, so the two files went out in a single commit.
 //!
-//! El rustdoc de [`on_layout_picker_key`] estaba APILADO sobre
-//! `on_connections_picker_key` en `main.rs`, dos doc-comments seguidos delante
-//! de una sola función: un movimiento anterior dejó atrás la documentación de
-//! la otra. Aquí vuelve a la suya, sin tocar una palabra.
+//! The rustdoc of [`on_layout_picker_key`] was STACKED on top of
+//! `on_connections_picker_key` in `main.rs`, two doc comments in a row in
+//! front of a single function: an earlier move left the other one's
+//! documentation behind. Here it goes back to its own, without a word
+//! changed.
 
 use crossterm::event::{KeyCode, KeyModifiers};
 use norte_i18n::{t, ta};
@@ -27,29 +28,29 @@ use crate::app::{
 use crate::config;
 use crate::keymap::{Resolution, Resolver, chord_from_crossterm};
 
-/// Resuelve `[ui].theme` (preset o ruta) y lo aplica al `App`; ante error
-/// degrada al preset por defecto y avisa (ADR 0020). El frontend no revienta
-/// por un tema malo.
+/// Resolves `[ui].theme` (preset or path) and applies it to the `App`; on
+/// error it degrades to the default preset and warns (ADR 0020). The
+/// frontend never blows up over a bad theme.
 pub fn apply_theme(app: &mut App, cfg: &config::LoadedConfig) {
     let depth = crate::theme::detect_depth();
     match crate::theme::resolve(cfg.common.ui_theme.as_deref(), depth) {
         Ok(theme) => app.theme = theme,
         Err(e) => {
             app.theme = crate::theme::TuiTheme::default();
-            // Por categoría Fluent (#73): jamás el Display del OS ni el
-            // diagnóstico crudo (el spec puede venir de un `./.norte` ajeno).
+            // By Fluent category (#73): never the OS's Display nor the raw
+            // diagnostic (the spec can come from someone else's `./.norte`).
             app.message = Some(theme_error_category(&e));
         }
     }
 }
 
-/// Traduce las teclas del popup de tema a una acción de dominio (la lógica
-/// vive en `App`, testeable) resolviendo contra el contexto `dialog` del
-/// keymap (H1 T2, issue #24 — rebindeable). `ctrl+c` conserva su salida
-/// global, hardcodeado ANTES de resolver, como los demás overlays. `F9`
-/// cierra el picker como atajo ESPECÍFICO de este overlay (no es un binding
-/// `dialog.*` del preset): se mantiene hardcodeado. Al confirmar, PERSISTE
-/// la elección en el `norte.toml` del usuario (ADR 0020), sin bloquear el
+/// Translates the theme popup's keys into a domain action (the logic lives
+/// in `App`, testable) by resolving against the keymap's `dialog` context
+/// (H1 T2, issue #24 — rebindable). `ctrl+c` keeps its global quit,
+/// hardcoded BEFORE resolving, like the other overlays. `F9` closes the
+/// picker as a SPECIFIC shortcut of this overlay (it is not a `dialog.*`
+/// binding of the preset): it stays hardcoded. On confirm, it PERSISTS the
+/// choice to the user's `norte.toml` (ADR 0020), without blocking the
 /// runtime.
 pub async fn on_theme_picker_key(
     app: &mut App,
@@ -66,33 +67,33 @@ pub async fn on_theme_picker_key(
         return;
     }
     let Some(chord) = chord_from_crossterm(mods, code) else {
-        return; // tecla no modelada por el keymap: ignorar
+        return; // key not modeled by the keymap: ignore
     };
     let cmd = match resolver.push(chord) {
         Resolution::Run { command: cmd, .. } => cmd,
-        // Sin semántica de secuencia definida para overlays (T2), y lo mismo
-        // para una tecla ligada a algo que esta build no corre (K1 T4):
-        // ignorar y reiniciar el estado de resolución.
+        // No sequence semantics defined for overlays (T2), and likewise for
+        // a key bound to something this build does not run (K1 T4): ignore
+        // and reset the resolution state.
         Resolution::Pending(_) | Resolution::Counting(_) | Resolution::Unavailable { .. } => {
             resolver.reset();
             return;
         }
         Resolution::Reset => return,
     };
-    // H1 T3: el MISMO allowlist que consume el hint generado
-    // (`hints::DialogHints::build`) — una sola fuente para dispatch y
-    // footer. El match sigue siendo exhaustivo por defensa en profundidad.
+    // H1 T3: the SAME allowlist the generated hint consumes
+    // (`hints::DialogHints::build`) — a single source for dispatch and
+    // footer. The match stays exhaustive for defense in depth.
     if !ALLOW_PICKER.contains(&cmd.as_str()) {
-        return; // fuera del allowlist de este overlay: inerte
+        return; // outside this overlay's allowlist: inert
     }
     let action = match cmd.as_str() {
         "dialog.up" => PickerAction::Up,
         "dialog.down" => PickerAction::Down,
         "dialog.confirm" => PickerAction::Confirm,
         "dialog.cancel" => PickerAction::Cancel,
-        _ => return, // ya filtrado por ALLOW_PICKER; inalcanzable en la práctica
+        _ => return, // already filtered by ALLOW_PICKER; unreachable in practice
     };
-    // El nombre a persistir se toma ANTES de que Confirm cierre el popup.
+    // The name to persist is taken BEFORE Confirm closes the popup.
     let confirmed = (action == PickerAction::Confirm)
         .then(|| {
             app.theme_picker
@@ -102,12 +103,13 @@ pub async fn on_theme_picker_key(
         .flatten();
     app.theme_picker_input(action);
     if let Some(name) = confirmed {
-        // I/O en spawn_blocking: el runtime jamás se bloquea (regla 2).
+        // I/O in spawn_blocking: the runtime never blocks (rule 2).
         //
-        // Al directorio del PERFIL activo si lo hay, y no siempre al del
-        // usuario: el perfil está por encima, así que un tema escrito abajo
-        // queda TAPADO por el que fije el perfil. Se guardaba, la barra decía
-        // «config recargada», y la pantalla no cambiaba de color (ADR 0079).
+        // To the active PROFILE's directory if there is one, and not always
+        // to the user's: the profile sits above it, so a theme written below
+        // ends up COVERED by whatever the profile sets. It was saving, the
+        // bar said "config reloaded", and the screen did not change color
+        // (ADR 0079).
         let n = name.clone();
         let Some(dir) = app.config_write_dir() else {
             app.message = Some(t("msg-settings-no-config-dir"));
@@ -115,8 +117,8 @@ pub async fn on_theme_picker_key(
         };
         match tokio::task::spawn_blocking(move || config::persist_ui_theme_to(&dir, &n)).await {
             Ok(Ok(path)) => {
-                // El path deriva de XDG_CONFIG_HOME/APPDATA (entorno):
-                // saneado como cualquier detalle (#73).
+                // The path derives from XDG_CONFIG_HOME/APPDATA (environment):
+                // sanitized like any other detail (#73).
                 app.message = Some(ta(
                     "msg-theme-saved",
                     &[
@@ -126,21 +128,22 @@ pub async fn on_theme_picker_key(
                 ));
             }
             Ok(Err(e)) => {
-                // El tema YA se aplicó (sesión); solo no se pudo guardar. A
-                // la barra va la CATEGORÍA, jamás el Display del OS (#73).
+                // The theme was ALREADY applied (session); it just could not
+                // be saved. Only the CATEGORY goes to the bar, never the
+                // OS's Display (#73).
                 app.message = Some(ta(
                     "msg-theme-save-failed",
                     &[("error", &io_error_category(&e))],
                 ));
             }
-            // Un panic en el write es un bug nuestro: que no tumbe la TUI.
+            // A panic in the write is our bug: it must not take the TUI down.
             Err(_) => {}
         }
     }
 }
 
-/// Teclas del selector de conexiones (#140): mismo reparto y mismo allowlist
-/// que el de disposiciones. Devuelve la URL elegida, si se confirmó.
+/// Keys for the connections picker (#140): same layout and same allowlist as
+/// the layout one. Returns the chosen URL, if confirmed.
 pub fn on_connections_picker_key(
     app: &mut App,
     resolver: &mut Resolver,
@@ -173,15 +176,15 @@ pub fn on_connections_picker_key(
     app.connections_picker_input(action)
 }
 
-/// Teclas del selector de disposición: resuelve por keymap (pantalla
-/// `dialog`) y filtra por [`ALLOW_PICKER`], el MISMO allowlist que el selector
-/// de tema — los dos son una lista con cursor que no muta nada fuera de sí
-/// misma, así que Enter sí dispara. `ctrl+c` conserva su salida global,
-/// hardcodeado antes de resolver, y `F9` cierra como en el de tema.
+/// Keys for the layout picker: resolves through the keymap (`dialog`
+/// screen) and filters by [`ALLOW_PICKER`], the SAME allowlist as the theme
+/// picker — both are a cursor list that mutates nothing outside itself, so
+/// Enter does fire. `ctrl+c` keeps its global quit, hardcoded before
+/// resolving, and `F9` closes it like the theme one.
 ///
-/// No es `async` y no persiste nada: elegir una disposición vale para esta
-/// sesión, y lo que la fija entre arranques es `[ui] layout` en tu config.
-/// Guardarla al vuelo convertiría una prueba en un cambio permanente.
+/// It is not `async` and persists nothing: choosing a layout only holds for
+/// this session, and what pins it across launches is `[ui] layout` in your
+/// config. Saving it on the fly would turn a trial into a permanent change.
 pub fn on_layout_picker_key(
     app: &mut App,
     resolver: &mut Resolver,
@@ -197,7 +200,7 @@ pub fn on_layout_picker_key(
         return;
     }
     let Some(chord) = chord_from_crossterm(mods, code) else {
-        return; // tecla no modelada por el keymap: ignorar
+        return; // key not modeled by the keymap: ignore
     };
     let cmd = match resolver.push(chord) {
         Resolution::Run { command: cmd, .. } => cmd,
@@ -208,21 +211,22 @@ pub fn on_layout_picker_key(
         Resolution::Reset => return,
     };
     if !ALLOW_PICKER.contains(&cmd.as_str()) {
-        return; // fuera del allowlist de este overlay: inerte
+        return; // outside this overlay's allowlist: inert
     }
     let action = match cmd.as_str() {
         "dialog.up" => PickerAction::Up,
         "dialog.down" => PickerAction::Down,
         "dialog.confirm" => PickerAction::Confirm,
         "dialog.cancel" => PickerAction::Cancel,
-        _ => return, // ya filtrado por ALLOW_PICKER; inalcanzable en la práctica
+        _ => return, // already filtered by ALLOW_PICKER; unreachable in practice
     };
     app.layout_picker_input(action);
 }
 
-/// Teclas del selector de PERFILES (ADR 0079). Misma disciplina que el de
-/// disposiciones: resuelve por keymap en la pantalla `dialog` y filtra por el
-/// mismo allowlist, con `ctrl+c` conservando su salida global antes de nada.
+/// Keys for the PROFILE picker (ADR 0079). Same discipline as the layout
+/// one: resolves through the keymap in the `dialog` screen and filters by
+/// the same allowlist, with `ctrl+c` keeping its global quit before anything
+/// else.
 pub fn on_profile_picker_key(
     app: &mut App,
     resolver: &mut Resolver,
@@ -234,7 +238,7 @@ pub fn on_profile_picker_key(
         return;
     }
     let Some(chord) = chord_from_crossterm(mods, code) else {
-        return; // tecla no modelada por el keymap: ignorar
+        return; // key not modeled by the keymap: ignore
     };
     let cmd = match resolver.push(chord) {
         Resolution::Run { command: cmd, .. } => cmd,
@@ -245,7 +249,7 @@ pub fn on_profile_picker_key(
         Resolution::Reset => return,
     };
     if !ALLOW_PICKER.contains(&cmd.as_str()) {
-        return; // fuera del allowlist de este overlay: inerte
+        return; // outside this overlay's allowlist: inert
     }
     let action = match cmd.as_str() {
         "dialog.up" => PickerAction::Up,
@@ -257,12 +261,12 @@ pub fn on_profile_picker_key(
     app.profile_picker_input(action);
 }
 
-/// Teclas del picker de columnas (#108 7a): resuelve por keymap (pantalla
-/// `dialog`) y filtra por [`ALLOW_COLUMNS`] — misma disciplina única-fuente
-/// que el resto de overlays (#24). `ctrl+c` conserva su salida global,
-/// hardcodeado ANTES de resolver, como los demás overlays. Devuelve `true`
-/// si un confirm cambió el set de attrs pintado (#117): el run loop
-/// re-lista entonces (mismo camino que tras una mutación).
+/// Keys for the columns picker (#108 7a): resolves through the keymap
+/// (`dialog` screen) and filters by [`ALLOW_COLUMNS`] — the same
+/// single-source discipline as the rest of the overlays (#24). `ctrl+c`
+/// keeps its global quit, hardcoded BEFORE resolving, like the other
+/// overlays. Returns `true` if a confirm changed the painted attr set
+/// (#117): the run loop then re-lists (same path as after a mutation).
 pub async fn on_columns_key(
     app: &mut App,
     resolver: &mut Resolver,
@@ -274,13 +278,13 @@ pub async fn on_columns_key(
         return false;
     }
     let Some(chord) = chord_from_crossterm(mods, code) else {
-        return false; // tecla no modelada por el keymap: ignorar
+        return false; // key not modeled by the keymap: ignore
     };
     let cmd = match resolver.push(chord) {
         Resolution::Run { command: cmd, .. } => cmd,
-        // Sin semántica de secuencia definida para overlays (T2), y lo mismo
-        // para una tecla ligada a algo que esta build no corre (K1 T4):
-        // ignorar y reiniciar el estado de resolución.
+        // No sequence semantics defined for overlays (T2), and likewise for
+        // a key bound to something this build does not run (K1 T4): ignore
+        // and reset the resolution state.
         Resolution::Pending(_) | Resolution::Counting(_) | Resolution::Unavailable { .. } => {
             resolver.reset();
             return false;
@@ -288,7 +292,7 @@ pub async fn on_columns_key(
         Resolution::Reset => return false,
     };
     if !ALLOW_COLUMNS.contains(&cmd.as_str()) {
-        return false; // fuera del allowlist de este overlay: inerte
+        return false; // outside this overlay's allowlist: inert
     }
     let Some(p) = app.columns_picker.as_mut() else {
         return false;
@@ -307,35 +311,35 @@ pub async fn on_columns_key(
             app.columns_picker = None;
             return apply_picked_columns(app, picked).await;
         }
-        _ => {} // ya filtrado por ALLOW_COLUMNS; inalcanzable en la práctica
+        _ => {} // already filtered by ALLOW_COLUMNS; unreachable in practice
     }
     false
 }
 
-/// Los ids attr CONFIGURADOS de cada pane visible (#117): la huella que
-/// decide si un cambio de columnas exige re-listar — los valores attr solo
-/// llegan pidiéndolos en `fs.list`, así que un id nuevo con el listado
-/// viejo pintaría blanco (ausencia) hasta el próximo cd. La huella ordenada
-/// vive en el modelo (una única definición para ambos frontends).
+/// The CONFIGURED attr ids of each visible pane (#117): the fingerprint that
+/// decides whether a columns change forces a re-list — attr values only
+/// arrive by asking for them in `fs.list`, so a new id with the old listing
+/// would paint blank (absence) until the next cd. The ordered fingerprint
+/// lives in the model (a single definition for both frontends).
 #[must_use]
 pub fn pane_attr_ids(app: &App) -> Vec<Vec<String>> {
-    // #117-follow-up (review MAJOR-1): huella COMBINADA attr+plugin, única
-    // definición en el modelo (`pane_fingerprint`) para ambos frontends —
-    // un cambio SOLO de plugins también re-lista (el re-list respawnea el
-    // fetch de valores; sin él la columna nueva quedaría en blanco).
+    // #117-follow-up (review MAJOR-1): COMBINED attr+plugin fingerprint, a
+    // single definition in the model (`pane_fingerprint`) for both
+    // frontends — a change to plugins ALONE also re-lists (the re-list
+    // respawns the value fetch; without it the new column would stay blank).
     app.panes
         .iter()
         .map(|p| app.columns.pane_fingerprint(p.dir().scheme()))
         .collect()
 }
 
-/// Aplica el resultado del picker (#108 7a): sesión primero (settings en
-/// memoria + re-sort de TODO pane, `apply_scheme_sort` es no-op donde el
-/// spec no cambia), disco después (`config::persist_columns` en
-/// `spawn_blocking` — regla 2). A la barra va la CATEGORÍA del error, jamás
-/// el Display del SO (#73). Devuelve `true` si el set de attrs pintado de
-/// algún pane visible cambió (#117): el caller re-lista entonces por el
-/// mismo camino que tras una mutación.
+/// Applies the picker's result (#108 7a): session first (in-memory settings
+/// and re-sort of EVERY pane, `apply_scheme_sort` is a no-op where the spec
+/// does not change), disk after (`config::persist_columns` in
+/// `spawn_blocking` — rule 2). Only the error's CATEGORY goes to the bar,
+/// never the OS's Display (#73). Returns `true` if the painted attr set of
+/// some visible pane changed (#117): the caller then re-lists through the
+/// same path as after a mutation.
 async fn apply_picked_columns(
     app: &mut App,
     picked: norte_frontend::columns_picker::Picked,
@@ -346,9 +350,9 @@ async fn apply_picked_columns(
         &picked.ids,
         picked.sort.clone(),
     );
-    // #108 7b: los formatos ciclados también EN SESIÓN antes del disco —
-    // mismo lockstep (`apply_format` toca el spec retenido que lee
-    // `style_for`).
+    // #108 7b: cycled formats also go IN SESSION before disk — same
+    // lockstep (`apply_format` touches the retained spec that `style_for`
+    // reads).
     for (id, fmt) in &picked.formats {
         app.columns.apply_format(id, fmt);
     }
@@ -356,9 +360,9 @@ async fn apply_picked_columns(
         app.apply_scheme_sort(i);
     }
     let needs_refresh = pane_attr_ids(app) != attrs_before;
-    // Al PERFIL activo si lo hay: un perfil está por encima de la capa del
-    // usuario, así que escribir ahí lo que el perfil también fija lo deja
-    // tapado — guardado y sin efecto (ADR 0079).
+    // To the active PROFILE if there is one: a profile sits above the
+    // user's layer, so writing there what the profile also sets leaves it
+    // covered — saved and with no effect (ADR 0079).
     let Some(dir) = app.config_write_dir() else {
         app.message = Some(t("msg-settings-no-config-dir"));
         return needs_refresh;
@@ -366,22 +370,22 @@ async fn apply_picked_columns(
     let ids = picked.ids.clone();
     let scheme = picked.scheme_target.clone();
     let sort = picked.sort.clone();
-    // Se mira AHORA: `sort` se mueve al hilo de fondo, y el desenlace tiene
-    // que saber si guardó el orden o lo dejó para la sesión.
-    let orden_de_sesion = matches!(sort.column, norte_frontend::SortColumn::Attr(_));
+    // Checked NOW: `sort` moves into the background thread, and the outcome
+    // needs to know whether it saved the order or left it for the session.
+    let session_only_order = matches!(sort.column, norte_frontend::SortColumn::Attr(_));
     let formats = picked.formats.clone();
     let res = tokio::task::spawn_blocking(move || {
-        // Todas las escrituras en UNA tarea de fondo, secuenciales sobre el
-        // mismo fichero (#108 7b): la lista+sort y después cada formato
-        // ciclado — un solo desenlace, un solo toast.
+        // All writes in ONE background task, sequential over the same file
+        // (#108 7b): the listing+sort and then each cycled format — one
+        // outcome, one toast.
         config::persist_columns(
             &dir,
             scheme.as_deref(),
             &ids,
-            // Un orden por ATRIBUTO no tiene forma en `norte.toml` (`[ui] sort`
-            // solo nombra built-ins, ADR 0144): se queda en la sesión y la
-            // clave `sort` del fichero no se toca. El aviso lo da el
-            // desenlace, abajo.
+            // An order by ATTRIBUTE has no shape in `norte.toml` (`[ui] sort`
+            // only names built-ins, ADR 0144): it stays in the session and
+            // the file's `sort` key is left untouched. The outcome below
+            // gives the notice.
             match sort.column {
                 norte_frontend::SortColumn::Name => Some("name"),
                 norte_frontend::SortColumn::Size => Some("size"),
@@ -402,10 +406,10 @@ async fn apply_picked_columns(
     })
     .await;
     match res {
-        // Si el orden era por atributo, decirlo: «guardado» a secas haría
-        // creer que al volver a abrir seguirá ordenado así.
+        // If the order was by attribute, say so: a bare "saved" would give
+        // the impression that reopening will still be sorted this way.
         Ok(Ok(())) => {
-            app.message = Some(t(if orden_de_sesion {
+            app.message = Some(t(if session_only_order {
                 "msg-columns-sort-session-only"
             } else {
                 "msg-columns-saved"
@@ -417,10 +421,11 @@ async fn apply_picked_columns(
                 &[("error", &io_error_category(&e))],
             ));
         }
-        // Un panic en el write es un bug nuestro: que no tumbe la TUI (misma
-        // disciplina que `persist_setting`) — se anuncia y queda traza.
+        // A panic in the write is our bug: it must not take the TUI down
+        // (same discipline as `persist_setting`) — it is announced and
+        // leaves a trace.
         Err(e) => {
-            tracing::error!(error = %e, "tarea de fondo de persist_columns no terminó");
+            tracing::error!(error = %e, "background persist_columns task did not finish");
             app.message = Some(t("msg-settings-save-crashed"));
         }
     }

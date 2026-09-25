@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { AltSolo, esParaElCampo, keyInputOf } from "../src/keys";
+import { AltSolo, isForTheField, keyInputOf } from "../src/keys";
 
 function ev(init: KeyboardEventInit): KeyboardEvent {
   return new KeyboardEvent("keydown", init);
 }
 
-describe("las teclas", () => {
-  it("viajan con el nombre del navegador y sus modificadores", () => {
+describe("keys", () => {
+  it("travel with the browser's name and its modifiers", () => {
     expect(keyInputOf(ev({ key: "ArrowDown" }))).toEqual({
       key: "ArrowDown",
       ctrl: false,
@@ -18,42 +18,42 @@ describe("las teclas", () => {
     expect(keyInputOf(ev({ key: "F5", ctrlKey: true, shiftKey: true }))?.ctrl).toBe(true);
   });
 
-  it("un modificador SOLO no es una tecla", () => {
+  it("a modifier ALONE is not a key", () => {
     for (const key of ["Shift", "Control", "Alt", "Meta"]) {
       expect(keyInputOf(ev({ key }))).toBeNull();
     }
   });
 
-  it("a media composición de IME no se manda nada", () => {
+  it("mid-IME-composition sends nothing", () => {
     expect(keyInputOf(ev({ key: "a", isComposing: true }))).toBeNull();
   });
 
-  it("no resuelve NADA: manda la tecla, no el comando", () => {
-    // Si esto dejara de ser cierto habría dos keymaps (decisión D14).
+  it("resolves NOTHING: sends the key, not the command", () => {
+    // If this stopped being true there would be two keymaps (decision D14).
     const k = keyInputOf(ev({ key: "q", ctrlKey: true }));
     expect(k).toEqual({ key: "q", ctrl: true, alt: false, shift: false, meta: false });
   });
 });
 
-describe("una tecla de TEXTO", () => {
-  it("se mide en puntos de código, no en unidades UTF-16", () => {
-    // Un emoji son dos unidades UTF-16 y UN punto de código: si se mide con
-    // `length`, el campo de texto no lo recibe y no se puede escribir en un
-    // nombre.
+describe("a TEXT key", () => {
+  it("is measured in code points, not UTF-16 units", () => {
+    // An emoji is two UTF-16 units and ONE code point: measured with
+    // `length`, the text field wouldn't receive it and it couldn't be typed
+    // into a name.
     const emoji = keyInputOf(ev({ key: "😀" }));
     expect(emoji).not.toBeNull();
     expect([...(emoji?.key ?? "")].length).toBe(1);
     expect((emoji?.key ?? "").length).toBe(2);
   });
 
-  it("una é en NFD son DOS puntos de código: no es una tecla de texto", () => {
-    const nfd = keyInputOf(ev({ key: "e\u0301" }));
+  it("an é in NFD is TWO code points: it's not a text key", () => {
+    const nfd = keyInputOf(ev({ key: "é" }));
     expect(nfd).not.toBeNull();
     expect([...(nfd?.key ?? "")].length).toBe(2);
   });
 });
 
-describe("un campo de texto abierto", () => {
+describe("an open text field", () => {
   const k = (
     key: string,
     mods: Partial<Record<"ctrl" | "alt" | "meta" | "shift", boolean>> = {},
@@ -65,51 +65,44 @@ describe("un campo de texto abierto", () => {
     meta: mods.meta ?? false,
   });
 
-  it("se queda las teclas que ESCRIBEN", () => {
-    expect(esParaElCampo(k("a"), true)).toBe(true);
-    expect(esParaElCampo(k("\u{1F600}"), true)).toBe(true);
+  it("keeps the keys that TYPE", () => {
+    expect(isForTheField(k("a"), true)).toBe(true);
+    expect(isForTheField(k("\u{1F600}"), true)).toBe(true);
   });
 
-  it("y las que EDITAN, que es la mitad que faltaba", () => {
-    // Sin esto, `preventDefault` cancelaba el borrado del propio campo y el
-    // host se lo tragaba: un nombre a medio escribir no se pod\u00eda corregir, y
-    // en el campo de una contrase\u00f1a (#327) \u2014cuarenta caracteres, sin verlos\u2014
-    // la \u00fanica salida de una errata era abandonar la navegaci\u00f3n.
-    for (const tecla of [
-      "Backspace",
-      "Delete",
-      "ArrowLeft",
-      "ArrowRight",
-      "Home",
-      "End",
-    ]) {
-      expect(esParaElCampo(k(tecla), true)).toBe(true);
+  it("and the ones that EDIT, which is the missing half", () => {
+    // Without this, `preventDefault` cancelled the field's own deletion and
+    // the host swallowed it: a half-typed name couldn't be corrected, and in
+    // a password field (#327) — forty characters, without seeing them — the
+    // only way out of a typo was abandoning navigation.
+    for (const key of ["Backspace", "Delete", "ArrowLeft", "ArrowRight", "Home", "End"]) {
+      expect(isForTheField(k(key), true)).toBe(true);
     }
   });
 
-  it("y el pegado, que es como se contesta un di\u00e1logo de contrase\u00f1a", () => {
-    expect(esParaElCampo(k("v", { ctrl: true }), true)).toBe(true);
-    expect(esParaElCampo(k("c", { ctrl: true }), true)).toBe(true);
-    expect(esParaElCampo(k("z", { ctrl: true }), true)).toBe(true);
+  it("and paste, which is how a password dialog gets answered", () => {
+    expect(isForTheField(k("v", { ctrl: true }), true)).toBe(true);
+    expect(isForTheField(k("c", { ctrl: true }), true)).toBe(true);
+    expect(isForTheField(k("z", { ctrl: true }), true)).toBe(true);
   });
 
-  it("pero NO los acordes del host", () => {
-    // `ctrl+q` no es edici\u00f3n: si el campo se lo quedara, no habr\u00eda forma de
-    // salir de la ventana con un di\u00e1logo delante.
-    expect(esParaElCampo(k("q", { ctrl: true }), true)).toBe(false);
-    expect(esParaElCampo(k("Enter"), true)).toBe(false);
-    expect(esParaElCampo(k("Escape"), true)).toBe(false);
-    expect(esParaElCampo(k("F5"), true)).toBe(false);
-    expect(esParaElCampo(k("Tab"), true)).toBe(false);
+  it("but NOT the host's chords", () => {
+    // `ctrl+q` is not editing: if the field kept it, there would be no way
+    // to leave the window with a dialog in front.
+    expect(isForTheField(k("q", { ctrl: true }), true)).toBe(false);
+    expect(isForTheField(k("Enter"), true)).toBe(false);
+    expect(isForTheField(k("Escape"), true)).toBe(false);
+    expect(isForTheField(k("F5"), true)).toBe(false);
+    expect(isForTheField(k("Tab"), true)).toBe(false);
   });
 
-  it("y sin campo abierto no se queda nada", () => {
-    expect(esParaElCampo(k("a"), false)).toBe(false);
-    expect(esParaElCampo(k("Backspace"), false)).toBe(false);
+  it("and with no field open, nothing is kept", () => {
+    expect(isForTheField(k("a"), false)).toBe(false);
+    expect(isForTheField(k("Backspace"), false)).toBe(false);
   });
 });
 
-describe("Alt SOLO (puente 68)", () => {
+describe("Alt ALONE (bridge 68)", () => {
   const t = (
     key: string,
     mods: Partial<{ ctrlKey: boolean; shiftKey: boolean; metaKey: boolean }> = {},
@@ -121,47 +114,47 @@ describe("Alt SOLO (puente 68)", () => {
     ...mods,
   });
 
-  it("bajar y soltar Alt sin nada en medio es el gesto", () => {
+  it("pressing and releasing Alt with nothing in between is the gesture", () => {
     const a = new AltSolo();
-    a.abajo(t("Alt"));
-    expect(a.arriba(t("Alt"))).toBe(true);
+    a.down(t("Alt"));
+    expect(a.up(t("Alt"))).toBe(true);
   });
 
-  it("Alt mantenido que se repite sigue siendo el gesto", () => {
+  it("Alt held and repeating is still the gesture", () => {
     const a = new AltSolo();
-    a.abajo(t("Alt"));
-    a.abajo(t("Alt"));
-    expect(a.arriba(t("Alt"))).toBe(true);
+    a.down(t("Alt"));
+    a.down(t("Alt"));
+    expect(a.up(t("Alt"))).toBe(true);
   });
 
-  it("Alt+otra tecla NO lo es, aunque Alt se suelte el último", () => {
+  it("Alt+another key is NOT it, even if Alt is released last", () => {
     const a = new AltSolo();
-    a.abajo(t("Alt"));
-    a.abajo(t("F4"));
-    expect(a.arriba(t("F4"))).toBe(false);
-    expect(a.arriba(t("Alt"))).toBe(false);
+    a.down(t("Alt"));
+    a.down(t("F4"));
+    expect(a.up(t("F4"))).toBe(false);
+    expect(a.up(t("Alt"))).toBe(false);
   });
 
-  it("AltGraph no es Alt: escribe @ y # en un teclado español", () => {
+  it("AltGraph is not Alt: it types @ and # on a Spanish keyboard", () => {
     const a = new AltSolo();
-    a.abajo(t("AltGraph"));
-    expect(a.arriba(t("AltGraph"))).toBe(false);
+    a.down(t("AltGraph"));
+    expect(a.up(t("AltGraph"))).toBe(false);
   });
 
-  it("con otro modificador bajado no se arma", () => {
+  it("with another modifier held down it doesn't arm", () => {
     const a = new AltSolo();
-    a.abajo(t("Alt", { ctrlKey: true }));
-    expect(a.arriba(t("Alt"))).toBe(false);
+    a.down(t("Alt", { ctrlKey: true }));
+    expect(a.up(t("Alt"))).toBe(false);
   });
 
-  it("un clic o perder el foco en medio lo desarma", () => {
+  it("a click or losing focus in between disarms it", () => {
     const a = new AltSolo();
-    a.abajo(t("Alt"));
-    a.soltar();
-    expect(a.arriba(t("Alt"))).toBe(false);
+    a.down(t("Alt"));
+    a.release();
+    expect(a.up(t("Alt"))).toBe(false);
   });
 
-  it("un soltar suelto no dispara nada", () => {
-    expect(new AltSolo().arriba(t("Alt"))).toBe(false);
+  it("a release with no prior press fires nothing", () => {
+    expect(new AltSolo().up(t("Alt"))).toBe(false);
   });
 });

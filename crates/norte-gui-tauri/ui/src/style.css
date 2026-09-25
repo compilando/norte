@@ -1,18 +1,19 @@
-/* Todo el color sale del tema resuelto EN RUST: estas variables las escribe
-   `applyTheme()` con lo que el host proyecta. Lo que hay aquí es geometría. */
+/* All color comes from the theme resolved IN RUST: these variables are
+   written by `applyTheme()` with what the host projects. What is here is
+   geometry. */
 :root {
   --cell-w: 8px;
   --cell-h: 22px;
-  /* El ancho de la barra de actividad (puente 84), el de VS Code. Lo que
-     RESERVA es `--activity-w`, que el renderer pone a esto o a cero. */
+  /* The activity bar's width (bridge 84), VS Code's. What it RESERVES is
+     `--activity-w`, which the renderer sets to this or to zero. */
   --activity-size: 48px;
-  /* Tipografía EMPAQUETADA (spec 2026-09-11, V1): JetBrains Mono para lo
-     que se alinea en celdas —listados, visor— e Inter para
-     el cromo —menús, diálogos, paleta—. Las dos van dentro del bundle
-     (`@fontsource`, OFL), así que la ventana se ve igual en una máquina sin
-     fuentes instaladas. `[ui] mono_font` y `[ui] font` siguen mandando: son
-     `--mono` y `--ui-font`, que `applyAppearance()` escribe en el raíz, y
-     aquí solo se les pone la pila de respaldo detrás. */
+  /* BUNDLED typography (spec 2026-09-11, V1): JetBrains Mono for what
+     aligns in cells — listings, viewer — and Inter for
+     the chrome — menus, dialogs, palette. Both ship inside the bundle
+     (`@fontsource`, OFL), so the window looks the same on a machine with no
+     fonts installed. `[ui] mono_font` and `[ui] font` still rule: they are
+     `--mono` and `--ui-font`, which `applyAppearance()` writes on the root,
+     and here they are only given the fallback stack behind them. */
   --font-mono: var(
     --mono,
     "JetBrains Mono",
@@ -34,24 +35,24 @@
   );
   --bg: #101216;
   --fg: #d8dee9;
-  /* La paleta del panel de TERMINAL (#362). Son los dieciséis de siempre, y
-     existen como variables porque el host manda los colores del shell SIN
-     resolver: dice «color 4» y qué azul sea eso se decide aquí, que es donde
-     vive el tema. Un tema que las redefina cambia el panel; uno que no, se
-     queda con éstas.
+  /* The TERMINAL panel's palette (#362). The usual sixteen, and they exist
+     as variables because the host sends the shell's colors UNRESOLVED: it
+     says "color 4" and which blue that is gets decided here, which is where
+     the theme lives. A theme that redefines them changes the panel; one
+     that does not keeps these.
 
-     Los 240 restantes del 256 no están: un tema no los elige uno a uno, y lo
-     que hace un navegador con una `var()` que no existe es heredar el color
-     de arriba, que para un fragmento de terminal es exactamente lo razonable
-     —se ve el texto— en vez de desaparecer.
+     The other 240 of the 256 are not here: a theme does not choose them one
+     by one, and what a browser does with a `var()` that does not exist is
+     inherit the color above, which for a terminal fragment is exactly the
+     reasonable thing — the text is visible — instead of disappearing.
 
-     El fondo y el primer plano por defecto NO están aquí: son `--bg` y `--fg`,
-     los del tema. Tenerlos aparte era tener dos nombres para el mismo color
-     con los mismos dígitos escritos dos veces, y además un par de perillas que
-     ningún tema alimenta — que es lo que el guardián de variables detectó. Un
-     terminal sin colores puestos se ve como el resto de la ventana, y eso es
-     lo correcto: el `ColorTerm::PorDefecto` del host significa exactamente
-     «el que toque aquí». */
+     The default background and foreground are NOT here: they are `--bg` and
+     `--fg`, the theme's. Having them apart meant two names for the same
+     color with the same digits written twice, plus a couple of knobs no
+     theme feeds — which is what the variable guard caught. A terminal with
+     no colors set looks like the rest of the window, and that is correct:
+     the host's `ColorTerm::PorDefecto` means exactly "whatever applies
+     here". */
   --term-0: #3b4252;
   --term-1: #bf616a;
   --term-2: #a3be8c;
@@ -86,18 +87,18 @@
   --warning-fg: #e5c07b;
   --info-fg: #61afef;
 
-  /* El CROMO (spec 2026-09-11, F2) no se declara aquí: se DERIVA en el sitio
-     donde se gasta, con `var(--hover, var(--panel-focus-bg))`.
+  /* The CHROME (spec 2026-09-11, F2) is not declared here: it is DERIVED at
+     the point where it is spent, with `var(--hover, var(--panel-focus-bg))`.
 
-     Es a propósito, y el motivo es que estos diez roles no están en
-     `Role::CORE`: un tema puede callarlos, y los ocho presets de siempre los
-     callan. Su valor sensato no se puede escribir como literal —un `hover`
-     correcto es «el fondo del panel con foco de ESTE tema»— así que un
-     `:root` con un defecto fijo se lo impondría a las ocho paletas. Derivado
-     en el punto de uso, un tema que no los nombra sigue pintando exactamente
-     lo que pintaba.
+     On purpose, and the reason is that these ten roles are not in
+     `Role::CORE`: a theme can leave them unset, and the eight usual presets
+     do. Their sensible value cannot be written as a literal — a correct
+     `hover` is "THIS theme's focused pane background" — so a `:root` with a
+     fixed default would impose it on the eight palettes. Derived at the
+     point of use, a theme that does not name them keeps painting exactly
+     what it painted.
 
-     La tabla, para que esté en UN sitio:
+     The table, so it lives in ONE place:
 
        --separator         → --border
        --hover             → --panel-focus-bg
@@ -111,8 +112,8 @@
        --badge-fg          → --selection-fg
        --widget-shadow     → rgb(0 0 0 / 35%)
 
-     `tests/variables_de_tema.rs` comprueba que cada nombre existe en el
-     acuerdo del host y que ninguno se queda sin gastar. */
+     `tests/variables_de_tema.rs` checks that every name exists in the
+     host's agreement and that none is left unspent. */
 }
 
 * {
@@ -126,24 +127,24 @@ body {
   overflow: hidden;
   background: var(--bg);
   color: var(--fg);
-  /* La base es la MONOESPACIADA: esta ventana se reparte en celdas, y todo
-     lo que no diga otra cosa se alinea con el listado. `[ui] font_size` si
-     la configuración lo dice; 14 px es lo que hoy usan los terminales que
-     la gente elige (WezTerm, Ghostty, Kitty) con una fila de 22 px. */
+  /* The base is MONOSPACE: this window is laid out in cells, and anything
+     that does not say otherwise aligns with the listing. `[ui] font_size`
+     if the configuration says so; 14px is what the terminals people choose
+     today (WezTerm, Ghostty, Kitty) use with a 22px row. */
   font-family: var(--font-mono);
   font-size: var(--ui-font-size, 14px);
   line-height: var(--cell-h);
-  /* Numerales tabulares: un tamaño y una fecha con dígitos del mismo ancho
-     forman columna aunque la fuente elegida sea proporcional. Y sin
-     ligaduras en un listado: `->` o `!=` dentro de un nombre de fichero son
-     dos caracteres y tienen que verse como dos. */
+  /* Tabular numerals: a size and a date with digits of the same width form
+     a column even if the chosen font is proportional. And no ligatures in
+     a listing: `->` or `!=` inside a file name are two characters and have
+     to look like two. */
   font-variant-numeric: tabular-nums;
   font-variant-ligatures: none;
 }
 
-/* El cromo lleva la proporcional: lo que se lee como texto, no lo que se
-   alinea en columnas. Los paneles, el visor, la barra de teclas y la salida
-   de un programa se quedan con la monoespaciada del cuerpo. */
+/* The chrome carries the proportional font: what reads as text, not what
+   aligns in columns. Panels, the viewer, the key bar and a program's output
+   keep the body's monospace one. */
 .menubar,
 .menu-items,
 .panelbar,
@@ -158,24 +159,24 @@ body {
 
 #screen {
   position: relative;
-  /* La barra de actividad reserva su columna igual que las barras de arriba
-     su fila: con un margen, y el ancho que se declara al host ya sin ella. */
+  /* The activity bar reserves its column the same way the bars up top
+     reserve their row: with a margin, and the width declared to the host
+     already excludes it. */
   width: calc(100vw - var(--activity-w, 0px));
   margin-left: var(--activity-w, 0px);
-  /* La barra de menús RESERVA su fila, no la tapa: el reparto que el host
-     calcula cuenta con la altura que este elemento diga, así que una barra
-     flotante encima escondería la primera fila del listado. Se aparta con un
-     MARGEN porque la barra está `fixed` —tiene que ir después en el
-     documento para pintar por encima de los paneles— y por tanto no ocupa
-     sitio en el flujo. Con `[ui] menu_bar` apagada la variable es cero y no
-     se pierde nada. */
+  /* The menu bar RESERVES its row, it does not cover it: the layout the
+     host computes counts on the height this element states, so a floating
+     bar on top would hide the listing's first row. Set apart with a MARGIN
+     because the bar is `fixed` — it has to come later in the document to
+     paint over the panels — and therefore takes no space in the flow. With
+     `[ui] menu_bar` off the variable is zero and nothing is lost. */
   height: calc(100vh - var(--menubar-h, 0px) - var(--panelbar-h, 0px));
   margin-top: calc(var(--menubar-h, 0px) + var(--panelbar-h, 0px));
 }
 
-/* La barra de paneles (#324): una fila fija bajo la de menús, reservada
-   igual que ella (ver `#screen`). Va ANTES de `#menu` en el documento para
-   que el desplegable del menú se pinte por encima. */
+/* The panel bar (#324): a fixed row under the menu bar, reserved the same
+   way (see `#screen`). Goes BEFORE `#menu` in the document so the menu's
+   dropdown paints over it. */
 .panelbar {
   position: fixed;
   top: var(--menubar-h, 0px);
@@ -194,10 +195,10 @@ body {
 
 .panelbar-button {
   font: inherit;
-  /* `--fg`, no `--status-fg`: el de la barra de estado es texto OSCURO
-     sobre fondo vivo, y aquí el fondo es el del panel — en los temas
-     ámbar/CRT los botones cerrados salían invisibles (2026-09-11). Cerrado
-     = atenuado, como en la TUI. */
+  /* `--fg`, not `--status-fg`: the status bar's is DARK text over a bright
+     background, and here the background is the panel's — on the amber/CRT
+     themes the closed buttons came out invisible (2026-09-11). Closed =
+     dimmed, as in the TUI. */
   color: var(--fg);
   opacity: 0.7;
   background: none;
@@ -220,14 +221,14 @@ body {
   text-decoration: underline;
 }
 
-/* `[ui] panel_bar_style = "letters"`: la fila de siempre, solo la letra. */
+/* `[ui] panel_bar_style = "letters"`: the usual row, letter only. */
 .panelbar[data-names="false"] .panelbar-name {
   display: none;
 }
 
-/* Tres estilos para tres estados, como en la TUI: abierto con el color de
-   título, y con el TECLADO con el de selección — «a dónde van mis teclas» es
-   la mitad de lo que se pregunta al mirar la barra. */
+/* Three styles for three states, as in the TUI: open with the title's
+   color, and with the KEYBOARD with the selection's — "where do my keys go"
+   is half of what gets asked when looking at the bar. */
 .panelbar-button[data-state="open"] {
   color: var(--title-fg, inherit);
   opacity: 1;
@@ -244,9 +245,9 @@ body {
   font-weight: bold;
 }
 
-/* La barra de actividad (puente 84): la misma barra en COLUMNA, en el borde
-   izquierdo, como la de VS Code. Reserva su ancho igual que la fila su alto
-   (ver `#screen`); el host reparte sobre lo que queda. */
+/* The activity bar (bridge 84): the same bar in a COLUMN, on the left edge,
+   like VS Code's. Reserves its width the same way the row reserves its
+   height (see `#screen`); the host lays out over what is left. */
 .panelbar[data-vertical="true"] {
   top: var(--menubar-h, 0px);
   bottom: 0;
@@ -268,8 +269,8 @@ body {
   height: var(--activity-size);
   padding: 0;
   opacity: 0.55;
-  /* El indicador de estado es un borde a la izquierda, no un fondo: el
-     icono tiene que seguir leyéndose sobre el panel. */
+  /* The state indicator is a border on the left, not a background: the
+     icon still has to read over the panel. */
   border-left: 2px solid transparent;
 }
 
@@ -299,15 +300,15 @@ body {
   stroke-linejoin: round;
 }
 
-/* Un panel sin icono propio (el de un plugin) enseña su letra, sin el
-   subrayado de la fila: aquí no hay nombre en el que marcarla. */
+/* A panel with no icon of its own (a plugin's) shows its letter, without
+   the row's underline: there is no name here to mark it in. */
 .panelbar[data-vertical="true"] .panelbar-letter {
   font-family: var(--font-ui);
   font-size: 18px;
   text-decoration: none;
 }
 
-/* La insignia: la cifra de novedades sobre la esquina del icono. */
+/* The badge: the novelty count over the icon's corner. */
 .panelbar[data-vertical="true"] .panelbar-attention {
   position: absolute;
   right: 6px;
@@ -324,20 +325,21 @@ body {
   color: var(--button-fg, var(--fg));
 }
 
-/* `#menu` no se posiciona: sus tres hijos son `fixed` y se colocan contra la
-   ventana. Es un ancla en el documento, y lo único que aporta es su SITIO —
-   después de la pantalla y antes de los overlays. */
+/* `#menu` is not positioned: its three children are `fixed` and are placed
+   against the window. It is an anchor in the document, and all it
+   contributes is its SPOT — after the screen and before the overlays. */
 
 .menubar {
-  /* FIJA arriba, por dos razones que apuntan al mismo sitio. El contenedor va
-     DESPUÉS de `#screen` en el documento —que es lo que hace que el
-     desplegable se pinte sobre los paneles en vez de debajo— así que en el
-     flujo caería al fondo de la pantalla. Y `fixed` es posicionado, que es lo
-     que la deja por encima del velo que cierra al pulsar fuera: el velo
-     también lo es, y entre posicionados manda el orden del documento — sin
-     esto el velo tapaba la propia barra y pulsar otro título con un menú
-     abierto cerraba en vez de cambiar de menú. Aquí no hay `z-index` en
-     ninguna parte, y esto es lo que lo sustituye. */
+  /* PINNED to the top, for two reasons that point to the same spot. The
+     container goes AFTER `#screen` in the document — which is what makes
+     the dropdown paint over the panels instead of under them — so in the
+     flow it would fall to the bottom of the screen. And `fixed` is
+     positioned, which is what puts it above the veil that closes on an
+     outside click: the veil is positioned too, and among positioned
+     elements document order rules — without this the veil covered the bar
+     itself and clicking another title with a menu open closed it instead of
+     switching menus. There is no `z-index` anywhere here, and this is what
+     replaces it. */
   position: fixed;
   top: 0;
   left: 0;
@@ -360,8 +362,8 @@ body {
   unicode-bidi: isolate;
 }
 
-/* Los botones de disposición (ADR 0133): en el borde derecho de la barra,
-   un icono cada uno, como los de arriba a la derecha de VS Code. */
+/* The layout buttons (ADR 0133): on the bar's right edge, one icon each,
+   like VS Code's top-right ones. */
 .menubar-actions {
   display: flex;
   margin-left: auto;
@@ -393,8 +395,8 @@ body {
   height: 16px;
 }
 
-/* La barra de título propia (ADR 0136): el hueco libre arrastra, así que
-   no selecciona texto. */
+/* The window's own title bar (ADR 0136): the free space drags, so it does
+   not select text. */
 .menubar[data-titlebar="true"] {
   user-select: none;
   -webkit-user-select: none;
@@ -413,8 +415,8 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  /* El ancho de los del escritorio y de VS Code: un blanco fácil en la
-     esquina, que es donde el ratón va sin mirar. */
+  /* The desktop's and VS Code's width: an easy target in the corner, which
+     is where the mouse goes without looking. */
   width: 46px;
   height: 100%;
   padding: 0;
@@ -433,9 +435,9 @@ body {
   background: var(--hover, var(--panel-focus-bg));
 }
 
-/* Cerrar se enciende en rojo, como en todos los escritorios: es el único
-   de los tres que no se deshace. Rojo fijo y no del tema, porque es la
-   señal del sistema y no un color de norte. */
+/* Close lights up in red, as on every desktop: it is the only one of the
+   three that cannot be undone. Fixed red and not the theme's, because it is
+   the system's signal and not one of norte's colors. */
 .window-control[data-verb="close"]:hover {
   background: #c42b1c;
   color: #ffffff;
@@ -461,26 +463,28 @@ body {
   color: var(--selection-fg);
 }
 
-/* El velo se queda DEBAJO del desplegable por orden del documento, igual que
-   el resto de esta pantalla: aquí no hay `z-index` en ninguna parte. */
+/* The veil stays UNDER the dropdown by document order, same as the rest of
+   this screen: there is no `z-index` anywhere here. */
 .menu-veil {
   position: fixed;
   inset: 0;
 }
 
 .menu-items {
-  /* Contra la VENTANA y no contra `#menu`: el ancla vive al final del flujo
-     (ver arriba), así que un `absolute` colgaría el desplegable del pie de la
-     página. Justo debajo de la barra, que es de donde cuelga de verdad. */
+  /* Against the WINDOW and not `#menu`: the anchor lives at the end of the
+     flow (see above), so an `absolute` would hang the dropdown from the
+     page's footer. Right under the bar, which is what it really hangs
+     from. */
   position: fixed;
   top: var(--menubar-h, 0px);
-  /* Colgando de SU título: un desplegable que se abre siempre a la izquierda
-     no dice de qué menú es. La posición la MIDE el renderer sobre el título
-     pintado (`--menu-left`): la cuenta anterior, a `12ch` por título, era
-     aproximada —los títulos no miden lo mismo— y el error se sumaba hacia la
-     derecha, hasta que «Ayuda» abría su desplegable un título más allá. El
-     `calc` con el índice queda solo como fallback sin medida, y el `min`
-     acota para que no se salga por la derecha. */
+  /* Hanging from ITS OWN title: a dropdown that always opens to the left
+     does not say which menu it belongs to. The position is MEASURED by the
+     renderer over the painted title (`--menu-left`): the previous count, at
+     `12ch` per title, was approximate — titles do not all measure the same
+     — and the error added up going right, until "Help" opened its dropdown
+     one title further over. The `calc` with the index stays only as a
+     fallback with no measurement, and the `min` bounds it so it does not
+     spill off the right edge. */
   left: min(var(--menu-left, calc(var(--menu-open, 0) * 12ch)), calc(100vw - 34ch));
   margin: 0;
   padding: 4px 0;
@@ -520,9 +524,9 @@ body {
   color: var(--selection-fg);
 }
 
-/* Una entrada que esta ventana no ejecuta SIGUE saliendo, atenuada: el menú
-   es donde se ve qué existe, y esconderla convertiría una limitación en un
-   misterio. */
+/* An entry this window does not run STILL shows, dimmed: the menu is where
+   what exists gets seen, and hiding it would turn a limitation into a
+   mystery. */
 .menu-item[data-enabled="false"] {
   opacity: 0.55;
 }
@@ -531,21 +535,22 @@ body {
   opacity: 0.7;
 }
 
-/* Lo que borra, en el color de peligro: la mano que baja por el menú lo ve
-   ANTES de pulsarlo (ADR 0125). Bajo el cursor manda la selección, que es lo
-   que dice dónde estás. */
+/* Whatever deletes, in the danger color: the hand moving down the menu sees
+   it BEFORE clicking it (ADR 0125). Under the cursor the selection rules,
+   which is what says where you are. */
 .menu-item[data-role="destructive"]:not([data-current="true"]) {
   color: var(--error-fg);
 }
 
-/* Lo que hace una IA lleva su marca: lo que propone no lo decidió norte. */
+/* Whatever an AI does carries its mark: what it proposes was not decided by
+   norte. */
 .menu-item[data-role="ai"] .menu-label::after {
   content: " ✦";
   opacity: 0.8;
 }
 
-/* Una sección: raya fina, y su rótulo apagado encima si lo tiene. No es
-   pulsable, así que ni cursor de mano ni relleno de entrada. */
+/* A section: a thin rule, and its dimmed label above it if it has one. Not
+   clickable, so neither a hand cursor nor entry padding. */
 .menu-section {
   margin: 3px 0;
   border-top: 1px solid var(--separator, var(--border));
@@ -554,8 +559,8 @@ body {
 
 .menu-section[data-titled="true"] {
   border-top: none;
-  /* A la misma sangría que el texto de las entradas (4 de margen + 12 de
-     relleno): un rótulo que empieza antes que lo que rotula se lee suelto. */
+  /* At the same indent as the entries' text (4 margin + 12 padding): a
+     label that starts before what it labels reads as loose. */
   padding: 4px 16px 0;
   font-size: 0.85em;
   color: var(--muted, var(--title-fg));
@@ -571,9 +576,9 @@ body {
   flex-direction: column;
 }
 
-/* Lo que está llegando a este directorio (ADR 0148): una línea de dos
-   píxeles en el borde inferior, como la de carga de un navegador. Sin texto,
-   sin ocupar una fila, y solo mientras hay trabajo. */
+/* What is arriving into this directory (ADR 0148): a two-pixel line on the
+   bottom border, like a browser's loading bar. No text, taking no row, and
+   only while there is work. */
 .slot[data-progress]::after {
   content: "";
   position: absolute;
@@ -595,9 +600,9 @@ body {
   background: var(--panel-focus-bg);
 }
 
-/* La barra de estado y la franja de tareas son FILAS del cromo, no paneles:
-   sin título —en un hueco de una fila el título se comía la fila entera y la
-   barra no se veía— y sin marco, a lo ancho, como la de VS Code. */
+/* The status bar and the task strip are chrome ROWS, not panels: no title —
+   in a one-row slot the title ate the whole row and the bar was not visible
+   — and no frame, full width, like VS Code's. */
 .slot[data-kind="status"],
 .slot[data-kind="tasks"] {
   border: 0;
@@ -621,29 +626,28 @@ body {
   min-height: 0;
 }
 
-/* El panel que NO tiene el teclado se atenúa (spec 2026-09-15, ADR 0115).
-   Con dos paneles gemelos, el borde de acento es lo único que dice a cuál
-   van las teclas, y en un tema donde `--border` y `--border-focus` se
-   parecen eso es un píxel de diferencia. Atenuar el contenido dice lo mismo
-   a un vistazo y desde el otro lado de la mesa.
+/* The panel that does NOT have the keyboard dims (spec 2026-09-15, ADR
+   0115). With two twin panels, the accent border is the only thing that
+   says which one the keys go to, and in a theme where `--border` and
+   `--border-focus` look alike that is a one-pixel difference. Dimming the
+   content says the same thing at a glance and from across the table.
 
-   Sobre el CONTENIDO, no sobre `.slot`: opacidad en el hueco entero apagaría
-   también su borde y su título, que son justo lo que tiene que seguir
-   legible.
+   On the CONTENT, not on `.slot`: opacity on the whole slot would also dim
+   its border and its title, which are exactly what has to stay legible.
 
-   Y solo sobre un LISTADO, que es lo que `.scroller` significa: los paneles
-   laterales sustituyen esa clase por la suya (`processes`, `tasks`,
-   `empty`). El rol no sirve para distinguirlos —el listado sin teclado se
-   queda sin rol cuando no hay destino que marcar, igual que un lateral—, así
-   que colgarlo del rol atenuaba el registro y hasta el panel de procesos
-   mientras tenían el teclado. */
+   And only on a LISTING, which is what `.scroller` means: the side panels
+   replace that class with their own (`processes`, `tasks`, `empty`). The
+   role does not work to tell them apart — a listing with no keyboard is
+   left with no role when there is no target to mark, just like a side
+   panel — so hanging it off the role dimmed the log and even the process
+   panel while they had the keyboard. */
 .slot:not([data-role="active"]) .scroller .canvas {
   opacity: var(--inactive-dim, 0.72);
 }
 
-/* La pantalla de arranque (puente 69, ADR 0115). Se pone DELANTE de todo,
-   con el mismo velo que un diálogo: mientras está puesta, nada de lo de
-   detrás responde, y un clic en cualquier sitio la quita. */
+/* The splash screen (bridge 69, ADR 0115). Placed IN FRONT of everything,
+   with the same veil as a dialog: while it is up, nothing behind it
+   responds, and a click anywhere dismisses it. */
 #splash[data-open="true"] {
   position: fixed;
   inset: 0;
@@ -667,9 +671,10 @@ body {
   border: 1px solid var(--border-focus);
 }
 
-/* La portada (`brief`, sin secciones): el logo ocupa la pantalla, sin marco y
-   sin fondo de panel. No se cierra —se quita con la primera tecla—, así que no
-   lleva el cromo de algo que haya que cerrar. */
+/* The cover (`brief`, no sections): the logo fills the screen, with no
+   frame and no panel background. It is not closed — it is dismissed with
+   the first key — so it carries none of the chrome of something that has
+   to be closed. */
 .splash[data-cover="true"] {
   width: 100%;
   max-width: none;
@@ -733,8 +738,9 @@ body {
   background: var(--hover, var(--panel-focus-bg));
 }
 
-/* El número ocupa su celda AUNQUE la fila no lo tenga: más allá de nueve la
-   fila se lee y no se promete, y sin el hueco los nombres bailarían. */
+/* The number occupies its cell EVEN IF the row does not have one: past nine
+   the row reads and promises nothing, and without the gap the names would
+   dance around. */
 .splash-number {
   flex: 0 0 2ch;
   color: var(--title-fg);
@@ -752,9 +758,9 @@ body {
   opacity: 0.8;
 }
 
-/* El avance de la task que lleva ESTA fila entre manos (puente 69): una
-   lámina de fondo bajo el nombre, no una barra que empuje al texto. El ancho
-   lo pone quien pinta la fila en `--pct`. */
+/* The progress of the task with THIS row in hand (bridge 69): a background
+   sheet under the name, not a bar that pushes the text aside. The width is
+   set by whoever paints the row, in `--pct`. */
 .row-progress {
   position: absolute;
   inset: 0 auto 0 0;
@@ -771,8 +777,9 @@ body {
   color: var(--title-fg);
   white-space: nowrap;
   overflow: hidden;
-  /* Fila: lo que se recorta es la RUTA, y lo que va detrás —el △ de hostil,
-     el aviso de entradas omitidas— no se encoge ni se sale de la vista. */
+  /* Row: what gets truncated is the PATH, and what comes after it — the
+     hostile △, the skipped-entries notice — neither shrinks nor falls out
+     of view. */
   display: flex;
   align-items: baseline;
 }
@@ -785,18 +792,19 @@ body {
   unicode-bidi: isolate;
 }
 
-/* El pie del listado: una fila bajo el desplazable, atenuada, que se recorta
-   por el final si no cabe. Oculta cuando `[ui] pane_footer` está apagado. */
+/* The listing's footer: a dimmed row under the scrollable area, truncated
+   from the end if it does not fit. Hidden when `[ui] pane_footer` is off. */
 .slot-footer {
   flex: 0 0 var(--cell-h);
-  /* Para el indicador de espacio, que se pega a su borde inferior. */
+  /* For the space indicator, which sticks to its bottom border. */
   position: relative;
   padding: 0 6px;
-  /* `muted`, no `--border` (spec 2026-09-11, F3). Esto es TEXTO —las cuentas
-     del panel y el espacio libre— y llevaba el color de un FILETE, que es
-     otra cosa: un tema cuyo borde es discreto contra su fondo, que es lo que
-     se le pide a un borde, hacía ilegible el pie. En `vscode-dark` eran
-     #2b2b2b sobre #1f1f1f. Atenuado sí, invisible no. */
+  /* `muted`, not `--border` (spec 2026-09-11, F3). This is TEXT — the
+     panel's counts and the free space — and it used to carry a RULE's
+     color, which is a different thing: a theme whose border is discreet
+     against its background, which is what a border is asked for, made the
+     footer unreadable. In `vscode-dark` that was #2b2b2b over #1f1f1f.
+     Dimmed yes, invisible no. */
   color: var(--muted, var(--title-fg));
   white-space: nowrap;
   overflow: hidden;
@@ -829,18 +837,17 @@ body {
   border-bottom: 1px solid var(--separator, var(--border));
 }
 
-/* Un panel que no es un listado no tiene columnas, y la fila vacía de su
-   cabecera se comía 22 px bajo cada título — el hueco en blanco que había
-   debajo de «Árbol», «Sitios» y «Registro» (captura del 2026-09-21). */
+/* A panel that is not a listing has no columns, and its header's empty row
+   ate 22px under every title — the blank gap that used to sit under
+   "Tree", "Places" and "Log" (2026-09-21 capture). */
 .slot-columns:empty {
   display: none;
 }
 
-/* El título de un PANEL (no de un listado, que lleva sus migas) como el de
-   una vista de VS Code: la fuente del cromo, un punto más pequeña y
-   atenuada, con un filete debajo. En su caja de siempre: el de «Detalles»
-   lleva una ruta, y cambiarle las mayúsculas a un nombre de fichero sería
-   enseñar otro nombre. */
+/* A PANEL's title (not a listing's, which carries its breadcrumbs) like a
+   VS Code view's: the chrome font, a point smaller and dimmed, with a rule
+   underneath. In its usual case: "Details"'s carries a path, and changing a
+   file name's capitalization would show a different name. */
 .slot:not([data-kind="browser"]) > .slot-title {
   font-family: var(--font-ui);
   font-size: 12px;
@@ -856,10 +863,10 @@ body {
   color: var(--title-fg);
 }
 
-/* Las cabeceras en VERSALITAS con un poco de aire (spec 2026-09-11, V2):
-   se distinguen de las filas sin gastar color, y con un ancho fijo se
-   recortan con elipsis como las celdas. `position: relative` es para el
-   tirador del borde. */
+/* Headers in SMALL CAPS with a bit of breathing room (spec 2026-09-11, V2):
+   told apart from rows without spending color, and with a fixed width they
+   ellipsis-truncate like the cells. `position: relative` is for the
+   border's grip. */
 .col {
   flex: 0 0 auto;
   opacity: 0.85;
@@ -878,8 +885,8 @@ body {
   flex: 1 1 auto;
 }
 
-/* El hueco de la casilla de marca, para que «Name» siga sobre los nombres
-   (ver `.row-check`). */
+/* The mark checkbox's gap, so "Name" stays over the names (see
+   `.row-check`). */
 .slot-columns::before {
   content: "";
   flex: 0 0 auto;
@@ -892,8 +899,8 @@ body {
   color: var(--border-focus);
 }
 
-/* El tirador del borde derecho de una cabecera: seis píxeles que cambian el
-   cursor. Arrastrarlo fija el ancho de la columna (`resize_column`). */
+/* A header's right-border grip: six pixels that change the cursor.
+   Dragging it fixes the column's width (`resize_column`). */
 .col-grip {
   position: absolute;
   top: 0;
@@ -909,25 +916,25 @@ body {
   opacity: 0.6;
 }
 
-/* --- La barra de desplazamiento (spec 2026-09-11, F3) ------------------
+/* --- The scrollbar (spec 2026-09-11, F3) --------------------------------
 
-   Superpuesta y sin flechas, como la del editor que estos temas imitan.
-   Hasta ahora no la estilizaba NADIE, así que la ventana enseñaba la de
-   WebKitGTK: el delator visual más ruidoso de todos, porque es cromo del
-   sistema metido en una ventana que por lo demás se pinta entera.
+   Overlaid and with no arrows, like the editor these themes imitate. Until
+   now NOBODY styled it, so the window showed WebKitGTK's: the noisiest
+   visual tell of all, because it is system chrome stuck inside a window
+   that otherwise paints itself whole.
 
-   La regla es GLOBAL y no una lista de selectores a propósito. Hay catorce
-   superficies con scroll en esta hoja (`.scroller`, `.tasks`,
+   The rule is GLOBAL and not a list of selectors, on purpose. There are
+   fourteen scrolling surfaces on this sheet (`.scroller`, `.tasks`,
    `.palette-rows`, `.help-topics`, `.help-body`, `.settings-rows`,
    `.extensions-rows`, `.extensions-pane`, `.profiles-rows`, `.metadata`,
-   `.processes`, `.tree`, `.places`, `.search-rows`) y enumerarlas garantiza
-   que la decimoquinta nazca con la barra del sistema y que nadie se entere:
-   un fallo que no se ve no se arregla.
+   `.processes`, `.tree`, `.places`, `.search-rows`) and listing them
+   guarantees the fifteenth is born with the system's bar and nobody
+   notices: a failure you cannot see does not get fixed.
 
-   El canal mide 14 px y el deslizador 8: los 3 px de cada lado son un borde
-   TRANSPARENTE con `background-clip: padding-box`, no un `width` menor. Con
-   `width` el resto del canal dejaría de ser zona de arrastre, y arrastrar el
-   borde de la barra es justo lo que hace todo el mundo. */
+   The track measures 14px and the thumb 8: the 3px on each side are a
+   TRANSPARENT border with `background-clip: padding-box`, not a smaller
+   `width`. With `width` the rest of the track would stop being a drag
+   zone, and dragging the bar's edge is exactly what everyone does. */
 ::-webkit-scrollbar {
   width: 14px;
   height: 14px;
@@ -936,7 +943,7 @@ body {
 
 ::-webkit-scrollbar-thumb {
   background: var(--scrollbar-slider, var(--border));
-  /* Cuadrado a propósito: el del editor no tiene radio. */
+  /* Square on purpose: the editor's has no radius. */
   border-radius: 0;
   border: 3px solid transparent;
   background-clip: padding-box;
@@ -945,13 +952,14 @@ body {
 
 ::-webkit-scrollbar-thumb:hover,
 ::-webkit-scrollbar-thumb:active {
-  /* Al pasar por encima manda el acento del panel con foco, que es el
-     color que este tema ya usa para «esto responde». */
+  /* On hover the focused panel's accent rules, which is the color this
+     theme already uses for "this responds". */
   background: var(--border-focus);
   background-clip: padding-box;
 }
 
-/* Ni flechas ni esquina: ocupan sitio y no existen en lo que esto imita. */
+/* No arrows and no corner: they take up space and do not exist in what
+   this imitates. */
 ::-webkit-scrollbar-button,
 ::-webkit-scrollbar-corner {
   display: none;
@@ -965,10 +973,10 @@ body {
   outline: none;
 }
 
-/* La regla de marcas (ADR 0135), como la de VS Code junto a la barra: tres
-   píxeles a la derecha, bajo el deslizador, con una banda donde hay marcas
-   en el listado ENTERO. Es un fondo: el de un elemento con scroll no se
-   mueve con el contenido. La imagen, con su color, la compone el renderer
+/* The mark ruler (ADR 0135), like VS Code's next to the bar: three pixels
+   on the right, under the thumb, with a band where there are marks in the
+   WHOLE listing. It is a background: a scrolling element's does not move
+   with the content. The image, with its color, is composed by the renderer
    (`markRulerImage`). */
 .scroller[data-ruler="true"] {
   background-image: var(--mark-ruler);
@@ -988,57 +996,59 @@ body {
   right: 0;
   height: var(--cell-h);
   display: flex;
-  /* Una CELDA entre columnas, como el separador del terminal: con anchos
-     fijos (puente 64) el hueco entre columnas es parte del reparto, y ocho
-     píxeles sueltos eran una celda que no cuadraba con nada. */
+  /* One CELL between columns, like the terminal's separator: with fixed
+     widths (bridge 64) the gap between columns is part of the layout, and
+     eight loose pixels were a cell that did not line up with anything. */
   gap: var(--cell-w);
   padding: 0 6px;
   white-space: nowrap;
   cursor: default;
 }
 
-/* El «pijama» (spec 2026-09-20): la banda de las filas impares, encendida
-   por `[ui] row_stripes`. El color lo pone el tema (`stripe`); sin él la
-   banda es transparente y el listado queda como estaba, que es el defecto.
+/* The "row stripes" (spec 2026-09-20): the odd rows' band, turned on by
+   `[ui] row_stripes`. The color is set by the theme (`stripe`); without it
+   the band is transparent and the listing stays as it was, which is the
+   default.
 
-   El `:where()` NO es cosmético y no se puede quitar: pone la especificidad
-   de este selector a CERO, que es lo único que hace que pierda contra el
-   puntero, el cursor y la marca. Sin él vale (0,4,0) y les gana a las cuatro
-   —que valen (0,2,0) y (0,3,0)— porque la cascada mira la especificidad
-   ANTES que el orden. El resultado medido con el tema de serie: la fila del
-   cursor en una línea impar quedaba con su `color` de selección (#1c1c1c)
-   sobre la banda (#232323), 1,05:1 de contraste, o sea el nombre del fichero
-   invisible en la mitad de las filas. La banda es una ayuda de lectura y
-   pierde contra todo lo que SIGNIFICA algo. */
+   The `:where()` is NOT cosmetic and cannot be removed: it sets this
+   selector's specificity to ZERO, which is the only thing that makes it
+   lose against the pointer, the cursor and the mark. Without it, it is
+   worth (0,4,0) and beats all four — worth (0,2,0) and (0,3,0) — because
+   the cascade looks at specificity BEFORE order. The measured result with
+   the stock theme: the cursor's row on an odd line was left with its
+   selection `color` (#1c1c1c) over the band (#232323), 1.05:1 contrast,
+   i.e. the file name invisible on half the rows. The band is a reading aid
+   and loses against anything that MEANS something. */
 :where(.canvas[data-stripes="true"] .row[data-odd="true"]) {
   background: var(--stripe-bg, transparent);
 }
 
-/* La fila bajo el PUNTERO (spec 2026-09-11, F3). Hasta ahora solo reaccionaba
-   la casilla de marca, y una lista que no responde al ratón se siente muerta
-   en una ventana.
+/* The row under the POINTER (spec 2026-09-11, F3). Until now only the mark
+   checkbox reacted, and a list that does not respond to the mouse feels
+   dead in a window.
 
-   Va ANTES del cursor y de la marca a propósito: `.row:hover` y
-   `.row[aria-selected="true"]` tienen la MISMA especificidad (0,2,0), así que
-   decide el orden de aparición. Puesto después, el ratón taparía al cursor y
-   la ventana dejaría de decir a dónde van las teclas — que es lo único que
-   esa fila está ahí para decir. */
+   Placed BEFORE the cursor and the mark on purpose: `.row:hover` and
+   `.row[aria-selected="true"]` have the SAME specificity (0,2,0), so
+   appearance order decides. Placed after, the mouse would cover the
+   cursor and the window would stop saying where the keys go — which is
+   the only thing that row is there to say. */
 .row:hover {
   background: var(--hover, var(--panel-focus-bg));
 }
 
-/* El cursor lleva un borde de ACENTO a la izquierda (spec 2026-09-11, V2)
-   además del fondo: en un tema donde selección y fondo se parecen, el
-   borde es lo que dice dónde está. Como sombra interior, no como borde:
-   un borde real movería el texto de esa fila tres píxeles. */
+/* The cursor carries an ACCENT border on the left (spec 2026-09-11, V2) in
+   addition to the background: in a theme where selection and background
+   look alike, the border is what says where it is. As an inset shadow,
+   not as a border: a real border would shift that row's text three
+   pixels. */
 .row[aria-selected="true"] {
   background: var(--selection-bg);
   color: var(--selection-fg);
   box-shadow: inset 3px 0 0 var(--border-focus);
 }
 
-/* El cursor de un panel SIN foco: presente pero apagado, para que dos
-   cursores no compitan por decir a dónde van las teclas. */
+/* An UNFOCUSED panel's cursor: present but dimmed, so two cursors do not
+   compete to say where the keys go. */
 [aria-current="false"] .row[aria-selected="true"] {
   background: var(--selection-unfocused-bg);
   color: var(--selection-unfocused-fg);
@@ -1049,8 +1059,8 @@ body {
   background: var(--mark-bg);
 }
 
-/* Marcada Y bajo el cursor: el acento del cursor y, detrás, la franja de
-   la marca. Dos sombras interiores; la primera pinta encima. */
+/* Marked AND under the cursor: the cursor's accent and, behind it, the
+   mark's stripe. Two inset shadows; the first one paints on top. */
 .row[aria-selected="true"][data-marked="true"] {
   background: var(--selection-bg);
   box-shadow:
@@ -1058,10 +1068,10 @@ body {
     inset 6px 0 0 var(--mark-bg);
 }
 
-/* La casilla de marca (spec 2026-09-11, V2): un hueco reservado en cada
-   fila que solo se pinta al pasar el ratón o cuando la fila está marcada.
-   Pulsarla alterna la marca sin Ctrl, que es lo que quien viene del
-   escritorio busca. Reservado siempre, para que los nombres no salten. */
+/* The mark checkbox (spec 2026-09-11, V2): a gap reserved in every row that
+   only paints on mouseover or when the row is marked. Clicking it toggles
+   the mark with no Ctrl, which is what someone coming from the desktop
+   expects. Always reserved, so names do not jump around. */
 .row-check {
   flex: 0 0 auto;
   width: 1.1em;
@@ -1076,23 +1086,23 @@ body {
   opacity: 0.9;
 }
 
-/* Un cambio de cursor o de marca se desliza 80 ms; nada si el escritorio o
-   `[ui] reduce_motion` piden quietud (ver el bloque del final). */
+/* A cursor or mark change slides over 80ms; nothing if the desktop or
+   `[ui] reduce_motion` ask for stillness (see the block at the end). */
 .row {
   transition:
     background-color 80ms ease-out,
     box-shadow 80ms ease-out;
 }
 
-/* El nombre y lo que lo decora. Es el que CRECE, así que el nombre de dentro
-   se recorta con elipsis sin empujar fuera de la vista ni el △ de hostil ni
-   la insignia de un plugin — que desaparecerían en silencio, y una insignia
-   que desaparece dice lo contrario de lo que hay. */
+/* The name and what decorates it. It is the one that GROWS, so the name
+   inside ellipsis-truncates without pushing the hostile △ or a plugin's
+   badge out of view — they would disappear silently, and a badge that
+   disappears says the opposite of what is there. */
 .name-block {
   flex: 1 1 auto;
-  /* El suelo del nombre es el del reparto compartido (`NAME_MIN`, diez
-     celdas): por debajo, un listado no se lee. Quien no cabe es la columna
-     de la derecha, que la cabecera descarta (ver `paintHeader`). */
+  /* The name's floor is the shared layout's (`NAME_MIN`, ten cells): below
+     that, a listing does not read. What does not fit is the column on the
+     right, which the header drops (see `paintHeader`). */
   min-width: calc(var(--cell-w) * 10);
   display: flex;
   align-items: baseline;
@@ -1103,18 +1113,18 @@ body {
   flex: 0 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
-  /* Un nombre en escritura RTL —hebreo, árabe— es legítimo y NO lleva
-     controles, así que no viene marcado como hostil. Sin aislar, reordena la
-     línea entera y se lleva el badge y el `/` de directorio al otro lado del
-     nombre que marcan. */
+  /* A name in RTL script — Hebrew, Arabic — is legitimate and carries NO
+     controls, so it does not come marked as hostile. Without isolation, it
+     reorders the whole line and carries the badge and the directory's `/`
+     to the other side of the name they mark. */
   unicode-bidi: isolate;
 }
 
 .cell {
   flex: 0 0 auto;
   opacity: 0.75;
-  /* Con un ancho fijo (puente 64) la celda se recorta como el nombre. Sin
-     él, `width: auto` y nada de esto actúa. */
+  /* With a fixed width (bridge 64) the cell truncates like the name.
+     Without it, `width: auto` and none of this does anything. */
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -1124,26 +1134,27 @@ body {
   opacity: 0.6;
 }
 
-/* La columna de iconos (puente 62): ancho fijo de dos celdas y un espacio,
-   ANTES del nombre, en todas las filas del hueco en cuanto una tiene icono.
-   Aislada porque es texto de un plugin pegado a un nombre de fichero. El
-   color es el de la entrada: un icono dice qué es, no en qué estado está. */
+/* The icon column (bridge 62): a fixed width of two cells and a space,
+   BEFORE the name, across every row of the slot as soon as one has an
+   icon. Isolated because it is a plugin's text glued to a file name. The
+   color is the entry's: an icon says what it is, not what state it is in. */
 .cell-icon {
   flex: 0 0 auto;
   width: calc(var(--cell-w) * 3);
   overflow: hidden;
   white-space: nowrap;
   unicode-bidi: isolate;
-  /* Los glifos Nerd (`file-icons`, `style = nerd`) salen de la fuente de
-     símbolos empaquetada, que solo tiene esos codepoints privados: todo lo
-     demás —emoji, ASCII— cae a la pila del cuerpo. */
+  /* The Nerd glyphs (`file-icons`, `style = nerd`) come from the bundled
+     symbol font, which only carries those private codepoints: everything
+     else — emoji, ASCII — falls back to the body's stack. */
   font-family: "Symbols Nerd Font Mono", var(--font-mono);
 }
 
-/* Symbols Nerd Font Mono (MIT), RECORTADA a los glifos que el plugin
-   `file-icons` usa en sus estilos `nerd` y `seti` (unos KB en woff2, frente a
-   los 2,6 MB de la fuente entera). Cómo se regenera está en
-   `ui/src/fonts/README.md`; añadir un glifo al plugin es añadirlo ahí. */
+/* Symbols Nerd Font Mono (MIT), TRIMMED to the glyphs the `file-icons`
+   plugin uses in its `nerd` and `seti` styles (a few KB in woff2, against
+   the whole font's 2.6MB). How it is regenerated is in
+   `ui/src/fonts/README.md`; adding a glyph to the plugin means adding it
+   there. */
 @font-face {
   font-family: "Symbols Nerd Font Mono";
   src: url("./fonts/symbols-nerd-mono-subset.woff2") format("woff2");
@@ -1171,9 +1182,9 @@ body {
   overflow: hidden;
 }
 
-/* La mitad derecha (ADR 0132): los elementos, pegados al borde. El host ya
-   los recortó por prioridad; aquí solo no se encogen, para que ceda la
-   mitad izquierda y no media palabra de un elemento. */
+/* The right half (ADR 0132): the elements, stuck to the edge. The host
+   already trimmed them by priority; here they just do not shrink, so the
+   left half gives way and not half a word of an element. */
 .status-items {
   display: flex;
   flex: 0 0 auto;
@@ -1195,8 +1206,8 @@ body {
   transition: background-color 0.12s;
 }
 
-/* La barra de estado con la fuente del cromo, como la de VS Code: son datos
-   sueltos, no columnas que alinear con el listado. */
+/* The status bar with the chrome's font, like VS Code's: they are loose
+   data, not columns to align with the listing. */
 .statusbar {
   font-family: var(--font-ui);
   font-size: 12px;
@@ -1214,9 +1225,8 @@ button.status-item:hover {
   color: var(--warning-fg);
 }
 
-/* La barra de progreso ligera del item de tareas (ADR 0146): fina, detrás
-   del texto, del ancho de diez celdas del terminal para que el reparto de
-   la barra de estado sea el mismo. */
+/* The tasks item's thin progress bar (ADR 0146): slim, behind the text,
+   ten terminal cells wide so the status bar's layout is the same one. */
 .status-bar {
   display: inline-block;
   position: relative;
@@ -1270,8 +1280,8 @@ button.status-item:hover {
   gap: 8px;
 }
 
-/* El asistente de primer arranque (puente 63): un velo a pantalla completa
-   con una caja en el centro, como la paleta. */
+/* The first-run wizard (bridge 63): a full-screen veil with a box in the
+   center, like the palette. */
 #wizard[data-open="true"] {
   position: fixed;
   inset: 0;
@@ -1343,8 +1353,8 @@ button.status-item:hover {
   display: none;
 }
 
-/* «Ir a» (#357): la cabecera de cada sección. No es una fila: no se elige, y
-   se lee como el título de lo que hay debajo. */
+/* "Go to" (#357): each section's header. Not a row: it is not chosen, and
+   it reads as the title of what is below it. */
 .goto-header {
   padding: 0.35em 0.75em 0.15em;
   font-size: 0.85em;
@@ -1359,8 +1369,8 @@ button.status-item:hover {
   max-height: 70vh;
   display: flex;
   flex-direction: column;
-  /* Un WIDGET flotante, no un panel: se apoya sobre el fondo base y por eso
-     lleva su propia superficie (spec 2026-09-11, F3). */
+  /* A floating WIDGET, not a panel: it rests over the base background and
+     that is why it carries its own surface (spec 2026-09-11, F3). */
   background: var(--widget-bg, var(--panel-bg));
   border: 1px solid var(--separator, var(--border));
   border-radius: 8px;
@@ -1371,9 +1381,9 @@ button.status-item:hover {
   animation: norte-emerge 110ms ease-out;
 }
 
-/* Lo que se abre ENCIMA —paleta, menú, diálogo— aparece con un deslizamiento
-   corto, no de golpe: dice de dónde sale sin hacer esperar a nadie. Con el
-   movimiento reducido, de golpe (ver al final). */
+/* Whatever opens ON TOP — palette, menu, dialog — appears with a short
+   slide, not all at once: it says where it comes from without making
+   anyone wait. With reduced motion, all at once (see the end). */
 @keyframes norte-emerge {
   from {
     opacity: 0;
@@ -1393,9 +1403,10 @@ button.status-item:hover {
   padding: 0 10px;
   border-bottom: 1px solid var(--separator, var(--border));
   display: flex;
-  /* El texto va PEGADO al `>` y la cuenta a la derecha: con
-     `space-between` el `::before`, el texto y la cuenta eran tres piezas
-     repartidas y lo tecleado salía centrado (captura del 2026-09-21). */
+  /* The text stays GLUED to the `>` and the count to the right: with
+     `space-between` the `::before`, the text and the count were three
+     pieces spread out and what was typed came out centered (2026-09-21
+     capture). */
   gap: 0;
   unicode-bidi: isolate;
 }
@@ -1451,8 +1462,8 @@ button.status-item:hover {
   opacity: 0.55;
 }
 
-/* La etiqueta humana crece y se lee entera; el id va después, atenuado y a
-   ancho fijo. Es el mismo reparto que el terminal. */
+/* The human label grows and reads whole; the id comes after, dimmed and at
+   a fixed width. Same layout as the terminal's. */
 .palette-desc {
   flex: 1 1 auto;
   overflow: hidden;
@@ -1466,7 +1477,8 @@ button.status-item:hover {
   opacity: 0.6;
 }
 
-/* Una reciente va arriba por serlo, y lo dice con un punto delante. */
+/* A recent one goes up top for being recent, and says so with a dot in
+   front. */
 .palette-row[data-recent="true"]::before {
   content: "• ";
   color: var(--info-fg);
@@ -1553,12 +1565,12 @@ button.status-item:hover {
   overflow: hidden;
 }
 
-/* El texto sale de la PAREJA de la barra de estado, no de `title-fg`: sobre
-   `--status-bg` hay que usar el primer plano de ese mismo rol. Adivinándolo,
-   un tema cuya barra de estado es clara pintaba claro sobre claro y la
-   cabecera entera —ruta, encoding, EOL, pérdidas, columna— era invisible. El
-   respaldo mantiene legible una ventana contra un host que aún no manda
-   `status-fg`. */
+/* The text comes from the status bar's PAIR, not from `title-fg`: over
+   `--status-bg` that same role's foreground has to be used. Guessing it, a
+   theme whose status bar is light painted light on light and the whole
+   header — path, encoding, EOL, losses, column — was invisible. The
+   fallback keeps a window legible against a host that does not send
+   `status-fg` yet. */
 .viewer-head {
   flex: 0 0 var(--cell-h);
   padding: 0 6px;
@@ -1571,9 +1583,9 @@ button.status-item:hover {
   overflow: hidden;
 }
 
-/* La RUTA es lo único que cede sitio. Las marcas de la derecha —encoding,
-   «via ‹plugin›», el aviso de decodificación con pérdida— no se encogen: son
-   lo que hace honesto lo que se está enseñando. */
+/* The PATH is the only thing that gives up space. The marks on the right —
+   encoding, "via ‹plugin›", the lossy-decoding notice — do not shrink: they
+   are what makes what is being shown honest. */
 .viewer-path {
   flex: 1 1 auto;
   min-width: 0;
@@ -1592,28 +1604,29 @@ button.status-item:hover {
   opacity: 0.8;
 }
 
-/* El cuerpo y la barra vertical, en una fila. `min-height: 0` es lo que deja
-   que el `pre` se encoja dentro del flex en vez de empujar la caja. */
+/* The body and the vertical bar, in a row. `min-height: 0` is what lets the
+   `pre` shrink inside the flex instead of pushing the box outward. */
 .viewer-canvas {
   flex: 1 1 auto;
   display: flex;
   min-height: 0;
 }
 
-/* `bidi-override` y `direction: ltr`: el cuerpo del visor se pinta en orden
-   LÓGICO, como una rejilla de celdas de terminal, y no reordenado por el
-   algoritmo bidi del navegador.
+/* `bidi-override` and `direction: ltr`: the viewer's body is painted in
+   LOGICAL order, like a grid of terminal cells, and not reordered by the
+   browser's bidi algorithm.
 
-   El recorte horizontal lo hace el host en orden lógico —una sola vez, en el
-   modelo compartido—, así que un navegador que reordenara dejaría la misma
-   `first_col` enseñando cosas distintas en el terminal y en la ventana. Y
-   pasaría sin ninguna marca: una línea de LETRAS árabes o hebreas no lleva
-   controles bidi, así que nada se enmascara y `had_errors` es falso.
+   Horizontal truncation is done by the host in logical order — once, in
+   the shared model — so a browser that reordered would leave the same
+   `first_col` showing different things in the terminal and in the window.
+   And it would slip through with no mark at all: a line of Arabic or
+   Hebrew LETTERS carries no bidi controls, so nothing gets masked and
+   `had_errors` is false.
 
-   Es la misma renuncia que ya hace `must_mask` con los aislantes bidi
-   legítimos: honestidad de rejilla por encima de tipografía. El resto de
-   superficies de esta hoja usa `isolate`, que es lo correcto para un NOMBRE
-   dentro de una fila; esto no es un nombre, es un volcado. */
+   It is the same trade-off `must_mask` already makes with legitimate bidi
+   isolates: grid honesty over typography. The rest of this sheet's
+   surfaces use `isolate`, which is correct for a NAME inside a row; this
+   is not a name, it is a dump. */
 .viewer-body {
   flex: 1 1 auto;
   margin: 0;
@@ -1626,14 +1639,15 @@ button.status-item:hover {
   unicode-bidi: bidi-override;
 }
 
-/* Las barras del visor: INDICADORES, no controles. El host manda solo la
-   ventana visible, así que no hay nada que el scroll del navegador pueda
-   mover; lo que falta es decir cuánto hay y por dónde vas. */
-/* La PISTA con el borde apagado, no con `--status-bg`: pintar de verdad
-   destapó que en un tema con la barra de estado clara la pista salía como una
-   franja de color macizo cruzando la ventana, indistinguible de la cabecera.
-   Una pista es cromo — lo que informa es el pulgar. Es el mismo par que usa el
-   terminal (`BorderUnfocused` para la pista, `BorderFocus` para el pulgar). */
+/* The viewer's bars: INDICATORS, not controls. The host only sends the
+   visible window, so there is nothing the browser's scroll could move; what
+   is missing is saying how much there is and how far along you are. */
+/* The TRACK with the dimmed border, not `--status-bg`: painting it for real
+   uncovered that in a theme with a light status bar the track came out as a
+   solid band of color crossing the window, indistinguishable from the
+   header. A track is chrome — what informs is the thumb. Same pair the
+   terminal uses (`BorderUnfocused` for the track, `BorderFocus` for the
+   thumb). */
 .viewer-bar {
   position: relative;
   background: var(--border);
@@ -1679,8 +1693,8 @@ button.status-item:hover {
   align-items: center;
   justify-content: center;
   background: rgb(0 0 0 / 45%);
-  /* `[effects] backdrop = "blur"` del tema (spec 2026-09-11, V6): el host
-     lo traduce a `--dialog-backdrop`; sin él, el velo de siempre. */
+  /* The theme's `[effects] backdrop = "blur"` (spec 2026-09-11, V6): the
+     host translates it to `--dialog-backdrop`; without it, the usual veil. */
   backdrop-filter: var(--dialog-backdrop, none);
 }
 
@@ -1708,13 +1722,13 @@ button.status-item:hover {
   unicode-bidi: isolate;
 }
 
-/* El destino, separado del cuerpo y con su etiqueta: es OTRA cosa que las
-   rutas de abajo, y distinguirlo por posición o por un separador dentro del
-   texto es lo que permitía que un nombre de directorio simulara dos rutas. */
-/* La revisión de un plan de renombrado. Los dos nombres de una pareja van en
-   elementos hermanos y el separador lo pone ESTE archivo: un nombre puede
-   contener una flecha, y escrita en el texto la fila se leería como otra
-   pareja. */
+/* The destination, separate from the body and with its own label: it is
+   ANOTHER thing than the paths below, and telling it apart by position or
+   by a separator inside the text is what let a directory name simulate two
+   paths. */
+/* The review of a rename plan. The two names of a pair go in sibling
+   elements and the separator is set by THIS file: a name can contain an
+   arrow, and written in the text the row would read as a different pair. */
 .ai-rename {
   position: fixed;
   left: 50%;
@@ -1755,13 +1769,13 @@ button.status-item:hover {
   unicode-bidi: isolate;
 }
 
-/* Un nombre largo se PARTE, no se corta (#122). La terminal recorta con
-   elipsis MEDIA (46/46/44) para que la cola sobreviva; aquí no había recorte
-   ninguno, así que el div cortaba por la derecha y sin marca: dos nombres que
-   comparten un prefijo largo se pintaban idénticos en la única pantalla donde
-   el lector decide si aprueba el renombrado. `anywhere` porque un nombre de
-   fichero no tiene puntos de corte de palabra, y `pre-wrap` para que una
-   tirada de espacios —que es parte del nombre— siga viéndose. */
+/* A long name WRAPS, it does not get cut off (#122). The terminal truncates
+   with a MID ellipsis (46/46/44) so the tail survives; here there was no
+   truncation at all, so the div cut off on the right with no mark: two names
+   sharing a long prefix painted identical on the one screen where the
+   reader decides whether to approve the rename. `anywhere` because a file
+   name has no word-break points, and `pre-wrap` so a run of spaces — which
+   is part of the name — stays visible. */
 .ai-rename-from,
 .ai-rename-to {
   unicode-bidi: isolate;
@@ -1769,9 +1783,9 @@ button.status-item:hover {
   white-space: pre-wrap;
 }
 
-/* El destino, en su propia línea y con su propio color: separarlo del origen
-   con una flecha en la MISMA línea lo separaba con un glifo que un nombre
-   puede contener. */
+/* The destination, on its own line and with its own color: separating it
+   from the source with an arrow on the SAME line split it with a glyph a
+   name can contain. */
 .ai-rename-to {
   padding-left: 1.5em;
   color: var(--title-fg);
@@ -1794,8 +1808,8 @@ button.status-item:hover {
   color: var(--muted, var(--title-fg));
 }
 
-/* La revisión de un plan de ORGANIZAR (fase 8). Misma caja que la de
-   renombrar; lo que cambia es el cuerpo, que es un árbol. */
+/* The review of an ORGANIZE plan (phase 8). Same box as the rename one;
+   what changes is the body, which is a tree. */
 .organize {
   position: fixed;
   left: 50%;
@@ -1823,7 +1837,7 @@ button.status-item:hover {
   unicode-bidi: isolate;
 }
 
-/* El recuento, destacado: es lo que se lee para decidir. */
+/* The count, highlighted: it is what gets read to decide. */
 .organize-summary {
   color: var(--title-fg);
 }
@@ -1834,9 +1848,9 @@ button.status-item:hover {
   list-style: none;
 }
 
-/* El sangrado sale de `--depth`, que lo pone el pintor con el dato del host.
-   Escrito con espacios dentro del texto, un nombre que empezara por espacios
-   podría fingir estar más adentro de donde va a caer. */
+/* The indent comes from `--depth`, set by the painter with the host's data.
+   Written with spaces inside the text, a name starting with spaces could
+   pretend to sit further in than where it lands. */
 .organize-line {
   display: flex;
   gap: 0.4em;
@@ -1844,30 +1858,30 @@ button.status-item:hover {
   padding-left: calc(var(--depth, 0) * 1.5em);
 }
 
-/* Un nombre largo se PARTE, no se corta, por lo mismo que en la revisión de
-   renombrar: dos nombres con un prefijo largo no pueden pintarse idénticos en
-   la pantalla donde se decide. */
+/* A long name WRAPS, it does not get cut off, for the same reason as in the
+   rename review: two names with a long prefix cannot paint identical on
+   the screen where the decision is made. */
 .organize-name {
   unicode-bidi: isolate;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
 
-/* El marcador va en su propio elemento y con ancho fijo: así el árbol se lee
-   en columna, y ningún nombre puede ocupar su sitio. */
+/* The marker goes in its own element and at a fixed width: this way the
+   tree reads in a column, and no name can take its place. */
 .organize-mark {
   flex: 0 0 1em;
   color: var(--muted, var(--title-fg));
 }
 
-/* Una carpeta que se va a CREAR es la línea que más importa. */
+/* A folder about to be CREATED is the line that matters most. */
 .organize-new-dir > .organize-name,
 .organize-new-dir > .organize-mark {
   color: var(--title-fg);
   font-weight: 600;
 }
 
-/* Una que ya estaba acompaña: se atenúa para que no compita. */
+/* One that was already there tags along: dimmed so it does not compete. */
 .organize-existing-dir > .organize-name,
 .organize-existing-dir > .organize-mark {
   color: var(--muted, var(--title-fg));
@@ -1896,31 +1910,32 @@ button.status-item:hover {
   flex: 0 0 auto;
 }
 
-/* La lista está recortada. Se pinta como aviso porque lo es: la operación
-   toca más de lo que se lee. */
+/* The list is truncated. Painted as a warning because it is one: the
+   operation touches more than what is read. */
 .dialog-overflow {
   color: var(--hostile-fg);
   margin-top: 6px;
 }
 
-/* Del DESTINO: que no cabe (#149), que no sabe confinar (#164). Mismo peso
-   visual que el recorte y por el mismo motivo: las tres frases dicen que lo
-   que se va a hacer no es exactamente lo que se lee. */
+/* About the DESTINATION: that it does not fit (#149), that it cannot
+   confine (#164). Same visual weight as the truncation notice and for the
+   same reason: all three sentences say that what is about to happen is not
+   exactly what is being read. */
 .dialog-warning {
   color: var(--warning-fg);
   margin-top: 6px;
 }
 
-/* Todavía se está preguntando. Ocupa el mismo alto que un aviso para que la
-   respuesta no empuje los botones bajo el puntero al llegar. */
+/* Still asking. Takes up the same height as a warning so the answer does
+   not push the buttons out from under the pointer when it arrives. */
 .dialog-checking {
   color: var(--title-fg);
   margin-top: 6px;
 }
 
-/* Un campo de FORMULARIO (puente 91): etiqueta y control en una fila. La
-   casilla de un interruptor no se estira —`.dialog input` las quiere al 100 %
-   y una casilla de ancho completo no se lee como una casilla—. */
+/* A FORM field (bridge 91): label and control in one row. A toggle's
+   checkbox does not stretch — `.dialog input` wants them at 100% and a
+   full-width checkbox does not read as a checkbox. */
 .dialog-fields {
   display: flex;
   flex-direction: column;
@@ -1955,11 +1970,12 @@ button.status-item:hover {
   font: inherit;
 }
 
-/* El anillo de foco de un CONTROL (spec 2026-09-11, F3). Es `focus-border` y
-   no `border-focus`: aquel dice qué PANEL recibe las teclas de navegación,
-   este dice qué campo o botón recibe lo que teclees dentro de un diálogo.
-   `:focus-visible` y no `:focus` para que un clic del ratón no deje el
-   anillo puesto — quien pulsa con el ratón ya sabe dónde pulsó. */
+/* A CONTROL's focus ring (spec 2026-09-11, F3). It is `focus-border` and
+   not `border-focus`: that one says which PANEL receives navigation keys,
+   this one says which field or button receives what you type inside a
+   dialog. `:focus-visible` and not `:focus` so a mouse click does not
+   leave the ring on — whoever clicks with the mouse already knows where
+   they clicked. */
 .dialog input:focus-visible,
 .choices button:focus-visible,
 .dialog button:focus-visible {
@@ -1999,8 +2015,8 @@ button.status-item:hover {
   color: var(--error-fg);
 }
 
-/* Lo que borra se ENCIENDE al señalarlo: el color de peligro a plena
-   superficie dice qué va a pasar justo antes de pulsar. */
+/* What deletes LIGHTS UP when pointed to: the danger color across the
+   whole surface says what is about to happen right before it is clicked. */
 .choices button[data-destructive="true"]:hover {
   background: var(--error-fg);
   color: var(--bg);
@@ -2016,9 +2032,9 @@ button.status-item:hover {
   transition: none;
 }
 
-/* Un aviso persistente es una PÍLDORA (spec 2026-09-11, V5): fondo tenue
-   del color de aviso, borde redondeado y un ⚠ delante. Es estado, no un
-   mensaje: se queda mientras dure lo que avisa. */
+/* A persistent notice is a PILL (spec 2026-09-11, V5): a faint background
+   of the warning color, a rounded border and a ⚠ in front. It is state,
+   not a message: it stays for as long as what it warns about lasts. */
 .banner {
   display: inline-block;
   color: var(--hostile-fg);
@@ -2035,10 +2051,10 @@ button.status-item:hover {
   opacity: 0.8;
 }
 
-/* El mensaje efímero es un TOAST: abajo a la derecha, ENCIMA de la barra de
-   estado —no sobre sus elementos—, con una entrada de 120 ms. El host lo
-   caduca (`[ui] notice_seconds`); vacío no se pinta. Un mensaje largo se
-   recorta a media pantalla y no tapa el listado entero. */
+/* The ephemeral message is a TOAST: bottom right, ON TOP of the status bar
+   — not over its elements — with a 120ms entrance. Expired by the host
+   (`[ui] notice_seconds`); empty is not painted. A long message truncates
+   at half the screen and does not cover the whole listing. */
 .status-message:empty {
   display: none;
 }
@@ -2072,8 +2088,8 @@ button.status-item:hover {
   }
 }
 
-/* Las migas de la ruta (puente 65): botones sin cromo, el actual sin
-   afordancia, y un separador tenue. */
+/* The path's breadcrumbs (bridge 65): buttons with no chrome, the current
+   one with no affordance, and a faint separator. */
 .crumb {
   font: inherit;
   color: inherit;
@@ -2100,9 +2116,10 @@ button.status-item:hover {
   padding: 0 1px;
 }
 
-/* La raíz de las migas (spec 2026-09-21, fase D): el esquema del provider, atenuado y un
-   punto más pequeño — está en todas las rutas del panel, y a la misma voz
-   que los directorios competía con ellos. Sigue pulsable. */
+/* The breadcrumbs' root (spec 2026-09-21, phase D): the provider's scheme,
+   dimmed and a point smaller — it is in every path in the panel, and at
+   the same volume as the directories it competed with them. Still
+   clickable. */
 .crumb[data-root="true"]:not(:disabled) {
   opacity: 0.6;
   font-size: 0.9em;
@@ -2112,9 +2129,10 @@ button.status-item:hover {
   opacity: 1;
 }
 
-/* El indicador de espacio del pie (puente 65): dos píxeles al pie del
-   pie, llenos hasta lo ocupado. Del color del borde de foco; de aviso
-   pasado el 75 %, y de error pasado el 90 %, que es cuando importa. */
+/* The footer's space indicator (bridge 65): two pixels at the bottom of
+   the footer, filled up to what is used. In the focus border's color; the
+   warning one past 75%, and the error one past 90%, which is when it
+   matters. */
 .slot-gauge {
   position: absolute;
   left: 0;
@@ -2138,7 +2156,7 @@ button.status-item:hover {
   background: var(--error-fg);
 }
 
-/* Una orden rechazada en la frontera: error, no nombre hostil. */
+/* A command rejected at the boundary: an error, not a hostile name. */
 .banner.rejected {
   color: var(--error-fg);
 }
@@ -2158,7 +2176,7 @@ button.status-item:hover {
   display: flex;
 }
 
-/* --- La ayuda (F1) --------------------------------------------------- */
+/* --- Help (F1) --------------------------------------------------------- */
 
 #help[data-open="true"] {
   position: fixed;
@@ -2188,8 +2206,8 @@ button.status-item:hover {
   grid-row: 1;
   border-right: 1px solid var(--separator, var(--border));
   overflow: auto;
-  /* Un nombre de página puede venir de un plugin: se aísla para que una
-     marca de dirección no reordene lo que hay a su alrededor. */
+  /* A page's name can come from a plugin: isolated so a directional mark
+     does not reorder what is around it. */
   unicode-bidi: isolate;
 }
 
@@ -2209,8 +2227,8 @@ button.status-item:hover {
   list-style: none;
 }
 
-/* Una cabecera de grupo se lee como tal y no como una página más: versalitas
-   pequeñas y aire encima, que es lo que separa un grupo del anterior. */
+/* A group header reads as one and not as one more page: small caps and
+   space above, which is what separates a group from the previous one. */
 .help-group {
   padding: 12px 8px 2px;
   color: var(--title-fg);
@@ -2241,21 +2259,21 @@ button.status-item:hover {
   color: var(--selection-fg);
 }
 
-/* El cursor del índice cuando el teclado está en el CUERPO (spec
-   2026-09-20): presente pero apagado, igual que el del panel sin foco. La
-   ayuda tenía foco y no lo enseñaba — las dos mitades resaltaban igual de
-   vivas, y la pantalla no decía a dónde iban las flechas. */
+/* The sidebar's cursor when the keyboard is in the BODY (spec 2026-09-20):
+   present but dimmed, same as an unfocused panel's. Help had focus and did
+   not show it — both halves highlighted equally bright, and the screen did
+   not say where the arrows went. */
 .help-topics[data-focused="false"] .help-topic[aria-selected="true"] {
   background: var(--selection-unfocused-bg);
   color: var(--selection-unfocused-fg);
 }
 
-/* Aire alrededor de la prosa, y el scroll con el mismo aire abajo: sin
-   padding, el texto tocaba el borde de la caja y la última línea quedaba
-   pegada al pie. */
+/* Breathing room around the prose, and the scroll with the same room at
+   the bottom: with no padding, the text touched the box's edge and the
+   last line ended up glued to the footer. */
 .help-body {
-  /* `relative` para que el `offsetTop` de un encabezado se mida desde esta
-     caja: es a donde saltan `[`, `]` y el índice de la página. */
+  /* `relative` so a heading's `offsetTop` is measured from this box: it is
+     where `[`, `]` and the page's table of contents jump to. */
   position: relative;
   grid-row: 1;
   padding: 12px 24px 24px;
@@ -2264,9 +2282,9 @@ button.status-item:hover {
   unicode-bidi: isolate;
 }
 
-/* Medida de lectura: la prosa no crece con la ventana. 72 caracteres es lo
-   mismo que el terminal (`HELP_MEASURE`); más ancho, el ojo pierde la línea
-   al volver. Las tablas y el código pueden ir más allá si lo necesitan. */
+/* Reading measure: the prose does not grow with the window. 72 characters
+   is the same as the terminal's (`HELP_MEASURE`); wider, the eye loses the
+   line coming back. Tables and code can go beyond it if they need to. */
 .help-body > p,
 .help-body > .help-bullets,
 .help-body > .help-callout,
@@ -2277,9 +2295,9 @@ button.status-item:hover {
   max-width: 72ch;
 }
 
-/* UN ritmo vertical para todos los bloques. Antes los párrafos llevaban el
-   margen del navegador y las listas, el código y las tablas cero, así que
-   una lista quedaba pegada a la frase que la presenta. */
+/* ONE vertical rhythm for every block. Paragraphs used to carry the
+   browser's margin and lists, code and tables zero, so a list ended up
+   glued to the sentence introducing it. */
 .help-body > p,
 .help-body > .help-bullets,
 .help-body > .help-code,
@@ -2316,8 +2334,8 @@ button.status-item:hover {
   color: var(--hostile-fg);
 }
 
-/* El índice de la página: las secciones en una fila que se parte, debajo del
-   título. Discreto — es un atajo, no parte del texto. */
+/* The page's table of contents: the sections in a row that wraps, under
+   the title. Discreet — it is a shortcut, not part of the text. */
 .help-toc {
   display: flex;
   flex-wrap: wrap;
@@ -2362,9 +2380,9 @@ button.status-item:hover {
   border-collapse: collapse;
 }
 
-/* La tabla del corpus con cabecera que se lee como cabecera, y filas con
-   aire: con `padding: 0` las celdas se tocaban y la tabla se leía como un
-   párrafo con huecos. */
+/* The corpus's table with a header that reads as a header, and rows with
+   room to breathe: with `padding: 0` the cells touched and the table read
+   as a paragraph with gaps. */
 .help-table th {
   color: var(--title-fg);
   border-bottom: 1px solid var(--separator, var(--border));
@@ -2374,8 +2392,8 @@ button.status-item:hover {
   border-top: 1px solid var(--separator, var(--border));
 }
 
-/* Sin esto, una tabla del corpus y la hoja de teclado que va debajo se leen
-   como una sola: dos rejillas pegadas, con anchos de columna distintos. */
+/* Without this, a corpus table and the keyboard sheet that follows it read
+   as one: two grids glued together, with different column widths. */
 .help-keys {
   border-top: 1px solid var(--separator, var(--border));
 }
@@ -2400,8 +2418,8 @@ button.status-item:hover {
   white-space: nowrap;
 }
 
-/* Columna fija: con el ancho al contenido, la etiqueta de cada fila empieza
-   en un sitio distinto y la hoja deja de leerse como una lista de teclas. */
+/* Fixed column: with the width set to the content, each row's label starts
+   at a different spot and the sheet stops reading as a list of keys. */
 .help-key-chord {
   width: 12ch;
 }
@@ -2410,12 +2428,12 @@ button.status-item:hover {
   width: 22ch;
 }
 
-/* Cada dato que pone el HOST dentro de una corrida de prosa de tercero es su
-   propia corrida bidi. `isolate` en el contenedor solo separa a los hermanos
-   entre sí: un `<p>` construido de varios spans es UNA corrida, así que una
-   frase con texto RTL fuerte podía mover de sitio la tecla que la frase dice
-   que hay que pulsar — sin un solo carácter de control, o sea sin que
-   enmascarar sirviera de nada. Es lo que hace `<bdi>` por defecto. */
+/* Every datum the HOST puts inside a run of third-party prose is its own
+   bidi run. `isolate` on the container only separates siblings from each
+   other: a `<p>` built out of several spans is ONE run, so a sentence with
+   strong RTL text could move the key it says to press somewhere else — with
+   not a single control character, i.e. with masking doing no good at all.
+   It is what `<bdi>` does by default. */
 .help-chord,
 .help-cmd,
 .help-link,
@@ -2487,15 +2505,15 @@ button.status-item:hover {
   cursor: pointer;
 }
 
-/* El cuerpo con el teclado: un filete de acento a la izquierda, el mismo
-   que lleva la fila del cursor en un listado (spec 2026-09-20). El índice ya
-   tenía el suyo (`border-right-color`) y el cuerpo no tenía ninguno, así que
-   al pasar el foco al cuerpo la pantalla se quedaba muda. */
+/* The body with the keyboard: an accent rule on the left, the same one the
+   cursor's row carries in a listing (spec 2026-09-20). The sidebar already
+   had its own (`border-right-color`) and the body had none, so passing
+   focus to the body left the screen mute. */
 .help-body[data-focused="true"] {
   box-shadow: inset 3px 0 0 var(--border-focus);
 }
 
-/* Y su cursor, apagado cuando el teclado está en el índice. */
+/* And its cursor, dimmed when the keyboard is in the sidebar. */
 .help-body[data-focused="false"] .help-action[aria-selected="true"] {
   background: var(--selection-unfocused-bg);
   color: var(--selection-unfocused-fg);
@@ -2537,7 +2555,7 @@ button.status-item:hover {
   text-overflow: ellipsis;
 }
 
-/* --- Los ajustes (F11), en solo lectura ------------------------------- */
+/* --- Settings (F11), read-only ------------------------------------------ */
 
 #settings[data-open="true"] {
   position: fixed;
@@ -2553,10 +2571,10 @@ button.status-item:hover {
 }
 
 .settings {
-  /* Grande: son 34 ajustes con su valor y sus acciones a la derecha, y a
-     110ch la columna del valor se comía el nombre. El tope en `vw`/`vh`
-     sigue dejando ver el listado de detrás, que es lo que dice que esto es
-     un modal y no otra pantalla. */
+  /* Large: there are 34 settings with their value and their actions on the
+     right, and at 110ch the value column ate into the name. The cap in
+     `vw`/`vh` still lets the listing behind it show through, which is what
+     says this is a modal and not another screen. */
   width: min(150ch, 96vw);
   height: min(90vh, 100%);
   display: flex;
@@ -2575,8 +2593,9 @@ button.status-item:hover {
   border-bottom: 1px solid var(--separator, var(--border));
 }
 
-/* El buscador y las dos cifras. La cuenta va SIEMPRE: sin la segunda, «no
-   hay nada» y «lo tapé con una letra» se leen igual. */
+/* The search box and the two figures. The count ALWAYS shows: without the
+   second one, "there is nothing" and "I covered it with a letter" read the
+   same. */
 .settings-search-bar {
   display: flex;
   gap: 8px;
@@ -2598,9 +2617,9 @@ button.status-item:hover {
   font-variant-numeric: tabular-nums;
 }
 
-/* Dos paneles: índice e lista. Por debajo de 700px el índice pasa arriba,
-   en horizontal — a ese ancho una columna de secciones deja el nombre de
-   cada ajuste sin sitio. */
+/* Two panels: sidebar and list. Below 700px the sidebar moves to the top,
+   horizontal — at that width a column of sections leaves each setting's
+   name with no room. */
 .settings-body {
   display: grid;
   grid-template-columns: 26ch 1fr;
@@ -2630,9 +2649,9 @@ button.status-item:hover {
 
 .settings-index-item {
   display: flex;
-  /* El rótulo pegado a su icono y la cuenta al final: con
-     `space-between` y tres hijos, el título se iba al centro y cada sección
-     empezaba en una columna distinta. */
+  /* The label glued to its icon and the count at the end: with
+     `space-between` and three children, the title drifted to the center
+     and each section started in a different column. */
   justify-content: flex-start;
   gap: 8px;
   padding: 3px 8px 3px 4px;
@@ -2648,9 +2667,9 @@ button.status-item:hover {
   background: var(--hover, var(--panel-bg));
 }
 
-/* Los DOS cursores se pintan siempre; el del lado sin teclado, apagado
-   (ADR 0128). Uno solo vivo, o ninguno, es lo que hace que no se sepa dónde
-   está el foco. */
+/* BOTH cursors are always painted; the one on the side without the
+   keyboard, dimmed (ADR 0128). Only one alive, or none, is what makes it
+   impossible to know where the focus is. */
 .settings-index-item[aria-current="true"] {
   background: var(--selection-unfocused-bg);
   color: var(--selection-unfocused-fg);
@@ -2666,17 +2685,17 @@ button.status-item:hover {
   color: var(--selection-unfocused-fg);
 }
 
-/* Vacía por el filtro: se queda, apagada. Un índice que cambia de largo
-   mientras escribes no se puede usar como mapa. */
+/* Emptied by the filter: it stays, dimmed. An index that changes length
+   while you type cannot be used as a map. */
 .settings-index-item[data-empty="true"] {
   color: var(--info-fg, var(--fg));
   opacity: 0.55;
   cursor: default;
 }
 
-/* El rótulo NO parte en dos líneas: «Paneles y listado» a dos renglones
-   rompía la rejilla del índice y hacía saltar las cuentas de sitio. Si no
-   cabe, se recorta. */
+/* The label does NOT wrap to two lines: "Panels and listing" over two
+   lines broke the index's grid and made the counts jump around. If it does
+   not fit, it truncates. */
 .settings-index-title {
   flex: 1;
   overflow: hidden;
@@ -2696,12 +2715,12 @@ button.status-item:hover {
   overflow: auto;
 }
 
-/* PEGAJOSA: al desplazar, el rótulo de la sección en la que estás se queda
-   arriba. Con fondo opaco — una cabecera translúcida con filas pasando por
-   debajo es ilegible. */
-/* La cabecera de sección PESA: es la que separa un bloque de ajustes del
-   siguiente en una lista larga, y con el mismo cuerpo que la prosa no
-   separaba nada. */
+/* STICKY: while scrolling, the label of the section you are in stays at
+   the top. With an opaque background — a translucent header with rows
+   scrolling under it is unreadable. */
+/* A section header CARRIES WEIGHT: it is what separates one block of
+   settings from the next in a long list, and with the same body as the
+   prose it separated nothing. */
 .settings-group {
   position: sticky;
   top: 0;
@@ -2715,23 +2734,23 @@ button.status-item:hover {
   border-bottom: 1px solid var(--separator, var(--border));
 }
 
-/* El punto de «no es el valor de fábrica», y el botón que lo deshace.
-   Por el rol `title-fg` del tema y no por un `--accent` inventado: una
-   variable que nadie alimenta se queda con su valor por defecto y deja de
-   seguir al tema en silencio.
+/* The "not the factory value" dot, and the button that undoes it. Through
+   the theme's `title-fg` role and not a made-up `--accent`: a variable
+   nobody feeds keeps its default value and silently stops following the
+   theme.
 
-   La celda existe SIEMPRE, con punto o sin él: es lo que mantiene los
-   nombres en columna. */
-/* La marca de «no es de fábrica»: una BARRA a la izquierda del bloque, no
-   un punto entre el texto. En una lista larga se encuentra de un vistazo lo
-   que has tocado, que es justo para lo que sirve. La celda existe siempre,
-   con barra o sin ella, para que los nombres empiecen todos igual. */
+   The cell ALWAYS exists, with a dot or without one: it is what keeps the
+   names in a column. */
+/* The "not from the factory" mark: a BAR on the left of the block, not a
+   dot inside the text. In a long list, what you have touched is found at a
+   glance, which is exactly what it is for. The cell always exists, with a
+   bar or without one, so the names all start the same. */
 .settings-dot {
-  grid-area: marca;
+  grid-area: mark;
   align-self: stretch;
   overflow: hidden;
-  /* El `●` que trae el nodo no se pinta: la información es la barra, y el
-     carácter está ahí para el lector de pantalla, con su etiqueta. */
+  /* The `●` the node carries is not painted: the information is the bar,
+     and the character is there for the screen reader, with its label. */
   text-indent: -99em;
 }
 
@@ -2740,9 +2759,9 @@ button.status-item:hover {
   border-radius: 2px;
 }
 
-/* Las acciones, arriba a la derecha del bloque, a la altura del nombre. */
+/* The actions, top right of the block, level with the name. */
 .settings-actions {
-  grid-area: acciones;
+  grid-area: actions;
   display: flex;
   gap: 8px;
   align-items: baseline;
@@ -2750,8 +2769,8 @@ button.status-item:hover {
   white-space: nowrap;
 }
 
-/* Restablecer: un ICONO. El texto se comía treinta celdas de cada fila
-   tocada para decir lo mismo que una flecha de deshacer. */
+/* Reset: an ICON. The text used to eat thirty cells of every touched row
+   to say the same thing as an undo arrow. */
 .settings-reset {
   width: 2.2em;
   padding: 0;
@@ -2769,10 +2788,10 @@ button.status-item:hover {
   border-color: var(--border-focus);
 }
 
-/* --- Los controles de una fila -------------------------------------- */
+/* --- A row's controls ---------------------------------------------------- */
 
-/* El interruptor. Pomo a un lado o al otro Y color: dos señales, porque una
-   posición sola no se distingue sin mirar fijo. */
+/* The switch. Knob on one side or the other AND color: two signals,
+   because a position alone is not told apart without staring. */
 .settings-switch {
   position: relative;
   width: 2.4em;
@@ -2805,7 +2824,7 @@ button.status-item:hover {
   background: var(--selection-fg);
 }
 
-/* Movimiento reducido: el pomo salta en vez de deslizarse. */
+/* Reduced motion: the knob jumps instead of sliding. */
 @media (prefers-reduced-motion: reduce) {
   .settings-switch-knob {
     transition: none;
@@ -2823,15 +2842,15 @@ button.status-item:hover {
   background: var(--input-bg, var(--bg));
   border: 1px solid var(--input-border, var(--border));
   border-radius: 3px;
-  /* SIN la apariencia del sistema. WebKit pintaba su propio fondo y su
-     propio color por encima de estos, y los controles salían grises —con
-     pinta de estar desactivados— sobre un tema oscuro. */
+  /* WITHOUT the system's appearance. WebKit painted its own background and
+     its own color over these, and the controls came out gray — looking
+     disabled — over a dark theme. */
   appearance: none;
 }
 
-/* La flecha del desplegable, que `appearance: none` se lleva por delante.
-   Dibujada con un degradado y no con un carácter: un glifo dependería de la
-   fuente que haya, y este control tiene que verse igual en todas. */
+/* The dropdown's arrow, which `appearance: none` takes down with it. Drawn
+   with a gradient and not a character: a glyph would depend on whatever
+   font is installed, and this control has to look the same everywhere. */
 .settings-select {
   padding-right: 2ch;
   background-image:
@@ -2846,16 +2865,16 @@ button.status-item:hover {
     4px 4px;
 }
 
-/* Un valor vacío NO es un hueco: es «la que trae norte». Se dice, en vez de
-   dejar una caja gris que parece rota. */
+/* An empty value is NOT a gap: it is "the one norte ships with". It is
+   said, instead of leaving a gray box that looks broken. */
 .settings-text::placeholder,
 .settings-number::placeholder {
   color: var(--info-fg, var(--fg));
   opacity: 0.7;
 }
 
-/* Ancho para el número Y sus flechas: a ocho celdas los botones tapaban el
-   valor, así que el campo se veía vacío con el número detrás. */
+/* Width for the number AND its arrows: at eight cells the buttons covered
+   the value, so the field looked empty with the number hidden behind it. */
 .settings-number {
   width: 12ch;
   max-width: 12ch;
@@ -2870,9 +2889,10 @@ button.status-item:hover {
   outline-offset: 1px;
 }
 
-/* Los iconos del índice llevan su propia pila: Inter no tiene los símbolos
-   geométricos, y sin esto el navegador sustituye glifo a glifo con lo que
-   encuentre — que es por lo que uno salía con otra forma y otro ancho. */
+/* The sidebar's icons carry their own stack: Inter does not have the
+   geometric symbols, and without this the browser substitutes glyph by
+   glyph with whatever it finds — which is why one used to come out a
+   different shape and width. */
 .settings-index-icon {
   width: 1.4em;
   font-family:
@@ -2883,26 +2903,26 @@ button.status-item:hover {
 
 .settings-row {
   display: grid;
-  /* Cada ajuste es un BLOQUE, no una fila de tabla: nombre, descripción y
-     control, uno debajo de otro. En columnas el control acaba lejos de lo
-     que controla, la descripción no cabe en ninguna parte y cada fila es su
-     propia rejilla —así que nada forma columna de verdad—. Los editores de
-     ajustes que la gente ya sabe usar lo hacen así.
+  /* Each setting is a BLOCK, not a table row: name, description and
+     control, one below the other. In columns the control ends up far from
+     what it controls, the description does not fit anywhere and each row
+     is its own grid — so nothing really forms a column. The settings
+     editors people already know how to use do it this way.
 
-     La primera columna es la MARCA de modificado: una barra de 3px como la
-     que usa VSCode, que se lee de un vistazo en una lista larga mucho mejor
-     que un punto perdido entre el texto. */
+     The first column is the MODIFIED mark: a 3px bar like VS Code's, which
+     reads at a glance in a long list much better than a dot lost inside
+     the text. */
   grid-template-columns: 3px minmax(0, 1fr) auto;
   grid-template-areas:
-    "marca nombre acciones"
-    "marca desc acciones"
-    "marca control control";
+    "mark name actions"
+    "mark desc actions"
+    "mark control control";
   align-items: baseline;
   gap: 2px 10px;
   padding: 6px 8px;
   cursor: pointer;
-  /* Un valor puede ser una RUTA, y una ruta puede traer marcas de dirección:
-     cada celda es su propia corrida bidi. */
+  /* A value can be a PATH, and a path can carry directional marks: each
+     cell is its own bidi run. */
   unicode-bidi: isolate;
 }
 
@@ -2911,10 +2931,10 @@ button.status-item:hover {
   color: var(--selection-fg);
 }
 
-/* El nombre es el TÍTULO del bloque: en seminegrita, porque es lo que se
-   recorre con la vista para encontrar un ajuste. */
+/* The name is the block's TITLE: semi-bold, because it is what the eye
+   scans to find a setting. */
 .settings-name {
-  grid-area: nombre;
+  grid-area: name;
   overflow: hidden;
   font-weight: 600;
   text-overflow: ellipsis;
@@ -2932,10 +2952,10 @@ button.status-item:hover {
   color: var(--hostile-fg);
 }
 
-/* «requiere reinicio» y «no está» son PASTILLAS, no texto suelto: dicen
-   algo sobre la fila entera y tienen que leerse como una etiqueta, no como
-   la continuación del valor. Borde y no relleno, para que no compitan con
-   el cursor de la fila elegida. */
+/* "restart required" and "missing" are PILLS, not loose text: they say
+   something about the whole row and have to read as a label, not as a
+   continuation of the value. A border and no fill, so they do not compete
+   with the chosen row's cursor. */
 .settings-badge,
 .settings-missing {
   padding: 0 6px;
@@ -2948,30 +2968,30 @@ button.status-item:hover {
   unicode-bidi: isolate;
 }
 
-/* La de una ubicación que falta sigue siendo un aviso de otra clase: ahí el
-   color hostil es el correcto, porque habla de una ruta. */
+/* A missing location's is still a different kind of warning: there the
+   hostile color is the correct one, because it is talking about a path. */
 .settings-missing {
   color: var(--hostile-fg);
 }
 
-/* La descripción ocupa la fila entera bajo el nombre, y solo se lee en la
-   fila elegida: con todas visibles, la lista deja de poder recorrerse. */
-/* La descripción va SIEMPRE, no solo bajo la fila elegida: es lo que dice
-   qué hace un ajuste, y esconderla obliga a recorrer la lista con el cursor
-   para poder leerla. Atenuada, para que el nombre siga mandando. */
+/* The description takes up the whole row under the name, and only reads on
+   the chosen row: with all of them visible, the list stops being scannable. */
+/* The description ALWAYS shows, not only under the chosen row: it is what
+   says what a setting does, and hiding it forces scanning the list with
+   the cursor to be able to read it. Dimmed, so the name still rules. */
 .settings-desc {
   grid-area: desc;
-  /* Atenuada, NO azul. El azul de `--info-fg` se lee como «esto se puede
-     pulsar», y una descripción no se pulsa: el color vivo es de los
-     controles y los enlaces, no de la prosa que los explica. */
+  /* Dimmed, NOT blue. `--info-fg`'s blue reads as "this can be clicked",
+     and a description is not clicked: the bright color belongs to controls
+     and links, not to the prose that explains them. */
   color: inherit;
   opacity: 0.72;
   unicode-bidi: isolate;
 }
 
-/* CUÁNDO se aplica lo que cambies, al final de la descripción y en
-   cursiva: repetido como pastilla en seis filas a la vez dejaba de leerse,
-   y es información que solo importa cuando tocas ESA fila. */
+/* WHEN a change you make applies, at the end of the description and in
+   italics: repeated as a pill on six rows at once it stopped reading, and
+   it is information that only matters when you touch THAT row. */
 .settings-when {
   font-style: italic;
   opacity: 0.85;
@@ -2985,10 +3005,10 @@ button.status-item:hover {
   display: block;
 }
 
-/* --- El gestor de extensiones (F12): lista y ficha con botones ----------
-   Dos columnas, como el de un editor: a la izquierda las instaladas, a la
-   derecha la elegida con lo que se puede hacer con ella. Los botones mandan
-   la misma acción que la tecla; las preguntas las hace el host. */
+/* --- The extension manager (F12): list and card with buttons ------------
+   Two columns, like an editor's: installed ones on the left, the chosen
+   one on the right with what can be done to it. The buttons send the same
+   action as the key; the host asks the questions. */
 
 #extensions[data-open="true"] {
   position: fixed;
@@ -3094,8 +3114,9 @@ button.status-item:hover {
   background: var(--panel-focus-bg);
 }
 
-/* La elegida lleva una barra de acento, no solo un fondo: con la ficha al
-   lado, el ojo tiene que poder unir las dos sin leerlas. */
+/* The chosen one carries an accent bar, not just a background: with the
+   card alongside it, the eye has to be able to connect the two without
+   reading them. */
 .extensions-row[aria-selected="true"] {
   background: var(--selection-bg);
   color: var(--selection-fg);
@@ -3119,8 +3140,8 @@ button.status-item:hover {
   margin-left: auto;
 }
 
-/* La píldora de estado: sin aprobar es lo que hay que mirar, así que es lo
-   que se ve. Colores por atributo, más abajo. */
+/* The status pill: unapproved is what needs looking at, so it is what is
+   visible. Colors by attribute, further below. */
 .extensions-state {
   flex: 0 0 auto;
   font-size: 0.85em;
@@ -3142,8 +3163,8 @@ button.status-item:hover {
 .extensions-key-value,
 .extensions-key-kind,
 .extensions-key-desc {
-  /* Casi todo esto lo escribe un TERCERO: cada dato es su propia corrida
-     bidi, o una descripción en RTL reordena lo que tiene al lado. */
+  /* Almost all of this is written by a THIRD PARTY: each datum is its own
+     bidi run, or an RTL description reorders what is next to it. */
   unicode-bidi: isolate;
 }
 
@@ -3157,7 +3178,7 @@ button.status-item:hover {
   opacity: 0.8;
 }
 
-/* Sin aprobar es lo que hay que mirar, así que es lo que se ve. */
+/* Unapproved is what needs looking at, so it is what is visible. */
 .extensions-state[data-approved="false"] {
   color: var(--error-fg);
 }
@@ -3199,7 +3220,7 @@ button.status-item:hover {
   border-radius: 3px;
 }
 
-/* La ficha: la elegida, con lo que se puede hacer con ella. */
+/* The card: the chosen one, with what can be done to it. */
 .extensions-pane {
   min-width: 0;
   padding: 10px 16px 12px;
@@ -3241,8 +3262,8 @@ button.status-item:hover {
   unicode-bidi: isolate;
 }
 
-/* Los botones: el que concede y el que borra se distinguen del resto, para
-   que ninguno de los dos se lea como el «Aceptar» de un aviso. */
+/* The buttons: the one that grants and the one that deletes stand apart
+   from the rest, so neither reads as a notice's "OK". */
 .extensions-actions {
   display: flex;
   flex-wrap: wrap;
@@ -3316,8 +3337,8 @@ button.status-item:hover {
   color: var(--border-focus);
 }
 
-/* Un valor que ya no es el del esquema: es lo único que distingue «así
-   viene» de «así lo dejaste». */
+/* A value that is no longer the schema's: it is the only thing that tells
+   apart "it comes this way" from "you left it this way". */
 .extensions-config tr[data-changed="true"] .extensions-key-value {
   color: var(--title-fg);
 }
@@ -3327,9 +3348,9 @@ button.status-item:hover {
   opacity: 0.85;
 }
 
-/* La clave elegida y la que no se puede editar: lo segundo importa tanto
-   como lo primero, porque un `kind` que este build no conoce es de solo
-   lectura y ofrecerlo hace creer que la escritura falló. */
+/* The chosen key and the one that cannot be edited: the second matters as
+   much as the first, because a `kind` this build does not know is
+   read-only and offering it makes it seem like the write failed. */
 .extensions-config tr[data-current="true"] {
   background: var(--selection-bg);
 }
@@ -3343,8 +3364,9 @@ button.status-item:hover {
   padding: 0 2px;
   background: var(--panel-bg);
   border-bottom: 2px solid var(--border-focus);
-  /* Lo que se teclea se aísla: el valor de partida lo escribió el plugin y
-     puede traer letras RTL que reordenarían la celda entera. */
+  /* What is being typed is isolated: the starting value was written by
+     the plugin and can carry RTL letters that would reorder the whole
+     cell. */
   unicode-bidi: isolate;
 }
 
@@ -3382,8 +3404,8 @@ button.status-item:hover {
   overflow: auto;
 }
 
-/* La barra de pestañas: encima del título del hueco, y cada rótulo aislado
-   —un nombre de directorio con letras RTL reordenaría la barra entera. */
+/* The tab bar: above the slot's title, and each label isolated — a
+   directory name with RTL letters would reorder the whole bar. */
 .slot-tabs[data-open="false"] {
   display: none;
 }
@@ -3410,9 +3432,9 @@ button.status-item:hover {
   border-bottom: 2px solid var(--border-focus);
 }
 
-/* Un grupo de PANELES (ADR 0134): sus pestañas se leen como las del panel de
-   VS Code —la fuente del cromo, pequeñas, la de delante subrayada— y hacen
-   de título: el título del panel de delante sobra y se esconde. */
+/* A group of PANELS (ADR 0134): its tabs read like VS Code's panel's — the
+   chrome font, small, the front one underlined — and act as the title: the
+   front panel's title is redundant and gets hidden. */
 .slot-tabs[data-panels="true"] {
   border-bottom: 1px solid
     color-mix(in srgb, var(--separator, var(--border)) 70%, transparent);
@@ -3460,15 +3482,15 @@ button.status-item:hover {
   transition: none;
 }
 
-/* La barra de pestañas y su `+` en una fila (ADR 0133). */
+/* The tab bar and its `+` in one row (ADR 0133). */
 .slot-tabs[data-open="true"] {
   display: flex;
   align-items: center;
 }
 
-/* La `×` de cada pestaña: siempre en la activa, al pasar en las demás,
-   como en VS Code. Ocupa su sitio aunque no se vea, para que el rótulo no
-   baile al pasar el ratón. */
+/* Each tab's `×`: always on the active one, on hover on the rest, as in VS
+   Code. Takes up its spot even when not visible, so the label does not
+   jump around on mouseover. */
 .tab-close,
 .tab-new {
   font: inherit;
@@ -3521,8 +3543,8 @@ button.status-item:hover {
   background: var(--selection-bg);
 }
 
-/* Cada cadena de tercero aislada: el id de una sesión es una clave opaca del
-   daemon y puede traer letras RTL que reordenarían la fila entera. */
+/* Every third-party string isolated: a session's id is an opaque daemon
+   key and can carry RTL letters that would reorder the whole row. */
 .agents-session,
 .agents-op {
   unicode-bidi: isolate;
@@ -3532,8 +3554,8 @@ button.status-item:hover {
   min-width: 24ch;
 }
 
-/* Una fila con un deshacer EN MARCHA: se dice, y otro `u` sobre ella se
-   rehúsa —dos undos de la misma sesión caminan la misma lista. */
+/* A row with an undo IN PROGRESS: it is said, and another `u` on it is
+   refused — two undos of the same session walk the same list. */
 .agents-row[data-undoing="true"] .agents-session::after {
   content: " ⟳";
 }
@@ -3571,8 +3593,8 @@ button.status-item:hover {
   overflow: auto;
 }
 
-/* Quién imprimió y qué, cada uno aislado: son dos cadenas de tercero y una
-   sola caja deja que la primera reordene a la segunda. */
+/* Who printed it and what, each one isolated: they are two third-party
+   strings and a single box lets the first one reorder the second. */
 .plugin-output-plugin,
 .plugin-output-command {
   unicode-bidi: isolate;
@@ -3607,8 +3629,8 @@ button.status-item:hover {
   color: var(--warning-fg, var(--title-fg));
 }
 
-/* La salida de un programa (#312) comparte la caja de la de una extensión;
-   el comando no lleva el separador porque va solo. */
+/* A program's output (#312) shares an extension's box; the command carries
+   no separator because it stands alone. */
 .program-output-command::before {
   content: none;
 }
@@ -3618,8 +3640,8 @@ button.status-item:hover {
   color: var(--error-fg);
 }
 
-/* El dominio de un `enum` puede ser largo: sin esto se pega a la
-   descripción y las dos se leen como una sola frase. */
+/* An `enum`'s domain can be long: without this it sticks to the
+   description and the two read as a single sentence. */
 .extensions-key-kind {
   padding-right: 3ch;
 }
@@ -3636,10 +3658,10 @@ button.status-item:hover {
   border-top: 1px solid var(--separator, var(--border));
 }
 
-/* Una que no cargó es una FILA que se elige, como las cargadas: sin el
-   cursor pintado aquí, el cursor cruzaba a esta lista y lo único que
-   cambiaba era la ficha del otro lado. Mismo acento que `.extensions-row`
-   para que el ojo una las dos. */
+/* One that did not load is a ROW that gets chosen, like the loaded ones:
+   without the cursor painted here, the cursor moved into this list and the
+   only thing that changed was the card on the other side. Same accent as
+   `.extensions-row` so the eye connects the two. */
 .extensions-error {
   list-style: none;
   padding: 2px 0 2px 2ch;
@@ -3663,7 +3685,7 @@ button.status-item:hover {
   opacity: 0.9;
 }
 
-/* --- El tema por dentro, y el selector de volúmenes ------------------- */
+/* --- The theme from the inside, and the volume picker -------------------- */
 
 #theme[data-open="true"],
 #picker[data-open="true"] {
@@ -3713,19 +3735,20 @@ button.status-item:hover {
   unicode-bidi: isolate;
 }
 
-/* El tirador del borde entre dos huecos. Seis píxeles y transparente: lo que
-   se ve es el borde de los paneles, y esto solo es dónde se puede agarrar —
-   un borde que se pinta el doble de grueso para poder cogerlo cambia la
-   pantalla para resolver un problema del ratón. */
+/* The grip on the border between two slots. Six pixels and transparent:
+   what is visible is the panels' border, and this is only where it can be
+   grabbed — a border painted twice as thick just to be grabbable changes
+   the screen to solve a mouse problem. */
 .resize-handle {
   position: absolute;
   background: transparent;
   touch-action: none;
 }
 
-/* Al pasar o arrastrar, el tirador se enciende con el color del foco (fase
-   D, spec 2026-09-21), como el sash de VS Code: dice «aquí se agarra» solo cuando el
-   puntero está encima, y un retardo corto evita que parpadee al cruzarlo. */
+/* On hover or drag, the grip lights up with the focus color (phase D, spec
+   2026-09-21), like VS Code's sash: it says "grab here" only while the
+   pointer is over it, and a short delay keeps it from flickering when
+   crossed. */
 .resize-handle:hover,
 .resize-handle:active {
   background: color-mix(in srgb, var(--border-focus) 70%, transparent);
@@ -3736,9 +3759,9 @@ button.status-item:hover {
   cursor: col-resize;
 }
 
-/* Mover un panel (ADR 0138): el título se agarra, y mientras se arrastra
-   la zona donde caería se tiñe del color del foco, como en VS Code. El velo
-   no recibe el puntero: el destino se calcula por geometría. */
+/* Moving a panel (ADR 0138): the title is grabbed, and while dragging, the
+   zone it would land on tints with the focus color, as in VS Code. The
+   veil does not receive the pointer: the target is computed by geometry. */
 .slot-title {
   cursor: grab;
 }
@@ -3776,9 +3799,9 @@ button.status-item:hover {
   cursor: row-resize;
 }
 
-/* Mientras se arrastra un borde, el cursor es el del borde en TODA la
-   pantalla: el puntero sale del tirador de seis píxeles en el primer
-   movimiento, y sin esto parpadeaba entre flechas. */
+/* While a border is being dragged, the cursor is the border's over the
+   WHOLE screen: the pointer leaves the six-pixel grip on the first move,
+   and without this it flickered between arrows. */
 :root[data-dragging="border-col"],
 :root[data-dragging="border-col"] * {
   cursor: col-resize !important;
@@ -3837,15 +3860,15 @@ button.status-item:hover {
   color: var(--selection-fg);
 }
 
-/* El ACTIVO se marca, y no solo con el cursor: el cursor dice dónde estás
-   mirando y esto dice en cuál estás. */
+/* The ACTIVE one is marked, and not only with the cursor: the cursor says
+   where you are looking and this says which one you are in. */
 .profiles-row[data-active="true"] .profiles-name::before {
   content: "● ";
   color: var(--border-focus);
 }
 
-/* Una fila rota se ENSEÑA. Esconder un directorio que el lector creó es peor
-   que enseñarlo con su motivo. */
+/* A broken row is SHOWN. Hiding a directory the reader created is worse
+   than showing it with its reason. */
 .profiles-row[data-broken="true"] .profiles-name {
   color: var(--error-fg);
 }
@@ -3855,10 +3878,10 @@ button.status-item:hover {
   opacity: 0.7;
 }
 
-/* La lista de temas entre los que se elige. Moverse por ella cambia los
-   colores de la ventana entera, así que la fila señalada tiene que verse con
-   los colores que ya están puestos: nada de color propio, solo la selección
-   del tema vigente. */
+/* The list of themes to choose from. Moving through it changes the whole
+   window's colors, so the pointed-to row has to be visible with whatever
+   colors are already set: no color of its own, only the current theme's
+   selection. */
 .theme-choices {
   margin: 0 0 12px;
   padding: 0;
@@ -3891,7 +3914,7 @@ button.status-item:hover {
   padding: 0 6px;
 }
 
-/* La muestra ES el dato: un `#2d4f8a` no dice nada hasta que se ve. */
+/* The swatch IS the data: a `#2d4f8a` says nothing until it is seen. */
 .theme-swatch {
   height: 1em;
   border: 1px solid var(--border);
@@ -3934,8 +3957,8 @@ button.status-item:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  /* Un punto de montaje son BYTES y el detalle lo escribe el sistema: cada
-     uno es su propia corrida bidi. */
+  /* A mount point is BYTES and the detail is written by the system: each
+     one is its own bidi run. */
   unicode-bidi: isolate;
 }
 
@@ -3947,7 +3970,7 @@ button.status-item:hover {
   opacity: 0.85;
 }
 
-/* --- La hoja de atributos y el panel de procesos ---------------------- */
+/* --- The attribute sheet and the process panel --------------------------- */
 
 .slot-note {
   margin: 0;
@@ -3959,9 +3982,10 @@ button.status-item:hover {
   overflow: auto;
 }
 
-/* El visor acoplado (#291): el mismo cuerpo que el grande. Desplaza el
-   HOST —viene la ventana que cabe—, así que aquí no hay scroll del DOM: la
-   rueda manda `preview_scroll` y las teclas van por el keymap del visor. */
+/* The docked viewer (#291): the same body as the full one. Scrolled by the
+   HOST — the window that fits comes in — so there is no DOM scroll here:
+   the wheel sends `preview_scroll` and the keys go through the viewer's
+   keymap. */
 .preview {
   overflow: hidden;
   display: flex;
@@ -3973,9 +3997,9 @@ button.status-item:hover {
   flex: 1 1 auto;
 }
 
-/* El visor sin fichero que enseñar dice POR QUÉ en el centro y atenuado,
-   como la vista vacía de VS Code: pegado arriba a la izquierda se leía como
-   un fichero que se llama «directorio». */
+/* A viewer with no file to show says WHY, in the center and dimmed, like
+   VS Code's empty view: glued to the top left it read as a file named
+   "directory". */
 .preview > .slot-note {
   margin: auto;
   padding: 12px;
@@ -4008,8 +4032,8 @@ button.status-item:hover {
   margin: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  /* El valor puede ser un NOMBRE de fichero: su propia corrida bidi, o una
-     marca de dirección reordena la etiqueta de al lado. */
+  /* The value can be a file NAME: its own bidi run, or a directional mark
+     reorders the label next to it. */
   unicode-bidi: isolate;
 }
 
@@ -4036,10 +4060,10 @@ button.status-item:hover {
   color: var(--selection-fg);
 }
 
-/* --- El panel de registro (#326) --------------------------------------- */
+/* --- The log panel (#326) ------------------------------------------------ */
 
-/* El panel que pinta un PLUGIN (fase 3). Lo de dentro lo describe su guest;
-   el borde y el título son de la ventana. */
+/* The panel a PLUGIN paints (phase 3). What is inside is described by its
+   guest; the border and the title belong to the window. */
 .panel-plugin {
   overflow: hidden;
   display: flex;
@@ -4052,8 +4076,8 @@ button.status-item:hover {
   padding: 2px 6px;
 }
 
-/* La línea de tiempo del journal (#359): una fila por mutación, con el punto
-   del color de QUIÉN la hizo. */
+/* The journal's timeline (#359): one row per mutation, with the dot in the
+   color of WHO did it. */
 .timeline {
   display: flex;
   flex-direction: column;
@@ -4116,18 +4140,18 @@ button.status-item:hover {
   border-top: 1px solid var(--border);
 }
 
-/* `relative` porque las zonas pulsables se colocan ENCIMA de su fila, por
-   columna y ancho en celdas: el guest habla de celdas, no de píxeles. */
+/* `relative` because clickable zones are placed ON TOP of their row, by
+   column and width in cells: the guest talks in cells, not pixels. */
 .panel-line {
   position: relative;
   white-space: pre;
   min-height: 1.2em;
 }
 
-/* Una zona es una región del texto que responde, no un botón dibujado: sin
-   fondo ni borde propios, para que el marco lo siga pintando el guest. El
-   foco sí se ve, porque una zona a la que se llega con el tabulador y no se
-   distingue es una zona que nadie usa. */
+/* A zone is a region of the text that responds, not a drawn button: no
+   background nor border of its own, so the frame keeps being painted by
+   the guest. The focus DOES show, because a zone reached with tab that
+   cannot be told apart is a zone nobody uses. */
 .panel-hit {
   position: absolute;
   top: 0;
@@ -4151,13 +4175,13 @@ button.status-item:hover {
   outline-offset: -1px;
 }
 
-/* El panel de terminal (#362, puente 95).
+/* The terminal panel (#362, bridge 95).
 
-   Monoespaciada y con `white-space: pre`: lo que llega es una REJILLA, ya
-   repartida en celdas por el host. Si el navegador colapsara los espacios o
-   partiera las líneas, el reparto que el host calculó dejaría de coincidir con
-   lo que se ve — y entonces el cursor, que viene en fila y columna, señalaría
-   otra cosa. */
+   Monospace and with `white-space: pre`: what arrives is a GRID, already
+   laid out in cells by the host. If the browser collapsed spaces or wrapped
+   lines, the layout the host computed would stop matching what is shown —
+   and then the cursor, which comes as a row and column, would point at
+   something else. */
 .terminal {
   overflow: hidden;
   font-family: var(--font-mono);
@@ -4171,8 +4195,8 @@ button.status-item:hover {
   height: var(--cell-h);
 }
 
-/* El cursor es una celda invertida, no un borde: un borde se sale de la
-   celda y desalinea la fila. */
+/* The cursor is an inverted cell, not a border: a border spills out of the
+   cell and misaligns the row. */
 .terminal-cursor {
   background: var(--fg);
   color: var(--bg);
@@ -4194,9 +4218,9 @@ button.status-item:hover {
   font-size: 12px;
 }
 
-/* Los mandos del registro con el aspecto del resto del cromo (captura del
-   2026-09-21): eran botones y un campo del SISTEMA —grises, y el filtro una
-   caja blanca— en medio de un tema oscuro. */
+/* The log's controls with the rest of the chrome's look (2026-09-21
+   capture): they used to be SYSTEM buttons and a field — gray, and the
+   filter a white box — in the middle of a dark theme. */
 .log-controls button {
   font: inherit;
   color: var(--fg);
@@ -4253,10 +4277,10 @@ button.status-item:hover {
   list-style: none;
   flex: 1 1 auto;
   overflow: hidden;
-  /* Monoespaciada, y no por estética: las columnas de hora y nivel son de
-     ancho fijo, y con una proporcional el mensaje empieza en un sitio
-     distinto por línea — que es lo que hace que una lista larga deje de
-     poder recorrerse con la vista. */
+  /* Monospace, and not for looks: the time and level columns have a fixed
+     width, and with a proportional font the message starts at a different
+     spot per line — which is what stops a long list from being scannable
+     with the eye. */
   font-family: var(--mono, monospace);
   white-space: pre;
 }
@@ -4272,16 +4296,17 @@ button.status-item:hover {
   margin-right: 1ch;
 }
 
-/* El nivel COLOREA la línea entera: leer un registro es buscar los errores, y
-   un color solo en la etiqueta de cinco letras no se ve de un vistazo. */
+/* The level COLORS the whole line: reading a log is looking for errors,
+   and a color only on the five-letter label does not catch the eye. */
 .log-line[data-level="error"] {
   color: var(--error-fg, #f66);
 }
 
 .log-line[data-level="warn"] {
-  /* `warning-fg`, que es como se llama lo que el host proyecta: escrito
-     `warn-fg`, esta línea llevaba desde que se escribió cayendo al #fc6 de
-     respaldo e ignorando el tema. Lo guarda `tests/variables_de_tema.rs`. */
+  /* `warning-fg`, which is what the host's projection is called: written
+     as `warn-fg`, this line had been falling back to #fc6 and ignoring the
+     theme ever since it was written. Guarded by
+     `tests/variables_de_tema.rs`. */
   color: var(--warning-fg, #fc6);
 }
 
@@ -4290,16 +4315,17 @@ button.status-item:hover {
   opacity: 0.8;
 }
 
-/* Una línea del DAEMON se marca al margen (#328). Un filete y no un color: el
-   color ya lo tiene tomado el nivel, que es lo que se busca de un vistazo. */
+/* A line from the DAEMON is marked in the margin (#328). A rule and not a
+   color: the color is already taken by the level, which is what the eye
+   looks for. */
 .log-line[data-source="daemon"] {
   border-left: 2px solid var(--badge-bg, var(--selection-bg));
   padding-left: 4px;
 }
 
-/* La fuente es un SELECTOR cuando hay dos anillos que ofrecer: un botón con
-   forma de etiqueta, para que se vea que se puede pulsar sin meter otro mando
-   en una cabecera que ya lleva cinco. */
+/* The source is a SELECTOR when there are two rings to offer: a button
+   shaped like a chip, so it shows it can be clicked without adding another
+   control to a header that already carries five. */
 .log-source {
   border: 1px solid var(--badge-bg, var(--selection-bg));
   color: inherit;
@@ -4308,13 +4334,13 @@ button.status-item:hover {
   cursor: pointer;
 }
 
-/* Una etiqueta pequeña de cabecera: el nivel, el filtro, el origen.
+/* A small header chip: the level, the filter, the origin.
 
-   Lleva el rol `badge`, que es lo que es. Antes pedía un `--chip-bg` que
-   NADIE alimentaba, así que se quedaba en un gris translúcido cosido al CSS
-   y era la misma etiqueta gris en los ocho temas. El primer plano no es
-   opcional con un fondo sólido: sin él, el texto hereda el color de la
-   cabecera y un acento oscuro se lo traga. */
+   Carries the `badge` role, which is what it is. It used to ask for a
+   `--chip-bg` NOBODY fed, so it stayed a translucent gray sewn into the
+   CSS and was the same gray chip across all eight themes. The foreground
+   is not optional with a solid background: without it, the text inherits
+   the header's color and a dark accent swallows it. */
 .chip {
   margin-left: 1ch;
   padding: 0 4px;
@@ -4324,7 +4350,7 @@ button.status-item:hover {
   font-size: 0.85em;
 }
 
-/* --- El árbol de directorios ------------------------------------------ */
+/* --- The directory tree --------------------------------------------------- */
 
 .tree {
   overflow: auto;
@@ -4337,21 +4363,21 @@ button.status-item:hover {
 }
 
 .tree-row {
-  /* El triángulo y el nombre EN LA MISMA línea, al revés que la barra de
-     sitios: aquí la segunda columna es la sangría, no un detalle largo, y
-     partir la fila rompería la única cosa que un árbol tiene que enseñar
-     —qué cuelga de qué. */
+  /* The triangle and the name on THE SAME line, the opposite of the places
+     sidebar: here the second column is the indent, not a long detail, and
+     splitting the row would break the one thing a tree has to show — what
+     hangs from what. */
   display: grid;
   grid-template-columns: 2ch 16px 1fr;
   align-items: center;
   gap: 0 4px;
   padding-right: 6px;
-  /* La sangría por nivel, con la profundidad que el host mandó. */
+  /* The per-level indent, with the depth the host sent. */
   padding-left: calc(6px + var(--depth, 0) * 1.5ch);
   cursor: pointer;
-  /* Las GUÍAS de sangría (captura del 2026-09-21): una raya tenue por
-     nivel, como en VS Code. Es lo que deja seguir qué cuelga de qué en una
-     rama larga sin contar espacios. */
+  /* Indent GUIDES (2026-09-21 capture): a faint line per level, as in VS
+     Code. It is what lets you follow what hangs from what down a long
+     branch without counting spaces. */
   background-image: repeating-linear-gradient(
     to right,
     transparent 0 calc(1.5ch - 1px),
@@ -4395,13 +4421,13 @@ button.status-item:hover {
 .tree-name {
   overflow: hidden;
   text-overflow: ellipsis;
-  /* Un nombre de directorio son BYTES del sistema de ficheros: no se parte en
-     dos líneas ni se deja envolver, porque un nombre partido se lee como dos.
-     El mismo criterio que la barra de sitios. */
+  /* A directory name is filesystem BYTES: it does not split across two
+     lines nor get to wrap, because a split name reads as two. Same
+     criterion as the places sidebar. */
   white-space: nowrap;
 }
 
-/* --- La barra lateral de sitios --------------------------------------- */
+/* --- The places sidebar ---------------------------------------------------- */
 
 .places {
   overflow: auto;
@@ -4414,10 +4440,10 @@ button.status-item:hover {
 }
 
 .places-row {
-  /* El nombre en su línea y el detalle DEBAJO, no al lado: una barra lateral
-     tiene 14–20 columnas, y con las dos cosas en la misma fila el detalle
-     —que suele ser más largo— se comía el nombre. Un sitio que no dice cómo
-     se llama no sirve para ir a ningún sitio. */
+  /* The name on its own line and the detail BELOW it, not next to it: a
+     sidebar is 14–20 columns wide, and with both on the same row the detail
+     — usually longer — ate the name. A place that does not say its name is
+     no good for going anywhere. */
   display: block;
   padding: 0 6px;
   cursor: pointer;
@@ -4451,8 +4477,8 @@ button.status-item:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  /* Una etiqueta de volumen y un destino son BYTES del sistema o del
-     usuario: cada uno, su propia corrida bidi. */
+  /* A volume label and a target are BYTES from the system or the user:
+     each one, its own bidi run. */
   unicode-bidi: isolate;
 }
 
@@ -4468,14 +4494,14 @@ button.status-item:hover {
   opacity: 0.8;
 }
 
-/* Un favorito roto se ve, y se ve QUE está roto. */
+/* A broken favorite shows, and it shows THAT it is broken. */
 .places-broken {
   color: var(--error-fg);
 }
 
-/* Una unidad o un favorito en UNA línea (captura del 2026-09-21): icono,
-   nombre corto y, en una unidad, el libre corto a la derecha — como en la
-   TUI. El montaje entero y el destino, en el título de la fila. */
+/* A drive or a favorite on ONE line (2026-09-21 capture): icon, short name
+   and, on a drive, the short free space on the right — as in the TUI. The
+   whole mount point and the target, in the row's title. */
 .places-row[data-line="one"] {
   display: grid;
   grid-template-columns: 16px 1fr auto;
@@ -4505,7 +4531,7 @@ button.status-item:hover {
   opacity: 0.8;
 }
 
-/* --- El selector de disposiciones ------------------------------------- */
+/* --- The layout picker ------------------------------------------------ */
 
 #layouts[data-open="true"] {
   position: fixed;
@@ -4549,9 +4575,9 @@ button.status-item:hover {
   margin: 0;
   padding: 0;
   list-style: none;
-  /* Sin esto, una fila larga ensancha su columna del grid en vez de
-     recortarse, y la miniatura de al lado se sale de la caja. Es la regla de
-     siempre: el mínimo de una pista de grid es su contenido. */
+  /* Without this, a long row widens its grid column instead of
+     truncating, and the thumbnail next to it spills out of the box. The
+     usual rule: a grid track's minimum is its content. */
   min-width: 0;
 }
 
@@ -4586,18 +4612,18 @@ button.status-item:hover {
   opacity: 0.7;
 }
 
-/* El aviso del nombre de teclado NO es adorno: sin él, la coincidencia de
-   nombres es una trampa en vez de una comodidad. Va EN LÍNEA y corto: con
-   dos líneas por fila, la lista deja de poder recorrerse de un vistazo, y
-   este aviso hay que verlo ANTES de elegir — también al elegir con el ratón,
-   que no pasa por la selección. */
+/* The keymap-name notice is NOT decoration: without it, the name match is
+   a trap instead of a convenience. Kept INLINE and short: with two lines
+   per row, the list stops being scannable at a glance, and this notice
+   needs to be seen BEFORE choosing — also when choosing with the mouse,
+   which does not go through the selection. */
 .layouts-warn {
   margin-left: 1ch;
   color: var(--hostile-fg);
 }
 
-/* La miniatura la pinta el MISMO motor que reparte la pantalla de verdad:
-   aquí solo se pone en su sitio, con la rejilla intacta. */
+/* The thumbnail is painted by the SAME engine that lays out the real
+   screen: here it is only put in place, with the grid intact. */
 .layouts-preview {
   margin: 0;
   padding: 4px;
@@ -4611,7 +4637,7 @@ button.status-item:hover {
   color: var(--error-fg);
 }
 
-/* --- La búsqueda por el subárbol --------------------------------------- */
+/* --- Subtree search --------------------------------------------------- */
 
 #search[data-open="true"] {
   position: fixed;
@@ -4661,8 +4687,8 @@ button.status-item:hover {
   opacity: 1;
 }
 
-/* Mientras corre, el estado se ve; parada, se apaga. La lista corta que ya
-   no crece y la que sigue creciendo se leen igual sin esto. */
+/* While it runs, the status shows; stopped, it dims. A short list that no
+   longer grows and one that keeps growing read the same without this. */
 .search-status[data-running="true"] {
   color: var(--title-fg);
 }
@@ -4700,7 +4726,7 @@ button.status-item:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  /* Un nombre y una ruta son BYTES: cada uno su propia corrida bidi. */
+  /* A name and a path are BYTES: each one its own bidi run. */
   unicode-bidi: isolate;
 }
 
@@ -4714,16 +4740,17 @@ button.status-item:hover {
 }
 
 /* ---------------------------------------------------------------------------
-   Aislamiento bidi de lo que compone datos de TERCEROS con prosa nuestra.
+   Bidi isolation for whatever mixes THIRD-PARTY data with our own prose.
 
-   `unicode-bidi: isolate` separa un elemento de sus HERMANOS; no separa dos
-   datos concatenados en un mismo nodo de texto, y `display_name` enmascara los
-   CONTROLES bidi pero no las LETRAS fuertes RTL —un nombre árabe o hebreo
-   perfectamente legítimo reordena lo que tiene al lado sin usar ni un carácter
-   de control—. Estas son las corridas que quedaban sin aislar. */
+   `unicode-bidi: isolate` separates an element from its SIBLINGS; it does
+   not separate two data points concatenated in the same text node, and
+   `display_name` masks bidi CONTROLS but not strong RTL LETTERS — a
+   perfectly legitimate Arabic or Hebrew name reorders what is next to it
+   without using a single control character. These are the runs that were
+   left unisolated. */
 .hostile-badge {
-  /* La insignia se AÑADE dentro del span del nombre, así que un nombre RTL se
-     la llevaba a su izquierda. Y la insignia es toda la mitigación. */
+  /* The badge gets ADDED inside the name's span, so an RTL name carried it
+     off to its left. And the badge is the entire mitigation. */
   unicode-bidi: isolate;
 }
 
@@ -4745,12 +4772,12 @@ button.status-item:hover {
   unicode-bidi: isolate;
 }
 
-/* La insignia que un PLUGIN pone en una fila. Su color sale del `data-role`,
-   que es vocabulario cerrado del tema: un plugin no elige el suyo. Aislada
-   porque es texto de tercero pegado a un nombre de fichero. */
+/* The badge a PLUGIN puts on a row. Its color comes from `data-role`, the
+   theme's closed vocabulary: a plugin does not choose its own. Isolated
+   because it is third-party text glued to a file name. */
 .cell-badge {
-  /* Dentro del bloque del nombre, justo detrás. No es una columna, y no se
-     encoge: el nombre es lo que cede sitio. */
+  /* Inside the name's block, right behind it. It is not a column, and it
+     does not shrink: the name is what gives up space. */
   flex: 0 0 auto;
   margin-left: 6px;
   unicode-bidi: isolate;
@@ -4769,10 +4796,10 @@ button.status-item:hover {
   color: var(--info-fg);
 }
 
-/* Una preview de plugin con estilo (puente 49): una línea por `div`, un
-   fragmento por `span`. El rol es vocabulario cerrado del tema y se mapea a
-   sus variables; un rol sin regla hereda el color del cuerpo. El color propio
-   de un plugin va inline, y solo cuando no hay rol. */
+/* A styled plugin preview (bridge 49): one line per `div`, one fragment per
+   `span`. The role is the theme's closed vocabulary and maps to its
+   variables; a role with no rule inherits the body's color. A plugin's own
+   color goes inline, and only when there is no role. */
 .viewer-line {
   min-height: var(--cell-h);
 }
@@ -4797,12 +4824,12 @@ button.status-item:hover {
   color: var(--hostile-fg);
 }
 
-/* `selection` NO está: desde `Role::REQUESTABLE` (spec 2026-09-11, F2) un
-   plugin no puede pedirlo —dice dónde está el cursor, que es estado de la
-   ventana y no significado del contenido— así que ese nombre degrada a
-   `None` antes de llegar al DOM y la regla no podía casar nunca.
+/* `selection` is NOT here: since `Role::REQUESTABLE` (spec 2026-09-11, F2)
+   a plugin cannot ask for it — it says where the cursor is, which is window
+   state and not content meaning — so that name degrades to `None` before
+   reaching the DOM and the rule could never match.
 
-   Los dos roles que SÍ se hicieron pedibles y necesitan el suyo: */
+   The two roles that DID become requestable and need their own: */
 .viewer-span[data-role="badge"] {
   background: var(--badge-bg, var(--selection-bg));
   color: var(--badge-fg, var(--selection-fg));
@@ -4812,9 +4839,10 @@ button.status-item:hover {
   color: var(--muted, var(--title-fg));
 }
 
-/* Lo que el provider se saltó al listar. En la cabecera del hueco, con el
-   color de aviso: no es un error —el listado sirve— pero está incompleto, y
-   eso no se puede ver mirando las filas que sí están. */
+/* What the provider skipped while listing. In the slot's header, with the
+   warning color: it is not an error — the listing works — but it is
+   incomplete, and that cannot be seen by looking at the rows that are
+   there. */
 .slot-skipped {
   flex: 0 0 auto;
   margin-left: 8px;
@@ -4822,9 +4850,9 @@ button.status-item:hover {
   unicode-bidi: isolate;
 }
 
-/* Lo que la ocultación aparta: mismo sitio y misma disciplina que
-   `.slot-skipped`, en el tono informativo — no es un listado incompleto,
-   es un filtro que el lector puso. */
+/* What hiding sets aside: same spot and same discipline as `.slot-skipped`,
+   in the informational tone — it is not an incomplete listing, it is a
+   filter the reader set. */
 .slot-hidden {
   color: var(--title-fg);
   unicode-bidi: isolate;
@@ -4832,16 +4860,16 @@ button.status-item:hover {
   margin-left: 8px;
 }
 
-/* Las otras cuatro notas de la cabecera, con la misma forma que las dos de
-   arriba. Sin regla propia eran items flex sin separación —«⚠ 2 entradas
-   omitidasnombres: cp866»— y encogibles, o sea que se recortaban antes que
-   la ruta, que es justo al revés de lo que hay que hacer.
+/* The header's other four notices, in the same shape as the two above.
+   With no rule of their own they were flex items with no separation —
+   "⚠ 2 entries skippednames: cp866" — and shrinkable, i.e. truncated
+   before the path, which is exactly backwards from what should happen.
 
-   `flex: none` es la mitad importante: LA RUTA es lo único que cede
-   (`.title-path` es el único `flex: 0 1 auto`), porque un aviso recortado
-   deja de avisar mientras que una ruta recortada sigue diciendo dónde estás.
-   Y `text-overflow` para que, cuando ya no quepa ni así, se vea que se cortó
-   en vez de desaparecer en silencio. */
+   `flex: none` is the important half: THE PATH is the only thing that
+   gives way (`.title-path` is the only `flex: 0 1 auto`), because a
+   truncated warning stops warning while a truncated path still says where
+   you are. And `text-overflow` so that, when it no longer fits even like
+   this, it shows that it was cut off instead of disappearing silently. */
 .slot-filling,
 .slot-names,
 .slot-pruned,
@@ -4853,31 +4881,32 @@ button.status-item:hover {
   text-overflow: ellipsis;
 }
 
-/* Reinterpretación de nombres y marcas caídas van en el color de AVISO. Lo
-   que se pinta no son los bytes que hay en el disco, y una selección que se
-   vació redirige la siguiente operación en masa al cursor: las dos dicen que
-   la pantalla no describe lo que el lector cree. */
+/* Name reinterpretation and dropped marks go in the WARNING color. What is
+   painted is not the bytes on disk, and a selection that got cleared
+   redirects the next bulk operation to the cursor: both say the screen
+   does not describe what the reader believes. */
 .slot-names,
 .slot-pruned {
   color: var(--warning-fg);
 }
 
-/* Rellenando y lo marcado son informativos: uno es temporal y el otro es un
-   contador de algo que el lector acaba de hacer. */
+/* Filling and marked are informational: one is temporary and the other is
+   a count of something the reader just did. */
 .slot-filling,
 .slot-marked {
   color: var(--title-fg);
 }
 
-/* Esperando un listado (#323).
+/* Waiting for a listing (#323).
 
-   El UMBRAL vive aquí, y es el sitio correcto: nada se ve antes de 250 ms
-   porque por debajo la operación acaba antes de que el ojo la registre y lo
-   único que queda es un parpadeo. En CSS eso es un `animation-delay` y no
-   cuesta ni un temporizador ni un mensaje, así que el nodo se puede crear ya.
+   The THRESHOLD lives here, and it is the correct spot: nothing shows
+   before 250ms because below that the operation finishes before the eye
+   registers it and all that is left is a flicker. In CSS that is an
+   `animation-delay` and costs neither a timer nor a message, so the node
+   can be created right away.
 
-   `opacity: 0` de salida y la animación lo levanta: sin eso, el texto se
-   vería desde el primer frame y el retardo no serviría de nada. */
+   `opacity: 0` at rest and the animation lifts it: without that, the text
+   would show from the very first frame and the delay would be useless. */
 @keyframes norte-aparece {
   to {
     opacity: 1;
@@ -4885,10 +4914,10 @@ button.status-item:hover {
 }
 
 .slot-busy {
-  /* Encoge ANTES que la ruta no: la ruta es lo único que cede en esta
-     cabecera (`.title-path`), así que este aviso se recorta con puntos
-     suspensivos en vez de desbordar. `nowrap` es lo que hace que
-     `text-overflow` signifique algo. */
+  /* Does NOT shrink before the path: the path is the only thing that gives
+     way in this header (`.title-path`), so this notice truncates with an
+     ellipsis instead of overflowing. `nowrap` is what makes `text-overflow`
+     mean something. */
   flex: 0 1 auto;
   min-width: 0;
   margin-left: 8px;
@@ -4898,26 +4927,28 @@ button.status-item:hover {
   text-overflow: ellipsis;
   color: var(--info-fg, var(--title-fg));
   opacity: 0;
-  /* El retardo lo pone el host (`--busy-delay`), que lo saca del crate
-     compartido con el terminal. El 250ms de aquí es solo el respaldo para el
-     instante anterior a que llegue el catálogo. */
+  /* The delay is set by the host (`--busy-delay`), which pulls it from the
+     crate shared with the terminal. The 250ms here is only the fallback
+     for the instant before the catalogue arrives. */
   animation: norte-aparece 120ms linear var(--busy-delay, 250ms) forwards;
 }
 
-/* La RUTA a la que se va, en su propio nodo: pegada dentro de la frase se
-   leería como parte de ella, y un directorio puede llamarse «yendo a /otro». */
+/* The PATH being navigated to, in its own node: glued inside the sentence
+   it would read as part of it, and a directory can be named "going to
+   /other". */
 .slot-busy-target {
   unicode-bidi: isolate;
 }
 
-/* Quien pide menos movimiento no ve la animación, y entonces el retardo no
-   puede depender de ella: se ve desde el principio, que es lo honesto — un
-   parpadeo molesta menos que no saber que se está esperando.
+/* Whoever asks for less motion does not see the animation, and then the
+   delay cannot depend on it: it shows from the start, which is the honest
+   thing — a flicker bothers less than not knowing you are waiting.
 
-   Dos formas de pedirlo y las dos valen: el escritorio
-   (`prefers-reduced-motion`) y `[ui] reduce_motion`, que solo puede AÑADIR la
-   petición — `false` no apaga la del sistema, porque una configuración no
-   contradice a quien ya lo pidió en su escritorio (spec §17). */
+   Two ways to ask for it and both count: the desktop
+   (`prefers-reduced-motion`) and `[ui] reduce_motion`, which can only ADD
+   the request — `false` does not turn off the system's, because a
+   configuration does not contradict someone who already asked for it on
+   their desktop (spec §17). */
 @media (prefers-reduced-motion: reduce) {
   .slot-busy {
     opacity: 1;
@@ -4949,8 +4980,8 @@ button.status-item:hover {
   transition: none;
 }
 
-/* Los efectos del pulido de 2026-09-21 —lo que se abre encima emerge, los
-   mandos se iluminan— tampoco se mueven con el movimiento reducido. */
+/* The 2026-09-21 polish effects — what opens on top emerges, the controls
+   light up — do not move either under reduced motion. */
 @media (prefers-reduced-motion: reduce) {
   .palette,
   .menu-items,
@@ -4983,7 +5014,7 @@ button.status-item:hover {
   animation: none;
 }
 
-/* --- El selector de columnas ------------------------------------------- */
+/* --- The columns picker ------------------------------------------------ */
 
 #columns[data-open="true"] {
   position: fixed;
@@ -5015,8 +5046,8 @@ button.status-item:hover {
   font-size: 1.35em;
   color: var(--title-fg);
   border-bottom: 1px solid var(--separator, var(--border));
-  /* El título lleva el ALCANCE dentro y ese trozo sale de un esquema, así
-     que es su propia corrida bidi. */
+  /* The title carries the SCOPE inside and that piece comes from a scheme,
+     so it is its own bidi run. */
   unicode-bidi: isolate;
 }
 
@@ -5041,9 +5072,10 @@ button.status-item:hover {
   color: var(--selection-fg);
 }
 
-/* Una fila FIJA —el nombre— no se apaga ni se mueve. Se dice apagándola, no
-   escondiéndola: una lista donde falta lo que se espera ver es peor que una
-   donde algo está y se ve que no se toca. */
+/* A FIXED row — the name — neither turns off nor moves. It is said by
+   dimming it, not by hiding it: a list missing what you expect to see is
+   worse than one where something is there and it shows that it cannot be
+   touched. */
 .columns-row[data-fixed="true"] {
   opacity: 0.7;
 }
@@ -5061,7 +5093,7 @@ button.status-item:hover {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  /* La etiqueta de un `attr:` o un `plugin:` la escribe un TERCERO. */
+  /* An `attr:` or `plugin:`'s label is written by a THIRD PARTY. */
   unicode-bidi: isolate;
 }
 
@@ -5071,8 +5103,8 @@ button.status-item:hover {
   unicode-bidi: isolate;
 }
 
-/* El formato lo fija un ajuste del esquema: aquí no se cicla. Apagado, no
-   ausente — una tecla que no hace nada y no dice por qué es peor. */
+/* The format is fixed by a scheme setting: not cycled here. Dimmed, not
+   absent — a key that does nothing and does not say why is worse. */
 .columns-format[data-locked="true"] {
   opacity: 0.5;
 }
@@ -5091,42 +5123,44 @@ button.status-item:hover {
   border-top: 1px solid var(--separator, var(--border));
 }
 
-/* Lo que enseña el visor lo produjo un PLUGIN. Su propio color, y aislado:
-   el nombre lo escribe un tercero. */
+/* What the viewer shows was produced by a PLUGIN. Its own color, and
+   isolated: the name is written by a third party. */
 .viewer-via {
   margin-left: 8px;
   color: var(--info-fg);
   unicode-bidi: isolate;
 }
 
-/* Y la decodificación que se le dio fue con pérdida: los `?` de su salida
-   vienen de ahí y no del fichero. */
+/* And the decoding given to it was lossy: the `?`s in its output come from
+   that and not from the file. */
 .viewer-via-lossy {
   margin-left: 6px;
   color: var(--warning-fg);
   unicode-bidi: isolate;
 }
 
-/* La imagen del visor. Se pinta con su tamaño DECLARADO, que el host ya
-   comparó con el presupuesto, y encogida a la caja: una foto de 6000 px de
-   ancho no puede sacar barras de scroll horizontales en la ventana. */
+/* The viewer's image. Painted with its DECLARED size, which the host
+   already compared against the budget, and shrunk to the box: a 6000px
+   wide photo cannot force horizontal scrollbars onto the window. */
 .viewer-image {
   display: block;
-  /* El ZOOM (puente 80): `--zoom` es el porcentaje que el host lleva, ya
-     dividido entre cien, y `1` —el que hay si nadie lo pone— es AJUSTADA,
-     que es exactamente lo que estos dos topes significaban antes.
+  /* The ZOOM (bridge 80): `--zoom` is the percentage the host carries,
+     already divided by a hundred, and `1` — what is there if nobody sets it
+     — is FITTED, which is exactly what these two caps used to mean.
 
-     Se multiplica el TOPE y no se escala la imagen con `transform`: escalar
-     deja a la caja creyendo que la foto sigue midiendo lo de antes, así que
-     no sale barra ninguna y lo que se sale del hueco queda inalcanzable. */
+     The CAP is multiplied and the image is not scaled with `transform`:
+     scaling leaves the box believing the photo still measures what it used
+     to, so no scrollbar shows up and whatever spills out of the slot is
+     unreachable. */
   max-width: calc(100% * var(--zoom, 1));
   max-height: calc(100% * var(--zoom, 1));
   object-fit: contain;
   margin: auto;
 }
 
-/* La caja de una imagen AMPLIADA (puente 80). Solo existe con zoom por
-   encima del 100 %: es la que desborda y deja recorrer lo que ya no cabe. */
+/* The box for an ENLARGED image (bridge 80). It only exists with zoom above
+   100%: it is the one that overflows and lets you scroll through what no
+   longer fits. */
 .viewer-image-box {
   flex: 1 1 auto;
   min-width: 0;
@@ -5134,8 +5168,8 @@ button.status-item:hover {
   display: flex;
 }
 
-/* Se reconoció una imagen y esta ventana se niega a pintarla. Se DICE, en vez
-   de caer en silencio al hexview. */
+/* An image was recognized and this window refuses to paint it. It is SAID,
+   instead of silently falling back to the hexview. */
 .viewer-image-refused {
   flex: 0 0 auto;
   margin: 0 0 0 8px;
