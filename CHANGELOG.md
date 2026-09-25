@@ -252,6 +252,22 @@ independently through `PROTOCOL_VERSION`.
   the task's class (`copy`, `delete`) and ten of the classes were English in
   `es.ftl` too; both frontends now name a task through one shared function.
 - **`ntc --help` names the seven keymap presets** (#376), not three.
+- **The window's docked viewer shows a photo whole** (#377). A half-block
+  picture from an image previewer had a stripe of background between every
+  two rows; its rows now touch.
+- **Marking by key works in the window** (#378). `Insert` and `space`
+  marked the row and stayed on it, so the second press unmarked it and the
+  window seemed not to mark at all. The key marks and moves on, as in the
+  terminal; a click still marks without moving.
+- **Source code is highlighted** (#379). A `.rs` file reached previewers as
+  `text/plain`, and `.py`, `.go`, `.sh`, `.yml`, `.c`, `.java`, `.rb` or
+  `.sql` were not text at all, so the syntect highlighter painted Rust in one
+  colour and never saw the rest. They are now typed by language
+  (`text/x-rust`, `text/x-python`…), all under `text/`.
+- **The viewer no longer calls a Markdown or JSON file «binary, no EOL»**
+  (#380) when a plugin previews it: the encoding and line-end marks are left
+  out, in both frontends, because they would describe the plugin's output
+  and not the file.
 - **Clicking a column title in `ntc` sorts by it.** It only focused the pane;
   sorting by mouse existed in the window alone. A second click reverses the
   order, like the window and the `pane.sort-*` keys. The two cells around each
