@@ -278,6 +278,85 @@ fn grabbing_before_the_separator_does_not_skip_a_cell() {
     );
 }
 
+/// A two-pane app with `n` entries each, painted on a 120-column terminal:
+/// wide enough for the columns past the name.
+fn app_wide(n: usize) -> App {
+    let dir = vp("file:///casa");
+    let mut app = App::new(
+        Pane::new(dir.clone(), entries(&dir, n)),
+        Pane::new(dir.clone(), entries(&dir, n)),
+    );
+    let _ = paint_at(&mut app, 120, H);
+    app
+}
+
+/// A click on a column's TITLE sorts by it, and a second one reverses it:
+/// the same rule as the window's header and the `pane.sort-*` keys
+/// (`SortSpec::after_click`). Before, the header only focused the pane.
+#[test]
+fn a_click_on_a_column_title_sorts_by_it_and_a_second_reverses() {
+    let mut app = app_wide(3);
+    let (edge, header, id, width) = edge_of_the_second_column(&app);
+    let col = norte_frontend::columns::sort_column_id(&id).expect("a sortable column");
+    assert_ne!(app.panes[0].sort().column, col, "the test starts elsewhere");
+    let middle = edge + width / 2;
+
+    mouse::handle(&mut app, ev(DOWN, middle, header));
+    mouse::handle(&mut app, ev(UP, middle, header));
+    assert_eq!(app.panes[0].sort().column, col);
+    assert_eq!(app.panes[0].sort().dir, norte_frontend::SortDir::Asc);
+
+    mouse::handle(&mut app, ev(DOWN, middle, header));
+    mouse::handle(&mut app, ev(UP, middle, header));
+    assert_eq!(app.panes[0].sort().column, col);
+    assert_eq!(
+        app.panes[0].sort().dir,
+        norte_frontend::SortDir::Desc,
+        "the second click reverses"
+    );
+    assert_eq!(
+        app.mouse.take_column_width(),
+        None,
+        "sorting is not a resize"
+    );
+}
+
+/// The click sorts the pane it lands on, and only that one: the order
+/// belongs to one listing, like the cursor. It also takes the focus there.
+#[test]
+fn a_click_on_the_other_panes_title_sorts_that_pane_only() {
+    let mut app = app_wide(3);
+    let (edge, header, id, width) = edge_of_the_second_column(&app);
+    let col = norte_frontend::columns::sort_column_id(&id).expect("a sortable column");
+    let g = app.mouse.geometry().expect("there is geometry")[1];
+    let before = app.panes[0].sort();
+    // The same column in the right pane: same offset from its own left edge.
+    let left = app.mouse.geometry().expect("there is geometry")[0].x;
+    let middle = g.x + (edge - left) + width / 2;
+
+    mouse::handle(&mut app, ev(DOWN, middle, header));
+    mouse::handle(&mut app, ev(UP, middle, header));
+    assert_eq!(app.panes[1].sort().column, col);
+    assert_eq!(app.panes[0].sort(), before, "the left pane is untouched");
+    assert_eq!(app.focus(), 1);
+}
+
+/// The border cells are also a title: pressing one and releasing it
+/// without moving is a click, and sorts by the column under the pointer.
+/// Otherwise two cells of every narrow column's title did nothing.
+#[test]
+fn a_click_on_a_columns_border_sorts_by_the_column_under_it() {
+    let mut app = app_wide(3);
+    let (edge, header, id, width) = edge_of_the_second_column(&app);
+    let col = norte_frontend::columns::sort_column_id(&id).expect("a sortable column");
+
+    mouse::handle(&mut app, ev(DOWN, edge, header));
+    mouse::handle(&mut app, ev(UP, edge, header));
+    assert_eq!(app.panes[0].sort().column, col, "the separator opens {id}");
+    assert_eq!(app.mouse.take_column_width(), None);
+    assert_eq!(width_of(&app, &id), width);
+}
+
 /// Left button down.
 const DOWN: MouseEventKind = MouseEventKind::Down(MouseButton::Left);
 /// Left button up.

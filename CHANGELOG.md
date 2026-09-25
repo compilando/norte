@@ -225,6 +225,12 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **Clicking a column title in `ntc` sorts by it.** It only focused the pane;
+  sorting by mouse existed in the window alone. A second click reverses the
+  order, like the window and the `pane.sort-*` keys. The two cells around each
+  column border, which drag to resize, also sort when pressed and released
+  without moving.
+
 - **The subshell is moved through a file now, not by typing at it** (#363,
   ADR 0153). `Ctrl+O`'s shell follows the panel, and norte did that by writing
   `__norte_cd '...'` into the pty. Typing at a line editor is only safe when
