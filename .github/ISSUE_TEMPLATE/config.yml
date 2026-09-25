@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a vulnerability
+    url: https://github.com/compilando/norte/security/advisories/new
+    about: Privately — please do not open a public issue for security problems.
+  - name: Documentation
+    url: https://github.com/compilando/norte/blob/main/docs/README.md
+    about: The manual, the specification and the architecture decisions.
