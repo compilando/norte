@@ -10,7 +10,8 @@ wait 1.2
 frame
 shot markdown
 keys Escape
-# No shot of src/main.rs: the syntect previewer shows its escapes raw today.
+# No shot of src/main.rs: the syntect previewer shows its escapes raw (#373).
+# No disk map either: it paints nothing in the terminal (#372).
 # The right pane walks to the photos: ~ is .., Documents, Downloads, Music, Photos.
 keys Tab
 keys Home
@@ -20,7 +21,7 @@ open
 frame
 # Going up leaves the cursor on the folder we came from: count from the top.
 # No frame right after entering Photos or Tromsø: the first paint of a row
-# with 🖼️ (VS16) shifts it by a cell until the next paint repairs it.
+# with 🖼️ (VS16) shifts it by a cell until the next paint repairs it (#374).
 keys Home Down Down Down Down
 open
 # Photos is .., 2026-01 Tromsø, 東京 2025, Café de Flore.jpg, profile.png.

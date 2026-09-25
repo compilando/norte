@@ -29,5 +29,6 @@ unapproved: `scenes/grant.scene` photographs the question.
 
 **Known product bugs the scenes step around**, each noted where it happens:
 the first paint of a row with a VS16 emoji (🖼️) is shifted by one cell until
-the next paint; the disk map panel paints nothing in the terminal; the syntect
-previewer shows its escapes raw.
+the next paint (#374); the disk map panel paints nothing in the terminal
+(#372); the syntect previewer shows its escapes raw (#373). When one is fixed,
+put its scene back.
