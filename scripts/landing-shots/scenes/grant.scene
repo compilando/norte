@@ -1,0 +1,11 @@
+# The question a plugin's capabilities are granted through. Syntect is the one
+# approve.scene leaves unapproved, and it asks for fs-read.
+run
+keys F12
+wait 1
+keys Down Down Down Down Down
+keys y
+wait 1
+shot grant
+keys n
+keys Escape

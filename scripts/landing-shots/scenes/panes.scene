@@ -1,0 +1,14 @@
+# The hero still, once per theme: two panes, photos on the right, two marked.
+run projects/aurora
+keys Tab
+keys Home
+open
+keys Home
+open
+keys Home Down Down Down Down
+open
+keys Down
+open
+keys Down Down Insert Insert
+wait 0.5
+shot panes

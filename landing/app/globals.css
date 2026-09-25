@@ -109,6 +109,58 @@ body {
   text-wrap: balance;
 }
 
+/* A captured terminal screen. The font is sized from the container's width so
+   the screen's columns fill it exactly: JetBrains Mono advances 0.6em. */
+.term {
+  container-type: inline-size;
+}
+
+.term pre {
+  margin: 0;
+  overflow: hidden;
+  font-family: var(--font-jetbrains), "JetBrains Mono", monospace;
+  font-size: calc(100cqw / (var(--cols) * 0.6));
+  font-variant-ligatures: none;
+  line-height: 1.2;
+  white-space: pre;
+}
+
+.term-wide {
+  display: inline-block;
+  width: 2ch;
+  overflow: hidden;
+  text-align: center;
+  vertical-align: top;
+}
+
+@supports (animation-timeline: view()) {
+  .rise {
+    animation: rise linear both;
+    animation-timeline: view();
+    animation-range: entry 0% cover 28%;
+  }
+}
+
+@keyframes fadein {
+  from { opacity: 0.4; }
+  to { opacity: 1; }
+}
+
+@keyframes rise {
+  from { opacity: 0; transform: translateY(48px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+
+.tilt {
+  transform: perspective(2200px) rotateX(9deg) scale(0.97);
+  transition: transform 0.9s cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+.tilt:hover,
+.tilt:focus-within {
+  transform: none;
+}
+
 .terminal-scan::after {
   position: absolute;
   inset: 0;
