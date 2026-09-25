@@ -3998,9 +3998,12 @@ button.status-item:hover {
 }
 
 /* A half-block picture (#377): each row is exactly one em, so the `▀` cells
-   of one row meet the next and the photo is not barred. */
+   of one row meet the next and the photo is not barred. `min-height` too:
+   `.viewer-line` has one of a whole text cell (~1.57em), and a min-height
+   beats a height — without it this rule changed nothing. */
 .viewer-body.viewer-cells .viewer-line {
   height: 1em;
+  min-height: 1em;
   line-height: 1;
   overflow: hidden;
 }

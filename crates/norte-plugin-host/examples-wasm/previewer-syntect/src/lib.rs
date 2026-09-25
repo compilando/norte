@@ -49,6 +49,10 @@ fn ext_for_mime(mime: &str) -> Option<&'static str> {
         "text/x-java" => Some("java"),
         "text/x-ruby" => Some("rb"),
         "text/x-sql" => Some("sql"),
+        // syntect's default set has no TOML grammar: this finds nothing
+        // today and falls back to plain text, and starts working the day a
+        // TOML syntax is bundled.
+        "text/x-toml" => Some("toml"),
         _ => None,
     }
 }
