@@ -75,6 +75,8 @@ OPTIONS:
     --preset <NAME>      Keyboard preset (default: the config's)
     --no-splash          No splash screen on this launch
     --profile <NAME>     Config profile (default: none)
+    --lang <LANG>        Language for this run (es|en); overrides NORTE_LANG
+                         and [ui] lang
     --attach             Picks up the screen the terminal just handed off
                          (`app.handoff`), marks included
     -h, --help           This help
@@ -262,6 +264,9 @@ pub struct Cli {
     /// Without it a startup is a startup, and marks from a handoff that was
     /// left halfway do not come back to life the next day.
     pub attach: bool,
+    /// Language requested for THIS run (`--lang`), above `NORTE_LANG` and
+    /// `[ui] lang`. Already validated: `parse` refuses anything but es/en.
+    pub lang: Option<Lang>,
     /// Help was requested.
     pub help: bool,
     /// The version was requested.
@@ -281,11 +286,18 @@ where
     let raw = norte_frontend::cli::parse(
         args,
         &["--no-splash", norte_frontend::handoff::ATTACH],
-        &["--socket", "--layout", "--preset", "--profile"],
+        &["--socket", "--layout", "--preset", "--profile", "--lang"],
     );
     if let Some(flag) = raw.unknown {
         return Err(StartupError::UnknownFlag(flag));
     }
+    let lang = match raw.text("--lang") {
+        Some(v) => Some(Lang::from_flag(&v).ok_or(StartupError::Unknown {
+            that: "--lang",
+            valor: v,
+        })?),
+        None => None,
+    };
     Ok(Cli {
         dir: raw.dir.clone(),
         socket: raw.path("--socket"),
@@ -294,6 +306,7 @@ where
         profile: raw.os_text("--profile").map(std::ffi::OsString::from),
         no_splash: raw.has("--no-splash"),
         attach: raw.has(norte_frontend::handoff::ATTACH),
+        lang,
         help: raw.help,
         version: raw.version,
     })
@@ -407,8 +420,8 @@ fn effects_declared(theme: &Theme) -> Vec<String> {
 
 /// The window's language, fixed for the whole process.
 ///
-/// **`NORTE_LANG` > `[ui] lang` > the system's environment**, which is what
-/// the terminal does (`norte-tui/src/main.rs`). The two surfaces used to
+/// **`--lang` > `NORTE_LANG` > `[ui] lang` > the system's environment**
+/// ([`Lang::resolve`], shared with the terminal). The two surfaces used to
 /// document OPPOSITE rules and both honored them: here the configuration
 /// won, there `NORTE_LANG` won, so with `NORTE_LANG=en` and `lang = "es"`
 /// both set, `ntc` came out in English and `norte-gui` in Spanish.
@@ -418,26 +431,17 @@ fn effects_declared(theme: &Theme) -> Vec<String> {
 /// of thing as `--layout`, which beats `[ui] layout`. `LANG` does not: that
 /// is the system's language, and a decision written in the configuration is
 /// more specific than it.
-fn language(requested: Option<&str>) -> Lang {
-    let explicito = std::env::var("NORTE_LANG").ok().filter(|v| !v.is_empty());
-    let lang = choose_language(explicito.as_deref(), requested, Lang::from_env());
+fn language(flag: Option<Lang>, requested: Option<&str>) -> Lang {
+    let lang = Lang::resolve(
+        flag,
+        std::env::var("NORTE_LANG").ok().as_deref(),
+        requested,
+        Lang::from_env(),
+    );
     let _ = norte_i18n::force(lang);
     // Keys are named in the window's language (see the TUI).
     let _ = norte_frontend::keymap::set_chord_lang(lang);
     lang
-}
-
-/// The precedence rule, without touching the environment.
-///
-/// Separate so it can be tested: `std::env::set_var` is `unsafe` since the
-/// 2024 edition and rule 5 forbids it, so what is read from the environment
-/// comes in as an argument. Same fix as [`daemon_program`].
-fn choose_language(explicito: Option<&str>, config: Option<&str>, from_env: Lang) -> Lang {
-    match (explicito, config) {
-        (Some(e), _) => Lang::negotiate(Some(e)),
-        (None, Some(c)) => Lang::negotiate(Some(c)),
-        (None, None) => from_env,
-    }
 }
 
 /// The two startup disk reads that are not the configuration.
@@ -709,7 +713,7 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
         Err(e) => std::panic::resume_unwind(e.into_panic()),
     };
 
-    let lang = language(cfg.common.ui_lang.as_deref());
+    let lang = language(cli.lang, cfg.common.ui_lang.as_deref());
 
     let (theme, theme_resolved) = theme(cfg.common.ui_theme.as_deref());
     // The desktop-scheme variants (V6): each one resolves like `theme` and
@@ -1126,30 +1130,23 @@ fn logging(cfg: &norte_frontend::config::FrontendConfig) -> Option<norte_config:
 mod tests {
     use super::*;
 
-    /// `NORTE_LANG` > `[ui] lang` > the system's environment.
-    ///
-    /// The two surfaces used to document OPPOSITE rules and both honored
-    /// them: the window sided with the configuration and the terminal with
-    /// `NORTE_LANG`, so with both set `ntc` came out in one language and
-    /// `norte-gui` in another. The terminal rules: `NORTE_LANG` is
-    /// norte-specific and is set for ONE run, i.e. the same kind of thing as
-    /// `--layout`, which beats `[ui] layout`.
+    /// `--lang` reaches the window's startup, and a language norte does not
+    /// have is an error that names the flag — not a quiet English. The
+    /// precedence itself (`--lang` > `NORTE_LANG` > `[ui] lang` > locale) is
+    /// [`Lang::resolve`]'s, tested where it lives.
     #[test]
-    fn norte_lang_wins_over_config_and_config_over_the_environment() {
+    fn lang_flag_parses_and_an_unknown_language_is_refused() {
+        let cli = parse(["--lang", "es"]).expect("parses");
+        assert_eq!(cli.lang, Some(Lang::Es));
         assert_eq!(
-            choose_language(Some("en"), Some("es"), Lang::Es),
-            Lang::En,
-            "what was set for this run rules"
+            parse(["--lang", "EN"]).expect("parses").lang,
+            Some(Lang::En)
         );
-        assert_eq!(
-            choose_language(None, Some("es"), Lang::En),
-            Lang::Es,
-            "and a decision written down rules over the system's language"
-        );
-        assert_eq!(
-            choose_language(None, None, Lang::En),
-            Lang::En,
-            "with nothing, the system"
+        assert_eq!(parse::<[&str; 0], &str>([]).expect("parses").lang, None);
+        let e = parse(["--lang", "fr"]).expect_err("fr is not a language of norte");
+        assert!(
+            matches!(&e, StartupError::Unknown { that, valor } if *that == "--lang" && valor == "fr"),
+            "{e:?}"
         );
     }
 

@@ -193,6 +193,7 @@ pub enum DaemonMode {
 #[serde(deny_unknown_fields)]
 pub struct UiSection {
     /// Language (`es` or `en`). When absent, negotiate from the environment.
+    /// `--lang` and `NORTE_LANG` win over it for a single run.
     #[serde(default)]
     pub lang: Option<String>,
     /// Theme preset name or a path to a custom TOML theme (ADR 0020). When

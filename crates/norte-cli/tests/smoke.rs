@@ -489,6 +489,22 @@ fn mcp_serve_help_mentions_session() {
     assert!(help.contains("--session"), "help: {help}");
 }
 
+/// `--lang` is a global option: the help announces it, and a language norte
+/// does not have is refused naming the flag instead of falling back to
+/// English in silence.
+#[test]
+fn lang_flag_is_announced_and_an_unknown_language_is_refused() {
+    let out = norte().arg("--help").output().unwrap();
+    assert!(out.status.success());
+    let help = String::from_utf8_lossy(&out.stdout);
+    assert!(help.contains("--lang"), "help: {help}");
+
+    let out = norte().args(["--lang", "fr", "ls", "."]).output().unwrap();
+    assert!(!out.status.success(), "fr is not a language of norte");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("--lang"), "stderr: {err}");
+}
+
 // ---------- ls --attrs (#108 block 2) ----------
 
 #[cfg(unix)]

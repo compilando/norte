@@ -55,6 +55,16 @@ async fn main() -> Result<()> {
     // yesterday's selection is putting an `F8` over whatever was marked
     // back then.
     let cli_attach = args.has("--attach");
+    // `--lang`: this run's language, above `NORTE_LANG` and `[ui] lang`.
+    // Checked here, before the terminal is taken, so a typo is a readable
+    // error and not a quiet English.
+    let cli_lang = match args.text("--lang") {
+        Some(v) => Some(
+            norte_i18n::Lang::from_flag(&v)
+                .with_context(|| format!("`--lang {v}`: the languages are `es` and `en`"))?,
+        ),
+        None => None,
+    };
     let (cli_preset, cli_layout, cli_profile, cli_daemon, cli_socket, cli_pick, cli_cd_file) = (
         args.text("--preset"),
         // `--layout` is NOT text by contract: it ends up as a file name,
@@ -111,14 +121,13 @@ async fn main() -> Result<()> {
     let cfg = config::load_async(layers.clone())
         .await
         .context("invalid config")?;
-    // Language: explicit NORTE_LANG > the config's [ui] lang > environment.
-    let lang = if std::env::var("NORTE_LANG").is_ok_and(|v| !v.is_empty()) {
-        norte_i18n::Lang::from_env()
-    } else if let Some(l) = &cfg.common.ui_lang {
-        norte_i18n::Lang::negotiate(Some(l))
-    } else {
-        norte_i18n::Lang::from_env()
-    };
+    // Language: --lang > NORTE_LANG > the config's [ui] lang > environment.
+    let lang = norte_i18n::Lang::resolve(
+        cli_lang,
+        std::env::var("NORTE_LANG").ok().as_deref(),
+        cfg.common.ui_lang.as_deref(),
+        norte_i18n::Lang::from_env(),
+    );
     let _ = norte_i18n::force(lang);
     // Keys are NAMED in the same language as the rest of the screen:
     // "[Backspace] back" stays consistent instead of a mixed-language chord
@@ -676,7 +685,14 @@ fn arm_mouse(cfg: &config::LoadedConfig, app: &mut App, out: &mut tty::TtyOut) -
 /// The TUI's boolean flags.
 const BOOL_FLAGS: &[&str] = &["--daemon", "--pick", "--setup", "--no-splash", "--attach"];
 /// The TUI's value flags.
-const VALUE_FLAGS: &[&str] = &["--preset", "--layout", "--profile", "--socket", "--cd-file"];
+const VALUE_FLAGS: &[&str] = &[
+    "--preset",
+    "--layout",
+    "--profile",
+    "--socket",
+    "--cd-file",
+    "--lang",
+];
 
 /// `--help`'s text. In ENGLISH and with no Fluent on purpose: printed
 /// BEFORE the language is negotiated (which comes from the config, not yet
@@ -696,6 +712,8 @@ Options:
       --profile <NAME>   Start in this profile — a directory under `profiles/`
                          in your config dir. Overrides the one you were last
                          in; refuses to start if it cannot be used
+      --lang <LANG>      Language for this run (es|en); overrides NORTE_LANG
+                         and [ui] lang in norte.toml
       --daemon           Talk to the daemon instead of the embedded core
       --socket <PATH>    Daemon socket (default: $XDG_RUNTIME_DIR/norte/daemon.sock)
       --pick             print the selection, NUL-terminated, and exit
