@@ -154,6 +154,13 @@ impl Rate {
     /// assert_eq!(r.observe(&p(100), 1000), Some(100.0), "100 B in one second");
     /// ```
     pub fn observe(&mut self, p: &norte_proto::TaskProgress, now_ms: i64) -> Option<f64> {
+        // Paused, nothing moves on purpose: a 0 B/s sample per repaint would
+        // decay the average into a fake crawl with an hours-long ETA. The
+        // baseline goes too, so resuming measures from the resume.
+        if matches!(p.state, norte_proto::TaskState::Paused) {
+            *self = Self::default();
+            return None;
+        }
         let done = p.bytes_done;
         // The first snapshot only leaves the baseline: without two there is
         // no speed.
@@ -507,5 +514,50 @@ mod tests {
         let mut p = progress(Some(2), None);
         p.bytes_done = 9;
         assert_eq!(progress_pct(&p), Some(100));
+    }
+
+    fn copy_at(bytes: u64, state: norte_proto::TaskState) -> norte_proto::TaskProgress {
+        norte_proto::TaskProgress {
+            kind: norte_proto::TaskKind::Copy,
+            state,
+            bytes_done: bytes,
+            ..progress(Some(1_000_000), None)
+        }
+    }
+
+    /// A paused task has no rate and no ETA — ADR 0147 says `⏸ 40%`.
+    ///
+    /// The TUI observes the SAME paused snapshot on every repaint; each one
+    /// entered the average as a 0 B/s sample, and the landing captured
+    /// `45.7 KiB/s · 4h 08m ⏸ 55%` decaying from the real speed.
+    #[test]
+    fn a_paused_task_has_no_rate_nor_eta() {
+        use norte_proto::TaskState::{Paused, Running};
+        let mut r = Rate::default();
+        r.observe(&copy_at(0, Running), 0);
+        r.observe(&copy_at(100_000, Running), 1000);
+        assert!(r.bps().is_some(), "running, it measures");
+
+        let paused = copy_at(100_000, Paused);
+        for tick in 1..=20 {
+            r.observe(&paused, 1000 + tick * 100);
+        }
+        assert_eq!(r.bps(), None, "paused, there is no speed");
+        assert_eq!(r.eta_secs(&paused), None, "nor a countdown");
+    }
+
+    /// Resuming measures from the resume, not across the pause: a sample
+    /// spanning ten idle minutes would start the average near zero.
+    #[test]
+    fn resuming_measures_from_the_resume() {
+        use norte_proto::TaskState::{Paused, Running};
+        let mut r = Rate::default();
+        r.observe(&copy_at(0, Running), 0);
+        r.observe(&copy_at(100_000, Running), 1000);
+        r.observe(&copy_at(100_000, Paused), 2000);
+        r.observe(&copy_at(100_000, Running), 600_000);
+        assert_eq!(r.bps(), None, "one snapshot since resuming: no rate yet");
+        r.observe(&copy_at(200_000, Running), 601_000);
+        assert_eq!(r.bps(), Some(100_000.0));
     }
 }
