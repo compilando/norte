@@ -706,7 +706,8 @@ Arguments:
   [DIR]  Directory to start in (default: the current directory)
 
 Options:
-      --preset <NAME>    Keymap preset (orthodox|vim|cua); overrides norte.toml
+      --preset <NAME>    Keymap preset (orthodox|vim|cua|krusader|far|norton|total-commander);
+                         overrides norte.toml
       --layout <NAME>    Layout for this run (orthodox|simple|krusader|explorer|full,
                          or one of your own under `layouts/`); overrides norte.toml
       --profile <NAME>   Start in this profile — a directory under `profiles/`
@@ -920,6 +921,23 @@ mod tests {
             assert!(
                 USAGE.contains(f),
                 "{f} is registered and missing from --help"
+            );
+        }
+    }
+
+    /// `--preset` lists every preset the binary embeds (#376). It named
+    /// three of seven for weeks, so four presets were invisible to anyone
+    /// who reads `--help` to find out what exists.
+    #[test]
+    fn help_names_every_embedded_preset() {
+        let line = USAGE
+            .lines()
+            .find(|l| l.contains("--preset"))
+            .expect("--preset is in --help");
+        for name in norte_frontend::keymap::presets::NAMES {
+            assert!(
+                line.contains(name),
+                "--help does not name the {name} preset: {line}"
             );
         }
     }
