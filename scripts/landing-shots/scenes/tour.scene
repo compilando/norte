@@ -1,0 +1,116 @@
+# The terminal tour. Every `shot` is a still on the page; every `frame` is
+# one beat of the clip that plays in the hero. Needs the plugins approved
+# (plugins.sh, then approve.scene).
+run projects/aurora
+frame
+# aurora is .., src, target, Cargo.lock, Cargo.toml, LICENSE, README.md.
+keys Home Down Down Down Down Down Down
+keys F3
+wait 1.2
+frame
+shot markdown
+keys Escape
+# src is .., lib.rs, main.rs, station.rs: main.rs, highlighted by syntect.
+keys Home Down
+open
+keys Down Down
+keys F3
+# The highlighter compiles its grammar on first use.
+wait 4
+frame
+shot code
+keys Escape
+keys Home
+open
+# The disk map of ada's home, measured and painted.
+keys Home
+open
+keys Home
+open
+keys M-z
+wait 3
+frame
+shot disk-map
+keys M-z
+keys Escape
+# Back to the project for the tour's left pane.
+keys Home Down Down Down Down Down
+open
+keys Home Down
+open
+# The right pane walks to the photos: ~ is .., Documents, Downloads, Music, Photos.
+keys Tab
+keys Home
+open
+keys Home
+open
+frame
+# Going up leaves the cursor on the folder we came from: count from the top.
+# No frame right after entering Photos or Tromsø: the first paint of a row
+# with 🖼️ (VS16) shifts it by a cell until the next paint repairs it (#374).
+keys Home Down Down Down Down
+open
+# Photos is .., 2026-01 Tromsø, 東京 2025, Café de Flore.jpg, profile.png.
+keys Down
+open
+# Tromsø is .., aurora-001, aurora-002, aurora-003, fjord. Mark two.
+keys Down Down Insert Insert
+frame
+shot panes
+# View an image as an image.
+keys Up Up Up
+keys F3
+wait 1.5
+frame
+shot viewer
+keys Escape
+# Copy the marked photos to the left pane.
+keys F5
+wait 0.4
+frame
+shot copy-dialog
+keys Enter
+wait 1
+frame
+# The journal: what happened, and a way back.
+keys C-p
+type timeline
+wait 0.3
+frame
+shot palette
+keys Enter
+wait 0.8
+frame
+shot timeline
+keys Escape
+# Go anywhere.
+keys C-g
+type trom
+wait 0.4
+frame
+shot goto
+keys Escape
+# A terminal in a panel.
+keys C-M-s
+wait 0.8
+type ls -l ~/projects/aurora
+keys Enter
+wait 0.6
+frame
+shot terminal
+keys C-M-s
+keys M-x
+# Settings, in sections.
+keys F11
+wait 0.5
+frame
+shot settings
+keys Escape
+keys F9
+frame
+shot menu
+keys Escape
+keys F1
+wait 0.5
+shot help
+keys Escape

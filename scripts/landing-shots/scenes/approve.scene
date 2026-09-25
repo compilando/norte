@@ -1,0 +1,68 @@
+# Approves and switches on the plugins plugins.sh installed, the way a person
+# does: in the extension manager (F12). `y` on a row asks «Grant these
+# capabilities?», `y` again grants, `e` switches it on. `y` on an APPROVED row
+# revokes, so this runs once per fresh home. The manager is reopened per row:
+# approving loads the binary, and keys typed meanwhile land on a stale list.
+# Rows: media-info, size-bar, file-icons, image-ansi, markdown, syntect, image-thumb.
+# Media info stays unapproved on purpose: grant.scene asks for it.
+run
+keys F12
+wait 1
+keys Down
+keys y
+wait 1
+keys y
+wait 1.5
+keys e
+wait 1.5
+keys Escape
+keys F12
+wait 1
+keys Down Down
+keys y
+wait 1
+keys y
+wait 1.5
+keys e
+wait 1.5
+keys Escape
+keys F12
+wait 1
+keys Down Down Down
+keys y
+wait 1
+keys y
+wait 1.5
+keys e
+wait 1.5
+keys Escape
+keys F12
+wait 1
+keys Down Down Down Down
+keys y
+wait 1
+keys y
+wait 1.5
+keys e
+wait 1.5
+keys Escape
+keys F12
+wait 1
+keys Down Down Down Down Down
+keys y
+wait 1
+keys y
+wait 1.5
+keys e
+wait 1.5
+keys Escape
+keys F12
+wait 1
+keys Down Down Down Down Down Down
+keys y
+wait 1
+keys y
+wait 1.5
+keys e
+wait 1.5
+keys Escape

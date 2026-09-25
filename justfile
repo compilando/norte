@@ -953,6 +953,13 @@ gui-package: gui-build
 gui-smoke imagen="debian:trixie":
     ./scripts/gui-smoke.sh {{imagen}}
 
+# Retakes every screen the landing shows, from the build in target/debug:
+# `ntc` in a detached tmux, `norte-gui` on Xvfb, both inside a bwrap sandbox
+# whose only home is a fixed demo one (scripts/landing-shots/README.md).
+# Build first (`just link link-gui`); the plugins must be built (`just plugins`).
+landing-shots:
+    ./scripts/landing-shots/shoot.sh
+
 # The baseline system's tests (`scripts/baseline/lib.sh`) and shellcheck over
 # all its scripts. Seconds, no Docker: that folder's RED→GREEN loop.
 baseline-selftest:

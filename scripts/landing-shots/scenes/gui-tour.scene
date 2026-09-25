@@ -1,0 +1,49 @@
+# The window's tour, recorded as a video (RECORD=…) with a still per stop.
+run projects/aurora
+wait 2
+keys Home Down Down Down Down Down Down
+keys F3
+wait 2
+shot markdown
+keys Escape
+keys Tab
+keys Home
+open
+keys Home
+open
+keys Home Down Down Down Down
+open
+keys Down
+open
+wait 2
+keys Down
+wait 1
+keys F3
+wait 3
+shot viewer
+keys Escape
+wait 1
+keys C-g
+type trom
+wait 1.5
+shot goto
+keys Escape
+keys C-p
+type timeline
+wait 1.5
+shot palette
+keys Escape
+keys C-M-s
+wait 2
+type ls -l ~/Photos
+keys Enter
+wait 2
+shot terminal
+keys C-M-s
+keys M-x
+wait 1
+keys F11
+wait 2
+shot settings
+keys Escape
+wait 1

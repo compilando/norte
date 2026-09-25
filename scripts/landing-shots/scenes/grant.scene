@@ -1,0 +1,10 @@
+# The question a plugin's capabilities are granted through. Media info is the
+# one approve.scene leaves unapproved, and it asks for `location`.
+run
+keys F12
+wait 1
+keys y
+wait 1
+shot grant
+keys n
+keys Escape
