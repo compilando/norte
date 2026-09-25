@@ -1011,6 +1011,9 @@ struct ColumnDrag {
     /// grab point made the width jump a cell on the first move for whoever
     /// grabbed the cell before the separator.
     agarre: u16,
+    /// The header row it was grabbed on: a release without movement sorts
+    /// by the column under `(agarre, row)`.
+    row: u16,
     /// There was movement. Without it, releasing is not a new width but a
     /// click.
     moved: bool,
@@ -1034,40 +1037,82 @@ impl ColumnDrag {
 /// width, the same call as the header: two different layouts would make the
 /// border the mouse grabs be another column's.
 fn column_border_at(app: &App, col: u16, row: u16) -> Option<ColumnDrag> {
-    let geometry = app.mouse.geometry()?;
-    for (i, g) in geometry.iter().enumerate() {
-        let header = g.first_list_row.checked_sub(1);
-        if g.list_rows == 0
-            || header != Some(row)
-            || col < g.x
-            || col >= g.x.saturating_add(g.width)
-        {
-            continue;
+    let (_, widths, x0) = header_under(app, col, row)?;
+    let mut x = x0;
+    for (k, f) in widths.iter().enumerate() {
+        if k > 0 && (col == x || col.saturating_add(1) == x) {
+            return Some(ColumnDrag {
+                column: f.id.to_string(),
+                start: f.width,
+                agarre: col,
+                row,
+                moved: false,
+            });
         }
-        let pane = app.panes.get(i)?;
-        // The SAME catalogue the painting uses: two different answers here
-        // would make the border the mouse grabs belong to a different
-        // column.
-        let widths = crate::ui::pane_columns(
-            &app.columns,
-            pane,
-            g.width.saturating_sub(2),
-            app.attr_catalog(pane.dir().scheme()),
-        );
-        let mut x = g.x.saturating_add(1);
-        for (k, f) in widths.iter().enumerate() {
-            if k > 0 && (col == x || col.saturating_add(1) == x) {
-                return Some(ColumnDrag {
-                    column: f.id.to_string(),
-                    start: f.width,
-                    agarre: col,
-                    moved: false,
-                });
-            }
-            x = x.saturating_add(f.width);
-        }
+        x = x.saturating_add(f.width);
     }
     None
+}
+
+/// The pane whose column header is at `(col, row)`, its columns as painted
+/// and the cell where the first one starts.
+///
+/// The widths come from the SAME call as the painting, over the painted
+/// geometry's inner width: two different layouts would make the mouse
+/// grab or sort another column than the one under it.
+fn header_under(
+    app: &App,
+    col: u16,
+    row: u16,
+) -> Option<(usize, Vec<norte_frontend::columns::Fitted>, u16)> {
+    let geometry = app.mouse.geometry()?;
+    let (i, g) = geometry.iter().enumerate().find(|(_, g)| {
+        g.list_rows > 0
+            && g.first_list_row.checked_sub(1) == Some(row)
+            && col >= g.x
+            && col < g.x.saturating_add(g.width)
+    })?;
+    let pane = app.panes.get(i)?;
+    let widths = crate::ui::pane_columns(
+        &app.columns,
+        pane,
+        g.width.saturating_sub(2),
+        app.attr_catalog(pane.dir().scheme()),
+    );
+    Some((i, widths, g.x.saturating_add(1)))
+}
+
+/// The pane and the column whose title is at `(col, row)`, if any. The
+/// side borders belong to no column.
+fn header_column_at(
+    app: &App,
+    col: u16,
+    row: u16,
+) -> Option<(usize, norte_frontend::columns::ColumnId)> {
+    let (pane, widths, x0) = header_under(app, col, row)?;
+    let mut x = x0;
+    for f in widths {
+        let end = x.saturating_add(f.width);
+        if (x..end).contains(&col) {
+            return Some((pane, f.id));
+        }
+        x = end;
+    }
+    None
+}
+
+/// Sorts `pane` by the column whose title is at `(col, row)`, with the
+/// header-click rule (`SortSpec::after_click`), and gives it the focus. A
+/// column with no sort key (a plugin's) only focuses.
+fn sort_by_title(app: &mut App, col: u16, row: u16) -> Option<After> {
+    let (pane, id) = header_column_at(app, col, row)?;
+    app.mouse.drag.cancel();
+    app.mouse.last_click = None;
+    app.set_focus(pane);
+    if let Some(column) = norte_frontend::columns::sort_column_id(&id) {
+        app.sort_focused_by(column);
+    }
+    Some(After::Nothing)
 }
 
 /// The drag of a column's border, in the gesture's three stages, like
@@ -1080,7 +1125,11 @@ fn column_border_at(app: &App, col: u16, row: u16) -> Option<ColumnDrag> {
 fn column_gesture(app: &mut App, ev: MouseEvent) -> Option<After> {
     match ev.kind {
         MouseEventKind::Down(MouseButton::Left) => {
-            let grab = column_border_at(app, ev.column, ev.row)?;
+            // Off the borders, the header is the column titles, and a title
+            // sorts.
+            let Some(grab) = column_border_at(app, ev.column, ev.row) else {
+                return sort_by_title(app, ev.column, ev.row);
+            };
             app.mouse.drag.cancel();
             app.mouse.last_click = None;
             // Pressing the header used to focus the panel before the border
@@ -1100,7 +1149,9 @@ fn column_gesture(app: &mut App, ev: MouseEvent) -> Option<After> {
         MouseEventKind::Up(MouseButton::Left) => {
             let grab = app.mouse.column.take()?;
             if !grab.moved {
-                return Some(After::Nothing);
+                // A border cell is also part of a title: pressed and released
+                // in place, it is a click on that title.
+                return sort_by_title(app, grab.agarre, grab.row).or(Some(After::Nothing));
             }
             let cells = app
                 .columns
