@@ -18,16 +18,30 @@ trap 'rm -rf "$ids"' EXIT
 printf 'root:x:0:0::/root:/bin/bash\nada:x:%s:%s:Ada:/home/ada:/bin/bash\n' "$(id -u)" "$(id -g)" >"$ids/passwd"
 printf 'root:x:0:\nada:x:%s:\n' "$(id -g)" >"$ids/group"
 
+# Only what a program needs is bound, never `/` whole: norte lists drives from
+# /proc/mounts, and binding `/` carried every mount of the real machine (the
+# user's network drives by name) into the Places sidebar, /home hidden or not.
 run=/run/user/$(id -u)
 bwrap \
-	--dev-bind / / \
+	--die-with-parent \
+	--unshare-pid \
+	--ro-bind /usr /usr \
+	--symlink usr/bin /bin \
+	--symlink usr/bin /sbin \
+	--symlink usr/lib /lib \
+	--symlink usr/lib /lib64 \
+	--ro-bind /etc /etc \
+	--ro-bind /sys /sys \
+	--bind /tmp /tmp \
+	--dev /dev \
+	--proc /proc \
 	--ro-bind "$ids/passwd" /etc/passwd \
 	--ro-bind "$ids/group" /etc/group \
 	--unshare-uts \
 	--hostname norte \
 	--tmpfs /home \
 	--bind "$home" /home/ada \
-	--tmpfs /run/user \
+	--tmpfs /run \
 	--dir "$run" \
 	--chmod 0700 "$run" \
 	--tmpfs /opt \

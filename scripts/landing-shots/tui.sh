@@ -21,6 +21,9 @@ here=$(cd "$(dirname "$0")" && pwd)
 sock=norte-landing
 cols=${COLS:-132} rows=${ROWS:-38}
 settle=${SETTLE:-0.5}
+# The shell in the terminal panel speaks the shot's language too.
+locale=C.UTF-8
+[ "$lang" = es ] && locale=es_ES.UTF-8
 
 mkdir -p "$out"
 : >"$out/reel.ansi"
@@ -50,7 +53,7 @@ while IFS= read -r line || [ -n "$line" ]; do
 		t -f /dev/null start-server \; set -s variation-selector-always-wide "${VS16_WIDE:-on}"
 		# shellcheck disable=SC2086 # the scene's arguments are words on purpose
 		t new-session -d -s shot -x "$cols" -y "$rows" \
-			"$here/sandbox.sh" "$home" "$bin" ntc $arg
+			"$here/sandbox.sh" "$home" "$bin" env LANG="$locale" LC_ALL="$locale" ntc $arg
 		# Keys sent before the first frame is up are lost, not queued.
 		sleep 2.5
 		;;

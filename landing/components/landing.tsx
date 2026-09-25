@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import type { Packed } from "@/lib/ansi";
 import { COPY, fill, type Lang, type Scene } from "@/lib/i18n";
 import { COMMANDS, LINKS, PRESETS, RELEASE, THEMES } from "@/lib/product";
-import { COLS, guiShot, presetKeys, themeAccent, tuiReel, tuiScene, tuiTheme } from "@/lib/shots";
+import { COLS, guiShot, guiVideo, presetKeys, themeAccent, tuiReel, tuiScene, tuiTheme } from "@/lib/shots";
 import { AppFrame } from "./app-frame";
 import { ButtonLink } from "./button-link";
 import { FinalCta } from "./final-cta";
@@ -62,6 +62,10 @@ export function Landing({ lang }: { lang: Lang }) {
   const keys = presetKeys(commands);
   const guiPanes = guiShot(lang, "panes-catppuccin-mocha") ?? windows[0]?.src ?? null;
   const tuiPanes = tuiScene(lang, "panes");
+  const gallery = t.duo.gallery.flatMap(([name, caption]) => {
+    const src = guiShot(lang, name);
+    return src ? [[src, caption] as const] : [];
+  });
 
   return (
     <main className="min-h-screen overflow-x-clip bg-base text-ink">
@@ -107,6 +111,7 @@ export function Landing({ lang }: { lang: Lang }) {
               themes={themes}
               cols={COLS}
               windows={windows}
+              video={guiVideo(lang)}
               labels={{ ...t.hero.tabs, theme: t.hero.theme, live: t.hero.live, play: t.hero.play, pause: t.hero.pause }}
             />
             <p className="mt-6 text-center font-mono text-[10px] uppercase tracking-[0.1em] text-muted">
@@ -144,6 +149,19 @@ export function Landing({ lang }: { lang: Lang }) {
             <figcaption className="mt-3 font-mono text-[10px] text-muted">{t.duo.window}</figcaption>
           </figure>
         </div>
+        {gallery.length > 0 && (
+          <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            {gallery.map(([src, caption]) => (
+              <figure key={src} className="rise">
+                <div className="overflow-hidden rounded-lg border border-white/[0.1] transition hover:border-phosphor/40">
+                  {/* eslint-disable-next-line @next/next/no-img-element -- a capture, served as-is */}
+                  <img src={src} alt={caption} loading="lazy" className="block w-full" />
+                </div>
+                <figcaption className="mt-2 font-mono text-[10px] text-muted">{caption}</figcaption>
+              </figure>
+            ))}
+          </div>
+        )}
       </Section>
 
       {/* Tour */}

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { pack, parseReel, parseScreen, type Packed } from "./ansi";
 import type { Lang, Scene } from "./i18n";
@@ -46,9 +46,10 @@ export function guiShot(lang: Lang, name: string): string | null {
   return existsSync(path.join(ROOT, "public", rel)) ? rel : null;
 }
 
-export function guiShots(lang: Lang): string[] {
-  const dir = path.join(ROOT, "public", "shots", "gui", lang);
-  return existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith(".webp")) : [];
+/** The window's recorded tour, when shoot.sh could record it. */
+export function guiVideo(lang: Lang): string | null {
+  const rel = `/shots/gui/${lang}/tour.webm`;
+  return existsSync(path.join(ROOT, "public", rel)) ? rel : null;
 }
 
 /**

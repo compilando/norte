@@ -11,7 +11,11 @@ set -euo pipefail
 home=${1:?home} bin=${2:?bin dir} scene=${3:?scene} out=${4:?out dir}
 theme=${5:-catppuccin-mocha} lang=${6:-en}
 here=$(cd "$(dirname "$0")" && pwd)
-width=${WIDTH:-1440} height=${HEIGHT:-900}
+# The window's own default size (tauri.conf.json): resizing it after it maps
+# leaves WebKit repainting at two sizes at once under Xvfb.
+width=${WIDTH:-1200} height=${HEIGHT:-800}
+locale=C.UTF-8
+[ "$lang" = es ] && locale=es_ES.UTF-8
 settle=${SETTLE:-0.6}
 display=${GUI_DISPLAY:-:77}
 
@@ -26,14 +30,27 @@ splash = "off"
 EOF
 rm -rf "$home/.local/state" "$home/.cache" "$home"/.config/norte/{journal,index}.db*
 
+if DISPLAY=$display xdotool getdisplaygeometry >/dev/null 2>&1; then
+	echo "gui.sh: $display is taken; a previous run left its Xvfb behind?" >&2
+	exit 1
+fi
 Xvfb "$display" -screen 0 "${width}x${height}x24" -nolisten tcp >/dev/null 2>&1 &
 xvfb=$!
 app=
 rec=
 cleanup() {
-	[ -n "$rec" ] && kill -INT "$rec" 2>/dev/null && wait "$rec" 2>/dev/null
-	[ -n "$app" ] && kill "$app" 2>/dev/null
-	kill "$xvfb" 2>/dev/null || true
+	# A kill of something already gone must not end the cleanup halfway.
+	set +e
+	if [ -n "$rec" ]; then
+		# ffmpeg finishes the file on SIGINT; give it a few seconds, not forever.
+		kill -INT "$rec" 2>/dev/null
+		for _ in $(seq 30); do kill -0 "$rec" 2>/dev/null || break; sleep 0.5; done
+		kill -9 "$rec" 2>/dev/null
+	fi
+	# The whole group: the sandbox, the window AND the daemon it started.
+	if [ -n "$app" ]; then kill -- "-$app" 2>/dev/null; fi
+	kill "$xvfb" 2>/dev/null
+	return 0
 }
 trap cleanup EXIT
 export DISPLAY=$display
@@ -48,6 +65,7 @@ key() {
 	C-M-*) k=ctrl+alt+${k#C-M-} ;;
 	C-*) k=ctrl+${k#C-} ;;
 	M-*) k=alt+${k#M-} ;;
+	S-*) k=shift+${k#S-} ;;
 	PageDown | NPage) k=Next ;;
 	PageUp | PPage) k=Prior ;;
 	esac
@@ -62,16 +80,17 @@ while IFS= read -r line || [ -n "$line" ]; do
 	case $verb in
 	run)
 		# shellcheck disable=SC2086 # the scene's arguments are words on purpose
-		"$here/sandbox.sh" "$home" "$bin" env DISPLAY="$display" GDK_BACKEND=x11 \
+		setsid "$here/sandbox.sh" "$home" "$bin" env DISPLAY="$display" GDK_BACKEND=x11 LANG="$locale" LC_ALL="$locale" \
 			WEBKIT_DISABLE_DMABUF_RENDERER=1 LIBGL_ALWAYS_SOFTWARE=1 \
-			norte-gui --no-splash $arg >"$out/gui.log" 2>&1 &
+			norte-gui --no-splash $arg </dev/null >"$out/gui.log" 2>&1 &
 		app=$!
 		win=$(xdotool search --sync --onlyvisible --name norte | head -1)
-		xdotool windowmove "$win" 0 0 windowsize "$win" "$width" "$height" windowfocus "$win"
+		xdotool windowmove "$win" 0 0 windowfocus "$win"
 		# The daemon starts, the webview loads, the first listing arrives.
 		sleep 6
 		if [ -n "${RECORD:-}" ]; then
-			ffmpeg -loglevel error -y -f x11grab -framerate 24 -video_size "${width}x${height}" -i "$display" \
+			# -nostdin: it would eat the scene this loop is reading.
+			ffmpeg -nostdin -loglevel error -y -f x11grab -framerate 24 -video_size "${width}x${height}" -i "$display" \
 				-c:v libvpx-vp9 -b:v 0 -crf 38 -row-mt 1 -deadline realtime -pix_fmt yuv420p "$RECORD" &
 			rec=$!
 		fi

@@ -1,0 +1,18 @@
+# The window's hero still, once per theme: the photos on the right, the
+# cursor on one of them, the Places sidebar open.
+run projects/aurora
+wait 2
+keys Tab
+keys Home
+open
+keys Home
+open
+keys Home Down Down Down Down
+open
+keys Down
+open
+wait 2
+keys Down
+keys M-b
+wait 2
+shot panes

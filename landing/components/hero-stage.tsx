@@ -20,7 +20,9 @@ export function HeroStage({
   windows,
   labels,
   cols,
+  video,
 }: {
+  video?: string | null;
   reel: Packed[];
   themes: { id: string; swatch: [string, string]; screen: Packed }[];
   cols: number;
@@ -113,7 +115,10 @@ export function HeroStage({
           <div key={mode === "window" ? `w${windowFor?.id}` : (theme ?? `r${frame}`)} className="animate-[fadein_.35s_ease]">
             {mode === "terminal" && theme === null && reel[frame] && <TerminalScreen screen={reel[frame]} cols={cols} />}
             {mode === "terminal" && shownTheme && <TerminalScreen screen={shownTheme.screen} cols={cols} label={shownTheme.id} />}
-            {mode === "window" && windowFor && (
+            {mode === "window" && theme === null && video && (
+              <video src={video} poster={windows[0]?.src} autoPlay muted loop playsInline className="block w-full" />
+            )}
+            {mode === "window" && (theme !== null || !video) && windowFor && (
               // eslint-disable-next-line @next/next/no-img-element -- a capture, served as-is
               <img src={windowFor.src} alt="" className="block w-full" />
             )}

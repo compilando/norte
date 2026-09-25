@@ -77,6 +77,12 @@ const en = {
     terminal: "ntc — in any terminal, core embedded, nothing to start first",
     window: "norte-gui — a native window that brings its own daemon",
     missing: "Window captures are taken on a machine with Xvfb: run just landing-shots.",
+    gallery: [
+      ["viewer", "The viewer, pixel for pixel"],
+      ["goto", "Go anywhere"],
+      ["terminal", "A shell in a panel"],
+      ["settings", "Settings with real controls"],
+    ] as [string, string][],
   },
   tour: {
     eyebrow: "A tour, in real captures",
@@ -307,6 +313,12 @@ const es: Copy = {
     terminal: "ntc — en cualquier terminal, con el núcleo dentro: nada que arrancar antes",
     window: "norte-gui — una ventana nativa que trae su propio demonio",
     missing: "Las capturas de la ventana se sacan en una máquina con Xvfb: ejecuta just landing-shots.",
+    gallery: [
+      ["viewer", "El visor, píxel a píxel"],
+      ["goto", "Ir a cualquier sitio"],
+      ["terminal", "Un shell en un panel"],
+      ["settings", "Ajustes con controles de verdad"],
+    ],
   },
   tour: {
     eyebrow: "Un recorrido, con capturas reales",
