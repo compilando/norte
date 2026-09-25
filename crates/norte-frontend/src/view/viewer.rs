@@ -631,6 +631,15 @@ impl Viewer {
         self.plugin_preview.as_ref().map(|p| p.plugin_name.as_str())
     }
 
+    /// Whether the encoding and line-ending marks describe the FILE (#380).
+    /// `false` in plugin preview mode: the viewer holds the plugin's spans,
+    /// not the file's bytes, and a frontend that paints the marks anyway
+    /// calls a UTF-8 README «binary, no EOL».
+    #[must_use]
+    pub fn describes_bytes(&self) -> bool {
+        self.plugin_preview.is_none()
+    }
+
     /// `true` if the viewer is in plugin preview mode AND the file's
     /// host-side decoding was LOSSY (#101): the frontend paints a warning
     /// next to the "via …" indicator. `false` for the raw view (which flags

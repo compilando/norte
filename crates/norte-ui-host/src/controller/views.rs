@@ -628,7 +628,10 @@ impl State {
             path_display: clamp_display(path),
             path_hostile: hostile,
             encoding: v.encoding_name().to_owned(),
+            // Empty in a plugin's preview (#380): the marks would describe
+            // the plugin's spans, not the file.
             eol: match v.eol() {
+                _ if !v.describes_bytes() => "",
                 norte_encoding::Eol::Lf => "lf",
                 norte_encoding::Eol::CrLf => "crlf",
                 norte_encoding::Eol::Cr => "cr",

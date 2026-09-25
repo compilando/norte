@@ -13,7 +13,10 @@ use norte_i18n::t;
 #[must_use]
 pub fn status(v: &Viewer) -> String {
     use std::fmt::Write;
-    let mut out = if v.encoding_name().is_empty() {
+    let mut out = if !v.describes_bytes() {
+        // A plugin's preview: the header's «via …» says whose it is.
+        String::new()
+    } else if v.encoding_name().is_empty() {
         t("viewer-binary")
     } else {
         v.encoding_name().to_owned()
@@ -22,7 +25,7 @@ pub fn status(v: &Viewer) -> String {
         out.push(' ');
         out.push_str(&t("viewer-forced"));
     }
-    if !v.hex {
+    if !v.hex && v.describes_bytes() {
         let eol = match v.eol() {
             Eol::Lf => "LF".to_owned(),
             Eol::CrLf => "CRLF".to_owned(),
@@ -46,5 +49,22 @@ pub fn status(v: &Viewer) -> String {
     if v.hscroll() > 0 {
         let _ = write!(out, "  {}/{}", v.hscroll() + 1, v.max_cols().max(1));
     }
-    out
+    out.trim_start().to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A plugin's preview says nothing about the file's bytes (#380). It
+    /// used to fall through to «binary · no EOL» for a README that is UTF-8
+    /// with LF: the viewer holds the plugin's spans, not the file.
+    #[test]
+    fn a_plugin_preview_does_not_call_the_file_binary() {
+        let path = norte_vfs::VPath::parse("file:///x/README.md").expect("test wire");
+        let v = Viewer::with_plugin_preview_styled(path, "Markdown".to_owned(), &[], false);
+        let s = status(&v);
+        assert!(!s.contains(&t("viewer-binary")), "{s}");
+        assert!(!s.contains(&t("eol-none")), "{s}");
+    }
 }
