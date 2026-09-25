@@ -658,7 +658,15 @@ pub async fn run(
                 // (drainer/probe #52/search) lives in `after_panes_refresh`
                 // — the SINGLE one for the refresh's three triggers (#117).
                 let refreshed = on_tick(app, backend, &mut Console::new(&mut events, terminal)).await;
-                after_panes_refresh(app, refreshed, &mut work.fill, &mut work.probed, &mut work.search);
+                after_panes_refresh(
+                    app,
+                    backend,
+                    refreshed,
+                    &mut work.fill,
+                    &mut work.decorate,
+                    &mut work.probed,
+                    &mut work.search,
+                );
             }
             ev = dir_watch.rx.recv(), if dir_watch_alive && watch_refresh_allowed(app) => {
                 // #106: an EXTERNAL change in a watched dir (debounced) —
@@ -682,8 +690,10 @@ pub async fn run(
                         refresh_panes(app, backend, &mut Console::new(&mut events, terminal)).await;
                     after_panes_refresh(
                         app,
+                        backend,
                         refreshed,
                         &mut work.fill,
+                        &mut work.decorate,
                         &mut work.probed,
                         &mut work.search,
                     );
@@ -1253,8 +1263,10 @@ pub async fn run(
                         refresh_panes(app, backend, &mut Console::new(&mut events, terminal)).await;
                     after_panes_refresh(
                         app,
+                        backend,
                         refreshed,
                         &mut work.fill,
+                        &mut work.decorate,
                         &mut work.probed,
                         &mut work.search,
                     );

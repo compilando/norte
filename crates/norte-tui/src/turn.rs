@@ -298,8 +298,10 @@ async fn handle_suspension(
             let refreshed = refresh_panes(app, backend, events).await;
             after_panes_refresh(
                 app,
+                backend,
                 refreshed,
                 &mut work.fill,
+                &mut work.decorate,
                 &mut work.probed,
                 &mut work.search,
             );
@@ -452,8 +454,10 @@ async fn handle_subshell(
         let refreshed = refresh_panes(app, backend, events).await;
         after_panes_refresh(
             app,
+            backend,
             refreshed,
             &mut work.fill,
+            &mut work.decorate,
             &mut work.probed,
             &mut work.search,
         );

@@ -511,8 +511,10 @@ pub async fn refresh_panes(
 /// because the world changes".
 pub fn after_panes_refresh(
     app: &mut App,
+    backend: &Backend,
     refreshed: [bool; 2],
     fill: &mut BySlot<Fill>,
+    decorate_fetch: &mut BySlot<crate::probes::DecorateFetch>,
     last_probed: &mut Probed,
     search_run: &mut Option<SearchRun>,
 ) {
@@ -522,6 +524,7 @@ pub fn after_panes_refresh(
     // A refresh is the moment free space may have changed with nobody
     // navigating: it is requested again along with it.
     app.volumes_stale = true;
+    crate::navigate::request_refreshed_decorations(app, backend, decorate_fetch, &refreshed);
     release_refreshed_fill(&app.panes, &refreshed, fill, last_probed);
     reap_search_run(app, search_run);
     if app.help.is_some() {

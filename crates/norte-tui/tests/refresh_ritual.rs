@@ -14,6 +14,14 @@ fn fill() -> Fill {
     Fill { rx }
 }
 
+fn backend() -> norte_core::backend::Backend {
+    norte_core::backend::Backend::Embedded(std::sync::Arc::new(norte_core::Engine::new()))
+}
+
+fn decorate() -> norte_frontend::layout::BySlot<norte_tui::probes::DecorateFetch> {
+    norte_frontend::layout::BySlot::new()
+}
+
 fn app() -> App {
     let d = VPath::parse("file:///d").expect("test wire");
     App::new(Pane::new(d.clone(), Vec::new()), Pane::new(d, Vec::new()))
@@ -30,7 +38,15 @@ fn an_esc_halfway_through_keeps_the_fill_of_the_unrefreshed_pane() {
     f.insert(norte_tui::panel::SLOT_RIGHT, fill());
     let mut lp = Probed::from([(1, VPath::parse("file:///d/x").unwrap())]);
     let mut sr: Option<SearchRun> = None;
-    after_panes_refresh(&mut app, [true, false], &mut f, &mut lp, &mut sr);
+    after_panes_refresh(
+        &mut app,
+        &backend(),
+        [true, false],
+        &mut f,
+        &mut decorate(),
+        &mut lp,
+        &mut sr,
+    );
     assert!(
         f.get(norte_tui::panel::SLOT_RIGHT).is_some(),
         "pane 1's fill (not re-listed) survives the Esc halfway through"
@@ -73,7 +89,15 @@ fn a_refresh_under_open_help_refreezes_the_facts() {
     let mut f: norte_frontend::layout::BySlot<Fill> = norte_frontend::layout::BySlot::new();
     let mut lp = Probed::new();
     let mut sr: Option<SearchRun> = None;
-    after_panes_refresh(&mut app, [true, false], &mut f, &mut lp, &mut sr);
+    after_panes_refresh(
+        &mut app,
+        &backend(),
+        [true, false],
+        &mut f,
+        &mut decorate(),
+        &mut lp,
+        &mut sr,
+    );
 
     assert_eq!(
         app.help_chords.availability("pane.view").reason(),
