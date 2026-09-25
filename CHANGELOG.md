@@ -236,10 +236,14 @@ independently through `PROTOCOL_VERSION`.
 - **The disk map in `ntc` measures when it opens** (#372). `alt+z` placed an
   empty panel that stayed empty: only `r` or a change on disk asked for a
   measurement. It now measures the listing's directory on opening and again
-  whenever the listing moves elsewhere, as the window already did.
+  whenever the listing moves elsewhere, as the window already did. A failed
+  measurement says so in the panel, and the finished one is named «disk map»
+  in both frontends instead of «task».
 - **The syntax highlighter shows colours, not escape codes** (#373). The
   syntect previewer's styled output carried its ANSI sequences inside the
-  text; the colour now travels as each span's colour.
+  text; the colour now travels as each span's colour. A minified line too
+  dense for the host's per-line cap comes back uncoloured instead of taking
+  the whole file's highlighting with it.
 - **Rows with an image, slides or config icon no longer paint one cell off**
   (#374). The `file-icons` plugin used three emoji that are only wide with a
   VS16 selector (`🖼️`, `📽️`, `⚙️`), and terminals disagree on that cell; they
