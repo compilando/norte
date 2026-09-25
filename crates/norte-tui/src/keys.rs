@@ -198,8 +198,10 @@ pub async fn on_key(
             let refreshed = refresh_panes(app, backend, events).await;
             after_panes_refresh(
                 app,
+                backend,
                 refreshed,
                 &mut work.fill,
+                &mut work.decorate,
                 &mut work.probed,
                 &mut work.search,
             );

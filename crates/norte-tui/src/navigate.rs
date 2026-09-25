@@ -167,6 +167,19 @@ pub fn request_decorations(
     );
 }
 
+/// Re-requests the decorations of every refreshed pane: they are kept by
+/// path, so without this the rows a refresh brings in stay bare.
+pub fn request_refreshed_decorations(
+    app: &App,
+    backend: &Backend,
+    decorate_fetch: &mut BySlot<DecorateFetch>,
+    refreshed: &[bool],
+) {
+    for (pane, _) in refreshed.iter().enumerate().filter(|(_, r)| **r) {
+        request_decorations(app, backend, decorate_fetch, pane);
+    }
+}
+
 /// A `cd`'s COMPLETE outcome: the pane that landed is re-sorted by its
 /// location's scheme, its plugin decorations are requested, and the result
 /// is applied ([`apply_cd`]: paginated fill and probe).
@@ -214,6 +227,9 @@ pub fn settle_cd(
             *the_mirror,
         );
         return;
+    }
+    if let Cd::Refreshed(refreshed) = &outcome {
+        request_refreshed_decorations(app, backend, decorate_fetch, refreshed);
     }
     if let Some(pane) = cd_landed_pane(&outcome) {
         app.apply_scheme_sort(pane);
