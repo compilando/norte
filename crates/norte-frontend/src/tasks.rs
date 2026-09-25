@@ -55,6 +55,7 @@ pub fn class(kind: norte_proto::TaskKind) -> &'static str {
         K::RenameBatch => "rename-batch",
         K::Compare => "compare",
         K::DirSize => "dir-size",
+        K::DirUsage => "dir-usage",
         K::Pack => "pack",
         K::TestArchive => "test-archive",
         K::Split => "split",
@@ -312,6 +313,47 @@ pub fn counts_as_work(kind: norte_proto::TaskKind) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every class this binary knows has its own name, in both languages.
+    /// `DirUsage` — the disk map's measurement — fell into `unknown` and
+    /// the strip said «task ✓» when a map finished (#372).
+    #[test]
+    fn every_known_class_is_named_in_both_languages() {
+        use norte_i18n::Lang;
+        use norte_proto::TaskKind as K;
+        for kind in [
+            K::Copy,
+            K::Move,
+            K::Delete,
+            K::Undo,
+            K::Search,
+            K::Mkdir,
+            K::Create,
+            K::Index,
+            K::Embed,
+            K::RenameBatch,
+            K::Compare,
+            K::DirSize,
+            K::Checksum,
+            K::DirUsage,
+            K::SetMode,
+            K::Pack,
+            K::TestArchive,
+            K::Split,
+            K::Combine,
+            K::SyncPlan,
+            K::Sync,
+        ] {
+            assert_ne!(class(kind), "unknown", "{kind:?} has no class of its own");
+            for lang in [Lang::En, Lang::Es] {
+                let label = kind_label(lang, kind);
+                assert!(
+                    !label.starts_with("gui-task-kind-"),
+                    "{kind:?}: no key in {lang:?}"
+                );
+            }
+        }
+    }
 
     /// A Spanish board names its tasks in Spanish (#375). The catalogue
     /// kept ten classes in English in `es.ftl`, and the terminal did not

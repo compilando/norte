@@ -80,7 +80,14 @@ pub async fn launch(app: &mut App, backend: &Backend, work: &mut InFlight) {
                 old.handle.abort();
             }
         }
-        Err(e) => app.message = Some(crate::app::error_message(&e)),
+        Err(e) => {
+            // The map is aimed already and will not ask again: it has to
+            // SAY it failed, or it reads as a map still measuring.
+            if let Some(m) = app.panes.disk_map_mut(slot) {
+                m.failure(crate::app::error_message(&e));
+            }
+            app.message = Some(crate::app::error_message(&e));
+        }
     }
 }
 

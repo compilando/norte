@@ -1972,6 +1972,7 @@ gui-task-kind-rename-batch = renombrar
 gui-task-kind-unknown = tarea
 gui-task-kind-compare = comparar
 gui-task-kind-dir-size = tamaño
+gui-task-kind-dir-usage = mapa de disco
 gui-task-kind-checksum = sumas
 gui-task-kind-set-mode = permisos
 gui-task-kind-pack = empaquetar
