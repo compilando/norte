@@ -154,10 +154,11 @@ impl Rate {
     /// assert_eq!(r.observe(&p(100), 1000), Some(100.0), "100 B in one second");
     /// ```
     pub fn observe(&mut self, p: &norte_proto::TaskProgress, now_ms: i64) -> Option<f64> {
-        // Paused, nothing moves on purpose: a 0 B/s sample per repaint would
-        // decay the average into a fake crawl with an hours-long ETA. The
-        // baseline goes too, so resuming measures from the resume.
-        if matches!(p.state, norte_proto::TaskState::Paused) {
+        // Paused or finished, nothing moves on purpose: a 0 B/s sample per
+        // repaint would decay the average into a fake crawl (with an
+        // hours-long ETA if paused). The baseline goes too, so resuming
+        // measures from the resume.
+        if matches!(p.state, norte_proto::TaskState::Paused) || p.state.is_terminal() {
             *self = Self::default();
             return None;
         }
@@ -544,6 +545,26 @@ mod tests {
         }
         assert_eq!(r.bps(), None, "paused, there is no speed");
         assert_eq!(r.eta_secs(&paused), None, "nor a countdown");
+    }
+
+    /// A finished task has no rate: there is nothing left moving.
+    ///
+    /// A 300 MB copy done in half a second ended as `586.9 KiB/s ✓`: the
+    /// row lingers, the TUI observes the Completed snapshot every repaint,
+    /// and each 0 B/s sample shaved a third off a real 600 MB/s.
+    #[test]
+    fn a_finished_task_has_no_rate() {
+        use norte_proto::TaskState::{Cancelled, Completed, Running};
+        for end in [Completed, Cancelled] {
+            let mut r = Rate::default();
+            r.observe(&copy_at(0, Running), 0);
+            r.observe(&copy_at(300_000_000, Running), 500);
+            let done = copy_at(300_000_000, end);
+            for tick in 1..=20 {
+                r.observe(&done, 500 + tick * 100);
+            }
+            assert_eq!(r.bps(), None, "{:?} has no speed", done.state);
+        }
     }
 
     /// Resuming measures from the resume, not across the pause: a sample
