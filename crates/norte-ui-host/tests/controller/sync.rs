@@ -1452,6 +1452,71 @@ async fn the_agents_pane_undoes_the_chosen_session() {
     assert_eq!(requested, ["agente\u{202e}1".to_owned()]);
 }
 
+/// The next `Agents` change the host sends, skipping everything else.
+async fn next_agents(
+    sub: &mut norte_ui_host::UiSubscription,
+) -> Option<norte_ui_host::dto::AgentsView> {
+    for _ in 0..20 {
+        let next = tokio::time::timeout(WAIT_MAX, sub.recv())
+            .await
+            .expect("an update with the agents panel, not a hang")
+            .expect("the host is still alive");
+        if let Update::Message(m) = next
+            && let UiUpdate::Patch(p) = &m.payload
+        {
+            for c in &p.changes {
+                if let norte_ui_host::dto::ViewChange::Agents { agents } = c {
+                    return agents.clone();
+                }
+            }
+        }
+    }
+    panic!("no Agents change in 20 updates");
+}
+
+/// An approval that arrives with the agents panel OPEN repaints the panel,
+/// without waiting for a resync.
+///
+/// The request reorders the list with no gesture, and a renderer that is not
+/// told keeps painting the previous order: the row the reader sees
+/// highlighted stops being the one the host has selected, and `u` undoes
+/// another session's work. `open_approval` built that repaint and then
+/// dropped it — it never reached the returned updates.
+#[tokio::test]
+async fn an_approval_repaints_the_open_agents_panel() {
+    let fake = tree_as_fake();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    *fake.approvals.lock().expect("approvals") = Some(rx);
+    let backend = Arc::new(fake);
+    let (h, _snap) = host_tree(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+
+    run_by_palette(&h, &mut sub, "app.agents").await;
+    let opened = next_agents(&mut sub).await.expect("the panel is open");
+    assert!(opened.rows.is_empty(), "nobody has asked for anything yet");
+
+    tx.send(norte_proto::methods::PolicyApprovalRequired {
+        approval_id: 21,
+        session: Some("agent-new".to_owned()),
+        op: "copy".to_owned(),
+        paths: vec!["mem:///casa/x".to_owned()],
+        paths_total: 1,
+        ttl_ms: 30_000,
+        detail: norte_proto::methods::ApprovalDetail::default(),
+    })
+    .expect("the host is listening");
+
+    let repainted = next_agents(&mut sub)
+        .await
+        .expect("the panel is still open");
+    assert_eq!(
+        repainted.rows.len(),
+        1,
+        "the new session is on screen without a resync"
+    );
+    assert_eq!(repainted.rows[0].last_op, "copy");
+}
+
 /// In read-only nothing is undone: it is SAID.
 #[tokio::test]
 async fn in_read_only_a_session_cannot_be_undone() {
