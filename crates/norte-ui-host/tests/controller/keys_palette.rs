@@ -358,3 +358,23 @@ prepend_keymap = [{ on = ["ctrl+x"], run = "lua:saluda" }]
         other => panic!("expected not available here: {other:?}"),
     }
 }
+
+/// The orthodox mark keys mark in the window, as the browser spells them:
+/// `Insert` and `" "` (#378). Marking was only tested through the row
+/// action, never through a key.
+#[tokio::test]
+async fn the_mark_keys_mark_in_the_window() {
+    let (h, _snap) = host(vec!["a.txt", "b.txt", "c.txt", "d.txt"]).await;
+    let mut sub = h.subscribe();
+
+    h.dispatch(press("ArrowDown")).await.expect("host alive");
+    h.dispatch(press("Insert")).await.expect("host alive");
+    h.dispatch(press(" ")).await.expect("host alive");
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let snap = next_snapshot(&mut sub).await;
+    assert_eq!(
+        listing(&snap).marks,
+        2,
+        "Insert and space each marked a row"
+    );
+}

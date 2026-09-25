@@ -322,10 +322,13 @@ impl State {
                 backend,
                 mailbox,
             ),
+            // The KEY marks and moves on, as in the terminal (#378): `Insert
+            // Insert` marks two rows. It used to reuse the click's `mark`,
+            // which stays put — so the second press unmarked the first row
+            // and the window seemed not to mark at all.
             Effect::Mark => {
-                let key = RowKey(self.slot().pane.cursor() as u64);
-                let generation = self.slot().pane.listing_epoch();
-                self.mark(slot, key, generation)
+                self.slot_mut().pane.toggle_mark_and_advance();
+                (self.applied(), vec![self.parche_rows()])
             }
             Effect::UnmarkAll => {
                 self.slot_mut().pane.clear_marks();
