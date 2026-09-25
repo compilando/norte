@@ -231,6 +231,11 @@ independently through `PROTOCOL_VERSION`.
   heaviest thing on screen. The keys still work, and the terminal keeps its
   key bar under `[ui] key_bar`.
 
+- **The website moved to its own repository, `getnorte-web`**: `landing/`,
+  the shot scripts behind `just landing-shots` and the `docs/mockups`
+  screens. The shots are now taken from there (`make shots`), against a
+  built norte checkout next to it.
+
 ### Fixed
 
 - **The disk map in `ntc` measures when it opens** (#372). `alt+z` placed an
