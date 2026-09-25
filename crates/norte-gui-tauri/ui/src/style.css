@@ -3997,6 +3997,14 @@ button.status-item:hover {
   flex: 1 1 auto;
 }
 
+/* A half-block picture (#377): each row is exactly one em, so the `▀` cells
+   of one row meet the next and the photo is not barred. */
+.viewer-body.viewer-cells .viewer-line {
+  height: 1em;
+  line-height: 1;
+  overflow: hidden;
+}
+
 /* A viewer with no file to show says WHY, in the center and dimmed, like
    VS Code's empty view: glued to the top left it read as a file named
    "directory". */
