@@ -25,6 +25,64 @@ pub fn pausable(kind: norte_proto::TaskKind) -> bool {
     )
 }
 
+/// A task's CLASS: the suffix of its `gui-task-kind-*` catalogue key, and
+/// the word the window's bridge carries.
+///
+/// A `match` and not `format!("{:?}").to_lowercase()`: `Debug` gave
+/// `renamebatch` and `dirsize` for keys spelled `rename-batch` and
+/// `dir-size`. `TaskKind` is `#[non_exhaustive]`, so a variant from a newer
+/// daemon falls into `unknown` — a key that exists — and reads «task».
+///
+/// ```
+/// use norte_frontend::tasks::class;
+/// use norte_proto::TaskKind;
+/// assert_eq!(class(TaskKind::RenameBatch), "rename-batch");
+/// assert_eq!(class(TaskKind::Unknown), "unknown");
+/// ```
+#[must_use]
+pub fn class(kind: norte_proto::TaskKind) -> &'static str {
+    use norte_proto::TaskKind as K;
+    match kind {
+        K::Copy => "copy",
+        K::Move => "move",
+        K::Delete => "delete",
+        K::Undo => "undo",
+        K::Search => "search",
+        K::Mkdir => "mkdir",
+        K::Create => "create",
+        K::Index => "index",
+        K::Embed => "embed",
+        K::RenameBatch => "rename-batch",
+        K::Compare => "compare",
+        K::DirSize => "dir-size",
+        K::Pack => "pack",
+        K::TestArchive => "test-archive",
+        K::Split => "split",
+        K::Combine => "combine",
+        K::SyncPlan => "sync-plan",
+        K::Sync => "sync",
+        K::Checksum => "checksum",
+        K::SetMode => "set-mode",
+        K::Unknown | _ => "unknown",
+    }
+}
+
+/// What a task board calls a task of this class, in `lang`.
+///
+/// The ONE place both frontends name a task (#375): the terminal used to
+/// print the class itself, so a Spanish board said «copy» next to «Copiar».
+///
+/// ```
+/// use norte_frontend::tasks::kind_label;
+/// use norte_i18n::Lang;
+/// use norte_proto::TaskKind;
+/// assert_eq!(kind_label(Lang::En, TaskKind::Copy), "copy");
+/// ```
+#[must_use]
+pub fn kind_label(lang: norte_i18n::Lang, kind: norte_proto::TaskKind) -> String {
+    norte_i18n::t_in(lang, &format!("gui-task-kind-{}", class(kind)))
+}
+
 /// A task's percentage: by bytes if known, otherwise by entries.
 ///
 /// `None` = not known yet (the walk has not finished and there are no
@@ -254,6 +312,33 @@ pub fn counts_as_work(kind: norte_proto::TaskKind) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A Spanish board names its tasks in Spanish (#375). The catalogue
+    /// kept ten classes in English in `es.ftl`, and the terminal did not
+    /// read it at all.
+    #[test]
+    fn a_spanish_board_names_its_tasks_in_spanish() {
+        use norte_i18n::Lang;
+        use norte_proto::TaskKind as K;
+        for kind in [
+            K::Copy,
+            K::Move,
+            K::Delete,
+            K::Undo,
+            K::Search,
+            K::Mkdir,
+            K::Index,
+            K::RenameBatch,
+            K::Unknown,
+        ] {
+            let (en, es) = (kind_label(Lang::En, kind), kind_label(Lang::Es, kind));
+            assert!(
+                !es.starts_with("gui-task-kind-"),
+                "{kind:?}: no key in es.ftl"
+            );
+            assert_ne!(en, es, "{kind:?} reads «{es}» in Spanish too");
+        }
+    }
 
     /// Every wire class decides, BY HAND, whether it is board work.
     ///
