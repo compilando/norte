@@ -20,8 +20,11 @@ set -uo pipefail
 
 # Un borrado de rama no construye nada.
 todo_borrados=1
-while read -r _local_ref local_sha _remote_ref _remote_sha; do
-    [[ "$local_sha" =~ ^0+$ ]] || todo_borrados=0
+refs=()
+while read -r _local_ref local_sha _remote_ref remote_sha; do
+    [[ "$local_sha" =~ ^0+$ ]] && continue
+    todo_borrados=0
+    refs+=("$local_sha $remote_sha")
 done
 [[ $todo_borrados -eq 1 ]] && exit 0
 
@@ -35,6 +38,32 @@ cd "$RAIZ" || exit 1
 # `cd "$RAIZ"` el repositorio se deduce del directorio, así que no hacen falta.
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
     GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_NAMESPACE GIT_PREFIX
+
+# Lo que este push SUBE, no lo que difiere de `origin/main`: con `main` por
+# delante del remoto, esa comparación metía commits ajenos a la rama y
+# disparaba `gui-ci` por un `justfile` que no era de este push. Una rama nueva
+# sube lo que ningún remoto tiene aún. `-m` lista las fusiones contra cada
+# padre: sobra, pero sobrar solo cuesta un gate.
+cambiados="$(
+    for r in "${refs[@]}"; do
+        read -r local_sha remote_sha <<<"$r"
+        if [[ ! "$remote_sha" =~ ^0+$ ]] && git cat-file -e "$remote_sha^{commit}" 2>/dev/null; then
+            git log -m --format= --name-only "$remote_sha..$local_sha"
+        else
+            git log -m --format= --name-only "$local_sha" --not --remotes
+        fi
+    done | sort -u | sed '/^$/d'
+)"
+
+# Solo prosa e imágenes: nada que el gate compile ni lea. `docs/schema/` queda
+# fuera porque `norte-proto` lo compara en sus tests, y todo `crates/` porque
+# `norte-help` hace `include_str!` de sus `.md`.
+inerte='^(docs/|[^/]+\.md$|\.github/(ISSUE_TEMPLATE/|PULL_REQUEST_TEMPLATE))'
+if ! grep -vE "$inerte" <<<"$cambiados" | grep -q . \
+    && ! grep -q '^docs/schema/' <<<"$cambiados"; then
+    echo "pre-push: solo documentación, sin gate"
+    exit 0
+fi
 
 # SELLO: el árbol que ya pasó el gate.
 #
@@ -69,10 +98,10 @@ sellado() {
 # `.github/workflows/gui.yml`, y por el mismo motivo: un cambio en
 # `norte-ui-host` puede romper la ventana mientras el gate portable sigue
 # verde.
-base="$(git rev-parse --verify -q origin/main 2>/dev/null || echo HEAD~1)"
 toca_ventana=0
-if git diff --name-only "$base"...HEAD 2>/dev/null | grep -qE \
-    '^(crates/norte-(gui-tauri|ui-host|client|frontend|proto)/|Cargo\.(toml|lock)$|justfile$)'; then
+if grep -qE \
+    '^(crates/norte-(gui-tauri|ui-host|client|frontend|proto)/|Cargo\.(toml|lock)$|justfile$)' \
+    <<<"$cambiados"; then
     toca_ventana=1
 fi
 
@@ -83,18 +112,25 @@ fi
 
 LOG="$(mktemp -t norte-prepush-XXXXXX.log)"
 
+# Un log para poder seguirlo con `tail -f`, pero cada paso anota su tramo:
+# la cola del log entero es la del ÚLTIMO paso, y con `ci-fast` rojo y
+# `gui-ci` verde enseñaba tests de la ventana pasando.
+rojos=()
 corre() {
     local nombre="$1"; shift
+    local desde
+    desde=$(($(wc -l <"$LOG") + 1))
     printf '  %-10s ' "$nombre"
     if "$@" >>"$LOG" 2>&1; then
         printf '\033[32mok\033[0m\n'
         return 0
     fi
     printf '\033[31mROJO\033[0m\n'
+    rojos+=("$nombre $desde $(wc -l <"$LOG")")
     return 1
 }
 
-echo "pre-push:"
+echo "pre-push: log en $LOG (tail -f para seguirlo)"
 fallo=0
 sellado "$SELLO" || corre "ci-fast" just ci-fast || fallo=1
 
@@ -116,9 +152,20 @@ if [[ $fallo -eq 0 ]]; then
     exit 0
 fi
 
-echo
-echo "--- cola del fallo ---"
-tail -n 30 "$LOG"
+# De cada paso rojo, lo que falló; si nada lo dice, la cola de SU tramo.
+for r in "${rojos[@]}"; do
+    read -r nombre desde hasta <<<"$r"
+    tramo="$(sed -n "${desde},${hasta}p" "$LOG")"
+    echo
+    echo "--- $nombre ---"
+    # `-A1`: el mensaje de un pánico va en la línea siguiente.
+    fallos="$(grep -E -A1 'panicked at|^error(\[|:)' <<<"$tramo"; grep -E '^\s+FAIL ' <<<"$tramo" | sort -u)"
+    if [[ -n "$fallos" ]]; then
+        head -n 40 <<<"$fallos"
+    else
+        tail -n 30 <<<"$tramo"
+    fi
+done
 echo "----------------------"
 echo "log completo: $LOG"
 echo "si sabes lo que haces: git push --no-verify"

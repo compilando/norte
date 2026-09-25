@@ -1,0 +1,57 @@
+name: Bug report
+description: Something in norte does not work as it should.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time. **A security problem?** Please use
+        [SECURITY.md](https://github.com/compilando/norte/blob/main/SECURITY.md) instead of a public issue.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you got instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. norte tui ~/some/dir
+        2. Mark two files, F5
+        3. …
+    validations:
+      required: true
+  - type: dropdown
+    id: frontend
+    attributes:
+      label: Where
+      multiple: true
+      options:
+        - ntc (terminal UI)
+        - norte-gui (window)
+        - norte (CLI)
+        - norte mcp (agents)
+        - A plugin
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: "`norte --version`, or the commit if built from source."
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS and terminal
+      placeholder: "Arch Linux, kitty 0.39 — or the desktop, for the window"
+  - type: textarea
+    id: doctor
+    attributes:
+      label: "`norte doctor` output"
+      description: Optional, but it often saves a round trip.
+      render: text
