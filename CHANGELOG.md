@@ -233,6 +233,21 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **The disk map in `ntc` measures when it opens** (#372). `alt+z` placed an
+  empty panel that stayed empty: only `r` or a change on disk asked for a
+  measurement. It now measures the listing's directory on opening and again
+  whenever the listing moves elsewhere, as the window already did.
+- **The syntax highlighter shows colours, not escape codes** (#373). The
+  syntect previewer's styled output carried its ANSI sequences inside the
+  text; the colour now travels as each span's colour.
+- **Rows with an image, slides or config icon no longer paint one cell off**
+  (#374). The `file-icons` plugin used three emoji that are only wide with a
+  VS16 selector (`🖼️`, `📽️`, `⚙️`), and terminals disagree on that cell; they
+  are now `📷`, `📈` and `🔩`, wide on their own.
+- **Tasks are named in Spanish in a Spanish UI** (#375). The terminal printed
+  the task's class (`copy`, `delete`) and ten of the classes were English in
+  `es.ftl` too; both frontends now name a task through one shared function.
+- **`ntc --help` names the seven keymap presets** (#376), not three.
 - **Clicking a column title in `ntc` sorts by it.** It only focused the pane;
   sorting by mouse existed in the window alone. A second click reverses the
   order, like the window and the `pane.sort-*` keys. The two cells around each
