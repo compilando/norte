@@ -32,7 +32,7 @@ use crate::keys::on_key;
 use crate::lua::{RunOutcome, load_lua, start_lua_run};
 use crate::mouse;
 use crate::nav;
-use crate::navigate::{apply_cd, cd, request_decorations, settle_cd};
+use crate::navigate::{cd, request_decorations, settle_cd};
 use crate::overlays::watch_refresh_allowed;
 use crate::paste::route_paste;
 use crate::probes::{DecorateFetch, Probed};
@@ -580,8 +580,9 @@ pub async fn run(
                         destination,
                     )
                     .await;
-                    apply_cd(
-                        &app.panes,
+                    settle_cd(
+                        app,
+                        backend,
                         &mut work.fill,
                         &mut work.decorate,
                         &mut work.probed,

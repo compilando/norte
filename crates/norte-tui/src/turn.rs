@@ -23,7 +23,7 @@ use crate::event_loop::RunError;
 use crate::jobs::{InFlight, launch_compare, launch_sync_apply, launch_sync_plan};
 use crate::lua::refresh_lua_status;
 use crate::mouse;
-use crate::navigate::{apply_cd, cd};
+use crate::navigate::{cd, settle_cd};
 use crate::overlays::{fetch_plugin_page, settle_help_over_modal, watch_refresh_allowed};
 use crate::probes::{
     LOG_TAIL_PERIODO, STAT_BATCH_MAX, STAT_WINDOW_RADIUS, spawn_compare_stat_probe,
@@ -172,8 +172,9 @@ pub async fn drain_pending(
             .and_then(|m| m.dir().map(|d| d.join(name)));
         if let Some(dir) = dest {
             let outcome = cd(app, backend, events, dir).await;
-            apply_cd(
-                &app.panes,
+            settle_cd(
+                app,
+                backend,
                 &mut work.fill,
                 &mut work.decorate,
                 &mut work.probed,
@@ -186,8 +187,9 @@ pub async fn drain_pending(
     // as any other navigation, with its return ritual.
     if let Some(dest) = app.pending_disconnect_dest.take() {
         let outcome = cd(app, backend, events, dest).await;
-        apply_cd(
-            &app.panes,
+        settle_cd(
+            app,
+            backend,
             &mut work.fill,
             &mut work.decorate,
             &mut work.probed,
@@ -431,8 +433,9 @@ async fn handle_subshell(
             return;
         };
         let outcome = cd(app, backend, events, vpath).await;
-        apply_cd(
-            &app.panes,
+        settle_cd(
+            app,
+            backend,
             &mut work.fill,
             &mut work.decorate,
             &mut work.probed,

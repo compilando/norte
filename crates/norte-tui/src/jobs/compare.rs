@@ -8,7 +8,7 @@ use norte_i18n::ta;
 use super::search::SearchRun;
 use crate::app::{App, CompareState, detail_for_bar, error_category, error_message};
 use crate::fill::Fill;
-use crate::navigate::{apply_cd, cd};
+use crate::navigate::{cd, settle_cd};
 use crate::probes::{DecorateFetch, Probed};
 
 /// A directory comparison IN PROGRESS (`Shift+F2`,
@@ -415,8 +415,9 @@ pub async fn on_compare_enter(
         app.panes[dest_pane].set_pending_focus(p);
     }
     let outcome = cd(app, backend, events, dest).await;
-    apply_cd(
-        &app.panes,
+    settle_cd(
+        app,
+        backend,
         fill,
         decorate_fetch,
         last_probed,
