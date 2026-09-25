@@ -690,6 +690,27 @@ impl App {
         self.slot_of_kind(crate::diskmap::KIND)
     }
 
+    /// Whether the disk map needs a measurement this turn (#372): `r` asked
+    /// for one, or the map is open and describes another directory than
+    /// the listing's — which is also the case of a map that was just
+    /// opened and describes none.
+    ///
+    /// The window asks the same question after every message
+    /// (`probe_maps`). The terminal only listened to `r` and to disk
+    /// changes, so a map opened with `alt+z` stayed empty for good.
+    /// `launch` aims the map before it measures, so a directory is asked
+    /// for once, and one that cannot be measured is not retried every turn.
+    #[must_use]
+    pub fn disk_map_wants_measure(&self) -> bool {
+        if self.disk_map_stale {
+            return true;
+        }
+        let dir = self.focused().dir();
+        self.disk_map_slot()
+            .and_then(|s| self.panes.disk_map(s))
+            .is_some_and(|m| m.dir() != Some(dir))
+    }
+
     /// The timeline's slot, if it's open (phase 7).
     #[must_use]
     pub fn timeline_slot(&self) -> Option<norte_frontend::layout::SlotId> {
@@ -1603,6 +1624,37 @@ mod tests {
         width: 110,
         height: 30,
     };
+
+    /// Opening the disk map asks for a measurement, and so does walking to
+    /// another directory with it open (#372). It asked for neither: `alt+z`
+    /// placed an empty panel that stayed empty.
+    #[test]
+    fn the_disk_map_measures_when_opened_and_when_the_listing_moves() {
+        let mut app = app_two_panes();
+        assert!(!app.disk_map_wants_measure(), "no map, nothing to measure");
+
+        app.toggle_disk_map();
+        assert!(
+            app.disk_map_wants_measure(),
+            "a map just opened describes nothing yet"
+        );
+
+        // What `jobs::diskmap::launch` does first: point the map at the listing.
+        let dir = app.focused().dir().clone();
+        let slot = app.disk_map_slot().expect("open");
+        app.panes.disk_map_mut(slot).expect("its state").aim(dir);
+        assert!(
+            !app.disk_map_wants_measure(),
+            "aimed: asked once, not every turn"
+        );
+
+        let elsewhere = norte_vfs::VPath::parse("file:///elsewhere").expect("test wire");
+        app.focused_mut().set_listing(elsewhere, Vec::new());
+        assert!(
+            app.disk_map_wants_measure(),
+            "the listing moved: the map follows"
+        );
+    }
 
     /// A panel CONTRIBUTED by a plugin is a slot in full standing: it gets
     /// found, it takes the keyboard and the picker offers it (phase 3).
