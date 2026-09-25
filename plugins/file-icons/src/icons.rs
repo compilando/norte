@@ -80,11 +80,10 @@ impl Kind {
             (Kind::Link, Style::Emoji) => "🔗",
             (Kind::Link, Style::Ascii) => "@",
             (Kind::Sheet, Style::Emoji) => "📊",
-            // The three with VS16 (U+FE0F): without it they are TEXT
-            // presentation, `unicode-width` measures them at ONE cell and
-            // the terminal paints them at two, and the column breaks
-            // exactly on those rows.
-            (Kind::Slides, Style::Emoji) => "📽\u{FE0F}",
+            // Every emoji here is wide ON ITS OWN. `📽`, `🖼` and `⚙` are
+            // text presentation and need VS16 to be wide, and terminals
+            // disagree on a VS16 cell: the row painted one cell off (#374).
+            (Kind::Slides, Style::Emoji) => "📈",
             (Kind::Sheet | Kind::Slides, Style::Ascii) => "''",
             (Kind::Rust, Style::Emoji) => "🦀",
             (Kind::Code, Style::Emoji) => "💻",
@@ -95,7 +94,7 @@ impl Kind {
             (Kind::Readme, Style::Emoji) => "📖",
             (Kind::Licence, Style::Emoji) => "📜",
             (Kind::Doc | Kind::Readme | Kind::Licence, Style::Ascii) => "''",
-            (Kind::Image, Style::Emoji) => "🖼\u{FE0F}",
+            (Kind::Image, Style::Emoji) => "📷",
             (Kind::Image, Style::Ascii) => "%",
             (Kind::Audio, Style::Emoji) => "🎵",
             (Kind::Audio, Style::Ascii) => "~",
@@ -103,7 +102,7 @@ impl Kind {
             (Kind::Video, Style::Ascii) => ">",
             (Kind::Archive, Style::Emoji) => "📦",
             (Kind::Archive, Style::Ascii) => "[]",
-            (Kind::Config, Style::Emoji) => "⚙\u{FE0F}",
+            (Kind::Config, Style::Emoji) => "🔩",
             (Kind::Build, Style::Emoji) => "🔧",
             (Kind::Git, Style::Emoji) => "🐙",
             (Kind::Container, Style::Emoji) => "🐳",
@@ -508,7 +507,7 @@ mod tests {
     fn office_files_have_their_own_icons() {
         assert_eq!(badge_for(b"cuentas.xlsx", Style::Emoji), Some("📊"));
         assert_eq!(badge_for(b"datos.csv", Style::Emoji), Some("📊"));
-        assert_eq!(badge_for(b"charla.pptx", Style::Emoji), Some("📽\u{fe0f}"));
+        assert_eq!(badge_for(b"charla.pptx", Style::Emoji), Some("📈"));
         assert_eq!(badge_for(b"informe.docx", Style::Emoji), Some("📄"));
     }
 
@@ -520,7 +519,7 @@ mod tests {
             Some("🦀"),
             "special before .toml"
         );
-        assert_eq!(badge_for(b"config.toml", Style::Emoji), Some("⚙\u{fe0f}"));
+        assert_eq!(badge_for(b"config.toml", Style::Emoji), Some("🔩"));
         assert_eq!(
             badge_for(b".bashrc", Style::Emoji),
             None,
@@ -533,7 +532,7 @@ mod tests {
         );
         assert_eq!(
             badge_for(b"PHOTO.JPG", Style::Emoji),
-            Some("🖼\u{fe0f}"),
+            Some("📷"),
             "case-insensitive"
         );
         assert_eq!(
@@ -564,6 +563,22 @@ mod tests {
                 assert!(g.chars().count() <= 2, "{g:?}");
                 assert!(!g.chars().any(char::is_control), "{g:?}");
             }
+        }
+    }
+
+    /// Every emoji is ONE codepoint that is wide on its own (#374).
+    ///
+    /// A text-presentation emoji made wide by VS16 (`🖼\u{FE0F}`) is the
+    /// case terminals disagree on: some widen the cell they already drew
+    /// when the selector arrives, and the row painted one cell off until its
+    /// next repaint (`fjord.jpg g`, `Caféde Flore.jpg`).
+    #[test]
+    fn every_emoji_is_one_natively_wide_codepoint() {
+        use unicode_width::UnicodeWidthStr;
+        for k in Kind::ALL {
+            let g = k.glyph(Style::Emoji);
+            assert_eq!(g.chars().count(), 1, "{k:?}: {g:?} is a sequence");
+            assert_eq!(g.width(), 2, "{k:?}: {g:?} is not wide on its own");
         }
     }
 

@@ -99,6 +99,14 @@ export function viewerBody(viewer: ViewerView): HTMLElement {
     body.textContent = viewer.lines.join("\n");
     return body;
   }
+  // A picture drawn in `▀` half-blocks (an image previewer): its rows must
+  // touch, or the text's line height leaves a stripe between each two (#377).
+  const cells = viewer.styled.every((line) =>
+    line.every((s) => s.bg !== null && /^▀*$/u.test(s.text)),
+  );
+  if (cells) {
+    body.classList.add("viewer-cells");
+  }
   for (const line of viewer.styled) {
     const row = document.createElement("div");
     row.className = "viewer-line";

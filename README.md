@@ -71,7 +71,8 @@ test everything else.
 ```sh
 norte tui              # terminal interface, in the current directory
 norte tui ~/code       # ...in another directory
-norte tui --preset vim # ...with a keymap preset (orthodox|vim|cua)
+norte tui --preset vim # ...with a keymap preset (orthodox, vim, cua, krusader,
+                       #    far, norton or total-commander)
 ```
 
 `norte tui` hands the process over to `ntc`, which can also be launched

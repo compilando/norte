@@ -136,9 +136,10 @@ const COMPOSED: &[(&str, &[&str])] = &[
     // breaks here, which is where it needs to be noticed that it is missing
     // its string.
     ("log-level-", &["error", "warn", "info", "debug", "trace"]),
-    // The suffix is `TaskView::kind`, produced by `task_class` in the host
-    // with an exhaustive `match`: this list is that `match`'s other half,
-    // and a new `TaskKind` variant breaks there first.
+    // The suffix is `TaskView::kind`, produced by `norte_frontend::tasks::class`
+    // with an exhaustive `match`: this list is that `match`'s other half. It
+    // had fallen behind by three (create, checksum, set-mode); the frontend's
+    // `every_known_class_is_named_in_both_languages` now pins the match itself.
     (
         "gui-task-kind-",
         &[
@@ -148,11 +149,15 @@ const COMPOSED: &[(&str, &[&str])] = &[
             "undo",
             "search",
             "mkdir",
+            "create",
             "index",
             "embed",
             "rename-batch",
             "compare",
             "dir-size",
+            "checksum",
+            "dir-usage",
+            "set-mode",
             "pack",
             "test-archive",
             "split",

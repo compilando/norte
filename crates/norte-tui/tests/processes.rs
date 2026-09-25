@@ -267,7 +267,10 @@ fn the_row_says_the_class_and_what_it_acts_on_without_the_id() {
     app.toggle_processes();
     let screen = paint(&app, 80, 24);
 
-    assert!(screen.contains("copy"), "the class: {screen}");
+    // In the UI's language (#375): «copy» or «copiar», whichever is active.
+    let class =
+        norte_frontend::tasks::kind_label(norte_i18n::active(), norte_proto::TaskKind::Copy);
+    assert!(screen.contains(&class), "the class «{class}»: {screen}");
     assert!(screen.contains("foto.jpg"), "the operand: {screen}");
     assert!(
         !screen.contains("7318349021"),
@@ -286,7 +289,9 @@ fn the_strip_names_the_operand_with_the_pane_closed() {
         None,
     );
     let screen = paint(&app, 80, 24);
-    assert!(screen.contains("delete"), "the class: {screen}");
+    let class =
+        norte_frontend::tasks::kind_label(norte_i18n::active(), norte_proto::TaskKind::Delete);
+    assert!(screen.contains(&class), "the class «{class}»: {screen}");
     assert!(screen.contains("borrame"), "the operand: {screen}");
 }
 

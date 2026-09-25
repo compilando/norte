@@ -729,47 +729,11 @@ pub(crate) fn progress_pct(p: &norte_proto::TaskProgress) -> u64 {
     norte_frontend::tasks::progress_pct(p).map_or(0, u64::from)
 }
 
-/// A task class's label, by CATEGORY (never the `Debug` one).
-///
-/// A single copy because there are two surfaces that paint it — the bottom
-/// strip and the processes panel — and a label that comes out different on
-/// each for the same task is a bug nobody reports: it reads as if they were
-/// two different things.
-pub(crate) fn kind_label(kind: norte_proto::TaskKind) -> &'static str {
-    match kind {
-        norte_proto::TaskKind::Copy => "copy",
-        norte_proto::TaskKind::Move => "move",
-        norte_proto::TaskKind::Delete => "delete",
-        norte_proto::TaskKind::Undo => "undo",
-        // Minimal label; the Alt+F7 dialog/virtual pane arrives in T6 of
-        // liveSearch — here it only avoids the non-exhaustive `match`.
-        norte_proto::TaskKind::Search => "search",
-        norte_proto::TaskKind::Index => "index",
-        norte_proto::TaskKind::Mkdir => "mkdir",
-        norte_proto::TaskKind::Create => "create",
-        norte_proto::TaskKind::Embed => "embed",
-        norte_proto::TaskKind::RenameBatch => "rename",
-        // Counting mutates nothing, but it DOES show in the strip like
-        // everything else, and it used to fall to the generic arm: "task
-        // 82%" does not say a directory is being measured.
-        norte_proto::TaskKind::DirSize => "dir-size",
-        // Minimal label, like `Search`'s in its day: the compare pane
-        // arrives in C7 of this same plan; this only keeps a `fs.compare`
-        // Task from being painted as generic.
-        norte_proto::TaskKind::Compare => "compare",
-        // #311: same case as `DirSize`. "task 40%" does not say what is
-        // running is the sha256 of what you marked.
-        norte_proto::TaskKind::Checksum => "checksum",
-        // #314: and this one MUTATES, so it can even less afford to come
-        // out with no name.
-        norte_proto::TaskKind::SetMode => "set-mode",
-        // `Unknown` is the class of an N+1 daemon that this proto ALREADY
-        // knew as unknown (via `serde(other)`); the `_` is
-        // `#[non_exhaustive]` (#126) — a variant of a newer norte-proto that
-        // this BINARY does not recognize at all. Same case from the user's
-        // point of view, same generic label.
-        norte_proto::TaskKind::Unknown | _ => "task",
-    }
+/// A task class's label, in the UI's language: the one both frontends use
+/// (#375), for both surfaces that paint it — the bottom strip and the
+/// processes panel.
+pub(crate) fn kind_label(kind: norte_proto::TaskKind) -> String {
+    norte_frontend::tasks::kind_label(norte_i18n::active(), kind)
 }
 
 /// What a board row acts ON, clipped to `max` cells.

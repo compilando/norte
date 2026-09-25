@@ -197,7 +197,21 @@ pub(crate) fn guess_mimetype(path: &norte_proto::VPath) -> &'static str {
         .and_then(|n| std::str::from_utf8(n).ok())
         .and_then(|n| n.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()));
     match ext.as_deref() {
-        Some("txt" | "rs" | "toml" | "log" | "csv" | "ini" | "conf") => "text/plain",
+        Some("txt" | "log" | "csv" | "ini" | "conf") => "text/plain",
+        // Source code, by language (#379): a previewer gets the type, never
+        // the name, so this is the only way a highlighter learns what it
+        // reads. All under `text/`: a `text/*` previewer still claims them.
+        Some("rs") => "text/x-rust",
+        Some("py") => "text/x-python",
+        Some("go") => "text/x-go",
+        Some("sh" | "bash" | "zsh") => "text/x-shellscript",
+        Some("toml") => "text/x-toml",
+        Some("yml" | "yaml") => "text/x-yaml",
+        Some("c" | "h") => "text/x-c",
+        Some("cc" | "cpp" | "cxx" | "hpp") => "text/x-c++",
+        Some("java") => "text/x-java",
+        Some("rb") => "text/x-ruby",
+        Some("sql") => "text/x-sql",
         // Its own type, so a Markdown previewer can claim it EXACTLY while a
         // `text/*` highlighter keeps everything else (D3).
         Some("md" | "markdown") => "text/markdown",
@@ -2509,6 +2523,34 @@ mimetypes = ["text/*"]
         assert_eq!(guess_mimetype(&vpath("file:///a.jpeg")), "image/jpeg");
         assert_eq!(guess_mimetype(&vpath("file:///a.gif")), "image/gif");
         assert_eq!(guess_mimetype(&vpath("file:///a.webp")), "image/webp");
+    }
+
+    /// Source code has a type of its own (#379). `.rs` was `text/plain`,
+    /// and `.py`, `.go` or `.sh` were not text at all: a highlighter had no
+    /// way to tell the language, since a previewer never learns the name.
+    /// Every one stays under `text/`, so a `text/*` previewer keeps them.
+    #[test]
+    fn source_code_has_a_type_a_highlighter_can_read() {
+        for (name, mime) in [
+            ("main.rs", "text/x-rust"),
+            ("app.py", "text/x-python"),
+            ("main.go", "text/x-go"),
+            ("run.sh", "text/x-shellscript"),
+            ("Cargo.toml", "text/x-toml"),
+            ("ci.yml", "text/x-yaml"),
+            ("lib.c", "text/x-c"),
+            ("lib.cpp", "text/x-c++"),
+            ("Main.java", "text/x-java"),
+            ("app.rb", "text/x-ruby"),
+            ("query.sql", "text/x-sql"),
+        ] {
+            let got = guess_mimetype(&vpath(&format!("file:///{name}")));
+            assert_eq!(got, mime, "{name}");
+            assert!(
+                got.starts_with("text/"),
+                "{name}: a text/* previewer claims it"
+            );
+        }
     }
 
     /// D4: the width a client asks for reaches the guest capped; absence

@@ -90,6 +90,70 @@ fn plugin_preview_syntect_e2e_real_wasm() {
         render.contains("42"),
         "the render includes the numeric value: {render:?}"
     );
+
+    // The STYLED twin is what the viewer calls (#373). It used to wrap
+    // `render`'s ANSI in plain spans, and the viewer printed the escapes as
+    // text: the colour has to travel in `fg`, never inside `text`.
+    let (_, _, wasm, caps, _) = reg
+        .resolve_previewer("application/json")
+        .expect("still consented");
+    let lines = rt
+        .instantiate(&wasm, caps)
+        .expect("instantiate the previewer")
+        .render_styled_preview("application/json", SAMPLE, None)
+        .expect("previewer-syntect must render styled");
+    let spans: Vec<_> = lines.iter().flatten().collect();
+    assert!(
+        spans.iter().all(|s| !s.text.contains('\x1b')),
+        "no span carries an escape sequence: {lines:?}"
+    );
+    assert!(
+        spans.iter().any(|s| s.fg.is_some()),
+        "the highlighting travels in fg: {lines:?}"
+    );
+    // A minified line: thousands of tokens on one line. One span per token
+    // broke the host's 256-spans-per-line cap and the whole preview was
+    // rejected; it has to come back, coloured or not.
+    let minified = format!(
+        "{{{}}}",
+        (0..3000)
+            .map(|i| format!("\"k{i}\":{i}"))
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+    let (_, _, wasm2, caps2, _) = reg
+        .resolve_previewer("application/json")
+        .expect("still consented");
+    let dense = rt
+        .instantiate(&wasm2, caps2)
+        .expect("instantiate the previewer")
+        .render_styled_preview("application/json", minified.as_bytes(), None)
+        .expect("a minified line still renders");
+    let back: String = dense.iter().flatten().map(|s| s.text.as_str()).collect();
+    assert_eq!(back, minified, "the whole line comes back");
+
+    // Rust, typed `text/x-rust` by the core (#379): it came as `text/plain`
+    // and came out in ONE colour, «via Syntect Highlighter» notwithstanding.
+    let (_, _, wasm3, caps3, _) = reg
+        .resolve_previewer("text/x-rust")
+        .expect("text/* claims source code");
+    let rust = rt
+        .instantiate(&wasm3, caps3)
+        .expect("instantiate the previewer")
+        .render_styled_preview("text/x-rust", b"fn main() {\n    let x = 42;\n}\n", None)
+        .expect("Rust renders");
+    let colours: std::collections::BTreeSet<_> =
+        rust.iter().flatten().filter_map(|s| s.fg).collect();
+    assert!(
+        colours.len() > 1,
+        "Rust is highlighted, not one colour: {rust:?}"
+    );
+
+    let text: String = spans.iter().map(|s| s.text.as_str()).collect();
+    assert!(
+        text.contains("name") && text.contains("42"),
+        "the content survives: {text:?}"
+    );
 }
 
 /// Compiles `examples-wasm/<name>/` to `wasm32-wasip2` (release). `None`

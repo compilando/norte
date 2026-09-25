@@ -147,10 +147,12 @@ pub async fn drain_pending(
     if let Some(hash) = app.pending_sync_apply.take() {
         launch_sync_apply(app, backend, &mut work.sync, &hash).await;
     }
-    // Phase 4: the disk map asks to measure. Drained here and not in
-    // dispatch because measuring is I/O and this loop owns the backend —
-    // same split as the checksums and the comparison.
-    if std::mem::take(&mut app.disk_map_stale) {
+    // Phase 4: the disk map asks to measure — `r`, or it describes another
+    // directory than the listing's (#372). Drained here and not in dispatch
+    // because measuring is I/O and this loop owns the backend — same split
+    // as the checksums and the comparison.
+    if app.disk_map_wants_measure() {
+        app.disk_map_stale = false;
         crate::jobs::launch_disk_map(app, backend, work).await;
     }
     // Phase 7: the timeline asks for its first page, for the same reason.

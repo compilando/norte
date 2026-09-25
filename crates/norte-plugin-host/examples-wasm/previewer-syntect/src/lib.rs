@@ -38,6 +38,21 @@ fn ext_for_mime(mime: &str) -> Option<&'static str> {
         "text/javascript" | "application/javascript" => Some("js"),
         "text/css" => Some("css"),
         "text/markdown" => Some("md"),
+        // Source code, typed by the core from the extension (#379).
+        "text/x-rust" => Some("rs"),
+        "text/x-python" => Some("py"),
+        "text/x-go" => Some("go"),
+        "text/x-shellscript" => Some("sh"),
+        "text/x-yaml" => Some("yaml"),
+        "text/x-c" => Some("c"),
+        "text/x-c++" => Some("cpp"),
+        "text/x-java" => Some("java"),
+        "text/x-ruby" => Some("rb"),
+        "text/x-sql" => Some("sql"),
+        // syntect's default set has no TOML grammar: this finds nothing
+        // today and falls back to plain text, and starts working the day a
+        // TOML syntax is bundled.
+        "text/x-toml" => Some("toml"),
         _ => None,
     }
 }
@@ -68,14 +83,9 @@ impl PreviewerGuest for Syntect {
             input.mimetype
         ));
 
-        let ps = SyntaxSet::load_defaults_newlines();
-        let ts = ThemeSet::load_defaults();
-        let theme = ts
-            .themes
-            .get("base16-ocean.dark")
-            .ok_or("base16-ocean.dark theme missing")?;
+        let (ps, theme) = highlighter()?;
         let syntax = pick_syntax(&ps, &input.mimetype, &text);
-        let mut hl = HighlightLines::new(syntax, theme);
+        let mut hl = HighlightLines::new(syntax, &theme);
 
         let mut out = String::new();
         for line in text.lines() {
@@ -89,30 +99,81 @@ impl PreviewerGuest for Syntect {
         Ok(out)
     }
 
-    // ADR 0037 (WIT 0.6.0): `render-styled` is a REQUIRED export of
-    // `previewer`. This guest does not translate its ANSI highlighting to
-    // structured spans (debt: it would need to parse SGR the same way
-    // `norte-frontend::ansi` does, out of scope for G3 Task 2) — it
-    // implements the TRIVIAL wrapper the ADR reserves for a text-only
-    // guest: one plain span per line, no `role` or `fg`. Each span's text
-    // carries `render`'s raw ANSI codes (the host would see them as
-    // literal text if something called `preview_styled` on this guest
-    // today); a future real SGR parse is the natural improvement, not
-    // required by this guest.
+    // ADR 0037 (WIT 0.6.0): the styled twin, and the one the viewer calls.
+    // The colour travels in `fg`, straight from syntect's ranges: never as
+    // escapes inside `text`, which the viewer paints as text (#373).
     fn render_styled(input: PreviewInput) -> Result<Vec<Vec<Span>>, String> {
-        let plain = Self::render(input)?;
-        Ok(plain
-            .lines()
-            .map(|l| {
-                vec![Span {
-                    text: l.to_string(),
-                    role: None,
-                    fg: None,
-                    bg: None,
-                }]
+        let text = String::from_utf8_lossy(&input.content);
+        let (ps, theme) = highlighter()?;
+        let syntax = pick_syntax(&ps, &input.mimetype, &text);
+        let mut hl = HighlightLines::new(syntax, &theme);
+        text.lines()
+            .map(|line| {
+                let ranges = hl
+                    .highlight_line(line, &ps)
+                    .map_err(|e| format!("syntect: {e}"))?;
+                let mut spans: Vec<Span> = Vec::new();
+                for (style, piece) in ranges {
+                    let fg = (style.foreground.r, style.foreground.g, style.foreground.b);
+                    match spans.last_mut() {
+                        // Neighbours of one colour are one span: a minified
+                        // line has thousands of tokens and a handful of colours.
+                        Some(last) if last.fg == Some(fg) => last.text.push_str(piece),
+                        _ => spans.push(Span {
+                            text: piece.to_string(),
+                            role: None,
+                            fg: Some(fg),
+                            bg: None,
+                        }),
+                    }
+                }
+                Ok(fit_line(spans, line))
             })
-            .collect())
+            .collect()
     }
+}
+
+/// The host's caps per line (`norte-plugin-host`, ADR 0037): a line over
+/// either is REJECTED with the whole preview, and the viewer falls back to
+/// no highlighting at all.
+const MAX_SPANS_PER_LINE: usize = 256;
+const MAX_SPAN_BYTES: usize = 4 * 1024;
+
+/// A line the host will accept: the highlighted spans if they fit, otherwise
+/// the line uncoloured in chunks that do — one dense line loses its colour,
+/// not the whole file's. Past 256 chunks (1 MiB in one line) the rest of that
+/// line is not shown; the host's total cap is 4 MiB anyway.
+fn fit_line(spans: Vec<Span>, line: &str) -> Vec<Span> {
+    if spans.len() <= MAX_SPANS_PER_LINE && spans.iter().all(|s| s.text.len() <= MAX_SPAN_BYTES) {
+        return spans;
+    }
+    let mut chunks = Vec::new();
+    let mut rest = line;
+    while !rest.is_empty() && chunks.len() < MAX_SPANS_PER_LINE {
+        let mut end = rest.len().min(MAX_SPAN_BYTES);
+        while !rest.is_char_boundary(end) {
+            end -= 1;
+        }
+        chunks.push(Span {
+            text: rest[..end].to_string(),
+            role: None,
+            fg: None,
+            bg: None,
+        });
+        rest = &rest[end..];
+    }
+    chunks
+}
+
+/// The syntaxes and the theme both renders use.
+fn highlighter() -> Result<(SyntaxSet, syntect::highlighting::Theme), String> {
+    let ps = SyntaxSet::load_defaults_newlines();
+    let mut ts = ThemeSet::load_defaults();
+    let theme = ts
+        .themes
+        .remove("base16-ocean.dark")
+        .ok_or("base16-ocean.dark theme missing")?;
+    Ok((ps, theme))
 }
 
 impl CommandGuest for Syntect {

@@ -2020,6 +2020,7 @@ gui-task-kind-rename-batch = rename
 gui-task-kind-unknown = task
 gui-task-kind-compare = compare
 gui-task-kind-dir-size = size
+gui-task-kind-dir-usage = disk map
 gui-task-kind-checksum = sums
 gui-task-kind-set-mode = permissions
 gui-task-kind-pack = pack

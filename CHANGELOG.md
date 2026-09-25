@@ -233,6 +233,41 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **The disk map in `ntc` measures when it opens** (#372). `alt+z` placed an
+  empty panel that stayed empty: only `r` or a change on disk asked for a
+  measurement. It now measures the listing's directory on opening and again
+  whenever the listing moves elsewhere, as the window already did. A failed
+  measurement says so in the panel, and the finished one is named «disk map»
+  in both frontends instead of «task».
+- **The syntax highlighter shows colours, not escape codes** (#373). The
+  syntect previewer's styled output carried its ANSI sequences inside the
+  text; the colour now travels as each span's colour. A minified line too
+  dense for the host's per-line cap comes back uncoloured instead of taking
+  the whole file's highlighting with it.
+- **Rows with an image, slides or config icon no longer paint one cell off**
+  (#374). The `file-icons` plugin used three emoji that are only wide with a
+  VS16 selector (`🖼️`, `📽️`, `⚙️`), and terminals disagree on that cell; they
+  are now `📷`, `📈` and `🔩`, wide on their own.
+- **Tasks are named in Spanish in a Spanish UI** (#375). The terminal printed
+  the task's class (`copy`, `delete`) and ten of the classes were English in
+  `es.ftl` too; both frontends now name a task through one shared function.
+- **`ntc --help` names the seven keymap presets** (#376), not three.
+- **The window's docked viewer shows a photo whole** (#377). A half-block
+  picture from an image previewer had a stripe of background between every
+  two rows; its rows now touch.
+- **Marking by key works in the window** (#378). `Insert` and `space`
+  marked the row and stayed on it, so the second press unmarked it and the
+  window seemed not to mark at all. The key marks and moves on, as in the
+  terminal; a click still marks without moving.
+- **Source code is highlighted** (#379). A `.rs` file reached previewers as
+  `text/plain`, and `.py`, `.go`, `.sh`, `.yml`, `.c`, `.java`, `.rb` or
+  `.sql` were not text at all, so the syntect highlighter painted Rust in one
+  colour and never saw the rest. They are now typed by language
+  (`text/x-rust`, `text/x-python`…), all under `text/`.
+- **The viewer no longer calls a Markdown or JSON file «binary, no EOL»**
+  (#380) when a plugin previews it: the encoding and line-end marks are left
+  out, in both frontends, because they would describe the plugin's output
+  and not the file.
 - **Clicking a column title in `ntc` sorts by it.** It only focused the pane;
   sorting by mouse existed in the window alone. A second click reverses the
   order, like the window and the `pane.sort-*` keys. The two cells around each

@@ -1855,47 +1855,10 @@ fn lost_approval_key(e: &norte_proto::Error) -> &'static str {
     }
 }
 
-/// A task's CLASS, in the bridge's vocabulary.
-///
-/// A `match` and not `format!("{:?}").to_lowercase()`. `Debug` gave
-/// `renamebatch` and `dirsize` for variants whose catalog key is
-/// `rename-batch` and `dir-size`, so those two painted as their own
-/// identifier.
-///
-/// `TaskKind` is `#[non_exhaustive]`, so the wildcard is mandatory and this
-/// does NOT stop compiling when a variant appears: what happens is it falls
-/// into `unknown`, a key that DOES EXIST in the catalog. A task from a newer
-/// daemon reads "task" instead of reading `gui-task-kind-frobnicate`.
+/// A task's CLASS, in the bridge's vocabulary: the shared one, which the
+/// terminal names its tasks with too (#375).
 fn task_class(kind: norte_proto::TaskKind) -> &'static str {
-    use norte_proto::TaskKind as K;
-    match kind {
-        K::Copy => "copy",
-        K::Move => "move",
-        K::Delete => "delete",
-        K::Undo => "undo",
-        K::Search => "search",
-        K::Mkdir => "mkdir",
-        K::Create => "create",
-        K::Index => "index",
-        K::Embed => "embed",
-        K::RenameBatch => "rename-batch",
-        K::Compare => "compare",
-        K::DirSize => "dir-size",
-        K::Pack => "pack",
-        K::TestArchive => "test-archive",
-        K::Split => "split",
-        K::Combine => "combine",
-        K::SyncPlan => "sync-plan",
-        K::Sync => "sync",
-        // #311 and #314: fell into `unknown`, meaning a checksum check and a
-        // permission change read "task" in the strip.
-        K::Checksum => "checksum",
-        K::SetMode => "set-mode",
-        // `Unknown` and whatever a newer daemon brings, together: see the
-        // doc above. `unknown` is a real key, not a raw identifier painted
-        // as is.
-        K::Unknown | _ => "unknown",
-    }
+    norte_frontend::tasks::class(kind)
 }
 
 /// The scheme's CONFIGURED `plugin:` columns' values.

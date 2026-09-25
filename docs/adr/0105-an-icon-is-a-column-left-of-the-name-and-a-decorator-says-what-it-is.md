@@ -96,8 +96,10 @@ characters per kind.
   column and shift every name (ADR 0077).
 - Three emoji in the table (`🖼`, `⚙`, `📽`) are text-presentation by default:
   `unicode-width` measures them at one cell and a terminal paints two. They
-  carry VS16 (U+FE0F), and a test pins every emoji glyph to two cells with
-  the same measure the terminal uses.
+  carried VS16 (U+FE0F) until #374: terminals disagree on a VS16 cell, and a
+  row painted one cell off until its next repaint. They are now `📷`, `🔩`
+  and `📈`, wide on their own, and a test pins every emoji to ONE codepoint
+  of two cells.
 - The terminal paints an icon that was masked without a mark, as it already
   did for a masked badge; the window appends its `△`. Written down here as a
   known asymmetry, inherited rather than opened.

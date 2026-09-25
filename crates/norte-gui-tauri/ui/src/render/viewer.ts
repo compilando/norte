@@ -352,7 +352,9 @@ function viewerMarks(screen: Screen, viewer: ViewerView): string {
   // Each mark is a DATUM the host resolved: encoding, line ending, whether
   // the user forced it, whether decoding had errors, whether the file was
   // truncated. None of it is computed here.
-  const marks = [viewer.encoding, viewer.eol];
+  // Empty when the host has nothing true to say (a plugin's preview, #380):
+  // an empty mark painted `- · none ·`.
+  const marks = [viewer.encoding, viewer.eol].filter((m) => m !== "");
   if (viewer.hex) {
     marks.push("hex");
   }
