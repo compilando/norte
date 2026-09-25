@@ -191,10 +191,13 @@ Two binaries, each with its own installer — `ntc`, the file manager, and
 
 ```sh
 curl --proto '=https' --tlsv1.2 -LsSf \
-  https://github.com/compilando/norte/releases/latest/download/norte-tui-installer.sh | sh
+  https://github.com/compilando/norte/releases/download/v0.3.0-alpha.4/norte-tui-installer.sh | sh
 curl --proto '=https' --tlsv1.2 -LsSf \
-  https://github.com/compilando/norte/releases/latest/download/norte-cli-installer.sh | sh
+  https://github.com/compilando/norte/releases/download/v0.3.0-alpha.4/norte-cli-installer.sh | sh
 ```
+
+The links name the tag on purpose: GitHub's `releases/latest` skips
+pre-releases, and every alpha is one.
 
 <details>
 <summary><b>From source</b></summary>
