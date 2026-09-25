@@ -24,11 +24,13 @@ shot's panes into the real `session.json`. `bwrap` hides `/home` entirely.
 
 **Consent is given, not forged.** `scenes/approve.scene` approves the plugins
 in the extension manager the way a person does. `y` on an approved row
-REVOKES, which is why it runs once per fresh home, and why syntect is left
-unapproved: `scenes/grant.scene` photographs the question.
+REVOKES, which is why it runs once per fresh home, and why media-info is
+left unapproved: `scenes/grant.scene` photographs the question.
+
+**Never edit `shoot.sh` while a run is going**: bash reads a script as it
+runs it. The scene files are read per step too; edit them between runs.
 
 **Known product bugs the scenes step around**, each noted where it happens:
-the first paint of a row with a VS16 emoji (🖼️) is shifted by one cell until
-the next paint (#374); the disk map panel paints nothing in the terminal
-(#372); the syntect previewer shows its escapes raw (#373). When one is fixed,
-put its scene back.
+in the window, marking by keyboard under xdotool (#378) and the docked
+viewer's striped image (#377). When one is fixed, put its scene back — as
+the disk map (#372) and the highlighted code (#373) were.

@@ -12,6 +12,8 @@ export type Scene =
   | "panes"
   | "viewer"
   | "markdown"
+  | "code"
+  | "disk-map"
   | "copy-dialog"
   | "timeline"
   | "goto"
@@ -108,6 +110,20 @@ const en = {
         title: "A README reads like a README.",
         body: "Headings, emphasis, code, lists and quotes, from a sandboxed previewer that never sees the path of what it renders.",
         keys: ["F3"],
+      },
+      {
+        scene: "code",
+        kicker: "Highlighting",
+        title: "Data and markup, highlighted.",
+        body: "JSON, HTML, XML, CSS and JavaScript through syntect, running as a WASM plugin that reads that one file and nothing else.",
+        keys: ["F3"],
+      },
+      {
+        scene: "disk-map",
+        kicker: "The disk map",
+        title: "Where did the space go?",
+        body: "Every folder a rectangle sized by everything inside it. The arrows walk them, Enter goes in, and a folder it could not read completely is marked, never reported short.",
+        keys: ["Alt+Z"],
       },
       {
         scene: "copy-dialog",
@@ -344,6 +360,20 @@ const es: Copy = {
         title: "Un README se lee como un README.",
         body: "Títulos, énfasis, código, listas y citas, desde un previsualizador aislado que nunca conoce la ruta de lo que pinta.",
         keys: ["F3"],
+      },
+      {
+        scene: "code",
+        kicker: "Resaltado",
+        title: "Datos y marcado, resaltados.",
+        body: "JSON, HTML, XML, CSS y JavaScript con syntect, que corre como plugin WASM y lee ese fichero y nada más.",
+        keys: ["F3"],
+      },
+      {
+        scene: "disk-map",
+        kicker: "El mapa de disco",
+        title: "¿Dónde se fue el espacio?",
+        body: "Cada carpeta, un rectángulo del tamaño de todo lo que contiene. Las flechas lo recorren, Intro entra, y una carpeta que no pudo leer entera se marca: nunca se da por más pequeña.",
+        keys: ["Alt+Z"],
       },
       {
         scene: "copy-dialog",

@@ -35,7 +35,7 @@ rm -rf "$home"
 "$here/plugins.sh" "$home" "$bin" "$repo" >/dev/null
 "$here/tui.sh" "$home" "$bin" "$here/scenes/approve.scene" "$work/approve" "$hero_theme" en
 if [ "$("$here/sandbox.sh" "$home" "$bin" norte plugin list | grep -c 'NOT approved')" != 1 ]; then
-	echo "shoot.sh: approve.scene should leave only syntect unapproved" >&2
+	echo "shoot.sh: approve.scene should leave only media-info unapproved" >&2
 	"$here/sandbox.sh" "$home" "$bin" norte plugin list >&2
 	exit 1
 fi

@@ -4,17 +4,8 @@
 # revokes, so this runs once per fresh home. The manager is reopened per row:
 # approving loads the binary, and keys typed meanwhile land on a stale list.
 # Rows: media-info, size-bar, file-icons, image-ansi, markdown, syntect, image-thumb.
-# Syntect stays unapproved on purpose: grant.scene asks for it.
+# Media info stays unapproved on purpose: grant.scene asks for it.
 run
-keys F12
-wait 1
-keys y
-wait 1
-keys y
-wait 1.5
-keys e
-wait 1.5
-keys Escape
 keys F12
 wait 1
 keys Down
@@ -48,6 +39,16 @@ keys Escape
 keys F12
 wait 1
 keys Down Down Down Down
+keys y
+wait 1
+keys y
+wait 1.5
+keys e
+wait 1.5
+keys Escape
+keys F12
+wait 1
+keys Down Down Down Down Down
 keys y
 wait 1
 keys y

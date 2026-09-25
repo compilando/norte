@@ -10,8 +10,32 @@ wait 1.2
 frame
 shot markdown
 keys Escape
-# No shot of src/main.rs: the syntect previewer shows its escapes raw (#373).
-# No disk map either: it paints nothing in the terminal (#372).
+# stations.json, the 8th row, highlighted by the syntect plugin. Not
+# src/main.rs: the previewer gets no file name and `.rs` arrives as
+# text/plain, so Rust comes out uncoloured (#379).
+keys Home Down Down Down Down Down Down Down
+keys F3
+# The highlighter compiles its grammar on first use.
+wait 4
+frame
+shot code
+keys Escape
+# The disk map of ada's home, measured and painted.
+keys Home
+open
+keys Home
+open
+keys M-z
+wait 3
+frame
+shot disk-map
+keys M-z
+keys Escape
+# Back to the project for the tour's left pane.
+keys Home Down Down Down Down Down
+open
+keys Home Down
+open
 # The right pane walks to the photos: ~ is .., Documents, Downloads, Music, Photos.
 keys Tab
 keys Home

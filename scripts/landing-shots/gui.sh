@@ -90,7 +90,7 @@ while IFS= read -r line || [ -n "$line" ]; do
 		sleep 6
 		if [ -n "${RECORD:-}" ]; then
 			# -nostdin: it would eat the scene this loop is reading.
-			ffmpeg -nostdin -loglevel error -y -f x11grab -framerate 24 -video_size "${width}x${height}" -i "$display" \
+			ffmpeg -nostdin -loglevel error -y -f x11grab -draw_mouse 0 -framerate 24 -video_size "${width}x${height}" -i "$display" \
 				-c:v libvpx-vp9 -b:v 0 -crf 38 -row-mt 1 -deadline realtime -pix_fmt yuv420p "$RECORD" &
 			rec=$!
 		fi
