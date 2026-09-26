@@ -62,6 +62,7 @@ pub fn daemon_run_argv(
 /// `uid_hint` is only used for the /tmp fallback (the server derives it from
 /// its own socket; clients, from the dir they find).
 #[must_use]
+#[cfg(unix)]
 pub fn default_socket_path(uid_hint: Option<u32>) -> PathBuf {
     socket_path_from(
         std::env::var_os("XDG_RUNTIME_DIR"),
@@ -69,9 +70,24 @@ pub fn default_socket_path(uid_hint: Option<u32>) -> PathBuf {
     )
 }
 
+#[must_use]
+#[cfg(not(unix))]
+/// Reserved address for the forthcoming Windows named-pipe transport.
+///
+/// Kept under the user's local application-data directory so command-line
+/// overrides and diagnostics remain path-shaped on every platform.
+pub fn default_socket_path(_uid_hint: Option<u32>) -> PathBuf {
+    std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("norte")
+        .join("daemon.pipe")
+}
+
 /// [`default_socket_path`]'s pure logic (testable without touching the
 /// global environment — which in edition 2024 requires `unsafe`, forbidden
 /// here).
+#[cfg(unix)]
 fn socket_path_from(xdg: Option<std::ffi::OsString>, uid: u32) -> PathBuf {
     if let Some(runtime) = xdg.filter(|v| !v.is_empty()) {
         return PathBuf::from(runtime).join("norte").join("daemon.sock");
@@ -84,6 +100,7 @@ fn socket_path_from(xdg: Option<std::ffi::OsString>, uid: u32) -> PathBuf {
 /// against the socket's peer; the real security comes from the server's
 /// checks on owner and mode.
 #[must_use]
+#[cfg(unix)]
 pub fn process_uid_best_effort() -> u32 {
     use std::os::unix::fs::MetadataExt;
     let probe = std::env::temp_dir().join(format!(
@@ -105,7 +122,16 @@ pub fn process_uid_best_effort() -> u32 {
     uid.unwrap_or(0)
 }
 
-#[cfg(test)]
+/// Windows transports authenticate with the process token rather than a
+/// numeric Unix uid. Kept for API compatibility with callers that only use
+/// the value as a best-effort naming hint.
+#[must_use]
+#[cfg(not(unix))]
+pub const fn process_uid_best_effort() -> u32 {
+    0
+}
+
+#[cfg(all(test, unix))]
 mod tests {
     use super::{process_uid_best_effort, socket_path_from};
 

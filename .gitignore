@@ -14,3 +14,6 @@ crates/norte-gui-tauri/gen/
 # Copias con sufijo de triple que `just gui-package` deja para Tauri (#256):
 # son artefactos de `target/release`, no fuentes.
 crates/norte-gui-tauri/binaries/
+# Local Windows VM configuration. The example is versioned; the real file can
+# contain an ISO path, its digest and local resource choices.
+infra/vm/windows/config.env

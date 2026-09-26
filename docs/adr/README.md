@@ -157,3 +157,4 @@ edits.
 | [0154](0154-the-source-code-is-written-in-english.md) | The source code is written in English | accepted |
 | [0155](0155-typing-a-name-jumps-to-it-in-the-presets-that-reserve-letters.md) | Typing a name jumps to it, in the presets that reserve letters | accepted |
 | [0156](0156-a-sync-plan-does-not-measure-the-orphans-it-copies.md) | A sync plan does not measure the orphans it copies | accepted |
+| [0157](0157-native-builders-share-one-release-contract.md) | Native builders share one release contract, and VM state stays outside the tree | accepted |

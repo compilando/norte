@@ -746,6 +746,43 @@ plugins *ARGS:
     just plugin-date-prefix "$@"
     just plugin-rename-log "$@"
 
+# ---------- native platform lab ----------
+
+# Fast tests for the VM orchestration's pure safety and path logic. No VM,
+# network or elevated privileges required.
+platform-selftest:
+    shellcheck -S warning infra/vm/common/*.sh infra/vm/windows/*.sh
+    ./infra/vm/common/selftest.sh
+
+# Windows' local native builder (ADR 0157). Definitions are in the tree;
+# ISOs, disks, generated answer media and artifacts live in ../norte-lab by
+# default. Copy infra/vm/windows/config.example.env to config.env first.
+windows-vm-preflight:
+    ./infra/vm/windows/preflight.sh
+
+windows-vm-host-network:
+    ./infra/vm/windows/host-network.sh --install
+
+windows-vm-attach-bootstrap:
+    ./infra/vm/windows/attach-bootstrap.sh
+
+windows-vm-create:
+    ./infra/vm/windows/create.sh
+
+windows-vm-start:
+    ./infra/vm/windows/start.sh
+
+windows-vm-stop:
+    ./infra/vm/windows/stop.sh
+
+windows-vm-snapshot name="provisioned":
+    ./infra/vm/windows/snapshot.sh {{name}}
+
+# Deliberately leaves the qcow2 in the external state root: undefining a VM
+# is recoverable; silently deleting a 160 GiB development disk is not.
+windows-vm-destroy:
+    ./infra/vm/windows/destroy.sh
+
 # ---------- distribution ----------
 
 # Release artifacts are NOT built on this machine: its glibc is newer than

@@ -19,7 +19,7 @@ use norte_proto::wire::{
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot};
 
-use crate::transport::unix;
+use crate::transport;
 
 /// Client errors.
 #[derive(Debug, thiserror::Error)]
@@ -87,7 +87,7 @@ impl Client {
     /// # Errors
     /// Connection I/O, or the socket being served by another user.
     pub async fn connect(socket: &Path) -> Result<Self, ClientError> {
-        let (reader, writer) = unix::connect(socket).await?;
+        let (reader, writer) = transport::connect(socket).await?;
         Ok(Self::from_halves(reader, writer))
     }
 
@@ -102,7 +102,7 @@ impl Client {
         socket: &Path,
         spawn: impl FnOnce() -> std::process::Command,
     ) -> Result<Self, ClientError> {
-        let (reader, writer) = unix::connect_or_spawn(socket, spawn).await?;
+        let (reader, writer) = transport::connect_or_spawn(socket, spawn).await?;
         Ok(Self::from_halves(reader, writer))
     }
 

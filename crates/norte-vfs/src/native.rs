@@ -62,7 +62,7 @@ pub fn bytes_to_os(bytes: &[u8]) -> Result<OsString, Error> {
     if bytes.contains(&b'\\') || bytes.contains(&b':') {
         return Err(Error::InvalidPath);
     }
-    let wide = norte_vfs::wtf8::decode_to_wide(bytes).ok_or(Error::InvalidPath)?;
+    let wide = crate::wtf8::decode_to_wide(bytes).ok_or(Error::InvalidPath)?;
     Ok(OsString::from_wide(&wide))
 }
 
@@ -86,7 +86,7 @@ pub fn link_target_to_os(bytes: &[u8]) -> Result<OsString, Error> {
 #[cfg(windows)]
 pub fn link_target_to_os(bytes: &[u8]) -> Result<OsString, Error> {
     use std::os::windows::ffi::OsStringExt;
-    let wide = norte_vfs::wtf8::decode_to_wide(bytes).ok_or(Error::InvalidPath)?;
+    let wide = crate::wtf8::decode_to_wide(bytes).ok_or(Error::InvalidPath)?;
     Ok(OsString::from_wide(&wide))
 }
 

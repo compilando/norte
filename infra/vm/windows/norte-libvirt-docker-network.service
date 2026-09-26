@@ -1,0 +1,11 @@
+[Unit]
+Description=Allow libvirt NAT through Docker's DOCKER-USER chain
+After=docker.service libvirtd.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/norte-libvirt-docker-network --apply
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
