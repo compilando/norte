@@ -94,6 +94,14 @@ Verified on 2026-09-26 with Windows 11 25H2 x64 and MSVC Rust 1.96.1:
 - `norte-core`'s own test suite does not compile on Windows yet (unix-only
   helpers such as `Permissions::from_mode`).
 
+After unclean power-offs Windows may reclassify the NAT network as
+*Public*, and the OpenSSH firewall rule only allows *Private*: SSH then
+drops, sometimes mid-session, while DHCP and outbound traffic keep working.
+From an elevated console PowerShell: `Set-NetConnectionProfile
+-NetworkCategory Private; Set-Service sshd -StartupType Automatic;
+Start-Service sshd`. A warm `virsh reset` has also left the guest hung;
+prefer `destroy` + `start`.
+
 The VM (11 GB) and a workspace build on the host (`just c`, `just ci`) do
 not fit in 31 GB together: the host OOM killer took QEMU twice on
 2026-09-26. Shut the guest down (`just windows-vm-stop`) before a heavy host

@@ -9,6 +9,10 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **The window runs on Windows** (ADR 0157). `scripts/platform/windows/build.ps1`
+  builds `norte`, `ntc` and `norte-gui` together; the window finds
+  `norte.exe` next to it and loads its bundle from `http://tauri.localhost`,
+  the only extra origin its navigation guard admits, and only on Windows.
 - **The daemon runs on Windows, over a named pipe only its user can open**
   (ADR 0159). `norte daemon`, `mcp`, `policy`, `undo` and `--daemon` are no
   longer unix-only; `--socket` still takes a path, or a `\\.\pipe\<name>`.
