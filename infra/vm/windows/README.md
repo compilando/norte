@@ -84,10 +84,16 @@ Verified on 2026-09-26 with Windows 11 25H2 x64 and MSVC Rust 1.96.1:
   adapter returns `Unsupported`; it must be replaced by an authenticated,
   per-user Windows named pipe before the GUI is releasable.
 - `norte-vfs` compiles after using its internal `crate::wtf8` path correctly.
-- `norte-core` is the current red gate. Its errors cluster around the
-  Unix-only confined local provider/plugin location API, three direct Unix
-  metadata conversions, and incorrectly gated remote task variants.
+- `norte-core` compiles (ADR 0158: the plugin `location` root is confined
+  by handle-relative `NtCreateFile`; its tests pass on NTFS).
+- `norte-cli` is red on `norte-mcp`, which imports the unix-only
+  `norte_core::daemon`; the CLI also runs the daemon server. Both need the
+  server side of the transport seam: the named-pipe listener.
+- `norte-tui` is red on the pty subshell (ADR 0084), which needs ConPTY.
 
-Work these groups in that order, then rerun `check.ps1`. Do not skip directly
-to packaging: ADR 0157 requires the daemon-only GUI to retain the same security
-boundary on Windows.
+The guest clock runs one hour ahead of the host. Files copied in keep the
+host's mtime and look OLDER than the guest's build artefacts, so cargo reuses
+stale builds. Extract with `tar -xm` (or touch the files) when syncing.
+
+Do not skip directly to packaging: ADR 0157 requires the daemon-only GUI to
+retain the same security boundary on Windows.

@@ -73,7 +73,6 @@ impl Backend {
                     .await?;
                 Ok((TaskRef::from_handle(&handle), rx))
             }
-            #[cfg(unix)]
             Self::Remote(r) => r
                 .compare(params)
                 .await
@@ -177,7 +176,6 @@ impl Backend {
                     .await?;
                 Ok((TaskRef::from_handle(&handle), rx))
             }
-            #[cfg(unix)]
             Self::Remote(r) => r
                 .sync_plan(params)
                 .await
@@ -224,7 +222,6 @@ impl Backend {
                 // same way.
                 Ok(TaskRef::from_handle(&handle))
             }
-            #[cfg(unix)]
             Self::Remote(r) => r.sync_apply(plan_hash).await.map(TaskRef::from),
         }
     }
@@ -269,7 +266,6 @@ impl Backend {
                 // Embedded has no actor to check: this `Backend` IS the
                 // human in-process (same criterion as `rename_batch_report`).
                 .ok_or(Error::NotFound),
-            #[cfg(unix)]
             Self::Remote(r) => r.sync_report(task_id).await,
         }
     }

@@ -78,10 +78,25 @@ pub fn default_socket_path(uid_hint: Option<u32>) -> PathBuf {
 /// overrides and diagnostics remain path-shaped on every platform.
 pub fn default_socket_path(_uid_hint: Option<u32>) -> PathBuf {
     std::env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir)
+        .map_or_else(std::env::temp_dir, PathBuf::from)
         .join("norte")
         .join("daemon.pipe")
+}
+
+/// `true` if a daemon answers at `socket` right now, without authenticating
+/// it or speaking JSON-RPC.
+///
+/// Synchronous and cheap enough to run under a lock: it is a presence probe
+/// ("is someone on the other end?"), not a connection. A stale socket file
+/// with nobody behind it answers `false`.
+///
+/// ```
+/// let dir = tempfile::tempdir().expect("tempdir");
+/// assert!(!norte_client::daemon_listening(&dir.path().join("daemon.sock")));
+/// ```
+#[must_use]
+pub fn daemon_listening(socket: &std::path::Path) -> bool {
+    crate::transport::listening(socket)
 }
 
 /// [`default_socket_path`]'s pure logic (testable without touching the

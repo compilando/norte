@@ -28,6 +28,12 @@ pub(crate) async fn connect(socket: &Path) -> Result<(OwnedReadHalf, OwnedWriteH
     authenticated(stream).await
 }
 
+/// Synchronous presence probe: a `connect` to a local unix socket resolves
+/// on the spot, and an orphaned socket answers `ECONNREFUSED`.
+pub(crate) fn listening(socket: &Path) -> bool {
+    std::os::unix::net::UnixStream::connect(socket).is_ok()
+}
+
 /// Connects and, if nobody is listening, STARTS the daemon and retries with
 /// backoff for up to ~3s.
 ///

@@ -20,6 +20,10 @@ fn unavailable() -> ClientError {
     .into()
 }
 
+pub(crate) const fn listening(_socket: &Path) -> bool {
+    false
+}
+
 pub(crate) async fn connect(_socket: &Path) -> Result<(Reader, Writer), ClientError> {
     Err(unavailable())
 }

@@ -14,6 +14,7 @@ use std::sync::Arc;
 use std::sync::mpsc;
 
 use russh::client::AuthResult;
+#[cfg(unix)]
 use russh::keys::agent::AgentIdentity;
 use russh::keys::{Algorithm, HashAlg, PrivateKey, PrivateKeyWithHashAlg, PublicKey};
 use russh_sftp::client::SftpSession;
@@ -262,6 +263,9 @@ impl SshConnector {
 
     /// Authenticates by trying the agent's ed25519 identities (ADR 0015 E:
     /// also via agent, only ed25519).
+    // Off unix nothing is awaited until the Windows agent's named pipe is
+    // supported; the signature stays the one the caller awaits.
+    #[cfg_attr(not(unix), allow(clippy::unused_async))]
     async fn authenticate_via_agent(
         &self,
         handle: &mut russh::client::Handle<TofuHandler>,

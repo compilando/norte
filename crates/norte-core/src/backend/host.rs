@@ -21,7 +21,6 @@ impl Backend {
     ) -> Result<usize, Error> {
         match self {
             Self::Embedded(engine) => engine.gc_partials(dir, older_than).await,
-            #[cfg(unix)]
             Self::Remote(_) => Err(Error::Unsupported),
         }
     }
@@ -55,7 +54,6 @@ impl Backend {
                     .map_err(|_| Error::Io { retryable: false })?;
                 Ok(volumes.into_iter().map(volume_to_proto).collect())
             }
-            #[cfg(unix)]
             Self::Remote(r) => r.volumes(include_pseudo).await,
         }
     }
@@ -100,7 +98,6 @@ impl Backend {
     ) -> Result<norte_proto::methods::LogTailResult, Error> {
         match self {
             Self::Embedded(_) => Err(Error::Unsupported),
-            #[cfg(unix)]
             Self::Remote(r) => r.log_tail(cursor, max).await,
         }
     }
@@ -130,7 +127,6 @@ impl Backend {
     pub async fn log_level(&self, level: &str) -> Result<String, Error> {
         match self {
             Self::Embedded(_) => Err(Error::Unsupported),
-            #[cfg(unix)]
             Self::Remote(r) => r.log_level(level).await,
         }
     }

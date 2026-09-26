@@ -72,7 +72,6 @@ impl Backend {
                 });
                 Ok((stream, skipped))
             }
-            #[cfg(unix)]
             Self::Remote(r) => r.list_stream(dir, attrs.to_vec()).await,
         }
     }
@@ -132,7 +131,6 @@ impl Backend {
                 }
                 Ok(out)
             }
-            #[cfg(unix)]
             Self::Remote(r) => r.read(path, range).await,
         }
     }
@@ -144,7 +142,6 @@ impl Backend {
     pub async fn capabilities(&self, path: &VPath) -> Result<Capabilities, Error> {
         match self {
             Self::Embedded(engine) => engine.capabilities(path).await,
-            #[cfg(unix)]
             Self::Remote(r) => r.capabilities(path).await,
         }
     }
@@ -159,7 +156,6 @@ impl Backend {
     pub async fn attr_catalog(&self, path: &VPath) -> Result<norte_proto::AttrCatalog, Error> {
         match self {
             Self::Embedded(engine) => engine.attr_catalog(path).await,
-            #[cfg(unix)]
             Self::Remote(r) => r.attr_catalog(path).await,
         }
     }
@@ -189,7 +185,6 @@ impl Backend {
                 engine.capabilities(path).await?,
                 engine.attr_catalog(path).await?,
             )),
-            #[cfg(unix)]
             Self::Remote(r) => {
                 let full = r.capabilities_full(path).await?;
                 Ok((full.capabilities, full.attrs))
@@ -222,7 +217,6 @@ impl Backend {
                 opt.attrs.retain_conforming(&mut entry);
                 Ok(entry)
             }
-            #[cfg(unix)]
             Self::Remote(r) => r.stat(path, attrs.to_vec()).await,
         }
     }
@@ -262,7 +256,6 @@ impl Backend {
                 });
                 engine.remember_dir_anchor(dir, anchor);
             }
-            #[cfg(unix)]
             Self::Remote(_) => {}
         }
     }
@@ -309,7 +302,6 @@ impl Backend {
                     )
                     .await?,
             )),
-            #[cfg(unix)]
             Self::Remote(r) => r
                 .transfer(norte_client::Transfer::Copy, from, to, opts.into())
                 .await
@@ -339,7 +331,6 @@ impl Backend {
                     )
                     .await?,
             )),
-            #[cfg(unix)]
             Self::Remote(r) => r
                 .transfer(norte_client::Transfer::Move, from, to, opts.into())
                 .await
@@ -356,7 +347,6 @@ impl Backend {
             Self::Embedded(engine) => {
                 Ok(TaskRef::from_handle(&engine.delete_with(path, mode).await?))
             }
-            #[cfg(unix)]
             Self::Remote(r) => r.delete(path, mode).await.map(TaskRef::from),
         }
     }
@@ -369,7 +359,6 @@ impl Backend {
     pub async fn mkdir(&self, path: &VPath) -> Result<TaskRef, Error> {
         match self {
             Self::Embedded(engine) => Ok(TaskRef::from_handle(&engine.mkdir(path).await?)),
-            #[cfg(unix)]
             Self::Remote(r) => r.mkdir(path).await.map(TaskRef::from),
         }
     }
@@ -396,7 +385,6 @@ impl Backend {
                     )
                     .await?,
             )),
-            #[cfg(unix)]
             Self::Remote(r) => r.create_file(path).await.map(TaskRef::from),
         }
     }
@@ -417,7 +405,6 @@ impl Backend {
     ) -> Result<TaskRef, Error> {
         match self {
             Self::Embedded(engine) => Ok(TaskRef::from_handle(&engine.set_mode(params).await?)),
-            #[cfg(unix)]
             Self::Remote(r) => r.set_mode(params).await.map(TaskRef::from),
         }
     }
@@ -464,7 +451,6 @@ impl Backend {
                     .await?;
                 Ok((TaskRef::from_handle(&handle), rx))
             }
-            #[cfg(unix)]
             Self::Remote(r) => r.search(params).await.map(|(t, rx)| (TaskRef::from(t), rx)),
         }
     }
@@ -496,7 +482,6 @@ impl Backend {
                     .await?;
                 Ok(TaskRef::from_handle(&handle))
             }
-            #[cfg(unix)]
             Self::Remote(r) => r.dir_size(params).await.map(TaskRef::from),
         }
     }
@@ -525,7 +510,6 @@ impl Backend {
                     .await?;
                 Ok(TaskRef::from_handle(&handle))
             }
-            #[cfg(unix)]
             Self::Remote(r) => r.checksum(params).await.map(TaskRef::from),
         }
     }
@@ -548,7 +532,6 @@ impl Backend {
                 .checksum_report(task_id)
                 .map(|(_owner, r)| r)
                 .ok_or(Error::NotFound),
-            #[cfg(unix)]
             Self::Remote(r) => r.checksum_report(task_id).await,
         }
     }
@@ -593,7 +576,6 @@ impl Backend {
                     .await?;
                 Ok(TaskRef::from_handle(&handle))
             }
-            #[cfg(unix)]
             Self::Remote(r) => r.dir_usage(params).await.map(TaskRef::from),
         }
     }
@@ -616,7 +598,6 @@ impl Backend {
                 .dir_usage_report(task_id)
                 .map(|(_owner, r)| r)
                 .ok_or(Error::NotFound),
-            #[cfg(unix)]
             Self::Remote(r) => r.dir_usage_report(task_id).await,
         }
     }

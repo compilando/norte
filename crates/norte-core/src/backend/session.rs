@@ -22,7 +22,6 @@ impl Backend {
     pub async fn session_get(&self) -> Result<(norte_proto::methods::Session, bool), Error> {
         match self {
             Self::Embedded(_) => Ok(crate::embedded::session_get().await),
-            #[cfg(unix)]
             Self::Remote(r) => r.session_get().await,
         }
     }
@@ -42,7 +41,6 @@ impl Backend {
     ) -> Result<u64, Error> {
         match self {
             Self::Embedded(_) => crate::embedded::session_put(version, revision, body).await,
-            #[cfg(unix)]
             Self::Remote(r) => r.session_put(version, revision, body).await,
         }
     }
@@ -61,7 +59,6 @@ impl Backend {
     pub async fn session_release(&self) -> Result<bool, Error> {
         match self {
             Self::Embedded(_) => Ok(false),
-            #[cfg(unix)]
             Self::Remote(r) => r.session_release().await,
         }
     }

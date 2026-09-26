@@ -7,6 +7,6 @@ pub(crate) mod unix;
 mod unsupported;
 
 #[cfg(unix)]
-pub(crate) use unix::{connect, connect_or_spawn};
+pub(crate) use unix::{connect, connect_or_spawn, listening};
 #[cfg(not(unix))]
-pub(crate) use unsupported::{connect, connect_or_spawn};
+pub(crate) use unsupported::{connect, connect_or_spawn, listening};

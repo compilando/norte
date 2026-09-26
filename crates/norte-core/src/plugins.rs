@@ -3884,9 +3884,11 @@ pub(crate) struct LocationMint {
     >,
 }
 
-/// The user's HOME, if the environment says so. Ceiling for the climb (#241).
+/// The user's home, if the environment says so. Ceiling for the climb (#241).
 fn home_from_env() -> Option<std::path::PathBuf> {
-    std::env::var_os("HOME")
+    // Windows has no `HOME` unless a Unix toolchain set one; the profile is.
+    let var = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+    std::env::var_os(var)
         .filter(|h| !h.is_empty())
         .map(std::path::PathBuf::from)
 }
@@ -3908,7 +3910,7 @@ fn home_from_env() -> Option<std::path::PathBuf> {
 /// A `stat` that fails says `true` —fail-closed—: if it cannot be known who
 /// writes there, that root is not handed out.
 #[cfg(unix)]
-fn anyone_can_write_it(p: &std::path::Path) -> bool {
+fn anyone_can_write_it(p: &std::path::Path, _home: Option<&std::path::Path>) -> bool {
     use std::os::unix::fs::PermissionsExt as _;
     // Written in the negative on purpose: it is "true unless it is PROVEN
     // otherwise". An `is_ok_and(… != 0)` would say `false` when the stat
@@ -3917,21 +3919,45 @@ fn anyone_can_write_it(p: &std::path::Path) -> bool {
     !std::fs::metadata(p).is_ok_and(|m| m.permissions().mode() & 0o002 == 0)
 }
 
-/// On systems with no POSIX bits this check does not apply: Windows has its
-/// own ACL story and confinement there is carried by #217.
+/// Windows has no `o+w` bit, and its defaults are worse: any authenticated
+/// user may create a folder at a drive's root, so `mkdir C:\.git` would
+/// hand every pane on the drive the whole drive. Reading the ACL is not
+/// attempted; a marker counts only inside the user's profile, and without
+/// a known profile, nowhere (ADR 0158).
+///
+/// Both sides are the FINAL path the system resolves, never the spelling:
+/// panes arrive as `\\?\C:\…` and the profile as `C:\…`, case and 8.3 names
+/// vary, and a junction inside the profile can lead to `D:\shared`, which
+/// is where the marker would really be.
 #[cfg(not(unix))]
-fn anyone_can_write_it(_p: &std::path::Path) -> bool {
-    false
+fn anyone_can_write_it(p: &std::path::Path, home: Option<&std::path::Path>) -> bool {
+    let real = std::fs::canonicalize(p);
+    let profile = home.map(std::fs::canonicalize);
+    !matches!((real, profile), (Ok(real), Some(Ok(profile))) if real.starts_with(&profile))
 }
 
-/// `(dev, ino)` of a path, or `None` if it could not be looked at.
+/// Is `p` the home itself?
+#[cfg(unix)]
+fn is_home(home: &std::path::Path, p: &std::path::Path) -> bool {
+    std::path::absolute(home).is_ok_and(|h| h == p)
+}
+
+/// Is `p` the home itself? By node: the same directory has many spellings
+/// on Windows (`\\?\`, case, 8.3), and comparing them is how the home
+/// stopped being a ceiling.
+#[cfg(not(unix))]
+fn is_home(home: &std::path::Path, p: &std::path::Path) -> bool {
+    node_id_of(home).is_some_and(|h| node_id_of(p) == Some(h))
+}
+
+/// The node's identity as the confinement will compare it, or `None` if it
+/// could not be looked at.
 ///
 /// `None` does not relax anything on its own: whoever receives it opens
 /// without verifying, which is what was done before #241 — and a path that
-/// cannot be `stat`ed is not going to be openable two lines later either.
-fn node_id_of(p: &std::path::Path) -> Option<(u64, u64)> {
-    use std::os::unix::fs::MetadataExt as _;
-    std::fs::metadata(p).ok().map(|m| (m.dev(), m.ino()))
+/// cannot be opened here is not going to be openable two lines later either.
+fn node_id_of(p: &std::path::Path) -> Option<norte_vfs::NodeId> {
+    norte_vfs_local::ConfinedRoot::identify(p)
 }
 
 impl LocationMint {
@@ -4058,8 +4084,13 @@ impl LocationMint {
         if dir.parent().is_none() {
             return true;
         }
+        // On Windows `file:///C:` still has a parent (`file:///`), and a
+        // drive's root is the system root there.
+        if cfg!(windows) && dir.parent().is_some_and(|p| p.parent().is_none()) {
+            return true;
+        }
         match (&self.home, norte_vfs_local::vpath_to_native(dir)) {
-            (Some(home), Ok(native)) => std::path::absolute(home).is_ok_and(|h| h == native),
+            (Some(home), Ok(native)) => is_home(home, &native),
             _ => false,
         }
     }
@@ -4089,8 +4120,7 @@ impl LocationMint {
         dir: &norte_proto::VPath,
         native: &std::path::Path,
         marker: &str,
-    ) -> (std::path::PathBuf, Vec<u8>, Option<(u64, u64)>) {
-        use std::os::unix::ffi::OsStrExt as _;
+    ) -> (std::path::PathBuf, Vec<u8>, Option<norte_vfs::NodeId>) {
         let home = self.home.as_deref();
         let mut prefix: Vec<Vec<u8>> = Vec::new();
         let mut current_v = dir.clone();
@@ -4108,7 +4138,7 @@ impl LocationMint {
                 .join(marker)
                 .symlink_metadata()
                 .is_ok_and(|m| !m.file_type().is_symlink())
-                && !anyone_can_write_it(&current_n)
+                && !anyone_can_write_it(&current_n, home)
             {
                 // The node that was LOOKED AT, to demand it when opening:
                 // between this decision and the `open`, the path is resolved
@@ -4122,7 +4152,7 @@ impl LocationMint {
             // nothing past it. Without this, `MAX_CLIMB` was the only limit
             // and a loose `.git` in the home would take the whole home with
             // it (#241).
-            if home == Some(current_n.as_path()) {
+            if home.is_some_and(|h| is_home(h, &current_n)) {
                 break;
             }
             let Some(parent_v) = current_v.parent() else {
@@ -4133,7 +4163,7 @@ impl LocationMint {
             };
             let name = current_n
                 .file_name()
-                .map(|n| n.as_bytes().to_vec())
+                .map(norte_vfs::wtf8::os_to_bytes)
                 .unwrap_or_default();
             prefix.insert(0, name);
             current_v = parent_v;

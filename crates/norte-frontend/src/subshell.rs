@@ -184,7 +184,6 @@ impl Default for Nonce {
 /// ```
 #[must_use]
 pub fn install(shell: Shell, nonce: &Nonce, mailbox: &std::path::Path) -> String {
-    use std::os::unix::ffi::OsStrExt as _;
     let (pre, n) = (marker_format_prefix(), nonce.as_str());
     // The mailbox path goes in ESCAPED as octal, the way a `cd`'s destination
     // used to: it is a path from the filesystem and can carry any byte,
@@ -192,7 +191,9 @@ pub fn install(shell: Shell, nonce: &Nonce, mailbox: &std::path::Path) -> String
     // control byte (the line editor would interpret it), so it travels as a
     // `printf` format and the shell reconstructs it.
     let mut mailbox_esc = String::new();
-    for b in mailbox.as_os_str().as_bytes() {
+    // The platform's own bytes: unix's, or WTF-8 on Windows, where an MSYS
+    // shell reads the reconstructed path as UTF-8.
+    for b in mailbox.as_os_str().as_encoded_bytes() {
         use std::fmt::Write as _;
         // `write!` to a `String` cannot fail; the `let _` says so without
         // spending an `expect` (rule 6).

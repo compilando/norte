@@ -18,8 +18,8 @@ mod confined;
 #[cfg(unix)]
 mod identity;
 /// Bounded reading under a directory, for the plugin-host's `location`
-/// capability (ADR 0057).
-#[cfg(unix)]
+/// capability (ADR 0057, ADR 0158).
+#[cfg(any(unix, windows))]
 mod location;
 #[cfg(target_os = "macos")]
 pub mod mounts_macos;
@@ -37,7 +37,7 @@ mod provider;
 ))]
 mod trash_fdo;
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub use location::{
     Bounds, ConfinedRoot, LocationDirent, LocationError, LocationKind, LocationMeta,
 };
