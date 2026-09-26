@@ -31,7 +31,6 @@ impl Backend {
                 .map_err(|_| Error::Internal { panic: true })?
                 .map_err(|_| Error::Io { retryable: false })
             }
-            #[cfg(unix)]
             Self::Remote(r) => r.plugins_list().await,
         }
     }
@@ -99,7 +98,6 @@ impl Backend {
                     }),
                 }
             }
-            #[cfg(unix)]
             Self::Remote(r) => r.plugins_set_approval(id, approved, expected_digest).await,
         }
     }
@@ -134,7 +132,6 @@ impl Backend {
                     Err(Error::NotFound)
                 }
             }
-            #[cfg(unix)]
             Self::Remote(r) => r.plugins_set_enabled(id, enabled).await,
         }
     }
@@ -172,7 +169,6 @@ impl Backend {
                         })?;
                 Ok(report.was_approved)
             }
-            #[cfg(unix)]
             Self::Remote(r) => r.plugins_uninstall(id).await.map(|r| r.was_approved),
         }
     }
@@ -215,7 +211,6 @@ impl Backend {
                 .await
                 .map_err(|_| Error::Internal { panic: true })?
             }
-            #[cfg(unix)]
             Self::Remote(r) => r.plugin_run_command(id, command, arg).await,
         }
     }
@@ -312,7 +307,6 @@ impl Backend {
                     }),
                 })
             }
-            #[cfg(unix)]
             Self::Remote(r) => r.plugin_preview(path).await,
         }
     }
@@ -427,7 +421,6 @@ impl Backend {
                     lossy,
                 }))
             }
-            #[cfg(unix)]
             Self::Remote(r) => r.plugin_preview_styled(path, columns).await,
         }
     }
@@ -500,7 +493,6 @@ impl Backend {
                     height: thumb.height,
                 }))
             }
-            #[cfg(unix)]
             Self::Remote(r) => r.plugin_thumbnail(path, max_edge).await,
         }
     }
@@ -589,7 +581,6 @@ impl Backend {
                 .map_err(|_| Error::Internal { panic: true })??;
                 Ok(plugins)
             }
-            #[cfg(unix)]
             Self::Remote(r) => r.plugin_decorate(paths, kinds).await,
         }
     }
@@ -661,7 +652,6 @@ impl Backend {
                 .await
                 .map_err(|_| Error::Internal { panic: true })?
             }
-            #[cfg(unix)]
             Self::Remote(r) => {
                 r.plugin_rename_plan(plugin_id, renamer_id, dir, names)
                     .await
@@ -750,7 +740,6 @@ impl Backend {
                 .await
                 .map_err(|_| Error::Internal { panic: true })?
             }
-            #[cfg(unix)]
             Self::Remote(r) => {
                 r.plugin_organize_plan(plugin_id, organizer_id, dir, names)
                     .await
@@ -830,7 +819,6 @@ impl Backend {
                 .map_err(|_| Error::Internal { panic: true })??;
                 Ok(values)
             }
-            #[cfg(unix)]
             Self::Remote(r) => r.plugin_column_values(plugin_id, column_id, paths).await,
         }
     }
@@ -913,7 +901,6 @@ impl Backend {
                 .await
                 .map_err(|_| Error::Internal { panic: true })?
             }
-            #[cfg(unix)]
             Self::Remote(r) => r.plugin_panel_render(params).await,
         }
     }
@@ -954,7 +941,6 @@ impl Backend {
                 .map_err(|_| Error::Internal { panic: true })??;
                 Ok(norte_proto::methods::PluginGetConfigResult { keys })
             }
-            #[cfg(unix)]
             Self::Remote(r) => r.plugin_get_config(id).await,
         }
     }
@@ -998,7 +984,6 @@ impl Backend {
                 .await
                 .map_err(|_| Error::Internal { panic: true })?
             }
-            #[cfg(unix)]
             Self::Remote(r) => r.plugin_help(id).await,
         }
     }
@@ -1034,7 +1019,6 @@ impl Backend {
                 .await
                 .map_err(|_| Error::Internal { panic: true })?
             }
-            #[cfg(unix)]
             Self::Remote(r) => r.plugin_set_config(id, key, value).await,
         }
     }

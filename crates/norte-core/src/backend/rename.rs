@@ -33,7 +33,6 @@ impl Backend {
                 let plan = engine.rename_batch_plan(dir, &raw).await?;
                 crate::rename::plan_to_proto(&plan)
             }
-            #[cfg(unix)]
             Self::Remote(r) => r.rename_batch_plan(dir, pairs).await,
         }
     }
@@ -70,7 +69,6 @@ impl Backend {
                 // requested the same way.
                 Ok(TaskRef::from_handle(&handle))
             }
-            #[cfg(unix)]
             Self::Remote(r) => r
                 .rename_batch(dir, pairs, plan_hash)
                 .await
@@ -103,7 +101,6 @@ impl Backend {
                 // human in-process (same criterion as
                 // `plugins_set_approval`).
                 .ok_or(Error::NotFound),
-            #[cfg(unix)]
             Self::Remote(r) => r.rename_batch_report(task_id).await,
         }
     }
@@ -140,7 +137,6 @@ impl Backend {
                 .map_err(|_| Error::ProviderUnavailable { retryable: true })??;
                 Ok(crate::ai::ai_plan_to_proto(plan))
             }
-            #[cfg(unix)]
             Self::Remote(r) => r.ai_rename_plan(dir, instruction, names).await,
         }
     }
@@ -179,7 +175,6 @@ impl Backend {
                     plan_hash,
                 })
             }
-            #[cfg(unix)]
             Self::Remote(r) => r.ai_organize_plan(dir, instruction, names).await,
         }
     }
@@ -203,7 +198,6 @@ impl Backend {
                     .await?;
                 Ok(TaskRef::from_handle(&handle))
             }
-            #[cfg(unix)]
             Self::Remote(r) => r.organize(dir, moves, plan_hash).await.map(TaskRef::from),
         }
     }

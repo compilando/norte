@@ -15,7 +15,6 @@ impl Backend {
     pub async fn close_connection(&self, path: &norte_proto::VPath) -> Result<bool, Error> {
         match self {
             Self::Embedded(engine) => Ok(engine.close_connection(path)),
-            #[cfg(unix)]
             Self::Remote(r) => r.close_connection(path).await,
         }
     }
@@ -44,7 +43,6 @@ impl Backend {
                 let _ = algo; // the engine confirms by fingerprint
                 engine.trust_host_key(host, port, fingerprint).await
             }
-            #[cfg(unix)]
             Self::Remote(r) => r.trust_host_key(host, port, algo, fingerprint).await,
         }
     }
@@ -59,7 +57,6 @@ impl Backend {
     pub async fn provide_secret(&self, conn: &str, secret: &str) -> Result<(), Error> {
         match self {
             Self::Embedded(engine) => engine.provide_secret(conn, secret).await,
-            #[cfg(unix)]
             Self::Remote(r) => r.provide_secret(conn, secret).await,
         }
     }

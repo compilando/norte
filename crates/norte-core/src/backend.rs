@@ -284,7 +284,6 @@ pub enum TaskPauser {
     /// The embedded scheduler's gate.
     Embedded(crate::scheduler::PauseGate),
     /// `task.pause`/`task.resume` against the daemon.
-    #[cfg(unix)]
     Remote(norte_client::RemoteTaskCanceller),
 }
 
@@ -303,7 +302,6 @@ impl TaskPauser {
                 }
                 Ok(())
             }
-            #[cfg(unix)]
             Self::Remote(c) => c.set_paused(paused).await,
         }
     }
@@ -315,7 +313,6 @@ impl TaskPauser {
     pub async fn mover_en_cola(&self, up: bool) -> Result<(), Error> {
         match self {
             Self::Embedded(_) => Err(Error::Unsupported),
-            #[cfg(unix)]
             Self::Remote(c) => c.mover_en_cola(up).await,
         }
     }
@@ -330,7 +327,6 @@ pub enum TaskCanceller {
     /// confirmation arrives via `task.progress`, per the method's contract).
     /// The handle is built by the SDK ([`norte_client::RemoteTaskCanceller`],
     /// ADR 0066).
-    #[cfg(unix)]
     Remote(norte_client::RemoteTaskCanceller),
 }
 
@@ -379,7 +375,6 @@ impl TaskCanceller {
     pub fn cancel(&self) {
         match self {
             Self::Embedded(token) => token.cancel(),
-            #[cfg(unix)]
             Self::Remote(canceller) => canceller.cancel(),
         }
     }
@@ -546,7 +541,6 @@ pub enum Backend {
     /// In-process core: instant startup, no daemon.
     Embedded(Arc<Engine>),
     /// Against the UDS daemon (ADR 0011).
-    #[cfg(unix)]
     Remote(norte_client::RemoteBackend),
 }
 
@@ -559,7 +553,6 @@ impl Clone for Backend {
     fn clone(&self) -> Self {
         match self {
             Self::Embedded(e) => Self::Embedded(Arc::clone(e)),
-            #[cfg(unix)]
             Self::Remote(r) => Self::Remote(r.clone()),
         }
     }
@@ -606,7 +599,6 @@ impl Backend {
     pub fn is_journalled(&self) -> bool {
         match self {
             Self::Embedded(_) => false,
-            #[cfg(unix)]
             Self::Remote(_) => true,
         }
     }
@@ -639,7 +631,6 @@ impl Backend {
     pub const fn is_remote(&self) -> bool {
         match self {
             Self::Embedded(_) => false,
-            #[cfg(unix)]
             Self::Remote(_) => true,
         }
     }
@@ -677,7 +668,6 @@ impl Backend {
     pub async fn ensure_journal(&self) -> bool {
         match self {
             Self::Embedded(engine) => engine.ensure_journal().await,
-            #[cfg(unix)]
             Self::Remote(_) => true,
         }
     }
@@ -699,7 +689,6 @@ impl Backend {
     pub async fn release_journal_if_idle(&self, idle: std::time::Duration) -> bool {
         match self {
             Self::Embedded(engine) => engine.release_journal_if_idle(idle).await,
-            #[cfg(unix)]
             Self::Remote(_) => true,
         }
     }
@@ -718,7 +707,6 @@ impl Backend {
     pub async fn journal_obstacle(&self) -> Option<crate::embedded::NoJournal> {
         match self {
             Self::Embedded(engine) => engine.journal_obstacle().await,
-            #[cfg(unix)]
             Self::Remote(_) => None,
         }
     }
@@ -770,7 +758,6 @@ impl Backend {
                     Err(e) => tracing::warn!(error = %e, "could not release the spool"),
                 }
             }
-            #[cfg(unix)]
             Self::Remote(_) => {}
         }
     }

@@ -508,8 +508,9 @@ volumes and images.
 4. **Send every mutation through the journal.** New mutations require a journal
    entry and an undo path, or an explicit `Irreversible` classification with a
    reason.
-5. **Forbid `unsafe` by default.** Only `norte-vfs-local` may use it, with a
-   `// SAFETY:` comment and a test.
+5. **Forbid `unsafe` by default.** Only `norte-vfs-local` and `norte-winpipe`
+   (the Windows daemon pipe's DACL and peer identity, ADR 0159) may use it,
+   with a `// SAFETY:` comment and a test.
 6. **Use typed errors.** Libraries use `thiserror`; only binaries use `anyhow`.
    Do not use `unwrap()` or `expect()` outside tests unless a comment states the
    invariant that makes it safe.

@@ -18,7 +18,6 @@ impl Backend {
                     .await?;
                 Ok(TaskRef::from_handle(&handle))
             }
-            #[cfg(unix)]
             Self::Remote(r) => r.index_build(root).await.map(TaskRef::from),
         }
     }
@@ -40,7 +39,6 @@ impl Backend {
                     .await?;
                 Ok(hits.into_iter().map(index_hit_to_proto).collect())
             }
-            #[cfg(unix)]
             Self::Remote(r) => r.index_query(root, text, limit).await,
         }
     }
@@ -61,7 +59,6 @@ impl Backend {
                     .await?;
                 Ok(TaskRef::from_handle(&handle))
             }
-            #[cfg(unix)]
             Self::Remote(r) => r.index_embed(root).await.map(TaskRef::from),
         }
     }
@@ -93,7 +90,6 @@ impl Backend {
                     .map(|(path, score)| norte_proto::methods::SemanticHit { path, score })
                     .collect())
             }
-            #[cfg(unix)]
             Self::Remote(r) => r.index_search_semantic(root, query, k).await,
         }
     }

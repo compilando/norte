@@ -19,7 +19,6 @@ impl Backend {
     pub fn take_foreign_tasks(&mut self) -> Option<mpsc::UnboundedReceiver<TaskRef>> {
         match self {
             Self::Embedded(_) => None,
-            #[cfg(unix)]
             Self::Remote(r) => {
                 // The SDK delivers REMOTE tasks; a frontend talks in terms
                 // of `TaskRef` and doesn't want to know where it came from.
@@ -46,7 +45,6 @@ impl Backend {
     pub fn take_conn_events(&mut self) -> Option<mpsc::UnboundedReceiver<ConnEvent>> {
         match self {
             Self::Embedded(_) => None,
-            #[cfg(unix)]
             Self::Remote(r) => r.take_conn_events(),
         }
     }
@@ -62,7 +60,6 @@ impl Backend {
     ) -> Option<mpsc::UnboundedReceiver<norte_proto::methods::PolicyApprovalRequired>> {
         match self {
             Self::Embedded(_) => None,
-            #[cfg(unix)]
             Self::Remote(r) => r.take_approvals(),
         }
     }
@@ -87,7 +84,6 @@ impl Backend {
                 });
                 Some(rx)
             }
-            #[cfg(unix)]
             Self::Remote(r) => r.take_degraded(),
         }
     }
@@ -126,7 +122,6 @@ impl Backend {
                 });
                 Some(rx)
             }
-            #[cfg(unix)]
             Self::Remote(r) => r.take_failed(),
         }
     }
@@ -203,7 +198,6 @@ impl Backend {
                 });
                 Some(rx)
             }
-            #[cfg(unix)]
             Self::Remote(r) => r.take_plugin_notices(),
         }
     }
@@ -240,7 +234,6 @@ impl Backend {
                     .set_journal_warning_sink(Arc::new(ChannelJournalSink { tx }))
                     .then_some(rx)
             }
-            #[cfg(unix)]
             Self::Remote(_) => None,
         }
     }

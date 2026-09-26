@@ -9,6 +9,15 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **The daemon runs on Windows, over a named pipe only its user can open**
+  (ADR 0159). `norte daemon`, `mcp`, `policy`, `undo` and `--daemon` are no
+  longer unix-only; `--socket` still takes a path, or a `\\.\pipe\<name>`.
+- **The core builds for Windows, and a plugin's `location` is confined
+  there too** (ADR 0158). Reparse points are never crossed, a repository
+  marker counts only inside the user profile, and `stat` reports what Git
+  for Windows records. `norte-vfs-local`: `ConfinedRoot::open_verified`
+  now takes a `norte_vfs::NodeId` (from the new `ConfinedRoot::identify`)
+  instead of `(dev, ino)`.
 - **Type a name to jump to it, in the Krusader preset** (ADR 0155). A letter
   opens the quick search and moves the cursor to the first name that STARTS
   with what you typed; up/down walk the other matches and the listing stays

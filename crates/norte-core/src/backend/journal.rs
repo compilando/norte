@@ -14,7 +14,6 @@ impl Backend {
     pub async fn policy_decide(&self, approval_id: u64, approve: bool) -> Result<(), Error> {
         match self {
             Self::Embedded(_) => Err(Error::Unsupported),
-            #[cfg(unix)]
             Self::Remote(r) => r.policy_decide(approval_id, approve).await,
         }
     }
@@ -30,7 +29,6 @@ impl Backend {
     pub async fn undo_session(&self, session: &str) -> Result<TaskRef, Error> {
         match self {
             Self::Embedded(_) => Err(Error::Unsupported),
-            #[cfg(unix)]
             Self::Remote(r) => r.undo_session(session).await.map(TaskRef::from),
         }
     }
@@ -62,7 +60,6 @@ impl Backend {
                 // on its own.
                 Ok(crate::journal::page_to_wire(&entries, limit))
             }
-            #[cfg(unix)]
             Self::Remote(r) => r.journal_list(before_seq, limit, actor_kind).await,
         }
     }
@@ -85,7 +82,6 @@ impl Backend {
                 let (handle, _report) = engine.undo_after(seq, upto_seq).await?;
                 Ok(TaskRef::from_handle(&handle))
             }
-            #[cfg(unix)]
             Self::Remote(r) => r.undo_after(seq, upto_seq).await.map(TaskRef::from),
         }
     }
@@ -109,7 +105,6 @@ impl Backend {
                 .undo_report(task_id)
                 .map(|(_owner, r)| crate::undo::report_to_proto(r))
                 .ok_or(Error::NotFound),
-            #[cfg(unix)]
             Self::Remote(r) => r.undo_report(task_id).await,
         }
     }

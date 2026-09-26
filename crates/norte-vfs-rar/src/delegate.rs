@@ -8,7 +8,7 @@
 use futures::stream::StreamExt;
 use norte_proto::Error;
 use norte_vfs::ByteStream;
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::OnceLock;
@@ -451,7 +451,7 @@ impl Delegate {
 #[cfg(unix)]
 fn os_from_bytes(bytes: &[u8]) -> OsString {
     use std::os::unix::ffi::OsStrExt;
-    OsStr::from_bytes(bytes).to_os_string()
+    std::ffi::OsStr::from_bytes(bytes).to_os_string()
 }
 
 /// On Windows `argv` is UTF-16 and there is no way to pass arbitrary bytes:

@@ -1,6 +1,6 @@
 //! Daemon JSON-RPC over UDS (ADR 0011, spec §17.6): one daemon per user,
-//! never root, authenticated by `SO_PEERCRED`. Windows is deferred behind an
-//! issue (the embedded mode remains the path there).
+//! never root, authenticated by `SO_PEERCRED`; on Windows over a named pipe
+//! with an owner-only DACL, authenticated by user SID (ADR 0159).
 //!
 //! - [`Daemon`] (server): accepts connections, authenticates, dispatches
 //!   `fs.*`/`task.*` and broadcasts `task.progress` to humans and to the
@@ -12,6 +12,7 @@
 pub mod approvals;
 pub mod compose;
 mod server;
+mod transport;
 
 pub use approvals::DaemonApprovalResolver;
 pub use compose::compose;

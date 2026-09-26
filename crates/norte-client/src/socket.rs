@@ -72,16 +72,76 @@ pub fn default_socket_path(uid_hint: Option<u32>) -> PathBuf {
 
 #[must_use]
 #[cfg(not(unix))]
-/// Reserved address for the forthcoming Windows named-pipe transport.
+/// The daemon's ADDRESS off unix: `%LOCALAPPDATA%\norte\daemon.pipe`.
 ///
-/// Kept under the user's local application-data directory so command-line
-/// overrides and diagnostics remain path-shaped on every platform.
+/// Path-shaped so `--socket` and diagnostics look the same on every
+/// platform; the pipe it names is [`pipe_name`]. Per user because
+/// `LOCALAPPDATA` is.
 pub fn default_socket_path(_uid_hint: Option<u32>) -> PathBuf {
     std::env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir)
+        .map_or_else(std::env::temp_dir, PathBuf::from)
         .join("norte")
         .join("daemon.pipe")
+}
+
+/// The named pipe an address names (ADR 0159): an address already under
+/// `\\.\pipe\` is used as is; any other becomes `\\.\pipe\norte-<hash>` of
+/// its bytes. Both ends call this, so they always agree.
+///
+/// The hash only names; the pipe's DACL and the peer check are what keep
+/// another user out.
+///
+/// ```
+/// # #[cfg(windows)] {
+/// use std::path::Path;
+/// let a = norte_client::pipe_name(Path::new(r"C:\Users\a\AppData\Local\norte\daemon.pipe"));
+/// assert!(a.to_string_lossy().starts_with(r"\\.\pipe\norte-"));
+/// assert_eq!(norte_client::pipe_name(Path::new(r"\\.\pipe\mine")), r"\\.\pipe\mine");
+/// # }
+/// ```
+#[must_use]
+#[cfg(windows)]
+pub fn pipe_name(address: &std::path::Path) -> std::ffi::OsString {
+    pipe_name_from(address.as_os_str().as_encoded_bytes()).into()
+}
+
+/// [`pipe_name`]'s pure logic, over the address's bytes.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn pipe_name_from(address: &[u8]) -> String {
+    const PREFIX: &[u8] = br"\\.\pipe\";
+    // Passed through only as ONE plain name: Win32 normalises `\\.\` paths,
+    // so `\\.\pipe\..\UNC\host\x` would reach a remote pipe, or a file.
+    if let Some(rest) = address
+        .get(..PREFIX.len())
+        .filter(|p| p.eq_ignore_ascii_case(PREFIX))
+        .map(|_| &address[PREFIX.len()..])
+        && !rest.is_empty()
+        && !rest.iter().any(|b| matches!(b, b'\\' | b'/'))
+        && !rest.windows(2).any(|w| w == b"..")
+    {
+        return String::from_utf8_lossy(address).into_owned();
+    }
+    // FNV-1a, 64 bits: stable across Rust versions, unlike `DefaultHasher`.
+    let hash = address.iter().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| {
+        (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3)
+    });
+    format!(r"\\.\pipe\norte-{hash:016x}")
+}
+
+/// `true` if a daemon answers at `socket` right now, without authenticating
+/// it or speaking JSON-RPC.
+///
+/// Synchronous and cheap enough to run under a lock: it is a presence probe
+/// ("is someone on the other end?"), not a connection. A stale socket file
+/// with nobody behind it answers `false`.
+///
+/// ```
+/// let dir = tempfile::tempdir().expect("tempdir");
+/// assert!(!norte_client::daemon_listening(&dir.path().join("daemon.sock")));
+/// ```
+#[must_use]
+pub fn daemon_listening(socket: &std::path::Path) -> bool {
+    crate::transport::listening(socket)
 }
 
 /// [`default_socket_path`]'s pure logic (testable without touching the
@@ -129,6 +189,38 @@ pub fn process_uid_best_effort() -> u32 {
 #[cfg(not(unix))]
 pub const fn process_uid_best_effort() -> u32 {
     0
+}
+
+#[cfg(test)]
+mod pipe_tests {
+    use super::pipe_name_from;
+
+    #[test]
+    fn an_address_names_one_stable_pipe() {
+        let a = pipe_name_from(br"C:\Users\a\AppData\Local\norte\daemon.pipe");
+        assert_eq!(
+            a,
+            pipe_name_from(br"C:\Users\a\AppData\Local\norte\daemon.pipe")
+        );
+        assert_ne!(
+            a,
+            pipe_name_from(br"C:\Users\b\AppData\Local\norte\daemon.pipe")
+        );
+        assert!(a.starts_with(r"\\.\pipe\norte-") && a.len() == r"\\.\pipe\norte-".len() + 16);
+        assert_eq!(pipe_name_from(br"\\.\PIPE\mine"), r"\\.\PIPE\mine");
+        for escaping in [
+            &br"\\.\pipe\..\UNC\host\share\x"[..],
+            br"\\.\pipe\a\b",
+            br"\\.\pipe\a/b",
+            br"\\.\pipe\..",
+            br"\\.\pipe\",
+        ] {
+            assert!(
+                pipe_name_from(escaping).starts_with(r"\\.\pipe\norte-"),
+                "{escaping:?} must be hashed, not passed through"
+            );
+        }
+    }
 }
 
 #[cfg(all(test, unix))]

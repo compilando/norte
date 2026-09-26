@@ -112,6 +112,10 @@ tracing-appender.workspace = true
 # norte-vfs-local; rustix wraps the syscall safely).
 rustix.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+# The daemon's named pipe: owner-only DACL and the client's SID (ADR 0159).
+norte-winpipe.workspace = true
+
 [dev-dependencies]
 # Deterministic FakeEmbed for the index.embed tests (M4-IA-2). The `testutil`
 # feature only activates in tests: the normal build never sees it.

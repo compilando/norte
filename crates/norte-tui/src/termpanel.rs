@@ -35,6 +35,34 @@
 
 use norte_term::{ColorTerm, Screen, Style};
 
+/// A key as the bytes a shell expects; documented in `subshell`, which
+/// re-exports it. It lives here because the terminal pane needs it on every
+/// platform and the subshell exists only on unix (ADR 0084).
+#[must_use]
+pub fn key_to_bytes(k: &crossterm::event::KeyEvent) -> Option<Vec<u8>> {
+    use norte_frontend::keymap::{Chord, KeyCode, Mods};
+    // **The TABLE is shared** (`norte_frontend::subshell::chord_a_bytes`),
+    // and all that is left here is translating the crossterm event into
+    // the canonical chord it understands. It was written twice since the
+    // terminal panel (#362) also needed it in the window, and two tables
+    // are two places where `F10` stops getting you out of an `htop`.
+    //
+    // `BackTab` is the one thing the canonical chord does not name: for
+    // the keymap it is shift+tab, which is exactly what is built here.
+    let (mods, code) = if k.code == crossterm::event::KeyCode::BackTab {
+        (
+            Mods {
+                shift: true,
+                ..Mods::default()
+            },
+            KeyCode::Tab,
+        )
+    } else {
+        crate::keymap::chord_from_crossterm(k.modifiers, k.code)?.parts()
+    };
+    norte_frontend::subshell::chord_a_bytes(Chord::new(mods, code))
+}
+
 /// The pane's shell, with its grid. It is `norte-term`'s.
 pub use norte_term::pty::Shell as TermPanel;
 

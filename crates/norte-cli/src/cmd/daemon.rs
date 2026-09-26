@@ -11,10 +11,43 @@ use norte_core::backend::Backend;
 
 use crate::{DaemonCmd, McpCmd, PolicyCmd};
 
+/// The system asking the daemon to end: `SIGTERM`, or on Windows the
+/// console closing and the session shutting down.
+struct Terminate {
+    #[cfg(unix)]
+    term: tokio::signal::unix::Signal,
+    #[cfg(windows)]
+    close: tokio::signal::windows::CtrlClose,
+    #[cfg(windows)]
+    shutdown: tokio::signal::windows::CtrlShutdown,
+}
+
+impl Terminate {
+    fn new() -> std::io::Result<Self> {
+        Ok(Self {
+            #[cfg(unix)]
+            term: tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?,
+            #[cfg(windows)]
+            close: tokio::signal::windows::ctrl_close()?,
+            #[cfg(windows)]
+            shutdown: tokio::signal::windows::ctrl_shutdown()?,
+        })
+    }
+
+    async fn recv(&mut self) {
+        #[cfg(unix)]
+        self.term.recv().await;
+        #[cfg(windows)]
+        tokio::select! {
+            _ = self.close.recv() => {}
+            _ = self.shutdown.recv() => {}
+        }
+    }
+}
+
 /// Resolves the daemon's socket and an auto-start `spawn_cmd` (this same
 /// binary knows how to be a daemon). FS probes off the runtime (hard rule
 /// 2).
-#[cfg(unix)]
 async fn socket_and_spawn(
     socket: Option<PathBuf>,
 ) -> anyhow::Result<(PathBuf, Vec<std::ffi::OsString>)> {
@@ -33,7 +66,6 @@ async fn socket_and_spawn(
 /// needed. The bridge connects as an agent session; tracing goes to
 /// stderr (the global `logging::init` already sets it), stdout is
 /// EXCLUSIVE to the MCP transport.
-#[cfg(unix)]
 pub(crate) async fn mcp_cmd(cmd: McpCmd, socket: Option<PathBuf>) -> anyhow::Result<ExitCode> {
     let McpCmd::Serve { session } = cmd;
     let (socket, spawn_cmd) = socket_and_spawn(socket).await?;
@@ -61,7 +93,6 @@ pub(crate) async fn mcp_cmd(cmd: McpCmd, socket: Option<PathBuf>) -> anyhow::Res
 
 /// `norte policy grant <request_id>`: a human grants a scope an agent
 /// requested. User connection (no `agent_session`).
-#[cfg(unix)]
 pub(crate) async fn policy_cmd(
     cmd: PolicyCmd,
     socket: Option<PathBuf>,
@@ -95,7 +126,6 @@ pub(crate) async fn policy_cmd(
 /// `norte undo <session>`: a human undoes an agent's whole session. Runs
 /// as a Task; its terminal state is awaited with Ctrl-C = cancel (the
 /// `cp` pattern).
-#[cfg(unix)]
 pub(crate) async fn undo_cmd(session: &str, socket: Option<PathBuf>) -> anyhow::Result<ExitCode> {
     use norte_core::backend::remote::RemoteBackend;
     let (socket, spawn_cmd) = socket_and_spawn(socket).await?;
@@ -236,12 +266,6 @@ pub(crate) async fn make_backend(
         // security m1).
         return Ok(Backend::Embedded(Arc::new(engine)));
     }
-    #[cfg(not(unix))]
-    {
-        let _ = socket;
-        anyhow::bail!("--daemon is not available on Windows yet (issue #33)");
-    }
-    #[cfg(unix)]
     {
         use norte_core::backend::remote::RemoteBackend;
         // Both FS probes (default socket + current_exe) off the runtime
@@ -280,7 +304,6 @@ pub(crate) async fn make_backend(
 /// setup failed because there was already a subscriber — leaves the
 /// daemon answering `Unsupported` to both registry methods, which is what
 /// the frontend needs to degrade while saying why.
-#[cfg(unix)]
 #[expect(clippy::too_many_lines, reason = "one arm per daemon subcommand")]
 pub(crate) async fn daemon_cmd(
     cmd: DaemonCmd,
@@ -353,20 +376,18 @@ pub(crate) async fn daemon_cmd(
             // rust-reviewer). The registration goes BEFORE the spawn: if
             // it fails, a visible error, not a panic swallowed inside a
             // task (M5).
-            let mut sigterm =
-                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                    .context("could not register SIGTERM")?;
+            let mut sigterm = Terminate::new().context("could not register SIGTERM")?;
             let shutdown = daemon.shutdown_token();
             let hard = daemon.hard_shutdown_token();
             tokio::spawn(async move {
                 tokio::select! {
                     _ = tokio::signal::ctrl_c() => {}
-                    _ = sigterm.recv() => {}
+                    () = sigterm.recv() => {}
                 }
                 shutdown.cancel();
                 tokio::select! {
                     _ = tokio::signal::ctrl_c() => {}
-                    _ = sigterm.recv() => {}
+                    () = sigterm.recv() => {}
                 }
                 eprintln!("{}", norte_i18n::t("cli-daemon-hard-shutdown"));
                 hard.cancel();

@@ -1,7 +1,5 @@
-//! Explicit placeholder until the Windows named-pipe adapter lands.
-//!
-//! Keeping this below the transport seam lets every higher layer compile on
-//! Windows while still failing honestly if a frontend requests a daemon.
+//! Platforms with neither unix sockets nor named pipes: every higher layer
+//! compiles, and asking for a daemon fails honestly.
 
 use std::path::Path;
 
@@ -18,6 +16,10 @@ fn unavailable() -> ClientError {
         "the daemon transport is not implemented on this platform",
     )
     .into()
+}
+
+pub(crate) const fn listening(_socket: &Path) -> bool {
+    false
 }
 
 pub(crate) async fn connect(_socket: &Path) -> Result<(Reader, Writer), ClientError> {

@@ -3,6 +3,7 @@
 //! `task.progress` and shutdown on idleness or request.
 
 use std::collections::HashMap;
+#[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -16,12 +17,12 @@ use norte_proto::wire::{
 };
 use norte_proto::{TaskId, methods};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use super::DaemonError;
 use super::approvals::DaemonApprovalResolver;
+use super::transport;
 use crate::Engine;
 use crate::engine::TransferOptions;
 use crate::journal::Actor;
@@ -233,9 +234,9 @@ struct Shared {
     shutdown: CancellationToken,
     /// `true` = the requested shutdown wants to cancel the tasks first.
     hard_shutdown: CancellationToken,
-    /// The daemon's uid (derived from the socket itself): the ONLY admitted
-    /// peer.
-    uid: u32,
+    /// The daemon's own identity — uid (derived from the socket itself) or
+    /// user SID: the ONLY admitted peer.
+    owner: transport::Owner,
     /// This daemon's config root, from [`DaemonConfig::plugins_dir`]. `None`
     /// = the user's real config. This is where the `connections.toml` that
     /// serves `connection.list` comes from (#365).
@@ -697,7 +698,7 @@ fn send_to_conn_impl(
 /// `Debug` is deliberately shallow (the socket path): internal state is not
 /// API.
 pub struct Daemon {
-    listener: UnixListener,
+    listener: transport::Listener,
     socket_path: PathBuf,
     shared: Arc<Shared>,
     idle_timeout: Option<Duration>,
@@ -853,33 +854,32 @@ impl Daemon {
             .plugins_dir
             .clone()
             .unwrap_or_else(crate::connect::config_dir);
-        let (listener, uid, socket_path, plugins, plugin_runtime) =
+        let (bound, owner, socket_path, plugins, plugin_runtime) =
             crate::blocking::spawn_blocking({
                 let requested = cfg.socket_path;
                 let plugins_dir = cfg.plugins_dir.clone();
                 move || -> Result<
                 (
-                    std::os::unix::net::UnixListener,
-                    u32,
+                    transport::Bound,
+                    transport::Owner,
                     PathBuf,
                     crate::plugins::PluginRegistry,
                     Arc<norte_plugin_host::PluginRuntime>,
                 ),
                 DaemonError,
             > {
-                let (listener, uid, socket_path) = bind_socket(requested)?;
+                let (bound, owner, socket_path) = transport::bind(requested)?;
                 // Plugin catalogue + shared WASM runtime (M4-P3/P4):
                 // synchronous I/O/CPU inside the spawn_blocking (rule 2).
                 let (plugins, plugin_runtime) = discover_plugins(plugins_dir)?;
-                Ok((listener, uid, socket_path, plugins, plugin_runtime))
+                Ok((bound, owner, socket_path, plugins, plugin_runtime))
             }
             })
             .await
             // A panic from the closure is NOT a problem with the dir: an
             // honest category.
             .map_err(|e| DaemonError::Io(std::io::Error::other(e)))??;
-        listener.set_nonblocking(true)?;
-        let listener = UnixListener::from_std(listener)?;
+        let listener = transport::Listener::new(bound)?;
 
         // The UI session (L2): the lock and the load are synchronous I/O, so
         // they go to a blocking pool (rule 2). Without `state_dir` nothing is
@@ -905,7 +905,7 @@ impl Daemon {
         ));
         let session_flush = Arc::new(tokio::sync::Notify::new());
 
-        tracing::info!(socket = %socket_path.display(), uid, "daemon bound");
+        tracing::info!(socket = %socket_path.display(), owner = %owner, "daemon bound");
         let shared = Arc::new(Shared {
             engine,
             tasks: Mutex::new(HashMap::new()),
@@ -915,7 +915,7 @@ impl Daemon {
             connections: AtomicUsize::new(0),
             shutdown: CancellationToken::new(),
             hard_shutdown: CancellationToken::new(),
-            uid,
+            owner,
             connections_dir: cfg.plugins_dir.clone(),
             listing_ttl: cfg.listing_ttl,
             open_listings: Arc::new(AtomicUsize::new(0)),
@@ -1082,7 +1082,7 @@ impl Daemon {
         loop {
             tokio::select! {
                 accepted = self.listener.accept() => {
-                    let (stream, _addr) = match accepted {
+                    let stream = match accepted {
                         Ok(v) => v,
                         Err(e) => { failure = Some(e); break }
                     };
@@ -1166,7 +1166,7 @@ impl Daemon {
         let socket_for_delete = socket_path.clone();
         // Rule 2: not a single synchronous unlink on the runtime.
         let _ =
-            crate::blocking::spawn_blocking(move || std::fs::remove_file(socket_for_delete)).await;
+            crate::blocking::spawn_blocking(move || transport::release(socket_for_delete)).await;
         let mut hard_done = false;
         loop {
             if shared.hard_shutdown.is_cancelled() && !hard_done {
@@ -1548,7 +1548,8 @@ fn discover_plugins(
 /// re-verifying the dir's identity after the bind (#34.2). `requested` `None`
 /// = default fallback (with an actionable message about `/tmp`, #34.1).
 /// Synchronous: called inside the bind's `spawn_blocking` (rule 2).
-fn bind_socket(
+#[cfg(unix)]
+pub(super) fn bind_socket(
     requested: Option<PathBuf>,
 ) -> Result<(std::os::unix::net::UnixListener, u32, PathBuf), DaemonError> {
     let defaulted = requested.is_none();
@@ -1626,12 +1627,14 @@ fn bind_socket(
 /// `Client::authenticated` rejects a socket whose owner is not its uid).
 /// Full closure would require anchoring to an fd (openat/fstatat), which in
 /// std requires `unsafe`/a dep — out of scope (rule 5).
+#[cfg(unix)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct DirIdentity {
     dev: u64,
     ino: u64,
 }
 
+#[cfg(unix)]
 impl DirIdentity {
     /// Identity of the dir at `path` WITHOUT following the last component's
     /// symlinks.
@@ -1662,6 +1665,7 @@ impl DirIdentity {
 /// Verifies (creating it if missing) that the socket's dir is OURS and 0700:
 /// never a symlink, never another uid's, never accessible to others. Returns
 /// the validated [`DirIdentity`] to re-check after the bind (#34.2).
+#[cfg(unix)]
 fn prepare_socket_dir(dir: &Path) -> Result<DirIdentity, DaemonError> {
     match std::fs::create_dir_all(dir) {
         Ok(()) => {}
@@ -1721,6 +1725,7 @@ fn prepare_socket_dir(dir: &Path) -> Result<DirIdentity, DaemonError> {
 /// `--socket`). The fallback is squattable (#34.1): an actionable message
 /// asks to set `XDG_RUNTIME_DIR` or pass `--socket`, instead of the opaque
 /// `InsecureDir`.
+#[cfg(unix)]
 fn is_default_tmp_fallback(path: &Path, defaulted: bool) -> bool {
     defaulted
         && path.parent().is_some_and(|dir| {
@@ -1748,27 +1753,18 @@ fn valid_agent_session(s: &str) -> bool {
 
 /// Is this peer admitted? Only the SAME uid (spec §17.6). Root does NOT get
 /// in: a user daemon is not a surface for privileged processes.
-fn peer_allowed(peer_uid: u32, daemon_uid: u32) -> bool {
+#[cfg(unix)]
+pub(super) fn peer_allowed(peer_uid: u32, daemon_uid: u32) -> bool {
     peer_uid == daemon_uid
 }
 
-fn spawn_connection(stream: UnixStream, shared: Arc<Shared>) {
+fn spawn_connection(stream: transport::Stream, shared: Arc<Shared>) {
     // ROOT: each `rpc` of this connection is a root (ADR 0127). Inheriting,
     // they would all hang off `run`, the span of the daemon's whole life.
     crate::blocking::spawn_root(async move {
         // Auth BEFORE reading a single byte (ADR 0011).
-        let peer = match stream.peer_cred() {
-            Ok(cred) => cred,
-            Err(e) => {
-                tracing::warn!(error = %e, "peer_cred failed; connection rejected");
-                return;
-            }
-        };
-        if !peer_allowed(peer.uid(), shared.uid) {
-            tracing::warn!(
-                peer_uid = peer.uid(),
-                "connection from another uid rejected"
-            );
+        if let Err(reason) = transport::admit(&stream, &shared.owner) {
+            tracing::warn!(%reason, "connection rejected");
             return;
         }
         shared.connections.fetch_add(1, Ordering::SeqCst);
@@ -2198,8 +2194,8 @@ fn cursor_expired() -> RpcError {
     RpcError::from(norte_proto::Error::CursorExpired)
 }
 
-async fn serve_connection(stream: UnixStream, shared: &Arc<Shared>) -> std::io::Result<()> {
-    let (reader, mut writer) = stream.into_split();
+async fn serve_connection(stream: transport::Stream, shared: &Arc<Shared>) -> std::io::Result<()> {
+    let (reader, mut writer) = transport::split(stream);
 
     // Every write (responses AND broadcasts) goes out through a single
     // BOUNDED channel: never two interleaved frames and never unbounded
@@ -2363,7 +2359,7 @@ async fn serve_connection(stream: UnixStream, shared: &Arc<Shared>) -> std::io::
 /// half-close (shutdown of the write side while still awaiting the response)
 /// is treated as dead — no norte client does this.
 async fn read_frames(
-    mut reader: tokio::net::unix::OwnedReadHalf,
+    mut reader: transport::Reader,
     tx: mpsc::Sender<Arc<[u8]>>,
     inbox: mpsc::Sender<serde_json::Value>,
     peer_gone: CancellationToken,

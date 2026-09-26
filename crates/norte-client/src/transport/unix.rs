@@ -7,7 +7,6 @@
 //! correlation or the framing.
 
 use std::path::Path;
-use std::time::Duration;
 
 use tokio::net::UnixStream;
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
@@ -28,34 +27,17 @@ pub(crate) async fn connect(socket: &Path) -> Result<(OwnedReadHalf, OwnedWriteH
     authenticated(stream).await
 }
 
-/// Connects and, if nobody is listening, STARTS the daemon and retries with
-/// backoff for up to ~3s.
-///
-/// The child is not waited on (`wait`): if the daemon dies before this
-/// process does, it leaves a zombie until we exit — an accepted cost of not
-/// double-forking (which would require unsafe).
-///
-/// # A daemon that DIES on startup
-///
-/// This is a different case from "is slow", and used to be read the same
-/// way: the child's `stderr` went to `/dev/null`, so the one sentence that
-/// explained the failure — "the journal predates `undoes_seq`", "the socket
-/// is held by someone else" — was lost, and the caller waited the whole
-/// 3.2s just to get a `SpawnTimeout` inviting a retry of something that will
-/// never change.
-///
-/// Now `stderr` is captured and the child is watched with `try_wait` on
-/// every round: if it died, [`ClientError::SpawnFailed`] is returned with
-/// what it said, **without exhausting the backoff**.
-///
-/// With a daemon that DOES start, a pipe is left that nobody reads, and that
-/// fills up: a daemon writing a warning to stderr with the buffer full
-/// BLOCKS on the `write`, meaning the window would hang it for having
-/// started it. That is why success leaves a thread draining it.
+/// Synchronous presence probe: a `connect` to a local unix socket resolves
+/// on the spot, and an orphaned socket answers `ECONNREFUSED`.
+pub(crate) fn listening(socket: &Path) -> bool {
+    std::os::unix::net::UnixStream::connect(socket).is_ok()
+}
+
+/// Connects and, if nobody is listening, STARTS the daemon
+/// ([`super::spawn::spawn_then_connect`]).
 ///
 /// # Errors
-/// I/O; [`ClientError::SpawnFailed`] if the daemon started and died; or
-/// [`ClientError::SpawnTimeout`] if it is still alive and never accepts.
+/// I/O, or what starting the daemon can fail with.
 pub(crate) async fn connect_or_spawn(
     socket: &Path,
     spawn: impl FnOnce() -> std::process::Command,
@@ -69,71 +51,13 @@ pub(crate) async fn connect_or_spawn(
             ) => {}
         Err(e) => return Err(e.into()),
     }
-    let mut cmd = spawn();
-    // The daemon is a process INDEPENDENT from the frontend that spawned it,
-    // except for `stderr`: that is where it says why it could not start, and
-    // dropping it leaves the caller with no explanation at all.
-    cmd.stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped());
-    let mut child = cmd.spawn()?;
-    // Total backoff ≈ 3.2s (documented as "up to ~3s").
-    for backoff_ms in [25u64, 50, 100, 200, 400, 800, 1600] {
-        tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
-        if let Ok(stream) = UnixStream::connect(socket).await {
-            drain_stderr(child.stderr.take());
-            return authenticated(stream).await;
+    super::spawn::spawn_then_connect(spawn, || async {
+        match UnixStream::connect(socket).await {
+            Ok(stream) => Some(authenticated(stream).await),
+            Err(_) => None,
         }
-        // Did it die? Then waiting out the rest of the backoff changes
-        // nothing, and what it wrote is the only thing that explains the
-        // failure. `try_wait` does not block, and after death `stderr` is
-        // closed: reading it terminates.
-        if let Ok(Some(status)) = child.try_wait() {
-            return Err(ClientError::SpawnFailed {
-                status: status.code(),
-                stderr: read_stderr(child.stderr.take()).await,
-            });
-        }
-    }
-    drain_stderr(child.stderr.take());
-    Err(ClientError::SpawnTimeout)
-}
-
-/// What the daemon said before dying, trimmed and with no control bytes.
-///
-/// Capped to 4 KiB: it is an error message meant to be displayed, not a log,
-/// and what arrives is another process's output. Read in `spawn_blocking`
-/// because it is synchronous I/O (rule 2) — and it terminates, because the
-/// child already died and the write end is closed.
-async fn read_stderr(stderr: Option<std::process::ChildStderr>) -> String {
-    let Some(mut stderr) = stderr else {
-        return String::new();
-    };
-    let read = tokio::task::spawn_blocking(move || {
-        use std::io::Read as _;
-        let mut buf = Vec::new();
-        let _ = std::io::Read::by_ref(&mut stderr)
-            .take(4096)
-            .read_to_end(&mut buf);
-        buf
     })
     .await
-    .unwrap_or_default();
-    String::from_utf8_lossy(&read).trim().to_owned()
-}
-
-/// Leaves the pipe draining forever, discarding whatever arrives.
-///
-/// Without this, a daemon that starts fine and later writes to `stderr`
-/// blocks as soon as it fills the pipe's buffer, because nobody in this
-/// process is reading. The thread only dies when the daemon closes its end.
-fn drain_stderr(stderr: Option<std::process::ChildStderr>) {
-    let Some(mut stderr) = stderr else {
-        return;
-    };
-    std::thread::spawn(move || {
-        let _ = std::io::copy(&mut stderr, &mut std::io::sink());
-    });
 }
 
 async fn authenticated(stream: UnixStream) -> Result<(OwnedReadHalf, OwnedWriteHalf), ClientError> {
@@ -151,6 +75,7 @@ async fn authenticated(stream: UnixStream) -> Result<(OwnedReadHalf, OwnedWriteH
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     fn nonexistent_socket() -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("norte-test-{}", std::process::id()));

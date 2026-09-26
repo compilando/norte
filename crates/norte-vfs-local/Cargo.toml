@@ -23,12 +23,11 @@ unicode-normalization.workspace = true
 tokio = { workspace = true, features = ["rt", "sync"] }
 tokio-stream.workspace = true
 trash.workspace = true
+# Typed errors for the `location` capability (rule 6: libraries use thiserror).
+thiserror.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
-
-# Typed errors for the `location` capability (rule 6: libraries use thiserror).
-thiserror.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = [
@@ -40,6 +39,13 @@ windows-sys = { workspace = true, features = [
     "Win32_System_WindowsProgramming",
     # `FILE_READ_ONLY_VOLUME` (`mounts_windows::volume_info`), same story.
     "Win32_System_SystemServices",
+    # `NtCreateFile` relative to a directory handle: the confined `location`
+    # root has no Win32 equivalent (ADR 0158). `OBJECT_ATTRIBUTES` is gated
+    # behind `Win32_Security`, `IO_STATUS_BLOCK` behind `Win32_System_IO`.
+    "Wdk_Foundation",
+    "Wdk_Storage_FileSystem",
+    "Win32_Security",
+    "Win32_System_IO",
 ] }
 
 [dev-dependencies]

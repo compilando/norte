@@ -14,7 +14,7 @@ mod blocking;
 /// The `fs.compare` Task: batches coalesced over the `norte-compare` engine.
 mod compare;
 pub mod connect;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub mod daemon;
 pub mod embedded;
 mod engine;

@@ -22,6 +22,11 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "net", "process", "rt", "sync", "time"] }
 tracing.workspace = true
 
+# The named pipe's DACL and peer SID: the only `unsafe` the transport needs,
+# kept out of this `forbid(unsafe_code)` crate (ADR 0159).
+[target.'cfg(windows)'.dependencies]
+norte-winpipe.workspace = true
+
 [dev-dependencies]
 # The boundary test reads cargo's graph and walks it.
 serde_json.workspace = true

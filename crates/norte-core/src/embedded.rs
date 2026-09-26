@@ -336,10 +336,9 @@ pub struct DaemonSocketProbe;
 
 impl DaemonPresence for DaemonSocketProbe {
     fn any_daemon_listening(&self) -> bool {
-        // Synchronous and, in practice, non-blocking: a `connect` to a local
-        // unix socket resolves on the spot, whether it exists or not. Runs
-        // with the window's lock held, so nothing more expensive fits here.
-        std::os::unix::net::UnixStream::connect(crate::daemon::default_socket_path(None)).is_ok()
+        // Runs with the window's lock held, so nothing more expensive than
+        // the transport's synchronous probe fits here.
+        norte_client::daemon_listening(&norte_client::default_socket_path(None))
     }
 }
 

@@ -326,7 +326,6 @@ async fn handle_suspension(
 async fn handle_subshell(
     app: &mut App,
     _backend: &Backend,
-    _terminal: &mut tty::Tui,
     _capture: &mut mouse::Capture,
     _events: &mut crate::console::Console<'_>,
     _work: &mut InFlight,

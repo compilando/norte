@@ -105,7 +105,6 @@ async fn plugin_uninstall(
         return Ok(uninstall_failed(&U::InvalidId));
     }
     match backend {
-        #[cfg(unix)]
         Backend::Remote(r) => {
             // "Is it there?" against the DAEMON'S catalog, which is the
             // directory being deleted from. And here, not from its
@@ -159,7 +158,6 @@ async fn plugin_uninstall(
 /// Warns, without starting it, if a daemon ACCEPTS connections on
 /// `socket`: it will keep listing what was just deleted behind its back
 /// until restarted.
-#[cfg(unix)]
 async fn warn_if_daemon_present(socket: Option<PathBuf>) {
     /// How long to wait for a daemon that accepts but does not answer: it
     /// is a warning, and it must not hang a command that previously never
@@ -188,10 +186,6 @@ async fn warn_if_daemon_present(socket: Option<PathBuf>) {
         eprintln!("{}", norte_i18n::t("cli-plugin-uninstall-daemon-stale"));
     }
 }
-
-/// Without a unix-socket daemon there is no registry left stale.
-#[cfg(not(unix))]
-async fn warn_if_daemon_present(_socket: Option<PathBuf>) {}
 
 /// What `plugin uninstall` says when it deleted.
 fn uninstall_done(id: &str, was_approved: bool) -> ExitCode {

@@ -27,7 +27,6 @@ impl Backend {
                 let handle = engine.pack_as(params, crate::journal::Actor::User).await?;
                 Ok(TaskRef::from_handle(&handle))
             }
-            #[cfg(unix)]
             Self::Remote(r) => r.pack(params).await.map(TaskRef::from),
         }
     }
@@ -49,7 +48,6 @@ impl Backend {
                     .await?;
                 Ok(TaskRef::from_handle(&handle))
             }
-            #[cfg(unix)]
             Self::Remote(r) => r.test_archive(params).await.map(TaskRef::from),
         }
     }
@@ -70,7 +68,6 @@ impl Backend {
                 .archive_test_report(task_id)
                 .map(|(_, r)| r)
                 .ok_or(Error::NotFound),
-            #[cfg(unix)]
             Self::Remote(r) => r.archive_test_report(task_id).await,
         }
     }
@@ -90,7 +87,6 @@ impl Backend {
                 .archive_pack_report(task_id)
                 .map(|(_, r)| r)
                 .ok_or(Error::NotFound),
-            #[cfg(unix)]
             Self::Remote(r) => r.archive_pack_report(task_id).await,
         }
     }
@@ -110,7 +106,6 @@ impl Backend {
                 let handle = engine.split_as(params, crate::journal::Actor::User).await?;
                 Ok(TaskRef::from_handle(&handle))
             }
-            #[cfg(unix)]
             Self::Remote(r) => r.split_file(params).await.map(TaskRef::from),
         }
     }
@@ -132,7 +127,6 @@ impl Backend {
                     .await?;
                 Ok(TaskRef::from_handle(&handle))
             }
-            #[cfg(unix)]
             Self::Remote(r) => r.combine_files(params).await.map(TaskRef::from),
         }
     }
