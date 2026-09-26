@@ -35,9 +35,12 @@ cierto "2.3.4 <= 2.35" version_le 2.3.4 2.35
 falso "2.39 <= 2.35" version_le 2.39 2.35
 
 # version_matches
-cierto "version with the revision" version_matches "norte 0.3.0-alpha.4 (v0.3.0-alpha.4-0-gabc)" "v0.3.0-alpha.4-0-gabc"
-falso "version from another revision" version_matches "norte 0.3.0-alpha.4 (v0.3.0-alpha.4-1-gdef)" "v0.3.0-alpha.4-0-gabc"
-falso "unknown revision" version_matches "norte 0.3.0-alpha.4 (unknown)" "v0.3.0-alpha.4-0-gabc"
+cierto "version with the revision" version_matches "norte 0.3.0-alpha.4 (v0.3.0-alpha.4-0-gabc1234)" "v0.3.0-alpha.4-0-gabc1234"
+falso "version from another revision" version_matches "norte 0.3.0-alpha.4 (v0.3.0-alpha.4-1-gdef5678)" "v0.3.0-alpha.4-0-gabc1234"
+falso "unknown revision" version_matches "norte 0.3.0-alpha.4 (unknown)" "v0.3.0-alpha.4-0-gabc1234"
+cierto "same commit, longer abbreviation" version_matches "norte 0.3.0-alpha.5 (v0.3.0-alpha.5-0-g659bcc044)" "v0.3.0-alpha.5-0-g659bcc04"
+falso "same prefix, another commit" version_matches "norte 0.3.0-alpha.5 (v0.3.0-alpha.5-0-g659bcc1ff)" "v0.3.0-alpha.5-0-g659bcc04"
+falso "a hash too short to mean anything" version_matches "norte 1 (v1-0-gabc)" "v1-0-gabc"
 
 # image_slug
 igual "slug with tag" "$(image_slug ubuntu:22.04)" "ubuntu-22.04"
@@ -59,19 +62,19 @@ falso "a touched sum does not match" manifest_check_sums "$tmp/out"
 
 # manifest_problems
 cat >"$tmp/bueno" <<'EOF'
-revision v1-0-gabc
+revision v1-0-gabc1234
 glibc-floor 2.35
 glibc deb/usr/bin/norte-gui 2.34
 glibc deb/usr/bin/norte 2.34
 glibc tar/norte-tui/ntc none
-version deb/usr/bin/norte norte 1 (v1-0-gabc)
+version deb/usr/bin/norte norte 1 (v1-0-gabc1234)
 EOF
 igual "good manifest has no problems" "$(manifest_problems "$tmp/bueno")" ""
 cat >"$tmp/malo" <<'EOF'
-revision v1-0-gabc
+revision v1-0-gabc1234
 glibc-floor 2.35
 glibc tar/x/norte 2.39
-version tar/x/norte norte 1 (v1-1-gdef)
+version tar/x/norte norte 1 (v1-1-gdef5678)
 EOF
 # floor exceeded, foreign revision, and ntc and norte-gui are missing: four.
 igual "bad manifest: four problems" "$(manifest_problems "$tmp/malo" | wc -l | tr -d ' ')" "4"

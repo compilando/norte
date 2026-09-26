@@ -53,11 +53,22 @@ instalar() {
   fi
 }
 
+# lib.sh's `version_matches`, repeated because this runs alone in the
+# container: the hash is compared by prefix (abbreviations differ).
+same_revision() {
+  [[ "$1" == *")" ]] || return 1
+  local got="${1##*(}"
+  got="${got%)}"
+  local got_hash="${got##*-g}" want_hash="${2##*-g}"
+  [ "${got%-g*}" = "${2%-g*}" ] && [ "${#got_hash}" -ge 7 ] && [ "${#want_hash}" -ge 7 ] &&
+    [[ "$got_hash" == "$want_hash"* || "$want_hash" == "$got_hash"* ]]
+}
+
 version_ok() {
   local out
   out="$("$1" --version)"
   echo "$out"
-  if [ -n "$REV" ] && [[ "$out" != *"($REV)" ]]; then
+  if [ -n "$REV" ] && ! same_revision "$out" "$REV"; then
     echo "unexpected revision: expected ($REV)" >&2
     return 1
   fi
