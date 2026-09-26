@@ -16,9 +16,17 @@ version_le() {
   [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -n 1)" = "$1" ]
 }
 
-# 0 if `--version`'s output ($1) ends in "($2)".
+# 0 if `--version`'s output ($1) ends in "($2)", comparing the hash by
+# prefix: the build container's `git describe` and the host's can abbreviate
+# the same commit to different lengths (it grows with the clone's object
+# count), and v0.3.0-alpha.5 failed on `g659bcc044` vs `g659bcc04`.
 version_matches() {
-  [[ "$1" == *"($2)" ]]
+  [[ "$1" == *")" ]] || return 1
+  local got="${1##*(}"
+  got="${got%)}"
+  local got_hash="${got##*-g}" want_hash="${2##*-g}"
+  [ "${got%-g*}" = "${2%-g*}" ] && [ "${#got_hash}" -ge 7 ] && [ "${#want_hash}" -ge 7 ] &&
+    [[ "$got_hash" == "$want_hash"* || "$want_hash" == "$got_hash"* ]]
 }
 
 # `debian:trixie@sha256:…` → `debian-trixie`: one file name per image.
