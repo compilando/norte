@@ -6,7 +6,10 @@ param(
     # Use the `ui\dist` already there (built elsewhere: the bundle is
     # platform-independent). The local VM's emulated e1000e NIC has hung
     # under `npm ci`'s download burst; a hosted runner never needs this.
-    [switch]$SkipUi
+    [switch]$SkipUi,
+    # Stop after the sidecars: `package.ps1` has the Tauri CLI build the
+    # window itself.
+    [switch]$SkipGui
 )
 
 # ADR 0157 "build": norte, ntc and norte-gui from ONE build. The window
@@ -34,6 +37,8 @@ try {
     foreach ($bin in @('norte', 'ntc')) {
         Copy-Item -Force "$out\$bin.exe" "$sidecars\$bin-$target.exe"
     }
+
+    if ($SkipGui) { return }
 
     if ($SkipUi) {
         if (-not (Test-Path 'crates\norte-gui-tauri\ui\dist\index.html')) {

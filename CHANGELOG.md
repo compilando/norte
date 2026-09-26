@@ -9,6 +9,9 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Windows installers** (ADR 0157): `scripts/platform/windows/package.ps1`
+  builds an NSIS setup and a portable ZIP carrying `norte-gui`, `norte` and
+  `ntc`, with `SHA256SUMS`. Not published yet.
 - **The window runs on Windows** (ADR 0157). `scripts/platform/windows/build.ps1`
   builds `norte`, `ntc` and `norte-gui` together; the window finds
   `norte.exe` next to it and loads its bundle from `http://tauri.localhost`,
