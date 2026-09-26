@@ -7,6 +7,8 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+## [0.3.0-alpha.5] - 2026-09-26
+
 ### Added
 
 - **Windows installers** (ADR 0157): `scripts/platform/windows/package.ps1`
@@ -7708,7 +7710,8 @@ and some daemon/socket tests are only available in CI environments.
 - Writes inside ZIP archives; list, restore, and purge operations for logical
   trash; and the M5 GUI.
 
-[Unreleased]: https://github.com/compilando/norte/compare/v0.3.0-alpha.4...HEAD
+[Unreleased]: https://github.com/compilando/norte/compare/v0.3.0-alpha.5...HEAD
+[0.3.0-alpha.5]: https://github.com/compilando/norte/compare/v0.3.0-alpha.4...v0.3.0-alpha.5
 [0.3.0-alpha.4]: https://github.com/compilando/norte/compare/v0.3.0-alpha.3...v0.3.0-alpha.4
 [0.3.0-alpha.3]: https://github.com/compilando/norte/compare/v0.3.0-alpha.2...v0.3.0-alpha.3
 [0.3.0-alpha.2]: https://github.com/compilando/norte/compare/v0.3.0-alpha.1...v0.3.0-alpha.2
