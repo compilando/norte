@@ -9,6 +9,9 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **The daemon runs on Windows, over a named pipe only its user can open**
+  (ADR 0159). `norte daemon`, `mcp`, `policy`, `undo` and `--daemon` are no
+  longer unix-only; `--socket` still takes a path, or a `\\.\pipe\<name>`.
 - **The core builds for Windows, and a plugin's `location` is confined
   there too** (ADR 0158). Reparse points are never crossed, a repository
   marker counts only inside the user profile, and `stat` reports what Git

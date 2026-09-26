@@ -159,3 +159,4 @@ edits.
 | [0156](0156-a-sync-plan-does-not-measure-the-orphans-it-copies.md) | A sync plan does not measure the orphans it copies | accepted |
 | [0157](0157-native-builders-share-one-release-contract.md) | Native builders share one release contract, and VM state stays outside the tree | accepted |
 | [0158](0158-a-confined-root-on-windows-opens-one-name-at-a-time.md) | A confined root on Windows opens one name at a time, and identity is a `NodeId` | accepted |
+| [0159](0159-the-windows-daemon-listens-on-an-owner-only-named-pipe.md) | The Windows daemon listens on an owner-only named pipe, and its unsafe lives in `norte-winpipe` | accepted |

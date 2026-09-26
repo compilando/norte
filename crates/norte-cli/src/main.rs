@@ -99,10 +99,11 @@ const EXIT_CANCELLED: u8 = 130;
 )]
 struct Cli {
     /// Operates against the daemon (starting it if needed) instead of the
-    /// embedded core. Unix only (ADR 0011).
+    /// embedded core (ADR 0011).
     #[arg(long, global = true)]
     daemon: bool,
-    /// The daemon's socket (default: `$XDG_RUNTIME_DIR/norte/daemon.sock`)
+    /// The daemon's address (default: `$XDG_RUNTIME_DIR/norte/daemon.sock`;
+    /// on Windows, `%LOCALAPPDATA%\norte\daemon.pipe`, which names a pipe)
     #[arg(long, global = true)]
     socket: Option<PathBuf>,
     /// Language of this run's messages (es|en); overrides `NORTE_LANG` and
@@ -177,27 +178,23 @@ enum Cmd {
         /// Connection name or remote URL
         target: String,
     },
-    /// JSON-RPC daemon over UDS (ADR 0011; unix only in M2)
-    #[cfg(unix)]
+    /// JSON-RPC daemon over a unix socket or a Windows named pipe (ADR 0011)
     Daemon {
         #[command(subcommand)]
         cmd: DaemonCmd,
     },
     /// Serves MCP over stdio for agents (Claude Code, Codex…): connects to
     /// the daemon as an agent session (M3-4, ADR 0024)
-    #[cfg(unix)]
     Mcp {
         #[command(subcommand)]
         cmd: McpCmd,
     },
     /// Agent governance from the human side (M3-4)
-    #[cfg(unix)]
     Policy {
         #[command(subcommand)]
         cmd: PolicyCmd,
     },
     /// Undoes an agent's whole session in strict LIFO (M3-4)
-    #[cfg(unix)]
     Undo {
         /// Agent session (the one from the MCP bridge's `--session`)
         session: String,
@@ -485,7 +482,6 @@ enum PluginCmd {
 }
 
 /// MCP subcommands.
-#[cfg(unix)]
 #[derive(Subcommand)]
 enum McpCmd {
     /// Serves MCP over stdio until EOF (starts the daemon if needed)
@@ -497,7 +493,6 @@ enum McpCmd {
 }
 
 /// Policy subcommands (human side).
-#[cfg(unix)]
 #[derive(Subcommand)]
 enum PolicyCmd {
     /// Grants a pending scope request (the `request_id` is printed by
@@ -509,7 +504,6 @@ enum PolicyCmd {
 }
 
 /// Daemon subcommands.
-#[cfg(unix)]
 #[derive(Subcommand)]
 enum DaemonCmd {
     /// Serves in the foreground until shutdown (request, SIGTERM/Ctrl-C or
@@ -693,7 +687,6 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     // have added a ring but REMOVED a layer. Whoever starts `norte daemon
     // run` in a terminal to see why it won't come up would stop reading
     // anything.
-    #[cfg(unix)]
     let log_ring = if matches!(
         cli.cmd,
         Cmd::Daemon {
@@ -705,19 +698,15 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         norte_core::logging::init(log_cfg);
         None
     };
-    #[cfg(not(unix))]
-    norte_core::logging::init(log_cfg);
 
     // The daemon builds ITS OWN engine (with journal+policy, M3-4): the
     // embedded one below is only for the rest of the subcommands.
-    #[cfg(unix)]
     if let Cmd::Daemon { cmd } = cli.cmd {
         return cmd::daemon::daemon_cmd(cmd, log_ring).await;
     }
     // MCP/policy/undo talk to the daemon directly as a client (they do not
     // go through the embedded Backend): the daemon owns the journal and
     // the policy.
-    #[cfg(unix)]
     match cli.cmd {
         Cmd::Mcp { cmd } => return cmd::daemon::mcp_cmd(cmd, cli.socket).await,
         Cmd::Policy { cmd } => return cmd::daemon::policy_cmd(cmd, cli.socket).await,
@@ -992,7 +981,6 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         | Cmd::ShellInit { .. }
         | Cmd::Theme { .. }
         | Cmd::Tui { .. } => unreachable!("handled above"),
-        #[cfg(unix)]
         Cmd::Daemon { .. } | Cmd::Mcp { .. } | Cmd::Policy { .. } | Cmd::Undo { .. } => {
             unreachable!("handled above")
         }

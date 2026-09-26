@@ -1,0 +1,33 @@
+[package]
+name = "norte-winpipe"
+description = "The Windows named pipe's security boundary for the norte daemon: an owner-only DACL and the peer's user SID (ADR 0159)"
+license = "MIT OR Apache-2.0"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+# Empty everywhere but Windows. It exists so that `unsafe` Win32 lives in one
+# small audited crate instead of in the SDK or the core, which both keep
+# `forbid(unsafe_code)` (ADR 0159).
+[target.'cfg(windows)'.dependencies]
+tokio = { workspace = true, features = ["net"] }
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    # SDDL → security descriptor, SID → `S-1-…`.
+    "Win32_Security_Authorization",
+    # `GetNamedPipe{Client,Server}ProcessId`.
+    "Win32_System_Pipes",
+    # `OpenProcess`, `OpenProcessToken`, `GetCurrentProcess`.
+    "Win32_System_Threading",
+    # `SYSTEM_MANDATORY_LABEL_ACE_TYPE`, for reading the pipe's label.
+    "Win32_System_SystemServices",
+] }
+
+[target.'cfg(windows)'.dev-dependencies]
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt"] }
+
+[lints]
+workspace = true

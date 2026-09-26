@@ -8,7 +8,8 @@
 //! Three layers, bottom up:
 //!
 //! - `transport` (private): how the daemon is reached and how it is
-//!   authenticated. Today, a UNIX socket with the peer's credentials.
+//!   authenticated: a UNIX socket with the peer's credentials, or on
+//!   Windows a named pipe with the peer's user SID (ADR 0159).
 //! - [`rpc`]: the framed JSON-RPC, which does not know what it travels over.
 //! - `remote`: the typed backend frontends actually use.
 //!
@@ -26,6 +27,8 @@ pub mod types;
 pub use remote::RemoteBackend;
 pub use remote::calls::to_taxonomy;
 pub use rpc::{Client, ClientError, is_version_mismatch};
+#[cfg(windows)]
+pub use socket::pipe_name;
 pub use socket::{
     SPAWNED_DAEMON_IDLE_SECS, daemon_listening, daemon_run_argv, default_socket_path,
     process_uid_best_effort,

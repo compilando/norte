@@ -309,7 +309,7 @@ pub async fn on_key(
             app.toggle_terminal();
         } else if let Some(t) = app.terminal.as_mut()
             && key.kind == crossterm::event::KeyEventKind::Press
-            && let Some(bytes) = crate::subshell::key_to_bytes(&key)
+            && let Some(bytes) = crate::termpanel::key_to_bytes(&key)
         {
             t.write(&bytes);
         }

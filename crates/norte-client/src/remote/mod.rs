@@ -3286,7 +3286,8 @@ fn ceiling_honored(peer: Option<&str>) -> bool {
     peer.is_none_or(|v| methods::version_at_least(v, 0, 80))
 }
 
-#[cfg(test)]
+// The stub daemons these tests bring up are unix sockets.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

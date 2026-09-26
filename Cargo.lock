@@ -5116,6 +5116,7 @@ dependencies = [
  "base64 0.22.1",
  "futures",
  "norte-proto",
+ "norte-winpipe",
  "serde",
  "serde_json",
  "tempfile",
@@ -5233,6 +5234,7 @@ dependencies = [
  "norte-vfs-object",
  "norte-vfs-rar",
  "norte-vfs-sftp",
+ "norte-winpipe",
  "opendal",
  "proptest",
  "rand 0.10.2",
@@ -5657,6 +5659,14 @@ dependencies = [
  "tempfile",
  "testcontainers",
  "tokio",
+]
+
+[[package]]
+name = "norte-winpipe"
+version = "0.3.0-alpha.4"
+dependencies = [
+ "tokio",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

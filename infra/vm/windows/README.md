@@ -86,10 +86,18 @@ Verified on 2026-09-26 with Windows 11 25H2 x64 and MSVC Rust 1.96.1:
 - `norte-vfs` compiles after using its internal `crate::wtf8` path correctly.
 - `norte-core` compiles (ADR 0158: the plugin `location` root is confined
   by handle-relative `NtCreateFile`; its tests pass on NTFS).
-- `norte-cli` is red on `norte-mcp`, which imports the unix-only
-  `norte_core::daemon`; the CLI also runs the daemon server. Both need the
-  server side of the transport seam: the named-pipe listener.
-- `norte-tui` is red on the pty subshell (ADR 0084), which needs ConPTY.
+- `norte-cli` and `norte-tui` compile, and the daemon runs over an
+  owner-only named pipe (ADR 0159): `norte --daemon ls` then `norte daemon
+  stop` works in the guest. `check.ps1` is green for all four crates; the
+  next gate is `-WithUi`.
+- The TUI's persistent subshell stays unix-only (ADR 0084).
+- `norte-core`'s own test suite does not compile on Windows yet (unix-only
+  helpers such as `Permissions::from_mode`).
+
+The VM (11 GB) and a workspace build on the host (`just c`, `just ci`) do
+not fit in 31 GB together: the host OOM killer took QEMU twice on
+2026-09-26. Shut the guest down (`just windows-vm-stop`) before a heavy host
+build.
 
 The guest clock runs one hour ahead of the host. Files copied in keep the
 host's mtime and look OLDER than the guest's build artefacts, so cargo reuses

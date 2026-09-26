@@ -47,7 +47,12 @@ The project explicitly considers:
 - Path traversal, symlink races, normalization collisions, and non-UTF-8 data.
 - Archive bombs and unbounded resource consumption.
 - Secrets in configuration, logs, process environments, and crash reports.
-- Local socket authentication and cross-client authorization.
+- Local socket authentication and cross-client authorization. On Windows the
+  daemon listens on a named pipe whose owner, DACL and integrity label admit
+  only its own user at its own integrity level; the client checks that owner
+  and label before trusting the pipe, and opens it at identification level so
+  a squatter cannot impersonate it (ADR 0159). A pipe name squatted by another
+  user stops the daemon from starting; it cannot receive a client.
 - Agent scope or policy bypass, including confused-deputy attacks.
 - WASM capability bypass and unbounded plugin execution.
 - Journal rewriting, truncation, rollback, and audit-anchor handling.
