@@ -134,7 +134,7 @@ async fn daemon_command(socket: &std::path::Path) -> Option<Vec<std::ffi::OsStri
 /// argument.
 fn daemon_program(next_to: Option<&std::path::Path>) -> std::ffi::OsString {
     next_to
-        .map(|d| d.join("norte"))
+        .map(|d| d.join(format!("norte{}", std::env::consts::EXE_SUFFIX)))
         .filter(|p| p.is_file())
         .map_or_else(|| "norte".into(), Into::into)
 }
@@ -151,7 +151,10 @@ mod daemon_test {
     #[test]
     fn the_sibling_wins() {
         let dir = tempfile::tempdir().expect("temp");
-        let sibling = dir.path().join("norte");
+        // `norte.exe` on Windows: the sibling is looked for by its real name.
+        let sibling = dir
+            .path()
+            .join(format!("norte{}", std::env::consts::EXE_SUFFIX));
         std::fs::write(&sibling, b"#!/bin/sh\n").expect("is written");
         assert_eq!(daemon_program(Some(dir.path())), sibling.as_os_str());
     }
@@ -173,7 +176,11 @@ mod daemon_test {
     #[test]
     fn a_directory_is_not_a_daemon() {
         let dir = tempfile::tempdir().expect("temp");
-        std::fs::create_dir(dir.path().join("norte")).expect("is created");
+        std::fs::create_dir(
+            dir.path()
+                .join(format!("norte{}", std::env::consts::EXE_SUFFIX)),
+        )
+        .expect("is created");
         assert_eq!(daemon_program(Some(dir.path())), "norte");
     }
 }

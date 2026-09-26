@@ -10,7 +10,7 @@ source "$ROOT/infra/vm/common/lib.sh"
 "$HERE/preflight.sh"
 
 name="${NORTE_WINDOWS_VM_NAME:-norte-win11-build}"
-memory="${NORTE_WINDOWS_MEMORY_MIB:-16384}"
+memory="${NORTE_WINDOWS_MEMORY_MIB:-10240}"
 vcpus="${NORTE_WINDOWS_VCPUS:-8}"
 disk_gib="${NORTE_WINDOWS_DISK_GIB:-160}"
 user="${NORTE_WINDOWS_USER:-norte}"

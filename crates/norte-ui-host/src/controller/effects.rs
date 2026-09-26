@@ -514,12 +514,11 @@ impl State {
     /// sweep can follow. A key hidden behind a parameter is a key that will
     /// paint as its own identifier the day it is missing.
     fn argv_resolved(mut argv: Vec<std::ffi::OsString>) -> Option<Vec<Vec<u8>>> {
-        use std::os::unix::ffi::OsStrExt as _;
         let program = argv
             .first()
             .and_then(|p| norte_frontend::openers::resolve_program(p))?;
         argv[0] = program.into_os_string();
-        Some(argv.iter().map(|a| a.as_bytes().to_vec()).collect())
+        Some(argv.iter().map(|a| a.as_encoded_bytes().to_vec()).collect())
     }
 
     /// `pane.edit`: the editor `[ui] editor` names, and if there is none,
@@ -620,7 +619,6 @@ impl State {
     /// says the comparator opens a window, and waited for and its output
     /// captured if not.
     pub(super) fn compare_files(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        use std::os::unix::ffi::OsStrExt as _;
         let here = self.slot();
         let marked: Vec<&norte_proto::Entry> = here.pane.marked_entries();
         let there = self
@@ -690,8 +688,8 @@ impl State {
         argv[0] = program.into_os_string();
         let effect = crate::dto::NativeEffect::RunProgram {
             title_key: "program-output-compare".to_owned(),
-            argv: argv.iter().map(|a| a.as_bytes().to_vec()).collect(),
-            cwd: Some(native_dir.as_os_str().as_bytes().to_vec()),
+            argv: argv.iter().map(|a| a.as_encoded_bytes().to_vec()).collect(),
+            cwd: Some(path_bytes(&native_dir)),
             detached,
         };
         if !self.native(effect) {
@@ -828,12 +826,8 @@ impl State {
     }
 }
 
-/// A native path in BYTES, which is how it crosses the bridge.
-///
-/// A free function so as not to repeat the Unix trait's `use` inside every
-/// method: a `use` mid-function is what clippy calls
-/// `items_after_statements`.
+/// A native path in BYTES, which is how it crosses the bridge: the
+/// platform's own on unix, WTF-8 on Windows (the window decodes them back).
 fn path_bytes(p: &std::path::Path) -> Vec<u8> {
-    use std::os::unix::ffi::OsStrExt as _;
-    p.as_os_str().as_bytes().to_vec()
+    p.as_os_str().as_encoded_bytes().to_vec()
 }

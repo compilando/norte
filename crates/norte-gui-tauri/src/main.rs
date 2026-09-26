@@ -318,6 +318,26 @@ fn main() -> ExitCode {
 /// process. Nothing else.
 const PAGE_SCHEMAS: &[&str] = &["tauri", "ipc"];
 
+/// Is `url` one of this app's own pages?
+///
+/// On Windows `WebView2` cannot register a custom scheme, so Tauri serves the
+/// same two as `http://tauri.localhost` and `http://ipc.localhost` (`https`
+/// with `useHttpsScheme`). Exactly those hosts pass; any other `http` page
+/// does not, or the guard below would have stopped guarding.
+fn is_own_page(url: &tauri::Url) -> bool {
+    match url.scheme() {
+        s if PAGE_SCHEMAS.contains(&s) => true,
+        "http" | "https" if cfg!(windows) => {
+            url.host_str().is_some_and(|host| {
+                PAGE_SCHEMAS
+                    .iter()
+                    .any(|s| host.strip_suffix(".localhost") == Some(s))
+            }) && url.port().is_none()
+        }
+        _ => false,
+    }
+}
+
 /// The webview does NOT navigate outside its assets.
 ///
 /// The CSP does not cover TOP-LEVEL navigation — `form-action` is forms and
@@ -329,7 +349,7 @@ const PAGE_SCHEMAS: &[&str] = &["tauri", "ipc"];
 fn navigation_guard<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
     tauri::plugin::Builder::new("norte-navegacion")
         .on_navigation(|_webview, url| {
-            let allowed = PAGE_SCHEMAS.contains(&url.scheme());
+            let allowed = is_own_page(url);
             if !allowed {
                 tracing::warn!(scheme = url.scheme(), "navigation rejected");
             }
@@ -451,6 +471,48 @@ fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
                          have been left unwritten"
                 ),
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod navigation_test {
+    use super::is_own_page;
+
+    fn own(url: &str) -> bool {
+        is_own_page(&tauri::Url::parse(url).expect("a url"))
+    }
+
+    /// Windows serves the bundle as `http://tauri.localhost`: refusing it
+    /// left the window blank at `about:blank`.
+    #[test]
+    fn the_app_pages_pass() {
+        assert!(own("tauri://localhost/index.html"));
+        assert!(own("ipc://localhost/cmd"));
+        // Only where they are how the bundle is served.
+        for url in [
+            "http://tauri.localhost/index.html",
+            "https://tauri.localhost/",
+            "http://ipc.localhost/cmd",
+        ] {
+            assert_eq!(own(url), cfg!(windows), "{url}");
+        }
+    }
+
+    /// And it stays a guard: no other page, however it is spelled.
+    #[test]
+    fn anything_else_is_refused() {
+        for url in [
+            "https://example.com/",
+            "http://localhost/",
+            "http://tauri.localhost.evil.com/",
+            "http://eviltauri.localhost/",
+            "http://tauri.localhost:8080/",
+            "http://evil.tauri.localhost/",
+            "http://ipc.localhost@evil.com/",
+            "file:///C:/Windows/win.ini",
+        ] {
+            assert!(!own(url), "{url} must not pass");
         }
     }
 }

@@ -178,21 +178,25 @@ pub fn execute(effect: &NativeEffect) -> RunOutcome {
             detached: true,
             ..
         } => {
-            use std::os::unix::ffi::OsStrExt as _;
             let Some((program, args)) = argv.split_first() else {
                 return RunOutcome::NoProgram;
             };
-            let args: Vec<std::ffi::OsString> = args
-                .iter()
-                .map(|a| std::ffi::OsStr::from_bytes(a).to_owned())
-                .collect();
-            let cwd = cwd
-                .as_deref()
-                .map(|d| std::path::Path::new(std::ffi::OsStr::from_bytes(d)));
+            // A part that does not decode refuses the launch, cwd included:
+            // running somewhere else than asked is not a fallback.
+            let (Some(program), Some(args), Some(cwd)) = (
+                os_from_bridge(program),
+                args.iter()
+                    .map(|a| os_from_bridge(a))
+                    .collect::<Option<Vec<_>>>(),
+                cwd.as_deref()
+                    .map_or(Some(None), |d| os_from_bridge(d).map(Some)),
+            ) else {
+                return RunOutcome::NoProgram;
+            };
             launch(
-                std::path::Path::new(std::ffi::OsStr::from_bytes(program)),
+                std::path::Path::new(&program),
                 &args,
-                cwd,
+                cwd.as_deref().map(std::path::Path::new),
             )
         }
         // `pump` handles all four, and none of them launches a program
@@ -402,6 +406,23 @@ impl Ran {
     }
 }
 
+/// A path or argument as it crossed the bridge, back to the platform's
+/// string: its own bytes on unix, WTF-8 on Windows. `None` if Windows bytes
+/// are not WTF-8, which nothing on this side produced.
+#[cfg_attr(unix, allow(clippy::unnecessary_wraps))] // only Windows can fail
+fn os_from_bridge(bytes: &[u8]) -> Option<std::ffi::OsString> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt as _;
+        Some(std::ffi::OsStr::from_bytes(bytes).to_owned())
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStringExt as _;
+        norte_vfs::wtf8::decode_to_wide(bytes).map(|w| std::ffi::OsString::from_wide(&w))
+    }
+}
+
 /// How much output is kept from an awaited program: the host splits it into
 /// lines and bounds it again, but a `diff` of two ISOs has no reason to fill
 /// this window's memory before it gets there.
@@ -417,7 +438,6 @@ const PROGRAM_DEADLINE: std::time::Duration = std::time::Duration::from_mins(1);
 /// file names that someone else named.
 fn run(argv: &[Vec<u8>], cwd: Option<&[u8]>) -> Ran {
     use std::io::Read as _;
-    use std::os::unix::ffi::OsStrExt as _;
     let command = argv
         .iter()
         .map(|a| String::from_utf8_lossy(a).into_owned())
@@ -426,13 +446,22 @@ fn run(argv: &[Vec<u8>], cwd: Option<&[u8]>) -> Ran {
     let Some((program, rest)) = argv.split_first() else {
         return Ran::failure(command);
     };
-    let mut cmd = std::process::Command::new(std::ffi::OsStr::from_bytes(program));
-    cmd.args(rest.iter().map(|a| std::ffi::OsStr::from_bytes(a)))
+    let (Some(program), Some(rest), Some(cwd)) = (
+        os_from_bridge(program),
+        rest.iter()
+            .map(|a| os_from_bridge(a))
+            .collect::<Option<Vec<_>>>(),
+        cwd.map_or(Some(None), |d| os_from_bridge(d).map(Some)),
+    ) else {
+        return Ran::failure(command);
+    };
+    let mut cmd = std::process::Command::new(program);
+    cmd.args(rest)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     if let Some(d) = cwd {
-        cmd.current_dir(std::ffi::OsStr::from_bytes(d));
+        cmd.current_dir(d);
     }
     let Ok(mut child) = cmd.spawn() else {
         return Ran::failure(command);

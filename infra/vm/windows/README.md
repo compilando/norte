@@ -90,9 +90,24 @@ Verified on 2026-09-26 with Windows 11 25H2 x64 and MSVC Rust 1.96.1:
   owner-only named pipe (ADR 0159): `norte --daemon ls` then `norte daemon
   stop` works in the guest. `check.ps1` is green for all four crates; the
   next gate is `-WithUi`.
+- `scripts/platform/windows/package.ps1` produces, from one release build,
+  the NSIS installer (`tauri build --bundles nsis`), a portable ZIP of
+  `norte-gui`, `norte` and `ntc`, and `SHA256SUMS` in `target\dist-windows`.
+  Smoked on 2026-09-26: `setup.exe /S` installs the three binaries under
+  `%LOCALAPPDATA%\norte`, and the installed `norte --daemon ls` works. A
+  build from a synced tree reports `-dirty`: publishable ones start from a
+  tag (ADR 0157).
 - The TUI's persistent subshell stays unix-only (ADR 0084).
 - `norte-core`'s own test suite does not compile on Windows yet (unix-only
   helpers such as `Permissions::from_mode`).
+
+After unclean power-offs Windows may reclassify the NAT network as
+*Public*, and the OpenSSH firewall rule only allows *Private*: SSH then
+drops, sometimes mid-session, while DHCP and outbound traffic keep working.
+From an elevated console PowerShell: `Set-NetConnectionProfile
+-NetworkCategory Private; Set-Service sshd -StartupType Automatic;
+Start-Service sshd`. A warm `virsh reset` has also left the guest hung;
+prefer `destroy` + `start`.
 
 The VM (11 GB) and a workspace build on the host (`just c`, `just ci`) do
 not fit in 31 GB together: the host OOM killer took QEMU twice on

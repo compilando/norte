@@ -21,15 +21,9 @@ try {
     }
 
     if ($WithUi) {
-        Push-Location 'crates\norte-gui-tauri\ui'
-        try {
-            npm ci --no-audit --no-fund
-            if ($LASTEXITCODE -ne 0) { throw 'npm ci failed' }
-            npm run build
-            if ($LASTEXITCODE -ne 0) { throw 'UI build failed' }
-        } finally { Pop-Location }
-        cargo check --locked --target $target -p norte-gui-tauri
-        if ($LASTEXITCODE -ne 0) { throw 'cargo check failed: norte-gui-tauri' }
+        # The window cannot even be checked without its sidecars, which
+        # means building norte and ntc: that is the build step.
+        & (Join-Path $PSScriptRoot 'build.ps1') -Repository $Repository
     }
 } finally {
     Pop-Location
