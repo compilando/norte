@@ -45,8 +45,10 @@ try {
     New-Item -ItemType Directory -Force $OutDir | Out-Null
     Get-ChildItem $OutDir | Remove-Item -Recurse -Force
 
-    $installer = Get-ChildItem "$release\bundle\nsis\*-setup.exe" | Select-Object -First 1
-    if (-not $installer) { throw 'no NSIS installer was produced' }
+    # By name, not "the first one": `bundle\nsis` keeps every earlier
+    # version's installer, and v0.3.0-alpha.5 first shipped alpha.4's.
+    $installer = Get-Item "$release\bundle\nsis\norte_${version}_x64-setup.exe" -ErrorAction SilentlyContinue
+    if (-not $installer) { throw "no NSIS installer for $version was produced" }
     Copy-Item $installer.FullName $OutDir
 
     # The portable ZIP takes the SAME binaries the installer carries.
