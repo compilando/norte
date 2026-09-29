@@ -947,6 +947,21 @@ fn effective_symlink_kind(
     }
 }
 
+/// A link that Windows deletes as a directory: a junction or a directory
+/// symlink. `remove_file` is refused on those (#220); `remove_dir` removes
+/// the link and never what it points at.
+#[cfg(windows)]
+fn is_directory_link(md: &std::fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x10;
+    md.file_type().is_symlink() && md.file_attributes() & FILE_ATTRIBUTE_DIRECTORY != 0
+}
+
+#[cfg(not(windows))]
+fn is_directory_link(_md: &std::fs::Metadata) -> bool {
+    false
+}
+
 /// Creates the native symlink. No pre-check for collision needed: the
 /// syscall fails with EEXIST atomically.
 #[cfg(unix)]
@@ -2045,7 +2060,7 @@ impl Provider for LocalProvider {
         let native = self.native(p)?;
         blocking(move || {
             let md = std::fs::symlink_metadata(&native).map_err(|e| map_io(&e))?;
-            if md.file_type().is_dir() {
+            if md.file_type().is_dir() || is_directory_link(&md) {
                 // Not recursive: a dir with children → Conflict (the walk
                 // belongs to the core).
                 std::fs::remove_dir(&native).map_err(|e| map_io(&e))

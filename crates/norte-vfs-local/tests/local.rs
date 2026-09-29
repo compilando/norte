@@ -1292,6 +1292,92 @@ async fn a_directory_without_write_permission_still_gets_an_answer() {
     );
 }
 
+/// A junction `name` → `target`, made the way a user makes one (no
+/// privilege needed, unlike a directory symlink).
+#[cfg(windows)]
+fn junction(base: &std::path::Path, name: &str, target: &std::path::Path) {
+    let ok = std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(base.join(name))
+        .arg(target)
+        .status()
+        .expect("cmd")
+        .success();
+    assert!(ok, "mklink /J");
+}
+
+/// #220 — a junction is a symlink to norte: listed as one, its target
+/// readable, and never walked into by a listing of its parent.
+#[cfg(windows)]
+#[tokio::test]
+async fn a_junction_is_a_symlink() {
+    use futures::StreamExt;
+    use norte_proto::EntryKind;
+    use norte_vfs::{FollowLinks, Provider};
+    let (p, root, base) = provider();
+    let outside = tempfile::tempdir().expect("tempdir");
+    std::fs::write(outside.path().join("kept.txt"), b"x").expect("write");
+    junction(&base, "j", outside.path());
+
+    let st = p.stat(&child(&root, b"j")).await.expect("stat");
+    assert_eq!(st.kind, EntryKind::Symlink);
+    let listed: Vec<_> = p
+        .list(&root)
+        .await
+        .expect("list")
+        .map(|e| e.expect("entry"))
+        .collect()
+        .await;
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].kind, EntryKind::Symlink);
+
+    // A plain Win32 path, not the reparse buffer's `\??\` form.
+    let target = p.read_link(&child(&root, b"j")).await.expect("read_link");
+    let expected = outside.path().to_string_lossy().into_owned();
+    assert_eq!(String::from_utf8_lossy(&target), expected);
+
+    // `Follow` walks detect cycles by `NodeId` (§17.9): followed, the
+    // junction must BE its target's node, and unfollowed, a node of its own.
+    let followed = p
+        .node_id(&child(&root, b"j"), FollowLinks::Yes)
+        .await
+        .expect("id");
+    let link = p
+        .node_id(&child(&root, b"j"), FollowLinks::No)
+        .await
+        .expect("id");
+    let there = LocalProvider::rooted(outside.path())
+        .node_id(&LocalProvider::root(), FollowLinks::Yes)
+        .await
+        .expect("id");
+    assert!(
+        followed.is_some() && followed == there,
+        "{followed:?} vs {there:?}"
+    );
+    assert_ne!(link, followed);
+}
+
+/// #220 — removing a junction removes the LINK: what it points at is
+/// someone else's tree.
+#[cfg(windows)]
+#[tokio::test]
+async fn removing_a_junction_keeps_its_target() {
+    use norte_vfs::Provider;
+    let (p, root, base) = provider();
+    let outside = tempfile::tempdir().expect("tempdir");
+    std::fs::write(outside.path().join("kept.txt"), b"x").expect("write");
+    junction(&base, "j", outside.path());
+
+    let res = p.remove(&child(&root, b"j")).await;
+
+    assert!(res.is_ok(), "got {res:?}");
+    assert!(!base.join("j").exists() && std::fs::symlink_metadata(base.join("j")).is_err());
+    assert_eq!(
+        std::fs::read(outside.path().join("kept.txt")).expect("kept"),
+        b"x"
+    );
+}
+
 /// #221 — a file another program holds without sharing is `Busy`, the one
 /// category the engine retries without doubting whether it applied. Before,
 /// it was `Io { retryable: false }` and failed on the first attempt.
