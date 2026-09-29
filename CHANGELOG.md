@@ -7,6 +7,21 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Security
+
+- **wasmtime 46 → 48.0.3** for RUSTSEC-2026-0314: a plugin could panic the
+  host through a filesystem datetime overflow. The same release fixes
+  RUSTSEC-2026-0316 (past the fuel limit), which norte, capped by epoch
+  and not by fuel, was not exposed to. A plugin with `net`
+  still only connects to its allow-list: wasmtime-wasi 48 turns TCP off by
+  default and checks an implicit bind before each connect, and both are
+  granted exactly that far.
+
+### Changed
+
+- **MSRV is now Rust 1.95**, which wasmtime 48 requires. Still within the
+  stable-minus-two policy.
+
 ## [0.3.0-alpha.5] - 2026-09-26
 
 ### Added

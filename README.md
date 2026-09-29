@@ -8,7 +8,7 @@
 
 [![Release](https://img.shields.io/badge/release-v0.3.0--alpha.4-B7FF52?style=flat-square&labelColor=0b0f0c)](CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0%20%2B%20AGPL--3.0-B7FF52?style=flat-square&labelColor=0b0f0c)](#license)
-[![Rust](https://img.shields.io/badge/rust-1.94%2B-B7FF52?style=flat-square&logo=rust&logoColor=white&labelColor=0b0f0c)](rust-toolchain.toml)
+[![Rust](https://img.shields.io/badge/rust-1.95%2B-B7FF52?style=flat-square&logo=rust&logoColor=white&labelColor=0b0f0c)](rust-toolchain.toml)
 [![Platform](https://img.shields.io/badge/platform-Linux%20x86__64-B7FF52?style=flat-square&logo=linux&logoColor=white&labelColor=0b0f0c)](#install)
 [![MCP](https://img.shields.io/badge/MCP-governed-B7FF52?style=flat-square&labelColor=0b0f0c)](#agents-governed-not-trusted)
 [![Telemetry](https://img.shields.io/badge/telemetry-none,%20ever-B7FF52?style=flat-square&labelColor=0b0f0c)](#telemetry)
@@ -398,7 +398,7 @@ just hooks   # install the pre-push hook
 
 The gates run **locally** — GitHub Actions is disabled on this repository —
 so install the hook. The toolchain is pinned in `rust-toolchain.toml`; the
-MSRV is stable minus two (currently 1.94).
+MSRV is at most stable minus two (currently 1.95, which wasmtime 48 needs).
 
 Found a vulnerability? Please follow [SECURITY.md](SECURITY.md) instead of
 opening an issue.
