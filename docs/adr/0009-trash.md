@@ -61,11 +61,11 @@ Delete semantics must be unambiguous in the protocol, engine, and UI.
   a provider without trash.
 - Platform dependencies from the `trash` crate enter the local provider.
 - Native trash reports a single unit of progress. Some platform operations are
-  not cancellable after dispatch. In particular, **Windows may permanently
-  delete an item that the Recycle Bin cannot accept** (#25), and macOS's
-  `NSFileManager` gives no more say in where an item lands than Windows does.
-  The freedesktop cross-device case is no longer one of these — see the
-  amendment below.
+  not cancellable after dispatch. macOS's `NSFileManager` gives no say in
+  where an item lands. Windows permanently deleted an item the Recycle Bin
+  could not accept (#25) until the 2026-09-29 amendment; the freedesktop
+  cross-device case is no longer one of these either — see the amendments
+  below.
 
 ## Amendment, 2026-08-12: freedesktop is ours now, and it says where it put things
 
@@ -124,3 +124,32 @@ bump was required.
 Remote logical-trash retention, garbage collection, list, and restore remain
 future work, with `.norte-info` metadata already preserving the origin. Local
 platform exceptions remain tracked separately.
+
+## Amendment, 2026-09-29: Windows refuses what it would destroy (#25)
+
+The `trash` crate runs `IFileOperation` with `FOF_NO_UI`, which auto-answers
+the shell's "cannot be recycled, delete permanently?" with yes. Measured in the
+ADR 0157 VM: `trash::delete` on a `subst` drive returned `Ok(())` and the file
+was gone, not in the bin.
+
+`norte-vfs-local::trash_windows` now runs the operation itself, and refuses
+with `Unsupported`, touching nothing, at three points. All three were measured
+in the VM, and the registry was restored afterwards:
+
+| case | where it is seen |
+| --- | --- |
+| drive without a bin (`subst`), volume set to `NukeOnDelete` | `PreDeleteItem` arrives without `TSF_DELETE_RECYCLE_IF_POSSIBLE`; the sink aborts |
+| item of at least the volume's `MaxCapacity` | nowhere in the sink before the delete (`PreDeleteItem` says "recycle"), so the item is weighed first against `HKCU\…\BitBucket\Volume\{GUID}\MaxCapacity`; an unreadable limit refuses |
+| a name Win32 would read differently once `\\?\` is stripped (`foo.`, `...`, `NUL.txt`, a non-drive shape, ≥ 260 units) | `shell_name`, before anything; `foo.` would have recycled its neighbour `foo`, and `...` its parent |
+
+The only after-the-fact signal is `PostDeleteItem` without a recycled item. It
+turns an `Ok` into an error, so a trash is never journaled as recoverable when
+it was not.
+
+`Unsupported` is what the TUI already answers by re-offering `Permanent` with
+a warning. The window only reports the failure: that gap is parity, not
+safety. The crate stays for listing and restoring. The destination is still
+not reported (`Ok(None)`), though `PostDeleteItem` hands the sink the new
+item; naming it would let Windows answer `trash_restorable()` with yes.
+
+Rejected: pre-checking the drive type alone. It misses the other two rows.

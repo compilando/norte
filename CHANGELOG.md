@@ -7,6 +7,17 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Windows: moving to the Recycle Bin no longer destroys what the bin
+  cannot take** (#25, ADR 0009). An item on a drive without a bin (a
+  `subst`, a USB stick), over the bin's size limit, or on a volume set not
+  to use the bin was deleted permanently and reported as trashed. Now it is
+  left in place and the delete fails as `Unsupported`: the TUI re-offers a
+  permanent delete with a warning, the window reports the failure. A name
+  Win32 would read as another file (`foo.` next to `foo`, `...`, `NUL.txt`)
+  is refused the same way instead of recycling the neighbour or the parent.
+
 ## [0.3.0-alpha.5] - 2026-09-26
 
 ### Added

@@ -230,12 +230,14 @@ fn trash_delete(p: &Path) -> Result<(), trash::Error> {
     ctx.delete(p)
 }
 
-/// Native trash delegated to the `trash` crate (Recycle Bin, and the unix
-/// systems that aren't freedesktop). On freedesktop it does NOT exist: the
-/// trash is implemented by [`crate::trash_fdo`], which also knows how to say
-/// where it left the file.
+/// Native trash delegated to the `trash` crate (the unix systems that
+/// aren't freedesktop). On freedesktop the trash is [`crate::trash_fdo`],
+/// which also knows where it left the file; on Windows it is
+/// `trash_windows`, because the crate's Recycle Bin destroys what it cannot
+/// recycle (#25).
 #[cfg(not(any(
     target_os = "macos",
+    windows,
     all(unix, not(target_os = "ios"), not(target_os = "android")),
 )))]
 fn trash_delete(p: &Path) -> Result<(), trash::Error> {
@@ -1571,9 +1573,9 @@ impl Provider for LocalProvider {
         Ok(self.vpath_of(&dest))
     }
 
-    /// macOS and Windows: still delegates to the `trash` crate, which
-    /// doesn't expose where it put the file — hence the `Ok(None)`, and
-    /// hence why [`Provider::trash_restorable`] says no.
+    /// macOS delegates to the `trash` crate, Windows to `trash_windows`
+    /// (#25); neither says where it put the file — hence the `Ok(None)`,
+    /// and hence why [`Provider::trash_restorable`] says no.
     ///
     /// Reimplementing those two platforms' trash isn't the same as
     /// implementing a three-file spec: `NSFileManager` and the Recycle Bin
@@ -1605,7 +1607,10 @@ impl Provider for LocalProvider {
             // and the delete, PermissionDenied comes out instead of
             // NotFound.)
             std::fs::symlink_metadata(&native).map_err(|e| map_io(&e))?;
-            trash_delete(&native).map_err(|e| match e {
+            #[cfg(windows)]
+            let res = crate::trash_windows::recycle(&native);
+            #[cfg(not(windows))]
+            let res = trash_delete(&native).map_err(|e| match e {
                 trash::Error::CouldNotAccess { .. } => Error::PermissionDenied,
                 trash::Error::TargetedRoot => Error::InvalidPath,
                 // "No usable trash HERE" (mount without a topdir, no
@@ -1616,7 +1621,8 @@ impl Provider for LocalProvider {
                 // `blocking()` as Internal{panic}).
                 trash::Error::Unknown { .. } => Error::Unsupported,
                 _ => Error::Io { retryable: false },
-            })
+            });
+            res
         })
         .await?;
         // The OS's NATIVE trash: we don't expose a stable destination
