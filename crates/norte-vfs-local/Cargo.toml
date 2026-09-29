@@ -46,7 +46,17 @@ windows-sys = { workspace = true, features = [
     "Wdk_Storage_FileSystem",
     "Win32_Security",
     "Win32_System_IO",
+    # The Recycle Bin's `MaxCapacity` per volume (`trash_windows`, #25).
+    "Win32_System_Registry",
 ] }
+# `trash_windows` (#25): the Recycle Bin through `IFileOperation` with our
+# own progress sink.
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_UI_Shell",
+] }
+windows-core.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true

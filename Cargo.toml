@@ -323,6 +323,15 @@ unic-langid = "0.9"
 # sin REPLACE_EXISTING (windows-sys, el binding oficial de Microsoft).
 libc = "0.2"
 windows-sys = "0.61"
+# The Recycle Bin with a progress sink (#25): `IFileOperationProgressSink` is
+# a COM interface WE implement, which windows-sys cannot express. 0.62 is the
+# version `trash` already pulls, with `windows-implement`/`-interface`, so it
+# adds no crate to the graph and no compile we did not already pay (Windows
+# only). Microsoft's own binding, maintained with windows-sys. `#[implement]`
+# expands to `::windows_core` paths, hence the direct dependency. Patching
+# `trash` instead: its API has no place for a sink, and it would be a fork.
+windows = "0.62"
+windows-core = "0.62"
 # norte-core::volumes (plan 2026-08-10, Linux `statvfs`): `libc::statvfs` would
 # need `unsafe` FFI, which regla 5 forbids outside norte-vfs-local. rustix
 # wraps the same syscall safely (`rustix::fs::statvfs` takes any `path::Arg`,

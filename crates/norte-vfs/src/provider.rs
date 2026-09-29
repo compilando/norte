@@ -312,10 +312,12 @@ pub trait Provider: Send + Sync {
     /// a second one or losing the `reversal_ref`. Native/vanish trashes
     /// ignore it (no recoverable destination).
     ///
-    /// Known platform exceptions (ADR 0009, issues #25/#26): Windows can
-    /// DESTROY non-recyclable items (auto-answer to the nuke warning);
-    /// freedesktop cross-device degrades to internal copy+delete
-    /// (potentially long and uncancellable mid-way).
+    /// An implementation that cannot put THIS item somewhere recoverable
+    /// answers `Unsupported` and leaves it alone; it never falls back to a
+    /// permanent delete (Windows' Recycle Bin did, #25, ADR 0009).
+    /// Known platform exception (ADR 0009, #26): freedesktop cross-device
+    /// degrades to internal copy+delete (potentially long and uncancellable
+    /// mid-way).
     async fn trash(&self, p: &VPath, id: &crate::trash::TrashId) -> Result<Option<VPath>, Error> {
         let _ = (p, id);
         Err(Error::Unsupported)

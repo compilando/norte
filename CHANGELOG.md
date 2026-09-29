@@ -7,6 +7,26 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Changed
+
+- **MSRV is now Rust 1.95**, which wasmtime 48 requires. Still within the
+  stable-minus-two policy.
+
+### Fixed
+
+- **Windows: moving to the Recycle Bin no longer destroys what the bin
+  cannot take** (#25, ADR 0009). An item on a drive without a bin (a
+  `subst`, a USB stick), over the bin's size limit, or on a volume set not
+  to use the bin was deleted permanently and reported as trashed. Now it is
+  left in place and the delete fails as `Unsupported`: the TUI re-offers a
+  permanent delete with a warning, the window reports the failure. A name
+  Win32 would read as another file (`foo.` next to `foo`, `...`, `NUL.txt`)
+  is refused the same way instead of recycling the neighbour or the parent.
+- **Windows: a resumed copy whose next chunk is all zeros no longer fails**
+  (#222). The resumed partial was opened append-only, and Windows refuses
+  to extend such a handle. On NTFS the skipped zeros still take disk
+  space: the file is correct, not sparse.
+
 ### Security
 
 - **wasmtime 46 → 48.0.3** for RUSTSEC-2026-0314: a plugin could panic the
@@ -16,11 +36,6 @@ independently through `PROTOCOL_VERSION`.
   still only connects to its allow-list: wasmtime-wasi 48 turns TCP off by
   default and checks an implicit bind before each connect, and both are
   granted exactly that far.
-
-### Changed
-
-- **MSRV is now Rust 1.95**, which wasmtime 48 requires. Still within the
-  stable-minus-two policy.
 
 ## [0.3.0-alpha.5] - 2026-09-26
 

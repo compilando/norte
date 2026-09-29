@@ -230,12 +230,14 @@ fn trash_delete(p: &Path) -> Result<(), trash::Error> {
     ctx.delete(p)
 }
 
-/// Native trash delegated to the `trash` crate (Recycle Bin, and the unix
-/// systems that aren't freedesktop). On freedesktop it does NOT exist: the
-/// trash is implemented by [`crate::trash_fdo`], which also knows how to say
-/// where it left the file.
+/// Native trash delegated to the `trash` crate (the unix systems that
+/// aren't freedesktop). On freedesktop the trash is [`crate::trash_fdo`],
+/// which also knows where it left the file; on Windows it is
+/// `trash_windows`, because the crate's Recycle Bin destroys what it cannot
+/// recycle (#25).
 #[cfg(not(any(
     target_os = "macos",
+    windows,
     all(unix, not(target_os = "ios"), not(target_os = "android")),
 )))]
 fn trash_delete(p: &Path) -> Result<(), trash::Error> {
@@ -382,14 +384,20 @@ fn open_stable_staging(path: &std::path::Path) -> Result<(std::fs::File, u64), E
 /// staging's name is the same hole, and there it isn't closed with an
 /// `open` flag — it needs `NtCreateFile` with `FILE_OPEN_REPARSE_POINT`,
 /// which is what #220 and #217 have open.
+///
+/// Write access, not append: an append-only handle is refused `set_len`,
+/// which the sparse write needs (#222). The sink tracks its own position,
+/// so starting at the end is all append gave.
 #[cfg(windows)]
 fn open_stable_staging(path: &std::path::Path) -> Result<(std::fs::File, u64), Error> {
-    let file = std::fs::OpenOptions::new()
-        .append(true)
+    use std::io::{Seek, SeekFrom};
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
         .create(true)
+        .truncate(false)
         .open(path)
         .map_err(|e| map_io(&e))?;
-    let already = file.metadata().map_err(|e| map_io(&e))?.len();
+    let already = file.seek(SeekFrom::End(0)).map_err(|e| map_io(&e))?;
     Ok((file, already))
 }
 
@@ -1571,9 +1579,9 @@ impl Provider for LocalProvider {
         Ok(self.vpath_of(&dest))
     }
 
-    /// macOS and Windows: still delegates to the `trash` crate, which
-    /// doesn't expose where it put the file — hence the `Ok(None)`, and
-    /// hence why [`Provider::trash_restorable`] says no.
+    /// macOS delegates to the `trash` crate, Windows to `trash_windows`
+    /// (#25); neither says where it put the file — hence the `Ok(None)`,
+    /// and hence why [`Provider::trash_restorable`] says no.
     ///
     /// Reimplementing those two platforms' trash isn't the same as
     /// implementing a three-file spec: `NSFileManager` and the Recycle Bin
@@ -1605,7 +1613,10 @@ impl Provider for LocalProvider {
             // and the delete, PermissionDenied comes out instead of
             // NotFound.)
             std::fs::symlink_metadata(&native).map_err(|e| map_io(&e))?;
-            trash_delete(&native).map_err(|e| match e {
+            #[cfg(windows)]
+            let res = crate::trash_windows::recycle(&native);
+            #[cfg(not(windows))]
+            let res = trash_delete(&native).map_err(|e| match e {
                 trash::Error::CouldNotAccess { .. } => Error::PermissionDenied,
                 trash::Error::TargetedRoot => Error::InvalidPath,
                 // "No usable trash HERE" (mount without a topdir, no
@@ -1616,7 +1627,8 @@ impl Provider for LocalProvider {
                 // `blocking()` as Internal{panic}).
                 trash::Error::Unknown { .. } => Error::Unsupported,
                 _ => Error::Io { retryable: false },
-            })
+            });
+            res
         })
         .await?;
         // The OS's NATIVE trash: we don't expose a stable destination
@@ -2257,9 +2269,8 @@ fn same_node(_from_md: &std::fs::Metadata, _to_md: &std::fs::Metadata) -> bool {
 /// inside the data, it only refrains from writing the ones that already
 /// arrive whole.
 ///
-/// Windows: `set_len` on a handle opened only for APPEND can answer
-/// `ERROR_ACCESS_DENIED`, so the resume path with a zero chunk is
-/// unverified there (#222, blocked by CI like #220 and #221).
+/// Windows: NTFS allocates the extension unless the file is marked sparse,
+/// so there the zeros cost disk as if written; correct, not smaller (#222).
 pub(crate) fn write_maybe_sparse(
     file: &mut std::fs::File,
     pos: &mut u64,

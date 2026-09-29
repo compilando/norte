@@ -1292,6 +1292,9 @@ async fn a_directory_without_write_permission_still_gets_an_answer() {
     );
 }
 
+/// Unix only: Windows has no cache key and probes every time
+/// (`dir_identity`), which costs one `Metadata` there.
+#[cfg(unix)]
 #[tokio::test]
 async fn two_paths_to_one_directory_probe_once() {
     let (p, root, base) = provider();

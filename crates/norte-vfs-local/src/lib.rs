@@ -27,6 +27,9 @@ pub mod mounts_macos;
 pub mod mounts_windows;
 
 mod provider;
+/// Built everywhere so its tests run on every gate; only Windows calls it.
+#[cfg_attr(not(windows), allow(dead_code))]
+mod shell_name;
 /// Our own freedesktop trash (Linux/BSD): the only one that knows WHERE it
 /// left the file, which is what undo needs.
 #[cfg(all(
@@ -36,6 +39,9 @@ mod provider;
     not(target_os = "android")
 ))]
 mod trash_fdo;
+/// The Recycle Bin, refusing what the shell would destroy (#25).
+#[cfg(windows)]
+mod trash_windows;
 
 #[cfg(any(unix, windows))]
 pub use location::{
