@@ -15,6 +15,9 @@
 mod caps_at;
 #[cfg(unix)]
 mod confined;
+/// Writes that cannot escape their root, on Windows (#217, ADR 0160).
+#[cfg(windows)]
+mod confined_windows;
 #[cfg(unix)]
 mod identity;
 /// Bounded reading under a directory, for the plugin-host's `location`

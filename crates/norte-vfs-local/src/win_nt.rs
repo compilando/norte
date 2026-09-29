@@ -127,6 +127,89 @@ pub(crate) fn file_id(file: &File) -> std::io::Result<NodeId> {
     })
 }
 
+/// Why [`open_child`] did not hand back a file.
+#[derive(Debug)]
+pub(crate) enum ChildError {
+    /// The name is a link (a name surrogate), or became one while looked
+    /// at: never crossed.
+    Escapes,
+    Io(std::io::Error),
+}
+
+/// Opens `name` under `dir` without crossing a link.
+///
+/// A name-surrogate reparse point (symlink, junction) is never crossed,
+/// not even one that stays inside — the safe side of unix's "followed if
+/// it does not escape". Any other reparse point (`OneDrive`, dedup, WOF)
+/// redirects no name, so it is opened again through its filter and must be
+/// the SAME node as the one looked at.
+pub(crate) fn open_child(
+    dir: &File,
+    name: &[u16],
+    access: u32,
+    options: u32,
+) -> Result<File, ChildError> {
+    use std::os::windows::fs::MetadataExt as _;
+    use windows_sys::Wdk::Storage::FileSystem::{FILE_OPEN, FILE_OPEN_REPARSE_POINT};
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_REPARSE_POINT, FILE_READ_ATTRIBUTES,
+    };
+    let looked = nt_create(
+        dir,
+        name,
+        access | FILE_READ_ATTRIBUTES,
+        FILE_OPEN,
+        options | FILE_OPEN_REPARSE_POINT,
+        SHARE_ALL,
+    )
+    .map_err(ChildError::Io)?;
+    let md = looked.metadata().map_err(ChildError::Io)?;
+    if md.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0 {
+        return Ok(looked);
+    }
+    if md.file_type().is_symlink() {
+        return Err(ChildError::Escapes);
+    }
+    let through = nt_create(
+        dir,
+        name,
+        access | FILE_READ_ATTRIBUTES,
+        FILE_OPEN,
+        options,
+        SHARE_ALL,
+    )
+    .map_err(ChildError::Io)?;
+    if solid_id(&through).map_err(ChildError::Io)? != solid_id(&looked).map_err(ChildError::Io)? {
+        return Err(ChildError::Escapes);
+    }
+    Ok(through)
+}
+
+/// How many names (hard links) the open file has.
+#[allow(unsafe_code)]
+pub(crate) fn link_count(file: &File) -> std::io::Result<u32> {
+    // SAFETY: `BY_HANDLE_FILE_INFORMATION` is plain integers, so all-zeros
+    // is a valid value, and the call below overwrites it before it is read.
+    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+    // SAFETY: the handle is alive for the call; the buffer is one
+    // `BY_HANDLE_FILE_INFORMATION`.
+    let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle(), &raw mut info) };
+    if ok == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(info.nNumberOfLinks)
+}
+
+/// [`file_id`], refusing an index of 0 (some SMB servers): no identity at
+/// all, and every comparison would pass.
+pub(crate) fn solid_id(file: &File) -> std::io::Result<NodeId> {
+    let id = file_id(file)?;
+    if id.index == 0 {
+        return Err(std::io::Error::other("the volume gives no file identity"));
+    }
+    Ok(id)
+}
+
 /// A component as UTF-16, or `None` for what the NT parser would not read
 /// as ONE plain name: `\` is a separator and `:` an alternate data stream.
 pub(crate) fn wide_component(bytes: &[u8]) -> Option<Vec<u16>> {
@@ -144,10 +227,6 @@ pub(crate) fn wide_component(bytes: &[u8]) -> Option<Vec<u16>> {
 /// wrapper refuses a `RootDirectory` with `ERROR_INVALID_PARAMETER`
 /// (measured), and the handle is the whole point.
 #[allow(unsafe_code)]
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "#217: the confined root publishes with it")
-)]
 pub(crate) fn rename_beneath(
     file: &File,
     dir: &File,
@@ -198,10 +277,6 @@ pub(crate) fn rename_beneath(
 /// handle closes, even if others are open (POSIX semantics). It must have
 /// been opened with `DELETE` access.
 #[allow(unsafe_code)]
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "#217: the confined root deletes with it")
-)]
 pub(crate) fn delete_by_handle(file: &File) -> std::io::Result<()> {
     let info = FILE_DISPOSITION_INFO_EX {
         Flags: FILE_DISPOSITION_FLAG_DELETE | FILE_DISPOSITION_FLAG_POSIX_SEMANTICS,

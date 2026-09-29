@@ -240,26 +240,10 @@ fn open_child(
     options: u32,
 ) -> Result<File, LocationError> {
     let wide = wide_name(name)?;
-    let looked = nt_open(
-        dir,
-        &wide,
-        access | FILE_READ_ATTRIBUTES,
-        options | FILE_OPEN_REPARSE_POINT,
-    )
-    .map_err(|e| from_io(&e))?;
-    let md = looked.metadata().map_err(|e| from_io(&e))?;
-    if md.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0 {
-        return Ok(looked);
-    }
-    if md.file_type().is_symlink() {
-        return Err(LocationError::Escapes);
-    }
-    let through =
-        nt_open(dir, &wide, access | FILE_READ_ATTRIBUTES, options).map_err(|e| from_io(&e))?;
-    if dir_id(&through)? != dir_id(&looked)? {
-        return Err(LocationError::Escapes);
-    }
-    Ok(through)
+    crate::win_nt::open_child(dir, &wide, access, options).map_err(|e| match e {
+        crate::win_nt::ChildError::Escapes => LocationError::Escapes,
+        crate::win_nt::ChildError::Io(e) => from_io(&e),
+    })
 }
 
 /// An existing name relative to `dir`, sharing everything (`crate::win_nt`).
