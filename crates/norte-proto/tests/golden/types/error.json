@@ -11,6 +11,9 @@
     "kind": "approval_gone",
     "reason": "unknown"
   },
+  "busy": {
+    "kind": "busy"
+  },
   "cancelled": {
     "kind": "cancelled"
   },

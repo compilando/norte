@@ -243,6 +243,7 @@ err-conflict = conflict at the destination
 err-provider-unavailable = the location is unavailable (retryable)
 err-no-space = no space left on destination
 err-io = I/O error
+err-busy = another program has the file open; close it and retry
 err-cancelled = cancelled
 err-policy-denied = denied by policy
 err-encoding-loss = the operation would lose data in transcoding

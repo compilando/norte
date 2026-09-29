@@ -1292,6 +1292,36 @@ async fn a_directory_without_write_permission_still_gets_an_answer() {
     );
 }
 
+/// #221 — a file another program holds without sharing is `Busy`, the one
+/// category the engine retries without doubting whether it applied. Before,
+/// it was `Io { retryable: false }` and failed on the first attempt.
+#[cfg(windows)]
+#[tokio::test]
+async fn a_file_held_without_sharing_is_busy() {
+    use norte_vfs::Provider;
+    use std::os::windows::fs::OpenOptionsExt;
+    let (p, root, base) = provider();
+    std::fs::write(base.join("held.txt"), b"x").expect("write");
+    let _held = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(base.join("held.txt"))
+        .expect("hold it");
+
+    let res = p.read(&child(&root, b"held.txt"), None).await;
+
+    assert!(
+        matches!(res, Err(norte_proto::Error::Busy)),
+        "got {:?}",
+        res.err()
+    );
+    let gone = p.remove(&child(&root, b"held.txt")).await;
+    assert!(
+        matches!(gone, Err(norte_proto::Error::Busy)),
+        "got {gone:?}"
+    );
+}
+
 /// Unix only: Windows has no cache key and probes every time
 /// (`dir_identity`), which costs one `Metadata` there.
 #[cfg(unix)]

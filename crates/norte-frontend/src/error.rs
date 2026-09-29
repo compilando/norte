@@ -57,6 +57,9 @@ pub fn error_key(e: &Error) -> &'static str {
         Error::ProviderUnavailable { .. } => "err-provider-unavailable",
         Error::NoSpace => "err-no-space",
         Error::Io { .. } => "err-io",
+        // 0.85.0 (#221): what the reader can act on is "close the program
+        // that has it open"; "I/O error" would not tell them.
+        Error::Busy => "err-busy",
         Error::Cancelled => "err-cancelled",
         Error::PolicyDenied { .. } => "err-policy-denied",
         Error::EncodingLoss => "err-encoding-loss",

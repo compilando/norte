@@ -7,6 +7,15 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Added
+
+- **Protocol 0.85.0: `Error::Busy`**, a file another program keeps open
+  without sharing it (#221). On Windows a copy, move or delete that meets
+  one no longer fails on the first attempt: the engine retries it (100,
+  200, 400 ms), and if it is still held the message says so and to close
+  that program, instead of "I/O error". A 0.84 client shows "unknown
+  error".
+
 ### Changed
 
 - **MSRV is now Rust 1.95**, which wasmtime 48 requires. Still within the

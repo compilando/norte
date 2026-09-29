@@ -569,6 +569,16 @@ fn escapes_root_round_trips_and_a_future_subtype_still_degrades() {
     );
 }
 
+/// The 0.85.0 category, pinned by name: the Windows provider emits it and
+/// the frontends translate it, so a rename would pass the round-trip and
+/// strand both.
+#[test]
+fn busy_round_trips_as_its_own_kind() {
+    let json = serde_json::to_value(Error::Busy).expect("serializes");
+    assert_eq!(json, serde_json::json!({ "kind": "busy" }));
+    assert_eq!(roundtrip(&Error::Busy), Error::Busy);
+}
+
 /// The 0.84.0 token, pinned by name like its two siblings.
 ///
 /// The fixture and the schema↔golden cross-check also cover it, but a named
@@ -1423,10 +1433,12 @@ fn current_version_window() {
     // anymore. And even being additive, the window SHIFTS: a 0.83 client
     // cannot offer "recreate the folder and retry", because it does not
     // know that is what happened.
-    assert!(version_compatible(PROTOCOL_VERSION, "0.84.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.83.0"), "N-1");
+    // 0.85.0: `Error::Busy`. A 0.84 client reads "unknown error" for a
+    // file another program holds; the daemon already retried it.
+    assert!(version_compatible(PROTOCOL_VERSION, "0.85.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.84.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.82.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.83.9"),
         "N-2 outside the window"
     );
 }

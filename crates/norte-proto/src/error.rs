@@ -222,6 +222,16 @@ pub enum Error {
         /// `true` if repeating the operation might work.
         retryable: bool,
     },
+    /// Another program holds the file and will not share it (Windows'
+    /// sharing and lock violations; #221, since 0.85.0).
+    ///
+    /// Exists because the ordinary case is short — an antivirus, a backup
+    /// agent, an editor saving — and the engine retries it; what outlasts
+    /// the retries is a program keeping the file open, which the reader can
+    /// act on (close it) and a generic `Io` does not tell them. Unlike `Io`,
+    /// the operation did NOT apply: it never leaves an effect in doubt.
+    #[error("the file is in use by another program")]
+    Busy,
     /// Cancelled by the user or by shutdown; clean state guaranteed.
     #[error("cancelled")]
     Cancelled,
