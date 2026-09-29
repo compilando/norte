@@ -384,14 +384,20 @@ fn open_stable_staging(path: &std::path::Path) -> Result<(std::fs::File, u64), E
 /// staging's name is the same hole, and there it isn't closed with an
 /// `open` flag — it needs `NtCreateFile` with `FILE_OPEN_REPARSE_POINT`,
 /// which is what #220 and #217 have open.
+///
+/// Write access, not append: an append-only handle is refused `set_len`,
+/// which the sparse write needs (#222). The sink tracks its own position,
+/// so starting at the end is all append gave.
 #[cfg(windows)]
 fn open_stable_staging(path: &std::path::Path) -> Result<(std::fs::File, u64), Error> {
-    let file = std::fs::OpenOptions::new()
-        .append(true)
+    use std::io::{Seek, SeekFrom};
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
         .create(true)
+        .truncate(false)
         .open(path)
         .map_err(|e| map_io(&e))?;
-    let already = file.metadata().map_err(|e| map_io(&e))?.len();
+    let already = file.seek(SeekFrom::End(0)).map_err(|e| map_io(&e))?;
     Ok((file, already))
 }
 
@@ -2263,9 +2269,8 @@ fn same_node(_from_md: &std::fs::Metadata, _to_md: &std::fs::Metadata) -> bool {
 /// inside the data, it only refrains from writing the ones that already
 /// arrive whole.
 ///
-/// Windows: `set_len` on a handle opened only for APPEND can answer
-/// `ERROR_ACCESS_DENIED`, so the resume path with a zero chunk is
-/// unverified there (#222, blocked by CI like #220 and #221).
+/// Windows: NTFS allocates the extension unless the file is marked sparse,
+/// so there the zeros cost disk as if written; correct, not smaller (#222).
 pub(crate) fn write_maybe_sparse(
     file: &mut std::fs::File,
     pos: &mut u64,

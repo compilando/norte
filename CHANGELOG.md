@@ -17,6 +17,10 @@ independently through `PROTOCOL_VERSION`.
   permanent delete with a warning, the window reports the failure. A name
   Win32 would read as another file (`foo.` next to `foo`, `...`, `NUL.txt`)
   is refused the same way instead of recycling the neighbour or the parent.
+- **Windows: a resumed copy whose next chunk is all zeros no longer fails**
+  (#222). The resumed partial was opened append-only, and Windows refuses
+  to extend such a handle. On NTFS the skipped zeros still take disk
+  space: the file is correct, not sparse.
 
 ## [0.3.0-alpha.5] - 2026-09-26
 
