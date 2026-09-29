@@ -1410,7 +1410,22 @@ use crate::{
 /// the trash (ADR 0151). This does not improve a message, it changes a
 /// "fact" that was a lie into a failure — and there is nothing a client
 /// can compensate for on its own.
-pub const PROTOCOL_VERSION: &str = "0.84.0";
+/// # 0.85.0 — a file another program holds (`Error::Busy`)
+///
+/// A new error category for a file that another program keeps open
+/// without sharing it — on Windows, `ERROR_SHARING_VIOLATION` and
+/// `ERROR_LOCK_VIOLATION` (#221). The daemon retries it with the usual
+/// backoff; what reaches the client is the case that outlasted the retries.
+///
+/// A **0.84 client against a 0.85 daemon** degrades it to
+/// [`Error::Unknown`](crate::Error::Unknown) and shows "unknown error". It
+/// loses the sentence and nothing else: the retries happen in the daemon,
+/// and the file was not touched.
+///
+/// A **0.85 client against a 0.84 daemon** does not negotiate
+/// ([`version_compatible`]). That daemon answered a held file with
+/// `Io { retryable: false }` on the first attempt, without retrying.
+pub const PROTOCOL_VERSION: &str = "0.85.0";
 
 /// `initialize` — MANDATORY handshake before any other method
 /// (ADR 0011). Rejects incompatible versions (see

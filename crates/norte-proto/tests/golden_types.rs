@@ -353,6 +353,7 @@ fn golden_error() {
             ("no_space", Error::NoSpace),
             ("io_retryable", Error::Io { retryable: true }),
             ("io_fatal", Error::Io { retryable: false }),
+            ("busy", Error::Busy),
             ("cancelled", Error::Cancelled),
             (
                 "policy_denied",
@@ -4966,7 +4967,8 @@ fn method_names_frozen() {
     // 0152, #371); a connection-failure reason, `rsa-too-small` (#370); and
     // `unusable` in `connection.list`, for the entries the daemon failed to
     // read (#365).
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.84.0");
+    // 0.85.0: no new method. An error category, `Error::Busy` (#221).
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.85.0");
 }
 
 /// An [`Entry`] for a comparison row: the four fields the panel paints,

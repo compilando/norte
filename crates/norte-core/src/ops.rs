@@ -716,8 +716,18 @@ pub(crate) async fn open_dest_root(
 fn is_transient(e: &Error) -> bool {
     matches!(
         e,
-        Error::ProviderUnavailable { retryable: true } | Error::Io { retryable: true }
+        Error::ProviderUnavailable { retryable: true }
+            | Error::Io { retryable: true }
+            | Error::Busy
     )
+}
+
+/// Can the failed mutation have applied anyway? A transient can (a reply
+/// lost after the effect, #17); `Busy` cannot — the file was never opened,
+/// and counting it as doubt would turn a later `NotFound` (someone else
+/// removed it) into "we did" in the journal.
+fn sows_doubt(e: &Error) -> bool {
+    is_transient(e) && !matches!(e, Error::Busy)
 }
 
 /// Waits out attempt `attempt`'s backoff, cancelable DURING the wait (rule 3:
@@ -850,13 +860,13 @@ where
             // exhausting the retries and cancelling are exactly the two
             // exits through which #186 used to escape.
             Err(e) if is_transient(&e) => {
-                ambiguous = true;
+                ambiguous |= sows_doubt(&e);
                 if attempt >= MAX_RETRIES || cancel.is_cancelled() {
-                    return Err((e, Ambiguity::MaybeApplied));
+                    return Err((e, doubtful(ambiguous)));
                 }
                 backoff_or_cancel(cancel, attempt)
                     .await
-                    .map_err(|e| (e, Ambiguity::MaybeApplied))?;
+                    .map_err(|e| (e, doubtful(ambiguous)))?;
                 attempt += 1;
             }
             Err(e) => return Err((e, doubtful(ambiguous))),
@@ -913,13 +923,13 @@ pub(crate) async fn trash_retrying_amb(
             // exhausting the retries and cancelling are exactly the two
             // exits through which #186 used to escape.
             Err(e) if is_transient(&e) => {
-                ambiguous = true;
+                ambiguous |= sows_doubt(&e);
                 if attempt >= MAX_RETRIES || cancel.is_cancelled() {
-                    return Err((e, Ambiguity::MaybeApplied));
+                    return Err((e, doubtful(ambiguous)));
                 }
                 backoff_or_cancel(cancel, attempt)
                     .await
-                    .map_err(|e| (e, Ambiguity::MaybeApplied))?;
+                    .map_err(|e| (e, doubtful(ambiguous)))?;
                 attempt += 1;
             }
             Err(e) => return Err((e, doubtful(ambiguous))),
@@ -977,7 +987,7 @@ pub(crate) async fn mkdir_retrying(
                 };
             }
             Err(e) if attempt < MAX_RETRIES && is_transient(&e) && !cancel.is_cancelled() => {
-                ambiguous = true;
+                ambiguous |= sows_doubt(&e);
                 backoff_or_cancel(cancel, attempt).await?;
                 attempt += 1;
             }
@@ -1030,7 +1040,7 @@ pub(crate) async fn symlink_retrying(
                 };
             }
             Err(e) if attempt < MAX_RETRIES && is_transient(&e) && !cancel.is_cancelled() => {
-                ambiguous = true;
+                ambiguous |= sows_doubt(&e);
                 backoff_or_cancel(cancel, attempt).await?;
                 attempt += 1;
             }
@@ -1228,7 +1238,9 @@ async fn rename_retrying(
                 };
             }
             e if attempt < MAX_RETRIES && is_transient(&e) && !cancel.is_cancelled() => {
-                last_transient = Some(e);
+                if sows_doubt(&e) {
+                    last_transient = Some(e);
+                }
                 backoff_or_cancel(cancel, attempt).await?;
                 attempt += 1;
             }
@@ -2383,7 +2395,7 @@ async fn copy_file(
         // the fix): a provider whose `stat` does not report `size` (`None`),
         // or a transient episode that also exhausts the `stat`, do not
         // confirm and fall back to the failure path.
-        Err(e) if is_transient(&e) => {
+        Err(e) if sows_doubt(&e) => {
             // And the post-transient disambiguation too (#218): claiming as
             // ours a write that is actually outside the root would put a
             // `Created` in the journal for someone else's file, and undo
@@ -4317,6 +4329,59 @@ mod tests {
     use norte_proto::{Entry, Error};
 
     use super::{is_descendant_folded, rename_auto_candidate, same_node_heuristic};
+
+    /// Runs `delete_loop` over scripted answers, one per attempt.
+    async fn delete_answers(
+        answers: Vec<Result<(), Error>>,
+    ) -> Result<(), (Error, super::Ambiguity)> {
+        let answers = std::sync::Mutex::new(answers.into_iter());
+        let cancel = tokio_util::sync::CancellationToken::new();
+        super::delete_loop(
+            || {
+                let next = answers.lock().expect("lock").next().expect("scripted");
+                async move { next }
+            },
+            &cancel,
+        )
+        .await
+    }
+
+    /// #221 — a file another program holds is retried like any transient,
+    /// and the delete goes through once it is released.
+    #[tokio::test]
+    async fn a_busy_file_is_retried() {
+        let res = delete_answers(vec![Err(Error::Busy), Err(Error::Busy), Ok(())]).await;
+        assert_eq!(res, Ok(()));
+    }
+
+    /// #221 — but `Busy` means the delete never ran. A `NotFound` after it
+    /// is someone else's doing, and reading it as "gone already" (what a
+    /// transient allows, #186) would journal a delete we never made.
+    #[tokio::test]
+    async fn busy_sows_no_doubt() {
+        let res = delete_answers(vec![Err(Error::Busy), Err(Error::NotFound)]).await;
+        assert_eq!(res, Err((Error::NotFound, super::Ambiguity::NotApplied)));
+
+        let held = delete_answers(vec![Err(Error::Busy); 4]).await;
+        assert_eq!(held, Err((Error::Busy, super::Ambiguity::NotApplied)));
+
+        // Doubt already sown stays: a `Busy` after it does not clear it.
+        let mixed = delete_answers(vec![
+            Err(Error::Io { retryable: true }),
+            Err(Error::Busy),
+            Err(Error::NotFound),
+        ])
+        .await;
+        assert_eq!(mixed, Ok(()));
+
+        // A real transient still sows it, as before.
+        let lost = delete_answers(vec![
+            Err(Error::Io { retryable: true }),
+            Err(Error::NotFound),
+        ])
+        .await;
+        assert_eq!(lost, Ok(()));
+    }
 
     /// #269 — the "inside itself" guard compared prefixes BYTE FOR BYTE, and
     /// on a folding volume (APFS, NTFS, exFAT, an SMB/SFTP against a folding

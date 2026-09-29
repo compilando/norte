@@ -485,6 +485,12 @@ pub(crate) fn map_io(e: &std::io::Error) -> Error {
     if e.raw_os_error() == Some(libc::EILSEQ) {
         return Error::InvalidPath;
     }
+    // ERROR_SHARING_VIOLATION / ERROR_LOCK_VIOLATION: another program holds
+    // the file without sharing it (#221).
+    #[cfg(windows)]
+    if matches!(e.raw_os_error(), Some(32 | 33)) {
+        return Error::Busy;
+    }
     match e.kind() {
         K::NotFound => Error::NotFound,
         K::PermissionDenied => Error::PermissionDenied,

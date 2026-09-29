@@ -244,6 +244,7 @@ err-conflict = conflicto en el destino
 err-provider-unavailable = la ubicación no está disponible (reintentable)
 err-no-space = sin espacio en el destino
 err-io = error de E/S
+err-busy = otro programa tiene el fichero abierto; ciérralo y reintenta
 err-cancelled = cancelado
 err-policy-denied = denegado por la política
 err-encoding-loss = la operación perdería datos al transcodificar
