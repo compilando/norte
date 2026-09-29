@@ -103,7 +103,7 @@ lto = "thin"
 [workspace.package]
 version = "0.3.0-alpha.5"
 edition = "2024"
-rust-version = "1.94"
+rust-version = "1.95"
 repository = "https://github.com/compilando/norte"
 authors = ["The norte Authors"]
 

@@ -35,12 +35,14 @@ sha2.workspace = true
 # dep of this phase — it runs the WASM components of M4-P1's model.
 # default-features=false + runtime/component-model/cranelift/std: only the
 # execution engine, the component model (WIT), the cranelift compiler and
-# std; wat/wasm parsing, gc, etc. are left out. wasmtime-wasi 46 shares a
-# release train with wasmtime 46 (the major is kept in sync): preview2 (p2)
+# std; wat/wasm parsing, gc, etc. are left out. wasmtime-wasi shares a
+# release train with wasmtime (the major is kept in sync): preview2 (p2)
 # by default. anyhow is required by wasmtime's API (its Results are
-# anyhow::Error).
-wasmtime = { version = "46", default-features = false, features = ["runtime", "component-model", "cranelift", "std"] }
-wasmtime-wasi = "46"
+# anyhow::Error). 48.0.3 is the floor: below it a guest can panic the host
+# (RUSTSEC-2026-0314). RUSTSEC-2026-0316 (past the fuel limit) is fixed by
+# the same release and does not reach us: the CPU cap is the epoch, not fuel.
+wasmtime = { version = "48.0.3", default-features = false, features = ["runtime", "component-model", "cranelift", "std"] }
+wasmtime-wasi = "48.0.3"
 # Reads a component's imports WITHOUT compiling it (ADR 0094): the catalog
 # notes which `norte:*@version` each guest was compiled against and lists as
 # broken — with both versions — the one that does not match, instead of

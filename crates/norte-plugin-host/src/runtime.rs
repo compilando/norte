@@ -484,6 +484,27 @@ pub struct PluginRuntime {
     compiled: std::sync::Mutex<Compiled>,
 }
 
+/// What a guest holding `net` may do with `addr`: connect to an allowed
+/// host, and nothing else.
+fn net_permits(
+    allowed: &std::collections::HashSet<String>,
+    addr: std::net::SocketAddr,
+    use_: wasmtime_wasi::sockets::SocketAddrUse,
+) -> bool {
+    use wasmtime_wasi::sockets::SocketAddrUse;
+    match use_ {
+        SocketAddrUse::TcpConnect => {
+            allowed.contains(&addr.ip().to_string()) || allowed.contains(&addr.to_string())
+        }
+        // Since wasmtime-wasi 48 a `connect` first asks for the OS's
+        // implicit bind, as `0.0.0.0:0`/`[::]:0`. An explicit bind there
+        // passes too and is as inert: `listen` is a separate `TcpListen`,
+        // refused below, even on an already-bound socket.
+        SocketAddrUse::TcpBind => addr.ip().is_unspecified() && addr.port() == 0,
+        _ => false,
+    }
+}
+
 /// The sha256 of some bytes: the cache key and, in hex, the catalog's
 /// fingerprint ([`crate::wasm_digest_of`]).
 fn digest_bytes(bytes: &[u8]) -> [u8; 32] {
@@ -1085,13 +1106,14 @@ impl PluginRuntime {
             // stage 3b's wiring.
             let allowed: std::collections::HashSet<String> = net.hosts.iter().cloned().collect();
             ctx_builder.socket_addr_check(move |addr, use_| {
-                let permitted = matches!(use_, wasmtime_wasi::sockets::SocketAddrUse::TcpConnect)
-                    && (allowed.contains(&addr.ip().to_string())
-                        || allowed.contains(&addr.to_string()));
+                let permitted = net_permits(&allowed, addr, use_);
                 Box::pin(async move { permitted })
             });
             ctx_builder.allow_ip_name_lookup(false);
             ctx_builder.allow_udp(false);
+            // Off by default since wasmtime-wasi 48; without `net` it stays
+            // off, a second lock behind the address check.
+            ctx_builder.allow_tcp(true);
         }
         let ctx = ctx_builder.build();
         // Per-store linear memory limit (closes M4-P2b): a guest cannot
@@ -2237,6 +2259,38 @@ impl ColumnsInstance {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `net` connects to its allow-list and does nothing else: the implicit
+    /// bind wasmtime-wasi 48 checks before a `connect` must not become a
+    /// way to listen or to bind a chosen port.
+    #[test]
+    fn net_permits_connecting_and_nothing_else() {
+        use wasmtime_wasi::sockets::SocketAddrUse as U;
+        let allowed: std::collections::HashSet<String> =
+            ["10.0.0.5".to_owned(), "10.0.0.6:21".to_owned()].into();
+        let a = |s: &str| s.parse::<std::net::SocketAddr>().expect("addr");
+
+        assert!(net_permits(&allowed, a("10.0.0.5:4242"), U::TcpConnect));
+        assert!(net_permits(&allowed, a("10.0.0.6:21"), U::TcpConnect));
+        assert!(!net_permits(&allowed, a("10.0.0.6:22"), U::TcpConnect));
+        assert!(!net_permits(&allowed, a("10.0.0.7:21"), U::TcpConnect));
+
+        assert!(net_permits(&allowed, a("0.0.0.0:0"), U::TcpBind));
+        assert!(net_permits(&allowed, a("[::]:0"), U::TcpBind));
+        assert!(!net_permits(&allowed, a("0.0.0.0:8080"), U::TcpBind));
+        assert!(!net_permits(&allowed, a("127.0.0.1:0"), U::TcpBind));
+
+        for (addr, use_) in [
+            ("0.0.0.0:0", U::TcpListen),
+            ("10.0.0.5:4242", U::TcpListen),
+            ("10.0.0.5:4242", U::TcpAccept),
+            ("0.0.0.0:0", U::UdpBind),
+            ("10.0.0.5:53", U::UdpSend),
+            ("10.0.0.5:53", U::UdpReceive),
+        ] {
+            assert!(!net_permits(&allowed, a(addr), use_), "{addr} {use_:?}");
+        }
+    }
 
     #[test]
     fn cap_return_value_passes_under_the_cap() {

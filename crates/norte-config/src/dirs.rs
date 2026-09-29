@@ -114,7 +114,7 @@ pub fn user_config_dir() -> Option<PathBuf> {
         // cwd must never decide where secrets live (security review, ADR
         // 0035 C1). `home_dir()` was deprecated 1.29–1.84 over an
         // inconsistent Windows implementation and un-deprecated in 1.85
-        // once that was fixed; the workspace MSRV (1.94) postdates that.
+        // once that was fixed; the workspace MSRV postdates that.
         #[allow(deprecated)]
         std::env::home_dir().map(|h| h.join(".config").join("norte"))
     })
