@@ -23,6 +23,12 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **Windows: a junction can be deleted, and deleting it never touches
+  what it points at** (#220). It was refused as "permission denied".
+  Junctions are symlinks to norte everywhere else too — listed, skipped
+  or followed with the same cycle detection — and `SymlinkPolicy`'s
+  documentation now says so.
+
 - **Windows: moving to the Recycle Bin no longer destroys what the bin
   cannot take** (#25, ADR 0009). An item on a drive without a bin (a
   `subst`, a USB stick), over the bin's size limit, or on a volume set not

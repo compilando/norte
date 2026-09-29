@@ -63,6 +63,14 @@ pub enum CollisionPolicy {
 /// In M1, [`Follow`](Self::Follow) on a symlink to a DIRECTORY returns
 /// `Unsupported` (following dirs requires cycle detection — M2).
 ///
+/// On Windows a junction or mount point IS a symlink here, like a
+/// directory symlink (#220): listed as one, skipped by `Skip`, walked by
+/// `Follow` with the same cycle detection, and removed as the link, never
+/// through it. `Preserve` into a Windows destination answers `Unsupported`:
+/// creating links there needs a privilege the provider does not assume.
+/// Any other reparse point (a cloud placeholder, a deduplicated file) is
+/// content, not a link, and is read through — which may download it.
+///
 /// ```
 /// use norte_proto::SymlinkPolicy;
 /// let p: SymlinkPolicy = serde_json::from_str(r#""preserve""#).unwrap();

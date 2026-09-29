@@ -5588,7 +5588,7 @@
       ]
     },
     "SymlinkPolicy": {
-      "description": "What to do with symlinks when copying (spec §17.9; ADR 0005).\n\nIn M1, [`Follow`](Self::Follow) on a symlink to a DIRECTORY returns\n`Unsupported` (following dirs requires cycle detection — M2).\n\n```\nuse norte_proto::SymlinkPolicy;\nlet p: SymlinkPolicy = serde_json::from_str(r#\"\"preserve\"\"#).unwrap();\nassert_eq!(p, SymlinkPolicy::Preserve);\nassert_eq!(SymlinkPolicy::default(), SymlinkPolicy::Preserve);\n```",
+      "description": "What to do with symlinks when copying (spec §17.9; ADR 0005).\n\nIn M1, [`Follow`](Self::Follow) on a symlink to a DIRECTORY returns\n`Unsupported` (following dirs requires cycle detection — M2).\n\nOn Windows a junction or mount point IS a symlink here, like a\ndirectory symlink (#220): listed as one, skipped by `Skip`, walked by\n`Follow` with the same cycle detection, and removed as the link, never\nthrough it. `Preserve` into a Windows destination answers `Unsupported`:\ncreating links there needs a privilege the provider does not assume.\nAny other reparse point (a cloud placeholder, a deduplicated file) is\ncontent, not a link, and is read through — which may download it.\n\n```\nuse norte_proto::SymlinkPolicy;\nlet p: SymlinkPolicy = serde_json::from_str(r#\"\"preserve\"\"#).unwrap();\nassert_eq!(p, SymlinkPolicy::Preserve);\nassert_eq!(SymlinkPolicy::default(), SymlinkPolicy::Preserve);\n```",
       "oneOf": [
         {
           "const": "follow",
