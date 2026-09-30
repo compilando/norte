@@ -43,6 +43,10 @@ keymap = [
     # The terminal panel (#362), with norte's common chord. See
     # orthodox.toml for why `ctrl+alt+s` and not `ctrl+alt+t`.
     { on = ["ctrl+alt+s"], run = "layout.terminal" },
+    # The live shell behind the panels (#142): the orthodox chord. CUA's
+    # Ctrl+O ("open a file") has no meaning in a file manager's panel, where
+    # opening is Enter.
+    { on = ["ctrl+o"], run = "app.toggle-panels" },
     # The rest of the `layout.*` family, with the same chords as in the
     # other six presets: see the long note in `orthodox.toml`.
     { on = ["alt+x"], run = "layout.close-slot" },

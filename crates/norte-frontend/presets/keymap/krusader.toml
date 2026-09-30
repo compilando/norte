@@ -22,6 +22,12 @@
 # other six presets bind F9 to the menu (spec 2026-09-10), but a Krusader
 # reader has F9 in the fingers as the terminal, and the menu keeps `alt+m`.
 #
+# `app.toggle-panels` (the live shell behind the panels, #142) is unbound:
+# Krusader docks a terminal emulator BESIDE its panels (`layout.terminal`
+# here) and has no shell behind them, so there is no chord to transcribe.
+# It is in the Panels menu, which declines without a key: with no lone
+# chord there is no way back from the shell.
+#
 # Omitted families (norte has no concept): Alt+F1..F12 and Ctrl+F1..F12 /
 # Ctrl+Shift+F1..F12 are explicitly "Standard (Plasma) key-bindings" per the
 # source itself, not Krusader's — never Krusader's to bind (drive selection

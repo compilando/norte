@@ -709,7 +709,6 @@ msg-shell-press-key = [norte] pulsa una tecla para volver
 msg-subshell-no-key = ata app.toggle-panels a una tecla suelta para usar el shell: una secuencia no puede devolver los paneles
 # El subshell es POSIX: un pty, un `cd` y los ganchos de prompt de bash/zsh/
 # fish. En Windows se declina en vez de dejarlo a medias.
-msg-subshell-not-here = el shell vivo detrás de los paneles no está disponible en este sistema
 # El shell dijo dónde está y norte no ha podido ir. La ruta NO se interpola: es
 # lo que el shell imprimió, y un seguimiento que a veces no pasa sin decir nada
 # es indistinguible de uno roto.

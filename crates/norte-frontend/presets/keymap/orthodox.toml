@@ -61,6 +61,11 @@ keymap = [
     # it and, above all, cannot leave it. The second press returns focus and
     # leaves the shell ALIVE; closing it is `layout.close-slot`.
     { on = ["ctrl+alt+s"], run = "layout.terminal" },
+    # The live shell behind the panels (#142, ADR 0084): Midnight
+    # Commander's own Ctrl+O. Unbound here until 2026-09-30, so the subshell
+    # had no key in the default preset — and with no lone chord there is no
+    # way back, so the menu entry declined as well.
+    { on = ["ctrl+o"], run = "app.toggle-panels" },
     # The rest of the `layout.*` family, which had NO KEY across all seven
     # presets: closing a slot, resizing it, equalizing them and setting the
     # target. It was reached only through the menu or the palette, and the

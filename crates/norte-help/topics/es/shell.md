@@ -36,8 +36,10 @@ El panel y ese shell se siguen el uno al otro. Al entrar, el shell se va al
 directorio del panel activo; al volver, si te moviste con `cd`, el panel se va
 adonde acabaste. El shell dice dónde está imprimiendo un marcador en su prompt,
 que norte le instala TECLEÁNDOSELO: no se toca ningún fichero tuyo, y el arreglo
-desaparece con el shell. bash, zsh y fish son los tres que sabe preparar; con
-cualquier otro la tecla te sigue dando el shell, pero nada sigue a nada.
+desaparece con el shell. bash, zsh, fish y PowerShell son los que sabe
+preparar; con cualquier otro la tecla te sigue dando el shell, pero nada sigue a
+nada. En Windows el shell es PowerShell —`pwsh` si está instalado, Windows
+PowerShell si no— o la ruta absoluta que diga `NORTE_SHELL`.
 
 Al shell solo se le manda a un sitio si está **parado en su prompt**. Deja una
 línea a medio escribir, o un `make` corriendo, o un `vim` abierto, y norte no

@@ -267,6 +267,136 @@ pub fn install(shell: Shell, nonce: &Nonce, mailbox: &std::path::Path) -> String
     }
 }
 
+/// Which hook a subshell gets: one of the POSIX three, or PowerShell (ADR
+/// 0161). `None` from [`Hook::of_program`] = a shell norte types nothing
+/// into (`cmd.exe`, `sh`): live, not followed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Hook {
+    /// bash, zsh or fish.
+    Posix(Shell),
+    /// Windows PowerShell or `pwsh`, on any platform.
+    PowerShell,
+}
+
+impl Hook {
+    /// From the program's FILE NAME, `.exe` dropped and case ignored on
+    /// Windows, where `PowerShell.exe` and `powershell.exe` are one file.
+    ///
+    /// ```
+    /// use norte_frontend::subshell::Hook;
+    /// assert_eq!(Hook::of_program("pwsh"), Some(Hook::PowerShell));
+    /// assert!(Hook::of_program("bash").is_some());
+    /// assert_eq!(Hook::of_program("cmd.exe"), None);
+    /// ```
+    #[must_use]
+    pub fn of_program(name: &str) -> Option<Self> {
+        let lower;
+        let name = if cfg!(windows) {
+            lower = name.to_ascii_lowercase();
+            lower.strip_suffix(".exe").unwrap_or(&lower)
+        } else {
+            name
+        };
+        match name {
+            "pwsh" | "powershell" => Some(Self::PowerShell),
+            other => Shell::parse(other).map(Self::Posix),
+        }
+    }
+
+    /// What has to be typed into it: [`install`] or [`install_powershell`].
+    #[must_use]
+    pub fn install(self, nonce: &Nonce, mailbox: &std::path::Path) -> String {
+        match self {
+            Self::Posix(shell) => install(shell, nonce, mailbox),
+            Self::PowerShell => install_powershell(nonce, mailbox),
+        }
+    }
+}
+
+/// Where a PowerShell hook ALSO writes the directory it is in: next to the
+/// mailbox, `.pwd`. `ConPTY` re-renders the console instead of passing its
+/// bytes through, and drops an OSC it does not know — the `777` marker
+/// never reaches the pty on Windows (measured, ADR 0161). The file is the
+/// channel there; the marker still works where the pty is a real one.
+#[must_use]
+pub fn announce_file(mailbox: &std::path::Path) -> std::path::PathBuf {
+    mailbox.with_extension("pwd")
+}
+
+/// [`install`] for PowerShell (ADR 0161): the same contract — read the
+/// mailbox and `cd`, THEN announce where it ended up — hooked by wrapping
+/// the reader's `prompt` function, which is called and never replaced.
+///
+/// The wrapper keeps what a prompt reads to paint an error: it restores
+/// `$LASTEXITCODE`, and a failed `$?` is failed again (a silenced
+/// `Write-Error`) before the reader's prompt runs — starship, oh-my-posh and
+/// posh-git all look at them first. Only a `FileSystem` location is
+/// announced (`HKLM:` has no directory to follow), and the `.pwd` file is
+/// replaced whole (write aside, rename), never read half-written.
+///
+/// Same rule as the POSIX three: nothing but printable ASCII. The mailbox
+/// path (a profile directory can carry any character) travels as `[char]`
+/// codes, the counterpart of the octal escapes; the marker's `ESC` and `BEL`
+/// as `[char]27`/`[char]7`. Each line ends in `\r`, which is Enter on a
+/// console: a `\n` reaches `PSReadLine` as Ctrl+J, a new line in the SAME
+/// command, and nothing would ever run.
+///
+/// ```
+/// use norte_frontend::subshell::{Nonce, install_powershell};
+/// let text = install_powershell(&Nonce::new(), std::path::Path::new(r"C:\Users\Zoë\n.cd"));
+/// assert!(text.contains("function global:prompt"));
+/// assert!(text.bytes().all(|b| b == b'\r' || (0x20..0x7f).contains(&b)));
+/// ```
+#[must_use]
+pub fn install_powershell(nonce: &Nonce, mailbox: &std::path::Path) -> String {
+    let chars = |p: &std::path::Path| {
+        let codes: Vec<String> = wide_units(p).iter().map(u16::to_string).collect();
+        format!("-join [char[]]({})", codes.join(","))
+    };
+    let f = chars(mailbox);
+    let a = chars(&announce_file(mailbox));
+    let n = nonce.as_str();
+    format!(
+        // Lines starting with a space stay out of PSReadLine's history, as
+        // `HISTCONTROL=ignorespace` does in bash; a handler the reader's
+        // profile set keeps deciding the rest. Absent PSReadLine, nothing.
+        " if (Get-Command Set-PSReadLineOption -ErrorAction SilentlyContinue) \
+         {{ $h = (Get-PSReadLineOption).AddToHistoryHandler; \
+         Set-PSReadLineOption -AddToHistoryHandler ({{ param($l) \
+         if ($l.StartsWith(' ')) {{ return $false }}; if ($h) {{ & $h $l }} else {{ $true }} \
+         }}.GetNewClosure()) }}\r\
+         \x20function global:__norte_cwd {{ $f = {f}; \
+         if ((Test-Path -LiteralPath $f) -and (Get-Item -LiteralPath $f).Length -gt 0) \
+         {{ $d = [IO.File]::ReadAllText($f, [Text.UTF8Encoding]::new($false)); \
+         [IO.File]::WriteAllText($f, ''); \
+         Set-Location -LiteralPath $d.Substring(0, $d.Length - 1) -ErrorAction SilentlyContinue }}; \
+         $w = Get-Location; if ($w.Provider.Name -ne 'FileSystem') {{ return }}; \
+         $a = {a}; [IO.File]::WriteAllText($a + '.tmp', $w.ProviderPath, [Text.UTF8Encoding]::new($false)); \
+         Move-Item -LiteralPath ($a + '.tmp') -Destination $a -Force; \
+         $p = $w.ProviderPath.Replace([string][char]16, [string][char]16 + [char]16)\
+         .Replace([string][char]7, [string][char]16 + 'G'); \
+         [Console]::Write([string][char]27 + ']777;norte-cwd;{n};' + $p + [char]7) }}\r\
+         \x20$global:__norte_prompt = $function:prompt\r\
+         \x20function global:prompt {{ $q = $?; $e = $global:LASTEXITCODE; __norte_cwd; \
+         $global:LASTEXITCODE = $e; if (-not $q) {{ Write-Error '' -ErrorAction Ignore }}; \
+         if ($global:__norte_prompt) {{ & $global:__norte_prompt }} else {{ 'PS> ' }} }}\r"
+    )
+}
+
+/// A path's UTF-16 units: exact on Windows, lone surrogates included (rule
+/// 1); elsewhere its text, the only thing a unix `pwsh` receives anyway.
+fn wide_units(p: &std::path::Path) -> Vec<u16> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt as _;
+        p.as_os_str().encode_wide().collect()
+    }
+    #[cfg(not(windows))]
+    {
+        p.as_os_str().to_string_lossy().encode_utf16().collect()
+    }
+}
+
 /// The marker's prefix written the way `printf` understands it, without a
 /// single control byte: `\033]777;norte-cwd;`.
 fn marker_format_prefix() -> String {
@@ -854,6 +984,31 @@ mod tests {
     /// line, `0x01` jumps to the start, `0x7f` deletes backward), so they
     /// never reach the parser the quote protects. The defense is that the
     /// path travels in octal.
+    /// PowerShell's side of the next test: the mailbox path reaches the
+    /// shell only as `[char]` codes, so no name can close a quote or start
+    /// a command, and the typed text stays printable.
+    #[test]
+    fn a_powershell_mailbox_path_does_not_let_a_command_escape() {
+        let n = nonce();
+        for name in [
+            "/tmp/'; Remove-Item ~ #",
+            "/tmp/$(whoami)",
+            "/tmp/`id`",
+            "/tmp/Zoë\u{1}x",
+        ] {
+            let text = install_powershell(&n, std::path::Path::new(name));
+            assert!(
+                text.bytes()
+                    .all(|b| b == b'\r' || (0x20..0x7f).contains(&b)),
+                "{name:?} traveled with a byte the line editor executes"
+            );
+            assert!(!text.contains("Remove-Item ~"), "{name:?} traveled as text");
+            assert!(!text.contains("whoami"), "{name:?} traveled as text");
+        }
+    }
+
+    /// unix only: builds paths from arbitrary BYTES.
+    #[cfg(unix)]
     #[test]
     fn the_mailbox_path_does_not_let_a_command_escape() {
         // The canonical CORPUS, not a list invented here (repo convention):

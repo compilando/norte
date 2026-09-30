@@ -53,6 +53,9 @@ keymap = [
     # be a STANDALONE chord. A sequence would force stealing its first key
     # from the shell exactly where the reader is typing.
     { on = ["ctrl+alt+s"], run = "layout.terminal" },
+    # The live shell behind the panels (#142): Ctrl+Z, which is what drops
+    # vim to the shell. Not Ctrl+O, which a vim hand reads as "jump back".
+    { on = ["ctrl+z"], run = "app.toggle-panels" },
     # The rest of the `layout.*` family, with the same chords as in the
     # other six presets: see the long note in `orthodox.toml`. They also
     # work here because they are not bare digits: this preset DOES have

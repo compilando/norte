@@ -519,6 +519,10 @@ pub fn terminal_command_candidates_from(
     orden: &[String],
 ) -> Vec<Vec<std::ffi::OsString>> {
     use std::ffi::OsString;
+    #[cfg_attr(
+        not(all(unix, not(target_os = "macos"))),
+        expect(unused_mut, reason = "only the freedesktop branch pushes first")
+    )]
     let mut out: Vec<Vec<OsString>> = Vec::new();
     if orden.is_empty() {
         return out;
@@ -896,6 +900,10 @@ pub fn terminal_candidates_from(
     // `$TERMINAL` first on every platform: an explicit answer is never
     // overruled by a probe. Empty is treated as unset, like `$SHELL`.
     if let Some(t) = env_terminal.filter(|t| !t.is_empty()) {
+        #[cfg_attr(
+            not(all(unix, not(target_os = "macos"))),
+            expect(unused_mut, reason = "only the freedesktop branch adds a cwd flag")
+        )]
         let mut argv = vec![OsString::from(t)];
         // `TERMINAL=gnome-terminal` is an ordinary setting, and it needs the
         // same cwd flag the probe list would have given it (S4 rust review,

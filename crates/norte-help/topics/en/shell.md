@@ -35,9 +35,11 @@ The panel and that shell follow each other. Going in, the shell is sent to the
 active pane's directory; coming back, if you moved with `cd`, the panel goes
 where you ended up. The shell announces where it is by printing a marker in its
 prompt, which norte installs by typing it into the shell — no file of yours is
-touched, and the arrangement disappears with the shell. bash, zsh and fish are
-the three it knows how to set up; under any other shell the key still gives you
-the shell, but nothing follows anything.
+touched, and the arrangement disappears with the shell. bash, zsh, fish and
+PowerShell are the ones it knows how to set up; under any other shell the key
+still gives you the shell, but nothing follows anything. On Windows the shell is
+PowerShell — `pwsh` if it is installed, Windows PowerShell otherwise — or
+whatever absolute path `NORTE_SHELL` names.
 
 The shell is only sent somewhere when it is **idle at its prompt**. Leave a
 half-typed line, or a `make` running, or `vim` open, and norte types nothing —

@@ -317,23 +317,6 @@ async fn handle_suspension(
 /// the same shell — with its history and its variables — which is the whole
 /// difference between this and the old scrollback.
 ///
-/// POSIX (ADR 0084): on Windows there is no pty to hand over, so the key
-/// DECLINES with the same message as `app.terminal` over a remote pane —
-/// which is the truth, and was what the ADR promised with nothing fulfilling
-/// it.
-#[cfg(not(unix))]
-#[allow(clippy::unused_async)] // same signature as the Unix one: the caller does not branch.
-async fn handle_subshell(
-    app: &mut App,
-    _backend: &Backend,
-    _capture: &mut mouse::Capture,
-    _events: &mut crate::console::Console<'_>,
-    _work: &mut InFlight,
-) {
-    app.message = Some(t("msg-subshell-not-here"));
-}
-
-#[cfg(unix)]
 async fn handle_subshell(
     app: &mut App,
     backend: &Backend,

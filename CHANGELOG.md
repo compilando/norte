@@ -9,6 +9,15 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **The live shell behind the panels on Windows** (ADR 0161):
+  `app.toggle-panels` opens a PowerShell (`pwsh` if installed, Windows
+  PowerShell otherwise, or `NORTE_SHELL`) that follows the panel and that
+  the panel follows. It used to decline on Windows.
+- **`app.toggle-panels` has a key in the default preset**: `Ctrl+O` in
+  orthodox and cua, `Ctrl+Z` in vim, as in norton and far. Before, only
+  those two bound it, and without a key the subshell refused to open even
+  from the menu.
+
 - **Windows: copies, moves and deletes into a local folder cannot be
   redirected outside it** (#217, ADR 0160). A junction or symlink planted in
   a folder along the way used to send the write wherever it pointed, and
