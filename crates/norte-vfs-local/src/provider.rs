@@ -1153,7 +1153,8 @@ impl Provider for LocalProvider {
         // Confinement is a PLATFORM property, not one of the location or
         // the tree's state: on unix there's `openat` — with `openat2` or
         // with the walk, both guarantee the same thing —, and on Windows
-        // not yet. It goes before any probe because it must also hold in
+        // handle-relative `NtCreateFile` (#217, ADR 0160). It goes before
+        // any probe because it must also hold in
         // the degraded path below: otherwise,
         // `file:///destination-that-doesnt-exist-yet` would say "I can't
         // confine" and `file:///` would say yes, which is a different
@@ -1161,7 +1162,7 @@ impl Provider for LocalProvider {
         // mirror.
         declared
             .flags
-            .set(CapabilityFlags::CONFINED_WRITES, cfg!(unix));
+            .set(CapabilityFlags::CONFINED_WRITES, cfg!(any(unix, windows)));
         let native = self.native(p)?;
         let cache = std::sync::Arc::clone(&self.caps_at);
         // With a DEADLINE, and on a detached thread (#213). Everything

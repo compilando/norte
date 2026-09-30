@@ -42,7 +42,7 @@
 //! renames, while `openat2` has no such window because the kernel resolves
 //! it as one piece. `libpathrs` documents the same limitation for the same
 //! emulation.
-//! | Windows | there's no `openat`: this module doesn't exist there and `open_root` answers `Unsupported` |
+//! | Windows | no `openat`: `confined_windows` opens each name relative to its parent's HANDLE, and never crosses a link (ADR 0160) |
 
 use std::ffi::CString;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};

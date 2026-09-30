@@ -48,6 +48,10 @@ windows-sys = { workspace = true, features = [
     "Win32_System_IO",
     # The Recycle Bin's `MaxCapacity` per volume (`trash_windows`, #25).
     "Win32_System_Registry",
+    # A resumed staging must be ours: its owner against the process token's
+    # (`win_nt::owned_by_us`, #217).
+    "Win32_Security_Authorization",
+    "Win32_System_Threading",
 ] }
 # `trash_windows` (#25): the Recycle Bin through `IFileOperation` with our
 # own progress sink.

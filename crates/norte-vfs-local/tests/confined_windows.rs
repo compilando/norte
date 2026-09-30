@@ -311,6 +311,56 @@ async fn a_planted_staging_is_not_resumed() {
     assert_eq!(std::fs::read_dir(&outside).expect("ls").count(), 0);
 }
 
+/// A stable staging owned by someone else is not resumed: its owner could
+/// read our bytes as they arrive and rewrite what we publish (security
+/// review of #217). Planted here by giving an empty partial to SYSTEM.
+#[tokio::test]
+async fn a_staging_owned_by_someone_else_is_not_resumed() {
+    let (p, root_path, inside, _outside) = scenario();
+    let root = p.open_root(&root_path).await.expect("confined root");
+    let (sink, _) = root.open_resumable(&[seg(b"t")]).await.expect("open");
+    sink.keep().await.expect("keep");
+    let name = std::fs::read_dir(&inside)
+        .expect("ls")
+        .next()
+        .expect("the partial")
+        .expect("entry")
+        .file_name();
+    let ok = std::process::Command::new("icacls")
+        .arg(inside.join(&name))
+        .args(["/setowner", "*S-1-5-18"])
+        .status()
+        .expect("icacls")
+        .success();
+    assert!(ok, "icacls /setowner (the test needs an administrator)");
+
+    let err = root
+        .open_resumable(&[seg(b"t")])
+        .await
+        .err()
+        .expect("refused");
+    assert!(escapes(&err), "answered {err:?}");
+    assert_eq!(
+        root.partial_digest(&[seg(b"t")], 0).await.expect("digest"),
+        None
+    );
+}
+
+/// The promise goes with the implementation: a location on Windows says it
+/// confines, for an existing path and for one that does not exist yet.
+#[tokio::test]
+async fn confinement_is_announced_in_the_locations_capabilities() {
+    use norte_proto::CapabilityFlags;
+    let (p, root_path, _inside, _outside) = scenario();
+    for at in [root_path.clone(), child(&root_path, b"not-yet")] {
+        let caps = p.capabilities_at(&at).await.expect("caps");
+        assert!(
+            caps.flags.contains(CapabilityFlags::CONFINED_WRITES),
+            "{at:?}"
+        );
+    }
+}
+
 /// Windows cannot create links here: `Unsupported`, like the provider.
 #[tokio::test]
 async fn symlinks_are_unsupported() {

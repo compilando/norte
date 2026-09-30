@@ -21,9 +21,10 @@ use windows_sys::Win32::Foundation::{
 };
 use windows_sys::Win32::Storage::FileSystem::{
     BY_HANDLE_FILE_INFORMATION, FILE_DISPOSITION_FLAG_DELETE,
-    FILE_DISPOSITION_FLAG_POSIX_SEMANTICS, FILE_DISPOSITION_INFO_EX, FILE_ID_128, FILE_ID_INFO,
-    FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FileDispositionInfoEx, FileIdInfo,
-    GetFileInformationByHandle, GetFileInformationByHandleEx, SetFileInformationByHandle,
+    FILE_DISPOSITION_FLAG_POSIX_SEMANTICS, FILE_DISPOSITION_INFO, FILE_DISPOSITION_INFO_EX,
+    FILE_ID_128, FILE_ID_INFO, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    FileDispositionInfo, FileDispositionInfoEx, FileIdInfo, GetFileInformationByHandle,
+    GetFileInformationByHandleEx, SetFileInformationByHandle,
 };
 use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
 
@@ -185,6 +186,84 @@ pub(crate) fn open_child(
     Ok(through)
 }
 
+/// Is the open file owned by whoever this process creates files as?
+///
+/// `TokenOwner`, not `TokenUser`: an elevated administrator's new files are
+/// owned by BUILTIN\Administrators, and a file of our own must pass. The
+/// handle needs `READ_CONTROL`.
+#[allow(unsafe_code)]
+pub(crate) fn owned_by_us(file: &File) -> std::io::Result<bool> {
+    use windows_sys::Win32::Foundation::{CloseHandle, LocalFree};
+    use windows_sys::Win32::Security::Authorization::{GetSecurityInfo, SE_FILE_OBJECT};
+    use windows_sys::Win32::Security::{
+        EqualSid, GetTokenInformation, OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID,
+        TOKEN_OWNER, TOKEN_QUERY, TokenOwner,
+    };
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+    let mut owner: PSID = std::ptr::null_mut();
+    let mut descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+    // SAFETY: the handle is alive for the call; the out-pointers are
+    // locals. On success `descriptor` owns the memory `owner` points into
+    // and is freed below with `LocalFree`.
+    let status = unsafe {
+        GetSecurityInfo(
+            file.as_raw_handle(),
+            SE_FILE_OBJECT,
+            OWNER_SECURITY_INFORMATION,
+            &raw mut owner,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &raw mut descriptor,
+        )
+    };
+    if status != 0 {
+        return Err(std::io::Error::from_raw_os_error(
+            i32::try_from(status).unwrap_or(i32::MAX),
+        ));
+    }
+    let mut token: HANDLE = std::ptr::null_mut();
+    // SAFETY: the pseudo-handle of the current process needs no closing;
+    // `token` is a local out-pointer.
+    let opened = unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &raw mut token) };
+    let result = if opened == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        // `u64` words: `TOKEN_OWNER` holds a pointer.
+        let mut buf = vec![0u64; 16];
+        let mut needed = 0u32;
+        let size = u32::try_from(buf.len() * 8).unwrap_or(u32::MAX);
+        // SAFETY: `token` is open; `buf` is an owned, aligned buffer of
+        // `size` bytes; `needed` is a local.
+        let got = unsafe {
+            GetTokenInformation(
+                token,
+                TokenOwner,
+                buf.as_mut_ptr().cast(),
+                size,
+                &raw mut needed,
+            )
+        };
+        let out = if got == 0 {
+            Err(std::io::Error::last_os_error())
+        } else {
+            // SAFETY: the call succeeded, so `buf` starts with a valid
+            // `TOKEN_OWNER` whose SID lives inside `buf`; both SIDs are
+            // valid for `EqualSid`.
+            let ours = unsafe { (*buf.as_ptr().cast::<TOKEN_OWNER>()).Owner };
+            Ok(unsafe { EqualSid(owner, ours) } != 0)
+        };
+        // SAFETY: `token` was opened above and is closed once.
+        unsafe { CloseHandle(token) };
+        out
+    };
+    // SAFETY: `descriptor` was allocated by `GetSecurityInfo` and is freed
+    // once, after the last use of `owner`.
+    unsafe { LocalFree(descriptor.cast()) };
+    result
+}
+
 /// How many names (hard links) the open file has.
 #[allow(unsafe_code)]
 pub(crate) fn link_count(file: &File) -> std::io::Result<u32> {
@@ -233,6 +312,7 @@ pub(crate) fn rename_beneath(
     name: &[u16],
     replace: bool,
 ) -> std::io::Result<()> {
+    debug_assert!(!name.is_empty(), "an empty name is the directory itself");
     let name_bytes = name.len() * 2;
     let start = std::mem::offset_of!(FILE_RENAME_INFORMATION, FileName);
     let total = start + name_bytes + 2;
@@ -289,6 +369,27 @@ pub(crate) fn delete_by_handle(file: &File) -> std::io::Result<()> {
             FileDispositionInfoEx,
             std::ptr::from_ref(&info).cast(),
             size_of_u32::<FILE_DISPOSITION_INFO_EX>(),
+        )
+    };
+    if ok != 0 {
+        return Ok(());
+    }
+    let err = std::io::Error::last_os_error();
+    // FAT, exFAT and many SMB servers know no POSIX semantics: invalid
+    // function, not supported, invalid parameter. The classic disposition
+    // removes the name when the last handle closes, and we hold the only
+    // one with DELETE access.
+    if !matches!(err.raw_os_error(), Some(1 | 50 | 87)) {
+        return Err(err);
+    }
+    let classic = FILE_DISPOSITION_INFO { DeleteFile: true };
+    // SAFETY: as above, with one `FILE_DISPOSITION_INFO`.
+    let ok = unsafe {
+        SetFileInformationByHandle(
+            file.as_raw_handle(),
+            FileDispositionInfo,
+            std::ptr::from_ref(&classic).cast(),
+            size_of_u32::<FILE_DISPOSITION_INFO>(),
         )
     };
     if ok == 0 {

@@ -1459,9 +1459,10 @@ async fn a_file_is_answered_by_its_containing_directory() {
 async fn a_missing_path_answers_the_declaration() {
     let (p, root, _) = provider();
     let mut expected = p.capabilities();
-    expected
-        .flags
-        .set(norte_proto::CapabilityFlags::CONFINED_WRITES, cfg!(unix));
+    expected.flags.set(
+        norte_proto::CapabilityFlags::CONFINED_WRITES,
+        cfg!(any(unix, windows)),
+    );
     assert_eq!(
         p.capabilities_at(&child(&root, b"does-not-exist"))
             .await

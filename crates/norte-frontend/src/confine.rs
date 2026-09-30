@@ -3,10 +3,10 @@
 //! A recursive `Copy` composes `destination + relative` step by step, and a
 //! symlink placed on an INTERMEDIATE component between the human saying yes
 //! and the bytes being written sends the copy somewhere else. Where the
-//! system knows how to open relative to a descriptor — Linux and macOS — the
-//! core opens the root once and that detour stops existing. Where it does
-//! not — Windows, SFTP, a bucket — the copy is done the same way it always
-//! has been, by path.
+//! system knows how to open relative to a descriptor or handle — Linux,
+//! macOS, Windows (ADR 0160) — the core opens the root once and that detour
+//! stops existing. Where it does not — SFTP, a bucket — the copy is done
+//! the same way it always has been, by path.
 //!
 //! What happens here is a WARNING about that second case, not a refusal. The
 //! same contract as [`crate::space`]: put the fact in front and let the human

@@ -24,7 +24,7 @@ use windows_sys::Wdk::Storage::FileSystem::{
 use windows_sys::Win32::Storage::FileSystem::{
     DELETE, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_GENERIC_READ,
     FILE_GENERIC_WRITE, FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES, FILE_SHARE_READ, FILE_TRAVERSE,
-    SYNCHRONIZE,
+    READ_CONTROL, SYNCHRONIZE,
 };
 
 use crate::provider::map_io;
@@ -98,8 +98,11 @@ impl WinRoot {
         .map_err(|e| map_io(&e))
     }
 
-    pub(crate) fn root_id(&self) -> Result<norte_vfs::NodeId, Error> {
-        win_nt::solid_id(&self.dir).map_err(|e| map_io(&e))
+    /// `None` where the volume gives no identity (index 0, some SMB
+    /// servers): "cannot tell", which the core already degrades on, rather
+    /// than an error that would fail the copy.
+    pub(crate) fn root_id(&self) -> Result<Option<norte_vfs::NodeId>, Error> {
+        identity(&self.dir)
     }
 
     pub(crate) fn mkdir(&self, rel: &[Segment]) -> Result<(), Error> {
@@ -109,7 +112,7 @@ impl WinRoot {
             &name,
             FILE_LIST_DIRECTORY | SYNCHRONIZE,
             FILE_CREATE,
-            FILE_DIRECTORY_FILE,
+            FILE_DIRECTORY_FILE | FILE_OPEN_REPARSE_POINT,
             win_nt::SHARE_ALL,
         )
         .map(drop)
@@ -129,8 +132,8 @@ impl WinRoot {
         ))
     }
 
-    pub(crate) fn node_id(&self, rel: &[Segment]) -> Result<norte_vfs::NodeId, Error> {
-        win_nt::solid_id(&self.open_leaf(rel, 0, 0)?).map_err(|e| map_io(&e))
+    pub(crate) fn node_id(&self, rel: &[Segment]) -> Result<Option<norte_vfs::NodeId>, Error> {
+        identity(&self.open_leaf(rel, 0, 0)?)
     }
 
     /// Deletes a LEAF about to be replaced: a file, or a link as the link.
@@ -175,7 +178,7 @@ impl WinRoot {
             &ascii_wide(&staging),
             FILE_GENERIC_WRITE | DELETE | SYNCHRONIZE,
             FILE_CREATE,
-            FILE_NON_DIRECTORY_FILE,
+            FILE_NON_DIRECTORY_FILE | FILE_OPEN_REPARSE_POINT,
             FILE_SHARE_READ,
         )
         .map_err(|e| exists_or(&e))?;
@@ -190,11 +193,10 @@ impl WinRoot {
     /// Like [`Self::open_write`], with the STABLE staging a later resume
     /// finds again (#297), continued after the bytes it already has.
     ///
-    /// The name is predictable, so what is there may have been planted:
-    /// a reparse point or a file with another hard link is refused
-    /// (`EscapesRoot`: our bytes would land elsewhere too). Ownership is
-    /// not checked, unlike unix: on Windows the ACL decides who could have
-    /// created it, and the handle is opened with the caller's rights.
+    /// The name is predictable, so what is there may have been planted
+    /// (#298): a reparse point, a file with another hard link or one owned
+    /// by someone else is refused (`EscapesRoot`). An owner of its own
+    /// could read our bytes as they arrive and rewrite what gets published.
     pub(crate) fn open_resumable(&self, rel: &[Segment]) -> Result<(WinStaging, u64), Error> {
         use std::io::{Seek as _, SeekFrom};
         let (dir, final_name) = self.parent_of(rel)?;
@@ -209,7 +211,7 @@ impl WinRoot {
         match win_nt::nt_create(
             &dir,
             &staging,
-            FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+            FILE_READ_ATTRIBUTES | READ_CONTROL | SYNCHRONIZE,
             FILE_OPEN,
             FILE_OPEN_REPARSE_POINT,
             win_nt::SHARE_ALL,
@@ -221,7 +223,7 @@ impl WinRoot {
         let mut file = win_nt::nt_create(
             &dir,
             &staging,
-            FILE_GENERIC_WRITE | FILE_GENERIC_READ | DELETE | SYNCHRONIZE,
+            FILE_GENERIC_WRITE | FILE_GENERIC_READ | DELETE | READ_CONTROL | SYNCHRONIZE,
             FILE_OPEN_IF,
             FILE_NON_DIRECTORY_FILE | FILE_OPEN_REPARSE_POINT,
             FILE_SHARE_READ,
@@ -256,7 +258,7 @@ impl WinRoot {
         let file = match win_nt::nt_create(
             &dir,
             &ascii_wide(&staging),
-            FILE_GENERIC_READ | SYNCHRONIZE,
+            FILE_GENERIC_READ | READ_CONTROL | SYNCHRONIZE,
             FILE_OPEN,
             FILE_NON_DIRECTORY_FILE | FILE_OPEN_REPARSE_POINT,
             win_nt::SHARE_ALL,
@@ -315,8 +317,10 @@ fn ensure_free(dir: &File, name: &[u16]) -> Result<(), Error> {
     }
 }
 
-/// A resumed staging must be a plain file with one name: a reparse point
-/// or a second hard link would carry our bytes somewhere else.
+/// A resumed staging must be a plain file with one name, owned by us: a
+/// reparse point or a second hard link would carry our bytes somewhere
+/// else, and another owner keeps control of what we publish. The handle
+/// needs `READ_CONTROL`.
 fn check_ours(file: &File) -> Result<(), Error> {
     let md = file.metadata().map_err(|e| map_io(&e))?;
     if md.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
@@ -329,12 +333,20 @@ fn check_ours(file: &File) -> Result<(), Error> {
             conflict: ConflictKind::TypeMismatch,
         });
     }
-    if win_nt::link_count(file).map_err(|e| map_io(&e))? != 1 {
+    if win_nt::link_count(file).map_err(|e| map_io(&e))? != 1
+        || !win_nt::owned_by_us(file).map_err(|e| map_io(&e))?
+    {
         return Err(Error::Conflict {
             conflict: ConflictKind::EscapesRoot,
         });
     }
     Ok(())
+}
+
+/// The node's identity, or `None` where the volume gives none (index 0).
+fn identity(file: &File) -> Result<Option<norte_vfs::NodeId>, Error> {
+    let id = win_nt::file_id(file).map_err(|e| map_io(&e))?;
+    Ok((id.index != 0).then_some(id))
 }
 
 fn wide(seg: &Segment) -> Result<Vec<u16>, Error> {
@@ -343,6 +355,7 @@ fn wide(seg: &Segment) -> Result<Vec<u16>, Error> {
 
 /// A staging name: ASCII by construction (prefix, hex, digits, dots).
 fn ascii_wide(name: &[u8]) -> Vec<u16> {
+    debug_assert!(name.is_ascii(), "a staging name is ASCII");
     name.iter().map(|&b| u16::from(b)).collect()
 }
 
@@ -393,7 +406,7 @@ impl WinConfinedRoot {
 impl norte_vfs::ConfinedRoot for WinConfinedRoot {
     async fn root_id(&self) -> Result<Option<norte_vfs::NodeId>, Error> {
         let root = Arc::clone(&self.root);
-        crate::provider::blocking(move || root.root_id().map(Some)).await
+        crate::provider::blocking(move || root.root_id()).await
     }
 
     async fn mkdir(&self, rel: &[Segment]) -> Result<(), Error> {
@@ -440,7 +453,7 @@ impl norte_vfs::ConfinedRoot for WinConfinedRoot {
 
     async fn node_id(&self, rel: &[Segment]) -> Result<Option<norte_vfs::NodeId>, Error> {
         let (root, rel) = (Arc::clone(&self.root), rel.to_vec());
-        crate::provider::blocking(move || root.node_id(&rel).map(Some)).await
+        crate::provider::blocking(move || root.node_id(&rel)).await
     }
 
     async fn remove(&self, rel: &[Segment]) -> Result<(), Error> {
