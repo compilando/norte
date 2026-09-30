@@ -18,6 +18,13 @@ independently through `PROTOCOL_VERSION`.
 - **Windows: themes are drawn in their own colors.** With no `COLORTERM`
   (Windows Terminal sets none), every theme was reduced to 16 colors and
   came out in the console's Campbell palette.
+- **Windows: `ntc --pick` leaves the console in its own code page.** It
+  exited without running the guard that restores it.
+- **Windows: `--pick` and `--cd-file` write `C:\dir`, not `\\?\C:\dir`.**
+  `cmd` refuses a `\\?\` working directory. The prefix stays only on a
+  path that needs it (a reserved name, a trailing dot, over 260 characters).
+- **Windows: "go to" accepts a typed `C:\dir`.** Only paths starting with
+  `/` were taken as local, so a Windows path was rejected as invalid.
 
 ### Added
 
@@ -29,6 +36,9 @@ independently through `PROTOCOL_VERSION`.
   orthodox and cua, `Ctrl+Z` in vim, as in norton and far. Before, only
   those two bound it, and without a key the subshell refused to open even
   from the menu.
+- **`ntc --daemon` on Windows.** It used to refuse with "not available on
+  Windows yet"; it now starts or joins the daemon over its named pipe
+  (ADR 0159), as `norte --daemon` and the window already did.
 
 - **Windows: copies, moves and deletes into a local folder cannot be
   redirected outside it** (#217, ADR 0160). A junction or symlink planted in
