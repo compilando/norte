@@ -58,6 +58,11 @@ independently through `PROTOCOL_VERSION`.
 
 ### Security
 
+- **A plugin can no longer declare its way past the memory cap.** The
+  64 MiB limit applied to each linear memory, and a plugin could declare up
+  to 10 000 of them, plus tables of any length. A guest now gets at most 4
+  memories, 16 tables of up to 100 000 elements and 128 instantiations —
+  far above what every official plugin uses (1 memory, 2 small tables).
 - **wasmtime 46 → 48.0.3** for RUSTSEC-2026-0314: a plugin could panic the
   host through a filesystem datetime overflow. The same release fixes
   RUSTSEC-2026-0316 (past the fuel limit), which norte, capped by epoch
