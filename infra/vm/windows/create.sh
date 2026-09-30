@@ -105,8 +105,11 @@ grant_qemu_traversal "$disk"
 setfacl -m "u:$qemu_user:r" "$NORTE_WINDOWS_ISO" "$answer_iso"
 setfacl -m "u:$qemu_user:rw" "$disk"
 
+# One socket: by default each vCPU is its own socket, and Windows 11 Pro
+# uses only two sockets — an 8-vCPU guest ran on 2.
 virt-install --connect qemu:///system \
-  --name "$name" --memory "$memory" --vcpus "$vcpus" --cpu host-passthrough \
+  --name "$name" --memory "$memory" \
+  --vcpus "$vcpus,sockets=1,cores=$vcpus,threads=1" --cpu host-passthrough \
   --machine q35 --boot uefi \
   --tpm backend.type=emulator,backend.version=2.0,model=tpm-crb \
   --disk "path=$disk,format=qcow2,bus=sata" \
