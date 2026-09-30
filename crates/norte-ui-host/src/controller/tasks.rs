@@ -102,10 +102,10 @@ pub(super) struct TaskViva {
     /// it finishes. Empty = nothing to refresh (a search, an unrelated task
     /// whose id is all that is known).
     pub(super) affected: Vec<VPath>,
-    /// What to retry with if it COLLIDES (#274). `None` for everything that
-    /// is not a transfer: a delete or an undo have no other policy to
-    /// offer.
-    retry: Option<Retry>,
+    /// What its failure can offer: the retry of a transfer that COLLIDES
+    /// (#274), or the permanent delete of an item the trash could not take.
+    /// `None` for the rest: an undo has nothing else to offer.
+    follow_up: Option<FollowUp>,
 }
 
 /// The count of ONE transfer batch (#271).
@@ -271,7 +271,9 @@ impl State {
                     .await
             };
             let message = match queued {
-                Ok(task) => Message::TaskNew(Box::new((task, affected, Some(con)))),
+                Ok(task) => {
+                    Message::TaskNew(Box::new((task, affected, Some(FollowUp::Transfer(con)))))
+                }
                 Err(e) => Message::TaskFailed(Box::new(e)),
             };
             let _ = mailbox.send(message).await;
@@ -312,7 +314,7 @@ impl State {
         });
     }
 
-    /// The retry this task already had, if any and if it belongs to this
+    /// The follow-up this task already had, if any and if it belongs to this
     /// epoch.
     ///
     /// A reconnection's re-announcement does not know what the task was
@@ -320,11 +322,18 @@ impl State {
     /// collision the reader finds on returning with no way out. The epoch
     /// matters: after a daemon handoff the ids start over, and whatever was
     /// there with that number was something else.
-    pub(super) fn retry_inherited(&self, id: u64) -> Option<Retry> {
+    pub(super) fn follow_up_inherited(&self, id: u64) -> Option<FollowUp> {
         self.tasks
             .get(&id)
             .filter(|t| t.epoch == self.epoch_connection)
-            .and_then(|t| t.retry.clone())
+            .and_then(|t| t.follow_up.clone())
+    }
+
+    /// The transfer a task can be retried with, if it has one.
+    fn retry_of(&self, id: u64) -> Option<Retry> {
+        self.tasks
+            .get(&id)
+            .and_then(|t| t.follow_up.as_ref()?.retry().cloned())
     }
 
     /// Ties the intent of "editing a new one" to the task that creates it
@@ -384,7 +393,7 @@ impl State {
         &mut self,
         task: crate::backend::HostTask,
         affected: Vec<VPath>,
-        retry: Option<Retry>,
+        follow_up: Option<FollowUp>,
         backend: &Arc<dyn HostBackend>,
         mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
@@ -466,7 +475,7 @@ impl State {
             .tasks
             .get(&id)
             .is_some_and(|t| t.report_requested && t.epoch == self.epoch_connection);
-        let retry = retry.or_else(|| self.retry_inherited(id));
+        let follow_up = follow_up.or_else(|| self.follow_up_inherited(id));
         self.tasks.insert(
             id,
             TaskViva {
@@ -479,7 +488,7 @@ impl State {
                 pause: task.pause,
                 cola: task.cola,
                 affected,
-                retry,
+                follow_up,
                 report_requested,
                 epoch: self.epoch_connection,
                 progress: task.progress.clone(),
@@ -685,6 +694,7 @@ impl State {
             self.request_checksums_report(p, backend, mailbox);
             changes.extend(self.report_the_count(p));
             changes.extend(self.offer_retry(p));
+            changes.extend(self.offer_permanent(p));
             self.open_the_created(p, backend, mailbox);
             self.notify_of_outcome(p);
         }
@@ -801,6 +811,33 @@ impl State {
         self.native(crate::dto::NativeEffect::Notify { title, body });
     }
 
+    /// A delete the trash could not take opens the permanent delete for that
+    /// item, with its warning (ADR 0009) — the terminal's answer. The window
+    /// used to leave a failed row and nothing else: on Windows that is a
+    /// subst drive, a volume set not to use the bin, an item over its size
+    /// (#25).
+    ///
+    /// Only for `Unsupported` and only for an own trash task: any other
+    /// failure is not "there is no trash here".
+    pub(super) fn offer_permanent(&mut self, p: &norte_proto::TaskProgress) -> Vec<ViewChange> {
+        if !matches!(
+            p.state,
+            norte_proto::TaskState::Failed {
+                error: norte_proto::Error::Unsupported
+            }
+        ) {
+            return Vec::new();
+        }
+        let Some(FollowUp::Permanent(path)) = self
+            .tasks
+            .get(&p.task_id.get())
+            .and_then(|t| t.follow_up.clone())
+        else {
+            return Vec::new();
+        };
+        self.push_delete_dialog(vec![path], true, false)
+    }
+
     /// A transfer that COLLIDED opens the missing question (#274).
     ///
     /// The window always sends `CollisionPolicy::Fail`, the safe default —
@@ -820,11 +857,7 @@ impl State {
         ) {
             return Vec::new();
         }
-        let Some(con) = self
-            .tasks
-            .get(&p.task_id.get())
-            .and_then(|t| t.retry.clone())
-        else {
+        let Some(con) = self.retry_of(p.task_id.get()) else {
             return Vec::new();
         };
         // The destination, in its own field and masked: it is a file name
@@ -1619,7 +1652,7 @@ impl State {
                 t.vista.state,
                 crate::dto::TaskStateView::Failed | crate::dto::TaskStateView::Cancelled
             )
-            .then(|| t.retry.clone())
+            .then(|| t.follow_up.as_ref()?.retry().cloned())
             .flatten()
         });
         let Some(con) = con else {

@@ -222,6 +222,21 @@ impl State {
             .path_caps(&dir)
             .map(|c| c.flags.contains(norte_proto::CapabilityFlags::TRASH));
         let permanent = permanent || trash == Some(false);
+        let changes = self.push_delete_dialog(paths, permanent, true);
+        (self.applied(), vec![self.parche(changes)])
+    }
+
+    /// Pushes THE delete dialog; every door that asks to delete uses it.
+    ///
+    /// `recognized: false` for one that opens on its own (the trash could
+    /// not take an item and the permanent delete is offered): its first
+    /// answer only acknowledges it, like any dialog that was not asked for.
+    pub(super) fn push_delete_dialog(
+        &mut self,
+        paths: Vec<VPath>,
+        permanent: bool,
+        recognized: bool,
+    ) -> Vec<ViewChange> {
         // The body's names could come from a potential attacker: they are
         // painted with the canonical sanitizing and clamped, same as in the
         // listing.
@@ -291,13 +306,12 @@ impl State {
             id,
             vista: vista.clone(),
             typed: Typed::Text(String::new()),
-            recognized: true,
+            recognized,
             on_confirm: Some(Pending::Delete { paths, permanent }),
         });
-        let change = ViewChange::Dialogs {
+        vec![ViewChange::Dialogs {
             dialogs: self.dialog_views(),
-        };
-        (self.applied(), vec![self.parche(vec![change])])
+        }]
     }
 
     /// The gestures that operate on what is MARKED — or on what is under the
@@ -1030,11 +1044,14 @@ impl State {
             let backend = Arc::clone(backend);
             let mailbox = mailbox.clone();
             let affected: Vec<VPath> = path.parent().into_iter().collect();
+            // To the trash, the item travels with its task: if the trash
+            // cannot take it, the permanent delete is offered for IT.
+            let follow_up = (!permanent).then(|| FollowUp::Permanent(path.clone()));
             tokio::spawn(async move {
                 match backend.delete(path, mode).await {
                     Ok(task) => {
                         let _ = mailbox
-                            .send(Message::TaskNew(Box::new((task, affected, None))))
+                            .send(Message::TaskNew(Box::new((task, affected, follow_up))))
                             .await;
                     }
                     Err(e) => {

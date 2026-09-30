@@ -843,7 +843,7 @@ enum Message {
     Hydrated(Box<Probes>),
     /// A freshly enqueued Task, with its progress, its cancellation and the
     /// directories it will leave out of date.
-    TaskNew(Box<(crate::backend::HostTask, Vec<VPath>, Option<Retry>)>),
+    TaskNew(Box<(crate::backend::HostTask, Vec<VPath>, Option<FollowUp>)>),
     /// What a slot's location accepts: how it folds names (#268) and
     /// whether it refuses writes.
     Capabilities(u32, VPath, norte_proto::Capabilities),
@@ -2535,6 +2535,28 @@ pub struct Retry {
     /// one that was seen. The terminal has carried this in its `RetrySpec`
     /// since #98 and says it there in these words.
     enc: Option<norte_encoding::NameEncoding>,
+}
+
+/// What a task's failure can offer the reader, remembered when enqueuing:
+/// the failure arrives later, and says neither what was requested nor how.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FollowUp {
+    /// A transfer that collides: the four outcomes (#274).
+    Transfer(Retry),
+    /// A delete to the trash: if the trash cannot take THIS item
+    /// (`Unsupported`), the permanent delete is offered, with its warning —
+    /// what the terminal does (ADR 0009).
+    Permanent(VPath),
+}
+
+impl FollowUp {
+    /// The transfer to retry, if this is one.
+    fn retry(&self) -> Option<&Retry> {
+        match self {
+            FollowUp::Transfer(r) => Some(r),
+            FollowUp::Permanent(_) => None,
+        }
+    }
 }
 
 /// The Fluent key for a LOCAL io error.
