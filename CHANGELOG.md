@@ -7,6 +7,15 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Windows: `ntc` renders correctly in a default console** (ADR 0162).
+  Windows Terminal starts console programs in the OEM code page (437, 850),
+  and `ntc` writes UTF-8: every box-drawing character came out as three and
+  the screen fell apart unless `chcp 65001` was typed first. `ntc` and
+  `norte` now switch the console to UTF-8 for the run and put the previous
+  page back on exit.
+
 ### Added
 
 - **The live shell behind the panels on Windows** (ADR 0161):

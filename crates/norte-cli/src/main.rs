@@ -567,6 +567,10 @@ impl From<SymlinksArg> for SymlinkPolicy {
 }
 
 fn main() -> ExitCode {
+    // Windows: names printed in UTF-8 to a console reading its OEM code
+    // page came out garbled (ADR 0162). The guard puts the old page back.
+    #[cfg(windows)]
+    let _utf8 = norte_winpipe::console_utf8();
     let cli = Cli::parse();
     // Before anything is said: the first message fixes the global language.
     if let Some(lang) = cli.lang {

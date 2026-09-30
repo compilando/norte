@@ -14,10 +14,17 @@
 //! - `server_is_ours`: the client's check, read from the pipe object (owner
 //!   and integrity label), not from a PID.
 //!
+//! And, since ADR 0162, the other Windows boundary norte needs `unsafe`
+//! for: `console_utf8`, the console's code page for the run.
+//!
 //! Everything is empty off Windows.
 #![deny(unsafe_code)]
 
 #[cfg(windows)]
+mod console;
+#[cfg(windows)]
 mod imp;
+#[cfg(windows)]
+pub use console::{ConsoleUtf8, console_utf8, output_code_page};
 #[cfg(windows)]
 pub use imp::{UserSid, client_user, create_server, current_user, server_is_ours};

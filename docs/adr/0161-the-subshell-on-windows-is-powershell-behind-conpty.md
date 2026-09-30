@@ -1,6 +1,6 @@
 # 0161 — The subshell on Windows is PowerShell behind ConPTY, hooked through its prompt
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-30
 - Decision makers: Oscar González
 - Related: ADR 0084 (the subshell), ADR 0157 (Windows builder), ADR 0159
@@ -90,13 +90,10 @@ PowerShell. The mailbox lives in `%LOCALAPPDATA%\norte\subshell\`.
   commands and changed directory.
 - The cwd from the `.pwd` file is UTF-8; a name with a lone surrogate gives
   no cwd rather than a wrong one.
-- NOT verified: the full round trip — back to the panels and the panel
-  following the shell — in a real Windows console. The VM is driven over
-  SSH, whose input reaches ConPTY as VT bytes, and there `Ctrl+O` (`0x0F`,
-  Shift In) never arrived as a key; other chords were unreliable too. That
-  needs a person at a Windows desktop, which is why this ADR stays
-  proposed.
-- Found on the way, not fixed here: `ntc` does not switch the console to
-  UTF-8 (`SetConsoleOutputCP(65001)`), so in a console left at code page 437
-  every box-drawing character renders as three and the screen falls apart.
-  The fix needs `unsafe`, which rule 5 does not allow in `norte-tui`.
+- The full round trip — back to the panels, the panel following the shell
+  — was verified by a person at the VM's desktop in Windows Terminal
+  (2026-09-30). Over SSH it could not be: that input reaches ConPTY as VT
+  bytes, and `Ctrl+O` (`0x0F`, Shift In) never arrived as a key.
+- Found on the way: `ntc` did not switch the console to UTF-8, so in
+  Windows Terminal's default code page (437) every box-drawing character
+  rendered as three and the screen fell apart. Fixed by ADR 0162.

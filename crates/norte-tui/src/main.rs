@@ -33,6 +33,11 @@ use std::sync::Arc;
     reason = "binary wiring, not API — same criterion as `run`/`dispatch`"
 )]
 async fn main() -> Result<()> {
+    // Windows: the console reads what is written in its code page, the OEM
+    // one by default, and every box-drawing character became three (ADR
+    // 0162). UTF-8 for the whole run; the guard puts the old page back.
+    #[cfg(windows)]
+    let _utf8 = norte_winpipe::console_utf8();
     // Args: positional DIR + `--preset`/`--daemon`/`--socket`. `--help` and
     // `--version` exit BEFORE touching the terminal (they used to be ignored
     // as an unknown flag and the binary died unable to open the TTY).
