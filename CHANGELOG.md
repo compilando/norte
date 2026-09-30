@@ -15,6 +15,9 @@ independently through `PROTOCOL_VERSION`.
   the screen fell apart unless `chcp 65001` was typed first. `ntc` and
   `norte` now switch the console to UTF-8 for the run and put the previous
   page back on exit.
+- **Windows: themes are drawn in their own colors.** With no `COLORTERM`
+  (Windows Terminal sets none), every theme was reduced to 16 colors and
+  came out in the console's Campbell palette.
 
 ### Added
 
