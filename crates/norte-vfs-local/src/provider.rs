@@ -838,7 +838,7 @@ fn probe_same_file(_upper_md: &std::fs::Metadata, _lower_md: &std::fs::Metadata)
 /// case-rename (`same_node`) — here it's exposed through the trait
 /// (issue #16).
 #[cfg(unix)]
-fn node_id_native(
+pub(crate) fn node_id_native(
     p: &Path,
     follow: norte_vfs::FollowLinks,
 ) -> Result<Option<norte_vfs::NodeId>, Error> {
@@ -861,7 +861,7 @@ fn node_id_native(
 /// never a made-up id.
 #[cfg(windows)]
 #[allow(unsafe_code)]
-fn node_id_native(
+pub(crate) fn node_id_native(
     p: &Path,
     follow: norte_vfs::FollowLinks,
 ) -> Result<Option<norte_vfs::NodeId>, Error> {

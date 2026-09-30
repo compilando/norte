@@ -6859,10 +6859,6 @@ mod tests {
         assert_eq!(id_for_log(&RequestId::Str("a\rb".to_owned())), "a\\rb");
     }
 
-    use std::os::unix::fs::PermissionsExt;
-
-    use super::{DirIdentity, is_default_tmp_fallback, peer_allowed, prepare_socket_dir};
-
     /// #239: the location given to a plugin GOES THROUGH its own gate.
     ///
     /// It was believed gated because the `paths` were, and that is not the
@@ -7086,6 +7082,15 @@ mod tests {
         );
         drop(alive);
     }
+}
+
+/// The unix socket's admission and directory checks. Windows listens on a
+/// named pipe instead, with its own tests in `norte-winpipe` (ADR 0159).
+#[cfg(all(test, unix))]
+mod unix_socket_tests {
+    use std::os::unix::fs::PermissionsExt;
+
+    use super::{DirIdentity, is_default_tmp_fallback, peer_allowed, prepare_socket_dir};
 
     /// The admission policy is EXACTLY same-uid: not even root gets in.
     #[test]

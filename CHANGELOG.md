@@ -31,6 +31,11 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **Windows: an expired sync plan is only deleted if it is still the same
+  file.** Re-planning the same tree writes a new plan under the same name;
+  a late look at the old one deleted the new one by name, and the reader
+  was told a plan from seconds ago had expired. Unix already checked.
+  `norte-vfs-local` gains `identity_of` and `identity_at` for it.
 - **Windows: a junction can be deleted, and deleting it never touches
   what it points at** (#220). It was refused as "permission denied".
   Junctions are symlinks to norte everywhere else too — listed, skipped

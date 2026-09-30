@@ -3233,6 +3233,10 @@ header = "Size"
     /// the sticky bit only stops deleting others' — made every pane under
     /// `/tmp` hand the plugin the whole of `/tmp`. A legitimate `.git` is a
     /// directory or a worktree's `gitdir:` file; a link, never.
+    ///
+    /// Unix only: a symlink needs a privilege on Windows, where the home
+    /// ceiling (ADR 0158) is what stops a planted `C:\.git`.
+    #[cfg(unix)]
     #[test]
     fn a_marker_that_is_a_symlink_does_not_open_the_ancestor() {
         let root = tempfile::tempdir().unwrap();
@@ -3271,6 +3275,10 @@ header = "Size"
     /// It was discovered because this test is intermittent on machines where
     /// someone has left a `/tmp/.git`. It was not a flaky test: it was the
     /// test seeing the hole every time the condition existed.
+    ///
+    /// Unix only: "anyone can write here" is a mode bit; Windows answers the
+    /// same question with the profile ceiling (ADR 0158).
+    #[cfg(unix)]
     #[test]
     fn a_marker_in_a_directory_anyone_can_write_to_opens_nothing() {
         use std::os::unix::fs::PermissionsExt as _;
@@ -3520,7 +3528,19 @@ header = "Size"
         // cap is applied when READING, not when decoding.
         let tmp = TempDir::new().unwrap();
         write_plugin(tmp.path(), "org.norte.demo", DEMO_MANIFEST);
-        let f = std::fs::File::create(tmp.path().join("plugins/org.norte.demo/help.md")).unwrap();
+        let help = tmp.path().join("plugins/org.norte.demo/help.md");
+        let f = std::fs::File::create(&help).unwrap();
+        // NTFS allocates an extension unless the file is marked sparse, and
+        // 100 GiB does not fit.
+        #[cfg(windows)]
+        assert!(
+            std::process::Command::new("fsutil")
+                .args(["sparse", "setflag"])
+                .arg(&help)
+                .status()
+                .unwrap()
+                .success()
+        );
         // Sparse: not a byte written, so the fixture fits in any CI.
         f.set_len(100 * 1024 * 1024 * 1024).unwrap();
         drop(f);
