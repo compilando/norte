@@ -214,8 +214,6 @@ pub async fn run_suspended(
 /// # Errors
 /// Whatever fails handing over or getting back the terminal, or writing the
 /// shell's output.
-// POSIX, like the whole `subshell` module (see `lib.rs`).
-#[cfg(unix)]
 pub fn attach_subshell(
     terminal: &mut tty::Tui,
     capture: &mut mouse::Capture,
@@ -330,10 +328,12 @@ pub fn attach_subshell(
     // favorites, nor the marks recognize as the previous one.
     let now = sub.cwd();
     let key = |p: &Option<std::path::PathBuf>| {
-        use std::os::unix::ffi::OsStrExt as _;
         p.as_ref().map(|p| {
-            norte_encoding::name_key(p.as_os_str().as_bytes(), norte_encoding::FoldMode::None)
-                .into_owned()
+            norte_encoding::name_key(
+                p.as_os_str().as_encoded_bytes(),
+                norte_encoding::FoldMode::None,
+            )
+            .into_owned()
         })
     };
     Ok(if key(&now) == key(&before) { None } else { now })

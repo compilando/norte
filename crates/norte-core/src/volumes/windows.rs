@@ -66,7 +66,7 @@ use super::{Error, Volume, VolumeKind};
 /// Same number as Linux's `linux::SPACE_QUERY_DEADLINE` and macOS's
 /// `macos::ENUMERATE_DEADLINE`, same reasoning: short enough that one dead
 /// share does not visibly stall opening the picker, generous enough that a
-/// busy-but-healthy call still answers. Applied PER CALL (label+fs_type is
+/// busy-but-healthy call still answers. Applied PER CALL (label + `fs_type` is
 /// one call, free/total is another), like Linux's per-mount grain — a drive
 /// with a hung info call and a healthy space call (or vice versa) still
 /// shows what it could get, not nothing.

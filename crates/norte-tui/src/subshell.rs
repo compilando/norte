@@ -33,7 +33,7 @@
 use std::io::{Read as _, Write as _};
 use std::sync::{Arc, Mutex};
 
-use norte_frontend::subshell::{Nonce, install, scan_cwd};
+use norte_frontend::subshell::{Hook, Nonce, scan_cwd};
 
 /// This session's live subshell.
 pub struct Subshell {
@@ -50,9 +50,10 @@ pub struct Subshell {
     /// What the shell has written and has not been painted yet, plus the
     /// LAST cwd it announced. Filled by a reader thread.
     mailbox: Arc<Mutex<Mailbox>>,
-    /// Which of the three it is, if it is one of the three. `None` = norte
-    /// installed nothing in it and does not type anything into it.
-    which: Option<norte_frontend::shell::Shell>,
+    /// Which hook it got, if it is a shell norte knows (the POSIX three, or
+    /// PowerShell). `None` = norte installed nothing in it and does not
+    /// type anything into it.
+    which: Option<Hook>,
     /// This session's MAILBOX: how the shell is told to change directory,
     /// instead of typing a `cd` into it (#363).
     ///
@@ -109,7 +110,8 @@ impl Subshell {
     /// # Errors
     /// Whatever fails when opening the pty or launching the shell.
     pub fn start(dir: &std::path::Path, size: (u16, u16)) -> std::io::Result<Self> {
-        Self::start_with(&norte_frontend::shell::login_shell(), &[], dir, size)
+        let (program, args) = shell_program();
+        Self::start_with(&program, args, dir, size)
     }
 
     /// [`Self::start`] with the GIVEN program and arguments.
@@ -194,7 +196,7 @@ impl Subshell {
         // inside, and one pointing at a file that does not exist would be
         // plumbing typed into the reader's face for nothing in return.
         if let (Some(which), Some(mailbox)) = (which, me.mailbox_file.clone()) {
-            let _ = me.write(install(which, &nonce, &mailbox).as_bytes());
+            let _ = me.write(which.install(&nonce, &mailbox).as_bytes());
             // Ctrl+L: the `readline`/ZLE/fish command that clears the
             // screen and repaints the prompt. Without this, the first thing
             // the reader sees on their first Ctrl+O is the wall of plumbing
@@ -274,7 +276,6 @@ impl Subshell {
     /// # Errors
     /// Whatever fails when writing the mailbox.
     pub fn ir_a(&mut self, dir: &std::path::Path) -> std::io::Result<bool> {
-        use std::os::unix::ffi::OsStrExt as _;
         if self.which.is_none() {
             return Ok(false);
         }
@@ -283,8 +284,9 @@ impl Subshell {
         };
         // The trailing `_` is a sentinel and not decoration: the shell
         // reads the file with `$(<f)`, which eats trailing newlines, and a
-        // directory CAN end in one.
-        let mut bytes = dir.as_os_str().as_bytes().to_vec();
+        // directory CAN end in one. The platform's own bytes: unix's, or
+        // WTF-8 on Windows, which PowerShell reads as UTF-8.
+        let mut bytes = dir.as_os_str().as_encoded_bytes().to_vec();
         bytes.push(b'_');
         write_mailbox(mailbox, &bytes)?;
         Ok(true)
@@ -309,10 +311,18 @@ impl Subshell {
     /// Same as [`Self::drain`]: poisoned mailbox.
     #[must_use]
     pub fn cwd(&self) -> Option<std::path::PathBuf> {
-        use std::os::unix::ffi::OsStrExt as _;
-        let b = mailbox_of(&self.mailbox);
-        let bytes = b.cwd.as_ref()?;
-        Some(std::path::PathBuf::from(std::ffi::OsStr::from_bytes(bytes)))
+        if let Some(bytes) = mailbox_of(&self.mailbox).cwd.as_ref() {
+            return path_from_announced(bytes);
+        }
+        // Where no marker gets through (ConPTY drops it), a PowerShell hook
+        // leaves the directory in a file of this session (ADR 0161).
+        if self.which != Some(Hook::PowerShell) {
+            return None;
+        }
+        let file = norte_frontend::subshell::announce_file(self.mailbox_file.as_deref()?);
+        let text = std::fs::read(file).ok()?;
+        (!text.is_empty()).then_some(())?;
+        path_from_announced(&text)
     }
 
     /// Is the shell gone? (the reader saw EOF, or the child died).
@@ -361,23 +371,100 @@ impl Drop for Subshell {
         if let Some(p) = &self.mailbox_file {
             let _ = std::fs::remove_file(p);
             let _ = std::fs::remove_file(p.with_extension("cd.tmp"));
+            let announced = norte_frontend::subshell::announce_file(p);
+            let _ = std::fs::remove_file(announced.with_extension("pwd.tmp"));
+            let _ = std::fs::remove_file(announced);
         }
     }
 }
 
 /// The executable name from a shell path, to choose the hook.
 ///
-/// By BYTES (rule 1) and not by `to_string_lossy`: a `$SHELL` with a
-/// component that is not UTF-8 turned into `\u{FFFD}`, `Shell::parse`
-/// failed, and the reader was left with a subshell that never said where it
-/// was — no hook, no `cd` and not a single message explaining it. Now a
-/// non-UTF-8 name simply is not one of the three we know, which is the
-/// truth.
-fn shell_known(shell: &std::path::Path) -> Option<norte_frontend::shell::Shell> {
-    use std::os::unix::ffi::OsStrExt as _;
-    let name = shell.file_name()?;
-    let text = std::str::from_utf8(name.as_bytes()).ok()?;
-    norte_frontend::shell::Shell::parse(text)
+/// Never through `to_string_lossy`: a `$SHELL` with a component that is not
+/// UTF-8 turned into `\u{FFFD}`, `Shell::parse` failed, and the reader was
+/// left with a subshell that never said where it was — no hook, no `cd` and
+/// not a single message explaining it. A name that is not text simply is not
+/// one we know, which is the truth.
+fn shell_known(shell: &std::path::Path) -> Option<Hook> {
+    Hook::of_program(shell.file_name()?.to_str()?)
+}
+
+/// The directory a shell announced, as an ABSOLUTE path, or `None`.
+///
+/// unix: the bytes as they are (rule 1). Windows: UTF-8 from PowerShell,
+/// which writes a lone surrogate as U+FFFD — a name that would be another,
+/// nonexistent directory, so a `None` (ADR 0161). A relative path is never
+/// followed: it would be relative to whatever norte's cwd happens to be.
+fn path_from_announced(bytes: &[u8]) -> Option<std::path::PathBuf> {
+    #[cfg(unix)]
+    let path = {
+        use std::os::unix::ffi::OsStrExt as _;
+        std::path::PathBuf::from(std::ffi::OsStr::from_bytes(bytes))
+    };
+    #[cfg(not(unix))]
+    let path = std::str::from_utf8(bytes)
+        .ok()
+        .filter(|s| !s.contains('\u{FFFD}'))
+        .map(std::path::PathBuf::from)?;
+    path.is_absolute().then_some(path)
+}
+
+/// `ConPTY`'s opening question, `ESC [ 6 n`, removed from `buf[..n]` if the
+/// FIRST read carries it; returns whether it did (and so must be answered).
+/// Only the first read: a later `ESC [ 6 n` belongs to a program the reader
+/// ran (a `cat` of a file), and neither answering nor hiding it is norte's
+/// business (ADR 0161).
+fn take_conpty_query(buf: &mut [u8], n: &mut usize) -> bool {
+    let Some(at) = buf[..*n].windows(4).position(|w| w == b"\x1b[6n") else {
+        return false;
+    };
+    buf.copy_within(at + 4..*n, at);
+    *n -= 4;
+    true
+}
+
+/// The shell to start, and its arguments.
+///
+/// unix: the login shell, as a suspension uses. Windows: `$NORTE_SHELL` if
+/// absolute, else `pwsh`, else Windows PowerShell (ADR 0161) — never
+/// `%COMSPEC%`, whose `cmd.exe` cannot follow the panel. Always an ABSOLUTE
+/// path: `CreateProcess` looks for a bare name in the CURRENT directory
+/// first, and the child starts in whatever directory is being browsed.
+fn shell_program() -> (std::path::PathBuf, &'static [&'static str]) {
+    #[cfg(windows)]
+    {
+        if let Some(p) = std::env::var_os("NORTE_SHELL")
+            .map(std::path::PathBuf::from)
+            .filter(|p| p.is_absolute())
+        {
+            return (p, &[]);
+        }
+        if let Some(p) = find_on_path("pwsh.exe") {
+            return (p, &["-NoLogo"]);
+        }
+        let system = std::env::var_os("SystemRoot").map_or_else(
+            || std::path::PathBuf::from(r"C:\Windows"),
+            std::path::PathBuf::from,
+        );
+        (
+            system.join(r"System32\WindowsPowerShell\v1.0\powershell.exe"),
+            &["-NoLogo"],
+        )
+    }
+    #[cfg(not(windows))]
+    {
+        (norte_frontend::shell::login_shell(), &[])
+    }
+}
+
+/// `name` in an ABSOLUTE directory of `PATH`; relative entries are skipped
+/// for the same reason the result must be absolute.
+#[cfg(windows)]
+fn find_on_path(name: &str) -> Option<std::path::PathBuf> {
+    std::env::split_paths(&std::env::var_os("PATH")?)
+        .filter(|d| d.is_absolute())
+        .map(|d| d.join(name))
+        .find(|p| p.is_file())
 }
 
 /// The thread that reads from the pty non-stop and leaves what it read in
@@ -414,25 +501,60 @@ fn mailbox_of(mailbox: &Mutex<Mailbox>) -> std::sync::MutexGuard<'_, Mailbox> {
 /// drag the shell along and the hook is not installed. That is preferable
 /// to the two alternatives —crashing, or typing the `cd` again—.
 fn create_mailbox(nonce: &Nonce) -> Option<std::path::PathBuf> {
-    use std::os::unix::fs::OpenOptionsExt as _;
-    let dir = match std::env::var_os("XDG_RUNTIME_DIR").filter(|v| !v.is_empty()) {
-        Some(r) => std::path::PathBuf::from(r).join("norte"),
-        // With no `XDG_RUNTIME_DIR`, the same place as the daemon's socket:
-        // `/tmp/norte-<uid>`. The uid comes from the owner of a file we just
-        // created, which is our euid with no `unsafe` (rule 5) — the same
-        // trick `norte-client` uses to name that directory.
-        None => std::path::PathBuf::from(format!("/tmp/norte-{}", uid_own()?)),
-    };
+    let dir = mailbox_dir()?;
     std::fs::create_dir_all(&dir).ok()?;
     let path = dir.join(format!("subshell-{}.cd", nonce.as_str()));
-    std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(&path)
-        .ok()?;
+    owner_only(
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true),
+    )
+    .open(&path)
+    .ok()?;
     Some(path)
+}
+
+/// Where the mailbox lives.
+#[cfg(unix)]
+fn mailbox_dir() -> Option<std::path::PathBuf> {
+    Some(
+        match std::env::var_os("XDG_RUNTIME_DIR").filter(|v| !v.is_empty()) {
+            Some(r) => std::path::PathBuf::from(r).join("norte"),
+            // With no `XDG_RUNTIME_DIR`, the same place as the daemon's socket:
+            // `/tmp/norte-<uid>`. The uid comes from the owner of a file we just
+            // created, which is our euid with no `unsafe` (rule 5) — the same
+            // trick `norte-client` uses to name that directory.
+            None => std::path::PathBuf::from(format!("/tmp/norte-{}", uid_own()?)),
+        },
+    )
+}
+
+/// Where the mailbox lives: under `%LOCALAPPDATA%`, whose ACL already keeps
+/// other users out — what the 0700 runtime directory does on unix.
+#[cfg(not(unix))]
+fn mailbox_dir() -> Option<std::path::PathBuf> {
+    let base = std::env::var_os("LOCALAPPDATA").filter(|v| !v.is_empty())?;
+    Some(
+        std::path::PathBuf::from(base)
+            .join("norte")
+            .join("subshell"),
+    )
+}
+
+/// 0600 on CREATION on unix, not afterward: a file born 0644 and fixed up
+/// later has a window where another user can open it. On Windows the file
+/// inherits its directory's per-user ACL.
+fn owner_only(options: &mut std::fs::OpenOptions) -> &mut std::fs::OpenOptions {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600)
+    }
+    #[cfg(not(unix))]
+    {
+        options
+    }
 }
 
 /// This process's uid WITHOUT `unsafe` (rule 5): the owner of a file we
@@ -441,6 +563,7 @@ fn create_mailbox(nonce: &Nonce) -> Option<std::path::PathBuf> {
 /// Only used to NAME the `/tmp` directory, as in `norte-client`. What
 /// truly protects it is that directory's 0700 mode and the mailbox's 0600,
 /// not the number in the name.
+#[cfg(unix)]
 fn uid_own() -> Option<u32> {
     use std::os::unix::fs::MetadataExt as _;
     let probe = std::env::temp_dir().join(format!(".norte-uid-{}", std::process::id()));
@@ -459,15 +582,15 @@ fn uid_own() -> Option<u32> {
 /// one, never a fragment.
 fn write_mailbox(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write as _;
-    use std::os::unix::fs::OpenOptionsExt as _;
     let tmp = path.with_extension("cd.tmp");
     {
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&tmp)?;
+        let mut f = owner_only(
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true),
+        )
+        .open(&tmp)?;
         f.write_all(bytes)?;
         f.flush()?;
     }
@@ -495,13 +618,25 @@ fn launch_reader(
 ) {
     std::thread::spawn(move || {
         let mut buf = [0u8; 8192];
+        // ConPTY opens by asking where the cursor is (`ESC [ 6 n`) and
+        // starts NOTHING until it is told: measured, PowerShell sat silent.
+        // A pseudoconsole just created is at `1;1`, so the one answer that
+        // is not invented is that one, once. Later position queries stay
+        // unanswered, as on unix (ADR 0084, ADR 0161).
+        let mut conpty_handshake = cfg!(windows);
         loop {
             match reader.read(&mut buf) {
                 Ok(0) | Err(_) => {
                     mailbox_of(&mailbox).closed = true;
                     return;
                 }
-                Ok(n) => {
+                Ok(mut n) => {
+                    // Out of the stream too: painted later, the reader's
+                    // real terminal would answer it into norte's input.
+                    if std::mem::take(&mut conpty_handshake) && take_conpty_query(&mut buf, &mut n)
+                    {
+                        let _ = write_raw(&write, b"\x1b[1;1R");
+                    }
                     // Answering comes BEFORE anything else: the shell is
                     // STOPPED waiting for it. Outside the mailbox's lock,
                     // which does not matter here, and `write_raw`
@@ -582,7 +717,131 @@ type PtyReader = Box<dyn std::io::Read + Send>;
 /// ```
 pub use crate::termpanel::key_to_bytes;
 
+/// The pure halves of ADR 0161, on every gate.
 #[cfg(test)]
+mod portable_tests {
+    use super::{path_from_announced, take_conpty_query};
+
+    /// The question leaves the stream whole, wherever it sits, and what
+    /// was around it stays in order.
+    #[test]
+    fn the_conpty_query_is_taken_out() {
+        let mut buf = *b"ab\x1b[6ncd.....";
+        let mut n = 8;
+        assert!(take_conpty_query(&mut buf, &mut n));
+        assert_eq!(&buf[..n], b"abcd");
+
+        let mut plain = *b"no question";
+        let mut m = plain.len();
+        assert!(!take_conpty_query(&mut plain, &mut m));
+        assert_eq!(m, plain.len());
+    }
+
+    /// Only an absolute path is followed: `HKLM:`'s `SOFTWARE` is not a
+    /// directory, and relative to norte's cwd it would be somewhere else.
+    #[test]
+    fn a_relative_announcement_is_not_followed() {
+        assert_eq!(path_from_announced(b"SOFTWARE"), None);
+        let abs: &[u8] = if cfg!(windows) {
+            br"C:\Users"
+        } else {
+            b"/home"
+        };
+        assert!(path_from_announced(abs).is_some());
+    }
+}
+
+/// ADR 0161: the same promises as the unix tests below, with the shell a
+/// Windows user has.
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+
+    /// Windows PowerShell with nobody's profile, as `start` would pick it
+    /// without `pwsh`.
+    fn powershell(dir: &std::path::Path) -> Subshell {
+        let system = std::env::var_os("SystemRoot").map_or_else(
+            || std::path::PathBuf::from(r"C:\Windows"),
+            std::path::PathBuf::from,
+        );
+        Subshell::start_with(
+            &system.join(r"System32\WindowsPowerShell\v1.0\powershell.exe"),
+            &["-NoLogo", "-NoProfile"],
+            dir,
+            (80, 24),
+        )
+        .expect("starts PowerShell")
+    }
+
+    /// The cwd once it is `want`; on a timeout, what the shell printed is
+    /// shown, which is the only clue a hook that never ran leaves.
+    fn wait_cwd(sh: &Subshell, want: &std::path::Path) -> Option<std::path::PathBuf> {
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let mut seen = Vec::new();
+        while std::time::Instant::now() < until {
+            seen.extend_from_slice(&sh.drain());
+            if let Some(now) = sh.cwd()
+                && now == want
+            {
+                return Some(now);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        eprintln!("SHELL OUTPUT: {:?}", String::from_utf8_lossy(&seen));
+        sh.cwd()
+    }
+
+    /// It lives, it announces where it is, and it follows the panel
+    /// through the mailbox — with a name that is not ASCII.
+    #[test]
+    fn powershell_announces_and_follows() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let start = dir.path().canonicalize().expect("canonical");
+        let start = std::path::PathBuf::from(
+            start
+                .to_string_lossy()
+                .trim_start_matches(r"\\?\")
+                .to_owned(),
+        );
+        let target = start.join("año ñ");
+        std::fs::create_dir(&target).expect("mkdir");
+
+        let mut sh = powershell(&start);
+        assert!(sh.which == Some(Hook::PowerShell), "the hook is installed");
+        assert_eq!(wait_cwd(&sh, &start).as_deref(), Some(start.as_path()));
+
+        assert!(sh.ir_a(&target).expect("mailbox"), "left in the mailbox");
+        // The `cd` applies at the next prompt: an Enter gives it one.
+        sh.write_key(b"\r").expect("enter");
+        assert_eq!(wait_cwd(&sh, &target).as_deref(), Some(target.as_path()));
+
+        // A registry location is not a directory: nothing is announced,
+        // and the last directory stands.
+        sh.write(b"Set-Location HKLM:\\SOFTWARE\r").expect("types");
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        assert_eq!(sh.cwd().as_deref(), Some(target.as_path()));
+
+        // The hook runs before the reader's prompt and must not eat the
+        // exit code a prompt paints (review of ADR 0161).
+        let _ = sh.drain();
+        sh.write(b"cmd /c exit 3\r").expect("types");
+        sh.write(b"echo \"code=$LASTEXITCODE\"\r").expect("types");
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut seen = Vec::new();
+        while std::time::Instant::now() < until && !seen.windows(6).any(|w| w == b"code=3") {
+            seen.extend_from_slice(&sh.drain());
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(
+            seen.windows(6).any(|w| w == b"code=3"),
+            "{:?}",
+            String::from_utf8_lossy(&seen)
+        );
+        sh.matar();
+    }
+}
+
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

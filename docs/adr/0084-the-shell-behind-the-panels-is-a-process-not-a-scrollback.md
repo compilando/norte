@@ -216,9 +216,8 @@ a journal whose contract is that its rows can be undone. The audit trail is one
 - Output the shell produces while nobody is looking is buffered, capped at
   256 KiB, keeping the TAIL. A `find /` left running does not grow without
   bound; what it printed an hour ago is gone.
-- Unix only, and enforced: the module is `#[cfg(unix)]` and Windows takes a
-  refusal path with its own message. Without the gate the crate did not compile
-  there at all, and this ADR claimed a refusal that did not exist.
+- Unix only at first, and enforced by a `#[cfg(unix)]`. Superseded on that
+  point by ADR 0161: on Windows the subshell is PowerShell behind ConPTY.
 - The reader's keys are translated, not proxied, so what the shell gets is what
   `tecla_a_bytes` knows how to say. Function keys and the non-letter control
   chords are in; the mouse is not. A paste IS forwarded — the argument that "a

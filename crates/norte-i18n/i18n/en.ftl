@@ -707,7 +707,6 @@ msg-shell-press-key = [norte] press any key to return
 msg-subshell-no-key = bind app.toggle-panels to a single key to use the shell: a key sequence cannot bring the panels back
 # The subshell is POSIX: a pty, a `cd`, and prompt hooks for bash/zsh/fish.
 # Windows gets a refusal rather than a half-working feature.
-msg-subshell-not-here = the live shell behind the panels is not available on this system
 # The shell said where it is and norte could not go there. The path is NOT
 # interpolated: it is what the shell printed, and a follow that sometimes does
 # not happen without saying so is indistinguishable from one that is broken.

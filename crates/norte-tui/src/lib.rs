@@ -45,11 +45,8 @@ pub mod session_push;
 pub mod settings;
 pub mod shortcuts_editor;
 pub mod splash;
-/// The persistent subshell is POSIX: the pty, `cd`, and the prompt hooks all
-/// are (#142, ADR 0084). On Windows `app.toggle-panels` declines, which is
-/// the truth — and without this `cfg` the crate would not even compile there,
-/// because the path-to-bytes translation is `std::os::unix`.
-#[cfg(unix)]
+/// The persistent subshell (#142, ADR 0084): a pty on unix, ConPTY with
+/// PowerShell on Windows (ADR 0161).
 pub mod subshell;
 pub mod suspend;
 pub mod tasks;

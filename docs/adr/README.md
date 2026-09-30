@@ -161,3 +161,4 @@ edits.
 | [0158](0158-a-confined-root-on-windows-opens-one-name-at-a-time.md) | A confined root on Windows opens one name at a time, and identity is a `NodeId` | accepted |
 | [0159](0159-the-windows-daemon-listens-on-an-owner-only-named-pipe.md) | The Windows daemon listens on an owner-only named pipe, and its unsafe lives in `norte-winpipe` | accepted |
 | [0160](0160-confined-writes-on-windows-go-by-handle-and-never-cross-a-link.md) | Confined writes on Windows open, publish and delete by handle, and never cross a link | accepted |
+| [0161](0161-the-subshell-on-windows-is-powershell-behind-conpty.md) | The subshell on Windows is PowerShell behind ConPTY, hooked through its prompt | proposed |

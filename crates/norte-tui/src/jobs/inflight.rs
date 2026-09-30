@@ -297,9 +297,5 @@ pub struct InFlight {
     /// reader thread — and key dispatch must not be able to touch it. Being
     /// lazy matters: whoever never presses the key doesn't pay for a `fork`
     /// or a pty.
-    ///
-    /// POSIX: on Windows there is no subshell and `app.toggle-panels`
-    /// declines.
-    #[cfg(unix)]
     pub subshell: Option<crate::subshell::Subshell>,
 }

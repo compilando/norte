@@ -48,6 +48,12 @@
 # (Ctrl+Left/Right); per-letter quicksearch (AltGr+Letter / Ctrl+Alt+Letter
 # — not one chord, cannot be expressed).
 #
+# `app.toggle-panels` (the live shell behind the panels, #142) is unbound:
+# TC has no shell behind its panels — its command line runs a program and
+# returns — so there is no chord to transcribe. It is in the Panels menu,
+# which declines without a key: with no lone chord there is no way back
+# from the shell.
+#
 # `layout.flip` (ADR 0138) is unbound in all seven presets on purpose: the
 # transcribed KEYBOARD.TXT itemises no such action, and it lives on the
 # `[/]` layout button, the Panels menu and the palette.
