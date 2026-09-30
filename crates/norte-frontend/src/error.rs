@@ -106,6 +106,32 @@ pub fn error_key(e: &Error) -> &'static str {
     }
 }
 
+/// The STABLE Fluent key for a LOCAL io error — a frontend's own files
+/// (configuration, themes, the layout it saves) — shared by both surfaces.
+/// Never the OS's `Display`, which the OS localizes however it pleases.
+///
+/// A file another program holds without sharing (Windows'
+/// `ERROR_SHARING_VIOLATION`/`ERROR_LOCK_VIOLATION`) says so, like the
+/// protocol's `Busy` (#221): "I/O error" gives the reader nothing to do.
+///
+/// ```
+/// use norte_frontend::error::io_error_key;
+/// let e = std::io::Error::from(std::io::ErrorKind::NotFound);
+/// assert_eq!(io_error_key(&e), "err-not-found");
+/// ```
+#[must_use]
+pub fn io_error_key(e: &std::io::Error) -> &'static str {
+    if cfg!(windows) && matches!(e.raw_os_error(), Some(32 | 33)) {
+        return "err-busy";
+    }
+    match e.kind() {
+        std::io::ErrorKind::NotFound => "err-not-found",
+        std::io::ErrorKind::PermissionDenied => "err-permission-denied",
+        std::io::ErrorKind::StorageFull => "err-no-space",
+        _ => "err-io",
+    }
+}
+
 /// LOCALIZED text for a protocol [`Error`]'s category in the REQUESTED
 /// language: [`error_key`]'s stable key run through Fluent — never the
 /// hardcoded English `Display` nor an OS string.
@@ -134,4 +160,20 @@ pub fn error_category_in(lang: Lang, e: &Error) -> String {
 #[must_use]
 pub fn error_category(e: &Error) -> String {
     error_category_in(norte_i18n::active(), e)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::io_error_key;
+
+    /// 32 and 33 are Windows' sharing and lock violations, and nothing of
+    /// the kind elsewhere: on unix 32 is `EPIPE`.
+    #[test]
+    fn a_held_file_is_busy_on_windows_only() {
+        let held = std::io::Error::from_raw_os_error(32);
+        let locked = std::io::Error::from_raw_os_error(33);
+        let expected = if cfg!(windows) { "err-busy" } else { "err-io" };
+        assert_eq!(io_error_key(&held), expected);
+        assert_eq!(io_error_key(&locked), expected);
+    }
 }

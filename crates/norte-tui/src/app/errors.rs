@@ -41,13 +41,7 @@ pub fn detail_for_bar(detail: &str) -> String {
 /// ("Permission denied (os error 13)"; rule 1).
 #[must_use]
 pub fn io_error_category(e: &std::io::Error) -> String {
-    let key = match e.kind() {
-        std::io::ErrorKind::NotFound => "err-not-found",
-        std::io::ErrorKind::PermissionDenied => "err-permission-denied",
-        std::io::ErrorKind::StorageFull => "err-no-space",
-        _ => "err-io",
-    };
-    t(key)
+    t(norte_frontend::error::io_error_key(e))
 }
 
 /// LOCALIZED category for a [`crate::config::ConfigError`] (#73): its own
