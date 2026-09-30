@@ -102,17 +102,32 @@ fn map_kind(kind: EntryKind) -> FileKind {
 }
 
 /// Detects the terminal's color depth (heuristic — there is no reliable
-/// portable API, ADR 0020 D4): `COLORTERM=truecolor/24bit` → truecolor; `TERM`
-/// containing `256` → 256; otherwise, 16 colors.
+/// portable API, ADR 0020 D4). See [`depth_from`].
 #[must_use]
 pub fn detect_depth() -> ColorDepth {
-    if let Ok(ct) = std::env::var("COLORTERM")
-        && (ct.contains("truecolor") || ct.contains("24bit"))
-    {
+    depth_from(
+        std::env::var("COLORTERM").ok().as_deref(),
+        std::env::var("TERM").ok().as_deref(),
+        cfg!(windows),
+    )
+}
+
+/// `COLORTERM=truecolor/24bit` → truecolor; `TERM` containing `256` → 256;
+/// otherwise 16 colors — EXCEPT on Windows, whose console has drawn 24-bit
+/// color since Windows 10 (1703) and whose Windows Terminal sets neither
+/// variable. There, the 16-color fallback turned every theme into the
+/// console's Campbell palette (seen at the VM's desktop: catppuccin-latte in
+/// Campbell's blue, yellow and purple).
+#[must_use]
+pub fn depth_from(colorterm: Option<&str>, term: Option<&str>, windows: bool) -> ColorDepth {
+    if colorterm.is_some_and(|ct| ct.contains("truecolor") || ct.contains("24bit")) {
         return ColorDepth::Truecolor;
     }
-    if std::env::var("TERM").is_ok_and(|t| t.contains("256")) {
+    if term.is_some_and(|t| t.contains("256")) {
         return ColorDepth::Ansi256;
+    }
+    if windows && term.is_none() {
+        return ColorDepth::Truecolor;
     }
     ColorDepth::Ansi16
 }
@@ -125,4 +140,32 @@ pub fn detect_depth() -> ColorDepth {
 /// Those of [`resolve_theme`].
 pub fn resolve(spec: Option<&str>, depth: ColorDepth) -> Result<TuiTheme, ResolveError> {
     Ok(TuiTheme::new(resolve_theme(spec)?, depth))
+}
+
+#[cfg(test)]
+mod depth_tests {
+    use super::depth_from;
+    use norte_theme::ColorDepth;
+
+    /// Windows Terminal sets neither variable and draws 24-bit color: the
+    /// 16-color fallback is for a unix terminal that says nothing.
+    #[test]
+    fn windows_without_variables_is_truecolor() {
+        assert_eq!(depth_from(None, None, true), ColorDepth::Truecolor);
+        assert_eq!(depth_from(None, None, false), ColorDepth::Ansi16);
+    }
+
+    /// What the variables say still wins, on both.
+    #[test]
+    fn the_variables_still_decide() {
+        assert_eq!(
+            depth_from(Some("truecolor"), None, false),
+            ColorDepth::Truecolor
+        );
+        assert_eq!(
+            depth_from(None, Some("xterm-256color"), true),
+            ColorDepth::Ansi256
+        );
+        assert_eq!(depth_from(None, Some("xterm"), true), ColorDepth::Ansi16);
+    }
 }

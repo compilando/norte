@@ -1,6 +1,6 @@
 [package]
 name = "norte-winpipe"
-description = "The Windows named pipe's security boundary for the norte daemon: an owner-only DACL and the peer's user SID (ADR 0159)"
+description = "The Windows boundaries norte needs unsafe for: the daemon's owner-only named pipe (ADR 0159) and the console's code page (ADR 0162)"
 license = "MIT OR Apache-2.0"
 version.workspace = true
 edition.workspace = true
@@ -24,6 +24,9 @@ windows-sys = { workspace = true, features = [
     "Win32_System_Threading",
     # `SYSTEM_MANDATORY_LABEL_ACE_TYPE`, for reading the pipe's label.
     "Win32_System_SystemServices",
+    # The console's code page (ADR 0162): `CP_UTF8` lives in Globalization.
+    "Win32_System_Console",
+    "Win32_Globalization",
 ] }
 
 [target.'cfg(windows)'.dev-dependencies]

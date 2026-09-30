@@ -47,6 +47,10 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }
 # `toml_edit::Value` is the type of `norte_config::persist_set` (`--use`).
 toml_edit.workspace = true
 
+# The console speaks UTF-8 for the run (ADR 0162): file names are printed.
+[target.'cfg(windows)'.dependencies]
+norte-winpipe.workspace = true
+
 [dev-dependencies]
 assert_cmd.workspace = true
 norte-testkit.workspace = true

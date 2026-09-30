@@ -106,6 +106,11 @@ portable-pty = { version = "0.9.0", default-features = false }
 # channel—, it is just linked here too.
 base64.workspace = true
 
+# The console speaks UTF-8 for the run (ADR 0162): `SetConsoleOutputCP` is
+# FFI, and `norte-winpipe` is where rule 5 lets it live.
+[target.'cfg(windows)'.dependencies]
+norte-winpipe.workspace = true
+
 [dev-dependencies]
 # A test `Provider` that returns `SecretNeeded`: it is the answer a remote
 # gives on reopening when the previous daemon took the secret with it, and
