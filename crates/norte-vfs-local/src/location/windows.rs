@@ -20,30 +20,24 @@
 
 use std::fs::File;
 use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
-use std::os::windows::io::{AsRawHandle as _, FromRawHandle as _};
+use std::os::windows::io::AsRawHandle as _;
 use std::path::Path;
 
 use norte_proto::Segment;
 use norte_vfs::NodeId;
-use windows_sys::Wdk::Foundation::OBJECT_ATTRIBUTES;
 use windows_sys::Wdk::Storage::FileSystem::{
-    FILE_DIRECTORY_FILE, FILE_OPEN, FILE_OPEN_REPARSE_POINT, FILE_SYNCHRONOUS_IO_NONALERT,
-    NtCreateFile,
+    FILE_DIRECTORY_FILE, FILE_OPEN, FILE_OPEN_REPARSE_POINT,
 };
 use windows_sys::Win32::Foundation::{
     ERROR_ACCESS_DENIED, ERROR_CANT_ACCESS_FILE, ERROR_DIRECTORY, ERROR_FILE_NOT_FOUND,
-    ERROR_NO_MORE_FILES, ERROR_PATH_NOT_FOUND, ERROR_STOPPED_ON_SYMLINK, HANDLE,
-    OBJ_CASE_INSENSITIVE, RtlNtStatusToDosError, UNICODE_STRING,
+    ERROR_NO_MORE_FILES, ERROR_PATH_NOT_FOUND, ERROR_STOPPED_ON_SYMLINK,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_READONLY,
-    FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FULL_DIR_INFO,
-    FILE_GENERIC_READ, FILE_ID_128, FILE_ID_INFO, FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES,
-    FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_TRAVERSE, FileFullDirectoryInfo,
-    FileFullDirectoryRestartInfo, FileIdInfo, GetFileInformationByHandle,
+    FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_READONLY, FILE_ATTRIBUTE_REPARSE_POINT,
+    FILE_FLAG_BACKUP_SEMANTICS, FILE_FULL_DIR_INFO, FILE_GENERIC_READ, FILE_LIST_DIRECTORY,
+    FILE_READ_ATTRIBUTES, FILE_TRAVERSE, FileFullDirectoryInfo, FileFullDirectoryRestartInfo,
     GetFileInformationByHandleEx, SYNCHRONIZE,
 };
-use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
 
 use super::{LocationDirent, LocationError, LocationKind, LocationMeta};
 
@@ -119,42 +113,8 @@ pub(super) fn dir_id(file: &File) -> Result<NodeId, LocationError> {
     Ok(id)
 }
 
-#[allow(unsafe_code)]
 fn raw_id(file: &File) -> Result<NodeId, LocationError> {
-    let mut info = FILE_ID_INFO {
-        VolumeSerialNumber: 0,
-        FileId: FILE_ID_128 {
-            Identifier: [0; 16],
-        },
-    };
-    // SAFETY: the handle is alive for the call (`file` is borrowed), and the
-    // buffer is exactly one `FILE_ID_INFO` whose size is what is passed.
-    let ok = unsafe {
-        GetFileInformationByHandleEx(
-            file.as_raw_handle(),
-            FileIdInfo,
-            std::ptr::from_mut(&mut info).cast(),
-            size_of_u32::<FILE_ID_INFO>(),
-        )
-    };
-    if ok != 0 {
-        return Ok(NodeId {
-            volume: info.VolumeSerialNumber,
-            index: u128::from_le_bytes(info.FileId.Identifier),
-        });
-    }
-    // SAFETY: `BY_HANDLE_FILE_INFORMATION` is plain integers, so all-zeros
-    // is a valid value, and the call below overwrites it before it is read.
-    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
-    // SAFETY: as above; the buffer is one `BY_HANDLE_FILE_INFORMATION`.
-    let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle(), &raw mut info) };
-    if ok == 0 {
-        return Err(from_io(&std::io::Error::last_os_error()));
-    }
-    Ok(NodeId {
-        volume: u64::from(info.dwVolumeSerialNumber),
-        index: (u128::from(info.nFileIndexHigh) << 32) | u128::from(info.nFileIndexLow),
-    })
+    crate::win_nt::file_id(file).map_err(|e| from_io(&e))
 }
 
 pub(super) fn open_read(dir: &Dir, name: &Segment) -> Result<File, LocationError> {
@@ -280,79 +240,22 @@ fn open_child(
     options: u32,
 ) -> Result<File, LocationError> {
     let wide = wide_name(name)?;
-    let looked = nt_open(
-        dir,
-        &wide,
-        access | FILE_READ_ATTRIBUTES,
-        options | FILE_OPEN_REPARSE_POINT,
-    )
-    .map_err(|e| from_io(&e))?;
-    let md = looked.metadata().map_err(|e| from_io(&e))?;
-    if md.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0 {
-        return Ok(looked);
-    }
-    if md.file_type().is_symlink() {
-        return Err(LocationError::Escapes);
-    }
-    let through =
-        nt_open(dir, &wide, access | FILE_READ_ATTRIBUTES, options).map_err(|e| from_io(&e))?;
-    if dir_id(&through)? != dir_id(&looked)? {
-        return Err(LocationError::Escapes);
-    }
-    Ok(through)
+    crate::win_nt::open_child(dir, &wide, access, options).map_err(|e| match e {
+        crate::win_nt::ChildError::Escapes => LocationError::Escapes,
+        crate::win_nt::ChildError::Io(e) => from_io(&e),
+    })
 }
 
-/// `NtCreateFile` of ONE name relative to `dir`, synchronous, sharing
-/// everything (a reader must not lock the user out of their own file).
-#[allow(unsafe_code)]
+/// An existing name relative to `dir`, sharing everything (`crate::win_nt`).
 fn nt_open(dir: &File, name: &[u16], access: u32, options: u32) -> std::io::Result<File> {
-    let bytes = u16::try_from(name.len() * 2)
-        .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidFilename))?;
-    let object_name = UNICODE_STRING {
-        Length: bytes,
-        MaximumLength: bytes,
-        Buffer: name.as_ptr().cast_mut(),
-    };
-    let attributes = OBJECT_ATTRIBUTES {
-        Length: size_of_u32::<OBJECT_ATTRIBUTES>(),
-        RootDirectory: dir.as_raw_handle(),
-        ObjectName: &raw const object_name,
-        // What `CreateFileW` does; a per-directory case-sensitive folder
-        // still decides for itself.
-        Attributes: OBJ_CASE_INSENSITIVE,
-        SecurityDescriptor: std::ptr::null(),
-        SecurityQualityOfService: std::ptr::null(),
-    };
-    let mut handle: HANDLE = std::ptr::null_mut();
-    let mut status_block = IO_STATUS_BLOCK::default();
-    // SAFETY: every pointer is to a local that outlives the call; `name`
-    // is borrowed for it and `NtCreateFile` does not write through
-    // `Buffer`. `dir` keeps `RootDirectory` open throughout.
-    let status = unsafe {
-        NtCreateFile(
-            &raw mut handle,
-            access,
-            &raw const attributes,
-            &raw mut status_block,
-            std::ptr::null(),
-            0,
-            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-            FILE_OPEN,
-            options | FILE_SYNCHRONOUS_IO_NONALERT,
-            std::ptr::null(),
-            0,
-        )
-    };
-    if status < 0 {
-        // SAFETY: a pure translation of a status code.
-        let code = unsafe { RtlNtStatusToDosError(status) };
-        return Err(std::io::Error::from_raw_os_error(
-            i32::try_from(code).unwrap_or(i32::MAX),
-        ));
-    }
-    // SAFETY: `NtCreateFile` succeeded, so `handle` is a fresh handle that
-    // nobody else owns; `File` becomes its only owner.
-    Ok(unsafe { File::from_raw_handle(handle) })
+    crate::win_nt::nt_create(
+        dir,
+        name,
+        access,
+        FILE_OPEN,
+        options,
+        crate::win_nt::SHARE_ALL,
+    )
 }
 
 /// A component as UTF-16, refusing what the NT parser would not read as
@@ -362,7 +265,7 @@ fn wide_name(name: &Segment) -> Result<Vec<u16>, LocationError> {
     if bytes.iter().any(|b| matches!(b, b'\\' | b':')) {
         return Err(LocationError::Escapes);
     }
-    norte_vfs::wtf8::decode_to_wide(bytes).ok_or(LocationError::Io)
+    crate::win_nt::wide_component(bytes).ok_or(LocationError::Io)
 }
 
 fn listed_kind(attrs: u32, tag: u32) -> LocationKind {
@@ -397,10 +300,6 @@ fn unix_time(filetime: u64) -> (i64, u32) {
 fn u32_at(bytes: &[u8], at: usize) -> Result<u32, LocationError> {
     let b = bytes.get(at..at + 4).ok_or(LocationError::Io)?;
     Ok(u32::from_ne_bytes([b[0], b[1], b[2], b[3]]))
-}
-
-fn size_of_u32<T>() -> u32 {
-    u32::try_from(std::mem::size_of::<T>()).unwrap_or(u32::MAX)
 }
 
 pub(super) fn from_io(e: &std::io::Error) -> LocationError {

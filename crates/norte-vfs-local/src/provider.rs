@@ -556,7 +556,11 @@ fn mtime_ms(md: &std::fs::Metadata) -> Option<i64> {
     }
 }
 
-fn entry_from(path: VPath, md: &std::fs::Metadata, req: &norte_vfs::AttrRequest) -> Entry {
+pub(crate) fn entry_from(
+    path: VPath,
+    md: &std::fs::Metadata,
+    req: &norte_vfs::AttrRequest,
+) -> Entry {
     let ft = md.file_type();
     let (kind, size) = if ft.is_symlink() {
         (EntryKind::Symlink, None)
@@ -1149,7 +1153,8 @@ impl Provider for LocalProvider {
         // Confinement is a PLATFORM property, not one of the location or
         // the tree's state: on unix there's `openat` — with `openat2` or
         // with the walk, both guarantee the same thing —, and on Windows
-        // not yet. It goes before any probe because it must also hold in
+        // handle-relative `NtCreateFile` (#217, ADR 0160). It goes before
+        // any probe because it must also hold in
         // the degraded path below: otherwise,
         // `file:///destination-that-doesnt-exist-yet` would say "I can't
         // confine" and `file:///` would say yes, which is a different
@@ -1157,7 +1162,7 @@ impl Provider for LocalProvider {
         // mirror.
         declared
             .flags
-            .set(CapabilityFlags::CONFINED_WRITES, cfg!(unix));
+            .set(CapabilityFlags::CONFINED_WRITES, cfg!(any(unix, windows)));
         let native = self.native(p)?;
         let cache = std::sync::Arc::clone(&self.caps_at);
         // With a DEADLINE, and on a detached thread (#213). Everything
@@ -1294,6 +1299,23 @@ impl Provider for LocalProvider {
             let opened = crate::confined::LocalRoot::open(&native)?;
             Ok(
                 Box::new(crate::confined::LocalConfinedRoot::new(opened, vpath))
+                    as Box<dyn norte_vfs::ConfinedRoot>,
+            )
+        })
+        .await
+    }
+
+    /// Windows: the root's handle, and every name below it opened relative
+    /// to its parent's handle (#217, ADR 0160).
+    #[cfg(windows)]
+    async fn open_root(&self, root: &VPath) -> Result<Box<dyn norte_vfs::ConfinedRoot>, Error> {
+        self.ensure_caps().await;
+        let native = self.native(root)?;
+        let vpath = root.clone();
+        blocking(move || {
+            let opened = crate::confined_windows::WinRoot::open(&native)?;
+            Ok(
+                Box::new(crate::confined_windows::WinConfinedRoot::new(opened, vpath))
                     as Box<dyn norte_vfs::ConfinedRoot>,
             )
         })

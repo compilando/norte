@@ -9,6 +9,14 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Windows: copies, moves and deletes into a local folder cannot be
+  redirected outside it** (#217, ADR 0160). A junction or symlink planted in
+  a folder along the way used to send the write wherever it pointed, and
+  the confirmation warned that this destination could not confine. Now
+  every name below the destination is opened relative to its parent, a link
+  on the way is refused, and the warning is gone. Unlike Linux and macOS, a
+  link that stays inside the destination is refused too.
+
 - **Protocol 0.85.0: `Error::Busy`**, a file another program keeps open
   without sharing it (#221). On Windows a copy, move or delete that meets
   one no longer fails on the first attempt: the engine retries it (100,

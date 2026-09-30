@@ -15,6 +15,9 @@
 mod caps_at;
 #[cfg(unix)]
 mod confined;
+/// Writes that cannot escape their root, on Windows (#217, ADR 0160).
+#[cfg(windows)]
+mod confined_windows;
 #[cfg(unix)]
 mod identity;
 /// Bounded reading under a directory, for the plugin-host's `location`
@@ -25,6 +28,9 @@ mod location;
 pub mod mounts_macos;
 #[cfg(windows)]
 pub mod mounts_windows;
+/// Names opened, renamed and deleted relative to a directory handle.
+#[cfg(windows)]
+mod win_nt;
 
 mod provider;
 /// Built everywhere so its tests run on every gate; only Windows calls it.
