@@ -32,9 +32,33 @@ const MAX_LOGS: usize = 1024;
 /// Truncated on a char boundary (never splits a code point).
 const MAX_LOG_CHARS: usize = 4096;
 
-/// Linear memory limit per guest store (64 MiB, generous): a plugin cannot
-/// exhaust the host's RAM by growing its linear memory without end.
+/// Limit per LINEAR MEMORY of a guest (64 MiB, generous): a plugin cannot
+/// exhaust the host's RAM by growing its memory without end. It is per
+/// memory, not per store — hence [`MAX_STORE_MEMORIES`].
 const MAX_STORE_MEMORY_BYTES: usize = 64 * 1024 * 1024;
+
+/// What a guest may declare, besides the size of each memory. wasmtime's
+/// defaults are 10 000 memories, tables and instances and tables of any
+/// length: 10 000 × 64 MiB is no cap at all. Measured on the 23 official
+/// and test guests (2026-09-30): 1 memory, 2 tables of at most 911
+/// elements, 3 core modules (29 instance-index entries at most, of which
+/// only instantiations count). The caps leave room for larger plugins and
+/// none for a store built to eat the host.
+const MAX_STORE_MEMORIES: usize = 4;
+const MAX_STORE_TABLES: usize = 16;
+const MAX_STORE_INSTANCES: usize = 128;
+const MAX_TABLE_ELEMENTS: usize = 100_000;
+
+/// The limits every guest store runs under.
+fn store_limits() -> StoreLimits {
+    StoreLimitsBuilder::new()
+        .memory_size(MAX_STORE_MEMORY_BYTES)
+        .memories(MAX_STORE_MEMORIES)
+        .tables(MAX_STORE_TABLES)
+        .instances(MAX_STORE_INSTANCES)
+        .table_elements(MAX_TABLE_ELEMENTS)
+        .build()
+}
 
 /// Cap on the guest's RETURN value (`run_command`/`render_preview`), in
 /// bytes (issue #68): a guest cannot grow the host's memory by returning a
@@ -1116,12 +1140,9 @@ impl PluginRuntime {
             ctx_builder.allow_tcp(true);
         }
         let ctx = ctx_builder.build();
-        // Per-store linear memory limit (closes M4-P2b): a guest cannot
-        // exhaust the host's RAM. `StoreLimits` implements
-        // `ResourceLimiter`.
-        let limits = StoreLimitsBuilder::new()
-            .memory_size(MAX_STORE_MEMORY_BYTES)
-            .build();
+        // Memory and table limits (closes M4-P2b): a guest cannot exhaust
+        // the host's RAM. `StoreLimits` implements `ResourceLimiter`.
+        let limits = store_limits();
         let state = HostState {
             ctx,
             table: ResourceTable::new(),
@@ -2259,6 +2280,70 @@ impl ColumnsInstance {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A core module, hand-assembled: `sections` after the header.
+    fn module(sections: &[&[u8]]) -> Vec<u8> {
+        let mut m = b"\0asm\x01\0\0\0".to_vec();
+        for s in sections {
+            m.extend_from_slice(s);
+        }
+        m
+    }
+
+    /// A memory section with `n` memories of 0 pages.
+    fn memories(n: u8) -> Vec<u8> {
+        let mut s = vec![5, 1 + 2 * n, n];
+        s.extend(std::iter::repeat_n([0u8, 0u8], n.into()).flatten());
+        s
+    }
+
+    /// A table section with `n` funcref tables of 0 elements.
+    fn tables(n: u8) -> Vec<u8> {
+        let mut s = vec![4, 1 + 3 * n, n];
+        s.extend(std::iter::repeat_n([0x70u8, 0, 0], n.into()).flatten());
+        s
+    }
+
+    /// Whether `bytes` instantiates under the guests' limits.
+    fn instantiates(bytes: &[u8]) -> bool {
+        let engine = Engine::default();
+        let module = wasmtime::Module::new(&engine, bytes).expect("a valid module");
+        let mut store = Store::new(&engine, store_limits());
+        store.limiter(|l| l);
+        wasmtime::Instance::new(&mut store, &module, &[]).is_ok()
+    }
+
+    /// The caps bite on what a guest DECLARES, not only on how its memory
+    /// grows: 10 000 memories of 64 MiB each was no cap at all.
+    #[test]
+    fn a_store_built_to_eat_the_host_does_not_instantiate() {
+        // What every official guest looks like: one memory, two tables.
+        assert!(instantiates(&module(&[&tables(2), &memories(1)])));
+
+        assert!(!instantiates(&module(&[&memories(
+            u8::try_from(MAX_STORE_MEMORIES + 1).expect("small")
+        )])));
+        assert!(!instantiates(&module(&[&tables(
+            u8::try_from(MAX_STORE_TABLES + 1).expect("small")
+        )])));
+        // One table of 200 000 elements (LEB128 `c0 9a 0c`).
+        assert!(!instantiates(&module(&[&[
+            4, 6, 1, 0x70, 0, 0xc0, 0x9a, 0x0c
+        ]])));
+    }
+
+    /// Instantiations are counted per store: the one past the cap fails.
+    #[test]
+    fn a_store_stops_instantiating_at_its_cap() {
+        let engine = Engine::default();
+        let empty = wasmtime::Module::new(&engine, module(&[])).expect("a valid module");
+        let mut store = Store::new(&engine, store_limits());
+        store.limiter(|l| l);
+        for _ in 0..MAX_STORE_INSTANCES {
+            wasmtime::Instance::new(&mut store, &empty, &[]).expect("within the cap");
+        }
+        assert!(wasmtime::Instance::new(&mut store, &empty, &[]).is_err());
+    }
 
     /// `net` connects to its allow-list and does nothing else: the implicit
     /// bind wasmtime-wasi 48 checks before a `connect` must not become a
