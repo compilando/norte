@@ -49,6 +49,19 @@ const MAX_STORE_TABLES: usize = 16;
 const MAX_STORE_INSTANCES: usize = 128;
 const MAX_TABLE_ELEMENTS: usize = 100_000;
 
+/// Live WASI resources a guest may hold at once (streams, pollables,
+/// sockets). wasmtime's default is 1 000 000 entries of host heap that no
+/// memory limit charges, and a guest can create them in a loop within one
+/// call's deadline. The official guests hold a few dozen at most.
+const MAX_GUEST_RESOURCES: usize = 4096;
+
+/// The resource table every guest store runs with.
+fn guest_resource_table() -> ResourceTable {
+    let mut table = ResourceTable::new();
+    table.set_max_capacity(MAX_GUEST_RESOURCES);
+    table
+}
+
 /// The limits every guest store runs under.
 fn store_limits() -> StoreLimits {
     StoreLimitsBuilder::new()
@@ -1145,7 +1158,7 @@ impl PluginRuntime {
         let limits = store_limits();
         let state = HostState {
             ctx,
-            table: ResourceTable::new(),
+            table: guest_resource_table(),
             caps,
             logs: Vec::new(),
             scoped_resources: HashMap::new(),
@@ -2330,6 +2343,17 @@ mod tests {
         assert!(!instantiates(&module(&[&[
             4, 6, 1, 0x70, 0, 0xc0, 0x9a, 0x0c
         ]])));
+    }
+
+    /// A guest's resource table refuses the entry past its cap instead of
+    /// growing the host's heap.
+    #[test]
+    fn the_resource_table_stops_at_its_cap() {
+        let mut table = guest_resource_table();
+        for _ in 0..MAX_GUEST_RESOURCES {
+            table.push(()).expect("within the cap");
+        }
+        assert!(table.push(()).is_err());
     }
 
     /// Instantiations are counted per store: the one past the cap fails.

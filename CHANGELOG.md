@@ -63,6 +63,9 @@ independently through `PROTOCOL_VERSION`.
   to 10 000 of them, plus tables of any length. A guest now gets at most 4
   memories, 16 tables of up to 100 000 elements and 128 instantiations —
   far above what every official plugin uses (1 memory, 2 small tables).
+  And it holds at most 4096 live WASI resources (streams, pollables,
+  sockets) instead of wasmtime's default million, which lived on the
+  host's heap outside any memory cap.
 - **wasmtime 46 → 48.0.3** for RUSTSEC-2026-0314: a plugin could panic the
   host through a filesystem datetime overflow. The same release fixes
   RUSTSEC-2026-0316 (past the fuel limit), which norte, capped by epoch
