@@ -2564,14 +2564,10 @@ impl FollowUp {
 /// The KEY and not the text: the host localizes with ITS OWN language
 /// (`norte_i18n::t_in`), not the process's. And never the system's `Display`,
 /// which the OS translates on a whim — "Permission denied (os error 13)" is
-/// not a norte message (#73).
+/// not a norte message (#73). The mapping is the terminal's too
+/// ([`norte_frontend::error::io_error_key`]).
 fn io_key(e: &std::io::Error) -> &'static str {
-    match e.kind() {
-        std::io::ErrorKind::NotFound => "err-not-found",
-        std::io::ErrorKind::PermissionDenied => "err-permission-denied",
-        std::io::ErrorKind::StorageFull => "err-no-space",
-        _ => "err-io",
-    }
+    norte_frontend::error::io_error_key(e)
 }
 
 /// The semantic state. Only the actor touches it.

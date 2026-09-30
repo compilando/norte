@@ -22,7 +22,8 @@ independently through `PROTOCOL_VERSION`.
   one no longer fails on the first attempt: the engine retries it (100,
   200, 400 ms), and if it is still held the message says so and to close
   that program, instead of "I/O error". A 0.84 client shows "unknown
-  error".
+  error". The frontends' own files (settings, themes, the saved layout)
+  say the same when held, through one mapping both now share.
 
 ### Changed
 
