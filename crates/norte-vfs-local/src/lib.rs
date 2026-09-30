@@ -59,3 +59,48 @@ pub use location::{
 // them this way.
 pub use norte_vfs::native::{vpath_from_native, vpath_to_native};
 pub use provider::LocalProvider;
+
+/// The identity of an open file, or `None` where the volume gives none.
+///
+/// With [`identity_at`], it answers "does this path still name the file I
+/// opened?" on every platform, which `std` only answers on unix.
+///
+/// ```
+/// let dir = tempfile::tempdir().unwrap();
+/// let path = dir.path().join("f");
+/// let file = std::fs::File::create(&path).unwrap();
+/// assert_eq!(
+///     norte_vfs_local::identity_of(&file),
+///     norte_vfs_local::identity_at(&path)
+/// );
+/// ```
+#[must_use]
+pub fn identity_of(file: &std::fs::File) -> Option<norte_vfs::NodeId> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        let md = file.metadata().ok()?;
+        Some(norte_vfs::NodeId {
+            volume: md.dev(),
+            index: u128::from(md.ino()),
+        })
+    }
+    #[cfg(windows)]
+    {
+        win_nt::file_id(file).ok().filter(|id| id.index != 0)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = file;
+        None
+    }
+}
+
+/// The identity of what `path` names, without following a final link, or
+/// `None` if it is gone or the volume gives none. See [`identity_of`].
+#[must_use]
+pub fn identity_at(path: &std::path::Path) -> Option<norte_vfs::NodeId> {
+    provider::node_id_native(path, norte_vfs::FollowLinks::No)
+        .ok()
+        .flatten()
+}

@@ -93,11 +93,11 @@ async fn names(mem: &MemProvider) -> Vec<Vec<u8>> {
 }
 
 /// The same over a real disk directory.
+/// Encoded bytes: the names here are ASCII, where they equal the wire's.
 fn names_in(dir: &std::path::Path) -> Vec<Vec<u8>> {
-    use std::os::unix::ffi::OsStrExt as _;
     let mut out: Vec<Vec<u8>> = std::fs::read_dir(dir)
         .expect("read_dir")
-        .map(|e| e.expect("entry").file_name().as_bytes().to_vec())
+        .map(|e| e.expect("entry").file_name().as_encoded_bytes().to_vec())
         .collect();
     out.sort();
     out

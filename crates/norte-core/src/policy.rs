@@ -968,8 +968,9 @@ mod tests {
     #[test]
     fn local_root_vpath_keeps_the_bytes_and_requires_absolute() {
         assert!(local_root_vpath(std::path::Path::new("rel/ativo")).is_none());
+        let dotted = if cfg!(windows) { r"C:\a\.\b" } else { "/a/./b" };
         assert!(
-            local_root_vpath(std::path::Path::new("/a/./b")).is_some(),
+            local_root_vpath(std::path::Path::new(dotted)).is_some(),
             "`components()` normalizes `.`"
         );
         #[cfg(unix)]

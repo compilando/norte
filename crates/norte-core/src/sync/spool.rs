@@ -1226,6 +1226,8 @@ fn validated_step(record: SpoolStep) -> Result<SpoolStep, SpoolError> {
 
 /// Creates the directory with owner-only permissions and nothing else.
 fn ensure_dir(dir: &Path) -> Result<(), SpoolError> {
+    // Windows has no mode here: the directory inherits its parent's ACL.
+    #[cfg_attr(not(unix), expect(unused_mut, reason = "only unix sets a mode"))]
     let mut builder = std::fs::DirBuilder::new();
     #[cfg(unix)]
     {
@@ -1327,8 +1329,9 @@ fn open_blocking(
         return Err(SpoolError::NotFound);
     }
     if expired(&meta) {
+        let opened = norte_vfs_local::identity_of(&file);
         drop(file);
-        remove_if_same_inode(path, &meta);
+        remove_if_same_node(path, opened);
         return Err(SpoolError::Expired);
     }
 
@@ -1469,24 +1472,19 @@ fn verify_digest(
     Ok(())
 }
 
-/// Deletes `path` only if it still names the inode that was looked at.
+/// Deletes `path` only if it still names the node that was opened.
 ///
 /// Re-planning the same tree with the same options produces the SAME hash,
 /// and `finish` renames over it. Without this check, a late-arriving `open`
 /// with the old file's descriptor would delete by name the just-approved
 /// plan, and the human would get "your plan expired" over one from seconds
-/// ago.
-fn remove_if_same_inode(path: &Path, opened: &std::fs::Metadata) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt as _;
-        match std::fs::symlink_metadata(path) {
-            Ok(now) if now.dev() == opened.dev() && now.ino() == opened.ino() => {}
-            // No longer there, or already another file: in both cases, not ours.
-            _ => return,
-        }
+/// ago. On Windows the check did not exist until the core's suite ran
+/// there; without an identity (FAT) nothing is deleted, and the startup
+/// sweep's TTL is the ceiling.
+fn remove_if_same_node(path: &Path, opened: Option<norte_vfs::NodeId>) {
+    if opened.is_some() && norte_vfs_local::identity_at(path) == opened {
+        let _ = std::fs::remove_file(path);
     }
-    let _ = std::fs::remove_file(path);
 }
 
 /// Did it pass the TTL? A mtime in the FUTURE counts as fresh: a clock

@@ -1209,13 +1209,24 @@ mod tests {
     /// A local port that responds `403` to whatever and closes. Returns the
     /// port; the task dies with the test's runtime.
     async fn server_that_denies() -> u16 {
-        use tokio::io::AsyncWriteExt as _;
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
         let l = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind");
         let port = l.local_addr().expect("addr").port();
         tokio::spawn(async move {
             while let Ok((mut s, _)) = l.accept().await {
+                // The request is read before answering: closing a socket
+                // with unread input sends a RST on Windows, and the client
+                // sees a transport error instead of the 403.
+                let mut seen = Vec::new();
+                let mut buf = [0u8; 4096];
+                while !seen.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match s.read(&mut buf).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => seen.extend_from_slice(&buf[..n]),
+                    }
+                }
                 let _ = s
                     .write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
                     .await;

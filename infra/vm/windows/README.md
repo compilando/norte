@@ -98,8 +98,10 @@ Verified on 2026-09-26 with Windows 11 25H2 x64 and MSVC Rust 1.96.1:
   build from a synced tree reports `-dirty`: publishable ones start from a
   tag (ADR 0157).
 - The TUI's persistent subshell stays unix-only (ADR 0084).
-- `norte-core`'s own test suite does not compile on Windows yet (unix-only
-  helpers such as `Permissions::from_mode`).
+- `norte-core`'s own test suite builds and passes on Windows
+  (`cargo test -p norte-core --features testing`, 2026-09-30); tests about
+  unix mechanisms (the daemon socket, mode bits) are `cfg(unix)` with their
+  reason.
 
 After unclean power-offs Windows may reclassify the NAT network as
 *Public*, and the OpenSSH firewall rule only allows *Private*: SSH then
