@@ -1,6 +1,6 @@
 # 0160 — Confined writes on Windows open, publish and delete by handle, and never cross a link
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-09-30
 - Decision makers: Oscar González
 - Related: ADR 0054 (confined writes), ADR 0158 (confined `location` on
