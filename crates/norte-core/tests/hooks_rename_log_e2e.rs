@@ -97,6 +97,31 @@ impl HookNoticeSink for ChanSink {
     }
 }
 
+/// The sidecar log once it holds `line`.
+///
+/// A notice does NOT mean its batch's sidecar is on disk: the dispatcher
+/// sends a batch's notices before applying its writes, and rewriting the log
+/// is "trash the old one, create the new one". Reading right after a notice
+/// races that rewrite and can find no file at all — which is how this test
+/// went red under the gate's load. So it waits for the CONTENT, with a
+/// deadline, instead of trusting an ordering that does not cover the write
+/// in flight.
+async fn log_once_it_has(path: &std::path::Path, line: &str) -> String {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Ok(log) = std::fs::read_to_string(path)
+            && log.contains(line)
+        {
+            return log;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the sidecar never held {line:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
 async fn next_notice(rx: &mut mpsc::UnboundedReceiver<PluginNotice>) -> PluginNotice {
     tokio::time::timeout(Duration::from_secs(20), rx.recv())
         .await
@@ -313,8 +338,8 @@ async fn move_through(backend: &norte_core::backend::Backend, from: &str, to: &s
 /// journal records the rename, the hook says so, and `plugin.notice` carries
 /// the sentence to the frontend's channel, attributed to the plugin. And the
 /// hook's sidecar (ADR 0101) lands next to the file, written by the core as
-/// the plugin actor: the second move's notice arrives only after the first
-/// batch's writes finished, which is the deterministic wait for the file.
+/// the plugin actor. Its content is waited for ([`log_once_it_has`]): a
+/// notice precedes its own batch's write.
 #[cfg(unix)]
 #[tokio::test]
 async fn a_move_through_the_daemon_becomes_a_plugin_notice_and_a_sidecar() {
@@ -342,23 +367,14 @@ async fn a_move_through_the_daemon_becomes_a_plugin_notice_and_a_sidecar() {
     move_through(&backend, &at("otra.jpg"), &at("2025_otra.jpg")).await;
     let n = next_notice(&mut notices).await;
     assert_eq!(n.kind, "notify", "{n:?}");
-    // By now the first batch's sidecar is written: the dispatcher applies a
-    // batch's writes before it drains the next one.
-    let log = std::fs::read(files.path().join(".norte-renames.log")).expect("the sidecar exists");
-    let log = String::from_utf8(log).expect("utf-8 lines");
-    assert!(
-        log.contains(&format!("{} -> {}\n", at("foto.jpg"), at("2025_foto.jpg"))),
-        "{log:?}"
-    );
-    // The second rename lands in the same log after the next batch: one more
-    // move is the wait, as above.
+    let first = format!("{} -> {}\n", at("foto.jpg"), at("2025_foto.jpg"));
+    let log = log_once_it_has(&files.path().join(".norte-renames.log"), &first).await;
+    assert!(log.contains(&first), "{log:?}");
     move_through(&backend, &at("2025_otra.jpg"), &at("2026_otra.jpg")).await;
     let _ = next_notice(&mut notices).await;
-    let log = std::fs::read_to_string(files.path().join(".norte-renames.log")).expect("log");
-    assert!(
-        log.contains(&format!("{} -> {}\n", at("otra.jpg"), at("2025_otra.jpg"))),
-        "{log:?}"
-    );
+    let second = format!("{} -> {}\n", at("otra.jpg"), at("2025_otra.jpg"));
+    let log = log_once_it_has(&files.path().join(".norte-renames.log"), &second).await;
+    assert!(log.contains(&second), "{log:?}");
     assert!(
         log.starts_with(&at("foto.jpg")),
         "the previous content is carried forward: {log:?}"
