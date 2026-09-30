@@ -146,9 +146,10 @@ The only after-the-fact signal is `PostDeleteItem` without a recycled item. It
 turns an `Ok` into an error, so a trash is never journaled as recoverable when
 it was not.
 
-`Unsupported` is what the TUI already answers by re-offering `Permanent` with
-a warning. The window only reports the failure: that gap is parity, not
-safety. The crate stays for listing and restoring. The destination is still
+`Unsupported` is what both frontends answer by re-offering `Permanent` for
+that item, with a warning (the window since the same week: its task
+remembers the item it sent to the trash). The crate stays for listing and
+restoring. The destination is still
 not reported (`Ok(None)`), though `PostDeleteItem` hands the sink the new
 item; naming it would let Windows answer `trash_restorable()` with yes.
 

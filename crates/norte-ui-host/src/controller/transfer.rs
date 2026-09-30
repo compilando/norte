@@ -780,7 +780,11 @@ impl State {
                         .await
                 };
                 let message = match queued {
-                    Ok(task) => Message::TaskNew(Box::new((task, affected.clone(), Some(retry)))),
+                    Ok(task) => Message::TaskNew(Box::new((
+                        task,
+                        affected.clone(),
+                        Some(FollowUp::Transfer(retry)),
+                    ))),
                     // To the batch's COUNT, not to the status bar: N
                     // rejections used to be N messages of which only the
                     // last one survived (#271).

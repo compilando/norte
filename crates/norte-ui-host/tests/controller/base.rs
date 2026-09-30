@@ -1760,6 +1760,61 @@ async fn deleting_asks_for_confirmation_before_touching_anything() {
     );
 }
 
+/// A trash that cannot take the item offers the PERMANENT delete of that
+/// item, as the terminal does (ADR 0009, #25): before, the window left a
+/// failed row and nothing else. Another failure offers nothing.
+#[tokio::test]
+async fn a_trash_that_cannot_take_it_offers_the_permanent_delete() {
+    let backend = fake_tree();
+    let (h, _snap) = host_tree(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    let confirm = |id| UiAction::Dialog {
+        id,
+        choice: "confirm".to_owned(),
+        secret: None,
+    };
+    h.dispatch(press("F8")).await.expect("host alive");
+    let id = next_dialogs(&mut sub).await[0].id;
+    h.dispatch(confirm(id)).await.expect("host alive");
+    let first = until(&backend, "the delete to the trash", |f| {
+        f.deleted.lock().expect("borrados").first().cloned()
+    })
+    .await;
+    assert_eq!(first.1, norte_proto::DeleteMode::Trash);
+    let _ = next_tasks(&mut sub).await;
+
+    backend
+        .progress
+        .lock()
+        .expect("progreso")
+        .clone()
+        .expect("there is a task")
+        .send_modify(|p| {
+            p.state = norte_proto::TaskState::Failed {
+                error: norte_proto::Error::Unsupported,
+            };
+        });
+    let dialogs = next_dialogs(&mut sub).await;
+    let offer = dialogs.last().expect("the permanent offer");
+    assert_eq!(offer.title_key, "modal-delete-permanent-title");
+    assert!(
+        matches!(&offer.dest_check, norte_ui_host::dto::DestCheckView::Done { warnings } if !warnings.is_empty()),
+        "with the no-way-back warning: {:?}",
+        offer.dest_check
+    );
+
+    // It opened on its own: the first answer only acknowledges it.
+    let oid = offer.id;
+    h.dispatch(confirm(oid)).await.expect("host alive");
+    h.dispatch(confirm(oid)).await.expect("host alive");
+    let both = annotated(&backend, "the permanent delete", 2, |f| {
+        f.deleted.lock().expect("borrados").clone()
+    })
+    .await;
+    assert_eq!(both[1].1, norte_proto::DeleteMode::Permanent);
+    assert_eq!(both[1].0.to_wire(), first.0.to_wire(), "of THAT item");
+}
+
 /// Confirming twice with the SAME id does not delete twice: the second one
 /// is a race in the renderer, not a second order.
 #[tokio::test]

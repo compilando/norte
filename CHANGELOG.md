@@ -46,8 +46,9 @@ independently through `PROTOCOL_VERSION`.
   cannot take** (#25, ADR 0009). An item on a drive without a bin (a
   `subst`, a USB stick), over the bin's size limit, or on a volume set not
   to use the bin was deleted permanently and reported as trashed. Now it is
-  left in place and the delete fails as `Unsupported`: the TUI re-offers a
-  permanent delete with a warning, the window reports the failure. A name
+  left in place and the delete fails as `Unsupported`, and both the TUI
+  and the window re-offer a permanent delete of that item with a warning
+  (the window used to leave a failed row and nothing else). A name
   Win32 would read as another file (`foo.` next to `foo`, `...`, `NUL.txt`)
   is refused the same way instead of recycling the neighbour or the parent.
 - **Windows: a resumed copy whose next chunk is all zeros no longer fails**
