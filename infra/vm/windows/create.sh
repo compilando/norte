@@ -77,7 +77,9 @@ sed \
   "$HERE/Autounattend.xml.in" >"$answer"
 chmod 600 "$answer"
 
-answer_iso="$lab/generated/unattend.iso"
+# One per VM: libvirt hands an attached ISO to its QEMU account, so a second
+# VM could not overwrite the first one's (and the first needs it to boot).
+answer_iso="$lab/generated/unattend-$name.iso"
 xorriso -as mkisofs -quiet -J -r -o "$answer_iso" "$answer"
 disk="$lab/disks/$name.qcow2"
 [ ! -e "$disk" ] || {
