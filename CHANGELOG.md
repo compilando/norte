@@ -7,6 +7,15 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Windows: `ntc` and `norte` start on a machine without Visual Studio.**
+  In alpha.5 and alpha.6 they needed `vcruntime140.dll`, which a clean
+  Windows does not have: both died at once with no message, and the window
+  could not start its daemon. They now carry the C runtime, and the
+  packaging refuses a binary that does not. Workaround for those two
+  releases: install the Microsoft Visual C++ Redistributable (x64).
+
 ### Changed
 
 - **Provider plugins: `norte:provider@0.2.0`** (ADR 0163). `vfs-error`

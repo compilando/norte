@@ -5,6 +5,14 @@
 [target.x86_64-unknown-linux-gnu]
 rustflags = ["-C", "link-arg=-fuse-ld=lld"]
 
+# Windows: the C runtime linked in, not taken from `vcruntime140.dll`. A clean
+# Windows does not have that DLL (it comes with the Visual C++ redistributable
+# or Visual Studio), and `ntc.exe` and `norte.exe` died on start with
+# 0xC0000135 there — so did the window's daemon. The build VM has Visual
+# Studio and never saw it. `package.ps1` refuses a binary that imports it.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
 # Sin caché incremental. Ocupaba 54 G de los 288 G del árbol y no compra nada
 # aquí: el bucle real es `just t <crate>` y el gate, ambos corridas completas
 # donde incremental sólo añade escritura a disco y peor codegen. `just lint` ya

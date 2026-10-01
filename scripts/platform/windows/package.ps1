@@ -57,6 +57,14 @@ try {
     $stage = Join-Path $OutDir "norte-$version-$target"
     New-Item -ItemType Directory -Force $stage | Out-Null
     foreach ($bin in @('norte-gui', 'norte', 'ntc')) {
+        # A clean Windows has no vcruntime140.dll: such a binary dies on
+        # start with 0xC0000135 (see .cargo/config.toml). The import table
+        # names it in ASCII, so a byte search is enough.
+        $bytes = [System.IO.File]::ReadAllBytes((Resolve-Path "$release\$bin.exe"))
+        $text = [System.Text.Encoding]::ASCII.GetString($bytes)
+        if ($text.IndexOf('vcruntime140.dll', [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+            throw "$bin.exe imports vcruntime140.dll: it would not start on a clean Windows"
+        }
         Copy-Item -Force "$release\$bin.exe" $stage
     }
     $zip = "$stage.zip"
