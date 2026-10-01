@@ -1,0 +1,74 @@
+# The Windows packages of a release, built on a GitHub runner (ADR 0157).
+#
+# The same `package.ps1` the build VM runs, from the tag and on a clean
+# machine every time. It exists for code signing: SignPath Foundation signs
+# only what a CI it can verify produced, so the artefacts that get signed
+# must come from here and not from a developer's VM. Signing itself is the
+# next step and needs the project's SignPath identifiers.
+#
+# Manual on purpose: a release is cut by hand (`just baseline` for Linux),
+# and a tag push already fires dist's `release.yml`.
+name: Windows packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build, e.g. v0.3.0-alpha.6"
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+          # `git describe` stamps the revision into `--version`.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: crates/norte-gui-tauri/ui/package-lock.json
+
+      # rust-toolchain.toml pins the channel; this installs it and the target.
+      - name: Rust toolchain
+        run: |
+          rustup show
+          rustup target add x86_64-pc-windows-msvc
+
+      - name: Package
+        shell: pwsh
+        run: ./scripts/platform/windows/package.ps1
+
+      # A build that does not name its tag is not the release (ADR 0112's rule,
+      # applied to Windows).
+      - name: Each binary names the tag
+        shell: pwsh
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          $zip = Get-ChildItem target\dist-windows\*.zip | Select-Object -First 1
+          $tmp = Join-Path $env:RUNNER_TEMP 'unzipped'
+          Expand-Archive $zip.FullName $tmp
+          foreach ($bin in 'ntc', 'norte', 'norte-gui') {
+            $exe = Get-ChildItem $tmp -Recurse -Filter "$bin.exe" | Select-Object -First 1
+            $v = & $exe.FullName --version
+            Write-Host $v
+            if ($v -notmatch [regex]::Escape("($env:TAG-0-g")) { throw "$bin is not $env:TAG: $v" }
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-unsigned-${{ inputs.tag }}
+          path: target/dist-windows/*
+          if-no-files-found: error
