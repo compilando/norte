@@ -286,6 +286,7 @@ fn map_vfs_error(e: provider_iface::VfsError) -> Error {
             conflict: ConflictKind::Unknown,
         },
         V::NoSpace => Error::NoSpace,
+        V::Busy => Error::Busy,
         V::Other => Error::Internal { panic: false },
     }
 }
@@ -656,5 +657,17 @@ impl ByteSink for PluginByteSink {
             r
         })
         .await
+    }
+}
+
+#[cfg(test)]
+mod map_tests {
+    use super::{Error, map_vfs_error, provider_iface::VfsError};
+
+    /// A guest's `busy` reaches the engine as the category it retries
+    /// (ADR 0163), not as a generic I/O error.
+    #[test]
+    fn a_guests_busy_is_the_protocols_busy() {
+        assert_eq!(map_vfs_error(VfsError::Busy), Error::Busy);
     }
 }

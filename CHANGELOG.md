@@ -7,6 +7,15 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Changed
+
+- **Provider plugins: `norte:provider@0.2.0`** (ADR 0163). `vfs-error`
+  gains `busy`, which the host retries and reports as "another program has
+  the file open", as it does for local files. A provider plugin compiled
+  against 0.1.0 is listed as broken until it is rebuilt against the new
+  WIT. The bundled FTP backend now answers a server's `450` (file busy)
+  this way instead of as an I/O error.
+
 ## [0.3.0-alpha.6] - 2026-10-01
 
 ### Added

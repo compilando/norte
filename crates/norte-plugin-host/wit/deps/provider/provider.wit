@@ -10,7 +10,11 @@
 // It starts at 0.1.0 and does not inherit the 0.6.0 of the package it came
 // from: it is a new package, and its earlier history is in
 // `norte-plugin.wit`'s header.
-package norte:provider@0.1.0;
+//
+// 0.1.0 → 0.2.0 (2026-10-01, ADR 0163): `vfs-error` gains `busy`. A closed
+// enum, so every guest compiled against 0.1.0 stops instantiating; the
+// embedded FTP backend is rebuilt in the same change (`just build-ftp-wasm`).
+package norte:provider@0.2.0;
 
 /// `provider` interface (#30, ADR 0032): SYNCHRONOUS projection of the
 /// `norte_vfs::Provider` trait. Async streaming is projected to BOUNDED
@@ -50,6 +54,11 @@ interface provider {
         %loop,
         conflict,
         no-space,
+        /// Another program holds the file (FTP 450, a Windows sharing
+        /// violation): transient, so the host retries before reporting it.
+        /// It promises the operation was NOT applied; a reply that may come
+        /// after the effect is `provider-unavailable` (ADR 0163).
+        busy,
         other,
     }
 

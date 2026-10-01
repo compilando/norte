@@ -28,7 +28,7 @@ use wasmparser::{Parser, Payload};
 pub const SERVED_WIT: &[(&str, &str)] = &[
     ("norte:host", "0.1.0"),
     ("norte:plugin", "0.10.0"),
-    ("norte:provider", "0.1.0"),
+    ("norte:provider", "0.2.0"),
     ("norte:location", "0.2.0"),
     ("norte:renamer", "0.1.0"),
     ("norte:hook", "0.2.0"),
