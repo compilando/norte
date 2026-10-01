@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# virsh translates domain states ("apagado" for "shut off"), and the checks
+# below compare against the English ones.
+export LC_ALL=C
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 [ ! -f "$HERE/config.env" ] || source "$HERE/config.env"
 name="${NORTE_WINDOWS_VM_NAME:-norte-win11-build}"

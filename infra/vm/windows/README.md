@@ -86,6 +86,38 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\platform\windows\pac
 `SHA256SUMS`, uploaded to the release as `SHA256SUMS-windows` (the Linux
 one is `SHA256SUMS`). Check that each binary's `--version` names the tag.
 
+## Smoke on a clean machine
+
+The build VM has Visual Studio, so it has every runtime a binary might
+forget to carry: alpha.5 and alpha.6 needed `vcruntime140.dll` and only a
+clean Windows showed it. A second VM, with nothing but OpenSSH:
+
+```sh
+NORTE_WINDOWS_VM_NAME=norte-win11-clean NORTE_WINDOWS_MEMORY_MIB=6144 \
+  NORTE_WINDOWS_VCPUS=4 NORTE_WINDOWS_DISK_GIB=64 just windows-vm-create
+# Setup's first reboot stops the domain: start it once more.
+virsh -c qemu:///system start norte-win11-clean
+```
+
+Its disk carries an internal snapshot, `clean-baseline`, taken right after
+install. Before each smoke, with the VM shut off:
+
+```sh
+qemu-img snapshot -a clean-baseline .../disks/norte-win11-clean.qcow2
+```
+
+Then, in the guest, either against the published release or a local copy
+of `target\dist-windows`:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File smoke-clean.ps1 -Tag v0.3.0-alpha.N
+powershell -NoProfile -ExecutionPolicy Bypass -File smoke-clean.ps1 -From C:\dist
+```
+
+`scripts/platform/windows/smoke-clean.ps1` checks the sums, starts the three
+binaries from the ZIP and from a silent install, lists a folder through the
+installed daemon's pipe, and keeps the window up for eight seconds.
+
 `windows-vm-snapshot` briefly shuts down the guest, creates an internal QCOW2
 disk snapshot, and restores its previous running state. It intentionally does
 not snapshot UEFI NVRAM, which is commonly stored as raw pflash and rejected by
