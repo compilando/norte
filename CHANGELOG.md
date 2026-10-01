@@ -7,6 +7,41 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+## [0.3.0-alpha.6] - 2026-10-01
+
+### Added
+
+- **The live shell behind the panels on Windows** (ADR 0161):
+  `app.toggle-panels` opens a PowerShell (`pwsh` if installed, Windows
+  PowerShell otherwise, or `NORTE_SHELL`) that follows the panel and that
+  the panel follows. It used to decline on Windows.
+- **`app.toggle-panels` has a key in the default preset**: `Ctrl+O` in
+  orthodox and cua, `Ctrl+Z` in vim, as in norton and far. Before, only
+  those two bound it, and without a key the subshell refused to open even
+  from the menu.
+- **`ntc --daemon` on Windows.** It used to refuse with "not available on
+  Windows yet"; it now starts or joins the daemon over its named pipe
+  (ADR 0159), as `norte --daemon` and the window already did.
+- **Windows: copies, moves and deletes into a local folder cannot be
+  redirected outside it** (#217, ADR 0160). A junction or symlink planted in
+  a folder along the way used to send the write wherever it pointed, and
+  the confirmation warned that this destination could not confine. Now
+  every name below the destination is opened relative to its parent, a link
+  on the way is refused, and the warning is gone. Unlike Linux and macOS, a
+  link that stays inside the destination is refused too.
+- **Protocol 0.85.0: `Error::Busy`**, a file another program keeps open
+  without sharing it (#221). On Windows a copy, move or delete that meets
+  one no longer fails on the first attempt: the engine retries it (100,
+  200, 400 ms), and if it is still held the message says so and to close
+  that program, instead of "I/O error". A 0.84 client shows "unknown
+  error". The frontends' own files (settings, themes, the saved layout)
+  say the same when held, through one mapping both now share.
+
+### Changed
+
+- **MSRV is now Rust 1.95**, which wasmtime 48 requires. Still within the
+  stable-minus-two policy.
+
 ### Fixed
 
 - **Windows: `ntc` renders correctly in a default console** (ADR 0162).
@@ -25,44 +60,6 @@ independently through `PROTOCOL_VERSION`.
   path that needs it (a reserved name, a trailing dot, over 260 characters).
 - **Windows: "go to" accepts a typed `C:\dir`.** Only paths starting with
   `/` were taken as local, so a Windows path was rejected as invalid.
-
-### Added
-
-- **The live shell behind the panels on Windows** (ADR 0161):
-  `app.toggle-panels` opens a PowerShell (`pwsh` if installed, Windows
-  PowerShell otherwise, or `NORTE_SHELL`) that follows the panel and that
-  the panel follows. It used to decline on Windows.
-- **`app.toggle-panels` has a key in the default preset**: `Ctrl+O` in
-  orthodox and cua, `Ctrl+Z` in vim, as in norton and far. Before, only
-  those two bound it, and without a key the subshell refused to open even
-  from the menu.
-- **`ntc --daemon` on Windows.** It used to refuse with "not available on
-  Windows yet"; it now starts or joins the daemon over its named pipe
-  (ADR 0159), as `norte --daemon` and the window already did.
-
-- **Windows: copies, moves and deletes into a local folder cannot be
-  redirected outside it** (#217, ADR 0160). A junction or symlink planted in
-  a folder along the way used to send the write wherever it pointed, and
-  the confirmation warned that this destination could not confine. Now
-  every name below the destination is opened relative to its parent, a link
-  on the way is refused, and the warning is gone. Unlike Linux and macOS, a
-  link that stays inside the destination is refused too.
-
-- **Protocol 0.85.0: `Error::Busy`**, a file another program keeps open
-  without sharing it (#221). On Windows a copy, move or delete that meets
-  one no longer fails on the first attempt: the engine retries it (100,
-  200, 400 ms), and if it is still held the message says so and to close
-  that program, instead of "I/O error". A 0.84 client shows "unknown
-  error". The frontends' own files (settings, themes, the saved layout)
-  say the same when held, through one mapping both now share.
-
-### Changed
-
-- **MSRV is now Rust 1.95**, which wasmtime 48 requires. Still within the
-  stable-minus-two policy.
-
-### Fixed
-
 - **Windows: an expired sync plan is only deleted if it is still the same
   file.** Re-planning the same tree writes a new plan under the same name;
   a late look at the old one deleted the new one by name, and the reader
@@ -73,7 +70,6 @@ independently through `PROTOCOL_VERSION`.
   Junctions are symlinks to norte everywhere else too — listed, skipped
   or followed with the same cycle detection — and `SymlinkPolicy`'s
   documentation now says so.
-
 - **Windows: moving to the Recycle Bin no longer destroys what the bin
   cannot take** (#25, ADR 0009). An item on a drive without a bin (a
   `subst`, a USB stick), over the bin's size limit, or on a volume set not
@@ -7809,7 +7805,8 @@ and some daemon/socket tests are only available in CI environments.
 - Writes inside ZIP archives; list, restore, and purge operations for logical
   trash; and the M5 GUI.
 
-[Unreleased]: https://github.com/compilando/norte/compare/v0.3.0-alpha.5...HEAD
+[Unreleased]: https://github.com/compilando/norte/compare/v0.3.0-alpha.6...HEAD
+[0.3.0-alpha.6]: https://github.com/compilando/norte/compare/v0.3.0-alpha.5...v0.3.0-alpha.6
 [0.3.0-alpha.5]: https://github.com/compilando/norte/compare/v0.3.0-alpha.4...v0.3.0-alpha.5
 [0.3.0-alpha.4]: https://github.com/compilando/norte/compare/v0.3.0-alpha.3...v0.3.0-alpha.4
 [0.3.0-alpha.3]: https://github.com/compilando/norte/compare/v0.3.0-alpha.2...v0.3.0-alpha.3
