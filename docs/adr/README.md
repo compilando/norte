@@ -163,3 +163,4 @@ edits.
 | [0160](0160-confined-writes-on-windows-go-by-handle-and-never-cross-a-link.md) | Confined writes on Windows open, publish and delete by handle, and never cross a link | accepted |
 | [0161](0161-the-subshell-on-windows-is-powershell-behind-conpty.md) | The subshell on Windows is PowerShell behind ConPTY, hooked through its prompt | accepted |
 | [0162](0162-norte-winpipe-also-holds-the-console-code-page.md) | `norte-winpipe` also holds the console's code page, and norte speaks UTF-8 to it | accepted |
+| [0163](0163-a-provider-plugin-can-say-a-file-is-busy.md) | A provider plugin can say a file is busy: `norte:provider@0.2.0` | accepted |

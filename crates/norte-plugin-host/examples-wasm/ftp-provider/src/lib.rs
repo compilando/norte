@@ -451,7 +451,13 @@ impl GuestWriter for FtpWriter {
             // (even if the write failed), or control ends up desynced.
             let fin = s.ftp.finalize_put_stream(data);
             res.map_err(|_| VfsError::Io)?;
-            fin.map_err(|e| map_err(&e))
+            // A 450 HERE arrives after the bytes went out and may follow an
+            // append that happened: `busy` promises "not applied", and the
+            // host's retry would append the chunk twice (ADR 0163).
+            fin.map_err(|e| match map_err(&e) {
+                VfsError::Busy => VfsError::Io,
+                other => other,
+            })
         })
     }
 
@@ -559,8 +565,11 @@ fn map_err(e: &FtpError) -> VfsError {
             Status::FileUnavailable => VfsError::NotFound,
             Status::NotLoggedIn => VfsError::PermissionDenied,
             Status::BadFilename => VfsError::InvalidPath,
+            // 450: "file unavailable (e.g., file busy)", RFC 959. Transient,
+            // unlike 550, so the host retries it (ADR 0163).
+            Status::RequestFileActionIgnored => VfsError::Busy,
             // The proto taxonomy's `retryable` flag does not cross the WIT
-            // interface (closed enum): 450 and the rest fall to `io`.
+            // interface (closed enum): the rest fall to `io`.
             _ => VfsError::Io,
         },
         // `SecureError` is gated by the TLS feature (disabled: FTPS is
