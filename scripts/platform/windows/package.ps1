@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-    [string]$Repository = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path,
+    # Defaults to this checkout, resolved below (see build.ps1).
+    [string]$Repository = '',
     [string]$OutDir = '',
     # Reuse an existing `ui\dist` (see build.ps1).
     [switch]$SkipUi
@@ -15,6 +16,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $env:CARGO_INCREMENTAL = '0'
 $target = 'x86_64-pc-windows-msvc'
+if (-not $Repository) { $Repository = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path }
 
 Push-Location $Repository
 try {
