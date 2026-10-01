@@ -65,11 +65,26 @@ PowerShell (or through the resulting administrative SSH session), then clone
 Norte to `C:\src\norte` and run:
 
 ```powershell
-pwsh C:\src\norte\scripts\platform\windows\check.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File C:\src\norte\scripts\platform\windows\check.ps1
 ```
 
-The first expected failure is the Unix-only `norte-client` transport. A VM or
-toolchain failure before that point is an infrastructure defect.
+A default Windows install refuses to run unsigned scripts, hence the
+`Bypass`. A failure in `check.ps1` is a code or toolchain defect; all four
+crates are green.
+
+## Building a release
+
+From the tag, never from a synced tree (that reports `-dirty`, ADR 0157):
+
+```powershell
+cd C:\src\norte
+git fetch origin --tags; git checkout -f v0.3.0-alpha.N; git clean -fd
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\platform\windows\package.ps1
+```
+
+`target\dist-windows` then holds the installer, the portable ZIP and
+`SHA256SUMS`, uploaded to the release as `SHA256SUMS-windows` (the Linux
+one is `SHA256SUMS`). Check that each binary's `--version` names the tag.
 
 `windows-vm-snapshot` briefly shuts down the guest, creates an internal QCOW2
 disk snapshot, and restores its previous running state. It intentionally does
@@ -80,9 +95,6 @@ libvirt's all-device snapshot operation.
 
 Verified on 2026-09-26 with Windows 11 25H2 x64 and MSVC Rust 1.96.1:
 
-- `norte-client` reaches the platform transport seam. The temporary non-Unix
-  adapter returns `Unsupported`; it must be replaced by an authenticated,
-  per-user Windows named pipe before the GUI is releasable.
 - `norte-vfs` compiles after using its internal `crate::wtf8` path correctly.
 - `norte-core` compiles (ADR 0158: the plugin `location` root is confined
   by handle-relative `NtCreateFile`; its tests pass on NTFS).
@@ -97,9 +109,11 @@ Verified on 2026-09-26 with Windows 11 25H2 x64 and MSVC Rust 1.96.1:
   `%LOCALAPPDATA%\norte`, and the installed `norte --daemon ls` works. A
   build from a synced tree reports `-dirty`: publishable ones start from a
   tag (ADR 0157).
-- The TUI's persistent subshell stays unix-only (ADR 0084).
-- `norte-core`'s own test suite builds and passes on Windows
-  (`cargo test -p norte-core --features testing`, 2026-09-30); tests about
+- The TUI's persistent subshell runs PowerShell over ConPTY (ADR 0161),
+  and `ntc --daemon` joins the named pipe (2026-10-01).
+- `norte-core`'s and `norte-frontend`'s own test suites build and pass on
+  Windows (`cargo test -p norte-core --features testing`, 2026-09-30;
+  `cargo test -p norte-frontend --lib`, 2026-10-01); tests about
   unix mechanisms (the daemon socket, mode bits) are `cfg(unix)` with their
   reason.
 

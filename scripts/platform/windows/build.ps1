@@ -1,6 +1,8 @@
 [CmdletBinding()]
 param(
-    [string]$Repository = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path,
+    # Defaults to this checkout, resolved below: Windows PowerShell 5.1
+    # leaves $PSScriptRoot empty inside param() under `powershell -File`.
+    [string]$Repository = '',
     [ValidateSet('debug', 'release')]
     [string]$Profile = 'debug',
     # Use the `ui\dist` already there (built elsewhere: the bundle is
@@ -21,6 +23,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $env:CARGO_INCREMENTAL = '0'
 $target = 'x86_64-pc-windows-msvc'
+if (-not $Repository) { $Repository = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path }
 
 Push-Location $Repository
 try {
