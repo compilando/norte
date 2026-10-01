@@ -711,7 +711,7 @@ fn resolver_typed(content: &str) -> Action {
             p.push(rest);
         }
         p
-    } else if content.starts_with('/') {
+    } else if typed_local(content) {
         std::path::PathBuf::from(content)
     } else {
         // With a scheme: the wire is already a wire.
@@ -720,6 +720,22 @@ fn resolver_typed(content: &str) -> Action {
     };
     norte_vfs::native::vpath_from_native(&expanded)
         .map_or(Action::Nothing("msg-goto-bad-path"), Action::Ir)
+}
+
+/// A typed LOCAL path: `/…` everywhere (on Windows, the current drive), or
+/// an absolute one on a drive or share. `\\.\pipe\x`, `\\.\COM1` and a
+/// non-disk `\\?\` name devices, not folders, and stay unparsed.
+fn typed_local(content: &str) -> bool {
+    use std::path::{Component, Path, Prefix};
+    if content.starts_with('/') {
+        return true;
+    }
+    let path = Path::new(content);
+    path.is_absolute()
+        && !matches!(
+            path.components().next(),
+            Some(Component::Prefix(p)) if matches!(p.kind(), Prefix::DeviceNS(_) | Prefix::Verbatim(_))
+        )
 }
 
 #[cfg(test)]
@@ -740,10 +756,29 @@ mod dispatch_tests {
             action(&format!("{K_IR}file:///tmp")),
             Action::Ir(VPath::parse("file:///tmp").expect("wire"))
         );
+        // A native absolute path: `/tmp` has no drive on Windows.
+        let (typed, wire) = if cfg!(windows) {
+            (r"C:\tmp", "file:///C:/tmp")
+        } else {
+            ("/tmp", "file:///tmp")
+        };
         assert_eq!(
-            action(&format!("{K_PATH}/tmp")),
-            Action::Ir(VPath::parse("file:///tmp").expect("wire"))
+            action(&format!("{K_PATH}{typed}")),
+            Action::Ir(VPath::parse(wire).expect("wire"))
         );
+    }
+
+    /// A device or pipe is not a folder to go to (encoding audit).
+    #[cfg(windows)]
+    #[test]
+    fn a_typed_device_is_not_a_place() {
+        for device in [r"\\.\pipe\x", r"\\.\COM1", r"\\?\pipe\x"] {
+            assert_eq!(
+                action(&format!("{K_PATH}{device}")),
+                Action::Nothing("msg-goto-bad-path"),
+                "{device:?}"
+            );
+        }
     }
 
     /// A typed path with a scheme parses as is; one that does NOT parse is

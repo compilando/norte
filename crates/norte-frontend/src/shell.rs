@@ -32,7 +32,7 @@
 pub fn pick_bytes(paths: &[norte_proto::VPath]) -> Vec<u8> {
     let mut out = Vec::new();
     for p in paths {
-        match norte_vfs::native::vpath_to_native(p) {
+        match norte_vfs::native::vpath_to_native(p).map(plain) {
             #[cfg(unix)]
             Ok(native) => {
                 use std::os::unix::ffi::OsStrExt;
@@ -52,6 +52,13 @@ pub fn pick_bytes(paths: &[norte_proto::VPath]) -> Vec<u8> {
     out
 }
 
+/// The native path as a shell or another tool spells it: without the `\\?\`
+/// prefix when dropping it loses nothing ([`child_cwd`]) — `cmd` refuses a
+/// verbatim cwd — and with it when the path only exists because of it.
+fn plain(native: std::path::PathBuf) -> std::path::PathBuf {
+    child_cwd(&native).unwrap_or(native)
+}
+
 /// What to write into the `--cd-file`, or `None` when the pane is not local.
 ///
 /// `Some` is the directory's native bytes with a trailing NUL. `None` means
@@ -67,7 +74,7 @@ pub fn pick_bytes(paths: &[norte_proto::VPath]) -> Vec<u8> {
 /// `cd` into a real directory on disk, and a wire form is not one.
 #[must_use]
 pub fn cd_bytes(dir: &norte_proto::VPath) -> Option<Vec<u8>> {
-    let native = norte_vfs::native::vpath_to_native(dir).ok()?;
+    let native = plain(norte_vfs::native::vpath_to_native(dir).ok()?);
     #[cfg(unix)]
     let mut bytes = {
         use std::os::unix::ffi::OsStrExt;
@@ -381,22 +388,32 @@ pub fn child_cwd(dir: &std::path::Path) -> Option<std::path::PathBuf> {
         };
         // UNC in verbatim form (`\\?\UNC\server\share`) has no plain spelling
         // that means the same thing to `CreateProcessW`.
-        if stripped.len() >= 260 || stripped.starts_with("UNC\\") {
+        // In UTF-16 units, against a cwd's limit: MAX_PATH less 12 for an 8.3
+        // name.
+        if stripped.encode_utf16().count() >= 248 || stripped.starts_with("UNC\\") {
             return None;
         }
         // Without the prefix, Win32 path munging eats a trailing dot or space
         // and reinterprets a reserved device name — the very things the
         // prefix was there to protect.
-        for component in stripped.split('\\') {
-            if component.is_empty() {
+        for (i, component) in stripped.split('\\').enumerate() {
+            // The drive (`C:`) is the one component a `:` belongs in.
+            if component.is_empty() || (i == 0 && component.len() == 2 && component.ends_with(':'))
+            {
                 continue;
             }
             if component.ends_with('.') || component.ends_with(' ') {
                 return None;
             }
+            // `a:b` is stream `b` of `a` once the prefix is gone; `CON:` a device.
+            if component.contains([':', '<', '>', '"', '|', '?', '*']) {
+                return None;
+            }
+            // `CON .txt` is CON too: Win32 trims the stem's trailing spaces.
             let stem = component
                 .split_once('.')
                 .map_or(component, |(s, _)| s)
+                .trim_end_matches(' ')
                 .to_ascii_uppercase();
             if WIN_RESERVED.contains(&stem.as_str()) {
                 return None;
@@ -415,7 +432,8 @@ const VERBATIM_PREFIX: &str = r"\\?\";
 #[cfg(windows)]
 const WIN_RESERVED: &[&str] = &[
     "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
-    "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9", "COM¹", "COM²",
+    "COM³", "LPT¹", "LPT²", "LPT³", "CONIN$", "CONOUT$",
 ];
 
 /// The terminal emulators probed, in order, when `$TERMINAL` says nothing.
@@ -1070,15 +1088,43 @@ mod tests {
     use super::*;
     use norte_proto::VPath;
 
+    /// A local root as `file://` wire and as native bytes: `/tmp` has no
+    /// drive, so on Windows it is not local at all.
+    #[cfg(unix)]
+    const ROOT: (&str, &[u8]) = ("file:///tmp", b"/tmp/");
+    #[cfg(windows)]
+    const ROOT: (&str, &[u8]) = ("file:///C:/tmp", b"C:\\tmp\\");
+    /// An absolute shell that is not the fallback.
+    #[cfg(unix)]
+    const ABS_SHELL: &str = "/bin/zsh";
+    #[cfg(windows)]
+    const ABS_SHELL: &str = r"C:\Program Files\PowerShell\7\pwsh.exe";
+
+    fn native(tail: &[u8]) -> Vec<u8> {
+        [ROOT.1, tail].concat()
+    }
+
     /// NUL-TERMINATED, not NUL-separated: one result is unambiguous and
     /// `xargs -0` is happy either way. The bytes are the path's, untouched —
     /// a name is bytes (rule 1) and a picker that lossily decodes is a picker
     /// that opens the wrong file.
     #[test]
     fn pick_bytes_terminates_every_path_with_nul() {
-        let a = VPath::parse("file:///tmp/a").unwrap();
-        let b = VPath::parse("file:///tmp/b").unwrap();
-        assert_eq!(pick_bytes(&[a, b]), b"/tmp/a\0/tmp/b\0".to_vec());
+        let a = VPath::parse(&format!("{}/a", ROOT.0)).unwrap();
+        let b = VPath::parse(&format!("{}/b", ROOT.0)).unwrap();
+        assert_eq!(
+            pick_bytes(&[a, b]),
+            [native(b"a\0"), native(b"b\0")].concat()
+        );
+    }
+
+    /// A name that exists only thanks to `\\?\` keeps it: without the prefix
+    /// `C:\tmp\CON` is the console device, and the tool would open that.
+    #[cfg(windows)]
+    #[test]
+    fn a_path_that_needs_the_prefix_keeps_it() {
+        let p = VPath::parse("file:///C:/tmp/CON").unwrap();
+        assert_eq!(pick_bytes(&[p]), b"\\\\?\\C:\\tmp\\CON\0".to_vec());
     }
 
     /// A remote path has no native form, so what comes out is the wire form —
@@ -1101,8 +1147,8 @@ mod tests {
     /// wrapper reads a file instead.
     #[test]
     fn cd_bytes_are_the_raw_directory_plus_a_nul() {
-        let p = VPath::parse("file:///tmp/we%0Aird").unwrap();
-        assert_eq!(cd_bytes(&p), Some(b"/tmp/we\nird\0".to_vec()));
+        let p = VPath::parse(&format!("{}/we%0Aird", ROOT.0)).unwrap();
+        assert_eq!(cd_bytes(&p), Some(native(b"we\nird\0")));
     }
 
     /// Not `file://` writes NOTHING: there is no local cwd that corresponds
@@ -1141,8 +1187,8 @@ mod tests {
     #[test]
     fn login_shell_falls_back_to_a_real_shell() {
         assert_eq!(
-            login_shell_from(Some("/bin/zsh".as_ref())),
-            std::path::PathBuf::from("/bin/zsh")
+            login_shell_from(Some(ABS_SHELL.as_ref())),
+            std::path::PathBuf::from(ABS_SHELL)
         );
         assert!(!login_shell_from(None).as_os_str().is_empty());
         assert!(
@@ -1166,7 +1212,7 @@ mod tests {
             );
         }
         assert_ne!(
-            login_shell_from(Some("/bin/zsh".as_ref())),
+            login_shell_from(Some(ABS_SHELL.as_ref())),
             fallback,
             "an absolute one is still honoured"
         );
@@ -1224,9 +1270,21 @@ mod tests {
         assert_eq!(child_cwd(Path::new(r"\\?\C:\proj\build ")), None);
         assert_eq!(child_cwd(Path::new(r"\\?\C:\CON")), None);
         assert_eq!(child_cwd(Path::new(r"\\?\C:\con.txt")), None);
-        // Over MAX_PATH, and verbatim UNC.
-        let long = format!(r"\\?\C:\{}", "x".repeat(300));
+        // Encoding audit: the stem's trailing spaces, Win10's superscript
+        // ports and console names, and a `:` that becomes a stream.
+        for hostile in [r"CON .txt", "COM¹", "lpt².log", "CONOUT$", "a:b", "CON:"] {
+            let p = format!(r"\\?\C:\{hostile}");
+            assert_eq!(child_cwd(Path::new(&p)), None, "{hostile:?}");
+        }
+        // Over a cwd's limit — counted in UTF-16 units, not bytes — and
+        // verbatim UNC.
+        let long = format!(r"\\?\C:\{}", "x".repeat(250));
         assert_eq!(child_cwd(Path::new(&long)), None);
+        let fits = format!(r"\\?\C:\{}", "ñ".repeat(200));
+        assert!(
+            child_cwd(Path::new(&fits)).is_some(),
+            "200 units, 400 bytes"
+        );
         assert_eq!(child_cwd(Path::new(r"\\?\UNC\server\share")), None);
     }
 

@@ -183,7 +183,7 @@
         },
         {
           "const": "daemon",
-          "description": "Connect to the Unix-domain-socket daemon (Unix only; ADR 0011).",
+          "description": "Connect to the daemon: a unix socket, or a named pipe on Windows\n(ADR 0011, ADR 0159).",
           "type": "string"
         }
       ]

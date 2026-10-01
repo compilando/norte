@@ -458,7 +458,11 @@ mod tests {
 
     /// Review MAJOR-3: a sustained STORM of raw events does not emit one
     /// refresh per debounce — the floor between emissions caps the rate.
-    #[tokio::test]
+    ///
+    /// Paused clock: on the real one, Windows rounds each 2 ms `sleep` up to
+    /// its ~15.6 ms timer tick, the storm lasts 3 s instead of 400 ms and
+    /// honestly emits 7 times. No poller runs here, so nothing waits on I/O.
+    #[tokio::test(start_paused = true)]
     async fn a_sustained_storm_respects_the_floor() {
         let mut w = DirWatch::new_with(FAST_DEBOUNCE, FAST_POLL);
         let raw = w.raw_tx.clone();

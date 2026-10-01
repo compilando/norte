@@ -183,7 +183,8 @@ pub enum LogFormat {
 pub enum DaemonMode {
     /// Core in-process (default).
     Embedded,
-    /// Connect to the Unix-domain-socket daemon (Unix only; ADR 0011).
+    /// Connect to the daemon: a unix socket, or a named pipe on Windows
+    /// (ADR 0011, ADR 0159).
     Daemon,
 }
 

@@ -37,7 +37,7 @@ async fn main() -> Result<()> {
     // one by default, and every box-drawing character became three (ADR
     // 0162). UTF-8 for the whole run; the guard puts the old page back.
     #[cfg(windows)]
-    let _utf8 = norte_winpipe::console_utf8();
+    let utf8 = norte_winpipe::console_utf8();
     // Args: positional DIR + `--preset`/`--daemon`/`--socket`. `--help` and
     // `--version` exit BEFORE touching the terminal (they used to be ignored
     // as an unknown flag and the binary died unable to open the TTY).
@@ -545,7 +545,12 @@ async fn main() -> Result<()> {
     drop(watch);
     res?; // A broken run loop is not a cancelled `--pick`.
     write_cd_file(&app, cli_cd_file.as_deref());
-    finish_pick(&mut app);
+    if let Some(code) = finish_pick(&mut app) {
+        // `exit` runs no destructors: the console's page goes back by hand.
+        #[cfg(windows)]
+        drop(utf8);
+        std::process::exit(code);
+    }
     Ok(())
 }
 
@@ -564,7 +569,7 @@ async fn main() -> Result<()> {
 /// printed before the alternate screen is left or the terminal swallows it.
 /// The `msg-cd-not-local` line below is exactly such a print, so it follows
 /// `finish_pick`'s placement, not the design prose. Still runs BEFORE
-/// `finish_pick` itself, whose `std::process::exit` would otherwise skip
+/// `finish_pick` itself, whose `std::process::exit` in `main` would skip
 /// this entirely when both `--pick` and `--cd-file` are given.
 ///
 /// A write failure is printed and swallowed, the same shape as
@@ -601,23 +606,21 @@ fn write_cd_file(app: &App, cd_file: Option<&std::path::Path>) {
 /// [`open_terminal_or_exit`] and, here, a write failure the caller needs to
 /// tell apart from "user picked nothing".
 ///
-/// Returns normally only when `--pick` was never passed: every other path
-/// exits the process directly, so `main` never reaches its own `Ok(())`
-/// with a pick outstanding.
-fn finish_pick(app: &mut App) {
+/// Returns the exit code `main` must leave with, or `None` only when
+/// `--pick` was never passed, so `main` never reaches its own `Ok(())` with a
+/// pick outstanding.
+fn finish_pick(app: &mut App) -> Option<i32> {
     if let Some(paths) = app.picked.take() {
         use std::io::Write as _;
         let bytes = norte_frontend::shell::pick_bytes(&paths);
         let mut stdout = std::io::stdout();
         if let Err(e) = stdout.write_all(&bytes).and_then(|()| stdout.flush()) {
             eprintln!("ntc: failed to write the pick: {e}");
-            std::process::exit(2);
+            return Some(2);
         }
-        std::process::exit(0);
+        return Some(0);
     }
-    if app.pick {
-        std::process::exit(1);
-    }
+    app.pick.then_some(1)
 }
 
 /// Undoes [`tty::init`]. The same thing `ratatui::restore()` used to do:
@@ -846,12 +849,6 @@ async fn make_backend(
         }
         return Ok(Backend::Embedded(Arc::new(engine)));
     }
-    #[cfg(not(unix))]
-    {
-        let _ = (cli_socket, cfg);
-        anyhow::bail!("daemon mode is not available on Windows yet (issue #33)");
-    }
-    #[cfg(unix)]
     {
         use norte_core::backend::remote::RemoteBackend;
         let socket = match cli_socket.or_else(|| cfg.common.daemon.socket.clone()) {
@@ -863,7 +860,7 @@ async fn make_backend(
         let exe = std::env::current_exe().context("current_exe")?;
         // The daemon's binary is `norte` (the CLI), not `norte-tui`: next
         // to the current executable inside the same install directory.
-        let daemon_bin = exe.with_file_name("norte");
+        let daemon_bin = daemon_sibling(&exe);
         // The argv is the shared one: whatever starts this terminal only
         // shuts down once its last client leaves.
         let spawn_cmd = norte_core::daemon::daemon_run_argv(daemon_bin, &socket);
@@ -886,9 +883,24 @@ async fn make_backend(
     }
 }
 
+/// The `norte` next to `exe` — `norte.exe` on Windows, where a bare `norte`
+/// names nothing and the spawn fails with "not found".
+fn daemon_sibling(exe: &std::path::Path) -> std::path::PathBuf {
+    exe.with_file_name(format!("norte{}", std::env::consts::EXE_SUFFIX))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{BOOL_FLAGS, USAGE, VALUE_FLAGS};
+
+    #[test]
+    fn the_daemon_is_the_sibling_with_the_platform_suffix() {
+        let exe = std::path::Path::new("dir").join(format!("ntc{}", std::env::consts::EXE_SUFFIX));
+        assert_eq!(
+            super::daemon_sibling(&exe),
+            std::path::Path::new("dir").join(format!("norte{}", std::env::consts::EXE_SUFFIX))
+        );
+    }
 
     /// `ntc` ACCEPTS what the window passes it in a handover (phase 9).
     ///
