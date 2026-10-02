@@ -3667,7 +3667,9 @@ pub(crate) async fn dir_usage(
             match entry.size {
                 Some(n) => (n, 1, 0),
                 None => match provider.stat(&entry.path).await {
-                    Ok(st) => (st.size.unwrap_or(0), 1, u64::from(st.size.is_none())),
+                    // No size is not unreadable: a symlink or a FIFO has
+                    // none to give (#389), as in `dir_size`.
+                    Ok(st) => (st.size.unwrap_or(0), 1, 0),
                     Err(Error::Cancelled) => return Err(Error::Cancelled),
                     // Can be listed but not stated: counts as an entry, its
                     // size is a lower bound, and it says so.
@@ -3851,18 +3853,20 @@ async fn measure_subtree(
             if entry.kind == EntryKind::Dir {
                 pending.push(entry.path);
             } else {
+                // Only a failed `stat` is unreadable; a symlink's `None`
+                // is not (#389).
                 let size = match entry.size {
-                    Some(n) => Some(n),
+                    Some(n) => n,
                     None => match provider.stat(&entry.path).await {
-                        Ok(st) => st.size,
+                        Ok(st) => st.size.unwrap_or(0),
                         Err(Error::Cancelled) => return Err(Error::Cancelled),
-                        Err(_) => None,
+                        Err(_) => {
+                            unreadables = unreadables.saturating_add(1);
+                            0
+                        }
                     },
                 };
-                if size.is_none() {
-                    unreadables = unreadables.saturating_add(1);
-                }
-                bytes = bytes.saturating_add(size.unwrap_or(0));
+                bytes = bytes.saturating_add(size);
             }
             // From the INNER loop: that is where time is spent.
             let seen = base_bytes.saturating_add(bytes);

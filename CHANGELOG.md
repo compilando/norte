@@ -15,6 +15,9 @@ independently through `PROTOCOL_VERSION`.
 - **Cancelling a task that is still waiting ends it at once** (#386). In
   the serial queue it stayed pending until every task ahead of it had
   finished.
+- **The disk map no longer marks a folder partial for holding a symlink**
+  (#389). A symlink or a FIFO counted as unreadable, so most of `/usr`
+  came out as a lower bound.
 
 ## [0.3.0-alpha.7] - 2026-10-02
 
