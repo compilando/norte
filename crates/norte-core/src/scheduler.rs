@@ -89,6 +89,11 @@ pub enum Lane {
     #[default]
     Parallel,
     /// One at a time, in arrival order.
+    ///
+    /// A queued task cancelled before its turn runs at once WITHOUT the
+    /// slot (#386), alongside the one holding it. So a body queued here
+    /// must look at the token before any effect: one that wrote first
+    /// would run concurrently with the task this lane exists to serialize.
     Cola,
 }
 

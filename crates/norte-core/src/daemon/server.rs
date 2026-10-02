@@ -2326,32 +2326,8 @@ async fn serve_connection(stream: transport::Stream, shared: &Arc<Shared>) -> st
         }
     };
 
-    // Common cleanup for ALL exit paths. Remove OUR subscription before
-    // waiting for the writer: it is the sender's other owner — without this,
-    // deadlock (the writer drains until EVERYONE dies).
-    shared
-        .subscribers
-        .lock()
-        .expect("subscribers lock is sound")
-        .remove(&conn_id);
-    // The scope requests THIS connection left pending die with it: an
-    // ungranted request must not outlive its requester (anti-leak of the
-    // global channel, M3-3b). `remove` of an id already granted is a benign
-    // no-op.
-    if !conn.pending_scope_ids.is_empty() {
-        let mut pending = shared
-            .pending_scope
-            .lock()
-            .expect("pending_scope lock is sound");
-        for id in &conn.pending_scope_ids {
-            pending.remove(id);
-        }
-    }
-    // The owner of the UI session RELEASES it on leaving: without this, a
-    // client that dies leaves the screen hostage and the next terminal runs
-    // detached forever. Releasing someone else's is a no-op (evicts nobody).
-    shared.ui_session.release(conn_id);
-    drop_sync_plans(shared, conn_id).await;
+    // Common cleanup for ALL exit paths.
+    release_connection(shared, conn_id, &conn.pending_scope_ids).await;
     drop(tx);
     // Closing the inbox ends the reader if it is still alive (its `send`
     // fails).
@@ -2369,6 +2345,36 @@ async fn serve_connection(stream: transport::Stream, shared: &Arc<Shared>) -> st
         Ok(read_result) => result.and(read_result),
         Err(_) => result,
     }
+}
+
+/// What a closing connection gives back to the daemon, whatever closed it.
+async fn release_connection(shared: &Arc<Shared>, conn_id: u64, pending_scope_ids: &[u64]) {
+    // Remove OUR subscription before the caller waits for the writer: it is
+    // the sender's other owner — without this, deadlock (the writer drains
+    // until EVERYONE dies).
+    shared
+        .subscribers
+        .lock()
+        .expect("subscribers lock is sound")
+        .remove(&conn_id);
+    // The scope requests THIS connection left pending die with it: an
+    // ungranted request must not outlive its requester (anti-leak of the
+    // global channel, M3-3b). `remove` of an id already granted is a benign
+    // no-op.
+    if !pending_scope_ids.is_empty() {
+        let mut pending = shared
+            .pending_scope
+            .lock()
+            .expect("pending_scope lock is sound");
+        for id in pending_scope_ids {
+            pending.remove(id);
+        }
+    }
+    // The owner of the UI session RELEASES it on leaving: without this, a
+    // client that dies leaves the screen hostage and the next terminal runs
+    // detached forever. Releasing someone else's is a no-op (evicts nobody).
+    shared.ui_session.release(conn_id);
+    drop_sync_plans(shared, conn_id).await;
 }
 
 /// A connection's READ loop (#64): decodes frames and queues them for

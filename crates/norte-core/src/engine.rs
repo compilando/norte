@@ -146,6 +146,8 @@ pub struct Engine {
     /// most [`RAR_PROVIDERS_MAX`] (#383). NOT in `sessions`: every local rar
     /// shares the `rar+file` key there, and one provider is one archive.
     rar_providers: std::sync::Mutex<std::collections::VecDeque<(String, Arc<dyn Provider>)>>,
+    /// The RAR reader found on `PATH`, once found.
+    rar_discovered: std::sync::Mutex<Option<norte_vfs_rar::Delegate>>,
     /// AI provider for the reviewable rename (M4-A2, ADR 0031). `None` = no
     /// AI (`ai_rename_plan` → `Unsupported`). Injected with
     /// [`Self::set_ai_provider`].
@@ -361,6 +363,7 @@ impl Engine {
             archive_limits: RwLock::new(norte_vfs_archive::Limits::default()),
             rar_delegate: RwLock::new(None),
             rar_providers: std::sync::Mutex::new(std::collections::VecDeque::new()),
+            rar_discovered: std::sync::Mutex::new(None),
             ai_provider: RwLock::new(None),
             ai_embed: RwLock::new(None),
             ai_config: RwLock::new(crate::ai::AiConfig::default()),
@@ -463,10 +466,7 @@ impl Engine {
             .clone();
         let delegate = match pinned {
             Some(program) => norte_vfs_rar::Delegate::pinned(program),
-            None => norte_vfs_rar::Delegate::discover().map_err(|e| {
-                tracing::warn!(error = %e, "no RAR reader installed");
-                Error::from(e)
-            })?,
+            None => self.discovered_rar_delegate()?,
         };
         let provider: Arc<dyn Provider> = Arc::new(norte_vfs_rar::RarProvider::new(
             archive,
@@ -485,6 +485,25 @@ impl Engine {
         cache.push_front((key, Arc::clone(&provider)));
         cache.truncate(RAR_PROVIDERS_MAX);
         Ok(provider)
+    }
+
+    /// The RAR reader found on `PATH`, probed once: the probe stats every
+    /// `PATH` directory, blocking, and each LRU miss would repeat it. A
+    /// failure is not kept, so installing `7z` later is seen.
+    fn discovered_rar_delegate(&self) -> Result<norte_vfs_rar::Delegate, Error> {
+        let mut found = self
+            .rar_discovered
+            .lock()
+            .expect("rar_discovered lock is sound");
+        if let Some(delegate) = found.as_ref() {
+            return Ok(delegate.clone());
+        }
+        let delegate = norte_vfs_rar::Delegate::discover().map_err(|e| {
+            tracing::warn!(error = %e, "no RAR reader installed");
+            Error::from(e)
+        })?;
+        *found = Some(delegate.clone());
+        Ok(delegate)
     }
 
     /// The executable that reads RAR, if the config FIXES one (`[archive]

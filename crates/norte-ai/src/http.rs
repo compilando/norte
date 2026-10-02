@@ -56,7 +56,7 @@ pub(crate) fn check_status(resp: reqwest::Response) -> Result<reqwest::Response,
 pub(crate) fn client() -> reqwest::Client {
     reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(10))
-        .read_timeout(std::time::Duration::from_secs(300))
+        .read_timeout(std::time::Duration::from_mins(5))
         .build()
         // Only fails if the TLS stack cannot initialize; with rustls
         // compiled in statically that is a build invariant.

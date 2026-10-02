@@ -280,7 +280,7 @@ async fn embed_clean_cancellation() {
 #[tokio::test]
 async fn embed_cancel_while_the_provider_hangs_is_prompt() {
     let (engine, mem, fake) = setup_with(
-        FakeEmbed::new(8).with_delay(Duration::from_secs(60)),
+        FakeEmbed::new(8).with_delay(Duration::from_mins(1)),
         ai_cfg(),
     )
     .await;

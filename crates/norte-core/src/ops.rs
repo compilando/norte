@@ -3667,9 +3667,10 @@ pub(crate) async fn dir_usage(
             match entry.size {
                 Some(n) => (n, 1, 0),
                 None => match provider.stat(&entry.path).await {
-                    // No size is not unreadable: a symlink or a FIFO has
-                    // none to give (#389), as in `dir_size`.
-                    Ok(st) => (st.size.unwrap_or(0), 1, 0),
+                    // A symlink or a FIFO has no size to give (#389); a
+                    // FILE without one (a provider plugin that does not
+                    // know it) is still a lower bound.
+                    Ok(st) => (st.size.unwrap_or(0), 1, size_unknown(&st)),
                     Err(Error::Cancelled) => return Err(Error::Cancelled),
                     // Can be listed but not stated: counts as an entry, its
                     // size is a lower bound, and it says so.
@@ -3735,6 +3736,11 @@ pub(crate) async fn dir_usage(
         p.current = None;
     });
     Ok(())
+}
+
+/// 1 if `st` is a file whose size is not known, else 0.
+fn size_unknown(st: &Entry) -> u64 {
+    u64::from(st.kind == EntryKind::File && st.size.is_none())
 }
 
 /// Puts `child` into `children` if it is one of the LARGEST, evicting the
@@ -3853,12 +3859,14 @@ async fn measure_subtree(
             if entry.kind == EntryKind::Dir {
                 pending.push(entry.path);
             } else {
-                // Only a failed `stat` is unreadable; a symlink's `None`
-                // is not (#389).
+                // A symlink's `None` is not unreadable (#389).
                 let size = match entry.size {
                     Some(n) => n,
                     None => match provider.stat(&entry.path).await {
-                        Ok(st) => st.size.unwrap_or(0),
+                        Ok(st) => {
+                            unreadables = unreadables.saturating_add(size_unknown(&st));
+                            st.size.unwrap_or(0)
+                        }
                         Err(Error::Cancelled) => return Err(Error::Cancelled),
                         Err(_) => {
                             unreadables = unreadables.saturating_add(1);
