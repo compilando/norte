@@ -12,6 +12,9 @@ independently through `PROTOCOL_VERSION`.
 - **Content search with a regular expression is many times faster on
   files with many lines** (#391); every line used to move the rest of
   the read buffer.
+- **Undo and the journal timeline stay fast on a long history** (#396).
+  The journal gets indexes for what they filter by; existing journals
+  gain them on first open, without touching any row.
 
 ## [0.3.0-alpha.7] - 2026-10-02
 
