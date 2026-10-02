@@ -330,6 +330,8 @@ pub struct PreviewFetch {
     pub path: VPath,
     /// The built viewer, or the untranslated read error.
     pub rx: tokio::sync::oneshot::Receiver<Result<Viewer, Error>>,
+    /// The read itself: dropping the fetch stops it.
+    _task: AbortOnDrop,
 }
 
 /// Reads `path` in the background for slot `slot`.
@@ -351,11 +353,26 @@ pub fn spawn_preview_fetch(backend: &Backend, path: VPath, columns: Option<u32>)
     let (tx, rx) = tokio::sync::oneshot::channel();
     let b = backend.clone();
     let p = path.clone();
-    tokio::spawn(async move {
+    let task = tokio::spawn(async move {
         let res = viewer_for_width(&b, &p, columns, Modo::Nothing).await;
         let _ = tx.send(res.map(|(viewer, _imagen)| viewer));
     });
-    PreviewFetch { path, rx }
+    PreviewFetch {
+        path,
+        rx,
+        _task: AbortOnDrop(task.abort_handle()),
+    }
+}
+
+/// Aborts its task when dropped (#402): a superseded preview stopped being
+/// APPLIED, but kept reading 256 KiB and running the previewer for nobody —
+/// thirty a second with an arrow held over a remote folder.
+pub struct AbortOnDrop(pub tokio::task::AbortHandle);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 /// Launches the decorations fetch (G3b) for ALL of `pane`'s currently listed
@@ -460,4 +477,20 @@ async fn fetch_plugin_columns(
         );
     }
     (out, headers)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AbortOnDrop;
+
+    /// #402: dropping a superseded fetch stops its read, it does not just
+    /// ignore the answer.
+    #[tokio::test]
+    async fn dropping_the_guard_stops_the_task() {
+        let task = tokio::spawn(std::future::pending::<()>());
+        let guard = AbortOnDrop(task.abort_handle());
+        drop(guard);
+        let err = task.await.expect_err("aborted, not finished");
+        assert!(err.is_cancelled());
+    }
 }

@@ -40,6 +40,18 @@ pub(super) struct StatePreview {
     /// The read in flight, with its token: a response with a different token
     /// is from a cursor that already moved.
     in_flight: Option<(RequestToken, VPath)>,
+    /// That read's task: replacing or clearing it stops the read (#402),
+    /// instead of letting it finish for an answer the token will discard.
+    task: Option<AbortOnDrop>,
+}
+
+/// Aborts its task when dropped.
+struct AbortOnDrop(tokio::task::AbortHandle);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 /// What a preview slot should be showing.
@@ -140,14 +152,17 @@ impl State {
                     }
                     self.token += 1;
                     let token = RequestToken(self.token);
-                    self.previews.entry(id).or_default().in_flight = Some((token, path.clone()));
+                    let state = self.previews.entry(id).or_default();
+                    state.in_flight = Some((token, path.clone()));
+                    // Replacing the previous read's guard aborts it.
+                    state.task = None;
                     // The SLOT's width minus its frame, for the previewer
                     // (proto 0.66.0): an image shrinks to whatever it is
                     // told.
                     let columns = Some(u32::from(width.saturating_sub(2).max(1)));
                     let backend = Arc::clone(backend);
                     let mailbox = mailbox.clone();
-                    tokio::spawn(async move {
+                    let task = tokio::spawn(async move {
                         let reading = backend.read(
                             path.clone(),
                             Some(norte_proto::ByteRange {
@@ -178,6 +193,9 @@ impl State {
                             ))))
                             .await;
                     });
+                    if let Some(state) = self.previews.get_mut(&id) {
+                        state.task = Some(AbortOnDrop(task.abort_handle()));
+                    }
                 }
             }
         }
@@ -204,6 +222,7 @@ impl State {
             return None;
         }
         state.in_flight = None;
+        state.task = None;
         if let Ok(mut bytes) = read_bytes {
             let cap = usize::try_from(VISOR_CAP).unwrap_or(usize::MAX);
             let truncated = bytes.len() > cap;

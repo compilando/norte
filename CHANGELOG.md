@@ -22,6 +22,9 @@ independently through `PROTOCOL_VERSION`.
 - **The window paints at most once per frame** (#400). Scrolling, a
   copy's progress and a big folder filling in each repainted the whole
   screen, sometimes several times per frame.
+- **Moving through files with the docked preview open stops the previous
+  read** (#402), in the terminal and in the window. Holding an arrow over
+  a remote folder used to start one read per row and finish them all.
 
 ## [0.3.0-alpha.7] - 2026-10-02
 
