@@ -1026,12 +1026,12 @@ async fn scan_bytes(
     let mut tail: Vec<u8> = Vec::new();
     // Count of `\n` in bytes that have ALREADY left `tail` (committed front of the file).
     let mut committed_nl: u64 = 0;
-    let mut chunk = Some(first);
+    let mut chunk = Some(bytes::Bytes::from(first));
     loop {
         let c = match chunk.take() {
             Some(c) => c,
             None => match stream.next().await {
-                Some(Ok(c)) => c.to_vec(),
+                Some(Ok(c)) => c,
                 Some(Err(e)) => return Err(e),
                 None => break,
             },
@@ -1088,14 +1088,14 @@ async fn scan_decode_lines(
     let mut line_no: u64 = 0;
     // `true` while discarding bytes of a line already truncated/evaluated.
     let mut skipping = false;
-    let mut chunk = Some(first);
+    let mut chunk = Some(bytes::Bytes::from(first));
     loop {
         let (bytes, last) = match chunk.take() {
             Some(c) => (c, false),
             None => match stream.next().await {
-                Some(Ok(c)) => (c.to_vec(), false),
+                Some(Ok(c)) => (c, false),
                 Some(Err(e)) => return Err(e),
-                None => (Vec::new(), true),
+                None => (bytes::Bytes::new(), true),
             },
         };
         if cancel.is_cancelled() {
@@ -1103,16 +1103,21 @@ async fn scan_decode_lines(
         }
         decoder.feed(&bytes, last, &mut pending);
 
-        // Complete lines (by the '\n' in the decoded text).
-        while let Some(nl) = pending.find('\n') {
-            let line: String = pending.drain(..=nl).collect();
+        // Complete lines (by the '\n' in the decoded text), borrowed in
+        // place: draining each one off the front moved the whole rest of
+        // the chunk per line (#391).
+        let mut start = 0;
+        while let Some(rel) = pending[start..].find('\n') {
+            let nl = start + rel;
+            let line = &pending[start..=nl];
+            start = nl + 1;
             line_no += 1;
             if skipping {
                 // The giant line was already evaluated truncated: just counted.
                 skipping = false;
                 continue;
             }
-            let l = strip_eol(&line);
+            let l = strip_eol(line);
             if matches(l) {
                 return Ok(Some(MatchInfo {
                     line: Some(line_no),
@@ -1120,6 +1125,7 @@ async fn scan_decode_lines(
                 }));
             }
         }
+        pending.drain(..start);
 
         // Line without '\n' that exceeds the cap: evaluate it truncated and
         // discard the rest up to the next '\n' (RAM cap).

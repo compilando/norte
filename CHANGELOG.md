@@ -7,6 +7,12 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Performance
+
+- **Content search with a regular expression is many times faster on
+  files with many lines** (#391); every line used to move the rest of
+  the read buffer.
+
 ## [0.3.0-alpha.7] - 2026-10-02
 
 ### Fixed
