@@ -20,6 +20,12 @@ independently through `PROTOCOL_VERSION`.
   came out as a lower bound.
 - **`norte mcp` no longer grows over a long session** (#387). The bridge
   kept every progress notification of the tasks its agent launched.
+- **A frontend that falls behind reconnects instead of going deaf** (#384).
+  When it could not keep up with the daemon's notifications it stopped
+  receiving task progress and approvals for good while still looking
+  connected, and a reply lost the same way left a call waiting 30 s. The
+  daemon now closes that connection, and the frontend reconnects and
+  resyncs.
 - **Indexing for semantic search can be cancelled while the AI provider
   does not answer** (#388), and an AI host that swallows packets now ends
   in an error (10 s to connect, 5 min without a byte) instead of hanging.

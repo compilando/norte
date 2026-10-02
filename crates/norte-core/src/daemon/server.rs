@@ -368,6 +368,10 @@ struct Subscriber {
     /// another actor's `task.progress` never reaches an agent (#66, the same
     /// leak as `task.list`: `current` carries other actors' paths).
     actor: Actor,
+    /// Cancelled when the broadcast evicts this subscriber: its connection
+    /// closes (#384). Staying up unsubscribed left the client deaf to every
+    /// progress and approval with no way to know.
+    undrained: CancellationToken,
 }
 
 /// A live task registered in the daemon: the handle + WHO queued it. The
@@ -653,7 +657,8 @@ fn broadcast_impl(
                     );
                     return true;
                 }
-                tracing::warn!(conn, "undrained subscriber: evicted from the broadcast");
+                tracing::warn!(conn, "undrained subscriber: evicted and disconnected");
+                s.undrained.cancel();
                 false
             }
             Err(mpsc::error::TrySendError::Closed(_)) => false,
@@ -1838,6 +1843,9 @@ struct ConnState {
     /// [`MAX_PENDING_SCOPE_PER_CONN`]: one session does not monopolize the
     /// global channel.
     pending_scope_ids: Vec<u64>,
+    /// Cancelled when this connection's outbox overflowed — a response
+    /// lost or the broadcast evicting it — and it must close (#384).
+    undrained: CancellationToken,
 }
 
 impl ConnState {
@@ -1848,6 +1856,7 @@ impl ConnState {
             listings: HashMap::new(),
             next_listing_id: 0,
             pending_scope_ids: Vec::new(),
+            undrained: CancellationToken::new(),
         }
     }
 
@@ -2228,6 +2237,7 @@ async fn serve_connection(stream: transport::Stream, shared: &Arc<Shared>) -> st
     ));
 
     let mut conn = ConnState::new();
+    let undrained = conn.undrained.clone();
     // #72: cancellation tokens of cancellable in-flight requests.
     let inflight_cancel: InflightCancel = Arc::default();
     // Reaping expired paginated listings on a live-but-silent connection (in
@@ -2255,6 +2265,7 @@ async fn serve_connection(stream: transport::Stream, shared: &Arc<Shared>) -> st
                     Some(v) => v,
                 },
                 () = shared.shutdown.cancelled() => break Ok(()),
+                () = undrained.cancelled() => break Ok(()),
                 _ = sweep.tick() => {
                     conn.sweep_expired(shared.listing_ttl);
                     continue;
@@ -2273,6 +2284,7 @@ async fn serve_connection(stream: transport::Stream, shared: &Arc<Shared>) -> st
                 () = &mut dispatch => break false,
                 // A SUSPENDED dispatch dies with its requester (#64).
                 () = peer_gone.cancelled() => break true,
+                () = undrained.cancelled() => break true,
                 // Frames arriving while this dispatch is still in flight —
                 // ONLY while the deferred buffer is not at the cap: at the
                 // cap this arm is disabled and the reader goes back to
@@ -2344,6 +2356,13 @@ async fn serve_connection(stream: transport::Stream, shared: &Arc<Shared>) -> st
     // Closing the inbox ends the reader if it is still alive (its `send`
     // fails).
     drop(inbox_rx);
+    if undrained.is_cancelled() {
+        // A client that does not read would hold the writer in `write_all`
+        // and the reader in `read` forever: dropping both halves is what
+        // closes the socket (#384).
+        writer_task.abort();
+        reader_task.abort();
+    }
     let _ = writer_task.await;
     // A READ error (e.g. ECONNRESET) propagates as before.
     match reader_task.await {
@@ -2598,10 +2617,17 @@ async fn handle_value(
                             tx: tx.clone(),
                             // The actor was fixed server-side by THIS initialize.
                             actor: conn.actor.clone(),
+                            undrained: conn.undrained.clone(),
                         },
                     );
             }
-            send(tx, &Response::from_outcome(id, response));
+            if !send(tx, &Response::from_outcome(id, response)) {
+                tracing::warn!(
+                    conn = conn_id,
+                    "response lost to a full outbox: disconnecting"
+                );
+                conn.undrained.cancel();
+            }
         }
         // Client notifications (none defined yet; JSON-RPC forbids answering
         // them) and spurious responses: ignored.
@@ -2642,12 +2668,16 @@ async fn drop_sync_plans(shared: &Arc<Shared>, conn_id: u64) {
 }
 
 /// Queues a frame on the connection's outbox. `try_send`: if the client does
-/// not drain (full outbox), the frame is lost and the connection will die on
-/// its next read — never unbounded accumulation.
-fn send<T: serde::Serialize>(tx: &mpsc::Sender<Arc<[u8]>>, msg: &T) {
-    if let Ok(frame) = encode_frame(msg) {
-        let _ = tx.try_send(Arc::from(frame.into_boxed_slice()));
-    }
+/// not drain, the frame is lost — never unbounded accumulation — and this
+/// returns `false` so the caller can close the connection (#384).
+fn send<T: serde::Serialize>(tx: &mpsc::Sender<Arc<[u8]>>, msg: &T) -> bool {
+    let Ok(frame) = encode_frame(msg) else {
+        return true;
+    };
+    !matches!(
+        tx.try_send(Arc::from(frame.into_boxed_slice())),
+        Err(mpsc::error::TrySendError::Full(_))
+    )
 }
 
 /// Sugar: builds a dispatch's Response.
@@ -6965,6 +6995,7 @@ mod tests {
             Subscriber {
                 tx: tx1,
                 actor: Actor::User,
+                undrained: tokio_util::sync::CancellationToken::new(),
             },
         );
         subs.lock().expect("lock").insert(
@@ -6972,6 +7003,7 @@ mod tests {
             Subscriber {
                 tx: tx2,
                 actor: Actor::User,
+                undrained: tokio_util::sync::CancellationToken::new(),
             },
         );
         let frame: Arc<[u8]> = Arc::from(vec![1u8, 2, 3].into_boxed_slice());
@@ -7020,6 +7052,7 @@ mod tests {
             Subscriber {
                 tx,
                 actor: Actor::User,
+                undrained: tokio_util::sync::CancellationToken::new(),
             },
         );
         let frame: Arc<[u8]> = Arc::from(vec![1u8].into_boxed_slice());
@@ -7052,14 +7085,18 @@ mod tests {
         // The receivers are kept alive: closing them would be the OTHER case
         // (dead outbox), and here what is being tested is the FULL one.
         let mut alive = Vec::new();
+        let mut undrained = Vec::new();
         for conn in [1u64, 2u64] {
             let (tx, rx) = mpsc::channel::<Arc<[u8]>>(1);
             alive.push(rx);
+            let token = tokio_util::sync::CancellationToken::new();
+            undrained.push(token.clone());
             subs.lock().expect("lock").insert(
                 conn,
                 Subscriber {
                     tx,
                     actor: Actor::User,
+                    undrained: token,
                 },
             );
         }
@@ -7080,7 +7117,25 @@ mod tests {
             subs.contains_key(&2),
             "the owner of a live directed feed keeps the subscription"
         );
+        // #384: the evicted connection is told to close, so its client
+        // reconnects and resyncs instead of going deaf while it stays up.
+        assert!(undrained[0].is_cancelled(), "the evicted one closes");
+        assert!(!undrained[1].is_cancelled(), "the feed's owner does not");
         drop(alive);
+    }
+
+    /// #384: a response that does not fit in the outbox says so, so the
+    /// connection is closed instead of leaving its caller waiting out the
+    /// call timeout for an answer that was thrown away.
+    #[test]
+    fn a_response_that_does_not_fit_is_reported() {
+        use std::sync::Arc;
+
+        use tokio::sync::mpsc;
+
+        let (tx, _rx) = mpsc::channel::<Arc<[u8]>>(1);
+        assert!(super::send(&tx, &1u8), "the first one fits");
+        assert!(!super::send(&tx, &2u8), "the second one is lost, and said");
     }
 }
 
