@@ -522,6 +522,46 @@ async fn cancelling_a_paused_one_ends_it() {
     assert_eq!(handle.join().await, TaskState::Cancelled);
 }
 
+/// #385: a paused task gives its slot back. With every slot held by paused
+/// copies, a search or a folder size used to wait for as long as the pause
+/// lasted. Resumed, it waits for a slot like any queued task, and finishes.
+#[tokio::test]
+async fn a_paused_task_lends_its_slot() {
+    let sched = Scheduler::new(1);
+    let end = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let paused = sched.submit(
+        "mem",
+        TaskKind::Copy,
+        Priority::Normal,
+        Actor::User,
+        counter(Arc::clone(&end)),
+    );
+    let mut rx = paused.progress();
+    until(&mut rx, |p| p.entries_done >= 1).await;
+    paused.pause_gate().pause();
+    until(&mut rx, |p| p.state == TaskState::Paused).await;
+
+    let other = sched.submit(
+        "mem",
+        TaskKind::Search,
+        Priority::Normal,
+        Actor::User,
+        body(|_ctx| Box::pin(async { Ok(()) })),
+    );
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(10), other.join())
+            .await
+            .expect("runs while the other one is paused"),
+        TaskState::Completed
+    );
+
+    paused.pause_gate().resume();
+    let before = rx.borrow().entries_done;
+    until(&mut rx, |p| p.entries_done > before).await;
+    end.store(true, Ordering::SeqCst);
+    assert_eq!(paused.join().await, TaskState::Completed);
+}
+
 /// A task paused BEFORE starting does not run its body until resumed, even if
 /// the body has no checkpoints of its own.
 #[tokio::test]

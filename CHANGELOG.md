@@ -26,6 +26,10 @@ independently through `PROTOCOL_VERSION`.
   connected, and a reply lost the same way left a call waiting 30 s. The
   daemon now closes that connection, and the frontend reconnects and
   resyncs.
+- **A paused task no longer blocks the others** (#385, ADR 0164). Four
+  paused copies kept every search and folder size waiting, and one paused
+  task froze the serial queue. Paused, a task now gives its slot back; on
+  resume it shows *pending* until a slot is free.
 - **A change in one panel's folder no longer reloads the other panel**
   (#390). In the terminal interface, a download into `~/Downloads`
   relisted a remote folder open in the other panel every second or so,
