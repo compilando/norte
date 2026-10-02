@@ -12,9 +12,10 @@ independently through `PROTOCOL_VERSION`.
 - **Content search with a regular expression is many times faster on
   files with many lines** (#391); every line used to move the rest of
   the read buffer.
-- **Undo and the journal timeline stay fast on a long history** (#396).
-  The journal gets indexes for what they filter by; existing journals
-  gain them on first open, without touching any row.
+- **Undo stays fast on a long history** (#396). The journal gets indexes
+  for what undo filters by; existing journals gain them on first open,
+  without touching any row. On a very large journal that first open takes
+  a moment longer, once.
 - **Plugins are compiled less often** (#399). Reconnecting to an FTP
   server, or to any server a provider plugin serves, no longer compiles
   the plugin again; and using more than sixteen plugins drops the least

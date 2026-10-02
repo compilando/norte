@@ -134,7 +134,12 @@ impl State {
             match self.wants_preview(SlotId(id)) {
                 Wants::Note(key) => {
                     let state = self.previews.entry(id).or_default();
-                    if state.note != Some(key) || state.viewer.is_some() {
+                    // A read in flight goes too: it was for a file the
+                    // cursor already left, and landing would flash it.
+                    if state.note != Some(key)
+                        || state.viewer.is_some()
+                        || state.in_flight.is_some()
+                    {
                         *state = StatePreview {
                             note: Some(key),
                             ..StatePreview::default()

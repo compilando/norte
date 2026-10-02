@@ -665,8 +665,7 @@ impl<C: Clone> Compiled<C> {
             && let Some(previous) = self.by_path.insert(p.to_path_buf(), key)
             && previous != key
         {
-            self.by_digest.remove(&previous);
-            self.recency.retain(|k| *k != previous);
+            self.forget(&previous);
         }
         if !self.by_digest.contains_key(&key)
             && self.by_digest.len() >= COMPILED_MAX

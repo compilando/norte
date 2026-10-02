@@ -204,14 +204,15 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
       if (!catalog.measure) {
         return;
       }
-      requestAnimationFrame(() => {
-        const dt = performance.now() - at;
-        if (what === "key") {
-          metrics.keyToPaint.push(dt);
-        } else {
-          metrics.scrollToPaint.push(dt);
-        }
-      });
+      // Sampled here, not in another frame: this paint already runs inside
+      // the animation frame that shows it, and one more `requestAnimationFrame`
+      // would add a whole frame to every sample.
+      const dt = performance.now() - at;
+      if (what === "key") {
+        metrics.keyToPaint.push(dt);
+      } else {
+        metrics.scrollToPaint.push(dt);
+      }
     }
   };
 

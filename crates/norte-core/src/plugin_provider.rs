@@ -51,7 +51,9 @@ const OP_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The process's runtime for provider guests (#399): one engine and one
 /// compiled-components cache, so connecting again does not compile the
-/// guest again. A failure to build it is not kept.
+/// guest again. A failure to build it is not kept. It lives as long as the
+/// process: its ticker thread and compiled code stay after the last
+/// disconnect, which is the price of not compiling on the next one.
 pub(crate) fn provider_runtime() -> Result<Arc<PluginRuntime>, RuntimeError> {
     static RUNTIME: std::sync::Mutex<Option<Arc<PluginRuntime>>> = std::sync::Mutex::new(None);
     let mut slot = RUNTIME
