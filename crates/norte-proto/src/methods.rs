@@ -2132,7 +2132,10 @@ pub const ARCHIVE_TEST_MAX_FAILURES: usize = 256;
 /// live directed feed stays on the map even if its queue fills up,
 /// precisely so it receives the terminal snapshot this check is made
 /// against (#155 — before, it got evicted, and the check got lost in
-/// exactly the case it exists for). The signal is
+/// exactly the case it exists for). The exception is a client that also
+/// stops taking its RESPONSES: one that does not fit for seconds closes the
+/// connection, feed included, and the client resyncs on reconnecting
+/// (#384). The signal is
 /// [`TaskProgress::entries_done`](crate::TaskProgress::entries_done), which
 /// on a [`TaskKind::Compare`](crate::TaskKind::Compare) Task counts ROWS
 /// emitted: `task.progress`'s last snapshot always carries terminal state

@@ -630,8 +630,9 @@ impl Shared {
 /// Testable core of [`Shared::broadcast_where`]: sends `frame` to every
 /// subscriber that `wants` accepts and REMOVES the ones whose receiver died.
 ///
-/// A FULL outbox evicts — a slow client's backlog never grows without limit
-/// (M1) — UNLESS the connection is in `feeds`, i.e. it owns a live directed
+/// A FULL outbox evicts and closes the connection (#384) — a slow client's
+/// backlog never grows without limit (M1), and it reconnects instead of
+/// staying deaf — UNLESS the connection is in `feeds`, i.e. it owns a live directed
 /// feed (#155): for that one, eviction would also take away its own task's
 /// terminal `task.progress`, which is the signal it uses to check whether all
 /// its rows arrived. It loses the frame and stays subscribed.
@@ -2254,6 +2255,11 @@ async fn serve_connection(stream: transport::Stream, shared: &Arc<Shared>) -> st
     let mut pending_frames: std::collections::VecDeque<serde_json::Value> =
         std::collections::VecDeque::new();
     let result: std::io::Result<()> = loop {
+        // A frame deferred behind a dispatch that overflowed the outbox is
+        // not run: its effect would happen and its answer would not arrive.
+        if undrained.is_cancelled() {
+            break Ok(());
+        }
         // Next frame: first the local buffer, then the inbox (with
         // shutdown/sweep handled ONLY between dispatches, as before #72).
         let value = if let Some(v) = pending_frames.pop_front() {
@@ -2627,7 +2633,7 @@ async fn handle_value(
                         },
                     );
             }
-            if !send(tx, &Response::from_outcome(id, response)) {
+            if !send_response(tx, &Response::from_outcome(id, response)).await {
                 tracing::warn!(
                     conn = conn_id,
                     "response lost to a full outbox: disconnecting"
@@ -2674,16 +2680,31 @@ async fn drop_sync_plans(shared: &Arc<Shared>, conn_id: u64) {
 }
 
 /// Queues a frame on the connection's outbox. `try_send`: if the client does
-/// not drain, the frame is lost — never unbounded accumulation — and this
-/// returns `false` so the caller can close the connection (#384).
-fn send<T: serde::Serialize>(tx: &mpsc::Sender<Arc<[u8]>>, msg: &T) -> bool {
-    let Ok(frame) = encode_frame(msg) else {
+/// not drain (full outbox), the frame is lost — never unbounded
+/// accumulation.
+fn send<T: serde::Serialize>(tx: &mpsc::Sender<Arc<[u8]>>, msg: &T) {
+    if let Ok(frame) = encode_frame(msg) {
+        let _ = tx.try_send(Arc::from(frame.into_boxed_slice()));
+    }
+}
+
+/// How long a response waits for room in a full outbox before the client
+/// is taken for one that does not read (#384).
+const RESPONSE_ROOM_WAIT: Duration = Duration::from_secs(5);
+
+/// Queues a RESPONSE, waiting up to [`RESPONSE_ROOM_WAIT`] for room: a
+/// response is one per dispatch, in series, so it can afford to wait out a
+/// burst a healthy client is still draining. `false` = it did not fit in
+/// time and the caller closes the connection (#384).
+async fn send_response(tx: &mpsc::Sender<Arc<[u8]>>, resp: &Response) -> bool {
+    let Ok(frame) = encode_frame(resp) else {
         return true;
     };
-    !matches!(
-        tx.try_send(Arc::from(frame.into_boxed_slice())),
-        Err(mpsc::error::TrySendError::Full(_))
-    )
+    let frame: Arc<[u8]> = Arc::from(frame.into_boxed_slice());
+    // A closed outbox is a connection already dying: nothing to add.
+    tokio::time::timeout(RESPONSE_ROOM_WAIT, tx.send(frame))
+        .await
+        .is_ok()
 }
 
 /// Sugar: builds a dispatch's Response.
@@ -7130,18 +7151,36 @@ mod tests {
         drop(alive);
     }
 
-    /// #384: a response that does not fit in the outbox says so, so the
-    /// connection is closed instead of leaving its caller waiting out the
-    /// call timeout for an answer that was thrown away.
-    #[test]
-    fn a_response_that_does_not_fit_is_reported() {
+    /// #384: a response waits a while for room — a burst a healthy client
+    /// is draining — and only then says it did not fit, so the connection
+    /// is closed instead of leaving its caller waiting out the call timeout
+    /// for an answer that was thrown away.
+    #[tokio::test(start_paused = true)]
+    async fn a_response_waits_for_room_then_reports_it_did_not_fit() {
         use std::sync::Arc;
 
+        use norte_proto::wire::{RequestId, Response};
         use tokio::sync::mpsc;
 
-        let (tx, _rx) = mpsc::channel::<Arc<[u8]>>(1);
-        assert!(super::send(&tx, &1u8), "the first one fits");
-        assert!(!super::send(&tx, &2u8), "the second one is lost, and said");
+        use super::send_response;
+
+        let resp = Response::ok(RequestId::Num(1), serde_json::Value::Null);
+        let (tx, mut rx) = mpsc::channel::<Arc<[u8]>>(1);
+        assert!(send_response(&tx, &resp).await, "the first one fits");
+        let drained = tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            rx.recv().await;
+            rx
+        });
+        assert!(
+            send_response(&tx, &resp).await,
+            "the second one waits while the client drains"
+        );
+        let _rx = drained.await.expect("drainer");
+        assert!(
+            !send_response(&tx, &resp).await,
+            "with nobody draining, it gives up and says so"
+        );
     }
 }
 
