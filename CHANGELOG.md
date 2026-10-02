@@ -7,6 +7,12 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A second `.rar` no longer shows the first one's contents** (#383).
+  Opening `a.rar` and then `b.rar` in the same session listed and read
+  `a.rar` again.
+
 ## [0.3.0-alpha.7] - 2026-10-02
 
 ### Fixed

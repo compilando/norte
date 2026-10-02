@@ -354,3 +354,48 @@ async fn rar_over_a_local_file_lists_for_real() {
     assert_eq!(entries.len(), 1, "the `docs` directory");
     assert_eq!(entries[0].path.file_name().unwrap().as_bytes(), b"docs");
 }
+
+/// #383: two local `.rar` files are two archives. Every local rar has the
+/// same `scheme://authority` (`rar+file`), and keying the provider by it
+/// served `b.rar` out of `a.rar`.
+#[tokio::test]
+async fn two_local_rars_are_not_the_same_archive() {
+    if norte_testkit::which_7z().is_none() {
+        eprintln!("no 7z installed: test withdrawn");
+        return;
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    let engine = Engine::new();
+    engine.register_provider(
+        Arc::new(norte_vfs_local::LocalProvider::rooted("/")) as Arc<dyn Provider>
+    );
+    for (file, inner) in [("a.rar", &b"from-a.txt"[..]), ("b.rar", &b"from-b.txt"[..])] {
+        let archive = dir.path().join(file);
+        std::fs::write(
+            &archive,
+            norte_testkit::RarSmith::new().file(inner, b"x\n").build(),
+        )
+        .expect("write");
+        let root = VPath::archive_compose(
+            "rar",
+            &norte_vfs_local::vpath_from_native(&archive).expect("file's vpath"),
+            &[],
+        )
+        .expect("compose");
+        let names: Vec<Vec<u8>> = engine
+            .list(&root)
+            .await
+            .expect("list of the rar's root")
+            .map(|e| {
+                e.expect("entry ok")
+                    .path
+                    .file_name()
+                    .unwrap()
+                    .as_bytes()
+                    .to_vec()
+            })
+            .collect()
+            .await;
+        assert_eq!(names, vec![inner.to_vec()], "{file} lists its own entries");
+    }
+}
