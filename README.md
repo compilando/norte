@@ -182,7 +182,7 @@ clean install has a daemon to talk to.
 ## Install
 
 > [!NOTE]
-> **Alpha.** The current release, **v0.3.0-alpha.6**, ships **x86_64 Linux**
+> **Alpha.** The current release, **v0.3.0-alpha.7**, ships **x86_64 Linux**
 > binaries and, as a first preview, an unsigned **x86_64 Windows** installer
 > and portable ZIP. macOS builds from source today. Interfaces and
 > configuration may still change.
@@ -192,9 +192,9 @@ Two binaries, each with its own installer — `ntc`, the file manager, and
 
 ```sh
 curl --proto '=https' --tlsv1.2 -LsSf \
-  https://github.com/compilando/norte/releases/download/v0.3.0-alpha.6/norte-tui-installer.sh | sh
+  https://github.com/compilando/norte/releases/download/v0.3.0-alpha.7/norte-tui-installer.sh | sh
 curl --proto '=https' --tlsv1.2 -LsSf \
-  https://github.com/compilando/norte/releases/download/v0.3.0-alpha.6/norte-cli-installer.sh | sh
+  https://github.com/compilando/norte/releases/download/v0.3.0-alpha.7/norte-cli-installer.sh | sh
 ```
 
 The links name the tag on purpose: GitHub's `releases/latest` skips
@@ -396,8 +396,9 @@ make dev     # a debug build of the TUI
 just hooks   # install the pre-push hook
 ```
 
-The gates run **locally** — GitHub Actions is disabled on this repository —
-so install the hook. The toolchain is pinned in `rust-toolchain.toml`; the
+The gates run **locally** — the CI, GUI and release workflows are disabled
+on GitHub; only the nightly remote-integration run and the manual Windows
+packaging run there — so install the hook. The toolchain is pinned in `rust-toolchain.toml`; the
 MSRV is at most stable minus two (currently 1.95, which wasmtime 48 needs).
 
 Found a vulnerability? Please follow [SECURITY.md](SECURITY.md) instead of
