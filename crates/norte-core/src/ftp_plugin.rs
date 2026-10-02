@@ -22,7 +22,7 @@
 
 use std::net::IpAddr;
 
-use norte_plugin_host::{Capabilities as HostCaps, PluginRuntime};
+use norte_plugin_host::Capabilities as HostCaps;
 use norte_vfs::proto::Error;
 
 use crate::plugin_provider::{PluginProvider, map_runtime_error};
@@ -122,7 +122,8 @@ pub async fn connect_ftp_plugin(
     // spawn_blocking (rule 2). The PluginProvider is built from the
     // EMBEDDED bytes.
     let provider = crate::blocking::spawn_blocking(move || {
-        let runtime = PluginRuntime::new().map_err(|e| map_runtime_error(&e))?;
+        let runtime =
+            crate::plugin_provider::provider_runtime().map_err(|e| map_runtime_error(&e))?;
         PluginProvider::from_bytes(runtime, FTP_PROVIDER_WASM, caps, "ftp")
             .map_err(|e| map_runtime_error(&e))
     })

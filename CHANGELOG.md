@@ -15,6 +15,10 @@ independently through `PROTOCOL_VERSION`.
 - **Undo and the journal timeline stay fast on a long history** (#396).
   The journal gets indexes for what they filter by; existing journals
   gain them on first open, without touching any row.
+- **Plugins are compiled less often** (#399). Reconnecting to an FTP
+  server, or to any server a provider plugin serves, no longer compiles
+  the plugin again; and using more than sixteen plugins drops the least
+  recently used one instead of recompiling all of them.
 
 ## [0.3.0-alpha.7] - 2026-10-02
 

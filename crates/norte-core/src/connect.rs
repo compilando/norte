@@ -22,7 +22,6 @@ use norte_vfs_object::ObjectProvider;
 use norte_vfs_sftp::SftpProvider;
 
 use crate::ftp_plugin::{connect_ftp_plugin, fmt_ip, resolve_ip};
-use norte_plugin_host::PluginRuntime;
 
 use crate::plugin_provider::{PluginProvider, map_runtime_error};
 use crate::plugins::{PluginRegistry, ResolvedProvider};
@@ -741,7 +740,8 @@ impl ConnectionManager {
         // the approved digest BEFORE compiling (ADR 0142).
         let scheme = ep.scheme.clone();
         let provider = crate::blocking::spawn_blocking(move || {
-            let runtime = PluginRuntime::new().map_err(|e| map_runtime_error(&e))?;
+            let runtime =
+                crate::plugin_provider::provider_runtime().map_err(|e| map_runtime_error(&e))?;
             PluginProvider::new(runtime, &wasm, caps, scheme).map_err(|e| {
                 if matches!(e, norte_plugin_host::RuntimeError::DigestMismatch) {
                     tracing::warn!(plugin = %id, "plugin.wasm is not the one that was approved");

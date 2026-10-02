@@ -49,11 +49,27 @@ use tokio::sync::Mutex;
 /// dead. 30 s = the order of magnitude of connect.
 const OP_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// The process's runtime for provider guests (#399): one engine and one
+/// compiled-components cache, so connecting again does not compile the
+/// guest again. A failure to build it is not kept.
+pub(crate) fn provider_runtime() -> Result<Arc<PluginRuntime>, RuntimeError> {
+    static RUNTIME: std::sync::Mutex<Option<Arc<PluginRuntime>>> = std::sync::Mutex::new(None);
+    let mut slot = RUNTIME
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(rt) = slot.as_ref() {
+        return Ok(Arc::clone(rt));
+    }
+    let rt = Arc::new(PluginRuntime::new()?);
+    *slot = Some(Arc::clone(&rt));
+    Ok(rt)
+}
+
 /// A VFS provider backed by a WASM plugin that exports the WIT `provider`
 /// interface (#30). See the module docs.
 pub struct PluginProvider {
     /// Keeps the epoch ticker alive (the guest's CPU deadline).
-    _runtime: PluginRuntime,
+    _runtime: Arc<PluginRuntime>,
     /// The guest instance; the `Mutex` serializes its synchronous calls.
     inst: Arc<Mutex<ProviderInstance>>,
     /// The scheme this provider serves (e.g. `mem`, `ftp`).
@@ -76,11 +92,12 @@ impl PluginProvider {
     /// [`RuntimeError`] if the artifact fails to instantiate or the call to
     /// `capabilities` traps.
     pub fn new(
-        runtime: PluginRuntime,
+        runtime: impl Into<Arc<PluginRuntime>>,
         wasm: &norte_plugin_host::WasmArtifact,
         host_caps: HostCaps,
         scheme: impl Into<String>,
     ) -> Result<Self, RuntimeError> {
+        let runtime = runtime.into();
         let inst = runtime.instantiate_provider(wasm, host_caps)?;
         Self::from_instance(runtime, inst, scheme)
     }
@@ -94,18 +111,19 @@ impl PluginProvider {
     /// [`RuntimeError`] if the bytes fail to instantiate or `capabilities`
     /// traps.
     pub fn from_bytes(
-        runtime: PluginRuntime,
+        runtime: impl Into<Arc<PluginRuntime>>,
         bytes: &[u8],
         host_caps: HostCaps,
         scheme: impl Into<String>,
     ) -> Result<Self, RuntimeError> {
+        let runtime = runtime.into();
         let inst = runtime.instantiate_provider_bytes(bytes, host_caps)?;
         Self::from_instance(runtime, inst, scheme)
     }
 
     /// Caches the guest's capabilities and assembles the adapter.
     fn from_instance(
-        runtime: PluginRuntime,
+        runtime: Arc<PluginRuntime>,
         mut inst: ProviderInstance,
         scheme: impl Into<String>,
     ) -> Result<Self, RuntimeError> {

@@ -616,21 +616,71 @@ impl AsRef<Path> for WasmArtifact {
 }
 
 /// What the compiled-components cache holds (ADR 0141).
-#[derive(Default)]
-struct Compiled {
+struct Compiled<C = Component> {
     /// The code, by the sha256 of the bytes it came from.
-    by_digest: HashMap<[u8; 32], Component>,
+    by_digest: HashMap<[u8; 32], C>,
     /// Which digest each PATH currently has: recompiling a changed plugin
     /// drops its previous version, which nobody is going to ask for
     /// anymore. Without this, each development iteration would leave a
     /// dead entry until the cache was cleared.
     by_path: HashMap<std::path::PathBuf, [u8; 32]>,
+    /// Digests from least to most recently used.
+    recency: Vec<[u8; 32]>,
 }
 
-/// How many compiled components a runtime keeps. Few: each one takes up
-/// as much as its machine code, and the plugins in use at the same time
-/// are a handful. When it overflows, it is cleared entirely, which is the
-/// simplest thing that doesn't grow.
+impl<C> Default for Compiled<C> {
+    fn default() -> Self {
+        Self {
+            by_digest: HashMap::new(),
+            by_path: HashMap::new(),
+            recency: Vec::new(),
+        }
+    }
+}
+
+impl<C: Clone> Compiled<C> {
+    /// The component for `key`, marked as just used.
+    fn get(&mut self, key: &[u8; 32]) -> Option<C> {
+        let c = self.by_digest.get(key)?.clone();
+        self.touch(*key);
+        Some(c)
+    }
+
+    fn touch(&mut self, key: [u8; 32]) {
+        self.recency.retain(|k| *k != key);
+        self.recency.push(key);
+    }
+
+    fn forget(&mut self, key: &[u8; 32]) {
+        self.by_digest.remove(key);
+        self.recency.retain(|k| k != key);
+        self.by_path.retain(|_, k| k != key);
+    }
+
+    /// Keeps `component` under `key`; over [`COMPILED_MAX`] it drops the
+    /// least recently used one, not everything (#399: with more plugins
+    /// than slots, clearing it all recompiled them in cascade).
+    fn insert(&mut self, key: [u8; 32], path: Option<&Path>, component: C) {
+        if let Some(p) = path
+            && let Some(previous) = self.by_path.insert(p.to_path_buf(), key)
+            && previous != key
+        {
+            self.by_digest.remove(&previous);
+            self.recency.retain(|k| *k != previous);
+        }
+        if !self.by_digest.contains_key(&key)
+            && self.by_digest.len() >= COMPILED_MAX
+            && let Some(oldest) = self.recency.first().copied()
+        {
+            self.forget(&oldest);
+        }
+        self.by_digest.insert(key, component);
+        self.touch(key);
+    }
+}
+
+/// How many compiled components a runtime keeps. Each one takes up as much
+/// as its machine code; past it, the least recently used one goes.
 const COMPILED_MAX: usize = 16;
 
 impl PluginRuntime {
@@ -733,30 +783,18 @@ impl PluginRuntime {
             .compiled
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .by_digest
             .get(&key)
         {
-            return Ok(c.clone());
+            return Ok(c);
         }
         // Compile OUTSIDE the lock: it takes seconds, and another call
         // with another plugin has no reason to wait for them.
         let component = Component::from_binary(&self.engine, bytes)
             .map_err(|e| RuntimeError::Component(e.to_string()))?;
-        let mut cache = self
-            .compiled
+        self.compiled
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(p) = path
-            && let Some(previous) = cache.by_path.insert(p.to_path_buf(), key)
-            && previous != key
-        {
-            cache.by_digest.remove(&previous);
-        }
-        if cache.by_digest.len() >= COMPILED_MAX {
-            cache.by_digest.clear();
-            cache.by_path.retain(|_, c| *c == key);
-        }
-        cache.by_digest.insert(key, component.clone());
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(key, path, component.clone());
         Ok(component)
     }
 
@@ -2293,6 +2331,28 @@ impl ColumnsInstance {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #399: one plugin past the cap drops the least recently USED one,
+    /// not all of them — with more plugins than slots, clearing everything
+    /// recompiled them in cascade, seconds each.
+    #[test]
+    fn a_full_cache_drops_the_least_recently_used_only() {
+        let key = |i: usize| {
+            let mut k = [0u8; 32];
+            k[0] = u8::try_from(i).expect("small");
+            k
+        };
+        let mut c: Compiled<usize> = Compiled::default();
+        for i in 0..COMPILED_MAX {
+            c.insert(key(i), None, i);
+        }
+        assert_eq!(c.get(&key(0)), Some(0), "0 is used again");
+        c.insert(key(COMPILED_MAX), None, COMPILED_MAX);
+        assert_eq!(c.by_digest.len(), COMPILED_MAX);
+        assert_eq!(c.get(&key(0)), Some(0), "the one just used stays");
+        assert_eq!(c.get(&key(1)), None, "the least recently used goes");
+        assert_eq!(c.get(&key(2)), Some(2), "and only that one");
+    }
 
     /// A core module, hand-assembled: `sections` after the header.
     fn module(sections: &[&[u8]]) -> Vec<u8> {
