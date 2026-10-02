@@ -18,6 +18,8 @@ independently through `PROTOCOL_VERSION`.
 - **The disk map no longer marks a folder partial for holding a symlink**
   (#389). A symlink or a FIFO counted as unreadable, so most of `/usr`
   came out as a lower bound.
+- **`norte mcp` no longer grows over a long session** (#387). The bridge
+  kept every progress notification of the tasks its agent launched.
 
 ## [0.3.0-alpha.7] - 2026-10-02
 

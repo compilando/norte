@@ -110,6 +110,10 @@ impl Bridge {
         let _init: methods::InitializeResult = client
             .initialize_as_agent(client_info(), session.to_owned())
             .await?;
+        // Nobody reads this connection's notifications (the daemon still
+        // broadcasts the session's `task.progress` to it), and the channel
+        // is uncapped: dropping the receiver makes each send a no-op (#387).
+        drop(client.take_notifications());
         Ok(Self {
             client,
             session: session.to_owned(),
@@ -187,6 +191,20 @@ impl Bridge {
                 Ok(backend)
             })
             .await
+    }
+
+    /// Whether the tools connection's notification channel is closed, so
+    /// nothing can pile up in it (#387).
+    ///
+    /// # Tests only
+    /// Not stable API, like [`Self::streams`].
+    #[doc(hidden)]
+    pub async fn tools_notifications_closed_for_tests(&mut self) -> bool {
+        // `timeout` polls the inner future once before looking at the clock.
+        matches!(
+            tokio::time::timeout(std::time::Duration::ZERO, self.client.notification()).await,
+            Ok(None)
+        )
     }
 
     /// Processes ONE line of the MCP transport and returns the already
