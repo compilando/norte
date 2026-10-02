@@ -7,6 +7,8 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+## [0.3.0-alpha.7] - 2026-10-02
+
 ### Fixed
 
 - **Windows: `ntc` and `norte` start on a machine without Visual Studio.**
@@ -7823,7 +7825,8 @@ and some daemon/socket tests are only available in CI environments.
 - Writes inside ZIP archives; list, restore, and purge operations for logical
   trash; and the M5 GUI.
 
-[Unreleased]: https://github.com/compilando/norte/compare/v0.3.0-alpha.6...HEAD
+[Unreleased]: https://github.com/compilando/norte/compare/v0.3.0-alpha.7...HEAD
+[0.3.0-alpha.7]: https://github.com/compilando/norte/compare/v0.3.0-alpha.6...v0.3.0-alpha.7
 [0.3.0-alpha.6]: https://github.com/compilando/norte/compare/v0.3.0-alpha.5...v0.3.0-alpha.6
 [0.3.0-alpha.5]: https://github.com/compilando/norte/compare/v0.3.0-alpha.4...v0.3.0-alpha.5
 [0.3.0-alpha.4]: https://github.com/compilando/norte/compare/v0.3.0-alpha.3...v0.3.0-alpha.4
