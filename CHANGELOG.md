@@ -19,6 +19,9 @@ independently through `PROTOCOL_VERSION`.
   server, or to any server a provider plugin serves, no longer compiles
   the plugin again; and using more than sixteen plugins drops the least
   recently used one instead of recompiling all of them.
+- **The window paints at most once per frame** (#400). Scrolling, a
+  copy's progress and a big folder filling in each repainted the whole
+  screen, sometimes several times per frame.
 
 ## [0.3.0-alpha.7] - 2026-10-02
 
