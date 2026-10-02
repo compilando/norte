@@ -54,9 +54,7 @@ impl OllamaProvider {
         Self {
             base_url,
             model,
-            // Client::new() only panics if the TLS stack fails to init; with
-            // rustls compiled statically that is a build invariant.
-            client: reqwest::Client::new(),
+            client: crate::http::client(),
             local,
         }
     }

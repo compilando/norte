@@ -20,6 +20,9 @@ independently through `PROTOCOL_VERSION`.
   came out as a lower bound.
 - **`norte mcp` no longer grows over a long session** (#387). The bridge
   kept every progress notification of the tasks its agent launched.
+- **Indexing for semantic search can be cancelled while the AI provider
+  does not answer** (#388), and an AI host that swallows packets now ends
+  in an error (10 s to connect, 5 min without a byte) instead of hanging.
 
 ## [0.3.0-alpha.7] - 2026-10-02
 

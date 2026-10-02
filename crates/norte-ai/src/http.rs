@@ -48,6 +48,21 @@ pub(crate) fn check_status(resp: reqwest::Response) -> Result<reqwest::Response,
     })
 }
 
+/// The HTTP client every provider uses (#388): a host that swallows packets
+/// must end in a transport error, not hang. A read timeout and not a total
+/// one, because a chat streams for as long as it takes; it is generous
+/// because a local server can take minutes to load a model before its
+/// first byte.
+pub(crate) fn client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .read_timeout(std::time::Duration::from_secs(300))
+        .build()
+        // Only fails if the TLS stack cannot initialize; with rustls
+        // compiled in statically that is a build invariant.
+        .expect("the HTTP client builds")
+}
+
 /// Transport error (connection, DNS, TLS, timeout). `reqwest::Error`'s
 /// `Display` does not include headers: the api key is never leaked through
 /// here (rule 10).
