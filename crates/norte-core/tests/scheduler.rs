@@ -609,6 +609,50 @@ async fn the_queue_lane_runs_one_at_a_time_and_in_order() {
     assert_eq!(*order.lock().expect("order"), vec![0, 1, 2, 3], "in order");
 }
 
+/// #386: cancelling a task still WAITING for its slot ends it now, not when
+/// the task ahead of it finishes. The body still runs, cancelled, so it can
+/// account for what it did not do; the one ahead is untouched.
+#[tokio::test]
+async fn cancelling_a_queued_task_ends_it_without_waiting_its_turn() {
+    use norte_core::Lane;
+    let sched = Scheduler::new(4);
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+    let first = sched.submit_en(
+        Lane::Cola,
+        "mem",
+        TaskKind::Copy,
+        Priority::Normal,
+        Actor::User,
+        body(move |_ctx| {
+            Box::pin(async move {
+                let _ = release_rx.await;
+                Ok(())
+            })
+        }),
+    );
+    let mut rx = first.progress();
+    until(&mut rx, |p| p.state == TaskState::Running).await;
+    let queued = sched.submit_en(
+        Lane::Cola,
+        "mem",
+        TaskKind::Copy,
+        Priority::Normal,
+        Actor::User,
+        body(|ctx| Box::pin(async move { ctx.checkpoint().await })),
+    );
+    queued.cancel();
+    let first_state = first.progress();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(10), queued.join())
+            .await
+            .expect("ends while the first one still holds the slot"),
+        TaskState::Cancelled
+    );
+    assert_eq!(first_state.borrow().state, TaskState::Running);
+    let _ = release_tx.send(());
+    assert_eq!(first.join().await, TaskState::Completed);
+}
+
 /// Moving up one that has NOT STARTED YET advances it; over one already
 /// running, over the first one in the queue, or over an unknown one, there is
 /// nothing to move.

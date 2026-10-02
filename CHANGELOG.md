@@ -12,6 +12,9 @@ independently through `PROTOCOL_VERSION`.
 - **A second `.rar` no longer shows the first one's contents** (#383).
   Opening `a.rar` and then `b.rar` in the same session listed and read
   `a.rar` again.
+- **Cancelling a task that is still waiting ends it at once** (#386). In
+  the serial queue it stayed pending until every task ahead of it had
+  finished.
 
 ## [0.3.0-alpha.7] - 2026-10-02
 

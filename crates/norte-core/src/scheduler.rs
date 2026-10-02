@@ -396,15 +396,32 @@ impl Scheduler {
         // pushed. Each job carries its own span and is instrumented with
         // it below.
         let runner_queue = Arc::clone(&queue);
+        let runner_cancel = cancel.clone();
         crate::blocking::spawn_root(async move {
-            let _permit = runner_queue
-                .sem
-                .acquire()
-                .await
-                .expect("semaphore never closes");
-            let job = {
+            // #386: a job cancelled while it waits leaves the heap now and
+            // runs WITHOUT a slot: its body sees the token at once. If
+            // another runner already popped it, this one waits as usual —
+            // runners and jobs stay one to one.
+            let early = tokio::select! {
+                biased;
+                permit = runner_queue.sem.acquire() => Err(permit),
+                () = runner_cancel.cancelled() => Ok(()),
+            };
+            let cancelled_job = early.is_ok().then(|| {
                 let mut heap = runner_queue.heap.lock().expect("heap lock sound");
-                heap.pop()
+                take_job(&mut heap, id)
+            });
+            let (job, _permit) = match (early, cancelled_job.flatten()) {
+                (Ok(()), Some(job)) => (Some(job), None),
+                (early, _) => {
+                    let permit = match early {
+                        Err(permit) => permit,
+                        Ok(()) => runner_queue.sem.acquire().await,
+                    }
+                    .expect("semaphore never closes");
+                    let mut heap = runner_queue.heap.lock().expect("heap lock sound");
+                    (heap.pop(), Some(permit))
+                }
             };
             let Some(job) = job else {
                 // Impossible: every runner corresponds to a push. Defensive.
@@ -478,6 +495,17 @@ impl Scheduler {
             })
         }))
     }
+}
+
+/// Removes job `id` from `heap`, if it is still there.
+fn take_job(heap: &mut BinaryHeap<QueuedJob>, id: TaskId) -> Option<QueuedJob> {
+    let mut jobs = std::mem::take(heap).into_vec();
+    let job = jobs
+        .iter()
+        .position(|j| j.id == id)
+        .map(|at| jobs.swap_remove(at));
+    *heap = jobs.into_iter().collect();
+    job
 }
 
 /// Runs a supervised job: panic → `Failed{Internal{panic}}`, never brings
