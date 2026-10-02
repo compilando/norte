@@ -26,6 +26,10 @@ independently through `PROTOCOL_VERSION`.
   connected, and a reply lost the same way left a call waiting 30 s. The
   daemon now closes that connection, and the frontend reconnects and
   resyncs.
+- **A change in one panel's folder no longer reloads the other panel**
+  (#390). In the terminal interface, a download into `~/Downloads`
+  relisted a remote folder open in the other panel every second or so,
+  and keys typed meanwhile were lost.
 - **Indexing for semantic search can be cancelled while the AI provider
   does not answer** (#388), and an AI host that swallows packets now ends
   in an error (10 s to connect, 5 min without a byte) instead of hanging.

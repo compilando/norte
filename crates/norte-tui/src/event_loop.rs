@@ -36,7 +36,9 @@ use crate::navigate::{cd, request_decorations, settle_cd};
 use crate::overlays::watch_refresh_allowed;
 use crate::paste::route_paste;
 use crate::probes::{DecorateFetch, Probed};
-use crate::refresh::{after_panes_refresh, on_tick, reap_search_run, refresh_panes};
+use crate::refresh::{
+    after_panes_refresh, on_tick, reap_search_run, refresh_panes, refresh_panes_where,
+};
 use crate::screens::pane_attr_ids;
 use crate::session_push::{
     JOURNAL_IDLE, SessionPush, capture_session, drain_notices, push_session,
@@ -676,7 +678,7 @@ pub async fn run(
                 // and Esc would change meaning — the precondition leaves the
                 // event QUEUED (capacity-1 channel) and fires once the
                 // overlay closes.
-                if let Some(()) = ev {
+                if let Some(which) = ev {
                     // The disk map is a snapshot from a while ago, and this
                     // says something changed — but does NOT say what, so the
                     // only honest thing is to measure again. The flag is
@@ -686,8 +688,13 @@ pub async fn run(
                     if app.disk_map_slot().is_some() {
                         app.disk_map_stale = true;
                     }
-                    let refreshed =
-                        refresh_panes(app, backend, &mut Console::new(&mut events, terminal)).await;
+                    let refreshed = refresh_panes_where(
+                        app,
+                        backend,
+                        &mut Console::new(&mut events, terminal),
+                        which,
+                    )
+                    .await;
                     after_panes_refresh(
                         app,
                         backend,
