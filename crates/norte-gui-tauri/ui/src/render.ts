@@ -140,6 +140,9 @@ export class Screen {
   /// size and cell size (`paint`).
   paintedLayers = new Map<string, unknown>();
   layersSignature = "";
+  /** The last `cell()` and the root's inline style it was measured under
+   *  (#400): the theme and the font settings write the cell variables there. */
+  cellMeasured: { key: string; cell: { w: number; h: number } } | null = null;
   /** The viewer lines already declared. */
   viewerRows = 0;
   /** The viewer body columns the host already knows. */
@@ -250,11 +253,20 @@ export class Screen {
 
   /** A layout cell's size, in real pixels. */
   cell(): { w: number; h: number } {
+    // `getComputedStyle` after DOM changes forces a style recalculation, and
+    // this ran several times per paint. The variables only move when the
+    // root's inline style does.
+    const key = document.documentElement.style.cssText;
+    if (this.cellMeasured?.key === key) {
+      return this.cellMeasured.cell;
+    }
     const cs = getComputedStyle(document.documentElement);
-    return {
+    const cell = {
       w: Number.parseFloat(cs.getPropertyValue("--cell-w")) || 8,
       h: Number.parseFloat(cs.getPropertyValue("--cell-h")) || 22,
     };
+    this.cellMeasured = { key, cell };
+    return cell;
   }
 
   paint(view: ViewSnapshot): void {
@@ -965,6 +977,13 @@ export class Screen {
    * see stops being the one that gets canceled.
    */
   paintProcesses(dom: SlotDom, slot: ProcessesSlotView, view: ViewSnapshot): void {
+    // #400: the board's array is replaced when the tasks change, and the
+    // cursor is a number; same pair, same panel — and no `scrollIntoView`.
+    const cursor = String(slot.cursor);
+    if (dom.painted?.slot === view.tasks && dom.painted.size === cursor) {
+      return;
+    }
+    dom.painted = { slot: view.tasks, size: cursor };
     dom.root.setAttribute("aria-label", this.t("processes-title"));
     dom.title.textContent = this.t("processes-title");
     dom.scroller.className = "processes";
@@ -1027,6 +1046,27 @@ export class Screen {
         document.createTextNode(kindName),
         badge(this.t("hostile-name")),
       );
+    }
+    // #400: the status bar and the task strip were rebuilt on every paint,
+    // and the rebuild restarted the progress bar's animation. The session
+    // replaces each input when it changes, so the same objects are the same
+    // bar.
+    const inputs =
+      kindName === "status"
+        ? [view.status, view.status_items, view.connection.state, this.rejection]
+        : kindName === "tasks"
+          ? [view.tasks]
+          : null;
+    if (inputs !== null) {
+      const prev = dom.painted?.slot;
+      if (
+        Array.isArray(prev) &&
+        prev.length === inputs.length &&
+        prev.every((x, i) => x === inputs[i])
+      ) {
+        return;
+      }
+      dom.painted = { slot: inputs, size: "" };
     }
     if (kindName === "status") {
       dom.scroller.className = "statusbar";

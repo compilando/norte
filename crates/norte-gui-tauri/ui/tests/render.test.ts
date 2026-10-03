@@ -975,6 +975,20 @@ describe("Screen", () => {
     expect(status?.textContent).toContain("2 entradas");
   });
 
+  // #400: the same status objects keep the bar's nodes (a rebuild restarted
+  // its progress animation); a changed input repaints it.
+  it("the status bar is rebuilt only when what it shows changes", () => {
+    const { screen, root } = mount();
+    const v = view({});
+    screen.paint(v);
+    const msg = () => root.querySelector(".statusbar .status-message");
+    const before = msg();
+    screen.paint(v);
+    expect(msg()).toBe(before);
+    screen.paint({ ...v, status: { ...v.status, message: "otra" } });
+    expect(msg()?.textContent).toBe("otra");
+  });
+
   it("a command the host rejects at the boundary shows up in the status bar", () => {
     // An action that fails to deserialize dies in `dispatch`, before the
     // host ever sees it: nobody but the renderer can say so. That's how the
