@@ -7,6 +7,13 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Performance
+
+- **An archive inside a compressed zip entry opens in reasonable time**
+  (#397). Listing a `.tar` stored deflated inside a `.zip` decompressed
+  the entry again from its start for every 256 KiB read, which for a
+  large one amounted to a hang.
+
 ### Security
 
 - **wasmtime 48.0.5** for RUSTSEC-2026-0321 to 0327: among them a plugin
