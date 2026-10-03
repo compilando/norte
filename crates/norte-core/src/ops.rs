@@ -3456,7 +3456,9 @@ pub(crate) async fn dir_size(
             if ctx.cancel.is_cancelled() {
                 return Err(Error::Cancelled);
             }
-            let mut stream = match provider.list(&dir).await {
+            // Sized (#395): one lstat on the open directory instead of a
+            // `stat` per file below.
+            let mut stream = match provider.list_sized(&dir).await {
                 Ok(s) => s,
                 Err(e) => {
                     if matches!(e, Error::Cancelled) {
@@ -3629,7 +3631,7 @@ pub(crate) async fn dir_usage(
     let mut unreadables: u64 = 0;
     let mut omitted_count: u64 = 0;
 
-    let mut stream = provider.list(&root).await?;
+    let mut stream = provider.list_sized(&root).await?;
     while let Some(item) = stream.next().await {
         // A real inner loop (rule 3): a directory with 10^6 entries cannot
         // delay cancellation until the end of the listing.
@@ -3818,7 +3820,7 @@ async fn measure_subtree(
         if ctx.cancel.is_cancelled() {
             return Err(Error::Cancelled);
         }
-        let mut stream = match provider.list(&current).await {
+        let mut stream = match provider.list_sized(&current).await {
             Ok(s) => s,
             Err(Error::Cancelled) => return Err(Error::Cancelled),
             Err(_) => {
@@ -4027,7 +4029,9 @@ async fn walk_following(
         if cancel.is_cancelled() {
             return Err(Error::Cancelled);
         }
-        let mut stream = provider.list(&frame.dir).await?;
+        // Sized (#395): copy and move plan with these sizes, and
+        // `hydrate_plan` only stats what is still missing.
+        let mut stream = provider.list_sized(&frame.dir).await?;
         while let Some(item) = stream.next().await {
             // A real inner loop (rule 3), as in walk().
             if cancel.is_cancelled() {

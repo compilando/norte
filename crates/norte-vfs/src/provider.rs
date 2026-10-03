@@ -237,6 +237,27 @@ pub trait Provider: Send + Sync {
         self.list(p).await
     }
 
+    /// [`Self::list`] for a caller about to ask every entry's size: a
+    /// provider whose plain listing is lazy (#52) fills `size` and
+    /// `mtime_ms` here, where it costs one `lstat` on the open directory
+    /// instead of a [`Self::stat`] per entry afterwards (#395). The
+    /// default is [`Self::list`], whose sizes may be `None`, which the
+    /// caller still has to handle.
+    ///
+    /// ```
+    /// # use norte_vfs::{Provider, VPath};
+    /// # async fn demo(p: &dyn Provider, dir: &VPath) -> Result<(), norte_vfs::Error> {
+    /// use futures::StreamExt as _;
+    /// let mut entries = p.list_sized(dir).await?;
+    /// while let Some(e) = entries.next().await {
+    ///     let _size = e?.size; // `None` still possible: ask `stat` then
+    /// }
+    /// # Ok(()) }
+    /// ```
+    async fn list_sized(&self, p: &VPath) -> Result<EntryStream, Error> {
+        self.list(p).await
+    }
+
     /// [`Self::stat`] with options. Same contract as [`Self::list_with`].
     async fn stat_with(&self, p: &VPath, opt: &ListOptions) -> Result<Entry, Error> {
         let _ = opt;

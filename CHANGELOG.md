@@ -7,6 +7,12 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Performance
+
+- **Folder size, the disk map and copy planning stop asking for each
+  file's size one by one** (#395). On a local folder with a million
+  files that was a million separate round trips before the first byte.
+
 ### Security
 
 - **wasmtime 48.0.5** for RUSTSEC-2026-0321 to 0327: among them a plugin

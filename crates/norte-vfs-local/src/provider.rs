@@ -1430,70 +1430,13 @@ impl Provider for LocalProvider {
         }
         self.ensure_caps().await;
         let native = self.native(p)?;
-        // Same synchronous upfront validation as `list` (NotFound / not-a-dir
-        // in the Result, not as the stream's first item).
-        {
-            let probe = native.clone();
-            blocking(move || {
-                let md = std::fs::metadata(&probe).map_err(|e| map_io(&e))?;
-                if md.is_dir() {
-                    Ok(())
-                } else {
-                    Err(Error::Conflict {
-                        conflict: ConflictKind::TypeMismatch,
-                    })
-                }
-            })
-            .await?;
-        }
-        let base_vpath = p.clone();
-        let req = opt.attrs.clone();
-        let (tx, rx) = tokio::sync::mpsc::channel::<Result<Entry, Error>>(64);
-        spawn_guarded_producer(tx, move |tx| {
-            let rd = match std::fs::read_dir(&native) {
-                Ok(rd) => rd,
-                Err(e) => {
-                    let _ = tx.blocking_send(Err(map_io(&e)));
-                    return;
-                }
-            };
-            for dent in rd {
-                let item = dent.map_err(|e| map_io(&e)).and_then(|d| {
-                    let seg = Segment::new(os_to_bytes(&d.file_name()))
-                        .map_err(|_| Error::InvalidPath)?;
-                    // Promotion (#108 block 2): requested attrs → one lstat
-                    // per entry (`DirEntry::metadata` does NOT follow
-                    // symlinks), which also hydrates size/mtime for free.
-                    // Still inside the blocking producer — never I/O on
-                    // the async executor.
-                    //
-                    // readdir→lstat race: an entry deleted between the two
-                    // no longer exists — it's SKIPPED (None), it doesn't
-                    // kill a listing of a live dir (/tmp, build dirs).
-                    // Other errors are still fatal, as in the non-promoted
-                    // path.
-                    match d.metadata() {
-                        Ok(md) => Ok(Some(entry_from(base_vpath.join(seg), &md, &req))),
-                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-                        Err(e) => Err(map_io(&e)),
-                    }
-                });
-                let item = match item {
-                    Ok(None) => continue,
-                    Ok(Some(entry)) => Ok(entry),
-                    Err(e) => Err(e),
-                };
-                let stop = item.is_err();
-                if tx.blocking_send(item).is_err() {
-                    // Receiver dropped: cooperative cancellation of the listing.
-                    return;
-                }
-                if stop {
-                    return;
-                }
-            }
-        });
-        Ok(ReceiverStream::new(rx).boxed())
+        list_hydrated(native, p.clone(), opt.attrs.clone()).await
+    }
+
+    async fn list_sized(&self, p: &VPath) -> Result<EntryStream, Error> {
+        self.ensure_caps().await;
+        let native = self.native(p)?;
+        list_hydrated(native, p.clone(), norte_vfs::AttrRequest::default()).await
     }
 
     async fn read(
@@ -2099,6 +2042,74 @@ impl Provider for LocalProvider {
         let nt = self.native(to)?;
         blocking(move || do_rename(&nf, &nt)).await
     }
+}
+
+/// A listing with one `lstat` per entry on the open directory: size, mtime
+/// and the attributes in `req` (#108 block 2; #395 asks it with none).
+async fn list_hydrated(
+    native: PathBuf,
+    base_vpath: VPath,
+    req: norte_vfs::AttrRequest,
+) -> Result<EntryStream, Error> {
+    // Same synchronous upfront validation as `list` (NotFound / not-a-dir in
+    // the Result, not as the stream's first item).
+    {
+        let probe = native.clone();
+        blocking(move || {
+            let md = std::fs::metadata(&probe).map_err(|e| map_io(&e))?;
+            if md.is_dir() {
+                Ok(())
+            } else {
+                Err(Error::Conflict {
+                    conflict: ConflictKind::TypeMismatch,
+                })
+            }
+        })
+        .await?;
+    }
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Entry, Error>>(64);
+    spawn_guarded_producer(tx, move |tx| {
+        let rd = match std::fs::read_dir(&native) {
+            Ok(rd) => rd,
+            Err(e) => {
+                let _ = tx.blocking_send(Err(map_io(&e)));
+                return;
+            }
+        };
+        for dent in rd {
+            let item = dent.map_err(|e| map_io(&e)).and_then(|d| {
+                let seg =
+                    Segment::new(os_to_bytes(&d.file_name())).map_err(|_| Error::InvalidPath)?;
+                // One lstat per entry (`DirEntry::metadata` does NOT follow
+                // symlinks), inside the blocking producer — never I/O on the
+                // async executor.
+                //
+                // readdir→lstat race: an entry deleted between the two no
+                // longer exists — it's SKIPPED (None), it doesn't kill a
+                // listing of a live dir (/tmp, build dirs). Other errors are
+                // still fatal, as in the plain path.
+                match d.metadata() {
+                    Ok(md) => Ok(Some(entry_from(base_vpath.join(seg), &md, &req))),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                    Err(e) => Err(map_io(&e)),
+                }
+            });
+            let item = match item {
+                Ok(None) => continue,
+                Ok(Some(entry)) => Ok(entry),
+                Err(e) => Err(e),
+            };
+            let stop = item.is_err();
+            if tx.blocking_send(item).is_err() {
+                // Receiver dropped: cooperative cancellation of the listing.
+                return;
+            }
+            if stop {
+                return;
+            }
+        }
+    });
+    Ok(ReceiverStream::new(rx).boxed())
 }
 
 /// Rename with a no-replace contract: the collision is detected by the

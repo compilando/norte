@@ -32,6 +32,39 @@ fn partials_with_prefix(base: &std::path::Path, prefix: &str) -> usize {
         .count()
 }
 
+/// #395: the plain listing stays lazy (#52), and `list_sized` brings the
+/// sizes and dates a folder size or a copy plan would otherwise `stat` one
+/// by one.
+#[tokio::test]
+async fn list_sized_brings_what_the_lazy_listing_leaves_out() {
+    let (p, root, base) = provider();
+    std::fs::write(base.join("f"), b"12345").expect("write");
+    std::fs::create_dir(base.join("d")).expect("mkdir");
+
+    let lazy: Vec<_> = p.list(&root).await.expect("list").collect().await;
+    let f = lazy
+        .iter()
+        .flatten()
+        .find(|e| e.kind == EntryKind::File)
+        .expect("the file");
+    assert_eq!(f.size, None, "the plain listing is still lazy");
+
+    let sized: Vec<_> = p
+        .list_sized(&root)
+        .await
+        .expect("list_sized")
+        .collect()
+        .await;
+    let f = sized
+        .iter()
+        .flatten()
+        .find(|e| e.kind == EntryKind::File)
+        .expect("the file");
+    assert_eq!(f.size, Some(5));
+    assert!(f.mtime_ms.is_some());
+    assert_eq!(sized.len(), 2, "the directory too");
+}
+
 #[tokio::test]
 async fn capabilities_are_probed() {
     let (p, root, _) = provider();
