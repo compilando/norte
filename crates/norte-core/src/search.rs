@@ -882,7 +882,20 @@ pub async fn run_walk(
             ctx.progress.update(|p| p.entries_done += 1);
             continue;
         };
-        while let Some(item) = stream.next().await {
+        loop {
+            // The reads in flight advance while the listing does: a read
+            // that finishes is settled now, not when the cap forces a wait.
+            let item = tokio::select! {
+                biased;
+                Some(done) = reading.next(), if !reading.is_empty() => {
+                    settle!(done);
+                    continue;
+                }
+                item = stream.next() => match item {
+                    Some(item) => item,
+                    None => break,
+                },
+            };
             // Time/size flush on EVERY iteration (even if the entry is not a
             // hit): this way the pane drips live even while scanning
             // through failures.
@@ -978,6 +991,14 @@ pub async fn run_walk(
     }
     while let Some(done) = reading.next().await {
         settle!(done);
+        // Slow reads finishing one by one still drip to the pane.
+        if !batch.is_empty() && last_flush.elapsed() >= FLUSH_INTERVAL {
+            match flush(&tx, &mut batch, &ctx.cancel).await {
+                FlushOutcome::Continue => last_flush = Instant::now(),
+                FlushOutcome::ReceiverGone => return Ok(()),
+                FlushOutcome::Cancelled => return Err(Error::Cancelled),
+            }
+        }
     }
     let _ = flush(&tx, &mut batch, &ctx.cancel).await;
     Ok(())
