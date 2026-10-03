@@ -438,6 +438,7 @@ pub async fn run(
         let painted_area = if skip_frame {
             last_area
         } else {
+            app.needs_frame = false;
             turn::prepare_frame(app, backend, terminal, lua_host.as_ref()).await?;
             // A one-off exemption from rule 2: the draw writes the control
             // terminal synchronously (ratatui's official async pattern;
@@ -580,12 +581,17 @@ pub async fn run(
         // deadline tests cannot fix. Comes after the frame because what it
         // promises is "it is seen, and it removes itself", not "it is
         // removed before being seen".
+        let had_splash = app.splash.is_some();
         crate::splash::tick(app);
+        if had_splash && app.splash.is_none() {
+            app.needs_frame = true;
+        }
         // The row the reader chose by its number: navigated here, where the
         // backend is. Today every splash row carries a directory, so this is
         // an ordinary `cd` —with its return ritual— and not a second door to
         // the dispatcher.
         if let Some((_, Some(arg))) = app.pending_splash_row.take() {
+            app.needs_frame = true;
             match norte_proto::VPath::parse(&arg) {
                 Ok(destination) => {
                     let outcome = cd(
@@ -642,9 +648,11 @@ pub async fn run(
             if opens && app.processes_slot().is_none() {
                 app.open_processes(false);
                 app.processes_auto = true;
+                app.needs_frame = true;
             } else if !has_tasks && app.processes_auto {
                 app.close_processes();
                 app.processes_auto = false;
+                app.needs_frame = true;
             }
         }
         turn::spawn_probes(app, backend, &mut work);

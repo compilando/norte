@@ -1231,6 +1231,11 @@ pub struct App {
     /// ([`App::SPLASH_BRIEF_MS`] since it was set). `None` = it does not
     /// expire on its own (`home`), or there is no splash.
     pub splash_until_ms: Option<i64>,
+    /// Something visible changed AFTER the last frame was drawn (the work
+    /// that follows a draw: the attributes sheet, a tree branch, the splash
+    /// expiring, the processes panel opening on its own): the next tick
+    /// must draw even if it is quiet (#405). Cleared by each draw.
+    pub needs_frame: bool,
     /// The processes panel was opened by the AUTOMATIC setting (`[ui]
     /// processes_panel = "auto"`), so the automatic setting can close it. A
     /// panel the reader opened does not close on its own: they opened it to
@@ -1471,6 +1476,7 @@ impl App {
             wizard: None,
             splash: None,
             splash_until_ms: None,
+            needs_frame: false,
             processes_auto: false,
             panel_focus: None,
             panels: norte_frontend::layout::BySlot::new(),
@@ -1695,7 +1701,8 @@ impl App {
     /// one drawn needlessly is only CPU.
     #[must_use]
     pub fn quiet_for_a_tick(&self) -> bool {
-        self.board.rows().is_empty()
+        !self.needs_frame
+            && self.board.rows().is_empty()
             && self.terminal_slot().is_none()
             && self.log_slot_visible().is_none()
             && self.panel_slot().is_none()
@@ -1826,6 +1833,12 @@ mod tests {
             None,
         ));
         assert!(!app.quiet_for_a_tick(), "a spinner turns");
+        app.busy = None;
+        app.needs_frame = true;
+        assert!(
+            !app.quiet_for_a_tick(),
+            "what changed after the last draw has to be drawn"
+        );
     }
 
     /// Search dialog (liveSearch T6): Tab cycles the active field and

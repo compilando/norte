@@ -640,6 +640,7 @@ pub async fn after_frame(
                     && (p.note().is_none_or(|n| n != text) || p.shown().is_some())
                 {
                     p.say(None, text);
+                    app.needs_frame = true;
                 }
             }
             None => {}
@@ -671,19 +672,27 @@ pub async fn after_frame(
                     None => t.branch_unreadable(dir),
                 }
             }
+            app.needs_frame = true;
         }
         // The attributes sheet requests NOTHING: what it shows already came
         // in the listing, so this is a copy, not a request. A slot the
         // layout pass did not place produces no target and is not touched.
         match crate::metadata::want(app, &res) {
             Some((slot, crate::metadata::Want::Entry(e, up))) => {
-                if let Some(sheet) = app.panes.metadata_mut(slot) {
-                    *sheet = Some((*e, up));
+                let new = Some((*e, up));
+                if let Some(sheet) = app.panes.metadata_mut(slot)
+                    && *sheet != new
+                {
+                    *sheet = new;
+                    app.needs_frame = true;
                 }
             }
             Some((slot, crate::metadata::Want::Note(_))) => {
-                if let Some(sheet) = app.panes.metadata_mut(slot) {
+                if let Some(sheet) = app.panes.metadata_mut(slot)
+                    && sheet.is_some()
+                {
                     *sheet = None;
+                    app.needs_frame = true;
                 }
             }
             None => {}
