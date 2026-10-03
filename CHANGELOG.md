@@ -7,6 +7,12 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Security
+
+- **wasmtime 48.0.5** for RUSTSEC-2026-0321 to 0327: among them a plugin
+  that could crash norte through a file dated before 1970, and a stack
+  overflow reachable from a component's callback.
+
 ## [0.3.0-alpha.7] - 2026-10-02
 
 ### Fixed
