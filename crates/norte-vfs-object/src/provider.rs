@@ -26,7 +26,12 @@ const MAX_KEY_BYTES: usize = 1024;
 /// `PutObject`).
 const WRITE_CHUNK: usize = 8 * 1024 * 1024;
 
-/// Multipart parts uploaded at once: up to 32 MiB buffered per write.
+/// Multipart parts uploaded at once. With opendal's writer that is about
+/// 48 MiB per write (four parts in flight, one being filled, the chunk
+/// buffer), times the copies the scheduler runs in parallel to the bucket.
+/// An abort can still see a part the server completes after it; the
+/// bucket's `AbortIncompleteMultipartUpload` lifecycle rule (ADR 0016 E)
+/// is what collects those, as it already did with one part in flight.
 const WRITE_PARTS_IN_FLIGHT: usize = 4;
 
 /// VFS provider over object storage (ADR 0016).

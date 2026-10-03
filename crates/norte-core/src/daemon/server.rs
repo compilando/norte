@@ -222,6 +222,8 @@ struct Shared {
     /// its sender). Bounded: a subscriber that does not drain loses the
     /// subscription, never accumulates.
     subscribers: Mutex<HashMap<u64, Subscriber>>,
+    /// Plugin guests running at once ([`spawn_guest`]).
+    plugin_guests: Arc<tokio::sync::Semaphore>,
     /// Recent outcomes (terminal snapshots) for `task.list`, with the owning
     /// actor: an agent's resync does not see other actors' terminals either
     /// (#66).
@@ -911,6 +913,7 @@ impl Daemon {
             tasks: Mutex::new(HashMap::new()),
             recent: Mutex::new(std::collections::VecDeque::new()),
             subscribers: Mutex::new(HashMap::new()),
+            plugin_guests: Arc::new(tokio::sync::Semaphore::new(PLUGIN_GUESTS_MAX)),
             next_conn: AtomicUsize::new(0),
             connections: AtomicUsize::new(0),
             shutdown: CancellationToken::new(),
@@ -2629,6 +2632,44 @@ async fn handle_value(
     }
 }
 
+/// Guests that may run at once, across connections (#408). The plugin
+/// reads are cancelable, and withdrawing one frees the connection while
+/// its guest runs on to its epoch deadline (up to ~10 s); without this
+/// cap a client paging through images left one live guest per page —
+/// blocking threads the pool keeps for sqlx and local I/O.
+const PLUGIN_GUESTS_MAX: usize = 16;
+
+/// Runs a plugin guest on a blocking thread, holding one of
+/// [`PLUGIN_GUESTS_MAX`] permits until the GUEST ends, not until its
+/// request is withdrawn: the permit moves into the closure.
+async fn spawn_guest<F, R>(shared: &Arc<Shared>, f: F) -> Result<R, tokio::task::JoinError>
+where
+    F: FnOnce() -> R + Send + 'static,
+    R: Send + 'static,
+{
+    spawn_guest_on(&shared.plugin_guests, f).await
+}
+
+/// [`spawn_guest`] over any semaphore (the tests use a small one).
+async fn spawn_guest_on<F, R>(
+    guests: &Arc<tokio::sync::Semaphore>,
+    f: F,
+) -> Result<R, tokio::task::JoinError>
+where
+    F: FnOnce() -> R + Send + 'static,
+    R: Send + 'static,
+{
+    let permit = Arc::clone(guests)
+        .acquire_owned()
+        .await
+        .expect("the guests semaphore is never closed");
+    crate::blocking::spawn_blocking(move || {
+        let _permit = permit;
+        f()
+    })
+    .await
+}
+
 /// Takes away the sync PLANS a closing connection left retained (ADR 0049,
 /// third of the spool's four deaths).
 ///
@@ -4213,7 +4254,7 @@ async fn handle_plugin_preview(
     // `Send+Sync` but not `Clone`: the `Arc` is cloned. `mime` is `&'static`
     // → moved as-is into the closure.
     let runtime = Arc::clone(&shared.plugin_runtime);
-    let output = crate::blocking::spawn_blocking(move || {
+    let output = spawn_guest(shared, move || {
         let mut inst = runtime.instantiate(&wasm, caps)?;
         // P2 Task 4a: delivers `[config]` ALREADY resolved (Task 2) to the
         // previewer, just as `handle_plugin_run_command` already does for
@@ -4303,7 +4344,7 @@ async fn handle_plugin_thumbnail(
 
     let runtime = Arc::clone(&shared.plugin_runtime);
     let max_edge = p.max_edge;
-    let outcome = crate::blocking::spawn_blocking(move || {
+    let outcome = spawn_guest(shared, move || {
         let mut inst = runtime.instantiate_thumbnail(&wasm, caps)?;
         inst.set_settings(settings);
         inst.render_thumbnail(mime, &bytes, max_edge)
@@ -4389,7 +4430,7 @@ async fn handle_plugin_panel_render(
     // gate prevents.
     let dir = p.dir.clone();
     let climb = matches!(actor, Actor::User);
-    let outcome = crate::blocking::spawn_blocking(move || {
+    let outcome = spawn_guest(shared, move || {
         crate::plugins::render_panel_blocking(
             &runtime,
             resolved,
@@ -4459,7 +4500,7 @@ async fn handle_plugin_preview_styled(
     let (content, lossy) = crate::plugins::decode_for_preview(bytes);
 
     let runtime = Arc::clone(&shared.plugin_runtime);
-    let outcome = crate::blocking::spawn_blocking(move || {
+    let outcome = spawn_guest(shared, move || {
         let mut inst = runtime.instantiate(&wasm, caps)?;
         inst.set_settings(settings);
         inst.render_styled_preview(
@@ -4712,7 +4753,7 @@ async fn handle_plugin_decorate(
         reg.resolve_decorators()
     };
     let runtime = Arc::clone(&shared.plugin_runtime);
-    let plugins = crate::blocking::spawn_blocking(move || {
+    let plugins = spawn_guest(shared, move || {
         let mut out = Vec::new();
         for ((id, _name, wasm, caps, settings), slot) in resolved {
             let Ok(mut inst) = runtime.instantiate_decorator(&wasm, caps) else {
@@ -4808,7 +4849,7 @@ async fn handle_plugin_column_values(
     });
     let climb = matches!(actor, Actor::User);
     let pool = Arc::clone(&shared.column_pool);
-    let values = crate::blocking::spawn_blocking(move || {
+    let values = spawn_guest(shared, move || {
         pool.column_values(
             &runtime,
             resolved,
@@ -7009,6 +7050,37 @@ mod tests {
             subs.lock().expect("lock").contains_key(&2),
             "the live one stays"
         );
+    }
+
+    /// #408: a withdrawn plugin read keeps its permit until its GUEST ends,
+    /// so abandoning requests cannot pile up more guests than the cap.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_abandoned_guest_keeps_its_permit_until_it_ends() {
+        use std::sync::Arc;
+        let guests = Arc::new(tokio::sync::Semaphore::new(1));
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel::<()>();
+        let g = Arc::clone(&guests);
+        let first = tokio::spawn(async move {
+            super::spawn_guest_on(&g, move || {
+                let _ = started_tx.send(());
+                let _ = release_rx.recv();
+            })
+            .await
+        });
+        started_rx.await.expect("the guest started");
+        // The request is withdrawn: its future is dropped, the guest runs on.
+        first.abort();
+        let _ = first.await;
+        assert_eq!(guests.available_permits(), 0, "still held by the guest");
+        release_tx.send(()).expect("release");
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            while guests.available_permits() == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("returned when the guest ends");
     }
 
     /// #155: a FULL outbox costs the frame and NOT the subscription. Eviction
