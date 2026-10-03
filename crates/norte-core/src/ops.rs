@@ -3498,7 +3498,9 @@ pub(crate) async fn dir_size(
             if ctx.cancel.is_cancelled() {
                 return Err(Error::Cancelled);
             }
-            let mut stream = match provider.list(&dir).await {
+            // Sized (#395): one lstat on the open directory instead of a
+            // `stat` per file below.
+            let mut stream = match provider.list_sized(&dir).await {
                 Ok(s) => s,
                 Err(e) => {
                     if matches!(e, Error::Cancelled) {
@@ -3671,7 +3673,7 @@ pub(crate) async fn dir_usage(
     let mut unreadables: u64 = 0;
     let mut omitted_count: u64 = 0;
 
-    let mut stream = provider.list(&root).await?;
+    let mut stream = provider.list_sized(&root).await?;
     while let Some(item) = stream.next().await {
         // A real inner loop (rule 3): a directory with 10^6 entries cannot
         // delay cancellation until the end of the listing.
@@ -3868,7 +3870,7 @@ async fn measure_subtree(
         if ctx.cancel.is_cancelled() {
             return Err(Error::Cancelled);
         }
-        let mut stream = match provider.list(&current).await {
+        let mut stream = match provider.list_sized(&current).await {
             Ok(s) => s,
             Err(Error::Cancelled) => return Err(Error::Cancelled),
             Err(_) => {
@@ -3933,13 +3935,27 @@ pub(crate) async fn walk(
     root: &VPath,
     cancel: &CancellationToken,
 ) -> Result<Vec<Entry>, Error> {
+    walk_with(provider, root, cancel, false).await
+}
+
+/// [`walk`], listing with [`Provider::list_sized`] when `sized` (#395).
+async fn walk_with(
+    provider: &dyn Provider,
+    root: &VPath,
+    cancel: &CancellationToken,
+    sized: bool,
+) -> Result<Vec<Entry>, Error> {
     let mut out = Vec::new();
     let mut pending = vec![root.clone()];
     while let Some(dir) = pending.pop() {
         if cancel.is_cancelled() {
             return Err(Error::Cancelled);
         }
-        let mut stream = provider.list(&dir).await?;
+        let mut stream = if sized {
+            provider.list_sized(&dir).await?
+        } else {
+            provider.list(&dir).await?
+        };
         while let Some(item) = stream.next().await {
             // A real inner loop (rule 3): a dir with 10^6 entries or a slow
             // provider cannot delay cancellation until the pop.
@@ -4025,7 +4041,9 @@ async fn plan_for(
     if opts.symlinks == SymlinkPolicy::Follow {
         walk_following(provider, root, false, cancel).await
     } else {
-        Ok(walk(provider, root, cancel)
+        // Sized (#395): the plan is hydrated next, and this way only what
+        // the listing could not size is stat'ed.
+        Ok(walk_with(provider, root, cancel, true)
             .await?
             .into_iter()
             .map(|entry| PlanEntry {
@@ -4081,7 +4099,9 @@ async fn walk_following(
         if cancel.is_cancelled() {
             return Err(Error::Cancelled);
         }
-        let mut stream = provider.list(&frame.dir).await?;
+        // Sized (#395): copy and move plan with these sizes, and
+        // `hydrate_plan` only stats what is still missing.
+        let mut stream = provider.list_sized(&frame.dir).await?;
         while let Some(item) = stream.next().await {
             // A real inner loop (rule 3), as in walk().
             if cancel.is_cancelled() {
@@ -4134,10 +4154,9 @@ async fn walk_following(
                             // SYNTHETIC dir: the copy creates a real dir at
                             // the destination. The reference mtime comes
                             // from the link's `entry` exactly as the
-                            // listing gave it — with a lazy local listing
-                            // (#52) it is almost always `None` today
-                            // (`hydrate_plan` does not touch Dirs); no
-                            // consumer reads it yet.
+                            // listing gave it — with the sized local
+                            // listing (#395) that is the LINK's own mtime,
+                            // not the target's; no consumer reads it yet.
                             out.push(PlanEntry {
                                 entry: Entry {
                                     // attrs: SYNTHETIC dir, empty on purpose

@@ -32,6 +32,60 @@ fn partials_with_prefix(base: &std::path::Path, prefix: &str) -> usize {
         .count()
 }
 
+/// #395: the plain listing stays lazy (#52), and `list_sized` brings the
+/// sizes and dates a folder size or a copy plan would otherwise `stat` one
+/// by one.
+#[tokio::test]
+async fn list_sized_brings_what_the_lazy_listing_leaves_out() {
+    let (p, root, base) = provider();
+    std::fs::write(base.join("f"), b"12345").expect("write");
+    std::fs::create_dir(base.join("d")).expect("mkdir");
+
+    let lazy: Vec<_> = p.list(&root).await.expect("list").collect().await;
+    let f = lazy
+        .iter()
+        .flatten()
+        .find(|e| e.kind == EntryKind::File)
+        .expect("the file");
+    assert_eq!(f.size, None, "the plain listing is still lazy");
+
+    let sized: Vec<_> = p
+        .list_sized(&root)
+        .await
+        .expect("list_sized")
+        .collect()
+        .await;
+    let f = sized
+        .iter()
+        .flatten()
+        .find(|e| e.kind == EntryKind::File)
+        .expect("the file");
+    assert_eq!(f.size, Some(5));
+    assert!(f.mtime_ms.is_some());
+    assert_eq!(sized.len(), 2, "the directory too");
+}
+
+/// #395: one entry that cannot be stat'ed (a directory readable but not
+/// searchable: EACCES on every lstat) does not end the sized listing: it
+/// comes out lazy, as the plain listing gives it, and the caller decides.
+#[cfg(unix)]
+#[tokio::test]
+async fn list_sized_survives_an_entry_it_cannot_stat() {
+    use std::os::unix::fs::PermissionsExt;
+    let (p, root, base) = provider();
+    std::fs::create_dir(base.join("locked")).expect("mkdir");
+    std::fs::write(base.join("locked/f"), b"x").expect("write");
+    std::fs::set_permissions(base.join("locked"), std::fs::Permissions::from_mode(0o400))
+        .expect("chmod");
+    let dir = child(&root, b"locked");
+    let got: Vec<_> = p.list_sized(&dir).await.expect("listable").collect().await;
+    std::fs::set_permissions(base.join("locked"), std::fs::Permissions::from_mode(0o700))
+        .expect("chmod back");
+    // As root the lstat succeeds; either way the listing does not fail.
+    assert_eq!(got.len(), 1);
+    assert!(got[0].is_ok(), "{:?}", got[0]);
+}
+
 #[tokio::test]
 async fn capabilities_are_probed() {
     let (p, root, _) = provider();

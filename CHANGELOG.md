@@ -76,6 +76,9 @@ independently through `PROTOCOL_VERSION`.
 - **Scrolling a zoomed image in the terminal no longer resends it** (#406).
   Each arrow key retransmitted the whole picture, megabytes of it, to a
   kitty-graphics terminal; now only its placement moves.
+- **Folder size, the disk map and copy planning stop asking for each
+  file's size one by one** (#395). On a local folder with a million
+  files that was a million separate round trips before the first byte.
 
 ### Security
 
