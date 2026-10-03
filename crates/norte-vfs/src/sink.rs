@@ -48,4 +48,40 @@ pub trait ByteSink: Send {
     async fn keep(self: Box<Self>) -> Result<(), Error> {
         self.abort().await
     }
+
+    /// Fills the still EMPTY staging with all of `src`, from its current
+    /// offset to its end, without passing the bytes through the caller
+    /// (ADR 0165): a reflink or an in-kernel copy, when the sink can.
+    ///
+    /// `progress` is called with the bytes copied so far; returning
+    /// `false` stops the copy, and the call answers
+    /// `Some(Err(Error::Cancelled))`. The staging contract is unchanged:
+    /// nothing is published until [`Self::commit`].
+    ///
+    /// `None` = this sink cannot, and NOTHING was written: the caller
+    /// streams instead. Default: `None`.
+    ///
+    /// ```
+    /// # use norte_vfs::ByteSink;
+    /// # async fn demo(sink: &mut dyn ByteSink, src: std::fs::File) {
+    /// let progress = std::sync::Arc::new(|_done: u64| true);
+    /// match sink.fill_from(src, progress).await {
+    ///     None => { /* stream it chunk by chunk */ }
+    ///     Some(Ok(copied)) => { let _ = copied; /* commit */ }
+    ///     Some(Err(_e)) => { /* abort */ }
+    /// }
+    /// # }
+    /// ```
+    async fn fill_from(
+        &mut self,
+        src: std::fs::File,
+        progress: FillProgress,
+    ) -> Option<Result<u64, Error>> {
+        let _ = (src, progress);
+        None
+    }
 }
+
+/// What [`ByteSink::fill_from`] reports to: bytes copied so far, and
+/// whether to go on.
+pub type FillProgress = std::sync::Arc<dyn Fn(u64) -> bool + Send + Sync>;

@@ -7,6 +7,14 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Performance
+
+- **Local copies are done by the kernel** (#393, ADR 0165). On btrfs, XFS
+  and other copy-on-write filesystems a copy is a reflink: instant, and
+  it takes no space until one side changes. Elsewhere on Linux the bytes
+  no longer pass through norte. Cancelling and the half-copied file
+  behave as before.
+
 ### Security
 
 - **wasmtime 48.0.5** for RUSTSEC-2026-0321 to 0327: among them a plugin

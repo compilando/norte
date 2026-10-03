@@ -2332,18 +2332,15 @@ async fn copy_file(
     // not go backward on resume).
     ctx.progress.update(|p| p.bytes_done = base + already);
 
-    let range = (already > 0).then_some(norte_proto::ByteRange {
-        offset: already,
-        len: None,
-    });
-    let mut stream = match src.read(from, range).await {
-        Ok(s) => s,
-        Err(e) => {
-            release(sink, to, resume).await;
-            return Err(e);
-        }
-    };
-    let mut written = base + already;
+    let (mut stream, filled) =
+        match remaining_source(src, from, already, &mut sink, base, ctx).await {
+            Ok(s) => s,
+            Err(e) => {
+                release(sink, to, resume).await;
+                return Err(e);
+            }
+        };
+    let mut written = base + already + filled;
     while let Some(item) = stream.next().await {
         // Per-chunk cancellation: clean destination, or a resumable
         // `.norte-partial` (resume), never an unmarked half-done file. And
@@ -2423,6 +2420,51 @@ async fn copy_file(
         .on_mutation(&Mutation::Created { path: to, node }, &ctx.actor)
         .await?;
     Ok(())
+}
+
+/// What is left to write into `sink`, and how many bytes the kernel already
+/// put there: nothing left if it filled the whole file (ADR 0165), else the
+/// source read from `already`.
+async fn remaining_source(
+    src: &dyn Provider,
+    from: &VPath,
+    already: u64,
+    sink: &mut Box<dyn norte_vfs::ByteSink>,
+    base: u64,
+    ctx: &TaskCtx,
+) -> Result<(norte_vfs::ByteStream, u64), Error> {
+    if already == 0
+        && let Some(n) = kernel_fill(src, from, sink, base, ctx).await?
+    {
+        return Ok((futures::stream::empty().boxed(), n));
+    }
+    let range = (already > 0).then_some(norte_proto::ByteRange {
+        offset: already,
+        len: None,
+    });
+    Ok((src.read(from, range).await?, 0))
+}
+
+/// A local source into a local, still empty staging, copied by the kernel —
+/// a reflink or `copy_file_range`. `Ok(None)` = either side cannot, nothing
+/// was written, and the caller streams.
+async fn kernel_fill(
+    src: &dyn Provider,
+    from: &VPath,
+    sink: &mut Box<dyn norte_vfs::ByteSink>,
+    base: u64,
+    ctx: &TaskCtx,
+) -> Result<Option<u64>, Error> {
+    let Some(opened) = src.open_local(from).await else {
+        return Ok(None);
+    };
+    let progress = Arc::clone(&ctx.progress);
+    let cancel = ctx.cancel.clone();
+    let report: norte_vfs::FillProgress = Arc::new(move |done| {
+        progress.update(|p| p.bytes_done = base + done);
+        !cancel.is_cancelled()
+    });
+    sink.fill_from(opened?, report).await.transpose()
 }
 
 /// Drops the sink on interruption: `keep` (keeps the resumable

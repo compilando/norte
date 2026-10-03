@@ -446,6 +446,17 @@ pub trait Provider: Send + Sync {
         Ok((self.write(p).await?, 0))
     }
 
+    /// The regular file at `p` as an open local descriptor, for a local
+    /// sink to fill itself from in the kernel (ADR 0165,
+    /// [`ByteSink::fill_from`]).
+    ///
+    /// `None` = this provider cannot hand one out (it is not local); the
+    /// caller reads with [`Self::read`]. Default: `None`.
+    async fn open_local(&self, p: &VPath) -> Option<Result<std::fs::File, Error>> {
+        let _ = p;
+        None
+    }
+
     /// SHA-256 of the FIRST `len` bytes of `p`'s resumable staging (#35,
     /// `VerifyPolicy::Hash`): the engine compares it against the hash of
     /// the SAME prefix of the SOURCE before resuming — if they don't
