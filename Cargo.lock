@@ -5276,6 +5276,7 @@ dependencies = [
 name = "norte-index"
 version = "0.3.0-alpha.7"
 dependencies = [
+ "futures",
  "norte-proto",
  "sqlx",
  "thiserror 2.0.18",

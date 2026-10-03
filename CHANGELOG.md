@@ -116,6 +116,13 @@ independently through `PROTOCOL_VERSION`.
 - **The window's folder tree is not rebuilt when it has not changed**
   (#403). With large branches open, every arrow key in the listing next
   to it rebuilt thousands of rows.
+- **Smaller speed-ups from the performance review** (#408): comparing
+  two remote folders lists both sides at once; uploads to S3-compatible
+  storage send four parts at a time; a slow plugin thumbnail or preview
+  can be withdrawn and no longer holds up the next listing; the daemon no
+  longer wakes four times a second when it has no idle timeout; and
+  `norte` opens its search index only for `norte index` commands. A
+  semantic search no longer loads every stored vector into memory.
 
 ### Security
 

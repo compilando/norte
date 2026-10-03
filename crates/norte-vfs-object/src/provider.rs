@@ -26,6 +26,14 @@ const MAX_KEY_BYTES: usize = 1024;
 /// `PutObject`).
 const WRITE_CHUNK: usize = 8 * 1024 * 1024;
 
+/// Multipart parts uploaded at once. With opendal's writer that is about
+/// 48 MiB per write (four parts in flight, one being filled, the chunk
+/// buffer), times the copies the scheduler runs in parallel to the bucket.
+/// An abort can still see a part the server completes after it; the
+/// bucket's `AbortIncompleteMultipartUpload` lifecycle rule (ADR 0016 E)
+/// is what collects those, as it already did with one part in flight.
+const WRITE_PARTS_IN_FLIGHT: usize = 4;
+
 /// VFS provider over object storage (ADR 0016).
 ///
 /// The [`Operator`] arrives ALREADY configured (bucket/region/endpoint/
@@ -594,7 +602,13 @@ impl Provider for ObjectProvider {
         // buffered PutObject): nothing exists at the key until `close()`.
         // If-None-Match travels in the commit → race-free create-new on
         // honest servers.
-        let mut w = self.op.writer_with(&key).chunk(WRITE_CHUNK);
+        // Four parts in flight (#408): one at a time held a large upload to
+        // a single stream's speed.
+        let mut w = self
+            .op
+            .writer_with(&key)
+            .chunk(WRITE_CHUNK)
+            .concurrent(WRITE_PARTS_IN_FLIGHT);
         if self.op.info().capability().write_with_if_not_exists {
             w = w.if_not_exists(true);
         }

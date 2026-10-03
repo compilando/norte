@@ -3306,25 +3306,25 @@ impl Engine {
         if qvec.is_empty() || !norm2.is_finite() || norm2 <= 0.0 {
             return Err(Error::ProviderUnavailable { retryable: false });
         }
-        let vectors = index
-            .embeddings_for_root(root, &model)
-            .await
-            .map_err(|e| crate::index_embed::index_to_proto(&e))?;
-        // Bounded heap and the query's norm HOISTED (#122): the count is the
-        // same, memory is O(k) instead of O(index), and the query stops
-        // being renormalized once per row. The final order breaks ties by
-        // path, so two files with the same score always come out the same
-        // way.
+        // Each vector is scored as it is read and dropped (#408): only the
+        // path and its score stay, never the vectors of the whole index.
+        // The query's norm is HOISTED (#122) and the bounded heap keeps the
+        // best k; the final order breaks ties by path, so two files with
+        // the same score always come out the same way.
         let norm_q = norm2.sqrt();
-        let scored = vectors.into_iter().filter_map(|(path, v)| {
-            crate::index_embed::cosine_prenormed(&qvec, norm_q, &v).map(|s| {
-                crate::index_embed::Scored {
-                    score: f64::from(s),
-                    path,
+        let mut scored = Vec::new();
+        index
+            .for_each_embedding(root, &model, |path, v| {
+                if let Some(s) = crate::index_embed::cosine_prenormed(&qvec, norm_q, &v) {
+                    scored.push(crate::index_embed::Scored {
+                        score: f64::from(s),
+                        path,
+                    });
                 }
             })
-        });
-        Ok(crate::index_embed::best_k(scored, k))
+            .await
+            .map_err(|e| crate::index_embed::index_to_proto(&e))?;
+        Ok(crate::index_embed::best_k(scored.into_iter(), k))
     }
 
     /// Copy (recursive if a dir) as a Task, with the default policies

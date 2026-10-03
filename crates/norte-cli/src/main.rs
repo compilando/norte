@@ -790,7 +790,14 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         // that is the list this change made unnecessary.
         let dir = norte_core::connect::config_dir();
         let base = norte_core::embedded::engine_in(&dir);
-        norte_core::team::with_index(base, &dir, &mut notices).await
+        // The index only for the commands that read or build it (#408):
+        // opening it meant a pool, WAL pragmas and nine DDL statements on
+        // every `norte ls`, against the < 50 ms cold-start target.
+        if matches!(cli.cmd, Cmd::Index { .. }) {
+            norte_core::team::with_index(base, &dir, &mut notices).await
+        } else {
+            base
+        }
     };
     if !cli.daemon {
         // Local provider, connector and — only for the two commands that

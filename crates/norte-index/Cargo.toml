@@ -9,6 +9,8 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+# Already in the workspace: `TryStreamExt` to read embeddings row by row.
+futures.workspace = true
 norte-proto.workspace = true
 sqlx = { workspace = true, features = ["sqlite", "runtime-tokio"] }
 thiserror.workspace = true

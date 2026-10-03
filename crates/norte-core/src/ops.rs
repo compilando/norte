@@ -3671,6 +3671,8 @@ pub(crate) async fn dir_usage(
     let mut entries: u64 = 0;
     let mut done: u64 = 0;
     let mut unreadables: u64 = 0;
+    // Where the smallest retained child sits (see `retain_largest`).
+    let mut smallest: Option<usize> = None;
     let mut omitted_count: u64 = 0;
 
     let mut stream = provider.list_sized(&root).await?;
@@ -3743,7 +3745,12 @@ pub(crate) async fn dir_usage(
             if r.children.len() >= DIR_USAGE_MAX_CHILDREN {
                 omitted_count = omitted_count.saturating_add(1);
             }
-            retain_largest(&mut r.children, child, DIR_USAGE_MAX_CHILDREN);
+            retain_largest(
+                &mut r.children,
+                child,
+                DIR_USAGE_MAX_CHILDREN,
+                &mut smallest,
+            );
             r.total_bytes = bytes;
             r.total_entries = entries;
             r.omitted = omitted_count;
@@ -3803,29 +3810,45 @@ fn size_unknown(st: &Entry) -> u64 {
 /// and not by folded or normalized text, because the result has to be the
 /// same on ext4, on NTFS, and on APFS: each sorts its listing its own way,
 /// and which child keeps its name cannot depend on that.
+///
+/// `smallest` remembers where the smallest retained child is, so a
+/// candidate that does not beat it is turned away without scanning the list
+/// (#395: `/nix/store`'s 300k children were 300k scans of 4096). It is only
+/// recomputed after an eviction moves things.
 fn retain_largest(
     children: &mut Vec<norte_proto::methods::DirUsageChild>,
     child: norte_proto::methods::DirUsageChild,
     cap: usize,
+    smallest: &mut Option<usize>,
 ) {
     if children.len() < cap {
         children.push(child);
+        *smallest = None;
         return;
     }
-    let victim = children
-        .iter()
-        .enumerate()
-        .min_by(|(_, a), (_, b)| {
-            a.bytes
-                .cmp(&b.bytes)
-                .then_with(|| a.name.as_bytes().cmp(b.name.as_bytes()))
-        })
-        .map(|(i, c)| (i, c.bytes, c.name.as_bytes().to_vec()));
-    if let Some((i, vb, vn)) = victim
-        && (child.bytes, child.name.as_bytes()) > (vb, vn.as_slice())
-    {
+    let i = match *smallest {
+        Some(i) if i < children.len() => i,
+        _ => {
+            let Some(i) = children
+                .iter()
+                .enumerate()
+                .min_by(|(_, a), (_, b)| {
+                    a.bytes
+                        .cmp(&b.bytes)
+                        .then_with(|| a.name.as_bytes().cmp(b.name.as_bytes()))
+                })
+                .map(|(i, _)| i)
+            else {
+                return;
+            };
+            *smallest = Some(i);
+            i
+        }
+    };
+    if (child.bytes, child.name.as_bytes()) > (children[i].bytes, children[i].name.as_bytes()) {
         children.remove(i);
         children.push(child);
+        *smallest = None;
     }
 }
 
@@ -4402,6 +4425,43 @@ mod tests {
     use norte_proto::{Entry, Error};
 
     use super::{is_descendant_folded, rename_auto_candidate, same_node_heuristic};
+
+    /// #395: remembering the smallest retained child must keep exactly the
+    /// children a full scan per candidate would keep, in listing order.
+    #[test]
+    fn retain_largest_with_a_remembered_minimum_keeps_the_same_children() {
+        use norte_proto::methods::DirUsageChild;
+        let child = |i: u64| DirUsageChild {
+            name: norte_proto::Segment::new(format!("c{i:03}").into_bytes()).expect("segment"),
+            kind: norte_proto::EntryKind::File,
+            // A deterministic jumble, ties included.
+            bytes: (i * 37) % 23,
+            entries: 1,
+            partial: false,
+        };
+        let mut kept = Vec::new();
+        let mut smallest = None;
+        for i in 0..200 {
+            super::retain_largest(&mut kept, child(i), 10, &mut smallest);
+        }
+        let mut all: Vec<DirUsageChild> = (0..200).map(child).collect();
+        all.sort_by(|a, b| (b.bytes, b.name.as_bytes()).cmp(&(a.bytes, a.name.as_bytes())));
+        let mut best: Vec<String> = all[..10]
+            .iter()
+            .map(|c| String::from_utf8_lossy(c.name.as_bytes()).into_owned())
+            .collect();
+        best.sort();
+        let mut got: Vec<String> = kept
+            .iter()
+            .map(|c| String::from_utf8_lossy(c.name.as_bytes()).into_owned())
+            .collect();
+        let order = got.clone();
+        got.sort();
+        assert_eq!(got, best, "the same ten survive");
+        let mut listing = order.clone();
+        listing.sort();
+        assert_eq!(order, listing, "in the order they were listed");
+    }
 
     /// Runs `delete_loop` over scripted answers, one per attempt.
     async fn delete_answers(
