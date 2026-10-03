@@ -495,13 +495,20 @@ pub async fn run(
                         && image.placed_in == Some(placement);
                     if !already_placed {
                         let out = terminal.backend_mut();
-                        crate::kitty_graphics::delete_placed(out);
-                        let esc = crate::kitty_graphics::escape_place(
-                            image.id,
-                            &image.bytes,
-                            rect,
-                            placement.crop,
-                        );
+                        // The same image moved or re-cropped (zoom, scroll):
+                        // its bytes are already in the terminal, so only the
+                        // placement is replaced (#406).
+                        let esc = if crate::kitty_graphics::ya_placed(image.id) {
+                            crate::kitty_graphics::escape_reposition(image.id, rect, placement.crop)
+                        } else {
+                            crate::kitty_graphics::delete_placed(out);
+                            crate::kitty_graphics::escape_place(
+                                image.id,
+                                &image.bytes,
+                                rect,
+                                placement.crop,
+                            )
+                        };
                         // CRITICAL 1: `a=T` places at the CURSOR's position,
                         // and after `terminal.draw` the cursor is left
                         // wherever the last run of repainted cells ended —

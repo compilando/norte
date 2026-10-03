@@ -14,6 +14,9 @@ independently through `PROTOCOL_VERSION`.
   it takes no space until one side changes. Elsewhere on Linux the bytes
   no longer pass through norte. Cancelling and the half-copied file
   behave as before.
+- **Scrolling a zoomed image in the terminal no longer resends it** (#406).
+  Each arrow key retransmitted the whole picture, megabytes of it, to a
+  kitty-graphics terminal; now only its placement moves.
 
 ### Security
 
