@@ -452,6 +452,17 @@ pub trait Provider: Send + Sync {
     ///
     /// `None` = this provider cannot hand one out (it is not local); the
     /// caller reads with [`Self::read`]. Default: `None`.
+    ///
+    /// ```
+    /// # use norte_vfs::{Provider, VPath};
+    /// # async fn demo(p: &dyn Provider, path: &VPath) {
+    /// match p.open_local(path).await {
+    ///     None => { /* not local: use `read` */ }
+    ///     Some(Ok(file)) => { let _ = file; /* hand it to `ByteSink::fill_from` */ }
+    ///     Some(Err(_e)) => { /* the same error `read` would give */ }
+    /// }
+    /// # }
+    /// ```
     async fn open_local(&self, p: &VPath) -> Option<Result<std::fs::File, Error>> {
         let _ = p;
         None

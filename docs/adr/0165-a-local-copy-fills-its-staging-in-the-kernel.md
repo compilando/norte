@@ -42,12 +42,24 @@ copy would bypass all three.
 ## Decision
 
 Option 1. The local sinks try `FICLONE` first (whole-file reflink), then
-`copy_file_range` in 64 MiB blocks, reporting progress and checking
-cancellation between blocks through the callback. If the kernel refuses
-before writing anything (`EXDEV`, `EOPNOTSUPP`, `ENOSYS`, `EINVAL`,
-`EBADF` for an `O_APPEND` resumed staging, `EPERM` under seccomp), the sink
-answers "cannot" and the engine streams as before. Only on Linux; elsewhere
-the default "cannot" stands.
+`copy_file_range` in 16 MiB blocks, reporting progress and checking
+cancellation between blocks through the callback. They answer "cannot",
+and the engine streams as before, when:
+
+- the source says it is EMPTY: `/proc`, `/sys` and some FUSE files say 0
+  and have content, and the kernel copies only what the size says;
+- there is no reflink and the source is SPARSE: `copy_file_range` on ext4
+  or tmpfs writes holes as zeros, which streaming avoids (#222);
+- the kernel refuses before writing anything (`EXDEV`, `EOPNOTSUPP`,
+  `ENOSYS`, `EINVAL`, `EPERM` under seccomp, or `EBADF` for an `O_APPEND`
+  staging) or copies nothing at all.
+
+A refusal after some bytes is an error, not a fallback: the staging holds
+them. Only on Linux; elsewhere the default "cannot" stands.
+
+The trait carries `std::fs::File`: an opaque, local handle and no I/O in
+`norte-vfs` itself, but it ties this path to providers that have a real
+descriptor, which is the point.
 
 ## Consequences
 
@@ -59,5 +71,8 @@ the default "cannot" stands.
   that is the point, and also why `du` stops adding up.
 - Bad: pause (ADR 0147) is honoured between files, not between 64 MiB
   blocks, as the pause gate's own doc already says for `copy_file_range`.
-- Bad: sparse files keep their holes with a reflink; with
-  `copy_file_range` that depends on the filesystem.
+- Bad: a copy with resume on (`ResumePolicy::On`, the CLI's option) always
+  streams: its stable staging is opened `O_APPEND`, which the kernel copy
+  refuses. Resume is off by default.
+- Bad: a local source going to a remote destination is opened twice (once
+  to offer it to a sink that then declines, once to read it).

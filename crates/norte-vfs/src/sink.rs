@@ -84,4 +84,14 @@ pub trait ByteSink: Send {
 
 /// What [`ByteSink::fill_from`] reports to: bytes copied so far, and
 /// whether to go on.
+///
+/// ```
+/// let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+/// let s = std::sync::Arc::clone(&stop);
+/// let progress: norte_vfs::FillProgress =
+///     std::sync::Arc::new(move |_done| !s.load(std::sync::atomic::Ordering::Relaxed));
+/// assert!(progress(10));
+/// stop.store(true, std::sync::atomic::Ordering::Relaxed);
+/// assert!(!progress(20), "false stops the copy");
+/// ```
 pub type FillProgress = std::sync::Arc<dyn Fn(u64) -> bool + Send + Sync>;

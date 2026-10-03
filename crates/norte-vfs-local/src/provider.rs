@@ -581,6 +581,8 @@ pub(crate) async fn fill_local_sink(
             (dst, res)
         })
         .await;
+        // A panic loses the descriptor: the sink is left without a file,
+        // its `abort`/`keep` fail, and its `Drop` removes the staging.
         let Ok((dst, res)) = joined else {
             return Some(Err(Error::Internal { panic: true }));
         };

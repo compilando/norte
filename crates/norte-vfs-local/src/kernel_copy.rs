@@ -7,9 +7,10 @@ use std::fs::File;
 use norte_proto::Error;
 
 /// Bytes per `copy_file_range` call: between two calls the copy reports
-/// progress and can be stopped.
+/// progress and can be stopped. Small enough that a slow USB stick still
+/// answers a cancel in about a second.
 #[cfg(target_os = "linux")]
-const BLOCK: usize = 64 * 1024 * 1024;
+const BLOCK: usize = 16 * 1024 * 1024;
 
 /// Copies `src`, from its offset to its end, into the EMPTY `dst` at its
 /// offset. `Ok(None)` = the kernel cannot do it here and NOTHING was
@@ -22,10 +23,19 @@ pub(crate) fn copy(
     progress: &(dyn Fn(u64) -> bool + Send + Sync),
 ) -> Result<Option<u64>, Error> {
     use std::os::fd::AsRawFd;
+    use std::os::unix::fs::MetadataExt;
 
     let (src_fd, dst_fd) = (src.as_raw_fd(), dst.as_raw_fd());
+    let md = src.metadata().map_err(|e| crate::provider::map_io(&e))?;
+    // A size of 0 is not to be trusted: `/proc` and `/sys` files, and some
+    // FUSE ones, say 0 and have content, and the kernel copies up to the
+    // size it is told. Streaming reads them as they are.
+    if md.len() == 0 {
+        return Ok(None);
+    }
     // A reflink shares the source's blocks: instant, and no space taken
-    // until one side is written. Whole-file only, so only from offset 0.
+    // until one side is written — holes included. Whole-file only, so only
+    // from offset 0.
     if src_offset(src) == Some(0) {
         #[allow(unsafe_code)]
         // SAFETY: both descriptors are open and owned by `src`/`dst` for the
@@ -33,15 +43,27 @@ pub(crate) fn copy(
         // and touches no memory of ours.
         let cloned = unsafe { libc::ioctl(dst_fd, libc::FICLONE, src_fd) } == 0;
         if cloned {
-            let len = src
+            // The clone's size, not the source's re-read one, which may have
+            // grown since; and the descriptor's offset moved past it, which
+            // FICLONE leaves at 0.
+            let len = dst
                 .metadata()
                 .map_err(|e| crate::provider::map_io(&e))?
                 .len();
+            let mut d = dst;
+            std::io::Seek::seek(&mut d, std::io::SeekFrom::Start(len))
+                .map_err(|e| crate::provider::map_io(&e))?;
             if !progress(len) {
                 return Err(Error::Cancelled);
             }
             return Ok(Some(len));
         }
+    }
+    // Without a reflink, `copy_file_range` on ext4 or tmpfs writes a sparse
+    // source's holes as zeros: a 50 GB disk image with 2 GB of data would
+    // take 50 GB. Streaming skips them (#222), so a sparse file streams.
+    if md.blocks().saturating_mul(512) < md.len() {
+        return Ok(None);
     }
     let mut done: u64 = 0;
     loop {
@@ -70,9 +92,12 @@ pub(crate) fn copy(
             return Err(crate::provider::map_io(&e));
         }
         if n == 0 {
-            return Ok(Some(done));
+            // Nothing at all from a file that said it had bytes: the kernel
+            // did not copy it here, and the caller streams. A refusal AFTER
+            // some bytes is an error instead: the staging holds them.
+            return Ok((done > 0).then_some(done));
         }
-        done += n.unsigned_abs() as u64;
+        done += u64::try_from(n).map_err(|_| Error::Io { retryable: false })?;
         if !progress(done) {
             return Err(Error::Cancelled);
         }
@@ -165,6 +190,62 @@ mod tests {
             Err(norte_proto::Error::Cancelled) | Ok(None) => {}
             other => panic!("expected a cancellation, got {other:?}"),
         }
+    }
+
+    /// A file that says it is empty and is not — `/proc` — is left to
+    /// streaming: the kernel would copy nothing and call it done.
+    #[test]
+    fn a_proc_file_is_left_to_streaming() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = std::fs::File::open("/proc/self/status").expect("proc");
+        let dst = std::fs::File::create(dir.path().join("dst")).expect("create");
+        assert!(matches!(copy(&src, &dst, &|_| true), Ok(None)));
+    }
+
+    /// A sparse file keeps its holes: either a reflink (which shares them)
+    /// or streaming, never `copy_file_range` writing them as zeros.
+    #[test]
+    fn a_sparse_file_does_not_come_out_full() {
+        use std::os::unix::fs::MetadataExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let f = std::fs::File::create(dir.path().join("src")).expect("create");
+        f.set_len(64 * 1024 * 1024).expect("hole");
+        drop(f);
+        let src = std::fs::File::open(dir.path().join("src")).expect("open");
+        if src.metadata().expect("md").blocks() * 512 >= 64 * 1024 * 1024 {
+            return; // this filesystem has no holes to keep
+        }
+        let dst = std::fs::File::create(dir.path().join("dst")).expect("create");
+        if let Ok(Some(_)) = copy(&src, &dst, &|_| true) {
+            let blocks = std::fs::metadata(dir.path().join("dst"))
+                .expect("md")
+                .blocks();
+            assert!(blocks * 512 < 64 * 1024 * 1024, "the holes were filled");
+        }
+    }
+
+    /// Through the real local sink, on a filesystem that takes it (the
+    /// tempdir's), the kernel DOES fill the staging: without this the e2e
+    /// tests would pass the same with the fast path never running.
+    #[tokio::test]
+    async fn the_local_sink_fills_in_the_kernel() {
+        use norte_vfs::Provider;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let data = vec![9u8; 200_000];
+        std::fs::write(dir.path().join("src"), &data).expect("write");
+        let p = crate::LocalProvider::rooted(dir.path());
+        let to = crate::LocalProvider::root()
+            .join(norte_proto::Segment::new(b"dst".to_vec()).expect("segment"));
+        let mut sink = p.write(&to).await.expect("sink");
+        let src = std::fs::File::open(dir.path().join("src")).expect("open");
+        let filled = sink
+            .fill_from(src, std::sync::Arc::new(|_| true))
+            .await
+            .expect("the kernel copies within one filesystem")
+            .expect("copy");
+        assert_eq!(filled, data.len() as u64);
+        sink.commit().await.expect("commit");
+        assert_eq!(std::fs::read(dir.path().join("dst")).expect("read"), data);
     }
 
     /// A staging opened `O_APPEND` (a resume) is refused before anything is
