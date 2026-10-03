@@ -321,6 +321,10 @@ pub struct PaneState {
     /// previous one's decorations; they arrive late, not silently wrong
     /// until then) through [`Self::clear_decorations`].
     decorations: HashMap<VPath, Decoration>,
+    /// Whether any of `decorations` carries an icon, kept when they are
+    /// written: the window asks on every patch, and walking the map each time
+    /// was O(entries) per slot (#401).
+    any_icon: bool,
     /// Per-entry `plugin:` column values (#117-follow-up), an async mirror of
     /// `decorations`: outer key = the column's Display id
     /// (`plugin:<p>/<c>`), inner = the CURRENT listing's `VPath` → value
@@ -397,6 +401,7 @@ impl PaneState {
             hidden_stash: Vec::new(),
             sort: crate::sort::SortSpec::default(),
             decorations: HashMap::new(),
+            any_icon: false,
             plugin_columns: HashMap::new(),
             viewport_rows: None,
             viewport_offset: 0,
@@ -738,7 +743,7 @@ impl PaneState {
         // G3b: the decorations were the PREVIOUS listing's (keyed by
         // byte-exact `VPath` of ANOTHER dir) — a new listing invalidates
         // them.
-        self.decorations.clear();
+        self.clear_decorations();
         self.plugin_columns.clear();
 
         // #107 review MINOR-1 (accepted): the hint is resolved against the
@@ -796,7 +801,7 @@ impl PaneState {
         self.pruned_marks = 0;
         self.skipped = None;
         self.hidden_stash.clear(); // #107: belonged to the previous listing
-        self.decorations.clear();
+        self.clear_decorations();
         self.plugin_columns.clear();
     }
 
@@ -829,7 +834,7 @@ impl PaneState {
     /// and the listing looks like it did before it existed.
     #[must_use]
     pub fn any_icon(&self) -> bool {
-        self.decorations.values().any(|d| d.icon.is_some())
+        self.any_icon
     }
 
     /// Installs the BATCH of decorations already resolved and sanitised
@@ -842,6 +847,7 @@ impl PaneState {
     /// response whose `dir` does not match the current one BEFORE calling
     /// (see the call site in each frontend).
     pub fn set_decorations(&mut self, decorations: HashMap<VPath, Decoration>) {
+        self.any_icon = decorations.values().any(|d| d.icon.is_some());
         self.decorations = decorations;
     }
 
@@ -850,6 +856,7 @@ impl PaneState {
     /// reset (e.g. when disabling every decorator).
     pub fn clear_decorations(&mut self) {
         self.decorations.clear();
+        self.any_icon = false;
     }
 
     /// Installs the BATCH of `plugin:` column values (#117-follow-up): outer
