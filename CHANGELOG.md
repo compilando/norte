@@ -14,6 +14,9 @@ independently through `PROTOCOL_VERSION`.
   listing, dialog and panel was rebuilt for a change confined to the
   terminal. Moving through the processes panel no longer resends the
   whole screen either.
+- **The window's folder tree is not rebuilt when it has not changed**
+  (#403). With large branches open, every arrow key in the listing next
+  to it rebuilt thousands of rows.
 
 ### Security
 

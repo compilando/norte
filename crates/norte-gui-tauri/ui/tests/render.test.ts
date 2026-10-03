@@ -4585,6 +4585,40 @@ describe("slots that aren't listings", () => {
     expect(list.getAttribute("aria-activedescendant")).toBe("process-row-1");
   });
 
+  // #403: a tree that did not change is not rebuilt on the next paint (an
+  // arrow in the listing next door repaints everything); one that did —
+  // here, its cursor — is.
+  it("an unchanged tree keeps its nodes across paints", () => {
+    const { screen } = mount();
+    const v = view({});
+    const tree = {
+      kind: "tree" as const,
+      slot_id: 8,
+      rows: [
+        { label: "home", hostile: false, depth: 0, expanded: true, children: true },
+        { label: "docs", hostile: false, depth: 1, expanded: false, children: null },
+      ],
+      cursor: 0,
+      generation: 1,
+    };
+    v.slots = [...v.slots, tree];
+    v.layout.placements = [
+      ...v.layout.placements,
+      { slot_id: 8, x: 0, y: 0, width: 30, height: 10, role: null, focus_index: 3 },
+    ];
+    screen.paint(v);
+    screen.paint(v);
+    const kept = document.querySelector(".tree-rows");
+    screen.paint({ ...v, slots: v.slots.map((s) => ({ ...s })) });
+    expect(document.querySelector(".tree-rows")).toBe(kept);
+    const moved = v.slots.map((s) => (s.kind === "tree" ? { ...s, cursor: 1 } : s));
+    screen.paint({ ...v, slots: moved });
+    expect(document.querySelector(".tree-rows")).not.toBe(kept);
+    expect(document.querySelectorAll(".tree-row")[1]?.getAttribute("aria-selected")).toBe(
+      "true",
+    );
+  });
+
   it("with no tasks, the panel says so instead of staying blank", () => {
     const { screen } = mount();
     const v = view({});
