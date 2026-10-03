@@ -38,6 +38,12 @@ independently through `PROTOCOL_VERSION`.
   does not answer** (#388), and an AI host that swallows packets now ends
   in an error (10 s to connect, 5 min without a byte) instead of hanging.
 
+### Security
+
+- **wasmtime 48.0.5** for RUSTSEC-2026-0321 to 0327: among them a plugin
+  that could crash norte through a file dated before 1970, and a stack
+  overflow reachable from a component's callback.
+
 ## [0.3.0-alpha.7] - 2026-10-02
 
 ### Fixed
