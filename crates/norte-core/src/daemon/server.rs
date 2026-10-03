@@ -2547,6 +2547,79 @@ fn rpc_cancel_id(value: &serde_json::Value) -> Option<RequestId> {
 /// Handles ONE already-parsed JSON message from the connection.
 /// Classification is structural so that an illegally-typed id NEVER dies
 /// silently as a notification (guardian M3).
+/// Whether a request's dispatch registers a token that `rpc.cancel` can
+/// withdraw.
+///
+/// #72: `fs.copy`/`move`/`delete` can be suspended in a policy Ask. A token
+/// is registered by its id so that an `rpc.cancel` (read by
+/// `serve_connection`'s loop in parallel) withdraws the Ask by dropping the
+/// dispatch — the gate dies PRE-effect (its `PendingGuard` cleans up
+/// `policy.pending`) and NEVER approves (fail-closed by construction:
+/// dropping a future cannot return `Approved`).
+fn is_cancelable(method: &str) -> bool {
+    matches!(
+        method,
+        methods::FS_COPY
+            | methods::FS_MOVE
+            | methods::FS_DELETE
+            | methods::FS_MKDIR
+            | methods::FS_CREATE
+            // #314: gates the WHOLE batch before touching anything, so it can
+            // be left suspended in an Ask just like a mkdir.
+            | methods::FS_SET_MODE
+            | methods::AI_RENAME_PLAN
+            | methods::INDEX_SEARCH_SEMANTIC
+            // 0.36.0: `fs.rename_batch` gates the WHOLE batch before reserving
+            // anything, so it can be left suspended in an Ask exactly like an
+            // fs.move; and `fs.rename_batch_plan` lists and plans a directory
+            // inside the dispatch, like `ai.rename_plan`. Withdrawing either is
+            // safe by construction: the gate dies PRE-effect, and there is no
+            // `.await` between the engine's submit and the register (#64).
+            //
+            // Withdrawing withdraws the RESPONSE, not the work: the planner
+            // already runs in `spawn_blocking` and dropping its `JoinHandle`
+            // does not stop it — it finishes on its own, bounded by
+            // `RENAME_BATCH_MAX_LISTING` and the pair cap. The client stops
+            // waiting; the CPU already spent does not come back.
+            | methods::FS_RENAME_BATCH
+            | methods::FS_RENAME_BATCH_PLAN
+            // 0.40.0: `sync.apply` gates BOTH roots of the plan before writing
+            // a single byte, so it suspends in an `ask` just like an fs.copy —
+            // and its wait is the most expensive of all, because the client
+            // has nothing to do in the meantime. Withdrawing it is safe: the
+            // gate dies PRE-effect, and the right to apply the plan — which
+            // `Spool::open` already charged for — is returned by
+            // `ApplyClaim`'s `Drop` in the engine, which exists exactly for
+            // this path.
+            | methods::SYNC_APPLY
+            // #248: pure READS, for a different reason. Here there is no
+            // effect to leave half-done — a read writes nothing, so dropping
+            // its dispatch cannot leave a trace — what gets freed is the
+            // CONNECTION. `serve_connection` dispatches serially, so an
+            // `fs.list` the client had abandoned (the startup's five-second
+            // budget, #235) kept running against a hung provider and EVERY
+            // following request waited behind it, dying one by one at its 30s
+            // `CALL_TIMEOUT`. The client already sends the `rpc.cancel`
+            // (`call_timed_guarded`'s guard); without this arm nobody was
+            // listening for it.
+            | methods::FS_LIST
+            | methods::FS_STAT
+            | methods::FS_READ
+            | methods::FS_CAPABILITIES
+            // #408: the plugin READS too. A slow thumbnail or previewer (WASM
+            // in `spawn_blocking`) held the connection and the next `fs.list`
+            // —navigating— waited behind it. Withdrawing frees the connection,
+            // not the CPU: the guest runs to its epoch deadline, and
+            // `spawn_guest` caps how many run at once.
+            | methods::PLUGIN_PREVIEW
+            | methods::PLUGIN_PREVIEW_STYLED
+            | methods::PLUGIN_THUMBNAIL
+            | methods::PLUGIN_DECORATE
+            | methods::PLUGIN_COLUMN_VALUES
+            | methods::PLUGIN_PANEL_RENDER
+    )
+}
+
 async fn handle_value(
     value: serde_json::Value,
     conn_id: u64,
@@ -2573,79 +2646,7 @@ async fn handle_value(
             };
             let id = req.id.clone();
             let was_initialized = conn.initialized;
-            // #72: fs.copy/move/delete can be suspended in a policy Ask. A
-            // token is registered by its id so that an `rpc.cancel` (read by
-            // serve_connection's loop in parallel) withdraws the Ask by
-            // dropping this dispatch — the gate dies PRE-effect (its
-            // PendingGuard cleans up policy.pending) and NEVER approves
-            // (fail-closed by construction: dropping a future cannot return
-            // Approved).
-            let cancelable = matches!(
-                req.method.as_str(),
-                methods::FS_COPY
-                    | methods::FS_MOVE
-                    | methods::FS_DELETE
-                    | methods::FS_MKDIR
-                    | methods::FS_CREATE
-                    // #314: gates the WHOLE batch before touching anything, so
-                    // it can be left suspended in an Ask just like a mkdir.
-                    | methods::FS_SET_MODE
-                    | methods::AI_RENAME_PLAN
-                    | methods::INDEX_SEARCH_SEMANTIC
-                    // 0.36.0: `fs.rename_batch` gates the WHOLE batch before
-                    // reserving anything, so it can be left suspended in an
-                    // Ask exactly like an fs.move; and `fs.rename_batch_plan`
-                    // lists and plans a directory inside the dispatch, like
-                    // `ai.rename_plan`. Withdrawing either is safe by
-                    // construction: the gate dies PRE-effect, and there is no
-                    // `.await` between the engine's submit and the register
-                    // (#64).
-                    //
-                    // Withdrawing withdraws the RESPONSE, not the work: the
-                    // planner already runs in `spawn_blocking` and dropping
-                    // its `JoinHandle` does not stop it — it finishes on its
-                    // own, bounded by `RENAME_BATCH_MAX_LISTING` and the pair
-                    // cap. The client stops waiting; the CPU already spent
-                    // does not come back.
-                    | methods::FS_RENAME_BATCH
-                    | methods::FS_RENAME_BATCH_PLAN
-                    // 0.40.0: `sync.apply` gates BOTH roots of the plan before
-                    // writing a single byte, so it suspends in an `ask` just
-                    // like an fs.copy — and its wait is the most expensive of
-                    // all, because the client has nothing to do in the
-                    // meantime. Withdrawing it is safe: the gate dies
-                    // PRE-effect, and the right to apply the plan — which
-                    // `Spool::open` already charged for — is returned by
-                    // `ApplyClaim`'s `Drop` in the engine, which exists
-                    // exactly for this path.
-                    | methods::SYNC_APPLY
-                    // #248: pure READS, for a different reason. Here there is
-                    // no effect to leave half-done — a read writes nothing, so
-                    // dropping its dispatch cannot leave a trace — what gets
-                    // freed is the CONNECTION. `serve_connection` dispatches
-                    // serially, so an `fs.list` the client had abandoned (the
-                    // startup's five-second budget, #235) kept running
-                    // against a hung provider and EVERY following request
-                    // waited behind it, dying one by one at its 30s
-                    // `CALL_TIMEOUT`. The client already sends the
-                    // `rpc.cancel` (`call_timed_guarded`'s guard); without
-                    // this arm nobody was listening for it.
-                    | methods::FS_LIST
-                    | methods::FS_STAT
-                    | methods::FS_READ
-                    | methods::FS_CAPABILITIES
-                    // #408: the plugin READS too. A slow thumbnail or
-                    // previewer (WASM in `spawn_blocking`) held the connection
-                    // and the next `fs.list` —navigating— waited behind it.
-                    // Withdrawing frees the connection, not the CPU: the guest
-                    // runs to its epoch deadline.
-                    | methods::PLUGIN_PREVIEW
-                    | methods::PLUGIN_PREVIEW_STYLED
-                    | methods::PLUGIN_THUMBNAIL
-                    | methods::PLUGIN_DECORATE
-                    | methods::PLUGIN_COLUMN_VALUES
-                    | methods::PLUGIN_PANEL_RENDER
-            );
+            let cancelable = is_cancelable(&req.method);
             let response = if cancelable {
                 let cancel = CancellationToken::new();
                 inflight_cancel
