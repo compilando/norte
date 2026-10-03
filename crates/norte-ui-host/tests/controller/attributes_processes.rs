@@ -413,7 +413,7 @@ async fn every_slot_that_follows_the_cursor_has_its_own_probe() {
 
         tokio::time::pause();
         let arrival =
-            tokio::time::timeout(std::time::Duration::from_secs(5), next_snapshot(&mut sub)).await;
+            tokio::time::timeout(std::time::Duration::from_secs(5), next_slot(&mut sub, 8)).await;
         tokio::time::resume();
         assert!(
             arrival.is_ok(),
@@ -441,6 +441,7 @@ async fn clicking_a_row_moves_the_sheet_with_no_viewer_in_the_layout() {
         Some(".."),
         "to start with, the parent row"
     );
+    let sheet_id = first.slot_id;
     let listing = primer_listing(&snap);
     let generation = listing.generation;
     // Row 2 of the listing: `..`, `docs`, and the next one.
@@ -466,12 +467,17 @@ async fn clicking_a_row_moves_the_sheet_with_no_viewer_in_the_layout() {
     // one the test itself triggered. What is checked here is what the host
     // sends ON ITS OWN on a click, which is the only thing the renderer has.
     tokio::time::pause();
-    let arrival =
-        tokio::time::timeout(std::time::Duration::from_secs(5), next_snapshot(&mut sub)).await;
+    let arrival = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        next_slot(&mut sub, sheet_id),
+    )
+    .await;
     tokio::time::resume();
-    let snap = arrival.expect("clicking produced no snapshot: the sheet stays frozen");
+    let slot = arrival.expect("clicking sent nothing: the sheet stays frozen");
 
-    let sheet = sheet(&snap).expect("still placed");
+    let SlotView::Metadata(sheet) = slot else {
+        panic!("the sheet's slot is still a sheet");
+    };
     assert_eq!(
         sheet.fields.first().map(|f| f.value.as_str()),
         Some(target.as_str()),

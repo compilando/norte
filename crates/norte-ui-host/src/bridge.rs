@@ -566,7 +566,9 @@ use serde::{Deserialize, Serialize};
 ///   whoever paints, not the host.
 /// - **96**: the `terminal { terminal }` change (#401). The shell's output
 ///   republished the WHOLE frame, up to 30 Hz; it now carries the panel
-///   alone, and the renderer replaces the slot with that `slot_id`.
+///   alone, and the renderer replaces the slot with that `slot_id`. Also the
+///   `slot { slot }` change: any slot that is not a listing, whole — the log
+///   panel and the attribute sheet republished the frame too.
 pub const BRIDGE_VERSION: u32 = 96;
 
 /// Cap on a string that crosses to the renderer, in bytes.

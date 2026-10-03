@@ -3832,6 +3832,15 @@ pub enum ViewChange {
         /// The panel, whole: a terminal repaints, it does not scroll.
         terminal: Box<TerminalSlotView>,
     },
+    /// One slot that is not a listing changed, whole, and nothing else did
+    /// (#401, bridge 96): the log panel got lines, the attribute sheet
+    /// followed the cursor. Each used to republish the whole frame. The
+    /// renderer replaces the slot with the same `kind` and `slot_id`, or
+    /// takes it in if the last frame did not carry it.
+    Slot {
+        /// The slot, whole.
+        slot: Box<SlotView>,
+    },
     /// The open dialogs changed. A struct for the same reason as
     /// [`ViewChange::Tasks`].
     Dialogs {

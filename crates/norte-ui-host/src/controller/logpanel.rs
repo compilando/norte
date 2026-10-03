@@ -593,23 +593,25 @@ impl State {
 
     /// Repaints the log, if some slot is showing it.
     ///
-    /// It goes as a SNAPSHOT and not a patch, for the same reason as the
-    /// processes panel's cursor: there is no `ViewChange` for a slot that is
-    /// not a listing, and adding one for this would be a new contract for
-    /// what are one-off keys, not a continuous scroll.
+    /// It goes as the log slots alone (`ViewChange::Slot`, #401): a panel
+    /// following a busy log used to republish the whole frame twice a
+    /// second.
     ///
     /// With no log slot at all, nothing is sent — the panel closes and an
-    /// action in flight lands afterward — an extra snapshot spends a
-    /// sequence number to paint the same thing.
+    /// action in flight lands afterward — an extra patch spends a sequence
+    /// number to paint the same thing.
     fn repaint_log(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        if self.log_slots().is_empty() {
+        let slots = self.log_slots();
+        if slots.is_empty() {
             return (self.applied(), Vec::new());
         }
-        let snap = self.snapshot();
-        (
-            self.applied(),
-            vec![self.over(UiUpdate::Snapshot(Box::new(snap)))],
-        )
+        let changes = slots
+            .into_iter()
+            .map(|id| crate::dto::ViewChange::Slot {
+                slot: Box::new(crate::dto::SlotView::Log(Box::new(self.log_panel(id)))),
+            })
+            .collect();
+        (self.applied(), vec![self.parche(changes)])
     }
 
     /// Schedules the log's next poll, if there is a panel open.
@@ -637,7 +639,7 @@ impl State {
     ///
     /// The entry counter is an `AtomicU64` that only goes up, so the check
     /// touches neither the lock nor clones anything. Without it, this would
-    /// be a full screen snapshot twice a second to paint the same thing.
+    /// be a repaint twice a second of the same thing.
     pub(super) fn log_tick(
         &mut self,
         epoch: u64,

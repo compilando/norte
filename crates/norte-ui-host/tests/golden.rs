@@ -2697,6 +2697,15 @@ fn rest_changes() -> Vec<(&'static str, ViewChange)> {
                 }),
             },
         ),
+        (
+            "slot",
+            ViewChange::Slot {
+                slot: Box::new(norte_ui_host::dto::SlotView::Processes {
+                    slot_id: 5,
+                    cursor: Some(1),
+                }),
+            },
+        ),
         ("layout", ViewChange::Layout(reference_layout())),
         (
             "slot_state",
@@ -2960,8 +2969,9 @@ fn the_corpus_shape_does_not_change_without_bumping_the_bridge() {
     // field.
     // 94 (ADR 0148): `BrowserSlotView.progress` and the `slot_progress`
     // change.
-    // 96 (#401): the `terminal` change, the panel alone.
-    const SHAPE: u64 = 17_792_984_437_978_629_822;
+    // 96 (#401): the `terminal` change, the panel alone; and the `slot`
+    // change, any non-listing slot alone.
+    const SHAPE: u64 = 13_985_843_233_828_489_306;
 
     let mut paths: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for file in ["changes.json", "updates.json", "variants.json", "acks.json"] {

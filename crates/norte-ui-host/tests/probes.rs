@@ -134,7 +134,12 @@ struct Observation {
 /// derived: the wire calls `preview` what the layout calls `viewer`, which is
 /// exactly the kind of synonym an exhaustive `match` cannot see.
 fn view_of(snap: &ViewSnapshot, kind: &str) -> Option<SlotView> {
-    snap.slots
+    of_kind(&snap.slots, kind)
+}
+
+/// The first slot of `kind` among `slots`.
+fn of_kind(slots: &[SlotView], kind: &str) -> Option<SlotView> {
+    slots
         .iter()
         .find(|s| match (kind, s) {
             ("metadata", SlotView::Metadata(_))
@@ -189,9 +194,26 @@ async fn wait_for_change(
         let Ok(received) = tokio::time::timeout(left, sub.recv()).await else {
             return None;
         };
-        if let Update::Message(m) = received.expect("the host is still alive")
-            && let UiUpdate::Snapshot(s) = m.payload
-            && let Some(now) = view_of(&s, kind)
+        let Update::Message(m) = received.expect("the host is still alive") else {
+            continue;
+        };
+        // Whole in a snapshot, or alone in a `slot` patch (#401).
+        let now = match m.payload {
+            UiUpdate::Snapshot(s) => view_of(&s, kind),
+            UiUpdate::Patch(p) => {
+                let slots: Vec<SlotView> = p
+                    .changes
+                    .into_iter()
+                    .filter_map(|c| match c {
+                        norte_ui_host::dto::ViewChange::Slot { slot } => Some(*slot),
+                        _ => None,
+                    })
+                    .collect();
+                of_kind(&slots, kind)
+            }
+            UiUpdate::Notice(_) => None,
+        };
+        if let Some(now) = now
             && &now != before
         {
             return Some(now);

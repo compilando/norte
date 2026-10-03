@@ -336,8 +336,8 @@ impl State {
             .collect()
     }
 
-    /// Brings up to date what each placed sheet shows, and returns a snapshot
-    /// if any changed.
+    /// Brings up to date what each placed sheet shows, and returns a patch
+    /// with the sheets that changed (#401).
     ///
     /// The sheet FOLLOWS the cursor, and any message moves the cursor: a key,
     /// a click, a listing that lands. The TUI resolves this for free because
@@ -361,20 +361,23 @@ impl State {
             .map(|SlotId(id)| id)
             .collect();
         self.leaves.retain(|id, _| alive.contains(id));
-        let mut changed = false;
+        let mut changes = Vec::new();
         for slot in self.leaf_slots() {
             let SlotId(id) = slot;
             let current = self.attributes_sheet(slot);
             if self.leaves.get(&id) != Some(&current) {
-                self.leaves.insert(id, current);
-                changed = true;
+                self.leaves.insert(id, current.clone());
+                // The sheet alone (#401): every cursor move used to cost
+                // the whole frame.
+                changes.push(crate::dto::ViewChange::Slot {
+                    slot: Box::new(crate::dto::SlotView::Metadata(Box::new(current))),
+                });
             }
         }
-        if changed {
-            let snap = self.snapshot();
-            vec![self.over(UiUpdate::Snapshot(Box::new(snap)))]
-        } else {
+        if changes.is_empty() {
             Vec::new()
+        } else {
+            vec![self.parche(changes)]
         }
     }
 

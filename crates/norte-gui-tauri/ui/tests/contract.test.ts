@@ -158,6 +158,7 @@ describe("the contract with the host", () => {
       "rows",
       "search",
       "settings",
+      "slot",
       "slot_state",
       "status",
       "status_items",

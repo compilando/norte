@@ -1665,6 +1665,10 @@ export type ViewChange =
   /** The terminal panel alone (bridge 96): the shell wrote, and nothing
    *  else on screen changed. Replaces the slot with this `slot_id`. */
   | { change: "terminal"; terminal: Omit<TerminalSlotView, "kind"> }
+  /** One slot that is not a listing, whole (bridge 96): the log panel or
+   *  the attribute sheet changed and nothing else did. Replaces the slot
+   *  with the same `kind` and `slot_id`, or takes it in. */
+  | { change: "slot"; slot: SlotView }
   | { change: "dialogs"; dialogs: DialogView[] }
   | ({ change: "connection" } & ConnectionView)
   | ({ change: "layout" } & LayoutView)

@@ -1714,8 +1714,7 @@ async fn actor(
         state.probe_lines(&backend, &mailbox);
         // And the attribute sheet, for the SAME reason and in the same
         // place: it also follows the cursor and also has no other path to
-        // the renderer. It goes after the viewer so that, when both change
-        // at once, the snapshot sent already carries both up to date.
+        // the renderer. It sends its own slot alone (#401).
         for u in state.probe_leaves() {
             let _ = updates.send(u);
         }

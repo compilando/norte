@@ -13,7 +13,11 @@ independently through `PROTOCOL_VERSION`.
   bridge 96). Up to thirty times a second while a shell printed, every
   listing, dialog and panel was rebuilt for a change confined to the
   terminal. Moving through the processes panel no longer resends the
-  whole screen either.
+  whole screen either, nor does the log panel when lines arrive, nor
+  the attribute sheet on every cursor move.
+- **The window repaints only the side panels that changed** (#400). The
+  log, the sheet, the tree, the viewer, the disk map and the others
+  were rebuilt on every update, even when only a listing's cursor moved.
 - **The window's folder tree is not rebuilt when it has not changed**
   (#403). With large branches open, every arrow key in the listing next
   to it rebuilt thousands of rows.

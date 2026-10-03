@@ -355,6 +355,46 @@ fn listing(snap: &norte_ui_host::ViewSnapshot) -> &norte_ui_host::dto::BrowserSl
 }
 
 /// Waits for the next snapshot (a navigation sends one).
+/// The next view of slot `slot_id` the host sends ON ITS OWN, whether it
+/// rides a whole snapshot or a `slot` patch (#401: the attribute sheet and
+/// the log panel patch their slot alone).
+async fn next_slot(
+    sub: &mut norte_ui_host::UiSubscription,
+    slot_id: u32,
+) -> norte_ui_host::dto::SlotView {
+    use norte_ui_host::dto::{SlotView, ViewChange};
+    fn id_of(s: &SlotView) -> u32 {
+        // Through the wire form: every slot carries its `slot_id` there.
+        serde_json::to_value(s)
+            .ok()
+            .and_then(|v| v.get("slot_id").and_then(serde_json::Value::as_u64))
+            .and_then(|n| u32::try_from(n).ok())
+            .unwrap_or(u32::MAX)
+    }
+    loop {
+        match sub.recv().await.expect("the host is still alive") {
+            Update::Message(m) => match m.payload {
+                UiUpdate::Snapshot(s) => {
+                    if let Some(slot) = s.slots.into_iter().find(|x| id_of(x) == slot_id) {
+                        return slot;
+                    }
+                }
+                UiUpdate::Patch(p) => {
+                    for c in p.changes {
+                        if let ViewChange::Slot { slot } = c
+                            && id_of(&slot) == slot_id
+                        {
+                            return *slot;
+                        }
+                    }
+                }
+                UiUpdate::Notice(_) => {}
+            },
+            Update::Lagged => {}
+        }
+    }
+}
+
 async fn next_snapshot(sub: &mut norte_ui_host::UiSubscription) -> norte_ui_host::ViewSnapshot {
     loop {
         match sub.recv().await.expect("the host is still alive") {
