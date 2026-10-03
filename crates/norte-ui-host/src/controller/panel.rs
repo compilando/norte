@@ -691,10 +691,7 @@ impl State {
         if !self.config.common.ui_chrome.pane_footer() {
             return String::new();
         }
-        let counts = norte_frontend::footer::counts(
-            target_slot.pane.entries(),
-            target_slot.pane.is_parent_row(0),
-        );
+        let counts = target_slot.pane.listing_counts();
         let marked = norte_frontend::footer::Marked {
             n: target_slot.pane.marks_len(),
             bytes: marks.bytes,

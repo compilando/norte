@@ -63,14 +63,20 @@ impl PaneState {
         if self.parent_target() == Some(&path) {
             return false;
         }
-        self.totals_moved();
-        self.marks.insert(path)
+        let added = self.marks.insert(path);
+        if added {
+            self.totals_moved();
+        }
+        added
     }
 
     /// Unmarks `path`; `true` if it was marked.
     fn unmark_path(&mut self, path: &VPath) -> bool {
-        self.totals_moved();
-        self.marks.remove(path)
+        let removed = self.marks.remove(path);
+        if removed {
+            self.totals_moved();
+        }
+        removed
     }
 
     /// Seeds the marks carried over by a hand-off between frontends (phase
@@ -1034,6 +1040,26 @@ impl PaneState {
             });
         *memo = Some((key, totals));
         totals
+    }
+
+    /// The footer's counts of this listing ([`crate::footer::counts`]), worked
+    /// out once per change of the listing or of a size (#404) rather than per
+    /// frame.
+    #[must_use]
+    pub fn listing_counts(&self) -> crate::footer::Counts {
+        let key = (self.listing_epoch(), self.totals_gen);
+        let mut memo = self
+            .counts_memo
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((k, c)) = *memo
+            && k == key
+        {
+            return c;
+        }
+        let c = crate::footer::counts(&self.entries, self.is_parent_row(0));
+        *memo = Some((key, c));
+        c
     }
 
     /// The marks or an entry's size changed: [`Self::mark_totals`] is stale.

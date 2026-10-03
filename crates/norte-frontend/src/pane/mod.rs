@@ -272,6 +272,8 @@ pub struct PaneState {
     /// The last `(key, (marked_bytes, marked_dirs))`. A `Mutex` and not a
     /// `Cell` so the pane stays `Sync`.
     totals_memo: std::sync::Mutex<Option<TotalsMemo>>,
+    /// [`Self::listing_counts`]'s memo, under the same key.
+    counts_memo: std::sync::Mutex<Option<((u64, u64), crate::footer::Counts)>>,
     /// Reinterpretation of non-UTF8 NAMES for display (#57, spec §6.1):
     /// `Some(enc)` = "see names as enc" — display ONLY, the bytes are never
     /// mutated (rule 1). Shared by the frontends (#98/m2): the quick search
@@ -399,6 +401,7 @@ impl PaneState {
             pruned_marks: 0,
             totals_gen: 0,
             totals_memo: std::sync::Mutex::new(None),
+            counts_memo: std::sync::Mutex::new(None),
             name_encoding: None,
             name_encoding_entry: 0,
             skipped: None,
@@ -430,6 +433,8 @@ impl PaneState {
             ParentRow::Off
         };
         self.insert_parent_row();
+        // The row went in or out at index 0: every index moved.
+        self.listing_moved();
     }
 
     /// Is row `i` the `..` one?

@@ -143,7 +143,7 @@ fn pane_footer(app: &App, pane: &crate::app::Pane, width: u16) -> Option<String>
     if !app.chrome.pane_footer() {
         return None;
     }
-    let counts = norte_frontend::footer::counts(pane.entries(), pane.is_parent_row(0));
+    let counts = pane.state().listing_counts();
     let marked = norte_frontend::footer::Marked {
         n: pane.marks_len(),
         bytes: pane.marked_bytes(),

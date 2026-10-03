@@ -2247,6 +2247,39 @@ fn the_remembered_totals_follow_every_change() {
     );
 }
 
+/// #404: hiding dot-files drops a marked hidden file from the totals —
+/// the riskiest path for a remembered total, because it moves the listing
+/// and prunes marks in one go.
+#[test]
+fn hiding_a_marked_dotfile_drops_it_from_the_totals() {
+    let mut h = e("mem:///.h", EntryKind::File);
+    h.size = Some(5);
+    let mut a = e("mem:///a", EntryKind::File);
+    a.size = Some(10);
+    let mut p = PaneState::new(VPath::parse("mem:///").unwrap(), vec![h, a]);
+    p.set_show_hidden(true);
+    p.mark_all();
+    assert_eq!(p.marked_bytes(), 15);
+    p.set_show_hidden(false);
+    assert_eq!(p.marked_bytes(), 10, "the hidden mark is gone");
+}
+
+/// #404: the footer's counts are remembered too, and follow a size that
+/// arrives late and a refill.
+#[test]
+fn the_remembered_listing_counts_follow_sizes_and_refills() {
+    let a = e("mem:///a", EntryKind::File);
+    let d = e("mem:///d", EntryKind::Dir);
+    let mut p = PaneState::new(VPath::parse("mem:///").unwrap(), vec![a, d]);
+    let c = p.listing_counts();
+    assert_eq!((c.dirs, c.files, c.bytes), (1, 1, 0));
+    p.hydrate(&VPath::parse("mem:///a").unwrap(), Some(7), None);
+    assert_eq!(p.listing_counts().bytes, 7);
+    p.refill(vec![e("mem:///z", EntryKind::File)]);
+    let c = p.listing_counts();
+    assert_eq!((c.dirs, c.files), (0, 1));
+}
+
 #[test]
 fn marked_bytes_saturates_instead_of_overflowing() {
     let mut a = e("mem:///a", EntryKind::File);
