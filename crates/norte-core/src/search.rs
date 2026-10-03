@@ -423,6 +423,10 @@ impl ContentRegex {
 /// non-empty batch is sent once this interval passes even if it has not
 /// filled the batch, so the virtual pane "drips" results live.
 const FLUSH_INTERVAL: Duration = Duration::from_millis(100);
+
+/// Content reads a search keeps in flight (#392): enough to hide a remote's
+/// round trips, few enough not to flood it or a disk.
+const CONTENT_READS_IN_FLIGHT: usize = 8;
 /// Cap on a match's `preview` character count (server-side trimming).
 const PREVIEW_MAX_CHARS: usize = 160;
 /// RAM budget per line on the decode path (`scan_decode_lines`): a line
@@ -806,6 +810,10 @@ async fn flush(
 /// [`Error::Cancelled`] if cancelled; it never propagates per-entry errors
 /// (they are skipped). An unreadable `root` counts as one more skip
 /// (Completed with 0 hits).
+#[expect(
+    clippy::too_many_lines,
+    reason = "one walk; the reads in flight share the batch and the hit count with it"
+)]
 pub async fn run_walk(
     provider: Arc<dyn Provider>,
     root: VPath,
@@ -834,6 +842,36 @@ pub async fn run_walk(
     // never gets through the filter.
     let confine = root.clone();
     queue.push_back(root);
+    // Content reads in flight (#392); a hit from one is a hit, whatever
+    // order they finish in.
+    let mut reading = futures::stream::FuturesUnordered::new();
+
+    // A result goes in the batch; at the cap, what is pending is drained
+    // and the search COMPLETES (the cap was reached), dropping the reads
+    // still in flight.
+    macro_rules! hit {
+        ($entry:expr, $info:expr) => {{
+            batch.push($entry, $info);
+            hits += 1;
+            ctx.progress.update(|p| p.bytes_done = hits as u64);
+            if matchers.max_hits.is_some_and(|max| hits >= max) {
+                let _ = flush(&tx, &mut batch, &ctx.cancel).await;
+                return Ok(());
+            }
+        }};
+    }
+    // A finished content read: a match is a hit; no match, a binary or an
+    // unreadable file is skipped; a cancellation ends the search.
+    macro_rules! settle {
+        ($done:expr) => {{
+            let (entry, found): (Entry, Result<Option<MatchInfo>, Error>) = $done;
+            match found {
+                Ok(Some(info)) => hit!(entry, Some(info)),
+                Err(Error::Cancelled) => return Err(Error::Cancelled),
+                Ok(None) | Err(_) => {}
+            }
+        }};
+    }
 
     while let Some(dir) = queue.pop_front() {
         if ctx.cancel.is_cancelled() {
@@ -914,32 +952,32 @@ pub async fn run_walk(
                 continue;
             }
 
-            let info = if content_search {
+            if content_search {
                 // Content only makes sense for regular files.
                 if entry.kind != EntryKind::File {
                     continue;
                 }
-                match search_content(&*provider, &entry.path, &matchers, &ctx.cancel).await {
-                    Ok(Some(info)) => Some(info),
-                    Err(Error::Cancelled) => return Err(Error::Cancelled),
-                    // No match (or binary), or unreadable: skipped either way.
-                    Ok(None) | Err(_) => continue,
+                // #392: the read goes in flight and the walk goes on; over
+                // SFTP or S3 each file is several round trips, and one at a
+                // time a remote tree took its latency times its files.
+                let (provider, matchers, cancel) = (&*provider, &matchers, &ctx.cancel);
+                reading.push(async move {
+                    let found = search_content(provider, &entry.path, matchers, cancel).await;
+                    (entry, found)
+                });
+                while reading.len() >= CONTENT_READS_IN_FLIGHT {
+                    let Some(done) = reading.next().await else {
+                        break;
+                    };
+                    settle!(done);
                 }
-            } else {
-                None
-            };
-
-            batch.push(entry, info);
-            hits += 1;
-            ctx.progress.update(|p| p.bytes_done = hits as u64);
-
-            if matchers.max_hits.is_some_and(|max| hits >= max) {
-                // Truncated: drain what is pending and COMPLETE (the cap
-                // was reached).
-                let _ = flush(&tx, &mut batch, &ctx.cancel).await;
-                return Ok(());
+                continue;
             }
+            hit!(entry, None);
         }
+    }
+    while let Some(done) = reading.next().await {
+        settle!(done);
     }
     let _ = flush(&tx, &mut batch, &ctx.cancel).await;
     Ok(())

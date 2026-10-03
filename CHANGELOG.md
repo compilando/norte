@@ -7,6 +7,13 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Performance
+
+- **Searching file contents over SFTP or S3 reads several files at once**
+  (#392). One file at a time, ten thousand files at 50 ms of latency was
+  about 25 minutes of waiting alone. Results now arrive in the order the
+  reads finish rather than the order of the listing.
+
 ### Security
 
 - **wasmtime 48.0.5** for RUSTSEC-2026-0321 to 0327: among them a plugin
