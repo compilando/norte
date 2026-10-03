@@ -555,7 +555,7 @@ pub async fn prepare_frame(
 ///
 /// A click resolved against a layout that is not the painted one does not
 /// fail loudly: it marks the file next door.
-pub async fn after_frame(
+pub fn after_frame(
     app: &mut App,
     backend: &Backend,
     work: &mut InFlight,
@@ -645,34 +645,14 @@ pub async fn after_frame(
             }
             None => {}
         }
-        // #136: the tree DOES request, and that is why it requests ONE
-        // branch per turn: a ten-thousand-entry directory or a slow remote
-        // must not jam the loop, and the next turn requests the next one.
-        if let Some(dir) = app.tree().and_then(crate::tree::Tree::wants) {
-            let child_dirs: Option<Vec<_>> = match backend.list(&dir).await {
-                Ok(mut entries) => Some({
-                    // The SAME order as the listing next door, with the
-                    // same comparator: two columns showing the same thing
-                    // in a different order read as if they said different
-                    // things.
-                    norte_frontend::sort_entries(&mut entries);
-                    entries
-                        .into_iter()
-                        .filter(|e| e.kind == norte_proto::EntryKind::Dir)
-                        .map(|e| e.path)
-                        .collect()
-                }),
-                // A branch that will not be read: decided by the shared
-                // model — empty, or re-anchor if it was the root.
-                Err(_) => None,
-            };
-            if let Some(t) = app.tree_mut() {
-                match child_dirs {
-                    Some(children) => t.insert_children(dir, children),
-                    None => t.branch_unreadable(dir),
-                }
-            }
-            app.needs_frame = true;
+        // #136: the tree DOES request, ONE branch at a time; #407: in the
+        // background, so a ten-thousand-entry directory or a slow remote does
+        // not freeze the loop. The run loop lands it (`land_tree_branch`)
+        // and the next turn requests the next one.
+        if work.tree_branch.is_none()
+            && let Some(dir) = app.tree().and_then(crate::tree::Tree::wants)
+        {
+            work.tree_branch = Some(crate::probes::spawn_tree_branch(backend, dir));
         }
         // The attributes sheet requests NOTHING: what it shows already came
         // in the listing, so this is a copy, not a request. A slot the
@@ -790,4 +770,35 @@ fn spawn_log_probes(app: &mut App, backend: &Backend, work: &mut InFlight) {
         app.log_remote.cursor,
         app.log_remote.epoch,
     ));
+}
+
+/// A tree branch's listing landed (#407): its subdirectories go in, or the
+/// branch is marked unreadable (the shared model decides: empty, or
+/// re-anchor if it was the root). `None` = the task died without
+/// answering; the branch is still wanted and gets asked again.
+pub fn land_tree_branch(
+    app: &mut App,
+    dir: norte_proto::VPath,
+    res: Option<Result<Vec<norte_proto::Entry>, norte_proto::Error>>,
+) {
+    let Some(res) = res else {
+        return;
+    };
+    let child_dirs = res.ok().map(|mut entries| {
+        // The SAME order as the listing next door, with the same
+        // comparator: two columns showing the same thing in a different
+        // order read as if they said different things.
+        norte_frontend::sort_entries(&mut entries);
+        entries
+            .into_iter()
+            .filter(|e| e.kind == norte_proto::EntryKind::Dir)
+            .map(|e| e.path)
+            .collect::<Vec<_>>()
+    });
+    if let Some(t) = app.tree_mut() {
+        match child_dirs {
+            Some(children) => t.insert_children(dir, children),
+            None => t.branch_unreadable(dir),
+        }
+    }
 }

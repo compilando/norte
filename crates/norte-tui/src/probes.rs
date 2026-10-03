@@ -318,6 +318,27 @@ pub fn spawn_log_level(
     LogLevelProbe { epoch, rx }
 }
 
+/// A tree branch being listed (#407): at most one, like the requests the
+/// tree made inline before, but off the loop.
+pub struct TreeBranchFetch {
+    /// The branch asked for.
+    pub dir: VPath,
+    /// Its listing, or the error that makes it unreadable.
+    pub rx: tokio::sync::oneshot::Receiver<Result<Vec<norte_proto::Entry>, Error>>,
+}
+
+/// Lists `dir` in the background for the tree. Listing it inline froze the
+/// loop, with no spinner and no way out, on a remote or huge directory.
+pub fn spawn_tree_branch(backend: &Backend, dir: VPath) -> TreeBranchFetch {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let b = backend.clone();
+    let d = dir.clone();
+    tokio::spawn(async move {
+        let _ = tx.send(b.list(&d).await);
+    });
+    TreeBranchFetch { dir, rx }
+}
+
 /// A preview read in flight, per SLOT.
 ///
 /// Keeps the path it requested: when it arrives, if the slot already wants

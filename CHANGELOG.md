@@ -12,6 +12,9 @@ independently through `PROTOCOL_VERSION`.
 - **The terminal interface stops redrawing an idle screen** (#405). It
   rebuilt the whole frame ten times a second with nothing running; now
   a tick that changes nothing on screen draws nothing.
+- **Opening a branch of the terminal interface's folder tree no longer
+  freezes it** (#407). A large or remote folder used to block every key,
+  with no sign of why, until it was listed.
 
 ### Security
 

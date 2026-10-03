@@ -574,7 +574,7 @@ pub async fn run(
             return Ok(());
         }
         if !skip_frame {
-            turn::after_frame(app, backend, &mut work, painted_area).await;
+            turn::after_frame(app, backend, &mut work, painted_area);
         }
         // The `brief` splash screen expires by the PAINT clock, the same one
         // that expires notices: measuring it with another would be a
@@ -903,6 +903,18 @@ pub async fn run(
                 if let Some(pr) = work.panel_render.take() {
                     crate::panelplugin::land(app, pr.slot, &pr.signature, res);
                 }
+            }
+            (dir, res) = async {
+                match &mut work.tree_branch {
+                    Some(f) => (f.dir.clone(), (&mut f.rx).await.ok()),
+                    None => std::future::pending().await,
+                }
+            } => {
+                // #407: a tree branch listed off the loop. The slot is
+                // cleared whatever came back, so the next turn can ask for
+                // the next branch.
+                work.tree_branch = None;
+                turn::land_tree_branch(app, dir, res);
             }
             (epoch, res) = async {
                 match &mut work.log_tail {
