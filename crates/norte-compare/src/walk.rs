@@ -636,9 +636,11 @@ impl Walk<'_> {
         // listing is the empty one, and from there comes one orphan row per
         // entry on the side that IS there, through the same path as
         // everything else.
-        let listed = (
-            self.list_visible(self.left, frame.left.as_ref()).await,
-            self.list_visible(self.right, frame.right.as_ref()).await,
+        // Both at once (#408): with two remotes, one after the other was
+        // two round trips per directory.
+        let listed = futures::join!(
+            self.list_visible(self.left, frame.left.as_ref()),
+            self.list_visible(self.right, frame.right.as_ref()),
         );
         if matches!(listed.0, Err(ListFailure::Cancelled))
             || matches!(listed.1, Err(ListFailure::Cancelled))

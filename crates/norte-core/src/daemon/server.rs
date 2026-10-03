@@ -1098,7 +1098,9 @@ impl Daemon {
                     }
                 }
                 () = shared.shutdown.cancelled() => break,
-                () = tokio::time::sleep(IDLE_POLL) => {
+                // Only with an idle timeout to measure (#408): without one,
+                // this woke the daemon four times a second for nothing.
+                () = tokio::time::sleep(IDLE_POLL), if self.idle_timeout.is_some() => {
                     if !shared.idle() {
                         idle_since = tokio::time::Instant::now();
                     } else if let Some(t) = self.idle_timeout
@@ -2547,6 +2549,17 @@ async fn handle_value(
                     | methods::FS_STAT
                     | methods::FS_READ
                     | methods::FS_CAPABILITIES
+                    // #408: the plugin READS too. A slow thumbnail or
+                    // previewer (WASM in `spawn_blocking`) held the connection
+                    // and the next `fs.list` —navigating— waited behind it.
+                    // Withdrawing frees the connection, not the CPU: the guest
+                    // runs to its epoch deadline.
+                    | methods::PLUGIN_PREVIEW
+                    | methods::PLUGIN_PREVIEW_STYLED
+                    | methods::PLUGIN_THUMBNAIL
+                    | methods::PLUGIN_DECORATE
+                    | methods::PLUGIN_COLUMN_VALUES
+                    | methods::PLUGIN_PANEL_RENDER
             );
             let response = if cancelable {
                 let cancel = CancellationToken::new();

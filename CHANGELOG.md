@@ -7,6 +7,15 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Performance
+
+- **Smaller speed-ups from the performance review** (#408): comparing
+  two remote folders lists both sides at once; uploads to S3-compatible
+  storage send four parts at a time; a slow plugin thumbnail or preview
+  can be withdrawn and no longer holds up the next listing; the daemon no
+  longer wakes four times a second when it has no idle timeout; and
+  `norte` opens its search index only for `norte index` commands.
+
 ### Security
 
 - **wasmtime 48.0.5** for RUSTSEC-2026-0321 to 0327: among them a plugin
