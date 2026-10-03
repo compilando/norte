@@ -325,6 +325,14 @@ pub struct TreeBranchFetch {
     pub dir: VPath,
     /// Its listing, or the error that makes it unreadable.
     pub rx: tokio::sync::oneshot::Receiver<Result<Vec<norte_proto::Entry>, Error>>,
+    /// The listing itself: dropping the fetch stops it (rule 3).
+    task: tokio::task::AbortHandle,
+}
+
+impl Drop for TreeBranchFetch {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
 }
 
 /// Lists `dir` in the background for the tree. Listing it inline froze the
@@ -333,10 +341,11 @@ pub fn spawn_tree_branch(backend: &Backend, dir: VPath) -> TreeBranchFetch {
     let (tx, rx) = tokio::sync::oneshot::channel();
     let b = backend.clone();
     let d = dir.clone();
-    tokio::spawn(async move {
+    let task = tokio::spawn(async move {
         let _ = tx.send(b.list(&d).await);
-    });
-    TreeBranchFetch { dir, rx }
+    })
+    .abort_handle();
+    TreeBranchFetch { dir, rx, task }
 }
 
 /// A preview read in flight, per SLOT.
