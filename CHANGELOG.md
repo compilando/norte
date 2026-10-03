@@ -92,6 +92,10 @@ independently through `PROTOCOL_VERSION`.
 - **Opening a branch of the terminal interface's folder tree no longer
   freezes it** (#407). A large or remote folder used to block every key,
   with no sign of why, until it was listed.
+- **An archive inside a compressed zip entry opens in reasonable time**
+  (#397). Listing a `.tar` stored deflated inside a `.zip` decompressed
+  the entry again from its start for every 256 KiB read, which for a
+  large one amounted to a hang.
 
 ### Security
 
