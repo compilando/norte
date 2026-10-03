@@ -7,6 +7,13 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Performance
+
+- **Reading large files over SFTP is no longer capped by latency** (#398).
+  A file over 2 MiB is read through up to eight handles at once; before,
+  one request at a time held a link with 80 ms of latency to about
+  3 MB/s whatever its bandwidth.
+
 ### Security
 
 - **wasmtime 48.0.5** for RUSTSEC-2026-0321 to 0327: among them a plugin

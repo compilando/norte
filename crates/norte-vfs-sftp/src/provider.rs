@@ -19,6 +19,13 @@ use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 
 /// Read chunk size (256 KiB, aligned with the copy engine).
 const READ_CHUNK: usize = 256 * 1024;
+
+/// Handles a large read uses at once, each with one block in flight (#398).
+const READS_IN_FLIGHT: usize = 8;
+
+/// From how many bytes a read goes over several handles: below it, opening
+/// the extra handles costs more than it saves.
+const PIPELINE_FROM: u64 = 2 * 1024 * 1024;
 /// Prefix for the write staging (ADR 0012, same convention as local).
 const PARTIAL_PREFIX: &str = ".norte-partial.";
 
@@ -430,6 +437,20 @@ impl Provider for SftpProvider {
             .open_with_flags(&remote, OpenFlags::READ)
             .await
             .map_err(|e| map_err(&e))?;
+        // #398: a large read goes over several handles at once. One handle
+        // keeps a single READ in flight, so throughput was one chunk per
+        // round trip (~3 MB/s at 80 ms) whatever the link.
+        let start = range.map_or(0, |r| r.offset);
+        let end = match (md.size, range.and_then(|r| r.len)) {
+            (Some(size), Some(n)) => Some(size.min(start.saturating_add(n))),
+            (Some(size), None) => Some(size),
+            (None, _) => None,
+        };
+        if let Some(end) = end
+            && end.saturating_sub(start) > PIPELINE_FROM
+        {
+            return Ok(read_stream::pipelined(session, remote, file, start, end).await);
+        }
         if let Some(r) = range {
             file.seek(std::io::SeekFrom::Start(r.offset))
                 .await
@@ -953,5 +974,62 @@ mod read_stream {
             },
         );
         s.boxed()
+    }
+
+    /// `[start, end)` of `remote`, read in `READ_CHUNK` blocks over up to
+    /// `READS_IN_FLIGHT` handles at once, delivered in order (#398). `first`
+    /// is the handle already open; the others are opened here, together. A
+    /// handle that fails to open only means fewer reads in flight.
+    ///
+    /// The end is the size `stat` gave: a file that grows meanwhile is read
+    /// up to where it was, like a ranged read.
+    pub(super) async fn pipelined(
+        session: std::sync::Arc<russh_sftp::client::SftpSession>,
+        remote: String,
+        first: russh_sftp::client::fs::File,
+        start: u64,
+        end: u64,
+    ) -> ByteStream {
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+
+        let opens = (1..super::READS_IN_FLIGHT)
+            .map(|_| session.open_with_flags(&remote, russh_sftp::protocol::OpenFlags::READ));
+        let mut handles = vec![Arc::new(Mutex::new(first))];
+        handles.extend(
+            futures::future::join_all(opens)
+                .await
+                .into_iter()
+                .flatten()
+                .map(|f| Arc::new(Mutex::new(f))),
+        );
+        let block = READ_CHUNK as u64;
+        let blocks = end.saturating_sub(start).div_ceil(block);
+        let k = handles.len();
+        futures::stream::iter(0..blocks)
+            .map(move |i| {
+                let handle = Arc::clone(&handles[usize::try_from(i).unwrap_or(0) % k]);
+                let off = start + i * block;
+                let want = usize::try_from(block.min(end - off)).unwrap_or(READ_CHUNK);
+                async move {
+                    let mut f = handle.lock().await;
+                    tokio::io::AsyncSeekExt::seek(&mut *f, std::io::SeekFrom::Start(off))
+                        .await
+                        .map_err(|_| Error::Io { retryable: false })?;
+                    let mut buf = vec![0u8; want];
+                    let mut got = 0;
+                    while got < want {
+                        match f.read(&mut buf[got..]).await {
+                            Ok(0) => break,
+                            Ok(n) => got += n,
+                            Err(_) => return Err(Error::Io { retryable: false }),
+                        }
+                    }
+                    buf.truncate(got);
+                    Ok(Bytes::from(buf))
+                }
+            })
+            .buffered(super::READS_IN_FLIGHT)
+            .boxed()
     }
 }
