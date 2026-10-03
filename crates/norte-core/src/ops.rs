@@ -3274,9 +3274,15 @@ async fn expand_tree(
     let cap = usize::try_from(norte_proto::methods::SET_MODE_RECURSIVE_MAX).unwrap_or(usize::MAX);
     let mut output: Vec<(Arc<dyn Provider>, VPath)> = Vec::new();
     let mut unvisited: u64 = 0;
-    let mut pending: std::collections::VecDeque<(Arc<dyn Provider>, VPath)> =
-        roots.into_iter().collect();
-    while let Some((provider, path)) = pending.pop_front() {
+    // A child carries the kind its listing gave (#395): asking `stat` again
+    // for every FILE was one round trip per entry, and `set_mode` lstats
+    // each node right before touching it anyway. A DIRECTORY is still
+    // lstat'ed right before it is listed: `list` follows a symlink, and the
+    // queue makes the gap between the parent's listing and this one long
+    // enough to swap the directory for a link out of the tree.
+    let mut pending: std::collections::VecDeque<(Arc<dyn Provider>, VPath, Option<EntryKind>)> =
+        roots.into_iter().map(|(p, v)| (p, v, None)).collect();
+    while let Some((provider, path, listed)) = pending.pop_front() {
         if ctx.cancel.is_cancelled() {
             return Err(Error::Cancelled);
         }
@@ -3294,11 +3300,15 @@ async fn expand_tree(
         // whether it is a link is unknown, and `chmod(2)` follows links —
         // a file that may be outside the tree the human pointed at would be
         // changed. It is counted as not visited and continues.
-        let Ok(entry) = with_retry(&ctx.cancel, || provider.stat(&path).boxed()).await else {
+        let kind = if let Some(kind) = listed.filter(|k| *k != EntryKind::Dir) {
+            kind
+        } else if let Ok(entry) = with_retry(&ctx.cancel, || provider.stat(&path).boxed()).await {
+            entry.kind
+        } else {
             unvisited = unvisited.saturating_add(1);
             continue;
         };
-        let dir = entry.kind == EntryKind::Dir;
+        let dir = kind == EntryKind::Dir;
         output.push((Arc::clone(&provider), path.clone()));
         if !dir {
             continue;
@@ -3307,7 +3317,7 @@ async fn expand_tree(
             Ok(mut stream) => {
                 while let Some(item) = stream.next().await {
                     match item {
-                        Ok(e) => pending.push_back((Arc::clone(&provider), e.path)),
+                        Ok(e) => pending.push_back((Arc::clone(&provider), e.path, Some(e.kind))),
                         // An unreadable listing entry does not bring down
                         // the walk; it is counted and continues.
                         Err(_) => unvisited = unvisited.saturating_add(1),
@@ -3386,8 +3396,15 @@ pub(crate) async fn set_mode(
         // target can be outside the scope someone approved, so a chmod on
         // a link is a write that leaves its root. It is counted as failed,
         // and the frontend says so.
-        let entry = provider.stat(&path).await;
-        if matches!(&entry, Ok(e) if e.kind == EntryKind::Symlink) {
+        //
+        // ONE lstat gives both the kind this guard needs and the mode the
+        // reversal records (#395: they were two). One that fails is not
+        // touched blindly (#315): whether it is a link is unknown.
+        let entry = with_retry(&ctx.cancel, || {
+            crate::undo::stat_with_mode(provider.as_ref(), &path).boxed()
+        })
+        .await;
+        if !matches!(&entry, Ok(e) if e.kind != EntryKind::Symlink) {
             failed = failed.saturating_add(1);
             done = done.saturating_add(1);
             ctx.progress.update(|p| {
@@ -3406,7 +3423,7 @@ pub(crate) async fn set_mode(
         } else {
             opts.mode
         };
-        let previous = crate::undo::modo_actual(provider.as_ref(), &path).await;
+        let previous = entry.as_ref().ok().and_then(crate::undo::mode_of);
         match provider.set_mode(&path, mode).await {
             Ok(()) => {
                 // The mode that was LEFT, re-read: `chmod(2)` silently

@@ -505,3 +505,96 @@ async fn a_failing_path_does_not_bring_down_the_batch() {
     assert_eq!(h.join().await, TaskState::Completed);
     assert_eq!(mode(&mem, "mem:///good.sh").await, 0o700);
 }
+
+/// `MemProvider` counting every `stat`, `stat_with` included.
+struct Counting {
+    inner: Arc<MemProvider>,
+    stats: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+#[async_trait::async_trait]
+impl Provider for Counting {
+    fn scheme(&self) -> &str {
+        self.inner.scheme()
+    }
+    fn capabilities(&self) -> norte_proto::Capabilities {
+        self.inner.capabilities()
+    }
+    async fn stat(&self, p: &VPath) -> Result<norte_proto::Entry, ProtoError> {
+        self.stats
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.inner.stat(p).await
+    }
+    async fn stat_with(
+        &self,
+        p: &VPath,
+        opt: &norte_vfs::ListOptions,
+    ) -> Result<norte_proto::Entry, ProtoError> {
+        self.stats
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.inner.stat_with(p, opt).await
+    }
+    async fn list(&self, p: &VPath) -> Result<norte_vfs::EntryStream, ProtoError> {
+        self.inner.list(p).await
+    }
+    async fn read(
+        &self,
+        p: &VPath,
+        range: Option<norte_proto::ByteRange>,
+    ) -> Result<norte_vfs::ByteStream, ProtoError> {
+        self.inner.read(p, range).await
+    }
+    async fn write(&self, p: &VPath) -> Result<Box<dyn norte_vfs::ByteSink>, ProtoError> {
+        self.inner.write(p).await
+    }
+    async fn mkdir(&self, p: &VPath) -> Result<(), ProtoError> {
+        self.inner.mkdir(p).await
+    }
+    async fn remove(&self, p: &VPath) -> Result<(), ProtoError> {
+        self.inner.remove(p).await
+    }
+    async fn rename(&self, from: &VPath, to: &VPath) -> Result<(), ProtoError> {
+        self.inner.rename(from, to).await
+    }
+    async fn set_mode(&self, p: &VPath, mode: u32) -> Result<(), ProtoError> {
+        self.inner.set_mode(p, mode).await
+    }
+}
+
+/// #395: a recursive change asks two `stat`s per node — the lstat that
+/// guards against links and gives the previous mode, and the re-read of
+/// what `chmod` left — plus one per DIRECTORY, lstat'ed right before it is
+/// listed (`list` follows links). It used to be four per node: the
+/// expansion stat'ed every file its listing had already described, and the
+/// guard and the previous mode were two separate calls.
+#[tokio::test]
+async fn a_recursive_change_asks_two_stats_per_node() {
+    let journal = Arc::new(SqliteJournal::new(
+        Journal::open_in_memory().await.expect("journal"),
+    ));
+    let engine = Engine::with_journal(journal);
+    let mem = Arc::new(MemProvider::new());
+    let stats = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    engine.register_provider(Arc::new(Counting {
+        inner: Arc::clone(&mem),
+        stats: Arc::clone(&stats),
+    }) as Arc<dyn Provider>);
+    mem.mkdir(&vp("mem:///tree")).await.expect("tree");
+    mem.mkdir(&vp("mem:///tree/sub")).await.expect("sub");
+    write_file(&mem, "mem:///tree/a.txt").await;
+    write_file(&mem, "mem:///tree/sub/b.txt").await;
+    stats.store(0, std::sync::atomic::Ordering::Relaxed);
+
+    let h = engine
+        .set_mode(recursive_params(&["mem:///tree"], 0o600, Some(0o700)))
+        .await
+        .expect("launches");
+    assert_eq!(h.join().await, TaskState::Completed);
+    assert_eq!(mode(&mem, "mem:///tree/sub/b.txt").await, 0o600);
+    let (nodes, dirs) = (4, 2);
+    let asked = stats.load(std::sync::atomic::Ordering::Relaxed);
+    assert!(
+        asked <= 2 * nodes + dirs,
+        "{asked} stats for {nodes} nodes: the expansion re-stats the files it listed"
+    );
+}
