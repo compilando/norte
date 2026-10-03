@@ -3,7 +3,7 @@
 
 import type { Screen } from "../render";
 import type { PlacesSlotView, TreeSlotView } from "../types";
-import { revealInView, badge } from "./dom";
+import { revealInView, badge, unchanged } from "./dom";
 import { icon } from "./icons";
 import type { SlotDom } from "./dom";
 
@@ -19,6 +19,17 @@ import type { SlotDom } from "./dom";
  * useful.
  */
 export function paintTree(this: Screen, dom: SlotDom, slot: TreeSlotView): void {
+  // #403: the tree used to be rebuilt —an `li` and two listeners per row—
+  // on every paint, so every arrow in the listing next door rebuilt a tree
+  // with thousands of open branches. Same rows, cursor and generation, and
+  // still this tree in the scroller: nothing to do.
+  // The signature is recorded on EVERY paint, the first included: behind
+  // the `&&` it was skipped while the scroller was still empty, and only a
+  // second identical paint armed it.
+  const same = unchanged(dom.scroller, JSON.stringify(slot));
+  if (same && dom.scroller.firstElementChild?.classList.contains("tree-rows") === true) {
+    return;
+  }
   dom.root.setAttribute("aria-label", this.t("tree-title"));
   dom.title.textContent = this.t("tree-title");
   dom.scroller.className = "tree";

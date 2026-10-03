@@ -1255,13 +1255,15 @@ button.status-item:hover {
   animation: status-bar-pulse 1.2s ease-in-out infinite alternate;
 }
 
+/* `transform`, not `left` (#400): a moving `left` lays the bar out again on
+   every animation frame. 233.33% of a 30%-wide fill is 70% of the bar. */
 @keyframes status-bar-pulse {
   from {
-    left: 0;
+    transform: translateX(0);
   }
 
   to {
-    left: 70%;
+    transform: translateX(233.33%);
   }
 }
 

@@ -1023,6 +1023,14 @@
       "total": 34
     }
   },
+  "slot": {
+    "change": "slot",
+    "slot": {
+      "cursor": 1,
+      "kind": "processes",
+      "slot_id": 5
+    }
+  },
   "slot_state": {
     "change": "slot_state",
     "slot_id": 1,
@@ -1159,6 +1167,29 @@
     "change": "tasks",
     "cursor": null,
     "tasks": []
+  },
+  "terminal": {
+    "change": "terminal",
+    "terminal": {
+      "cursor": [
+        0,
+        4
+      ],
+      "no_shell": false,
+      "rows": [
+        [
+          {
+            "bold": true,
+            "fg": {
+              "index": 2,
+              "kind": "indexed"
+            },
+            "text": "$ ls"
+          }
+        ]
+      ],
+      "slot_id": 4
+    }
   },
   "theme": {
     "change": "theme",

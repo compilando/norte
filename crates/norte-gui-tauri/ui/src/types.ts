@@ -10,7 +10,7 @@
 // that lives in Rust (ADR 0066, decision D14).
 
 /** The contract version this renderer knows how to read. */
-export const BRIDGE_VERSION = 95;
+export const BRIDGE_VERSION = 96;
 
 /** Where a dragged pane is dropped over another (ADR 0138): on a side, or in
  *  the center to join it as a tab. */
@@ -1662,6 +1662,13 @@ export type ViewChange =
    *  no version mismatches, it rejects them. */
   | { change: "slot_progress"; slot_id: number; progress: number | null }
   | { change: "tasks"; tasks: TaskView[]; cursor: number | null }
+  /** The terminal panel alone (bridge 96): the shell wrote, and nothing
+   *  else on screen changed. Replaces the slot with this `slot_id`. */
+  | { change: "terminal"; terminal: Omit<TerminalSlotView, "kind"> }
+  /** One slot that is not a listing, whole (bridge 96): the log panel or
+   *  the attribute sheet changed and nothing else did. Replaces the slot
+   *  with the same `kind` and `slot_id`, or takes it in. */
+  | { change: "slot"; slot: SlotView }
   | { change: "dialogs"; dialogs: DialogView[] }
   | ({ change: "connection" } & ConnectionView)
   | ({ change: "layout" } & LayoutView)

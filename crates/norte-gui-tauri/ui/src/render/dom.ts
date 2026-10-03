@@ -197,6 +197,12 @@ export interface SlotDom {
    * match.
    */
   generation: number;
+  /**
+   * The slot object last painted here, and the window and cell size it was
+   * painted at (#400). The session REPLACES a non-listing slot when its
+   * change arrives, so the same object is the same slot.
+   */
+  painted?: { slot: unknown; size: string };
 }
 
 /**

@@ -27,7 +27,7 @@ use tokio::sync::mpsc;
 
 use crate::backend::HostBackend;
 use crate::bridge::BridgeEnvelope;
-use crate::dto::{TerminalColorView, TerminalSlotView, TerminalSpanView, UiUpdate};
+use crate::dto::{TerminalColorView, TerminalSlotView, TerminalSpanView, UiUpdate, ViewChange};
 
 use super::{ActionAck, Message, State};
 
@@ -121,6 +121,12 @@ impl State {
             self.reconciles_roles();
         }
         updates.extend(self.start_si_missing(mailbox));
+        // The focus moved AFTER `open_slot_of_kind` sent its frame, and the
+        // active role only travels in the layout: without a frame here the
+        // window kept the listing painted as active while the keys went to
+        // the shell. Opening is rare; the whole frame is the simple answer.
+        let snap = self.snapshot();
+        updates.push(self.over(UiUpdate::Snapshot(Box::new(snap))));
         (ack, updates)
     }
 
@@ -310,10 +316,15 @@ impl State {
         }
     }
 
-    /// The whole snapshot, which is how any slot in this window republishes.
+    /// Only the panel (#401): the shell's output touches nothing else, and
+    /// the whole frame at up to 30 Hz rebuilt every slot. Without a placed
+    /// slot there is nothing to send.
     fn republicar_terminal(&mut self) -> Vec<BridgeEnvelope<UiUpdate>> {
-        let snap = self.snapshot();
-        vec![self.over(UiUpdate::Snapshot(Box::new(snap)))]
+        let Some(slot) = self.slot_of_kind(KIND) else {
+            return Vec::new();
+        };
+        let terminal = Box::new(self.panel_de_terminal(slot.0));
+        vec![self.parche(vec![ViewChange::Terminal { terminal }])]
     }
 
     /// The panel's view for the snapshot, if the slot exists.

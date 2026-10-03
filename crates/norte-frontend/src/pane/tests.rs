@@ -17,6 +17,29 @@ fn pane(names: &[&str]) -> PaneState {
     PaneState::new(VPath::parse("mem:///").unwrap(), es)
 }
 
+/// #401: `any_icon` is kept when the decorations are written, and follows
+/// every way of writing them.
+#[test]
+fn any_icon_follows_the_decorations() {
+    let mut p = pane(&["a.png", "b.png"]);
+    assert!(!p.any_icon());
+    let badge_only = crate::Decoration {
+        badge: Some("M".into()),
+        ..Default::default()
+    };
+    let with_icon = crate::Decoration {
+        icon: Some("image".into()),
+        ..Default::default()
+    };
+    let path = |n: &str| VPath::parse(&format!("mem:///{n}")).unwrap();
+    p.set_decorations([(path("a.png"), badge_only)].into_iter().collect());
+    assert!(!p.any_icon(), "a badge is not an icon");
+    p.set_decorations([(path("b.png"), with_icon)].into_iter().collect());
+    assert!(p.any_icon());
+    p.clear_decorations();
+    assert!(!p.any_icon(), "cleared with them");
+}
+
 /// **Pointing is not moving the cursor**, and with a live filter that
 /// difference is what lets the docked viewer find out.
 ///

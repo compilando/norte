@@ -366,6 +366,9 @@ impl State {
     /// WHAT and the ORDER belong to `norte_frontend::panelbar`, shared.
     pub(super) fn view_pane_bar(&self) -> crate::dto::PanelBarView {
         let buttons = self.pane_buttons();
+        // Rendered ONCE per bar (#401): `first_chord` renders every binding
+        // to a string, and this runs on every patch, once per button.
+        let bindings = self.effective.bindings();
         crate::dto::PanelBarView {
             // ON by default, same as the menu bar's and the TUI's.
             bar: self.config.common.ui_panel_bar.unwrap_or(true),
@@ -387,9 +390,12 @@ impl State {
                         )),
                         kind,
                         letter: b.letter.to_string(),
+                        // The same answer as `palette::first_chord`.
                         chord: clamp_display(
-                            norte_frontend::palette::first_chord(&b.command, &self.effective)
-                                .unwrap_or_else(|| "—".to_owned()),
+                            bindings.iter().find(|(_, c)| *c == b.command).map_or_else(
+                                || "—".to_owned(),
+                                |(chord, _)| norte_frontend::keymap::paint_chord(chord),
+                            ),
                         ),
                         state: match b.state {
                             norte_frontend::panelbar::PanelState::Closed => {

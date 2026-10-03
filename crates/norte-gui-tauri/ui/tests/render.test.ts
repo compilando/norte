@@ -975,6 +975,20 @@ describe("Screen", () => {
     expect(status?.textContent).toContain("2 entradas");
   });
 
+  // #400: the same status objects keep the bar's nodes (a rebuild restarted
+  // its progress animation); a changed input repaints it.
+  it("the status bar is rebuilt only when what it shows changes", () => {
+    const { screen, root } = mount();
+    const v = view({});
+    screen.paint(v);
+    const msg = () => root.querySelector(".statusbar .status-message");
+    const before = msg();
+    screen.paint(v);
+    expect(msg()).toBe(before);
+    screen.paint({ ...v, status: { ...v.status, message: "otra" } });
+    expect(msg()?.textContent).toBe("otra");
+  });
+
   it("a command the host rejects at the boundary shows up in the status bar", () => {
     // An action that fails to deserialize dies in `dispatch`, before the
     // host ever sees it: nobody but the renderer can say so. That's how the
@@ -4375,6 +4389,38 @@ describe("slots that aren't listings", () => {
     expect(values[1]?.getAttribute("data-hostile")).toBe("false");
   });
 
+  // #400: a slot the session did not replace is not rebuilt — repainting
+  // the same object keeps its nodes — and a new object is painted.
+  it("a non-listing slot is rebuilt only when its object changes", () => {
+    const { screen } = mount();
+    const v = view({});
+    const sheet = {
+      kind: "metadata" as const,
+      slot_id: 7,
+      fields: [{ label: "Nombre", value: "a.txt", hostile: false }],
+      note: "",
+      follows_display: "x",
+      follows_hostile: false,
+    };
+    v.slots = [...v.slots, sheet];
+    v.layout.placements = [
+      ...v.layout.placements,
+      { slot_id: 7, x: 0, y: 0, width: 30, height: 10, role: null, focus_index: 2 },
+    ];
+    screen.paint(v);
+    const before = document.querySelector(".metadata-fields dd");
+    screen.paint(v);
+    expect(document.querySelector(".metadata-fields dd")).toBe(before);
+
+    v.slots = v.slots.map((s) =>
+      s.slot_id === 7
+        ? { ...sheet, fields: [{ label: "Nombre", value: "b.txt", hostile: false }] }
+        : s,
+    );
+    screen.paint(v);
+    expect(document.querySelector(".metadata-fields dd")?.textContent).toBe("b.txt");
+  });
+
   // "Details" on its own doesn't say WHAT the details are of: with two
   // listings open, the only way to know which one was being described was
   // to move the cursor and see if the sheet moved.
@@ -4583,6 +4629,40 @@ describe("slots that aren't listings", () => {
     expect(rows[1]?.getAttribute("aria-selected")).toBe("true");
     const list = document.querySelector(".processes-rows") as HTMLElement;
     expect(list.getAttribute("aria-activedescendant")).toBe("process-row-1");
+  });
+
+  // #403: a tree that did not change is not rebuilt on the next paint (an
+  // arrow in the listing next door repaints everything); one that did —
+  // here, its cursor — is.
+  it("an unchanged tree keeps its nodes across paints", () => {
+    const { screen } = mount();
+    const v = view({});
+    const tree = {
+      kind: "tree" as const,
+      slot_id: 8,
+      rows: [
+        { label: "home", hostile: false, depth: 0, expanded: true, children: true },
+        { label: "docs", hostile: false, depth: 1, expanded: false, children: null },
+      ],
+      cursor: 0,
+      generation: 1,
+    };
+    v.slots = [...v.slots, tree];
+    v.layout.placements = [
+      ...v.layout.placements,
+      { slot_id: 8, x: 0, y: 0, width: 30, height: 10, role: null, focus_index: 3 },
+    ];
+    screen.paint(v);
+    screen.paint(v);
+    const kept = document.querySelector(".tree-rows");
+    screen.paint({ ...v, slots: v.slots.map((s) => ({ ...s })) });
+    expect(document.querySelector(".tree-rows")).toBe(kept);
+    const moved = v.slots.map((s) => (s.kind === "tree" ? { ...s, cursor: 1 } : s));
+    screen.paint({ ...v, slots: moved });
+    expect(document.querySelector(".tree-rows")).not.toBe(kept);
+    expect(document.querySelectorAll(".tree-row")[1]?.getAttribute("aria-selected")).toBe(
+      "true",
+    );
   });
 
   it("with no tasks, the panel says so instead of staying blank", () => {

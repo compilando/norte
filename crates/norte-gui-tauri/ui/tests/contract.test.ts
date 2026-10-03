@@ -158,6 +158,7 @@ describe("the contract with the host", () => {
       "rows",
       "search",
       "settings",
+      "slot",
       "slot_state",
       "status",
       "status_items",
@@ -166,6 +167,7 @@ describe("the contract with the host", () => {
       // Two `tasks` cases, not two variants: this list is the corpus cases'
       // NAMES, and the empty board is the only way its cursor comes out `null`.
       "tasks_vacio",
+      "terminal",
       "theme",
       "viewer",
       "which_key",

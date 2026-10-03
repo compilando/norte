@@ -1690,17 +1690,13 @@ impl State {
         } else {
             self.cursor_processes.down(&ids);
         }
-        // SNAPSHOT and not a patch. Since bridge 57 the cursor DOES have
-        // somewhere to travel (`ViewChange::Tasks`), so this is no longer
-        // "there is no contract": it is that a key that only moves the
-        // choice does not need to resend the whole board, and the snapshot
-        // is what this path has been doing without complaint. Changing it
-        // is an optimization, not a fix.
-        let snap = self.snapshot();
-        (
-            self.applied(),
-            vec![self.over(UiUpdate::Snapshot(Box::new(snap)))],
-        )
+        // The board with its cursor, and nothing else (#401): a key that
+        // only moves the choice used to resend the whole frame.
+        let change = ViewChange::Tasks {
+            tasks: self.vistas_de_tasks(),
+            cursor: self.board_cursor(),
+        };
+        (self.applied(), vec![self.parche(vec![change])])
     }
 
     /// Removes the board's chosen row, if it has ALREADY finished.

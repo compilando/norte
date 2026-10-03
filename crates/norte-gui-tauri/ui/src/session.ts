@@ -194,6 +194,33 @@ export class Session {
         }
         return true;
       }
+      case "terminal": {
+        const slot = { kind: "terminal" as const, ...c.terminal };
+        const i = s.slots.findIndex(
+          (x) => x.kind === "terminal" && x.slot_id === c.terminal.slot_id,
+        );
+        if (i >= 0) {
+          s.slots[i] = slot;
+        } else if (s.layout.placements.some((p) => p.slot_id === c.terminal.slot_id)) {
+          // Placed but not in the last frame: a hidden slot uncovered by a
+          // layout change travels without its content. Taking it here is
+          // what paints a shell that has gone quiet.
+          s.slots.push(slot);
+        }
+        return true;
+      }
+      case "slot": {
+        // Same rule as `terminal`, for any slot that is not a listing. By
+        // id alone, as the painter looks it up: matching the kind too would
+        // leave two entries for an id whose kind changed.
+        const i = s.slots.findIndex((x) => x.slot_id === c.slot.slot_id);
+        if (i >= 0) {
+          s.slots[i] = c.slot;
+        } else if (s.layout.placements.some((p) => p.slot_id === c.slot.slot_id)) {
+          s.slots.push(c.slot);
+        }
+        return true;
+      }
       case "dialogs":
         s.dialogs = c.dialogs;
         return true;

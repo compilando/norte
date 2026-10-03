@@ -76,6 +76,112 @@ describe("Session", () => {
     expect(after?.kind === "processes" ? after.cursor : null).toBe(1);
   });
 
+  // Bridge 96 (#401): a `slot` patch replaces the slot of that kind and id
+  // alone — the log panel, the attribute sheet — and takes in a placed one
+  // the last frame did not carry.
+  it("a slot patch replaces that slot and nothing else", () => {
+    const view = s.view();
+    expect(view).not.toBeNull();
+    view?.slots.push({
+      kind: "unsupported",
+      slot_id: 90,
+      kind_name: "a",
+      kind_name_hostile: false,
+    });
+    const others = view?.slots.filter((x) => x.slot_id !== 90) ?? [];
+    const out = s.receive(
+      env(1, {
+        update: "patch",
+        base_sequence: 0,
+        changes: [
+          {
+            change: "slot",
+            slot: {
+              kind: "unsupported",
+              slot_id: 90,
+              kind_name: "b",
+              kind_name_hostile: false,
+            },
+          },
+        ],
+      }),
+    );
+    expect(out.kind).toBe("applied");
+    const got = s.view()?.slots.find((x) => x.slot_id === 90);
+    expect(got?.kind === "unsupported" ? got.kind_name : null).toBe("b");
+    const after = s.view()?.slots.filter((x) => x.slot_id !== 90) ?? [];
+    expect(after.every((x, i) => x === others[i])).toBe(true);
+
+    view?.layout.placements.push({
+      slot_id: 91,
+      x: 0,
+      y: 0,
+      width: 10,
+      height: 5,
+      role: null,
+      focus_index: 9,
+    });
+    s.receive(
+      env(2, {
+        update: "patch",
+        base_sequence: 1,
+        changes: [
+          { change: "slot", slot: { kind: "processes", slot_id: 91, cursor: null } },
+        ],
+      }),
+    );
+    expect(s.view()?.slots.some((x) => x.slot_id === 91)).toBe(true);
+  });
+
+  // Bridge 96 (#401): the shell's output replaces the terminal slot alone
+  // and leaves every other slot as it was; a placed slot missing from the
+  // last frame (uncovered by a layout change) is taken in.
+  it("a terminal patch replaces that slot and nothing else", () => {
+    const view = s.view();
+    expect(view).not.toBeNull();
+    view?.slots.push({ kind: "terminal", slot_id: 77, rows: [], cursor: null });
+    const others = view?.slots.filter((x) => x.kind !== "terminal") ?? [];
+    const out = s.receive(
+      env(1, {
+        update: "patch",
+        base_sequence: 0,
+        changes: [
+          {
+            change: "terminal",
+            terminal: { slot_id: 77, rows: [[{ text: "$ ls" }]], cursor: [0, 4] },
+          },
+        ],
+      }),
+    );
+    expect(out.kind).toBe("applied");
+    const term = s.view()?.slots.find((x) => x.kind === "terminal");
+    expect(term?.kind === "terminal" ? term.rows[0]?.[0]?.text : null).toBe("$ ls");
+    const after = s.view()?.slots.filter((x) => x.kind !== "terminal") ?? [];
+    expect(after.every((x, i) => x === others[i])).toBe(true);
+
+    view?.layout.placements.push({
+      slot_id: 78,
+      x: 0,
+      y: 0,
+      width: 10,
+      height: 5,
+      role: null,
+      focus_index: 9,
+    });
+    s.receive(
+      env(2, {
+        update: "patch",
+        base_sequence: 1,
+        changes: [
+          { change: "terminal", terminal: { slot_id: 78, rows: [], cursor: null } },
+        ],
+      }),
+    );
+    expect(s.view()?.slots.some((x) => x.kind === "terminal" && x.slot_id === 78)).toBe(
+      true,
+    );
+  });
+
   // The board goes empty: `null`, not "whatever was there before". A
   // highlight over nothing points at a row that isn't there, and the cancel
   // key promises something it can't deliver.
