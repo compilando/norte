@@ -23,10 +23,11 @@ export function paintTree(this: Screen, dom: SlotDom, slot: TreeSlotView): void 
   // on every paint, so every arrow in the listing next door rebuilt a tree
   // with thousands of open branches. Same rows, cursor and generation, and
   // still this tree in the scroller: nothing to do.
-  if (
-    dom.scroller.firstElementChild?.classList.contains("tree-rows") === true &&
-    unchanged(dom.scroller, JSON.stringify(slot))
-  ) {
+  // The signature is recorded on EVERY paint, the first included: behind
+  // the `&&` it was skipped while the scroller was still empty, and only a
+  // second identical paint armed it.
+  const same = unchanged(dom.scroller, JSON.stringify(slot));
+  if (same && dom.scroller.firstElementChild?.classList.contains("tree-rows") === true) {
     return;
   }
   dom.root.setAttribute("aria-label", this.t("tree-title"));

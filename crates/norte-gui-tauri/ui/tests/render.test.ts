@@ -4375,6 +4375,38 @@ describe("slots that aren't listings", () => {
     expect(values[1]?.getAttribute("data-hostile")).toBe("false");
   });
 
+  // #400: a slot the session did not replace is not rebuilt — repainting
+  // the same object keeps its nodes — and a new object is painted.
+  it("a non-listing slot is rebuilt only when its object changes", () => {
+    const { screen } = mount();
+    const v = view({});
+    const sheet = {
+      kind: "metadata" as const,
+      slot_id: 7,
+      fields: [{ label: "Nombre", value: "a.txt", hostile: false }],
+      note: "",
+      follows_display: "x",
+      follows_hostile: false,
+    };
+    v.slots = [...v.slots, sheet];
+    v.layout.placements = [
+      ...v.layout.placements,
+      { slot_id: 7, x: 0, y: 0, width: 30, height: 10, role: null, focus_index: 2 },
+    ];
+    screen.paint(v);
+    const before = document.querySelector(".metadata-fields dd");
+    screen.paint(v);
+    expect(document.querySelector(".metadata-fields dd")).toBe(before);
+
+    v.slots = v.slots.map((s) =>
+      s.slot_id === 7
+        ? { ...sheet, fields: [{ label: "Nombre", value: "b.txt", hostile: false }] }
+        : s,
+    );
+    screen.paint(v);
+    expect(document.querySelector(".metadata-fields dd")?.textContent).toBe("b.txt");
+  });
+
   // "Details" on its own doesn't say WHAT the details are of: with two
   // listings open, the only way to know which one was being described was
   // to move the cursor and see if the sheet moved.

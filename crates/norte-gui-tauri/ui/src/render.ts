@@ -869,6 +869,21 @@ export class Screen {
     // whole row got eaten by the title and the bar was not visible
     // (2026-09-21 capture).
     dom.root.dataset["kind"] = slot.kind === "unsupported" ? slot.kind_name : slot.kind;
+    // #400: every update repainted every panel, rebuilding the log, the
+    // sheet, the tree… with `replaceChildren` while only a listing moved.
+    // Not for the listing nor the processes panel: the session mutates
+    // those in place, and the processes panel paints the board, not itself.
+    if (
+      slot.kind !== "browser" &&
+      slot.kind !== "processes" &&
+      slot.kind !== "unsupported"
+    ) {
+      const size = `${String(window.innerWidth)}x${String(window.innerHeight)}|${String(cell.w)}x${String(cell.h)}`;
+      if (dom.painted?.slot === slot && dom.painted.size === size) {
+        return;
+      }
+      dom.painted = { slot, size };
+    }
     if (slot.kind === "places") {
       this.paintPlaces(dom, slot);
       return;
