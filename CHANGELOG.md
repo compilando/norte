@@ -100,6 +100,10 @@ independently through `PROTOCOL_VERSION`.
   (#392). One file at a time, ten thousand files at 50 ms of latency was
   about 25 minutes of waiting alone. Results now arrive in the order the
   reads finish rather than the order of the listing.
+- **Reading large files over SFTP is no longer capped by latency** (#398).
+  A file over 2 MiB is read through up to eight handles at once; before,
+  one request at a time held a link with 80 ms of latency to about
+  3 MB/s whatever its bandwidth.
 
 ### Security
 

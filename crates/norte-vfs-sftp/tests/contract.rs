@@ -70,6 +70,52 @@ norte_vfs::provider_contract! {
     hostile_names: hostile_names(),
 }
 
+/// #398: a large read goes over several handles, block by block, and must
+/// still deliver every byte in order — whole, and for a range that starts
+/// and ends inside blocks.
+#[tokio::test]
+async fn a_large_read_over_several_handles_keeps_its_bytes_in_order() {
+    use futures::StreamExt;
+    use norte_proto::{ByteRange, Segment};
+    use norte_vfs::Provider;
+
+    let p = fresh().await;
+    let root = SftpProvider::root(Authority::new("test:22").expect("valid authority"));
+    let f = root.join(Segment::new(b"big.bin".to_vec()).expect("valid segment"));
+    let data: Vec<u8> = (0..5_000_000u32).map(|i| (i % 251) as u8).collect();
+    {
+        let mut sink = p.write(&f).await.expect("write opens");
+        for chunk in data.chunks(1 << 20) {
+            norte_vfs::ByteSink::write(&mut *sink, bytes::Bytes::copy_from_slice(chunk))
+                .await
+                .expect("chunk goes in");
+        }
+        sink.commit().await.expect("commit publishes");
+    }
+    let read_all = |range| {
+        let p = &p;
+        let f = &f;
+        async move {
+            let mut s = p.read(f, range).await.expect("read");
+            let mut out = Vec::new();
+            while let Some(c) = s.next().await {
+                out.extend_from_slice(&c.expect("chunk"));
+            }
+            out
+        }
+    };
+    assert_eq!(read_all(None).await, data, "whole file");
+    let range = ByteRange {
+        offset: 100_001,
+        len: Some(3_000_000),
+    };
+    assert_eq!(
+        read_all(Some(range)).await,
+        &data[100_001..3_100_001],
+        "a range across blocks"
+    );
+}
+
 // ---------- posix attrs (#108 block 2) ----------
 
 #[tokio::test]
