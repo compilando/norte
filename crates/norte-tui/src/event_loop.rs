@@ -338,6 +338,10 @@ pub async fn run(
     work.panels = Some(crate::probes::spawn_panels(backend));
     let mut dir_watch = norte_frontend::watch::DirWatch::new();
     let mut dir_watch_alive = true;
+    // #405: set by a 100 ms tick that changed nothing on screen; the next
+    // turn reuses the last frame's area instead of drawing.
+    let mut quiet_tick = false;
+    let mut last_area = ratatui::layout::Rect::default();
     loop {
         dir_watch.rewatch(&watch_targets(app));
         if dir_watch.take_degraded_notice() {
@@ -427,14 +431,23 @@ pub async fn run(
                 }
             }
         }
-        turn::prepare_frame(app, backend, terminal, lua_host.as_ref()).await?;
-        // A one-off exemption from rule 2: the draw writes the control
-        // terminal synchronously (ratatui's official async pattern; bounded,
-        // multi-thread runtime).
-        let painted_area = terminal
-            .draw(|f| ui::draw(f, app))
-            .map_err(RunError::Terminal)?
-            .area;
+        // #405: a quiet 100 ms tick changed nothing on screen, so the frame
+        // is not rebuilt. Every other turn —a key, an event, the one-second
+        // tick— draws.
+        let skip_frame = std::mem::take(&mut quiet_tick);
+        let painted_area = if skip_frame {
+            last_area
+        } else {
+            turn::prepare_frame(app, backend, terminal, lua_host.as_ref()).await?;
+            // A one-off exemption from rule 2: the draw writes the control
+            // terminal synchronously (ratatui's official async pattern;
+            // bounded, multi-thread runtime).
+            terminal
+                .draw(|f| ui::draw(f, app))
+                .map_err(RunError::Terminal)?
+                .area
+        };
+        last_area = painted_area;
         // T4 (phase 5 WOW): the pixels go AFTER the frame and outside
         // ratatui — an APC does not fit in a cell, and ratatui paints cells
         // (`draw_viewer` already left the slot empty when there is an
@@ -559,7 +572,9 @@ pub async fn run(
             session_push.close(last).await;
             return Ok(());
         }
-        turn::after_frame(app, backend, &mut work, painted_area).await;
+        if !skip_frame {
+            turn::after_frame(app, backend, &mut work, painted_area).await;
+        }
         // The `brief` splash screen expires by the PAINT clock, the same one
         // that expires notices: measuring it with another would be a
         // deadline tests cannot fix. Comes after the frame because what it
@@ -654,10 +669,16 @@ pub async fn run(
                 backend.release_journal_if_idle(JOURNAL_IDLE).await;
             }
             _ = tick.tick() => {
+                let was_quiet = app.quiet_for_a_tick();
+                let modal_before = app.modal.is_some();
                 // Mutation finished → panes refresh; the complete ritual
                 // (drainer/probe #52/search) lives in `after_panes_refresh`
                 // — the SINGLE one for the refresh's three triggers (#117).
                 let refreshed = on_tick(app, backend, &mut Console::new(&mut events, terminal)).await;
+                quiet_tick = was_quiet
+                    && app.quiet_for_a_tick()
+                    && refreshed == [false; 2]
+                    && app.modal.is_some() == modal_before;
                 after_panes_refresh(
                     app,
                     backend,

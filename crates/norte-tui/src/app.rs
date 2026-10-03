@@ -1684,6 +1684,25 @@ impl App {
         );
     }
 
+    /// Whether a 100 ms tick can leave the screen as it is (#405): nothing
+    /// on it moves with the clock at that pace. Tasks (their rows and the
+    /// light bar animate), a terminal or log panel (they stream), a plugin
+    /// panel, the splash (it expires by the paint clock) and a wait in
+    /// progress (its spinner) all say no. Notices and relative dates move by
+    /// the second, and the one-second tick always repaints.
+    ///
+    /// Conservative on purpose: a frame skipped wrongly is a frozen screen,
+    /// one drawn needlessly is only CPU.
+    #[must_use]
+    pub fn quiet_for_a_tick(&self) -> bool {
+        self.board.rows().is_empty()
+            && self.terminal_slot().is_none()
+            && self.log_slot_visible().is_none()
+            && self.panel_slot().is_none()
+            && self.splash.is_none()
+            && self.busy.is_none()
+    }
+
     /// The paint clock.
     #[must_use]
     pub fn now_ms(&self) -> i64 {
@@ -1793,6 +1812,21 @@ pub use norte_frontend::AI_RENAME_PAIR_LIMIT;
 mod tests {
     use super::testutil::*;
     use super::*;
+
+    /// #405: an idle screen lets a 100 ms tick skip the frame; a wait in
+    /// progress or the splash do not, because they move with the clock.
+    #[test]
+    fn only_a_screen_with_nothing_moving_skips_the_tick() {
+        let mut app = app_two_panes();
+        app.splash = None;
+        assert!(app.quiet_for_a_tick(), "two listings and nothing running");
+        app.busy = Some(norte_frontend::busy::Busy::new(
+            norte_frontend::busy::BusyKind::Listing,
+            None,
+            None,
+        ));
+        assert!(!app.quiet_for_a_tick(), "a spinner turns");
+    }
 
     /// Search dialog (liveSearch T6): Tab cycles the active field and
     /// printables/backspace land in the focused field.
