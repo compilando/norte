@@ -26,6 +26,14 @@ const READS_IN_FLIGHT: usize = 8;
 /// From how many bytes a read goes over several handles: below it, opening
 /// the extra handles costs more than it saves.
 const PIPELINE_FROM: u64 = 2 * 1024 * 1024;
+
+/// A pipelined read's block: what OpenSSH answers in ONE `READ`
+/// (`limits@openssh` announces 261 120 bytes); 256 KiB would take two.
+const PIPELINE_BLOCK: u64 = 255 * 1024;
+
+/// Blocks read over the first handle alone before the read counts as
+/// sustained and opens the others (#398).
+const PIPELINE_HEAD: u64 = 4;
 /// Prefix for the write staging (ADR 0012, same convention as local).
 const PARTIAL_PREFIX: &str = ".norte-partial.";
 
@@ -449,7 +457,7 @@ impl Provider for SftpProvider {
         if let Some(end) = end
             && end.saturating_sub(start) > PIPELINE_FROM
         {
-            return Ok(read_stream::pipelined(session, remote, file, start, end).await);
+            return Ok(read_stream::pipelined(session, remote, file, start, end));
         }
         if let Some(r) = range {
             file.seek(std::io::SeekFrom::Start(r.offset))
@@ -976,39 +984,79 @@ mod read_stream {
         s.boxed()
     }
 
-    /// `[start, end)` of `remote`, read in `READ_CHUNK` blocks over up to
-    /// `READS_IN_FLIGHT` handles at once, delivered in order (#398). `first`
-    /// is the handle already open; the others are opened here, together. A
-    /// handle that fails to open only means fewer reads in flight.
+    type Handle = std::sync::Arc<tokio::sync::Mutex<russh_sftp::client::fs::File>>;
+
+    /// `[start, end)` of `remote`, in order (#398). The first
+    /// [`super::PIPELINE_HEAD`] blocks come over `first` alone: a reader
+    /// that only wants the head (a content search, a preview, an archive's
+    /// index) never pays for more. Past them the read is sustained, and the
+    /// other handles are opened then, together, to keep
+    /// [`super::READS_IN_FLIGHT`] blocks in flight. A handle that fails to
+    /// open only means fewer reads in flight.
     ///
-    /// The end is the size `stat` gave: a file that grows meanwhile is read
-    /// up to where it was, like a ranged read.
-    pub(super) async fn pipelined(
+    /// The stream ends at the first error or the first short block (the
+    /// file shrank). The end is the size `stat` gave: a file that grows
+    /// meanwhile is read up to where it was, like a ranged read.
+    pub(super) fn pipelined(
         session: std::sync::Arc<russh_sftp::client::SftpSession>,
         remote: String,
         first: russh_sftp::client::fs::File,
         start: u64,
         end: u64,
     ) -> ByteStream {
-        use std::sync::Arc;
-        use tokio::sync::Mutex;
+        let first: Handle = std::sync::Arc::new(tokio::sync::Mutex::new(first));
+        let head_end = end.min(start + super::PIPELINE_HEAD * super::PIPELINE_BLOCK);
+        let head = blocks(vec![std::sync::Arc::clone(&first)], start, head_end, 1);
+        let tail = futures::stream::once(async move {
+            let opens = (1..super::READS_IN_FLIGHT)
+                .map(|_| session.open_with_flags(&remote, russh_sftp::protocol::OpenFlags::READ));
+            let mut handles = vec![first];
+            handles.extend(
+                futures::future::join_all(opens)
+                    .await
+                    .into_iter()
+                    .flatten()
+                    .map(|f| std::sync::Arc::new(tokio::sync::Mutex::new(f))),
+            );
+            blocks(handles, head_end, end, super::READS_IN_FLIGHT)
+        })
+        .flatten();
+        head.chain(tail)
+            .scan(false, |done, item| {
+                let out = if *done {
+                    None
+                } else {
+                    match item {
+                        Ok((bytes, short)) => {
+                            *done = short;
+                            Some(Ok(bytes))
+                        }
+                        Err(e) => {
+                            *done = true;
+                            Some(Err(e))
+                        }
+                    }
+                };
+                futures::future::ready(out)
+            })
+            .filter(|item| futures::future::ready(!matches!(item, Ok(b) if b.is_empty())))
+            .boxed()
+    }
 
-        let opens = (1..super::READS_IN_FLIGHT)
-            .map(|_| session.open_with_flags(&remote, russh_sftp::protocol::OpenFlags::READ));
-        let mut handles = vec![Arc::new(Mutex::new(first))];
-        handles.extend(
-            futures::future::join_all(opens)
-                .await
-                .into_iter()
-                .flatten()
-                .map(|f| Arc::new(Mutex::new(f))),
-        );
-        let block = READ_CHUNK as u64;
-        let blocks = end.saturating_sub(start).div_ceil(block);
-        let k = handles.len();
-        futures::stream::iter(0..blocks)
+    /// `[start, end)` in [`super::PIPELINE_BLOCK`] blocks, round-robin over
+    /// `handles`, `in_flight` at once, in order; each with whether it came
+    /// back short.
+    fn blocks(
+        handles: Vec<Handle>,
+        start: u64,
+        end: u64,
+        in_flight: usize,
+    ) -> futures::stream::BoxStream<'static, Result<(Bytes, bool), Error>> {
+        let block = super::PIPELINE_BLOCK;
+        let k = handles.len().max(1);
+        futures::stream::iter(0..end.saturating_sub(start).div_ceil(block))
             .map(move |i| {
-                let handle = Arc::clone(&handles[usize::try_from(i).unwrap_or(0) % k]);
+                let handle = std::sync::Arc::clone(&handles[usize::try_from(i).unwrap_or(0) % k]);
                 let off = start + i * block;
                 let want = usize::try_from(block.min(end - off)).unwrap_or(READ_CHUNK);
                 async move {
@@ -1026,10 +1074,10 @@ mod read_stream {
                         }
                     }
                     buf.truncate(got);
-                    Ok(Bytes::from(buf))
+                    Ok((Bytes::from(buf), got < want))
                 }
             })
-            .buffered(super::READS_IN_FLIGHT)
+            .buffered(in_flight)
             .boxed()
     }
 }
