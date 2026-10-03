@@ -51,6 +51,10 @@ independently through `PROTOCOL_VERSION`.
 
 ### Performance
 
+- **Opening help or the palette over an image no longer resends it**
+  (#406). In a kitty-graphics terminal, closing F1 or the palette over a
+  previewed image transmitted the whole picture again; it is now only
+  shown again.
 - **Content search with a regular expression is many times faster on
   files with many lines** (#391); every line used to move the rest of
   the read buffer.

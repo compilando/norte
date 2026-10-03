@@ -287,6 +287,51 @@ pub fn escape_delete(id: u32) -> String {
     format!("\x1b_Ga=d,d=I,i={id},q=2\x1b\\")
 }
 
+/// The escape that takes image `id` off the screen and KEEPS its bytes in
+/// the terminal (`d=i`, lowercase), so [`escape_reposition`] can show it
+/// again (#406): covering the viewer with F1 or the palette used to free
+/// them, and uncovering it retransmitted the whole PNG.
+///
+/// ```
+/// use norte_tui::kitty_graphics::escape_hide;
+/// let esc = escape_hide(7);
+/// assert!(esc.contains("d=i,") && esc.contains("i=7"));
+/// ```
+#[must_use]
+pub fn escape_hide(id: u32) -> String {
+    format!("\x1b_Ga=d,d=i,i={id},q=2\x1b\\")
+}
+
+/// The id of an image taken off the screen with [`escape_hide`] whose bytes
+/// the terminal still keeps, or `0`. At most one: placing or freeing any
+/// image frees it too.
+static KEPT: AtomicU32 = AtomicU32::new(0);
+
+/// Is `id` hidden with its bytes still in the terminal?
+#[must_use]
+pub fn kept(id: u32) -> bool {
+    id != 0 && KEPT.load(Ordering::Relaxed) == id
+}
+
+/// Takes the placed image off the screen keeping its bytes (#406), for a
+/// viewer that is only covered. Same failure handling as [`delete_placed`].
+pub fn hide_placed(out: &mut impl Write) {
+    let id = PLACED.swap(0, Ordering::Relaxed);
+    if id == 0 {
+        return;
+    }
+    match out
+        .write_all(escape_hide(id).as_bytes())
+        .and_then(|()| out.flush())
+    {
+        Ok(()) => KEPT.store(id, Ordering::Relaxed),
+        Err(e) => {
+            let _ = out.write_all(b"\x1b\\");
+            tracing::debug!(error = %e, id, "could not hide the placed image");
+        }
+    }
+}
+
 /// The id of the image placed RIGHT NOW on the real terminal, or `0` if
 /// there is none — PROCESS state, like [`crate::alt_menu`]'s
 /// `REQUESTED`/`YIELDED`: `0` is not a valid id because
@@ -301,6 +346,8 @@ static PLACED: AtomicU32 = AtomicU32::new(0);
 /// image is up that the terminal never saw.
 pub fn mark_placed(id: u32) {
     PLACED.store(id, Ordering::Relaxed);
+    // Shown again, or another image placed (which freed the kept one first).
+    KEPT.store(0, Ordering::Relaxed);
 }
 
 /// Is `id` the image placed RIGHT NOW?
@@ -329,14 +376,20 @@ pub fn ya_placed(id: u32) -> bool {
 /// ([`crate::tty::restore`]) call it here directly because neither of the two
 /// is guaranteed a following frame to make that diff.
 pub fn delete_placed(out: &mut impl Write) {
+    // A hidden image's bytes go too: it is the viewer closing, moving to
+    // another file, or norte handing over the terminal.
+    let kept = KEPT.swap(0, Ordering::Relaxed);
     let id = PLACED.swap(0, Ordering::Relaxed);
-    if id == 0 {
+    let mut esc = String::new();
+    for i in [kept, id] {
+        if i != 0 {
+            esc.push_str(&escape_delete(i));
+        }
+    }
+    if esc.is_empty() {
         return;
     }
-    match out
-        .write_all(escape_delete(id).as_bytes())
-        .and_then(|()| out.flush())
-    {
+    match out.write_all(esc.as_bytes()).and_then(|()| out.flush()) {
         Ok(()) => {}
         Err(e) => {
             // MINOR 7: `write_all` can fail mid-APC — without closing it,
@@ -433,6 +486,35 @@ fn ask() -> io::Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::response_says_yes;
+
+    /// #406: an image covered by an overlay leaves the screen keeping its
+    /// bytes (`d=i`), so uncovering it needs no retransmission; closing the
+    /// viewer afterwards frees them (`d=I`). Process state: nextest runs
+    /// each test in its own process.
+    #[test]
+    fn hiding_keeps_the_bytes_and_closing_frees_them() {
+        use super::{delete_placed, hide_placed, kept, mark_placed, ya_placed};
+        mark_placed(5);
+        let mut out = Vec::new();
+        hide_placed(&mut out);
+        let hidden = String::from_utf8(out).expect("ascii");
+        assert!(hidden.contains("d=i,i=5"), "placement only: {hidden:?}");
+        assert!(!ya_placed(5) && kept(5));
+
+        // Uncovered: placed again (the loop sends `a=p`), no longer kept.
+        mark_placed(5);
+        assert!(ya_placed(5) && !kept(5));
+
+        hide_placed(&mut Vec::new());
+        let mut out = Vec::new();
+        delete_placed(&mut out);
+        let freed = String::from_utf8(out).expect("ascii");
+        assert!(
+            freed.contains("d=I,i=5"),
+            "the kept bytes are freed: {freed:?}"
+        );
+        assert!(!kept(5) && !ya_placed(5));
+    }
 
     #[test]
     fn a_kitty_response_is_a_yes() {
