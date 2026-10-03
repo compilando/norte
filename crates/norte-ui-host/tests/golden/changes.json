@@ -1160,6 +1160,29 @@
     "cursor": null,
     "tasks": []
   },
+  "terminal": {
+    "change": "terminal",
+    "terminal": {
+      "cursor": [
+        0,
+        4
+      ],
+      "no_shell": false,
+      "rows": [
+        [
+          {
+            "bold": true,
+            "fg": {
+              "index": 2,
+              "kind": "indexed"
+            },
+            "text": "$ ls"
+          }
+        ]
+      ],
+      "slot_id": 4
+    }
+  },
   "theme": {
     "change": "theme",
     "theme": {

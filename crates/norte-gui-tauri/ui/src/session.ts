@@ -194,6 +194,17 @@ export class Session {
         }
         return true;
       }
+      case "terminal": {
+        // A NEW object for the slot: the painter memoizes by identity, and
+        // mutating the old one in place would leave the grid unpainted.
+        const i = s.slots.findIndex(
+          (slot) => slot.kind === "terminal" && slot.slot_id === c.terminal.slot_id,
+        );
+        if (i >= 0) {
+          s.slots[i] = { kind: "terminal", ...c.terminal };
+        }
+        return true;
+      }
       case "dialogs":
         s.dialogs = c.dialogs;
         return true;

@@ -3822,6 +3822,16 @@ pub enum ViewChange {
         #[serde(default)]
         cursor: Option<u64>,
     },
+    /// The terminal panel's grid changed (#401, bridge 96): the shell wrote.
+    ///
+    /// It used to republish the whole frame, up to thirty times a second
+    /// while a shell printed — every listing's rows, the dialogs, the help —
+    /// for a change confined to this one slot. The renderer replaces the
+    /// slot whose `slot_id` this carries and leaves the rest as it was.
+    Terminal {
+        /// The panel, whole: a terminal repaints, it does not scroll.
+        terminal: Box<TerminalSlotView>,
+    },
     /// The open dialogs changed. A struct for the same reason as
     /// [`ViewChange::Tasks`].
     Dialogs {

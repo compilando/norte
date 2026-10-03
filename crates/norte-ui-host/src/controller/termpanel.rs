@@ -27,7 +27,7 @@ use tokio::sync::mpsc;
 
 use crate::backend::HostBackend;
 use crate::bridge::BridgeEnvelope;
-use crate::dto::{TerminalColorView, TerminalSlotView, TerminalSpanView, UiUpdate};
+use crate::dto::{TerminalColorView, TerminalSlotView, TerminalSpanView, UiUpdate, ViewChange};
 
 use super::{ActionAck, Message, State};
 
@@ -310,10 +310,15 @@ impl State {
         }
     }
 
-    /// The whole snapshot, which is how any slot in this window republishes.
+    /// Only the panel (#401): the shell's output touches nothing else, and
+    /// the whole frame at up to 30 Hz rebuilt every slot. Without a placed
+    /// slot there is nothing to send.
     fn republicar_terminal(&mut self) -> Vec<BridgeEnvelope<UiUpdate>> {
-        let snap = self.snapshot();
-        vec![self.over(UiUpdate::Snapshot(Box::new(snap)))]
+        let Some(slot) = self.slot_of_kind(KIND) else {
+            return Vec::new();
+        };
+        let terminal = Box::new(self.panel_de_terminal(slot.0));
+        vec![self.parche(vec![ViewChange::Terminal { terminal }])]
     }
 
     /// The panel's view for the snapshot, if the slot exists.

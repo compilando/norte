@@ -7,6 +7,14 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Performance
+
+- **The window's terminal panel no longer redraws the whole window** (#401,
+  bridge 96). Up to thirty times a second while a shell printed, every
+  listing, dialog and panel was rebuilt for a change confined to the
+  terminal. Moving through the processes panel no longer resends the
+  whole screen either.
+
 ### Security
 
 - **wasmtime 48.0.5** for RUSTSEC-2026-0321 to 0327: among them a plugin

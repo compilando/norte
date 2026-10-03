@@ -2676,6 +2676,27 @@ fn listing_row_changes() -> Vec<(&'static str, ViewChange)> {
 #[expect(clippy::too_many_lines, reason = "list of literals, no logic")]
 fn rest_changes() -> Vec<(&'static str, ViewChange)> {
     vec![
+        (
+            "terminal",
+            ViewChange::Terminal {
+                terminal: Box::new(norte_ui_host::dto::TerminalSlotView {
+                    slot_id: 4,
+                    rows: vec![vec![norte_ui_host::dto::TerminalSpanView {
+                        text: "$ ls".to_owned(),
+                        fg: Some(norte_ui_host::dto::TerminalColorView::Indexed { index: 2 }),
+                        bg: None,
+                        bold: true,
+                        dim: false,
+                        italic: false,
+                        underline: false,
+                        reverse: false,
+                        strike: false,
+                    }]],
+                    cursor: Some((0, 4)),
+                    no_shell: false,
+                }),
+            },
+        ),
         ("layout", ViewChange::Layout(reference_layout())),
         (
             "slot_state",
@@ -2939,7 +2960,8 @@ fn the_corpus_shape_does_not_change_without_bumping_the_bridge() {
     // field.
     // 94 (ADR 0148): `BrowserSlotView.progress` and the `slot_progress`
     // change.
-    const SHAPE: u64 = 7_145_087_327_109_203_787;
+    // 96 (#401): the `terminal` change, the panel alone.
+    const SHAPE: u64 = 17_792_984_437_978_629_822;
 
     let mut paths: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for file in ["changes.json", "updates.json", "variants.json", "acks.json"] {

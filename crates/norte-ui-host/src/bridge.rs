@@ -564,7 +564,10 @@ use serde::{Deserialize, Serialize};
 ///   construction. Its colors travel UNRESOLVED —`indexed` stays an
 ///   index— because which blue "color 4" is is decided by the palette of
 ///   whoever paints, not the host.
-pub const BRIDGE_VERSION: u32 = 95;
+/// - **96**: the `terminal { terminal }` change (#401). The shell's output
+///   republished the WHOLE frame, up to 30 Hz; it now carries the panel
+///   alone, and the renderer replaces the slot with that `slot_id`.
+pub const BRIDGE_VERSION: u32 = 96;
 
 /// Cap on a string that crosses to the renderer, in bytes.
 ///
