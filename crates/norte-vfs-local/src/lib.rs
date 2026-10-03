@@ -7,7 +7,8 @@
 //! `mounts_windows` (2026-08-10-volumes.md task V4), the raw
 //! `getmntinfo`/`GetVolumeInformationW` and friends FFI that
 //! `norte-core::volumes` needs but can't touch directly; `trash_fdo`
-//! (`getuid` and `localtime_r`). Rebuilding
+//! (`getuid` and `localtime_r`); `kernel_copy` (`FICLONE` and
+//! `copy_file_range`, ADR 0165). Rebuilding
 //! `OsString` on Windows stays 100% safe: WTF-8 validated → UTF-16 →
 //! `from_wide` (the unchecked variant stays forbidden).
 #![deny(unsafe_code)]
@@ -20,6 +21,9 @@ mod confined;
 mod confined_windows;
 #[cfg(unix)]
 mod identity;
+/// Reflink and `copy_file_range` for local copies (ADR 0165).
+#[cfg(unix)]
+mod kernel_copy;
 /// Bounded reading under a directory, for the plugin-host's `location`
 /// capability (ADR 0057, ADR 0158).
 #[cfg(any(unix, windows))]

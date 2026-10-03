@@ -68,6 +68,14 @@ independently through `PROTOCOL_VERSION`.
 - **Moving through files with the docked preview open stops the previous
   read** (#402), in the terminal and in the window. Holding an arrow over
   a remote folder used to start one read per row and finish them all.
+- **Local copies are done by the kernel** (#393, ADR 0165). On btrfs, XFS
+  and other copy-on-write filesystems a copy is a reflink: instant, and
+  it takes no space until one side changes. Elsewhere on Linux the bytes
+  no longer pass through norte. Cancelling and the half-copied file
+  behave as before.
+- **Scrolling a zoomed image in the terminal no longer resends it** (#406).
+  Each arrow key retransmitted the whole picture, megabytes of it, to a
+  kitty-graphics terminal; now only its placement moves.
 
 ### Security
 

@@ -28,7 +28,7 @@ pub use options::{AttrRequest, ListOptions};
 pub use provider::{
     ByteStream, ConfinedRoot, EntryStream, FollowLinks, NodeId, Provider, SymlinkKind,
 };
-pub use sink::ByteSink;
+pub use sink::{ByteSink, FillProgress};
 
 /// Internal re-exports for [`provider_contract!`]'s expansion.
 /// NOT API: it can change without notice.

@@ -1371,6 +1371,14 @@ impl ConfinedSink {
 
 #[async_trait::async_trait]
 impl norte_vfs::ByteSink for ConfinedSink {
+    async fn fill_from(
+        &mut self,
+        src: std::fs::File,
+        progress: norte_vfs::FillProgress,
+    ) -> Option<Result<u64, Error>> {
+        crate::provider::fill_local_sink(&mut self.file, &mut self.pos, src, progress).await
+    }
+
     async fn write(&mut self, chunk: bytes::Bytes) -> Result<(), Error> {
         let file = self.file.take().ok_or(Error::Io { retryable: false })?;
         let mut pos = self.pos;

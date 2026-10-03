@@ -540,6 +540,69 @@ fn spawn_guarded_producer<T: Send + 'static>(
 /// bound how long a dead mount can make whoever's asking wait.
 const CAPS_AT_DEADLINE: std::time::Duration = std::time::Duration::from_millis(200);
 
+/// Opens the regular file at `native` for reading.
+fn open_regular(native: &std::path::Path) -> Result<std::fs::File, Error> {
+    // `metadata` FOLLOWS symlinks (open semantics): reading a dir-symlink is
+    // TypeMismatch — that's how the copy engine's probe distinguishes
+    // file/dir — and a broken link is NotFound.
+    let md = std::fs::metadata(native).map_err(|e| map_io(&e))?;
+    if md.is_dir() {
+        return Err(Error::Conflict {
+            conflict: ConflictKind::TypeMismatch,
+        });
+    }
+    // Non-regular files (FIFO/socket/device): the open can BLOCK the thread
+    // indefinitely (a FIFO with no writer) and cancellation can't interrupt
+    // it (rule 3) — an honest rejection BEFORE the open. The engine treats
+    // them as Other/Unsupported anyway.
+    if !md.is_file() {
+        return Err(Error::Unsupported);
+    }
+    std::fs::File::open(native).map_err(|e| map_io(&e))
+}
+
+/// [`ByteSink::fill_from`] for a local sink holding `file` at `pos` (ADR
+/// 0165): only into an empty staging, and the descriptor comes back to the
+/// sink whatever happens.
+pub(crate) async fn fill_local_sink(
+    file: &mut Option<std::fs::File>,
+    pos: &mut u64,
+    src: std::fs::File,
+    progress: norte_vfs::FillProgress,
+) -> Option<Result<u64, Error>> {
+    #[cfg(unix)]
+    {
+        if *pos != 0 {
+            return None;
+        }
+        let dst = file.take()?;
+        let joined = tokio::task::spawn_blocking(move || {
+            let res = crate::kernel_copy::copy(&src, &dst, &*progress);
+            (dst, res)
+        })
+        .await;
+        // A panic loses the descriptor: the sink is left without a file,
+        // its `abort`/`keep` fail, and its `Drop` removes the staging.
+        let Ok((dst, res)) = joined else {
+            return Some(Err(Error::Internal { panic: true }));
+        };
+        *file = Some(dst);
+        match res {
+            Ok(None) => None,
+            Ok(Some(n)) => {
+                *pos = n;
+                Some(Ok(n))
+            }
+            Err(e) => Some(Err(e)),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (file, pos, src, progress);
+        None
+    }
+}
+
 pub(crate) async fn blocking<T: Send + 'static>(
     f: impl FnOnce() -> Result<T, Error> + Send + 'static,
 ) -> Result<T, Error> {
@@ -1496,6 +1559,15 @@ impl Provider for LocalProvider {
         Ok(ReceiverStream::new(rx).boxed())
     }
 
+    async fn open_local(&self, p: &VPath) -> Option<Result<std::fs::File, Error>> {
+        self.ensure_caps().await;
+        let native = match self.native(p) {
+            Ok(n) => n,
+            Err(e) => return Some(Err(e)),
+        };
+        Some(blocking(move || open_regular(&native)).await)
+    }
+
     async fn read(
         &self,
         p: &VPath,
@@ -1504,25 +1576,7 @@ impl Provider for LocalProvider {
         self.ensure_caps().await;
         let native = self.native(p)?;
         let file = blocking(move || {
-            // `metadata` FOLLOWS symlinks (open semantics): reading a
-            // dir-symlink is TypeMismatch — that's how the copy engine's
-            // probe distinguishes file/dir — and a broken link is
-            // NotFound.
-            let md = std::fs::metadata(&native).map_err(|e| map_io(&e))?;
-            if md.is_dir() {
-                return Err(Error::Conflict {
-                    conflict: ConflictKind::TypeMismatch,
-                });
-            }
-            // Non-regular files (FIFO/socket/device): the open can BLOCK
-            // the thread indefinitely (a FIFO with no writer) and
-            // cancellation can't interrupt it (rule 3) — an honest
-            // rejection BEFORE the open. The engine treats them as
-            // Other/Unsupported anyway.
-            if !md.is_file() {
-                return Err(Error::Unsupported);
-            }
-            let mut file = std::fs::File::open(&native).map_err(|e| map_io(&e))?;
+            let mut file = open_regular(&native)?;
             if let Some(r) = range {
                 use std::io::Seek;
                 // pread semantics (ADR 0005): an offset past EOF isn't an
@@ -2359,6 +2413,14 @@ struct LocalSink {
 
 #[async_trait]
 impl ByteSink for LocalSink {
+    async fn fill_from(
+        &mut self,
+        src: std::fs::File,
+        progress: norte_vfs::FillProgress,
+    ) -> Option<Result<u64, Error>> {
+        fill_local_sink(&mut self.file, &mut self.pos, src, progress).await
+    }
+
     async fn write(&mut self, chunk: Bytes) -> Result<(), Error> {
         let file = self.file.take().ok_or(Error::Io { retryable: false })?;
         let mut pos = self.pos;

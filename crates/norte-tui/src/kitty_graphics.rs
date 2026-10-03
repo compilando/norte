@@ -206,18 +206,14 @@ pub fn escape_place(
             // `write!` on a `String` never fails (rule 6: no
             // `unwrap`/`expect` outside tests, and here it is not even
             // needed).
+            // `p=1`: the placement has a name, so [`escape_reposition`] can
+            // replace it later without sending the bytes again (#406).
             let _ = write!(
                 out,
-                "a=T,i={id},f=100,c={},r={},C=1,q=2",
+                "a=T,i={id},p={PLACEMENT},f=100,c={},r={},C=1,q=2",
                 rect.width, rect.height
             );
-            // The chunk goes BEFORE `m`, which closes the header. Its four
-            // keys go together or none goes at all: kitty takes whichever
-            // are missing as "from the origin" and "to the end", and half a
-            // pair would show a piece nobody asked for.
-            if let Some(r) = crop {
-                let _ = write!(out, ",x={},y={},w={},h={}", r.x, r.y, r.w, r.h);
-            }
+            write_crop(&mut out, crop);
             let _ = write!(out, ",m={more}");
         } else {
             let _ = write!(out, "m={more},q=2");
@@ -226,6 +222,46 @@ pub fn escape_place(
         out.push_str(&engine.encode(chunk));
         out.push_str("\x1b\\");
     }
+    out
+}
+
+/// The one placement an image of ours has; naming it is what lets a new
+/// `a=p` replace it.
+const PLACEMENT: u32 = 1;
+
+/// The crop's four keys go together or none goes at all: kitty takes
+/// whichever are missing as "from the origin" and "to the end", and half a
+/// pair would show a piece nobody asked for.
+fn write_crop(out: &mut String, crop: Option<crate::viewer_open::Crop>) {
+    use std::fmt::Write as _;
+    if let Some(r) = crop {
+        let _ = write!(out, ",x={},y={},w={},h={}", r.x, r.y, r.w, r.h);
+    }
+}
+
+/// Moves or re-crops image `id`, ALREADY transmitted by [`escape_place`],
+/// without sending its bytes again (#406): scrolling a zoomed image used to
+/// resend the whole PNG, megabytes of base64, on every key.
+///
+/// ```
+/// use norte_tui::kitty_graphics::escape_reposition;
+/// use ratatui::layout::Rect;
+///
+/// let esc = escape_reposition(7, Rect::new(1, 2, 40, 20), None);
+/// assert!(esc.starts_with("\x1b_Ga=p,i=7,p=1,"));
+/// assert!(!esc.contains(';'), "no payload");
+/// ```
+#[must_use]
+pub fn escape_reposition(id: u32, rect: Rect, crop: Option<crate::viewer_open::Crop>) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::from("\x1b_G");
+    let _ = write!(
+        out,
+        "a=p,i={id},p={PLACEMENT},c={},r={},C=1,q=2",
+        rect.width, rect.height
+    );
+    write_crop(&mut out, crop);
+    out.push_str("\x1b\\");
     out
 }
 
