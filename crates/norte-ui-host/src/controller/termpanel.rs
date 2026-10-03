@@ -121,6 +121,12 @@ impl State {
             self.reconciles_roles();
         }
         updates.extend(self.start_si_missing(mailbox));
+        // The focus moved AFTER `open_slot_of_kind` sent its frame, and the
+        // active role only travels in the layout: without a frame here the
+        // window kept the listing painted as active while the keys went to
+        // the shell. Opening is rare; the whole frame is the simple answer.
+        let snap = self.snapshot();
+        updates.push(self.over(UiUpdate::Snapshot(Box::new(snap))));
         (ack, updates)
     }
 

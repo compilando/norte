@@ -76,9 +76,9 @@ describe("Session", () => {
     expect(after?.kind === "processes" ? after.cursor : null).toBe(1);
   });
 
-  // Bridge 96 (#401): the shell's output replaces the terminal slot alone,
-  // with a NEW object (the painter memoizes by identity), and leaves every
-  // other slot as it was.
+  // Bridge 96 (#401): the shell's output replaces the terminal slot alone
+  // and leaves every other slot as it was; a placed slot missing from the
+  // last frame (uncovered by a layout change) is taken in.
   it("a terminal patch replaces that slot and nothing else", () => {
     const view = s.view();
     expect(view).not.toBeNull();
@@ -101,6 +101,28 @@ describe("Session", () => {
     expect(term?.kind === "terminal" ? term.rows[0]?.[0]?.text : null).toBe("$ ls");
     const after = s.view()?.slots.filter((x) => x.kind !== "terminal") ?? [];
     expect(after.every((x, i) => x === others[i])).toBe(true);
+
+    view?.layout.placements.push({
+      slot_id: 78,
+      x: 0,
+      y: 0,
+      width: 10,
+      height: 5,
+      role: null,
+      focus_index: 9,
+    });
+    s.receive(
+      env(2, {
+        update: "patch",
+        base_sequence: 1,
+        changes: [
+          { change: "terminal", terminal: { slot_id: 78, rows: [], cursor: null } },
+        ],
+      }),
+    );
+    expect(s.view()?.slots.some((x) => x.kind === "terminal" && x.slot_id === 78)).toBe(
+      true,
+    );
   });
 
   // The board goes empty: `null`, not "whatever was there before". A

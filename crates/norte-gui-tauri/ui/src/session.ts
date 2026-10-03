@@ -195,13 +195,17 @@ export class Session {
         return true;
       }
       case "terminal": {
-        // A NEW object for the slot: the painter memoizes by identity, and
-        // mutating the old one in place would leave the grid unpainted.
+        const slot = { kind: "terminal" as const, ...c.terminal };
         const i = s.slots.findIndex(
-          (slot) => slot.kind === "terminal" && slot.slot_id === c.terminal.slot_id,
+          (x) => x.kind === "terminal" && x.slot_id === c.terminal.slot_id,
         );
         if (i >= 0) {
-          s.slots[i] = { kind: "terminal", ...c.terminal };
+          s.slots[i] = slot;
+        } else if (s.layout.placements.some((p) => p.slot_id === c.terminal.slot_id)) {
+          // Placed but not in the last frame: a hidden slot uncovered by a
+          // layout change travels without its content. Taking it here is
+          // what paints a shell that has gone quiet.
+          s.slots.push(slot);
         }
         return true;
       }
