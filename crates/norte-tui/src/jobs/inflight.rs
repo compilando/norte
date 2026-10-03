@@ -19,7 +19,7 @@ use crate::jobs::{CompareRun, SearchRun, SyncRun};
 use crate::lua::CommandRun;
 use crate::probes::{
     CompareStatProbe, DecorateFetch, LogLevelProbe, LogTailProbe, PanelRenderProbe, PanelsProbe,
-    PreviewFetch, Probed, StatProbe,
+    PreviewFetch, Probed, StatProbe, TreeBranchFetch,
 };
 use norte_proto::{Error, VPath};
 
@@ -271,6 +271,8 @@ pub struct InFlight {
     /// panel is one, and with two a slow daemon would pile up a request per
     /// loop turn forever.
     pub log_tail: Option<LogTailProbe>,
+    /// The tree branch being listed (#407): at most one.
+    pub tree_branch: Option<TreeBranchFetch>,
     /// The plugin catalogue in flight, to declare the panels they
     /// contribute (phase 3): at most one, and it's requested ONCE per
     /// session — what it brings is which slots exist, not any one's

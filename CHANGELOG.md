@@ -83,6 +83,15 @@ independently through `PROTOCOL_VERSION`.
   one file marked in a folder of 100 000, the terminal and the window
   re-added every marked size several times per frame; the totals are now
   worked out once per change.
+- **The terminal interface stops redrawing an idle screen** (#405). It
+  rebuilt the whole frame ten times a second with nothing running; now
+  a tick that changes nothing on screen draws nothing. The terminal
+  panel's output shows as soon as the shell writes it instead of on the
+  next tick, and an idle terminal panel no longer keeps the screen
+  redrawing.
+- **Opening a branch of the terminal interface's folder tree no longer
+  freezes it** (#407). A large or remote folder used to block every key,
+  with no sign of why, until it was listed.
 
 ### Security
 

@@ -241,6 +241,8 @@ pub async fn dispatch(
                                     "TUI opened a shell in a terminal panel \
                                      (not journalled: no actor, no reversal)"
                                 );
+                                let wake = std::sync::Arc::clone(&app.term_wake);
+                                t.set_waker(std::sync::Arc::new(move || wake.notify_one()));
                                 app.terminal = Some(t);
                             }
                             // The slot stays open even if the shell does not
