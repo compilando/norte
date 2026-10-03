@@ -2125,17 +2125,16 @@ pub const ARCHIVE_TEST_MAX_FAILURES: usize = 256;
 /// directional criterion as [`SEARCH_HITS`]).
 ///
 /// # How to know whether ALL of them arrived
-/// A notification can be lost: a client that does not drain its queue
-/// loses the frames that do not fit, and unlike `fs.search` there is no
-/// `max_hits` to count against here (MINOR finding from protocol-guardian,
-/// C1 review). What it does NOT lose is the subscription: the owner of a
-/// live directed feed stays on the map even if its queue fills up,
-/// precisely so it receives the terminal snapshot this check is made
-/// against (#155 — before, it got evicted, and the check got lost in
-/// exactly the case it exists for). The exception is a client that also
-/// stops taking its RESPONSES: one that does not fit for seconds closes the
-/// connection, feed included, and the client resyncs on reconnecting
-/// (#384). The signal is
+/// A slow client is waited for: the daemon holds the comparison back until
+/// its queue has room, and only a client that reads nothing for 30 s stops
+/// the feed (#384; before, the rows that did not fit were lost). What it
+/// does NOT lose is the subscription: the owner of a live directed feed
+/// stays on the map even if its queue fills up, precisely so it receives
+/// the terminal snapshot this check is made against (#155). The exception
+/// is a client that also stops taking its RESPONSES: one that does not fit
+/// for seconds closes the connection, feed included, and the client
+/// resyncs on reconnecting. Rows can still be missing when the feed was
+/// stopped that way, which is what this check catches. The signal is
 /// [`TaskProgress::entries_done`](crate::TaskProgress::entries_done), which
 /// on a [`TaskKind::Compare`](crate::TaskKind::Compare) Task counts ROWS
 /// emitted: `task.progress`'s last snapshot always carries terminal state

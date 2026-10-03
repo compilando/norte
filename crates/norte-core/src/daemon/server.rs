@@ -42,6 +42,10 @@ const CONNECTION_DRAIN: Duration = Duration::from_secs(2);
 /// its side of the socket hits this and gets CUT OFF: never unbounded memory
 /// for a slow or hostile peer (security-reviewer finding M1).
 const OUTBOX_FRAMES: usize = 1024;
+
+/// How long a directed feed (search hits, compare rows, sync steps) waits
+/// for room in its owner's outbox before giving the owner up (#384).
+const FEED_ROOM_WAIT: Duration = Duration::from_secs(30);
 /// Consecutive parse errors tolerated before cutting the connection (a peer
 /// that only emits garbage does not deserve infinite responses).
 const MAX_PARSE_ERRORS: u32 = 16;
@@ -576,24 +580,21 @@ impl Shared {
     }
 
     /// Sends a frame to ONE specific connection (the hits of an `fs.search`
-    /// belong to whoever launched it — never broadcast, security T4). No-op
-    /// if the connection died or is no longer subscribed.
+    /// belong to whoever launched it — never broadcast, security T4),
+    /// WAITING for room in its outbox up to [`FEED_ROOM_WAIT`] (#384).
     ///
-    /// A FULL outbox loses the frame and NOT the subscription (#155): the
-    /// eviction used to be irreversible — the entry is only inserted in
-    /// `initialize` — and took down with it the terminal `task.progress`,
-    /// which is exactly the signal the client uses to detect it is missing
-    /// rows. The backlog is still bounded by the channel, which is what
-    /// really bounded it; what gets lost is frames, and the contract already
-    /// knows how to say that. A CLOSED outbox does remove the entry: there
-    /// is nobody there to protect.
+    /// A directed feed's pump that waits holds its producer back through
+    /// their bounded channel, so a slow client slows the walk instead of
+    /// losing hits (search) or having the feed aborted (compare, sync). A
+    /// full outbox never costs the subscription (#155): that would take the
+    /// terminal `task.progress` with it, the signal the client checks its
+    /// rows against.
     ///
-    /// Returns `false` if the frame was NOT delivered. Used so a directed
-    /// feed's producer stops: continuing to compare two trees for an hour for
-    /// an owner who is not reading is wasted work and a scheduler permit held
-    /// onto for nothing.
-    fn send_to_conn(&self, conn_id: u64, frame: &Arc<[u8]>) -> bool {
-        send_to_conn_impl(&self.subscribers, conn_id, frame)
+    /// `false` = no owner, or it read nothing for that long: the feed stops,
+    /// rather than comparing two trees for an hour for nobody while holding
+    /// a scheduler permit.
+    async fn send_to_conn_waiting(&self, conn_id: u64, frame: Arc<[u8]>) -> bool {
+        send_to_conn_waiting_impl(&self.subscribers, conn_id, frame, FEED_ROOM_WAIT).await
     }
 
     /// Marks `conn_id` as the owner of a live directed feed until the guard
@@ -667,34 +668,29 @@ fn broadcast_impl(
     });
 }
 
-/// Testable core of [`Shared::send_to_conn`]: sends `frame` to connection
-/// `conn_id` in `subs` (if it exists) and REMOVES the entry only if its
-/// receiver DIED. A full outbox loses the frame and keeps the subscription
-/// (#155).
-///
-/// `true` = delivered.
-fn send_to_conn_impl(
+/// Testable core of [`Shared::send_to_conn_waiting`], with the wait
+/// injected. The subscribers lock is NOT held while waiting: the sender is
+/// cloned out. `true` = delivered.
+async fn send_to_conn_waiting_impl(
     subs: &Mutex<HashMap<u64, Subscriber>>,
     conn_id: u64,
-    frame: &Arc<[u8]>,
+    frame: Arc<[u8]>,
+    wait: Duration,
 ) -> bool {
-    let mut subs = subs.lock().expect("subscribers lock is sound");
-    let (delivered, remove) = match subs.get(&conn_id) {
-        None => return false,
-        Some(s) => match s.tx.try_send(Arc::clone(frame)) {
-            Ok(()) => (true, false),
-            Err(mpsc::error::TrySendError::Full(_)) => {
-                tracing::warn!(
-                    conn = conn_id,
-                    "owner of an undrained directed feed: the frame is lost, not the subscription"
-                );
-                (false, false)
-            }
-            Err(mpsc::error::TrySendError::Closed(_)) => (false, true),
-        },
+    let tx = subs
+        .lock()
+        .expect("subscribers lock is sound")
+        .get(&conn_id)
+        .map(|s| s.tx.clone());
+    let Some(tx) = tx else {
+        return false;
     };
-    if remove {
-        subs.remove(&conn_id);
+    let delivered = matches!(tokio::time::timeout(wait, tx.send(frame)).await, Ok(Ok(())));
+    if !delivered {
+        tracing::warn!(
+            conn = conn_id,
+            "owner of a directed feed did not read: the feed stops, the subscription stays"
+        );
     }
     delivered
 }
@@ -4701,7 +4697,7 @@ async fn handle_plugin_organize_plan(
 /// **if the actor could read it itself** (#239).
 ///
 /// A separate function with the permission as a predicate, for the same
-/// reason as `send_to_conn_impl`: the decision is testable without standing
+/// reason as `send_to_conn_waiting_impl`: the decision is testable without standing
 /// up a `Shared`, and what needs pinning down is that the parent goes
 /// through a gate — it used to go through none, and the handler's comment
 /// claimed the opposite.
@@ -5563,7 +5559,10 @@ async fn handle_fs_compare(
             let Ok(frame) = encode_frame(&notif) else {
                 continue;
             };
-            if !shared_pump.send_to_conn(conn_id, &Arc::from(frame.into_boxed_slice())) {
+            if !shared_pump
+                .send_to_conn_waiting(conn_id, Arc::from(frame.into_boxed_slice()))
+                .await
+            {
                 tracing::debug!(
                     conn = conn_id,
                     "compare.rows with no owner: stopping the walk"
@@ -5726,7 +5725,10 @@ async fn handle_sync_plan(
             let Ok(frame) = encode_frame(&notif) else {
                 break;
             };
-            if !shared_pump.send_to_conn(conn_id, &Arc::from(frame.into_boxed_slice())) {
+            if !shared_pump
+                .send_to_conn_waiting(conn_id, Arc::from(frame.into_boxed_slice()))
+                .await
+            {
                 tracing::debug!(
                     conn = conn_id,
                     method,
@@ -5925,14 +5927,15 @@ async fn handle_fs_search(
                 method: methods::SEARCH_HITS.into(),
                 params: serde_json::to_value(&hits).ok(),
             };
-            if let Ok(frame) = encode_frame(&notif) {
-                // The outcome is ignored ON PURPOSE: `fs.compare`'s pump does
-                // stop when the owner disappears, but changing that here
-                // would change a live search's behavior, which is not what
-                // this change came to touch. `fs.search` is also bounded by
-                // `max_hits`.
-                let _delivered =
-                    shared_pump.send_to_conn(conn_id, &Arc::from(frame.into_boxed_slice()));
+            if let Ok(frame) = encode_frame(&notif)
+                && !shared_pump
+                    .send_to_conn_waiting(conn_id, Arc::from(frame.into_boxed_slice()))
+                    .await
+            {
+                // No owner, or it stopped reading (#384): dropping the
+                // receiver ends the walk, instead of searching on and
+                // throwing every hit away.
+                break;
             }
         }
     });
@@ -6999,20 +7002,20 @@ mod tests {
         );
     }
 
-    /// `send_to_conn` is a DIRECTED send (a search's hits belong to whoever
-    /// launched it): only the destination connection receives it; an unknown
-    /// connection is a no-op; a connection whose receiver died is removed
-    /// from the map (same eviction criterion as the broadcast — no backlog
-    /// accumulation).
-    #[test]
-    fn send_to_conn_only_reaches_the_destination_and_evicts_the_dead() {
+    /// A DIRECTED send (a search's hits belong to whoever launched it): only
+    /// the destination connection receives it; an unknown connection or a
+    /// dead receiver is "not delivered", which stops the feed.
+    #[tokio::test]
+    async fn a_directed_send_only_reaches_the_destination() {
         use std::collections::HashMap;
         use std::sync::{Arc, Mutex};
+        use std::time::Duration;
 
         use tokio::sync::mpsc;
 
-        use super::{Subscriber, send_to_conn_impl};
+        use super::{Subscriber, send_to_conn_waiting_impl};
         use crate::journal::Actor;
+        let wait = Duration::from_millis(50);
 
         let subs = Mutex::new(HashMap::new());
         let (tx1, mut rx1) = mpsc::channel::<Arc<[u8]>>(4);
@@ -7036,44 +7039,37 @@ mod tests {
         let frame: Arc<[u8]> = Arc::from(vec![1u8, 2, 3].into_boxed_slice());
 
         // Only connection 1 receives.
-        send_to_conn_impl(&subs, 1, &frame);
+        assert!(send_to_conn_waiting_impl(&subs, 1, Arc::clone(&frame), wait).await);
         assert!(rx1.try_recv().is_ok(), "the destination receives");
         assert!(rx2.try_recv().is_err(), "the other one does NOT receive");
 
-        // Unknown connection: no-op, no panic, does not touch the map.
-        send_to_conn_impl(&subs, 99, &frame);
+        // Unknown connection: not delivered, the map untouched.
+        assert!(!send_to_conn_waiting_impl(&subs, 99, Arc::clone(&frame), wait).await);
         assert_eq!(subs.lock().expect("lock").len(), 2);
 
-        // Dead receiver: the connection is removed from the map.
+        // Dead receiver: not delivered.
         drop(rx1);
-        send_to_conn_impl(&subs, 1, &frame);
-        assert!(
-            !subs.lock().expect("lock").contains_key(&1),
-            "the connection with a closed receiver is removed"
-        );
-        assert!(
-            subs.lock().expect("lock").contains_key(&2),
-            "the live one stays"
-        );
+        assert!(!send_to_conn_waiting_impl(&subs, 1, frame, wait).await);
     }
 
-    /// #155: a FULL outbox costs the frame and NOT the subscription. Eviction
-    /// used to be irreversible — the entry is only inserted in `initialize`
-    /// — and took down with it the terminal `task.progress`, which is
-    /// exactly what `compare.rows`'s contract says to compare against
-    /// received rows to know whether they all arrived.
-    #[test]
-    fn a_full_outbox_costs_the_frame_not_the_subscription() {
+    /// #384 + #155: a FULL outbox makes the feed WAIT — what the client
+    /// drains, it gets — and only an owner that reads nothing for the whole
+    /// wait stops the feed. Never at the cost of the subscription, which
+    /// carries the terminal `task.progress` the client checks its rows
+    /// against.
+    #[tokio::test(start_paused = true)]
+    async fn a_full_outbox_makes_the_feed_wait_not_lose() {
         use std::collections::HashMap;
         use std::sync::{Arc, Mutex};
+        use std::time::Duration;
 
         use tokio::sync::mpsc;
 
-        use super::{Subscriber, send_to_conn_impl};
+        use super::{Subscriber, send_to_conn_waiting_impl};
         use crate::journal::Actor;
 
-        let subs = Mutex::new(HashMap::new());
-        let (tx, _rx) = mpsc::channel::<Arc<[u8]>>(1);
+        let subs = Arc::new(Mutex::new(HashMap::new()));
+        let (tx, mut rx) = mpsc::channel::<Arc<[u8]>>(1);
         subs.lock().expect("lock").insert(
             1u64,
             Subscriber {
@@ -7083,12 +7079,22 @@ mod tests {
             },
         );
         let frame: Arc<[u8]> = Arc::from(vec![1u8].into_boxed_slice());
+        let wait = Duration::from_secs(30);
 
-        assert!(send_to_conn_impl(&subs, 1, &frame), "the first one fits");
+        assert!(send_to_conn_waiting_impl(&subs, 1, Arc::clone(&frame), wait).await);
+        // Full: a reader that drains after 5 s still gets the second frame.
+        let drain = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            rx.recv().await;
+            rx
+        });
         assert!(
-            !send_to_conn_impl(&subs, 1, &frame),
-            "the second does not fit: not delivered"
+            send_to_conn_waiting_impl(&subs, 1, Arc::clone(&frame), wait).await,
+            "it waited instead of losing the frame"
         );
+        let _rx = drain.await.expect("drainer");
+        // Full again and nobody reads: given up after the wait.
+        assert!(!send_to_conn_waiting_impl(&subs, 1, frame, wait).await);
         assert!(
             subs.lock().expect("lock").contains_key(&1),
             "and still subscribed: without this it also loses its terminal"
