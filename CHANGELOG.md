@@ -14,7 +14,8 @@ independently through `PROTOCOL_VERSION`.
   storage send four parts at a time; a slow plugin thumbnail or preview
   can be withdrawn and no longer holds up the next listing; the daemon no
   longer wakes four times a second when it has no idle timeout; and
-  `norte` opens its search index only for `norte index` commands.
+  `norte` opens its search index only for `norte index` commands. A
+  semantic search no longer loads every stored vector into memory.
 
 ### Security
 

@@ -600,6 +600,9 @@ impl Index {
     /// from ALL roots if `root` is `None`. Rows with a corrupt BLOB or an
     /// inconsistent `dim` are SKIPPED (they never break the search).
     ///
+    /// Loads them all; a search goes through [`Self::for_each_embedding`],
+    /// which does not.
+    ///
     /// # Errors
     /// [`IndexError::Sqlite`].
     pub async fn embeddings_for_root(
@@ -607,7 +610,26 @@ impl Index {
         root: Option<&VPath>,
         model: &str,
     ) -> Result<Vec<(VPath, Vec<f32>)>, IndexError> {
-        let rows = if let Some(root) = root {
+        let mut out = Vec::new();
+        self.for_each_embedding(root, model, |path, v| out.push((path, v)))
+            .await?;
+        Ok(out)
+    }
+
+    /// Like [`Self::embeddings_for_root`], one row at a time and without
+    /// holding them (#408): a million files of 384 floats were 1.5 GB of
+    /// vectors in memory for a search that keeps the best k.
+    ///
+    /// # Errors
+    /// [`IndexError::Sqlite`].
+    pub async fn for_each_embedding(
+        &self,
+        root: Option<&VPath>,
+        model: &str,
+        mut each: impl FnMut(VPath, Vec<f32>),
+    ) -> Result<(), IndexError> {
+        use futures::TryStreamExt as _;
+        let query = if let Some(root) = root {
             sqlx::query(
                 "SELECT e.file_id AS file_id, f.path AS path, e.dim AS dim, e.vec AS vec
                  FROM embeddings e
@@ -616,8 +638,6 @@ impl Index {
             )
             .bind(root_id(root))
             .bind(model)
-            .fetch_all(&self.pool)
-            .await?
         } else {
             sqlx::query(
                 "SELECT e.file_id AS file_id, f.path AS path, e.dim AS dim, e.vec AS vec
@@ -626,34 +646,38 @@ impl Index {
                  WHERE e.model = ?1",
             )
             .bind(model)
-            .fetch_all(&self.pool)
-            .await?
         };
-        Ok(rows
-            .into_iter()
-            .filter_map(|r| {
-                // Unreadable path ⇒ skipped, but with a TRACE (encoding
-                // audit M4-IA-2 S3): without the warn, an orphaned
-                // embedding disappears from every semantic search without
-                // anything saying so. The `file_id` and the TEXT's length
-                // are logged, never the path's bytes (spec §6: not dumped
-                // raw to a log).
-                let file_id: i64 = r.get("file_id");
-                let raw: String = r.get("path");
-                let Ok(path) = VPath::parse(&raw) else {
-                    tracing::warn!(
-                        file_id,
-                        path_len = raw.len(),
-                        "embedding with unreadable path: skipped in search"
-                    );
-                    return None;
-                };
-                let v = decode_vec(&r.get::<Vec<u8>, _>("vec"))?;
-                // dim⟷blob consistency: a corrupt row is skipped, no panic.
-                (i64::try_from(v.len()) == Ok(r.get::<i64, _>("dim"))).then_some((path, v))
-            })
-            .collect())
+        let mut rows = query.fetch(&self.pool);
+        while let Some(r) = rows.try_next().await? {
+            if let Some((path, v)) = embedding_row(&r) {
+                each(path, v);
+            }
+        }
+        Ok(())
     }
+}
+
+/// One `(path, vector)` from an embeddings row, or `None` for a row that
+/// cannot be used.
+fn embedding_row(r: &sqlx::sqlite::SqliteRow) -> Option<(VPath, Vec<f32>)> {
+    // Unreadable path ⇒ skipped, but with a TRACE (encoding audit M4-IA-2
+    // S3): without the warn, an orphaned embedding disappears from every
+    // semantic search without anything saying so. The `file_id` and the
+    // TEXT's length are logged, never the path's bytes (spec §6: not dumped
+    // raw to a log).
+    let file_id: i64 = r.get("file_id");
+    let raw: String = r.get("path");
+    let Ok(path) = VPath::parse(&raw) else {
+        tracing::warn!(
+            file_id,
+            path_len = raw.len(),
+            "embedding with unreadable path: skipped in search"
+        );
+        return None;
+    };
+    let v = decode_vec(&r.get::<Vec<u8>, _>("vec"))?;
+    // dim⟷blob consistency: a corrupt row is skipped, no panic.
+    (i64::try_from(v.len()) == Ok(r.get::<i64, _>("dim"))).then_some((path, v))
 }
 
 /// A `files` row that is a candidate for embedding (`kind = file`).
