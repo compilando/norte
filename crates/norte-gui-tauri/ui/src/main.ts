@@ -199,15 +199,36 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
     if (pending !== null) {
       const { at, what } = pending;
       pending = null;
-      requestAnimationFrame(() => {
-        const dt = performance.now() - at;
-        if (what === "key") {
-          metrics.keyToPaint.push(dt);
-        } else {
-          metrics.scrollToPaint.push(dt);
-        }
-      });
+      // Only a measuring pass keeps samples: outside it the arrays grew by
+      // one per key for the whole session (#400).
+      if (!catalog.measure) {
+        return;
+      }
+      // Sampled here, not in another frame: this paint already runs inside
+      // the animation frame that shows it, and one more `requestAnimationFrame`
+      // would add a whole frame to every sample.
+      const dt = performance.now() - at;
+      if (what === "key") {
+        metrics.keyToPaint.push(dt);
+      } else {
+        metrics.scrollToPaint.push(dt);
+      }
     }
+  };
+
+  // Updates are applied as they arrive and painted once per frame (#400): a
+  // scroll, a copy's progress and a listing's batches can land several
+  // times inside one frame, and each paint rebuilt the whole screen.
+  let frameQueued = false;
+  const repaintNextFrame = (): void => {
+    if (frameQueued) {
+      return;
+    }
+    frameQueued = true;
+    requestAnimationFrame(() => {
+      frameQueued = false;
+      repaint();
+    });
   };
 
   const resync = (): void => {
@@ -220,7 +241,7 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
     const out = session.receive(env);
     switch (out.kind) {
       case "applied":
-        repaint();
+        repaintNextFrame();
         return;
       case "gap":
         // What was missing is NEVER guessed: the whole frame is requested.

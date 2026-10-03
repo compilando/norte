@@ -27,8 +27,11 @@ pub struct FrameOversized;
 #[derive(Debug, Default)]
 pub struct FrameDecoder {
     buf: Vec<u8>,
+    /// Where the next frame starts: frames are read in place and `buf` is
+    /// compacted once per push, not once per frame (#391).
+    start: usize,
     /// From where we have not seen a `\n` yet (avoids rescanning on every
-    /// push).
+    /// push). Never below `start`.
     scanned: usize,
     /// `\n`s received and not yet drained: the oversized check is O(1) per
     /// push (no rescanning the whole buffer — a security-reviewer finding).
@@ -49,6 +52,11 @@ impl FrameDecoder {
     /// [`MAX_FRAME_BYTES`] without closing — the caller must cut the
     /// connection.
     pub fn push(&mut self, bytes: &[u8]) -> Result<(), FrameOversized> {
+        if self.start > 0 {
+            self.buf.drain(..self.start);
+            self.scanned -= self.start;
+            self.start = 0;
+        }
         self.pending_newlines += bytes
             .iter()
             .fold(0usize, |acc, &b| acc + usize::from(b == b'\n'));
@@ -72,20 +80,20 @@ impl FrameDecoder {
                 self.scanned = self.buf.len();
                 return None;
             };
-            let mut frame: Vec<u8> = self.buf.drain(..=nl).collect();
-            self.scanned = 0;
+            let mut line = &self.buf[self.start..nl];
+            self.start = nl + 1;
+            self.scanned = self.start;
             self.pending_newlines = self.pending_newlines.saturating_sub(1);
-            frame.pop(); // the `\n`
             // Trims ALL trailing `\r`s, not just one: a peer emitting
             // `\r\r\n` (or repeated CRLF) must not leave a dangling `\r` that
             // breaks the JSON parse (a framing fuzz finding).
-            while frame.last() == Some(&b'\r') {
-                frame.pop();
+            while let Some((&b'\r', rest)) = line.split_last() {
+                line = rest;
             }
-            if frame.is_empty() {
+            if line.is_empty() {
                 continue; // empty line = keepalive, dropped
             }
-            return Some(frame);
+            return Some(line.to_vec());
         }
     }
 }

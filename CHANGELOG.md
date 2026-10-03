@@ -49,6 +49,26 @@ independently through `PROTOCOL_VERSION`.
   does not answer** (#388), and an AI host that swallows packets now ends
   in an error (10 s to connect, 5 min without a byte) instead of hanging.
 
+### Performance
+
+- **Content search with a regular expression is many times faster on
+  files with many lines** (#391); every line used to move the rest of
+  the read buffer.
+- **Undo stays fast on a long history** (#396). The journal gets indexes
+  for what undo filters by; existing journals gain them on first open,
+  without touching any row. On a very large journal that first open takes
+  a moment longer, once.
+- **Plugins are compiled less often** (#399). Reconnecting to an FTP
+  server, or to any server a provider plugin serves, no longer compiles
+  the plugin again; and using more than sixteen plugins drops the least
+  recently used one instead of recompiling all of them.
+- **The window paints at most once per frame** (#400). Scrolling, a
+  copy's progress and a big folder filling in each repainted the whole
+  screen, sometimes several times per frame.
+- **Moving through files with the docked preview open stops the previous
+  read** (#402), in the terminal and in the window. Holding an arrow over
+  a remote folder used to start one read per row and finish them all.
+
 ### Security
 
 - **wasmtime 48.0.5** for RUSTSEC-2026-0321 to 0327: among them a plugin

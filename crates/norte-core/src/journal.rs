@@ -44,6 +44,15 @@ CREATE TABLE IF NOT EXISTS journal (
     entry_hash   BLOB    NOT NULL
 );";
 
+/// What undo and the timeline filter by (#396): the actor, the entry a
+/// compensation points at, the batch. Partial where the column is mostly
+/// `NULL`. Indexes are outside the hash chain: adding them to an existing
+/// journal changes no row.
+const INDEXES: &str = "\
+CREATE INDEX IF NOT EXISTS journal_by_actor ON journal (actor_kind, actor_id, seq);
+CREATE INDEX IF NOT EXISTS journal_by_undoes ON journal (undoes_seq) WHERE undoes_seq IS NOT NULL;
+CREATE INDEX IF NOT EXISTS journal_by_batch ON journal (batch_id) WHERE batch_id IS NOT NULL;";
+
 /// Migration for the batch column (batch rename, §17). Deliberately kept
 /// outside `SCHEMA`: `CREATE TABLE IF NOT EXISTS` does NOT alter a table that
 /// already exists, so a DB written before this version would end up without
@@ -1173,6 +1182,8 @@ impl Journal {
                 ));
             }
         }
+        // After the migrations: `batch_id` has to exist to be indexed.
+        sqlx::raw_sql(INDEXES).execute(&pool).await?;
         Self::stamp_format_if_new(&pool).await?;
         Self::warn_if_format_unknown(&pool).await?;
         // WITHOUT a `seq` filter ON PURPOSE (and it is not an oversight that
@@ -2210,6 +2221,22 @@ impl crate::observer::MutationObserver for SqliteJournal {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #396: undo and the timeline filter by actor, by compensation and by
+    /// batch; without these indexes every page or undo was a full scan of a
+    /// table that gets one row per file touched, forever.
+    #[tokio::test]
+    async fn the_journal_is_indexed_by_what_it_is_queried_by() {
+        let j = Journal::open_in_memory().await.expect("open");
+        let names: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type = 'index'")
+                .fetch_all(&j.pool)
+                .await
+                .expect("catalog");
+        for want in ["journal_by_actor", "journal_by_undoes", "journal_by_batch"] {
+            assert!(names.iter().any(|n| n == want), "{want} missing: {names:?}");
+        }
+    }
 
     /// ADR 0100: every committed row is offered to the hooks endpoint, with
     /// what the row says — and only after the insert, with its `seq`.

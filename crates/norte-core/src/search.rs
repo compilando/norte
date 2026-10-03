@@ -423,6 +423,9 @@ impl ContentRegex {
 /// non-empty batch is sent once this interval passes even if it has not
 /// filled the batch, so the virtual pane "drips" results live.
 const FLUSH_INTERVAL: Duration = Duration::from_millis(100);
+
+/// How often the walk refreshes `TaskProgress::current` (#391).
+const CURRENT_EVERY: Duration = Duration::from_millis(100);
 /// Cap on a match's `preview` character count (server-side trimming).
 const PREVIEW_MAX_CHARS: usize = 160;
 /// RAM budget per line on the decode path (`scan_decode_lines`): a line
@@ -825,6 +828,10 @@ pub async fn run_walk(
     let content_search = matchers.searches_content();
     let mut batch = Batch::new(task_id, content_search);
     let mut last_flush = Instant::now();
+    // In the past, so the first entry is shown.
+    let mut last_current = Instant::now()
+        .checked_sub(CURRENT_EVERY)
+        .unwrap_or_else(Instant::now);
     let mut hits: usize = 0;
 
     let mut queue: VecDeque<VPath> = VecDeque::new();
@@ -888,9 +895,18 @@ pub async fn run_walk(
                 ctx.progress.update(|p| p.entries_done += 1);
                 continue;
             }
+            // `current` is only shown, and progress is published coalesced:
+            // cloning the path for every entry was an allocation per entry
+            // for frames nobody sees (#391).
+            let show = last_current.elapsed() >= CURRENT_EVERY;
+            if show {
+                last_current = Instant::now();
+            }
             ctx.progress.update(|p| {
                 p.entries_done += 1;
-                p.current = Some(entry.path.clone());
+                if show {
+                    p.current = Some(entry.path.clone());
+                }
             });
 
             // Descent: dirs yes; symlinks NO (name candidate, not followed).
@@ -1031,12 +1047,19 @@ async fn scan_bytes(
     let mut tail: Vec<u8> = Vec::new();
     // Count of `\n` in bytes that have ALREADY left `tail` (committed front of the file).
     let mut committed_nl: u64 = 0;
-    let mut chunk = Some(first);
+    let mut chunk = Some(bytes::Bytes::from(first));
+    // Built once per file, not once per chunk (#391).
+    let finders: Vec<memchr::memmem::Finder<'_>> = needle
+        .needles()
+        .iter()
+        .map(|(_, n)| memchr::memmem::Finder::new(n))
+        .collect();
+    let keep = needle.max_len().saturating_sub(1);
     loop {
         let c = match chunk.take() {
             Some(c) => c,
             None => match stream.next().await {
-                Some(Ok(c)) => c.to_vec(),
+                Some(Ok(c)) => c,
                 Some(Err(e)) => return Err(e),
                 None => break,
             },
@@ -1044,16 +1067,11 @@ async fn scan_bytes(
         if cancel.is_cancelled() {
             return Err(Error::Cancelled);
         }
-        // buf = previous_tail ++ chunk (the match, if it falls, is here).
-        let mut buf = std::mem::take(&mut tail);
-        buf.extend_from_slice(&c);
-        let mut hit: Option<usize> = None;
-        for (_e, n) in needle.needles() {
-            if let Some(pos) = memchr::memmem::find(&buf, n) {
-                hit = Some(hit.map_or(pos, |h: usize| h.min(pos)));
-            }
-        }
-        if let Some(pos) = hit {
+        // Positions are in `tail ++ c`, which is only materialised on a hit
+        // (#391: copying every chunk into it doubled the bytes touched).
+        if let Some(pos) = first_hit(&finders, &tail, &c, keep) {
+            let mut buf = std::mem::take(&mut tail);
+            buf.extend_from_slice(&c);
             let line = committed_nl + count_nl(&buf[..pos]) + 1;
             let preview = extract_line_preview(&buf, pos, enc);
             return Ok(Some(MatchInfo {
@@ -1062,12 +1080,48 @@ async fn scan_bytes(
             }));
         }
         // Retains the last `max_len-1` bytes (overlap); the rest is committed.
-        let keep = needle.max_len().saturating_sub(1).min(buf.len());
-        let split = buf.len() - keep;
-        committed_nl += count_nl(&buf[..split]);
-        tail = buf[split..].to_vec();
+        let total = tail.len() + c.len();
+        let split = total - keep.min(total);
+        if split >= tail.len() {
+            committed_nl += count_nl(&tail) + count_nl(&c[..split - tail.len()]);
+            tail = c[split - tail.len()..].to_vec();
+        } else {
+            committed_nl += count_nl(&tail[..split]);
+            tail.drain(..split);
+            tail.extend_from_slice(&c);
+        }
     }
     Ok(None)
+}
+
+/// The earliest match of any finder in `tail ++ chunk`, as a position in
+/// that concatenation, without building it. `tail` was already searched and
+/// holds no whole match, so one starting in it straddles into the first
+/// `keep` bytes of `chunk`; one starting in `chunk` is found in `chunk`.
+fn first_hit(
+    finders: &[memchr::memmem::Finder<'_>],
+    tail: &[u8],
+    chunk: &[u8],
+    keep: usize,
+) -> Option<usize> {
+    if !tail.is_empty() {
+        let mut edge = tail.to_vec();
+        edge.extend_from_slice(&chunk[..keep.min(chunk.len())]);
+        // A straddling match starts before any match inside `chunk`.
+        if let Some(pos) = finders
+            .iter()
+            .filter_map(|f| f.find(&edge))
+            .filter(|&p| p < tail.len())
+            .min()
+        {
+            return Some(pos);
+        }
+    }
+    finders
+        .iter()
+        .filter_map(|f| f.find(chunk))
+        .min()
+        .map(|p| tail.len() + p)
 }
 
 /// Scan over DECODED lines with a STATEFUL decoder: splits on `'\n'` in the
@@ -1093,14 +1147,14 @@ async fn scan_decode_lines(
     let mut line_no: u64 = 0;
     // `true` while discarding bytes of a line already truncated/evaluated.
     let mut skipping = false;
-    let mut chunk = Some(first);
+    let mut chunk = Some(bytes::Bytes::from(first));
     loop {
         let (bytes, last) = match chunk.take() {
             Some(c) => (c, false),
             None => match stream.next().await {
-                Some(Ok(c)) => (c.to_vec(), false),
+                Some(Ok(c)) => (c, false),
                 Some(Err(e)) => return Err(e),
-                None => (Vec::new(), true),
+                None => (bytes::Bytes::new(), true),
             },
         };
         if cancel.is_cancelled() {
@@ -1108,16 +1162,21 @@ async fn scan_decode_lines(
         }
         decoder.feed(&bytes, last, &mut pending);
 
-        // Complete lines (by the '\n' in the decoded text).
-        while let Some(nl) = pending.find('\n') {
-            let line: String = pending.drain(..=nl).collect();
+        // Complete lines (by the '\n' in the decoded text), borrowed in
+        // place: draining each one off the front moved the whole rest of
+        // the chunk per line (#391).
+        let mut start = 0;
+        while let Some(rel) = pending[start..].find('\n') {
+            let nl = start + rel;
+            let line = &pending[start..=nl];
+            start = nl + 1;
             line_no += 1;
             if skipping {
                 // The giant line was already evaluated truncated: just counted.
                 skipping = false;
                 continue;
             }
-            let l = strip_eol(&line);
+            let l = strip_eol(line);
             if matches(l) {
                 return Ok(Some(MatchInfo {
                     line: Some(line_no),
@@ -1125,6 +1184,7 @@ async fn scan_decode_lines(
                 }));
             }
         }
+        pending.drain(..start);
 
         // Line without '\n' that exceeds the cap: evaluate it truncated and
         // discard the rest up to the next '\n' (RAM cap).
@@ -1775,5 +1835,80 @@ mod tests {
         let utf16_bom = b"\xFF\xFE\x61\x00\xF1\x00\x6F\x00";
         let n = ContentNeedle::literal("año", false);
         assert!(n.find_in(&mut Overlap::default(), utf16_bom).is_none());
+    }
+
+    /// `scan_bytes` over `content` cut at `cuts`.
+    fn scan_cut(needle: &ContentNeedle, content: &[u8], cuts: &[usize]) -> Option<MatchInfo> {
+        let mut bounds: Vec<usize> = cuts.iter().map(|c| c % (content.len() + 1)).collect();
+        bounds.push(0);
+        bounds.push(content.len());
+        // Repeated cuts are kept: they make empty chunks mid-stream.
+        bounds.sort_unstable();
+        let mut chunks: Vec<Vec<u8>> = bounds
+            .windows(2)
+            .map(|w| content[w[0]..w[1]].to_vec())
+            .collect();
+        let first = if chunks.is_empty() {
+            Vec::new()
+        } else {
+            chunks.remove(0)
+        };
+        let rest: Vec<Result<bytes::Bytes, Error>> = chunks
+            .into_iter()
+            .map(|c| Ok(bytes::Bytes::from(c)))
+            .collect();
+        let stream: ByteStream = futures::stream::iter(rest).boxed();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("runtime");
+        rt.block_on(scan_bytes(
+            needle,
+            norte_encoding::UTF_8,
+            first,
+            stream,
+            &CancellationToken::new(),
+        ))
+        .expect("scan")
+    }
+
+    /// #391: a needle longer than every chunk straddles three or more of
+    /// them, and the seam buffer still finds it on the right line.
+    #[test]
+    fn scan_bytes_finds_a_needle_cut_byte_by_byte() {
+        let needle = ContentNeedle::literal("año", false);
+        let content = "x\nxañox".as_bytes();
+        let cuts: Vec<usize> = (1..content.len()).collect();
+        let hit = scan_cut(&needle, content, &cuts).expect("found across the seams");
+        assert_eq!(hit.line, Some(2));
+    }
+
+    proptest::proptest! {
+        /// #391: matching each chunk in place (plus the seam) finds the same
+        /// match line as one pass over the whole file, wherever the chunks
+        /// are cut — needles of several lengths (the encodings of a
+        /// case-insensitive literal) included. The preview is not compared:
+        /// its leading context has always stopped at the previous chunk.
+        #[test]
+        fn scan_bytes_does_not_depend_on_where_chunks_are_cut(
+            parts in proptest::collection::vec(
+                proptest::prop_oneof![
+                    proptest::strategy::Just(b"a".to_vec()),
+                    proptest::strategy::Just(b"\n".to_vec()),
+                    proptest::strategy::Just("añ".as_bytes().to_vec()),
+                    proptest::strategy::Just("AÑO".as_bytes().to_vec()),
+                    proptest::strategy::Just(b"a\xF1o".to_vec()),
+                    proptest::strategy::Just(b"a\x00\xF1\x00o\x00".to_vec()),
+                    proptest::strategy::Just(b"o".to_vec()),
+                ],
+                0..40,
+            ),
+            cuts in proptest::collection::vec(0usize..400, 0..12),
+        ) {
+            let content: Vec<u8> = parts.concat();
+            let needle = ContentNeedle::literal("año", false);
+            let whole = scan_cut(&needle, &content, &[]).map(|m| m.line);
+            let cut = scan_cut(&needle, &content, &cuts).map(|m| m.line);
+            proptest::prop_assert_eq!(cut, whole);
+        }
     }
 }
