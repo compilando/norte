@@ -268,6 +268,8 @@ pub async fn run(
     // and not the 100 ms one because they are two different rhythms: the
     // tasks panel watches an in-memory `watch` and this ends up in a file.
     let mut session_tick = tokio::time::interval(std::time::Duration::from_secs(1));
+    // A handle of its own: the `select!` future must not borrow `app`.
+    let term_wake = std::sync::Arc::clone(&app.term_wake);
     session_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut session_push = SessionPush::start(backend, app.session.revision);
     // Hot-reload debounce WITHOUT blocking the loop (phase 6 review): every
@@ -657,6 +659,11 @@ pub async fn run(
         }
         turn::spawn_probes(app, backend, &mut work);
         tokio::select! {
+            // The terminal panel's shell wrote (#405): this turn draws, so
+            // the echo shows now and not on the next tick.
+            () = term_wake.notified() => {
+                app.needs_frame = true;
+            }
             _ = session_tick.tick() => {
                 // One more second for the bar's notice (spec 2026-09-10).
                 app.tick_notices();

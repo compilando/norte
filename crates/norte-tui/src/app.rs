@@ -837,6 +837,10 @@ pub struct App {
     /// What kills it is closing the slot (`layout.close-slot`) or quitting
     /// norte.
     pub terminal: Option<crate::termpanel::TermPanel>,
+    /// Rung by the terminal panel's reader thread when its shell writes
+    /// (#405): the loop paints the echo at once, and a quiet terminal no
+    /// longer keeps the 100 ms tick drawing.
+    pub term_wake: std::sync::Arc<tokio::sync::Notify>,
     /// The log panel's state: which level is shown and what is filtered.
     pub log_panel: norte_frontend::logpanel::LogPanel,
     /// The log's text filter WHILE it is being typed.
@@ -1356,6 +1360,7 @@ impl App {
             // going to use is a process, a pty and someone's `.bashrc`
             // running just in case.
             terminal: None,
+            term_wake: std::sync::Arc::new(tokio::sync::Notify::new()),
             log_panel: norte_frontend::logpanel::LogPanel::default(),
             log_filter_input: None,
             log_ring: None,
@@ -1692,10 +1697,12 @@ impl App {
 
     /// Whether a 100 ms tick can leave the screen as it is (#405): nothing
     /// on it moves with the clock at that pace. Tasks (their rows and the
-    /// light bar animate), a terminal or log panel (they stream), a plugin
+    /// light bar animate), a log panel (it streams), a plugin
     /// panel, the splash (it expires by the paint clock) and a wait in
-    /// progress (its spinner) all say no. Notices and relative dates move by
-    /// the second, and the one-second tick always repaints.
+    /// progress (its spinner) all say no. A terminal panel does not: its
+    /// shell's output wakes the loop itself ([`App::term_wake`]). Notices
+    /// and relative dates move by the second, and the one-second tick
+    /// always repaints.
     ///
     /// Conservative on purpose: a frame skipped wrongly is a frozen screen,
     /// one drawn needlessly is only CPU.
@@ -1703,7 +1710,6 @@ impl App {
     pub fn quiet_for_a_tick(&self) -> bool {
         !self.needs_frame
             && self.board.rows().is_empty()
-            && self.terminal_slot().is_none()
             && self.log_slot_visible().is_none()
             && self.panel_slot().is_none()
             && self.splash.is_none()

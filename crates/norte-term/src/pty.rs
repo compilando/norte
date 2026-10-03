@@ -89,7 +89,13 @@ struct Mailbox {
     pending: Vec<u8>,
     /// The pty closed: the shell is gone.
     closed: bool,
+    /// Called by the reader thread after it leaves something here.
+    waker: Option<Waker>,
 }
+
+/// How the reader thread tells whoever repaints that there is output, so a
+/// frontend can paint the echo at once instead of on its next tick.
+pub type Waker = Arc<dyn Fn() + Send + Sync>;
 
 /// How something is sent to the pty.
 ///
@@ -211,6 +217,21 @@ impl Shell {
         true
     }
 
+    /// Asks the reader thread to call `waker` whenever it leaves output, or
+    /// sees the shell close. If something is already waiting, it is called
+    /// now: output read before this would otherwise wait for a tick.
+    pub fn set_waker(&self, waker: Waker) {
+        let pending = {
+            let mut b = mailbox_of(&self.mailbox);
+            let pending = !b.pending.is_empty() || b.closed;
+            b.waker = Some(waker);
+            pending.then(|| b.waker.clone()).flatten()
+        };
+        if let Some(wake) = pending {
+            wake();
+        }
+    }
+
     /// Sends bytes to the shell, NEVER blocking the caller.
     ///
     /// It is the difference that matters: writing to a pty blocks if the
@@ -317,7 +338,14 @@ fn launch_reader(
         loop {
             match reader.read(&mut buf) {
                 Ok(0) | Err(_) => {
-                    mailbox_of(&mailbox).closed = true;
+                    let waker = {
+                        let mut b = mailbox_of(&mailbox);
+                        b.closed = true;
+                        b.waker.clone()
+                    };
+                    if let Some(wake) = waker {
+                        wake();
+                    }
                     return;
                 }
                 Ok(n) => {
@@ -345,8 +373,52 @@ fn launch_reader(
                         let extra = b.pending.len() - BUFFER_MAX;
                         b.pending.drain(..extra);
                     }
+                    // Outside the lock: the waker is the frontend's code.
+                    let waker = b.waker.clone();
+                    drop(b);
+                    if let Some(wake) = waker {
+                        wake();
+                    }
                 }
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use super::{Shell, Startup};
+
+    /// #405: the reader thread wakes whoever repaints when the shell
+    /// writes, so its echo does not wait for a tick.
+    #[test]
+    fn output_calls_the_waker() {
+        let dir = std::env::temp_dir();
+        let mut sh = Shell::open(
+            &Startup {
+                program: std::path::Path::new("/bin/sh"),
+                dir: &dir,
+                tam: (40, 5),
+                env: &[],
+            },
+            |_| None,
+        )
+        .expect("a shell");
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        let tx = std::sync::Mutex::new(tx);
+        sh.set_waker(Arc::new(move || {
+            let _ = tx.lock().expect("sender").send(());
+        }));
+        // Whatever the prompt left may already have woken it: drain that.
+        while rx.try_recv().is_ok() {}
+        let _ = sh.pump();
+        sh.write(b"echo hi\n");
+        rx.recv_timeout(Duration::from_secs(10))
+            .expect("the shell's output woke the waker");
+        assert!(sh.pump(), "and there is output to feed");
+        sh.matar();
+    }
 }
