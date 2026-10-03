@@ -7,6 +7,13 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Performance
+
+- **Marked files no longer cost CPU while nothing happens** (#404). With
+  one file marked in a folder of 100 000, the terminal and the window
+  re-added every marked size several times per frame; the totals are now
+  worked out once per change.
+
 ### Security
 
 - **wasmtime 48.0.5** for RUSTSEC-2026-0321 to 0327: among them a plugin

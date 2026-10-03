@@ -184,6 +184,9 @@ enum ParentRow {
     Present,
 }
 
+/// `((listing_epoch, totals_gen), (marked_bytes, marked_dirs))`.
+type TotalsMemo = ((u64, u64), (u64, usize));
+
 /// Non-render state of a pane: directory, entries (normalised internally —
 /// no longer requires a pre-sorted caller, see [`PaneState::new`]), cursor
 /// and quick search.
@@ -263,6 +266,12 @@ pub struct PaneState {
     /// back to the CURSOR entry once the set empties — a silent prune would
     /// retarget the next bulk operation onto something nobody marked.
     pruned_marks: usize,
+    /// Bumped when the marks or an entry's size change; with
+    /// `listing_epoch` it keys [`Self::marked_bytes`]'s memo (#404).
+    totals_gen: u64,
+    /// The last `(key, (marked_bytes, marked_dirs))`. A `Mutex` and not a
+    /// `Cell` so the pane stays `Sync`.
+    totals_memo: std::sync::Mutex<Option<TotalsMemo>>,
     /// Reinterpretation of non-UTF8 NAMES for display (#57, spec §6.1):
     /// `Some(enc)` = "see names as enc" — display ONLY, the bytes are never
     /// mutated (rule 1). Shared by the frontends (#98/m2): the quick search
@@ -388,6 +397,8 @@ impl PaneState {
             sweep_extent: None,
             listing_epoch: 0,
             pruned_marks: 0,
+            totals_gen: 0,
+            totals_memo: std::sync::Mutex::new(None),
             name_encoding: None,
             name_encoding_entry: 0,
             skipped: None,
@@ -1401,6 +1412,7 @@ impl PaneState {
         if let Some(e) = self.entries.iter_mut().find(|e| &e.path == path) {
             e.size = size.or(e.size);
             e.mtime_ms = mtime_ms.or(e.mtime_ms);
+            self.totals_moved();
         }
     }
 }

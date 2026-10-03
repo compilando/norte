@@ -2204,6 +2204,49 @@ fn marked_bytes_counts_only_what_is_marked() {
     );
 }
 
+/// #404: the totals are remembered between asks, and every change that
+/// moves them has to be seen — a stale total in the status bar is a lie
+/// about what the next copy will move.
+#[test]
+fn the_remembered_totals_follow_every_change() {
+    let mut a = e("mem:///a", EntryKind::File);
+    a.size = Some(10);
+    let mut b = e("mem:///b", EntryKind::File);
+    b.size = Some(32);
+    let d = e("mem:///d", EntryKind::Dir);
+    let mut p = PaneState::new(VPath::parse("mem:///").unwrap(), vec![a, b, d]);
+    let at_a = p
+        .entries()
+        .iter()
+        .position(|x| x.path == VPath::parse("mem:///a").unwrap())
+        .expect("a is listed");
+    p.set_cursor(at_a);
+    p.toggle_mark(); // a
+    assert_eq!((p.marked_bytes(), p.marked_dirs()), (10, 0));
+    assert_eq!(p.marked_bytes(), 10, "asked again, same answer");
+
+    p.hydrate(&VPath::parse("mem:///a").unwrap(), Some(11), None);
+    assert_eq!(p.marked_bytes(), 11, "a size that arrives later");
+
+    p.mark_all();
+    assert_eq!((p.marked_bytes(), p.marked_dirs()), (43, 1));
+
+    p.clear_marks();
+    assert_eq!((p.marked_bytes(), p.marked_dirs()), (0, 0));
+
+    p.restore_previous_marks();
+    assert_eq!((p.marked_bytes(), p.marked_dirs()), (43, 1), "mark.restore");
+
+    let mut only_b = e("mem:///b", EntryKind::File);
+    only_b.size = Some(32);
+    p.refill(vec![only_b]);
+    assert_eq!(
+        (p.marked_bytes(), p.marked_dirs()),
+        (32, 0),
+        "a refill prunes the marks of what left"
+    );
+}
+
 #[test]
 fn marked_bytes_saturates_instead_of_overflowing() {
     let mut a = e("mem:///a", EntryKind::File);
