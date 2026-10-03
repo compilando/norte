@@ -61,6 +61,12 @@ pub(crate) struct ProviderReader {
     /// sequential read, the only kind worth an open-ended stream (a
     /// random one would read ahead for nothing).
     last_end: Option<u64>,
+    /// How far a forward seek is read through instead of reopened:
+    /// [`SKIP_BY_READING`] when the container is itself an archive's entry
+    /// (reopening decompresses from its start), 0 for a plain file, where a
+    /// seek is cheap and reading through a tar's data to its next header
+    /// would read the whole archive.
+    skip_by_reading: u64,
     /// Reads opened on the inner provider, for the tests.
     #[cfg(test)]
     opens: usize,
@@ -85,6 +91,11 @@ impl ProviderReader {
         path: VPath,
         len: u64,
     ) -> Self {
+        let skip_by_reading = if norte_proto::scheme_archive_format(path.scheme()).is_some() {
+            SKIP_BY_READING
+        } else {
+            0
+        };
         Self {
             handle,
             inner,
@@ -95,6 +106,7 @@ impl ProviderReader {
             stream: None,
             carry: Vec::new(),
             last_end: None,
+            skip_by_reading,
             #[cfg(test)]
             opens: 0,
         }
@@ -106,8 +118,8 @@ impl ProviderReader {
         // The open stream serves this block if it is at it, or a little
         // behind it (a short forward seek): the gap is read and dropped.
         let stream_at = self.stream.as_ref().map(|(next, _)| *next);
-        let reuse =
-            stream_at.is_some_and(|next| next <= block_off && block_off - next <= SKIP_BY_READING);
+        let reuse = stream_at
+            .is_some_and(|next| next <= block_off && block_off - next <= self.skip_by_reading);
         let sequential = self.last_end == Some(block_off);
         if !reuse {
             self.stream = None;
@@ -187,6 +199,7 @@ impl Clone for ProviderReader {
             stream: None,
             carry: Vec::new(),
             last_end: None,
+            skip_by_reading: self.skip_by_reading,
             #[cfg(test)]
             opens: 0,
         }
@@ -325,8 +338,27 @@ mod tests {
             assert_eq!(all, content);
             assert_eq!(r.opens, 2, "one bounded read, then one stream for the rest");
 
-            let mut r = r.clone();
+            // A plain container: a skip ahead is a seek, never a read
+            // through what lies between (a tar's data up to its next header).
+            let mut plain = r.clone();
             let mut buf = vec![0u8; 300_000];
+            plain.read_exact(&mut buf).expect("two blocks");
+            plain
+                .seek(SeekFrom::Current(1_000_000))
+                .expect("skip ahead");
+            plain.read_exact(&mut buf).expect("after the skip");
+            assert_eq!(&buf[..], &content[1_300_000..1_600_000]);
+            // 2 before; after the skip, a bounded read of the block it
+            // lands in, and a stream again once reading is sequential.
+            assert_eq!(
+                plain.opens, 4,
+                "the skip reopened instead of reading through"
+            );
+
+            // A container that is itself an archive's entry: reopening would
+            // decompress from its start, so a short skip reads through.
+            let mut r = r.clone();
+            r.skip_by_reading = SKIP_BY_READING;
             r.read_exact(&mut buf).expect("two blocks");
             r.seek(SeekFrom::Current(1_000_000)).expect("skip ahead");
             r.read_exact(&mut buf).expect("after the skip");
