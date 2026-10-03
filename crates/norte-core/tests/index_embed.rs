@@ -274,6 +274,33 @@ async fn embed_clean_cancellation() {
     assert_eq!(h2.join().await, TaskState::Completed);
 }
 
+/// #388: a provider that never answers (a model still loading, a host that
+/// swallows packets) must not make the task uncancellable. The cancel used
+/// to be looked at only between batches.
+#[tokio::test]
+async fn embed_cancel_while_the_provider_hangs_is_prompt() {
+    let (engine, mem, fake) = setup_with(
+        FakeEmbed::new(8).with_delay(Duration::from_mins(1)),
+        ai_cfg(),
+    )
+    .await;
+    write_file(&mem, "mem:///a.txt", b"alpha content").await;
+    build(&engine, "mem:///").await;
+
+    let h = engine
+        .index_embed_as(vp("mem:///"), Actor::User)
+        .await
+        .expect("index_embed_as");
+    wait_first_call(&fake).await;
+    h.cancel();
+    let start = std::time::Instant::now();
+    assert_eq!(h.join().await, TaskState::Cancelled);
+    assert!(
+        start.elapsed() < Duration::from_secs(10),
+        "the cancellation does not wait for the provider"
+    );
+}
+
 #[tokio::test]
 async fn embed_cancel_during_rate_limit_retry_is_prompt() {
     // Persistent rate limit with a high retry_after: the task sits in the

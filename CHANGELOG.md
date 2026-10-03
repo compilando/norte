@@ -7,6 +7,48 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A second `.rar` no longer shows the first one's contents** (#383).
+  Opening `a.rar` and then `b.rar` in the same session listed and read
+  `a.rar` again.
+- **Cancelling a task that is still waiting ends it at once** (#386). In
+  the serial queue it stayed pending until every task ahead of it had
+  finished.
+- **The disk map no longer marks a folder partial for holding a symlink**
+  (#389). A symlink or a FIFO counted as unreadable, so most of `/usr`
+  came out as a lower bound.
+- **`norte mcp` no longer grows over a long session** (#387). The bridge
+  kept every progress notification of the tasks its agent launched.
+- **The daemon waits for a client that reads slowly instead of dropping
+  its search, comparison or sync results** (#384). It used to drop the
+  hits that did not fit, and to abort a comparison or plan; it now slows
+  the work down, and gives up only on a client that reads nothing for
+  30 s. A search given up that way now ends as cancelled, not completed.
+  The owner also gets the task's final state after the last batch, which
+  it could lose before.
+- **A frontend that falls behind reconnects instead of going deaf** (#384).
+  When it could not keep up with the daemon's notifications it stopped
+  receiving task progress and approvals for good while still looking
+  connected, and a reply lost the same way left a call waiting 30 s. The
+  daemon now closes that connection, and the frontend reconnects and
+  resyncs.
+- **A paused task no longer blocks the others** (#385, ADR 0164). Four
+  paused copies kept every search and folder size waiting, and one paused
+  task froze the serial queue. Paused, a task now gives its slot back; on
+  resume it shows *pending* until a slot is free.
+- **Keys typed while the terminal interface waits are no longer lost**
+  (#390). During a slow listing or refresh only Esc and Ctrl+C were heard
+  and everything else vanished; the other keys now run when the wait
+  ends.
+- **A change in one panel's folder no longer reloads the other panel**
+  (#390). In the terminal interface, a download into `~/Downloads`
+  relisted a remote folder open in the other panel every second or so,
+  and keys typed meanwhile were lost.
+- **Indexing for semantic search can be cancelled while the AI provider
+  does not answer** (#388), and an AI host that swallows packets now ends
+  in an error (10 s to connect, 5 min without a byte) instead of hanging.
+
 ### Security
 
 - **wasmtime 48.0.5** for RUSTSEC-2026-0321 to 0327: among them a plugin

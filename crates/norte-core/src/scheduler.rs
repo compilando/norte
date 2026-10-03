@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use futures::FutureExt;
 use futures::future::BoxFuture;
 use norte_proto::{Error, TaskId, TaskKind, TaskProgress, TaskState};
-use tokio::sync::{Semaphore, watch};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, watch};
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument as _;
 
@@ -50,15 +50,45 @@ pub enum Priority {
 /// assert!(!g.is_paused());
 /// ```
 #[derive(Clone)]
-pub struct PauseGate(Arc<watch::Sender<bool>>);
+pub struct PauseGate(Arc<watch::Sender<bool>>, Arc<Mutex<Slot>>);
+
+/// The scheduler slot a running task holds, so a pause can give it back
+/// (ADR 0164). Empty for a context built outside the scheduler.
+#[derive(Default)]
+struct Slot {
+    sem: Option<Arc<Semaphore>>,
+    permit: Option<OwnedSemaphorePermit>,
+}
 
 impl Default for PauseGate {
     fn default() -> Self {
-        Self(Arc::new(watch::channel(false).0))
+        Self(
+            Arc::new(watch::channel(false).0),
+            Arc::new(Mutex::new(Slot::default())),
+        )
     }
 }
 
 impl PauseGate {
+    /// The task now runs on `permit` from `sem`.
+    fn hold(&self, sem: Arc<Semaphore>, permit: Option<OwnedSemaphorePermit>) {
+        let mut slot = self.1.lock().expect("slot lock sound");
+        slot.sem = Some(sem);
+        slot.permit = permit;
+    }
+
+    /// Gives the slot back; the semaphore to ask again, if it had one.
+    fn lend_slot(&self) -> Option<Arc<Semaphore>> {
+        let mut slot = self.1.lock().expect("slot lock sound");
+        drop(slot.permit.take()?);
+        slot.sem.clone()
+    }
+
+    /// The task ended: its slot is free and stays free.
+    fn release_slot(&self) {
+        *self.1.lock().expect("slot lock sound") = Slot::default();
+    }
+
     /// Closes the gate: the task will stop at its next checkpoint.
     pub fn pause(&self) {
         self.0.send_replace(true);
@@ -89,6 +119,11 @@ pub enum Lane {
     #[default]
     Parallel,
     /// One at a time, in arrival order.
+    ///
+    /// A queued task cancelled before its turn runs at once WITHOUT the
+    /// slot (#386), alongside the one holding it. So a body queued here
+    /// must look at the token before any effect: one that wrote first
+    /// would run concurrently with the task this lane exists to serialize.
     Cola,
 }
 
@@ -119,8 +154,15 @@ impl TaskCtx {
     /// and returns with `Cancelled` so the body can clean up as with any
     /// other cancellation.
     ///
+    /// Paused, the task lends its scheduler slot; resumed, it publishes
+    /// `Pending` until it gets one again (ADR 0164).
+    ///
     /// # Errors
     /// [`Error::Cancelled`] if cancelled before or during the pause.
+    ///
+    /// # Panics
+    /// Only from poisoning of an internal lock, like the rest of the
+    /// scheduler's.
     pub async fn checkpoint(&self) -> Result<(), Error> {
         if self.cancel.is_cancelled() {
             return Err(Error::Cancelled);
@@ -129,6 +171,9 @@ impl TaskCtx {
             return Ok(());
         }
         self.progress.update(|p| p.state = TaskState::Paused);
+        // ADR 0164: paused, the slot goes back to the scheduler, so a
+        // paused copy does not keep a search or the next queued task out.
+        let lent = self.pause.lend_slot();
         let mut rx = self.pause.0.subscribe();
         tokio::select! {
             () = self.cancel.cancelled() => {
@@ -143,6 +188,20 @@ impl TaskCtx {
         }
         if self.cancel.is_cancelled() {
             return Err(Error::Cancelled);
+        }
+        if let Some(sem) = lent {
+            // Resumed, it waits for a slot like anything queued.
+            self.progress.update(|p| p.state = TaskState::Pending);
+            let permit = tokio::select! {
+                () = self.cancel.cancelled() => {
+                    self.progress.update(|p| p.state = TaskState::Running);
+                    return Err(Error::Cancelled);
+                }
+                permit = Arc::clone(&sem).acquire_owned() => {
+                    permit.expect("semaphore never closes")
+                }
+            };
+            self.pause.hold(sem, Some(permit));
         }
         self.progress.update(|p| p.state = TaskState::Running);
         Ok(())
@@ -396,20 +455,41 @@ impl Scheduler {
         // pushed. Each job carries its own span and is instrumented with
         // it below.
         let runner_queue = Arc::clone(&queue);
+        let runner_cancel = cancel.clone();
         crate::blocking::spawn_root(async move {
-            let _permit = runner_queue
-                .sem
-                .acquire()
-                .await
-                .expect("semaphore never closes");
-            let job = {
+            // #386: a job cancelled while it waits leaves the heap now and
+            // runs WITHOUT a slot: its body sees the token at once. If
+            // another runner already popped it, this one waits as usual —
+            // runners and jobs stay one to one.
+            let sem = Arc::clone(&runner_queue.sem);
+            let early = tokio::select! {
+                biased;
+                permit = Arc::clone(&sem).acquire_owned() => Err(permit),
+                () = runner_cancel.cancelled() => Ok(()),
+            };
+            let cancelled_job = early.is_ok().then(|| {
                 let mut heap = runner_queue.heap.lock().expect("heap lock sound");
-                heap.pop()
+                take_job(&mut heap, id)
+            });
+            let (job, permit) = match (early, cancelled_job.flatten()) {
+                (Ok(()), Some(job)) => (Some(job), None),
+                (early, _) => {
+                    let permit = match early {
+                        Err(permit) => permit,
+                        Ok(()) => Arc::clone(&sem).acquire_owned().await,
+                    }
+                    .expect("semaphore never closes");
+                    let mut heap = runner_queue.heap.lock().expect("heap lock sound");
+                    (heap.pop(), Some(permit))
+                }
             };
             let Some(job) = job else {
                 // Impossible: every runner corresponds to a push. Defensive.
                 return;
             };
+            // The permit lives in the job's pause gate, which can lend it
+            // while paused (ADR 0164); `run_job` frees it at the end.
+            job.ctx.pause.hold(sem, permit);
             // `tokio::spawn` inherits nobody's span: the JOB provides its own.
             let span = job.span.clone();
             run_job(job).instrument(span).await;
@@ -480,11 +560,25 @@ impl Scheduler {
     }
 }
 
+/// Removes job `id` from `heap`, if it is still there.
+fn take_job(heap: &mut BinaryHeap<QueuedJob>, id: TaskId) -> Option<QueuedJob> {
+    let mut jobs = std::mem::take(heap).into_vec();
+    let job = jobs
+        .iter()
+        .position(|j| j.id == id)
+        .map(|at| jobs.swap_remove(at));
+    *heap = jobs.into_iter().collect();
+    job
+}
+
 /// Runs a supervised job: panic → `Failed{Internal{panic}}`, never brings
 /// down the process; the terminal state is ALWAYS published.
 async fn run_job(job: QueuedJob) {
     let QueuedJob { body, ctx, .. } = job;
     let progress = Arc::clone(&ctx.progress);
+    // The handle keeps a clone of the gate after the end: the slot must not
+    // stay held by it.
+    let gate = ctx.pause.clone();
     progress.update(|p| p.state = TaskState::Running);
     // A task paused BEFORE it starts does not start: it waits here, and a
     // body with no checkpoints of its own also honors the pause at
@@ -498,6 +592,7 @@ async fn run_job(job: QueuedJob) {
 
     let fut = std::panic::AssertUnwindSafe(body(ctx));
     let outcome = fut.catch_unwind().await;
+    gate.release_slot();
 
     let final_state = match outcome {
         Ok(Ok(())) => TaskState::Completed,

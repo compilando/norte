@@ -1850,12 +1850,12 @@ pub const PLAN_HASH_LEN: usize = 64;
 /// the search (never broadcast, same directional criterion as
 /// [`POLICY_APPROVAL_REQUIRED`]).
 ///
-/// A client that does not drain its queue loses the frames that do not fit,
-/// but NOT its subscription (#155): the owner of a live directed feed keeps
-/// its place to receive the Task's terminal snapshot. With `max_hits` set,
-/// that snapshot is also what a truncated search is measured against; with
-/// `max_hits: None` it is the only signal there is, same as in
-/// [`COMPARE_ROWS`].
+/// A slow client is waited for, as in [`COMPARE_ROWS`] (#384): the daemon
+/// holds the search back until its queue has room, and an owner that takes
+/// no frame for 30 s ends the search as `Cancelled`. After the last batch
+/// the owner gets the Task's terminal snapshot itself, behind the batches.
+/// With `max_hits` set, that snapshot is also what a truncated search is
+/// measured against; with `max_hits: None` it is the only signal there is.
 pub const SEARCH_HITS: &str = "search.hits";
 /// Limit of entries per [`SEARCH_HITS`] notification (server-side
 /// coalescing, same spirit as [`FS_LIST_MAX_PAGE`]).
@@ -2125,14 +2125,16 @@ pub const ARCHIVE_TEST_MAX_FAILURES: usize = 256;
 /// directional criterion as [`SEARCH_HITS`]).
 ///
 /// # How to know whether ALL of them arrived
-/// A notification can be lost: a client that does not drain its queue
-/// loses the frames that do not fit, and unlike `fs.search` there is no
-/// `max_hits` to count against here (MINOR finding from protocol-guardian,
-/// C1 review). What it does NOT lose is the subscription: the owner of a
-/// live directed feed stays on the map even if its queue fills up,
-/// precisely so it receives the terminal snapshot this check is made
-/// against (#155 — before, it got evicted, and the check got lost in
-/// exactly the case it exists for). The signal is
+/// A client that does not read its socket is waited for: the daemon holds
+/// the comparison back until its queue has room, and only a client that
+/// takes no frame for 30 s stops the feed (#384; before, the rows that did
+/// not fit were lost). After the last batch the owner gets the Task's
+/// terminal snapshot itself, behind the rows, which is what this check is
+/// made against; its subscription is never evicted for a full queue
+/// (#155). Rows can still be missing: a feed stopped as above, a client
+/// that stops taking its RESPONSES (the connection closes, and it resyncs
+/// on reconnecting), or a client that drops batches on its own side after
+/// reading them. This check catches all three. The signal is
 /// [`TaskProgress::entries_done`](crate::TaskProgress::entries_done), which
 /// on a [`TaskKind::Compare`](crate::TaskKind::Compare) Task counts ROWS
 /// emitted: `task.progress`'s last snapshot always carries terminal state

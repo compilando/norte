@@ -142,6 +142,12 @@ pub struct Engine {
     /// to probe `PATH`. Set at startup with [`Self::set_rar_delegate`], never
     /// from the Project layer.
     rar_delegate: RwLock<Option<std::path::PathBuf>>,
+    /// RAR providers by their archive's wire path, most recent first, at
+    /// most [`RAR_PROVIDERS_MAX`] (#383). NOT in `sessions`: every local rar
+    /// shares the `rar+file` key there, and one provider is one archive.
+    rar_providers: std::sync::Mutex<std::collections::VecDeque<(String, Arc<dyn Provider>)>>,
+    /// The RAR reader found on `PATH`, once found.
+    rar_discovered: std::sync::Mutex<Option<norte_vfs_rar::Delegate>>,
     /// AI provider for the reviewable rename (M4-A2, ADR 0031). `None` = no
     /// AI (`ai_rename_plan` → `Unsupported`). Injected with
     /// [`Self::set_ai_provider`].
@@ -356,6 +362,8 @@ impl Engine {
             approvals: Arc::new(crate::approval::DenyAll),
             archive_limits: RwLock::new(norte_vfs_archive::Limits::default()),
             rar_delegate: RwLock::new(None),
+            rar_providers: std::sync::Mutex::new(std::collections::VecDeque::new()),
+            rar_discovered: std::sync::Mutex::new(None),
             ai_provider: RwLock::new(None),
             ai_embed: RwLock::new(None),
             ai_config: RwLock::new(crate::ai::AiConfig::default()),
@@ -429,17 +437,26 @@ impl Engine {
     /// - with no `7z` or `unrar` installed there is no reader:
     ///   `Unsupported`, with the phrase naming what to install in the log
     ///   (the wire carries no prose).
-    fn rar_provider_for(
-        &self,
-        aref: &norte_proto::ArchiveRef,
-        key: String,
-    ) -> Result<Arc<dyn Provider>, Error> {
+    fn rar_provider_for(&self, aref: &norte_proto::ArchiveRef) -> Result<Arc<dyn Provider>, Error> {
         if aref.outer.scheme() != "file" || aref.outer.authority().is_some() {
             tracing::warn!(
                 outer = %aref.outer.scheme(),
                 "rar only mounts over a LOCAL file: the delegate needs a path"
             );
             return Err(Error::Unsupported);
+        }
+        let key = aref.outer.to_wire();
+        {
+            let mut cache = self
+                .rar_providers
+                .lock()
+                .expect("rar_providers lock is sound");
+            if let Some(at) = cache.iter().position(|(k, _)| *k == key) {
+                let hit = cache.remove(at).expect("position is in range");
+                let provider = Arc::clone(&hit.1);
+                cache.push_front(hit);
+                return Ok(provider);
+            }
         }
         let archive = norte_vfs_local::vpath_to_native(&aref.outer)?;
         let pinned = self
@@ -449,17 +466,44 @@ impl Engine {
             .clone();
         let delegate = match pinned {
             Some(program) => norte_vfs_rar::Delegate::pinned(program),
-            None => norte_vfs_rar::Delegate::discover().map_err(|e| {
-                tracing::warn!(error = %e, "no RAR reader installed");
-                Error::from(e)
-            })?,
+            None => self.discovered_rar_delegate()?,
         };
         let provider: Arc<dyn Provider> = Arc::new(norte_vfs_rar::RarProvider::new(
             archive,
             delegate,
             norte_vfs_rar::RarLimits::default(),
         ));
-        Ok(self.sessions.insert_composite(key, provider))
+        let mut cache = self
+            .rar_providers
+            .lock()
+            .expect("rar_providers lock is sound");
+        // Two callers can both miss and both build: the first one in wins,
+        // so the archive keeps a single index cache.
+        if let Some((_, existing)) = cache.iter().find(|(k, _)| *k == key) {
+            return Ok(Arc::clone(existing));
+        }
+        cache.push_front((key, Arc::clone(&provider)));
+        cache.truncate(RAR_PROVIDERS_MAX);
+        Ok(provider)
+    }
+
+    /// The RAR reader found on `PATH`, probed once: the probe stats every
+    /// `PATH` directory, blocking, and each LRU miss would repeat it. A
+    /// failure is not kept, so installing `7z` later is seen.
+    fn discovered_rar_delegate(&self) -> Result<norte_vfs_rar::Delegate, Error> {
+        let mut found = self
+            .rar_discovered
+            .lock()
+            .expect("rar_discovered lock is sound");
+        if let Some(delegate) = found.as_ref() {
+            return Ok(delegate.clone());
+        }
+        let delegate = norte_vfs_rar::Delegate::discover().map_err(|e| {
+            tracing::warn!(error = %e, "no RAR reader installed");
+            Error::from(e)
+        })?;
+        *found = Some(delegate.clone());
+        Ok(delegate)
     }
 
     /// The executable that reads RAR, if the config FIXES one (`[archive]
@@ -475,6 +519,11 @@ impl Engine {
             .rar_delegate
             .write()
             .expect("rar_delegate lock is sound") = program;
+        // A provider already built carries the previous delegate.
+        self.rar_providers
+            .lock()
+            .expect("rar_providers lock is sound")
+            .clear();
     }
 
     /// Sets the archive providers' anti-bomb limits (#95.2, ADR 0018's
@@ -1109,7 +1158,7 @@ impl Engine {
             // composing anything, instead of bringing in the whole
             // container for a download nobody asked for.
             if aref.format == "rar" {
-                return self.rar_provider_for(&aref, key);
+                return self.rar_provider_for(&aref);
             }
             let format = match aref.format.as_str() {
                 "tar" => norte_vfs_archive::Format::Tar,
@@ -5064,6 +5113,10 @@ pub(crate) fn ai_to_proto_error(e: &norte_ai::AiError) -> Error {
 /// A PRESENTATION cap, not a decision one: policy is always evaluated over
 /// the complete list. See the comment on [`Engine::gate`].
 const APPROVAL_PATHS_SHOWN: usize = 32;
+
+/// How many RAR archives keep their provider (and its index) alive at once,
+/// like the eight index slots of the other archive formats.
+const RAR_PROVIDERS_MAX: usize = 8;
 
 /// Cap on the directory entries a batch rename plans against.
 ///

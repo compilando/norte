@@ -743,7 +743,8 @@ impl Batch {
 enum FlushOutcome {
     /// Sent (or nothing to send): the walk continues.
     Continue,
-    /// The receiver died (the search's owner left): ends cleanly.
+    /// The receiver died (the search's owner left or stopped reading): ends
+    /// as `Cancelled`.
     ReceiverGone,
     /// Cancelled while `send` was blocked (backpressure): ends as
     /// `Cancelled` (rule 3).
@@ -853,8 +854,12 @@ pub async fn run_walk(
             {
                 match flush(&tx, &mut batch, &ctx.cancel).await {
                     FlushOutcome::Continue => last_flush = Instant::now(),
-                    FlushOutcome::ReceiverGone => return Ok(()), // ends cleanly
-                    FlushOutcome::Cancelled => return Err(Error::Cancelled),
+                    // Like `fs.compare`: a search nobody received whole
+                    // must not end `Completed` (#384, the daemon drops the
+                    // receiver for an owner that stopped reading).
+                    FlushOutcome::ReceiverGone | FlushOutcome::Cancelled => {
+                        return Err(Error::Cancelled);
+                    }
                 }
             }
             if ctx.cancel.is_cancelled() {

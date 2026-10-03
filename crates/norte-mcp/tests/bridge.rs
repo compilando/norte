@@ -302,6 +302,27 @@ async fn copy_with_scope_completes_and_out_of_scope_is_actionable() {
     assert_eq!(v["state"], "completed");
 }
 
+/// #387: the daemon broadcasts the session's task progress to the tools
+/// connection too, and nobody reads it there. Its channel has to be closed,
+/// or every task the agent launches leaves its notifications behind for
+/// the bridge's whole life.
+#[tokio::test]
+async fn the_tools_connection_keeps_no_notifications() {
+    let d = spawn_daemon_allow().await;
+    d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir");
+    write_file(&d.mem, "mem:///proj/src.txt", b"hola").await;
+    grant_proj(&d, "claude");
+    let mut b = Bridge::connect(&d.socket, "claude").await.expect("connect");
+    let (out, err) = call_tool(
+        &b,
+        "copy",
+        serde_json::json!({"from": "mem:///proj/src.txt", "to": "mem:///proj/dst.txt"}),
+    )
+    .await;
+    assert!(!err, "{out}");
+    assert!(b.tools_notifications_closed_for_tests().await);
+}
+
 #[tokio::test]
 async fn delete_default_trash_y_permanent_explicito() {
     let d = spawn_daemon_allow().await;

@@ -522,6 +522,46 @@ async fn cancelling_a_paused_one_ends_it() {
     assert_eq!(handle.join().await, TaskState::Cancelled);
 }
 
+/// #385: a paused task gives its slot back. With every slot held by paused
+/// copies, a search or a folder size used to wait for as long as the pause
+/// lasted. Resumed, it waits for a slot like any queued task, and finishes.
+#[tokio::test]
+async fn a_paused_task_lends_its_slot() {
+    let sched = Scheduler::new(1);
+    let end = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let paused = sched.submit(
+        "mem",
+        TaskKind::Copy,
+        Priority::Normal,
+        Actor::User,
+        counter(Arc::clone(&end)),
+    );
+    let mut rx = paused.progress();
+    until(&mut rx, |p| p.entries_done >= 1).await;
+    paused.pause_gate().pause();
+    until(&mut rx, |p| p.state == TaskState::Paused).await;
+
+    let other = sched.submit(
+        "mem",
+        TaskKind::Search,
+        Priority::Normal,
+        Actor::User,
+        body(|_ctx| Box::pin(async { Ok(()) })),
+    );
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(10), other.join())
+            .await
+            .expect("runs while the other one is paused"),
+        TaskState::Completed
+    );
+
+    paused.pause_gate().resume();
+    let before = rx.borrow().entries_done;
+    until(&mut rx, |p| p.entries_done > before).await;
+    end.store(true, Ordering::SeqCst);
+    assert_eq!(paused.join().await, TaskState::Completed);
+}
+
 /// A task paused BEFORE starting does not run its body until resumed, even if
 /// the body has no checkpoints of its own.
 #[tokio::test]
@@ -607,6 +647,50 @@ async fn the_queue_lane_runs_one_at_a_time_and_in_order() {
     }
     assert_eq!(max.load(Ordering::SeqCst), 1, "one at a time");
     assert_eq!(*order.lock().expect("order"), vec![0, 1, 2, 3], "in order");
+}
+
+/// #386: cancelling a task still WAITING for its slot ends it now, not when
+/// the task ahead of it finishes. The body still runs, cancelled, so it can
+/// account for what it did not do; the one ahead is untouched.
+#[tokio::test]
+async fn cancelling_a_queued_task_ends_it_without_waiting_its_turn() {
+    use norte_core::Lane;
+    let sched = Scheduler::new(4);
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+    let first = sched.submit_en(
+        Lane::Cola,
+        "mem",
+        TaskKind::Copy,
+        Priority::Normal,
+        Actor::User,
+        body(move |_ctx| {
+            Box::pin(async move {
+                let _ = release_rx.await;
+                Ok(())
+            })
+        }),
+    );
+    let mut rx = first.progress();
+    until(&mut rx, |p| p.state == TaskState::Running).await;
+    let queued = sched.submit_en(
+        Lane::Cola,
+        "mem",
+        TaskKind::Copy,
+        Priority::Normal,
+        Actor::User,
+        body(|ctx| Box::pin(async move { ctx.checkpoint().await })),
+    );
+    queued.cancel();
+    let first_state = first.progress();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(10), queued.join())
+            .await
+            .expect("ends while the first one still holds the slot"),
+        TaskState::Cancelled
+    );
+    assert_eq!(first_state.borrow().state, TaskState::Running);
+    let _ = release_tx.send(());
+    assert_eq!(first.join().await, TaskState::Completed);
 }
 
 /// Moving up one that has NOT STARTED YET advances it; over one already

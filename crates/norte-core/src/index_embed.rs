@@ -252,7 +252,11 @@ async fn flush_batch(
     let texts: Vec<String> = batch.iter().map(|(_, t, _)| t.clone()).collect();
     let mut attempt: u32 = 0;
     let vectors = loop {
-        match embedder.embed(&texts).await {
+        let answer = tokio::select! {
+            () = ctx.cancel.cancelled() => return Err(Error::Cancelled),
+            answer = embedder.embed(&texts) => answer,
+        };
+        match answer {
             Ok(v) => break v,
             Err(norte_ai::AiError::RateLimited { retry_after })
                 if attempt + 1 < EMBED_RETRY_MAX =>

@@ -42,6 +42,10 @@ const CONNECTION_DRAIN: Duration = Duration::from_secs(2);
 /// its side of the socket hits this and gets CUT OFF: never unbounded memory
 /// for a slow or hostile peer (security-reviewer finding M1).
 const OUTBOX_FRAMES: usize = 1024;
+
+/// How long a directed feed (search hits, compare rows, sync steps) waits
+/// for room in its owner's outbox before giving the owner up (#384).
+const FEED_ROOM_WAIT: Duration = Duration::from_secs(30);
 /// Consecutive parse errors tolerated before cutting the connection (a peer
 /// that only emits garbage does not deserve infinite responses).
 const MAX_PARSE_ERRORS: u32 = 16;
@@ -368,6 +372,10 @@ struct Subscriber {
     /// another actor's `task.progress` never reaches an agent (#66, the same
     /// leak as `task.list`: `current` carries other actors' paths).
     actor: Actor,
+    /// Cancelled when the broadcast evicts this subscriber: its connection
+    /// closes (#384). Staying up unsubscribed left the client deaf to every
+    /// progress and approval with no way to know.
+    undrained: CancellationToken,
 }
 
 /// A live task registered in the daemon: the handle + WHO queued it. The
@@ -572,24 +580,38 @@ impl Shared {
     }
 
     /// Sends a frame to ONE specific connection (the hits of an `fs.search`
-    /// belong to whoever launched it — never broadcast, security T4). No-op
-    /// if the connection died or is no longer subscribed.
+    /// belong to whoever launched it — never broadcast, security T4),
+    /// WAITING for room in its outbox up to [`FEED_ROOM_WAIT`] (#384).
     ///
-    /// A FULL outbox loses the frame and NOT the subscription (#155): the
-    /// eviction used to be irreversible — the entry is only inserted in
-    /// `initialize` — and took down with it the terminal `task.progress`,
-    /// which is exactly the signal the client uses to detect it is missing
-    /// rows. The backlog is still bounded by the channel, which is what
-    /// really bounded it; what gets lost is frames, and the contract already
-    /// knows how to say that. A CLOSED outbox does remove the entry: there
-    /// is nobody there to protect.
+    /// A directed feed's pump that waits holds its producer back through
+    /// their bounded channel, so a slow client slows the walk instead of
+    /// losing hits (search) or having the feed aborted (compare, sync). A
+    /// full outbox never costs the subscription (#155): that would take the
+    /// terminal `task.progress` with it, the signal the client checks its
+    /// rows against.
     ///
-    /// Returns `false` if the frame was NOT delivered. Used so a directed
-    /// feed's producer stops: continuing to compare two trees for an hour for
-    /// an owner who is not reading is wasted work and a scheduler permit held
-    /// onto for nothing.
-    fn send_to_conn(&self, conn_id: u64, frame: &Arc<[u8]>) -> bool {
-        send_to_conn_impl(&self.subscribers, conn_id, frame)
+    /// `false` = no owner, or it read nothing for that long: the feed stops,
+    /// rather than comparing two trees for an hour for nobody while holding
+    /// a scheduler permit.
+    async fn send_to_conn_waiting(&self, conn_id: u64, frame: Arc<[u8]>) -> bool {
+        send_to_conn_waiting_impl(&self.subscribers, conn_id, frame, FEED_ROOM_WAIT).await
+    }
+
+    /// After a directed feed's last batch, the Task's terminal
+    /// `task.progress` to its owner, WAITING for room like the batches
+    /// (#384). The broadcast copy uses `try_send`, and while a feed pump
+    /// waits, the outbox's freed slots go to the pump first: under
+    /// backpressure the broadcast terminal is lost almost every time, and it
+    /// is the snapshot the client checks its rows against. Sent after the
+    /// last batch, it also lands behind it. A duplicate of the broadcast
+    /// one is harmless: clients already take the terminal twice (pump and
+    /// resync).
+    async fn send_terminal_to_owner(
+        &self,
+        conn_id: u64,
+        progress: tokio::sync::watch::Receiver<norte_proto::TaskProgress>,
+    ) {
+        send_terminal_to_owner_impl(&self.subscribers, conn_id, progress, FEED_ROOM_WAIT).await;
     }
 
     /// Marks `conn_id` as the owner of a live directed feed until the guard
@@ -626,8 +648,9 @@ impl Shared {
 /// Testable core of [`Shared::broadcast_where`]: sends `frame` to every
 /// subscriber that `wants` accepts and REMOVES the ones whose receiver died.
 ///
-/// A FULL outbox evicts — a slow client's backlog never grows without limit
-/// (M1) — UNLESS the connection is in `feeds`, i.e. it owns a live directed
+/// A FULL outbox evicts and closes the connection (#384) — a slow client's
+/// backlog never grows without limit (M1), and it reconnects instead of
+/// staying deaf — UNLESS the connection is in `feeds`, i.e. it owns a live directed
 /// feed (#155): for that one, eviction would also take away its own task's
 /// terminal `task.progress`, which is the signal it uses to check whether all
 /// its rows arrived. It loses the frame and stays subscribed.
@@ -653,7 +676,8 @@ fn broadcast_impl(
                     );
                     return true;
                 }
-                tracing::warn!(conn, "undrained subscriber: evicted from the broadcast");
+                tracing::warn!(conn, "undrained subscriber: evicted and disconnected");
+                s.undrained.cancel();
                 false
             }
             Err(mpsc::error::TrySendError::Closed(_)) => false,
@@ -661,34 +685,67 @@ fn broadcast_impl(
     });
 }
 
-/// Testable core of [`Shared::send_to_conn`]: sends `frame` to connection
-/// `conn_id` in `subs` (if it exists) and REMOVES the entry only if its
-/// receiver DIED. A full outbox loses the frame and keeps the subscription
-/// (#155).
-///
-/// `true` = delivered.
-fn send_to_conn_impl(
+/// Testable core of [`Shared::send_terminal_to_owner`], with the wait
+/// injected. `true` = the terminal snapshot was delivered.
+async fn send_terminal_to_owner_impl(
     subs: &Mutex<HashMap<u64, Subscriber>>,
     conn_id: u64,
-    frame: &Arc<[u8]>,
+    mut progress: tokio::sync::watch::Receiver<norte_proto::TaskProgress>,
+    wait: Duration,
 ) -> bool {
-    let mut subs = subs.lock().expect("subscribers lock is sound");
-    let (delivered, remove) = match subs.get(&conn_id) {
-        None => return false,
-        Some(s) => match s.tx.try_send(Arc::clone(frame)) {
-            Ok(()) => (true, false),
-            Err(mpsc::error::TrySendError::Full(_)) => {
-                tracing::warn!(
-                    conn = conn_id,
-                    "owner of an undrained directed feed: the frame is lost, not the subscription"
-                );
-                (false, false)
-            }
-            Err(mpsc::error::TrySendError::Closed(_)) => (false, true),
-        },
+    let waited = tokio::time::timeout(wait, async {
+        progress
+            .wait_for(|p| p.state.is_terminal())
+            .await
+            .map(|snapshot| snapshot.clone())
+    })
+    .await;
+    let last = match waited {
+        Ok(Ok(snapshot)) => snapshot,
+        // The scheduler dropped its sender: its last value is the outcome.
+        Ok(Err(_)) => progress.borrow().clone(),
+        Err(_) => return false,
     };
-    if remove {
-        subs.remove(&conn_id);
+    if !last.state.is_terminal() {
+        return false;
+    }
+    let notif = Notification {
+        jsonrpc: norte_proto::wire::JsonRpcVersion,
+        method: methods::TASK_PROGRESS.into(),
+        params: serde_json::to_value(&last).ok(),
+    };
+    match encode_frame(&notif) {
+        Ok(frame) => {
+            send_to_conn_waiting_impl(subs, conn_id, Arc::from(frame.into_boxed_slice()), wait)
+                .await
+        }
+        Err(_) => false,
+    }
+}
+
+/// Testable core of [`Shared::send_to_conn_waiting`], with the wait
+/// injected. The subscribers lock is NOT held while waiting: the sender is
+/// cloned out. `true` = delivered.
+async fn send_to_conn_waiting_impl(
+    subs: &Mutex<HashMap<u64, Subscriber>>,
+    conn_id: u64,
+    frame: Arc<[u8]>,
+    wait: Duration,
+) -> bool {
+    let tx = subs
+        .lock()
+        .expect("subscribers lock is sound")
+        .get(&conn_id)
+        .map(|s| s.tx.clone());
+    let Some(tx) = tx else {
+        return false;
+    };
+    let delivered = matches!(tokio::time::timeout(wait, tx.send(frame)).await, Ok(Ok(())));
+    if !delivered {
+        tracing::warn!(
+            conn = conn_id,
+            "owner of a directed feed did not read: the feed stops, the subscription stays"
+        );
     }
     delivered
 }
@@ -1838,6 +1895,9 @@ struct ConnState {
     /// [`MAX_PENDING_SCOPE_PER_CONN`]: one session does not monopolize the
     /// global channel.
     pending_scope_ids: Vec<u64>,
+    /// Cancelled when this connection's outbox overflowed — a response
+    /// lost or the broadcast evicting it — and it must close (#384).
+    undrained: CancellationToken,
 }
 
 impl ConnState {
@@ -1848,6 +1908,7 @@ impl ConnState {
             listings: HashMap::new(),
             next_listing_id: 0,
             pending_scope_ids: Vec::new(),
+            undrained: CancellationToken::new(),
         }
     }
 
@@ -2228,6 +2289,7 @@ async fn serve_connection(stream: transport::Stream, shared: &Arc<Shared>) -> st
     ));
 
     let mut conn = ConnState::new();
+    let undrained = conn.undrained.clone();
     // #72: cancellation tokens of cancellable in-flight requests.
     let inflight_cancel: InflightCancel = Arc::default();
     // Reaping expired paginated listings on a live-but-silent connection (in
@@ -2244,6 +2306,11 @@ async fn serve_connection(stream: transport::Stream, shared: &Arc<Shared>) -> st
     let mut pending_frames: std::collections::VecDeque<serde_json::Value> =
         std::collections::VecDeque::new();
     let result: std::io::Result<()> = loop {
+        // A frame deferred behind a dispatch that overflowed the outbox is
+        // not run: its effect would happen and its answer would not arrive.
+        if undrained.is_cancelled() {
+            break Ok(());
+        }
         // Next frame: first the local buffer, then the inbox (with
         // shutdown/sweep handled ONLY between dispatches, as before #72).
         let value = if let Some(v) = pending_frames.pop_front() {
@@ -2255,6 +2322,7 @@ async fn serve_connection(stream: transport::Stream, shared: &Arc<Shared>) -> st
                     Some(v) => v,
                 },
                 () = shared.shutdown.cancelled() => break Ok(()),
+                () = undrained.cancelled() => break Ok(()),
                 _ = sweep.tick() => {
                     conn.sweep_expired(shared.listing_ttl);
                     continue;
@@ -2273,6 +2341,7 @@ async fn serve_connection(stream: transport::Stream, shared: &Arc<Shared>) -> st
                 () = &mut dispatch => break false,
                 // A SUSPENDED dispatch dies with its requester (#64).
                 () = peer_gone.cancelled() => break true,
+                () = undrained.cancelled() => break true,
                 // Frames arriving while this dispatch is still in flight —
                 // ONLY while the deferred buffer is not at the cap: at the
                 // cap this arm is disabled and the reader goes back to
@@ -2314,9 +2383,32 @@ async fn serve_connection(stream: transport::Stream, shared: &Arc<Shared>) -> st
         }
     };
 
-    // Common cleanup for ALL exit paths. Remove OUR subscription before
-    // waiting for the writer: it is the sender's other owner — without this,
-    // deadlock (the writer drains until EVERYONE dies).
+    // Common cleanup for ALL exit paths.
+    release_connection(shared, conn_id, &conn.pending_scope_ids).await;
+    drop(tx);
+    // Closing the inbox ends the reader if it is still alive (its `send`
+    // fails).
+    drop(inbox_rx);
+    if undrained.is_cancelled() {
+        // A client that does not read would hold the writer in `write_all`
+        // and the reader in `read` forever: dropping both halves is what
+        // closes the socket (#384).
+        writer_task.abort();
+        reader_task.abort();
+    }
+    let _ = writer_task.await;
+    // A READ error (e.g. ECONNRESET) propagates as before.
+    match reader_task.await {
+        Ok(read_result) => result.and(read_result),
+        Err(_) => result,
+    }
+}
+
+/// What a closing connection gives back to the daemon, whatever closed it.
+async fn release_connection(shared: &Arc<Shared>, conn_id: u64, pending_scope_ids: &[u64]) {
+    // Remove OUR subscription before the caller waits for the writer: it is
+    // the sender's other owner — without this, deadlock (the writer drains
+    // until EVERYONE dies).
     shared
         .subscribers
         .lock()
@@ -2326,12 +2418,12 @@ async fn serve_connection(stream: transport::Stream, shared: &Arc<Shared>) -> st
     // ungranted request must not outlive its requester (anti-leak of the
     // global channel, M3-3b). `remove` of an id already granted is a benign
     // no-op.
-    if !conn.pending_scope_ids.is_empty() {
+    if !pending_scope_ids.is_empty() {
         let mut pending = shared
             .pending_scope
             .lock()
             .expect("pending_scope lock is sound");
-        for id in &conn.pending_scope_ids {
+        for id in pending_scope_ids {
             pending.remove(id);
         }
     }
@@ -2340,16 +2432,6 @@ async fn serve_connection(stream: transport::Stream, shared: &Arc<Shared>) -> st
     // detached forever. Releasing someone else's is a no-op (evicts nobody).
     shared.ui_session.release(conn_id);
     drop_sync_plans(shared, conn_id).await;
-    drop(tx);
-    // Closing the inbox ends the reader if it is still alive (its `send`
-    // fails).
-    drop(inbox_rx);
-    let _ = writer_task.await;
-    // A READ error (e.g. ECONNRESET) propagates as before.
-    match reader_task.await {
-        Ok(read_result) => result.and(read_result),
-        Err(_) => result,
-    }
 }
 
 /// A connection's READ loop (#64): decodes frames and queues them for
@@ -2598,10 +2680,17 @@ async fn handle_value(
                             tx: tx.clone(),
                             // The actor was fixed server-side by THIS initialize.
                             actor: conn.actor.clone(),
+                            undrained: conn.undrained.clone(),
                         },
                     );
             }
-            send(tx, &Response::from_outcome(id, response));
+            if !send_response(tx, &Response::from_outcome(id, response)).await {
+                tracing::warn!(
+                    conn = conn_id,
+                    "response lost to a full outbox: disconnecting"
+                );
+                conn.undrained.cancel();
+            }
         }
         // Client notifications (none defined yet; JSON-RPC forbids answering
         // them) and spurious responses: ignored.
@@ -2642,12 +2731,31 @@ async fn drop_sync_plans(shared: &Arc<Shared>, conn_id: u64) {
 }
 
 /// Queues a frame on the connection's outbox. `try_send`: if the client does
-/// not drain (full outbox), the frame is lost and the connection will die on
-/// its next read — never unbounded accumulation.
+/// not drain (full outbox), the frame is lost — never unbounded
+/// accumulation.
 fn send<T: serde::Serialize>(tx: &mpsc::Sender<Arc<[u8]>>, msg: &T) {
     if let Ok(frame) = encode_frame(msg) {
         let _ = tx.try_send(Arc::from(frame.into_boxed_slice()));
     }
+}
+
+/// How long a response waits for room in a full outbox before the client
+/// is taken for one that does not read (#384).
+const RESPONSE_ROOM_WAIT: Duration = Duration::from_secs(5);
+
+/// Queues a RESPONSE, waiting up to [`RESPONSE_ROOM_WAIT`] for room: a
+/// response is one per dispatch, in series, so it can afford to wait out a
+/// burst a healthy client is still draining. `false` = it did not fit in
+/// time and the caller closes the connection (#384).
+async fn send_response(tx: &mpsc::Sender<Arc<[u8]>>, resp: &Response) -> bool {
+    let Ok(frame) = encode_frame(resp) else {
+        return true;
+    };
+    let frame: Arc<[u8]> = Arc::from(frame.into_boxed_slice());
+    // A closed outbox is a connection already dying: nothing to add.
+    tokio::time::timeout(RESPONSE_ROOM_WAIT, tx.send(frame))
+        .await
+        .is_ok()
 }
 
 /// Sugar: builds a dispatch's Response.
@@ -4644,7 +4752,7 @@ async fn handle_plugin_organize_plan(
 /// **if the actor could read it itself** (#239).
 ///
 /// A separate function with the permission as a predicate, for the same
-/// reason as `send_to_conn_impl`: the decision is testable without standing
+/// reason as `send_to_conn_waiting_impl`: the decision is testable without standing
 /// up a `Shared`, and what needs pinning down is that the parent goes
 /// through a gate — it used to go through none, and the handler's comment
 /// claimed the opposite.
@@ -5471,6 +5579,7 @@ async fn handle_fs_compare(
     // `compare_as`) and this register — the Task never runs OUTSIDE
     // `shared.tasks` (with task.list/cancel and counting against the caps).
     // Whoever adds an await here breaks that guarantee.
+    let progress = handle.progress();
     let task_id = register_task_id(shared, handle, actor.clone())?;
 
     // ROW pump: drains the walk's channel and routes each batch as
@@ -5478,8 +5587,8 @@ async fn handle_fs_compare(
     // `tx` (terminal, cancel, or the receiver — the owner itself — gone).
     //
     // And the other way around: as soon as a batch is NOT delivered — the
-    // owner left, or was not draining its outbox and the daemon evicted it —
-    // the pump STOPS. Dropping `rx`, the walk sees `ReceiverGone` and ends.
+    // owner left, or read nothing for `FEED_ROOM_WAIT` (#384) — the pump
+    // STOPS. Dropping `rx`, the walk sees `ReceiverGone` and ends.
     // Without this, a three-hour comparison would keep reading two trees
     // (and hashing them) for nobody, holding its scheduler permit against the
     // rest of that scheme's work. `fs.compare` is the case that calls for
@@ -5506,14 +5615,18 @@ async fn handle_fs_compare(
             let Ok(frame) = encode_frame(&notif) else {
                 continue;
             };
-            if !shared_pump.send_to_conn(conn_id, &Arc::from(frame.into_boxed_slice())) {
+            if !shared_pump
+                .send_to_conn_waiting(conn_id, Arc::from(frame.into_boxed_slice()))
+                .await
+            {
                 tracing::debug!(
                     conn = conn_id,
                     "compare.rows with no owner: stopping the walk"
                 );
-                break;
+                return;
             }
         }
+        shared_pump.send_terminal_to_owner(conn_id, progress).await;
     });
 
     to_value(&methods::FsTaskResult { task_id })
@@ -5619,6 +5732,7 @@ async fn handle_sync_plan(
     // INVARIANT (#64): ZERO `.await` between the engine's submit (inside
     // `sync_plan_as`) and this register — the Task never runs OUTSIDE
     // `shared.tasks`. Whoever adds an await here breaks that guarantee.
+    let progress = handle.progress();
     let task_id = register_task_id(shared, handle, actor.clone())?;
 
     // STEPS pump: drains the plan's channel and routes each event ONLY to
@@ -5626,8 +5740,8 @@ async fn handle_sync_plan(
     // order "`sync.steps`* then a `sync.plan_done`" does not depend on this
     // pump: it is the queue.
     //
-    // As soon as an event is NOT delivered — the owner left, or was not
-    // draining its outbox and the daemon evicted it — the pump STOPS.
+    // As soon as an event is NOT delivered — the owner left, or read nothing
+    // for `FEED_ROOM_WAIT` (#384) — the pump STOPS.
     // Dropping `rx`, the Task sees its receiver disappeared, closes the
     // spool as INTERRUPTED (leaves no approvable plan) and ends. Without
     // this, a three-hour plan would keep walking two trees for nobody,
@@ -5659,7 +5773,7 @@ async fn handle_sync_plan(
             // and that is precisely why it is cheap to have here.
             let Ok(params) = params else {
                 tracing::error!(method, "could not serialize a sync.plan event");
-                break;
+                return;
             };
             let notif = Notification {
                 jsonrpc: norte_proto::wire::JsonRpcVersion,
@@ -5667,9 +5781,12 @@ async fn handle_sync_plan(
                 params: Some(params),
             };
             let Ok(frame) = encode_frame(&notif) else {
-                break;
+                return;
             };
-            if !shared_pump.send_to_conn(conn_id, &Arc::from(frame.into_boxed_slice())) {
+            if !shared_pump
+                .send_to_conn_waiting(conn_id, Arc::from(frame.into_boxed_slice()))
+                .await
+            {
                 tracing::debug!(
                     conn = conn_id,
                     method,
@@ -5682,9 +5799,10 @@ async fn handle_sync_plan(
                 // fits in the channel's buffer, so the Task counts it as
                 // delivered.
                 drop_sync_plans(&shared_pump, conn_id).await;
-                break;
+                return;
             }
         }
+        shared_pump.send_terminal_to_owner(conn_id, progress).await;
     });
 
     to_value(&methods::FsTaskResult { task_id })
@@ -5850,6 +5968,7 @@ async fn handle_fs_search(
     // `search_as`) and this register — the Task never runs OUTSIDE
     // `shared.tasks` (with task.list/cancel and counting against the caps).
     // Whoever adds an await here breaks that guarantee.
+    let progress = handle.progress();
     let task_id = register_task_id(shared, handle, actor.clone())?;
 
     // HITS pump: drains the walker's channel and routes each batch as
@@ -5868,16 +5987,18 @@ async fn handle_fs_search(
                 method: methods::SEARCH_HITS.into(),
                 params: serde_json::to_value(&hits).ok(),
             };
-            if let Ok(frame) = encode_frame(&notif) {
-                // The outcome is ignored ON PURPOSE: `fs.compare`'s pump does
-                // stop when the owner disappears, but changing that here
-                // would change a live search's behavior, which is not what
-                // this change came to touch. `fs.search` is also bounded by
-                // `max_hits`.
-                let _delivered =
-                    shared_pump.send_to_conn(conn_id, &Arc::from(frame.into_boxed_slice()));
+            if let Ok(frame) = encode_frame(&notif)
+                && !shared_pump
+                    .send_to_conn_waiting(conn_id, Arc::from(frame.into_boxed_slice()))
+                    .await
+            {
+                // No owner, or it stopped reading (#384): dropping the
+                // receiver ends the walk, instead of searching on and
+                // throwing every hit away.
+                return;
             }
         }
+        shared_pump.send_terminal_to_owner(conn_id, progress).await;
     });
 
     to_value(&methods::FsTaskResult { task_id })
@@ -6942,20 +7063,20 @@ mod tests {
         );
     }
 
-    /// `send_to_conn` is a DIRECTED send (a search's hits belong to whoever
-    /// launched it): only the destination connection receives it; an unknown
-    /// connection is a no-op; a connection whose receiver died is removed
-    /// from the map (same eviction criterion as the broadcast — no backlog
-    /// accumulation).
-    #[test]
-    fn send_to_conn_only_reaches_the_destination_and_evicts_the_dead() {
+    /// A DIRECTED send (a search's hits belong to whoever launched it): only
+    /// the destination connection receives it; an unknown connection or a
+    /// dead receiver is "not delivered", which stops the feed.
+    #[tokio::test]
+    async fn a_directed_send_only_reaches_the_destination() {
         use std::collections::HashMap;
         use std::sync::{Arc, Mutex};
+        use std::time::Duration;
 
         use tokio::sync::mpsc;
 
-        use super::{Subscriber, send_to_conn_impl};
+        use super::{Subscriber, send_to_conn_waiting_impl};
         use crate::journal::Actor;
+        let wait = Duration::from_millis(50);
 
         let subs = Mutex::new(HashMap::new());
         let (tx1, mut rx1) = mpsc::channel::<Arc<[u8]>>(4);
@@ -6965,6 +7086,7 @@ mod tests {
             Subscriber {
                 tx: tx1,
                 actor: Actor::User,
+                undrained: tokio_util::sync::CancellationToken::new(),
             },
         );
         subs.lock().expect("lock").insert(
@@ -6972,67 +7094,172 @@ mod tests {
             Subscriber {
                 tx: tx2,
                 actor: Actor::User,
+                undrained: tokio_util::sync::CancellationToken::new(),
             },
         );
         let frame: Arc<[u8]> = Arc::from(vec![1u8, 2, 3].into_boxed_slice());
 
         // Only connection 1 receives.
-        send_to_conn_impl(&subs, 1, &frame);
+        assert!(send_to_conn_waiting_impl(&subs, 1, Arc::clone(&frame), wait).await);
         assert!(rx1.try_recv().is_ok(), "the destination receives");
         assert!(rx2.try_recv().is_err(), "the other one does NOT receive");
 
-        // Unknown connection: no-op, no panic, does not touch the map.
-        send_to_conn_impl(&subs, 99, &frame);
+        // Unknown connection: not delivered, the map untouched.
+        assert!(!send_to_conn_waiting_impl(&subs, 99, Arc::clone(&frame), wait).await);
         assert_eq!(subs.lock().expect("lock").len(), 2);
 
-        // Dead receiver: the connection is removed from the map.
+        // Dead receiver: not delivered.
         drop(rx1);
-        send_to_conn_impl(&subs, 1, &frame);
-        assert!(
-            !subs.lock().expect("lock").contains_key(&1),
-            "the connection with a closed receiver is removed"
-        );
-        assert!(
-            subs.lock().expect("lock").contains_key(&2),
-            "the live one stays"
-        );
+        assert!(!send_to_conn_waiting_impl(&subs, 1, frame, wait).await);
     }
 
-    /// #155: a FULL outbox costs the frame and NOT the subscription. Eviction
-    /// used to be irreversible — the entry is only inserted in `initialize`
-    /// — and took down with it the terminal `task.progress`, which is
-    /// exactly what `compare.rows`'s contract says to compare against
-    /// received rows to know whether they all arrived.
-    #[test]
-    fn a_full_outbox_costs_the_frame_not_the_subscription() {
+    /// #384 + #155: a FULL outbox makes the feed WAIT — what the client
+    /// drains, it gets — and only an owner that reads nothing for the whole
+    /// wait stops the feed. Never at the cost of the subscription, which
+    /// carries the terminal `task.progress` the client checks its rows
+    /// against.
+    #[tokio::test(start_paused = true)]
+    async fn a_full_outbox_makes_the_feed_wait_not_lose() {
         use std::collections::HashMap;
         use std::sync::{Arc, Mutex};
+        use std::time::Duration;
 
         use tokio::sync::mpsc;
 
-        use super::{Subscriber, send_to_conn_impl};
+        use super::{Subscriber, send_to_conn_waiting_impl};
         use crate::journal::Actor;
 
-        let subs = Mutex::new(HashMap::new());
-        let (tx, _rx) = mpsc::channel::<Arc<[u8]>>(1);
+        let subs = Arc::new(Mutex::new(HashMap::new()));
+        let (tx, mut rx) = mpsc::channel::<Arc<[u8]>>(1);
         subs.lock().expect("lock").insert(
             1u64,
             Subscriber {
                 tx,
                 actor: Actor::User,
+                undrained: tokio_util::sync::CancellationToken::new(),
             },
         );
         let frame: Arc<[u8]> = Arc::from(vec![1u8].into_boxed_slice());
+        let wait = Duration::from_secs(30);
 
-        assert!(send_to_conn_impl(&subs, 1, &frame), "the first one fits");
+        assert!(send_to_conn_waiting_impl(&subs, 1, Arc::clone(&frame), wait).await);
+        // Full: a reader that drains after 5 s still gets the second frame.
+        let drain = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            rx.recv().await;
+            rx
+        });
         assert!(
-            !send_to_conn_impl(&subs, 1, &frame),
-            "the second does not fit: not delivered"
+            send_to_conn_waiting_impl(&subs, 1, Arc::clone(&frame), wait).await,
+            "it waited instead of losing the frame"
         );
+        let _rx = drain.await.expect("drainer");
+        // Full again and nobody reads: given up after the wait.
+        assert!(!send_to_conn_waiting_impl(&subs, 1, frame, wait).await);
         assert!(
             subs.lock().expect("lock").contains_key(&1),
             "and still subscribed: without this it also loses its terminal"
         );
+    }
+
+    /// #384 review M1: under backpressure the BROADCAST terminal
+    /// (`try_send`) hits a full outbox and is lost, so the pump sends the
+    /// owner its own copy once the Task is terminal, waiting for room. Here
+    /// the outbox is full, the Task ends later, and the client drains even
+    /// later: the terminal still arrives.
+    #[tokio::test(start_paused = true)]
+    async fn the_owner_gets_the_terminal_behind_a_full_outbox() {
+        use std::collections::HashMap;
+        use std::sync::{Arc, Mutex};
+        use std::time::Duration;
+
+        use norte_proto::{TaskId, TaskKind, TaskProgress, TaskState};
+        use tokio::sync::{mpsc, watch};
+
+        use super::{Subscriber, send_terminal_to_owner_impl};
+        use crate::journal::Actor;
+
+        let subs = Mutex::new(HashMap::new());
+        let (tx, mut rx) = mpsc::channel::<Arc<[u8]>>(1);
+        tx.try_send(Arc::from(vec![0u8].into_boxed_slice()))
+            .expect("fill the outbox");
+        subs.lock().expect("lock").insert(
+            1u64,
+            Subscriber {
+                tx,
+                actor: Actor::User,
+                undrained: tokio_util::sync::CancellationToken::new(),
+            },
+        );
+        let running = TaskProgress {
+            task_id: TaskId::new(7),
+            kind: TaskKind::Search,
+            state: TaskState::Running,
+            bytes_done: 0,
+            bytes_total: None,
+            entries_done: 3,
+            entries_total: None,
+            current: None,
+            unreadable: None,
+            unvisited: None,
+        };
+        let (progress_tx, progress) = watch::channel(running.clone());
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            progress_tx.send_replace(TaskProgress {
+                state: TaskState::Completed,
+                ..running
+            });
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            rx.recv().await.expect("the filler");
+            rx.recv().await.expect("the terminal")
+        });
+        let delivered =
+            send_terminal_to_owner_impl(&subs, 1, progress, Duration::from_secs(30)).await;
+        assert!(
+            delivered,
+            "the terminal waited for room instead of being lost"
+        );
+    }
+
+    /// A Task that never ends within the wait sends nothing: the owner is
+    /// not told a running Task is over.
+    #[tokio::test(start_paused = true)]
+    async fn no_terminal_no_frame() {
+        use std::collections::HashMap;
+        use std::sync::{Arc, Mutex};
+        use std::time::Duration;
+
+        use norte_proto::{TaskId, TaskKind, TaskProgress, TaskState};
+        use tokio::sync::{mpsc, watch};
+
+        use super::{Subscriber, send_terminal_to_owner_impl};
+        use crate::journal::Actor;
+
+        let subs = Mutex::new(HashMap::new());
+        let (tx, mut rx) = mpsc::channel::<Arc<[u8]>>(4);
+        subs.lock().expect("lock").insert(
+            1u64,
+            Subscriber {
+                tx,
+                actor: Actor::User,
+                undrained: tokio_util::sync::CancellationToken::new(),
+            },
+        );
+        let (_progress_tx, progress) = watch::channel(TaskProgress {
+            task_id: TaskId::new(7),
+            kind: TaskKind::Search,
+            state: TaskState::Running,
+            bytes_done: 0,
+            bytes_total: None,
+            entries_done: 0,
+            entries_total: None,
+            current: None,
+            unreadable: None,
+            unvisited: None,
+        });
+        assert!(!send_terminal_to_owner_impl(&subs, 1, progress, Duration::from_secs(30)).await);
+        assert!(rx.try_recv().is_err(), "nothing was sent");
     }
 
     /// The broadcast DOES keep evicting whoever does not drain — a slow
@@ -7052,14 +7279,18 @@ mod tests {
         // The receivers are kept alive: closing them would be the OTHER case
         // (dead outbox), and here what is being tested is the FULL one.
         let mut alive = Vec::new();
+        let mut undrained = Vec::new();
         for conn in [1u64, 2u64] {
             let (tx, rx) = mpsc::channel::<Arc<[u8]>>(1);
             alive.push(rx);
+            let token = tokio_util::sync::CancellationToken::new();
+            undrained.push(token.clone());
             subs.lock().expect("lock").insert(
                 conn,
                 Subscriber {
                     tx,
                     actor: Actor::User,
+                    undrained: token,
                 },
             );
         }
@@ -7080,7 +7311,43 @@ mod tests {
             subs.contains_key(&2),
             "the owner of a live directed feed keeps the subscription"
         );
+        // #384: the evicted connection is told to close, so its client
+        // reconnects and resyncs instead of going deaf while it stays up.
+        assert!(undrained[0].is_cancelled(), "the evicted one closes");
+        assert!(!undrained[1].is_cancelled(), "the feed's owner does not");
         drop(alive);
+    }
+
+    /// #384: a response waits a while for room — a burst a healthy client
+    /// is draining — and only then says it did not fit, so the connection
+    /// is closed instead of leaving its caller waiting out the call timeout
+    /// for an answer that was thrown away.
+    #[tokio::test(start_paused = true)]
+    async fn a_response_waits_for_room_then_reports_it_did_not_fit() {
+        use std::sync::Arc;
+
+        use norte_proto::wire::{RequestId, Response};
+        use tokio::sync::mpsc;
+
+        use super::send_response;
+
+        let resp = Response::ok(RequestId::Num(1), serde_json::Value::Null);
+        let (tx, mut rx) = mpsc::channel::<Arc<[u8]>>(1);
+        assert!(send_response(&tx, &resp).await, "the first one fits");
+        let drained = tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            rx.recv().await;
+            rx
+        });
+        assert!(
+            send_response(&tx, &resp).await,
+            "the second one waits while the client drains"
+        );
+        let _rx = drained.await.expect("drainer");
+        assert!(
+            !send_response(&tx, &resp).await,
+            "with nobody draining, it gives up and says so"
+        );
     }
 }
 

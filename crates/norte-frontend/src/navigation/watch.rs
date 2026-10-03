@@ -68,6 +68,34 @@ fn es_change(res: &Result<notify::Event, notify::Error>) -> bool {
     }
 }
 
+/// Which panes a CHANGE event touches (#390): a path that is a watched dir
+/// or sits directly in one. When it cannot tell — an error, an event with
+/// no path it recognizes — it says both, which is what it said before.
+fn panes_touched(
+    res: &Result<notify::Event, notify::Error>,
+    dirs: &[Option<PathBuf>; 2],
+) -> [bool; 2] {
+    let Ok(ev) = res else {
+        return [true, true];
+    };
+    let touched: [bool; 2] = std::array::from_fn(|i| {
+        dirs[i].as_ref().is_some_and(|dir| {
+            ev.paths
+                .iter()
+                .any(|p| p == dir || p.parent() == Some(dir.as_path()))
+        })
+    });
+    if touched == [false, false] {
+        [true, true]
+    } else {
+        touched
+    }
+}
+
+fn either(a: [bool; 2], b: [bool; 2]) -> [bool; 2] {
+    [a[0] || b[0], a[1] || b[1]]
+}
+
 /// Shared watcher/poller <-> [`DirWatch`] state.
 struct Shared {
     /// Natively watched dirs (one per pane; `None` = pane not watchable).
@@ -81,15 +109,15 @@ struct Shared {
 /// drop-based cancellation: the native watcher closes and the
 /// debouncer/poller task sees its raw channel closed and returns).
 pub struct DirWatch {
-    /// Receives ONE event per burst (debounced): "something changed in a
-    /// watched dir" — the consumer refreshes both panes (Ctrl+R parity).
-    pub rx: tokio::sync::mpsc::Receiver<()>,
+    /// Receives ONE event per burst (debounced): which panes' watched dirs
+    /// changed — the consumer refreshes those (#390).
+    pub rx: tokio::sync::mpsc::Receiver<[bool; 2]>,
     /// Raw sender kept on PURPOSE (and used by tests): in degraded mode the
     /// watcher is `None` and without this end alive the raw channel would
     /// close, killing the POLLER too. Its drop (with the watcher's) is
     /// what closes the task — drop-based cancellation.
     #[cfg_attr(not(test), allow(dead_code))]
-    raw_tx: tokio::sync::mpsc::UnboundedSender<()>,
+    raw_tx: tokio::sync::mpsc::UnboundedSender<[bool; 2]>,
     watcher: Option<notify::RecommendedWatcher>,
     shared: Arc<Shared>,
     /// Degradation notice pending to show (once only).
@@ -113,21 +141,28 @@ impl DirWatch {
     /// short periods — the poller does real I/O and tokio's paused clock
     /// does not wait for it).
     fn new_with(debounce: std::time::Duration, poll: std::time::Duration) -> Self {
-        let (raw_tx, mut raw_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
-        let (out_tx, rx) = tokio::sync::mpsc::channel::<()>(1);
+        let (raw_tx, mut raw_rx) = tokio::sync::mpsc::unbounded_channel::<[bool; 2]>();
+        let (out_tx, rx) = tokio::sync::mpsc::channel::<[bool; 2]>(1);
         let shared = Arc::new(Shared {
             dirs: Mutex::new([None, None]),
             degraded: AtomicBool::new(false),
         });
         // Native watcher: a CHANGE event (also Err: "you may have missed
-        // events") = raw ping; the debouncer coalesces. Same criterion as
-        // `norte_config::watch`, including its filter — see [`es_change`],
-        // which is what stops this from feeding back on itself.
+        // events") = raw ping naming its panes; the debouncer coalesces.
+        // Same criterion as `norte_config::watch`, including its filter —
+        // see [`es_change`], which is what stops this from feeding back on
+        // itself.
         let cb_tx = raw_tx.clone();
+        let cb_shared = Arc::clone(&shared);
         let watcher =
             notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
                 if es_change(&res) {
-                    let _ = cb_tx.send(());
+                    let dirs = cb_shared
+                        .dirs
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .clone();
+                    let _ = cb_tx.send(panes_touched(&res, &dirs));
                 }
             })
             .ok();
@@ -145,25 +180,31 @@ impl DirWatch {
             loop {
                 tokio::select! {
                     ev = raw_rx.recv() => {
-                        if ev.is_none() {
+                        let Some(mut touched) = ev else {
                             return; // all senders dead (drop)
-                        }
+                        };
                         // REAL trailing edge (review MAJOR-3): drain and
                         // wait for a quiet window; a storm with no pause
-                        // emits anyway at the latency cap.
+                        // emits anyway at the latency cap. What is drained
+                        // adds its panes.
                         let start = tokio::time::Instant::now();
                         loop {
-                            while raw_rx.try_recv().is_ok() {}
+                            while let Ok(more) = raw_rx.try_recv() {
+                                touched = either(touched, more);
+                            }
                             tokio::time::sleep(debounce).await;
-                            if raw_rx.try_recv().is_err() {
-                                break; // quiet window
+                            match raw_rx.try_recv() {
+                                Err(_) => break, // quiet window
+                                Ok(more) => touched = either(touched, more),
                             }
                             if start.elapsed() >= max_coalesce(debounce) {
-                                while raw_rx.try_recv().is_ok() {}
+                                while let Ok(more) = raw_rx.try_recv() {
+                                    touched = either(touched, more);
+                                }
                                 break;
                             }
                         }
-                        if out_tx.send(()).await.is_err() {
+                        if out_tx.send(touched).await.is_err() {
                             return; // consumer dead
                         }
                         // Floor between emissions: whatever arrives during
@@ -187,22 +228,27 @@ impl DirWatch {
                         // watched (without this the map grows all
                         // session).
                         mtimes.retain(|d, _| dirs.iter().flatten().any(|w| w == d));
-                        let mut changed = false;
-                        for dir in dirs.into_iter().flatten() {
-                            let Ok(meta) = tokio::fs::metadata(&dir).await else {
+                        let mut changed: Vec<PathBuf> = Vec::new();
+                        for dir in dirs.iter().flatten() {
+                            let Ok(meta) = tokio::fs::metadata(dir).await else {
                                 continue; // dir gone: the refresh will say so
                             };
                             let Ok(modified) = meta.modified() else {
                                 continue;
                             };
-                            match mtimes.insert(dir, modified) {
-                                Some(prev) if prev != modified => changed = true,
+                            match mtimes.insert(dir.clone(), modified) {
+                                Some(prev) if prev != modified => changed.push(dir.clone()),
                                 // First sighting = baseline (starting up is
                                 // not a change); same mtime = nothing.
                                 None | Some(_) => {}
                             }
                         }
-                        if changed && out_tx.send(()).await.is_err() {
+                        // By dir, not by pane: two panes on one dir both
+                        // changed, though the second lookup saw it stored.
+                        let touched: [bool; 2] = std::array::from_fn(|i| {
+                            dirs[i].as_ref().is_some_and(|d| changed.contains(d))
+                        });
+                        if touched != [false, false] && out_tx.send(touched).await.is_err() {
                             return;
                         }
                     }
@@ -265,7 +311,7 @@ impl DirWatch {
     /// Raw-event injector for tests (same channel as the watcher).
     #[cfg(test)]
     fn inject(&self) {
-        let _ = self.raw_tx.send(());
+        let _ = self.raw_tx.send([true, true]);
     }
 
     /// Forces degraded mode (poller tests).
@@ -288,7 +334,10 @@ mod tests {
     const FAST_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(20);
     const FAST_POLL: std::time::Duration = std::time::Duration::from_millis(50);
 
-    async fn recv_within(rx: &mut tokio::sync::mpsc::Receiver<()>, d: std::time::Duration) -> bool {
+    async fn recv_within(
+        rx: &mut tokio::sync::mpsc::Receiver<[bool; 2]>,
+        d: std::time::Duration,
+    ) -> bool {
         tokio::time::timeout(d, rx.recv()).await.is_ok()
     }
 
@@ -342,6 +391,34 @@ mod tests {
             recv_within(&mut w.rx, std::time::Duration::from_secs(2)).await,
             "a real write does refresh"
         );
+    }
+
+    /// #390: the event says WHICH pane's directory changed, so the other
+    /// pane — maybe a remote listing of 50k entries — is not relisted for
+    /// it. Both the native watcher and the degraded poller say it.
+    #[tokio::test]
+    async fn a_change_names_the_pane_whose_dir_changed() {
+        let a = tempfile::tempdir().unwrap();
+        let b = tempfile::tempdir().unwrap();
+        let mut w = DirWatch::new_with(FAST_DEBOUNCE, std::time::Duration::from_hours(1));
+        w.rewatch(&[Some(a.path().to_path_buf()), Some(b.path().to_path_buf())]);
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        std::fs::write(b.path().join("nuevo.txt"), b"x").expect("create");
+        let got = tokio::time::timeout(std::time::Duration::from_secs(2), w.rx.recv())
+            .await
+            .expect("a write is seen");
+        assert_eq!(got, Some([false, true]), "only the second pane changed");
+
+        let mut p = DirWatch::new_with(FAST_DEBOUNCE, FAST_POLL);
+        p.watcher = None;
+        p.force_degraded();
+        p.rewatch(&[Some(a.path().to_path_buf()), Some(b.path().to_path_buf())]);
+        tokio::time::sleep(FAST_POLL * 4).await;
+        std::fs::write(a.path().join("nuevo"), b"x").unwrap();
+        let got = tokio::time::timeout(std::time::Duration::from_secs(5), p.rx.recv())
+            .await
+            .expect("the poller sees it");
+        assert_eq!(got, Some([true, false]), "only the first pane changed");
     }
 
     /// A burst of raw events = ONE debounced event (trailing edge) —
@@ -468,7 +545,7 @@ mod tests {
         let raw = w.raw_tx.clone();
         let storm = tokio::spawn(async move {
             for _ in 0..200 {
-                let _ = raw.send(());
+                let _ = raw.send([true, true]);
                 tokio::time::sleep(std::time::Duration::from_millis(2)).await;
             }
         });
@@ -479,7 +556,7 @@ mod tests {
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
         while tokio::time::Instant::now() < deadline {
             match tokio::time::timeout(std::time::Duration::from_millis(100), w.rx.recv()).await {
-                Ok(Some(())) => emitted += 1,
+                Ok(Some(_)) => emitted += 1,
                 _ => {
                     if storm.is_finished() {
                         break;

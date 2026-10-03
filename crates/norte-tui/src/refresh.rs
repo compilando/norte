@@ -412,8 +412,23 @@ pub async fn refresh_panes(
     backend: &Backend,
     events: &mut crate::console::Console<'_>,
 ) -> [bool; 2] {
+    refresh_panes_where(app, backend, events, [true, true]).await
+}
+
+/// [`refresh_panes`] for only the panes `which` names: the watcher says
+/// whose directory changed, and relisting the other one — maybe a remote
+/// with 50k entries — froze the keyboard for nothing (#390).
+pub async fn refresh_panes_where(
+    app: &mut App,
+    backend: &Backend,
+    events: &mut crate::console::Console<'_>,
+    which: [bool; 2],
+) -> [bool; 2] {
     let mut refreshed = [false; 2];
     for i in 0..app.panes.len() {
+        if !which.get(i).copied().unwrap_or(false) {
+            continue;
+        }
         // A pane in virtual search mode (liveSearch T6) does NOT
         // auto-refresh: `refresh_listing` would pull it out of virtual mode
         // and `reap` would cancel the Task without the user leaving (review

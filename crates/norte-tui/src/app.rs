@@ -1192,6 +1192,11 @@ pub struct App {
     /// pressing the key, and the loop dispatches it through `on_key`, which
     /// is the only path with all three resolvers at hand.
     pub pending_key: Option<crossterm::event::KeyEvent>,
+    /// Keys typed while a wait painted its spinner (#390): kept and run
+    /// afterwards, one per loop turn, instead of thrown away. A watcher
+    /// refresh starts a wait nobody asked for, and the reader's typing used
+    /// to vanish into it. Bounded by [`App::TYPED_AHEAD_MAX`].
+    pub typed_ahead: std::collections::VecDeque<crossterm::event::KeyEvent>,
     /// Binary version and revision (`norte_frontend::version::VERSION_LINE`),
     /// painted in the help frame. Empty = not painted: what the tests
     /// receive, whose snapshots cannot depend on the commit.
@@ -1462,6 +1467,7 @@ impl App {
             key_bars: KeyBars::default(),
             chord_split_h: None,
             pending_key: None,
+            typed_ahead: std::collections::VecDeque::new(),
             version_line: "",
             help_chords: default_help_chords(),
             palette: None,
@@ -1683,6 +1689,11 @@ impl App {
                 }),
         );
     }
+
+    /// How many keys a wait keeps for afterwards (#390): a held key during a
+    /// long wait must not grow without bound, and past this the reader is
+    /// not typing ahead any more.
+    pub const TYPED_AHEAD_MAX: usize = 64;
 
     /// The paint clock.
     #[must_use]

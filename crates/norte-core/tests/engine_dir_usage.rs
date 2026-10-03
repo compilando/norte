@@ -170,6 +170,41 @@ async fn an_unreadable_child_comes_out_marked_and_does_not_bring_down_the_map() 
     assert_eq!(open.bytes, 7);
 }
 
+/// #389: a symlink has no size of its own to give, and that is not being
+/// unreadable. Counting it as one marked every child of `/usr` partial.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_symlink_is_not_an_unreadable_entry() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let tree = dir.path().join("tree");
+    std::fs::create_dir_all(tree.join("lib")).expect("mkdir");
+    std::fs::write(tree.join("lib/real"), b"1234567").expect("write");
+    std::os::unix::fs::symlink("real", tree.join("lib/alias")).expect("symlink");
+    std::os::unix::fs::symlink("lib/real", tree.join("top-alias")).expect("symlink");
+    let engine = Engine::new();
+    engine.register_provider(
+        Arc::new(norte_vfs_local::LocalProvider::rooted("/")) as Arc<dyn Provider>
+    );
+    let root = norte_vfs_local::vpath_from_native(&tree).expect("vpath");
+    let handle = engine
+        .dir_usage_as(
+            FsDirUsageParams {
+                path: root,
+                depth: 1,
+            },
+            Actor::User,
+        )
+        .await
+        .expect("launches");
+    let id = handle.id();
+    assert_eq!(handle.join().await, TaskState::Completed);
+    let (_actor, report) = engine.dir_usage_report(id).expect("map");
+    let lib = child(&report, b"lib");
+    assert!(!lib.partial, "a symlink inside is not a lower bound");
+    assert_eq!(lib.bytes, 7);
+    assert!(!child(&report, b"top-alias").partial);
+}
+
 /// What a FILE is made of is not a question: it is made of itself.
 ///
 /// It is rejected instead of answering with a one-rectangle map, which is the

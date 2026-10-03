@@ -107,9 +107,7 @@ impl AnthropicProvider {
                 .to_string(),
             model,
             secret,
-            // Client::new() only panics if the TLS stack fails to init; with
-            // rustls compiled statically that is a build invariant.
-            client: reqwest::Client::new(),
+            client: crate::http::client(),
         }
     }
 
