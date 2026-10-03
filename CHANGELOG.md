@@ -20,10 +20,13 @@ independently through `PROTOCOL_VERSION`.
   came out as a lower bound.
 - **`norte mcp` no longer grows over a long session** (#387). The bridge
   kept every progress notification of the tasks its agent launched.
-- **A search, comparison or sync plan waits for a slow window instead of
-  losing results** (#384). A search used to drop the hits that did not
-  fit while the window was busy, and a comparison or plan stopped; the
-  daemon now slows the work down until the window catches up.
+- **The daemon waits for a client that reads slowly instead of dropping
+  its search, comparison or sync results** (#384). It used to drop the
+  hits that did not fit, and to abort a comparison or plan; it now slows
+  the work down, and gives up only on a client that reads nothing for
+  30 s. A search given up that way now ends as cancelled, not completed.
+  The owner also gets the task's final state after the last batch, which
+  it could lose before.
 - **A frontend that falls behind reconnects instead of going deaf** (#384).
   When it could not keep up with the daemon's notifications it stopped
   receiving task progress and approvals for good while still looking

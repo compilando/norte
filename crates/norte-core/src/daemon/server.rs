@@ -597,6 +597,23 @@ impl Shared {
         send_to_conn_waiting_impl(&self.subscribers, conn_id, frame, FEED_ROOM_WAIT).await
     }
 
+    /// After a directed feed's last batch, the Task's terminal
+    /// `task.progress` to its owner, WAITING for room like the batches
+    /// (#384). The broadcast copy uses `try_send`, and while a feed pump
+    /// waits, the outbox's freed slots go to the pump first: under
+    /// backpressure the broadcast terminal is lost almost every time, and it
+    /// is the snapshot the client checks its rows against. Sent after the
+    /// last batch, it also lands behind it. A duplicate of the broadcast
+    /// one is harmless: clients already take the terminal twice (pump and
+    /// resync).
+    async fn send_terminal_to_owner(
+        &self,
+        conn_id: u64,
+        progress: tokio::sync::watch::Receiver<norte_proto::TaskProgress>,
+    ) {
+        send_terminal_to_owner_impl(&self.subscribers, conn_id, progress, FEED_ROOM_WAIT).await;
+    }
+
     /// Marks `conn_id` as the owner of a live directed feed until the guard
     /// is dropped (#155).
     fn feed_guard(self: &Arc<Self>, conn_id: u64) -> DirectedFeed {
@@ -666,6 +683,44 @@ fn broadcast_impl(
             Err(mpsc::error::TrySendError::Closed(_)) => false,
         }
     });
+}
+
+/// Testable core of [`Shared::send_terminal_to_owner`], with the wait
+/// injected. `true` = the terminal snapshot was delivered.
+async fn send_terminal_to_owner_impl(
+    subs: &Mutex<HashMap<u64, Subscriber>>,
+    conn_id: u64,
+    mut progress: tokio::sync::watch::Receiver<norte_proto::TaskProgress>,
+    wait: Duration,
+) -> bool {
+    let waited = tokio::time::timeout(wait, async {
+        progress
+            .wait_for(|p| p.state.is_terminal())
+            .await
+            .map(|snapshot| snapshot.clone())
+    })
+    .await;
+    let last = match waited {
+        Ok(Ok(snapshot)) => snapshot,
+        // The scheduler dropped its sender: its last value is the outcome.
+        Ok(Err(_)) => progress.borrow().clone(),
+        Err(_) => return false,
+    };
+    if !last.state.is_terminal() {
+        return false;
+    }
+    let notif = Notification {
+        jsonrpc: norte_proto::wire::JsonRpcVersion,
+        method: methods::TASK_PROGRESS.into(),
+        params: serde_json::to_value(&last).ok(),
+    };
+    match encode_frame(&notif) {
+        Ok(frame) => {
+            send_to_conn_waiting_impl(subs, conn_id, Arc::from(frame.into_boxed_slice()), wait)
+                .await
+        }
+        Err(_) => false,
+    }
 }
 
 /// Testable core of [`Shared::send_to_conn_waiting`], with the wait
@@ -5524,6 +5579,7 @@ async fn handle_fs_compare(
     // `compare_as`) and this register — the Task never runs OUTSIDE
     // `shared.tasks` (with task.list/cancel and counting against the caps).
     // Whoever adds an await here breaks that guarantee.
+    let progress = handle.progress();
     let task_id = register_task_id(shared, handle, actor.clone())?;
 
     // ROW pump: drains the walk's channel and routes each batch as
@@ -5531,8 +5587,8 @@ async fn handle_fs_compare(
     // `tx` (terminal, cancel, or the receiver — the owner itself — gone).
     //
     // And the other way around: as soon as a batch is NOT delivered — the
-    // owner left, or was not draining its outbox and the daemon evicted it —
-    // the pump STOPS. Dropping `rx`, the walk sees `ReceiverGone` and ends.
+    // owner left, or read nothing for `FEED_ROOM_WAIT` (#384) — the pump
+    // STOPS. Dropping `rx`, the walk sees `ReceiverGone` and ends.
     // Without this, a three-hour comparison would keep reading two trees
     // (and hashing them) for nobody, holding its scheduler permit against the
     // rest of that scheme's work. `fs.compare` is the case that calls for
@@ -5567,9 +5623,10 @@ async fn handle_fs_compare(
                     conn = conn_id,
                     "compare.rows with no owner: stopping the walk"
                 );
-                break;
+                return;
             }
         }
+        shared_pump.send_terminal_to_owner(conn_id, progress).await;
     });
 
     to_value(&methods::FsTaskResult { task_id })
@@ -5675,6 +5732,7 @@ async fn handle_sync_plan(
     // INVARIANT (#64): ZERO `.await` between the engine's submit (inside
     // `sync_plan_as`) and this register — the Task never runs OUTSIDE
     // `shared.tasks`. Whoever adds an await here breaks that guarantee.
+    let progress = handle.progress();
     let task_id = register_task_id(shared, handle, actor.clone())?;
 
     // STEPS pump: drains the plan's channel and routes each event ONLY to
@@ -5682,8 +5740,8 @@ async fn handle_sync_plan(
     // order "`sync.steps`* then a `sync.plan_done`" does not depend on this
     // pump: it is the queue.
     //
-    // As soon as an event is NOT delivered — the owner left, or was not
-    // draining its outbox and the daemon evicted it — the pump STOPS.
+    // As soon as an event is NOT delivered — the owner left, or read nothing
+    // for `FEED_ROOM_WAIT` (#384) — the pump STOPS.
     // Dropping `rx`, the Task sees its receiver disappeared, closes the
     // spool as INTERRUPTED (leaves no approvable plan) and ends. Without
     // this, a three-hour plan would keep walking two trees for nobody,
@@ -5715,7 +5773,7 @@ async fn handle_sync_plan(
             // and that is precisely why it is cheap to have here.
             let Ok(params) = params else {
                 tracing::error!(method, "could not serialize a sync.plan event");
-                break;
+                return;
             };
             let notif = Notification {
                 jsonrpc: norte_proto::wire::JsonRpcVersion,
@@ -5723,7 +5781,7 @@ async fn handle_sync_plan(
                 params: Some(params),
             };
             let Ok(frame) = encode_frame(&notif) else {
-                break;
+                return;
             };
             if !shared_pump
                 .send_to_conn_waiting(conn_id, Arc::from(frame.into_boxed_slice()))
@@ -5741,9 +5799,10 @@ async fn handle_sync_plan(
                 // fits in the channel's buffer, so the Task counts it as
                 // delivered.
                 drop_sync_plans(&shared_pump, conn_id).await;
-                break;
+                return;
             }
         }
+        shared_pump.send_terminal_to_owner(conn_id, progress).await;
     });
 
     to_value(&methods::FsTaskResult { task_id })
@@ -5909,6 +5968,7 @@ async fn handle_fs_search(
     // `search_as`) and this register — the Task never runs OUTSIDE
     // `shared.tasks` (with task.list/cancel and counting against the caps).
     // Whoever adds an await here breaks that guarantee.
+    let progress = handle.progress();
     let task_id = register_task_id(shared, handle, actor.clone())?;
 
     // HITS pump: drains the walker's channel and routes each batch as
@@ -5935,9 +5995,10 @@ async fn handle_fs_search(
                 // No owner, or it stopped reading (#384): dropping the
                 // receiver ends the walk, instead of searching on and
                 // throwing every hit away.
-                break;
+                return;
             }
         }
+        shared_pump.send_terminal_to_owner(conn_id, progress).await;
     });
 
     to_value(&methods::FsTaskResult { task_id })
@@ -7099,6 +7160,106 @@ mod tests {
             subs.lock().expect("lock").contains_key(&1),
             "and still subscribed: without this it also loses its terminal"
         );
+    }
+
+    /// #384 review M1: under backpressure the BROADCAST terminal
+    /// (`try_send`) hits a full outbox and is lost, so the pump sends the
+    /// owner its own copy once the Task is terminal, waiting for room. Here
+    /// the outbox is full, the Task ends later, and the client drains even
+    /// later: the terminal still arrives.
+    #[tokio::test(start_paused = true)]
+    async fn the_owner_gets_the_terminal_behind_a_full_outbox() {
+        use std::collections::HashMap;
+        use std::sync::{Arc, Mutex};
+        use std::time::Duration;
+
+        use norte_proto::{TaskId, TaskKind, TaskProgress, TaskState};
+        use tokio::sync::{mpsc, watch};
+
+        use super::{Subscriber, send_terminal_to_owner_impl};
+        use crate::journal::Actor;
+
+        let subs = Mutex::new(HashMap::new());
+        let (tx, mut rx) = mpsc::channel::<Arc<[u8]>>(1);
+        tx.try_send(Arc::from(vec![0u8].into_boxed_slice()))
+            .expect("fill the outbox");
+        subs.lock().expect("lock").insert(
+            1u64,
+            Subscriber {
+                tx,
+                actor: Actor::User,
+                undrained: tokio_util::sync::CancellationToken::new(),
+            },
+        );
+        let running = TaskProgress {
+            task_id: TaskId::new(7),
+            kind: TaskKind::Search,
+            state: TaskState::Running,
+            bytes_done: 0,
+            bytes_total: None,
+            entries_done: 3,
+            entries_total: None,
+            current: None,
+            unreadable: None,
+            unvisited: None,
+        };
+        let (progress_tx, progress) = watch::channel(running.clone());
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            progress_tx.send_replace(TaskProgress {
+                state: TaskState::Completed,
+                ..running
+            });
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            rx.recv().await.expect("the filler");
+            rx.recv().await.expect("the terminal")
+        });
+        let delivered =
+            send_terminal_to_owner_impl(&subs, 1, progress, Duration::from_secs(30)).await;
+        assert!(
+            delivered,
+            "the terminal waited for room instead of being lost"
+        );
+    }
+
+    /// A Task that never ends within the wait sends nothing: the owner is
+    /// not told a running Task is over.
+    #[tokio::test(start_paused = true)]
+    async fn no_terminal_no_frame() {
+        use std::collections::HashMap;
+        use std::sync::{Arc, Mutex};
+        use std::time::Duration;
+
+        use norte_proto::{TaskId, TaskKind, TaskProgress, TaskState};
+        use tokio::sync::{mpsc, watch};
+
+        use super::{Subscriber, send_terminal_to_owner_impl};
+        use crate::journal::Actor;
+
+        let subs = Mutex::new(HashMap::new());
+        let (tx, mut rx) = mpsc::channel::<Arc<[u8]>>(4);
+        subs.lock().expect("lock").insert(
+            1u64,
+            Subscriber {
+                tx,
+                actor: Actor::User,
+                undrained: tokio_util::sync::CancellationToken::new(),
+            },
+        );
+        let (_progress_tx, progress) = watch::channel(TaskProgress {
+            task_id: TaskId::new(7),
+            kind: TaskKind::Search,
+            state: TaskState::Running,
+            bytes_done: 0,
+            bytes_total: None,
+            entries_done: 0,
+            entries_total: None,
+            current: None,
+            unreadable: None,
+            unvisited: None,
+        });
+        assert!(!send_terminal_to_owner_impl(&subs, 1, progress, Duration::from_secs(30)).await);
+        assert!(rx.try_recv().is_err(), "nothing was sent");
     }
 
     /// The broadcast DOES keep evicting whoever does not drain — a slow
