@@ -3881,13 +3881,27 @@ pub(crate) async fn walk(
     root: &VPath,
     cancel: &CancellationToken,
 ) -> Result<Vec<Entry>, Error> {
+    walk_with(provider, root, cancel, false).await
+}
+
+/// [`walk`], listing with [`Provider::list_sized`] when `sized` (#395).
+async fn walk_with(
+    provider: &dyn Provider,
+    root: &VPath,
+    cancel: &CancellationToken,
+    sized: bool,
+) -> Result<Vec<Entry>, Error> {
     let mut out = Vec::new();
     let mut pending = vec![root.clone()];
     while let Some(dir) = pending.pop() {
         if cancel.is_cancelled() {
             return Err(Error::Cancelled);
         }
-        let mut stream = provider.list(&dir).await?;
+        let mut stream = if sized {
+            provider.list_sized(&dir).await?
+        } else {
+            provider.list(&dir).await?
+        };
         while let Some(item) = stream.next().await {
             // A real inner loop (rule 3): a dir with 10^6 entries or a slow
             // provider cannot delay cancellation until the pop.
@@ -3973,7 +3987,9 @@ async fn plan_for(
     if opts.symlinks == SymlinkPolicy::Follow {
         walk_following(provider, root, false, cancel).await
     } else {
-        Ok(walk(provider, root, cancel)
+        // Sized (#395): the plan is hydrated next, and this way only what
+        // the listing could not size is stat'ed.
+        Ok(walk_with(provider, root, cancel, true)
             .await?
             .into_iter()
             .map(|entry| PlanEntry {
@@ -4084,10 +4100,9 @@ async fn walk_following(
                             // SYNTHETIC dir: the copy creates a real dir at
                             // the destination. The reference mtime comes
                             // from the link's `entry` exactly as the
-                            // listing gave it — with a lazy local listing
-                            // (#52) it is almost always `None` today
-                            // (`hydrate_plan` does not touch Dirs); no
-                            // consumer reads it yet.
+                            // listing gave it — with the sized local
+                            // listing (#395) that is the LINK's own mtime,
+                            // not the target's; no consumer reads it yet.
                             out.push(PlanEntry {
                                 entry: Entry {
                                     // attrs: SYNTHETIC dir, empty on purpose
