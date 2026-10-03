@@ -2153,13 +2153,12 @@ async fn hash_source_prefix(
     len: u64,
     ctx: &TaskCtx,
 ) -> Result<Option<[u8; 32]>, Error> {
-    use sha2::{Digest, Sha256};
     let range = norte_proto::ByteRange {
         offset: 0,
         len: Some(len),
     };
     let mut stream = src.read(from, Some(range)).await?;
-    let mut hasher = Sha256::new();
+    let mut hasher = BlockingSha256::new();
     let mut seen: u64 = 0;
     while let Some(item) = stream.next().await {
         if ctx.cancel.is_cancelled() {
@@ -2171,7 +2170,7 @@ async fn hash_source_prefix(
         let take = usize::try_from(len - seen)
             .unwrap_or(chunk.len())
             .min(chunk.len());
-        hasher.update(&chunk[..take]);
+        hasher.update(chunk.slice(..take)).await?;
         seen += take as u64;
         if seen >= len {
             break;
@@ -2180,7 +2179,44 @@ async fn hash_source_prefix(
     if seen < len {
         return Ok(None); // source shorter than the partial
     }
-    Ok(Some(hasher.finalize().into()))
+    Ok(Some(hasher.finish().await?))
+}
+
+/// SHA-256 on a blocking thread of its own, fed chunk by chunk (#408).
+///
+/// Hashing on a runtime worker held it for ~0.15 ms per 256 KiB chunk, and
+/// the read could not run ahead of the hash. Dropping it unfinished (a
+/// cancel, a read error) closes the channel and the thread ends.
+struct BlockingSha256 {
+    tx: tokio::sync::mpsc::Sender<bytes::Bytes>,
+    done: tokio::task::JoinHandle<[u8; 32]>,
+}
+
+impl BlockingSha256 {
+    fn new() -> Self {
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<bytes::Bytes>(4);
+        let done = crate::blocking::spawn_blocking(move || {
+            use sha2::{Digest as _, Sha256};
+            let mut hasher = Sha256::new();
+            while let Some(chunk) = rx.blocking_recv() {
+                hasher.update(&chunk);
+            }
+            hasher.finalize().into()
+        });
+        Self { tx, done }
+    }
+
+    async fn update(&mut self, chunk: bytes::Bytes) -> Result<(), Error> {
+        self.tx
+            .send(chunk)
+            .await
+            .map_err(|_| Error::Internal { panic: true })
+    }
+
+    async fn finish(self) -> Result<[u8; 32], Error> {
+        drop(self.tx);
+        self.done.await.map_err(|_| Error::Internal { panic: true })
+    }
 }
 
 /// Discard the resumable partial and start from scratch? Decided according
@@ -4406,10 +4442,9 @@ async fn digest_of(
     cancel: &tokio_util::sync::CancellationToken,
 ) -> Result<(String, u64), Error> {
     use futures::StreamExt as _;
-    use sha2::{Digest as _, Sha256};
 
     let mut stream = provider.read(path, None).await?;
-    let mut hasher = Sha256::new();
+    let mut hasher = BlockingSha256::new();
     let mut read_count: u64 = 0;
     while let Some(chunk) = stream.next().await {
         // By CHUNK and not by file (rule 3).
@@ -4418,10 +4453,10 @@ async fn digest_of(
         }
         let chunk = chunk?;
         read_count = read_count.saturating_add(chunk.len() as u64);
-        hasher.update(&chunk);
+        hasher.update(chunk).await?;
     }
     Ok((
-        norte_proto::hashing::hex_lower(&hasher.finalize()),
+        norte_proto::hashing::hex_lower(&hasher.finish().await?),
         read_count,
     ))
 }
