@@ -516,7 +516,11 @@ pub async fn run(
                         // The same image moved or re-cropped (zoom, scroll):
                         // its bytes are already in the terminal, so only the
                         // placement is replaced (#406).
-                        let esc = if crate::kitty_graphics::ya_placed(image.id) {
+                        // Also one only hidden under an overlay: its bytes
+                        // stayed in the terminal.
+                        let esc = if crate::kitty_graphics::ya_placed(image.id)
+                            || crate::kitty_graphics::kept(image.id)
+                        {
                             crate::kitty_graphics::escape_reposition(image.id, rect, placement.crop)
                         } else {
                             crate::kitty_graphics::delete_placed(out);
@@ -560,7 +564,10 @@ pub async fn run(
                         }
                     }
                 }
-                _ => crate::kitty_graphics::delete_placed(terminal.backend_mut()),
+                // Still requested, only not placeable this frame (F1 or the
+                // palette over the viewer): off the screen, bytes kept (#406).
+                (Some(_), None) => crate::kitty_graphics::hide_placed(terminal.backend_mut()),
+                (None, _) => crate::kitty_graphics::delete_placed(terminal.backend_mut()),
             }
         }
         if app.quit {

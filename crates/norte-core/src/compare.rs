@@ -226,7 +226,24 @@ pub async fn run_compare(
         ctx.cancel.clone(),
     );
 
-    while let Some(item) = stream.next().await {
+    loop {
+        // With rows waiting, the flush deadline is waited on too (#408): it
+        // used to be checked only when the NEXT row arrived, so a long hash
+        // held rows already found for as long as it took. `next()` on a
+        // stream is cancel-safe.
+        let item = if batch.is_empty() {
+            stream.next().await
+        } else {
+            tokio::select! {
+                item = stream.next() => item,
+                () = tokio::time::sleep_until(last_flush + FLUSH_INTERVAL) => {
+                    send_rows(&tx, &mut batch, ctx).await?;
+                    last_flush = Instant::now();
+                    continue;
+                }
+            }
+        };
+        let Some(item) = item else { break };
         match item {
             Ok(row) => batch.rows.push(row),
             // The stream's ONLY error. It's emitted once and the stream
@@ -243,25 +260,26 @@ pub async fn run_compare(
             }
         }
         if batch.len() >= COMPARE_ROWS_MAX_BATCH || last_flush.elapsed() >= FLUSH_INTERVAL {
-            match flush(&tx, &mut batch, &ctx.cancel).await {
-                FlushOutcome::Continue(rows) => {
-                    ctx.progress.update(|p| p.entries_done += rows);
-                    last_flush = Instant::now();
-                }
-                // The receiver vanished partway through: the comparison did
-                // NOT finish, and saying `Completed` would make whoever
-                // compares received rows against `entries_done` accept a
-                // half-finished answer as good. `Cancelled` is what really
-                // happened (whoever asked for it), and there's nothing to
-                // clean up.
-                FlushOutcome::ReceiverGone | FlushOutcome::Cancelled => {
-                    return Err(Error::Cancelled);
-                }
-            }
+            send_rows(&tx, &mut batch, ctx).await?;
+            last_flush = Instant::now();
         }
     }
 
-    match flush(&tx, &mut batch, &ctx.cancel).await {
+    send_rows(&tx, &mut batch, ctx).await
+}
+
+/// Flushes the batch and counts its rows into progress.
+///
+/// The receiver vanished partway through: the comparison did NOT finish, and
+/// saying `Completed` would make whoever compares received rows against
+/// `entries_done` accept a half-finished answer as good. `Cancelled` is what
+/// really happened (whoever asked for it), and there's nothing to clean up.
+async fn send_rows(
+    tx: &mpsc::Sender<CompareRowsBatch>,
+    batch: &mut Batch,
+    ctx: &crate::scheduler::TaskCtx,
+) -> Result<(), Error> {
+    match flush(tx, batch, &ctx.cancel).await {
         FlushOutcome::Continue(rows) => {
             ctx.progress.update(|p| p.entries_done += rows);
             Ok(())

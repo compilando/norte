@@ -255,9 +255,22 @@ async fn rename_via_detour(
 /// thing `set_mode` accepts, and returning the whole `st_mode` would make
 /// the reversal try to change what class the node is.
 pub(crate) async fn modo_actual(provider: &dyn Provider, p: &VPath) -> Option<u32> {
+    mode_of(&stat_with_mode(provider, p).await.ok()?)
+}
+
+/// `stat` (lstat) asking for `posix.mode` too: the entry's kind and its
+/// mode in one round trip.
+pub(crate) async fn stat_with_mode(
+    provider: &dyn Provider,
+    p: &VPath,
+) -> Result<norte_proto::Entry, norte_proto::Error> {
     let req = norte_vfs::AttrRequest::sanitized(vec!["posix.mode".to_owned()]);
     let opt = norte_vfs::ListOptions { attrs: req };
-    let entry = provider.stat_with(p, &opt).await.ok()?;
+    provider.stat_with(p, &opt).await
+}
+
+/// The permission bits of an entry that was stat'ed with `posix.mode`.
+pub(crate) fn mode_of(entry: &norte_proto::Entry) -> Option<u32> {
     match entry.attrs.get("posix.mode")? {
         norte_proto::AttrValue::Uint(m) => u32::try_from(*m)
             .ok()
