@@ -49,7 +49,7 @@ pub use pane::painted_len_and_selection;
 pub(crate) use pane::pane_columns;
 pub use panels::{PlaceZone, TreeZone, places_zones, tree_zones};
 pub use pickers::draw_theme_picker;
-pub use status::{SessionZone, StatusItemZone, session_zone, status_item_zones};
+pub use status::{SessionZone, StatusItemZone, session_zone, status_item_zones, status_zones};
 pub use text::fit_hint_groups;
 
 pub(crate) use chrome::{TARGET_BADGE, TabStrip, draw_tab_strip};
@@ -143,7 +143,7 @@ fn pane_footer(app: &App, pane: &crate::app::Pane, width: u16) -> Option<String>
     if !app.chrome.pane_footer() {
         return None;
     }
-    let counts = norte_frontend::footer::counts(pane.entries(), pane.is_parent_row(0));
+    let counts = pane.state().listing_counts();
     let marked = norte_frontend::footer::Marked {
         n: pane.marks_len(),
         bytes: pane.marked_bytes(),

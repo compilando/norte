@@ -79,6 +79,10 @@ independently through `PROTOCOL_VERSION`.
 - **Folder size, the disk map and copy planning stop asking for each
   file's size one by one** (#395). On a local folder with a million
   files that was a million separate round trips before the first byte.
+- **Marked files no longer cost CPU while nothing happens** (#404). With
+  one file marked in a folder of 100 000, the terminal and the window
+  re-added every marked size several times per frame; the totals are now
+  worked out once per change.
 
 ### Security
 

@@ -577,6 +577,7 @@ pub async fn after_frame(
     // recomputed on every click, and a click resolved against a layout that
     // is not the painted one does not fail loudly: it marks the file next
     // door.
+    let (session, status_items) = ui::status_zones(app, painted);
     mouse::after_frame(
         app,
         ui::pane_geometry(app, painted),
@@ -590,8 +591,8 @@ pub async fn after_frame(
             tree: ui::tree_zones(app, painted),
             extensions: ui::extension_zones(app, painted),
             help: ui::help_zones(app, painted),
-            session: ui::session_zone(app, painted),
-            status_items: ui::status_item_zones(app, painted),
+            session,
+            status_items,
             borders: ui::resize_borders(app, painted),
             slots: ui::panel_slots(app, painted),
         },

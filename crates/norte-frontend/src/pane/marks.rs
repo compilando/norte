@@ -63,7 +63,20 @@ impl PaneState {
         if self.parent_target() == Some(&path) {
             return false;
         }
-        self.marks.insert(path)
+        let added = self.marks.insert(path);
+        if added {
+            self.totals_moved();
+        }
+        added
+    }
+
+    /// Unmarks `path`; `true` if it was marked.
+    fn unmark_path(&mut self, path: &VPath) -> bool {
+        let removed = self.marks.remove(path);
+        if removed {
+            self.totals_moved();
+        }
+        removed
     }
 
     /// Seeds the marks carried over by a hand-off between frontends (phase
@@ -92,7 +105,7 @@ impl PaneState {
         let Some(path) = self.selected().map(|e| e.path.clone()) else {
             return;
         };
-        if !self.marks.remove(&path) {
+        if !self.unmark_path(&path) {
             self.mark(path);
         }
     }
@@ -391,6 +404,7 @@ impl PaneState {
     /// ```
     pub fn restore_previous_marks(&mut self) -> Option<usize> {
         let previous = self.marks_previous.take()?;
+        self.totals_moved();
         let current = std::mem::take(&mut self.marks);
         self.marks_previous = Some(current);
         for path in previous {
@@ -407,6 +421,7 @@ impl PaneState {
     /// Clears every mark.
     pub fn clear_marks(&mut self) {
         self.snapshot_marks();
+        self.totals_moved();
         self.marks.clear();
     }
 
@@ -450,7 +465,7 @@ impl PaneState {
             let hit = if mark {
                 self.mark(path)
             } else {
-                self.marks.remove(&path)
+                self.unmark_path(&path)
             };
             if hit {
                 changed += 1;
@@ -729,7 +744,7 @@ impl PaneState {
                 }
             }
             for path in release {
-                self.marks.remove(&path);
+                self.unmark_path(&path);
             }
         }
         // Marks only what ENTERS the range: the rest of the overlap was
@@ -805,7 +820,7 @@ impl PaneState {
             }
         }
         for path in release {
-            self.marks.remove(&path);
+            self.unmark_path(&path);
         }
     }
 
@@ -866,7 +881,7 @@ impl PaneState {
         if marked {
             self.mark(path);
         } else {
-            self.marks.remove(&path);
+            self.unmark_path(&path);
         }
     }
 
@@ -881,7 +896,7 @@ impl PaneState {
             let Some(path) = self.entries.get(i).map(|e| e.path.clone()) else {
                 continue;
             };
-            if !self.marks.remove(&path) {
+            if !self.unmark_path(&path) {
                 self.mark(path);
             }
         }
@@ -974,7 +989,7 @@ impl PaneState {
             let hit = if mark {
                 self.mark(path)
             } else {
-                self.marks.remove(&path)
+                self.unmark_path(&path)
             };
             if hit {
                 changed += 1;
@@ -990,16 +1005,66 @@ impl PaneState {
     /// computed.
     #[must_use]
     pub fn marked_bytes(&self) -> u64 {
-        // With no marks there is nothing to add up: walking twenty thousand
-        // entries summing every path, on every keystroke, was half the cost
-        // of moving the cursor in a large directory.
+        self.mark_totals().0
+    }
+
+    /// `(marked_bytes, marked_dirs)`, walked once per change of the marks
+    /// or the listing (#404): the status bar and the footer ask several
+    /// times per frame, and each ask was a pass over every entry with a
+    /// hash lookup — on 100k entries with one mark, a core's worth at idle.
+    fn mark_totals(&self) -> (u64, usize) {
+        // With no marks there is nothing to add up.
         if self.marks.is_empty() {
-            return 0;
+            return (0, 0);
         }
-        self.entries
+        let key = (self.listing_epoch(), self.totals_gen);
+        let mut memo = self
+            .totals_memo
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((k, totals)) = *memo
+            && k == key
+        {
+            return totals;
+        }
+        let totals = self
+            .entries
             .iter()
-            .filter(|e| e.kind != EntryKind::Dir && self.marks.contains(&e.path))
-            .fold(0u64, |acc, e| acc.saturating_add(e.size.unwrap_or(0)))
+            .filter(|e| self.marks.contains(&e.path))
+            .fold((0u64, 0usize), |(bytes, dirs), e| {
+                if e.kind == EntryKind::Dir {
+                    (bytes, dirs + 1)
+                } else {
+                    (bytes.saturating_add(e.size.unwrap_or(0)), dirs)
+                }
+            });
+        *memo = Some((key, totals));
+        totals
+    }
+
+    /// The footer's counts of this listing ([`crate::footer::counts`]), worked
+    /// out once per change of the listing or of a size (#404) rather than per
+    /// frame.
+    #[must_use]
+    pub fn listing_counts(&self) -> crate::footer::Counts {
+        let key = (self.listing_epoch(), self.totals_gen);
+        let mut memo = self
+            .counts_memo
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((k, c)) = *memo
+            && k == key
+        {
+            return c;
+        }
+        let c = crate::footer::counts(&self.entries, self.is_parent_row(0));
+        *memo = Some((key, c));
+        c
+    }
+
+    /// The marks or an entry's size changed: [`Self::mark_totals`] is stale.
+    pub(super) fn totals_moved(&mut self) {
+        self.totals_gen = self.totals_gen.wrapping_add(1);
     }
 
     /// How many marked entries are directories. [`Self::marked_bytes`]
@@ -1011,13 +1076,7 @@ impl PaneState {
     /// separately instead of folding it into a total nobody computed.
     #[must_use]
     pub fn marked_dirs(&self) -> usize {
-        if self.marks.is_empty() {
-            return 0;
-        }
-        self.entries
-            .iter()
-            .filter(|e| e.kind == EntryKind::Dir && self.marks.contains(&e.path))
-            .count()
+        self.mark_totals().1
     }
 
     /// Marks dropped by the last [`Self::refill`] because their entry was
@@ -1050,6 +1109,7 @@ impl PaneState {
         let before = self.marks.len();
         let present: HashSet<&VPath> = self.entries.iter().map(|e| &e.path).collect();
         self.marks.retain(|p| present.contains(p));
+        self.totals_moved();
         before - self.marks.len()
     }
 }

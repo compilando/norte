@@ -45,14 +45,33 @@ pub struct StatusItemZone {
     pub command: &'static str,
 }
 
+/// The session indicator's zone and the clickable items' zones, from ONE
+/// composition of the bar (#404: the loop composed it once per zone).
+#[must_use]
+pub fn status_zones(app: &App, area: Rect) -> (Option<SessionZone>, Vec<StatusItemZone>) {
+    let Some(status) = status_rect(app, area) else {
+        return (None, Vec::new());
+    };
+    let c = compose(app, status);
+    let session = c.session.map(|(x0, x1)| SessionZone {
+        row: status.y,
+        x0,
+        x1,
+    });
+    (session, item_zones(c, status))
+}
+
 /// The zones of the clickable items, for frame `area`.
 #[must_use]
 pub fn status_item_zones(app: &App, area: Rect) -> Vec<StatusItemZone> {
     let Some(status) = status_rect(app, area) else {
         return Vec::new();
     };
-    compose(app, status)
-        .items
+    item_zones(compose(app, status), status)
+}
+
+fn item_zones(c: Composed, status: Rect) -> Vec<StatusItemZone> {
+    c.items
         .into_iter()
         .map(|(x0, x1, command)| StatusItemZone {
             row: status.y,
@@ -571,6 +590,20 @@ mod tests {
         // is nothing to click.
         app.message = Some("copied 1 file".to_string());
         assert!(compose(&app, area).session.is_none());
+    }
+
+    /// #404: the one-composition `status_zones` gives the loop exactly what
+    /// the two per-zone functions give.
+    #[test]
+    fn status_zones_match_the_per_zone_functions() {
+        use super::{session_zone, status_item_zones, status_zones};
+        let mut app = app_two_panes();
+        app.session.detached = true;
+        let frame = ratatui::layout::Rect::new(0, 0, 90, 24);
+        let (session, items) = status_zones(&app, frame);
+        assert!(session.is_some() && !items.is_empty(), "both zones painted");
+        assert_eq!(session, session_zone(&app, frame));
+        assert_eq!(items, status_item_zones(&app, frame));
     }
 
     /// A notice expires after `notice_seconds` ticks (spec 2026-09-10): it
