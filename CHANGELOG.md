@@ -96,6 +96,10 @@ independently through `PROTOCOL_VERSION`.
   (#397). Listing a `.tar` stored deflated inside a `.zip` decompressed
   the entry again from its start for every 256 KiB read, which for a
   large one amounted to a hang.
+- **Searching file contents over SFTP or S3 reads several files at once**
+  (#392). One file at a time, ten thousand files at 50 ms of latency was
+  about 25 minutes of waiting alone. Results now arrive in the order the
+  reads finish rather than the order of the listing.
 
 ### Security
 

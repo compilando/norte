@@ -71,6 +71,33 @@ fn disp(wire: &str) -> String {
     vp(wire).display_lossy()
 }
 
+/// #392: content reads overlap. Over a provider where every operation
+/// costs 100 ms (a remote), sixteen files read one at a time take over
+/// 1.6 s; in flight together, a fraction of that. Tokio's clock is paused,
+/// so the latency is simulated, not slept.
+#[tokio::test(start_paused = true)]
+async fn content_reads_overlap_over_a_slow_provider() {
+    let (engine, mem) = setup();
+    mkdir(&mem, "mem:///r").await;
+    for i in 0..16 {
+        write_file(&mem, &format!("mem:///r/f{i}.txt"), b"one needle here\n").await;
+    }
+    mem.faults()
+        .set_latency_per_op(Some(Duration::from_millis(100)));
+    let mut p = params("mem:///r");
+    p.content = Some("needle".to_owned());
+    let started = tokio::time::Instant::now();
+    let (h, rx) = engine.search_as(p, Actor::User).await.expect("search");
+    let hits = drain(rx).await;
+    assert_eq!(h.join().await, TaskState::Completed);
+    assert_eq!(hits.len(), 16, "every file is found");
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "reads went one at a time: {:?}",
+        started.elapsed()
+    );
+}
+
 // 1 ───────────────────────────────────────────────────────────────────────
 #[tokio::test]
 async fn name_only_finds_recursively() {
