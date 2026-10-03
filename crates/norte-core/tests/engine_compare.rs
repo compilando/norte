@@ -285,3 +285,82 @@ async fn the_comparison_folds_the_way_the_root_folds() {
         "and the row carries both sides"
     );
 }
+
+/// `MemProvider` whose listing of `stall` hangs until `release` is notified.
+struct Stalling {
+    inner: Arc<MemProvider>,
+    stall: VPath,
+    release: Arc<tokio::sync::Notify>,
+}
+
+#[async_trait::async_trait]
+impl Provider for Stalling {
+    fn scheme(&self) -> &str {
+        self.inner.scheme()
+    }
+    fn capabilities(&self) -> norte_proto::Capabilities {
+        self.inner.capabilities()
+    }
+    async fn stat(&self, p: &VPath) -> Result<norte_proto::Entry, ProtoError> {
+        self.inner.stat(p).await
+    }
+    async fn list(&self, p: &VPath) -> Result<norte_vfs::EntryStream, ProtoError> {
+        if *p == self.stall {
+            self.release.notified().await;
+        }
+        self.inner.list(p).await
+    }
+    async fn read(
+        &self,
+        p: &VPath,
+        range: Option<norte_proto::ByteRange>,
+    ) -> Result<norte_vfs::ByteStream, ProtoError> {
+        self.inner.read(p, range).await
+    }
+    async fn write(&self, p: &VPath) -> Result<Box<dyn norte_vfs::ByteSink>, ProtoError> {
+        self.inner.write(p).await
+    }
+    async fn mkdir(&self, p: &VPath) -> Result<(), ProtoError> {
+        self.inner.mkdir(p).await
+    }
+    async fn remove(&self, p: &VPath) -> Result<(), ProtoError> {
+        self.inner.remove(p).await
+    }
+    async fn rename(&self, from: &VPath, to: &VPath) -> Result<(), ProtoError> {
+        self.inner.rename(from, to).await
+    }
+}
+
+/// #408: rows already found reach the client while the walk is stuck on
+/// something slow. The flush deadline used to be checked only when the NEXT
+/// row arrived, so a slow listing (or a long hash) held them all back.
+#[tokio::test]
+async fn rows_found_arrive_while_the_walk_is_stuck() {
+    let engine = Engine::new();
+    let mem = Arc::new(MemProvider::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    engine.register_provider(Arc::new(Stalling {
+        inner: Arc::clone(&mem),
+        stall: vp("mem:///r/slow"),
+        release: Arc::clone(&release),
+    }) as Arc<dyn Provider>);
+    twin_trees(&mem, 3).await;
+    mkdir(&mem, "mem:///l/slow").await;
+    mkdir(&mem, "mem:///r/slow").await;
+    write_file(&mem, "mem:///l/slow/x", b"x").await;
+    write_file(&mem, "mem:///r/slow/x", b"x").await;
+
+    let (h, mut rx) = engine
+        .compare_as(params("mem:///l", "mem:///r"), Actor::User)
+        .await
+        .expect("compare");
+    let first = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+        .await
+        .expect("the rows found arrive while `slow` hangs")
+        .expect("a batch");
+    assert!(!first.rows.is_empty());
+
+    release.notify_one();
+    drop(drain(rx).await);
+    assert_eq!(h.join().await, TaskState::Completed);
+}
