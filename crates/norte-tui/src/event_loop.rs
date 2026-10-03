@@ -635,6 +635,31 @@ pub async fn run(
             }
         }
         turn::spawn_probes(app, backend, &mut work);
+        // A key typed during the last wait (#390) runs now, through the same
+        // `on_key` as a real one, one per turn so each is drawn.
+        if let Some(key) = app.typed_ahead.pop_front() {
+            alt_solo.key(&key);
+            on_key(
+                app,
+                backend,
+                capture,
+                &mut Console::new(&mut events, terminal),
+                resolver,
+                viewer_resolver,
+                dialog_resolver,
+                help_lines,
+                lang,
+                quick_mode,
+                confirm_quit,
+                &cfg,
+                cli_preset.as_deref(),
+                lua_host.as_ref(),
+                &mut work,
+                key,
+            )
+            .await;
+            continue;
+        }
         tokio::select! {
             _ = session_tick.tick() => {
                 // One more second for the bar's notice (spec 2026-09-10).

@@ -126,7 +126,8 @@ pub enum Waited<T> {
 ///
 /// `Esc` and `Ctrl+C` are FIXED here, they do not go through the keymap: they
 /// are the emergency exit and must not be remappable to something that does
-/// not exist. Every other key is discarded while the wait lasts.
+/// not exist. Every other key is kept in `app.typed_ahead` and run when the
+/// wait is over (#390).
 ///
 /// The caller sets `app.busy` BEFORE and clears it AFTER; this only keeps it
 /// updated with the elapsed time.
@@ -168,7 +169,13 @@ pub async fn wait_painting<T>(
                                 return Waited::Quit;
                             }
                             (KeyCode::Esc, _) => return Waited::Cancelled,
-                            _ => {}
+                            // Any other key is KEPT for after the wait
+                            // (#390), not thrown away.
+                            _ => {
+                                if app.typed_ahead.len() < App::TYPED_AHEAD_MAX {
+                                    app.typed_ahead.push_back(key);
+                                }
+                            }
                         }
                     }
                     Some(Ok(_)) => {}

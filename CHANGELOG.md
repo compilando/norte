@@ -34,6 +34,10 @@ independently through `PROTOCOL_VERSION`.
   paused copies kept every search and folder size waiting, and one paused
   task froze the serial queue. Paused, a task now gives its slot back; on
   resume it shows *pending* until a slot is free.
+- **Keys typed while the terminal interface waits are no longer lost**
+  (#390). During a slow listing or refresh only Esc and Ctrl+C were heard
+  and everything else vanished; the other keys now run when the wait
+  ends.
 - **A change in one panel's folder no longer reloads the other panel**
   (#390). In the terminal interface, a download into `~/Downloads`
   relisted a remote folder open in the other panel every second or so,
