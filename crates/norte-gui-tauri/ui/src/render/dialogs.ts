@@ -31,6 +31,7 @@ export function dialogField(
 export function paintDialogs(this: Screen, dialogs: DialogView[]): void {
   if (dialogs.length === 0) {
     this.dialogsRoot.replaceChildren();
+    delete this.dialogsRoot.dataset["shape"];
     this.dialogPainted = null;
     this.dialogInput = null;
     this.dialogFields.clear();
@@ -40,6 +41,25 @@ export function paintDialogs(this: Screen, dialogs: DialogView[]): void {
   if (top === undefined) {
     return;
   }
+  // Typing does not rebuild the box. Every keystroke brings a patch, and the
+  // box — title, body, buttons, the field — was built anew for each one: the
+  // whole dialog repainted while typing a name. What typing changes is what
+  // the field and the form's text fields ALREADY show, so with the same
+  // dialog and the rest unchanged there is nothing to paint.
+  const shape = JSON.stringify([
+    dialogs.length,
+    {
+      ...top,
+      input: null,
+      fields: (top.fields ?? []).map((f) =>
+        f.kind.kind === "text" ? { ...f, value: null } : f,
+      ),
+    },
+  ]);
+  if (this.dialogPainted === top.id && this.dialogsRoot.dataset["shape"] === shape) {
+    return;
+  }
+  this.dialogsRoot.dataset["shape"] = shape;
   // The field to return focus to once the new box is mounted.
   let refocus: HTMLInputElement | null = null;
   // And, in a FORM, which of its fields had it and where the caret was

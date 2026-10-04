@@ -1769,6 +1769,18 @@ describe("a dialog's text field", () => {
     }
   });
 
+  it("typing does not rebuild the dialog box", () => {
+    const { screen } = mount();
+    screen.paint(withDialog("in", false));
+    const box = document.querySelector(".dialog");
+    liveField().value = "inf";
+    screen.paint(withDialog("inf", false));
+    expect(document.querySelector(".dialog")).toBe(box);
+    // A change that is not typing (the name turns hostile) does repaint.
+    screen.paint(withDialog("inf", true));
+    expect(document.querySelector(".dialog")).not.toBe(box);
+  });
+
   it("the field keeps FOCUS across the patch each key triggers", () => {
     // Reusing the node wasn't enough: the box gets rebuilt and the field
     // moves to the new one, and moving a node takes it out of the document
