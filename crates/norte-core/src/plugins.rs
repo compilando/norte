@@ -135,6 +135,45 @@ pub enum PluginConfigSetError {
     Io(#[source] io::Error),
 }
 
+/// One validated `[config]` write, detached from the registry
+/// ([`PluginRegistry::config_write`]): it holds what persisting and
+/// re-resolving need, so the I/O runs without the registry's lock.
+#[derive(Debug)]
+pub struct ConfigWrite {
+    config_dir: PathBuf,
+    id: String,
+    key: String,
+    value: String,
+    spec: norte_plugin_host::ConfigKeySpec,
+    manifest: norte_plugin_host::Manifest,
+    dir: PathBuf,
+}
+
+impl ConfigWrite {
+    /// Persists the value in `config.toml` and returns the plugin's settings
+    /// re-resolved from it, for [`PluginRegistry::install_settings`].
+    /// Synchronous I/O: call it from `spawn_blocking`, and serialize writes
+    /// to the same `config.toml` (it is a read-modify-write).
+    ///
+    /// # Errors
+    /// [`PluginConfigSetError::Io`] if the write or the re-resolution fails.
+    pub fn run(self) -> Result<BTreeMap<String, String>, PluginConfigSetError> {
+        norte_plugin_host::persist_plugin_setting_typed(
+            &self.config_dir,
+            &self.id,
+            &self.key,
+            &self.spec,
+            &self.value,
+        )
+        .map_err(PluginConfigSetError::Io)?;
+        norte_plugin_host::resolve_settings(&self.manifest, &self.dir).map_err(|e| {
+            PluginConfigSetError::Io(io::Error::other(format!(
+                "re-resolving config after write: {e}"
+            )))
+        })
+    }
+}
+
 /// Byte cap the core reads from a file when PREVIEWING (1 MiB, anti-DoS): the
 /// daemon's handler reads at most this much and hands it to the guest. The
 /// M4-P2 guest ADDITIONALLY has its own limit; this is the first barrier, on
@@ -1004,13 +1043,30 @@ impl PluginRegistry {
         key: &str,
         value: &str,
     ) -> Result<(), PluginConfigSetError> {
-        let idx = self
+        let settings = self.config_write(id, key, value)?.run()?;
+        self.install_settings(id, settings);
+        Ok(())
+    }
+
+    /// The validating half of [`Self::set_config`]: everything the write
+    /// needs, so it can run WITHOUT this registry (#408: the daemon held the
+    /// plugins lock across the `config.toml` write).
+    ///
+    /// # Errors
+    /// As [`Self::set_config`], minus the I/O.
+    pub fn config_write(
+        &self,
+        id: &str,
+        key: &str,
+        value: &str,
+    ) -> Result<ConfigWrite, PluginConfigSetError> {
+        let entry = self
             .catalog
             .plugins
             .iter()
-            .position(|p| p.manifest.id == id)
+            .find(|p| p.manifest.id == id)
             .ok_or_else(|| PluginConfigSetError::Unknown(id.to_string()))?;
-        let spec = self.catalog.plugins[idx]
+        let spec = entry
             .manifest
             .config
             .get(key)
@@ -1018,17 +1074,28 @@ impl PluginRegistry {
             .ok_or_else(|| PluginConfigSetError::UnknownKey(key.to_string()))?;
         norte_plugin_host::encode_wire_value(key, &spec, value)
             .map_err(PluginConfigSetError::Invalid)?;
-        norte_plugin_host::persist_plugin_setting_typed(&self.config_dir, id, key, &spec, value)
-            .map_err(PluginConfigSetError::Io)?;
-        let manifest = self.catalog.plugins[idx].manifest.clone();
-        let dir = self.catalog.plugins[idx].dir.clone();
-        let refreshed = norte_plugin_host::resolve_settings(&manifest, &dir).map_err(|e| {
-            PluginConfigSetError::Io(io::Error::other(format!(
-                "re-resolving config after write: {e}"
-            )))
-        })?;
-        self.catalog.plugins[idx].settings = refreshed;
-        Ok(())
+        Ok(ConfigWrite {
+            config_dir: self.config_dir.clone(),
+            id: id.to_owned(),
+            key: key.to_owned(),
+            value: value.to_owned(),
+            spec,
+            manifest: entry.manifest.clone(),
+            dir: entry.dir.clone(),
+        })
+    }
+
+    /// Installs the settings a [`ConfigWrite`] re-resolved. An `id` that
+    /// left the catalog meanwhile is ignored.
+    pub fn install_settings(&mut self, id: &str, settings: BTreeMap<String, String>) {
+        if let Some(entry) = self
+            .catalog
+            .plugins
+            .iter_mut()
+            .find(|p| p.manifest.id == id)
+        {
+            entry.settings = settings;
+        }
     }
 
     /// `id`'s expected binary path: `<config_dir>/plugins/<id>/plugin.wasm`.

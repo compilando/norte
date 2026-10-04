@@ -276,6 +276,9 @@ struct Shared {
     /// lock. The std `Mutex` is enough: dispatch is serial and the sections
     /// are short.
     plugins: Mutex<crate::plugins::PluginRegistry>,
+    /// Serializes `plugin.set_config`'s writes of `config.toml` (#408), so
+    /// the plugins lock need not be held across them.
+    plugin_config_writes: Mutex<()>,
     /// Serializes each WRITE of `plugins-state.toml` with the snapshot it
     /// comes from (ADR 0104). The `Mutex` above does not cross an `.await`,
     /// and `persist_state` merges the snapshot onto the file: two governance
@@ -984,6 +987,7 @@ impl Daemon {
             next_scope_req: AtomicU64::new(0),
             approvals: Arc::clone(&approvals),
             plugins: Mutex::new(plugins),
+            plugin_config_writes: Mutex::new(()),
             plugins_state_io: tokio::sync::Mutex::new(()),
             plugin_runtime,
             column_pool: Arc::new(crate::plugins::ColumnPool::default()),
@@ -5075,18 +5079,30 @@ async fn handle_plugin_set_config(
     let id = p.id.clone();
     let key = p.key.clone();
     let value = p.value.clone();
-    // The lock is held DURING the write (unlike set_approval/set_enabled,
-    // which release it before persisting): deliberate — it serializes
-    // `config.toml`'s read-modify-write for THIS plugin against a concurrent
-    // `set_config` on another key of the same plugin, which without it could
-    // lose a write (two interleaved read-modify-writes of `config.toml`).
-    // Still runs in `spawn_blocking` (rule 2: the write + the
-    // re-`resolve_settings` are synchronous I/O), so the async reactor never
-    // blocks — only a thread from the blocking pool holds the lock.
+    // `config_writes` serializes `config.toml`'s read-modify-write against a
+    // concurrent `set_config` on another key, which could otherwise lose a
+    // write. The PLUGINS lock is only taken to validate and to install the
+    // result (#408): held across the write, it stalled every plugin read —
+    // previews, decorations — for the length of the disk I/O. Runs in
+    // `spawn_blocking` (rule 2: synchronous I/O).
     let shared = Arc::clone(shared);
     crate::blocking::spawn_blocking(move || {
-        let mut reg = shared.plugins.lock().expect("plugins lock is sound");
-        reg.set_config(&id, &key, &value)
+        let _serial = shared
+            .plugin_config_writes
+            .lock()
+            .expect("plugin_config_writes lock is sound");
+        let write = shared
+            .plugins
+            .lock()
+            .expect("plugins lock is sound")
+            .config_write(&id, &key, &value)?;
+        let settings = write.run()?;
+        shared
+            .plugins
+            .lock()
+            .expect("plugins lock is sound")
+            .install_settings(&id, settings);
+        Ok::<(), crate::plugins::PluginConfigSetError>(())
     })
     .await
     .map_err(|_| RpcError::protocol(codes::INTERNAL_ERROR, "set_config task panicked"))?

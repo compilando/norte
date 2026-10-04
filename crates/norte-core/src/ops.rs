@@ -2153,13 +2153,12 @@ async fn hash_source_prefix(
     len: u64,
     ctx: &TaskCtx,
 ) -> Result<Option<[u8; 32]>, Error> {
-    use sha2::{Digest, Sha256};
     let range = norte_proto::ByteRange {
         offset: 0,
         len: Some(len),
     };
     let mut stream = src.read(from, Some(range)).await?;
-    let mut hasher = Sha256::new();
+    let mut hasher = BlockingSha256::new();
     let mut seen: u64 = 0;
     while let Some(item) = stream.next().await {
         if ctx.cancel.is_cancelled() {
@@ -2171,7 +2170,7 @@ async fn hash_source_prefix(
         let take = usize::try_from(len - seen)
             .unwrap_or(chunk.len())
             .min(chunk.len());
-        hasher.update(&chunk[..take]);
+        hasher.update(chunk.slice(..take)).await?;
         seen += take as u64;
         if seen >= len {
             break;
@@ -2180,7 +2179,44 @@ async fn hash_source_prefix(
     if seen < len {
         return Ok(None); // source shorter than the partial
     }
-    Ok(Some(hasher.finalize().into()))
+    Ok(Some(hasher.finish().await?))
+}
+
+/// SHA-256 on a blocking thread of its own, fed chunk by chunk (#408).
+///
+/// Hashing on a runtime worker held it for ~0.15 ms per 256 KiB chunk, and
+/// the read could not run ahead of the hash. Dropping it unfinished (a
+/// cancel, a read error) closes the channel and the thread ends.
+struct BlockingSha256 {
+    tx: tokio::sync::mpsc::Sender<bytes::Bytes>,
+    done: tokio::task::JoinHandle<[u8; 32]>,
+}
+
+impl BlockingSha256 {
+    fn new() -> Self {
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<bytes::Bytes>(4);
+        let done = crate::blocking::spawn_blocking(move || {
+            use sha2::{Digest as _, Sha256};
+            let mut hasher = Sha256::new();
+            while let Some(chunk) = rx.blocking_recv() {
+                hasher.update(&chunk);
+            }
+            hasher.finalize().into()
+        });
+        Self { tx, done }
+    }
+
+    async fn update(&mut self, chunk: bytes::Bytes) -> Result<(), Error> {
+        self.tx
+            .send(chunk)
+            .await
+            .map_err(|_| Error::Internal { panic: true })
+    }
+
+    async fn finish(self) -> Result<[u8; 32], Error> {
+        drop(self.tx);
+        self.done.await.map_err(|_| Error::Internal { panic: true })
+    }
 }
 
 /// Discard the resumable partial and start from scratch? Decided according
@@ -3274,9 +3310,15 @@ async fn expand_tree(
     let cap = usize::try_from(norte_proto::methods::SET_MODE_RECURSIVE_MAX).unwrap_or(usize::MAX);
     let mut output: Vec<(Arc<dyn Provider>, VPath)> = Vec::new();
     let mut unvisited: u64 = 0;
-    let mut pending: std::collections::VecDeque<(Arc<dyn Provider>, VPath)> =
-        roots.into_iter().collect();
-    while let Some((provider, path)) = pending.pop_front() {
+    // A child carries the kind its listing gave (#395): asking `stat` again
+    // for every FILE was one round trip per entry, and `set_mode` lstats
+    // each node right before touching it anyway. A DIRECTORY is still
+    // lstat'ed right before it is listed: `list` follows a symlink, and the
+    // queue makes the gap between the parent's listing and this one long
+    // enough to swap the directory for a link out of the tree.
+    let mut pending: std::collections::VecDeque<(Arc<dyn Provider>, VPath, Option<EntryKind>)> =
+        roots.into_iter().map(|(p, v)| (p, v, None)).collect();
+    while let Some((provider, path, listed)) = pending.pop_front() {
         if ctx.cancel.is_cancelled() {
             return Err(Error::Cancelled);
         }
@@ -3294,11 +3336,15 @@ async fn expand_tree(
         // whether it is a link is unknown, and `chmod(2)` follows links —
         // a file that may be outside the tree the human pointed at would be
         // changed. It is counted as not visited and continues.
-        let Ok(entry) = with_retry(&ctx.cancel, || provider.stat(&path).boxed()).await else {
+        let kind = if let Some(kind) = listed.filter(|k| *k != EntryKind::Dir) {
+            kind
+        } else if let Ok(entry) = with_retry(&ctx.cancel, || provider.stat(&path).boxed()).await {
+            entry.kind
+        } else {
             unvisited = unvisited.saturating_add(1);
             continue;
         };
-        let dir = entry.kind == EntryKind::Dir;
+        let dir = kind == EntryKind::Dir;
         output.push((Arc::clone(&provider), path.clone()));
         if !dir {
             continue;
@@ -3307,7 +3353,7 @@ async fn expand_tree(
             Ok(mut stream) => {
                 while let Some(item) = stream.next().await {
                     match item {
-                        Ok(e) => pending.push_back((Arc::clone(&provider), e.path)),
+                        Ok(e) => pending.push_back((Arc::clone(&provider), e.path, Some(e.kind))),
                         // An unreadable listing entry does not bring down
                         // the walk; it is counted and continues.
                         Err(_) => unvisited = unvisited.saturating_add(1),
@@ -3386,8 +3432,15 @@ pub(crate) async fn set_mode(
         // target can be outside the scope someone approved, so a chmod on
         // a link is a write that leaves its root. It is counted as failed,
         // and the frontend says so.
-        let entry = provider.stat(&path).await;
-        if matches!(&entry, Ok(e) if e.kind == EntryKind::Symlink) {
+        //
+        // ONE lstat gives both the kind this guard needs and the mode the
+        // reversal records (#395: they were two). One that fails is not
+        // touched blindly (#315): whether it is a link is unknown.
+        let entry = with_retry(&ctx.cancel, || {
+            crate::undo::stat_with_mode(provider.as_ref(), &path).boxed()
+        })
+        .await;
+        if !matches!(&entry, Ok(e) if e.kind != EntryKind::Symlink) {
             failed = failed.saturating_add(1);
             done = done.saturating_add(1);
             ctx.progress.update(|p| {
@@ -3406,7 +3459,7 @@ pub(crate) async fn set_mode(
         } else {
             opts.mode
         };
-        let previous = crate::undo::modo_actual(provider.as_ref(), &path).await;
+        let previous = entry.as_ref().ok().and_then(crate::undo::mode_of);
         match provider.set_mode(&path, mode).await {
             Ok(()) => {
                 // The mode that was LEFT, re-read: `chmod(2)` silently
@@ -4389,10 +4442,9 @@ async fn digest_of(
     cancel: &tokio_util::sync::CancellationToken,
 ) -> Result<(String, u64), Error> {
     use futures::StreamExt as _;
-    use sha2::{Digest as _, Sha256};
 
     let mut stream = provider.read(path, None).await?;
-    let mut hasher = Sha256::new();
+    let mut hasher = BlockingSha256::new();
     let mut read_count: u64 = 0;
     while let Some(chunk) = stream.next().await {
         // By CHUNK and not by file (rule 3).
@@ -4401,10 +4453,10 @@ async fn digest_of(
         }
         let chunk = chunk?;
         read_count = read_count.saturating_add(chunk.len() as u64);
-        hasher.update(&chunk);
+        hasher.update(chunk).await?;
     }
     Ok((
-        norte_proto::hashing::hex_lower(&hasher.finalize()),
+        norte_proto::hashing::hex_lower(&hasher.finish().await?),
         read_count,
     ))
 }
