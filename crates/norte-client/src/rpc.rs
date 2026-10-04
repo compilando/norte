@@ -13,9 +13,9 @@ use std::sync::{Arc, Mutex};
 
 use norte_proto::methods;
 use norte_proto::wire::{
-    FrameDecoder, JsonRpcVersion, Message, Notification, Request, RequestId, RpcError, codes,
-    encode_frame,
+    FrameDecoder, JsonRpcVersion, Notification, Request, RequestId, RpcError, codes, encode_frame,
 };
+use serde_json::value::RawValue;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot};
 
@@ -66,7 +66,46 @@ pub enum ClientError {
 }
 
 /// Responses in flight, by request id.
-type PendingMap = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<serde_json::Value, RpcError>>>>>;
+type PendingMap = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Box<RawValue>, RpcError>>>>>;
+
+/// One frame from the server, decoded ONCE (#408).
+///
+/// It used to be decoded three times: as an `untagged` [`Message`] — which
+/// buffers the whole frame and tries each variant in turn — then the result
+/// cloned out of it, then decoded again from that `Value` into the call's
+/// type. Here every kind of message fits this one shape, and a response's
+/// `result` stays raw until `call` decodes it straight into its type.
+#[derive(serde::Deserialize)]
+struct Incoming {
+    /// Required, as the `untagged` `Message` required it: a frame without
+    /// `"jsonrpc":"2.0"` resolves no call.
+    #[allow(dead_code)]
+    jsonrpc: JsonRpcVersion,
+    #[serde(default)]
+    id: Option<RequestId>,
+    #[serde(default)]
+    method: Option<String>,
+    #[serde(default)]
+    params: Option<serde_json::Value>,
+    #[serde(default)]
+    result: Option<Box<RawValue>>,
+    #[serde(default)]
+    error: Option<RpcError>,
+}
+
+impl Incoming {
+    /// `result` XOR `error`, as [`norte_proto::wire::Response::outcome`].
+    fn outcome(self) -> Result<Box<RawValue>, RpcError> {
+        match (self.result, self.error) {
+            (Some(r), None) => Ok(r),
+            (None, Some(e)) => Err(e),
+            _ => Err(RpcError::protocol(
+                codes::INVALID_REQUEST,
+                "response needs exactly one of result/error",
+            )),
+        }
+    }
+}
 
 /// Authenticated connection (implicitly: same uid, or the server cuts it)
 /// to the daemon.
@@ -137,28 +176,31 @@ impl Client {
                     break;
                 }
                 while let Some(frame) = decoder.next_frame() {
-                    let Ok(msg) = serde_json::from_slice::<Message>(&frame) else {
+                    let Ok(mut msg) = serde_json::from_slice::<Incoming>(&frame) else {
                         continue; // corrupt frame from the server: ignored
                     };
-                    match msg {
-                        Message::Response(resp) => {
-                            let Some(RequestId::Num(id)) = resp.id else {
-                                continue;
-                            };
+                    match (msg.method.take(), msg.id.take()) {
+                        // A response: an id and no method.
+                        (None, Some(RequestId::Num(id))) => {
                             let waiter = pending_reader
                                 .lock()
                                 .expect("pending lock is sound")
                                 .remove(&id);
                             if let Some(tx) = waiter {
-                                let outcome = resp.outcome().cloned();
-                                let _ = tx.send(outcome);
+                                let _ = tx.send(msg.outcome());
                             }
                         }
-                        Message::Notification(n) => {
-                            let _ = notif_tx.send(n);
+                        // A notification: a method and no id.
+                        (Some(method), None) => {
+                            let _ = notif_tx.send(Notification {
+                                jsonrpc: JsonRpcVersion,
+                                method,
+                                params: msg.params,
+                            });
                         }
-                        // The server does not send us requests in M2.
-                        Message::Request(_) => {}
+                        // The server does not send us requests in M2, and a
+                        // response without a numeric id names no call.
+                        _ => {}
                     }
                 }
             }
@@ -311,8 +353,8 @@ impl Client {
                 .remove(&id);
             return Err(ClientError::ConnectionClosed);
         }
-        let value = rx.await.map_err(|_| ClientError::ConnectionClosed)??;
-        Ok(serde_json::from_value(value)?)
+        let raw = rx.await.map_err(|_| ClientError::ConnectionClosed)??;
+        Ok(serde_json::from_str(raw.get())?)
     }
 
     /// Sends a JSON-RPC notification (no id, no response): fire-and-forget.
@@ -355,4 +397,62 @@ impl Client {
 pub fn is_version_mismatch(e: &ClientError) -> bool {
     // By CODE, never by parsing the message (protocol-guardian B1).
     matches!(e, ClientError::Rpc(rpc) if rpc.code == codes::VERSION_MISMATCH)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Incoming;
+    use norte_proto::wire::{RequestId, codes};
+
+    fn parse(json: &str) -> Incoming {
+        serde_json::from_str(json).expect("a frame")
+    }
+
+    /// #408: decoded once, every kind of frame keeps what the `untagged`
+    /// `Message` used to give: a response's result (raw, decoded later into
+    /// its type), the peer's error, a notification's method and params, and
+    /// the protocol error for a response with both or neither.
+    #[test]
+    fn one_decode_keeps_what_each_frame_says() {
+        let ok = parse(r#"{"jsonrpc":"2.0","id":7,"result":{"entries":[1,2]}}"#);
+        assert!(matches!(ok.id, Some(RequestId::Num(7))));
+        assert_eq!(ok.outcome().expect("ok").get(), r#"{"entries":[1,2]}"#);
+
+        let err = parse(r#"{"jsonrpc":"2.0","id":7,"error":{"code":-32601,"message":"no"}}"#);
+        assert_eq!(err.outcome().expect_err("err").code, -32601);
+
+        let both = parse(r#"{"jsonrpc":"2.0","id":7,"result":1,"error":{"code":1,"message":"x"}}"#);
+        assert_eq!(
+            both.outcome().expect_err("malformed").code,
+            codes::INVALID_REQUEST
+        );
+
+        let null = parse(r#"{"jsonrpc":"2.0","id":7,"result":null}"#);
+        assert_eq!(
+            null.outcome().expect_err("null is neither").code,
+            codes::INVALID_REQUEST
+        );
+
+        let orphan = parse(r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"x"}}"#);
+        assert!(
+            orphan.id.is_none() && orphan.method.is_none(),
+            "names no call"
+        );
+
+        let named = parse(r#"{"jsonrpc":"2.0","id":"a","result":1}"#);
+        assert!(
+            matches!(named.id, Some(RequestId::Str(_))),
+            "not a numeric call id"
+        );
+
+        assert!(
+            serde_json::from_str::<Incoming>(r#"{"id":7,"result":1}"#).is_err(),
+            "without jsonrpc 2.0 it is no frame"
+        );
+
+        let n = parse(r#"{"jsonrpc":"2.0","method":"task.progress","params":{"a":1}}"#);
+        assert!(n.id.is_none());
+        assert_eq!(n.method.as_deref(), Some("task.progress"));
+        assert_eq!(n.params, Some(serde_json::json!({"a":1})));
+    }
 }

@@ -140,7 +140,9 @@ norte-ai = { path = "crates/norte-ai", version = "0.3.0-alpha.8" }
 # Externos: versiones centralizadas; cada crate opta por las que necesita
 # con justificación en la PR que las introduce (regla 8 de CLAUDE.md).
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# `raw_value`: a response's result stays raw until it is decoded once into
+# its type (#408) — no new dependency, a feature of the one already here.
+serde_json = { version = "1", features = ["raw_value"] }
 # Provider SFTP (spec §3, ADR 0013): russh (SSH async Rust puro; alternativa
 # ssh2/libssh2 = binding a C con API bloqueante, rompe la regla 2) +
 # russh-sftp (cliente Y servidor sobre stream crudo, base del test in-process

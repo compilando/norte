@@ -562,7 +562,28 @@ impl RemoteBackend {
         // Resync: the state of the tasks that were already running (or
         // finished while we were away — the server retains recent
         // outcomes).
-        let list: TaskListResult = client.call(methods::TASK_LIST, &TaskListParams {}).await?;
+        //
+        // Both questions go out together (#408): one round trip, not two.
+        // An agent connection does not ask for approvals — see below.
+        let agent = self.inner.agent_session.is_some();
+        let (list, pending) = tokio::join!(
+            client.call::<_, TaskListResult>(methods::TASK_LIST, &TaskListParams {}),
+            async {
+                if agent {
+                    None
+                } else {
+                    Some(
+                        client
+                            .call::<_, PolicyPendingResult>(
+                                methods::POLICY_PENDING,
+                                &serde_json::json!({}),
+                            )
+                            .await,
+                    )
+                }
+            }
+        );
+        let list = list?;
         let mut live: std::collections::HashSet<u64> = std::collections::HashSet::new();
         for snapshot in list.tasks {
             live.insert(snapshot.task_id.get());
@@ -586,13 +607,10 @@ impl RemoteBackend {
         // channel where the real warnings need to be readable. It would
         // also make no sense: whoever approves is the human, never the
         // agent.
-        if self.inner.agent_session.is_some() {
+        let Some(pending) = pending else {
             return Ok(());
-        }
-        match client
-            .call::<_, PolicyPendingResult>(methods::POLICY_PENDING, &serde_json::json!({}))
-            .await
-        {
+        };
+        match pending {
             Ok(listed) => {
                 for p in listed.pending {
                     self.inner.push_approval(PolicyApprovalRequired {
