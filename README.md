@@ -182,7 +182,7 @@ clean install has a daemon to talk to.
 ## Install
 
 > [!NOTE]
-> **Alpha.** The current release, **v0.3.0-alpha.7**, ships **x86_64 Linux**
+> **Alpha.** The current release, **v0.3.0-alpha.8**, ships **x86_64 Linux**
 > binaries and, as a first preview, an unsigned **x86_64 Windows** installer
 > and portable ZIP. macOS builds from source today. Interfaces and
 > configuration may still change.
@@ -192,9 +192,9 @@ Two binaries, each with its own installer — `ntc`, the file manager, and
 
 ```sh
 curl --proto '=https' --tlsv1.2 -LsSf \
-  https://github.com/compilando/norte/releases/download/v0.3.0-alpha.7/norte-tui-installer.sh | sh
+  https://github.com/compilando/norte/releases/download/v0.3.0-alpha.8/norte-tui-installer.sh | sh
 curl --proto '=https' --tlsv1.2 -LsSf \
-  https://github.com/compilando/norte/releases/download/v0.3.0-alpha.7/norte-cli-installer.sh | sh
+  https://github.com/compilando/norte/releases/download/v0.3.0-alpha.8/norte-cli-installer.sh | sh
 ```
 
 The links name the tag on purpose: GitHub's `releases/latest` skips
