@@ -7,6 +7,8 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+## [0.3.0-alpha.8] - 2026-10-04
+
 ### Fixed
 
 - **A second `.rar` no longer shows the first one's contents** (#383).
@@ -7967,7 +7969,8 @@ and some daemon/socket tests are only available in CI environments.
 - Writes inside ZIP archives; list, restore, and purge operations for logical
   trash; and the M5 GUI.
 
-[Unreleased]: https://github.com/compilando/norte/compare/v0.3.0-alpha.7...HEAD
+[Unreleased]: https://github.com/compilando/norte/compare/v0.3.0-alpha.8...HEAD
+[0.3.0-alpha.8]: https://github.com/compilando/norte/compare/v0.3.0-alpha.7...v0.3.0-alpha.8
 [0.3.0-alpha.7]: https://github.com/compilando/norte/compare/v0.3.0-alpha.6...v0.3.0-alpha.7
 [0.3.0-alpha.6]: https://github.com/compilando/norte/compare/v0.3.0-alpha.5...v0.3.0-alpha.6
 [0.3.0-alpha.5]: https://github.com/compilando/norte/compare/v0.3.0-alpha.4...v0.3.0-alpha.5
