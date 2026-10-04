@@ -86,6 +86,9 @@ const SPOOL_HEAT_CAP: usize = 32;
 /// it changes generation. `saturating_add` pins it here.
 const SPOOL_UNSPOOLABLE: u32 = u32::MAX;
 
+/// How many spools a provider keeps (#397).
+const SPOOL_SLOTS: usize = 2;
+
 /// ONE hot `tar+gz` container's spool (#95.1): its whole gz stream
 /// DECOMPRESSED into a temporary file, so repeated reads are local O(1)
 /// seeks instead of O(offset) forward-decode.
@@ -108,9 +111,12 @@ struct Spool {
 /// The spool's shared state (#95.1). Lives in an `Arc` because the
 /// `spawn_blocking` threads that build/install the spool need `'static`.
 struct SpoolState {
-    /// A SINGLE slot per provider (v1): the last hot container wins —
-    /// another container that heats up REPLACES the previous one.
-    slot: tokio::sync::Mutex<Option<Spool>>,
+    /// Up to [`SPOOL_SLOTS`] hot containers, least recently used first
+    /// (#397), whose sizes TOGETHER stay within `spool_max_bytes`: with one
+    /// slot, comparing two `.tgz` (left, then right, per pair) decompressed
+    /// each one whole on every switch. The byte budget is the one a single
+    /// spool already had, so the disk it can take does not grow.
+    slot: tokio::sync::Mutex<Vec<Spool>>,
     /// Heat per container: number of gz reads of the generation seen. A
     /// new generation resets the counter (and un-marks a non-spoolable
     /// one); old generations' entries get pruned this way, opportunistically.
@@ -123,7 +129,7 @@ struct SpoolState {
 impl SpoolState {
     fn new() -> Self {
         Self {
-            slot: tokio::sync::Mutex::new(None),
+            slot: tokio::sync::Mutex::new(Vec::new()),
             heat: Mutex::new(HashMap::new()),
             building: Mutex::new(None),
         }
@@ -570,14 +576,15 @@ impl ArchiveProvider {
         // Path 1: a current spool. Unknown mtime = NEVER spool (with no
         // validator no cache is worth anything — same criterion as IndexCache).
         if generation.0.is_some() {
-            let mut slot = self.spool.slot.lock().await;
-            if let Some(s) = slot.as_ref()
-                && s.key == key
-            {
-                if s.generation == generation {
+            let mut slots = self.spool.slot.lock().await;
+            if let Some(i) = slots.iter().position(|s| s.key == key) {
+                if slots[i].generation == generation {
+                    // Most recently used goes last.
+                    let s = slots.remove(i);
                     let file = Arc::clone(&s.file);
                     let spool_len = s.len;
-                    drop(slot);
+                    slots.push(s);
+                    drop(slots);
                     let (tx, mut rx) = tokio::sync::mpsc::channel(4);
                     drop(crate::blocking::spawn_blocking(move || {
                         serve_from_spool(&file, spool_len, start, req_len, &tx);
@@ -591,7 +598,7 @@ impl ArchiveProvider {
                     container = %aref.outer.display_lossy(),
                     "spool discarded: the container changed generation"
                 );
-                *slot = None;
+                slots.remove(i);
             }
         }
 
@@ -709,7 +716,18 @@ fn build_spool_and_serve(
             };
             // blocking_lock: we're on a `spawn_blocking` thread, never
             // inside the async runtime (where it would panic).
-            *job.claim.state().slot.blocking_lock() = Some(spool);
+            {
+                let mut slots = job.claim.state().slot.blocking_lock();
+                slots.retain(|s| s.key != spool.key);
+                slots.push(spool);
+                // Oldest out until both caps hold. The new one alone is
+                // within the budget (`spool_gz` enforced it), so it stays.
+                while slots.len() > SPOOL_SLOTS
+                    || slots.iter().map(|s| s.len).sum::<u64>() > job.budget
+                {
+                    slots.remove(0);
+                }
+            }
             tracing::debug!(
                 bytes = len,
                 container = %job.container,

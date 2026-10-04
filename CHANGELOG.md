@@ -51,6 +51,15 @@ independently through `PROTOCOL_VERSION`.
 
 ### Performance
 
+- **Copying many small files to a local disk is faster** (#394): each
+  file is flushed to disk once instead of twice.
+- **Comparing two `.tar.gz` archives no longer decompresses each of
+  them again on every file** (#397), when both fit the spool budget
+  together; opening a `.rar` lists it once instead of once per request.
+- **Plugins compile on every core** (#399), shortening the first use
+  of a plugin such as the bundled FTP support.
+- **A large folder tree in the window no longer holds a click handler
+  per row** (#403).
 - **Opening help or the palette over an image no longer resends it**
   (#406). In a kitty-graphics terminal, closing F1 or the palette over a
   previewed image transmitted the whole picture again; it is now only

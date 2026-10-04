@@ -2463,7 +2463,8 @@ impl ByteSink for LocalSink {
         let final_path = self.final_path.clone();
         let stable = self.stable;
         let res = blocking(move || {
-            file.sync_all().map_err(|e| map_io(&e))?;
+            // `sync_data`, as in `confined.rs` (#394).
+            file.sync_data().map_err(|e| map_io(&e))?;
             // The descriptor stays ALIVE during the rename on purpose
             // (#299): the mode is fixed AFTER publishing and on the fd,
             // not on the path. The other way — relaxing `0o600` while it's
@@ -2541,7 +2542,7 @@ impl ByteSink for LocalSink {
         self.done = true;
         blocking(move || {
             if let Some(f) = file {
-                f.sync_all().map_err(|e| map_io(&e))?;
+                f.sync_data().map_err(|e| map_io(&e))?;
             }
             Ok(())
         })

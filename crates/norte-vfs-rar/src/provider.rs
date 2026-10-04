@@ -29,6 +29,10 @@ pub struct RarProvider {
     limits: RarLimits,
     /// Cached index and its generation. One archive, one slot.
     cache: Mutex<Option<Arc<ArchiveIndex>>>,
+    /// Single-flight for rebuilding the index (#397): opening a `.rar`
+    /// fans out several requests at once, and each one used to run the
+    /// delegate's full listing.
+    rebuild: tokio::sync::Mutex<()>,
     /// The index arrives already set and is NOT rebuilt: only tests that pin
     /// policy without a `.rar` to back it use this.
     pinned: bool,
@@ -43,6 +47,7 @@ impl RarProvider {
             delegate,
             limits,
             cache: Mutex::new(None),
+            rebuild: tokio::sync::Mutex::new(()),
             pinned: false,
         }
     }
@@ -57,6 +62,7 @@ impl RarProvider {
             delegate: Delegate::SevenZip(PathBuf::from("/nonexistent/7z")),
             limits: RarLimits::default(),
             cache: Mutex::new(Some(Arc::new(index))),
+            rebuild: tokio::sync::Mutex::new(()),
             pinned: true,
         }
     }
@@ -106,11 +112,20 @@ impl RarProvider {
             return Ok(Arc::clone(cache.as_ref().expect("pinned index")));
         }
         let generation = self.generation().await?;
-        if generation.0.is_some() {
+        let cached = || {
             let cache = self.cache.lock().expect("cache lock is sound");
-            if let Some(hit) = cache.as_ref().filter(|i| i.generation == generation) {
-                return Ok(Arc::clone(hit));
-            }
+            cache
+                .as_ref()
+                .filter(|i| generation.0.is_some() && i.generation == generation)
+                .map(Arc::clone)
+        };
+        if let Some(hit) = cached() {
+            return Ok(hit);
+        }
+        // Whoever waited here finds the index the first one built.
+        let _rebuilding = self.rebuild.lock().await;
+        if let Some(hit) = cached() {
+            return Ok(hit);
         }
         let argv = self.delegate.list_argv(&self.archive);
         let stdout = self

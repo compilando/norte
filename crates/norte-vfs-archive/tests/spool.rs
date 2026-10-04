@@ -94,6 +94,43 @@ async fn a_second_hot_read_uses_the_spool() {
     );
 }
 
+/// #397: two hot containers read alternately (a comparison's hash step:
+/// left, right, left…) both stay spooled when they fit the byte budget
+/// together. With one slot each switch decompressed the other one whole.
+#[tokio::test(flavor = "multi_thread")]
+async fn two_hot_containers_stay_spooled_together() {
+    let data = noise(600_000, 0x2545_F491);
+    let gz = common::gzip(&TarSmith::new().file(b"a.bin", &data).build());
+    let (mem, left) = common::seed_container(b"left.tar.gz", &gz).await;
+    let right = MemProvider::root().join(seg(b"right.tar.gz"));
+    common::write_file(&mem, &right, &gz).await;
+    let p = ArchiveProvider::with_limits(
+        Arc::clone(&mem) as Arc<dyn Provider>,
+        Format::TarGz,
+        "tar+gz+mem",
+        Limits::default(),
+    );
+    let file = |c: &VPath| {
+        VPath::archive_compose("tar+gz", c, &[])
+            .expect("compose")
+            .join(seg(b"a.bin"))
+    };
+    let (l, r) = (file(&left), file(&right));
+    // Warm both: two reads each build their spools.
+    for f in [&l, &l, &r, &r] {
+        assert_eq!(read_all(&p, f, None).await, data);
+    }
+    let before = mem.faults().read_calls();
+    for f in [&l, &r, &l, &r] {
+        assert_eq!(read_all(&p, f, None).await, data);
+    }
+    let delta = mem.faults().read_calls() - before;
+    assert!(
+        delta <= 4,
+        "alternating must be served from both spools (read_calls delta = {delta})"
+    );
+}
+
 /// Mutating the container invalidates the spool: the later read serves
 /// the NEW content (never the stale spool) and the heat starts from zero.
 #[tokio::test(flavor = "multi_thread")]

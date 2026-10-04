@@ -20,13 +20,25 @@ set -uo pipefail
 
 # Un borrado de rama no construye nada.
 todo_borrados=1
+toca_main=0
 refs=()
-while read -r _local_ref local_sha _remote_ref remote_sha; do
+while read -r _local_ref local_sha remote_ref remote_sha; do
     [[ "$local_sha" =~ ^0+$ ]] && continue
     todo_borrados=0
+    [[ "$remote_ref" == "refs/heads/main" ]] && toca_main=1
     refs+=("$local_sha $remote_sha")
 done
 [[ $todo_borrados -eq 1 ]] && exit 0
+
+# SOLO `main` paga el gate (2026-10-04, mientras no haya releases reales).
+# Nadie más compila las ramas: el gate en cada push de rama duplicaba el de
+# la fusión, y en una sesión fueron ~15 pasadas de `ci-fast` — más de una
+# hora esperando. Un rojo aparece al fusionar y se arregla allí. Para el gate
+# en una rama, `NORTE_GATE=1 git push`.
+if [[ $toca_main -eq 0 && "${NORTE_GATE:-0}" != "1" ]]; then
+    echo "pre-push: rama, sin gate (solo main lo pasa; NORTE_GATE=1 para forzarlo)"
+    exit 0
+fi
 
 RAIZ="$(git rev-parse --show-toplevel)"
 cd "$RAIZ" || exit 1
