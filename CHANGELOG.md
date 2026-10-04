@@ -9,6 +9,14 @@ independently through `PROTOCOL_VERSION`.
 
 ### Performance
 
+- **The window paints less** while a terminal prints, a border is
+  dragged or a task runs: the terminal repaints only the rows that
+  changed, resizing moves the panels instead of rebuilding them, and a
+  listing nothing touched is not repainted. Typing in a dialog no longer
+  repaints the whole dialog.
+- **The terminal interface stops redrawing with an idle log or plugin
+  panel open**: the log panel repaints only when lines arrive.
+
 - **Copying many small files is several times faster** (#394, ADR 0166):
   consecutive files of a folder are copied four at a time. Pausing,
   cancelling, undo and the progress bar behave as before.

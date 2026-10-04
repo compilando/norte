@@ -857,6 +857,9 @@ pub struct App {
     /// build `App` without it: a panel with no ring paints empty saying there
     /// is no log installed, which is the truth, and does not crash.
     pub log_ring: Option<norte_config::logring::LogRing>,
+    /// The ring's `pushed()` when the last frame was drawn: a 100 ms tick
+    /// repaints an open log panel only if lines arrived since.
+    pub log_painted: u64,
     /// The REMOTE half of that panel: what the daemon has counted (#328).
     ///
     /// With `--socket` the ring above only has this terminal's own lines, and
@@ -1369,6 +1372,7 @@ impl App {
             log_panel: norte_frontend::logpanel::LogPanel::default(),
             log_filter_input: None,
             log_ring: None,
+            log_painted: 0,
             log_remote: crate::logview::LogRemote::default(),
             busy: None,
             menu: None,
@@ -1708,21 +1712,27 @@ impl App {
 
     /// Whether a 100 ms tick can leave the screen as it is (#405): nothing
     /// on it moves with the clock at that pace. Tasks (their rows and the
-    /// light bar animate), a log panel (it streams), a plugin
-    /// panel, the splash (it expires by the paint clock) and a wait in
-    /// progress (its spinner) all say no. A terminal panel does not: its
-    /// shell's output wakes the loop itself ([`App::term_wake`]). Notices
-    /// and relative dates move by the second, and the one-second tick
-    /// always repaints.
+    /// light bar animate), the splash (it expires by the paint clock) and a
+    /// wait in progress (its spinner) say no; so does an open log panel, but
+    /// only when this process logged a line since the last frame — nothing
+    /// else wakes the loop for those. A terminal panel does not (its shell's
+    /// output wakes the loop, [`App::term_wake`]), nor a plugin panel or the
+    /// daemon's log (their answers arrive as events, and that turn draws).
+    /// Notices and relative dates move by the second, and the one-second
+    /// tick always repaints.
     ///
     /// Conservative on purpose: a frame skipped wrongly is a frozen screen,
     /// one drawn needlessly is only CPU.
     #[must_use]
     pub fn quiet_for_a_tick(&self) -> bool {
+        let log_moved = self.log_slot_visible().is_some()
+            && self
+                .log_ring
+                .as_ref()
+                .is_some_and(|r| r.pushed() != self.log_painted);
         !self.needs_frame
             && self.board.rows().is_empty()
-            && self.log_slot_visible().is_none()
-            && self.panel_slot().is_none()
+            && !log_moved
             && self.splash.is_none()
             && self.busy.is_none()
     }
@@ -1855,6 +1865,20 @@ mod tests {
         assert!(
             !app.quiet_for_a_tick(),
             "what changed after the last draw has to be drawn"
+        );
+        app.needs_frame = false;
+
+        // An open log panel only costs a frame when lines arrived since the
+        // last one: it used to keep the tick drawing ten times a second.
+        app.log_ring = Some(norte_config::logring::LogRing::new(16));
+        app.toggle_log();
+        app.needs_frame = false;
+        app.log_painted = 0;
+        assert!(app.quiet_for_a_tick(), "the log panel, with nothing new");
+        app.log_painted = 1;
+        assert!(
+            !app.quiet_for_a_tick(),
+            "the ring moved since the last frame: it is drawn"
         );
     }
 

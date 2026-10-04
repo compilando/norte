@@ -443,6 +443,10 @@ pub async fn run(
             last_area
         } else {
             app.needs_frame = false;
+            app.log_painted = app
+                .log_ring
+                .as_ref()
+                .map_or(0, norte_config::logring::LogRing::pushed);
             turn::prepare_frame(app, backend, terminal, lua_host.as_ref()).await?;
             // A one-off exemption from rule 2: the draw writes the control
             // terminal synchronously (ratatui's official async pattern;
