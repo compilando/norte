@@ -18,6 +18,38 @@ impl State {
     /// open branch turns every host snapshot into a message of megabytes.
     pub(super) const MAX_BRANCHES: usize = 2000;
 
+    /// Rows assumed visible until the renderer says how many fit (#403).
+    pub(super) const TREE_DEFAULT_ROWS: u32 = 100;
+
+    /// Rows sent beyond each edge of the visible window, so a short scroll
+    /// paints at once while its `TreeSetVisibleRange` is on its way.
+    const TREE_OVERSCAN: u64 = 50;
+
+    /// Cap on how many rows the renderer may say fit: a hostile `count`
+    /// would put the whole tree back on the wire.
+    const TREE_MAX_ROWS: u32 = 500;
+
+    /// The renderer scrolled the tree (#403).
+    pub(super) fn tree_range(
+        &mut self,
+        first: u64,
+        count: u32,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let cursor = self.branches.as_ref().map_or(0, |t| t.cursor() as u64);
+        let window = (first, count.clamp(1, Self::TREE_MAX_ROWS), cursor);
+        if window == self.tree_window {
+            return (self.applied(), Vec::new());
+        }
+        self.tree_window = window;
+        let Some(SlotId(id)) = self.branches_slot() else {
+            return (self.applied(), Vec::new());
+        };
+        let change = ViewChange::Slot {
+            slot: Box::new(crate::dto::SlotView::Tree(Box::new(self.branch_tree(id)))),
+        };
+        (self.applied(), vec![self.parche(vec![change])])
+    }
+
     /// The tree's slot, if the layout places one.
     pub(super) fn branches_slot(&self) -> Option<SlotId> {
         self.tree
@@ -193,7 +225,27 @@ impl State {
         let tree = self.branches.as_ref().unwrap_or(&empty);
         let rows_in = tree.rows();
         let root = tree.root().cloned();
+        let total = rows_in.len() as u64;
+        let cursor = tree.cursor() as u64;
+        // The window the renderer paints, or one centred on the cursor when
+        // the cursor MOVED out of it (a key): the renderer reveals the cursor
+        // and reports its new window. A cursor that stayed put while the
+        // reader scrolled away with the wheel does not pull the window back.
+        let (mut first, count, cursor_then) = self.tree_window;
+        let count = u64::from(count);
+        if cursor != cursor_then && (cursor < first || cursor >= first.saturating_add(count)) {
+            first = cursor.saturating_sub(count / 2);
+        }
+        let start = first.saturating_sub(Self::TREE_OVERSCAN).min(total);
+        let end = first
+            .saturating_add(count)
+            .saturating_add(Self::TREE_OVERSCAN)
+            .min(total);
+        let window = usize::try_from(start).unwrap_or(usize::MAX)
+            ..usize::try_from(end).unwrap_or(usize::MAX);
         let rows = rows_in
+            .get(window)
+            .unwrap_or_default()
             .iter()
             .map(|r| {
                 // The root carries its whole path: a bare "`/`", or the name
@@ -221,7 +273,9 @@ impl State {
         crate::dto::TreeSlotView {
             slot_id: id,
             rows,
-            cursor: tree.cursor() as u64,
+            first: start,
+            total,
+            cursor,
             generation: self.gen_branches,
         }
     }

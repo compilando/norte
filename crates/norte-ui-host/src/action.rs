@@ -634,7 +634,8 @@ pub enum UiAction {
     /// The tree stays where it is, which is what makes keeping it open
     /// useful.
     TreeActivateRow {
-        /// Row, in the order they traveled.
+        /// Row, among ALL visible branches (`TreeSlotView::first` plus the
+        /// position in the window that traveled).
         row: u32,
         /// The generation with which it was painted. Mandatory for the same
         /// reason as the places bar: expanding requests a listing, and that
@@ -643,10 +644,18 @@ pub enum UiAction {
     },
     /// Folds or expands the branch, without navigating anywhere.
     TreeToggleRow {
-        /// Row, in the order they traveled.
+        /// Row, among ALL visible branches, as in [`Self::TreeActivateRow`].
         row: u32,
         /// The generation with which it was painted.
         generation: u64,
+    },
+    /// States which rows of the tree the renderer is painting (#403,
+    /// bridge 97): only a window of them travels, and this moves it.
+    TreeSetVisibleRange {
+        /// Index, among all visible branches, of the first painted row.
+        first: u64,
+        /// How many fit.
+        count: u32,
     },
     /// Chooses a layout from the picker (a click) and APPLIES it.
     LayoutActivateRow {

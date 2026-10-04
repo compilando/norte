@@ -1461,9 +1461,17 @@ pub struct MetadataFieldView {
 pub struct TreeSlotView {
     /// Slot id.
     pub slot_id: u32,
-    /// The visible branches, in paint order.
+    /// A WINDOW of the visible branches, in paint order (#403, bridge 97):
+    /// the ones around what the renderer paints, not all of them — a
+    /// tree with large branches open is thousands of rows.
     pub rows: Vec<TreeRowView>,
-    /// Which row has the cursor.
+    /// Index, among all visible branches, of `rows[0]`.
+    #[serde(default)]
+    pub first: u64,
+    /// How many visible branches there are in all, for the scrollbar.
+    #[serde(default)]
+    pub total: u64,
+    /// Which row has the cursor, among all visible branches.
     pub cursor: u64,
     /// Rises every time the SET of rows changes.
     ///

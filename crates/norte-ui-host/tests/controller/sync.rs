@@ -2143,6 +2143,42 @@ async fn the_tree_requests_a_branch_and_only_when_opening_it() {
     );
 }
 
+/// #403: a tree with hundreds of branches open travels as a WINDOW, and
+/// the renderer's range moves it — the rows it carries are the ones around
+/// what is painted, numbered among all of them.
+#[tokio::test]
+async fn a_large_tree_travels_as_a_window() {
+    let mut f = Fake::default();
+    let dirs: Vec<(Vec<u8>, bool)> = (0..400)
+        .map(|i| (format!("d{i:03}").into_bytes(), true))
+        .collect();
+    f.put("mem:///casa", dirs);
+    let (h, _snap) = host_tree(Arc::new(f)).await;
+    let mut sub = h.subscribe();
+    run_by_palette(&h, &mut sub, "pane.tree").await;
+    let snapshot = tree_with_branches(&mut sub, 2).await;
+    let t = tree_of(&snapshot);
+    assert_eq!(t.total, 401, "the root and its 400 branches");
+    assert!(t.rows.len() <= 200, "a window, not all: {}", t.rows.len());
+    assert_eq!(t.first, 0);
+
+    h.dispatch(UiAction::TreeSetVisibleRange {
+        first: 300,
+        count: 20,
+    })
+    .await
+    .expect("host alive");
+    let SlotView::Tree(moved) = next_slot(&mut sub, t.slot_id).await else {
+        panic!("still a tree");
+    };
+    assert_eq!(moved.first, 250, "the window, with its overscan");
+    assert_eq!(moved.rows.len(), 120);
+    assert_eq!(
+        moved.rows[0].label, "d249",
+        "rows numbered among all of them"
+    );
+}
+
 /// **The tree FOLLOWS the listing that navigates** (ADR 0102).
 ///
 /// A pane anchored on opening and still afterward said where you were when

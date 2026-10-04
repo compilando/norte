@@ -7,6 +7,13 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Performance
+
+- **The window's folder tree sends only the rows around what is on
+  screen** (#403, bridge 97). With large branches open it used to carry
+  every visible branch in each update; scrolling now asks for the rows
+  it needs.
+
 ## [0.3.0-alpha.8] - 2026-10-04
 
 ### Fixed

@@ -4644,11 +4644,14 @@ describe("slots that aren't listings", () => {
       {
         kind: "tree" as const,
         slot_id: 8,
+        // A window: rows 40 and 41 of 120 (bridge 97).
         rows: [
           { label: "home", hostile: false, depth: 0, expanded: true, children: true },
           { label: "docs", hostile: false, depth: 1, expanded: false, children: null },
         ],
-        cursor: 0,
+        first: 40,
+        total: 120,
+        cursor: 40,
         generation: 3,
       },
     ];
@@ -4660,10 +4663,14 @@ describe("slots that aren't listings", () => {
     const rows = document.querySelectorAll<HTMLElement>(".tree-row");
     rows[1]?.querySelector<HTMLElement>(".tree-name")?.click();
     rows[1]?.querySelector<HTMLElement>(".tree-twisty")?.click();
+    // Numbered among ALL branches, as the host names them.
     expect(sent.slice(-2)).toEqual([
-      { action: "tree_activate_row", row: 1, generation: 3 },
-      { action: "tree_toggle_row", row: 1, generation: 3 },
+      { action: "tree_activate_row", row: 41, generation: 3 },
+      { action: "tree_toggle_row", row: 41, generation: 3 },
     ]);
+    const list = document.querySelector<HTMLElement>(".tree-rows");
+    expect(list?.style.paddingTop).toBe("calc(var(--cell-h) * 40)");
+    expect(list?.style.paddingBottom).toBe("calc(var(--cell-h) * 78)");
   });
 
   it("an unchanged tree keeps its nodes across paints", () => {
@@ -4676,6 +4683,8 @@ describe("slots that aren't listings", () => {
         { label: "home", hostile: false, depth: 0, expanded: true, children: true },
         { label: "docs", hostile: false, depth: 1, expanded: false, children: null },
       ],
+      first: 0,
+      total: 2,
       cursor: 0,
       generation: 1,
     };
