@@ -16,7 +16,10 @@ independently through `PROTOCOL_VERSION`.
   repaints the whole dialog.
 - **The terminal interface stops redrawing with an idle log or plugin
   panel open**: the log panel repaints only when lines arrive.
-
+- **Large daemon answers cost less on both ends** (#408): the daemon
+  serializes a result once and the client decodes it once, straight
+  into its type, instead of three times. Reconnecting asks for tasks and
+  pending approvals in one round trip. The protocol does not change.
 - **Copying many small files is several times faster** (#394, ADR 0166):
   consecutive files of a folder are copied four at a time. Pausing,
   cancelling, undo and the progress bar behave as before.
