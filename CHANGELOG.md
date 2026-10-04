@@ -133,6 +133,12 @@ independently through `PROTOCOL_VERSION`.
 - **wasmtime 48.0.5** for RUSTSEC-2026-0321 to 0327: among them a plugin
   that could crash norte through a file dated before 1970, and a stack
   overflow reachable from a component's callback.
+- **russh 0.63.3 and pageant 0.2.3** for six advisories in the SSH
+  transport behind SFTP connections: among them a server that could make
+  norte run callbacks for channels it never opened, a panic on a
+  malformed cipher negotiation, memory exhaustion during a rekey, and an
+  out-of-bounds read from a malicious Pageant agent on Windows. A server
+  that offers only a host certificate is refused, as before.
 
 ## [0.3.0-alpha.7] - 2026-10-02
 

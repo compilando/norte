@@ -145,7 +145,7 @@ serde_json = "1"
 # ssh2/libssh2 = binding a C con API bloqueante, rompe la regla 2) +
 # russh-sftp (cliente Y servidor sobre stream crudo, base del test in-process
 # sin Docker). Superficie de deps grande (aws-lc-rs) → cargo-deny vigilante.
-russh = "0.62"
+russh = "0.63.2"
 russh-sftp = "2.3"
 # Provider FTP (fase 5bis, ADR 0014): suppaftp, cliente FTP/FTPS async (fork
 # mantenido de rust-ftp), feature async sobre tokio. MLSD (RFC 3659) + REST
