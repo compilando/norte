@@ -812,6 +812,30 @@ describe("Screen", () => {
     expect(grid.getAttribute("aria-activedescendant")).toBe(selected.id);
   });
 
+  // A listing nothing touched is skipped whole: a patch for something else
+  // (a task, the other pane) used to walk every visible row of it.
+  it("an untouched listing is not repainted", () => {
+    const { screen, root } = mount();
+    const v = view({ rows: [row(0, "a.txt"), row(1, "b.txt")] });
+    screen.paint(v);
+    const slot = v.slots[0];
+    if (slot?.kind !== "browser") {
+      throw new Error("expected a listing");
+    }
+    // Mutated WITHOUT the session's `rev`: a skipped listing keeps its DOM.
+    slot.cursor = 1;
+    screen.paint(v);
+    expect(
+      root.querySelector(".slot")?.querySelector("[aria-activedescendant]"),
+    ).toBeTruthy();
+    const before = root.querySelector(".scroller")?.getAttribute("aria-activedescendant");
+    slot.rev = (slot.rev ?? 0) + 1;
+    screen.paint(v);
+    expect(
+      root.querySelector(".scroller")?.getAttribute("aria-activedescendant"),
+    ).not.toBe(before);
+  });
+
   it("the cursor patch, which mutates `selected` in place, gets repainted", () => {
     // A row is skipped by IDENTITY if nothing changed; the cursor is the one
     // thing the session changes without replacing the row, and it can't be
@@ -830,6 +854,8 @@ describe("Screen", () => {
     a.selected = false;
     b.selected = true;
     slot.cursor = 1;
+    // As the session does when it mutates a listing in place.
+    slot.rev = (slot.rev ?? 0) + 1;
     screen.paint(v);
     const rows = root.querySelectorAll(".row");
     expect(rows[0]?.getAttribute("aria-selected")).toBe("false");

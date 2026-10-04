@@ -927,6 +927,18 @@ export class Screen {
       }
       dom.painted = { slot, size };
     }
+    // A LISTING is mutated in place by the session, which bumps its `rev`
+    // when it does: same object, same `rev`, same sizes and stripes = a
+    // listing nothing touched, skipped whole. Every patch — a task's
+    // progress, the terminal, the other pane — used to walk every listing's
+    // visible rows.
+    if (slot.kind === "browser") {
+      const size = `${String(slot.rev ?? 0)}|${String(window.innerWidth)}x${String(window.innerHeight)}|${String(cell.w)}x${String(cell.h)}|${String(view.row_stripes ?? false)}`;
+      if (dom.painted?.slot === slot && dom.painted.size === size) {
+        return;
+      }
+      dom.painted = { slot, size };
+    }
     if (slot.kind === "places") {
       this.paintPlaces(dom, slot);
       return;

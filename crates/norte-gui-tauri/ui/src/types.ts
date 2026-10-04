@@ -213,6 +213,10 @@ export interface ColumnHeader {
 export interface BrowserSlotView {
   kind: "browser";
   slot_id: number;
+  /** RENDERER-local, never from the host: bumped by the session each time
+   *  it mutates this listing in place, so the painter skips one that did
+   *  not change. */
+  rev?: number;
   generation: number;
   /**
    * What is arriving INTO this directory, 0–100 (ADR 0148, bridge 94): the
