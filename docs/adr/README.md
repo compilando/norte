@@ -166,3 +166,4 @@ edits.
 | [0163](0163-a-provider-plugin-can-say-a-file-is-busy.md) | A provider plugin can say a file is busy: `norte:provider@0.2.0` | accepted |
 | [0164](0164-a-paused-task-gives-its-slot-back.md) | A paused task gives its scheduler slot back | accepted |
 | [0165](0165-a-local-copy-fills-its-staging-in-the-kernel.md) | A local copy fills its staging in the kernel | accepted |
+| [0166](0166-a-copy-keeps-several-files-in-flight.md) | A copy keeps several files in flight | accepted |

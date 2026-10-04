@@ -50,7 +50,15 @@ pub enum Priority {
 /// assert!(!g.is_paused());
 /// ```
 #[derive(Clone)]
-pub struct PauseGate(Arc<watch::Sender<bool>>, Arc<Mutex<Slot>>);
+pub struct PauseGate(
+    Arc<watch::Sender<bool>>,
+    Arc<Mutex<Slot>>,
+    /// Whether the slot is HELD (not lent): several callers of
+    /// [`TaskCtx::checkpoint`] — the files of a run in flight (#394) — wait
+    /// on it after a resume, so only the one that lent the slot asks for it
+    /// and the rest go on once it is back.
+    Arc<watch::Sender<bool>>,
+);
 
 /// The scheduler slot a running task holds, so a pause can give it back
 /// (ADR 0164). Empty for a context built outside the scheduler.
@@ -65,6 +73,7 @@ impl Default for PauseGate {
         Self(
             Arc::new(watch::channel(false).0),
             Arc::new(Mutex::new(Slot::default())),
+            Arc::new(watch::channel(true).0),
         )
     }
 }
@@ -75,18 +84,21 @@ impl PauseGate {
         let mut slot = self.1.lock().expect("slot lock sound");
         slot.sem = Some(sem);
         slot.permit = permit;
+        self.2.send_replace(true);
     }
 
     /// Gives the slot back; the semaphore to ask again, if it had one.
     fn lend_slot(&self) -> Option<Arc<Semaphore>> {
         let mut slot = self.1.lock().expect("slot lock sound");
         drop(slot.permit.take()?);
+        self.2.send_replace(false);
         slot.sem.clone()
     }
 
     /// The task ended: its slot is free and stays free.
     fn release_slot(&self) {
         *self.1.lock().expect("slot lock sound") = Slot::default();
+        self.2.send_replace(true);
     }
 
     /// Closes the gate: the task will stop at its next checkpoint.
@@ -168,7 +180,9 @@ impl TaskCtx {
             return Err(Error::Cancelled);
         }
         if !self.pause.is_paused() {
-            return Ok(());
+            // Resumed but the slot is still lent (#394): a caller that was
+            // not at a checkpoint during the pause must not run without it.
+            return self.wait_for_slot().await;
         }
         self.progress.update(|p| p.state = TaskState::Paused);
         // ADR 0164: paused, the slot goes back to the scheduler, so a
@@ -202,9 +216,27 @@ impl TaskCtx {
                 }
             };
             self.pause.hold(sem, Some(permit));
+        } else {
+            // Another caller lent the slot (#394): wait until it holds it
+            // again, or this one would run with no slot at all.
+            self.wait_for_slot().await?;
         }
         self.progress.update(|p| p.state = TaskState::Running);
         Ok(())
+    }
+
+    /// Waits until the slot is HELD (not lent by another caller, #394).
+    /// Immediate when it is, which is always outside a pause.
+    async fn wait_for_slot(&self) -> Result<(), Error> {
+        // On the sender first: this runs once per chunk.
+        if *self.pause.2.borrow() {
+            return Ok(());
+        }
+        let mut held = self.pause.2.subscribe();
+        tokio::select! {
+            () = self.cancel.cancelled() => Err(Error::Cancelled),
+            _ = held.wait_for(|held| *held) => Ok(()),
+        }
     }
 }
 

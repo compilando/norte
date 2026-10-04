@@ -562,6 +562,77 @@ async fn a_paused_task_lends_its_slot() {
     assert_eq!(paused.join().await, TaskState::Completed);
 }
 
+/// One caller of `checkpoint`, counting its steps.
+async fn stepping(
+    ctx: &norte_core::TaskCtx,
+    steps: &std::sync::atomic::AtomicU64,
+) -> Result<(), Error> {
+    for _ in 0..1000 {
+        ctx.checkpoint().await?;
+        steps.fetch_add(1, Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+    Ok(())
+}
+
+/// #394: with SEVERAL callers at `checkpoint` (the files of a run in
+/// flight), only one lends the slot, and after a resume none of them runs
+/// until the slot is held again — the others used to go on with no slot.
+#[tokio::test(flavor = "multi_thread")]
+async fn several_callers_resume_only_with_the_slot_back() {
+    let sched = Scheduler::new(1);
+    let steps = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let s = Arc::clone(&steps);
+    let paused = sched.submit(
+        "mem",
+        TaskKind::Copy,
+        Priority::Normal,
+        Actor::User,
+        body(move |ctx| {
+            Box::pin(async move {
+                let (a, b, c) =
+                    tokio::join!(stepping(&ctx, &s), stepping(&ctx, &s), stepping(&ctx, &s));
+                a.and(b).and(c)
+            })
+        }),
+    );
+    let mut rx = paused.progress();
+    while steps.load(Ordering::SeqCst) < 3 {
+        tokio::task::yield_now().await;
+    }
+    paused.pause_gate().pause();
+    until(&mut rx, |p| p.state == TaskState::Paused).await;
+
+    // Takes the only slot while the copy is paused, until told to finish.
+    let release = Arc::new(tokio::sync::Notify::new());
+    let r = Arc::clone(&release);
+    let holder = sched.submit(
+        "mem",
+        TaskKind::Search,
+        Priority::Normal,
+        Actor::User,
+        body(move |_ctx| {
+            Box::pin(async move {
+                r.notified().await;
+                Ok(())
+            })
+        }),
+    );
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    paused.pause_gate().resume();
+    let frozen = steps.load(Ordering::SeqCst);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(
+        steps.load(Ordering::SeqCst),
+        frozen,
+        "no caller runs while another task holds the slot"
+    );
+    release.notify_one();
+    assert_eq!(holder.join().await, TaskState::Completed);
+    paused.cancel();
+    assert_eq!(paused.join().await, TaskState::Cancelled);
+}
+
 /// A task paused BEFORE starting does not run its body until resumed, even if
 /// the body has no checkpoints of its own.
 #[tokio::test]

@@ -1978,6 +1978,200 @@ pub(crate) const CHECK_ROOT_EACH: usize = 32;
 /// another cost, and ADR 0151 did not make it.
 pub(crate) const CHECK_ROOT_EVERY_SECONDS: u64 = 5;
 
+/// Files of one run copied at once (#394, ADR 0166): enough for the
+/// filesystem to group their commits and to hide a remote's round trips.
+const FILES_IN_FLIGHT: usize = 4;
+
+/// What every entry of a copy goes through before it starts: the PAUSE
+/// (ADR 0147: the only place a copy with no chunks — server-to-server, a
+/// reflink — stops) and, every [`CHECK_ROOT_EACH`] entries or
+/// [`CHECK_ROOT_EVERY_SECONDS`], that the opened root STILL is the path
+/// that was requested to copy to (ADR 0151).
+///
+/// Checking the root only when it was opened is not enough, and this is a
+/// bug a reader found: they set a large folder to copy and, with the bar
+/// running, deleted the destination one. norte deletes to the trash, i.e. a
+/// `rename`, and a `rename` does NOT invalidate the descriptor: the
+/// directory stays alive with the same inode elsewhere, so the copy kept
+/// happily filling it and the task ended up saying "completed". The files
+/// were in the trash. Saying "done" there is worse than failing, because
+/// nobody is going to check.
+///
+/// Per ENTRY, also inside a run of files in flight (#394): per run, a run
+/// of large files would not pause nor notice a vanished root for gigabytes.
+struct EntryGate<'a> {
+    dst: &'a dyn Provider,
+    root: Option<&'a dyn norte_vfs::ConfinedRoot>,
+    to: &'a VPath,
+    seen: usize,
+    last_check: std::time::Instant,
+}
+
+impl<'a> EntryGate<'a> {
+    fn new(
+        dst: &'a dyn Provider,
+        root: Option<&'a dyn norte_vfs::ConfinedRoot>,
+        to: &'a VPath,
+    ) -> Self {
+        Self {
+            dst,
+            root,
+            to,
+            seen: 0,
+            last_check: std::time::Instant::now(),
+        }
+    }
+
+    async fn pass(&mut self, ctx: &TaskCtx) -> Result<(), Error> {
+        ctx.checkpoint().await?;
+        // Not on the first entry: the check after opening the root just
+        // ran, with only a `Destination::new` and no I/O in between. Without
+        // this, every copy — including one of a SINGLE entry — paid for the
+        // check three times and was exposed once more to a false positive.
+        if let Some(root) = self.root
+            && self.seen > 0
+            && (self.seen.is_multiple_of(CHECK_ROOT_EACH)
+                || self.last_check.elapsed().as_secs() >= CHECK_ROOT_EVERY_SECONDS)
+        {
+            dest_still_there_or_fails(self.dst, root, self.to, &ctx.cancel).await?;
+            self.last_check = std::time::Instant::now();
+        }
+        self.seen += 1;
+        Ok(())
+    }
+}
+
+/// Where the run of files starting at `start` ends: at the first entry that
+/// is not a file, or at a file whose WHOLE PATH folds to one already in the
+/// run. On a destination that folds case or normalization, `A.txt` and
+/// `a.txt` in flight together would race for the same name — and so would
+/// `D/x` and `d/x`, whose folders the destination merges; one after the
+/// other, the collision policy decides as it always did.
+fn run_end(plan: &[PlanEntry], start: usize, fold: norte_encoding::FoldMode) -> usize {
+    let mut seen: std::collections::HashSet<Vec<Vec<u8>>> = std::collections::HashSet::new();
+    for (n, pe) in plan[start..].iter().enumerate().take(FILES_PER_RUN) {
+        if pe.entry.kind != EntryKind::File {
+            return start + n;
+        }
+        let key = pe
+            .entry
+            .path
+            .segments()
+            .map(|s| norte_encoding::name_key(s, fold).into_owned())
+            .collect();
+        if !seen.insert(key) {
+            return start + n;
+        }
+    }
+    (start + FILES_PER_RUN).min(plan.len())
+}
+
+/// Longest run: bounds the keys `run_end` holds, which for a flat folder of
+/// a million files would otherwise be as large as the plan. Runs follow one
+/// another, so the bound costs nothing but a moment's drain.
+const FILES_PER_RUN: usize = 256;
+
+/// What every file of a run shares.
+#[derive(Clone, Copy)]
+struct RunCtx<'a> {
+    from: &'a VPath,
+    to: &'a VPath,
+    opts: TransferOptions,
+    observer: &'a Arc<dyn MutationObserver>,
+    ctx: &'a TaskCtx,
+}
+
+/// A run of files, [`FILES_IN_FLIGHT`] at a time (#394, ADR 0166).
+///
+/// **No copy in flight is ever dropped, nor cancelled by a sibling.** A
+/// dropped copy can have its rename applied (it runs on a blocking thread)
+/// or its server-side copy done, and never record its `Created`: a file
+/// undo does not know. On the first failure the run only stops STARTING
+/// files; the ones in flight end by their own path — committed and
+/// journaled, or released — and the run returns that first error once they
+/// have. Only the task's own cancel cuts them, as it always did.
+///
+/// The entry gate (pause, root re-check) runs WHILE the files in flight
+/// keep being polled: awaiting it alone, a pause could hang the task — the
+/// file that lent the slot sits in the set, unpolled, and never asks for it
+/// back. By hand, not `buffer_unordered` over a closure: an `async` closure
+/// borrowing these makes the task's future not `Send`.
+async fn copy_file_run(
+    src: &dyn Provider,
+    into: &Destination<'_>,
+    run: &[PlanEntry],
+    rc: RunCtx<'_>,
+    gate: &mut EntryGate<'_>,
+    skipped: &mut Vec<VPath>,
+) -> Result<(), Error> {
+    let ctx = rc.ctx;
+    let mut pending = run.iter();
+    let mut in_flight = futures::stream::FuturesUnordered::new();
+    let mut failed: Option<Error> = None;
+    let mut land =
+        |done: Result<(&PlanEntry, Placed), Error>, failed: &mut Option<Error>| match done {
+            Ok((pe, Placed::Skipped)) => {
+                // The bar must be able to reach 100%: what was skipped does
+                // not count.
+                ctx.progress.update(|p| {
+                    p.bytes_total = p
+                        .bytes_total
+                        .map(|t| t.saturating_sub(pe.entry.size.unwrap_or(0)));
+                });
+                skipped.push(pe.entry.path.clone());
+            }
+            Ok(_) => {}
+            Err(e) => {
+                failed.get_or_insert(e);
+            }
+        };
+    loop {
+        if failed.is_none()
+            && in_flight.len() < FILES_IN_FLIGHT
+            && let Some(pe) = pending.next()
+        {
+            let passed = {
+                let pass = gate.pass(ctx);
+                tokio::pin!(pass);
+                loop {
+                    tokio::select! {
+                        r = &mut pass => break r,
+                        Some(done) = in_flight.next() => land(done, &mut failed),
+                    }
+                }
+            };
+            match passed {
+                Ok(()) => in_flight.push(copy_run_file(src, into, pe, rc)),
+                Err(e) => {
+                    failed.get_or_insert(e);
+                }
+            }
+            continue;
+        }
+        let Some(done) = in_flight.next().await else {
+            break;
+        };
+        land(done, &mut failed);
+    }
+    failed.map_or(Ok(()), Err)
+}
+
+/// One file of a run: what `copy_tree` does for a file, and its progress.
+async fn copy_run_file<'p>(
+    src: &dyn Provider,
+    into: &Destination<'_>,
+    pe: &'p PlanEntry,
+    rc: RunCtx<'_>,
+) -> Result<(&'p PlanEntry, Placed), Error> {
+    let ctx = rc.ctx;
+    let target = rebase(&pe.entry.path, rc.from, rc.to)?;
+    ctx.progress
+        .update(|p| p.current = Some(pe.entry.path.clone()));
+    let placed = copy_file_leaf(src, into, &pe.entry, &target, rc.opts, rc.observer, ctx).await?;
+    ctx.progress.update(|p| p.entries_done += 1);
+    Ok((pe, placed))
+}
+
 /// Copies the `from` → `to` tree following an ALREADY walked plan (the walk
 /// is the caller's: move reuses it for the delete — issue #9). The copy
 /// ignores provenance (a synthetic dir from an expanded link is created as a
@@ -2029,34 +2223,40 @@ async fn copy_tree(
     let into = Destination::new(&**dst, root.as_deref(), to);
 
     let mut skipped: Vec<VPath> = Vec::new();
-    let mut last_check = std::time::Instant::now();
-    for (i, pe) in plan.iter().enumerate() {
-        // Between one entry and the next it can be PAUSED (ADR 0147): the
-        // only place where a copy with no chunks (server-to-server) stops.
-        ctx.checkpoint().await?;
-        // And it is checked again that the opened root STILL is the path
-        // that was requested to copy to.
-        //
-        // Checking only when it was opened is not enough, and this is a bug
-        // a reader found: they set a large folder to copy and, with the bar
-        // running, deleted the destination one. norte deletes to the trash,
-        // i.e. a `rename`, and a `rename` does NOT invalidate the
-        // descriptor: the directory stays alive with the same inode
-        // elsewhere, so the copy kept happily filling it and the task ended
-        // up saying "completed". The files were in the trash. Saying "done"
-        // there is worse than failing, because nobody is going to check.
-        // `i > 0`: on the first lap the check above just ran, with only a
-        // `Destination::new` and no I/O in between. Without this, every
-        // copy —including one of a SINGLE entry— paid for the check three
-        // times and was exposed once more to a false positive.
-        if let Some(root) = root.as_deref()
-            && i > 0
-            && (i % CHECK_ROOT_EACH == 0
-                || last_check.elapsed().as_secs() >= CHECK_ROOT_EVERY_SECONDS)
-        {
-            dest_still_there_or_fails(&**dst, root, to, &ctx.cancel).await?;
-            last_check = std::time::Instant::now();
+    let mut gate = EntryGate::new(&**dst, root.as_deref(), to);
+    // FULL folding for the run's key whatever the destination does: a
+    // stricter key only splits runs, never lets two colliding names race —
+    // and a subfolder mounted with another fold mode than the root is
+    // covered too.
+    let fold = norte_encoding::FoldMode::Full;
+    let mut i = 0;
+    while i < plan.len() {
+        let pe = &plan[i];
+        // A run of consecutive FILES goes several at a time (#394, ADR
+        // 0166). Not with `RenameAuto`: two files in flight could race for
+        // the same free name, and the loser would fail the task.
+        if pe.entry.kind == EntryKind::File && opts.on_collision != CollisionPolicy::RenameAuto {
+            let end = run_end(plan, i, fold);
+            copy_file_run(
+                &**src,
+                &into,
+                &plan[i..end],
+                RunCtx {
+                    from,
+                    to,
+                    opts,
+                    observer,
+                    ctx,
+                },
+                &mut gate,
+                &mut skipped,
+            )
+            .await?;
+            i = end;
+            continue;
         }
+        i += 1;
+        gate.pass(ctx).await?;
         let entry = &pe.entry;
         let target = rebase(&entry.path, from, to)?;
         ctx.progress
@@ -2100,12 +2300,38 @@ async fn copy_tree(
     Ok(skipped)
 }
 
+/// One file's share of the task's `bytes_done` (#394).
+///
+/// Each file sets how much of ITSELF is done and the total moves by the
+/// difference. Setting `bytes_done = base + written`, with `base` read when
+/// the file started, made files in flight overwrite each other: the bar
+/// went backwards and never reached its total.
+pub(crate) struct FileBytes {
+    progress: Arc<crate::progress::ProgressReporter>,
+    mine: std::sync::atomic::AtomicU64,
+}
+
+impl FileBytes {
+    fn new(progress: &Arc<crate::progress::ProgressReporter>) -> Arc<Self> {
+        Arc::new(Self {
+            progress: Arc::clone(progress),
+            mine: std::sync::atomic::AtomicU64::new(0),
+        })
+    }
+
+    /// This file has `n` bytes done.
+    fn set(&self, n: u64) {
+        let before = self.mine.swap(n, std::sync::atomic::Ordering::Relaxed);
+        self.progress
+            .update(|p| p.bytes_done = p.bytes_done.saturating_add(n).saturating_sub(before));
+    }
+}
+
 /// Copies ONE file with file-level retries. With `resume=Off` a transient
 /// failure restarts the whole file (the sink aborted cleanly) and returns
-/// progress to the starting point. With `resume=On` the partial SURVIVES
-/// (`keep`) and the retry continues from where it was (`open_resumable`) —
-/// the `before` that gets restored is the file's base, not zero, and
-/// `copy_file` recomposes `base + already` on every attempt.
+/// its progress to zero. With `resume=On` the partial SURVIVES (`keep`) and
+/// the retry continues from where it was (`open_resumable`): `copy_file`
+/// sets the file's `already` again on every attempt.
 pub(crate) async fn copy_file_retrying(
     src: &dyn Provider,
     dest: &Dest<'_>,
@@ -2115,14 +2341,14 @@ pub(crate) async fn copy_file_retrying(
     observer: &Arc<dyn MutationObserver>,
     ctx: &TaskCtx,
 ) -> Result<(), Error> {
-    let base = ctx.progress.snapshot().bytes_done;
+    let bytes = FileBytes::new(&ctx.progress);
     let mut attempt = 0u32;
     loop {
-        match copy_file(src, dest, from, known_size, base, opts, observer, ctx).await {
+        match copy_file(src, dest, from, known_size, &bytes, opts, observer, ctx).await {
             Err(e) if attempt < MAX_RETRIES && is_transient(&e) && !ctx.cancel.is_cancelled() => {
-                // The file's base: `copy_file` recomposes `base + already`
+                // Back to this file's start: `copy_file` sets `already` again
                 // (with resume, `already` grows; without resume, it goes back to 0).
-                ctx.progress.update(|p| p.bytes_done = base);
+                bytes.set(0);
                 let delay = std::time::Duration::from_millis(BACKOFF_BASE_MS << attempt);
                 attempt += 1;
                 tokio::select! {
@@ -2261,7 +2487,7 @@ async fn should_discard_partial(
 /// Copies ONE file: `copy_native` if the provider (the same on both sides)
 /// declares `SERVER_COPY`; if not, streaming with per-chunk cancellation.
 ///
-/// `base` = `bytes_done` BEFORE this file (to recompose progress on resume).
+/// `bytes` = this file's share of progress (#394).
 /// With resume: opens `open_resumable`, discards the partial if it does not
 /// match the source (`verify`, #35), reads the source from `already`, and
 /// on cancellation/failure KEEPS the partial (`keep`) instead of aborting.
@@ -2274,7 +2500,7 @@ async fn copy_file(
     dest: &Dest<'_>,
     from: &VPath,
     known_size: Option<u64>,
-    base: u64,
+    bytes: &Arc<FileBytes>,
     opts: TransferOptions,
     observer: &Arc<dyn MutationObserver>,
     ctx: &TaskCtx,
@@ -2315,7 +2541,7 @@ async fn copy_file(
             res?;
             // The size was already given by the source's stat: zero extra round trips.
             let size = known_size.unwrap_or(0);
-            ctx.progress.update(|p| p.bytes_done = base + size);
+            bytes.set(size);
             let node = dest.node_id_for(observer).await;
             observer
                 .on_mutation(&Mutation::Created { path: to, node }, &ctx.actor)
@@ -2366,17 +2592,17 @@ async fn copy_file(
 
     // The stretch already present counts as done immediately (the bar does
     // not go backward on resume).
-    ctx.progress.update(|p| p.bytes_done = base + already);
+    bytes.set(already);
 
     let (mut stream, filled) =
-        match remaining_source(src, from, already, &mut sink, base, ctx).await {
+        match remaining_source(src, from, already, &mut sink, bytes, ctx).await {
             Ok(s) => s,
             Err(e) => {
                 release(sink, to, resume).await;
                 return Err(e);
             }
         };
-    let mut written = base + already + filled;
+    let mut written = already + filled;
     while let Some(item) = stream.next().await {
         // Per-chunk cancellation: clean destination, or a resumable
         // `.norte-partial` (resume), never an unmarked half-done file. And
@@ -2399,16 +2625,16 @@ async fn copy_file(
             return Err(e);
         }
         written += n;
-        ctx.progress.update(|p| p.bytes_done = written);
+        bytes.set(written);
     }
     if ctx.cancel.is_cancelled() {
         release(sink, to, resume).await;
         return Err(Error::Cancelled);
     }
-    // Committed file size = what was written in THIS copy (`written`) minus
-    // the progress `base` prior to this file. It is the witness used to
-    // disambiguate a commit that applied but returned transient (#32.1).
-    let final_size = written - base;
+    // Committed file size = what was written in THIS copy. It is the witness
+    // used to disambiguate a commit that applied but returned transient
+    // (#32.1).
+    let final_size = written;
     match sink.commit().await {
         Ok(()) => {}
         // The commit (staging→final rename) may have APPLIED before
@@ -2466,11 +2692,11 @@ async fn remaining_source(
     from: &VPath,
     already: u64,
     sink: &mut Box<dyn norte_vfs::ByteSink>,
-    base: u64,
+    bytes: &Arc<FileBytes>,
     ctx: &TaskCtx,
 ) -> Result<(norte_vfs::ByteStream, u64), Error> {
     if already == 0
-        && let Some(n) = kernel_fill(src, from, sink, base, ctx).await?
+        && let Some(n) = kernel_fill(src, from, sink, bytes, ctx).await?
     {
         return Ok((futures::stream::empty().boxed(), n));
     }
@@ -2488,16 +2714,16 @@ async fn kernel_fill(
     src: &dyn Provider,
     from: &VPath,
     sink: &mut Box<dyn norte_vfs::ByteSink>,
-    base: u64,
+    bytes: &Arc<FileBytes>,
     ctx: &TaskCtx,
 ) -> Result<Option<u64>, Error> {
     let Some(opened) = src.open_local(from).await else {
         return Ok(None);
     };
-    let progress = Arc::clone(&ctx.progress);
+    let bytes = Arc::clone(bytes);
     let cancel = ctx.cancel.clone();
     let report: norte_vfs::FillProgress = Arc::new(move |done| {
-        progress.update(|p| p.bytes_done = base + done);
+        bytes.set(done);
         !cancel.is_cancelled()
     });
     sink.fill_from(opened?, report).await.transpose()
@@ -4477,6 +4703,72 @@ mod tests {
     use norte_proto::{Entry, Error};
 
     use super::{is_descendant_folded, rename_auto_candidate, same_node_heuristic};
+
+    /// #394 (ADR 0166): a run of files in flight stops at a directory, and at
+    /// a name that FOLDS to one already in it under the same parent — on a
+    /// case-insensitive destination `A.txt` and `a.txt` must not race.
+    #[test]
+    fn a_run_stops_at_a_directory_and_at_a_folded_repeat() {
+        use super::{PlanEntry, Provenance, run_end};
+        use norte_encoding::FoldMode;
+        use norte_proto::{EntryKind, VPath};
+        let pe = |w: &str, kind: EntryKind| PlanEntry {
+            entry: Entry {
+                attrs: std::collections::BTreeMap::new(),
+                path: VPath::parse(w).expect("wire"),
+                kind,
+                size: Some(1),
+                mtime_ms: None,
+            },
+            provenance: Provenance::Real,
+        };
+        let plan = [
+            pe("mem:///s/A.txt", EntryKind::File),
+            pe("mem:///s/b.txt", EntryKind::File),
+            pe("mem:///s/a.txt", EntryKind::File),
+            pe("mem:///s/d", EntryKind::Dir),
+            pe("mem:///s/d/a.txt", EntryKind::File),
+        ];
+        assert_eq!(
+            run_end(&plan, 0, FoldMode::None),
+            3,
+            "no folding: up to the dir"
+        );
+        assert_eq!(
+            run_end(&plan, 0, FoldMode::Simple),
+            2,
+            "`a.txt` folds onto `A.txt`"
+        );
+        assert_eq!(
+            run_end(&plan, 2, FoldMode::Simple),
+            3,
+            "the dir ends the run"
+        );
+        assert_eq!(
+            run_end(&plan, 4, FoldMode::Simple),
+            5,
+            "another parent, no clash"
+        );
+
+        // `D` and `d` merge on a folding destination, so `d/x` and `D/x`
+        // land on the same file: the run must not hold both.
+        let merged = [
+            pe("mem:///s/D", EntryKind::Dir),
+            pe("mem:///s/d", EntryKind::Dir),
+            pe("mem:///s/d/x", EntryKind::File),
+            pe("mem:///s/D/x", EntryKind::File),
+        ];
+        assert_eq!(
+            run_end(&merged, 2, FoldMode::Simple),
+            3,
+            "folded parents collide"
+        );
+        assert_eq!(
+            run_end(&merged, 2, FoldMode::None),
+            4,
+            "distinct without folding"
+        );
+    }
 
     /// #395: remembering the smallest retained child must keep exactly the
     /// children a full scan per candidate would keep, in listing order.

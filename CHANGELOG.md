@@ -9,6 +9,10 @@ independently through `PROTOCOL_VERSION`.
 
 ### Performance
 
+- **Copying many small files is several times faster** (#394, ADR 0166):
+  consecutive files of a folder are copied four at a time. Pausing,
+  cancelling, undo and the progress bar behave as before.
+
 - **The window's folder tree sends only the rows around what is on
   screen** (#403, bridge 97). With large branches open it used to carry
   every visible branch in each update; scrolling now asks for the rows
