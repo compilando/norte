@@ -34,8 +34,34 @@ export function paintTerminal(this: Screen, dom: SlotDom, slot: TerminalSlotView
     dom.scroller.replaceChildren(note(this.t("terminal-none")));
     return;
   }
-  const rows = slot.rows.map((row, y) => paintRow(row, y, slot.cursor));
-  dom.scroller.replaceChildren(...rows);
+  // Row by row, and only the rows that changed: the whole grid used to be
+  // rebuilt on every patch, up to thirty times a second while a shell
+  // printed — a `top` or a build output redrew every span of every line.
+  const old = dom.scroller.children;
+  if (
+    old.length > 0 &&
+    !(old[0] instanceof HTMLElement && old[0].classList.contains("terminal-row"))
+  ) {
+    dom.scroller.replaceChildren();
+  }
+  for (const [y, row] of slot.rows.entries()) {
+    const col = slot.cursor !== null && slot.cursor[0] === y ? slot.cursor[1] : null;
+    const signature = JSON.stringify([row, col]);
+    const current = old[y];
+    if (current instanceof HTMLElement && current.dataset["sig"] === signature) {
+      continue;
+    }
+    const line = paintRow(row, y, slot.cursor);
+    line.dataset["sig"] = signature;
+    if (current === undefined) {
+      dom.scroller.append(line);
+    } else {
+      current.replaceWith(line);
+    }
+  }
+  while (dom.scroller.children.length > slot.rows.length) {
+    dom.scroller.lastElementChild?.remove();
+  }
 }
 
 /** A row: its fragments, plus the cursor if it falls on it. */

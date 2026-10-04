@@ -812,6 +812,30 @@ describe("Screen", () => {
     expect(grid.getAttribute("aria-activedescendant")).toBe(selected.id);
   });
 
+  // A listing nothing touched is skipped whole: a patch for something else
+  // (a task, the other pane) used to walk every visible row of it.
+  it("an untouched listing is not repainted", () => {
+    const { screen, root } = mount();
+    const v = view({ rows: [row(0, "a.txt"), row(1, "b.txt")] });
+    screen.paint(v);
+    const slot = v.slots[0];
+    if (slot?.kind !== "browser") {
+      throw new Error("expected a listing");
+    }
+    // Mutated WITHOUT the session's `rev`: a skipped listing keeps its DOM.
+    slot.cursor = 1;
+    screen.paint(v);
+    expect(
+      root.querySelector(".slot")?.querySelector("[aria-activedescendant]"),
+    ).toBeTruthy();
+    const before = root.querySelector(".scroller")?.getAttribute("aria-activedescendant");
+    slot.rev = (slot.rev ?? 0) + 1;
+    screen.paint(v);
+    expect(
+      root.querySelector(".scroller")?.getAttribute("aria-activedescendant"),
+    ).not.toBe(before);
+  });
+
   it("the cursor patch, which mutates `selected` in place, gets repainted", () => {
     // A row is skipped by IDENTITY if nothing changed; the cursor is the one
     // thing the session changes without replacing the row, and it can't be
@@ -830,6 +854,8 @@ describe("Screen", () => {
     a.selected = false;
     b.selected = true;
     slot.cursor = 1;
+    // As the session does when it mutates a listing in place.
+    slot.rev = (slot.rev ?? 0) + 1;
     screen.paint(v);
     const rows = root.querySelectorAll(".row");
     expect(rows[0]?.getAttribute("aria-selected")).toBe("false");
@@ -4372,6 +4398,54 @@ describe("the theme and the selector", () => {
 });
 
 describe("slots that aren't listings", () => {
+  // The terminal repaints only the rows that changed: the whole grid used to
+  // be rebuilt on every patch, up to thirty times a second.
+  it("a terminal keeps the nodes of the rows that did not change", () => {
+    const { screen } = mount();
+    const v = view({});
+    const term = (second: string) => ({
+      kind: "terminal" as const,
+      slot_id: 7,
+      rows: [[{ text: "$ ls" }], [{ text: second }]],
+      cursor: null,
+      no_shell: false,
+    });
+    v.slots = [...v.slots, term("a")];
+    v.layout.placements = [
+      ...v.layout.placements,
+      { slot_id: 7, x: 0, y: 0, width: 30, height: 10, role: null, focus_index: 2 },
+    ];
+    screen.paint(v);
+    const [first, second] = document.querySelectorAll(".terminal-row");
+    screen.paint({ ...v, slots: v.slots.map((s) => (s.slot_id === 7 ? term("b") : s)) });
+    const after = document.querySelectorAll(".terminal-row");
+    expect(after[0]).toBe(first);
+    expect(after[1]).not.toBe(second);
+    expect(after[1]?.textContent).toBe("b");
+  });
+
+  // Moving a border moves the slots: rebuilding them dropped every
+  // listing's rows and listeners on each step of a drag.
+  it("a layout with the same slots in other places keeps their nodes", () => {
+    const { screen } = mount();
+    const v = view({});
+    screen.paint(v);
+    const before = [...document.querySelectorAll(".slot")];
+    const moved = {
+      ...v,
+      layout: {
+        ...v.layout,
+        placements: v.layout.placements.map((p, i) =>
+          i === 0 ? { ...p, width: p.width + 2 } : p,
+        ),
+      },
+    };
+    screen.paint(moved);
+    const after = [...document.querySelectorAll(".slot")];
+    expect(after.length).toBe(before.length);
+    expect(after.every((s, i) => s === before[i])).toBe(true);
+  });
+
   it("the attribute sheet paints label and value, and marks a hostile name", () => {
     const { screen } = mount();
     const v = view({});

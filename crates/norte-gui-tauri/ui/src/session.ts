@@ -167,10 +167,9 @@ export class Session {
         // Two pixels on the border of the pane something is arriving into
         // (ADR 0148). Travels apart from the listing because progress runs
         // at 30 Hz.
-        for (const slot of s.slots) {
-          if (slot.kind === "browser" && slot.slot_id === c.slot_id) {
-            slot.progress = c.progress;
-          }
+        const slot = browser(s, c.slot_id);
+        if (slot !== null) {
+          slot.progress = c.progress;
         }
         return true;
       }
@@ -325,12 +324,18 @@ export class Session {
   }
 }
 
+/**
+ * The listing `slotId`, about to be MUTATED in place: its `rev` goes up, so
+ * the painter can tell a listing that changed from one that did not —
+ * the object is the same either way.
+ */
 function browser(
   s: ViewSnapshot,
   slotId: number,
 ): Extract<ViewSnapshot["slots"][number], { kind: "browser" }> | null {
   for (const slot of s.slots) {
     if (slot.kind === "browser" && slot.slot_id === slotId) {
+      slot.rev = (slot.rev ?? 0) + 1;
       return slot;
     }
   }
