@@ -1402,7 +1402,11 @@ impl norte_vfs::ByteSink for ConfinedSink {
         let final_name = self.final_name.clone();
         let stable = self.stable;
         let res = crate::provider::blocking(move || {
-            file.sync_all().map_err(|e| crate::provider::map_io(&e))?;
+            // `sync_data` (#394): the bytes and the size are durable before
+            // publishing, which is the journal's promise. `sync_all` also
+            // flushed timestamps and mode — the mode is restored right after
+            // anyway — and cost a second journal commit per file.
+            file.sync_data().map_err(|e| crate::provider::map_io(&e))?;
             // The descriptor stays alive during `publish` on purpose
             // (#299): the mode is restored AFTER publishing and on the fd.
             // Relaxing it earlier would leave readable by others a staging
@@ -1459,7 +1463,7 @@ impl norte_vfs::ByteSink for ConfinedSink {
         let file = self.file.take().ok_or(Error::Io { retryable: false })?;
         self.dir.take();
         self.done = true;
-        crate::provider::blocking(move || file.sync_all().map_err(|e| crate::provider::map_io(&e)))
+        crate::provider::blocking(move || file.sync_data().map_err(|e| crate::provider::map_io(&e)))
             .await
     }
 }
