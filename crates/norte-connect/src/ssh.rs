@@ -326,12 +326,17 @@ impl russh::client::Handler for TofuHandler {
 
     async fn check_server_key(
         &mut self,
-        server_public_key: &PublicKey,
+        server_key: &russh::keys::PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
+        let Some(key) = plain_key(server_key) else {
+            return Err(ConnectError::KnownHosts(
+                "the server presented a host certificate, which is not supported".into(),
+            ));
+        };
         let store = self.store.clone();
         let host = self.host.clone();
         let port = self.port;
-        let key = server_public_key.clone();
+        let key = key.clone();
         // File I/O off the reactor (rule 2).
         let status = tokio::task::spawn_blocking(move || store.check(&host, port, &key))
             .await
@@ -366,12 +371,30 @@ impl russh::client::Handler for CaptureHandler {
 
     async fn check_server_key(
         &mut self,
-        server_public_key: &PublicKey,
+        server_key: &russh::keys::PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
         // If the receiver died, the connect was already abandoned: nothing
-        // to do.
-        let _ = self.tx.send(server_public_key.clone());
+        // to do. A certificate is not captured: there is nothing to trust
+        // it with (see `plain_key`).
+        if let Some(key) = plain_key(server_key) {
+            let _ = self.tx.send(key.clone());
+        }
         Ok(false)
+    }
+}
+
+/// The server's bare host key, or `None` for a host CERTIFICATE.
+///
+/// russh (0.63) only negotiates certificates when the client advertises
+/// them (`Preferred::host_key_certificates`, empty by default, and norte
+/// never sets it), so this `None` is not reached today. Should it be,
+/// trusting the key inside a certificate without checking its authority
+/// would be TOFU on something the server claims is CA-vouched: refused
+/// instead.
+fn plain_key(key: &russh::keys::PublicKeyOrCertificate) -> Option<&PublicKey> {
+    match key {
+        russh::keys::PublicKeyOrCertificate::PublicKey { key, .. } => Some(key),
+        russh::keys::PublicKeyOrCertificate::Certificate(_) => None,
     }
 }
 
