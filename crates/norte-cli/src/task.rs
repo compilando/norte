@@ -134,9 +134,10 @@ impl SigintGate {
             std::sync::Mutex<SigintState<norte_core::backend::TaskCanceller>>,
         > = std::sync::Arc::default();
         let seen = std::sync::Arc::clone(&state);
+        let mut interrupt = Interrupt::register();
         let handle = tokio::spawn(async move {
             loop {
-                if tokio::signal::ctrl_c().await.is_err() {
+                if !interrupt.recv().await {
                     break;
                 }
                 // INVARIANT: the Mutex never gets poisoned — under the
@@ -196,12 +197,48 @@ impl SigintGate {
 
 fn watch_ctrl_c(task: &TaskRef) -> tokio::task::JoinHandle<()> {
     let canceller = task.canceller();
+    let mut interrupt = Interrupt::register();
     tokio::spawn(async move {
-        if tokio::signal::ctrl_c().await.is_ok() {
+        if interrupt.recv().await {
             eprintln!("\n{}", norte_i18n::t("cli-cancelling"));
             canceller.cancel();
         }
     })
+}
+
+/// A `Ctrl+C` listener that is REGISTERED by the time `register` returns.
+///
+/// `tokio::signal::ctrl_c()` registers on its future's first poll, and
+/// both watchers poll it inside a task they spawn: until a worker got to
+/// that task, a SIGINT still killed the process raw — after the copy had
+/// started, so without the cleanup this exists for. Under load that took
+/// long enough for `cp_sigint_cancels_cleanly` to land in it. What is left
+/// is the gap between the task being enqueued and its watcher being armed,
+/// with no `.await` in between.
+struct Interrupt {
+    #[cfg(unix)]
+    signal: Option<tokio::signal::unix::Signal>,
+    #[cfg(windows)]
+    signal: Option<tokio::signal::windows::CtrlC>,
+}
+
+impl Interrupt {
+    fn register() -> Self {
+        #[cfg(unix)]
+        let signal = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt()).ok();
+        #[cfg(windows)]
+        let signal = tokio::signal::windows::ctrl_c().ok();
+        Self { signal }
+    }
+
+    /// The next `Ctrl+C`; `false` if it cannot listen (no handler could be
+    /// registered), in which case the OS default stays.
+    async fn recv(&mut self) -> bool {
+        match self.signal.as_mut() {
+            Some(s) => s.recv().await.is_some(),
+            None => false,
+        }
+    }
 }
 
 /// The loop shared between [`run_task`] and `sync.apply`: paints progress
