@@ -291,11 +291,60 @@ pub(crate) async fn drive_task(
     final_state
 }
 
+/// Enqueues a Task with its `Ctrl+C` watcher ALREADY armed, and runs it.
+///
+/// The watcher used to be armed after `enqueue` returned — by then the
+/// Task was running on another thread and could have created its
+/// destination, so a `Ctrl+C` in that window killed the process raw,
+/// without the cleanup. Under a loaded machine the window was wide enough
+/// for `cp_sigint_cancels_cleanly` to land in it, twice. Here a `Ctrl+C`
+/// while it is being enqueued is parked and cancels the Task as soon as it
+/// exists; at the TOFU prompt the gate is released, so `Ctrl+C` exits as it
+/// always did there.
+///
+/// # Errors
+/// The enqueue's error, with `context`, or the TOFU prompt's.
+pub(crate) async fn run_guarded<F, Fut>(
+    backend: &norte_core::backend::Backend,
+    show_bytes: bool,
+    context: &str,
+    enqueue: F,
+) -> anyhow::Result<ExitCode>
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = Result<TaskRef, norte_proto::Error>>,
+{
+    use anyhow::Context as _;
+    let gate = SigintGate::arm();
+    gate.arming();
+    let task = match enqueue().await {
+        Err(e) => {
+            gate.release();
+            // First TOFU contact: confirm and retry ONCE.
+            if crate::cmd::connect::tofu_confirm(backend, &e).await? {
+                gate.arming();
+                enqueue().await
+            } else {
+                Err(e)
+            }
+        }
+        ok => ok,
+    }
+    .map_err(|e| anyhow::anyhow!("{e}"))
+    .context(norte_i18n::t(context))?;
+    Ok(finish(drive_task(task, show_bytes, Some(&gate)).await))
+}
+
 /// Runs a Task painting progress to stderr; Ctrl-C cancels cooperatively
 /// (the task leaves a clean destination or a `.norte-partial`, hard rule
 /// 3).
 pub(crate) async fn run_task(task: TaskRef, show_bytes: bool) -> ExitCode {
-    match drive_task(task, show_bytes, None).await {
+    finish(drive_task(task, show_bytes, None).await)
+}
+
+/// A finished Task's exit code, with its message.
+fn finish(state: TaskState) -> ExitCode {
+    match state {
         TaskState::Completed => ExitCode::SUCCESS,
         TaskState::Cancelled => {
             eprintln!("{}", norte_i18n::t("cli-cancelled-clean"));

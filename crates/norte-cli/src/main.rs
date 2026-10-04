@@ -9,7 +9,6 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use anyhow::Context;
 use clap::{Parser, Subcommand};
 use norte_core::{Engine, TransferOptions};
 use norte_proto::SymlinkPolicy;
@@ -916,16 +915,10 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 resume: resume_policy(resume),
                 ..TransferOptions::default()
             };
-            let task = match backend.copy(&from, &to, opts).await {
-                // First TOFU contact: confirm and retry ONCE.
-                Err(e) if cmd::connect::tofu_confirm(&backend, &e).await? => {
-                    backend.copy(&from, &to, opts).await
-                }
-                other => other,
-            }
-            .map_err(|e| anyhow::anyhow!("{e}"))
-            .context(norte_i18n::t("cli-enqueue-copy"))?;
-            Ok(task::run_task(task, true).await)
+            task::run_guarded(&backend, true, "cli-enqueue-copy", || {
+                backend.copy(&from, &to, opts)
+            })
+            .await
         }
         Cmd::Mv {
             src,
@@ -939,15 +932,10 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 resume: resume_policy(resume),
                 ..TransferOptions::default()
             };
-            let task = match backend.move_(&from, &to, opts).await {
-                Err(e) if cmd::connect::tofu_confirm(&backend, &e).await? => {
-                    backend.move_(&from, &to, opts).await
-                }
-                other => other,
-            }
-            .map_err(|e| anyhow::anyhow!("{e}"))
-            .context(norte_i18n::t("cli-enqueue-move"))?;
-            Ok(task::run_task(task, false).await)
+            task::run_guarded(&backend, false, "cli-enqueue-move", || {
+                backend.move_(&from, &to, opts)
+            })
+            .await
         }
         Cmd::Gc {
             path,
@@ -955,32 +943,17 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         } => cmd::ai::gc_cmd(&backend, cli.daemon, &path, older_than_hours).await,
         Cmd::Rm { path } => {
             let target = cmd::connect::vpath(&path)?;
-            let task = match backend
-                .delete(&target, norte_proto::DeleteMode::Permanent)
-                .await
-            {
-                Err(e) if cmd::connect::tofu_confirm(&backend, &e).await? => {
-                    backend
-                        .delete(&target, norte_proto::DeleteMode::Permanent)
-                        .await
-                }
-                other => other,
-            }
-            .map_err(|e| anyhow::anyhow!("{e}"))
-            .context(norte_i18n::t("cli-enqueue-delete"))?;
-            Ok(task::run_task(task, false).await)
+            task::run_guarded(&backend, false, "cli-enqueue-delete", || {
+                backend.delete(&target, norte_proto::DeleteMode::Permanent)
+            })
+            .await
         }
         Cmd::Mkdir { path } => {
             let target = cmd::connect::vpath(&path)?;
-            let task = match backend.mkdir(&target).await {
-                Err(e) if cmd::connect::tofu_confirm(&backend, &e).await? => {
-                    backend.mkdir(&target).await
-                }
-                other => other,
-            }
-            .map_err(|e| anyhow::anyhow!("{e}"))
-            .context(norte_i18n::t("cli-enqueue-mkdir"))?;
-            Ok(task::run_task(task, false).await)
+            task::run_guarded(&backend, false, "cli-enqueue-mkdir", || {
+                backend.mkdir(&target)
+            })
+            .await
         }
         Cmd::Plugin { cmd } => cmd::plugin::plugin_cmd(&backend, cmd, cli.socket).await,
         Cmd::Index { cmd } => cmd::index::index_cmd(&backend, cmd).await,
