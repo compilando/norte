@@ -62,16 +62,8 @@ export function paintTree(this: Screen, dom: SlotDom, slot: TreeSlotView): void 
       mark.textContent = "›";
       mark.dataset["expanded"] = String(r.expanded);
       row.setAttribute("aria-expanded", String(r.expanded));
-      mark.addEventListener("click", (ev) => {
-        // Keep it from reaching the name: folding does not navigate.
-        ev.stopPropagation();
-        this.send({
-          action: "tree_toggle_row",
-          row: i,
-          generation: slot.generation,
-        });
-      });
     }
+    row.dataset["row"] = String(i);
     // The folder, open or closed depending on the branch: it is what makes
     // the column read as a tree at a glance, as in VS Code.
     const folder = icon(document, r.expanded ? "fs:folder-open" : "fs:folder");
@@ -82,22 +74,33 @@ export function paintTree(this: Screen, dom: SlotDom, slot: TreeSlotView): void 
     if (r.hostile) {
       name.append(badge(this.t("hostile-name")));
     }
-    row.addEventListener("click", () => {
-      // THIS paint's generation: a branch's children arrive on their own
-      // and get inserted IN THE MIDDLE, so without it a click could navigate
-      // to a folder nobody clicked.
-      this.send({
-        action: "tree_activate_row",
-        row: i,
-        generation: slot.generation,
-      });
-    });
     if (folder !== null) {
       folder.classList.add("tree-icon");
     }
     row.append(mark, folder ?? document.createElement("span"), name);
     list.append(row);
   }
+  // ONE listener for every row (#403): two closures per row were thousands
+  // of listeners on a tree with big branches open, rebuilt on each change.
+  list.addEventListener("click", (ev) => {
+    const target = ev.target instanceof Element ? ev.target : null;
+    const row = target?.closest<HTMLElement>("li.tree-row");
+    const index = Number(row?.dataset["row"]);
+    if (row === null || row === undefined || !Number.isInteger(index)) {
+      return;
+    }
+    // THIS paint's generation: a branch's children arrive on their own and
+    // get inserted IN THE MIDDLE, so without it a click could navigate to a
+    // folder nobody clicked. The twisty of a branch folds and does not
+    // navigate.
+    const twisty = target?.closest<HTMLElement>(".tree-twisty");
+    const folds = twisty !== null && twisty !== undefined && "expanded" in twisty.dataset;
+    this.send({
+      action: folds ? "tree_toggle_row" : "tree_activate_row",
+      row: index,
+      generation: slot.generation,
+    });
+  });
   list.setAttribute("aria-activedescendant", `tree-row-${String(slot.cursor)}`);
   dom.scroller.replaceChildren(list);
   revealInView(list.querySelector(`#tree-row-${String(slot.cursor)}`) ?? undefined);

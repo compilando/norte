@@ -4634,6 +4634,38 @@ describe("slots that aren't listings", () => {
   // #403: a tree that did not change is not rebuilt on the next paint (an
   // arrow in the listing next door repaints everything); one that did —
   // here, its cursor — is.
+  // #403: one delegated listener; the name navigates, a branch's twisty
+  // folds, and both carry the painted generation.
+  it("clicking a tree row navigates and its twisty folds", () => {
+    const { screen, sent } = mount();
+    const v = view({});
+    v.slots = [
+      ...v.slots,
+      {
+        kind: "tree" as const,
+        slot_id: 8,
+        rows: [
+          { label: "home", hostile: false, depth: 0, expanded: true, children: true },
+          { label: "docs", hostile: false, depth: 1, expanded: false, children: null },
+        ],
+        cursor: 0,
+        generation: 3,
+      },
+    ];
+    v.layout.placements = [
+      ...v.layout.placements,
+      { slot_id: 8, x: 0, y: 0, width: 30, height: 10, role: null, focus_index: 3 },
+    ];
+    screen.paint(v);
+    const rows = document.querySelectorAll<HTMLElement>(".tree-row");
+    rows[1]?.querySelector<HTMLElement>(".tree-name")?.click();
+    rows[1]?.querySelector<HTMLElement>(".tree-twisty")?.click();
+    expect(sent.slice(-2)).toEqual([
+      { action: "tree_activate_row", row: 1, generation: 3 },
+      { action: "tree_toggle_row", row: 1, generation: 3 },
+    ]);
+  });
+
   it("an unchanged tree keeps its nodes across paints", () => {
     const { screen } = mount();
     const v = view({});
