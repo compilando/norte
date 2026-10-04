@@ -71,6 +71,8 @@ const DOUBLE_CLICK_MS = 400;
 export class Screen {
   readonly slots = new Map<number, SlotDom>();
   placementsKey = "";
+  /** The slot ids of the last placement, in order: same ids = relayout. */
+  placementIds = "";
   /** The dialog whose text field has already been seeded. */
   dialogPainted: number | null = null;
   /// The live text field of the dialog above, to REUSE it.
@@ -276,8 +278,20 @@ export class Screen {
       .map((p) => `${p.slot_id}:${p.x},${p.y},${p.width},${p.height}`)
       .join("|");
     if (key !== this.placementsKey) {
-      this.rebuild(view, cell);
+      // The SAME slots in other places — a border dragged, the window
+      // resized — are moved, not rebuilt: rebuilding dropped every listing's
+      // rows, listeners and controls on each step of a drag.
+      const ids = view.layout.placements.map((p) => p.slot_id).join(",");
+      if (
+        ids === this.placementIds &&
+        this.slots.size === view.layout.placements.length
+      ) {
+        this.relayout(view, cell);
+      } else {
+        this.rebuild(view, cell);
+      }
       this.placementsKey = key;
+      this.placementIds = ids;
     }
     // Whether the role EXISTS and whether it gets MARKED are two questions.
     // The second arrives COMPUTED from the host (`layout.mark_target`): it
@@ -578,6 +592,23 @@ export class Screen {
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", release);
     window.addEventListener("pointercancel", release);
+  }
+
+  /** Moves the existing slots to their new places and redraws the grips. */
+  relayout(view: ViewSnapshot, cell: { w: number; h: number }): void {
+    for (const p of view.layout.placements) {
+      const dom = this.slots.get(p.slot_id);
+      if (dom === undefined) {
+        continue;
+      }
+      place(dom.root, p, cell);
+      // Its size changed: a panel that measures its slot repaints.
+      delete dom.painted;
+    }
+    for (const grip of this.root.querySelectorAll(":scope > .resize-handle")) {
+      grip.remove();
+    }
+    this.buildHandles(view, cell);
   }
 
   rebuild(view: ViewSnapshot, cell: { w: number; h: number }): void {
