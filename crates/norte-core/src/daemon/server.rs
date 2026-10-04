@@ -12,8 +12,8 @@ use std::time::{Duration, Instant};
 
 use futures::StreamExt;
 use norte_proto::wire::{
-    FrameDecoder, MessageKind, Notification, Request, RequestId, Response, RpcError, classify,
-    codes, encode_frame,
+    FrameDecoder, JsonRpcVersion, MessageKind, Notification, Request, RequestId, Response,
+    RpcError, classify, codes, encode_frame,
 };
 use norte_proto::{TaskId, methods};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -2034,10 +2034,7 @@ fn enforce_attr_caps(entry: &mut norte_proto::Entry, allowed: &norte_vfs::AttrRe
 /// The `fs.stat` handler (#108 block 2): validates the attrs request,
 /// crosses it with what is advertised, materializes and applies the
 /// emission belt. The `read_gate` (#80) is applied by the dispatch's arm.
-async fn handle_fs_stat(
-    p: methods::FsStatParams,
-    shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
+async fn handle_fs_stat(p: methods::FsStatParams, shared: &Arc<Shared>) -> Reply {
     let request = resolve_attr_request(&p.attrs, &p.path, shared).await?;
     let mut entry = shared
         .engine
@@ -2066,7 +2063,7 @@ async fn handle_fs_list(
     p: methods::FsListParams,
     conn: &mut ConnState,
     shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
+) -> Reply {
     // The read gate (#80) is applied by the dispatch's ARM, outside this
     // instrumented span (it does not leak the path into the trace on a
     // denial).
@@ -2203,7 +2200,7 @@ async fn continue_listing(
     now: std::time::Instant,
     conn: &mut ConnState,
     mut entries: Vec<norte_proto::Entry>,
-) -> Result<serde_json::Value, RpcError> {
+) -> Reply {
     // Non-numeric or unknown cursor = expired (the client restarts).
     let id: u64 = cursor.parse().map_err(|_| cursor_expired())?;
     let (drained, skipped, dir_anchor) = {
@@ -2705,7 +2702,7 @@ async fn handle_value(
                         },
                     );
             }
-            if !send_response(tx, &Response::from_outcome(id, response)).await {
+            if !send_response(tx, &ReplyFrame::new(id, response)).await {
                 tracing::warn!(
                     conn = conn_id,
                     "response lost to a full outbox: disconnecting"
@@ -2806,7 +2803,7 @@ const RESPONSE_ROOM_WAIT: Duration = Duration::from_secs(5);
 /// response is one per dispatch, in series, so it can afford to wait out a
 /// burst a healthy client is still draining. `false` = it did not fit in
 /// time and the caller closes the connection (#384).
-async fn send_response(tx: &mpsc::Sender<Arc<[u8]>>, resp: &Response) -> bool {
+async fn send_response(tx: &mpsc::Sender<Arc<[u8]>>, resp: &impl serde::Serialize) -> bool {
     let Ok(frame) = encode_frame(resp) else {
         return true;
     };
@@ -2817,16 +2814,32 @@ async fn send_response(tx: &mpsc::Sender<Arc<[u8]>>, resp: &Response) -> bool {
         .is_ok()
 }
 
-/// Sugar: builds a dispatch's Response.
-trait FromOutcome {
-    fn from_outcome(id: RequestId, out: Result<serde_json::Value, RpcError>) -> Response;
+/// What a handler answers: its result already serialized, once (#408). It
+/// used to be a `serde_json::Value` — the result built as a tree, then that
+/// tree serialized again into the frame.
+type Reply = Result<Box<serde_json::value::RawValue>, RpcError>;
+
+/// A dispatch's response, field for field what [`Response`] puts on the
+/// wire (`error: null` included), with the result spliced in raw.
+#[derive(serde::Serialize)]
+struct ReplyFrame {
+    jsonrpc: JsonRpcVersion,
+    id: Option<RequestId>,
+    result: Option<Box<serde_json::value::RawValue>>,
+    error: Option<RpcError>,
 }
 
-impl FromOutcome for Response {
-    fn from_outcome(id: RequestId, out: Result<serde_json::Value, RpcError>) -> Response {
-        match out {
-            Ok(v) => Response::ok(id, v),
-            Err(e) => Response::err(Some(id), e),
+impl ReplyFrame {
+    fn new(id: RequestId, out: Reply) -> Self {
+        let (result, error) = match out {
+            Ok(r) => (Some(r), None),
+            Err(e) => (None, Some(e)),
+        };
+        Self {
+            jsonrpc: JsonRpcVersion,
+            id: Some(id),
+            result,
+            error,
         }
     }
 }
@@ -2838,8 +2851,8 @@ fn parse_params<T: serde::de::DeserializeOwned>(
         .map_err(|e| RpcError::protocol(codes::INVALID_PARAMS, format!("invalid params: {e}")))
 }
 
-fn to_value<T: serde::Serialize>(v: &T) -> Result<serde_json::Value, RpcError> {
-    serde_json::to_value(v)
+fn to_value<T: serde::Serialize>(v: &T) -> Reply {
+    serde_json::value::to_raw_value(v)
         .map_err(|e| RpcError::protocol(codes::INTERNAL_ERROR, format!("serialization: {e}")))
 }
 
@@ -2868,12 +2881,7 @@ fn to_value<T: serde::Serialize>(v: &T) -> Result<serde_json::Value, RpcError> {
         req_id = %id_for_log(&req.id),
     )
 )]
-async fn dispatch(
-    req: Request,
-    conn_id: u64,
-    conn: &mut ConnState,
-    shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
+async fn dispatch(req: Request, conn_id: u64, conn: &mut ConnState, shared: &Arc<Shared>) -> Reply {
     if !conn.initialized && req.method != methods::INITIALIZE {
         return Err(RpcError::protocol(
             codes::NOT_INITIALIZED,
@@ -3162,7 +3170,7 @@ fn handle_daemon_shutdown(
     actor: &Actor,
     params: Option<serde_json::Value>,
     shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
+) -> Reply {
     if !matches!(actor, Actor::User) {
         return Err(RpcError::protocol(
             codes::INVALID_REQUEST,
@@ -3241,7 +3249,7 @@ fn handle_request_scope(
     conn: &mut ConnState,
     p: methods::RequestScopeParams,
     shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
+) -> Reply {
     // Only an agent requests scope, and ONLY for its own session: the
     // identity is fixed by the connection (T2), never by the message body. A
     // `User` does not need scope (it is not sandboxed), so requesting it is a
@@ -3305,11 +3313,7 @@ fn handle_request_scope(
 /// with its TTL and opens the border the engine's gate consults (the same
 /// `ScopeRegistry`).
 #[tracing::instrument(skip_all, fields(request_id = p.request_id))]
-fn handle_grant_scope(
-    actor: &Actor,
-    p: &methods::GrantScopeParams,
-    shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
+fn handle_grant_scope(actor: &Actor, p: &methods::GrantScopeParams, shared: &Arc<Shared>) -> Reply {
     if !matches!(actor, Actor::User) {
         return Err(RpcError::protocol(
             codes::INVALID_REQUEST,
@@ -3351,11 +3355,7 @@ fn handle_grant_scope(
 ///
 /// Humans ONLY, same criterion as `daemon.shutdown` and `policy.pending`: an
 /// agent session has no screen to save.
-fn handle_session_get(
-    actor: &Actor,
-    conn_id: u64,
-    shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
+fn handle_session_get(actor: &Actor, conn_id: u64, shared: &Arc<Shared>) -> Reply {
     if !matches!(actor, Actor::User) {
         return Err(RpcError::protocol(
             codes::INVALID_REQUEST,
@@ -3393,11 +3393,7 @@ fn handle_session_get(
 /// The body is NOT touched: what is released is ownership. The document
 /// stays where it was with its revision, which is exactly what the other one
 /// is going to read.
-fn handle_session_release(
-    actor: &Actor,
-    conn_id: u64,
-    shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
+fn handle_session_release(actor: &Actor, conn_id: u64, shared: &Arc<Shared>) -> Reply {
     if !matches!(actor, Actor::User) {
         return Err(RpcError::protocol(
             codes::INVALID_REQUEST,
@@ -3506,7 +3502,7 @@ fn handle_session_put(
     conn_id: u64,
     p: methods::SessionPutParams,
     shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
+) -> Reply {
     if let Some(veto) = session_put_veto(
         matches!(actor, Actor::User),
         shared.ui_session.owner(),
@@ -3563,7 +3559,7 @@ fn handle_policy_decide(
     actor: &Actor,
     p: &methods::PolicyDecideParams,
     shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
+) -> Reply {
     if !matches!(actor, Actor::User) {
         return Err(RpcError::protocol(
             codes::INVALID_REQUEST,
@@ -3595,10 +3591,7 @@ fn handle_policy_decide(
 /// frontend that connects AFTER the broadcast. Humans only: the list crosses
 /// sessions (other sessions' paths) and an agent does not decide, so it does
 /// not list either.
-fn handle_policy_pending(
-    actor: &Actor,
-    shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
+fn handle_policy_pending(actor: &Actor, shared: &Arc<Shared>) -> Reply {
     if !matches!(actor, Actor::User) {
         return Err(RpcError::protocol(
             codes::INVALID_REQUEST,
@@ -3624,7 +3617,7 @@ async fn handle_policy_undo_session(
     actor: &Actor,
     p: methods::PolicyUndoSessionParams,
     shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
+) -> Reply {
     if !matches!(actor, Actor::User) {
         return Err(RpcError::protocol(
             codes::INVALID_REQUEST,
@@ -3685,7 +3678,7 @@ async fn handle_journal_list(
     actor: &Actor,
     p: &methods::JournalListParams,
     shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
+) -> Reply {
     if !matches!(actor, Actor::User) {
         return Err(RpcError::from(norte_proto::Error::PolicyDenied {
             rule: "not-approved".into(),
@@ -3715,7 +3708,7 @@ async fn handle_journal_undo_after(
     actor: &Actor,
     p: &methods::JournalUndoAfterParams,
     shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
+) -> Reply {
     if !matches!(actor, Actor::User) {
         return Err(RpcError::from(norte_proto::Error::PolicyDenied {
             rule: "not-approved".into(),
@@ -3760,7 +3753,7 @@ fn handle_policy_undo_report(
     actor: &Actor,
     p: &methods::PolicyUndoReportParams,
     shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
+) -> Reply {
     if !matches!(actor, Actor::User) {
         return Err(RpcError::protocol(
             codes::INVALID_REQUEST,
@@ -3790,7 +3783,7 @@ fn handle_policy_undo_report(
 /// already-authorized connection, so it does not re-check the actor. There
 /// is no `Provider`/engine to consult — [`crate::volumes::enumerate`] is a
 /// free HOST function (design §A).
-async fn handle_host_volumes(p: methods::HostVolumesParams) -> Result<serde_json::Value, RpcError> {
+async fn handle_host_volumes(p: methods::HostVolumesParams) -> Reply {
     let volumes = crate::volumes::enumerate(p.include_pseudo)
         .await
         .map_err(|_| RpcError::from(norte_proto::Error::Io { retryable: false }))?;
@@ -3817,7 +3810,7 @@ async fn handle_host_volumes(p: methods::HostVolumesParams) -> Result<serde_json
 ///
 /// Never a secret: what comes out is the `(name, url)` pair as written, and
 /// credentials are REFERENCED (ADR 0015).
-async fn handle_connection_list(shared: &Arc<Shared>) -> Result<serde_json::Value, RpcError> {
+async fn handle_connection_list(shared: &Arc<Shared>) -> Reply {
     let dir = shared
         .connections_dir
         .clone()
@@ -3863,10 +3856,7 @@ async fn handle_connection_list(shared: &Arc<Shared>) -> Result<serde_json::Valu
 ///   with the cursor stuck, and on screen that reads as "nothing is
 ///   happening" instead of the programming error it is.
 #[tracing::instrument(skip(shared))]
-fn handle_log_tail(
-    p: &methods::LogTailParams,
-    shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
+fn handle_log_tail(p: &methods::LogTailParams, shared: &Arc<Shared>) -> Reply {
     // The ring FIRST: to a daemon that does not serve a log, the honest
     // answer is "I don't have one", also when the params are bad — what the
     // client has to do next is the same in both cases.
@@ -3940,10 +3930,7 @@ fn handle_log_tail(
 /// and formatting it before the rejection would mean logging whatever a peer
 /// wants for the simple fact of having sent it.
 #[tracing::instrument(skip(shared, p), fields(level = tracing::field::Empty))]
-fn handle_log_level(
-    p: &methods::LogLevelParams,
-    shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
+fn handle_log_level(p: &methods::LogLevelParams, shared: &Arc<Shared>) -> Reply {
     let Some(ring) = shared.log_ring.get() else {
         return Err(RpcError::from(norte_proto::Error::Unsupported));
     };
@@ -3970,10 +3957,7 @@ fn handle_log_level(
 /// empty object): null/absence are accepted as defaults (ADR 0004), same as
 /// `daemon.shutdown`; any object is ignored — a future extension does not
 /// break old clients.
-fn handle_plugin_list(
-    params: Option<serde_json::Value>,
-    shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
+fn handle_plugin_list(params: Option<serde_json::Value>, shared: &Arc<Shared>) -> Reply {
     let _p: methods::PluginListParams = parse_params(
         params
             .filter(|v| !v.is_null())
@@ -3999,7 +3983,7 @@ async fn handle_plugin_set_approval(
     actor: &Actor,
     p: &methods::PluginSetApprovalParams,
     shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
+) -> Reply {
     if !matches!(actor, Actor::User) {
         return Err(RpcError::protocol(
             codes::INVALID_REQUEST,
@@ -4081,7 +4065,7 @@ async fn handle_plugin_set_enabled(
     actor: &Actor,
     p: &methods::PluginSetEnabledParams,
     shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
+) -> Reply {
     if !matches!(actor, Actor::User) {
         return Err(RpcError::protocol(
             codes::INVALID_REQUEST,
@@ -4139,7 +4123,7 @@ async fn handle_plugin_uninstall(
     actor: &Actor,
     p: &methods::PluginUninstallParams,
     shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
+) -> Reply {
     if !matches!(actor, Actor::User) {
         return Err(RpcError::protocol(
             codes::INVALID_REQUEST,
@@ -4219,7 +4203,7 @@ async fn handle_plugin_uninstall(
 async fn handle_plugin_run_command(
     params: Option<serde_json::Value>,
     shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
+) -> Reply {
     let p: methods::PluginRunCommandParams = parse_params(params)?;
     // 1) Resolve under the lock (cheap). The guard does NOT cross the `.await`.
     let resolved = {
@@ -4313,7 +4297,7 @@ async fn handle_plugin_preview(
     params: Option<serde_json::Value>,
     actor: &Actor,
     shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
+) -> Reply {
     let p: methods::PluginPreviewParams = parse_params(params)?;
     // Read gate (#80): preview READS the file with the daemon's authority;
     // without this gate a scopeless agent would exfiltrate content by
@@ -4423,7 +4407,7 @@ async fn handle_plugin_thumbnail(
     params: Option<serde_json::Value>,
     actor: &Actor,
     shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
+) -> Reply {
     let p: methods::PluginThumbnailParams = parse_params(params)?;
     read_gate(actor, &p.path, shared)?;
     let mime = crate::plugins::guess_mimetype(&p.path);
@@ -4500,7 +4484,7 @@ async fn handle_plugin_panel_render(
     params: Option<serde_json::Value>,
     actor: &Actor,
     shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
+) -> Reply {
     let p: methods::PluginPanelRenderParams = parse_params(params)?;
     read_gate(actor, &p.dir, shared)?;
     let resolved = {
@@ -4576,7 +4560,7 @@ async fn handle_plugin_preview_styled(
     params: Option<serde_json::Value>,
     actor: &Actor,
     shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
+) -> Reply {
     let p: methods::PluginPreviewStyledParams = parse_params(params)?;
     read_gate(actor, &p.path, shared)?;
     let mime = crate::plugins::guess_mimetype(&p.path);
@@ -4681,7 +4665,7 @@ async fn handle_plugin_rename_plan(
     params: Option<serde_json::Value>,
     actor: &Actor,
     shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
+) -> Reply {
     let p: methods::PluginRenamePlanParams = parse_params(params)?;
     read_gate(actor, &p.dir, shared)?;
     // The SAME cap as `ai.rename_plan`: `names` comes from outside, and the
@@ -4737,7 +4721,7 @@ async fn handle_plugin_organize_plan(
     params: Option<serde_json::Value>,
     actor: &Actor,
     shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
+) -> Reply {
     let p: methods::PluginOrganizePlanParams = parse_params(params)?;
     read_gate(actor, &p.dir, shared)?;
     if p.names.len() > methods::AI_RENAME_NAMES_MAX {
@@ -4843,7 +4827,7 @@ async fn handle_plugin_decorate(
     params: Option<serde_json::Value>,
     actor: &Actor,
     shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
+) -> Reply {
     let p: methods::PluginDecorateParams = parse_params(params)?;
     read_gate_all(actor, &p.paths, shared)?;
     if p.paths.is_empty() {
@@ -4913,7 +4897,7 @@ async fn handle_plugin_column_values(
     params: Option<serde_json::Value>,
     actor: &Actor,
     shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
+) -> Reply {
     let p: methods::PluginColumnValuesParams = parse_params(params)?;
     read_gate_all(actor, &p.paths, shared)?;
     if p.paths.is_empty() {
@@ -4992,7 +4976,7 @@ async fn handle_plugin_column_values(
 async fn handle_plugin_get_config(
     params: Option<serde_json::Value>,
     shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
+) -> Reply {
     let p: methods::PluginGetConfigParams = parse_params(params)?;
     let keys = {
         let reg = shared.plugins.lock().expect("plugins lock is sound");
@@ -5029,10 +5013,7 @@ async fn handle_plugin_get_config(
 // log before being validated against the catalogue (same criterion as
 // `handle_plugin_set_approval`).
 #[tracing::instrument(skip_all)]
-async fn handle_plugin_help(
-    params: Option<serde_json::Value>,
-    shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
+async fn handle_plugin_help(params: Option<serde_json::Value>, shared: &Arc<Shared>) -> Reply {
     let p: methods::PluginHelpParams = parse_params(params)?;
     // The lock is released when the block closes, BEFORE any `.await`.
     let job = {
@@ -5069,7 +5050,7 @@ async fn handle_plugin_set_config(
     actor: &Actor,
     p: &methods::PluginSetConfigParams,
     shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
+) -> Reply {
     if !matches!(actor, Actor::User) {
         return Err(RpcError::protocol(
             codes::INVALID_REQUEST,
@@ -5231,7 +5212,7 @@ fn handle_connection_close(
     actor: &Actor,
     params: Option<serde_json::Value>,
     shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
+) -> Reply {
     let p: methods::ConnectionCloseParams = parse_params(params)?;
     if !matches!(actor, Actor::User) {
         return Err(RpcError::protocol(
@@ -5257,7 +5238,7 @@ async fn handle_fs_dir_size(
     params: Option<serde_json::Value>,
     actor: &Actor,
     shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
+) -> Reply {
     let p: methods::FsDirSizeParams = parse_params(params)?;
     for path in &p.paths {
         read_gate(actor, path, shared)?;
@@ -5305,7 +5286,7 @@ async fn handle_fs_checksum(
     params: Option<serde_json::Value>,
     actor: &Actor,
     shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
+) -> Reply {
     let p: methods::FsChecksumParams = parse_params(params)?;
     if p.paths.is_empty() {
         return Err(RpcError::protocol(
@@ -5347,7 +5328,7 @@ fn handle_fs_checksum_report(
     actor: &Actor,
     p: &methods::FsChecksumReportParams,
     shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
+) -> Reply {
     let unknown = || RpcError::from(norte_proto::Error::NotFound);
     let (owner, report) = shared
         .engine
@@ -5380,7 +5361,7 @@ async fn handle_fs_dir_usage(
     params: Option<serde_json::Value>,
     actor: &Actor,
     shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
+) -> Reply {
     let p: methods::FsDirUsageParams = parse_params(params)?;
     read_gate(actor, &p.path, shared)?;
     let handle = shared
@@ -5406,7 +5387,7 @@ fn handle_fs_dir_usage_report(
     actor: &Actor,
     p: &methods::FsDirUsageReportParams,
     shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
+) -> Reply {
     let unknown = || RpcError::from(norte_proto::Error::NotFound);
     let (owner, report) = shared
         .engine
@@ -5433,7 +5414,7 @@ async fn handle_archive_pack(
     params: Option<serde_json::Value>,
     actor: &Actor,
     shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
+) -> Reply {
     let p: methods::ArchivePackParams = parse_params(params)?;
     if p.sources.is_empty() {
         return Err(RpcError::protocol(
@@ -5465,7 +5446,7 @@ fn handle_archive_pack_report(
     params: Option<serde_json::Value>,
     actor: &Actor,
     shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
+) -> Reply {
     let p: methods::ArchivePackReportParams = parse_params(params)?;
     let unknown = || RpcError::from(norte_proto::Error::NotFound);
     let (owner, report) = shared
@@ -5490,7 +5471,7 @@ async fn handle_archive_test(
     params: Option<serde_json::Value>,
     actor: &Actor,
     shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
+) -> Reply {
     let p: methods::ArchiveTestParams = parse_params(params)?;
     read_gate(actor, &p.path, shared)?;
     let (handle, _report) = shared
@@ -5514,7 +5495,7 @@ fn handle_archive_test_report(
     params: Option<serde_json::Value>,
     actor: &Actor,
     shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
+) -> Reply {
     let p: methods::ArchiveTestReportParams = parse_params(params)?;
     // A single answer for all three situations — evicted from the ring,
     // never was a test, belongs to another actor — and the third is the
@@ -5539,7 +5520,7 @@ async fn handle_file_split(
     params: Option<serde_json::Value>,
     actor: &Actor,
     shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
+) -> Reply {
     let p: methods::FileSplitParams = parse_params(params)?;
     read_gate(actor, &p.path, shared)?;
     let handle = shared
@@ -5557,7 +5538,7 @@ async fn handle_file_combine(
     params: Option<serde_json::Value>,
     actor: &Actor,
     shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
+) -> Reply {
     let p: methods::FileCombineParams = parse_params(params)?;
     read_gate(actor, &p.first, shared)?;
     // And the DIRECTORY, because the other chunks are derived by convention
@@ -5611,7 +5592,7 @@ async fn handle_fs_compare(
     conn_id: u64,
     actor: &Actor,
     shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
+) -> Reply {
     let p: methods::FsCompareParams = parse_params(params)?;
 
     // Gate BEFORE validating params: an actor with no rights over the roots
@@ -5737,7 +5718,7 @@ async fn handle_sync_plan(
     conn_id: u64,
     actor: &Actor,
     shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
+) -> Reply {
     let p: methods::SyncPlanParams = parse_params(params)?;
 
     // Gate BEFORE validating params (see the doc's note).
@@ -5911,7 +5892,7 @@ async fn handle_sync_apply(
     conn_id: u64,
     actor: &Actor,
     shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
+) -> Reply {
     let p: methods::SyncApplyParams = parse_params(params)?;
     // The live-tasks cap is checked BEFORE opening the plan, not only in
     // `register_task_id`. Opening it takes away the RIGHT to apply it (it is
@@ -5960,11 +5941,7 @@ async fn handle_sync_apply(
 /// An id EVICTED from the ring ([`SYNC_REPORTS_MAX`](crate::SYNC_REPORTS_MAX))
 /// answers the same as one that was never an application, with the same
 /// trade-off its twin documents.
-fn handle_sync_report(
-    actor: &Actor,
-    p: &methods::SyncReportParams,
-    shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
+fn handle_sync_report(actor: &Actor, p: &methods::SyncReportParams, shared: &Arc<Shared>) -> Reply {
     // `NotFound` from the taxonomy, a single answer for all THREE situations
     // — evicted from the ring, never was an application, belongs to another
     // actor — and the third is the reason: separating it would confirm
@@ -6011,7 +5988,7 @@ async fn handle_fs_search(
     conn_id: u64,
     actor: &Actor,
     shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
+) -> Reply {
     let p: methods::FsSearchParams = parse_params(params)?;
 
     // Read gate (default-deny for out-of-scope agents): the same
@@ -6124,7 +6101,7 @@ fn handle_rename_batch_report(
     actor: &Actor,
     p: &methods::FsRenameBatchReportParams,
     shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
+) -> Reply {
     // `NotFound` from the taxonomy, exactly what the `Backend`'s embedded arm
     // answers for the same case. A single answer for all THREE situations —
     // evicted from the ring, never was a batch, belongs to another actor —
@@ -6179,7 +6156,7 @@ async fn dispatch_fs_task(
     conn_id: u64,
     actor: crate::journal::Actor,
     shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
+) -> Reply {
     match req.method.as_str() {
         // fs.search (0.18.0): HITS belong to whoever launched it → needs
         // conn_id for the directed send (never broadcast).
@@ -6585,7 +6562,7 @@ async fn dispatch_task_family(
     req: Request,
     actor: crate::journal::Actor,
     shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
+) -> Reply {
     match req.method.as_str() {
         methods::TASK_LIST => {
             let _p: methods::TaskListParams = parse_params(
@@ -6753,7 +6730,7 @@ async fn dispatch_trust_host_key(
     req: Request,
     actor: &crate::journal::Actor,
     shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
+) -> Reply {
     // Accepting a fingerprint under TOFU is a HUMAN trust decision, like
     // `grant_scope`/`decide`/`undo_session` (#66): an agent never blesses a
     // host's identity.
@@ -6782,7 +6759,7 @@ async fn dispatch_provide_secret(
     req: Request,
     actor: &crate::journal::Actor,
     shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
+) -> Reply {
     // Typing a password is a HUMAN act, for the same reason as its twin and
     // one more: an agent that could inject session credentials would be
     // choosing which identity the user acts under on the remote host.
@@ -6818,10 +6795,7 @@ async fn dispatch_provide_secret(
 /// `fs.read` (0.5.0): ONE chunk in base64, with a per-call cap. ONE extra
 /// byte is read to know whether the file continues (honest `eof` with no
 /// extra stat and no trusting the size, which can change under one's feet).
-async fn dispatch_fs_read(
-    p: methods::FsReadParams,
-    shared: &Arc<Shared>,
-) -> Result<serde_json::Value, RpcError> {
+async fn dispatch_fs_read(p: methods::FsReadParams, shared: &Arc<Shared>) -> Reply {
     use base64::Engine as _;
     let offset = p.range.as_ref().map_or(0, |r| r.offset);
     let want = p
@@ -6857,11 +6831,7 @@ async fn dispatch_fs_read(
 
 /// Registers the task and starts its progress pump; returns the standard
 /// wire result `FsTaskResult`. See [`register_task_id`].
-fn register_task(
-    shared: &Arc<Shared>,
-    handle: TaskHandle,
-    owner: Actor,
-) -> Result<serde_json::Value, RpcError> {
+fn register_task(shared: &Arc<Shared>, handle: TaskHandle, owner: Actor) -> Reply {
     let task_id = register_task_id(shared, handle, owner)?;
     to_value(&methods::FsTaskResult { task_id })
 }
@@ -7418,6 +7388,27 @@ mod tests {
         assert!(undrained[0].is_cancelled(), "the evicted one closes");
         assert!(!undrained[1].is_cancelled(), "the feed's owner does not");
         drop(alive);
+    }
+
+    /// #408: the raw reply is the same frame `Response` was, for a result and
+    /// for an error. Byte-identical envelope; inside a typed result the keys
+    /// now keep field order instead of `Value`'s alphabetical one — the same
+    /// JSON, which no client may tell apart.
+    #[test]
+    fn a_raw_reply_is_the_same_frame_as_a_response() {
+        use norte_proto::wire::{RequestId, Response, RpcError, codes, encode_frame};
+
+        use super::{ReplyFrame, to_value};
+
+        let result = serde_json::json!({"entries": [{"name": "a"}], "more": false});
+        let raw = ReplyFrame::new(RequestId::Num(3), to_value(&result));
+        let old = Response::ok(RequestId::Num(3), result);
+        assert_eq!(encode_frame(&raw).unwrap(), encode_frame(&old).unwrap());
+
+        let e = RpcError::protocol(codes::INVALID_PARAMS, "bad");
+        let raw = ReplyFrame::new(RequestId::Num(4), Err(e.clone()));
+        let old = Response::err(Some(RequestId::Num(4)), e);
+        assert_eq!(encode_frame(&raw).unwrap(), encode_frame(&old).unwrap());
     }
 
     /// #384: a response waits a while for room — a burst a healthy client

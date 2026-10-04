@@ -77,6 +77,10 @@ type PendingMap = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Box<RawValue>, R
 /// `result` stays raw until `call` decodes it straight into its type.
 #[derive(serde::Deserialize)]
 struct Incoming {
+    /// Required, as the `untagged` `Message` required it: a frame without
+    /// `"jsonrpc":"2.0"` resolves no call.
+    #[allow(dead_code)]
+    jsonrpc: JsonRpcVersion,
     #[serde(default)]
     id: Option<RequestId>,
     #[serde(default)]
@@ -421,6 +425,29 @@ mod tests {
         assert_eq!(
             both.outcome().expect_err("malformed").code,
             codes::INVALID_REQUEST
+        );
+
+        let null = parse(r#"{"jsonrpc":"2.0","id":7,"result":null}"#);
+        assert_eq!(
+            null.outcome().expect_err("null is neither").code,
+            codes::INVALID_REQUEST
+        );
+
+        let orphan = parse(r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"x"}}"#);
+        assert!(
+            orphan.id.is_none() && orphan.method.is_none(),
+            "names no call"
+        );
+
+        let named = parse(r#"{"jsonrpc":"2.0","id":"a","result":1}"#);
+        assert!(
+            matches!(named.id, Some(RequestId::Str(_))),
+            "not a numeric call id"
+        );
+
+        assert!(
+            serde_json::from_str::<Incoming>(r#"{"id":7,"result":1}"#).is_err(),
+            "without jsonrpc 2.0 it is no frame"
         );
 
         let n = parse(r#"{"jsonrpc":"2.0","method":"task.progress","params":{"a":1}}"#);
