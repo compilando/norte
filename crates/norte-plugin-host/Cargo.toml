@@ -42,7 +42,14 @@ sha2.workspace = true
 # among them a guest panicking the host through a pre-epoch timestamp and a
 # stack overflow from an async-lifted callback; 48.0.3 was the floor for
 # RUSTSEC-2026-0314 before that.
-wasmtime = { version = "48.0.4", default-features = false, features = ["runtime", "component-model", "cranelift", "std"] }
+#
+# `parallel-compilation` (#399): cranelift compiles a component's functions
+# on every core instead of one; the bundled FTP component (1.6 MB) is the
+# first-open cost a user waits on. It brings `rayon` (and its
+# `crossbeam-*`), the de-facto Rust work-stealing pool, maintained by the
+# rust-lang org's contributors and already used by wasmtime upstream by
+# default; the alternative is no parallelism, which is what we had.
+wasmtime = { version = "48.0.4", default-features = false, features = ["runtime", "component-model", "cranelift", "std", "parallel-compilation"] }
 wasmtime-wasi = "48.0.4"
 # Reads a component's imports WITHOUT compiling it (ADR 0094): the catalog
 # notes which `norte:*@version` each guest was compiled against and lists as
