@@ -1242,7 +1242,8 @@
         "slot_id": 7
       },
       {
-        "cursor": 1,
+        "cursor": 41,
+        "first": 40,
         "generation": 3,
         "kind": "tree",
         "rows": [
@@ -1268,7 +1269,8 @@
             "label": "vacia"
           }
         ],
-        "slot_id": 8
+        "slot_id": 8,
+        "total": 120
       },
       {
         "capturing": "este proceso captura debug · el daemon captura trace",

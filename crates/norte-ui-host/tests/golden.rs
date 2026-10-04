@@ -178,6 +178,7 @@ fn action_tag(a: &UiAction) -> &'static str {
         UiAction::PanelClick { .. } => "panel_click",
         UiAction::TreeActivateRow { .. } => "tree_activate_row",
         UiAction::TreeToggleRow { .. } => "tree_toggle_row",
+        UiAction::TreeSetVisibleRange { .. } => "tree_set_visible_range",
         UiAction::RefreshSlot { .. } => "refresh_slot",
         UiAction::LogSetLevel { .. } => "log_set_level",
         UiAction::LogSetFilter { .. } => "log_set_filter",
@@ -488,6 +489,13 @@ fn overlay_actions() -> Vec<(&'static str, UiAction)> {
             UiAction::TreeToggleRow {
                 row: 2,
                 generation: 6,
+            },
+        ),
+        (
+            "tree_set_visible_range",
+            UiAction::TreeSetVisibleRange {
+                first: 40,
+                count: 30,
             },
         ),
         (
@@ -1296,7 +1304,10 @@ fn reference_slots() -> Vec<SlotView> {
                     children: Some(false),
                 },
             ],
-            cursor: 1,
+            // A window of rows 40..43 of 120 (#403, bridge 97).
+            first: 40,
+            total: 120,
+            cursor: 41,
             generation: 3,
         })),
         // The log panel, with BOTH sources in view (#328, bridge 48). The
@@ -2971,7 +2982,8 @@ fn the_corpus_shape_does_not_change_without_bumping_the_bridge() {
     // change.
     // 96 (#401): the `terminal` change, the panel alone; and the `slot`
     // change, any non-listing slot alone.
-    const SHAPE: u64 = 13_985_843_233_828_489_306;
+    // 97 (#403): the tree's window, `first`/`total` and its range action.
+    const SHAPE: u64 = 7_568_239_604_462_371_663;
 
     let mut paths: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for file in ["changes.json", "updates.json", "variants.json", "acks.json"] {

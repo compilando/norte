@@ -10,7 +10,7 @@
 // that lives in Rust (ADR 0066, decision D14).
 
 /** The contract version this renderer knows how to read. */
-export const BRIDGE_VERSION = 96;
+export const BRIDGE_VERSION = 97;
 
 /** Where a dragged pane is dropped over another (ADR 0138): on a side, or in
  *  the center to join it as a tab. */
@@ -516,7 +516,12 @@ export interface TreeRowView {
 export interface TreeSlotView {
   kind: "tree";
   slot_id: number;
+  /** A WINDOW of the visible branches (bridge 97): `rows[0]` is branch
+   *  `first` among all `total` of them. */
   rows: TreeRowView[];
+  first: number;
+  total: number;
+  /** Among all visible branches. */
   cursor: number;
   /**
    * Goes up every time the set of branches changes. Travels back on the
@@ -1831,6 +1836,8 @@ export type UiAction =
   | { action: "place_activate_row"; row: number; generation: number }
   | { action: "tree_activate_row"; row: number; generation: number }
   | { action: "tree_toggle_row"; row: number; generation: number }
+  /** The tree rows painted (bridge 97): moves the window that travels. */
+  | { action: "tree_set_visible_range"; first: number; count: number }
   | { action: "layout_activate_row"; row: number }
   | { action: "search_activate_row"; row: number }
   | { action: "ai_rename_decide"; approve: boolean }

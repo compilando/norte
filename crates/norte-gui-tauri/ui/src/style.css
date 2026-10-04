@@ -4383,6 +4383,10 @@ button.status-item:hover {
   display: grid;
   grid-template-columns: 2ch 16px 1fr;
   align-items: center;
+  /* A fixed height: only a window of rows travels (#403), and the padding
+     standing in for the rest counts them in cells. */
+  height: var(--cell-h);
+  box-sizing: border-box;
   gap: 0 4px;
   padding-right: 6px;
   /* The per-level indent, with the depth the host sent. */

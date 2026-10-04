@@ -2809,6 +2809,10 @@ struct State {
     branches: Option<norte_frontend::tree::Tree>,
     /// Bumps every time the set of visible branches changes.
     gen_branches: u64,
+    /// The rows the renderer paints of the tree, `(first, count)`, and
+    /// where the cursor was when it said so (`TreeSetVisibleRange`, #403):
+    /// only that window travels, recentred only once the cursor moves.
+    tree_window: (u64, u32, u64),
     /// The file to open as soon as it exists (#290), with the task creating
     /// it.
     ///
@@ -3381,6 +3385,7 @@ impl State {
             gen_places: 0,
             branches: None,
             gen_branches: 0,
+            tree_window: (0, State::TREE_DEFAULT_ROWS, 0),
             open_on_create: None,
             gen_selector: 0,
             gen_extensions: 0,
@@ -4117,6 +4122,7 @@ impl State {
             UiAction::TreeToggleRow { row, generation } => {
                 self.touch_branch(*row, *generation, false, backend, mailbox)
             }
+            UiAction::TreeSetVisibleRange { first, count } => self.tree_range(*first, *count),
             UiAction::LayoutActivateRow { row } => self.choose_layout(*row, backend, mailbox),
             UiAction::SearchActivateRow { row } => self.go_to_result(*row, backend, mailbox),
             UiAction::HelpActivate { index } => self.activate_in_help(*index, backend, mailbox),

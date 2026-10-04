@@ -370,6 +370,11 @@
     "generation": 6,
     "row": 2
   },
+  "tree_set_visible_range": {
+    "action": "tree_set_visible_range",
+    "count": 30,
+    "first": 40
+  },
   "tree_toggle_row": {
     "action": "tree_toggle_row",
     "generation": 6,

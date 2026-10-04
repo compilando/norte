@@ -36,7 +36,15 @@ export function paintTree(this: Screen, dom: SlotDom, slot: TreeSlotView): void 
   const list = document.createElement("ul");
   list.className = "tree-rows";
   list.setAttribute("role", "tree");
-  for (const [i, r] of slot.rows.entries()) {
+  // Only a window of the branches travels (#403, bridge 97): the padding
+  // stands in for the rest, so the scrollbar measures the whole tree.
+  const first = slot.first ?? 0;
+  const after = Math.max(0, (slot.total ?? slot.rows.length) - first - slot.rows.length);
+  list.style.paddingTop = `calc(var(--cell-h) * ${String(first)})`;
+  list.style.paddingBottom = `calc(var(--cell-h) * ${String(after)})`;
+  for (const [n, r] of slot.rows.entries()) {
+    // Numbered among ALL branches: that is what the host's actions name.
+    const i = first + n;
     const row = document.createElement("li");
     row.className = "tree-row";
     row.id = `tree-row-${String(i)}`;
@@ -102,8 +110,34 @@ export function paintTree(this: Screen, dom: SlotDom, slot: TreeSlotView): void 
     });
   });
   list.setAttribute("aria-activedescendant", `tree-row-${String(slot.cursor)}`);
+  const scrollTop = dom.scroller.scrollTop;
   dom.scroller.replaceChildren(list);
-  revealInView(list.querySelector(`#tree-row-${String(slot.cursor)}`) ?? undefined);
+  // Revealed only when the CURSOR moved: a repaint brought by the reader's
+  // own scroll must not pull the view back to it.
+  if (dom.scroller.dataset["treeCursor"] !== String(slot.cursor)) {
+    dom.scroller.dataset["treeCursor"] = String(slot.cursor);
+    revealInView(list.querySelector(`#tree-row-${String(slot.cursor)}`) ?? undefined);
+  } else {
+    dom.scroller.scrollTop = scrollTop;
+  }
+  if (dom.scroller.dataset["treeScroll"] !== "on") {
+    dom.scroller.dataset["treeScroll"] = "on";
+    let pending: number | undefined;
+    const report = (): void => {
+      pending = undefined;
+      const h = this.cell().h;
+      this.send({
+        action: "tree_set_visible_range",
+        first: Math.floor(dom.scroller.scrollTop / h),
+        count: Math.max(1, Math.ceil(dom.scroller.clientHeight / h)),
+      });
+    };
+    dom.scroller.addEventListener("scroll", () => {
+      if (pending === undefined) {
+        pending = window.setTimeout(report, 50);
+      }
+    });
+  }
 }
 
 /**

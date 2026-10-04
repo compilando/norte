@@ -569,7 +569,11 @@ use serde::{Deserialize, Serialize};
 ///   alone, and the renderer replaces the slot with that `slot_id`. Also the
 ///   `slot { slot }` change: any slot that is not a listing, whole — the log
 ///   panel and the attribute sheet republished the frame too.
-pub const BRIDGE_VERSION: u32 = 96;
+/// - **97**: the tree travels as a WINDOW of rows (#403): `TreeSlotView`
+///   gains `first` and `total`, `rows` is only the window around what the
+///   renderer paints, and `tree_set_visible_range` moves it. Row actions
+///   name rows among ALL visible branches.
+pub const BRIDGE_VERSION: u32 = 97;
 
 /// Cap on a string that crosses to the renderer, in bytes.
 ///
