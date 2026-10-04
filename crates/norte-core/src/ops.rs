@@ -2100,12 +2100,38 @@ async fn copy_tree(
     Ok(skipped)
 }
 
+/// One file's share of the task's `bytes_done` (#394).
+///
+/// Each file sets how much of ITSELF is done and the total moves by the
+/// difference. Setting `bytes_done = base + written`, with `base` read when
+/// the file started, made files in flight overwrite each other: the bar
+/// went backwards and never reached its total.
+pub(crate) struct FileBytes {
+    progress: Arc<crate::progress::ProgressReporter>,
+    mine: std::sync::atomic::AtomicU64,
+}
+
+impl FileBytes {
+    fn new(progress: &Arc<crate::progress::ProgressReporter>) -> Arc<Self> {
+        Arc::new(Self {
+            progress: Arc::clone(progress),
+            mine: std::sync::atomic::AtomicU64::new(0),
+        })
+    }
+
+    /// This file has `n` bytes done.
+    fn set(&self, n: u64) {
+        let before = self.mine.swap(n, std::sync::atomic::Ordering::Relaxed);
+        self.progress
+            .update(|p| p.bytes_done = p.bytes_done.saturating_add(n).saturating_sub(before));
+    }
+}
+
 /// Copies ONE file with file-level retries. With `resume=Off` a transient
 /// failure restarts the whole file (the sink aborted cleanly) and returns
-/// progress to the starting point. With `resume=On` the partial SURVIVES
-/// (`keep`) and the retry continues from where it was (`open_resumable`) —
-/// the `before` that gets restored is the file's base, not zero, and
-/// `copy_file` recomposes `base + already` on every attempt.
+/// its progress to zero. With `resume=On` the partial SURVIVES (`keep`) and
+/// the retry continues from where it was (`open_resumable`): `copy_file`
+/// sets the file's `already` again on every attempt.
 pub(crate) async fn copy_file_retrying(
     src: &dyn Provider,
     dest: &Dest<'_>,
@@ -2115,14 +2141,14 @@ pub(crate) async fn copy_file_retrying(
     observer: &Arc<dyn MutationObserver>,
     ctx: &TaskCtx,
 ) -> Result<(), Error> {
-    let base = ctx.progress.snapshot().bytes_done;
+    let bytes = FileBytes::new(&ctx.progress);
     let mut attempt = 0u32;
     loop {
-        match copy_file(src, dest, from, known_size, base, opts, observer, ctx).await {
+        match copy_file(src, dest, from, known_size, &bytes, opts, observer, ctx).await {
             Err(e) if attempt < MAX_RETRIES && is_transient(&e) && !ctx.cancel.is_cancelled() => {
-                // The file's base: `copy_file` recomposes `base + already`
+                // Back to this file's start: `copy_file` sets `already` again
                 // (with resume, `already` grows; without resume, it goes back to 0).
-                ctx.progress.update(|p| p.bytes_done = base);
+                bytes.set(0);
                 let delay = std::time::Duration::from_millis(BACKOFF_BASE_MS << attempt);
                 attempt += 1;
                 tokio::select! {
@@ -2261,7 +2287,7 @@ async fn should_discard_partial(
 /// Copies ONE file: `copy_native` if the provider (the same on both sides)
 /// declares `SERVER_COPY`; if not, streaming with per-chunk cancellation.
 ///
-/// `base` = `bytes_done` BEFORE this file (to recompose progress on resume).
+/// `bytes` = this file's share of progress (#394).
 /// With resume: opens `open_resumable`, discards the partial if it does not
 /// match the source (`verify`, #35), reads the source from `already`, and
 /// on cancellation/failure KEEPS the partial (`keep`) instead of aborting.
@@ -2274,7 +2300,7 @@ async fn copy_file(
     dest: &Dest<'_>,
     from: &VPath,
     known_size: Option<u64>,
-    base: u64,
+    bytes: &Arc<FileBytes>,
     opts: TransferOptions,
     observer: &Arc<dyn MutationObserver>,
     ctx: &TaskCtx,
@@ -2315,7 +2341,7 @@ async fn copy_file(
             res?;
             // The size was already given by the source's stat: zero extra round trips.
             let size = known_size.unwrap_or(0);
-            ctx.progress.update(|p| p.bytes_done = base + size);
+            bytes.set(size);
             let node = dest.node_id_for(observer).await;
             observer
                 .on_mutation(&Mutation::Created { path: to, node }, &ctx.actor)
@@ -2366,17 +2392,17 @@ async fn copy_file(
 
     // The stretch already present counts as done immediately (the bar does
     // not go backward on resume).
-    ctx.progress.update(|p| p.bytes_done = base + already);
+    bytes.set(already);
 
     let (mut stream, filled) =
-        match remaining_source(src, from, already, &mut sink, base, ctx).await {
+        match remaining_source(src, from, already, &mut sink, bytes, ctx).await {
             Ok(s) => s,
             Err(e) => {
                 release(sink, to, resume).await;
                 return Err(e);
             }
         };
-    let mut written = base + already + filled;
+    let mut written = already + filled;
     while let Some(item) = stream.next().await {
         // Per-chunk cancellation: clean destination, or a resumable
         // `.norte-partial` (resume), never an unmarked half-done file. And
@@ -2399,16 +2425,16 @@ async fn copy_file(
             return Err(e);
         }
         written += n;
-        ctx.progress.update(|p| p.bytes_done = written);
+        bytes.set(written);
     }
     if ctx.cancel.is_cancelled() {
         release(sink, to, resume).await;
         return Err(Error::Cancelled);
     }
-    // Committed file size = what was written in THIS copy (`written`) minus
-    // the progress `base` prior to this file. It is the witness used to
-    // disambiguate a commit that applied but returned transient (#32.1).
-    let final_size = written - base;
+    // Committed file size = what was written in THIS copy. It is the witness
+    // used to disambiguate a commit that applied but returned transient
+    // (#32.1).
+    let final_size = written;
     match sink.commit().await {
         Ok(()) => {}
         // The commit (staging→final rename) may have APPLIED before
@@ -2466,11 +2492,11 @@ async fn remaining_source(
     from: &VPath,
     already: u64,
     sink: &mut Box<dyn norte_vfs::ByteSink>,
-    base: u64,
+    bytes: &Arc<FileBytes>,
     ctx: &TaskCtx,
 ) -> Result<(norte_vfs::ByteStream, u64), Error> {
     if already == 0
-        && let Some(n) = kernel_fill(src, from, sink, base, ctx).await?
+        && let Some(n) = kernel_fill(src, from, sink, bytes, ctx).await?
     {
         return Ok((futures::stream::empty().boxed(), n));
     }
@@ -2488,16 +2514,16 @@ async fn kernel_fill(
     src: &dyn Provider,
     from: &VPath,
     sink: &mut Box<dyn norte_vfs::ByteSink>,
-    base: u64,
+    bytes: &Arc<FileBytes>,
     ctx: &TaskCtx,
 ) -> Result<Option<u64>, Error> {
     let Some(opened) = src.open_local(from).await else {
         return Ok(None);
     };
-    let progress = Arc::clone(&ctx.progress);
+    let bytes = Arc::clone(bytes);
     let cancel = ctx.cancel.clone();
     let report: norte_vfs::FillProgress = Arc::new(move |done| {
-        progress.update(|p| p.bytes_done = base + done);
+        bytes.set(done);
         !cancel.is_cancelled()
     });
     sink.fill_from(opened?, report).await.transpose()
