@@ -180,7 +180,9 @@ impl TaskCtx {
             return Err(Error::Cancelled);
         }
         if !self.pause.is_paused() {
-            return Ok(());
+            // Resumed but the slot is still lent (#394): a caller that was
+            // not at a checkpoint during the pause must not run without it.
+            return self.wait_for_slot().await;
         }
         self.progress.update(|p| p.state = TaskState::Paused);
         // ADR 0164: paused, the slot goes back to the scheduler, so a
@@ -217,17 +219,24 @@ impl TaskCtx {
         } else {
             // Another caller lent the slot (#394): wait until it holds it
             // again, or this one would run with no slot at all.
-            let mut held = self.pause.2.subscribe();
-            tokio::select! {
-                () = self.cancel.cancelled() => {
-                    self.progress.update(|p| p.state = TaskState::Running);
-                    return Err(Error::Cancelled);
-                }
-                _ = held.wait_for(|held| *held) => {}
-            }
+            self.wait_for_slot().await?;
         }
         self.progress.update(|p| p.state = TaskState::Running);
         Ok(())
+    }
+
+    /// Waits until the slot is HELD (not lent by another caller, #394).
+    /// Immediate when it is, which is always outside a pause.
+    async fn wait_for_slot(&self) -> Result<(), Error> {
+        // On the sender first: this runs once per chunk.
+        if *self.pause.2.borrow() {
+            return Ok(());
+        }
+        let mut held = self.pause.2.subscribe();
+        tokio::select! {
+            () = self.cancel.cancelled() => Err(Error::Cancelled),
+            _ = held.wait_for(|held| *held) => Ok(()),
+        }
     }
 }
 
