@@ -33,7 +33,12 @@ This budget works — the session after it went from 50 gate runs to 3. It is
 | --- | --- | --- |
 | the RED→GREEN loop | `just t <crate>` (+ `just c` if you touched lint surface) | unlimited |
 | every ~3 tasks of a plan | `just ci-fast` | ONE run |
-| closing the branch, before the merge | `just ci` | ONE run |
+| merging to `main` | the push of `main` (hook: `ci-fast` + `gui-ci`) | ONE run |
+| before cutting a release | `just ci` (with `cov`) | ONE run |
+
+**Until releases are real (decided 2026-10-04), `cov` and `just ci` are
+release-time only**, and a batch is ONE branch merged ONCE: no chain of
+PR → merge → PR → merge, each paying its own gate.
 
 **Costs, measured under real load** — the numbers that used to be here (10s /
 34s / 143s) were 3–7× optimistic, and budgeting against them is what produced
@@ -61,18 +66,20 @@ gate time, the cheapest part of the session.
 `cov` is the bulk of `just ci` and can only move if you touched proto/vfs/core
 — the sole crates under the 85% gate — so it stays out of the loop entirely.
 
-### `git push` IS a gate run. Do not pay for two.
+### Pushing `main` IS a gate run. Pushing a branch is not.
 
-**The pre-push hook runs `ci-fast`, and `gui-ci` too if the push touches the
-window.** So `just ci-fast && git push` runs the whole thing twice, back to
-back, for nothing. Measured on the five-issue session (2026-09-24): three full
-duplicate runs, ~8 minutes each.
+**The pre-push hook gates ONLY a push that updates `main`**: `ci-fast`, and
+`gui-ci` too if the push touches the window. A branch push is instant — nobody
+else builds branches, and gating each one doubled the merge's gate: ~15
+`ci-fast` runs, over an hour of waiting, in the 2026-10-03 session.
+`NORTE_GATE=1 git push` gates a branch on purpose.
 
-The rule is one line: **when the work is committed and you intend to push,
-push.** The hook is the gate run. Run `ci-fast` by hand only when you are NOT
-about to push — mid-plan, every ~3 tasks, as the table above says.
+So `just ci-fast && git push origin main` still runs it twice for nothing
+(three duplicate runs, ~8 minutes each, on 2026-09-24). The rule is one line:
+**when the merge is committed, push `main`; the hook is the gate run.** Run
+`ci-fast` by hand only mid-plan, every ~3 tasks, as the table above says.
 
-**And run `just gui-ci` BEFORE pushing if you touched
+**And run `just gui-ci` BEFORE pushing `main` if you touched
 `crates/norte-gui-tauri/**`, `ui/` included.** It is not in `ci-fast`
 (`core_pkgs` excludes it on purpose — see the disk budget), so a green
 `ci-fast` says nothing about it, and the hook finds it only after having
