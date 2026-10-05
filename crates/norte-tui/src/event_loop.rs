@@ -439,6 +439,10 @@ pub async fn run(
         // is not rebuilt. Every other turn —a key, an event, the one-second
         // tick— draws.
         let skip_frame = std::mem::take(&mut quiet_tick);
+        // A sixel rail repaints cells from the frame it took icons off
+        // (`rail_icons::sync`), so only then is the frame kept.
+        let keep_frame = crate::rail_icons::backend(app) == crate::rail_icons::RailBackend::Sixel;
+        let mut drawn: Option<ratatui::buffer::Buffer> = None;
         let painted_area = if skip_frame {
             last_area
         } else {
@@ -451,10 +455,13 @@ pub async fn run(
             // A one-off exemption from rule 2: the draw writes the control
             // terminal synchronously (ratatui's official async pattern;
             // bounded, multi-thread runtime).
-            terminal
+            let frame = terminal
                 .draw(|f| ui::draw(f, app))
-                .map_err(RunError::Terminal)?
-                .area
+                .map_err(RunError::Terminal)?;
+            if keep_frame {
+                drawn = Some(frame.buffer.clone());
+            }
+            frame.area
         };
         // A resize redraws through ED 2, and kitty drops every placement
         // with it: the column's icons must be placed again even where their
@@ -583,10 +590,28 @@ pub async fn run(
         // The panel column's big icons (spec 2026-10-05), the same way and
         // for the same reasons. Called on every terminal: with nothing to
         // place and nothing placed it writes nothing.
-        crate::rail_icons::sync(
+        let repaint = crate::rail_icons::sync(
             terminal.backend_mut(),
             &ui::rail_icons_to_place(app, painted_area, crate::rail_icons::cell_px()),
         );
+        // Sixel icons taken down: their cells again, as this frame has them
+        // — through ratatui's own backend, so colours come out at the
+        // terminal's depth exactly as the frame wrote the rest.
+        if let Some(buf) = &drawn
+            && !repaint.is_empty()
+        {
+            use ratatui::backend::Backend as _;
+            let cells: Vec<_> = repaint
+                .iter()
+                .flat_map(|r| r.positions())
+                .filter(|p| buf.area.contains(*p))
+                .map(|p| (p.x, p.y, &buf[p]))
+                .collect();
+            let out = terminal.backend_mut();
+            if let Err(e) = out.draw(cells.into_iter()).and_then(|()| out.flush()) {
+                tracing::debug!(error = %e, "could not repaint under a sixel icon");
+            }
+        }
         if app.quit {
             // The last snapshot, and waiting for it. The one-second tick
             // loses whatever happened within that second, and quitting is

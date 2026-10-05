@@ -214,9 +214,12 @@ fn placed() -> std::sync::MutexGuard<'static, Vec<Option<RailIcon>>> {
 /// alone — a still frame writes nothing. A failed write forgets that slot
 /// so the next frame retries it.
 ///
-/// Only kitty images are deleted: a sixel image is cells, and whatever
-/// replaced it on screen (ratatui's repaint of the slot) already did.
-pub fn sync(out: &mut impl std::io::Write, want: &[RailIcon]) {
+/// Only kitty images are deleted by escape. A sixel image is cells, with
+/// no escape to remove it, and ratatui does not rewrite cells it believes
+/// unchanged — so the rects of sixel images taken down are RETURNED, for
+/// the caller to repaint from the frame it just drew.
+#[must_use = "sixel cells to repaint"]
+pub fn sync(out: &mut impl std::io::Write, want: &[RailIcon]) -> Vec<ratatui::layout::Rect> {
     use crate::kitty_graphics::escape_delete;
     // Built BEFORE taking the lock: a panic inside resvg must not find the
     // panic hook waiting on a lock its own thread holds (`delete_all`).
@@ -228,20 +231,25 @@ pub fn sync(out: &mut impl std::io::Write, want: &[RailIcon]) {
     let mut placed = placed();
     let len = placed.len().max(want.len());
     placed.resize(len, None);
+    let mut repaint = Vec::new();
     for (i, slot) in placed.iter_mut().enumerate() {
         let wants = want.get(i);
         if slot.as_ref() == wants {
             continue;
         }
         let id = id_for(i);
-        let mut esc = String::new();
-        if slot
-            .take()
-            .is_some_and(|had| had.backend == RailBackend::KittyGraphics)
-        {
-            esc.push_str(&escape_delete(id));
-        }
         let put = wants.zip(payloads.get(i).cloned().flatten());
+        let mut esc = String::new();
+        match slot.take() {
+            Some(had) if had.backend == RailBackend::KittyGraphics => {
+                esc.push_str(&escape_delete(id));
+            }
+            // A new sixel image over the same cells covers it whole.
+            Some(had) if put.as_ref().is_none_or(|(w, _)| w.rect != had.rect) => {
+                repaint.push(had.rect);
+            }
+            _ => {}
+        }
         let result = out.write_all(esc.as_bytes()).and_then(|()| match &put {
             Some((w, escape)) => {
                 crossterm::queue!(out, crossterm::cursor::MoveTo(w.rect.x, w.rect.y))?;
@@ -260,6 +268,7 @@ pub fn sync(out: &mut impl std::io::Write, want: &[RailIcon]) {
     }
     placed.truncate(want.len());
     let _ = out.flush();
+    repaint
 }
 
 /// Forgets what is placed WITHOUT writing: the screen was cleared (a resize
@@ -366,15 +375,35 @@ mod tests {
         );
     }
 
-    /// Ratatui's repaint of the cells under an overlay erased the pixels;
-    /// when the overlay goes, they must be painted again.
+    /// Hiding a sixel image writes no escape — there is none — but hands
+    /// back its cells: ratatui does not rewrite cells it believes unchanged
+    /// (seen in xterm: the icons below an open menu stayed half drawn), so
+    /// the loop repaints them from the frame. Shown again, it is re-sent.
     #[test]
     fn sixel_hidden_then_shown_emits_again() {
         let _ = written(delete_all);
         let want = [sixel_icon([200, 0, 0])];
-        let _ = written(|o| sync(o, &want));
-        assert_eq!(written(|o| sync(o, &[])), "", "nothing to delete in sixel");
-        assert!(written(|o| sync(o, &want)).contains("\x1bP"));
+        let _ = written(|o| {
+            let _ = sync(o, &want);
+        });
+        let mut out = Vec::new();
+        let erase = sync(&mut out, &[]);
+        assert!(out.is_empty(), "nothing to delete in sixel");
+        assert_eq!(erase, vec![want[0].rect], "its cells, to repaint");
+        assert!(
+            written(|o| {
+                let _ = sync(o, &want);
+            })
+            .contains("\x1bP")
+        );
+    }
+
+    /// Kitty images are deleted by escape: nothing to repaint.
+    #[test]
+    fn kitty_removal_asks_for_no_repaint() {
+        let _ = written(delete_all);
+        let _ = sync(&mut Vec::new(), &[icon("places", [1, 2, 3], 1, 2)]);
+        assert!(sync(&mut Vec::new(), &[]).is_empty());
     }
 
     /// Sixel pixels are cells: leaving the alternate screen takes them, and
@@ -441,9 +470,9 @@ mod tests {
 
     /// Runs `f` against a fresh writer, after forgetting whatever an
     /// earlier step placed, and hands back what it wrote.
-    fn written(f: impl FnOnce(&mut Vec<u8>)) -> String {
+    fn written<R>(f: impl FnOnce(&mut Vec<u8>) -> R) -> String {
         let mut out = Vec::new();
-        f(&mut out);
+        let _ = f(&mut out);
         String::from_utf8(out).expect("escapes are ascii")
     }
 

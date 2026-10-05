@@ -685,7 +685,12 @@ pub fn rail_icons_to_place(
     // icons with `dim`, which pixels do not get, and most presets define
     // no `muted` — so without this, closed and open came out the same
     // colour wherever `title` equals `regular`.
-    let bg = app.theme.role_bg_rgb(Role::Background).unwrap_or([0, 0, 0]);
+    // As SHOWN: sixel paints the empty pixels in it, and a 16-colour
+    // terminal shows `#1f1f1f` as ANSI black.
+    let bg = app
+        .theme
+        .role_bg_shown(Role::Background)
+        .unwrap_or([0, 0, 0]);
     let closed = rgb(Role::Muted).map(|c| {
         let mut out = c;
         for (o, b) in out.iter_mut().zip(bg) {
