@@ -167,3 +167,4 @@ edits.
 | [0164](0164-a-paused-task-gives-its-slot-back.md) | A paused task gives its scheduler slot back | accepted |
 | [0165](0165-a-local-copy-fills-its-staging-in-the-kernel.md) | A local copy fills its staging in the kernel | accepted |
 | [0166](0166-a-copy-keeps-several-files-in-flight.md) | A copy keeps several files in flight | accepted |
+| [0167](0167-compacting-the-journal-keeps-a-signed-base.md) | Compacting the journal keeps a signed base | accepted |

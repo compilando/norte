@@ -267,7 +267,29 @@ pub enum JournalError {
     /// config dir).
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
+    /// The journal is not what a compaction plan was made against (ADR
+    /// 0167): nothing was deleted.
+    #[error("the journal changed since the compaction was planned: {0}")]
+    Changed(&'static str),
 }
+
+/// What a compaction leaves behind (ADR 0167): the last row it dropped. The
+/// first surviving row links to `through_hash`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CompactionBase {
+    /// The last dropped `seq`.
+    pub through_seq: i64,
+    /// Its `entry_hash`.
+    pub through_hash: [u8; 32],
+}
+
+/// Created by the first compaction, never by an ordinary open: a journal
+/// nobody compacted keeps the exact shape older binaries know.
+const BASE_TABLE: &str = "CREATE TABLE IF NOT EXISTS journal_base (\
+    id INTEGER PRIMARY KEY CHECK (id = 1), \
+    through_seq INTEGER NOT NULL, \
+    through_hash BLOB NOT NULL, \
+    compacted_at_ms INTEGER NOT NULL)";
 
 impl From<JournalError> for ProtoError {
     fn from(_: JournalError) -> Self {
@@ -1558,6 +1580,10 @@ impl Journal {
     /// [`JournalError::Sqlx`], including a column whose stored type this build
     /// cannot decode — a verdict is never produced by panicking.
     pub async fn verify_chain(&self) -> Result<ChainStatus, JournalError> {
+        // A compacted journal (ADR 0167) links its first surviving mutation
+        // to the base instead of to the marker. Whether that base is genuine
+        // is the audit's question — its signature — not this walk's.
+        let mut base = self.base().await?;
         let rows = sqlx::query(self.pick(SELECT_VERIFY, SELECT_VERIFY_NO_BATCH))
             .fetch_all(&self.pool)
             .await?;
@@ -1583,6 +1609,14 @@ impl Journal {
             // answering `Err` there would let one column write replace a
             // located accusation with a shrug.
             let content = decode_verified_row(&row);
+            if seq > FORMAT_SEQ
+                && let Some(b) = base.take()
+            {
+                if seq != b.through_seq + 1 {
+                    return Ok(ChainStatus::Broken { first_bad_seq: seq });
+                }
+                prev = b.through_hash;
+            }
             // Two format-independent checks, and they run first. Below the
             // reserved metadata `seq` nothing legitimate exists — a row there
             // would be chained and certified while being invisible to every
@@ -1638,6 +1672,13 @@ impl Journal {
                 }
             }
             prev = stored;
+        }
+        // A base no row follows: compaction never drops the head, so the
+        // rows after it were deleted.
+        if let Some(b) = base {
+            return Ok(ChainStatus::Broken {
+                first_bad_seq: b.through_seq + 1,
+            });
         }
         Ok(match (first_bad, declared.is_unknown()) {
             (None, false) => ChainStatus::Intact { entries: verified },
@@ -1773,6 +1814,156 @@ impl Journal {
             .try_into()
             .map_err(|_| JournalError::Corrupt("the marker's entry_hash is not 32 bytes long"))?;
         Ok(Some(hash))
+    }
+
+    /// The base a compaction left (ADR 0167), or `None` if this journal was
+    /// never compacted.
+    ///
+    /// Keyless, like the rest of the file: [`Journal::verify_chain`] checks
+    /// that the chain continues from it, and only its signature in
+    /// `journal-compactions.jsonl` says it was not forged.
+    ///
+    /// # Errors
+    /// [`JournalError::Sqlx`]; [`JournalError::Corrupt`] if the stored hash
+    /// is not 32 bytes long.
+    pub async fn base(&self) -> Result<Option<CompactionBase>, JournalError> {
+        let exists = sqlx::query(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'journal_base'",
+        )
+        .fetch_optional(&self.pool)
+        .await?
+        .is_some();
+        if !exists {
+            return Ok(None);
+        }
+        let row = sqlx::query("SELECT through_seq, through_hash FROM journal_base WHERE id = 1")
+            .fetch_optional(&self.pool)
+            .await?;
+        let Some(row) = row else { return Ok(None) };
+        let blob: Vec<u8> = row.try_get(1)?;
+        let through_hash = blob
+            .try_into()
+            .map_err(|_| JournalError::Corrupt("the base's hash is not 32 bytes long"))?;
+        Ok(Some(CompactionBase {
+            through_seq: row.try_get(0)?,
+            through_hash,
+        }))
+    }
+
+    /// What `compact` would drop for `before_ms` (ADR 0167): the longest
+    /// prefix of mutations older than it, never the head and never half a
+    /// batch. `None` = nothing to drop.
+    ///
+    /// Certifying the chain first is the caller's job: a plan says nothing
+    /// about whether the rows it would drop verify.
+    ///
+    /// # Errors
+    /// [`JournalError::Sqlx`]; [`JournalError::Corrupt`] on a malformed hash.
+    pub async fn compaction_plan(
+        &self,
+        before_ms: i64,
+    ) -> Result<Option<CompactionBase>, JournalError> {
+        let Some((head, _)) = self.head().await? else {
+            return Ok(None);
+        };
+        let start = self.base().await?.map_or(1, |b| b.through_seq + 1);
+        let first_young: Option<i64> =
+            sqlx::query("SELECT MIN(seq) FROM journal WHERE seq >= 1 AND ts_ms >= ?")
+                .bind(before_ms)
+                .fetch_one(&self.pool)
+                .await?
+                .try_get(0)?;
+        let mut through = first_young.unwrap_or(head).min(head) - 1;
+        // Batches interleave (concurrent tasks) and a group undo reuses the
+        // batch id far later: a batch is split if ANY of its rows lies on
+        // each side of the cut, not just the two rows around it.
+        while self.has_batch_id && through >= start {
+            let split: Option<i64> = sqlx::query(
+                "SELECT MIN(a.seq) FROM journal a \
+                 WHERE a.seq >= 1 AND a.seq <= ?1 AND a.batch_id IS NOT NULL \
+                   AND EXISTS (SELECT 1 FROM journal b \
+                               WHERE b.batch_id = a.batch_id AND b.seq > ?1)",
+            )
+            .bind(through)
+            .fetch_one(&self.pool)
+            .await?
+            .try_get(0)?;
+            let Some(first) = split else { break };
+            through = first - 1;
+        }
+        if through < start {
+            return Ok(None);
+        }
+        let Some(through_hash) = self.entry_hash_at(through).await? else {
+            return Err(JournalError::Corrupt("a gap in the chain below the head"));
+        };
+        Ok(Some(CompactionBase {
+            through_seq: through,
+            through_hash,
+        }))
+    }
+
+    /// Drops every mutation up to `plan.through_seq` and records the base
+    /// (ADR 0167). Returns how many rows it dropped; [`Journal::vacuum`]
+    /// gives the space back.
+    ///
+    /// The plan is re-checked inside the transaction: if the row it names
+    /// no longer carries its hash, or nothing follows it, nothing is
+    /// deleted. Sign the plan BEFORE calling this — a signed compaction that
+    /// did not happen is harmless, an unsigned one is an accusation.
+    ///
+    /// # Errors
+    /// [`JournalError::Changed`] if the journal moved since the plan;
+    /// [`JournalError::Sqlx`].
+    pub async fn compact(&self, plan: &CompactionBase) -> Result<u64, JournalError> {
+        // IMMEDIATE: the write lock is taken before the plan is re-checked,
+        // not at the first write after it.
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        let at: Option<Vec<u8>> =
+            sqlx::query("SELECT entry_hash FROM journal WHERE seq = ? AND seq >= 1")
+                .bind(plan.through_seq)
+                .fetch_optional(&mut *tx)
+                .await?
+                .map(|r| r.try_get(0))
+                .transpose()?;
+        if at.as_deref() != Some(&plan.through_hash[..]) {
+            return Err(JournalError::Changed("the planned row is not there"));
+        }
+        let after: Option<i64> = sqlx::query("SELECT MAX(seq) FROM journal")
+            .fetch_one(&mut *tx)
+            .await?
+            .try_get(0)?;
+        if after.is_none_or(|h| h <= plan.through_seq) {
+            return Err(JournalError::Changed("the head would be dropped"));
+        }
+        sqlx::query(BASE_TABLE).execute(&mut *tx).await?;
+        let dropped = sqlx::query("DELETE FROM journal WHERE seq >= 1 AND seq <= ?")
+            .bind(plan.through_seq)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+        sqlx::query(
+            "INSERT OR REPLACE INTO journal_base (id, through_seq, through_hash, compacted_at_ms) \
+             VALUES (1, ?, ?, ?)",
+        )
+        .bind(plan.through_seq)
+        .bind(&plan.through_hash[..])
+        .bind(now_ms())
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(dropped)
+    }
+
+    /// Gives the space of dropped rows back to the file system. Separate
+    /// from [`Journal::compact`]: when it fails the compaction has still
+    /// happened.
+    ///
+    /// # Errors
+    /// [`JournalError::Sqlx`].
+    pub async fn vacuum(&self) -> Result<(), JournalError> {
+        sqlx::query("VACUUM").execute(&self.pool).await?;
+        Ok(())
     }
 
     /// Dumps every entry in `seq` order. Materializes in memory: meant for
@@ -4650,5 +4841,221 @@ CREATE TABLE IF NOT EXISTS journal (
         let original = &rows[1];
         assert_eq!(compensation.undoes_seq, Some(seq), "it is the compensation");
         assert!(original.undone, "and the one below is already undone");
+    }
+}
+
+/// ADR 0167: compaction drops a prefix and the chain still verifies from
+/// its base — and only from a base that matches.
+#[cfg(test)]
+mod compaction_tests {
+    use super::*;
+
+    async fn created(j: &Journal, n: u8, batch_id: Option<i64>) -> i64 {
+        let path = format!("file:///{n}");
+        j.record_entry(&NewEntry {
+            op: "created",
+            path: path.as_bytes(),
+            path_to: None,
+            reversal: Reversal::Delete,
+            reversal_ref: None,
+            actor: &Actor::User,
+            undoes_seq: None,
+            batch_id,
+        })
+        .await
+        .expect("record")
+    }
+
+    #[tokio::test]
+    async fn a_compacted_journal_verifies_from_its_base_and_keeps_growing() {
+        let j = Journal::open_in_memory().await.expect("open");
+        for n in 0..5 {
+            created(&j, n, None).await;
+        }
+        let head = j.head().await.expect("head").expect("some");
+        let plan = j
+            .compaction_plan(i64::MAX)
+            .await
+            .expect("plan")
+            .expect("some");
+        assert_eq!(plan.through_seq, 4, "everything but the head");
+        assert_eq!(j.compact(&plan).await.expect("compact"), 4);
+
+        assert_eq!(j.base().await.expect("base"), Some(plan));
+        assert_eq!(
+            j.head().await.expect("head"),
+            Some(head),
+            "the head survives"
+        );
+        assert_eq!(
+            j.verify_chain().await.expect("verify"),
+            ChainStatus::Intact { entries: 1 }
+        );
+        assert!(
+            j.marker_hash().await.expect("marker").is_some(),
+            "seq 0 stays"
+        );
+
+        // The writer's chain state is untouched: new rows link to the head.
+        created(&j, 9, None).await;
+        assert_eq!(
+            j.verify_chain().await.expect("verify"),
+            ChainStatus::Intact { entries: 2 }
+        );
+        // And a second compaction moves the base forward.
+        let again = j
+            .compaction_plan(i64::MAX)
+            .await
+            .expect("plan")
+            .expect("some");
+        assert_eq!(again.through_seq, 5);
+        j.compact(&again).await.expect("compact");
+        assert_eq!(
+            j.verify_chain().await.expect("verify"),
+            ChainStatus::Intact { entries: 1 }
+        );
+    }
+
+    #[tokio::test]
+    async fn nothing_old_enough_or_only_the_head_is_no_plan() {
+        let j = Journal::open_in_memory().await.expect("open");
+        assert_eq!(
+            j.compaction_plan(i64::MAX).await.expect("plan"),
+            None,
+            "empty"
+        );
+        created(&j, 0, None).await;
+        assert_eq!(
+            j.compaction_plan(i64::MAX).await.expect("plan"),
+            None,
+            "head only"
+        );
+        created(&j, 1, None).await;
+        assert_eq!(
+            j.compaction_plan(0).await.expect("plan"),
+            None,
+            "all too young"
+        );
+    }
+
+    /// Undo and the timeline treat a batch as one action: the cut moves
+    /// back to its first row instead of splitting it.
+    #[tokio::test]
+    async fn a_batch_is_never_split() {
+        let j = Journal::open_in_memory().await.expect("open");
+        created(&j, 0, None).await;
+        created(&j, 1, None).await;
+        let batch = j.alloc_batch().await.expect("alloc");
+        for n in 2..5 {
+            created(&j, n, Some(batch)).await;
+        }
+        let plan = j
+            .compaction_plan(i64::MAX)
+            .await
+            .expect("plan")
+            .expect("some");
+        assert_eq!(plan.through_seq, 2, "stops before the batch at seq 3");
+    }
+
+    /// Batches interleave: the row right after the cut belongs to no batch,
+    /// and a batch is still split if it has rows on both sides.
+    #[tokio::test]
+    async fn an_interleaved_batch_is_never_split() {
+        let j = Journal::open_in_memory().await.expect("open");
+        let batch = j.alloc_batch().await.expect("alloc");
+        created(&j, 0, None).await;
+        created(&j, 1, Some(batch)).await;
+        created(&j, 2, None).await;
+        created(&j, 3, Some(batch)).await;
+        let plan = j
+            .compaction_plan(i64::MAX)
+            .await
+            .expect("plan")
+            .expect("some");
+        assert_eq!(
+            plan.through_seq, 1,
+            "seq 2 and 4 share a batch across a cut at 3"
+        );
+    }
+
+    /// The base is only a starting point if the chain really continues
+    /// from it: a deleted prefix with a base that does not match is still a
+    /// break, and so is a base with every row after it gone.
+    #[tokio::test]
+    async fn a_base_that_does_not_match_is_a_break() {
+        let j = Journal::open_in_memory().await.expect("open");
+        for n in 0..4 {
+            created(&j, n, None).await;
+        }
+        let plan = j
+            .compaction_plan(i64::MAX)
+            .await
+            .expect("plan")
+            .expect("some");
+        j.compact(&plan).await.expect("compact");
+
+        sqlx::query("UPDATE journal_base SET through_hash = ?")
+            .bind(&[7u8; 32][..])
+            .execute(&j.pool)
+            .await
+            .expect("forge");
+        assert_eq!(
+            j.verify_chain().await.expect("verify"),
+            ChainStatus::Broken { first_bad_seq: 4 }
+        );
+
+        sqlx::query("UPDATE journal_base SET through_hash = ?, through_seq = 2")
+            .bind(&plan.through_hash[..])
+            .execute(&j.pool)
+            .await
+            .expect("forge");
+        assert_eq!(
+            j.verify_chain().await.expect("verify"),
+            ChainStatus::Broken { first_bad_seq: 4 },
+            "the first surviving row is not the one after the base"
+        );
+
+        sqlx::query("UPDATE journal_base SET through_seq = 3")
+            .execute(&j.pool)
+            .await
+            .expect("restore");
+        sqlx::query("DELETE FROM journal WHERE seq >= 1")
+            .execute(&j.pool)
+            .await
+            .expect("truncate");
+        assert_eq!(
+            j.verify_chain().await.expect("verify"),
+            ChainStatus::Broken { first_bad_seq: 4 },
+            "a base with nothing after it"
+        );
+    }
+
+    /// A plan made against another journal deletes nothing.
+    #[tokio::test]
+    async fn a_stale_plan_deletes_nothing() {
+        let j = Journal::open_in_memory().await.expect("open");
+        for n in 0..3 {
+            created(&j, n, None).await;
+        }
+        let mut plan = j
+            .compaction_plan(i64::MAX)
+            .await
+            .expect("plan")
+            .expect("some");
+        plan.through_hash = [1; 32];
+        assert!(matches!(
+            j.compact(&plan).await,
+            Err(JournalError::Changed(_))
+        ));
+        let head_plan = CompactionBase {
+            through_seq: 3,
+            through_hash: j.entry_hash_at(3).await.expect("hash").expect("some"),
+        };
+        assert!(matches!(
+            j.compact(&head_plan).await,
+            Err(JournalError::Changed(_))
+        ));
+        assert_eq!(j.count().await.expect("count"), 3);
+        assert_eq!(j.base().await.expect("base"), None);
     }
 }

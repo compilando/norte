@@ -7,6 +7,19 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Added
+
+- **`norte journal compact --before <date>`** (#396, ADR 0167) drops the
+  journal entries older than a day, so the journal stops growing forever.
+  The chain stays verifiable: `norte audit verify` checks it from a base
+  the command signs with your anchor key. Stop the daemon and run
+  `norte audit anchor` first — it only drops entries an anchor covers —
+  and try `--dry-run` to see what would go. Check your off-machine copy
+  of the anchors with `norte audit verify` before compacting: past the
+  cut, it can no longer catch anything. Compacted entries can no longer be
+  undone, and **a norte older than this one reports a compacted journal
+  as broken** — do not go back to one after compacting.
+
 ### Performance
 
 - **The window paints less** while a terminal prints, a border is

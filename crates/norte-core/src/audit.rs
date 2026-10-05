@@ -86,6 +86,82 @@ fn unhex<const N: usize>(s: &str) -> Option<[u8; N]> {
     Some(out)
 }
 
+/// The compaction signature's context (ADR 0167): distinct from
+/// [`ANCHOR_CONTEXT`], so a head anchor at the same `seq` never vouches for
+/// a base.
+const COMPACT_CONTEXT: &[u8] = b"norte-compact-v1";
+
+/// `marker` is the format marker's digest ([`crate::Journal::marker_hash`]):
+/// after a compaction no row links to the marker any more, so the signature
+/// is what notices it deleted or replaced.
+fn compact_mac(
+    key: &[u8],
+    base: &crate::journal::CompactionBase,
+    marker: Option<&[u8; 32]>,
+) -> HmacSha256 {
+    let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts any key length");
+    mac.update(COMPACT_CONTEXT);
+    mac.update(&base.through_seq.to_le_bytes());
+    mac.update(&base.through_hash);
+    match marker {
+        Some(m) => {
+            mac.update(&[1]);
+            mac.update(m);
+        }
+        None => mac.update(&[0]),
+    }
+    mac
+}
+
+/// Signs a compaction base — and the format marker it leaves unlinked — as a
+/// line for `journal-compactions.jsonl` (no trailing `\n`).
+#[must_use]
+pub fn compaction_line(
+    key: &[u8],
+    base: &crate::journal::CompactionBase,
+    marker: Option<&[u8; 32]>,
+) -> String {
+    let mac: [u8; 32] = compact_mac(key, base, marker)
+        .finalize()
+        .into_bytes()
+        .into();
+    format!(
+        r#"{{"through_seq":{},"through_hash":"{}","mac":"{}"}}"#,
+        base.through_seq,
+        hex(&base.through_hash),
+        hex(&mac)
+    )
+}
+
+/// Whether some line of `lines` signs exactly `base` and `marker` with `key`
+/// (ADR 0167). Lines that sign another base — an earlier compaction, or one
+/// signed whose delete never ran — are ignored, not accused.
+#[must_use]
+pub fn base_is_signed(
+    key: &[u8],
+    lines: &str,
+    base: &crate::journal::CompactionBase,
+    marker: Option<&[u8; 32]>,
+) -> bool {
+    #[derive(serde::Deserialize)]
+    struct Line {
+        through_seq: i64,
+        through_hash: String,
+        mac: String,
+    }
+    lines.lines().any(|line| {
+        let Ok(l) = serde_json::from_str::<Line>(line) else {
+            return false;
+        };
+        let (Some(hash), Some(mac)) = (unhex::<32>(&l.through_hash), unhex::<32>(&l.mac)) else {
+            return false;
+        };
+        l.through_seq == base.through_seq
+            && hash == base.through_hash
+            && compact_mac(key, base, marker).verify_slice(&mac).is_ok()
+    })
+}
+
 /// Serializes an anchor as a JSONL line with its MAC (no trailing `\n`).
 #[must_use]
 pub fn anchor_line(key: &[u8], anchor: &Anchor) -> String {
@@ -153,6 +229,10 @@ pub struct AnchorsReport {
     /// the anchors file shows up as coverage moving backward (that's why
     /// `verify` ALWAYS prints it).
     pub max_ok_seq: Option<i64>,
+    /// Anchors with a valid MAC at a `seq` a SIGNED compaction dropped (ADR
+    /// 0167): counted here, not in `bad`. Only
+    /// [`verify_anchors_over_base`] fills it.
+    pub compacted: u64,
 }
 
 /// Verifies each line of `anchors_text` against a SNAPSHOT of the chain (a
@@ -165,6 +245,22 @@ pub fn verify_anchors<S: std::hash::BuildHasher>(
     key: &[u8],
     anchors_text: &str,
     hash_by_seq: &std::collections::HashMap<i64, [u8; 32], S>,
+) -> AnchorsReport {
+    verify_anchors_over_base(key, anchors_text, hash_by_seq, None)
+}
+
+/// [`verify_anchors`] over a compacted journal (ADR 0167): `base` is the
+/// current base, ALREADY checked against its signature
+/// ([`base_is_signed`]). An anchor below it with a valid MAC is counted as
+/// compacted instead of `MissingSeq`; one AT it is checked against its
+/// hash. Pass `None` when the base is not signed — then those anchors
+/// accuse, as they should.
+#[must_use]
+pub fn verify_anchors_over_base<S: std::hash::BuildHasher>(
+    key: &[u8],
+    anchors_text: &str,
+    hash_by_seq: &std::collections::HashMap<i64, [u8; 32], S>,
+    base: Option<&crate::journal::CompactionBase>,
 ) -> AnchorsReport {
     let mut report = AnchorsReport::default();
     for (idx, line) in anchors_text
@@ -180,10 +276,18 @@ pub fn verify_anchors<S: std::hash::BuildHasher>(
         let seq = serde_json::from_str::<serde_json::Value>(line)
             .ok()
             .and_then(|v| v["seq"].as_i64());
-        let at = seq.and_then(|s| hash_by_seq.get(&s).copied());
+        let at = seq.and_then(|s| match base {
+            Some(b) if s == b.through_seq => Some(b.through_hash),
+            _ => hash_by_seq.get(&s).copied(),
+        });
         match verify_anchor_line(key, line, at) {
             AnchorVerdict::Ok(a) => {
                 report.max_ok_seq = Some(report.max_ok_seq.map_or(a.seq, |m| m.max(a.seq)));
+            }
+            AnchorVerdict::MissingSeq(a)
+                if base.is_some_and(|b| a.seq >= 1 && a.seq < b.through_seq) =>
+            {
+                report.compacted += 1;
             }
             verdict => report.bad.push((idx + 1, verdict)),
         }
@@ -527,6 +631,107 @@ mod tests {
                 (3, AnchorVerdict::MissingSeq(_)),
                 (4, AnchorVerdict::BadLine)
             ]
+        ));
+    }
+
+    /// ADR 0167: a base is signed only by the compaction context and only
+    /// for itself — not by another key, another base, or a head anchor at
+    /// the same `seq`.
+    #[test]
+    fn a_base_is_signed_only_by_its_own_line() {
+        use crate::journal::CompactionBase;
+        let key = [9u8; 32];
+        let base = CompactionBase {
+            through_seq: 4,
+            through_hash: [4u8; 32],
+        };
+        let marker = Some(&[0u8; 32]);
+        let line = compaction_line(&key, &base, marker);
+        assert!(base_is_signed(
+            &key,
+            &format!("junk\n{line}\n"),
+            &base,
+            marker
+        ));
+        assert!(
+            !base_is_signed(&[8u8; 32], &line, &base, marker),
+            "another key"
+        );
+        let other = CompactionBase {
+            through_seq: 3,
+            ..base
+        };
+        assert!(!base_is_signed(&key, &line, &other, marker), "another base");
+        let head = anchor_line(
+            &key,
+            &Anchor {
+                seq: 4,
+                head: [4u8; 32],
+            },
+        );
+        assert!(!base_is_signed(&key, &head, &base, marker), "a head anchor");
+        // After a compaction nothing links to the marker: deleting it or
+        // swapping it is caught here.
+        assert!(!base_is_signed(&key, &line, &base, None), "marker deleted");
+        assert!(
+            !base_is_signed(&key, &line, &base, Some(&[1u8; 32])),
+            "marker replaced"
+        );
+    }
+
+    /// Below a signed base an anchor is compacted, not missing; at the base
+    /// it is checked against the base's hash; without a base it accuses.
+    #[test]
+    fn anchors_below_a_signed_base_are_compacted_not_missing() {
+        use crate::journal::CompactionBase;
+        let key = [9u8; 32];
+        let base = CompactionBase {
+            through_seq: 4,
+            through_hash: [4u8; 32],
+        };
+        let text = [
+            anchor_line(
+                &key,
+                &Anchor {
+                    seq: 2,
+                    head: [2u8; 32],
+                },
+            ),
+            anchor_line(
+                &key,
+                &Anchor {
+                    seq: 4,
+                    head: [4u8; 32],
+                },
+            ),
+            anchor_line(
+                &key,
+                &Anchor {
+                    seq: 6,
+                    head: [6u8; 32],
+                },
+            ),
+        ]
+        .join("\n");
+        let mut chain = std::collections::HashMap::new();
+        chain.insert(6, [6u8; 32]);
+        let r = verify_anchors_over_base(&key, &text, &chain, Some(&base));
+        assert_eq!(r.bad, vec![]);
+        assert_eq!(r.compacted, 1);
+        assert_eq!(r.max_ok_seq, Some(6));
+
+        let r = verify_anchors_over_base(&key, &text, &chain, None);
+        assert_eq!(r.compacted, 0);
+        assert_eq!(r.bad.len(), 2, "unsigned: both dropped seqs accuse");
+
+        let forged = CompactionBase {
+            through_hash: [5u8; 32],
+            ..base
+        };
+        let r = verify_anchors_over_base(&key, &text, &chain, Some(&forged));
+        assert!(matches!(
+            r.bad.as_slice(),
+            [(2, AnchorVerdict::HashMismatch(_))]
         ));
     }
 }

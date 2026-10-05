@@ -90,6 +90,89 @@ fn ls_does_not_open_the_journal_and_mkdir_does() {
     );
 }
 
+/// ADR 0167, end to end: a compacted journal still passes `audit verify`,
+/// and only because its base is signed — remove the signature and the same
+/// journal reads as a truncation.
+#[test]
+fn a_compacted_journal_verifies_only_with_its_signature() {
+    let state = tempfile::tempdir().unwrap();
+    let tree = tempfile::tempdir().unwrap();
+    let run = |args: &[&str]| {
+        Command::cargo_bin("norte")
+            .expect("norte binary compiled")
+            .env("NORTE_CONFIG_DIR", state.path())
+            .env("NORTE_ANCHOR_KEY", "ab".repeat(32))
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    let ok = |out: &std::process::Output| {
+        assert!(
+            out.status.success(),
+            "stdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    for name in ["a", "b", "c"] {
+        let dir = tree.path().join(name);
+        ok(&run(&["mkdir", dir.to_str().expect("utf-8 tempdir")]));
+    }
+    let compact = || run(&["journal", "compact", "--before", "2999-01-01"]);
+    assert!(
+        !compact().status.success(),
+        "never anchored: nothing would ever check what it drops"
+    );
+    ok(&run(&["audit", "anchor"]));
+    assert!(
+        !run(&["journal", "compact", "--before", "someday"])
+            .status
+            .success()
+    );
+    ok(&run(&[
+        "journal",
+        "compact",
+        "--before",
+        "2999-01-01",
+        "--dry-run",
+    ]));
+    assert!(!state.path().join("journal-compactions.jsonl").exists());
+
+    ok(&compact());
+    ok(&run(&["audit", "verify"]));
+
+    // New entries past the last anchor: the cut would drop rows no anchor
+    // covers, until they are anchored.
+    for name in ["e", "f"] {
+        let dir = tree.path().join(name);
+        ok(&run(&["mkdir", dir.to_str().expect("utf-8 tempdir")]));
+    }
+    assert!(
+        !compact().status.success(),
+        "the anchors do not reach the cut"
+    );
+    ok(&run(&["audit", "anchor"]));
+    ok(&compact());
+    ok(&run(&["audit", "verify"]));
+
+    std::fs::remove_file(state.path().join("journal-compactions.jsonl")).unwrap();
+    assert!(
+        !run(&["audit", "verify"]).status.success(),
+        "an unsigned base is what a truncation looks like"
+    );
+    // And it is never laundered: neither a new compaction nor an anchor
+    // signs over it.
+    let dir = tree.path().join("d");
+    ok(&run(&["mkdir", dir.to_str().expect("utf-8 tempdir")]));
+    assert!(
+        !run(&["journal", "compact", "--before", "2999-01-01"])
+            .status
+            .success()
+    );
+    assert!(!state.path().join("journal-compactions.jsonl").exists());
+    assert!(!run(&["audit", "anchor"]).status.success());
+}
+
 #[test]
 fn ls_json_lists_entries() {
     let dir = tempfile::tempdir().unwrap();
