@@ -72,6 +72,8 @@ Checked in xterm `-ti vt340` under Xvfb.
   the glyph column exactly as before.
 - One more dependency (`resvg`, default features off). It brings
   `arrayref` (BSD-2-Clause), allowed in `deny.toml` for that crate only.
-- Sixel terminals (foot, xterm `-ti vt340`, Windows Terminal, mlterm,
-  tmux ≥ 3.4 built with sixel) get the icons too; a sixel terminal that
-  does not report its cell pixels keeps the glyphs.
+- Sixel terminals that report their cell pixels (foot, xterm
+  `-ti vt340`, mlterm; only xterm was seen) get the icons too. One that
+  does not keeps the glyphs — Windows Terminal among them, since
+  crossterm reports no pixel size on Windows; asking the terminal itself
+  (`CSI 16 t`) would bring it in. tmux is untested.

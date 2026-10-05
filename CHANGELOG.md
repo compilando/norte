@@ -11,9 +11,9 @@ independently through `PROTOCOL_VERSION`.
 
 - **Big icons in the terminal's panel column** (ADR 0169). On a terminal
   that paints images — kitty's graphics protocol (kitty, Ghostty,
-  WezTerm, Konsole) or sixel (foot, xterm `-ti vt340`, Windows Terminal,
-  mlterm) — the column draws the window's own icons at double size;
-  other terminals, and tmux without sixel, keep the one-cell icons.
+  WezTerm, Konsole) or sixel (foot, xterm `-ti vt340`, mlterm) — the
+  column draws the window's own icons at double size; other terminals,
+  tmux and Windows keep the one-cell icons.
   `[ui] images = "off"` keeps them small anywhere.
 - **`norte journal compact --before <date>`** (#396, ADR 0167) drops the
   journal entries older than a day, so the journal stops growing forever.

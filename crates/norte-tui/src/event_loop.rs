@@ -440,8 +440,11 @@ pub async fn run(
         // tick— draws.
         let skip_frame = std::mem::take(&mut quiet_tick);
         // A sixel rail repaints cells from the frame it took icons off
-        // (`rail_icons::sync`), so only then is the frame kept.
-        let keep_frame = crate::rail_icons::backend(app) == crate::rail_icons::RailBackend::Sixel;
+        // (`rail_icons::sync`), so the frame is kept while sixel is the
+        // backend OR sixel icons are still up (a reload to `images = "off"`
+        // takes them down on this very frame).
+        let keep_frame = crate::rail_icons::backend(app) == crate::rail_icons::RailBackend::Sixel
+            || crate::rail_icons::any_sixel_placed();
         let mut drawn: Option<ratatui::buffer::Buffer> = None;
         let painted_area = if skip_frame {
             last_area
@@ -588,29 +591,16 @@ pub async fn run(
             }
         }
         // The panel column's big icons (spec 2026-10-05), the same way and
-        // for the same reasons. Called on every terminal: with nothing to
-        // place and nothing placed it writes nothing.
-        let repaint = crate::rail_icons::sync(
-            terminal.backend_mut(),
-            &ui::rail_icons_to_place(app, painted_area, crate::rail_icons::cell_px()),
-        );
-        // Sixel icons taken down: their cells again, as this frame has them
-        // — through ratatui's own backend, so colours come out at the
-        // terminal's depth exactly as the frame wrote the rest.
-        if let Some(buf) = &drawn
-            && !repaint.is_empty()
-        {
-            use ratatui::backend::Backend as _;
-            let cells: Vec<_> = repaint
-                .iter()
-                .flat_map(|r| r.positions())
-                .filter(|p| buf.area.contains(*p))
-                .map(|p| (p.x, p.y, &buf[p]))
-                .collect();
-            let out = terminal.backend_mut();
-            if let Err(e) = out.draw(cells.into_iter()).and_then(|()| out.flush()) {
-                tracing::debug!(error = %e, "could not repaint under a sixel icon");
-            }
+        // for the same reasons. Only on a drawn frame: a quiet tick changed
+        // nothing visible, and a sixel icon taken down then would have no
+        // frame to repaint its cells from. With nothing to place and
+        // nothing placed it writes nothing.
+        if !skip_frame {
+            crate::rail_icons::sync(
+                terminal.backend_mut(),
+                &ui::rail_icons_to_place(app, painted_area, crate::rail_icons::cell_px()),
+                drawn.as_ref(),
+            );
         }
         if app.quit {
             // The last snapshot, and waiting for it. The one-second tick
