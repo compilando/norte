@@ -87,10 +87,169 @@ fn rasterise(svg: &str, [r, g, b]: [u8; 3]) -> Option<Vec<u8>> {
     pixmap.encode_png().ok()
 }
 
+/// One icon to place: which, in what colour, over which 2×2 cells.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RailIcon {
+    /// The panel kind, whose shared SVG is drawn.
+    pub kind: String,
+    /// The stroke colour: the state's role, from the theme.
+    pub rgb: [u8; 3],
+    /// The 2×2 cells `draw_rail` left blank for it.
+    pub rect: ratatui::layout::Rect,
+}
+
+/// The first kitty image id of the column's range. The viewer's ids count
+/// up from 1 (`viewer_open`), so the two never meet; one id per slot.
+pub const ID_BASE: u32 = 0x4E52_0000;
+/// How many slots the range holds — far more than buttons exist.
+pub const MAX_SLOTS: u32 = 64;
+
+/// The image id of slot `i`.
+#[must_use]
+pub fn id_for(i: usize) -> u32 {
+    ID_BASE + u32::try_from(i).unwrap_or(MAX_SLOTS - 1).min(MAX_SLOTS - 1)
+}
+
+/// What is on the terminal right now, slot by slot. PROCESS state, like
+/// `kitty_graphics::PLACED`: the exit paths that erase have no `App`.
+static PLACED: std::sync::Mutex<Vec<Option<RailIcon>>> = std::sync::Mutex::new(Vec::new());
+
+fn placed() -> std::sync::MutexGuard<'static, Vec<Option<RailIcon>>> {
+    PLACED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Brings the terminal to `want`: a slot that changed is deleted and
+/// placed again, one no longer wanted is deleted, one unchanged is left
+/// alone — a still frame writes nothing. A failed write forgets that slot
+/// so the next frame retries it.
+pub fn sync(out: &mut impl std::io::Write, want: &[RailIcon]) {
+    use crate::kitty_graphics::{escape_delete, escape_place};
+    let mut placed = placed();
+    let len = placed.len().max(want.len());
+    placed.resize(len, None);
+    for (i, slot) in placed.iter_mut().enumerate() {
+        let wants = want.get(i);
+        if slot.as_ref() == wants {
+            continue;
+        }
+        let id = id_for(i);
+        let mut esc = String::new();
+        if slot.take().is_some() {
+            esc.push_str(&escape_delete(id));
+        }
+        let png = wants.and_then(|w| png(&w.kind, w.rgb).map(|p| (w, p)));
+        let result = out.write_all(esc.as_bytes()).and_then(|()| match &png {
+            Some((w, bytes)) => {
+                crossterm::queue!(out, crossterm::cursor::MoveTo(w.rect.x, w.rect.y))?;
+                out.write_all(escape_place(id, bytes, w.rect, None).as_bytes())
+            }
+            None => Ok(()),
+        });
+        match result {
+            Ok(()) => *slot = png.map(|(w, _)| w.clone()),
+            Err(e) => {
+                // An APC cut short swallows whatever is painted after it.
+                let _ = out.write_all(b"\x1b\\");
+                tracing::debug!(error = %e, id, "could not place a panel icon");
+            }
+        }
+    }
+    placed.truncate(want.len());
+    let _ = out.flush();
+}
+
+/// Takes every column icon off the terminal and forgets them: the exit,
+/// suspend and panic paths, next to `kitty_graphics::delete_placed`.
+pub fn delete_all(out: &mut impl std::io::Write) {
+    let mut placed = placed();
+    if placed.iter().all(Option::is_none) {
+        placed.clear();
+        return;
+    }
+    let esc = format!(
+        "\x1b_Ga=d,d=R,x={},y={},q=2\x1b\\",
+        ID_BASE,
+        ID_BASE + MAX_SLOTS - 1
+    );
+    if let Err(e) = out.write_all(esc.as_bytes()).and_then(|()| out.flush()) {
+        tracing::debug!(error = %e, "could not erase the panel icons");
+    }
+    placed.clear();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use norte_config::Images;
+
+    fn icon(kind: &str, rgb: [u8; 3], x: u16, y: u16) -> RailIcon {
+        RailIcon {
+            kind: kind.to_owned(),
+            rgb,
+            rect: ratatui::layout::Rect::new(x, y, 2, 2),
+        }
+    }
+
+    /// Runs `f` against a fresh writer, after forgetting whatever an
+    /// earlier step placed, and hands back what it wrote.
+    fn written(f: impl FnOnce(&mut Vec<u8>)) -> String {
+        let mut out = Vec::new();
+        f(&mut out);
+        String::from_utf8(out).expect("escapes are ascii")
+    }
+
+    #[test]
+    fn the_first_sync_places_and_the_second_writes_nothing() {
+        let _ = written(delete_all);
+        let want = [icon("places", [1, 2, 3], 1, 2)];
+        let first = written(|o| sync(o, &want));
+        assert!(first.contains(&format!("a=T,i={}", id_for(0))), "{first:?}");
+        assert!(first.contains("c=2,r=2"), "{first:?}");
+        assert_eq!(written(|o| sync(o, &want)), "", "nothing changed");
+    }
+
+    #[test]
+    fn a_new_colour_replaces_the_old_image() {
+        let _ = written(delete_all);
+        let _ = written(|o| sync(o, &[icon("places", [1, 2, 3], 1, 2)]));
+        let again = written(|o| sync(o, &[icon("places", [9, 9, 9], 1, 2)]));
+        let del = again
+            .find(&format!("d=I,i={}", id_for(0)))
+            .expect("deleted");
+        let put = again.find(&format!("a=T,i={}", id_for(0))).expect("placed");
+        assert!(del < put, "delete first: {again:?}");
+    }
+
+    #[test]
+    fn shrinking_drops_to_glyphs_and_erases() {
+        let _ = written(delete_all);
+        let _ = written(|o| sync(o, &[icon("places", [1, 2, 3], 1, 2)]));
+        let gone = written(|o| sync(o, &[]));
+        assert!(gone.contains(&format!("d=I,i={}", id_for(0))), "{gone:?}");
+        assert_eq!(written(|o| sync(o, &[])), "");
+    }
+
+    /// The exit paths call it on EVERY terminal: one that never got an icon
+    /// must not receive an APC either.
+    #[test]
+    fn delete_all_with_nothing_placed_writes_nothing() {
+        let _ = written(delete_all);
+        assert_eq!(written(delete_all), "");
+    }
+
+    #[test]
+    fn delete_all_clears_the_range_and_the_state() {
+        let want = [icon("places", [1, 2, 3], 1, 2)];
+        let _ = written(|o| sync(o, &want));
+        let all = written(delete_all);
+        assert!(
+            all.contains(&format!("d=R,x={},y={}", ID_BASE, ID_BASE + MAX_SLOTS - 1)),
+            "{all:?}"
+        );
+        assert!(written(|o| sync(o, &want)).contains("a=T"), "placed again");
+    }
 
     #[test]
     fn the_star_rasterises_in_the_requested_colour() {

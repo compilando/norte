@@ -113,6 +113,7 @@ pub fn restore(term: &mut Tui) -> io::Result<()> {
     // module's error handling: a paint failure must never block the exit
     // this function exists to guarantee.
     crate::kitty_graphics::delete_placed(term.backend_mut());
+    crate::rail_icons::delete_all(term.backend_mut());
     // Disabling raw mode first, same order as `ratatui::try_restore`: it has
     // more side effects than leaving the alternate screen buffer.
     let raw = disable_raw_mode();
@@ -143,6 +144,7 @@ fn install_panic_hook() {
             // placed leaves it stuck on the developer's terminal, on top of
             // the very backtrace this hook exists to make readable.
             crate::kitty_graphics::delete_placed(&mut out);
+            crate::rail_icons::delete_all(&mut out);
             let _ = execute!(
                 out,
                 DisableBracketedPaste,

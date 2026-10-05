@@ -641,6 +641,53 @@ pub fn something_above_the_viewer(app: &App) -> bool {
         || app.modal.is_some()
 }
 
+/// The panel column's big icons to place this frame (spec 2026-10-05): one
+/// per slot `draw_rail` left blank, in the state's colour. Empty when the
+/// column is not big, or when anything is painted over the body — kitty's
+/// pixels sit above the text, so an icon left placed would cover a menu
+/// or a dialog.
+///
+/// The column's own visibility is `panel_bar_visible`, the answer that
+/// already decides whether it is painted and clickable; what that one does
+/// not count — which-key, the go-to pop-up, the splash — is in
+/// [`something_above_the_viewer`], which asks the same question for the
+/// viewer's pixels.
+#[must_use]
+pub fn rail_icons_to_place(app: &App, area: Rect) -> Vec<crate::rail_icons::RailIcon> {
+    use norte_frontend::panelbar::{PanelState, icon_svg};
+    let Some(bar) = geometry::panel_bar_visible(app, area) else {
+        return Vec::new();
+    };
+    if something_above_the_viewer(app) || !geometry::bar_in_column(app) {
+        return Vec::new();
+    }
+    let rail = geometry::rail_layout(app, bar.height, bar.y);
+    if !rail.big {
+        return Vec::new();
+    }
+    let rgb = |role| {
+        app.theme
+            .role_rgb(role)
+            .or_else(|| app.theme.role_rgb(Role::Regular))
+    };
+    rail.slots
+        .into_iter()
+        .zip(chrome::panel_buttons(app, area))
+        .filter(|(_, b)| icon_svg(&b.kind).is_some())
+        .filter_map(|(slot, b)| {
+            let role = match b.state {
+                PanelState::Closed => Role::Muted,
+                PanelState::Open | PanelState::Focused => Role::Title,
+            };
+            Some(crate::rail_icons::RailIcon {
+                rgb: rgb(role)?,
+                rect: Rect::new(bar.x + 1, slot.y, 2, 2),
+                kind: b.kind,
+            })
+        })
+        .collect()
+}
+
 /// The slot (interior, WITHOUT borders) where [`App::viewer_imagen`]'s
 /// thumbnail must be placed this frame, or `None` if it must not be seen —
 /// neither its pixels nor the blank slot that makes room for them.

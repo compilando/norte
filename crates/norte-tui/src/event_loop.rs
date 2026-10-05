@@ -574,6 +574,13 @@ pub async fn run(
                 (None, _) => crate::kitty_graphics::delete_placed(terminal.backend_mut()),
             }
         }
+        // The panel column's big icons (spec 2026-10-05), the same way and
+        // for the same reasons. Called on every terminal: with nothing to
+        // place and nothing placed it writes nothing.
+        crate::rail_icons::sync(
+            terminal.backend_mut(),
+            &ui::rail_icons_to_place(app, painted_area),
+        );
         if app.quit {
             // The last snapshot, and waiting for it. The one-second tick
             // loses whatever happened within that second, and quitting is

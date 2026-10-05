@@ -281,6 +281,68 @@ fn the_default_column_tells_an_open_panel_from_a_closed_one() {
     );
 }
 
+/// A big column (`images = "kitty"`) over vscode-dark, places open.
+fn app_big_rail() -> App {
+    let mut app = app_con_dir(ColorDepth::Truecolor);
+    app.theme = TuiTheme::new(
+        Theme::preset("vscode-dark").unwrap().unwrap(),
+        ColorDepth::Truecolor,
+    );
+    app.panel_bar = true;
+    app.chrome.images = Some(norte_config::Images::Kitty);
+    app.toggle_places();
+    app
+}
+
+/// Kitty's pixels sit ABOVE the text: an icon left placed under a menu,
+/// help, the palette or which-key would cover them. Nothing is placed
+/// while anything is painted over the body.
+#[test]
+fn no_icons_under_an_overlay() {
+    let area = ratatui::layout::Rect::new(0, 0, 80, 40);
+    let mut app = app_big_rail();
+    assert!(
+        !ui::rail_icons_to_place(&app, area).is_empty(),
+        "nothing over it"
+    );
+    app.menu = Some(norte_frontend::menu::MenuState::new());
+    assert!(ui::rail_icons_to_place(&app, area).is_empty(), "menu open");
+    app.menu = None;
+    app.help = Some(norte_tui::app::HelpView::new(
+        norte_i18n::Lang::En,
+        Vec::new(),
+    ));
+    assert!(ui::rail_icons_to_place(&app, area).is_empty(), "help open");
+}
+
+/// Each icon sits on the 2×2 cells `draw_rail` left blank — column 1, two
+/// rows — in the state's colour, and only kinds with an SVG get one.
+#[test]
+fn icons_sit_on_the_reserved_cells() {
+    let area = ratatui::layout::Rect::new(0, 0, 80, 40);
+    let app = app_big_rail();
+    let icons = ui::rail_icons_to_place(&app, area);
+    let mut terminal = Terminal::new(TestBackend::new(80, 40)).expect("terminal");
+    terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+    let buf = terminal.backend().buffer().clone();
+    for i in &icons {
+        assert_eq!((i.rect.x, i.rect.width, i.rect.height), (1, 2, 2), "{i:?}");
+        for (x, y) in [(1, 0), (2, 0), (1, 1), (2, 1)] {
+            let cell = &buf[(i.rect.x + x - 1, i.rect.y + y)];
+            assert_eq!(cell.symbol(), " ", "{} at {:?}", i.kind, (x, y));
+        }
+        assert!(norte_frontend::panelbar::icon_svg(&i.kind).is_some());
+    }
+    assert!(
+        icons.iter().all(|i| i.kind != "terminal"),
+        "no svg, no pixels"
+    );
+    let places = icons.iter().find(|i| i.kind == "places").expect("places");
+    let log = icons.iter().find(|i| i.kind == "log").expect("log");
+    assert_eq!(places.rgb, [0xcc, 0xcc, 0xcc], "open: Title");
+    assert_eq!(log.rgb, [0x9d, 0x9d, 0x9d], "closed: Muted");
+}
+
 /// `true` if ANY buffer cell has that foreground color.
 fn hay_fg(app: &App, want: Color) -> bool {
     let mut terminal = Terminal::new(TestBackend::new(80, 16)).expect("terminal");
